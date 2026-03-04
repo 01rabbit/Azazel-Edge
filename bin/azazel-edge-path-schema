@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PY_ROOT = REPO_ROOT / "py"
+if str(PY_ROOT) not in sys.path:
+    sys.path.insert(0, str(PY_ROOT))
+OPT_PY_ROOT = Path("/opt/azazel-edge/py")
+if str(OPT_PY_ROOT) not in sys.path:
+    sys.path.insert(0, str(OPT_PY_ROOT))
+
+from azazel_edge.path_schema import migrate_schema, status
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Azazel-Edge path schema utility")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("status", help="Show current path schema status")
+    migrate = sub.add_parser("migrate", help="Migrate path layout")
+    migrate.add_argument("--to", choices=["v1", "v2"], required=True, help="Target schema version")
+    migrate.add_argument("--dry-run", action="store_true", help="Preview actions only")
+
+    args = parser.parse_args()
+    if args.cmd == "status":
+        print(json.dumps(status(), indent=2, ensure_ascii=False))
+        return 0
+    if args.cmd == "migrate":
+        result = migrate_schema(args.to, dry_run=args.dry_run)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0 if result.get("ok") else 1
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

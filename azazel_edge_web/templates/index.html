@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azazel-Edge Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <h1>🛡️ Azazel-Edge</h1>
+        </div>
+        <div class="header-right">
+            <div class="header-metrics">
+                <span class="header-metric">CPU Temp: <strong id="headerCpuTemp">--°C</strong></span>
+                <span class="header-metric">CPU Usage: <strong id="headerCpuUsage">--%</strong></span>
+                <span class="header-metric">Memory Usage: <strong id="headerMemUsage">--%</strong></span>
+            </div>
+            <span id="headerClock" class="header-clock">--:--:--</span>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <div class="container">
+        <!-- PC: Two-column layout | Mobile: Single column -->
+        <div class="grid">
+            <!-- Risk Card -->
+            <div class="card card-risk" id="cardRisk">
+                <h2>🎯 Risk Assessment</h2>
+                <div class="risk-compact">
+                    <div class="score-circle" id="scoreCircle">0</div>
+                    <div class="risk-info">
+                        <div class="risk-status" id="riskStatus">SAFE</div>
+                        <div class="risk-level" id="riskThreatLevel">LOW</div>
+                    </div>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Recommendation</span>
+                    <span class="metric-value text-wrap" id="riskRecommendation">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Reason</span>
+                    <span class="metric-value text-wrap" id="riskReason">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Suricata</span>
+                    <span class="badge" id="riskSuricata">UNKNOWN</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">OpenCanary</span>
+                    <span class="badge" id="riskOpenCanary">UNKNOWN</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">ntfy</span>
+                    <span class="badge" id="riskNtfy">UNKNOWN</span>
+                </div>
+            </div>
+
+            <!-- Control / Safety Card -->
+            <div class="card card-control">
+                <h2>🚦 Control & Safety</h2>
+
+                <h3>Gateway Mode</h3>
+                <div class="metric">
+                    <span class="metric-label">Current</span>
+                    <span class="badge" id="modeCurrent">SHIELD</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Last Change</span>
+                    <span class="metric-value" id="modeLastChange">-</span>
+                </div>
+                <div class="mode-buttons">
+                    <button class="btn btn-secondary mode-btn" id="modePortalBtn" onclick="switchMode('portal')">Portal</button>
+                    <button class="btn btn-secondary mode-btn" id="modeShieldBtn" onclick="switchMode('shield')">Shield</button>
+                    <button class="btn btn-secondary mode-btn" id="modeScapegoatBtn" onclick="switchMode('scapegoat')">Scapegoat</button>
+                </div>
+                <div class="mode-note" id="modeNote">Inbound(wlan): DROP ALL</div>
+                
+                <h3>Traffic Filtering</h3>
+                <div class="metric">
+                    <span class="metric-label">QUIC</span>
+                    <span class="badge" id="ctrlQUIC">ALLOWED</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">DoH</span>
+                    <span class="badge" id="ctrlDoH">BLOCKED</span>
+                </div>
+
+                <h3>Traffic Shaping</h3>
+                <div class="metric">
+                    <span class="metric-label">Degrade</span>
+                    <span class="badge" id="ctrlDegrade">OFF</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Down/Up</span>
+                    <span class="metric-value" id="ctrlSpeed">- / - Mbps</span>
+                </div>
+
+                <h3>Security</h3>
+                <div class="metric">
+                    <span class="metric-label">Probe</span>
+                    <span class="metric-value text-wrap" id="ctrlProbe">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">IDS</span>
+                    <span class="metric-value text-wrap" id="ctrlIDS">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Delay-to-Win</span>
+                    <span class="metric-value text-wrap" id="ctrlCanaryDelay">inactive</span>
+                </div>
+            </div>
+
+                <!-- Connection Card -->
+                <div class="card card-connection">
+                    <h2>📡 Connection</h2>
+                    <div class="metric">
+                        <span class="metric-label">SSID</span>
+                        <span class="metric-value" id="connSSID">-</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">BSSID</span>
+                        <span class="metric-value mono" id="connBSSID">-</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Signal</span>
+                        <span class="metric-value" id="connSignal">- dBm</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Gateway</span>
+                        <span class="metric-value mono" id="connGateway">-</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">State</span>
+                        <span class="badge" id="wifiState">DISCONNECTED</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Internet</span>
+                        <span class="badge" id="internetCheck">UNKNOWN</span>
+                    </div>
+                
+                    <div class="metric" id="captivePortalWarning" style="display: none; flex-direction: column; align-items: flex-start;">
+                        <span class="metric-label">⚠️ Captive Portal</span>
+                        <span style="font-size: 0.75em; color: #ff6b35; margin-top: 4px;">
+                            Complete portal login, then Re-Probe
+                        </span>
+                    </div>
+
+                    <div class="metric" id="portalViewerRow" style="display: none;">
+                        <span class="metric-label">Portal Assist</span>
+                        <button class="btn btn-info btn-inline" id="portalViewerBtn" onclick="openPortalViewer()">
+                            🧭 Open Portal
+                        </button>
+                    </div>
+
+                    <div class="metric" id="portalReprobeRow" style="display: none;">
+                        <span class="metric-label">After Login</span>
+                        <button class="btn btn-success btn-inline" id="portalReprobeBtn" onclick="completePortalAuthReprobe()">
+                            ✅ Auth Done & Re-Probe
+                        </button>
+                    </div>
+                
+                    <button class="btn btn-primary" onclick="scanWiFi()" style="margin-top: 8px; width: 100%; font-size: 0.9em; padding: 8px;">
+                        📡 Scan Wi-Fi
+                    </button>
+                
+                    <div id="wifiScanResults" style="display: none; margin-top: 8px;">
+                        <div style="max-height: 120px; overflow-y: auto; border: 1px solid #333; border-radius: 4px; padding: 4px;">
+                            <table style="width: 100%; font-size: 0.7em;">
+                                <thead>
+                                    <tr style="border-bottom: 1px solid #444;">
+                                        <th style="text-align: left; padding: 2px;">SSID</th>
+                                        <th style="text-align: center; padding: 2px;">Sig</th>
+                                        <th style="text-align: center; padding: 2px;">Sec</th>
+                                        <th style="text-align: center; padding: 2px;">Act</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="wifiAPList">
+                                </tbody>
+                            </table>
+                        </div>
+                    
+                        <div style="margin-top: 6px;">
+                            <input type="text" id="manualSSID" placeholder="Manual SSID" style="width: 100%; padding: 6px; font-size: 0.75em; border: 1px solid #333; border-radius: 4px; background: #1a1a1a; color: #fff;">
+                        </div>
+                    
+                        <div id="passphraseSection" style="margin-top: 6px; display: none;">
+                            <input type="password" id="wifiPassphrase" placeholder="Passphrase" style="width: 100%; padding: 6px; font-size: 0.75em; border: 1px solid #333; border-radius: 4px; background: #1a1a1a; color: #fff;">
+                        </div>
+                    
+                        <button class="btn btn-success" onclick="connectWiFi()" style="margin-top: 6px; width: 100%; font-size: 0.75em; padding: 6px;">
+                            🔗 Connect
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Live Notifications Card -->
+                <div class="card card-notifications">
+                    <h2>🔔 Live Notifications</h2>
+                    <div class="metric">
+                        <span class="metric-label">Event Stream</span>
+                        <span class="badge" id="ntfyStreamStatus">CONNECTING</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Browser Notification</span>
+                        <span class="badge" id="browserNotifyStatus">DEFAULT</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Unread</span>
+                        <span class="badge" id="ntfyUnreadBadge">0</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">CA Cert</span>
+                        <span class="badge" id="caCertStatus">CHECKING</span>
+                    </div>
+                    <button class="btn btn-primary" id="enableNotificationsBtn" onclick="enableBrowserNotifications()" style="margin-top: 8px; width: 100%; font-size: 0.9em; padding: 8px;">
+                        🔔 通知を有効化
+                    </button>
+                    <button class="btn btn-secondary" id="downloadCaBtn" onclick="downloadCACertificate()" style="margin-top: 8px; width: 100%; font-size: 0.9em; padding: 8px;">
+                        📥 CA証明書をダウンロード
+                    </button>
+                    <div class="cert-fingerprint" id="caCertFingerprint">SHA256: -</div>
+                    <div class="event-log-wrap">
+                        <ul class="event-log-list" id="ntfyEventLog"></ul>
+                    </div>
+                </div>
+        </div>
+
+        <!-- Evidence (Full Width) -->
+        <div class="card card-evidence">
+            <h2>📜 Evidence & State</h2>
+            <div class="evidence-grid">
+                <div class="metric">
+                    <span class="metric-label">State</span>
+                    <span class="badge" id="evidState">NORMAL</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Suspicion</span>
+                    <span class="metric-value" id="evidSuspicion">0</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">CPU Temp</span>
+                    <span class="metric-value" id="sysCPUTemp">--°C</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">CPU Usage</span>
+                    <span class="metric-value" id="sysCPUUsage">--%</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Memory Usage</span>
+                    <span class="metric-value" id="sysMemUsage">--%</span>
+                </div>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Scan Results</span>
+                <span class="metric-value text-wrap" id="evidScan">-</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Decision</span>
+                <span class="metric-value text-wrap" id="evidDecision">-</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Action Bar (Fixed Bottom) -->
+    <div class="action-bar">
+        <button class="btn btn-primary" onclick="executeAction('refresh')">
+            🔄 Refresh
+        </button>
+        <button class="btn btn-secondary" onclick="executeAction('reprobe')">
+            🔍 Re-Probe
+        </button>
+        <button class="btn btn-warning" id="containBtn" onclick="executeAction('contain')">
+            🛡️ Contain
+        </button>
+        <button class="btn btn-success" id="releaseBtn" onclick="executeAction('release')" style="display: none;">
+            ✅ Release
+        </button>
+        <button class="btn btn-danger" onclick="executeAction('disconnect')">
+            ⛔ Disconnect
+        </button>
+        <button class="btn btn-info mobile-more" onclick="showMoreMenu()">
+            ⋮ More
+        </button>
+    </div>
+
+    <!-- More Menu (Mobile) -->
+    <div class="more-menu" id="moreMenu" style="display: none;">
+        <button class="btn btn-secondary" onclick="executeAction('details'); hideMoreMenu();">
+            📄 Details
+        </button>
+        <button class="btn btn-secondary" onclick="executeAction('stage_open'); hideMoreMenu();">
+            🚪 Stage Open
+        </button>
+        <button class="btn btn-warning" onclick="executeReboot(); hideMoreMenu();">
+            ↻ Reboot
+        </button>
+        <button class="btn btn-danger" onclick="executeShutdown(); hideMoreMenu();">
+            ⏻ Shutdown
+        </button>
+        <button class="btn btn-secondary" onclick="hideMoreMenu()">
+            ❌ Close
+        </button>
+    </div>
+
+    <!-- Details Modal -->
+    <div class="modal" id="detailsModal" onclick="closeDetailsModal()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3>Probe Details</h3>
+                <button class="modal-close" onclick="closeDetailsModal()" aria-label="Close">×</button>
+            </div>
+            <div class="modal-body" id="detailsBody"></div>
+        </div>
+    </div>
+
+    <!-- Status Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

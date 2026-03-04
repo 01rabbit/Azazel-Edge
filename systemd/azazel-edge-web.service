@@ -1,0 +1,19 @@
+[Unit]
+Description=Azazel-Edge Web UI (Gunicorn)
+After=network-online.target azazel-edge-control-daemon.service
+Wants=network-online.target azazel-edge-control-daemon.service
+
+[Service]
+Type=simple
+Environment="AZAZEL_WEB_HOST=127.0.0.1"
+Environment="AZAZEL_WEB_PORT=8084"
+Environment="AZAZEL_WEB_WORKERS=2"
+Environment="AZAZEL_WEB_THREADS=4"
+Environment="PYTHONPATH=/opt/azazel-edge:/opt/azazel-edge/py"
+EnvironmentFile=-/etc/default/azazel-edge-web
+ExecStart=/bin/bash -lc 'exec /opt/azazel-edge/venv/bin/gunicorn --workers "${AZAZEL_WEB_WORKERS}" --threads "${AZAZEL_WEB_THREADS}" --bind "${AZAZEL_WEB_HOST}:${AZAZEL_WEB_PORT}" --chdir /opt/azazel-edge --pythonpath /opt/azazel-edge:/opt/azazel-edge/py azazel_edge_web.app:app'
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

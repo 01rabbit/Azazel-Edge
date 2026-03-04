@@ -140,6 +140,7 @@ configure_dnsmasq_dhcp() {
 interface=${LAN_IF}
 bind-interfaces
 except-interface=lo
+resolv-file=/run/NetworkManager/resolv.conf
 dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},255.255.255.0,${DHCP_LEASE_TIME}
 dhcp-option=option:router,${SSH_LISTEN_IP}
 dhcp-option=option:dns-server,${SSH_LISTEN_IP}
@@ -147,6 +148,13 @@ EOD
 
   systemctl enable --now dnsmasq
   systemctl restart dnsmasq
+}
+
+ensure_resolver_baseline() {
+  if [[ -f /run/NetworkManager/resolv.conf ]]; then
+    rm -f /etc/resolv.conf
+    ln -s /run/NetworkManager/resolv.conf /etc/resolv.conf
+  fi
 }
 
 configure_sshd() {
@@ -214,6 +222,10 @@ nmcli con up lan-wlan0-ap || true
 systemctl restart dnsmasq
 systemctl restart ssh
 systemctl restart avahi-daemon
+if [[ -f /run/NetworkManager/resolv.conf ]]; then
+  rm -f /etc/resolv.conf
+  ln -s /run/NetworkManager/resolv.conf /etc/resolv.conf
+fi
 sysctl -p /etc/sysctl.d/99-azazel-internal.conf >/dev/null || true
 if [[ -f /etc/nftables.d/azazel-internal.nft ]]; then
   nft list table ip azazel_internal >/dev/null 2>&1 && nft delete table ip azazel_internal || true
@@ -260,6 +272,7 @@ main() {
   install_packages
   ensure_services
   configure_nm_internal_bridge
+  ensure_resolver_baseline
   configure_dnsmasq_dhcp
   configure_sshd
   configure_forwarding_and_nat
