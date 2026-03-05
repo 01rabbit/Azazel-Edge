@@ -7,6 +7,7 @@ ENABLE_NTFY="${ENABLE_NTFY:-1}"
 ENABLE_HTTPS="${ENABLE_HTTPS:-1}"
 ENABLE_LOCAL_CA="${ENABLE_LOCAL_CA:-1}"
 ENABLE_SECURITY_STACK="${ENABLE_SECURITY_STACK:-1}"
+ENABLE_RUST_CORE="${ENABLE_RUST_CORE:-1}"
 VENV_DIR="/opt/azazel-edge/venv"
 
 if [[ "${EUID}" -ne 0 ]]; then
@@ -20,16 +21,20 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3 python3-venv python3-pip \
   network-manager iw curl dnsmasq nginx openssl
 
+DEBIAN_FRONTEND=noninteractive apt-get install -y rustc cargo
+
 echo "[2/16] Create base directories"
 install -d \
   /opt/azazel-edge/py/azazel_edge \
   /opt/azazel-edge/py/azazel_edge/tactics_engine \
   /opt/azazel-edge/py/azazel_edge/sensors \
   /opt/azazel-edge/py/azazel_edge_control/scripts \
+  /opt/azazel-edge/py/azazel_edge_ai \
   /opt/azazel-edge/azazel_edge_web/static \
   /opt/azazel-edge/azazel_edge_web/templates \
   /opt/azazel-edge/security/opencanary \
   /opt/azazel-edge/security/suricata \
+  /opt/azazel-edge/rust/azazel-edge-core/src \
   /opt/azazel-edge/fonts \
   /opt/azazel-edge/icons/epd \
   /opt/azazel-edge/logs/tactics_engine
@@ -59,6 +64,8 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge_control/mode_manager.py" /opt/azazel-
 install -m 0644 "$REPO_ROOT/py/azazel_edge_control/wifi_scan.py" /opt/azazel-edge/py/azazel_edge_control/wifi_scan.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge_control/wifi_connect.py" /opt/azazel-edge/py/azazel_edge_control/wifi_connect.py
 install -m 0755 "$REPO_ROOT/py/azazel_edge_control/scripts/"*.sh /opt/azazel-edge/py/azazel_edge_control/scripts/
+install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/__init__.py" /opt/azazel-edge/py/azazel_edge_ai/__init__.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/agent.py" /opt/azazel-edge/py/azazel_edge_ai/agent.py
 
 echo "[6/16] Install WebUI and EPD modules"
 install -m 0644 "$REPO_ROOT/azazel_edge_web/app.py" /opt/azazel-edge/azazel_edge_web/app.py
@@ -90,6 +97,7 @@ install -m 0755 "$REPO_ROOT/bin/azazel-edge-compose" /usr/local/bin/azazel-edge-
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-epd" /usr/local/bin/azazel-edge-epd
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-epd-refresh" /usr/local/bin/azazel-edge-epd-refresh
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-control-daemon" /usr/local/bin/azazel-edge-control-daemon
+install -m 0755 "$REPO_ROOT/bin/azazel-edge-ai-agent" /usr/local/bin/azazel-edge-ai-agent
 install -m 0755 "$REPO_ROOT/installer/internal/set_dev_remote_access.sh" /opt/azazel-edge/set_dev_remote_access.sh
 
 echo "[10/16] Install systemd units"
@@ -99,6 +107,8 @@ install -m 0644 "$REPO_ROOT/systemd/azazel-edge-epd-refresh.service" /etc/system
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-epd-refresh.timer" /etc/systemd/system/azazel-edge-epd-refresh.timer
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-opencanary.service" /etc/systemd/system/azazel-edge-opencanary.service
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-suricata.service" /etc/systemd/system/azazel-edge-suricata.service
+install -m 0644 "$REPO_ROOT/systemd/azazel-edge-ai-agent.service" /etc/systemd/system/azazel-edge-ai-agent.service
+install -m 0644 "$REPO_ROOT/systemd/azazel-edge-core.service" /etc/systemd/system/azazel-edge-core.service
 systemctl daemon-reload
 
 echo "[11/16] Prepare runtime/config paths"
@@ -123,6 +133,8 @@ if [[ "$ENABLE_SERVICES" == "1" ]]; then
   systemctl enable --now azazel-edge-control-daemon.service
   systemctl enable --now azazel-edge-web.service
   systemctl enable --now azazel-edge-epd-refresh.timer
+  systemctl enable --now azazel-edge-ai-agent.service
+  systemctl enable --now azazel-edge-core.service
   systemctl restart azazel-edge-control-daemon.service
   systemctl restart azazel-edge-web.service
 fi
@@ -156,5 +168,11 @@ install -m 0644 "$REPO_ROOT/security/suricata/azazel-lite.rules" /opt/azazel-edg
 if [[ "$ENABLE_SECURITY_STACK" == "1" ]]; then
   ENABLE_SERVICES="$ENABLE_SERVICES" /opt/azazel-edge/install_security_stack.sh
 fi
+
+echo "[17/17] Install Rust defense core source (optional)"
+install -m 0644 "$REPO_ROOT/rust/azazel-edge-core/Cargo.toml" /opt/azazel-edge/rust/azazel-edge-core/Cargo.toml
+install -m 0644 "$REPO_ROOT/rust/azazel-edge-core/src/main.rs" /opt/azazel-edge/rust/azazel-edge-core/src/main.rs
+cargo build --release --manifest-path /opt/azazel-edge/rust/azazel-edge-core/Cargo.toml
+install -m 0755 /opt/azazel-edge/rust/azazel-edge-core/target/release/azazel-edge-core /usr/local/bin/azazel-edge-core
 
 echo "Installed Azazel-Edge stack (WebUI/TUI/EPD/control/HTTPS/security) under /opt/azazel-edge and /usr/local/bin."

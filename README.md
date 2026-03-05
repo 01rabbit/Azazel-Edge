@@ -25,6 +25,33 @@ sudo AP_SSID='Azazel-Internal' AP_PSK='yourStrongPass123' ./installer/internal/i
 
 `AP_SSID` と `AP_PSK` を省略するとデフォルト値が使われます。
 
+## ワンショット統合インストーラ
+内部ネットワーク + アプリスタック + （任意）開発用リモート許可を1回で実行:
+
+```bash
+cd /home/azazel/Azazel-Edge
+sudo ENABLE_DEV_REMOTE_ACCESS=1 DEV_REMOTE_MODE=open ./installer/internal/install_all.sh
+```
+
+主な切替変数:
+- `ENABLE_INTERNAL_NETWORK=1|0`（既定: 1）
+- `ENABLE_APP_STACK=1|0`（既定: 1）
+- `ENABLE_DEV_REMOTE_ACCESS=1|0`（既定: 0）
+- `DEV_REMOTE_MODE=open|close`（既定: open）
+
+Rust防御コアは既定で導入されます（完全移行モード）。明示的に再導入する場合:
+```bash
+cd /home/azazel/Azazel-Edge
+sudo ENABLE_RUST_CORE=1 ./installer/internal/install_migrated_tools.sh
+```
+
+関連サービス:
+- `azazel-edge-core.service`（Rustイベントエンジン）
+- `azazel-edge-ai-agent.service`（Python AI支援）
+
+設計資料:
+- `docs/ARCHITECTURE_REDESIGN.md`
+
 ## 反映後チェック
 ```bash
 nmcli -t -f DEVICE,STATE,CONNECTION dev
