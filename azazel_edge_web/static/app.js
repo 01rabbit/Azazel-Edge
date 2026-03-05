@@ -101,6 +101,23 @@ function updateUI(state) {
     
     updateElement('riskRecommendation', state.recommendation || '-');
     updateElement('riskReason', (state.reasons || [])[0] || '-');
+    const llm = state.llm || {};
+    const llmMetrics = state.llm_metrics || {};
+    const llmStatus = String(llm.status || 'n/a').toUpperCase();
+    const deferredCount = Number(llmMetrics.deferred_count || 0);
+    const queueDepth = Number(llmMetrics.queue_depth || 0);
+    const queueCap = Number(llmMetrics.queue_capacity || 0);
+    const llmLatency = Number(llmMetrics.llm_latency_ms_last || 0);
+    const llmReason = String(llm.reason || llmMetrics.last_error || '').trim();
+    updateElement('riskLLMStatus', llmStatus);
+    updateElement('riskLLMDeferred', String(deferredCount));
+    updateElement('riskLLMQueue', `${queueDepth} / ${queueCap}`);
+    updateElement('riskLLMLatency', llmLatency > 0 ? `${llmLatency} ms` : '-');
+    updateElement('riskLLMReason', llmReason || '-');
+    const deferredEl = document.getElementById('riskLLMDeferred');
+    if (deferredEl) {
+        deferredEl.classList.toggle('alert', deferredCount > 0);
+    }
 
     // Monitoring status
     const monitoring = state.monitoring || {};

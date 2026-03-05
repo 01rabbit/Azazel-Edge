@@ -8,10 +8,12 @@ __name_formal__ = "Tactics Engine"
 from .config_hash import ConfigHash
 from .decision_logger import DecisionLogger
 from .eve_parser import EVEParser, EVEParseError
+from .scorer import TacticalScorer
 
 __all__ = [
     "ConfigHash",
     "DecisionLogger",
     "EVEParser",
     "EVEParseError",
+    "TacticalScorer",
 ]

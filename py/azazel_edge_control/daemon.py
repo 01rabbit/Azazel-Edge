@@ -30,6 +30,7 @@ if str(PY_ROOT) not in sys.path:
 from wifi_scan import scan_wifi, get_wireless_interface, check_networkmanager
 from mode_manager import ModeManager
 from wifi_connect import connect_wifi, update_state_json
+from azazel_edge.sensors.network_health import NetworkHealthMonitor
 from azazel_edge.path_schema import (
     first_minute_config_candidates,
     migrate_schema,
@@ -75,6 +76,10 @@ RATE_LIMITS = {
 PORTAL_DEFAULT_START_URL = "http://neverssl.com"
 _LAST_CPU_TOTAL: float | None = None
 _LAST_CPU_IDLE: float | None = None
+NETWORK_HEALTH = NetworkHealthMonitor(
+    cache_ttl_sec=float(os.environ.get("AZAZEL_HEALTH_CACHE_TTL", "25")),
+    captive_url=os.environ.get("AZAZEL_CAPTIVE_CHECK_URL", "http://connectivitycheck.gstatic.com/generate_204"),
+)
 
 
 def _read_portal_viewer_env() -> dict[str, str]:
@@ -442,6 +447,42 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     connection.setdefault("wifi_state", "DISCONNECTED")
     connection.setdefault("internet_check", "N/A")
     connection.setdefault("usb_nat", "OFF")
+
+    iface = str(enriched.get("up_if", "wlan0") or "wlan0").strip()
+    gateway = str(enriched.get("gateway_ip", "") or "").strip()
+    health = NETWORK_HEALTH.assess(iface=iface, gateway_ip=gateway)
+    enriched["network_health"] = health
+    if health.get("internet_check"):
+        connection["internet_check"] = str(health.get("internet_check"))
+    connection["captive_portal"] = str(health.get("captive_portal", connection.get("captive_portal", "NA")))
+    connection["captive_portal_reason"] = str(
+        health.get("captive_portal_reason", connection.get("captive_portal_reason", "NOT_CHECKED"))
+    )
+
+    user_state = str(enriched.get("user_state", "") or "").upper()
+    signals = health.get("signals", []) if isinstance(health.get("signals"), list) else []
+    if user_state in ("", "CHECKING", "SAFE") and signals:
+        if "captive_portal" in signals or "evil_ap" in signals:
+            enriched["user_state"] = "CONTAINED"
+        else:
+            enriched["user_state"] = "LIMITED"
+
+    evidence = enriched.get("evidence")
+    if not isinstance(evidence, list):
+        evidence = []
+    if signals:
+        evidence.append(f"net_health={health.get('status','NA')} signals={','.join(signals)}")
+    else:
+        evidence.append(f"net_health={health.get('status','NA')}")
+    enriched["evidence"] = [str(x) for x in evidence][-8:]
+
+    reasons = enriched.get("reasons")
+    if not isinstance(reasons, list):
+        reasons = []
+    if signals:
+        reasons.append(f"health:{signals[0]}")
+    enriched["reasons"] = [str(x) for x in reasons][-5:]
+
     enriched["connection"] = connection
 
     return enriched

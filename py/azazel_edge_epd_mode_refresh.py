@@ -47,6 +47,7 @@ def _normal_render_spec(payload: Dict[str, Any], mode_label: str, risk_status: s
     live_ssid = ""
     live_signal: int | None = None
     live_wifi_state = ""
+    live_suspicion = 0
     for path in RUNTIME_SNAPSHOT_CANDIDATES:
         data = _safe_load(path)
         if not isinstance(data, dict):
@@ -62,6 +63,12 @@ def _normal_render_spec(payload: Dict[str, Any], mode_label: str, risk_status: s
             live_signal = int(float(str(raw_signal).strip()))
         except Exception:
             pass
+        internal = data.get("internal")
+        if isinstance(internal, dict):
+            try:
+                live_suspicion = int(float(str(internal.get("suspicion", 0)).strip()))
+            except Exception:
+                live_suspicion = 0
         if live_ssid or live_signal is not None:
             break
 
@@ -72,7 +79,7 @@ def _normal_render_spec(payload: Dict[str, Any], mode_label: str, risk_status: s
         "mode_label": str(mode_label or "SHIELD").strip().upper()[:12],
         "ssid": ssid,
         "risk_status": str(risk_status or "UNKNOWN").strip().upper(),
-        "suspicion": 0,
+        "suspicion": max(0, min(100, live_suspicion)),
         "signal": signal,
     }
 

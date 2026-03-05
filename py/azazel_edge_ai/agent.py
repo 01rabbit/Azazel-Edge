@@ -6,21 +6,192 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import socket
+import sys
+import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict
+
+PY_ROOT = Path(__file__).resolve().parents[1]
+if str(PY_ROOT) not in sys.path:
+    sys.path.insert(0, str(PY_ROOT))
+
+from azazel_edge.tactics_engine import ConfigHash, DecisionLogger, TacticalScorer
+from azazel_edge.tactics_engine.decision_logger import (
+    ChosenAction,
+    ScoreDelta,
+    StateSnapshot,
+)
 
 SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
 ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge/ai_advisory.json"))
 EVENT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", "/var/log/azazel-edge/ai-events.jsonl"))
+SNAPSHOT_PATH = Path(os.environ.get("AZAZEL_UI_SNAPSHOT", "/run/azazel-edge/ui_snapshot.json"))
+LLM_DEFERRED_LOG_PATH = Path(os.environ.get("AZAZEL_AI_DEFERRED_LOG", "/var/log/azazel-edge/ai-deferred.jsonl"))
+LLM_RESULT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-llm.jsonl"))
+METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_metrics.json"))
+POLICY_PATH = Path(os.environ.get("AZAZEL_AI_POLICY", "/run/azazel-edge/ai_runtime_policy.json"))
+LLM_ENABLED = os.environ.get("AZAZEL_LLM_ENABLED", "1") == "1"
+LLM_ENDPOINT = os.environ.get("AZAZEL_OLLAMA_ENDPOINT", "http://127.0.0.1:11434")
+LLM_MODEL_PRIMARY = os.environ.get("AZAZEL_LLM_MODEL_PRIMARY", os.environ.get("AZAZEL_LLM_MODEL", "qwen3.5:2b"))
+LLM_MODEL_DEGRADED = os.environ.get("AZAZEL_LLM_MODEL_DEGRADED", "qwen3.5:0.8b")
+OPS_COACH_MODEL = os.environ.get("AZAZEL_OPS_MODEL", "qwen3.5:4b")
+OPS_COACH_ENABLED = os.environ.get("AZAZEL_OPS_ENABLED", "1") == "1"
+LLM_TIMEOUT_SEC = float(os.environ.get("AZAZEL_LLM_TIMEOUT_SEC", "45"))
+LLM_RETRY_MAX = max(0, int(os.environ.get("AZAZEL_LLM_RETRY_MAX", "0")))
+LLM_RETRY_BACKOFF_SEC = float(os.environ.get("AZAZEL_LLM_RETRY_BACKOFF_SEC", "0.5"))
+LLM_AMBIG_MIN = int(os.environ.get("AZAZEL_LLM_AMBIG_MIN", "40"))
+LLM_AMBIG_MAX = int(os.environ.get("AZAZEL_LLM_AMBIG_MAX", "79"))
+LLM_AMBIG_MIN_DEGRADED = int(os.environ.get("AZAZEL_LLM_AMBIG_MIN_DEGRADED", str(min(79, LLM_AMBIG_MIN + 10))))
+LLM_QUEUE_MAX = int(os.environ.get("AZAZEL_LLM_QUEUE_MAX", "32"))
+LLM_NUM_CTX = int(os.environ.get("AZAZEL_LLM_NUM_CTX", "256"))
+LLM_NUM_PREDICT = int(os.environ.get("AZAZEL_LLM_NUM_PREDICT", "48"))
+LLM_NUM_THREAD = int(os.environ.get("AZAZEL_LLM_NUM_THREAD", "2"))
+LLM_KEEP_ALIVE = os.environ.get("AZAZEL_LLM_KEEP_ALIVE", "20m")
+LLM_THINK = os.environ.get("AZAZEL_LLM_THINK", "0") == "1"
+OPS_KEEP_ALIVE = os.environ.get("AZAZEL_OPS_KEEP_ALIVE", "0s")
+OPS_NUM_PREDICT = int(os.environ.get("AZAZEL_OPS_NUM_PREDICT", "80"))
+OPS_MIN_MEM_AVAILABLE_MB = int(os.environ.get("AZAZEL_OPS_MIN_MEM_AVAILABLE_MB", "1400"))
+OPS_MAX_SWAP_USED_MB = int(os.environ.get("AZAZEL_OPS_MAX_SWAP_USED_MB", "512"))
+OPS_ESCALATE_MIN_RISK = int(os.environ.get("AZAZEL_OPS_ESCALATE_MIN_RISK", "70"))
+OPS_ESCALATE_LOW_CONF = float(os.environ.get("AZAZEL_OPS_ESCALATE_LOW_CONF", "0.60"))
+OPS_ESCALATE_COOLDOWN_SEC = int(os.environ.get("AZAZEL_OPS_ESCALATE_COOLDOWN_SEC", "180"))
+OPS_MODEL_CHAIN = [
+    m.strip()
+    for m in os.environ.get("AZAZEL_OPS_MODEL_CHAIN", f"{OPS_COACH_MODEL},{LLM_MODEL_PRIMARY},{LLM_MODEL_DEGRADED}").split(",")
+    if m.strip()
+]
+LLM_PROMPT_SYSTEM = (
+    "Return strict minified JSON only. "
+    "Keys: verdict, confidence, reason, suggested_action, escalation. "
+    "reason<=80 chars, suggested_action<=80 chars, confidence=0.0..1.0."
+)
+OPS_PROMPT_SYSTEM = (
+    "You are an ops coach. Return strict JSON only with keys: runbook_id, summary, operator_note. "
+    "Keep summary and operator_note each under 120 chars."
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("azazel-edge-ai-agent")
+SCORER = TacticalScorer()
+DECISION_LOGGER = DecisionLogger()
+CONFIG_HASH = ConfigHash.compute(config_dict={"engine": "tactical_scorer_v1"})
+_LAST_RISK_SCORE = 0
+_LAST_STATE_NAME = "NORMAL"
+LLM_QUEUE: "queue.Queue[Dict[str, Any]]" = queue.Queue(maxsize=LLM_QUEUE_MAX)
+IO_LOCK = threading.Lock()
+METRICS_LOCK = threading.Lock()
+METRICS: Dict[str, Any] = {
+    "processed_events": 0,
+    "queue_depth": 0,
+    "queue_max_seen": 0,
+    "deferred_count": 0,
+    "llm_requests": 0,
+    "llm_completed": 0,
+    "llm_failed": 0,
+    "llm_retried": 0,
+    "llm_fallback_count": 0,
+    "llm_empty_response_count": 0,
+    "llm_latency_ms_last": 0,
+    "llm_latency_ms_ema": 0.0,
+    "llm_completed_rate": 0.0,
+    "llm_fallback_rate": 0.0,
+    "llm_empty_rate": 0.0,
+    "ops_requests": 0,
+    "ops_completed": 0,
+    "ops_skipped": 0,
+    "ops_errors": 0,
+    "ops_fallback_model_count": 0,
+    "policy_mode": "normal",
+    "last_error": "",
+    "last_update_ts": 0.0,
+}
+RUNTIME_POLICY: Dict[str, Any] = {"mode": "normal", "updated_at": 0.0, "reason": "init"}
+_LAST_OPS_ESCALATE_TS = 0.0
 
 
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _metrics_snapshot() -> Dict[str, Any]:
+    with METRICS_LOCK:
+        snap = dict(METRICS)
+    snap["queue_depth"] = LLM_QUEUE.qsize()
+    snap["queue_capacity"] = LLM_QUEUE_MAX
+    snap["policy"] = dict(RUNTIME_POLICY)
+    return snap
+
+
+def _persist_metrics() -> None:
+    _write_json(METRICS_PATH, _metrics_snapshot())
+
+
+def _persist_policy() -> None:
+    _write_json(POLICY_PATH, dict(RUNTIME_POLICY))
+
+
+def _metrics_update(**updates: Any) -> None:
+    now = time.time()
+    with METRICS_LOCK:
+        for k, v in updates.items():
+            METRICS[k] = v
+        METRICS["queue_depth"] = LLM_QUEUE.qsize()
+        METRICS["queue_max_seen"] = max(int(METRICS.get("queue_max_seen", 0)), LLM_QUEUE.qsize())
+        METRICS["last_update_ts"] = now
+
+
+def _metrics_inc(name: str, delta: int = 1) -> None:
+    now = time.time()
+    with METRICS_LOCK:
+        METRICS[name] = int(METRICS.get(name, 0)) + delta
+        METRICS["queue_depth"] = LLM_QUEUE.qsize()
+        METRICS["queue_max_seen"] = max(int(METRICS.get("queue_max_seen", 0)), LLM_QUEUE.qsize())
+        METRICS["last_update_ts"] = now
+
+
+def _update_kpi_rates() -> None:
+    with METRICS_LOCK:
+        requests = max(1, int(METRICS.get("llm_requests", 0)))
+        completed = int(METRICS.get("llm_completed", 0))
+        fallback = int(METRICS.get("llm_fallback_count", 0))
+        empty = int(METRICS.get("llm_empty_response_count", 0))
+        METRICS["llm_completed_rate"] = round(completed / requests, 4)
+        METRICS["llm_fallback_rate"] = round(fallback / requests, 4)
+        METRICS["llm_empty_rate"] = round(empty / requests, 4)
+
+
+def _set_policy_mode(mode: str, reason: str) -> None:
+    mode_norm = "degraded" if str(mode).lower() == "degraded" else "normal"
+    if RUNTIME_POLICY.get("mode") == mode_norm and RUNTIME_POLICY.get("reason") == reason:
+        return
+    RUNTIME_POLICY["mode"] = mode_norm
+    RUNTIME_POLICY["reason"] = reason
+    RUNTIME_POLICY["updated_at"] = time.time()
+    _metrics_update(policy_mode=mode_norm)
+    with IO_LOCK:
+        _persist_policy()
+        _persist_metrics()
+    logger.warning("LLM runtime policy switched to %s (%s)", mode_norm, reason)
+
+
+def _recompute_policy() -> None:
+    _update_kpi_rates()
+    snap = _metrics_snapshot()
+    requests = int(snap.get("llm_requests", 0))
+    completed_rate = float(snap.get("llm_completed_rate", 0.0))
+    empty_rate = float(snap.get("llm_empty_rate", 0.0))
+    fallback_rate = float(snap.get("llm_fallback_rate", 0.0))
+
+    if requests >= 10 and (completed_rate < 0.15 or empty_rate > 0.35 or fallback_rate > 0.70):
+        _set_policy_mode("degraded", f"quality_low:c={completed_rate:.2f}:e={empty_rate:.2f}:f={fallback_rate:.2f}")
+        return
+    if requests >= 20 and completed_rate >= 0.40 and empty_rate < 0.20 and fallback_rate < 0.55:
+        _set_policy_mode("normal", f"quality_recovered:c={completed_rate:.2f}:e={empty_rate:.2f}:f={fallback_rate:.2f}")
 
 
 def _risk_level(score: int) -> str:
@@ -33,6 +204,126 @@ def _risk_level(score: int) -> str:
     return "LOW"
 
 
+def _system_mem_state() -> tuple[int, int]:
+    mem_available_kb = 0
+    swap_total_kb = 0
+    swap_free_kb = 0
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                mem_available_kb = int(line.split()[1])
+            elif line.startswith("SwapTotal:"):
+                swap_total_kb = int(line.split()[1])
+            elif line.startswith("SwapFree:"):
+                swap_free_kb = int(line.split()[1])
+    except Exception:
+        return 0, 0
+    swap_used_kb = max(0, swap_total_kb - swap_free_kb)
+    return int(mem_available_kb / 1024), int(swap_used_kb / 1024)
+
+
+def _ops_coach_allowed() -> tuple[bool, str]:
+    if not OPS_COACH_ENABLED:
+        return False, "ops_disabled"
+    mem_avail_mb, swap_used_mb = _system_mem_state()
+    if mem_avail_mb > 0 and mem_avail_mb < OPS_MIN_MEM_AVAILABLE_MB:
+        return False, f"low_mem:{mem_avail_mb}MB"
+    if swap_used_mb > OPS_MAX_SWAP_USED_MB:
+        return False, f"swap_high:{swap_used_mb}MB"
+    return True, "ok"
+
+
+def _should_escalate_to_ops(
+    advisory: Dict[str, Any],
+    llm_status: str,
+    confidence: float,
+    llm_escalation: bool = False,
+) -> tuple[bool, str]:
+    global _LAST_OPS_ESCALATE_TS
+    if not OPS_COACH_ENABLED:
+        return False, "ops_disabled"
+
+    now = time.time()
+    if _LAST_OPS_ESCALATE_TS > 0 and (now - _LAST_OPS_ESCALATE_TS) < OPS_ESCALATE_COOLDOWN_SEC:
+        return False, "cooldown"
+
+    risk_score = int(advisory.get("risk_score") or 0)
+    if llm_status != "completed":
+        return True, "llm_not_completed"
+    if risk_score >= 85:
+        return True, "critical_risk"
+    if llm_escalation:
+        return True, "llm_escalation_flag"
+    if risk_score >= OPS_ESCALATE_MIN_RISK and confidence < OPS_ESCALATE_LOW_CONF:
+        return True, "high_risk_low_confidence"
+    return False, "not_needed"
+
+
+def _run_ops_coach(advisory: Dict[str, Any], verdict: str, confidence: float, reason: str, trigger_reason: str) -> Dict[str, Any]:
+    global _LAST_OPS_ESCALATE_TS
+    allowed, why = _ops_coach_allowed()
+    if not allowed:
+        return {"status": "skipped", "reason": why, "model": OPS_COACH_MODEL, "trigger": trigger_reason}
+
+    coach_payload = {
+        "state_name": advisory.get("state_name", "PROBE"),
+        "risk_score": advisory.get("risk_score", 0),
+        "attack_type": advisory.get("attack_type", "unknown"),
+        "llm_verdict": verdict,
+        "llm_confidence": confidence,
+        "llm_reason": reason,
+        "recommendation": advisory.get("recommendation", ""),
+    }
+    errors: list[dict[str, str]] = []
+    for idx, model in enumerate(OPS_MODEL_CHAIN):
+        try:
+            coach = _ollama_chat(
+                coach_payload,
+                model=model,
+                prompt_system=OPS_PROMPT_SYSTEM,
+                keep_alive=OPS_KEEP_ALIVE,
+                num_predict=OPS_NUM_PREDICT,
+                required_keys=None,
+            )
+            _LAST_OPS_ESCALATE_TS = time.time()
+            if idx > 0:
+                _metrics_inc("ops_fallback_model_count", 1)
+            runbook_id = str(
+                coach.get("runbook_id")
+                or coach.get("playbook_id")
+                or coach.get("id")
+                or ""
+            ).strip()
+            summary = str(coach.get("summary") or coach.get("reason") or coach.get("analysis") or "").strip()
+            operator_note = str(
+                coach.get("operator_note")
+                or coach.get("suggested_action")
+                or coach.get("action")
+                or summary
+            ).strip()
+            if not summary:
+                raise ValueError("ops_empty_summary")
+            return {
+                "status": "completed",
+                "model": model,
+                "trigger": trigger_reason,
+                "fallback_model_used": idx > 0,
+                "runbook_id": runbook_id,
+                "summary": summary,
+                "operator_note": operator_note,
+            }
+        except Exception as exc:
+            errors.append({"model": model, "reason": str(exc)})
+            continue
+    return {
+        "status": "error",
+        "model": OPS_COACH_MODEL,
+        "trigger": trigger_reason,
+        "reason": "all_ops_models_failed",
+        "errors": errors,
+    }
+
+
 def _recommendation(ev: Dict[str, Any], score: int) -> str:
     port = int(ev.get("target_port") or 0)
     if score >= 80:
@@ -42,12 +333,45 @@ def _recommendation(ev: Dict[str, Any], score: int) -> str:
     return "Observe and continue baseline monitoring"
 
 
+def _state_name(score: int) -> str:
+    if score >= 80:
+        return "CONTAIN"
+    if score >= 60:
+        return "DEGRADED"
+    if score >= 40:
+        return "PROBE"
+    return "NORMAL"
+
+
+def _user_state(state_name: str) -> str:
+    m = {
+        "NORMAL": "SAFE",
+        "PROBE": "LIMITED",
+        "DEGRADED": "LIMITED",
+        "CONTAIN": "CONTAINED",
+        "DECEPTION": "DECEPTION",
+    }
+    return m.get(state_name, "CHECKING")
+
+
 def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
+    global _LAST_RISK_SCORE, _LAST_STATE_NAME
+
     norm = event.get("normalized") if isinstance(event, dict) else {}
     if not isinstance(norm, dict):
         norm = {}
 
-    risk_score = int(norm.get("risk_score") or 0)
+    features = {
+        "suricata_sid": int(norm.get("sid") or 0),
+        "suricata_sev": int(norm.get("severity") or 0),
+        "suricata_signature": str(norm.get("attack_type") or ""),
+        "suricata_category": str(norm.get("category") or ""),
+        "suricata_action": str(norm.get("action") or "allowed"),
+        "target_port": int(norm.get("target_port") or 0),
+        "protocol": str(norm.get("protocol") or ""),
+    }
+    risk_score, factors = SCORER.score_with_features(features)
+
     advisory = {
         "ts": time.time(),
         "source": "ai_agent",
@@ -58,8 +382,439 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
         "dst_ip": str(norm.get("dst_ip") or ""),
         "target_port": int(norm.get("target_port") or 0),
         "recommendation": _recommendation(norm, risk_score),
+        "score_factors": factors,
+        "score_engine": "tactical_scorer_v1",
+        "state_name": _state_name(risk_score),
+        "user_state": _user_state(_state_name(risk_score)),
+        "suricata_severity": int(features["suricata_sev"]),
+        "suricata_sid": int(features["suricata_sid"]),
     }
+
+    state_before = StateSnapshot(
+        state="ANALYZING",
+        user_state="NORMAL",
+        suspicion=float(_LAST_RISK_SCORE),
+        risk_score=int(_LAST_RISK_SCORE),
+    )
+    state_after = StateSnapshot(
+        state="ANALYZING",
+        user_state="NORMAL",
+        suspicion=float(risk_score),
+        risk_score=risk_score,
+    )
+    score_delta = ScoreDelta(
+        suspicion_add=max(0.0, float(risk_score - _LAST_RISK_SCORE)),
+        suspicion_decay=max(0.0, float(_LAST_RISK_SCORE - risk_score)),
+    )
+    record = DecisionLogger.create_record(
+        engine_version="0.1.0",
+        config_hash=CONFIG_HASH,
+        inputs_source="suricata",
+        event_digest=f"sid:{features['suricata_sid']}:port:{features['target_port']}",
+        event_min={
+            "sid": features["suricata_sid"],
+            "severity": features["suricata_sev"],
+            "signature": features["suricata_signature"],
+            "category": features["suricata_category"],
+            "action": features["suricata_action"],
+        },
+        features=features,
+        state_before=state_before,
+        score_delta=score_delta,
+        constraints_triggered=[],
+        chosen=[ChosenAction(action_type="action", detail={"recommendation": advisory["recommendation"]})],
+        state_after=state_after,
+        parse_errors={},
+    )
+    DECISION_LOGGER.log_decision(record)
+    _LAST_RISK_SCORE = risk_score
+    _LAST_STATE_NAME = advisory["state_name"]
+
     return advisory
+
+
+def _is_ambiguous(advisory: Dict[str, Any]) -> bool:
+    score = int(advisory.get("risk_score") or 0)
+    min_score = LLM_AMBIG_MIN_DEGRADED if RUNTIME_POLICY.get("mode") == "degraded" else LLM_AMBIG_MIN
+    return min_score <= score <= LLM_AMBIG_MAX
+
+
+def _select_analyst_model() -> str:
+    if RUNTIME_POLICY.get("mode") == "degraded":
+        return LLM_MODEL_DEGRADED
+    return LLM_MODEL_PRIMARY
+
+
+def _route_llm(event: Dict[str, Any], advisory: Dict[str, Any]) -> None:
+    if not LLM_ENABLED:
+        advisory["llm"] = {"status": "disabled", "reason": "llm_disabled"}
+        _metrics_update(last_error="")
+        return
+    if not _is_ambiguous(advisory):
+        advisory["llm"] = {
+            "status": "skipped_non_ambiguous",
+            "reason": "risk_score_outside_ambiguous_range",
+        }
+        if int(advisory.get("risk_score") or 0) >= 85:
+            try:
+                LLM_QUEUE.put_nowait(
+                    {
+                        "event": event,
+                        "advisory": advisory.copy(),
+                        "enqueued_at": time.time(),
+                        "ops_only": True,
+                    }
+                )
+                advisory["ops_coach"] = {"status": "queued", "reason": "critical_risk_direct", "model": OPS_COACH_MODEL}
+                _metrics_inc("ops_requests", 1)
+            except queue.Full:
+                advisory["ops_coach"] = {"status": "deferred", "reason": "queue_full", "model": OPS_COACH_MODEL}
+                _metrics_inc("deferred_count", 1)
+        _metrics_update(last_error="")
+        return
+
+    queue_depth = LLM_QUEUE.qsize()
+    if queue_depth >= LLM_QUEUE_MAX:
+        advisory["llm"] = {"status": "deferred", "reason": "queue_full", "queue_depth": queue_depth}
+        _metrics_inc("deferred_count", 1)
+        _metrics_update(last_error="queue_full")
+        _append_jsonl(
+            LLM_DEFERRED_LOG_PATH,
+            {
+                "ts": time.time(),
+                "reason": "queue_full",
+                "queue_depth": queue_depth,
+                "sid": advisory.get("suricata_sid", 0),
+                "risk_score": advisory.get("risk_score", 0),
+            },
+        )
+        return
+
+    model = _select_analyst_model()
+    task = {"event": event, "advisory": advisory.copy(), "enqueued_at": time.time(), "model": model}
+    try:
+        LLM_QUEUE.put_nowait(task)
+        advisory["llm"] = {"status": "queued", "queue_depth": LLM_QUEUE.qsize(), "model": model}
+        _metrics_inc("llm_requests", 1)
+        _metrics_update(last_error="")
+    except queue.Full:
+        advisory["llm"] = {"status": "deferred", "reason": "queue_full", "queue_depth": LLM_QUEUE.qsize()}
+        _metrics_inc("deferred_count", 1)
+        _metrics_update(last_error="queue_full")
+        _append_jsonl(
+            LLM_DEFERRED_LOG_PATH,
+            {
+                "ts": time.time(),
+                "reason": "queue_full",
+                "queue_depth": LLM_QUEUE.qsize(),
+                "sid": advisory.get("suricata_sid", 0),
+                "risk_score": advisory.get("risk_score", 0),
+            },
+        )
+
+
+def _extract_json_payload(text: str) -> Dict[str, Any]:
+    body = text.strip()
+    if body.startswith("```"):
+        start = body.find("{")
+        end = body.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            body = body[start : end + 1]
+    parsed = json.loads(body)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _build_llm_input(event: Dict[str, Any], advisory: Dict[str, Any]) -> Dict[str, Any]:
+    norm = event.get("normalized", {})
+    if not isinstance(norm, dict):
+        norm = {}
+    return {
+        "sid": advisory.get("suricata_sid", 0),
+        "suricata_severity": advisory.get("suricata_severity", 0),
+        "risk_score": advisory.get("risk_score", 0),
+        "attack_type": advisory.get("attack_type", "unknown"),
+        "src_ip": advisory.get("src_ip", ""),
+        "dst_ip": advisory.get("dst_ip", ""),
+        "target_port": advisory.get("target_port", 0),
+        "signature": norm.get("attack_type", ""),
+        "category": norm.get("category", ""),
+        "action": norm.get("action", ""),
+    }
+
+
+def _ollama_chat(
+    payload: Dict[str, Any],
+    model: str,
+    prompt_system: str = LLM_PROMPT_SYSTEM,
+    keep_alive: str = LLM_KEEP_ALIVE,
+    num_predict: int = LLM_NUM_PREDICT,
+    required_keys: tuple[str, ...] | None = ("verdict", "confidence", "reason", "suggested_action", "escalation"),
+) -> Dict[str, Any]:
+    req_body = {
+        "model": model,
+        "stream": False,
+        "think": LLM_THINK,
+        "keep_alive": keep_alive,
+        "messages": [
+            {"role": "system", "content": prompt_system},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        "options": {
+            "temperature": 0.1,
+            "num_predict": num_predict,
+            "num_ctx": LLM_NUM_CTX,
+            "num_thread": LLM_NUM_THREAD,
+        },
+    }
+    raw = json.dumps(req_body, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url=f"{LLM_ENDPOINT.rstrip('/')}/api/chat",
+        data=raw,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_SEC) as resp:
+        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    message = data.get("message", {}) if isinstance(data, dict) else {}
+    content = str(message.get("content") or "")
+    if not content.strip():
+        raise ValueError("empty_content")
+    parsed = _extract_json_payload(content)
+    if required_keys and any(k not in parsed for k in required_keys):
+        raise ValueError("invalid_json_schema")
+    return parsed
+
+
+def _call_llm_with_retry(payload: Dict[str, Any], model: str) -> tuple[Dict[str, Any] | None, int, int, str]:
+    attempts_total = 1 + LLM_RETRY_MAX
+    latency_ms = 0
+    last_error = ""
+    for attempt in range(1, attempts_total + 1):
+        started = time.time()
+        try:
+            result = _ollama_chat(payload, model=model)
+            latency_ms = int((time.time() - started) * 1000)
+            return result, latency_ms, attempt, ""
+        except Exception as exc:
+            latency_ms = int((time.time() - started) * 1000)
+            last_error = str(exc)
+            if attempt < attempts_total:
+                _metrics_inc("llm_retried", 1)
+                time.sleep(max(0.0, LLM_RETRY_BACKOFF_SEC * attempt))
+    return None, latency_ms, attempts_total, last_error
+
+
+def _process_llm_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    event = task.get("event", {})
+    advisory = task.get("advisory", {})
+    if bool(task.get("ops_only")):
+        ops = _run_ops_coach(
+            advisory,
+            verdict="not_evaluated",
+            confidence=0.0,
+            reason="critical_risk_direct",
+            trigger_reason="critical_risk_direct",
+        )
+        advisory["ops_coach"] = ops
+        if ops.get("status") == "completed":
+            _metrics_inc("ops_completed", 1)
+        elif ops.get("status") == "skipped":
+            _metrics_inc("ops_skipped", 1)
+        else:
+            _metrics_inc("ops_errors", 1)
+        with IO_LOCK:
+            _write_json(ADVISORY_PATH, advisory)
+            _update_ui_snapshot(advisory, count_suricata=False)
+            _persist_metrics()
+        return advisory
+
+    model = str(task.get("model") or _select_analyst_model())
+    payload = _build_llm_input(event, advisory)
+    result, latency_ms, attempts, error_text = _call_llm_with_retry(payload, model=model)
+
+    if result is not None:
+        confidence = float(result.get("confidence") or 0.0)
+        verdict = str(result.get("verdict") or "").strip()
+        reason = str(result.get("reason") or "").strip()
+        suggested_action = str(result.get("suggested_action") or "").strip()
+        escalation = bool(result.get("escalation") or False)
+        has_effective_signal = bool(verdict or reason or suggested_action or escalation or confidence > 0.0)
+        if not has_effective_signal:
+            result = None
+            error_text = "empty_response"
+        else:
+            llm_result = {
+                "status": "completed",
+                "latency_ms": latency_ms,
+                "model": model,
+                "verdict": verdict,
+                "confidence": confidence,
+                "reason": reason,
+                "suggested_action": suggested_action,
+                "escalation": escalation,
+                "attempts": attempts,
+            }
+            if llm_result["suggested_action"] and confidence >= 0.60:
+                advisory["recommendation"] = llm_result["suggested_action"]
+            need_ops, ops_reason = _should_escalate_to_ops(
+                advisory,
+                llm_status="completed",
+                confidence=confidence,
+                llm_escalation=escalation,
+            )
+            if need_ops:
+                _metrics_inc("ops_requests", 1)
+                advisory["ops_coach"] = _run_ops_coach(advisory, verdict=verdict, confidence=confidence, reason=reason, trigger_reason=ops_reason)
+                if advisory["ops_coach"].get("status") == "completed":
+                    _metrics_inc("ops_completed", 1)
+                elif advisory["ops_coach"].get("status") == "skipped":
+                    _metrics_inc("ops_skipped", 1)
+                else:
+                    _metrics_inc("ops_errors", 1)
+            _metrics_inc("llm_completed", 1)
+            with METRICS_LOCK:
+                prev_ema = float(METRICS.get("llm_latency_ms_ema", 0.0))
+                METRICS["llm_latency_ms_last"] = latency_ms
+                METRICS["llm_latency_ms_ema"] = latency_ms if prev_ema <= 0 else (prev_ema * 0.8) + (latency_ms * 0.2)
+                METRICS["last_error"] = ""
+                METRICS["last_update_ts"] = time.time()
+    if result is None:
+        llm_result = {
+            "status": "fallback",
+            "policy": "tactical_only_keep_recommendation",
+            "reason": error_text or "llm_failed",
+            "attempts": attempts,
+            "model": model,
+        }
+        if llm_result["reason"] == "empty_response":
+            _metrics_inc("llm_empty_response_count", 1)
+        _metrics_inc("llm_failed", 1)
+        _metrics_inc("llm_fallback_count", 1)
+        _metrics_update(last_error=llm_result["reason"])
+        need_ops, ops_reason = _should_escalate_to_ops(advisory, llm_status="fallback", confidence=0.0)
+        if need_ops:
+            _metrics_inc("ops_requests", 1)
+            advisory["ops_coach"] = _run_ops_coach(
+                advisory,
+                verdict="fallback",
+                confidence=0.0,
+                reason=llm_result["reason"],
+                trigger_reason=ops_reason,
+            )
+            if advisory["ops_coach"].get("status") == "completed":
+                _metrics_inc("ops_completed", 1)
+            elif advisory["ops_coach"].get("status") == "skipped":
+                _metrics_inc("ops_skipped", 1)
+            else:
+                _metrics_inc("ops_errors", 1)
+
+    advisory["llm"] = llm_result
+    _recompute_policy()
+    _append_jsonl(
+        LLM_RESULT_LOG_PATH,
+        {
+            "ts": time.time(),
+            "sid": advisory.get("suricata_sid", 0),
+            "risk_score": advisory.get("risk_score", 0),
+            "llm": llm_result,
+        },
+    )
+    with IO_LOCK:
+        _write_json(ADVISORY_PATH, advisory)
+        _update_ui_snapshot(advisory, count_suricata=False)
+        _persist_metrics()
+    return advisory
+
+
+def _llm_worker() -> None:
+    logger.info(
+        "LLM worker started analyst=%s degraded=%s ops=%s endpoint=%s queue_max=%s",
+        LLM_MODEL_PRIMARY,
+        LLM_MODEL_DEGRADED,
+        OPS_COACH_MODEL,
+        LLM_ENDPOINT,
+        LLM_QUEUE_MAX,
+    )
+    while True:
+        task = LLM_QUEUE.get()
+        try:
+            _process_llm_task(task)
+        finally:
+            LLM_QUEUE.task_done()
+
+
+def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -> None:
+    _ensure_parent(SNAPSHOT_PATH)
+    now = time.time()
+    snapshot: Dict[str, Any] = {}
+    if SNAPSHOT_PATH.exists():
+        try:
+            loaded = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                snapshot = loaded
+        except Exception:
+            snapshot = {}
+
+    severity = int(advisory.get("suricata_severity") or 0)
+    critical = int(snapshot.get("suricata_critical", 0) or 0)
+    warning = int(snapshot.get("suricata_warning", 0) or 0)
+    info = int(snapshot.get("suricata_info", 0) or 0)
+    if count_suricata:
+        if severity <= 1:
+            critical += 1
+        elif severity == 2:
+            warning += 1
+        else:
+            info += 1
+
+    reasons = snapshot.get("reasons", [])
+    if not isinstance(reasons, list):
+        reasons = []
+    reasons = [str(r) for r in reasons][-4:]
+    reasons.append(f"suricata_sid={advisory.get('suricata_sid', 0)} risk={advisory.get('risk_score', 0)}")
+
+    evidence = snapshot.get("evidence", [])
+    if not isinstance(evidence, list):
+        evidence = []
+    evidence = [str(e) for e in evidence][-7:]
+    evidence.append(
+        f"{advisory.get('risk_level','LOW')} sid={advisory.get('suricata_sid',0)} "
+        f"{advisory.get('attack_type','unknown')}"
+    )
+
+    snapshot["now_time"] = time.strftime("%H:%M:%S", time.localtime(now))
+    snapshot["snapshot_epoch"] = now
+    snapshot["user_state"] = advisory.get("user_state", "CHECKING")
+    snapshot["recommendation"] = advisory.get("recommendation", "Observe")
+    snapshot["reasons"] = reasons
+    snapshot["evidence"] = evidence
+    snapshot["suricata_critical"] = critical
+    snapshot["suricata_warning"] = warning
+    snapshot["suricata_info"] = info
+    snapshot["llm"] = advisory.get("llm", {})
+    snapshot["ops_coach"] = advisory.get("ops_coach", {})
+    snapshot["llm_metrics"] = _metrics_snapshot()
+    snapshot["internal"] = {
+        "state_name": advisory.get("state_name", _LAST_STATE_NAME),
+        "suspicion": int(advisory.get("risk_score", 0)),
+        "decay": 0,
+    }
+    snapshot["attack"] = {
+        "suricata_alert": True,
+        "suricata_severity": severity,
+        "suricata_sid": int(advisory.get("suricata_sid", 0)),
+        "canary_target_alert": False,
+        "canary_delay_active": False,
+        "canary_delay_target_count": 0,
+        "canary_delay_targets": [],
+    }
+    monitoring = snapshot.get("monitoring")
+    if not isinstance(monitoring, dict):
+        monitoring = {}
+    monitoring["suricata"] = "ON"
+    snapshot["monitoring"] = monitoring
+
+    _write_json(SNAPSHOT_PATH, snapshot)
 
 
 def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
@@ -86,12 +841,19 @@ def _handle_line(raw: str) -> None:
         return
 
     advisory = _build_advisory(event)
+    _metrics_inc("processed_events", 1)
+    _route_llm(event, advisory)
     _append_jsonl(EVENT_LOG_PATH, {"event": event, "advisory": advisory})
-    _write_json(ADVISORY_PATH, advisory)
+    with IO_LOCK:
+        _write_json(ADVISORY_PATH, advisory)
+        _update_ui_snapshot(advisory)
+        _persist_metrics()
 
 
 def _serve() -> None:
     _ensure_parent(SOCKET_PATH)
+    _ensure_parent(METRICS_PATH)
+    _ensure_parent(POLICY_PATH)
     if SOCKET_PATH.exists():
         SOCKET_PATH.unlink()
 
@@ -99,6 +861,10 @@ def _serve() -> None:
     srv.bind(str(SOCKET_PATH))
     os.chmod(SOCKET_PATH, 0o666)
     srv.listen(16)
+    worker = threading.Thread(target=_llm_worker, daemon=True)
+    worker.start()
+    _persist_policy()
+    _persist_metrics()
     logger.info("AI advisory agent listening on %s", SOCKET_PATH)
 
     while True:

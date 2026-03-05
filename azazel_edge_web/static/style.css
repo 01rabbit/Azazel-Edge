@@ -249,6 +249,10 @@ body {
     word-break: break-word;
 }
 
+.metric-value.alert {
+    color: var(--color-danger);
+}
+
 .metric-value.mono {
     font-family: 'Courier New', monospace;
     font-size: 0.95em;

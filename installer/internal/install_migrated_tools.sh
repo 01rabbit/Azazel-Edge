@@ -50,12 +50,14 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/wifi_scanner.py" /opt/azazel-
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/wifi_channel_scanner.py" /opt/azazel-edge/py/azazel_edge/sensors/wifi_channel_scanner.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/system_metrics.py" /opt/azazel-edge/py/azazel_edge/sensors/system_metrics.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/network_analytics.py" /opt/azazel-edge/py/azazel_edge/sensors/network_analytics.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/network_health.py" /opt/azazel-edge/py/azazel_edge/sensors/network_health.py
 
 echo "[4/16] Install tactics modules"
 install -m 0644 "$REPO_ROOT/py/azazel_edge/tactics_engine/__init__.py" /opt/azazel-edge/py/azazel_edge/tactics_engine/__init__.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/tactics_engine/config_hash.py" /opt/azazel-edge/py/azazel_edge/tactics_engine/config_hash.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/tactics_engine/decision_logger.py" /opt/azazel-edge/py/azazel_edge/tactics_engine/decision_logger.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/tactics_engine/eve_parser.py" /opt/azazel-edge/py/azazel_edge/tactics_engine/eve_parser.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/tactics_engine/scorer.py" /opt/azazel-edge/py/azazel_edge/tactics_engine/scorer.py
 
 echo "[5/16] Install control-daemon modules"
 install -m 0644 "$REPO_ROOT/py/azazel_edge_control/__init__.py" /opt/azazel-edge/py/azazel_edge_control/__init__.py

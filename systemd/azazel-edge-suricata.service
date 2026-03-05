@@ -5,6 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Nice=-5
+IOSchedulingClass=realtime
+IOSchedulingPriority=0
 EnvironmentFile=-/etc/default/azazel-edge-security
 ExecStartPre=/bin/mkdir -p /var/log/suricata /etc/suricata/rules
 ExecStart=/bin/bash -lc 'exec /usr/bin/suricata -c /etc/suricata/suricata.yaml -i "${SURICATA_IFACE:-br0}" -S /etc/suricata/rules/azazel-lite.rules -l /var/log/suricata --set vars.address-groups.HOME_NET="[172.16.0.0/24,10.12.194.0/28]" --set vars.address-groups.EXTERNAL_NET="!$$HOME_NET" --set detect-engine.profile=low --set stream.memcap=32mb --set flow.memcap=32mb --set outputs.1.eve-log.enabled=yes --set outputs.1.eve-log.filename=eve.json --set outputs.1.eve-log.types="[alert,stats]"'
