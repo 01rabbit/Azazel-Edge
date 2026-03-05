@@ -289,9 +289,9 @@ class AzazelTextualApp(App):
             {"label": "Shutdown System", "kind": "send_action", "action": "shutdown"},
             {"label": "Reboot System", "kind": "send_action", "action": "reboot"},
             {"label": "Wi-Fi Selector (Textual)", "kind": "interactive_cmd", "cmd": ssid_cmd},
-            {"label": "OpenCanary: start", "kind": "run_cmd", "cmd": _maybe_sudo(["systemctl", "start", "opencanary.service"])},
-            {"label": "OpenCanary: stop", "kind": "run_cmd", "cmd": _maybe_sudo(["systemctl", "stop", "opencanary.service"])},
-            {"label": "OpenCanary: hits (latest)", "kind": "interactive_cmd", "cmd": _maybe_sudo(["journalctl", "-u", "opencanary.service", "-n", "50", "--no-pager"])},
+            {"label": "OpenCanary: start", "kind": "run_cmd", "cmd": _maybe_sudo(["systemctl", "start", "azazel-edge-opencanary.service"])},
+            {"label": "OpenCanary: stop", "kind": "run_cmd", "cmd": _maybe_sudo(["systemctl", "stop", "azazel-edge-opencanary.service"])},
+            {"label": "OpenCanary: hits (latest)", "kind": "interactive_cmd", "cmd": _maybe_sudo(["docker", "logs", "--tail", "50", "azazel-edge-opencanary"])},
             {"label": "Toggle Details", "kind": "toggle_details"},
             {"label": "Close Menu", "kind": "close_menu"},
         ]

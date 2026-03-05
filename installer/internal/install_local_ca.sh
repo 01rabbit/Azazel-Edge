@@ -30,13 +30,29 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y openssl ca-certificates
 
 install -d "$TLS_DIR" "$CA_DIR" /var/lib/azazel-edge/public
 
+recreate_ca=0
 if [[ ! -s "$CA_KEY" || ! -s "$CA_CERT" ]]; then
+  recreate_ca=1
+else
+  if ! openssl x509 -in "$CA_CERT" -noout -text | grep -q "CA:TRUE"; then
+    recreate_ca=1
+  fi
+  if ! openssl x509 -in "$CA_CERT" -noout -text | grep -q "Certificate Sign"; then
+    recreate_ca=1
+  fi
+fi
+
+if (( recreate_ca == 1 )); then
   echo "[ca] Creating local root CA"
+  rm -f "$CA_CERT" "$CA_KEY" "$CA_SERIAL"
   openssl genrsa -out "$CA_KEY" 4096
   openssl req -x509 -new -nodes -sha256 \
     -key "$CA_KEY" \
     -days "$CA_DAYS" \
     -subj "/CN=Azazel-Edge Local Root CA/O=Azazel-Edge" \
+    -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -addext "subjectKeyIdentifier=hash" \
     -out "$CA_CERT"
 fi
 

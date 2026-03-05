@@ -1,0 +1,3 @@
+alert tcp any any -> $HOME_NET 12222 (msg:"AZAZEL OPENCANARY SSH probe"; flags:S; flow:to_server; classtype:attempted-recon; sid:9901101; rev:1;)
+alert tcp any any -> $HOME_NET 18080 (msg:"AZAZEL OPENCANARY HTTP probe"; flags:S; flow:to_server; classtype:attempted-recon; sid:9901102; rev:1;)
+alert tcp any any -> $HOME_NET [12222,18080] (msg:"AZAZEL OPENCANARY repeated access"; flags:S; flow:to_server; threshold:type both, track by_src, count 8, seconds 60; classtype:attempted-recon; sid:9901103; rev:1;)

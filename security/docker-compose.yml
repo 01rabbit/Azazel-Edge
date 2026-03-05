@@ -1,0 +1,10 @@
+services:
+  opencanary:
+    build:
+      context: ./opencanary
+    container_name: azazel-edge-opencanary
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./opencanary/opencanary.conf:/etc/opencanaryd/opencanary.conf:ro
+      - /var/log/azazel-edge/opencanary:/var/log/opencanary

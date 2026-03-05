@@ -376,6 +376,22 @@ def _process_running(pattern: str) -> bool:
         return False
 
 
+def _container_running(name: str) -> bool:
+    try:
+        res = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+        if res.returncode != 0:
+            return False
+        names = {line.strip() for line in res.stdout.splitlines() if line.strip()}
+        return name in names
+    except Exception:
+        return False
+
+
 def _ntfy_health_ok() -> bool:
     mgmt_ip = os.environ.get("MGMT_IP", "10.55.0.10")
     ntfy_port = os.environ.get("NTFY_PORT", "8081")
@@ -391,8 +407,17 @@ def _ntfy_health_ok() -> bool:
 
 
 def _collect_monitoring_state() -> Dict[str, str]:
-    opencanary_ok = _service_active("opencanary@az_canary.service") or _service_active("opencanary.service")
-    suricata_ok = _service_active("suricata.service")
+    opencanary_ok = (
+        _service_active("opencanary@az_canary.service")
+        or _service_active("opencanary.service")
+        or _service_active("azazel-edge-opencanary.service")
+        or _container_running("azazel-edge-opencanary")
+    )
+    suricata_ok = (
+        _service_active("suricata.service")
+        or _service_active("azazel-edge-suricata.service")
+        or _container_running("azazel-edge-suricata")
+    )
     ntfy_ok = _service_active("ntfy.service") and _ntfy_health_ok()
     opencanary_pid = Path("/home/azazel/canary-venv/bin/opencanaryd.pid")
     suricata_pid = Path("/run/suricata.pid")
