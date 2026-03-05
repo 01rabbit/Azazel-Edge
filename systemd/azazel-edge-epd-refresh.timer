@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Azazel-Edge EPD refresh periodically
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=2min
+Unit=azazel-edge-epd-refresh.service
+
+[Install]
+WantedBy=timers.target

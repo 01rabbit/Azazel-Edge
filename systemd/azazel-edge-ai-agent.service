@@ -1,0 +1,12 @@
+[Unit]
+Description=Azazel-Edge AI Advisory Agent (Unix socket consumer)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/azazel-edge/venv/bin/python /opt/azazel-edge/py/azazel_edge_ai/agent.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

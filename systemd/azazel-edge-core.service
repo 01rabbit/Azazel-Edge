@@ -1,0 +1,19 @@
+[Unit]
+Description=Azazel-Edge Rust Real-time Defense Core
+After=azazel-edge-ai-agent.service azazel-edge-suricata.service
+Wants=azazel-edge-ai-agent.service
+
+[Service]
+Type=simple
+Environment="AZAZEL_EVE_PATH=/var/log/suricata/eve.json"
+Environment="AZAZEL_AI_SOCKET=/run/azazel-edge/ai-bridge.sock"
+Environment="AZAZEL_NORMALIZED_EVENT_LOG=/var/log/azazel-edge/normalized-events.jsonl"
+Environment="AZAZEL_FORWARD_AI=true"
+Environment="AZAZEL_FORWARD_LOG=true"
+Environment="AZAZEL_DEFENSE_ENFORCE=false"
+ExecStart=/usr/local/bin/azazel-edge-core
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

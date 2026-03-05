@@ -1,0 +1,17 @@
+[Unit]
+Description=Azazel-Edge OpenCanary (Docker Compose)
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/azazel-edge/security
+EnvironmentFile=-/etc/default/azazel-edge-security
+ExecStart=/usr/local/bin/azazel-edge-compose -f /opt/azazel-edge/security/docker-compose.yml up -d opencanary
+ExecStop=/usr/local/bin/azazel-edge-compose -f /opt/azazel-edge/security/docker-compose.yml stop opencanary
+TimeoutStartSec=120
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

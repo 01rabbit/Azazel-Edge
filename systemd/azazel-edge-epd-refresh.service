@@ -1,0 +1,8 @@
+[Unit]
+Description=Azazel-Edge EPD mode refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/azazel-edge-epd-refresh

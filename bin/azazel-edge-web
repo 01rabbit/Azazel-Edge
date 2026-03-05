@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export PYTHONPATH="/opt/azazel-edge/py:${PYTHONPATH:-}"
+exec /opt/azazel-edge/venv/bin/python /opt/azazel-edge/azazel_edge_web/app.py "$@"
