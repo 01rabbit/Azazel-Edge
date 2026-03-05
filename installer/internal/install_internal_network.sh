@@ -4,6 +4,7 @@ set -euo pipefail
 LAN_IF="br0"
 LAN_ADDR="172.16.0.254/24"
 SSH_LISTEN_IP="172.16.0.254"
+ALLOW_EXTERNAL_SSH="${ALLOW_EXTERNAL_SSH:-false}"
 DHCP_RANGE_START="172.16.0.101"
 DHCP_RANGE_END="172.16.0.200"
 DHCP_LEASE_TIME="12h"
@@ -22,6 +23,7 @@ SERVICE_FILE="/etc/systemd/system/azazel-internal-apply.service"
 RUNNER_FILE="/usr/local/sbin/azazel-internal-apply"
 SYSCTL_FILE="/etc/sysctl.d/99-azazel-internal.conf"
 NFT_RULES_FILE="/etc/nftables.d/azazel-internal.nft"
+FIRST_MINUTE_CFG="/etc/azazel-edge/first_minute.yaml"
 
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
@@ -107,6 +109,14 @@ configure_nm_internal_bridge() {
     nmcli con modify "$ETH_SLAVE_CONN" connection.autoconnect yes connection.autoconnect-priority 40
   fi
 
+  # Prevent wlan0 profile races so AP profile stays up after reboot.
+  nmcli -t -f NAME,DEVICE,TYPE,ACTIVE con show | awk -F: '$2 == "wlan0" && $3 == "802-11-wireless" {print $1}' | while IFS= read -r con; do
+    if [[ -n "$con" && "$con" != "$WLAN_AP_CONN" ]]; then
+      nmcli con modify "$con" connection.autoconnect no || true
+      nmcli con down "$con" || true
+    fi
+  done
+
   if nmcli -t -f NAME con show | grep -qx "$WLAN_AP_CONN"; then
     nmcli con modify "$WLAN_AP_CONN" \
       connection.interface-name wlan0 \
@@ -163,11 +173,15 @@ configure_sshd() {
   awk '
     /^[[:space:]]*ListenAddress[[:space:]]+/ { next }
     { print }
-    END {
-      print ""
-      print "ListenAddress 172.16.0.254"
-    }
   ' "$SSHD_CONF" > "${SSHD_CONF}.tmp"
+
+  if [[ "${ALLOW_EXTERNAL_SSH,,}" != "true" ]]; then
+    {
+      echo ""
+      echo "ListenAddress ${SSH_LISTEN_IP}"
+    } >> "${SSHD_CONF}.tmp"
+  fi
+
   mv "${SSHD_CONF}.tmp" "$SSHD_CONF"
 
   systemctl restart ssh
@@ -202,6 +216,13 @@ EOD
     nft delete table ip azazel_internal
   fi
   nft -f "$NFT_RULES_FILE"
+}
+
+configure_control_flags() {
+  install -d /etc/azazel-edge
+  cat > "$FIRST_MINUTE_CFG" <<'EOD'
+suppress_auto_wifi: false
+EOD
 }
 
 ensure_services() {
@@ -276,12 +297,18 @@ main() {
   configure_dnsmasq_dhcp
   configure_sshd
   configure_forwarding_and_nat
+  configure_control_flags
   install_runner
   install_service
   verify_state
 
   echo "Internal AP + DHCP baseline applied."
   echo "AP SSID: $AP_SSID"
+  if [[ "${ALLOW_EXTERNAL_SSH,,}" == "true" ]]; then
+    echo "SSH listen scope: all interfaces (temporary external access enabled)."
+  else
+    echo "SSH listen scope: ${SSH_LISTEN_IP} only."
+  fi
   echo "From internal host, verify: ssh azazel@Azazel-Edge.local"
 }
 

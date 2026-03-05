@@ -90,6 +90,12 @@ if _env_ca_cert:
     _WEBUI_CA_CERT_CANDIDATES.append(Path(_env_ca_cert))
 for cfg_dir in config_dir_candidates():
     _WEBUI_CA_CERT_CANDIDATES.append(cfg_dir / "certs" / _CA_CERT_FILENAME)
+_WEBUI_CA_CERT_CANDIDATES.extend([
+    Path("/etc/azazel-edge/tls/ca/azazel-edge-local-ca.crt"),
+    Path("/var/lib/azazel-edge/public/azazel-edge-local-ca.crt"),
+    Path("/etc/azazel-gadget/tls/ca/azazel-edge-local-ca.crt"),
+    Path("/var/lib/azazel-gadget/public/azazel-edge-local-ca.crt"),
+])
 if not _WEBUI_CA_CERT_CANDIDATES:
     _WEBUI_CA_CERT_CANDIDATES = [
         Path("/etc/azazel-edge/certs/azazel-webui-local-ca.crt"),
@@ -631,11 +637,37 @@ def _process_running(pattern: str) -> bool:
         return False
 
 
+def _container_running(name: str) -> bool:
+    """Check Docker container running state by exact name."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode != 0:
+            return False
+        names = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+        return name in names
+    except Exception:
+        return False
+
+
 def get_monitoring_state() -> Dict[str, str]:
     """Return ON/OFF status for local monitoring daemons."""
     # Prefer systemd state to avoid pidfile permission issues
-    opencanary_ok = _service_active("opencanary@az_canary.service") or _service_active("opencanary.service")
-    suricata_ok = _service_active("suricata.service")
+    opencanary_ok = (
+        _service_active("opencanary@az_canary.service")
+        or _service_active("opencanary.service")
+        or _service_active("azazel-edge-opencanary.service")
+        or _container_running("azazel-edge-opencanary")
+    )
+    suricata_ok = (
+        _service_active("suricata.service")
+        or _service_active("azazel-edge-suricata.service")
+        or _container_running("azazel-edge-suricata")
+    )
     ntfy_ok = _service_active("ntfy.service") and _ntfy_health_ok()
     opencanary_pid = Path("/home/azazel/canary-venv/bin/opencanaryd.pid")
     suricata_pid = Path("/run/suricata.pid")
@@ -927,7 +959,8 @@ def execute_details_action() -> Dict[str, Any]:
         )
         if payload is not None:
             return payload
-        return {"ok": False, "action": "details", "error": "Failed to reach Status API on any host"}
+        # Fallback to control-daemon script (details.sh) when Status API is absent.
+        return _send_control_command_socket(action="details", params=None, timeout_sec=5.0)
     except Exception as e:
         return {"ok": False, "action": "details", "error": str(e)}
 

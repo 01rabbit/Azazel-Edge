@@ -447,6 +447,35 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     return enriched
 
 
+def _default_snapshot_seed() -> dict[str, Any]:
+    """Bootstrap snapshot when /run is empty after reboot."""
+    return {
+        "now_time": "",
+        "ssid": "-",
+        "user_state": "CHECKING",
+        "recommendation": "Initializing",
+        "evidence": [],
+        "snapshot_epoch": 0,
+    }
+
+
+def _seed_snapshot_if_missing() -> tuple[dict[str, Any] | None, Path | None]:
+    """Create and return a minimal snapshot when no runtime snapshot exists."""
+    seed = _default_snapshot_seed()
+    for path in _snapshot_candidates():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text(json.dumps(seed, ensure_ascii=False), encoding="utf-8")
+            warn_if_legacy_path(path, logger=logger)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data, path
+        except Exception as exc:
+            logger.debug(f"Failed to seed snapshot {path}: {exc}")
+    return None, None
+
+
 def read_ui_snapshot() -> dict[str, Any]:
     """Read latest UI snapshot from schema-aware paths."""
     mode_payload: dict[str, Any] = {}
@@ -472,6 +501,19 @@ def read_ui_snapshot() -> dict[str, Any]:
                 }
         except Exception as exc:
             logger.debug(f"Failed to read snapshot {path}: {exc}")
+
+    seeded, seeded_path = _seed_snapshot_if_missing()
+    if isinstance(seeded, dict) and seeded_path is not None:
+        data = _enrich_snapshot(seeded)
+        if mode_payload.get("ok"):
+            data["mode"] = mode_payload.get("mode", {})
+        return {
+            "ok": True,
+            "snapshot": data,
+            "path": str(seeded_path),
+            "ts": time.time(),
+        }
+
     return {
         "ok": False,
         "error": "snapshot_not_found",

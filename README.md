@@ -12,7 +12,7 @@
   - Gateway/DNS: `172.16.0.254`
 - 既存の `eth0` 自動接続プロファイル競合を無効化（`eth0` の bridge 参加を固定）
 - `avahi-daemon` 有効化（`.local` 維持）
-- `sshd` を `ListenAddress 172.16.0.254` に固定
+- `sshd` は既定で `ListenAddress 172.16.0.254`（内部専用）
 - `nftables` で `br0 -> WAN` の NAT/forward を設定（既定: デフォルトルートのIF）
 
 外部WAN (`eth1`/`wlan1`) の uplink は自動検出（必要なら `WAN_IF` で上書き）します。OpenCanary・policy routing は対象外です。
@@ -41,6 +41,29 @@ DHCP確認（接続端末側）:
 ```bash
 ssh azazel@Azazel-Edge.local
 ```
+
+## 開発期間: 外部/内部から同時アクセスを許可
+開発期間中に、外部ネットワークと内部ネットワークの両方からアクセスできる設定へ切り替えるには:
+
+```bash
+cd /home/azazel/Azazel-Edge
+sudo MODE=open DEVICE_HOSTNAME=Azazel-Edge ./installer/internal/set_dev_remote_access.sh
+```
+
+この設定で以下を実施します:
+- SSH を全インターフェースで待受（VSCode Remote-SSH 利用可）
+- Avahi を `br0` + WAN IF で有効化し、`.local` を広報
+- UFW 有効時は `22/tcp` を許可
+
+開発終了後に戻す:
+```bash
+cd /home/azazel/Azazel-Edge
+sudo MODE=close DEVICE_HOSTNAME=Azazel-Edge ./installer/internal/set_dev_remote_access.sh
+```
+
+注意:
+- `.local` は mDNS 依存のため、外部クライアント環境によっては名前解決できません。
+- その場合は外部クライアント側の hosts に `WAN_IP Azazel-Edge.local` を追加してください。
 
 ## Azazel-Gadget からの移植（ネットワーク非影響）
 - `bin/azazel-edge-path-schema`
