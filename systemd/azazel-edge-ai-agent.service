@@ -4,11 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
-Environment="AZAZEL_LLM_MODEL_PRIMARY=qwen3.5:0.8b"
+Environment="AZAZEL_LLM_MODEL_PRIMARY=qwen3.5:2b"
 Environment="AZAZEL_LLM_MODEL_DEGRADED=qwen3.5:0.8b"
-Environment="AZAZEL_OPS_MODEL=qwen3.5:4b"
+Environment="AZAZEL_OPS_MODEL=qwen3.5:2b"
 Environment="AZAZEL_OPS_ENABLED=1"
-Environment="AZAZEL_OPS_MODEL_CHAIN=qwen3.5:4b,qwen3.5:2b,qwen3.5:0.8b"
+Environment="AZAZEL_OPS_MODEL_CHAIN=qwen3.5:2b,qwen3.5:0.8b"
 Environment="AZAZEL_OPS_KEEP_ALIVE=0s"
 Environment="AZAZEL_OPS_NUM_PREDICT=80"
 Environment="AZAZEL_OPS_MIN_MEM_AVAILABLE_MB=1400"
