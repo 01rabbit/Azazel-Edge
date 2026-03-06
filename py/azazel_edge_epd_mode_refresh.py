@@ -151,7 +151,7 @@ def _to_int_or_none(value: Any) -> int | None:
 
 
 def _signal_bucket(signal_value: Any) -> str:
-    # Keep in sync with py/azazel_epd.py:render_normal icon thresholds.
+    # Keep in sync with py/azazel_edge_epd.py:render_normal icon thresholds.
     signal_dbm = _to_int_or_none(signal_value)
     if signal_dbm is None:
         return "none"
@@ -180,14 +180,26 @@ def _visual_fingerprint(render: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _resolve_epd_script(root: Path) -> Path | None:
+    """Resolve EPD renderer path with backward compatibility."""
+    candidates = (
+        root / "py" / "azazel_edge_epd.py",
+        root / "py" / "azazel_epd.py",
+    )
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
 def main() -> int:
     payload = _safe_load(EPD_STATE)
     if not payload:
         return 0
 
-    root = Path(os.environ.get("AZAZEL_ROOT", str(Path(__file__).resolve().parents[2])))
-    epd_script = root / "py" / "azazel_epd.py"
-    if not epd_script.exists():
+    root = Path(os.environ.get("AZAZEL_ROOT", str(Path(__file__).resolve().parents[1])))
+    epd_script = _resolve_epd_script(root)
+    if epd_script is None:
         return 0
 
     desired = _desired_render_spec(payload)

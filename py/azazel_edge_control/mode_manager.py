@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -17,6 +18,7 @@ MODE_CHOICES = ("portal", "shield", "scapegoat")
 DEFAULT_MODE = "shield"
 
 EPD_STATE_PATH = Path("/run/azazel-edge/epd_state.json")
+EPD_REFRESH_UNIT = "azazel-edge-epd-refresh.service"
 
 
 class ModeManager:
@@ -70,6 +72,18 @@ class ModeManager:
         except Exception as exc:
             self.logger.debug("failed to write epd state: %s", exc)
 
+    def _trigger_epd_refresh(self) -> None:
+        try:
+            subprocess.run(
+                ["systemctl", "start", EPD_REFRESH_UNIT],
+                check=False,
+                timeout=10,
+                capture_output=True,
+                text=True,
+            )
+        except Exception as exc:
+            self.logger.debug("failed to trigger epd refresh: %s", exc)
+
     def status(self) -> Dict[str, Any]:
         state = self._read_state()
         return {
@@ -108,6 +122,7 @@ class ModeManager:
         }
         self._write_state(state)
         self._write_epd_state(target, requested_by)
+        self._trigger_epd_refresh()
         return {
             "ok": True,
             "from": prev.get("current_mode", DEFAULT_MODE),
