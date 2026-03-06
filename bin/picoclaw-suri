@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export HOME=/opt/azazel/ai/picoclaw-suri
+export PICOCLAW_HOME=/opt/azazel/ai/picoclaw-suri
+export PICOCLAW_CONFIG=/opt/azazel/ai/picoclaw-suri/.picoclaw/config.json
+
+if [[ "${1:-}" == "agent" ]]; then
+  case " $* " in
+    *" --model "*) ;;
+    *)
+      shift
+      exec picoclaw agent --model qwen35-2b "$@"
+      ;;
+  esac
+fi
+exec picoclaw "$@"

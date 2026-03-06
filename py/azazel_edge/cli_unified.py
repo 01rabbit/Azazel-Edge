@@ -963,6 +963,17 @@ def _epd_fingerprint(snap: Snapshot) -> Tuple[str, str, str, Optional[int], str]
     return (snap.user_state.upper(), snap.ssid or "-", wlan_ip, sig_dbm, rec)
 
 
+def _resolve_epd_script() -> Optional[Path]:
+    candidates = (
+        DEFAULT_ROOT / "py" / "azazel_edge_epd.py",
+        DEFAULT_ROOT / "py" / "azazel_epd.py",
+    )
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
 def update_epd(snap: Snapshot, enable_epd: bool = True) -> None:
     """
     Update E-Paper Display based on current snapshot state.
@@ -976,8 +987,8 @@ def update_epd(snap: Snapshot, enable_epd: bool = True) -> None:
         return
     
     try:
-        epd_script = DEFAULT_ROOT / "py" / "azazel_epd.py"
-        if not epd_script.exists():
+        epd_script = _resolve_epd_script()
+        if epd_script is None:
             return
         
         user_state = snap.user_state.upper()

@@ -19,9 +19,16 @@ echo "[1/16] Install OS dependencies"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3 python3-venv python3-pip \
-  network-manager iw curl dnsmasq nginx openssl
+  network-manager iw curl dnsmasq nginx openssl \
+  python3-dev python3-numpy python3-pil python3-spidev \
+  python3-rpi.gpio python3-gpiozero fonts-noto-cjk git
 
 DEBIAN_FRONTEND=noninteractive apt-get install -y rustc cargo
+
+if [[ ! -d /opt/waveshare-epd ]]; then
+  echo "[1/16] Clone Waveshare e-Paper repository"
+  git clone https://github.com/waveshare/e-Paper /opt/waveshare-epd
+fi
 
 echo "[2/16] Create base directories"
 install -d \
@@ -50,12 +57,14 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/wifi_scanner.py" /opt/azazel-
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/wifi_channel_scanner.py" /opt/azazel-edge/py/azazel_edge/sensors/wifi_channel_scanner.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/system_metrics.py" /opt/azazel-edge/py/azazel_edge/sensors/system_metrics.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/network_analytics.py" /opt/azazel-edge/py/azazel_edge/sensors/network_analytics.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/network_health.py" /opt/azazel-edge/py/azazel_edge/sensors/network_health.py
 
 echo "[4/16] Install tactics modules"
 install -m 0644 "$REPO_ROOT/py/azazel_edge/tactics_engine/__init__.py" /opt/azazel-edge/py/azazel_edge/tactics_engine/__init__.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/tactics_engine/config_hash.py" /opt/azazel-edge/py/azazel_edge/tactics_engine/config_hash.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/tactics_engine/decision_logger.py" /opt/azazel-edge/py/azazel_edge/tactics_engine/decision_logger.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/tactics_engine/eve_parser.py" /opt/azazel-edge/py/azazel_edge/tactics_engine/eve_parser.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/tactics_engine/scorer.py" /opt/azazel-edge/py/azazel_edge/tactics_engine/scorer.py
 
 echo "[5/16] Install control-daemon modules"
 install -m 0644 "$REPO_ROOT/py/azazel_edge_control/__init__.py" /opt/azazel-edge/py/azazel_edge_control/__init__.py

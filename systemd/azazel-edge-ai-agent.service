@@ -4,6 +4,30 @@ After=network.target
 
 [Service]
 Type=simple
+Environment="AZAZEL_LLM_MODEL_PRIMARY=qwen3.5:2b"
+Environment="AZAZEL_LLM_MODEL_DEGRADED=qwen3.5:0.8b"
+Environment="AZAZEL_OPS_MODEL=qwen3.5:2b"
+Environment="AZAZEL_OPS_ENABLED=1"
+Environment="AZAZEL_OPS_MODEL_CHAIN=qwen3.5:2b,qwen3.5:0.8b"
+Environment="AZAZEL_OPS_KEEP_ALIVE=0s"
+Environment="AZAZEL_OPS_NUM_PREDICT=80"
+Environment="AZAZEL_OPS_MIN_MEM_AVAILABLE_MB=1400"
+Environment="AZAZEL_OPS_MAX_SWAP_USED_MB=512"
+Environment="AZAZEL_OPS_ESCALATE_MIN_RISK=70"
+Environment="AZAZEL_OPS_ESCALATE_LOW_CONF=0.60"
+Environment="AZAZEL_OPS_ESCALATE_COOLDOWN_SEC=180"
+Environment="AZAZEL_LLM_TIMEOUT_SEC=45"
+Environment="AZAZEL_LLM_RETRY_MAX=0"
+Environment="AZAZEL_LLM_RETRY_BACKOFF_SEC=0.5"
+Environment="AZAZEL_LLM_QUEUE_MAX=8"
+Environment="AZAZEL_LLM_AMBIG_MIN=60"
+Environment="AZAZEL_LLM_AMBIG_MAX=79"
+Environment="AZAZEL_LLM_AMBIG_MIN_DEGRADED=70"
+Environment="AZAZEL_LLM_NUM_CTX=256"
+Environment="AZAZEL_LLM_NUM_PREDICT=120"
+Environment="AZAZEL_LLM_NUM_THREAD=2"
+Environment="AZAZEL_LLM_KEEP_ALIVE=5m"
+Environment="AZAZEL_LLM_THINK=0"
 ExecStart=/opt/azazel-edge/venv/bin/python /opt/azazel-edge/py/azazel_edge_ai/agent.py
 Restart=always
 RestartSec=2
