@@ -1,0 +1,21 @@
+id: rb.user.first-contact.network-issue
+title: First Contact for Network Trouble
+domain: user
+audience: beginner
+risk: low
+effect: operator_guidance
+requires_approval: false
+args_schema:
+  type: object
+  properties:
+    symptom:
+      type: string
+      maxLength: 120
+  required: [symptom]
+steps:
+  - Ask the user what stopped working first.
+  - Ask whether only one device or all devices are affected.
+  - Ask the user not to reboot repeatedly until checks complete.
+  - Give one instruction at a time in simple language.
+user_message_template: "確認します。まず『何ができなくなったか』を一つだけ教えてください。"
+

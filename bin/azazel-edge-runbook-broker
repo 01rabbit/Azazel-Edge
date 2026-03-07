@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec /opt/azazel-edge/venv/bin/python /opt/azazel-edge/py/azazel_edge_runbook_broker.py "$@"
+

@@ -1,0 +1,26 @@
+id: rb.ops.logs.ai.recent
+title: Recent AI Log Review
+domain: ops
+audience: operator
+risk: low
+effect: read_only
+requires_approval: false
+args_schema:
+  type: object
+  required: [lines]
+  properties:
+    lines:
+      type: integer
+      minimum: 1
+      maximum: 50
+steps:
+  - Review recent LLM completions and failures.
+  - If failures repeat, compare with Ollama latency and memory pressure.
+user_message_template: "AIログの直近内容を確認しています。"
+command:
+  exec: /usr/bin/tail
+  argv:
+    - -n
+    - ${lines}
+    - /var/log/azazel-edge/ai-llm.jsonl
+

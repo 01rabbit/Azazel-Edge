@@ -61,10 +61,12 @@ function updateUI(state) {
     updateModeUI(state.mode || {}, state.mode_runtime || {});
     window.__lastStateMode = state.mode || {};
     
-    // Risk Assessment (based on internal state)
+    // Risk Assessment (prefer normalized user_state, fallback to internal stage name)
     const internal = state.internal || {};
     const suspicion = internal.suspicion || 0;
-    const stateVal = (internal.state_name || 'NORMAL').toUpperCase();
+    const userState = String(state.user_state || '').toUpperCase();
+    const internalState = String(internal.state_name || '').toUpperCase();
+    const stateVal = userState ? stageFromUserState(userState) : (internalState || 'PROBE');
     
     // Update score circle
     const scoreCircle = document.getElementById('scoreCircle');
@@ -274,6 +276,17 @@ function mapState(state) {
         'INIT': 'CHECKING'
     };
     return map[state] || state;
+}
+
+function stageFromUserState(userState) {
+    const map = {
+        'SAFE': 'NORMAL',
+        'CHECKING': 'PROBE',
+        'LIMITED': 'DEGRADED',
+        'CONTAINED': 'CONTAIN',
+        'DECEPTION': 'DECEPTION',
+    };
+    return map[userState] || 'PROBE';
 }
 
 // Get CSS class for status

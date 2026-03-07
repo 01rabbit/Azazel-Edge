@@ -555,6 +555,27 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
 
     enriched["connection"] = connection
 
+    # Keep WebUI/TUI status source consistent.
+    internal = enriched.get("internal")
+    if not isinstance(internal, dict):
+        internal = {}
+    state_name = str(internal.get("state_name", "") or "").upper()
+    if not state_name:
+        state_name = {
+            "SAFE": "NORMAL",
+            "CHECKING": "PROBE",
+            "LIMITED": "DEGRADED",
+            "CONTAINED": "CONTAIN",
+            "DECEPTION": "DECEPTION",
+        }.get(str(enriched.get("user_state", "CHECKING")).upper(), "PROBE")
+    internal["state_name"] = state_name
+    try:
+        internal.setdefault("suspicion", int(float(str(enriched.get("risk_score", 0)).strip())))
+    except Exception:
+        internal.setdefault("suspicion", 0)
+    internal.setdefault("decay", 0)
+    enriched["internal"] = internal
+
     return enriched
 
 
@@ -582,6 +603,7 @@ def _default_snapshot_seed() -> dict[str, Any]:
             "captive_portal_reason": "NOT_CHECKED",
         },
         "user_state": "CHECKING",
+        "internal": {"state_name": "PROBE", "suspicion": 0, "decay": 0},
         "recommendation": "Initializing",
         "evidence": [],
         "snapshot_epoch": 0,

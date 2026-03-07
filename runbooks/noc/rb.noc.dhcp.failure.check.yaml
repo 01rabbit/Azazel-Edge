@@ -1,0 +1,20 @@
+id: rb.noc.dhcp.failure.check
+title: DHCP Failure Intake
+domain: noc
+audience: operator
+risk: medium
+effect: operator_guidance
+requires_approval: false
+args_schema:
+  type: object
+  properties:
+    symptom:
+      type: string
+      maxLength: 120
+  required: [symptom]
+steps:
+  - Confirm whether one device or multiple devices failed to obtain an IP address.
+  - Confirm the affected interface or SSID before changing any network service.
+  - Check UI snapshot, DHCP lease state, and recent service status in that order.
+  - If multiple clients fail together, escalate to infrastructure review.
+user_message_template: "端末にIPアドレスが配布されているか確認します。接続先と症状を一つずつ教えてください。"

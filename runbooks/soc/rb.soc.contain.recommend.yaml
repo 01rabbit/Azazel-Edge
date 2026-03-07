@@ -1,0 +1,21 @@
+id: rb.soc.contain.recommend
+title: Contain Recommendation Review
+domain: soc
+audience: operator
+risk: medium
+effect: operator_guidance
+requires_approval: true
+args_schema:
+  type: object
+  properties:
+    risk_score:
+      type: integer
+      minimum: 0
+      maximum: 100
+  required: [risk_score]
+steps:
+  - Confirm that the event is not a known false positive.
+  - Confirm whether user impact is acceptable before containment.
+  - Escalate to a supervisor if the operator is unsure.
+user_message_template: "現在、通信制限の要否を確認しています。案内があるまで操作を変えないでください。"
+

@@ -37,6 +37,10 @@
                 <span class="metric-label">Channel ID</span>
                 <span class="metric-value mono" id="mmChannelId">-</span>
             </div>
+            <div class="metric">
+                <span class="metric-label">Command Hook</span>
+                <span class="metric-value mono" id="mmCommandStatus">-</span>
+            </div>
             <button class="btn btn-primary" id="refreshBtn">Refresh</button>
         </section>
 
@@ -46,8 +50,20 @@
             <input id="senderInput" class="ops-input" type="text" value="Azazel-Edge WebUI" maxlength="64">
             <label class="ops-label" for="messageInput">Message</label>
             <textarea id="messageInput" class="ops-textarea" rows="5" placeholder="Type message for Mattermost channel..."></textarea>
-            <button class="btn btn-success" id="sendBtn">Send to Mattermost</button>
+            <div class="ops-actions">
+                <button class="btn btn-success" id="sendBtn">Send to Mattermost</button>
+                <button class="btn btn-primary" id="askAiBtn">Ask AI</button>
+            </div>
             <div id="sendResult" class="ops-result">-</div>
+            <div id="aiResult" class="ops-result">AI: -</div>
+            <div id="runbookResult" class="ops-result">Runbook: -</div>
+            <div id="runbookReviewResult" class="ops-result">Review: -</div>
+        </section>
+
+        <section class="card ops-runbooks-card">
+            <h2>Runbook Candidates</h2>
+            <div id="runbookCandidatesEmpty" class="ops-result">No candidates yet</div>
+            <div id="runbookCandidates" class="ops-runbook-list"></div>
         </section>
 
         <section class="card ops-messages-card">

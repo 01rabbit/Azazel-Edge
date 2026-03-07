@@ -29,7 +29,7 @@ services:
       TZ: Asia/Tokyo
       MM_SQLSETTINGS_DRIVERNAME: postgres
       MM_SQLSETTINGS_DATASOURCE: postgres://mmuser:mm-password-change@mattermost-db:5432/mattermost?sslmode=disable&connect_timeout=10
-      MM_SERVICESETTINGS_SITEURL: ${MATTERMOST_SITE_URL:-http://192.168.40.89:8065}
+      MM_SERVICESETTINGS_SITEURL: ${MATTERMOST_SITE_URL:-http://172.16.0.254:8065}
       MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
     volumes:
       - mattermost_config:/mattermost/config

@@ -1,0 +1,23 @@
+id: rb.user.incident-status-brief
+title: User Incident Status Brief
+domain: user
+audience: beginner
+risk: low
+effect: operator_guidance
+requires_approval: false
+args_schema:
+  type: object
+  properties:
+    scope:
+      type: string
+      enum:
+        - single-device
+        - multiple-devices
+        - site-wide
+  required: [scope]
+steps:
+  - Tell the user what is currently known without declaring the issue safe.
+  - Tell the user what check is being performed now.
+  - Tell the user what to avoid doing until the next update.
+  - Give the next update timing if possible.
+user_message_template: "現在の状況を共有します。まだ安全・正常とは断定せず、確認中の内容だけをお伝えします。"

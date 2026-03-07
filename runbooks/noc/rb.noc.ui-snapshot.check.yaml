@@ -1,0 +1,20 @@
+id: rb.noc.ui-snapshot.check
+title: UI Snapshot Check
+domain: noc
+audience: operator
+risk: low
+effect: read_only
+requires_approval: false
+args_schema:
+  type: object
+  properties: {}
+  required: []
+steps:
+  - Compare ui_snapshot values with the actual route and mode.
+  - If values disagree, check control-daemon and ai-agent health.
+user_message_template: "現在の状態表示を確認しています。"
+command:
+  exec: /bin/cat
+  argv:
+    - /run/azazel-edge/ui_snapshot.json
+

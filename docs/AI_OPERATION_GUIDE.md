@@ -1,6 +1,6 @@
 # Azazel-Edge AI運用要領（現行）
 
-最終更新: 2026-03-06
+最終更新: 2026-03-07
 
 詳細手順: `docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL.md`
 
@@ -134,6 +134,53 @@ sudo systemctl show azazel-edge-ai-agent --property=Environment --no-pager
 ## 11. Mattermost運用
 
 - ログイン情報の保管先（ローカル機密ファイル）: `/etc/azazel-edge/mattermost-credentials.env`（`0600`）
-- WebUIのMattermost起動URL: `AZAZEL_MATTERMOST_OPEN_URL`（未設定時は `AZAZEL_MATTERMOST_BASE_URL` を利用）
+- WebUIのMattermost起動URL: `AZAZEL_MATTERMOST_OPEN_URL`（未設定時は `AZAZEL_MATTERMOST_HOST`/`AZAZEL_MATTERMOST_PORT`/`AZAZEL_MATTERMOST_TEAM`/`AZAZEL_MATTERMOST_CHANNEL` から自動生成）
 - 運用の主画面: Mattermostダッシュボード
-- WebUI(`/ops-comm`)の役割: 監視画面からの簡易投稿・疎通確認・直近メッセージ参照
+- WebUI(`/ops-comm`)の役割: 監視画面からの簡易投稿・疎通確認・直近メッセージ参照・手動AI質問
+- 手動AI質問API: `POST /api/ai/ask`（`question`必須）
+- Mattermost slash command / outgoing webhook 用エンドポイント: `POST /api/mattermost/command`
+- `AZAZEL_MATTERMOST_COMMAND_TOKEN` を設定した場合のみ、Mattermost 側トークン一致で受付
+- `/api/mattermost/message` で `ask_ai=true` を指定すると、AI回答に加えて Runbook 候補も返す
+- 設定場所:
+  - `/etc/default/azazel-edge-web`
+  - 例:
+    - `AZAZEL_MATTERMOST_COMMAND_TOKEN=<mattermost command token>`
+
+## 12. Runbook運用
+
+- レジストリ: `runbooks/**/*.yaml`
+- API:
+  - `GET /api/runbooks`
+  - `GET /api/runbooks/<id>`
+  - `GET /api/runbooks/<id>/review`
+  - `POST /api/runbooks/propose`
+  - `POST /api/runbooks/act`
+  - `POST /api/runbooks/execute`
+- 現段階の対象:
+  - `read_only` Runbook は dry-run / 実行可能
+  - `operator_guidance` は提案のみ
+  - `controlled_exec` は安全ゲート付き骨格のみ実装
+- AI が返す `runbook_id` は候補提示として扱い、初心者運用では必ず UI かオペレータ承認を介す
+- Runbook reviewer:
+  - `SOC Analyst`
+  - `NOC Operator`
+  - `User Support`
+  - `Security Architect`
+  - `Runbook QA`
+- reviewer は別 LLM 常駐ではなく、軽量なポリシー評価器として実装している
+- `/api/ai/ask` の結果に `runbook_review` が付く場合は、その判定を優先して採否を決める
+- `POST /api/runbooks/act` の扱い:
+  - `preview`: dry-run / 手順確認
+  - `approve`: guidance 承認記録
+  - `execute`: `read_only` と `controlled_exec` を対象
+- `controlled_exec` の既定:
+  - `AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC=1` が無い限り実行拒否
+  - approval 必須
+- 有効化場所:
+  - `/etc/default/azazel-edge-web`
+  - 例:
+    - `AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC=1`
+- 注意:
+  - 有効化しても `requires_approval=true` の Runbook は承認無しで実行できない
+  - 初心者向けフローでは `controlled_exec` を直接使わせない
+- 実行/承認ログ: `/var/log/azazel-edge/runbook-events.jsonl`

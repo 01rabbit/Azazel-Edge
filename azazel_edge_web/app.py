@@ -46,6 +46,15 @@ try:
         read_snapshot_payload as cp_read_snapshot_payload,
         watch_snapshots as cp_watch_snapshots,
     )
+    from azazel_edge.runbooks import (
+        execute_runbook as runbook_execute,
+        get_runbook as runbook_get,
+        list_runbooks as runbook_list,
+    )
+    from azazel_edge.runbook_review import (
+        propose_runbooks as runbook_propose,
+        review_runbook_id as runbook_review_id,
+    )
     from azazel_edge.path_schema import (
         config_dir_candidates,
         first_minute_config_candidates,
@@ -58,6 +67,11 @@ try:
 except Exception:
     cp_read_snapshot_payload = None
     cp_watch_snapshots = None
+    runbook_execute = None
+    runbook_get = None
+    runbook_list = None
+    runbook_propose = None
+    runbook_review_id = None
     config_dir_candidates = lambda: [Path("/etc/azazel-edge"), Path("/etc/azazel-zero")]  # type: ignore
     first_minute_config_candidates = lambda: [Path("/etc/azazel-edge/first_minute.yaml"), Path("/etc/azazel-zero/first_minute.yaml")]  # type: ignore
     mode_state_candidates = lambda: [Path("/etc/azazel/mode.json"), Path("/etc/azazel-edge/mode.json"), Path("/etc/azazel-zero/mode.json")]  # type: ignore
@@ -71,6 +85,9 @@ _RUNTIME_STATE_PATHS = runtime_snapshot_path_candidates()
 STATE_PATH = _RUNTIME_STATE_PATHS[0]  # Share TUI snapshot
 FALLBACK_STATE_PATH = _RUNTIME_STATE_PATHS[-1]  # Legacy runtime fallback
 CONTROL_SOCKET = Path("/run/azazel-edge/control.sock")
+AI_SOCKET = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
+AI_MANUAL_TIMEOUT_SEC = float(os.environ.get("AZAZEL_AI_MANUAL_TIMEOUT_SEC", "95"))
+RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/azazel-edge/runbook-events.jsonl"))
 TOKEN_FILE = web_token_candidates()[0]
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
@@ -83,10 +100,18 @@ NTFY_CONFIG_PATHS = [
 NTFY_SSE_KEEPALIVE_SEC = int(os.environ.get("AZAZEL_SSE_KEEPALIVE_SEC", "20"))
 NTFY_SSE_READ_TIMEOUT_SEC = int(os.environ.get("AZAZEL_NTFY_READ_TIMEOUT_SEC", "35"))
 NTFY_SSE_MAX_BACKOFF_SEC = int(os.environ.get("AZAZEL_NTFY_MAX_BACKOFF_SEC", "30"))
-MATTERMOST_BASE_URL = os.environ.get("AZAZEL_MATTERMOST_BASE_URL", "http://127.0.0.1:8065").rstrip("/")
+MATTERMOST_HOST = str(os.environ.get("AZAZEL_MATTERMOST_HOST", "172.16.0.254")).strip() or "172.16.0.254"
+MATTERMOST_PORT = int(os.environ.get("AZAZEL_MATTERMOST_PORT", "8065"))
+_mattermost_base_default = f"http://{MATTERMOST_HOST}:{MATTERMOST_PORT}"
+MATTERMOST_BASE_URL = os.environ.get("AZAZEL_MATTERMOST_BASE_URL", _mattermost_base_default).rstrip("/")
+MATTERMOST_TEAM = str(os.environ.get("AZAZEL_MATTERMOST_TEAM", "azazelops")).strip() or "azazelops"
+MATTERMOST_CHANNEL = str(os.environ.get("AZAZEL_MATTERMOST_CHANNEL", "soc-noc")).strip() or "soc-noc"
+MATTERMOST_OPEN_URL_DEFAULT = f"{MATTERMOST_BASE_URL}/{MATTERMOST_TEAM}/channels/{MATTERMOST_CHANNEL}"
+MATTERMOST_OPEN_URL = str(os.environ.get("AZAZEL_MATTERMOST_OPEN_URL", MATTERMOST_OPEN_URL_DEFAULT)).strip() or MATTERMOST_OPEN_URL_DEFAULT
 MATTERMOST_WEBHOOK_URL = str(os.environ.get("AZAZEL_MATTERMOST_WEBHOOK_URL", "")).strip()
 MATTERMOST_BOT_TOKEN = str(os.environ.get("AZAZEL_MATTERMOST_BOT_TOKEN", "")).strip()
 MATTERMOST_CHANNEL_ID = str(os.environ.get("AZAZEL_MATTERMOST_CHANNEL_ID", "")).strip()
+MATTERMOST_COMMAND_TOKEN = str(os.environ.get("AZAZEL_MATTERMOST_COMMAND_TOKEN", "")).strip()
 MATTERMOST_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MATTERMOST_TIMEOUT_SEC", "8"))
 MATTERMOST_FETCH_LIMIT = int(os.environ.get("AZAZEL_MATTERMOST_FETCH_LIMIT", "40"))
 _CA_CERT_FILENAME = "azazel-webui-local-ca.crt"
@@ -396,6 +421,12 @@ def load_token() -> Optional[str]:
         return TOKEN_FILE.read_text().strip()
     return None
 
+
+def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
 def verify_token() -> bool:
     """リクエストのトークン検証（ヘッダーまたはクエリパラメータ）"""
     token = load_token()
@@ -408,6 +439,59 @@ def verify_token() -> bool:
         or request.args.get('token')
     )
     return req_token == token
+
+
+def _review_context_from_request(body: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    src = body if isinstance(body, dict) else {}
+    context = src.get("context") if isinstance(src.get("context"), dict) else {}
+    out: Dict[str, Any] = dict(context)
+    question = str(src.get("question") or out.get("question") or "").strip()
+    audience = str(src.get("audience") or out.get("audience") or "").strip()
+    risk_score = src.get("risk_score", out.get("risk_score"))
+    if question:
+        out["question"] = question
+    if audience:
+        out["audience"] = audience
+    try:
+        if risk_score not in (None, ""):
+            out["risk_score"] = int(risk_score)
+    except Exception:
+        pass
+    return out
+
+
+def _mattermost_command_allowed(command_token: str) -> bool:
+    token = str(command_token or "").strip()
+    if MATTERMOST_COMMAND_TOKEN:
+        return token == MATTERMOST_COMMAND_TOKEN
+    return True
+
+
+def _format_mattermost_ai_response(ai_result: Dict[str, Any] | None, proposals: Dict[str, Any] | None) -> str:
+    lines: List[str] = []
+    if isinstance(ai_result, dict):
+        answer = str(ai_result.get("answer") or "").strip()
+        if answer:
+            lines.append(f"AI: {answer}")
+        runbook_id = str(ai_result.get("runbook_id") or "").strip()
+        review = ai_result.get("runbook_review") if isinstance(ai_result.get("runbook_review"), dict) else {}
+        if runbook_id:
+            lines.append(f"Suggested Runbook: `{runbook_id}`")
+        if review:
+            lines.append(f"Review: `{review.get('final_status', '-')}`")
+            changes = review.get("required_changes")
+            if isinstance(changes, list) and changes:
+                lines.append("Required Changes: " + " | ".join(str(x) for x in changes[:3]))
+    if isinstance(proposals, dict):
+        items = proposals.get("items")
+        if isinstance(items, list) and items:
+            lines.append("Candidates:")
+            for item in items[:3]:
+                review = item.get("review") if isinstance(item.get("review"), dict) else {}
+                lines.append(
+                    f"- `{item.get('runbook_id', '-')}` [{review.get('final_status', '-')}] {item.get('title', '-')}"
+                )
+    return "\n".join(lines)[:3000]
 
 
 def _pid_running(pid_path: Path, expected_cmd: str = "") -> bool:
@@ -1084,6 +1168,53 @@ def send_control_command_with_params(action: str, params: Dict[str, Any]) -> Dic
     return _send_control_command_socket(action=action, params=params, timeout_sec=30.0)
 
 
+def _send_ai_manual_query(
+    question: str,
+    sender: str = "Azazel-Edge WebUI",
+    source: str = "webui",
+    context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if not AI_SOCKET.exists():
+        return {"ok": False, "error": f"ai_socket_not_found:{AI_SOCKET}"}
+    payload = {
+        "action": "manual_query",
+        "params": {
+            "question": str(question or "").strip(),
+            "sender": str(sender or "operator").strip(),
+            "source": str(source or "webui").strip(),
+            "context": context if isinstance(context, dict) else {},
+        },
+        "ts": time.time(),
+    }
+    if not payload["params"]["question"]:
+        return {"ok": False, "error": "empty_question"}
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(AI_MANUAL_TIMEOUT_SEC)
+        sock.connect(str(AI_SOCKET))
+        sock.sendall(json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n")
+        response = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+            if b"\n" in chunk:
+                break
+        sock.close()
+        if not response:
+            return {"ok": False, "error": "empty_ai_response"}
+        text = response.decode("utf-8", errors="replace").strip()
+        if "\n" in text:
+            text = text.splitlines()[0]
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else {"ok": False, "error": "invalid_ai_response"}
+    except socket.timeout:
+        return {"ok": False, "error": "ai_timeout"}
+    except Exception as e:
+        return {"ok": False, "error": f"ai_query_error:{e}"}
+
+
 def _mattermost_mode() -> str:
     if MATTERMOST_BOT_TOKEN and MATTERMOST_CHANNEL_ID:
         return "bot_api"
@@ -1199,7 +1330,7 @@ def index():
 @app.route("/ops-comm")
 def ops_comm():
     """Dedicated communication page for Mattermost + WebUI bridge."""
-    open_url = (os.getenv("AZAZEL_MATTERMOST_OPEN_URL") or "").strip() or MATTERMOST_BASE_URL
+    open_url = MATTERMOST_OPEN_URL
     return render_template("ops_comm.html", mattermost_open_url=open_url)
 
 
@@ -1462,11 +1593,239 @@ def api_mattermost_status():
             "ok": True,
             "reachable": reachable,
             "base_url": MATTERMOST_BASE_URL,
+            "open_url": MATTERMOST_OPEN_URL,
             "mode": _mattermost_mode(),
             "channel_id": MATTERMOST_CHANNEL_ID,
+            "command_enabled": bool(MATTERMOST_COMMAND_TOKEN),
+            "command_endpoint": "/api/mattermost/command",
             "ping": ping_payload,
         }
     )
+
+
+@app.route("/api/ai/ask", methods=["POST"])
+def api_ai_ask():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    body = request.get_json(silent=True) or {}
+    question = str(body.get("question") or "").strip()
+    sender = str(body.get("sender") or "Azazel-Edge WebUI").strip() or "Azazel-Edge WebUI"
+    source = str(body.get("source") or "webui").strip() or "webui"
+    context = body.get("context") if isinstance(body.get("context"), dict) else {}
+    if not question:
+        return jsonify({"ok": False, "error": "question is required"}), 400
+    result = _send_ai_manual_query(
+        question=question,
+        sender=sender,
+        source=source,
+        context=context,
+    )
+    code = 200 if result.get("ok") else 500
+    return jsonify(result), code
+
+
+@app.route("/api/runbooks", methods=["GET"])
+def api_runbooks_list():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    if runbook_list is None:
+        return jsonify({"ok": False, "error": "runbook_registry_unavailable"}), 500
+    return jsonify({"ok": True, "items": runbook_list()}), 200
+
+
+@app.route("/api/runbooks/<runbook_id>", methods=["GET"])
+def api_runbooks_get(runbook_id: str):
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    if runbook_get is None:
+        return jsonify({"ok": False, "error": "runbook_registry_unavailable"}), 500
+    try:
+        return jsonify({"ok": True, "runbook": runbook_get(runbook_id)}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 404
+
+
+@app.route("/api/runbooks/<runbook_id>/review", methods=["GET"])
+def api_runbooks_review(runbook_id: str):
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    if runbook_review_id is None:
+        return jsonify({"ok": False, "error": "runbook_review_unavailable"}), 500
+    context: Dict[str, Any] = {}
+    question = str(request.args.get("question") or "").strip()
+    audience = str(request.args.get("audience") or "").strip()
+    risk_score = str(request.args.get("risk_score") or "").strip()
+    if question:
+        context["question"] = question
+    if audience:
+        context["audience"] = audience
+    if risk_score:
+        try:
+            context["risk_score"] = int(risk_score)
+        except ValueError:
+            pass
+    try:
+        return jsonify(runbook_review_id(runbook_id, context=context)), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 404
+
+
+@app.route("/api/runbooks/execute", methods=["POST"])
+def api_runbooks_execute():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    if runbook_execute is None:
+        return jsonify({"ok": False, "error": "runbook_registry_unavailable"}), 500
+    body = request.get_json(silent=True) or {}
+    runbook_id = str(body.get("runbook_id") or "").strip()
+    args = body.get("args") if isinstance(body.get("args"), dict) else {}
+    dry_run = bool(body.get("dry_run", True))
+    if not runbook_id:
+        return jsonify({"ok": False, "error": "runbook_id is required"}), 400
+    try:
+        result = runbook_execute(runbook_id, args=args, dry_run=dry_run)
+        code = 200 if result.get("ok") else 500
+        return jsonify(result), code
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.route("/api/runbooks/propose", methods=["POST"])
+def api_runbooks_propose():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    if runbook_propose is None:
+        return jsonify({"ok": False, "error": "runbook_review_unavailable"}), 500
+    body = request.get_json(silent=True) or {}
+    question = str(body.get("question") or "").strip()
+    audience = str(body.get("audience") or "beginner").strip() or "beginner"
+    context = body.get("context") if isinstance(body.get("context"), dict) else {}
+    max_items = body.get("max_items", 3)
+    if not question:
+        return jsonify({"ok": False, "error": "question is required"}), 400
+    try:
+        max_items_int = max(1, min(int(max_items), 10))
+    except Exception:
+        max_items_int = 3
+    try:
+        return jsonify(runbook_propose(question, audience=audience, max_items=max_items_int, context=context)), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.route("/api/runbooks/act", methods=["POST"])
+def api_runbooks_act():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    if runbook_get is None or runbook_execute is None or runbook_review_id is None:
+        return jsonify({"ok": False, "error": "runbook_registry_unavailable"}), 500
+    body = request.get_json(silent=True) or {}
+    runbook_id = str(body.get("runbook_id") or "").strip()
+    action = str(body.get("action") or "preview").strip().lower()
+    args = body.get("args") if isinstance(body.get("args"), dict) else {}
+    actor = str(body.get("actor") or body.get("sender") or "webui-operator").strip() or "webui-operator"
+    note = str(body.get("note") or "").strip()[:240]
+    approved = bool(body.get("approved", False))
+    if not runbook_id:
+        return jsonify({"ok": False, "error": "runbook_id is required"}), 400
+    if action not in {"preview", "approve", "execute"}:
+        return jsonify({"ok": False, "error": "invalid_action"}), 400
+
+    def _log_runbook_decision(ok: bool, error: str = "") -> None:
+        _append_jsonl(
+            RUNBOOK_EVENT_LOG,
+            {
+                "ts": time.time(),
+                "actor": actor,
+                "action": action,
+                "runbook_id": runbook_id,
+                "args": args,
+                "approved": approved,
+                "ok": ok,
+                "error": error,
+                "note": note,
+            },
+        )
+
+    try:
+        runbook = runbook_get(runbook_id)
+        review = runbook_review_id(runbook_id, context=_review_context_from_request(body))
+    except Exception as e:
+        _log_runbook_decision(False, str(e))
+        return jsonify({"ok": False, "error": str(e)}), 404
+
+    effect = str(runbook.get("effect") or "")
+    requires_approval = bool(runbook.get("requires_approval"))
+    review_status = str(review.get("final_status") or "approved")
+    if review_status == "rejected":
+        _log_runbook_decision(False, "runbook_rejected_by_review")
+        return jsonify({"ok": False, "error": "runbook_rejected_by_review", "review": review}), 409
+    if action == "execute" and review_status == "amend_required":
+        _log_runbook_decision(False, "runbook_requires_changes_before_execute")
+        return jsonify({"ok": False, "error": "runbook_requires_changes_before_execute", "review": review}), 409
+    if action == "approve" and review_status == "amend_required":
+        _log_runbook_decision(False, "runbook_requires_changes_before_approve")
+        return jsonify({"ok": False, "error": "runbook_requires_changes_before_approve", "review": review}), 409
+    if action in {"approve", "execute"} and requires_approval and not approved:
+        _log_runbook_decision(False, "approval_required")
+        return jsonify({"ok": False, "error": "approval_required", "review": review}), 409
+
+    result: Dict[str, Any]
+    code = 200
+    if action == "preview":
+        try:
+            result = runbook_execute(runbook_id, args=args, dry_run=True)
+        except Exception as e:
+            _log_runbook_decision(False, str(e))
+            return jsonify({"ok": False, "error": str(e), "review": review}), 400
+    elif action == "approve":
+        result = {
+            "ok": True,
+            "runbook_id": runbook_id,
+            "title": runbook.get("title"),
+            "effect": effect,
+            "approved": approved or not requires_approval,
+            "executed": False,
+            "steps": runbook.get("steps", []),
+            "user_message_template": runbook.get("user_message_template", ""),
+        }
+    else:
+        if effect not in {"read_only", "controlled_exec"}:
+            _log_runbook_decision(False, "execute_supported_only_for_read_only")
+            return jsonify({"ok": False, "error": "execute_supported_only_for_read_only_or_controlled_exec", "review": review}), 409
+        try:
+            result = runbook_execute(
+                runbook_id,
+                args=args,
+                dry_run=False,
+                approved=approved,
+                allow_controlled_exec=(effect == "controlled_exec"),
+            )
+            code = 200 if result.get("ok") else 500
+        except Exception as e:
+            _log_runbook_decision(False, str(e))
+            return jsonify({"ok": False, "error": str(e), "review": review}), 400
+
+    result["review"] = review
+    result["operator_action"] = action
+    result["actor"] = actor
+    result["note"] = note
+    _append_jsonl(
+        RUNBOOK_EVENT_LOG,
+        {
+            "ts": time.time(),
+            "actor": actor,
+            "action": action,
+            "runbook_id": runbook_id,
+            "args": args,
+            "approved": approved,
+            "review_status": review_status,
+            "effect": effect,
+            "ok": bool(result.get("ok")),
+            "note": note,
+        },
+    )
+    return jsonify(result), code
 
 
 @app.route("/api/mattermost/message", methods=["POST"])
@@ -1476,13 +1835,76 @@ def api_mattermost_message():
     body = request.get_json(silent=True) or {}
     message = str(body.get("message") or "").strip()
     sender = str(body.get("sender") or "Azazel-Edge WebUI").strip() or "Azazel-Edge WebUI"
+    ask_ai = bool(body.get("ask_ai"))
+    post_ai_reply = bool(body.get("post_ai_reply", True))
+    send_to_mattermost = bool(body.get("send_to_mattermost", True))
     if not message:
         return jsonify({"ok": False, "error": "message is required"}), 400
     try:
-        result = _mattermost_send_message(message, sender=sender)
-        return jsonify({"ok": True, "result": result}), 200
+        posted: Dict[str, Any] | None = None
+        if send_to_mattermost:
+            posted = _mattermost_send_message(message, sender=sender)
+        ai_result: Dict[str, Any] | None = None
+        ai_post: Dict[str, Any] | None = None
+        runbook_proposals: Dict[str, Any] | None = None
+        if ask_ai:
+            ai_result = _send_ai_manual_query(
+                question=message,
+                sender=sender,
+                source="mattermost_post",
+                context={"channel_id": MATTERMOST_CHANNEL_ID},
+            )
+            if runbook_propose is not None:
+                try:
+                    runbook_proposals = runbook_propose(
+                        message,
+                        audience="operator",
+                        max_items=3,
+                        context={"question": message, "source": "mattermost_post"},
+                    )
+                except Exception:
+                    runbook_proposals = None
+            if ai_result.get("ok") and post_ai_reply and send_to_mattermost:
+                reply_text = _format_mattermost_ai_response(ai_result, runbook_proposals)
+                if reply_text:
+                    ai_post = _mattermost_send_message(f"[AI]\n{reply_text}", sender="Azazel-Edge AI")
+        return jsonify({"ok": True, "result": posted, "ai_result": ai_result, "runbook_proposals": runbook_proposals, "ai_post_result": ai_post}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/mattermost/command", methods=["POST"])
+def api_mattermost_command():
+    body = request.get_json(silent=True) or {}
+    form = request.form or {}
+    text = str(form.get("text") or body.get("text") or "").strip()
+    sender = str(form.get("user_name") or body.get("user_name") or body.get("sender") or "mattermost-user").strip() or "mattermost-user"
+    command_token = str(form.get("token") or body.get("token") or "").strip()
+    channel_id = str(form.get("channel_id") or body.get("channel_id") or MATTERMOST_CHANNEL_ID).strip()
+    if not _mattermost_command_allowed(command_token):
+        return jsonify({"response_type": "ephemeral", "text": "Mattermost command token mismatch."}), 403
+    if not text:
+        return jsonify({"response_type": "ephemeral", "text": "Usage: /azops <question>"}), 200
+
+    ai_result = _send_ai_manual_query(
+        question=text,
+        sender=sender,
+        source="mattermost_command",
+        context={"channel_id": channel_id, "page": "mattermost"},
+    )
+    proposals = None
+    if runbook_propose is not None:
+        try:
+            proposals = runbook_propose(
+                text,
+                audience="operator",
+                max_items=3,
+                context={"question": text, "source": "mattermost_command"},
+            )
+        except Exception:
+            proposals = None
+    reply_text = _format_mattermost_ai_response(ai_result, proposals) or "No response."
+    return jsonify({"response_type": "ephemeral", "text": reply_text}), 200
 
 
 @app.route("/api/mattermost/messages", methods=["GET"])

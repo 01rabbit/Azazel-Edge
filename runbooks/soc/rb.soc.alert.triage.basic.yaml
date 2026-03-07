@@ -1,0 +1,20 @@
+id: rb.soc.alert.triage.basic
+title: Basic Suricata Alert Triage
+domain: soc
+audience: operator
+risk: medium
+effect: operator_guidance
+requires_approval: false
+args_schema:
+  type: object
+  properties:
+    signature:
+      type: string
+      maxLength: 160
+  required: [signature]
+steps:
+  - Confirm the alert signature, severity, source, destination, and target port.
+  - Check whether the same source repeated recently or changed signature pattern.
+  - Compare with the current tactical score before deciding that the alert is benign.
+  - If impact is unclear, escalate to a supervisor instead of dismissing the alert.
+user_message_template: "警報内容を確認しています。通信元、通信先、時刻の変化を順番に見ます。"

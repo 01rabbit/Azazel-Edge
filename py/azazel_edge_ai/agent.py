@@ -27,6 +27,14 @@ from azazel_edge.tactics_engine.decision_logger import (
     ScoreDelta,
     StateSnapshot,
 )
+try:
+    from azazel_edge.runbooks import get_runbook as runbook_get
+except Exception:  # pragma: no cover
+    runbook_get = None
+try:
+    from azazel_edge.runbook_review import review_runbook_id
+except Exception:  # pragma: no cover
+    review_runbook_id = None
 
 SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
 ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge/ai_advisory.json"))
@@ -81,6 +89,18 @@ OPS_PROMPT_SYSTEM = (
     "You are an ops coach. Return strict JSON only with keys: runbook_id, summary, operator_note. "
     "Keep summary and operator_note each under 120 chars."
 )
+MANUAL_PROMPT_SYSTEM = (
+    "You are Azazel-Edge SOC/NOC assistant. Return strict JSON only with keys: "
+    "answer,confidence,runbook_id,operator_note. "
+    "answer<=240 chars, operator_note<=120 chars, confidence=0.0..1.0."
+)
+MANUAL_QUERY_MAX_CHARS = int(os.environ.get("AZAZEL_MANUAL_QUERY_MAX_CHARS", "500"))
+MANUAL_QUERY_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MANUAL_QUERY_TIMEOUT_SEC", "12"))
+MANUAL_MODEL_CHAIN = [
+    m.strip()
+    for m in os.environ.get("AZAZEL_MANUAL_MODEL_CHAIN", f"{LLM_MODEL_DEGRADED}").split(",")
+    if m.strip()
+]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("azazel-edge-ai-agent")
@@ -116,6 +136,10 @@ METRICS: Dict[str, Any] = {
     "ops_errors": 0,
     "ops_schema_invalid_count": 0,
     "ops_fallback_model_count": 0,
+    "manual_requests": 0,
+    "manual_completed": 0,
+    "manual_failed": 0,
+    "manual_schema_invalid_count": 0,
     "policy_mode": "normal",
     "last_error": "",
     "last_update_ts": 0.0,
@@ -383,7 +407,7 @@ def _normalize_analyst_result(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _normalize_ops_result(raw: Dict[str, Any]) -> Dict[str, Any]:
-    runbook_id = str(raw.get("runbook_id") or raw.get("playbook_id") or raw.get("id") or "").strip()[:48]
+    runbook_id = _normalize_runbook_id(raw.get("runbook_id") or raw.get("playbook_id") or raw.get("id") or "")
     summary = str(raw.get("summary") or raw.get("reason") or raw.get("analysis") or "").strip()
     operator_note = str(raw.get("operator_note") or raw.get("suggested_action") or raw.get("action") or "").strip()
     if not summary:
@@ -395,6 +419,155 @@ def _normalize_ops_result(raw: Dict[str, Any]) -> Dict[str, Any]:
         "summary": summary[:120],
         "operator_note": operator_note[:120],
     }
+
+
+def _normalize_manual_result(raw: Dict[str, Any]) -> Dict[str, Any]:
+    answer = str(raw.get("answer") or raw.get("summary") or raw.get("operator_note") or "").strip()
+    if not answer:
+        raise ValueError("manual_empty_answer")
+    runbook_id = _normalize_runbook_id(raw.get("runbook_id") or "")
+    operator_note = str(raw.get("operator_note") or "").strip()[:120]
+    if not operator_note:
+        operator_note = answer[:120]
+    return {
+        "answer": answer[:240],
+        "confidence": _normalize_confidence(raw.get("confidence", 0.6)),
+        "runbook_id": runbook_id,
+        "operator_note": operator_note,
+    }
+
+
+def _latest_advisory_snapshot() -> Dict[str, Any]:
+    try:
+        if ADVISORY_PATH.exists():
+            data = json.loads(ADVISORY_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _normalize_runbook_id(value: Any) -> str:
+    runbook_id = str(value or "").strip()[:48]
+    if not runbook_id or runbook_get is None:
+        return runbook_id
+    try:
+        runbook_get(runbook_id)
+        return runbook_id
+    except Exception:
+        return ""
+
+
+def _guess_runbook_id(question: str) -> str:
+    q = str(question or "").lower()
+    if any(token in q for token in ("epd", "display", "e-paper")):
+        return "rb.ops.epd.state.check"
+    if any(token in q for token in ("log", "ログ", "llm", "ai")):
+        return "rb.ops.logs.ai.recent"
+    if any(token in q for token in ("gateway", "route", "uplink", "回線", "ゲートウェイ")):
+        return "rb.noc.default-route.check"
+    if any(token in q for token in ("service", "systemd", "サービス")):
+        return "rb.noc.service.status.check"
+    if any(token in q for token in ("connect", "wifi", "network", "繋", "接続", "ネット")):
+        return "rb.user.first-contact.network-issue"
+    return "rb.noc.ui-snapshot.check"
+
+
+def _manual_fallback_response(question: str) -> Dict[str, Any]:
+    latest = _latest_advisory_snapshot()
+    state_name = str(latest.get("state_name") or "UNKNOWN")
+    risk_score = int(latest.get("risk_score") or 0)
+    rec = str(latest.get("recommendation") or "ログ確認を継続してください。")
+    return {
+        "status": "fallback",
+        "model": "tactical_snapshot",
+        "fallback_model_used": False,
+        "latency_ms": 0,
+        "answer": f"現在の推奨: {rec}",
+        "confidence": 0.35,
+        "runbook_id": _guess_runbook_id(question),
+        "operator_note": f"state={state_name} risk={risk_score} question={question[:48]}",
+    }
+
+
+def _run_manual_query(
+    question: str,
+    sender: str,
+    source: str,
+    context: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    allowed, why = _ops_coach_allowed()
+    if not allowed:
+        return {"status": "skipped", "reason": why, "model": OPS_COACH_MODEL}
+
+    q = str(question or "").strip()
+    if not q:
+        return {"status": "error", "reason": "empty_question", "model": OPS_COACH_MODEL}
+    q = q[:MANUAL_QUERY_MAX_CHARS]
+    ctx = context if isinstance(context, dict) else {}
+    latest = _latest_advisory_snapshot()
+    payload = {
+        "source": str(source or "webui"),
+        "sender": str(sender or "operator"),
+        "question": q,
+        "latest_risk_score": int(latest.get("risk_score") or 0),
+        "latest_attack_type": str(latest.get("attack_type") or "unknown"),
+        "latest_state_name": str(latest.get("state_name") or "UNKNOWN"),
+        "latest_user_state": str(latest.get("user_state") or "CHECKING"),
+        "context": ctx,
+    }
+
+    _metrics_inc("manual_requests", 1)
+    errors: list[dict[str, str]] = []
+    for idx, model in enumerate(MANUAL_MODEL_CHAIN):
+        started = time.time()
+        try:
+            raw = _ollama_chat(
+                payload,
+                model=model,
+                prompt_system=MANUAL_PROMPT_SYSTEM,
+                keep_alive=OPS_KEEP_ALIVE,
+                num_predict=OPS_NUM_PREDICT,
+                timeout_sec=MANUAL_QUERY_TIMEOUT_SEC,
+                return_text_on_parse_error=True,
+                required_keys=None,
+            )
+            out = _normalize_manual_result(raw)
+            latency_ms = int((time.time() - started) * 1000)
+            _metrics_inc("manual_completed", 1)
+            _append_jsonl(
+                LLM_RESULT_LOG_PATH,
+                {
+                    "ts": time.time(),
+                    "kind": "manual_query",
+                    "source": source,
+                    "sender": sender,
+                    "question": q,
+                    "model": model,
+                    "latency_ms": latency_ms,
+                    "response": out,
+                },
+            )
+            return {
+                "status": "completed",
+                "model": model,
+                "fallback_model_used": idx > 0,
+                "latency_ms": latency_ms,
+                **out,
+            }
+        except Exception as exc:
+            reason = str(exc)
+            if reason.startswith("manual_"):
+                _metrics_inc("manual_schema_invalid_count", 1)
+            errors.append({"model": model, "reason": reason})
+            continue
+
+    _metrics_inc("manual_failed", 1)
+    fallback = _manual_fallback_response(q)
+    fallback["reason"] = "all_manual_models_failed"
+    fallback["errors"] = errors
+    return fallback
 
 
 def _run_ops_coach(advisory: Dict[str, Any], verdict: str, confidence: float, reason: str, trigger_reason: str) -> Dict[str, Any]:
@@ -692,6 +865,8 @@ def _ollama_chat(
     prompt_system: str = LLM_PROMPT_SYSTEM,
     keep_alive: str = LLM_KEEP_ALIVE,
     num_predict: int = LLM_NUM_PREDICT,
+    timeout_sec: float = LLM_TIMEOUT_SEC,
+    return_text_on_parse_error: bool = False,
     required_keys: tuple[str, ...] | None = ("verdict", "confidence", "reason", "suggested_action", "escalation"),
 ) -> Dict[str, Any]:
     req_body = {
@@ -717,13 +892,23 @@ def _ollama_chat(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_SEC) as resp:
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
         data = json.loads(resp.read().decode("utf-8", errors="replace"))
     message = data.get("message", {}) if isinstance(data, dict) else {}
     content = str(message.get("content") or "")
     if not content.strip():
         raise ValueError("empty_content")
-    parsed = _extract_json_payload(content)
+    try:
+        parsed = _extract_json_payload(content)
+    except Exception:
+        if return_text_on_parse_error:
+            return {
+                "answer": content.strip()[:240],
+                "confidence": 0.5,
+                "runbook_id": "",
+                "operator_note": "raw_text_fallback",
+            }
+        raise
     if required_keys and any(k not in parsed for k in required_keys):
         raise ValueError("invalid_json_schema")
     return parsed
@@ -1061,16 +1246,7 @@ def _default_route_info() -> Dict[str, str]:
     return result
 
 
-def _handle_line(raw: str) -> None:
-    raw = raw.strip()
-    if not raw:
-        return
-
-    try:
-        event = json.loads(raw)
-    except json.JSONDecodeError:
-        return
-
+def _handle_event(event: Dict[str, Any]) -> None:
     advisory = _build_advisory(event)
     _metrics_inc("processed_events", 1)
     _route_llm(event, advisory)
@@ -1079,6 +1255,76 @@ def _handle_line(raw: str) -> None:
         _write_json(ADVISORY_PATH, advisory)
         _update_ui_snapshot(advisory)
         _persist_metrics()
+
+
+def _handle_manual_query_request(req: Dict[str, Any]) -> Dict[str, Any]:
+    params = req.get("params")
+    if not isinstance(params, dict):
+        params = {}
+    question = str(params.get("question") or req.get("question") or "").strip()
+    sender = str(params.get("sender") or req.get("sender") or "operator").strip()
+    source = str(params.get("source") or req.get("source") or "webui").strip()
+    context = params.get("context")
+    started = time.time()
+    result = _run_manual_query(question=question, sender=sender, source=source, context=context if isinstance(context, dict) else {})
+    runbook_id = str(result.get("runbook_id") or "").strip()
+    if runbook_id and review_runbook_id is not None:
+        audience = "operator" if source in {"webui", "ops-comm", "mattermost_post", "mattermost_command", "cli"} else "beginner"
+        try:
+            result["runbook_review"] = review_runbook_id(
+                runbook_id,
+                context={
+                    "question": question,
+                    "audience": audience,
+                    "risk_score": int(_latest_advisory_snapshot().get("risk_score") or 0),
+                    "source": source,
+                },
+            )
+        except Exception as exc:
+            result["runbook_review_error"] = str(exc)
+    with IO_LOCK:
+        _persist_metrics()
+    result["ok"] = str(result.get("status") or "") in {"completed", "fallback"}
+    result["action"] = "manual_query"
+    result["duration_ms"] = int((time.time() - started) * 1000)
+    return result
+
+
+def _handle_request_line(raw: str) -> Dict[str, Any] | None:
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {"ok": False, "error": "invalid_json"}
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "invalid_payload"}
+
+    action = str(payload.get("action") or "").strip().lower()
+    if action == "manual_query":
+        return _handle_manual_query_request(payload)
+
+    _handle_event(payload)
+    return None
+
+
+def _handle_client(conn: socket.socket) -> None:
+    with conn:
+        buf = b""
+        while True:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                resp = _handle_request_line(line.decode("utf-8", errors="replace"))
+                if isinstance(resp, dict):
+                    try:
+                        conn.sendall((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+                    except Exception:
+                        return
 
 
 def _serve() -> None:
@@ -1100,16 +1346,7 @@ def _serve() -> None:
 
     while True:
         conn, _ = srv.accept()
-        with conn:
-            buf = b""
-            while True:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                buf += chunk
-                while b"\n" in buf:
-                    line, buf = buf.split(b"\n", 1)
-                    _handle_line(line.decode("utf-8", errors="replace"))
+        threading.Thread(target=_handle_client, args=(conn,), daemon=True).start()
 
 
 if __name__ == "__main__":

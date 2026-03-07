@@ -8,6 +8,10 @@
     grid-column: 1 / -1;
 }
 
+.ops-runbooks-card {
+    grid-column: 1 / -1;
+}
+
 .ops-label {
     display: block;
     color: var(--text-secondary);
@@ -37,12 +41,88 @@
     font-size: 0.9em;
 }
 
+.ops-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
 .ops-message-list {
     list-style: none;
     margin: 0;
     padding: 0;
     display: grid;
     gap: 8px;
+}
+
+.ops-runbook-list {
+    display: grid;
+    gap: 10px;
+}
+
+.ops-runbook-item {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.ops-runbook-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.ops-runbook-title {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.ops-runbook-meta {
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.ops-runbook-review {
+    color: var(--text-secondary);
+    font-size: 0.9em;
+    margin-bottom: 8px;
+    white-space: pre-wrap;
+}
+
+.ops-runbook-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ops-runbook-output {
+    margin-top: 8px;
+    font-size: 0.9em;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+}
+
+.ops-runbook-args {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.ops-runbook-arg {
+    display: grid;
+    gap: 4px;
+}
+
+.ops-runbook-arg label {
+    color: var(--text-secondary);
+    font-size: 0.85em;
 }
 
 .ops-message-item {

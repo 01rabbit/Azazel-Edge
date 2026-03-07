@@ -17,8 +17,11 @@
   - 相関エスカレーション（反復・SID多様化）
   - Opsエスカレーション（高リスク直行 + メモリ/スワップガード）
   - Analyst/Ops JSONスキーマ検証
+  - Runbookレジストリ（YAML）/ ローダ / ブローカー骨格
+  - Web API: `GET /api/runbooks`, `GET /api/runbooks/<id>`, `POST /api/runbooks/execute`
 - 未実装（今後）:
-  - Runbookレジストリ + ブローカー実行層
+  - Runbook reviewer多層評価
+  - controlled_exec 系の承認実行層
   - 半年ごとのモデル比較運用の自動化
 
 ## 3. 前提条件
@@ -154,16 +157,95 @@ sudo journalctl -u azazel-edge-ai-agent -n 100 --no-pager
 sudo docker logs --tail 100 azazel-edge-ollama
 ```
 
-## 10. 将来拡張（Runbookブローカー）
+## 10. Runbook基盤
+
+実装済み:
+- `runbooks/**/*.yaml` に Runbook 定義を配置
+- `py/azazel_edge/runbooks.py` でロード/検証
+- `py/azazel_edge/runbook_review.py` で複数専門家レビューを実装
+- `py/azazel_edge_runbook_broker.py` で CLI 実行
+- Web API から一覧/詳細/レビュー/提案/承認/実行が可能
+
+初期Runbook:
+- `rb.noc.service.status.check`
+- `rb.noc.service.restart.controlled`
+- `rb.noc.default-route.check`
+- `rb.noc.ui-snapshot.check`
+- `rb.noc.dhcp.failure.check`
+- `rb.noc.dns.failure.check`
+- `rb.ops.logs.ai.recent`
+- `rb.ops.epd.state.check`
+- `rb.soc.alert.triage.basic`
+- `rb.soc.contain.recommend`
+- `rb.user.first-contact.network-issue`
+- `rb.user.reconnect-guide`
+- `rb.user.device-onboarding-guide`
+- `rb.user.incident-status-brief`
+
+Reviewer構成:
+- `soc_analyst_ai`
+- `noc_operator_ai`
+- `user_support_ai`
+- `security_architect_ai`
+- `runbook_qa_ai`
+
+CLI例:
+
+```bash
+/usr/local/bin/azazel-edge-runbook-broker list
+/usr/local/bin/azazel-edge-runbook-broker show rb.noc.service.status.check
+/usr/local/bin/azazel-edge-runbook-broker review rb.user.first-contact.network-issue
+/usr/local/bin/azazel-edge-runbook-broker propose --question 'Wi-Fi に繋がらない'
+/usr/local/bin/azazel-edge-runbook-broker execute rb.ops.logs.ai.recent --args-json '{"lines":5}'
+```
+
+Web API例:
+
+```bash
+curl http://127.0.0.1:8084/api/runbooks
+curl http://127.0.0.1:8084/api/runbooks/rb.noc.default-route.check
+curl http://127.0.0.1:8084/api/runbooks/rb.user.first-contact.network-issue/review
+curl -X POST http://127.0.0.1:8084/api/runbooks/propose \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"DNS が引けない","audience":"beginner"}'
+curl -X POST http://127.0.0.1:8084/api/runbooks/act \
+  -H 'Content-Type: application/json' \
+  -d '{"runbook_id":"rb.ops.logs.ai.recent","action":"preview","args":{"lines":5},"question":"AIログを確認したい"}'
+curl -X POST http://127.0.0.1:8084/api/runbooks/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"runbook_id":"rb.ops.logs.ai.recent","args":{"lines":5},"dry_run":true}'
+```
+
+レビュー方針:
+- Pi 5 同居前提のため reviewer を別 LLM 多重起動にはしない
+- 代わりに複数専門家ロールごとのポリシー評価を固定化する
+- 初心者向け Runbook は `user_message_template` と段階的手順を必須とする
+- 封じ込めや認証系の Runbook は approval が無い場合 reject する
+- `runbook-events.jsonl` に preview/approve/execute を記録し、承認履歴を残す
+
+## 11. 将来拡張（Runbookブローカー）
 
 将来の設計方針:
 - `runbook_id` + `args` のみLLMに返させる
 - 実コマンドはブローカーがYAML定義を検証して実行
 - 実行権限は `sudoers` で最小化
 
-この層は未実装のため、現時点では「LLMが直接コマンド実行しない」原則を厳守する。
+現状:
+- `read_only` Runbook は broker から実行可能
+- `operator_guidance` は提案のみ
+- `controlled_exec` は `AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC=1` + approval 条件でのみ許可
+- LLMが直接コマンド実行しない原則は維持
 
-## 11. Mattermost連携（WebUI専用サイト）
+有効化例:
+
+```bash
+sudo tee -a /etc/default/azazel-edge-web >/dev/null <<'EOF'
+AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC=1
+EOF
+sudo systemctl restart azazel-edge-web
+```
+
+## 12. Mattermost連携（WebUI専用サイト）
 
 ### 11.1 MattermostをDocker導入
 
@@ -187,18 +269,64 @@ docker compose -f security/docker-compose.mattermost.yml ps
 - 機能:
   - Mattermost到達性表示
   - WebUIからメッセージ送信
+  - 手動質問 (`Ask AI + Post`) による `ai-agent` 対話呼び出し
   - 直近メッセージ一覧表示（Bot APIモード時）
+  - Runbook 候補の preview / approve / execute
+
+### 11.4 手動質問API（ai-agent連携）
+
+- エンドポイント: `POST /api/ai/ask`
+- 入力:
+  - `question` (required)
+
+### 11.5 Mattermost command 連携
+
+- エンドポイント: `POST /api/mattermost/command`
+- 用途:
+  - Mattermost slash command または outgoing webhook から AI 質問を受ける
+  - 返答には AI 要約と Runbook 候補/Review を含める
+- 推奨:
+  - `AZAZEL_MATTERMOST_COMMAND_TOKEN` を設定し、Mattermost 側の token と一致させる
+  - 設定先は `/etc/default/azazel-edge-web`
+  - `sender` (optional)
+  - `source` (optional)
+  - `context` (optional object)
+- 動作:
+  - WebUIが `/run/azazel-edge/ai-bridge.sock` に `action=manual_query` を送信
+  - `azazel-edge-ai-agent` が Ops 系モデルで応答生成
+  - 応答JSONを同期返却
+- `/api/mattermost/message` では `ask_ai=true` 指定で投稿内容を同時にAI問い合わせし、応答を Mattermost に追記可能
+
+設定例:
+
+```bash
+sudo tee -a /etc/default/azazel-edge-web >/dev/null <<'EOF'
+AZAZEL_MATTERMOST_COMMAND_TOKEN=replace-with-mattermost-token
+EOF
+sudo systemctl restart azazel-edge-web
+```
+
+slash command 例:
+- Command Trigger: `/azops`
+- Request URL: `https://<host>/api/mattermost/command`
+- Method: `POST`
 
 ### 11.3 環境変数（`/etc/default/azazel-edge-web`）
 
 ```bash
-AZAZEL_MATTERMOST_BASE_URL=http://<host-ip>:8065
-AZAZEL_MATTERMOST_OPEN_URL=http://<host-ip>:8065/<team>/channels/<channel>
+AZAZEL_MATTERMOST_HOST=172.16.0.254
+AZAZEL_MATTERMOST_PORT=8065
+AZAZEL_MATTERMOST_BASE_URL=
+AZAZEL_MATTERMOST_TEAM=azazelops
+AZAZEL_MATTERMOST_CHANNEL=soc-noc
+AZAZEL_MATTERMOST_OPEN_URL=
 AZAZEL_MATTERMOST_WEBHOOK_URL=
 AZAZEL_MATTERMOST_BOT_TOKEN=
 AZAZEL_MATTERMOST_CHANNEL_ID=
+AZAZEL_MATTERMOST_COMMAND_TOKEN=
 AZAZEL_MATTERMOST_TIMEOUT_SEC=8
 AZAZEL_MATTERMOST_FETCH_LIMIT=40
+AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC=0
 ```
 
 運用モード:
@@ -208,7 +336,7 @@ AZAZEL_MATTERMOST_FETCH_LIMIT=40
 補足:
 - Webhookモードは WebUI -> Mattermost 投稿が可能（読み戻しは不可）。
 - Bot APIモードは投稿 + 直近メッセージ読み戻しが可能。
-- `Open Mattermost` は `AZAZEL_MATTERMOST_OPEN_URL` を優先して開く。
+- `Open Mattermost` は `AZAZEL_MATTERMOST_OPEN_URL` を優先し、未設定時は `http://<AZAZEL_MATTERMOST_HOST>:<AZAZEL_MATTERMOST_PORT>/<team>/channels/<channel>` を自動生成する。
 - ログイン情報は `/etc/azazel-edge/mattermost-credentials.env`（権限 `0600`）に保管する。
 
 反映:

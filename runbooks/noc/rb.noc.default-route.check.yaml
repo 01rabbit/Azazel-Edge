@@ -1,0 +1,22 @@
+id: rb.noc.default-route.check
+title: Default Route Check
+domain: noc
+audience: operator
+risk: low
+effect: read_only
+requires_approval: false
+args_schema:
+  type: object
+  properties: {}
+  required: []
+steps:
+  - Confirm the current upstream interface and gateway.
+  - Compare the route result with the UI snapshot if uplink is unclear.
+user_message_template: "現在の上位回線とゲートウェイを確認しています。"
+command:
+  exec: /usr/sbin/ip
+  argv:
+    - "-4"
+    - "route"
+    - "show"
+    - "default"
