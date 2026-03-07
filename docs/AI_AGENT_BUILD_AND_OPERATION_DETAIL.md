@@ -259,6 +259,22 @@ docker compose -f security/docker-compose.mattermost.yml ps
 - `http://<host>:8065` で管理者アカウントを作成
 - チーム/チャンネルを作成
 
+### 11.2 Mattermost slash command を導入
+
+```bash
+sudo installer/internal/provision_mattermost_command.sh
+```
+
+結果:
+- trigger: `/azops`
+- callback URL: `http://172.16.0.254/api/mattermost/command`
+- token sync: `/etc/azazel-edge/mattermost-command-token`
+
+注意:
+- nginx は `/api/mattermost/command` のみ HTTP:80 で WebUI へ直通させる
+- それ以外の WebUI パスは HTTPS へリダイレクトする
+- Mattermost 側は `AllowedUntrustedInternalConnections=172.16.0.254` を設定して callback を許可する
+
 注記:
 - 現行の Mattermost 公式イメージは Pi5(arm64) で `linux/amd64` エミュレーション起動。
 - 初回起動はイメージが大きく時間がかかる。
@@ -286,8 +302,8 @@ docker compose -f security/docker-compose.mattermost.yml ps
   - Mattermost slash command または outgoing webhook から AI 質問を受ける
   - 返答には AI 要約と Runbook 候補/Review を含める
 - 推奨:
-  - `AZAZEL_MATTERMOST_COMMAND_TOKEN` を設定し、Mattermost 側の token と一致させる
-  - 設定先は `/etc/default/azazel-edge-web`
+  - token は `/etc/azazel-edge/mattermost-command-token`（`0600`）へ保存する
+  - `AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE` は必要時のみ変更する
   - `sender` (optional)
   - `source` (optional)
   - `context` (optional object)
@@ -300,9 +316,9 @@ docker compose -f security/docker-compose.mattermost.yml ps
 設定例:
 
 ```bash
-sudo tee -a /etc/default/azazel-edge-web >/dev/null <<'EOF'
-AZAZEL_MATTERMOST_COMMAND_TOKEN=replace-with-mattermost-token
-EOF
+sudo install -d -m 0700 /etc/azazel-edge
+printf '%s\n' 'replace-with-mattermost-token' | sudo tee /etc/azazel-edge/mattermost-command-token >/dev/null
+sudo chmod 600 /etc/azazel-edge/mattermost-command-token
 sudo systemctl restart azazel-edge-web
 ```
 
@@ -323,7 +339,7 @@ AZAZEL_MATTERMOST_OPEN_URL=
 AZAZEL_MATTERMOST_WEBHOOK_URL=
 AZAZEL_MATTERMOST_BOT_TOKEN=
 AZAZEL_MATTERMOST_CHANNEL_ID=
-AZAZEL_MATTERMOST_COMMAND_TOKEN=
+AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE=/etc/azazel-edge/mattermost-command-token
 AZAZEL_MATTERMOST_TIMEOUT_SEC=8
 AZAZEL_MATTERMOST_FETCH_LIMIT=40
 AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC=0

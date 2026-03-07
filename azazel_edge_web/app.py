@@ -111,7 +111,24 @@ MATTERMOST_OPEN_URL = str(os.environ.get("AZAZEL_MATTERMOST_OPEN_URL", MATTERMOS
 MATTERMOST_WEBHOOK_URL = str(os.environ.get("AZAZEL_MATTERMOST_WEBHOOK_URL", "")).strip()
 MATTERMOST_BOT_TOKEN = str(os.environ.get("AZAZEL_MATTERMOST_BOT_TOKEN", "")).strip()
 MATTERMOST_CHANNEL_ID = str(os.environ.get("AZAZEL_MATTERMOST_CHANNEL_ID", "")).strip()
-MATTERMOST_COMMAND_TOKEN = str(os.environ.get("AZAZEL_MATTERMOST_COMMAND_TOKEN", "")).strip()
+MATTERMOST_COMMAND_TOKEN_FILE = Path(
+    str(os.environ.get("AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE", "/etc/azazel-edge/mattermost-command-token")).strip()
+    or "/etc/azazel-edge/mattermost-command-token"
+)
+
+
+def _read_secret_file(path: Path) -> str:
+    try:
+        if path.exists():
+            return path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    return ""
+
+
+MATTERMOST_COMMAND_TOKEN = _read_secret_file(MATTERMOST_COMMAND_TOKEN_FILE) or str(
+    os.environ.get("AZAZEL_MATTERMOST_COMMAND_TOKEN", "")
+).strip()
 MATTERMOST_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MATTERMOST_TIMEOUT_SEC", "8"))
 MATTERMOST_FETCH_LIMIT = int(os.environ.get("AZAZEL_MATTERMOST_FETCH_LIMIT", "40"))
 _CA_CERT_FILENAME = "azazel-webui-local-ca.crt"
@@ -464,7 +481,7 @@ def _mattermost_command_allowed(command_token: str) -> bool:
     token = str(command_token or "").strip()
     if MATTERMOST_COMMAND_TOKEN:
         return token == MATTERMOST_COMMAND_TOKEN
-    return True
+    return False
 
 
 def _format_mattermost_ai_response(ai_result: Dict[str, Any] | None, proposals: Dict[str, Any] | None) -> str:
@@ -492,6 +509,107 @@ def _format_mattermost_ai_response(ai_result: Dict[str, Any] | None, proposals: 
                     f"- `{item.get('runbook_id', '-')}` [{review.get('final_status', '-')}] {item.get('title', '-')}"
                 )
     return "\n".join(lines)[:3000]
+
+
+def _run_runbook_action(body: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
+    if runbook_get is None or runbook_execute is None or runbook_review_id is None:
+        return {"ok": False, "error": "runbook_registry_unavailable"}, 500
+
+    runbook_id = str(body.get("runbook_id") or "").strip()
+    action = str(body.get("action") or "preview").strip().lower()
+    args = body.get("args") if isinstance(body.get("args"), dict) else {}
+    actor = str(body.get("actor") or body.get("sender") or "webui-operator").strip() or "webui-operator"
+    note = str(body.get("note") or "").strip()[:240]
+    approved = bool(body.get("approved", False))
+
+    def _log_runbook_decision(ok: bool, error: str = "", review_status: str = "", effect: str = "") -> None:
+        _append_jsonl(
+            RUNBOOK_EVENT_LOG,
+            {
+                "ts": time.time(),
+                "actor": actor,
+                "action": action,
+                "runbook_id": runbook_id,
+                "args": args,
+                "approved": approved,
+                "ok": ok,
+                "error": error,
+                "review_status": review_status,
+                "effect": effect,
+                "note": note,
+            },
+        )
+
+    if not runbook_id:
+        return {"ok": False, "error": "runbook_id is required"}, 400
+    if action not in {"preview", "approve", "execute"}:
+        return {"ok": False, "error": "invalid_action"}, 400
+
+    try:
+        runbook = runbook_get(runbook_id)
+        review = runbook_review_id(runbook_id, context=_review_context_from_request(body))
+    except Exception as e:
+        _log_runbook_decision(False, str(e))
+        return {"ok": False, "error": str(e)}, 404
+
+    effect = str(runbook.get("effect") or "")
+    requires_approval = bool(runbook.get("requires_approval"))
+    review_status = str(review.get("final_status") or "approved")
+    if review_status == "rejected":
+        _log_runbook_decision(False, "runbook_rejected_by_review", review_status=review_status, effect=effect)
+        return {"ok": False, "error": "runbook_rejected_by_review", "review": review}, 409
+    if action == "execute" and review_status == "amend_required":
+        _log_runbook_decision(False, "runbook_requires_changes_before_execute", review_status=review_status, effect=effect)
+        return {"ok": False, "error": "runbook_requires_changes_before_execute", "review": review}, 409
+    if action == "approve" and review_status == "amend_required":
+        _log_runbook_decision(False, "runbook_requires_changes_before_approve", review_status=review_status, effect=effect)
+        return {"ok": False, "error": "runbook_requires_changes_before_approve", "review": review}, 409
+    if action in {"approve", "execute"} and requires_approval and not approved:
+        _log_runbook_decision(False, "approval_required", review_status=review_status, effect=effect)
+        return {"ok": False, "error": "approval_required", "review": review}, 409
+
+    result: Dict[str, Any]
+    code = 200
+    if action == "preview":
+        try:
+            result = runbook_execute(runbook_id, args=args, dry_run=True)
+        except Exception as e:
+            _log_runbook_decision(False, str(e), review_status=review_status, effect=effect)
+            return {"ok": False, "error": str(e), "review": review}, 400
+    elif action == "approve":
+        result = {
+            "ok": True,
+            "runbook_id": runbook_id,
+            "title": runbook.get("title"),
+            "effect": effect,
+            "approved": approved or not requires_approval,
+            "executed": False,
+            "steps": runbook.get("steps", []),
+            "user_message_template": runbook.get("user_message_template", ""),
+        }
+    else:
+        if effect not in {"read_only", "controlled_exec"}:
+            _log_runbook_decision(False, "execute_supported_only_for_read_only_or_controlled_exec", review_status=review_status, effect=effect)
+            return {"ok": False, "error": "execute_supported_only_for_read_only_or_controlled_exec", "review": review}, 409
+        try:
+            result = runbook_execute(
+                runbook_id,
+                args=args,
+                dry_run=False,
+                approved=approved,
+                allow_controlled_exec=(effect == "controlled_exec"),
+            )
+            code = 200 if result.get("ok") else 500
+        except Exception as e:
+            _log_runbook_decision(False, str(e), review_status=review_status, effect=effect)
+            return {"ok": False, "error": str(e), "review": review}, 400
+
+    result["review"] = review
+    result["operator_action"] = action
+    result["actor"] = actor
+    result["note"] = note
+    _log_runbook_decision(bool(result.get("ok")), review_status=review_status, effect=effect)
+    return result, code
 
 
 def _pid_running(pid_path: Path, expected_cmd: str = "") -> bool:
@@ -1674,20 +1792,12 @@ def api_runbooks_review(runbook_id: str):
 def api_runbooks_execute():
     if not verify_token():
         return jsonify({"ok": False, "error": "Unauthorized"}), 403
-    if runbook_execute is None:
-        return jsonify({"ok": False, "error": "runbook_registry_unavailable"}), 500
     body = request.get_json(silent=True) or {}
-    runbook_id = str(body.get("runbook_id") or "").strip()
-    args = body.get("args") if isinstance(body.get("args"), dict) else {}
     dry_run = bool(body.get("dry_run", True))
-    if not runbook_id:
-        return jsonify({"ok": False, "error": "runbook_id is required"}), 400
-    try:
-        result = runbook_execute(runbook_id, args=args, dry_run=dry_run)
-        code = 200 if result.get("ok") else 500
-        return jsonify(result), code
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
+    body["action"] = "preview" if dry_run else "execute"
+    result, code = _run_runbook_action(body)
+    result["legacy_execute_endpoint"] = True
+    return jsonify(result), code
 
 
 @app.route("/api/runbooks/propose", methods=["POST"])
@@ -1717,114 +1827,8 @@ def api_runbooks_propose():
 def api_runbooks_act():
     if not verify_token():
         return jsonify({"ok": False, "error": "Unauthorized"}), 403
-    if runbook_get is None or runbook_execute is None or runbook_review_id is None:
-        return jsonify({"ok": False, "error": "runbook_registry_unavailable"}), 500
     body = request.get_json(silent=True) or {}
-    runbook_id = str(body.get("runbook_id") or "").strip()
-    action = str(body.get("action") or "preview").strip().lower()
-    args = body.get("args") if isinstance(body.get("args"), dict) else {}
-    actor = str(body.get("actor") or body.get("sender") or "webui-operator").strip() or "webui-operator"
-    note = str(body.get("note") or "").strip()[:240]
-    approved = bool(body.get("approved", False))
-    if not runbook_id:
-        return jsonify({"ok": False, "error": "runbook_id is required"}), 400
-    if action not in {"preview", "approve", "execute"}:
-        return jsonify({"ok": False, "error": "invalid_action"}), 400
-
-    def _log_runbook_decision(ok: bool, error: str = "") -> None:
-        _append_jsonl(
-            RUNBOOK_EVENT_LOG,
-            {
-                "ts": time.time(),
-                "actor": actor,
-                "action": action,
-                "runbook_id": runbook_id,
-                "args": args,
-                "approved": approved,
-                "ok": ok,
-                "error": error,
-                "note": note,
-            },
-        )
-
-    try:
-        runbook = runbook_get(runbook_id)
-        review = runbook_review_id(runbook_id, context=_review_context_from_request(body))
-    except Exception as e:
-        _log_runbook_decision(False, str(e))
-        return jsonify({"ok": False, "error": str(e)}), 404
-
-    effect = str(runbook.get("effect") or "")
-    requires_approval = bool(runbook.get("requires_approval"))
-    review_status = str(review.get("final_status") or "approved")
-    if review_status == "rejected":
-        _log_runbook_decision(False, "runbook_rejected_by_review")
-        return jsonify({"ok": False, "error": "runbook_rejected_by_review", "review": review}), 409
-    if action == "execute" and review_status == "amend_required":
-        _log_runbook_decision(False, "runbook_requires_changes_before_execute")
-        return jsonify({"ok": False, "error": "runbook_requires_changes_before_execute", "review": review}), 409
-    if action == "approve" and review_status == "amend_required":
-        _log_runbook_decision(False, "runbook_requires_changes_before_approve")
-        return jsonify({"ok": False, "error": "runbook_requires_changes_before_approve", "review": review}), 409
-    if action in {"approve", "execute"} and requires_approval and not approved:
-        _log_runbook_decision(False, "approval_required")
-        return jsonify({"ok": False, "error": "approval_required", "review": review}), 409
-
-    result: Dict[str, Any]
-    code = 200
-    if action == "preview":
-        try:
-            result = runbook_execute(runbook_id, args=args, dry_run=True)
-        except Exception as e:
-            _log_runbook_decision(False, str(e))
-            return jsonify({"ok": False, "error": str(e), "review": review}), 400
-    elif action == "approve":
-        result = {
-            "ok": True,
-            "runbook_id": runbook_id,
-            "title": runbook.get("title"),
-            "effect": effect,
-            "approved": approved or not requires_approval,
-            "executed": False,
-            "steps": runbook.get("steps", []),
-            "user_message_template": runbook.get("user_message_template", ""),
-        }
-    else:
-        if effect not in {"read_only", "controlled_exec"}:
-            _log_runbook_decision(False, "execute_supported_only_for_read_only")
-            return jsonify({"ok": False, "error": "execute_supported_only_for_read_only_or_controlled_exec", "review": review}), 409
-        try:
-            result = runbook_execute(
-                runbook_id,
-                args=args,
-                dry_run=False,
-                approved=approved,
-                allow_controlled_exec=(effect == "controlled_exec"),
-            )
-            code = 200 if result.get("ok") else 500
-        except Exception as e:
-            _log_runbook_decision(False, str(e))
-            return jsonify({"ok": False, "error": str(e), "review": review}), 400
-
-    result["review"] = review
-    result["operator_action"] = action
-    result["actor"] = actor
-    result["note"] = note
-    _append_jsonl(
-        RUNBOOK_EVENT_LOG,
-        {
-            "ts": time.time(),
-            "actor": actor,
-            "action": action,
-            "runbook_id": runbook_id,
-            "args": args,
-            "approved": approved,
-            "review_status": review_status,
-            "effect": effect,
-            "ok": bool(result.get("ok")),
-            "note": note,
-        },
-    )
+    result, code = _run_runbook_action(body)
     return jsonify(result), code
 
 

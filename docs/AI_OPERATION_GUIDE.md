@@ -82,6 +82,12 @@ jq '{processed_events,llm_requests,llm_completed,llm_failed,llm_schema_invalid_c
 tail -n 5 /var/log/azazel-edge/ai-llm.jsonl
 ```
 
+Mattermost slash command:
+
+```text
+/azops 現在の警戒ポイントは？
+```
+
 ## 7. 異常時の一次対応
 
 ### A. WebUI数値が異常に高い
@@ -139,12 +145,17 @@ sudo systemctl show azazel-edge-ai-agent --property=Environment --no-pager
 - WebUI(`/ops-comm`)の役割: 監視画面からの簡易投稿・疎通確認・直近メッセージ参照・手動AI質問
 - 手動AI質問API: `POST /api/ai/ask`（`question`必須）
 - Mattermost slash command / outgoing webhook 用エンドポイント: `POST /api/mattermost/command`
-- `AZAZEL_MATTERMOST_COMMAND_TOKEN` を設定した場合のみ、Mattermost 側トークン一致で受付
+- Mattermost slash command trigger: `/azops`
+- slash command callback URL: `http://172.16.0.254/api/mattermost/command`
+- command token は `/etc/azazel-edge/mattermost-command-token`（`0600`）で管理
+- token 未設定時は `POST /api/mattermost/command` を拒否
 - `/api/mattermost/message` で `ask_ai=true` を指定すると、AI回答に加えて Runbook 候補も返す
+- command の作成/更新:
+  - `sudo installer/internal/provision_mattermost_command.sh`
 - 設定場所:
   - `/etc/default/azazel-edge-web`
   - 例:
-    - `AZAZEL_MATTERMOST_COMMAND_TOKEN=<mattermost command token>`
+    - `AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE=/etc/azazel-edge/mattermost-command-token`
 
 ## 12. Runbook運用
 
@@ -173,6 +184,7 @@ sudo systemctl show azazel-edge-ai-agent --property=Environment --no-pager
   - `preview`: dry-run / 手順確認
   - `approve`: guidance 承認記録
   - `execute`: `read_only` と `controlled_exec` を対象
+- `POST /api/runbooks/execute` は後方互換用で、内部的には `act` フローへ統合済み
 - `controlled_exec` の既定:
   - `AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC=1` が無い限り実行拒否
   - approval 必須

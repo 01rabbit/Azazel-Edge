@@ -54,7 +54,7 @@ def _validate_runbook_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("runbook_invalid_args_schema")
     doc["args_schema"] = args_schema
     command = doc.get("command")
-    if effect == "read_only" and command is not None:
+    if effect in {"read_only", "controlled_exec"}:
         if not isinstance(command, dict):
             raise ValueError("runbook_invalid_command")
         exec_path = str(command.get("exec") or "").strip()
