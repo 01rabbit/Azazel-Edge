@@ -32,7 +32,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, Iterator, Tuple, List
 from urllib.request import Request, urlopen
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 
 app = Flask(__name__)
 
@@ -83,6 +83,12 @@ NTFY_CONFIG_PATHS = [
 NTFY_SSE_KEEPALIVE_SEC = int(os.environ.get("AZAZEL_SSE_KEEPALIVE_SEC", "20"))
 NTFY_SSE_READ_TIMEOUT_SEC = int(os.environ.get("AZAZEL_NTFY_READ_TIMEOUT_SEC", "35"))
 NTFY_SSE_MAX_BACKOFF_SEC = int(os.environ.get("AZAZEL_NTFY_MAX_BACKOFF_SEC", "30"))
+MATTERMOST_BASE_URL = os.environ.get("AZAZEL_MATTERMOST_BASE_URL", "http://127.0.0.1:8065").rstrip("/")
+MATTERMOST_WEBHOOK_URL = str(os.environ.get("AZAZEL_MATTERMOST_WEBHOOK_URL", "")).strip()
+MATTERMOST_BOT_TOKEN = str(os.environ.get("AZAZEL_MATTERMOST_BOT_TOKEN", "")).strip()
+MATTERMOST_CHANNEL_ID = str(os.environ.get("AZAZEL_MATTERMOST_CHANNEL_ID", "")).strip()
+MATTERMOST_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MATTERMOST_TIMEOUT_SEC", "8"))
+MATTERMOST_FETCH_LIMIT = int(os.environ.get("AZAZEL_MATTERMOST_FETCH_LIMIT", "40"))
 _CA_CERT_FILENAME = "azazel-webui-local-ca.crt"
 _WEBUI_CA_CERT_CANDIDATES: List[Path] = []
 _env_ca_cert = str(os.environ.get("AZAZEL_WEBUI_CA_PATH", "")).strip()
@@ -1078,12 +1084,123 @@ def send_control_command_with_params(action: str, params: Dict[str, Any]) -> Dic
     return _send_control_command_socket(action=action, params=params, timeout_sec=30.0)
 
 
+def _mattermost_mode() -> str:
+    if MATTERMOST_BOT_TOKEN and MATTERMOST_CHANNEL_ID:
+        return "bot_api"
+    if MATTERMOST_WEBHOOK_URL:
+        return "webhook"
+    return "disabled"
+
+
+def _mattermost_ping() -> tuple[bool, Dict[str, Any]]:
+    try:
+        req = Request(
+            f"{MATTERMOST_BASE_URL}/api/v4/system/ping",
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        with urlopen(req, timeout=MATTERMOST_TIMEOUT_SEC) as resp:
+            payload_raw = resp.read().decode("utf-8", errors="replace")
+        payload = json.loads(payload_raw) if payload_raw else {}
+        return True, payload if isinstance(payload, dict) else {}
+    except Exception as e:
+        return False, {"error": str(e)}
+
+
+def _mattermost_api_request(method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if not MATTERMOST_BOT_TOKEN:
+        raise RuntimeError("mattermost_token_not_configured")
+
+    body = None
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {MATTERMOST_BOT_TOKEN}",
+    }
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    req = Request(f"{MATTERMOST_BASE_URL}{path}", data=body, headers=headers, method=method.upper())
+    try:
+        with urlopen(req, timeout=MATTERMOST_TIMEOUT_SEC) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        parsed = json.loads(raw) if raw else {}
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception as e:
+        raise RuntimeError(f"mattermost_api_error:{e}") from e
+
+
+def _mattermost_send_message(text: str, sender: str = "Azazel-Edge WebUI") -> Dict[str, Any]:
+    message = str(text or "").strip()
+    if not message:
+        raise RuntimeError("empty_message")
+
+    if MATTERMOST_BOT_TOKEN and MATTERMOST_CHANNEL_ID:
+        payload = {"channel_id": MATTERMOST_CHANNEL_ID, "message": message}
+        result = _mattermost_api_request("POST", "/api/v4/posts", payload)
+        return {"ok": True, "mode": "bot_api", "post_id": str(result.get("id") or "")}
+
+    if MATTERMOST_WEBHOOK_URL:
+        payload = {"text": message, "username": sender}
+        req = Request(
+            MATTERMOST_WEBHOOK_URL,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=MATTERMOST_TIMEOUT_SEC):
+                pass
+            return {"ok": True, "mode": "webhook"}
+        except Exception as e:
+            raise RuntimeError(f"mattermost_webhook_error:{e}") from e
+
+    raise RuntimeError("mattermost_not_configured")
+
+
+def _mattermost_fetch_messages(limit: int = MATTERMOST_FETCH_LIMIT) -> Dict[str, Any]:
+    per_page = min(200, max(1, int(limit)))
+    mode = _mattermost_mode()
+    if mode != "bot_api":
+        return {"ok": True, "mode": mode, "items": [], "note": "readback_requires_bot_api"}
+
+    channel_id = quote(MATTERMOST_CHANNEL_ID, safe="")
+    payload = _mattermost_api_request(
+        "GET",
+        f"/api/v4/channels/{channel_id}/posts?page=0&per_page={per_page}",
+        None,
+    )
+    posts = payload.get("posts", {}) if isinstance(payload.get("posts"), dict) else {}
+    order = payload.get("order", []) if isinstance(payload.get("order"), list) else []
+    items: List[Dict[str, Any]] = []
+    for post_id in reversed(order):
+        post = posts.get(post_id)
+        if not isinstance(post, dict):
+            continue
+        items.append(
+            {
+                "id": str(post.get("id") or ""),
+                "create_at": int(post.get("create_at") or 0),
+                "message": str(post.get("message") or ""),
+                "user_id": str(post.get("user_id") or ""),
+            }
+        )
+    return {"ok": True, "mode": mode, "items": items}
+
+
 # Web UI Routes
 
 @app.route("/")
 def index():
     """Main dashboard page"""
     return render_template("index.html")
+
+
+@app.route("/ops-comm")
+def ops_comm():
+    """Dedicated communication page for Mattermost + WebUI bridge."""
+    open_url = (os.getenv("AZAZEL_MATTERMOST_OPEN_URL") or "").strip() or MATTERMOST_BASE_URL
+    return render_template("ops_comm.html", mattermost_open_url=open_url)
 
 
 @app.route("/api/state")
@@ -1333,6 +1450,51 @@ def api_events_stream():
         "X-Accel-Buffering": "no",
     }
     return Response(stream_with_context(generate()), headers=headers, mimetype="text/event-stream")
+
+
+@app.route("/api/mattermost/status", methods=["GET"])
+def api_mattermost_status():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    reachable, ping_payload = _mattermost_ping()
+    return jsonify(
+        {
+            "ok": True,
+            "reachable": reachable,
+            "base_url": MATTERMOST_BASE_URL,
+            "mode": _mattermost_mode(),
+            "channel_id": MATTERMOST_CHANNEL_ID,
+            "ping": ping_payload,
+        }
+    )
+
+
+@app.route("/api/mattermost/message", methods=["POST"])
+def api_mattermost_message():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    body = request.get_json(silent=True) or {}
+    message = str(body.get("message") or "").strip()
+    sender = str(body.get("sender") or "Azazel-Edge WebUI").strip() or "Azazel-Edge WebUI"
+    if not message:
+        return jsonify({"ok": False, "error": "message is required"}), 400
+    try:
+        result = _mattermost_send_message(message, sender=sender)
+        return jsonify({"ok": True, "result": result}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/mattermost/messages", methods=["GET"])
+def api_mattermost_messages():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    limit = request.args.get("limit", MATTERMOST_FETCH_LIMIT)
+    try:
+        payload = _mattermost_fetch_messages(int(limit))
+        return jsonify(payload), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/action", methods=["POST"])

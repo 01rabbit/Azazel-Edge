@@ -8,6 +8,7 @@ import logging
 import os
 import queue
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -53,6 +54,12 @@ LLM_NUM_PREDICT = int(os.environ.get("AZAZEL_LLM_NUM_PREDICT", "48"))
 LLM_NUM_THREAD = int(os.environ.get("AZAZEL_LLM_NUM_THREAD", "2"))
 LLM_KEEP_ALIVE = os.environ.get("AZAZEL_LLM_KEEP_ALIVE", "20m")
 LLM_THINK = os.environ.get("AZAZEL_LLM_THINK", "0") == "1"
+CORR_ENABLED = os.environ.get("AZAZEL_CORR_ENABLED", "1") == "1"
+CORR_WINDOW_SEC = int(os.environ.get("AZAZEL_CORR_WINDOW_SEC", "300"))
+CORR_REPEAT_THRESHOLD = int(os.environ.get("AZAZEL_CORR_REPEAT_THRESHOLD", "4"))
+CORR_SID_DIVERSITY_THRESHOLD = int(os.environ.get("AZAZEL_CORR_SID_DIVERSITY_THRESHOLD", "3"))
+CORR_MIN_RISK_SCORE = int(os.environ.get("AZAZEL_CORR_MIN_RISK_SCORE", "20"))
+CORR_MAX_HISTORY_PER_SRC = int(os.environ.get("AZAZEL_CORR_MAX_HISTORY_PER_SRC", "32"))
 OPS_KEEP_ALIVE = os.environ.get("AZAZEL_OPS_KEEP_ALIVE", "0s")
 OPS_NUM_PREDICT = int(os.environ.get("AZAZEL_OPS_NUM_PREDICT", "80"))
 OPS_MIN_MEM_AVAILABLE_MB = int(os.environ.get("AZAZEL_OPS_MIN_MEM_AVAILABLE_MB", "1400"))
@@ -96,15 +103,18 @@ METRICS: Dict[str, Any] = {
     "llm_retried": 0,
     "llm_fallback_count": 0,
     "llm_empty_response_count": 0,
+    "llm_schema_invalid_count": 0,
     "llm_latency_ms_last": 0,
     "llm_latency_ms_ema": 0.0,
     "llm_completed_rate": 0.0,
     "llm_fallback_rate": 0.0,
     "llm_empty_rate": 0.0,
+    "correlation_escalations": 0,
     "ops_requests": 0,
     "ops_completed": 0,
     "ops_skipped": 0,
     "ops_errors": 0,
+    "ops_schema_invalid_count": 0,
     "ops_fallback_model_count": 0,
     "policy_mode": "normal",
     "last_error": "",
@@ -112,6 +122,8 @@ METRICS: Dict[str, Any] = {
 }
 RUNTIME_POLICY: Dict[str, Any] = {"mode": "normal", "updated_at": 0.0, "reason": "init"}
 _LAST_OPS_ESCALATE_TS = 0.0
+CORR_LOCK = threading.Lock()
+CORR_STATE: Dict[str, list[Dict[str, Any]]] = {}
 
 
 def _ensure_parent(path: Path) -> None:
@@ -259,6 +271,132 @@ def _should_escalate_to_ops(
     return False, "not_needed"
 
 
+def _evaluate_correlation(advisory: Dict[str, Any]) -> Dict[str, Any]:
+    if not CORR_ENABLED:
+        return {
+            "enabled": False,
+            "force_llm": False,
+            "repeat_trigger": False,
+            "sid_diversity_trigger": False,
+            "hits_in_window": 0,
+            "unique_sid_count": 0,
+            "window_sec": CORR_WINDOW_SEC,
+        }
+
+    src_ip = str(advisory.get("src_ip") or "").strip()
+    sid = int(advisory.get("suricata_sid") or 0)
+    attack_type = str(advisory.get("attack_type") or "").strip()
+    risk_score = int(advisory.get("risk_score") or 0)
+    if not src_ip:
+        return {
+            "enabled": True,
+            "force_llm": False,
+            "repeat_trigger": False,
+            "sid_diversity_trigger": False,
+            "hits_in_window": 0,
+            "unique_sid_count": 0,
+            "window_sec": CORR_WINDOW_SEC,
+        }
+
+    now = time.time()
+    cutoff = now - max(1, CORR_WINDOW_SEC)
+    with CORR_LOCK:
+        bucket = CORR_STATE.get(src_ip, [])
+        bucket = [entry for entry in bucket if float(entry.get("ts") or 0.0) >= cutoff]
+        bucket.append({"ts": now, "sid": sid, "attack_type": attack_type})
+        if len(bucket) > max(1, CORR_MAX_HISTORY_PER_SRC):
+            bucket = bucket[-max(1, CORR_MAX_HISTORY_PER_SRC) :]
+        CORR_STATE[src_ip] = bucket
+
+    hits = len(bucket)
+    unique_sid = len({int(entry.get("sid") or 0) for entry in bucket if int(entry.get("sid") or 0) > 0})
+    repeat_trigger = hits >= max(2, CORR_REPEAT_THRESHOLD)
+    sid_diversity_trigger = unique_sid >= max(2, CORR_SID_DIVERSITY_THRESHOLD)
+    force_llm = (
+        (repeat_trigger or sid_diversity_trigger)
+        and risk_score >= max(0, CORR_MIN_RISK_SCORE)
+        and risk_score < LLM_AMBIG_MIN
+    )
+    return {
+        "enabled": True,
+        "force_llm": force_llm,
+        "repeat_trigger": repeat_trigger,
+        "sid_diversity_trigger": sid_diversity_trigger,
+        "hits_in_window": hits,
+        "unique_sid_count": unique_sid,
+        "window_sec": CORR_WINDOW_SEC,
+    }
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "on", "escalate", "urgent"}
+
+
+def _normalize_confidence(value: Any) -> float:
+    try:
+        conf = float(value)
+    except Exception as exc:
+        raise ValueError("analyst_invalid_confidence") from exc
+    if conf > 1.0 and conf <= 100.0:
+        conf = conf / 100.0
+    if conf < 0.0 or conf > 1.0:
+        raise ValueError("analyst_invalid_confidence")
+    return round(conf, 4)
+
+
+def _normalize_analyst_result(raw: Dict[str, Any]) -> Dict[str, Any]:
+    verdict_raw = str(raw.get("verdict") or "").strip().lower()
+    verdict_alias = {
+        "safe": "allow",
+        "benign": "allow",
+        "deny": "block",
+        "drop": "block",
+        "contain": "block",
+    }
+    verdict = verdict_alias.get(verdict_raw, verdict_raw)
+    allowed_verdict = {"allow", "monitor", "block", "deceive", "escalate", "hold"}
+    if verdict not in allowed_verdict:
+        raise ValueError("analyst_invalid_verdict")
+
+    reason = str(raw.get("reason") or "").strip()
+    if not reason:
+        raise ValueError("analyst_empty_reason")
+    reason = reason[:80]
+
+    suggested_action = str(raw.get("suggested_action") or "").strip()
+    if not suggested_action:
+        suggested_action = verdict
+    suggested_action = suggested_action[:80]
+
+    return {
+        "verdict": verdict,
+        "confidence": _normalize_confidence(raw.get("confidence")),
+        "reason": reason,
+        "suggested_action": suggested_action,
+        "escalation": _as_bool(raw.get("escalation")),
+    }
+
+
+def _normalize_ops_result(raw: Dict[str, Any]) -> Dict[str, Any]:
+    runbook_id = str(raw.get("runbook_id") or raw.get("playbook_id") or raw.get("id") or "").strip()[:48]
+    summary = str(raw.get("summary") or raw.get("reason") or raw.get("analysis") or "").strip()
+    operator_note = str(raw.get("operator_note") or raw.get("suggested_action") or raw.get("action") or "").strip()
+    if not summary:
+        raise ValueError("ops_empty_summary")
+    if not operator_note:
+        operator_note = summary
+    return {
+        "runbook_id": runbook_id,
+        "summary": summary[:120],
+        "operator_note": operator_note[:120],
+    }
+
+
 def _run_ops_coach(advisory: Dict[str, Any], verdict: str, confidence: float, reason: str, trigger_reason: str) -> Dict[str, Any]:
     global _LAST_OPS_ESCALATE_TS
     allowed, why = _ops_coach_allowed()
@@ -285,34 +423,22 @@ def _run_ops_coach(advisory: Dict[str, Any], verdict: str, confidence: float, re
                 num_predict=OPS_NUM_PREDICT,
                 required_keys=None,
             )
+            coach_norm = _normalize_ops_result(coach)
             _LAST_OPS_ESCALATE_TS = time.time()
             if idx > 0:
                 _metrics_inc("ops_fallback_model_count", 1)
-            runbook_id = str(
-                coach.get("runbook_id")
-                or coach.get("playbook_id")
-                or coach.get("id")
-                or ""
-            ).strip()
-            summary = str(coach.get("summary") or coach.get("reason") or coach.get("analysis") or "").strip()
-            operator_note = str(
-                coach.get("operator_note")
-                or coach.get("suggested_action")
-                or coach.get("action")
-                or summary
-            ).strip()
-            if not summary:
-                raise ValueError("ops_empty_summary")
             return {
                 "status": "completed",
                 "model": model,
                 "trigger": trigger_reason,
                 "fallback_model_used": idx > 0,
-                "runbook_id": runbook_id,
-                "summary": summary,
-                "operator_note": operator_note,
+                "runbook_id": coach_norm["runbook_id"],
+                "summary": coach_norm["summary"],
+                "operator_note": coach_norm["operator_note"],
             }
         except Exception as exc:
+            if str(exc).startswith("ops_"):
+                _metrics_inc("ops_schema_invalid_count", 1)
             errors.append({"model": model, "reason": str(exc)})
             continue
     return {
@@ -389,6 +515,18 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
         "suricata_severity": int(features["suricata_sev"]),
         "suricata_sid": int(features["suricata_sid"]),
     }
+    correlation = _evaluate_correlation(advisory)
+    advisory["correlation"] = correlation
+    if bool(correlation.get("force_llm")):
+        if bool(correlation.get("repeat_trigger")):
+            advisory["score_factors"].append(
+                f"corr_repeat_src_ip={int(correlation.get('hits_in_window') or 0)}/{int(correlation.get('window_sec') or 0)}s"
+            )
+        if bool(correlation.get("sid_diversity_trigger")):
+            advisory["score_factors"].append(
+                f"corr_sid_diversity={int(correlation.get('unique_sid_count') or 0)}"
+            )
+        _metrics_inc("correlation_escalations", 1)
 
     state_before = StateSnapshot(
         state="ANALYZING",
@@ -433,10 +571,15 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
     return advisory
 
 
-def _is_ambiguous(advisory: Dict[str, Any]) -> bool:
+def _is_ambiguous(advisory: Dict[str, Any]) -> tuple[bool, str]:
     score = int(advisory.get("risk_score") or 0)
     min_score = LLM_AMBIG_MIN_DEGRADED if RUNTIME_POLICY.get("mode") == "degraded" else LLM_AMBIG_MIN
-    return min_score <= score <= LLM_AMBIG_MAX
+    if min_score <= score <= LLM_AMBIG_MAX:
+        return True, "risk_score_ambiguous_range"
+    corr = advisory.get("correlation")
+    if isinstance(corr, dict) and bool(corr.get("force_llm")):
+        return True, "correlation_escalation"
+    return False, "risk_score_outside_ambiguous_range"
 
 
 def _select_analyst_model() -> str:
@@ -450,10 +593,11 @@ def _route_llm(event: Dict[str, Any], advisory: Dict[str, Any]) -> None:
         advisory["llm"] = {"status": "disabled", "reason": "llm_disabled"}
         _metrics_update(last_error="")
         return
-    if not _is_ambiguous(advisory):
+    ambiguous, route_reason = _is_ambiguous(advisory)
+    if not ambiguous:
         advisory["llm"] = {
             "status": "skipped_non_ambiguous",
-            "reason": "risk_score_outside_ambiguous_range",
+            "reason": route_reason,
         }
         if int(advisory.get("risk_score") or 0) >= 85:
             try:
@@ -494,7 +638,7 @@ def _route_llm(event: Dict[str, Any], advisory: Dict[str, Any]) -> None:
     task = {"event": event, "advisory": advisory.copy(), "enqueued_at": time.time(), "model": model}
     try:
         LLM_QUEUE.put_nowait(task)
-        advisory["llm"] = {"status": "queued", "queue_depth": LLM_QUEUE.qsize(), "model": model}
+        advisory["llm"] = {"status": "queued", "queue_depth": LLM_QUEUE.qsize(), "model": model, "reason": route_reason}
         _metrics_inc("llm_requests", 1)
         _metrics_update(last_error="")
     except queue.Full:
@@ -633,15 +777,22 @@ def _process_llm_task(task: Dict[str, Any]) -> Dict[str, Any]:
     result, latency_ms, attempts, error_text = _call_llm_with_retry(payload, model=model)
 
     if result is not None:
-        confidence = float(result.get("confidence") or 0.0)
-        verdict = str(result.get("verdict") or "").strip()
-        reason = str(result.get("reason") or "").strip()
-        suggested_action = str(result.get("suggested_action") or "").strip()
-        escalation = bool(result.get("escalation") or False)
+        try:
+            analyst = _normalize_analyst_result(result)
+        except Exception as exc:
+            result = None
+            error_text = str(exc)
+            _metrics_inc("llm_schema_invalid_count", 1)
+            analyst = {}
+        confidence = float(analyst.get("confidence") or 0.0)
+        verdict = str(analyst.get("verdict") or "").strip()
+        reason = str(analyst.get("reason") or "").strip()
+        suggested_action = str(analyst.get("suggested_action") or "").strip()
+        escalation = bool(analyst.get("escalation") or False)
         has_effective_signal = bool(verdict or reason or suggested_action or escalation or confidence > 0.0)
         if not has_effective_signal:
             result = None
-            error_text = "empty_response"
+            error_text = error_text or "empty_response"
         else:
             llm_result = {
                 "status": "completed",
@@ -799,6 +950,20 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
         "suspicion": int(advisory.get("risk_score", 0)),
         "decay": 0,
     }
+    route = _default_route_info()
+    up_if = route.get("up_if", "-")
+    up_ip = route.get("up_ip", "-")
+    gateway_ip = route.get("gateway_ip", "-")
+    uplink_type = route.get("uplink_type", "unknown")
+    snapshot["up_if"] = up_if
+    snapshot["up_ip"] = up_ip
+    snapshot["gateway_ip"] = gateway_ip
+    snapshot["down_if"] = str(snapshot.get("down_if") or "usb0")
+    snapshot["down_ip"] = str(snapshot.get("down_ip") or "10.12.194.1")
+    if uplink_type == "ethernet":
+        snapshot["ssid"] = f"ETH:{up_if}" if up_if != "-" else "ETH"
+    else:
+        snapshot["ssid"] = str(snapshot.get("ssid") or "-")
     snapshot["attack"] = {
         "suricata_alert": True,
         "suricata_severity": severity,
@@ -813,6 +978,22 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
         monitoring = {}
     monitoring["suricata"] = "ON"
     snapshot["monitoring"] = monitoring
+    connection = snapshot.get("connection")
+    if not isinstance(connection, dict):
+        connection = {}
+    if uplink_type == "wifi":
+        connection["wifi_state"] = "CONNECTED"
+    elif uplink_type == "ethernet":
+        connection["wifi_state"] = "N/A(ETH)"
+    else:
+        connection["wifi_state"] = "DISCONNECTED"
+    connection["uplink_if"] = up_if
+    connection["uplink_type"] = uplink_type
+    connection.setdefault("usb_nat", "OFF")
+    connection.setdefault("internet_check", "UNKNOWN")
+    connection.setdefault("captive_portal", "NA")
+    connection.setdefault("captive_portal_reason", "NOT_CHECKED")
+    snapshot["connection"] = connection
 
     _write_json(SNAPSHOT_PATH, snapshot)
 
@@ -828,6 +1009,56 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _default_route_info() -> Dict[str, str]:
+    """Best-effort default route info for current uplink (eth/wlan/etc)."""
+    result = {"up_if": "-", "up_ip": "-", "gateway_ip": "-", "uplink_type": "unknown"}
+    out = []
+    for ip_cmd in ("/usr/sbin/ip", "/sbin/ip", "ip"):
+        try:
+            out = (
+                subprocess.run(
+                    [ip_cmd, "-4", "route", "show", "default"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    check=False,
+                ).stdout.strip().splitlines()
+            )
+            if out:
+                break
+        except Exception:
+            continue
+
+    if not out:
+        return result
+
+    line = out[0].strip().split()
+    if "dev" in line:
+        try:
+            result["up_if"] = line[line.index("dev") + 1]
+        except Exception:
+            pass
+    if "via" in line:
+        try:
+            result["gateway_ip"] = line[line.index("via") + 1]
+        except Exception:
+            pass
+    if "src" in line:
+        try:
+            result["up_ip"] = line[line.index("src") + 1]
+        except Exception:
+            pass
+
+    iface = result["up_if"]
+    if iface.startswith("wl"):
+        result["uplink_type"] = "wifi"
+    elif iface.startswith("eth") or iface.startswith("en"):
+        result["uplink_type"] = "ethernet"
+    elif iface != "-":
+        result["uplink_type"] = "other"
+    return result
 
 
 def _handle_line(raw: str) -> None:

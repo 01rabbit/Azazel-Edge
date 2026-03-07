@@ -60,6 +60,21 @@ body {
     font-size: 1.2em;
 }
 
+.ops-link {
+    color: var(--accent);
+    text-decoration: none;
+    border: 1px solid rgba(0, 212, 255, 0.5);
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 0.75em;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: rgba(0, 212, 255, 0.08);
+}
+
+.ops-link:hover {
+    background: rgba(0, 212, 255, 0.2);
+}
+
 .header-metrics {
     display: flex;
     align-items: center;

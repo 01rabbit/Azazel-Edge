@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
+from azazel_edge.control_plane import read_snapshot_payload
 from azazel_edge.path_schema import runtime_snapshot_path_candidates
 
 EPD_STATE = Path("/run/azazel-edge/epd_state.json")
@@ -22,6 +23,37 @@ def _safe_load(path: Path) -> Dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except Exception:
         return {}
+
+
+def _read_runtime_snapshot() -> Dict[str, Any]:
+    try:
+        payload, _source = read_snapshot_payload(prefer_control_plane=True)
+        if isinstance(payload, dict) and payload:
+            return payload
+    except Exception:
+        pass
+    for path in RUNTIME_SNAPSHOT_CANDIDATES:
+        data = _safe_load(path)
+        if isinstance(data, dict) and data:
+            return data
+    return {}
+
+
+def _fallback_epd_state() -> Dict[str, Any]:
+    """Build minimal mode payload when epd_state.json is unavailable."""
+    data = _read_runtime_snapshot()
+    if isinstance(data, dict) and data:
+        mode_payload = data.get("mode")
+        mode = "shield"
+        if isinstance(mode_payload, dict):
+            mode = str(mode_payload.get("current_mode", "shield") or "shield").strip().lower()
+        return {
+            "mode": mode if mode in ("portal", "shield", "scapegoat") else "shield",
+            "internet": "unknown",
+            "ssid": str(data.get("ssid", "") or ""),
+            "upstream_if": str(data.get("up_if", "") or ""),
+        }
+    return {"mode": "shield", "internet": "unknown", "ssid": "", "upstream_if": ""}
 
 
 def _read_live_ssid(upstream_if: str) -> str:
@@ -48,10 +80,8 @@ def _normal_render_spec(payload: Dict[str, Any], mode_label: str, risk_status: s
     live_signal: int | None = None
     live_wifi_state = ""
     live_suspicion = 0
-    for path in RUNTIME_SNAPSHOT_CANDIDATES:
-        data = _safe_load(path)
-        if not isinstance(data, dict):
-            continue
+    data = _read_runtime_snapshot()
+    if isinstance(data, dict) and data:
         conn = data.get("connection")
         if isinstance(conn, dict):
             live_wifi_state = str(conn.get("wifi_state", "")).strip().upper()
@@ -69,8 +99,6 @@ def _normal_render_spec(payload: Dict[str, Any], mode_label: str, risk_status: s
                 live_suspicion = int(float(str(internal.get("suspicion", 0)).strip()))
             except Exception:
                 live_suspicion = 0
-        if live_ssid or live_signal is not None:
-            break
 
     ssid = live_ssid or str(payload.get("ssid", "")).strip() or _read_live_ssid(str(payload.get("upstream_if", "")).strip())
     signal = live_signal if live_wifi_state == "CONNECTED" else None
@@ -85,13 +113,15 @@ def _normal_render_spec(payload: Dict[str, Any], mode_label: str, risk_status: s
 
 
 def _risk_status_from_snapshot() -> str:
-    for path in RUNTIME_SNAPSHOT_CANDIDATES:
-        data = _safe_load(path)
-        if not isinstance(data, dict):
-            continue
+    data = _read_runtime_snapshot()
+    if isinstance(data, dict) and data:
+        # Align with TUI/WebUI status source first.
+        user_state = str(data.get("user_state", "")).strip().upper()
+        if user_state in ("SAFE", "CHECKING", "LIMITED", "CONTAINED", "DECEPTION"):
+            return user_state
         conn = data.get("connection")
         if not isinstance(conn, dict):
-            continue
+            return "UNKNOWN"
         internet = str(conn.get("internet_check", "")).strip().upper()
         if internet == "OK":
             return "SAFE"
@@ -151,7 +181,7 @@ def _to_int_or_none(value: Any) -> int | None:
 
 
 def _signal_bucket(signal_value: Any) -> str:
-    # Keep in sync with py/azazel_epd.py:render_normal icon thresholds.
+    # Keep in sync with py/azazel_edge_epd.py:render_normal icon thresholds.
     signal_dbm = _to_int_or_none(signal_value)
     if signal_dbm is None:
         return "none"
@@ -180,14 +210,25 @@ def _visual_fingerprint(render: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _resolve_epd_script(root: Path) -> Path | None:
+    candidates = (
+        root / "py" / "azazel_edge_epd.py",
+        root / "py" / "azazel_epd.py",
+    )
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
 def main() -> int:
     payload = _safe_load(EPD_STATE)
     if not payload:
-        return 0
+        payload = _fallback_epd_state()
 
-    root = Path(os.environ.get("AZAZEL_ROOT", str(Path(__file__).resolve().parents[2])))
-    epd_script = root / "py" / "azazel_epd.py"
-    if not epd_script.exists():
+    root = Path(os.environ.get("AZAZEL_ROOT", str(Path(__file__).resolve().parents[1])))
+    epd_script = _resolve_epd_script(root)
+    if epd_script is None:
         return 0
 
     desired = _desired_render_spec(payload)

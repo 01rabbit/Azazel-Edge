@@ -6,3 +6,6 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/azazel-edge-epd-refresh
+TimeoutStartSec=60
+StandardOutput=journal
+StandardError=journal

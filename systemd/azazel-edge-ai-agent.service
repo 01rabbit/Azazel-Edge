@@ -28,6 +28,12 @@ Environment="AZAZEL_LLM_NUM_PREDICT=120"
 Environment="AZAZEL_LLM_NUM_THREAD=2"
 Environment="AZAZEL_LLM_KEEP_ALIVE=5m"
 Environment="AZAZEL_LLM_THINK=0"
+Environment="AZAZEL_CORR_ENABLED=1"
+Environment="AZAZEL_CORR_WINDOW_SEC=300"
+Environment="AZAZEL_CORR_REPEAT_THRESHOLD=4"
+Environment="AZAZEL_CORR_SID_DIVERSITY_THRESHOLD=3"
+Environment="AZAZEL_CORR_MIN_RISK_SCORE=20"
+Environment="AZAZEL_CORR_MAX_HISTORY_PER_SRC=32"
 ExecStart=/opt/azazel-edge/venv/bin/python /opt/azazel-edge/py/azazel_edge_ai/agent.py
 Restart=always
 RestartSec=2

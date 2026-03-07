@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azazel-Edge Ops Communication</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/ops_comm.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <h1>💬 Ops Communication</h1>
+        </div>
+        <div class="header-right">
+            <a class="ops-link" href="/">← Dashboard</a>
+            <a class="ops-link" id="mattermostLink" href="{{ mattermost_open_url or '#' }}" target="_blank" rel="noopener noreferrer">Open Mattermost</a>
+        </div>
+    </header>
+
+    <main class="container ops-container">
+        <section class="card">
+            <h2>Bridge Status</h2>
+            <div class="metric">
+                <span class="metric-label">Reachability</span>
+                <span class="badge" id="mmReachability">CHECKING</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Mode</span>
+                <span class="metric-value" id="mmMode">-</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Base URL</span>
+                <span class="metric-value mono" id="mmBaseUrl">-</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Channel ID</span>
+                <span class="metric-value mono" id="mmChannelId">-</span>
+            </div>
+            <button class="btn btn-primary" id="refreshBtn">Refresh</button>
+        </section>
+
+        <section class="card">
+            <h2>Send Message</h2>
+            <label class="ops-label" for="senderInput">Sender</label>
+            <input id="senderInput" class="ops-input" type="text" value="Azazel-Edge WebUI" maxlength="64">
+            <label class="ops-label" for="messageInput">Message</label>
+            <textarea id="messageInput" class="ops-textarea" rows="5" placeholder="Type message for Mattermost channel..."></textarea>
+            <button class="btn btn-success" id="sendBtn">Send to Mattermost</button>
+            <div id="sendResult" class="ops-result">-</div>
+        </section>
+
+        <section class="card ops-messages-card">
+            <h2>Recent Messages</h2>
+            <div id="messagesEmpty" class="ops-result">No messages yet</div>
+            <ul id="messagesList" class="ops-message-list"></ul>
+        </section>
+    </main>
+
+    <script src="/static/ops_comm.js"></script>
+</body>
+</html>
