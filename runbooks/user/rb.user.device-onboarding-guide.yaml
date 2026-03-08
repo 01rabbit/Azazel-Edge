@@ -1,0 +1,22 @@
+id: rb.user.device-onboarding-guide
+title: Device Onboarding Guide
+domain: user
+audience: beginner
+risk: low
+effect: operator_guidance
+requires_approval: false
+args_schema:
+  type: object
+  properties:
+    device_type:
+      type: string
+      enum:
+        - phone
+        - laptop
+        - tablet
+  required: [device_type]
+steps:
+  - Tell the user the exact SSID to select before entering any password.
+  - Tell the user to connect only once and wait for the result screen.
+  - If captive portal appears or onboarding fails twice, stop retrying and move to a NOC intake runbook.
+user_message_template: "接続先のSSIDを確認します。表示された候補の中から指定のSSIDだけを選んでください。"

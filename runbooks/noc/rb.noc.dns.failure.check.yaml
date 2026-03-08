@@ -1,0 +1,20 @@
+id: rb.noc.dns.failure.check
+title: DNS Failure Intake
+domain: noc
+audience: operator
+risk: medium
+effect: operator_guidance
+requires_approval: false
+args_schema:
+  type: object
+  properties:
+    symptom:
+      type: string
+      maxLength: 120
+  required: [symptom]
+steps:
+  - Confirm whether the user can reach IP addresses but not host names.
+  - Check whether the issue affects one client or all clients.
+  - Compare configured DNS information with the current uplink and captive portal state.
+  - If DNS mismatch is confirmed, escalate before changing resolver settings.
+user_message_template: "名前解決の状態を確認します。開けないサイト名と、IPアドレス直打ちで開けるかを教えてください。"

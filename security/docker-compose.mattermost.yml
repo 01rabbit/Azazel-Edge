@@ -1,0 +1,54 @@
+services:
+  mattermost-db:
+    image: postgres:16-alpine
+    container_name: azazel-edge-mm-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mattermost
+      POSTGRES_USER: mmuser
+      POSTGRES_PASSWORD: mm-password-change
+    volumes:
+      - mattermost_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mmuser -d mattermost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mattermost:
+    image: mattermost/mattermost-team-edition:latest
+    container_name: azazel-edge-mattermost
+    platform: linux/amd64
+    restart: unless-stopped
+    depends_on:
+      mattermost-db:
+        condition: service_healthy
+    ports:
+      - "8065:8065"
+    environment:
+      TZ: Asia/Tokyo
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: postgres://mmuser:mm-password-change@mattermost-db:5432/mattermost?sslmode=disable&connect_timeout=10
+      MM_SERVICESETTINGS_SITEURL: ${MATTERMOST_SITE_URL:-http://172.16.0.254:8065}
+      MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS: ${MATTERMOST_ALLOWED_UNTRUSTED_INTERNAL_CONNECTIONS:-172.16.0.254}
+      MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
+    volumes:
+      - mattermost_config:/mattermost/config
+      - mattermost_data:/mattermost/data
+      - mattermost_logs:/mattermost/logs
+      - mattermost_plugins:/mattermost/plugins
+      - mattermost_client_plugins:/mattermost/client/plugins
+    healthcheck:
+      test: ["CMD", "/mattermost/bin/mattermost", "-c", "/mattermost/config/config.json", "db", "version"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  mattermost_db:
+  mattermost_config:
+  mattermost_data:
+  mattermost_logs:
+  mattermost_plugins:
+  mattermost_client_plugins:

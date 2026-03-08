@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Inject normalized test events into azazel-edge-ai-agent socket."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import socket
+import sys
+import time
+from typing import Dict, List
+
+
+def _build_event(sid: int, severity: int, attack_type: str, category: str, src_ip: str, dst_ip: str, port: int) -> Dict[str, object]:
+    return {
+        "normalized": {
+            "sid": sid,
+            "severity": severity,
+            "attack_type": attack_type,
+            "category": category,
+            "action": "allowed",
+            "target_port": port,
+            "protocol": "tcp",
+            "src_ip": src_ip,
+            "dst_ip": dst_ip,
+        }
+    }
+
+
+def _default_events(base_sid: int) -> List[Dict[str, object]]:
+    return [
+        _build_event(base_sid + 0, 3, "port scan", "attempted-recon", "10.66.0.10", "10.0.0.1", 80),
+        _build_event(base_sid + 1, 3, "tls heartbeat", "misc-activity", "10.66.0.11", "10.0.0.1", 443),
+        _build_event(base_sid + 2, 2, "ssh brute force", "attempted-admin", "10.66.0.12", "10.0.0.1", 22),
+    ]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Inject test events to /run/azazel-edge/ai-bridge.sock")
+    parser.add_argument("--socket", default="/run/azazel-edge/ai-bridge.sock", help="Unix socket path")
+    parser.add_argument("--count", type=int, default=3, help="Number of events to send")
+    parser.add_argument("--interval", type=float, default=0.2, help="Interval between events (seconds)")
+    parser.add_argument("--base-sid", type=int, default=990000, help="Base SID for generated events")
+    parser.add_argument("--src-prefix", default="10.66.0.", help="Source IP prefix (e.g. 10.66.0.)")
+    parser.add_argument("--dst-ip", default="10.0.0.1", help="Destination IP")
+    args = parser.parse_args()
+
+    templates = _default_events(args.base_sid)
+    sent = 0
+    for i in range(max(1, args.count)):
+        event = dict(templates[i % len(templates)])
+        normalized = dict(event["normalized"])  # type: ignore[index]
+        normalized["sid"] = int(args.base_sid + i)
+        normalized["src_ip"] = f"{args.src_prefix}{random.randint(2, 254)}"
+        event["normalized"] = normalized
+        payload = (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
+
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(5)
+                sock.connect(args.socket)
+                sock.sendall(payload)
+            sent += 1
+            print(f"sent sid={normalized['sid']} src={normalized['src_ip']} type={normalized['attack_type']}")
+        except Exception as exc:
+            print(f"send failed sid={normalized['sid']}: {exc}", file=sys.stderr)
+            return 1
+
+        if i < args.count - 1:
+            time.sleep(max(0.0, args.interval))
+
+    print(f"done: sent={sent}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -43,6 +43,17 @@ server {
     default_type application/pkix-cert;
     add_header Cache-Control "no-store";
   }
+  location = /api/mattermost/command {
+    proxy_pass http://${AZAZEL_WEB_UPSTREAM_HOST}:${AZAZEL_WEB_UPSTREAM_PORT};
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto http;
+    proxy_set_header X-Forwarded-Host \$host;
+    proxy_set_header Connection "";
+    proxy_redirect off;
+    proxy_read_timeout 120s;
+  }
   location / {
     return 301 https://\$host\$request_uri;
   }

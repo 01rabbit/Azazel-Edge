@@ -1,0 +1,22 @@
+id: rb.user.reconnect-guide
+title: User Reconnect Guide
+domain: user
+audience: beginner
+risk: low
+effect: operator_guidance
+requires_approval: false
+args_schema:
+  type: object
+  properties:
+    device_type:
+      type: string
+      enum:
+        - phone
+        - laptop
+        - tablet
+  required: [device_type]
+steps:
+  - Tell the user to disable and re-enable Wi-Fi once.
+  - Tell the user to reconnect to the expected SSID only.
+  - If reconnect fails twice, escalate to NOC checks.
+user_message_template: "端末のWi-Fiを一度オフにして、30秒後にオンへ戻してください。"

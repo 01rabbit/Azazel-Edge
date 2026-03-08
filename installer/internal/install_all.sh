@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 ENABLE_INTERNAL_NETWORK="${ENABLE_INTERNAL_NETWORK:-1}"
 ENABLE_APP_STACK="${ENABLE_APP_STACK:-1}"
+ENABLE_AI_RUNTIME="${ENABLE_AI_RUNTIME:-1}"
 ENABLE_DEV_REMOTE_ACCESS="${ENABLE_DEV_REMOTE_ACCESS:-0}"
 ENABLE_RUST_CORE="${ENABLE_RUST_CORE:-1}"
 
@@ -20,6 +21,7 @@ echo "[all/1] Azazel-Edge unified installer"
 echo "repo=${REPO_ROOT}"
 echo "ENABLE_INTERNAL_NETWORK=${ENABLE_INTERNAL_NETWORK}"
 echo "ENABLE_APP_STACK=${ENABLE_APP_STACK}"
+echo "ENABLE_AI_RUNTIME=${ENABLE_AI_RUNTIME}"
 echo "ENABLE_DEV_REMOTE_ACCESS=${ENABLE_DEV_REMOTE_ACCESS}"
 echo "ENABLE_RUST_CORE=${ENABLE_RUST_CORE}"
 echo "DEV_REMOTE_MODE=${DEV_REMOTE_MODE}"
@@ -38,11 +40,18 @@ else
   echo "[all/3] Skip app stack installation"
 fi
 
+if [[ "${ENABLE_AI_RUNTIME}" == "1" ]]; then
+  echo "[all/4] Install AI runtime stack"
+  "${REPO_ROOT}/installer/internal/install_ai_runtime.sh"
+else
+  echo "[all/4] Skip AI runtime stack"
+fi
+
 if [[ "${ENABLE_DEV_REMOTE_ACCESS}" == "1" ]]; then
-  echo "[all/4] Configure dev remote access"
+  echo "[all/5] Configure dev remote access"
   MODE="${DEV_REMOTE_MODE}" "${REPO_ROOT}/installer/internal/set_dev_remote_access.sh"
 else
-  echo "[all/4] Skip dev remote access setup"
+  echo "[all/5] Skip dev remote access setup"
 fi
 
 echo "Unified installation completed."

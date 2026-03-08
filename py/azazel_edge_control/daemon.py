@@ -415,15 +415,78 @@ def _read_signal_dbm(iface: str = "wlan0") -> int | None:
     return None
 
 
+def _default_route_info() -> dict[str, str]:
+    """Best-effort default route info for current uplink."""
+    result = {"up_if": "-", "up_ip": "-", "gateway_ip": "-", "uplink_type": "unknown"}
+    out: list[str] = []
+    for ip_cmd in ("/usr/sbin/ip", "/sbin/ip", "ip"):
+        try:
+            out = (
+                subprocess.run(
+                    [ip_cmd, "-4", "route", "show", "default"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    check=False,
+                ).stdout.strip().splitlines()
+            )
+            if out:
+                break
+        except Exception:
+            continue
+
+    if not out:
+        return result
+
+    line = out[0].strip().split()
+    if "dev" in line:
+        try:
+            result["up_if"] = line[line.index("dev") + 1]
+        except Exception:
+            pass
+    if "via" in line:
+        try:
+            result["gateway_ip"] = line[line.index("via") + 1]
+        except Exception:
+            pass
+    if "src" in line:
+        try:
+            result["up_ip"] = line[line.index("src") + 1]
+        except Exception:
+            pass
+
+    iface = result["up_if"]
+    if iface.startswith("wl"):
+        result["uplink_type"] = "wifi"
+    elif iface.startswith("eth") or iface.startswith("en"):
+        result["uplink_type"] = "ethernet"
+    elif iface != "-":
+        result["uplink_type"] = "other"
+    return result
+
+
 def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(data)
     enriched["now_time"] = datetime.now().strftime("%H:%M:%S")
     enriched["snapshot_epoch"] = time.time()
 
+    route = _default_route_info()
+    up_if = str(route.get("up_if") or "-")
+    up_ip = str(route.get("up_ip") or "-")
+    gateway_ip = str(route.get("gateway_ip") or "-")
+    uplink_type = str(route.get("uplink_type") or "unknown")
+    enriched["up_if"] = up_if
+    enriched["up_ip"] = up_ip
+    enriched["gateway_ip"] = gateway_ip
+    enriched.setdefault("down_if", "usb0")
+    enriched.setdefault("down_ip", "10.12.194.1")
+    if uplink_type == "ethernet":
+        enriched["ssid"] = f"ETH:{up_if}" if up_if != "-" else "ETH"
+
     cpu_percent = _read_cpu_usage_percent()
     mem_percent, mem_used_mb, mem_total_mb = _read_mem_usage()
     temp_c = _read_temp_c()
-    signal_dbm = _read_signal_dbm("wlan0")
+    signal_dbm = _read_signal_dbm(up_if if up_if.startswith("wl") else "wlan0")
 
     enriched["cpu_percent"] = cpu_percent
     enriched["mem_percent"] = mem_percent
@@ -444,12 +507,19 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     connection = enriched.get("connection")
     if not isinstance(connection, dict):
         connection = {}
-    connection.setdefault("wifi_state", "DISCONNECTED")
+    if uplink_type == "wifi":
+        connection["wifi_state"] = "CONNECTED"
+    elif uplink_type == "ethernet":
+        connection["wifi_state"] = "N/A(ETH)"
+    else:
+        connection.setdefault("wifi_state", "DISCONNECTED")
+    connection["uplink_if"] = up_if
+    connection["uplink_type"] = uplink_type
     connection.setdefault("internet_check", "N/A")
     connection.setdefault("usb_nat", "OFF")
 
-    iface = str(enriched.get("up_if", "wlan0") or "wlan0").strip()
-    gateway = str(enriched.get("gateway_ip", "") or "").strip()
+    iface = up_if if up_if != "-" else str(enriched.get("up_if", "wlan0") or "wlan0").strip()
+    gateway = gateway_ip if gateway_ip != "-" else str(enriched.get("gateway_ip", "") or "").strip()
     health = NETWORK_HEALTH.assess(iface=iface, gateway_ip=gateway)
     enriched["network_health"] = health
     if health.get("internet_check"):
@@ -485,15 +555,55 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
 
     enriched["connection"] = connection
 
+    # Keep WebUI/TUI status source consistent.
+    internal = enriched.get("internal")
+    if not isinstance(internal, dict):
+        internal = {}
+    state_name = str(internal.get("state_name", "") or "").upper()
+    if not state_name:
+        state_name = {
+            "SAFE": "NORMAL",
+            "CHECKING": "PROBE",
+            "LIMITED": "DEGRADED",
+            "CONTAINED": "CONTAIN",
+            "DECEPTION": "DECEPTION",
+        }.get(str(enriched.get("user_state", "CHECKING")).upper(), "PROBE")
+    internal["state_name"] = state_name
+    try:
+        internal.setdefault("suspicion", int(float(str(enriched.get("risk_score", 0)).strip())))
+    except Exception:
+        internal.setdefault("suspicion", 0)
+    internal.setdefault("decay", 0)
+    enriched["internal"] = internal
+
     return enriched
 
 
 def _default_snapshot_seed() -> dict[str, Any]:
     """Bootstrap snapshot when /run is empty after reboot."""
+    route = _default_route_info()
+    up_if = str(route.get("up_if") or "-")
+    uplink_type = str(route.get("uplink_type") or "unknown")
+    ssid = f"ETH:{up_if}" if uplink_type == "ethernet" and up_if != "-" else "-"
     return {
         "now_time": "",
-        "ssid": "-",
+        "ssid": ssid,
+        "up_if": up_if,
+        "up_ip": str(route.get("up_ip") or "-"),
+        "gateway_ip": str(route.get("gateway_ip") or "-"),
+        "down_if": "usb0",
+        "down_ip": "10.12.194.1",
+        "connection": {
+            "wifi_state": "N/A(ETH)" if uplink_type == "ethernet" else "DISCONNECTED",
+            "uplink_if": up_if,
+            "uplink_type": uplink_type,
+            "internet_check": "UNKNOWN",
+            "usb_nat": "OFF",
+            "captive_portal": "NA",
+            "captive_portal_reason": "NOT_CHECKED",
+        },
         "user_state": "CHECKING",
+        "internal": {"state_name": "PROBE", "suspicion": 0, "decay": 0},
         "recommendation": "Initializing",
         "evidence": [],
         "snapshot_epoch": 0,
@@ -517,6 +627,17 @@ def _seed_snapshot_if_missing() -> tuple[dict[str, Any] | None, Path | None]:
     return None, None
 
 
+def _persist_snapshot(path: Path, payload: dict[str, Any]) -> None:
+    """Persist enriched snapshot so file readers (EPD/legacy tools) stay in sync."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception as exc:
+        logger.debug(f"Failed to persist snapshot {path}: {exc}")
+
+
 def read_ui_snapshot() -> dict[str, Any]:
     """Read latest UI snapshot from schema-aware paths."""
     mode_payload: dict[str, Any] = {}
@@ -532,6 +653,7 @@ def read_ui_snapshot() -> dict[str, Any]:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 data = _enrich_snapshot(data)
+                _persist_snapshot(path, data)
                 if mode_payload.get("ok"):
                     data["mode"] = mode_payload.get("mode", {})
                 return {
@@ -546,6 +668,7 @@ def read_ui_snapshot() -> dict[str, Any]:
     seeded, seeded_path = _seed_snapshot_if_missing()
     if isinstance(seeded, dict) and seeded_path is not None:
         data = _enrich_snapshot(seeded)
+        _persist_snapshot(seeded_path, data)
         if mode_payload.get("ok"):
             data["mode"] = mode_payload.get("mode", {})
         return {

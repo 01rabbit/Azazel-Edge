@@ -1,0 +1,30 @@
+id: rb.noc.service.status.check
+title: Service Status Check
+domain: noc
+audience: operator
+risk: low
+effect: read_only
+requires_approval: false
+args_schema:
+  type: object
+  required: [service]
+  properties:
+    service:
+      type: string
+      enum:
+        - azazel-edge-ai-agent
+        - azazel-edge-control-daemon
+        - azazel-edge-web
+        - suricata
+        - opencanary
+steps:
+  - Confirm the affected function before checking service state.
+  - If the service is inactive, inspect the journal before restart.
+user_message_template: "サービス状態を確認しています。結果が出るまでそのままお待ちください。"
+command:
+  exec: /bin/systemctl
+  argv:
+    - status
+    - ${service}
+    - --no-pager
+

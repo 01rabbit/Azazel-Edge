@@ -39,6 +39,10 @@ install -d \
   /opt/azazel-edge/py/azazel_edge_ai \
   /opt/azazel-edge/azazel_edge_web/static \
   /opt/azazel-edge/azazel_edge_web/templates \
+  /opt/azazel-edge/runbooks/noc \
+  /opt/azazel-edge/runbooks/ops \
+  /opt/azazel-edge/runbooks/soc \
+  /opt/azazel-edge/runbooks/user \
   /opt/azazel-edge/security/opencanary \
   /opt/azazel-edge/security/suricata \
   /opt/azazel-edge/rust/azazel-edge-core/src \
@@ -52,6 +56,8 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge/path_schema.py" /opt/azazel-edge/py/a
 install -m 0644 "$REPO_ROOT/py/azazel_edge/control_plane.py" /opt/azazel-edge/py/azazel_edge/control_plane.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/cli_unified.py" /opt/azazel-edge/py/azazel_edge/cli_unified.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/cli_unified_textual.py" /opt/azazel-edge/py/azazel_edge/cli_unified_textual.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/runbooks.py" /opt/azazel-edge/py/azazel_edge/runbooks.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/runbook_review.py" /opt/azazel-edge/py/azazel_edge/runbook_review.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/__init__.py" /opt/azazel-edge/py/azazel_edge/sensors/__init__.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/wifi_scanner.py" /opt/azazel-edge/py/azazel_edge/sensors/wifi_scanner.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/wifi_channel_scanner.py" /opt/azazel-edge/py/azazel_edge/sensors/wifi_channel_scanner.py
@@ -75,12 +81,16 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge_control/wifi_connect.py" /opt/azazel-
 install -m 0755 "$REPO_ROOT/py/azazel_edge_control/scripts/"*.sh /opt/azazel-edge/py/azazel_edge_control/scripts/
 install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/__init__.py" /opt/azazel-edge/py/azazel_edge_ai/__init__.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/agent.py" /opt/azazel-edge/py/azazel_edge_ai/agent.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge_runbook_broker.py" /opt/azazel-edge/py/azazel_edge_runbook_broker.py
 
 echo "[6/16] Install WebUI and EPD modules"
 install -m 0644 "$REPO_ROOT/azazel_edge_web/app.py" /opt/azazel-edge/azazel_edge_web/app.py
 install -m 0644 "$REPO_ROOT/azazel_edge_web/static/app.js" /opt/azazel-edge/azazel_edge_web/static/app.js
+install -m 0644 "$REPO_ROOT/azazel_edge_web/static/ops_comm.js" /opt/azazel-edge/azazel_edge_web/static/ops_comm.js
+install -m 0644 "$REPO_ROOT/azazel_edge_web/static/ops_comm.css" /opt/azazel-edge/azazel_edge_web/static/ops_comm.css
 install -m 0644 "$REPO_ROOT/azazel_edge_web/static/style.css" /opt/azazel-edge/azazel_edge_web/static/style.css
 install -m 0644 "$REPO_ROOT/azazel_edge_web/templates/index.html" /opt/azazel-edge/azazel_edge_web/templates/index.html
+install -m 0644 "$REPO_ROOT/azazel_edge_web/templates/ops_comm.html" /opt/azazel-edge/azazel_edge_web/templates/ops_comm.html
 install -m 0644 "$REPO_ROOT/py/azazel_edge_menu.py" /opt/azazel-edge/py/azazel_edge_menu.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge_status.py" /opt/azazel-edge/py/azazel_edge_status.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge_epd.py" /opt/azazel-edge/py/azazel_edge_epd.py
@@ -107,7 +117,12 @@ install -m 0755 "$REPO_ROOT/bin/azazel-edge-epd" /usr/local/bin/azazel-edge-epd
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-epd-refresh" /usr/local/bin/azazel-edge-epd-refresh
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-control-daemon" /usr/local/bin/azazel-edge-control-daemon
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-ai-agent" /usr/local/bin/azazel-edge-ai-agent
+install -m 0755 "$REPO_ROOT/bin/azazel-edge-runbook-broker" /usr/local/bin/azazel-edge-runbook-broker
+install -m 0755 "$REPO_ROOT/bin/azazel-edge-inject-test-events" /usr/local/bin/azazel-edge-inject-test-events
 install -m 0755 "$REPO_ROOT/installer/internal/set_dev_remote_access.sh" /opt/azazel-edge/set_dev_remote_access.sh
+install -m 0755 "$REPO_ROOT/installer/internal/install_ai_runtime.sh" /opt/azazel-edge/install_ai_runtime.sh
+install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_workspace.sh" /opt/azazel-edge/provision_mattermost_workspace.sh
+install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_command.sh" /opt/azazel-edge/provision_mattermost_command.sh
 
 echo "[10/16] Install systemd units"
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-control-daemon.service" /etc/systemd/system/azazel-edge-control-daemon.service
@@ -127,6 +142,15 @@ if [[ ! -f /run/azazel-edge/ui_snapshot.json ]]; then
 {"now_time":"","ssid":"-","user_state":"CHECKING","recommendation":"Initializing","evidence":[],"snapshot_epoch":0}
 EOD
 fi
+
+echo "[11.5/16] Install runbook registry and AI compose assets"
+install -m 0644 "$REPO_ROOT/security/docker-compose.ollama.yml" /opt/azazel-edge/security/docker-compose.ollama.yml
+install -m 0644 "$REPO_ROOT/security/docker-compose.mattermost.yml" /opt/azazel-edge/security/docker-compose.mattermost.yml
+install -m 0644 "$REPO_ROOT/security/.env" /opt/azazel-edge/security/.env
+install -m 0644 "$REPO_ROOT/runbooks/noc/"*.yaml /opt/azazel-edge/runbooks/noc/
+install -m 0644 "$REPO_ROOT/runbooks/ops/"*.yaml /opt/azazel-edge/runbooks/ops/
+install -m 0644 "$REPO_ROOT/runbooks/soc/"*.yaml /opt/azazel-edge/runbooks/soc/
+install -m 0644 "$REPO_ROOT/runbooks/user/"*.yaml /opt/azazel-edge/runbooks/user/
 if [[ ! -e /etc/azazel-gadget ]]; then
   ln -s /etc/azazel-edge /etc/azazel-gadget
 fi

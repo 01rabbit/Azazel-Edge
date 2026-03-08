@@ -1,0 +1,28 @@
+id: rb.noc.service.restart.controlled
+title: Controlled Service Restart
+domain: noc
+audience: operator
+risk: high
+effect: controlled_exec
+requires_approval: true
+args_schema:
+  type: object
+  properties:
+    service:
+      type: string
+      enum:
+        - azazel-edge-ai-agent
+        - azazel-edge-control-daemon
+        - azazel-edge-web
+  required: [service]
+steps:
+  - Confirm the service fault is real and not only a UI desynchronization.
+  - Confirm preview output and expected impact before restart.
+  - Obtain operator approval before executing the restart.
+  - Re-check status and user impact after execution.
+user_message_template: "影響を伴う再起動のため、承認と事前確認が完了するまでお待ちください。"
+command:
+  exec: /bin/systemctl
+  argv:
+    - restart
+    - ${service}

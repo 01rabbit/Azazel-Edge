@@ -60,6 +60,40 @@ body {
     font-size: 1.2em;
 }
 
+.ops-link {
+    color: var(--accent);
+    text-decoration: none;
+    border: 1px solid rgba(0, 212, 255, 0.5);
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 0.75em;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: rgba(0, 212, 255, 0.08);
+}
+
+.ops-link:hover {
+    background: rgba(0, 212, 255, 0.2);
+}
+
+.ops-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ops-logo {
+    width: 44px;
+    height: 44px;
+    object-fit: cover;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.ops-logo-small {
+    width: 38px;
+    height: 38px;
+}
+
 .header-metrics {
     display: flex;
     align-items: center;

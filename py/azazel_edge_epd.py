@@ -54,7 +54,10 @@ WS_LIB = "/opt/waveshare-epd/RaspberryPi_JetsonNano/python/lib"
 EPD_WIDTH = 250
 EPD_HEIGHT = 122
 LAST_RENDER_PATH = Path("/run/azazel-edge/epd_last_render.json")
-DISPLAY_ROTATION_DEG = 180
+try:
+    DISPLAY_ROTATION_DEG = int(str(os.environ.get("DISPLAY_ROTATION_DEG", "180")).strip() or "180")
+except ValueError:
+    DISPLAY_ROTATION_DEG = 180
 
 # Icon file names (user-replaceable in icons/epd/)
 ICON_WIFI_STRONG = "wifi_3.png"      # Signal >= -60 dBm (very good)
@@ -722,7 +725,7 @@ def save_preview(black_img: Image.Image, red_img: Image.Image, state: str) -> No
 
 
 def apply_display_rotation(black_img: Image.Image, red_img: Image.Image) -> tuple[Image.Image, Image.Image]:
-    """Apply panel orientation compensation."""
+    """Apply panel orientation compensation before preview/display."""
     if DISPLAY_ROTATION_DEG == 180:
         return (
             black_img.transpose(Image.ROTATE_180),

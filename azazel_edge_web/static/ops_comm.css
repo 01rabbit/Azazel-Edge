@@ -1,0 +1,246 @@
+.ops-container {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(280px, 1fr));
+    gap: 12px;
+}
+
+.ops-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ops-logo {
+    width: 56px;
+    height: 56px;
+    object-fit: cover;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.ops-brand-subtitle {
+    color: var(--text-secondary);
+    font-size: 0.82em;
+    letter-spacing: 0.03em;
+}
+
+.ops-audience {
+    margin-bottom: 10px;
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ops-audience-label {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 0.82em;
+    margin-bottom: 8px;
+}
+
+.ops-audience-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.ops-messages-card {
+    grid-column: 1 / -1;
+}
+
+.ops-runbooks-card {
+    grid-column: 1 / -1;
+}
+
+.ops-label {
+    display: block;
+    color: var(--text-secondary);
+    margin-top: 8px;
+    margin-bottom: 4px;
+    font-size: 0.9em;
+}
+
+.ops-input,
+.ops-textarea {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: var(--text-primary);
+    border-radius: 8px;
+    padding: 10px;
+}
+
+.ops-textarea {
+    resize: vertical;
+    min-height: 90px;
+}
+
+.ops-result {
+    margin-top: 10px;
+    color: var(--text-secondary);
+    font-size: 0.9em;
+}
+
+.ops-user-guidance {
+    color: var(--text-primary);
+    border-left: 3px solid rgba(121, 199, 255, 0.7);
+    padding-left: 10px;
+    background: rgba(121, 199, 255, 0.06);
+}
+
+.ops-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.ops-shortcuts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.ops-capabilities-card {
+    grid-column: 1 / -1;
+}
+
+.ops-capabilities-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.ops-capability-item {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.ops-capability-title {
+    color: var(--text-primary);
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.ops-capability-detail {
+    color: var(--text-secondary);
+    font-size: 0.88em;
+    white-space: pre-wrap;
+}
+
+.ops-message-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 8px;
+}
+
+.ops-runbook-list {
+    display: grid;
+    gap: 10px;
+}
+
+.ops-runbook-item {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.ops-runbook-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.ops-runbook-title {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.ops-runbook-meta {
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.ops-runbook-review {
+    color: var(--text-secondary);
+    font-size: 0.9em;
+    margin-bottom: 8px;
+    white-space: pre-wrap;
+}
+
+.ops-runbook-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ops-runbook-output {
+    margin-top: 8px;
+    font-size: 0.9em;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+}
+
+.ops-runbook-args {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.ops-runbook-arg {
+    display: grid;
+    gap: 4px;
+}
+
+.ops-runbook-arg label {
+    color: var(--text-secondary);
+    font-size: 0.85em;
+}
+
+.ops-message-item {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.ops-message-head {
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-secondary);
+    font-size: 0.8em;
+    margin-bottom: 6px;
+}
+
+.ops-message-user {
+    font-family: monospace;
+}
+
+.ops-message-time {
+    font-family: monospace;
+}
+
+.ops-message-body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-primary);
+}
+
+@media (max-width: 900px) {
+    .ops-container {
+        grid-template-columns: 1fr;
+    }
+}

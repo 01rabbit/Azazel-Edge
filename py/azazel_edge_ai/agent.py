@@ -8,6 +8,7 @@ import logging
 import os
 import queue
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -26,6 +27,14 @@ from azazel_edge.tactics_engine.decision_logger import (
     ScoreDelta,
     StateSnapshot,
 )
+try:
+    from azazel_edge.runbooks import get_runbook as runbook_get
+except Exception:  # pragma: no cover
+    runbook_get = None
+try:
+    from azazel_edge.runbook_review import review_runbook_id
+except Exception:  # pragma: no cover
+    review_runbook_id = None
 
 SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
 ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge/ai_advisory.json"))
@@ -53,6 +62,12 @@ LLM_NUM_PREDICT = int(os.environ.get("AZAZEL_LLM_NUM_PREDICT", "48"))
 LLM_NUM_THREAD = int(os.environ.get("AZAZEL_LLM_NUM_THREAD", "2"))
 LLM_KEEP_ALIVE = os.environ.get("AZAZEL_LLM_KEEP_ALIVE", "20m")
 LLM_THINK = os.environ.get("AZAZEL_LLM_THINK", "0") == "1"
+CORR_ENABLED = os.environ.get("AZAZEL_CORR_ENABLED", "1") == "1"
+CORR_WINDOW_SEC = int(os.environ.get("AZAZEL_CORR_WINDOW_SEC", "300"))
+CORR_REPEAT_THRESHOLD = int(os.environ.get("AZAZEL_CORR_REPEAT_THRESHOLD", "4"))
+CORR_SID_DIVERSITY_THRESHOLD = int(os.environ.get("AZAZEL_CORR_SID_DIVERSITY_THRESHOLD", "3"))
+CORR_MIN_RISK_SCORE = int(os.environ.get("AZAZEL_CORR_MIN_RISK_SCORE", "20"))
+CORR_MAX_HISTORY_PER_SRC = int(os.environ.get("AZAZEL_CORR_MAX_HISTORY_PER_SRC", "32"))
 OPS_KEEP_ALIVE = os.environ.get("AZAZEL_OPS_KEEP_ALIVE", "0s")
 OPS_NUM_PREDICT = int(os.environ.get("AZAZEL_OPS_NUM_PREDICT", "80"))
 OPS_MIN_MEM_AVAILABLE_MB = int(os.environ.get("AZAZEL_OPS_MIN_MEM_AVAILABLE_MB", "1400"))
@@ -60,20 +75,44 @@ OPS_MAX_SWAP_USED_MB = int(os.environ.get("AZAZEL_OPS_MAX_SWAP_USED_MB", "512"))
 OPS_ESCALATE_MIN_RISK = int(os.environ.get("AZAZEL_OPS_ESCALATE_MIN_RISK", "70"))
 OPS_ESCALATE_LOW_CONF = float(os.environ.get("AZAZEL_OPS_ESCALATE_LOW_CONF", "0.60"))
 OPS_ESCALATE_COOLDOWN_SEC = int(os.environ.get("AZAZEL_OPS_ESCALATE_COOLDOWN_SEC", "180"))
+MANUAL_KEEP_ALIVE = os.environ.get("AZAZEL_MANUAL_KEEP_ALIVE", "5m")
+MANUAL_NUM_PREDICT = int(os.environ.get("AZAZEL_MANUAL_NUM_PREDICT", "64"))
+MANUAL_NUM_CTX = int(os.environ.get("AZAZEL_MANUAL_NUM_CTX", "192"))
+MANUAL_NUM_THREAD = int(os.environ.get("AZAZEL_MANUAL_NUM_THREAD", str(LLM_NUM_THREAD)))
 OPS_MODEL_CHAIN = [
     m.strip()
     for m in os.environ.get("AZAZEL_OPS_MODEL_CHAIN", f"{OPS_COACH_MODEL},{LLM_MODEL_PRIMARY},{LLM_MODEL_DEGRADED}").split(",")
     if m.strip()
 ]
 LLM_PROMPT_SYSTEM = (
+    "You are M.I.O. (Mission Intelligence Operator), a calm tactical analyst. "
     "Return strict minified JSON only. "
     "Keys: verdict, confidence, reason, suggested_action, escalation. "
-    "reason<=80 chars, suggested_action<=80 chars, confidence=0.0..1.0."
+    "reason<=80 chars, suggested_action<=80 chars, confidence=0.0..1.0. "
+    "Prefer precise, conditional wording over hard certainty."
 )
 OPS_PROMPT_SYSTEM = (
-    "You are an ops coach. Return strict JSON only with keys: runbook_id, summary, operator_note. "
-    "Keep summary and operator_note each under 120 chars."
+    "You are M.I.O. (Mission Intelligence Operator), a calm deputy-style ops coach. "
+    "Return strict JSON only with keys: runbook_id, summary, operator_note. "
+    "Keep summary and operator_note each under 120 chars. "
+    "Prioritize situation, likely cause, next check, and safe escalation."
 )
+MANUAL_PROMPT_SYSTEM = (
+    "You are M.I.O. (Mission Intelligence Operator), a calm SOC/NOC support assistant. "
+    "Return strict JSON only with keys: "
+    "answer,confidence,runbook_id,operator_note,user_message. "
+    "answer<=240 chars, operator_note<=120 chars, user_message<=160 chars, confidence=0.0..1.0. "
+    "Be concise, structured, and conditional. "
+    "For beginner-facing situations, give at most 3 simple steps and do not ask the user to perform operator-only actions."
+)
+MANUAL_QUERY_MAX_CHARS = int(os.environ.get("AZAZEL_MANUAL_QUERY_MAX_CHARS", "500"))
+MANUAL_QUERY_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MANUAL_QUERY_TIMEOUT_SEC", "18"))
+MANUAL_TOTAL_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MANUAL_TOTAL_TIMEOUT_SEC", "20"))
+MANUAL_MODEL_CHAIN = [
+    m.strip()
+    for m in os.environ.get("AZAZEL_MANUAL_MODEL_CHAIN", f"{LLM_MODEL_DEGRADED},{LLM_MODEL_PRIMARY}").split(",")
+    if m.strip()
+]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("azazel-edge-ai-agent")
@@ -96,22 +135,32 @@ METRICS: Dict[str, Any] = {
     "llm_retried": 0,
     "llm_fallback_count": 0,
     "llm_empty_response_count": 0,
+    "llm_schema_invalid_count": 0,
     "llm_latency_ms_last": 0,
     "llm_latency_ms_ema": 0.0,
     "llm_completed_rate": 0.0,
     "llm_fallback_rate": 0.0,
     "llm_empty_rate": 0.0,
+    "correlation_escalations": 0,
     "ops_requests": 0,
     "ops_completed": 0,
     "ops_skipped": 0,
     "ops_errors": 0,
+    "ops_schema_invalid_count": 0,
     "ops_fallback_model_count": 0,
+    "manual_requests": 0,
+    "manual_routed_count": 0,
+    "manual_completed": 0,
+    "manual_failed": 0,
+    "manual_schema_invalid_count": 0,
     "policy_mode": "normal",
     "last_error": "",
     "last_update_ts": 0.0,
 }
 RUNTIME_POLICY: Dict[str, Any] = {"mode": "normal", "updated_at": 0.0, "reason": "init"}
 _LAST_OPS_ESCALATE_TS = 0.0
+CORR_LOCK = threading.Lock()
+CORR_STATE: Dict[str, list[Dict[str, Any]]] = {}
 
 
 def _ensure_parent(path: Path) -> None:
@@ -259,6 +308,455 @@ def _should_escalate_to_ops(
     return False, "not_needed"
 
 
+def _evaluate_correlation(advisory: Dict[str, Any]) -> Dict[str, Any]:
+    if not CORR_ENABLED:
+        return {
+            "enabled": False,
+            "force_llm": False,
+            "repeat_trigger": False,
+            "sid_diversity_trigger": False,
+            "hits_in_window": 0,
+            "unique_sid_count": 0,
+            "window_sec": CORR_WINDOW_SEC,
+        }
+
+    src_ip = str(advisory.get("src_ip") or "").strip()
+    sid = int(advisory.get("suricata_sid") or 0)
+    attack_type = str(advisory.get("attack_type") or "").strip()
+    risk_score = int(advisory.get("risk_score") or 0)
+    if not src_ip:
+        return {
+            "enabled": True,
+            "force_llm": False,
+            "repeat_trigger": False,
+            "sid_diversity_trigger": False,
+            "hits_in_window": 0,
+            "unique_sid_count": 0,
+            "window_sec": CORR_WINDOW_SEC,
+        }
+
+    now = time.time()
+    cutoff = now - max(1, CORR_WINDOW_SEC)
+    with CORR_LOCK:
+        bucket = CORR_STATE.get(src_ip, [])
+        bucket = [entry for entry in bucket if float(entry.get("ts") or 0.0) >= cutoff]
+        bucket.append({"ts": now, "sid": sid, "attack_type": attack_type})
+        if len(bucket) > max(1, CORR_MAX_HISTORY_PER_SRC):
+            bucket = bucket[-max(1, CORR_MAX_HISTORY_PER_SRC) :]
+        CORR_STATE[src_ip] = bucket
+
+    hits = len(bucket)
+    unique_sid = len({int(entry.get("sid") or 0) for entry in bucket if int(entry.get("sid") or 0) > 0})
+    repeat_trigger = hits >= max(2, CORR_REPEAT_THRESHOLD)
+    sid_diversity_trigger = unique_sid >= max(2, CORR_SID_DIVERSITY_THRESHOLD)
+    force_llm = (
+        (repeat_trigger or sid_diversity_trigger)
+        and risk_score >= max(0, CORR_MIN_RISK_SCORE)
+        and risk_score < LLM_AMBIG_MIN
+    )
+    return {
+        "enabled": True,
+        "force_llm": force_llm,
+        "repeat_trigger": repeat_trigger,
+        "sid_diversity_trigger": sid_diversity_trigger,
+        "hits_in_window": hits,
+        "unique_sid_count": unique_sid,
+        "window_sec": CORR_WINDOW_SEC,
+    }
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "on", "escalate", "urgent"}
+
+
+def _normalize_confidence(value: Any) -> float:
+    try:
+        conf = float(value)
+    except Exception as exc:
+        raise ValueError("analyst_invalid_confidence") from exc
+    if conf > 1.0 and conf <= 100.0:
+        conf = conf / 100.0
+    if conf < 0.0 or conf > 1.0:
+        raise ValueError("analyst_invalid_confidence")
+    return round(conf, 4)
+
+
+def _normalize_analyst_result(raw: Dict[str, Any]) -> Dict[str, Any]:
+    verdict_raw = str(raw.get("verdict") or "").strip().lower()
+    verdict_alias = {
+        "safe": "allow",
+        "benign": "allow",
+        "deny": "block",
+        "drop": "block",
+        "contain": "block",
+    }
+    verdict = verdict_alias.get(verdict_raw, verdict_raw)
+    allowed_verdict = {"allow", "monitor", "block", "deceive", "escalate", "hold"}
+    if verdict not in allowed_verdict:
+        raise ValueError("analyst_invalid_verdict")
+
+    reason = str(raw.get("reason") or "").strip()
+    if not reason:
+        raise ValueError("analyst_empty_reason")
+    reason = reason[:80]
+
+    suggested_action = str(raw.get("suggested_action") or "").strip()
+    if not suggested_action:
+        suggested_action = verdict
+    suggested_action = suggested_action[:80]
+
+    return {
+        "verdict": verdict,
+        "confidence": _normalize_confidence(raw.get("confidence")),
+        "reason": reason,
+        "suggested_action": suggested_action,
+        "escalation": _as_bool(raw.get("escalation")),
+    }
+
+
+def _normalize_ops_result(raw: Dict[str, Any]) -> Dict[str, Any]:
+    runbook_id = _normalize_runbook_id(raw.get("runbook_id") or raw.get("playbook_id") or raw.get("id") or "")
+    summary = str(raw.get("summary") or raw.get("reason") or raw.get("analysis") or "").strip()
+    operator_note = str(raw.get("operator_note") or raw.get("suggested_action") or raw.get("action") or "").strip()
+    if not summary:
+        raise ValueError("ops_empty_summary")
+    if not operator_note:
+        operator_note = summary
+    return {
+        "runbook_id": runbook_id,
+        "summary": summary[:120],
+        "operator_note": operator_note[:120],
+    }
+
+
+def _normalize_manual_result(raw: Dict[str, Any]) -> Dict[str, Any]:
+    answer = str(raw.get("answer") or raw.get("summary") or raw.get("operator_note") or "").strip()
+    if not answer:
+        raise ValueError("manual_empty_answer")
+    runbook_id = _normalize_runbook_id(raw.get("runbook_id") or "")
+    operator_note = str(raw.get("operator_note") or "").strip()[:120]
+    if not operator_note:
+        operator_note = answer[:120]
+    user_message = str(raw.get("user_message") or raw.get("user_note") or "").strip()[:160]
+    return {
+        "answer": answer[:240],
+        "confidence": _normalize_confidence(raw.get("confidence", 0.6)),
+        "runbook_id": runbook_id,
+        "operator_note": operator_note,
+        "user_message": user_message,
+    }
+
+
+def _latest_advisory_snapshot() -> Dict[str, Any]:
+    try:
+        if ADVISORY_PATH.exists():
+            data = json.loads(ADVISORY_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _normalize_runbook_id(value: Any) -> str:
+    runbook_id = str(value or "").strip()[:48]
+    if not runbook_id or runbook_get is None:
+        return runbook_id
+    try:
+        runbook_get(runbook_id)
+        return runbook_id
+    except Exception:
+        return ""
+
+
+def _classify_manual_question(question: str) -> str:
+    q = str(question or "").lower()
+    if any(token in q for token in ("onboarding", "初回", "初期接続", "登録")):
+        return "wifi_onboarding"
+    if any(token in q for token in ("reconnect", "再接続", "再接続できない")):
+        return "wifi_reconnect"
+    if any(token in q for token in ("dns", "名前解決", "host", "hostname")):
+        return "dns"
+    if any(token in q for token in ("gateway", "route", "uplink", "回線", "ゲートウェイ")):
+        return "route"
+    if any(token in q for token in ("service", "systemd", "サービス")):
+        return "service"
+    if any(token in q for token in ("epd", "display", "e-paper", "電子ペーパー")):
+        return "epd"
+    if any(token in q for token in ("log", "ログ", "llm", "ai")):
+        return "ai_logs"
+    if any(token in q for token in ("wifi", "ssid", "connect", "接続", "繋", "ネット")):
+        return "wifi_issue"
+    return "snapshot"
+
+
+def _guess_runbook_id(question: str) -> str:
+    kind = _classify_manual_question(question)
+    mapping = {
+        "wifi_onboarding": "rb.user.device-onboarding-guide",
+        "wifi_reconnect": "rb.user.reconnect-guide",
+        "wifi_issue": "rb.user.first-contact.network-issue",
+        "dns": "rb.noc.dns.failure.check",
+        "route": "rb.noc.default-route.check",
+        "service": "rb.noc.service.status.check",
+        "epd": "rb.ops.epd.state.check",
+        "ai_logs": "rb.ops.logs.ai.recent",
+        "snapshot": "rb.noc.ui-snapshot.check",
+    }
+    return mapping.get(kind, "rb.noc.ui-snapshot.check")
+
+
+def _runbook_user_message(runbook_id: str, default: str = "") -> str:
+    if not runbook_id or runbook_get is None:
+        return default[:160]
+    try:
+        runbook = runbook_get(runbook_id)
+        return str(runbook.get("user_message_template") or default).strip()[:160]
+    except Exception:
+        return default[:160]
+
+
+def _manual_router_response(
+    question: str,
+    sender: str,
+    source: str,
+    context: Dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    q = str(question or "").strip()
+    if not q:
+        return None
+    q_lower = q.lower()
+    ctx = context if isinstance(context, dict) else {}
+    audience = str(ctx.get("audience") or ("operator" if str(source or "") in {"webui", "ops-comm", "mattermost_post", "mattermost_command", "cli"} else "beginner")).strip() or "operator"
+    route_info = _default_route_info()
+    latest = _latest_advisory_snapshot()
+    state_name = str(latest.get("state_name") or "UNKNOWN")
+    risk_score = int(latest.get("risk_score") or 0)
+
+    runbook_id = ""
+    answer = ""
+
+    kind = _classify_manual_question(q_lower)
+
+    if kind == "wifi_onboarding":
+        runbook_id = "rb.user.device-onboarding-guide"
+        answer = (
+            "M.I.O.判断: 初回接続手順として扱います。"
+            " 利用者には指定 SSID の選択だけを案内し、接続試行は一度ずつ行います。"
+        )
+    elif kind == "wifi_reconnect":
+        runbook_id = "rb.user.reconnect-guide"
+        answer = (
+            "M.I.O.判断: 再接続手順として扱います。"
+            " Wi-Fi のオフ/オンを一度だけ案内し、同じ SSID への再接続結果を確認します。"
+        )
+    elif kind == "wifi_issue":
+        runbook_id = "rb.user.first-contact.network-issue"
+        answer = (
+            "M.I.O.判断: まず単一端末障害か複数端末障害かを切り分けます。"
+            " 利用者には最初に何が使えなくなったかを一つだけ確認し、再起動の連打は止めます。"
+        )
+    elif kind == "dns":
+        runbook_id = "rb.noc.dns.failure.check"
+        answer = (
+            f"M.I.O.判断: DNS 障害と uplink 側障害を切り分けます。"
+            f" 現在 uplink={route_info.get('up_if', '-')} gateway={route_info.get('gateway_ip', '-')}"
+        )
+    elif kind == "route":
+        runbook_id = "rb.noc.default-route.check"
+        answer = (
+            f"M.I.O.判断: 上位回線と経路の実状態を確認します。"
+            f" 現在 uplink={route_info.get('up_if', '-')} up_ip={route_info.get('up_ip', '-')} gateway={route_info.get('gateway_ip', '-')}"
+        )
+    elif kind == "service":
+        runbook_id = "rb.noc.service.status.check"
+        answer = "M.I.O.判断: UI の表示ズレではなく、実サービス停止かを先に確認します。status と journal の順で確認します。"
+    elif kind == "epd":
+        runbook_id = "rb.ops.epd.state.check"
+        answer = "M.I.O.判断: EPD の最終描画状態と WebUI/TUI のスナップショット差異を確認します。"
+    elif kind == "ai_logs":
+        runbook_id = "rb.ops.logs.ai.recent"
+        answer = "M.I.O.判断: AI の直近成功・失敗と fallback 状況を確認して、遅延要因を切り分けます。"
+
+    if not runbook_id:
+        return None
+
+    user_message = _runbook_user_message(
+        runbook_id,
+        default="現在の状況を確認中です。案内があるまで設定変更は行わず、そのままお待ちください。",
+    )
+    return {
+        "status": "routed",
+        "model": "manual_router",
+        "fallback_model_used": False,
+        "latency_ms": 0,
+        "answer": answer[:240],
+        "confidence": 0.82,
+        "runbook_id": runbook_id,
+        "operator_note": f"state={state_name} risk={risk_score} audience={audience} route={route_info.get('up_if', '-')} question={q[:48]}",
+        "user_message": user_message,
+    }
+
+
+def _manual_fallback_response(question: str, context: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    latest = _latest_advisory_snapshot()
+    state_name = str(latest.get("state_name") or "UNKNOWN")
+    risk_score = int(latest.get("risk_score") or 0)
+    rec = str(latest.get("recommendation") or "ログ確認を継続してください。")
+    ctx = context if isinstance(context, dict) else {}
+    route_info = _default_route_info()
+    runbook_id = _guess_runbook_id(question)
+    user_message = _runbook_user_message(
+        runbook_id,
+        default="現在の状況を確認中です。案内があるまで設定変更は行わず、そのままお待ちください。",
+    )
+    q = str(question or "").lower()
+    answer = f"現在の推奨: {rec}"
+    if any(token in q for token in ("dns", "名前解決", "host")):
+        answer = (
+            f"M.I.O.判断: 名前解決障害か uplink 側問題を切り分けます。"
+            f" 現在 uplink={route_info.get('up_if', '-')} gateway={route_info.get('gateway_ip', '-')}"
+        )[:240]
+    elif any(token in q for token in ("wifi", "ssid", "繋", "接続", "ネット")):
+        answer = (
+            "M.I.O.判断: 単一端末障害か複数端末障害かを先に切り分けます。"
+            " 利用者には症状を一つだけ答えてもらい、再起動の連打は止めます。"
+        )[:240]
+    elif any(token in q for token in ("service", "systemd", "サービス")):
+        answer = "M.I.O.判断: UI不整合ではなく実サービス障害かを確認してから、必要なら status と journal を確認します。"[:240]
+    audience = str(ctx.get("audience") or "").strip() or "operator"
+    return {
+        "status": "fallback",
+        "model": "tactical_snapshot",
+        "fallback_model_used": False,
+        "latency_ms": 0,
+        "answer": answer,
+        "confidence": 0.35,
+        "runbook_id": runbook_id,
+        "operator_note": f"state={state_name} risk={risk_score} audience={audience} question={question[:48]}",
+        "user_message": user_message,
+    }
+
+
+def _run_manual_query(
+    question: str,
+    sender: str,
+    source: str,
+    context: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    q = str(question or "").strip()
+    if not q:
+        return {"status": "error", "reason": "empty_question", "model": OPS_COACH_MODEL}
+    q = q[:MANUAL_QUERY_MAX_CHARS]
+    ctx = context if isinstance(context, dict) else {}
+    _metrics_inc("manual_requests", 1)
+
+    routed = _manual_router_response(q, sender=sender, source=source, context=ctx)
+    if routed is not None:
+        _metrics_inc("manual_routed_count", 1)
+        _metrics_inc("manual_completed", 1)
+        _append_jsonl(
+            LLM_RESULT_LOG_PATH,
+            {
+                "ts": time.time(),
+                "kind": "manual_query_routed",
+                "source": source,
+                "sender": sender,
+                "question": q,
+                "model": "manual_router",
+                "latency_ms": 0,
+                "response": routed,
+            },
+        )
+        return routed
+
+    allowed, why = _ops_coach_allowed()
+    if not allowed:
+        return {"status": "skipped", "reason": why, "model": OPS_COACH_MODEL}
+
+    latest = _latest_advisory_snapshot()
+    audience = str(ctx.get("audience") or ("operator" if str(source or "") in {"webui", "ops-comm", "mattermost_post", "mattermost_command", "cli"} else "beginner")).strip() or "operator"
+    route_info = _default_route_info()
+    payload = {
+        "source": str(source or "webui"),
+        "sender": str(sender or "operator"),
+        "audience": audience,
+        "question": q,
+        "latest_risk_score": int(latest.get("risk_score") or 0),
+        "latest_attack_type": str(latest.get("attack_type") or "unknown"),
+        "latest_state_name": str(latest.get("state_name") or "UNKNOWN"),
+        "latest_user_state": str(latest.get("user_state") or "CHECKING"),
+        "latest_recommendation": str(latest.get("recommendation") or ""),
+        "current_uplink": route_info.get("up_if", "-"),
+        "current_gateway": route_info.get("gateway_ip", "-"),
+        "current_up_ip": route_info.get("up_ip", "-"),
+        "context": ctx,
+    }
+
+    errors: list[dict[str, str]] = []
+    overall_started = time.time()
+    for idx, model in enumerate(MANUAL_MODEL_CHAIN):
+        if (time.time() - overall_started) >= MANUAL_TOTAL_TIMEOUT_SEC:
+            errors.append({"model": model, "reason": "manual_total_timeout_exceeded"})
+            break
+        started = time.time()
+        try:
+            raw = _ollama_chat(
+                payload,
+                model=model,
+                prompt_system=MANUAL_PROMPT_SYSTEM,
+                keep_alive=MANUAL_KEEP_ALIVE,
+                num_predict=MANUAL_NUM_PREDICT,
+                num_ctx=MANUAL_NUM_CTX,
+                num_thread=MANUAL_NUM_THREAD,
+                timeout_sec=MANUAL_QUERY_TIMEOUT_SEC,
+                return_text_on_parse_error=True,
+                required_keys=None,
+            )
+            out = _normalize_manual_result(raw)
+            latency_ms = int((time.time() - started) * 1000)
+            _metrics_inc("manual_completed", 1)
+            _append_jsonl(
+                LLM_RESULT_LOG_PATH,
+                {
+                    "ts": time.time(),
+                    "kind": "manual_query",
+                    "source": source,
+                    "sender": sender,
+                    "question": q,
+                    "model": model,
+                    "latency_ms": latency_ms,
+                    "response": out,
+                },
+            )
+            return {
+                "status": "completed",
+                "model": model,
+                "fallback_model_used": idx > 0,
+                "latency_ms": latency_ms,
+                **out,
+            }
+        except Exception as exc:
+            reason = str(exc)
+            if reason.startswith("manual_"):
+                _metrics_inc("manual_schema_invalid_count", 1)
+            errors.append({"model": model, "reason": reason})
+            if "timed out" in reason.lower():
+                break
+            continue
+
+    _metrics_inc("manual_failed", 1)
+    fallback = _manual_fallback_response(q, context=ctx)
+    fallback["reason"] = "all_manual_models_failed"
+    fallback["errors"] = errors
+    return fallback
+
+
 def _run_ops_coach(advisory: Dict[str, Any], verdict: str, confidence: float, reason: str, trigger_reason: str) -> Dict[str, Any]:
     global _LAST_OPS_ESCALATE_TS
     allowed, why = _ops_coach_allowed()
@@ -285,34 +783,22 @@ def _run_ops_coach(advisory: Dict[str, Any], verdict: str, confidence: float, re
                 num_predict=OPS_NUM_PREDICT,
                 required_keys=None,
             )
+            coach_norm = _normalize_ops_result(coach)
             _LAST_OPS_ESCALATE_TS = time.time()
             if idx > 0:
                 _metrics_inc("ops_fallback_model_count", 1)
-            runbook_id = str(
-                coach.get("runbook_id")
-                or coach.get("playbook_id")
-                or coach.get("id")
-                or ""
-            ).strip()
-            summary = str(coach.get("summary") or coach.get("reason") or coach.get("analysis") or "").strip()
-            operator_note = str(
-                coach.get("operator_note")
-                or coach.get("suggested_action")
-                or coach.get("action")
-                or summary
-            ).strip()
-            if not summary:
-                raise ValueError("ops_empty_summary")
             return {
                 "status": "completed",
                 "model": model,
                 "trigger": trigger_reason,
                 "fallback_model_used": idx > 0,
-                "runbook_id": runbook_id,
-                "summary": summary,
-                "operator_note": operator_note,
+                "runbook_id": coach_norm["runbook_id"],
+                "summary": coach_norm["summary"],
+                "operator_note": coach_norm["operator_note"],
             }
         except Exception as exc:
+            if str(exc).startswith("ops_"):
+                _metrics_inc("ops_schema_invalid_count", 1)
             errors.append({"model": model, "reason": str(exc)})
             continue
     return {
@@ -389,6 +875,18 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
         "suricata_severity": int(features["suricata_sev"]),
         "suricata_sid": int(features["suricata_sid"]),
     }
+    correlation = _evaluate_correlation(advisory)
+    advisory["correlation"] = correlation
+    if bool(correlation.get("force_llm")):
+        if bool(correlation.get("repeat_trigger")):
+            advisory["score_factors"].append(
+                f"corr_repeat_src_ip={int(correlation.get('hits_in_window') or 0)}/{int(correlation.get('window_sec') or 0)}s"
+            )
+        if bool(correlation.get("sid_diversity_trigger")):
+            advisory["score_factors"].append(
+                f"corr_sid_diversity={int(correlation.get('unique_sid_count') or 0)}"
+            )
+        _metrics_inc("correlation_escalations", 1)
 
     state_before = StateSnapshot(
         state="ANALYZING",
@@ -433,10 +931,15 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
     return advisory
 
 
-def _is_ambiguous(advisory: Dict[str, Any]) -> bool:
+def _is_ambiguous(advisory: Dict[str, Any]) -> tuple[bool, str]:
     score = int(advisory.get("risk_score") or 0)
     min_score = LLM_AMBIG_MIN_DEGRADED if RUNTIME_POLICY.get("mode") == "degraded" else LLM_AMBIG_MIN
-    return min_score <= score <= LLM_AMBIG_MAX
+    if min_score <= score <= LLM_AMBIG_MAX:
+        return True, "risk_score_ambiguous_range"
+    corr = advisory.get("correlation")
+    if isinstance(corr, dict) and bool(corr.get("force_llm")):
+        return True, "correlation_escalation"
+    return False, "risk_score_outside_ambiguous_range"
 
 
 def _select_analyst_model() -> str:
@@ -450,10 +953,11 @@ def _route_llm(event: Dict[str, Any], advisory: Dict[str, Any]) -> None:
         advisory["llm"] = {"status": "disabled", "reason": "llm_disabled"}
         _metrics_update(last_error="")
         return
-    if not _is_ambiguous(advisory):
+    ambiguous, route_reason = _is_ambiguous(advisory)
+    if not ambiguous:
         advisory["llm"] = {
             "status": "skipped_non_ambiguous",
-            "reason": "risk_score_outside_ambiguous_range",
+            "reason": route_reason,
         }
         if int(advisory.get("risk_score") or 0) >= 85:
             try:
@@ -494,7 +998,7 @@ def _route_llm(event: Dict[str, Any], advisory: Dict[str, Any]) -> None:
     task = {"event": event, "advisory": advisory.copy(), "enqueued_at": time.time(), "model": model}
     try:
         LLM_QUEUE.put_nowait(task)
-        advisory["llm"] = {"status": "queued", "queue_depth": LLM_QUEUE.qsize(), "model": model}
+        advisory["llm"] = {"status": "queued", "queue_depth": LLM_QUEUE.qsize(), "model": model, "reason": route_reason}
         _metrics_inc("llm_requests", 1)
         _metrics_update(last_error="")
     except queue.Full:
@@ -548,6 +1052,10 @@ def _ollama_chat(
     prompt_system: str = LLM_PROMPT_SYSTEM,
     keep_alive: str = LLM_KEEP_ALIVE,
     num_predict: int = LLM_NUM_PREDICT,
+    num_ctx: int = LLM_NUM_CTX,
+    num_thread: int = LLM_NUM_THREAD,
+    timeout_sec: float = LLM_TIMEOUT_SEC,
+    return_text_on_parse_error: bool = False,
     required_keys: tuple[str, ...] | None = ("verdict", "confidence", "reason", "suggested_action", "escalation"),
 ) -> Dict[str, Any]:
     req_body = {
@@ -562,8 +1070,8 @@ def _ollama_chat(
         "options": {
             "temperature": 0.1,
             "num_predict": num_predict,
-            "num_ctx": LLM_NUM_CTX,
-            "num_thread": LLM_NUM_THREAD,
+            "num_ctx": num_ctx,
+            "num_thread": num_thread,
         },
     }
     raw = json.dumps(req_body, ensure_ascii=False).encode("utf-8")
@@ -573,13 +1081,23 @@ def _ollama_chat(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_SEC) as resp:
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
         data = json.loads(resp.read().decode("utf-8", errors="replace"))
     message = data.get("message", {}) if isinstance(data, dict) else {}
     content = str(message.get("content") or "")
     if not content.strip():
         raise ValueError("empty_content")
-    parsed = _extract_json_payload(content)
+    try:
+        parsed = _extract_json_payload(content)
+    except Exception:
+        if return_text_on_parse_error:
+            return {
+                "answer": content.strip()[:240],
+                "confidence": 0.5,
+                "runbook_id": "",
+                "operator_note": "raw_text_fallback",
+            }
+        raise
     if required_keys and any(k not in parsed for k in required_keys):
         raise ValueError("invalid_json_schema")
     return parsed
@@ -633,15 +1151,22 @@ def _process_llm_task(task: Dict[str, Any]) -> Dict[str, Any]:
     result, latency_ms, attempts, error_text = _call_llm_with_retry(payload, model=model)
 
     if result is not None:
-        confidence = float(result.get("confidence") or 0.0)
-        verdict = str(result.get("verdict") or "").strip()
-        reason = str(result.get("reason") or "").strip()
-        suggested_action = str(result.get("suggested_action") or "").strip()
-        escalation = bool(result.get("escalation") or False)
+        try:
+            analyst = _normalize_analyst_result(result)
+        except Exception as exc:
+            result = None
+            error_text = str(exc)
+            _metrics_inc("llm_schema_invalid_count", 1)
+            analyst = {}
+        confidence = float(analyst.get("confidence") or 0.0)
+        verdict = str(analyst.get("verdict") or "").strip()
+        reason = str(analyst.get("reason") or "").strip()
+        suggested_action = str(analyst.get("suggested_action") or "").strip()
+        escalation = bool(analyst.get("escalation") or False)
         has_effective_signal = bool(verdict or reason or suggested_action or escalation or confidence > 0.0)
         if not has_effective_signal:
             result = None
-            error_text = "empty_response"
+            error_text = error_text or "empty_response"
         else:
             llm_result = {
                 "status": "completed",
@@ -799,6 +1324,20 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
         "suspicion": int(advisory.get("risk_score", 0)),
         "decay": 0,
     }
+    route = _default_route_info()
+    up_if = route.get("up_if", "-")
+    up_ip = route.get("up_ip", "-")
+    gateway_ip = route.get("gateway_ip", "-")
+    uplink_type = route.get("uplink_type", "unknown")
+    snapshot["up_if"] = up_if
+    snapshot["up_ip"] = up_ip
+    snapshot["gateway_ip"] = gateway_ip
+    snapshot["down_if"] = str(snapshot.get("down_if") or "usb0")
+    snapshot["down_ip"] = str(snapshot.get("down_ip") or "10.12.194.1")
+    if uplink_type == "ethernet":
+        snapshot["ssid"] = f"ETH:{up_if}" if up_if != "-" else "ETH"
+    else:
+        snapshot["ssid"] = str(snapshot.get("ssid") or "-")
     snapshot["attack"] = {
         "suricata_alert": True,
         "suricata_severity": severity,
@@ -813,6 +1352,22 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
         monitoring = {}
     monitoring["suricata"] = "ON"
     snapshot["monitoring"] = monitoring
+    connection = snapshot.get("connection")
+    if not isinstance(connection, dict):
+        connection = {}
+    if uplink_type == "wifi":
+        connection["wifi_state"] = "CONNECTED"
+    elif uplink_type == "ethernet":
+        connection["wifi_state"] = "N/A(ETH)"
+    else:
+        connection["wifi_state"] = "DISCONNECTED"
+    connection["uplink_if"] = up_if
+    connection["uplink_type"] = uplink_type
+    connection.setdefault("usb_nat", "OFF")
+    connection.setdefault("internet_check", "UNKNOWN")
+    connection.setdefault("captive_portal", "NA")
+    connection.setdefault("captive_portal_reason", "NOT_CHECKED")
+    snapshot["connection"] = connection
 
     _write_json(SNAPSHOT_PATH, snapshot)
 
@@ -830,16 +1385,57 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def _handle_line(raw: str) -> None:
-    raw = raw.strip()
-    if not raw:
-        return
+def _default_route_info() -> Dict[str, str]:
+    """Best-effort default route info for current uplink (eth/wlan/etc)."""
+    result = {"up_if": "-", "up_ip": "-", "gateway_ip": "-", "uplink_type": "unknown"}
+    out = []
+    for ip_cmd in ("/usr/sbin/ip", "/sbin/ip", "ip"):
+        try:
+            out = (
+                subprocess.run(
+                    [ip_cmd, "-4", "route", "show", "default"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    check=False,
+                ).stdout.strip().splitlines()
+            )
+            if out:
+                break
+        except Exception:
+            continue
 
-    try:
-        event = json.loads(raw)
-    except json.JSONDecodeError:
-        return
+    if not out:
+        return result
 
+    line = out[0].strip().split()
+    if "dev" in line:
+        try:
+            result["up_if"] = line[line.index("dev") + 1]
+        except Exception:
+            pass
+    if "via" in line:
+        try:
+            result["gateway_ip"] = line[line.index("via") + 1]
+        except Exception:
+            pass
+    if "src" in line:
+        try:
+            result["up_ip"] = line[line.index("src") + 1]
+        except Exception:
+            pass
+
+    iface = result["up_if"]
+    if iface.startswith("wl"):
+        result["uplink_type"] = "wifi"
+    elif iface.startswith("eth") or iface.startswith("en"):
+        result["uplink_type"] = "ethernet"
+    elif iface != "-":
+        result["uplink_type"] = "other"
+    return result
+
+
+def _handle_event(event: Dict[str, Any]) -> None:
     advisory = _build_advisory(event)
     _metrics_inc("processed_events", 1)
     _route_llm(event, advisory)
@@ -848,6 +1444,82 @@ def _handle_line(raw: str) -> None:
         _write_json(ADVISORY_PATH, advisory)
         _update_ui_snapshot(advisory)
         _persist_metrics()
+
+
+def _handle_manual_query_request(req: Dict[str, Any]) -> Dict[str, Any]:
+    params = req.get("params")
+    if not isinstance(params, dict):
+        params = {}
+    question = str(params.get("question") or req.get("question") or "").strip()
+    sender = str(params.get("sender") or req.get("sender") or "operator").strip()
+    source = str(params.get("source") or req.get("source") or "webui").strip()
+    context = params.get("context")
+    started = time.time()
+    result = _run_manual_query(question=question, sender=sender, source=source, context=context if isinstance(context, dict) else {})
+    runbook_id = str(result.get("runbook_id") or "").strip()
+    if runbook_id and not str(result.get("user_message") or "").strip() and runbook_get is not None:
+        try:
+            runbook = runbook_get(runbook_id)
+            result["user_message"] = str(runbook.get("user_message_template") or "").strip()[:160]
+        except Exception:
+            pass
+    if runbook_id and review_runbook_id is not None:
+        audience = "operator" if source in {"webui", "ops-comm", "mattermost_post", "mattermost_command", "cli"} else "beginner"
+        try:
+            result["runbook_review"] = review_runbook_id(
+                runbook_id,
+                context={
+                    "question": question,
+                    "audience": audience,
+                    "risk_score": int(_latest_advisory_snapshot().get("risk_score") or 0),
+                    "source": source,
+                },
+            )
+        except Exception as exc:
+            result["runbook_review_error"] = str(exc)
+    with IO_LOCK:
+        _persist_metrics()
+    result["ok"] = str(result.get("status") or "") in {"completed", "fallback", "routed"}
+    result["action"] = "manual_query"
+    result["duration_ms"] = int((time.time() - started) * 1000)
+    return result
+
+
+def _handle_request_line(raw: str) -> Dict[str, Any] | None:
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {"ok": False, "error": "invalid_json"}
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "invalid_payload"}
+
+    action = str(payload.get("action") or "").strip().lower()
+    if action == "manual_query":
+        return _handle_manual_query_request(payload)
+
+    _handle_event(payload)
+    return None
+
+
+def _handle_client(conn: socket.socket) -> None:
+    with conn:
+        buf = b""
+        while True:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                resp = _handle_request_line(line.decode("utf-8", errors="replace"))
+                if isinstance(resp, dict):
+                    try:
+                        conn.sendall((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+                    except Exception:
+                        return
 
 
 def _serve() -> None:
@@ -869,16 +1541,7 @@ def _serve() -> None:
 
     while True:
         conn, _ = srv.accept()
-        with conn:
-            buf = b""
-            while True:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                buf += chunk
-                while b"\n" in buf:
-                    line, buf = buf.split(b"\n", 1)
-                    _handle_line(line.decode("utf-8", errors="replace"))
+        threading.Thread(target=_handle_client, args=(conn,), daemon=True).start()
 
 
 if __name__ == "__main__":
