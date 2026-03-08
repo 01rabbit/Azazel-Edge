@@ -19,9 +19,16 @@ echo "[1/16] Install OS dependencies"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3 python3-venv python3-pip \
-  network-manager iw curl dnsmasq nginx openssl
+  network-manager iw curl dnsmasq nginx openssl \
+  python3-dev python3-numpy python3-pil python3-spidev \
+  python3-rpi.gpio python3-gpiozero fonts-noto-cjk git
 
 DEBIAN_FRONTEND=noninteractive apt-get install -y rustc cargo
+
+if [[ ! -d /opt/waveshare-epd ]]; then
+  echo "[1/16] Clone Waveshare e-Paper repository"
+  git clone https://github.com/waveshare/e-Paper /opt/waveshare-epd
+fi
 
 echo "[2/16] Create base directories"
 install -d \

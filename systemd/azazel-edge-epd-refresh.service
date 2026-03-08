@@ -2,6 +2,7 @@
 Description=Azazel-Edge EPD mode refresh
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/run/azazel-edge/epd_state.json
 
 [Service]
 Type=oneshot

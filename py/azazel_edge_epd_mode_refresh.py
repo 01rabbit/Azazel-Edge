@@ -211,6 +211,7 @@ def _visual_fingerprint(render: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _resolve_epd_script(root: Path) -> Path | None:
+    """Resolve EPD renderer path with backward compatibility."""
     candidates = (
         root / "py" / "azazel_edge_epd.py",
         root / "py" / "azazel_epd.py",
