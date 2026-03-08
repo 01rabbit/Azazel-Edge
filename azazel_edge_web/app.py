@@ -28,6 +28,7 @@ import subprocess
 import hashlib
 import queue
 import threading
+from collections import deque
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, Iterator, Tuple, List
@@ -87,6 +88,10 @@ FALLBACK_STATE_PATH = _RUNTIME_STATE_PATHS[-1]  # Legacy runtime fallback
 CONTROL_SOCKET = Path("/run/azazel-edge/control.sock")
 AI_SOCKET = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
 AI_MANUAL_TIMEOUT_SEC = float(os.environ.get("AZAZEL_AI_MANUAL_TIMEOUT_SEC", "95"))
+AI_ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge/ai_advisory.json"))
+AI_METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_metrics.json"))
+AI_EVENT_LOG = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", "/var/log/azazel-edge/ai-events.jsonl"))
+AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-llm.jsonl"))
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/azazel-edge/runbook-events.jsonl"))
 TOKEN_FILE = web_token_candidates()[0]
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
@@ -151,6 +156,9 @@ def _read_mattermost_command_tokens() -> List[str]:
 MATTERMOST_COMMAND_TOKENS = _read_mattermost_command_tokens()
 MATTERMOST_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MATTERMOST_TIMEOUT_SEC", "8"))
 MATTERMOST_FETCH_LIMIT = int(os.environ.get("AZAZEL_MATTERMOST_FETCH_LIMIT", "40"))
+DASHBOARD_SNAPSHOT_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_SNAPSHOT_STALE_SEC", "30"))
+DASHBOARD_AI_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_AI_STALE_SEC", "120"))
+DASHBOARD_EVENT_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_EVENT_STALE_SEC", "300"))
 _CA_CERT_FILENAME = "azazel-webui-local-ca.crt"
 _WEBUI_CA_CERT_CANDIDATES: List[Path] = []
 _env_ca_cert = str(os.environ.get("AZAZEL_WEBUI_CA_PATH", "")).strip()
@@ -463,6 +471,406 @@ def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _read_json_file(path: Path) -> Dict[str, Any]:
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        return {}
+    return {}
+
+
+def _tail_jsonl(path: Path, limit: int = 20) -> List[Dict[str, Any]]:
+    rows: deque[Dict[str, Any]] = deque(maxlen=max(1, int(limit)))
+    try:
+        if not path.exists():
+            return []
+        with path.open("r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(payload, dict):
+                    rows.append(payload)
+    except Exception:
+        return []
+    return list(rows)
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(str(value).strip()))
+    except Exception:
+        return default
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(str(value).strip())
+    except Exception:
+        return default
+
+
+def _iso_from_epoch(value: Any) -> str:
+    try:
+        epoch = float(value)
+        if epoch > 0:
+            return datetime.fromtimestamp(epoch).isoformat()
+    except Exception:
+        pass
+    return ""
+
+
+def _age_seconds(value: Any, now_epoch: float | None = None) -> Optional[float]:
+    try:
+        epoch = float(value)
+    except Exception:
+        return None
+    if epoch <= 0:
+        return None
+    now = time.time() if now_epoch is None else float(now_epoch)
+    age = now - epoch
+    return age if age >= 0 else 0.0
+
+
+def _latest_item(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return items[-1] if items else {}
+
+
+def _latest_ai_context(advisory: Dict[str, Any], llm_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    result = {
+        "answer": "",
+        "user_message": "",
+        "runbook_id": "",
+        "operator_note": "",
+        "status": "",
+        "model": "",
+        "review": {},
+        "ts": 0.0,
+    }
+    latest = _latest_item(llm_rows)
+    response = latest.get("response") if isinstance(latest.get("response"), dict) else {}
+    if response:
+        result.update(
+            {
+                "answer": str(response.get("answer") or response.get("summary") or ""),
+                "user_message": str(response.get("user_message") or ""),
+                "runbook_id": str(response.get("runbook_id") or ""),
+                "operator_note": str(response.get("operator_note") or ""),
+                "status": str(response.get("status") or latest.get("kind") or ""),
+                "model": str(response.get("model") or latest.get("model") or ""),
+                "review": response.get("runbook_review") if isinstance(response.get("runbook_review"), dict) else {},
+                "ts": _as_float(latest.get("ts"), 0.0),
+            }
+        )
+    if not advisory:
+        return result
+    if not result["runbook_id"]:
+        ops = advisory.get("ops_coach") if isinstance(advisory.get("ops_coach"), dict) else {}
+        result["runbook_id"] = str(ops.get("runbook_id") or "")
+    if not result["answer"]:
+        result["answer"] = str(
+            advisory.get("recommendation")
+            or (advisory.get("ops_coach") or {}).get("summary")
+            or ""
+        )
+    if not result["operator_note"]:
+        result["operator_note"] = str((advisory.get("ops_coach") or {}).get("operator_note") or "")
+    return result
+
+
+def _runbook_brief(runbook_id: str) -> Dict[str, Any]:
+    if not runbook_id or runbook_get is None:
+        return {}
+    try:
+        runbook = runbook_get(runbook_id)
+    except Exception:
+        return {}
+    steps = runbook.get("steps") if isinstance(runbook.get("steps"), list) else []
+    return {
+        "id": str(runbook.get("id") or runbook_id),
+        "title": str(runbook.get("title") or runbook_id),
+        "effect": str(runbook.get("effect") or ""),
+        "requires_approval": bool(runbook.get("requires_approval")),
+        "steps": [str(item) for item in steps[:3]],
+        "user_message_template": str(runbook.get("user_message_template") or ""),
+    }
+
+
+def _normalize_alert_event(item: Dict[str, Any]) -> Dict[str, Any]:
+    advisory = item.get("advisory") if isinstance(item.get("advisory"), dict) else {}
+    event = item.get("event") if isinstance(item.get("event"), dict) else {}
+    normalized = event.get("normalized") if isinstance(event.get("normalized"), dict) else {}
+    ts = _as_float(advisory.get("ts") or item.get("ts"), 0.0)
+    return {
+        "ts": ts,
+        "ts_iso": _iso_from_epoch(ts),
+        "risk_score": _as_int(advisory.get("risk_score"), 0),
+        "risk_level": str(advisory.get("risk_level") or ""),
+        "state_name": str(advisory.get("state_name") or ""),
+        "user_state": str(advisory.get("user_state") or ""),
+        "sid": _as_int(advisory.get("suricata_sid") or normalized.get("sid"), 0),
+        "severity": _as_int(advisory.get("suricata_severity") or normalized.get("severity"), 0),
+        "attack_type": str(advisory.get("attack_type") or normalized.get("attack_type") or ""),
+        "src_ip": str(advisory.get("src_ip") or normalized.get("src_ip") or ""),
+        "dst_ip": str(advisory.get("dst_ip") or normalized.get("dst_ip") or ""),
+        "recommendation": str(advisory.get("recommendation") or ""),
+    }
+
+
+def _normalize_ai_activity(item: Dict[str, Any]) -> Dict[str, Any]:
+    response = item.get("response") if isinstance(item.get("response"), dict) else {}
+    ts = _as_float(item.get("ts"), 0.0)
+    return {
+        "ts": ts,
+        "ts_iso": _iso_from_epoch(ts),
+        "kind": str(item.get("kind") or ""),
+        "source": str(item.get("source") or ""),
+        "sender": str(item.get("sender") or ""),
+        "question": str(item.get("question") or ""),
+        "model": str(item.get("model") or response.get("model") or ""),
+        "status": str(response.get("status") or ""),
+        "answer": str(response.get("answer") or response.get("summary") or ""),
+        "runbook_id": str(response.get("runbook_id") or ""),
+        "user_message": str(response.get("user_message") or ""),
+        "latency_ms": _as_int(item.get("latency_ms") or response.get("latency_ms"), 0),
+    }
+
+
+def _normalize_runbook_event(item: Dict[str, Any]) -> Dict[str, Any]:
+    ts = _as_float(item.get("ts"), 0.0)
+    return {
+        "ts": ts,
+        "ts_iso": _iso_from_epoch(ts),
+        "actor": str(item.get("actor") or ""),
+        "action": str(item.get("action") or ""),
+        "runbook_id": str(item.get("runbook_id") or ""),
+        "approved": bool(item.get("approved")),
+        "ok": bool(item.get("ok")),
+        "error": str(item.get("error") or ""),
+        "review_status": str(item.get("review_status") or ""),
+        "effect": str(item.get("effect") or ""),
+        "note": str(item.get("note") or ""),
+    }
+
+
+def _recent_mode_changes(mode_runtime: Dict[str, Any]) -> List[Dict[str, Any]]:
+    mode = mode_runtime.get("mode") if isinstance(mode_runtime.get("mode"), dict) else {}
+    if not mode:
+        return []
+    return [
+        {
+            "current_mode": str(mode.get("current_mode") or ""),
+            "last_change": str(mode.get("last_change") or ""),
+            "requested_by": str(mode.get("requested_by") or ""),
+            "source": str(mode_runtime.get("source") or ""),
+        }
+    ]
+
+
+def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], advisory: Dict[str, Any]) -> Dict[str, Any]:
+    monitoring = get_monitoring_state()
+    mode_runtime = get_mode_state()
+    mode = mode_runtime.get("mode") if isinstance(mode_runtime.get("mode"), dict) else {}
+    connection = state.get("connection") if isinstance(state.get("connection"), dict) else {}
+    network_health = state.get("network_health") if isinstance(state.get("network_health"), dict) else {}
+    internal = state.get("internal") if isinstance(state.get("internal"), dict) else {}
+    now_epoch = time.time()
+    snapshot_age = _age_seconds(state.get("snapshot_epoch"), now_epoch=now_epoch)
+    ai_age = _age_seconds(metrics.get("last_update_ts"), now_epoch=now_epoch)
+    stale_warning = bool(
+        (snapshot_age is not None and snapshot_age > DASHBOARD_SNAPSHOT_STALE_SEC)
+        or (ai_age is not None and ai_age > DASHBOARD_AI_STALE_SEC)
+    )
+    service_summary = {
+        "suricata": monitoring.get("suricata", "UNKNOWN"),
+        "opencanary": monitoring.get("opencanary", "UNKNOWN"),
+        "ntfy": monitoring.get("ntfy", "UNKNOWN"),
+        "ai_agent": "ON" if _service_active("azazel-edge-ai-agent") else "OFF",
+        "web": "ON" if _service_active("azazel-edge-web") else "OFF",
+    }
+    return {
+        "ok": True,
+        "risk": {
+            "user_state": str(state.get("user_state") or ""),
+            "state_name": str(internal.get("state_name") or ""),
+            "suspicion": _as_int(internal.get("suspicion"), 0),
+            "recommendation": str(state.get("recommendation") or advisory.get("recommendation") or ""),
+            "suricata_critical": _as_int(state.get("suricata_critical"), 0),
+            "suricata_warning": _as_int(state.get("suricata_warning"), 0),
+        },
+        "mode": {
+            "current_mode": str(mode.get("current_mode") or "shield"),
+            "last_change": str(mode.get("last_change") or ""),
+            "requested_by": str(mode.get("requested_by") or ""),
+        },
+        "uplink": {
+            "ssid": str(state.get("ssid") or ""),
+            "up_if": str(state.get("up_if") or ""),
+            "up_ip": str(state.get("up_ip") or ""),
+            "gateway": str(state.get("gateway_ip") or ""),
+            "uplink_type": str(connection.get("uplink_type") or ""),
+            "internet_check": str(connection.get("internet_check") or ""),
+        },
+        "gateway": str(state.get("gateway_ip") or ""),
+        "service_health_summary": service_summary,
+        "current_recommendation": str(state.get("recommendation") or advisory.get("recommendation") or ""),
+        "command_strip": {
+            "current_mode": str(mode.get("current_mode") or "shield"),
+            "current_risk": str(state.get("user_state") or ""),
+            "current_uplink": str(state.get("up_if") or ""),
+            "internet_reachability": str(connection.get("internet_check") or ""),
+            "direct_critical_count": _as_int(state.get("suricata_critical"), 0),
+            "deferred_count": _as_int(metrics.get("deferred_count"), 0),
+            "stale_warning": stale_warning,
+            "ask_mio_url": "/ops-comm",
+            "mattermost_url": MATTERMOST_OPEN_URL,
+        },
+        "situation_board": {
+            "threat_posture": {
+                "recommendation": str(state.get("recommendation") or advisory.get("recommendation") or ""),
+                "confidence": _as_float((advisory.get("ops_coach") or {}).get("confidence"), 0.0),
+                "last_alert": _iso_from_epoch(advisory.get("ts")),
+                "llm_status": str((state.get("llm") or {}).get("status") or ""),
+            },
+            "network_health": {
+                "status": str(network_health.get("status") or ""),
+                "uplink": str(state.get("up_if") or ""),
+                "gateway": str(state.get("gateway_ip") or ""),
+                "dns_mismatch": _as_int(network_health.get("dns_mismatch"), 0),
+                "captive_portal": str(connection.get("captive_portal") or ""),
+                "internet_check": str(connection.get("internet_check") or ""),
+                "signals": network_health.get("signals") if isinstance(network_health.get("signals"), list) else [],
+            },
+            "service_health": service_summary,
+        },
+        "timestamps": {
+            "snapshot_at": _iso_from_epoch(state.get("snapshot_epoch")),
+            "ai_metrics_at": _iso_from_epoch(metrics.get("last_update_ts")),
+            "mode_last_change": str(mode.get("last_change") or ""),
+        },
+    }
+
+
+def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], llm_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    latest_ai = _latest_ai_context(advisory, llm_rows)
+    suggested_runbook = _runbook_brief(latest_ai.get("runbook_id", ""))
+    user_guidance = str(
+        latest_ai.get("user_message")
+        or suggested_runbook.get("user_message_template")
+        or state.get("recommendation")
+        or ""
+    )
+    next_actions: List[str] = []
+    recommendation = str(state.get("recommendation") or advisory.get("recommendation") or "").strip()
+    if recommendation:
+        next_actions.append(recommendation)
+    if suggested_runbook.get("title"):
+        next_actions.append(f"Runbook: {suggested_runbook['title']}")
+    for step in suggested_runbook.get("steps", []):
+        if step and step not in next_actions:
+            next_actions.append(step)
+    return {
+        "ok": True,
+        "current_operator_actions": next_actions[:4],
+        "current_user_guidance": user_guidance[:160],
+        "suggested_runbook": suggested_runbook,
+        "approval_required": bool(suggested_runbook.get("requires_approval")),
+        "current_recommendation": recommendation,
+        "operator_note": str(latest_ai.get("operator_note") or ""),
+        "mio": {
+            "answer": str(latest_ai.get("answer") or ""),
+            "status": str(latest_ai.get("status") or ""),
+            "model": str(latest_ai.get("model") or ""),
+            "review": latest_ai.get("review") if isinstance(latest_ai.get("review"), dict) else {},
+        },
+        "links": {
+            "ask_mio": "/ops-comm",
+            "mattermost": MATTERMOST_OPEN_URL,
+        },
+    }
+
+
+def _dashboard_evidence_payload(
+    state: Dict[str, Any],
+    advisory: Dict[str, Any],
+    alert_rows: List[Dict[str, Any]],
+    llm_rows: List[Dict[str, Any]],
+    runbook_rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    recent_alerts = [_normalize_alert_event(item) for item in alert_rows[-10:]]
+    if not recent_alerts and advisory:
+        recent_alerts = [_normalize_alert_event({"advisory": advisory, "event": {}})]
+    ai_activity = [_normalize_ai_activity(item) for item in llm_rows[-10:]]
+    runbook_events = [_normalize_runbook_event(item) for item in runbook_rows[-10:]]
+    mode_runtime = get_mode_state()
+    return {
+        "ok": True,
+        "recent_alerts": recent_alerts,
+        "recent_ai_activity": ai_activity,
+        "recent_runbook_events": runbook_events,
+        "recent_mode_changes": _recent_mode_changes(mode_runtime),
+        "snapshot_evidence": [str(item) for item in (state.get("evidence") or [])[:8]] if isinstance(state.get("evidence"), list) else [],
+    }
+
+
+def _dashboard_health_payload(state: Dict[str, Any], metrics: Dict[str, Any], llm_rows: List[Dict[str, Any]], runbook_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    now_epoch = time.time()
+    snapshot_age = _age_seconds(state.get("snapshot_epoch"), now_epoch=now_epoch)
+    ai_metrics_age = _age_seconds(metrics.get("last_update_ts"), now_epoch=now_epoch)
+    last_ai_ts = _as_float((_latest_item(llm_rows)).get("ts"), 0.0)
+    last_runbook_ts = _as_float((_latest_item(runbook_rows)).get("ts"), 0.0)
+    reachable, ping = _mattermost_ping()
+    return {
+        "ok": True,
+        "stale_flags": {
+            "snapshot": bool(snapshot_age is not None and snapshot_age > DASHBOARD_SNAPSHOT_STALE_SEC),
+            "ai_metrics": bool(ai_metrics_age is not None and ai_metrics_age > DASHBOARD_AI_STALE_SEC),
+            "ai_activity": bool(last_ai_ts and (_age_seconds(last_ai_ts, now_epoch=now_epoch) or 0.0) > DASHBOARD_EVENT_STALE_SEC),
+            "runbook_events": bool(last_runbook_ts and (_age_seconds(last_runbook_ts, now_epoch=now_epoch) or 0.0) > DASHBOARD_EVENT_STALE_SEC),
+        },
+        "queue": {
+            "depth": _as_int(metrics.get("queue_depth"), 0),
+            "capacity": _as_int(metrics.get("queue_capacity"), 0),
+            "max_seen": _as_int(metrics.get("queue_max_seen"), 0),
+            "deferred_count": _as_int(metrics.get("deferred_count"), 0),
+        },
+        "llm": {
+            "requests": _as_int(metrics.get("llm_requests"), 0),
+            "completed": _as_int(metrics.get("llm_completed"), 0),
+            "failed": _as_int(metrics.get("llm_failed"), 0),
+            "fallback_rate": _as_float(metrics.get("llm_fallback_rate"), 0.0),
+            "latency_ms_last": _as_int(metrics.get("llm_latency_ms_last"), 0),
+            "latency_ms_ema": _as_float(metrics.get("llm_latency_ms_ema"), 0.0),
+            "manual_routed_count": _as_int(metrics.get("manual_routed_count"), 0),
+        },
+        "timestamps": {
+            "snapshot_at": _iso_from_epoch(state.get("snapshot_epoch")),
+            "ai_metrics_at": _iso_from_epoch(metrics.get("last_update_ts")),
+            "last_ai_activity_at": _iso_from_epoch(last_ai_ts),
+            "last_runbook_event_at": _iso_from_epoch(last_runbook_ts),
+        },
+        "ages_sec": {
+            "snapshot": snapshot_age,
+            "ai_metrics": ai_metrics_age,
+            "ai_activity": _age_seconds(last_ai_ts, now_epoch=now_epoch),
+            "runbook_events": _age_seconds(last_runbook_ts, now_epoch=now_epoch),
+        },
+        "policy_mode": str(metrics.get("policy_mode") or ""),
+        "last_error": str(metrics.get("last_error") or ""),
+        "mattermost": {
+            "reachable": reachable,
+            "ping": ping,
+        },
+    }
 
 def verify_token() -> bool:
     """リクエストのトークン検証（ヘッダーまたはクエリパラメータ）"""
@@ -1829,6 +2237,49 @@ def api_ai_capabilities():
             ],
         }
     ), 200
+
+
+@app.route("/api/dashboard/summary", methods=["GET"])
+def api_dashboard_summary():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    state = read_state()
+    metrics = _read_json_file(AI_METRICS_PATH)
+    advisory = _read_json_file(AI_ADVISORY_PATH)
+    return jsonify(_dashboard_summary_payload(state, metrics, advisory)), 200
+
+
+@app.route("/api/dashboard/actions", methods=["GET"])
+def api_dashboard_actions():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    state = read_state()
+    advisory = _read_json_file(AI_ADVISORY_PATH)
+    llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
+    return jsonify(_dashboard_actions_payload(state, advisory, llm_rows)), 200
+
+
+@app.route("/api/dashboard/evidence", methods=["GET"])
+def api_dashboard_evidence():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    state = read_state()
+    advisory = _read_json_file(AI_ADVISORY_PATH)
+    alert_rows = _tail_jsonl(AI_EVENT_LOG, limit=20)
+    llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
+    runbook_rows = _tail_jsonl(RUNBOOK_EVENT_LOG, limit=20)
+    return jsonify(_dashboard_evidence_payload(state, advisory, alert_rows, llm_rows, runbook_rows)), 200
+
+
+@app.route("/api/dashboard/health", methods=["GET"])
+def api_dashboard_health():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    state = read_state()
+    metrics = _read_json_file(AI_METRICS_PATH)
+    llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
+    runbook_rows = _tail_jsonl(RUNBOOK_EVENT_LOG, limit=20)
+    return jsonify(_dashboard_health_payload(state, metrics, llm_rows, runbook_rows)), 200
 
 
 @app.route("/api/runbooks", methods=["GET"])

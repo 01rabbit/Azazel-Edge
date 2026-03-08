@@ -1,7 +1,7 @@
 # Azazel-Edge SOC/NOC Dashboard Plan
 
 最終更新: 2026-03-08
-対象ブランチ: `feature/ai-ollama-qwen35`
+対象ブランチ: `feature/dashboard-redesign-phase1`
 前提: 現行 Dashboard は Azazel-Gadget 流用であり、Azazel-Edge 向け SOC/NOC 運用画面として再設計が必要
 
 ## 1. 目的
@@ -296,6 +296,21 @@ Dashboard 再設計前に以下の API/スナップショットを整える。
 
 完了条件:
 - UI を作らなくても API だけで状態要約が再現できる
+
+実装状況:
+- 完了
+- 実装済み API:
+  - `/api/dashboard/summary`
+  - `/api/dashboard/actions`
+  - `/api/dashboard/evidence`
+  - `/api/dashboard/health`
+- データソース:
+  - `/run/azazel-edge/ui_snapshot.json`
+  - `/run/azazel-edge/ai_advisory.json`
+  - `/run/azazel-edge/ai_metrics.json`
+  - `/var/log/azazel-edge/ai-events.jsonl`
+  - `/var/log/azazel-edge/ai-llm.jsonl`
+  - `/var/log/azazel-edge/runbook-events.jsonl`
 
 ### Phase 2: Layout Replacement
 
