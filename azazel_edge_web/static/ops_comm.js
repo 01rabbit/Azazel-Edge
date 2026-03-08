@@ -1,6 +1,55 @@
 const AUTH_TOKEN = localStorage.getItem('azazel_token') || 'azazel-default-token-change-me';
 const STATUS_INTERVAL_MS = 8000;
 let lastQuestion = '';
+let currentAudience = 'operator';
+const SHORTCUTS = {
+    operator: [
+        { label: 'Gateway / Uplink', question: 'gateway と uplink を確認したい' },
+        { label: 'DNS Failure', question: 'DNS が引けないとき何を確認するか' },
+        { label: 'Service Status', question: 'service の異常時に何を確認するか' },
+        { label: 'EPD Diff', question: 'EPD 表示差異を確認したい' },
+        { label: 'AI Logs', question: 'AI ログを確認したい' },
+        { label: 'Wi-Fi Intake', question: 'Wi-Fi に繋がらない利用者へどう案内するか' },
+    ],
+    beginner: [
+        { label: 'Wi-Fi Trouble', question: 'Wi-Fi に繋がらない利用者へどう案内するか' },
+        { label: 'Reconnect Guide', question: '再接続できない利用者へどう案内するか' },
+        { label: 'Device Onboarding', question: '初回接続の利用者へどう案内するか' },
+        { label: 'DNS Failure', question: 'DNS が引けないとき何を確認するか' },
+        { label: 'Current Status', question: '利用者へ現在の状況をどう説明するか' },
+    ],
+};
+
+function audienceHintText(audience) {
+    if (audience === 'beginner') {
+        return 'Temporary mode: simpler wording, one action at a time, and user-facing guidance first.';
+    }
+    return 'Professional mode: concise operator guidance and runbook-first responses.';
+}
+
+function syncAudienceUi() {
+    const operatorBtn = document.getElementById('audienceOperatorBtn');
+    const beginnerBtn = document.getElementById('audienceBeginnerBtn');
+    const hint = document.getElementById('audienceHint');
+    if (operatorBtn) operatorBtn.className = currentAudience === 'operator' ? 'btn btn-primary active' : 'btn btn-secondary';
+    if (beginnerBtn) beginnerBtn.className = currentAudience === 'beginner' ? 'btn btn-primary active' : 'btn btn-secondary';
+    if (hint) hint.textContent = audienceHintText(currentAudience);
+    renderShortcuts();
+}
+
+function renderShortcuts() {
+    const root = document.getElementById('opsShortcuts');
+    if (!root) return;
+    root.innerHTML = '';
+    const items = SHORTCUTS[currentAudience] || [];
+    for (const item of items) {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-primary';
+        btn.dataset.symptomQuestion = item.question;
+        btn.textContent = item.label;
+        root.appendChild(btn);
+    }
+}
 
 function authHeaders() {
     return {
@@ -56,7 +105,10 @@ async function loadStatus() {
         setText('mmMode', data.mode || '-');
         setText('mmBaseUrl', data.base_url || '-');
         setText('mmChannelId', data.channel_id || '-');
-        setText('mmCommandStatus', data.command_enabled ? `enabled (${data.command_endpoint || '/api/mattermost/command'})` : 'disabled');
+        const triggers = Array.isArray(data.command_triggers) && data.command_triggers.length
+            ? ` triggers=/${data.command_triggers.join(', /')}`
+            : '';
+        setText('mmCommandStatus', data.command_enabled ? `enabled (${data.command_endpoint || '/api/mattermost/command'})${triggers}` : 'disabled');
         const link = document.getElementById('mattermostLink');
         if (link) link.href = data.open_url || data.base_url || '#';
     } catch (e) {
@@ -180,6 +232,40 @@ function renderRunbookCandidates(items) {
     }
 }
 
+function renderCapabilities(payload) {
+    const summary = document.getElementById('capabilitiesSummary');
+    const list = document.getElementById('capabilitiesList');
+    if (!summary || !list) return;
+    list.innerHTML = '';
+    if (!payload || !payload.ok) {
+        summary.textContent = 'Failed to load capabilities';
+        return;
+    }
+    const routed = Array.isArray(payload.manual_router_categories) ? payload.manual_router_categories.join(', ') : '-';
+    const triggers = Array.isArray(payload.mattermost_triggers) ? payload.mattermost_triggers.map((x) => `/${x}`).join(', ') : '-';
+    summary.textContent = `Audience=${currentAudience} / Routed categories=${routed} / Mattermost=${triggers}`;
+    const items = Array.isArray(payload.capabilities) ? payload.capabilities : [];
+    for (const item of items) {
+        const node = document.createElement('div');
+        node.className = 'ops-capability-item';
+        node.innerHTML = `
+            <div class="ops-capability-title">${escapeHtml(item.title || '-')}</div>
+            <div class="ops-capability-detail">${escapeHtml(item.detail || '-')}</div>
+        `;
+        list.appendChild(node);
+    }
+}
+
+async function loadCapabilities() {
+    try {
+        const res = await fetch('/api/ai/capabilities', { headers: authHeaders() });
+        const data = await res.json();
+        renderCapabilities(data);
+    } catch (_e) {
+        renderCapabilities(null);
+    }
+}
+
 async function loadRunbookCandidates(question) {
     const q = String(question || '').trim();
     lastQuestion = q;
@@ -190,7 +276,7 @@ async function loadRunbookCandidates(question) {
     const res = await fetch('/api/runbooks/propose', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ question: q, audience: 'operator', context: { page: 'ops-comm' }, max_items: 3 }),
+        body: JSON.stringify({ question: q, audience: currentAudience, context: { page: 'ops-comm', audience: currentAudience }, max_items: 3 }),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
@@ -205,7 +291,7 @@ async function runRunbookAction(runbookId, action) {
     const domId = runbookDomId(runbookId);
     const outputId = `runbookOutput-${domId}`;
     const output = document.getElementById(outputId);
-    const actor = senderInput ? senderInput.value.trim() : 'Azazel-Edge WebUI';
+    const actor = senderInput ? senderInput.value.trim() : 'M.I.O. Console';
     const args = {};
     document.querySelectorAll(`[id^="runbookArg-${domId}-"]`).forEach((node) => {
         if (!(node instanceof HTMLInputElement) && !(node instanceof HTMLSelectElement)) return;
@@ -226,7 +312,7 @@ async function runRunbookAction(runbookId, action) {
                 args,
                 actor,
                 question: lastQuestion,
-                audience: 'operator',
+                audience: currentAudience,
                 note: 'ops-comm',
             }),
         });
@@ -238,14 +324,14 @@ async function runRunbookAction(runbookId, action) {
         }
         if (action === 'preview') {
             const command = data.command ? `${data.command.exec} ${(data.command.argv || []).join(' ')}` : '(guidance only)';
-            output.textContent = `Preview OK\ncommand=${command}\nargs=${JSON.stringify(args)}\nsteps=${(data.steps || []).join(' | ')}`;
+            output.textContent = `Preview OK\ncommand=${command}\nargs=${JSON.stringify(args)}\nsteps=${(data.steps || []).join(' | ')}\nuser=${data.user_message || '-'}`;
             return;
         }
         if (action === 'approve') {
-            output.textContent = `Approved\nargs=${JSON.stringify(args)}\nsteps=${(data.steps || []).join(' | ')}\nuser=${data.user_message_template || '-'}`;
+            output.textContent = `Approved\nargs=${JSON.stringify(args)}\nsteps=${(data.steps || []).join(' | ')}\nuser=${data.user_message || data.user_message_template || '-'}`;
             return;
         }
-        output.textContent = `Executed\nargs=${JSON.stringify(args)}\nexit=${data.exit_code ?? '-'}\nstdout=${data.stdout || '-'}\nstderr=${data.stderr || '-'}`;
+        output.textContent = `Executed\nargs=${JSON.stringify(args)}\nuser=${data.user_message || '-'}\nexit=${data.exit_code ?? '-'}\nstdout=${data.stdout || '-'}\nstderr=${data.stderr || '-'}`;
     } catch (e) {
         if (output) output.textContent = `Failed: ${e}`;
     }
@@ -270,13 +356,15 @@ async function sendMessage() {
     const messageInput = document.getElementById('messageInput');
     const result = document.getElementById('sendResult');
     const aiResult = document.getElementById('aiResult');
+    const userGuidanceResult = document.getElementById('userGuidanceResult');
     const runbookResult = document.getElementById('runbookResult');
     const runbookReviewResult = document.getElementById('runbookReviewResult');
-    const sender = senderInput ? senderInput.value.trim() : 'Azazel-Edge WebUI';
+    const sender = senderInput ? senderInput.value.trim() : 'M.I.O. Console';
     const message = messageInput ? messageInput.value.trim() : '';
         if (!message) {
             if (result) result.textContent = 'Message is empty';
-            if (aiResult) aiResult.textContent = 'AI: -';
+            if (aiResult) aiResult.textContent = 'M.I.O.: -';
+            if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
             if (runbookResult) runbookResult.textContent = 'Runbook: -';
             if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
             return;
@@ -290,7 +378,8 @@ async function sendMessage() {
         const data = await res.json();
         if (res.ok && data.ok) {
             if (result) result.textContent = `Sent (${data.result.mode})`;
-            if (aiResult) aiResult.textContent = 'AI: -';
+            if (aiResult) aiResult.textContent = 'M.I.O.: -';
+            if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
             if (runbookResult) runbookResult.textContent = 'Runbook: -';
             if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
             if (messageInput) messageInput.value = '';
@@ -298,12 +387,14 @@ async function sendMessage() {
             return;
         }
         if (result) result.textContent = `Failed: ${data.error || 'unknown error'}`;
-        if (aiResult) aiResult.textContent = 'AI: -';
+        if (aiResult) aiResult.textContent = 'M.I.O.: -';
+        if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
         if (runbookResult) runbookResult.textContent = 'Runbook: -';
         if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
     } catch (e) {
         if (result) result.textContent = `Failed: ${e}`;
-        if (aiResult) aiResult.textContent = 'AI: -';
+        if (aiResult) aiResult.textContent = 'M.I.O.: -';
+        if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
         if (runbookResult) runbookResult.textContent = 'Runbook: -';
         if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
     }
@@ -314,13 +405,15 @@ async function askAi() {
     const messageInput = document.getElementById('messageInput');
     const result = document.getElementById('sendResult');
     const aiResult = document.getElementById('aiResult');
+    const userGuidanceResult = document.getElementById('userGuidanceResult');
     const runbookResult = document.getElementById('runbookResult');
     const runbookReviewResult = document.getElementById('runbookReviewResult');
-    const sender = senderInput ? senderInput.value.trim() : 'Azazel-Edge WebUI';
+    const sender = senderInput ? senderInput.value.trim() : 'M.I.O. Console';
     const question = messageInput ? messageInput.value.trim() : '';
     if (!question) {
         if (result) result.textContent = 'Question is empty';
-        if (aiResult) aiResult.textContent = 'AI: -';
+        if (aiResult) aiResult.textContent = 'M.I.O.: -';
+        if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
         if (runbookResult) runbookResult.textContent = 'Runbook: -';
         if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
         return;
@@ -329,12 +422,17 @@ async function askAi() {
         const res = await fetch('/api/ai/ask', {
             method: 'POST',
             headers: authHeaders(),
-            body: JSON.stringify({ question, sender, source: 'ops-comm', context: { page: 'ops-comm' } }),
+            body: JSON.stringify({ question, sender, source: 'ops-comm', context: { page: 'ops-comm', audience: currentAudience } }),
         });
         const data = await res.json();
         if (res.ok && data.ok) {
             if (result) result.textContent = `AI completed (${data.model || '-'})`;
-            if (aiResult) aiResult.textContent = `AI: ${data.answer || '-'}${data.runbook_id ? ` [runbook=${data.runbook_id}]` : ''}`;
+            if (aiResult) aiResult.textContent = `M.I.O.: ${data.answer || '-'}${data.runbook_id ? ` [runbook=${data.runbook_id}]` : ''}`;
+            if (userGuidanceResult) {
+                userGuidanceResult.textContent = data.user_message
+                    ? `User Guidance: ${data.user_message}`
+                    : 'User Guidance: -';
+            }
             if (runbookResult) {
                 runbookResult.textContent = data.runbook_id
                     ? `Runbook: ${data.runbook_id}`
@@ -355,13 +453,15 @@ async function askAi() {
             return;
         }
         if (result) result.textContent = `AI failed: ${data.error || data.reason || 'unknown error'}`;
-        if (aiResult) aiResult.textContent = 'AI: -';
+        if (aiResult) aiResult.textContent = 'M.I.O.: -';
+        if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
         if (runbookResult) runbookResult.textContent = 'Runbook: -';
         if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
         renderRunbookCandidates([]);
     } catch (e) {
         if (result) result.textContent = `AI failed: ${e}`;
-        if (aiResult) aiResult.textContent = 'AI: -';
+        if (aiResult) aiResult.textContent = 'M.I.O.: -';
+        if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
         if (runbookResult) runbookResult.textContent = 'Runbook: -';
         if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
         renderRunbookCandidates([]);
@@ -372,13 +472,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const refreshBtn = document.getElementById('refreshBtn');
     const sendBtn = document.getElementById('sendBtn');
     const askAiBtn = document.getElementById('askAiBtn');
+    const messageInput = document.getElementById('messageInput');
+    const operatorBtn = document.getElementById('audienceOperatorBtn');
+    const beginnerBtn = document.getElementById('audienceBeginnerBtn');
+    syncAudienceUi();
     if (refreshBtn) refreshBtn.addEventListener('click', async () => {
         await loadStatus();
         await loadMessages();
+        await loadCapabilities();
         if (lastQuestion) await loadRunbookCandidates(lastQuestion);
     });
     if (sendBtn) sendBtn.addEventListener('click', sendMessage);
     if (askAiBtn) askAiBtn.addEventListener('click', askAi);
+    if (operatorBtn) operatorBtn.addEventListener('click', () => {
+        currentAudience = 'operator';
+        syncAudienceUi();
+    });
+    if (beginnerBtn) beginnerBtn.addEventListener('click', () => {
+        currentAudience = 'beginner';
+        syncAudienceUi();
+    });
     document.addEventListener('click', async (event) => {
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
@@ -387,8 +500,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!action || !runbookId) return;
         await runRunbookAction(runbookId, action);
     });
+    document.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const symptomQuestion = target.dataset.symptomQuestion;
+        if (!symptomQuestion) return;
+        if (messageInput && 'value' in messageInput) {
+            messageInput.value = symptomQuestion;
+        }
+        await askAi();
+    });
     loadStatus();
     loadMessages();
+    loadCapabilities();
     setInterval(() => {
         loadStatus();
         loadMessages();

@@ -18,6 +18,5 @@ args_schema:
 steps:
   - Tell the user what is currently known without declaring the issue safe.
   - Tell the user what check is being performed now.
-  - Tell the user what to avoid doing until the next update.
-  - Give the next update timing if possible.
+  - Tell the user what to avoid doing until the next update and when the next update will be given if possible.
 user_message_template: "現在の状況を共有します。まだ安全・正常とは断定せず、確認中の内容だけをお伝えします。"

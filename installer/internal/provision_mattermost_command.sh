@@ -8,10 +8,11 @@ fi
 
 ENV_FILE="${AZAZEL_WEB_ENV_FILE:-/etc/default/azazel-edge-web}"
 TOKEN_FILE="${AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE:-/etc/azazel-edge/mattermost-command-token}"
-TRIGGER="${AZAZEL_MATTERMOST_COMMAND_TRIGGER:-azops}"
-DISPLAY_NAME="${AZAZEL_MATTERMOST_COMMAND_NAME:-Azazel Ops AI}"
-DESCRIPTION="${AZAZEL_MATTERMOST_COMMAND_DESCRIPTION:-Query Azazel-Edge AI from Mattermost}"
-AUTOCOMPLETE_DESC="${AZAZEL_MATTERMOST_COMMAND_AUTOCOMPLETE_DESC:-Ask Azazel-Edge AI for SOC/NOC support}"
+TRIGGER="${AZAZEL_MATTERMOST_COMMAND_TRIGGER:-mio}"
+ALIASES="${AZAZEL_MATTERMOST_COMMAND_ALIASES:-azops}"
+DISPLAY_NAME="${AZAZEL_MATTERMOST_COMMAND_NAME:-M.I.O. Ops AI}"
+DESCRIPTION="${AZAZEL_MATTERMOST_COMMAND_DESCRIPTION:-Query M.I.O. from Mattermost}"
+AUTOCOMPLETE_DESC="${AZAZEL_MATTERMOST_COMMAND_AUTOCOMPLETE_DESC:-Ask M.I.O. for SOC/NOC support}"
 AUTOCOMPLETE_HINT="${AZAZEL_MATTERMOST_COMMAND_AUTOCOMPLETE_HINT:-<question>}"
 COMMAND_URL="${AZAZEL_MATTERMOST_COMMAND_URL:-http://172.16.0.254/api/mattermost/command}"
 MATTERMOST_URL_DEFAULT="${AZAZEL_MATTERMOST_URL:-http://127.0.0.1:8065}"
@@ -54,13 +55,18 @@ api() {
 TEAM_JSON="$(api GET "/api/v4/teams/name/${TEAM_NAME}")"
 TEAM_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"${TEAM_JSON}")"
 
-COMMANDS_JSON="$(api GET "/api/v4/commands?team_id=${TEAM_ID}")"
-EXISTING_ID="$(printf '%s' "${COMMANDS_JSON}" | python3 -c 'import json,sys; trigger=sys.argv[1]; print(next((item.get("id","") for item in json.load(sys.stdin) if item.get("trigger")==trigger), ""))' "${TRIGGER}")"
+provision_command() {
+  local trigger="$1"
+  local token_path="$2"
+  local commands_json existing_id payload response command_id command_token
 
-read -r -d '' PAYLOAD <<EOF || true
+  commands_json="$(api GET "/api/v4/commands?team_id=${TEAM_ID}")"
+  existing_id="$(printf '%s' "${commands_json}" | python3 -c 'import json,sys; trigger=sys.argv[1]; print(next((item.get("id","") for item in json.load(sys.stdin) if item.get("trigger")==trigger), ""))' "${trigger}")"
+
+  read -r -d '' payload <<EOF || true
 {
   "team_id": "${TEAM_ID}",
-  "trigger": "${TRIGGER}",
+  "trigger": "${trigger}",
   "method": "P",
   "username": "azazelops",
   "auto_complete": true,
@@ -72,41 +78,60 @@ read -r -d '' PAYLOAD <<EOF || true
 }
 EOF
 
-if [[ -n "${EXISTING_ID}" ]]; then
-  RESPONSE="$(printf '{"id":"%s"}' "${EXISTING_ID}")"
-else
-  RESPONSE="$(api POST "/api/v4/commands" "${PAYLOAD}")"
+  if [[ -n "${existing_id}" ]]; then
+    response="$(printf '{"id":"%s"}' "${existing_id}")"
+  else
+    response="$(api POST "/api/v4/commands" "${payload}")"
+  fi
+
+  command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' <<<"${response}")"
+  command_token="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' <<<"${response}")"
+
+  if [[ -z "${command_id}" ]]; then
+    echo "[ERROR] command provisioning failed for trigger=${trigger}"
+    exit 1
+  fi
+
+  if [[ -z "${command_token}" && -n "${existing_id}" ]]; then
+    command_token="$(printf '%s' "${commands_json}" | python3 -c 'import json,sys; trigger=sys.argv[1]; print(next((item.get("token","") for item in json.load(sys.stdin) if item.get("trigger")==trigger), ""))' "${trigger}")"
+  fi
+
+  if [[ -z "${command_token}" && -n "${existing_id}" ]]; then
+    api DELETE "/api/v4/commands/${existing_id}" >/dev/null
+    response="$(api POST "/api/v4/commands" "${payload}")"
+    command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' <<<"${response}")"
+    command_token="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' <<<"${response}")"
+  fi
+
+  if [[ -z "${command_token}" && -f "${token_path}" ]]; then
+    command_token="$(tr -d '\r\n' < "${token_path}")"
+  fi
+
+  if [[ -z "${command_token}" ]]; then
+    echo "[ERROR] command token is empty for trigger=${trigger}"
+    exit 1
+  fi
+
+  install -d -m 0755 "$(dirname "${token_path}")"
+  printf '%s\n' "${command_token}" > "${token_path}"
+  chmod 0600 "${token_path}"
+  echo "[OK] Mattermost slash command provisioned"
+  echo "trigger=${trigger}"
+  echo "command_id=${command_id}"
+  echo "callback_url=${COMMAND_URL}"
+  echo "token_file=${token_path}"
+}
+
+provision_command "${TRIGGER}" "${TOKEN_FILE}"
+
+if [[ -n "${ALIASES}" ]]; then
+  IFS=',' read -r -a alias_items <<<"${ALIASES}"
+  for alias in "${alias_items[@]}"; do
+    alias="$(echo "${alias}" | xargs)"
+    [[ -z "${alias}" ]] && continue
+    [[ "${alias}" == "${TRIGGER}" ]] && continue
+    provision_command "${alias}" "${TOKEN_FILE}.${alias}"
+  done
 fi
-
-COMMAND_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' <<<"${RESPONSE}")"
-COMMAND_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' <<<"${RESPONSE}")"
-
-if [[ -z "${COMMAND_ID}" ]]; then
-  echo "[ERROR] command provisioning failed"
-  exit 1
-fi
-
-if [[ -z "${COMMAND_TOKEN}" && -n "${EXISTING_ID}" ]]; then
-  COMMAND_TOKEN="$(printf '%s' "${COMMANDS_JSON}" | python3 -c 'import json,sys; trigger=sys.argv[1]; print(next((item.get("token","") for item in json.load(sys.stdin) if item.get("trigger")==trigger), ""))' "${TRIGGER}")"
-fi
-
-if [[ -z "${COMMAND_TOKEN}" && -f "${TOKEN_FILE}" ]]; then
-  COMMAND_TOKEN="$(tr -d '\r\n' < "${TOKEN_FILE}")"
-fi
-
-if [[ -z "${COMMAND_TOKEN}" ]]; then
-  echo "[ERROR] command token is empty"
-  exit 1
-fi
-
-install -d -m 0755 "$(dirname "${TOKEN_FILE}")"
-printf '%s\n' "${COMMAND_TOKEN}" > "${TOKEN_FILE}"
-chmod 0600 "${TOKEN_FILE}"
 
 systemctl restart azazel-edge-web
-
-echo "[OK] Mattermost slash command provisioned"
-echo "trigger=${TRIGGER}"
-echo "command_id=${COMMAND_ID}"
-echo "callback_url=${COMMAND_URL}"
-echo "token_file=${TOKEN_FILE}"

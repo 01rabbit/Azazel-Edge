@@ -1,7 +1,9 @@
 # エージェントAI構築手順書（詳細）
 
-最終更新: 2026-03-06  
+最終更新: 2026-03-08  
 対象: Azazel-Edge（Raspberry Pi 5 / arm64）
+
+関連人格設計: `docs/MIO_PERSONA_PROFILE.md`
 
 ## 1. 目的
 
@@ -18,10 +20,14 @@
   - Opsエスカレーション（高リスク直行 + メモリ/スワップガード）
   - Analyst/Ops JSONスキーマ検証
   - Runbookレジストリ（YAML）/ ローダ / ブローカー骨格
-  - Web API: `GET /api/runbooks`, `GET /api/runbooks/<id>`, `POST /api/runbooks/execute`
+  - Runbook reviewer 多層評価
+  - `controlled_exec` の安全ゲート
+  - 手動質問 API (`/api/ai/ask`)
+  - Mattermost slash command (`/mio`, legacy alias `/azops`)
+  - Web API: `GET /api/runbooks`, `GET /api/runbooks/<id>`, `GET /api/runbooks/<id>/review`, `POST /api/runbooks/propose`, `POST /api/runbooks/act`, `POST /api/runbooks/execute`
 - 未実装（今後）:
-  - Runbook reviewer多層評価
-  - controlled_exec 系の承認実行層
+  - 多段対話ベースの聞き取り
+  - 初心者向け症状別ウィザード
   - 半年ごとのモデル比較運用の自動化
 
 ## 3. 前提条件
@@ -68,7 +74,7 @@ sudo ENABLE_INTERNAL_NETWORK=1 \
 - `qwen3.5:2b` / `qwen3.5:0.8b`
 - Mattermost / PostgreSQL コンテナ
 - `azazelops` ユーザ、`azazelops` チーム、`soc-noc` チャンネル
-- WebUI 用 bot token / incoming webhook / slash command `/azops`
+- WebUI 用 bot token / incoming webhook / slash command `/mio`（legacy alias `/azops`）
 - `/etc/azazel-edge/mattermost-credentials.env`
 - `/etc/azazel-edge/mattermost-command-token`
 
@@ -114,6 +120,12 @@ systemctl is-active azazel-edge-ai-agent
   - `AZAZEL_LLM_NUM_THREAD=2`
   - `AZAZEL_LLM_NUM_CTX=256`
   - `AZAZEL_LLM_NUM_PREDICT=120`
+  - `AZAZEL_MANUAL_QUERY_TIMEOUT_SEC=18`
+  - `AZAZEL_MANUAL_TOTAL_TIMEOUT_SEC=20`
+  - `AZAZEL_MANUAL_MODEL_CHAIN=qwen3.5:0.8b,qwen3.5:2b`
+  - `AZAZEL_MANUAL_NUM_CTX=192`
+  - `AZAZEL_MANUAL_NUM_PREDICT=64`
+  - `AZAZEL_MANUAL_KEEP_ALIVE=5m`
   - `AZAZEL_OPS_MIN_MEM_AVAILABLE_MB=1400`
   - `AZAZEL_OPS_MAX_SWAP_USED_MB=512`
 
@@ -126,6 +138,23 @@ systemctl is-active azazel-edge-ai-agent
 - Ops:
   - 出力: `runbook_id/summary/operator_note` を正規化
   - 検証: 必須項目不足や不正値は拒否
+
+## 7.1 M.I.O. 人格反映方針
+
+- M.I.O. は「強いキャラクター」ではなく「運用人格」として使う
+- プロンプトへ直接長文設定を流し込まず、以下へ分解して反映する
+  - 文体
+  - 出力順序
+  - 初心者向け制約
+  - 危険操作時の抑制
+- 具体的には次を固定する
+  - operator 向け: 状況、推定、確認、推奨 Runbook、判断
+  - beginner 向け: 現在わかっていること、最大3手順、改善しない場合
+  - 不確実時: 断定回避、追加確認要求、暫定安全策
+- 詳細は `docs/MIO_PERSONA_PROFILE.md` を参照
+- 共通症状 (`Wi-Fi`, `DNS`, `service`, `gateway`, `EPD`, `AI logs`) は `manual_router` で先に処理し、LLM を使わずに即時返答する
+- 現段階での UI 実装対象は `ops-comm` と Mattermost を主とする
+- Dashboard (`/`) は Azazel-Edge 向け再設計前提のため、M.I.O. の本格統合は後段で実施する
 
 ## 8. 検証手順（実運用相当）
 
@@ -291,7 +320,11 @@ sudo installer/internal/provision_mattermost_command.sh
 ```
 
 結果:
-- trigger: `/azops`
+- trigger: `/mio`
+- alias: `/azops`
+- audience prefix:
+  - `temp:` / `temporary:` / `beginner:`
+  - `pro:` / `operator:` / `professional:`
 - callback URL: `http://172.16.0.254/api/mattermost/command`
 - token sync: `/etc/azazel-edge/mattermost-command-token`
 
@@ -348,7 +381,8 @@ sudo systemctl restart azazel-edge-web
 ```
 
 slash command 例:
-- Command Trigger: `/azops`
+- Command Trigger: `/mio`
+- Legacy Trigger: `/azops`
 - Request URL: `https://<host>/api/mattermost/command`
 - Method: `POST`
 

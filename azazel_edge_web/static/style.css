@@ -75,6 +75,25 @@ body {
     background: rgba(0, 212, 255, 0.2);
 }
 
+.ops-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ops-logo {
+    width: 44px;
+    height: 44px;
+    object-fit: cover;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.ops-logo-small {
+    width: 38px;
+    height: 38px;
+}
+
 .header-metrics {
     display: flex;
     align-items: center;

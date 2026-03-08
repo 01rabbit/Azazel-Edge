@@ -75,30 +75,42 @@ OPS_MAX_SWAP_USED_MB = int(os.environ.get("AZAZEL_OPS_MAX_SWAP_USED_MB", "512"))
 OPS_ESCALATE_MIN_RISK = int(os.environ.get("AZAZEL_OPS_ESCALATE_MIN_RISK", "70"))
 OPS_ESCALATE_LOW_CONF = float(os.environ.get("AZAZEL_OPS_ESCALATE_LOW_CONF", "0.60"))
 OPS_ESCALATE_COOLDOWN_SEC = int(os.environ.get("AZAZEL_OPS_ESCALATE_COOLDOWN_SEC", "180"))
+MANUAL_KEEP_ALIVE = os.environ.get("AZAZEL_MANUAL_KEEP_ALIVE", "5m")
+MANUAL_NUM_PREDICT = int(os.environ.get("AZAZEL_MANUAL_NUM_PREDICT", "64"))
+MANUAL_NUM_CTX = int(os.environ.get("AZAZEL_MANUAL_NUM_CTX", "192"))
+MANUAL_NUM_THREAD = int(os.environ.get("AZAZEL_MANUAL_NUM_THREAD", str(LLM_NUM_THREAD)))
 OPS_MODEL_CHAIN = [
     m.strip()
     for m in os.environ.get("AZAZEL_OPS_MODEL_CHAIN", f"{OPS_COACH_MODEL},{LLM_MODEL_PRIMARY},{LLM_MODEL_DEGRADED}").split(",")
     if m.strip()
 ]
 LLM_PROMPT_SYSTEM = (
+    "You are M.I.O. (Mission Intelligence Operator), a calm tactical analyst. "
     "Return strict minified JSON only. "
     "Keys: verdict, confidence, reason, suggested_action, escalation. "
-    "reason<=80 chars, suggested_action<=80 chars, confidence=0.0..1.0."
+    "reason<=80 chars, suggested_action<=80 chars, confidence=0.0..1.0. "
+    "Prefer precise, conditional wording over hard certainty."
 )
 OPS_PROMPT_SYSTEM = (
-    "You are an ops coach. Return strict JSON only with keys: runbook_id, summary, operator_note. "
-    "Keep summary and operator_note each under 120 chars."
+    "You are M.I.O. (Mission Intelligence Operator), a calm deputy-style ops coach. "
+    "Return strict JSON only with keys: runbook_id, summary, operator_note. "
+    "Keep summary and operator_note each under 120 chars. "
+    "Prioritize situation, likely cause, next check, and safe escalation."
 )
 MANUAL_PROMPT_SYSTEM = (
-    "You are Azazel-Edge SOC/NOC assistant. Return strict JSON only with keys: "
-    "answer,confidence,runbook_id,operator_note. "
-    "answer<=240 chars, operator_note<=120 chars, confidence=0.0..1.0."
+    "You are M.I.O. (Mission Intelligence Operator), a calm SOC/NOC support assistant. "
+    "Return strict JSON only with keys: "
+    "answer,confidence,runbook_id,operator_note,user_message. "
+    "answer<=240 chars, operator_note<=120 chars, user_message<=160 chars, confidence=0.0..1.0. "
+    "Be concise, structured, and conditional. "
+    "For beginner-facing situations, give at most 3 simple steps and do not ask the user to perform operator-only actions."
 )
 MANUAL_QUERY_MAX_CHARS = int(os.environ.get("AZAZEL_MANUAL_QUERY_MAX_CHARS", "500"))
-MANUAL_QUERY_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MANUAL_QUERY_TIMEOUT_SEC", "12"))
+MANUAL_QUERY_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MANUAL_QUERY_TIMEOUT_SEC", "18"))
+MANUAL_TOTAL_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MANUAL_TOTAL_TIMEOUT_SEC", "20"))
 MANUAL_MODEL_CHAIN = [
     m.strip()
-    for m in os.environ.get("AZAZEL_MANUAL_MODEL_CHAIN", f"{LLM_MODEL_DEGRADED}").split(",")
+    for m in os.environ.get("AZAZEL_MANUAL_MODEL_CHAIN", f"{LLM_MODEL_DEGRADED},{LLM_MODEL_PRIMARY}").split(",")
     if m.strip()
 ]
 
@@ -137,6 +149,7 @@ METRICS: Dict[str, Any] = {
     "ops_schema_invalid_count": 0,
     "ops_fallback_model_count": 0,
     "manual_requests": 0,
+    "manual_routed_count": 0,
     "manual_completed": 0,
     "manual_failed": 0,
     "manual_schema_invalid_count": 0,
@@ -429,11 +442,13 @@ def _normalize_manual_result(raw: Dict[str, Any]) -> Dict[str, Any]:
     operator_note = str(raw.get("operator_note") or "").strip()[:120]
     if not operator_note:
         operator_note = answer[:120]
+    user_message = str(raw.get("user_message") or raw.get("user_note") or "").strip()[:160]
     return {
         "answer": answer[:240],
         "confidence": _normalize_confidence(raw.get("confidence", 0.6)),
         "runbook_id": runbook_id,
         "operator_note": operator_note,
+        "user_message": user_message,
     }
 
 
@@ -459,35 +474,172 @@ def _normalize_runbook_id(value: Any) -> str:
         return ""
 
 
-def _guess_runbook_id(question: str) -> str:
+def _classify_manual_question(question: str) -> str:
     q = str(question or "").lower()
-    if any(token in q for token in ("epd", "display", "e-paper")):
-        return "rb.ops.epd.state.check"
-    if any(token in q for token in ("log", "ログ", "llm", "ai")):
-        return "rb.ops.logs.ai.recent"
+    if any(token in q for token in ("onboarding", "初回", "初期接続", "登録")):
+        return "wifi_onboarding"
+    if any(token in q for token in ("reconnect", "再接続", "再接続できない")):
+        return "wifi_reconnect"
+    if any(token in q for token in ("dns", "名前解決", "host", "hostname")):
+        return "dns"
     if any(token in q for token in ("gateway", "route", "uplink", "回線", "ゲートウェイ")):
-        return "rb.noc.default-route.check"
+        return "route"
     if any(token in q for token in ("service", "systemd", "サービス")):
-        return "rb.noc.service.status.check"
-    if any(token in q for token in ("connect", "wifi", "network", "繋", "接続", "ネット")):
-        return "rb.user.first-contact.network-issue"
-    return "rb.noc.ui-snapshot.check"
+        return "service"
+    if any(token in q for token in ("epd", "display", "e-paper", "電子ペーパー")):
+        return "epd"
+    if any(token in q for token in ("log", "ログ", "llm", "ai")):
+        return "ai_logs"
+    if any(token in q for token in ("wifi", "ssid", "connect", "接続", "繋", "ネット")):
+        return "wifi_issue"
+    return "snapshot"
 
 
-def _manual_fallback_response(question: str) -> Dict[str, Any]:
+def _guess_runbook_id(question: str) -> str:
+    kind = _classify_manual_question(question)
+    mapping = {
+        "wifi_onboarding": "rb.user.device-onboarding-guide",
+        "wifi_reconnect": "rb.user.reconnect-guide",
+        "wifi_issue": "rb.user.first-contact.network-issue",
+        "dns": "rb.noc.dns.failure.check",
+        "route": "rb.noc.default-route.check",
+        "service": "rb.noc.service.status.check",
+        "epd": "rb.ops.epd.state.check",
+        "ai_logs": "rb.ops.logs.ai.recent",
+        "snapshot": "rb.noc.ui-snapshot.check",
+    }
+    return mapping.get(kind, "rb.noc.ui-snapshot.check")
+
+
+def _runbook_user_message(runbook_id: str, default: str = "") -> str:
+    if not runbook_id or runbook_get is None:
+        return default[:160]
+    try:
+        runbook = runbook_get(runbook_id)
+        return str(runbook.get("user_message_template") or default).strip()[:160]
+    except Exception:
+        return default[:160]
+
+
+def _manual_router_response(
+    question: str,
+    sender: str,
+    source: str,
+    context: Dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    q = str(question or "").strip()
+    if not q:
+        return None
+    q_lower = q.lower()
+    ctx = context if isinstance(context, dict) else {}
+    audience = str(ctx.get("audience") or ("operator" if str(source or "") in {"webui", "ops-comm", "mattermost_post", "mattermost_command", "cli"} else "beginner")).strip() or "operator"
+    route_info = _default_route_info()
+    latest = _latest_advisory_snapshot()
+    state_name = str(latest.get("state_name") or "UNKNOWN")
+    risk_score = int(latest.get("risk_score") or 0)
+
+    runbook_id = ""
+    answer = ""
+
+    kind = _classify_manual_question(q_lower)
+
+    if kind == "wifi_onboarding":
+        runbook_id = "rb.user.device-onboarding-guide"
+        answer = (
+            "M.I.O.判断: 初回接続手順として扱います。"
+            " 利用者には指定 SSID の選択だけを案内し、接続試行は一度ずつ行います。"
+        )
+    elif kind == "wifi_reconnect":
+        runbook_id = "rb.user.reconnect-guide"
+        answer = (
+            "M.I.O.判断: 再接続手順として扱います。"
+            " Wi-Fi のオフ/オンを一度だけ案内し、同じ SSID への再接続結果を確認します。"
+        )
+    elif kind == "wifi_issue":
+        runbook_id = "rb.user.first-contact.network-issue"
+        answer = (
+            "M.I.O.判断: まず単一端末障害か複数端末障害かを切り分けます。"
+            " 利用者には最初に何が使えなくなったかを一つだけ確認し、再起動の連打は止めます。"
+        )
+    elif kind == "dns":
+        runbook_id = "rb.noc.dns.failure.check"
+        answer = (
+            f"M.I.O.判断: DNS 障害と uplink 側障害を切り分けます。"
+            f" 現在 uplink={route_info.get('up_if', '-')} gateway={route_info.get('gateway_ip', '-')}"
+        )
+    elif kind == "route":
+        runbook_id = "rb.noc.default-route.check"
+        answer = (
+            f"M.I.O.判断: 上位回線と経路の実状態を確認します。"
+            f" 現在 uplink={route_info.get('up_if', '-')} up_ip={route_info.get('up_ip', '-')} gateway={route_info.get('gateway_ip', '-')}"
+        )
+    elif kind == "service":
+        runbook_id = "rb.noc.service.status.check"
+        answer = "M.I.O.判断: UI の表示ズレではなく、実サービス停止かを先に確認します。status と journal の順で確認します。"
+    elif kind == "epd":
+        runbook_id = "rb.ops.epd.state.check"
+        answer = "M.I.O.判断: EPD の最終描画状態と WebUI/TUI のスナップショット差異を確認します。"
+    elif kind == "ai_logs":
+        runbook_id = "rb.ops.logs.ai.recent"
+        answer = "M.I.O.判断: AI の直近成功・失敗と fallback 状況を確認して、遅延要因を切り分けます。"
+
+    if not runbook_id:
+        return None
+
+    user_message = _runbook_user_message(
+        runbook_id,
+        default="現在の状況を確認中です。案内があるまで設定変更は行わず、そのままお待ちください。",
+    )
+    return {
+        "status": "routed",
+        "model": "manual_router",
+        "fallback_model_used": False,
+        "latency_ms": 0,
+        "answer": answer[:240],
+        "confidence": 0.82,
+        "runbook_id": runbook_id,
+        "operator_note": f"state={state_name} risk={risk_score} audience={audience} route={route_info.get('up_if', '-')} question={q[:48]}",
+        "user_message": user_message,
+    }
+
+
+def _manual_fallback_response(question: str, context: Dict[str, Any] | None = None) -> Dict[str, Any]:
     latest = _latest_advisory_snapshot()
     state_name = str(latest.get("state_name") or "UNKNOWN")
     risk_score = int(latest.get("risk_score") or 0)
     rec = str(latest.get("recommendation") or "ログ確認を継続してください。")
+    ctx = context if isinstance(context, dict) else {}
+    route_info = _default_route_info()
+    runbook_id = _guess_runbook_id(question)
+    user_message = _runbook_user_message(
+        runbook_id,
+        default="現在の状況を確認中です。案内があるまで設定変更は行わず、そのままお待ちください。",
+    )
+    q = str(question or "").lower()
+    answer = f"現在の推奨: {rec}"
+    if any(token in q for token in ("dns", "名前解決", "host")):
+        answer = (
+            f"M.I.O.判断: 名前解決障害か uplink 側問題を切り分けます。"
+            f" 現在 uplink={route_info.get('up_if', '-')} gateway={route_info.get('gateway_ip', '-')}"
+        )[:240]
+    elif any(token in q for token in ("wifi", "ssid", "繋", "接続", "ネット")):
+        answer = (
+            "M.I.O.判断: 単一端末障害か複数端末障害かを先に切り分けます。"
+            " 利用者には症状を一つだけ答えてもらい、再起動の連打は止めます。"
+        )[:240]
+    elif any(token in q for token in ("service", "systemd", "サービス")):
+        answer = "M.I.O.判断: UI不整合ではなく実サービス障害かを確認してから、必要なら status と journal を確認します。"[:240]
+    audience = str(ctx.get("audience") or "").strip() or "operator"
     return {
         "status": "fallback",
         "model": "tactical_snapshot",
         "fallback_model_used": False,
         "latency_ms": 0,
-        "answer": f"現在の推奨: {rec}",
+        "answer": answer,
         "confidence": 0.35,
-        "runbook_id": _guess_runbook_id(question),
-        "operator_note": f"state={state_name} risk={risk_score} question={question[:48]}",
+        "runbook_id": runbook_id,
+        "operator_note": f"state={state_name} risk={risk_score} audience={audience} question={question[:48]}",
+        "user_message": user_message,
     }
 
 
@@ -497,38 +649,71 @@ def _run_manual_query(
     source: str,
     context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    allowed, why = _ops_coach_allowed()
-    if not allowed:
-        return {"status": "skipped", "reason": why, "model": OPS_COACH_MODEL}
-
     q = str(question or "").strip()
     if not q:
         return {"status": "error", "reason": "empty_question", "model": OPS_COACH_MODEL}
     q = q[:MANUAL_QUERY_MAX_CHARS]
     ctx = context if isinstance(context, dict) else {}
+    _metrics_inc("manual_requests", 1)
+
+    routed = _manual_router_response(q, sender=sender, source=source, context=ctx)
+    if routed is not None:
+        _metrics_inc("manual_routed_count", 1)
+        _metrics_inc("manual_completed", 1)
+        _append_jsonl(
+            LLM_RESULT_LOG_PATH,
+            {
+                "ts": time.time(),
+                "kind": "manual_query_routed",
+                "source": source,
+                "sender": sender,
+                "question": q,
+                "model": "manual_router",
+                "latency_ms": 0,
+                "response": routed,
+            },
+        )
+        return routed
+
+    allowed, why = _ops_coach_allowed()
+    if not allowed:
+        return {"status": "skipped", "reason": why, "model": OPS_COACH_MODEL}
+
     latest = _latest_advisory_snapshot()
+    audience = str(ctx.get("audience") or ("operator" if str(source or "") in {"webui", "ops-comm", "mattermost_post", "mattermost_command", "cli"} else "beginner")).strip() or "operator"
+    route_info = _default_route_info()
     payload = {
         "source": str(source or "webui"),
         "sender": str(sender or "operator"),
+        "audience": audience,
         "question": q,
         "latest_risk_score": int(latest.get("risk_score") or 0),
         "latest_attack_type": str(latest.get("attack_type") or "unknown"),
         "latest_state_name": str(latest.get("state_name") or "UNKNOWN"),
         "latest_user_state": str(latest.get("user_state") or "CHECKING"),
+        "latest_recommendation": str(latest.get("recommendation") or ""),
+        "current_uplink": route_info.get("up_if", "-"),
+        "current_gateway": route_info.get("gateway_ip", "-"),
+        "current_up_ip": route_info.get("up_ip", "-"),
         "context": ctx,
     }
 
-    _metrics_inc("manual_requests", 1)
     errors: list[dict[str, str]] = []
+    overall_started = time.time()
     for idx, model in enumerate(MANUAL_MODEL_CHAIN):
+        if (time.time() - overall_started) >= MANUAL_TOTAL_TIMEOUT_SEC:
+            errors.append({"model": model, "reason": "manual_total_timeout_exceeded"})
+            break
         started = time.time()
         try:
             raw = _ollama_chat(
                 payload,
                 model=model,
                 prompt_system=MANUAL_PROMPT_SYSTEM,
-                keep_alive=OPS_KEEP_ALIVE,
-                num_predict=OPS_NUM_PREDICT,
+                keep_alive=MANUAL_KEEP_ALIVE,
+                num_predict=MANUAL_NUM_PREDICT,
+                num_ctx=MANUAL_NUM_CTX,
+                num_thread=MANUAL_NUM_THREAD,
                 timeout_sec=MANUAL_QUERY_TIMEOUT_SEC,
                 return_text_on_parse_error=True,
                 required_keys=None,
@@ -561,10 +746,12 @@ def _run_manual_query(
             if reason.startswith("manual_"):
                 _metrics_inc("manual_schema_invalid_count", 1)
             errors.append({"model": model, "reason": reason})
+            if "timed out" in reason.lower():
+                break
             continue
 
     _metrics_inc("manual_failed", 1)
-    fallback = _manual_fallback_response(q)
+    fallback = _manual_fallback_response(q, context=ctx)
     fallback["reason"] = "all_manual_models_failed"
     fallback["errors"] = errors
     return fallback
@@ -865,6 +1052,8 @@ def _ollama_chat(
     prompt_system: str = LLM_PROMPT_SYSTEM,
     keep_alive: str = LLM_KEEP_ALIVE,
     num_predict: int = LLM_NUM_PREDICT,
+    num_ctx: int = LLM_NUM_CTX,
+    num_thread: int = LLM_NUM_THREAD,
     timeout_sec: float = LLM_TIMEOUT_SEC,
     return_text_on_parse_error: bool = False,
     required_keys: tuple[str, ...] | None = ("verdict", "confidence", "reason", "suggested_action", "escalation"),
@@ -881,8 +1070,8 @@ def _ollama_chat(
         "options": {
             "temperature": 0.1,
             "num_predict": num_predict,
-            "num_ctx": LLM_NUM_CTX,
-            "num_thread": LLM_NUM_THREAD,
+            "num_ctx": num_ctx,
+            "num_thread": num_thread,
         },
     }
     raw = json.dumps(req_body, ensure_ascii=False).encode("utf-8")
@@ -1268,6 +1457,12 @@ def _handle_manual_query_request(req: Dict[str, Any]) -> Dict[str, Any]:
     started = time.time()
     result = _run_manual_query(question=question, sender=sender, source=source, context=context if isinstance(context, dict) else {})
     runbook_id = str(result.get("runbook_id") or "").strip()
+    if runbook_id and not str(result.get("user_message") or "").strip() and runbook_get is not None:
+        try:
+            runbook = runbook_get(runbook_id)
+            result["user_message"] = str(runbook.get("user_message_template") or "").strip()[:160]
+        except Exception:
+            pass
     if runbook_id and review_runbook_id is not None:
         audience = "operator" if source in {"webui", "ops-comm", "mattermost_post", "mattermost_command", "cli"} else "beginner"
         try:
@@ -1284,7 +1479,7 @@ def _handle_manual_query_request(req: Dict[str, Any]) -> Dict[str, Any]:
             result["runbook_review_error"] = str(exc)
     with IO_LOCK:
         _persist_metrics()
-    result["ok"] = str(result.get("status") or "") in {"completed", "fallback"}
+    result["ok"] = str(result.get("status") or "") in {"completed", "fallback", "routed"}
     result["action"] = "manual_query"
     result["duration_ms"] = int((time.time() - started) * 1000)
     return result

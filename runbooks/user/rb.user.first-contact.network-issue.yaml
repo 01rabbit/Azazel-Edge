@@ -15,7 +15,5 @@ args_schema:
 steps:
   - Ask the user what stopped working first.
   - Ask whether only one device or all devices are affected.
-  - Ask the user not to reboot repeatedly until checks complete.
-  - Give one instruction at a time in simple language.
+  - Ask the user not to reboot repeatedly until checks complete, and keep guidance to one instruction at a time.
 user_message_template: "確認します。まず『何ができなくなったか』を一つだけ教えてください。"
-

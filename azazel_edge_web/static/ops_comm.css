@@ -4,6 +4,48 @@
     gap: 12px;
 }
 
+.ops-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ops-logo {
+    width: 56px;
+    height: 56px;
+    object-fit: cover;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.ops-brand-subtitle {
+    color: var(--text-secondary);
+    font-size: 0.82em;
+    letter-spacing: 0.03em;
+}
+
+.ops-audience {
+    margin-bottom: 10px;
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ops-audience-label {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 0.82em;
+    margin-bottom: 8px;
+}
+
+.ops-audience-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
 .ops-messages-card {
     grid-column: 1 / -1;
 }
@@ -41,10 +83,53 @@
     font-size: 0.9em;
 }
 
+.ops-user-guidance {
+    color: var(--text-primary);
+    border-left: 3px solid rgba(121, 199, 255, 0.7);
+    padding-left: 10px;
+    background: rgba(121, 199, 255, 0.06);
+}
+
 .ops-actions {
     display: flex;
     gap: 8px;
     margin-top: 10px;
+}
+
+.ops-shortcuts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.ops-capabilities-card {
+    grid-column: 1 / -1;
+}
+
+.ops-capabilities-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.ops-capability-item {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.ops-capability-title {
+    color: var(--text-primary);
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.ops-capability-detail {
+    color: var(--text-secondary);
+    font-size: 0.88em;
+    white-space: pre-wrap;
 }
 
 .ops-message-list {

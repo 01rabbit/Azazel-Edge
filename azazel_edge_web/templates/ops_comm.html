@@ -3,14 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Azazel-Edge Ops Communication</title>
+    <title>M.I.O. Ops Communication</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="/static/ops_comm.css">
 </head>
 <body>
     <header class="header">
         <div class="header-left">
-            <h1>💬 Ops Communication</h1>
+            <div class="ops-brand">
+                <img class="ops-logo" src="/images/MIO_Logo.jpeg" alt="M.I.O. Logo">
+                <div>
+                    <h1>💬 M.I.O. Ops Communication</h1>
+                    <div class="ops-brand-subtitle">Mission Intelligence Operator for SOC / NOC support</div>
+                </div>
+            </div>
         </div>
         <div class="header-right">
             <a class="ops-link" href="/">← Dashboard</a>
@@ -46,8 +52,17 @@
 
         <section class="card">
             <h2>Send Message</h2>
+            <div class="ops-audience">
+                <span class="ops-audience-label">Audience Mode</span>
+                <div class="ops-audience-buttons">
+                    <button class="btn btn-primary active" id="audienceOperatorBtn" data-audience-mode="operator">Professional</button>
+                    <button class="btn btn-secondary" id="audienceBeginnerBtn" data-audience-mode="beginner">Temporary</button>
+                </div>
+                <div id="audienceHint" class="ops-result">Professional mode: concise operator guidance and runbook-first responses.</div>
+            </div>
+            <div id="opsShortcuts" class="ops-shortcuts"></div>
             <label class="ops-label" for="senderInput">Sender</label>
-            <input id="senderInput" class="ops-input" type="text" value="Azazel-Edge WebUI" maxlength="64">
+            <input id="senderInput" class="ops-input" type="text" value="M.I.O. Console" maxlength="64">
             <label class="ops-label" for="messageInput">Message</label>
             <textarea id="messageInput" class="ops-textarea" rows="5" placeholder="Type message for Mattermost channel..."></textarea>
             <div class="ops-actions">
@@ -55,7 +70,8 @@
                 <button class="btn btn-primary" id="askAiBtn">Ask AI</button>
             </div>
             <div id="sendResult" class="ops-result">-</div>
-            <div id="aiResult" class="ops-result">AI: -</div>
+            <div id="aiResult" class="ops-result">M.I.O.: -</div>
+            <div id="userGuidanceResult" class="ops-result ops-user-guidance">User Guidance: -</div>
             <div id="runbookResult" class="ops-result">Runbook: -</div>
             <div id="runbookReviewResult" class="ops-result">Review: -</div>
         </section>
@@ -64,6 +80,12 @@
             <h2>Runbook Candidates</h2>
             <div id="runbookCandidatesEmpty" class="ops-result">No candidates yet</div>
             <div id="runbookCandidates" class="ops-runbook-list"></div>
+        </section>
+
+        <section class="card ops-capabilities-card">
+            <h2>Current M.I.O. Capabilities</h2>
+            <div id="capabilitiesSummary" class="ops-result">Loading capabilities...</div>
+            <div id="capabilitiesList" class="ops-capabilities-list"></div>
         </section>
 
         <section class="card ops-messages-card">

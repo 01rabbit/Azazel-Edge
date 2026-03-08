@@ -89,6 +89,7 @@ AI_SOCKET = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.
 AI_MANUAL_TIMEOUT_SEC = float(os.environ.get("AZAZEL_AI_MANUAL_TIMEOUT_SEC", "95"))
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/azazel-edge/runbook-events.jsonl"))
 TOKEN_FILE = web_token_candidates()[0]
+IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
@@ -115,6 +116,12 @@ MATTERMOST_COMMAND_TOKEN_FILE = Path(
     str(os.environ.get("AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE", "/etc/azazel-edge/mattermost-command-token")).strip()
     or "/etc/azazel-edge/mattermost-command-token"
 )
+MATTERMOST_COMMAND_ALIASES = [
+    item.strip()
+    for item in str(os.environ.get("AZAZEL_MATTERMOST_COMMAND_ALIASES", "azops")).split(",")
+    if item.strip()
+]
+MATTERMOST_COMMAND_PRIMARY_TRIGGER = str(os.environ.get("AZAZEL_MATTERMOST_COMMAND_TRIGGER", "mio")).strip() or "mio"
 
 
 def _read_secret_file(path: Path) -> str:
@@ -126,9 +133,22 @@ def _read_secret_file(path: Path) -> str:
     return ""
 
 
-MATTERMOST_COMMAND_TOKEN = _read_secret_file(MATTERMOST_COMMAND_TOKEN_FILE) or str(
-    os.environ.get("AZAZEL_MATTERMOST_COMMAND_TOKEN", "")
-).strip()
+def _read_mattermost_command_tokens() -> List[str]:
+    tokens: List[str] = []
+    primary = _read_secret_file(MATTERMOST_COMMAND_TOKEN_FILE)
+    if primary:
+        tokens.append(primary)
+    for extra in sorted(MATTERMOST_COMMAND_TOKEN_FILE.parent.glob(f"{MATTERMOST_COMMAND_TOKEN_FILE.name}.*")):
+        value = _read_secret_file(extra)
+        if value and value not in tokens:
+            tokens.append(value)
+    env_token = str(os.environ.get("AZAZEL_MATTERMOST_COMMAND_TOKEN", "")).strip()
+    if env_token and env_token not in tokens:
+        tokens.append(env_token)
+    return tokens
+
+
+MATTERMOST_COMMAND_TOKENS = _read_mattermost_command_tokens()
 MATTERMOST_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MATTERMOST_TIMEOUT_SEC", "8"))
 MATTERMOST_FETCH_LIMIT = int(os.environ.get("AZAZEL_MATTERMOST_FETCH_LIMIT", "40"))
 _CA_CERT_FILENAME = "azazel-webui-local-ca.crt"
@@ -479,17 +499,40 @@ def _review_context_from_request(body: Dict[str, Any] | None = None) -> Dict[str
 
 def _mattermost_command_allowed(command_token: str) -> bool:
     token = str(command_token or "").strip()
-    if MATTERMOST_COMMAND_TOKEN:
-        return token == MATTERMOST_COMMAND_TOKEN
-    return False
+    if not token:
+        return False
+    return token in MATTERMOST_COMMAND_TOKENS
+
+
+def _extract_mattermost_audience_and_text(text: str) -> tuple[str, str]:
+    raw = str(text or "").strip()
+    lowered = raw.lower()
+    prefixes = {
+        "temporary:": "beginner",
+        "temp:": "beginner",
+        "beginner:": "beginner",
+        "casual:": "beginner",
+        "pro:": "operator",
+        "operator:": "operator",
+        "professional:": "operator",
+    }
+    for prefix, audience in prefixes.items():
+        if lowered.startswith(prefix):
+            return audience, raw[len(prefix):].strip()
+    return "operator", raw
 
 
 def _format_mattermost_ai_response(ai_result: Dict[str, Any] | None, proposals: Dict[str, Any] | None) -> str:
     lines: List[str] = []
     if isinstance(ai_result, dict):
+        routed = str(ai_result.get("status") or "") == "routed"
         answer = str(ai_result.get("answer") or "").strip()
         if answer:
-            lines.append(f"AI: {answer}")
+            prefix = "" if answer.startswith("M.I.O.") else "M.I.O.: "
+            lines.append(f"{prefix}{answer}")
+        user_message = str(ai_result.get("user_message") or "").strip()
+        if user_message:
+            lines.append(f"User Guidance: {user_message}")
         runbook_id = str(ai_result.get("runbook_id") or "").strip()
         review = ai_result.get("runbook_review") if isinstance(ai_result.get("runbook_review"), dict) else {}
         if runbook_id:
@@ -499,6 +542,8 @@ def _format_mattermost_ai_response(ai_result: Dict[str, Any] | None, proposals: 
             changes = review.get("required_changes")
             if isinstance(changes, list) and changes:
                 lines.append("Required Changes: " + " | ".join(str(x) for x in changes[:3]))
+        if routed:
+            return "\n".join(lines)[:1200]
     if isinstance(proposals, dict):
         items = proposals.get("items")
         if isinstance(items, list) and items:
@@ -554,6 +599,7 @@ def _run_runbook_action(body: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
 
     effect = str(runbook.get("effect") or "")
     requires_approval = bool(runbook.get("requires_approval"))
+    user_message = str(runbook.get("user_message_template") or "").strip()[:160]
     review_status = str(review.get("final_status") or "approved")
     if review_status == "rejected":
         _log_runbook_decision(False, "runbook_rejected_by_review", review_status=review_status, effect=effect)
@@ -608,6 +654,7 @@ def _run_runbook_action(body: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
     result["operator_action"] = action
     result["actor"] = actor
     result["note"] = note
+    result["user_message"] = user_message
     _log_runbook_decision(bool(result.get("ok")), review_status=review_status, effect=effect)
     return result, code
 
@@ -1714,8 +1761,9 @@ def api_mattermost_status():
             "open_url": MATTERMOST_OPEN_URL,
             "mode": _mattermost_mode(),
             "channel_id": MATTERMOST_CHANNEL_ID,
-            "command_enabled": bool(MATTERMOST_COMMAND_TOKEN),
+            "command_enabled": bool(MATTERMOST_COMMAND_TOKENS),
             "command_endpoint": "/api/mattermost/command",
+            "command_triggers": [MATTERMOST_COMMAND_PRIMARY_TRIGGER, *MATTERMOST_COMMAND_ALIASES],
             "ping": ping_payload,
         }
     )
@@ -1727,7 +1775,7 @@ def api_ai_ask():
         return jsonify({"ok": False, "error": "Unauthorized"}), 403
     body = request.get_json(silent=True) or {}
     question = str(body.get("question") or "").strip()
-    sender = str(body.get("sender") or "Azazel-Edge WebUI").strip() or "Azazel-Edge WebUI"
+    sender = str(body.get("sender") or "M.I.O. Console").strip() or "M.I.O. Console"
     source = str(body.get("source") or "webui").strip() or "webui"
     context = body.get("context") if isinstance(body.get("context"), dict) else {}
     if not question:
@@ -1740,6 +1788,47 @@ def api_ai_ask():
     )
     code = 200 if result.get("ok") else 500
     return jsonify(result), code
+
+
+@app.route("/api/ai/capabilities", methods=["GET"])
+def api_ai_capabilities():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    return jsonify(
+        {
+            "ok": True,
+            "mattermost_triggers": [MATTERMOST_COMMAND_PRIMARY_TRIGGER, *MATTERMOST_COMMAND_ALIASES],
+            "manual_router_categories": [
+                "wifi_onboarding",
+                "wifi_reconnect",
+                "wifi_issue",
+                "dns",
+                "route",
+                "service",
+                "epd",
+                "ai_logs",
+                "snapshot",
+            ],
+            "capabilities": [
+                {
+                    "title": "Symptom Router",
+                    "detail": "Wi-Fi, DNS, route, service, EPD, AI logs are answered immediately without waiting for LLM.",
+                },
+                {
+                    "title": "Audience Adaptation",
+                    "detail": "Professional and Temporary modes adjust wording, runbook priority, and user guidance.",
+                },
+                {
+                    "title": "Runbook Guidance",
+                    "detail": "M.I.O. proposes reviewed runbooks and returns user-facing guidance text together with operator notes.",
+                },
+                {
+                    "title": "Mattermost Integration",
+                    "detail": "Slash commands /mio and /azops are available. Prefixes temp: and pro: switch the audience mode.",
+                },
+            ],
+        }
+    ), 200
 
 
 @app.route("/api/runbooks", methods=["GET"])
@@ -1838,7 +1927,7 @@ def api_mattermost_message():
         return jsonify({"ok": False, "error": "Unauthorized"}), 403
     body = request.get_json(silent=True) or {}
     message = str(body.get("message") or "").strip()
-    sender = str(body.get("sender") or "Azazel-Edge WebUI").strip() or "Azazel-Edge WebUI"
+    sender = str(body.get("sender") or "M.I.O. Console").strip() or "M.I.O. Console"
     ask_ai = bool(body.get("ask_ai"))
     post_ai_reply = bool(body.get("post_ai_reply", True))
     send_to_mattermost = bool(body.get("send_to_mattermost", True))
@@ -1871,7 +1960,7 @@ def api_mattermost_message():
             if ai_result.get("ok") and post_ai_reply and send_to_mattermost:
                 reply_text = _format_mattermost_ai_response(ai_result, runbook_proposals)
                 if reply_text:
-                    ai_post = _mattermost_send_message(f"[AI]\n{reply_text}", sender="Azazel-Edge AI")
+                    ai_post = _mattermost_send_message(f"[M.I.O.]\n{reply_text}", sender="M.I.O.")
         return jsonify({"ok": True, "result": posted, "ai_result": ai_result, "runbook_proposals": runbook_proposals, "ai_post_result": ai_post}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -1881,29 +1970,31 @@ def api_mattermost_message():
 def api_mattermost_command():
     body = request.get_json(silent=True) or {}
     form = request.form or {}
-    text = str(form.get("text") or body.get("text") or "").strip()
+    raw_text = str(form.get("text") or body.get("text") or "").strip()
     sender = str(form.get("user_name") or body.get("user_name") or body.get("sender") or "mattermost-user").strip() or "mattermost-user"
     command_token = str(form.get("token") or body.get("token") or "").strip()
     channel_id = str(form.get("channel_id") or body.get("channel_id") or MATTERMOST_CHANNEL_ID).strip()
     if not _mattermost_command_allowed(command_token):
         return jsonify({"response_type": "ephemeral", "text": "Mattermost command token mismatch."}), 403
+    audience, text = _extract_mattermost_audience_and_text(raw_text)
     if not text:
-        return jsonify({"response_type": "ephemeral", "text": "Usage: /azops <question>"}), 200
+        aliases = ", ".join(f"/{x}" for x in [MATTERMOST_COMMAND_PRIMARY_TRIGGER, *MATTERMOST_COMMAND_ALIASES])
+        return jsonify({"response_type": "ephemeral", "text": f"Usage: {aliases} <question>\nOptional prefix: `temp:` or `pro:`"}), 200
 
     ai_result = _send_ai_manual_query(
         question=text,
         sender=sender,
         source="mattermost_command",
-        context={"channel_id": channel_id, "page": "mattermost"},
+        context={"channel_id": channel_id, "page": "mattermost", "audience": audience},
     )
     proposals = None
     if runbook_propose is not None:
         try:
             proposals = runbook_propose(
                 text,
-                audience="operator",
+                audience=audience,
                 max_items=3,
-                context={"question": text, "source": "mattermost_command"},
+                context={"question": text, "source": "mattermost_command", "audience": audience},
             )
         except Exception:
             proposals = None
@@ -2041,6 +2132,12 @@ def api_wifi_connect():
 def static_files(filename):
     """Serve static files"""
     return send_from_directory("static", filename)
+
+
+@app.route("/images/<path:filename>")
+def image_files(filename):
+    """Serve project image assets"""
+    return send_from_directory(IMAGES_DIR, filename)
 
 
 @app.route("/health")

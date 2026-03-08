@@ -18,6 +18,5 @@ args_schema:
 steps:
   - Tell the user the exact SSID to select before entering any password.
   - Tell the user to connect only once and wait for the result screen.
-  - If captive portal appears, ask the user to complete it before retrying.
-  - If onboarding fails twice, move to a NOC intake runbook.
+  - If captive portal appears or onboarding fails twice, stop retrying and move to a NOC intake runbook.
 user_message_template: "接続先のSSIDを確認します。表示された候補の中から指定のSSIDだけを選んでください。"

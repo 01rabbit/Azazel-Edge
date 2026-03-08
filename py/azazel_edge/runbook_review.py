@@ -284,12 +284,42 @@ def propose_runbooks(
         add("rb.noc.ui-snapshot.check", 70, "default runtime state inspection")
         add("rb.user.first-contact.network-issue", 65, "default beginner intake")
 
-    items: List[Dict[str, Any]] = []
-    for candidate in sorted(candidates, key=lambda item: (-item["score"], item["runbook_id"]))[: max(1, min(max_items, 10))]:
+    def sort_bonus(runbook: Dict[str, Any]) -> int:
+        bonus = 0
+        runbook_audience = str(runbook.get("audience") or "")
+        domain = str(runbook.get("domain") or "")
+        effect = str(runbook.get("effect") or "")
+        if audience == "beginner":
+            if runbook_audience == "beginner":
+                bonus += 20
+            if domain == "user":
+                bonus += 15
+            if domain == "noc":
+                bonus += 5
+            if effect == "controlled_exec":
+                bonus -= 30
+        else:
+            if runbook_audience == "operator":
+                bonus += 15
+            if domain in {"noc", "soc", "ops"}:
+                bonus += 10
+            if domain == "user":
+                bonus -= 5
+        return bonus
+
+    hydrated: List[Dict[str, Any]] = []
+    for candidate in candidates:
         try:
             runbook = get_runbook(candidate["runbook_id"])
         except Exception:
             continue
+        candidate["effective_score"] = int(candidate["score"]) + sort_bonus(runbook)
+        candidate["runbook"] = runbook
+        hydrated.append(candidate)
+
+    items: List[Dict[str, Any]] = []
+    for candidate in sorted(hydrated, key=lambda item: (-int(item.get("effective_score", item["score"])), -item["score"], item["runbook_id"]))[: max(1, min(max_items, 10))]:
+        runbook = candidate["runbook"]
         review = review_runbook(runbook, context=ctx)
         items.append(
             {
@@ -303,6 +333,7 @@ def propose_runbooks(
                 "steps": runbook.get("steps") if isinstance(runbook.get("steps"), list) else [],
                 "user_message_template": str(runbook.get("user_message_template") or ""),
                 "score": candidate["score"],
+                "effective_score": candidate.get("effective_score", candidate["score"]),
                 "selection_reasons": candidate["selection_reasons"],
                 "review": review,
             }

@@ -3,6 +3,7 @@
 最終更新: 2026-03-07
 
 詳細手順: `docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL.md`
+人格設計: `docs/MIO_PERSONA_PROFILE.md`
 
 ## 1. 目的
 
@@ -54,6 +55,14 @@ sudo docker exec azazel-edge-ollama ollama list
   - `AZAZEL_LLM_NUM_CTX=256`
   - `AZAZEL_LLM_NUM_PREDICT=120`
   - `AZAZEL_LLM_KEEP_ALIVE=5m`
+- Manual Query:
+  - 共通症状 (`Wi-Fi`, `DNS`, `service`, `gateway`, `EPD`, `AI logs`) は `manual_router` が即時返答
+  - `AZAZEL_MANUAL_QUERY_TIMEOUT_SEC=18`
+  - `AZAZEL_MANUAL_TOTAL_TIMEOUT_SEC=20`
+  - `AZAZEL_MANUAL_MODEL_CHAIN=qwen3.5:0.8b,qwen3.5:2b`
+  - `AZAZEL_MANUAL_NUM_CTX=192`
+  - `AZAZEL_MANUAL_NUM_PREDICT=64`
+  - `AZAZEL_MANUAL_KEEP_ALIVE=5m`
 - Ops Guard:
   - `AZAZEL_OPS_MIN_MEM_AVAILABLE_MB=1400`
   - `AZAZEL_OPS_MAX_SWAP_USED_MB=512`
@@ -73,6 +82,7 @@ sudo docker exec azazel-edge-ollama ollama list
 - LLM結果ログ: `/var/log/azazel-edge/ai-llm.jsonl`
 - Deferredログ: `/var/log/azazel-edge/ai-deferred.jsonl`
 - Ops連携UI: `/ops-comm`（Mattermost連携専用サイト）
+- Dashboard (`/`) への M.I.O. 本格統合は未着手。現段階では `ops-comm` と Mattermost が主導線
 
 ## 6. 日常確認手順
 
@@ -82,10 +92,18 @@ jq '{processed_events,llm_requests,llm_completed,llm_failed,llm_schema_invalid_c
 tail -n 5 /var/log/azazel-edge/ai-llm.jsonl
 ```
 
+手動質問の確認:
+
+```bash
+jq '{manual_requests,manual_routed_count,manual_completed,manual_failed,last_error}' /run/azazel-edge/ai_metrics.json
+tail -n 5 /var/log/azazel-edge/ai-llm.jsonl
+```
+
 Mattermost slash command:
 
 ```text
-/azops 現在の警戒ポイントは？
+/mio 現在の警戒ポイントは？
+/mio temp: Wi-Fi に繋がらない利用者へどう案内するか
 ```
 
 ## 7. 異常時の一次対応
@@ -145,7 +163,17 @@ sudo systemctl show azazel-edge-ai-agent --property=Environment --no-pager
 - WebUI(`/ops-comm`)の役割: 監視画面からの簡易投稿・疎通確認・直近メッセージ参照・手動AI質問
 - 手動AI質問API: `POST /api/ai/ask`（`question`必須）
 - Mattermost slash command / outgoing webhook 用エンドポイント: `POST /api/mattermost/command`
-- Mattermost slash command trigger: `/azops`
+- Mattermost slash command trigger: `/mio`
+- legacy alias: `/azops`
+- audience prefix:
+  - `temp:` / `temporary:` / `beginner:` は臨時担当向け
+  - `pro:` / `operator:` / `professional:` はプロ向け
+
+現在実装済みの M.I.O. 機能確認:
+
+```bash
+curl -sS http://127.0.0.1:8084/api/ai/capabilities | jq
+```
 - slash command callback URL: `http://172.16.0.254/api/mattermost/command`
 - command token は `/etc/azazel-edge/mattermost-command-token`（`0600`）で管理
 - token 未設定時は `POST /api/mattermost/command` を拒否
@@ -196,3 +224,20 @@ sudo systemctl show azazel-edge-ai-agent --property=Environment --no-pager
   - 有効化しても `requires_approval=true` の Runbook は承認無しで実行できない
   - 初心者向けフローでは `controlled_exec` を直接使わせない
 - 実行/承認ログ: `/var/log/azazel-edge/runbook-events.jsonl`
+
+## 13. M.I.O. 運用方針
+
+- Azazel-Edge の SOC/NOC 支援AIの運用人格は `M.I.O. (Mission Intelligence Operator)` とする
+- M.I.O. は「副官型」の運用人格であり、判断補佐・情報整理・手順提示を担う
+- 応答では以下を優先する
+  - 冷静
+  - 明瞭
+  - 簡潔
+  - 条件付き表現
+  - 初心者配慮
+- 初心者向け応答では以下を守る
+  - 1回答で最大3手順
+  - 1手順ごとに1行動
+  - 専門語は短く言い換える
+  - operator 作業を利用者へ直接指示しない
+- 詳細な分類と利用範囲は `docs/MIO_PERSONA_PROFILE.md` を参照
