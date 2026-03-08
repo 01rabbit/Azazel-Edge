@@ -327,6 +327,18 @@ Dashboard 再設計前に以下の API/スナップショットを整える。
 完了条件:
 - `Professional/Temporary` の両モードで操作順が自然
 
+実装状況:
+- 完了
+- 実装済み:
+  - `Command Strip`
+  - `Situation Board`
+  - `Action Board`
+  - `Evidence Timeline`
+  - `Audience Mode` toggle
+- 備考:
+  - 旧 Gadget 流用カード構造は撤去
+  - Mode switch / Portal assist / Contain / Release は新盤面へ再配置
+
 ### Phase 3: M.I.O. Integration
 
 目的:
@@ -341,6 +353,18 @@ Dashboard 再設計前に以下の API/スナップショットを整える。
 
 完了条件:
 - Dashboard 内から `ops-comm` へ遷移せずに、最低限の支援が完結する
+
+実装状況:
+- 完了
+- 実装済み:
+  - `Assistant Rail`
+  - `current recommendation`
+  - `user guidance`
+  - `Ask M.I.O.` inline panel
+  - `Mattermost` deep link
+- 備考:
+  - Dashboard から `/api/ai/ask` を直接利用可能
+  - `Professional/Temporary` は M.I.O. 問い合わせ文脈にも反映
 
 ## 7. 今回時点で実装可能と判断するもの
 

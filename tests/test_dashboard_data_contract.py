@@ -222,6 +222,16 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertTrue(payload["mattermost"]["reachable"])
         self.assertFalse(payload["stale_flags"]["snapshot"])
 
+    def test_dashboard_index_renders_new_sections(self) -> None:
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        text = response.get_data(as_text=True)
+        self.assertIn("Command Dashboard", text)
+        self.assertIn("Audience Mode", text)
+        self.assertIn("M.I.O. Assist", text)
+        self.assertIn("Recent Alerts", text)
+        self.assertIn("Ask M.I.O.", text)
+
 
 if __name__ == "__main__":
     unittest.main()
