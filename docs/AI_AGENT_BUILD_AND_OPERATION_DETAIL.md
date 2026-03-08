@@ -47,6 +47,31 @@ sudo docker exec azazel-edge-ollama ollama list
 - `qwen3.5:2b` と `qwen3.5:0.8b` が表示される
 - `qwen3.5:4b` は表示されない
 
+## 4.1 再現インストール
+
+現行環境は unified installer で再現可能。
+
+```bash
+sudo ENABLE_INTERNAL_NETWORK=1 \
+     ENABLE_APP_STACK=1 \
+     ENABLE_AI_RUNTIME=1 \
+     ENABLE_DEV_REMOTE_ACCESS=0 \
+     bash installer/internal/install_all.sh
+```
+
+この経路で再現されるもの:
+- `/opt/azazel-edge` 配下のアプリ本体
+- WebUI/TUI/EPD/control/AI agent/systemd
+- Runbook レジストリと broker
+- nginx HTTPS reverse proxy
+- Ollama コンテナ
+- `qwen3.5:2b` / `qwen3.5:0.8b`
+- Mattermost / PostgreSQL コンテナ
+- `azazelops` ユーザ、`azazelops` チーム、`soc-noc` チャンネル
+- WebUI 用 bot token / incoming webhook / slash command `/azops`
+- `/etc/azazel-edge/mattermost-credentials.env`
+- `/etc/azazel-edge/mattermost-command-token`
+
 ## 5. AIエージェント統合
 
 対象ファイル:

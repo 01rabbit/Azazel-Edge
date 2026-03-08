@@ -39,7 +39,7 @@ services:
       - mattermost_plugins:/mattermost/plugins
       - mattermost_client_plugins:/mattermost/client/plugins
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8065/api/v4/system/ping >/dev/null 2>&1"]
+      test: ["CMD", "/mattermost/bin/mattermost", "-c", "/mattermost/config/config.json", "db", "version"]
       interval: 20s
       timeout: 10s
       retries: 10

@@ -55,7 +55,7 @@ TEAM_JSON="$(api GET "/api/v4/teams/name/${TEAM_NAME}")"
 TEAM_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"${TEAM_JSON}")"
 
 COMMANDS_JSON="$(api GET "/api/v4/commands?team_id=${TEAM_ID}")"
-EXISTING_ID="$(printf '%s' "${COMMANDS_JSON}" | python3 -c 'import json,sys; trigger=sys.argv[1]; print(next((item.get("id","") for item in json.load(sys.stdin) if item.get("trigger")==trigger and item.get("url")), ""))' "${TRIGGER}")"
+EXISTING_ID="$(printf '%s' "${COMMANDS_JSON}" | python3 -c 'import json,sys; trigger=sys.argv[1]; print(next((item.get("id","") for item in json.load(sys.stdin) if item.get("trigger")==trigger), ""))' "${TRIGGER}")"
 
 read -r -d '' PAYLOAD <<EOF || true
 {
@@ -73,7 +73,7 @@ read -r -d '' PAYLOAD <<EOF || true
 EOF
 
 if [[ -n "${EXISTING_ID}" ]]; then
-  RESPONSE="$(api PUT "/api/v4/commands/${EXISTING_ID}" "${PAYLOAD}")"
+  RESPONSE="$(printf '{"id":"%s"}' "${EXISTING_ID}")"
 else
   RESPONSE="$(api POST "/api/v4/commands" "${PAYLOAD}")"
 fi
@@ -87,7 +87,11 @@ if [[ -z "${COMMAND_ID}" ]]; then
 fi
 
 if [[ -z "${COMMAND_TOKEN}" && -n "${EXISTING_ID}" ]]; then
-  COMMAND_TOKEN="$(printf '%s' "${COMMANDS_JSON}" | python3 -c 'import json,sys; trigger=sys.argv[1]; print(next((item.get("token","") for item in json.load(sys.stdin) if item.get("trigger")==trigger and item.get("url")), ""))' "${TRIGGER}")"
+  COMMAND_TOKEN="$(printf '%s' "${COMMANDS_JSON}" | python3 -c 'import json,sys; trigger=sys.argv[1]; print(next((item.get("token","") for item in json.load(sys.stdin) if item.get("trigger")==trigger), ""))' "${TRIGGER}")"
+fi
+
+if [[ -z "${COMMAND_TOKEN}" && -f "${TOKEN_FILE}" ]]; then
+  COMMAND_TOKEN="$(tr -d '\r\n' < "${TOKEN_FILE}")"
 fi
 
 if [[ -z "${COMMAND_TOKEN}" ]]; then
