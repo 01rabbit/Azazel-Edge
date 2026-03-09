@@ -92,6 +92,39 @@ function formatReview(review) {
     return `${review.final_status}${findings}${changes}`;
 }
 
+function resetAiPanels() {
+    setText('aiResult', 'M.I.O.: -');
+    setText('userGuidanceResult', 'User Guidance: -');
+    setText('runbookResult', 'Runbook: -');
+    setText('runbookReviewResult', 'Review: -');
+    setText('rationaleResult', 'Rationale: -');
+    setText('handoffResult', 'Handoff: -');
+}
+
+function renderAiPanels(data) {
+    setText('aiResult', `M.I.O.: ${data.answer || '-'}${data.runbook_id ? ` [runbook=${data.runbook_id}]` : ''}`);
+    setText('userGuidanceResult', data.user_message ? `User Guidance: ${data.user_message}` : 'User Guidance: -');
+    setText('runbookResult', data.runbook_id ? `Runbook: ${data.runbook_id}` : 'Runbook: no suggestion');
+    const review = data.runbook_review || null;
+    if (review && review.final_status) {
+        const changes = Array.isArray(review.required_changes) && review.required_changes.length
+            ? ` / changes=${review.required_changes.join(' | ')}`
+            : '';
+        setText('runbookReviewResult', `Review: ${review.final_status}${changes}`);
+    } else {
+        setText('runbookReviewResult', 'Review: -');
+    }
+    const rationale = Array.isArray(data.rationale) && data.rationale.length
+        ? data.rationale.join(' | ')
+        : '-';
+    setText('rationaleResult', `Rationale: ${rationale}`);
+    const handoff = data.handoff && typeof data.handoff === 'object' ? data.handoff : {};
+    const parts = [];
+    if (handoff.ops_comm) parts.push(`Ops Comm ${handoff.ops_comm}`);
+    if (handoff.mattermost) parts.push(`Mattermost ${handoff.mattermost}`);
+    setText('handoffResult', `Handoff: ${parts.length ? parts.join(' / ') : '-'}`);
+}
+
 async function loadStatus() {
     try {
         const res = await fetch('/api/mattermost/status', { headers: authHeaders() });
@@ -355,18 +388,11 @@ async function sendMessage() {
     const senderInput = document.getElementById('senderInput');
     const messageInput = document.getElementById('messageInput');
     const result = document.getElementById('sendResult');
-    const aiResult = document.getElementById('aiResult');
-    const userGuidanceResult = document.getElementById('userGuidanceResult');
-    const runbookResult = document.getElementById('runbookResult');
-    const runbookReviewResult = document.getElementById('runbookReviewResult');
     const sender = senderInput ? senderInput.value.trim() : 'M.I.O. Console';
     const message = messageInput ? messageInput.value.trim() : '';
         if (!message) {
             if (result) result.textContent = 'Message is empty';
-            if (aiResult) aiResult.textContent = 'M.I.O.: -';
-            if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
-            if (runbookResult) runbookResult.textContent = 'Runbook: -';
-            if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
+            resetAiPanels();
             return;
         }
     try {
@@ -378,25 +404,16 @@ async function sendMessage() {
         const data = await res.json();
         if (res.ok && data.ok) {
             if (result) result.textContent = `Sent (${data.result.mode})`;
-            if (aiResult) aiResult.textContent = 'M.I.O.: -';
-            if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
-            if (runbookResult) runbookResult.textContent = 'Runbook: -';
-            if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
+            resetAiPanels();
             if (messageInput) messageInput.value = '';
             await loadMessages();
             return;
         }
         if (result) result.textContent = `Failed: ${data.error || 'unknown error'}`;
-        if (aiResult) aiResult.textContent = 'M.I.O.: -';
-        if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
-        if (runbookResult) runbookResult.textContent = 'Runbook: -';
-        if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
+        resetAiPanels();
     } catch (e) {
         if (result) result.textContent = `Failed: ${e}`;
-        if (aiResult) aiResult.textContent = 'M.I.O.: -';
-        if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
-        if (runbookResult) runbookResult.textContent = 'Runbook: -';
-        if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
+        resetAiPanels();
     }
 }
 
@@ -404,18 +421,11 @@ async function askAi() {
     const senderInput = document.getElementById('senderInput');
     const messageInput = document.getElementById('messageInput');
     const result = document.getElementById('sendResult');
-    const aiResult = document.getElementById('aiResult');
-    const userGuidanceResult = document.getElementById('userGuidanceResult');
-    const runbookResult = document.getElementById('runbookResult');
-    const runbookReviewResult = document.getElementById('runbookReviewResult');
     const sender = senderInput ? senderInput.value.trim() : 'M.I.O. Console';
     const question = messageInput ? messageInput.value.trim() : '';
     if (!question) {
         if (result) result.textContent = 'Question is empty';
-        if (aiResult) aiResult.textContent = 'M.I.O.: -';
-        if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
-        if (runbookResult) runbookResult.textContent = 'Runbook: -';
-        if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
+        resetAiPanels();
         return;
     }
     try {
@@ -427,43 +437,16 @@ async function askAi() {
         const data = await res.json();
         if (res.ok && data.ok) {
             if (result) result.textContent = `AI completed (${data.model || '-'})`;
-            if (aiResult) aiResult.textContent = `M.I.O.: ${data.answer || '-'}${data.runbook_id ? ` [runbook=${data.runbook_id}]` : ''}`;
-            if (userGuidanceResult) {
-                userGuidanceResult.textContent = data.user_message
-                    ? `User Guidance: ${data.user_message}`
-                    : 'User Guidance: -';
-            }
-            if (runbookResult) {
-                runbookResult.textContent = data.runbook_id
-                    ? `Runbook: ${data.runbook_id}`
-                    : 'Runbook: no suggestion';
-            }
-            if (runbookReviewResult) {
-                const review = data.runbook_review || null;
-                if (review && review.final_status) {
-                    const changes = Array.isArray(review.required_changes) && review.required_changes.length
-                        ? ` / changes=${review.required_changes.join(' | ')}`
-                        : '';
-                    runbookReviewResult.textContent = `Review: ${review.final_status}${changes}`;
-                } else {
-                    runbookReviewResult.textContent = 'Review: -';
-                }
-            }
+            renderAiPanels(data);
             await loadRunbookCandidates(question);
             return;
         }
         if (result) result.textContent = `AI failed: ${data.error || data.reason || 'unknown error'}`;
-        if (aiResult) aiResult.textContent = 'M.I.O.: -';
-        if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
-        if (runbookResult) runbookResult.textContent = 'Runbook: -';
-        if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
+        resetAiPanels();
         renderRunbookCandidates([]);
     } catch (e) {
         if (result) result.textContent = `AI failed: ${e}`;
-        if (aiResult) aiResult.textContent = 'M.I.O.: -';
-        if (userGuidanceResult) userGuidanceResult.textContent = 'User Guidance: -';
-        if (runbookResult) runbookResult.textContent = 'Runbook: -';
-        if (runbookReviewResult) runbookReviewResult.textContent = 'Review: -';
+        resetAiPanels();
         renderRunbookCandidates([]);
     }
 }

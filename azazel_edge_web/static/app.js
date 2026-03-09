@@ -6,13 +6,115 @@ let dashboardTimer = null;
 let currentAudience = localStorage.getItem(AUDIENCE_KEY) || 'professional';
 let latestState = {};
 let latestMattermost = {};
+let lastRefreshWarning = '';
 
 const shortcutQuestions = {
     wifi: 'Wi-Fi に繋がらない利用者へどう案内するか',
+    reconnect: '再接続できない利用者へどう案内するか',
+    onboarding: '初回接続の利用者へどう案内するか',
     dns: 'DNS が引けない時に何を確認するか',
     route: 'gateway と uplink の異常時に何を確認するか',
     service: 'service の異常時に何を確認するか',
+    portal: 'ポータルが表示されない利用者へどう案内するか',
 };
+
+const temporaryFlows = {
+    wifi: {
+        ask: [
+            'Which device is failing first?',
+            'Does the device see the SSID at all?',
+            'Is this only one device or multiple devices?'
+        ],
+        tell: [
+            'Do not repeatedly reboot the device yet.',
+            'We are checking whether this is a single-device issue or a wider Wi-Fi issue.'
+        ],
+    },
+    reconnect: {
+        ask: [
+            'Was the user connected successfully before?',
+            'Did the failure start after moving location or after a password change?',
+            'Is the problem only on one device?'
+        ],
+        tell: [
+            'We are checking whether this is a saved-profile issue or a broader wireless issue.',
+            'Please keep the device near the normal usage area and avoid repeated reconnect attempts for the moment.'
+        ],
+    },
+    onboarding: {
+        ask: [
+            'Is this the first time this device is joining the network?',
+            'Can the device see the expected SSID?',
+            'Is the user following the standard onboarding steps?'
+        ],
+        tell: [
+            'We are checking the onboarding path first before changing any network settings.',
+            'Please prepare the device name and the exact step where the user got stuck.'
+        ],
+    },
+    dns: {
+        ask: [
+            'Which site or hostname fails to open?',
+            'Does access by IP address work?',
+            'Is the issue affecting multiple users?'
+        ],
+        tell: [
+            'We are checking name resolution first.',
+            'Please keep the device connected while we verify DNS and gateway status.'
+        ],
+    },
+    uplink: {
+        ask: [
+            'Are all users affected or only one area?',
+            'When did the problem start?',
+            'Is any external site reachable at all?'
+        ],
+        tell: [
+            'We are checking upstream connectivity and gateway reachability.',
+            'Please avoid changing cables or mode settings until the first check completes.'
+        ],
+    },
+    service: {
+        ask: [
+            'Which function appears unavailable?',
+            'Is the UI wrong, or is the function really down?',
+            'When was the last successful use?'
+        ],
+        tell: [
+            'We are confirming actual service status before any restart.',
+            'Please wait while we check status and journal information.'
+        ],
+    },
+    portal: {
+        ask: [
+            'Does the device show a browser at all after connecting?',
+            'Can the user reach any page by typing a normal website address?',
+            'Is this one user or multiple users?'
+        ],
+        tell: [
+            'We are checking whether the portal trigger or browser redirection is missing.',
+            'Please stay connected and avoid switching Wi-Fi networks until the first check completes.'
+        ],
+    },
+};
+
+function formatAssistResponse(result) {
+    const lines = [];
+    lines.push(result.answer || '-');
+    const rationale = Array.isArray(result.rationale) && result.rationale.length
+        ? result.rationale.join(' | ')
+        : '-';
+    lines.push(`Rationale: ${rationale}`);
+    lines.push(`User Guidance: ${result.user_message || '-'}`);
+    lines.push(`Runbook: ${result.runbook_id || 'no suggestion'}`);
+    lines.push(`Review: ${result.runbook_review?.final_status || 'no review data'}`);
+    const handoff = result.handoff && typeof result.handoff === 'object' ? result.handoff : {};
+    const handoffParts = [];
+    if (handoff.ops_comm) handoffParts.push(`Ops Comm ${handoff.ops_comm}`);
+    if (handoff.mattermost) handoffParts.push(`Mattermost ${handoff.mattermost}`);
+    lines.push(`Continue: ${handoffParts.length ? handoffParts.join(' / ') : '-'}`);
+    return lines.join('\n\n');
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     bindStaticHandlers();
@@ -47,6 +149,13 @@ function bindStaticHandlers() {
         });
     });
 
+    document.querySelectorAll('.temp-flow-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const symptom = String(btn.dataset.symptom || '').trim();
+            applyTemporaryFlow(symptom);
+        });
+    });
+
     document.getElementById('mioAskForm')?.addEventListener('submit', async (event) => {
         event.preventDefault();
         const area = document.getElementById('mioQuestion');
@@ -68,33 +177,164 @@ function setAudience(audience) {
     updateElement('audienceSummary', currentAudience === 'temporary'
         ? 'Temporary mode highlights user guidance, safe next steps, and suppresses dangerous controls'
         : 'Professional mode shows deeper evidence, review status, and operator control context');
+    if (currentAudience === 'temporary') {
+        applyTemporaryFlow('wifi', false);
+    }
+    applyAudienceControlPolicy();
+}
+
+function applyAudienceControlPolicy() {
+    const temporary = currentAudience === 'temporary';
+    ['modePortalBtn', 'modeShieldBtn', 'modeScapegoatBtn'].forEach((id) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.disabled = temporary;
+        btn.title = temporary ? 'Gateway mode changes are disabled in Temporary mode.' : '';
+    });
+}
+
+function applyTemporaryFlow(symptom, triggerAsk = true) {
+    const selected = temporaryFlows[symptom] ? symptom : 'wifi';
+    const flow = temporaryFlows[selected];
+    renderList('temporaryAskList', flow.ask || [], (item) => item);
+    renderList('temporaryTellList', flow.tell || [], (item) => item);
+    if (!triggerAsk) return;
+    const question = document.querySelector(`.temp-flow-btn[data-symptom="${selected}"]`)?.dataset.question || shortcutQuestions[selected] || '';
+    const area = document.getElementById('mioQuestion');
+    if (area) area.value = question;
+    if (question) askMio(question);
+}
+
+function formatLocalDateTime(rawValue) {
+    const raw = String(rawValue || '').trim();
+    if (!raw) return '-';
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return raw;
+    const formatter = new Intl.DateTimeFormat(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZoneName: 'short',
+    });
+    return formatter.format(date);
+}
+
+function formatRelativeTime(rawValue) {
+    const raw = String(rawValue || '').trim();
+    if (!raw) return '';
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return '';
+    const diffSec = Math.round((date.getTime() - Date.now()) / 1000);
+    const absSec = Math.abs(diffSec);
+    let value = diffSec;
+    let unit = 'second';
+    if (absSec >= 86400) {
+        value = Math.round(diffSec / 86400);
+        unit = 'day';
+    } else if (absSec >= 3600) {
+        value = Math.round(diffSec / 3600);
+        unit = 'hour';
+    } else if (absSec >= 60) {
+        value = Math.round(diffSec / 60);
+        unit = 'minute';
+    }
+    return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(value, unit);
+}
+
+function formatHumanDateTime(rawValue) {
+    const local = formatLocalDateTime(rawValue);
+    if (local === '-' || local === String(rawValue || '').trim()) return local;
+    const relative = formatRelativeTime(rawValue);
+    return relative ? `${local} (${relative})` : local;
+}
+
+function formatFreshness(ageSec, rawTime, stale) {
+    const label = formatHumanDateTime(rawTime);
+    if (ageSec == null) {
+        return stale ? `STALE | ${label}` : label;
+    }
+    const seconds = Number(ageSec);
+    let bucket = `${Math.round(seconds)}s ago`;
+    if (seconds >= 3600) {
+        bucket = `${Math.round(seconds / 3600)}h ago`;
+    } else if (seconds >= 60) {
+        bucket = `${Math.round(seconds / 60)}m ago`;
+    }
+    return `${stale ? 'STALE' : 'LIVE'} | ${bucket} | ${label}`;
 }
 
 async function refreshDashboard() {
+    const requests = [
+        ['summary', '/api/dashboard/summary', true],
+        ['actions', '/api/dashboard/actions', false],
+        ['evidence', '/api/dashboard/evidence', false],
+        ['health', '/api/dashboard/health', false],
+        ['state', '/api/state', true],
+        ['mattermost', '/api/mattermost/status', false],
+        ['capabilities', '/api/ai/capabilities', false],
+    ];
+
+    const resolved = await Promise.all(
+        requests.map(async ([name, path, required]) => {
+            try {
+                const data = await fetchJson(path);
+                return [name, { ok: true, data, required }];
+            } catch (error) {
+                return [name, { ok: false, error: error.message || String(error), required }];
+            }
+        })
+    );
+
+    const resultMap = Object.fromEntries(resolved);
+    const failures = Object.entries(resultMap)
+        .filter(([, item]) => !item.ok)
+        .map(([name, item]) => `${name}: ${item.error}`);
+    const hardFailures = Object.entries(resultMap)
+        .filter(([, item]) => !item.ok && item.required)
+        .map(([name, item]) => `${name}: ${item.error}`);
+
+    if (hardFailures.length > 0) {
+        console.error('Dashboard refresh failed:', hardFailures);
+        showToast(`Dashboard refresh failed: ${hardFailures.join(' | ')}`, 'error');
+        return;
+    }
+
+    const summary = resultMap.summary?.data || {};
+    const actions = resultMap.actions?.data || {};
+    const evidence = resultMap.evidence?.data || {};
+    const health = resultMap.health?.data || {};
+    const state = resultMap.state?.data || {};
+    const mattermost = resultMap.mattermost?.data || { reachable: false, command_triggers: [] };
+    const capabilities = resultMap.capabilities?.data || { mattermost_triggers: [] };
+
+    latestState = state || {};
+    latestMattermost = mattermost || {};
+
     try {
-        const [summary, actions, evidence, health, state, mattermost, capabilities] = await Promise.all([
-            fetchJson('/api/dashboard/summary'),
-            fetchJson('/api/dashboard/actions'),
-            fetchJson('/api/dashboard/evidence'),
-            fetchJson('/api/dashboard/health'),
-            fetchJson('/api/state'),
-            fetchJson('/api/mattermost/status'),
-            fetchJson('/api/ai/capabilities'),
-        ]);
-
-        latestState = state || {};
-        latestMattermost = mattermost || {};
-
         updateHeader(state, mattermost);
-        updateCommandStrip(summary, health);
+        updateCommandStrip(summary, health, failures);
         updateSituationBoard(summary, state, health, mattermost);
         updateActionBoard(actions, state);
         updateEvidenceBoard(evidence, health);
         updateAssistant(actions, mattermost, capabilities);
         updateControlButtons(summary, state);
     } catch (error) {
-        console.error('Dashboard refresh failed:', error);
-        showToast(`Dashboard refresh failed: ${error.message}`, 'error');
+        console.error('Dashboard render failed:', error);
+        showToast(`Dashboard render failed: ${error.message}`, 'error');
+        return;
+    }
+
+    if (failures.length > 0) {
+        const warning = `Partial refresh: ${failures.join(' | ')}`;
+        if (warning !== lastRefreshWarning) {
+            showToast(warning, 'info');
+            lastRefreshWarning = warning;
+        }
+    } else {
+        lastRefreshWarning = '';
     }
 }
 
@@ -118,7 +358,7 @@ function updateHeader(state, mattermost) {
     if (mmLink) mmLink.href = mattermostUrl;
 }
 
-function updateCommandStrip(summary, health) {
+function updateCommandStrip(summary, health, failures = []) {
     const strip = summary.command_strip || {};
     updateElement('stripMode', String(strip.current_mode || '--').toUpperCase());
     updateElement('stripRisk', summary.risk?.user_state || '--');
@@ -128,9 +368,14 @@ function updateCommandStrip(summary, health) {
     updateElement('stripDeferred', String(strip.deferred_count ?? 0));
     updateElement('stripQueue', `${health.queue?.depth ?? 0} / ${health.queue?.capacity ?? 0}`);
     updateElement('stripStale', strip.stale_warning ? 'YES' : 'NO');
-    updateElement('commandStripNote', strip.stale_warning
+    const baseNote = strip.stale_warning
         ? 'One or more dashboard inputs are stale. Verify control-plane freshness before acting.'
-        : 'Dashboard inputs are live and in sync with current control-plane state.');
+        : 'Dashboard inputs are live and in sync with current control-plane state.';
+    updateElement('commandStripNote', failures.length > 0 ? `${baseNote} Degraded APIs: ${failures.join(' | ')}` : baseNote);
+    updateElement('freshnessSnapshot', formatFreshness(health.ages_sec?.snapshot, health.timestamps?.snapshot_at, health.stale_flags?.snapshot));
+    updateElement('freshnessAiMetrics', formatFreshness(health.ages_sec?.ai_metrics, health.timestamps?.ai_metrics_at, health.stale_flags?.ai_metrics));
+    updateElement('freshnessAiActivity', formatFreshness(health.ages_sec?.ai_activity, health.timestamps?.last_ai_activity_at, health.stale_flags?.ai_activity));
+    updateElement('freshnessRunbook', formatFreshness(health.ages_sec?.runbook_events, health.timestamps?.last_runbook_event_at, health.stale_flags?.runbook_events));
 }
 
 function updateSituationBoard(summary, state, health, mattermost) {
@@ -163,7 +408,10 @@ function updateSituationBoard(summary, state, health, mattermost) {
 }
 
 function updateActionBoard(actions, state) {
-    renderList('nextActionsList', actions.current_operator_actions || [], (item) => item);
+    renderList('whyNowList', actions.why_now || [], (item) => item);
+    renderList('nextActionsList', actions.do_next || actions.current_operator_actions || [], (item) => item);
+    renderList('doNotDoList', actions.do_not_do || [], (item) => item);
+    renderList('escalateIfList', actions.escalate_if || [], (item) => item);
     updateElement('userGuidanceText', actions.current_user_guidance || '-');
 
     const runbook = actions.suggested_runbook || {};
@@ -174,7 +422,7 @@ function updateActionBoard(actions, state) {
     renderList('runbookSteps', runbook.steps || [], (item) => item);
 
     const mode = latestState.mode || {};
-    updateElement('modeLastChange', mode.last_change || '-');
+    updateElement('modeLastChange', formatHumanDateTime(mode.last_change));
     updateElement('modeRequestedBy', mode.requested_by || '-');
 
     const portalBtn = document.getElementById('portalAssistBtn');
@@ -186,32 +434,40 @@ function updateActionBoard(actions, state) {
 }
 
 function updateEvidenceBoard(evidence, health) {
-    renderTimeline('alertsTimeline', evidence.recent_alerts || [], (item) => ({
+    const currentTriggers = Array.isArray(evidence.current_triggers) && evidence.current_triggers.length
+        ? evidence.current_triggers
+        : [{
+            ts_iso: latestState.timestamps?.snapshot_at || '-',
+            kind: 'state',
+            title: 'No active trigger',
+            detail: 'No current trigger is keeping the dashboard outside normal monitoring.',
+        }];
+    renderTimeline('currentTriggersTimeline', currentTriggers, (item) => ({
         metaLeft: item.ts_iso || '-',
-        metaRight: `SID ${item.sid || 0}`,
-        title: `${item.attack_type || 'alert'} [${item.risk_level || 'UNKNOWN'}]`,
-        detail: `${item.src_ip || '-'} -> ${item.dst_ip || '-'} | score=${item.risk_score ?? 0} | ${item.recommendation || '-'}`,
+        metaRight: item.kind || '-',
+        title: item.title || '-',
+        detail: item.detail || '-',
     }));
 
-    renderTimeline('aiTimeline', evidence.recent_ai_activity || [], (item) => ({
+    renderTimeline('decisionChangesTimeline', evidence.decision_changes || [], (item) => ({
         metaLeft: item.ts_iso || '-',
-        metaRight: item.status || item.kind || '-',
-        title: item.question || item.answer || '-',
-        detail: `${item.model || '-'} | runbook=${item.runbook_id || '-'} | ${item.user_message || item.answer || '-'}`,
+        metaRight: item.kind || '-',
+        title: item.title || '-',
+        detail: item.detail || '-',
     }));
 
-    renderTimeline('runbookTimeline', evidence.recent_runbook_events || [], (item) => ({
+    renderTimeline('operatorInteractionsTimeline', evidence.operator_interactions || [], (item) => ({
         metaLeft: item.ts_iso || '-',
-        metaRight: item.review_status || '-',
-        title: `${item.action || '-'} ${item.runbook_id || '-'}`,
-        detail: `${item.actor || '-'} | ok=${item.ok} | ${item.effect || '-'}`,
+        metaRight: item.kind || '-',
+        title: item.title || '-',
+        detail: item.detail || '-',
     }));
 
-    renderTimeline('modeTimeline', evidence.recent_mode_changes || [], (item) => ({
-        metaLeft: item.last_change || '-',
-        metaRight: item.requested_by || '-',
-        title: `mode=${item.current_mode || '-'}`,
-        detail: item.source || '-',
+    renderTimeline('backgroundHistoryTimeline', evidence.background_history || [], (item) => ({
+        metaLeft: item.ts_iso || '-',
+        metaRight: item.kind || '-',
+        title: item.title || '-',
+        detail: item.detail || '-',
     }));
 
     const stale = health.stale_flags || {};
@@ -222,10 +478,25 @@ function updateAssistant(actions, mattermost, capabilities) {
     const mio = actions.mio || {};
     updateElement('mioCurrentAnswer', mio.answer || actions.current_recommendation || '-');
     updateElement('mioRecommendation', actions.current_recommendation || '-');
+    const askedAt = mio.asked_at ? formatHumanDateTime(mio.asked_at) : '';
+    const lastAsk = mio.question
+        ? `${mio.question}${askedAt ? ` | ${askedAt}` : ''}${mio.source ? ` | ${mio.source}` : ''}`
+        : 'No manual query executed yet.';
+    updateElement('mioLastAsk', lastAsk);
+    const mioRunbook = mio.runbook || actions.suggested_runbook || {};
+    const runbookSummary = mioRunbook.title
+        ? `${mioRunbook.title}${mioRunbook.id ? ` | ${mioRunbook.id}` : ''}${mioRunbook.effect ? ` | ${mioRunbook.effect}` : ''}`
+        : 'No runbook selected.';
+    updateElement('mioRunbookSummary', runbookSummary);
+    renderList('mioRationaleList', mio.rationale || [], (item) => item);
     updateElement('mioUserGuidance', actions.current_user_guidance || '-');
     updateElement('mioReview', mio.review?.final_status || 'No review data');
     updateElement('mattermostState', mattermost.reachable ? 'reachable' : 'unreachable');
     updateElement('mattermostTriggers', joinList(mattermost.command_triggers || capabilities.mattermost_triggers || []));
+    const opsCommLink = document.getElementById('assistantOpsCommLink');
+    if (opsCommLink) opsCommLink.href = mio.handoff?.ops_comm || '/ops-comm';
+    const mattermostLink = document.getElementById('assistantMattermostLink');
+    if (mattermostLink) mattermostLink.href = mio.handoff?.mattermost || mattermost.open_url || '/ops-comm';
 
     const statusBadge = document.getElementById('mioStatusBadge');
     if (statusBadge) {
@@ -240,6 +511,7 @@ function updateControlButtons(summary) {
     ['portal', 'shield', 'scapegoat'].forEach((mode) => {
         document.getElementById(`mode${capitalize(mode)}Btn`)?.classList.toggle('active', currentMode === mode);
     });
+    applyAudienceControlPolicy();
 }
 
 async function switchMode(mode) {
@@ -307,14 +579,20 @@ async function askMio(question) {
                 context: { audience: currentAudience },
             }),
         });
-        const review = result.runbook_review?.final_status ? ` | review=${result.runbook_review.final_status}` : '';
-        const runbook = result.runbook_id ? ` | runbook=${result.runbook_id}` : '';
         if (responseBox) {
-            responseBox.textContent = `${result.answer || '-'}${runbook}${review}\n\nUser Guidance: ${result.user_message || '-'}`;
+            responseBox.textContent = formatAssistResponse(result);
         }
         updateElement('mioCurrentAnswer', result.answer || '-');
         updateElement('mioUserGuidance', result.user_message || '-');
         updateElement('mioReview', result.runbook_review?.final_status || 'No review data');
+        renderList('mioRationaleList', result.rationale || [], (item) => item);
+        const askedAt = new Date().toISOString();
+        updateElement('mioLastAsk', `${question}${askedAt ? ` | ${formatHumanDateTime(askedAt)}` : ''} | dashboard`);
+        updateElement('mioRunbookSummary', result.runbook_id || 'No runbook selected.');
+        const opsCommLink = document.getElementById('assistantOpsCommLink');
+        if (opsCommLink) opsCommLink.href = result.handoff?.ops_comm || '/ops-comm';
+        const mattermostLink = document.getElementById('assistantMattermostLink');
+        if (mattermostLink) mattermostLink.href = result.handoff?.mattermost || latestMattermost.open_url || '/ops-comm';
         const statusBadge = document.getElementById('mioStatusBadge');
         if (statusBadge) {
             statusBadge.textContent = String(result.status || 'completed').toUpperCase();

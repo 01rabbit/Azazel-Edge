@@ -83,6 +83,24 @@
                     <strong id="stripStale">NO</strong>
                 </div>
             </div>
+            <div class="freshness-grid">
+                <div class="freshness-pill">
+                    <span class="strip-label">Snapshot</span>
+                    <strong id="freshnessSnapshot">-</strong>
+                </div>
+                <div class="freshness-pill">
+                    <span class="strip-label">AI Metrics</span>
+                    <strong id="freshnessAiMetrics">-</strong>
+                </div>
+                <div class="freshness-pill">
+                    <span class="strip-label">AI Activity</span>
+                    <strong id="freshnessAiActivity">-</strong>
+                </div>
+                <div class="freshness-pill">
+                    <span class="strip-label">Runbook Event</span>
+                    <strong id="freshnessRunbook">-</strong>
+                </div>
+            </div>
         </section>
 
         <div class="board-layout">
@@ -151,15 +169,60 @@
                     </div>
                     <div class="action-grid">
                         <article class="action-card emphasis-card">
-                            <div class="card-kicker">Next Actions</div>
-                            <ol class="action-list" id="nextActionsList">
-                                <li>Waiting for action synthesis</li>
-                            </ol>
+                            <div class="card-kicker">Decision Rationale</div>
+                            <div class="action-subsection">
+                                <div class="assistant-label">Why now</div>
+                                <ul class="action-list" id="whyNowList">
+                                    <li>Waiting for causal summary</li>
+                                </ul>
+                            </div>
+                            <div class="action-subsection">
+                                <div class="assistant-label">Do next</div>
+                                <ol class="action-list" id="nextActionsList">
+                                    <li>Waiting for action synthesis</li>
+                                </ol>
+                            </div>
                         </article>
 
                         <article class="action-card guidance-card">
                             <div class="card-kicker">User Guidance</div>
                             <p id="userGuidanceText">-</p>
+                            <div class="action-subsection temp-only">
+                                <div class="assistant-label">Temporary Triage</div>
+                                <div class="temporary-triage-buttons">
+                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="wifi" data-question="Wi-Fi に繋がらない利用者へどう案内するか">Wi-Fi</button>
+                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="reconnect" data-question="再接続できない利用者へどう案内するか">Reconnect</button>
+                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="onboarding" data-question="初回接続の利用者へどう案内するか">Onboarding</button>
+                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="dns" data-question="DNS が引けない時に何を確認するか">DNS</button>
+                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="uplink" data-question="gateway と uplink の異常時に何を確認するか">Uplink</button>
+                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="service" data-question="service の異常時に何を確認するか">Service</button>
+                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="portal" data-question="ポータルが表示されない利用者へどう案内するか">Portal</button>
+                                </div>
+                            </div>
+                            <div class="action-subsection temp-only">
+                                <div class="assistant-label">Ask the user</div>
+                                <ul class="action-list" id="temporaryAskList">
+                                    <li>Choose one symptom card to start guided triage.</li>
+                                </ul>
+                            </div>
+                            <div class="action-subsection temp-only">
+                                <div class="assistant-label">Tell the user</div>
+                                <ul class="action-list" id="temporaryTellList">
+                                    <li>We are checking the current state. Please wait for the next instruction.</li>
+                                </ul>
+                            </div>
+                            <div class="action-subsection">
+                                <div class="assistant-label">Do not do</div>
+                                <ul class="action-list" id="doNotDoList">
+                                    <li>No restricted action</li>
+                                </ul>
+                            </div>
+                            <div class="action-subsection pro-only">
+                                <div class="assistant-label">Escalate if</div>
+                                <ul class="action-list" id="escalateIfList">
+                                    <li>No escalation condition</li>
+                                </ul>
+                            </div>
                             <div class="guidance-warning temp-only" id="temporaryWarningBox">
                                 Temporary mode suppresses dangerous actions and prioritizes safe instructions for the person in front of you.
                             </div>
@@ -174,6 +237,7 @@
                                 <div class="fact-item"><span>Approval</span><strong id="runbookApproval">-</strong></div>
                             </div>
                             <ul class="step-list" id="runbookSteps">
+                                <li>Waiting for action synthesis</li>
                                 <li>No runbook suggested</li>
                             </ul>
                         </article>
@@ -208,20 +272,20 @@
                     </div>
                     <div class="evidence-grid">
                         <article class="evidence-card">
-                            <div class="card-kicker">Recent Alerts</div>
-                            <ul class="timeline-list" id="alertsTimeline"></ul>
+                            <div class="card-kicker">Current Triggers</div>
+                            <ul class="timeline-list" id="currentTriggersTimeline"></ul>
                         </article>
                         <article class="evidence-card">
-                            <div class="card-kicker">AI Activity</div>
-                            <ul class="timeline-list" id="aiTimeline"></ul>
+                            <div class="card-kicker">Decision Changes</div>
+                            <ul class="timeline-list" id="decisionChangesTimeline"></ul>
                         </article>
                         <article class="evidence-card pro-only">
-                            <div class="card-kicker">Runbook Events</div>
-                            <ul class="timeline-list" id="runbookTimeline"></ul>
+                            <div class="card-kicker">Operator Interactions</div>
+                            <ul class="timeline-list" id="operatorInteractionsTimeline"></ul>
                         </article>
                         <article class="evidence-card pro-only">
-                            <div class="card-kicker">Mode Changes</div>
-                            <ul class="timeline-list" id="modeTimeline"></ul>
+                            <div class="card-kicker">Background History</div>
+                            <ul class="timeline-list" id="backgroundHistoryTimeline"></ul>
                         </article>
                     </div>
                 </section>
@@ -230,9 +294,12 @@
             <aside class="assistant-rail">
                 <section class="panel assistant-panel" id="assistantPanel">
                     <div class="panel-heading assistant-heading">
-                        <div>
+                        <div class="assistant-title-row">
+                            <img class="assistant-logo" src="/images/MIO_Logo.png" alt="M.I.O. logo">
+                            <div>
                             <div class="panel-kicker">M.I.O. Assist</div>
                             <h2>Mission Intelligence Operator</h2>
+                            </div>
                         </div>
                         <span class="assistant-status" id="mioStatusBadge">IDLE</span>
                     </div>
@@ -240,6 +307,20 @@
                     <div class="assistant-block">
                         <div class="assistant-label">Current Recommendation</div>
                         <div id="mioRecommendation">-</div>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Last Manual Ask</div>
+                        <div id="mioLastAsk">No manual query executed yet.</div>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Recommended Runbook</div>
+                        <div id="mioRunbookSummary">No runbook selected.</div>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Rationale</div>
+                        <ul class="action-list" id="mioRationaleList">
+                            <li>No rationale available.</li>
+                        </ul>
                     </div>
                     <div class="assistant-block">
                         <div class="assistant-label">User Guidance</div>
@@ -264,6 +345,10 @@
                     <div class="assistant-footer">
                         <div><span class="assistant-label">Mattermost</span><strong id="mattermostState">-</strong></div>
                         <div><span class="assistant-label">Triggers</span><strong id="mattermostTriggers">-</strong></div>
+                    </div>
+                    <div class="assistant-shortcuts">
+                        <a id="assistantOpsCommLink" class="topbar-link" href="/ops-comm">Open Ops Comm</a>
+                        <a id="assistantMattermostLink" class="topbar-link" href="/ops-comm">Open Mattermost</a>
                     </div>
                 </section>
             </aside>

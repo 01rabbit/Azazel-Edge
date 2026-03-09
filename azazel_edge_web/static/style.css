@@ -203,6 +203,24 @@ body[data-audience="professional"] .temp-only {
     margin-bottom: 18px;
 }
 
+.assistant-title-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+}
+
+.assistant-logo {
+    width: 68px;
+    height: 68px;
+    object-fit: cover;
+    border-radius: 14px;
+    border: 1px solid var(--line-strong);
+    box-shadow: var(--shadow-sm);
+    background: rgba(255,255,255,0.04);
+    flex: 0 0 auto;
+}
+
 .command-strip {
     padding: 22px 24px;
     margin-bottom: 18px;
@@ -214,11 +232,31 @@ body[data-audience="professional"] .temp-only {
     gap: 12px;
 }
 
+.freshness-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+}
+
 .strip-pill {
     padding: 14px 14px 12px;
     border-radius: var(--radius-md);
     background: var(--bg-panel);
     border: 1px solid var(--line-soft);
+}
+
+.freshness-pill {
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    background: rgba(255,255,255,0.035);
+    border: 1px solid rgba(255,255,255,0.06);
+}
+
+.freshness-pill strong {
+    display: block;
+    margin-top: 8px;
+    font-size: 0.95rem;
 }
 
 .strip-pill strong {
@@ -379,6 +417,14 @@ body[data-audience="professional"] .temp-only {
     line-height: 1.5;
 }
 
+.action-subsection {
+    margin-top: 16px;
+}
+
+.action-subsection:first-of-type {
+    margin-top: 0;
+}
+
 .guidance-warning {
     margin-top: 16px;
     padding: 12px 14px;
@@ -397,6 +443,13 @@ body[data-audience="professional"] .temp-only {
     margin-top: 16px;
 }
 
+.temporary-triage-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+}
+
 .mode-btn,
 .quick-btn,
 .shortcut-btn,
@@ -413,6 +466,45 @@ body[data-audience="professional"] .temp-only {
     border-color: var(--line-strong);
 }
 
+#modePortalBtn {
+    color: #b9ffd0;
+    border-color: rgba(61, 214, 123, 0.34);
+    background: linear-gradient(145deg, rgba(18, 74, 43, 0.52), rgba(11, 31, 20, 0.72));
+}
+
+#modePortalBtn.active {
+    color: #f4fff8;
+    background: linear-gradient(145deg, rgba(58, 214, 121, 0.78), rgba(18, 120, 63, 0.92));
+    border-color: rgba(132, 255, 179, 0.9);
+    box-shadow: 0 0 0 1px rgba(132, 255, 179, 0.22), 0 10px 26px rgba(32, 150, 82, 0.35);
+}
+
+#modeShieldBtn {
+    color: #c7e4ff;
+    border-color: rgba(78, 155, 255, 0.36);
+    background: linear-gradient(145deg, rgba(17, 46, 90, 0.54), rgba(10, 22, 43, 0.72));
+}
+
+#modeShieldBtn.active {
+    color: #f7fbff;
+    background: linear-gradient(145deg, rgba(69, 151, 255, 0.82), rgba(25, 93, 207, 0.95));
+    border-color: rgba(157, 205, 255, 0.92);
+    box-shadow: 0 0 0 1px rgba(157, 205, 255, 0.22), 0 10px 26px rgba(33, 88, 191, 0.38);
+}
+
+#modeScapegoatBtn {
+    color: #ffd2cb;
+    border-color: rgba(233, 92, 92, 0.38);
+    background: linear-gradient(145deg, rgba(98, 24, 24, 0.58), rgba(47, 12, 12, 0.76));
+}
+
+#modeScapegoatBtn.active {
+    color: #fff8f7;
+    background: linear-gradient(145deg, rgba(231, 79, 79, 0.86), rgba(180, 27, 27, 0.96));
+    border-color: rgba(255, 169, 169, 0.94);
+    box-shadow: 0 0 0 1px rgba(255, 169, 169, 0.22), 0 10px 26px rgba(155, 32, 32, 0.4);
+}
+
 .quick-btn-caution {
     background: rgba(228, 109, 93, 0.14);
     border-color: rgba(228, 109, 93, 0.24);
@@ -421,6 +513,10 @@ body[data-audience="professional"] .temp-only {
 .assistant-rail {
     display: grid;
     align-content: start;
+}
+
+.assistant-heading .assistant-title-row h2 {
+    margin-top: 4px;
 }
 
 .assistant-status {
@@ -553,6 +649,10 @@ body[data-audience="professional"] .temp-only {
         grid-template-columns: repeat(4, minmax(0, 1fr));
     }
 
+    .freshness-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .board-layout {
         grid-template-columns: 1fr;
     }
@@ -579,13 +679,19 @@ body[data-audience="professional"] .temp-only {
     .situation-grid,
     .action-grid,
     .evidence-grid,
-    .strip-grid {
+    .strip-grid,
+    .freshness-grid {
         grid-template-columns: 1fr;
     }
 
     .assistant-footer,
     .service-grid {
         grid-template-columns: 1fr;
+    }
+
+    .assistant-logo {
+        width: 54px;
+        height: 54px;
     }
 
     .dashboard-shell {

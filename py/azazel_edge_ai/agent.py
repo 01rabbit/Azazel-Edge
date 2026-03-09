@@ -480,6 +480,8 @@ def _classify_manual_question(question: str) -> str:
         return "wifi_onboarding"
     if any(token in q for token in ("reconnect", "再接続", "再接続できない")):
         return "wifi_reconnect"
+    if any(token in q for token in ("portal", "ポータル", "captive")):
+        return "portal"
     if any(token in q for token in ("dns", "名前解決", "host", "hostname")):
         return "dns"
     if any(token in q for token in ("gateway", "route", "uplink", "回線", "ゲートウェイ")):
@@ -500,6 +502,7 @@ def _guess_runbook_id(question: str) -> str:
     mapping = {
         "wifi_onboarding": "rb.user.device-onboarding-guide",
         "wifi_reconnect": "rb.user.reconnect-guide",
+        "portal": "rb.user.portal-access-guide",
         "wifi_issue": "rb.user.first-contact.network-issue",
         "dns": "rb.noc.dns.failure.check",
         "route": "rb.noc.default-route.check",
@@ -554,6 +557,13 @@ def _manual_router_response(
         answer = (
             "M.I.O.判断: 再接続手順として扱います。"
             " Wi-Fi のオフ/オンを一度だけ案内し、同じ SSID への再接続結果を確認します。"
+        )
+    elif kind == "portal":
+        runbook_id = "rb.user.portal-access-guide"
+        answer = (
+            "M.I.O.判断: ポータル誘導の失敗として扱います。"
+            " 利用者には接続状態を維持したまま通常のWebサイトを一度だけ開いてもらい、"
+            " ポータル表示の有無を確認します。"
         )
     elif kind == "wifi_issue":
         runbook_id = "rb.user.first-contact.network-issue"

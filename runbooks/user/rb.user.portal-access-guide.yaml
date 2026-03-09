@@ -1,0 +1,22 @@
+id: rb.user.portal-access-guide
+title: User Portal Access Guide
+domain: user
+audience: beginner
+risk: low
+effect: operator_guidance
+requires_approval: false
+args_schema:
+  type: object
+  properties:
+    device_type:
+      type: string
+      enum:
+        - phone
+        - laptop
+        - tablet
+  required: [device_type]
+steps:
+  - Tell the user to remain connected to the expected SSID and open a normal website once.
+  - Confirm whether the portal page appears or the browser stays on a normal error page.
+  - If the portal still does not appear after one guided retry, escalate to NOC portal checks.
+user_message_template: "Wi-Fi接続を維持したまま、通常のWebサイトを1回だけ開いてください。ポータルが出ない場合は、その画面のままお待ちください。"

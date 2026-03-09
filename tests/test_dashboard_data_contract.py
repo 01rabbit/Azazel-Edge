@@ -29,6 +29,7 @@ class DashboardDataContractTests(unittest.TestCase):
             "get_mode_state": webapp.get_mode_state,
             "_mattermost_ping": webapp._mattermost_ping,
             "_service_active": webapp._service_active,
+            "_send_ai_manual_query": webapp._send_ai_manual_query,
         }
 
         webapp.STATE_PATH = root / "ui_snapshot.json"
@@ -181,6 +182,7 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.get_mode_state = self._orig["get_mode_state"]
         webapp._mattermost_ping = self._orig["_mattermost_ping"]
         webapp._service_active = self._orig["_service_active"]
+        webapp._send_ai_manual_query = self._orig["_send_ai_manual_query"]
         self.tmp.cleanup()
 
     def test_dashboard_summary_contract(self) -> None:
@@ -201,6 +203,15 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["suggested_runbook"]["id"], "rb.noc.dns.failure.check")
         self.assertIn("通信経路を確認しています", payload["current_user_guidance"])
         self.assertTrue(payload["current_operator_actions"])
+        self.assertTrue(payload["why_now"])
+        self.assertTrue(payload["do_next"])
+        self.assertTrue(payload["do_not_do"])
+        self.assertTrue(payload["escalate_if"])
+        self.assertIn("signals", " ".join(payload["why_now"]).lower())
+        self.assertEqual(payload["mio"]["question"], "DNS failure")
+        self.assertEqual(payload["mio"]["runbook"]["id"], "rb.noc.dns.failure.check")
+        self.assertTrue(payload["mio"]["rationale"])
+        self.assertEqual(payload["mio"]["handoff"]["ops_comm"], "/ops-comm")
 
     def test_dashboard_evidence_contract(self) -> None:
         response = self.client.get("/api/dashboard/evidence")
@@ -211,6 +222,10 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["recent_ai_activity"][0]["runbook_id"], "rb.noc.dns.failure.check")
         self.assertEqual(payload["recent_runbook_events"][0]["action"], "preview")
         self.assertEqual(payload["recent_mode_changes"][0]["current_mode"], "shield")
+        self.assertTrue(payload["current_triggers"])
+        self.assertTrue(payload["decision_changes"])
+        self.assertTrue(payload["operator_interactions"])
+        self.assertTrue(payload["background_history"])
 
     def test_dashboard_health_contract(self) -> None:
         response = self.client.get("/api/dashboard/health")
@@ -228,9 +243,64 @@ class DashboardDataContractTests(unittest.TestCase):
         text = response.get_data(as_text=True)
         self.assertIn("Command Dashboard", text)
         self.assertIn("Audience Mode", text)
+        self.assertIn("Snapshot", text)
+        self.assertIn("AI Metrics", text)
+        self.assertIn("AI Activity", text)
+        self.assertIn("Runbook Event", text)
         self.assertIn("M.I.O. Assist", text)
-        self.assertIn("Recent Alerts", text)
+        self.assertIn("Last Manual Ask", text)
+        self.assertIn("Recommended Runbook", text)
+        self.assertIn("Rationale", text)
+        self.assertIn("Open Ops Comm", text)
+        self.assertIn("Current Triggers", text)
+        self.assertIn("Decision Changes", text)
+        self.assertIn("Operator Interactions", text)
+        self.assertIn("Background History", text)
         self.assertIn("Ask M.I.O.", text)
+        self.assertIn("Why now", text)
+        self.assertIn("Do not do", text)
+        self.assertIn("Escalate if", text)
+        self.assertIn("Reconnect", text)
+        self.assertIn("Onboarding", text)
+        self.assertIn("Portal", text)
+
+    def test_manual_ai_ask_enriches_rationale_and_handoff(self) -> None:
+        webapp._send_ai_manual_query = lambda **_: {
+            "ok": True,
+            "status": "routed",
+            "model": "manual_router",
+            "answer": "M.I.O.: DNS と gateway を確認します。",
+            "runbook_id": "rb.noc.dns.failure.check",
+            "user_message": "通信経路を確認しています。",
+            "runbook_review": {"final_status": "approved", "findings": ["Resolver mismatch detected."]},
+        }
+        response = self.client.post(
+            "/api/ai/ask",
+            json={"question": "DNS が引けない", "sender": "tester", "source": "ops-comm"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["handoff"]["ops_comm"], "/ops-comm")
+        self.assertIn("rationale", payload)
+        self.assertTrue(payload["rationale"])
+
+    def test_mattermost_response_includes_rationale_and_continue_hint(self) -> None:
+        text = webapp._format_mattermost_ai_response(
+            {
+                "ok": True,
+                "status": "routed",
+                "answer": "M.I.O.: DNS と gateway を確認します。",
+                "user_message": "通信経路を確認しています。",
+                "runbook_id": "rb.noc.dns.failure.check",
+                "runbook_review": {"final_status": "approved"},
+                "rationale": ["Symptom router handled this request without waiting for LLM."],
+                "handoff": {"ops_comm": "/ops-comm", "mattermost": "http://example.invalid/mm"},
+            },
+            None,
+        )
+        self.assertIn("Rationale:", text)
+        self.assertIn("Continue:", text)
 
 
 if __name__ == "__main__":
