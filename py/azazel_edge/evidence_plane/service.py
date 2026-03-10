@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .bus import EvidenceBus
+from .flow_min import read_flow_jsonl
 from .noc_probe import NocProbeAdapter
 from .schema import EvidenceEvent
 from .suricata import read_suricata_jsonl
@@ -19,6 +20,9 @@ class EvidencePlaneService:
 
     def dispatch_suricata_jsonl(self, path: Path, limit: Optional[int] = None) -> List[Dict[str, object]]:
         return self.dispatch_events(read_suricata_jsonl(path, limit=limit))
+
+    def dispatch_flow_jsonl(self, path: Path, limit: Optional[int] = None) -> List[Dict[str, object]]:
+        return self.dispatch_events(read_flow_jsonl(path, limit=limit))
 
     def dispatch_noc_probe(self, adapter: Optional[NocProbeAdapter] = None, snapshot: Optional[Dict[str, object]] = None) -> List[Dict[str, object]]:
         probe = adapter or NocProbeAdapter()

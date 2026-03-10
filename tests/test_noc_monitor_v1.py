@@ -17,6 +17,7 @@ from azazel_edge.sensors.noc_monitor import LightweightNocMonitor, SERVICE_TARGE
 class LightweightNocMonitorV1Tests(unittest.TestCase):
     def test_snapshot_contains_issue_defined_collectors(self) -> None:
         with patch('azazel_edge.sensors.noc_monitor.collect_icmp', return_value={'target': '192.168.40.1', 'reachable': True}), \
+             patch('azazel_edge.sensors.noc_monitor.collect_path_probes', return_value=[{'target': '192.168.40.1', 'scope': 'gateway', 'reachable': True}]), \
              patch('azazel_edge.sensors.noc_monitor.collect_iface_stats', return_value=[{'interface': 'eth1', 'operstate': 'up', 'carrier': 1}]), \
              patch('azazel_edge.sensors.noc_monitor.collect_cpu_mem_temp', return_value={'cpu_percent': 10.0, 'memory': {'percent': 30}, 'temperature_c': 45.0}), \
              patch('azazel_edge.sensors.noc_monitor.collect_dhcp_leases', return_value=[{'ip': '192.168.40.10', 'mac': 'aa:bb:cc:dd:ee:ff'}]), \
@@ -27,13 +28,14 @@ class LightweightNocMonitorV1Tests(unittest.TestCase):
 
         self.assertEqual(
             set(snapshot.keys()),
-            {'icmp', 'iface_stats', 'cpu_mem_temp', 'dhcp_leases', 'arp_table', 'service_health', 'collector_failures'},
+            {'icmp', 'path_probes', 'iface_stats', 'cpu_mem_temp', 'dhcp_leases', 'arp_table', 'service_health', 'collector_failures'},
         )
         self.assertEqual(snapshot['collector_failures'], [])
         self.assertEqual(set(snapshot['service_health'].keys()), set(SERVICE_TARGETS.keys()))
 
     def test_collector_failure_is_not_silenced(self) -> None:
         with patch('azazel_edge.sensors.noc_monitor.collect_icmp', side_effect=RuntimeError('icmp disabled')), \
+             patch('azazel_edge.sensors.noc_monitor.collect_path_probes', return_value=[]), \
              patch('azazel_edge.sensors.noc_monitor.collect_iface_stats', return_value=[]), \
              patch('azazel_edge.sensors.noc_monitor.collect_cpu_mem_temp', return_value={}), \
              patch('azazel_edge.sensors.noc_monitor.collect_dhcp_leases', return_value=[]), \

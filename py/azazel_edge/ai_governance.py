@@ -35,10 +35,13 @@ class AIGovernance:
         source = str(context.get('source') or '')
         if intent not in ALLOWED_INTENTS:
             return False, 'intent_not_allowed'
+        risk_band = str(context.get('risk_band') or '')
         if intent == 'advice':
-            if source == 'suricata_eve' and str(context.get('risk_band') or '') == 'ambiguous':
+            if source == 'suricata_eve' and risk_band in {'ambiguous', 'uncertain'}:
                 return True, 'ambiguous_suricata'
             return False, 'advice_requires_ambiguous_suricata'
+        if intent == 'candidate' and source == 'suricata_eve' and risk_band in {'ambiguous', 'uncertain'}:
+            return True, 'ambiguous_suricata_candidate'
         if intent in {'summary', 'candidate'} and source in {'operator', 'ops_comm', 'mattermost', 'dashboard'}:
             return True, 'operator_requested'
         return False, 'source_not_allowed'
@@ -54,17 +57,36 @@ class AIGovernance:
     def validate_output(self, output: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(output, dict):
             raise AIGovernanceError('output_not_dict')
-        extra = sorted(set(output.keys()).difference({'advice', 'summary', 'candidate'}))
+        allowed_keys = {'advice', 'summary', 'candidate', 'runbook_candidates', 'attack_candidates'}
+        extra = sorted(set(output.keys()).difference(allowed_keys))
         if extra:
             raise AIGovernanceError('output_extra_keys:' + ','.join(extra))
-        validated: Dict[str, Any] = {'advice': '', 'summary': '', 'candidate': ''}
-        for key in validated:
+        validated: Dict[str, Any] = {
+            'advice': '',
+            'summary': '',
+            'candidate': '',
+            'runbook_candidates': [],
+            'attack_candidates': [],
+        }
+        for key in ('advice', 'summary', 'candidate'):
             value = output.get(key, '')
             if value is None:
                 value = ''
             if not isinstance(value, str):
                 raise AIGovernanceError(f'output_{key}_must_be_string')
             validated[key] = value[:240]
+        for key in ('runbook_candidates', 'attack_candidates'):
+            raw = output.get(key, [])
+            if raw is None:
+                raw = []
+            if not isinstance(raw, list):
+                raise AIGovernanceError(f'output_{key}_must_be_list')
+            values: list[str] = []
+            for item in raw[:5]:
+                if not isinstance(item, str):
+                    raise AIGovernanceError(f'output_{key}_items_must_be_string')
+                values.append(item[:96])
+            validated[key] = values
         return validated
 
     def invoke(
@@ -86,7 +108,7 @@ class AIGovernance:
             payload=sanitized,
         )
         if not allowed:
-            result = {'advice': '', 'summary': '', 'candidate': ''}
+            result = {'advice': '', 'summary': '', 'candidate': '', 'runbook_candidates': [], 'attack_candidates': []}
             self.audit.log(
                 'ai_assist',
                 trace_id=trace_id,
@@ -109,10 +131,20 @@ class AIGovernance:
             )
             return validated
         except AIGovernanceError:
+            self.audit.log(
+                'ai_assist',
+                trace_id=trace_id,
+                source=source,
+                stage='review',
+                decision='rejected',
+                payload={'summary': sanitized.get('summary', '')[:240]},
+            )
             fallback = {
                 'advice': '',
                 'summary': sanitized.get('summary', '')[:240],
                 'candidate': '',
+                'runbook_candidates': [],
+                'attack_candidates': [],
             }
             self.audit.log(
                 'ai_assist',

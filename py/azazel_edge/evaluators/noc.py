@@ -99,7 +99,7 @@ class NocEvaluator:
     def __init__(self, config: Dict[str, Any] | None = None):
         self.config = _merge_config(config)
 
-    def evaluate(self, events: Iterable[Any], sot: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def evaluate(self, events: Iterable[Any], sot: Dict[str, Any] | None = None, sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         payloads = _to_payloads(events)
         by_kind: Dict[str, List[Dict[str, Any]]] = {}
         all_evidence_ids: List[str] = []
@@ -113,7 +113,9 @@ class NocEvaluator:
         availability = self._evaluate_availability(by_kind)
         path_health = self._evaluate_path_health(by_kind)
         device_health = self._evaluate_device_health(by_kind)
-        client_health = self._evaluate_client_health(by_kind, sot=sot)
+        client_health = self._evaluate_client_health(by_kind, sot=sot, sot_diff=sot_diff)
+        if sot_diff:
+            path_health = self._apply_sot_diff_to_path_health(path_health, sot_diff)
 
         summary_reasons: List[str] = []
         degraded_mode = False
@@ -183,6 +185,12 @@ class NocEvaluator:
             if str(attrs.get('state') or '').upper() != 'ON':
                 score -= cfg['service_off_penalty']
                 reasons.append(f"service_off:{attrs.get('target') or event.get('subject')}")
+            elif str(attrs.get('substate') or '').lower() not in {'running', 'listening', 'unknown'}:
+                score -= 5
+                reasons.append(f"service_degraded:{attrs.get('target') or event.get('subject')}")
+            elif str(attrs.get('result') or '').lower() not in {'success', 'unknown'}:
+                score -= 5
+                reasons.append(f"service_result:{attrs.get('target') or event.get('subject')}")
 
         for event in by_kind.get('collector_failure', []):
             collector = str(event.get('attrs', {}).get('collector') or '')
@@ -205,6 +213,20 @@ class NocEvaluator:
                 score -= cfg['probe_failed_penalty']
                 reasons.append('path_probe_failed')
 
+        probe_results: List[bool] = []
+        for event in by_kind.get('path_probe', []):
+            attrs = event.get('attrs', {})
+            evidence_ids.append(str(event.get('event_id') or ''))
+            reachable = bool(attrs.get('reachable'))
+            scope = str(attrs.get('scope') or '')
+            probe_results.append(reachable)
+            if not reachable:
+                score -= 20 if scope == 'external' else 10
+                reasons.append(f'path_probe_failed:{scope or "unknown"}')
+        if probe_results and len(set(probe_results)) > 1:
+            score -= 15
+            reasons.append('path_target_divergence')
+
         for event in by_kind.get('iface_stats', []):
             attrs = event.get('attrs', {})
             evidence_ids.append(str(event.get('event_id') or ''))
@@ -214,12 +236,24 @@ class NocEvaluator:
                 score -= cfg['iface_degraded_penalty']
                 reasons.append(f"iface_degraded:{attrs.get('interface') or event.get('subject')}")
 
+        for event in by_kind.get('flow_summary', []):
+            attrs = event.get('attrs', {})
+            flow_state = str(attrs.get('flow_state') or '').lower()
+            evidence_ids.append(str(event.get('event_id') or ''))
+            if flow_state in {'failed', 'reset', 'timeout'}:
+                score -= 10
+                reasons.append('flow_path_instability')
+
         for event in by_kind.get('collector_failure', []):
             collector = str(event.get('attrs', {}).get('collector') or '')
             if collector in {'icmp', 'iface_stats'}:
                 evidence_ids.append(str(event.get('event_id') or ''))
                 score -= cfg['collector_failure_penalty']
                 reasons.append(f'collector_failure:{collector}')
+            if collector == 'path_probes':
+                evidence_ids.append(str(event.get('event_id') or ''))
+                score -= cfg['collector_failure_penalty']
+                reasons.append('collector_failure:path_probes')
 
         return _make_dimension(score, reasons, evidence_ids)
 
@@ -263,7 +297,7 @@ class NocEvaluator:
 
         return _make_dimension(score, reasons, evidence_ids)
 
-    def _evaluate_client_health(self, by_kind: Dict[str, List[Dict[str, Any]]], sot: Dict[str, Any] | None) -> Dict[str, Any]:
+    def _evaluate_client_health(self, by_kind: Dict[str, List[Dict[str, Any]]], sot: Dict[str, Any] | None, sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         cfg = self.config['client_health']
         score = 100
         reasons: List[str] = []
@@ -289,6 +323,13 @@ class NocEvaluator:
             if state in {'STALE', 'FAILED', 'INCOMPLETE'}:
                 stale_arp += 1
 
+        for event in by_kind.get('flow_summary', []):
+            evidence_ids.append(str(event.get('event_id') or ''))
+            attrs = event.get('attrs', {})
+            if int(attrs.get('pkts_toserver') or 0) >= 20 and int(attrs.get('pkts_toclient') or 0) == 0:
+                score -= 10
+                reasons.append('one_way_client_flow')
+
         if not dhcp_ips and not arp_ips:
             score = cfg['no_client_evidence_score']
             reasons.append('no_client_evidence')
@@ -312,4 +353,27 @@ class NocEvaluator:
                 score -= min(cfg['unknown_client_penalty_cap'], cfg['unknown_client_penalty_per_client'] * len(unknown))
                 reasons.append('unknown_clients_present')
 
+        if sot_diff:
+            unauthorized_devices = sot_diff.get('unauthorized_devices', []) if isinstance(sot_diff.get('unauthorized_devices'), list) else []
+            if unauthorized_devices:
+                score -= min(cfg['unknown_client_penalty_cap'], cfg['unknown_client_penalty_per_client'] * len(unauthorized_devices))
+                reasons.append('unauthorized_devices_present')
+                evidence_ids.extend(str(x) for x in sot_diff.get('evidence_ids', []) if str(x))
+
         return _make_dimension(score, reasons, evidence_ids)
+
+    @staticmethod
+    def _apply_sot_diff_to_path_health(path_health: Dict[str, Any], sot_diff: Dict[str, Any]) -> Dict[str, Any]:
+        updated = deepcopy(path_health)
+        if sot_diff.get('path_deviations'):
+            updated['score'] = max(0, int(updated.get('score') or 0) - 20)
+            updated['reasons'] = list(updated.get('reasons', [])) + ['path_deviation_detected']
+        if sot_diff.get('unauthorized_services'):
+            updated['score'] = max(0, int(updated.get('score') or 0) - 10)
+            updated['reasons'] = list(updated.get('reasons', [])) + ['unauthorized_services_present']
+        updated['evidence_ids'] = sorted(dict.fromkeys(
+            [str(x) for x in updated.get('evidence_ids', []) if str(x)] +
+            [str(x) for x in sot_diff.get('evidence_ids', []) if str(x)]
+        ))
+        updated['label'] = _bucket(int(updated.get('score') or 0))
+        return updated
