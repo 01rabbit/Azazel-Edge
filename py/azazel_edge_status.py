@@ -26,6 +26,7 @@ PY_ROOT = Path(__file__).resolve().parent
 if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 
+from azazel_edge.demo_overlay import is_demo_overlay_active, read_demo_overlay
 from azazel_edge.path_schema import wifi_health_path_candidates
 
 # ---------- helpers ----------
@@ -200,12 +201,19 @@ def _print_status():
     line1 = f"{ap}{arw}{ssid}{arw}{aza}{arw}{dhcp}{arw}{lap}"
     badges = f"  [NET {ok_sym}]  [CAP {cap_sym}]  [RSSI {rssi if rssi is not None else '—'} dBm]"
     health = _health_status()
+    demo = read_demo_overlay()
 
     # Print
     print(f"==== Azazel-Edge Status  |  {now} ====")
     print(line1 + badges)
     print(f"AP(wlan0): {wlan_ip}   |   Pi(usb0): {usb_ip}   |   Laptop: {lap_ip}")
     print(f"GW-IF: {gw_if}    BSSID: {bssid}")
+    if is_demo_overlay_active(demo):
+        print(
+            f"DEMO: {demo.get('scenario_id', 'demo')}  "
+            f"| action={demo.get('action', '-')}  "
+            f"| reason={demo.get('reason', '-')}"
+        )
     if health:
         print(f"Wi-Fi health: {health}")
     print("-" * 80)

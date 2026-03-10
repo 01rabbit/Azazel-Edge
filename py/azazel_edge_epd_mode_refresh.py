@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from azazel_edge.control_plane import read_snapshot_payload
+from azazel_edge.demo_overlay import is_demo_overlay_active, read_demo_overlay
 from azazel_edge.path_schema import runtime_snapshot_path_candidates
 
 EPD_STATE = Path("/run/azazel-edge/epd_state.json")
@@ -133,6 +134,24 @@ def _risk_status_from_snapshot() -> str:
 
 
 def _desired_render_spec(payload: Dict[str, Any]) -> Dict[str, Any]:
+    overlay = read_demo_overlay()
+    if is_demo_overlay_active(overlay):
+        user_state = str(overlay.get("soc_status") or "").strip().lower()
+        if user_state == "critical":
+            risk_status = "DECEPTION"
+        elif str(overlay.get("noc_status") or "").strip().lower() in ("critical", "degraded"):
+            risk_status = "LIMITED"
+        else:
+            risk_status = "CHECKING"
+        return {
+            "state": "normal",
+            "mode_label": "DEMO",
+            "ssid": str(overlay.get("scenario_id") or "demo")[:24],
+            "risk_status": risk_status,
+            "suspicion": int(overlay.get("soc_suspicion") or 0),
+            "signal": None,
+        }
+
     mode = str(payload.get("mode", "")).strip().lower()
 
     # Keep base screen during mode switch (no WARNING banner).

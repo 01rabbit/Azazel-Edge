@@ -42,6 +42,13 @@ body {
         linear-gradient(145deg, var(--bg-0), var(--bg-1) 46%, #0f151b 100%);
 }
 
+body.demo-overlay-active {
+    background:
+        radial-gradient(circle at 12% 12%, rgba(224, 164, 88, 0.24), transparent 28%),
+        radial-gradient(circle at 86% 16%, rgba(228, 109, 93, 0.16), transparent 22%),
+        linear-gradient(145deg, #18120d, #211812 42%, #0f151b 100%);
+}
+
 body::before {
     content: "";
     position: fixed;
@@ -236,6 +243,43 @@ body[data-audience="professional"] .temp-only {
     margin-top: 10px;
     color: var(--text-dim);
     line-height: 1.45;
+}
+
+.demo-raw-panel {
+    margin-top: 16px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    padding-top: 16px;
+}
+
+body.demo-overlay-active .demo-panel,
+body.demo-overlay-active .command-strip,
+body.demo-overlay-active .assistant-panel,
+body.demo-overlay-active .posture-card {
+    border-color: rgba(224, 164, 88, 0.32);
+    box-shadow: 0 0 0 1px rgba(224, 164, 88, 0.10), var(--shadow-lg);
+}
+
+body.demo-overlay-active #commandStripNote,
+body.demo-overlay-active #healthSummaryLine {
+    color: #ffd7a7;
+}
+
+.demo-raw-panel summary {
+    cursor: pointer;
+    color: var(--text-dim);
+    list-style: none;
+}
+
+.demo-raw-panel summary::-webkit-details-marker {
+    display: none;
+}
+
+.demo-raw-response {
+    margin-top: 12px;
+    max-height: 280px;
+    overflow: auto;
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
 }
 
 .command-strip {
@@ -635,6 +679,12 @@ body[data-audience="professional"] .temp-only {
 .status-caution { color: var(--accent-amber); }
 .status-danger { color: var(--accent-red); }
 .status-neutral { color: var(--accent-steel); }
+.status-demo {
+    color: #ffe2b8;
+    background: linear-gradient(145deg, rgba(224, 164, 88, 0.22), rgba(228, 109, 93, 0.14));
+    border-color: rgba(224, 164, 88, 0.42);
+    box-shadow: 0 0 0 1px rgba(224, 164, 88, 0.12), 0 8px 20px rgba(224, 164, 88, 0.12);
+}
 
 .toast {
     position: fixed;

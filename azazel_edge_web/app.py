@@ -56,6 +56,13 @@ try:
         propose_runbooks as runbook_propose,
         review_runbook_id as runbook_review_id,
     )
+    from azazel_edge.demo_overlay import (
+        DEMO_OVERLAY_PATH,
+        build_demo_overlay,
+        clear_demo_overlay,
+        read_demo_overlay,
+        write_demo_overlay,
+    )
     from azazel_edge.path_schema import (
         config_dir_candidates,
         first_minute_config_candidates,
@@ -73,6 +80,11 @@ except Exception:
     runbook_list = None
     runbook_propose = None
     runbook_review_id = None
+    DEMO_OVERLAY_PATH = Path("/run/azazel-edge/demo_overlay.json")
+    build_demo_overlay = lambda result: {"active": True, "raw_result": result}  # type: ignore
+    clear_demo_overlay = lambda: None  # type: ignore
+    read_demo_overlay = lambda: {}  # type: ignore
+    write_demo_overlay = lambda payload: DEMO_OVERLAY_PATH  # type: ignore
     config_dir_candidates = lambda: [Path("/etc/azazel-edge"), Path("/etc/azazel-zero")]  # type: ignore
     first_minute_config_candidates = lambda: [Path("/etc/azazel-edge/first_minute.yaml"), Path("/etc/azazel-zero/first_minute.yaml")]  # type: ignore
     mode_state_candidates = lambda: [Path("/etc/azazel/mode.json"), Path("/etc/azazel-edge/mode.json"), Path("/etc/azazel-zero/mode.json")]  # type: ignore
@@ -2649,6 +2661,22 @@ def api_demo_scenarios():
     return jsonify(payload), code
 
 
+@app.route("/api/demo/overlay", methods=["GET"])
+def api_demo_overlay():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    payload = read_demo_overlay()
+    return jsonify({"ok": True, "overlay": payload, "active": bool(payload.get("active"))}), 200
+
+
+@app.route("/api/demo/overlay/clear", methods=["POST"])
+def api_demo_overlay_clear():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    clear_demo_overlay()
+    return jsonify({"ok": True, "cleared": True}), 200
+
+
 @app.route("/api/demo/run/<scenario_id>", methods=["POST"])
 def api_demo_run(scenario_id: str):
     if not verify_token():
@@ -2657,6 +2685,10 @@ def api_demo_run(scenario_id: str):
     if not scenario:
         return jsonify({"ok": False, "error": "scenario_id is required"}), 400
     payload, code = _run_demo_runner("run", scenario)
+    if code == 200 and isinstance(payload, dict) and payload.get("ok") and isinstance(payload.get("result"), dict):
+        overlay = build_demo_overlay(payload["result"])
+        write_demo_overlay(overlay)
+        payload["overlay"] = overlay
     return jsonify(payload), code
 
 

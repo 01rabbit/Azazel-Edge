@@ -28,6 +28,7 @@ if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 
 from azazel_edge.control_plane import read_snapshot_payload, send_action, send_action_with_fallback
+from azazel_edge.demo_overlay import read_demo_overlay, is_demo_overlay_active
 from azazel_edge.path_schema import log_dir_candidates, snapshot_path_candidates
 
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -694,6 +695,36 @@ def generate_recommendation(snap: Snapshot) -> str:
     return " | ".join(recommendations[:2]) if recommendations else "✅ 問題なし"
 
 
+def _apply_demo_overlay_to_snapshot(snap: Snapshot) -> Snapshot:
+    overlay = read_demo_overlay()
+    if not is_demo_overlay_active(overlay):
+        return snap
+    scenario_id = str(overlay.get("scenario_id") or "demo").strip()
+    action = str(overlay.get("action") or "observe").strip()
+    reason = str(overlay.get("reason") or "demo_overlay").strip()
+    noc_status = str(overlay.get("noc_status") or "unknown").strip().lower()
+    soc_status = str(overlay.get("soc_status") or "unknown").strip().lower()
+    suspicion = int(overlay.get("soc_suspicion") or 0)
+    if soc_status == "critical":
+        snap.user_state = "DECEPTION"
+        snap.internal["state_name"] = "DEMO-SOC"
+    elif noc_status in {"critical", "degraded"}:
+        snap.user_state = "LIMITED"
+        snap.internal["state_name"] = "DEMO-NOC"
+    else:
+        snap.user_state = "CHECKING"
+        snap.internal["state_name"] = "DEMO"
+    snap.recommendation = f"DEMO {scenario_id}: {action} because {reason}"[:120]
+    snap.reasons = [f"demo:{scenario_id}", f"action:{action}", f"reason:{reason}"]
+    snap.next_action_hint = "Clear demo overlay to return to live state"
+    snap.evidence = [f"demo scenario={scenario_id}", *[str(x) for x in (overlay.get('chosen_evidence_ids') or [])[:4]]]
+    snap.risk_score = suspicion
+    snap.ssid = f"DEMO:{scenario_id}"
+    snap.gateway_ip = "demo-target"
+    snap.source = f"DEMO:{scenario_id}"
+    return snap
+
+
 def load_snapshot() -> Snapshot:
     data: Dict[str, object]
     payload, source = read_snapshot_payload(prefer_control_plane=True)
@@ -735,6 +766,8 @@ def load_snapshot() -> Snapshot:
                 pass
             snap = build_snapshot(sample, source="SAMPLE")
     
+    snap = _apply_demo_overlay_to_snapshot(snap)
+
     # WiFiチャンネルスキャンを実行（上りインターフェースを使用）
     try:
         # 相対インポートまたは直接インポートを試行

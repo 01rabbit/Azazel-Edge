@@ -367,7 +367,10 @@
                             <option value="">Loading scenarios...</option>
                         </select>
                         <div id="demoScenarioDescription" class="demo-description">-</div>
-                        <button type="submit" id="demoRunSubmit" class="assistant-submit">Run Demo</button>
+                        <div class="assistant-shortcuts">
+                            <button type="submit" id="demoRunSubmit" class="assistant-submit">Run Demo</button>
+                            <button type="button" id="demoClearOverlayBtn" class="shortcut-btn">Clear Demo Overlay</button>
+                        </div>
                     </form>
                     <div class="assistant-block">
                         <div class="assistant-label">Scenario Result</div>
@@ -375,13 +378,35 @@
                             <div class="fact-item"><span>NOC</span><strong id="demoNocStatus">-</strong></div>
                             <div class="fact-item"><span>SOC</span><strong id="demoSocStatus">-</strong></div>
                             <div class="fact-item"><span>Action</span><strong id="demoAction">-</strong></div>
+                            <div class="fact-item"><span>Reason</span><strong id="demoReason">-</strong></div>
                         </div>
                     </div>
                     <div class="assistant-block">
                         <div class="assistant-label">Operator Wording</div>
                         <div id="demoOperatorWording">No scenario executed yet.</div>
                     </div>
-                    <div class="assistant-response" id="demoResponse">No scenario executed yet.</div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Next Checks</div>
+                        <ul class="action-list" id="demoNextChecks">
+                            <li>No scenario executed yet.</li>
+                        </ul>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Chosen Evidence</div>
+                        <ul class="action-list" id="demoEvidenceIds">
+                            <li>No scenario executed yet.</li>
+                        </ul>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Rejected Alternatives</div>
+                        <ul class="action-list" id="demoRejectedAlternatives">
+                            <li>No scenario executed yet.</li>
+                        </ul>
+                    </div>
+                    <details class="demo-raw-panel">
+                        <summary>Raw JSON</summary>
+                        <pre class="assistant-response demo-raw-response" id="demoResponse">No scenario executed yet.</pre>
+                    </details>
                 </section>
             </aside>
         </div>
