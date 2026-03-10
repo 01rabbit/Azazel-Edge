@@ -1,164 +1,248 @@
 # Azazel-Edge
 
-内部ネットワーク向けインストーラです。`wlan0` をアクセスポイントとして起動し、`br0` 上で DHCP 配布を行います。
+Azazel-Edge is a Raspberry Pi-class defensive edge gateway for small internal networks.
+It combines a local gateway/AP stack, deterministic NOC/SOC evaluation, operator-facing UI surfaces, and tightly governed AI assistance for ambiguous security and operational events.
 
-## 構成内容
-- `NetworkManager` で内部ブリッジを永続化
-- `br0` に `172.16.0.254/24` を設定
-- `eth0` を `br0` の slave として接続
-- `wlan0` を AP モード (`master=br0`) で起動
-- `dnsmasq` で DHCP 配布
-  - 配布レンジ: `172.16.0.101-172.16.0.200`
-  - Gateway/DNS: `172.16.0.254`
-- 既存の `eth0` 自動接続プロファイル競合を無効化（`eth0` の bridge 参加を固定）
-- `avahi-daemon` 有効化（`.local` 維持）
-- `sshd` は既定で `ListenAddress 172.16.0.254`（内部専用）
-- `nftables` で `br0 -> WAN` の NAT/forward を設定（既定: デフォルトルートのIF）
+<p align="center">
+  <img src="https://img.shields.io/badge/-Raspberry%20Pi-C51A4A.svg?logo=raspberry-pi&style=flat">
+  <img src="https://img.shields.io/badge/-Python-F9DC3E.svg?logo=python&style=flat">
+  <img src="https://img.shields.io/badge/-Rust-000000.svg?logo=rust&style=flat">
+  <img src="https://img.shields.io/badge/-Flask-000000.svg?logo=flask&style=flat">
+  <img src="https://img.shields.io/badge/-Mattermost-0058CC.svg?logo=mattermost&style=flat">
+  <img src="https://img.shields.io/badge/-Ollama-111111.svg?style=flat">
+</p>
 
-外部WAN (`eth1`/`wlan1`) の uplink は自動検出（必要なら `WAN_IF` で上書き）します。OpenCanary・policy routing は対象外です。
+## Concept
 
-## 実行
+Azazel-Edge is not just a dashboard or a packet filter.
+It is designed as an operator-aware edge appliance that:
+
+- provides a managed internal segment and uplink gateway
+- observes network and service health continuously
+- ingests security and operational evidence into a shared evidence plane
+- evaluates NOC and SOC conditions deterministically first
+- chooses actions through an explicit arbiter
+- explains decisions, logs them, and only then uses AI as a governed assist layer
+
+The design goal is practical field use on constrained hardware, especially Raspberry Pi 5-class systems, without letting the AI path dominate or destabilize core defensive functions.
+
+## What It Does
+
+### 1. Internal edge gateway
+- Builds an internal network baseline around `br0`
+- Default internal address space: `172.16.0.254/24`
+- Supports AP-mode internal access and NAT/forwarding toward an external uplink
+- Uses `NetworkManager`, `dnsmasq`, `nftables`, and related host-side plumbing
+
+### 2. Operational control plane
+- Maintains a unified runtime snapshot consumed by WebUI, TUI, and EPD
+- Exposes local control/actions through the control daemon
+- Supports mode changes, reprobe, containment, Wi-Fi scan/connect, and related actions
+
+### 3. Deterministic NOC/SOC pipeline
+- Evidence Plane normalizes:
+  - `suricata_eve`
+  - `flow_min`
+  - `noc_probe`
+  - `syslog_min`
+- NOC evaluator scores:
+  - availability
+  - path health
+  - device health
+  - client health
+- SOC evaluator scores:
+  - suspicion
+  - confidence
+  - technique likelihood
+  - blast radius
+- Action Arbiter selects:
+  - `observe`
+  - `notify`
+  - `throttle`
+  - `redirect`
+  - `isolate`
+
+### 4. Governed AI assistance
+- Ollama-hosted local models are used only as a bounded assist path
+- Current model strategy:
+  - `qwen3.5:2b`
+  - `qwen3.5:0.8b`
+- AI is used for:
+  - ambiguous Suricata alerts
+  - operator questions
+  - runbook suggestion support
+- AI is not the primary decision-maker
+
+### 5. Operator interfaces
+- Web dashboard
+- `/ops-comm` M.I.O. assist console
+- Mattermost integration with `/mio`
+- TUI status/control surface
+- E-paper status display
+
+## Current Runtime Architecture
+
+High-level pipeline:
+
+1. Evidence inputs
+2. Evidence Plane
+3. NOC / SOC evaluators
+4. Action Arbiter
+5. Decision Explanation
+6. Notification / AI governance
+7. Audit logging
+
+Related implementation notes:
+- [P0 runtime architecture](docs/P0_RUNTIME_ARCHITECTURE.md)
+- [AI operation guide](docs/AI_OPERATION_GUIDE.md)
+- [AI build and operation detail](docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL.md)
+
+## Feature Highlights
+
+### Unified evidence and evaluation
+- Shared event schema with consistent fields:
+  - `event_id`
+  - `ts`
+  - `source`
+  - `kind`
+  - `subject`
+  - `severity`
+  - `confidence`
+  - `attrs`
+- Source-specific adapters normalized into one downstream format
+
+### Lightweight defensive research extensions
+- config drift audit
+- multi-segment NOC evaluation
+- cross-source correlation
+- ATT&CK / D3FEND visualization payloads
+- Sigma assist execution
+- YARA / YARA-X assist matching
+- upstream integration envelope/sinks
+- demo scenario pack
+
+### M.I.O. operator assistance
+M.I.O. is the operator support persona used in:
+- dashboard assist
+- `/ops-comm`
+- Mattermost `/mio`
+
+M.I.O. is designed as a governed assistant, not an unrestricted autonomous agent.
+
+See:
+- [M.I.O. persona profile](docs/MIO_PERSONA_PROFILE.md)
+
+## Installation
+
+### Unified installer
+
+This is the main entrypoint for reproducing the current Azazel-Edge stack on another host:
+
 ```bash
 cd /home/azazel/Azazel-Edge
-sudo AP_SSID='Azazel-Internal' AP_PSK='yourStrongPass123' ./installer/internal/install_internal_network.sh
+sudo ENABLE_INTERNAL_NETWORK=1 \
+     ENABLE_APP_STACK=1 \
+     ENABLE_AI_RUNTIME=1 \
+     ENABLE_DEV_REMOTE_ACCESS=0 \
+     bash installer/internal/install_all.sh
 ```
 
-`AP_SSID` と `AP_PSK` を省略するとデフォルト値が使われます。
+Main flags:
+- `ENABLE_INTERNAL_NETWORK=1|0`
+- `ENABLE_APP_STACK=1|0`
+- `ENABLE_AI_RUNTIME=1|0`
+- `ENABLE_DEV_REMOTE_ACCESS=1|0`
+- `ENABLE_RUST_CORE=1|0`
 
-## ワンショット統合インストーラ
-内部ネットワーク + アプリスタック + （任意）開発用リモート許可を1回で実行:
+### App stack only
 
 ```bash
 cd /home/azazel/Azazel-Edge
-sudo ENABLE_DEV_REMOTE_ACCESS=1 DEV_REMOTE_MODE=open ./installer/internal/install_all.sh
+sudo ENABLE_SERVICES=1 bash installer/internal/install_migrated_tools.sh
 ```
 
-主な切替変数:
-- `ENABLE_INTERNAL_NETWORK=1|0`（既定: 1）
-- `ENABLE_APP_STACK=1|0`（既定: 1）
-- `ENABLE_DEV_REMOTE_ACCESS=1|0`（既定: 0）
-- `DEV_REMOTE_MODE=open|close`（既定: open）
-
-Rust防御コアは既定で導入されます（完全移行モード）。明示的に再導入する場合:
-```bash
-cd /home/azazel/Azazel-Edge
-sudo ENABLE_RUST_CORE=1 ./installer/internal/install_migrated_tools.sh
-```
-
-関連サービス:
-- `azazel-edge-core.service`（Rustイベントエンジン）
-- `azazel-edge-ai-agent.service`（Python AI支援）
-
-設計資料:
-- `docs/ARCHITECTURE_REDESIGN.md`
-
-## 反映後チェック
-```bash
-nmcli -t -f DEVICE,STATE,CONNECTION dev
-ip addr show br0
-systemctl status dnsmasq --no-pager
-systemctl status avahi-daemon --no-pager
-```
-
-DHCP確認（接続端末側）:
-- APに接続して `172.16.0.101-200` が払い出されること
-- `eth0` 接続端末でも同レンジが払い出されること
-
-内部端末からの管理SSH確認:
-```bash
-ssh azazel@Azazel-Edge.local
-```
-
-## 開発期間: 外部/内部から同時アクセスを許可
-開発期間中に、外部ネットワークと内部ネットワークの両方からアクセスできる設定へ切り替えるには:
+### AI runtime only
 
 ```bash
 cd /home/azazel/Azazel-Edge
-sudo MODE=open DEVICE_HOSTNAME=Azazel-Edge ./installer/internal/set_dev_remote_access.sh
+sudo ENABLE_OLLAMA=1 ENABLE_MATTERMOST=1 bash installer/internal/install_ai_runtime.sh
 ```
 
-この設定で以下を実施します:
-- SSH を全インターフェースで待受（VSCode Remote-SSH 利用可）
-- Avahi を `br0` + WAN IF で有効化し、`.local` を広報
-- UFW 有効時は `22/tcp` を許可
+## Access Points
 
-開発終了後に戻す:
-```bash
-cd /home/azazel/Azazel-Edge
-sudo MODE=close DEVICE_HOSTNAME=Azazel-Edge ./installer/internal/set_dev_remote_access.sh
+Default local endpoints after installation:
+
+- Dashboard: `https://172.16.0.254/`
+- M.I.O. ops console: `https://172.16.0.254/ops-comm`
+- Mattermost: `http://172.16.0.254:8065/`
+- Local web backend: `http://127.0.0.1:8084/`
+
+Mattermost operator shortcut:
+
+```text
+/mio 現在の警戒ポイントは？
 ```
 
-注意:
-- `.local` は mDNS 依存のため、外部クライアント環境によっては名前解決できません。
-- その場合は外部クライアント側の hosts に `WAN_IP Azazel-Edge.local` を追加してください。
+## Core Services
 
-## Azazel-Gadget からの移植（ネットワーク非影響）
-- `bin/azazel-edge-path-schema`
-  - パススキーマ状態確認/移行ツール
-  - `status` は参照のみ
-  - `migrate --dry-run` は変更なしで計画表示
-- `py/azazel_edge/path_schema.py`
-  - パス候補解決とスキーマ移行ロジック
-- `py/azazel_edge/tactics_engine/config_hash.py`
-  - 設定の SHA256 計算/検証ユーティリティ
-- `py/azazel_edge/tactics_engine/decision_logger.py`
-  - 意思決定レコードを JSONL に追記するロガー
-- `py/azazel_edge/tactics_engine/eve_parser.py`
-  - EVE JSON を破損耐性つきで解析するパーサ
+Main systemd units:
 
-インストール（移植した順）:
+- `azazel-edge-control-daemon.service`
+- `azazel-edge-web.service`
+- `azazel-edge-ai-agent.service`
+- `azazel-edge-core.service`
+- `azazel-edge-epd-refresh.service`
+- `azazel-edge-epd-refresh.timer`
+- `azazel-edge-opencanary.service`
+- `azazel-edge-suricata.service`
+
+## Quick Verification
+
 ```bash
-cd /home/azazel/Azazel-Edge
-sudo ./installer/internal/install_migrated_tools.sh
-```
-
-使用例:
-```bash
-cd /home/azazel/Azazel-Edge
-/usr/local/bin/azazel-edge-path-schema status
-PYTHONPATH=/opt/azazel-edge/py python3 -c "from azazel_edge.tactics_engine.config_hash import ConfigHash; print(ConfigHash.compute(config_dict={'mode':'shield'}))"
-PYTHONPATH=/opt/azazel-edge/py python3 -c "from azazel_edge.tactics_engine import EVEParser; p=EVEParser(); print(p.parse_line('{\"alert\":{\"sid\":1}}'))"
-```
-
-## WebUI / TUI / EPD 移植
-以下を `Azazel-Edge` 名で移植・インストール済みです。
-- WebUI: `azazel_edge_web/` + `azazel-edge-web.service`（`gunicorn` 本番WSGI）
-- TUI: `py/azazel_edge/cli_unified.py` + `azazel-edge-tui`
-- EPD: `py/azazel_edge_epd.py` / `py/azazel_edge_epd_mode_refresh.py` + `azazel-edge-epd-refresh.timer`
-- Control API: `py/azazel_edge_control/daemon.py` + `azazel-edge-control-daemon.service`
-
-実装済み機能:
-- `azazel-edge-control-daemon` の Unix socket (`/run/azazel-edge/control.sock`) 経由で action API を処理
-- `/api/mode`（mode状態取得・切替）
-- `/api/action/*`（refresh/reprobe/contain/stage_open/disconnect/details/shutdown/reboot）
-- `/api/wifi/scan`, `/api/wifi/connect`
-- TUI/EPD は `azazel_edge` の snapshot/control API を使用
-
-再インストール:
-```bash
-cd /home/azazel/Azazel-Edge
-sudo ./installer/internal/install_migrated_tools.sh
-```
-
-他環境への構築:
-1. このリポジトリを配置
-2. `sudo ./installer/internal/install_migrated_tools.sh` を実行
-3. 自動で以下を構成
-   - `/opt/azazel-edge` 配下にコード/資産配置
-   - `venv` 作成と `requirements/runtime.txt` から依存導入
-   - `azazel-edge-control-daemon.service`
-   - `azazel-edge-web.service`（gunicorn）
-   - `azazel-edge-epd-refresh.timer`
-   - `/usr/local/bin/azazel-edge-*` ランチャー配置
-
-起動/確認:
-```bash
-systemctl status azazel-edge-control-daemon.service --no-pager
-systemctl status azazel-edge-web.service --no-pager
-systemctl status azazel-edge-epd-refresh.timer --no-pager
+systemctl status azazel-edge-control-daemon --no-pager
+systemctl status azazel-edge-web --no-pager
+systemctl status azazel-edge-ai-agent --no-pager
+systemctl status azazel-edge-core --no-pager
 curl http://127.0.0.1:8084/health
-curl http://127.0.0.1:8084/api/mode
-curl -X POST http://127.0.0.1:8084/api/action/refresh
-/usr/local/bin/azazel-edge-tui --help
-/usr/local/bin/azazel-edge-epd --state normal --ssid "Azazel-Edge" --mode-label SHIELD --risk-status SAFE --signal -55 --dry-run
+curl http://127.0.0.1:8084/api/state
 ```
+
+AI runtime:
+
+```bash
+sudo docker exec azazel-edge-ollama ollama list
+curl -sS http://127.0.0.1:8084/api/ai/capabilities | jq
+```
+
+## Repository Layout
+
+| Path | Role |
+|---|---|
+| `py/azazel_edge/` | Core runtime libraries, evaluators, arbiter, AI governance, research extensions |
+| `py/azazel_edge_control/` | Control daemon and action handlers |
+| `py/azazel_edge_ai/` | AI agent integration and M.I.O. assist path |
+| `azazel_edge_web/` | Web backend, dashboard, ops-comm UI |
+| `rust/azazel-edge-core/` | Rust defense core |
+| `runbooks/` | Runbook registry |
+| `systemd/` | Service/timer units |
+| `security/` | Compose stacks and security-side assets |
+| `installer/` | Unified installer and staged install scripts |
+| `docs/` | Architecture, AI operation, redesign and implementation notes |
+| `tests/` | Unit/regression coverage for P0-P2 slices |
+
+## Documentation
+
+- [Architecture redesign notes](docs/ARCHITECTURE_REDESIGN.md)
+- [P0 runtime architecture](docs/P0_RUNTIME_ARCHITECTURE.md)
+- [AI operation guide](docs/AI_OPERATION_GUIDE.md)
+- [AI build and operation detail](docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL.md)
+- [Dashboard plan](docs/AZAZEL_EDGE_SOC_NOC_DASHBOARD_PLAN.md)
+
+## Status
+
+The repository currently contains completed P0, P1, and P2 issue lines as implemented runtime/library slices.
+The installer has been updated to deploy the P0-P2 runtime module set and associated assets required by the current Azazel-Edge stack.
+
+## License
+
+See `LICENSE` if present in this repository.
