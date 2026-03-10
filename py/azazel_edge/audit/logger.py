@@ -27,3 +27,18 @@ class P0AuditLogger:
         with self.path.open('a', encoding='utf-8') as fh:
             fh.write(json.dumps(record, ensure_ascii=True, separators=(',', ':')) + '\n')
         return record
+
+    def log_event_receive(self, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
+        return self.log('event_receive', trace_id=trace_id, source=source, **payload)
+
+    def log_evaluation(self, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
+        return self.log('evaluation', trace_id=trace_id, source=source, **payload)
+
+    def log_action_decision(self, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
+        return self.log('action_decision', trace_id=trace_id, source=source, **payload)
+
+    def log_notification(self, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
+        return self.log('notification', trace_id=trace_id, source=source, **payload)
+
+    def log_ai_assist(self, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
+        return self.log('ai_assist', trace_id=trace_id, source=source, **payload)
