@@ -89,6 +89,20 @@ def collect_path_probes(gateway_ip: str, interface: str = '') -> List[Dict[str, 
     return probes
 
 
+def collect_path_probes_multi(gateway_ip: str, interfaces: Iterable[str]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for interface in interfaces:
+        iface = str(interface or '').strip()
+        if not iface or iface in seen:
+            continue
+        seen.add(iface)
+        rows.extend(collect_path_probes(gateway_ip, interface=iface))
+    if not rows:
+        rows.extend(collect_path_probes(gateway_ip, interface=''))
+    return rows
+
+
 def collect_iface_stats(interfaces: Iterable[str]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for iface in sorted({str(x).strip() for x in interfaces if str(x).strip()}):
@@ -184,10 +198,12 @@ class LightweightNocMonitor:
         up_interface: str = 'eth1',
         down_interface: str = 'usb0',
         gateway_ip: str = '',
+        extra_interfaces: Optional[List[str]] = None,
     ):
         self.up_interface = up_interface
         self.down_interface = down_interface
         self.gateway_ip = gateway_ip
+        self.extra_interfaces = [str(x).strip() for x in (extra_interfaces or []) if str(x).strip()]
 
     def collect_snapshot(self) -> Dict[str, Any]:
         failures: List[Dict[str, str]] = []
@@ -202,7 +218,14 @@ class LightweightNocMonitor:
         icmp_target = _default_icmp_target(self.gateway_ip)
         snapshot = {
             'icmp': capture('icmp', lambda: collect_icmp(icmp_target, self.up_interface), {}),
-            'path_probes': capture('path_probes', lambda: collect_path_probes(self.gateway_ip, self.up_interface), []),
+            'path_probes': capture(
+                'path_probes',
+                lambda: collect_path_probes_multi(
+                    self.gateway_ip,
+                    [self.up_interface, self.down_interface, *self.extra_interfaces],
+                ),
+                [],
+            ),
             'iface_stats': capture(
                 'iface_stats',
                 lambda: collect_iface_stats([self.up_interface, self.down_interface]),
