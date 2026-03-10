@@ -214,6 +214,14 @@ class NocEvaluator:
                 score -= cfg['iface_degraded_penalty']
                 reasons.append(f"iface_degraded:{attrs.get('interface') or event.get('subject')}")
 
+        for event in by_kind.get('flow_summary', []):
+            attrs = event.get('attrs', {})
+            flow_state = str(attrs.get('flow_state') or '').lower()
+            evidence_ids.append(str(event.get('event_id') or ''))
+            if flow_state in {'failed', 'reset', 'timeout'}:
+                score -= 10
+                reasons.append('flow_path_instability')
+
         for event in by_kind.get('collector_failure', []):
             collector = str(event.get('attrs', {}).get('collector') or '')
             if collector in {'icmp', 'iface_stats'}:
@@ -288,6 +296,13 @@ class NocEvaluator:
                 arp_ips.add(ip)
             if state in {'STALE', 'FAILED', 'INCOMPLETE'}:
                 stale_arp += 1
+
+        for event in by_kind.get('flow_summary', []):
+            evidence_ids.append(str(event.get('event_id') or ''))
+            attrs = event.get('attrs', {})
+            if int(attrs.get('pkts_toserver') or 0) >= 20 and int(attrs.get('pkts_toclient') or 0) == 0:
+                score -= 10
+                reasons.append('one_way_client_flow')
 
         if not dhcp_ips and not arp_ips:
             score = cfg['no_client_evidence_score']
