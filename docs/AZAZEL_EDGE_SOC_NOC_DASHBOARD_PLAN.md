@@ -1,7 +1,7 @@
 # Azazel-Edge SOC/NOC Dashboard Plan
 
 最終更新: 2026-03-08
-対象ブランチ: `feature/ai-ollama-qwen35`
+対象ブランチ: `feature/dashboard-redesign-phase1`
 前提: 現行 Dashboard は Azazel-Gadget 流用であり、Azazel-Edge 向け SOC/NOC 運用画面として再設計が必要
 
 ## 1. 目的
@@ -297,6 +297,21 @@ Dashboard 再設計前に以下の API/スナップショットを整える。
 完了条件:
 - UI を作らなくても API だけで状態要約が再現できる
 
+実装状況:
+- 完了
+- 実装済み API:
+  - `/api/dashboard/summary`
+  - `/api/dashboard/actions`
+  - `/api/dashboard/evidence`
+  - `/api/dashboard/health`
+- データソース:
+  - `/run/azazel-edge/ui_snapshot.json`
+  - `/run/azazel-edge/ai_advisory.json`
+  - `/run/azazel-edge/ai_metrics.json`
+  - `/var/log/azazel-edge/ai-events.jsonl`
+  - `/var/log/azazel-edge/ai-llm.jsonl`
+  - `/var/log/azazel-edge/runbook-events.jsonl`
+
 ### Phase 2: Layout Replacement
 
 目的:
@@ -312,6 +327,18 @@ Dashboard 再設計前に以下の API/スナップショットを整える。
 完了条件:
 - `Professional/Temporary` の両モードで操作順が自然
 
+実装状況:
+- 完了
+- 実装済み:
+  - `Command Strip`
+  - `Situation Board`
+  - `Action Board`
+  - `Evidence Timeline`
+  - `Audience Mode` toggle
+- 備考:
+  - 旧 Gadget 流用カード構造は撤去
+  - Mode switch / Portal assist / Contain / Release は新盤面へ再配置
+
 ### Phase 3: M.I.O. Integration
 
 目的:
@@ -326,6 +353,18 @@ Dashboard 再設計前に以下の API/スナップショットを整える。
 
 完了条件:
 - Dashboard 内から `ops-comm` へ遷移せずに、最低限の支援が完結する
+
+実装状況:
+- 完了
+- 実装済み:
+  - `Assistant Rail`
+  - `current recommendation`
+  - `user guidance`
+  - `Ask M.I.O.` inline panel
+  - `Mattermost` deep link
+- 備考:
+  - Dashboard から `/api/ai/ask` を直接利用可能
+  - `Professional/Temporary` は M.I.O. 問い合わせ文脈にも反映
 
 ## 7. 今回時点で実装可能と判断するもの
 
@@ -355,3 +394,468 @@ Dashboard 本体を再設計せずに、今すぐ追加可能なのは以下。
 1. `Phase 1` の API 設計を先に実装
 2. その API を基準に Dashboard 再設計へ入る
 3. M.I.O. の Dashboard 常設支援は `Phase 3` で扱う
+
+## 10. 再協議 2026-03-08
+
+前節までは「構想段階」の計画である。ここでは、Phase 1-3 の実装完了後に、現実装を前提として残課題と次段方針を再評価した結果をまとめる。
+
+### 10.1 参加ロール
+
+- `SOC Analyst AI`
+- `NOC Operator AI`
+- `Incident Commander AI`
+- `Temporary Operator Support AI`
+- `Frontend Architect AI`
+- `Security Architect AI`
+- `Observability Engineer AI`
+- `Platform Reliability AI`
+
+### 10.2 協議ラウンド
+
+#### Round 1: 現在の完成度判定
+
+`Incident Commander AI`:
+- 盤面の骨格は成立している
+- ただし「完成」ではなく「運用投入可能なベータ」
+
+`Frontend Architect AI`:
+- 情報構造は Gadget 流用段階を脱した
+- ただし Action/Evidence の意味づけがまだ浅い
+
+`SOC Analyst AI`:
+- 重大イベントが無い時の盤面は静的でよい
+- その一方、イベント発生時の因果表示が弱い
+
+合意:
+- 現在の完成度は 70-80%
+- 次段は「見た目」より「判断密度の向上」を優先する
+
+#### Round 2: Action Board の不足
+
+`NOC Operator AI`:
+- `Next Actions` は出ているが、「なぜその順番なのか」が不足
+- たとえば uplink 問題と service 問題の切り分け順が明示されていない
+
+`SOC Analyst AI`:
+- `Runbook` が見えても、どのシグナルを根拠に推薦したかが無い
+
+`Temporary Operator Support AI`:
+- 初心者には「次に押すもの」だけでなく「押してはいけないもの」も必要
+
+合意:
+- `Action Board` は次段で以下へ分解する
+  1. `Why now`
+  2. `Do next`
+  3. `Do not do`
+  4. `Escalate if`
+
+#### Round 3: Evidence Board の不足
+
+`Observability Engineer AI`:
+- 今の `recent_ai_activity` と `recent_runbook_events` は「ログ抜粋」に近い
+- オペレータが読むべき優先度順に圧縮されていない
+
+`Security Architect AI`:
+- 古い M.I.O. 応答が誤って現況の助言に見える問題は、Evidence の時間管理不足が原因
+
+`Platform Reliability AI`:
+- stale / freshness は見えているが、盤面上の警告強度が弱い
+
+合意:
+- `Evidence` は次段で以下へ再編する
+  1. `Current triggers`
+  2. `Recent decision changes`
+  3. `Operator interactions`
+  4. `Background history`
+
+#### Round 4: Audience Mode の不足
+
+`Temporary Operator Support AI`:
+- `Temporary` は表示抑制まではできている
+- しかし症状別導線がまだ不足
+
+`Incident Commander AI`:
+- 臨時担当は観測値ではなく行動文と確認質問を先頭表示すべき
+
+`NOC Operator AI`:
+- `Professional` 側は逆に、サービス・経路・相関をもっと前面に出してよい
+
+合意:
+- `Temporary` に症状別フローを追加
+  - Wi-Fi
+  - DNS
+  - uplink
+  - service
+- `Professional` は telemetry と evidence を強化
+
+#### Round 5: M.I.O. の配置と権限境界
+
+`Security Architect AI`:
+- Dashboard 上の M.I.O. は「助言」と「問い合わせ入口」に留めるべき
+- コマンド実行や強い誘導を主盤面へ混ぜると責務が曖昧になる
+
+`SOC Analyst AI`:
+- M.I.O. は観測根拠を短く添えられるようにすべき
+
+`Frontend Architect AI`:
+- 右レール配置は正しい
+- ただし `Current status` と `Last asked advice` を分離した方が誤読が減る
+
+合意:
+- M.I.O. は次段で
+  1. `Current assist`
+  2. `Last manual ask`
+  3. `Recommended runbook`
+  に分離する
+
+#### Round 6: データ鮮度と運用信頼性
+
+`Platform Reliability AI`:
+- stale flag が立っていても operator が気づきにくい
+- `ai_metrics stale` と `runbook_events stale` は盤面の端ではなく header に近い位置で告知すべき
+
+`Observability Engineer AI`:
+- `Last Change` の human-readable 化は正しい
+- 同様に `Last AI activity`、`Last runbook event` も相対時間付きに揃えるべき
+
+`Incident Commander AI`:
+- stale は UI 問題ではなく運用問題
+- したがって表示だけでなく、閾値と suppression 条件を定義すべき
+
+合意:
+- 時刻表現と freshness 表現を全盤面で統一
+- stale の閾値を運用設定として明文化
+
+#### Round 7: 完成条件の再定義
+
+`SOC Analyst AI`:
+- 重大アラート発生時に 10 秒以内で状況把握できるかが第一
+
+`NOC Operator AI`:
+- 回線・ゲートウェイ・サービス障害の切り分けが 30 秒以内に始められるかが第二
+
+`Temporary Operator Support AI`:
+- 初心者が利用者に返す文を 15 秒以内に得られるかが第三
+
+`Incident Commander AI`:
+- 以上が揃って初めて「完成」と言える
+
+最終合意:
+- 完成判定は UI の見た目ではなく、判断時間短縮で測る
+
+## 11. 残タスク
+
+### 11.1 高優先
+
+1. `Action Board` の因果表示
+- 推奨理由
+- 根拠シグナル
+- 次に確認する項目
+- 触るべきでない操作
+
+2. `Evidence Board` の圧縮
+- ログ列挙ではなく重要イベント要約
+- stale な AI 応答と live 状態の視覚分離
+
+3. `Temporary` 症状別導線
+- Wi-Fi / DNS / uplink / service の 4 導線
+- `利用者へ聞くこと` と `利用者へ伝えること` の分離
+
+4. stale/freshness の全体統一
+- `Last AI activity`
+- `Last runbook event`
+- `Last mode change`
+- `Last snapshot`
+
+### 11.2 中優先
+
+1. M.I.O. 表示の 3 分割
+- `Current assist`
+- `Last manual ask`
+- `Recommended runbook`
+
+2. `Professional` 向け深掘り情報の追加
+- queue
+- fallback
+- review result summary
+- direct critical / deferred の推移
+
+3. Evidence と Mattermost の接続強化
+- slash command 実行結果を evidence に正しく畳み込む
+- 手動問い合わせと自動支援を見分けやすくする
+
+### 11.3 低優先
+
+1. ダーク/ライトや細部トーン調整
+2. モバイル最適化の細部
+3. 視覚演出の追加
+
+## 12. 今後の構築計画
+
+### Phase 4: Decision Clarity
+
+目的:
+- `Action Board` を「理由付き行動盤」に変える
+
+実装:
+- `why_now`
+- `do_next`
+- `do_not_do`
+- `escalate_if`
+の各フィールドを `/api/dashboard/actions` へ追加
+
+完了条件:
+- 推奨 Runbook の理由を画面だけで説明できる
+
+実装状況:
+- 完了
+- 実装済み:
+  - `why_now`
+  - `do_next`
+  - `do_not_do`
+  - `escalate_if`
+  - `Action Board` への表示反映
+
+### Phase 5: Evidence Compression
+
+目的:
+- `Evidence Board` をログ表示から判断支援表示へ変える
+
+実装:
+- `recent_alerts` を重要順に圧縮
+- `recent_ai_activity` を `live/manual/background` に分類
+- `runbook_events` を preview/approve/execute の要点へ圧縮
+
+完了条件:
+- 画面下段を 20 秒見れば「何が起きたか」が追える
+
+実装状況:
+- 完了
+- 実装済み:
+  - `current_triggers`
+  - `decision_changes`
+  - `operator_interactions`
+  - `background_history`
+  - `Evidence Board` の圧縮表示
+
+### Phase 6: Temporary Flow
+
+目的:
+- 初心者導線を Dashboard 内で完結させる
+
+実装:
+- 症状カード
+- 聞き取りテンプレート
+- 利用者向け短文
+- 危険操作の抑止表示
+
+完了条件:
+- `ops-comm` に飛ばなくても一次案内が可能
+
+実装状況:
+- 初期完了
+- 実装済み:
+  - `Temporary Triage`
+  - `Ask the user`
+  - `Tell the user`
+  - 症状別ボタンからの M.I.O. 問い合わせ接続
+- 継続課題:
+  - 症状別導線の更なる細分化
+  - 一次案内文の改善
+
+### Phase 7: Reliability and Freshness
+
+目的:
+- stale 情報と live 情報の誤読を防ぐ
+
+実装:
+- 時刻表現の統一
+- freshness badge
+- stale threshold の設定化
+- alert 無し時の quiet state 最適化
+
+完了条件:
+- 古い助言を現況と誤認しない
+
+実装状況:
+- 初期完了
+- 実装済み:
+  - freshness badge
+  - stale / live の表示
+  - `snapshot / ai metrics / ai activity / runbook event` の freshness 表示
+- 継続課題:
+  - stale 閾値の運用調整
+  - quiet state 最適化の追加
+
+### Phase 8: Final M.I.O. Integration
+
+目的:
+- M.I.O. を「主役ではなく強い補助線」として完成させる
+
+実装:
+- `Current assist`
+- `Last asked advice`
+- `Runbook with rationale`
+- Mattermost / dashboard / ops-comm の体験統一
+
+完了条件:
+- どの入口から入っても、M.I.O. の役割と限界が一貫する
+
+実装状況:
+- 部分完了
+- 実装済み:
+  - `Current assist`
+  - `Last manual ask`
+  - `Recommended runbook`
+  - `Rationale`
+  - `Open Ops Comm / Open Mattermost`
+  - `/api/ai/ask` の `rationale / handoff` 返却
+  - Mattermost 応答への `Rationale / Continue` 追記
+  の分離表示と共通構造化
+- 継続課題:
+  - Dashboard / Mattermost / ops-comm の文言・語順の最終統一
+  - `Temporary` 向け症状導線の細分化
+
+## 13. 現時点の方針
+
+1. 新規 UI 部品を増やす前に、`Phase 4` の API 追加を優先する
+2. `Temporary` 最適化は、見た目より先に症状別フローを作る
+3. M.I.O. は常に補助であり、中央主盤面を奪わない
+4. 完成判定は「見栄え」ではなく「判断時間短縮」で行う
+
+## 14. 否定的レビューと改善ラウンド
+
+前提:
+- 各ラウンドでは、否定的立場のレビュワーが「このままでは運用で事故る」という前提で批判を出す
+- その後、複数の専門家ロールが改善策を協議し、実装へ反映する
+
+専門家ロール:
+- `Adversarial SOC Reviewer`
+- `Adversarial NOC Reviewer`
+- `Adversarial Temporary-Operator Reviewer`
+- `Security Architect`
+- `Frontend Architect`
+- `Incident Commander`
+- `Observability Engineer`
+
+### Round 1
+
+否定的レビュー:
+- `Dashboard / ops-comm / Mattermost` で M.I.O. の返答構造が一致していない
+- 手動質問の返答から次の導線が読めず、入口を変えると体験が崩れる
+
+改善協議:
+- `Security Architect`: 補助AIの出力は構造を固定すべき
+- `Frontend Architect`: `answer / rationale / guidance / runbook / review / handoff` に揃えるべき
+- `Incident Commander`: 緊急時は「次にどこへ行くか」が最短で見える必要がある
+
+実施:
+- `/api/ai/ask` に `rationale / handoff` を追加
+- `ops-comm` に `Rationale / Handoff` を追加
+- Mattermost 応答へ `Rationale / Continue` を追加
+
+### Round 2
+
+否定的レビュー:
+- `Temporary` モードが Wi-Fi / DNS / Uplink / Service の4分類だけでは粗すぎる
+- 初回接続、再接続、ポータル表示失敗が切り分けられない
+
+改善協議:
+- `Temporary-Operator Reviewer`: 現場では「最初からつながらない」と「昨日まで使えた」が別問題
+- `NOC Reviewer`: Portal は Wi-Fi と分けないと案内が崩れる
+- `Frontend Architect`: 症状別ボタンを増やしても情報密度は保てる
+
+実施:
+- `Reconnect / Onboarding / Portal` を `Temporary Triage` に追加
+- 症状別の `Ask the user / Tell the user` を細分化
+
+### Round 3
+
+否定的レビュー:
+- `SAFE` 時でも `Current Triggers` が空欄だと「壊れている」のか「正常なのか」が分からない
+- 静穏時の盤面が曖昧
+
+改善協議:
+- `Observability Engineer`: quiet state を明示しない監視UIは誤解を生む
+- `SOC Reviewer`: 何も無いこと自体を証拠として表示すべき
+- `Frontend Architect`: empty state は欠落ではなく状態表示に変えるべき
+
+実施:
+- `No active trigger` を `Current Triggers` の既定表示に追加
+
+### Round 4
+
+否定的レビュー:
+- Dashboard から手動で M.I.O. に聞いた結果が、右ペインの構造と一致していない
+- `mioAskResponse` だけ独自フォーマットで、レビューと handoff が見えない
+
+改善協議:
+- `Frontend Architect`: 手動応答欄も同じ語順に揃えるべき
+- `Incident Commander`: 緊急時にレビュー状態と継続導線が欠けるのは不十分
+- `Security Architect`: runbook 提案には常に review を添えるべき
+
+実施:
+- Dashboard の `Ask M.I.O.` 応答を共通構造へ変更
+- `Rationale / User Guidance / Runbook / Review / Continue` を表示
+- 右ペインの `Last Manual Ask / Rationale / Handoff` も即時更新
+
+### Round 5
+
+否定的レビュー:
+- `Temporary` モードでも Gateway mode 変更ボタンが見えており、誤操作余地が残る
+- 表示だけ切り替わっても、操作抑制が弱い
+
+改善協議:
+- `Security Architect`: 初心者向けモードでは危険操作を視覚上だけでなく操作上も抑止すべき
+- `Temporary-Operator Reviewer`: 現場では押せるものは押される
+- `NOC Reviewer`: mode change は初動の聞き取り担当に開けるべきではない
+
+実施:
+- `Temporary` モードでは `Portal / Shield / Scapegoat` ボタンを `disabled`
+- tooltip で禁止理由を明示
+
+### Round 6
+
+否定的レビュー:
+- Mattermost の応答順が Dashboard/ops-comm と一致しないと、オペレータ教育が分裂する
+- 同じ M.I.O. なのに入口ごとに説明の順番が違うのは弱い
+
+改善協議:
+- `Incident Commander`: 現場教育では返答順序の一貫性が重要
+- `SOC Reviewer`: `answer -> rationale -> guidance -> runbook -> review -> continue` に統一すべき
+- `Frontend Architect`: 文言と順番の差異は最小化する
+
+実施:
+- Mattermost 応答順を Dashboard/ops-comm と同じ語順へ調整
+
+### Round 7
+
+否定的レビュー:
+- 完成度は高いが、なお `Temporary` 症状導線の文言、Mattermost での長文圧縮、運用閾値の実測調整は継続余地がある
+- 「改善余地がない」ではなく「現段階で優先度の高い欠陥が解消された」状態
+
+改善協議:
+- `Observability Engineer`: stale 閾値は実運用ログで再調整すべき
+- `Temporary-Operator Reviewer`: 実地の日本語案内文は現場観察でさらに改善余地あり
+- `Security Architect`: controlled action は将来も保守的に維持すべき
+
+結論:
+- 高優先の構造欠陥は解消済み
+- 残るのは運用チューニングであり、現時点では実装阻害要因ではない
+- 現段階の完成判定は「構造完成・運用改善フェーズ移行」とする
+
+### Round 8
+
+否定的レビュー:
+- `Temporary Triage` に `Portal` を置いたのに、manual router 側で `portal` 分類が無く fallback に落ちる
+- UI と backend の症状分類が一致していないのは設計欠陥
+
+改善協議:
+- `Adversarial NOC Reviewer`: portal は利用者体験に直結するため、個別ハンドラが必要
+- `Security Architect`: UI にだけ存在する症状は誤誘導になる
+- `Temporary-Operator Reviewer`: 現場では「ボタンを押したのに曖昧な答え」が最も不信感を生む
+
+実施:
+- `portal` 分類を manual router に追加
+- `rb.user.portal-access-guide` を追加
+- `Portal` 症状を routed 応答で即時処理するよう修正

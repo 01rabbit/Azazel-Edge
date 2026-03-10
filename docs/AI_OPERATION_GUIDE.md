@@ -1,15 +1,29 @@
 # Azazel-Edge AI運用要領（現行）
 
-最終更新: 2026-03-07
+最終更新: 2026-03-10
 
 詳細手順: `docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL.md`
 人格設計: `docs/MIO_PERSONA_PROFILE.md`
+P0 実装状態: `docs/P0_RUNTIME_ARCHITECTURE.md`
 
 ## 1. 目的
 
 - Suricataアラートのうち「曖昧帯」のみLLMで補助判断する。
 - クリティカルはLLM判定を待たずに初動し、必要時にOps Coachを走らせる。
 - 同居運用でSuricata優先を維持し、LLM暴走で本体機能を阻害しない。
+
+## 1.1 P0 との関係
+
+- P0 の一次判定は deterministic evaluator を主とする
+- AI は `#15 AI補助の統治層 v1` により補助に限定する
+- P0 の判断パイプラインは以下
+  1. Evidence Plane
+  2. NOC/SOC Evaluator
+  3. Action Arbiter
+  4. Decision Explanation
+  5. Notification / AI Assist
+  6. Audit Logger
+- 本書は主に AI 補助運用を扱い、P0 全体構成は `docs/P0_RUNTIME_ARCHITECTURE.md` を正とする
 
 ## 2. モデル構成（Ollama）
 
@@ -238,6 +252,130 @@ curl -sS http://127.0.0.1:8084/api/ai/capabilities | jq
 - 初心者向け応答では以下を守る
   - 1回答で最大3手順
   - 1手順ごとに1行動
+
+## 14. 質問マップ
+
+### 14.1 初心者向け (`Temporary / beginner`)
+
+目的:
+- 利用者対応を安全に進める
+- 危険操作や過剰操作を避ける
+- 返答の `user_message` をそのまま案内文として使えるようにする
+
+処理経路:
+1. 質問を `manual_router` で分類
+2. 既知症状なら即時返答
+3. `answer + user_message + runbook_id + rationale` を返す
+4. 必要時のみ NOC/SOC 側 Runbook へ handoff
+
+主な質問と設計:
+- `初回接続できない`
+  - 分類: `wifi_onboarding`
+  - Runbook: `rb.user.device-onboarding-guide`
+  - 考え方:
+    - onboarding 手順として扱う
+    - SSID 選択と接続試行を一度ずつ案内
+  - 返答方針:
+    - 利用者向けの短い案内
+    - 失敗継続時は escalation
+- `再接続できない`
+  - 分類: `wifi_reconnect`
+  - Runbook: `rb.user.reconnect-guide`
+  - 考え方:
+    - saved profile / 一時切断 / 単一端末障害を疑う
+    - オフ/オンの一度きりの再試行に抑える
+  - 返答方針:
+    - Wi-Fi のオフ/オンを一度だけ案内
+- `ポータルが出ない`
+  - 分類: `portal`
+  - Runbook: `rb.user.portal-access-guide`
+  - 考え方:
+    - portal 誘導失敗として扱う
+    - 接続状態を維持したまま通常サイト表示を確認
+  - 返答方針:
+    - portal が出るかだけを確認させる
+- `Wi-Fi に繋がらない`
+  - 分類: `wifi_issue`
+  - Runbook: `rb.user.first-contact.network-issue`
+  - 考え方:
+    - 単一端末か複数端末かを先に切り分ける
+    - 再起動連打を抑止する
+  - 返答方針:
+    - 最初に何が使えないかを一つだけ聞く
+- `DNS が引けない`
+  - 分類: `dns`
+  - Runbook: `rb.noc.dns.failure.check`
+  - 考え方:
+    - 利用者説明は簡潔に留める
+    - 実切り分けは NOC 側へ渡す
+  - 返答方針:
+    - サイト名と IP 直打ち結果を聞く
+- `いま何が起きているか`
+  - 分類: 多くは `snapshot`
+  - Runbook: `rb.noc.ui-snapshot.check`
+  - 考え方:
+    - 断定より状況説明を優先
+  - 返答方針:
+    - 「確認中」を維持し、次の案内だけ返す
+
+### 14.2 ベテラン向け (`Professional / operator`)
+
+目的:
+- 状態、根拠、次手、Runbook を短く返す
+- dashboard / ops-comm / Mattermost で同じ構造を返す
+
+処理経路:
+1. 既知症状なら `manual_router`
+2. 非定型は LLM (`qwen3.5:0.8b -> qwen3.5:2b`)
+3. LLM 失敗時は `tactical_snapshot` fallback
+4. 返答は `answer / rationale / user guidance / suggested runbook / review / handoff`
+
+主な質問と設計:
+- `gateway / uplink を確認したい`
+  - 分類: `route`
+  - Runbook: `rb.noc.default-route.check`
+  - 考え方:
+    - 上位回線と経路の実状態確認を優先
+    - `up_if / up_ip / gateway` を返答へ含める
+- `DNS failure を確認したい`
+  - 分類: `dns`
+  - Runbook: `rb.noc.dns.failure.check`
+  - 考え方:
+    - DNS 障害と uplink 側障害の切り分け
+    - resolver / gateway / captive portal の順で確認
+- `service が異常か確認したい`
+  - 分類: `service`
+  - Runbook: `rb.noc.service.status.check`
+  - 考え方:
+    - UI 表示ズレより先に実サービス停止を確認
+    - `status -> journal` の順で確認
+- `EPD 差異を確認したい`
+  - 分類: `epd`
+  - Runbook: `rb.ops.epd.state.check`
+  - 考え方:
+    - EPD と WebUI/TUI の差異確認
+- `AI ログを確認したい`
+  - 分類: `ai_logs`
+  - Runbook: `rb.ops.logs.ai.recent`
+  - 考え方:
+    - fallback、失敗、遅延要因の切り分け
+- `既知分類に落ちない質問`
+  - 分類: `snapshot` または LLM
+  - Runbook: `rb.noc.ui-snapshot.check` から開始
+  - 考え方:
+    - snapshot / 最新 advisory / route 情報を LLM 文脈へ入れる
+  - 返答方針:
+    - 既知症状へ寄せられなければ LLM へ委譲
+
+### 14.3 回答方針の差
+
+- `beginner`
+  - 利用者へ伝える文を優先
+  - 危険操作は隠すか無効化
+  - 1回答で 1-3 手順に抑える
+- `operator`
+  - 状態、根拠、次手、Runbook、review を優先
+  - `handoff` で `ops-comm` または Mattermost へ継続可能にする
   - 専門語は短く言い換える
   - operator 作業を利用者へ直接指示しない
 - 詳細な分類と利用範囲は `docs/MIO_PERSONA_PROFILE.md` を参照

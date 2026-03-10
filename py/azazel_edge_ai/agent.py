@@ -44,6 +44,7 @@ LLM_DEFERRED_LOG_PATH = Path(os.environ.get("AZAZEL_AI_DEFERRED_LOG", "/var/log/
 LLM_RESULT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-llm.jsonl"))
 METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_metrics.json"))
 POLICY_PATH = Path(os.environ.get("AZAZEL_AI_POLICY", "/run/azazel-edge/ai_runtime_policy.json"))
+METRICS_HEARTBEAT_SEC = max(5.0, float(os.environ.get("AZAZEL_AI_METRICS_HEARTBEAT_SEC", "15")))
 LLM_ENABLED = os.environ.get("AZAZEL_LLM_ENABLED", "1") == "1"
 LLM_ENDPOINT = os.environ.get("AZAZEL_OLLAMA_ENDPOINT", "http://127.0.0.1:11434")
 LLM_MODEL_PRIMARY = os.environ.get("AZAZEL_LLM_MODEL_PRIMARY", os.environ.get("AZAZEL_LLM_MODEL", "qwen3.5:2b"))
@@ -201,6 +202,13 @@ def _metrics_inc(name: str, delta: int = 1) -> None:
         METRICS["queue_depth"] = LLM_QUEUE.qsize()
         METRICS["queue_max_seen"] = max(int(METRICS.get("queue_max_seen", 0)), LLM_QUEUE.qsize())
         METRICS["last_update_ts"] = now
+
+
+def _metrics_heartbeat() -> None:
+    with METRICS_LOCK:
+        METRICS["queue_depth"] = LLM_QUEUE.qsize()
+        METRICS["queue_max_seen"] = max(int(METRICS.get("queue_max_seen", 0)), LLM_QUEUE.qsize())
+        METRICS["last_update_ts"] = time.time()
 
 
 def _update_kpi_rates() -> None:
@@ -480,6 +488,8 @@ def _classify_manual_question(question: str) -> str:
         return "wifi_onboarding"
     if any(token in q for token in ("reconnect", "再接続", "再接続できない")):
         return "wifi_reconnect"
+    if any(token in q for token in ("portal", "ポータル", "captive")):
+        return "portal"
     if any(token in q for token in ("dns", "名前解決", "host", "hostname")):
         return "dns"
     if any(token in q for token in ("gateway", "route", "uplink", "回線", "ゲートウェイ")):
@@ -500,6 +510,7 @@ def _guess_runbook_id(question: str) -> str:
     mapping = {
         "wifi_onboarding": "rb.user.device-onboarding-guide",
         "wifi_reconnect": "rb.user.reconnect-guide",
+        "portal": "rb.user.portal-access-guide",
         "wifi_issue": "rb.user.first-contact.network-issue",
         "dns": "rb.noc.dns.failure.check",
         "route": "rb.noc.default-route.check",
@@ -554,6 +565,13 @@ def _manual_router_response(
         answer = (
             "M.I.O.判断: 再接続手順として扱います。"
             " Wi-Fi のオフ/オンを一度だけ案内し、同じ SSID への再接続結果を確認します。"
+        )
+    elif kind == "portal":
+        runbook_id = "rb.user.portal-access-guide"
+        answer = (
+            "M.I.O.判断: ポータル誘導の失敗として扱います。"
+            " 利用者には接続状態を維持したまま通常のWebサイトを一度だけ開いてもらい、"
+            " ポータル表示の有無を確認します。"
         )
     elif kind == "wifi_issue":
         runbook_id = "rb.user.first-contact.network-issue"
@@ -1533,14 +1551,24 @@ def _serve() -> None:
     srv.bind(str(SOCKET_PATH))
     os.chmod(SOCKET_PATH, 0o666)
     srv.listen(16)
+    srv.settimeout(1.0)
     worker = threading.Thread(target=_llm_worker, daemon=True)
     worker.start()
     _persist_policy()
     _persist_metrics()
     logger.info("AI advisory agent listening on %s", SOCKET_PATH)
+    last_heartbeat = time.time()
 
     while True:
-        conn, _ = srv.accept()
+        now = time.time()
+        if now - last_heartbeat >= METRICS_HEARTBEAT_SEC:
+            _metrics_heartbeat()
+            _persist_metrics()
+            last_heartbeat = now
+        try:
+            conn, _ = srv.accept()
+        except socket.timeout:
+            continue
         threading.Thread(target=_handle_client, args=(conn,), daemon=True).start()
 
 

@@ -69,7 +69,7 @@ class NetworkHealthMonitor:
         elif signals:
             status = "SUSPECTED"
 
-        internet_check = "OK" if status == "SAFE" else "FAIL"
+        internet_check = self._internet_check(captive)
         result = {
             "status": status,
             "internet_check": internet_check,
@@ -85,6 +85,18 @@ class NetworkHealthMonitor:
         }
         self._store(result)
         return result
+
+    @staticmethod
+    def _internet_check(captive: Dict[str, str]) -> str:
+        portal = str(captive.get("captive_portal") or "NA").upper()
+        reason = str(captive.get("captive_portal_reason") or "").upper()
+        if portal == "NO" or reason == "HTTP_204":
+            return "OK"
+        if portal in {"YES", "SUSPECTED"}:
+            return "FAIL"
+        if reason.startswith("CURL_ERR_") or reason == "TIMEOUT":
+            return "FAIL"
+        return "UNKNOWN"
 
     def _store(self, payload: Dict[str, Any]) -> None:
         self._last_ts = time.time()
@@ -199,7 +211,7 @@ class NetworkHealthMonitor:
                     "--max-time",
                     "4",
                     "-o",
-                    "/tmp/azazel_captive_body.txt",
+                    "/dev/null",
                     "-w",
                     "%{http_code}",
                     self.captive_url,
@@ -243,11 +255,16 @@ class NetworkHealthMonitor:
                 mismatch += 1
                 continue
 
-            dig = NetworkHealthMonitor._run(["dig", "@9.9.9.9", name, "+short", "+time=2", "+tries=1"], timeout=3)
-            if dig:
-                ref_ips = {ln.strip() for ln in dig.splitlines() if ln.strip() and ln[0].isdigit()}
+            for rrtype in ("A", "AAAA"):
+                dig = NetworkHealthMonitor._run(
+                    ["dig", "@9.9.9.9", name, rrtype, "+short", "+time=2", "+tries=1"],
+                    timeout=3,
+                )
+                if dig:
+                    ref_ips.update({ln.strip() for ln in dig.splitlines() if ln.strip()})
             else:
-                ref_ips = default_ips
+                if not ref_ips:
+                    ref_ips = default_ips
 
             if default_ips != ref_ips:
                 mismatch += 1

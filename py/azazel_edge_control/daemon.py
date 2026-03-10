@@ -333,6 +333,22 @@ def _snapshot_candidates() -> list[Path]:
     return candidates[:2]
 
 
+def _parse_json_dict_lenient(text: str) -> dict[str, Any]:
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        pass
+    try:
+        parsed, _idx = json.JSONDecoder().raw_decode(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
 def _read_cpu_usage_percent() -> float:
     global _LAST_CPU_TOTAL, _LAST_CPU_IDLE
     try:
@@ -549,9 +565,10 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     reasons = enriched.get("reasons")
     if not isinstance(reasons, list):
         reasons = []
+    reasons = [str(x) for x in reasons if not str(x).startswith("health:")]
     if signals:
         reasons.append(f"health:{signals[0]}")
-    enriched["reasons"] = [str(x) for x in reasons][-5:]
+    enriched["reasons"] = reasons[-5:]
 
     enriched["connection"] = connection
 
@@ -560,6 +577,20 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(internal, dict):
         internal = {}
     state_name = str(internal.get("state_name", "") or "").upper()
+    try:
+        suspicion = int(float(str(internal.get("suspicion", enriched.get("risk_score", 0))).strip()))
+    except Exception:
+        suspicion = 0
+    health_status = str(health.get("status") or "").upper()
+    current_user_state = str(enriched.get("user_state", "") or "").upper()
+    if not signals and health_status == "SAFE" and suspicion <= 0:
+        if current_user_state in ("", "CHECKING", "LIMITED", "SAFE"):
+            enriched["user_state"] = "SAFE"
+        if state_name in ("", "PROBE", "DEGRADED", "NORMAL"):
+            state_name = "NORMAL"
+        recommendation = str(enriched.get("recommendation") or "").strip().lower()
+        if recommendation in ("", "initializing", "checking", "observe"):
+            enriched["recommendation"] = "No active issues detected"
     if not state_name:
         state_name = {
             "SAFE": "NORMAL",
@@ -569,10 +600,7 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
             "DECEPTION": "DECEPTION",
         }.get(str(enriched.get("user_state", "CHECKING")).upper(), "PROBE")
     internal["state_name"] = state_name
-    try:
-        internal.setdefault("suspicion", int(float(str(enriched.get("risk_score", 0)).strip())))
-    except Exception:
-        internal.setdefault("suspicion", 0)
+    internal["suspicion"] = suspicion
     internal.setdefault("decay", 0)
     enriched["internal"] = internal
 
@@ -619,7 +647,7 @@ def _seed_snapshot_if_missing() -> tuple[dict[str, Any] | None, Path | None]:
             if not path.exists():
                 path.write_text(json.dumps(seed, ensure_ascii=False), encoding="utf-8")
             warn_if_legacy_path(path, logger=logger)
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = _parse_json_dict_lenient(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 return data, path
         except Exception as exc:
@@ -650,7 +678,7 @@ def read_ui_snapshot() -> dict[str, Any]:
             if not path.exists():
                 continue
             warn_if_legacy_path(path, logger=logger)
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = _parse_json_dict_lenient(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 data = _enrich_snapshot(data)
                 _persist_snapshot(path, data)
