@@ -5,11 +5,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
+from azazel_edge.knowledge import AttackDefendKnowledge
+
 
 class DecisionExplainer:
     def __init__(self, output_path: str | Path = '/var/log/azazel-edge/decision-explanations.jsonl'):
         self.output_path = Path(output_path)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.knowledge = AttackDefendKnowledge()
 
     def explain(
         self,
@@ -36,6 +39,7 @@ class DecisionExplainer:
             attack_candidates.extend(str(x) for x in soc_summary.get('ai_attack_candidates', []) if str(x))
         attack_candidates = list(dict.fromkeys(attack_candidates))
         correlation = soc_summary.get('correlation', {}) if isinstance(soc_summary.get('correlation'), dict) else {}
+        visualization = self.knowledge.build_visualization(attack_candidates, soc_summary.get('ti_matches', []))
         next_checks = self._next_checks(action, noc_summary, soc_summary, client_impact)
         why_chosen = {
             'format_version': 'v2',
@@ -47,6 +51,7 @@ class DecisionExplainer:
             'target': target,
             'ti_matches': soc_summary.get('ti_matches', []),
             'attack_candidates': attack_candidates,
+            'visualization': visualization,
             'correlation': correlation,
             'client_impact': client_impact,
         }
