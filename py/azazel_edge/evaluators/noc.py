@@ -185,6 +185,12 @@ class NocEvaluator:
             if str(attrs.get('state') or '').upper() != 'ON':
                 score -= cfg['service_off_penalty']
                 reasons.append(f"service_off:{attrs.get('target') or event.get('subject')}")
+            elif str(attrs.get('substate') or '').lower() not in {'running', 'listening', 'unknown'}:
+                score -= 5
+                reasons.append(f"service_degraded:{attrs.get('target') or event.get('subject')}")
+            elif str(attrs.get('result') or '').lower() not in {'success', 'unknown'}:
+                score -= 5
+                reasons.append(f"service_result:{attrs.get('target') or event.get('subject')}")
 
         for event in by_kind.get('collector_failure', []):
             collector = str(event.get('attrs', {}).get('collector') or '')
@@ -206,6 +212,20 @@ class NocEvaluator:
             if not bool(event.get('attrs', {}).get('reachable')):
                 score -= cfg['probe_failed_penalty']
                 reasons.append('path_probe_failed')
+
+        probe_results: List[bool] = []
+        for event in by_kind.get('path_probe', []):
+            attrs = event.get('attrs', {})
+            evidence_ids.append(str(event.get('event_id') or ''))
+            reachable = bool(attrs.get('reachable'))
+            scope = str(attrs.get('scope') or '')
+            probe_results.append(reachable)
+            if not reachable:
+                score -= 20 if scope == 'external' else 10
+                reasons.append(f'path_probe_failed:{scope or "unknown"}')
+        if probe_results and len(set(probe_results)) > 1:
+            score -= 15
+            reasons.append('path_target_divergence')
 
         for event in by_kind.get('iface_stats', []):
             attrs = event.get('attrs', {})
@@ -230,6 +250,10 @@ class NocEvaluator:
                 evidence_ids.append(str(event.get('event_id') or ''))
                 score -= cfg['collector_failure_penalty']
                 reasons.append(f'collector_failure:{collector}')
+            if collector == 'path_probes':
+                evidence_ids.append(str(event.get('event_id') or ''))
+                score -= cfg['collector_failure_penalty']
+                reasons.append('collector_failure:path_probes')
 
         return _make_dimension(score, reasons, evidence_ids)
 

@@ -82,6 +82,22 @@ class NocProbeAdapter:
                 status='ok' if sev == 0 else 'fail',
             ))
 
+        path_probes = snapshot.get('path_probes') if isinstance(snapshot.get('path_probes'), list) else []
+        for row in path_probes:
+            if not isinstance(row, dict):
+                continue
+            sev = _icmp_severity(row)
+            events.append(EvidenceEvent.build(
+                ts=ts,
+                source='noc_probe',
+                kind='path_probe',
+                subject=str(row.get('target') or host),
+                severity=sev,
+                confidence=0.95,
+                attrs=row,
+                status='ok' if sev == 0 else 'fail',
+            ))
+
         iface_stats = snapshot.get('iface_stats') if isinstance(snapshot.get('iface_stats'), list) else []
         for row in iface_stats:
             if not isinstance(row, dict):

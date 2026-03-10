@@ -26,6 +26,7 @@ SERVICE_TARGETS = {
     'suricata': 'suricata',
     'opencanary': 'opencanary',
 }
+EXTERNAL_PATH_TARGETS = ('1.1.1.1', '8.8.8.8')
 
 
 def _run(cmd: List[str], timeout: float = 3.0) -> str:
@@ -72,6 +73,20 @@ def collect_icmp(target: str, interface: str = '') -> Dict[str, Any]:
         'duration_ms': elapsed_ms,
         'raw': stdout.strip().splitlines()[-1] if stdout.strip() else '',
     }
+
+
+def collect_path_probes(gateway_ip: str, interface: str = '') -> List[Dict[str, Any]]:
+    probes: List[Dict[str, Any]] = []
+    gateway = _default_icmp_target(gateway_ip)
+    if gateway:
+        row = collect_icmp(gateway, interface=interface)
+        row['scope'] = 'gateway'
+        probes.append(row)
+    for target in EXTERNAL_PATH_TARGETS:
+        row = collect_icmp(target, interface=interface)
+        row['scope'] = 'external'
+        probes.append(row)
+    return probes
 
 
 def collect_iface_stats(interfaces: Iterable[str]) -> List[Dict[str, Any]]:
@@ -145,11 +160,20 @@ def collect_service_health(targets: Dict[str, str] = SERVICE_TARGETS) -> Dict[st
     for alias, unit in targets.items():
         proc = subprocess.run(['systemctl', 'is-active', unit], capture_output=True, text=True, timeout=2)
         state = (proc.stdout or '').strip() or 'unknown'
+        show = subprocess.run(
+            ['systemctl', 'show', unit, '--property=SubState,Result', '--value'],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        rows = [line.strip() for line in (show.stdout or '').splitlines()]
         result[alias] = {
             'target': alias,
             'unit': unit,
             'state': 'ON' if state == 'active' else 'OFF',
             'detail': state,
+            'substate': rows[0] if len(rows) >= 1 and rows[0] else 'unknown',
+            'result': rows[1] if len(rows) >= 2 and rows[1] else 'unknown',
         }
     return result
 
@@ -178,6 +202,7 @@ class LightweightNocMonitor:
         icmp_target = _default_icmp_target(self.gateway_ip)
         snapshot = {
             'icmp': capture('icmp', lambda: collect_icmp(icmp_target, self.up_interface), {}),
+            'path_probes': capture('path_probes', lambda: collect_path_probes(self.gateway_ip, self.up_interface), []),
             'iface_stats': capture(
                 'iface_stats',
                 lambda: collect_iface_stats([self.up_interface, self.down_interface]),
