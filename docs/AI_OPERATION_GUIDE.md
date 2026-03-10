@@ -1,15 +1,29 @@
 # Azazel-Edge AI運用要領（現行）
 
-最終更新: 2026-03-07
+最終更新: 2026-03-10
 
 詳細手順: `docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL.md`
 人格設計: `docs/MIO_PERSONA_PROFILE.md`
+P0 実装状態: `docs/P0_RUNTIME_ARCHITECTURE.md`
 
 ## 1. 目的
 
 - Suricataアラートのうち「曖昧帯」のみLLMで補助判断する。
 - クリティカルはLLM判定を待たずに初動し、必要時にOps Coachを走らせる。
 - 同居運用でSuricata優先を維持し、LLM暴走で本体機能を阻害しない。
+
+## 1.1 P0 との関係
+
+- P0 の一次判定は deterministic evaluator を主とする
+- AI は `#15 AI補助の統治層 v1` により補助に限定する
+- P0 の判断パイプラインは以下
+  1. Evidence Plane
+  2. NOC/SOC Evaluator
+  3. Action Arbiter
+  4. Decision Explanation
+  5. Notification / AI Assist
+  6. Audit Logger
+- 本書は主に AI 補助運用を扱い、P0 全体構成は `docs/P0_RUNTIME_ARCHITECTURE.md` を正とする
 
 ## 2. モデル構成（Ollama）
 

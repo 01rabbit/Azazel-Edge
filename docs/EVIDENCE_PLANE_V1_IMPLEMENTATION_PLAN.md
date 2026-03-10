@@ -2,11 +2,21 @@
 
 最終更新: 2026-03-10
 対象 Issue: GitHub `#10 Evidence Plane v1 を実装する`
+状態: 完了 / close 済み
 
 ## 1. 目的
 
 既存の `Suricata -> normalized event -> AI advisory` 先行実装を土台にしつつ、P0 の Evidence Plane を
 `suricata_eve / noc_probe / syslog_min` の 3 入力を単一契約に落とす共通基盤として成立させる。
+
+完了実装:
+
+- [`schema.py`](/home/azazel/Azazel-Edge/py/azazel_edge/evidence_plane/schema.py)
+- [`bus.py`](/home/azazel/Azazel-Edge/py/azazel_edge/evidence_plane/bus.py)
+- [`suricata.py`](/home/azazel/Azazel-Edge/py/azazel_edge/evidence_plane/suricata.py)
+- [`noc_probe.py`](/home/azazel/Azazel-Edge/py/azazel_edge/evidence_plane/noc_probe.py)
+- [`syslog_min.py`](/home/azazel/Azazel-Edge/py/azazel_edge/evidence_plane/syslog_min.py)
+- [`service.py`](/home/azazel/Azazel-Edge/py/azazel_edge/evidence_plane/service.py)
 
 ## 2. 現状資産
 
