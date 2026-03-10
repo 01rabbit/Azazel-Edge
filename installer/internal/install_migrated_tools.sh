@@ -33,8 +33,23 @@ fi
 echo "[2/16] Create base directories"
 install -d \
   /opt/azazel-edge/py/azazel_edge \
+  /opt/azazel-edge/py/azazel_edge/arbiter \
+  /opt/azazel-edge/py/azazel_edge/audit \
+  /opt/azazel-edge/py/azazel_edge/correlation \
+  /opt/azazel-edge/py/azazel_edge/demo \
+  /opt/azazel-edge/py/azazel_edge/evaluators \
+  /opt/azazel-edge/py/azazel_edge/evidence_plane \
+  /opt/azazel-edge/py/azazel_edge/explanations \
+  /opt/azazel-edge/py/azazel_edge/impact \
+  /opt/azazel-edge/py/azazel_edge/integrations \
+  /opt/azazel-edge/py/azazel_edge/knowledge \
+  /opt/azazel-edge/py/azazel_edge/notify \
   /opt/azazel-edge/py/azazel_edge/tactics_engine \
   /opt/azazel-edge/py/azazel_edge/sensors \
+  /opt/azazel-edge/py/azazel_edge/sigma \
+  /opt/azazel-edge/py/azazel_edge/sot \
+  /opt/azazel-edge/py/azazel_edge/ti \
+  /opt/azazel-edge/py/azazel_edge/yara \
   /opt/azazel-edge/py/azazel_edge_control/scripts \
   /opt/azazel-edge/py/azazel_edge_ai \
   /opt/azazel-edge/azazel_edge_web/static \
@@ -47,6 +62,7 @@ install -d \
   /opt/azazel-edge/security/suricata \
   /opt/azazel-edge/rust/azazel-edge-core/src \
   /opt/azazel-edge/fonts \
+  /opt/azazel-edge/images \
   /opt/azazel-edge/icons/epd \
   /opt/azazel-edge/logs/tactics_engine
 
@@ -56,6 +72,9 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge/path_schema.py" /opt/azazel-edge/py/a
 install -m 0644 "$REPO_ROOT/py/azazel_edge/control_plane.py" /opt/azazel-edge/py/azazel_edge/control_plane.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/cli_unified.py" /opt/azazel-edge/py/azazel_edge/cli_unified.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/cli_unified_textual.py" /opt/azazel-edge/py/azazel_edge/cli_unified_textual.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/ai_governance.py" /opt/azazel-edge/py/azazel_edge/ai_governance.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/config_drift.py" /opt/azazel-edge/py/azazel_edge/config_drift.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/opencanary_redirect.py" /opt/azazel-edge/py/azazel_edge/opencanary_redirect.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/runbooks.py" /opt/azazel-edge/py/azazel_edge/runbooks.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/runbook_review.py" /opt/azazel-edge/py/azazel_edge/runbook_review.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/__init__.py" /opt/azazel-edge/py/azazel_edge/sensors/__init__.py
@@ -64,6 +83,27 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/wifi_channel_scanner.py" /opt
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/system_metrics.py" /opt/azazel-edge/py/azazel_edge/sensors/system_metrics.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/network_analytics.py" /opt/azazel-edge/py/azazel_edge/sensors/network_analytics.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/network_health.py" /opt/azazel-edge/py/azazel_edge/sensors/network_health.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/noc_monitor.py" /opt/azazel-edge/py/azazel_edge/sensors/noc_monitor.py
+
+for package in \
+  arbiter \
+  audit \
+  correlation \
+  demo \
+  evaluators \
+  evidence_plane \
+  explanations \
+  impact \
+  integrations \
+  knowledge \
+  notify \
+  sigma \
+  sot \
+  ti \
+  yara
+do
+  install -m 0644 "$REPO_ROOT/py/azazel_edge/${package}/"*.py "/opt/azazel-edge/py/azazel_edge/${package}/"
+done
 
 echo "[4/16] Install tactics modules"
 install -m 0644 "$REPO_ROOT/py/azazel_edge/tactics_engine/__init__.py" /opt/azazel-edge/py/azazel_edge/tactics_engine/__init__.py
@@ -100,6 +140,7 @@ echo "[7/16] Install assets"
 install -m 0644 "$REPO_ROOT/fonts/StardosStencilBold-9mzn.ttf" /opt/azazel-edge/fonts/StardosStencilBold-9mzn.ttf
 install -m 0644 "$REPO_ROOT/fonts/icbmss20.ttf" /opt/azazel-edge/fonts/icbmss20.ttf
 install -m 0644 "$REPO_ROOT/icons/epd/"*.png /opt/azazel-edge/icons/epd/
+install -m 0644 "$REPO_ROOT/images/"* /opt/azazel-edge/images/
 
 echo "[8/16] Build Python runtime (venv + pip)"
 if [[ ! -d "$VENV_DIR" ]]; then
