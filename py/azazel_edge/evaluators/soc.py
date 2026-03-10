@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Iterable, List, Tuple
 
+from azazel_edge.ti import ThreatIntelFeed
+
 
 def _to_payloads(events: Iterable[Any]) -> List[Dict[str, Any]]:
     payloads: List[Dict[str, Any]] = []
@@ -64,15 +66,19 @@ class SocEvaluator:
     Score semantics are threat-oriented: 100 is most concerning.
     """
 
+    def __init__(self, ti_feed: ThreatIntelFeed | None = None):
+        self.ti_feed = ti_feed
+
     def evaluate(self, events: Iterable[Any]) -> Dict[str, Any]:
         payloads = _to_payloads(events)
         soc_payloads = [item for item in payloads if str(item.get('source') or '') == 'suricata_eve']
         flow_payloads = [item for item in payloads if str(item.get('source') or '') == 'flow_min']
         evidence_ids = [str(item.get('event_id') or '') for item in payloads if str(item.get('event_id') or '')]
+        ti_matches = self._match_ti(soc_payloads)
 
-        suspicion = self._evaluate_suspicion(soc_payloads, flow_payloads)
+        suspicion = self._evaluate_suspicion(soc_payloads, flow_payloads, ti_matches)
         confidence = self._evaluate_confidence(soc_payloads)
-        technique_likelihood, attack_candidates = self._evaluate_technique_likelihood(soc_payloads, flow_payloads)
+        technique_likelihood, attack_candidates = self._evaluate_technique_likelihood(soc_payloads, flow_payloads, ti_matches)
         blast_radius = self._evaluate_blast_radius(soc_payloads, flow_payloads)
 
         worst = max(
@@ -100,6 +106,7 @@ class SocEvaluator:
                 'status': _bucket(worst),
                 'reasons': summary_reasons,
                 'attack_candidates': attack_candidates,
+                'ti_matches': [match.to_dict() for match in ti_matches],
                 'event_count': len(payloads),
             },
             'evidence_ids': sorted(dict.fromkeys(evidence_ids)),
@@ -116,7 +123,7 @@ class SocEvaluator:
             'evidence_ids': evaluation.get('evidence_ids', []),
         }
 
-    def _evaluate_suspicion(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _evaluate_suspicion(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any]) -> Dict[str, Any]:
         if not payloads:
             return _make_dimension(0, ['no_soc_events'], [])
         evidence_ids: List[str] = []
@@ -138,6 +145,9 @@ class SocEvaluator:
                 evidence_ids.append(str(payload.get('event_id') or ''))
                 top_risk = min(100, top_risk + 5)
                 reasons.append('flow_anomaly_support')
+        if ti_matches:
+            top_risk = min(100, top_risk + 15)
+            reasons.append('ti_match_support')
         return _make_dimension(top_risk, reasons, evidence_ids)
 
     def _evaluate_confidence(self, payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -159,7 +169,7 @@ class SocEvaluator:
             reasons.append('consistent_signal')
         return _make_dimension(score, reasons, evidence_ids)
 
-    def _evaluate_technique_likelihood(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[str]]:
+    def _evaluate_technique_likelihood(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any]) -> Tuple[Dict[str, Any], List[str]]:
         if not payloads:
             return _make_dimension(0, ['no_soc_events'], []), []
         evidence_ids: List[str] = []
@@ -188,6 +198,9 @@ class SocEvaluator:
                 evidence_ids.append(str(payload.get('event_id') or ''))
                 score = max(score, 40)
                 reasons.append('flow_app_proto_support')
+        if ti_matches:
+            score = max(score, 75)
+            reasons.append('ti_match_support')
         return _make_dimension(score, reasons, evidence_ids), sorted(dict.fromkeys(candidates))
 
     def _evaluate_blast_radius(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -228,3 +241,21 @@ class SocEvaluator:
         if len(ports) > 2:
             reasons.append('multiple_service_targets')
         return _make_dimension(score, reasons, evidence_ids)
+
+    def _match_ti(self, payloads: List[Dict[str, Any]]) -> List[Any]:
+        if not self.ti_feed or not payloads:
+            return []
+        ips: List[str] = []
+        domains: List[str] = []
+        for payload in payloads:
+            attrs = payload.get('attrs', {})
+            src, dst = _parse_subject(str(payload.get('subject') or ''))
+            if src:
+                ips.append(src)
+            if dst:
+                ips.append(dst)
+            for key in ('domain', 'hostname', 'fqdn'):
+                value = str(attrs.get(key) or '').strip()
+                if value:
+                    domains.append(value)
+        return self.ti_feed.match(ips=ips, domains=domains)

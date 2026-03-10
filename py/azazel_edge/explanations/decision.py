@@ -24,6 +24,7 @@ class DecisionExplainer:
             'noc_status': noc_summary.get('status', 'unknown'),
             'soc_status': soc_summary.get('status', 'unknown'),
             'target': target,
+            'ti_matches': soc_summary.get('ti_matches', []),
         }
         why_not_others = [
             {
@@ -40,6 +41,7 @@ class DecisionExplainer:
             noc_status=str(noc_summary.get('status') or 'unknown'),
             soc_status=str(soc_summary.get('status') or 'unknown'),
             why_not_others=why_not_others,
+            ti_matches=why_chosen['ti_matches'],
         )
         return {
             'why_chosen': why_chosen,
@@ -61,6 +63,7 @@ class DecisionExplainer:
         noc_status: str,
         soc_status: str,
         why_not_others: List[Dict[str, str]],
+        ti_matches: List[Dict[str, Any]],
     ) -> str:
         rejected_text = '; '.join(
             f"{item['action']} was rejected because {item['reason']}"
@@ -71,6 +74,9 @@ class DecisionExplainer:
             f"Selected action {action} for {target} because {reason}. "
             f"NOC status is {noc_status} and SOC status is {soc_status}."
         )
+        if ti_matches:
+            ti_text = ', '.join(f"{item.get('indicator_type')}:{item.get('value')}" for item in ti_matches[:3])
+            sentence += f" TI matches: {ti_text}."
         if rejected_text:
             sentence += f" Alternatives: {rejected_text}."
         return sentence
