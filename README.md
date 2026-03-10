@@ -1,5 +1,14 @@
 # Azazel-Edge
 
+<p align="center">
+  <a href="./README.md">
+    <img alt="English" src="https://img.shields.io/badge/Language-English-1f6feb?style=for-the-badge">
+  </a>
+  <a href="./README_ja.md">
+    <img alt="日本語" src="https://img.shields.io/badge/Language-日本語-2ea44f?style=for-the-badge">
+  </a>
+</p>
+
 Azazel-Edge is a Raspberry Pi-class defensive edge gateway for small internal networks.
 It combines a local gateway/AP stack, deterministic NOC/SOC evaluation, operator-facing UI surfaces, and tightly governed AI assistance for ambiguous security and operational events.
 
