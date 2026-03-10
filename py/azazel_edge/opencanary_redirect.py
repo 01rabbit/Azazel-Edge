@@ -32,8 +32,8 @@ class OpenCanaryRedirectController:
         trace_id: str,
         config_path: Optional[str | Path] = None,
     ) -> Dict[str, Any]:
-        if str(arbiter.get('action') or '') != 'throttle':
-            return {'ok': False, 'redirect': False, 'reason': 'arbiter_not_throttle'}
+        if str(arbiter.get('action') or '') not in {'redirect', 'throttle'}:
+            return {'ok': False, 'redirect': False, 'reason': 'arbiter_not_redirect'}
         suspicion = int(soc.get('suspicion', {}).get('score') or 0)
         confidence = int(soc.get('confidence', {}).get('score') or 0)
         if suspicion < 80 or confidence < 70:
@@ -49,6 +49,7 @@ class OpenCanaryRedirectController:
             'trace_id': trace_id,
             'target_ip': str(target_ip),
             'reason': 'high_confidence_soc_redirect',
+            'control_mode': 'opencanary_redirect',
             'opencanary': target,
             'expires_at': expires_at.isoformat(timespec='seconds'),
             'evidence_ids': [str(x) for x in arbiter.get('chosen_evidence_ids', []) if str(x)],

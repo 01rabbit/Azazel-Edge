@@ -21,13 +21,23 @@ class ActionArbiter:
 
         action = 'observe'
         reason = 'baseline'
+        control_mode = 'none'
 
         noc_fragile = availability_label in {'poor', 'critical'} or path_label in {'poor', 'critical'} or device_label in {'poor', 'critical'}
         strong_soc = suspicion_label in {'high', 'critical'} and confidence_score >= 60
 
-        if strong_soc and not noc_fragile and blast_score >= 40:
+        if strong_soc and not noc_fragile and suspicion_score >= 95 and confidence_score >= 90 and blast_score >= 80:
+            action = 'isolate'
+            reason = 'soc_extreme_and_target_is_narrow_enough'
+            control_mode = 'segment_isolation'
+        elif strong_soc and not noc_fragile and suspicion_score >= 90 and confidence_score >= 80 and blast_score >= 70:
+            action = 'redirect'
+            reason = 'soc_high_confidence_redirect_is_preferred'
+            control_mode = 'opencanary_redirect'
+        elif strong_soc and not noc_fragile and blast_score >= 40:
             action = 'throttle'
             reason = 'soc_high_and_reversible_control_is_safe'
+            control_mode = 'route_preference'
         elif strong_soc:
             action = 'notify'
             reason = 'soc_high_but_noc_fragile'
@@ -35,12 +45,13 @@ class ActionArbiter:
             action = 'notify'
             reason = 'noc_degraded_requires_operator_attention'
 
-        if action == 'throttle' and isinstance(client_impact, dict):
+        if action in {'throttle', 'isolate', 'redirect'} and isinstance(client_impact, dict):
             impact_score = int(client_impact.get('score') or 0)
             critical_clients = int(client_impact.get('critical_client_count') or 0)
             if impact_score >= 70 or critical_clients > 0:
                 action = 'notify'
-                reason = 'client_impact_too_high_for_throttle'
+                reason = 'client_impact_too_high_for_control'
+                control_mode = 'none'
 
         rejected = self._rejected_alternatives(action, noc_fragile=noc_fragile, strong_soc=strong_soc, blast_score=blast_score)
         chosen_evidence_ids = self._chosen_evidence_ids(action, noc, soc)
@@ -48,6 +59,7 @@ class ActionArbiter:
         return {
             'action': action,
             'reason': reason,
+            'control_mode': control_mode,
             'chosen_evidence_ids': chosen_evidence_ids,
             'rejected_alternatives': rejected,
             'client_impact': client_impact or {},
@@ -88,7 +100,7 @@ class ActionArbiter:
                 candidates.append({'action': 'observe', 'reason': 'deferred_to_higher_visibility_action'})
         if action != 'notify':
             if noc_fragile and strong_soc:
-                candidates.append({'action': 'notify', 'reason': 'throttle_was_preferred_due_to_reversible_control'})
+                candidates.append({'action': 'notify', 'reason': 'control_path_was_not_safe_due_to_availability_risk'})
             else:
                 candidates.append({'action': 'notify', 'reason': 'operator_notification_not_primary_choice'})
         if action != 'throttle':
@@ -98,4 +110,18 @@ class ActionArbiter:
                 candidates.append({'action': 'throttle', 'reason': 'availability_risk_too_high'})
             elif blast_score < 40:
                 candidates.append({'action': 'throttle', 'reason': 'blast_radius_too_small_for_control'})
+        if action != 'redirect':
+            if not strong_soc:
+                candidates.append({'action': 'redirect', 'reason': 'threat_signal_not_strong_enough'})
+            elif noc_fragile:
+                candidates.append({'action': 'redirect', 'reason': 'availability_risk_too_high'})
+            else:
+                candidates.append({'action': 'redirect', 'reason': 'redirect_gate_not_satisfied'})
+        if action != 'isolate':
+            if not strong_soc:
+                candidates.append({'action': 'isolate', 'reason': 'threat_signal_not_strong_enough'})
+            elif noc_fragile:
+                candidates.append({'action': 'isolate', 'reason': 'availability_risk_too_high'})
+            else:
+                candidates.append({'action': 'isolate', 'reason': 'isolate_gate_not_satisfied'})
         return candidates

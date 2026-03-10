@@ -83,7 +83,7 @@ class ClientImpactScoreV1Tests(unittest.TestCase):
             },
         )
         self.assertEqual(result['action'], 'notify')
-        self.assertEqual(result['reason'], 'client_impact_too_high_for_throttle')
+        self.assertEqual(result['reason'], 'client_impact_too_high_for_control')
 
     def test_low_impact_keeps_throttle(self) -> None:
         arbiter = ActionArbiter()

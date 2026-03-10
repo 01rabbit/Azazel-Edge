@@ -22,7 +22,7 @@ def _soc(high: bool) -> dict:
 
 
 class OpenCanaryRedirectV1Tests(unittest.TestCase):
-    def test_redirect_only_for_high_confidence_soc_throttle(self) -> None:
+    def test_redirect_only_for_high_confidence_soc_redirect(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audit = P0AuditLogger(Path(tmp) / 'audit.jsonl')
             config = Path(tmp) / 'opencanary.conf'
@@ -33,7 +33,7 @@ class OpenCanaryRedirectV1Tests(unittest.TestCase):
                 redirect_log_path=Path(tmp) / 'redirect.jsonl',
             )
             decision = controller.evaluate(
-                arbiter={'action': 'throttle', 'chosen_evidence_ids': ['ev-1']},
+                arbiter={'action': 'redirect', 'chosen_evidence_ids': ['ev-1']},
                 soc=_soc(high=True),
                 target_ip='192.168.40.50',
                 trace_id='trace-1',
@@ -71,7 +71,7 @@ class OpenCanaryRedirectV1Tests(unittest.TestCase):
                 redirect_log_path=Path(tmp) / 'redirect.jsonl',
             )
             decision = controller.evaluate(
-                arbiter={'action': 'throttle', 'chosen_evidence_ids': ['ev-1']},
+                arbiter={'action': 'redirect', 'chosen_evidence_ids': ['ev-1']},
                 soc=_soc(high=True),
                 target_ip='192.168.40.50',
                 trace_id='trace-1',
