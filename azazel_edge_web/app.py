@@ -95,6 +95,9 @@ AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-l
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/azazel-edge/runbook-events.jsonl"))
 TOKEN_FILE = web_token_candidates()[0]
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
+LOCAL_DEMO_RUNNER = PROJECT_ROOT / "bin" / "azazel-edge-demo"
+OPT_DEMO_RUNNER = Path("/opt/azazel-edge/bin/azazel-edge-demo")
+USR_LOCAL_DEMO_RUNNER = Path("/usr/local/bin/azazel-edge-demo")
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
@@ -1267,6 +1270,59 @@ def _assist_handoff_payload() -> Dict[str, str]:
         "ops_comm": "/ops-comm",
         "mattermost": MATTERMOST_OPEN_URL,
     }
+
+
+def _resolve_demo_runner() -> Path:
+    candidates = [USR_LOCAL_DEMO_RUNNER, OPT_DEMO_RUNNER, LOCAL_DEMO_RUNNER]
+    for path in candidates:
+        try:
+            if path.exists() and os.access(path, os.X_OK):
+                return path
+        except Exception:
+            continue
+    return LOCAL_DEMO_RUNNER
+
+
+def _run_demo_runner(*args: str) -> tuple[Dict[str, Any], int]:
+    runner = _resolve_demo_runner()
+    cmd = [str(runner), *[str(x) for x in args]]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PY_ROOT) + (f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else "")
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env=env,
+            cwd=str(PROJECT_ROOT),
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "demo_runner_timeout", "command": cmd}, 504
+    except Exception as e:
+        return {"ok": False, "error": str(e), "command": cmd}, 500
+
+    stdout = str(result.stdout or "").strip()
+    stderr = str(result.stderr or "").strip()
+    payload: Dict[str, Any] = {}
+    if stdout:
+        try:
+            payload = json.loads(stdout)
+        except Exception:
+            payload = {"ok": False, "error": "invalid_demo_runner_output", "stdout": stdout}
+    if result.returncode != 0:
+        if not payload:
+            payload = {"ok": False}
+        payload.setdefault("error", stderr or f"demo_runner_exit_{result.returncode}")
+        payload["stderr"] = stderr
+        payload["returncode"] = result.returncode
+        payload["command"] = cmd
+        return payload, 400 if "unknown_scenario" in str(payload.get("error", "")) else 500
+
+    if not payload:
+        payload = {"ok": True}
+    payload["runner"] = str(runner)
+    return payload, 200
 
 
 def _assist_rationale(ai_result: Dict[str, Any]) -> List[str]:
@@ -2583,6 +2639,25 @@ def api_ai_capabilities():
             ],
         }
     ), 200
+
+
+@app.route("/api/demo/scenarios", methods=["GET"])
+def api_demo_scenarios():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    payload, code = _run_demo_runner("list")
+    return jsonify(payload), code
+
+
+@app.route("/api/demo/run/<scenario_id>", methods=["POST"])
+def api_demo_run(scenario_id: str):
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    scenario = str(scenario_id or "").strip()
+    if not scenario:
+        return jsonify({"ok": False, "error": "scenario_id is required"}), 400
+    payload, code = _run_demo_runner("run", scenario)
+    return jsonify(payload), code
 
 
 @app.route("/api/dashboard/summary", methods=["GET"])

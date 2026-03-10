@@ -7,6 +7,7 @@ let currentAudience = localStorage.getItem(AUDIENCE_KEY) || 'professional';
 let latestState = {};
 let latestMattermost = {};
 let lastRefreshWarning = '';
+let demoScenarioItems = [];
 
 const shortcutQuestions = {
     wifi: 'Wi-Fi に繋がらない利用者へどう案内するか',
@@ -166,6 +167,14 @@ function bindStaticHandlers() {
         }
         await askMio(question);
     });
+
+    document.getElementById('demoScenarioSelect')?.addEventListener('change', updateDemoScenarioDescription);
+    document.getElementById('demoRunForm')?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        await runDemoScenario();
+    });
+
+    loadDemoScenarios();
 }
 
 function setAudience(audience) {
@@ -339,6 +348,75 @@ async function refreshDashboard() {
         }
     } else {
         lastRefreshWarning = '';
+    }
+}
+
+async function loadDemoScenarios() {
+    const select = document.getElementById('demoScenarioSelect');
+    if (!select) return;
+    try {
+        const payload = await fetchJson('/api/demo/scenarios');
+        demoScenarioItems = Array.isArray(payload.items) ? payload.items : [];
+        if (!demoScenarioItems.length) {
+            select.innerHTML = '<option value="">No scenarios available</option>';
+            updateElement('demoScenarioDescription', 'No scenario is currently available.');
+            return;
+        }
+        select.innerHTML = demoScenarioItems
+            .map((item) => `<option value="${escapeAttribute(item.scenario_id)}">${escapeHtml(item.scenario_id)}</option>`)
+            .join('');
+        updateDemoScenarioDescription();
+    } catch (error) {
+        select.innerHTML = '<option value="">Failed to load scenarios</option>';
+        updateElement('demoScenarioDescription', `Failed to load scenarios: ${error.message}`);
+    }
+}
+
+function updateDemoScenarioDescription() {
+    const select = document.getElementById('demoScenarioSelect');
+    const selected = String(select?.value || '').trim();
+    const item = demoScenarioItems.find((row) => row.scenario_id === selected) || demoScenarioItems[0];
+    if (!item) {
+        updateElement('demoScenarioDescription', 'No scenario selected.');
+        return;
+    }
+    if (select && !select.value) {
+        select.value = item.scenario_id;
+    }
+    updateElement('demoScenarioDescription', `${item.description || '-'} | events=${item.event_count ?? 0}`);
+}
+
+async function runDemoScenario() {
+    const select = document.getElementById('demoScenarioSelect');
+    const submit = document.getElementById('demoRunSubmit');
+    const scenarioId = String(select?.value || '').trim();
+    if (!scenarioId) {
+        showToast('Scenario is required.', 'info');
+        return;
+    }
+    if (submit) submit.disabled = true;
+    updateElement('demoResponse', 'Running demo scenario...');
+    const statusBadge = document.getElementById('demoStatusBadge');
+    updateElement('demoStatusBadge', 'RUNNING');
+    if (statusBadge) statusBadge.className = 'assistant-status status-caution';
+    try {
+        const payload = await fetchJson(`/api/demo/run/${encodeURIComponent(scenarioId)}`, { method: 'POST' });
+        const result = payload.result || {};
+        updateElement('demoNocStatus', result.noc?.summary?.status || '-');
+        updateElement('demoSocStatus', result.soc?.summary?.status || '-');
+        updateElement('demoAction', result.arbiter?.action || '-');
+        updateElement('demoOperatorWording', result.explanation?.operator_wording || 'No explanation returned.');
+        updateElement('demoResponse', JSON.stringify(result, null, 2));
+        updateElement('demoStatusBadge', 'DONE');
+        if (statusBadge) statusBadge.className = 'assistant-status status-safe';
+        showToast(`Demo completed: ${scenarioId}`, 'success');
+    } catch (error) {
+        updateElement('demoResponse', `Demo failed: ${error.message}`);
+        updateElement('demoStatusBadge', 'FAILED');
+        if (statusBadge) statusBadge.className = 'assistant-status status-danger';
+        showToast(`Demo failed: ${error.message}`, 'error');
+    } finally {
+        if (submit) submit.disabled = false;
     }
 }
 
@@ -618,6 +696,14 @@ function renderList(id, items, formatter) {
     if (!el) return;
     const rows = Array.isArray(items) && items.length ? items : ['No data'];
     el.innerHTML = rows.map((item) => `<li>${escapeHtml(formatter(item))}</li>`).join('');
+}
+
+function escapeAttribute(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('"', '&quot;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
 }
 
 function renderTimeline(id, items, formatter) {

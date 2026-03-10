@@ -351,6 +351,38 @@
                         <a id="assistantMattermostLink" class="topbar-link" href="/ops-comm">Open Mattermost</a>
                     </div>
                 </section>
+
+                <section class="panel assistant-panel demo-panel" id="demoPanel">
+                    <div class="panel-heading assistant-heading">
+                        <div>
+                            <div class="panel-kicker">Demo Runner</div>
+                            <h2>Scenario Replay</h2>
+                        </div>
+                        <span class="assistant-status status-neutral" id="demoStatusBadge">READY</span>
+                    </div>
+                    <p class="assistant-intro">Run deterministic backend scenarios and inspect the resulting NOC, SOC, arbiter, and explanation outputs.</p>
+                    <form id="demoRunForm" class="assistant-form">
+                        <label for="demoScenarioSelect">Scenario</label>
+                        <select id="demoScenarioSelect" class="demo-select">
+                            <option value="">Loading scenarios...</option>
+                        </select>
+                        <div id="demoScenarioDescription" class="demo-description">-</div>
+                        <button type="submit" id="demoRunSubmit" class="assistant-submit">Run Demo</button>
+                    </form>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Scenario Result</div>
+                        <div class="fact-list compact-list">
+                            <div class="fact-item"><span>NOC</span><strong id="demoNocStatus">-</strong></div>
+                            <div class="fact-item"><span>SOC</span><strong id="demoSocStatus">-</strong></div>
+                            <div class="fact-item"><span>Action</span><strong id="demoAction">-</strong></div>
+                        </div>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Operator Wording</div>
+                        <div id="demoOperatorWording">No scenario executed yet.</div>
+                    </div>
+                    <div class="assistant-response" id="demoResponse">No scenario executed yet.</div>
+                </section>
             </aside>
         </div>
     </main>

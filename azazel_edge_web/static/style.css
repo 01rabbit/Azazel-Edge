@@ -221,6 +221,23 @@ body[data-audience="professional"] .temp-only {
     flex: 0 0 auto;
 }
 
+.demo-select {
+    width: 100%;
+    margin-top: 8px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--line-soft);
+    background: rgba(255,255,255,0.04);
+    color: var(--text-main);
+    font: inherit;
+}
+
+.demo-description {
+    margin-top: 10px;
+    color: var(--text-dim);
+    line-height: 1.45;
+}
+
 .command-strip {
     padding: 22px 24px;
     margin-bottom: 18px;
@@ -566,6 +583,7 @@ body[data-audience="professional"] .temp-only {
     background: rgba(255,255,255,0.04);
     border: 1px solid var(--line-soft);
     line-height: 1.55;
+    white-space: pre-wrap;
 }
 
 .assistant-footer {
