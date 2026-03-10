@@ -7,7 +7,7 @@ class ActionArbiter:
     REQUIRED_NOC_KEYS = {'availability', 'path_health', 'device_health', 'client_health', 'summary', 'evidence_ids'}
     REQUIRED_SOC_KEYS = {'suspicion', 'confidence', 'technique_likelihood', 'blast_radius', 'summary', 'evidence_ids'}
 
-    def decide(self, noc: Dict[str, Any], soc: Dict[str, Any]) -> Dict[str, Any]:
+    def decide(self, noc: Dict[str, Any], soc: Dict[str, Any], client_impact: Dict[str, Any] | None = None) -> Dict[str, Any]:
         self._validate_schema(noc, self.REQUIRED_NOC_KEYS, 'noc')
         self._validate_schema(soc, self.REQUIRED_SOC_KEYS, 'soc')
 
@@ -35,6 +35,13 @@ class ActionArbiter:
             action = 'notify'
             reason = 'noc_degraded_requires_operator_attention'
 
+        if action == 'throttle' and isinstance(client_impact, dict):
+            impact_score = int(client_impact.get('score') or 0)
+            critical_clients = int(client_impact.get('critical_client_count') or 0)
+            if impact_score >= 70 or critical_clients > 0:
+                action = 'notify'
+                reason = 'client_impact_too_high_for_throttle'
+
         rejected = self._rejected_alternatives(action, noc_fragile=noc_fragile, strong_soc=strong_soc, blast_score=blast_score)
         chosen_evidence_ids = self._chosen_evidence_ids(action, noc, soc)
 
@@ -43,6 +50,7 @@ class ActionArbiter:
             'reason': reason,
             'chosen_evidence_ids': chosen_evidence_ids,
             'rejected_alternatives': rejected,
+            'client_impact': client_impact or {},
         }
 
     @staticmethod
