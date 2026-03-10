@@ -2,6 +2,7 @@ const AUTH_TOKEN = localStorage.getItem('azazel_token') || 'azazel-default-token
 const STATUS_INTERVAL_MS = 8000;
 let lastQuestion = '';
 let currentAudience = 'operator';
+let demoScenarios = [];
 const SHORTCUTS = {
     operator: [
         { label: 'Gateway / Uplink', question: 'gateway と uplink を確認したい' },
@@ -99,6 +100,23 @@ function resetAiPanels() {
     setText('runbookReviewResult', 'Review: -');
     setText('rationaleResult', 'Rationale: -');
     setText('handoffResult', 'Handoff: -');
+}
+
+function formatDemoSummary(result) {
+    const noc = result?.noc?.summary?.status || '-';
+    const soc = result?.soc?.summary?.status || '-';
+    const action = result?.arbiter?.action || '-';
+    const reason = result?.arbiter?.reason || '-';
+    return `Scenario=${result?.scenario_id || '-'} | NOC=${noc} | SOC=${soc} | action=${action} | reason=${reason}`;
+}
+
+function buildDemoQuestion(result) {
+    const scenarioId = result?.scenario_id || 'demo';
+    const noc = result?.noc?.summary?.status || '-';
+    const soc = result?.soc?.summary?.status || '-';
+    const action = result?.arbiter?.action || '-';
+    const reason = result?.arbiter?.reason || '-';
+    return `デモ ${scenarioId} で NOC=${noc} SOC=${soc} action=${action} reason=${reason} となった理由と次の確認項目を説明せよ`;
 }
 
 function renderAiPanels(data) {
@@ -299,6 +317,95 @@ async function loadCapabilities() {
     }
 }
 
+function updateDemoScenarioDescription() {
+    const select = document.getElementById('demoScenarioSelect');
+    const selected = String(select?.value || '').trim();
+    const item = demoScenarios.find((row) => row.scenario_id === selected) || demoScenarios[0];
+    if (!item) {
+        setText('demoScenarioDescription', 'No scenario available.');
+        return;
+    }
+    if (select && !select.value) select.value = item.scenario_id;
+    setText('demoScenarioDescription', `${item.description || '-'} | events=${item.event_count ?? 0}`);
+}
+
+async function loadDemoScenarios() {
+    const select = document.getElementById('demoScenarioSelect');
+    if (!select) return;
+    try {
+        const res = await fetch('/api/demo/scenarios', { headers: authHeaders() });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            setText('demoScenarioDescription', `Failed to load scenarios: ${data.error || 'unknown error'}`);
+            return;
+        }
+        demoScenarios = Array.isArray(data.items) ? data.items : [];
+        if (!demoScenarios.length) {
+            select.innerHTML = '<option value=\"\">No scenario</option>';
+            setText('demoScenarioDescription', 'No scenario available.');
+            return;
+        }
+        select.innerHTML = demoScenarios
+            .map((item) => `<option value="${escapeHtml(item.scenario_id)}">${escapeHtml(item.scenario_id)}</option>`)
+            .join('');
+        updateDemoScenarioDescription();
+    } catch (e) {
+        setText('demoScenarioDescription', `Failed to load scenarios: ${e}`);
+    }
+}
+
+async function runDemoScenario() {
+    const select = document.getElementById('demoScenarioSelect');
+    const scenarioId = String(select?.value || '').trim();
+    if (!scenarioId) {
+        setText('demoResult', 'Scenario is required.');
+        return;
+    }
+    setText('demoResult', 'Running demo scenario...');
+    setText('demoOperatorSummary', 'Operator wording: preparing replay...');
+    setText('demoNextChecks', 'Next checks: waiting for result...');
+    try {
+        const res = await fetch(`/api/demo/run/${encodeURIComponent(scenarioId)}`, {
+            method: 'POST',
+            headers: authHeaders(),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            setText('demoResult', `Demo failed: ${data.error || 'unknown error'}`);
+            return;
+        }
+        const result = data.result || {};
+        setText('demoResult', formatDemoSummary(result));
+        setText('demoOperatorSummary', `Operator wording: ${result.explanation?.operator_wording || '-'}`);
+        setText('demoNextChecks', `Next checks: ${(result.explanation?.next_checks || []).join(' | ') || '-'}`);
+        const question = buildDemoQuestion(result);
+        const messageInput = document.getElementById('messageInput');
+        if (messageInput) messageInput.value = question;
+        await askAi(question);
+    } catch (e) {
+        setText('demoResult', `Demo failed: ${e}`);
+    }
+}
+
+async function clearDemoOverlay() {
+    try {
+        const res = await fetch('/api/demo/overlay/clear', {
+            method: 'POST',
+            headers: authHeaders(),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            setText('demoResult', `Clear failed: ${data.error || 'unknown error'}`);
+            return;
+        }
+        setText('demoResult', 'Demo overlay cleared.');
+        setText('demoOperatorSummary', 'Operator wording: -');
+        setText('demoNextChecks', 'Next checks: -');
+    } catch (e) {
+        setText('demoResult', `Clear failed: ${e}`);
+    }
+}
+
 async function loadRunbookCandidates(question) {
     const q = String(question || '').trim();
     lastQuestion = q;
@@ -417,12 +524,12 @@ async function sendMessage() {
     }
 }
 
-async function askAi() {
+async function askAi(forcedQuestion = '') {
     const senderInput = document.getElementById('senderInput');
     const messageInput = document.getElementById('messageInput');
     const result = document.getElementById('sendResult');
     const sender = senderInput ? senderInput.value.trim() : 'M.I.O. Console';
-    const question = messageInput ? messageInput.value.trim() : '';
+    const question = String(forcedQuestion || (messageInput ? messageInput.value.trim() : '')).trim();
     if (!question) {
         if (result) result.textContent = 'Question is empty';
         resetAiPanels();
@@ -456,6 +563,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const sendBtn = document.getElementById('sendBtn');
     const askAiBtn = document.getElementById('askAiBtn');
     const messageInput = document.getElementById('messageInput');
+    const demoRunBtn = document.getElementById('demoRunBtn');
+    const demoClearBtn = document.getElementById('demoClearBtn');
+    const demoScenarioSelect = document.getElementById('demoScenarioSelect');
     const operatorBtn = document.getElementById('audienceOperatorBtn');
     const beginnerBtn = document.getElementById('audienceBeginnerBtn');
     syncAudienceUi();
@@ -467,6 +577,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (sendBtn) sendBtn.addEventListener('click', sendMessage);
     if (askAiBtn) askAiBtn.addEventListener('click', askAi);
+    if (demoRunBtn) demoRunBtn.addEventListener('click', runDemoScenario);
+    if (demoClearBtn) demoClearBtn.addEventListener('click', clearDemoOverlay);
+    if (demoScenarioSelect) demoScenarioSelect.addEventListener('change', updateDemoScenarioDescription);
     if (operatorBtn) operatorBtn.addEventListener('click', () => {
         currentAudience = 'operator';
         syncAudienceUi();
@@ -496,6 +609,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadStatus();
     loadMessages();
     loadCapabilities();
+    loadDemoScenarios();
     setInterval(() => {
         loadStatus();
         loadMessages();

@@ -81,6 +81,7 @@
     margin-top: 10px;
     color: var(--text-secondary);
     font-size: 0.9em;
+    white-space: pre-wrap;
 }
 
 .ops-user-guidance {
@@ -104,6 +105,10 @@
 }
 
 .ops-capabilities-card {
+    grid-column: 1 / -1;
+}
+
+.ops-demo-card {
     grid-column: 1 / -1;
 }
 

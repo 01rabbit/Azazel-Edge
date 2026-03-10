@@ -90,6 +90,22 @@
             <div id="capabilitiesList" class="ops-capabilities-list"></div>
         </section>
 
+        <section class="card ops-demo-card">
+            <h2>Demo Runner</h2>
+            <label class="ops-label" for="demoScenarioSelect">Scenario</label>
+            <select id="demoScenarioSelect" class="ops-input">
+                <option value="">Loading...</option>
+            </select>
+            <div id="demoScenarioDescription" class="ops-result">-</div>
+            <div class="ops-actions">
+                <button class="btn btn-primary" id="demoRunBtn">Run Demo</button>
+                <button class="btn btn-secondary" id="demoClearBtn">Clear Overlay</button>
+            </div>
+            <div id="demoResult" class="ops-result">No scenario executed yet.</div>
+            <div id="demoOperatorSummary" class="ops-result">Operator wording: -</div>
+            <div id="demoNextChecks" class="ops-result">Next checks: -</div>
+        </section>
+
         <section class="card ops-messages-card">
             <h2>Recent Messages</h2>
             <div id="messagesEmpty" class="ops-result">No messages yet</div>
