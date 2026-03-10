@@ -74,6 +74,7 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge/cli_unified.py" /opt/azazel-edge/py/a
 install -m 0644 "$REPO_ROOT/py/azazel_edge/cli_unified_textual.py" /opt/azazel-edge/py/azazel_edge/cli_unified_textual.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/ai_governance.py" /opt/azazel-edge/py/azazel_edge/ai_governance.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/config_drift.py" /opt/azazel-edge/py/azazel_edge/config_drift.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/demo_overlay.py" /opt/azazel-edge/py/azazel_edge/demo_overlay.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/opencanary_redirect.py" /opt/azazel-edge/py/azazel_edge/opencanary_redirect.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/runbooks.py" /opt/azazel-edge/py/azazel_edge/runbooks.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/runbook_review.py" /opt/azazel-edge/py/azazel_edge/runbook_review.py
@@ -160,6 +161,7 @@ install -m 0755 "$REPO_ROOT/bin/azazel-edge-control-daemon" /usr/local/bin/azaze
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-ai-agent" /usr/local/bin/azazel-edge-ai-agent
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-runbook-broker" /usr/local/bin/azazel-edge-runbook-broker
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-inject-test-events" /usr/local/bin/azazel-edge-inject-test-events
+install -m 0755 "$REPO_ROOT/bin/azazel-edge-demo" /usr/local/bin/azazel-edge-demo
 install -m 0755 "$REPO_ROOT/installer/internal/set_dev_remote_access.sh" /opt/azazel-edge/set_dev_remote_access.sh
 install -m 0755 "$REPO_ROOT/installer/internal/install_ai_runtime.sh" /opt/azazel-edge/install_ai_runtime.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_workspace.sh" /opt/azazel-edge/provision_mattermost_workspace.sh

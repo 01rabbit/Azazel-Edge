@@ -7,6 +7,12 @@ let currentAudience = localStorage.getItem(AUDIENCE_KEY) || 'professional';
 let latestState = {};
 let latestMattermost = {};
 let lastRefreshWarning = '';
+let demoScenarioItems = [];
+let demoOverlayResult = null;
+
+function setDemoOverlayVisualState(active) {
+    document.body.classList.toggle('demo-overlay-active', !!active);
+}
 
 const shortcutQuestions = {
     wifi: 'Wi-Fi に繋がらない利用者へどう案内するか',
@@ -166,6 +172,15 @@ function bindStaticHandlers() {
         }
         await askMio(question);
     });
+
+    document.getElementById('demoScenarioSelect')?.addEventListener('change', updateDemoScenarioDescription);
+    document.getElementById('demoRunForm')?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        await runDemoScenario();
+    });
+    document.getElementById('demoClearOverlayBtn')?.addEventListener('click', clearDemoOverlay);
+
+    loadDemoScenarios();
 }
 
 function setAudience(audience) {
@@ -279,6 +294,7 @@ async function refreshDashboard() {
         ['state', '/api/state', true],
         ['mattermost', '/api/mattermost/status', false],
         ['capabilities', '/api/ai/capabilities', false],
+        ['demoOverlay', '/api/demo/overlay', false],
     ];
 
     const resolved = await Promise.all(
@@ -313,9 +329,12 @@ async function refreshDashboard() {
     const state = resultMap.state?.data || {};
     const mattermost = resultMap.mattermost?.data || { reachable: false, command_triggers: [] };
     const capabilities = resultMap.capabilities?.data || { mattermost_triggers: [] };
+    const demoOverlay = resultMap.demoOverlay?.data?.overlay || {};
 
     latestState = state || {};
     latestMattermost = mattermost || {};
+    demoOverlayResult = demoOverlay && demoOverlay.active ? demoOverlay : null;
+    setDemoOverlayVisualState(!!demoOverlayResult);
 
     try {
         updateHeader(state, mattermost);
@@ -325,6 +344,9 @@ async function refreshDashboard() {
         updateEvidenceBoard(evidence, health);
         updateAssistant(actions, mattermost, capabilities);
         updateControlButtons(summary, state);
+        if (demoOverlayResult) {
+            applyDemoOverlay(demoOverlayResult);
+        }
     } catch (error) {
         console.error('Dashboard render failed:', error);
         showToast(`Dashboard render failed: ${error.message}`, 'error');
@@ -339,6 +361,267 @@ async function refreshDashboard() {
         }
     } else {
         lastRefreshWarning = '';
+    }
+}
+
+async function loadDemoScenarios() {
+    const select = document.getElementById('demoScenarioSelect');
+    if (!select) return;
+    try {
+        const payload = await fetchJson('/api/demo/scenarios');
+        demoScenarioItems = Array.isArray(payload.items) ? payload.items : [];
+        if (!demoScenarioItems.length) {
+            select.innerHTML = '<option value="">No scenarios available</option>';
+            updateElement('demoScenarioDescription', 'No scenario is currently available.');
+            return;
+        }
+        select.innerHTML = demoScenarioItems
+            .map((item) => `<option value="${escapeAttribute(item.scenario_id)}">${escapeHtml(item.scenario_id)}</option>`)
+            .join('');
+        updateDemoScenarioDescription();
+    } catch (error) {
+        select.innerHTML = '<option value="">Failed to load scenarios</option>';
+        updateElement('demoScenarioDescription', `Failed to load scenarios: ${error.message}`);
+    }
+}
+
+function updateDemoScenarioDescription() {
+    const select = document.getElementById('demoScenarioSelect');
+    const selected = String(select?.value || '').trim();
+    const item = demoScenarioItems.find((row) => row.scenario_id === selected) || demoScenarioItems[0];
+    if (!item) {
+        updateElement('demoScenarioDescription', 'No scenario selected.');
+        return;
+    }
+    if (select && !select.value) {
+        select.value = item.scenario_id;
+    }
+    updateElement('demoScenarioDescription', `${item.description || '-'} | events=${item.event_count ?? 0}`);
+}
+
+async function runDemoScenario() {
+    const select = document.getElementById('demoScenarioSelect');
+    const submit = document.getElementById('demoRunSubmit');
+    const scenarioId = String(select?.value || '').trim();
+    if (!scenarioId) {
+        showToast('Scenario is required.', 'info');
+        return;
+    }
+    if (submit) submit.disabled = true;
+    updateElement('demoResponse', 'Running demo scenario...');
+    updateElement('demoOperatorWording', 'Preparing scenario replay...');
+    updateElement('demoNocStatus', '-');
+    updateElement('demoSocStatus', '-');
+    updateElement('demoAction', '-');
+    updateElement('demoReason', '-');
+    renderList('demoNextChecks', ['Waiting for scenario output'], (item) => item);
+    renderList('demoEvidenceIds', ['Waiting for scenario output'], (item) => item);
+    renderList('demoRejectedAlternatives', ['Waiting for scenario output'], (item) => item);
+    const statusBadge = document.getElementById('demoStatusBadge');
+    updateElement('demoStatusBadge', 'RUNNING');
+    if (statusBadge) statusBadge.className = 'assistant-status status-caution';
+    try {
+        const payload = await fetchJson(`/api/demo/run/${encodeURIComponent(scenarioId)}`, { method: 'POST' });
+        const result = payload.result || {};
+        const overlay = payload.overlay || {};
+        updateElement('demoNocStatus', result.noc?.summary?.status || '-');
+        updateElement('demoSocStatus', result.soc?.summary?.status || '-');
+        updateElement('demoAction', result.arbiter?.action || '-');
+        updateElement('demoReason', result.arbiter?.reason || '-');
+        updateElement('demoOperatorWording', result.explanation?.operator_wording || 'No explanation returned.');
+        renderList('demoNextChecks', result.explanation?.next_checks || [], (item) => item);
+        renderList('demoEvidenceIds', result.explanation?.evidence_ids || result.arbiter?.chosen_evidence_ids || [], (item) => item);
+        renderList(
+            'demoRejectedAlternatives',
+            result.explanation?.why_not_others || result.arbiter?.rejected_alternatives || [],
+            (item) => `${item.action || '-'}: ${item.reason || '-'}`,
+        );
+        updateElement('demoResponse', JSON.stringify(result, null, 2));
+        updateElement('demoStatusBadge', 'DONE');
+        if (statusBadge) statusBadge.className = 'assistant-status status-safe';
+        demoOverlayResult = overlay && overlay.active ? overlay : null;
+        if (demoOverlayResult) {
+            setDemoOverlayVisualState(true);
+            applyDemoOverlay(demoOverlayResult);
+        }
+        await askMioWithOptions(buildDemoMioQuestion(result), {
+            silent: true,
+            context: {
+                audience: currentAudience,
+                demo_overlay: {
+                    scenario_id: overlay.scenario_id || result.scenario_id || scenarioId,
+                    noc_status: overlay.noc_status || result.noc?.summary?.status || '-',
+                    soc_status: overlay.soc_status || result.soc?.summary?.status || '-',
+                    action: overlay.action || result.arbiter?.action || '-',
+                    reason: overlay.reason || result.arbiter?.reason || '-',
+                },
+            },
+        });
+        showToast(`Demo completed: ${scenarioId}`, 'success');
+    } catch (error) {
+        updateElement('demoResponse', `Demo failed: ${error.message}`);
+        updateElement('demoStatusBadge', 'FAILED');
+        updateElement('demoOperatorWording', `Scenario replay failed: ${error.message}`);
+        if (statusBadge) statusBadge.className = 'assistant-status status-danger';
+        showToast(`Demo failed: ${error.message}`, 'error');
+    } finally {
+        if (submit) submit.disabled = false;
+    }
+}
+
+async function clearDemoOverlay() {
+    if (!demoOverlayResult) {
+        showToast('No demo overlay is active.', 'info');
+        return;
+    }
+    try {
+        await fetchJson('/api/demo/overlay/clear', { method: 'POST' });
+        demoOverlayResult = null;
+        setDemoOverlayVisualState(false);
+        updateElement('demoStatusBadge', 'READY');
+        const statusBadge = document.getElementById('demoStatusBadge');
+        if (statusBadge) statusBadge.className = 'assistant-status status-neutral';
+        await refreshDashboard();
+        showToast('Demo overlay cleared.', 'success');
+    } catch (error) {
+        showToast(`Failed to clear demo overlay: ${error.message}`, 'error');
+    }
+}
+
+function applyDemoOverlay(result) {
+    if (!result || typeof result !== 'object') return;
+
+    const raw = result.raw_result && typeof result.raw_result === 'object' ? result.raw_result : {};
+    const scenarioId = String(result.scenario_id || raw.scenario_id || 'demo').trim();
+    const description = String(result.description || raw.description || '').trim();
+    const nocStatus = String(result.noc_status || raw.noc?.summary?.status || '-').trim();
+    const socStatus = String(result.soc_status || raw.soc?.summary?.status || '-').trim();
+    const action = String(result.action || raw.arbiter?.action || '-').trim();
+    const reason = String(result.reason || raw.arbiter?.reason || '-').trim();
+    const suspicion = Number(result.soc_suspicion || raw.soc?.suspicion?.score || 0);
+    const evidenceIds = Array.isArray(result.chosen_evidence_ids)
+        ? result.chosen_evidence_ids
+        : (Array.isArray(raw.explanation?.evidence_ids) ? raw.explanation.evidence_ids : []);
+    const nextChecks = Array.isArray(result.next_checks)
+        ? result.next_checks
+        : (Array.isArray(raw.explanation?.next_checks) ? raw.explanation.next_checks : []);
+    const rejected = Array.isArray(result.rejected_alternatives)
+        ? result.rejected_alternatives
+        : (Array.isArray(raw.explanation?.why_not_others) ? raw.explanation.why_not_others : []);
+    const operatorWording = String(result.operator_wording || raw.explanation?.operator_wording || '').trim();
+    updateElement('demoNocStatus', nocStatus || '-');
+    updateElement('demoSocStatus', socStatus || '-');
+    updateElement('demoAction', action || '-');
+    updateElement('demoReason', reason || '-');
+    updateElement('demoOperatorWording', operatorWording || 'No explanation returned.');
+    renderList('demoNextChecks', nextChecks.length ? nextChecks : ['No next checks'], (item) => item);
+    renderList('demoEvidenceIds', evidenceIds.length ? evidenceIds : ['No evidence ids'], (item) => item);
+    renderList('demoRejectedAlternatives', rejected.length ? rejected : ['No rejected alternatives'], (item) =>
+        typeof item === 'string' ? item : `${item.action || '-'}: ${item.reason || '-'}`,
+    );
+    updateElement('demoResponse', JSON.stringify(raw && Object.keys(raw).length ? raw : result, null, 2));
+    setDemoOverlayVisualState(true);
+    updateElement('demoStatusBadge', 'DEMO ACTIVE');
+    const demoStatusBadge = document.getElementById('demoStatusBadge');
+    if (demoStatusBadge) demoStatusBadge.className = 'assistant-status status-demo';
+
+    const userState = socStatus === 'critical'
+        ? 'DECEPTION'
+        : (nocStatus === 'critical' || nocStatus === 'degraded' ? 'LIMITED' : 'SAFE');
+    const stateName = socStatus === 'critical' ? 'DEMO-SOC' : 'DEMO-NOC';
+    const postureTone = toneForRisk(userState, suspicion);
+    const postureCard = document.getElementById('postureCard');
+    if (postureCard) postureCard.className = `situation-card posture-card ${postureTone}`;
+
+    updateElement('commandStripNote', `Demo overlay active: ${scenarioId}. ${description || 'Synthetic scenario replay.'}`);
+    updateElement('stripMode', 'DEMO');
+    updateElement('stripRisk', userState);
+    updateElement('stripUplink', scenarioId);
+    updateElement('stripInternet', action === 'notify' ? 'OBSERVE' : action.toUpperCase());
+    updateElement('stripCritical', String(socStatus === 'critical' ? evidenceIds.length || 1 : 0));
+    updateElement('stripDeferred', '0');
+    updateElement('stripQueue', 'demo');
+    updateElement('stripStale', 'NO');
+
+    updateElement('postureState', `${userState} / ${stateName}`);
+    updateElement('riskScore', String(suspicion));
+    updateElement('postureRecommendation', `Demo selected ${action} because ${reason}.`);
+    updateElement('postureCurrentRecommendation', `Scenario ${scenarioId}: ${action}`);
+    updateElement('postureConfidence', result.soc?.confidence?.label || nocStatus || '-');
+    updateElement('postureLastAlert', scenarioId);
+    updateElement('postureLlmStatus', 'demo-overlay');
+
+    updateElement('networkSsid', `DEMO:${scenarioId}`);
+    updateElement('networkGateway', 'demo-target');
+    updateElement('networkInternet', action === 'notify' ? 'CHECK' : 'CONTROL');
+    updateElement('networkPortal', 'N/A');
+    updateElement('networkDnsMismatch', '0');
+    updateElement('networkSignals', joinList(result.noc?.summary?.reasons || []));
+
+    renderList('whyNowList', [
+        `Scenario ${scenarioId} is active.`,
+        `NOC status: ${nocStatus}.`,
+        `SOC status: ${socStatus}.`,
+        `Reason: ${reason}.`,
+    ], (item) => item);
+    renderList('nextActionsList', nextChecks.length ? nextChecks : [`Review ${action} path for ${scenarioId}.`], (item) => item);
+    renderList('doNotDoList', ['Do not treat demo output as live telemetry.', 'Do not change gateway mode based on demo data alone.'], (item) => item);
+    renderList('escalateIfList', [`Move to ops review if the same pattern appears in live telemetry.`], (item) => item);
+    updateElement('userGuidanceText', `Demo overlay active. Current simulated action is ${action}.`);
+    updateElement('runbookTitle', 'Demo scenario summary');
+    updateElement('runbookId', scenarioId);
+    updateElement('runbookEffect', 'display_only');
+    updateElement('runbookApproval', 'Not applicable');
+    renderList('runbookSteps', nextChecks.length ? nextChecks : ['Inspect explanation output', 'Compare with live telemetry before acting'], (item) => item);
+
+    renderTimeline('currentTriggersTimeline', [
+        {
+            ts_iso: result.ts || raw.explanation?.ts || '-',
+            kind: 'demo',
+            title: `Scenario ${scenarioId}`,
+            detail: description || 'Synthetic demo scenario replay',
+        },
+    ], (item) => item);
+    renderTimeline('decisionChangesTimeline', [
+        {
+            ts_iso: result.ts || raw.explanation?.ts || '-',
+            kind: 'arbiter',
+            title: `${action} selected`,
+            detail: reason || 'No reason provided',
+        },
+    ], (item) => item);
+    renderTimeline('operatorInteractionsTimeline', [
+        {
+            ts_iso: result.ts || raw.explanation?.ts || '-',
+            kind: 'demo',
+            title: 'Demo overlay applied to dashboard',
+            detail: 'Display state is synthetic until cleared.',
+        },
+    ], (item) => item);
+    renderTimeline('backgroundHistoryTimeline', rejected, (item) => ({
+        ts_iso: result.ts || raw.explanation?.ts || '-',
+        kind: 'rejected',
+        title: item.action || '-',
+        detail: item.reason || '-',
+    }));
+    updateElement('healthSummaryLine', `Demo overlay active | scenario=${scenarioId} | action=${action} | evidence=${evidenceIds.length}`);
+
+    updateElement('mioCurrentAnswer', `Demo overlay active for ${scenarioId}. ${operatorWording}`.trim());
+    updateElement('mioRecommendation', `Demo scenario ${scenarioId} selected ${action}.`);
+    updateElement('mioLastAsk', `Demo scenario replay | ${scenarioId}`);
+    updateElement('mioRunbookSummary', `Scenario ${scenarioId} | display_only`);
+    renderList('mioRationaleList', [
+        `Demo scenario: ${scenarioId}`,
+        `NOC=${nocStatus}, SOC=${socStatus}`,
+        `Arbiter action=${action}`,
+        `Reason=${reason}`,
+    ], (item) => item);
+    updateElement('mioUserGuidance', `This is a demo overlay. Compare it against live telemetry before acting.`);
+    updateElement('mioReview', 'demo-overlay');
+    const mioStatusBadge = document.getElementById('mioStatusBadge');
+    if (mioStatusBadge) {
+        mioStatusBadge.textContent = 'DEMO';
+        mioStatusBadge.className = 'assistant-status status-demo';
     }
 }
 
@@ -569,8 +852,14 @@ async function executeAction(action) {
 }
 
 async function askMio(question) {
+    return askMioWithOptions(question, {});
+}
+
+async function askMioWithOptions(question, options = {}) {
     const submit = document.getElementById('mioAskSubmit');
     const responseBox = document.getElementById('mioAskResponse');
+    const silent = Boolean(options.silent);
+    const extraContext = options.context && typeof options.context === 'object' ? options.context : {};
     if (submit) submit.disabled = true;
     if (responseBox) responseBox.textContent = 'M.I.O. is analyzing...';
 
@@ -582,7 +871,7 @@ async function askMio(question) {
                 question,
                 sender: 'Dashboard',
                 source: 'dashboard',
-                context: { audience: currentAudience },
+                context: Object.assign({ audience: currentAudience }, extraContext),
             }),
         });
         if (responseBox) {
@@ -604,13 +893,24 @@ async function askMio(question) {
             statusBadge.textContent = String(result.status || 'completed').toUpperCase();
             statusBadge.className = `assistant-status ${toneForStatus(result.status || 'completed')}`;
         }
-        showToast('M.I.O. response received', 'success');
+        if (!silent) showToast('M.I.O. response received', 'success');
+        return result;
     } catch (error) {
         if (responseBox) responseBox.textContent = `M.I.O. request failed: ${error.message}`;
-        showToast(`M.I.O. request failed: ${error.message}`, 'error');
+        if (!silent) showToast(`M.I.O. request failed: ${error.message}`, 'error');
+        throw error;
     } finally {
         if (submit) submit.disabled = false;
     }
+}
+
+function buildDemoMioQuestion(result) {
+    const scenarioId = result?.scenario_id || 'demo';
+    const nocStatus = result?.noc?.summary?.status || '-';
+    const socStatus = result?.soc?.summary?.status || '-';
+    const action = result?.arbiter?.action || '-';
+    const reason = result?.arbiter?.reason || '-';
+    return `Demo scenario ${scenarioId}: NOC status ${nocStatus}, SOC status ${socStatus}, selected action ${action}, reason ${reason}. Explain this choice for an operator and give the next checks.`;
 }
 
 function renderList(id, items, formatter) {
@@ -618,6 +918,14 @@ function renderList(id, items, formatter) {
     if (!el) return;
     const rows = Array.isArray(items) && items.length ? items : ['No data'];
     el.innerHTML = rows.map((item) => `<li>${escapeHtml(formatter(item))}</li>`).join('');
+}
+
+function escapeAttribute(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('"', '&quot;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
 }
 
 function renderTimeline(id, items, formatter) {

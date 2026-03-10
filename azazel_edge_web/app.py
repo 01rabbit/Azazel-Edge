@@ -56,6 +56,13 @@ try:
         propose_runbooks as runbook_propose,
         review_runbook_id as runbook_review_id,
     )
+    from azazel_edge.demo_overlay import (
+        DEMO_OVERLAY_PATH,
+        build_demo_overlay,
+        clear_demo_overlay,
+        read_demo_overlay,
+        write_demo_overlay,
+    )
     from azazel_edge.path_schema import (
         config_dir_candidates,
         first_minute_config_candidates,
@@ -73,6 +80,11 @@ except Exception:
     runbook_list = None
     runbook_propose = None
     runbook_review_id = None
+    DEMO_OVERLAY_PATH = Path("/run/azazel-edge/demo_overlay.json")
+    build_demo_overlay = lambda result: {"active": True, "raw_result": result}  # type: ignore
+    clear_demo_overlay = lambda: None  # type: ignore
+    read_demo_overlay = lambda: {}  # type: ignore
+    write_demo_overlay = lambda payload: DEMO_OVERLAY_PATH  # type: ignore
     config_dir_candidates = lambda: [Path("/etc/azazel-edge"), Path("/etc/azazel-zero")]  # type: ignore
     first_minute_config_candidates = lambda: [Path("/etc/azazel-edge/first_minute.yaml"), Path("/etc/azazel-zero/first_minute.yaml")]  # type: ignore
     mode_state_candidates = lambda: [Path("/etc/azazel/mode.json"), Path("/etc/azazel-edge/mode.json"), Path("/etc/azazel-zero/mode.json")]  # type: ignore
@@ -95,6 +107,9 @@ AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-l
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/azazel-edge/runbook-events.jsonl"))
 TOKEN_FILE = web_token_candidates()[0]
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
+LOCAL_DEMO_RUNNER = PROJECT_ROOT / "bin" / "azazel-edge-demo"
+OPT_DEMO_RUNNER = Path("/opt/azazel-edge/bin/azazel-edge-demo")
+USR_LOCAL_DEMO_RUNNER = Path("/usr/local/bin/azazel-edge-demo")
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
@@ -1267,6 +1282,59 @@ def _assist_handoff_payload() -> Dict[str, str]:
         "ops_comm": "/ops-comm",
         "mattermost": MATTERMOST_OPEN_URL,
     }
+
+
+def _resolve_demo_runner() -> Path:
+    candidates = [USR_LOCAL_DEMO_RUNNER, OPT_DEMO_RUNNER, LOCAL_DEMO_RUNNER]
+    for path in candidates:
+        try:
+            if path.exists() and os.access(path, os.X_OK):
+                return path
+        except Exception:
+            continue
+    return LOCAL_DEMO_RUNNER
+
+
+def _run_demo_runner(*args: str) -> tuple[Dict[str, Any], int]:
+    runner = _resolve_demo_runner()
+    cmd = [str(runner), *[str(x) for x in args]]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PY_ROOT) + (f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else "")
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env=env,
+            cwd=str(PROJECT_ROOT),
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "demo_runner_timeout", "command": cmd}, 504
+    except Exception as e:
+        return {"ok": False, "error": str(e), "command": cmd}, 500
+
+    stdout = str(result.stdout or "").strip()
+    stderr = str(result.stderr or "").strip()
+    payload: Dict[str, Any] = {}
+    if stdout:
+        try:
+            payload = json.loads(stdout)
+        except Exception:
+            payload = {"ok": False, "error": "invalid_demo_runner_output", "stdout": stdout}
+    if result.returncode != 0:
+        if not payload:
+            payload = {"ok": False}
+        payload.setdefault("error", stderr or f"demo_runner_exit_{result.returncode}")
+        payload["stderr"] = stderr
+        payload["returncode"] = result.returncode
+        payload["command"] = cmd
+        return payload, 400 if "unknown_scenario" in str(payload.get("error", "")) else 500
+
+    if not payload:
+        payload = {"ok": True}
+    payload["runner"] = str(runner)
+    return payload, 200
 
 
 def _assist_rationale(ai_result: Dict[str, Any]) -> List[str]:
@@ -2583,6 +2651,45 @@ def api_ai_capabilities():
             ],
         }
     ), 200
+
+
+@app.route("/api/demo/scenarios", methods=["GET"])
+def api_demo_scenarios():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    payload, code = _run_demo_runner("list")
+    return jsonify(payload), code
+
+
+@app.route("/api/demo/overlay", methods=["GET"])
+def api_demo_overlay():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    payload = read_demo_overlay()
+    return jsonify({"ok": True, "overlay": payload, "active": bool(payload.get("active"))}), 200
+
+
+@app.route("/api/demo/overlay/clear", methods=["POST"])
+def api_demo_overlay_clear():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    clear_demo_overlay()
+    return jsonify({"ok": True, "cleared": True}), 200
+
+
+@app.route("/api/demo/run/<scenario_id>", methods=["POST"])
+def api_demo_run(scenario_id: str):
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    scenario = str(scenario_id or "").strip()
+    if not scenario:
+        return jsonify({"ok": False, "error": "scenario_id is required"}), 400
+    payload, code = _run_demo_runner("run", scenario)
+    if code == 200 and isinstance(payload, dict) and payload.get("ok") and isinstance(payload.get("result"), dict):
+        overlay = build_demo_overlay(payload["result"])
+        write_demo_overlay(overlay)
+        payload["overlay"] = overlay
+    return jsonify(payload), code
 
 
 @app.route("/api/dashboard/summary", methods=["GET"])

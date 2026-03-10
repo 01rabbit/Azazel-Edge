@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="${ROOT_DIR}/py:${PYTHONPATH:-}"
+
+exec python3 - "$@" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from typing import Any, Dict
+
+from azazel_edge.demo import DemoScenarioPack, DemoScenarioRunner
+
+
+def _usage() -> int:
+    print("Usage: azazel-edge-demo list | azazel-edge-demo run <scenario_id>", file=sys.stderr)
+    return 2
+
+
+def _list_payload() -> Dict[str, Any]:
+    pack = DemoScenarioPack().scenarios()
+    items = []
+    for scenario_id, item in sorted(pack.items()):
+        items.append(
+            {
+                "scenario_id": scenario_id,
+                "description": item.get("description", ""),
+                "event_count": len(item.get("events", [])),
+            }
+        )
+    return {"ok": True, "items": items}
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        return _usage()
+
+    command = str(argv[1]).strip().lower()
+    if command == "list":
+        print(json.dumps(_list_payload(), ensure_ascii=False, indent=2))
+        return 0
+
+    if command == "run":
+        if len(argv) < 3:
+            return _usage()
+        scenario_id = str(argv[2]).strip()
+        try:
+            result = DemoScenarioRunner().run(scenario_id)
+        except KeyError as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+            return 1
+        print(json.dumps({"ok": True, "result": result}, ensure_ascii=False, indent=2))
+        return 0
+
+    return _usage()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
+PY
