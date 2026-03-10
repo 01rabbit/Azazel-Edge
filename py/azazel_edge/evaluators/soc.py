@@ -3,7 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Iterable, List, Tuple
 
+from azazel_edge.correlation import AdvancedCorrelator
+from azazel_edge.sigma import MiniSigmaExecutor
 from azazel_edge.ti import ThreatIntelFeed
+from azazel_edge.yara import MiniYaraMatcher
 
 
 def _to_payloads(events: Iterable[Any]) -> List[Dict[str, Any]]:
@@ -66,8 +69,11 @@ class SocEvaluator:
     Score semantics are threat-oriented: 100 is most concerning.
     """
 
-    def __init__(self, ti_feed: ThreatIntelFeed | None = None):
+    def __init__(self, ti_feed: ThreatIntelFeed | None = None, sigma_rules: Iterable[Dict[str, Any]] | None = None, yara_rules: Iterable[Dict[str, Any]] | None = None):
         self.ti_feed = ti_feed
+        self.correlator = AdvancedCorrelator()
+        self.sigma = MiniSigmaExecutor(sigma_rules)
+        self.yara = MiniYaraMatcher(yara_rules)
 
     def evaluate(self, events: Iterable[Any], sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         payloads = _to_payloads(events)
@@ -75,10 +81,13 @@ class SocEvaluator:
         flow_payloads = [item for item in payloads if str(item.get('source') or '') == 'flow_min']
         evidence_ids = [str(item.get('event_id') or '') for item in payloads if str(item.get('event_id') or '')]
         ti_matches = self._match_ti(soc_payloads)
+        correlation = self.correlator.correlate(payloads)
+        sigma_hits = self.sigma.match(payloads)
+        yara_hits = self.yara.match(payloads)
 
-        suspicion = self._evaluate_suspicion(soc_payloads, flow_payloads, ti_matches, sot_diff=sot_diff)
+        suspicion = self._evaluate_suspicion(soc_payloads, flow_payloads, ti_matches, correlation, yara_hits, sot_diff=sot_diff)
         confidence = self._evaluate_confidence(soc_payloads)
-        technique_likelihood, attack_candidates = self._evaluate_technique_likelihood(soc_payloads, flow_payloads, ti_matches, sot_diff=sot_diff)
+        technique_likelihood, attack_candidates = self._evaluate_technique_likelihood(soc_payloads, flow_payloads, ti_matches, correlation, sigma_hits, sot_diff=sot_diff)
         blast_radius = self._evaluate_blast_radius(soc_payloads, flow_payloads)
 
         worst = max(
@@ -107,6 +116,9 @@ class SocEvaluator:
                 'reasons': summary_reasons,
                 'attack_candidates': attack_candidates,
                 'ti_matches': [match.to_dict() for match in ti_matches],
+                'correlation': correlation,
+                'sigma_hits': sigma_hits,
+                'yara_hits': yara_hits,
                 'event_count': len(payloads),
             },
             'evidence_ids': sorted(dict.fromkeys(evidence_ids)),
@@ -123,7 +135,7 @@ class SocEvaluator:
             'evidence_ids': evaluation.get('evidence_ids', []),
         }
 
-    def _evaluate_suspicion(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any], sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def _evaluate_suspicion(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any], correlation: Dict[str, Any], yara_hits: List[Dict[str, Any]], sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         if not payloads:
             return _make_dimension(0, ['no_soc_events'], [])
         evidence_ids: List[str] = []
@@ -148,6 +160,15 @@ class SocEvaluator:
         if ti_matches:
             top_risk = min(100, top_risk + 15)
             reasons.append('ti_match_support')
+        if int(correlation.get('top_score') or 0) >= 50:
+            top_risk = min(100, top_risk + 10)
+            reasons.append('correlation_support')
+            evidence_ids.extend(str(x) for x in correlation.get('evidence_ids', []) if str(x))
+        if yara_hits:
+            top_risk = min(100, top_risk + 10)
+            reasons.append('yara_support')
+            for hit in yara_hits:
+                evidence_ids.extend(str(x) for x in hit.get('evidence_ids', []) if str(x))
         if sot_diff:
             if sot_diff.get('unauthorized_services'):
                 top_risk = min(100, top_risk + 10)
@@ -176,7 +197,7 @@ class SocEvaluator:
             reasons.append('consistent_signal')
         return _make_dimension(score, reasons, evidence_ids)
 
-    def _evaluate_technique_likelihood(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any], sot_diff: Dict[str, Any] | None = None) -> Tuple[Dict[str, Any], List[str]]:
+    def _evaluate_technique_likelihood(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any], correlation: Dict[str, Any], sigma_hits: List[Dict[str, Any]], sot_diff: Dict[str, Any] | None = None) -> Tuple[Dict[str, Any], List[str]]:
         if not payloads:
             return _make_dimension(0, ['no_soc_events'], []), []
         evidence_ids: List[str] = []
@@ -208,6 +229,15 @@ class SocEvaluator:
         if ti_matches:
             score = max(score, 75)
             reasons.append('ti_match_support')
+        if int(correlation.get('top_score') or 0) >= 50:
+            score = max(score, 65)
+            reasons.append('correlation_support')
+            evidence_ids.extend(str(x) for x in correlation.get('evidence_ids', []) if str(x))
+        if sigma_hits:
+            score = max(score, 70)
+            reasons.append('sigma_support')
+            for hit in sigma_hits:
+                evidence_ids.extend(str(x) for x in hit.get('evidence_ids', []) if str(x))
         if sot_diff and sot_diff.get('unauthorized_services'):
             score = max(score, 60)
             reasons.append('unauthorized_service_support')

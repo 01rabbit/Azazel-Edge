@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List
+import ipaddress
+import re
 
 
 DEFAULT_CONFIG: Dict[str, Dict[str, int]] = {
@@ -88,6 +90,30 @@ def _make_dimension(score: int, reasons: List[str], evidence_ids: List[str]) -> 
     }
 
 
+def _parse_subject(subject: str) -> tuple[str, str]:
+    match = re.match(r'(?P<src>[^-]+)->(?P<dst>[^:]+):', str(subject or ''))
+    if not match:
+        return '', ''
+    return match.group('src'), match.group('dst')
+
+
+def _network_id_for_ip(networks: List[Dict[str, Any]], ip: str) -> str:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ''
+    for net in networks:
+        try:
+            cidr = ipaddress.ip_network(str(net.get('cidr') or ''), strict=False)
+        except ValueError:
+            continue
+        if addr in cidr:
+            return str(net.get('id') or '')
+    if addr.is_global:
+        return 'wan'
+    return ''
+
+
 class NocEvaluator:
     """
     Deterministic NOC evaluator.
@@ -144,6 +170,9 @@ class NocEvaluator:
             'degraded_mode': degraded_mode,
             'reasons': sorted(dict.fromkeys(summary_reasons)),
         }
+        if sot and isinstance(sot.get('networks'), list):
+            segment_status = self._evaluate_segment_scope(payloads, sot.get('networks', []))
+            summary['segment_scope'] = segment_status
 
         result = {
             'availability': availability,
@@ -214,18 +243,27 @@ class NocEvaluator:
                 reasons.append('path_probe_failed')
 
         probe_results: List[bool] = []
+        by_interface: Dict[str, List[bool]] = {}
         for event in by_kind.get('path_probe', []):
             attrs = event.get('attrs', {})
             evidence_ids.append(str(event.get('event_id') or ''))
             reachable = bool(attrs.get('reachable'))
             scope = str(attrs.get('scope') or '')
+            iface = str(attrs.get('interface') or '')
             probe_results.append(reachable)
+            if iface:
+                by_interface.setdefault(iface, []).append(reachable)
             if not reachable:
                 score -= 20 if scope == 'external' else 10
                 reasons.append(f'path_probe_failed:{scope or "unknown"}')
         if probe_results and len(set(probe_results)) > 1:
             score -= 15
             reasons.append('path_target_divergence')
+        if by_interface and len(by_interface) > 1:
+            interface_health = {iface: all(values) for iface, values in by_interface.items() if values}
+            if len(set(interface_health.values())) > 1:
+                score -= 10
+                reasons.append('uplink_divergence')
 
         for event in by_kind.get('iface_stats', []):
             attrs = event.get('attrs', {})
@@ -377,3 +415,31 @@ class NocEvaluator:
         ))
         updated['label'] = _bucket(int(updated.get('score') or 0))
         return updated
+
+    @staticmethod
+    def _evaluate_segment_scope(payloads: List[Dict[str, Any]], networks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        segments = set()
+        for payload in payloads:
+            source = str(payload.get('source') or '')
+            kind = str(payload.get('kind') or '')
+            attrs = payload.get('attrs', {})
+            if source in {'suricata_eve', 'flow_min'}:
+                src, dst = _parse_subject(str(payload.get('subject') or ''))
+                if src:
+                    segment = _network_id_for_ip(networks, src)
+                    if segment:
+                        segments.add(segment)
+                if dst:
+                    segment = _network_id_for_ip(networks, dst)
+                    if segment:
+                        segments.add(segment)
+            elif kind in {'dhcp_lease', 'arp_entry'}:
+                ip = str(attrs.get('ip') or '')
+                if ip:
+                    segment = _network_id_for_ip(networks, ip)
+                    if segment:
+                        segments.add(segment)
+        return {
+            'affected_segments': sorted(segments),
+            'multi_segment': len(segments) > 1,
+        }

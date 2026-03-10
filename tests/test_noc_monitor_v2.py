@@ -27,7 +27,7 @@ class LightweightNocMonitorV2Tests(unittest.TestCase):
              patch('azazel_edge.sensors.noc_monitor.collect_service_health', return_value=service_payload):
             snapshot = LightweightNocMonitor(up_interface='eth1', down_interface='usb0', gateway_ip='192.168.40.1').collect_snapshot()
         self.assertIn('path_probes', snapshot)
-        self.assertEqual(len(snapshot['path_probes']), 2)
+        self.assertEqual(len(snapshot['path_probes']), 4)
         self.assertIn('substate', snapshot['service_health']['web'])
 
     def test_adapter_and_evaluator_reflect_path_and_service_detail(self) -> None:
