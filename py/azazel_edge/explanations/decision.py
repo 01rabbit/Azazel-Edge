@@ -39,6 +39,7 @@ class DecisionExplainer:
             attack_candidates.extend(str(x) for x in soc_summary.get('ai_attack_candidates', []) if str(x))
         attack_candidates = list(dict.fromkeys(attack_candidates))
         correlation = soc_summary.get('correlation', {}) if isinstance(soc_summary.get('correlation'), dict) else {}
+        sigma_hits = soc_summary.get('sigma_hits', []) if isinstance(soc_summary.get('sigma_hits'), list) else []
         visualization = self.knowledge.build_visualization(attack_candidates, soc_summary.get('ti_matches', []))
         next_checks = self._next_checks(action, noc_summary, soc_summary, client_impact)
         why_chosen = {
@@ -51,6 +52,7 @@ class DecisionExplainer:
             'target': target,
             'ti_matches': soc_summary.get('ti_matches', []),
             'attack_candidates': attack_candidates,
+            'sigma_hits': sigma_hits,
             'visualization': visualization,
             'correlation': correlation,
             'client_impact': client_impact,
@@ -72,6 +74,7 @@ class DecisionExplainer:
             why_not_others=why_not_others,
             ti_matches=why_chosen['ti_matches'],
             attack_candidates=attack_candidates,
+            sigma_hits=sigma_hits,
             correlation=correlation,
             control_mode=control_mode,
             client_impact=client_impact,
@@ -109,6 +112,7 @@ class DecisionExplainer:
         why_not_others: List[Dict[str, str]],
         ti_matches: List[Dict[str, Any]],
         attack_candidates: List[str],
+        sigma_hits: List[Dict[str, Any]],
         correlation: Dict[str, Any],
         control_mode: str,
         client_impact: Dict[str, Any],
@@ -129,6 +133,8 @@ class DecisionExplainer:
             sentence += f" TI matches: {ti_text}."
         if attack_candidates:
             sentence += f" ATT&CK candidates: {', '.join(attack_candidates[:3])}."
+        if sigma_hits:
+            sentence += f" Sigma: {', '.join(str(item.get('rule_id') or '') for item in sigma_hits[:3] if str(item.get('rule_id') or ''))}."
         if int(correlation.get('top_score') or 0) > 0:
             sentence += (
                 f" Correlation: {int(correlation.get('cluster_count') or 0)} cluster(s), "
