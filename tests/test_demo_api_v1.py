@@ -20,6 +20,7 @@ class DemoApiV1Tests(unittest.TestCase):
             "write_demo_overlay": webapp.write_demo_overlay,
             "clear_demo_overlay": webapp.clear_demo_overlay,
             "build_demo_overlay": webapp.build_demo_overlay,
+            "_trigger_demo_clear_side_effects": webapp._trigger_demo_clear_side_effects,
         }
         webapp.load_token = lambda: None
         webapp.STATE_PATH = root / "ui_snapshot.json"
@@ -34,6 +35,7 @@ class DemoApiV1Tests(unittest.TestCase):
         webapp.write_demo_overlay = self._orig["write_demo_overlay"]
         webapp.clear_demo_overlay = self._orig["clear_demo_overlay"]
         webapp.build_demo_overlay = self._orig["build_demo_overlay"]
+        webapp._trigger_demo_clear_side_effects = self._orig["_trigger_demo_clear_side_effects"]
         self.tmp.cleanup()
 
     def test_list_scenarios_endpoint(self) -> None:
@@ -109,12 +111,15 @@ class DemoApiV1Tests(unittest.TestCase):
 
     def test_clear_overlay_endpoint(self) -> None:
         cleared = {"done": False}
+        side_effect = {"done": False}
         webapp.clear_demo_overlay = lambda: cleared.__setitem__("done", True)
+        webapp._trigger_demo_clear_side_effects = lambda: side_effect.__setitem__("done", True)
         response = self.client.post("/api/demo/overlay/clear")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload["ok"])
         self.assertTrue(cleared["done"])
+        self.assertTrue(side_effect["done"])
 
 
 if __name__ == "__main__":

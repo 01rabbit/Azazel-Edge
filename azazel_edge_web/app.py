@@ -639,6 +639,25 @@ def _blank_ai_context() -> Dict[str, Any]:
     }
 
 
+def _demo_overlay_is_active() -> bool:
+    payload = read_demo_overlay()
+    return bool(payload.get("active")) if isinstance(payload, dict) else False
+
+
+def _trigger_demo_clear_side_effects() -> None:
+    # EPD keeps the last rendered frame until refreshed, so clear should force
+    # one live redraw instead of waiting for the timer. Use no-block so the
+    # web response is not held open by slow panel hardware.
+    commands = [
+        ["/bin/systemctl", "--no-block", "start", "azazel-edge-epd-refresh.service"],
+    ]
+    for cmd in commands:
+        try:
+            subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8)
+        except Exception:
+            continue
+
+
 def _dashboard_visible_ai_context(state: Dict[str, Any], advisory: Dict[str, Any], llm_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     latest_ai = _latest_ai_context(advisory, llm_rows)
     ai_age = _age_seconds(latest_ai.get("ts"))
@@ -648,6 +667,8 @@ def _dashboard_visible_ai_context(state: Dict[str, Any], advisory: Dict[str, Any
     internal = state.get("internal") if isinstance(state.get("internal"), dict) else {}
     suspicion = _as_int(internal.get("suspicion"), 0)
     latest_source = str(latest_ai.get("source") or "").lower()
+    if latest_source == "dashboard_demo" and not _demo_overlay_is_active():
+        return _blank_ai_context()
     if latest_source == "dashboard" and user_state == "SAFE" and suspicion <= 0:
         return _blank_ai_context()
     return latest_ai
@@ -843,12 +864,30 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
         "ai_agent": "ON" if _service_active("azazel-edge-ai-agent") else "OFF",
         "web": "ON" if _service_active("azazel-edge-web") else "OFF",
     }
+    attack_type = str(advisory.get("attack_type") or "").strip()
+    top_src = str(advisory.get("src_ip") or "").strip()
+    top_dst = str(advisory.get("dst_ip") or "").strip()
+    top_sid = _as_int(advisory.get("suricata_sid"), 0)
+    top_severity = _as_int(advisory.get("suricata_severity"), 0)
+    suspicion = _as_int(internal.get("suspicion"), 0)
+    if suspicion >= 85 or _as_int(state.get("suricata_critical"), 0) > 0:
+        threat_level = "critical"
+    elif suspicion >= 60 or _as_int(state.get("suricata_warning"), 0) > 0:
+        threat_level = "elevated"
+    elif suspicion > 0:
+        threat_level = "watch"
+    else:
+        threat_level = "quiet"
+    signals = network_health.get("signals") if isinstance(network_health.get("signals"), list) else []
+    path_scope = "all uplink clients" if str(connection.get("internet_check") or "").upper() == "FAIL" else (
+        "dns-affected clients" if _as_int(network_health.get("dns_mismatch"), 0) > 0 else "no broad impact indicated"
+    )
     return {
         "ok": True,
         "risk": {
             "user_state": str(state.get("user_state") or ""),
             "state_name": str(internal.get("state_name") or ""),
-            "suspicion": _as_int(internal.get("suspicion"), 0),
+            "suspicion": suspicion,
             "recommendation": str(state.get("recommendation") or advisory.get("recommendation") or ""),
             "suricata_critical": _as_int(state.get("suricata_critical"), 0),
             "suricata_warning": _as_int(state.get("suricata_warning"), 0),
@@ -898,6 +937,47 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
             },
             "service_health": service_summary,
         },
+        "soc_focus": {
+            "threat_level": threat_level,
+            "attack_type": attack_type or "No current attack type",
+            "top_source": top_src or "-",
+            "top_destination": top_dst or "-",
+            "top_sid": top_sid or "-",
+            "top_severity": top_severity or "-",
+            "critical_count": _as_int(state.get("suricata_critical"), 0),
+            "warning_count": _as_int(state.get("suricata_warning"), 0),
+            "confidence_signal": f"suspicion={suspicion}",
+            "attack_candidates": [attack_type] if attack_type else [],
+            "sigma_hits": [],
+            "yara_hits": [],
+            "ti_matches": [],
+            "correlation": {
+                "status": "present" if attack_type or top_src or top_dst else "none",
+                "reasons": [
+                    item for item in [
+                        f"src={top_src}" if top_src else "",
+                        f"dst={top_dst}" if top_dst else "",
+                        f"sid={top_sid}" if top_sid else "",
+                    ] if item
+                ][:3],
+            },
+        },
+        "noc_focus": {
+            "path_health": {
+                "status": str(network_health.get("status") or ""),
+                "uplink": str(state.get("up_if") or ""),
+                "gateway": str(state.get("gateway_ip") or ""),
+                "internet_check": str(connection.get("internet_check") or ""),
+                "signals": signals[:4],
+            },
+            "service_health": service_summary,
+            "client_impact": {
+                "scope": path_scope,
+                "segment_scope": str(state.get("up_if") or "unknown"),
+                "captive_portal": str(connection.get("captive_portal") or ""),
+                "dns_mismatch": _as_int(network_health.get("dns_mismatch"), 0),
+            },
+        },
         "timestamps": {
             "snapshot_at": _iso_from_epoch(state.get("snapshot_epoch")),
             "ai_metrics_at": _iso_from_epoch(metrics.get("last_update_ts")),
@@ -926,6 +1006,18 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
     findings = review.get("findings") if isinstance(review.get("findings"), list) else []
     if findings:
         _append_unique(rationale, f"Review findings: {' | '.join(str(x) for x in findings[:2])}.")
+    suspicion = _as_int((state.get("internal") or {}).get("suspicion"), 0) if isinstance(state.get("internal"), dict) else 0
+    critical = _as_int(state.get("suricata_critical"), 0)
+    stronger_actions: List[Dict[str, str]] = []
+    if critical <= 0 and suspicion < 80:
+        stronger_actions.append({"action": "throttle", "reason": "Threat signal is not strong enough yet."})
+        stronger_actions.append({"action": "redirect", "reason": "High-confidence deception criteria are not met."})
+        stronger_actions.append({"action": "isolate", "reason": "Client impact is not justified by current evidence."})
+    elif suspicion < 95:
+        stronger_actions.append({"action": "redirect", "reason": "Reversible control remains safer than redirect."})
+        stronger_actions.append({"action": "isolate", "reason": "Isolation requires stronger blast-radius evidence."})
+    else:
+        stronger_actions.append({"action": "isolate", "reason": "Isolation stays reserved for confirmed, high-impact compromise."})
     return {
         "ok": True,
         "current_operator_actions": guidance["do_next"],
@@ -938,6 +1030,7 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
         "approval_required": bool(suggested_runbook.get("requires_approval")),
         "current_recommendation": recommendation,
         "operator_note": str(latest_ai.get("operator_note") or ""),
+        "rejected_stronger_actions": stronger_actions[:4],
         "mio": {
             "answer": str(latest_ai.get("answer") or ""),
             "status": str(latest_ai.get("status") or ""),
@@ -2674,6 +2767,7 @@ def api_demo_overlay_clear():
     if not verify_token():
         return jsonify({"ok": False, "error": "Unauthorized"}), 403
     clear_demo_overlay()
+    _trigger_demo_clear_side_effects()
     return jsonify({"ok": True, "cleared": True}), 200
 
 

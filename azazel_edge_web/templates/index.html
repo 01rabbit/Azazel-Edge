@@ -103,6 +103,74 @@
             </div>
         </section>
 
+        <section class="panel mission-row">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">Current Mission</div>
+                    <h2>What the operator should do now</h2>
+                </div>
+                <div class="panel-note" id="missionAudienceNote">Mission row compresses the current goal, the first checks, and the safety rails.</div>
+            </div>
+            <div class="mission-grid">
+                <article class="mission-card mission-card-primary">
+                    <div class="card-kicker">Primary Objective</div>
+                    <h3 id="missionHeadline">Waiting for control-plane synthesis</h3>
+                    <p class="card-summary" id="missionSummary">The dashboard will place the current objective here after the first refresh.</p>
+                    <div class="assistant-label">Why this now</div>
+                    <ul class="action-list" id="missionReasonList">
+                        <li>Waiting for causal summary</li>
+                    </ul>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">Operator Focus</div>
+                    <ul class="action-list" id="missionFocusList">
+                        <li>Waiting for next checks</li>
+                    </ul>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">Safety Rails</div>
+                    <ul class="action-list" id="missionSafetyList">
+                        <li>Waiting for safety guidance</li>
+                    </ul>
+                </article>
+            </div>
+        </section>
+
+        <section class="panel temporary-mission-panel temp-only">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">Temporary Mission</div>
+                    <h2>Safe first response for the person in front of you</h2>
+                </div>
+                <div class="panel-note">Temporary mode keeps the first action, the user-facing wording, and the forbidden moves in one block.</div>
+            </div>
+            <div class="temporary-mission-grid">
+                <article class="mission-card mission-card-primary">
+                    <div class="card-kicker">First Action</div>
+                    <h3 id="temporaryMissionHeadline">Guide the user safely.</h3>
+                    <p class="card-summary" id="temporaryMissionSummary">Temporary mode will place the first safe action here.</p>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">Ask the User</div>
+                    <ul class="action-list" id="temporaryMissionAskList">
+                        <li>Choose one symptom card to start guided triage.</li>
+                    </ul>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">Tell the User</div>
+                    <ul class="action-list" id="temporaryMissionTellList">
+                        <li>We are checking the current state. Please wait for the next instruction.</li>
+                    </ul>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">Do Not Do</div>
+                    <ul class="action-list" id="temporaryMissionDoNotDoList">
+                        <li>Do not change mode or restart services until the first checks are done.</li>
+                    </ul>
+                </article>
+            </div>
+        </section>
+
         <div class="board-layout">
             <section class="board-main">
                 <section class="panel situation-board">
@@ -159,17 +227,105 @@
                     </div>
                 </section>
 
+                <section class="panel split-board">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="panel-kicker">SOC / NOC Split Board</div>
+                            <h2>Threat evidence and operational impact</h2>
+                        </div>
+                        <div class="panel-note">Separate the threat case from the path and service case before you decide on stronger control.</div>
+                    </div>
+                    <div class="split-grid">
+                        <article class="split-card soc-split-card">
+                            <div class="split-card-header">
+                                <div>
+                                    <div class="card-kicker">Threat Evidence Summary</div>
+                                    <h3 id="socThreatLevel">quiet</h3>
+                                </div>
+                                <button type="button" class="context-ask-btn pro-only" data-question="現在の threat evidence を要約し、なぜ stronger action ではないのか説明せよ">Ask about this</button>
+                            </div>
+                            <p class="card-summary" id="socThreatSummary">No active threat evidence summary.</p>
+                            <div class="fact-list compact-list">
+                                <div class="fact-item"><span>Attack Type</span><strong id="socAttackType">-</strong></div>
+                                <div class="fact-item"><span>Source</span><strong id="socTopSource">-</strong></div>
+                                <div class="fact-item"><span>Destination</span><strong id="socTopDestination">-</strong></div>
+                                <div class="fact-item"><span>SID / Severity</span><strong id="socTopSignature">-</strong></div>
+                                <div class="fact-item"><span>Critical / Warning</span><strong id="socAlertCounts">0 / 0</strong></div>
+                                <div class="fact-item"><span>Confidence</span><strong id="socConfidenceSignal">-</strong></div>
+                            </div>
+                            <div class="split-subgrid">
+                                <div class="split-subcard">
+                                    <div class="assistant-label">Correlation</div>
+                                    <div id="socCorrelationStatus">-</div>
+                                    <ul class="action-list" id="socCorrelationReasons">
+                                        <li>No correlation summary.</li>
+                                    </ul>
+                                </div>
+                                <div class="split-subcard">
+                                    <div class="assistant-label">ATT&CK / TI / Sigma / YARA</div>
+                                    <ul class="action-list" id="socKnowledgeList">
+                                        <li>No auxiliary detection summary.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </article>
+
+                        <article class="split-card noc-split-card">
+                            <div class="split-card-header">
+                                <div>
+                                    <div class="card-kicker">NOC Focus</div>
+                                    <h3 id="nocPathStatus">unknown</h3>
+                                </div>
+                                <button type="button" class="context-ask-btn" data-question="現在の path、service、client impact を要約し、どこから確認すべきか説明せよ">Ask about this</button>
+                            </div>
+                            <div class="noc-split-grid">
+                                <div class="split-subcard">
+                                    <div class="assistant-label">Path Health</div>
+                                    <div class="fact-list compact-list">
+                                        <div class="fact-item"><span>Uplink</span><strong id="nocPathUplink">-</strong></div>
+                                        <div class="fact-item"><span>Gateway</span><strong id="nocPathGateway">-</strong></div>
+                                        <div class="fact-item"><span>Internet</span><strong id="nocPathInternet">-</strong></div>
+                                    </div>
+                                    <ul class="action-list" id="nocPathSignals">
+                                        <li>No path signal summary.</li>
+                                    </ul>
+                                </div>
+                                <div class="split-subcard">
+                                    <div class="assistant-label">Service Health</div>
+                                    <ul class="action-list" id="nocServiceList">
+                                        <li>No service summary.</li>
+                                    </ul>
+                                </div>
+                                <div class="split-subcard">
+                                    <div class="assistant-label">Client Impact</div>
+                                    <div class="fact-list compact-list">
+                                        <div class="fact-item"><span>Scope</span><strong id="nocClientScope">-</strong></div>
+                                        <div class="fact-item"><span>Segment</span><strong id="nocClientSegment">-</strong></div>
+                                        <div class="fact-item"><span>Captive Portal</span><strong id="nocClientPortal">-</strong></div>
+                                        <div class="fact-item"><span>DNS Mismatch</span><strong id="nocClientDnsMismatch">0</strong></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </article>
+                    </div>
+                </section>
+
                 <section class="panel action-board">
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">Action Board</div>
                             <h2>Next actions and operator controls</h2>
                         </div>
-                        <div class="panel-note" id="audienceSummary">Professional mode shows deeper evidence and approval context</div>
+                        <div class="panel-heading-actions">
+                            <div class="panel-note" id="audienceSummary">Professional mode shows deeper evidence and approval context</div>
+                            <button type="button" class="context-ask-btn pro-only" data-question="現在の action board を要約し、今やるべきことと避けるべきことを説明せよ">Ask about this</button>
+                        </div>
                     </div>
                     <div class="action-grid">
-                        <article class="action-card emphasis-card">
-                            <div class="card-kicker">Decision Rationale</div>
+                        <article class="action-card emphasis-card primary-action-card">
+                            <div class="card-kicker">Immediate Action</div>
+                            <h3 id="priorityActionTitle">Waiting for action synthesis</h3>
+                            <p class="card-summary" id="priorityActionSummary">The highest priority action will appear here before detailed controls.</p>
                             <div class="action-subsection">
                                 <div class="assistant-label">Why now</div>
                                 <ul class="action-list" id="whyNowList">
@@ -242,6 +398,14 @@
                             </ul>
                         </article>
 
+                        <article class="action-card pro-only">
+                            <div class="card-kicker">Rejected Stronger Actions</div>
+                            <p class="card-summary">Show why stronger containment was not selected with the current evidence.</p>
+                            <ul class="action-list" id="rejectedStrongerActionsList">
+                                <li>No stronger-action rejection summary.</li>
+                            </ul>
+                        </article>
+
                         <article class="action-card control-card">
                             <div class="card-kicker">Gateway Controls</div>
                             <div class="mode-button-row">
@@ -258,34 +422,6 @@
                                 <button class="quick-btn quick-btn-caution pro-only" id="containBtn">Contain</button>
                                 <button class="quick-btn quick-btn-caution pro-only" id="releaseBtn">Release</button>
                             </div>
-                        </article>
-                    </div>
-                </section>
-
-                <section class="panel evidence-board">
-                    <div class="panel-heading">
-                        <div>
-                            <div class="panel-kicker">Evidence & Timeline</div>
-                            <h2>Why the dashboard is telling you to act</h2>
-                        </div>
-                        <div class="panel-note" id="healthSummaryLine">-</div>
-                    </div>
-                    <div class="evidence-grid">
-                        <article class="evidence-card">
-                            <div class="card-kicker">Current Triggers</div>
-                            <ul class="timeline-list" id="currentTriggersTimeline"></ul>
-                        </article>
-                        <article class="evidence-card">
-                            <div class="card-kicker">Decision Changes</div>
-                            <ul class="timeline-list" id="decisionChangesTimeline"></ul>
-                        </article>
-                        <article class="evidence-card pro-only">
-                            <div class="card-kicker">Operator Interactions</div>
-                            <ul class="timeline-list" id="operatorInteractionsTimeline"></ul>
-                        </article>
-                        <article class="evidence-card pro-only">
-                            <div class="card-kicker">Background History</div>
-                            <ul class="timeline-list" id="backgroundHistoryTimeline"></ul>
                         </article>
                     </div>
                 </section>
@@ -410,6 +546,37 @@
                 </section>
             </aside>
         </div>
+
+        <section class="panel evidence-board evidence-board-lowered">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">Evidence & Timeline</div>
+                    <h2>Supporting history and audit trail</h2>
+                </div>
+                <div class="panel-heading-actions">
+                    <div class="panel-note" id="healthSummaryLine">-</div>
+                    <button type="button" class="context-ask-btn pro-only" data-question="現在の evidence と timeline を要約し、live telemetry で何を確認すべきか説明せよ">Ask about this</button>
+                </div>
+            </div>
+            <div class="evidence-grid">
+                <article class="evidence-card">
+                    <div class="card-kicker">Current Triggers</div>
+                    <ul class="timeline-list" id="currentTriggersTimeline"></ul>
+                </article>
+                <article class="evidence-card">
+                    <div class="card-kicker">Decision Changes</div>
+                    <ul class="timeline-list" id="decisionChangesTimeline"></ul>
+                </article>
+                <article class="evidence-card pro-only">
+                    <div class="card-kicker">Operator Interactions</div>
+                    <ul class="timeline-list" id="operatorInteractionsTimeline"></ul>
+                </article>
+                <article class="evidence-card pro-only">
+                    <div class="card-kicker">Background History</div>
+                    <ul class="timeline-list" id="backgroundHistoryTimeline"></ul>
+                </article>
+            </div>
+        </section>
     </main>
 
     <div id="toast" class="toast"></div>

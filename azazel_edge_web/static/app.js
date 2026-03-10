@@ -14,6 +14,22 @@ function setDemoOverlayVisualState(active) {
     document.body.classList.toggle('demo-overlay-active', !!active);
 }
 
+function resetDemoOverlayPresentation() {
+    setDemoOverlayVisualState(false);
+    updateElement('demoStatusBadge', 'READY');
+    const badge = document.getElementById('demoStatusBadge');
+    if (badge) badge.className = 'assistant-status status-neutral';
+    updateElement('demoNocStatus', '-');
+    updateElement('demoSocStatus', '-');
+    updateElement('demoAction', '-');
+    updateElement('demoReason', '-');
+    updateElement('demoOperatorWording', 'No demo overlay is active.');
+    updateElement('demoResponse', 'Run a scenario to preview the deterministic pipeline.');
+    renderList('demoNextChecks', ['No demo overlay active'], (item) => item);
+    renderList('demoEvidenceIds', ['No demo overlay active'], (item) => item);
+    renderList('demoRejectedAlternatives', ['No demo overlay active'], (item) => item);
+}
+
 const shortcutQuestions = {
     wifi: 'Wi-Fi に繋がらない利用者へどう案内するか',
     reconnect: '再接続できない利用者へどう案内するか',
@@ -155,6 +171,15 @@ function bindStaticHandlers() {
         });
     });
 
+    document.querySelectorAll('.context-ask-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const question = btn.dataset.question || '';
+            const area = document.getElementById('mioQuestion');
+            if (area) area.value = question;
+            if (question) askMio(question);
+        });
+    });
+
     document.querySelectorAll('.temp-flow-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
             const symptom = String(btn.dataset.symptom || '').trim();
@@ -285,6 +310,54 @@ function formatFreshness(ageSec, rawTime, stale, idle = false) {
     return `${stale ? 'STALE' : 'LIVE'} | ${bucket} | ${label}`;
 }
 
+function updateMissionRow(summary, actions) {
+    const recommendation = String(summary.current_recommendation || '-').trim();
+    const userGuidance = String(actions.current_user_guidance || '').trim();
+    const doNext = Array.isArray(actions.do_next) ? actions.do_next : [];
+    const whyNow = Array.isArray(actions.why_now) ? actions.why_now : [];
+    const doNotDo = Array.isArray(actions.do_not_do) ? actions.do_not_do : [];
+
+    const temporary = currentAudience === 'temporary';
+    const headline = temporary
+        ? (userGuidance || doNext[0] || recommendation || 'Guide the user safely.')
+        : (doNext[0] || recommendation || 'Review current operator action.');
+    const summaryLine = temporary
+        ? 'Temporary mode reduces the task to a safe first response and a user-facing explanation.'
+        : 'Professional mode compresses the first operator action, the current reason, and the non-negotiable safety rails.';
+    const focusItems = temporary
+        ? ([
+            ...(Array.isArray(actions.current_operator_actions) ? actions.current_operator_actions.slice(0, 2) : []),
+            ...(doNext.slice(0, 1)),
+        ].filter(Boolean))
+        : doNext.slice(0, 3);
+    const safetyItems = doNotDo.length ? doNotDo.slice(0, 3) : ['Do not act on stale data without confirming freshness.'];
+
+    updateElement('missionHeadline', headline || '-');
+    updateElement('missionSummary', summaryLine);
+    updateElement('missionAudienceNote', temporary
+        ? 'Temporary mode places the first safe action and the user-facing instruction ahead of deep evidence.'
+        : 'Professional mode places the first operator action and the causal summary ahead of deep history.');
+    renderList('missionReasonList', whyNow.length ? whyNow.slice(0, 3) : ['Waiting for causal summary.'], (item) => item);
+    renderList('missionFocusList', focusItems.length ? focusItems : ['Waiting for next checks.'], (item) => item);
+    renderList('missionSafetyList', safetyItems, (item) => item);
+}
+
+function updateTemporaryMission(actions) {
+    const doNext = Array.isArray(actions.do_next) ? actions.do_next : [];
+    const doNotDo = Array.isArray(actions.do_not_do) ? actions.do_not_do : [];
+    const askItems = Array.from(document.querySelectorAll('#temporaryAskList li'))
+        .map((item) => item.textContent || '')
+        .filter(Boolean);
+    const tellItems = Array.from(document.querySelectorAll('#temporaryTellList li'))
+        .map((item) => item.textContent || '')
+        .filter(Boolean);
+    updateElement('temporaryMissionHeadline', actions.current_user_guidance || doNext[0] || 'Guide the user safely.');
+    updateElement('temporaryMissionSummary', 'Temporary mode compresses the first safe response, the interview prompts, and the forbidden actions into one block.');
+    renderList('temporaryMissionAskList', askItems, (item) => item);
+    renderList('temporaryMissionTellList', tellItems, (item) => item);
+    renderList('temporaryMissionDoNotDoList', doNotDo.length ? doNotDo : ['Do not change mode or restart services until the first checks are done.'], (item) => item);
+}
+
 async function refreshDashboard() {
     const requests = [
         ['summary', '/api/dashboard/summary', true],
@@ -340,7 +413,10 @@ async function refreshDashboard() {
         updateHeader(state, mattermost);
         updateCommandStrip(summary, health, failures);
         updateSituationBoard(summary, state, health, mattermost);
+        updateSplitBoard(summary, actions);
         updateActionBoard(actions, state);
+        updateMissionRow(summary, actions);
+        updateTemporaryMission(actions);
         updateEvidenceBoard(evidence, health);
         updateAssistant(actions, mattermost, capabilities);
         updateControlButtons(summary, state);
@@ -446,6 +522,7 @@ async function runDemoScenario() {
         }
         await askMioWithOptions(buildDemoMioQuestion(result), {
             silent: true,
+            source: 'dashboard_demo',
             context: {
                 audience: currentAudience,
                 demo_overlay: {
@@ -475,12 +552,9 @@ async function clearDemoOverlay() {
         return;
     }
     try {
-        await fetchJson('/api/demo/overlay/clear', { method: 'POST' });
         demoOverlayResult = null;
-        setDemoOverlayVisualState(false);
-        updateElement('demoStatusBadge', 'READY');
-        const statusBadge = document.getElementById('demoStatusBadge');
-        if (statusBadge) statusBadge.className = 'assistant-status status-neutral';
+        resetDemoOverlayPresentation();
+        await fetchJson('/api/demo/overlay/clear', { method: 'POST' });
         await refreshDashboard();
         showToast('Demo overlay cleared.', 'success');
     } catch (error) {
@@ -557,6 +631,41 @@ function applyDemoOverlay(result) {
     updateElement('networkPortal', 'N/A');
     updateElement('networkDnsMismatch', '0');
     updateElement('networkSignals', joinList(result.noc?.summary?.reasons || []));
+    updateElement('socThreatLevel', String(socStatus || 'quiet').toUpperCase());
+    updateElement('socThreatSummary', `${scenarioId} | action=${action} | reason=${reason}`);
+    updateElement('socAttackType', joinList(result.soc?.summary?.attack_candidates || []));
+    updateElement('socTopSource', '-');
+    updateElement('socTopDestination', '-');
+    updateElement('socTopSignature', '-');
+    updateElement('socAlertCounts', `${socStatus === 'critical' ? 1 : 0} / 0`);
+    updateElement('socConfidenceSignal', `suspicion=${suspicion}`);
+    updateElement('socCorrelationStatus', result.soc?.summary?.correlation?.status || '-');
+    renderList('socCorrelationReasons', result.soc?.summary?.correlation?.reasons || [], (item) => item);
+    renderList(
+        'socKnowledgeList',
+        [
+            ...(result.soc?.summary?.attack_candidates || []),
+            ...(result.soc?.summary?.ti_matches || []),
+            ...(result.soc?.summary?.sigma_hits || []),
+            ...(result.soc?.summary?.yara_hits || []),
+        ],
+        (item) => item,
+    );
+    updateElement('nocPathStatus', String(nocStatus || 'unknown').toUpperCase());
+    updateElement('nocPathUplink', scenarioId);
+    updateElement('nocPathGateway', 'demo-target');
+    updateElement('nocPathInternet', action === 'notify' ? 'CHECK' : 'CONTROL');
+    renderList('nocPathSignals', result.noc?.summary?.reasons || [], (item) => item);
+    renderList('nocServiceList', [`demo-services: simulated`, `control-mode: ${result.arbiter?.control_mode || 'none'}`], (item) => item);
+    updateElement('nocClientScope', 'demo impact');
+    updateElement('nocClientSegment', scenarioId);
+    updateElement('nocClientPortal', 'N/A');
+    updateElement('nocClientDnsMismatch', '0');
+    renderList(
+        'rejectedStrongerActionsList',
+        rejected.length ? rejected : ['No stronger-action rejection summary.'],
+        (item) => typeof item === 'string' ? item : `${item.action || '-'}: ${item.reason || '-'}`,
+    );
 
     renderList('whyNowList', [
         `Scenario ${scenarioId} is active.`,
@@ -623,6 +732,11 @@ function applyDemoOverlay(result) {
         mioStatusBadge.textContent = 'DEMO';
         mioStatusBadge.className = 'assistant-status status-demo';
     }
+    updateTemporaryMission({
+        current_user_guidance: `Demo overlay active. Current simulated action is ${action}.`,
+        do_next: nextChecks,
+        do_not_do: ['Do not treat demo output as live telemetry.', 'Do not change gateway mode based on demo data alone.'],
+    });
 }
 
 async function fetchJson(path, options = {}) {
@@ -695,6 +809,58 @@ function updateSituationBoard(summary, state, health, mattermost) {
     updateServiceChip('svcMattermost', mattermost.reachable ? 'ON' : 'OFF');
 }
 
+function updateSplitBoard(summary, actions) {
+    const soc = summary.soc_focus || {};
+    const noc = summary.noc_focus || {};
+    const correlation = soc.correlation || {};
+    const path = noc.path_health || {};
+    const services = noc.service_health || {};
+    const clientImpact = noc.client_impact || {};
+    const attackType = soc.attack_type || 'No current attack type';
+
+    updateElement('socThreatLevel', String(soc.threat_level || 'quiet').toUpperCase());
+    updateElement('socThreatSummary', `${attackType} | src=${soc.top_source || '-'} | dst=${soc.top_destination || '-'}`);
+    updateElement('socAttackType', attackType);
+    updateElement('socTopSource', soc.top_source || '-');
+    updateElement('socTopDestination', soc.top_destination || '-');
+    updateElement('socTopSignature', `${soc.top_sid || '-'} / ${soc.top_severity || '-'}`);
+    updateElement('socAlertCounts', `${soc.critical_count || 0} / ${soc.warning_count || 0}`);
+    updateElement('socConfidenceSignal', soc.confidence_signal || '-');
+    updateElement('socCorrelationStatus', correlation.status || '-');
+    renderList('socCorrelationReasons', correlation.reasons || [], (item) => item);
+    renderList(
+        'socKnowledgeList',
+        [
+            ...(soc.attack_candidates || []),
+            ...(soc.ti_matches || []),
+            ...(soc.sigma_hits || []),
+            ...(soc.yara_hits || []),
+        ],
+        (item) => item,
+    );
+
+    updateElement('nocPathStatus', String(path.status || 'unknown').toUpperCase());
+    updateElement('nocPathUplink', path.uplink || '-');
+    updateElement('nocPathGateway', path.gateway || '-');
+    updateElement('nocPathInternet', path.internet_check || '-');
+    renderList('nocPathSignals', path.signals || [], (item) => item);
+    renderList(
+        'nocServiceList',
+        Object.entries(services).map(([name, value]) => `${name}: ${value}`),
+        (item) => item,
+    );
+    updateElement('nocClientScope', clientImpact.scope || '-');
+    updateElement('nocClientSegment', clientImpact.segment_scope || '-');
+    updateElement('nocClientPortal', clientImpact.captive_portal || '-');
+    updateElement('nocClientDnsMismatch', String(clientImpact.dns_mismatch ?? 0));
+
+    renderList(
+        'rejectedStrongerActionsList',
+        actions.rejected_stronger_actions || [],
+        (item) => `${item.action || '-'}: ${item.reason || '-'}`,
+    );
+}
+
 function updateActionBoard(actions, state) {
     renderList('whyNowList', actions.why_now || [], (item) => item);
     renderList('nextActionsList', actions.do_next || actions.current_operator_actions || [], (item) => item);
@@ -703,6 +869,10 @@ function updateActionBoard(actions, state) {
     updateElement('userGuidanceText', actions.current_user_guidance || '-');
 
     const runbook = actions.suggested_runbook || {};
+    const primaryAction = (actions.do_next || actions.current_operator_actions || [])[0] || actions.current_user_guidance || 'No immediate action synthesized.';
+    const primarySummary = (actions.why_now || [])[0] || 'The dashboard is waiting for stronger causal evidence.';
+    updateElement('priorityActionTitle', primaryAction);
+    updateElement('priorityActionSummary', primarySummary);
     updateElement('runbookTitle', runbook.title || '-');
     updateElement('runbookId', runbook.id || '-');
     updateElement('runbookEffect', runbook.effect || '-');
@@ -870,7 +1040,7 @@ async function askMioWithOptions(question, options = {}) {
             body: JSON.stringify({
                 question,
                 sender: 'Dashboard',
-                source: 'dashboard',
+                source: options.source || 'dashboard',
                 context: Object.assign({ audience: currentAudience }, extraContext),
             }),
         });
