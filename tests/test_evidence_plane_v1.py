@@ -109,22 +109,30 @@ class EvidencePlaneV1Tests(unittest.TestCase):
     def test_noc_probe_adapter_generates_multiple_events(self) -> None:
         adapter = NocProbeAdapter(up_interface='eth1', down_interface='usb0', gateway_ip='192.168.40.1')
         snapshot = {
-            'network_health': {
-                'status': 'SUSPECTED',
-                'iface': 'eth1',
-                'signals': ['dns_mismatch'],
-                'internet_check': 'OK',
-                'dns_mismatch': 2,
+            'icmp': {
+                'target': '192.168.40.1',
+                'interface': 'eth1',
+                'reachable': True,
+                'latency_ms': 1.2,
             },
-            'system_metrics': {
+            'iface_stats': [
+                {
+                    'interface': 'eth1',
+                    'operstate': 'up',
+                    'carrier': 1,
+                    'rx_bytes': 100,
+                    'tx_bytes': 50,
+                }
+            ],
+            'cpu_mem_temp': {
                 'cpu_percent': 12.0,
                 'memory': {'percent': 38},
                 'temperature_c': 51.2,
             },
             'service_health': {
-                'azazel-edge-control-daemon': 'ON',
-                'azazel-edge-ai-agent': 'ON',
-                'azazel-edge-web': 'OFF',
+                'control-daemon': {'target': 'control-daemon', 'unit': 'azazel-edge-control-daemon', 'state': 'ON'},
+                'ai-agent': {'target': 'ai-agent', 'unit': 'azazel-edge-ai-agent', 'state': 'ON'},
+                'web': {'target': 'web', 'unit': 'azazel-edge-web', 'state': 'OFF'},
             },
             'dhcp_leases': [
                 {'ip': '192.168.40.100', 'mac': 'aa:bb:cc:dd:ee:ff', 'hostname': 'client-1'},
@@ -138,8 +146,9 @@ class EvidencePlaneV1Tests(unittest.TestCase):
         }
         events = adapter.collect(snapshot=snapshot)
         kinds = {item.to_dict()['kind'] for item in events}
-        self.assertIn('network_health', kinds)
-        self.assertIn('system_health', kinds)
+        self.assertIn('icmp_probe', kinds)
+        self.assertIn('iface_stats', kinds)
+        self.assertIn('cpu_mem_temp', kinds)
         self.assertIn('service_health', kinds)
         self.assertIn('dhcp_lease', kinds)
         self.assertIn('arp_entry', kinds)
