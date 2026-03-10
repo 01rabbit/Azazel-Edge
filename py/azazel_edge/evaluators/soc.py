@@ -69,16 +69,16 @@ class SocEvaluator:
     def __init__(self, ti_feed: ThreatIntelFeed | None = None):
         self.ti_feed = ti_feed
 
-    def evaluate(self, events: Iterable[Any]) -> Dict[str, Any]:
+    def evaluate(self, events: Iterable[Any], sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         payloads = _to_payloads(events)
         soc_payloads = [item for item in payloads if str(item.get('source') or '') == 'suricata_eve']
         flow_payloads = [item for item in payloads if str(item.get('source') or '') == 'flow_min']
         evidence_ids = [str(item.get('event_id') or '') for item in payloads if str(item.get('event_id') or '')]
         ti_matches = self._match_ti(soc_payloads)
 
-        suspicion = self._evaluate_suspicion(soc_payloads, flow_payloads, ti_matches)
+        suspicion = self._evaluate_suspicion(soc_payloads, flow_payloads, ti_matches, sot_diff=sot_diff)
         confidence = self._evaluate_confidence(soc_payloads)
-        technique_likelihood, attack_candidates = self._evaluate_technique_likelihood(soc_payloads, flow_payloads, ti_matches)
+        technique_likelihood, attack_candidates = self._evaluate_technique_likelihood(soc_payloads, flow_payloads, ti_matches, sot_diff=sot_diff)
         blast_radius = self._evaluate_blast_radius(soc_payloads, flow_payloads)
 
         worst = max(
@@ -123,7 +123,7 @@ class SocEvaluator:
             'evidence_ids': evaluation.get('evidence_ids', []),
         }
 
-    def _evaluate_suspicion(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any]) -> Dict[str, Any]:
+    def _evaluate_suspicion(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any], sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         if not payloads:
             return _make_dimension(0, ['no_soc_events'], [])
         evidence_ids: List[str] = []
@@ -148,6 +148,13 @@ class SocEvaluator:
         if ti_matches:
             top_risk = min(100, top_risk + 15)
             reasons.append('ti_match_support')
+        if sot_diff:
+            if sot_diff.get('unauthorized_services'):
+                top_risk = min(100, top_risk + 10)
+                reasons.append('unauthorized_service_support')
+            if sot_diff.get('path_deviations'):
+                top_risk = min(100, top_risk + 5)
+                reasons.append('path_deviation_support')
         return _make_dimension(top_risk, reasons, evidence_ids)
 
     def _evaluate_confidence(self, payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -169,7 +176,7 @@ class SocEvaluator:
             reasons.append('consistent_signal')
         return _make_dimension(score, reasons, evidence_ids)
 
-    def _evaluate_technique_likelihood(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any]) -> Tuple[Dict[str, Any], List[str]]:
+    def _evaluate_technique_likelihood(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any], sot_diff: Dict[str, Any] | None = None) -> Tuple[Dict[str, Any], List[str]]:
         if not payloads:
             return _make_dimension(0, ['no_soc_events'], []), []
         evidence_ids: List[str] = []
@@ -201,6 +208,9 @@ class SocEvaluator:
         if ti_matches:
             score = max(score, 75)
             reasons.append('ti_match_support')
+        if sot_diff and sot_diff.get('unauthorized_services'):
+            score = max(score, 60)
+            reasons.append('unauthorized_service_support')
         return _make_dimension(score, reasons, evidence_ids), sorted(dict.fromkeys(candidates))
 
     def _evaluate_blast_radius(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]]) -> Dict[str, Any]:

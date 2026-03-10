@@ -99,7 +99,7 @@ class NocEvaluator:
     def __init__(self, config: Dict[str, Any] | None = None):
         self.config = _merge_config(config)
 
-    def evaluate(self, events: Iterable[Any], sot: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def evaluate(self, events: Iterable[Any], sot: Dict[str, Any] | None = None, sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         payloads = _to_payloads(events)
         by_kind: Dict[str, List[Dict[str, Any]]] = {}
         all_evidence_ids: List[str] = []
@@ -113,7 +113,9 @@ class NocEvaluator:
         availability = self._evaluate_availability(by_kind)
         path_health = self._evaluate_path_health(by_kind)
         device_health = self._evaluate_device_health(by_kind)
-        client_health = self._evaluate_client_health(by_kind, sot=sot)
+        client_health = self._evaluate_client_health(by_kind, sot=sot, sot_diff=sot_diff)
+        if sot_diff:
+            path_health = self._apply_sot_diff_to_path_health(path_health, sot_diff)
 
         summary_reasons: List[str] = []
         degraded_mode = False
@@ -271,7 +273,7 @@ class NocEvaluator:
 
         return _make_dimension(score, reasons, evidence_ids)
 
-    def _evaluate_client_health(self, by_kind: Dict[str, List[Dict[str, Any]]], sot: Dict[str, Any] | None) -> Dict[str, Any]:
+    def _evaluate_client_health(self, by_kind: Dict[str, List[Dict[str, Any]]], sot: Dict[str, Any] | None, sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         cfg = self.config['client_health']
         score = 100
         reasons: List[str] = []
@@ -327,4 +329,27 @@ class NocEvaluator:
                 score -= min(cfg['unknown_client_penalty_cap'], cfg['unknown_client_penalty_per_client'] * len(unknown))
                 reasons.append('unknown_clients_present')
 
+        if sot_diff:
+            unauthorized_devices = sot_diff.get('unauthorized_devices', []) if isinstance(sot_diff.get('unauthorized_devices'), list) else []
+            if unauthorized_devices:
+                score -= min(cfg['unknown_client_penalty_cap'], cfg['unknown_client_penalty_per_client'] * len(unauthorized_devices))
+                reasons.append('unauthorized_devices_present')
+                evidence_ids.extend(str(x) for x in sot_diff.get('evidence_ids', []) if str(x))
+
         return _make_dimension(score, reasons, evidence_ids)
+
+    @staticmethod
+    def _apply_sot_diff_to_path_health(path_health: Dict[str, Any], sot_diff: Dict[str, Any]) -> Dict[str, Any]:
+        updated = deepcopy(path_health)
+        if sot_diff.get('path_deviations'):
+            updated['score'] = max(0, int(updated.get('score') or 0) - 20)
+            updated['reasons'] = list(updated.get('reasons', [])) + ['path_deviation_detected']
+        if sot_diff.get('unauthorized_services'):
+            updated['score'] = max(0, int(updated.get('score') or 0) - 10)
+            updated['reasons'] = list(updated.get('reasons', [])) + ['unauthorized_services_present']
+        updated['evidence_ids'] = sorted(dict.fromkeys(
+            [str(x) for x in updated.get('evidence_ids', []) if str(x)] +
+            [str(x) for x in sot_diff.get('evidence_ids', []) if str(x)]
+        ))
+        updated['label'] = _bucket(int(updated.get('score') or 0))
+        return updated
