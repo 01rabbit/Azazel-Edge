@@ -35,6 +35,7 @@ class DecisionExplainer:
         if isinstance(soc_summary.get('ai_attack_candidates'), list):
             attack_candidates.extend(str(x) for x in soc_summary.get('ai_attack_candidates', []) if str(x))
         attack_candidates = list(dict.fromkeys(attack_candidates))
+        correlation = soc_summary.get('correlation', {}) if isinstance(soc_summary.get('correlation'), dict) else {}
         next_checks = self._next_checks(action, noc_summary, soc_summary, client_impact)
         why_chosen = {
             'format_version': 'v2',
@@ -46,6 +47,7 @@ class DecisionExplainer:
             'target': target,
             'ti_matches': soc_summary.get('ti_matches', []),
             'attack_candidates': attack_candidates,
+            'correlation': correlation,
             'client_impact': client_impact,
         }
         why_not_others = [
@@ -65,6 +67,7 @@ class DecisionExplainer:
             why_not_others=why_not_others,
             ti_matches=why_chosen['ti_matches'],
             attack_candidates=attack_candidates,
+            correlation=correlation,
             control_mode=control_mode,
             client_impact=client_impact,
         )
@@ -101,6 +104,7 @@ class DecisionExplainer:
         why_not_others: List[Dict[str, str]],
         ti_matches: List[Dict[str, Any]],
         attack_candidates: List[str],
+        correlation: Dict[str, Any],
         control_mode: str,
         client_impact: Dict[str, Any],
     ) -> str:
@@ -120,6 +124,11 @@ class DecisionExplainer:
             sentence += f" TI matches: {ti_text}."
         if attack_candidates:
             sentence += f" ATT&CK candidates: {', '.join(attack_candidates[:3])}."
+        if int(correlation.get('top_score') or 0) > 0:
+            sentence += (
+                f" Correlation: {int(correlation.get('cluster_count') or 0)} cluster(s), "
+                f"top score {int(correlation.get('top_score') or 0)}."
+            )
         if client_impact:
             sentence += (
                 f" Client impact: score {int(client_impact.get('score') or 0)}, "
