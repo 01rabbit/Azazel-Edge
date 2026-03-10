@@ -251,9 +251,10 @@ function formatHumanDateTime(rawValue) {
     return relative ? `${local} (${relative})` : local;
 }
 
-function formatFreshness(ageSec, rawTime, stale) {
+function formatFreshness(ageSec, rawTime, stale, idle = false) {
     const label = formatHumanDateTime(rawTime);
     if (ageSec == null) {
+        if (idle) return `IDLE | ${label}`;
         return stale ? `STALE | ${label}` : label;
     }
     const seconds = Number(ageSec);
@@ -262,6 +263,9 @@ function formatFreshness(ageSec, rawTime, stale) {
         bucket = `${Math.round(seconds / 3600)}h ago`;
     } else if (seconds >= 60) {
         bucket = `${Math.round(seconds / 60)}m ago`;
+    }
+    if (idle) {
+        return `IDLE | ${bucket} | ${label}`;
     }
     return `${stale ? 'STALE' : 'LIVE'} | ${bucket} | ${label}`;
 }
@@ -360,6 +364,7 @@ function updateHeader(state, mattermost) {
 
 function updateCommandStrip(summary, health, failures = []) {
     const strip = summary.command_strip || {};
+    const idleFlags = health.idle_flags || {};
     updateElement('stripMode', String(strip.current_mode || '--').toUpperCase());
     updateElement('stripRisk', summary.risk?.user_state || '--');
     updateElement('stripUplink', strip.current_uplink || '--');
@@ -374,8 +379,8 @@ function updateCommandStrip(summary, health, failures = []) {
     updateElement('commandStripNote', failures.length > 0 ? `${baseNote} Degraded APIs: ${failures.join(' | ')}` : baseNote);
     updateElement('freshnessSnapshot', formatFreshness(health.ages_sec?.snapshot, health.timestamps?.snapshot_at, health.stale_flags?.snapshot));
     updateElement('freshnessAiMetrics', formatFreshness(health.ages_sec?.ai_metrics, health.timestamps?.ai_metrics_at, health.stale_flags?.ai_metrics));
-    updateElement('freshnessAiActivity', formatFreshness(health.ages_sec?.ai_activity, health.timestamps?.last_ai_activity_at, health.stale_flags?.ai_activity));
-    updateElement('freshnessRunbook', formatFreshness(health.ages_sec?.runbook_events, health.timestamps?.last_runbook_event_at, health.stale_flags?.runbook_events));
+    updateElement('freshnessAiActivity', formatFreshness(health.ages_sec?.ai_activity, health.timestamps?.last_ai_activity_at, health.stale_flags?.ai_activity, idleFlags.ai_activity));
+    updateElement('freshnessRunbook', formatFreshness(health.ages_sec?.runbook_events, health.timestamps?.last_runbook_event_at, health.stale_flags?.runbook_events, idleFlags.runbook_events));
 }
 
 function updateSituationBoard(summary, state, health, mattermost) {
@@ -471,7 +476,8 @@ function updateEvidenceBoard(evidence, health) {
     }));
 
     const stale = health.stale_flags || {};
-    updateElement('healthSummaryLine', `Queue ${health.queue?.depth ?? 0}/${health.queue?.capacity ?? 0} | fallback ${(health.llm?.fallback_rate ?? 0)} | stale snapshot=${stale.snapshot ? 'yes' : 'no'} ai=${stale.ai_metrics ? 'yes' : 'no'}`);
+    const idle = health.idle_flags || {};
+    updateElement('healthSummaryLine', `Queue ${health.queue?.depth ?? 0}/${health.queue?.capacity ?? 0} | fallback ${(health.llm?.fallback_rate ?? 0)} | stale snapshot=${stale.snapshot ? 'yes' : 'no'} ai=${stale.ai_metrics ? 'yes' : 'no'} | idle ai=${idle.ai_activity ? 'yes' : 'no'} runbook=${idle.runbook_events ? 'yes' : 'no'}`);
 }
 
 function updateAssistant(actions, mattermost, capabilities) {

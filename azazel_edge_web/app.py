@@ -1104,15 +1104,30 @@ def _dashboard_health_payload(state: Dict[str, Any], metrics: Dict[str, Any], ll
     ai_metrics_age = _age_seconds(metrics.get("last_update_ts"), now_epoch=now_epoch)
     last_ai_ts = _as_float((_latest_item(llm_rows)).get("ts"), 0.0)
     last_runbook_ts = _as_float((_latest_item(runbook_rows)).get("ts"), 0.0)
+    network_health = state.get("network_health") if isinstance(state.get("network_health"), dict) else {}
+    signals = network_health.get("signals") if isinstance(network_health.get("signals"), list) else []
+    safe_idle = (
+        str(state.get("user_state") or "").upper() == "SAFE"
+        and _as_int((state.get("internal") or {}).get("suspicion"), 0) <= 0
+        and not signals
+        and _as_int(metrics.get("queue_depth"), 0) <= 0
+    )
+    ai_activity_stale = bool(last_ai_ts and (_age_seconds(last_ai_ts, now_epoch=now_epoch) or 0.0) > DASHBOARD_EVENT_STALE_SEC)
+    runbook_stale = bool(last_runbook_ts and (_age_seconds(last_runbook_ts, now_epoch=now_epoch) or 0.0) > DASHBOARD_EVENT_STALE_SEC)
+    idle_flags = {
+        "ai_activity": bool(safe_idle and ai_activity_stale),
+        "runbook_events": bool(safe_idle and runbook_stale),
+    }
     reachable, ping = _mattermost_ping()
     return {
         "ok": True,
         "stale_flags": {
             "snapshot": bool(snapshot_age is not None and snapshot_age > DASHBOARD_SNAPSHOT_STALE_SEC),
             "ai_metrics": bool(ai_metrics_age is not None and ai_metrics_age > DASHBOARD_AI_STALE_SEC),
-            "ai_activity": bool(last_ai_ts and (_age_seconds(last_ai_ts, now_epoch=now_epoch) or 0.0) > DASHBOARD_EVENT_STALE_SEC),
-            "runbook_events": bool(last_runbook_ts and (_age_seconds(last_runbook_ts, now_epoch=now_epoch) or 0.0) > DASHBOARD_EVENT_STALE_SEC),
+            "ai_activity": bool(ai_activity_stale and not idle_flags["ai_activity"]),
+            "runbook_events": bool(runbook_stale and not idle_flags["runbook_events"]),
         },
+        "idle_flags": idle_flags,
         "queue": {
             "depth": _as_int(metrics.get("queue_depth"), 0),
             "capacity": _as_int(metrics.get("queue_capacity"), 0),

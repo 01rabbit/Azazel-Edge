@@ -236,6 +236,8 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertAlmostEqual(payload["llm"]["fallback_rate"], 0.25)
         self.assertTrue(payload["mattermost"]["reachable"])
         self.assertFalse(payload["stale_flags"]["snapshot"])
+        self.assertIn("idle_flags", payload)
+        self.assertIn("ai_activity", payload["idle_flags"])
 
     def test_dashboard_index_renders_new_sections(self) -> None:
         response = self.client.get("/")
