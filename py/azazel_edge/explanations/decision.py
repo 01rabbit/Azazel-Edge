@@ -29,7 +29,12 @@ class DecisionExplainer:
 
         noc_summary = noc.get('summary', {}) if isinstance(noc, dict) else {}
         soc_summary = soc.get('summary', {}) if isinstance(soc, dict) else {}
-        attack_candidates = soc_summary.get('attack_candidates', []) if isinstance(soc_summary.get('attack_candidates'), list) else []
+        attack_candidates = []
+        if isinstance(soc_summary.get('attack_candidates'), list):
+            attack_candidates.extend(str(x) for x in soc_summary.get('attack_candidates', []) if str(x))
+        if isinstance(soc_summary.get('ai_attack_candidates'), list):
+            attack_candidates.extend(str(x) for x in soc_summary.get('ai_attack_candidates', []) if str(x))
+        attack_candidates = list(dict.fromkeys(attack_candidates))
         next_checks = self._next_checks(action, noc_summary, soc_summary, client_impact)
         why_chosen = {
             'format_version': 'v2',

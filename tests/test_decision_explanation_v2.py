@@ -19,7 +19,7 @@ class DecisionExplanationV2Tests(unittest.TestCase):
         explainer = DecisionExplainer(output_path=Path('/tmp/unused-decision-explanations.jsonl'))
         result = explainer.explain(
             noc={'summary': {'status': 'good'}},
-            soc={'summary': {'status': 'critical', 'attack_candidates': ['T1071 Application Layer Protocol'], 'ti_matches': [{'indicator_type': 'ip', 'value': '10.0.0.5'}]}},
+            soc={'summary': {'status': 'critical', 'attack_candidates': ['T1071 Application Layer Protocol'], 'ai_attack_candidates': ['T1190 Exploit Public-Facing Application'], 'ti_matches': [{'indicator_type': 'ip', 'value': '10.0.0.5'}]}},
             arbiter={
                 'action': 'redirect',
                 'reason': 'soc_high_confidence_redirect_is_preferred',
@@ -36,6 +36,7 @@ class DecisionExplanationV2Tests(unittest.TestCase):
         self.assertIn('next_checks', result)
         self.assertIn('attack_candidates', result['why_chosen'])
         self.assertIn('ATT&CK candidates', result['operator_wording'])
+        self.assertIn('T1190 Exploit Public-Facing Application', result['why_chosen']['attack_candidates'])
 
     def test_explanation_can_be_persisted_as_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
