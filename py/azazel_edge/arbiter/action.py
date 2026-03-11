@@ -6,6 +6,43 @@ from typing import Any, Dict, List
 class ActionArbiter:
     REQUIRED_NOC_KEYS = {'availability', 'path_health', 'device_health', 'client_health', 'summary', 'evidence_ids'}
     REQUIRED_SOC_KEYS = {'suspicion', 'confidence', 'technique_likelihood', 'blast_radius', 'summary', 'evidence_ids'}
+    ACTION_PROFILES = {
+        'observe': {
+            'reversible': True,
+            'approval_required': False,
+            'audited': True,
+            'effect': 'visibility_only',
+            'mode': 'passive',
+        },
+        'notify': {
+            'reversible': True,
+            'approval_required': False,
+            'audited': True,
+            'effect': 'operator_notification',
+            'mode': 'human_loop',
+        },
+        'throttle': {
+            'reversible': True,
+            'approval_required': True,
+            'audited': True,
+            'effect': 'traffic_shaping',
+            'mode': 'bounded_control',
+        },
+        'redirect': {
+            'reversible': True,
+            'approval_required': True,
+            'audited': True,
+            'effect': 'controlled_redirect',
+            'mode': 'bounded_control',
+        },
+        'isolate': {
+            'reversible': True,
+            'approval_required': True,
+            'audited': True,
+            'effect': 'segment_isolation',
+            'mode': 'high_risk_control',
+        },
+    }
 
     def decide(self, noc: Dict[str, Any], soc: Dict[str, Any], client_impact: Dict[str, Any] | None = None) -> Dict[str, Any]:
         self._validate_schema(noc, self.REQUIRED_NOC_KEYS, 'noc')
@@ -55,6 +92,18 @@ class ActionArbiter:
 
         rejected = self._rejected_alternatives(action, noc_fragile=noc_fragile, strong_soc=strong_soc, blast_score=blast_score)
         chosen_evidence_ids = self._chosen_evidence_ids(action, noc, soc)
+        action_profile = self.action_profile(action)
+        decision_trace = self._decision_trace(
+            noc=noc,
+            soc=soc,
+            action=action,
+            reason=reason,
+            noc_fragile=noc_fragile,
+            strong_soc=strong_soc,
+            blast_score=blast_score,
+            confidence_score=confidence_score,
+            client_impact=client_impact or {},
+        )
 
         return {
             'action': action,
@@ -63,6 +112,8 @@ class ActionArbiter:
             'chosen_evidence_ids': chosen_evidence_ids,
             'rejected_alternatives': rejected,
             'client_impact': client_impact or {},
+            'action_profile': action_profile,
+            'decision_trace': decision_trace,
         }
 
     @staticmethod
@@ -125,3 +176,38 @@ class ActionArbiter:
             else:
                 candidates.append({'action': 'isolate', 'reason': 'isolate_gate_not_satisfied'})
         return candidates
+
+    @classmethod
+    def action_profile(cls, action: str) -> Dict[str, Any]:
+        profile = cls.ACTION_PROFILES.get(str(action or 'observe'), cls.ACTION_PROFILES['observe'])
+        return dict(profile)
+
+    @classmethod
+    def _decision_trace(
+        cls,
+        noc: Dict[str, Any],
+        soc: Dict[str, Any],
+        action: str,
+        reason: str,
+        noc_fragile: bool,
+        strong_soc: bool,
+        blast_score: int,
+        confidence_score: int,
+        client_impact: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return {
+            'selected_action': action,
+            'selected_reason': reason,
+            'noc_fragile': bool(noc_fragile),
+            'strong_soc': bool(strong_soc),
+            'availability_label': str(noc.get('availability', {}).get('label') or 'unknown'),
+            'path_label': str(noc.get('path_health', {}).get('label') or 'unknown'),
+            'device_label': str(noc.get('device_health', {}).get('label') or 'unknown'),
+            'suspicion_label': str(soc.get('suspicion', {}).get('label') or 'unknown'),
+            'suspicion_score': int(soc.get('suspicion', {}).get('score') or 0),
+            'confidence_score': int(confidence_score or 0),
+            'blast_score': int(blast_score or 0),
+            'client_impact_score': int(client_impact.get('score') or 0),
+            'critical_client_count': int(client_impact.get('critical_client_count') or 0),
+            'safety_profile': cls.action_profile(action),
+        }

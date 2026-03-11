@@ -148,6 +148,35 @@ class DemoApiV1Tests(unittest.TestCase):
         self.assertEqual(loaded, {})
         self.assertFalse(overlay_path.exists())
 
+    def test_demo_capabilities_endpoint(self) -> None:
+        response = self.client.get("/api/demo/capabilities")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["execution_mode"], "deterministic_replay")
+        self.assertFalse(payload["ai_used_in_core_path"])
+        self.assertTrue(payload["local_only_in_core_path"])
+        self.assertIn("implemented_now", payload["boundary"])
+
+    def test_latest_explanation_endpoint_reads_active_overlay(self) -> None:
+        overlay = build_demo_overlay(
+            {
+                "scenario_id": "mixed_correlation_demo",
+                "event_count": 3,
+                "execution": {"mode": "deterministic_replay", "ai_used": False},
+                "arbiter": {"action": "throttle", "reason": "correlated_signal"},
+                "explanation": {"operator_wording": "demo wording", "evidence_ids": ["soc-1"]},
+            }
+        )
+        write_demo_overlay(overlay, self.overlay_path)
+        response = self.client.get("/api/demo/explanation/latest")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["scenario_id"], "mixed_correlation_demo")
+        self.assertEqual(payload["action"], "throttle")
+        self.assertEqual(payload["explanation"]["operator_wording"], "demo wording")
+
 
 if __name__ == "__main__":
     unittest.main()

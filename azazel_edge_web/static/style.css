@@ -268,6 +268,31 @@ body[data-audience="professional"] .temp-only {
     line-height: 1.45;
 }
 
+.demo-boundary-banner {
+    display: grid;
+    gap: 8px;
+    margin-top: 16px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(116, 212, 255, 0.28);
+    background: linear-gradient(145deg, rgba(30, 66, 92, 0.38), rgba(17, 30, 46, 0.7));
+}
+
+.demo-boundary-banner strong {
+    color: #cceeff;
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+}
+
+.demo-boundary-banner span {
+    color: var(--text-main);
+    line-height: 1.5;
+}
+
+.review-panel .action-list {
+    margin-top: 10px;
+}
+
 .demo-raw-panel {
     margin-top: 16px;
     border-top: 1px solid rgba(255,255,255,0.06);

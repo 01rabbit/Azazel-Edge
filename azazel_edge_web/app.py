@@ -3098,6 +3098,47 @@ def api_demo_overlay():
     return jsonify({"ok": True, "overlay": payload, "active": bool(payload.get("active"))}), 200
 
 
+@app.route("/api/demo/capabilities", methods=["GET"])
+def api_demo_capabilities():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    try:
+        from azazel_edge.demo import DemoScenarioRunner
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"demo_capabilities_unavailable:{exc}"}), 500
+    return jsonify(
+        {
+            "ok": True,
+            "execution_mode": "deterministic_replay",
+            "ai_used_in_core_path": False,
+            "live_telemetry_required": False,
+            "local_only_in_core_path": True,
+            "boundary": DemoScenarioRunner.capability_boundary(),
+        }
+    ), 200
+
+
+@app.route("/api/demo/explanation/latest", methods=["GET"])
+def api_demo_explanation_latest():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    payload = read_demo_overlay()
+    if not payload.get("active"):
+        return jsonify({"ok": False, "error": "no_active_demo_overlay"}), 404
+    raw = payload.get("raw_result") if isinstance(payload.get("raw_result"), dict) else {}
+    explanation = raw.get("explanation") if isinstance(raw.get("explanation"), dict) else {}
+    if not explanation:
+        return jsonify({"ok": False, "error": "no_explanation_available"}), 404
+    return jsonify(
+        {
+            "ok": True,
+            "scenario_id": payload.get("scenario_id"),
+            "action": payload.get("action"),
+            "explanation": explanation,
+        }
+    ), 200
+
+
 @app.route("/api/demo/overlay/clear", methods=["POST"])
 def api_demo_overlay_clear():
     if not verify_token():
