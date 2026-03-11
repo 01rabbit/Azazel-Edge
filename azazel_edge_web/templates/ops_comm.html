@@ -1,118 +1,204 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="{{ tr('ops.html_lang', 'ja') }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>M.I.O. Ops Communication</title>
+    <title>{{ tr('ops.title', 'M.I.O. Ops Communication') }}</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="/static/ops_comm.css">
 </head>
-<body>
-    <header class="header">
-        <div class="header-left">
-            <div class="ops-brand">
-                <img class="ops-logo" src="/images/MIO_Logo.png" alt="M.I.O. Logo">
-                <div>
-                    <h1>💬 M.I.O. Ops Communication</h1>
-                    <div class="ops-brand-subtitle">Mission Intelligence Operator for SOC / NOC support</div>
-                </div>
+<body class="ops-page">
+    <header class="topbar ops-topbar">
+        <div class="ops-topbar-brand">
+            <img class="ops-logo" src="/images/MIO_Logo.png" alt="M.I.O. Logo">
+            <div class="ops-brand-copy">
+                <div class="brand-kicker">Mission Intelligence Operator</div>
+                <h1>{{ tr('ops.title', 'M.I.O. Ops Communication') }}</h1>
+                <p class="ops-brand-subtitle">{{ tr('ops.subtitle', 'Operator-facing command workspace for SOC and NOC support, runbook guidance, and demo replay.') }}</p>
             </div>
         </div>
-        <div class="header-right">
-            <a class="ops-link" href="/">← Dashboard</a>
-            <a class="ops-link" id="mattermostLink" href="{{ mattermost_open_url or '#' }}" target="_blank" rel="noopener noreferrer">Open Mattermost</a>
+        <div class="ops-topbar-links">
+            <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
+            <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
+            <a class="topbar-link" href="/">{{ tr('ops.dashboard', 'Dashboard') }}</a>
+            <a class="topbar-link" id="mattermostLink" href="{{ mattermost_open_url or '#' }}" target="_blank" rel="noopener noreferrer">{{ tr('ops.open_mattermost', 'Open Mattermost') }}</a>
         </div>
     </header>
 
-    <main class="container ops-container">
-        <section class="card">
-            <h2>Bridge Status</h2>
-            <div class="metric">
-                <span class="metric-label">Reachability</span>
-                <span class="badge" id="mmReachability">CHECKING</span>
-            </div>
-            <div class="metric">
-                <span class="metric-label">Mode</span>
-                <span class="metric-value" id="mmMode">-</span>
-            </div>
-            <div class="metric">
-                <span class="metric-label">Base URL</span>
-                <span class="metric-value mono" id="mmBaseUrl">-</span>
-            </div>
-            <div class="metric">
-                <span class="metric-label">Channel ID</span>
-                <span class="metric-value mono" id="mmChannelId">-</span>
-            </div>
-            <div class="metric">
-                <span class="metric-label">Command Hook</span>
-                <span class="metric-value mono" id="mmCommandStatus">-</span>
-            </div>
-            <button class="btn btn-primary" id="refreshBtn">Refresh</button>
-        </section>
-
-        <section class="card">
-            <h2>Send Message</h2>
-            <div class="ops-audience">
-                <span class="ops-audience-label">Audience Mode</span>
-                <div class="ops-audience-buttons">
-                    <button class="btn btn-primary active" id="audienceOperatorBtn" data-audience-mode="operator">Professional</button>
-                    <button class="btn btn-secondary" id="audienceBeginnerBtn" data-audience-mode="beginner">Temporary</button>
+    <main class="ops-shell">
+        <section class="panel ops-hero">
+            <div class="ops-hero-main">
+                <div class="panel-heading">
+                    <div>
+                        <div class="panel-kicker">{{ tr('ops.command_workspace', 'Command Workspace') }}</div>
+                        <h2>{{ tr('ops.ask_explain_handoff', 'Ask, explain, and hand off') }}</h2>
+                    </div>
+                    <div class="panel-note">{{ tr('ops.workspace_note', 'Use this view when you need direct M.I.O. support, a safe user-facing message, or a reviewed runbook candidate.') }}</div>
                 </div>
-                <div id="audienceHint" class="ops-result">Professional mode: concise operator guidance and runbook-first responses.</div>
+
+                <div class="ops-audience">
+                    <div>
+                        <div class="assistant-label">{{ tr('ops.audience_mode', 'Audience Mode') }}</div>
+                        <div id="audienceHint" class="ops-audience-hint">{{ tr('ops.professional_hint', 'Professional mode: concise operator guidance and runbook-first responses.') }}</div>
+                    </div>
+                    <div class="ops-audience-buttons">
+                        <button class="btn btn-primary active" id="audienceOperatorBtn" data-audience-mode="operator">{{ tr('dashboard.professional', 'Professional') }}</button>
+                        <button class="btn btn-secondary" id="audienceBeginnerBtn" data-audience-mode="beginner">{{ tr('dashboard.temporary', 'Temporary') }}</button>
+                    </div>
+                </div>
+
+                <div class="ops-shortcuts-wrap">
+                    <div class="assistant-label">{{ tr('ops.quick_prompts', 'Quick Prompts') }}</div>
+                    <div id="opsShortcuts" class="ops-shortcuts"></div>
+                </div>
+
+                <div class="ops-form-grid">
+                    <div class="ops-form-field">
+                        <label class="ops-label" for="senderInput">{{ tr('ops.sender', 'Sender') }}</label>
+                        <input id="senderInput" class="ops-input" type="text" value="M.I.O. Console" maxlength="64">
+                    </div>
+                    <div class="ops-form-field ops-form-field-wide">
+                        <label class="ops-label" for="messageInput">{{ tr('ops.message', 'Message') }}</label>
+                        <textarea id="messageInput" class="ops-textarea" rows="6" placeholder="{{ tr('ops.message_placeholder', 'Describe the symptom, ask for a decision rationale, or request a user-facing explanation...') }}"></textarea>
+                    </div>
+                </div>
+
+                <div class="ops-actions">
+                    <button class="btn btn-success" id="sendBtn">{{ tr('ops.send_mattermost', 'Send to Mattermost') }}</button>
+                    <button class="btn btn-primary" id="askAiBtn">{{ tr('ops.ask_mio', 'Ask M.I.O.') }}</button>
+                    <div id="sendResult" class="ops-inline-status">-</div>
+                </div>
+
+                <div class="ops-response-grid">
+                    <section class="ops-response-card emphasis">
+                        <div class="assistant-label">M.I.O. Assessment</div>
+                        <div id="aiResult" class="ops-result ops-result-strong">M.I.O.: -</div>
+                    </section>
+                    <section class="ops-response-card guidance">
+                        <div class="assistant-label">User Guidance</div>
+                        <div id="userGuidanceResult" class="ops-result ops-user-guidance">{{ tr('ops.user_guidance', 'User Guidance') }}: -</div>
+                    </section>
+                    <section class="ops-response-card">
+                        <div class="assistant-label">Runbook</div>
+                        <div id="runbookResult" class="ops-result">{{ tr('ops.runbook', 'Runbook') }}: -</div>
+                        <div id="runbookReviewResult" class="ops-result">{{ tr('ops.review', 'Review') }}: -</div>
+                    </section>
+                    <section class="ops-response-card">
+                        <div class="assistant-label">Rationale</div>
+                        <div id="rationaleResult" class="ops-result">{{ tr('ops.rationale', 'Rationale') }}: -</div>
+                        <div id="handoffResult" class="ops-result">{{ tr('ops.handoff', 'Handoff') }}: -</div>
+                    </section>
+                </div>
             </div>
-            <div id="opsShortcuts" class="ops-shortcuts"></div>
-            <label class="ops-label" for="senderInput">Sender</label>
-            <input id="senderInput" class="ops-input" type="text" value="M.I.O. Console" maxlength="64">
-            <label class="ops-label" for="messageInput">Message</label>
-            <textarea id="messageInput" class="ops-textarea" rows="5" placeholder="Type message for Mattermost channel..."></textarea>
-            <div class="ops-actions">
-                <button class="btn btn-success" id="sendBtn">Send to Mattermost</button>
-                <button class="btn btn-primary" id="askAiBtn">Ask AI</button>
-            </div>
-            <div id="sendResult" class="ops-result">-</div>
-            <div id="aiResult" class="ops-result">M.I.O.: -</div>
-            <div id="userGuidanceResult" class="ops-result ops-user-guidance">User Guidance: -</div>
-            <div id="runbookResult" class="ops-result">Runbook: -</div>
-            <div id="runbookReviewResult" class="ops-result">Review: -</div>
-            <div id="rationaleResult" class="ops-result">Rationale: -</div>
-            <div id="handoffResult" class="ops-result">Handoff: -</div>
+
+            <aside class="ops-hero-side">
+                <section class="ops-side-card">
+                    <div class="assistant-label">{{ tr('ops.bridge_status', 'Bridge Status') }}</div>
+                    <div class="ops-status-grid">
+                        <div class="ops-status-item">
+                            <span>Reachability</span>
+                            <strong><span class="badge" id="mmReachability">{{ tr('ops.checking', 'CHECKING') }}</span></strong>
+                        </div>
+                        <div class="ops-status-item">
+                            <span>Mode</span>
+                            <strong id="mmMode">-</strong>
+                        </div>
+                        <div class="ops-status-item">
+                            <span>Base URL</span>
+                            <strong class="mono" id="mmBaseUrl">-</strong>
+                        </div>
+                        <div class="ops-status-item">
+                            <span>Channel ID</span>
+                            <strong class="mono" id="mmChannelId">-</strong>
+                        </div>
+                        <div class="ops-status-item">
+                            <span>Command Hook</span>
+                            <strong class="mono" id="mmCommandStatus">-</strong>
+                        </div>
+                    </div>
+                    <button class="btn btn-secondary btn-block" id="refreshBtn">{{ tr('ops.refresh_status', 'Refresh Status') }}</button>
+                </section>
+
+                <section class="ops-side-card">
+                    <div class="assistant-label">{{ tr('ops.capabilities', 'Current M.I.O. Capabilities') }}</div>
+                    <div id="capabilitiesSummary" class="ops-result">{{ tr('ops.loading_caps', 'Loading capabilities...') }}</div>
+                    <div id="capabilitiesList" class="ops-capabilities-list"></div>
+                </section>
+            </aside>
         </section>
 
-        <section class="card ops-runbooks-card">
-            <h2>Runbook Candidates</h2>
-            <div id="runbookCandidatesEmpty" class="ops-result">No candidates yet</div>
-            <div id="runbookCandidates" class="ops-runbook-list"></div>
-        </section>
+        <section class="ops-lower-grid">
+            <section class="card ops-triage-card">
+                <div class="assistant-label">Triage Navigator</div>
+                <div class="ops-result" id="triageIntro">{{ tr('ops.triage_intro', 'Use a symptom card or classify the current issue text before moving to a reviewed runbook.') }}</div>
+                <div class="ops-triage-actions">
+                    <input id="triageInput" class="ops-input" type="text" placeholder="{{ tr('ops.triage_input_placeholder', 'Describe the symptom for triage...') }}">
+                    <button class="btn btn-secondary" id="triageClassifyBtn">{{ tr('ops.triage_classify', 'Classify Symptom') }}</button>
+                </div>
+                <div class="ops-triage-intents" id="triageIntentButtons"></div>
+                <div id="triageCandidatesEmpty" class="ops-result">{{ tr('ops.triage_no_candidates', 'No triage candidates yet') }}</div>
+                <div id="triageCandidates" class="ops-triage-candidate-list"></div>
+                <div class="ops-triage-session" id="triageSessionCard">
+                    <div class="assistant-label">Current Triage</div>
+                    <div id="triageSessionMeta" class="ops-result">{{ tr('ops.triage_no_session', 'No active triage session') }}</div>
+                    <div id="triagePreface" class="ops-result">{{ tr('ops.triage_preface_idle', 'M.I.O. will add a short preface before the next deterministic question.') }}</div>
+                    <div id="triageQuestion" class="ops-result ops-result-strong">-</div>
+                    <div id="triageChoices" class="ops-triage-choices"></div>
+                    <div id="triageTextAnswerWrap" class="ops-triage-actions" style="display:none;">
+                        <input id="triageTextAnswer" class="ops-input" type="text" placeholder="{{ tr('ops.triage_answer_placeholder', 'Answer') }}">
+                        <button class="btn btn-primary" id="triageAnswerBtn">{{ tr('ops.triage_submit', 'Submit') }}</button>
+                    </div>
+                    <div id="triageDiagnostic" class="ops-result">-</div>
+                    <div id="triageMioSummary" class="ops-result">{{ tr('ops.triage_summary_idle', 'No triage summary yet.') }}</div>
+                    <div id="triageHandoff" class="ops-result">{{ tr('ops.triage_handoff_idle', 'No handoff is required.') }}</div>
+                    <div id="triageRunbooks" class="ops-triage-runbooks"></div>
+                    <div class="ops-actions">
+                        <button class="btn btn-primary" id="triageHandoffBtn">{{ tr('ops.triage_handoff_btn', 'Send Handoff to Mattermost') }}</button>
+                        <button class="btn btn-secondary" id="triageResetBtn">{{ tr('ops.triage_reset', 'Reset Triage') }}</button>
+                    </div>
+                </div>
+            </section>
 
-        <section class="card ops-capabilities-card">
-            <h2>Current M.I.O. Capabilities</h2>
-            <div id="capabilitiesSummary" class="ops-result">Loading capabilities...</div>
-            <div id="capabilitiesList" class="ops-capabilities-list"></div>
-        </section>
+            <section class="card ops-runbooks-card">
+                <div class="assistant-label">{{ tr('ops.runbook_candidates', 'Runbook Candidates') }}</div>
+                <div id="runbookCandidatesEmpty" class="ops-result">{{ tr('ops.no_candidates', 'No candidates yet') }}</div>
+                <div id="runbookCandidates" class="ops-runbook-list"></div>
+            </section>
 
-        <section class="card ops-demo-card">
-            <h2>Demo Runner</h2>
-            <label class="ops-label" for="demoScenarioSelect">Scenario</label>
-            <select id="demoScenarioSelect" class="ops-input">
-                <option value="">Loading...</option>
-            </select>
-            <div id="demoScenarioDescription" class="ops-result">-</div>
-            <div class="ops-actions">
-                <button class="btn btn-primary" id="demoRunBtn">Run Demo</button>
-                <button class="btn btn-secondary" id="demoClearBtn">Clear Overlay</button>
-            </div>
-            <div id="demoResult" class="ops-result">No scenario executed yet.</div>
-            <div id="demoOperatorSummary" class="ops-result">Operator wording: -</div>
-            <div id="demoNextChecks" class="ops-result">Next checks: -</div>
-        </section>
+            <section class="card ops-triage-audit-card">
+                <div class="assistant-label">{{ tr('ops.triage_audit', 'Triage Audit') }}</div>
+                <div id="triageAuditEmpty" class="ops-result">{{ tr('ops.triage_audit_empty', 'No triage audit entries yet') }}</div>
+                <ul id="triageAuditList" class="ops-message-list"></ul>
+            </section>
 
-        <section class="card ops-messages-card">
-            <h2>Recent Messages</h2>
-            <div id="messagesEmpty" class="ops-result">No messages yet</div>
-            <ul id="messagesList" class="ops-message-list"></ul>
+            <section class="card ops-demo-card">
+                <div class="assistant-label">{{ tr('ops.demo_runner', 'Demo Runner') }}</div>
+                <label class="ops-label" for="demoScenarioSelect">{{ tr('ops.scenario', 'Scenario') }}</label>
+                <select id="demoScenarioSelect" class="ops-input">
+                    <option value="">{{ tr('ops.loading', 'Loading...') }}</option>
+                </select>
+                <div id="demoScenarioDescription" class="ops-result">-</div>
+                <div class="ops-actions">
+                    <button class="btn btn-primary" id="demoRunBtn">{{ tr('ops.run_demo', 'Run Demo') }}</button>
+                    <button class="btn btn-secondary" id="demoClearBtn">{{ tr('ops.clear_overlay', 'Clear Overlay') }}</button>
+                </div>
+                <div id="demoResult" class="ops-result ops-result-strong">{{ tr('ops.no_scenario', 'No scenario executed yet.') }}</div>
+                <div id="demoOperatorSummary" class="ops-result">{{ tr('ops.operator_wording', 'Operator wording') }}: -</div>
+                <div id="demoNextChecks" class="ops-result">{{ tr('ops.next_checks', 'Next checks') }}: -</div>
+            </section>
+
+            <section class="card ops-messages-card">
+                <div class="assistant-label">{{ tr('ops.recent_messages', 'Recent Messages') }}</div>
+                <div id="messagesEmpty" class="ops-result">{{ tr('ops.no_messages', 'No messages yet') }}</div>
+                <ul id="messagesList" class="ops-message-list"></ul>
+            </section>
         </section>
     </main>
 
+    <script>
+        window.AZAZEL_LANG = {{ ui_lang|tojson }};
+        window.AZAZEL_I18N = {{ ui_catalog|tojson }};
+    </script>
     <script src="/static/ops_comm.js"></script>
 </body>
 </html>

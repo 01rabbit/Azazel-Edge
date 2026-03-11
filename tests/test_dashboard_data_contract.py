@@ -23,6 +23,8 @@ class DashboardDataContractTests(unittest.TestCase):
             "AI_EVENT_LOG": webapp.AI_EVENT_LOG,
             "AI_LLM_LOG": webapp.AI_LLM_LOG,
             "RUNBOOK_EVENT_LOG": webapp.RUNBOOK_EVENT_LOG,
+            "TRIAGE_AUDIT_LOG": webapp.TRIAGE_AUDIT_LOG,
+            "TRIAGE_AUDIT_FALLBACK_LOG": webapp.TRIAGE_AUDIT_FALLBACK_LOG,
             "cp_read_snapshot_payload": webapp.cp_read_snapshot_payload,
             "load_token": webapp.load_token,
             "get_monitoring_state": webapp.get_monitoring_state,
@@ -30,6 +32,7 @@ class DashboardDataContractTests(unittest.TestCase):
             "_mattermost_ping": webapp._mattermost_ping,
             "_service_active": webapp._service_active,
             "_send_ai_manual_query": webapp._send_ai_manual_query,
+            "read_demo_overlay": webapp.read_demo_overlay,
         }
 
         webapp.STATE_PATH = root / "ui_snapshot.json"
@@ -39,6 +42,8 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.AI_EVENT_LOG = root / "ai-events.jsonl"
         webapp.AI_LLM_LOG = root / "ai-llm.jsonl"
         webapp.RUNBOOK_EVENT_LOG = root / "runbook-events.jsonl"
+        webapp.TRIAGE_AUDIT_LOG = root / "triage-audit.jsonl"
+        webapp.TRIAGE_AUDIT_FALLBACK_LOG = root / "triage-audit-fallback.jsonl"
         webapp.cp_read_snapshot_payload = None
         webapp.load_token = lambda: None
         webapp.get_monitoring_state = lambda: {
@@ -165,6 +170,22 @@ class DashboardDataContractTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
+        webapp.TRIAGE_AUDIT_LOG.write_text(
+            json.dumps(
+                {
+                    "ts": "2026-03-11T10:00:00+09:00",
+                    "kind": "triage_runbook_proposed",
+                    "trace_id": "triage-1",
+                    "source": "triage_engine",
+                    "session_id": "triage-1",
+                    "intent_id": "dns_resolution",
+                    "diagnostic_state": "dns_global_failure",
+                    "proposed_runbooks": ["rb.noc.dns.failure.check"],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         self.client = webapp.app.test_client()
 
@@ -176,6 +197,8 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.AI_EVENT_LOG = self._orig["AI_EVENT_LOG"]
         webapp.AI_LLM_LOG = self._orig["AI_LLM_LOG"]
         webapp.RUNBOOK_EVENT_LOG = self._orig["RUNBOOK_EVENT_LOG"]
+        webapp.TRIAGE_AUDIT_LOG = self._orig["TRIAGE_AUDIT_LOG"]
+        webapp.TRIAGE_AUDIT_FALLBACK_LOG = self._orig["TRIAGE_AUDIT_FALLBACK_LOG"]
         webapp.cp_read_snapshot_payload = self._orig["cp_read_snapshot_payload"]
         webapp.load_token = self._orig["load_token"]
         webapp.get_monitoring_state = self._orig["get_monitoring_state"]
@@ -183,6 +206,7 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp._mattermost_ping = self._orig["_mattermost_ping"]
         webapp._service_active = self._orig["_service_active"]
         webapp._send_ai_manual_query = self._orig["_send_ai_manual_query"]
+        webapp.read_demo_overlay = self._orig["read_demo_overlay"]
         self.tmp.cleanup()
 
     def test_dashboard_summary_contract(self) -> None:
@@ -194,6 +218,10 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["uplink"]["up_if"], "eth1")
         self.assertEqual(payload["command_strip"]["direct_critical_count"], 2)
         self.assertEqual(payload["service_health_summary"]["ai_agent"], "ON")
+        self.assertIn("soc_focus", payload)
+        self.assertIn("noc_focus", payload)
+        self.assertEqual(payload["soc_focus"]["attack_type"], "dns anomaly")
+        self.assertEqual(payload["noc_focus"]["path_health"]["uplink"], "eth1")
 
     def test_dashboard_actions_contract(self) -> None:
         response = self.client.get("/api/dashboard/actions")
@@ -212,6 +240,39 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["mio"]["runbook"]["id"], "rb.noc.dns.failure.check")
         self.assertTrue(payload["mio"]["rationale"])
         self.assertEqual(payload["mio"]["handoff"]["ops_comm"], "/ops-comm")
+        self.assertTrue(payload["rejected_stronger_actions"])
+
+    def test_dashboard_actions_hides_dashboard_demo_context_when_overlay_is_inactive(self) -> None:
+        now = time.time()
+        webapp.read_demo_overlay = lambda: {}
+        webapp.AI_LLM_LOG.write_text(
+            json.dumps(
+                {
+                    "ts": now - 1,
+                    "kind": "manual_query_completed",
+                    "source": "dashboard_demo",
+                    "sender": "Dashboard",
+                    "question": "Demo scenario noc_degraded_demo",
+                    "model": "manual_router",
+                    "response": {
+                        "status": "completed",
+                        "answer": "Demo explanation",
+                        "runbook_id": "rb.noc.dns.failure.check",
+                        "operator_note": "demo only",
+                        "user_message": "demo only",
+                        "runbook_review": {"final_status": "approved"},
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        response = self.client.get("/api/dashboard/actions")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["mio"]["status"], "idle")
+        self.assertEqual(payload["mio"]["answer"], "")
 
     def test_dashboard_evidence_contract(self) -> None:
         response = self.client.get("/api/dashboard/evidence")
@@ -226,6 +287,8 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertTrue(payload["decision_changes"])
         self.assertTrue(payload["operator_interactions"])
         self.assertTrue(payload["background_history"])
+        self.assertTrue(payload["triage_audit"])
+        self.assertEqual(payload["recent_triage_audit"][0]["kind"], "triage_runbook_proposed")
 
     def test_dashboard_health_contract(self) -> None:
         response = self.client.get("/api/dashboard/health")
@@ -240,11 +303,20 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("ai_activity", payload["idle_flags"])
 
     def test_dashboard_index_renders_new_sections(self) -> None:
-        response = self.client.get("/")
+        response = self.client.get("/?lang=en")
         self.assertEqual(response.status_code, 200)
         text = response.get_data(as_text=True)
         self.assertIn("Command Dashboard", text)
         self.assertIn("Audience Mode", text)
+        self.assertIn("Current Mission", text)
+        self.assertIn("What the operator should do now", text)
+        self.assertIn("Primary Objective", text)
+        self.assertIn("SOC / NOC Split Board", text)
+        self.assertIn("Threat Evidence Summary", text)
+        self.assertIn("Rejected Stronger Actions", text)
+        self.assertIn("Temporary Mission", text)
+        self.assertIn("Safe first response for the person in front of you", text)
+        self.assertIn("Immediate Action", text)
         self.assertIn("Snapshot", text)
         self.assertIn("AI Metrics", text)
         self.assertIn("AI Activity", text)
@@ -258,9 +330,12 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("Decision Changes", text)
         self.assertIn("Operator Interactions", text)
         self.assertIn("Background History", text)
+        self.assertIn("Triage Audit", text)
+        self.assertIn("Supporting history and audit trail", text)
         self.assertIn("Demo Runner", text)
         self.assertIn("Scenario Replay", text)
         self.assertIn("Run Demo", text)
+        self.assertIn("temporaryOpsCommLink", text)
         self.assertIn("Next Checks", text)
         self.assertIn("Chosen Evidence", text)
         self.assertIn("Rejected Alternatives", text)
@@ -296,19 +371,21 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertTrue(payload["rationale"])
 
     def test_mattermost_response_includes_rationale_and_continue_hint(self) -> None:
-        text = webapp._format_mattermost_ai_response(
-            {
-                "ok": True,
-                "status": "routed",
-                "answer": "M.I.O.: DNS と gateway を確認します。",
-                "user_message": "通信経路を確認しています。",
-                "runbook_id": "rb.noc.dns.failure.check",
-                "runbook_review": {"final_status": "approved"},
-                "rationale": ["Symptom router handled this request without waiting for LLM."],
-                "handoff": {"ops_comm": "/ops-comm", "mattermost": "http://example.invalid/mm"},
-            },
-            None,
-        )
+        with webapp.app.test_request_context("/?lang=en"):
+            text = webapp._format_mattermost_ai_response(
+                {
+                    "ok": True,
+                    "status": "routed",
+                    "answer": "M.I.O.: DNS と gateway を確認します。",
+                    "user_message": "通信経路を確認しています。",
+                    "runbook_id": "rb.noc.dns.failure.check",
+                    "runbook_review": {"final_status": "approved"},
+                    "rationale": ["Symptom router handled this request without waiting for LLM."],
+                    "handoff": {"ops_comm": "/ops-comm", "mattermost": "http://example.invalid/mm"},
+                },
+                None,
+                lang="en",
+            )
         self.assertIn("Rationale:", text)
         self.assertIn("Continue:", text)
 

@@ -1,0 +1,59 @@
+flow_id: service_status
+version: 1
+intents:
+  - service_status
+label_i18n:
+  ja: サービス状態トリアージ
+  en: Service status triage
+entry_state: symptom_scope
+steps:
+  - step_id: symptom_scope
+    question_i18n:
+      ja: 問題は一つのサービスだけですか？
+      en: Is the issue limited to one service?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: service_single_failure
+      no: service_multiple_failure
+    fallback_transition: user_cannot_answer
+  - step_id: service_single_failure
+    question_i18n:
+      ja: 利用者向け説明より先に運用者の状態確認が必要ですか？
+      en: Is operator-side status checking needed before user guidance?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: service_check_ready
+      no: service_guidance_ready
+    fallback_transition: user_cannot_answer
+
+diagnostic_states:
+  - state_id: service_check_ready
+    severity: low
+    summary_key: triage.service.check_ready.summary
+    user_guidance_key: triage.service.check_ready.user
+    operator_note_key: triage.service.check_ready.operator
+  - state_id: service_guidance_ready
+    severity: low
+    summary_key: triage.service.guidance_ready.summary
+    user_guidance_key: triage.service.guidance_ready.user
+    operator_note_key: triage.service.guidance_ready.operator
+  - state_id: service_multiple_failure
+    severity: medium
+    summary_key: triage.service.multiple.summary
+    user_guidance_key: triage.service.multiple.user
+    operator_note_key: triage.service.multiple.operator
+  - state_id: user_cannot_answer
+    severity: low
+    summary_key: triage.common.user_cannot_answer.summary
+    user_guidance_key: triage.common.user_cannot_answer.user
+    operator_note_key: triage.common.user_cannot_answer.operator

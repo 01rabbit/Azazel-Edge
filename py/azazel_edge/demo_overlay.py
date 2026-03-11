@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 DEMO_OVERLAY_PATH = Path(os.environ.get("AZAZEL_DEMO_OVERLAY", "/run/azazel-edge/demo_overlay.json"))
+DEMO_OVERLAY_MAX_AGE_SEC = int(os.environ.get("AZAZEL_DEMO_OVERLAY_MAX_AGE_SEC", "120"))
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 
 
 def _ensure_parent(path: Path) -> None:
@@ -19,7 +21,12 @@ def read_demo_overlay(path: Path | None = None) -> Dict[str, Any]:
         if not target.exists():
             return {}
         payload = json.loads(target.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, dict) else {}
+        if not isinstance(payload, dict):
+            return {}
+        if _is_overlay_invalid(payload):
+            clear_demo_overlay(target)
+            return {}
+        return payload
     except Exception:
         return {}
 
@@ -47,6 +54,32 @@ def is_demo_overlay_active(payload: Dict[str, Any] | None = None) -> bool:
     return bool(data.get("active"))
 
 
+def _is_overlay_stale(payload: Dict[str, Any]) -> bool:
+    ts = payload.get("ts")
+    try:
+        age = time.time() - float(ts)
+    except Exception:
+        return False
+    return age > DEMO_OVERLAY_MAX_AGE_SEC
+
+
+def _current_boot_id() -> str:
+    try:
+        return BOOT_ID_PATH.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def _is_overlay_invalid(payload: Dict[str, Any]) -> bool:
+    if _is_overlay_stale(payload):
+        return True
+    boot_id = str(payload.get("boot_id") or "").strip()
+    current_boot_id = _current_boot_id()
+    if not boot_id or not current_boot_id:
+        return True
+    return boot_id != current_boot_id
+
+
 def build_demo_overlay(result: Dict[str, Any]) -> Dict[str, Any]:
     explanation = result.get("explanation") if isinstance(result.get("explanation"), dict) else {}
     arbiter = result.get("arbiter") if isinstance(result.get("arbiter"), dict) else {}
@@ -55,6 +88,7 @@ def build_demo_overlay(result: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "active": True,
         "ts": time.time(),
+        "boot_id": _current_boot_id(),
         "scenario_id": str(result.get("scenario_id") or "demo"),
         "description": str(result.get("description") or ""),
         "event_count": int(result.get("event_count") or 0),
@@ -75,3 +109,7 @@ def build_demo_overlay(result: Dict[str, Any]) -> Dict[str, Any]:
         "machine": explanation.get("machine") if isinstance(explanation.get("machine"), dict) else {},
         "raw_result": result,
     }
+
+
+def purge_demo_artifacts(path: Path | None = None) -> None:
+    clear_demo_overlay(path)

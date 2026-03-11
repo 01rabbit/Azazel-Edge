@@ -1,0 +1,54 @@
+flow_id: portal_access
+version: 1
+intents:
+  - portal_access
+label_i18n:
+  ja: ポータル到達トリアージ
+  en: Portal access triage
+entry_state: portal_visibility
+steps:
+  - step_id: portal_visibility
+    question_i18n:
+      ja: ポータルや認証画面は一度も表示されませんか？
+      en: Does the portal or login page never appear?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: portal_trigger_likely
+      no: portal_session_expired
+    fallback_transition: user_cannot_answer
+  - step_id: portal_session_expired
+    question_i18n:
+      ja: 以前は通れたが今だけ失敗していますか？
+      en: Did it work before and fail only now?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: portal_session_issue
+      no: portal_trigger_likely
+    fallback_transition: user_cannot_answer
+
+diagnostic_states:
+  - state_id: portal_trigger_likely
+    severity: low
+    summary_key: triage.portal.trigger_likely.summary
+    user_guidance_key: triage.portal.trigger_likely.user
+    operator_note_key: triage.portal.trigger_likely.operator
+  - state_id: portal_session_issue
+    severity: low
+    summary_key: triage.portal.session_issue.summary
+    user_guidance_key: triage.portal.session_issue.user
+    operator_note_key: triage.portal.session_issue.operator
+  - state_id: user_cannot_answer
+    severity: low
+    summary_key: triage.common.user_cannot_answer.summary
+    user_guidance_key: triage.common.user_cannot_answer.user
+    operator_note_key: triage.common.user_cannot_answer.operator

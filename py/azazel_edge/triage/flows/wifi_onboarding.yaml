@@ -1,0 +1,78 @@
+flow_id: wifi_onboarding
+version: 1
+intents:
+  - wifi_onboarding
+label_i18n:
+  ja: 新規端末トリアージ
+  en: New device onboarding triage
+entry_state: device_type
+steps:
+  - step_id: device_type
+    question_i18n:
+      ja: 追加したい端末は新規端末ですか？
+      en: Is this a new device that has not connected before?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: ssid_visibility
+      no: wifi_reconnect_needed
+    fallback_transition: user_cannot_answer
+  - step_id: ssid_visibility
+    question_i18n:
+      ja: SSID は端末から見えていますか？
+      en: Is the SSID visible from the device?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: portal_needed
+      no: wifi_signal_unavailable
+    fallback_transition: user_cannot_answer
+  - step_id: portal_needed
+    question_i18n:
+      ja: ポータルまたは認証画面の案内が必要ですか？
+      en: Does the user need portal or onboarding guidance?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: portal_trigger_likely
+      no: onboarding_guidance_ready
+    fallback_transition: onboarding_guidance_ready
+
+diagnostic_states:
+  - state_id: wifi_reconnect_needed
+    severity: low
+    summary_key: triage.wifi.reconnect_needed.summary
+    user_guidance_key: triage.wifi.reconnect_needed.user
+    operator_note_key: triage.wifi.reconnect_needed.operator
+  - state_id: wifi_signal_unavailable
+    severity: medium
+    summary_key: triage.wifi.signal_unavailable.summary
+    user_guidance_key: triage.wifi.signal_unavailable.user
+    operator_note_key: triage.wifi.signal_unavailable.operator
+  - state_id: portal_trigger_likely
+    severity: low
+    summary_key: triage.portal.trigger_likely.summary
+    user_guidance_key: triage.portal.trigger_likely.user
+    operator_note_key: triage.portal.trigger_likely.operator
+  - state_id: onboarding_guidance_ready
+    severity: low
+    summary_key: triage.wifi.onboarding_ready.summary
+    user_guidance_key: triage.wifi.onboarding_ready.user
+    operator_note_key: triage.wifi.onboarding_ready.operator
+  - state_id: user_cannot_answer
+    severity: low
+    summary_key: triage.common.user_cannot_answer.summary
+    user_guidance_key: triage.common.user_cannot_answer.user
+    operator_note_key: triage.common.user_cannot_answer.operator

@@ -32,6 +32,12 @@ try:
 except Exception:  # pragma: no cover
     runbook_get = None
 try:
+    from azazel_edge.i18n import localize_runbook_user_message, normalize_lang, translate
+except Exception:  # pragma: no cover
+    localize_runbook_user_message = None
+    normalize_lang = lambda value=None: "ja"  # type: ignore
+    translate = lambda key, lang=None, default=None, **kwargs: (default or key).format(**kwargs) if kwargs else (default or key)  # type: ignore
+try:
     from azazel_edge.runbook_review import review_runbook_id
 except Exception:  # pragma: no cover
     review_runbook_id = None
@@ -522,11 +528,13 @@ def _guess_runbook_id(question: str) -> str:
     return mapping.get(kind, "rb.noc.ui-snapshot.check")
 
 
-def _runbook_user_message(runbook_id: str, default: str = "") -> str:
+def _runbook_user_message(runbook_id: str, lang: str = "ja", default: str = "") -> str:
     if not runbook_id or runbook_get is None:
         return default[:160]
     try:
-        runbook = runbook_get(runbook_id)
+        runbook = runbook_get(runbook_id, lang=lang)
+        if localize_runbook_user_message is not None:
+            return str(localize_runbook_user_message(runbook, lang=lang, default=default)).strip()[:160]
         return str(runbook.get("user_message_template") or default).strip()[:160]
     except Exception:
         return default[:160]
@@ -544,6 +552,7 @@ def _manual_router_response(
     q_lower = q.lower()
     ctx = context if isinstance(context, dict) else {}
     audience = str(ctx.get("audience") or ("operator" if str(source or "") in {"webui", "ops-comm", "mattermost_post", "mattermost_command", "cli"} else "beginner")).strip() or "operator"
+    lang = normalize_lang(ctx.get("lang"))
     route_info = _default_route_info()
     latest = _latest_advisory_snapshot()
     state_name = str(latest.get("state_name") or "UNKNOWN")
@@ -556,57 +565,84 @@ def _manual_router_response(
 
     if kind == "wifi_onboarding":
         runbook_id = "rb.user.device-onboarding-guide"
-        answer = (
-            "M.I.O.判断: 初回接続手順として扱います。"
-            " 利用者には指定 SSID の選択だけを案内し、接続試行は一度ずつ行います。"
+        answer = translate(
+            "agent.manual.wifi_onboarding",
+            lang=lang,
+            default="M.I.O. assessment: Treat this as first-time onboarding. Tell the user to select only the assigned SSID and attempt the connection one step at a time.",
         )
     elif kind == "wifi_reconnect":
         runbook_id = "rb.user.reconnect-guide"
-        answer = (
-            "M.I.O.判断: 再接続手順として扱います。"
-            " Wi-Fi のオフ/オンを一度だけ案内し、同じ SSID への再接続結果を確認します。"
+        answer = translate(
+            "agent.manual.wifi_reconnect",
+            lang=lang,
+            default="M.I.O. assessment: Treat this as a reconnect workflow. Instruct the user to toggle Wi-Fi once and confirm the result on the same SSID.",
         )
     elif kind == "portal":
         runbook_id = "rb.user.portal-access-guide"
-        answer = (
-            "M.I.O.判断: ポータル誘導の失敗として扱います。"
-            " 利用者には接続状態を維持したまま通常のWebサイトを一度だけ開いてもらい、"
-            " ポータル表示の有無を確認します。"
+        answer = translate(
+            "agent.manual.portal",
+            lang=lang,
+            default="M.I.O. assessment: Treat this as portal redirection failure. Keep the user connected and open one normal website once to confirm whether the portal appears.",
         )
     elif kind == "wifi_issue":
         runbook_id = "rb.user.first-contact.network-issue"
-        answer = (
-            "M.I.O.判断: まず単一端末障害か複数端末障害かを切り分けます。"
-            " 利用者には最初に何が使えなくなったかを一つだけ確認し、再起動の連打は止めます。"
+        answer = translate(
+            "agent.manual.wifi_issue",
+            lang=lang,
+            default="M.I.O. assessment: First separate single-device failure from multi-device failure. Ask the user for one symptom first and stop repeated restarts.",
         )
     elif kind == "dns":
         runbook_id = "rb.noc.dns.failure.check"
-        answer = (
-            f"M.I.O.判断: DNS 障害と uplink 側障害を切り分けます。"
-            f" 現在 uplink={route_info.get('up_if', '-')} gateway={route_info.get('gateway_ip', '-')}"
+        answer = translate(
+            "agent.manual.dns",
+            lang=lang,
+            default="M.I.O. assessment: Separate DNS failure from uplink failure. Current uplink={uplink} gateway={gateway}",
+            uplink=route_info.get("up_if", "-"),
+            gateway=route_info.get("gateway_ip", "-"),
         )
     elif kind == "route":
         runbook_id = "rb.noc.default-route.check"
-        answer = (
-            f"M.I.O.判断: 上位回線と経路の実状態を確認します。"
-            f" 現在 uplink={route_info.get('up_if', '-')} up_ip={route_info.get('up_ip', '-')} gateway={route_info.get('gateway_ip', '-')}"
+        answer = translate(
+            "agent.manual.route",
+            lang=lang,
+            default="M.I.O. assessment: Verify the actual uplink and route state. Current uplink={uplink} up_ip={up_ip} gateway={gateway}",
+            uplink=route_info.get("up_if", "-"),
+            up_ip=route_info.get("up_ip", "-"),
+            gateway=route_info.get("gateway_ip", "-"),
         )
     elif kind == "service":
         runbook_id = "rb.noc.service.status.check"
-        answer = "M.I.O.判断: UI の表示ズレではなく、実サービス停止かを先に確認します。status と journal の順で確認します。"
+        answer = translate(
+            "agent.manual.service",
+            lang=lang,
+            default="M.I.O. assessment: First confirm whether this is a real service failure instead of a UI mismatch. Check status, then journal.",
+        )
     elif kind == "epd":
         runbook_id = "rb.ops.epd.state.check"
-        answer = "M.I.O.判断: EPD の最終描画状態と WebUI/TUI のスナップショット差異を確認します。"
+        answer = translate(
+            "agent.manual.epd",
+            lang=lang,
+            default="M.I.O. assessment: Check the last EPD render state and compare it with the WebUI/TUI snapshot.",
+        )
     elif kind == "ai_logs":
         runbook_id = "rb.ops.logs.ai.recent"
-        answer = "M.I.O.判断: AI の直近成功・失敗と fallback 状況を確認して、遅延要因を切り分けます。"
+        answer = translate(
+            "agent.manual.ai_logs",
+            lang=lang,
+            default="M.I.O. assessment: Check recent AI successes, failures, and fallback activity to isolate the cause of delay.",
+        )
 
     if not runbook_id:
         return None
 
     user_message = _runbook_user_message(
         runbook_id,
-        default="現在の状況を確認中です。案内があるまで設定変更は行わず、そのままお待ちください。",
+        lang=lang,
+        default=translate(
+            "agent.user.wait",
+            lang=lang,
+            default="We are checking the current situation. Do not change settings until we provide the next instruction.",
+        ),
     )
     return {
         "status": "routed",
@@ -627,26 +663,40 @@ def _manual_fallback_response(question: str, context: Dict[str, Any] | None = No
     risk_score = int(latest.get("risk_score") or 0)
     rec = str(latest.get("recommendation") or "ログ確認を継続してください。")
     ctx = context if isinstance(context, dict) else {}
+    lang = normalize_lang(ctx.get("lang"))
     route_info = _default_route_info()
     runbook_id = _guess_runbook_id(question)
     user_message = _runbook_user_message(
         runbook_id,
-        default="現在の状況を確認中です。案内があるまで設定変更は行わず、そのままお待ちください。",
+        lang=lang,
+        default=translate(
+            "agent.user.wait",
+            lang=lang,
+            default="We are checking the current situation. Do not change settings until we provide the next instruction.",
+        ),
     )
     q = str(question or "").lower()
-    answer = f"現在の推奨: {rec}"
+    answer = translate("agent.fallback.current_recommendation", lang=lang, default="Current recommendation: {recommendation}", recommendation=rec)
     if any(token in q for token in ("dns", "名前解決", "host")):
-        answer = (
-            f"M.I.O.判断: 名前解決障害か uplink 側問題を切り分けます。"
-            f" 現在 uplink={route_info.get('up_if', '-')} gateway={route_info.get('gateway_ip', '-')}"
+        answer = translate(
+            "agent.fallback.dns",
+            lang=lang,
+            default="M.I.O. assessment: Separate name-resolution failure from uplink failure. Current uplink={uplink} gateway={gateway}",
+            uplink=route_info.get("up_if", "-"),
+            gateway=route_info.get("gateway_ip", "-"),
         )[:240]
     elif any(token in q for token in ("wifi", "ssid", "繋", "接続", "ネット")):
-        answer = (
-            "M.I.O.判断: 単一端末障害か複数端末障害かを先に切り分けます。"
-            " 利用者には症状を一つだけ答えてもらい、再起動の連打は止めます。"
+        answer = translate(
+            "agent.fallback.wifi",
+            lang=lang,
+            default="M.I.O. assessment: First separate single-device failure from multi-device failure. Ask the user for one symptom and stop repeated restarts.",
         )[:240]
     elif any(token in q for token in ("service", "systemd", "サービス")):
-        answer = "M.I.O.判断: UI不整合ではなく実サービス障害かを確認してから、必要なら status と journal を確認します。"[:240]
+        answer = translate(
+            "agent.fallback.service",
+            lang=lang,
+            default="M.I.O. assessment: Confirm whether this is a real service failure instead of a UI mismatch, then check status and journal if needed.",
+        )[:240]
     audience = str(ctx.get("audience") or "").strip() or "operator"
     return {
         "status": "fallback",
@@ -703,6 +753,7 @@ def _run_manual_query(
     payload = {
         "source": str(source or "webui"),
         "sender": str(sender or "operator"),
+        "lang": lang,
         "audience": audience,
         "question": q,
         "latest_risk_score": int(latest.get("risk_score") or 0),
@@ -1472,13 +1523,17 @@ def _handle_manual_query_request(req: Dict[str, Any]) -> Dict[str, Any]:
     sender = str(params.get("sender") or req.get("sender") or "operator").strip()
     source = str(params.get("source") or req.get("source") or "webui").strip()
     context = params.get("context")
+    lang = normalize_lang((context if isinstance(context, dict) else {}).get("lang"))
     started = time.time()
     result = _run_manual_query(question=question, sender=sender, source=source, context=context if isinstance(context, dict) else {})
     runbook_id = str(result.get("runbook_id") or "").strip()
     if runbook_id and not str(result.get("user_message") or "").strip() and runbook_get is not None:
         try:
-            runbook = runbook_get(runbook_id)
-            result["user_message"] = str(runbook.get("user_message_template") or "").strip()[:160]
+            runbook = runbook_get(runbook_id, lang=lang)
+            if localize_runbook_user_message is not None:
+                result["user_message"] = str(localize_runbook_user_message(runbook, lang=lang)).strip()[:160]
+            else:
+                result["user_message"] = str(runbook.get("user_message_template") or "").strip()[:160]
         except Exception:
             pass
     if runbook_id and review_runbook_id is not None:
@@ -1489,6 +1544,7 @@ def _handle_manual_query_request(req: Dict[str, Any]) -> Dict[str, Any]:
                 context={
                     "question": question,
                     "audience": audience,
+                    "lang": lang,
                     "risk_score": int(_latest_advisory_snapshot().get("risk_score") or 0),
                     "source": source,
                 },

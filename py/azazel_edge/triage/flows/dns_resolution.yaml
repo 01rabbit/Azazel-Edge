@@ -1,0 +1,59 @@
+flow_id: dns_resolution
+version: 1
+intents:
+  - dns_resolution
+label_i18n:
+  ja: DNS 解決トリアージ
+  en: DNS resolution triage
+entry_state: internet_vs_name
+steps:
+  - step_id: internet_vs_name
+    question_i18n:
+      ja: IP 直指定なら開けますか？
+      en: Can the user reach the service by IP address directly?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: resolver_scope
+      no: uplink_reachability_likely
+    fallback_transition: user_cannot_answer
+  - step_id: resolver_scope
+    question_i18n:
+      ja: 問題は特定ドメインだけですか？
+      en: Is the problem limited to one domain or service?
+    answer_type: single_choice
+    choices:
+      - value: single
+        label_i18n: {ja: 特定ドメインだけ, en: One domain only}
+      - value: many
+        label_i18n: {ja: 複数ドメイン, en: Multiple domains}
+    transition_map:
+      single: dns_partial_failure
+      many: dns_global_failure
+    fallback_transition: user_cannot_answer
+
+diagnostic_states:
+  - state_id: dns_partial_failure
+    severity: low
+    summary_key: triage.dns.partial.summary
+    user_guidance_key: triage.dns.partial.user
+    operator_note_key: triage.dns.partial.operator
+  - state_id: dns_global_failure
+    severity: medium
+    summary_key: triage.dns.global.summary
+    user_guidance_key: triage.dns.global.user
+    operator_note_key: triage.dns.global.operator
+  - state_id: uplink_reachability_likely
+    severity: medium
+    summary_key: triage.uplink.reachability.summary
+    user_guidance_key: triage.uplink.reachability.user
+    operator_note_key: triage.uplink.reachability.operator
+  - state_id: user_cannot_answer
+    severity: low
+    summary_key: triage.common.user_cannot_answer.summary
+    user_guidance_key: triage.common.user_cannot_answer.user
+    operator_note_key: triage.common.user_cannot_answer.operator

@@ -1,0 +1,59 @@
+flow_id: uplink_reachability
+version: 1
+intents:
+  - uplink_reachability
+label_i18n:
+  ja: 上位回線トリアージ
+  en: Uplink reachability triage
+entry_state: impact_scope
+steps:
+  - step_id: impact_scope
+    question_i18n:
+      ja: 影響は一部の利用者だけですか、それとも全体ですか？
+      en: Is the impact limited to some users or affecting everyone?
+    answer_type: single_choice
+    choices:
+      - value: partial
+        label_i18n: {ja: 一部だけ, en: Some users}
+      - value: global
+        label_i18n: {ja: 全体, en: Everyone}
+    transition_map:
+      partial: partial_path_issue
+      global: gateway_reachability
+    fallback_transition: user_cannot_answer
+  - step_id: gateway_reachability
+    question_i18n:
+      ja: デフォルトゲートウェイへ到達できますか？
+      en: Is the default gateway reachable?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: uplink_issue
+      no: gateway_issue
+    fallback_transition: user_cannot_answer
+
+diagnostic_states:
+  - state_id: partial_path_issue
+    severity: medium
+    summary_key: triage.uplink.partial.summary
+    user_guidance_key: triage.uplink.partial.user
+    operator_note_key: triage.uplink.partial.operator
+  - state_id: uplink_issue
+    severity: medium
+    summary_key: triage.uplink.issue.summary
+    user_guidance_key: triage.uplink.issue.user
+    operator_note_key: triage.uplink.issue.operator
+  - state_id: gateway_issue
+    severity: high
+    summary_key: triage.uplink.gateway.summary
+    user_guidance_key: triage.uplink.gateway.user
+    operator_note_key: triage.uplink.gateway.operator
+  - state_id: user_cannot_answer
+    severity: low
+    summary_key: triage.common.user_cannot_answer.summary
+    user_guidance_key: triage.common.user_cannot_answer.user
+    operator_note_key: triage.common.user_cannot_answer.operator

@@ -1,0 +1,78 @@
+flow_id: wifi_connectivity
+version: 1
+intents:
+  - wifi_connectivity
+label_i18n:
+  ja: Wi-Fi 接続トリアージ
+  en: Wi-Fi connectivity triage
+entry_state: scope
+steps:
+  - step_id: scope
+    question_i18n:
+      ja: 1台だけですか、それとも複数台ですか？
+      en: Is the issue affecting one device or multiple devices?
+    answer_type: single_choice
+    choices:
+      - value: single
+        label_i18n: {ja: 1台だけ, en: One device}
+      - value: multiple
+        label_i18n: {ja: 複数台, en: Multiple devices}
+    transition_map:
+      single: ssid_visibility
+      multiple: ssid_visibility
+    fallback_transition: multi_client_wifi_issue
+  - step_id: ssid_visibility
+    question_i18n:
+      ja: SSID は見えていますか？
+      en: Is the SSID visible to the user?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: ip_assignment
+      no: wifi_signal_unavailable
+    fallback_transition: wifi_signal_unavailable
+  - step_id: ip_assignment
+    question_i18n:
+      ja: 端末は IP アドレスを取得していますか？
+      en: Is the device receiving an IP address?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: dns_likely
+      no: dhcp_likely
+    fallback_transition: user_cannot_answer
+
+diagnostic_states:
+  - state_id: wifi_signal_unavailable
+    severity: medium
+    summary_key: triage.wifi.signal_unavailable.summary
+    user_guidance_key: triage.wifi.signal_unavailable.user
+    operator_note_key: triage.wifi.signal_unavailable.operator
+  - state_id: dhcp_likely
+    severity: medium
+    summary_key: triage.wifi.dhcp_likely.summary
+    user_guidance_key: triage.wifi.dhcp_likely.user
+    operator_note_key: triage.wifi.dhcp_likely.operator
+  - state_id: dns_likely
+    severity: low
+    summary_key: triage.wifi.dns_likely.summary
+    user_guidance_key: triage.wifi.dns_likely.user
+    operator_note_key: triage.wifi.dns_likely.operator
+  - state_id: multi_client_wifi_issue
+    severity: medium
+    summary_key: triage.wifi.multi_client.summary
+    user_guidance_key: triage.wifi.multi_client.user
+    operator_note_key: triage.wifi.multi_client.operator
+  - state_id: user_cannot_answer
+    severity: low
+    summary_key: triage.common.user_cannot_answer.summary
+    user_guidance_key: triage.common.user_cannot_answer.user
+    operator_note_key: triage.common.user_cannot_answer.operator
