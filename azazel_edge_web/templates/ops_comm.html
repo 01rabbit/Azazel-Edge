@@ -165,6 +165,12 @@
                 <div id="runbookCandidates" class="ops-runbook-list"></div>
             </section>
 
+            <section class="card ops-triage-audit-card">
+                <div class="assistant-label">{{ tr('ops.triage_audit', 'Triage Audit') }}</div>
+                <div id="triageAuditEmpty" class="ops-result">{{ tr('ops.triage_audit_empty', 'No triage audit entries yet') }}</div>
+                <ul id="triageAuditList" class="ops-message-list"></ul>
+            </section>
+
             <section class="card ops-demo-card">
                 <div class="assistant-label">{{ tr('ops.demo_runner', 'Demo Runner') }}</div>
                 <label class="ops-label" for="demoScenarioSelect">{{ tr('ops.scenario', 'Scenario') }}</label>

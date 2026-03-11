@@ -26,6 +26,8 @@ class OpsCommDemoUiV1Tests(unittest.TestCase):
         self.assertIn("triageClassifyBtn", text)
         self.assertIn("triageSessionCard", text)
         self.assertIn("triageHandoffBtn", text)
+        self.assertIn("Triage Audit", text)
+        self.assertIn("triageAuditList", text)
 
 
 if __name__ == "__main__":

@@ -245,6 +245,30 @@ function renderMessages(items) {
     }
 }
 
+function renderTriageAudit(items) {
+    const list = document.getElementById('triageAuditList');
+    const empty = document.getElementById('triageAuditEmpty');
+    if (!list || !empty) return;
+    list.innerHTML = '';
+    if (!Array.isArray(items) || items.length === 0) {
+        empty.style.display = 'block';
+        return;
+    }
+    empty.style.display = 'none';
+    for (const item of items) {
+        const li = document.createElement('li');
+        li.className = 'ops-message-item';
+        li.innerHTML = `
+            <div class="ops-message-head">
+                <span class="ops-message-user">${escapeHtml(item.title || item.kind || 'triage')}</span>
+                <span class="ops-message-time">${escapeHtml(item.ts_iso || '-')}</span>
+            </div>
+            <div class="ops-message-body">${escapeHtml(item.detail || '-')}</div>
+        `;
+        list.appendChild(li);
+    }
+}
+
 function renderRunbookCandidates(items) {
     const list = document.getElementById('runbookCandidates');
     const empty = document.getElementById('runbookCandidatesEmpty');
@@ -805,6 +829,20 @@ async function loadMessages() {
     }
 }
 
+async function loadTriageAudit() {
+    try {
+        const res = await fetch('/api/triage/audit?limit=12', { headers: authHeaders() });
+        const data = await res.json();
+        if (!data.ok) {
+            renderTriageAudit([]);
+            return;
+        }
+        renderTriageAudit(data.items || []);
+    } catch (_e) {
+        renderTriageAudit([]);
+    }
+}
+
 async function sendMessage() {
     const senderInput = document.getElementById('senderInput');
     const messageInput = document.getElementById('messageInput');
@@ -895,6 +933,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (refreshBtn) refreshBtn.addEventListener('click', async () => {
         await loadStatus();
         await loadMessages();
+        await loadTriageAudit();
         await loadCapabilities();
         if (lastQuestion) await loadRunbookCandidates(lastQuestion);
     });
@@ -965,6 +1004,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     loadStatus();
     loadMessages();
+    loadTriageAudit();
     loadCapabilities();
     loadDemoScenarios();
     loadTriageIntents();
@@ -990,5 +1030,6 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(() => {
         loadStatus();
         loadMessages();
+        loadTriageAudit();
     }, STATUS_INTERVAL_MS);
 });

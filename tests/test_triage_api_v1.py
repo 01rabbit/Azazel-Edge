@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 import azazel_edge_web.app as webapp
+from azazel_edge.audit import P0AuditLogger
 from azazel_edge.triage import TriageFlowEngine, TriageSessionStore
 
 
@@ -14,17 +15,24 @@ class TriageApiV1Tests(unittest.TestCase):
             "load_token": webapp.load_token,
             "_TRIAGE_STORE": webapp._TRIAGE_STORE,
             "_TRIAGE_ENGINE": webapp._TRIAGE_ENGINE,
+            "TRIAGE_AUDIT_LOG": webapp.TRIAGE_AUDIT_LOG,
+            "TRIAGE_AUDIT_FALLBACK_LOG": webapp.TRIAGE_AUDIT_FALLBACK_LOG,
         }
         webapp.load_token = lambda: None
         store = TriageSessionStore(base_dir=self.tmp.name)
+        audit_path = webapp.Path(self.tmp.name) / "triage-audit.jsonl"
         webapp._TRIAGE_STORE = store
-        webapp._TRIAGE_ENGINE = TriageFlowEngine(store=store)
+        webapp._TRIAGE_ENGINE = TriageFlowEngine(store=store, audit_logger=P0AuditLogger(audit_path))
+        webapp.TRIAGE_AUDIT_LOG = audit_path
+        webapp.TRIAGE_AUDIT_FALLBACK_LOG = audit_path
         self.client = webapp.app.test_client()
 
     def tearDown(self) -> None:
         webapp.load_token = self._orig["load_token"]
         webapp._TRIAGE_STORE = self._orig["_TRIAGE_STORE"]
         webapp._TRIAGE_ENGINE = self._orig["_TRIAGE_ENGINE"]
+        webapp.TRIAGE_AUDIT_LOG = self._orig["TRIAGE_AUDIT_LOG"]
+        webapp.TRIAGE_AUDIT_FALLBACK_LOG = self._orig["TRIAGE_AUDIT_FALLBACK_LOG"]
         self.tmp.cleanup()
 
     def test_triage_intents_endpoint(self) -> None:
@@ -69,6 +77,17 @@ class TriageApiV1Tests(unittest.TestCase):
         self.assertTrue(payload2["mio"]["summary"])
         runbook_ids = [item["runbook_id"] for item in payload2["runbooks"]]
         self.assertIn("rb.noc.dns.failure.check", runbook_ids)
+
+    def test_triage_audit_endpoint_returns_recent_entries(self) -> None:
+        start = self.client.post("/api/triage/start?lang=en", json={"intent_id": "portal_access", "audience": "temporary"})
+        session_id = start.get_json()["session"]["session_id"]
+        self.client.post("/api/triage/answer?lang=en", json={"session_id": session_id, "answer": "yes"})
+        response = self.client.get("/api/triage/audit?limit=5&lang=en")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertGreaterEqual(payload["count"], 2)
+        self.assertTrue(any(item["kind"] == "triage_session_started" for item in payload["items"]))
 
 
 if __name__ == "__main__":

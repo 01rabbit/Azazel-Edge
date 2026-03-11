@@ -1072,6 +1072,12 @@ function updateEvidenceBoard(evidence, health) {
         title: item.title || '-',
         detail: item.detail || '-',
     }));
+    renderTimeline('triageAuditTimeline', evidence.triage_audit || [], (item) => ({
+        metaLeft: item.ts_iso || '-',
+        metaRight: item.kind || '-',
+        title: item.title || '-',
+        detail: item.detail || '-',
+    }));
 
     const stale = health.stale_flags || {};
     const idle = health.idle_flags || {};

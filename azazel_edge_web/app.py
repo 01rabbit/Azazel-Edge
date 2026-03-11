@@ -129,6 +129,8 @@ AI_METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_
 AI_EVENT_LOG = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", "/var/log/azazel-edge/ai-events.jsonl"))
 AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-llm.jsonl"))
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/azazel-edge/runbook-events.jsonl"))
+TRIAGE_AUDIT_LOG = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", "/var/log/azazel-edge/triage-audit.jsonl"))
+TRIAGE_AUDIT_FALLBACK_LOG = Path("/tmp/azazel-edge-triage-audit.jsonl")
 TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge/triage-sessions"))
 TOKEN_FILE = web_token_candidates()[0]
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
@@ -592,6 +594,14 @@ def _tail_jsonl(path: Path, limit: int = 20) -> List[Dict[str, Any]]:
     except Exception:
         return []
     return list(rows)
+
+
+def _tail_first_existing_jsonl(paths: List[Path], limit: int = 20) -> List[Dict[str, Any]]:
+    for path in paths:
+        rows = _tail_jsonl(path, limit=limit)
+        if rows:
+            return rows
+    return []
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -1124,6 +1134,7 @@ def _dashboard_evidence_sections(
     advisory: Dict[str, Any],
     ai_activity: List[Dict[str, Any]],
     runbook_events: List[Dict[str, Any]],
+    triage_audit: List[Dict[str, Any]],
     mode_runtime: Dict[str, Any],
 ) -> Dict[str, List[Dict[str, Any]]]:
     now_iso = datetime.now().isoformat()
@@ -1134,6 +1145,7 @@ def _dashboard_evidence_sections(
     decision_changes: List[Dict[str, Any]] = []
     operator_interactions: List[Dict[str, Any]] = []
     background_history: List[Dict[str, Any]] = []
+    triage_timeline: List[Dict[str, Any]] = []
 
     suspicion = _as_int(internal.get("suspicion"), 0)
     user_state = str(state.get("user_state") or "")
@@ -1236,11 +1248,51 @@ def _dashboard_evidence_sections(
             },
         )
 
+    for item in triage_audit[-8:]:
+        triage_timeline.append(
+            {
+                "ts_iso": str(item.get("ts_iso") or ""),
+                "title": str(item.get("title") or item.get("kind") or "-"),
+                "detail": str(item.get("detail") or "-"),
+                "kind": "triage",
+            }
+        )
+
     return {
         "current_triggers": current_triggers[:6],
         "decision_changes": decision_changes[:8],
         "operator_interactions": operator_interactions[:8],
         "background_history": background_history[:8],
+        "triage_audit": triage_timeline[:8],
+    }
+
+
+def _normalize_triage_audit_event(item: Dict[str, Any]) -> Dict[str, Any]:
+    kind = str(item.get("kind") or "triage")
+    session_id = str(item.get("session_id") or item.get("trace_id") or "")
+    state_bits: List[str] = []
+    if item.get("intent_id"):
+        state_bits.append(f"intent={item.get('intent_id')}")
+    if item.get("step_id"):
+        state_bits.append(f"step={item.get('step_id')}")
+    if item.get("diagnostic_state"):
+        state_bits.append(f"diagnostic={item.get('diagnostic_state')}")
+    if item.get("target"):
+        state_bits.append(f"target={item.get('target')}")
+    if item.get("reason"):
+        state_bits.append(f"reason={item.get('reason')}")
+    if item.get("proposed_runbooks"):
+        state_bits.append(
+            "runbooks=" + ",".join(str(x) for x in list(item.get("proposed_runbooks") or [])[:3])
+        )
+    return {
+        "ts_iso": str(item.get("ts") or ""),
+        "kind": kind,
+        "trace_id": str(item.get("trace_id") or ""),
+        "session_id": session_id,
+        "title": kind.replace("_", " "),
+        "detail": " | ".join(state_bits) if state_bits else str(item.get("source") or "triage_engine"),
+        "source": str(item.get("source") or ""),
     }
 
 
@@ -1250,24 +1302,28 @@ def _dashboard_evidence_payload(
     alert_rows: List[Dict[str, Any]],
     llm_rows: List[Dict[str, Any]],
     runbook_rows: List[Dict[str, Any]],
+    triage_rows: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     recent_alerts = [_normalize_alert_event(item) for item in alert_rows[-10:]]
     if not recent_alerts and advisory:
         recent_alerts = [_normalize_alert_event({"advisory": advisory, "event": {}})]
     ai_activity = [_normalize_ai_activity(item) for item in llm_rows[-10:]]
     runbook_events = [_normalize_runbook_event(item) for item in runbook_rows[-10:]]
+    triage_audit = [_normalize_triage_audit_event(item) for item in triage_rows[-10:]]
     mode_runtime = get_mode_state()
-    sections = _dashboard_evidence_sections(state, advisory, ai_activity, runbook_events, mode_runtime)
+    sections = _dashboard_evidence_sections(state, advisory, ai_activity, runbook_events, triage_audit, mode_runtime)
     return {
         "ok": True,
         "recent_alerts": recent_alerts,
         "recent_ai_activity": ai_activity,
         "recent_runbook_events": runbook_events,
+        "recent_triage_audit": triage_audit,
         "recent_mode_changes": _recent_mode_changes(mode_runtime),
         "current_triggers": sections["current_triggers"],
         "decision_changes": sections["decision_changes"],
         "operator_interactions": sections["operator_interactions"],
         "background_history": sections["background_history"],
+        "triage_audit": sections["triage_audit"],
         "snapshot_evidence": [str(item) for item in (state.get("evidence") or [])[:8]] if isinstance(state.get("evidence"), list) else [],
     }
 
@@ -3016,6 +3072,16 @@ def api_triage_session(session_id: str):
     return jsonify(_triage_progress_payload(progress, lang=lang)), 200
 
 
+@app.route("/api/triage/audit", methods=["GET"])
+def api_triage_audit():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    limit = min(max(_as_int(request.args.get("limit"), 20), 1), 100)
+    rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG, TRIAGE_AUDIT_FALLBACK_LOG], limit=limit)
+    items = [_normalize_triage_audit_event(item) for item in rows[-limit:]]
+    return jsonify({"ok": True, "items": items, "count": len(items)}), 200
+
+
 @app.route("/api/demo/scenarios", methods=["GET"])
 def api_demo_scenarios():
     if not verify_token():
@@ -3086,7 +3152,8 @@ def api_dashboard_evidence():
     alert_rows = _tail_jsonl(AI_EVENT_LOG, limit=20)
     llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
     runbook_rows = _tail_jsonl(RUNBOOK_EVENT_LOG, limit=20)
-    return jsonify(_dashboard_evidence_payload(state, advisory, alert_rows, llm_rows, runbook_rows)), 200
+    triage_rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG, TRIAGE_AUDIT_FALLBACK_LOG], limit=20)
+    return jsonify(_dashboard_evidence_payload(state, advisory, alert_rows, llm_rows, runbook_rows, triage_rows)), 200
 
 
 @app.route("/api/dashboard/health", methods=["GET"])

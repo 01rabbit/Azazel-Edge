@@ -23,6 +23,8 @@ class DashboardDataContractTests(unittest.TestCase):
             "AI_EVENT_LOG": webapp.AI_EVENT_LOG,
             "AI_LLM_LOG": webapp.AI_LLM_LOG,
             "RUNBOOK_EVENT_LOG": webapp.RUNBOOK_EVENT_LOG,
+            "TRIAGE_AUDIT_LOG": webapp.TRIAGE_AUDIT_LOG,
+            "TRIAGE_AUDIT_FALLBACK_LOG": webapp.TRIAGE_AUDIT_FALLBACK_LOG,
             "cp_read_snapshot_payload": webapp.cp_read_snapshot_payload,
             "load_token": webapp.load_token,
             "get_monitoring_state": webapp.get_monitoring_state,
@@ -40,6 +42,8 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.AI_EVENT_LOG = root / "ai-events.jsonl"
         webapp.AI_LLM_LOG = root / "ai-llm.jsonl"
         webapp.RUNBOOK_EVENT_LOG = root / "runbook-events.jsonl"
+        webapp.TRIAGE_AUDIT_LOG = root / "triage-audit.jsonl"
+        webapp.TRIAGE_AUDIT_FALLBACK_LOG = root / "triage-audit-fallback.jsonl"
         webapp.cp_read_snapshot_payload = None
         webapp.load_token = lambda: None
         webapp.get_monitoring_state = lambda: {
@@ -166,6 +170,22 @@ class DashboardDataContractTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
+        webapp.TRIAGE_AUDIT_LOG.write_text(
+            json.dumps(
+                {
+                    "ts": "2026-03-11T10:00:00+09:00",
+                    "kind": "triage_runbook_proposed",
+                    "trace_id": "triage-1",
+                    "source": "triage_engine",
+                    "session_id": "triage-1",
+                    "intent_id": "dns_resolution",
+                    "diagnostic_state": "dns_global_failure",
+                    "proposed_runbooks": ["rb.noc.dns.failure.check"],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         self.client = webapp.app.test_client()
 
@@ -177,6 +197,8 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.AI_EVENT_LOG = self._orig["AI_EVENT_LOG"]
         webapp.AI_LLM_LOG = self._orig["AI_LLM_LOG"]
         webapp.RUNBOOK_EVENT_LOG = self._orig["RUNBOOK_EVENT_LOG"]
+        webapp.TRIAGE_AUDIT_LOG = self._orig["TRIAGE_AUDIT_LOG"]
+        webapp.TRIAGE_AUDIT_FALLBACK_LOG = self._orig["TRIAGE_AUDIT_FALLBACK_LOG"]
         webapp.cp_read_snapshot_payload = self._orig["cp_read_snapshot_payload"]
         webapp.load_token = self._orig["load_token"]
         webapp.get_monitoring_state = self._orig["get_monitoring_state"]
@@ -265,6 +287,8 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertTrue(payload["decision_changes"])
         self.assertTrue(payload["operator_interactions"])
         self.assertTrue(payload["background_history"])
+        self.assertTrue(payload["triage_audit"])
+        self.assertEqual(payload["recent_triage_audit"][0]["kind"], "triage_runbook_proposed")
 
     def test_dashboard_health_contract(self) -> None:
         response = self.client.get("/api/dashboard/health")
@@ -306,6 +330,7 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("Decision Changes", text)
         self.assertIn("Operator Interactions", text)
         self.assertIn("Background History", text)
+        self.assertIn("Triage Audit", text)
         self.assertIn("Supporting history and audit trail", text)
         self.assertIn("Demo Runner", text)
         self.assertIn("Scenario Replay", text)
