@@ -61,10 +61,24 @@ function resetDemoOverlayPresentation() {
     updateElement('demoStatusBadge', tr('dashboard.demo_ready', 'READY'));
     const badge = document.getElementById('demoStatusBadge');
     if (badge) badge.className = 'assistant-status status-neutral';
+    updateElement('demoScenarioId', '-');
+    updateElement('demoEventCount', '-');
+    updateElement('demoExecutionMode', 'deterministic_replay');
+    updateElement('demoAiCore', 'not-used');
     updateElement('demoNocStatus', '-');
     updateElement('demoSocStatus', '-');
     updateElement('demoAction', '-');
     updateElement('demoReason', '-');
+    updateElement('demoSafetyReversible', '-');
+    updateElement('demoSafetyApproval', '-');
+    updateElement('demoSafetyAudited', '-');
+    updateElement('demoSafetyEffect', '-');
+    updateElement('demoTraceNocFragile', '-');
+    updateElement('demoTraceStrongSoc', '-');
+    updateElement('demoTraceBlastConfidence', '-');
+    updateElement('demoTraceClientImpact', '-');
+    updateElement('demoBoundaryMode', 'DETERMINISTIC REPLAY');
+    updateElement('demoBoundarySummary', 'Synthetic replay path. AI is not used in the core decision loop.');
     updateElement('demoOperatorWording', tr('dashboard.no_demo', 'No demo overlay is active.'));
     updateElement('demoResponse', tr('dashboard.no_demo_response', 'Run a scenario to preview the deterministic pipeline.'));
     renderList('demoNextChecks', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
@@ -310,6 +324,12 @@ function bindStaticHandlers() {
         await runDemoScenario();
     });
     document.getElementById('demoClearOverlayBtn')?.addEventListener('click', clearDemoOverlay);
+    document.getElementById('reviewOpenCapabilitiesBtn')?.addEventListener('click', () => {
+        void openAuthenticatedJson('/api/demo/capabilities', 'Azazel-Edge Capability Boundary');
+    });
+    document.getElementById('reviewOpenExplanationBtn')?.addEventListener('click', () => {
+        void openAuthenticatedJson('/api/demo/explanation/latest', 'Azazel-Edge Latest Explanation');
+    });
 
     loadDemoScenarios();
 }
@@ -491,6 +511,7 @@ async function refreshDashboard() {
         ['state', '/api/state', true],
         ['mattermost', '/api/mattermost/status', false],
         ['capabilities', '/api/ai/capabilities', false],
+        ['demoCapabilities', '/api/demo/capabilities', false],
         ['demoOverlay', '/api/demo/overlay', false],
     ];
 
@@ -526,6 +547,7 @@ async function refreshDashboard() {
     const state = resultMap.state?.data || {};
     const mattermost = resultMap.mattermost?.data || { reachable: false, command_triggers: [] };
     const capabilities = resultMap.capabilities?.data || { mattermost_triggers: [] };
+    const demoCapabilities = resultMap.demoCapabilities?.data || { boundary: {}, execution_mode: 'deterministic_replay' };
     const demoOverlay = resultMap.demoOverlay?.data?.overlay || {};
 
     latestState = state || {};
@@ -546,6 +568,7 @@ async function refreshDashboard() {
         updateTemporaryMission(actions);
         updateEvidenceBoard(evidence, health);
         updateAssistant(actions, mattermost, capabilities);
+        updateReviewReadiness(resultMap.health, resultMap.demoCapabilities, demoOverlayResult);
         updateControlButtons(summary, state);
         if (demoOverlayResult) {
             applyDemoOverlay(demoOverlayResult);
@@ -613,6 +636,8 @@ async function runDemoScenario() {
     if (submit) submit.disabled = true;
     updateElement('demoResponse', tr('dashboard.demo_running', 'Running demo scenario...'));
     updateElement('demoOperatorWording', tr('dashboard.demo_preparing', 'Preparing scenario replay...'));
+    updateElement('demoBoundaryMode', 'DETERMINISTIC REPLAY');
+    updateElement('demoBoundarySummary', 'Synthetic replay path. AI is not used in the core decision loop.');
     updateElement('demoNocStatus', '-');
     updateElement('demoSocStatus', '-');
     updateElement('demoAction', '-');
@@ -627,6 +652,7 @@ async function runDemoScenario() {
         const payload = await fetchJson(`/api/demo/run/${encodeURIComponent(scenarioId)}`, { method: 'POST' });
         const result = payload.result || {};
         const overlay = payload.overlay || {};
+        applyDemoDerivedFields(result);
         updateElement('demoNocStatus', result.noc?.summary?.status || '-');
         updateElement('demoSocStatus', result.soc?.summary?.status || '-');
         updateElement('demoAction', result.arbiter?.action || '-');
@@ -712,6 +738,14 @@ function applyDemoOverlay(result) {
         ? result.rejected_alternatives
         : (Array.isArray(raw.explanation?.why_not_others) ? raw.explanation.why_not_others : []);
     const operatorWording = String(result.operator_wording || raw.explanation?.operator_wording || '').trim();
+    applyDemoDerivedFields({
+        scenario_id: scenarioId,
+        event_count: Number(result.event_count || raw.event_count || 0),
+        execution: result.execution || raw.execution || {},
+        action_profile: result.action_profile || raw.arbiter?.action_profile || {},
+        decision_trace: result.decision_trace || raw.arbiter?.decision_trace || {},
+        capability_boundary: result.capability_boundary || raw.capability_boundary || {},
+    });
     updateElement('demoNocStatus', nocStatus || '-');
     updateElement('demoSocStatus', socStatus || '-');
     updateElement('demoAction', action || '-');
@@ -1241,6 +1275,161 @@ function buildDemoMioQuestion(result) {
     const action = result?.arbiter?.action || '-';
     const reason = result?.arbiter?.reason || '-';
     return `Demo scenario ${scenarioId}: NOC status ${nocStatus}, SOC status ${socStatus}, selected action ${action}, reason ${reason}. Explain this choice for an operator and give the next checks.`;
+}
+
+async function openAuthenticatedJson(path, title) {
+    const popup = window.open('', '_blank', 'noopener,noreferrer');
+    if (popup) {
+        popup.document.title = title;
+        popup.document.body.innerHTML = '<pre>Loading...</pre>';
+    }
+    try {
+        const payload = await fetchJson(path);
+        const content = JSON.stringify(payload, null, 2);
+        if (popup) {
+            popup.document.title = title;
+            popup.document.body.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
+        }
+    } catch (error) {
+        if (popup) {
+            popup.document.title = `${title} (error)`;
+            popup.document.body.innerHTML = `<pre>${escapeHtml(String(error.message || error))}</pre>`;
+        }
+        showToast(`${title}: ${error.message || error}`, 'error');
+    }
+}
+
+function formatDemoBoolean(value) {
+    return value ? 'yes' : 'no';
+}
+
+function formatCapabilityBoundarySummary(boundary) {
+    if (!boundary || typeof boundary !== 'object') {
+        return 'Synthetic replay path. AI is not used in the core decision loop.';
+    }
+    const implemented = Array.isArray(boundary.implemented_now) ? boundary.implemented_now.length : 0;
+    const demoOnly = Array.isArray(boundary.demo_only) ? boundary.demo_only.length : 0;
+    const experimental = Array.isArray(boundary.experimental) ? boundary.experimental.length : 0;
+    return `Synthetic replay path. implemented=${implemented}, demo_only=${demoOnly}, experimental=${experimental}. AI is not used in the core decision loop.`;
+}
+
+function applyDemoDerivedFields(source) {
+    const raw = source && typeof source === 'object' ? source : {};
+    const execution = raw.execution && typeof raw.execution === 'object' ? raw.execution : {};
+    const actionProfile = raw.action_profile && typeof raw.action_profile === 'object'
+        ? raw.action_profile
+        : (raw.arbiter?.action_profile && typeof raw.arbiter.action_profile === 'object' ? raw.arbiter.action_profile : {});
+    const decisionTrace = raw.decision_trace && typeof raw.decision_trace === 'object'
+        ? raw.decision_trace
+        : (raw.arbiter?.decision_trace && typeof raw.arbiter.decision_trace === 'object' ? raw.arbiter.decision_trace : {});
+    const capabilityBoundary = raw.capability_boundary && typeof raw.capability_boundary === 'object' ? raw.capability_boundary : {};
+    const scenarioId = String(raw.scenario_id || '-').trim();
+    const eventCount = Number(raw.event_count || 0);
+
+    updateElement('demoScenarioId', scenarioId || '-');
+    updateElement('demoEventCount', Number.isFinite(eventCount) ? String(eventCount) : '-');
+    updateElement('demoExecutionMode', String(execution.mode || 'deterministic_replay'));
+    updateElement('demoAiCore', execution.ai_used ? 'used' : 'not-used');
+    updateElement('demoSafetyReversible', formatDemoBoolean(Boolean(actionProfile.reversible)));
+    updateElement('demoSafetyApproval', actionProfile.approval_required ? 'required' : 'not-required');
+    updateElement('demoSafetyAudited', formatDemoBoolean(Boolean(actionProfile.audited)));
+    updateElement('demoSafetyEffect', String(actionProfile.effect || '-'));
+    updateElement('demoTraceNocFragile', formatDemoBoolean(Boolean(decisionTrace.noc_fragile)));
+    updateElement('demoTraceStrongSoc', formatDemoBoolean(Boolean(decisionTrace.strong_soc)));
+    updateElement(
+        'demoTraceBlastConfidence',
+        `${Number(decisionTrace.blast_score || 0)}/${Number(decisionTrace.confidence_score || 0)}`,
+    );
+    updateElement(
+        'demoTraceClientImpact',
+        `${Number(decisionTrace.client_impact_score || 0)} / critical=${Number(decisionTrace.critical_client_count || 0)}`,
+    );
+    updateElement('demoBoundaryMode', execution.live_telemetry ? 'LIVE TELEMETRY' : 'DETERMINISTIC REPLAY');
+    updateElement('demoBoundarySummary', formatCapabilityBoundarySummary(capabilityBoundary));
+}
+
+function updateReviewReadiness(healthEntry, demoCapabilitiesEntry, demoOverlay) {
+    const healthOk = Boolean(healthEntry?.ok);
+    const demoCapabilitiesOk = Boolean(demoCapabilitiesEntry?.ok);
+    const health = healthEntry?.data || {};
+    const demoCapabilities = demoCapabilitiesEntry?.data || {};
+    const boundary = demoOverlay?.capability_boundary || demoCapabilities?.boundary || {};
+    const execution = demoOverlay?.execution || {
+        mode: demoCapabilities?.execution_mode || 'deterministic_replay',
+        ai_used: Boolean(demoCapabilities?.ai_used_in_core_path),
+        live_telemetry: Boolean(demoCapabilities?.live_telemetry_required),
+        local_only: Boolean(demoCapabilities?.local_only_in_core_path),
+    };
+    const implemented = Array.isArray(boundary.implemented_now) ? boundary.implemented_now : [];
+    const demoOnly = Array.isArray(boundary.demo_only) ? boundary.demo_only : [];
+    const experimental = Array.isArray(boundary.experimental) ? boundary.experimental : [];
+    const nonGoals = Array.isArray(boundary.non_goals) ? boundary.non_goals : [];
+    const staleFlags = health?.stale_flags || {};
+    const queue = health?.queue || {};
+    const llm = health?.llm || {};
+    const badge = document.getElementById('reviewStatusBadge');
+    const capabilityBtn = document.getElementById('reviewOpenCapabilitiesBtn');
+    const explanationBtn = document.getElementById('reviewOpenExplanationBtn');
+    const hasBoundaryData = Boolean(demoOverlay?.capability_boundary) || demoCapabilitiesOk;
+    const hasHealthData = healthOk;
+    const overlayActive = Boolean(demoOverlay);
+    const healthy = hasBoundaryData
+        && hasHealthData
+        && !staleFlags.snapshot
+        && !staleFlags.ai_metrics
+        && Number(queue.capacity ?? 0) > 0
+        && Number(queue.depth ?? 0) <= Number(queue.capacity ?? 0);
+    const status = (!hasBoundaryData || !hasHealthData) ? 'UNKNOWN' : (healthy ? 'BOUNDED' : 'CHECK');
+
+    updateElement('reviewExecutionMode', hasBoundaryData ? String(execution.mode || 'deterministic_replay') : 'unknown');
+    updateElement('reviewAiCore', hasBoundaryData ? (execution.ai_used ? 'used' : 'not-used') : 'unknown');
+    updateElement('reviewLocalOnly', hasBoundaryData ? (execution.local_only ? 'yes' : 'no') : 'unknown');
+    updateElement('reviewLiveTelemetry', hasBoundaryData ? (execution.live_telemetry ? 'required' : 'not-required') : 'unknown');
+    updateElement('reviewDemoState', overlayActive ? 'overlay-active' : 'overlay-inactive');
+    updateElement('reviewBoundaryCounts', hasBoundaryData ? `${implemented.length} / ${experimental.length}` : 'unknown');
+    renderList('reviewImplementedList', hasBoundaryData && implemented.length ? implemented : ['No data'], (item) => item);
+    renderList(
+        'reviewExperimentalList',
+        hasBoundaryData
+            ? [
+                ...experimental.map((item) => `experimental: ${item}`),
+                ...demoOnly.map((item) => `demo-only: ${item}`),
+            ]
+            : ['No data'],
+        (item) => item,
+    );
+    renderList(
+        'reviewNonGoalsList',
+        hasBoundaryData && nonGoals.length ? nonGoals.map((item) => `non-goal: ${item}`) : ['No data'],
+        (item) => item,
+    );
+
+    updateElement('reviewQueueDepth', hasHealthData ? `${queue.depth ?? 0} / ${queue.capacity ?? 0} (max ${queue.max_seen ?? 0})` : 'unknown');
+    updateElement('reviewDeferredCount', hasHealthData ? String(queue.deferred_count ?? 0) : 'unknown');
+    updateElement('reviewFallbackRate', hasHealthData ? String(llm.fallback_rate ?? 0) : 'unknown');
+    updateElement('reviewPolicyMode', hasHealthData ? String(health?.policy_mode || '-') : 'unknown');
+    updateElement('reviewLatency', hasHealthData ? `${llm.latency_ms_last ?? 0} ms / ema ${llm.latency_ms_ema ?? 0}` : 'unknown');
+    updateElement(
+        'reviewStaleFlags',
+        hasHealthData
+            ? `snapshot=${staleFlags.snapshot ? 'yes' : 'no'} ai=${staleFlags.ai_metrics ? 'yes' : 'no'} events=${staleFlags.ai_activity ? 'yes' : 'no'}`
+            : 'unknown',
+    );
+    updateElement('reviewStatusBadge', status);
+    if (badge) {
+        badge.className = `assistant-status ${
+            status === 'BOUNDED' ? 'status-safe' : (status === 'CHECK' ? 'status-caution' : 'status-neutral')
+        }`;
+    }
+    if (capabilityBtn) capabilityBtn.disabled = !hasBoundaryData;
+    if (explanationBtn) explanationBtn.disabled = !overlayActive;
+    updateElement('reviewSummary', 'Deterministic edge pipeline, bounded controls, local-first operation, auditable outputs.');
+    updateElement(
+        'reviewSummaryDetail',
+        !hasBoundaryData || !hasHealthData
+            ? 'Reviewer-proof summary is incomplete because capability or health data is unavailable.'
+            : `Execution=${execution.mode || 'deterministic_replay'} | local_only=${execution.local_only ? 'yes' : 'no'} | demo_state=${overlayActive ? 'overlay-active' : 'overlay-inactive'} | bounded=${healthy ? 'yes' : 'check'}`,
+    );
 }
 
 function renderList(id, items, formatter) {

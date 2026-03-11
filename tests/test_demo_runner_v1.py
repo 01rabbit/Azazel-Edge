@@ -22,8 +22,14 @@ class DemoRunnerV1Tests(unittest.TestCase):
         result = subprocess.run([str(RUNNER), 'run', 'mixed_correlation_demo'], capture_output=True, text=True, cwd=str(ROOT), check=True)
         payload = json.loads(result.stdout)
         self.assertTrue(payload['ok'])
-        self.assertEqual(payload['result']['scenario_id'], 'mixed_correlation_demo')
-        self.assertIn('arbiter', payload['result'])
+        scenario = payload['result']
+        self.assertEqual(scenario['scenario_id'], 'mixed_correlation_demo')
+        self.assertIn('arbiter', scenario)
+        self.assertEqual(scenario['execution']['mode'], 'deterministic_replay')
+        self.assertFalse(scenario['execution']['ai_used'])
+        self.assertIn('implemented_now', scenario['capability_boundary'])
+        self.assertTrue(scenario['arbiter']['action_profile']['audited'])
+        self.assertIn('selected_action', scenario['arbiter']['decision_trace'])
 
 
 if __name__ == '__main__':

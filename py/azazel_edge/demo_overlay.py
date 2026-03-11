@@ -85,6 +85,8 @@ def build_demo_overlay(result: Dict[str, Any]) -> Dict[str, Any]:
     arbiter = result.get("arbiter") if isinstance(result.get("arbiter"), dict) else {}
     noc = result.get("noc") if isinstance(result.get("noc"), dict) else {}
     soc = result.get("soc") if isinstance(result.get("soc"), dict) else {}
+    execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
+    capability_boundary = result.get("capability_boundary") if isinstance(result.get("capability_boundary"), dict) else {}
     return {
         "active": True,
         "ts": time.time(),
@@ -92,9 +94,13 @@ def build_demo_overlay(result: Dict[str, Any]) -> Dict[str, Any]:
         "scenario_id": str(result.get("scenario_id") or "demo"),
         "description": str(result.get("description") or ""),
         "event_count": int(result.get("event_count") or 0),
+        "execution": execution,
+        "capability_boundary": capability_boundary,
         "action": str(arbiter.get("action") or "observe"),
         "reason": str(arbiter.get("reason") or "demo_overlay"),
         "control_mode": str(arbiter.get("control_mode") or "none"),
+        "action_profile": arbiter.get("action_profile") if isinstance(arbiter.get("action_profile"), dict) else {},
+        "decision_trace": arbiter.get("decision_trace") if isinstance(arbiter.get("decision_trace"), dict) else {},
         "chosen_evidence_ids": list(explanation.get("evidence_ids") or arbiter.get("chosen_evidence_ids") or []),
         "rejected_alternatives": list(explanation.get("why_not_others") or arbiter.get("rejected_alternatives") or []),
         "next_checks": list(explanation.get("next_checks") or []),

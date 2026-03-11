@@ -38,6 +38,27 @@ class DemoScenarioPack:
 
 
 class DemoScenarioRunner:
+    CAPABILITY_BOUNDARY = {
+        'implemented_now': [
+            'deterministic_evidence_to_evaluation_pipeline',
+            'deterministic_action_arbiter',
+            'decision_explanation',
+            'dashboard_demo_replay',
+        ],
+        'demo_only': [
+            'synthetic_scenario_replay_overlay',
+        ],
+        'experimental': [
+            'local_ai_operator_assist',
+            'ti_sigma_yara_helpers',
+        ],
+        'non_goals': [
+            'enterprise_siem_replacement',
+            'fully_autonomous_response',
+            'high_throughput_datacenter_edge',
+        ],
+    }
+
     def __init__(self):
         self.pack = DemoScenarioPack()
         self.noc = NocEvaluator()
@@ -68,8 +89,20 @@ class DemoScenarioRunner:
             'scenario_id': scenario_id,
             'description': scenario.get('description', ''),
             'event_count': len(events),
+            'execution': {
+                'mode': 'deterministic_replay',
+                'ai_used': False,
+                'live_telemetry': False,
+                'local_only': True,
+                'source': 'demo_scenario_pack',
+            },
+            'capability_boundary': self.capability_boundary(),
             'noc': noc_eval,
             'soc': soc_eval,
             'arbiter': arbiter,
             'explanation': explanation,
         }
+
+    @classmethod
+    def capability_boundary(cls) -> Dict[str, List[str]]:
+        return {key: list(value) for key, value in cls.CAPABILITY_BOUNDARY.items()}

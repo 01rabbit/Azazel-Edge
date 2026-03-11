@@ -517,13 +517,39 @@
                             <button type="button" id="demoClearOverlayBtn" class="shortcut-btn">{{ tr('dashboard.clear_demo', 'Clear Demo Overlay') }}</button>
                         </div>
                     </form>
+                    <div class="demo-boundary-banner" id="demoBoundaryBanner">
+                        <strong id="demoBoundaryMode">DETERMINISTIC REPLAY</strong>
+                        <span id="demoBoundarySummary">Synthetic replay path. AI is not used in the core decision loop.</span>
+                    </div>
                     <div class="assistant-block">
                         <div class="assistant-label">Scenario Result</div>
                         <div class="fact-list compact-list">
+                            <div class="fact-item"><span>Scenario</span><strong id="demoScenarioId">-</strong></div>
+                            <div class="fact-item"><span>Events</span><strong id="demoEventCount">-</strong></div>
+                            <div class="fact-item"><span>Execution</span><strong id="demoExecutionMode">-</strong></div>
+                            <div class="fact-item"><span>AI Core</span><strong id="demoAiCore">-</strong></div>
                             <div class="fact-item"><span>NOC</span><strong id="demoNocStatus">-</strong></div>
                             <div class="fact-item"><span>SOC</span><strong id="demoSocStatus">-</strong></div>
                             <div class="fact-item"><span>Action</span><strong id="demoAction">-</strong></div>
                             <div class="fact-item"><span>Reason</span><strong id="demoReason">-</strong></div>
+                        </div>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Action Safety</div>
+                        <div class="fact-list compact-list">
+                            <div class="fact-item"><span>Reversible</span><strong id="demoSafetyReversible">-</strong></div>
+                            <div class="fact-item"><span>Approval</span><strong id="demoSafetyApproval">-</strong></div>
+                            <div class="fact-item"><span>Audited</span><strong id="demoSafetyAudited">-</strong></div>
+                            <div class="fact-item"><span>Effect</span><strong id="demoSafetyEffect">-</strong></div>
+                        </div>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Arbiter Trace</div>
+                        <div class="fact-list compact-list">
+                            <div class="fact-item"><span>NOC Fragile</span><strong id="demoTraceNocFragile">-</strong></div>
+                            <div class="fact-item"><span>Strong SOC</span><strong id="demoTraceStrongSoc">-</strong></div>
+                            <div class="fact-item"><span>Blast / Confidence</span><strong id="demoTraceBlastConfidence">-</strong></div>
+                            <div class="fact-item"><span>Client Impact</span><strong id="demoTraceClientImpact">-</strong></div>
                         </div>
                     </div>
                     <div class="assistant-block">
@@ -552,6 +578,62 @@
                         <summary>Raw JSON</summary>
                         <pre class="assistant-response demo-raw-response" id="demoResponse">{{ tr('dashboard.no_demo_response', 'Run a scenario to preview the deterministic pipeline.') }}</pre>
                     </details>
+                </section>
+
+                <section class="panel assistant-panel review-panel" id="reviewPanel">
+                    <div class="panel-heading assistant-heading">
+                        <div>
+                            <div class="panel-kicker">Review Readiness</div>
+                            <h2>Capability Boundary and Resource Guard</h2>
+                        </div>
+                        <span class="assistant-status status-neutral" id="reviewStatusBadge">READY</span>
+                    </div>
+                    <p class="assistant-intro">Compact proof that the deterministic path is bounded, local-first, and running within visible resource limits.</p>
+                    <div class="demo-boundary-banner">
+                        <strong id="reviewSummary">Deterministic edge pipeline, bounded controls, local-first operation, auditable outputs.</strong>
+                        <span id="reviewSummaryDetail">Waiting for capability and health data.</span>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Capability Boundary</div>
+                        <div class="fact-list compact-list">
+                            <div class="fact-item"><span>Execution</span><strong id="reviewExecutionMode">-</strong></div>
+                            <div class="fact-item"><span>AI Core</span><strong id="reviewAiCore">-</strong></div>
+                            <div class="fact-item"><span>Local Only</span><strong id="reviewLocalOnly">-</strong></div>
+                            <div class="fact-item"><span>Live Telemetry</span><strong id="reviewLiveTelemetry">-</strong></div>
+                            <div class="fact-item"><span>Demo State</span><strong id="reviewDemoState">-</strong></div>
+                            <div class="fact-item"><span>Implemented / Experimental</span><strong id="reviewBoundaryCounts">-</strong></div>
+                        </div>
+                        <div class="assistant-shortcuts">
+                            <button type="button" class="shortcut-btn" id="reviewOpenCapabilitiesBtn">Open Capability JSON</button>
+                            <button type="button" class="shortcut-btn" id="reviewOpenExplanationBtn">Open Latest Explanation</button>
+                        </div>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Implemented Now</div>
+                        <ul class="action-list" id="reviewImplementedList">
+                            <li>No data</li>
+                        </ul>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Experimental / Non-goals</div>
+                        <ul class="action-list" id="reviewExperimentalList">
+                            <li>No data</li>
+                        </ul>
+                        <ul class="action-list" id="reviewNonGoalsList">
+                            <li>No data</li>
+                        </ul>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Resource Guard</div>
+                        <div class="fact-list compact-list">
+                            <div class="fact-item"><span>Queue</span><strong id="reviewQueueDepth">-</strong></div>
+                            <div class="fact-item"><span>Deferred</span><strong id="reviewDeferredCount">-</strong></div>
+                            <div class="fact-item"><span>Fallback</span><strong id="reviewFallbackRate">-</strong></div>
+                            <div class="fact-item"><span>Policy</span><strong id="reviewPolicyMode">-</strong></div>
+                            <div class="fact-item"><span>Latency</span><strong id="reviewLatency">-</strong></div>
+                            <div class="fact-item"><span>Stale</span><strong id="reviewStaleFlags">-</strong></div>
+                        </div>
+                    </div>
                 </section>
             </aside>
         </div>
