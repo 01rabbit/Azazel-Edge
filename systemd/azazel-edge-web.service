@@ -12,6 +12,7 @@ Environment="AZAZEL_WEB_THREADS=4"
 Environment="AZAZEL_WEB_GRACEFUL_TIMEOUT=5"
 Environment="PYTHONPATH=/opt/azazel-edge:/opt/azazel-edge/py"
 EnvironmentFile=-/etc/default/azazel-edge-web
+ExecStartPre=/bin/rm -f /run/azazel-edge/demo_overlay.json
 ExecStart=/bin/bash -lc 'exec /opt/azazel-edge/venv/bin/gunicorn --workers "${AZAZEL_WEB_WORKERS}" --threads "${AZAZEL_WEB_THREADS}" --graceful-timeout "${AZAZEL_WEB_GRACEFUL_TIMEOUT}" --bind "${AZAZEL_WEB_HOST}:${AZAZEL_WEB_PORT}" --chdir /opt/azazel-edge --pythonpath /opt/azazel-edge:/opt/azazel-edge/py azazel_edge_web.app:app'
 Restart=on-failure
 RestartSec=3

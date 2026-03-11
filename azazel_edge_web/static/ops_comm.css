@@ -312,10 +312,84 @@
     gap: 18px;
 }
 
+.ops-triage-card {
+    grid-column: 1 / -1;
+}
+
 .ops-runbooks-card,
 .ops-demo-card,
 .ops-messages-card {
     min-width: 0;
+}
+
+.ops-triage-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-top: 12px;
+}
+
+.ops-triage-actions .ops-input {
+    flex: 1 1 auto;
+}
+
+.ops-triage-intents,
+.ops-triage-choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.ops-triage-candidate-list,
+.ops-triage-runbooks {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.ops-triage-candidate,
+.ops-triage-runbook-item,
+.ops-triage-session {
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 14px;
+    padding: 14px;
+    background: rgba(255,255,255,0.03);
+}
+
+.ops-triage-candidate {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.ops-triage-candidate-copy {
+    min-width: 0;
+}
+
+.ops-triage-candidate-copy strong {
+    display: block;
+    color: var(--text-main);
+}
+
+.ops-triage-candidate-meta,
+.ops-triage-runbook-detail {
+    color: var(--text-dim);
+    margin-top: 4px;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.ops-triage-session {
+    margin-top: 14px;
+}
+
+.ops-triage-runbook-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
 }
 
 .ops-messages-card {
@@ -440,5 +514,11 @@
     .ops-logo {
         width: 60px;
         height: 60px;
+    }
+
+    .ops-triage-actions,
+    .ops-triage-candidate {
+        flex-direction: column;
+        align-items: stretch;
     }
 }

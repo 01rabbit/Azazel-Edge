@@ -279,7 +279,7 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("ai_activity", payload["idle_flags"])
 
     def test_dashboard_index_renders_new_sections(self) -> None:
-        response = self.client.get("/")
+        response = self.client.get("/?lang=en")
         self.assertEqual(response.status_code, 200)
         text = response.get_data(as_text=True)
         self.assertIn("Command Dashboard", text)
@@ -345,19 +345,21 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertTrue(payload["rationale"])
 
     def test_mattermost_response_includes_rationale_and_continue_hint(self) -> None:
-        text = webapp._format_mattermost_ai_response(
-            {
-                "ok": True,
-                "status": "routed",
-                "answer": "M.I.O.: DNS と gateway を確認します。",
-                "user_message": "通信経路を確認しています。",
-                "runbook_id": "rb.noc.dns.failure.check",
-                "runbook_review": {"final_status": "approved"},
-                "rationale": ["Symptom router handled this request without waiting for LLM."],
-                "handoff": {"ops_comm": "/ops-comm", "mattermost": "http://example.invalid/mm"},
-            },
-            None,
-        )
+        with webapp.app.test_request_context("/?lang=en"):
+            text = webapp._format_mattermost_ai_response(
+                {
+                    "ok": True,
+                    "status": "routed",
+                    "answer": "M.I.O.: DNS と gateway を確認します。",
+                    "user_message": "通信経路を確認しています。",
+                    "runbook_id": "rb.noc.dns.failure.check",
+                    "runbook_review": {"final_status": "approved"},
+                    "rationale": ["Symptom router handled this request without waiting for LLM."],
+                    "handoff": {"ops_comm": "/ops-comm", "mattermost": "http://example.invalid/mm"},
+                },
+                None,
+                lang="en",
+            )
         self.assertIn("Rationale:", text)
         self.assertIn("Continue:", text)
 

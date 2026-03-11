@@ -1,31 +1,67 @@
 const AUTH_TOKEN = localStorage.getItem('azazel_token') || 'azazel-default-token-change-me';
+const LANG_KEY = 'azazel_lang';
+const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
+const I18N = window.AZAZEL_I18N || {};
 const STATUS_INTERVAL_MS = 8000;
 let lastQuestion = '';
 let currentAudience = 'operator';
 let demoScenarios = [];
+let triageIntentItems = [];
+let triageSession = null;
+
+function tr(key, fallback, vars = null) {
+    const base = I18N[key] || fallback || key;
+    if (!vars || typeof base !== 'string') return base;
+    return base.replace(/\{([a-zA-Z0-9_]+)\}/g, (_m, name) => {
+        return Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : `{${name}}`;
+    });
+}
+
+function switchLanguage(lang) {
+    const next = lang === 'en' ? 'en' : 'ja';
+    localStorage.setItem(LANG_KEY, next);
+    const url = new URL(window.location.href);
+    url.searchParams.set('lang', next);
+    window.location.assign(url.toString());
+}
+
+function syncLanguageUi() {
+    const jaBtn = document.getElementById('langJaBtn');
+    const enBtn = document.getElementById('langEnBtn');
+    if (jaBtn) {
+        jaBtn.classList.toggle('active', CURRENT_LANG === 'ja');
+        jaBtn.classList.toggle('lang-active-ja', CURRENT_LANG === 'ja');
+        jaBtn.classList.remove('lang-active-en');
+    }
+    if (enBtn) {
+        enBtn.classList.toggle('active', CURRENT_LANG === 'en');
+        enBtn.classList.toggle('lang-active-en', CURRENT_LANG === 'en');
+        enBtn.classList.remove('lang-active-ja');
+    }
+}
 const SHORTCUTS = {
     operator: [
-        { label: 'Gateway / Uplink', question: 'gateway と uplink を確認したい' },
-        { label: 'DNS Failure', question: 'DNS が引けないとき何を確認するか' },
-        { label: 'Service Status', question: 'service の異常時に何を確認するか' },
-        { label: 'EPD Diff', question: 'EPD 表示差異を確認したい' },
-        { label: 'AI Logs', question: 'AI ログを確認したい' },
-        { label: 'Wi-Fi Intake', question: 'Wi-Fi に繋がらない利用者へどう案内するか' },
+        { label: 'Gateway / Uplink', question: CURRENT_LANG === 'ja' ? 'gateway と uplink を確認したい' : 'I want to check the gateway and uplink' },
+        { label: 'DNS Failure', question: CURRENT_LANG === 'ja' ? 'DNS が引けないとき何を確認するか' : 'What should I verify when DNS lookup fails?' },
+        { label: 'Service Status', question: CURRENT_LANG === 'ja' ? 'service の異常時に何を確認するか' : 'What should I verify when a service appears unhealthy?' },
+        { label: 'EPD Diff', question: CURRENT_LANG === 'ja' ? 'EPD 表示差異を確認したい' : 'I want to inspect the EPD display difference' },
+        { label: 'AI Logs', question: CURRENT_LANG === 'ja' ? 'AI ログを確認したい' : 'I want to review recent AI logs' },
+        { label: 'Wi-Fi Intake', question: CURRENT_LANG === 'ja' ? 'Wi-Fi に繋がらない利用者へどう案内するか' : 'How should I guide a user who cannot connect to Wi-Fi?' },
     ],
     beginner: [
-        { label: 'Wi-Fi Trouble', question: 'Wi-Fi に繋がらない利用者へどう案内するか' },
-        { label: 'Reconnect Guide', question: '再接続できない利用者へどう案内するか' },
-        { label: 'Device Onboarding', question: '初回接続の利用者へどう案内するか' },
-        { label: 'DNS Failure', question: 'DNS が引けないとき何を確認するか' },
-        { label: 'Current Status', question: '利用者へ現在の状況をどう説明するか' },
+        { label: 'Wi-Fi Trouble', question: CURRENT_LANG === 'ja' ? 'Wi-Fi に繋がらない利用者へどう案内するか' : 'How should I guide a user who cannot connect to Wi-Fi?' },
+        { label: 'Reconnect Guide', question: CURRENT_LANG === 'ja' ? '再接続できない利用者へどう案内するか' : 'How should I guide a user who cannot reconnect?' },
+        { label: 'Device Onboarding', question: CURRENT_LANG === 'ja' ? '初回接続の利用者へどう案内するか' : 'How should I guide a first-time onboarding user?' },
+        { label: 'DNS Failure', question: CURRENT_LANG === 'ja' ? 'DNS が引けないとき何を確認するか' : 'What should I verify when DNS lookup fails?' },
+        { label: 'Current Status', question: CURRENT_LANG === 'ja' ? '利用者へ現在の状況をどう説明するか' : 'How should I explain the current situation to the user?' },
     ],
 };
 
 function audienceHintText(audience) {
     if (audience === 'beginner') {
-        return 'Temporary mode: simpler wording, one action at a time, and user-facing guidance first.';
+        return tr('ops.temporary_hint', 'Temporary mode: simpler wording, one action at a time, and user-facing guidance first.');
     }
-    return 'Professional mode: concise operator guidance and runbook-first responses.';
+    return tr('ops.professional_hint', 'Professional mode: concise operator guidance and runbook-first responses.');
 }
 
 function syncAudienceUi() {
@@ -36,6 +72,10 @@ function syncAudienceUi() {
     if (beginnerBtn) beginnerBtn.className = currentAudience === 'beginner' ? 'btn btn-primary active' : 'btn btn-secondary';
     if (hint) hint.textContent = audienceHintText(currentAudience);
     renderShortcuts();
+}
+
+function triageAudienceMode() {
+    return currentAudience === 'beginner' ? 'temporary' : 'professional';
 }
 
 function renderShortcuts() {
@@ -56,6 +96,7 @@ function authHeaders() {
     return {
         'Content-Type': 'application/json',
         'X-Auth-Token': AUTH_TOKEN,
+        'X-AZAZEL-LANG': CURRENT_LANG,
     };
 }
 
@@ -95,11 +136,11 @@ function formatReview(review) {
 
 function resetAiPanels() {
     setText('aiResult', 'M.I.O.: -');
-    setText('userGuidanceResult', 'User Guidance: -');
-    setText('runbookResult', 'Runbook: -');
-    setText('runbookReviewResult', 'Review: -');
-    setText('rationaleResult', 'Rationale: -');
-    setText('handoffResult', 'Handoff: -');
+    setText('userGuidanceResult', `${tr('ops.user_guidance', 'User Guidance')}: -`);
+    setText('runbookResult', `${tr('ops.runbook', 'Runbook')}: -`);
+    setText('runbookReviewResult', `${tr('ops.review', 'Review')}: -`);
+    setText('rationaleResult', `${tr('ops.rationale', 'Rationale')}: -`);
+    setText('handoffResult', `${tr('ops.handoff', 'Handoff')}: -`);
 }
 
 function formatDemoSummary(result) {
@@ -107,7 +148,7 @@ function formatDemoSummary(result) {
     const soc = result?.soc?.summary?.status || '-';
     const action = result?.arbiter?.action || '-';
     const reason = result?.arbiter?.reason || '-';
-    return `Scenario=${result?.scenario_id || '-'} | NOC=${noc} | SOC=${soc} | action=${action} | reason=${reason}`;
+    return `${tr('ops.scenario', 'Scenario')}=${result?.scenario_id || '-'} | NOC=${noc} | SOC=${soc} | action=${action} | reason=${reason}`;
 }
 
 function buildDemoQuestion(result) {
@@ -116,31 +157,33 @@ function buildDemoQuestion(result) {
     const soc = result?.soc?.summary?.status || '-';
     const action = result?.arbiter?.action || '-';
     const reason = result?.arbiter?.reason || '-';
-    return `デモ ${scenarioId} で NOC=${noc} SOC=${soc} action=${action} reason=${reason} となった理由と次の確認項目を説明せよ`;
+    return CURRENT_LANG === 'ja'
+        ? `デモ ${scenarioId} で NOC=${noc} SOC=${soc} action=${action} reason=${reason} となった理由と次の確認項目を説明せよ`
+        : `Explain why demo ${scenarioId} resulted in NOC=${noc} SOC=${soc} action=${action} reason=${reason}, and list the next checks.`;
 }
 
 function renderAiPanels(data) {
     setText('aiResult', `M.I.O.: ${data.answer || '-'}${data.runbook_id ? ` [runbook=${data.runbook_id}]` : ''}`);
-    setText('userGuidanceResult', data.user_message ? `User Guidance: ${data.user_message}` : 'User Guidance: -');
-    setText('runbookResult', data.runbook_id ? `Runbook: ${data.runbook_id}` : 'Runbook: no suggestion');
+    setText('userGuidanceResult', data.user_message ? `${tr('ops.user_guidance', 'User Guidance')}: ${data.user_message}` : `${tr('ops.user_guidance', 'User Guidance')}: -`);
+    setText('runbookResult', data.runbook_id ? `${tr('ops.runbook', 'Runbook')}: ${data.runbook_id}` : `${tr('ops.runbook', 'Runbook')}: ${tr('api.no_suggestion', 'no suggestion')}`);
     const review = data.runbook_review || null;
     if (review && review.final_status) {
         const changes = Array.isArray(review.required_changes) && review.required_changes.length
             ? ` / changes=${review.required_changes.join(' | ')}`
             : '';
-        setText('runbookReviewResult', `Review: ${review.final_status}${changes}`);
+        setText('runbookReviewResult', `${tr('ops.review', 'Review')}: ${review.final_status}${changes}`);
     } else {
-        setText('runbookReviewResult', 'Review: -');
+        setText('runbookReviewResult', `${tr('ops.review', 'Review')}: -`);
     }
     const rationale = Array.isArray(data.rationale) && data.rationale.length
         ? data.rationale.join(' | ')
         : '-';
-    setText('rationaleResult', `Rationale: ${rationale}`);
+    setText('rationaleResult', `${tr('ops.rationale', 'Rationale')}: ${rationale}`);
     const handoff = data.handoff && typeof data.handoff === 'object' ? data.handoff : {};
     const parts = [];
     if (handoff.ops_comm) parts.push(`Ops Comm ${handoff.ops_comm}`);
     if (handoff.mattermost) parts.push(`Mattermost ${handoff.mattermost}`);
-    setText('handoffResult', `Handoff: ${parts.length ? parts.join(' / ') : '-'}`);
+    setText('handoffResult', `${tr('ops.handoff', 'Handoff')}: ${parts.length ? parts.join(' / ') : '-'}`);
 }
 
 async function loadStatus() {
@@ -148,22 +191,27 @@ async function loadStatus() {
         const res = await fetch('/api/mattermost/status', { headers: authHeaders() });
         const data = await res.json();
         if (!data.ok) {
-            setBadge('mmReachability', 'ERROR', false);
-            setText('mmMode', data.error || 'failed');
+            setBadge('mmReachability', tr('ops.error', 'ERROR'), false);
+            setText('mmMode', data.error || tr('ops.failed', 'Failed: {error}', { error: tr('ops.unknown_error', 'unknown error') }));
             return;
         }
-        setBadge('mmReachability', data.reachable ? 'REACHABLE' : 'UNREACHABLE', !!data.reachable);
+        setBadge('mmReachability', data.reachable ? tr('ops.reachable', 'REACHABLE') : tr('ops.unreachable', 'UNREACHABLE'), !!data.reachable);
         setText('mmMode', data.mode || '-');
         setText('mmBaseUrl', data.base_url || '-');
         setText('mmChannelId', data.channel_id || '-');
         const triggers = Array.isArray(data.command_triggers) && data.command_triggers.length
             ? ` triggers=/${data.command_triggers.join(', /')}`
             : '';
-        setText('mmCommandStatus', data.command_enabled ? `enabled (${data.command_endpoint || '/api/mattermost/command'})${triggers}` : 'disabled');
+        setText(
+            'mmCommandStatus',
+            data.command_enabled
+                ? tr('ops.command_enabled', 'enabled ({endpoint}){triggers}', { endpoint: data.command_endpoint || '/api/mattermost/command', triggers })
+                : tr('ops.command_disabled', 'disabled')
+        );
         const link = document.getElementById('mattermostLink');
         if (link) link.href = data.open_url || data.base_url || '#';
     } catch (e) {
-        setBadge('mmReachability', 'ERROR', false);
+        setBadge('mmReachability', tr('ops.error', 'ERROR'), false);
         setText('mmMode', String(e));
     }
 }
@@ -209,7 +257,7 @@ function renderRunbookCandidates(items) {
         const reviewStatus = item.review && item.review.final_status ? item.review.final_status : 'unknown';
         const domId = runbookDomId(item.runbook_id || '');
         const executeButton = (item.effect === 'read_only' || item.effect === 'controlled_exec')
-            ? `<button class="btn btn-primary" data-runbook-action="execute" data-runbook-id="${escapeHtml(item.runbook_id || '')}">Execute</button>`
+            ? `<button class="btn btn-primary" data-runbook-action="execute" data-runbook-id="${escapeHtml(item.runbook_id || '')}">${tr('ops.execute', 'Execute')}</button>`
             : '';
         const schema = item.args_schema && typeof item.args_schema === 'object' ? item.args_schema : { properties: {}, required: [] };
         const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
@@ -268,13 +316,13 @@ function renderRunbookCandidates(items) {
                 <span>${escapeHtml(item.domain || '-')}</span>
                 <span>${escapeHtml(item.effect || '-')}</span>
                 <span>score=${escapeHtml(item.score || '-')}</span>
-                <span>approval=${item.requires_approval ? 'required' : 'optional'}</span>
+                <span>${item.requires_approval ? tr('ops.approval_required', 'approval=required') : tr('ops.approval_optional', 'approval=optional')}</span>
             </div>
-            <div class="ops-runbook-review">reasons=${escapeHtml(reasons)}\nreview=${escapeHtml(reviewText)}</div>
+            <div class="ops-runbook-review">${tr('ops.reasons_label', 'reasons')}=${escapeHtml(reasons)}\n${tr('ops.review_label', 'review')}=${escapeHtml(reviewText)}</div>
             ${argFields ? `<div class="ops-runbook-args">${argFields}</div>` : ''}
             <div class="ops-runbook-actions">
-                <button class="btn btn-primary" data-runbook-action="preview" data-runbook-id="${escapeHtml(item.runbook_id || '')}">Preview</button>
-                <button class="btn btn-success" data-runbook-action="approve" data-runbook-id="${escapeHtml(item.runbook_id || '')}">Approve</button>
+                <button class="btn btn-primary" data-runbook-action="preview" data-runbook-id="${escapeHtml(item.runbook_id || '')}">${tr('ops.preview', 'Preview')}</button>
+                <button class="btn btn-success" data-runbook-action="approve" data-runbook-id="${escapeHtml(item.runbook_id || '')}">${tr('ops.approve', 'Approve')}</button>
                 ${executeButton}
             </div>
             <div class="ops-runbook-output" id="runbookOutput-${domId}">-</div>
@@ -289,12 +337,16 @@ function renderCapabilities(payload) {
     if (!summary || !list) return;
     list.innerHTML = '';
     if (!payload || !payload.ok) {
-        summary.textContent = 'Failed to load capabilities';
+        summary.textContent = tr('ops.capabilities_failed', 'Failed to load capabilities');
         return;
     }
     const routed = Array.isArray(payload.manual_router_categories) ? payload.manual_router_categories.join(', ') : '-';
     const triggers = Array.isArray(payload.mattermost_triggers) ? payload.mattermost_triggers.map((x) => `/${x}`).join(', ') : '-';
-    summary.textContent = `Audience=${currentAudience} / Routed categories=${routed} / Mattermost=${triggers}`;
+    summary.textContent = tr('ops.capabilities_summary', 'Audience={audience} / Routed categories={routed} / Mattermost={triggers}', {
+        audience: currentAudience,
+        routed,
+        triggers,
+    });
     const items = Array.isArray(payload.capabilities) ? payload.capabilities : [];
     for (const item of items) {
         const node = document.createElement('div');
@@ -304,6 +356,213 @@ function renderCapabilities(payload) {
             <div class="ops-capability-detail">${escapeHtml(item.detail || '-')}</div>
         `;
         list.appendChild(node);
+    }
+}
+
+function resetTriageUi() {
+    triageSession = null;
+    setText('triageSessionMeta', tr('ops.triage_no_session', 'No active triage session'));
+    setText('triagePreface', tr('ops.triage_preface_idle', 'M.I.O. will add a short preface before the next deterministic question.'));
+    setText('triageQuestion', '-');
+    setText('triageDiagnostic', '-');
+    setText('triageMioSummary', tr('ops.triage_summary_idle', 'No triage summary yet.'));
+    setText('triageHandoff', tr('ops.triage_handoff_idle', 'No handoff is required.'));
+    const choices = document.getElementById('triageChoices');
+    if (choices) choices.innerHTML = '';
+    const runbooks = document.getElementById('triageRunbooks');
+    if (runbooks) runbooks.innerHTML = '';
+    const input = document.getElementById('triageTextAnswer');
+    if (input) input.value = '';
+    const wrap = document.getElementById('triageTextAnswerWrap');
+    if (wrap) wrap.style.display = 'none';
+}
+
+function renderTriageIntents(items) {
+    const root = document.getElementById('triageIntentButtons');
+    if (!root) return;
+    root.innerHTML = '';
+    triageIntentItems = Array.isArray(items) ? items : [];
+    for (const item of triageIntentItems) {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-secondary';
+        btn.dataset.triageIntent = item.intent_id;
+        btn.textContent = item.label || item.intent_id;
+        root.appendChild(btn);
+    }
+}
+
+function renderTriageCandidates(items) {
+    const root = document.getElementById('triageCandidates');
+    const empty = document.getElementById('triageCandidatesEmpty');
+    if (!root || !empty) return;
+    root.innerHTML = '';
+    const candidates = Array.isArray(items) ? items : [];
+    if (!candidates.length) {
+        empty.style.display = 'block';
+        empty.textContent = tr('ops.triage_no_candidates', 'No triage candidates yet');
+        return;
+    }
+    empty.style.display = 'none';
+    for (const item of candidates) {
+        const node = document.createElement('div');
+        node.className = 'ops-triage-candidate';
+        node.innerHTML = `
+            <div class="ops-triage-candidate-copy">
+                <strong>${escapeHtml(item.label || item.intent_id || '-')}</strong>
+                <div class="ops-triage-candidate-meta">${tr('ops.triage_confidence', 'confidence')}=${Math.round((item.confidence || 0) * 100)}% / ${escapeHtml(item.source || 'classifier')}</div>
+            </div>
+            <button class="btn btn-secondary" data-triage-intent="${escapeHtml(item.intent_id || '')}">${tr('ops.triage_start', 'Start')}</button>
+        `;
+        root.appendChild(node);
+    }
+}
+
+function renderTriageRunbooks(items) {
+    const root = document.getElementById('triageRunbooks');
+    if (!root) return;
+    root.innerHTML = '';
+    const runbooks = Array.isArray(items) ? items : [];
+    for (const item of runbooks) {
+        const node = document.createElement('div');
+        node.className = 'ops-triage-runbook-item';
+        const review = item.review && item.review.final_status ? item.review.final_status : 'unknown';
+        node.innerHTML = `
+            <div class="ops-triage-runbook-head">
+                <strong>${escapeHtml(item.title || item.runbook_id || '-')}</strong>
+                <span class="badge ${review === 'approved' ? 'active' : 'inactive'}">${escapeHtml(review)}</span>
+            </div>
+            <div class="ops-triage-runbook-detail">${escapeHtml(item.runbook_id || '-')} | ${escapeHtml(item.effect || '-')}</div>
+            <div class="ops-triage-runbook-detail">${escapeHtml(item.user_message_template || '-')}</div>
+        `;
+        root.appendChild(node);
+    }
+}
+
+function renderTriageProgress(payload) {
+    triageSession = payload && payload.session ? payload.session : null;
+    const session = triageSession || {};
+    const nextStep = payload && payload.next_step ? payload.next_step : null;
+    const diagnostic = payload && payload.diagnostic_state ? payload.diagnostic_state : null;
+    const mio = payload && payload.mio ? payload.mio : {};
+    setText(
+        'triageSessionMeta',
+        triageSession
+            ? `${payload.flow_label || payload.flow_id || triageSession.selected_intent || '-'} | state=${triageSession.current_state || triageSession.diagnostic_state || '-'}`
+            : tr('ops.triage_no_session', 'No active triage session')
+    );
+    setText('triagePreface', mio.preface || tr('ops.triage_preface_idle', 'M.I.O. will add a short preface before the next deterministic question.'));
+    setText('triageMioSummary', mio.summary || tr('ops.triage_summary_idle', 'No triage summary yet.'));
+    setText('triageHandoff', mio.handoff || tr('ops.triage_handoff_idle', 'No handoff is required.'));
+    const choicesRoot = document.getElementById('triageChoices');
+    if (choicesRoot) choicesRoot.innerHTML = '';
+    const textWrap = document.getElementById('triageTextAnswerWrap');
+    if (textWrap) textWrap.style.display = 'none';
+    if (nextStep) {
+        setText('triageQuestion', nextStep.question || '-');
+        setText('triageDiagnostic', tr('ops.triage_in_progress', 'Triage in progress'));
+        if (nextStep.answer_type === 'text') {
+            if (textWrap) textWrap.style.display = 'flex';
+            const textInput = document.getElementById('triageTextAnswer');
+            if (textInput) textInput.focus();
+        } else if (choicesRoot && Array.isArray(nextStep.choices)) {
+            for (const choice of nextStep.choices) {
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-primary';
+                btn.dataset.triageAnswer = String(choice.value || '');
+                const labels = choice.label_i18n || {};
+                btn.textContent = labels[CURRENT_LANG] || labels.en || choice.value || '-';
+                choicesRoot.appendChild(btn);
+            }
+        }
+    } else {
+        setText('triageQuestion', '-');
+    }
+    if (diagnostic) {
+        const summary = diagnostic.summary_i18n || {};
+        const localizedSummary = summary[CURRENT_LANG] || summary.en || diagnostic.state_id;
+        setText('triageDiagnostic', `${tr('ops.triage_diagnostic', 'Diagnostic State')}: ${localizedSummary}`);
+        renderTriageRunbooks(payload.runbooks || []);
+        renderRunbookCandidates(payload.runbooks || []);
+    } else {
+        renderTriageRunbooks([]);
+    }
+}
+
+async function loadTriageIntents() {
+    try {
+        const res = await fetch('/api/triage/intents', { headers: authHeaders() });
+        const data = await res.json();
+        if (!res.ok || !data.ok) return;
+        renderTriageIntents(data.items || []);
+        const intro = document.getElementById('triageIntro');
+        if (intro && Array.isArray(data.items) && data.items.length) {
+            intro.textContent = tr('ops.triage_intro_ready', 'Choose a symptom family first, or classify the current issue text to narrow it down.');
+        }
+    } catch (_e) {
+        renderTriageIntents([]);
+    }
+}
+
+async function classifyTriageText() {
+    const input = document.getElementById('triageInput');
+    const text = input ? input.value.trim() : '';
+    if (!text) {
+        setText('triageSessionMeta', tr('ops.triage_text_required', 'Enter a symptom before classification.'));
+        return;
+    }
+    try {
+        const res = await fetch('/api/triage/classify', {
+            method: 'POST',
+            headers: authHeaders(),
+            body: JSON.stringify({ text }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            setText('triageSessionMeta', tr('ops.failed', 'Failed: {error}', { error: data.error || tr('ops.unknown_error', 'unknown error') }));
+            return;
+        }
+        renderTriageCandidates(data.items || []);
+        setText('triageSessionMeta', tr('ops.triage_candidates_ready', 'Select one of the triage candidates.'));
+    } catch (e) {
+        setText('triageSessionMeta', tr('ops.failed', 'Failed: {error}', { error: String(e) }));
+    }
+}
+
+async function startTriage(intentId) {
+    if (!intentId) return;
+    try {
+        const res = await fetch('/api/triage/start', {
+            method: 'POST',
+            headers: authHeaders(),
+            body: JSON.stringify({ intent_id: intentId, audience: triageAudienceMode() }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            setText('triageSessionMeta', tr('ops.failed', 'Failed: {error}', { error: data.error || tr('ops.unknown_error', 'unknown error') }));
+            return;
+        }
+        renderTriageProgress(data);
+    } catch (e) {
+        setText('triageSessionMeta', tr('ops.failed', 'Failed: {error}', { error: String(e) }));
+    }
+}
+
+async function answerTriage(answerValue) {
+    if (!triageSession || !triageSession.session_id) return;
+    try {
+        const res = await fetch('/api/triage/answer', {
+            method: 'POST',
+            headers: authHeaders(),
+            body: JSON.stringify({ session_id: triageSession.session_id, answer: answerValue }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            setText('triageSessionMeta', tr('ops.failed', 'Failed: {error}', { error: data.error || tr('ops.unknown_error', 'unknown error') }));
+            return;
+        }
+        renderTriageProgress(data);
+    } catch (e) {
+        setText('triageSessionMeta', tr('ops.failed', 'Failed: {error}', { error: String(e) }));
     }
 }
 
@@ -322,7 +581,7 @@ function updateDemoScenarioDescription() {
     const selected = String(select?.value || '').trim();
     const item = demoScenarios.find((row) => row.scenario_id === selected) || demoScenarios[0];
     if (!item) {
-        setText('demoScenarioDescription', 'No scenario available.');
+        setText('demoScenarioDescription', tr('ops.no_scenario_available', 'No scenario available.'));
         return;
     }
     if (select && !select.value) select.value = item.scenario_id;
@@ -336,13 +595,13 @@ async function loadDemoScenarios() {
         const res = await fetch('/api/demo/scenarios', { headers: authHeaders() });
         const data = await res.json();
         if (!res.ok || !data.ok) {
-            setText('demoScenarioDescription', `Failed to load scenarios: ${data.error || 'unknown error'}`);
+            setText('demoScenarioDescription', tr('ops.demo_load_failed', 'Failed to load scenarios: {error}', { error: data.error || 'unknown error' }));
             return;
         }
         demoScenarios = Array.isArray(data.items) ? data.items : [];
         if (!demoScenarios.length) {
             select.innerHTML = '<option value=\"\">No scenario</option>';
-            setText('demoScenarioDescription', 'No scenario available.');
+            setText('demoScenarioDescription', tr('ops.no_scenario_available', 'No scenario available.'));
             return;
         }
         select.innerHTML = demoScenarios
@@ -350,7 +609,7 @@ async function loadDemoScenarios() {
             .join('');
         updateDemoScenarioDescription();
     } catch (e) {
-        setText('demoScenarioDescription', `Failed to load scenarios: ${e}`);
+        setText('demoScenarioDescription', tr('ops.demo_load_failed', 'Failed to load scenarios: {error}', { error: String(e) }));
     }
 }
 
@@ -358,12 +617,12 @@ async function runDemoScenario() {
     const select = document.getElementById('demoScenarioSelect');
     const scenarioId = String(select?.value || '').trim();
     if (!scenarioId) {
-        setText('demoResult', 'Scenario is required.');
+        setText('demoResult', tr('ops.scenario_required', 'Scenario is required.'));
         return;
     }
-    setText('demoResult', 'Running demo scenario...');
-    setText('demoOperatorSummary', 'Operator wording: preparing replay...');
-    setText('demoNextChecks', 'Next checks: waiting for result...');
+    setText('demoResult', tr('ops.demo_running', 'Running demo scenario...'));
+    setText('demoOperatorSummary', tr('ops.demo_preparing', 'Operator wording: preparing replay...'));
+    setText('demoNextChecks', tr('ops.demo_waiting', 'Next checks: waiting for result...'));
     try {
         const res = await fetch(`/api/demo/run/${encodeURIComponent(scenarioId)}`, {
             method: 'POST',
@@ -371,7 +630,7 @@ async function runDemoScenario() {
         });
         const data = await res.json();
         if (!res.ok || !data.ok) {
-            setText('demoResult', `Demo failed: ${data.error || 'unknown error'}`);
+            setText('demoResult', tr('ops.demo_failed', 'Demo failed: {error}', { error: data.error || 'unknown error' }));
             return;
         }
         const result = data.result || {};
@@ -383,7 +642,7 @@ async function runDemoScenario() {
         if (messageInput) messageInput.value = question;
         await askAi(question);
     } catch (e) {
-        setText('demoResult', `Demo failed: ${e}`);
+        setText('demoResult', tr('ops.demo_failed', 'Demo failed: {error}', { error: String(e) }));
     }
 }
 
@@ -395,14 +654,14 @@ async function clearDemoOverlay() {
         });
         const data = await res.json();
         if (!res.ok || !data.ok) {
-            setText('demoResult', `Clear failed: ${data.error || 'unknown error'}`);
+            setText('demoResult', tr('ops.demo_failed', 'Demo failed: {error}', { error: data.error || 'unknown error' }));
             return;
         }
-        setText('demoResult', 'Demo overlay cleared.');
-        setText('demoOperatorSummary', 'Operator wording: -');
-        setText('demoNextChecks', 'Next checks: -');
+        setText('demoResult', tr('ops.demo_cleared', 'Demo overlay cleared.'));
+        setText('demoOperatorSummary', `${tr('ops.operator_wording', 'Operator wording')}: -`);
+        setText('demoNextChecks', `${tr('ops.next_checks', 'Next checks')}: -`);
     } catch (e) {
-        setText('demoResult', `Clear failed: ${e}`);
+        setText('demoResult', tr('ops.demo_failed', 'Demo failed: {error}', { error: String(e) }));
     }
 }
 
@@ -416,7 +675,7 @@ async function loadRunbookCandidates(question) {
     const res = await fetch('/api/runbooks/propose', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ question: q, audience: currentAudience, context: { page: 'ops-comm', audience: currentAudience }, max_items: 3 }),
+        body: JSON.stringify({ question: q, audience: currentAudience, lang: CURRENT_LANG, context: { page: 'ops-comm', audience: currentAudience, lang: CURRENT_LANG }, max_items: 3 }),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
@@ -453,27 +712,28 @@ async function runRunbookAction(runbookId, action) {
                 actor,
                 question: lastQuestion,
                 audience: currentAudience,
+                lang: CURRENT_LANG,
                 note: 'ops-comm',
             }),
         });
         const data = await res.json();
         if (!output) return;
         if (!res.ok || !data.ok) {
-            output.textContent = `Failed: ${data.error || 'unknown error'}`;
+            output.textContent = tr('ops.failed', 'Failed: {error}', { error: data.error || tr('ops.unknown_error', 'unknown error') });
             return;
         }
         if (action === 'preview') {
             const command = data.command ? `${data.command.exec} ${(data.command.argv || []).join(' ')}` : '(guidance only)';
-            output.textContent = `Preview OK\ncommand=${command}\nargs=${JSON.stringify(args)}\nsteps=${(data.steps || []).join(' | ')}\nuser=${data.user_message || '-'}`;
+            output.textContent = `${tr('ops.preview_ok', 'Preview OK')}\n${tr('ops.command_label', 'command')}=${command}\n${tr('ops.args_label', 'args')}=${JSON.stringify(args)}\n${tr('ops.steps_label', 'steps')}=${(data.steps || []).join(' | ')}\n${tr('ops.user_label', 'user')}=${data.user_message || '-'}`;
             return;
         }
         if (action === 'approve') {
-            output.textContent = `Approved\nargs=${JSON.stringify(args)}\nsteps=${(data.steps || []).join(' | ')}\nuser=${data.user_message || data.user_message_template || '-'}`;
+            output.textContent = `${tr('ops.approved', 'Approved')}\n${tr('ops.args_label', 'args')}=${JSON.stringify(args)}\n${tr('ops.steps_label', 'steps')}=${(data.steps || []).join(' | ')}\n${tr('ops.user_label', 'user')}=${data.user_message || data.user_message_template || '-'}`;
             return;
         }
-        output.textContent = `Executed\nargs=${JSON.stringify(args)}\nuser=${data.user_message || '-'}\nexit=${data.exit_code ?? '-'}\nstdout=${data.stdout || '-'}\nstderr=${data.stderr || '-'}`;
+        output.textContent = `${tr('ops.executed', 'Executed')}\n${tr('ops.args_label', 'args')}=${JSON.stringify(args)}\n${tr('ops.user_label', 'user')}=${data.user_message || '-'}\n${tr('ops.exit_label', 'exit')}=${data.exit_code ?? '-'}\n${tr('ops.stdout_label', 'stdout')}=${data.stdout || '-'}\n${tr('ops.stderr_label', 'stderr')}=${data.stderr || '-'}`;
     } catch (e) {
-        if (output) output.textContent = `Failed: ${e}`;
+        if (output) output.textContent = tr('ops.failed', 'Failed: {error}', { error: String(e) });
     }
 }
 
@@ -498,7 +758,7 @@ async function sendMessage() {
     const sender = senderInput ? senderInput.value.trim() : 'M.I.O. Console';
     const message = messageInput ? messageInput.value.trim() : '';
         if (!message) {
-            if (result) result.textContent = 'Message is empty';
+            if (result) result.textContent = tr('ops.message_empty', 'Message is empty');
             resetAiPanels();
             return;
         }
@@ -506,20 +766,20 @@ async function sendMessage() {
         const res = await fetch('/api/mattermost/message', {
             method: 'POST',
             headers: authHeaders(),
-            body: JSON.stringify({ sender, message, ask_ai: false }),
+            body: JSON.stringify({ sender, message, lang: CURRENT_LANG, ask_ai: false }),
         });
         const data = await res.json();
         if (res.ok && data.ok) {
-            if (result) result.textContent = `Sent (${data.result.mode})`;
+            if (result) result.textContent = tr('ops.sent', 'Sent ({mode})', { mode: data.result.mode });
             resetAiPanels();
             if (messageInput) messageInput.value = '';
             await loadMessages();
             return;
         }
-        if (result) result.textContent = `Failed: ${data.error || 'unknown error'}`;
+        if (result) result.textContent = tr('ops.failed', 'Failed: {error}', { error: data.error || tr('ops.unknown_error', 'unknown error') });
         resetAiPanels();
     } catch (e) {
-        if (result) result.textContent = `Failed: ${e}`;
+        if (result) result.textContent = tr('ops.failed', 'Failed: {error}', { error: String(e) });
         resetAiPanels();
     }
 }
@@ -531,7 +791,7 @@ async function askAi(forcedQuestion = '') {
     const sender = senderInput ? senderInput.value.trim() : 'M.I.O. Console';
     const question = String(forcedQuestion || (messageInput ? messageInput.value.trim() : '')).trim();
     if (!question) {
-        if (result) result.textContent = 'Question is empty';
+        if (result) result.textContent = tr('ops.question_empty', 'Question is empty');
         resetAiPanels();
         return;
     }
@@ -539,26 +799,28 @@ async function askAi(forcedQuestion = '') {
         const res = await fetch('/api/ai/ask', {
             method: 'POST',
             headers: authHeaders(),
-            body: JSON.stringify({ question, sender, source: 'ops-comm', context: { page: 'ops-comm', audience: currentAudience } }),
+            body: JSON.stringify({ question, sender, lang: CURRENT_LANG, source: 'ops-comm', context: { page: 'ops-comm', audience: currentAudience, lang: CURRENT_LANG } }),
         });
         const data = await res.json();
         if (res.ok && data.ok) {
-            if (result) result.textContent = `AI completed (${data.model || '-'})`;
+            if (result) result.textContent = tr('ops.ai_completed', 'AI completed ({model})', { model: data.model || '-' });
             renderAiPanels(data);
             await loadRunbookCandidates(question);
             return;
         }
-        if (result) result.textContent = `AI failed: ${data.error || data.reason || 'unknown error'}`;
+        if (result) result.textContent = tr('ops.ai_failed', 'AI failed: {error}', { error: data.error || data.reason || tr('ops.unknown_error', 'unknown error') });
         resetAiPanels();
         renderRunbookCandidates([]);
     } catch (e) {
-        if (result) result.textContent = `AI failed: ${e}`;
+        if (result) result.textContent = tr('ops.ai_failed', 'AI failed: {error}', { error: String(e) });
         resetAiPanels();
         renderRunbookCandidates([]);
     }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    document.documentElement.lang = CURRENT_LANG;
+    syncLanguageUi();
     const refreshBtn = document.getElementById('refreshBtn');
     const sendBtn = document.getElementById('sendBtn');
     const askAiBtn = document.getElementById('askAiBtn');
@@ -568,7 +830,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const demoScenarioSelect = document.getElementById('demoScenarioSelect');
     const operatorBtn = document.getElementById('audienceOperatorBtn');
     const beginnerBtn = document.getElementById('audienceBeginnerBtn');
+    const triageClassifyBtn = document.getElementById('triageClassifyBtn');
+    const triageAnswerBtn = document.getElementById('triageAnswerBtn');
+    const triageResetBtn = document.getElementById('triageResetBtn');
+    document.getElementById('langJaBtn')?.addEventListener('click', () => switchLanguage('ja'));
+    document.getElementById('langEnBtn')?.addEventListener('click', () => switchLanguage('en'));
     syncAudienceUi();
+    resetTriageUi();
     if (refreshBtn) refreshBtn.addEventListener('click', async () => {
         await loadStatus();
         await loadMessages();
@@ -579,6 +847,25 @@ document.addEventListener('DOMContentLoaded', () => {
     if (askAiBtn) askAiBtn.addEventListener('click', askAi);
     if (demoRunBtn) demoRunBtn.addEventListener('click', runDemoScenario);
     if (demoClearBtn) demoClearBtn.addEventListener('click', clearDemoOverlay);
+    if (triageClassifyBtn) triageClassifyBtn.addEventListener('click', classifyTriageText);
+    if (triageAnswerBtn) triageAnswerBtn.addEventListener('click', async () => {
+        const input = document.getElementById('triageTextAnswer');
+        const value = input && 'value' in input ? input.value.trim() : '';
+        if (!value) {
+            setText('triageSessionMeta', tr('ops.triage_answer_required', 'Enter an answer before continuing.'));
+            return;
+        }
+        await answerTriage(value);
+        if (input) input.value = '';
+    });
+    if (triageResetBtn) triageResetBtn.addEventListener('click', resetTriageUi);
+    const triageInput = document.getElementById('triageInput');
+    if (triageInput) triageInput.addEventListener('keydown', async (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            await classifyTriageText();
+        }
+    });
     if (demoScenarioSelect) demoScenarioSelect.addEventListener('change', updateDemoScenarioDescription);
     if (operatorBtn) operatorBtn.addEventListener('click', () => {
         currentAudience = 'operator';
@@ -606,10 +893,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         await askAi();
     });
+    document.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const triageIntent = target.dataset.triageIntent;
+        if (!triageIntent) return;
+        await startTriage(triageIntent);
+    });
+    document.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const triageAnswer = target.dataset.triageAnswer;
+        if (triageAnswer === undefined) return;
+        await answerTriage(triageAnswer);
+    });
     loadStatus();
     loadMessages();
     loadCapabilities();
     loadDemoScenarios();
+    loadTriageIntents();
     setInterval(() => {
         loadStatus();
         loadMessages();

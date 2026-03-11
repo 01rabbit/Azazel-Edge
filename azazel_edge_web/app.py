@@ -47,6 +47,12 @@ try:
         read_snapshot_payload as cp_read_snapshot_payload,
         watch_snapshots as cp_watch_snapshots,
     )
+    from azazel_edge.i18n import (
+        normalize_lang,
+        translate as i18n_translate,
+        ui_catalog as i18n_ui_catalog,
+        localize_runbook_user_message,
+    )
     from azazel_edge.runbooks import (
         execute_runbook as runbook_execute,
         get_runbook as runbook_get,
@@ -56,10 +62,18 @@ try:
         propose_runbooks as runbook_propose,
         review_runbook_id as runbook_review_id,
     )
+    from azazel_edge.triage import (
+        TriageFlowEngine,
+        TriageSessionStore,
+        classify_intent_candidates,
+        list_flows as triage_list_flows,
+        select_runbooks_for_diagnostic_state,
+    )
     from azazel_edge.demo_overlay import (
         DEMO_OVERLAY_PATH,
         build_demo_overlay,
         clear_demo_overlay,
+        purge_demo_artifacts,
         read_demo_overlay,
         write_demo_overlay,
     )
@@ -75,14 +89,24 @@ try:
 except Exception:
     cp_read_snapshot_payload = None
     cp_watch_snapshots = None
+    normalize_lang = lambda value=None: "ja"  # type: ignore
+    i18n_translate = lambda key, lang=None, default=None, **kwargs: (default or key).format(**kwargs) if kwargs else (default or key)  # type: ignore
+    i18n_ui_catalog = lambda lang=None: {}  # type: ignore
+    localize_runbook_user_message = lambda runbook, lang=None, default="": str(runbook.get("user_message_template") or default)  # type: ignore
     runbook_execute = None
     runbook_get = None
     runbook_list = None
     runbook_propose = None
     runbook_review_id = None
+    TriageFlowEngine = None  # type: ignore
+    TriageSessionStore = None  # type: ignore
+    classify_intent_candidates = None  # type: ignore
+    triage_list_flows = None  # type: ignore
+    select_runbooks_for_diagnostic_state = None  # type: ignore
     DEMO_OVERLAY_PATH = Path("/run/azazel-edge/demo_overlay.json")
     build_demo_overlay = lambda result: {"active": True, "raw_result": result}  # type: ignore
     clear_demo_overlay = lambda: None  # type: ignore
+    purge_demo_artifacts = lambda: None  # type: ignore
     read_demo_overlay = lambda: {}  # type: ignore
     write_demo_overlay = lambda payload: DEMO_OVERLAY_PATH  # type: ignore
     config_dir_candidates = lambda: [Path("/etc/azazel-edge"), Path("/etc/azazel-zero")]  # type: ignore
@@ -105,6 +129,7 @@ AI_METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_
 AI_EVENT_LOG = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", "/var/log/azazel-edge/ai-events.jsonl"))
 AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-llm.jsonl"))
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/azazel-edge/runbook-events.jsonl"))
+TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge/triage-sessions"))
 TOKEN_FILE = web_token_candidates()[0]
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
 LOCAL_DEMO_RUNNER = PROJECT_ROOT / "bin" / "azazel-edge-demo"
@@ -144,6 +169,35 @@ MATTERMOST_COMMAND_ALIASES = [
 MATTERMOST_COMMAND_PRIMARY_TRIGGER = str(os.environ.get("AZAZEL_MATTERMOST_COMMAND_TRIGGER", "mio")).strip() or "mio"
 
 
+def _request_lang() -> str:
+    query_lang = request.args.get("lang") if has_request_context() else ""
+    header_lang = request.headers.get("X-AZAZEL-LANG") if has_request_context() else ""
+    cookie_lang = request.cookies.get("azazel_lang") if has_request_context() else ""
+    return normalize_lang(query_lang or header_lang or cookie_lang or "ja")
+
+
+def _tr(key: str, default: str | None = None, **kwargs: Any) -> str:
+    return i18n_translate(key, lang=_request_lang(), default=default, **kwargs)
+
+
+@app.context_processor
+def _inject_i18n() -> Dict[str, Any]:
+    lang = _request_lang()
+    return {
+        "ui_lang": lang,
+        "ui_catalog": i18n_ui_catalog(lang),
+        "tr": lambda key, default=None, **kwargs: i18n_translate(key, lang=lang, default=default, **kwargs),
+    }
+
+
+@app.after_request
+def _apply_language_headers(response: Response) -> Response:
+    lang = _request_lang()
+    response.headers["Content-Language"] = lang
+    response.set_cookie("azazel_lang", lang, max_age=31536000, samesite="Lax")
+    return response
+
+
 def _read_secret_file(path: Path) -> str:
     try:
         if path.exists():
@@ -175,6 +229,8 @@ DASHBOARD_SNAPSHOT_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_SNAPSHOT_S
 DASHBOARD_AI_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_AI_STALE_SEC", "120"))
 DASHBOARD_EVENT_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_EVENT_STALE_SEC", "300"))
 DASHBOARD_ASSIST_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_ASSIST_STALE_SEC", "90"))
+_TRIAGE_STORE = TriageSessionStore(base_dir=TRIAGE_SESSION_DIR) if TriageSessionStore is not None else None
+_TRIAGE_ENGINE = TriageFlowEngine(store=_TRIAGE_STORE) if TriageFlowEngine is not None and _TRIAGE_STORE is not None else None
 _CA_CERT_FILENAME = "azazel-webui-local-ca.crt"
 _WEBUI_CA_CERT_CANDIDATES: List[Path] = []
 _env_ca_cert = str(os.environ.get("AZAZEL_WEBUI_CA_PATH", "")).strip()
@@ -646,14 +702,22 @@ def _demo_overlay_is_active() -> bool:
 
 def _trigger_demo_clear_side_effects() -> None:
     # EPD keeps the last rendered frame until refreshed, so clear should force
-    # one live redraw instead of waiting for the timer. Use no-block so the
-    # web response is not held open by slow panel hardware.
+    # one live redraw instead of waiting for the timer. Call the refresh script
+    # directly instead of systemctl to avoid polkit / interactive auth failures.
+    # Run it synchronously with a realistic timeout so the hardware actually
+    # leaves demo mode before the request returns.
     commands = [
-        ["/bin/systemctl", "--no-block", "start", "azazel-edge-epd-refresh.service"],
+        ["/usr/local/bin/azazel-edge-epd-refresh"],
     ]
     for cmd in commands:
         try:
-            subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8)
+            subprocess.run(
+                cmd,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=45,
+            )
         except Exception:
             continue
 
@@ -703,7 +767,7 @@ def _dashboard_action_guidance(
     escalate_if: List[str] = []
 
     if user_state == "SAFE" and suspicion <= 0 and not signals:
-        _append_unique(why_now, "Current state is SAFE and no active health signal is present.")
+        _append_unique(why_now, _tr("api.no_active_issues", default="No active issues detected."))
     else:
         _append_unique(why_now, f"Current state is {user_state or '-'} / {state_name or '-'} with suspicion {suspicion}.")
     if signals:
@@ -718,13 +782,13 @@ def _dashboard_action_guidance(
         _append_unique(why_now, "Latest M.I.O. assist is advisory only and no runbook is currently selected.")
 
     recommendation = str(state.get("recommendation") or advisory.get("recommendation") or "").strip()
-    _append_unique(do_next, recommendation or "Keep monitoring the current state.")
+    _append_unique(do_next, recommendation or _tr("api.keep_monitoring", default="Keep monitoring the current state."))
     if suggested_runbook.get("title"):
         _append_unique(do_next, f"Open {suggested_runbook['title']} and follow the read-only checks first.")
     for step in suggested_runbook.get("steps", []):
         _append_unique(do_next, str(step))
     if not do_next:
-        _append_unique(do_next, "Keep monitoring the current state.")
+        _append_unique(do_next, _tr("api.keep_monitoring", default="Keep monitoring the current state."))
 
     if suggested_runbook.get("effect") == "controlled_exec":
         _append_unique(do_not_do, "Do not execute the runbook before approval is granted.")
@@ -754,11 +818,11 @@ def _dashboard_action_guidance(
     }
 
 
-def _runbook_brief(runbook_id: str) -> Dict[str, Any]:
+def _runbook_brief(runbook_id: str, lang: str | None = None) -> Dict[str, Any]:
     if not runbook_id or runbook_get is None:
         return {}
     try:
-        runbook = runbook_get(runbook_id)
+        runbook = runbook_get(runbook_id, lang=lang)
     except Exception:
         return {}
     steps = runbook.get("steps") if isinstance(runbook.get("steps"), list) else []
@@ -768,7 +832,7 @@ def _runbook_brief(runbook_id: str) -> Dict[str, Any]:
         "effect": str(runbook.get("effect") or ""),
         "requires_approval": bool(runbook.get("requires_approval")),
         "steps": [str(item) for item in steps[:3]],
-        "user_message_template": str(runbook.get("user_message_template") or ""),
+        "user_message_template": localize_runbook_user_message(runbook, lang=lang),
     }
 
 
@@ -844,6 +908,7 @@ def _recent_mode_changes(mode_runtime: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], advisory: Dict[str, Any]) -> Dict[str, Any]:
+    lang = _request_lang()
     monitoring = get_monitoring_state()
     mode_runtime = get_mode_state()
     mode = mode_runtime.get("mode") if isinstance(mode_runtime.get("mode"), dict) else {}
@@ -879,8 +944,8 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     else:
         threat_level = "quiet"
     signals = network_health.get("signals") if isinstance(network_health.get("signals"), list) else []
-    path_scope = "all uplink clients" if str(connection.get("internet_check") or "").upper() == "FAIL" else (
-        "dns-affected clients" if _as_int(network_health.get("dns_mismatch"), 0) > 0 else "no broad impact indicated"
+    path_scope = ("全 uplink 利用者" if lang == "ja" else "all uplink clients") if str(connection.get("internet_check") or "").upper() == "FAIL" else (
+        ("DNS 影響利用者" if lang == "ja" else "dns-affected clients") if _as_int(network_health.get("dns_mismatch"), 0) > 0 else ("広域影響なし" if lang == "ja" else "no broad impact indicated")
     )
     return {
         "ok": True,
@@ -939,7 +1004,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
         },
         "soc_focus": {
             "threat_level": threat_level,
-            "attack_type": attack_type or "No current attack type",
+            "attack_type": attack_type or ("現在の攻撃種別なし" if lang == "ja" else "No current attack type"),
             "top_source": top_src or "-",
             "top_destination": top_dst or "-",
             "top_sid": top_sid or "-",
@@ -987,8 +1052,9 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
 
 
 def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], llm_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    lang = _request_lang()
     latest_ai = _dashboard_visible_ai_context(state, advisory, llm_rows)
-    suggested_runbook = _runbook_brief(latest_ai.get("runbook_id", ""))
+    suggested_runbook = _runbook_brief(latest_ai.get("runbook_id", ""), lang=lang)
     guidance = _dashboard_action_guidance(state, advisory, latest_ai, suggested_runbook)
     user_guidance = str(
         latest_ai.get("user_message")
@@ -1002,7 +1068,7 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
     for item in guidance["why_now"][:2]:
         _append_unique(rationale, item)
     if review.get("final_status"):
-        _append_unique(rationale, f"Runbook review status: {review.get('final_status')}.")
+        _append_unique(rationale, f"{_tr('api.review_prefix', default='Review')}: {review.get('final_status')}.")
     findings = review.get("findings") if isinstance(review.get("findings"), list) else []
     if findings:
         _append_unique(rationale, f"Review findings: {' | '.join(str(x) for x in findings[:2])}.")
@@ -1296,6 +1362,7 @@ def _review_context_from_request(body: Dict[str, Any] | None = None) -> Dict[str
         out["question"] = question
     if audience:
         out["audience"] = audience
+    out["lang"] = str(src.get("lang") or out.get("lang") or _request_lang())
     try:
         if risk_score not in (None, ""):
             out["risk_score"] = int(risk_score)
@@ -1311,25 +1378,48 @@ def _mattermost_command_allowed(command_token: str) -> bool:
     return token in MATTERMOST_COMMAND_TOKENS
 
 
-def _extract_mattermost_audience_and_text(text: str) -> tuple[str, str]:
+def _extract_mattermost_context_and_text(text: str) -> tuple[str, str, str]:
     raw = str(text or "").strip()
-    lowered = raw.lower()
+    audience = "operator"
+    lang = "ja"
     prefixes = {
-        "temporary:": "beginner",
-        "temp:": "beginner",
-        "beginner:": "beginner",
-        "casual:": "beginner",
-        "pro:": "operator",
-        "operator:": "operator",
-        "professional:": "operator",
+        "temporary:": ("audience", "beginner"),
+        "temp:": ("audience", "beginner"),
+        "beginner:": ("audience", "beginner"),
+        "casual:": ("audience", "beginner"),
+        "pro:": ("audience", "operator"),
+        "operator:": ("audience", "operator"),
+        "professional:": ("audience", "operator"),
+        "ja:": ("lang", "ja"),
+        "jp:": ("lang", "ja"),
+        "japanese:": ("lang", "ja"),
+        "en:": ("lang", "en"),
+        "english:": ("lang", "en"),
     }
-    for prefix, audience in prefixes.items():
-        if lowered.startswith(prefix):
-            return audience, raw[len(prefix):].strip()
-    return "operator", raw
+    changed = True
+    current = raw
+    while changed and current:
+        changed = False
+        lowered = current.lower()
+        for prefix, (kind, value) in prefixes.items():
+            if lowered.startswith(prefix):
+                if kind == "audience":
+                    audience = value
+                else:
+                    lang = normalize_lang(value)
+                current = current[len(prefix):].strip()
+                changed = True
+                break
+    return audience, lang, current
 
 
-def _format_mattermost_ai_response(ai_result: Dict[str, Any] | None, proposals: Dict[str, Any] | None) -> str:
+def _format_mattermost_ai_response(
+    ai_result: Dict[str, Any] | None,
+    proposals: Dict[str, Any] | None,
+    lang: str | None = None,
+) -> str:
+    lang_norm = normalize_lang(lang)
+    tr = lambda key, default=None, **kwargs: i18n_translate(key, lang=lang_norm, default=default, **kwargs)
     lines: List[str] = []
     if isinstance(ai_result, dict):
         routed = str(ai_result.get("status") or "") == "routed"
@@ -1342,26 +1432,26 @@ def _format_mattermost_ai_response(ai_result: Dict[str, Any] | None, proposals: 
             lines.append("Rationale: " + " | ".join(str(x) for x in rationale[:2]))
         user_message = str(ai_result.get("user_message") or "").strip()
         if user_message:
-            lines.append(f"User Guidance: {user_message}")
+            lines.append(f"{tr('api.user_guidance', default='User Guidance')}: {user_message}")
         runbook_id = str(ai_result.get("runbook_id") or "").strip()
         review = ai_result.get("runbook_review") if isinstance(ai_result.get("runbook_review"), dict) else {}
         if runbook_id:
-            lines.append(f"Suggested Runbook: `{runbook_id}`")
+            lines.append(f"{tr('api.suggested_runbook', default='Suggested Runbook')}: `{runbook_id}`")
         if review:
-            lines.append(f"Review: `{review.get('final_status', '-')}`")
+            lines.append(f"{tr('api.review_prefix', default='Review')}: `{review.get('final_status', '-')}`")
             changes = review.get("required_changes")
             if isinstance(changes, list) and changes:
-                lines.append("Required Changes: " + " | ".join(str(x) for x in changes[:3]))
+                lines.append(tr("api.required_changes", default="Required Changes") + ": " + " | ".join(str(x) for x in changes[:3]))
         handoff = ai_result.get("handoff") if isinstance(ai_result.get("handoff"), dict) else {}
         ops_comm = str(handoff.get("ops_comm") or "").strip()
         if ops_comm:
-            lines.append(f"Continue: `{ops_comm}`")
+            lines.append(f"{tr('api.continue', default='Continue')}: `{ops_comm}`")
         if routed:
             return "\n".join(lines)[:1200]
     if isinstance(proposals, dict):
         items = proposals.get("items")
         if isinstance(items, list) and items:
-            lines.append("Candidates:")
+            lines.append(tr("api.candidates", default="Candidates") + ":")
             for item in items[:3]:
                 review = item.get("review") if isinstance(item.get("review"), dict) else {}
                 lines.append(
@@ -1463,6 +1553,13 @@ def _enrich_ai_result(ai_result: Dict[str, Any] | None) -> Dict[str, Any]:
     result = dict(ai_result) if isinstance(ai_result, dict) else {}
     if not result:
         return {"ok": False, "error": "empty_ai_result", "rationale": [], "handoff": _assist_handoff_payload()}
+    runbook_id = str(result.get("runbook_id") or "").strip()
+    if runbook_id and not str(result.get("user_message") or "").strip() and runbook_get is not None:
+        try:
+            runbook = runbook_get(runbook_id, lang=_request_lang())
+            result["user_message"] = localize_runbook_user_message(runbook, lang=_request_lang())[:160]
+        except Exception:
+            pass
     result["rationale"] = _assist_rationale(result)
     result["handoff"] = _assist_handoff_payload()
     return result
@@ -1478,6 +1575,8 @@ def _run_runbook_action(body: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
     actor = str(body.get("actor") or body.get("sender") or "webui-operator").strip() or "webui-operator"
     note = str(body.get("note") or "").strip()[:240]
     approved = bool(body.get("approved", False))
+    context = _review_context_from_request(body)
+    lang = str(context.get("lang") or _request_lang())
 
     def _log_runbook_decision(ok: bool, error: str = "", review_status: str = "", effect: str = "") -> None:
         _append_jsonl(
@@ -1503,15 +1602,15 @@ def _run_runbook_action(body: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
         return {"ok": False, "error": "invalid_action"}, 400
 
     try:
-        runbook = runbook_get(runbook_id)
-        review = runbook_review_id(runbook_id, context=_review_context_from_request(body))
+        runbook = runbook_get(runbook_id, lang=lang)
+        review = runbook_review_id(runbook_id, context=context)
     except Exception as e:
         _log_runbook_decision(False, str(e))
         return {"ok": False, "error": str(e)}, 404
 
     effect = str(runbook.get("effect") or "")
     requires_approval = bool(runbook.get("requires_approval"))
-    user_message = str(runbook.get("user_message_template") or "").strip()[:160]
+    user_message = localize_runbook_user_message(runbook, lang=lang).strip()[:160]
     review_status = str(review.get("final_status") or "approved")
     if review_status == "rejected":
         _log_runbook_decision(False, "runbook_rejected_by_review", review_status=review_status, effect=effect)
@@ -1530,7 +1629,7 @@ def _run_runbook_action(body: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
     code = 200
     if action == "preview":
         try:
-            result = runbook_execute(runbook_id, args=args, dry_run=True)
+            result = runbook_execute(runbook_id, args=args, dry_run=True, lang=lang)
         except Exception as e:
             _log_runbook_decision(False, str(e), review_status=review_status, effect=effect)
             return {"ok": False, "error": str(e), "review": review}, 400
@@ -1543,7 +1642,7 @@ def _run_runbook_action(body: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
             "approved": approved or not requires_approval,
             "executed": False,
             "steps": runbook.get("steps", []),
-            "user_message_template": runbook.get("user_message_template", ""),
+            "user_message_template": localize_runbook_user_message(runbook, lang=lang),
         }
     else:
         if effect not in {"read_only", "controlled_exec"}:
@@ -1556,6 +1655,7 @@ def _run_runbook_action(body: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
                 dry_run=False,
                 approved=approved,
                 allow_controlled_exec=(effect == "controlled_exec"),
+                lang=lang,
             )
             code = 200 if result.get("ok") else 500
         except Exception as e:
@@ -2398,6 +2498,81 @@ def _mattermost_fetch_messages(limit: int = MATTERMOST_FETCH_LIMIT) -> Dict[str,
     return {"ok": True, "mode": mode, "items": items}
 
 
+def _triage_unavailable_payload() -> tuple[Dict[str, Any], int]:
+    return {"ok": False, "error": "triage_unavailable"}, 503
+
+
+def _triage_step_payload(step: Any, lang: str) -> Dict[str, Any]:
+    question_i18n = step.question_i18n if isinstance(getattr(step, "question_i18n", None), dict) else {}
+    question = question_i18n.get(lang) or question_i18n.get("en") or next(iter(question_i18n.values()), "")
+    return {
+        "step_id": step.step_id,
+        "question": question,
+        "answer_type": step.answer_type,
+        "choices": list(step.choices or []),
+    }
+
+
+def _triage_mio_payload(progress: Any, lang: str) -> Dict[str, Any]:
+    session = progress.session
+    flow_label = progress.flow.label_i18n.get(lang) or progress.flow.label_i18n.get("en") or progress.flow.flow_id
+    if progress.next_step is not None:
+        return {
+            "preface": i18n_translate("triage.mio.preface.question", lang=lang, default="M.I.O.: narrow the symptom with one deterministic question before changing settings."),
+            "summary": i18n_translate("triage.mio.summary.in_progress", lang=lang, default="Current flow: {flow}. Answer one question at a time and avoid changing mode or restarting services yet.", flow=flow_label),
+            "handoff": i18n_translate("triage.mio.handoff.none", lang=lang, default="No handoff is required yet."),
+        }
+    diagnostic = progress.diagnostic_state
+    if diagnostic is None:
+        return {
+            "preface": i18n_translate("triage.mio.preface.idle", lang=lang, default="M.I.O. will add a short preface before the next deterministic question."),
+            "summary": i18n_translate("triage.mio.summary.idle", lang=lang, default="No triage summary yet."),
+            "handoff": i18n_translate("triage.mio.handoff.none", lang=lang, default="No handoff is required."),
+        }
+    state_id = diagnostic.state_id
+    summary_text = i18n_translate("triage.mio.summary.ready", lang=lang, default="Diagnostic state: {state}. Review the candidate runbooks before taking stronger action.", state=state_id)
+    if session.handoff_reason:
+        return {
+            "preface": i18n_translate("triage.mio.preface.done", lang=lang, default="M.I.O.: the deterministic triage has finished."),
+            "summary": summary_text,
+            "handoff": i18n_translate("triage.mio.handoff.operator", lang=lang, default="Handoff to an operator: the user could not provide enough input. Continue with the reviewed runbooks and current context."),
+        }
+    return {
+        "preface": i18n_translate("triage.mio.preface.done", lang=lang, default="M.I.O.: the deterministic triage has finished."),
+        "summary": summary_text,
+        "handoff": i18n_translate("triage.mio.handoff.review", lang=lang, default="No forced handoff. Continue with the reviewed runbooks and the current diagnostic state."),
+    }
+
+
+def _triage_progress_payload(progress: Any, lang: str) -> Dict[str, Any]:
+    session = progress.session
+    payload: Dict[str, Any] = {
+        "ok": True,
+        "session": session.to_dict(),
+        "completed": bool(progress.completed),
+        "flow_id": progress.flow.flow_id,
+        "flow_label": progress.flow.label_i18n.get(lang) or progress.flow.label_i18n.get("en") or progress.flow.flow_id,
+        "mio": _triage_mio_payload(progress, lang=lang),
+    }
+    if progress.next_step is not None:
+        payload["next_step"] = _triage_step_payload(progress.next_step, lang=lang)
+    if progress.diagnostic_state is not None:
+        diagnostic_payload = progress.diagnostic_state.to_dict()
+        diagnostic_payload["summary_i18n"] = {
+            "ja": i18n_translate(progress.diagnostic_state.summary_key, lang="ja", default=progress.diagnostic_state.state_id),
+            "en": i18n_translate(progress.diagnostic_state.summary_key, lang="en", default=progress.diagnostic_state.state_id),
+        }
+        payload["diagnostic_state"] = diagnostic_payload
+        if select_runbooks_for_diagnostic_state is not None:
+            payload["runbooks"] = select_runbooks_for_diagnostic_state(
+                progress.diagnostic_state.state_id,
+                audience=session.audience,
+                lang=lang,
+                context={"lang": lang, "audience": session.audience, "diagnostic_state": progress.diagnostic_state.state_id},
+            ).get("items", [])
+    return payload
+
+
 # Web UI Routes
 
 @app.route("/")
@@ -2692,6 +2867,8 @@ def api_ai_ask():
     sender = str(body.get("sender") or "M.I.O. Console").strip() or "M.I.O. Console"
     source = str(body.get("source") or "webui").strip() or "webui"
     context = body.get("context") if isinstance(body.get("context"), dict) else {}
+    context = dict(context)
+    context.setdefault("lang", str(body.get("lang") or _request_lang()))
     if not question:
         return jsonify({"ok": False, "error": "question is required"}), 400
     result = _send_ai_manual_query(
@@ -2727,23 +2904,116 @@ def api_ai_capabilities():
             "capabilities": [
                 {
                     "title": "Symptom Router",
-                    "detail": "Wi-Fi, DNS, route, service, EPD, AI logs are answered immediately without waiting for LLM.",
+                    "detail": _tr("api.detail.symptom_router", default="Wi-Fi, DNS, route, service, EPD, and AI logs are answered immediately without waiting for the LLM."),
                 },
                 {
                     "title": "Audience Adaptation",
-                    "detail": "Professional and Temporary modes adjust wording, runbook priority, and user guidance.",
+                    "detail": _tr("api.detail.audience", default="Professional and Temporary modes adjust wording, runbook priority, and user guidance."),
                 },
                 {
                     "title": "Runbook Guidance",
-                    "detail": "M.I.O. proposes reviewed runbooks and returns user-facing guidance text together with operator notes.",
+                    "detail": _tr("api.detail.runbook", default="M.I.O. proposes reviewed runbooks and returns user-facing guidance together with operator notes."),
                 },
                 {
                     "title": "Mattermost Integration",
-                    "detail": "Slash commands /mio and /azops are available. Prefixes temp: and pro: switch the audience mode.",
+                    "detail": _tr("api.detail.mattermost", default="Slash commands /mio and /azops are available. Prefixes temp: and pro: switch the audience mode."),
                 },
             ],
         }
     ), 200
+
+
+@app.route("/api/triage/intents", methods=["GET"])
+def api_triage_intents():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    if triage_list_flows is None:
+        payload, code = _triage_unavailable_payload()
+        return jsonify(payload), code
+    lang = _request_lang()
+    items = []
+    for flow in triage_list_flows():
+        items.append(
+            {
+                "intent_id": flow.flow_id,
+                "label": flow.label_i18n.get(lang) or flow.label_i18n.get("en") or flow.flow_id,
+                "entry_state": flow.entry_state,
+            }
+        )
+    return jsonify({"ok": True, "items": items}), 200
+
+
+@app.route("/api/triage/classify", methods=["POST"])
+def api_triage_classify():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    if classify_intent_candidates is None:
+        payload, code = _triage_unavailable_payload()
+        return jsonify(payload), code
+    body = request.get_json(silent=True) or {}
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "text is required"}), 400
+    lang = _request_lang()
+    items = [item.to_dict() for item in classify_intent_candidates(text, lang=lang, limit=2)]
+    return jsonify({"ok": True, "items": items}), 200
+
+
+@app.route("/api/triage/start", methods=["POST"])
+def api_triage_start():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    if _TRIAGE_ENGINE is None:
+        payload, code = _triage_unavailable_payload()
+        return jsonify(payload), code
+    body = request.get_json(silent=True) or {}
+    intent_id = str(body.get("intent_id") or "").strip()
+    if not intent_id:
+        return jsonify({"ok": False, "error": "intent_id is required"}), 400
+    audience = str(body.get("audience") or "temporary").strip() or "temporary"
+    lang = _request_lang()
+    progress = _TRIAGE_ENGINE.start(intent_id, audience=audience, lang=lang)
+    return jsonify(_triage_progress_payload(progress, lang=lang)), 200
+
+
+@app.route("/api/triage/answer", methods=["POST"])
+def api_triage_answer():
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    if _TRIAGE_ENGINE is None:
+        payload, code = _triage_unavailable_payload()
+        return jsonify(payload), code
+    body = request.get_json(silent=True) or {}
+    session_id = str(body.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"ok": False, "error": "session_id is required"}), 400
+    if "answer" not in body:
+        return jsonify({"ok": False, "error": "answer is required"}), 400
+    lang = _request_lang()
+    try:
+        progress = _TRIAGE_ENGINE.answer(session_id, body.get("answer"))
+    except KeyError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify(_triage_progress_payload(progress, lang=lang)), 200
+
+
+@app.route("/api/triage/session/<session_id>", methods=["GET"])
+def api_triage_session(session_id: str):
+    if not verify_token():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 403
+    if _TRIAGE_ENGINE is None:
+        payload, code = _triage_unavailable_payload()
+        return jsonify(payload), code
+    lang = _request_lang()
+    try:
+        progress = _TRIAGE_ENGINE.resume(str(session_id or "").strip())
+    except KeyError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify(_triage_progress_payload(progress, lang=lang)), 200
 
 
 @app.route("/api/demo/scenarios", methods=["GET"])
@@ -2767,6 +3037,7 @@ def api_demo_overlay_clear():
     if not verify_token():
         return jsonify({"ok": False, "error": "Unauthorized"}), 403
     clear_demo_overlay()
+    purge_demo_artifacts()
     _trigger_demo_clear_side_effects()
     return jsonify({"ok": True, "cleared": True}), 200
 
@@ -2835,7 +3106,7 @@ def api_runbooks_list():
         return jsonify({"ok": False, "error": "Unauthorized"}), 403
     if runbook_list is None:
         return jsonify({"ok": False, "error": "runbook_registry_unavailable"}), 500
-    return jsonify({"ok": True, "items": runbook_list()}), 200
+    return jsonify({"ok": True, "items": runbook_list(lang=_request_lang())}), 200
 
 
 @app.route("/api/runbooks/<runbook_id>", methods=["GET"])
@@ -2845,7 +3116,7 @@ def api_runbooks_get(runbook_id: str):
     if runbook_get is None:
         return jsonify({"ok": False, "error": "runbook_registry_unavailable"}), 500
     try:
-        return jsonify({"ok": True, "runbook": runbook_get(runbook_id)}), 200
+        return jsonify({"ok": True, "runbook": runbook_get(runbook_id, lang=_request_lang())}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 404
 
@@ -2939,11 +3210,12 @@ def api_mattermost_message():
         ai_post: Dict[str, Any] | None = None
         runbook_proposals: Dict[str, Any] | None = None
         if ask_ai:
+            lang = str(body.get("lang") or _request_lang())
             ai_result = _enrich_ai_result(_send_ai_manual_query(
                 question=message,
                 sender=sender,
                 source="mattermost_post",
-                context={"channel_id": MATTERMOST_CHANNEL_ID},
+                context={"channel_id": MATTERMOST_CHANNEL_ID, "lang": lang},
             ))
             if runbook_propose is not None:
                 try:
@@ -2951,12 +3223,12 @@ def api_mattermost_message():
                         message,
                         audience="operator",
                         max_items=3,
-                        context={"question": message, "source": "mattermost_post"},
+                        context={"question": message, "source": "mattermost_post", "lang": lang},
                     )
                 except Exception:
                     runbook_proposals = None
             if ai_result.get("ok") and post_ai_reply and send_to_mattermost:
-                reply_text = _format_mattermost_ai_response(ai_result, runbook_proposals)
+                reply_text = _format_mattermost_ai_response(ai_result, runbook_proposals, lang=lang)
                 if reply_text:
                     ai_post = _mattermost_send_message(f"[M.I.O.]\n{reply_text}", sender="M.I.O.")
         return jsonify({"ok": True, "result": posted, "ai_result": ai_result, "runbook_proposals": runbook_proposals, "ai_post_result": ai_post}), 200
@@ -2974,16 +3246,16 @@ def api_mattermost_command():
     channel_id = str(form.get("channel_id") or body.get("channel_id") or MATTERMOST_CHANNEL_ID).strip()
     if not _mattermost_command_allowed(command_token):
         return jsonify({"response_type": "ephemeral", "text": "Mattermost command token mismatch."}), 403
-    audience, text = _extract_mattermost_audience_and_text(raw_text)
+    audience, lang, text = _extract_mattermost_context_and_text(raw_text)
     if not text:
         aliases = ", ".join(f"/{x}" for x in [MATTERMOST_COMMAND_PRIMARY_TRIGGER, *MATTERMOST_COMMAND_ALIASES])
-        return jsonify({"response_type": "ephemeral", "text": f"Usage: {aliases} <question>\nOptional prefix: `temp:` or `pro:`"}), 200
+        return jsonify({"response_type": "ephemeral", "text": f"Usage: {aliases} <question>\nOptional prefix: `temp:` or `pro:` / `ja:` or `en:`"}), 200
 
     ai_result = _send_ai_manual_query(
         question=text,
         sender=sender,
         source="mattermost_command",
-        context={"channel_id": channel_id, "page": "mattermost", "audience": audience},
+        context={"channel_id": channel_id, "page": "mattermost", "audience": audience, "lang": lang},
     )
     ai_result = _enrich_ai_result(ai_result)
     proposals = None
@@ -2993,11 +3265,11 @@ def api_mattermost_command():
                 text,
                 audience=audience,
                 max_items=3,
-                context={"question": text, "source": "mattermost_command", "audience": audience},
+                context={"question": text, "source": "mattermost_command", "audience": audience, "lang": lang},
             )
         except Exception:
             proposals = None
-    reply_text = _format_mattermost_ai_response(ai_result, proposals) or "No response."
+    reply_text = _format_mattermost_ai_response(ai_result, proposals, lang=lang) or "No response."
     return jsonify({"response_type": "ephemeral", "text": reply_text}), 200
 
 

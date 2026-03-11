@@ -1,6 +1,9 @@
 const AUTH_TOKEN = localStorage.getItem('azazel_token') || 'azazel-default-token-change-me';
 const AUDIENCE_KEY = 'azazel_dashboard_audience';
+const LANG_KEY = 'azazel_lang';
 const POLL_INTERVAL_MS = 4000;
+const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
+const I18N = window.AZAZEL_I18N || {};
 
 let dashboardTimer = null;
 let currentAudience = localStorage.getItem(AUDIENCE_KEY) || 'professional';
@@ -10,110 +13,198 @@ let lastRefreshWarning = '';
 let demoScenarioItems = [];
 let demoOverlayResult = null;
 
+function tr(key, fallback, vars = null) {
+    const base = I18N[key] || fallback || key;
+    if (!vars || typeof base !== 'string') return base;
+    return base.replace(/\{([a-zA-Z0-9_]+)\}/g, (_m, name) => {
+        return Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : `{${name}}`;
+    });
+}
+
+function authHeaders() {
+    return {
+        'Content-Type': 'application/json',
+        'X-Auth-Token': AUTH_TOKEN,
+        'X-AZAZEL-LANG': CURRENT_LANG,
+    };
+}
+
+function switchLanguage(lang) {
+    const next = lang === 'en' ? 'en' : 'ja';
+    localStorage.setItem(LANG_KEY, next);
+    const url = new URL(window.location.href);
+    url.searchParams.set('lang', next);
+    window.location.assign(url.toString());
+}
+
+function syncLanguageUi() {
+    const jaBtn = document.getElementById('langJaBtn');
+    const enBtn = document.getElementById('langEnBtn');
+    if (jaBtn) {
+        jaBtn.classList.toggle('active', CURRENT_LANG === 'ja');
+        jaBtn.classList.toggle('lang-active-ja', CURRENT_LANG === 'ja');
+        jaBtn.classList.remove('lang-active-en');
+    }
+    if (enBtn) {
+        enBtn.classList.toggle('active', CURRENT_LANG === 'en');
+        enBtn.classList.toggle('lang-active-en', CURRENT_LANG === 'en');
+        enBtn.classList.remove('lang-active-ja');
+    }
+}
+
 function setDemoOverlayVisualState(active) {
     document.body.classList.toggle('demo-overlay-active', !!active);
 }
 
 function resetDemoOverlayPresentation() {
     setDemoOverlayVisualState(false);
-    updateElement('demoStatusBadge', 'READY');
+    updateElement('demoStatusBadge', tr('dashboard.demo_ready', 'READY'));
     const badge = document.getElementById('demoStatusBadge');
     if (badge) badge.className = 'assistant-status status-neutral';
     updateElement('demoNocStatus', '-');
     updateElement('demoSocStatus', '-');
     updateElement('demoAction', '-');
     updateElement('demoReason', '-');
-    updateElement('demoOperatorWording', 'No demo overlay is active.');
-    updateElement('demoResponse', 'Run a scenario to preview the deterministic pipeline.');
-    renderList('demoNextChecks', ['No demo overlay active'], (item) => item);
-    renderList('demoEvidenceIds', ['No demo overlay active'], (item) => item);
-    renderList('demoRejectedAlternatives', ['No demo overlay active'], (item) => item);
+    updateElement('demoOperatorWording', tr('dashboard.no_demo', 'No demo overlay is active.'));
+    updateElement('demoResponse', tr('dashboard.no_demo_response', 'Run a scenario to preview the deterministic pipeline.'));
+    renderList('demoNextChecks', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
+    renderList('demoEvidenceIds', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
+    renderList('demoRejectedAlternatives', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
 }
 
 const shortcutQuestions = {
-    wifi: 'Wi-Fi に繋がらない利用者へどう案内するか',
-    reconnect: '再接続できない利用者へどう案内するか',
-    onboarding: '初回接続の利用者へどう案内するか',
-    dns: 'DNS が引けない時に何を確認するか',
-    route: 'gateway と uplink の異常時に何を確認するか',
-    service: 'service の異常時に何を確認するか',
-    portal: 'ポータルが表示されない利用者へどう案内するか',
+    wifi: CURRENT_LANG === 'ja' ? 'Wi-Fi に繋がらない利用者へどう案内するか' : 'How should I guide a user who cannot connect to Wi-Fi?',
+    reconnect: CURRENT_LANG === 'ja' ? '再接続できない利用者へどう案内するか' : 'How should I guide a user who cannot reconnect?',
+    onboarding: CURRENT_LANG === 'ja' ? '初回接続の利用者へどう案内するか' : 'How should I guide a first-time onboarding user?',
+    dns: CURRENT_LANG === 'ja' ? 'DNS が引けない時に何を確認するか' : 'What should I verify when DNS lookup fails?',
+    route: CURRENT_LANG === 'ja' ? 'gateway と uplink の異常時に何を確認するか' : 'What should I verify when the gateway or uplink looks unhealthy?',
+    service: CURRENT_LANG === 'ja' ? 'service の異常時に何を確認するか' : 'What should I verify when a service appears unhealthy?',
+    portal: CURRENT_LANG === 'ja' ? 'ポータルが表示されない利用者へどう案内するか' : 'How should I guide a user when the portal does not appear?',
 };
 
 const temporaryFlows = {
     wifi: {
-        ask: [
+        ask: CURRENT_LANG === 'ja' ? [
+            '最初に失敗している端末はどれですか？',
+            '端末から SSID は見えていますか？',
+            '問題は 1 台だけですか、それとも複数台ですか？'
+        ] : [
             'Which device is failing first?',
             'Does the device see the SSID at all?',
             'Is this only one device or multiple devices?'
         ],
-        tell: [
+        tell: CURRENT_LANG === 'ja' ? [
+            '端末の再起動を繰り返さないでください。',
+            '単一端末の問題か、広域の Wi-Fi 問題かを確認しています。'
+        ] : [
             'Do not repeatedly reboot the device yet.',
             'We are checking whether this is a single-device issue or a wider Wi-Fi issue.'
         ],
     },
     reconnect: {
-        ask: [
+        ask: CURRENT_LANG === 'ja' ? [
+            '以前は正常に接続できていましたか？',
+            '場所の移動やパスワード変更の後に失敗し始めましたか？',
+            '問題は 1 台だけですか？'
+        ] : [
             'Was the user connected successfully before?',
             'Did the failure start after moving location or after a password change?',
             'Is the problem only on one device?'
         ],
-        tell: [
+        tell: CURRENT_LANG === 'ja' ? [
+            '保存済みプロファイルの問題か、広域の無線問題かを確認しています。',
+            '当面は通常利用位置の近くで待機し、再接続の連打は避けてください。'
+        ] : [
             'We are checking whether this is a saved-profile issue or a broader wireless issue.',
             'Please keep the device near the normal usage area and avoid repeated reconnect attempts for the moment.'
         ],
     },
     onboarding: {
-        ask: [
+        ask: CURRENT_LANG === 'ja' ? [
+            'この端末がネットワークへ参加するのは初めてですか？',
+            '端末から想定の SSID は見えていますか？',
+            '標準のオンボーディング手順どおりに進めていますか？'
+        ] : [
             'Is this the first time this device is joining the network?',
             'Can the device see the expected SSID?',
             'Is the user following the standard onboarding steps?'
         ],
-        tell: [
+        tell: CURRENT_LANG === 'ja' ? [
+            'ネットワーク設定変更の前に、オンボーディング経路を先に確認しています。',
+            '端末名と、どの手順で止まったかを控えてください。'
+        ] : [
             'We are checking the onboarding path first before changing any network settings.',
             'Please prepare the device name and the exact step where the user got stuck.'
         ],
     },
     dns: {
-        ask: [
+        ask: CURRENT_LANG === 'ja' ? [
+            'どのサイトまたはホスト名が開けませんか？',
+            'IP アドレス直打ちでは開けますか？',
+            '複数の利用者に影響していますか？'
+        ] : [
             'Which site or hostname fails to open?',
             'Does access by IP address work?',
             'Is the issue affecting multiple users?'
         ],
-        tell: [
+        tell: CURRENT_LANG === 'ja' ? [
+            'まず名前解決の状態を確認しています。',
+            'DNS と gateway を確認する間、そのまま接続状態を維持してください。'
+        ] : [
             'We are checking name resolution first.',
             'Please keep the device connected while we verify DNS and gateway status.'
         ],
     },
     uplink: {
-        ask: [
+        ask: CURRENT_LANG === 'ja' ? [
+            '全利用者に影響していますか、それとも一部の区画だけですか？',
+            '問題はいつ始まりましたか？',
+            '外部サイトへまったく到達できませんか？'
+        ] : [
             'Are all users affected or only one area?',
             'When did the problem start?',
             'Is any external site reachable at all?'
         ],
-        tell: [
+        tell: CURRENT_LANG === 'ja' ? [
+            '上位回線と gateway 到達性を確認しています。',
+            '最初の確認が終わるまでケーブル変更やモード変更は行わないでください。'
+        ] : [
             'We are checking upstream connectivity and gateway reachability.',
             'Please avoid changing cables or mode settings until the first check completes.'
         ],
     },
     service: {
-        ask: [
+        ask: CURRENT_LANG === 'ja' ? [
+            'どの機能が使えないように見えますか？',
+            'UI 表示の問題ですか、それとも本当に機能停止ですか？',
+            '最後に正常に使えたのはいつですか？'
+        ] : [
             'Which function appears unavailable?',
             'Is the UI wrong, or is the function really down?',
             'When was the last successful use?'
         ],
-        tell: [
+        tell: CURRENT_LANG === 'ja' ? [
+            '再起動前に実サービス状態を確認しています。',
+            'status と journal を確認する間、そのままお待ちください。'
+        ] : [
             'We are confirming actual service status before any restart.',
             'Please wait while we check status and journal information.'
         ],
     },
     portal: {
-        ask: [
+        ask: CURRENT_LANG === 'ja' ? [
+            '接続後にブラウザは表示されますか？',
+            '通常サイトを入力すると何か表示されますか？',
+            '問題は 1 人だけですか、それとも複数人ですか？'
+        ] : [
             'Does the device show a browser at all after connecting?',
             'Can the user reach any page by typing a normal website address?',
             'Is this one user or multiple users?'
         ],
-        tell: [
+        tell: CURRENT_LANG === 'ja' ? [
+            'ポータルトリガーかブラウザ転送が失われていないか確認しています。',
+            '最初の確認が終わるまで、接続を維持したままお待ちください。'
+        ] : [
             'We are checking whether the portal trigger or browser redirection is missing.',
             'Please stay connected and avoid switching Wi-Fi networks until the first check completes.'
         ],
@@ -126,19 +217,21 @@ function formatAssistResponse(result) {
     const rationale = Array.isArray(result.rationale) && result.rationale.length
         ? result.rationale.join(' | ')
         : '-';
-    lines.push(`Rationale: ${rationale}`);
-    lines.push(`User Guidance: ${result.user_message || '-'}`);
-    lines.push(`Runbook: ${result.runbook_id || 'no suggestion'}`);
-    lines.push(`Review: ${result.runbook_review?.final_status || 'no review data'}`);
+    lines.push(`${tr('api.rationale', 'Rationale')}: ${rationale}`);
+    lines.push(`${tr('api.user_guidance', 'User Guidance')}: ${result.user_message || '-'}`);
+    lines.push(`${tr('api.suggested_runbook', 'Suggested Runbook')}: ${result.runbook_id || tr('api.no_suggestion', 'no suggestion')}`);
+    lines.push(`${tr('api.review_prefix', 'Review')}: ${result.runbook_review?.final_status || tr('dashboard.no_review_data', 'No review data')}`);
     const handoff = result.handoff && typeof result.handoff === 'object' ? result.handoff : {};
     const handoffParts = [];
     if (handoff.ops_comm) handoffParts.push(`Ops Comm ${handoff.ops_comm}`);
     if (handoff.mattermost) handoffParts.push(`Mattermost ${handoff.mattermost}`);
-    lines.push(`Continue: ${handoffParts.length ? handoffParts.join(' / ') : '-'}`);
+    lines.push(`${tr('api.continue', 'Continue')}: ${handoffParts.length ? handoffParts.join(' / ') : '-'}`);
     return lines.join('\n\n');
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    document.documentElement.lang = CURRENT_LANG;
+    syncLanguageUi();
     bindStaticHandlers();
     setAudience(currentAudience);
     refreshDashboard();
@@ -152,6 +245,8 @@ window.addEventListener('beforeunload', () => {
 });
 
 function bindStaticHandlers() {
+    document.getElementById('langJaBtn')?.addEventListener('click', () => switchLanguage('ja'));
+    document.getElementById('langEnBtn')?.addEventListener('click', () => switchLanguage('en'));
     document.getElementById('audienceProfessional')?.addEventListener('click', () => setAudience('professional'));
     document.getElementById('audienceTemporary')?.addEventListener('click', () => setAudience('temporary'));
 
@@ -192,7 +287,7 @@ function bindStaticHandlers() {
         const area = document.getElementById('mioQuestion');
         const question = String(area?.value || '').trim();
         if (!question) {
-            showToast('質問を入力してください。', 'info');
+            showToast(tr('dashboard.question_required', 'Enter a question first.'), 'info');
             return;
         }
         await askMio(question);
@@ -215,8 +310,8 @@ function setAudience(audience) {
     document.getElementById('audienceProfessional')?.classList.toggle('active', currentAudience === 'professional');
     document.getElementById('audienceTemporary')?.classList.toggle('active', currentAudience === 'temporary');
     updateElement('audienceSummary', currentAudience === 'temporary'
-        ? 'Temporary mode highlights user guidance, safe next steps, and suppresses dangerous controls'
-        : 'Professional mode shows deeper evidence, review status, and operator control context');
+        ? tr('dashboard.temporary_summary', 'Temporary mode prioritizes simpler wording, safe next steps, and user-facing guidance.')
+        : tr('dashboard.professional_summary', 'Professional mode shows deeper evidence, review status, and control context.'));
     if (currentAudience === 'temporary') {
         applyTemporaryFlow('wifi', false);
     }
@@ -229,7 +324,7 @@ function applyAudienceControlPolicy() {
         const btn = document.getElementById(id);
         if (!btn) return;
         btn.disabled = temporary;
-        btn.title = temporary ? 'Gateway mode changes are disabled in Temporary mode.' : '';
+        btn.title = temporary ? tr('dashboard.temp_do_not_do_default', 'Do not change mode or restart services until the first checks are done.') : '';
     });
 }
 
@@ -319,26 +414,26 @@ function updateMissionRow(summary, actions) {
 
     const temporary = currentAudience === 'temporary';
     const headline = temporary
-        ? (userGuidance || doNext[0] || recommendation || 'Guide the user safely.')
-        : (doNext[0] || recommendation || 'Review current operator action.');
+        ? (userGuidance || doNext[0] || recommendation || tr('dashboard.mission_headline_temporary_fallback', 'Guide the user safely.'))
+        : (doNext[0] || recommendation || tr('dashboard.mission_headline_professional_fallback', 'Review current operator action.'));
     const summaryLine = temporary
-        ? 'Temporary mode reduces the task to a safe first response and a user-facing explanation.'
-        : 'Professional mode compresses the first operator action, the current reason, and the non-negotiable safety rails.';
+        ? tr('dashboard.mission_summary_temporary', 'Temporary mode reduces the task to a safe first response and a user-facing explanation.')
+        : tr('dashboard.mission_summary_professional', 'Professional mode compresses the first operator action, the current reason, and the non-negotiable safety rails.');
     const focusItems = temporary
         ? ([
             ...(Array.isArray(actions.current_operator_actions) ? actions.current_operator_actions.slice(0, 2) : []),
             ...(doNext.slice(0, 1)),
         ].filter(Boolean))
         : doNext.slice(0, 3);
-    const safetyItems = doNotDo.length ? doNotDo.slice(0, 3) : ['Do not act on stale data without confirming freshness.'];
+    const safetyItems = doNotDo.length ? doNotDo.slice(0, 3) : [tr('dashboard.mission_safety_default', 'Do not act on stale data without confirming freshness.')];
 
     updateElement('missionHeadline', headline || '-');
     updateElement('missionSummary', summaryLine);
     updateElement('missionAudienceNote', temporary
-        ? 'Temporary mode places the first safe action and the user-facing instruction ahead of deep evidence.'
-        : 'Professional mode places the first operator action and the causal summary ahead of deep history.');
-    renderList('missionReasonList', whyNow.length ? whyNow.slice(0, 3) : ['Waiting for causal summary.'], (item) => item);
-    renderList('missionFocusList', focusItems.length ? focusItems : ['Waiting for next checks.'], (item) => item);
+        ? tr('dashboard.mission_note_temporary', 'Temporary mode places the first safe action and the user-facing instruction ahead of deep evidence.')
+        : tr('dashboard.mission_note_professional', 'Professional mode places the first operator action and the causal summary ahead of deep history.'));
+    renderList('missionReasonList', whyNow.length ? whyNow.slice(0, 3) : [tr('dashboard.waiting_causal_summary_ui', 'Waiting for causal summary.')], (item) => item);
+    renderList('missionFocusList', focusItems.length ? focusItems : [tr('dashboard.waiting_next_checks_ui', 'Waiting for next checks.')], (item) => item);
     renderList('missionSafetyList', safetyItems, (item) => item);
 }
 
@@ -351,11 +446,11 @@ function updateTemporaryMission(actions) {
     const tellItems = Array.from(document.querySelectorAll('#temporaryTellList li'))
         .map((item) => item.textContent || '')
         .filter(Boolean);
-    updateElement('temporaryMissionHeadline', actions.current_user_guidance || doNext[0] || 'Guide the user safely.');
-    updateElement('temporaryMissionSummary', 'Temporary mode compresses the first safe response, the interview prompts, and the forbidden actions into one block.');
+    updateElement('temporaryMissionHeadline', actions.current_user_guidance || doNext[0] || tr('dashboard.temp_headline_fallback', 'Guide the user safely.'));
+    updateElement('temporaryMissionSummary', tr('dashboard.temp_summary_ui', 'Temporary mode compresses the first safe response, the interview prompts, and the forbidden actions into one block.'));
     renderList('temporaryMissionAskList', askItems, (item) => item);
     renderList('temporaryMissionTellList', tellItems, (item) => item);
-    renderList('temporaryMissionDoNotDoList', doNotDo.length ? doNotDo : ['Do not change mode or restart services until the first checks are done.'], (item) => item);
+    renderList('temporaryMissionDoNotDoList', doNotDo.length ? doNotDo : [tr('dashboard.temp_do_not_do_default', 'Do not change mode or restart services until the first checks are done.')], (item) => item);
 }
 
 async function refreshDashboard() {
@@ -391,7 +486,7 @@ async function refreshDashboard() {
 
     if (hardFailures.length > 0) {
         console.error('Dashboard refresh failed:', hardFailures);
-        showToast(`Dashboard refresh failed: ${hardFailures.join(' | ')}`, 'error');
+        showToast(tr('dashboard.refresh_failed', 'Dashboard refresh failed: {error}', { error: hardFailures.join(' | ') }), 'error');
         return;
     }
 
@@ -408,6 +503,9 @@ async function refreshDashboard() {
     latestMattermost = mattermost || {};
     demoOverlayResult = demoOverlay && demoOverlay.active ? demoOverlay : null;
     setDemoOverlayVisualState(!!demoOverlayResult);
+    if (!demoOverlayResult) {
+        resetDemoOverlayPresentation();
+    }
 
     try {
         updateHeader(state, mattermost);
@@ -425,12 +523,12 @@ async function refreshDashboard() {
         }
     } catch (error) {
         console.error('Dashboard render failed:', error);
-        showToast(`Dashboard render failed: ${error.message}`, 'error');
+        showToast(tr('dashboard.render_failed', 'Dashboard render failed: {error}', { error: error.message }), 'error');
         return;
     }
 
     if (failures.length > 0) {
-        const warning = `Partial refresh: ${failures.join(' | ')}`;
+        const warning = tr('dashboard.partial_refresh', 'Partial refresh: {error}', { error: failures.join(' | ') });
         if (warning !== lastRefreshWarning) {
             showToast(warning, 'info');
             lastRefreshWarning = warning;
@@ -447,8 +545,8 @@ async function loadDemoScenarios() {
         const payload = await fetchJson('/api/demo/scenarios');
         demoScenarioItems = Array.isArray(payload.items) ? payload.items : [];
         if (!demoScenarioItems.length) {
-            select.innerHTML = '<option value="">No scenarios available</option>';
-            updateElement('demoScenarioDescription', 'No scenario is currently available.');
+            select.innerHTML = `<option value="">${escapeHtml(tr('dashboard.demo_no_scenarios', 'No scenarios available.'))}</option>`;
+            updateElement('demoScenarioDescription', tr('dashboard.demo_no_scenario_desc', 'No scenario is currently available.'));
             return;
         }
         select.innerHTML = demoScenarioItems
@@ -456,8 +554,8 @@ async function loadDemoScenarios() {
             .join('');
         updateDemoScenarioDescription();
     } catch (error) {
-        select.innerHTML = '<option value="">Failed to load scenarios</option>';
-        updateElement('demoScenarioDescription', `Failed to load scenarios: ${error.message}`);
+        select.innerHTML = `<option value="">${escapeHtml(tr('dashboard.demo_load_failed', 'Failed to load scenarios: {error}', { error: '...' }))}</option>`;
+        updateElement('demoScenarioDescription', tr('dashboard.demo_load_failed', 'Failed to load scenarios: {error}', { error: error.message }));
     }
 }
 
@@ -466,7 +564,7 @@ function updateDemoScenarioDescription() {
     const selected = String(select?.value || '').trim();
     const item = demoScenarioItems.find((row) => row.scenario_id === selected) || demoScenarioItems[0];
     if (!item) {
-        updateElement('demoScenarioDescription', 'No scenario selected.');
+        updateElement('demoScenarioDescription', tr('dashboard.demo_no_selection', 'No scenario selected.'));
         return;
     }
     if (select && !select.value) {
@@ -480,19 +578,19 @@ async function runDemoScenario() {
     const submit = document.getElementById('demoRunSubmit');
     const scenarioId = String(select?.value || '').trim();
     if (!scenarioId) {
-        showToast('Scenario is required.', 'info');
+        showToast(tr('dashboard.demo_scenario_required', 'Scenario is required.'), 'info');
         return;
     }
     if (submit) submit.disabled = true;
-    updateElement('demoResponse', 'Running demo scenario...');
-    updateElement('demoOperatorWording', 'Preparing scenario replay...');
+    updateElement('demoResponse', tr('dashboard.demo_running', 'Running demo scenario...'));
+    updateElement('demoOperatorWording', tr('dashboard.demo_preparing', 'Preparing scenario replay...'));
     updateElement('demoNocStatus', '-');
     updateElement('demoSocStatus', '-');
     updateElement('demoAction', '-');
     updateElement('demoReason', '-');
-    renderList('demoNextChecks', ['Waiting for scenario output'], (item) => item);
-    renderList('demoEvidenceIds', ['Waiting for scenario output'], (item) => item);
-    renderList('demoRejectedAlternatives', ['Waiting for scenario output'], (item) => item);
+    renderList('demoNextChecks', [tr('dashboard.demo_waiting_output', 'Waiting for scenario output')], (item) => item);
+    renderList('demoEvidenceIds', [tr('dashboard.demo_waiting_output', 'Waiting for scenario output')], (item) => item);
+    renderList('demoRejectedAlternatives', [tr('dashboard.demo_waiting_output', 'Waiting for scenario output')], (item) => item);
     const statusBadge = document.getElementById('demoStatusBadge');
     updateElement('demoStatusBadge', 'RUNNING');
     if (statusBadge) statusBadge.className = 'assistant-status status-caution';
@@ -504,7 +602,7 @@ async function runDemoScenario() {
         updateElement('demoSocStatus', result.soc?.summary?.status || '-');
         updateElement('demoAction', result.arbiter?.action || '-');
         updateElement('demoReason', result.arbiter?.reason || '-');
-        updateElement('demoOperatorWording', result.explanation?.operator_wording || 'No explanation returned.');
+        updateElement('demoOperatorWording', result.explanation?.operator_wording || tr('dashboard.demo_no_explanation', 'No explanation returned.'));
         renderList('demoNextChecks', result.explanation?.next_checks || [], (item) => item);
         renderList('demoEvidenceIds', result.explanation?.evidence_ids || result.arbiter?.chosen_evidence_ids || [], (item) => item);
         renderList(
@@ -534,31 +632,33 @@ async function runDemoScenario() {
                 },
             },
         });
-        showToast(`Demo completed: ${scenarioId}`, 'success');
+        showToast(tr('dashboard.demo_completed', 'Demo completed: {scenario}', { scenario: scenarioId }), 'success');
     } catch (error) {
-        updateElement('demoResponse', `Demo failed: ${error.message}`);
+        updateElement('demoResponse', tr('dashboard.demo_failed', 'Demo failed: {error}', { error: error.message }));
         updateElement('demoStatusBadge', 'FAILED');
-        updateElement('demoOperatorWording', `Scenario replay failed: ${error.message}`);
+        updateElement('demoOperatorWording', tr('dashboard.demo_failed', 'Demo failed: {error}', { error: error.message }));
         if (statusBadge) statusBadge.className = 'assistant-status status-danger';
-        showToast(`Demo failed: ${error.message}`, 'error');
+        showToast(tr('dashboard.demo_failed', 'Demo failed: {error}', { error: error.message }), 'error');
     } finally {
         if (submit) submit.disabled = false;
     }
 }
 
 async function clearDemoOverlay() {
-    if (!demoOverlayResult) {
-        showToast('No demo overlay is active.', 'info');
-        return;
-    }
     try {
         demoOverlayResult = null;
         resetDemoOverlayPresentation();
         await fetchJson('/api/demo/overlay/clear', { method: 'POST' });
+        const overlayState = await fetchJson('/api/demo/overlay');
+        demoOverlayResult = overlayState && overlayState.active ? overlayState.overlay : null;
+        if (!demoOverlayResult) {
+            resetDemoOverlayPresentation();
+            setDemoOverlayVisualState(false);
+        }
         await refreshDashboard();
-        showToast('Demo overlay cleared.', 'success');
+        showToast(tr('dashboard.demo_cleared', 'Demo overlay cleared.'), 'success');
     } catch (error) {
-        showToast(`Failed to clear demo overlay: ${error.message}`, 'error');
+        showToast(tr('dashboard.demo_failed', 'Demo failed: {error}', { error: error.message }), 'error');
     }
 }
 
@@ -587,10 +687,10 @@ function applyDemoOverlay(result) {
     updateElement('demoSocStatus', socStatus || '-');
     updateElement('demoAction', action || '-');
     updateElement('demoReason', reason || '-');
-    updateElement('demoOperatorWording', operatorWording || 'No explanation returned.');
-    renderList('demoNextChecks', nextChecks.length ? nextChecks : ['No next checks'], (item) => item);
-    renderList('demoEvidenceIds', evidenceIds.length ? evidenceIds : ['No evidence ids'], (item) => item);
-    renderList('demoRejectedAlternatives', rejected.length ? rejected : ['No rejected alternatives'], (item) =>
+    updateElement('demoOperatorWording', operatorWording || tr('dashboard.demo_no_explanation', 'No explanation returned.'));
+    renderList('demoNextChecks', nextChecks.length ? nextChecks : [tr('dashboard.demo_no_next_checks', 'No next checks')], (item) => item);
+    renderList('demoEvidenceIds', evidenceIds.length ? evidenceIds : [tr('dashboard.demo_no_evidence', 'No evidence ids')], (item) => item);
+    renderList('demoRejectedAlternatives', rejected.length ? rejected : [tr('dashboard.demo_no_rejections', 'No rejected alternatives')], (item) =>
         typeof item === 'string' ? item : `${item.action || '-'}: ${item.reason || '-'}`,
     );
     updateElement('demoResponse', JSON.stringify(raw && Object.keys(raw).length ? raw : result, null, 2));
@@ -607,7 +707,10 @@ function applyDemoOverlay(result) {
     const postureCard = document.getElementById('postureCard');
     if (postureCard) postureCard.className = `situation-card posture-card ${postureTone}`;
 
-    updateElement('commandStripNote', `Demo overlay active: ${scenarioId}. ${description || 'Synthetic scenario replay.'}`);
+    updateElement('commandStripNote', tr('dashboard.demo_overlay_note', 'Demo overlay active: {scenario}. {description}', {
+        scenario: scenarioId,
+        description: description || tr('dashboard.demo_overlay_note_fallback', 'Synthetic scenario replay.'),
+    }));
     updateElement('stripMode', 'DEMO');
     updateElement('stripRisk', userState);
     updateElement('stripUplink', scenarioId);
@@ -619,7 +722,7 @@ function applyDemoOverlay(result) {
 
     updateElement('postureState', `${userState} / ${stateName}`);
     updateElement('riskScore', String(suspicion));
-    updateElement('postureRecommendation', `Demo selected ${action} because ${reason}.`);
+    updateElement('postureRecommendation', tr('dashboard.demo_selected_action', 'Demo selected {action} because {reason}.', { action, reason }));
     updateElement('postureCurrentRecommendation', `Scenario ${scenarioId}: ${action}`);
     updateElement('postureConfidence', result.soc?.confidence?.label || nocStatus || '-');
     updateElement('postureLastAlert', scenarioId);
@@ -656,55 +759,61 @@ function applyDemoOverlay(result) {
     updateElement('nocPathGateway', 'demo-target');
     updateElement('nocPathInternet', action === 'notify' ? 'CHECK' : 'CONTROL');
     renderList('nocPathSignals', result.noc?.summary?.reasons || [], (item) => item);
-    renderList('nocServiceList', [`demo-services: simulated`, `control-mode: ${result.arbiter?.control_mode || 'none'}`], (item) => item);
+    renderList('nocServiceList', [
+        tr('dashboard.demo_service_simulated', 'demo-services: simulated'),
+        tr('dashboard.demo_control_mode', 'control-mode: {mode}', { mode: result.arbiter?.control_mode || 'none' }),
+    ], (item) => item);
     updateElement('nocClientScope', 'demo impact');
     updateElement('nocClientSegment', scenarioId);
     updateElement('nocClientPortal', 'N/A');
     updateElement('nocClientDnsMismatch', '0');
     renderList(
         'rejectedStrongerActionsList',
-        rejected.length ? rejected : ['No stronger-action rejection summary.'],
+        rejected.length ? rejected : [tr('dashboard.no_active_rejections', 'No rejected stronger actions')],
         (item) => typeof item === 'string' ? item : `${item.action || '-'}: ${item.reason || '-'}`,
     );
 
     renderList('whyNowList', [
-        `Scenario ${scenarioId} is active.`,
-        `NOC status: ${nocStatus}.`,
-        `SOC status: ${socStatus}.`,
-        `Reason: ${reason}.`,
+        tr('dashboard.scenario_active', 'Scenario {scenario} is active.', { scenario: scenarioId }),
+        tr('dashboard.noc_status_line', 'NOC status: {status}', { status: nocStatus }),
+        tr('dashboard.soc_status_line', 'SOC status: {status}', { status: socStatus }),
+        tr('dashboard.reason_line', 'Reason: {reason}', { reason }),
     ], (item) => item);
-    renderList('nextActionsList', nextChecks.length ? nextChecks : [`Review ${action} path for ${scenarioId}.`], (item) => item);
-    renderList('doNotDoList', ['Do not treat demo output as live telemetry.', 'Do not change gateway mode based on demo data alone.'], (item) => item);
-    renderList('escalateIfList', [`Move to ops review if the same pattern appears in live telemetry.`], (item) => item);
-    updateElement('userGuidanceText', `Demo overlay active. Current simulated action is ${action}.`);
-    updateElement('runbookTitle', 'Demo scenario summary');
+    renderList('nextActionsList', nextChecks.length ? nextChecks : [tr('dashboard.demo_review_action_path', 'Review {action} path for {scenario}.', { action, scenario: scenarioId })], (item) => item);
+    renderList('doNotDoList', [
+        tr('dashboard.demo_do_not_1', 'Do not treat demo output as live telemetry.'),
+        tr('dashboard.demo_do_not_2', 'Do not change gateway mode based on demo data alone.'),
+    ], (item) => item);
+    renderList('escalateIfList', [tr('dashboard.demo_escalate_if', 'Move to ops review if the same pattern appears in live telemetry.')], (item) => item);
+    updateElement('userGuidanceText', tr('dashboard.demo_user_guidance', 'This is a demo overlay. Compare it against live telemetry before acting.'));
+    updateElement('runbookTitle', tr('dashboard.demo_runbook_title', 'Demo scenario summary'));
     updateElement('runbookId', scenarioId);
-    updateElement('runbookEffect', 'display_only');
-    updateElement('runbookApproval', 'Not applicable');
-    renderList('runbookSteps', nextChecks.length ? nextChecks : ['Inspect explanation output', 'Compare with live telemetry before acting'], (item) => item);
+    updateElement('runbookEffect', tr('dashboard.display_only', 'display_only'));
+    updateElement('runbookApproval', tr('dashboard.not_applicable', 'Not applicable'));
+    renderList('runbookSteps', nextChecks.length ? nextChecks : [tr('dashboard.demo_runbook_step_1', 'Inspect explanation output'), tr('dashboard.demo_runbook_step_2', 'Compare with live telemetry before acting')], (item) => item);
 
     renderTimeline('currentTriggersTimeline', [
         {
             ts_iso: result.ts || raw.explanation?.ts || '-',
             kind: 'demo',
-            title: `Scenario ${scenarioId}`,
-            detail: description || 'Synthetic demo scenario replay',
+            title: tr('dashboard.demo_trigger_title', 'Scenario {scenario}', { scenario: scenarioId }),
+            detail: description || tr('dashboard.demo_trigger_detail', 'Synthetic demo scenario replay'),
         },
     ], (item) => item);
     renderTimeline('decisionChangesTimeline', [
         {
             ts_iso: result.ts || raw.explanation?.ts || '-',
             kind: 'arbiter',
-            title: `${action} selected`,
-            detail: reason || 'No reason provided',
+            title: tr('dashboard.demo_decision_title', '{action} selected', { action }),
+            detail: reason || tr('dashboard.demo_decision_no_reason', 'No reason provided'),
         },
     ], (item) => item);
     renderTimeline('operatorInteractionsTimeline', [
         {
             ts_iso: result.ts || raw.explanation?.ts || '-',
             kind: 'demo',
-            title: 'Demo overlay applied to dashboard',
-            detail: 'Display state is synthetic until cleared.',
+            title: tr('dashboard.demo_operator_interaction_title', 'Demo overlay applied to dashboard'),
+            detail: tr('dashboard.demo_operator_interaction_detail', 'Display state is synthetic until cleared.'),
         },
     ], (item) => item);
     renderTimeline('backgroundHistoryTimeline', rejected, (item) => ({
@@ -713,19 +822,19 @@ function applyDemoOverlay(result) {
         title: item.action || '-',
         detail: item.reason || '-',
     }));
-    updateElement('healthSummaryLine', `Demo overlay active | scenario=${scenarioId} | action=${action} | evidence=${evidenceIds.length}`);
+    updateElement('healthSummaryLine', tr('dashboard.demo_health_summary', 'Demo overlay active | scenario={scenario} | action={action} | evidence={count}', { scenario: scenarioId, action, count: evidenceIds.length }));
 
-    updateElement('mioCurrentAnswer', `Demo overlay active for ${scenarioId}. ${operatorWording}`.trim());
-    updateElement('mioRecommendation', `Demo scenario ${scenarioId} selected ${action}.`);
-    updateElement('mioLastAsk', `Demo scenario replay | ${scenarioId}`);
-    updateElement('mioRunbookSummary', `Scenario ${scenarioId} | display_only`);
+    updateElement('mioCurrentAnswer', tr('dashboard.demo_mio_answer', 'Demo overlay active for {scenario}. {wording}', { scenario: scenarioId, wording: operatorWording }).trim());
+    updateElement('mioRecommendation', tr('dashboard.demo_mio_recommendation', 'Demo scenario {scenario} selected {action}.', { scenario: scenarioId, action }));
+    updateElement('mioLastAsk', tr('dashboard.demo_mio_last_ask', 'Demo scenario replay | {scenario}', { scenario: scenarioId }));
+    updateElement('mioRunbookSummary', tr('dashboard.demo_mio_runbook', 'Scenario {scenario} | display_only', { scenario: scenarioId }));
     renderList('mioRationaleList', [
-        `Demo scenario: ${scenarioId}`,
-        `NOC=${nocStatus}, SOC=${socStatus}`,
-        `Arbiter action=${action}`,
-        `Reason=${reason}`,
+        tr('dashboard.demo_mio_rationale_1', 'Demo scenario: {scenario}', { scenario: scenarioId }),
+        tr('dashboard.demo_mio_rationale_2', 'NOC={noc}, SOC={soc}', { noc: nocStatus, soc: socStatus }),
+        tr('dashboard.demo_mio_rationale_3', 'Arbiter action={action}', { action }),
+        tr('dashboard.demo_mio_rationale_4', 'Reason={reason}', { reason }),
     ], (item) => item);
-    updateElement('mioUserGuidance', `This is a demo overlay. Compare it against live telemetry before acting.`);
+    updateElement('mioUserGuidance', tr('dashboard.demo_user_guidance', 'This is a demo overlay. Compare it against live telemetry before acting.'));
     updateElement('mioReview', 'demo-overlay');
     const mioStatusBadge = document.getElementById('mioStatusBadge');
     if (mioStatusBadge) {
@@ -733,14 +842,17 @@ function applyDemoOverlay(result) {
         mioStatusBadge.className = 'assistant-status status-demo';
     }
     updateTemporaryMission({
-        current_user_guidance: `Demo overlay active. Current simulated action is ${action}.`,
+        current_user_guidance: tr('dashboard.demo_user_guidance', 'This is a demo overlay. Compare it against live telemetry before acting.'),
         do_next: nextChecks,
-        do_not_do: ['Do not treat demo output as live telemetry.', 'Do not change gateway mode based on demo data alone.'],
+        do_not_do: [
+            tr('dashboard.demo_user_guidance', 'This is a demo overlay. Compare it against live telemetry before acting.'),
+            tr('dashboard.temp_do_not_do_default', 'Do not change mode or restart services until the first checks are done.'),
+        ],
     });
 }
 
 async function fetchJson(path, options = {}) {
-    const headers = Object.assign({}, options.headers || {}, { 'X-Auth-Token': AUTH_TOKEN });
+    const headers = Object.assign({}, options.headers || {}, { 'X-Auth-Token': AUTH_TOKEN, 'X-AZAZEL-LANG': CURRENT_LANG });
     const response = await fetch(path, { ...options, headers });
     const payload = await response.json();
     if (!response.ok || payload.ok === false) {
@@ -771,8 +883,12 @@ function updateCommandStrip(summary, health, failures = []) {
     updateElement('stripQueue', `${health.queue?.depth ?? 0} / ${health.queue?.capacity ?? 0}`);
     updateElement('stripStale', strip.stale_warning ? 'YES' : 'NO');
     const baseNote = strip.stale_warning
-        ? 'One or more dashboard inputs are stale. Verify control-plane freshness before acting.'
-        : 'Dashboard inputs are live and in sync with current control-plane state.';
+        ? (CURRENT_LANG === 'ja'
+            ? 'ダッシュボード入力の一部が stale です。操作前に control-plane の鮮度を確認してください。'
+            : 'One or more dashboard inputs are stale. Verify control-plane freshness before acting.')
+        : (CURRENT_LANG === 'ja'
+            ? 'ダッシュボード入力は live で、現在の control-plane 状態と同期しています。'
+            : 'Dashboard inputs are live and in sync with current control-plane state.');
     updateElement('commandStripNote', failures.length > 0 ? `${baseNote} Degraded APIs: ${failures.join(' | ')}` : baseNote);
     updateElement('freshnessSnapshot', formatFreshness(health.ages_sec?.snapshot, health.timestamps?.snapshot_at, health.stale_flags?.snapshot));
     updateElement('freshnessAiMetrics', formatFreshness(health.ages_sec?.ai_metrics, health.timestamps?.ai_metrics_at, health.stale_flags?.ai_metrics));
@@ -816,7 +932,7 @@ function updateSplitBoard(summary, actions) {
     const path = noc.path_health || {};
     const services = noc.service_health || {};
     const clientImpact = noc.client_impact || {};
-    const attackType = soc.attack_type || 'No current attack type';
+    const attackType = soc.attack_type || tr('dashboard.no_attack_type', 'No current attack type');
 
     updateElement('socThreatLevel', String(soc.threat_level || 'quiet').toUpperCase());
     updateElement('socThreatSummary', `${attackType} | src=${soc.top_source || '-'} | dst=${soc.top_destination || '-'}`);
@@ -869,14 +985,14 @@ function updateActionBoard(actions, state) {
     updateElement('userGuidanceText', actions.current_user_guidance || '-');
 
     const runbook = actions.suggested_runbook || {};
-    const primaryAction = (actions.do_next || actions.current_operator_actions || [])[0] || actions.current_user_guidance || 'No immediate action synthesized.';
-    const primarySummary = (actions.why_now || [])[0] || 'The dashboard is waiting for stronger causal evidence.';
+    const primaryAction = (actions.do_next || actions.current_operator_actions || [])[0] || actions.current_user_guidance || tr('dashboard.no_immediate_action', 'No immediate action synthesized.');
+    const primarySummary = (actions.why_now || [])[0] || tr('dashboard.waiting_stronger_evidence', 'The dashboard is waiting for stronger causal evidence.');
     updateElement('priorityActionTitle', primaryAction);
     updateElement('priorityActionSummary', primarySummary);
     updateElement('runbookTitle', runbook.title || '-');
     updateElement('runbookId', runbook.id || '-');
     updateElement('runbookEffect', runbook.effect || '-');
-    updateElement('runbookApproval', actions.approval_required ? 'Required' : 'Not required');
+    updateElement('runbookApproval', actions.approval_required ? tr('dashboard.review_required', 'Required') : tr('dashboard.review_not_required', 'Not required'));
     renderList('runbookSteps', runbook.steps || [], (item) => item);
 
     const mode = latestState.mode || {};
@@ -887,7 +1003,7 @@ function updateActionBoard(actions, state) {
     if (portalBtn) {
         const portalViewer = latestState.portal_viewer || {};
         portalBtn.disabled = !portalViewer.url;
-        portalBtn.textContent = portalViewer.ready ? 'Portal Assist' : 'Portal Assist (prep)';
+        portalBtn.textContent = portalViewer.ready ? 'Portal Assist' : tr('dashboard.portal_assist_prep', 'Portal Assist (prep)');
     }
 }
 
@@ -897,8 +1013,8 @@ function updateEvidenceBoard(evidence, health) {
         : [{
             ts_iso: latestState.timestamps?.snapshot_at || '-',
             kind: 'state',
-            title: 'No active trigger',
-            detail: 'No current trigger is keeping the dashboard outside normal monitoring.',
+            title: tr('dashboard.no_active_trigger_title', 'No active trigger'),
+            detail: tr('dashboard.no_active_trigger_detail', 'No current trigger is keeping the dashboard outside normal monitoring.'),
         }];
     renderTimeline('currentTriggersTimeline', currentTriggers, (item) => ({
         metaLeft: item.ts_iso || '-',
@@ -930,7 +1046,15 @@ function updateEvidenceBoard(evidence, health) {
 
     const stale = health.stale_flags || {};
     const idle = health.idle_flags || {};
-    updateElement('healthSummaryLine', `Queue ${health.queue?.depth ?? 0}/${health.queue?.capacity ?? 0} | fallback ${(health.llm?.fallback_rate ?? 0)} | stale snapshot=${stale.snapshot ? 'yes' : 'no'} ai=${stale.ai_metrics ? 'yes' : 'no'} | idle ai=${idle.ai_activity ? 'yes' : 'no'} runbook=${idle.runbook_events ? 'yes' : 'no'}`);
+    updateElement('healthSummaryLine', tr('dashboard.health_summary_line', 'Queue {depth}/{capacity} | fallback {fallback} | stale snapshot={snapshot} ai={ai} | idle ai={ai_idle} runbook={runbook_idle}', {
+        depth: health.queue?.depth ?? 0,
+        capacity: health.queue?.capacity ?? 0,
+        fallback: health.llm?.fallback_rate ?? 0,
+        snapshot: stale.snapshot ? 'yes' : 'no',
+        ai: stale.ai_metrics ? 'yes' : 'no',
+        ai_idle: idle.ai_activity ? 'yes' : 'no',
+        runbook_idle: idle.runbook_events ? 'yes' : 'no',
+    }));
 }
 
 function updateAssistant(actions, mattermost, capabilities) {
@@ -940,17 +1064,17 @@ function updateAssistant(actions, mattermost, capabilities) {
     const askedAt = mio.asked_at ? formatHumanDateTime(mio.asked_at) : '';
     const lastAsk = mio.question
         ? `${mio.question}${askedAt ? ` | ${askedAt}` : ''}${mio.source ? ` | ${mio.source}` : ''}`
-        : 'No manual query executed yet.';
+        : tr('dashboard.no_manual_query', 'No manual query executed yet.');
     updateElement('mioLastAsk', lastAsk);
     const mioRunbook = mio.runbook || actions.suggested_runbook || {};
     const runbookSummary = mioRunbook.title
         ? `${mioRunbook.title}${mioRunbook.id ? ` | ${mioRunbook.id}` : ''}${mioRunbook.effect ? ` | ${mioRunbook.effect}` : ''}`
-        : 'No runbook selected.';
+        : tr('dashboard.no_runbook_selected', 'No runbook selected.');
     updateElement('mioRunbookSummary', runbookSummary);
     renderList('mioRationaleList', mio.rationale || [], (item) => item);
     updateElement('mioUserGuidance', actions.current_user_guidance || '-');
-    updateElement('mioReview', mio.review?.final_status || 'No review data');
-    updateElement('mattermostState', mattermost.reachable ? 'reachable' : 'unreachable');
+    updateElement('mioReview', mio.review?.final_status || tr('dashboard.no_review_data', 'No review data'));
+    updateElement('mattermostState', mattermost.reachable ? tr('dashboard.state_reachable', 'reachable') : tr('dashboard.state_unreachable', 'unreachable'));
     updateElement('mattermostTriggers', joinList(mattermost.command_triggers || capabilities.mattermost_triggers || []));
     const opsCommLink = document.getElementById('assistantOpsCommLink');
     if (opsCommLink) opsCommLink.href = mio.handoff?.ops_comm || '/ops-comm';
@@ -1031,7 +1155,7 @@ async function askMioWithOptions(question, options = {}) {
     const silent = Boolean(options.silent);
     const extraContext = options.context && typeof options.context === 'object' ? options.context : {};
     if (submit) submit.disabled = true;
-    if (responseBox) responseBox.textContent = 'M.I.O. is analyzing...';
+    if (responseBox) responseBox.textContent = tr('dashboard.mio_analyzing', 'M.I.O. is analyzing...');
 
     try {
         const result = await fetchJson('/api/ai/ask', {
@@ -1039,9 +1163,10 @@ async function askMioWithOptions(question, options = {}) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 question,
+                lang: CURRENT_LANG,
                 sender: 'Dashboard',
                 source: options.source || 'dashboard',
-                context: Object.assign({ audience: currentAudience }, extraContext),
+                context: Object.assign({ audience: currentAudience, lang: CURRENT_LANG }, extraContext),
             }),
         });
         if (responseBox) {
@@ -1063,11 +1188,11 @@ async function askMioWithOptions(question, options = {}) {
             statusBadge.textContent = String(result.status || 'completed').toUpperCase();
             statusBadge.className = `assistant-status ${toneForStatus(result.status || 'completed')}`;
         }
-        if (!silent) showToast('M.I.O. response received', 'success');
+        if (!silent) showToast(tr('dashboard.mio_response_received', 'M.I.O. response received'), 'success');
         return result;
     } catch (error) {
-        if (responseBox) responseBox.textContent = `M.I.O. request failed: ${error.message}`;
-        if (!silent) showToast(`M.I.O. request failed: ${error.message}`, 'error');
+        if (responseBox) responseBox.textContent = `${tr('dashboard.mio_request_failed', 'M.I.O. request failed')}: ${error.message}`;
+        if (!silent) showToast(`${tr('dashboard.mio_request_failed', 'M.I.O. request failed')}: ${error.message}`, 'error');
         throw error;
     } finally {
         if (submit) submit.disabled = false;

@@ -1,0 +1,78 @@
+flow_id: wifi_reconnect
+version: 1
+intents:
+  - wifi_reconnect
+label_i18n:
+  ja: Wi-Fi 再接続トリアージ
+  en: Wi-Fi reconnect triage
+entry_state: prior_access
+steps:
+  - step_id: prior_access
+    question_i18n:
+      ja: 以前は同じ場所で接続できていましたか？
+      en: Did this device connect successfully here before?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: password_changed
+      no: wifi_onboarding_needed
+    fallback_transition: user_cannot_answer
+  - step_id: password_changed
+    question_i18n:
+      ja: パスワードや認証方式に変更はありましたか？
+      en: Was the password or authentication method changed?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: reconnect_credentials_refresh
+      no: signal_vs_dhcp
+    fallback_transition: user_cannot_answer
+  - step_id: signal_vs_dhcp
+    question_i18n:
+      ja: SSID は見えていますか？
+      en: Is the SSID visible to the device?
+    answer_type: boolean
+    choices:
+      - value: yes
+        label_i18n: {ja: はい, en: Yes}
+      - value: no
+        label_i18n: {ja: いいえ, en: No}
+    transition_map:
+      yes: dhcp_likely
+      no: wifi_signal_unavailable
+    fallback_transition: user_cannot_answer
+
+diagnostic_states:
+  - state_id: wifi_onboarding_needed
+    severity: low
+    summary_key: triage.wifi.onboarding_needed.summary
+    user_guidance_key: triage.wifi.onboarding_needed.user
+    operator_note_key: triage.wifi.onboarding_needed.operator
+  - state_id: reconnect_credentials_refresh
+    severity: low
+    summary_key: triage.wifi.reconnect_credentials.summary
+    user_guidance_key: triage.wifi.reconnect_credentials.user
+    operator_note_key: triage.wifi.reconnect_credentials.operator
+  - state_id: dhcp_likely
+    severity: medium
+    summary_key: triage.wifi.dhcp_likely.summary
+    user_guidance_key: triage.wifi.dhcp_likely.user
+    operator_note_key: triage.wifi.dhcp_likely.operator
+  - state_id: wifi_signal_unavailable
+    severity: medium
+    summary_key: triage.wifi.signal_unavailable.summary
+    user_guidance_key: triage.wifi.signal_unavailable.user
+    operator_note_key: triage.wifi.signal_unavailable.operator
+  - state_id: user_cannot_answer
+    severity: low
+    summary_key: triage.common.user_cannot_answer.summary
+    user_guidance_key: triage.common.user_cannot_answer.user
+    operator_note_key: triage.common.user_cannot_answer.operator

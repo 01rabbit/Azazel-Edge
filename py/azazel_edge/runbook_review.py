@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List
 
+from azazel_edge.i18n import translate_review_texts
 from azazel_edge.runbooks import get_runbook, list_runbooks
 
 
@@ -195,6 +196,7 @@ def _qa_review(runbook: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, An
 
 def review_runbook(runbook: Dict[str, Any], context: Dict[str, Any] | None = None) -> Dict[str, Any]:
     ctx = context if isinstance(context, dict) else {}
+    lang = str(ctx.get("lang") or "ja")
     reviewers = [
         _soc_review(runbook, ctx),
         _noc_review(runbook, ctx),
@@ -214,6 +216,11 @@ def review_runbook(runbook: Dict[str, Any], context: Dict[str, Any] | None = Non
         confidence = 0.74
     elif final_status == "rejected":
         confidence = 0.58
+    findings = translate_review_texts(findings, lang=lang)
+    required_changes = translate_review_texts(required_changes, lang=lang)
+    for item in reviewers:
+        item["findings"] = translate_review_texts(item.get("findings", []), lang=lang)
+        item["amendments"] = translate_review_texts(item.get("amendments", []), lang=lang)
     return {
         "ok": True,
         "runbook_id": str(runbook.get("id") or ""),
@@ -228,7 +235,8 @@ def review_runbook(runbook: Dict[str, Any], context: Dict[str, Any] | None = Non
 
 
 def review_runbook_id(runbook_id: str, context: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    runbook = get_runbook(runbook_id)
+    lang = str((context or {}).get("lang") or "ja")
+    runbook = get_runbook(runbook_id, lang=lang)
     return review_runbook(runbook, context=context)
 
 

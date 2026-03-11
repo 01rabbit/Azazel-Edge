@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 import azazel_edge_web.app as webapp
+from azazel_edge.demo_overlay import build_demo_overlay, clear_demo_overlay, read_demo_overlay, write_demo_overlay
 
 
 class DemoApiV1Tests(unittest.TestCase):
@@ -25,6 +27,10 @@ class DemoApiV1Tests(unittest.TestCase):
         webapp.load_token = lambda: None
         webapp.STATE_PATH = root / "ui_snapshot.json"
         webapp.STATE_PATH.write_text(json.dumps({"ok": True}), encoding="utf-8")
+        self.overlay_path = root / "demo_overlay.json"
+        webapp.read_demo_overlay = lambda: read_demo_overlay(self.overlay_path)
+        webapp.write_demo_overlay = lambda payload: write_demo_overlay(payload, self.overlay_path)
+        webapp.clear_demo_overlay = lambda: clear_demo_overlay(self.overlay_path)
         self.client = webapp.app.test_client()
 
     def tearDown(self) -> None:
@@ -120,6 +126,27 @@ class DemoApiV1Tests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertTrue(cleared["done"])
         self.assertTrue(side_effect["done"])
+
+    def test_stale_overlay_is_ignored_and_removed(self) -> None:
+        overlay_path = Path(self.tmp.name) / "demo_overlay.json"
+        overlay_path.write_text(json.dumps({
+            "active": True,
+            "scenario_id": "stale-demo",
+            "ts": time.time() - 3600,
+            "boot_id": "old-boot",
+        }), encoding="utf-8")
+        payload = read_demo_overlay(overlay_path)
+        self.assertEqual(payload, {})
+        self.assertFalse(overlay_path.exists())
+
+    def test_overlay_without_current_boot_id_is_ignored(self) -> None:
+        overlay_path = Path(self.tmp.name) / "demo_overlay.json"
+        payload = build_demo_overlay({"scenario_id": "boot-check", "arbiter": {"action": "observe"}})
+        payload["boot_id"] = "different-boot-id"
+        overlay_path.write_text(json.dumps(payload), encoding="utf-8")
+        loaded = read_demo_overlay(overlay_path)
+        self.assertEqual(loaded, {})
+        self.assertFalse(overlay_path.exists())
 
 
 if __name__ == "__main__":

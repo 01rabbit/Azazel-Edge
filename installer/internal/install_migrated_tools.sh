@@ -48,6 +48,8 @@ install -d \
   /opt/azazel-edge/py/azazel_edge/sensors \
   /opt/azazel-edge/py/azazel_edge/sigma \
   /opt/azazel-edge/py/azazel_edge/sot \
+  /opt/azazel-edge/py/azazel_edge/triage \
+  /opt/azazel-edge/py/azazel_edge/triage/flows \
   /opt/azazel-edge/py/azazel_edge/ti \
   /opt/azazel-edge/py/azazel_edge/yara \
   /opt/azazel-edge/py/azazel_edge_control/scripts \
@@ -100,6 +102,7 @@ for package in \
   notify \
   sigma \
   sot \
+  triage \
   ti \
   yara
 do
@@ -194,6 +197,7 @@ install -m 0644 "$REPO_ROOT/runbooks/noc/"*.yaml /opt/azazel-edge/runbooks/noc/
 install -m 0644 "$REPO_ROOT/runbooks/ops/"*.yaml /opt/azazel-edge/runbooks/ops/
 install -m 0644 "$REPO_ROOT/runbooks/soc/"*.yaml /opt/azazel-edge/runbooks/soc/
 install -m 0644 "$REPO_ROOT/runbooks/user/"*.yaml /opt/azazel-edge/runbooks/user/
+install -m 0644 "$REPO_ROOT/py/azazel_edge/triage/flows/"*.yaml /opt/azazel-edge/py/azazel_edge/triage/flows/
 if [[ ! -e /etc/azazel-gadget ]]; then
   ln -s /etc/azazel-edge /etc/azazel-gadget
 fi

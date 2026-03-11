@@ -8,6 +8,12 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 import yaml
 
+from azazel_edge.i18n import (
+    localize_runbook_steps,
+    localize_runbook_title,
+    localize_runbook_user_message,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK_DIRS = [
     Path(os.environ.get("AZAZEL_RUNBOOK_DIR", "/etc/azazel-edge/runbooks")),
@@ -66,7 +72,7 @@ def _validate_runbook_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
     return doc
 
 
-def list_runbooks() -> List[Dict[str, Any]]:
+def list_runbooks(lang: str | None = None) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for path in _iter_runbook_files():
         try:
@@ -74,12 +80,14 @@ def list_runbooks() -> List[Dict[str, Any]]:
             items.append(
                 {
                     "id": doc["id"],
-                    "title": doc["title"],
+                    "title": localize_runbook_title(doc, lang=lang),
                     "domain": doc["domain"],
                     "audience": doc["audience"],
                     "risk": doc["risk"],
                     "effect": doc["effect"],
                     "requires_approval": bool(doc["requires_approval"]),
+                    "steps": localize_runbook_steps(doc, lang=lang),
+                    "user_message_template": localize_runbook_user_message(doc, lang=lang),
                     "path": doc["_path"],
                 }
             )
@@ -88,7 +96,7 @@ def list_runbooks() -> List[Dict[str, Any]]:
     return sorted(items, key=lambda x: str(x.get("id") or ""))
 
 
-def get_runbook(runbook_id: str) -> Dict[str, Any]:
+def get_runbook(runbook_id: str, lang: str | None = None) -> Dict[str, Any]:
     target = str(runbook_id or "").strip()
     if not target:
         raise KeyError("runbook_id_required")
@@ -98,6 +106,9 @@ def get_runbook(runbook_id: str) -> Dict[str, Any]:
         except Exception:
             continue
         if str(doc.get("id")) == target:
+            doc["title"] = localize_runbook_title(doc, lang=lang)
+            doc["steps"] = localize_runbook_steps(doc, lang=lang)
+            doc["user_message_template"] = localize_runbook_user_message(doc, lang=lang)
             return doc
     raise KeyError(f"runbook_not_found:{target}")
 
@@ -181,22 +192,23 @@ def execute_runbook(
     dry_run: bool = True,
     approved: bool = False,
     allow_controlled_exec: bool = False,
+    lang: str | None = None,
 ) -> Dict[str, Any]:
-    runbook = get_runbook(runbook_id)
+    runbook = get_runbook(runbook_id, lang=lang)
     validated_args = validate_args(runbook, args)
     built = build_command(runbook, validated_args)
     result = {
         "ok": True,
         "runbook_id": runbook["id"],
-        "title": runbook["title"],
+        "title": localize_runbook_title(runbook, lang=lang),
         "effect": runbook["effect"],
         "requires_approval": bool(runbook.get("requires_approval")),
         "args": validated_args,
         "dry_run": bool(dry_run),
         "approved": bool(approved),
         "command": built,
-        "steps": runbook.get("steps", []),
-        "user_message_template": runbook.get("user_message_template", ""),
+        "steps": localize_runbook_steps(runbook, lang=lang),
+        "user_message_template": localize_runbook_user_message(runbook, lang=lang),
     }
     effect = str(runbook.get("effect") or "")
     if dry_run or effect not in {"read_only", "controlled_exec"} or not built["exec"]:
