@@ -82,6 +82,16 @@ const shortcutQuestions = {
     portal: CURRENT_LANG === 'ja' ? 'ポータルが表示されない利用者へどう案内するか' : 'How should I guide a user when the portal does not appear?',
 };
 
+const triageIntentBySymptom = {
+    wifi: 'wifi_connectivity',
+    reconnect: 'wifi_reconnect',
+    onboarding: 'wifi_onboarding',
+    dns: 'dns_resolution',
+    uplink: 'uplink_reachability',
+    service: 'service_status',
+    portal: 'portal_access',
+};
+
 const temporaryFlows = {
     wifi: {
         ask: CURRENT_LANG === 'ja' ? [
@@ -279,6 +289,7 @@ function bindStaticHandlers() {
         btn.addEventListener('click', () => {
             const symptom = String(btn.dataset.symptom || '').trim();
             applyTemporaryFlow(symptom);
+            updateTemporaryOpsCommLink(symptom);
         });
     });
 
@@ -303,6 +314,22 @@ function bindStaticHandlers() {
     loadDemoScenarios();
 }
 
+function buildOpsCommTriageUrl(intentId = '', question = '') {
+    const url = new URL('/ops-comm', window.location.origin);
+    url.searchParams.set('lang', CURRENT_LANG);
+    url.searchParams.set('audience', currentAudience === 'temporary' ? 'beginner' : 'operator');
+    if (intentId) url.searchParams.set('triage_intent', intentId);
+    if (question) url.searchParams.set('message', question);
+    return `${url.pathname}${url.search}`;
+}
+
+function updateTemporaryOpsCommLink(symptom = 'wifi') {
+    const link = document.getElementById('temporaryOpsCommLink');
+    if (!link) return;
+    const key = triageIntentBySymptom[symptom] ? symptom : 'wifi';
+    link.href = buildOpsCommTriageUrl(triageIntentBySymptom[key], shortcutQuestions[key] || '');
+}
+
 function setAudience(audience) {
     currentAudience = audience === 'temporary' ? 'temporary' : 'professional';
     localStorage.setItem(AUDIENCE_KEY, currentAudience);
@@ -315,6 +342,7 @@ function setAudience(audience) {
     if (currentAudience === 'temporary') {
         applyTemporaryFlow('wifi', false);
     }
+    updateTemporaryOpsCommLink('wifi');
     applyAudienceControlPolicy();
 }
 
@@ -331,6 +359,7 @@ function applyAudienceControlPolicy() {
 function applyTemporaryFlow(symptom, triggerAsk = true) {
     const selected = temporaryFlows[symptom] ? symptom : 'wifi';
     const flow = temporaryFlows[selected];
+    updateTemporaryOpsCommLink(selected);
     renderList('temporaryAskList', flow.ask || [], (item) => item);
     renderList('temporaryTellList', flow.tell || [], (item) => item);
     if (!triggerAsk) return;

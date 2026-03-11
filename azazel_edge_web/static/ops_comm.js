@@ -74,6 +74,10 @@ function syncAudienceUi() {
     renderShortcuts();
 }
 
+function queryParams() {
+    return new URLSearchParams(window.location.search);
+}
+
 function triageAudienceMode() {
     return currentAudience === 'beginner' ? 'temporary' : 'professional';
 }
@@ -377,6 +381,24 @@ function resetTriageUi() {
     if (wrap) wrap.style.display = 'none';
 }
 
+function buildTriageHandoffMessage() {
+    if (!triageSession || !triageSession.diagnostic_state) return '';
+    const diagnosticText = document.getElementById('triageDiagnostic')?.textContent || triageSession.diagnostic_state;
+    const summaryText = document.getElementById('triageMioSummary')?.textContent || '-';
+    const handoffText = document.getElementById('triageHandoff')?.textContent || '-';
+    const runbookNodes = Array.from(document.querySelectorAll('#triageRunbooks .ops-triage-runbook-item strong'));
+    const runbooks = runbookNodes.map((node) => node.textContent || '-').filter(Boolean);
+    return [
+        '[Triage Handoff]',
+        `audience=${triageAudienceMode()}`,
+        `intent=${triageSession.selected_intent || '-'}`,
+        `diagnostic=${diagnosticText}`,
+        `summary=${summaryText}`,
+        `handoff=${handoffText}`,
+        `runbooks=${runbooks.length ? runbooks.join(' | ') : '-'}`,
+    ].join('\n');
+}
+
 function renderTriageIntents(items) {
     const root = document.getElementById('triageIntentButtons');
     if (!root) return;
@@ -563,6 +585,38 @@ async function answerTriage(answerValue) {
         renderTriageProgress(data);
     } catch (e) {
         setText('triageSessionMeta', tr('ops.failed', 'Failed: {error}', { error: String(e) }));
+    }
+}
+
+async function sendTriageHandoff() {
+    const payloadMessage = buildTriageHandoffMessage();
+    if (!payloadMessage) {
+        setText('triageSessionMeta', tr('ops.triage_handoff_missing', 'No diagnostic handoff is ready yet.'));
+        return;
+    }
+    const senderInput = document.getElementById('senderInput');
+    const sender = senderInput ? senderInput.value.trim() : 'M.I.O. Console';
+    const result = document.getElementById('sendResult');
+    try {
+        const res = await fetch('/api/mattermost/message', {
+            method: 'POST',
+            headers: authHeaders(),
+            body: JSON.stringify({
+                sender,
+                message: payloadMessage,
+                lang: CURRENT_LANG,
+                ask_ai: false,
+                send_to_mattermost: true,
+            }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            if (result) result.textContent = tr('ops.failed', 'Failed: {error}', { error: data.error || tr('ops.unknown_error', 'unknown error') });
+            return;
+        }
+        if (result) result.textContent = tr('ops.triage_handoff_sent', 'Sent triage handoff to Mattermost ({mode})', { mode: data.result?.mode || '-' });
+    } catch (e) {
+        if (result) result.textContent = tr('ops.failed', 'Failed: {error}', { error: String(e) });
     }
 }
 
@@ -832,6 +886,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const beginnerBtn = document.getElementById('audienceBeginnerBtn');
     const triageClassifyBtn = document.getElementById('triageClassifyBtn');
     const triageAnswerBtn = document.getElementById('triageAnswerBtn');
+    const triageHandoffBtn = document.getElementById('triageHandoffBtn');
     const triageResetBtn = document.getElementById('triageResetBtn');
     document.getElementById('langJaBtn')?.addEventListener('click', () => switchLanguage('ja'));
     document.getElementById('langEnBtn')?.addEventListener('click', () => switchLanguage('en'));
@@ -859,6 +914,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (input) input.value = '';
     });
     if (triageResetBtn) triageResetBtn.addEventListener('click', resetTriageUi);
+    if (triageHandoffBtn) triageHandoffBtn.addEventListener('click', sendTriageHandoff);
     const triageInput = document.getElementById('triageInput');
     if (triageInput) triageInput.addEventListener('keydown', async (event) => {
         if (event.key === 'Enter') {
@@ -912,6 +968,25 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCapabilities();
     loadDemoScenarios();
     loadTriageIntents();
+    const params = queryParams();
+    const audienceParam = String(params.get('audience') || '').trim().toLowerCase();
+    if (audienceParam === 'beginner') {
+        currentAudience = 'beginner';
+        syncAudienceUi();
+    } else if (audienceParam === 'operator') {
+        currentAudience = 'operator';
+        syncAudienceUi();
+    }
+    const messageParam = String(params.get('message') || '').trim();
+    const triageIntentParam = String(params.get('triage_intent') || '').trim();
+    if (messageParam && messageInput && 'value' in messageInput) {
+        messageInput.value = messageParam;
+        const triageInput = document.getElementById('triageInput');
+        if (triageInput && 'value' in triageInput) triageInput.value = messageParam;
+    }
+    if (triageIntentParam) {
+        startTriage(triageIntentParam);
+    }
     setInterval(() => {
         loadStatus();
         loadMessages();

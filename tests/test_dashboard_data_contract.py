@@ -310,6 +310,7 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("Demo Runner", text)
         self.assertIn("Scenario Replay", text)
         self.assertIn("Run Demo", text)
+        self.assertIn("temporaryOpsCommLink", text)
         self.assertIn("Next Checks", text)
         self.assertIn("Chosen Evidence", text)
         self.assertIn("Rejected Alternatives", text)
