@@ -15,7 +15,7 @@ P0 実装状態: `docs/P0_RUNTIME_ARCHITECTURE.md`
 ## 1.1 P0 との関係
 
 - P0 の一次判定は deterministic evaluator を主とする
-- AI は `#15 AI補助の統治層 v1` により補助に限定する
+- AI は補助に限定し、一次判断経路とは分離して扱う
 - P0 の判断パイプラインは以下
   1. Evidence Plane
   2. NOC/SOC Evaluator
@@ -96,7 +96,7 @@ sudo docker exec azazel-edge-ollama ollama list
 - LLM結果ログ: `/var/log/azazel-edge/ai-llm.jsonl`
 - Deferredログ: `/var/log/azazel-edge/ai-deferred.jsonl`
 - Ops連携UI: `/ops-comm`（Mattermost連携専用サイト）
-- Dashboard (`/`) への M.I.O. 本格統合は未着手。現段階では `ops-comm` と Mattermost が主導線
+- M.I.O. は Dashboard、`ops-comm`、Mattermost の各面で役割を分けて運用する
 
 ## 6. 日常確認手順
 
@@ -156,20 +156,7 @@ sudo systemctl show azazel-edge-ai-agent --property=Environment --no-pager
 - モデル追加は「メモリ上限・失敗率・遅延」を実測してから採用する。
 - 同居運用では `4b` 以上を常用しない。上位モデルは別ホスト分離を前提とする。
 
-## 10. 実行ロードマップ（2026-03-05更新）
-
-- Phase A（運用固定）: 完了
-  - `2b` 主系 / `0.8b` フェイルオーバー / `4b` 非採用を固定
-- Phase B（相関エスカレーション）: 完了
-  - 同一 `src_ip` の短時間反復、`sid` 多様化を LLM実行条件へ追加
-- Phase C（JSONスキーマ厳格化）: 完了
-  - Analyst/Opsの型・必須項目・文字列長を検証し、不正応答はフォールバック
-- Phase D（定期モデル評価）: 未着手
-  - 半年ごとのモデル比較（遅延/失敗率/常駐メモリ）を運用手順化予定
-- Phase E（PicoClaw再評価）: 保留
-  - マルチエージェント常時運用化時点で再評価
-
-## 11. Mattermost運用
+## 10. Mattermost運用
 
 - ログイン情報の保管先（ローカル機密ファイル）: `/etc/azazel-edge/mattermost-credentials.env`（`0600`）
 - WebUIのMattermost起動URL: `AZAZEL_MATTERMOST_OPEN_URL`（未設定時は `AZAZEL_MATTERMOST_HOST`/`AZAZEL_MATTERMOST_PORT`/`AZAZEL_MATTERMOST_TEAM`/`AZAZEL_MATTERMOST_CHANNEL` から自動生成）
@@ -199,7 +186,7 @@ curl -sS http://127.0.0.1:8084/api/ai/capabilities | jq
   - 例:
     - `AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE=/etc/azazel-edge/mattermost-command-token`
 
-## 12. Runbook運用
+## 11. Runbook運用
 
 - レジストリ: `runbooks/**/*.yaml`
 - API:
@@ -209,10 +196,10 @@ curl -sS http://127.0.0.1:8084/api/ai/capabilities | jq
   - `POST /api/runbooks/propose`
   - `POST /api/runbooks/act`
   - `POST /api/runbooks/execute`
-- 現段階の対象:
+- 対象:
   - `read_only` Runbook は dry-run / 実行可能
   - `operator_guidance` は提案のみ
-  - `controlled_exec` は安全ゲート付き骨格のみ実装
+  - `controlled_exec` は安全ゲート付きで既定無効
 - AI が返す `runbook_id` は候補提示として扱い、初心者運用では必ず UI かオペレータ承認を介す
 - Runbook reviewer:
   - `SOC Analyst`
@@ -239,7 +226,7 @@ curl -sS http://127.0.0.1:8084/api/ai/capabilities | jq
   - 初心者向けフローでは `controlled_exec` を直接使わせない
 - 実行/承認ログ: `/var/log/azazel-edge/runbook-events.jsonl`
 
-## 13. M.I.O. 運用方針
+## 12. M.I.O. 運用方針
 
 - Azazel-Edge の SOC/NOC 支援AIの運用人格は `M.I.O. (Mission Intelligence Operator)` とする
 - M.I.O. は「副官型」の運用人格であり、判断補佐・情報整理・手順提示を担う
@@ -253,7 +240,7 @@ curl -sS http://127.0.0.1:8084/api/ai/capabilities | jq
   - 1回答で最大3手順
   - 1手順ごとに1行動
 
-## 14. 質問マップ
+## 13. 質問マップ
 
 ### 14.1 初心者向け (`Temporary / beginner`)
 

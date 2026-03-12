@@ -9,8 +9,8 @@
   </a>
 </p>
 
-Azazel-Edge は、小規模内部ネットワーク向けの Raspberry Pi クラス防御エッジゲートウェイです。  
-内部ネットワーク基盤、決定論的な NOC/SOC 評価、運用者向け UI、そして統治された AI 補助を一体化しています。
+Azazel-Edge は、Raspberry Pi クラスで動く operator-aware defensive edge appliance です。  
+管理されたゲートウェイ、決定論的な SOC/NOC 評価、明示的な action arbitration、監査可能な decision explanation、そして統治されたローカル AI 補助を、現場運用向けに 1 つへまとめています。
 
 <p align="center">
   <img src="https://img.shields.io/badge/-Raspberry%20Pi-C51A4A.svg?logo=raspberry-pi&style=flat">
@@ -21,133 +21,105 @@ Azazel-Edge は、小規模内部ネットワーク向けの Raspberry Pi クラ
   <img src="https://img.shields.io/badge/-Ollama-111111.svg?style=flat">
 </p>
 
-## コンセプト
+## Azazel-Edge が目を引く理由
 
-Azazel-Edge は単なるダッシュボードやパケットフィルタではありません。  
-以下を一貫した運用装置としてまとめています。
+- **AI より先に deterministic**  
+  一次判断は Evidence Plane、NOC/SOC evaluator、Action Arbiter、Decision Explanation が担います。AI は bounded assist layer であり、主制御ではありません。
+- **SOC と NOC と gateway を 1 台へ統合**  
+  IDS 可視化だけでも、LLM ラッパーだけでもありません。エッジ gateway、共通 evidence、運用監視、脅威評価、operator action を 1 台で回します。
+- **制約ハードウェア前提で設計**  
+  Raspberry Pi 5 クラスでも、AI 経路が CPU、メモリ、運用判断を食い潰さないように組んでいます。
+- **operator surface を最初から持つ**  
+  Dashboard、`ops-comm`、Mattermost `/mio`、TUI、EPD が、それぞれ役割分担された運用面として用意されています。
+- **再現しやすく、見せやすい**  
+  installer で現行 runtime を再現でき、deterministic demo replay で live state を汚さずに判断経路を見せられます。
 
-- 管理された内部セグメントと uplink gateway
-- 継続的なネットワーク/サービス健全性監視
-- セキュリティ/運用イベントの共通 Evidence Plane への正規化
-- NOC / SOC の決定論的な一次評価
-- Action Arbiter による明示的な行動選択
-- Decision Explanation と監査ログ
-- その後段に限定された AI 補助
+## 何ができるか
 
-設計上の主眼は、特に Raspberry Pi 5 クラスの制約下でも、AI 経路が中核防御機能を圧迫しないことです。
+- **管理された内部セグメントと uplink gateway** を構築する
+- **Suricata / flow / NOC probe / syslog** を共通 evidence に正規化する
+- **運用障害** と **脅威兆候** を分離して評価し、action を選ぶ
+- **Runbook / triage state machine / M.I.O.** で、プロ担当者と臨時担当の両方を支援する
+- **deterministic scenario replay** でデモや検証を行う
+- モデルの勘に頼らず、**説明可能で監査可能な判断** を残す
 
-## できること
+## Core Architecture
 
-### 1. 内部エッジゲートウェイ
-- `br0` を中心とした内部ネットワーク基盤の構築
+1. **Evidence inputs**
+   - `suricata_eve`
+   - `flow_min`
+   - `noc_probe`
+   - `syslog_min`
+2. **Evidence Plane**
+   - `event_id`, `ts`, `source`, `kind`, `subject`, `severity`, `confidence`, `attrs` を持つ共通 schema
+3. **Deterministic evaluation**
+   - NOC evaluator: availability, path health, device health, client health
+   - SOC evaluator: suspicion, confidence, technique likelihood, blast radius
+4. **Action Arbiter**
+   - `observe`, `notify`, `throttle`, `redirect`, `isolate`
+5. **Decision Explanation / Audit**
+   - why chosen / why not others / evidence IDs / operator wording / JSONL trail
+6. **Governed assist layer**
+   - Ollama 上の M.I.O. が曖昧事象、質問応答、Runbook 補助を担当
+
+## Operator Surfaces
+
+### Dashboard
+現在 posture、threat evidence、NOC health、action、demo replay、M.I.O. 概観をまとめて見る主盤面です。
+
+### `ops-comm`
+M.I.O. との直接対話、triage state machine、Runbook review、Mattermost bridge、demo control を扱う作業面です。
+
+### Mattermost `/mio`
+operator の質問、review 済み runbook 候補提示、handoff に使う chat 入口です。
+
+### TUI / EPD
+ローカルで状態を素早く把握するための軽量表示面です。
+
+## Platform Capabilities
+
+### Managed edge gateway
+- `br0` を中心とした内部ネットワーク基盤
 - 既定内部アドレス: `172.16.0.254/24`
-- AP モードの内部接続と外部 uplink への NAT/forwarding
-- `NetworkManager`、`dnsmasq`、`nftables` ベースのホスト側制御
+- AP モード内部接続と外部 uplink への NAT/forwarding
+- `NetworkManager`, `dnsmasq`, `nftables`, systemd を使った host-side orchestration
 
-### 2. 運用 control plane
-- WebUI / TUI / EPD が共通で参照する runtime snapshot を維持
-- control daemon 経由で各種 action を実行
-- mode 変更、reprobe、contain、Wi-Fi scan/connect などを提供
+### Deterministic NOC/SOC pipeline
+- adapter による evidence 正規化
+- AI より前に評価が完結する一次判断経路
+- explicit で reviewable な action selection
+- default で残る explanation と audit trail
 
-### 3. 決定論的 NOC/SOC パイプライン
-- Evidence Plane が正規化する入力:
-  - `suricata_eve`
-  - `flow_min`
-  - `noc_probe`
-  - `syslog_min`
-- NOC evaluator の評価軸:
-  - availability
-  - path health
-  - device health
-  - client health
-- SOC evaluator の評価軸:
-  - suspicion
-  - confidence
-  - technique likelihood
-  - blast radius
-- Action Arbiter が選ぶ action:
-  - `observe`
-  - `notify`
-  - `throttle`
-  - `redirect`
-  - `isolate`
-
-### 4. 統治された AI 補助
-- Ollama 上のローカルモデルを補助経路として利用
-- 現行モデル:
+### Governed local AI
+- 現行 Ollama モデル:
   - `qwen3.5:2b`
   - `qwen3.5:0.8b`
 - AI の用途:
-  - 曖昧な Suricata アラートの補助判断
-  - オペレータからの質問対応
-  - Runbook 候補提示
-- AI は一次判断主体ではありません
+  - 曖昧アラート補助
+  - operator 質問応答
+  - runbook suggestion support
+  - bilingual guidance output
+- AI は primary decision-maker ではありません
 
-### 5. オペレータ向けインターフェース
-- Web ダッシュボード
-- `/ops-comm` M.I.O. assist console
-- Mattermost `/mio`
-- TUI
-- E-paper 表示
-
-## 現行 runtime architecture
-
-高レベルの判断パイプライン:
-
-1. Evidence inputs
-2. Evidence Plane
-3. NOC / SOC evaluators
-4. Action Arbiter
-5. Decision Explanation
-6. Notification / AI governance
-7. Audit logging
-
-関連資料:
-- [P0 runtime architecture](docs/P0_RUNTIME_ARCHITECTURE.md)
-- [AI operation guide](docs/AI_OPERATION_GUIDE.md)
-- [AI build and operation detail](docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL.md)
-
-## 機能ハイライト
-
-### Unified evidence and evaluation
-- 共通イベント schema:
-  - `event_id`
-  - `ts`
-  - `source`
-  - `kind`
-  - `subject`
-  - `severity`
-  - `confidence`
-  - `attrs`
-- 入力元ごとの差異を adapter で吸収し、後段は同じ形式で扱う
+### Guided triage and runbooks
+- temporary / beginner 向け deterministic triage state machine
+- diagnostic state からの runbook selector
+- runbook review / approval flow
+- triage session から Mattermost への handoff
 
 ### 研究拡張ライン
 - config drift audit
 - multi-segment NOC evaluation
 - cross-source correlation
-- ATT&CK / D3FEND visualization payload
+- ATT&CK / D3FEND visualization payloads
 - Sigma assist execution
 - YARA / YARA-X assist matching
-- upstream integration envelope/sink
-- demo scenario pack
+- upstream integration envelopes / sinks
+- deterministic demo scenario pack
 
-### M.I.O. operator assistance
-M.I.O. は以下で使うオペレータ補助人格です。
-
-- dashboard assist
-- `/ops-comm`
-- Mattermost `/mio`
-
-M.I.O. は unrestricted agent ではなく、統治された補助層として設計しています。
-
-参照:
-- [M.I.O. persona profile](docs/MIO_PERSONA_PROFILE.md)
-
-## インストール
+## インストールと再現
 
 ### Unified installer
-
-現在の Azazel-Edge を他ホストに再現する主導線です。
 
 ```bash
 cd /home/azazel/Azazel-Edge
@@ -168,89 +140,67 @@ sudo ENABLE_INTERNAL_NETWORK=1 \
 ### App stack のみ
 
 ```bash
-cd /home/azazel/Azazel-Edge
 sudo ENABLE_SERVICES=1 bash installer/internal/install_migrated_tools.sh
 ```
 
 ### AI runtime のみ
 
 ```bash
-cd /home/azazel/Azazel-Edge
 sudo ENABLE_OLLAMA=1 ENABLE_MATTERMOST=1 bash installer/internal/install_ai_runtime.sh
 ```
 
-## 主なアクセス先
+## Quick Tour
 
-インストール後の既定エンドポイント:
-
+既定の主要エンドポイント:
 - Dashboard: `https://172.16.0.254/`
 - M.I.O. ops console: `https://172.16.0.254/ops-comm`
 - Mattermost: `http://172.16.0.254:8065/`
-- ローカル web backend: `http://127.0.0.1:8084/`
+- local backend: `http://127.0.0.1:8084/`
 
 Mattermost の基本操作:
 
 ```text
-/mio 現在の警戒ポイントは？
+/mio 現在の最優先懸念は何か
 ```
 
-## 主要 systemd service
-
-- `azazel-edge-control-daemon.service`
-- `azazel-edge-web.service`
-- `azazel-edge-ai-agent.service`
-- `azazel-edge-core.service`
-- `azazel-edge-epd-refresh.service`
-- `azazel-edge-epd-refresh.timer`
-- `azazel-edge-opencanary.service`
-- `azazel-edge-suricata.service`
-
-## クイック確認
+deterministic demo replay:
 
 ```bash
-systemctl status azazel-edge-control-daemon --no-pager
-systemctl status azazel-edge-web --no-pager
-systemctl status azazel-edge-ai-agent --no-pager
-systemctl status azazel-edge-core --no-pager
-curl http://127.0.0.1:8084/health
-curl http://127.0.0.1:8084/api/state
-```
-
-AI runtime:
-
-```bash
-sudo docker exec azazel-edge-ollama ollama list
-curl -sS http://127.0.0.1:8084/api/ai/capabilities | jq
+bin/azazel-edge-demo list
+bin/azazel-edge-demo run mixed_correlation_demo
 ```
 
 ## リポジトリ構成
 
 | Path | 役割 |
 |---|---|
-| `py/azazel_edge/` | core runtime library、evaluator、arbiter、AI governance、研究拡張 |
+| `py/azazel_edge/` | Evidence Plane、evaluator、arbiter、audit、SoT、triage、demo、研究/runtime extension |
 | `py/azazel_edge_control/` | control daemon と action handler |
-| `py/azazel_edge_ai/` | AI agent と M.I.O. assist path |
-| `azazel_edge_web/` | Web backend、dashboard、ops-comm UI |
+| `py/azazel_edge_ai/` | AI agent integration と M.I.O. assist path |
+| `azazel_edge_web/` | Flask backend、dashboard、ops-comm UI |
 | `rust/azazel-edge-core/` | Rust defense core |
 | `runbooks/` | Runbook registry |
-| `systemd/` | service/timer units |
+| `systemd/` | service / timer units |
 | `security/` | compose stack と security-side assets |
-| `installer/` | unified installer と staged installer |
-| `docs/` | architecture、AI operation、redesign、implementation notes |
-| `tests/` | P0-P2 の unit/regression coverage |
+| `installer/` | unified installer と staged install scripts |
+| `docs/` | 公開向け architecture、AI operation、persona、demo 文書 |
+| `tests/` | unit / regression coverage |
 
-## 参照資料
+## ドキュメント
 
-- [Architecture redesign notes](docs/ARCHITECTURE_REDESIGN.md)
 - [P0 runtime architecture](docs/P0_RUNTIME_ARCHITECTURE.md)
 - [AI operation guide](docs/AI_OPERATION_GUIDE.md)
 - [AI build and operation detail](docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL.md)
-- [Dashboard plan](docs/AZAZEL_EDGE_SOC_NOC_DASHBOARD_PLAN.md)
+- [M.I.O. persona profile](docs/MIO_PERSONA_PROFILE.md)
+- [Demo guide](docs/DEMO_GUIDE.md)
+- [Demo guide (Japanese)](docs/DEMO_GUIDE_JA.md)
 
-## ステータス
 
-このリポジトリには、P0、P1、P2 の issue ラインで実装した runtime/library slice が含まれています。  
-installer も、現行 Azazel-Edge の再現に必要な P0-P2 runtime module と asset を配布できる状態まで更新済みです。
+## Current Status
+
+- P0, P1, P2 実装ラインがリポジトリに含まれています
+- installer は現行 runtime module と asset を配備できる状態です
+- 現在このリポジトリには **38** 個の Python test module と **15** 個の runbook 定義があります
 
 ## License
 
