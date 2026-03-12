@@ -1,31 +1,61 @@
 # Azazel-Edge Demo Guide
 
+Last updated: 2026-03-12
+
 ## Purpose
 
-Azazel-Edge ships with a deterministic demo pack for showing the end-to-end decision path:
+Azazel-Edge includes a deterministic demo pack for showing how the system behaves without polluting live runtime state.
 
-1. Evidence Plane input normalization
-2. NOC / SOC evaluation
-3. Action Arbiter decision
-4. Decision Explanation output
-5. M.I.O. operator guidance via WebUI or Mattermost
+A demo replay shows this path:
 
-The current demo pack is a backend replay. It does not inject live events into the running system. The intended flow is:
+1. Evidence is normalized into a shared model
+2. NOC and SOC are evaluated separately
+3. Action Arbiter selects an explicit action
+4. Decision Explanation records why that action won
+5. Dashboard, `ops-comm`, TUI, and EPD can reflect the replay through a temporary demo overlay
 
-1. Run a scenario
-2. Inspect the returned NOC / SOC / arbiter / explanation payload
-3. Ask M.I.O. to explain the same situation in operator terms
+The demo pack is a replay path. It is not live telemetry injection.
+
+## What the Demo Proves
+
+- Azazel-Edge does not rely on AI for the primary decision path
+- NOC and SOC are evaluated separately before action selection
+- Actions remain explicit, reviewable, and auditable
+- Demo results can be shown without contaminating live control state
 
 ## Available Scenarios
 
-- `soc_redirect_demo`
-  - High-confidence SOC path that supports redirect-capable control
-- `noc_degraded_demo`
-  - NOC degradation path with poor path health and degraded device state
 - `mixed_correlation_demo`
-  - Cross-source correlation path with Sigma / YARA assist signals
+  - Main showcase scenario
+  - Cross-source evidence with correlation, explanation, and action selection
+- `noc_degraded_demo`
+  - Operations-focused scenario
+  - Poor path health and degraded device state
+- `soc_redirect_demo`
+  - Security-focused scenario
+  - High-confidence SOC path with reversible control discussion
 
-## CLI Usage
+## Recommended Scenario Order
+
+1. `mixed_correlation_demo`
+2. `noc_degraded_demo`
+3. `soc_redirect_demo`
+
+If you only show one scenario, use `mixed_correlation_demo`.
+
+## Prerequisites
+
+Confirm the following before starting:
+
+- `bin/azazel-edge-demo list` succeeds
+- `bin/azazel-edge-demo run mixed_correlation_demo` succeeds
+- Web UI returns `status=ok` from `/health`
+- Dashboard can load `/api/demo/scenarios`
+- `ops-comm` is reachable if you want to demonstrate M.I.O. guidance
+
+## Quick Start
+
+### CLI
 
 List scenarios:
 
@@ -39,9 +69,96 @@ Run a scenario:
 bin/azazel-edge-demo run mixed_correlation_demo
 ```
 
-Pretty-printed JSON is returned by default.
+### Web UI
 
-## Web API Usage
+Open:
+
+- Dashboard: `https://172.16.0.254/`
+- Ops workspace: `https://172.16.0.254/ops-comm`
+
+In the dashboard:
+
+1. Open `Scenario Replay`
+2. Select a scenario
+3. Click `Run Demo`
+4. Review the overlay result cards
+5. Click `Clear Demo Overlay` when finished
+
+## What Changes During a Demo
+
+When a demo runs, the system applies a temporary overlay to presentation surfaces.
+
+Affected surfaces:
+
+- Dashboard
+- `ops-comm`
+- TUI
+- EPD
+
+The demo overlay changes presentation only. It does not replace the live control plane as the source of truth.
+
+## What to Show on Screen
+
+Focus on these sections:
+
+1. `Current Mission`
+2. `SOC / NOC Split Board`
+3. `Immediate Action`
+4. `Threat Evidence Summary`
+5. `NOC Focus`
+6. `Operator Wording`
+7. `Next Checks`
+8. `Chosen Evidence`
+9. `Rejected Alternatives`
+
+Avoid starting with raw JSON. Use the summary cards first.
+
+## Suggested Talk Track
+
+### Short Version
+
+```text
+Azazel-Edge separates NOC and SOC evaluation, chooses an explicit action, records why it was selected, and can replay that path without contaminating live runtime state.
+```
+
+### If Asked About AI
+
+```text
+AI is assistive here. The primary decision path in the demo is deterministic.
+```
+
+### If Asked Whether This Is Live
+
+```text
+No. This is a deterministic replay path designed for reproducibility. The live operator surfaces exist separately.
+```
+
+## M.I.O. Demonstration
+
+After running a scenario, continue in one of these ways:
+
+### Dashboard
+
+- Use `Ask about this`
+- Show how M.I.O. explains the current action and next checks
+
+### `ops-comm`
+
+- Open `Triage Navigator` or direct ask
+- Ask for:
+  - the current concern
+  - the reason the action was selected
+  - the next operator check
+
+### Mattermost
+
+Example:
+
+```text
+/mio Explain why this demo selected throttle and what should be checked next.
+```
+
+## Web API
 
 List scenarios:
 
@@ -57,78 +174,56 @@ curl -sS -X POST -H "X-AZAZEL-TOKEN: <token>" \
   http://127.0.0.1:8084/api/demo/run/mixed_correlation_demo | jq
 ```
 
-## What To Show During a Demo
-
-### 1. NOC degradation demo
-
-Run:
+Clear the overlay:
 
 ```bash
-bin/azazel-edge-demo run noc_degraded_demo
+curl -sS -X POST -H "X-AZAZEL-TOKEN: <token>" \
+  http://127.0.0.1:8084/api/demo/overlay/clear | jq
 ```
 
-Expected result:
-
-- NOC status degrades
-- SOC remains low
-- Arbiter chooses `notify`
-
-Suggested M.I.O. question:
-
-```text
-/mio uplink と device health が同時に悪い時、何から確認すべきか
-```
-
-### 2. SOC redirect-capable demo
-
-Run:
+Read the latest overlay state:
 
 ```bash
-bin/azazel-edge-demo run soc_redirect_demo
+curl -sS -H "X-AZAZEL-TOKEN: <token>" \
+  http://127.0.0.1:8084/api/demo/overlay | jq
 ```
 
-Expected result:
+## Troubleshooting
 
-- SOC becomes critical
-- NOC remains degraded but not collapsed
-- Arbiter selects a reversible control path first
+### `Scenario Replay` is empty
 
-Suggested M.I.O. question:
+Check:
 
-```text
-/mio この通信で強制遮断より可逆制御を優先する理由は？
-```
+- `/api/demo/scenarios`
+- whether the Web UI was started from the repository root
 
-### 3. Mixed correlation demo
+### Scenario replay fails in Web UI
 
-Run:
+Run the same scenario in CLI:
 
 ```bash
 bin/azazel-edge-demo run mixed_correlation_demo
 ```
 
-Expected result:
+If CLI works, the replay path is healthy and the problem is in the web layer.
 
-- Correlated multi-source evidence
-- Sigma / YARA assist hits
-- SOC critical with explanation payload
+### Demo overlay does not clear
 
-Suggested M.I.O. question:
+Use:
 
-```text
-/mio 複数ソースが同じ対象を指している時、何を重視して判断すべきか
+```bash
+curl -sS -X POST -H "X-AZAZEL-TOKEN: <token>" \
+  http://127.0.0.1:8084/api/demo/overlay/clear | jq
 ```
 
-## Expected Output Shape
+Then refresh the dashboard.
 
-Each scenario returns:
+### You need to fall back to CLI-only demo
 
-- `scenario_id`
-- `description`
-- `event_count`
-- `noc`
-- `soc`
-- `arbiter`
-- `explanation`
+That is valid. The replay runner uses the same deterministic scenario pack.
 
-This is intentionally backend-oriented. M.I.O. remains a separate explanation layer.
+## Related Documents
+
+- [AI operation guide](docs/AI_OPERATION_GUIDE.md)
+- [M.I.O. persona profile](docs/MIO_PERSONA_PROFILE.md)
+- [P0 runtime architecture](docs/P0_RUNTIME_ARCHITECTURE.md)
