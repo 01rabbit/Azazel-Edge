@@ -188,6 +188,8 @@ M.I.O. 自身が状態遷移を決めるのではない。
 非定型質問では LLM assist を使う。
 
 ただし現行方針は:
+- Tactical Engine で first-minute triage を行う
+- Evidence Plane と deterministic evaluator で second-pass context を付ける
 - router で吸えるものは router
 - triage で収まるものは triage
 - それでも不足するものだけ LLM

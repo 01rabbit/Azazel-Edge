@@ -21,13 +21,14 @@
 
 ## 2. P0 の判断パイプライン
 
-1. `suricata_eve / noc_probe / syslog_min`
-2. `Evidence Plane`
-3. `NOC Evaluator` / `SOC Evaluator`
-4. `Action Arbiter`
-5. `Decision Explanation`
-6. `Notification` / `AI Assist Governance`
-7. `P0 Audit Logger`
+1. `Tactical Engine` first-minute triage
+2. `suricata_eve / noc_probe / syslog_min`
+3. `Evidence Plane`
+4. `NOC Evaluator` / `SOC Evaluator`
+5. `Action Arbiter`
+6. `Decision Explanation`
+7. `Notification` / `AI Assist Governance`
+8. `P0 Audit Logger`
 
 ## 3. 実装モジュール
 

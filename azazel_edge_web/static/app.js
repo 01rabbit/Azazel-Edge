@@ -78,7 +78,7 @@ function resetDemoOverlayPresentation() {
     updateElement('demoTraceBlastConfidence', '-');
     updateElement('demoTraceClientImpact', '-');
     updateElement('demoBoundaryMode', 'DETERMINISTIC REPLAY');
-    updateElement('demoBoundarySummary', 'Synthetic replay path. AI is not used in the core decision loop.');
+    updateElement('demoBoundarySummary', tr('dashboard.demo_boundary_summary', 'Deterministic replay path. This does not replace the live Tactical first-pass path, and AI is not used in the core demo decision loop.'));
     updateElement('demoOperatorWording', tr('dashboard.no_demo', 'No demo overlay is active.'));
     updateElement('demoResponse', tr('dashboard.no_demo_response', 'Run a scenario to preview the deterministic pipeline.'));
     renderList('demoNextChecks', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
@@ -637,7 +637,7 @@ async function runDemoScenario() {
     updateElement('demoResponse', tr('dashboard.demo_running', 'Running demo scenario...'));
     updateElement('demoOperatorWording', tr('dashboard.demo_preparing', 'Preparing scenario replay...'));
     updateElement('demoBoundaryMode', 'DETERMINISTIC REPLAY');
-    updateElement('demoBoundarySummary', 'Synthetic replay path. AI is not used in the core decision loop.');
+    updateElement('demoBoundarySummary', tr('dashboard.demo_boundary_summary', 'Deterministic replay path. This does not replace the live Tactical first-pass path, and AI is not used in the core demo decision loop.'));
     updateElement('demoNocStatus', '-');
     updateElement('demoSocStatus', '-');
     updateElement('demoAction', '-');
@@ -1057,6 +1057,15 @@ function updateActionBoard(actions, state) {
     updateElement('runbookEffect', runbook.effect || '-');
     updateElement('runbookApproval', actions.approval_required ? tr('dashboard.review_required', 'Required') : tr('dashboard.review_not_required', 'Not required'));
     renderList('runbookSteps', runbook.steps || [], (item) => item);
+    const decisionPath = actions.decision_path || {};
+    updateElement('decisionFirstPass', `${decisionPath.first_pass_engine || '-'} | ${decisionPath.first_pass_role || '-'}`);
+    updateElement('decisionSecondPass', `${decisionPath.second_pass_engine || '-'} | ${decisionPath.second_pass_role || '-'}`);
+    const secondPassBits = [decisionPath.second_pass_status || '-'];
+    if (decisionPath.second_pass_evidence_count !== undefined) secondPassBits.push(`evidence=${decisionPath.second_pass_evidence_count}`);
+    if (decisionPath.second_pass_flow_support_count !== undefined) secondPassBits.push(`flow=${decisionPath.second_pass_flow_support_count}`);
+    if (decisionPath.soc_status) secondPassBits.push(`soc=${decisionPath.soc_status}`);
+    updateElement('decisionSecondPassStatus', secondPassBits.join(' | '));
+    updateElement('decisionAiRole', decisionPath.ai_role || '-');
 
     const mode = latestState.mode || {};
     updateElement('modeLastChange', formatHumanDateTime(mode.last_change));
@@ -1305,12 +1314,16 @@ function formatDemoBoolean(value) {
 
 function formatCapabilityBoundarySummary(boundary) {
     if (!boundary || typeof boundary !== 'object') {
-        return 'Synthetic replay path. AI is not used in the core decision loop.';
+        return tr('dashboard.demo_boundary_summary', 'Deterministic replay path. This does not replace the live Tactical first-pass path, and AI is not used in the core demo decision loop.');
     }
     const implemented = Array.isArray(boundary.implemented_now) ? boundary.implemented_now.length : 0;
     const demoOnly = Array.isArray(boundary.demo_only) ? boundary.demo_only.length : 0;
     const experimental = Array.isArray(boundary.experimental) ? boundary.experimental.length : 0;
-    return `Synthetic replay path. implemented=${implemented}, demo_only=${demoOnly}, experimental=${experimental}. AI is not used in the core decision loop.`;
+    return tr(
+        'dashboard.demo_boundary_summary_verbose',
+        'Deterministic replay path. It does not replace the live Tactical first-pass path. implemented={implemented}, demo_only={demo_only}, experimental={experimental}. AI is not used in the core demo decision loop.',
+        { implemented, demo_only: demoOnly, experimental }
+    );
 }
 
 function applyDemoDerivedFields(source) {

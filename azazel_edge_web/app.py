@@ -954,6 +954,14 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     else:
         threat_level = "quiet"
     signals = network_health.get("signals") if isinstance(network_health.get("signals"), list) else []
+    decision_pipeline = state.get("decision_pipeline") if isinstance(state.get("decision_pipeline"), dict) else {}
+    if not decision_pipeline and isinstance(advisory.get("decision_pipeline"), dict):
+        decision_pipeline = advisory.get("decision_pipeline")
+    first_pass = decision_pipeline.get("first_pass") if isinstance(decision_pipeline.get("first_pass"), dict) else {}
+    second_pass = decision_pipeline.get("second_pass") if isinstance(decision_pipeline.get("second_pass"), dict) else {}
+    second_pass_detail = state.get("second_pass") if isinstance(state.get("second_pass"), dict) else {}
+    if not second_pass_detail and isinstance(advisory.get("second_pass"), dict):
+        second_pass_detail = advisory.get("second_pass")
     path_scope = ("全 uplink 利用者" if lang == "ja" else "all uplink clients") if str(connection.get("internet_check") or "").upper() == "FAIL" else (
         ("DNS 影響利用者" if lang == "ja" else "dns-affected clients") if _as_int(network_health.get("dns_mismatch"), 0) > 0 else ("広域影響なし" if lang == "ja" else "no broad impact indicated")
     )
@@ -1058,6 +1066,17 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
             "ai_metrics_at": _iso_from_epoch(metrics.get("last_update_ts")),
             "mode_last_change": str(mode.get("last_change") or ""),
         },
+        "decision_path": {
+            "first_pass_engine": str(first_pass.get("engine") or "tactical_scorer_v1"),
+            "first_pass_role": str(first_pass.get("role") or "first_minute_triage"),
+            "second_pass_engine": str(second_pass.get("engine") or "soc_evaluator_v1"),
+            "second_pass_role": str(second_pass.get("role") or "second_pass_evaluation"),
+            "second_pass_status": str(second_pass.get("status") or second_pass_detail.get("status") or "pending"),
+            "second_pass_evidence_count": _as_int(second_pass.get("evidence_count") or second_pass_detail.get("evidence_count"), 0),
+            "second_pass_flow_support_count": _as_int(second_pass.get("flow_support_count") or second_pass_detail.get("flow_support_count"), 0),
+            "soc_status": str(((second_pass_detail.get("soc") or {}) if isinstance(second_pass_detail.get("soc"), dict) else {}).get("status") or ""),
+            "ai_role": "supplemental_operator_assist",
+        },
     }
 
 
@@ -1094,6 +1113,14 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
         stronger_actions.append({"action": "isolate", "reason": "Isolation requires stronger blast-radius evidence."})
     else:
         stronger_actions.append({"action": "isolate", "reason": "Isolation stays reserved for confirmed, high-impact compromise."})
+    decision_pipeline = state.get("decision_pipeline") if isinstance(state.get("decision_pipeline"), dict) else {}
+    if not decision_pipeline and isinstance(advisory.get("decision_pipeline"), dict):
+        decision_pipeline = advisory.get("decision_pipeline")
+    first_pass = decision_pipeline.get("first_pass") if isinstance(decision_pipeline.get("first_pass"), dict) else {}
+    second_pass = decision_pipeline.get("second_pass") if isinstance(decision_pipeline.get("second_pass"), dict) else {}
+    second_pass_detail = state.get("second_pass") if isinstance(state.get("second_pass"), dict) else {}
+    if not second_pass_detail and isinstance(advisory.get("second_pass"), dict):
+        second_pass_detail = advisory.get("second_pass")
     return {
         "ok": True,
         "current_operator_actions": guidance["do_next"],
@@ -1125,6 +1152,17 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
         "links": {
             "ask_mio": "/ops-comm",
             "mattermost": MATTERMOST_OPEN_URL,
+        },
+        "decision_path": {
+            "first_pass_engine": str(first_pass.get("engine") or "tactical_scorer_v1"),
+            "first_pass_role": str(first_pass.get("role") or "first_minute_triage"),
+            "second_pass_engine": str(second_pass.get("engine") or "soc_evaluator_v1"),
+            "second_pass_role": str(second_pass.get("role") or "second_pass_evaluation"),
+            "second_pass_status": str(second_pass.get("status") or second_pass_detail.get("status") or "pending"),
+            "second_pass_evidence_count": _as_int(second_pass.get("evidence_count") or second_pass_detail.get("evidence_count"), 0),
+            "second_pass_flow_support_count": _as_int(second_pass.get("flow_support_count") or second_pass_detail.get("flow_support_count"), 0),
+            "soc_status": str(((second_pass_detail.get("soc") or {}) if isinstance(second_pass_detail.get("soc"), dict) else {}).get("status") or ""),
+            "ai_role": "supplemental_operator_assist",
         },
     }
 

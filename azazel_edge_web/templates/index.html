@@ -408,6 +408,17 @@
                         </article>
 
                         <article class="action-card pro-only">
+                            <div class="card-kicker">{{ tr('dashboard.decision_path', 'Decision Path') }}</div>
+                            <p class="card-summary" id="decisionPathSummary">{{ tr('dashboard.decision_path_intro', 'Tactical first-pass decides quickly. Deterministic second-pass adds context before operator assist and AI explanation.') }}</p>
+                            <div class="fact-list compact-list">
+                                <div class="fact-item"><span>{{ tr('dashboard.first_pass', 'First Pass') }}</span><strong id="decisionFirstPass">-</strong></div>
+                                <div class="fact-item"><span>{{ tr('dashboard.second_pass', 'Second Pass') }}</span><strong id="decisionSecondPass">-</strong></div>
+                                <div class="fact-item"><span>{{ tr('dashboard.second_pass_status', '2nd Pass Status') }}</span><strong id="decisionSecondPassStatus">-</strong></div>
+                                <div class="fact-item"><span>{{ tr('dashboard.ai_role', 'AI Role') }}</span><strong id="decisionAiRole">-</strong></div>
+                            </div>
+                        </article>
+
+                        <article class="action-card pro-only">
                             <div class="card-kicker">Rejected Stronger Actions</div>
                             <p class="card-summary">{{ tr('dashboard.threat_impact', 'Separate the threat case from the path and service case before you decide on stronger control.') }}</p>
                             <ul class="action-list" id="rejectedStrongerActionsList">
@@ -519,7 +530,7 @@
                     </form>
                     <div class="demo-boundary-banner" id="demoBoundaryBanner">
                         <strong id="demoBoundaryMode">DETERMINISTIC REPLAY</strong>
-                        <span id="demoBoundarySummary">Synthetic replay path. AI is not used in the core decision loop.</span>
+                        <span id="demoBoundarySummary">{{ tr('dashboard.demo_boundary_summary', 'Deterministic replay path. This does not replace the live Tactical first-pass path, and AI is not used in the core demo decision loop.') }}</span>
                     </div>
                     <div class="assistant-block">
                         <div class="assistant-label">Scenario Result</div>

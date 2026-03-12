@@ -24,7 +24,7 @@ Azazel-Edge は、Raspberry Pi クラスで動く operator-aware defensive edge 
 ## Azazel-Edge が目を引く理由
 
 - **AI より先に deterministic**  
-  一次判断は Evidence Plane、NOC/SOC evaluator、Action Arbiter、Decision Explanation が担います。AI は bounded assist layer であり、主制御ではありません。
+  Tactical Engine が first-minute triage を行い、Evidence Plane と evaluator が second-pass context を追加します。AI は bounded assist layer であり、主制御ではありません。
 - **SOC と NOC と gateway を 1 台へ統合**  
   IDS 可視化だけでも、LLM ラッパーだけでもありません。エッジ gateway、共通 evidence、運用監視、脅威評価、operator action を 1 台で回します。
 - **制約ハードウェア前提で設計**  
@@ -52,14 +52,16 @@ Azazel-Edge は、Raspberry Pi クラスで動く operator-aware defensive edge 
    - `syslog_min`
 2. **Evidence Plane**
    - `event_id`, `ts`, `source`, `kind`, `subject`, `severity`, `confidence`, `attrs` を持つ共通 schema
-3. **Deterministic evaluation**
+3. **First-pass triage**
+   - Tactical Engine による即時 Suricata スコアリング
+4. **Second-pass deterministic evaluation**
    - NOC evaluator: availability, path health, device health, client health
    - SOC evaluator: suspicion, confidence, technique likelihood, blast radius
-4. **Action Arbiter**
+5. **Action Arbiter**
    - `observe`, `notify`, `throttle`, `redirect`, `isolate`
-5. **Decision Explanation / Audit**
+6. **Decision Explanation / Audit**
    - why chosen / why not others / evidence IDs / operator wording / JSONL trail
-6. **Governed assist layer**
+7. **Governed assist layer**
    - Ollama 上の M.I.O. が曖昧事象、質問応答、Runbook 補助を担当
 
 ## Operator Surfaces
@@ -85,8 +87,9 @@ operator の質問、review 済み runbook 候補提示、handoff に使う chat
 - `NetworkManager`, `dnsmasq`, `nftables`, systemd を使った host-side orchestration
 
 ### Deterministic NOC/SOC pipeline
+- Tactical Engine による first-minute triage
 - adapter による evidence 正規化
-- AI より前に評価が完結する一次判断経路
+- Evidence Plane と evaluator による second-pass evaluation
 - explicit で reviewable な action selection
 - default で残る explanation と audit trail
 

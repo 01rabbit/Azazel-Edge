@@ -106,6 +106,16 @@ class DashboardDataContractTests(unittest.TestCase):
                 "runbook_id": "rb.noc.dns.failure.check",
                 "operator_note": "Confirm gateway and resolver mismatch.",
             },
+            "decision_pipeline": {
+                "first_pass": {"engine": "tactical_scorer_v1", "role": "first_minute_triage"},
+                "second_pass": {"engine": "soc_evaluator_v1", "role": "second_pass_evaluation", "status": "completed", "evidence_count": 2, "flow_support_count": 1},
+            },
+            "second_pass": {
+                "status": "completed",
+                "evidence_count": 2,
+                "flow_support_count": 1,
+                "soc": {"status": "high"},
+            },
         }
         metrics = {
             "queue_depth": 1,
@@ -220,8 +230,11 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["service_health_summary"]["ai_agent"], "ON")
         self.assertIn("soc_focus", payload)
         self.assertIn("noc_focus", payload)
+        self.assertIn("decision_path", payload)
         self.assertEqual(payload["soc_focus"]["attack_type"], "dns anomaly")
         self.assertEqual(payload["noc_focus"]["path_health"]["uplink"], "eth1")
+        self.assertEqual(payload["decision_path"]["first_pass_engine"], "tactical_scorer_v1")
+        self.assertEqual(payload["decision_path"]["second_pass_status"], "completed")
 
     def test_dashboard_actions_contract(self) -> None:
         response = self.client.get("/api/dashboard/actions")
@@ -241,6 +254,8 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertTrue(payload["mio"]["rationale"])
         self.assertEqual(payload["mio"]["handoff"]["ops_comm"], "/ops-comm")
         self.assertTrue(payload["rejected_stronger_actions"])
+        self.assertEqual(payload["decision_path"]["first_pass_role"], "first_minute_triage")
+        self.assertEqual(payload["decision_path"]["second_pass_flow_support_count"], 1)
 
     def test_dashboard_actions_hides_dashboard_demo_context_when_overlay_is_inactive(self) -> None:
         now = time.time()
@@ -317,6 +332,7 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("Temporary Mission", text)
         self.assertIn("Safe first response for the person in front of you", text)
         self.assertIn("Immediate Action", text)
+        self.assertIn("Decision Path", text)
         self.assertIn("Snapshot", text)
         self.assertIn("AI Metrics", text)
         self.assertIn("AI Activity", text)

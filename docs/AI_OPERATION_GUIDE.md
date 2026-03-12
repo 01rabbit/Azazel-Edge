@@ -14,15 +14,17 @@ P0 実装状態: `docs/P0_RUNTIME_ARCHITECTURE.md`
 
 ## 1.1 P0 との関係
 
-- P0 の一次判定は deterministic evaluator を主とする
+- first-minute triage は Tactical Engine が担う
+- second-pass の deterministic context は Evidence Plane と NOC/SOC evaluator が担う
 - AI は補助に限定し、一次判断経路とは分離して扱う
 - P0 の判断パイプラインは以下
-  1. Evidence Plane
-  2. NOC/SOC Evaluator
-  3. Action Arbiter
-  4. Decision Explanation
-  5. Notification / AI Assist
-  6. Audit Logger
+  1. Tactical Engine
+  2. Evidence Plane
+  3. NOC/SOC Evaluator
+  4. Action Arbiter
+  5. Decision Explanation
+  6. Notification / AI Assist
+  7. Audit Logger
 - 本書は主に AI 補助運用を扱い、P0 全体構成は `docs/P0_RUNTIME_ARCHITECTURE.md` を正とする
 
 ## 2. モデル構成（Ollama）
@@ -41,12 +43,13 @@ sudo docker exec azazel-edge-ollama ollama list
 
 ## 3. 判定フロー（運用）
 
-1. Tactical EngineがSuricataイベントをスコア化
-2. `risk_score` が曖昧帯 (`60-79`) の場合のみ Analyst LLM を実行
-3. 低スコアでも相関条件（同一送信元の短時間反復/シグネチャ多様化）を満たした場合は Analyst LLM を強制実行
-4. 非曖昧はLLMをスキップ
-5. `risk_score >= 85` は direct critical としてOps Coachキュー投入
-6. Ops Coachはメモリ/スワップ閾値を満たす場合のみ実行
+1. Tactical Engine が Suricata イベントを即時スコア化する
+2. 同じ事象を Evidence Plane schema に再整形し、SOC second-pass context を付与する
+3. first-pass の `risk_score` が曖昧帯 (`60-79`) の場合のみ Analyst LLM を実行する
+4. 低スコアでも相関条件（同一送信元の短時間反復/シグネチャ多様化）を満たした場合は Analyst LLM を強制実行する
+5. 非曖昧は LLM をスキップし、deterministic recommendation を維持する
+6. `risk_score >= 85` は direct critical として Ops Coach キューへ投入する
+7. Ops Coach はメモリ/スワップ閾値を満たす場合のみ実行する
 
 ## 4. 現行しきい値
 
