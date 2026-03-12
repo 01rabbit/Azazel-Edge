@@ -49,6 +49,7 @@ logger = logging.getLogger('azazel-edge-daemon')
 MODE_MANAGER = ModeManager(logger=logger)
 
 SOCKET_PATH = Path('/run/azazel-edge/control.sock')
+AI_ADVISORY_PATH = Path("/run/azazel-edge/ai_advisory.json")
 PORTAL_VIEWER_SERVICE = "azazel-edge-portal-viewer.service"
 PORTAL_VIEWER_ENV_CANDIDATES = portal_env_candidates()
 PORTAL_START_URL_RUNTIME_PATH = Path("/run/azazel-edge/portal-viewer-start-url")
@@ -80,6 +81,7 @@ NETWORK_HEALTH = NetworkHealthMonitor(
     cache_ttl_sec=float(os.environ.get("AZAZEL_HEALTH_CACHE_TTL", "25")),
     captive_url=os.environ.get("AZAZEL_CAPTIVE_CHECK_URL", "http://connectivitycheck.gstatic.com/generate_204"),
 )
+SURICATA_ADVISORY_TTL_SEC = int(os.environ.get("AZAZEL_SURICATA_ADVISORY_TTL_SEC", "300"))
 
 
 def _read_portal_viewer_env() -> dict[str, str]:
@@ -483,8 +485,9 @@ def _default_route_info() -> dict[str, str]:
 
 def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(data)
+    now = time.time()
     enriched["now_time"] = datetime.now().strftime("%H:%M:%S")
-    enriched["snapshot_epoch"] = time.time()
+    enriched["snapshot_epoch"] = now
 
     route = _default_route_info()
     up_if = str(route.get("up_if") or "-")
@@ -581,8 +584,73 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
         suspicion = int(float(str(internal.get("suspicion", enriched.get("risk_score", 0))).strip()))
     except Exception:
         suspicion = 0
+    try:
+        advisory_epoch = float(enriched.get("advisory_epoch") or 0)
+    except Exception:
+        advisory_epoch = 0.0
+    if advisory_epoch <= 0 and AI_ADVISORY_PATH.exists():
+        try:
+            advisory_payload = json.loads(AI_ADVISORY_PATH.read_text(encoding="utf-8"))
+            if isinstance(advisory_payload, dict):
+                advisory_epoch = float(advisory_payload.get("ts") or 0)
+                if advisory_epoch > 0:
+                    enriched["advisory_epoch"] = advisory_epoch
+        except Exception:
+            advisory_epoch = 0.0
+    advisory_age_sec = max(0.0, now - advisory_epoch) if advisory_epoch > 0 else 0.0
+    advisory_stale = bool(advisory_epoch and advisory_age_sec > float(SURICATA_ADVISORY_TTL_SEC))
     health_status = str(health.get("status") or "").upper()
     current_user_state = str(enriched.get("user_state", "") or "").upper()
+    if advisory_stale:
+        reasons = [str(x) for x in enriched.get("reasons", []) if not str(x).startswith("suricata_sid=")]
+        enriched["reasons"] = reasons[-5:]
+        attack = enriched.get("attack")
+        if not isinstance(attack, dict):
+            attack = {}
+        attack["suricata_alert"] = False
+        attack["stale_advisory_expired"] = True
+        attack["suricata_sid"] = 0
+        attack["suricata_severity"] = 0
+        enriched["attack"] = attack
+        enriched["suricata_critical"] = 0
+        enriched["suricata_warning"] = 0
+        enriched["suricata_info"] = 0
+        if not signals and health_status == "SAFE":
+            suspicion = 0
+            enriched["user_state"] = "SAFE"
+            state_name = "NORMAL"
+            enriched["recommendation"] = "No active issues detected"
+            enriched["llm"] = {"status": "idle", "reason": "stale_advisory_expired"}
+            enriched["ops_coach"] = {}
+            idle_second_pass = {
+                "stage": "second_pass",
+                "engine": "evidence_plane_soc_v1",
+                "status": "idle",
+                "reason": "stale_advisory_expired",
+                "evidence_count": 0,
+                "flow_support_count": 0,
+                "soc": {
+                    "status": "low",
+                    "reasons": [],
+                    "attack_candidates": [],
+                    "ti_matches": [],
+                    "sigma_hits": [],
+                    "yara_hits": [],
+                    "correlation": {"status": "none", "cluster_count": 0, "top_score": 0, "clusters": [], "reasons": [], "evidence_ids": []},
+                    "event_count": 0,
+                    "evidence_ids": [],
+                },
+            }
+            enriched["second_pass"] = idle_second_pass
+            decision_pipeline = enriched.get("decision_pipeline")
+            if not isinstance(decision_pipeline, dict):
+                decision_pipeline = {}
+            first_pass = decision_pipeline.get("first_pass")
+            if not isinstance(first_pass, dict):
+                first_pass = {"engine": "tactical_scorer_v1", "role": "first_minute_triage"}
+            decision_pipeline["first_pass"] = first_pass
+            decision_pipeline["second_pass"] = dict(idle_second_pass)
+            enriched["decision_pipeline"] = decision_pipeline
     if not signals and health_status == "SAFE" and suspicion <= 0:
         if current_user_state in ("", "CHECKING", "LIMITED", "SAFE"):
             enriched["user_state"] = "SAFE"

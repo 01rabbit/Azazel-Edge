@@ -925,6 +925,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     connection = state.get("connection") if isinstance(state.get("connection"), dict) else {}
     network_health = state.get("network_health") if isinstance(state.get("network_health"), dict) else {}
     internal = state.get("internal") if isinstance(state.get("internal"), dict) else {}
+    attack = state.get("attack") if isinstance(state.get("attack"), dict) else {}
     now_epoch = time.time()
     snapshot_age = _age_seconds(state.get("snapshot_epoch"), now_epoch=now_epoch)
     ai_age = _age_seconds(metrics.get("last_update_ts"), now_epoch=now_epoch)
@@ -962,6 +963,13 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     second_pass_detail = state.get("second_pass") if isinstance(state.get("second_pass"), dict) else {}
     if not second_pass_detail and isinstance(advisory.get("second_pass"), dict):
         second_pass_detail = advisory.get("second_pass")
+    second_pass_status = str(second_pass.get("status") or second_pass_detail.get("status") or "pending")
+    if bool(attack.get("stale_advisory_expired")):
+        attack_type = ""
+        top_src = ""
+        top_dst = ""
+        top_sid = 0
+        top_severity = 0
     path_scope = ("全 uplink 利用者" if lang == "ja" else "all uplink clients") if str(connection.get("internet_check") or "").upper() == "FAIL" else (
         ("DNS 影響利用者" if lang == "ja" else "dns-affected clients") if _as_int(network_health.get("dns_mismatch"), 0) > 0 else ("広域影響なし" if lang == "ja" else "no broad impact indicated")
     )
@@ -1071,7 +1079,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
             "first_pass_role": str(first_pass.get("role") or "first_minute_triage"),
             "second_pass_engine": str(second_pass.get("engine") or "soc_evaluator_v1"),
             "second_pass_role": str(second_pass.get("role") or "second_pass_evaluation"),
-            "second_pass_status": str(second_pass.get("status") or second_pass_detail.get("status") or "pending"),
+            "second_pass_status": second_pass_status,
             "second_pass_evidence_count": _as_int(second_pass.get("evidence_count") or second_pass_detail.get("evidence_count"), 0),
             "second_pass_flow_support_count": _as_int(second_pass.get("flow_support_count") or second_pass_detail.get("flow_support_count"), 0),
             "soc_status": str(((second_pass_detail.get("soc") or {}) if isinstance(second_pass_detail.get("soc"), dict) else {}).get("status") or ""),

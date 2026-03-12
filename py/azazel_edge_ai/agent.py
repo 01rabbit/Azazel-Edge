@@ -724,6 +724,7 @@ def _run_manual_query(
         return {"status": "error", "reason": "empty_question", "model": OPS_COACH_MODEL}
     q = q[:MANUAL_QUERY_MAX_CHARS]
     ctx = context if isinstance(context, dict) else {}
+    lang = normalize_lang(ctx.get("lang"))
     _metrics_inc("manual_requests", 1)
 
     routed = _manual_router_response(q, sender=sender, source=source, context=ctx)
@@ -1408,6 +1409,7 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
 
     snapshot["now_time"] = time.strftime("%H:%M:%S", time.localtime(now))
     snapshot["snapshot_epoch"] = now
+    snapshot["advisory_epoch"] = float(advisory.get("ts") or now)
     snapshot["user_state"] = advisory.get("user_state", "CHECKING")
     snapshot["recommendation"] = advisory.get("recommendation", "Observe")
     snapshot["reasons"] = reasons

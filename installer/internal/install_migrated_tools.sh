@@ -169,6 +169,8 @@ install -m 0755 "$REPO_ROOT/installer/internal/set_dev_remote_access.sh" /opt/az
 install -m 0755 "$REPO_ROOT/installer/internal/install_ai_runtime.sh" /opt/azazel-edge/install_ai_runtime.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_workspace.sh" /opt/azazel-edge/provision_mattermost_workspace.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_command.sh" /opt/azazel-edge/provision_mattermost_command.sh
+install -m 0755 "$REPO_ROOT/installer/internal/verify_runtime_sync.sh" /opt/azazel-edge/verify_runtime_sync.sh
+install -m 0755 "$REPO_ROOT/installer/internal/verify_runtime_sync.sh" /usr/local/bin/azazel-edge-runtime-sync-check
 
 echo "[10/16] Install systemd units"
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-control-daemon.service" /etc/systemd/system/azazel-edge-control-daemon.service
@@ -254,5 +256,8 @@ install -m 0644 "$REPO_ROOT/rust/azazel-edge-core/Cargo.toml" /opt/azazel-edge/r
 install -m 0644 "$REPO_ROOT/rust/azazel-edge-core/src/main.rs" /opt/azazel-edge/rust/azazel-edge-core/src/main.rs
 cargo build --release --manifest-path /opt/azazel-edge/rust/azazel-edge-core/Cargo.toml
 install -m 0755 /opt/azazel-edge/rust/azazel-edge-core/target/release/azazel-edge-core /usr/local/bin/azazel-edge-core
+
+echo "[18/18] Verify runtime sync"
+/opt/azazel-edge/verify_runtime_sync.sh "$REPO_ROOT" /opt/azazel-edge
 
 echo "Installed Azazel-Edge stack (WebUI/TUI/EPD/control/HTTPS/security) under /opt/azazel-edge and /usr/local/bin."
