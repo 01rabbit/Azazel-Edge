@@ -24,7 +24,7 @@ It combines a managed gateway, deterministic SOC/NOC evaluation, explicit action
 ## Why Azazel-Edge Stands Out
 
 - **Deterministic before AI**
-  Evidence Plane, NOC/SOC evaluators, Action Arbiter, and Decision Explanation form the primary decision path. AI is bounded and governed, not the core control loop.
+  Tactical Engine performs the first-minute triage. Evidence Plane and deterministic evaluators add second-pass context. AI is bounded and governed, not the core control loop.
 - **SOC + NOC + edge gateway in one appliance**
   Azazel-Edge is not just a dashboard and not just a packet filter. It is an edge gateway with shared evidence, operational monitoring, threat evaluation, and operator actions.
 - **Built for constrained hardware**
@@ -52,14 +52,16 @@ It combines a managed gateway, deterministic SOC/NOC evaluation, explicit action
    - `syslog_min`
 2. **Evidence Plane**
    - shared schema with `event_id`, `ts`, `source`, `kind`, `subject`, `severity`, `confidence`, `attrs`
-3. **Deterministic evaluation**
+3. **First-pass triage**
+   - Tactical Engine for immediate Suricata-driven risk scoring
+4. **Second-pass deterministic evaluation**
    - NOC evaluator: availability, path health, device health, client health
    - SOC evaluator: suspicion, confidence, technique likelihood, blast radius
-4. **Action Arbiter**
+5. **Action Arbiter**
    - `observe`, `notify`, `throttle`, `redirect`, `isolate`
-5. **Decision Explanation and audit**
+6. **Decision Explanation and audit**
    - why chosen, why not others, evidence IDs, operator wording, JSONL audit trail
-6. **Governed assist layer**
+7. **Governed assist layer**
    - local Ollama-backed M.I.O. assist for ambiguous cases, operator questions, and runbook support
 
 ## Operator Surfaces
@@ -85,8 +87,9 @@ Low-friction local visibility surfaces for runtime state, mode, and current post
 - Host-side orchestration built around `NetworkManager`, `dnsmasq`, `nftables`, and systemd services
 
 ### Deterministic NOC/SOC pipeline
+- Tactical Engine for first-minute triage on normalized Suricata events
 - Evidence normalization through adapters
-- Shared evaluation path before any AI assist
+- Second-pass evaluation through Evidence Plane and deterministic evaluators
 - Action decisions that remain explicit and reviewable
 - Decision explanations and audit records by default
 

@@ -6,6 +6,12 @@ Last updated: 2026-03-12
 
 Azazel-Edge includes a deterministic demo pack for showing how the system behaves without polluting live runtime state.
 
+In live operation, Azazel-Edge uses a layered path:
+
+1. Tactical Engine performs first-minute triage
+2. Evidence Plane and deterministic evaluators add second-pass context
+3. AI remains supplemental for explanation and operator help
+
 A demo replay shows this path:
 
 1. Evidence is normalized into a shared model
@@ -15,6 +21,7 @@ A demo replay shows this path:
 5. Dashboard, `ops-comm`, TUI, and EPD can reflect the replay through a temporary demo overlay
 
 The demo pack is a replay path. It is not live telemetry injection.
+It also does not replace the live Tactical first-pass path. The replay exists to show the deterministic NOC/SOC/arbiter pipeline in a controlled way.
 
 ## What the Demo Proves
 
@@ -124,7 +131,7 @@ Azazel-Edge separates NOC and SOC evaluation, chooses an explicit action, record
 ### If Asked About AI
 
 ```text
-AI is assistive here. The primary decision path in the demo is deterministic.
+AI is assistive here. In live operation, Tactical Engine still handles the first-minute pass. The demo replays the deterministic second-pass evaluation path.
 ```
 
 ### If Asked Whether This Is Live

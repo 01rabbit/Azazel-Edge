@@ -21,6 +21,7 @@ PY_ROOT = Path(__file__).resolve().parents[1]
 if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 
+from azazel_edge.decision_layers import DecisionLayers
 from azazel_edge.tactics_engine import ConfigHash, DecisionLogger, TacticalScorer
 from azazel_edge.tactics_engine.decision_logger import (
     ChosenAction,
@@ -126,6 +127,7 @@ logger = logging.getLogger("azazel-edge-ai-agent")
 SCORER = TacticalScorer()
 DECISION_LOGGER = DecisionLogger()
 CONFIG_HASH = ConfigHash.compute(config_dict={"engine": "tactical_scorer_v1"})
+DECISION_LAYERS = DecisionLayers()
 _LAST_RISK_SCORE = 0
 _LAST_STATE_NAME = "NORMAL"
 LLM_QUEUE: "queue.Queue[Dict[str, Any]]" = queue.Queue(maxsize=LLM_QUEUE_MAX)
@@ -930,6 +932,17 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
     advisory = {
         "ts": time.time(),
         "source": "ai_agent",
+        "decision_pipeline": {
+            "first_pass": {
+                "engine": "tactical_scorer_v1",
+                "role": "first_minute_triage",
+            },
+            "second_pass": {
+                "engine": "evidence_plane_soc_v1",
+                "role": "context_enrichment",
+                "status": "pending",
+            },
+        },
         "risk_level": _risk_level(risk_score),
         "risk_score": risk_score,
         "attack_type": str(norm.get("attack_type") or "unknown"),
@@ -944,6 +957,17 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
         "suricata_severity": int(features["suricata_sev"]),
         "suricata_sid": int(features["suricata_sid"]),
     }
+    try:
+        second_pass = DECISION_LAYERS.enrich_with_second_pass(event, advisory)
+    except Exception as exc:
+        second_pass = {
+            "stage": "second_pass",
+            "engine": "evidence_plane_soc_v1",
+            "status": "failed",
+            "reason": str(exc),
+        }
+    advisory["decision_pipeline"]["second_pass"] = second_pass
+    advisory["second_pass"] = second_pass
     correlation = _evaluate_correlation(advisory)
     advisory["correlation"] = correlation
     if bool(correlation.get("force_llm")):
@@ -1101,6 +1125,8 @@ def _build_llm_input(event: Dict[str, Any], advisory: Dict[str, Any]) -> Dict[st
     norm = event.get("normalized", {})
     if not isinstance(norm, dict):
         norm = {}
+    second_pass = advisory.get("second_pass") if isinstance(advisory.get("second_pass"), dict) else {}
+    second_soc = second_pass.get("soc") if isinstance(second_pass.get("soc"), dict) else {}
     return {
         "sid": advisory.get("suricata_sid", 0),
         "suricata_severity": advisory.get("suricata_severity", 0),
@@ -1112,6 +1138,10 @@ def _build_llm_input(event: Dict[str, Any], advisory: Dict[str, Any]) -> Dict[st
         "signature": norm.get("attack_type", ""),
         "category": norm.get("category", ""),
         "action": norm.get("action", ""),
+        "second_pass_soc_status": second_soc.get("status", "unknown"),
+        "second_pass_soc_reasons": second_soc.get("reasons", []),
+        "second_pass_attack_candidates": second_soc.get("attack_candidates", []),
+        "second_pass_correlation": second_soc.get("correlation", {}),
     }
 
 
@@ -1387,6 +1417,8 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
     snapshot["suricata_info"] = info
     snapshot["llm"] = advisory.get("llm", {})
     snapshot["ops_coach"] = advisory.get("ops_coach", {})
+    snapshot["decision_pipeline"] = advisory.get("decision_pipeline", {})
+    snapshot["second_pass"] = advisory.get("second_pass", {})
     snapshot["llm_metrics"] = _metrics_snapshot()
     snapshot["internal"] = {
         "state_name": advisory.get("state_name", _LAST_STATE_NAME),
