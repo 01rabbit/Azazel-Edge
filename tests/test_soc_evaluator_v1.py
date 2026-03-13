@@ -10,7 +10,7 @@ if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 
 from azazel_edge.evaluators import SocEvaluator
-from azazel_edge.evidence_plane import EvidenceEvent
+from azazel_edge.evidence_plane import EvidenceEvent, adapt_flow_record
 
 
 def _event(subject: str, risk: int, confidence_raw: int, attack_type: str, category: str, port: int, sid: int) -> EvidenceEvent:
@@ -33,6 +33,23 @@ def _event(subject: str, risk: int, confidence_raw: int, attack_type: str, categ
     )
 
 
+def _flow_event(src_ip: str, dst_ip: str, dst_port: int, flow_id: str = 'flow-1') -> EvidenceEvent:
+    return adapt_flow_record({
+        'ts': '2026-03-10T00:00:00Z',
+        'src_ip': src_ip,
+        'dst_ip': dst_ip,
+        'dst_port': dst_port,
+        'proto': 'TCP',
+        'app_proto': 'tls',
+        'flow_state': 'failed',
+        'bytes_toserver': 1024,
+        'bytes_toclient': 0,
+        'pkts_toserver': 30,
+        'pkts_toclient': 0,
+        'flow_id': flow_id,
+    })
+
+
 class SocEvaluatorV1Tests(unittest.TestCase):
     def test_generates_required_sections_from_soc_events(self) -> None:
         evaluator = SocEvaluator()
@@ -41,11 +58,28 @@ class SocEvaluatorV1Tests(unittest.TestCase):
             _event('10.0.0.5->192.168.40.20:80/TCP', 68, 80, 'Web Attack Attempt', 'Attempted Administrator Privilege Gain', 80, 210002),
         ]
         result = evaluator.evaluate(events)
-        for key in ('suspicion', 'confidence', 'technique_likelihood', 'blast_radius', 'summary', 'evidence_ids'):
+        for key in (
+            'suspicion',
+            'confidence',
+            'technique_likelihood',
+            'blast_radius',
+            'entity_risk_state',
+            'incident_campaign_state',
+            'security_visibility_state',
+            'suppression_exception_state',
+            'asset_target_criticality',
+            'exposure_change_state',
+            'confidence_provenance',
+            'behavior_sequence_state',
+            'triage_priority_state',
+            'summary',
+            'evidence_ids',
+        ):
             self.assertIn(key, result)
         for key in ('suspicion', 'confidence', 'technique_likelihood', 'blast_radius'):
             self.assertIn('score', result[key])
             self.assertIn('label', result[key])
+        self.assertIn('top_entities', result['entity_risk_state'])
 
     def test_keeps_evidence_ids(self) -> None:
         evaluator = SocEvaluator()
@@ -68,8 +102,105 @@ class SocEvaluatorV1Tests(unittest.TestCase):
         evaluator = SocEvaluator()
         handoff = evaluator.to_arbiter_input(evaluator.evaluate([]))
         self.assertEqual(handoff['source'], 'soc_evaluator')
-        for key in ('summary', 'suspicion', 'confidence', 'technique_likelihood', 'blast_radius', 'evidence_ids'):
+        for key in (
+            'summary',
+            'suspicion',
+            'confidence',
+            'technique_likelihood',
+            'blast_radius',
+            'entity_risk_state',
+            'incident_campaign_state',
+            'security_visibility_state',
+            'suppression_exception_state',
+            'asset_target_criticality',
+            'exposure_change_state',
+            'confidence_provenance',
+            'behavior_sequence_state',
+            'triage_priority_state',
+            'evidence_ids',
+        ):
             self.assertIn(key, handoff)
+
+    def test_entity_risk_state_captures_top_entities(self) -> None:
+        evaluator = SocEvaluator()
+        events = [
+            _event('10.0.0.5->192.168.40.10:53/UDP', 85, 90, 'DNS C2 Beacon', 'Potentially Bad Traffic', 53, 210001),
+            _event('10.0.0.5->192.168.40.10:443/TCP', 92, 94, 'TLS Beacon', 'Trojan Activity', 443, 210020),
+        ]
+        result = evaluator.evaluate(events)
+        state = result['entity_risk_state']
+        self.assertGreaterEqual(state['entity_count'], 3)
+        self.assertGreaterEqual(state['bounded_entity_count'], 1)
+        top = state['top_entities'][0]
+        self.assertIn('entity_type', top)
+        self.assertIn('entity_id', top)
+        self.assertIn('score', top)
+        self.assertIn('label', top)
+        self.assertTrue(top['evidence_ids'])
+
+    def test_entity_risk_state_is_bounded(self) -> None:
+        evaluator = SocEvaluator(max_entities=8)
+        events = []
+        for idx in range(30):
+            events.append(
+                _event(
+                    f'10.0.0.{idx + 1}->192.168.40.{idx + 1}:80/TCP',
+                    50 + (idx % 40),
+                    60 + (idx % 30),
+                    'Web Attack Attempt',
+                    'Attempted Administrator Privilege Gain',
+                    80,
+                    210100 + idx,
+                )
+            )
+        result = evaluator.evaluate(events)
+        state = result['entity_risk_state']
+        self.assertGreater(state['entity_count'], state['bounded_entity_count'])
+        self.assertEqual(state['bounded_entity_count'], 8)
+        self.assertEqual(len(state['top_entities']), 8)
+
+    def test_suppression_policy_filters_events_but_keeps_high_risk_exception(self) -> None:
+        evaluator = SocEvaluator(suppression_policy={'sid': [210001]})
+        lower_risk = _event('10.0.0.5->192.168.40.10:53/UDP', 65, 80, 'Suspicious DNS Beacon', 'Potentially Bad Traffic', 53, 210001)
+        higher_risk = _event('10.0.0.5->192.168.40.10:443/TCP', 95, 90, 'Suspicious TLS Beacon', 'Trojan Activity', 443, 210001)
+        control = _event('10.0.0.6->192.168.40.20:80/TCP', 70, 75, 'Web Attack Attempt', 'Attempted Administrator Privilege Gain', 80, 210002)
+        result = evaluator.evaluate([lower_risk, higher_risk, control])
+        suppression = result['suppression_exception_state']
+        self.assertEqual(suppression['suppressed_count'], 1)
+        self.assertEqual(suppression['exception_count'], 1)
+        self.assertEqual(suppression['actionable_count'], 2)
+        self.assertIn('high_risk_exception_escaped_suppression', suppression['reasons'])
+
+    def test_visibility_and_triage_include_flow_signal(self) -> None:
+        evaluator = SocEvaluator()
+        events = [
+            _event('10.0.0.5->192.168.40.10:443/TCP', 88, 82, 'TLS Beacon', 'Trojan Activity', 443, 210020),
+            _flow_event('10.0.0.5', '192.168.40.10', 443, flow_id='flow-visibility-1'),
+        ]
+        result = evaluator.evaluate(events)
+        self.assertEqual(result['security_visibility_state']['status'], 'good')
+        triage = result['triage_priority_state']
+        self.assertIn(triage['status'], {'now', 'watch', 'later', 'idle'})
+        self.assertIn('score', triage)
+        self.assertIn('now', triage)
+
+    def test_critical_target_increases_criticality_and_blast_radius(self) -> None:
+        evaluator = SocEvaluator(criticality={'dst_ips': ['192.168.40.10']})
+        result = evaluator.evaluate([
+            _event('10.0.0.5->192.168.40.10:443/TCP', 72, 80, 'TLS Beacon', 'Trojan Activity', 443, 210020),
+        ])
+        criticality = result['asset_target_criticality']
+        self.assertEqual(criticality['critical_target_count'], 1)
+        self.assertEqual(criticality['status'], 'critical_targets_observed')
+        self.assertGreaterEqual(result['blast_radius']['score'], 55)
+
+    def test_exposure_change_transitions_to_stable_when_targets_repeat(self) -> None:
+        evaluator = SocEvaluator()
+        events = [_event('10.0.0.5->8.8.8.8:443/TCP', 65, 75, 'Suspicious TLS Beacon', 'Potentially Bad Traffic', 443, 210001)]
+        first = evaluator.evaluate(events)
+        second = evaluator.evaluate(events)
+        self.assertEqual(first['exposure_change_state']['status'], 'expanding')
+        self.assertEqual(second['exposure_change_state']['status'], 'stable')
 
 
 if __name__ == '__main__':
