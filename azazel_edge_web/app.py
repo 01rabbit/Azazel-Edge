@@ -67,6 +67,7 @@ try:
         TriageSessionStore,
         classify_intent_candidates,
         list_flows as triage_list_flows,
+        select_noc_runbook_support,
         select_runbooks_for_diagnostic_state,
     )
     from azazel_edge.demo_overlay import (
@@ -102,6 +103,7 @@ except Exception:
     TriageSessionStore = None  # type: ignore
     classify_intent_candidates = None  # type: ignore
     triage_list_flows = None  # type: ignore
+    select_noc_runbook_support = None  # type: ignore
     select_runbooks_for_diagnostic_state = None  # type: ignore
     DEMO_OVERLAY_PATH = Path("/run/azazel-edge/demo_overlay.json")
     build_demo_overlay = lambda result: {"active": True, "raw_result": result}  # type: ignore
@@ -759,6 +761,7 @@ def _dashboard_action_guidance(
     advisory: Dict[str, Any],
     latest_ai: Dict[str, Any],
     suggested_runbook: Dict[str, Any],
+    noc_runbook_support: Dict[str, Any] | None = None,
 ) -> Dict[str, List[str]]:
     network_health = state.get("network_health") if isinstance(state.get("network_health"), dict) else {}
     monitoring = state.get("monitoring") if isinstance(state.get("monitoring"), dict) else {}
@@ -770,6 +773,7 @@ def _dashboard_action_guidance(
     internet_check = str((state.get("connection") or {}).get("internet_check") or "").upper() if isinstance(state.get("connection"), dict) else ""
     critical = _as_int(state.get("suricata_critical"), 0)
     warning = _as_int(state.get("suricata_warning"), 0)
+    support = noc_runbook_support if isinstance(noc_runbook_support, dict) else {}
 
     why_now: List[str] = []
     do_next: List[str] = []
@@ -790,6 +794,8 @@ def _dashboard_action_guidance(
         _append_unique(why_now, f"Recommended runbook is {suggested_runbook['title']}.")
     elif latest_ai.get("answer"):
         _append_unique(why_now, "Latest M.I.O. assist is advisory only and no runbook is currently selected.")
+    if support.get("why_this_runbook"):
+        _append_unique(why_now, str(support.get("why_this_runbook")))
 
     recommendation = str(state.get("recommendation") or advisory.get("recommendation") or "").strip()
     _append_unique(do_next, recommendation or _tr("api.keep_monitoring", default="Keep monitoring the current state."))
@@ -797,6 +803,8 @@ def _dashboard_action_guidance(
         _append_unique(do_next, f"Open {suggested_runbook['title']} and follow the read-only checks first.")
     for step in suggested_runbook.get("steps", []):
         _append_unique(do_next, str(step))
+    for check in support.get("operator_checks", []) if isinstance(support.get("operator_checks"), list) else []:
+        _append_unique(do_next, str(check))
     if not do_next:
         _append_unique(do_next, _tr("api.keep_monitoring", default="Keep monitoring the current state."))
 
@@ -817,6 +825,8 @@ def _dashboard_action_guidance(
         _append_unique(escalate_if, "Escalate if a core monitoring service remains OFF after local verification.")
     if user_state not in ("SAFE", ""):
         _append_unique(escalate_if, "Escalate if the state does not return to SAFE after the recommended checks.")
+    if support.get("escalation_hint"):
+        _append_unique(escalate_if, str(support.get("escalation_hint")))
     if not escalate_if:
         _append_unique(escalate_if, "Escalate if the state leaves SAFE or new alerts appear.")
 
@@ -844,6 +854,43 @@ def _runbook_brief(runbook_id: str, lang: str | None = None) -> Dict[str, Any]:
         "steps": [str(item) for item in steps[:3]],
         "user_message_template": localize_runbook_user_message(runbook, lang=lang),
     }
+
+
+def _dashboard_noc_runbook_support(state: Dict[str, Any], lang: str) -> Dict[str, Any]:
+    if select_noc_runbook_support is None:
+        return {}
+    network_health = state.get("network_health") if isinstance(state.get("network_health"), dict) else {}
+    noc_capacity = state.get("noc_capacity") if isinstance(state.get("noc_capacity"), dict) else {}
+    noc_client_inventory = state.get("noc_client_inventory") if isinstance(state.get("noc_client_inventory"), dict) else {}
+    noc_service_assurance = state.get("noc_service_assurance") if isinstance(state.get("noc_service_assurance"), dict) else {}
+    noc_resolution_assurance = state.get("noc_resolution_assurance") if isinstance(state.get("noc_resolution_assurance"), dict) else {}
+    noc_blast_radius = state.get("noc_blast_radius") if isinstance(state.get("noc_blast_radius"), dict) else {}
+    noc_config_drift = state.get("noc_config_drift") if isinstance(state.get("noc_config_drift"), dict) else {}
+    noc_incident_summary = state.get("noc_incident_summary") if isinstance(state.get("noc_incident_summary"), dict) else {}
+    return select_noc_runbook_support(
+        {
+            "summary": {
+                "status": str(network_health.get("status") or "unknown"),
+                "blast_radius": noc_blast_radius,
+                "incident_summary": noc_incident_summary,
+            },
+            "path_health": {
+                "status": str(network_health.get("status") or "unknown"),
+                "signals": network_health.get("signals") if isinstance(network_health.get("signals"), list) else [],
+            },
+            "capacity": noc_capacity,
+            "client_inventory": noc_client_inventory,
+            "service_health": noc_service_assurance,
+            "resolution_health": noc_resolution_assurance,
+            "config_drift": noc_config_drift,
+            "affected_scope": noc_blast_radius,
+            "incident_summary": noc_incident_summary,
+        },
+        audience="professional",
+        lang=lang,
+        context={"source": "dashboard"},
+        source="dashboard",
+    )
 
 
 def _normalize_alert_event(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -1144,19 +1191,26 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
 def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], llm_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     lang = _request_lang()
     latest_ai = _dashboard_visible_ai_context(state, advisory, llm_rows)
-    suggested_runbook = _runbook_brief(latest_ai.get("runbook_id", ""), lang=lang)
-    guidance = _dashboard_action_guidance(state, advisory, latest_ai, suggested_runbook)
+    noc_runbook_support = _dashboard_noc_runbook_support(state, lang=lang)
+    selected_runbook_id = str(latest_ai.get("runbook_id") or noc_runbook_support.get("runbook_candidate_id") or "")
+    suggested_runbook = _runbook_brief(selected_runbook_id, lang=lang)
+    guidance = _dashboard_action_guidance(state, advisory, latest_ai, suggested_runbook, noc_runbook_support=noc_runbook_support)
     user_guidance = str(
         latest_ai.get("user_message")
         or suggested_runbook.get("user_message_template")
+        or noc_runbook_support.get("why_this_runbook")
         or state.get("recommendation")
         or ""
     )
     recommendation = str(state.get("recommendation") or advisory.get("recommendation") or "").strip()
     review = latest_ai.get("review") if isinstance(latest_ai.get("review"), dict) else {}
+    if not review:
+        review = ((noc_runbook_support.get("reviewed_runbook") or {}) if isinstance(noc_runbook_support.get("reviewed_runbook"), dict) else {}).get("review") if isinstance((noc_runbook_support.get("reviewed_runbook") or {}), dict) else {}
     rationale: List[str] = []
     for item in guidance["why_now"][:2]:
         _append_unique(rationale, item)
+    if noc_runbook_support.get("why_this_runbook"):
+        _append_unique(rationale, str(noc_runbook_support.get("why_this_runbook")))
     if review.get("final_status"):
         _append_unique(rationale, f"{_tr('api.review_prefix', default='Review')}: {review.get('final_status')}.")
     findings = review.get("findings") if isinstance(review.get("findings"), list) else []
@@ -1193,7 +1247,14 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
         "suggested_runbook": suggested_runbook,
         "approval_required": bool(suggested_runbook.get("requires_approval")),
         "current_recommendation": recommendation,
-        "operator_note": str(latest_ai.get("operator_note") or ""),
+        "operator_note": str(latest_ai.get("operator_note") or noc_runbook_support.get("operator_note") or ""),
+        "noc_runbook_support": {
+            "runbook_candidate_id": str(noc_runbook_support.get("runbook_candidate_id") or ""),
+            "why_this_runbook": str(noc_runbook_support.get("why_this_runbook") or ""),
+            "operator_checks": noc_runbook_support.get("operator_checks") if isinstance(noc_runbook_support.get("operator_checks"), list) else [],
+            "escalation_hint": str(noc_runbook_support.get("escalation_hint") or ""),
+            "ai_used": bool(noc_runbook_support.get("ai_used")),
+        },
         "rejected_stronger_actions": stronger_actions[:4],
         "mio": {
             "answer": str(latest_ai.get("answer") or ""),

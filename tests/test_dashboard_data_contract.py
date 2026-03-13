@@ -311,8 +311,23 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertTrue(payload["mio"]["rationale"])
         self.assertEqual(payload["mio"]["handoff"]["ops_comm"], "/ops-comm")
         self.assertTrue(payload["rejected_stronger_actions"])
+        self.assertEqual(payload["noc_runbook_support"]["runbook_candidate_id"], "rb.noc.dns.failure.check")
+        self.assertTrue(payload["noc_runbook_support"]["operator_checks"])
         self.assertEqual(payload["decision_path"]["first_pass_role"], "first_minute_triage")
         self.assertEqual(payload["decision_path"]["second_pass_flow_support_count"], 1)
+
+    def test_dashboard_actions_falls_back_to_deterministic_noc_runbook_without_ai_context(self) -> None:
+        webapp.AI_LLM_LOG.write_text("", encoding="utf-8")
+        advisory = json.loads(webapp.AI_ADVISORY_PATH.read_text(encoding="utf-8"))
+        advisory["ops_coach"]["runbook_id"] = ""
+        webapp.AI_ADVISORY_PATH.write_text(json.dumps(advisory), encoding="utf-8")
+        response = self.client.get("/api/dashboard/actions")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["suggested_runbook"]["id"], "rb.noc.dns.failure.check")
+        self.assertIn("resolver", payload["noc_runbook_support"]["why_this_runbook"].lower())
+        self.assertTrue(payload["current_operator_actions"])
 
     def test_dashboard_actions_hides_dashboard_demo_context_when_overlay_is_inactive(self) -> None:
         now = time.time()
