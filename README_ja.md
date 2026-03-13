@@ -39,6 +39,7 @@ Azazel-Edge は、Raspberry Pi クラスで動く operator-aware defensive edge 
 - **管理された内部セグメントと uplink gateway** を構築する
 - **Suricata / flow / NOC probe / syslog** を共通 evidence に正規化する
 - **運用障害** と **脅威兆候** を分離して評価し、action を選ぶ
+- **capacity / client inventory / service assurance / resolution assurance / config drift / incident summary** を含む NOC 状態を把握する
 - **Runbook / triage state machine / M.I.O.** で、プロ担当者と臨時担当の両方を支援する
 - **deterministic scenario replay** でデモや検証を行う
 - モデルの勘に頼らず、**説明可能で監査可能な判断** を残す
@@ -55,7 +56,7 @@ Azazel-Edge は、Raspberry Pi クラスで動く operator-aware defensive edge 
 3. **First-pass triage**
    - Tactical Engine による即時 Suricata スコアリング
 4. **Second-pass deterministic evaluation**
-   - NOC evaluator: availability, path health, device health, client health
+   - NOC evaluator: availability, path health, device health, client health, capacity health, client inventory health, service health, resolution health, config drift health, affected scope, incident summary
    - SOC evaluator: suspicion, confidence, technique likelihood, blast radius
 5. **Action Arbiter**
    - `observe`, `notify`, `throttle`, `redirect`, `isolate`
@@ -67,7 +68,11 @@ Azazel-Edge は、Raspberry Pi クラスで動く operator-aware defensive edge 
 ## Operator Surfaces
 
 ### Dashboard
-現在 posture、threat evidence、NOC health、action、demo replay、M.I.O. 概観をまとめて見る主盤面です。
+現在の posture、threat evidence、NOC/SOC split status、action、runtime guardrail、M.I.O. 概観をまとめて見る live 運用盤面です。
+
+### `/demo`
+deterministic replay と reviewer 向け状態確認を行う専用ワークスペースです。  
+scenario replay、capability boundary、review-readiness は live の運用ダッシュボードから分離されています。
 
 ### `ops-comm`
 M.I.O. との直接対話、triage state machine、Runbook review、Mattermost bridge、demo control を扱う作業面です。
@@ -90,6 +95,7 @@ operator の質問、review 済み runbook 候補提示、handoff に使う chat
 - Tactical Engine による first-minute triage
 - adapter による evidence 正規化
 - Evidence Plane と evaluator による second-pass evaluation
+- capacity pressure、client inventory/session、service/resolution assurance、config drift、incident compression を含む NOC 拡張
 - explicit で reviewable な action selection
 - default で残る explanation と audit trail
 
@@ -100,7 +106,7 @@ operator の質問、review 済み runbook 候補提示、handoff に使う chat
 - AI の用途:
   - 曖昧アラート補助
   - operator 質問応答
-  - runbook suggestion support
+  - runbook wording/support
   - bilingual guidance output
 - AI は primary decision-maker ではありません
 
@@ -111,7 +117,6 @@ operator の質問、review 済み runbook 候補提示、handoff に使う chat
 - triage session から Mattermost への handoff
 
 ### 研究拡張ライン
-- config drift audit
 - multi-segment NOC evaluation
 - cross-source correlation
 - ATT&CK / D3FEND visualization payloads
@@ -156,6 +161,7 @@ sudo ENABLE_OLLAMA=1 ENABLE_MATTERMOST=1 bash installer/internal/install_ai_runt
 
 既定の主要エンドポイント:
 - Dashboard: `https://172.16.0.254/`
+- Demo workspace: `https://172.16.0.254/demo`
 - M.I.O. ops console: `https://172.16.0.254/ops-comm`
 - Mattermost: `http://172.16.0.254:8065/`
 - local backend: `http://127.0.0.1:8084/`
@@ -203,7 +209,7 @@ bin/azazel-edge-demo run mixed_correlation_demo
 
 - P0, P1, P2 実装ラインがリポジトリに含まれています
 - installer は現行 runtime module と asset を配備できる状態です
-- 現在このリポジトリには **38** 個の Python test module と **15** 個の runbook 定義があります
+- 現在このリポジトリには **39** 個の Python test module と **15** 個の runbook 定義があります
 
 ## License
 
