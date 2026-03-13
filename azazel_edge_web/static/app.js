@@ -102,7 +102,10 @@ function updateDemoModeBanner(result) {
     if (!result || !result.active) {
         banner.hidden = true;
         if (text) {
-            text.textContent = 'A demo overlay is active. Review replay output on the dedicated demo page, not on the operational dashboard.';
+            text.textContent = tr(
+                'dashboard.demo_banner_default',
+                'A demo overlay is active. Review replay output on the dedicated demo page, not on the operational dashboard.'
+            );
         }
         return;
     }
@@ -110,7 +113,11 @@ function updateDemoModeBanner(result) {
     const scenarioId = String(result.scenario_id || 'demo').trim() || 'demo';
     const action = String(result.arbiter?.action || '-').trim() || '-';
     if (text) {
-        text.textContent = `Demo overlay ${scenarioId} is active with action ${action}. The operational dashboard remains on live telemetry; use /demo for replay output and reviewer state.`;
+        text.textContent = tr(
+            'dashboard.demo_banner_active',
+            'Demo overlay {scenario} is active with action {action}. The operational dashboard remains on live telemetry; use /demo for replay output and reviewer state.',
+            { scenario: scenarioId, action }
+        );
     }
 }
 
@@ -466,8 +473,8 @@ function formatHumanDateTime(rawValue) {
 function formatFreshness(ageSec, rawTime, stale, idle = false) {
     const label = formatHumanDateTime(rawTime);
     if (ageSec == null) {
-        if (idle) return `IDLE | ${label}`;
-        return stale ? `STALE | ${label}` : label;
+        if (idle) return `${tr('dashboard.status_idle', 'IDLE')} | ${label}`;
+        return stale ? `${tr('dashboard.status_stale', 'STALE')} | ${label}` : label;
     }
     const seconds = Number(ageSec);
     let bucket = `${Math.round(seconds)}s ago`;
@@ -477,9 +484,9 @@ function formatFreshness(ageSec, rawTime, stale, idle = false) {
         bucket = `${Math.round(seconds / 60)}m ago`;
     }
     if (idle) {
-        return `IDLE | ${bucket} | ${label}`;
+        return `${tr('dashboard.status_idle', 'IDLE')} | ${bucket} | ${label}`;
     }
-    return `${stale ? 'STALE' : 'LIVE'} | ${bucket} | ${label}`;
+    return `${stale ? tr('dashboard.status_stale', 'STALE') : tr('dashboard.status_live', 'LIVE')} | ${bucket} | ${label}`;
 }
 
 function updateMissionRow(summary, actions) {
@@ -590,6 +597,7 @@ async function refreshDashboard() {
     try {
         updateHeader(state, mattermost);
         updateCommandStrip(summary, health, failures);
+        updateOperationalResourceGuard(health);
         updateSituationBoard(summary, state, health, mattermost);
         updateSplitBoard(summary, actions);
         updateActionBoard(actions, state);
@@ -1474,17 +1482,6 @@ function updateReviewReadiness(healthEntry, demoCapabilitiesEntry, demoOverlay) 
         (item) => item,
     );
 
-    updateElement('reviewQueueDepth', hasHealthData ? `${queue.depth ?? 0} / ${queue.capacity ?? 0} (max ${queue.max_seen ?? 0})` : 'unknown');
-    updateElement('reviewDeferredCount', hasHealthData ? String(queue.deferred_count ?? 0) : 'unknown');
-    updateElement('reviewFallbackRate', hasHealthData ? String(llm.fallback_rate ?? 0) : 'unknown');
-    updateElement('reviewPolicyMode', hasHealthData ? String(health?.policy_mode || '-') : 'unknown');
-    updateElement('reviewLatency', hasHealthData ? `${llm.latency_ms_last ?? 0} ms / ema ${llm.latency_ms_ema ?? 0}` : 'unknown');
-    updateElement(
-        'reviewStaleFlags',
-        hasHealthData
-            ? `snapshot=${staleFlags.snapshot ? 'yes' : 'no'} ai=${staleFlags.ai_metrics ? 'yes' : 'no'} events=${staleFlags.ai_activity ? 'yes' : 'no'}`
-            : 'unknown',
-    );
     updateElement('reviewStatusBadge', status);
     if (badge) {
         badge.className = `assistant-status ${
@@ -1500,6 +1497,103 @@ function updateReviewReadiness(healthEntry, demoCapabilitiesEntry, demoOverlay) 
             ? 'Reviewer-proof summary is incomplete because capability or health data is unavailable.'
             : `Execution=${execution.mode || 'deterministic_replay'} | local_only=${execution.local_only ? 'yes' : 'no'} | demo_state=${overlayActive ? 'overlay-active' : 'overlay-inactive'} | bounded=${healthy ? 'yes' : 'check'}`,
     );
+}
+
+function updateOperationalResourceGuard(health) {
+    const queue = health?.queue || {};
+    const llm = health?.llm || {};
+    const staleFlags = health?.stale_flags || {};
+    const depth = Number(queue.depth ?? 0);
+    const capacity = Number(queue.capacity ?? 0);
+    const maxSeen = Number(queue.max_seen ?? 0);
+    const deferred = Number(queue.deferred_count ?? 0);
+    const fallbackRate = Number(llm.fallback_rate ?? 0);
+    const latencyLast = Number(llm.latency_ms_last ?? 0);
+    const latencyEma = Number(llm.latency_ms_ema ?? 0);
+    const requests = Number(llm.requests ?? 0);
+    const failed = Number(llm.failed ?? 0);
+    const staleCount = [Boolean(staleFlags.snapshot), Boolean(staleFlags.ai_metrics), Boolean(staleFlags.ai_activity)].filter(Boolean).length;
+    const queuePct = capacity > 0 ? Math.min(100, Math.max(0, (depth / capacity) * 100)) : 0;
+    const fallbackPct = Math.min(100, Math.max(0, fallbackRate * 100));
+    const latencyPct = Math.min(100, Math.max(0, (latencyEma / 1500) * 100));
+    const headline = document.getElementById('resourceGuardHeadline');
+    const queueTone = queuePct >= 90 || (capacity > 0 && depth > capacity) ? 'status-danger' : (queuePct >= 65 ? 'status-caution' : 'status-safe');
+    const fallbackTone = fallbackPct >= 50 ? 'status-danger' : (fallbackPct >= 20 ? 'status-caution' : 'status-safe');
+    const latencyTone = latencyPct >= 85 ? 'status-danger' : (latencyPct >= 55 ? 'status-caution' : 'status-safe');
+    let overallStatus = 'status-safe';
+    let summary = tr('dashboard.resource_guard_summary_stable', 'Runtime looks stable.');
+    if (Boolean(staleFlags.snapshot) || (capacity > 0 && depth > capacity) || fallbackPct >= 50 || latencyPct >= 85) {
+        overallStatus = 'status-danger';
+        summary = tr('dashboard.resource_guard_summary_degraded', 'Runtime degraded. Verify live state first.');
+    } else if (staleCount > 0 || queuePct >= 65 || fallbackPct >= 20 || latencyPct >= 55 || deferred > 0) {
+        overallStatus = 'status-caution';
+        summary = tr('dashboard.resource_guard_summary_caution', 'Watch queue, stale data, or fallback before acting.');
+    }
+
+    const reasons = [
+        tr(
+            overallStatus === 'status-danger'
+                ? 'dashboard.resource_guard_reason_degraded'
+                : (overallStatus === 'status-caution'
+                    ? 'dashboard.resource_guard_reason_caution'
+                    : 'dashboard.resource_guard_reason_stable'),
+            overallStatus === 'status-danger'
+                ? 'Trust is reduced: queue {queue_pct}%, fallback {fallback_pct}%, stale {stale_count}/3.'
+                : (overallStatus === 'status-caution'
+                    ? 'Guardrails are drifting: queue {queue_pct}%, fallback {fallback_pct}%, stale {stale_count}/3.'
+                    : 'Guardrails are within bounds: queue {queue_pct}%, fallback {fallback_pct}%, stale {stale_count}/3.'),
+            {
+                queue_pct: Math.round(queuePct),
+                fallback_pct: Math.round(fallbackPct),
+                stale_count: staleCount,
+            },
+        ),
+        tr(
+            'dashboard.resource_guard_reason_latency',
+            'Latency last {last} ms; EMA {ema} ms.',
+            { last: latencyLast, ema: latencyEma },
+        ),
+        tr(
+            'dashboard.resource_guard_reason_queue_window',
+            'Queue depth {depth}/{capacity}; max seen {max_seen}.',
+            { depth, capacity: capacity || 0, max_seen: maxSeen },
+        ),
+    ];
+    const flags = [
+        tr('dashboard.resource_guard_flag_policy', 'Policy: {value}', { value: String(health?.policy_mode || '-') }),
+        tr('dashboard.resource_guard_flag_stale', 'Stale flags: {count}/3', { count: staleCount }),
+        tr('dashboard.resource_guard_flag_deferred', 'Deferred work: {count}', { count: deferred }),
+    ];
+    const indicators = [
+        tr('dashboard.resource_guard_indicator_queue', 'Queue pressure: {pct}%', { pct: Math.round(queuePct) }),
+        tr(
+            'dashboard.resource_guard_indicator_fallback',
+            'Fallback rate: {pct}% ({failed}/{requests})',
+            { pct: Math.round(fallbackPct), failed, requests },
+        ),
+        tr(
+            'dashboard.resource_guard_indicator_latency',
+            'Latency: last {last} ms / EMA {ema} ms',
+            { last: latencyLast, ema: latencyEma },
+        ),
+    ];
+
+    updateElement('resourceGuardSummary', summary);
+    renderList('resourceGuardReasonList', reasons, (item) => item);
+    renderList('resourceGuardFlagList', flags, (item) => item);
+    renderList('resourceGuardIndicatorList', indicators, (item) => item);
+    updateElement('resourceGuardQueueValue', `${Math.round(queuePct)}%`);
+    updateElement('resourceGuardQueueDetail', `${depth} / ${capacity || 0} | max ${maxSeen}`);
+    updateElement('resourceGuardFallbackValue', `${Math.round(fallbackPct)}%`);
+    updateElement('resourceGuardFallbackDetail', `${failed} / ${requests} fallback`);
+    updateElement('resourceGuardLatencyValue', `${latencyLast} ms`);
+    updateElement('resourceGuardLatencyDetail', `EMA ${latencyEma} ms`);
+    setMeterFill('resourceGuardQueueBar', queuePct, queueTone);
+    setMeterFill('resourceGuardFallbackBar', fallbackPct, fallbackTone);
+    setMeterFill('resourceGuardLatencyBar', latencyPct, latencyTone);
+    if (headline) {
+        headline.textContent = overallStatus === 'status-danger' ? 'DEGRADED' : (overallStatus === 'status-caution' ? 'WATCH' : 'STABLE');
+    }
 }
 
 function renderList(id, items, formatter) {
@@ -1546,6 +1640,14 @@ function updateServiceChip(id, value) {
 function updateElement(id, text) {
     const el = document.getElementById(id);
     if (el) el.textContent = text;
+}
+
+function setMeterFill(id, pct, tone) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const width = Math.max(0, Math.min(100, Number(pct) || 0));
+    el.style.width = `${width}%`;
+    el.className = `resource-guard-meter-fill ${tone || 'status-safe'}`;
 }
 
 function joinList(items) {
