@@ -18,7 +18,7 @@ class DecisionExplanationV2Tests(unittest.TestCase):
     def test_explanation_contains_structured_v2_fields(self) -> None:
         explainer = DecisionExplainer(output_path=Path('/tmp/unused-decision-explanations.jsonl'))
         result = explainer.explain(
-            noc={'summary': {'status': 'good'}},
+            noc={'summary': {'status': 'good', 'blast_radius': {'affected_uplinks': ['eth1'], 'affected_segments': ['lan-a'], 'affected_client_count': 2}}, 'affected_scope': {'affected_uplinks': ['eth1'], 'affected_segments': ['lan-a'], 'affected_client_count': 2}},
             soc={'summary': {'status': 'critical', 'attack_candidates': ['T1071 Application Layer Protocol'], 'ai_attack_candidates': ['T1190 Exploit Public-Facing Application'], 'ti_matches': [{'indicator_type': 'ip', 'value': '10.0.0.5'}]}},
             arbiter={
                 'action': 'redirect',
@@ -36,6 +36,8 @@ class DecisionExplanationV2Tests(unittest.TestCase):
         self.assertIn('next_checks', result)
         self.assertIn('attack_candidates', result['why_chosen'])
         self.assertIn('ATT&CK candidates', result['operator_wording'])
+        self.assertEqual(result['why_chosen']['affected_scope']['affected_segments'], ['lan-a'])
+        self.assertIn('Affected scope: uplinks eth1, segments lan-a, estimated clients 2.', result['operator_wording'])
         self.assertIn('T1190 Exploit Public-Facing Application', result['why_chosen']['attack_candidates'])
 
     def test_explanation_can_be_persisted_as_jsonl(self) -> None:

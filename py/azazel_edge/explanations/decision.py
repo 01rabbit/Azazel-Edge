@@ -61,6 +61,7 @@ class DecisionExplainer:
                 'service_health': (noc.get('service_health') or {}).get('label', 'unknown') if isinstance(noc, dict) else 'unknown',
                 'resolution_health': (noc.get('resolution_health') or {}).get('label', 'unknown') if isinstance(noc, dict) else 'unknown',
             },
+            'affected_scope': (noc.get('affected_scope') or (noc_summary.get('blast_radius') if isinstance(noc_summary.get('blast_radius'), dict) else {})) if isinstance(noc, dict) else {},
             'ti_matches': soc_summary.get('ti_matches', []),
             'attack_candidates': attack_candidates,
             'sigma_hits': sigma_hits,
@@ -91,6 +92,7 @@ class DecisionExplainer:
             correlation=correlation,
             control_mode=control_mode,
             client_impact=client_impact,
+            affected_scope=why_chosen['affected_scope'],
         )
         explanation = {
             'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'),
@@ -130,6 +132,7 @@ class DecisionExplainer:
         correlation: Dict[str, Any],
         control_mode: str,
         client_impact: Dict[str, Any],
+        affected_scope: Dict[str, Any],
     ) -> str:
         rejected_text = '; '.join(
             f"{item['action']} was rejected because {item['reason']}"
@@ -161,6 +164,12 @@ class DecisionExplainer:
                 f" Client impact: score {int(client_impact.get('score') or 0)}, "
                 f"affected {int(client_impact.get('affected_client_count') or 0)}, "
                 f"critical {int(client_impact.get('critical_client_count') or 0)}."
+            )
+        if isinstance(affected_scope, dict) and affected_scope:
+            sentence += (
+                f" Affected scope: uplinks {', '.join(affected_scope.get('affected_uplinks', [])[:3]) or '-'}, "
+                f"segments {', '.join(affected_scope.get('affected_segments', [])[:3]) or '-'}, "
+                f"estimated clients {int(affected_scope.get('affected_client_count') or 0)}."
             )
         if rejected_text:
             sentence += f" Alternatives: {rejected_text}."

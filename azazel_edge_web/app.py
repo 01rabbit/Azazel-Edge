@@ -981,6 +981,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
         top_talker = str(top_sources[0].get("src_ip") or top_sources[0].get("id") or "-")
     noc_service_assurance = state.get("noc_service_assurance") if isinstance(state.get("noc_service_assurance"), dict) else {}
     noc_resolution_assurance = state.get("noc_resolution_assurance") if isinstance(state.get("noc_resolution_assurance"), dict) else {}
+    noc_blast_radius = state.get("noc_blast_radius") if isinstance(state.get("noc_blast_radius"), dict) else {}
     return {
         "ok": True,
         "risk": {
@@ -1077,6 +1078,13 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
             "resolution_health": {
                 "status": str(noc_resolution_assurance.get("status") or "unknown"),
                 "failed_targets": noc_resolution_assurance.get("failed_targets") if isinstance(noc_resolution_assurance.get("failed_targets"), list) else [],
+            },
+            "blast_radius": {
+                "affected_uplinks": noc_blast_radius.get("affected_uplinks") if isinstance(noc_blast_radius.get("affected_uplinks"), list) else [],
+                "affected_segments": noc_blast_radius.get("affected_segments") if isinstance(noc_blast_radius.get("affected_segments"), list) else [],
+                "related_service_targets": noc_blast_radius.get("related_service_targets") if isinstance(noc_blast_radius.get("related_service_targets"), list) else [],
+                "affected_client_count": _as_int(noc_blast_radius.get("affected_client_count"), 0),
+                "critical_client_count": _as_int(noc_blast_radius.get("critical_client_count"), 0),
             },
             "capacity": {
                 "state": str(noc_capacity.get("state") or "unknown"),
