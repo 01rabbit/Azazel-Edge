@@ -195,6 +195,8 @@ class NocEvaluator:
             if 'sot_missing' not in client_health['reasons']:
                 client_health['reasons'].append('sot_missing')
 
+        affected_scope = self._evaluate_affected_scope(payloads, by_kind, sot=sot)
+
         dimensions = [
             availability,
             path_health,
@@ -230,6 +232,8 @@ class NocEvaluator:
         if sot and isinstance(sot.get('networks'), list):
             segment_status = self._evaluate_segment_scope(payloads, sot.get('networks', []))
             summary['segment_scope'] = segment_status
+        if affected_scope:
+            summary['blast_radius'] = affected_scope
 
         result = {
             'availability': availability,
@@ -240,6 +244,7 @@ class NocEvaluator:
             'client_inventory_health': client_inventory_health,
             'service_health': service_health,
             'resolution_health': resolution_health,
+            'affected_scope': affected_scope,
             'summary': summary,
             'evidence_ids': sorted(dict.fromkeys(all_evidence_ids)),
         }
@@ -258,6 +263,7 @@ class NocEvaluator:
             'client_inventory_health': evaluation.get('client_inventory_health', {}),
             'service_health': evaluation.get('service_health', {}),
             'resolution_health': evaluation.get('resolution_health', {}),
+            'affected_scope': evaluation.get('affected_scope', {}),
             'evidence_ids': evaluation.get('evidence_ids', []),
         }
 
@@ -657,4 +663,144 @@ class NocEvaluator:
         return {
             'affected_segments': sorted(segments),
             'multi_segment': len(segments) > 1,
+        }
+
+    @staticmethod
+    def _evaluate_affected_scope(
+        payloads: List[Dict[str, Any]],
+        by_kind: Dict[str, List[Dict[str, Any]]],
+        sot: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        networks = sot.get('networks', []) if isinstance(sot, dict) and isinstance(sot.get('networks'), list) else []
+        devices = sot.get('devices', []) if isinstance(sot, dict) and isinstance(sot.get('devices'), list) else []
+        services = sot.get('services', []) if isinstance(sot, dict) and isinstance(sot.get('services'), list) else []
+        service_ids = {str(item.get('id') or item.get('name') or '').strip() for item in services if isinstance(item, dict)}
+        service_ids.discard('')
+
+        affected_uplinks: set[str] = set()
+        affected_segments: set[str] = set()
+        related_service_targets: set[str] = set()
+        evidence_ids: set[str] = set()
+
+        for kind in ('path_probe', 'path_probe_window'):
+            for event in by_kind.get(kind, []):
+                attrs = event.get('attrs', {})
+                interface = str(attrs.get('interface') or '').strip()
+                reachable = bool(attrs.get('reachable', True))
+                state = str(attrs.get('state') or '').lower()
+                if interface and (not reachable or state in {'degraded', 'down'}):
+                    affected_uplinks.add(interface)
+                    if str(event.get('event_id') or ''):
+                        evidence_ids.add(str(event.get('event_id')))
+
+        for event in by_kind.get('capacity_pressure', []):
+            attrs = event.get('attrs', {})
+            interface = str(attrs.get('interface') or '').strip()
+            state = str(attrs.get('state') or '').lower()
+            if interface and state in {'elevated', 'congested'}:
+                affected_uplinks.add(interface)
+                if str(event.get('event_id') or ''):
+                    evidence_ids.add(str(event.get('event_id')))
+
+        for kind in ('service_health', 'service_probe', 'service_probe_window'):
+            for event in by_kind.get(kind, []):
+                attrs = event.get('attrs', {})
+                target = str(attrs.get('target') or attrs.get('name') or event.get('subject') or '').strip()
+                if not target:
+                    continue
+                degraded = False
+                if kind == 'service_health':
+                    degraded = str(attrs.get('state') or '').upper() != 'ON' or str(attrs.get('substate') or '').lower() not in {'running', 'listening', 'unknown'}
+                elif kind == 'service_probe':
+                    degraded = not bool(attrs.get('reachable'))
+                else:
+                    degraded = str(attrs.get('state') or '').lower() in {'degraded', 'down'}
+                if degraded:
+                    related_service_targets.add(target)
+                    if str(event.get('event_id') or ''):
+                        evidence_ids.add(str(event.get('event_id')))
+
+        for event in by_kind.get('resolution_probe_window', []):
+            attrs = event.get('attrs', {})
+            state = str(attrs.get('state') or '').lower()
+            if state in {'degraded', 'failed'}:
+                target = str(attrs.get('name') or event.get('subject') or '').strip()
+                if target:
+                    related_service_targets.add(target)
+                    if str(event.get('event_id') or ''):
+                        evidence_ids.add(str(event.get('event_id')))
+
+        for payload in payloads:
+            attrs = payload.get('attrs', {})
+            event_id = str(payload.get('event_id') or '')
+            if payload.get('source') in {'suricata_eve', 'flow_min'}:
+                src, dst = _parse_subject(str(payload.get('subject') or ''))
+                for ip in (src, dst):
+                    if ip:
+                        segment = _network_id_for_ip(networks, ip)
+                        if segment:
+                            affected_segments.add(segment)
+                            if event_id:
+                                evidence_ids.add(event_id)
+                app_proto = str(attrs.get('app_proto') or '').strip()
+                if app_proto:
+                    related_service_targets.add(app_proto)
+            elif payload.get('kind') in {'dhcp_lease', 'arp_entry', 'client_session'}:
+                ip = str(attrs.get('ip') or '')
+                segment = str(attrs.get('interface_or_segment') or '')
+                if not segment and ip:
+                    segment = _network_id_for_ip(networks, ip)
+                if segment:
+                    affected_segments.add(segment)
+                    if event_id:
+                        evidence_ids.add(event_id)
+
+        device_by_ip = {
+            str(item.get('ip') or ''): item
+            for item in devices
+            if isinstance(item, dict) and str(item.get('ip') or '')
+        }
+        affected_client_count = 0
+        critical_client_count = 0
+        client_groups: set[str] = set()
+        for event in by_kind.get('client_session', []):
+            attrs = event.get('attrs', {})
+            ip = str(attrs.get('ip') or '')
+            segment = str(attrs.get('interface_or_segment') or '')
+            session_state = str(attrs.get('session_state') or '')
+            if not segment and ip:
+                segment = _network_id_for_ip(networks, ip)
+            impacted = False
+            if segment and segment in affected_segments:
+                impacted = True
+            if attrs.get('interface_or_segment') and str(attrs.get('interface_or_segment')) in affected_uplinks:
+                impacted = True
+            if session_state in {'authorized_missing', 'stale_session'}:
+                impacted = False
+            if impacted:
+                affected_client_count += 1
+                device = device_by_ip.get(ip, {})
+                criticality = str(device.get('criticality') or '').lower()
+                if criticality in {'critical', 'high', 'core', 'mission'}:
+                    critical_client_count += 1
+                    client_groups.add('critical')
+                elif criticality:
+                    client_groups.add(criticality)
+
+        related_service_targets = {
+            target
+            for target in related_service_targets
+            if not service_ids or target in service_ids or ':' in target or '.' in target
+        }
+        if not affected_segments and not affected_uplinks and not related_service_targets:
+            return {}
+        return {
+            'affected_uplinks': sorted(affected_uplinks),
+            'affected_segments': sorted(affected_segments),
+            'related_service_targets': sorted(related_service_targets),
+            'affected_client_count': affected_client_count,
+            'critical_client_count': critical_client_count,
+            'client_groups': sorted(client_groups),
+            'multi_segment': len(affected_segments) > 1,
+            'evidence_ids': sorted(evidence_ids),
         }

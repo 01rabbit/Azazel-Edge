@@ -1008,6 +1008,7 @@ function updateSplitBoard(summary, actions) {
     const services = noc.service_health || {};
     const serviceAssurance = noc.service_assurance || {};
     const resolutionHealth = noc.resolution_health || {};
+    const blastRadius = noc.blast_radius || {};
     const capacity = noc.capacity || {};
     const clientInventory = noc.client_inventory || {};
     const clientImpact = noc.client_impact || {};
@@ -1038,6 +1039,8 @@ function updateSplitBoard(summary, actions) {
     updateElement('nocPathUplink', path.uplink || '-');
     updateElement('nocPathGateway', path.gateway || '-');
     updateElement('nocPathInternet', path.internet_check || '-');
+    updateElement('nocBlastSegments', (blastRadius.affected_segments || []).join(', ') || '-');
+    updateElement('nocBlastClients', String(blastRadius.affected_client_count ?? 0));
     renderList('nocPathSignals', path.signals || [], (item) => item);
     renderList(
         'nocServiceList',
@@ -1046,6 +1049,7 @@ function updateSplitBoard(summary, actions) {
     );
     updateElement('nocServiceAssurance', String(serviceAssurance.status || 'unknown').toUpperCase());
     updateElement('nocResolutionHealth', String(resolutionHealth.status || 'unknown').toUpperCase());
+    updateElement('nocBlastTargets', (blastRadius.related_service_targets || []).join(', ') || '-');
     const utilization = capacity.utilization_pct == null || capacity.utilization_pct === ''
         ? '-'
         : `${capacity.utilization_pct}%`;

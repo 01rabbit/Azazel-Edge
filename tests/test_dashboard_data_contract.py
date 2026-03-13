@@ -109,6 +109,13 @@ class DashboardDataContractTests(unittest.TestCase):
                 "status": "failed",
                 "failed_targets": ["example.com"],
             },
+            "noc_blast_radius": {
+                "affected_uplinks": ["eth1"],
+                "affected_segments": ["lan-main", "wan"],
+                "related_service_targets": ["dns", "resolver-tcp"],
+                "affected_client_count": 4,
+                "critical_client_count": 1,
+            },
             "evidence": ["net_health=SUSPECTED signals=dns_mismatch"],
             "llm": {"status": "skipped_non_ambiguous"},
         }
@@ -262,6 +269,8 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["noc_focus"]["client_inventory"]["inventory_mismatch_count"], 1)
         self.assertEqual(payload["noc_focus"]["service_assurance"]["status"], "degraded")
         self.assertEqual(payload["noc_focus"]["resolution_health"]["status"], "failed")
+        self.assertEqual(payload["noc_focus"]["blast_radius"]["affected_client_count"], 4)
+        self.assertEqual(payload["noc_focus"]["blast_radius"]["related_service_targets"], ["dns", "resolver-tcp"])
         self.assertEqual(payload["decision_path"]["first_pass_engine"], "tactical_scorer_v1")
         self.assertEqual(payload["decision_path"]["second_pass_status"], "completed")
 

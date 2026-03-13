@@ -39,11 +39,13 @@ class MultiSegmentNocV2Tests(unittest.TestCase):
         events = [
             {'event_id': 'probe-1', 'source': 'noc_probe', 'kind': 'path_probe', 'subject': '192.168.40.1', 'severity': 0, 'confidence': 0.95, 'attrs': {'scope': 'gateway', 'reachable': True, 'interface': 'eth1'}},
             {'event_id': 'probe-2', 'source': 'noc_probe', 'kind': 'path_probe', 'subject': '192.168.40.1', 'severity': 70, 'confidence': 0.95, 'attrs': {'scope': 'gateway', 'reachable': False, 'interface': 'usb0'}},
+            {'event_id': 'svc-1', 'source': 'noc_probe', 'kind': 'service_probe_window', 'subject': 'resolver-tcp', 'severity': 65, 'confidence': 0.9, 'attrs': {'name': 'resolver-tcp', 'state': 'down'}},
+            {'event_id': 'client-1', 'source': 'noc_probe', 'kind': 'client_session', 'subject': '192.168.40.10', 'severity': 0, 'confidence': 0.85, 'attrs': {'ip': '192.168.40.10', 'interface_or_segment': 'lan-a', 'session_state': 'authorized_present'}},
             {'event_id': 'flow-1', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '192.168.40.10->10.20.0.10:443/TCP', 'severity': 60, 'confidence': 0.8, 'attrs': {'src_ip': '192.168.40.10', 'dst_ip': '10.20.0.10', 'dst_port': 443}},
         ]
         sot = {
-            'devices': [],
-            'services': [],
+            'devices': [{'id': 'dev1', 'hostname': 'client-1', 'ip': '192.168.40.10', 'mac': 'aa:bb:cc:dd:ee:ff', 'criticality': 'critical', 'allowed_networks': ['lan-a']}],
+            'services': [{'id': 'resolver-tcp', 'target': '1.1.1.1:53'}],
             'expected_paths': [],
             'networks': [
                 {'id': 'lan-a', 'cidr': '192.168.40.0/24', 'zone': 'lan', 'gateway': '192.168.40.1'},
@@ -54,6 +56,10 @@ class MultiSegmentNocV2Tests(unittest.TestCase):
         self.assertIn('uplink_divergence', result['path_health']['reasons'])
         self.assertTrue(result['summary']['segment_scope']['multi_segment'])
         self.assertEqual(result['summary']['segment_scope']['affected_segments'], ['lan-a', 'lan-b'])
+        self.assertEqual(result['affected_scope']['affected_uplinks'], ['usb0'])
+        self.assertEqual(result['affected_scope']['related_service_targets'], ['resolver-tcp'])
+        self.assertEqual(result['affected_scope']['affected_client_count'], 1)
+        self.assertEqual(result['affected_scope']['critical_client_count'], 1)
 
 
 if __name__ == '__main__':
