@@ -131,7 +131,7 @@ class ActionArbiter:
             chosen.extend(noc.get('evidence_ids', []))
             chosen.extend(soc.get('evidence_ids', []))
         elif action == 'notify':
-            for key in ('availability', 'path_health', 'device_health'):
+            for key in ('availability', 'path_health', 'device_health', 'capacity_health', 'client_inventory_health'):
                 chosen.extend(noc.get(key, {}).get('evidence_ids', []))
             chosen.extend(soc.get('suspicion', {}).get('evidence_ids', []))
         else:
@@ -139,6 +139,8 @@ class ActionArbiter:
             chosen.extend(soc.get('blast_radius', {}).get('evidence_ids', []))
             chosen.extend(noc.get('availability', {}).get('evidence_ids', []))
             chosen.extend(noc.get('path_health', {}).get('evidence_ids', []))
+            chosen.extend(noc.get('capacity_health', {}).get('evidence_ids', []))
+            chosen.extend(noc.get('client_inventory_health', {}).get('evidence_ids', []))
         return sorted(dict.fromkeys(str(x) for x in chosen if str(x)))
 
     @staticmethod
@@ -203,6 +205,8 @@ class ActionArbiter:
             'availability_label': str(noc.get('availability', {}).get('label') or 'unknown'),
             'path_label': str(noc.get('path_health', {}).get('label') or 'unknown'),
             'device_label': str(noc.get('device_health', {}).get('label') or 'unknown'),
+            'capacity_label': str(noc.get('capacity_health', {}).get('label') or 'unknown'),
+            'client_inventory_label': str(noc.get('client_inventory_health', {}).get('label') or 'unknown'),
             'suspicion_label': str(soc.get('suspicion', {}).get('label') or 'unknown'),
             'suspicion_score': int(soc.get('suspicion', {}).get('score') or 0),
             'confidence_score': int(confidence_score or 0),

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from .schema import EvidenceEvent
+from .schema import EvidenceEvent, iso_utc_now
 
 
 def adapt_flow_record(record: Dict[str, object]) -> EvidenceEvent:
@@ -55,6 +55,83 @@ def adapt_flow_record(record: Dict[str, object]) -> EvidenceEvent:
     )
 
 
+def summarize_flow_events(events: Iterable[EvidenceEvent | Dict[str, object]]) -> Optional[EvidenceEvent]:
+    flow_rows: List[Dict[str, object]] = []
+    for event in events:
+        payload = event.to_dict() if hasattr(event, 'to_dict') else (dict(event) if isinstance(event, dict) else {})
+        if str(payload.get('kind') or '') != 'flow_summary':
+            continue
+        attrs = payload.get('attrs', {})
+        if not isinstance(attrs, dict):
+            continue
+        flow_rows.append(attrs)
+    if not flow_rows:
+        return None
+
+    total_bytes = 0
+    total_packets = 0
+    by_source: Dict[str, Dict[str, int]] = {}
+    by_service: Dict[str, Dict[str, int]] = {}
+    latest_ts = ''
+    for row in flow_rows:
+        src_ip = str(row.get('src_ip') or '-')
+        proto = str(row.get('proto') or row.get('app_proto') or 'unknown').upper()
+        service = f"{row.get('app_proto') or proto}:{int(row.get('dst_port') or 0)}/{proto}"
+        bytes_total = int(row.get('bytes_toserver') or 0) + int(row.get('bytes_toclient') or 0)
+        packets_total = int(row.get('pkts_toserver') or 0) + int(row.get('pkts_toclient') or 0)
+        total_bytes += bytes_total
+        total_packets += packets_total
+        by_source.setdefault(src_ip, {'bytes': 0, 'packets': 0, 'flows': 0})
+        by_source[src_ip]['bytes'] += bytes_total
+        by_source[src_ip]['packets'] += packets_total
+        by_source[src_ip]['flows'] += 1
+        by_service.setdefault(service, {'bytes': 0, 'packets': 0, 'flows': 0})
+        by_service[service]['bytes'] += bytes_total
+        by_service[service]['packets'] += packets_total
+        by_service[service]['flows'] += 1
+
+    top_sources = [
+        {'src_ip': key, **stats}
+        for key, stats in sorted(by_source.items(), key=lambda item: (-item[1]['bytes'], item[0]))[:3]
+    ]
+    top_services = [
+        {'service': key, **stats}
+        for key, stats in sorted(by_service.items(), key=lambda item: (-item[1]['bytes'], item[0]))[:3]
+    ]
+    top_source_bytes = int(top_sources[0]['bytes']) if top_sources else 0
+    top_service_bytes = int(top_services[0]['bytes']) if top_services else 0
+    max_ratio = max(
+        (top_source_bytes / total_bytes) if total_bytes > 0 else 0.0,
+        (top_service_bytes / total_bytes) if total_bytes > 0 else 0.0,
+    )
+    severity = 0
+    if max_ratio >= 0.8:
+        severity = 55
+    elif max_ratio >= 0.6:
+        severity = 35
+    attrs = {
+        'total_flows': len(flow_rows),
+        'total_bytes': total_bytes,
+        'total_packets': total_packets,
+        'top_sources': top_sources,
+        'top_services': top_services,
+        'source_concentration_ratio': round((top_source_bytes / total_bytes), 4) if total_bytes > 0 else 0.0,
+        'service_concentration_ratio': round((top_service_bytes / total_bytes), 4) if total_bytes > 0 else 0.0,
+        'max_concentration_ratio': round(max_ratio, 4),
+        'high_concentration': max_ratio >= 0.6,
+    }
+    return EvidenceEvent.build(
+        ts=latest_ts or iso_utc_now(),
+        source='flow_min',
+        kind='traffic_concentration',
+        subject='flow-window',
+        severity=severity,
+        confidence=0.8,
+        attrs=attrs,
+        status='warn' if severity > 0 else 'info',
+    )
+
+
 def iter_flow_jsonl(path: Path) -> Iterable[EvidenceEvent]:
     if not path.exists():
         return []
@@ -78,4 +155,8 @@ def iter_flow_jsonl(path: Path) -> Iterable[EvidenceEvent]:
 
 def read_flow_jsonl(path: Path, limit: Optional[int] = None) -> List[EvidenceEvent]:
     items = list(iter_flow_jsonl(path))
-    return items[-limit:] if isinstance(limit, int) and limit > 0 else items
+    items = items[-limit:] if isinstance(limit, int) and limit > 0 else items
+    summary = summarize_flow_events(items)
+    if summary is not None:
+        items.append(summary)
+    return items

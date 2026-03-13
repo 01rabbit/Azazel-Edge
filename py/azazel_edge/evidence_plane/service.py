@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 
 from .bus import EvidenceBus
 from .flow_min import read_flow_jsonl
+from .noc_inventory import build_client_inventory_events
 from .noc_probe import NocProbeAdapter
 from .schema import EvidenceEvent
 from .suricata import read_suricata_jsonl
@@ -26,7 +27,9 @@ class EvidencePlaneService:
 
     def dispatch_noc_probe(self, adapter: Optional[NocProbeAdapter] = None, snapshot: Optional[Dict[str, object]] = None) -> List[Dict[str, object]]:
         probe = adapter or NocProbeAdapter()
-        return self.dispatch_events(probe.collect(snapshot=snapshot if isinstance(snapshot, dict) else None))
+        events = probe.collect(snapshot=snapshot if isinstance(snapshot, dict) else None)
+        events.extend(build_client_inventory_events(events))
+        return self.dispatch_events(events)
 
     def dispatch_syslog_line(self, line: str) -> Dict[str, object]:
         return self.bus.publish(adapt_syslog_line(line))

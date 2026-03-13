@@ -924,6 +924,8 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     mode = mode_runtime.get("mode") if isinstance(mode_runtime.get("mode"), dict) else {}
     connection = state.get("connection") if isinstance(state.get("connection"), dict) else {}
     network_health = state.get("network_health") if isinstance(state.get("network_health"), dict) else {}
+    noc_capacity = state.get("noc_capacity") if isinstance(state.get("noc_capacity"), dict) else {}
+    noc_client_inventory = state.get("noc_client_inventory") if isinstance(state.get("noc_client_inventory"), dict) else {}
     internal = state.get("internal") if isinstance(state.get("internal"), dict) else {}
     attack = state.get("attack") if isinstance(state.get("attack"), dict) else {}
     now_epoch = time.time()
@@ -973,6 +975,12 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     path_scope = ("全 uplink 利用者" if lang == "ja" else "all uplink clients") if str(connection.get("internet_check") or "").upper() == "FAIL" else (
         ("DNS 影響利用者" if lang == "ja" else "dns-affected clients") if _as_int(network_health.get("dns_mismatch"), 0) > 0 else ("広域影響なし" if lang == "ja" else "no broad impact indicated")
     )
+    top_sources = noc_capacity.get("top_sources") if isinstance(noc_capacity.get("top_sources"), list) else []
+    top_talker = "-"
+    if top_sources and isinstance(top_sources[0], dict):
+        top_talker = str(top_sources[0].get("src_ip") or top_sources[0].get("id") or "-")
+    noc_service_assurance = state.get("noc_service_assurance") if isinstance(state.get("noc_service_assurance"), dict) else {}
+    noc_resolution_assurance = state.get("noc_resolution_assurance") if isinstance(state.get("noc_resolution_assurance"), dict) else {}
     return {
         "ok": True,
         "risk": {
@@ -1062,6 +1070,29 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
                 "signals": signals[:4],
             },
             "service_health": service_summary,
+            "service_assurance": {
+                "status": str(noc_service_assurance.get("status") or "unknown"),
+                "degraded_targets": noc_service_assurance.get("degraded_targets") if isinstance(noc_service_assurance.get("degraded_targets"), list) else [],
+            },
+            "resolution_health": {
+                "status": str(noc_resolution_assurance.get("status") or "unknown"),
+                "failed_targets": noc_resolution_assurance.get("failed_targets") if isinstance(noc_resolution_assurance.get("failed_targets"), list) else [],
+            },
+            "capacity": {
+                "state": str(noc_capacity.get("state") or "unknown"),
+                "mode": str(noc_capacity.get("mode") or "unknown"),
+                "utilization_pct": _as_float(noc_capacity.get("utilization_pct"), 0.0) if "utilization_pct" in noc_capacity else None,
+                "top_talker": top_talker,
+                "signals": noc_capacity.get("signals") if isinstance(noc_capacity.get("signals"), list) else [],
+            },
+            "client_inventory": {
+                "current_client_count": _as_int(noc_client_inventory.get("current_client_count"), 0),
+                "new_client_count": _as_int(noc_client_inventory.get("new_client_count"), 0),
+                "unknown_client_count": _as_int(noc_client_inventory.get("unknown_client_count"), 0),
+                "unauthorized_client_count": _as_int(noc_client_inventory.get("unauthorized_client_count"), 0),
+                "inventory_mismatch_count": _as_int(noc_client_inventory.get("inventory_mismatch_count"), 0),
+                "stale_session_count": _as_int(noc_client_inventory.get("stale_session_count"), 0),
+            },
             "client_impact": {
                 "scope": path_scope,
                 "segment_scope": str(state.get("up_if") or "unknown"),

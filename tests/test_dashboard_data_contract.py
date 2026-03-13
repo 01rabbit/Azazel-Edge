@@ -86,6 +86,29 @@ class DashboardDataContractTests(unittest.TestCase):
                 "dns_mismatch": 2,
                 "signals": ["dns_mismatch"],
             },
+            "noc_capacity": {
+                "state": "elevated",
+                "mode": "utilization_known",
+                "utilization_pct": 78.4,
+                "top_sources": [{"src_ip": "192.168.40.12", "bytes": 4096}],
+                "signals": ["capacity_elevated"],
+            },
+            "noc_client_inventory": {
+                "current_client_count": 6,
+                "new_client_count": 1,
+                "unknown_client_count": 1,
+                "unauthorized_client_count": 0,
+                "inventory_mismatch_count": 1,
+                "stale_session_count": 0,
+            },
+            "noc_service_assurance": {
+                "status": "degraded",
+                "degraded_targets": ["resolver-tcp"],
+            },
+            "noc_resolution_assurance": {
+                "status": "failed",
+                "failed_targets": ["example.com"],
+            },
             "evidence": ["net_health=SUSPECTED signals=dns_mismatch"],
             "llm": {"status": "skipped_non_ambiguous"},
         }
@@ -233,6 +256,12 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("decision_path", payload)
         self.assertEqual(payload["soc_focus"]["attack_type"], "dns anomaly")
         self.assertEqual(payload["noc_focus"]["path_health"]["uplink"], "eth1")
+        self.assertEqual(payload["noc_focus"]["capacity"]["state"], "elevated")
+        self.assertEqual(payload["noc_focus"]["capacity"]["top_talker"], "192.168.40.12")
+        self.assertEqual(payload["noc_focus"]["client_inventory"]["current_client_count"], 6)
+        self.assertEqual(payload["noc_focus"]["client_inventory"]["inventory_mismatch_count"], 1)
+        self.assertEqual(payload["noc_focus"]["service_assurance"]["status"], "degraded")
+        self.assertEqual(payload["noc_focus"]["resolution_health"]["status"], "failed")
         self.assertEqual(payload["decision_path"]["first_pass_engine"], "tactical_scorer_v1")
         self.assertEqual(payload["decision_path"]["second_pass_status"], "completed")
 

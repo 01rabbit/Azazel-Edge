@@ -59,8 +59,10 @@ class FlowInputV1Tests(unittest.TestCase):
                 'flow_id': 'flow-1',
             }) + '\n', encoding='utf-8')
             items = service.dispatch_flow_jsonl(flow_path)
-        self.assertEqual(len(items), 1)
+        self.assertEqual(len(items), 2)
         self.assertEqual(items[0]['source'], 'flow_min')
+        self.assertEqual(items[1]['kind'], 'traffic_concentration')
+        self.assertTrue(items[1]['attrs']['top_sources'])
 
     def test_flow_supports_noc_and_soc_scores(self) -> None:
         flow_event = adapt_flow_record({

@@ -90,6 +90,23 @@ def get_network_stats(interface: str) -> Dict[str, int]:
     return result
 
 
+def get_link_speed_mbps(interface: str) -> Optional[int]:
+    """リンク速度を取得（Mbps）。未知または unsupported の場合は None。"""
+    try:
+        path = Path(f"/sys/class/net/{interface}/speed")
+        if not path.exists():
+            return None
+        raw = path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return None
+        speed = int(raw)
+        if speed <= 0:
+            return None
+        return speed
+    except Exception:
+        return None
+
+
 def calculate_throughput(
     prev_stats: Dict[str, int],
     curr_stats: Dict[str, int],

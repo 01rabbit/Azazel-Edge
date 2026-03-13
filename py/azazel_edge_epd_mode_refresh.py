@@ -27,16 +27,16 @@ def _safe_load(path: Path) -> Dict[str, Any]:
 
 
 def _read_runtime_snapshot() -> Dict[str, Any]:
+    for path in RUNTIME_SNAPSHOT_CANDIDATES:
+        data = _safe_load(path)
+        if isinstance(data, dict) and data:
+            return data
     try:
         payload, _source = read_snapshot_payload(prefer_control_plane=True)
         if isinstance(payload, dict) and payload:
             return payload
     except Exception:
         pass
-    for path in RUNTIME_SNAPSHOT_CANDIDATES:
-        data = _safe_load(path)
-        if isinstance(data, dict) and data:
-            return data
     return {}
 
 
