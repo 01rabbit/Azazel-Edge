@@ -4,6 +4,7 @@ const LANG_KEY = 'azazel_lang';
 const POLL_INTERVAL_MS = 4000;
 const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
 const I18N = window.AZAZEL_I18N || {};
+const CURRENT_PAGE = document.body?.dataset?.page || 'dashboard';
 
 let dashboardTimer = null;
 let currentAudience = localStorage.getItem(AUDIENCE_KEY) || 'professional';
@@ -53,7 +54,7 @@ function syncLanguageUi() {
 }
 
 function setDemoOverlayVisualState(active) {
-    document.body.classList.toggle('demo-overlay-active', !!active);
+    document.body.classList.toggle('demo-overlay-active', CURRENT_PAGE === 'demo' && !!active);
 }
 
 function resetDemoOverlayPresentation() {
@@ -92,6 +93,25 @@ function resetDemoOverlayPresentation() {
     renderList('demoNextChecks', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
     renderList('demoEvidenceIds', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
     renderList('demoRejectedAlternatives', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
+}
+
+function updateDemoModeBanner(result) {
+    const banner = document.getElementById('demoModeBanner');
+    const text = document.getElementById('demoModeBannerText');
+    if (!banner || CURRENT_PAGE !== 'dashboard') return;
+    if (!result || !result.active) {
+        banner.hidden = true;
+        if (text) {
+            text.textContent = 'A demo overlay is active. Review replay output on the dedicated demo page, not on the operational dashboard.';
+        }
+        return;
+    }
+    banner.hidden = false;
+    const scenarioId = String(result.scenario_id || 'demo').trim() || 'demo';
+    const action = String(result.arbiter?.action || '-').trim() || '-';
+    if (text) {
+        text.textContent = `Demo overlay ${scenarioId} is active with action ${action}. The operational dashboard remains on live telemetry; use /demo for replay output and reviewer state.`;
+    }
 }
 
 const shortcutQuestions = {
@@ -562,6 +582,7 @@ async function refreshDashboard() {
     latestMattermost = mattermost || {};
     demoOverlayResult = demoOverlay && demoOverlay.active ? demoOverlay : null;
     setDemoOverlayVisualState(!!demoOverlayResult);
+    updateDemoModeBanner(demoOverlayResult);
     if (!demoOverlayResult) {
         resetDemoOverlayPresentation();
     }
@@ -576,9 +597,11 @@ async function refreshDashboard() {
         updateTemporaryMission(actions);
         updateEvidenceBoard(evidence, health);
         updateAssistant(actions, mattermost, capabilities);
-        updateReviewReadiness(resultMap.health, resultMap.demoCapabilities, demoOverlayResult);
+        if (CURRENT_PAGE === 'demo') {
+            updateReviewReadiness(resultMap.health, resultMap.demoCapabilities, demoOverlayResult);
+        }
         updateControlButtons(summary, state);
-        if (demoOverlayResult) {
+        if (CURRENT_PAGE === 'demo' && demoOverlayResult) {
             applyDemoOverlay(demoOverlayResult);
         }
     } catch (error) {
