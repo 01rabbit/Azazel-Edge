@@ -392,6 +392,7 @@ class DashboardDataContractTests(unittest.TestCase):
     def test_dashboard_index_renders_new_sections(self) -> None:
         response = self.client.get("/?lang=en")
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Content-Language"), "en")
         text = response.get_data(as_text=True)
         self.assertIn("Command Dashboard", text)
         self.assertIn("Audience Mode", text)
@@ -409,6 +410,12 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("AI Metrics", text)
         self.assertIn("AI Activity", text)
         self.assertIn("Runbook Event", text)
+        self.assertIn("Resource Guard", text)
+        self.assertIn('id="resourceGuardHeadline"', text)
+        self.assertIn('id="resourceGuardReasonList"', text)
+        self.assertIn('id="resourceGuardQueueBar"', text)
+        self.assertIn('id="resourceGuardFallbackBar"', text)
+        self.assertIn('id="resourceGuardLatencyBar"', text)
         self.assertIn("M.I.O. Assist", text)
         self.assertIn("Last Manual Ask", text)
         self.assertIn("Recommended Runbook", text)
@@ -432,6 +439,39 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertNotIn('id="demoRunForm"', text)
         self.assertNotIn('id="reviewPanel"', text)
 
+    def test_dashboard_index_renders_japanese_labels_when_requested(self) -> None:
+        response = self.client.get("/?lang=ja")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Content-Language"), "ja")
+        text = response.get_data(as_text=True)
+        self.assertIn("表示言語", text)
+        self.assertIn("プロ向け", text)
+        self.assertIn("デモ表示", text)
+        self.assertIn("実務ダッシュボードは live のままです", text)
+        self.assertIn("Service Health", text)
+        self.assertIn("NOC Focus", text)
+        self.assertIn("Action Board", text)
+        self.assertNotIn("サービス健全性", text)
+        self.assertNotIn("NOC 注視点", text)
+        self.assertNotIn("アクションボード", text)
+
+    def test_dashboard_index_renders_english_labels_without_japanese_heading_leakage(self) -> None:
+        response = self.client.get("/?lang=en")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Content-Language"), "en")
+        text = response.get_data(as_text=True)
+        self.assertIn("Service Health", text)
+        self.assertIn("Core daemons", text)
+        self.assertIn("NOC Focus", text)
+        self.assertIn("Action Board", text)
+        self.assertIn("Uplink and route", text)
+        self.assertIn("How should I guide a user who cannot connect to Wi-Fi?", text)
+        self.assertNotIn("アップリンクと経路", text)
+        self.assertNotIn("NOC 注視点", text)
+        self.assertNotIn("アクションボード", text)
+        self.assertNotIn("主要デーモン", text)
+        self.assertNotIn("Wi-Fi に繋がらない利用者へどう案内するか", text)
+
     def test_demo_page_renders_replay_and_review_sections(self) -> None:
         response = self.client.get("/demo?lang=en")
         self.assertEqual(response.status_code, 200)
@@ -442,6 +482,7 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("Review Readiness", text)
         self.assertIn("Capability Boundary and Resource Guard", text)
         self.assertIn("Open Latest Explanation", text)
+        self.assertNotIn('id="resourceGuardQueue"', text)
 
     def test_manual_ai_ask_enriches_rationale_and_handoff(self) -> None:
         webapp._send_ai_manual_query = lambda **_: {

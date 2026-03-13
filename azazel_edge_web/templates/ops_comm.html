@@ -21,7 +21,7 @@
             <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
             <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
             <a class="topbar-link" href="/">{{ tr('ops.dashboard', 'Dashboard') }}</a>
-            <a class="topbar-link" href="/demo">Demo</a>
+            <a class="topbar-link" href="/demo">{{ tr('dashboard.demo_link', 'Demo') }}</a>
             <a class="topbar-link" id="mattermostLink" href="{{ mattermost_open_url or '#' }}" target="_blank" rel="noopener noreferrer">{{ tr('ops.open_mattermost', 'Open Mattermost') }}</a>
         </div>
     </header>
@@ -72,20 +72,20 @@
 
                 <div class="ops-response-grid">
                     <section class="ops-response-card emphasis">
-                        <div class="assistant-label">M.I.O. Assessment</div>
+                        <div class="assistant-label">{{ tr('ops.mio_assessment', 'M.I.O. Assessment') }}</div>
                         <div id="aiResult" class="ops-result ops-result-strong">M.I.O.: -</div>
                     </section>
                     <section class="ops-response-card guidance">
-                        <div class="assistant-label">User Guidance</div>
+                        <div class="assistant-label">{{ tr('ops.user_guidance', 'User Guidance') }}</div>
                         <div id="userGuidanceResult" class="ops-result ops-user-guidance">{{ tr('ops.user_guidance', 'User Guidance') }}: -</div>
                     </section>
                     <section class="ops-response-card">
-                        <div class="assistant-label">Runbook</div>
+                        <div class="assistant-label">{{ tr('ops.runbook', 'Runbook') }}</div>
                         <div id="runbookResult" class="ops-result">{{ tr('ops.runbook', 'Runbook') }}: -</div>
                         <div id="runbookReviewResult" class="ops-result">{{ tr('ops.review', 'Review') }}: -</div>
                     </section>
                     <section class="ops-response-card">
-                        <div class="assistant-label">Rationale</div>
+                        <div class="assistant-label">{{ tr('ops.rationale', 'Rationale') }}</div>
                         <div id="rationaleResult" class="ops-result">{{ tr('ops.rationale', 'Rationale') }}: -</div>
                         <div id="handoffResult" class="ops-result">{{ tr('ops.handoff', 'Handoff') }}: -</div>
                     </section>
@@ -130,7 +130,7 @@
 
         <section class="ops-lower-grid">
             <section class="card ops-triage-card">
-                <div class="assistant-label">Triage Navigator</div>
+                <div class="assistant-label">{{ tr('ops.triage_navigator', 'Triage Navigator') }}</div>
                 <div class="ops-result" id="triageIntro">{{ tr('ops.triage_intro', 'Use a symptom card or classify the current issue text before moving to a reviewed runbook.') }}</div>
                 <div class="ops-triage-actions">
                     <input id="triageInput" class="ops-input" type="text" placeholder="{{ tr('ops.triage_input_placeholder', 'Describe the symptom for triage...') }}">
@@ -140,7 +140,7 @@
                 <div id="triageCandidatesEmpty" class="ops-result">{{ tr('ops.triage_no_candidates', 'No triage candidates yet') }}</div>
                 <div id="triageCandidates" class="ops-triage-candidate-list"></div>
                 <div class="ops-triage-session" id="triageSessionCard">
-                    <div class="assistant-label">Current Triage</div>
+                    <div class="assistant-label">{{ tr('ops.current_triage', 'Current Triage') }}</div>
                     <div id="triageSessionMeta" class="ops-result">{{ tr('ops.triage_no_session', 'No active triage session') }}</div>
                     <div id="triagePreface" class="ops-result">{{ tr('ops.triage_preface_idle', 'M.I.O. will add a short preface before the next deterministic question.') }}</div>
                     <div id="triageQuestion" class="ops-result ops-result-strong">-</div>
