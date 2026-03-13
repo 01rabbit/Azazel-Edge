@@ -982,6 +982,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     noc_service_assurance = state.get("noc_service_assurance") if isinstance(state.get("noc_service_assurance"), dict) else {}
     noc_resolution_assurance = state.get("noc_resolution_assurance") if isinstance(state.get("noc_resolution_assurance"), dict) else {}
     noc_blast_radius = state.get("noc_blast_radius") if isinstance(state.get("noc_blast_radius"), dict) else {}
+    noc_config_drift = state.get("noc_config_drift") if isinstance(state.get("noc_config_drift"), dict) else {}
     return {
         "ok": True,
         "risk": {
@@ -1085,6 +1086,12 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
                 "related_service_targets": noc_blast_radius.get("related_service_targets") if isinstance(noc_blast_radius.get("related_service_targets"), list) else [],
                 "affected_client_count": _as_int(noc_blast_radius.get("affected_client_count"), 0),
                 "critical_client_count": _as_int(noc_blast_radius.get("critical_client_count"), 0),
+            },
+            "config_drift": {
+                "status": str(noc_config_drift.get("status") or "unknown"),
+                "baseline_state": str(noc_config_drift.get("baseline_state") or "unknown"),
+                "changed_fields": noc_config_drift.get("changed_fields") if isinstance(noc_config_drift.get("changed_fields"), list) else [],
+                "rollback_hint": str(noc_config_drift.get("rollback_hint") or ""),
             },
             "capacity": {
                 "state": str(noc_capacity.get("state") or "unknown"),
