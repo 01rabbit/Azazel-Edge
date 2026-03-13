@@ -64,6 +64,7 @@ class DecisionExplainer:
             },
             'affected_scope': (noc.get('affected_scope') or (noc_summary.get('blast_radius') if isinstance(noc_summary.get('blast_radius'), dict) else {})) if isinstance(noc, dict) else {},
             'config_drift': (noc.get('config_drift_health') or {}) if isinstance(noc, dict) else {},
+            'incident_summary': (noc.get('incident_summary') or (noc_summary.get('incident_summary') if isinstance(noc_summary.get('incident_summary'), dict) else {})) if isinstance(noc, dict) else {},
             'ti_matches': soc_summary.get('ti_matches', []),
             'attack_candidates': attack_candidates,
             'sigma_hits': sigma_hits,
@@ -96,6 +97,7 @@ class DecisionExplainer:
             client_impact=client_impact,
             affected_scope=why_chosen['affected_scope'],
             config_drift=why_chosen['config_drift'],
+            incident_summary=why_chosen['incident_summary'],
         )
         explanation = {
             'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'),
@@ -137,6 +139,7 @@ class DecisionExplainer:
         client_impact: Dict[str, Any],
         affected_scope: Dict[str, Any],
         config_drift: Dict[str, Any],
+        incident_summary: Dict[str, Any],
     ) -> str:
         rejected_text = '; '.join(
             f"{item['action']} was rejected because {item['reason']}"
@@ -175,6 +178,11 @@ class DecisionExplainer:
                 f"segments {', '.join(affected_scope.get('affected_segments', [])[:3]) or '-'}, "
                 f"estimated clients {int(affected_scope.get('affected_client_count') or 0)}."
             )
+        if isinstance(incident_summary, dict) and incident_summary:
+            incident_id = str(incident_summary.get('incident_id') or '')
+            probable_cause = str(incident_summary.get('probable_cause') or '')
+            if incident_id or probable_cause:
+                sentence += f" Incident summary: {incident_id or '-'} cause={probable_cause or 'unknown'}."
         if isinstance(config_drift, dict) and config_drift:
             drift_reasons = [str(item) for item in config_drift.get('reasons', []) if str(item)]
             if drift_reasons:
@@ -205,6 +213,8 @@ class DecisionExplainer:
             checks.append('review_path_and_service_assurance')
         if any(str(noc_summary.get('reasons') or '').find(token) >= 0 for token in ('config_drift_health', 'config_drift')):
             checks.append('review_config_drift_and_last_known_good')
+        if isinstance(noc_summary.get('incident_summary'), dict) and str((noc_summary.get('incident_summary') or {}).get('incident_id') or ''):
+            checks.append('review_incident_summary_and_drill_down')
         if int(client_impact.get('critical_client_count') or 0) > 0:
             checks.append('confirm_critical_client_owner_before_control')
         return checks

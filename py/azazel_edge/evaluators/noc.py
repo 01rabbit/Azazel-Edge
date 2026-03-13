@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 from typing import Any, Dict, Iterable, List
 import ipaddress
 import re
@@ -205,6 +206,18 @@ class NocEvaluator:
                 client_health['reasons'].append('sot_missing')
 
         affected_scope = self._evaluate_affected_scope(payloads, by_kind, sot=sot)
+        incident_summary = self._build_incident_summary(
+            availability=availability,
+            path_health=path_health,
+            device_health=device_health,
+            client_health=client_health,
+            capacity_health=capacity_health,
+            client_inventory_health=client_inventory_health,
+            service_health=service_health,
+            resolution_health=resolution_health,
+            config_drift_health=config_drift_health,
+            affected_scope=affected_scope,
+        )
 
         dimensions = [
             availability,
@@ -245,6 +258,8 @@ class NocEvaluator:
             summary['segment_scope'] = segment_status
         if affected_scope:
             summary['blast_radius'] = affected_scope
+        if incident_summary:
+            summary['incident_summary'] = incident_summary
 
         result = {
             'availability': availability,
@@ -257,6 +272,7 @@ class NocEvaluator:
             'resolution_health': resolution_health,
             'config_drift_health': config_drift_health,
             'affected_scope': affected_scope,
+            'incident_summary': incident_summary,
             'summary': summary,
             'evidence_ids': sorted(dict.fromkeys(all_evidence_ids)),
         }
@@ -277,6 +293,7 @@ class NocEvaluator:
             'resolution_health': evaluation.get('resolution_health', {}),
             'config_drift_health': evaluation.get('config_drift_health', {}),
             'affected_scope': evaluation.get('affected_scope', {}),
+            'incident_summary': evaluation.get('incident_summary', {}),
             'evidence_ids': evaluation.get('evidence_ids', []),
         }
 
@@ -663,6 +680,103 @@ class NocEvaluator:
         result = _make_dimension(score, reasons, evidence_ids)
         result['rollback_hint'] = rollback_hint
         return result
+
+    @staticmethod
+    def _build_incident_summary(
+        availability: Dict[str, Any],
+        path_health: Dict[str, Any],
+        device_health: Dict[str, Any],
+        client_health: Dict[str, Any],
+        capacity_health: Dict[str, Any],
+        client_inventory_health: Dict[str, Any],
+        service_health: Dict[str, Any],
+        resolution_health: Dict[str, Any],
+        config_drift_health: Dict[str, Any],
+        affected_scope: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        dimensions = {
+            'availability': availability,
+            'path_health': path_health,
+            'device_health': device_health,
+            'client_health': client_health,
+            'capacity_health': capacity_health,
+            'client_inventory_health': client_inventory_health,
+            'service_health': service_health,
+            'resolution_health': resolution_health,
+            'config_drift_health': config_drift_health,
+        }
+        degraded = {
+            name: dim
+            for name, dim in dimensions.items()
+            if str(dim.get('label') or 'good') != 'good'
+        }
+        if not degraded:
+            return {
+                'incident_id': 'incident:none',
+                'probable_cause': 'stable',
+                'confidence': 0.95,
+                'supporting_symptoms': [],
+                'affected_scope': affected_scope or {},
+                'evidence_ids': [],
+                'drill_down': {'dimension_reasons': {}, 'evidence_ids': []},
+            }
+
+        probable_cause = 'general_noc_degradation'
+        if str(config_drift_health.get('label') or 'good') != 'good':
+            probable_cause = 'misconfiguration_drift'
+        elif str(resolution_health.get('label') or 'good') != 'good':
+            probable_cause = 'resolution_failure'
+        elif str(service_health.get('label') or 'good') != 'good':
+            probable_cause = 'service_assurance_failure'
+        elif str(capacity_health.get('label') or 'good') != 'good':
+            probable_cause = 'capacity_pressure'
+        elif str(path_health.get('label') or 'good') != 'good':
+            probable_cause = 'uplink_or_path_instability'
+        elif str(client_inventory_health.get('label') or 'good') != 'good':
+            probable_cause = 'client_inventory_anomaly'
+        elif str(device_health.get('label') or 'good') != 'good':
+            probable_cause = 'device_resource_pressure'
+        elif str(client_health.get('label') or 'good') != 'good':
+            probable_cause = 'client_connectivity_anomaly'
+
+        supporting_symptoms: List[str] = []
+        evidence_ids: List[str] = []
+        drill_down: Dict[str, List[str]] = {}
+        severity_map = {'critical': 4, 'poor': 3, 'degraded': 2, 'good': 1, 'unknown': 0}
+        top_label_weight = 0
+        for name, dim in degraded.items():
+            reasons = [str(item) for item in dim.get('reasons', []) if str(item)]
+            if reasons:
+                supporting_symptoms.extend(f'{name}:{reason}' for reason in reasons[:3])
+                drill_down[name] = reasons
+            evidence_ids.extend(str(item) for item in dim.get('evidence_ids', []) if str(item))
+            top_label_weight = max(top_label_weight, severity_map.get(str(dim.get('label') or 'unknown'), 0))
+        confidence = 0.6
+        if probable_cause in {'misconfiguration_drift', 'resolution_failure', 'service_assurance_failure', 'capacity_pressure'}:
+            confidence = 0.88
+        elif top_label_weight >= 3:
+            confidence = 0.8
+        elif len(degraded) >= 2:
+            confidence = 0.74
+        basis = '|'.join([
+            probable_cause,
+            ','.join(sorted(affected_scope.get('affected_uplinks', []) if isinstance(affected_scope, dict) else [])),
+            ','.join(sorted(affected_scope.get('affected_segments', []) if isinstance(affected_scope, dict) else [])),
+            ','.join(sorted(dict.fromkeys(evidence_ids))[:8]),
+        ])
+        incident_id = 'incident:' + hashlib.sha256(basis.encode('utf-8')).hexdigest()[:12]
+        return {
+            'incident_id': incident_id,
+            'probable_cause': probable_cause,
+            'confidence': round(confidence, 2),
+            'supporting_symptoms': supporting_symptoms[:8],
+            'affected_scope': affected_scope or {},
+            'evidence_ids': sorted(dict.fromkeys(evidence_ids)),
+            'drill_down': {
+                'dimension_reasons': drill_down,
+                'evidence_ids': sorted(dict.fromkeys(evidence_ids)),
+            },
+        }
 
     @staticmethod
     def _apply_sot_diff_to_path_health(path_health: Dict[str, Any], sot_diff: Dict[str, Any]) -> Dict[str, Any]:

@@ -122,6 +122,15 @@ class DashboardDataContractTests(unittest.TestCase):
                 "changed_fields": ["uplink_preference.preferred_uplink", "policy_markers.policy_version"],
                 "rollback_hint": "review_changed_fields_and_restore_last_known_good",
             },
+            "noc_incident_summary": {
+                "incident_id": "incident:abc123",
+                "probable_cause": "resolution_failure",
+                "confidence": 0.88,
+                "supporting_symptoms": [
+                    "resolution_health:resolution_window_failed:example.com",
+                    "service_health:service_window_down:resolver-tcp",
+                ],
+            },
             "evidence": ["net_health=SUSPECTED signals=dns_mismatch"],
             "llm": {"status": "skipped_non_ambiguous"},
         }
@@ -279,6 +288,8 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["noc_focus"]["blast_radius"]["related_service_targets"], ["dns", "resolver-tcp"])
         self.assertEqual(payload["noc_focus"]["config_drift"]["status"], "drift")
         self.assertEqual(payload["noc_focus"]["config_drift"]["rollback_hint"], "review_changed_fields_and_restore_last_known_good")
+        self.assertEqual(payload["noc_focus"]["incident_summary"]["incident_id"], "incident:abc123")
+        self.assertEqual(payload["noc_focus"]["incident_summary"]["probable_cause"], "resolution_failure")
         self.assertEqual(payload["decision_path"]["first_pass_engine"], "tactical_scorer_v1")
         self.assertEqual(payload["decision_path"]["second_pass_status"], "completed")
 

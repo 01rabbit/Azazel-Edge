@@ -26,6 +26,11 @@ class DecisionExplanationV2Tests(unittest.TestCase):
                     'reasons': ['config_drift_detected', 'config_drift:uplink_preference.preferred_uplink'],
                     'rollback_hint': 'review_changed_fields_and_restore_last_known_good',
                 },
+                'incident_summary': {
+                    'incident_id': 'incident:abc123',
+                    'probable_cause': 'resolution_failure',
+                    'confidence': 0.88,
+                },
             },
             soc={'summary': {'status': 'critical', 'attack_candidates': ['T1071 Application Layer Protocol'], 'ai_attack_candidates': ['T1190 Exploit Public-Facing Application'], 'ti_matches': [{'indicator_type': 'ip', 'value': '10.0.0.5'}]}},
             arbiter={
@@ -46,6 +51,8 @@ class DecisionExplanationV2Tests(unittest.TestCase):
         self.assertIn('ATT&CK candidates', result['operator_wording'])
         self.assertEqual(result['why_chosen']['affected_scope']['affected_segments'], ['lan-a'])
         self.assertIn('Affected scope: uplinks eth1, segments lan-a, estimated clients 2.', result['operator_wording'])
+        self.assertEqual(result['why_chosen']['incident_summary']['incident_id'], 'incident:abc123')
+        self.assertIn('Incident summary: incident:abc123 cause=resolution_failure.', result['operator_wording'])
         self.assertIn('Config drift indicators: config_drift_detected, config_drift:uplink_preference.preferred_uplink.', result['operator_wording'])
         self.assertIn('T1190 Exploit Public-Facing Application', result['why_chosen']['attack_candidates'])
 
