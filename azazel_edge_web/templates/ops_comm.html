@@ -21,6 +21,7 @@
             <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
             <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
             <a class="topbar-link" href="/">{{ tr('ops.dashboard', 'Dashboard') }}</a>
+            <a class="topbar-link" href="/demo">Demo</a>
             <a class="topbar-link" id="mattermostLink" href="{{ mattermost_open_url or '#' }}" target="_blank" rel="noopener noreferrer">{{ tr('ops.open_mattermost', 'Open Mattermost') }}</a>
         </div>
     </header>

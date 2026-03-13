@@ -420,15 +420,8 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("Background History", text)
         self.assertIn("Triage Audit", text)
         self.assertIn("Supporting history and audit trail", text)
-        self.assertIn("Demo Runner", text)
-        self.assertIn("Scenario Replay", text)
-        self.assertIn("Run Demo", text)
+        self.assertIn("Open Demo Page", text)
         self.assertIn("temporaryOpsCommLink", text)
-        self.assertIn("Next Checks", text)
-        self.assertIn("Chosen Evidence", text)
-        self.assertIn("Rejected Alternatives", text)
-        self.assertIn("Raw JSON", text)
-        self.assertIn("Clear Demo Overlay", text)
         self.assertIn("Ask M.I.O.", text)
         self.assertIn("Why now", text)
         self.assertIn("Do not do", text)
@@ -436,6 +429,19 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("Reconnect", text)
         self.assertIn("Onboarding", text)
         self.assertIn("Portal", text)
+        self.assertNotIn('id="demoRunForm"', text)
+        self.assertNotIn('id="reviewPanel"', text)
+
+    def test_demo_page_renders_replay_and_review_sections(self) -> None:
+        response = self.client.get("/demo?lang=en")
+        self.assertEqual(response.status_code, 200)
+        text = response.get_data(as_text=True)
+        self.assertIn("Demo Runner", text)
+        self.assertIn("Scenario Replay", text)
+        self.assertIn("Run Demo", text)
+        self.assertIn("Review Readiness", text)
+        self.assertIn("Capability Boundary and Resource Guard", text)
+        self.assertIn("Open Latest Explanation", text)
 
     def test_manual_ai_ask_enriches_rationale_and_handoff(self) -> None:
         webapp._send_ai_manual_query = lambda **_: {

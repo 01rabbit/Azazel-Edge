@@ -210,6 +210,126 @@ body[data-audience="professional"] .temp-only {
     padding: 24px 22px 64px;
 }
 
+.demo-shell {
+    max-width: 1280px;
+}
+
+.demo-page-grid {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 18px;
+    align-items: start;
+}
+
+.demo-mode-banner {
+    padding: 18px 22px;
+    margin-bottom: 18px;
+    border-color: rgba(224, 164, 88, 0.28);
+    background: linear-gradient(145deg, rgba(57, 42, 20, 0.42), rgba(24, 27, 34, 0.88));
+}
+
+.demo-mode-banner-static {
+    border-color: rgba(116, 212, 255, 0.24);
+    background: linear-gradient(145deg, rgba(30, 66, 92, 0.32), rgba(17, 30, 46, 0.7));
+}
+
+.demo-panel,
+.review-panel {
+    overflow: hidden;
+}
+
+.demo-sidebar {
+    position: sticky;
+    top: 96px;
+}
+
+.demo-hero-grid,
+.demo-card-grid,
+.demo-copy-grid {
+    display: grid;
+    gap: 14px;
+}
+
+.demo-hero-grid {
+    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+    margin-top: 8px;
+    margin-bottom: 18px;
+}
+
+.demo-card-grid,
+.demo-copy-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 16px;
+}
+
+.demo-control-card,
+.demo-result-block,
+.demo-metric-card,
+.demo-copy-card,
+.review-summary-banner {
+    margin-top: 0;
+}
+
+.demo-control-card {
+    min-height: 100%;
+}
+
+.demo-shortcuts {
+    margin-top: 14px;
+}
+
+.demo-result-block {
+    padding: 18px 18px 20px;
+    border-radius: 18px;
+    background: linear-gradient(145deg, rgba(255,255,255,0.055), rgba(255,255,255,0.028));
+    border: 1px solid rgba(116, 212, 255, 0.12);
+}
+
+.demo-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.demo-kpi {
+    min-height: 92px;
+    padding: 14px 14px 12px;
+    border-radius: 14px;
+    background: rgba(10, 15, 20, 0.34);
+    border: 1px solid rgba(255,255,255,0.06);
+}
+
+.demo-kpi strong {
+    display: block;
+    margin-top: 10px;
+    font-size: 1.08rem;
+    line-height: 1.2;
+    color: var(--text-main);
+}
+
+.demo-kpi-wide {
+    grid-column: span 2;
+}
+
+.demo-metric-card,
+.demo-copy-card {
+    min-height: 100%;
+    padding: 18px 18px 20px;
+    border-radius: 18px;
+    background: rgba(11, 18, 24, 0.44);
+    border: 1px solid rgba(255,255,255,0.06);
+}
+
+.demo-copy-card #demoOperatorWording {
+    line-height: 1.62;
+    color: var(--text-main);
+}
+
+.review-summary-banner {
+    margin-bottom: 16px;
+}
+
 .panel {
     background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.025));
     border: 1px solid var(--line-soft);
@@ -906,6 +1026,28 @@ body.demo-overlay-active #healthSummaryLine {
 
     .board-layout {
         grid-template-columns: 1fr;
+    }
+
+    .demo-page-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .demo-sidebar {
+        position: static;
+    }
+
+    .demo-hero-grid,
+    .demo-card-grid,
+    .demo-copy-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .demo-kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .demo-kpi-wide {
+        grid-column: span 2;
     }
 
     .split-grid,

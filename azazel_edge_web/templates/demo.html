@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="{{ tr('dashboard.html_lang', 'en') }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ tr('dashboard.demo_runner', 'Demo Runner') }} | Azazel-Edge</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-audience="professional" data-page="demo">
+    <header class="topbar">
+        <div class="brand-block">
+            <div class="brand-kicker">Azazel-Edge</div>
+            <h1>{{ tr('dashboard.demo_runner', 'Demo Runner') }}</h1>
+            <p class="brand-subtitle">Dedicated replay and reviewer workspace. Operational dashboard concerns stay on the main page.</p>
+        </div>
+        <div class="topbar-controls">
+            <div class="language-toggle" role="tablist" aria-label="{{ tr('lang.label', 'Language') }}">
+                <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
+                <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
+            </div>
+            <div class="topbar-links">
+                <a class="topbar-link" href="/">Dashboard</a>
+                <a class="topbar-link" href="/ops-comm">Ops Comm</a>
+            </div>
+            <div class="topbar-meta">
+                <div class="meta-item">
+                    <span class="meta-label">CPU</span>
+                    <strong id="headerCpuUsage">--%</strong>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">MEM</span>
+                    <strong id="headerMemUsage">--%</strong>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">TEMP</span>
+                    <strong id="headerCpuTemp">--°C</strong>
+                </div>
+                <div class="meta-clock" id="headerClock">--:--:--</div>
+            </div>
+        </div>
+    </header>
+
+    <main class="dashboard-shell demo-shell">
+        <section class="panel demo-mode-banner demo-mode-banner-static">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">Separation</div>
+                    <h2>Replay and reviewer view</h2>
+                </div>
+            </div>
+            <p class="panel-note">This page owns deterministic replay, capability boundary, and reviewer-facing status. The main dashboard stays focused on live operations.</p>
+        </section>
+
+        <div class="demo-page-grid">
+            <section class="panel assistant-panel demo-panel" id="demoPanel">
+                <div class="panel-heading assistant-heading">
+                    <div>
+                        <div class="panel-kicker">{{ tr('dashboard.demo_runner', 'Demo Runner') }}</div>
+                        <h2>{{ tr('dashboard.scenario_replay', 'Scenario Replay') }}</h2>
+                    </div>
+                    <span class="assistant-status status-neutral" id="demoStatusBadge">READY</span>
+                </div>
+                <p class="assistant-intro">{{ tr('dashboard.demo_intro', 'Run deterministic backend scenarios and inspect the resulting NOC, SOC, arbiter, and explanation outputs.') }}</p>
+
+                <div class="demo-hero-grid">
+                    <form id="demoRunForm" class="assistant-form demo-control-card">
+                        <label for="demoScenarioSelect">Scenario</label>
+                        <select id="demoScenarioSelect" class="demo-select">
+                            <option value="">Loading scenarios...</option>
+                        </select>
+                        <div id="demoScenarioDescription" class="demo-description">-</div>
+                        <div class="assistant-shortcuts demo-shortcuts">
+                            <button type="submit" id="demoRunSubmit" class="assistant-submit">{{ tr('dashboard.run_demo', 'Run Demo') }}</button>
+                            <button type="button" id="demoClearOverlayBtn" class="shortcut-btn">{{ tr('dashboard.clear_demo', 'Clear Demo Overlay') }}</button>
+                        </div>
+                    </form>
+
+                    <div class="demo-boundary-banner demo-control-card" id="demoBoundaryBanner">
+                        <strong id="demoBoundaryMode">DETERMINISTIC REPLAY</strong>
+                        <span id="demoBoundarySummary">{{ tr('dashboard.demo_boundary_summary', 'Deterministic replay path. This does not replace the live Tactical first-pass path, and AI is not used in the core demo decision loop.') }}</span>
+                    </div>
+                </div>
+
+                <div class="assistant-block demo-result-block">
+                    <div class="assistant-label">Scenario Result</div>
+                    <div class="demo-kpi-grid">
+                        <div class="fact-item demo-kpi"><span>Scenario</span><strong id="demoScenarioId">-</strong></div>
+                        <div class="fact-item demo-kpi"><span>Events</span><strong id="demoEventCount">-</strong></div>
+                        <div class="fact-item demo-kpi"><span>Execution</span><strong id="demoExecutionMode">-</strong></div>
+                        <div class="fact-item demo-kpi"><span>AI Core</span><strong id="demoAiCore">-</strong></div>
+                        <div class="fact-item demo-kpi"><span>NOC</span><strong id="demoNocStatus">-</strong></div>
+                        <div class="fact-item demo-kpi"><span>SOC</span><strong id="demoSocStatus">-</strong></div>
+                        <div class="fact-item demo-kpi"><span>Action</span><strong id="demoAction">-</strong></div>
+                        <div class="fact-item demo-kpi demo-kpi-wide"><span>Reason</span><strong id="demoReason">-</strong></div>
+                    </div>
+                </div>
+
+                <div class="demo-card-grid">
+                    <div class="assistant-block demo-metric-card">
+                        <div class="assistant-label">Action Safety</div>
+                        <div class="fact-list compact-list">
+                            <div class="fact-item"><span>Reversible</span><strong id="demoSafetyReversible">-</strong></div>
+                            <div class="fact-item"><span>Approval</span><strong id="demoSafetyApproval">-</strong></div>
+                            <div class="fact-item"><span>Audited</span><strong id="demoSafetyAudited">-</strong></div>
+                            <div class="fact-item"><span>Effect</span><strong id="demoSafetyEffect">-</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="assistant-block demo-metric-card">
+                        <div class="assistant-label">Arbiter Trace</div>
+                        <div class="fact-list compact-list">
+                            <div class="fact-item"><span>NOC Fragile</span><strong id="demoTraceNocFragile">-</strong></div>
+                            <div class="fact-item"><span>Strong SOC</span><strong id="demoTraceStrongSoc">-</strong></div>
+                            <div class="fact-item"><span>Blast / Confidence</span><strong id="demoTraceBlastConfidence">-</strong></div>
+                            <div class="fact-item"><span>Client Impact</span><strong id="demoTraceClientImpact">-</strong></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="demo-copy-grid">
+                    <div class="assistant-block demo-copy-card">
+                        <div class="assistant-label">Operator Wording</div>
+                        <div id="demoOperatorWording">{{ tr('dashboard.no_demo', 'No demo overlay is active.') }}</div>
+                    </div>
+                    <div class="assistant-block demo-copy-card">
+                        <div class="assistant-label">Next Checks</div>
+                        <ul class="action-list" id="demoNextChecks">
+                            <li>{{ tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.') }}</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="demo-copy-grid">
+                    <div class="assistant-block demo-copy-card">
+                        <div class="assistant-label">Chosen Evidence</div>
+                        <ul class="action-list" id="demoEvidenceIds">
+                            <li>{{ tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.') }}</li>
+                        </ul>
+                    </div>
+                    <div class="assistant-block demo-copy-card">
+                        <div class="assistant-label">Rejected Alternatives</div>
+                        <ul class="action-list" id="demoRejectedAlternatives">
+                            <li>{{ tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.') }}</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <details class="demo-raw-panel">
+                    <summary>Raw JSON</summary>
+                    <pre class="assistant-response demo-raw-response" id="demoResponse">{{ tr('dashboard.no_demo_response', 'Run a scenario to preview the deterministic pipeline.') }}</pre>
+                </details>
+            </section>
+
+            <aside class="demo-sidebar">
+                <section class="panel assistant-panel review-panel" id="reviewPanel">
+                    <div class="panel-heading assistant-heading">
+                        <div>
+                            <div class="panel-kicker">Review Readiness</div>
+                            <h2>Capability Boundary and Resource Guard</h2>
+                        </div>
+                        <span class="assistant-status status-neutral" id="reviewStatusBadge">READY</span>
+                    </div>
+                    <p class="assistant-intro">Compact proof that the deterministic path is bounded, local-first, and running within visible resource limits.</p>
+                    <div class="demo-boundary-banner review-summary-banner">
+                        <strong id="reviewSummary">Deterministic edge pipeline, bounded controls, local-first operation, auditable outputs.</strong>
+                        <span id="reviewSummaryDetail">Waiting for capability and health data.</span>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Capability Boundary</div>
+                        <div class="fact-list compact-list">
+                            <div class="fact-item"><span>Execution</span><strong id="reviewExecutionMode">-</strong></div>
+                            <div class="fact-item"><span>AI Core</span><strong id="reviewAiCore">-</strong></div>
+                            <div class="fact-item"><span>Local Only</span><strong id="reviewLocalOnly">-</strong></div>
+                            <div class="fact-item"><span>Live Telemetry</span><strong id="reviewLiveTelemetry">-</strong></div>
+                            <div class="fact-item"><span>Demo State</span><strong id="reviewDemoState">-</strong></div>
+                            <div class="fact-item"><span>Implemented / Experimental</span><strong id="reviewBoundaryCounts">-</strong></div>
+                        </div>
+                        <div class="assistant-shortcuts demo-shortcuts">
+                            <button type="button" class="shortcut-btn" id="reviewOpenCapabilitiesBtn">Open Capability JSON</button>
+                            <button type="button" class="shortcut-btn" id="reviewOpenExplanationBtn">Open Latest Explanation</button>
+                        </div>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Implemented Now</div>
+                        <ul class="action-list" id="reviewImplementedList">
+                            <li>No data</li>
+                        </ul>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Experimental / Non-goals</div>
+                        <ul class="action-list" id="reviewExperimentalList">
+                            <li>No data</li>
+                        </ul>
+                        <ul class="action-list" id="reviewNonGoalsList">
+                            <li>No data</li>
+                        </ul>
+                    </div>
+                    <div class="assistant-block">
+                        <div class="assistant-label">Resource Guard</div>
+                        <div class="fact-list compact-list">
+                            <div class="fact-item"><span>Queue</span><strong id="reviewQueueDepth">-</strong></div>
+                            <div class="fact-item"><span>Deferred</span><strong id="reviewDeferredCount">-</strong></div>
+                            <div class="fact-item"><span>Fallback</span><strong id="reviewFallbackRate">-</strong></div>
+                            <div class="fact-item"><span>Policy</span><strong id="reviewPolicyMode">-</strong></div>
+                            <div class="fact-item"><span>Latency</span><strong id="reviewLatency">-</strong></div>
+                            <div class="fact-item"><span>Stale</span><strong id="reviewStaleFlags">-</strong></div>
+                        </div>
+                    </div>
+                </section>
+            </aside>
+        </div>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <script>
+        window.AZAZEL_LANG = {{ ui_lang|tojson }};
+        window.AZAZEL_I18N = {{ ui_catalog|tojson }};
+    </script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

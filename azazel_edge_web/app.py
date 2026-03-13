@@ -1205,7 +1205,8 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
     recommendation = str(state.get("recommendation") or advisory.get("recommendation") or "").strip()
     review = latest_ai.get("review") if isinstance(latest_ai.get("review"), dict) else {}
     if not review:
-        review = ((noc_runbook_support.get("reviewed_runbook") or {}) if isinstance(noc_runbook_support.get("reviewed_runbook"), dict) else {}).get("review") if isinstance((noc_runbook_support.get("reviewed_runbook") or {}), dict) else {}
+        reviewed_runbook = (noc_runbook_support.get("reviewed_runbook") or {}) if isinstance(noc_runbook_support.get("reviewed_runbook"), dict) else {}
+        review = reviewed_runbook.get("review") if isinstance(reviewed_runbook.get("review"), dict) else {}
     rationale: List[str] = []
     for item in guidance["why_now"][:2]:
         _append_unique(rationale, item)
@@ -2795,6 +2796,12 @@ def _triage_progress_payload(progress: Any, lang: str) -> Dict[str, Any]:
 def index():
     """Main dashboard page"""
     return render_template("index.html")
+
+
+@app.route("/demo")
+def demo_page():
+    """Dedicated demo and review workspace."""
+    return render_template("demo.html")
 
 
 @app.route("/ops-comm")
