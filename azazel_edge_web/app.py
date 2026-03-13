@@ -983,6 +983,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     noc_resolution_assurance = state.get("noc_resolution_assurance") if isinstance(state.get("noc_resolution_assurance"), dict) else {}
     noc_blast_radius = state.get("noc_blast_radius") if isinstance(state.get("noc_blast_radius"), dict) else {}
     noc_config_drift = state.get("noc_config_drift") if isinstance(state.get("noc_config_drift"), dict) else {}
+    noc_incident_summary = state.get("noc_incident_summary") if isinstance(state.get("noc_incident_summary"), dict) else {}
     return {
         "ok": True,
         "risk": {
@@ -1092,6 +1093,12 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
                 "baseline_state": str(noc_config_drift.get("baseline_state") or "unknown"),
                 "changed_fields": noc_config_drift.get("changed_fields") if isinstance(noc_config_drift.get("changed_fields"), list) else [],
                 "rollback_hint": str(noc_config_drift.get("rollback_hint") or ""),
+            },
+            "incident_summary": {
+                "incident_id": str(noc_incident_summary.get("incident_id") or ""),
+                "probable_cause": str(noc_incident_summary.get("probable_cause") or "stable"),
+                "confidence": _as_float(noc_incident_summary.get("confidence"), 0.0),
+                "supporting_symptoms": noc_incident_summary.get("supporting_symptoms") if isinstance(noc_incident_summary.get("supporting_symptoms"), list) else [],
             },
             "capacity": {
                 "state": str(noc_capacity.get("state") or "unknown"),

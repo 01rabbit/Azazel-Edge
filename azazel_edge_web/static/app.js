@@ -1010,6 +1010,7 @@ function updateSplitBoard(summary, actions) {
     const resolutionHealth = noc.resolution_health || {};
     const blastRadius = noc.blast_radius || {};
     const configDrift = noc.config_drift || {};
+    const incidentSummary = noc.incident_summary || {};
     const capacity = noc.capacity || {};
     const clientInventory = noc.client_inventory || {};
     const clientImpact = noc.client_impact || {};
@@ -1036,7 +1037,9 @@ function updateSplitBoard(summary, actions) {
         (item) => item,
     );
 
-    updateElement('nocPathStatus', String(path.status || 'unknown').toUpperCase());
+    updateElement('nocPathStatus', String(incidentSummary.probable_cause || path.status || 'unknown').toUpperCase());
+    updateElement('nocIncidentCause', incidentSummary.probable_cause || '-');
+    updateElement('nocIncidentConfidence', incidentSummary.confidence ? String(incidentSummary.confidence) : '-');
     updateElement('nocPathUplink', path.uplink || '-');
     updateElement('nocPathGateway', path.gateway || '-');
     updateElement('nocPathInternet', path.internet_check || '-');

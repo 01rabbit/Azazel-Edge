@@ -78,6 +78,7 @@ class DecisionNotifier:
             'evidence_ids': [str(x) for x in arbiter.get('chosen_evidence_ids', []) if str(x)],
             'level': 'critical' if 'high' in str(arbiter.get('reason') or '') else 'warning',
             'operator_wording': str(explanation.get('operator_wording') or ''),
+            'incident_id': str((((explanation.get('why_chosen') or {}) if isinstance(explanation.get('why_chosen'), dict) else {}).get('incident_summary') or {}).get('incident_id') or ''),
         }
 
         errors: List[str] = []

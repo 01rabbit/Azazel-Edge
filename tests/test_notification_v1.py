@@ -34,7 +34,7 @@ class NotificationV1Tests(unittest.TestCase):
             notifier = DecisionNotifier([NtfyNotifier('http://127.0.0.1:8081', 'azazel-alerts')], logger)
             result = notifier.notify(
                 arbiter={'action': 'notify', 'reason': 'soc_high_but_noc_fragile', 'chosen_evidence_ids': ['ev-1']},
-                explanation={'operator_wording': 'Notify operator now.'},
+                explanation={'operator_wording': 'Notify operator now.', 'why_chosen': {'incident_summary': {'incident_id': 'incident:abc123'}}},
                 target='edge-uplink',
             )
             lines = [json.loads(line) for line in (Path(tmp) / 'audit.jsonl').read_text(encoding='utf-8').splitlines()]
@@ -42,6 +42,7 @@ class NotificationV1Tests(unittest.TestCase):
         self.assertEqual(lines[-1]['kind'], 'notification')
         self.assertEqual(lines[-1]['decision'], 'sent')
         self.assertEqual(lines[-1]['payload']['payload']['target'], 'edge-uplink')
+        self.assertEqual(lines[-1]['payload']['payload']['incident_id'], 'incident:abc123')
 
     def test_non_notify_action_is_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

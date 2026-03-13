@@ -49,6 +49,7 @@ class NocEvaluatorV1Tests(unittest.TestCase):
         self.assertIn('service_health', result)
         self.assertIn('resolution_health', result)
         self.assertIn('config_drift_health', result)
+        self.assertIn('incident_summary', result)
         self.assertIn('summary', result)
         self.assertIn('evidence_ids', result)
         for key in ('availability', 'path_health', 'device_health', 'client_health', 'capacity_health', 'client_inventory_health', 'service_health', 'resolution_health', 'config_drift_health'):
@@ -80,7 +81,7 @@ class NocEvaluatorV1Tests(unittest.TestCase):
         result = evaluator.evaluate([])
         handoff = evaluator.to_arbiter_input(result)
         self.assertEqual(handoff['source'], 'noc_evaluator')
-        for key in ('summary', 'availability', 'path_health', 'device_health', 'client_health', 'capacity_health', 'client_inventory_health', 'service_health', 'resolution_health', 'config_drift_health', 'evidence_ids'):
+        for key in ('summary', 'availability', 'path_health', 'device_health', 'client_health', 'capacity_health', 'client_inventory_health', 'service_health', 'resolution_health', 'config_drift_health', 'incident_summary', 'evidence_ids'):
             self.assertIn(key, handoff)
 
     def test_sot_can_reduce_unknown_client_penalty(self) -> None:
@@ -168,6 +169,24 @@ class NocEvaluatorV1Tests(unittest.TestCase):
         self.assertIn('config_drift_detected', drift_result['config_drift_health']['reasons'])
         self.assertIn('config_drift:uplink_preference.preferred_uplink', drift_result['config_drift_health']['reasons'])
         self.assertIn('config_baseline_missing', missing_result['config_drift_health']['reasons'])
+
+    def test_incident_summary_groups_primary_noc_symptoms(self) -> None:
+        evaluator = NocEvaluator()
+        events = [
+            _event('capacity_pressure', 'eth1', 65, {'interface': 'eth1', 'state': 'congested', 'mode': 'utilization_known'}, status='warn'),
+            _event('service_probe_window', 'resolver-tcp', 65, {'name': 'resolver-tcp', 'state': 'down', 'success_ratio_pct': 0.0}, status='warn'),
+            _event('client_session', '192.168.40.10', 0, {'ip': '192.168.40.10', 'interface_or_segment': 'lan-main', 'session_state': 'authorized_present'}, status='info'),
+        ]
+        sot = {
+            'devices': [{'id': 'dev1', 'hostname': 'client-1', 'ip': '192.168.40.10', 'mac': 'aa:bb:cc:dd:ee:ff', 'criticality': 'critical', 'allowed_networks': ['lan-main']}],
+            'networks': [{'id': 'lan-main', 'cidr': '192.168.40.0/24', 'zone': 'lan', 'gateway': '192.168.40.1'}],
+            'services': [{'id': 'resolver-tcp', 'proto': 'tcp', 'port': 53, 'owner': 'noc', 'exposure': 'internal'}],
+            'expected_paths': [],
+        }
+        result = evaluator.evaluate(events, sot=sot)
+        self.assertEqual(result['incident_summary']['probable_cause'], 'service_assurance_failure')
+        self.assertTrue(str(result['incident_summary']['incident_id']).startswith('incident:'))
+        self.assertIn('service_health:service_window_down:resolver-tcp', result['incident_summary']['supporting_symptoms'])
 
 
 if __name__ == '__main__':
