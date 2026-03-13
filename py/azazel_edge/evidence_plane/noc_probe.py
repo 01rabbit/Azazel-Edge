@@ -49,6 +49,25 @@ def _cpu_mem_temp_severity(metrics: Dict[str, Any]) -> int:
     return severity
 
 
+def _resolution_severity(result: Dict[str, Any]) -> int:
+    return 0 if bool(result.get('resolved')) else 60
+
+
+def _service_probe_severity(result: Dict[str, Any]) -> int:
+    return 0 if bool(result.get('reachable')) else 60
+
+
+def _window_severity(state: str) -> int:
+    normalized = str(state or 'unknown').lower()
+    if normalized in {'normal', 'healthy', 'resolved'}:
+        return 0
+    if normalized in {'degraded'}:
+        return 30
+    if normalized in {'down', 'failed'}:
+        return 65
+    return 15
+
+
 class NocProbeAdapter:
     def __init__(self, up_interface: str = 'eth1', down_interface: str = 'usb0', gateway_ip: str = ''):
         self.up_interface = up_interface
@@ -98,6 +117,22 @@ class NocProbeAdapter:
                 status='ok' if sev == 0 else 'fail',
             ))
 
+        path_probe_window = snapshot.get('path_probe_window') if isinstance(snapshot.get('path_probe_window'), list) else []
+        for row in path_probe_window:
+            if not isinstance(row, dict):
+                continue
+            sev = _window_severity(str(row.get('state') or 'unknown'))
+            events.append(EvidenceEvent.build(
+                ts=ts,
+                source='noc_probe',
+                kind='path_probe_window',
+                subject=str(row.get('target') or host),
+                severity=sev,
+                confidence=0.9,
+                attrs=row,
+                status='ok' if sev == 0 else 'warn',
+            ))
+
         iface_stats = snapshot.get('iface_stats') if isinstance(snapshot.get('iface_stats'), list) else []
         for row in iface_stats:
             if not isinstance(row, dict):
@@ -108,6 +143,110 @@ class NocProbeAdapter:
                 source='noc_probe',
                 kind='iface_stats',
                 subject=str(row.get('interface') or host),
+                severity=sev,
+                confidence=0.9,
+                attrs=row,
+                status='ok' if sev == 0 else 'warn',
+            ))
+
+        capacity_samples = snapshot.get('capacity_samples') if isinstance(snapshot.get('capacity_samples'), list) else []
+        for row in capacity_samples:
+            if not isinstance(row, dict):
+                continue
+            sample_state = str(row.get('sample_state') or 'unknown')
+            sev = 0 if sample_state == 'sampled' else 10
+            events.append(EvidenceEvent.build(
+                ts=ts,
+                source='noc_probe',
+                kind='capacity_sample',
+                subject=str(row.get('interface') or host),
+                severity=sev,
+                confidence=0.85,
+                attrs=row,
+                status='info' if sev == 0 else 'warn',
+            ))
+
+        capacity_pressure = snapshot.get('capacity_pressure') if isinstance(snapshot.get('capacity_pressure'), list) else []
+        for row in capacity_pressure:
+            if not isinstance(row, dict):
+                continue
+            state = str(row.get('state') or 'unknown')
+            sev = 0
+            if state == 'elevated':
+                sev = 35
+            elif state == 'congested':
+                sev = 65
+            elif state == 'unknown':
+                sev = 20
+            events.append(EvidenceEvent.build(
+                ts=ts,
+                source='noc_probe',
+                kind='capacity_pressure',
+                subject=str(row.get('interface') or host),
+                severity=sev,
+                confidence=0.9,
+                attrs=row,
+                status='warn' if sev > 0 else 'info',
+            ))
+
+        resolution_probes = snapshot.get('resolution_probes') if isinstance(snapshot.get('resolution_probes'), list) else []
+        for row in resolution_probes:
+            if not isinstance(row, dict):
+                continue
+            sev = _resolution_severity(row)
+            events.append(EvidenceEvent.build(
+                ts=ts,
+                source='noc_probe',
+                kind='resolution_probe',
+                subject=str(row.get('name') or host),
+                severity=sev,
+                confidence=0.9,
+                attrs=row,
+                status='ok' if sev == 0 else 'fail',
+            ))
+
+        resolution_probe_window = snapshot.get('resolution_probe_window') if isinstance(snapshot.get('resolution_probe_window'), list) else []
+        for row in resolution_probe_window:
+            if not isinstance(row, dict):
+                continue
+            sev = _window_severity(str(row.get('state') or 'unknown'))
+            events.append(EvidenceEvent.build(
+                ts=ts,
+                source='noc_probe',
+                kind='resolution_probe_window',
+                subject=str(row.get('name') or host),
+                severity=sev,
+                confidence=0.9,
+                attrs=row,
+                status='ok' if sev == 0 else 'warn',
+            ))
+
+        service_probes = snapshot.get('service_probes') if isinstance(snapshot.get('service_probes'), list) else []
+        for row in service_probes:
+            if not isinstance(row, dict):
+                continue
+            sev = _service_probe_severity(row)
+            events.append(EvidenceEvent.build(
+                ts=ts,
+                source='noc_probe',
+                kind='service_probe',
+                subject=str(row.get('name') or row.get('target') or host),
+                severity=sev,
+                confidence=0.9,
+                attrs=row,
+                status='ok' if sev == 0 else 'fail',
+            ))
+
+        service_probe_window = snapshot.get('service_probe_window') if isinstance(snapshot.get('service_probe_window'), list) else []
+        for row in service_probe_window:
+            if not isinstance(row, dict):
+                continue
+            sev = _window_severity(str(row.get('state') or 'unknown'))
+            events.append(EvidenceEvent.build(
+                ts=ts,
+                source='noc_probe',
+                kind='service_probe_window',
+                subject=str(row.get('name') or row.get('target') or host),
                 severity=sev,
                 confidence=0.9,
                 attrs=row,

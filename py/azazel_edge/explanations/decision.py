@@ -51,6 +51,16 @@ class DecisionExplainer:
             'noc_status': noc_summary.get('status', 'unknown'),
             'soc_status': soc_summary.get('status', 'unknown'),
             'target': target,
+            'noc_dimensions': {
+                'availability': (noc.get('availability') or {}).get('label', 'unknown') if isinstance(noc, dict) else 'unknown',
+                'path_health': (noc.get('path_health') or {}).get('label', 'unknown') if isinstance(noc, dict) else 'unknown',
+                'device_health': (noc.get('device_health') or {}).get('label', 'unknown') if isinstance(noc, dict) else 'unknown',
+                'client_health': (noc.get('client_health') or {}).get('label', 'unknown') if isinstance(noc, dict) else 'unknown',
+                'capacity_health': (noc.get('capacity_health') or {}).get('label', 'unknown') if isinstance(noc, dict) else 'unknown',
+                'client_inventory_health': (noc.get('client_inventory_health') or {}).get('label', 'unknown') if isinstance(noc, dict) else 'unknown',
+                'service_health': (noc.get('service_health') or {}).get('label', 'unknown') if isinstance(noc, dict) else 'unknown',
+                'resolution_health': (noc.get('resolution_health') or {}).get('label', 'unknown') if isinstance(noc, dict) else 'unknown',
+            },
             'ti_matches': soc_summary.get('ti_matches', []),
             'attack_candidates': attack_candidates,
             'sigma_hits': sigma_hits,
@@ -172,6 +182,10 @@ class DecisionExplainer:
             checks.append('review_soc_evidence_and_attack_candidates')
         if str(noc_summary.get('status') or '') in {'poor', 'critical'}:
             checks.append('confirm_noc_stability_before_escalation')
+        if any(str(noc_summary.get('reasons') or '').find(token) >= 0 for token in ('capacity_health', 'client_inventory_health')):
+            checks.append('review_capacity_and_client_inventory_summary')
+        if any(str(noc_summary.get('reasons') or '').find(token) >= 0 for token in ('service_health', 'resolution_health')):
+            checks.append('review_path_and_service_assurance')
         if int(client_impact.get('critical_client_count') or 0) > 0:
             checks.append('confirm_critical_client_owner_before_control')
         return checks

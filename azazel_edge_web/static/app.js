@@ -74,6 +74,14 @@ function resetDemoOverlayPresentation() {
     updateElement('demoSafetyAudited', '-');
     updateElement('demoSafetyEffect', '-');
     updateElement('demoTraceNocFragile', '-');
+    updateElement('nocCapacityState', '-');
+    updateElement('nocCapacityUtilization', '-');
+    updateElement('nocCapacityMode', '-');
+    updateElement('nocCapacityTopTalker', '-');
+    updateElement('nocClientCurrent', '0');
+    updateElement('nocClientUnknown', '0');
+    updateElement('nocClientUnauthorized', '0');
+    updateElement('nocClientMismatch', '0');
     updateElement('demoTraceStrongSoc', '-');
     updateElement('demoTraceBlastConfidence', '-');
     updateElement('demoTraceClientImpact', '-');
@@ -826,10 +834,14 @@ function applyDemoOverlay(result) {
         tr('dashboard.demo_service_simulated', 'demo-services: simulated'),
         tr('dashboard.demo_control_mode', 'control-mode: {mode}', { mode: result.arbiter?.control_mode || 'none' }),
     ], (item) => item);
-    updateElement('nocClientScope', 'demo impact');
-    updateElement('nocClientSegment', scenarioId);
-    updateElement('nocClientPortal', 'N/A');
-    updateElement('nocClientDnsMismatch', '0');
+    updateElement('nocCapacityState', String(result.noc?.capacity_health?.label || 'unknown').toUpperCase());
+    updateElement('nocCapacityUtilization', '-');
+    updateElement('nocCapacityMode', 'demo');
+    updateElement('nocCapacityTopTalker', '-');
+    updateElement('nocClientCurrent', String(result.noc?.client_inventory_health?.score != null ? 1 : 0));
+    updateElement('nocClientUnknown', '0');
+    updateElement('nocClientUnauthorized', '0');
+    updateElement('nocClientMismatch', '0');
     renderList(
         'rejectedStrongerActionsList',
         rejected.length ? rejected : [tr('dashboard.no_active_rejections', 'No rejected stronger actions')],
@@ -994,6 +1006,10 @@ function updateSplitBoard(summary, actions) {
     const correlation = soc.correlation || {};
     const path = noc.path_health || {};
     const services = noc.service_health || {};
+    const serviceAssurance = noc.service_assurance || {};
+    const resolutionHealth = noc.resolution_health || {};
+    const capacity = noc.capacity || {};
+    const clientInventory = noc.client_inventory || {};
     const clientImpact = noc.client_impact || {};
     const attackType = soc.attack_type || tr('dashboard.no_attack_type', 'No current attack type');
 
@@ -1028,10 +1044,19 @@ function updateSplitBoard(summary, actions) {
         Object.entries(services).map(([name, value]) => `${name}: ${value}`),
         (item) => item,
     );
-    updateElement('nocClientScope', clientImpact.scope || '-');
-    updateElement('nocClientSegment', clientImpact.segment_scope || '-');
-    updateElement('nocClientPortal', clientImpact.captive_portal || '-');
-    updateElement('nocClientDnsMismatch', String(clientImpact.dns_mismatch ?? 0));
+    updateElement('nocServiceAssurance', String(serviceAssurance.status || 'unknown').toUpperCase());
+    updateElement('nocResolutionHealth', String(resolutionHealth.status || 'unknown').toUpperCase());
+    const utilization = capacity.utilization_pct == null || capacity.utilization_pct === ''
+        ? '-'
+        : `${capacity.utilization_pct}%`;
+    updateElement('nocCapacityState', String(capacity.state || 'unknown').toUpperCase());
+    updateElement('nocCapacityUtilization', utilization);
+    updateElement('nocCapacityMode', capacity.mode || '-');
+    updateElement('nocCapacityTopTalker', capacity.top_talker || '-');
+    updateElement('nocClientCurrent', String(clientInventory.current_client_count ?? 0));
+    updateElement('nocClientUnknown', String(clientInventory.unknown_client_count ?? 0));
+    updateElement('nocClientUnauthorized', String(clientInventory.unauthorized_client_count ?? 0));
+    updateElement('nocClientMismatch', String(clientInventory.inventory_mismatch_count ?? 0));
 
     renderList(
         'rejectedStrongerActionsList',

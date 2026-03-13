@@ -5,6 +5,8 @@ from typing import Any, Dict, Iterable, List
 import ipaddress
 import re
 
+from azazel_edge.evidence_plane.noc_inventory import build_client_inventory
+
 
 DEFAULT_CONFIG: Dict[str, Dict[str, int]] = {
     'availability': {
@@ -41,6 +43,36 @@ DEFAULT_CONFIG: Dict[str, Dict[str, int]] = {
         'unknown_client_penalty_per_client': 5,
         'unknown_client_penalty_cap': 20,
     },
+    'capacity_health': {
+        'elevated_penalty': 15,
+        'congested_penalty': 35,
+        'unknown_penalty': 10,
+        'high_concentration_penalty': 10,
+    },
+    'client_inventory_health': {
+        'unknown_client_penalty_per_client': 8,
+        'unknown_client_penalty_cap': 24,
+        'unauthorized_client_penalty_per_client': 12,
+        'unauthorized_client_penalty_cap': 36,
+        'inventory_mismatch_penalty_per_client': 10,
+        'inventory_mismatch_penalty_cap': 30,
+        'stale_session_penalty_per_client': 5,
+        'stale_session_penalty_cap': 20,
+        'authorized_missing_penalty_per_client': 4,
+        'authorized_missing_penalty_cap': 16,
+    },
+    'service_health': {
+        'probe_failed_penalty': 20,
+        'window_degraded_penalty': 10,
+        'window_down_penalty': 25,
+        'collector_failure_penalty': 10,
+    },
+    'resolution_health': {
+        'probe_failed_penalty': 25,
+        'window_degraded_penalty': 10,
+        'window_failed_penalty': 30,
+        'collector_failure_penalty': 10,
+    },
 }
 
 
@@ -54,6 +86,14 @@ def _merge_config(config: Dict[str, Any] | None) -> Dict[str, Dict[str, int]]:
         for key, value in values.items():
             if isinstance(value, (int, float)):
                 merged[section][key] = int(value)
+    if merged['capacity_health']['elevated_penalty'] < 0 or merged['capacity_health']['congested_penalty'] < merged['capacity_health']['elevated_penalty']:
+        raise ValueError('invalid_capacity_health_config')
+    if merged['client_inventory_health']['unauthorized_client_penalty_per_client'] < merged['client_inventory_health']['unknown_client_penalty_per_client']:
+        raise ValueError('invalid_client_inventory_health_config')
+    if merged['service_health']['window_down_penalty'] < merged['service_health']['window_degraded_penalty']:
+        raise ValueError('invalid_service_health_config')
+    if merged['resolution_health']['window_failed_penalty'] < merged['resolution_health']['window_degraded_penalty']:
+        raise ValueError('invalid_resolution_health_config')
     return merged
 
 
@@ -140,6 +180,10 @@ class NocEvaluator:
         path_health = self._evaluate_path_health(by_kind)
         device_health = self._evaluate_device_health(by_kind)
         client_health = self._evaluate_client_health(by_kind, sot=sot, sot_diff=sot_diff)
+        capacity_health = self._evaluate_capacity_health(by_kind)
+        client_inventory_health = self._evaluate_client_inventory_health(payloads, by_kind, sot=sot, sot_diff=sot_diff)
+        service_health = self._evaluate_service_health(by_kind)
+        resolution_health = self._evaluate_resolution_health(by_kind)
         if sot_diff:
             path_health = self._apply_sot_diff_to_path_health(path_health, sot_diff)
 
@@ -151,7 +195,16 @@ class NocEvaluator:
             if 'sot_missing' not in client_health['reasons']:
                 client_health['reasons'].append('sot_missing')
 
-        dimensions = [availability, path_health, device_health, client_health]
+        dimensions = [
+            availability,
+            path_health,
+            device_health,
+            client_health,
+            capacity_health,
+            client_inventory_health,
+            service_health,
+            resolution_health,
+        ]
         worst_score = min(int(dim['score']) for dim in dimensions) if dimensions else 100
         if worst_score < 90:
             summary_reasons.extend(
@@ -161,6 +214,10 @@ class NocEvaluator:
                     ('path_health', path_health),
                     ('device_health', device_health),
                     ('client_health', client_health),
+                    ('capacity_health', capacity_health),
+                    ('client_inventory_health', client_inventory_health),
+                    ('service_health', service_health),
+                    ('resolution_health', resolution_health),
                 )
                 if dim['label'] != 'good'
             )
@@ -179,6 +236,10 @@ class NocEvaluator:
             'path_health': path_health,
             'device_health': device_health,
             'client_health': client_health,
+            'capacity_health': capacity_health,
+            'client_inventory_health': client_inventory_health,
+            'service_health': service_health,
+            'resolution_health': resolution_health,
             'summary': summary,
             'evidence_ids': sorted(dict.fromkeys(all_evidence_ids)),
         }
@@ -193,6 +254,10 @@ class NocEvaluator:
             'path_health': evaluation.get('path_health', {}),
             'device_health': evaluation.get('device_health', {}),
             'client_health': evaluation.get('client_health', {}),
+            'capacity_health': evaluation.get('capacity_health', {}),
+            'client_inventory_health': evaluation.get('client_inventory_health', {}),
+            'service_health': evaluation.get('service_health', {}),
+            'resolution_health': evaluation.get('resolution_health', {}),
             'evidence_ids': evaluation.get('evidence_ids', []),
         }
 
@@ -335,6 +400,36 @@ class NocEvaluator:
 
         return _make_dimension(score, reasons, evidence_ids)
 
+    def _evaluate_capacity_health(self, by_kind: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        cfg = self.config['capacity_health']
+        score = 100
+        reasons: List[str] = []
+        evidence_ids: List[str] = []
+
+        for event in by_kind.get('capacity_pressure', []):
+            evidence_ids.append(str(event.get('event_id') or ''))
+            attrs = event.get('attrs', {})
+            state = str(attrs.get('state') or 'unknown')
+            mode = str(attrs.get('mode') or 'unknown')
+            if state == 'congested':
+                score -= cfg['congested_penalty']
+                reasons.append(f'capacity_congested:{mode}')
+            elif state == 'elevated':
+                score -= cfg['elevated_penalty']
+                reasons.append(f'capacity_elevated:{mode}')
+            elif state == 'unknown':
+                score -= cfg['unknown_penalty']
+                reasons.append(f'capacity_unknown:{mode}')
+
+        for event in by_kind.get('traffic_concentration', []):
+            evidence_ids.append(str(event.get('event_id') or ''))
+            attrs = event.get('attrs', {})
+            if bool(attrs.get('high_concentration')):
+                score -= cfg['high_concentration_penalty']
+                reasons.append('traffic_concentration_high')
+
+        return _make_dimension(score, reasons, evidence_ids)
+
     def _evaluate_client_health(self, by_kind: Dict[str, List[Dict[str, Any]]], sot: Dict[str, Any] | None, sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         cfg = self.config['client_health']
         score = 100
@@ -397,6 +492,126 @@ class NocEvaluator:
                 score -= min(cfg['unknown_client_penalty_cap'], cfg['unknown_client_penalty_per_client'] * len(unauthorized_devices))
                 reasons.append('unauthorized_devices_present')
                 evidence_ids.extend(str(x) for x in sot_diff.get('evidence_ids', []) if str(x))
+
+        return _make_dimension(score, reasons, evidence_ids)
+
+    def _evaluate_client_inventory_health(
+        self,
+        payloads: List[Dict[str, Any]],
+        by_kind: Dict[str, List[Dict[str, Any]]],
+        sot: Dict[str, Any] | None,
+        sot_diff: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        cfg = self.config['client_inventory_health']
+        score = 100
+        reasons: List[str] = []
+        evidence_ids: List[str] = []
+
+        summary_attrs: Dict[str, Any] = {}
+        summaries = by_kind.get('client_inventory_summary', [])
+        if summaries:
+            summary_attrs = summaries[-1].get('attrs', {}) if isinstance(summaries[-1].get('attrs'), dict) else {}
+            evidence_ids.extend(str(item.get('event_id') or '') for item in summaries)
+        else:
+            inventory = build_client_inventory(payloads, sot=sot)
+            summary_attrs = inventory.get('summary', {})
+            evidence_ids.extend(str(x) for x in inventory.get('evidence_ids', []) if str(x))
+
+        unknown_count = int(summary_attrs.get('unknown_client_count') or 0)
+        unauthorized_count = int(summary_attrs.get('unauthorized_client_count') or 0)
+        mismatch_count = int(summary_attrs.get('inventory_mismatch_count') or 0)
+        stale_count = int(summary_attrs.get('stale_session_count') or 0)
+        missing_count = int(summary_attrs.get('authorized_missing_count') or 0)
+
+        if unknown_count:
+            score -= min(cfg['unknown_client_penalty_cap'], cfg['unknown_client_penalty_per_client'] * unknown_count)
+            reasons.append('client_inventory_unknown_present')
+        if unauthorized_count:
+            score -= min(cfg['unauthorized_client_penalty_cap'], cfg['unauthorized_client_penalty_per_client'] * unauthorized_count)
+            reasons.append('client_inventory_unauthorized_present')
+        if mismatch_count:
+            score -= min(cfg['inventory_mismatch_penalty_cap'], cfg['inventory_mismatch_penalty_per_client'] * mismatch_count)
+            reasons.append('client_inventory_mismatch')
+        if stale_count:
+            score -= min(cfg['stale_session_penalty_cap'], cfg['stale_session_penalty_per_client'] * stale_count)
+            reasons.append('client_inventory_stale_sessions')
+        if missing_count:
+            score -= min(cfg['authorized_missing_penalty_cap'], cfg['authorized_missing_penalty_per_client'] * missing_count)
+            reasons.append('client_inventory_authorized_missing')
+        if sot_diff:
+            unauthorized_devices = sot_diff.get('unauthorized_devices', []) if isinstance(sot_diff.get('unauthorized_devices'), list) else []
+            if unauthorized_devices and 'client_inventory_unauthorized_present' not in reasons:
+                reasons.append('client_inventory_unauthorized_present')
+
+        return _make_dimension(score, reasons, evidence_ids)
+
+    def _evaluate_service_health(self, by_kind: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        cfg = self.config['service_health']
+        score = 100
+        reasons: List[str] = []
+        evidence_ids: List[str] = []
+
+        for event in by_kind.get('service_probe', []):
+            evidence_ids.append(str(event.get('event_id') or ''))
+            attrs = event.get('attrs', {})
+            name = str(attrs.get('name') or attrs.get('target') or event.get('subject') or 'unknown')
+            if not bool(attrs.get('reachable')):
+                score -= cfg['probe_failed_penalty']
+                reasons.append(f'service_probe_failed:{name}')
+
+        for event in by_kind.get('service_probe_window', []):
+            evidence_ids.append(str(event.get('event_id') or ''))
+            attrs = event.get('attrs', {})
+            name = str(attrs.get('name') or attrs.get('target') or event.get('subject') or 'unknown')
+            state = str(attrs.get('state') or 'unknown')
+            if state == 'degraded':
+                score -= cfg['window_degraded_penalty']
+                reasons.append(f'service_window_degraded:{name}')
+            elif state == 'down':
+                score -= cfg['window_down_penalty']
+                reasons.append(f'service_window_down:{name}')
+
+        for event in by_kind.get('collector_failure', []):
+            collector = str(event.get('attrs', {}).get('collector') or '')
+            if collector == 'service_probes':
+                evidence_ids.append(str(event.get('event_id') or ''))
+                score -= cfg['collector_failure_penalty']
+                reasons.append('collector_failure:service_probes')
+
+        return _make_dimension(score, reasons, evidence_ids)
+
+    def _evaluate_resolution_health(self, by_kind: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        cfg = self.config['resolution_health']
+        score = 100
+        reasons: List[str] = []
+        evidence_ids: List[str] = []
+
+        for event in by_kind.get('resolution_probe', []):
+            evidence_ids.append(str(event.get('event_id') or ''))
+            attrs = event.get('attrs', {})
+            name = str(attrs.get('name') or event.get('subject') or 'unknown')
+            if not bool(attrs.get('resolved')):
+                score -= cfg['probe_failed_penalty']
+                reasons.append(f'resolution_failed:{name}')
+
+        for event in by_kind.get('resolution_probe_window', []):
+            evidence_ids.append(str(event.get('event_id') or ''))
+            attrs = event.get('attrs', {})
+            name = str(attrs.get('name') or event.get('subject') or 'unknown')
+            state = str(attrs.get('state') or 'unknown')
+            if state == 'degraded':
+                score -= cfg['window_degraded_penalty']
+                reasons.append(f'resolution_window_degraded:{name}')
+            elif state == 'failed':
+                score -= cfg['window_failed_penalty']
+                reasons.append(f'resolution_window_failed:{name}')
+
+        for event in by_kind.get('collector_failure', []):
+            collector = str(event.get('attrs', {}).get('collector') or '')
+            if collector == 'resolution_probes':
+                evidence_ids.append(str(event.get('event_id') or ''))
+                score -= cfg['collector_failure_penalty']
+                reasons.append('collector_failure:resolution_probes')
 
         return _make_dimension(score, reasons, evidence_ids)
 

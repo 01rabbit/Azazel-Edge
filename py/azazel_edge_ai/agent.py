@@ -1549,6 +1549,11 @@ def _handle_event(event: Dict[str, Any]) -> None:
         _persist_metrics()
 
 
+def _handle_line(raw: str) -> Dict[str, Any] | None:
+    """Backward-compatible single-line handler used by tests and legacy callers."""
+    return _handle_request_line(raw)
+
+
 def _handle_manual_query_request(req: Dict[str, Any]) -> Dict[str, Any]:
     params = req.get("params")
     if not isinstance(params, dict):

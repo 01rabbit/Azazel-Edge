@@ -297,17 +297,30 @@
                                 <div class="noc-lower-grid">
                                     <div class="split-subcard">
                                         <div class="assistant-label">Service Health</div>
+                                        <div class="fact-list compact-list">
+                                            <div class="fact-item"><span>Assurance</span><strong id="nocServiceAssurance">-</strong></div>
+                                            <div class="fact-item"><span>Resolution</span><strong id="nocResolutionHealth">-</strong></div>
+                                        </div>
                                         <ul class="action-list" id="nocServiceList">
                                             <li>{{ tr('dashboard.no_service_summary', 'No service summary.') }}</li>
                                         </ul>
                                     </div>
                                     <div class="split-subcard">
-                                        <div class="assistant-label">Client Impact</div>
+                                        <div class="assistant-label">Capacity</div>
                                         <div class="fact-list compact-list">
-                                            <div class="fact-item"><span>Scope</span><strong id="nocClientScope">-</strong></div>
-                                            <div class="fact-item"><span>Segment</span><strong id="nocClientSegment">-</strong></div>
-                                            <div class="fact-item"><span>Captive Portal</span><strong id="nocClientPortal">-</strong></div>
-                                            <div class="fact-item"><span>DNS Mismatch</span><strong id="nocClientDnsMismatch">0</strong></div>
+                                            <div class="fact-item"><span>State</span><strong id="nocCapacityState">-</strong></div>
+                                            <div class="fact-item"><span>Utilization</span><strong id="nocCapacityUtilization">-</strong></div>
+                                            <div class="fact-item"><span>Mode</span><strong id="nocCapacityMode">-</strong></div>
+                                            <div class="fact-item"><span>Top Talker</span><strong id="nocCapacityTopTalker">-</strong></div>
+                                        </div>
+                                    </div>
+                                    <div class="split-subcard">
+                                        <div class="assistant-label">Client Inventory</div>
+                                        <div class="fact-list compact-list">
+                                            <div class="fact-item"><span>Current</span><strong id="nocClientCurrent">0</strong></div>
+                                            <div class="fact-item"><span>Unknown</span><strong id="nocClientUnknown">0</strong></div>
+                                            <div class="fact-item"><span>Unauthorized</span><strong id="nocClientUnauthorized">0</strong></div>
+                                            <div class="fact-item"><span>Mismatch</span><strong id="nocClientMismatch">0</strong></div>
                                         </div>
                                     </div>
                                 </div>

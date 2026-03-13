@@ -18,6 +18,7 @@ from azazel_edge.evidence_plane import (
     EvidencePlaneService,
     NocProbeAdapter,
     adapt_suricata_record,
+    build_client_inventory,
     adapt_syslog_line,
     read_suricata_jsonl,
 )
@@ -124,6 +125,21 @@ class EvidencePlaneV1Tests(unittest.TestCase):
                     'tx_bytes': 50,
                 }
             ],
+            'path_probe_window': [
+                {'target': '1.1.1.1', 'interface': 'eth1', 'scope': 'external', 'state': 'down', 'success_ratio_pct': 0.0},
+            ],
+            'resolution_probes': [
+                {'name': 'example.com', 'resolved': False, 'answers': [], 'latency_ms': 4.0, 'probe': 'dns'},
+            ],
+            'resolution_probe_window': [
+                {'name': 'example.com', 'state': 'failed', 'success_ratio_pct': 0.0},
+            ],
+            'service_probes': [
+                {'name': 'resolver-tcp', 'target': '1.1.1.1:53', 'reachable': False, 'latency_ms': 10.0, 'probe': 'tcp'},
+            ],
+            'service_probe_window': [
+                {'name': 'resolver-tcp', 'target': '1.1.1.1:53', 'state': 'down', 'success_ratio_pct': 0.0},
+            ],
             'cpu_mem_temp': {
                 'cpu_percent': 12.0,
                 'memory': {'percent': 38},
@@ -147,7 +163,12 @@ class EvidencePlaneV1Tests(unittest.TestCase):
         events = adapter.collect(snapshot=snapshot)
         kinds = {item.to_dict()['kind'] for item in events}
         self.assertIn('icmp_probe', kinds)
+        self.assertIn('path_probe_window', kinds)
         self.assertIn('iface_stats', kinds)
+        self.assertIn('resolution_probe', kinds)
+        self.assertIn('resolution_probe_window', kinds)
+        self.assertIn('service_probe', kinds)
+        self.assertIn('service_probe_window', kinds)
         self.assertIn('cpu_mem_temp', kinds)
         self.assertIn('service_health', kinds)
         self.assertIn('dhcp_lease', kinds)
@@ -192,3 +213,63 @@ class EvidencePlaneV1Tests(unittest.TestCase):
                 for field in REQUIRED_FIELDS:
                     self.assertIn(field, payload)
                 self.assertIsInstance(payload['attrs'], dict)
+
+    def test_noc_probe_dispatch_derives_client_inventory_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bus = EvidenceBus(fanout_path=Path(tmp) / 'evidence.jsonl', queue_max=32)
+            service = EvidencePlaneService(bus)
+            snapshot = {
+                'icmp': {'target': '192.168.40.1', 'reachable': True},
+                'path_probes': [],
+                'path_probe_window': [],
+                'iface_stats': [],
+                'capacity_samples': [],
+                'capacity_pressure': [],
+                'resolution_probes': [],
+                'resolution_probe_window': [],
+                'service_probes': [],
+                'service_probe_window': [],
+                'cpu_mem_temp': {},
+                'service_health': {},
+                'dhcp_leases': [{'ip': '192.168.40.20', 'mac': 'aa:bb:cc:dd:ee:01', 'hostname': 'client-a'}],
+                'arp_table': [{'ip': '192.168.40.20', 'mac': 'aa:bb:cc:dd:ee:01', 'dev': 'eth1', 'state': 'REACHABLE'}],
+                'collector_failures': [],
+            }
+            items = service.dispatch_noc_probe(snapshot=snapshot)
+            kinds = {item['kind'] for item in items}
+            self.assertIn('client_session', kinds)
+            self.assertIn('client_inventory_summary', kinds)
+
+    def test_client_inventory_merges_flow_with_existing_dhcp_arp_session(self) -> None:
+        inventory = build_client_inventory([
+            EvidenceEvent.build(
+                ts='2026-03-10T00:00:00Z',
+                source='noc_probe',
+                kind='dhcp_lease',
+                subject='192.168.40.20',
+                severity=0,
+                confidence=0.9,
+                attrs={'ip': '192.168.40.20', 'mac': 'aa:bb:cc:dd:ee:01', 'hostname': 'client-a'},
+            ),
+            EvidenceEvent.build(
+                ts='2026-03-10T00:00:05Z',
+                source='noc_probe',
+                kind='arp_entry',
+                subject='192.168.40.20',
+                severity=0,
+                confidence=0.9,
+                attrs={'ip': '192.168.40.20', 'mac': 'aa:bb:cc:dd:ee:01', 'dev': 'eth1', 'state': 'REACHABLE'},
+            ),
+            EvidenceEvent.build(
+                ts='2026-03-10T00:00:10Z',
+                source='flow_min',
+                kind='flow_summary',
+                subject='192.168.40.20->8.8.8.8:443/TCP',
+                severity=20,
+                confidence=0.7,
+                attrs={'src_ip': '192.168.40.20', 'dst_ip': '8.8.8.8', 'dst_port': 443, 'proto': 'TCP', 'app_proto': 'tls'},
+            ),
+        ])
+        rows = [row for row in inventory['sessions'] if row['session_state'] != 'authorized_missing']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['sources_present'], ['arp', 'dhcp', 'flow'])

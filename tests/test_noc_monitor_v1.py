@@ -18,6 +18,8 @@ class LightweightNocMonitorV1Tests(unittest.TestCase):
     def test_snapshot_contains_issue_defined_collectors(self) -> None:
         with patch('azazel_edge.sensors.noc_monitor.collect_icmp', return_value={'target': '192.168.40.1', 'reachable': True}), \
              patch('azazel_edge.sensors.noc_monitor.collect_path_probes', return_value=[{'target': '192.168.40.1', 'scope': 'gateway', 'reachable': True}]), \
+             patch('azazel_edge.sensors.noc_monitor.collect_dns_resolution', side_effect=lambda name: {'name': name, 'resolved': True, 'answers': ['93.184.216.34'], 'latency_ms': 5.0, 'probe': 'dns'}), \
+             patch('azazel_edge.sensors.noc_monitor.collect_service_probes', return_value=[{'name': 'resolver-tcp', 'target': '1.1.1.1:53', 'reachable': True, 'latency_ms': 8.0, 'probe': 'tcp'}]), \
              patch('azazel_edge.sensors.noc_monitor.collect_iface_stats', return_value=[{'interface': 'eth1', 'operstate': 'up', 'carrier': 1}]), \
              patch('azazel_edge.sensors.noc_monitor.collect_cpu_mem_temp', return_value={'cpu_percent': 10.0, 'memory': {'percent': 30}, 'temperature_c': 45.0}), \
              patch('azazel_edge.sensors.noc_monitor.collect_dhcp_leases', return_value=[{'ip': '192.168.40.10', 'mac': 'aa:bb:cc:dd:ee:ff'}]), \
@@ -28,14 +30,24 @@ class LightweightNocMonitorV1Tests(unittest.TestCase):
 
         self.assertEqual(
             set(snapshot.keys()),
-            {'icmp', 'path_probes', 'iface_stats', 'cpu_mem_temp', 'dhcp_leases', 'arp_table', 'service_health', 'collector_failures'},
+            {
+                'icmp', 'path_probes', 'path_probe_window', 'iface_stats', 'capacity_samples', 'capacity_pressure',
+                'resolution_probes', 'resolution_probe_window', 'service_probes', 'service_probe_window',
+                'cpu_mem_temp', 'dhcp_leases', 'arp_table', 'service_health', 'collector_failures',
+            },
         )
         self.assertEqual(snapshot['collector_failures'], [])
         self.assertEqual(set(snapshot['service_health'].keys()), set(SERVICE_TARGETS.keys()))
+        self.assertEqual(len(snapshot['capacity_samples']), 1)
+        self.assertEqual(snapshot['capacity_pressure'][0]['state'], 'unknown')
+        self.assertEqual(snapshot['resolution_probe_window'][0]['state'], 'healthy')
+        self.assertEqual(snapshot['service_probe_window'][0]['state'], 'healthy')
 
     def test_collector_failure_is_not_silenced(self) -> None:
         with patch('azazel_edge.sensors.noc_monitor.collect_icmp', side_effect=RuntimeError('icmp disabled')), \
              patch('azazel_edge.sensors.noc_monitor.collect_path_probes', return_value=[]), \
+             patch('azazel_edge.sensors.noc_monitor.collect_dns_resolution', side_effect=RuntimeError('dns disabled')), \
+             patch('azazel_edge.sensors.noc_monitor.collect_service_probes', side_effect=RuntimeError('service probes disabled')), \
              patch('azazel_edge.sensors.noc_monitor.collect_iface_stats', return_value=[]), \
              patch('azazel_edge.sensors.noc_monitor.collect_cpu_mem_temp', return_value={}), \
              patch('azazel_edge.sensors.noc_monitor.collect_dhcp_leases', return_value=[]), \
@@ -44,14 +56,18 @@ class LightweightNocMonitorV1Tests(unittest.TestCase):
             monitor = LightweightNocMonitor(up_interface='eth1', down_interface='usb0', gateway_ip='192.168.40.1')
             snapshot = monitor.collect_snapshot()
 
-        self.assertEqual(len(snapshot['collector_failures']), 1)
-        self.assertEqual(snapshot['collector_failures'][0]['collector'], 'icmp')
+        self.assertEqual({item['collector'] for item in snapshot['collector_failures']}, {'icmp', 'resolution_probes', 'service_probes'})
 
     def test_adapter_emits_evidence_plane_compatible_events(self) -> None:
         adapter = NocProbeAdapter(up_interface='eth1', down_interface='usb0', gateway_ip='192.168.40.1')
         snapshot = {
             'icmp': {'target': '192.168.40.1', 'reachable': False, 'latency_ms': None},
+            'path_probe_window': [{'target': '1.1.1.1', 'interface': 'eth1', 'scope': 'external', 'state': 'down'}],
             'iface_stats': [{'interface': 'eth1', 'operstate': 'down', 'carrier': 0, 'rx_bytes': 0, 'tx_bytes': 0}],
+            'resolution_probes': [{'name': 'example.com', 'resolved': False, 'answers': [], 'latency_ms': 10.0}],
+            'resolution_probe_window': [{'name': 'example.com', 'state': 'failed', 'success_ratio_pct': 0.0}],
+            'service_probes': [{'name': 'resolver-tcp', 'target': '1.1.1.1:53', 'reachable': False, 'latency_ms': 20.0, 'probe': 'tcp'}],
+            'service_probe_window': [{'name': 'resolver-tcp', 'target': '1.1.1.1:53', 'state': 'down', 'success_ratio_pct': 0.0}],
             'cpu_mem_temp': {'cpu_percent': 92.0, 'memory': {'percent': 91}, 'temperature_c': 82.0},
             'dhcp_leases': [{'ip': '192.168.40.50', 'mac': 'aa:bb:cc:dd:ee:ff', 'hostname': 'client-1'}],
             'arp_table': [{'ip': '192.168.40.50', 'mac': 'aa:bb:cc:dd:ee:ff', 'dev': 'eth1', 'state': 'STALE'}],
@@ -62,7 +78,11 @@ class LightweightNocMonitorV1Tests(unittest.TestCase):
         kinds = {event['kind'] for event in events}
         self.assertEqual(
             kinds,
-            {'icmp_probe', 'iface_stats', 'cpu_mem_temp', 'dhcp_lease', 'arp_entry', 'service_health', 'collector_failure'},
+            {
+                'icmp_probe', 'path_probe_window', 'iface_stats', 'resolution_probe', 'resolution_probe_window',
+                'service_probe', 'service_probe_window', 'cpu_mem_temp', 'dhcp_lease', 'arp_entry',
+                'service_health', 'collector_failure',
+            },
         )
         for event in events:
             self.assertEqual(event['source'], 'noc_probe')
