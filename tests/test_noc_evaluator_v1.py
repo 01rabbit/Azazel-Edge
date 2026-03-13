@@ -48,9 +48,10 @@ class NocEvaluatorV1Tests(unittest.TestCase):
         self.assertIn('client_inventory_health', result)
         self.assertIn('service_health', result)
         self.assertIn('resolution_health', result)
+        self.assertIn('config_drift_health', result)
         self.assertIn('summary', result)
         self.assertIn('evidence_ids', result)
-        for key in ('availability', 'path_health', 'device_health', 'client_health', 'capacity_health', 'client_inventory_health', 'service_health', 'resolution_health'):
+        for key in ('availability', 'path_health', 'device_health', 'client_health', 'capacity_health', 'client_inventory_health', 'service_health', 'resolution_health', 'config_drift_health'):
             self.assertIn('score', result[key])
             self.assertIn('label', result[key])
 
@@ -79,7 +80,7 @@ class NocEvaluatorV1Tests(unittest.TestCase):
         result = evaluator.evaluate([])
         handoff = evaluator.to_arbiter_input(result)
         self.assertEqual(handoff['source'], 'noc_evaluator')
-        for key in ('summary', 'availability', 'path_health', 'device_health', 'client_health', 'capacity_health', 'client_inventory_health', 'service_health', 'resolution_health', 'evidence_ids'):
+        for key in ('summary', 'availability', 'path_health', 'device_health', 'client_health', 'capacity_health', 'client_inventory_health', 'service_health', 'resolution_health', 'config_drift_health', 'evidence_ids'):
             self.assertIn(key, handoff)
 
     def test_sot_can_reduce_unknown_client_penalty(self) -> None:
@@ -109,6 +110,8 @@ class NocEvaluatorV1Tests(unittest.TestCase):
             NocEvaluator(config={'service_health': {'window_degraded_penalty': 20, 'window_down_penalty': 10}})
         with self.assertRaises(ValueError):
             NocEvaluator(config={'resolution_health': {'window_degraded_penalty': 20, 'window_failed_penalty': 10}})
+        with self.assertRaises(ValueError):
+            NocEvaluator(config={'config_drift_health': {'drift_penalty_per_field': 20, 'drift_penalty_cap': 10}})
 
     def test_capacity_and_client_inventory_dimensions_consume_new_evidence(self) -> None:
         evaluator = NocEvaluator()
@@ -143,6 +146,28 @@ class NocEvaluatorV1Tests(unittest.TestCase):
         self.assertIn('service_window_down:resolver-tcp', result['service_health']['reasons'])
         self.assertIn('resolution_failed:example.com', result['resolution_health']['reasons'])
         self.assertIn('resolution_window_failed:example.com', result['resolution_health']['reasons'])
+
+    def test_config_drift_dimension_handles_drift_and_missing_baseline(self) -> None:
+        evaluator = NocEvaluator()
+        drift_result = evaluator.evaluate([
+            _event('config_drift', 'health_config', 45, {
+                'status': 'drift',
+                'baseline_state': 'present',
+                'changed_fields': ['uplink_preference.preferred_uplink', 'policy_markers.policy_version'],
+                'rollback_hint': 'review_changed_fields_and_restore_last_known_good',
+            }, status='warn'),
+        ])
+        missing_result = evaluator.evaluate([
+            _event('config_drift', 'health_config', 20, {
+                'status': 'baseline_missing',
+                'baseline_state': 'missing',
+                'changed_fields': [],
+                'rollback_hint': 'create_last_known_good_baseline',
+            }, status='warn'),
+        ])
+        self.assertIn('config_drift_detected', drift_result['config_drift_health']['reasons'])
+        self.assertIn('config_drift:uplink_preference.preferred_uplink', drift_result['config_drift_health']['reasons'])
+        self.assertIn('config_baseline_missing', missing_result['config_drift_health']['reasons'])
 
 
 if __name__ == '__main__':

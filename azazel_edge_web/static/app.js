@@ -1009,6 +1009,7 @@ function updateSplitBoard(summary, actions) {
     const serviceAssurance = noc.service_assurance || {};
     const resolutionHealth = noc.resolution_health || {};
     const blastRadius = noc.blast_radius || {};
+    const configDrift = noc.config_drift || {};
     const capacity = noc.capacity || {};
     const clientInventory = noc.client_inventory || {};
     const clientImpact = noc.client_impact || {};
@@ -1050,6 +1051,7 @@ function updateSplitBoard(summary, actions) {
     updateElement('nocServiceAssurance', String(serviceAssurance.status || 'unknown').toUpperCase());
     updateElement('nocResolutionHealth', String(resolutionHealth.status || 'unknown').toUpperCase());
     updateElement('nocBlastTargets', (blastRadius.related_service_targets || []).join(', ') || '-');
+    updateElement('nocConfigDrift', `${String(configDrift.status || 'unknown').toUpperCase()} / ${String(configDrift.baseline_state || 'unknown').toUpperCase()}`);
     const utilization = capacity.utilization_pct == null || capacity.utilization_pct === ''
         ? '-'
         : `${capacity.utilization_pct}%`;

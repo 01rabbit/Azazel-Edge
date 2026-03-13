@@ -73,6 +73,12 @@ DEFAULT_CONFIG: Dict[str, Dict[str, int]] = {
         'window_failed_penalty': 30,
         'collector_failure_penalty': 10,
     },
+    'config_drift_health': {
+        'drift_penalty_per_field': 8,
+        'drift_penalty_cap': 32,
+        'baseline_missing_penalty': 12,
+        'baseline_invalid_penalty': 20,
+    },
 }
 
 
@@ -94,6 +100,8 @@ def _merge_config(config: Dict[str, Any] | None) -> Dict[str, Dict[str, int]]:
         raise ValueError('invalid_service_health_config')
     if merged['resolution_health']['window_failed_penalty'] < merged['resolution_health']['window_degraded_penalty']:
         raise ValueError('invalid_resolution_health_config')
+    if merged['config_drift_health']['drift_penalty_cap'] < merged['config_drift_health']['drift_penalty_per_field']:
+        raise ValueError('invalid_config_drift_health_config')
     return merged
 
 
@@ -184,6 +192,7 @@ class NocEvaluator:
         client_inventory_health = self._evaluate_client_inventory_health(payloads, by_kind, sot=sot, sot_diff=sot_diff)
         service_health = self._evaluate_service_health(by_kind)
         resolution_health = self._evaluate_resolution_health(by_kind)
+        config_drift_health = self._evaluate_config_drift_health(by_kind)
         if sot_diff:
             path_health = self._apply_sot_diff_to_path_health(path_health, sot_diff)
 
@@ -206,6 +215,7 @@ class NocEvaluator:
             client_inventory_health,
             service_health,
             resolution_health,
+            config_drift_health,
         ]
         worst_score = min(int(dim['score']) for dim in dimensions) if dimensions else 100
         if worst_score < 90:
@@ -220,6 +230,7 @@ class NocEvaluator:
                     ('client_inventory_health', client_inventory_health),
                     ('service_health', service_health),
                     ('resolution_health', resolution_health),
+                    ('config_drift_health', config_drift_health),
                 )
                 if dim['label'] != 'good'
             )
@@ -244,6 +255,7 @@ class NocEvaluator:
             'client_inventory_health': client_inventory_health,
             'service_health': service_health,
             'resolution_health': resolution_health,
+            'config_drift_health': config_drift_health,
             'affected_scope': affected_scope,
             'summary': summary,
             'evidence_ids': sorted(dict.fromkeys(all_evidence_ids)),
@@ -263,6 +275,7 @@ class NocEvaluator:
             'client_inventory_health': evaluation.get('client_inventory_health', {}),
             'service_health': evaluation.get('service_health', {}),
             'resolution_health': evaluation.get('resolution_health', {}),
+            'config_drift_health': evaluation.get('config_drift_health', {}),
             'affected_scope': evaluation.get('affected_scope', {}),
             'evidence_ids': evaluation.get('evidence_ids', []),
         }
@@ -620,6 +633,36 @@ class NocEvaluator:
                 reasons.append('collector_failure:resolution_probes')
 
         return _make_dimension(score, reasons, evidence_ids)
+
+    def _evaluate_config_drift_health(self, by_kind: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        cfg = self.config['config_drift_health']
+        score = 100
+        reasons: List[str] = []
+        evidence_ids: List[str] = []
+        rollback_hint = ''
+
+        for event in by_kind.get('config_drift', []):
+            evidence_ids.append(str(event.get('event_id') or ''))
+            attrs = event.get('attrs', {})
+            status = str(attrs.get('status') or 'baseline_missing')
+            changed_fields = [str(item) for item in attrs.get('changed_fields', []) if str(item)]
+            if not rollback_hint:
+                rollback_hint = str(attrs.get('rollback_hint') or '')
+            if status == 'drift':
+                penalty = min(cfg['drift_penalty_cap'], cfg['drift_penalty_per_field'] * max(1, len(changed_fields)))
+                score -= penalty
+                reasons.append('config_drift_detected')
+                reasons.extend(f'config_drift:{field}' for field in changed_fields[:4])
+            elif status == 'baseline_missing':
+                score -= cfg['baseline_missing_penalty']
+                reasons.append('config_baseline_missing')
+            elif status == 'baseline_invalid':
+                score -= cfg['baseline_invalid_penalty']
+                reasons.append('config_baseline_invalid')
+
+        result = _make_dimension(score, reasons, evidence_ids)
+        result['rollback_hint'] = rollback_hint
+        return result
 
     @staticmethod
     def _apply_sot_diff_to_path_health(path_health: Dict[str, Any], sot_diff: Dict[str, Any]) -> Dict[str, Any]:

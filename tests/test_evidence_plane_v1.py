@@ -18,6 +18,7 @@ from azazel_edge.evidence_plane import (
     EvidencePlaneService,
     NocProbeAdapter,
     adapt_suricata_record,
+    build_config_drift_event,
     build_client_inventory,
     adapt_syslog_line,
     read_suricata_jsonl,
@@ -213,6 +214,22 @@ class EvidencePlaneV1Tests(unittest.TestCase):
                 for field in REQUIRED_FIELDS:
                     self.assertIn(field, payload)
                 self.assertIsInstance(payload['attrs'], dict)
+
+    def test_config_drift_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bus = EvidenceBus(fanout_path=Path(tmp) / 'evidence.jsonl', queue_max=8)
+            service = EvidencePlaneService(bus)
+            item = service.dispatch_config_drift({
+                'status': 'drift',
+                'baseline_state': 'present',
+                'changed_fields': ['uplink_preference.preferred_uplink'],
+                'baseline_values': {'uplink_preference.preferred_uplink': 'eth1'},
+                'current_values': {'uplink_preference.preferred_uplink': 'usb0'},
+                'rollback_hint': 'review_changed_fields_and_restore_last_known_good',
+            })
+        self.assertEqual(item['kind'], 'config_drift')
+        self.assertEqual(item['source'], 'config_drift')
+        self.assertEqual(item['attrs']['changed_fields'], ['uplink_preference.preferred_uplink'])
 
     def test_noc_probe_dispatch_derives_client_inventory_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

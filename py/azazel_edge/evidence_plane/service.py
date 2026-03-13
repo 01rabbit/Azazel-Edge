@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .bus import EvidenceBus
+from .config_drift import build_config_drift_event
 from .flow_min import read_flow_jsonl
 from .noc_inventory import build_client_inventory_events
 from .noc_probe import NocProbeAdapter
@@ -30,6 +31,9 @@ class EvidencePlaneService:
         events = probe.collect(snapshot=snapshot if isinstance(snapshot, dict) else None)
         events.extend(build_client_inventory_events(events))
         return self.dispatch_events(events)
+
+    def dispatch_config_drift(self, diff: Dict[str, object]) -> Dict[str, object]:
+        return self.bus.publish(build_config_drift_event(diff))
 
     def dispatch_syslog_line(self, line: str) -> Dict[str, object]:
         return self.bus.publish(adapt_syslog_line(line))
