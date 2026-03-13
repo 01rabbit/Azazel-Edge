@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from azazel_edge.knowledge import AttackDefendKnowledge
+from azazel_edge.triage import select_noc_runbook_support
 
 
 class DecisionExplainer:
@@ -42,6 +43,7 @@ class DecisionExplainer:
         sigma_hits = soc_summary.get('sigma_hits', []) if isinstance(soc_summary.get('sigma_hits'), list) else []
         yara_hits = soc_summary.get('yara_hits', []) if isinstance(soc_summary.get('yara_hits'), list) else []
         visualization = self.knowledge.build_visualization(attack_candidates, soc_summary.get('ti_matches', []))
+        runbook_support = select_noc_runbook_support(noc if isinstance(noc, dict) else {}, audience='professional', lang='en')
         next_checks = self._next_checks(action, noc_summary, soc_summary, client_impact)
         why_chosen = {
             'format_version': 'v2',
@@ -65,6 +67,7 @@ class DecisionExplainer:
             'affected_scope': (noc.get('affected_scope') or (noc_summary.get('blast_radius') if isinstance(noc_summary.get('blast_radius'), dict) else {})) if isinstance(noc, dict) else {},
             'config_drift': (noc.get('config_drift_health') or {}) if isinstance(noc, dict) else {},
             'incident_summary': (noc.get('incident_summary') or (noc_summary.get('incident_summary') if isinstance(noc_summary.get('incident_summary'), dict) else {})) if isinstance(noc, dict) else {},
+            'runbook_support': runbook_support,
             'ti_matches': soc_summary.get('ti_matches', []),
             'attack_candidates': attack_candidates,
             'sigma_hits': sigma_hits,
@@ -98,6 +101,7 @@ class DecisionExplainer:
             affected_scope=why_chosen['affected_scope'],
             config_drift=why_chosen['config_drift'],
             incident_summary=why_chosen['incident_summary'],
+            runbook_support=runbook_support,
         )
         explanation = {
             'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'),
@@ -140,6 +144,7 @@ class DecisionExplainer:
         affected_scope: Dict[str, Any],
         config_drift: Dict[str, Any],
         incident_summary: Dict[str, Any],
+        runbook_support: Dict[str, Any],
     ) -> str:
         rejected_text = '; '.join(
             f"{item['action']} was rejected because {item['reason']}"
@@ -187,6 +192,12 @@ class DecisionExplainer:
             drift_reasons = [str(item) for item in config_drift.get('reasons', []) if str(item)]
             if drift_reasons:
                 sentence += f" Config drift indicators: {', '.join(drift_reasons[:3])}."
+        if isinstance(runbook_support, dict) and str(runbook_support.get('runbook_candidate_id') or ''):
+            runbook_title = str((((runbook_support.get('reviewed_runbook') or {}) if isinstance(runbook_support.get('reviewed_runbook'), dict) else {}).get('title')) or runbook_support.get('runbook_candidate_id') or '')
+            sentence += (
+                f" Suggested NOC runbook: {runbook_title} "
+                f"because {str(runbook_support.get('why_this_runbook') or '').rstrip('.') or 'deterministic NOC review is required'}."
+            )
         if rejected_text:
             sentence += f" Alternatives: {rejected_text}."
         return sentence

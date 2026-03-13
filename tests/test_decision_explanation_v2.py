@@ -54,6 +54,8 @@ class DecisionExplanationV2Tests(unittest.TestCase):
         self.assertEqual(result['why_chosen']['incident_summary']['incident_id'], 'incident:abc123')
         self.assertIn('Incident summary: incident:abc123 cause=resolution_failure.', result['operator_wording'])
         self.assertIn('Config drift indicators: config_drift_detected, config_drift:uplink_preference.preferred_uplink.', result['operator_wording'])
+        self.assertEqual(result['why_chosen']['runbook_support']['runbook_candidate_id'], 'rb.noc.dns.failure.check')
+        self.assertIn('Suggested NOC runbook', result['operator_wording'])
         self.assertIn('T1190 Exploit Public-Facing Application', result['why_chosen']['attack_candidates'])
 
     def test_explanation_can_be_persisted_as_jsonl(self) -> None:

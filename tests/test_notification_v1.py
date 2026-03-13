@@ -43,6 +43,7 @@ class NotificationV1Tests(unittest.TestCase):
         self.assertEqual(lines[-1]['decision'], 'sent')
         self.assertEqual(lines[-1]['payload']['payload']['target'], 'edge-uplink')
         self.assertEqual(lines[-1]['payload']['payload']['incident_id'], 'incident:abc123')
+        self.assertEqual(lines[-1]['payload']['payload']['runbook_candidate_id'], '')
 
     def test_non_notify_action_is_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
