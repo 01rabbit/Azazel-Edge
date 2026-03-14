@@ -56,6 +56,62 @@
             </div>
             <p class="panel-note" id="demoModeBannerText">{{ tr('dashboard.demo_banner_default', 'A demo overlay is active. Review replay output on the dedicated demo page, not on the operational dashboard.') }}</p>
         </section>
+        <section class="panel normal-assurance-panel" id="normalAssurancePanel">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('dashboard.normal_assurance', 'Normal Assurance') }}</div>
+                    <h2>{{ tr('dashboard.normal_assurance_title', 'Clearly normal by default') }}</h2>
+                </div>
+                <div class="panel-note">{{ tr('dashboard.normal_assurance_note', 'If any required gate fails, the panel leaves normal immediately so any operator can notice it.') }}</div>
+            </div>
+            <div class="normal-assurance-grid">
+                <article class="mission-card mission-card-primary">
+                    <div class="card-kicker">{{ tr('dashboard.normal_assurance_state', 'Assurance State') }}</div>
+                    <h3 id="normalAssuranceState">{{ tr('dashboard.status_idle', 'IDLE') }}</h3>
+                    <p class="card-summary" id="normalAssuranceSummary">{{ tr('dashboard.normal_assurance_waiting', 'Waiting for normal-assurance evaluation.') }}</p>
+                    <div class="assistant-label">{{ tr('dashboard.normal_assurance_failed', 'Failed Gates') }}</div>
+                    <ul class="action-list" id="normalAssuranceFailedList">
+                        <li>{{ tr('dashboard.normal_assurance_gate_waiting', 'Waiting for gate evaluation.') }}</li>
+                    </ul>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">{{ tr('dashboard.normal_assurance_gates', 'Assurance Gates') }}</div>
+                    <ul class="action-list" id="normalAssuranceGateList">
+                        <li>{{ tr('dashboard.normal_assurance_gate_waiting', 'Waiting for gate evaluation.') }}</li>
+                    </ul>
+                </article>
+            </div>
+        </section>
+        <section class="panel primary-anomaly-panel" id="primaryAnomalyPanel">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('dashboard.primary_anomaly_card', 'Primary Anomaly Card') }}</div>
+                    <h2>{{ tr('dashboard.primary_anomaly_title', 'One anomaly to focus on now') }}</h2>
+                </div>
+                <div class="panel-note">{{ tr('dashboard.primary_anomaly_note', 'When anomalies exist, this card compresses severity, what happened, impact, and immediate actions into one block.') }}</div>
+            </div>
+            <div class="primary-anomaly-grid">
+                <article class="mission-card mission-card-primary">
+                    <div class="card-kicker">{{ tr('dashboard.primary_anomaly_severity', 'Severity') }}</div>
+                    <strong id="primaryAnomalySeverity" class="assistant-status status-neutral">NONE</strong>
+                    <h3 id="primaryAnomalyHeading">{{ tr('dashboard.primary_anomaly_none_title', 'No primary anomaly right now') }}</h3>
+                    <p class="card-summary" id="primaryAnomalyWhat">{{ tr('dashboard.primary_anomaly_none_what', 'No SOC/NOC anomaly has been selected as the current primary trigger.') }}</p>
+                    <p class="panel-note" id="primaryAnomalyImpact">{{ tr('dashboard.primary_anomaly_none_impact', 'Keep the normal baseline visible and continue routine monitoring.') }}</p>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">{{ tr('dashboard.primary_anomaly_do_now', 'Do Now') }}</div>
+                    <ul class="action-list" id="primaryAnomalyDoNowList">
+                        <li>{{ tr('dashboard.primary_anomaly_waiting', 'Waiting for anomaly synthesis.') }}</li>
+                    </ul>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">{{ tr('dashboard.primary_anomaly_dont_do', 'Do Not Do') }}</div>
+                    <ul class="action-list" id="primaryAnomalyDontDoList">
+                        <li>{{ tr('dashboard.primary_anomaly_waiting', 'Waiting for anomaly synthesis.') }}</li>
+                    </ul>
+                </article>
+            </div>
+        </section>
         <section class="command-strip panel">
             <div class="panel-heading">
                 <div>
@@ -424,6 +480,22 @@
                             </div>
                         </article>
                     </div>
+                </section>
+
+                <section class="panel client-identity-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="panel-kicker">{{ tr('dashboard.client_identity_view', 'Client Identity View') }}</div>
+                            <h2>{{ tr('dashboard.client_identity_title', 'Who is affected right now') }}</h2>
+                        </div>
+                        <div class="panel-heading-actions">
+                            <div class="panel-note" id="clientIdentitySummary">{{ tr('dashboard.client_identity_summary_waiting', 'Waiting for client identity data.') }}</div>
+                            <button type="button" class="context-ask-btn" id="clientIdentityToggle">{{ tr('dashboard.client_identity_toggle_show_normal', 'Show normal too') }}</button>
+                        </div>
+                    </div>
+                    <ul class="action-list client-identity-list" id="clientIdentityList">
+                        <li>{{ tr('dashboard.client_identity_empty', 'No client identity data.') }}</li>
+                    </ul>
                 </section>
 
                 <section class="panel action-board">

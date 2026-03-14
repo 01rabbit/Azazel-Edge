@@ -101,6 +101,38 @@ class DashboardDataContractTests(unittest.TestCase):
                 "inventory_mismatch_count": 1,
                 "stale_session_count": 0,
             },
+            "noc_client_sessions": [
+                {
+                    "session_key": "aa:bb:cc:dd:ee:01",
+                    "mac": "aa:bb:cc:dd:ee:01",
+                    "ip": "192.168.40.20",
+                    "hostname": "client-a",
+                    "interface_or_segment": "lan-main",
+                    "last_seen": "2026-03-11T10:00:00+09:00",
+                    "session_state": "authorized_present",
+                    "sot_status": "known",
+                },
+                {
+                    "session_key": "aa:bb:cc:dd:ee:02",
+                    "mac": "aa:bb:cc:dd:ee:02",
+                    "ip": "192.168.40.21",
+                    "hostname": "unknown-client",
+                    "interface_or_segment": "lan-main",
+                    "last_seen": "2026-03-11T10:01:00+09:00",
+                    "session_state": "unknown_present",
+                    "sot_status": "unknown",
+                },
+                {
+                    "session_key": "aa:bb:cc:dd:ee:03",
+                    "mac": "aa:bb:cc:dd:ee:03",
+                    "ip": "192.168.40.22",
+                    "hostname": "mismatch-client",
+                    "interface_or_segment": "lan-main",
+                    "last_seen": "2026-03-11T10:02:00+09:00",
+                    "session_state": "inventory_mismatch",
+                    "sot_status": "known",
+                },
+            ],
             "noc_service_assurance": {
                 "status": "degraded",
                 "degraded_targets": ["resolver-tcp"],
@@ -305,6 +337,12 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["noc_focus"]["capacity"]["top_talker"], "192.168.40.12")
         self.assertEqual(payload["noc_focus"]["client_inventory"]["current_client_count"], 6)
         self.assertEqual(payload["noc_focus"]["client_inventory"]["inventory_mismatch_count"], 1)
+        self.assertIn("client_identity_view", payload["noc_focus"])
+        self.assertEqual(payload["noc_focus"]["client_identity_view"]["default_filter"], "attention_only")
+        self.assertEqual(payload["noc_focus"]["client_identity_view"]["attention_count"], 2)
+        self.assertEqual(payload["noc_focus"]["client_identity_view"]["normal_count"], 1)
+        self.assertEqual(payload["noc_focus"]["client_identity_view"]["items"][0]["state"], "mismatch")
+        self.assertEqual(payload["noc_focus"]["client_identity_view"]["items"][0]["masked_mac"], "aa:bb:**:**:**:03")
         self.assertEqual(payload["noc_focus"]["service_assurance"]["status"], "degraded")
         self.assertEqual(payload["noc_focus"]["resolution_health"]["status"], "failed")
         self.assertEqual(payload["noc_focus"]["blast_radius"]["affected_client_count"], 4)
@@ -315,12 +353,65 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["noc_focus"]["incident_summary"]["probable_cause"], "resolution_failure")
         self.assertEqual(payload["decision_path"]["first_pass_engine"], "tactical_scorer_v1")
         self.assertEqual(payload["decision_path"]["second_pass_status"], "completed")
+        self.assertIn("normal_assurance", payload)
+        self.assertFalse(payload["normal_assurance"]["all_ok"])
+        self.assertIn("no_direct_critical", payload["normal_assurance"]["failed_gates"])
         self.assertEqual(payload["soc_focus"]["visibility"]["status"], "partial")
         self.assertEqual(payload["soc_focus"]["suppression"]["suppressed_count"], 2)
         self.assertEqual(payload["soc_focus"]["triage_priority"]["status"], "now")
         self.assertEqual(payload["soc_focus"]["triage_priority"]["top_priority_ids"], ["inc-1", "ent-1"])
         self.assertEqual(payload["soc_focus"]["incident_campaign"]["incident_count"], 2)
         self.assertEqual(payload["soc_focus"]["entity_risk"]["entity_count"], 3)
+
+    def test_dashboard_summary_normal_assurance_stale_snapshot_cannot_be_normal(self) -> None:
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        metrics = json.loads(webapp.AI_METRICS_PATH.read_text(encoding="utf-8"))
+        now = time.time()
+        state["snapshot_epoch"] = now - (webapp.DASHBOARD_SNAPSHOT_STALE_SEC + 5)
+        state["suricata_critical"] = 0
+        state["suricata_warning"] = 0
+        state["user_state"] = "SAFE"
+        state["internal"] = {"state_name": "SAFE", "suspicion": 0, "decay": 0}
+        state["network_health"] = {"status": "HEALTHY", "dns_mismatch": 0, "signals": []}
+        metrics["deferred_count"] = 0
+        metrics["queue_depth"] = 0
+        metrics["queue_capacity"] = 8
+        metrics["last_update_ts"] = now
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+        webapp.AI_METRICS_PATH.write_text(json.dumps(metrics), encoding="utf-8")
+
+        response = self.client.get("/api/dashboard/summary")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        assurance = payload["normal_assurance"]
+        self.assertFalse(assurance["all_ok"])
+        self.assertNotEqual(assurance["status"], "normal")
+        self.assertIn("snapshot_fresh", assurance["failed_gates"])
+
+    def test_dashboard_summary_normal_assurance_missing_ai_metrics_cannot_be_normal(self) -> None:
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        metrics = json.loads(webapp.AI_METRICS_PATH.read_text(encoding="utf-8"))
+        now = time.time()
+        state["snapshot_epoch"] = now
+        state["suricata_critical"] = 0
+        state["suricata_warning"] = 0
+        state["user_state"] = "SAFE"
+        state["internal"] = {"state_name": "SAFE", "suspicion": 0, "decay": 0}
+        state["network_health"] = {"status": "HEALTHY", "dns_mismatch": 0, "signals": []}
+        metrics["deferred_count"] = 0
+        metrics["queue_depth"] = 0
+        metrics["queue_capacity"] = 8
+        metrics.pop("last_update_ts", None)
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+        webapp.AI_METRICS_PATH.write_text(json.dumps(metrics), encoding="utf-8")
+
+        response = self.client.get("/api/dashboard/summary")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        assurance = payload["normal_assurance"]
+        self.assertFalse(assurance["all_ok"])
+        self.assertNotEqual(assurance["status"], "normal")
+        self.assertIn("ai_metrics_fresh", assurance["failed_gates"])
 
     def test_dashboard_actions_contract(self) -> None:
         response = self.client.get("/api/dashboard/actions")
@@ -347,6 +438,38 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["soc_priority"]["status"], "now")
         self.assertEqual(len(payload["soc_priority"]["now"]), 1)
         self.assertEqual(payload["soc_priority"]["top_priority_ids"], ["inc-1", "ent-1"])
+        self.assertIn("primary_anomaly_card", payload)
+        self.assertEqual(payload["primary_anomaly_card"]["status"], "anomaly")
+        self.assertEqual(payload["primary_anomaly_card"]["severity"], "critical")
+        self.assertTrue(payload["primary_anomaly_card"]["do_now"])
+        self.assertTrue(payload["primary_anomaly_card"]["dont_do"])
+
+    def test_dashboard_actions_primary_anomaly_card_returns_none_when_no_anomaly(self) -> None:
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        advisory = json.loads(webapp.AI_ADVISORY_PATH.read_text(encoding="utf-8"))
+        state["suricata_critical"] = 0
+        state["suricata_warning"] = 0
+        state["user_state"] = "SAFE"
+        state["internal"] = {"state_name": "SAFE", "suspicion": 0, "decay": 0}
+        state["network_health"] = {"status": "HEALTHY", "dns_mismatch": 0, "signals": []}
+        state["connection"]["internet_check"] = "OK"
+        state["noc_blast_radius"] = {
+            "affected_uplinks": [],
+            "affected_segments": [],
+            "related_service_targets": [],
+            "affected_client_count": 0,
+            "critical_client_count": 0,
+        }
+        advisory["second_pass"]["soc"]["status"] = "quiet"
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+        webapp.AI_ADVISORY_PATH.write_text(json.dumps(advisory), encoding="utf-8")
+
+        response = self.client.get("/api/dashboard/actions")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["primary_anomaly_card"]["status"], "none")
+        self.assertEqual(payload["primary_anomaly_card"]["severity"], "none")
 
     def test_dashboard_actions_falls_back_to_deterministic_noc_runbook_without_ai_context(self) -> None:
         webapp.AI_LLM_LOG.write_text("", encoding="utf-8")
@@ -448,6 +571,18 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn('id="resourceGuardQueueBar"', text)
         self.assertIn('id="resourceGuardFallbackBar"', text)
         self.assertIn('id="resourceGuardLatencyBar"', text)
+        self.assertIn("Normal Assurance", text)
+        self.assertIn('id="normalAssuranceState"', text)
+        self.assertIn('id="normalAssuranceFailedList"', text)
+        self.assertIn('id="normalAssuranceGateList"', text)
+        self.assertIn("Primary Anomaly Card", text)
+        self.assertIn('id="primaryAnomalySeverity"', text)
+        self.assertIn('id="primaryAnomalyDoNowList"', text)
+        self.assertIn('id="primaryAnomalyDontDoList"', text)
+        self.assertIn("Client Identity View", text)
+        self.assertIn('id="clientIdentitySummary"', text)
+        self.assertIn('id="clientIdentityToggle"', text)
+        self.assertIn('id="clientIdentityList"', text)
         self.assertIn("M.I.O. Assist", text)
         self.assertIn("Last Manual Ask", text)
         self.assertIn("Recommended Runbook", text)

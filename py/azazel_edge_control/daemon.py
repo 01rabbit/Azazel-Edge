@@ -583,6 +583,7 @@ def _build_noc_runtime_projection(
     evaluation: dict[str, Any],
     event_payloads: list[dict[str, Any]],
     inventory_summary: dict[str, Any],
+    inventory_sessions: list[dict[str, Any]] | None = None,
     preferred_uplink: str = "",
 ) -> dict[str, Any]:
     capacity = evaluation.get("capacity_health") if isinstance(evaluation.get("capacity_health"), dict) else {}
@@ -628,6 +629,24 @@ def _build_noc_runtime_projection(
         rollback_hint = "validate_baseline_and_restore_valid_state"
 
     inventory = inventory_summary if isinstance(inventory_summary, dict) else {}
+    sessions_raw = inventory_sessions if isinstance(inventory_sessions, list) else []
+    sessions: list[dict[str, Any]] = []
+    for row in sessions_raw[:120]:
+        if not isinstance(row, dict):
+            continue
+        sessions.append(
+            {
+                "session_key": str(row.get("session_key") or ""),
+                "mac": str(row.get("mac") or "").lower(),
+                "ip": str(row.get("ip") or ""),
+                "hostname": str(row.get("hostname") or ""),
+                "interface_or_segment": str(row.get("interface_or_segment") or "unknown"),
+                "last_seen": str(row.get("last_seen") or ""),
+                "session_state": str(row.get("session_state") or "unknown_present"),
+                "sot_status": str(row.get("sot_status") or "unknown"),
+                "evidence_ids": [str(item) for item in (row.get("evidence_ids") or []) if str(item)],
+            }
+        )
     return {
         "noc_summary": {
             "status": str(summary.get("status") or "unknown"),
@@ -649,6 +668,7 @@ def _build_noc_runtime_projection(
             "inventory_mismatch_count": int(inventory.get("inventory_mismatch_count") or 0),
             "stale_session_count": int(inventory.get("stale_session_count") or 0),
         },
+        "noc_client_sessions": sessions,
         "noc_service_assurance": {
             "status": str(service.get("label") or "unknown"),
             "degraded_targets": _parse_reason_targets(
@@ -725,11 +745,13 @@ def _compute_live_noc_projection(up_if: str, down_if: str, gateway_ip: str) -> d
         payloads = _event_payloads(events)
         inventory = build_client_inventory(events)
         inventory_summary = inventory.get("summary") if isinstance(inventory.get("summary"), dict) else {}
+        inventory_sessions = inventory.get("sessions") if isinstance(inventory.get("sessions"), list) else []
         evaluation = NOC_EVALUATOR.evaluate(events)
         projection = _build_noc_runtime_projection(
             evaluation=evaluation,
             event_payloads=payloads,
             inventory_summary=inventory_summary,
+            inventory_sessions=inventory_sessions,
             preferred_uplink=up_if,
         )
         _NOC_CACHE["key"] = key

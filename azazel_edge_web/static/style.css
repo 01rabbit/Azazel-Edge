@@ -477,6 +477,58 @@ body.demo-overlay-active #healthSummaryLine {
     margin-bottom: 18px;
 }
 
+.normal-assurance-panel {
+    padding: 22px 24px 24px;
+    margin-bottom: 18px;
+    border-color: rgba(116, 212, 255, 0.24);
+}
+
+.normal-assurance-panel.normal-assurance-safe {
+    border-color: rgba(127, 211, 155, 0.48);
+    box-shadow: 0 0 0 1px rgba(127, 211, 155, 0.16), var(--shadow-lg);
+}
+
+.normal-assurance-panel.normal-assurance-caution {
+    border-color: rgba(224, 164, 88, 0.48);
+    box-shadow: 0 0 0 1px rgba(224, 164, 88, 0.14), var(--shadow-lg);
+}
+
+.normal-assurance-panel.normal-assurance-danger {
+    border-color: rgba(228, 109, 93, 0.52);
+    box-shadow: 0 0 0 1px rgba(228, 109, 93, 0.14), var(--shadow-lg);
+}
+
+.normal-assurance-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 14px;
+}
+
+.primary-anomaly-panel {
+    padding: 22px 24px 24px;
+    margin-bottom: 18px;
+}
+
+.primary-anomaly-panel.primary-anomaly-none {
+    border-color: rgba(116, 212, 255, 0.24);
+}
+
+.primary-anomaly-panel.primary-anomaly-warning {
+    border-color: rgba(224, 164, 88, 0.5);
+    box-shadow: 0 0 0 1px rgba(224, 164, 88, 0.14), var(--shadow-lg);
+}
+
+.primary-anomaly-panel.primary-anomaly-critical {
+    border-color: rgba(228, 109, 93, 0.56);
+    box-shadow: 0 0 0 1px rgba(228, 109, 93, 0.16), var(--shadow-lg);
+}
+
+.primary-anomaly-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1fr;
+    gap: 14px;
+}
+
 .mission-row {
     padding: 22px 24px 24px;
     margin-bottom: 18px;
@@ -734,6 +786,21 @@ body.demo-overlay-active #healthSummaryLine {
 .evidence-board,
 .assistant-panel {
     padding: 22px 24px 24px;
+}
+
+.client-identity-panel {
+    padding: 22px 24px 24px;
+    margin-bottom: 18px;
+}
+
+.client-identity-list {
+    margin-top: 10px;
+}
+
+.client-identity-list li {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
 }
 
 .situation-grid,
@@ -1114,6 +1181,14 @@ body.demo-overlay-active #healthSummaryLine {
 
 @media (max-width: 1240px) {
     .mission-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .normal-assurance-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .primary-anomaly-grid {
         grid-template-columns: 1fr;
     }
 
