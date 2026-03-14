@@ -30,6 +30,8 @@ if str(PY_ROOT) not in sys.path:
 from wifi_scan import scan_wifi, get_wireless_interface, check_networkmanager
 from mode_manager import ModeManager
 from wifi_connect import connect_wifi, update_state_json
+from azazel_edge.evaluators import NocEvaluator
+from azazel_edge.evidence_plane import NocProbeAdapter, build_client_inventory
 from azazel_edge.sensors.network_health import NetworkHealthMonitor
 from azazel_edge.path_schema import (
     first_minute_config_candidates,
@@ -82,6 +84,16 @@ NETWORK_HEALTH = NetworkHealthMonitor(
     captive_url=os.environ.get("AZAZEL_CAPTIVE_CHECK_URL", "http://connectivitycheck.gstatic.com/generate_204"),
 )
 SURICATA_ADVISORY_TTL_SEC = int(os.environ.get("AZAZEL_SURICATA_ADVISORY_TTL_SEC", "300"))
+NOC_REFRESH_SEC = max(5.0, float(os.environ.get("AZAZEL_NOC_REFRESH_SEC", "20")))
+NOC_EVALUATOR = NocEvaluator()
+NOC_CACHE_LOCK = threading.Lock()
+_NOC_CACHE: dict[str, Any] = {
+    "key": "",
+    "ts": 0.0,
+    "payload": {},
+}
+_NOC_ADAPTER: Optional[NocProbeAdapter] = None
+_NOC_ADAPTER_KEY = ""
 
 
 def _read_portal_viewer_env() -> dict[str, str]:
@@ -483,6 +495,249 @@ def _default_route_info() -> dict[str, str]:
     return result
 
 
+def _event_payloads(events: list[Any]) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for event in events:
+        if hasattr(event, "to_dict"):
+            payload = event.to_dict()
+        elif isinstance(event, dict):
+            payload = dict(event)
+        else:
+            continue
+        if isinstance(payload.get("attrs"), dict):
+            payloads.append(payload)
+    return payloads
+
+
+def _parse_reason_targets(reasons: Any, prefixes: tuple[str, ...]) -> list[str]:
+    if not isinstance(reasons, list):
+        return []
+    targets: list[str] = []
+    for item in reasons:
+        text = str(item or "")
+        for prefix in prefixes:
+            if text.startswith(prefix):
+                value = text[len(prefix):].strip()
+                if value:
+                    targets.append(value)
+                break
+    return sorted(dict.fromkeys(targets))
+
+
+def _capacity_state_from_label(label: str) -> str:
+    mapping = {
+        "good": "normal",
+        "degraded": "elevated",
+        "poor": "congested",
+        "critical": "congested",
+    }
+    return mapping.get(str(label or "").strip().lower(), "unknown")
+
+
+def _select_capacity_row(event_payloads: list[dict[str, Any]], preferred_uplink: str) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for payload in event_payloads:
+        if str(payload.get("kind") or "") != "capacity_pressure":
+            continue
+        attrs = payload.get("attrs")
+        if isinstance(attrs, dict):
+            rows.append(attrs)
+    if not rows:
+        return {}
+    uplink = str(preferred_uplink or "").strip()
+    if uplink:
+        for row in rows:
+            if str(row.get("interface") or "").strip() == uplink:
+                return row
+    return rows[0]
+
+
+def _traffic_top_sources(event_payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for payload in event_payloads:
+        if str(payload.get("kind") or "") != "traffic_concentration":
+            continue
+        attrs = payload.get("attrs")
+        if not isinstance(attrs, dict):
+            continue
+        top_sources = attrs.get("top_sources")
+        if not isinstance(top_sources, list):
+            continue
+        normalized: list[dict[str, Any]] = []
+        for item in top_sources[:5]:
+            if not isinstance(item, dict):
+                continue
+            normalized.append(
+                {
+                    "src_ip": str(item.get("src_ip") or ""),
+                    "bytes": int(item.get("bytes") or 0),
+                    "packets": int(item.get("packets") or 0),
+                    "flows": int(item.get("flows") or 0),
+                }
+            )
+        return normalized
+    return []
+
+
+def _build_noc_runtime_projection(
+    *,
+    evaluation: dict[str, Any],
+    event_payloads: list[dict[str, Any]],
+    inventory_summary: dict[str, Any],
+    preferred_uplink: str = "",
+) -> dict[str, Any]:
+    capacity = evaluation.get("capacity_health") if isinstance(evaluation.get("capacity_health"), dict) else {}
+    service = evaluation.get("service_health") if isinstance(evaluation.get("service_health"), dict) else {}
+    resolution = evaluation.get("resolution_health") if isinstance(evaluation.get("resolution_health"), dict) else {}
+    config_drift = evaluation.get("config_drift_health") if isinstance(evaluation.get("config_drift_health"), dict) else {}
+    blast_radius = evaluation.get("affected_scope") if isinstance(evaluation.get("affected_scope"), dict) else {}
+    incident = evaluation.get("incident_summary") if isinstance(evaluation.get("incident_summary"), dict) else {}
+    summary = evaluation.get("summary") if isinstance(evaluation.get("summary"), dict) else {}
+
+    capacity_reasons = capacity.get("reasons") if isinstance(capacity.get("reasons"), list) else []
+    service_reasons = service.get("reasons") if isinstance(service.get("reasons"), list) else []
+    resolution_reasons = resolution.get("reasons") if isinstance(resolution.get("reasons"), list) else []
+    drift_reasons = config_drift.get("reasons") if isinstance(config_drift.get("reasons"), list) else []
+
+    capacity_row = _select_capacity_row(event_payloads, preferred_uplink=preferred_uplink)
+    capacity_state = str(capacity_row.get("state") or _capacity_state_from_label(str(capacity.get("label") or "")))
+    utilization_pct = capacity_row.get("avg_utilization_pct")
+    if utilization_pct is None:
+        utilization_pct = capacity_row.get("peak_utilization_pct")
+    capacity_mode = str(capacity_row.get("mode") or "deterministic_noc_evaluator_v1")
+
+    changed_fields = _parse_reason_targets(drift_reasons, ("config_drift:",))
+    baseline_state = "present"
+    if "config_baseline_missing" in drift_reasons:
+        baseline_state = "missing"
+    elif "config_baseline_invalid" in drift_reasons:
+        baseline_state = "invalid"
+    if changed_fields:
+        config_state = "drift"
+    elif baseline_state == "missing":
+        config_state = "baseline_missing"
+    elif baseline_state == "invalid":
+        config_state = "baseline_invalid"
+    else:
+        config_state = "normal"
+    rollback_hint = ""
+    if config_state == "drift":
+        rollback_hint = "review_changed_fields_and_restore_last_known_good"
+    elif config_state == "baseline_missing":
+        rollback_hint = "create_last_known_good_baseline"
+    elif config_state == "baseline_invalid":
+        rollback_hint = "validate_baseline_and_restore_valid_state"
+
+    inventory = inventory_summary if isinstance(inventory_summary, dict) else {}
+    return {
+        "noc_summary": {
+            "status": str(summary.get("status") or "unknown"),
+            "degraded_mode": bool(summary.get("degraded_mode")),
+            "reasons": [str(item) for item in (summary.get("reasons") or []) if str(item)],
+        },
+        "noc_capacity": {
+            "state": capacity_state,
+            "mode": capacity_mode,
+            "utilization_pct": float(utilization_pct) if isinstance(utilization_pct, (int, float)) else None,
+            "top_sources": _traffic_top_sources(event_payloads),
+            "signals": [str(item) for item in capacity_reasons],
+        },
+        "noc_client_inventory": {
+            "current_client_count": int(inventory.get("current_client_count") or 0),
+            "new_client_count": int(inventory.get("new_client_count") or 0),
+            "unknown_client_count": int(inventory.get("unknown_client_count") or 0),
+            "unauthorized_client_count": int(inventory.get("unauthorized_client_count") or 0),
+            "inventory_mismatch_count": int(inventory.get("inventory_mismatch_count") or 0),
+            "stale_session_count": int(inventory.get("stale_session_count") or 0),
+        },
+        "noc_service_assurance": {
+            "status": str(service.get("label") or "unknown"),
+            "degraded_targets": _parse_reason_targets(
+                service_reasons,
+                (
+                    "service_probe_failed:",
+                    "service_window_down:",
+                    "service_window_degraded:",
+                    "service_off:",
+                    "service_degraded:",
+                    "service_result:",
+                ),
+            ),
+        },
+        "noc_resolution_assurance": {
+            "status": str(resolution.get("label") or "unknown"),
+            "failed_targets": _parse_reason_targets(
+                resolution_reasons,
+                (
+                    "resolution_failed:",
+                    "resolution_window_failed:",
+                    "resolution_window_degraded:",
+                ),
+            ),
+        },
+        "noc_blast_radius": {
+            "affected_uplinks": [str(item) for item in (blast_radius.get("affected_uplinks") or []) if str(item)],
+            "affected_segments": [str(item) for item in (blast_radius.get("affected_segments") or []) if str(item)],
+            "related_service_targets": [str(item) for item in (blast_radius.get("related_service_targets") or []) if str(item)],
+            "affected_client_count": int(blast_radius.get("affected_client_count") or 0),
+            "critical_client_count": int(blast_radius.get("critical_client_count") or 0),
+        },
+        "noc_config_drift": {
+            "status": config_state,
+            "baseline_state": baseline_state,
+            "changed_fields": changed_fields,
+            "rollback_hint": rollback_hint,
+        },
+        "noc_incident_summary": {
+            "incident_id": str(incident.get("incident_id") or ""),
+            "probable_cause": str(incident.get("probable_cause") or "stable"),
+            "confidence": float(incident.get("confidence") or 0.0),
+            "supporting_symptoms": [str(item) for item in (incident.get("supporting_symptoms") or []) if str(item)],
+        },
+        "noc_runtime": {
+            "status": str(summary.get("status") or "unknown"),
+            "evidence_count": int(len(evaluation.get("evidence_ids") or [])),
+            "updated_epoch": time.time(),
+        },
+    }
+
+
+def _compute_live_noc_projection(up_if: str, down_if: str, gateway_ip: str) -> dict[str, Any]:
+    global _NOC_ADAPTER, _NOC_ADAPTER_KEY
+    now = time.time()
+    key = f"{up_if}|{down_if}|{gateway_ip}"
+    refresh_sec = max(5.0, float(NOC_REFRESH_SEC))
+    with NOC_CACHE_LOCK:
+        cache_ts = float(_NOC_CACHE.get("ts") or 0.0)
+        cache_key = str(_NOC_CACHE.get("key") or "")
+        cache_payload = _NOC_CACHE.get("payload")
+        if cache_key == key and isinstance(cache_payload, dict) and now - cache_ts < refresh_sec:
+            return dict(cache_payload)
+
+        if _NOC_ADAPTER is None or _NOC_ADAPTER_KEY != key:
+            _NOC_ADAPTER = NocProbeAdapter(
+                up_interface=str(up_if or "eth1"),
+                down_interface=str(down_if or "usb0"),
+                gateway_ip=str(gateway_ip or ""),
+            )
+            _NOC_ADAPTER_KEY = key
+
+        events = _NOC_ADAPTER.collect()
+        payloads = _event_payloads(events)
+        inventory = build_client_inventory(events)
+        inventory_summary = inventory.get("summary") if isinstance(inventory.get("summary"), dict) else {}
+        evaluation = NOC_EVALUATOR.evaluate(events)
+        projection = _build_noc_runtime_projection(
+            evaluation=evaluation,
+            event_payloads=payloads,
+            inventory_summary=inventory_summary,
+            preferred_uplink=up_if,
+        )
+        _NOC_CACHE["key"] = key
+        _NOC_CACHE["ts"] = now
+        _NOC_CACHE["payload"] = projection
+        return dict(projection)
+
+
 def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(data)
     now = time.time()
@@ -547,6 +802,16 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     connection["captive_portal_reason"] = str(
         health.get("captive_portal_reason", connection.get("captive_portal_reason", "NOT_CHECKED"))
     )
+    try:
+        noc_projection = _compute_live_noc_projection(
+            up_if=up_if,
+            down_if=str(enriched.get("down_if") or "usb0"),
+            gateway_ip=gateway_ip,
+        )
+        if isinstance(noc_projection, dict):
+            enriched.update(noc_projection)
+    except Exception as exc:
+        logger.debug(f"Failed to evaluate live NOC projection: {exc}")
 
     user_state = str(enriched.get("user_state", "") or "").upper()
     signals = health.get("signals", []) if isinstance(health.get("signals"), list) else []
