@@ -32,7 +32,18 @@ class DecisionExplanationV2Tests(unittest.TestCase):
                     'confidence': 0.88,
                 },
             },
-            soc={'summary': {'status': 'critical', 'attack_candidates': ['T1071 Application Layer Protocol'], 'ai_attack_candidates': ['T1190 Exploit Public-Facing Application'], 'ti_matches': [{'indicator_type': 'ip', 'value': '10.0.0.5'}]}},
+            soc={
+                'summary': {'status': 'critical', 'attack_candidates': ['T1071 Application Layer Protocol'], 'ai_attack_candidates': ['T1190 Exploit Public-Facing Application'], 'ti_matches': [{'indicator_type': 'ip', 'value': '10.0.0.5'}], 'visibility_status': 'partial', 'suppressed_count': 2, 'triage_now_count': 1},
+                'security_visibility_state': {'status': 'partial', 'missing_sources': ['syslog_min']},
+                'suppression_exception_state': {'status': 'partial', 'suppressed_count': 2, 'exception_count': 1},
+                'asset_target_criticality': {'status': 'critical_targets_observed', 'critical_target_count': 1},
+                'exposure_change_state': {'status': 'expanding'},
+                'confidence_provenance': {'adjusted_score': 78, 'supports': ['ti_match']},
+                'behavior_sequence_state': {'status': 'multi_stage'},
+                'triage_priority_state': {'status': 'now', 'now': [{'id': 'inc-1', 'kind': 'incident', 'score': 90}]},
+                'incident_campaign_state': {'status': 'active'},
+                'entity_risk_state': {'entity_count': 3},
+            },
             arbiter={
                 'action': 'redirect',
                 'reason': 'soc_high_confidence_redirect_is_preferred',
@@ -57,6 +68,9 @@ class DecisionExplanationV2Tests(unittest.TestCase):
         self.assertEqual(result['why_chosen']['runbook_support']['runbook_candidate_id'], 'rb.noc.dns.failure.check')
         self.assertIn('Suggested NOC runbook', result['operator_wording'])
         self.assertIn('T1190 Exploit Public-Facing Application', result['why_chosen']['attack_candidates'])
+        self.assertIn('soc_states', result['why_chosen'])
+        self.assertEqual(result['why_chosen']['soc_states']['security_visibility_state']['status'], 'partial')
+        self.assertIn('SOC triage priority: now', result['operator_wording'])
 
     def test_explanation_can_be_persisted_as_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

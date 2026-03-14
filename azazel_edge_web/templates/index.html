@@ -341,6 +341,27 @@
                                         <li>{{ tr('dashboard.no_aux_detection_summary', 'No auxiliary detection summary.') }}</li>
                                     </ul>
                                 </div>
+                                <div class="split-subcard">
+                                    <div class="assistant-label">SOC Guardrails</div>
+                                    <div class="fact-list compact-list">
+                                        <div class="fact-item"><span>Visibility</span><strong id="socVisibilityStatus">-</strong></div>
+                                        <div class="fact-item"><span>Suppression</span><strong id="socSuppressionStatus">-</strong></div>
+                                        <div class="fact-item"><span>Incident</span><strong id="socIncidentStatus">-</strong></div>
+                                        <div class="fact-item"><span>Critical Target</span><strong id="socCriticalityStatus">-</strong></div>
+                                        <div class="fact-item"><span>Exposure</span><strong id="socExposureStatus">-</strong></div>
+                                        <div class="fact-item"><span>Sequence</span><strong id="socSequenceStatus">-</strong></div>
+                                    </div>
+                                </div>
+                                <div class="split-subcard">
+                                    <div class="assistant-label">SOC Triage Queue</div>
+                                    <div class="fact-list compact-list">
+                                        <div class="fact-item"><span>Status</span><strong id="socTriageStatus">-</strong></div>
+                                        <div class="fact-item"><span>Now / Watch / Backlog</span><strong id="socTriageCounts">0 / 0 / 0</strong></div>
+                                    </div>
+                                    <ul class="action-list" id="socTriageQueueList">
+                                        <li>{{ tr('dashboard.no_soc_triage_summary', 'No SOC triage priority summary.') }}</li>
+                                    </ul>
+                                </div>
                             </div>
                         </article>
 

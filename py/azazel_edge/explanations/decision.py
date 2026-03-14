@@ -33,6 +33,15 @@ class DecisionExplainer:
 
         noc_summary = noc.get('summary', {}) if isinstance(noc, dict) else {}
         soc_summary = soc.get('summary', {}) if isinstance(soc, dict) else {}
+        visibility_state = soc.get('security_visibility_state') if isinstance(soc.get('security_visibility_state'), dict) else {}
+        suppression_state = soc.get('suppression_exception_state') if isinstance(soc.get('suppression_exception_state'), dict) else {}
+        criticality_state = soc.get('asset_target_criticality') if isinstance(soc.get('asset_target_criticality'), dict) else {}
+        exposure_state = soc.get('exposure_change_state') if isinstance(soc.get('exposure_change_state'), dict) else {}
+        confidence_provenance = soc.get('confidence_provenance') if isinstance(soc.get('confidence_provenance'), dict) else {}
+        sequence_state = soc.get('behavior_sequence_state') if isinstance(soc.get('behavior_sequence_state'), dict) else {}
+        triage_state = soc.get('triage_priority_state') if isinstance(soc.get('triage_priority_state'), dict) else {}
+        incident_state = soc.get('incident_campaign_state') if isinstance(soc.get('incident_campaign_state'), dict) else {}
+        entity_state = soc.get('entity_risk_state') if isinstance(soc.get('entity_risk_state'), dict) else {}
         attack_candidates = []
         if isinstance(soc_summary.get('attack_candidates'), list):
             attack_candidates.extend(str(x) for x in soc_summary.get('attack_candidates', []) if str(x))
@@ -75,6 +84,17 @@ class DecisionExplainer:
             'visualization': visualization,
             'correlation': correlation,
             'client_impact': client_impact,
+            'soc_states': {
+                'security_visibility_state': visibility_state,
+                'suppression_exception_state': suppression_state,
+                'asset_target_criticality': criticality_state,
+                'exposure_change_state': exposure_state,
+                'confidence_provenance': confidence_provenance,
+                'behavior_sequence_state': sequence_state,
+                'triage_priority_state': triage_state,
+                'incident_campaign_state': incident_state,
+                'entity_risk_state': entity_state,
+            },
         }
         why_not_others = [
             {
@@ -102,6 +122,15 @@ class DecisionExplainer:
             config_drift=why_chosen['config_drift'],
             incident_summary=why_chosen['incident_summary'],
             runbook_support=runbook_support,
+            visibility_state=visibility_state,
+            suppression_state=suppression_state,
+            criticality_state=criticality_state,
+            exposure_state=exposure_state,
+            confidence_provenance=confidence_provenance,
+            sequence_state=sequence_state,
+            triage_state=triage_state,
+            incident_state=incident_state,
+            entity_state=entity_state,
         )
         explanation = {
             'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'),
@@ -145,6 +174,15 @@ class DecisionExplainer:
         config_drift: Dict[str, Any],
         incident_summary: Dict[str, Any],
         runbook_support: Dict[str, Any],
+        visibility_state: Dict[str, Any],
+        suppression_state: Dict[str, Any],
+        criticality_state: Dict[str, Any],
+        exposure_state: Dict[str, Any],
+        confidence_provenance: Dict[str, Any],
+        sequence_state: Dict[str, Any],
+        triage_state: Dict[str, Any],
+        incident_state: Dict[str, Any],
+        entity_state: Dict[str, Any],
     ) -> str:
         rejected_text = '; '.join(
             f"{item['action']} was rejected because {item['reason']}"
@@ -198,6 +236,47 @@ class DecisionExplainer:
                 f" Suggested NOC runbook: {runbook_title} "
                 f"because {str(runbook_support.get('why_this_runbook') or '').rstrip('.') or 'deterministic NOC review is required'}."
             )
+        if isinstance(visibility_state, dict):
+            vis = str(visibility_state.get('status') or '')
+            if vis:
+                sentence += f" SOC visibility is {vis}."
+        if isinstance(suppression_state, dict):
+            suppressed = int(suppression_state.get('suppressed_count') or 0)
+            if suppressed > 0:
+                sentence += f" Suppressed signals: {suppressed}."
+        if isinstance(criticality_state, dict):
+            critical_targets = int(criticality_state.get('critical_target_count') or 0)
+            if critical_targets > 0:
+                sentence += f" Critical targets involved: {critical_targets}."
+        if isinstance(exposure_state, dict):
+            exposure_status = str(exposure_state.get('status') or '')
+            if exposure_status:
+                sentence += f" Exposure state: {exposure_status}."
+        if isinstance(confidence_provenance, dict):
+            adjusted = int(confidence_provenance.get('adjusted_score') or 0)
+            supports = confidence_provenance.get('supports') if isinstance(confidence_provenance.get('supports'), list) else []
+            if supports:
+                sentence += f" Confidence provenance: score {adjusted}, supports {', '.join(str(x) for x in supports[:3])}."
+        if isinstance(sequence_state, dict):
+            seq_status = str(sequence_state.get('status') or '')
+            if seq_status:
+                sentence += f" Behavior sequence: {seq_status}."
+        if isinstance(incident_state, dict):
+            incident_status = str(incident_state.get('status') or '')
+            if incident_status:
+                sentence += f" Incident campaign state: {incident_status}."
+        if isinstance(entity_state, dict):
+            entity_count = int(entity_state.get('entity_count') or 0)
+            if entity_count > 0:
+                sentence += f" Risky entities tracked: {entity_count}."
+        if isinstance(triage_state, dict):
+            triage_status = str(triage_state.get('status') or '')
+            now_items = triage_state.get('now') if isinstance(triage_state.get('now'), list) else []
+            if triage_status:
+                sentence += f" SOC triage priority: {triage_status}"
+                if now_items:
+                    sentence += f" ({len(now_items)} now)"
+                sentence += "."
         if rejected_text:
             sentence += f" Alternatives: {rejected_text}."
         return sentence
@@ -216,6 +295,12 @@ class DecisionExplainer:
             checks.append('verify_control_applied_and_reversible')
         if str(soc_summary.get('status') or '') in {'high', 'critical'}:
             checks.append('review_soc_evidence_and_attack_candidates')
+        if str(soc_summary.get('visibility_status') or '').lower() in {'blind', 'partial', 'degraded'}:
+            checks.append('review_soc_visibility_and_sensor_gaps')
+        if int(soc_summary.get('suppressed_count') or 0) > 0:
+            checks.append('review_suppressed_soc_signals_and_exceptions')
+        if int(soc_summary.get('triage_now_count') or 0) > 0:
+            checks.append('review_soc_triage_now_items')
         if str(noc_summary.get('status') or '') in {'poor', 'critical'}:
             checks.append('confirm_noc_stability_before_escalation')
         if any(str(noc_summary.get('reasons') or '').find(token) >= 0 for token in ('capacity_health', 'client_inventory_health')):

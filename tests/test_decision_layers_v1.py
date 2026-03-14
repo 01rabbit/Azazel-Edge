@@ -47,6 +47,9 @@ class DecisionLayersV1Tests(unittest.TestCase):
         self.assertIn('soc', result)
         self.assertIn('status', result['soc'])
         self.assertIn('attack_candidates', result['soc'])
+        self.assertIn('triage_priority_state', result['soc'])
+        self.assertIn('security_visibility_state', result['soc'])
+        self.assertIn('confidence_provenance', result['soc'])
         self.assertGreaterEqual(result['evidence_count'], 1)
 
     def test_uses_optional_flow_records_for_correlation_context(self) -> None:

@@ -159,7 +159,30 @@ class DashboardDataContractTests(unittest.TestCase):
                 "status": "completed",
                 "evidence_count": 2,
                 "flow_support_count": 1,
-                "soc": {"status": "high"},
+                "soc": {
+                    "status": "high",
+                    "attack_candidates": ["T1071 Application Layer Protocol"],
+                    "ti_matches": [{"indicator_type": "ip", "value": "8.8.8.8"}],
+                    "sigma_hits": [{"rule_id": "sig-1"}],
+                    "yara_hits": [{"rule_id": "yara-1"}],
+                    "correlation": {"status": "present", "reasons": ["cluster_detected"]},
+                    "security_visibility_state": {"status": "partial", "missing_sources": ["syslog_min"], "stale_sources": []},
+                    "suppression_exception_state": {"status": "partial", "suppressed_count": 2, "exception_count": 1},
+                    "asset_target_criticality": {"status": "critical_targets_observed", "critical_target_count": 1},
+                    "exposure_change_state": {"status": "expanding", "new_external_destinations": ["8.8.8.8"], "new_service_targets": ["8.8.8.8:443"]},
+                    "confidence_provenance": {"status": "medium", "adjusted_score": 74, "supports": ["ti_match"], "weakens": ["limited_visibility"]},
+                    "behavior_sequence_state": {"status": "multi_stage", "stage_sequence": ["recon", "access", "command"], "chain_hits": ["recon->access->command"]},
+                    "triage_priority_state": {
+                        "status": "now",
+                        "score": 84,
+                        "now": [{"id": "inc-1", "kind": "incident", "score": 92}],
+                        "watch": [{"id": "ent-1", "kind": "entity", "score": 64}],
+                        "backlog": [{"id": "ent-2", "kind": "entity", "score": 35}],
+                        "top_priority_ids": ["inc-1", "ent-1"],
+                    },
+                    "incident_campaign_state": {"status": "active", "incident_count": 2, "active_count": 1},
+                    "entity_risk_state": {"entity_count": 3},
+                },
             },
         }
         metrics = {
@@ -292,6 +315,12 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["noc_focus"]["incident_summary"]["probable_cause"], "resolution_failure")
         self.assertEqual(payload["decision_path"]["first_pass_engine"], "tactical_scorer_v1")
         self.assertEqual(payload["decision_path"]["second_pass_status"], "completed")
+        self.assertEqual(payload["soc_focus"]["visibility"]["status"], "partial")
+        self.assertEqual(payload["soc_focus"]["suppression"]["suppressed_count"], 2)
+        self.assertEqual(payload["soc_focus"]["triage_priority"]["status"], "now")
+        self.assertEqual(payload["soc_focus"]["triage_priority"]["top_priority_ids"], ["inc-1", "ent-1"])
+        self.assertEqual(payload["soc_focus"]["incident_campaign"]["incident_count"], 2)
+        self.assertEqual(payload["soc_focus"]["entity_risk"]["entity_count"], 3)
 
     def test_dashboard_actions_contract(self) -> None:
         response = self.client.get("/api/dashboard/actions")
@@ -315,6 +344,9 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertTrue(payload["noc_runbook_support"]["operator_checks"])
         self.assertEqual(payload["decision_path"]["first_pass_role"], "first_minute_triage")
         self.assertEqual(payload["decision_path"]["second_pass_flow_support_count"], 1)
+        self.assertEqual(payload["soc_priority"]["status"], "now")
+        self.assertEqual(len(payload["soc_priority"]["now"]), 1)
+        self.assertEqual(payload["soc_priority"]["top_priority_ids"], ["inc-1", "ent-1"])
 
     def test_dashboard_actions_falls_back_to_deterministic_noc_runbook_without_ai_context(self) -> None:
         webapp.AI_LLM_LOG.write_text("", encoding="utf-8")

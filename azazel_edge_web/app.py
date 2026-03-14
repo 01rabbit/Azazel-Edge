@@ -1012,6 +1012,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     second_pass_detail = state.get("second_pass") if isinstance(state.get("second_pass"), dict) else {}
     if not second_pass_detail and isinstance(advisory.get("second_pass"), dict):
         second_pass_detail = advisory.get("second_pass")
+    second_pass_soc = second_pass_detail.get("soc") if isinstance(second_pass_detail.get("soc"), dict) else {}
     second_pass_status = str(second_pass.get("status") or second_pass_detail.get("status") or "pending")
     if bool(attack.get("stale_advisory_expired")):
         attack_type = ""
@@ -1031,6 +1032,28 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     noc_blast_radius = state.get("noc_blast_radius") if isinstance(state.get("noc_blast_radius"), dict) else {}
     noc_config_drift = state.get("noc_config_drift") if isinstance(state.get("noc_config_drift"), dict) else {}
     noc_incident_summary = state.get("noc_incident_summary") if isinstance(state.get("noc_incident_summary"), dict) else {}
+    soc_attack_candidates = (
+        second_pass_soc.get("attack_candidates")
+        if isinstance(second_pass_soc.get("attack_candidates"), list)
+        else ([attack_type] if attack_type else [])
+    )
+    soc_ti_matches = second_pass_soc.get("ti_matches") if isinstance(second_pass_soc.get("ti_matches"), list) else []
+    soc_sigma_hits = second_pass_soc.get("sigma_hits") if isinstance(second_pass_soc.get("sigma_hits"), list) else []
+    soc_yara_hits = second_pass_soc.get("yara_hits") if isinstance(second_pass_soc.get("yara_hits"), list) else []
+    soc_correlation = second_pass_soc.get("correlation") if isinstance(second_pass_soc.get("correlation"), dict) else {}
+    soc_visibility = second_pass_soc.get("security_visibility_state") if isinstance(second_pass_soc.get("security_visibility_state"), dict) else {}
+    soc_suppression = second_pass_soc.get("suppression_exception_state") if isinstance(second_pass_soc.get("suppression_exception_state"), dict) else {}
+    soc_criticality = second_pass_soc.get("asset_target_criticality") if isinstance(second_pass_soc.get("asset_target_criticality"), dict) else {}
+    soc_exposure = second_pass_soc.get("exposure_change_state") if isinstance(second_pass_soc.get("exposure_change_state"), dict) else {}
+    soc_confidence_provenance = second_pass_soc.get("confidence_provenance") if isinstance(second_pass_soc.get("confidence_provenance"), dict) else {}
+    soc_sequence = second_pass_soc.get("behavior_sequence_state") if isinstance(second_pass_soc.get("behavior_sequence_state"), dict) else {}
+    soc_triage = second_pass_soc.get("triage_priority_state") if isinstance(second_pass_soc.get("triage_priority_state"), dict) else {}
+    soc_incident = second_pass_soc.get("incident_campaign_state") if isinstance(second_pass_soc.get("incident_campaign_state"), dict) else {}
+    soc_entity = second_pass_soc.get("entity_risk_state") if isinstance(second_pass_soc.get("entity_risk_state"), dict) else {}
+    soc_status_from_second_pass = str(second_pass_soc.get("status") or "").lower()
+    if soc_status_from_second_pass in {"critical", "high"}:
+        threat_level = soc_status_from_second_pass if soc_status_from_second_pass != "high" else "elevated"
+
     return {
         "ok": True,
         "risk": {
@@ -1095,20 +1118,79 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
             "top_severity": top_severity or "-",
             "critical_count": _as_int(state.get("suricata_critical"), 0),
             "warning_count": _as_int(state.get("suricata_warning"), 0),
-            "confidence_signal": f"suspicion={suspicion}",
-            "attack_candidates": [attack_type] if attack_type else [],
-            "sigma_hits": [],
-            "yara_hits": [],
-            "ti_matches": [],
+            "confidence_signal": (
+                f"suspicion={suspicion}"
+                + (
+                    f" | confidence={_as_int(soc_confidence_provenance.get('adjusted_score'), 0)}"
+                    if isinstance(soc_confidence_provenance, dict) and soc_confidence_provenance
+                    else ""
+                )
+            ),
+            "attack_candidates": soc_attack_candidates,
+            "sigma_hits": soc_sigma_hits,
+            "yara_hits": soc_yara_hits,
+            "ti_matches": soc_ti_matches,
             "correlation": {
-                "status": "present" if attack_type or top_src or top_dst else "none",
-                "reasons": [
-                    item for item in [
-                        f"src={top_src}" if top_src else "",
-                        f"dst={top_dst}" if top_dst else "",
-                        f"sid={top_sid}" if top_sid else "",
-                    ] if item
-                ][:3],
+                "status": str(soc_correlation.get("status") or ("present" if attack_type or top_src or top_dst else "none")),
+                "reasons": (
+                    [str(item) for item in soc_correlation.get("reasons", []) if str(item)]
+                    if isinstance(soc_correlation, dict) and isinstance(soc_correlation.get("reasons"), list)
+                    else [
+                        item for item in [
+                            f"src={top_src}" if top_src else "",
+                            f"dst={top_dst}" if top_dst else "",
+                            f"sid={top_sid}" if top_sid else "",
+                        ] if item
+                    ][:3]
+                ),
+            },
+            "visibility": {
+                "status": str(soc_visibility.get("status") or second_pass_soc.get("visibility_status") or "unknown"),
+                "missing_sources": soc_visibility.get("missing_sources") if isinstance(soc_visibility.get("missing_sources"), list) else [],
+                "stale_sources": soc_visibility.get("stale_sources") if isinstance(soc_visibility.get("stale_sources"), list) else [],
+            },
+            "suppression": {
+                "status": str(soc_suppression.get("status") or "normal"),
+                "suppressed_count": _as_int(soc_suppression.get("suppressed_count"), _as_int(second_pass_soc.get("suppressed_count"), 0)),
+                "exception_count": _as_int(soc_suppression.get("exception_count"), 0),
+            },
+            "criticality": {
+                "status": str(soc_criticality.get("status") or "unknown"),
+                "critical_target_count": _as_int(soc_criticality.get("critical_target_count"), 0),
+            },
+            "exposure_change": {
+                "status": str(soc_exposure.get("status") or "stable"),
+                "new_external_destinations": soc_exposure.get("new_external_destinations") if isinstance(soc_exposure.get("new_external_destinations"), list) else [],
+                "new_service_targets": soc_exposure.get("new_service_targets") if isinstance(soc_exposure.get("new_service_targets"), list) else [],
+            },
+            "confidence_provenance": {
+                "status": str(soc_confidence_provenance.get("status") or "unknown"),
+                "adjusted_score": _as_int(soc_confidence_provenance.get("adjusted_score"), 0),
+                "supports": soc_confidence_provenance.get("supports") if isinstance(soc_confidence_provenance.get("supports"), list) else [],
+                "weakens": soc_confidence_provenance.get("weakens") if isinstance(soc_confidence_provenance.get("weakens"), list) else [],
+            },
+            "behavior_sequence": {
+                "status": str(soc_sequence.get("status") or "none"),
+                "stage_sequence": soc_sequence.get("stage_sequence") if isinstance(soc_sequence.get("stage_sequence"), list) else [],
+                "chain_hits": soc_sequence.get("chain_hits") if isinstance(soc_sequence.get("chain_hits"), list) else [],
+            },
+            "triage_priority": {
+                "status": str(soc_triage.get("status") or second_pass_soc.get("triage_status") or "idle"),
+                "score": _as_int(soc_triage.get("score"), 0),
+                "now": soc_triage.get("now") if isinstance(soc_triage.get("now"), list) else [],
+                "watch": soc_triage.get("watch") if isinstance(soc_triage.get("watch"), list) else [],
+                "backlog": soc_triage.get("backlog") if isinstance(soc_triage.get("backlog"), list) else [],
+                "top_priority_ids": soc_triage.get("top_priority_ids") if isinstance(soc_triage.get("top_priority_ids"), list) else [],
+            },
+            "incident_campaign": {
+                "status": str(soc_incident.get("status") or "none"),
+                "incident_count": _as_int(soc_incident.get("incident_count"), _as_int(second_pass_soc.get("incident_count"), 0)),
+                "active_count": _as_int(soc_incident.get("active_count"), 0),
+                "top_incidents": soc_incident.get("top_incidents") if isinstance(soc_incident.get("top_incidents"), list) else [],
+            },
+            "entity_risk": {
+                "entity_count": _as_int(soc_entity.get("entity_count"), _as_int(second_pass_soc.get("entity_count"), 0)),
+                "top_entities": soc_entity.get("top_entities") if isinstance(soc_entity.get("top_entities"), list) else [],
             },
         },
         "noc_focus": {
@@ -1195,6 +1277,21 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
     selected_runbook_id = str(latest_ai.get("runbook_id") or noc_runbook_support.get("runbook_candidate_id") or "")
     suggested_runbook = _runbook_brief(selected_runbook_id, lang=lang)
     guidance = _dashboard_action_guidance(state, advisory, latest_ai, suggested_runbook, noc_runbook_support=noc_runbook_support)
+    second_pass_detail = state.get("second_pass") if isinstance(state.get("second_pass"), dict) else {}
+    if not second_pass_detail and isinstance(advisory.get("second_pass"), dict):
+        second_pass_detail = advisory.get("second_pass")
+    second_pass_soc = second_pass_detail.get("soc") if isinstance(second_pass_detail.get("soc"), dict) else {}
+    triage_state = second_pass_soc.get("triage_priority_state") if isinstance(second_pass_soc.get("triage_priority_state"), dict) else {}
+    triage_now = triage_state.get("now") if isinstance(triage_state.get("now"), list) else []
+    triage_watch = triage_state.get("watch") if isinstance(triage_state.get("watch"), list) else []
+    triage_backlog = triage_state.get("backlog") if isinstance(triage_state.get("backlog"), list) else []
+    triage_status = str(triage_state.get("status") or second_pass_soc.get("triage_status") or "").strip()
+    if triage_status:
+        _append_unique(guidance["why_now"], f"SOC triage priority is {triage_status}.")
+    if triage_now:
+        _append_unique(guidance["do_next"], f"Review {len(triage_now)} SOC triage-now item(s) before stronger controls.")
+    if triage_watch:
+        _append_unique(guidance["do_next"], f"Keep {len(triage_watch)} SOC watch item(s) under active monitoring.")
     user_guidance = str(
         latest_ai.get("user_message")
         or suggested_runbook.get("user_message_template")
@@ -1234,9 +1331,6 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
         decision_pipeline = advisory.get("decision_pipeline")
     first_pass = decision_pipeline.get("first_pass") if isinstance(decision_pipeline.get("first_pass"), dict) else {}
     second_pass = decision_pipeline.get("second_pass") if isinstance(decision_pipeline.get("second_pass"), dict) else {}
-    second_pass_detail = state.get("second_pass") if isinstance(state.get("second_pass"), dict) else {}
-    if not second_pass_detail and isinstance(advisory.get("second_pass"), dict):
-        second_pass_detail = advisory.get("second_pass")
     return {
         "ok": True,
         "current_operator_actions": guidance["do_next"],
@@ -1286,6 +1380,13 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
             "second_pass_flow_support_count": _as_int(second_pass.get("flow_support_count") or second_pass_detail.get("flow_support_count"), 0),
             "soc_status": str(((second_pass_detail.get("soc") or {}) if isinstance(second_pass_detail.get("soc"), dict) else {}).get("status") or ""),
             "ai_role": "supplemental_operator_assist",
+        },
+        "soc_priority": {
+            "status": triage_status or "idle",
+            "now": triage_now[:8],
+            "watch": triage_watch[:8],
+            "backlog": triage_backlog[:8],
+            "top_priority_ids": triage_state.get("top_priority_ids") if isinstance(triage_state.get("top_priority_ids"), list) else [],
         },
     }
 

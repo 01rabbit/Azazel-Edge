@@ -39,6 +39,7 @@ It combines a managed gateway, deterministic SOC/NOC evaluation, explicit action
 - Stand up a **managed internal segment and uplink gateway**
 - Normalize **Suricata, flow, NOC probe, and syslog** events into a shared evidence model
 - Evaluate **operational degradation** and **security suspicion** separately, then arbitrate an action
+- Track NOC health with **capacity, client inventory/session, service assurance, resolution assurance, config drift, and incident summary**
 - Guide professional operators and temporary staff with **runbooks, triage state machines, and M.I.O.**
 - Run **deterministic scenario replays** for demos, validation, and review
 - Export auditable, explainable decisions instead of opaque model guesses
@@ -55,7 +56,7 @@ It combines a managed gateway, deterministic SOC/NOC evaluation, explicit action
 3. **First-pass triage**
    - Tactical Engine for immediate Suricata-driven risk scoring
 4. **Second-pass deterministic evaluation**
-   - NOC evaluator: availability, path health, device health, client health
+   - NOC evaluator: availability, path health, device health, client health, capacity health, client inventory health, service health, resolution health, config drift health, affected scope, incident summary
    - SOC evaluator: suspicion, confidence, technique likelihood, blast radius
 5. **Action Arbiter**
    - `observe`, `notify`, `throttle`, `redirect`, `isolate`
@@ -67,7 +68,11 @@ It combines a managed gateway, deterministic SOC/NOC evaluation, explicit action
 ## Operator Surfaces
 
 ### Dashboard
-The main situation board for command posture, threat evidence, NOC health, action selection, demo replay, and M.I.O. overview.
+The live operational board for command posture, threat evidence, NOC/SOC split status, action selection, runtime guardrails, and M.I.O. overview.
+
+### `/demo`
+Dedicated deterministic replay and reviewer workspace.
+Scenario replay, capability boundary, and review-readiness views are separated from the live operational dashboard.
 
 ### `ops-comm`
 The focused operator workspace for direct M.I.O. interaction, triage state machine flows, runbook review, Mattermost bridge, and demo control.
@@ -90,6 +95,7 @@ Low-friction local visibility surfaces for runtime state, mode, and current post
 - Tactical Engine for first-minute triage on normalized Suricata events
 - Evidence normalization through adapters
 - Second-pass evaluation through Evidence Plane and deterministic evaluators
+- Extended NOC dimensions for capacity pressure, client inventory/session, service and resolution assurance, config drift, and incident compression
 - Action decisions that remain explicit and reviewable
 - Decision explanations and audit records by default
 
@@ -100,7 +106,7 @@ Low-friction local visibility surfaces for runtime state, mode, and current post
 - AI is used for:
   - ambiguous alert assistance
   - operator questions
-  - runbook suggestion support
+  - runbook wording/support
   - bilingual guidance output
 - AI is not the primary decision-maker
 
@@ -111,7 +117,6 @@ Low-friction local visibility surfaces for runtime state, mode, and current post
 - Mattermost handoff from triage sessions
 
 ### Advanced and research extensions
-- config drift audit
 - multi-segment NOC evaluation
 - cross-source correlation
 - ATT&CK / D3FEND visualization payloads
@@ -156,6 +161,7 @@ sudo ENABLE_OLLAMA=1 ENABLE_MATTERMOST=1 bash installer/internal/install_ai_runt
 
 Default local endpoints after installation:
 - Dashboard: `https://172.16.0.254/`
+- Demo workspace: `https://172.16.0.254/demo`
 - M.I.O. ops console: `https://172.16.0.254/ops-comm`
 - Mattermost: `http://172.16.0.254:8065/`
 - Local backend: `http://127.0.0.1:8084/`
@@ -203,7 +209,7 @@ bin/azazel-edge-demo run mixed_correlation_demo
 
 - P0, P1, and P2 implementation lines are present in the repository
 - The installer has been updated to deploy the current runtime module set and required assets
-- The repository currently contains **38** Python test modules and **15** runbook definitions
+- The repository currently contains **39** Python test modules and **15** runbook definitions
 
 ## License
 
