@@ -12,7 +12,7 @@
         <div class="ops-topbar-brand">
             <img class="ops-logo" src="/images/MIO_Logo.png" alt="M.I.O. Logo">
             <div class="ops-brand-copy">
-                <div class="brand-kicker">Mission Intelligence Operator</div>
+                <div class="brand-kicker">{{ tr('ops.brand_kicker', 'Mission Intelligence Operator') }}</div>
                 <h1>{{ tr('ops.title', 'M.I.O. Ops Communication') }}</h1>
                 <p class="ops-brand-subtitle">{{ tr('ops.subtitle', 'Operator-facing command workspace for SOC and NOC support, runbook guidance, and demo replay.') }}</p>
             </div>
@@ -73,7 +73,7 @@
                 <div class="ops-response-grid">
                     <section class="ops-response-card emphasis">
                         <div class="assistant-label">{{ tr('ops.mio_assessment', 'M.I.O. Assessment') }}</div>
-                        <div id="aiResult" class="ops-result ops-result-strong">M.I.O.: -</div>
+                        <div id="aiResult" class="ops-result ops-result-strong">{{ tr('ops.mio_prefix', 'M.I.O.') }}: -</div>
                     </section>
                     <section class="ops-response-card guidance">
                         <div class="assistant-label">{{ tr('ops.user_guidance', 'User Guidance') }}</div>
@@ -97,23 +97,23 @@
                     <div class="assistant-label">{{ tr('ops.bridge_status', 'Bridge Status') }}</div>
                     <div class="ops-status-grid">
                         <div class="ops-status-item">
-                            <span>Reachability</span>
+                            <span>{{ tr('ops.reachability', 'Reachability') }}</span>
                             <strong><span class="badge" id="mmReachability">{{ tr('ops.checking', 'CHECKING') }}</span></strong>
                         </div>
                         <div class="ops-status-item">
-                            <span>Mode</span>
+                            <span>{{ tr('ops.mode', 'Mode') }}</span>
                             <strong id="mmMode">-</strong>
                         </div>
                         <div class="ops-status-item">
-                            <span>Base URL</span>
+                            <span>{{ tr('ops.base_url', 'Base URL') }}</span>
                             <strong class="mono" id="mmBaseUrl">-</strong>
                         </div>
                         <div class="ops-status-item">
-                            <span>Channel ID</span>
+                            <span>{{ tr('ops.channel_id', 'Channel ID') }}</span>
                             <strong class="mono" id="mmChannelId">-</strong>
                         </div>
                         <div class="ops-status-item">
-                            <span>Command Hook</span>
+                            <span>{{ tr('ops.command_hook', 'Command Hook') }}</span>
                             <strong class="mono" id="mmCommandStatus">-</strong>
                         </div>
                     </div>

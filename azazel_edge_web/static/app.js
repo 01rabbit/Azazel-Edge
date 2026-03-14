@@ -1527,7 +1527,11 @@ function updateReviewReadiness(healthEntry, demoCapabilitiesEntry, demoOverlay) 
     updateElement('reviewLiveTelemetry', hasBoundaryData ? (execution.live_telemetry ? 'required' : 'not-required') : 'unknown');
     updateElement('reviewDemoState', overlayActive ? 'overlay-active' : 'overlay-inactive');
     updateElement('reviewBoundaryCounts', hasBoundaryData ? `${implemented.length} / ${experimental.length}` : 'unknown');
-    renderList('reviewImplementedList', hasBoundaryData && implemented.length ? implemented : ['No data'], (item) => item);
+    renderList(
+        'reviewImplementedList',
+        hasBoundaryData && implemented.length ? implemented : [tr('dashboard.no_data', 'No data')],
+        (item) => item,
+    );
     renderList(
         'reviewExperimentalList',
         hasBoundaryData
@@ -1535,12 +1539,12 @@ function updateReviewReadiness(healthEntry, demoCapabilitiesEntry, demoOverlay) 
                 ...experimental.map((item) => `experimental: ${item}`),
                 ...demoOnly.map((item) => `demo-only: ${item}`),
             ]
-            : ['No data'],
+            : [tr('dashboard.no_data', 'No data')],
         (item) => item,
     );
     renderList(
         'reviewNonGoalsList',
-        hasBoundaryData && nonGoals.length ? nonGoals.map((item) => `non-goal: ${item}`) : ['No data'],
+        hasBoundaryData && nonGoals.length ? nonGoals.map((item) => `non-goal: ${item}`) : [tr('dashboard.no_data', 'No data')],
         (item) => item,
     );
 
@@ -1552,12 +1556,30 @@ function updateReviewReadiness(healthEntry, demoCapabilitiesEntry, demoOverlay) 
     }
     if (capabilityBtn) capabilityBtn.disabled = !hasBoundaryData;
     if (explanationBtn) explanationBtn.disabled = !overlayActive;
-    updateElement('reviewSummary', 'Deterministic edge pipeline, bounded controls, local-first operation, auditable outputs.');
+    updateElement(
+        'reviewSummary',
+        tr(
+            'dashboard.review_summary_default',
+            'Deterministic edge pipeline, bounded controls, local-first operation, auditable outputs.',
+        ),
+    );
     updateElement(
         'reviewSummaryDetail',
         !hasBoundaryData || !hasHealthData
-            ? 'Reviewer-proof summary is incomplete because capability or health data is unavailable.'
-            : `Execution=${execution.mode || 'deterministic_replay'} | local_only=${execution.local_only ? 'yes' : 'no'} | demo_state=${overlayActive ? 'overlay-active' : 'overlay-inactive'} | bounded=${healthy ? 'yes' : 'check'}`,
+            ? tr(
+                'dashboard.review_summary_unavailable',
+                'Reviewer-proof summary is incomplete because capability or health data is unavailable.',
+            )
+            : tr(
+                'dashboard.review_summary_runtime',
+                'Execution={execution} | local_only={local_only} | demo_state={demo_state} | bounded={bounded}',
+                {
+                    execution: execution.mode || 'deterministic_replay',
+                    local_only: execution.local_only ? 'yes' : 'no',
+                    demo_state: overlayActive ? 'overlay-active' : 'overlay-inactive',
+                    bounded: healthy ? 'yes' : 'check',
+                },
+            ),
     );
 }
 

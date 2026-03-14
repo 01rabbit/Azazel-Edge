@@ -24,15 +24,15 @@
             </div>
             <div class="topbar-meta">
                 <div class="meta-item">
-                    <span class="meta-label">CPU</span>
+                    <span class="meta-label">{{ tr('dashboard.cpu_label', 'CPU') }}</span>
                     <strong id="headerCpuUsage">--%</strong>
                 </div>
                 <div class="meta-item">
-                    <span class="meta-label">MEM</span>
+                    <span class="meta-label">{{ tr('dashboard.mem_label', 'MEM') }}</span>
                     <strong id="headerMemUsage">--%</strong>
                 </div>
                 <div class="meta-item">
-                    <span class="meta-label">TEMP</span>
+                    <span class="meta-label">{{ tr('dashboard.temp_label', 'TEMP') }}</span>
                     <strong id="headerCpuTemp">--°C</strong>
                 </div>
                 <div class="meta-clock" id="headerClock">--:--:--</div>
@@ -84,46 +84,46 @@
                 <div class="assistant-block demo-result-block">
                     <div class="assistant-label">{{ tr('dashboard.scenario_result', 'Scenario Result') }}</div>
                     <div class="demo-kpi-grid">
-                        <div class="fact-item demo-kpi"><span>Scenario</span><strong id="demoScenarioId">-</strong></div>
-                        <div class="fact-item demo-kpi"><span>Events</span><strong id="demoEventCount">-</strong></div>
-                        <div class="fact-item demo-kpi"><span>Execution</span><strong id="demoExecutionMode">-</strong></div>
-                        <div class="fact-item demo-kpi"><span>AI Core</span><strong id="demoAiCore">-</strong></div>
+                        <div class="fact-item demo-kpi"><span>{{ tr('dashboard.scenario_label', 'Scenario') }}</span><strong id="demoScenarioId">-</strong></div>
+                        <div class="fact-item demo-kpi"><span>{{ tr('dashboard.events_label', 'Events') }}</span><strong id="demoEventCount">-</strong></div>
+                        <div class="fact-item demo-kpi"><span>{{ tr('dashboard.execution_label', 'Execution') }}</span><strong id="demoExecutionMode">-</strong></div>
+                        <div class="fact-item demo-kpi"><span>{{ tr('dashboard.ai_core_label', 'AI Core') }}</span><strong id="demoAiCore">-</strong></div>
                         <div class="fact-item demo-kpi"><span>NOC</span><strong id="demoNocStatus">-</strong></div>
                         <div class="fact-item demo-kpi"><span>SOC</span><strong id="demoSocStatus">-</strong></div>
-                        <div class="fact-item demo-kpi"><span>Action</span><strong id="demoAction">-</strong></div>
-                        <div class="fact-item demo-kpi demo-kpi-wide"><span>Reason</span><strong id="demoReason">-</strong></div>
+                        <div class="fact-item demo-kpi"><span>{{ tr('dashboard.action_label', 'Action') }}</span><strong id="demoAction">-</strong></div>
+                        <div class="fact-item demo-kpi demo-kpi-wide"><span>{{ tr('dashboard.reason_label', 'Reason') }}</span><strong id="demoReason">-</strong></div>
                     </div>
                 </div>
 
                 <div class="demo-card-grid">
                     <div class="assistant-block demo-metric-card">
-                        <div class="assistant-label">Action Safety</div>
+                        <div class="assistant-label">{{ tr('dashboard.action_safety', 'Action Safety') }}</div>
                         <div class="fact-list compact-list">
-                            <div class="fact-item"><span>Reversible</span><strong id="demoSafetyReversible">-</strong></div>
-                            <div class="fact-item"><span>Approval</span><strong id="demoSafetyApproval">-</strong></div>
-                            <div class="fact-item"><span>Audited</span><strong id="demoSafetyAudited">-</strong></div>
-                            <div class="fact-item"><span>Effect</span><strong id="demoSafetyEffect">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.reversible_label', 'Reversible') }}</span><strong id="demoSafetyReversible">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.approval_label', 'Approval') }}</span><strong id="demoSafetyApproval">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.audited_label', 'Audited') }}</span><strong id="demoSafetyAudited">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.effect_label', 'Effect') }}</span><strong id="demoSafetyEffect">-</strong></div>
                         </div>
                     </div>
 
                     <div class="assistant-block demo-metric-card">
-                        <div class="assistant-label">Arbiter Trace</div>
+                        <div class="assistant-label">{{ tr('dashboard.arbiter_trace', 'Arbiter Trace') }}</div>
                         <div class="fact-list compact-list">
-                            <div class="fact-item"><span>NOC Fragile</span><strong id="demoTraceNocFragile">-</strong></div>
-                            <div class="fact-item"><span>Strong SOC</span><strong id="demoTraceStrongSoc">-</strong></div>
-                            <div class="fact-item"><span>Blast / Confidence</span><strong id="demoTraceBlastConfidence">-</strong></div>
-                            <div class="fact-item"><span>Client Impact</span><strong id="demoTraceClientImpact">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.noc_fragile_label', 'NOC Fragile') }}</span><strong id="demoTraceNocFragile">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.strong_soc_label', 'Strong SOC') }}</span><strong id="demoTraceStrongSoc">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.blast_confidence_label', 'Blast / Confidence') }}</span><strong id="demoTraceBlastConfidence">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.client_impact', 'Client Impact') }}</span><strong id="demoTraceClientImpact">-</strong></div>
                         </div>
                     </div>
                 </div>
 
                 <div class="demo-copy-grid">
                     <div class="assistant-block demo-copy-card">
-                        <div class="assistant-label">Operator Wording</div>
+                        <div class="assistant-label">{{ tr('ops.operator_wording', 'Operator wording') }}</div>
                         <div id="demoOperatorWording">{{ tr('dashboard.no_demo', 'No demo overlay is active.') }}</div>
                     </div>
                     <div class="assistant-block demo-copy-card">
-                        <div class="assistant-label">Next Checks</div>
+                        <div class="assistant-label">{{ tr('ops.next_checks', 'Next checks') }}</div>
                         <ul class="action-list" id="demoNextChecks">
                             <li>{{ tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.') }}</li>
                         </ul>
@@ -132,13 +132,13 @@
 
                 <div class="demo-copy-grid">
                     <div class="assistant-block demo-copy-card">
-                        <div class="assistant-label">Chosen Evidence</div>
+                        <div class="assistant-label">{{ tr('dashboard.chosen_evidence', 'Chosen Evidence') }}</div>
                         <ul class="action-list" id="demoEvidenceIds">
                             <li>{{ tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.') }}</li>
                         </ul>
                     </div>
                     <div class="assistant-block demo-copy-card">
-                        <div class="assistant-label">Rejected Alternatives</div>
+                        <div class="assistant-label">{{ tr('dashboard.rejected_alternatives', 'Rejected Alternatives') }}</div>
                         <ul class="action-list" id="demoRejectedAlternatives">
                             <li>{{ tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.') }}</li>
                         </ul>
@@ -162,37 +162,37 @@
                     </div>
                     <p class="assistant-intro">{{ tr('dashboard.review_readiness_intro', 'Compact proof that the deterministic path is bounded, local-first, and running within visible resource limits.') }}</p>
                     <div class="demo-boundary-banner review-summary-banner">
-                        <strong id="reviewSummary">Deterministic edge pipeline, bounded controls, local-first operation, auditable outputs.</strong>
-                        <span id="reviewSummaryDetail">Waiting for capability and health data.</span>
+                        <strong id="reviewSummary">{{ tr('dashboard.review_summary_default', 'Deterministic edge pipeline, bounded controls, local-first operation, auditable outputs.') }}</strong>
+                        <span id="reviewSummaryDetail">{{ tr('dashboard.review_summary_waiting', 'Waiting for capability and health data.') }}</span>
                     </div>
                     <div class="assistant-block">
-                        <div class="assistant-label">Capability Boundary</div>
+                        <div class="assistant-label">{{ tr('dashboard.capability_boundary', 'Capability Boundary') }}</div>
                         <div class="fact-list compact-list">
-                            <div class="fact-item"><span>Execution</span><strong id="reviewExecutionMode">-</strong></div>
-                            <div class="fact-item"><span>AI Core</span><strong id="reviewAiCore">-</strong></div>
-                            <div class="fact-item"><span>Local Only</span><strong id="reviewLocalOnly">-</strong></div>
-                            <div class="fact-item"><span>Live Telemetry</span><strong id="reviewLiveTelemetry">-</strong></div>
-                            <div class="fact-item"><span>Demo State</span><strong id="reviewDemoState">-</strong></div>
-                            <div class="fact-item"><span>Implemented / Experimental</span><strong id="reviewBoundaryCounts">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.execution_label', 'Execution') }}</span><strong id="reviewExecutionMode">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.ai_core_label', 'AI Core') }}</span><strong id="reviewAiCore">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.local_only_label', 'Local Only') }}</span><strong id="reviewLocalOnly">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.live_telemetry_label', 'Live Telemetry') }}</span><strong id="reviewLiveTelemetry">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.demo_state_label', 'Demo State') }}</span><strong id="reviewDemoState">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.implemented_experimental_label', 'Implemented / Experimental') }}</span><strong id="reviewBoundaryCounts">-</strong></div>
                         </div>
                         <div class="assistant-shortcuts demo-shortcuts">
-                            <button type="button" class="shortcut-btn" id="reviewOpenCapabilitiesBtn">Open Capability JSON</button>
-                            <button type="button" class="shortcut-btn" id="reviewOpenExplanationBtn">Open Latest Explanation</button>
+                            <button type="button" class="shortcut-btn" id="reviewOpenCapabilitiesBtn">{{ tr('dashboard.open_capability_json', 'Open Capability JSON') }}</button>
+                            <button type="button" class="shortcut-btn" id="reviewOpenExplanationBtn">{{ tr('dashboard.open_latest_explanation', 'Open Latest Explanation') }}</button>
                         </div>
                     </div>
                     <div class="assistant-block">
-                        <div class="assistant-label">Implemented Now</div>
+                        <div class="assistant-label">{{ tr('dashboard.implemented_now', 'Implemented Now') }}</div>
                         <ul class="action-list" id="reviewImplementedList">
-                            <li>No data</li>
+                            <li>{{ tr('dashboard.no_data', 'No data') }}</li>
                         </ul>
                     </div>
                     <div class="assistant-block">
-                        <div class="assistant-label">Experimental / Non-goals</div>
+                        <div class="assistant-label">{{ tr('dashboard.experimental_non_goals', 'Experimental / Non-goals') }}</div>
                         <ul class="action-list" id="reviewExperimentalList">
-                            <li>No data</li>
+                            <li>{{ tr('dashboard.no_data', 'No data') }}</li>
                         </ul>
                         <ul class="action-list" id="reviewNonGoalsList">
-                            <li>No data</li>
+                            <li>{{ tr('dashboard.no_data', 'No data') }}</li>
                         </ul>
                     </div>
                 </section>
