@@ -760,6 +760,210 @@ def _append_unique(items: List[str], value: str) -> None:
         items.append(text)
 
 
+def _normal_assurance_payload(
+    state: Dict[str, Any],
+    metrics: Dict[str, Any],
+    service_summary: Dict[str, Any],
+    snapshot_age: Optional[float],
+    ai_age: Optional[float],
+    network_health: Dict[str, Any],
+) -> Dict[str, Any]:
+    gates: List[Dict[str, Any]] = []
+
+    def add_gate(gate_id: str, label: str, ok: bool, detail: str) -> None:
+        gates.append(
+            {
+                "id": gate_id,
+                "label": label,
+                "ok": bool(ok),
+                "detail": detail,
+            }
+        )
+
+    if snapshot_age is None:
+        add_gate("snapshot_fresh", "Snapshot Fresh", False, "snapshot timestamp is missing")
+    elif snapshot_age > DASHBOARD_SNAPSHOT_STALE_SEC:
+        add_gate(
+            "snapshot_fresh",
+            "Snapshot Fresh",
+            False,
+            f"snapshot stale ({round(snapshot_age)}s > {int(DASHBOARD_SNAPSHOT_STALE_SEC)}s)",
+        )
+    else:
+        add_gate("snapshot_fresh", "Snapshot Fresh", True, f"snapshot age {round(snapshot_age)}s")
+
+    if ai_age is None:
+        add_gate("ai_metrics_fresh", "AI Metrics Fresh", False, "ai metrics timestamp is missing")
+    elif ai_age > DASHBOARD_AI_STALE_SEC:
+        add_gate(
+            "ai_metrics_fresh",
+            "AI Metrics Fresh",
+            False,
+            f"ai metrics stale ({round(ai_age)}s > {int(DASHBOARD_AI_STALE_SEC)}s)",
+        )
+    else:
+        add_gate("ai_metrics_fresh", "AI Metrics Fresh", True, f"ai metrics age {round(ai_age)}s")
+
+    critical_raw = state.get("suricata_critical")
+    if critical_raw in (None, ""):
+        add_gate("no_direct_critical", "Direct Critical Alerts", False, "direct critical count is missing")
+    else:
+        critical = _as_int(critical_raw, 0)
+        add_gate(
+            "no_direct_critical",
+            "Direct Critical Alerts",
+            critical <= 0,
+            f"direct critical count={critical}",
+        )
+
+    has_network_health = isinstance(network_health, dict) and bool(network_health)
+    signals_raw = network_health.get("signals") if isinstance(network_health.get("signals"), list) else None
+    if not has_network_health or signals_raw is None:
+        add_gate("no_network_signals", "Network Signals", False, "network signals are missing")
+    else:
+        add_gate(
+            "no_network_signals",
+            "Network Signals",
+            len(signals_raw) == 0,
+            f"active signals={len(signals_raw)}",
+        )
+
+    queue_depth_raw = metrics.get("queue_depth")
+    queue_capacity_raw = metrics.get("queue_capacity")
+    if queue_depth_raw in (None, "") or queue_capacity_raw in (None, ""):
+        add_gate("queue_within_capacity", "Queue Capacity", False, "queue depth/capacity is missing")
+    else:
+        depth = _as_int(queue_depth_raw, -1)
+        capacity = _as_int(queue_capacity_raw, -1)
+        queue_ok = capacity > 0 and depth >= 0 and depth <= capacity
+        detail = f"depth={depth} capacity={capacity}"
+        if capacity <= 0:
+            detail += " (invalid capacity)"
+        add_gate("queue_within_capacity", "Queue Capacity", queue_ok, detail)
+
+    deferred_raw = metrics.get("deferred_count")
+    if deferred_raw in (None, ""):
+        add_gate("deferred_clear", "Deferred Queue", False, "deferred count is missing")
+    else:
+        deferred = _as_int(deferred_raw, 0)
+        add_gate("deferred_clear", "Deferred Queue", deferred <= 0, f"deferred count={deferred}")
+
+    service_states = {
+        name: str(service_summary.get(name) or "UNKNOWN").upper()
+        for name in ("suricata", "opencanary", "ntfy", "ai_agent", "web")
+    }
+    off_services = [name for name, status in service_states.items() if status != "ON"]
+    add_gate(
+        "core_services_healthy",
+        "Core Services",
+        len(off_services) == 0,
+        "all core services ON" if not off_services else f"not ON: {', '.join(off_services)}",
+    )
+
+    failed = [gate["id"] for gate in gates if not gate["ok"]]
+    critical_failure_ids = {
+        "snapshot_fresh",
+        "ai_metrics_fresh",
+        "no_direct_critical",
+        "queue_within_capacity",
+        "core_services_healthy",
+    }
+    if not failed:
+        status = "normal"
+        level = "safe"
+    elif any(gate_id in critical_failure_ids for gate_id in failed):
+        status = "alert"
+        level = "danger"
+    else:
+        status = "watch"
+        level = "caution"
+
+    return {
+        "status": status,
+        "level": level,
+        "all_ok": len(failed) == 0,
+        "gate_count": len(gates),
+        "passed_count": len(gates) - len(failed),
+        "failed_gates": failed,
+        "gates": gates,
+        "evaluated_at": datetime.now().isoformat(),
+    }
+
+
+def _mask_mac(mac: str) -> str:
+    text = str(mac or "").strip().lower()
+    if not text:
+        return "-"
+    parts = text.split(":")
+    if len(parts) == 6 and all(len(part) == 2 for part in parts):
+        return f"{parts[0]}:{parts[1]}:**:**:**:{parts[5]}"
+    return text[:2] + "**"
+
+
+def _client_identity_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
+    sessions_raw = state.get("noc_client_sessions") if isinstance(state.get("noc_client_sessions"), list) else []
+    rows: List[Dict[str, Any]] = []
+    state_map = {
+        "authorized_present": "normal",
+        "unknown_present": "unknown",
+        "unauthorized_present": "unauthorized",
+        "inventory_mismatch": "mismatch",
+        "stale_session": "stale",
+        "authorized_missing": "missing",
+    }
+    state_rank = {
+        "unauthorized_present": 0,
+        "inventory_mismatch": 1,
+        "stale_session": 2,
+        "unknown_present": 3,
+        "authorized_missing": 4,
+        "authorized_present": 9,
+    }
+
+    for row in sessions_raw[:200]:
+        if not isinstance(row, dict):
+            continue
+        session_state = str(row.get("session_state") or "unknown_present")
+        state_label = state_map.get(session_state, "unknown")
+        requires_attention = session_state != "authorized_present"
+        ip = str(row.get("ip") or "")
+        hostname = str(row.get("hostname") or "")
+        mac = str(row.get("mac") or "").lower()
+        display_name = hostname or ip or mac or str(row.get("session_key") or "unknown-client")
+        rows.append(
+            {
+                "session_key": str(row.get("session_key") or ""),
+                "display_name": display_name,
+                "ip": ip or "-",
+                "masked_mac": _mask_mac(mac),
+                "state": state_label,
+                "state_raw": session_state,
+                "sot_status": str(row.get("sot_status") or "unknown"),
+                "last_seen": str(row.get("last_seen") or ""),
+                "interface_or_segment": str(row.get("interface_or_segment") or "unknown"),
+                "requires_attention": requires_attention,
+            }
+        )
+
+    rows.sort(
+        key=lambda item: (
+            0 if bool(item.get("requires_attention")) else 1,
+            state_rank.get(str(item.get("state_raw") or ""), 8),
+            str(item.get("display_name") or ""),
+        )
+    )
+
+    attention_count = sum(1 for item in rows if bool(item.get("requires_attention")))
+    normal_count = sum(1 for item in rows if not bool(item.get("requires_attention")))
+    return {
+        "default_filter": "attention_only",
+        "show_normal_toggle": True,
+        "attention_count": attention_count,
+        "normal_count": normal_count,
+        "items": rows[:120],
+    }
+
+
 def _dashboard_action_guidance(
     state: Dict[str, Any],
     advisory: Dict[str, Any],
@@ -839,6 +1043,157 @@ def _dashboard_action_guidance(
         "do_next": do_next[:4],
         "do_not_do": do_not_do[:4],
         "escalate_if": escalate_if[:4],
+    }
+
+
+def _primary_anomaly_card_payload(
+    state: Dict[str, Any],
+    advisory: Dict[str, Any],
+    guidance: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    lang = _request_lang()
+    internal = state.get("internal") if isinstance(state.get("internal"), dict) else {}
+    connection = state.get("connection") if isinstance(state.get("connection"), dict) else {}
+    network_health = state.get("network_health") if isinstance(state.get("network_health"), dict) else {}
+    blast_radius = state.get("noc_blast_radius") if isinstance(state.get("noc_blast_radius"), dict) else {}
+    monitoring = state.get("monitoring") if isinstance(state.get("monitoring"), dict) else {}
+    second_pass_detail = state.get("second_pass") if isinstance(state.get("second_pass"), dict) else {}
+    if not second_pass_detail and isinstance(advisory.get("second_pass"), dict):
+        second_pass_detail = advisory.get("second_pass")
+    second_pass_soc = second_pass_detail.get("soc") if isinstance(second_pass_detail.get("soc"), dict) else {}
+
+    critical = _as_int(state.get("suricata_critical"), 0)
+    warning = _as_int(state.get("suricata_warning"), 0)
+    suspicion = _as_int(internal.get("suspicion"), 0)
+    attack_type = str(advisory.get("attack_type") or "").strip()
+    soc_status = str(second_pass_soc.get("status") or "").lower()
+    signals = network_health.get("signals") if isinstance(network_health.get("signals"), list) else []
+    internet_check = str(connection.get("internet_check") or "").upper()
+    affected_clients = _as_int(blast_radius.get("affected_client_count"), 0)
+    critical_clients = _as_int(blast_radius.get("critical_client_count"), 0)
+    off_services = [
+        name for name in ("suricata", "opencanary", "ntfy")
+        if str(monitoring.get(name) or "").upper() == "OFF"
+    ]
+
+    candidates: List[Dict[str, Any]] = []
+
+    if critical > 0 or soc_status in {"critical", "high"}:
+        candidates.append(
+            {
+                "severity": "critical",
+                "source": "soc",
+                "title": "SOC critical evidence detected" if lang == "en" else "SOC 重大根拠を検知",
+                "what_happened": (
+                    f"direct critical={critical}, attack={attack_type or '-'}"
+                    if lang == "en"
+                    else f"direct critical={critical}、attack={attack_type or '-'}"
+                ),
+                "impact": (
+                    "A stronger security response may be required if this trend persists."
+                    if lang == "en"
+                    else "この傾向が続く場合、より強いセキュリティ対応が必要になる可能性があります。"
+                ),
+            }
+        )
+    elif warning > 0 or suspicion >= 60 or soc_status in {"elevated", "watch", "medium"}:
+        candidates.append(
+            {
+                "severity": "warning",
+                "source": "soc",
+                "title": "SOC warning signals detected" if lang == "en" else "SOC 警戒シグナルを検知",
+                "what_happened": (
+                    f"warning={warning}, suspicion={suspicion}, attack={attack_type or '-'}"
+                    if lang == "en"
+                    else f"warning={warning}、suspicion={suspicion}、attack={attack_type or '-'}"
+                ),
+                "impact": (
+                    "Escalation readiness should be maintained while evidence is confirmed."
+                    if lang == "en"
+                    else "根拠確定までエスカレーション準備を維持してください。"
+                ),
+            }
+        )
+
+    if internet_check == "FAIL" or signals:
+        noc_severity = "critical" if (internet_check == "FAIL" and critical_clients > 0) else "warning"
+        candidates.append(
+            {
+                "severity": noc_severity,
+                "source": "noc",
+                "title": "NOC path/service anomaly detected" if lang == "en" else "NOC 経路/サービス異常を検知",
+                "what_happened": (
+                    f"internet={internet_check or '-'}, signals={len(signals)}, affected_clients={affected_clients}"
+                    if lang == "en"
+                    else f"internet={internet_check or '-'}、signals={len(signals)}、affected_clients={affected_clients}"
+                ),
+                "impact": (
+                    "User connectivity can degrade quickly across impacted segments."
+                    if lang == "en"
+                    else "影響セグメントで利用者の接続性が急速に低下する可能性があります。"
+                ),
+            }
+        )
+
+    if off_services:
+        candidates.append(
+            {
+                "severity": "warning",
+                "source": "noc",
+                "title": "Core monitoring service is OFF" if lang == "en" else "コア監視サービスが OFF",
+                "what_happened": f"off_services={','.join(off_services)}",
+                "impact": (
+                    "Operator visibility is reduced until monitoring coverage is restored."
+                    if lang == "en"
+                    else "監視カバレッジが復旧するまで、運用可視性が低下します。"
+                ),
+            }
+        )
+
+    severity_rank = {"none": 0, "info": 1, "warning": 2, "critical": 3}
+    source_rank = {"soc": 0, "noc": 1, "runtime": 2}
+    selected = None
+    if candidates:
+        selected = sorted(
+            candidates,
+            key=lambda item: (
+                -severity_rank.get(str(item.get("severity") or "").lower(), 0),
+                source_rank.get(str(item.get("source") or ""), 9),
+            ),
+        )[0]
+
+    do_now = [str(item) for item in guidance.get("do_next", []) if str(item).strip()][:3]
+    dont_do = [str(item) for item in guidance.get("do_not_do", []) if str(item).strip()][:3]
+
+    if selected is None:
+        return {
+            "status": "none",
+            "severity": "none",
+            "source": "none",
+            "title": "No primary anomaly right now" if lang == "en" else "現在の主要異常はありません",
+            "what_happened": (
+                "No SOC/NOC anomaly has been selected as the current primary trigger."
+                if lang == "en"
+                else "SOC/NOC で主要トリガーとして選ぶべき異常は現在ありません。"
+            ),
+            "impact": (
+                "Keep the normal baseline visible and continue routine monitoring."
+                if lang == "en"
+                else "正常ベースラインを維持し、通常監視を継続してください。"
+            ),
+            "do_now": do_now,
+            "dont_do": dont_do,
+        }
+
+    return {
+        "status": "anomaly",
+        "severity": str(selected.get("severity") or "warning"),
+        "source": str(selected.get("source") or "noc"),
+        "title": str(selected.get("title") or ""),
+        "what_happened": str(selected.get("what_happened") or ""),
+        "impact": str(selected.get("impact") or ""),
+        "do_now": do_now,
+        "dont_do": dont_do,
     }
 
 
@@ -1036,6 +1391,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     noc_blast_radius = state.get("noc_blast_radius") if isinstance(state.get("noc_blast_radius"), dict) else {}
     noc_config_drift = state.get("noc_config_drift") if isinstance(state.get("noc_config_drift"), dict) else {}
     noc_incident_summary = state.get("noc_incident_summary") if isinstance(state.get("noc_incident_summary"), dict) else {}
+    client_identity_view = _client_identity_view_payload(state)
     soc_attack_candidates = (
         second_pass_soc.get("attack_candidates")
         if isinstance(second_pass_soc.get("attack_candidates"), list)
@@ -1084,6 +1440,14 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
         "gateway": str(state.get("gateway_ip") or ""),
         "service_health_summary": service_summary,
         "current_recommendation": str(state.get("recommendation") or advisory.get("recommendation") or ""),
+        "normal_assurance": _normal_assurance_payload(
+            state=state,
+            metrics=metrics,
+            service_summary=service_summary,
+            snapshot_age=snapshot_age,
+            ai_age=ai_age,
+            network_health=network_health,
+        ),
         "command_strip": {
             "current_mode": str(mode.get("current_mode") or "shield"),
             "current_risk": str(state.get("user_state") or ""),
@@ -1248,6 +1612,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
                 "inventory_mismatch_count": _as_int(noc_client_inventory.get("inventory_mismatch_count"), 0),
                 "stale_session_count": _as_int(noc_client_inventory.get("stale_session_count"), 0),
             },
+            "client_identity_view": client_identity_view,
             "client_impact": {
                 "scope": path_scope,
                 "segment_scope": str(state.get("up_if") or "unknown"),
@@ -1281,6 +1646,7 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
     selected_runbook_id = str(latest_ai.get("runbook_id") or noc_runbook_support.get("runbook_candidate_id") or "")
     suggested_runbook = _runbook_brief(selected_runbook_id, lang=lang)
     guidance = _dashboard_action_guidance(state, advisory, latest_ai, suggested_runbook, noc_runbook_support=noc_runbook_support)
+    primary_anomaly_card = _primary_anomaly_card_payload(state, advisory, guidance)
     second_pass_detail = state.get("second_pass") if isinstance(state.get("second_pass"), dict) else {}
     if not second_pass_detail and isinstance(advisory.get("second_pass"), dict):
         second_pass_detail = advisory.get("second_pass")
@@ -1354,6 +1720,7 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
             "escalation_hint": str(noc_runbook_support.get("escalation_hint") or ""),
             "ai_used": bool(noc_runbook_support.get("ai_used")),
         },
+        "primary_anomaly_card": primary_anomaly_card,
         "rejected_stronger_actions": stronger_actions[:4],
         "mio": {
             "answer": str(latest_ai.get("answer") or ""),

@@ -9,10 +9,12 @@ const CURRENT_PAGE = document.body?.dataset?.page || 'dashboard';
 let dashboardTimer = null;
 let currentAudience = localStorage.getItem(AUDIENCE_KEY) || 'professional';
 let latestState = {};
+let latestSummary = {};
 let latestMattermost = {};
 let lastRefreshWarning = '';
 let demoScenarioItems = [];
 let demoOverlayResult = null;
+let showNormalClients = false;
 
 function tr(key, fallback, vars = null) {
     const base = I18N[key] || fallback || key;
@@ -315,6 +317,10 @@ function bindStaticHandlers() {
     document.getElementById('portalAssistBtn')?.addEventListener('click', openPortalViewer);
     document.getElementById('containBtn')?.addEventListener('click', () => executeAction('contain'));
     document.getElementById('releaseBtn')?.addEventListener('click', () => executeAction('release'));
+    document.getElementById('clientIdentityToggle')?.addEventListener('click', () => {
+        showNormalClients = !showNormalClients;
+        updateClientIdentityView(latestSummary);
+    });
 
     document.querySelectorAll('.shortcut-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -586,6 +592,7 @@ async function refreshDashboard() {
     const demoOverlay = resultMap.demoOverlay?.data?.overlay || {};
 
     latestState = state || {};
+    latestSummary = summary || {};
     latestMattermost = mattermost || {};
     demoOverlayResult = demoOverlay && demoOverlay.active ? demoOverlay : null;
     setDemoOverlayVisualState(!!demoOverlayResult);
@@ -596,6 +603,9 @@ async function refreshDashboard() {
 
     try {
         updateHeader(state, mattermost);
+        updateNormalAssurance(summary);
+        updatePrimaryAnomalyCard(actions);
+        updateClientIdentityView(summary);
         updateCommandStrip(summary, health, failures);
         updateOperationalResourceGuard(health);
         updateSituationBoard(summary, state, health, mattermost);
@@ -975,6 +985,178 @@ function updateHeader(state, mattermost) {
     const mattermostUrl = mattermost.open_url || '/ops-comm';
     const mmLink = document.getElementById('openMattermostLink');
     if (mmLink) mmLink.href = mattermostUrl;
+}
+
+function updateNormalAssurance(summary) {
+    const panel = document.getElementById('normalAssurancePanel');
+    if (!panel) return;
+    const assurance = summary && typeof summary === 'object' && summary.normal_assurance && typeof summary.normal_assurance === 'object'
+        ? summary.normal_assurance
+        : {};
+    const gates = Array.isArray(assurance.gates) ? assurance.gates : [];
+    const failedGateIds = Array.isArray(assurance.failed_gates) ? assurance.failed_gates.map((item) => String(item)) : [];
+    const failedGateSet = new Set(failedGateIds);
+    const failedGates = gates.filter((gate) => !gate?.ok || failedGateSet.has(String(gate?.id || '')));
+    const status = String(assurance.status || '').toLowerCase();
+    const level = String(assurance.level || '').toLowerCase();
+    const statusLabel = status === 'normal'
+        ? tr('dashboard.normal_assurance_state_normal', 'NORMAL')
+        : (status === 'alert'
+            ? tr('dashboard.normal_assurance_state_alert', 'ALERT')
+            : (status === 'watch'
+                ? tr('dashboard.normal_assurance_state_watch', 'WATCH')
+                : tr('dashboard.status_idle', 'IDLE')));
+    updateElement('normalAssuranceState', statusLabel);
+
+    if (!gates.length) {
+        updateElement('normalAssuranceSummary', tr('dashboard.normal_assurance_waiting', 'Waiting for normal-assurance evaluation.'));
+        renderList('normalAssuranceFailedList', [tr('dashboard.normal_assurance_gate_waiting', 'Waiting for gate evaluation.')], (item) => item);
+        renderList('normalAssuranceGateList', [tr('dashboard.normal_assurance_gate_waiting', 'Waiting for gate evaluation.')], (item) => item);
+    } else if (!failedGates.length) {
+        const passed = Number(assurance.passed_count ?? gates.length);
+        const total = Number(assurance.gate_count ?? gates.length);
+        updateElement(
+            'normalAssuranceSummary',
+            tr('dashboard.normal_assurance_all_clear', 'All required gates are healthy ({passed}/{total}).', { passed, total }),
+        );
+        renderList('normalAssuranceFailedList', [tr('dashboard.normal_assurance_no_failed_gate', 'No failed gates.')], (item) => item);
+        renderList(
+            'normalAssuranceGateList',
+            gates.map((gate) => `OK | ${String(gate.label || gate.id || '-')}: ${String(gate.detail || '-')}`),
+            (item) => item,
+        );
+    } else {
+        const failedCount = failedGates.length;
+        const total = Number(assurance.gate_count ?? gates.length);
+        updateElement(
+            'normalAssuranceSummary',
+            tr('dashboard.normal_assurance_attention', '{failed} of {total} gates need attention.', { failed: failedCount, total }),
+        );
+        renderList(
+            'normalAssuranceFailedList',
+            failedGates.map((gate) => `${String(gate.label || gate.id || '-')}: ${String(gate.detail || '-')}`),
+            (item) => item,
+        );
+        renderList(
+            'normalAssuranceGateList',
+            gates.map((gate) => `${gate?.ok ? 'OK' : 'NG'} | ${String(gate?.label || gate?.id || '-')}: ${String(gate?.detail || '-')}`),
+            (item) => item,
+        );
+    }
+
+    panel.classList.remove('normal-assurance-safe', 'normal-assurance-caution', 'normal-assurance-danger');
+    if (level === 'safe') {
+        panel.classList.add('normal-assurance-safe');
+    } else if (level === 'danger') {
+        panel.classList.add('normal-assurance-danger');
+    } else if (level === 'caution') {
+        panel.classList.add('normal-assurance-caution');
+    }
+}
+
+function updatePrimaryAnomalyCard(actions) {
+    const panel = document.getElementById('primaryAnomalyPanel');
+    if (!panel) return;
+    const card = actions && typeof actions === 'object' && actions.primary_anomaly_card && typeof actions.primary_anomaly_card === 'object'
+        ? actions.primary_anomaly_card
+        : {};
+    const status = String(card.status || 'none').toLowerCase();
+    const severity = String(card.severity || 'none').toLowerCase();
+    const severityLabel = severity === 'critical'
+        ? tr('dashboard.primary_anomaly_severity_critical', 'CRITICAL')
+        : (severity === 'warning'
+            ? tr('dashboard.primary_anomaly_severity_warning', 'WARNING')
+            : (severity === 'info'
+                ? tr('dashboard.primary_anomaly_severity_info', 'INFO')
+                : tr('dashboard.primary_anomaly_severity_none', 'NONE')));
+    const tone = severity === 'critical'
+        ? 'status-danger'
+        : (severity === 'warning' ? 'status-caution' : (severity === 'info' ? 'status-safe' : 'status-neutral'));
+    const title = String(card.title || '').trim() || tr('dashboard.primary_anomaly_none_title', 'No primary anomaly right now');
+    const what = String(card.what_happened || '').trim() || tr('dashboard.primary_anomaly_none_what', 'No SOC/NOC anomaly has been selected as the current primary trigger.');
+    const impact = String(card.impact || '').trim() || tr('dashboard.primary_anomaly_none_impact', 'Keep the normal baseline visible and continue routine monitoring.');
+    const doNow = Array.isArray(card.do_now) ? card.do_now.filter(Boolean).slice(0, 3) : [];
+    const dontDo = Array.isArray(card.dont_do) ? card.dont_do.filter(Boolean).slice(0, 3) : [];
+
+    updateElement('primaryAnomalySeverity', severityLabel);
+    updateElement('primaryAnomalyHeading', title);
+    updateElement('primaryAnomalyWhat', what);
+    updateElement('primaryAnomalyImpact', impact);
+    renderList(
+        'primaryAnomalyDoNowList',
+        doNow.length ? doNow : [tr('dashboard.primary_anomaly_waiting', 'Waiting for anomaly synthesis.')],
+        (item) => item,
+    );
+    renderList(
+        'primaryAnomalyDontDoList',
+        dontDo.length ? dontDo : [tr('dashboard.primary_anomaly_waiting', 'Waiting for anomaly synthesis.')],
+        (item) => item,
+    );
+
+    const severityEl = document.getElementById('primaryAnomalySeverity');
+    if (severityEl) {
+        severityEl.className = `assistant-status ${tone}`;
+    }
+
+    panel.classList.remove('primary-anomaly-none', 'primary-anomaly-warning', 'primary-anomaly-critical');
+    if (status === 'anomaly' && severity === 'critical') {
+        panel.classList.add('primary-anomaly-critical');
+    } else if (status === 'anomaly' && severity === 'warning') {
+        panel.classList.add('primary-anomaly-warning');
+    } else {
+        panel.classList.add('primary-anomaly-none');
+    }
+}
+
+function updateClientIdentityView(summary) {
+    const view = summary && typeof summary === 'object'
+        ? (summary.noc_focus && typeof summary.noc_focus === 'object' ? summary.noc_focus.client_identity_view : null)
+        : null;
+    const items = view && Array.isArray(view.items) ? view.items : [];
+    const attentionItems = items.filter((item) => Boolean(item?.requires_attention));
+    const attentionCount = Number(view?.attention_count ?? attentionItems.length);
+    const normalCount = Number(view?.normal_count ?? Math.max(items.length - attentionItems.length, 0));
+    const rows = showNormalClients ? items : attentionItems;
+
+    const toggle = document.getElementById('clientIdentityToggle');
+    const summaryEl = document.getElementById('clientIdentitySummary');
+    if (summaryEl) {
+        summaryEl.textContent = tr(
+            'dashboard.client_identity_summary',
+            'Attention {attention} / Normal {normal}',
+            { attention: attentionCount, normal: normalCount },
+        );
+    }
+    if (toggle) {
+        toggle.textContent = showNormalClients
+            ? tr('dashboard.client_identity_toggle_attention_only', 'Show attention only')
+            : tr('dashboard.client_identity_toggle_show_normal', 'Show normal too');
+        toggle.disabled = !items.length || (normalCount <= 0 && !showNormalClients);
+    }
+
+    const stateLabel = (state) => {
+        const text = String(state || 'unknown');
+        if (text === 'normal') return tr('dashboard.client_identity_state_normal', 'NORMAL');
+        if (text === 'unauthorized') return tr('dashboard.client_identity_state_unauthorized', 'UNAUTHORIZED');
+        if (text === 'mismatch') return tr('dashboard.client_identity_state_mismatch', 'MISMATCH');
+        if (text === 'stale') return tr('dashboard.client_identity_state_stale', 'STALE');
+        if (text === 'missing') return tr('dashboard.client_identity_state_missing', 'MISSING');
+        return tr('dashboard.client_identity_state_unknown', 'UNKNOWN');
+    };
+
+    const fallback = items.length
+        ? tr('dashboard.client_identity_no_attention', 'No attention-required clients.')
+        : tr('dashboard.client_identity_empty', 'No client identity data.');
+    renderList(
+        'clientIdentityList',
+        rows.length ? rows : [fallback],
+        (item) => {
+            if (typeof item === 'string') return item;
+            const lastSeenRaw = String(item.last_seen || '').trim();
+            const lastSeen = lastSeenRaw ? formatHumanDateTime(lastSeenRaw) : '-';
+            return `${stateLabel(item.state)} | ${item.display_name || '-'} | ip=${item.ip || '-'} | mac=${item.masked_mac || '-'} | sot=${item.sot_status || '-'} | seg=${item.interface_or_segment || '-'} | last=${lastSeen}`;
+        },
+    );
 }
 
 function updateCommandStrip(summary, health, failures = []) {
