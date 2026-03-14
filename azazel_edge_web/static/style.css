@@ -529,6 +529,18 @@ body.demo-overlay-active #healthSummaryLine {
     gap: 14px;
 }
 
+.mode-layer-panel {
+    padding: 22px 24px 24px;
+    margin-bottom: 18px;
+    border-color: rgba(116, 212, 255, 0.26);
+}
+
+.mode-layer-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 14px;
+}
+
 .mission-row {
     padding: 22px 24px 24px;
     margin-bottom: 18px;
@@ -1189,6 +1201,10 @@ body.demo-overlay-active #healthSummaryLine {
     }
 
     .primary-anomaly-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .mode-layer-grid {
         grid-template-columns: 1fr;
     }
 

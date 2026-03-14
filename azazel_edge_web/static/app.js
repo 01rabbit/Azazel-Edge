@@ -7,7 +7,7 @@ const I18N = window.AZAZEL_I18N || {};
 const CURRENT_PAGE = document.body?.dataset?.page || 'dashboard';
 
 let dashboardTimer = null;
-let currentAudience = localStorage.getItem(AUDIENCE_KEY) || 'professional';
+let currentAudience = resolveInitialAudience();
 let latestState = {};
 let latestSummary = {};
 let latestMattermost = {};
@@ -22,6 +22,20 @@ function tr(key, fallback, vars = null) {
     return base.replace(/\{([a-zA-Z0-9_]+)\}/g, (_m, name) => {
         return Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : `{${name}}`;
     });
+}
+
+function normalizeAudience(value) {
+    const text = String(value || '').trim().toLowerCase();
+    if (['temporary', 'beginner', 'casual'].includes(text)) return 'temporary';
+    if (['professional', 'operator', 'pro', 'expert'].includes(text)) return 'professional';
+    return '';
+}
+
+function resolveInitialAudience() {
+    const url = new URL(window.location.href);
+    const queryAudience = normalizeAudience(url.searchParams.get('audience'));
+    const savedAudience = normalizeAudience(localStorage.getItem(AUDIENCE_KEY));
+    return queryAudience || savedAudience || 'temporary';
 }
 
 function authHeaders() {
@@ -392,7 +406,7 @@ function updateTemporaryOpsCommLink(symptom = 'wifi') {
 }
 
 function setAudience(audience) {
-    currentAudience = audience === 'temporary' ? 'temporary' : 'professional';
+    currentAudience = normalizeAudience(audience) || 'temporary';
     localStorage.setItem(AUDIENCE_KEY, currentAudience);
     document.body.dataset.audience = currentAudience;
     document.getElementById('audienceProfessional')?.classList.toggle('active', currentAudience === 'professional');
@@ -400,11 +414,43 @@ function setAudience(audience) {
     updateElement('audienceSummary', currentAudience === 'temporary'
         ? tr('dashboard.temporary_summary', 'Temporary mode prioritizes simpler wording, safe next steps, and user-facing guidance.')
         : tr('dashboard.professional_summary', 'Professional mode shows deeper evidence, review status, and control context.'));
+    updateAudienceModePanel();
     if (currentAudience === 'temporary') {
         applyTemporaryFlow('wifi', false);
     }
     updateTemporaryOpsCommLink('wifi');
     applyAudienceControlPolicy();
+}
+
+function updateAudienceModePanel() {
+    const beginner = currentAudience === 'temporary';
+    updateElement(
+        'modeLayerState',
+        beginner
+            ? tr('dashboard.mode_layer_beginner', 'BEGINNER')
+            : tr('dashboard.mode_layer_professional', 'PROFESSIONAL'),
+    );
+    updateElement(
+        'modeLayerSummary',
+        beginner
+            ? tr('dashboard.mode_layer_beginner_summary', 'Beginner mode keeps wording plain and focuses on immediate safe action.')
+            : tr('dashboard.mode_layer_professional_summary', 'Professional mode expands evidence and operator context for deeper decisions.'),
+    );
+    renderList(
+        'modeLayerVisibleList',
+        beginner
+            ? [
+                tr('dashboard.mode_layer_beginner_item_1', 'Normal/abnormal status and primary anomaly are shown first.'),
+                tr('dashboard.mode_layer_beginner_item_2', 'Client identity list defaults to attention-only items.'),
+                tr('dashboard.mode_layer_beginner_item_3', 'Action wording is simplified for first-response operators.'),
+            ]
+            : [
+                tr('dashboard.mode_layer_professional_item_1', 'SOC/NOC split evidence and detailed telemetry remain visible.'),
+                tr('dashboard.mode_layer_professional_item_2', 'History and audit timelines are fully available.'),
+                tr('dashboard.mode_layer_professional_item_3', 'Operator controls keep full context and traceability.'),
+            ],
+        (item) => item,
+    );
 }
 
 function applyAudienceControlPolicy() {
