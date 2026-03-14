@@ -550,6 +550,18 @@ body.demo-overlay-active #healthSummaryLine {
     padding: 14px;
 }
 
+.split-card .fact-item span {
+    max-width: 52%;
+}
+
+.split-card .fact-item strong {
+    max-width: 48%;
+}
+
+.split-card .action-list li {
+    overflow-wrap: anywhere;
+}
+
 .noc-path-card {
     grid-column: 1 / -1;
 }
@@ -669,12 +681,6 @@ body.demo-overlay-active #healthSummaryLine {
     gap: 12px;
 }
 
-.situation-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 16px; /* ギャップを増やす */
-}
-
 .freshness-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -719,12 +725,6 @@ body.demo-overlay-active #healthSummaryLine {
 }
 
 .board-main {
-
-.action-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px; /* ギャップを増やす */
-}
     display: grid;
     gap: 18px;
 }
@@ -772,42 +772,6 @@ body.demo-overlay-active #healthSummaryLine {
     background: var(--bg-panel-strong);
     border: 1px solid var(--line-soft);
     box-shadow: var(--shadow-sm);
-}
-
-.fact-list {
-    margin-top: 12px;
-}
-
-.fact-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 6px 0;
-    border-bottom: 1px solid var(--line-soft);
-}
-
-.fact-item:last-child {
-    border-bottom: none;
-}
-
-.fact-item span {
-    color: var(--text-dim);
-    font-size: 0.9rem;
-}
-
-.fact-item strong {
-    color: var(--text-main);
-    font-weight: 500;
-}
-
-.action-list {
-    margin-top: 12px;
-    padding-left: 20px; /* インデントを増やす */
-}
-
-.action-list li {
-    margin-bottom: 8px; /* マージンを増やす */
-    line-height: 1.5;
 }
 
 .posture-card {
