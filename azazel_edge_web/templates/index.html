@@ -6,7 +6,7 @@
     <title>{{ tr('dashboard.title', 'Azazel-Edge Command Dashboard') }}</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body data-audience="professional" data-page="dashboard">
+<body data-audience="temporary" data-page="dashboard">
     <header class="topbar">
         <div class="brand-block">
             <div class="brand-kicker">Azazel-Edge</div>
@@ -19,8 +19,8 @@
                 <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
             </div>
             <div class="audience-toggle" role="tablist" aria-label="Audience Mode">
-                <button id="audienceProfessional" class="audience-btn active" data-audience="professional">{{ tr('dashboard.professional', 'Professional') }}</button>
-                <button id="audienceTemporary" class="audience-btn" data-audience="temporary">{{ tr('dashboard.temporary', 'Temporary') }}</button>
+                <button id="audienceProfessional" class="audience-btn" data-audience="professional">{{ tr('dashboard.professional', 'Professional') }}</button>
+                <button id="audienceTemporary" class="audience-btn active" data-audience="temporary">{{ tr('dashboard.temporary', 'Temporary') }}</button>
             </div>
             <div class="topbar-links">
                 <a id="askMioLink" class="topbar-link" href="#assistantPanel">{{ tr('dashboard.ask_mio', 'Ask M.I.O.') }}</a>
@@ -108,6 +108,28 @@
                     <div class="card-kicker">{{ tr('dashboard.primary_anomaly_dont_do', 'Do Not Do') }}</div>
                     <ul class="action-list" id="primaryAnomalyDontDoList">
                         <li>{{ tr('dashboard.primary_anomaly_waiting', 'Waiting for anomaly synthesis.') }}</li>
+                    </ul>
+                </article>
+            </div>
+        </section>
+        <section class="panel mode-layer-panel">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('dashboard.mode_layer', 'Mode Layer') }}</div>
+                    <h2>{{ tr('dashboard.mode_layer_title', 'Beginner first, professional depth on demand') }}</h2>
+                </div>
+                <div class="panel-note">{{ tr('dashboard.mode_layer_note', 'The same dashboard has two display layers so operators can switch between plain first-response and deep evidence review.') }}</div>
+            </div>
+            <div class="mode-layer-grid">
+                <article class="mission-card mission-card-primary">
+                    <div class="card-kicker">{{ tr('dashboard.mode_layer_current', 'Current Layer') }}</div>
+                    <h3 id="modeLayerState">{{ tr('dashboard.mode_layer_beginner', 'BEGINNER') }}</h3>
+                    <p class="card-summary" id="modeLayerSummary">{{ tr('dashboard.mode_layer_beginner_summary', 'Beginner mode keeps wording plain and focuses on immediate safe action.') }}</p>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">{{ tr('dashboard.mode_layer_visible', 'What is emphasized') }}</div>
+                    <ul class="action-list" id="modeLayerVisibleList">
+                        <li>{{ tr('dashboard.mode_layer_beginner_item_1', 'Normal/abnormal status and primary anomaly are shown first.') }}</li>
                     </ul>
                 </article>
             </div>
@@ -357,7 +379,7 @@
                     </div>
                 </section>
 
-                <section class="panel split-board">
+                <section class="panel split-board pro-only">
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.split_board', 'SOC / NOC Split Board') }}</div>
@@ -505,7 +527,7 @@
                             <h2>{{ tr('dashboard.next_actions_controls', 'Next actions and operator controls') }}</h2>
                         </div>
                         <div class="panel-heading-actions">
-                            <div class="panel-note" id="audienceSummary">Professional mode shows deeper evidence and approval context</div>
+                            <div class="panel-note" id="audienceSummary">{{ tr('dashboard.temporary_summary', 'Temporary mode prioritizes simpler wording, safe next steps, and user-facing guidance.') }}</div>
                             <button type="button" class="context-ask-btn pro-only" data-question="{{ tr('dashboard.question_action_board_summary', 'Summarize the current action board and explain what to do now and what to avoid.') }}">{{ tr('dashboard.ask_about_this', 'Ask about this') }}</button>
                         </div>
                     </div>
@@ -693,7 +715,7 @@
             </aside>
         </div>
 
-        <section class="panel evidence-board evidence-board-lowered">
+        <section class="panel evidence-board evidence-board-lowered pro-only">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.evidence_timeline', 'Evidence & Timeline') }}</div>
