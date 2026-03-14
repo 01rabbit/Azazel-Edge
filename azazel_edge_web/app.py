@@ -28,10 +28,11 @@ import subprocess
 import hashlib
 import queue
 import threading
+from functools import wraps
 from collections import deque
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, Iterator, Tuple, List
+from typing import Dict, Any, Optional, Iterator, Tuple, List, Callable
 from urllib.request import Request, urlopen
 from urllib.parse import urlparse, quote
 
@@ -538,8 +539,11 @@ def _stream_ntfy_to_queue(out_q: queue.Queue, stop_event: threading.Event) -> No
 
 def load_token() -> Optional[str]:
     """Web UI 認証トークンをロード"""
-    if TOKEN_FILE.exists():
-        return TOKEN_FILE.read_text().strip()
+    try:
+        if TOKEN_FILE.exists():
+            return TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
     return None
 
 
@@ -1667,6 +1671,29 @@ def verify_token() -> bool:
         or request.args.get('token')
     )
     return req_token == token
+
+
+def _unauthorized_response(*, ok_payload: Optional[bool] = False, status_code: int = 403) -> tuple[Response, int]:
+    if ok_payload is None:
+        payload: Dict[str, Any] = {"error": "Unauthorized"}
+    else:
+        payload = {"ok": bool(ok_payload), "error": "Unauthorized"}
+    return jsonify(payload), int(status_code)
+
+
+def require_token(*, ok_payload: Optional[bool] = False, status_code: int = 403) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Endpoint decorator that centralizes token verification responses."""
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(func)
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            if not verify_token():
+                return _unauthorized_response(ok_payload=ok_payload, status_code=status_code)
+            return func(*args, **kwargs)
+
+        return wrapped
+
+    return decorator
 
 
 def _review_context_from_request(body: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -2913,11 +2940,9 @@ def ops_comm():
 
 
 @app.route("/api/state")
+@require_token(ok_payload=None)
 def api_state():
     """GET /api/state - Return current state.json"""
-    if not verify_token():
-        return jsonify({"error": "Unauthorized"}), 403
-    
     state = read_state()
     # Add local monitoring status
     state["monitoring"] = get_monitoring_state()
@@ -2929,10 +2954,9 @@ def api_state():
 
 
 @app.route("/api/state/stream")
+@require_token(ok_payload=None)
 def api_state_stream():
     """GET /api/state/stream - SSE stream for control-plane snapshot updates."""
-    if not verify_token():
-        return jsonify({"error": "Unauthorized"}), 403
 
     headers = {
         "Cache-Control": "no-cache",
@@ -2967,19 +2991,16 @@ def api_state_stream():
 
 
 @app.route("/api/portal-viewer")
+@require_token(ok_payload=None)
 def api_portal_viewer():
     """GET /api/portal-viewer - Return portal viewer status and URL."""
-    if not verify_token():
-        return jsonify({"error": "Unauthorized"}), 403
     return jsonify(get_portal_viewer_state())
 
 
 @app.route("/api/portal-viewer/open", methods=["POST"])
+@require_token()
 def api_portal_viewer_open():
     """POST /api/portal-viewer/open - Ensure noVNC is up then return URL."""
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
-
     request_body = request.get_json(silent=True) or {}
     timeout_sec = request_body.get("timeout_sec", 15)
     start_url = _normalize_http_url(request_body.get("start_url", ""))
@@ -3027,21 +3048,18 @@ def api_portal_viewer_open():
 
 
 @app.route("/api/mode", methods=["GET"])
+@require_token()
 def api_mode_get():
     """GET /api/mode - Return current mode metadata."""
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     payload = get_mode_state()
     code = 200 if payload.get("ok") else 500
     return jsonify(payload), code
 
 
 @app.route("/api/mode", methods=["POST"])
+@require_token()
 def api_mode_set():
     """POST /api/mode - Switch mode via control daemon."""
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
-
     body = request.get_json(silent=True) or {}
     target_mode = str(body.get("mode", "")).strip().lower()
     if target_mode not in {"portal", "shield", "scapegoat"}:
@@ -3108,11 +3126,9 @@ def api_webui_ca_download():
 
 
 @app.route("/api/events/stream")
+@require_token(ok_payload=None)
 def api_events_stream():
     """GET /api/events/stream - SSE bridge for ntfy topic events."""
-    if not verify_token():
-        return jsonify({"error": "Unauthorized"}), 403
-
     def generate() -> Iterator[str]:
         out_q: "queue.Queue[Dict[str, Any]]" = queue.Queue(maxsize=256)
         stop_event = threading.Event()
@@ -3162,9 +3178,8 @@ def api_events_stream():
 
 
 @app.route("/api/mattermost/status", methods=["GET"])
+@require_token()
 def api_mattermost_status():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     reachable, ping_payload = _mattermost_ping()
     return jsonify(
         {
@@ -3183,9 +3198,8 @@ def api_mattermost_status():
 
 
 @app.route("/api/ai/ask", methods=["POST"])
+@require_token()
 def api_ai_ask():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     body = request.get_json(silent=True) or {}
     question = str(body.get("question") or "").strip()
     sender = str(body.get("sender") or "M.I.O. Console").strip() or "M.I.O. Console"
@@ -3207,9 +3221,8 @@ def api_ai_ask():
 
 
 @app.route("/api/ai/capabilities", methods=["GET"])
+@require_token()
 def api_ai_capabilities():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     return jsonify(
         {
             "ok": True,
@@ -3248,9 +3261,8 @@ def api_ai_capabilities():
 
 
 @app.route("/api/triage/intents", methods=["GET"])
+@require_token()
 def api_triage_intents():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     if triage_list_flows is None:
         payload, code = _triage_unavailable_payload()
         return jsonify(payload), code
@@ -3268,9 +3280,8 @@ def api_triage_intents():
 
 
 @app.route("/api/triage/classify", methods=["POST"])
+@require_token()
 def api_triage_classify():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     if classify_intent_candidates is None:
         payload, code = _triage_unavailable_payload()
         return jsonify(payload), code
@@ -3284,9 +3295,8 @@ def api_triage_classify():
 
 
 @app.route("/api/triage/start", methods=["POST"])
+@require_token()
 def api_triage_start():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     if _TRIAGE_ENGINE is None:
         payload, code = _triage_unavailable_payload()
         return jsonify(payload), code
@@ -3301,9 +3311,8 @@ def api_triage_start():
 
 
 @app.route("/api/triage/answer", methods=["POST"])
+@require_token()
 def api_triage_answer():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     if _TRIAGE_ENGINE is None:
         payload, code = _triage_unavailable_payload()
         return jsonify(payload), code
@@ -3324,9 +3333,8 @@ def api_triage_answer():
 
 
 @app.route("/api/triage/session/<session_id>", methods=["GET"])
+@require_token()
 def api_triage_session(session_id: str):
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     if _TRIAGE_ENGINE is None:
         payload, code = _triage_unavailable_payload()
         return jsonify(payload), code
@@ -3341,9 +3349,8 @@ def api_triage_session(session_id: str):
 
 
 @app.route("/api/triage/audit", methods=["GET"])
+@require_token()
 def api_triage_audit():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     limit = min(max(_as_int(request.args.get("limit"), 20), 1), 100)
     rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG, TRIAGE_AUDIT_FALLBACK_LOG], limit=limit)
     items = [_normalize_triage_audit_event(item) for item in rows[-limit:]]
@@ -3351,25 +3358,22 @@ def api_triage_audit():
 
 
 @app.route("/api/demo/scenarios", methods=["GET"])
+@require_token()
 def api_demo_scenarios():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     payload, code = _run_demo_runner("list")
     return jsonify(payload), code
 
 
 @app.route("/api/demo/overlay", methods=["GET"])
+@require_token()
 def api_demo_overlay():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     payload = read_demo_overlay()
     return jsonify({"ok": True, "overlay": payload, "active": bool(payload.get("active"))}), 200
 
 
 @app.route("/api/demo/capabilities", methods=["GET"])
+@require_token()
 def api_demo_capabilities():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     try:
         from azazel_edge.demo import DemoScenarioRunner
     except Exception as exc:
@@ -3387,9 +3391,8 @@ def api_demo_capabilities():
 
 
 @app.route("/api/demo/explanation/latest", methods=["GET"])
+@require_token()
 def api_demo_explanation_latest():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     payload = read_demo_overlay()
     if not payload.get("active"):
         return jsonify({"ok": False, "error": "no_active_demo_overlay"}), 404
@@ -3408,9 +3411,8 @@ def api_demo_explanation_latest():
 
 
 @app.route("/api/demo/overlay/clear", methods=["POST"])
+@require_token()
 def api_demo_overlay_clear():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     clear_demo_overlay()
     purge_demo_artifacts()
     _trigger_demo_clear_side_effects()
@@ -3418,9 +3420,8 @@ def api_demo_overlay_clear():
 
 
 @app.route("/api/demo/run/<scenario_id>", methods=["POST"])
+@require_token()
 def api_demo_run(scenario_id: str):
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     scenario = str(scenario_id or "").strip()
     if not scenario:
         return jsonify({"ok": False, "error": "scenario_id is required"}), 400
@@ -3433,9 +3434,8 @@ def api_demo_run(scenario_id: str):
 
 
 @app.route("/api/dashboard/summary", methods=["GET"])
+@require_token()
 def api_dashboard_summary():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     state = read_state()
     metrics = _read_json_file(AI_METRICS_PATH)
     advisory = _read_json_file(AI_ADVISORY_PATH)
@@ -3443,9 +3443,8 @@ def api_dashboard_summary():
 
 
 @app.route("/api/dashboard/actions", methods=["GET"])
+@require_token()
 def api_dashboard_actions():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     state = read_state()
     advisory = _read_json_file(AI_ADVISORY_PATH)
     llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
@@ -3453,9 +3452,8 @@ def api_dashboard_actions():
 
 
 @app.route("/api/dashboard/evidence", methods=["GET"])
+@require_token()
 def api_dashboard_evidence():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     state = read_state()
     advisory = _read_json_file(AI_ADVISORY_PATH)
     alert_rows = _tail_jsonl(AI_EVENT_LOG, limit=20)
@@ -3466,9 +3464,8 @@ def api_dashboard_evidence():
 
 
 @app.route("/api/dashboard/health", methods=["GET"])
+@require_token()
 def api_dashboard_health():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     state = read_state()
     metrics = _read_json_file(AI_METRICS_PATH)
     llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
@@ -3477,18 +3474,16 @@ def api_dashboard_health():
 
 
 @app.route("/api/runbooks", methods=["GET"])
+@require_token()
 def api_runbooks_list():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     if runbook_list is None:
         return jsonify({"ok": False, "error": "runbook_registry_unavailable"}), 500
     return jsonify({"ok": True, "items": runbook_list(lang=_request_lang())}), 200
 
 
 @app.route("/api/runbooks/<runbook_id>", methods=["GET"])
+@require_token()
 def api_runbooks_get(runbook_id: str):
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     if runbook_get is None:
         return jsonify({"ok": False, "error": "runbook_registry_unavailable"}), 500
     try:
@@ -3498,9 +3493,8 @@ def api_runbooks_get(runbook_id: str):
 
 
 @app.route("/api/runbooks/<runbook_id>/review", methods=["GET"])
+@require_token()
 def api_runbooks_review(runbook_id: str):
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     if runbook_review_id is None:
         return jsonify({"ok": False, "error": "runbook_review_unavailable"}), 500
     context: Dict[str, Any] = {}
@@ -3523,9 +3517,8 @@ def api_runbooks_review(runbook_id: str):
 
 
 @app.route("/api/runbooks/execute", methods=["POST"])
+@require_token()
 def api_runbooks_execute():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     body = request.get_json(silent=True) or {}
     dry_run = bool(body.get("dry_run", True))
     body["action"] = "preview" if dry_run else "execute"
@@ -3535,9 +3528,8 @@ def api_runbooks_execute():
 
 
 @app.route("/api/runbooks/propose", methods=["POST"])
+@require_token()
 def api_runbooks_propose():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     if runbook_propose is None:
         return jsonify({"ok": False, "error": "runbook_review_unavailable"}), 500
     body = request.get_json(silent=True) or {}
@@ -3558,18 +3550,16 @@ def api_runbooks_propose():
 
 
 @app.route("/api/runbooks/act", methods=["POST"])
+@require_token()
 def api_runbooks_act():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     body = request.get_json(silent=True) or {}
     result, code = _run_runbook_action(body)
     return jsonify(result), code
 
 
 @app.route("/api/mattermost/message", methods=["POST"])
+@require_token()
 def api_mattermost_message():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     body = request.get_json(silent=True) or {}
     message = str(body.get("message") or "").strip()
     sender = str(body.get("sender") or "M.I.O. Console").strip() or "M.I.O. Console"
@@ -3650,9 +3640,8 @@ def api_mattermost_command():
 
 
 @app.route("/api/mattermost/messages", methods=["GET"])
+@require_token()
 def api_mattermost_messages():
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
     limit = request.args.get("limit", MATTERMOST_FETCH_LIMIT)
     try:
         payload = _mattermost_fetch_messages(int(limit))
@@ -3662,11 +3651,10 @@ def api_mattermost_messages():
 
 
 @app.route("/api/action", methods=["POST"])
+@require_token(ok_payload=None)
 def api_action_new():
     """POST /api/action - Execute control action (AI Coding Spec v1 format)"""
-    if not verify_token():
-        return jsonify({"error": "Unauthorized"}), 403
-    
+
     data = request.json
     if not data or 'action' not in data:
         return jsonify({
@@ -3691,11 +3679,10 @@ def api_action_new():
 
 
 @app.route("/api/action/<action>", methods=["POST"])
+@require_token()
 def api_action(action: str):
     """POST /api/action/<action> - Execute control action (legacy format)"""
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
-    
+
     # Validate action
     if action not in ALLOWED_ACTIONS:
         return jsonify({
@@ -3726,11 +3713,10 @@ def api_wifi_scan():
 
 
 @app.route("/api/wifi/connect", methods=["POST"])
+@require_token(status_code=401)
 def api_wifi_connect():
     """POST /api/wifi/connect - Connect to Wi-Fi AP"""
-    if not verify_token():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 401
-    
+
     data = request.json
     if not data:
         return jsonify({"ok": False, "error": "Missing request body"}), 400

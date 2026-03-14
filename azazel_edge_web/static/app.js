@@ -122,13 +122,13 @@ function updateDemoModeBanner(result) {
 }
 
 const shortcutQuestions = {
-    wifi: CURRENT_LANG === 'ja' ? 'Wi-Fi に繋がらない利用者へどう案内するか' : 'How should I guide a user who cannot connect to Wi-Fi?',
-    reconnect: CURRENT_LANG === 'ja' ? '再接続できない利用者へどう案内するか' : 'How should I guide a user who cannot reconnect?',
-    onboarding: CURRENT_LANG === 'ja' ? '初回接続の利用者へどう案内するか' : 'How should I guide a first-time onboarding user?',
-    dns: CURRENT_LANG === 'ja' ? 'DNS が引けない時に何を確認するか' : 'What should I verify when DNS lookup fails?',
-    route: CURRENT_LANG === 'ja' ? 'gateway と uplink の異常時に何を確認するか' : 'What should I verify when the gateway or uplink looks unhealthy?',
-    service: CURRENT_LANG === 'ja' ? 'service の異常時に何を確認するか' : 'What should I verify when a service appears unhealthy?',
-    portal: CURRENT_LANG === 'ja' ? 'ポータルが表示されない利用者へどう案内するか' : 'How should I guide a user when the portal does not appear?',
+    wifi: tr('dashboard.question_wifi_trouble', 'How should I guide a user who cannot connect to Wi-Fi?'),
+    reconnect: tr('dashboard.question_reconnect', 'How should I guide a user who cannot reconnect?'),
+    onboarding: tr('dashboard.question_onboarding', 'How should I guide a first-time onboarding user?'),
+    dns: tr('dashboard.question_dns_failure', 'What should I verify when DNS lookup fails?'),
+    uplink: tr('dashboard.question_gateway_uplink', 'What should I verify when the gateway or uplink looks unhealthy?'),
+    service: tr('dashboard.question_service_status', 'What should I verify when a service appears unhealthy?'),
+    portal: tr('dashboard.question_portal', 'How should I guide a user when the portal does not appear?'),
 };
 
 const triageIntentBySymptom = {
@@ -1060,7 +1060,16 @@ function updateSplitBoard(summary, actions) {
     updateElement('socThreatLevel', String(soc.threat_level || 'quiet').toUpperCase());
     updateElement(
         'socThreatSummary',
-        `${attackType} | src=${soc.top_source || '-'} | dst=${soc.top_destination || '-'} | triage=${String(triage.status || 'idle')}`,
+        tr(
+            'dashboard.soc_threat_summary_line',
+            '{attack_type} | src={source} | dst={destination} | triage={triage}',
+            {
+                attack_type: attackType,
+                source: soc.top_source || '-',
+                destination: soc.top_destination || '-',
+                triage: String(triage.status || 'idle'),
+            },
+        ),
     );
     updateElement('socAttackType', attackType);
     updateElement('socTopSource', soc.top_source || '-');
@@ -1100,10 +1109,18 @@ function updateSplitBoard(summary, actions) {
     renderList(
         'socTriageQueueList',
         [
-            ...triageNow.slice(0, 4).map((item) => `now: ${item.id || '-'} (${item.score || 0})`),
-            ...triageWatch.slice(0, 3).map((item) => `watch: ${item.id || '-'} (${item.score || 0})`),
-            ...triageBacklog.slice(0, 2).map((item) => `backlog: ${item.id || '-'} (${item.score || 0})`),
-            ...((Array.isArray(triage.top_priority_ids) ? triage.top_priority_ids : []).slice(0, 3).map((id) => `priority-id: ${id}`)),
+            ...triageNow.slice(0, 4).map((item) =>
+                `${tr('dashboard.triage_now_prefix', 'now')}: ${item.id || '-'} (${item.score || 0})`
+            ),
+            ...triageWatch.slice(0, 3).map((item) =>
+                `${tr('dashboard.triage_watch_prefix', 'watch')}: ${item.id || '-'} (${item.score || 0})`
+            ),
+            ...triageBacklog.slice(0, 2).map((item) =>
+                `${tr('dashboard.triage_backlog_prefix', 'backlog')}: ${item.id || '-'} (${item.score || 0})`
+            ),
+            ...((Array.isArray(triage.top_priority_ids) ? triage.top_priority_ids : []).slice(0, 3).map((id) =>
+                `${tr('dashboard.priority_id_prefix', 'priority-id')}: ${id}`
+            )),
         ],
         (item) => item,
     );
@@ -1362,11 +1379,11 @@ async function askMioWithOptions(question, options = {}) {
         }
         updateElement('mioCurrentAnswer', result.answer || '-');
         updateElement('mioUserGuidance', result.user_message || '-');
-        updateElement('mioReview', result.runbook_review?.final_status || 'No review data');
+        updateElement('mioReview', result.runbook_review?.final_status || tr('dashboard.no_review_data', 'No review data'));
         renderList('mioRationaleList', result.rationale || [], (item) => item);
         const askedAt = new Date().toISOString();
         updateElement('mioLastAsk', `${question}${askedAt ? ` | ${formatHumanDateTime(askedAt)}` : ''} | dashboard`);
-        updateElement('mioRunbookSummary', result.runbook_id || 'No runbook selected.');
+        updateElement('mioRunbookSummary', result.runbook_id || tr('dashboard.no_runbook_selected', 'No runbook selected.'));
         const opsCommLink = document.getElementById('assistantOpsCommLink');
         if (opsCommLink) opsCommLink.href = result.handoff?.ops_comm || '/ops-comm';
         const mattermostLink = document.getElementById('assistantMattermostLink');
@@ -1510,7 +1527,11 @@ function updateReviewReadiness(healthEntry, demoCapabilitiesEntry, demoOverlay) 
     updateElement('reviewLiveTelemetry', hasBoundaryData ? (execution.live_telemetry ? 'required' : 'not-required') : 'unknown');
     updateElement('reviewDemoState', overlayActive ? 'overlay-active' : 'overlay-inactive');
     updateElement('reviewBoundaryCounts', hasBoundaryData ? `${implemented.length} / ${experimental.length}` : 'unknown');
-    renderList('reviewImplementedList', hasBoundaryData && implemented.length ? implemented : ['No data'], (item) => item);
+    renderList(
+        'reviewImplementedList',
+        hasBoundaryData && implemented.length ? implemented : [tr('dashboard.no_data', 'No data')],
+        (item) => item,
+    );
     renderList(
         'reviewExperimentalList',
         hasBoundaryData
@@ -1518,12 +1539,12 @@ function updateReviewReadiness(healthEntry, demoCapabilitiesEntry, demoOverlay) 
                 ...experimental.map((item) => `experimental: ${item}`),
                 ...demoOnly.map((item) => `demo-only: ${item}`),
             ]
-            : ['No data'],
+            : [tr('dashboard.no_data', 'No data')],
         (item) => item,
     );
     renderList(
         'reviewNonGoalsList',
-        hasBoundaryData && nonGoals.length ? nonGoals.map((item) => `non-goal: ${item}`) : ['No data'],
+        hasBoundaryData && nonGoals.length ? nonGoals.map((item) => `non-goal: ${item}`) : [tr('dashboard.no_data', 'No data')],
         (item) => item,
     );
 
@@ -1535,12 +1556,30 @@ function updateReviewReadiness(healthEntry, demoCapabilitiesEntry, demoOverlay) 
     }
     if (capabilityBtn) capabilityBtn.disabled = !hasBoundaryData;
     if (explanationBtn) explanationBtn.disabled = !overlayActive;
-    updateElement('reviewSummary', 'Deterministic edge pipeline, bounded controls, local-first operation, auditable outputs.');
+    updateElement(
+        'reviewSummary',
+        tr(
+            'dashboard.review_summary_default',
+            'Deterministic edge pipeline, bounded controls, local-first operation, auditable outputs.',
+        ),
+    );
     updateElement(
         'reviewSummaryDetail',
         !hasBoundaryData || !hasHealthData
-            ? 'Reviewer-proof summary is incomplete because capability or health data is unavailable.'
-            : `Execution=${execution.mode || 'deterministic_replay'} | local_only=${execution.local_only ? 'yes' : 'no'} | demo_state=${overlayActive ? 'overlay-active' : 'overlay-inactive'} | bounded=${healthy ? 'yes' : 'check'}`,
+            ? tr(
+                'dashboard.review_summary_unavailable',
+                'Reviewer-proof summary is incomplete because capability or health data is unavailable.',
+            )
+            : tr(
+                'dashboard.review_summary_runtime',
+                'Execution={execution} | local_only={local_only} | demo_state={demo_state} | bounded={bounded}',
+                {
+                    execution: execution.mode || 'deterministic_replay',
+                    local_only: execution.local_only ? 'yes' : 'no',
+                    demo_state: overlayActive ? 'overlay-active' : 'overlay-inactive',
+                    bounded: healthy ? 'yes' : 'check',
+                },
+            ),
     );
 }
 

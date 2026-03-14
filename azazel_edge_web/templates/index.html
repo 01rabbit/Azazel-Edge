@@ -304,59 +304,59 @@
                 <section class="panel split-board">
                     <div class="panel-heading">
                         <div>
-                            <div class="panel-kicker">SOC / NOC Split Board</div>
-                            <h2>Threat evidence and operational impact</h2>
+                            <div class="panel-kicker">{{ tr('dashboard.split_board', 'SOC / NOC Split Board') }}</div>
+                            <h2>{{ tr('dashboard.threat_operational_impact', 'Threat evidence and operational impact') }}</h2>
                         </div>
-                        <div class="panel-note">Separate the threat case from the path and service case before you decide on stronger control.</div>
+                        <div class="panel-note">{{ tr('dashboard.threat_impact', 'Separate the threat case from the path and service case before you decide on stronger control.') }}</div>
                     </div>
                     <div class="split-grid">
                         <article class="split-card soc-split-card">
                             <div class="split-card-header">
                                 <div>
-                                    <div class="card-kicker">Threat Evidence Summary</div>
+                                    <div class="card-kicker">{{ tr('dashboard.threat_summary', 'Threat Evidence Summary') }}</div>
                                     <h3 id="socThreatLevel">quiet</h3>
                                 </div>
                                 <button type="button" class="context-ask-btn pro-only" data-question="{{ tr('dashboard.question_threat_evidence_summary', 'Summarize the current threat evidence and explain why a stronger action is not selected.') }}">{{ tr('dashboard.ask_about_this', 'Ask about this') }}</button>
                             </div>
                             <p class="card-summary" id="socThreatSummary">{{ tr('dashboard.no_threat_summary', 'No active threat evidence summary.') }}</p>
                             <div class="fact-list compact-list">
-                                <div class="fact-item"><span>Attack Type</span><strong id="socAttackType">-</strong></div>
-                                <div class="fact-item"><span>Source</span><strong id="socTopSource">-</strong></div>
-                                <div class="fact-item"><span>Destination</span><strong id="socTopDestination">-</strong></div>
-                                <div class="fact-item"><span>SID / Severity</span><strong id="socTopSignature">-</strong></div>
-                                <div class="fact-item"><span>Critical / Warning</span><strong id="socAlertCounts">0 / 0</strong></div>
-                                <div class="fact-item"><span>Confidence</span><strong id="socConfidenceSignal">-</strong></div>
+                                <div class="fact-item"><span>{{ tr('dashboard.attack_type_label', 'Attack Type') }}</span><strong id="socAttackType">-</strong></div>
+                                <div class="fact-item"><span>{{ tr('dashboard.source_label', 'Source') }}</span><strong id="socTopSource">-</strong></div>
+                                <div class="fact-item"><span>{{ tr('dashboard.destination_label', 'Destination') }}</span><strong id="socTopDestination">-</strong></div>
+                                <div class="fact-item"><span>{{ tr('dashboard.sid_severity_label', 'SID / Severity') }}</span><strong id="socTopSignature">-</strong></div>
+                                <div class="fact-item"><span>{{ tr('dashboard.critical_warning_label', 'Critical / Warning') }}</span><strong id="socAlertCounts">0 / 0</strong></div>
+                                <div class="fact-item"><span>{{ tr('dashboard.confidence', 'Confidence') }}</span><strong id="socConfidenceSignal">-</strong></div>
                             </div>
                             <div class="split-subgrid">
                                 <div class="split-subcard">
-                                    <div class="assistant-label">Correlation</div>
+                                    <div class="assistant-label">{{ tr('dashboard.correlation', 'Correlation') }}</div>
                                     <div id="socCorrelationStatus">-</div>
                                     <ul class="action-list" id="socCorrelationReasons">
                                         <li>{{ tr('dashboard.no_correlation_summary', 'No correlation summary.') }}</li>
                                     </ul>
                                 </div>
                                 <div class="split-subcard">
-                                    <div class="assistant-label">ATT&CK / TI / Sigma / YARA</div>
+                                    <div class="assistant-label">{{ tr('dashboard.aux_detection_label', 'ATT&CK / TI / Sigma / YARA') }}</div>
                                     <ul class="action-list" id="socKnowledgeList">
                                         <li>{{ tr('dashboard.no_aux_detection_summary', 'No auxiliary detection summary.') }}</li>
                                     </ul>
                                 </div>
                                 <div class="split-subcard">
-                                    <div class="assistant-label">SOC Guardrails</div>
+                                    <div class="assistant-label">{{ tr('dashboard.soc_guardrails', 'SOC Guardrails') }}</div>
                                     <div class="fact-list compact-list">
-                                        <div class="fact-item"><span>Visibility</span><strong id="socVisibilityStatus">-</strong></div>
-                                        <div class="fact-item"><span>Suppression</span><strong id="socSuppressionStatus">-</strong></div>
-                                        <div class="fact-item"><span>Incident</span><strong id="socIncidentStatus">-</strong></div>
-                                        <div class="fact-item"><span>Critical Target</span><strong id="socCriticalityStatus">-</strong></div>
-                                        <div class="fact-item"><span>Exposure</span><strong id="socExposureStatus">-</strong></div>
-                                        <div class="fact-item"><span>Sequence</span><strong id="socSequenceStatus">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.visibility_label', 'Visibility') }}</span><strong id="socVisibilityStatus">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.suppression_label', 'Suppression') }}</span><strong id="socSuppressionStatus">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.incident_label', 'Incident') }}</span><strong id="socIncidentStatus">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.critical_target_label', 'Critical Target') }}</span><strong id="socCriticalityStatus">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.exposure_label', 'Exposure') }}</span><strong id="socExposureStatus">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.sequence_label', 'Sequence') }}</span><strong id="socSequenceStatus">-</strong></div>
                                     </div>
                                 </div>
                                 <div class="split-subcard">
-                                    <div class="assistant-label">SOC Triage Queue</div>
+                                    <div class="assistant-label">{{ tr('dashboard.soc_triage_queue', 'SOC Triage Queue') }}</div>
                                     <div class="fact-list compact-list">
-                                        <div class="fact-item"><span>Status</span><strong id="socTriageStatus">-</strong></div>
-                                        <div class="fact-item"><span>Now / Watch / Backlog</span><strong id="socTriageCounts">0 / 0 / 0</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.status_label', 'Status') }}</span><strong id="socTriageStatus">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.now_watch_backlog', 'Now / Watch / Backlog') }}</span><strong id="socTriageCounts">0 / 0 / 0</strong></div>
                                     </div>
                                     <ul class="action-list" id="socTriageQueueList">
                                         <li>{{ tr('dashboard.no_soc_triage_summary', 'No SOC triage priority summary.') }}</li>
@@ -373,17 +373,17 @@
                                 </div>
                                 <button type="button" class="context-ask-btn" data-question="{{ tr('dashboard.question_noc_summary', 'Summarize the current path, service, and client impact, and explain where to verify first.') }}">{{ tr('dashboard.ask_about_this', 'Ask about this') }}</button>
                             </div>
-                            <div class="noc-split-grid">
-                                <div class="split-subcard noc-path-card">
-                                    <div class="assistant-label">{{ tr('dashboard.path_health', 'Path Health') }}</div>
-                                    <div class="fact-list compact-list">
-                                        <div class="fact-item"><span>Incident</span><strong id="nocIncidentCause">-</strong></div>
-                                        <div class="fact-item"><span>Confidence</span><strong id="nocIncidentConfidence">-</strong></div>
-                                        <div class="fact-item"><span>Uplink</span><strong id="nocPathUplink">-</strong></div>
-                                        <div class="fact-item"><span>Gateway</span><strong id="nocPathGateway">-</strong></div>
-                                        <div class="fact-item"><span>Internet</span><strong id="nocPathInternet">-</strong></div>
-                                        <div class="fact-item"><span>Segments</span><strong id="nocBlastSegments">-</strong></div>
-                                        <div class="fact-item"><span>Impacted</span><strong id="nocBlastClients">0</strong></div>
+                                <div class="noc-split-grid">
+                                    <div class="split-subcard noc-path-card">
+                                        <div class="assistant-label">{{ tr('dashboard.path_health', 'Path Health') }}</div>
+                                        <div class="fact-list compact-list">
+                                        <div class="fact-item"><span>{{ tr('dashboard.incident_label', 'Incident') }}</span><strong id="nocIncidentCause">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.confidence', 'Confidence') }}</span><strong id="nocIncidentConfidence">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.uplink', 'Uplink') }}</span><strong id="nocPathUplink">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.gateway', 'Gateway') }}</span><strong id="nocPathGateway">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.internet', 'Internet') }}</span><strong id="nocPathInternet">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.segments_label', 'Segments') }}</span><strong id="nocBlastSegments">-</strong></div>
+                                        <div class="fact-item"><span>{{ tr('dashboard.impacted_label', 'Impacted') }}</span><strong id="nocBlastClients">0</strong></div>
                                     </div>
                                     <ul class="action-list" id="nocPathSignals">
                                         <li>{{ tr('dashboard.no_path_signal_summary', 'No path signal summary.') }}</li>
@@ -393,10 +393,10 @@
                                         <div class="split-subcard noc-service-card">
                                             <div class="assistant-label">{{ tr('dashboard.service_health', 'Service Health') }}</div>
                                             <div class="fact-list compact-list">
-                                                <div class="fact-item"><span>Assurance</span><strong id="nocServiceAssurance">-</strong></div>
-                                                <div class="fact-item"><span>Resolution</span><strong id="nocResolutionHealth">-</strong></div>
-                                            <div class="fact-item"><span>Targets</span><strong id="nocBlastTargets">-</strong></div>
-                                            <div class="fact-item"><span>Config Drift</span><strong id="nocConfigDrift">-</strong></div>
+                                                <div class="fact-item"><span>{{ tr('dashboard.assurance_label', 'Assurance') }}</span><strong id="nocServiceAssurance">-</strong></div>
+                                                <div class="fact-item"><span>{{ tr('dashboard.resolution_label', 'Resolution') }}</span><strong id="nocResolutionHealth">-</strong></div>
+                                            <div class="fact-item"><span>{{ tr('dashboard.targets_label', 'Targets') }}</span><strong id="nocBlastTargets">-</strong></div>
+                                            <div class="fact-item"><span>{{ tr('dashboard.config_drift_label', 'Config Drift') }}</span><strong id="nocConfigDrift">-</strong></div>
                                         </div>
                                         <ul class="action-list" id="nocServiceList">
                                             <li>{{ tr('dashboard.no_service_summary', 'No service summary.') }}</li>
@@ -405,19 +405,19 @@
                                     <div class="split-subcard">
                                         <div class="assistant-label">{{ tr('dashboard.capacity', 'Capacity') }}</div>
                                         <div class="fact-list compact-list">
-                                            <div class="fact-item"><span>State</span><strong id="nocCapacityState">-</strong></div>
-                                            <div class="fact-item"><span>Utilization</span><strong id="nocCapacityUtilization">-</strong></div>
-                                            <div class="fact-item"><span>Mode</span><strong id="nocCapacityMode">-</strong></div>
-                                            <div class="fact-item"><span>Top Talker</span><strong id="nocCapacityTopTalker">-</strong></div>
+                                            <div class="fact-item"><span>{{ tr('dashboard.state_label', 'State') }}</span><strong id="nocCapacityState">-</strong></div>
+                                            <div class="fact-item"><span>{{ tr('dashboard.utilization_label', 'Utilization') }}</span><strong id="nocCapacityUtilization">-</strong></div>
+                                            <div class="fact-item"><span>{{ tr('dashboard.mode', 'Mode') }}</span><strong id="nocCapacityMode">-</strong></div>
+                                            <div class="fact-item"><span>{{ tr('dashboard.top_talker_label', 'Top Talker') }}</span><strong id="nocCapacityTopTalker">-</strong></div>
                                         </div>
                                     </div>
                                     <div class="split-subcard">
                                         <div class="assistant-label">{{ tr('dashboard.client_inventory', 'Client Inventory') }}</div>
                                         <div class="fact-list compact-list">
-                                            <div class="fact-item"><span>Current</span><strong id="nocClientCurrent">0</strong></div>
-                                            <div class="fact-item"><span>Unknown</span><strong id="nocClientUnknown">0</strong></div>
-                                            <div class="fact-item"><span>Unauthorized</span><strong id="nocClientUnauthorized">0</strong></div>
-                                            <div class="fact-item"><span>Mismatch</span><strong id="nocClientMismatch">0</strong></div>
+                                            <div class="fact-item"><span>{{ tr('dashboard.current_label', 'Current') }}</span><strong id="nocClientCurrent">0</strong></div>
+                                            <div class="fact-item"><span>{{ tr('dashboard.unknown_label', 'Unknown') }}</span><strong id="nocClientUnknown">0</strong></div>
+                                            <div class="fact-item"><span>{{ tr('dashboard.unauthorized_label', 'Unauthorized') }}</span><strong id="nocClientUnauthorized">0</strong></div>
+                                            <div class="fact-item"><span>{{ tr('dashboard.mismatch_label', 'Mismatch') }}</span><strong id="nocClientMismatch">0</strong></div>
                                         </div>
                                     </div>
                                 </div>
@@ -529,7 +529,7 @@
                         </article>
 
                         <article class="action-card pro-only">
-                            <div class="card-kicker">Rejected Stronger Actions</div>
+                            <div class="card-kicker">{{ tr('dashboard.rejected_stronger_actions', 'Rejected Stronger Actions') }}</div>
                             <p class="card-summary">{{ tr('dashboard.threat_impact', 'Separate the threat case from the path and service case before you decide on stronger control.') }}</p>
                             <ul class="action-list" id="rejectedStrongerActionsList">
                                 <li>{{ tr('dashboard.no_stronger_rejection_summary', 'No stronger-action rejection summary.') }}</li>
@@ -537,7 +537,7 @@
                         </article>
 
                         <article class="action-card control-card">
-                            <div class="card-kicker">Gateway Controls</div>
+                            <div class="card-kicker">{{ tr('dashboard.gateway_controls', 'Gateway Controls') }}</div>
                             <div class="mode-button-row">
                                 <button class="mode-btn" id="modePortalBtn">Portal</button>
                                 <button class="mode-btn" id="modeShieldBtn">Shield</button>
@@ -624,8 +624,8 @@
         <section class="panel evidence-board evidence-board-lowered">
             <div class="panel-heading">
                 <div>
-                    <div class="panel-kicker">Evidence & Timeline</div>
-                    <h2>Supporting history and audit trail</h2>
+                    <div class="panel-kicker">{{ tr('dashboard.evidence_timeline', 'Evidence & Timeline') }}</div>
+                    <h2>{{ tr('dashboard.supporting_history', 'Supporting history and audit trail') }}</h2>
                 </div>
                 <div class="panel-heading-actions">
                     <div class="panel-note" id="healthSummaryLine">-</div>
@@ -638,19 +638,19 @@
                     <ul class="timeline-list" id="currentTriggersTimeline"></ul>
                 </article>
                 <article class="evidence-card">
-                    <div class="card-kicker">Decision Changes</div>
+                    <div class="card-kicker">{{ tr('dashboard.decision_changes', 'Decision Changes') }}</div>
                     <ul class="timeline-list" id="decisionChangesTimeline"></ul>
                 </article>
                 <article class="evidence-card pro-only">
-                    <div class="card-kicker">Operator Interactions</div>
+                    <div class="card-kicker">{{ tr('dashboard.operator_interactions', 'Operator Interactions') }}</div>
                     <ul class="timeline-list" id="operatorInteractionsTimeline"></ul>
                 </article>
                 <article class="evidence-card pro-only">
-                    <div class="card-kicker">Background History</div>
+                    <div class="card-kicker">{{ tr('dashboard.background_history', 'Background History') }}</div>
                     <ul class="timeline-list" id="backgroundHistoryTimeline"></ul>
                 </article>
                 <article class="evidence-card">
-                    <div class="card-kicker">Triage Audit</div>
+                    <div class="card-kicker">{{ tr('dashboard.triage_audit', 'Triage Audit') }}</div>
                     <ul class="timeline-list" id="triageAuditTimeline"></ul>
                 </article>
             </div>

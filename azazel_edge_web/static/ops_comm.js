@@ -41,19 +41,52 @@ function syncLanguageUi() {
 }
 const SHORTCUTS = {
     operator: [
-        { label: 'Gateway / Uplink', question: CURRENT_LANG === 'ja' ? 'gateway と uplink を確認したい' : 'I want to check the gateway and uplink' },
-        { label: 'DNS Failure', question: CURRENT_LANG === 'ja' ? 'DNS が引けないとき何を確認するか' : 'What should I verify when DNS lookup fails?' },
-        { label: 'Service Status', question: CURRENT_LANG === 'ja' ? 'service の異常時に何を確認するか' : 'What should I verify when a service appears unhealthy?' },
-        { label: 'EPD Diff', question: CURRENT_LANG === 'ja' ? 'EPD 表示差異を確認したい' : 'I want to inspect the EPD display difference' },
-        { label: 'AI Logs', question: CURRENT_LANG === 'ja' ? 'AI ログを確認したい' : 'I want to review recent AI logs' },
-        { label: 'Wi-Fi Intake', question: CURRENT_LANG === 'ja' ? 'Wi-Fi に繋がらない利用者へどう案内するか' : 'How should I guide a user who cannot connect to Wi-Fi?' },
+        {
+            label: tr('ops.shortcut_gateway_uplink', 'Gateway / Uplink'),
+            question: tr('dashboard.question_gateway_uplink', 'What should I verify when the gateway or uplink looks unhealthy?'),
+        },
+        {
+            label: tr('ops.shortcut_dns_failure', 'DNS Failure'),
+            question: tr('dashboard.question_dns_failure', 'What should I verify when DNS lookup fails?'),
+        },
+        {
+            label: tr('ops.shortcut_service_status', 'Service Status'),
+            question: tr('dashboard.question_service_status', 'What should I verify when a service appears unhealthy?'),
+        },
+        {
+            label: tr('ops.shortcut_epd_diff', 'EPD Diff'),
+            question: tr('ops.question_epd_diff', 'I want to inspect the EPD display difference'),
+        },
+        {
+            label: tr('ops.shortcut_ai_logs', 'AI Logs'),
+            question: tr('ops.question_ai_logs', 'I want to review recent AI logs'),
+        },
+        {
+            label: tr('ops.shortcut_wifi_intake', 'Wi-Fi Intake'),
+            question: tr('dashboard.question_wifi_trouble', 'How should I guide a user who cannot connect to Wi-Fi?'),
+        },
     ],
     beginner: [
-        { label: 'Wi-Fi Trouble', question: CURRENT_LANG === 'ja' ? 'Wi-Fi に繋がらない利用者へどう案内するか' : 'How should I guide a user who cannot connect to Wi-Fi?' },
-        { label: 'Reconnect Guide', question: CURRENT_LANG === 'ja' ? '再接続できない利用者へどう案内するか' : 'How should I guide a user who cannot reconnect?' },
-        { label: 'Device Onboarding', question: CURRENT_LANG === 'ja' ? '初回接続の利用者へどう案内するか' : 'How should I guide a first-time onboarding user?' },
-        { label: 'DNS Failure', question: CURRENT_LANG === 'ja' ? 'DNS が引けないとき何を確認するか' : 'What should I verify when DNS lookup fails?' },
-        { label: 'Current Status', question: CURRENT_LANG === 'ja' ? '利用者へ現在の状況をどう説明するか' : 'How should I explain the current situation to the user?' },
+        {
+            label: tr('ops.shortcut_wifi_trouble', 'Wi-Fi Trouble'),
+            question: tr('dashboard.question_wifi_trouble', 'How should I guide a user who cannot connect to Wi-Fi?'),
+        },
+        {
+            label: tr('ops.shortcut_reconnect_guide', 'Reconnect Guide'),
+            question: tr('dashboard.question_reconnect', 'How should I guide a user who cannot reconnect?'),
+        },
+        {
+            label: tr('ops.shortcut_device_onboarding', 'Device Onboarding'),
+            question: tr('dashboard.question_onboarding', 'How should I guide a first-time onboarding user?'),
+        },
+        {
+            label: tr('ops.shortcut_dns_failure', 'DNS Failure'),
+            question: tr('dashboard.question_dns_failure', 'What should I verify when DNS lookup fails?'),
+        },
+        {
+            label: tr('ops.shortcut_current_status', 'Current Status'),
+            question: tr('ops.question_current_status', 'How should I explain the current situation to the user?'),
+        },
     ],
 };
 
@@ -161,9 +194,11 @@ function buildDemoQuestion(result) {
     const soc = result?.soc?.summary?.status || '-';
     const action = result?.arbiter?.action || '-';
     const reason = result?.arbiter?.reason || '-';
-    return CURRENT_LANG === 'ja'
-        ? `デモ ${scenarioId} で NOC=${noc} SOC=${soc} action=${action} reason=${reason} となった理由と次の確認項目を説明せよ`
-        : `Explain why demo ${scenarioId} resulted in NOC=${noc} SOC=${soc} action=${action} reason=${reason}, and list the next checks.`;
+    return tr(
+        'ops.demo_question_template',
+        'Explain why demo {scenario} resulted in NOC={noc} SOC={soc} action={action} reason={reason}, and list the next checks.',
+        { scenario: scenarioId, noc, soc, action, reason },
+    );
 }
 
 function renderAiPanels(data) {
@@ -713,8 +748,14 @@ async function runDemoScenario() {
         }
         const result = data.result || {};
         setText('demoResult', formatDemoSummary(result));
-        setText('demoOperatorSummary', `Operator wording: ${result.explanation?.operator_wording || '-'}`);
-        setText('demoNextChecks', `Next checks: ${(result.explanation?.next_checks || []).join(' | ') || '-'}`);
+        setText(
+            'demoOperatorSummary',
+            tr('ops.operator_wording_line', 'Operator wording: {value}', { value: result.explanation?.operator_wording || '-' }),
+        );
+        setText(
+            'demoNextChecks',
+            tr('ops.next_checks_line', 'Next checks: {value}', { value: (result.explanation?.next_checks || []).join(' | ') || '-' }),
+        );
         const question = buildDemoQuestion(result);
         const messageInput = document.getElementById('messageInput');
         if (messageInput) messageInput.value = question;
