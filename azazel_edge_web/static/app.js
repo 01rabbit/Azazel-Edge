@@ -1046,9 +1046,22 @@ function updateSplitBoard(summary, actions) {
     const clientInventory = noc.client_inventory || {};
     const clientImpact = noc.client_impact || {};
     const attackType = soc.attack_type || tr('dashboard.no_attack_type', 'No current attack type');
+    const visibility = soc.visibility || {};
+    const suppression = soc.suppression || {};
+    const criticality = soc.criticality || {};
+    const exposure = soc.exposure_change || {};
+    const sequence = soc.behavior_sequence || {};
+    const triage = soc.triage_priority || {};
+    const incidentCampaign = soc.incident_campaign || {};
+    const triageNow = Array.isArray(triage.now) ? triage.now : [];
+    const triageWatch = Array.isArray(triage.watch) ? triage.watch : [];
+    const triageBacklog = Array.isArray(triage.backlog) ? triage.backlog : [];
 
     updateElement('socThreatLevel', String(soc.threat_level || 'quiet').toUpperCase());
-    updateElement('socThreatSummary', `${attackType} | src=${soc.top_source || '-'} | dst=${soc.top_destination || '-'}`);
+    updateElement(
+        'socThreatSummary',
+        `${attackType} | src=${soc.top_source || '-'} | dst=${soc.top_destination || '-'} | triage=${String(triage.status || 'idle')}`,
+    );
     updateElement('socAttackType', attackType);
     updateElement('socTopSource', soc.top_source || '-');
     updateElement('socTopDestination', soc.top_destination || '-');
@@ -1061,9 +1074,36 @@ function updateSplitBoard(summary, actions) {
         'socKnowledgeList',
         [
             ...(soc.attack_candidates || []),
-            ...(soc.ti_matches || []),
-            ...(soc.sigma_hits || []),
-            ...(soc.yara_hits || []),
+            ...((soc.ti_matches || []).map((item) => typeof item === 'string' ? item : `${item.indicator_type || 'ti'}:${item.value || '-'}`)),
+            ...((soc.sigma_hits || []).map((item) => typeof item === 'string' ? item : `sigma:${item.rule_id || '-'}`)),
+            ...((soc.yara_hits || []).map((item) => typeof item === 'string' ? item : `yara:${item.rule_id || '-'}`)),
+        ],
+        (item) => item,
+    );
+    updateElement('socVisibilityStatus', String(visibility.status || 'unknown').toUpperCase());
+    updateElement(
+        'socSuppressionStatus',
+        `${String(suppression.status || 'normal').toUpperCase()} / ${Number(suppression.suppressed_count || 0)}`,
+    );
+    updateElement(
+        'socIncidentStatus',
+        `${String(incidentCampaign.status || 'none').toUpperCase()} / ${Number(incidentCampaign.incident_count || 0)}`,
+    );
+    updateElement(
+        'socCriticalityStatus',
+        `${String(criticality.status || 'unknown').toUpperCase()} / ${Number(criticality.critical_target_count || 0)}`,
+    );
+    updateElement('socExposureStatus', String(exposure.status || 'stable').toUpperCase());
+    updateElement('socSequenceStatus', String(sequence.status || 'none').toUpperCase());
+    updateElement('socTriageStatus', String(triage.status || 'idle').toUpperCase());
+    updateElement('socTriageCounts', `${triageNow.length} / ${triageWatch.length} / ${triageBacklog.length}`);
+    renderList(
+        'socTriageQueueList',
+        [
+            ...triageNow.slice(0, 4).map((item) => `now: ${item.id || '-'} (${item.score || 0})`),
+            ...triageWatch.slice(0, 3).map((item) => `watch: ${item.id || '-'} (${item.score || 0})`),
+            ...triageBacklog.slice(0, 2).map((item) => `backlog: ${item.id || '-'} (${item.score || 0})`),
+            ...((Array.isArray(triage.top_priority_ids) ? triage.top_priority_ids : []).slice(0, 3).map((id) => `priority-id: ${id}`)),
         ],
         (item) => item,
     );
@@ -1114,7 +1154,12 @@ function updateActionBoard(actions, state) {
 
     const runbook = actions.suggested_runbook || {};
     const primaryAction = (actions.do_next || actions.current_operator_actions || [])[0] || actions.current_user_guidance || tr('dashboard.no_immediate_action', 'No immediate action synthesized.');
-    const primarySummary = (actions.why_now || [])[0] || tr('dashboard.waiting_stronger_evidence', 'The dashboard is waiting for stronger causal evidence.');
+    const socPriority = actions.soc_priority || {};
+    const triageSummary = socPriority.status
+        ? `SOC triage=${socPriority.status} now=${(socPriority.now || []).length} watch=${(socPriority.watch || []).length}`
+        : '';
+    const primarySummary = (actions.why_now || [])[0]
+        || (triageSummary || tr('dashboard.waiting_stronger_evidence', 'The dashboard is waiting for stronger causal evidence.'));
     updateElement('priorityActionTitle', primaryAction);
     updateElement('priorityActionSummary', primarySummary);
     updateElement('runbookTitle', runbook.title || '-');

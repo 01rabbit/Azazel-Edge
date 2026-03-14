@@ -50,6 +50,23 @@ def _flow_event(src_ip: str, dst_ip: str, dst_port: int, flow_id: str = 'flow-1'
     })
 
 
+def _syslog_event(message: str, host: str = 'edge-gw') -> EvidenceEvent:
+    return EvidenceEvent.build(
+        ts='2026-03-10T00:00:00Z',
+        source='syslog_min',
+        kind='syslog_line',
+        subject=f'{host}:kernel',
+        severity=30,
+        confidence=0.75,
+        attrs={
+            'host': host,
+            'tag': 'kernel',
+            'message': message,
+        },
+        status='warn',
+    )
+
+
 class SocEvaluatorV1Tests(unittest.TestCase):
     def test_generates_required_sections_from_soc_events(self) -> None:
         evaluator = SocEvaluator()
@@ -201,6 +218,97 @@ class SocEvaluatorV1Tests(unittest.TestCase):
         second = evaluator.evaluate(events)
         self.assertEqual(first['exposure_change_state']['status'], 'expanding')
         self.assertEqual(second['exposure_change_state']['status'], 'stable')
+
+    def test_incident_campaign_state_transitions_active_cooling_closed_and_recurrence(self) -> None:
+        evaluator = SocEvaluator()
+        event = _event('10.0.0.5->192.168.40.10:443/TCP', 90, 85, 'TLS Beacon', 'Trojan Activity', 443, 210020)
+        first = evaluator.evaluate([event])
+        self.assertEqual(first['incident_campaign_state']['status'], 'active')
+        self.assertEqual(first['incident_campaign_state']['top_incidents'][0]['status'], 'active')
+
+        second = evaluator.evaluate([])
+        third = evaluator.evaluate([])
+        fourth = evaluator.evaluate([])
+        self.assertEqual(second['incident_campaign_state']['status'], 'cooling')
+        self.assertEqual(third['incident_campaign_state']['status'], 'cooling')
+        self.assertEqual(fourth['incident_campaign_state']['status'], 'closed')
+
+        fifth = evaluator.evaluate([event])
+        top = fifth['incident_campaign_state']['top_incidents'][0]
+        self.assertEqual(top['status'], 'active')
+        self.assertGreaterEqual(int(top.get('recurrence_count') or 0), 1)
+        self.assertTrue(top.get('implicated_entities'))
+
+    def test_visibility_state_tracks_syslog_and_stale_source(self) -> None:
+        evaluator = SocEvaluator()
+        soc_event = _event('10.0.0.5->192.168.40.10:443/TCP', 75, 80, 'TLS Beacon', 'Trojan Activity', 443, 210020)
+        stale_flow = _flow_event('10.0.0.5', '192.168.40.10', 443, flow_id='flow-stale-1').to_dict()
+        stale_flow['attrs']['collector_age_sec'] = 1200
+        result = evaluator.evaluate([soc_event, stale_flow, _syslog_event('resolver timeout')])
+        visibility = result['security_visibility_state']
+        self.assertIn('syslog_event_count', visibility)
+        self.assertIn('stale_sources', visibility)
+        self.assertIn('flow_min', visibility['stale_sources'])
+        self.assertGreater(int(visibility.get('trust_penalty') or 0), 0)
+
+    def test_suppression_policy_supports_expected_scanner_and_lab_and_maintenance(self) -> None:
+        evaluator = SocEvaluator(
+            suppression_policy={
+                'expected_scanners': ['10.0.0.9'],
+                'lab_segments': ['lab-segment-a'],
+                'maintenance_windows': [{'start_hour': 0, 'end_hour': 23}],
+            }
+        )
+        scanner_event = _event('10.0.0.9->192.168.40.20:80/TCP', 60, 70, 'Web Probe', 'Potentially Bad Traffic', 80, 210101)
+        lab_event = _event('10.0.0.10->192.168.40.30:443/TCP', 62, 70, 'TLS Probe', 'Potentially Bad Traffic', 443, 210102)
+        maint_event = _event('10.0.0.11->192.168.40.31:53/UDP', 58, 72, 'DNS Query Burst', 'Potentially Bad Traffic', 53, 210103)
+        lab_payload = lab_event.to_dict()
+        lab_payload['attrs']['segment'] = 'lab-segment-a'
+        result = evaluator.evaluate([scanner_event, lab_payload, maint_event])
+        suppression = result['suppression_exception_state']
+        self.assertEqual(suppression['suppressed_count'], 3)
+        self.assertEqual(suppression['actionable_count'], 0)
+        reasons = ' '.join(str(x) for x in suppression['reasons'])
+        self.assertIn('suppression_policy_applied', reasons)
+
+    def test_behavior_sequence_includes_chain_hits_and_implicated_entities(self) -> None:
+        evaluator = SocEvaluator()
+        events = [
+            _event('10.0.0.5->192.168.40.10:22/TCP', 55, 70, 'Network Scan', 'Recon Activity', 22, 210200),
+            _event('10.0.0.5->192.168.40.10:22/TCP', 68, 75, 'Auth Brute Attempt', 'Authentication Failure', 22, 210201),
+            _event('10.0.0.5->192.168.40.10:443/TCP', 88, 80, 'DNS C2 Beacon', 'Trojan Activity', 443, 210202),
+        ]
+        result = evaluator.evaluate(events)
+        sequence = result['behavior_sequence_state']
+        self.assertIn(sequence['status'], {'single_stage', 'multi_stage'})
+        self.assertTrue(sequence.get('chain_hits'))
+        self.assertTrue(sequence.get('implicated_entities'))
+
+    def test_confidence_provenance_includes_sot_diff_support(self) -> None:
+        evaluator = SocEvaluator()
+        result = evaluator.evaluate(
+            [_event('10.0.0.5->192.168.40.10:443/TCP', 70, 80, 'TLS Beacon', 'Trojan Activity', 443, 210020)],
+            sot_diff={
+                'unauthorized_services': ['192.168.40.10:443'],
+                'path_deviations': ['p1'],
+                'unauthorized_devices': ['10.0.0.5'],
+            },
+        )
+        provenance = result['confidence_provenance']
+        supports = set(str(x) for x in provenance.get('supports', []))
+        self.assertIn('sot_unauthorized_service_diff', supports)
+        self.assertIn('sot_path_deviation_diff', supports)
+        self.assertIn('sot_unauthorized_device_diff', supports)
+
+    def test_triage_priority_uses_now_watch_backlog_buckets(self) -> None:
+        evaluator = SocEvaluator()
+        result = evaluator.evaluate([
+            _event('10.0.0.5->192.168.40.10:443/TCP', 94, 92, 'TLS Beacon', 'Trojan Activity', 443, 210020),
+        ])
+        triage = result['triage_priority_state']
+        self.assertIn('backlog', triage)
+        self.assertIn('top_priority_ids', triage)
+        self.assertIn(triage['status'], {'now', 'watch', 'backlog', 'idle'})
 
 
 if __name__ == '__main__':

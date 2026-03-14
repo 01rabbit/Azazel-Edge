@@ -21,7 +21,7 @@ def _to_payloads(events: Iterable[Any]) -> List[Dict[str, Any]]:
             payload = dict(event)
         else:
             continue
-        if str(payload.get('source') or '') in {'suricata_eve', 'flow_min'}:
+        if str(payload.get('source') or '') in {'suricata_eve', 'flow_min', 'syslog_min'}:
             payloads.append(payload)
     return payloads
 
@@ -91,6 +91,62 @@ def _to_int_set(values: Any) -> set[int]:
     return output
 
 
+def _to_str_set(values: Any) -> set[str]:
+    if not isinstance(values, list):
+        return set()
+    return {str(value).strip() for value in values if str(value).strip()}
+
+
+def _is_stale_payload(payload: Dict[str, Any], stale_age_sec: int = 300) -> bool:
+    attrs = payload.get('attrs', {}) if isinstance(payload.get('attrs'), dict) else {}
+    if bool(attrs.get('stale') or attrs.get('collector_stale')):
+        return True
+    age = attrs.get('collector_age_sec')
+    try:
+        if age is not None and float(age) >= float(stale_age_sec):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+def _in_maintenance_window(ts: datetime, windows: List[Dict[str, Any]]) -> bool:
+    if not windows:
+        return False
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        start_hour = window.get('start_hour')
+        end_hour = window.get('end_hour')
+        days = window.get('days')
+        if start_hour is None or end_hour is None:
+            continue
+        try:
+            start = int(start_hour)
+            end = int(end_hour)
+        except (TypeError, ValueError):
+            continue
+        if start < 0 or start > 23 or end < 0 or end > 23:
+            continue
+        if isinstance(days, list):
+            dayset = set()
+            for day in days:
+                try:
+                    dayset.add(int(day))
+                except (TypeError, ValueError):
+                    continue
+            if dayset and ts.weekday() not in dayset:
+                continue
+        hour = ts.hour
+        if start <= end:
+            if start <= hour <= end:
+                return True
+        else:
+            if hour >= start or hour <= end:
+                return True
+    return False
+
+
 def _candidate_hits(text: str) -> List[str]:
     lowered = text.lower()
     mapping = {
@@ -136,6 +192,9 @@ class SocEvaluator:
             'sid': _to_int_set(policy.get('sid', [])),
             'attack_types': {str(x).lower() for x in policy.get('attack_types', []) if str(x)},
             'categories': {str(x).lower() for x in policy.get('categories', []) if str(x)},
+            'expected_scanners': _to_str_set(policy.get('expected_scanners', [])),
+            'lab_segments': _to_str_set(policy.get('lab_segments', [])),
+            'maintenance_windows': [dict(item) for item in policy.get('maintenance_windows', []) if isinstance(item, dict)],
         }
         crit = criticality if isinstance(criticality, dict) else {}
         self.criticality = {
@@ -146,13 +205,16 @@ class SocEvaluator:
         self._incident_store: Dict[str, Dict[str, Any]] = {}
         self._seen_service_targets: set[str] = set()
         self._seen_external_destinations: set[str] = set()
+        self._seen_route_markers: set[str] = set()
+        self._seen_visible_services: set[str] = set()
 
     def evaluate(self, events: Iterable[Any], sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         payloads = _to_payloads(events)
         soc_payloads = [item for item in payloads if str(item.get('source') or '') == 'suricata_eve']
         flow_payloads = [item for item in payloads if str(item.get('source') or '') == 'flow_min']
+        syslog_payloads = [item for item in payloads if str(item.get('source') or '') == 'syslog_min']
         evidence_ids = [str(item.get('event_id') or '') for item in payloads if str(item.get('event_id') or '')]
-        security_visibility_state = self._evaluate_security_visibility_state(soc_payloads, flow_payloads)
+        security_visibility_state = self._evaluate_security_visibility_state(soc_payloads, flow_payloads, syslog_payloads)
         suppression_exception_state, actionable_soc_payloads = self._evaluate_suppression_exception_state(soc_payloads)
         actionable_payloads = actionable_soc_payloads + flow_payloads
         ti_matches = self._match_ti(actionable_soc_payloads)
@@ -178,6 +240,7 @@ class SocEvaluator:
             suppression_state=suppression_exception_state,
             visibility_state=security_visibility_state,
             criticality_state=asset_target_criticality,
+            sot_diff=sot_diff,
         )
         triage_priority_state = self._evaluate_triage_priority_state(
             suspicion=suspicion,
@@ -212,7 +275,7 @@ class SocEvaluator:
             summary_reasons.append(f'suppression:{suppression_exception_state.get("status")}')
         if int(incident_campaign_state.get('active_count') or 0) > 0:
             summary_reasons.append('incident:active')
-        if str(triage_priority_state.get('status') or '') in {'now', 'watch'}:
+        if str(triage_priority_state.get('status') or '') in {'now', 'watch', 'backlog'}:
             summary_reasons.append(f'triage:{triage_priority_state.get("status")}')
 
         return {
@@ -244,6 +307,7 @@ class SocEvaluator:
                 'visibility_status': str(security_visibility_state.get('status') or 'unknown'),
                 'suppressed_count': int(suppression_exception_state.get('suppressed_count') or 0),
                 'triage_now_count': len(triage_priority_state.get('now', [])) if isinstance(triage_priority_state.get('now'), list) else 0,
+                'triage_status': str(triage_priority_state.get('status') or 'idle'),
                 'event_count': len(actionable_payloads),
             },
             'evidence_ids': sorted(dict.fromkeys(evidence_ids)),
@@ -525,44 +589,82 @@ class SocEvaluator:
             'top_entities': top_entities,
         }
 
-    def _evaluate_security_visibility_state(self, soc_payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _evaluate_security_visibility_state(
+        self,
+        soc_payloads: List[Dict[str, Any]],
+        flow_payloads: List[Dict[str, Any]],
+        syslog_payloads: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
         evidence_ids: List[str] = []
         reasons: List[str] = []
-        for payload in soc_payloads + flow_payloads:
+        for payload in soc_payloads + flow_payloads + syslog_payloads:
             event_id = str(payload.get('event_id') or '')
             if event_id:
                 evidence_ids.append(event_id)
 
         soc_count = len(soc_payloads)
         flow_count = len(flow_payloads)
+        syslog_count = len(syslog_payloads)
         missing_sources: List[str] = []
-        coverage_score = 100
+        stale_sources: List[str] = []
+        source_rows = [
+            ('suricata_eve', soc_payloads),
+            ('flow_min', flow_payloads),
+            ('syslog_min', syslog_payloads),
+        ]
+        for source_name, rows in source_rows:
+            if rows and all(_is_stale_payload(row) for row in rows):
+                stale_sources.append(source_name)
+        ti_status = 'configured' if self.ti_feed is not None else 'unconfigured'
+        if self.ti_feed is not None and len(getattr(self.ti_feed, 'indicators', [])) <= 0:
+            ti_status = 'empty'
 
-        if soc_count == 0 and flow_count == 0:
+        if soc_count == 0 and flow_count == 0 and syslog_count == 0:
             status = 'blind'
-            coverage_score = 0
-            missing_sources = ['suricata_eve', 'flow_min']
-            reasons.append('no_soc_or_flow_evidence')
-        elif soc_count == 0:
-            status = 'partial'
-            coverage_score = 45
-            missing_sources = ['suricata_eve']
-            reasons.append('missing_suricata_evidence')
-        elif flow_count == 0:
-            status = 'partial'
-            coverage_score = 60
-            missing_sources = ['flow_min']
-            reasons.append('missing_flow_evidence')
+            reasons.append('no_soc_or_flow_or_syslog_evidence')
         else:
-            status = 'good'
-            reasons.append('multi_source_visibility')
+            if soc_count == 0:
+                missing_sources.append('suricata_eve')
+                reasons.append('missing_suricata_evidence')
+            if flow_count == 0:
+                missing_sources.append('flow_min')
+                reasons.append('missing_flow_evidence')
+            if syslog_count == 0:
+                missing_sources.append('syslog_min')
+                reasons.append('missing_syslog_evidence')
+            if stale_sources:
+                reasons.extend(f'stale_{name}' for name in stale_sources)
+            if ti_status == 'unconfigured':
+                reasons.append('ti_feed_unconfigured')
+            elif ti_status == 'empty':
+                reasons.append('ti_feed_empty')
+
+            if soc_count > 0 and flow_count > 0 and not stale_sources:
+                status = 'good'
+                reasons.append('multi_source_visibility')
+            elif soc_count > 0 or flow_count > 0:
+                status = 'partial'
+            else:
+                status = 'degraded'
+
+        total_sources = 3
+        present_sources = sum(1 for count in (soc_count, flow_count, syslog_count) if count > 0)
+        stale_penalty = min(40, len(stale_sources) * 15)
+        missing_penalty = min(40, (total_sources - present_sources) * 15)
+        ti_penalty = 10 if ti_status in {'unconfigured', 'empty'} else 0
+        coverage_score = max(0, min(100, 100 - stale_penalty - missing_penalty - ti_penalty))
+        trust_penalty = min(60, stale_penalty + missing_penalty + ti_penalty)
 
         return {
             'status': status,
             'coverage_score': max(0, min(100, int(coverage_score))),
             'soc_event_count': soc_count,
             'flow_event_count': flow_count,
+            'syslog_event_count': syslog_count,
             'missing_sources': missing_sources,
+            'stale_sources': stale_sources,
+            'ti_status': ti_status,
+            'trust_penalty': trust_penalty,
             'reasons': reasons,
             'evidence_ids': sorted(dict.fromkeys(evidence_ids)),
         }
@@ -585,6 +687,9 @@ class SocEvaluator:
         actionable: List[Dict[str, Any]] = []
         suppressed: List[Dict[str, Any]] = []
         exceptions: List[Dict[str, Any]] = []
+        expected_scanners = policy.get('expected_scanners', set()) if isinstance(policy, dict) else set()
+        lab_segments = policy.get('lab_segments', set()) if isinstance(policy, dict) else set()
+        maintenance_windows = policy.get('maintenance_windows', []) if isinstance(policy, dict) else []
         for payload in payloads:
             attrs = payload.get('attrs', {}) if isinstance(payload.get('attrs'), dict) else {}
             src, dst = _parse_subject(str(payload.get('subject') or ''))
@@ -595,6 +700,8 @@ class SocEvaluator:
             sid = int(attrs.get('sid') or 0)
             risk = int(attrs.get('risk_score') or payload.get('severity') or 0)
             evidence_id = str(payload.get('event_id') or '')
+            segment = str(attrs.get('segment') or attrs.get('dst_segment') or attrs.get('src_segment') or '')
+            ts = _parse_ts(payload.get('ts')) or datetime.now(timezone.utc)
             matched_reasons: List[str] = []
             if src and src in policy['src_ips']:
                 matched_reasons.append('src_ip')
@@ -606,6 +713,14 @@ class SocEvaluator:
                 matched_reasons.append('attack_type')
             if category and category in policy['categories']:
                 matched_reasons.append('category')
+            if src and src in expected_scanners:
+                matched_reasons.append('expected_scanner')
+            if segment and segment in lab_segments:
+                matched_reasons.append('lab_traffic')
+            if bool(attrs.get('lab_traffic')):
+                matched_reasons.append('lab_traffic')
+            if bool(attrs.get('maintenance_window')) or _in_maintenance_window(ts, maintenance_windows):
+                matched_reasons.append('maintenance_window')
 
             if not matched_reasons:
                 actionable.append(payload)
@@ -759,6 +874,7 @@ class SocEvaluator:
 
     def _evaluate_incident_campaign_state(self, soc_payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
         now_ts = datetime.now(timezone.utc)
+        touched_incidents: set[str] = set()
         for payload in soc_payloads:
             attrs = payload.get('attrs', {}) if isinstance(payload.get('attrs'), dict) else {}
             src, dst = _parse_subject(str(payload.get('subject') or ''))
@@ -786,13 +902,39 @@ class SocEvaluator:
                     'max_score': 0,
                     'evidence_ids': [],
                     'supporting_flow_count': 0,
+                    'implicated_entities': [],
+                    'inactive_rounds': 0,
+                    'recurrence_count': 0,
+                    'status': 'active',
                 },
             )
+            if int(row.get('inactive_rounds') or 0) > 0:
+                row['recurrence_count'] = int(row.get('recurrence_count') or 0) + 1
+            row['inactive_rounds'] = 0
+            row['status'] = 'active'
             row['last_seen'] = ts.isoformat()
             row['event_count'] = int(row['event_count']) + 1
             row['max_score'] = max(int(row['max_score']), risk)
             if event_id and event_id not in row['evidence_ids']:
                 row['evidence_ids'].append(event_id)
+            entity_refs = [src, dst, f'{dst}:{port}' if dst and port else '']
+            for entity in entity_refs:
+                text = str(entity or '').strip()
+                if text and text not in row['implicated_entities']:
+                    row['implicated_entities'].append(text)
+            touched_incidents.add(incident_id)
+
+        for incident_id, row in self._incident_store.items():
+            if incident_id in touched_incidents:
+                continue
+            row['inactive_rounds'] = int(row.get('inactive_rounds') or 0) + 1
+            inactive_rounds = int(row.get('inactive_rounds') or 0)
+            if inactive_rounds >= 3:
+                row['status'] = 'closed'
+            elif inactive_rounds >= 1:
+                row['status'] = 'cooling'
+            else:
+                row['status'] = 'active'
 
         if flow_payloads and self._incident_store:
             for payload in flow_payloads:
@@ -806,9 +948,26 @@ class SocEvaluator:
                         if flow_eid and flow_eid not in row['evidence_ids']:
                             row['evidence_ids'].append(flow_eid)
 
+        active_count = 0
+        cooling_count = 0
+        closed_count = 0
+        for row in self._incident_store.values():
+            status = str(row.get('status') or 'active')
+            if status == 'active':
+                active_count += 1
+            elif status == 'cooling':
+                cooling_count += 1
+            elif status == 'closed':
+                closed_count += 1
+
         ranked = sorted(
             self._incident_store.values(),
-            key=lambda item: (int(item.get('max_score') or 0), int(item.get('event_count') or 0), str(item.get('last_seen') or '')),
+            key=lambda item: (
+                2 if str(item.get('status') or '') == 'active' else (1 if str(item.get('status') or '') == 'cooling' else 0),
+                int(item.get('max_score') or 0),
+                int(item.get('event_count') or 0),
+                str(item.get('last_seen') or ''),
+            ),
             reverse=True,
         )
         if len(ranked) > self.max_incidents:
@@ -836,29 +995,49 @@ class SocEvaluator:
                     'last_seen': str(item.get('last_seen') or ''),
                     'event_count': event_count,
                     'supporting_flow_count': int(item.get('supporting_flow_count') or 0),
+                    'status': str(item.get('status') or 'active'),
+                    'inactive_rounds': int(item.get('inactive_rounds') or 0),
+                    'recurrence_count': int(item.get('recurrence_count') or 0),
                     'score': max_score,
                     'label': _bucket(max_score),
                     'confidence': confidence,
+                    'implicated_entities': list(item.get('implicated_entities') or [])[:8],
                     'evidence_ids': list(item.get('evidence_ids') or [])[: self.max_entity_evidence_ids],
                 }
             )
             all_evidence_ids.extend(str(x) for x in item.get('evidence_ids', []) if str(x))
 
-        active_count = len(top_incidents)
+        if active_count > 0:
+            status = 'active'
+        elif cooling_count > 0:
+            status = 'cooling'
+        elif closed_count > 0:
+            status = 'closed'
+        else:
+            status = 'none'
         return {
-            'status': 'active' if active_count else 'none',
+            'status': status,
             'incident_count': len(self._incident_store),
             'active_count': active_count,
+            'cooling_count': cooling_count,
+            'closed_count': closed_count,
             'max_incidents': self.max_incidents,
             'top_incidents': top_incidents[: self.max_incidents],
             'evidence_ids': sorted(dict.fromkeys(all_evidence_ids)),
-            'reasons': ['incident_clustered'] if active_count else ['no_soc_events'],
+            'reasons': (
+                ['incident_clustered']
+                if active_count
+                else (['incident_cooling'] if cooling_count else (['incident_closed'] if closed_count else ['no_soc_events']))
+            ),
         }
 
     def _evaluate_exposure_change_state(self, soc_payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
         current_services: set[str] = set()
         current_external_dsts: set[str] = set()
+        current_routes: set[str] = set()
+        current_visible_services: set[str] = set()
         evidence_ids: List[str] = []
+        expected_change = False
 
         for payload in soc_payloads + flow_payloads:
             attrs = payload.get('attrs', {}) if isinstance(payload.get('attrs'), dict) else {}
@@ -871,34 +1050,64 @@ class SocEvaluator:
                 current_services.add(f'{dst}:{port}')
             if _is_external_ip(dst):
                 current_external_dsts.add(dst)
+            route_marker = str(attrs.get('route_id') or attrs.get('route') or attrs.get('path_id') or '').strip()
+            if route_marker:
+                current_routes.add(route_marker)
+            service_name = str(attrs.get('service_name') or attrs.get('service') or attrs.get('app_proto') or '').strip().lower()
+            if service_name:
+                current_visible_services.add(service_name)
+            if bool(attrs.get('expected_change')):
+                expected_change = True
             event_id = str(payload.get('event_id') or '')
             if event_id:
                 evidence_ids.append(event_id)
 
         new_services = current_services.difference(self._seen_service_targets)
         new_external = current_external_dsts.difference(self._seen_external_destinations)
+        seen_routes = getattr(self, '_seen_route_markers', set())
+        seen_visible_services = getattr(self, '_seen_visible_services', set())
+        new_routes = current_routes.difference(seen_routes)
+        new_visible_services = current_visible_services.difference(seen_visible_services)
         self._seen_service_targets.update(current_services)
         self._seen_external_destinations.update(current_external_dsts)
+        seen_routes.update(current_routes)
+        seen_visible_services.update(current_visible_services)
+        self._seen_route_markers = seen_routes
+        self._seen_visible_services = seen_visible_services
         if len(self._seen_service_targets) > 2048:
             self._seen_service_targets = set(sorted(self._seen_service_targets)[-2048:])
         if len(self._seen_external_destinations) > 1024:
             self._seen_external_destinations = set(sorted(self._seen_external_destinations)[-1024:])
+        if len(self._seen_route_markers) > 1024:
+            self._seen_route_markers = set(sorted(self._seen_route_markers)[-1024:])
+        if len(self._seen_visible_services) > 512:
+            self._seen_visible_services = set(sorted(self._seen_visible_services)[-512:])
 
-        score = min(100, (len(new_external) * 20) + (len(new_services) * 6))
+        score = min(100, (len(new_external) * 20) + (len(new_services) * 6) + (len(new_routes) * 8) + (len(new_visible_services) * 5))
+        if expected_change:
+            score = max(0, score - 10)
         reasons: List[str] = []
         if new_external:
             reasons.append('new_external_destination')
         if new_services:
             reasons.append('new_service_target')
+        if new_routes:
+            reasons.append('route_drift')
+        if new_visible_services:
+            reasons.append('new_visible_service')
+        if expected_change:
+            reasons.append('expected_change_context')
         if not reasons:
             reasons.append('no_new_exposure')
 
         return {
-            'status': 'expanding' if (new_external or new_services) else 'stable',
+            'status': 'expanding' if (new_external or new_services or new_routes or new_visible_services) else 'stable',
             'score': score,
             'label': _bucket(score),
             'new_external_destinations': sorted(new_external)[:12],
             'new_service_targets': sorted(new_services)[:12],
+            'new_route_markers': sorted(new_routes)[:12],
+            'new_visible_services': sorted(new_visible_services)[:12],
             'seen_external_destination_count': len(self._seen_external_destinations),
             'seen_service_target_count': len(self._seen_service_targets),
             'reasons': reasons,
@@ -921,13 +1130,17 @@ class SocEvaluator:
                 return 'impact'
             return 'unknown'
 
-        rows: List[Tuple[datetime, str, str]] = []
+        rows: List[Tuple[datetime, str, str, str, str]] = []
         evidence_ids: List[str] = []
         for payload in soc_payloads + flow_payloads:
             stage = infer_stage(payload)
             ts = _parse_ts(payload.get('ts')) or datetime.now(timezone.utc)
             event_id = str(payload.get('event_id') or '')
-            rows.append((ts, stage, event_id))
+            attrs = payload.get('attrs', {}) if isinstance(payload.get('attrs'), dict) else {}
+            src, dst = _parse_subject(str(payload.get('subject') or ''))
+            src = src or str(attrs.get('src_ip') or '')
+            dst = dst or str(attrs.get('dst_ip') or '')
+            rows.append((ts, stage, event_id, src, dst))
             if event_id:
                 evidence_ids.append(event_id)
 
@@ -944,15 +1157,35 @@ class SocEvaluator:
 
         rows.sort(key=lambda row: row[0])
         ordered: List[str] = []
-        for _, stage, _ in rows:
+        involved_entities: List[str] = []
+        for _, stage, _, src, dst in rows:
             if not ordered or ordered[-1] != stage:
                 ordered.append(stage)
+            for candidate in (src, dst):
+                text = str(candidate or '').strip()
+                if text and text not in involved_entities:
+                    involved_entities.append(text)
         distinct_non_unknown = [stage for stage in ordered if stage != 'unknown']
         distinct_count = len(distinct_non_unknown)
         score = min(100, 20 + (distinct_count * 20))
         if 'recon' in ordered and 'command' in ordered:
             score = min(100, score + 15)
         if 'access' in ordered and 'lateral' in ordered:
+            score = min(100, score + 10)
+        known_chains = [
+            ('recon', 'access', 'command'),
+            ('recon', 'access', 'lateral', 'command'),
+            ('access', 'lateral', 'impact'),
+        ]
+        chain_hits: List[str] = []
+        collapsed = [stage for stage in ordered if stage != 'unknown']
+        for chain in known_chains:
+            chain_len = len(chain)
+            for idx in range(0, max(0, len(collapsed) - chain_len + 1)):
+                if tuple(collapsed[idx : idx + chain_len]) == chain:
+                    chain_hits.append('->'.join(chain))
+                    break
+        if chain_hits:
             score = min(100, score + 10)
 
         if distinct_count >= 3:
@@ -969,6 +1202,8 @@ class SocEvaluator:
             reasons.append('single_stage_signal')
         else:
             reasons.append('insufficient_stage_signal')
+        if chain_hits:
+            reasons.append('known_chain_match')
 
         return {
             'status': status,
@@ -976,6 +1211,8 @@ class SocEvaluator:
             'label': _bucket(score),
             'stage_sequence': ordered[:8],
             'distinct_stage_count': distinct_count,
+            'chain_hits': chain_hits[:6],
+            'implicated_entities': involved_entities[:8],
             'reasons': reasons,
             'evidence_ids': sorted(dict.fromkeys(evidence_ids)),
         }
@@ -990,6 +1227,7 @@ class SocEvaluator:
         suppression_state: Dict[str, Any],
         visibility_state: Dict[str, Any],
         criticality_state: Dict[str, Any],
+        sot_diff: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         base_score = int(confidence.get('score') or 0)
         evidence_ids: List[str] = list(confidence.get('evidence_ids') or [])
@@ -1022,6 +1260,16 @@ class SocEvaluator:
             weakens.append('heavy_suppression')
         if int(criticality_state.get('critical_target_count') or 0) > 0:
             supports.append('critical_targeting_context')
+        if isinstance(sot_diff, dict):
+            if sot_diff.get('unauthorized_services'):
+                adjusted_score = min(100, adjusted_score + 4)
+                supports.append('sot_unauthorized_service_diff')
+            if sot_diff.get('path_deviations'):
+                adjusted_score = min(100, adjusted_score + 4)
+                supports.append('sot_path_deviation_diff')
+            if sot_diff.get('unauthorized_devices'):
+                adjusted_score = min(100, adjusted_score + 4)
+                supports.append('sot_unauthorized_device_diff')
 
         if adjusted_score >= 75:
             quality = 'high'
@@ -1098,7 +1346,7 @@ class SocEvaluator:
 
         now: List[Dict[str, Any]] = []
         watch: List[Dict[str, Any]] = []
-        later: List[Dict[str, Any]] = []
+        backlog: List[Dict[str, Any]] = []
         evidence_ids: List[str] = []
         for row in rows:
             score = int(row['score'])
@@ -1112,7 +1360,7 @@ class SocEvaluator:
             elif score >= 50:
                 watch.append(item)
             else:
-                later.append(item)
+                backlog.append(item)
             evidence_ids.extend(str(x) for x in row.get('evidence_ids', []) if str(x))
 
         if base >= 75:
@@ -1120,7 +1368,7 @@ class SocEvaluator:
         elif base >= 50:
             status = 'watch'
         elif base >= 25:
-            status = 'later'
+            status = 'backlog'
         else:
             status = 'idle'
 
@@ -1140,7 +1388,9 @@ class SocEvaluator:
             'label': _bucket(base),
             'now': now[:8],
             'watch': watch[:8],
-            'later': later[:8],
+            'backlog': backlog[:8],
+            'later': backlog[:8],
+            'top_priority_ids': [item['id'] for item in now[:5]] + [item['id'] for item in watch[:3]],
             'reasons': reasons,
             'evidence_ids': sorted(dict.fromkeys(evidence_ids)),
         }
