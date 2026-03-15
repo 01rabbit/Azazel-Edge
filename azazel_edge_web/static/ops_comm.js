@@ -202,7 +202,13 @@ function buildDemoQuestion(result) {
 }
 
 function renderAiPanels(data) {
-    setText('aiResult', `M.I.O.: ${data.answer || '-'}${data.runbook_id ? ` [runbook=${data.runbook_id}]` : ''}`);
+    const surfaceMessages = data.surface_messages && typeof data.surface_messages === 'object' ? data.surface_messages : {};
+    const opsSurface = surfaceMessages['ops-comm'] || data.surface_message || '';
+    if (opsSurface) {
+        setText('aiResult', opsSurface);
+    } else {
+        setText('aiResult', `M.I.O.: ${data.answer || '-'}${data.runbook_id ? ` [runbook=${data.runbook_id}]` : ''}`);
+    }
     setText('userGuidanceResult', data.user_message ? `${tr('ops.user_guidance', 'User Guidance')}: ${data.user_message}` : `${tr('ops.user_guidance', 'User Guidance')}: -`);
     setText('runbookResult', data.runbook_id ? `${tr('ops.runbook', 'Runbook')}: ${data.runbook_id}` : `${tr('ops.runbook', 'Runbook')}: ${tr('api.no_suggestion', 'no suggestion')}`);
     const review = data.runbook_review || null;

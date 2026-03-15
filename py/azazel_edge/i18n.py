@@ -221,7 +221,7 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "dashboard.top_talker_label": "Top Talker",
         "dashboard.client_inventory": "Client Inventory",
         "dashboard.client_identity_view": "Client Identity View",
-        "dashboard.client_identity_title": "いま影響を受けている端末",
+        "dashboard.client_identity_title": "Who is affected right now",
         "dashboard.client_identity_summary_waiting": "クライアント識別データを待っています。",
         "dashboard.client_identity_summary": "ETH {eth} / WLAN {wlan} / ARP-only {arp_only} / link drift {link_drift}",
         "dashboard.client_identity_toggle_show_normal": "正常も表示",
