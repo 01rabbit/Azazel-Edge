@@ -25,6 +25,7 @@ import socket
 import sys
 import time
 import subprocess
+import ipaddress
 import hashlib
 import queue
 import threading
@@ -267,7 +268,8 @@ for _candidate in _WEBUI_CA_CERT_CANDIDATES:
 ALLOWED_ACTIONS = {
     "refresh", "reprobe", "contain", "release", "details", "stage_open", "disconnect",
     "wifi_scan", "wifi_connect", "portal_viewer_open", "shutdown", "reboot",
-    "mode_set", "mode_status", "mode_get", "mode_portal", "mode_shield", "mode_scapegoat"
+    "mode_set", "mode_status", "mode_get", "mode_portal", "mode_shield", "mode_scapegoat",
+    "sot_trust_client",
 }
 
 
@@ -760,6 +762,262 @@ def _append_unique(items: List[str], value: str) -> None:
         items.append(text)
 
 
+_MIO_SURFACE_RULES: Dict[str, Dict[str, Any]] = {
+    "dashboard": {"max_chars": 260, "format": "summary_first"},
+    "ops-comm": {"max_chars": 900, "format": "conversation"},
+    "mattermost": {"max_chars": 1200, "format": "handoff_share"},
+}
+
+
+def _normalize_mio_audience(value: Any, default: str = "professional") -> str:
+    text = str(value or "").strip().lower()
+    if text in {"temporary", "beginner", "casual", "temp"}:
+        return "beginner"
+    if text in {"professional", "operator", "pro", "expert"}:
+        return "professional"
+    return "beginner" if default == "beginner" else "professional"
+
+
+def _normalize_mio_surface(value: Any, default: str = "dashboard") -> str:
+    text = str(value or "").strip().lower().replace("_", "-")
+    mapping = {
+        "dashboard": "dashboard",
+        "webui": "dashboard",
+        "ops-comm": "ops-comm",
+        "opscomm": "ops-comm",
+        "ops-comm-ui": "ops-comm",
+        "mattermost": "mattermost",
+        "mattermost-post": "mattermost",
+        "mattermost-command": "mattermost",
+    }
+    return mapping.get(text, mapping.get(str(default or "dashboard").strip().lower().replace("_", "-"), "dashboard"))
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    text = str(value or "").strip()
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return text[:limit]
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _mio_sentence_slices(text: str, limit: int = 3) -> List[str]:
+    chunks: List[str] = []
+    source = str(text or "").replace("\n", " ").strip()
+    if not source:
+        return []
+    parts = source.replace("。", ". ").replace("！", "! ").replace("？", "? ").split(".")
+    for part in parts:
+        item = part.strip(" \t\r\n。!?")
+        if not item:
+            continue
+        _append_unique(chunks, item)
+        if len(chunks) >= limit:
+            break
+    if not chunks:
+        chunks = [source]
+    return chunks[:limit]
+
+
+def _mio_review_payload(ai_result: Dict[str, Any]) -> Dict[str, Any]:
+    review = ai_result.get("runbook_review") if isinstance(ai_result.get("runbook_review"), dict) else {}
+    if review:
+        return review
+    alt = ai_result.get("review")
+    return alt if isinstance(alt, dict) else {}
+
+
+def _string_list(value: Any, limit: int = 3) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    out: List[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        _append_unique(out, text)
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
+def _mio_next_actions(ai_result: Dict[str, Any], lang: str, limit: int = 3) -> List[str]:
+    next_actions = _string_list(ai_result.get("do_next"), limit=limit)
+    if not next_actions:
+        next_actions = _string_list(ai_result.get("current_operator_actions"), limit=limit)
+    runbook_id = str(ai_result.get("runbook_id") or "").strip()
+    if runbook_id and len(next_actions) < limit:
+        _append_unique(
+            next_actions,
+            (f"Runbook `{runbook_id}` で確認を進める" if lang == "ja" else f"Proceed with runbook `{runbook_id}` checks."),
+        )
+    handoff = ai_result.get("handoff") if isinstance(ai_result.get("handoff"), dict) else {}
+    ops_comm = str(handoff.get("ops_comm") or "").strip()
+    if ops_comm and len(next_actions) < limit:
+        _append_unique(
+            next_actions,
+            (f"不確実な点は `{ops_comm}` に引き継ぐ" if lang == "ja" else f"Handoff unresolved points to `{ops_comm}`."),
+        )
+    return next_actions[:limit]
+
+
+def _mio_beginner_steps(ai_result: Dict[str, Any], lang: str, limit: int = 3) -> List[str]:
+    steps: List[str] = []
+    user_message = str(ai_result.get("user_message") or "").strip()
+    answer = str(ai_result.get("answer") or "").strip()
+    if user_message:
+        for piece in _mio_sentence_slices(user_message, limit=limit):
+            _append_unique(steps, piece)
+            if len(steps) >= limit:
+                break
+    if answer and len(steps) < limit:
+        for piece in _mio_sentence_slices(answer, limit=limit):
+            _append_unique(steps, piece)
+            if len(steps) >= limit:
+                break
+    for action in _mio_next_actions(ai_result, lang=lang, limit=limit):
+        if len(steps) >= limit:
+            break
+        _append_unique(steps, action)
+    if not steps:
+        _append_unique(
+            steps,
+            "最初の安全確認を優先してください。" if lang == "ja" else "Prioritize the first safe check.",
+        )
+    return steps[:limit]
+
+
+def _mio_labels(lang: str) -> Dict[str, str]:
+    if lang == "ja":
+        return {
+            "summary": "Summary",
+            "do_now": "Do now",
+            "rationale": "Rationale",
+            "review": "Review",
+            "next": "Next",
+            "runbook": "Runbook",
+            "continue": "Continue",
+        }
+    return {
+        "summary": "Summary",
+        "do_now": "Do now",
+        "rationale": "Rationale",
+        "review": "Review",
+        "next": "Next",
+        "runbook": "Runbook",
+        "continue": "Continue",
+    }
+
+
+def _build_mio_message_profile(
+    audience: Any = None,
+    lang: Any = None,
+    surface: Any = None,
+) -> Dict[str, Any]:
+    lang_norm = normalize_lang(lang)
+    audience_norm = _normalize_mio_audience(audience, default="professional")
+    surface_norm = _normalize_mio_surface(surface, default="dashboard")
+    rule = _MIO_SURFACE_RULES.get(surface_norm, _MIO_SURFACE_RULES["dashboard"])
+    return {
+        "audience": audience_norm,
+        "lang": lang_norm,
+        "surface": surface_norm,
+        "style": "action_first" if audience_norm == "beginner" else "summary_rationale_next",
+        "max_chars": int(rule["max_chars"]),
+        "max_steps": 3 if audience_norm == "beginner" else None,
+        "format": str(rule["format"]),
+    }
+
+
+def _build_mio_surface_message(ai_result: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    lang = normalize_lang(profile.get("lang"))
+    audience = _normalize_mio_audience(profile.get("audience"), default="professional")
+    surface = _normalize_mio_surface(profile.get("surface"), default="dashboard")
+    labels = _mio_labels(lang)
+    max_chars = int(profile.get("max_chars") or _MIO_SURFACE_RULES.get(surface, {}).get("max_chars") or 260)
+    runbook_id = str(ai_result.get("runbook_id") or "").strip()
+    handoff = ai_result.get("handoff") if isinstance(ai_result.get("handoff"), dict) else {}
+    ops_comm = str(handoff.get("ops_comm") or "").strip()
+    review = _mio_review_payload(ai_result)
+    review_status = str(review.get("final_status") or "").strip()
+
+    if audience == "beginner":
+        steps = _mio_beginner_steps(ai_result, lang=lang, limit=3)
+        if surface == "dashboard":
+            headline = steps[0] if steps else ("最初の確認から開始してください。" if lang == "ja" else "Start with the first safety check.")
+            return _truncate_text(headline, max_chars)
+        lines = [f"{labels['do_now']}:"]
+        for idx, step in enumerate(steps[:3], start=1):
+            lines.append(f"{idx}. {step}")
+        if runbook_id:
+            lines.append(f"{labels['runbook']}: `{runbook_id}`")
+        if ops_comm:
+            lines.append(f"{labels['continue']}: `{ops_comm}`")
+        return _truncate_text("\n".join(lines), max_chars)
+
+    summary = str(ai_result.get("answer") or ai_result.get("user_message") or "").strip() or "-"
+    rationale = _string_list(ai_result.get("rationale"), limit=3) or _assist_rationale(ai_result)[:3]
+    next_actions = _mio_next_actions(ai_result, lang=lang, limit=3)
+    if surface == "dashboard":
+        parts = [summary]
+        if rationale:
+            parts.append(f"{labels['rationale']}: {rationale[0]}")
+        if review_status:
+            parts.append(f"{labels['review']}: {review_status}")
+        if next_actions:
+            parts.append(f"{labels['next']}: {next_actions[0]}")
+        return _truncate_text(" | ".join(parts), max_chars)
+
+    lines = [f"{labels['summary']}: {summary}"]
+    if rationale:
+        lines.append(f"{labels['rationale']}: " + " | ".join(rationale[:2]))
+    if review_status:
+        lines.append(f"{labels['review']}: `{review_status}`")
+    if next_actions:
+        lines.append(f"{labels['next']}: " + " | ".join(next_actions[:2]))
+    if runbook_id:
+        lines.append(f"{labels['runbook']}: `{runbook_id}`")
+    if ops_comm:
+        lines.append(f"{labels['continue']}: `{ops_comm}`")
+    return _truncate_text("\n".join(lines), max_chars)
+
+
+def _build_mio_surface_messages(
+    ai_result: Dict[str, Any],
+    audience: Any = None,
+    lang: Any = None,
+) -> Dict[str, str]:
+    audience_norm = _normalize_mio_audience(audience, default="professional")
+    lang_norm = normalize_lang(lang)
+    messages: Dict[str, str] = {}
+    for surface in ("dashboard", "ops-comm", "mattermost"):
+        profile = _build_mio_message_profile(audience=audience_norm, lang=lang_norm, surface=surface)
+        messages[surface] = _build_mio_surface_message(ai_result, profile)
+    return messages
+
+
+def _compose_mio_message_bundle(
+    ai_result: Dict[str, Any],
+    audience: Any = None,
+    lang: Any = None,
+    surface: Any = None,
+) -> Dict[str, Any]:
+    profile = _build_mio_message_profile(audience=audience, lang=lang, surface=surface)
+    messages = _build_mio_surface_messages(
+        ai_result,
+        audience=profile["audience"],
+        lang=profile["lang"],
+    )
+    return {
+        "profile": profile,
+        "surface_messages": messages,
+        "surface_message": str(messages.get(profile["surface"]) or ""),
+    }
+
+
 def _normal_assurance_payload(
     state: Dict[str, Any],
     metrics: Dict[str, Any],
@@ -900,6 +1158,60 @@ def _mask_mac(mac: str) -> str:
     return text[:2] + "**"
 
 
+def _client_trust_eligible(ip: str, mac: str, sot_status: str) -> bool:
+    if str(sot_status or "").strip().lower() == "known":
+        return True
+    if str(mac or "").strip():
+        return True
+    try:
+        return ipaddress.ip_address(str(ip or "").strip()).is_private
+    except ValueError:
+        return False
+
+
+def _client_interface_family(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "unknown"
+    if text.startswith("wl"):
+        return "wlan"
+    if text.startswith("eth"):
+        return "eth"
+    return "other"
+
+
+def _managed_client_cidrs() -> List[ipaddress._BaseNetwork]:
+    raw = str(os.environ.get("AZAZEL_MANAGED_CLIENT_CIDRS", "172.16.0.0/24")).strip()
+    networks: List[ipaddress._BaseNetwork] = []
+    for item in [part.strip() for part in raw.split(",") if part.strip()]:
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            continue
+    return networks
+
+
+def _ip_in_managed_client_scope(ip: str, networks: List[ipaddress._BaseNetwork]) -> bool:
+    text = str(ip or "").strip()
+    if not text:
+        return False
+    try:
+        addr = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return any(addr in network for network in networks)
+
+
+def _client_identity_excluded_ips(state: Dict[str, Any]) -> set[str]:
+    excluded: set[str] = set()
+    for key in ("gateway_ip", "up_ip", "down_ip"):
+        value = str(state.get(key) or "").strip()
+        if value and value != "-":
+            excluded.add(value)
+    excluded.update({"127.0.0.1", "::1"})
+    return excluded
+
+
 def _client_identity_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
     sessions_raw = state.get("noc_client_sessions") if isinstance(state.get("noc_client_sessions"), list) else []
     rows: List[Dict[str, Any]] = []
@@ -919,6 +1231,13 @@ def _client_identity_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
         "authorized_missing": 4,
         "authorized_present": 9,
     }
+    segment_counts = {"eth": 0, "wlan": 0, "other": 0, "unknown": 0}
+    arp_only_count = 0
+    infra_filtered_count = 0
+    ignored_filtered_count = 0
+    expected_link_mismatch_count = 0
+    excluded_ips = _client_identity_excluded_ips(state)
+    managed_cidrs = _managed_client_cidrs()
 
     for row in sessions_raw[:200]:
         if not isinstance(row, dict):
@@ -927,20 +1246,53 @@ def _client_identity_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
         state_label = state_map.get(session_state, "unknown")
         requires_attention = session_state != "authorized_present"
         ip = str(row.get("ip") or "")
+        if ip in excluded_ips:
+            infra_filtered_count += 1
+            continue
+        if not _ip_in_managed_client_scope(ip, managed_cidrs):
+            infra_filtered_count += 1
+            continue
         hostname = str(row.get("hostname") or "")
         mac = str(row.get("mac") or "").lower()
+        sot_status = str(row.get("sot_status") or "unknown")
+        interface_or_segment = str(row.get("interface_or_segment") or "unknown")
+        interface_family = _client_interface_family(str(row.get("interface_family") or interface_or_segment))
+        session_origin = str(row.get("session_origin") or "unknown")
+        monitoring_scope = str(row.get("monitoring_scope") or "managed")
+        if monitoring_scope == "ignore":
+            ignored_filtered_count += 1
+            continue
+        if interface_family not in segment_counts:
+            interface_family = "other"
+        segment_counts[interface_family] += 1
+        if session_origin == "arp_only":
+            arp_only_count += 1
+        if bool(row.get("expected_link_mismatch")):
+            expected_link_mismatch_count += 1
         display_name = hostname or ip or mac or str(row.get("session_key") or "unknown-client")
         rows.append(
             {
                 "session_key": str(row.get("session_key") or ""),
                 "display_name": display_name,
+                "hostname": hostname or "",
                 "ip": ip or "-",
+                "mac": mac or "",
                 "masked_mac": _mask_mac(mac),
                 "state": state_label,
                 "state_raw": session_state,
-                "sot_status": str(row.get("sot_status") or "unknown"),
+                "sot_status": sot_status,
+                "trusted": bool(sot_status == "known" and session_state != "unauthorized_present"),
+                "trust_eligible": _client_trust_eligible(ip, mac, sot_status),
                 "last_seen": str(row.get("last_seen") or ""),
-                "interface_or_segment": str(row.get("interface_or_segment") or "unknown"),
+                "interface_or_segment": interface_or_segment,
+                "interface_family": interface_family,
+                "session_origin": session_origin,
+                "sources_present": [str(item) for item in (row.get("sources_present") or []) if str(item)],
+                "note": str(row.get("notes") or ""),
+                "allowed_networks": [str(item) for item in (row.get("allowed_networks") or []) if str(item)],
+                "expected_interface_or_segment": str(row.get("expected_interface_or_segment") or ""),
+                "expected_link_mismatch": bool(row.get("expected_link_mismatch")),
+                "monitoring_scope": monitoring_scope,
                 "requires_attention": requires_attention,
             }
         )
@@ -960,7 +1312,46 @@ def _client_identity_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
         "show_normal_toggle": True,
         "attention_count": attention_count,
         "normal_count": normal_count,
+        "segment_counts": segment_counts,
+        "arp_only_count": arp_only_count,
+        "infra_filtered_count": infra_filtered_count,
+        "ignored_filtered_count": ignored_filtered_count,
+        "expected_link_mismatch_count": expected_link_mismatch_count,
         "items": rows[:120],
+    }
+
+
+def _remote_peer_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
+    noc_capacity = state.get("noc_capacity") if isinstance(state.get("noc_capacity"), dict) else {}
+    top_sources = noc_capacity.get("top_sources") if isinstance(noc_capacity.get("top_sources"), list) else []
+    managed_cidrs = _managed_client_cidrs()
+    excluded_ips = _client_identity_excluded_ips(state)
+    items: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in top_sources[:12]:
+        if not isinstance(row, dict):
+            continue
+        ip = str(row.get("src_ip") or row.get("id") or "").strip()
+        if not ip or ip in seen:
+            continue
+        seen.add(ip)
+        if ip in excluded_ips:
+            continue
+        if _ip_in_managed_client_scope(ip, managed_cidrs):
+            continue
+        items.append(
+            {
+                "id": ip,
+                "label": ip,
+                "bytes": _as_int(row.get("bytes"), 0),
+                "packets": _as_int(row.get("packets"), 0),
+                "flows": _as_int(row.get("flows"), 0),
+            }
+        )
+    items.sort(key=lambda item: (-_as_int(item.get("bytes"), 0), str(item.get("id") or "")))
+    return {
+        "count": len(items),
+        "items": items[:8],
     }
 
 
@@ -1392,6 +1783,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     noc_config_drift = state.get("noc_config_drift") if isinstance(state.get("noc_config_drift"), dict) else {}
     noc_incident_summary = state.get("noc_incident_summary") if isinstance(state.get("noc_incident_summary"), dict) else {}
     client_identity_view = _client_identity_view_payload(state)
+    remote_peer_view = _remote_peer_view_payload(state)
     soc_attack_candidates = (
         second_pass_soc.get("attack_candidates")
         if isinstance(second_pass_soc.get("attack_candidates"), list)
@@ -1613,6 +2005,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
                 "stale_session_count": _as_int(noc_client_inventory.get("stale_session_count"), 0),
             },
             "client_identity_view": client_identity_view,
+            "remote_peers": remote_peer_view,
             "client_impact": {
                 "scope": path_scope,
                 "segment_scope": str(state.get("up_if") or "unknown"),
@@ -1639,8 +2032,17 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     }
 
 
-def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], llm_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _dashboard_actions_payload(
+    state: Dict[str, Any],
+    advisory: Dict[str, Any],
+    llm_rows: List[Dict[str, Any]],
+    *,
+    audience: str | None = None,
+    surface: str | None = None,
+) -> Dict[str, Any]:
     lang = _request_lang()
+    audience_norm = _normalize_mio_audience(audience, default="beginner")
+    surface_norm = _normalize_mio_surface(surface or "dashboard", default="dashboard")
     latest_ai = _dashboard_visible_ai_context(state, advisory, llm_rows)
     noc_runbook_support = _dashboard_noc_runbook_support(state, lang=lang)
     selected_runbook_id = str(latest_ai.get("runbook_id") or noc_runbook_support.get("runbook_candidate_id") or "")
@@ -1701,6 +2103,22 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
         decision_pipeline = advisory.get("decision_pipeline")
     first_pass = decision_pipeline.get("first_pass") if isinstance(decision_pipeline.get("first_pass"), dict) else {}
     second_pass = decision_pipeline.get("second_pass") if isinstance(decision_pipeline.get("second_pass"), dict) else {}
+    mio_model_payload = {
+        "answer": str(latest_ai.get("answer") or ""),
+        "user_message": user_guidance[:160],
+        "runbook_id": selected_runbook_id,
+        "runbook_review": review,
+        "rationale": rationale[:4],
+        "do_next": guidance["do_next"][:3],
+        "current_operator_actions": guidance["do_next"][:3],
+        "handoff": _assist_handoff_payload(),
+    }
+    mio_bundle = _compose_mio_message_bundle(
+        mio_model_payload,
+        audience=audience_norm,
+        lang=lang,
+        surface=surface_norm,
+    )
     return {
         "ok": True,
         "current_operator_actions": guidance["do_next"],
@@ -1736,7 +2154,12 @@ def _dashboard_actions_payload(state: Dict[str, Any], advisory: Dict[str, Any], 
                 "ops_comm": "/ops-comm",
                 "mattermost": MATTERMOST_OPEN_URL,
             },
+            "message_profile": mio_bundle["profile"],
+            "surface_message": mio_bundle["surface_message"],
+            "surface_messages": mio_bundle["surface_messages"],
         },
+        "mio_message_profile": mio_bundle["profile"],
+        "mio_surface_messages": mio_bundle["surface_messages"],
         "links": {
             "ask_mio": "/ops-comm",
             "mattermost": MATTERMOST_OPEN_URL,
@@ -2135,29 +2558,24 @@ def _format_mattermost_ai_response(
     lines: List[str] = []
     if isinstance(ai_result, dict):
         routed = str(ai_result.get("status") or "") == "routed"
-        answer = str(ai_result.get("answer") or "").strip()
-        if answer:
-            prefix = "" if answer.startswith("M.I.O.") else "M.I.O.: "
-            lines.append(f"{prefix}{answer}")
-        rationale = ai_result.get("rationale")
-        if isinstance(rationale, list) and rationale:
-            lines.append("Rationale: " + " | ".join(str(x) for x in rationale[:2]))
+        profile = ai_result.get("mio_message_profile") if isinstance(ai_result.get("mio_message_profile"), dict) else {}
+        audience = (
+            profile.get("audience")
+            or ai_result.get("audience")
+            or ("beginner" if str(ai_result.get("source") or "").lower() == "temporary" else "operator")
+        )
+        bundle = _compose_mio_message_bundle(ai_result, audience=audience, lang=lang_norm, surface="mattermost")
+        mattermost_summary = str(bundle.get("surface_message") or "").strip()
+        if mattermost_summary:
+            lines.append(mattermost_summary)
+        else:
+            answer = str(ai_result.get("answer") or "").strip()
+            if answer:
+                prefix = "" if answer.startswith("M.I.O.") else "M.I.O.: "
+                lines.append(f"{prefix}{answer}")
         user_message = str(ai_result.get("user_message") or "").strip()
-        if user_message:
+        if user_message and user_message not in "\n".join(lines):
             lines.append(f"{tr('api.user_guidance', default='User Guidance')}: {user_message}")
-        runbook_id = str(ai_result.get("runbook_id") or "").strip()
-        review = ai_result.get("runbook_review") if isinstance(ai_result.get("runbook_review"), dict) else {}
-        if runbook_id:
-            lines.append(f"{tr('api.suggested_runbook', default='Suggested Runbook')}: `{runbook_id}`")
-        if review:
-            lines.append(f"{tr('api.review_prefix', default='Review')}: `{review.get('final_status', '-')}`")
-            changes = review.get("required_changes")
-            if isinstance(changes, list) and changes:
-                lines.append(tr("api.required_changes", default="Required Changes") + ": " + " | ".join(str(x) for x in changes[:3]))
-        handoff = ai_result.get("handoff") if isinstance(ai_result.get("handoff"), dict) else {}
-        ops_comm = str(handoff.get("ops_comm") or "").strip()
-        if ops_comm:
-            lines.append(f"{tr('api.continue', default='Continue')}: `{ops_comm}`")
         if routed:
             return "\n".join(lines)[:1200]
     if isinstance(proposals, dict):
@@ -2261,19 +2679,58 @@ def _assist_rationale(ai_result: Dict[str, Any]) -> List[str]:
     return rationale[:4]
 
 
-def _enrich_ai_result(ai_result: Dict[str, Any] | None) -> Dict[str, Any]:
+def _enrich_ai_result(
+    ai_result: Dict[str, Any] | None,
+    *,
+    audience: str | None = None,
+    lang: str | None = None,
+    surface: str | None = None,
+) -> Dict[str, Any]:
     result = dict(ai_result) if isinstance(ai_result, dict) else {}
+    lang_norm = normalize_lang(lang or _request_lang())
+    surface_norm = _normalize_mio_surface(surface or "dashboard", default="dashboard")
+    audience_norm = _normalize_mio_audience(audience, default="professional")
     if not result:
-        return {"ok": False, "error": "empty_ai_result", "rationale": [], "handoff": _assist_handoff_payload()}
+        bundle = _compose_mio_message_bundle(
+            {},
+            audience=audience_norm,
+            lang=lang_norm,
+            surface=surface_norm,
+        )
+        return {
+            "ok": False,
+            "error": "empty_ai_result",
+            "rationale": [],
+            "handoff": _assist_handoff_payload(),
+            "mio_message_profile": bundle["profile"],
+            "surface_messages": bundle["surface_messages"],
+            "surface_message": bundle["surface_message"],
+        }
     runbook_id = str(result.get("runbook_id") or "").strip()
     if runbook_id and not str(result.get("user_message") or "").strip() and runbook_get is not None:
         try:
-            runbook = runbook_get(runbook_id, lang=_request_lang())
-            result["user_message"] = localize_runbook_user_message(runbook, lang=_request_lang())[:160]
+            runbook = runbook_get(runbook_id, lang=lang_norm)
+            result["user_message"] = localize_runbook_user_message(runbook, lang=lang_norm)[:160]
         except Exception:
             pass
-    result["rationale"] = _assist_rationale(result)
-    result["handoff"] = _assist_handoff_payload()
+    existing_rationale = _string_list(result.get("rationale"), limit=4)
+    result["rationale"] = existing_rationale if existing_rationale else _assist_rationale(result)
+    handoff = result.get("handoff") if isinstance(result.get("handoff"), dict) else {}
+    if not handoff:
+        result["handoff"] = _assist_handoff_payload()
+    else:
+        merged_handoff = dict(_assist_handoff_payload())
+        merged_handoff.update({k: v for k, v in handoff.items() if v})
+        result["handoff"] = merged_handoff
+    bundle = _compose_mio_message_bundle(
+        result,
+        audience=audience_norm,
+        lang=lang_norm,
+        surface=surface_norm,
+    )
+    result["mio_message_profile"] = bundle["profile"]
+    result["surface_messages"] = bundle["surface_messages"]
+    result["surface_message"] = bundle["surface_message"]
     return result
 
 
@@ -2703,6 +3160,7 @@ def read_state() -> Dict[str, Any]:
             if isinstance(data, dict):
                 data["ok"] = True
                 data["source"] = source
+                data["now_time"] = time.strftime("%H:%M:%S")
                 return data
 
         # Try primary path (TUI snapshot)
@@ -2725,6 +3183,7 @@ def read_state() -> Dict[str, Any]:
             raise ValueError("ui_snapshot.json could not be parsed as object")
         data["ok"] = True
         data.setdefault("source", f"FILE:{path}")
+        data["now_time"] = time.strftime("%H:%M:%S")
         return data
     except Exception as e:
         return {
@@ -3573,7 +4032,10 @@ def api_ai_ask():
     source = str(body.get("source") or "webui").strip() or "webui"
     context = body.get("context") if isinstance(body.get("context"), dict) else {}
     context = dict(context)
-    context.setdefault("lang", str(body.get("lang") or _request_lang()))
+    lang = str(context.get("lang") or body.get("lang") or _request_lang())
+    context["lang"] = lang
+    audience = str(context.get("audience") or body.get("audience") or "").strip()
+    surface = str(context.get("surface") or context.get("page") or source).strip()
     if not question:
         return jsonify({"ok": False, "error": "question is required"}), 400
     result = _send_ai_manual_query(
@@ -3582,7 +4044,7 @@ def api_ai_ask():
         source=source,
         context=context,
     )
-    result = _enrich_ai_result(result)
+    result = _enrich_ai_result(result, audience=audience, lang=lang, surface=surface)
     code = 200 if result.get("ok") else 500
     return jsonify(result), code
 
@@ -3815,7 +4277,9 @@ def api_dashboard_actions():
     state = read_state()
     advisory = _read_json_file(AI_ADVISORY_PATH)
     llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
-    return jsonify(_dashboard_actions_payload(state, advisory, llm_rows)), 200
+    audience = str(request.args.get("audience") or "temporary").strip() or "temporary"
+    surface = str(request.args.get("surface") or "dashboard").strip() or "dashboard"
+    return jsonify(_dashboard_actions_payload(state, advisory, llm_rows, audience=audience, surface=surface)), 200
 
 
 @app.route("/api/dashboard/evidence", methods=["GET"])
@@ -3838,6 +4302,43 @@ def api_dashboard_health():
     llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
     runbook_rows = _tail_jsonl(RUNBOOK_EVENT_LOG, limit=20)
     return jsonify(_dashboard_health_payload(state, metrics, llm_rows, runbook_rows)), 200
+
+
+@app.route("/api/clients/trust", methods=["POST"])
+@require_token()
+def api_clients_trust():
+    body = request.get_json(silent=True) or {}
+    trusted = bool(body.get("trusted", False))
+    ignored = bool(body.get("ignored", False))
+    ip = str(body.get("ip") or "").strip()
+    mac = str(body.get("mac") or "").strip().lower()
+    hostname = str(body.get("hostname") or body.get("display_name") or "").strip()
+    session_key = str(body.get("session_key") or "").strip()
+    interface_or_segment = str(body.get("interface_or_segment") or "").strip()
+    note = str(body.get("note") or "").strip()[:240]
+    expected_interface_or_segment = str(body.get("expected_interface_or_segment") or "").strip()
+    allowed_networks = body.get("allowed_networks")
+
+    if not session_key and not ip and not mac:
+        return jsonify({"ok": False, "error": "session_key_or_ip_or_mac_required"}), 400
+
+    result = send_control_command_with_params(
+        "sot_trust_client",
+        {
+            "trusted": trusted,
+            "ignored": ignored,
+            "ip": ip,
+            "mac": mac,
+            "hostname": hostname,
+            "display_name": str(body.get("display_name") or "").strip(),
+            "session_key": session_key,
+            "interface_or_segment": interface_or_segment,
+            "note": note,
+            "expected_interface_or_segment": expected_interface_or_segment,
+            "allowed_networks": allowed_networks,
+        },
+    )
+    return jsonify(result), (200 if result.get("ok") else 400)
 
 
 @app.route("/api/runbooks", methods=["GET"])
@@ -3944,19 +4445,20 @@ def api_mattermost_message():
         runbook_proposals: Dict[str, Any] | None = None
         if ask_ai:
             lang = str(body.get("lang") or _request_lang())
+            audience = str(body.get("audience") or "operator").strip() or "operator"
             ai_result = _enrich_ai_result(_send_ai_manual_query(
                 question=message,
                 sender=sender,
                 source="mattermost_post",
-                context={"channel_id": MATTERMOST_CHANNEL_ID, "lang": lang},
-            ))
+                context={"channel_id": MATTERMOST_CHANNEL_ID, "lang": lang, "audience": audience, "page": "mattermost"},
+            ), audience=audience, lang=lang, surface="mattermost")
             if runbook_propose is not None:
                 try:
                     runbook_proposals = runbook_propose(
                         message,
-                        audience="operator",
+                        audience=audience,
                         max_items=3,
-                        context={"question": message, "source": "mattermost_post", "lang": lang},
+                        context={"question": message, "source": "mattermost_post", "lang": lang, "audience": audience},
                     )
                 except Exception:
                     runbook_proposals = None
@@ -3990,7 +4492,7 @@ def api_mattermost_command():
         source="mattermost_command",
         context={"channel_id": channel_id, "page": "mattermost", "audience": audience, "lang": lang},
     )
-    ai_result = _enrich_ai_result(ai_result)
+    ai_result = _enrich_ai_result(ai_result, audience=audience, lang=lang, surface="mattermost")
     proposals = None
     if runbook_propose is not None:
         try:

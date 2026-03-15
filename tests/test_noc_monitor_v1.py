@@ -11,10 +11,42 @@ if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 
 from azazel_edge.evidence_plane import NocProbeAdapter
-from azazel_edge.sensors.noc_monitor import LightweightNocMonitor, SERVICE_TARGETS
+from azazel_edge.sensors.noc_monitor import LightweightNocMonitor, SERVICE_TARGETS, collect_arp_table
 
 
 class LightweightNocMonitorV1Tests(unittest.TestCase):
+    def test_collect_arp_table_enriches_bridge_port(self) -> None:
+        def _fake_run(cmd, timeout=3.0):
+            if cmd[:3] == ['bridge', 'fdb', 'show']:
+                return '00:e0:4c:8c:8f:92 dev eth0 master br0 \\n'
+            if cmd[:4] == ['iw', 'dev', 'wlan0', 'station']:
+                return ''
+            if cmd[:3] == ['ip', 'neigh', 'show']:
+                return '172.16.0.156 dev br0 lladdr 00:e0:4c:8c:8f:92 STALE\\n'
+            return ''
+
+        with patch('azazel_edge.sensors.noc_monitor._run', side_effect=_fake_run):
+            rows = collect_arp_table()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['dev'], 'br0')
+        self.assertEqual(rows[0]['bridge_port'], 'eth0')
+
+    def test_collect_arp_table_falls_back_to_wlan_station_when_bridge_port_missing(self) -> None:
+        def _fake_run(cmd, timeout=3.0):
+            if cmd[:3] == ['bridge', 'fdb', 'show']:
+                return ''
+            if cmd[:4] == ['iw', 'dev', 'wlan0', 'station']:
+                return 'Station 00:e0:4c:8c:8f:92 (on wlan0)\\n'
+            if cmd[:3] == ['ip', 'neigh', 'show']:
+                return '172.16.0.156 dev br0 lladdr 00:e0:4c:8c:8f:92 STALE\\n'
+            return ''
+
+        with patch('azazel_edge.sensors.noc_monitor._run', side_effect=_fake_run):
+            rows = collect_arp_table()
+
+        self.assertEqual(rows[0]['bridge_port'], 'wlan0')
+
     def test_snapshot_contains_issue_defined_collectors(self) -> None:
         with patch('azazel_edge.sensors.noc_monitor.collect_icmp', return_value={'target': '192.168.40.1', 'reachable': True}), \
              patch('azazel_edge.sensors.noc_monitor.collect_path_probes', return_value=[{'target': '192.168.40.1', 'scope': 'gateway', 'reachable': True}]), \

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import ipaddress
+import os
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .schema import EvidenceEvent, iso_utc_now
@@ -52,6 +53,50 @@ def _network_id(networks: List[Dict[str, Any]], ip: str) -> str:
         if addr in cidr:
             return str(item.get('id') or '')
     return ''
+
+
+def _interface_family(name: str) -> str:
+    text = str(name or '').strip().lower()
+    if not text:
+        return 'unknown'
+    if text.startswith('wl'):
+        return 'wlan'
+    if text.startswith('eth'):
+        return 'eth'
+    return 'other'
+
+
+def _managed_client_cidrs(configured: List[str] | None = None) -> List[ipaddress._BaseNetwork]:
+    raw_items = configured
+    if raw_items is None:
+        raw = str(os.environ.get('AZAZEL_MANAGED_CLIENT_CIDRS', '172.16.0.0/24')).strip()
+        raw_items = [part.strip() for part in raw.split(',') if part.strip()]
+    networks: List[ipaddress._BaseNetwork] = []
+    for item in raw_items or []:
+        try:
+            networks.append(ipaddress.ip_network(str(item), strict=False))
+        except ValueError:
+            continue
+    return networks
+
+
+def _managed_client_interfaces(configured: List[str] | None = None) -> set[str]:
+    raw_items = configured
+    if raw_items is None:
+        raw = str(os.environ.get('AZAZEL_MANAGED_CLIENT_INTERFACES', 'eth0,wlan0')).strip()
+        raw_items = [part.strip().lower() for part in raw.split(',') if part.strip()]
+    return {str(item).strip().lower() for item in (raw_items or []) if str(item).strip()}
+
+
+def _ip_in_managed_scope(ip: str, managed_cidrs: List[ipaddress._BaseNetwork]) -> bool:
+    text = str(ip or '').strip()
+    if not text:
+        return False
+    try:
+        addr = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return any(addr in network for network in managed_cidrs)
 
 
 @dataclass
@@ -107,12 +152,24 @@ def _device_lookup(sot: Dict[str, Any] | None) -> Tuple[Dict[str, Dict[str, Any]
     return by_ip, by_mac, [item for item in networks if isinstance(item, dict)]
 
 
+def _device_monitoring_scope(device: Dict[str, Any]) -> str:
+    if not isinstance(device, dict):
+        return 'managed'
+    return str(device.get('monitoring_scope') or device.get('managed_scope') or 'managed').strip().lower() or 'managed'
+
+
+def _device_ignored(device: Dict[str, Any]) -> bool:
+    return _device_monitoring_scope(device) == 'ignore'
+
+
 def build_client_inventory(
     events: Iterable[Any],
     sot: Dict[str, Any] | None = None,
     stale_after_sec: int = 900,
     new_after_sec: int = 300,
     now_ts: str | None = None,
+    managed_client_cidrs: List[str] | None = None,
+    managed_client_interfaces: List[str] | None = None,
 ) -> Dict[str, Any]:
     payloads = _event_payloads(events)
     by_ip, by_mac, networks = _device_lookup(sot)
@@ -120,6 +177,8 @@ def build_client_inventory(
     now_norm = str(now_ts or iso_utc_now())
     now_epoch = _epoch(now_norm) or datetime.now(timezone.utc).timestamp()
     seen_sot_keys: set[str] = set()
+    scoped_cidrs = _managed_client_cidrs(managed_client_cidrs)
+    scoped_interfaces = _managed_client_interfaces(managed_client_interfaces)
 
     def ensure_session(key: str) -> _SessionRecord:
         if key not in sessions:
@@ -150,18 +209,35 @@ def build_client_inventory(
             iface = str(attrs.get('interface') or '')
             hostname = str(attrs.get('hostname') or '')
             source_name = 'dhcp'
+            if not _ip_in_managed_scope(ip, scoped_cidrs):
+                continue
         elif kind == 'arp_entry':
             ip = str(attrs.get('ip') or '')
             mac = str(attrs.get('mac') or '').lower()
-            iface = str(attrs.get('dev') or attrs.get('interface') or '')
+            iface = str(attrs.get('bridge_port') or attrs.get('dev') or attrs.get('interface') or '')
             source_name = 'arp'
+            if not _ip_in_managed_scope(ip, scoped_cidrs):
+                continue
+            session = find_session(ip, mac=mac)
+            if session is None:
+                if str(iface or '').strip().lower() not in scoped_interfaces:
+                    continue
+                session = ensure_session(mac or f'{ip}|{iface or "unknown"}')
+                session.ip = ip
+                session.mac = mac
+                session.interface_or_segment = iface or session.interface_or_segment
         elif kind == 'flow_summary':
             ip = str(attrs.get('src_ip') or '')
             if not ip:
                 continue
+            if not _ip_in_managed_scope(ip, scoped_cidrs):
+                continue
             service_hint = f"{attrs.get('app_proto') or attrs.get('proto') or 'unknown'}:{int(attrs.get('dst_port') or 0)}"
             source_name = 'flow'
-            session = find_session(ip) or ensure_session(f'{ip}|flow')
+            session = find_session(ip)
+            if session is None:
+                # Flow-only observations are remote peers until DHCP/ARP shows a directly attached endpoint.
+                continue
             if not session.ip:
                 session.ip = ip
             if service_hint:
@@ -176,11 +252,19 @@ def build_client_inventory(
         else:
             continue
 
-        session = find_session(ip, mac=mac) or ensure_session(mac or f'{ip}|{iface or "unknown"}')
+        if kind == 'dhcp_lease':
+            session = find_session(ip, mac=mac) or ensure_session(mac or f'{ip}|{iface or "unknown"}')
+        else:
+            session = find_session(ip, mac=mac)
+            if session is None:
+                continue
         session.ip = session.ip or ip
         session.mac = session.mac or mac
         session.hostname = session.hostname or hostname
-        session.interface_or_segment = session.interface_or_segment or iface or _network_id(networks, ip) or 'unknown'
+        if iface and str(session.interface_or_segment or '').strip().lower() in {'', 'unknown'}:
+            session.interface_or_segment = iface
+        else:
+            session.interface_or_segment = session.interface_or_segment or iface or _network_id(networks, ip) or 'unknown'
         if kind == 'arp_entry':
             session.arp_state = str(attrs.get('state') or '')
         session.sources_present.add(source_name)
@@ -196,16 +280,28 @@ def build_client_inventory(
         'unknown_client_count': 0,
         'unauthorized_client_count': 0,
         'inventory_mismatch_count': 0,
+        'expected_link_mismatch_count': 0,
         'stale_session_count': 0,
         'authorized_missing_count': 0,
+        'ignored_client_count': 0,
     }
 
     for session in sessions.values():
         device = by_mac.get(session.mac) or by_ip.get(session.ip) or {}
+        if device and _device_ignored(device):
+            counts['ignored_client_count'] += 1
+            continue
         device_key = str(device.get('id') or device.get('ip') or device.get('mac') or '')
         if device_key:
             seen_sot_keys.add(device_key)
         session_state = 'unknown_present'
+        expected_interface_or_segment = str(device.get('expected_interface_or_segment') or '').strip()
+        expected_link_mismatch = bool(
+            device
+            and expected_interface_or_segment
+            and str(session.interface_or_segment or '').strip()
+            and expected_interface_or_segment.lower() != str(session.interface_or_segment or '').strip().lower()
+        )
         if device:
             if bool(device.get('authorized', True)):
                 session_state = 'authorized_present'
@@ -213,6 +309,8 @@ def build_client_inventory(
                 session_state = 'unauthorized_present'
         mismatch = 'dhcp' in session.sources_present and 'arp' not in session.sources_present
         if mismatch:
+            session_state = 'inventory_mismatch'
+        elif expected_link_mismatch and session_state == 'authorized_present':
             session_state = 'inventory_mismatch'
         last_seen_epoch = _epoch(session.last_seen) or now_epoch
         if now_epoch - last_seen_epoch > max(60, stale_after_sec):
@@ -228,6 +326,8 @@ def build_client_inventory(
         elif session_state == 'inventory_mismatch':
             counts['current_client_count'] += 1
             counts['inventory_mismatch_count'] += 1
+            if expected_link_mismatch:
+                counts['expected_link_mismatch_count'] += 1
         elif session_state == 'stale_session':
             counts['stale_session_count'] += 1
         first_seen_epoch = _epoch(session.first_seen) or now_epoch
@@ -239,19 +339,31 @@ def build_client_inventory(
             'ip': session.ip,
             'hostname': session.hostname,
             'interface_or_segment': session.interface_or_segment or 'unknown',
+            'interface_family': _interface_family(session.interface_or_segment),
             'first_seen': session.first_seen or now_norm,
             'last_seen': session.last_seen or now_norm,
             'sources_present': sorted(session.sources_present),
+            'session_origin': (
+                'dhcp_arp' if {'dhcp', 'arp'}.issubset(session.sources_present)
+                else ('dhcp' if 'dhcp' in session.sources_present else ('arp_only' if 'arp' in session.sources_present else 'unknown'))
+            ),
             'service_hints': sorted(session.service_hints),
             'sot_status': 'known' if device else 'unknown',
             'session_state': session_state,
             'arp_state': session.arp_state,
             'evidence_ids': sorted(session.evidence_ids),
+            'monitoring_scope': _device_monitoring_scope(device) if device else 'managed',
+            'notes': str(device.get('notes') or ''),
+            'allowed_networks': [str(item) for item in (device.get('allowed_networks') or []) if str(item)],
+            'expected_interface_or_segment': expected_interface_or_segment,
+            'expected_link_mismatch': expected_link_mismatch,
         })
 
     if isinstance(sot, dict) and isinstance(sot.get('devices'), list):
         for item in sot.get('devices', []):
             if not isinstance(item, dict):
+                continue
+            if _device_ignored(item):
                 continue
             key = str(item.get('id') or item.get('ip') or item.get('mac') or '')
             if not key or key in seen_sot_keys:

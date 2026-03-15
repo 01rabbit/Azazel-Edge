@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import socket
 import statistics
@@ -161,8 +162,52 @@ def collect_dhcp_leases(paths: Optional[List[Path]] = None) -> List[Dict[str, st
     return leases
 
 
+def collect_bridge_fdb_ports() -> Dict[str, str]:
+    rows: Dict[str, str] = {}
+    out = _run(['bridge', 'fdb', 'show'], timeout=2)
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 3 or 'dev' not in parts:
+            continue
+        mac = str(parts[0] or '').strip().lower()
+        if not mac or mac == '00:00:00:00:00:00':
+            continue
+        if 'self' in parts or 'permanent' in parts and 'master' not in parts:
+            continue
+        try:
+            dev = parts[parts.index('dev') + 1]
+        except Exception:
+            continue
+        if dev.startswith('br-') or dev.startswith('veth') or dev.startswith('docker'):
+            continue
+        if mac not in rows:
+            rows[mac] = dev
+    return rows
+
+
+def collect_wifi_station_macs(interface: str = 'wlan0') -> set[str]:
+    stations: set[str] = set()
+    out = _run(['iw', 'dev', interface, 'station', 'dump'], timeout=2)
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.lower().startswith('station '):
+            continue
+        parts = line.split()
+        if len(parts) >= 2:
+            stations.add(parts[1].strip().lower())
+    return stations
+
+
 def collect_arp_table() -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
+    bridge_ports = collect_bridge_fdb_ports()
+    managed_bridge = str(os.environ.get('AZAZEL_INTERNAL_BRIDGE_IF', 'br0')).strip()
+    managed_eth = str(os.environ.get('AZAZEL_INTERNAL_ETH_IF', 'eth0')).strip()
+    managed_wlan = str(os.environ.get('AZAZEL_INTERNAL_WLAN_IF', 'wlan0')).strip()
+    wifi_station_macs = collect_wifi_station_macs(managed_wlan) if managed_wlan else set()
     out = _run(['ip', 'neigh', 'show'], timeout=2)
     for line in out.splitlines():
         line = line.strip()
@@ -176,6 +221,15 @@ def collect_arp_table() -> List[Dict[str, str]]:
             row['dev'] = parts[parts.index('dev') + 1]
         if 'lladdr' in parts:
             row['mac'] = parts[parts.index('lladdr') + 1].lower()
+        if row['mac']:
+            bridge_port = bridge_ports.get(row['mac'], '')
+            if not bridge_port and row['dev'] == managed_bridge:
+                if row['mac'] in wifi_station_macs and managed_wlan:
+                    bridge_port = managed_wlan
+                elif managed_eth:
+                    bridge_port = managed_eth
+            if bridge_port:
+                row['bridge_port'] = bridge_port
         rows.append(row)
     return rows
 
