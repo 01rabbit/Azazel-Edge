@@ -34,8 +34,8 @@ class NocEvaluatorV1Tests(unittest.TestCase):
             _event('iface_stats', 'eth1', 0, {'interface': 'eth1', 'operstate': 'up', 'carrier': 1}),
             _event('cpu_mem_temp', 'edge', 0, {'cpu_percent': 20.0, 'memory': {'percent': 35}, 'temperature_c': 45.0}),
             _event('service_health', 'web', 0, {'target': 'web', 'state': 'ON'}),
-            _event('dhcp_lease', '192.168.40.10', 0, {'ip': '192.168.40.10', 'mac': 'aa:bb:cc:dd:ee:ff'}),
-            _event('arp_entry', '192.168.40.10', 0, {'ip': '192.168.40.10', 'mac': 'aa:bb:cc:dd:ee:ff', 'state': 'REACHABLE'}),
+            _event('dhcp_lease', '172.16.0.10', 0, {'ip': '172.16.0.10', 'mac': 'aa:bb:cc:dd:ee:ff'}),
+            _event('arp_entry', '172.16.0.10', 0, {'ip': '172.16.0.10', 'mac': 'aa:bb:cc:dd:ee:ff', 'state': 'REACHABLE'}),
         ]
 
         result = evaluator.evaluate(events)
@@ -87,10 +87,10 @@ class NocEvaluatorV1Tests(unittest.TestCase):
     def test_sot_can_reduce_unknown_client_penalty(self) -> None:
         evaluator = NocEvaluator()
         events = [
-            _event('dhcp_lease', '192.168.40.10', 0, {'ip': '192.168.40.10', 'mac': 'aa:bb:cc:dd:ee:ff'}),
-            _event('arp_entry', '192.168.40.10', 0, {'ip': '192.168.40.10', 'mac': 'aa:bb:cc:dd:ee:ff', 'state': 'REACHABLE'}),
+            _event('dhcp_lease', '172.16.0.10', 0, {'ip': '172.16.0.10', 'mac': 'aa:bb:cc:dd:ee:ff'}),
+            _event('arp_entry', '172.16.0.10', 0, {'ip': '172.16.0.10', 'mac': 'aa:bb:cc:dd:ee:ff', 'state': 'REACHABLE'}),
         ]
-        with_sot = evaluator.evaluate(events, sot={'devices': [{'id': 'dev1', 'ip': '192.168.40.10'}]})
+        with_sot = evaluator.evaluate(events, sot={'devices': [{'id': 'dev1', 'ip': '172.16.0.10'}]})
         without_sot = evaluator.evaluate(events)
         self.assertGreaterEqual(with_sot['client_health']['score'], without_sot['client_health']['score'])
 
@@ -175,10 +175,10 @@ class NocEvaluatorV1Tests(unittest.TestCase):
         events = [
             _event('capacity_pressure', 'eth1', 65, {'interface': 'eth1', 'state': 'congested', 'mode': 'utilization_known'}, status='warn'),
             _event('service_probe_window', 'resolver-tcp', 65, {'name': 'resolver-tcp', 'state': 'down', 'success_ratio_pct': 0.0}, status='warn'),
-            _event('client_session', '192.168.40.10', 0, {'ip': '192.168.40.10', 'interface_or_segment': 'lan-main', 'session_state': 'authorized_present'}, status='info'),
+            _event('client_session', '172.16.0.10', 0, {'ip': '172.16.0.10', 'interface_or_segment': 'lan-main', 'session_state': 'authorized_present'}, status='info'),
         ]
         sot = {
-            'devices': [{'id': 'dev1', 'hostname': 'client-1', 'ip': '192.168.40.10', 'mac': 'aa:bb:cc:dd:ee:ff', 'criticality': 'critical', 'allowed_networks': ['lan-main']}],
+            'devices': [{'id': 'dev1', 'hostname': 'client-1', 'ip': '172.16.0.10', 'mac': 'aa:bb:cc:dd:ee:ff', 'criticality': 'critical', 'allowed_networks': ['lan-main']}],
             'networks': [{'id': 'lan-main', 'cidr': '192.168.40.0/24', 'zone': 'lan', 'gateway': '192.168.40.1'}],
             'services': [{'id': 'resolver-tcp', 'proto': 'tcp', 'port': 53, 'owner': 'noc', 'exposure': 'internal'}],
             'expected_paths': [],

@@ -56,84 +56,6 @@
             </div>
             <p class="panel-note" id="demoModeBannerText">{{ tr('dashboard.demo_banner_default', 'A demo overlay is active. Review replay output on the dedicated demo page, not on the operational dashboard.') }}</p>
         </section>
-        <section class="panel normal-assurance-panel" id="normalAssurancePanel">
-            <div class="panel-heading">
-                <div>
-                    <div class="panel-kicker">{{ tr('dashboard.normal_assurance', 'Normal Assurance') }}</div>
-                    <h2>{{ tr('dashboard.normal_assurance_title', 'Clearly normal by default') }}</h2>
-                </div>
-                <div class="panel-note">{{ tr('dashboard.normal_assurance_note', 'If any required gate fails, the panel leaves normal immediately so any operator can notice it.') }}</div>
-            </div>
-            <div class="normal-assurance-grid">
-                <article class="mission-card mission-card-primary">
-                    <div class="card-kicker">{{ tr('dashboard.normal_assurance_state', 'Assurance State') }}</div>
-                    <h3 id="normalAssuranceState">{{ tr('dashboard.status_idle', 'IDLE') }}</h3>
-                    <p class="card-summary" id="normalAssuranceSummary">{{ tr('dashboard.normal_assurance_waiting', 'Waiting for normal-assurance evaluation.') }}</p>
-                    <div class="assistant-label">{{ tr('dashboard.normal_assurance_failed', 'Failed Gates') }}</div>
-                    <ul class="action-list" id="normalAssuranceFailedList">
-                        <li>{{ tr('dashboard.normal_assurance_gate_waiting', 'Waiting for gate evaluation.') }}</li>
-                    </ul>
-                </article>
-                <article class="mission-card">
-                    <div class="card-kicker">{{ tr('dashboard.normal_assurance_gates', 'Assurance Gates') }}</div>
-                    <ul class="action-list" id="normalAssuranceGateList">
-                        <li>{{ tr('dashboard.normal_assurance_gate_waiting', 'Waiting for gate evaluation.') }}</li>
-                    </ul>
-                </article>
-            </div>
-        </section>
-        <section class="panel primary-anomaly-panel" id="primaryAnomalyPanel">
-            <div class="panel-heading">
-                <div>
-                    <div class="panel-kicker">{{ tr('dashboard.primary_anomaly_card', 'Primary Anomaly Card') }}</div>
-                    <h2>{{ tr('dashboard.primary_anomaly_title', 'One anomaly to focus on now') }}</h2>
-                </div>
-                <div class="panel-note">{{ tr('dashboard.primary_anomaly_note', 'When anomalies exist, this card compresses severity, what happened, impact, and immediate actions into one block.') }}</div>
-            </div>
-            <div class="primary-anomaly-grid">
-                <article class="mission-card mission-card-primary">
-                    <div class="card-kicker">{{ tr('dashboard.primary_anomaly_severity', 'Severity') }}</div>
-                    <strong id="primaryAnomalySeverity" class="assistant-status status-neutral">NONE</strong>
-                    <h3 id="primaryAnomalyHeading">{{ tr('dashboard.primary_anomaly_none_title', 'No primary anomaly right now') }}</h3>
-                    <p class="card-summary" id="primaryAnomalyWhat">{{ tr('dashboard.primary_anomaly_none_what', 'No SOC/NOC anomaly has been selected as the current primary trigger.') }}</p>
-                    <p class="panel-note" id="primaryAnomalyImpact">{{ tr('dashboard.primary_anomaly_none_impact', 'Keep the normal baseline visible and continue routine monitoring.') }}</p>
-                </article>
-                <article class="mission-card">
-                    <div class="card-kicker">{{ tr('dashboard.primary_anomaly_do_now', 'Do Now') }}</div>
-                    <ul class="action-list" id="primaryAnomalyDoNowList">
-                        <li>{{ tr('dashboard.primary_anomaly_waiting', 'Waiting for anomaly synthesis.') }}</li>
-                    </ul>
-                </article>
-                <article class="mission-card">
-                    <div class="card-kicker">{{ tr('dashboard.primary_anomaly_dont_do', 'Do Not Do') }}</div>
-                    <ul class="action-list" id="primaryAnomalyDontDoList">
-                        <li>{{ tr('dashboard.primary_anomaly_waiting', 'Waiting for anomaly synthesis.') }}</li>
-                    </ul>
-                </article>
-            </div>
-        </section>
-        <section class="panel mode-layer-panel">
-            <div class="panel-heading">
-                <div>
-                    <div class="panel-kicker">{{ tr('dashboard.mode_layer', 'Mode Layer') }}</div>
-                    <h2>{{ tr('dashboard.mode_layer_title', 'Beginner first, professional depth on demand') }}</h2>
-                </div>
-                <div class="panel-note">{{ tr('dashboard.mode_layer_note', 'The same dashboard has two display layers so operators can switch between plain first-response and deep evidence review.') }}</div>
-            </div>
-            <div class="mode-layer-grid">
-                <article class="mission-card mission-card-primary">
-                    <div class="card-kicker">{{ tr('dashboard.mode_layer_current', 'Current Layer') }}</div>
-                    <h3 id="modeLayerState">{{ tr('dashboard.mode_layer_beginner', 'BEGINNER') }}</h3>
-                    <p class="card-summary" id="modeLayerSummary">{{ tr('dashboard.mode_layer_beginner_summary', 'Beginner mode keeps wording plain and focuses on immediate safe action.') }}</p>
-                </article>
-                <article class="mission-card">
-                    <div class="card-kicker">{{ tr('dashboard.mode_layer_visible', 'What is emphasized') }}</div>
-                    <ul class="action-list" id="modeLayerVisibleList">
-                        <li>{{ tr('dashboard.mode_layer_beginner_item_1', 'Normal/abnormal status and primary anomaly are shown first.') }}</li>
-                    </ul>
-                </article>
-            </div>
-        </section>
         <section class="command-strip panel">
             <div class="panel-heading">
                 <div>
@@ -141,6 +63,39 @@
                     <h2>{{ tr('dashboard.immediate_posture', 'Immediate posture') }}</h2>
                 </div>
                 <div id="commandStripNote" class="panel-note">{{ tr('dashboard.waiting_snapshot', 'Waiting for control-plane snapshot') }}</div>
+            </div>
+            <div class="command-glance-band">
+                <article class="command-glance-hero status-neutral" id="commandGlanceHero">
+                    <div class="command-glance-kicker">{{ tr('dashboard.visual_baseline', 'Visual Baseline') }}</div>
+                    <strong id="commandGlanceHeadline">{{ tr('dashboard.visual_baseline_waiting', 'CHECKING') }}</strong>
+                    <p id="commandGlanceSummary">{{ tr('dashboard.visual_baseline_waiting_summary', 'Preparing the first visual status pass.') }}</p>
+                </article>
+                <div class="command-heatmap" id="commandHeatmap">
+                    <article class="command-heat-cell status-neutral" id="commandHeatThreat">
+                        <span>{{ tr('dashboard.heat_threat', 'Threat') }}</span>
+                        <strong id="commandHeatThreatValue">-</strong>
+                    </article>
+                    <article class="command-heat-cell status-neutral" id="commandHeatPath">
+                        <span>{{ tr('dashboard.heat_path', 'Path') }}</span>
+                        <strong id="commandHeatPathValue">-</strong>
+                    </article>
+                    <article class="command-heat-cell status-neutral" id="commandHeatServices">
+                        <span>{{ tr('dashboard.heat_services', 'Services') }}</span>
+                        <strong id="commandHeatServicesValue">-</strong>
+                    </article>
+                    <article class="command-heat-cell status-neutral" id="commandHeatClients">
+                        <span>{{ tr('dashboard.heat_clients', 'Clients') }}</span>
+                        <strong id="commandHeatClientsValue">-</strong>
+                    </article>
+                    <article class="command-heat-cell status-neutral" id="commandHeatTelemetry">
+                        <span>{{ tr('dashboard.heat_telemetry', 'Telemetry') }}</span>
+                        <strong id="commandHeatTelemetryValue">-</strong>
+                    </article>
+                    <article class="command-heat-cell status-neutral" id="commandHeatAi">
+                        <span>{{ tr('dashboard.heat_ai', 'AI') }}</span>
+                        <strong id="commandHeatAiValue">-</strong>
+                    </article>
+                </div>
             </div>
             <div class="strip-grid">
                 <div class="strip-pill">
@@ -387,8 +342,64 @@
                         </div>
                         <div class="panel-note">{{ tr('dashboard.threat_impact', 'Separate the threat case from the path and service case before you decide on stronger control.') }}</div>
                     </div>
-                    <div class="split-grid">
-                        <article class="split-card soc-split-card">
+                    <div class="split-glance-grid" id="splitGlanceGrid">
+                        <article class="split-glance-card status-neutral" id="socGlanceCard">
+                            <div class="split-glance-header">
+                                <div>
+                                    <div class="card-kicker">SOC</div>
+                                    <h3 id="socGlanceState">UNKNOWN</h3>
+                                </div>
+                            </div>
+                            <div class="split-glance-heat-grid">
+                                <div class="split-glance-cell status-neutral" id="socGlanceThreat">
+                                    <span>{{ tr('dashboard.threat', 'Threat') }}</span>
+                                    <strong id="socGlanceThreatValue">-</strong>
+                                </div>
+                                <div class="split-glance-cell status-neutral" id="socGlanceCorrelation">
+                                    <span>{{ tr('dashboard.correlation', 'Correlation') }}</span>
+                                    <strong id="socGlanceCorrelationValue">-</strong>
+                                </div>
+                                <div class="split-glance-cell status-neutral" id="socGlanceTriage">
+                                    <span>{{ tr('dashboard.soc_triage_queue', 'SOC Triage Queue') }}</span>
+                                    <strong id="socGlanceTriageValue">-</strong>
+                                </div>
+                                <div class="split-glance-cell status-neutral" id="socGlanceVisibility">
+                                    <span>{{ tr('dashboard.visibility_label', 'Visibility') }}</span>
+                                    <strong id="socGlanceVisibilityValue">-</strong>
+                                </div>
+                            </div>
+                        </article>
+                        <article class="split-glance-card status-neutral" id="nocGlanceCard">
+                            <div class="split-glance-header">
+                                <div>
+                                    <div class="card-kicker">NOC</div>
+                                    <h3 id="nocGlanceState">UNKNOWN</h3>
+                                </div>
+                            </div>
+                            <div class="split-glance-heat-grid">
+                                <div class="split-glance-cell status-neutral" id="nocGlancePath">
+                                    <span>{{ tr('dashboard.path_health', 'Path Health') }}</span>
+                                    <strong id="nocGlancePathValue">-</strong>
+                                </div>
+                                <div class="split-glance-cell status-neutral" id="nocGlanceServices">
+                                    <span>{{ tr('dashboard.service_health', 'Service Health') }}</span>
+                                    <strong id="nocGlanceServicesValue">-</strong>
+                                </div>
+                                <div class="split-glance-cell status-neutral" id="nocGlanceCapacity">
+                                    <span>{{ tr('dashboard.capacity', 'Capacity') }}</span>
+                                    <strong id="nocGlanceCapacityValue">-</strong>
+                                </div>
+                                <div class="split-glance-cell status-neutral" id="nocGlanceClients">
+                                    <span>{{ tr('dashboard.client_inventory', 'Client Inventory') }}</span>
+                                    <strong id="nocGlanceClientsValue">-</strong>
+                                </div>
+                            </div>
+                        </article>
+                    </div>
+                    <details class="split-board-details" id="splitBoardDetails">
+                        <summary id="splitBoardDetailsToggle">{{ tr('dashboard.split_board_details_show', 'Show SOC / NOC details') }}</summary>
+                        <div class="split-grid">
+                            <article class="split-card soc-split-card">
                             <div class="split-card-header">
                                 <div>
                                     <div class="card-kicker">{{ tr('dashboard.threat_summary', 'Threat Evidence Summary') }}</div>
@@ -441,9 +452,9 @@
                                     </ul>
                                 </div>
                             </div>
-                        </article>
+                            </article>
 
-                        <article class="split-card noc-split-card">
+                            <article class="split-card noc-split-card">
                             <div class="split-card-header">
                                 <div>
                                     <div class="card-kicker">{{ tr('dashboard.noc_focus', 'NOC Focus') }}</div>
@@ -500,8 +511,9 @@
                                     </div>
                                 </div>
                             </div>
-                        </article>
-                    </div>
+                            </article>
+                        </div>
+                    </details>
                 </section>
 
                 <section class="panel client-identity-panel">
@@ -515,9 +527,58 @@
                             <button type="button" class="context-ask-btn" id="clientIdentityToggle">{{ tr('dashboard.client_identity_toggle_show_normal', 'Show normal too') }}</button>
                         </div>
                     </div>
-                    <ul class="action-list client-identity-list" id="clientIdentityList">
-                        <li>{{ tr('dashboard.client_identity_empty', 'No client identity data.') }}</li>
-                    </ul>
+                    <div class="client-identity-tile-grid">
+                        <article class="client-identity-tile status-neutral" id="clientIdentityCurrentTile">
+                            <span>{{ tr('dashboard.current_label', 'Current') }}</span>
+                            <strong id="clientIdentityCurrentCount">0</strong>
+                        </article>
+                        <article class="client-identity-tile status-neutral" id="clientIdentityEthTile">
+                            <span>{{ tr('dashboard.client_identity_family_eth', 'ETH') }}</span>
+                            <strong id="clientIdentityEthCount">0</strong>
+                        </article>
+                        <article class="client-identity-tile status-neutral" id="clientIdentityWlanTile">
+                            <span>{{ tr('dashboard.client_identity_family_wlan', 'WLAN') }}</span>
+                            <strong id="clientIdentityWlanCount">0</strong>
+                        </article>
+                        <article class="client-identity-tile status-danger" id="clientIdentityAnomalyTile">
+                            <span>{{ tr('dashboard.anomaly_label', 'Anomaly') }}</span>
+                            <strong id="clientIdentityAnomalyCount">0</strong>
+                        </article>
+                        <article class="client-identity-tile status-neutral" id="clientIdentityUnidentifiedTile">
+                            <span>{{ tr('dashboard.unidentified_label', 'Unidentified') }}</span>
+                            <strong id="clientIdentityUnidentifiedCount">0</strong>
+                        </article>
+                        <article class="client-identity-tile status-safe" id="clientIdentityNormalTile">
+                            <span>{{ tr('dashboard.client_identity_state_normal', 'NORMAL') }}</span>
+                            <strong id="clientIdentityNormalCount">0</strong>
+                        </article>
+                    </div>
+                    <div class="client-identity-legend" id="clientIdentityLegend">
+                        <span class="client-identity-legend-item">
+                            <span class="client-identity-legend-swatch legend-trusted"></span>
+                            <span>{{ tr('dashboard.client_identity_legend_trusted', 'Trusted') }}</span>
+                        </span>
+                        <span class="client-identity-legend-item">
+                            <span class="client-identity-legend-swatch legend-unidentified"></span>
+                            <span>{{ tr('dashboard.client_identity_legend_unidentified', 'Unidentified') }}</span>
+                        </span>
+                        <span class="client-identity-legend-item">
+                            <span class="client-identity-legend-swatch legend-suspicious"></span>
+                            <span>{{ tr('dashboard.client_identity_legend_suspicious', 'Suspicious candidate') }}</span>
+                        </span>
+                    </div>
+                    <details class="client-identity-details" id="clientIdentityDetails">
+                        <summary id="clientIdentityDetailsToggle">{{ tr('dashboard.client_identity_details_show', 'Show endpoint details') }}</summary>
+                        <div class="client-identity-list" id="clientIdentityList">
+                            <div>{{ tr('dashboard.client_identity_empty', 'No client identity data.') }}</div>
+                        </div>
+                    </details>
+                    <details class="client-identity-details remote-peers-details" id="remotePeersDetails">
+                        <summary id="remotePeersDetailsToggle">{{ tr('dashboard.remote_peers_show', 'Show remote peers') }}</summary>
+                        <div class="client-identity-list remote-peer-list" id="remotePeersList">
+                            <div>{{ tr('dashboard.remote_peers_empty', 'No remote peers in the current top talkers.') }}</div>
+                        </div>
+                    </details>
                 </section>
 
                 <section class="panel action-board">
@@ -536,98 +597,113 @@
                             <div class="card-kicker">{{ tr('dashboard.immediate_action', 'Immediate Action') }}</div>
                             <h3 id="priorityActionTitle">Waiting for action synthesis</h3>
                             <p class="card-summary" id="priorityActionSummary">The highest priority action will appear here before detailed controls.</p>
-                            <div class="action-subsection">
-                                <div class="assistant-label">{{ tr('dashboard.why_now', 'Why now') }}</div>
-                                <ul class="action-list" id="whyNowList">
-                                    <li>{{ tr('dashboard.waiting_causal_summary_ui', 'Waiting for causal summary.') }}</li>
-                                </ul>
-                            </div>
-                            <div class="action-subsection">
-                                <div class="assistant-label">{{ tr('dashboard.do_next', 'Do next') }}</div>
-                                <ol class="action-list" id="nextActionsList">
-                                    <li>{{ tr('dashboard.waiting_synthesis', 'Waiting for control-plane synthesis') }}</li>
-                                </ol>
-                            </div>
+                            <details class="action-board-details" id="actionBoardPrimaryDetails">
+                                <summary id="actionBoardPrimaryDetailsToggle">{{ tr('dashboard.action_board_primary_details_show', 'Show immediate action details') }}</summary>
+                                <div class="action-subsection">
+                                    <div class="assistant-label">{{ tr('dashboard.why_now', 'Why now') }}</div>
+                                    <ul class="action-list" id="whyNowList">
+                                        <li>{{ tr('dashboard.waiting_causal_summary_ui', 'Waiting for causal summary.') }}</li>
+                                    </ul>
+                                </div>
+                                <div class="action-subsection">
+                                    <div class="assistant-label">{{ tr('dashboard.do_next', 'Do next') }}</div>
+                                    <ol class="action-list" id="nextActionsList">
+                                        <li>{{ tr('dashboard.waiting_synthesis', 'Waiting for control-plane synthesis') }}</li>
+                                    </ol>
+                                </div>
+                            </details>
                         </article>
 
                         <article class="action-card guidance-card">
                             <div class="card-kicker">{{ tr('dashboard.user_guidance', 'User Guidance') }}</div>
                             <p id="userGuidanceText">-</p>
-                            <div class="action-subsection temp-only">
-                                <div class="assistant-label">Temporary Triage</div>
-                                <div class="temporary-triage-buttons">
-                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="wifi" data-question="{{ tr('dashboard.question_wifi_trouble', 'How should I guide a user who cannot connect to Wi-Fi?') }}">Wi-Fi</button>
-                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="reconnect" data-question="{{ tr('dashboard.question_reconnect', 'How should I guide a user who cannot reconnect?') }}">Reconnect</button>
-                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="onboarding" data-question="{{ tr('dashboard.question_onboarding', 'How should I guide a first-time onboarding user?') }}">Onboarding</button>
-                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="dns" data-question="{{ tr('dashboard.question_dns_failure', 'What should I verify when DNS lookup fails?') }}">DNS</button>
-                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="uplink" data-question="{{ tr('dashboard.question_gateway_uplink', 'What should I verify when the gateway or uplink looks unhealthy?') }}">Uplink</button>
-                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="service" data-question="{{ tr('dashboard.question_service_status', 'What should I verify when a service appears unhealthy?') }}">Service</button>
-                                    <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="portal" data-question="{{ tr('dashboard.question_portal', 'How should I guide a user when the portal does not appear?') }}">Portal</button>
+                            <details class="action-board-details" id="actionBoardGuidanceDetails">
+                                <summary id="actionBoardGuidanceDetailsToggle">{{ tr('dashboard.action_board_guidance_details_show', 'Show guidance details') }}</summary>
+                                <div class="action-subsection temp-only">
+                                    <div class="assistant-label">Temporary Triage</div>
+                                    <div class="temporary-triage-buttons">
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="wifi" data-question="{{ tr('dashboard.question_wifi_trouble', 'How should I guide a user who cannot connect to Wi-Fi?') }}">Wi-Fi</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="reconnect" data-question="{{ tr('dashboard.question_reconnect', 'How should I guide a user who cannot reconnect?') }}">Reconnect</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="onboarding" data-question="{{ tr('dashboard.question_onboarding', 'How should I guide a first-time onboarding user?') }}">Onboarding</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="dns" data-question="{{ tr('dashboard.question_dns_failure', 'What should I verify when DNS lookup fails?') }}">DNS</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="uplink" data-question="{{ tr('dashboard.question_gateway_uplink', 'What should I verify when the gateway or uplink looks unhealthy?') }}">Uplink</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="service" data-question="{{ tr('dashboard.question_service_status', 'What should I verify when a service appears unhealthy?') }}">Service</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="portal" data-question="{{ tr('dashboard.question_portal', 'How should I guide a user when the portal does not appear?') }}">Portal</button>
+                                    </div>
+                                    <div class="temporary-triage-handoff">
+                                        <a id="temporaryOpsCommLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.continue_ops_comm', 'Continue in Ops Comm') }}</a>
+                                    </div>
                                 </div>
-                                <div class="temporary-triage-handoff">
-                                    <a id="temporaryOpsCommLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.continue_ops_comm', 'Continue in Ops Comm') }}</a>
+                                <div class="action-subsection temp-only">
+                                    <div class="assistant-label">Ask the user</div>
+                                    <ul class="action-list" id="temporaryAskList">
+                                        <li>Choose one symptom card to start guided triage.</li>
+                                    </ul>
                                 </div>
-                            </div>
-                            <div class="action-subsection temp-only">
-                                <div class="assistant-label">Ask the user</div>
-                                <ul class="action-list" id="temporaryAskList">
-                                    <li>Choose one symptom card to start guided triage.</li>
-                                </ul>
-                            </div>
-                            <div class="action-subsection temp-only">
-                                <div class="assistant-label">Tell the user</div>
-                                <ul class="action-list" id="temporaryTellList">
-                                    <li>We are checking the current state. Please wait for the next instruction.</li>
-                                </ul>
-                            </div>
-                            <div class="action-subsection">
-                                <div class="assistant-label">Do not do</div>
-                                <ul class="action-list" id="doNotDoList">
-                                    <li>{{ tr('dashboard.no_restricted_action', 'No restricted action') }}</li>
-                                </ul>
-                            </div>
-                            <div class="action-subsection pro-only">
-                                <div class="assistant-label">Escalate if</div>
-                                <ul class="action-list" id="escalateIfList">
-                                    <li>{{ tr('dashboard.no_escalation_condition', 'No escalation condition') }}</li>
-                                </ul>
-                            </div>
-                            <div class="guidance-warning temp-only" id="temporaryWarningBox">
-                                Temporary mode suppresses dangerous actions and prioritizes safe instructions for the person in front of you.
-                            </div>
+                                <div class="action-subsection temp-only">
+                                    <div class="assistant-label">Tell the user</div>
+                                    <ul class="action-list" id="temporaryTellList">
+                                        <li>We are checking the current state. Please wait for the next instruction.</li>
+                                    </ul>
+                                </div>
+                                <div class="action-subsection">
+                                    <div class="assistant-label">Do not do</div>
+                                    <ul class="action-list" id="doNotDoList">
+                                        <li>{{ tr('dashboard.no_restricted_action', 'No restricted action') }}</li>
+                                    </ul>
+                                </div>
+                                <div class="action-subsection pro-only">
+                                    <div class="assistant-label">Escalate if</div>
+                                    <ul class="action-list" id="escalateIfList">
+                                        <li>{{ tr('dashboard.no_escalation_condition', 'No escalation condition') }}</li>
+                                    </ul>
+                                </div>
+                                <div class="guidance-warning temp-only" id="temporaryWarningBox">
+                                    Temporary mode suppresses dangerous actions and prioritizes safe instructions for the person in front of you.
+                                </div>
+                            </details>
                         </article>
 
                         <article class="action-card">
                             <div class="card-kicker">{{ tr('dashboard.recommended_runbook', 'Recommended Runbook') }}</div>
                             <h3 id="runbookTitle">-</h3>
-                            <div class="fact-list compact-list">
-                                <div class="fact-item"><span>ID</span><strong id="runbookId">-</strong></div>
-                                <div class="fact-item"><span>Effect</span><strong id="runbookEffect">-</strong></div>
-                                <div class="fact-item"><span>Approval</span><strong id="runbookApproval">-</strong></div>
-                            </div>
-                            <ul class="step-list" id="runbookSteps">
-                                    <li>{{ tr('dashboard.waiting_synthesis', 'Waiting for control-plane synthesis') }}</li>
-                                <li>{{ tr('dashboard.no_runbook_suggested', 'No runbook suggested') }}</li>
-                            </ul>
+                            <details class="action-board-details" id="actionBoardRunbookDetails">
+                                <summary id="actionBoardRunbookDetailsToggle">{{ tr('dashboard.action_board_runbook_details_show', 'Show runbook and decision details') }}</summary>
+                                <div class="fact-list compact-list">
+                                    <div class="fact-item"><span>ID</span><strong id="runbookId">-</strong></div>
+                                    <div class="fact-item"><span>Effect</span><strong id="runbookEffect">-</strong></div>
+                                    <div class="fact-item"><span>Approval</span><strong id="runbookApproval">-</strong></div>
+                                </div>
+                                <ul class="step-list" id="runbookSteps">
+                                        <li>{{ tr('dashboard.waiting_synthesis', 'Waiting for control-plane synthesis') }}</li>
+                                    <li>{{ tr('dashboard.no_runbook_suggested', 'No runbook suggested') }}</li>
+                                </ul>
+                            </details>
                         </article>
 
                         <article class="action-card pro-only">
                             <div class="card-kicker">{{ tr('dashboard.decision_path', 'Decision Path') }}</div>
                             <p class="card-summary" id="decisionPathSummary">{{ tr('dashboard.decision_path_intro', 'Tactical first-pass decides quickly. Deterministic second-pass adds context before operator assist and AI explanation.') }}</p>
-                            <div class="fact-list compact-list">
-                                <div class="fact-item"><span>{{ tr('dashboard.first_pass', 'First Pass') }}</span><strong id="decisionFirstPass">-</strong></div>
-                                <div class="fact-item"><span>{{ tr('dashboard.second_pass', 'Second Pass') }}</span><strong id="decisionSecondPass">-</strong></div>
-                                <div class="fact-item"><span>{{ tr('dashboard.second_pass_status', '2nd Pass Status') }}</span><strong id="decisionSecondPassStatus">-</strong></div>
-                                <div class="fact-item"><span>{{ tr('dashboard.ai_role', 'AI Role') }}</span><strong id="decisionAiRole">-</strong></div>
-                            </div>
+                            <details class="action-board-details" id="actionBoardDecisionDetails">
+                                <summary id="actionBoardDecisionDetailsToggle">{{ tr('dashboard.action_board_runbook_details_show', 'Show runbook and decision details') }}</summary>
+                                <div class="fact-list compact-list">
+                                    <div class="fact-item"><span>{{ tr('dashboard.first_pass', 'First Pass') }}</span><strong id="decisionFirstPass">-</strong></div>
+                                    <div class="fact-item"><span>{{ tr('dashboard.second_pass', 'Second Pass') }}</span><strong id="decisionSecondPass">-</strong></div>
+                                    <div class="fact-item"><span>{{ tr('dashboard.second_pass_status', '2nd Pass Status') }}</span><strong id="decisionSecondPassStatus">-</strong></div>
+                                    <div class="fact-item"><span>{{ tr('dashboard.ai_role', 'AI Role') }}</span><strong id="decisionAiRole">-</strong></div>
+                                </div>
+                            </details>
                         </article>
 
                         <article class="action-card pro-only">
                             <div class="card-kicker">{{ tr('dashboard.rejected_stronger_actions', 'Rejected Stronger Actions') }}</div>
                             <p class="card-summary">{{ tr('dashboard.threat_impact', 'Separate the threat case from the path and service case before you decide on stronger control.') }}</p>
-                            <ul class="action-list" id="rejectedStrongerActionsList">
-                                <li>{{ tr('dashboard.no_stronger_rejection_summary', 'No stronger-action rejection summary.') }}</li>
-                            </ul>
+                            <details class="action-board-details" id="actionBoardRejectedDetails">
+                                <summary id="actionBoardRejectedDetailsToggle">{{ tr('dashboard.action_board_runbook_details_show', 'Show runbook and decision details') }}</summary>
+                                <ul class="action-list" id="rejectedStrongerActionsList">
+                                    <li>{{ tr('dashboard.no_stronger_rejection_summary', 'No stronger-action rejection summary.') }}</li>
+                                </ul>
+                            </details>
                         </article>
 
                         <article class="action-card control-card">
@@ -637,15 +713,18 @@
                                 <button class="mode-btn" id="modeShieldBtn">Shield</button>
                                 <button class="mode-btn" id="modeScapegoatBtn">Scapegoat</button>
                             </div>
-                            <div class="fact-list compact-list">
-                                <div class="fact-item"><span>Last Change</span><strong id="modeLastChange">-</strong></div>
-                                <div class="fact-item"><span>Requested By</span><strong id="modeRequestedBy">-</strong></div>
-                            </div>
-                            <div class="quick-actions">
-                                <button class="quick-btn" id="portalAssistBtn">Portal Assist</button>
-                                <button class="quick-btn quick-btn-caution pro-only" id="containBtn">Contain</button>
-                                <button class="quick-btn quick-btn-caution pro-only" id="releaseBtn">Release</button>
-                            </div>
+                            <details class="action-board-details" id="actionBoardControlDetails">
+                                <summary id="actionBoardControlDetailsToggle">{{ tr('dashboard.action_board_control_details_show', 'Show control details') }}</summary>
+                                <div class="fact-list compact-list">
+                                    <div class="fact-item"><span>Last Change</span><strong id="modeLastChange">-</strong></div>
+                                    <div class="fact-item"><span>Requested By</span><strong id="modeRequestedBy">-</strong></div>
+                                </div>
+                                <div class="quick-actions">
+                                    <button class="quick-btn" id="portalAssistBtn">Portal Assist</button>
+                                    <button class="quick-btn quick-btn-caution pro-only" id="containBtn">Contain</button>
+                                    <button class="quick-btn quick-btn-caution pro-only" id="releaseBtn">Release</button>
+                                </div>
+                            </details>
                         </article>
                     </div>
                 </section>
@@ -668,28 +747,31 @@
                                 <div class="assistant-label">{{ tr('dashboard.current_recommendation', 'Current Recommendation') }}</div>
                         <div id="mioRecommendation">-</div>
                     </div>
-                    <div class="assistant-block">
-                        <div class="assistant-label">Last Manual Ask</div>
-                        <div id="mioLastAsk">No manual query executed yet.</div>
-                    </div>
-                    <div class="assistant-block">
-                                <div class="assistant-label">{{ tr('dashboard.recommended_runbook', 'Recommended Runbook') }}</div>
-                        <div id="mioRunbookSummary">No runbook selected.</div>
-                    </div>
-                    <div class="assistant-block">
-                        <div class="assistant-label">Rationale</div>
-                        <ul class="action-list" id="mioRationaleList">
-                            <li>{{ tr('dashboard.no_rationale_available', 'No rationale available.') }}</li>
-                        </ul>
-                    </div>
-                    <div class="assistant-block">
-                                <div class="assistant-label">{{ tr('dashboard.user_guidance', 'User Guidance') }}</div>
-                        <div id="mioUserGuidance">-</div>
-                    </div>
-                    <div class="assistant-block pro-only">
-                                <div class="assistant-label">{{ tr('dashboard.review', 'Review') }}</div>
-                        <div id="mioReview">-</div>
-                    </div>
+                    <details class="panel-fold-details" id="mioAssistDetails">
+                        <summary id="mioAssistDetailsToggle">{{ tr('dashboard.mio_details_show', 'Show M.I.O. details') }}</summary>
+                        <div class="assistant-block">
+                            <div class="assistant-label">Last Manual Ask</div>
+                            <div id="mioLastAsk">No manual query executed yet.</div>
+                        </div>
+                        <div class="assistant-block">
+                                    <div class="assistant-label">{{ tr('dashboard.recommended_runbook', 'Recommended Runbook') }}</div>
+                            <div id="mioRunbookSummary">No runbook selected.</div>
+                        </div>
+                        <div class="assistant-block">
+                            <div class="assistant-label">Rationale</div>
+                            <ul class="action-list" id="mioRationaleList">
+                                <li>{{ tr('dashboard.no_rationale_available', 'No rationale available.') }}</li>
+                            </ul>
+                        </div>
+                        <div class="assistant-block">
+                                    <div class="assistant-label">{{ tr('dashboard.user_guidance', 'User Guidance') }}</div>
+                            <div id="mioUserGuidance">-</div>
+                        </div>
+                        <div class="assistant-block pro-only">
+                                    <div class="assistant-label">{{ tr('dashboard.review', 'Review') }}</div>
+                            <div id="mioReview">-</div>
+                        </div>
+                    </details>
                     <form id="mioAskForm" class="assistant-form">
                         <label for="mioQuestion">{{ tr('dashboard.ask_from_dashboard', 'Ask M.I.O. from the dashboard') }}</label>
                         <textarea id="mioQuestion" rows="4" placeholder="Example: Users report Wi-Fi failure on one floor. What should I verify first?"></textarea>
@@ -726,28 +808,31 @@
                     <button type="button" class="context-ask-btn pro-only" data-question="{{ tr('dashboard.question_evidence_timeline_summary', 'Summarize the current evidence and timeline, and explain what to verify in live telemetry.') }}">{{ tr('dashboard.ask_about_this', 'Ask about this') }}</button>
                 </div>
             </div>
-            <div class="evidence-grid">
-                <article class="evidence-card">
-                            <div class="card-kicker">{{ tr('dashboard.current_triggers', 'Current Triggers') }}</div>
-                    <ul class="timeline-list" id="currentTriggersTimeline"></ul>
-                </article>
-                <article class="evidence-card">
-                    <div class="card-kicker">{{ tr('dashboard.decision_changes', 'Decision Changes') }}</div>
-                    <ul class="timeline-list" id="decisionChangesTimeline"></ul>
-                </article>
-                <article class="evidence-card pro-only">
-                    <div class="card-kicker">{{ tr('dashboard.operator_interactions', 'Operator Interactions') }}</div>
-                    <ul class="timeline-list" id="operatorInteractionsTimeline"></ul>
-                </article>
-                <article class="evidence-card pro-only">
-                    <div class="card-kicker">{{ tr('dashboard.background_history', 'Background History') }}</div>
-                    <ul class="timeline-list" id="backgroundHistoryTimeline"></ul>
-                </article>
-                <article class="evidence-card">
-                    <div class="card-kicker">{{ tr('dashboard.triage_audit', 'Triage Audit') }}</div>
-                    <ul class="timeline-list" id="triageAuditTimeline"></ul>
-                </article>
-            </div>
+            <details class="panel-fold-details" id="evidenceTimelineDetails">
+                <summary id="evidenceTimelineDetailsToggle">{{ tr('dashboard.evidence_timeline_details_show', 'Show evidence and history') }}</summary>
+                <div class="evidence-grid">
+                    <article class="evidence-card">
+                                <div class="card-kicker">{{ tr('dashboard.current_triggers', 'Current Triggers') }}</div>
+                        <ul class="timeline-list" id="currentTriggersTimeline"></ul>
+                    </article>
+                    <article class="evidence-card">
+                        <div class="card-kicker">{{ tr('dashboard.decision_changes', 'Decision Changes') }}</div>
+                        <ul class="timeline-list" id="decisionChangesTimeline"></ul>
+                    </article>
+                    <article class="evidence-card pro-only">
+                        <div class="card-kicker">{{ tr('dashboard.operator_interactions', 'Operator Interactions') }}</div>
+                        <ul class="timeline-list" id="operatorInteractionsTimeline"></ul>
+                    </article>
+                    <article class="evidence-card pro-only">
+                        <div class="card-kicker">{{ tr('dashboard.background_history', 'Background History') }}</div>
+                        <ul class="timeline-list" id="backgroundHistoryTimeline"></ul>
+                    </article>
+                    <article class="evidence-card">
+                        <div class="card-kicker">{{ tr('dashboard.triage_audit', 'Triage Audit') }}</div>
+                        <ul class="timeline-list" id="triageAuditTimeline"></ul>
+                    </article>
+                </div>
+            </details>
         </section>
     </main>
 

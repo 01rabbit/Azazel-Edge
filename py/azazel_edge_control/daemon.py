@@ -9,6 +9,8 @@ import time
 import sys
 import os
 import logging
+import ipaddress
+import re
 import socket
 import subprocess
 import threading
@@ -34,6 +36,7 @@ from azazel_edge.evaluators import NocEvaluator
 from azazel_edge.evidence_plane import NocProbeAdapter, build_client_inventory
 from azazel_edge.sensors.network_health import NetworkHealthMonitor
 from azazel_edge.path_schema import (
+    config_dir_candidates,
     first_minute_config_candidates,
     migrate_schema,
     portal_env_candidates,
@@ -41,6 +44,7 @@ from azazel_edge.path_schema import (
     status as path_schema_status,
     warn_if_legacy_path,
 )
+from azazel_edge.sot import SoTValidationError, load_sot_file
 
 # Logging setup
 logging.basicConfig(
@@ -92,8 +96,327 @@ _NOC_CACHE: dict[str, Any] = {
     "ts": 0.0,
     "payload": {},
 }
+SNAPSHOT_CACHE_TTL_SEC = 30.0
+SNAPSHOT_REFRESH_INTERVAL_SEC = max(10.0, float(os.environ.get("AZAZEL_SNAPSHOT_REFRESH_SEC", "12")))
+SNAPSHOT_CACHE_LOCK = threading.Lock()
+_SNAPSHOT_CACHE: dict[str, Any] = {
+    "ts": 0.0,
+    "payload": None,
+}
 _NOC_ADAPTER: Optional[NocProbeAdapter] = None
 _NOC_ADAPTER_KEY = ""
+SOT_CACHE_LOCK = threading.Lock()
+_SOT_CACHE: dict[str, Any] = {
+    "path": "",
+    "mtime": 0.0,
+    "payload": {},
+}
+
+
+def _default_sot_payload() -> dict[str, Any]:
+    return {
+        "devices": [],
+        "networks": [],
+        "services": [],
+        "expected_paths": [],
+    }
+
+
+def _sot_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    env_path = str(os.environ.get("AZAZEL_SOT_PATH", "")).strip()
+    if env_path:
+        candidates.append(Path(env_path))
+    for cfg_dir in config_dir_candidates():
+        candidates.append(cfg_dir / "sot.yaml")
+        candidates.append(cfg_dir / "sot.json")
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped or [Path("/etc/azazel-edge/sot.yaml")]
+
+
+def _sot_target_path() -> Path:
+    for path in _sot_candidates():
+        if path.exists():
+            return path
+    return _sot_candidates()[0]
+
+
+def _load_sot_payload(force: bool = False) -> tuple[dict[str, Any], Path]:
+    target = _sot_target_path()
+    if target.exists():
+        try:
+            mtime = target.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+        with SOT_CACHE_LOCK:
+            cached_path = str(_SOT_CACHE.get("path") or "")
+            cached_mtime = float(_SOT_CACHE.get("mtime") or 0.0)
+            cached_payload = _SOT_CACHE.get("payload")
+            if (
+                not force
+                and cached_path == str(target)
+                and cached_mtime == mtime
+                and isinstance(cached_payload, dict)
+                and cached_payload
+            ):
+                return json.loads(json.dumps(cached_payload, ensure_ascii=False)), target
+        try:
+            payload = load_sot_file(target).to_dict()
+        except (SoTValidationError, OSError, ValueError) as exc:
+            logger.warning(f"Failed to load SoT {target}: {exc}")
+            payload = _default_sot_payload()
+        with SOT_CACHE_LOCK:
+            _SOT_CACHE["path"] = str(target)
+            _SOT_CACHE["mtime"] = mtime
+            _SOT_CACHE["payload"] = json.loads(json.dumps(payload, ensure_ascii=False))
+        return payload, target
+
+    payload = _default_sot_payload()
+    with SOT_CACHE_LOCK:
+        _SOT_CACHE["path"] = str(target)
+        _SOT_CACHE["mtime"] = 0.0
+        _SOT_CACHE["payload"] = json.loads(json.dumps(payload, ensure_ascii=False))
+    return payload, target
+
+
+def _persist_sot_payload(payload: dict[str, Any], target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    if target.suffix.lower() == ".json" or yaml is None:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        tmp.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, target)
+    try:
+        mtime = target.stat().st_mtime
+    except Exception:
+        mtime = time.time()
+    with SOT_CACHE_LOCK:
+        _SOT_CACHE["path"] = str(target)
+        _SOT_CACHE["mtime"] = mtime
+        _SOT_CACHE["payload"] = json.loads(json.dumps(payload, ensure_ascii=False))
+
+
+def _normalize_mac(mac: object) -> str:
+    text = str(mac or "").strip().lower()
+    if not text:
+        return ""
+    text = text.replace("-", ":")
+    return text
+
+
+def _is_private_ip(ip: object) -> bool:
+    text = str(ip or "").strip()
+    if not text:
+        return False
+    try:
+        return ipaddress.ip_address(text).is_private
+    except ValueError:
+        return False
+
+
+def _guess_allowed_networks(sot: dict[str, Any], ip: str) -> list[str]:
+    text = str(ip or "").strip()
+    if not text:
+        return []
+    try:
+        addr = ipaddress.ip_address(text)
+    except ValueError:
+        return []
+    allowed: list[str] = []
+    for item in sot.get("networks", []) if isinstance(sot.get("networks"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            cidr = ipaddress.ip_network(str(item.get("cidr") or ""), strict=False)
+        except ValueError:
+            continue
+        if addr in cidr:
+            net_id = str(item.get("id") or "").strip()
+            if net_id:
+                allowed.append(net_id)
+    return sorted(dict.fromkeys(allowed))
+
+
+def _normalize_allowed_networks(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return sorted(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return sorted(dict.fromkeys(part.strip() for part in text.split(",") if part.strip()))
+
+
+def _managed_network_defaults() -> list[dict[str, Any]]:
+    raw = str(os.environ.get("AZAZEL_MANAGED_CLIENT_CIDRS", "172.16.0.0/24")).strip()
+    cidrs = [part.strip() for part in raw.split(",") if part.strip()]
+    defaults: list[dict[str, Any]] = []
+    for idx, cidr_text in enumerate(cidrs, start=1):
+        try:
+            network = ipaddress.ip_network(cidr_text, strict=False)
+        except ValueError:
+            continue
+        gateway = ""
+        try:
+            gateway = str(next(network.hosts()))
+        except StopIteration:
+            gateway = str(network.network_address)
+        defaults.append(
+            {
+                "id": "managed-lan" if idx == 1 else f"managed-lan-{idx}",
+                "cidr": str(network),
+                "zone": "managed",
+                "gateway": gateway,
+            }
+        )
+    return defaults
+
+
+def _ensure_managed_network_entries(sot: dict[str, Any]) -> None:
+    networks = sot.get("networks")
+    if not isinstance(networks, list):
+        networks = []
+        sot["networks"] = networks
+    existing_cidrs = {str(item.get("cidr") or "").strip() for item in networks if isinstance(item, dict)}
+    for item in _managed_network_defaults():
+        if str(item.get("cidr") or "").strip() in existing_cidrs:
+            continue
+        networks.append(item)
+
+
+def _device_identifier(hostname: str, ip: str, mac: str) -> str:
+    base = hostname or ip or mac or f"device-{int(time.time())}"
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", base).strip("-").lower()
+    return slug or f"device-{int(time.time())}"
+
+
+def _invalidate_runtime_caches(refresh_snapshot: bool = True) -> None:
+    with NOC_CACHE_LOCK:
+        _NOC_CACHE["key"] = ""
+        _NOC_CACHE["ts"] = 0.0
+        _NOC_CACHE["payload"] = {}
+    with SNAPSHOT_CACHE_LOCK:
+        _SNAPSHOT_CACHE["ts"] = 0.0
+        _SNAPSHOT_CACHE["payload"] = None
+    if refresh_snapshot:
+        try:
+            read_ui_snapshot()
+        except Exception as exc:
+            logger.debug(f"Snapshot refresh after SoT update failed: {exc}")
+
+
+def _set_client_trust(params: dict[str, Any]) -> dict[str, Any]:
+    trusted = bool(params.get("trusted", False))
+    ignored = bool(params.get("ignored", False))
+    ip = str(params.get("ip") or "").strip()
+    mac = _normalize_mac(params.get("mac"))
+    hostname = str(params.get("hostname") or params.get("display_name") or "").strip()
+    interface_or_segment = str(params.get("interface_or_segment") or "").strip()
+    expected_interface_or_segment = str(params.get("expected_interface_or_segment") or "").strip()
+    session_key = str(params.get("session_key") or "").strip()
+    note = str(params.get("note") or "").strip()[:240]
+    allowed_networks = _normalize_allowed_networks(params.get("allowed_networks"))
+
+    if not mac and not _is_private_ip(ip):
+        return {
+            "ok": False,
+            "error": "trust_requires_mac_or_private_ip",
+            "ts": time.time(),
+        }
+
+    sot, path = _load_sot_payload(force=True)
+    _ensure_managed_network_entries(sot)
+    devices = sot.get("devices")
+    if not isinstance(devices, list):
+        devices = []
+        sot["devices"] = devices
+
+    target: dict[str, Any] | None = None
+    for item in devices:
+        if not isinstance(item, dict):
+            continue
+        item_mac = _normalize_mac(item.get("mac"))
+        item_ip = str(item.get("ip") or "").strip()
+        if mac and item_mac and item_mac == mac:
+            target = item
+            break
+        if ip and item_ip and item_ip == ip:
+            target = item
+            break
+
+    if target is None:
+        target = {
+            "id": _device_identifier(hostname, ip, mac or session_key),
+            "hostname": hostname or ip or mac or session_key or "trusted-device",
+            "ip": ip,
+            "mac": mac,
+            "criticality": "standard",
+            "allowed_networks": allowed_networks or _guess_allowed_networks(sot, ip),
+            "authorized": trusted and not ignored,
+            "monitoring_scope": "ignore" if ignored else "managed",
+        }
+        if expected_interface_or_segment:
+            target["expected_interface_or_segment"] = expected_interface_or_segment
+        elif interface_or_segment:
+            target["expected_interface_or_segment"] = interface_or_segment
+        if note:
+            target["notes"] = note
+        elif interface_or_segment:
+            target["notes"] = f"source_segment:{interface_or_segment}"
+        devices.append(target)
+    else:
+        if hostname:
+            target["hostname"] = hostname
+        if ip:
+            target["ip"] = ip
+        if mac:
+            target["mac"] = mac
+        target["authorized"] = trusted and not ignored
+        target["monitoring_scope"] = "ignore" if ignored else "managed"
+        target.setdefault("criticality", "standard")
+        if allowed_networks:
+            target["allowed_networks"] = allowed_networks
+        else:
+            allowed = target.get("allowed_networks")
+            if not isinstance(allowed, list):
+                target["allowed_networks"] = []
+            if not target.get("allowed_networks") and ip:
+                target["allowed_networks"] = _guess_allowed_networks(sot, ip)
+        if expected_interface_or_segment:
+            target["expected_interface_or_segment"] = expected_interface_or_segment
+        elif interface_or_segment and not str(target.get("expected_interface_or_segment") or "").strip():
+            target["expected_interface_or_segment"] = interface_or_segment
+        if note:
+            target["notes"] = note
+
+    _persist_sot_payload(sot, path)
+    _invalidate_runtime_caches(refresh_snapshot=True)
+    return {
+        "ok": True,
+        "trusted": trusted,
+        "session_key": session_key,
+        "device": {
+            "id": str(target.get("id") or ""),
+            "hostname": str(target.get("hostname") or ""),
+            "ip": str(target.get("ip") or ""),
+            "mac": _normalize_mac(target.get("mac")),
+            "authorized": bool(target.get("authorized", False)),
+            "monitoring_scope": str(target.get("monitoring_scope") or "managed"),
+            "notes": str(target.get("notes") or ""),
+            "allowed_networks": [str(item) for item in (target.get("allowed_networks") or []) if str(item)],
+            "expected_interface_or_segment": str(target.get("expected_interface_or_segment") or ""),
+        },
+        "sot_path": str(path),
+        "ts": time.time(),
+    }
 
 
 def _read_portal_viewer_env() -> dict[str, str]:
@@ -641,7 +964,10 @@ def _build_noc_runtime_projection(
                 "ip": str(row.get("ip") or ""),
                 "hostname": str(row.get("hostname") or ""),
                 "interface_or_segment": str(row.get("interface_or_segment") or "unknown"),
+                "interface_family": str(row.get("interface_family") or "unknown"),
                 "last_seen": str(row.get("last_seen") or ""),
+                "sources_present": [str(item) for item in (row.get("sources_present") or []) if str(item)],
+                "session_origin": str(row.get("session_origin") or "unknown"),
                 "session_state": str(row.get("session_state") or "unknown_present"),
                 "sot_status": str(row.get("sot_status") or "unknown"),
                 "evidence_ids": [str(item) for item in (row.get("evidence_ids") or []) if str(item)],
@@ -743,10 +1069,11 @@ def _compute_live_noc_projection(up_if: str, down_if: str, gateway_ip: str) -> d
 
         events = _NOC_ADAPTER.collect()
         payloads = _event_payloads(events)
-        inventory = build_client_inventory(events)
+        sot_payload, _sot_path = _load_sot_payload()
+        inventory = build_client_inventory(events, sot=sot_payload)
         inventory_summary = inventory.get("summary") if isinstance(inventory.get("summary"), dict) else {}
         inventory_sessions = inventory.get("sessions") if isinstance(inventory.get("sessions"), list) else []
-        evaluation = NOC_EVALUATOR.evaluate(events)
+        evaluation = NOC_EVALUATOR.evaluate(events, sot=sot_payload)
         projection = _build_noc_runtime_projection(
             evaluation=evaluation,
             event_payloads=payloads,
@@ -1021,13 +1348,34 @@ def _persist_snapshot(path: Path, payload: dict[str, Any]) -> None:
         logger.debug(f"Failed to persist snapshot {path}: {exc}")
 
 
-def read_ui_snapshot() -> dict[str, Any]:
-    """Read latest UI snapshot from schema-aware paths."""
-    mode_payload: dict[str, Any] = {}
-    try:
-        mode_payload = MODE_MANAGER.status()
-    except Exception as exc:
-        logger.debug(f"Failed to read mode status: {exc}")
+def _snapshot_cache_get(max_age_sec: float = SNAPSHOT_CACHE_TTL_SEC) -> dict[str, Any] | None:
+    payload = _SNAPSHOT_CACHE.get("payload")
+    ts = float(_SNAPSHOT_CACHE.get("ts") or 0.0)
+    if not isinstance(payload, dict):
+        return None
+    if ts <= 0 or (time.time() - ts) > max_age_sec:
+        return None
+    return json.loads(json.dumps(payload, ensure_ascii=False))
+
+
+def _snapshot_cache_set(payload: dict[str, Any]) -> None:
+    _SNAPSHOT_CACHE["payload"] = json.loads(json.dumps(payload, ensure_ascii=False))
+    _SNAPSHOT_CACHE["ts"] = time.time()
+
+
+def _snapshot_payload_from_file(path: Path, data: dict[str, Any], mode_payload: dict[str, Any]) -> dict[str, Any]:
+    if mode_payload.get("ok"):
+        data["mode"] = mode_payload.get("mode", {})
+    payload = {
+        "ok": True,
+        "snapshot": data,
+        "path": str(path),
+        "ts": time.time(),
+    }
+    return payload
+
+
+def _build_fresh_snapshot_payload(mode_payload: dict[str, Any]) -> dict[str, Any]:
     for path in _snapshot_candidates():
         try:
             if not path.exists():
@@ -1037,14 +1385,9 @@ def read_ui_snapshot() -> dict[str, Any]:
             if isinstance(data, dict):
                 data = _enrich_snapshot(data)
                 _persist_snapshot(path, data)
-                if mode_payload.get("ok"):
-                    data["mode"] = mode_payload.get("mode", {})
-                return {
-                    "ok": True,
-                    "snapshot": data,
-                    "path": str(path),
-                    "ts": time.time(),
-                }
+                payload = _snapshot_payload_from_file(path, data, mode_payload)
+                _snapshot_cache_set(payload)
+                return payload
         except Exception as exc:
             logger.debug(f"Failed to read snapshot {path}: {exc}")
 
@@ -1052,14 +1395,9 @@ def read_ui_snapshot() -> dict[str, Any]:
     if isinstance(seeded, dict) and seeded_path is not None:
         data = _enrich_snapshot(seeded)
         _persist_snapshot(seeded_path, data)
-        if mode_payload.get("ok"):
-            data["mode"] = mode_payload.get("mode", {})
-        return {
-            "ok": True,
-            "snapshot": data,
-            "path": str(seeded_path),
-            "ts": time.time(),
-        }
+        payload = _snapshot_payload_from_file(seeded_path, data, mode_payload)
+        _snapshot_cache_set(payload)
+        return payload
 
     return {
         "ok": False,
@@ -1067,6 +1405,39 @@ def read_ui_snapshot() -> dict[str, Any]:
         "paths": [str(p) for p in _snapshot_candidates()],
         "ts": time.time(),
     }
+
+
+def read_ui_snapshot() -> dict[str, Any]:
+    """Read latest UI snapshot from schema-aware paths."""
+    cached = _snapshot_cache_get()
+    if cached is not None:
+        return cached
+
+    mode_payload: dict[str, Any] = {}
+    try:
+        mode_payload = MODE_MANAGER.status()
+    except Exception as exc:
+        logger.debug(f"Failed to read mode status: {exc}")
+    acquired_cache_lock = SNAPSHOT_CACHE_LOCK.acquire(blocking=False)
+    if not acquired_cache_lock:
+        cached = _snapshot_cache_get(max_age_sec=30.0)
+        if cached is not None:
+            return cached
+        for path in _snapshot_candidates():
+            try:
+                if not path.exists():
+                    continue
+                data = _parse_json_dict_lenient(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return _snapshot_payload_from_file(path, data, mode_payload)
+            except Exception:
+                continue
+
+    try:
+        return _build_fresh_snapshot_payload(mode_payload)
+    finally:
+        if acquired_cache_lock:
+            SNAPSHOT_CACHE_LOCK.release()
 
 
 def stream_ui_snapshots(conn: socket.socket, interval_sec: float = 1.0) -> None:
@@ -1090,6 +1461,49 @@ def ensure_socket_dir():
     
     # Set directory permissions so any user can access
     os.chmod(str(SOCKET_PATH.parent), 0o777)
+
+
+def create_listener_socket() -> socket.socket:
+    """Create a fresh Unix listener socket at the control path."""
+    ensure_socket_dir()
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(str(SOCKET_PATH))
+    # Make socket world-readable/writable for other processes
+    os.chmod(str(SOCKET_PATH), 0o666)
+    sock.listen(16)
+    sock.settimeout(1.0)
+    logger.info(f"Listening on {SOCKET_PATH}")
+    return sock
+
+
+def warm_snapshot_cache_once() -> None:
+    """Prime snapshot cache in the background after daemon start."""
+    try:
+        read_ui_snapshot()
+    except Exception as exc:
+        logger.debug(f"Snapshot warm-up failed: {exc}")
+
+
+def snapshot_refresh_loop(interval_sec: float = SNAPSHOT_REFRESH_INTERVAL_SEC) -> None:
+    """Keep the UI snapshot fresh so socket readers can return immediately."""
+    interval = max(5.0, float(interval_sec))
+    while True:
+        started = time.time()
+        acquired_cache_lock = SNAPSHOT_CACHE_LOCK.acquire(timeout=1.0)
+        if acquired_cache_lock:
+            try:
+                mode_payload: dict[str, Any] = {}
+                try:
+                    mode_payload = MODE_MANAGER.status()
+                except Exception as exc:
+                    logger.debug(f"Failed to read mode status during refresh: {exc}")
+                _build_fresh_snapshot_payload(mode_payload)
+            except Exception as exc:
+                logger.debug(f"Snapshot refresh failed: {exc}")
+            finally:
+                SNAPSHOT_CACHE_LOCK.release()
+        elapsed = time.time() - started
+        time.sleep(max(1.0, interval - elapsed))
 
 def suppress_auto_wifi(enabled: bool = True):
     """Disable Wi-Fi auto-connect and disconnect existing session on startup."""
@@ -1229,6 +1643,8 @@ def execute_action(action_name, params=None):
         result = MODE_MANAGER.apply_default(requested_by=requested_by)
         result["ts"] = time.time()
         return result
+    if action_name == "sot_trust_client":
+        return _set_client_trust(params)
     if action_name == "path_schema_status":
         return {"ok": True, "schema": path_schema_status(), "ts": time.time()}
     if action_name == "migrate_path_schema":
@@ -1333,18 +1749,25 @@ def main():
     ensure_socket_dir()
     suppress_auto_wifi(enabled=bool(flags.get("suppress_auto_wifi", True)))
     logger.info("Azazel-Edge Control Daemon started")
-    
-    # Create Unix socket
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.bind(str(SOCKET_PATH))
-    # Make socket world-readable/writable for other processes
-    os.chmod(str(SOCKET_PATH), 0o666)
-    sock.listen(16)
-    logger.info(f"Listening on {SOCKET_PATH}")
-    
+
+    sock = create_listener_socket()
+    threading.Thread(target=warm_snapshot_cache_once, daemon=True).start()
+    threading.Thread(target=snapshot_refresh_loop, daemon=True).start()
+
     try:
         while True:
-            conn, _ = sock.accept()
+            if not SOCKET_PATH.exists():
+                logger.warning("Control socket path disappeared; recreating listener")
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                sock = create_listener_socket()
+                continue
+            try:
+                conn, _ = sock.accept()
+            except socket.timeout:
+                continue
             # Handle in thread to allow concurrent connections
             thread = threading.Thread(target=handle_client, args=(conn, _))
             thread.daemon = True

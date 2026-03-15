@@ -152,10 +152,10 @@ class EvidencePlaneV1Tests(unittest.TestCase):
                 'web': {'target': 'web', 'unit': 'azazel-edge-web', 'state': 'OFF'},
             },
             'dhcp_leases': [
-                {'ip': '192.168.40.100', 'mac': 'aa:bb:cc:dd:ee:ff', 'hostname': 'client-1'},
+                {'ip': '172.16.0.100', 'mac': 'aa:bb:cc:dd:ee:ff', 'hostname': 'client-1'},
             ],
             'arp_table': [
-                {'ip': '192.168.40.100', 'mac': 'aa:bb:cc:dd:ee:ff', 'dev': 'eth1', 'state': 'REACHABLE'},
+                {'ip': '172.16.0.100', 'mac': 'aa:bb:cc:dd:ee:ff', 'dev': 'eth0', 'state': 'REACHABLE'},
             ],
             'collector_failures': [
                 {'collector': 'icmp', 'error': 'disabled_for_slice'}
@@ -248,8 +248,8 @@ class EvidencePlaneV1Tests(unittest.TestCase):
                 'service_probe_window': [],
                 'cpu_mem_temp': {},
                 'service_health': {},
-                'dhcp_leases': [{'ip': '192.168.40.20', 'mac': 'aa:bb:cc:dd:ee:01', 'hostname': 'client-a'}],
-                'arp_table': [{'ip': '192.168.40.20', 'mac': 'aa:bb:cc:dd:ee:01', 'dev': 'eth1', 'state': 'REACHABLE'}],
+                'dhcp_leases': [{'ip': '172.16.0.20', 'mac': 'aa:bb:cc:dd:ee:01', 'hostname': 'client-a'}],
+                'arp_table': [{'ip': '172.16.0.20', 'mac': 'aa:bb:cc:dd:ee:01', 'dev': 'eth0', 'state': 'REACHABLE'}],
                 'collector_failures': [],
             }
             items = service.dispatch_noc_probe(snapshot=snapshot)
@@ -263,30 +263,195 @@ class EvidencePlaneV1Tests(unittest.TestCase):
                 ts='2026-03-10T00:00:00Z',
                 source='noc_probe',
                 kind='dhcp_lease',
-                subject='192.168.40.20',
+                subject='172.16.0.20',
                 severity=0,
                 confidence=0.9,
-                attrs={'ip': '192.168.40.20', 'mac': 'aa:bb:cc:dd:ee:01', 'hostname': 'client-a'},
+                attrs={'ip': '172.16.0.20', 'mac': 'aa:bb:cc:dd:ee:01', 'hostname': 'client-a'},
             ),
             EvidenceEvent.build(
                 ts='2026-03-10T00:00:05Z',
                 source='noc_probe',
                 kind='arp_entry',
-                subject='192.168.40.20',
+                subject='172.16.0.20',
                 severity=0,
                 confidence=0.9,
-                attrs={'ip': '192.168.40.20', 'mac': 'aa:bb:cc:dd:ee:01', 'dev': 'eth1', 'state': 'REACHABLE'},
+                attrs={'ip': '172.16.0.20', 'mac': 'aa:bb:cc:dd:ee:01', 'dev': 'br0', 'bridge_port': 'eth0', 'state': 'REACHABLE'},
             ),
             EvidenceEvent.build(
                 ts='2026-03-10T00:00:10Z',
                 source='flow_min',
                 kind='flow_summary',
-                subject='192.168.40.20->8.8.8.8:443/TCP',
+                subject='172.16.0.20->8.8.8.8:443/TCP',
                 severity=20,
                 confidence=0.7,
-                attrs={'src_ip': '192.168.40.20', 'dst_ip': '8.8.8.8', 'dst_port': 443, 'proto': 'TCP', 'app_proto': 'tls'},
+                attrs={'src_ip': '172.16.0.20', 'dst_ip': '8.8.8.8', 'dst_port': 443, 'proto': 'TCP', 'app_proto': 'tls'},
             ),
         ])
         rows = [row for row in inventory['sessions'] if row['session_state'] != 'authorized_missing']
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['sources_present'], ['arp', 'dhcp', 'flow'])
+        self.assertEqual(rows[0]['interface_or_segment'], 'eth0')
+
+    def test_client_inventory_ignores_flow_only_remote_peer(self) -> None:
+        inventory = build_client_inventory([
+            EvidenceEvent.build(
+                ts='2026-03-10T00:00:10Z',
+                source='flow_min',
+                kind='flow_summary',
+                subject='1.1.1.1->172.16.0.20:443/TCP',
+                severity=20,
+                confidence=0.7,
+                attrs={'src_ip': '1.1.1.1', 'dst_ip': '172.16.0.20', 'dst_port': 443, 'proto': 'TCP', 'app_proto': 'tls'},
+            ),
+        ])
+        rows = [row for row in inventory['sessions'] if row['session_state'] != 'authorized_missing']
+        self.assertEqual(rows, [])
+        self.assertEqual(inventory['summary']['current_client_count'], 0)
+        self.assertEqual(inventory['summary']['unknown_client_count'], 0)
+
+    def test_client_inventory_keeps_arp_only_peer_on_client_facing_interface(self) -> None:
+        inventory = build_client_inventory(
+            [
+                EvidenceEvent.build(
+                    ts='2026-03-10T00:00:05Z',
+                    source='noc_probe',
+                    kind='arp_entry',
+                    subject='172.16.0.55',
+                    severity=0,
+                    confidence=0.9,
+                    attrs={'ip': '172.16.0.55', 'mac': '18:34:af:cb:4f:d1', 'dev': 'eth0', 'state': 'REACHABLE'},
+                ),
+            ],
+            now_ts='2026-03-10T00:00:30Z',
+        )
+        rows = [row for row in inventory['sessions'] if row['session_state'] != 'authorized_missing']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['session_origin'], 'arp_only')
+        self.assertEqual(rows[0]['interface_family'], 'eth')
+        self.assertEqual(inventory['summary']['current_client_count'], 1)
+
+    def test_client_inventory_marks_wlan_bridge_port_as_wireless(self) -> None:
+        inventory = build_client_inventory([
+            EvidenceEvent.build(
+                ts='2026-03-10T00:00:00Z',
+                source='noc_probe',
+                kind='dhcp_lease',
+                subject='172.16.0.44',
+                severity=0,
+                confidence=0.9,
+                attrs={'ip': '172.16.0.44', 'mac': 'aa:bb:cc:dd:ee:44', 'hostname': 'client-wlan'},
+            ),
+            EvidenceEvent.build(
+                ts='2026-03-10T00:00:05Z',
+                source='noc_probe',
+                kind='arp_entry',
+                subject='172.16.0.44',
+                severity=0,
+                confidence=0.9,
+                attrs={'ip': '172.16.0.44', 'mac': 'aa:bb:cc:dd:ee:44', 'dev': 'br0', 'bridge_port': 'wlan0', 'state': 'REACHABLE'},
+            ),
+        ])
+        rows = [row for row in inventory['sessions'] if row['session_state'] != 'authorized_missing']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['interface_or_segment'], 'wlan0')
+        self.assertEqual(rows[0]['interface_family'], 'wlan')
+
+    def test_client_inventory_skips_ignored_device_from_sot(self) -> None:
+        inventory = build_client_inventory(
+            [
+                EvidenceEvent.build(
+                    ts='2026-03-10T00:00:00Z',
+                    source='noc_probe',
+                    kind='arp_entry',
+                    subject='172.16.0.88',
+                    severity=0,
+                    confidence=0.9,
+                    attrs={'ip': '172.16.0.88', 'mac': 'aa:bb:cc:dd:ee:88', 'dev': 'eth0', 'state': 'REACHABLE'},
+                ),
+            ],
+            sot={
+                'devices': [
+                    {
+                        'id': 'ignored-arp',
+                        'hostname': 'ignored-arp',
+                        'ip': '172.16.0.88',
+                        'mac': 'aa:bb:cc:dd:ee:88',
+                        'criticality': 'standard',
+                        'allowed_networks': [],
+                        'authorized': False,
+                        'monitoring_scope': 'ignore',
+                    }
+                ],
+                'networks': [],
+                'services': [],
+                'expected_paths': [],
+            },
+            now_ts='2026-03-10T00:00:30Z',
+        )
+        rows = [row for row in inventory['sessions'] if row['session_state'] != 'authorized_missing']
+        self.assertEqual(rows, [])
+        self.assertEqual(inventory['summary']['ignored_client_count'], 1)
+        self.assertEqual(inventory['summary']['current_client_count'], 0)
+
+    def test_client_inventory_marks_expected_link_drift_as_mismatch(self) -> None:
+        inventory = build_client_inventory(
+            [
+                EvidenceEvent.build(
+                    ts='2026-03-10T00:00:00Z',
+                    source='noc_probe',
+                    kind='dhcp_lease',
+                    subject='172.16.0.44',
+                    severity=0,
+                    confidence=0.9,
+                    attrs={'ip': '172.16.0.44', 'mac': 'aa:bb:cc:dd:ee:44', 'hostname': 'client-wlan'},
+                ),
+                EvidenceEvent.build(
+                    ts='2026-03-10T00:00:05Z',
+                    source='noc_probe',
+                    kind='arp_entry',
+                    subject='172.16.0.44',
+                    severity=0,
+                    confidence=0.9,
+                    attrs={'ip': '172.16.0.44', 'mac': 'aa:bb:cc:dd:ee:44', 'dev': 'br0', 'bridge_port': 'wlan0', 'state': 'REACHABLE'},
+                ),
+            ],
+            sot={
+                'devices': [
+                    {
+                        'id': 'client-wlan',
+                        'hostname': 'client-wlan',
+                        'ip': '172.16.0.44',
+                        'mac': 'aa:bb:cc:dd:ee:44',
+                        'criticality': 'standard',
+                        'allowed_networks': ['managed-lan'],
+                        'authorized': True,
+                        'expected_interface_or_segment': 'eth0',
+                    }
+                ],
+                'networks': [],
+                'services': [],
+                'expected_paths': [],
+            },
+            now_ts='2026-03-10T00:00:30Z',
+        )
+        rows = [row for row in inventory['sessions'] if row['ip'] == '172.16.0.44']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['session_state'], 'inventory_mismatch')
+        self.assertTrue(rows[0]['expected_link_mismatch'])
+        self.assertEqual(inventory['summary']['expected_link_mismatch_count'], 1)
+
+    def test_client_inventory_ignores_arp_only_peer_on_non_client_interface(self) -> None:
+        inventory = build_client_inventory([
+            EvidenceEvent.build(
+                ts='2026-03-10T00:00:05Z',
+                source='noc_probe',
+                kind='arp_entry',
+                subject='192.168.40.1',
+                severity=0,
+                confidence=0.9,
+                attrs={'ip': '192.168.40.1', 'mac': '18:34:af:cb:4f:d1', 'dev': 'usb0', 'state': 'REACHABLE'},
+            ),
+        ])
+        rows = [row for row in inventory['sessions'] if row['session_state'] != 'authorized_missing']
+        self.assertEqual(rows, [])
+        self.assertEqual(inventory['summary']['current_client_count'], 0)

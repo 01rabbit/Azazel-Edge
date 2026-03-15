@@ -33,6 +33,7 @@ class DashboardDataContractTests(unittest.TestCase):
             "_service_active": webapp._service_active,
             "_send_ai_manual_query": webapp._send_ai_manual_query,
             "read_demo_overlay": webapp.read_demo_overlay,
+            "send_control_command_with_params": webapp.send_control_command_with_params,
         }
 
         webapp.STATE_PATH = root / "ui_snapshot.json"
@@ -105,7 +106,7 @@ class DashboardDataContractTests(unittest.TestCase):
                 {
                     "session_key": "aa:bb:cc:dd:ee:01",
                     "mac": "aa:bb:cc:dd:ee:01",
-                    "ip": "192.168.40.20",
+                    "ip": "172.16.0.20",
                     "hostname": "client-a",
                     "interface_or_segment": "lan-main",
                     "last_seen": "2026-03-11T10:00:00+09:00",
@@ -115,7 +116,7 @@ class DashboardDataContractTests(unittest.TestCase):
                 {
                     "session_key": "aa:bb:cc:dd:ee:02",
                     "mac": "aa:bb:cc:dd:ee:02",
-                    "ip": "192.168.40.21",
+                    "ip": "172.16.0.21",
                     "hostname": "unknown-client",
                     "interface_or_segment": "lan-main",
                     "last_seen": "2026-03-11T10:01:00+09:00",
@@ -125,7 +126,7 @@ class DashboardDataContractTests(unittest.TestCase):
                 {
                     "session_key": "aa:bb:cc:dd:ee:03",
                     "mac": "aa:bb:cc:dd:ee:03",
-                    "ip": "192.168.40.22",
+                    "ip": "172.16.0.22",
                     "hostname": "mismatch-client",
                     "interface_or_segment": "lan-main",
                     "last_seen": "2026-03-11T10:02:00+09:00",
@@ -317,6 +318,7 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp._service_active = self._orig["_service_active"]
         webapp._send_ai_manual_query = self._orig["_send_ai_manual_query"]
         webapp.read_demo_overlay = self._orig["read_demo_overlay"]
+        webapp.send_control_command_with_params = self._orig["send_control_command_with_params"]
         self.tmp.cleanup()
 
     def test_dashboard_summary_contract(self) -> None:
@@ -341,8 +343,17 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["noc_focus"]["client_identity_view"]["default_filter"], "attention_only")
         self.assertEqual(payload["noc_focus"]["client_identity_view"]["attention_count"], 2)
         self.assertEqual(payload["noc_focus"]["client_identity_view"]["normal_count"], 1)
+        self.assertEqual(payload["noc_focus"]["client_identity_view"]["segment_counts"]["other"], 3)
+        self.assertEqual(payload["noc_focus"]["client_identity_view"]["arp_only_count"], 0)
+        self.assertEqual(payload["noc_focus"]["client_identity_view"]["infra_filtered_count"], 0)
         self.assertEqual(payload["noc_focus"]["client_identity_view"]["items"][0]["state"], "mismatch")
         self.assertEqual(payload["noc_focus"]["client_identity_view"]["items"][0]["masked_mac"], "aa:bb:**:**:**:03")
+        self.assertEqual(payload["noc_focus"]["client_identity_view"]["items"][0]["interface_family"], "other")
+        self.assertEqual(payload["noc_focus"]["client_identity_view"]["items"][0]["session_origin"], "unknown")
+        self.assertTrue(payload["noc_focus"]["client_identity_view"]["items"][0]["trusted"])
+        self.assertTrue(payload["noc_focus"]["client_identity_view"]["items"][0]["trust_eligible"])
+        self.assertFalse(payload["noc_focus"]["client_identity_view"]["items"][1]["trusted"])
+        self.assertTrue(payload["noc_focus"]["client_identity_view"]["items"][1]["trust_eligible"])
         self.assertEqual(payload["noc_focus"]["service_assurance"]["status"], "degraded")
         self.assertEqual(payload["noc_focus"]["resolution_health"]["status"], "failed")
         self.assertEqual(payload["noc_focus"]["blast_radius"]["affected_client_count"], 4)
@@ -362,6 +373,17 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["soc_focus"]["triage_priority"]["top_priority_ids"], ["inc-1", "ent-1"])
         self.assertEqual(payload["soc_focus"]["incident_campaign"]["incident_count"], 2)
         self.assertEqual(payload["soc_focus"]["entity_risk"]["entity_count"], 3)
+
+    def test_api_state_uses_current_now_time_instead_of_snapshot_time(self) -> None:
+        original_strftime = webapp.time.strftime
+        try:
+            webapp.time.strftime = lambda fmt, *args: "23:59:58" if fmt == "%H:%M:%S" else original_strftime(fmt, *args)
+            response = self.client.get("/api/state")
+        finally:
+            webapp.time.strftime = original_strftime
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["now_time"], "23:59:58")
 
     def test_dashboard_summary_normal_assurance_stale_snapshot_cannot_be_normal(self) -> None:
         state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
@@ -443,6 +465,15 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["primary_anomaly_card"]["severity"], "critical")
         self.assertTrue(payload["primary_anomaly_card"]["do_now"])
         self.assertTrue(payload["primary_anomaly_card"]["dont_do"])
+        self.assertIn("mio_message_profile", payload)
+        self.assertEqual(payload["mio_message_profile"]["surface"], "dashboard")
+        self.assertIn("mio_surface_messages", payload)
+        self.assertIn("dashboard", payload["mio_surface_messages"])
+        self.assertIn("ops-comm", payload["mio_surface_messages"])
+        self.assertIn("mattermost", payload["mio_surface_messages"])
+        self.assertIn("message_profile", payload["mio"])
+        self.assertIn("surface_messages", payload["mio"])
+        self.assertIn("dashboard", payload["mio"]["surface_messages"])
 
     def test_dashboard_actions_primary_anomaly_card_returns_none_when_no_anomaly(self) -> None:
         state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
@@ -483,6 +514,163 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["suggested_runbook"]["id"], "rb.noc.dns.failure.check")
         self.assertIn("resolver", payload["noc_runbook_support"]["why_this_runbook"].lower())
         self.assertTrue(payload["current_operator_actions"])
+
+    def test_api_clients_trust_proxies_to_control_daemon(self) -> None:
+        captured = {}
+
+        def _fake_send(action: str, params: dict) -> dict:
+            captured["action"] = action
+            captured["params"] = params
+            return {"ok": True, "trusted": True, "device": {"id": "unknown-client"}}
+
+        webapp.send_control_command_with_params = _fake_send
+
+        response = self.client.post(
+            "/api/clients/trust",
+            json={
+                "trusted": True,
+                "session_key": "aa:bb:cc:dd:ee:02",
+                "ip": "172.16.0.21",
+                "mac": "aa:bb:cc:dd:ee:02",
+                "hostname": "unknown-client",
+                "display_name": "unknown-client",
+                "interface_or_segment": "lan-main",
+                "expected_interface_or_segment": "eth0",
+                "note": "known kiosk",
+                "allowed_networks": "lan-main,guest-lan",
+                "ignored": False,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(captured["action"], "sot_trust_client")
+        self.assertTrue(captured["params"]["trusted"])
+        self.assertEqual(captured["params"]["session_key"], "aa:bb:cc:dd:ee:02")
+        self.assertEqual(captured["params"]["ip"], "172.16.0.21")
+        self.assertEqual(captured["params"]["mac"], "aa:bb:cc:dd:ee:02")
+        self.assertEqual(captured["params"]["expected_interface_or_segment"], "eth0")
+        self.assertEqual(captured["params"]["note"], "known kiosk")
+        self.assertEqual(captured["params"]["allowed_networks"], "lan-main,guest-lan")
+        self.assertFalse(captured["params"]["ignored"])
+
+    def test_api_clients_trust_requires_identifier(self) -> None:
+        response = self.client.post("/api/clients/trust", json={"trusted": True})
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"], "session_key_or_ip_or_mac_required")
+
+    def test_dashboard_summary_filters_gateway_from_client_identity_view(self) -> None:
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        sessions = list(state.get("noc_client_sessions") or [])
+        sessions.append(
+            {
+                "session_key": "18:34:af:cb:4f:d1",
+                "mac": "18:34:af:cb:4f:d1",
+                "ip": "192.168.40.1",
+                "hostname": "",
+                "interface_or_segment": "eth1",
+                "interface_family": "eth",
+                "session_origin": "arp_only",
+                "sources_present": ["arp"],
+                "last_seen": "2026-03-11T10:03:00+09:00",
+                "session_state": "unknown_present",
+                "sot_status": "unknown",
+            }
+        )
+        state["noc_client_sessions"] = sessions
+        state["noc_client_inventory"]["current_client_count"] = 7
+        state["noc_client_inventory"]["unknown_client_count"] = 2
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+
+        response = self.client.get("/api/dashboard/summary")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        view = payload["noc_focus"]["client_identity_view"]
+        ips = [item["ip"] for item in view["items"]]
+        self.assertNotIn("192.168.40.1", ips)
+        self.assertEqual(view["infra_filtered_count"], 1)
+
+    def test_dashboard_summary_counts_wlan_client_in_client_identity_view(self) -> None:
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        sessions = list(state.get("noc_client_sessions") or [])
+        sessions.append(
+            {
+                "session_key": "aa:bb:cc:dd:ee:44",
+                "mac": "aa:bb:cc:dd:ee:44",
+                "ip": "172.16.0.44",
+                "hostname": "client-wlan",
+                "interface_or_segment": "wlan0",
+                "interface_family": "wlan",
+                "session_origin": "dhcp_arp",
+                "sources_present": ["dhcp", "arp"],
+                "last_seen": "2026-03-11T10:04:00+09:00",
+                "session_state": "authorized_present",
+                "sot_status": "known",
+            }
+        )
+        state["noc_client_sessions"] = sessions
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+
+        response = self.client.get("/api/dashboard/summary")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        view = payload["noc_focus"]["client_identity_view"]
+        self.assertEqual(view["segment_counts"]["wlan"], 1)
+        wlan_rows = [item for item in view["items"] if item["ip"] == "172.16.0.44"]
+        self.assertEqual(len(wlan_rows), 1)
+        self.assertEqual(wlan_rows[0]["interface_family"], "wlan")
+
+    def test_dashboard_summary_counts_expected_link_mismatch(self) -> None:
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        sessions = list(state.get("noc_client_sessions") or [])
+        sessions.append(
+            {
+                "session_key": "aa:bb:cc:dd:ee:55",
+                "mac": "aa:bb:cc:dd:ee:55",
+                "ip": "172.16.0.55",
+                "hostname": "client-drift",
+                "interface_or_segment": "wlan0",
+                "interface_family": "wlan",
+                "session_origin": "dhcp_arp",
+                "sources_present": ["dhcp", "arp"],
+                "last_seen": "2026-03-11T10:04:00+09:00",
+                "session_state": "inventory_mismatch",
+                "sot_status": "known",
+                "expected_interface_or_segment": "eth0",
+                "expected_link_mismatch": True,
+            }
+        )
+        state["noc_client_sessions"] = sessions
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+
+        response = self.client.get("/api/dashboard/summary")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        view = payload["noc_focus"]["client_identity_view"]
+        self.assertEqual(view["expected_link_mismatch_count"], 1)
+        drift_rows = [item for item in view["items"] if item["ip"] == "172.16.0.55"]
+        self.assertEqual(len(drift_rows), 1)
+        self.assertTrue(drift_rows[0]["expected_link_mismatch"])
+
+    def test_dashboard_summary_exposes_remote_peers_separately(self) -> None:
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        state["noc_capacity"]["top_sources"] = [
+            {"src_ip": "8.8.8.8", "bytes": 4096, "packets": 40, "flows": 3},
+            {"src_ip": "172.16.0.44", "bytes": 2048, "packets": 20, "flows": 2},
+            {"src_ip": "1.1.1.1", "bytes": 1024, "packets": 10, "flows": 1},
+        ]
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+
+        response = self.client.get("/api/dashboard/summary")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        remote = payload["noc_focus"]["remote_peers"]
+        self.assertEqual(remote["count"], 2)
+        labels = [item["label"] for item in remote["items"]]
+        self.assertEqual(labels, ["8.8.8.8", "1.1.1.1"])
 
     def test_dashboard_actions_hides_dashboard_demo_context_when_overlay_is_inactive(self) -> None:
         now = time.time()
@@ -558,42 +746,88 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("What the operator should do now", text)
         self.assertIn("Primary Objective", text)
         self.assertIn("SOC / NOC Split Board", text)
+        self.assertIn('id="splitGlanceGrid"', text)
+        self.assertIn('id="socGlanceCard"', text)
+        self.assertIn('id="splitBoardDetails"', text)
+        self.assertIn('id="splitBoardDetailsToggle"', text)
+        self.assertIn('id="socGlanceThreat"', text)
+        self.assertIn('id="socGlanceCorrelation"', text)
+        self.assertIn('id="socGlanceTriage"', text)
+        self.assertIn('id="socGlanceVisibility"', text)
+        self.assertIn('id="nocGlanceCard"', text)
+        self.assertIn('id="nocGlancePath"', text)
+        self.assertIn('id="nocGlanceServices"', text)
+        self.assertIn('id="nocGlanceCapacity"', text)
+        self.assertIn('id="nocGlanceClients"', text)
         self.assertIn("Threat Evidence Summary", text)
         self.assertIn("Rejected Stronger Actions", text)
         self.assertIn("Temporary Mission", text)
         self.assertIn("Safe first response for the person in front of you", text)
         self.assertIn("Immediate Action", text)
+        self.assertIn('id="actionBoardPrimaryDetails"', text)
+        self.assertIn('id="actionBoardPrimaryDetailsToggle"', text)
+        self.assertIn('id="actionBoardGuidanceDetails"', text)
+        self.assertIn('id="actionBoardGuidanceDetailsToggle"', text)
+        self.assertIn('id="actionBoardRunbookDetails"', text)
+        self.assertIn('id="actionBoardRunbookDetailsToggle"', text)
+        self.assertIn('id="actionBoardDecisionDetails"', text)
+        self.assertIn('id="actionBoardDecisionDetailsToggle"', text)
+        self.assertIn('id="actionBoardRejectedDetails"', text)
+        self.assertIn('id="actionBoardRejectedDetailsToggle"', text)
+        self.assertIn('id="actionBoardControlDetails"', text)
+        self.assertIn('id="actionBoardControlDetailsToggle"', text)
         self.assertIn("Decision Path", text)
         self.assertIn("Snapshot", text)
         self.assertIn("AI Metrics", text)
         self.assertIn("AI Activity", text)
         self.assertIn("Runbook Event", text)
+        self.assertIn("Visual Baseline", text)
+        self.assertIn('id="commandGlanceHero"', text)
+        self.assertIn('id="commandGlanceHeadline"', text)
+        self.assertIn('id="commandHeatThreat"', text)
+        self.assertIn('id="commandHeatTelemetry"', text)
+        self.assertIn('id="commandHeatAi"', text)
         self.assertIn("Resource Guard", text)
         self.assertIn('id="resourceGuardHeadline"', text)
         self.assertIn('id="resourceGuardReasonList"', text)
         self.assertIn('id="resourceGuardQueueBar"', text)
         self.assertIn('id="resourceGuardFallbackBar"', text)
         self.assertIn('id="resourceGuardLatencyBar"', text)
-        self.assertIn("Normal Assurance", text)
-        self.assertIn('id="normalAssuranceState"', text)
-        self.assertIn('id="normalAssuranceFailedList"', text)
-        self.assertIn('id="normalAssuranceGateList"', text)
-        self.assertIn("Primary Anomaly Card", text)
-        self.assertIn('id="primaryAnomalySeverity"', text)
-        self.assertIn('id="primaryAnomalyDoNowList"', text)
-        self.assertIn('id="primaryAnomalyDontDoList"', text)
-        self.assertIn("Mode Layer", text)
-        self.assertIn('id="modeLayerState"', text)
-        self.assertIn('id="modeLayerVisibleList"', text)
+        self.assertNotIn('id="normalAssuranceState"', text)
+        self.assertNotIn('id="normalAssuranceFailedList"', text)
+        self.assertNotIn('id="normalAssuranceGateList"', text)
+        self.assertNotIn('id="primaryAnomalySeverity"', text)
+        self.assertNotIn('id="primaryAnomalyDoNowList"', text)
+        self.assertNotIn('id="primaryAnomalyDontDoList"', text)
+        self.assertNotIn('id="modeLayerState"', text)
+        self.assertNotIn('id="modeLayerVisibleList"', text)
         self.assertIn("Client Identity View", text)
         self.assertIn('id="clientIdentitySummary"', text)
         self.assertIn('id="clientIdentityToggle"', text)
+        self.assertIn('id="clientIdentityCurrentTile"', text)
+        self.assertIn('id="clientIdentityAnomalyTile"', text)
+        self.assertIn('id="clientIdentityUnidentifiedTile"', text)
+        self.assertIn('id="clientIdentityNormalTile"', text)
+        self.assertIn('id="clientIdentityLegend"', text)
+        self.assertIn("Trusted", text)
+        self.assertIn("Unidentified", text)
+        self.assertIn("Suspicious candidate", text)
+        self.assertIn('id="clientIdentityDetails"', text)
+        self.assertIn('id="clientIdentityDetailsToggle"', text)
         self.assertIn('id="clientIdentityList"', text)
+        self.assertIn("Show remote peers", text)
+        self.assertIn('id="remotePeersDetails"', text)
+        self.assertIn('id="remotePeersDetailsToggle"', text)
+        self.assertIn('id="remotePeersList"', text)
         self.assertIn("M.I.O. Assist", text)
+        self.assertIn('id="mioAssistDetails"', text)
+        self.assertIn('id="mioAssistDetailsToggle"', text)
         self.assertIn("Last Manual Ask", text)
         self.assertIn("Recommended Runbook", text)
         self.assertIn("Rationale", text)
         self.assertIn("Open Ops Comm", text)
+        self.assertIn('id="evidenceTimelineDetails"', text)
+        self.assertIn('id="evidenceTimelineDetailsToggle"', text)
         self.assertIn("Current Triggers", text)
         self.assertIn("Decision Changes", text)
         self.assertIn("Operator Interactions", text)
@@ -609,6 +843,9 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("Reconnect", text)
         self.assertIn("Onboarding", text)
         self.assertIn("Portal", text)
+        self.assertIn('id="modePortalBtn"', text)
+        self.assertIn('id="modeShieldBtn"', text)
+        self.assertIn('id="modeScapegoatBtn"', text)
         self.assertNotIn('id="demoRunForm"', text)
         self.assertNotIn('id="reviewPanel"', text)
 
@@ -678,6 +915,11 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["handoff"]["ops_comm"], "/ops-comm")
         self.assertIn("rationale", payload)
         self.assertTrue(payload["rationale"])
+        self.assertIn("mio_message_profile", payload)
+        self.assertEqual(payload["mio_message_profile"]["surface"], "ops-comm")
+        self.assertIn("surface_messages", payload)
+        self.assertIn("ops-comm", payload["surface_messages"])
+        self.assertIn("mattermost", payload["surface_messages"])
 
     def test_mattermost_response_includes_rationale_and_continue_hint(self) -> None:
         with webapp.app.test_request_context("/?lang=en"):
