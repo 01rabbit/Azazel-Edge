@@ -1712,6 +1712,190 @@ body.demo-overlay-active #healthSummaryLine {
     margin-top: 0;
 }
 
+.trust-capsule {
+    margin-top: 14px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.035);
+}
+
+.onboarding-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 18px 20px;
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background:
+        linear-gradient(135deg, rgba(255, 196, 107, 0.16), rgba(255, 255, 255, 0.04)),
+        rgba(15, 20, 28, 0.9);
+}
+
+.onboarding-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+}
+
+.onboarding-progress {
+    font-size: 0.85rem;
+    color: var(--text-soft);
+}
+
+.onboarding-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.onboarding-highlight {
+    box-shadow: 0 0 0 2px rgba(255, 196, 107, 0.65), 0 14px 30px rgba(0, 0, 0, 0.22);
+    transition: box-shadow 180ms ease;
+}
+
+.progress-checklist-block {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 14px;
+}
+
+.progress-checklist-summary,
+.handoff-summary {
+    color: var(--text-soft);
+    margin-top: 6px;
+}
+
+.progress-checklist-list {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.progress-checklist-item {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.progress-checklist-item.done {
+    border-color: rgba(93, 207, 145, 0.28);
+    background: rgba(93, 207, 145, 0.08);
+}
+
+.progress-checklist-item label {
+    display: grid;
+    gap: 4px;
+    cursor: pointer;
+}
+
+.progress-checklist-item strong {
+    color: var(--text-main);
+}
+
+.progress-checklist-item span {
+    color: var(--text-soft);
+    font-size: 0.88rem;
+}
+
+.progress-blocked-box {
+    display: grid;
+    gap: 8px;
+    margin-top: 14px;
+    padding: 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.progress-blocked-box textarea {
+    width: 100%;
+    resize: vertical;
+}
+
+.progress-blocked-prompt {
+    color: var(--text-soft);
+    font-size: 0.92rem;
+}
+
+.progress-blocked-actions,
+.handoff-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.handoff-block {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 14px;
+}
+
+.handoff-preview {
+    margin: 10px 0 0;
+    padding: 14px;
+    border-radius: 14px;
+    background: rgba(0, 0, 0, 0.22);
+    color: var(--text-main);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.88rem;
+    line-height: 1.45;
+}
+
+.trust-capsule-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.trust-capsule-summary {
+    margin-top: 10px;
+    color: var(--text-main);
+    line-height: 1.5;
+}
+
+.trust-capsule-meta {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    gap: 8px 10px;
+    margin-top: 10px;
+    font-size: 0.84rem;
+    color: var(--text-soft);
+    align-items: center;
+}
+
+.trust-capsule-detail {
+    margin-top: 10px;
+}
+
+.trust-tone-safe {
+    border-color: rgba(127, 211, 155, 0.24);
+    background: rgba(127, 211, 155, 0.08);
+}
+
+.trust-tone-neutral {
+    border-color: rgba(167, 199, 214, 0.22);
+    background: rgba(167, 199, 214, 0.07);
+}
+
+.trust-tone-caution {
+    border-color: rgba(224, 164, 88, 0.26);
+    background: rgba(224, 164, 88, 0.08);
+}
+
+.trust-tone-danger {
+    border-color: rgba(228, 109, 93, 0.28);
+    background: rgba(228, 109, 93, 0.08);
+}
+
 .action-board-details {
     margin-top: 14px;
     border-top: 1px solid rgba(255, 255, 255, 0.08);

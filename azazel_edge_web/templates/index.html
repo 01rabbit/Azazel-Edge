@@ -56,6 +56,20 @@
             </div>
             <p class="panel-note" id="demoModeBannerText">{{ tr('dashboard.demo_banner_default', 'A demo overlay is active. Review replay output on the dedicated demo page, not on the operational dashboard.') }}</p>
         </section>
+        <section class="onboarding-banner" id="beginnerOnboarding" hidden>
+            <div class="onboarding-copy">
+                <div class="panel-kicker">{{ tr('dashboard.beginner_onboarding_kicker', 'Beginner Guide') }}</div>
+                <h2 id="onboardingTitle">{{ tr('dashboard.beginner_onboarding_title', 'Start with the first three blocks') }}</h2>
+                <p id="onboardingBody">{{ tr('dashboard.beginner_onboarding_body', 'Visual Baseline tells you whether the situation is calm, SOC / NOC Split tells you what domain moved first, and Client Identity tells you who is affected.') }}</p>
+            </div>
+            <div class="onboarding-controls">
+                <div class="onboarding-progress" id="onboardingStepLabel">{{ tr('dashboard.beginner_onboarding_step', 'Step 1 / 3') }}</div>
+                <div class="onboarding-actions">
+                    <button type="button" class="context-ask-btn" id="onboardingNextBtn">{{ tr('dashboard.beginner_onboarding_next', 'Next') }}</button>
+                    <button type="button" class="context-ask-btn" id="onboardingDismissBtn">{{ tr('dashboard.beginner_onboarding_dismiss', 'Hide guide') }}</button>
+                </div>
+            </div>
+        </section>
         <section class="command-strip panel">
             <div class="panel-heading">
                 <div>
@@ -597,6 +611,33 @@
                             <div class="card-kicker">{{ tr('dashboard.immediate_action', 'Immediate Action') }}</div>
                             <h3 id="priorityActionTitle">Waiting for action synthesis</h3>
                             <p class="card-summary" id="priorityActionSummary">The highest priority action will appear here before detailed controls.</p>
+                            <div class="trust-capsule trust-tone-neutral" id="decisionTrustCapsule">
+                                <div class="trust-capsule-header">
+                                    <div class="assistant-label">{{ tr('dashboard.decision_trust_capsule', 'Decision Trust') }}</div>
+                                    <span class="assistant-status status-neutral" id="trustCapsuleConfidence">-</span>
+                                </div>
+                                <div class="trust-capsule-summary" id="trustCapsuleSummary">{{ tr('dashboard.trust_summary_waiting', 'Waiting for trust synthesis.') }}</div>
+                                <div class="trust-capsule-meta">
+                                    <span>{{ tr('dashboard.trust_confidence', 'Confidence') }}</span>
+                                    <strong id="trustCapsuleConfidenceSource">-</strong>
+                                    <span>{{ tr('dashboard.trust_evidence', 'Evidence') }}</span>
+                                    <strong id="trustCapsuleEvidence">0</strong>
+                                </div>
+                                <div class="trust-capsule-detail pro-only">
+                                    <div class="action-subsection">
+                                        <div class="assistant-label">{{ tr('dashboard.trust_why_this', 'Why this') }}</div>
+                                        <ul class="action-list" id="trustCapsuleWhyList">
+                                            <li>{{ tr('dashboard.waiting_causal_summary_ui', 'Waiting for causal summary.') }}</li>
+                                        </ul>
+                                    </div>
+                                    <div class="action-subsection">
+                                        <div class="assistant-label">{{ tr('dashboard.trust_unknowns', 'Unknowns') }}</div>
+                                        <ul class="action-list" id="trustCapsuleUnknownList">
+                                            <li>{{ tr('dashboard.trust_unknown_none', 'No material unknowns right now.') }}</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
                             <details class="action-board-details" id="actionBoardPrimaryDetails">
                                 <summary id="actionBoardPrimaryDetailsToggle">{{ tr('dashboard.action_board_primary_details_show', 'Show immediate action details') }}</summary>
                                 <div class="action-subsection">
@@ -632,6 +673,22 @@
                                     </div>
                                     <div class="temporary-triage-handoff">
                                         <a id="temporaryOpsCommLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.continue_ops_comm', 'Continue in Ops Comm') }}</a>
+                                    </div>
+                                </div>
+                                <div class="action-subsection temp-only progress-checklist-block">
+                                    <div class="assistant-label">{{ tr('dashboard.progress_checklist', 'Progress Checklist') }}</div>
+                                    <div class="progress-checklist-summary" id="progressChecklistSummary">{{ tr('dashboard.progress_checklist_waiting', 'Waiting for progress state.') }}</div>
+                                    <div class="progress-checklist-list" id="progressChecklistList">
+                                        <div>{{ tr('dashboard.progress_checklist_waiting', 'Waiting for progress state.') }}</div>
+                                    </div>
+                                    <div class="progress-blocked-box" id="progressBlockedBox">
+                                        <label for="progressBlockedReason">{{ tr('dashboard.progress_blocked_reason_label', 'Blocked reason') }}</label>
+                                        <textarea id="progressBlockedReason" rows="2" placeholder="{{ tr('dashboard.progress_blocked_reason_placeholder', 'Why are you blocked right now?') }}"></textarea>
+                                        <div class="progress-blocked-prompt" id="progressBlockedPrompt">{{ tr('dashboard.progress_blocked_prompt_default', 'Ask what changed first, when it started, and whether this is one device or many.') }}</div>
+                                        <div class="progress-blocked-actions">
+                                            <button type="button" class="shortcut-btn" id="progressBlockedSaveBtn">{{ tr('dashboard.progress_blocked_save', 'Save blocked state') }}</button>
+                                            <button type="button" class="shortcut-btn" id="progressBlockedClearBtn">{{ tr('dashboard.progress_blocked_clear', 'Clear blocked state') }}</button>
+                                        </div>
                                     </div>
                                 </div>
                                 <div class="action-subsection temp-only">
@@ -784,6 +841,19 @@
                         <button type="submit" id="mioAskSubmit" class="assistant-submit">{{ tr('dashboard.ask_submit', 'Ask M.I.O.') }}</button>
                     </form>
                     <div class="assistant-response" id="mioAskResponse">No manual query executed yet.</div>
+                    <div class="assistant-block handoff-block">
+                        <div class="assistant-label">{{ tr('dashboard.handoff_brief_pack', 'Handoff Brief Pack') }}</div>
+                        <div class="handoff-summary" id="handoffPackSummary">{{ tr('dashboard.handoff_waiting', 'Preparing handoff pack.') }}</div>
+                        <div class="handoff-actions">
+                            <button type="button" class="shortcut-btn" id="handoffCopyBtn">{{ tr('dashboard.handoff_copy', 'Copy') }}</button>
+                            <a id="handoffOpsCommBtn" class="topbar-link" href="/ops-comm">{{ tr('dashboard.handoff_send_ops_comm', 'Send to Ops Comm') }}</a>
+                            <button type="button" class="shortcut-btn" id="handoffMattermostBtn">{{ tr('dashboard.handoff_send_mattermost', 'Send to Mattermost') }}</button>
+                        </div>
+                        <details class="panel-fold-details" id="handoffDetails">
+                            <summary id="handoffDetailsToggle">{{ tr('dashboard.handoff_details_show', 'Show handoff brief') }}</summary>
+                            <pre class="handoff-preview" id="handoffPreview">{{ tr('dashboard.handoff_waiting', 'Preparing handoff pack.') }}</pre>
+                        </details>
+                    </div>
                     <div class="assistant-footer">
                         <div><span class="assistant-label">Mattermost</span><strong id="mattermostState">-</strong></div>
                         <div><span class="assistant-label">Triggers</span><strong id="mattermostTriggers">-</strong></div>

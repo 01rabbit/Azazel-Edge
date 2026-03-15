@@ -125,6 +125,13 @@
                     <div id="capabilitiesSummary" class="ops-result">{{ tr('ops.loading_caps', 'Loading capabilities...') }}</div>
                     <div id="capabilitiesList" class="ops-capabilities-list"></div>
                 </section>
+
+                <section class="ops-side-card">
+                    <div class="assistant-label">{{ tr('dashboard.progress_checklist', 'Progress Checklist') }}</div>
+                    <div id="opsProgressSummary" class="ops-result">{{ tr('dashboard.progress_checklist_waiting', 'Waiting for progress state.') }}</div>
+                    <div id="opsProgressList" class="ops-result">{{ tr('dashboard.progress_checklist_waiting', 'Waiting for progress state.') }}</div>
+                    <div id="opsProgressBlocked" class="ops-result">{{ tr('dashboard.progress_blocked_prompt_default', 'Ask what changed first, when it started, and whether this is one device or many.') }}</div>
+                </section>
             </aside>
         </section>
 

@@ -1,5 +1,6 @@
 const AUTH_TOKEN = localStorage.getItem('azazel_token') || 'azazel-default-token-change-me';
 const LANG_KEY = 'azazel_lang';
+const PROGRESS_SESSION_KEY = 'azazel_operator_progress_session';
 const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
 const I18N = window.AZAZEL_I18N || {};
 const STATUS_INTERVAL_MS = 8000;
@@ -8,6 +9,14 @@ let currentAudience = 'operator';
 let demoScenarios = [];
 let triageIntentItems = [];
 let triageSession = null;
+
+function ensureProgressSessionId() {
+    let sessionId = String(localStorage.getItem(PROGRESS_SESSION_KEY) || '').trim();
+    if (sessionId) return sessionId;
+    sessionId = `ops-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(PROGRESS_SESSION_KEY, sessionId);
+    return sessionId;
+}
 
 function tr(key, fallback, vars = null) {
     const base = I18N[key] || fallback || key;
@@ -876,6 +885,41 @@ async function loadMessages() {
     }
 }
 
+async function loadProgress() {
+    try {
+        const url = `/api/operator-progress?session_id=${encodeURIComponent(ensureProgressSessionId())}`;
+        const res = await fetch(url, { headers: authHeaders() });
+        const data = await res.json();
+        if (!res.ok || data.ok === false) {
+            throw new Error(data.error || 'progress_load_failed');
+        }
+        const progress = data.operator_progress_state || {};
+        const items = Array.isArray(progress.items) ? progress.items : [];
+        setText(
+            'opsProgressSummary',
+            tr('dashboard.progress_checklist_summary', 'Done {done}/{total} | Next {next}', {
+                done: Number(progress.done_count || 0),
+                total: Number(progress.total_count || 0),
+                next: progress.next_item?.label || tr('dashboard.progress_next_none', 'All clear'),
+            }),
+        );
+        const list = document.getElementById('opsProgressList');
+        if (list) {
+            list.innerHTML = items.length
+                ? items.map((item) => `${item.done ? 'DONE' : 'NEXT'} | ${escapeHtml(item.label || '-')}<br><small>${escapeHtml(item.detail || '-')}</small>`).join('<br><br>')
+                : escapeHtml(tr('dashboard.progress_checklist_waiting', 'Waiting for progress state.'));
+        }
+        setText(
+            'opsProgressBlocked',
+            progress.blocked
+                ? `${tr('dashboard.progress_blocked_reason_label', 'Blocked reason')}: ${progress.blocked_reason} | ${progress.blocked_prompt || ''}`
+                : `${tr('dashboard.progress_blocked_prompt_label', 'Ask next')}: ${progress.blocked_prompt || tr('dashboard.progress_blocked_prompt_default', 'Ask what changed first, when it started, and whether this is one device or many.')}`,
+        );
+    } catch (error) {
+        setText('opsProgressSummary', `${tr('ops.error', 'ERROR')}: ${error.message || error}`);
+    }
+}
+
 async function loadTriageAudit() {
     try {
         const res = await fetch('/api/triage/audit?limit=12', { headers: authHeaders() });
@@ -1051,6 +1095,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     loadStatus();
     loadMessages();
+    loadProgress();
     loadTriageAudit();
     loadCapabilities();
     loadDemoScenarios();
@@ -1077,6 +1122,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(() => {
         loadStatus();
         loadMessages();
+        loadProgress();
         loadTriageAudit();
     }, STATUS_INTERVAL_MS);
 });
