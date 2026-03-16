@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ tr('dashboard.demo_runner', 'Demo Runner') }} | Azazel-Edge</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
 <body data-audience="professional" data-page="demo">
     <header class="topbar">
@@ -205,6 +205,6 @@
         window.AZAZEL_LANG = {{ ui_lang|tojson }};
         window.AZAZEL_I18N = {{ ui_catalog|tojson }};
     </script>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v={{ asset_version }}"></script>
 </body>
 </html>

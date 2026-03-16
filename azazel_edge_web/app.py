@@ -38,6 +38,7 @@ from urllib.request import Request, urlopen
 from urllib.parse import urlparse, quote
 
 app = Flask(__name__)
+STATIC_ASSET_VERSION = str(int(time.time()))
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PY_ROOT = PROJECT_ROOT / "py"
@@ -136,6 +137,7 @@ RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/az
 TRIAGE_AUDIT_LOG = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", "/var/log/azazel-edge/triage-audit.jsonl"))
 TRIAGE_AUDIT_FALLBACK_LOG = Path("/tmp/azazel-edge-triage-audit.jsonl")
 TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge/triage-sessions"))
+OPERATOR_PROGRESS_PATH = Path(os.environ.get("AZAZEL_OPERATOR_PROGRESS_PATH", "/run/azazel-edge/operator-progress.json"))
 TOKEN_FILE = web_token_candidates()[0]
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
 LOCAL_DEMO_RUNNER = PROJECT_ROOT / "bin" / "azazel-edge-demo"
@@ -192,6 +194,7 @@ def _inject_i18n() -> Dict[str, Any]:
     return {
         "ui_lang": lang,
         "ui_catalog": i18n_ui_catalog(lang),
+        "asset_version": STATIC_ASSET_VERSION,
         "tr": lambda key, default=None, **kwargs: i18n_translate(key, lang=lang, default=default, **kwargs),
     }
 
@@ -553,6 +556,13 @@ def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _write_json_file(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
 
 
 def _read_json_file(path: Path) -> Dict[str, Any]:
@@ -1321,6 +1331,194 @@ def _client_identity_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_progress_session_id(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) > 120:
+        text = text[:120]
+    return "".join(ch for ch in text if ch.isalnum() or ch in {"-", "_", "."})
+
+
+def _operator_progress_store() -> Dict[str, Any]:
+    payload = _read_json_file(OPERATOR_PROGRESS_PATH)
+    sessions = payload.get("sessions") if isinstance(payload.get("sessions"), dict) else {}
+    return {"sessions": sessions}
+
+
+def _operator_progress_default_items(summary: Dict[str, Any], actions: Dict[str, Any], *, lang: str) -> List[Dict[str, str]]:
+    client_view = (((summary.get("noc_focus") or {}) if isinstance(summary.get("noc_focus"), dict) else {}).get("client_identity_view") or {})
+    attention_count = _as_int(client_view.get("attention_count"), 0)
+    runbook = actions.get("suggested_runbook") if isinstance(actions.get("suggested_runbook"), dict) else {}
+    runbook_title = str(runbook.get("title") or "")
+    return [
+        {
+            "id": "baseline",
+            "label": i18n_translate(
+                "dashboard.progress_item_baseline",
+                lang=lang,
+                default="Review the first-view baseline",
+            ),
+            "detail": i18n_translate(
+                "dashboard.progress_item_baseline_detail",
+                lang=lang,
+                default="Confirm Visual Baseline and the strongest heatmap cell before changing anything.",
+            ),
+        },
+        {
+            "id": "scope",
+            "label": i18n_translate(
+                "dashboard.progress_item_scope",
+                lang=lang,
+                default="Confirm who is affected",
+            ),
+            "detail": i18n_translate(
+                "dashboard.progress_item_scope_detail",
+                lang=lang,
+                default="Attention endpoints now: {count}. Verify whether impact is one device or wider.",
+                count=attention_count,
+            ),
+        },
+        {
+            "id": "guidance",
+            "label": i18n_translate(
+                "dashboard.progress_item_guidance",
+                lang=lang,
+                default="Give the safe first guidance",
+            ),
+            "detail": i18n_translate(
+                "dashboard.progress_item_guidance_detail",
+                lang=lang,
+                default="Use the current user guidance before any stronger control change.",
+            ),
+        },
+        {
+            "id": "runbook",
+            "label": i18n_translate(
+                "dashboard.progress_item_runbook",
+                lang=lang,
+                default="Prepare the reviewed runbook path",
+            ),
+            "detail": i18n_translate(
+                "dashboard.progress_item_runbook_detail",
+                lang=lang,
+                default="Current reviewed candidate: {title}.",
+                title=runbook_title or i18n_translate("dashboard.no_runbook_selected", lang=lang, default="No runbook selected."),
+            ),
+        },
+    ]
+
+
+def _operator_progress_default_prompt(summary: Dict[str, Any], *, lang: str) -> str:
+    noc_focus = summary.get("noc_focus") if isinstance(summary.get("noc_focus"), dict) else {}
+    client_view = noc_focus.get("client_identity_view") if isinstance(noc_focus.get("client_identity_view"), dict) else {}
+    attention_count = _as_int(client_view.get("attention_count"), 0)
+    internet_check = str(((noc_focus.get("path_health") or {}) if isinstance(noc_focus.get("path_health"), dict) else {}).get("internet_check") or "").upper()
+    if attention_count > 1:
+        return i18n_translate(
+            "dashboard.progress_blocked_prompt_many_clients",
+            lang=lang,
+            default="Ask whether all affected users are seeing the same symptom or only one area is failing.",
+        )
+    if attention_count == 1:
+        return i18n_translate(
+            "dashboard.progress_blocked_prompt_one_client",
+            lang=lang,
+            default="Ask which exact device is affected and what the user sees on screen.",
+        )
+    if internet_check == "FAIL":
+        return i18n_translate(
+            "dashboard.progress_blocked_prompt_uplink",
+            lang=lang,
+            default="Ask whether any external site is reachable from one test device before changing mode.",
+        )
+    return i18n_translate(
+        "dashboard.progress_blocked_prompt_default",
+        lang=lang,
+        default="Ask what changed first, when it started, and whether this is one device or many.",
+    )
+
+
+def _operator_progress_payload(
+    summary: Dict[str, Any],
+    actions: Dict[str, Any],
+    *,
+    session_id: str,
+    lang: str,
+) -> Dict[str, Any]:
+    normalized_session = _normalize_progress_session_id(session_id)
+    items = _operator_progress_default_items(summary, actions, lang=lang)
+    stored = {}
+    if normalized_session:
+        stored = (_operator_progress_store().get("sessions") or {}).get(normalized_session) or {}
+    done_map = stored.get("items") if isinstance(stored.get("items"), dict) else {}
+    payload_items: List[Dict[str, Any]] = []
+    for item in items:
+        item_id = str(item.get("id") or "")
+        stored_item = done_map.get(item_id) if isinstance(done_map.get(item_id), dict) else {}
+        payload_items.append(
+            {
+                "id": item_id,
+                "label": str(item.get("label") or ""),
+                "detail": str(item.get("detail") or ""),
+                "done": bool(stored_item.get("done")),
+            }
+        )
+    next_item = next((item for item in payload_items if not item["done"]), None)
+    blocked_reason = str(stored.get("blocked_reason") or "").strip()
+    blocked_prompt = str(stored.get("blocked_prompt") or "").strip() or _operator_progress_default_prompt(summary, lang=lang)
+    done_count = sum(1 for item in payload_items if item["done"])
+    return {
+        "session_id": normalized_session,
+        "items": payload_items,
+        "done_count": done_count,
+        "total_count": len(payload_items),
+        "next_item": next_item,
+        "blocked": bool(blocked_reason),
+        "blocked_reason": blocked_reason,
+        "blocked_prompt": blocked_prompt,
+        "last_updated": str(stored.get("last_updated") or ""),
+    }
+
+
+def _save_operator_progress(
+    *,
+    session_id: str,
+    item_id: str | None = None,
+    done: bool | None = None,
+    blocked_reason: str | None = None,
+    blocked_prompt: str | None = None,
+    clear_blocked: bool = False,
+) -> Dict[str, Any]:
+    normalized_session = _normalize_progress_session_id(session_id)
+    if not normalized_session:
+        raise ValueError("session_id_required")
+    store = _operator_progress_store()
+    sessions = store.setdefault("sessions", {})
+    session_payload = sessions.get(normalized_session) if isinstance(sessions.get(normalized_session), dict) else {}
+    if not session_payload:
+        session_payload = {"created_at": datetime.now().isoformat(), "items": {}}
+        sessions[normalized_session] = session_payload
+    items = session_payload.get("items") if isinstance(session_payload.get("items"), dict) else {}
+    session_payload["items"] = items
+    if item_id:
+        entry = items.get(item_id) if isinstance(items.get(item_id), dict) else {}
+        if done is not None:
+            entry["done"] = bool(done)
+        items[item_id] = entry
+    if clear_blocked:
+        session_payload["blocked_reason"] = ""
+        session_payload["blocked_prompt"] = ""
+    else:
+        if blocked_reason is not None:
+            session_payload["blocked_reason"] = str(blocked_reason).strip()
+        if blocked_prompt is not None:
+            session_payload["blocked_prompt"] = str(blocked_prompt).strip()
+    session_payload["last_updated"] = datetime.now().isoformat()
+    _write_json_file(OPERATOR_PROGRESS_PATH, store)
+    return session_payload
+
+
 def _remote_peer_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
     noc_capacity = state.get("noc_capacity") if isinstance(state.get("noc_capacity"), dict) else {}
     top_sources = noc_capacity.get("top_sources") if isinstance(noc_capacity.get("top_sources"), list) else []
@@ -1585,6 +1783,106 @@ def _primary_anomaly_card_payload(
         "impact": str(selected.get("impact") or ""),
         "do_now": do_now,
         "dont_do": dont_do,
+    }
+
+
+def _decision_trust_capsule_payload(
+    state: Dict[str, Any],
+    metrics: Dict[str, Any],
+    guidance: Dict[str, List[str]],
+    review: Dict[str, Any],
+    decision_path: Dict[str, Any],
+    *,
+    lang: str,
+) -> Dict[str, Any]:
+    tr = lambda key, default=None, **kwargs: i18n_translate(key, lang=lang, default=default, **kwargs)
+    now_epoch = time.time()
+    snapshot_age = _age_seconds(state.get("snapshot_epoch"), now_epoch=now_epoch)
+    ai_age = _age_seconds(metrics.get("last_update_ts"), now_epoch=now_epoch)
+    second_pass_status = str(decision_path.get("second_pass_status") or "pending").strip().lower()
+    evidence_count = _as_int(decision_path.get("second_pass_evidence_count"), 0)
+    why_this = [str(item) for item in (guidance.get("why_now") or []) if str(item).strip()][:3]
+    unknowns: List[str] = []
+    freshness_unknown = False
+    execution_unknown = False
+
+    if snapshot_age is None:
+        freshness_unknown = True
+        _append_unique(unknowns, tr("dashboard.trust_unknown_snapshot_missing", default="Snapshot time is unavailable."))
+    elif snapshot_age > DASHBOARD_SNAPSHOT_STALE_SEC:
+        freshness_unknown = True
+        _append_unique(
+            unknowns,
+            tr("dashboard.trust_unknown_snapshot_stale", default="Snapshot is stale ({age}s old).", age=int(round(snapshot_age))),
+        )
+
+    if ai_age is None:
+        freshness_unknown = True
+        _append_unique(unknowns, tr("dashboard.trust_unknown_ai_metrics_missing", default="AI metrics time is unavailable."))
+    elif ai_age > DASHBOARD_AI_STALE_SEC:
+        freshness_unknown = True
+        _append_unique(
+            unknowns,
+            tr("dashboard.trust_unknown_ai_metrics_stale", default="AI metrics are stale ({age}s old).", age=int(round(ai_age))),
+        )
+
+    if second_pass_status in {"pending", "running"}:
+        execution_unknown = True
+        _append_unique(unknowns, tr("dashboard.trust_unknown_second_pass_pending", default="Deterministic second-pass is not finished yet."))
+    elif second_pass_status in {"failed", "error"}:
+        execution_unknown = True
+        _append_unique(unknowns, tr("dashboard.trust_unknown_second_pass_failed", default="Deterministic second-pass did not complete successfully."))
+
+    if not review.get("final_status"):
+        _append_unique(unknowns, tr("dashboard.trust_unknown_review_missing", default="Runbook review status is not available."))
+
+    if not why_this:
+        _append_unique(unknowns, tr("dashboard.trust_unknown_reasoning_thin", default="Reasoning detail is still thin."))
+
+    if second_pass_status in {"done", "complete", "completed", "ready"} and evidence_count > 0:
+        confidence_source = tr("dashboard.trust_confidence_source_second_pass", default="Deterministic second-pass with live evidence support")
+        confidence_label = tr("dashboard.trust_confidence_high", default="HIGH")
+        tone = "safe" if not unknowns else "neutral"
+    elif evidence_count > 0:
+        confidence_source = tr("dashboard.trust_confidence_source_live_evidence", default="Live evidence and first-pass recommendation")
+        confidence_label = tr("dashboard.trust_confidence_medium", default="MEDIUM")
+        tone = "neutral" if not unknowns else "caution"
+    else:
+        confidence_source = tr("dashboard.trust_confidence_source_first_pass", default="First-pass recommendation with limited supporting evidence")
+        confidence_label = tr("dashboard.trust_confidence_limited", default="LIMITED")
+        tone = "caution"
+
+    if second_pass_status in {"failed", "error"}:
+        tone = "danger"
+        confidence_label = tr("dashboard.trust_confidence_limited", default="LIMITED")
+    elif freshness_unknown or execution_unknown:
+        tone = "caution"
+
+    first_reason = why_this[0] if why_this else tr("dashboard.waiting_causal_summary_ui", default="Waiting for causal summary.")
+    beginner_summary = tr(
+        "dashboard.trust_beginner_summary",
+        default="Why: {reason} | Confidence: {confidence}",
+        reason=first_reason,
+        confidence=confidence_label,
+    )
+    professional_summary = tr(
+        "dashboard.trust_professional_summary",
+        default="{source} | evidence={evidence} | unknowns={unknowns}",
+        source=confidence_source,
+        evidence=evidence_count,
+        unknowns=len(unknowns),
+    )
+
+    return {
+        "tone": tone,
+        "beginner_summary": beginner_summary[:220],
+        "professional_summary": professional_summary[:260],
+        "why_this": why_this,
+        "confidence_source": confidence_source,
+        "confidence_label": confidence_label,
+        "unknowns": unknowns[:3],
+        "evidence_count": evidence_count,
+        "review_status": str(review.get("final_status") or ""),
     }
 
 
@@ -2035,6 +2333,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
 def _dashboard_actions_payload(
     state: Dict[str, Any],
     advisory: Dict[str, Any],
+    metrics: Dict[str, Any],
     llm_rows: List[Dict[str, Any]],
     *,
     audience: str | None = None,
@@ -2103,6 +2402,25 @@ def _dashboard_actions_payload(
         decision_pipeline = advisory.get("decision_pipeline")
     first_pass = decision_pipeline.get("first_pass") if isinstance(decision_pipeline.get("first_pass"), dict) else {}
     second_pass = decision_pipeline.get("second_pass") if isinstance(decision_pipeline.get("second_pass"), dict) else {}
+    decision_path = {
+        "first_pass_engine": str(first_pass.get("engine") or "tactical_scorer_v1"),
+        "first_pass_role": str(first_pass.get("role") or "first_minute_triage"),
+        "second_pass_engine": str(second_pass.get("engine") or "soc_evaluator_v1"),
+        "second_pass_role": str(second_pass.get("role") or "second_pass_evaluation"),
+        "second_pass_status": str(second_pass.get("status") or second_pass_detail.get("status") or "pending"),
+        "second_pass_evidence_count": _as_int(second_pass.get("evidence_count") or second_pass_detail.get("evidence_count"), 0),
+        "second_pass_flow_support_count": _as_int(second_pass.get("flow_support_count") or second_pass_detail.get("flow_support_count"), 0),
+        "soc_status": str(((second_pass_detail.get("soc") or {}) if isinstance(second_pass_detail.get("soc"), dict) else {}).get("status") or ""),
+        "ai_role": "supplemental_operator_assist",
+    }
+    decision_trust_capsule = _decision_trust_capsule_payload(
+        state,
+        metrics,
+        guidance,
+        review,
+        decision_path,
+        lang=lang,
+    )
     mio_model_payload = {
         "answer": str(latest_ai.get("answer") or ""),
         "user_message": user_guidance[:160],
@@ -2139,6 +2457,7 @@ def _dashboard_actions_payload(
             "ai_used": bool(noc_runbook_support.get("ai_used")),
         },
         "primary_anomaly_card": primary_anomaly_card,
+        "decision_trust_capsule": decision_trust_capsule,
         "rejected_stronger_actions": stronger_actions[:4],
         "mio": {
             "answer": str(latest_ai.get("answer") or ""),
@@ -2164,17 +2483,7 @@ def _dashboard_actions_payload(
             "ask_mio": "/ops-comm",
             "mattermost": MATTERMOST_OPEN_URL,
         },
-        "decision_path": {
-            "first_pass_engine": str(first_pass.get("engine") or "tactical_scorer_v1"),
-            "first_pass_role": str(first_pass.get("role") or "first_minute_triage"),
-            "second_pass_engine": str(second_pass.get("engine") or "soc_evaluator_v1"),
-            "second_pass_role": str(second_pass.get("role") or "second_pass_evaluation"),
-            "second_pass_status": str(second_pass.get("status") or second_pass_detail.get("status") or "pending"),
-            "second_pass_evidence_count": _as_int(second_pass.get("evidence_count") or second_pass_detail.get("evidence_count"), 0),
-            "second_pass_flow_support_count": _as_int(second_pass.get("flow_support_count") or second_pass_detail.get("flow_support_count"), 0),
-            "soc_status": str(((second_pass_detail.get("soc") or {}) if isinstance(second_pass_detail.get("soc"), dict) else {}).get("status") or ""),
-            "ai_role": "supplemental_operator_assist",
-        },
+        "decision_path": decision_path,
         "soc_priority": {
             "status": triage_status or "idle",
             "now": triage_now[:8],
@@ -2182,6 +2491,120 @@ def _dashboard_actions_payload(
             "backlog": triage_backlog[:8],
             "top_priority_ids": triage_state.get("top_priority_ids") if isinstance(triage_state.get("top_priority_ids"), list) else [],
         },
+    }
+
+
+def _handoff_brief_pack_payload(
+    summary: Dict[str, Any],
+    actions: Dict[str, Any],
+    health: Dict[str, Any],
+    progress: Dict[str, Any],
+    *,
+    lang: str,
+) -> Dict[str, Any]:
+    noc_focus = summary.get("noc_focus") if isinstance(summary.get("noc_focus"), dict) else {}
+    client_view = noc_focus.get("client_identity_view") if isinstance(noc_focus.get("client_identity_view"), dict) else {}
+    clients = client_view.get("items") if isinstance(client_view.get("items"), list) else []
+    affected_clients = [
+        {
+            "label": str(item.get("display_name") or item.get("ip") or "-"),
+            "state": str(item.get("state") or "unknown"),
+            "ip": str(item.get("ip") or "-"),
+            "segment": str(item.get("interface_or_segment") or item.get("interface_family") or "-"),
+        }
+        for item in clients
+        if bool(item.get("requires_attention"))
+    ][:5]
+    primary = actions.get("primary_anomaly_card") if isinstance(actions.get("primary_anomaly_card"), dict) else {}
+    trust = actions.get("decision_trust_capsule") if isinstance(actions.get("decision_trust_capsule"), dict) else {}
+    stale_flags = health.get("stale_flags") if isinstance(health.get("stale_flags"), dict) else {}
+    timestamps = summary.get("timestamps") if isinstance(summary.get("timestamps"), dict) else {}
+    done_items = [
+        str(item.get("label") or "")
+        for item in (progress.get("items") or [])
+        if isinstance(item, dict) and bool(item.get("done"))
+    ]
+    posture = " | ".join(
+        [
+            f"mode={str(((summary.get('mode') or {}) if isinstance(summary.get('mode'), dict) else {}).get('current_mode') or '-').upper()}",
+            f"risk={str(((summary.get('risk') or {}) if isinstance(summary.get('risk'), dict) else {}).get('user_state') or '-').upper()}",
+            f"path={str(((noc_focus.get('path_health') or {}) if isinstance(noc_focus.get('path_health'), dict) else {}).get('status') or '-').upper()}",
+            f"internet={str(((summary.get('uplink') or {}) if isinstance(summary.get('uplink'), dict) else {}).get('internet_check') or '-').upper()}",
+        ]
+    )
+    anomaly_title = str(primary.get("title") or "")
+    anomaly_detail = str(primary.get("what_happened") or "")
+    if str(primary.get("status") or "none") == "none" or not anomaly_title:
+        anomaly_title = i18n_translate("dashboard.handoff_no_primary_anomaly", lang=lang, default="No primary anomaly selected.")
+        anomaly_detail = i18n_translate("dashboard.handoff_no_primary_anomaly_detail", lang=lang, default="The dashboard does not currently have a single dominant anomaly.")
+    generated_at = datetime.now().isoformat()
+    none_text = i18n_translate("dashboard.handoff_none", lang=lang, default="none")
+    brief_text = "\n".join(
+        [
+            i18n_translate("dashboard.handoff_title", lang=lang, default="Handoff Brief Pack"),
+            i18n_translate("dashboard.handoff_generated", lang=lang, default="Generated: {ts}", ts=generated_at),
+            i18n_translate(
+                "dashboard.handoff_snapshot",
+                lang=lang,
+                default="Snapshot: {snapshot} | stale snapshot={snapshot_stale} ai={ai_stale}",
+                snapshot=str(timestamps.get("snapshot_at") or "-"),
+                snapshot_stale="yes" if stale_flags.get("snapshot") else "no",
+                ai_stale="yes" if stale_flags.get("ai_metrics") else "no",
+            ),
+            i18n_translate("dashboard.handoff_posture", lang=lang, default="Current posture: {value}", value=posture),
+            i18n_translate(
+                "dashboard.handoff_trust",
+                lang=lang,
+                default="Decision trust: {value}",
+                value=str(trust.get("professional_summary") or trust.get("beginner_summary") or "-"),
+            ),
+            i18n_translate("dashboard.handoff_primary_anomaly", lang=lang, default="Primary anomaly: {title}", title=anomaly_title),
+            i18n_translate("dashboard.handoff_primary_detail", lang=lang, default="Anomaly detail: {detail}", detail=anomaly_detail),
+            i18n_translate(
+                "dashboard.handoff_affected_clients",
+                lang=lang,
+                default="Affected clients: {value}",
+                value=", ".join(f"{item['label']} [{item['state']} / {item['segment']} / {item['ip']}]" for item in affected_clients) or none_text,
+            ),
+            i18n_translate(
+                "dashboard.handoff_actions_done",
+                lang=lang,
+                default="Actions done: {value}",
+                value=", ".join(done_items) or none_text,
+            ),
+            i18n_translate(
+                "dashboard.handoff_do_now",
+                lang=lang,
+                default="Do now: {value}",
+                value=" | ".join([str(item) for item in (actions.get("do_next") or []) if str(item).strip()][:3]) or none_text,
+            ),
+            i18n_translate(
+                "dashboard.handoff_do_not_do",
+                lang=lang,
+                default="Do not do: {value}",
+                value=" | ".join([str(item) for item in (actions.get("do_not_do") or []) if str(item).strip()][:3]) or none_text,
+            ),
+        ]
+    )
+    return {
+        "current_posture": posture,
+        "primary_anomaly": {"title": anomaly_title, "detail": anomaly_detail},
+        "affected_clients": affected_clients,
+        "actions_done": done_items,
+        "do_now": [str(item) for item in (actions.get("do_next") or []) if str(item).strip()][:4],
+        "do_not_do": [str(item) for item in (actions.get("do_not_do") or []) if str(item).strip()][:4],
+        "timestamps": {
+            "generated_at": generated_at,
+            "snapshot_at": str(timestamps.get("snapshot_at") or "-"),
+            "mode_last_change": str(timestamps.get("mode_last_change") or "-"),
+        },
+        "stale_flags": {
+            "snapshot": bool(stale_flags.get("snapshot")),
+            "ai_metrics": bool(stale_flags.get("ai_metrics")),
+        },
+        "brief_text": brief_text,
+        "ops_comm_url": f"/ops-comm?lang={quote(lang)}&audience=operator&message={quote(brief_text)}",
+        "mattermost_available": _mattermost_mode() != "disabled",
     }
 
 
@@ -4276,10 +4699,69 @@ def api_dashboard_summary():
 def api_dashboard_actions():
     state = read_state()
     advisory = _read_json_file(AI_ADVISORY_PATH)
+    metrics = _read_json_file(AI_METRICS_PATH)
     llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
     audience = str(request.args.get("audience") or "temporary").strip() or "temporary"
     surface = str(request.args.get("surface") or "dashboard").strip() or "dashboard"
-    return jsonify(_dashboard_actions_payload(state, advisory, llm_rows, audience=audience, surface=surface)), 200
+    return jsonify(_dashboard_actions_payload(state, advisory, metrics, llm_rows, audience=audience, surface=surface)), 200
+
+
+@app.route("/api/operator-progress", methods=["GET", "POST"])
+@require_token()
+def api_operator_progress():
+    lang = _request_lang()
+    body = request.get_json(silent=True) or {}
+    session_id = _normalize_progress_session_id(request.args.get("session_id") or body.get("session_id"))
+    if request.method == "POST":
+        if not session_id:
+            return jsonify({"ok": False, "error": "session_id_required"}), 400
+        try:
+            _save_operator_progress(
+                session_id=session_id,
+                item_id=str(body.get("item_id") or "").strip() or None,
+                done=body.get("done") if "done" in body else None,
+                blocked_reason=body.get("blocked_reason") if "blocked_reason" in body else None,
+                blocked_prompt=body.get("blocked_prompt") if "blocked_prompt" in body else None,
+                clear_blocked=bool(body.get("clear_blocked")),
+            )
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+    state = read_state()
+    metrics = _read_json_file(AI_METRICS_PATH)
+    advisory = _read_json_file(AI_ADVISORY_PATH)
+    llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
+    summary = _dashboard_summary_payload(state, metrics, advisory)
+    actions = _dashboard_actions_payload(state, advisory, metrics, llm_rows, audience="temporary", surface="dashboard")
+    payload = _operator_progress_payload(summary, actions, session_id=session_id, lang=lang)
+    return jsonify({"ok": True, "operator_progress_state": payload}), 200
+
+
+@app.route("/api/dashboard/handoff", methods=["GET", "POST"])
+@require_token()
+def api_dashboard_handoff():
+    lang = _request_lang()
+    body = request.get_json(silent=True) or {}
+    session_id = _normalize_progress_session_id(request.args.get("session_id") or body.get("session_id"))
+    state = read_state()
+    metrics = _read_json_file(AI_METRICS_PATH)
+    advisory = _read_json_file(AI_ADVISORY_PATH)
+    llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
+    runbook_rows = _tail_jsonl(RUNBOOK_EVENT_LOG, limit=20)
+    summary = _dashboard_summary_payload(state, metrics, advisory)
+    actions = _dashboard_actions_payload(state, advisory, metrics, llm_rows, audience="professional", surface="dashboard")
+    health = _dashboard_health_payload(state, metrics, llm_rows, runbook_rows)
+    progress = _operator_progress_payload(summary, actions, session_id=session_id, lang=lang)
+    pack = _handoff_brief_pack_payload(summary, actions, health, progress, lang=lang)
+    if request.method == "POST":
+        target = str(body.get("target") or "").strip().lower()
+        if target != "mattermost":
+            return jsonify({"ok": False, "error": "unsupported_target", "handoff_brief_pack": pack}), 400
+        try:
+            result = _mattermost_send_message(f"[Handoff Brief]\n{pack['brief_text']}", sender="Azazel-Edge Handoff")
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e), "handoff_brief_pack": pack}), 502
+        return jsonify({"ok": True, "result": result, "handoff_brief_pack": pack}), 200
+    return jsonify({"ok": True, "handoff_brief_pack": pack}), 200
 
 
 @app.route("/api/dashboard/evidence", methods=["GET"])

@@ -1,6 +1,8 @@
 const AUTH_TOKEN = localStorage.getItem('azazel_token') || 'azazel-default-token-change-me';
 const AUDIENCE_KEY = 'azazel_dashboard_audience';
 const LANG_KEY = 'azazel_lang';
+const PROGRESS_SESSION_KEY = 'azazel_operator_progress_session';
+const ONBOARDING_DISMISSED_KEY = 'azazel_dashboard_onboarding_v3_dismissed';
 const POLL_INTERVAL_MS = 4000;
 const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
 const I18N = window.AZAZEL_I18N || {};
@@ -18,6 +20,29 @@ let showNormalClients = false;
 let headerClockTimer = null;
 let headerClockBaseMs = null;
 let headerClockSeedMs = null;
+let currentProgress = {};
+let currentHandoff = {};
+let onboardingStepIndex = 0;
+
+function advanceOnboardingStep() {
+    onboardingStepIndex = (onboardingStepIndex + 1) % 3;
+    syncOnboardingBanner();
+}
+
+function dismissOnboardingGuide() {
+    localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
+    syncOnboardingBanner();
+}
+
+function reopenOnboardingGuide() {
+    localStorage.removeItem(ONBOARDING_DISMISSED_KEY);
+    onboardingStepIndex = 0;
+    syncOnboardingBanner();
+}
+
+window.__azOnboardingNext = advanceOnboardingStep;
+window.__azOnboardingDismiss = dismissOnboardingGuide;
+window.__azOnboardingReopen = reopenOnboardingGuide;
 
 function tr(key, fallback, vars = null) {
     const base = I18N[key] || fallback || key;
@@ -47,6 +72,33 @@ function authHeaders() {
         'X-Auth-Token': AUTH_TOKEN,
         'X-AZAZEL-LANG': CURRENT_LANG,
     };
+}
+
+function ensureProgressSessionId() {
+    let sessionId = String(localStorage.getItem(PROGRESS_SESSION_KEY) || '').trim();
+    if (sessionId) return sessionId;
+    sessionId = `ops-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(PROGRESS_SESSION_KEY, sessionId);
+    return sessionId;
+}
+
+async function copyTextToClipboard(text) {
+    const value = String(text || '').trim();
+    if (!value) return false;
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(value);
+        return true;
+    }
+    const area = document.createElement('textarea');
+    area.value = value;
+    area.setAttribute('readonly', 'readonly');
+    area.style.position = 'absolute';
+    area.style.left = '-9999px';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(area);
+    return ok;
 }
 
 function switchLanguage(lang) {
@@ -333,6 +385,7 @@ function bindStaticHandlers() {
     document.getElementById('langEnBtn')?.addEventListener('click', () => switchLanguage('en'));
     document.getElementById('audienceProfessional')?.addEventListener('click', () => setAudience('professional'));
     document.getElementById('audienceTemporary')?.addEventListener('click', () => setAudience('temporary'));
+    document.getElementById('showGuideBtn')?.addEventListener('click', reopenOnboardingGuide);
 
     document.getElementById('modePortalBtn')?.addEventListener('click', () => switchMode('portal'));
     document.getElementById('modeShieldBtn')?.addEventListener('click', () => switchMode('shield'));
@@ -424,6 +477,77 @@ function bindStaticHandlers() {
         await askMio(question);
     });
 
+    document.getElementById('progressChecklistList')?.addEventListener('change', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement) || !target.classList.contains('progress-checklist-checkbox')) return;
+        try {
+            await fetchJson('/api/operator-progress', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({
+                    session_id: ensureProgressSessionId(),
+                    item_id: target.dataset.itemId || '',
+                    done: target.checked,
+                }),
+            });
+            await refreshDashboard();
+        } catch (error) {
+            target.checked = !target.checked;
+            showToast(error.message || String(error), 'error');
+        }
+    });
+    document.getElementById('progressBlockedSaveBtn')?.addEventListener('click', async () => {
+        const reason = String(document.getElementById('progressBlockedReason')?.value || '').trim();
+        try {
+            await fetchJson('/api/operator-progress', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({
+                    session_id: ensureProgressSessionId(),
+                    blocked_reason: reason,
+                    blocked_prompt: currentProgress.blocked_prompt || '',
+                }),
+            });
+            await refreshDashboard();
+        } catch (error) {
+            showToast(error.message || String(error), 'error');
+        }
+    });
+    document.getElementById('progressBlockedClearBtn')?.addEventListener('click', async () => {
+        try {
+            await fetchJson('/api/operator-progress', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({
+                    session_id: ensureProgressSessionId(),
+                    clear_blocked: true,
+                }),
+            });
+            await refreshDashboard();
+        } catch (error) {
+            showToast(error.message || String(error), 'error');
+        }
+    });
+    document.getElementById('handoffCopyBtn')?.addEventListener('click', async () => {
+        try {
+            const ok = await copyTextToClipboard(currentHandoff.brief_text || '');
+            showToast(ok ? tr('dashboard.handoff_copied', 'Handoff brief copied.') : tr('dashboard.handoff_copy_failed', 'Could not copy handoff brief.'), ok ? 'info' : 'error');
+        } catch (error) {
+            showToast(error.message || String(error), 'error');
+        }
+    });
+    document.getElementById('handoffMattermostBtn')?.addEventListener('click', async () => {
+        try {
+            await fetchJson('/api/dashboard/handoff', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ session_id: ensureProgressSessionId(), target: 'mattermost' }),
+            });
+            showToast(tr('dashboard.handoff_sent_mattermost', 'Handoff brief sent to Mattermost.'), 'info');
+        } catch (error) {
+            showToast(error.message || String(error), 'error');
+        }
+    });
     document.getElementById('demoScenarioSelect')?.addEventListener('change', updateDemoScenarioDescription);
     document.getElementById('demoRunForm')?.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -470,6 +594,7 @@ function setAudience(audience) {
     }
     updateTemporaryOpsCommLink('wifi');
     applyAudienceControlPolicy();
+    syncOnboardingBanner();
 }
 
 function applyAudienceControlPolicy() {
@@ -641,12 +766,19 @@ function updateTemporaryMission(actions) {
 }
 
 async function refreshDashboard() {
+    const progressSessionId = ensureProgressSessionId();
     const actionsUrl = new URL('/api/dashboard/actions', window.location.origin);
     actionsUrl.searchParams.set('audience', currentAudience);
     actionsUrl.searchParams.set('surface', 'dashboard');
+    const progressUrl = new URL('/api/operator-progress', window.location.origin);
+    progressUrl.searchParams.set('session_id', progressSessionId);
+    const handoffUrl = new URL('/api/dashboard/handoff', window.location.origin);
+    handoffUrl.searchParams.set('session_id', progressSessionId);
     const requests = [
         ['summary', '/api/dashboard/summary', true],
         ['actions', actionsUrl.pathname + actionsUrl.search, false],
+        ['progress', progressUrl.pathname + progressUrl.search, false],
+        ['handoff', handoffUrl.pathname + handoffUrl.search, false],
         ['evidence', '/api/dashboard/evidence', false],
         ['health', '/api/dashboard/health', false],
         ['state', '/api/state', true],
@@ -683,6 +815,8 @@ async function refreshDashboard() {
 
     const summary = resultMap.summary?.data || {};
     const actions = resultMap.actions?.data || {};
+    const progress = resultMap.progress?.data?.operator_progress_state || {};
+    const handoff = resultMap.handoff?.data?.handoff_brief_pack || {};
     const evidence = resultMap.evidence?.data || {};
     const health = resultMap.health?.data || {};
     const state = resultMap.state?.data || {};
@@ -694,6 +828,8 @@ async function refreshDashboard() {
     latestState = state || {};
     latestSummary = summary || {};
     latestMattermost = mattermost || {};
+    currentProgress = progress || {};
+    currentHandoff = handoff || {};
     demoOverlayResult = demoOverlay && demoOverlay.active ? demoOverlay : null;
     setDemoOverlayVisualState(!!demoOverlayResult);
     updateDemoModeBanner(demoOverlayResult);
@@ -711,6 +847,9 @@ async function refreshDashboard() {
         updateActionBoard(actions, state);
         updateMissionRow(summary, actions);
         updateTemporaryMission(actions);
+        updateProgressChecklist(progress);
+        updateHandoffPack(handoff);
+        syncOnboardingBanner();
         updateEvidenceBoard(evidence, health);
         updateAssistant(actions, mattermost, capabilities);
         if (CURRENT_PAGE === 'demo') {
@@ -2090,6 +2229,52 @@ function updateActionBoard(actions, state) {
     const runbookSteps = runbook.steps || [];
     renderList('runbookSteps', runbookSteps, (item) => item);
     const decisionPath = actions.decision_path || {};
+    const trustCapsule = actions.decision_trust_capsule || {};
+    updateElement(
+        'trustCapsuleSummary',
+        currentAudience === 'temporary'
+            ? (trustCapsule.beginner_summary || tr('dashboard.trust_summary_waiting', 'Waiting for trust synthesis.'))
+            : (trustCapsule.professional_summary || trustCapsule.beginner_summary || tr('dashboard.trust_summary_waiting', 'Waiting for trust synthesis.')),
+    );
+    updateElement('trustCapsuleConfidence', trustCapsule.confidence_label || '-');
+    updateElement('trustCapsuleConfidenceSource', trustCapsule.confidence_source || '-');
+    updateElement('trustCapsuleEvidence', String(trustCapsule.evidence_count ?? 0));
+    renderList(
+        'trustCapsuleWhyList',
+        Array.isArray(trustCapsule.why_this) && trustCapsule.why_this.length
+            ? trustCapsule.why_this
+            : [tr('dashboard.waiting_causal_summary_ui', 'Waiting for causal summary.')],
+        (item) => item,
+    );
+    renderList(
+        'trustCapsuleUnknownList',
+        Array.isArray(trustCapsule.unknowns) && trustCapsule.unknowns.length
+            ? trustCapsule.unknowns
+            : [tr('dashboard.trust_unknown_none', 'No material unknowns right now.')],
+        (item) => item,
+    );
+    const trustCapsuleEl = document.getElementById('decisionTrustCapsule');
+    if (trustCapsuleEl) {
+        trustCapsuleEl.classList.remove('trust-tone-safe', 'trust-tone-neutral', 'trust-tone-caution', 'trust-tone-danger');
+        const trustTone = String(trustCapsule.tone || 'neutral').toLowerCase();
+        const confidenceEl = document.getElementById('trustCapsuleConfidence');
+        if (confidenceEl) {
+            confidenceEl.className = `assistant-status ${
+                trustTone === 'safe'
+                    ? 'status-safe'
+                    : (trustTone === 'danger'
+                        ? 'status-danger'
+                        : (trustTone === 'caution' ? 'status-caution' : 'status-neutral'))
+            }`;
+        }
+        trustCapsuleEl.classList.add(
+            trustTone === 'safe'
+                ? 'trust-tone-safe'
+                : (trustTone === 'danger'
+                    ? 'trust-tone-danger'
+                    : (trustTone === 'caution' ? 'trust-tone-caution' : 'trust-tone-neutral')),
+        );
+    }
     updateElement('decisionFirstPass', `${decisionPath.first_pass_engine || '-'} | ${decisionPath.first_pass_role || '-'}`);
     updateElement('decisionSecondPass', `${decisionPath.second_pass_engine || '-'} | ${decisionPath.second_pass_role || '-'}`);
     const secondPassBits = [decisionPath.second_pass_status || '-'];
@@ -2148,6 +2333,105 @@ function updateActionBoard(actions, state) {
             ? 'status-safe'
             : (String(mode.current_mode || '').toLowerCase() === 'scapegoat' ? 'status-caution' : 'status-neutral'),
     );
+}
+
+function updateProgressChecklist(progress) {
+    const payload = progress && typeof progress === 'object' ? progress : {};
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    const nextItem = payload.next_item && typeof payload.next_item === 'object' ? payload.next_item : null;
+    updateElement(
+        'progressChecklistSummary',
+        tr('dashboard.progress_checklist_summary', 'Done {done}/{total} | Next {next}', {
+            done: Number(payload.done_count || 0),
+            total: Number(payload.total_count || 0),
+            next: nextItem?.label || tr('dashboard.progress_next_none', 'All clear'),
+        }),
+    );
+    const list = document.getElementById('progressChecklistList');
+    if (list) {
+        if (!items.length) {
+            list.innerHTML = `<div>${escapeHtml(tr('dashboard.progress_checklist_waiting', 'Waiting for progress state.'))}</div>`;
+        } else {
+            list.innerHTML = items.map((item) => `
+                <div class="progress-checklist-item ${item.done ? 'done' : ''}">
+                    <input type="checkbox" class="progress-checklist-checkbox" data-item-id="${escapeAttribute(item.id || '')}" ${item.done ? 'checked' : ''}>
+                    <label>
+                        <strong>${escapeHtml(item.label || '-')}</strong>
+                        <span>${escapeHtml(item.detail || '-')}</span>
+                    </label>
+                </div>
+            `).join('');
+        }
+    }
+    const blockedReason = document.getElementById('progressBlockedReason');
+    if (blockedReason && document.activeElement !== blockedReason) {
+        blockedReason.value = payload.blocked_reason || '';
+    }
+    updateElement('progressBlockedPrompt', payload.blocked_prompt || tr('dashboard.progress_blocked_prompt_default', 'Ask what changed first, when it started, and whether this is one device or many.'));
+}
+
+function updateHandoffPack(handoff) {
+    const payload = handoff && typeof handoff === 'object' ? handoff : {};
+    const summary = payload.current_posture
+        ? tr('dashboard.handoff_summary_ready', 'Ready | {posture}', { posture: payload.current_posture })
+        : tr('dashboard.handoff_waiting', 'Preparing handoff pack.');
+    updateElement('handoffPackSummary', summary);
+    updateElement('handoffPreview', payload.brief_text || tr('dashboard.handoff_waiting', 'Preparing handoff pack.'));
+    const opsCommBtn = document.getElementById('handoffOpsCommBtn');
+    if (opsCommBtn) opsCommBtn.href = payload.ops_comm_url || '/ops-comm';
+    const mattermostBtn = document.getElementById('handoffMattermostBtn');
+    if (mattermostBtn) mattermostBtn.disabled = !payload.mattermost_available;
+    updateToggleSummary(
+        'handoffDetailsToggle',
+        tr('dashboard.handoff_details_summary', 'Clients {clients} | Done {done} | stale {stale}', {
+            clients: Array.isArray(payload.affected_clients) ? payload.affected_clients.length : 0,
+            done: Array.isArray(payload.actions_done) ? payload.actions_done.length : 0,
+            stale: payload.stale_flags?.snapshot || payload.stale_flags?.ai_metrics ? 'yes' : 'no',
+        }),
+        payload.stale_flags?.snapshot || payload.stale_flags?.ai_metrics
+            ? 'status-caution'
+            : ((Array.isArray(payload.affected_clients) && payload.affected_clients.length > 0) ? 'status-neutral' : 'status-safe'),
+    );
+}
+
+function onboardingSteps() {
+    return [
+        {
+            targetId: 'commandGlanceHero',
+            title: tr('dashboard.beginner_onboarding_step1_title', 'Start with Visual Baseline'),
+            body: tr('dashboard.beginner_onboarding_step1_body', 'If this block says NORMAL, the overall baseline is holding. If it says WATCH or ATTENTION, begin from the highlighted heat cell.'),
+        },
+        {
+            targetId: 'splitGlanceGrid',
+            title: tr('dashboard.beginner_onboarding_step2_title', 'Then compare SOC and NOC'),
+            body: tr('dashboard.beginner_onboarding_step2_body', 'SOC tells you whether the security side moved first. NOC tells you whether path, services, or client-side health moved first.'),
+        },
+        {
+            targetId: 'clientIdentityCurrentTile',
+            title: tr('dashboard.beginner_onboarding_step3_title', 'Finish with affected clients'),
+            body: tr('dashboard.beginner_onboarding_step3_body', 'Client Identity tells you who is affected now, whether the client is trusted, and whether the issue is wired or wireless.'),
+        },
+    ];
+}
+
+function syncOnboardingBanner() {
+    const banner = document.getElementById('beginnerOnboarding');
+    if (!banner) return;
+    const dismissed = localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1';
+    const visible = !dismissed;
+    banner.hidden = !visible;
+    document.querySelectorAll('.onboarding-highlight').forEach((el) => el.classList.remove('onboarding-highlight'));
+    if (!visible) return;
+    const steps = onboardingSteps();
+    const step = steps[onboardingStepIndex % steps.length];
+    updateElement('onboardingTitle', step.title);
+    updateElement('onboardingBody', step.body);
+    updateElement('onboardingStepLabel', tr('dashboard.beginner_onboarding_step', 'Step {current} / {total}', {
+        current: (onboardingStepIndex % steps.length) + 1,
+        total: steps.length,
+    }));
+    const target = document.getElementById(step.targetId);
+    if (target) target.classList.add('onboarding-highlight');
 }
 
 function updateEvidenceBoard(evidence, health) {

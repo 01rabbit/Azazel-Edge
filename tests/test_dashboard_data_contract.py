@@ -18,6 +18,7 @@ class DashboardDataContractTests(unittest.TestCase):
         self._orig = {
             "STATE_PATH": webapp.STATE_PATH,
             "FALLBACK_STATE_PATH": webapp.FALLBACK_STATE_PATH,
+            "OPERATOR_PROGRESS_PATH": webapp.OPERATOR_PROGRESS_PATH,
             "AI_ADVISORY_PATH": webapp.AI_ADVISORY_PATH,
             "AI_METRICS_PATH": webapp.AI_METRICS_PATH,
             "AI_EVENT_LOG": webapp.AI_EVENT_LOG,
@@ -34,10 +35,12 @@ class DashboardDataContractTests(unittest.TestCase):
             "_send_ai_manual_query": webapp._send_ai_manual_query,
             "read_demo_overlay": webapp.read_demo_overlay,
             "send_control_command_with_params": webapp.send_control_command_with_params,
+            "_mattermost_send_message": webapp._mattermost_send_message,
         }
 
         webapp.STATE_PATH = root / "ui_snapshot.json"
         webapp.FALLBACK_STATE_PATH = root / "ui_snapshot_fallback.json"
+        webapp.OPERATOR_PROGRESS_PATH = root / "operator_progress.json"
         webapp.AI_ADVISORY_PATH = root / "ai_advisory.json"
         webapp.AI_METRICS_PATH = root / "ai_metrics.json"
         webapp.AI_EVENT_LOG = root / "ai-events.jsonl"
@@ -319,6 +322,8 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp._send_ai_manual_query = self._orig["_send_ai_manual_query"]
         webapp.read_demo_overlay = self._orig["read_demo_overlay"]
         webapp.send_control_command_with_params = self._orig["send_control_command_with_params"]
+        webapp.OPERATOR_PROGRESS_PATH = self._orig["OPERATOR_PROGRESS_PATH"]
+        webapp._mattermost_send_message = self._orig["_mattermost_send_message"]
         self.tmp.cleanup()
 
     def test_dashboard_summary_contract(self) -> None:
@@ -465,6 +470,12 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["primary_anomaly_card"]["severity"], "critical")
         self.assertTrue(payload["primary_anomaly_card"]["do_now"])
         self.assertTrue(payload["primary_anomaly_card"]["dont_do"])
+        self.assertIn("decision_trust_capsule", payload)
+        self.assertTrue(payload["decision_trust_capsule"]["beginner_summary"])
+        self.assertTrue(payload["decision_trust_capsule"]["confidence_source"])
+        self.assertIn("why_this", payload["decision_trust_capsule"])
+        self.assertIn("unknowns", payload["decision_trust_capsule"])
+        self.assertEqual(payload["decision_trust_capsule"]["evidence_count"], 2)
         self.assertIn("mio_message_profile", payload)
         self.assertEqual(payload["mio_message_profile"]["surface"], "dashboard")
         self.assertIn("mio_surface_messages", payload)
@@ -514,6 +525,81 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["suggested_runbook"]["id"], "rb.noc.dns.failure.check")
         self.assertIn("resolver", payload["noc_runbook_support"]["why_this_runbook"].lower())
         self.assertTrue(payload["current_operator_actions"])
+
+    def test_dashboard_actions_trust_capsule_marks_unknowns_when_inputs_are_stale(self) -> None:
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        metrics = json.loads(webapp.AI_METRICS_PATH.read_text(encoding="utf-8"))
+        state["snapshot_epoch"] = time.time() - (webapp.DASHBOARD_SNAPSHOT_STALE_SEC + 10)
+        advisory = json.loads(webapp.AI_ADVISORY_PATH.read_text(encoding="utf-8"))
+        advisory["second_pass"]["status"] = "pending"
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+        metrics["last_update_ts"] = time.time() - (webapp.DASHBOARD_AI_STALE_SEC + 10)
+        webapp.AI_METRICS_PATH.write_text(json.dumps(metrics), encoding="utf-8")
+        webapp.AI_ADVISORY_PATH.write_text(json.dumps(advisory), encoding="utf-8")
+
+        response = self.client.get("/api/dashboard/actions")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        capsule = payload["decision_trust_capsule"]
+        self.assertGreaterEqual(len(capsule["unknowns"]), 2)
+        self.assertEqual(capsule["tone"], "caution")
+
+    def test_operator_progress_state_persists_and_restores(self) -> None:
+        session_id = "ops-session-1"
+        response = self.client.post(
+            "/api/operator-progress",
+            json={
+                "session_id": session_id,
+                "item_id": "baseline",
+                "done": True,
+                "blocked_reason": "waiting for user confirmation",
+                "blocked_prompt": "Ask whether only one device is affected.",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        progress = payload["operator_progress_state"]
+        self.assertEqual(progress["session_id"], session_id)
+        self.assertTrue(next(item for item in progress["items"] if item["id"] == "baseline")["done"])
+        self.assertEqual(progress["blocked_reason"], "waiting for user confirmation")
+        self.assertEqual(progress["blocked_prompt"], "Ask whether only one device is affected.")
+
+        response = self.client.get(f"/api/operator-progress?session_id={session_id}")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        progress = payload["operator_progress_state"]
+        self.assertEqual(progress["blocked_reason"], "waiting for user confirmation")
+        self.assertTrue(next(item for item in progress["items"] if item["id"] == "baseline")["done"])
+
+    def test_dashboard_handoff_contract_contains_minimum_fields(self) -> None:
+        response = self.client.get("/api/dashboard/handoff?session_id=ops-session-2")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        pack = payload["handoff_brief_pack"]
+        self.assertIn("current_posture", pack)
+        self.assertIn("primary_anomaly", pack)
+        self.assertIn("affected_clients", pack)
+        self.assertIn("do_now", pack)
+        self.assertIn("stale_flags", pack)
+        self.assertTrue(pack["brief_text"])
+        self.assertIn("/ops-comm?", pack["ops_comm_url"])
+
+    def test_dashboard_handoff_send_posts_to_mattermost(self) -> None:
+        captured = {}
+
+        def _fake_send_message(text: str, sender: str = "Azazel-Edge WebUI") -> dict:
+            captured["text"] = text
+            captured["sender"] = sender
+            return {"ok": True, "mode": "webhook"}
+
+        webapp._mattermost_send_message = _fake_send_message
+        response = self.client.post("/api/dashboard/handoff", json={"session_id": "ops-session-3", "target": "mattermost"})
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertIn("[Handoff Brief]", captured["text"])
+        self.assertEqual(captured["sender"], "Azazel-Edge Handoff")
 
     def test_api_clients_trust_proxies_to_control_daemon(self) -> None:
         captured = {}
@@ -738,6 +824,10 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(response.headers.get("Content-Language"), "en")
         text = response.get_data(as_text=True)
         self.assertIn("Command Dashboard", text)
+        self.assertIn('id="beginnerOnboarding"', text)
+        self.assertIn('id="onboardingTitle"', text)
+        self.assertIn('id="onboardingBody"', text)
+        self.assertIn('id="onboardingNextBtn"', text)
         self.assertIn("Audience Mode", text)
         self.assertIn('data-audience="temporary"', text)
         self.assertIn("Beginner", text)
@@ -764,10 +854,18 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("Temporary Mission", text)
         self.assertIn("Safe first response for the person in front of you", text)
         self.assertIn("Immediate Action", text)
+        self.assertIn('id="decisionTrustCapsule"', text)
+        self.assertIn('id="trustCapsuleSummary"', text)
+        self.assertIn('id="trustCapsuleConfidence"', text)
+        self.assertIn('id="trustCapsuleUnknownList"', text)
         self.assertIn('id="actionBoardPrimaryDetails"', text)
         self.assertIn('id="actionBoardPrimaryDetailsToggle"', text)
         self.assertIn('id="actionBoardGuidanceDetails"', text)
         self.assertIn('id="actionBoardGuidanceDetailsToggle"', text)
+        self.assertIn('id="progressChecklistSummary"', text)
+        self.assertIn('id="progressChecklistList"', text)
+        self.assertIn('id="progressBlockedReason"', text)
+        self.assertIn('id="progressBlockedSaveBtn"', text)
         self.assertIn('id="actionBoardRunbookDetails"', text)
         self.assertIn('id="actionBoardRunbookDetailsToggle"', text)
         self.assertIn('id="actionBoardDecisionDetails"', text)
@@ -820,6 +918,10 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn('id="remotePeersDetailsToggle"', text)
         self.assertIn('id="remotePeersList"', text)
         self.assertIn("M.I.O. Assist", text)
+        self.assertIn('id="handoffPackSummary"', text)
+        self.assertIn('id="handoffCopyBtn"', text)
+        self.assertIn('id="handoffMattermostBtn"', text)
+        self.assertIn('id="handoffPreview"', text)
         self.assertIn('id="mioAssistDetails"', text)
         self.assertIn('id="mioAssistDetailsToggle"', text)
         self.assertIn("Last Manual Ask", text)

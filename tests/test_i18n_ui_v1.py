@@ -64,6 +64,9 @@ class I18nUiV1Test(unittest.TestCase):
         self.assertIn("日本語", body)
         self.assertIn("English", body)
         self.assertIn('id="langJaBtn" class="audience-btn active lang-active-ja"', body)
+        self.assertIn('id="opsProgressSummary"', body)
+        self.assertIn('id="opsProgressList"', body)
+        self.assertIn('id="opsProgressBlocked"', body)
 
     def test_dashboard_japanese_keeps_titles_in_english(self):
         client = app.test_client()
