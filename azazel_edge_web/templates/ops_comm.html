@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ tr('ops.title', 'M.I.O. Ops Communication') }}</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <link rel="stylesheet" href="/static/ops_comm.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="/static/ops_comm.css?v={{ asset_version }}">
 </head>
 <body class="ops-page">
     <header class="topbar ops-topbar">
@@ -207,6 +207,6 @@
         window.AZAZEL_LANG = {{ ui_lang|tojson }};
         window.AZAZEL_I18N = {{ ui_catalog|tojson }};
     </script>
-    <script src="/static/ops_comm.js"></script>
+    <script src="/static/ops_comm.js?v={{ asset_version }}"></script>
 </body>
 </html>

@@ -38,6 +38,7 @@ from urllib.request import Request, urlopen
 from urllib.parse import urlparse, quote
 
 app = Flask(__name__)
+STATIC_ASSET_VERSION = str(int(time.time()))
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PY_ROOT = PROJECT_ROOT / "py"
@@ -193,6 +194,7 @@ def _inject_i18n() -> Dict[str, Any]:
     return {
         "ui_lang": lang,
         "ui_catalog": i18n_ui_catalog(lang),
+        "asset_version": STATIC_ASSET_VERSION,
         "tr": lambda key, default=None, **kwargs: i18n_translate(key, lang=lang, default=default, **kwargs),
     }
 

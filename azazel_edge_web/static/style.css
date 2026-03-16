@@ -1733,6 +1733,18 @@ body.demo-overlay-active #healthSummaryLine {
         rgba(15, 20, 28, 0.9);
 }
 
+.onboarding-banner[hidden] {
+    display: none !important;
+}
+
+.topbar-link-button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font: inherit;
+    padding: 0;
+}
+
 .onboarding-controls {
     display: flex;
     flex-direction: column;

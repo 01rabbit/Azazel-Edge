@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ tr('dashboard.title', 'Azazel-Edge Command Dashboard') }}</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
 <body data-audience="temporary" data-page="dashboard">
     <header class="topbar">
@@ -24,6 +24,7 @@
             </div>
             <div class="topbar-links">
                 <a id="askMioLink" class="topbar-link" href="#assistantPanel">{{ tr('dashboard.ask_mio', 'Ask M.I.O.') }}</a>
+                <button id="showGuideBtn" class="topbar-link topbar-link-button" type="button">{{ tr('dashboard.show_guide', 'Show Guide') }}</button>
                 <a id="openMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.open_mattermost', 'Open Mattermost') }}</a>
                 <a class="topbar-link" href="/demo">{{ tr('dashboard.demo_link', 'Demo') }}</a>
             </div>
@@ -56,17 +57,17 @@
             </div>
             <p class="panel-note" id="demoModeBannerText">{{ tr('dashboard.demo_banner_default', 'A demo overlay is active. Review replay output on the dedicated demo page, not on the operational dashboard.') }}</p>
         </section>
-        <section class="onboarding-banner" id="beginnerOnboarding" hidden>
+        <section class="onboarding-banner" id="beginnerOnboarding">
             <div class="onboarding-copy">
                 <div class="panel-kicker">{{ tr('dashboard.beginner_onboarding_kicker', 'Beginner Guide') }}</div>
                 <h2 id="onboardingTitle">{{ tr('dashboard.beginner_onboarding_title', 'Start with the first three blocks') }}</h2>
                 <p id="onboardingBody">{{ tr('dashboard.beginner_onboarding_body', 'Visual Baseline tells you whether the situation is calm, SOC / NOC Split tells you what domain moved first, and Client Identity tells you who is affected.') }}</p>
             </div>
             <div class="onboarding-controls">
-                <div class="onboarding-progress" id="onboardingStepLabel">{{ tr('dashboard.beginner_onboarding_step', 'Step 1 / 3') }}</div>
+                <div class="onboarding-progress" id="onboardingStepLabel">Step 1 / 3</div>
                 <div class="onboarding-actions">
-                    <button type="button" class="context-ask-btn" id="onboardingNextBtn">{{ tr('dashboard.beginner_onboarding_next', 'Next') }}</button>
-                    <button type="button" class="context-ask-btn" id="onboardingDismissBtn">{{ tr('dashboard.beginner_onboarding_dismiss', 'Hide guide') }}</button>
+                    <button type="button" class="context-ask-btn" id="onboardingNextBtn" onclick="window.__azOnboardingNext && window.__azOnboardingNext(); return false;">{{ tr('dashboard.beginner_onboarding_next', 'Next') }}</button>
+                    <button type="button" class="context-ask-btn" id="onboardingDismissBtn" onclick="window.__azOnboardingDismiss && window.__azOnboardingDismiss(); return false;">{{ tr('dashboard.beginner_onboarding_dismiss', 'Hide guide') }}</button>
                 </div>
             </div>
         </section>
@@ -911,6 +912,6 @@
         window.AZAZEL_LANG = {{ ui_lang|tojson }};
         window.AZAZEL_I18N = {{ ui_catalog|tojson }};
     </script>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v={{ asset_version }}"></script>
 </body>
 </html>

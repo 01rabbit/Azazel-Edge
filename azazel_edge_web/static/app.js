@@ -2,7 +2,7 @@ const AUTH_TOKEN = localStorage.getItem('azazel_token') || 'azazel-default-token
 const AUDIENCE_KEY = 'azazel_dashboard_audience';
 const LANG_KEY = 'azazel_lang';
 const PROGRESS_SESSION_KEY = 'azazel_operator_progress_session';
-const ONBOARDING_DISMISSED_KEY = 'azazel_dashboard_onboarding_v2_dismissed';
+const ONBOARDING_DISMISSED_KEY = 'azazel_dashboard_onboarding_v3_dismissed';
 const POLL_INTERVAL_MS = 4000;
 const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
 const I18N = window.AZAZEL_I18N || {};
@@ -23,6 +23,26 @@ let headerClockSeedMs = null;
 let currentProgress = {};
 let currentHandoff = {};
 let onboardingStepIndex = 0;
+
+function advanceOnboardingStep() {
+    onboardingStepIndex = (onboardingStepIndex + 1) % 3;
+    syncOnboardingBanner();
+}
+
+function dismissOnboardingGuide() {
+    localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
+    syncOnboardingBanner();
+}
+
+function reopenOnboardingGuide() {
+    localStorage.removeItem(ONBOARDING_DISMISSED_KEY);
+    onboardingStepIndex = 0;
+    syncOnboardingBanner();
+}
+
+window.__azOnboardingNext = advanceOnboardingStep;
+window.__azOnboardingDismiss = dismissOnboardingGuide;
+window.__azOnboardingReopen = reopenOnboardingGuide;
 
 function tr(key, fallback, vars = null) {
     const base = I18N[key] || fallback || key;
@@ -365,6 +385,7 @@ function bindStaticHandlers() {
     document.getElementById('langEnBtn')?.addEventListener('click', () => switchLanguage('en'));
     document.getElementById('audienceProfessional')?.addEventListener('click', () => setAudience('professional'));
     document.getElementById('audienceTemporary')?.addEventListener('click', () => setAudience('temporary'));
+    document.getElementById('showGuideBtn')?.addEventListener('click', reopenOnboardingGuide);
 
     document.getElementById('modePortalBtn')?.addEventListener('click', () => switchMode('portal'));
     document.getElementById('modeShieldBtn')?.addEventListener('click', () => switchMode('shield'));
@@ -527,15 +548,6 @@ function bindStaticHandlers() {
             showToast(error.message || String(error), 'error');
         }
     });
-    document.getElementById('onboardingNextBtn')?.addEventListener('click', () => {
-        onboardingStepIndex = (onboardingStepIndex + 1) % 3;
-        syncOnboardingBanner();
-    });
-    document.getElementById('onboardingDismissBtn')?.addEventListener('click', () => {
-        localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
-        syncOnboardingBanner();
-    });
-
     document.getElementById('demoScenarioSelect')?.addEventListener('change', updateDemoScenarioDescription);
     document.getElementById('demoRunForm')?.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -2406,7 +2418,7 @@ function syncOnboardingBanner() {
     const banner = document.getElementById('beginnerOnboarding');
     if (!banner) return;
     const dismissed = localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1';
-    const visible = currentAudience === 'temporary' && !dismissed;
+    const visible = !dismissed;
     banner.hidden = !visible;
     document.querySelectorAll('.onboarding-highlight').forEach((el) => el.classList.remove('onboarding-highlight'));
     if (!visible) return;
