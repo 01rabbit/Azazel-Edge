@@ -68,13 +68,48 @@ List scenarios:
 
 ```bash
 bin/azazel-edge-demo list
+bin/azazel-edge-arsenal-demo list
 ```
 
 Run a scenario:
 
 ```bash
 bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-arsenal-demo run arsenal_low_watch
+bin/azazel-edge-arsenal-demo run arsenal_throttle
+bin/azazel-edge-arsenal-demo run arsenal_decoy_redirect
+bin/azazel-edge-arsenal-demo flow --keep-final
+bin/azazel-edge-arsenal-demo menu
 ```
+
+For external automation without the dashboard:
+
+```bash
+bin/azazel-edge-arsenal-demo run arsenal_decoy_redirect --state-out /tmp/arsenal-demo-state.json
+bin/azazel-edge-arsenal-demo flow --hold-sec 0 --keep-final --state-out /tmp/arsenal-demo-state.json
+```
+
+Recommended booth attack stages:
+
+- `arsenal_low_watch`
+  - `Ping Sweep`
+- `arsenal_throttle`
+  - `SSH Brute Force`
+  - the `Mock-LLM` first pass lands in the ambiguity band, so the `Ollama Review` path becomes visible
+- `arsenal_decoy_redirect`
+  - `Exploit Probe / RCE Beacon`
+
+Manual booth menu:
+
+```bash
+bin/azazel-edge-arsenal-demo menu
+```
+
+Menu actions:
+
+- run one attack stage
+- run the full 3-stage exhibition flow
+- clear all demo state
 
 ### Web UI
 
@@ -82,6 +117,18 @@ Open:
 
 - Dashboard: `https://172.16.0.254/`
 - Ops workspace: `https://172.16.0.254/ops-comm`
+- Arsenal exhibition page: `https://172.16.0.254/arsenal-demo`
+
+Recommended exhibition surface:
+
+- use `/arsenal-demo` for Azazel-Pi-compatible booth presentation
+- do not use the main dashboard if you want to avoid Azazel-Edge operator wording
+
+Recommended exhibition order:
+
+1. `Ping Sweep`
+2. `SSH Brute Force`
+3. `Exploit Probe / RCE Beacon`
 
 In the dashboard:
 
@@ -234,3 +281,4 @@ That is valid. The replay runner uses the same deterministic scenario pack.
 - [AI operation guide](docs/AI_OPERATION_GUIDE.md)
 - [M.I.O. persona profile](docs/MIO_PERSONA_PROFILE.md)
 - [P0 runtime architecture](docs/P0_RUNTIME_ARCHITECTURE.md)
+- [Black Hat Asia Arsenal demo design](docs/BLACK_HAT_ASIA_ARSENAL_DEMO_DESIGN.md)

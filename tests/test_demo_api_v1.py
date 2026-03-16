@@ -17,6 +17,7 @@ class DemoApiV1Tests(unittest.TestCase):
         self._orig = {
             "load_token": webapp.load_token,
             "_run_demo_runner": webapp._run_demo_runner,
+            "_run_arsenal_demo_runner": webapp._run_arsenal_demo_runner,
             "STATE_PATH": webapp.STATE_PATH,
             "read_demo_overlay": webapp.read_demo_overlay,
             "write_demo_overlay": webapp.write_demo_overlay,
@@ -36,6 +37,7 @@ class DemoApiV1Tests(unittest.TestCase):
     def tearDown(self) -> None:
         webapp.load_token = self._orig["load_token"]
         webapp._run_demo_runner = self._orig["_run_demo_runner"]
+        webapp._run_arsenal_demo_runner = self._orig["_run_arsenal_demo_runner"]
         webapp.STATE_PATH = self._orig["STATE_PATH"]
         webapp.read_demo_overlay = self._orig["read_demo_overlay"]
         webapp.write_demo_overlay = self._orig["write_demo_overlay"]
@@ -59,6 +61,22 @@ class DemoApiV1Tests(unittest.TestCase):
         payload = response.get_json()
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["items"][0]["scenario_id"], "mixed_correlation_demo")
+
+    def test_arsenal_stages_endpoint(self) -> None:
+        webapp._run_arsenal_demo_runner = lambda *args: (
+            {
+                "ok": True,
+                "items": [
+                    {"stage_id": "arsenal_throttle", "band": "THROTTLE", "score": 73}
+                ],
+            },
+            200,
+        )
+        response = self.client.get("/api/arsenal-demo/stages")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["items"][0]["stage_id"], "arsenal_throttle")
 
     def test_run_scenario_endpoint(self) -> None:
         webapp._run_demo_runner = lambda *args: (
@@ -176,6 +194,60 @@ class DemoApiV1Tests(unittest.TestCase):
         self.assertEqual(payload["scenario_id"], "mixed_correlation_demo")
         self.assertEqual(payload["action"], "throttle")
         self.assertEqual(payload["explanation"]["operator_wording"], "demo wording")
+
+    def test_arsenal_state_endpoint_returns_compact_overlay(self) -> None:
+        overlay = build_demo_overlay(
+            {
+                "scenario_id": "arsenal_throttle",
+                "event_count": 3,
+                "execution": {"mode": "deterministic_replay", "ai_used": False, "offline_demo": True},
+                "arbiter": {"action": "throttle", "reason": "arsenal_score_band:throttle", "control_mode": "traffic_shaping"},
+                "explanation": {"operator_wording": "demo wording", "evidence_ids": ["ars-1"]},
+            }
+        )
+        overlay["arsenal_demo"] = {
+            "title": "Risk score triggers throttle",
+            "attack_label": "SSH Brute Force",
+            "score": 73,
+            "band": "THROTTLE",
+            "state_message": "Traffic shaping is active with bounded delay / bandwidth control.",
+            "talk_track": "demo wording",
+            "score_factors": ["severity=3"],
+            "decision_path": {
+                "first_pass": {"headline": "MOCK-LLM SCORE 67", "detail": "deterministic first pass"},
+                "ollama_review": {"status": "used", "headline": "OLLAMA REVIEWED", "detail": "local review", "evidence": "model=qwen3.5:2b"},
+                "final_policy": {"headline": "FINAL POLICY: THROTTLE", "detail": "bounded control"},
+            },
+            "proofs": {
+                "tc": {"status": "active", "headline": "TC THROTTLE ACTIVE", "detail": "detail", "evidence": "netem delay 120ms"},
+                "firewall": {"status": "active", "headline": "MICRO-POLICY ACTIVE", "detail": "detail", "evidence": "nft counter"},
+                "decoy": {"status": "standby", "headline": "DECOY ON HOLD", "detail": "detail", "evidence": "selector idle"},
+                "offline": {"status": "active", "headline": "OFFLINE ACTIVE", "detail": "detail", "evidence": "local only"},
+                "epd": {"status": "sync", "headline": "EPD SYNC READY", "detail": "detail", "evidence": "expected panel"},
+            },
+        }
+        write_demo_overlay(overlay, self.overlay_path)
+        response = self.client.get("/api/arsenal-demo/state")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["presentation"]["brand"], "Azazel-Pi")
+        self.assertEqual(payload["band"], "THROTTLE")
+        self.assertEqual(payload["action"], "throttle")
+        self.assertEqual(payload["attack_label"], "SSH Brute Force")
+        self.assertEqual(payload["decision_path"]["ollama_review"]["status"], "used")
+        self.assertEqual(payload["proofs"]["tc"]["status"], "active")
+        self.assertIn("nft", payload["proofs"]["firewall"]["evidence"])
+
+    def test_arsenal_demo_page_uses_azazel_pi_title(self) -> None:
+        response = self.client.get("/arsenal-demo")
+        self.assertEqual(response.status_code, 200)
+        text = response.get_data(as_text=True)
+        self.assertIn("Azazel-Pi", text)
+        self.assertIn("arsenalTcCard", text)
+        self.assertIn("arsenalOfflineCard", text)
+        self.assertIn("arsenalDecisionStrip", text)
+        self.assertIn("arsenalOllamaCard", text)
 
 
 if __name__ == "__main__":

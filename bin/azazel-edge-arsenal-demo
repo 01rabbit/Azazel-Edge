@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any, Dict
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+PY_ROOT = ROOT_DIR / "py"
+if str(PY_ROOT) not in sys.path:
+    sys.path.insert(0, str(PY_ROOT))
+os.environ["PYTHONPATH"] = str(PY_ROOT) + (f":{os.environ['PYTHONPATH']}" if os.environ.get("PYTHONPATH") else "")
+
+from azazel_edge.demo import ARSENAL_STAGE_ORDER, ArsenalDemoRunner
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="azazel-edge-arsenal-demo",
+        description="Run Black Hat Asia Arsenal-compatible Azazel-Edge demo stages.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    list_parser = sub.add_parser("list", help="List Arsenal demo stages")
+    list_parser.add_argument("--format", choices=("text", "json"), default="text")
+
+    run_parser = sub.add_parser("run", help="Run a single Arsenal stage")
+    run_parser.add_argument("stage_id", choices=list(ARSENAL_STAGE_ORDER))
+    run_parser.add_argument("--no-overlay", action="store_true", help="Do not write the stage into demo overlay state")
+    run_parser.add_argument("--refresh-epd", action="store_true", help="Trigger an immediate EPD refresh after overlay change")
+    run_parser.add_argument("--format", choices=("text", "json"), default="text")
+    run_parser.add_argument("--state-out", help="Write a compact stage state JSON to this path")
+
+    flow_parser = sub.add_parser("flow", help="Run the full Arsenal demo flow")
+    flow_parser.add_argument("--hold-sec", type=int, default=None, help="Override per-stage hold seconds")
+    flow_parser.add_argument("--keep-final", action="store_true", help="Keep the last overlay active instead of clearing it")
+    flow_parser.add_argument("--refresh-epd", action="store_true", help="Trigger EPD refresh after each overlay change")
+    flow_parser.add_argument("--format", choices=("text", "json"), default="text")
+    flow_parser.add_argument("--state-out", help="Write a compact stage state JSON to this path")
+    flow_parser.add_argument(
+        "--stages",
+        default=",".join(ARSENAL_STAGE_ORDER),
+        help="Comma-separated stage list (default: full Arsenal flow)",
+    )
+
+    clear_parser = sub.add_parser("clear", help="Clear the demo overlay")
+    clear_parser.add_argument("--refresh-epd", action="store_true", help="Trigger an immediate EPD refresh after clearing")
+    clear_parser.add_argument("--format", choices=("text", "json"), default="text")
+    clear_parser.add_argument("--state-out", help="Write a compact clear state JSON to this path")
+
+    menu_parser = sub.add_parser("menu", help="Interactive menu for exhibition attack stages")
+    menu_parser.add_argument("--refresh-epd", action="store_true", help="Trigger EPD refresh after each selected action")
+    menu_parser.add_argument("--state-out", help="Write the last selected compact state JSON to this path")
+    return parser
+
+
+def _stage_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    arsenal = result.get("arsenal_demo") if isinstance(result.get("arsenal_demo"), dict) else {}
+    arbiter = result.get("arbiter") if isinstance(result.get("arbiter"), dict) else {}
+    return {
+        "ok": bool(payload.get("ok")),
+        "scenario_id": str(result.get("scenario_id") or ""),
+        "title": str(arsenal.get("title") or result.get("scenario_id") or ""),
+        "attack_label": str(arsenal.get("attack_label") or ""),
+        "score": int(arsenal.get("score") or 0),
+        "band": str(arsenal.get("band") or ""),
+        "action": str(arbiter.get("action") or ""),
+        "control_mode": str(arbiter.get("control_mode") or ""),
+        "message": str(arsenal.get("state_message") or ""),
+        "talk_track": str(arsenal.get("talk_track") or result.get("explanation", {}).get("operator_wording") or ""),
+        "decision_path": dict(arsenal.get("decision_path") or {}) if isinstance(arsenal.get("decision_path"), dict) else {},
+        "proofs": dict(arsenal.get("proofs") or {}) if isinstance(arsenal.get("proofs"), dict) else {},
+        "overlay_written": bool(payload.get("overlay_written") or payload.get("overlay")),
+        "epd_refresh": payload.get("epd_refresh"),
+    }
+
+
+def _write_state_out(path_value: str | None, payload: Dict[str, Any]) -> None:
+    if not path_value:
+        return
+    path = Path(path_value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _print_text(payload: Dict[str, Any], command: str) -> None:
+    if command == "list":
+        for item in payload.get("items", []):
+            print(
+                f"{item.get('stage_id')} | score={item.get('score')} | band={item.get('band')} | "
+                f"action={item.get('action')} | hold={item.get('default_hold_sec')}s"
+            )
+        return
+
+    if command == "run":
+        summary = _stage_summary(payload)
+        print(f"STAGE: {summary['scenario_id']}")
+        print(f"TITLE: {summary['title']}")
+        print(f"ATTACK: {summary['attack_label']}")
+        print(f"SCORE: {summary['score']}")
+        print(f"BAND: {summary['band']}")
+        print(f"ACTION: {summary['action']}")
+        print(f"CONTROL: {summary['control_mode']}")
+        print(f"MESSAGE: {summary['message']}")
+        print(f"TALK: {summary['talk_track']}")
+        print(f"OVERLAY: {'written' if summary['overlay_written'] else 'not-written'}")
+        return
+
+    if command == "flow":
+        print("ARSENAL FLOW")
+        for step in payload.get("stages", []):
+            print(
+                f"{step.get('index')}. {step.get('stage_id')} | score={step.get('score')} | "
+                f"band={step.get('band')} | action={step.get('action')} | hold={step.get('hold_sec')}s"
+            )
+        print(f"KEEP_FINAL: {bool(payload.get('keep_final'))}")
+        print(f"OVERLAY_CLEARED: {bool(payload.get('overlay_cleared'))}")
+        return
+
+    if command == "clear":
+        print("CLEARED")
+
+
+def _menu_options() -> list[tuple[str, str, str]]:
+    return [
+        ("1", "arsenal_low_watch", "Ping Sweep"),
+        ("2", "arsenal_throttle", "SSH Brute Force"),
+        ("3", "arsenal_decoy_redirect", "Exploit Probe / RCE Beacon"),
+        ("4", "flow", "Run full exhibition flow"),
+        ("5", "clear", "Clear all demo state"),
+        ("0", "exit", "Exit"),
+    ]
+
+
+def _render_menu() -> None:
+    print("AZAZEL-PI EXHIBITION MENU")
+    for key, _action, label in _menu_options():
+        print(f"{key}. {label}")
+
+
+def _menu_loop(runner: ArsenalDemoRunner, *, refresh_epd: bool = False, state_out: str | None = None) -> int:
+    while True:
+        _render_menu()
+        try:
+            choice = input("Select action: ").strip()
+        except EOFError:
+            return 0
+        selected = next((item for item in _menu_options() if item[0] == choice), None)
+        if not selected:
+            print("Unknown selection")
+            continue
+        _key, action, _label = selected
+        if action == "exit":
+            print("EXIT")
+            return 0
+        if action == "flow":
+            payload = runner.run_flow(
+                stage_ids=ARSENAL_STAGE_ORDER,
+                hold_sec=None,
+                apply_overlay=True,
+                refresh_epd=refresh_epd,
+                keep_final=True,
+            )
+            summary = {
+                "ok": bool(payload.get("ok")),
+                "mode": "arsenal_flow",
+                "stages": payload.get("stages", []),
+                "keep_final": bool(payload.get("keep_final")),
+                "overlay_cleared": bool(payload.get("overlay_cleared")),
+            }
+            _write_state_out(state_out, summary)
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+            continue
+        if action == "clear":
+            payload = runner.clear(refresh_epd=refresh_epd)
+            summary = {"ok": bool(payload.get("ok")), "cleared": bool(payload.get("cleared"))}
+            _write_state_out(state_out, summary)
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+            continue
+        payload = runner.run_stage(action, apply_overlay=True, refresh_epd=refresh_epd)
+        summary = _stage_summary(payload)
+        _write_state_out(state_out, summary)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+def main(argv: list[str]) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv[1:])
+    runner = ArsenalDemoRunner()
+
+    if args.command == "list":
+        payload = {"ok": True, "items": runner.list_items()}
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            _print_text(payload, "list")
+        return 0
+
+    if args.command == "run":
+        payload = runner.run_stage(args.stage_id, apply_overlay=not bool(args.no_overlay), refresh_epd=bool(args.refresh_epd))
+        summary = _stage_summary(payload)
+        _write_state_out(args.state_out, summary)
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            _print_text(payload, "run")
+        return 0
+
+    if args.command == "flow":
+        requested = [item.strip() for item in str(args.stages or "").split(",") if item.strip()]
+        unknown = [item for item in requested if item not in ARSENAL_STAGE_ORDER]
+        if unknown:
+            print(json.dumps({"ok": False, "error": f"unknown_stage:{','.join(unknown)}"}), file=sys.stderr)
+            return 2
+        payload = runner.run_flow(
+            stage_ids=requested,
+            hold_sec=args.hold_sec,
+            apply_overlay=True,
+            refresh_epd=bool(args.refresh_epd),
+            keep_final=bool(args.keep_final),
+        )
+        last_step = payload.get("stages", [])[-1] if payload.get("stages") else {}
+        summary = {
+            "ok": bool(payload.get("ok")),
+            "mode": "arsenal_flow",
+            "last_stage_id": str(last_step.get("stage_id") or ""),
+            "last_band": str(last_step.get("band") or ""),
+            "last_score": int(last_step.get("score") or 0),
+            "last_action": str(last_step.get("action") or ""),
+            "overlay_cleared": bool(payload.get("overlay_cleared")),
+            "keep_final": bool(payload.get("keep_final")),
+        }
+        _write_state_out(args.state_out, summary)
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            _print_text(payload, "flow")
+        return 0
+
+    if args.command == "clear":
+        payload = runner.clear(refresh_epd=bool(args.refresh_epd))
+        _write_state_out(args.state_out, {"ok": True, "cleared": True})
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            _print_text(payload, "clear")
+        return 0
+
+    if args.command == "menu":
+        return _menu_loop(runner, refresh_epd=bool(args.refresh_epd), state_out=args.state_out)
+
+    parser.print_usage(sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

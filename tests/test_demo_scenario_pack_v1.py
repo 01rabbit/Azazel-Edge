@@ -18,6 +18,12 @@ class DemoScenarioPackV1Tests(unittest.TestCase):
         self.assertIn('soc_redirect_demo', scenarios)
         self.assertIn('noc_degraded_demo', scenarios)
         self.assertIn('mixed_correlation_demo', scenarios)
+        self.assertIn('arsenal_low_watch', scenarios)
+        self.assertIn('arsenal_throttle', scenarios)
+        self.assertIn('arsenal_decoy_redirect', scenarios)
+        self.assertEqual(scenarios['arsenal_low_watch']['arsenal']['attack_label'], 'Ping Sweep')
+        self.assertEqual(scenarios['arsenal_throttle']['arsenal']['attack_label'], 'SSH Brute Force')
+        self.assertEqual(scenarios['arsenal_throttle']['arsenal']['decision_path']['ollama_review']['status'], 'used')
 
     def test_runner_executes_pipeline(self) -> None:
         result = DemoScenarioRunner().run('mixed_correlation_demo')

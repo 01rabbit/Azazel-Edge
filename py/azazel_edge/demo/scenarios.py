@@ -10,6 +10,215 @@ from azazel_edge.explanations import DecisionExplainer
 class DemoScenarioPack:
     def scenarios(self) -> Dict[str, Dict[str, Any]]:
         return {
+            'arsenal_low_watch': {
+                'description': 'Arsenal-compatible low band scenario showing a ping sweep in WATCH without active control.',
+                'arsenal': {
+                    'title': 'Ping sweep enters WATCH band',
+                    'default_hold_sec': 8,
+                    'scorer_features': {
+                        'suricata_sev': 4,
+                        'suricata_sid': 210101,
+                        'suricata_signature': 'ET SCAN ping sweep reconnaissance',
+                        'suricata_category': 'attempted-recon',
+                        'suricata_action': 'allowed',
+                        'target_port': 0,
+                    },
+                    'talk_track': 'Suricata detected a ping sweep. The deterministic Mock-LLM scorer enters WATCH, but no bounded control is applied yet.',
+                    'attack_label': 'Ping Sweep',
+                    'decision_path': {
+                        'first_pass': {
+                            'headline': 'MOCK-LLM SCORE 38',
+                            'detail': 'Deterministic first pass classifies reconnaissance and holds the gateway in WATCH.',
+                        },
+                        'ollama_review': {
+                            'status': 'not-needed',
+                            'headline': 'OLLAMA NOT NEEDED',
+                            'detail': 'The score is outside the ambiguity band, so the first pass is accepted as-is.',
+                            'evidence': 'Ambiguity window not entered',
+                        },
+                        'final_policy': {
+                            'headline': 'FINAL POLICY: WATCH',
+                            'detail': 'Log and observe while keeping the segment online.',
+                        },
+                    },
+                    'proofs': {
+                        'tc': {
+                            'status': 'standby',
+                            'headline': 'TC STANDBY',
+                            'detail': 'No delay or bandwidth shaping is active in the WATCH band.',
+                            'evidence': 'No tc qdisc change has been requested yet.',
+                        },
+                        'firewall': {
+                            'status': 'observe',
+                            'headline': 'MICRO-POLICY READY',
+                            'detail': 'nftables / iptables stay in observe mode until the score crosses the control threshold.',
+                            'evidence': 'Counter lane reserved for suspicious flow policy.',
+                        },
+                        'decoy': {
+                            'status': 'standby',
+                            'headline': 'DECOY STANDBY',
+                            'detail': 'OpenCanary redirect is armed but not selected in the WATCH band.',
+                            'evidence': 'Redirect selector remains idle.',
+                        },
+                        'offline': {
+                            'status': 'active',
+                            'headline': 'OFFLINE ACTIVE',
+                            'detail': 'Suricata, scoring, and policy logic are running locally with no cloud dependency.',
+                            'evidence': 'Deterministic scorer and local control path only.',
+                        },
+                        'epd': {
+                            'status': 'sync',
+                            'headline': 'EPD SYNC READY',
+                            'detail': 'The e-paper panel mirrors the WATCH state when the overlay is active.',
+                            'evidence': 'Expected panel state: DEMO / CHECKING.',
+                        },
+                    },
+                },
+                'events': [
+                    {'event_id': 'ars-low-1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.5->172.16.0.20:0/ICMP', 'severity': 42, 'confidence': 0.62, 'attrs': {'sid': 210101, 'attack_type': 'Ping Sweep', 'category': 'Attempted Information Leak', 'target_port': 0, 'risk_score': 42, 'confidence_raw': 62, 'src_ip': '10.0.0.5', 'dst_ip': '172.16.0.20'}},
+                    {'event_id': 'ars-low-2', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.0.5->172.16.0.20:0/ICMP', 'severity': 20, 'confidence': 0.55, 'attrs': {'src_ip': '10.0.0.5', 'dst_ip': '172.16.0.20', 'dst_port': 0, 'flow_state': 'open', 'app_proto': 'icmp'}},
+                ],
+            },
+            'arsenal_throttle': {
+                'description': 'Arsenal-compatible mid band scenario showing SSH brute force reviewed through Ollama before reversible throttle.',
+                'arsenal': {
+                    'title': 'SSH brute force enters review band',
+                    'default_hold_sec': 10,
+                    'scorer_features': {
+                        'suricata_sev': 4,
+                        'suricata_sid': 210201,
+                        'suricata_signature': 'ET POLICY ssh brute force burst',
+                        'suricata_category': 'attempted-recon',
+                        'suricata_action': 'allowed',
+                        'target_port': 22,
+                    },
+                    'talk_track': 'An SSH brute force lands in the ambiguity band, so Ollama performs a local second review before the gateway applies bounded tc control.',
+                    'attack_label': 'SSH Brute Force',
+                    'decision_path': {
+                        'first_pass': {
+                            'headline': 'MOCK-LLM SCORE 67',
+                            'detail': 'The deterministic first pass lands inside the ambiguity band.',
+                        },
+                        'ollama_review': {
+                            'status': 'used',
+                            'headline': 'OLLAMA REVIEWED',
+                            'detail': 'Local Ollama confirms repeated failed-auth behavior and preserves bounded control.',
+                            'evidence': 'model=qwen3.5:2b | verdict=throttle | confidence=0.78',
+                        },
+                        'final_policy': {
+                            'headline': 'FINAL POLICY: THROTTLE',
+                            'detail': 'Apply reversible tc shaping while the main segment stays online.',
+                        },
+                    },
+                    'proofs': {
+                        'tc': {
+                            'status': 'active',
+                            'headline': 'TC THROTTLE ACTIVE',
+                            'detail': 'Bounded delay and bandwidth control are active on the suspicious flow.',
+                            'evidence': 'netem delay 120ms + tbf rate 2mbit burst 32kbit',
+                        },
+                        'firewall': {
+                            'status': 'active',
+                            'headline': 'MICRO-POLICY ACTIVE',
+                            'detail': 'The suspicious 443/TLS flow is held inside a reversible policy lane.',
+                            'evidence': 'nft counter: 48 packets / 5.2 KiB',
+                        },
+                        'decoy': {
+                            'status': 'standby',
+                            'headline': 'DECOY ON HOLD',
+                            'detail': 'OpenCanary redirect is still withheld while traffic shaping absorbs the flow.',
+                            'evidence': 'Redirect selector stays below the redirect band.',
+                        },
+                        'offline': {
+                            'status': 'active',
+                            'headline': 'OFFLINE ACTIVE',
+                            'detail': 'The score and enforcement decision are both computed locally.',
+                            'evidence': 'No remote model or cloud API is required.',
+                        },
+                        'epd': {
+                            'status': 'sync',
+                            'headline': 'EPD SYNC READY',
+                            'detail': 'The e-paper panel should flip to DEMO / LIMITED during this stage.',
+                            'evidence': 'Expected panel state: DEMO / LIMITED.',
+                        },
+                    },
+                },
+                'events': [
+                    {'event_id': 'ars-throttle-1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.5->172.16.0.20:22/TCP', 'severity': 76, 'confidence': 0.86, 'attrs': {'sid': 210201, 'attack_type': 'SSH Brute Force', 'category': 'Attempted Administrator Privilege Gain', 'target_port': 22, 'risk_score': 76, 'confidence_raw': 86, 'src_ip': '10.0.0.5', 'dst_ip': '172.16.0.20'}},
+                    {'event_id': 'ars-throttle-2', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.0.5->172.16.0.20:22/TCP', 'severity': 40, 'confidence': 0.72, 'attrs': {'src_ip': '10.0.0.5', 'dst_ip': '172.16.0.20', 'dst_port': 22, 'flow_state': 'failed', 'app_proto': 'ssh'}},
+                    {'event_id': 'ars-throttle-3', 'source': 'syslog_min', 'kind': 'syslog_line', 'subject': '172.16.0.20', 'severity': 38, 'confidence': 0.70, 'attrs': {'message': 'failed ssh auth burst promoted to bounded control review', 'host': 'edge', 'tag': 'azazel-demo'}},
+                ],
+            },
+            'arsenal_decoy_redirect': {
+                'description': 'Arsenal-compatible high band scenario showing decoy redirect to OpenCanary.',
+                'arsenal': {
+                    'title': 'High confidence signal redirects to decoy',
+                    'default_hold_sec': 12,
+                    'scorer_features': {
+                        'suricata_sev': 1,
+                        'suricata_sid': 210301,
+                        'suricata_signature': 'ET command injection rce beacon',
+                        'suricata_category': 'attempted-admin',
+                        'suricata_action': 'allowed',
+                        'target_port': 443,
+                    },
+                    'talk_track': 'The score enters the highest band, so the gateway keeps the main segment online and selectively redirects the suspicious flow into an OpenCanary decoy.',
+                    'attack_label': 'Exploit Probe / RCE Beacon',
+                    'decision_path': {
+                        'first_pass': {
+                            'headline': 'MOCK-LLM SCORE 100',
+                            'detail': 'The deterministic first pass already reaches the highest band.',
+                        },
+                        'ollama_review': {
+                            'status': 'not-needed',
+                            'headline': 'OLLAMA SKIPPED',
+                            'detail': 'The score is already decisive, so no second review is needed.',
+                            'evidence': 'Above redirect threshold',
+                        },
+                        'final_policy': {
+                            'headline': 'FINAL POLICY: DECOY REDIRECT',
+                            'detail': 'Keep the main segment online and steer the suspicious flow into OpenCanary.',
+                        },
+                    },
+                    'proofs': {
+                        'tc': {
+                            'status': 'active',
+                            'headline': 'TC GUARD ACTIVE',
+                            'detail': 'Traffic shaping remains available while the redirect lane is engaged.',
+                            'evidence': 'Guard rail profile: delay 80ms + ceiling 1mbit on suspicious lane',
+                        },
+                        'firewall': {
+                            'status': 'active',
+                            'headline': 'MICRO-POLICY ACTIVE',
+                            'detail': 'The suspicious flow is pinned into a selective redirect policy.',
+                            'evidence': 'nft dnat counter: 91 packets / 11.4 KiB',
+                        },
+                        'decoy': {
+                            'status': 'redirect',
+                            'headline': 'OPENCANARY REDIRECT',
+                            'detail': 'The suspicious flow is being steered into the OpenCanary decoy service.',
+                            'evidence': 'Redirect hit count: 1 flow -> 172.16.0.77:443',
+                        },
+                        'offline': {
+                            'status': 'active',
+                            'headline': 'OFFLINE ACTIVE',
+                            'detail': 'Detection, score, and redirect choice stay local to the gateway.',
+                            'evidence': 'Suricata + deterministic scorer + local policy path only.',
+                        },
+                        'epd': {
+                            'status': 'sync',
+                            'headline': 'EPD SYNC READY',
+                            'detail': 'The e-paper panel should show DEMO / DECEPTION during redirect.',
+                            'evidence': 'Expected panel state: DEMO / DECEPTION.',
+                        },
+                    },
+                },
+                'events': [
+                    {'event_id': 'ars-decoy-1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.5->172.16.0.20:443/TCP', 'severity': 92, 'confidence': 0.95, 'attrs': {'sid': 210301, 'attack_type': 'RCE Beacon', 'category': 'Attempted Administrator Privilege Gain', 'target_port': 443, 'risk_score': 92, 'confidence_raw': 95, 'src_ip': '10.0.0.5', 'dst_ip': '172.16.0.20'}},
+                    {'event_id': 'ars-decoy-2', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.0.5->172.16.0.20:443/TCP', 'severity': 55, 'confidence': 0.80, 'attrs': {'src_ip': '10.0.0.5', 'dst_ip': '172.16.0.20', 'dst_port': 443, 'flow_state': 'failed', 'app_proto': 'tls'}},
+                    {'event_id': 'ars-decoy-3', 'source': 'syslog_min', 'kind': 'syslog_line', 'subject': '172.16.0.20', 'severity': 65, 'confidence': 0.82, 'attrs': {'message': 'honeypot redirect eligibility raised', 'host': 'edge', 'tag': 'azazel-demo'}},
+                ],
+            },
             'soc_redirect_demo': {
                 'description': 'High-confidence SOC path leading to redirect-capable decision.',
                 'events': [

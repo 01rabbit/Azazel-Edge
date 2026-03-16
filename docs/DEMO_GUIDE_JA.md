@@ -68,13 +68,48 @@ scenario 一覧:
 
 ```bash
 bin/azazel-edge-demo list
+bin/azazel-edge-arsenal-demo list
 ```
 
 scenario 実行:
 
 ```bash
 bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-arsenal-demo run arsenal_low_watch
+bin/azazel-edge-arsenal-demo run arsenal_throttle
+bin/azazel-edge-arsenal-demo run arsenal_decoy_redirect
+bin/azazel-edge-arsenal-demo flow --keep-final
+bin/azazel-edge-arsenal-demo menu
 ```
+
+Dashboard を使わず外部スクリプトから連携する場合:
+
+```bash
+bin/azazel-edge-arsenal-demo run arsenal_decoy_redirect --state-out /tmp/arsenal-demo-state.json
+bin/azazel-edge-arsenal-demo flow --hold-sec 0 --keep-final --state-out /tmp/arsenal-demo-state.json
+```
+
+展示で使う攻撃シナリオ:
+
+- `arsenal_low_watch`
+  - `Ping Sweep`
+- `arsenal_throttle`
+  - `SSH Brute Force`
+  - `Mock-LLM` の一次判定が ambiguity band に入るため、`Ollama Review` が可視化される
+- `arsenal_decoy_redirect`
+  - `Exploit Probe / RCE Beacon`
+
+ブースでの手動操作:
+
+```bash
+bin/azazel-edge-arsenal-demo menu
+```
+
+選べる内容:
+
+- 個別攻撃の実行
+- 3 シナリオの連続実行
+- 全クリア
 
 ### Web UI
 
@@ -82,6 +117,18 @@ bin/azazel-edge-demo run mixed_correlation_demo
 
 - Dashboard: `https://172.16.0.254/`
 - Ops workspace: `https://172.16.0.254/ops-comm`
+- Arsenal 展示ページ: `https://172.16.0.254/arsenal-demo`
+
+展示で推奨する表示面:
+
+- Azazel-Pi 互換の見せ方にしたい場合は `/arsenal-demo` を使う
+- Azazel-Edge の運用語彙を避けたい場合は通常の Dashboard を前面に出さない
+
+展示で推奨する見せ順:
+
+1. `Ping Sweep`
+2. `SSH Brute Force`
+3. `Exploit Probe / RCE Beacon`
 
 Dashboard では次の順で操作します。
 
@@ -234,3 +281,4 @@ curl -sS -X POST -H "X-AZAZEL-TOKEN: <token>" \
 - [AI operation guide](docs/AI_OPERATION_GUIDE.md)
 - [M.I.O. persona profile](docs/MIO_PERSONA_PROFILE.md)
 - [P0 runtime architecture](docs/P0_RUNTIME_ARCHITECTURE.md)
+- [Black Hat Asia Arsenal demo design](docs/BLACK_HAT_ASIA_ARSENAL_DEMO_DESIGN.md)

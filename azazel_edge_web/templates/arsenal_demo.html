@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="{{ tr('dashboard.html_lang', 'en') }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ tr('arsenal.title', 'Azazel-Pi') }}</title>
+    <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="/static/arsenal_demo.css?v={{ asset_version }}">
+</head>
+<body class="arsenal-page" data-page="arsenal-demo">
+    <header class="arsenal-header">
+        <div>
+            <div class="arsenal-kicker">{{ tr('arsenal.kicker', 'Black Hat Asia') }}</div>
+            <h1>{{ tr('arsenal.title', 'Azazel-Pi') }}</h1>
+            <p class="arsenal-subtitle">{{ tr('arsenal.subtitle', 'Suricata detection, deterministic scoring, bounded policy control, decoy redirect, offline operation, and e-paper status in one short flow.') }}</p>
+        </div>
+        <div class="arsenal-topline">
+            <span id="arsenalPresentationBadge" class="arsenal-badge arsenal-badge-idle">{{ tr('arsenal.idle', 'IDLE') }}</span>
+            <span id="arsenalClock" class="arsenal-clock">--:--:--</span>
+        </div>
+    </header>
+
+    <main class="arsenal-shell">
+        <section class="arsenal-hero">
+            <div class="arsenal-hero-copy" id="arsenalHeroCard">
+                <div class="arsenal-step-label">{{ tr('arsenal.anomaly_label', 'Primary Detection') }}</div>
+                <div class="arsenal-primary-state" id="arsenalPrimaryState">{{ tr('arsenal.normal_baseline', 'NORMAL BASELINE') }}</div>
+                <div class="arsenal-attack-label" id="arsenalAttackLabel">{{ tr('arsenal.attack_idle', 'Awaiting exhibition attack stage') }}</div>
+                <h2 id="arsenalHeroTitle">{{ tr('arsenal.waiting_title', 'Waiting for a demo stage') }}</h2>
+                <p id="arsenalHeroMessage">{{ tr('arsenal.waiting_message', 'Run azazel-edge-arsenal-demo from the terminal to activate the exhibition state.') }}</p>
+            </div>
+            <div class="arsenal-score-card" id="arsenalHeroScoreCard">
+                <span>{{ tr('arsenal.risk_score', 'Risk Score') }}</span>
+                <strong id="arsenalScoreValue">0</strong>
+                <div class="arsenal-score-band" id="arsenalBandValue">{{ tr('arsenal.idle', 'IDLE') }}</div>
+            </div>
+        </section>
+
+        <section class="arsenal-critical-grid">
+            <article class="arsenal-flow-card" id="arsenalDetectCard">
+                <span>{{ tr('arsenal.detect', '1. Detect') }}</span>
+                <strong id="arsenalDetectValue">{{ tr('arsenal.no', 'NO') }}</strong>
+                <p id="arsenalDetectDetail">{{ tr('arsenal.detect_note', 'Suricata alert observed') }}</p>
+            </article>
+            <article class="arsenal-flow-card" id="arsenalScoreCard">
+                <span>{{ tr('arsenal.score', '2. Score') }}</span>
+                <strong id="arsenalScoreBandValue">{{ tr('arsenal.idle', 'IDLE') }}</strong>
+                <p id="arsenalScoreFactors">{{ tr('arsenal.waiting_factors', 'Waiting for deterministic score factors') }}</p>
+            </article>
+            <article class="arsenal-flow-card" id="arsenalPolicyCard">
+                <span>{{ tr('arsenal.policy', '3. Policy') }}</span>
+                <strong id="arsenalPolicyValue">-</strong>
+                <p id="arsenalPolicyMode">-</p>
+            </article>
+        </section>
+
+        <section class="arsenal-proof-section">
+            <div class="arsenal-section-label">{{ tr('arsenal.evidence_label', 'Control Evidence') }}</div>
+            <div class="arsenal-support-grid">
+                <article class="arsenal-flow-card" id="arsenalTcCard">
+                    <span>{{ tr('arsenal.tc_control', 'TC') }}</span>
+                    <strong id="arsenalTcValue">{{ tr('arsenal.idle', 'IDLE') }}</strong>
+                    <p id="arsenalTcDetail">{{ tr('arsenal.proof_waiting', 'Waiting for proof state') }}</p>
+                    <code id="arsenalTcEvidence" class="arsenal-proof-code">-</code>
+                </article>
+                <article class="arsenal-flow-card" id="arsenalFirewallCard">
+                    <span>{{ tr('arsenal.firewall', 'Micro-Policy') }}</span>
+                    <strong id="arsenalFirewallValue">{{ tr('arsenal.idle', 'IDLE') }}</strong>
+                    <p id="arsenalFirewallDetail">{{ tr('arsenal.proof_waiting', 'Waiting for proof state') }}</p>
+                    <code id="arsenalFirewallEvidence" class="arsenal-proof-code">-</code>
+                </article>
+                <article class="arsenal-flow-card" id="arsenalDecoyCard">
+                    <span>{{ tr('arsenal.decoy', '4. Decoy') }}</span>
+                    <strong id="arsenalDecoyValue">{{ tr('arsenal.standby', 'STANDBY') }}</strong>
+                    <p id="arsenalDecoyDetail">{{ tr('arsenal.decoy_note', 'OpenCanary redirect status') }}</p>
+                    <code id="arsenalDecoyEvidence" class="arsenal-proof-code">-</code>
+                </article>
+                <article class="arsenal-flow-card" id="arsenalOfflineCard">
+                    <span>{{ tr('arsenal.offline', 'Offline') }}</span>
+                    <strong id="arsenalOfflineValue">{{ tr('arsenal.active', 'ACTIVE') }}</strong>
+                    <p id="arsenalOfflineDetail">{{ tr('arsenal.offline_note', 'Local-only control path') }}</p>
+                    <code id="arsenalOfflineEvidence" class="arsenal-proof-code">-</code>
+                </article>
+                <article class="arsenal-flow-card" id="arsenalEpdCard">
+                    <span>{{ tr('arsenal.epd', '5. E-Paper') }}</span>
+                    <strong id="arsenalEpdValue">-</strong>
+                    <p id="arsenalEpdDetail">{{ tr('arsenal.epd_waiting', 'Waiting for EPD refresh') }}</p>
+                    <code id="arsenalEpdEvidence" class="arsenal-proof-code">-</code>
+                </article>
+            </div>
+        </section>
+
+        <section class="arsenal-decision-strip" id="arsenalDecisionStrip">
+            <article class="arsenal-decision-card" id="arsenalFirstPassCard">
+                <span>{{ tr('arsenal.decision_first_pass', 'First Pass') }}</span>
+                <strong id="arsenalFirstPassValue">{{ tr('arsenal.decision_waiting', 'WAITING') }}</strong>
+                <p id="arsenalFirstPassDetail">{{ tr('arsenal.decision_waiting_detail', 'The deterministic scorer path will appear here when a stage is active.') }}</p>
+            </article>
+            <article class="arsenal-decision-card" id="arsenalOllamaCard">
+                <span>{{ tr('arsenal.decision_ollama', 'Ollama Review') }}</span>
+                <strong id="arsenalOllamaValue">{{ tr('arsenal.decision_waiting', 'WAITING') }}</strong>
+                <p id="arsenalOllamaDetail">{{ tr('arsenal.decision_ollama_waiting', 'If the first-pass score is ambiguous, the local Ollama review path appears here.') }}</p>
+                <code id="arsenalOllamaEvidence" class="arsenal-proof-code">-</code>
+            </article>
+            <article class="arsenal-decision-card" id="arsenalFinalPolicyCard">
+                <span>{{ tr('arsenal.decision_final_policy', 'Final Policy') }}</span>
+                <strong id="arsenalFinalPolicyValue">{{ tr('arsenal.decision_waiting', 'WAITING') }}</strong>
+                <p id="arsenalFinalPolicyDetail">{{ tr('arsenal.decision_final_waiting', 'The final policy selection will appear here.') }}</p>
+            </article>
+        </section>
+    </main>
+
+    <script>
+        window.AZAZEL_LANG = {{ ui_lang|tojson }};
+        window.AZAZEL_I18N = {{ ui_catalog|tojson }};
+    </script>
+    <script src="/static/arsenal_demo.js?v={{ asset_version }}"></script>
+</body>
+</html>

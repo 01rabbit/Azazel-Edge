@@ -143,6 +143,11 @@ IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
 LOCAL_DEMO_RUNNER = PROJECT_ROOT / "bin" / "azazel-edge-demo"
 OPT_DEMO_RUNNER = Path("/opt/azazel-edge/bin/azazel-edge-demo")
 USR_LOCAL_DEMO_RUNNER = Path("/usr/local/bin/azazel-edge-demo")
+LOCAL_ARSENAL_DEMO_RUNNER = PROJECT_ROOT / "bin" / "azazel-edge-arsenal-demo"
+OPT_ARSENAL_DEMO_RUNNER = Path("/opt/azazel-edge/bin/azazel-edge-arsenal-demo")
+USR_LOCAL_ARSENAL_DEMO_RUNNER = Path("/usr/local/bin/azazel-edge-arsenal-demo")
+EPD_LAST_RENDER_PATH = Path("/run/azazel-edge/epd_last_render.json")
+OPENCANARY_REDIRECT_STATE_PATH = Path("/run/azazel-edge/opencanary_redirect_state.json")
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
@@ -186,6 +191,13 @@ def _request_lang() -> str:
 
 def _tr(key: str, default: str | None = None, **kwargs: Any) -> str:
     return i18n_translate(key, lang=_request_lang(), default=default, **kwargs)
+
+
+def _arsenal_ui_catalog(lang: str) -> Dict[str, str]:
+    base = i18n_ui_catalog(lang)
+    keep = {"dashboard.html_lang"}
+    keep.update({key for key in base.keys() if str(key).startswith("arsenal.")})
+    return {key: base[key] for key in keep if key in base}
 
 
 @app.context_processor
@@ -3073,6 +3085,127 @@ def _run_demo_runner(*args: str) -> tuple[Dict[str, Any], int]:
     return payload, 200
 
 
+def _resolve_arsenal_demo_runner() -> Path:
+    candidates = [USR_LOCAL_ARSENAL_DEMO_RUNNER, OPT_ARSENAL_DEMO_RUNNER, LOCAL_ARSENAL_DEMO_RUNNER]
+    for path in candidates:
+        try:
+            if path.exists() and os.access(path, os.X_OK):
+                return path
+        except Exception:
+            continue
+    return LOCAL_ARSENAL_DEMO_RUNNER
+
+
+def _run_arsenal_demo_runner(*args: str) -> tuple[Dict[str, Any], int]:
+    runner = _resolve_arsenal_demo_runner()
+    cmd = [str(runner), *[str(x) for x in args]]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PY_ROOT) + (f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else "")
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env=env,
+            cwd=str(PROJECT_ROOT),
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "arsenal_demo_runner_timeout", "command": cmd}, 504
+    except Exception as e:
+        return {"ok": False, "error": str(e), "command": cmd}, 500
+
+    stdout = str(result.stdout or "").strip()
+    stderr = str(result.stderr or "").strip()
+    payload: Dict[str, Any] = {}
+    if stdout:
+        try:
+            payload = json.loads(stdout)
+        except Exception:
+            payload = {"ok": False, "error": "invalid_arsenal_demo_runner_output", "stdout": stdout}
+    if result.returncode != 0:
+        if not payload:
+            payload = {"ok": False}
+        payload.setdefault("error", stderr or f"arsenal_demo_runner_exit_{result.returncode}")
+        payload["stderr"] = stderr
+        payload["returncode"] = result.returncode
+        payload["command"] = cmd
+        return payload, 400 if "unknown_stage" in str(payload.get("error", "")) else 500
+
+    if not payload:
+        payload = {"ok": True}
+    payload["runner"] = str(runner)
+    return payload, 200
+
+
+def _arsenal_demo_state_payload() -> Dict[str, Any]:
+    overlay = read_demo_overlay()
+    arsenal = overlay.get("arsenal_demo") if isinstance(overlay.get("arsenal_demo"), dict) else {}
+    epd_last = _read_json_file(EPD_LAST_RENDER_PATH)
+    epd_render = epd_last.get("render") if isinstance(epd_last, dict) and isinstance(epd_last.get("render"), dict) else {}
+    redirect_state = _read_json_file(OPENCANARY_REDIRECT_STATE_PATH)
+    active = bool(overlay.get("active")) and bool(arsenal)
+    proofs = arsenal.get("proofs") if isinstance(arsenal.get("proofs"), dict) else {}
+    epd_ts = str(epd_last.get("ts") or "")
+    epd_risk = str(epd_render.get("risk_status") or "")
+    epd_mode = str(epd_render.get("mode_label") or "")
+    decoy_proof = proofs.get("decoy") if isinstance(proofs.get("decoy"), dict) else {}
+    if active and isinstance(redirect_state, dict) and redirect_state:
+        target = redirect_state.get("opencanary") if isinstance(redirect_state.get("opencanary"), dict) else {}
+        detail_parts = []
+        listen_addr = str(target.get("listen_addr") or "").strip()
+        http_port = str(target.get("http_port") or "").strip()
+        if listen_addr:
+            detail_parts.append(listen_addr if not http_port or http_port == "0" else f"{listen_addr}:{http_port}")
+        expires_at = str(redirect_state.get("expires_at") or "").strip()
+        if expires_at:
+            detail_parts.append(f"TTL {expires_at}")
+        if detail_parts:
+            decoy_proof = dict(decoy_proof)
+            decoy_proof["evidence"] = " | ".join(detail_parts)
+    proof_payload = {
+        "tc": proofs.get("tc") if isinstance(proofs.get("tc"), dict) else {},
+        "firewall": proofs.get("firewall") if isinstance(proofs.get("firewall"), dict) else {},
+        "decoy": decoy_proof,
+        "offline": proofs.get("offline") if isinstance(proofs.get("offline"), dict) else {},
+        "epd": {
+            **(proofs.get("epd") if isinstance(proofs.get("epd"), dict) else {}),
+            "detail": f"{epd_mode or 'EPD'} | {epd_risk or 'UNKNOWN'}" if epd_mode or epd_risk else str(((proofs.get('epd') if isinstance(proofs.get('epd'), dict) else {}) or {}).get('detail') or ""),
+            "evidence": epd_ts or str(((proofs.get('epd') if isinstance(proofs.get('epd'), dict) else {}) or {}).get('evidence') or ""),
+        },
+    }
+    return {
+        "ok": True,
+        "presentation": {
+            "title": "Azazel-Pi",
+            "mode": "arsenal_compatibility",
+            "brand": "Azazel-Pi",
+        },
+        "active": active,
+        "scenario_id": str(overlay.get("scenario_id") or ""),
+        "title": str(arsenal.get("title") or overlay.get("scenario_id") or "idle"),
+        "attack_label": str(arsenal.get("attack_label") or ""),
+        "score": int(arsenal.get("score") or 0),
+        "band": str(arsenal.get("band") or "IDLE"),
+        "action": str(overlay.get("action") or "observe"),
+        "control_mode": str(overlay.get("control_mode") or "none"),
+        "message": str(arsenal.get("state_message") or "Waiting for Arsenal demo stage."),
+        "talk_track": str(arsenal.get("talk_track") or overlay.get("operator_wording") or ""),
+        "score_factors": list(arsenal.get("score_factors") or []),
+        "decision_path": dict(arsenal.get("decision_path") or {}) if isinstance(arsenal.get("decision_path"), dict) else {},
+        "suricata_detection": bool(active),
+        "offline_demo": bool(((overlay.get("execution") or {}) if isinstance(overlay.get("execution"), dict) else {}).get("offline_demo")),
+        "proofs": proof_payload,
+        "epd": {
+            "ts": epd_ts,
+            "state": str(epd_render.get("state") or ""),
+            "risk_status": epd_risk,
+            "mode_label": epd_mode,
+            "ssid": str(epd_render.get("ssid") or ""),
+        },
+    }
+
+
 def _assist_rationale(ai_result: Dict[str, Any]) -> List[str]:
     rationale: List[str] = []
     status = str(ai_result.get("status") or "").strip()
@@ -4181,6 +4314,13 @@ def demo_page():
     return render_template("demo.html")
 
 
+@app.route("/arsenal-demo")
+def arsenal_demo_page():
+    """Minimal Azazel-Pi-compatible exhibition page."""
+    lang = _request_lang()
+    return render_template("arsenal_demo.html", ui_lang=lang, ui_catalog=_arsenal_ui_catalog(lang))
+
+
 @app.route("/ops-comm")
 def ops_comm():
     """Dedicated communication page for Mattermost + WebUI bridge."""
@@ -4683,6 +4823,19 @@ def api_demo_run(scenario_id: str):
         write_demo_overlay(overlay)
         payload["overlay"] = overlay
     return jsonify(payload), code
+
+
+@app.route("/api/arsenal-demo/stages", methods=["GET"])
+@require_token()
+def api_arsenal_demo_stages():
+    payload, code = _run_arsenal_demo_runner("list", "--format", "json")
+    return jsonify(payload), code
+
+
+@app.route("/api/arsenal-demo/state", methods=["GET"])
+@require_token()
+def api_arsenal_demo_state():
+    return jsonify(_arsenal_demo_state_payload()), 200
 
 
 @app.route("/api/dashboard/summary", methods=["GET"])
