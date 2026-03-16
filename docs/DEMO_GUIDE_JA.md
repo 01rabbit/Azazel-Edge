@@ -77,6 +77,7 @@ scenario 実行:
 bin/azazel-edge-demo run mixed_correlation_demo
 bin/azazel-edge-arsenal-demo run arsenal_low_watch
 bin/azazel-edge-arsenal-demo run arsenal_throttle
+bin/azazel-edge-arsenal-demo run arsenal_ollama_review
 bin/azazel-edge-arsenal-demo run arsenal_decoy_redirect
 bin/azazel-edge-arsenal-demo flow --keep-final
 bin/azazel-edge-arsenal-demo menu
@@ -95,7 +96,9 @@ bin/azazel-edge-arsenal-demo flow --hold-sec 0 --keep-final --state-out /tmp/ars
   - `Ping Sweep`
 - `arsenal_throttle`
   - `SSH Brute Force`
-  - `Mock-LLM` の一次判定が ambiguity band に入るため、`Ollama Review` が可視化される
+- `arsenal_ollama_review`
+  - `Suspicious Admin Login Burst`
+  - `Mock-LLM` の一次判定だけでは断定しにくいため、`Ollama Review` が可視化される
 - `arsenal_decoy_redirect`
   - `Exploit Probe / RCE Beacon`
 
@@ -108,7 +111,7 @@ bin/azazel-edge-arsenal-demo menu
 選べる内容:
 
 - 個別攻撃の実行
-- 3 シナリオの連続実行
+- `Ping Sweep -> Suspicious Admin Login Burst -> Exploit Probe` の連続実行
 - 全クリア
 
 ### Web UI
@@ -127,7 +130,7 @@ bin/azazel-edge-arsenal-demo menu
 展示で推奨する見せ順:
 
 1. `Ping Sweep`
-2. `SSH Brute Force`
+2. `Suspicious Admin Login Burst`
 3. `Exploit Probe / RCE Beacon`
 
 Dashboard では次の順で操作します。

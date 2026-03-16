@@ -14,7 +14,27 @@ if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 os.environ["PYTHONPATH"] = str(PY_ROOT) + (f":{os.environ['PYTHONPATH']}" if os.environ.get("PYTHONPATH") else "")
 
-from azazel_edge.demo import ARSENAL_STAGE_ORDER, ArsenalDemoRunner
+from azazel_edge.demo import ARSENAL_EXHIBITION_FLOW, ARSENAL_STAGE_ORDER, ArsenalDemoRunner
+
+
+def _load_default_env_file() -> None:
+    if str(os.environ.get("AZAZEL_SKIP_SYSTEM_ENV", "")).strip() in {"1", "true", "yes"}:
+        return
+    for candidate in (Path("/etc/default/azazel-edge-arsenal-demo"), Path("/etc/default/azazel-edge-web")):
+        try:
+            if not candidate.exists():
+                continue
+            for raw_line in candidate.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                if key and key not in os.environ:
+                    os.environ[key] = value.strip()
+            return
+        except Exception:
+            continue
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("stage_id", choices=list(ARSENAL_STAGE_ORDER))
     run_parser.add_argument("--no-overlay", action="store_true", help="Do not write the stage into demo overlay state")
     run_parser.add_argument("--refresh-epd", action="store_true", help="Trigger an immediate EPD refresh after overlay change")
+    run_parser.add_argument("--notify-mattermost", action="store_true", help="Send a short anomaly notification to Mattermost if configured")
     run_parser.add_argument("--format", choices=("text", "json"), default="text")
     run_parser.add_argument("--state-out", help="Write a compact stage state JSON to this path")
 
@@ -38,12 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
     flow_parser.add_argument("--hold-sec", type=int, default=None, help="Override per-stage hold seconds")
     flow_parser.add_argument("--keep-final", action="store_true", help="Keep the last overlay active instead of clearing it")
     flow_parser.add_argument("--refresh-epd", action="store_true", help="Trigger EPD refresh after each overlay change")
+    flow_parser.add_argument("--notify-mattermost", action="store_true", help="Send a short anomaly notification to Mattermost for each stage if configured")
     flow_parser.add_argument("--format", choices=("text", "json"), default="text")
     flow_parser.add_argument("--state-out", help="Write a compact stage state JSON to this path")
     flow_parser.add_argument(
         "--stages",
-        default=",".join(ARSENAL_STAGE_ORDER),
-        help="Comma-separated stage list (default: full Arsenal flow)",
+        default=",".join(ARSENAL_EXHIBITION_FLOW),
+        help="Comma-separated stage list (default: exhibition flow with Ollama review)",
     )
 
     clear_parser = sub.add_parser("clear", help="Clear the demo overlay")
@@ -53,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     menu_parser = sub.add_parser("menu", help="Interactive menu for exhibition attack stages")
     menu_parser.add_argument("--refresh-epd", action="store_true", help="Trigger EPD refresh after each selected action")
+    menu_parser.add_argument("--notify-mattermost", action="store_true", help="Send a short anomaly notification to Mattermost if configured")
     menu_parser.add_argument("--state-out", help="Write the last selected compact state JSON to this path")
     return parser
 
@@ -76,6 +99,7 @@ def _stage_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
         "proofs": dict(arsenal.get("proofs") or {}) if isinstance(arsenal.get("proofs"), dict) else {},
         "overlay_written": bool(payload.get("overlay_written") or payload.get("overlay")),
         "epd_refresh": payload.get("epd_refresh"),
+        "mattermost": dict(payload.get("mattermost") or {}) if isinstance(payload.get("mattermost"), dict) else {},
     }
 
 
@@ -108,6 +132,8 @@ def _print_text(payload: Dict[str, Any], command: str) -> None:
         print(f"MESSAGE: {summary['message']}")
         print(f"TALK: {summary['talk_track']}")
         print(f"OVERLAY: {'written' if summary['overlay_written'] else 'not-written'}")
+        if summary["mattermost"]:
+            print(f"MATTERMOST: {summary['mattermost'].get('mode')} / {'ok' if summary['mattermost'].get('ok') else summary['mattermost'].get('error')}")
         return
 
     if command == "flow":
@@ -129,9 +155,10 @@ def _menu_options() -> list[tuple[str, str, str]]:
     return [
         ("1", "arsenal_low_watch", "Ping Sweep"),
         ("2", "arsenal_throttle", "SSH Brute Force"),
-        ("3", "arsenal_decoy_redirect", "Exploit Probe / RCE Beacon"),
-        ("4", "flow", "Run full exhibition flow"),
-        ("5", "clear", "Clear all demo state"),
+        ("3", "arsenal_ollama_review", "Suspicious Admin Login Burst"),
+        ("4", "arsenal_decoy_redirect", "Exploit Probe / RCE Beacon"),
+        ("5", "flow", "Run full exhibition flow"),
+        ("6", "clear", "Clear all demo state"),
         ("0", "exit", "Exit"),
     ]
 
@@ -142,7 +169,13 @@ def _render_menu() -> None:
         print(f"{key}. {label}")
 
 
-def _menu_loop(runner: ArsenalDemoRunner, *, refresh_epd: bool = False, state_out: str | None = None) -> int:
+def _menu_loop(
+    runner: ArsenalDemoRunner,
+    *,
+    refresh_epd: bool = False,
+    notify_mattermost: bool = False,
+    state_out: str | None = None,
+) -> int:
     while True:
         _render_menu()
         try:
@@ -159,11 +192,12 @@ def _menu_loop(runner: ArsenalDemoRunner, *, refresh_epd: bool = False, state_ou
             return 0
         if action == "flow":
             payload = runner.run_flow(
-                stage_ids=ARSENAL_STAGE_ORDER,
+                stage_ids=ARSENAL_EXHIBITION_FLOW,
                 hold_sec=None,
                 apply_overlay=True,
                 refresh_epd=refresh_epd,
                 keep_final=True,
+                notify_mattermost=notify_mattermost,
             )
             summary = {
                 "ok": bool(payload.get("ok")),
@@ -171,6 +205,7 @@ def _menu_loop(runner: ArsenalDemoRunner, *, refresh_epd: bool = False, state_ou
                 "stages": payload.get("stages", []),
                 "keep_final": bool(payload.get("keep_final")),
                 "overlay_cleared": bool(payload.get("overlay_cleared")),
+                "mattermost_notifications": payload.get("mattermost_notifications", []),
             }
             _write_state_out(state_out, summary)
             print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -181,13 +216,19 @@ def _menu_loop(runner: ArsenalDemoRunner, *, refresh_epd: bool = False, state_ou
             _write_state_out(state_out, summary)
             print(json.dumps(summary, ensure_ascii=False, indent=2))
             continue
-        payload = runner.run_stage(action, apply_overlay=True, refresh_epd=refresh_epd)
+        payload = runner.run_stage(
+            action,
+            apply_overlay=True,
+            refresh_epd=refresh_epd,
+            notify_mattermost=notify_mattermost,
+        )
         summary = _stage_summary(payload)
         _write_state_out(state_out, summary)
         print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 def main(argv: list[str]) -> int:
+    _load_default_env_file()
     parser = build_parser()
     args = parser.parse_args(argv[1:])
     runner = ArsenalDemoRunner()
@@ -201,7 +242,12 @@ def main(argv: list[str]) -> int:
         return 0
 
     if args.command == "run":
-        payload = runner.run_stage(args.stage_id, apply_overlay=not bool(args.no_overlay), refresh_epd=bool(args.refresh_epd))
+        payload = runner.run_stage(
+            args.stage_id,
+            apply_overlay=not bool(args.no_overlay),
+            refresh_epd=bool(args.refresh_epd),
+            notify_mattermost=bool(args.notify_mattermost),
+        )
         summary = _stage_summary(payload)
         _write_state_out(args.state_out, summary)
         if args.format == "json":
@@ -222,6 +268,7 @@ def main(argv: list[str]) -> int:
             apply_overlay=True,
             refresh_epd=bool(args.refresh_epd),
             keep_final=bool(args.keep_final),
+            notify_mattermost=bool(args.notify_mattermost),
         )
         last_step = payload.get("stages", [])[-1] if payload.get("stages") else {}
         summary = {
@@ -233,6 +280,7 @@ def main(argv: list[str]) -> int:
             "last_action": str(last_step.get("action") or ""),
             "overlay_cleared": bool(payload.get("overlay_cleared")),
             "keep_final": bool(payload.get("keep_final")),
+            "mattermost_notifications": payload.get("mattermost_notifications", []),
         }
         _write_state_out(args.state_out, summary)
         if args.format == "json":
@@ -251,7 +299,12 @@ def main(argv: list[str]) -> int:
         return 0
 
     if args.command == "menu":
-        return _menu_loop(runner, refresh_epd=bool(args.refresh_epd), state_out=args.state_out)
+        return _menu_loop(
+            runner,
+            refresh_epd=bool(args.refresh_epd),
+            notify_mattermost=bool(args.notify_mattermost),
+            state_out=args.state_out,
+        )
 
     parser.print_usage(sys.stderr)
     return 2

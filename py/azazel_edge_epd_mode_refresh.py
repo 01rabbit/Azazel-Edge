@@ -136,21 +136,10 @@ def _risk_status_from_snapshot() -> str:
 def _desired_render_spec(payload: Dict[str, Any]) -> Dict[str, Any]:
     overlay = read_demo_overlay()
     if is_demo_overlay_active(overlay):
-        user_state = str(overlay.get("soc_status") or "").strip().lower()
-        if user_state == "critical":
-            risk_status = "DECEPTION"
-        elif str(overlay.get("noc_status") or "").strip().lower() in ("critical", "degraded"):
-            risk_status = "LIMITED"
-        else:
-            risk_status = "CHECKING"
-        return {
-            "state": "normal",
-            "mode_label": "DEMO",
-            "ssid": str(overlay.get("scenario_id") or "demo")[:24],
-            "risk_status": risk_status,
-            "suspicion": int(overlay.get("soc_suspicion") or 0),
-            "signal": None,
-        }
+        band = str((((overlay.get("arsenal_demo") or {}) if isinstance(overlay.get("arsenal_demo"), dict) else {}).get("band") or "")).strip().upper()
+        if band == "WATCH":
+            return {"state": "warning", "msg": "CHECK WEB"}
+        return {"state": "danger", "msg": "CHECK WEB"}
 
     mode = str(payload.get("mode", "")).strip().lower()
 

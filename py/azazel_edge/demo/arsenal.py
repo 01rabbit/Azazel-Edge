@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import copy
+import json
+import os
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Sequence
+from urllib.request import Request, urlopen
 
 from azazel_edge.arbiter import ActionArbiter
 from azazel_edge.demo.scenarios import DemoScenarioPack, DemoScenarioRunner
@@ -17,6 +20,13 @@ from azazel_edge.tactics_engine.scorer import TacticalScorer
 ARSENAL_STAGE_ORDER = (
     "arsenal_low_watch",
     "arsenal_throttle",
+    "arsenal_ollama_review",
+    "arsenal_decoy_redirect",
+)
+
+ARSENAL_EXHIBITION_FLOW = (
+    "arsenal_low_watch",
+    "arsenal_ollama_review",
     "arsenal_decoy_redirect",
 )
 
@@ -40,12 +50,18 @@ def _band_for_score(score: int) -> ArsenalBand:
 
 
 class ArsenalDemoRunner:
-    def __init__(self, root_dir: Path | None = None, overlay_path: Path | None = None):
+    def __init__(
+        self,
+        root_dir: Path | None = None,
+        overlay_path: Path | None = None,
+        mattermost_sender: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
+    ):
         self.pack = DemoScenarioPack()
         self.runner = DemoScenarioRunner()
         self.scorer = TacticalScorer()
         self.root_dir = root_dir or Path(__file__).resolve().parents[3]
         self.overlay_path = overlay_path or DEMO_OVERLAY_PATH
+        self.mattermost_sender = mattermost_sender or self._send_mattermost_notification
 
     def list_items(self) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
@@ -69,7 +85,13 @@ class ArsenalDemoRunner:
             )
         return items
 
-    def run_stage(self, stage_id: str, apply_overlay: bool = False, refresh_epd: bool = False) -> Dict[str, Any]:
+    def run_stage(
+        self,
+        stage_id: str,
+        apply_overlay: bool = False,
+        refresh_epd: bool = False,
+        notify_mattermost: bool = False,
+    ) -> Dict[str, Any]:
         normalized = str(stage_id or "").strip()
         if not normalized:
             raise KeyError("unknown_arsenal_stage:")
@@ -92,6 +114,8 @@ class ArsenalDemoRunner:
             payload["overlay_written"] = True
             if refresh_epd:
                 payload["epd_refresh"] = self.refresh_epd()
+        if notify_mattermost:
+            payload["mattermost"] = self.mattermost_sender(result)
         return payload
 
     def run_flow(
@@ -101,14 +125,28 @@ class ArsenalDemoRunner:
         apply_overlay: bool = True,
         refresh_epd: bool = False,
         keep_final: bool = False,
+        notify_mattermost: bool = False,
     ) -> Dict[str, Any]:
-        selected = list(stage_ids or ARSENAL_STAGE_ORDER)
+        selected = list(stage_ids or ARSENAL_EXHIBITION_FLOW)
         steps: List[Dict[str, Any]] = []
+        notifications: List[Dict[str, Any]] = []
         for index, stage_id in enumerate(selected):
-            payload = self.run_stage(stage_id, apply_overlay=apply_overlay, refresh_epd=refresh_epd)
+            payload = self.run_stage(
+                stage_id,
+                apply_overlay=apply_overlay,
+                refresh_epd=refresh_epd,
+                notify_mattermost=notify_mattermost,
+            )
             result = payload["result"]
             arsenal = result.get("arsenal_demo") if isinstance(result.get("arsenal_demo"), dict) else {}
             stage_hold = int(hold_sec if hold_sec is not None else arsenal.get("default_hold_sec") or 8)
+            if notify_mattermost:
+                notifications.append(
+                    {
+                        "stage_id": stage_id,
+                        **(payload.get("mattermost") if isinstance(payload.get("mattermost"), dict) else {}),
+                    }
+                )
             steps.append(
                 {
                     "index": index + 1,
@@ -135,6 +173,7 @@ class ArsenalDemoRunner:
             "ok": True,
             "mode": "arsenal_flow",
             "stages": steps,
+            "mattermost_notifications": notifications,
             "keep_final": bool(keep_final),
             "overlay_cleared": cleared,
             "epd_refresh": epd_refresh,
@@ -231,5 +270,103 @@ class ArsenalDemoRunner:
         result["explanation"] = explanation
         return result
 
+    def _send_mattermost_notification(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        arsenal = result.get("arsenal_demo") if isinstance(result.get("arsenal_demo"), dict) else {}
+        arbiter = result.get("arbiter") if isinstance(result.get("arbiter"), dict) else {}
+        band = str(arsenal.get("band") or "").strip().upper()
+        attack_label = str(arsenal.get("attack_label") or result.get("scenario_id") or "Unknown attack").strip()
+        score = int(arsenal.get("score") or 0)
+        action = str(arbiter.get("action") or "observe").strip() or "observe"
+        control_mode = str(arbiter.get("control_mode") or "none").strip() or "none"
+        decision_path = arsenal.get("decision_path") if isinstance(arsenal.get("decision_path"), dict) else {}
+        ollama = decision_path.get("ollama_review") if isinstance(decision_path.get("ollama_review"), dict) else {}
+        ollama_status = str(ollama.get("status") or "unknown").strip() or "unknown"
+        severity = "WARNING" if band == "WATCH" else "DANGER"
+        open_url = self._arsenal_demo_url()
+        message = (
+            f"[{severity}] Azazel-Pi detected {attack_label}\n"
+            f"score={score} band={band} action={action} control={control_mode}\n"
+            f"ollama_review={ollama_status}\n"
+            f"webui={open_url}"
+        )
 
-__all__ = ["ARSENAL_STAGE_ORDER", "ArsenalDemoRunner"]
+        if self._mattermost_bot_token() and self._mattermost_channel_id():
+            payload = {"channel_id": self._mattermost_channel_id(), "message": message}
+            return self._mattermost_api_post("/api/v4/posts", payload)
+        webhook_url = self._mattermost_webhook_url()
+        if webhook_url:
+            request = Request(
+                webhook_url,
+                data=json.dumps({"text": message, "username": "Azazel-Pi"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urlopen(request, timeout=self._mattermost_timeout_sec()):
+                    pass
+                return {"ok": True, "mode": "webhook"}
+            except Exception as exc:
+                return {"ok": False, "mode": "webhook", "error": f"mattermost_webhook_error:{exc}"}
+        return {"ok": False, "mode": "disabled", "error": "mattermost_not_configured"}
+
+    def _mattermost_api_post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        request = Request(
+            f"{self._mattermost_base_url()}{path}",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self._mattermost_bot_token()}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self._mattermost_timeout_sec()) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            parsed = json.loads(raw) if raw else {}
+            return {"ok": True, "mode": "bot_api", "post_id": str((parsed or {}).get("id") or "")}
+        except Exception as exc:
+            return {"ok": False, "mode": "bot_api", "error": f"mattermost_api_error:{exc}"}
+
+    def _mattermost_base_url(self) -> str:
+        host = str(
+            os.environ.get("AZAZEL_MATTERMOST_ALERT_HOST")
+            or os.environ.get("AZAZEL_MATTERMOST_HOST")
+            or "172.16.0.254"
+        ).strip() or "172.16.0.254"
+        port = int(os.environ.get("AZAZEL_MATTERMOST_ALERT_PORT") or os.environ.get("AZAZEL_MATTERMOST_PORT") or "8065")
+        default = f"http://{host}:{port}"
+        return str(os.environ.get("AZAZEL_MATTERMOST_ALERT_BASE_URL") or os.environ.get("AZAZEL_MATTERMOST_BASE_URL") or default).rstrip("/")
+
+    def _mattermost_team(self) -> str:
+        return str(os.environ.get("AZAZEL_MATTERMOST_ALERT_TEAM") or os.environ.get("AZAZEL_MATTERMOST_TEAM") or "azazelops").strip() or "azazelops"
+
+    def _mattermost_channel(self) -> str:
+        return str(os.environ.get("AZAZEL_MATTERMOST_ALERT_CHANNEL") or os.environ.get("AZAZEL_MATTERMOST_CHANNEL") or "soc-noc").strip() or "soc-noc"
+
+    def _mattermost_open_url(self) -> str:
+        default = f"{self._mattermost_base_url()}/{self._mattermost_team()}/channels/{self._mattermost_channel()}"
+        return str(os.environ.get("AZAZEL_MATTERMOST_ALERT_OPEN_URL") or os.environ.get("AZAZEL_MATTERMOST_OPEN_URL") or default).strip() or default
+
+    def _arsenal_demo_url(self) -> str:
+        explicit = str(os.environ.get("AZAZEL_ARSENAL_DEMO_URL", "")).strip()
+        if explicit:
+            return explicit
+        web_host = str(os.environ.get("AZAZEL_WEB_PUBLIC_HOST", "172.16.0.254")).strip() or "172.16.0.254"
+        web_scheme = str(os.environ.get("AZAZEL_WEB_PUBLIC_SCHEME", "https")).strip() or "https"
+        return f"{web_scheme}://{web_host}/arsenal-demo"
+
+    def _mattermost_webhook_url(self) -> str:
+        return str(os.environ.get("AZAZEL_MATTERMOST_ALERT_WEBHOOK_URL") or os.environ.get("AZAZEL_MATTERMOST_WEBHOOK_URL") or "").strip()
+
+    def _mattermost_bot_token(self) -> str:
+        return str(os.environ.get("AZAZEL_MATTERMOST_ALERT_BOT_TOKEN") or os.environ.get("AZAZEL_MATTERMOST_BOT_TOKEN") or "").strip()
+
+    def _mattermost_channel_id(self) -> str:
+        return str(os.environ.get("AZAZEL_MATTERMOST_ALERT_CHANNEL_ID") or os.environ.get("AZAZEL_MATTERMOST_CHANNEL_ID") or "").strip()
+
+    def _mattermost_timeout_sec(self) -> float:
+        return float(os.environ.get("AZAZEL_MATTERMOST_ALERT_TIMEOUT_SEC") or os.environ.get("AZAZEL_MATTERMOST_TIMEOUT_SEC") or "8")
+
+
+__all__ = ["ARSENAL_STAGE_ORDER", "ARSENAL_EXHIBITION_FLOW", "ArsenalDemoRunner"]

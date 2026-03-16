@@ -29,7 +29,8 @@ class ArsenalDemoRunnerV1Tests(unittest.TestCase):
         self.assertEqual([item['stage_id'] for item in items], list(ARSENAL_STAGE_ORDER))
         self.assertEqual(items[0]['band'], 'WATCH')
         self.assertEqual(items[1]['band'], 'THROTTLE')
-        self.assertEqual(items[2]['band'], 'DECOY REDIRECT')
+        self.assertEqual(items[2]['band'], 'THROTTLE')
+        self.assertEqual(items[3]['band'], 'DECOY REDIRECT')
 
     def test_run_stage_adapts_result_to_arsenal_band(self) -> None:
         payload = self.runner.run_stage('arsenal_throttle')
@@ -54,12 +55,78 @@ class ArsenalDemoRunnerV1Tests(unittest.TestCase):
         self.assertEqual(arsenal.get('band'), 'DECOY REDIRECT')
         self.assertEqual(arsenal.get('proofs', {}).get('decoy', {}).get('status'), 'redirect')
 
+    def test_run_stage_can_notify_mattermost(self) -> None:
+        calls = []
+
+        def fake_sender(result: dict) -> dict:
+            calls.append(result)
+            return {'ok': True, 'mode': 'test'}
+
+        runner = ArsenalDemoRunner(root_dir=ROOT, overlay_path=self.overlay_path, mattermost_sender=fake_sender)
+        payload = runner.run_stage('arsenal_throttle', notify_mattermost=True)
+
+        self.assertTrue(payload['ok'])
+        self.assertEqual(payload['mattermost']['mode'], 'test')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]['arsenal_demo']['attack_label'], 'SSH Brute Force')
+
     def test_run_flow_can_keep_final_overlay(self) -> None:
         payload = self.runner.run_flow(hold_sec=0, keep_final=True)
         self.assertTrue(payload['ok'])
         self.assertEqual(len(payload['stages']), 3)
         overlay = read_demo_overlay(self.overlay_path)
         self.assertEqual(overlay.get('scenario_id'), 'arsenal_decoy_redirect')
+
+    def test_run_stage_ollama_review_scenario_marks_used(self) -> None:
+        payload = self.runner.run_stage('arsenal_ollama_review')
+        self.assertTrue(payload['ok'])
+        result = payload['result']
+        self.assertEqual(result['arsenal_demo']['attack_label'], 'Suspicious Admin Login Burst')
+        self.assertEqual(result['arsenal_demo']['band'], 'THROTTLE')
+        self.assertEqual(result['arsenal_demo']['decision_path']['ollama_review']['status'], 'used')
+        self.assertIn('qwen3.5:2b', result['arsenal_demo']['decision_path']['ollama_review']['evidence'])
+
+    def test_run_flow_collects_mattermost_notifications(self) -> None:
+        calls = []
+
+        def fake_sender(result: dict) -> dict:
+            calls.append(result.get('scenario_id'))
+            return {'ok': True, 'mode': 'test'}
+
+        runner = ArsenalDemoRunner(root_dir=ROOT, overlay_path=self.overlay_path, mattermost_sender=fake_sender)
+        payload = runner.run_flow(hold_sec=0, keep_final=False, notify_mattermost=True)
+
+        self.assertTrue(payload['ok'])
+        self.assertEqual(calls, ['arsenal_low_watch', 'arsenal_ollama_review', 'arsenal_decoy_redirect'])
+        self.assertEqual(len(payload['mattermost_notifications']), 3)
+        self.assertTrue(all(item.get('ok') for item in payload['mattermost_notifications']))
+
+    def test_notification_message_uses_arsenal_demo_url(self) -> None:
+        import os
+        captured = {}
+        runner = ArsenalDemoRunner(root_dir=ROOT, overlay_path=self.overlay_path)
+        original = os.environ.get('AZAZEL_ARSENAL_DEMO_URL')
+        os.environ['AZAZEL_ARSENAL_DEMO_URL'] = 'https://192.168.40.89/arsenal-demo'
+        try:
+            def fake_api_post(path: str, payload: dict) -> dict:
+                captured['path'] = path
+                captured['payload'] = payload
+                return {'ok': True, 'mode': 'bot_api'}
+
+            runner._mattermost_api_post = fake_api_post  # type: ignore[method-assign]
+            runner._mattermost_bot_token = lambda: 'token'  # type: ignore[method-assign]
+            runner._mattermost_channel_id = lambda: 'channel'  # type: ignore[method-assign]
+            result = runner.run_stage('arsenal_low_watch')['result']
+            notify = runner._send_mattermost_notification(result)
+        finally:
+            if original is None:
+                os.environ.pop('AZAZEL_ARSENAL_DEMO_URL', None)
+            else:
+                os.environ['AZAZEL_ARSENAL_DEMO_URL'] = original
+
+        self.assertTrue(notify['ok'])
+        self.assertEqual(captured['path'], '/api/v4/posts')
+        self.assertIn('webui=https://192.168.40.89/arsenal-demo', captured['payload']['message'])
 
 
 if __name__ == '__main__':

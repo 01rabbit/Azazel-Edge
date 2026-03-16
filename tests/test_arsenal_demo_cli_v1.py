@@ -14,11 +14,13 @@ RUNNER = ROOT / 'bin' / 'azazel-edge-arsenal-demo'
 
 class ArsenalDemoCliV1Tests(unittest.TestCase):
     def test_cli_lists_arsenal_stages(self) -> None:
-        result = subprocess.run([str(RUNNER), 'list', '--format', 'json'], capture_output=True, text=True, cwd=str(ROOT), check=True)
+        env = os.environ.copy()
+        env['AZAZEL_SKIP_SYSTEM_ENV'] = '1'
+        result = subprocess.run([str(RUNNER), 'list', '--format', 'json'], capture_output=True, text=True, cwd=str(ROOT), check=True, env=env)
         payload = json.loads(result.stdout)
         self.assertTrue(payload['ok'])
         stage_ids = [item['stage_id'] for item in payload['items']]
-        self.assertEqual(stage_ids, ['arsenal_low_watch', 'arsenal_throttle', 'arsenal_decoy_redirect'])
+        self.assertEqual(stage_ids, ['arsenal_low_watch', 'arsenal_throttle', 'arsenal_ollama_review', 'arsenal_decoy_redirect'])
 
     def test_cli_run_can_apply_overlay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -26,6 +28,7 @@ class ArsenalDemoCliV1Tests(unittest.TestCase):
             state_path = Path(tmp) / 'stage_state.json'
             env = os.environ.copy()
             env['AZAZEL_DEMO_OVERLAY'] = str(overlay_path)
+            env['AZAZEL_SKIP_SYSTEM_ENV'] = '1'
             result = subprocess.run(
                 [str(RUNNER), 'run', 'arsenal_throttle', '--format', 'json', '--state-out', str(state_path)],
                 capture_output=True,
@@ -53,9 +56,10 @@ class ArsenalDemoCliV1Tests(unittest.TestCase):
             state_path = Path(tmp) / 'menu_state.json'
             env = os.environ.copy()
             env['AZAZEL_DEMO_OVERLAY'] = str(overlay_path)
+            env['AZAZEL_SKIP_SYSTEM_ENV'] = '1'
             result = subprocess.run(
                 [str(RUNNER), 'menu', '--state-out', str(state_path)],
-                input='2\n0\n',
+                input='3\n0\n',
                 capture_output=True,
                 text=True,
                 cwd=str(ROOT),
@@ -63,11 +67,34 @@ class ArsenalDemoCliV1Tests(unittest.TestCase):
                 env=env,
             )
             self.assertIn('AZAZEL-PI EXHIBITION MENU', result.stdout)
-            self.assertIn('SSH Brute Force', result.stdout)
+            self.assertIn('Suspicious Admin Login Burst', result.stdout)
             state = json.loads(state_path.read_text(encoding='utf-8'))
-            self.assertEqual(state['scenario_id'], 'arsenal_throttle')
-            self.assertEqual(state['attack_label'], 'SSH Brute Force')
+            self.assertEqual(state['scenario_id'], 'arsenal_ollama_review')
+            self.assertEqual(state['attack_label'], 'Suspicious Admin Login Burst')
             self.assertEqual(state['decision_path']['ollama_review']['status'], 'used')
+
+    def test_cli_run_notify_mattermost_does_not_block_when_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            overlay_path = Path(tmp) / 'demo_overlay.json'
+            state_path = Path(tmp) / 'stage_state.json'
+            env = os.environ.copy()
+            env['AZAZEL_DEMO_OVERLAY'] = str(overlay_path)
+            env['AZAZEL_SKIP_SYSTEM_ENV'] = '1'
+            env.pop('AZAZEL_MATTERMOST_WEBHOOK_URL', None)
+            env.pop('AZAZEL_MATTERMOST_BOT_TOKEN', None)
+            env.pop('AZAZEL_MATTERMOST_CHANNEL_ID', None)
+            result = subprocess.run(
+                [str(RUNNER), 'run', 'arsenal_low_watch', '--notify-mattermost', '--state-out', str(state_path)],
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT),
+                check=True,
+                env=env,
+            )
+            self.assertIn('MATTERMOST: disabled', result.stdout)
+            state = json.loads(state_path.read_text(encoding='utf-8'))
+            self.assertEqual(state['mattermost']['mode'], 'disabled')
+            self.assertFalse(state['mattermost']['ok'])
 
 
 if __name__ == '__main__':

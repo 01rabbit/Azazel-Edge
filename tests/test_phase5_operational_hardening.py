@@ -204,6 +204,75 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
         self.assertEqual(int(desired["suspicion"]), 67)
         self.assertEqual(desired["risk_status"], "SAFE")
 
+    def test_epd_overlay_watch_raises_warning_and_check_web(self) -> None:
+        orig_read_demo_overlay = epd_refresh.read_demo_overlay
+        orig_is_demo_overlay_active = epd_refresh.is_demo_overlay_active
+        try:
+            epd_refresh.read_demo_overlay = lambda: {
+                "active": True,
+                "scenario_id": "arsenal_low_watch",
+                "action": "observe",
+                "control_mode": "none",
+                "arsenal_demo": {
+                    "band": "WATCH",
+                    "attack_label": "Ping Sweep",
+                },
+            }
+            epd_refresh.is_demo_overlay_active = lambda overlay=None: True
+            desired = epd_refresh._desired_render_spec({"mode": "shield", "ssid": "AzazelNet", "upstream_if": "wlan0"})
+        finally:
+            epd_refresh.read_demo_overlay = orig_read_demo_overlay
+            epd_refresh.is_demo_overlay_active = orig_is_demo_overlay_active
+
+        self.assertEqual(desired["state"], "warning")
+        self.assertEqual(desired["msg"], "CHECK WEB")
+
+    def test_epd_overlay_throttle_raises_danger_and_check_web(self) -> None:
+        orig_read_demo_overlay = epd_refresh.read_demo_overlay
+        orig_is_demo_overlay_active = epd_refresh.is_demo_overlay_active
+        try:
+            epd_refresh.read_demo_overlay = lambda: {
+                "active": True,
+                "scenario_id": "arsenal_throttle",
+                "action": "throttle",
+                "control_mode": "traffic_shaping",
+                "soc_status": "critical",
+                "soc_suspicion": 81,
+                "arsenal_demo": {
+                    "band": "THROTTLE",
+                    "attack_label": "SSH Brute Force",
+                },
+            }
+            epd_refresh.is_demo_overlay_active = lambda overlay=None: True
+            desired = epd_refresh._desired_render_spec({"mode": "shield", "ssid": "AzazelNet", "upstream_if": "wlan0"})
+        finally:
+            epd_refresh.read_demo_overlay = orig_read_demo_overlay
+            epd_refresh.is_demo_overlay_active = orig_is_demo_overlay_active
+
+        self.assertEqual(desired["state"], "danger")
+        self.assertEqual(desired["msg"], "CHECK WEB")
+
+    def test_epd_overlay_redirect_raises_danger_and_check_web(self) -> None:
+        orig_read_demo_overlay = epd_refresh.read_demo_overlay
+        orig_is_demo_overlay_active = epd_refresh.is_demo_overlay_active
+        try:
+            epd_refresh.read_demo_overlay = lambda: {
+                "active": True,
+                "scenario_id": "arsenal_decoy_redirect",
+                "action": "redirect",
+                "control_mode": "opencanary_redirect",
+                "soc_status": "critical",
+                "soc_suspicion": 97,
+            }
+            epd_refresh.is_demo_overlay_active = lambda overlay=None: True
+            desired = epd_refresh._desired_render_spec({"mode": "shield", "ssid": "AzazelNet", "upstream_if": "wlan0"})
+        finally:
+            epd_refresh.read_demo_overlay = orig_read_demo_overlay
+            epd_refresh.is_demo_overlay_active = orig_is_demo_overlay_active
+
+        self.assertEqual(desired["state"], "danger")
+        self.assertEqual(desired["msg"], "CHECK WEB")
+
     def test_epd_resolve_prefers_edge_script(self) -> None:
         root = Path(self.tmp.name) / "repo"
         py_dir = root / "py"

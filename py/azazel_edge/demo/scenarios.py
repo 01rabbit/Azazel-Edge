@@ -69,8 +69,8 @@ class DemoScenarioPack:
                         'epd': {
                             'status': 'sync',
                             'headline': 'EPD SYNC READY',
-                            'detail': 'The e-paper panel mirrors the WATCH state when the overlay is active.',
-                            'evidence': 'Expected panel state: DEMO / CHECKING.',
+                            'detail': 'The e-paper panel raises WARNING and prompts the operator to open the WebUI for detail.',
+                            'evidence': 'Expected panel state: WARNING / CHECK WEB.',
                         },
                     },
                 },
@@ -138,8 +138,8 @@ class DemoScenarioPack:
                         'epd': {
                             'status': 'sync',
                             'headline': 'EPD SYNC READY',
-                            'detail': 'The e-paper panel should flip to DEMO / LIMITED during this stage.',
-                            'evidence': 'Expected panel state: DEMO / LIMITED.',
+                            'detail': 'The e-paper panel should raise DANGER and push attention toward the WebUI.',
+                            'evidence': 'Expected panel state: DANGER / CHECK WEB.',
                         },
                     },
                 },
@@ -208,8 +208,8 @@ class DemoScenarioPack:
                         'epd': {
                             'status': 'sync',
                             'headline': 'EPD SYNC READY',
-                            'detail': 'The e-paper panel should show DEMO / DECEPTION during redirect.',
-                            'evidence': 'Expected panel state: DEMO / DECEPTION.',
+                            'detail': 'The e-paper panel should raise DANGER and push attention toward the WebUI.',
+                            'evidence': 'Expected panel state: DANGER / CHECK WEB.',
                         },
                     },
                 },
@@ -217,6 +217,76 @@ class DemoScenarioPack:
                     {'event_id': 'ars-decoy-1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.5->172.16.0.20:443/TCP', 'severity': 92, 'confidence': 0.95, 'attrs': {'sid': 210301, 'attack_type': 'RCE Beacon', 'category': 'Attempted Administrator Privilege Gain', 'target_port': 443, 'risk_score': 92, 'confidence_raw': 95, 'src_ip': '10.0.0.5', 'dst_ip': '172.16.0.20'}},
                     {'event_id': 'ars-decoy-2', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.0.5->172.16.0.20:443/TCP', 'severity': 55, 'confidence': 0.80, 'attrs': {'src_ip': '10.0.0.5', 'dst_ip': '172.16.0.20', 'dst_port': 443, 'flow_state': 'failed', 'app_proto': 'tls'}},
                     {'event_id': 'ars-decoy-3', 'source': 'syslog_min', 'kind': 'syslog_line', 'subject': '172.16.0.20', 'severity': 65, 'confidence': 0.82, 'attrs': {'message': 'honeypot redirect eligibility raised', 'host': 'edge', 'tag': 'azazel-demo'}},
+                ],
+            },
+            'arsenal_ollama_review': {
+                'description': 'Ambiguous admin login burst that requires a local Ollama review before bounded control is selected.',
+                'arsenal': {
+                    'title': 'Ambiguous admin login burst enters Ollama review',
+                    'default_hold_sec': 10,
+                    'scorer_features': {
+                        'suricata_sev': 3,
+                        'suricata_sid': 210251,
+                        'suricata_signature': 'ET POLICY suspicious admin login burst',
+                        'suricata_category': 'attempted-admin',
+                        'suricata_action': 'allowed',
+                        'target_port': 443,
+                    },
+                    'talk_track': 'The first pass is not decisive here, so the gateway asks local Ollama to review the admin login burst before applying bounded control.',
+                    'attack_label': 'Suspicious Admin Login Burst',
+                    'decision_path': {
+                        'first_pass': {
+                            'headline': 'MOCK-LLM SCORE 67',
+                            'detail': 'The deterministic first pass lands in the ambiguity band and cannot safely classify the activity alone.',
+                        },
+                        'ollama_review': {
+                            'status': 'used',
+                            'headline': 'OLLAMA REVIEWED',
+                            'detail': 'Local Ollama correlates repeated 401 bursts, admin URI targeting, and cross-source timing before confirming bounded control.',
+                            'evidence': 'model=qwen3.5:2b | verdict=throttle | confidence=0.81',
+                        },
+                        'final_policy': {
+                            'headline': 'FINAL POLICY: THROTTLE',
+                            'detail': 'Apply reversible tc shaping while preserving the service path for legitimate clients.',
+                        },
+                    },
+                    'proofs': {
+                        'tc': {
+                            'status': 'active',
+                            'headline': 'TC THROTTLE ACTIVE',
+                            'detail': 'Bounded delay and bandwidth control are active while the login burst is under review.',
+                            'evidence': 'netem delay 90ms + tbf rate 3mbit burst 32kbit',
+                        },
+                        'firewall': {
+                            'status': 'active',
+                            'headline': 'MICRO-POLICY ACTIVE',
+                            'detail': 'The suspicious admin endpoint is pinned into a reversible policy lane.',
+                            'evidence': 'nft counter: 33 packets / 3.8 KiB on tcp dport 8443',
+                        },
+                        'decoy': {
+                            'status': 'standby',
+                            'headline': 'DECOY ON HOLD',
+                            'detail': 'OpenCanary redirect is withheld until the risk crosses the redirect band.',
+                            'evidence': 'Redirect selector remains below decoy threshold.',
+                        },
+                        'offline': {
+                            'status': 'active',
+                            'headline': 'OFFLINE ACTIVE',
+                            'detail': 'Both the deterministic scorer and the Ollama review stay local to the gateway.',
+                            'evidence': 'No external API dependency in the review path.',
+                        },
+                        'epd': {
+                            'status': 'sync',
+                            'headline': 'EPD SYNC READY',
+                            'detail': 'The e-paper panel should raise DANGER and push attention toward the WebUI.',
+                            'evidence': 'Expected panel state: DANGER / CHECK WEB.',
+                        },
+                    },
+                },
+                'events': [
+                    {'event_id': 'ars-ollama-1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.5->172.16.0.20:443/TCP', 'severity': 71, 'confidence': 0.73, 'attrs': {'sid': 210251, 'attack_type': 'Suspicious Admin Login Burst', 'category': 'Attempted Administrator Privilege Gain', 'target_port': 443, 'risk_score': 71, 'confidence_raw': 73, 'src_ip': '10.0.0.5', 'dst_ip': '172.16.0.20'}},
+                    {'event_id': 'ars-ollama-2', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.0.5->172.16.0.20:443/TCP', 'severity': 38, 'confidence': 0.64, 'attrs': {'src_ip': '10.0.0.5', 'dst_ip': '172.16.0.20', 'dst_port': 443, 'flow_state': 'open', 'app_proto': 'tls'}},
+                    {'event_id': 'ars-ollama-3', 'source': 'syslog_min', 'kind': 'syslog_line', 'subject': '172.16.0.20', 'severity': 44, 'confidence': 0.69, 'attrs': {'message': 'admin ui repeated 401 burst from single source', 'host': 'edge', 'tag': 'reverse-proxy'}},
                 ],
             },
             'soc_redirect_demo': {

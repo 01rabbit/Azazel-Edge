@@ -166,9 +166,10 @@ Arsenal で必要なのは「広さ」ではなく「一本で伝わること」
 2. Suricata Alert
 3. Risk Score Meter
 4. Policy Band
-5. Active Control
-6. Decoy Redirect Status
-7. EPD Status
+5. Ollama Review Gate
+6. Active Control
+7. Decoy Redirect Status
+8. EPD Status
 
 ### 5.2 表示ルール
 
