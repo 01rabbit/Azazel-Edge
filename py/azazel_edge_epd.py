@@ -28,6 +28,7 @@ Usage:
 Icon files in icons/epd/:
   - wifi_3.png / wifi_2.png / wifi_1.png (signal strength)
   - wifi_notconnected.png (not connected)
+  - eth.png (ethernet uplink)
   - warning.png (for WARNING state)
   - danger.png (for DANGER state)
 """
@@ -64,6 +65,7 @@ ICON_WIFI_STRONG = "wifi_3.png"      # Signal >= -60 dBm (very good)
 ICON_WIFI_MEDIUM = "wifi_2.png"      # Signal >= -70 dBm (good)
 ICON_WIFI_WEAK = "wifi_1.png"        # Signal >= -80 dBm (weak)
 ICON_WIFI_DISCONNECTED = "wifi_notconnected.png"  # No connection
+ICON_ETHERNET = "eth.png"            # Wired uplink
 ICON_WARNING = "warning.png"
 ICON_DANGER = "danger.png"
 
@@ -75,6 +77,7 @@ def check_icon_files(icon_dir: Path) -> None:
     """
     required_icons = [
         ICON_WIFI_STRONG, ICON_WIFI_MEDIUM, ICON_WIFI_WEAK, ICON_WIFI_DISCONNECTED,
+        ICON_ETHERNET,
         ICON_WARNING, ICON_DANGER
     ]
     missing = []
@@ -93,6 +96,7 @@ def check_icon_files(icon_dir: Path) -> None:
         print(f"  - {ICON_WIFI_MEDIUM} (Wi-Fi icon - medium signal)")
         print(f"  - {ICON_WIFI_WEAK} (Wi-Fi icon - weak signal)")
         print(f"  - {ICON_WIFI_DISCONNECTED} (Wi-Fi icon - not connected)")
+        print(f"  - {ICON_ETHERNET} (Ethernet icon - wired uplink)")
         print(f"  - {ICON_WARNING} (Warning icon for WARNING state)")
         print(f"  - {ICON_DANGER} (Danger icon for DANGER state)")
         sys.exit(1)
@@ -370,6 +374,7 @@ def render_normal(
     risk_status: str = "SAFE",
     suspicion: int = 0,
     mode_label: str = "SHIELD",
+    uplink_type: str = "unknown",
 ) -> Tuple[Image.Image, Image.Image]:
     """
     Render NORMAL state:
@@ -397,26 +402,27 @@ def render_normal(
     font_ssid = load_font(15, "stardos")
     font_evidence = load_font(20, "icbm")  # Evidence (State/Suspicion) - 20pt (icbmss20, bottom)
     
-    # Select Wi-Fi icon based on signal strength (dBm)
-    # dBm scale: closer to 0 = stronger, closer to -100 = weaker
-    # Thresholds: >= -60 (very good), >= -70 (good), >= -80 (weak), < -80 (very weak)
+    # Select connection icon based on uplink type and Wi-Fi signal strength.
     signal_dbm = normalize_signal_dbm(signal)
-    if signal_dbm is None:
-        wifi_icon_name = ICON_WIFI_DISCONNECTED
+    uplink = str(uplink_type or "").strip().lower()
+    if uplink == "ethernet":
+        connection_icon_name = ICON_ETHERNET
+    elif signal_dbm is None:
+        connection_icon_name = ICON_WIFI_DISCONNECTED
     elif signal_dbm >= -60:
-        wifi_icon_name = ICON_WIFI_STRONG
+        connection_icon_name = ICON_WIFI_STRONG
     elif signal_dbm >= -70:
-        wifi_icon_name = ICON_WIFI_MEDIUM
+        connection_icon_name = ICON_WIFI_MEDIUM
     else:
-        wifi_icon_name = ICON_WIFI_WEAK
+        connection_icon_name = ICON_WIFI_WEAK
     
-    # Load and paste Wi-Fi icon (left side, black)
-    wifi_icon_path = icon_dir / wifi_icon_name
-    wifi_icon = load_icon_with_transparency(wifi_icon_path, max_size=45)
-    wifi_icon_1bit = convert_to_1bit(wifi_icon, invert=False)
+    # Load and paste connection icon (left side, black)
+    connection_icon_path = icon_dir / connection_icon_name
+    connection_icon = load_icon_with_transparency(connection_icon_path, max_size=45)
+    connection_icon_1bit = convert_to_1bit(connection_icon, invert=False)
     icon_x = 10
     icon_y = 8
-    black_img.paste(wifi_icon_1bit, (icon_x, icon_y))
+    black_img.paste(connection_icon_1bit, (icon_x, icon_y))
     
     # Draw mode + SSID as two stacked lines in top area.
     ssid_x = icon_x + 55  # Icon width + small gap
@@ -825,6 +831,7 @@ Examples:
     parser.add_argument('--ssid', help='Wi-Fi SSID (for normal state)')
     parser.add_argument('--mode-label', default='SHIELD', help='Gateway mode label shown above SSID (for normal state)')
     parser.add_argument('--signal', type=int, help='Wi-Fi signal strength in dBm (negative, e.g., -55) or 0-100%')
+    parser.add_argument('--uplink-type', default='unknown', help='Uplink type for icon selection: wifi, ethernet, other')
     parser.add_argument('--risk-status', default='SAFE', help='Risk status (for normal state): SAFE, CHECKING, LIMITED, CONTAINED')
     parser.add_argument('--suspicion', type=int, default=0, help='Suspicion score (for normal state, 0-100)')
     parser.add_argument('--msg', help='Message (for warning/danger/stale states)')
@@ -863,6 +870,7 @@ Examples:
             args.risk_status,
             args.suspicion,
             args.mode_label,
+            args.uplink_type,
         )
         render_spec.update(
             {
@@ -871,6 +879,7 @@ Examples:
                 "risk_status": str(args.risk_status or "").strip().upper(),
                 "suspicion": int(args.suspicion),
                 "signal": args.signal if args.signal is not None else None,
+                "uplink_type": str(args.uplink_type or "").strip().lower() or "unknown",
             }
         )
     elif args.state == 'warning':

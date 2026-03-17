@@ -273,6 +273,31 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
         self.assertEqual(desired["state"], "danger")
         self.assertEqual(desired["msg"], "CHECK WEB")
 
+    def test_epd_normal_render_spec_keeps_ethernet_uplink(self) -> None:
+        runtime_snapshot = Path(self.tmp.name) / "runtime_snapshot_eth.json"
+        runtime_snapshot.write_text(
+            json.dumps(
+                {
+                    "ssid": "ETH:eth1",
+                    "signal_dbm": -42,
+                    "internal": {"suspicion": 12},
+                    "connection": {
+                        "wifi_state": "N/A(ETH)",
+                        "uplink_type": "ethernet",
+                        "internet_check": "OK",
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        epd_refresh.RUNTIME_SNAPSHOT_CANDIDATES = (runtime_snapshot,)
+
+        desired = epd_refresh._desired_render_spec({"mode": "shield", "ssid": "ETH:eth1", "upstream_if": "eth1"})
+        self.assertEqual(desired["state"], "normal")
+        self.assertEqual(desired["uplink_type"], "ethernet")
+        self.assertIsNone(desired["signal"])
+
     def test_epd_resolve_prefers_edge_script(self) -> None:
         root = Path(self.tmp.name) / "repo"
         py_dir = root / "py"
@@ -314,6 +339,55 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertTrue(calls)
         self.assertIn(str(legacy_script), calls[0])
+
+    def test_epd_main_passes_ethernet_uplink_type_for_normal_render(self) -> None:
+        root = Path(self.tmp.name) / "repo_normal"
+        py_dir = root / "py"
+        py_dir.mkdir(parents=True, exist_ok=True)
+        edge_script = py_dir / "azazel_edge_epd.py"
+        edge_script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+        epd_state = Path(self.tmp.name) / "epd_state_normal.json"
+        epd_state.write_text(json.dumps({"mode": "shield", "ssid": "ETH:eth1", "upstream_if": "eth1"}), encoding="utf-8")
+        epd_last = Path(self.tmp.name) / "epd_last_render_normal.json"
+        runtime_snapshot = Path(self.tmp.name) / "runtime_snapshot_main_eth.json"
+        runtime_snapshot.write_text(
+            json.dumps(
+                {
+                    "ssid": "ETH:eth1",
+                    "connection": {
+                        "wifi_state": "N/A(ETH)",
+                        "uplink_type": "ethernet",
+                        "internet_check": "OK",
+                    },
+                    "internal": {"suspicion": 9},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        epd_refresh.EPD_STATE = epd_state
+        epd_refresh.EPD_LAST_RENDER = epd_last
+        epd_refresh.RUNTIME_SNAPSHOT_CANDIDATES = (runtime_snapshot,)
+
+        calls = []
+        orig_run = epd_refresh.subprocess.run
+        epd_refresh.subprocess.run = lambda cmd, timeout=0, check=False: calls.append(cmd)  # type: ignore[assignment]
+        old_root = os.environ.get("AZAZEL_ROOT")
+        os.environ["AZAZEL_ROOT"] = str(root)
+        try:
+            rc = epd_refresh.main()
+        finally:
+            epd_refresh.subprocess.run = orig_run  # type: ignore[assignment]
+            if old_root is None:
+                os.environ.pop("AZAZEL_ROOT", None)
+            else:
+                os.environ["AZAZEL_ROOT"] = old_root
+        self.assertEqual(rc, 0)
+        self.assertTrue(calls)
+        self.assertIn("--uplink-type", calls[0])
+        self.assertIn("ethernet", calls[0])
 
 
     def test_correlation_escalation_routes_low_risk_event_to_llm(self) -> None:
