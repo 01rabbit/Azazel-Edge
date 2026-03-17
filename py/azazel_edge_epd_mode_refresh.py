@@ -80,12 +80,14 @@ def _normal_render_spec(payload: Dict[str, Any], mode_label: str, risk_status: s
     live_ssid = ""
     live_signal: int | None = None
     live_wifi_state = ""
+    live_uplink_type = ""
     live_suspicion = 0
     data = _read_runtime_snapshot()
     if isinstance(data, dict) and data:
         conn = data.get("connection")
         if isinstance(conn, dict):
             live_wifi_state = str(conn.get("wifi_state", "")).strip().upper()
+            live_uplink_type = str(conn.get("uplink_type", "")).strip().lower()
         raw_ssid = str(data.get("ssid", "")).strip()
         if raw_ssid and raw_ssid != "-":
             live_ssid = raw_ssid
@@ -110,6 +112,7 @@ def _normal_render_spec(payload: Dict[str, Any], mode_label: str, risk_status: s
         "risk_status": str(risk_status or "UNKNOWN").strip().upper(),
         "suspicion": max(0, min(100, live_suspicion)),
         "signal": signal,
+        "uplink_type": live_uplink_type or str(payload.get("uplink_type", "")).strip().lower() or "unknown",
     }
 
 
@@ -150,6 +153,7 @@ def _desired_render_spec(payload: Dict[str, Any]) -> Dict[str, Any]:
             "risk_status": risk_status,
             "suspicion": int(overlay.get("soc_suspicion") or 0),
             "signal": None,
+            "uplink_type": "unknown",
         }
 
     mode = str(payload.get("mode", "")).strip().lower()
@@ -222,6 +226,7 @@ def _visual_fingerprint(render: Dict[str, Any]) -> Dict[str, Any]:
             "risk_status": str(render.get("risk_status", "")).strip().upper(),
             "suspicion": int(_to_int_or_none(render.get("suspicion")) or 0),
             "signal_bucket": _signal_bucket(render.get("signal")),
+            "uplink_type": str(render.get("uplink_type", "")).strip().lower() or "unknown",
         }
     return {
         "state": state,
@@ -262,6 +267,7 @@ def main() -> int:
             [
                 "--ssid", str(desired.get("ssid", "")),
                 "--mode-label", str(desired.get("mode_label", "SHIELD")),
+                "--uplink-type", str(desired.get("uplink_type", "unknown")),
                 "--risk-status", str(desired.get("risk_status", "UNKNOWN")),
                 "--suspicion", str(desired.get("suspicion", 0)),
             ]
