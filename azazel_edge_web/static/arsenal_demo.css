@@ -45,6 +45,17 @@
     display: flex;
     gap: 12px;
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.arsenal-language-toggle {
+    display: inline-flex;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.05);
 }
 
 .arsenal-badge,
@@ -323,6 +334,10 @@
 
     .arsenal-header {
         flex-direction: column;
+    }
+
+    .arsenal-topline {
+        justify-content: flex-start;
     }
 
     .arsenal-topline {

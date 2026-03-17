@@ -248,6 +248,8 @@ class DemoApiV1Tests(unittest.TestCase):
         self.assertIn("arsenalOfflineCard", text)
         self.assertIn("arsenalDecisionStrip", text)
         self.assertIn("arsenalOllamaCard", text)
+        self.assertIn("langJaBtn", text)
+        self.assertIn("langEnBtn", text)
 
 
 if __name__ == "__main__":

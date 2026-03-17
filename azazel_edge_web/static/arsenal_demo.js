@@ -1,5 +1,6 @@
+const LANG_KEY = 'azazel_lang';
 const ARSENAL_AUTH_TOKEN = localStorage.getItem('azazel_token') || 'azazel-default-token-change-me';
-const ARSENAL_LANG = window.AZAZEL_LANG || localStorage.getItem('azazel_lang') || 'ja';
+const ARSENAL_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
 const ARSENAL_I18N = window.AZAZEL_I18N || {};
 const ARSENAL_POLL_MS = 2500;
 
@@ -7,6 +8,29 @@ let arsenalClockTimer = null;
 
 function arsenalTr(key, fallback) {
     return ARSENAL_I18N[key] || fallback || key;
+}
+
+function switchLanguage(lang) {
+    const next = lang === 'en' ? 'en' : 'ja';
+    localStorage.setItem(LANG_KEY, next);
+    const url = new URL(window.location.href);
+    url.searchParams.set('lang', next);
+    window.location.assign(url.toString());
+}
+
+function syncLanguageUi() {
+    const jaBtn = document.getElementById('langJaBtn');
+    const enBtn = document.getElementById('langEnBtn');
+    if (jaBtn) {
+        jaBtn.classList.toggle('active', ARSENAL_LANG === 'ja');
+        jaBtn.classList.toggle('lang-active-ja', ARSENAL_LANG === 'ja');
+        jaBtn.classList.remove('lang-active-en');
+    }
+    if (enBtn) {
+        enBtn.classList.toggle('active', ARSENAL_LANG === 'en');
+        enBtn.classList.toggle('lang-active-en', ARSENAL_LANG === 'en');
+        enBtn.classList.remove('lang-active-ja');
+    }
 }
 
 function arsenalHeaders() {
@@ -210,6 +234,11 @@ async function refreshArsenalState() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    syncLanguageUi();
+    const jaBtn = document.getElementById('langJaBtn');
+    const enBtn = document.getElementById('langEnBtn');
+    if (jaBtn) jaBtn.addEventListener('click', () => switchLanguage('ja'));
+    if (enBtn) enBtn.addEventListener('click', () => switchLanguage('en'));
     tickClock();
     refreshArsenalState();
     arsenalClockTimer = window.setInterval(tickClock, 1000);

@@ -15,6 +15,10 @@
             <p class="arsenal-subtitle">{{ tr('arsenal.subtitle', 'Suricata detection, deterministic scoring, bounded policy control, decoy redirect, offline operation, and e-paper status in one short flow.') }}</p>
         </div>
         <div class="arsenal-topline">
+            <div class="language-toggle arsenal-language-toggle" role="tablist" aria-label="{{ tr('lang.label', 'Language') }}">
+                <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
+                <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
+            </div>
             <span id="arsenalPresentationBadge" class="arsenal-badge arsenal-badge-idle">{{ tr('arsenal.idle', 'IDLE') }}</span>
             <span id="arsenalClock" class="arsenal-clock">--:--:--</span>
         </div>
