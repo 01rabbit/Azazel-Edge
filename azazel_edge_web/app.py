@@ -143,6 +143,7 @@ IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
 LOCAL_DEMO_RUNNER = PROJECT_ROOT / "bin" / "azazel-edge-demo"
 OPT_DEMO_RUNNER = Path("/opt/azazel-edge/bin/azazel-edge-demo")
 USR_LOCAL_DEMO_RUNNER = Path("/usr/local/bin/azazel-edge-demo")
+EPD_LAST_RENDER_PATH = Path("/run/azazel-edge/epd_last_render.json")
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
@@ -3065,12 +3066,50 @@ def _run_demo_runner(*args: str) -> tuple[Dict[str, Any], int]:
         payload["stderr"] = stderr
         payload["returncode"] = result.returncode
         payload["command"] = cmd
-        return payload, 400 if "unknown_scenario" in str(payload.get("error", "")) else 500
+        error_text = str(payload.get("error", ""))
+        return payload, 400 if "unknown_scenario" in error_text or "unknown_scenarios" in error_text else 500
 
     if not payload:
         payload = {"ok": True}
     payload["runner"] = str(runner)
     return payload, 200
+
+
+def _demo_state_payload() -> Dict[str, Any]:
+    overlay = read_demo_overlay()
+    demo = overlay.get("demo") if isinstance(overlay.get("demo"), dict) else {}
+    presentation = overlay.get("presentation") if isinstance(overlay.get("presentation"), dict) else {}
+    epd_last = _read_json_file(EPD_LAST_RENDER_PATH)
+    epd_render = epd_last.get("render") if isinstance(epd_last, dict) and isinstance(epd_last.get("render"), dict) else {}
+    active = bool(overlay.get("active"))
+    return {
+        "ok": True,
+        "active": active,
+        "scenario_id": str(overlay.get("scenario_id") or ""),
+        "title": str(overlay.get("title") or presentation.get("title") or demo.get("title") or "idle"),
+        "summary": str(overlay.get("summary") or presentation.get("summary") or demo.get("summary") or ""),
+        "attack_label": str(overlay.get("attack_label") or demo.get("attack_label") or presentation.get("attack_label") or ""),
+        "description": str(overlay.get("description") or ""),
+        "event_count": int(overlay.get("event_count") or 0),
+        "action": str(overlay.get("action") or "observe"),
+        "control_mode": str(overlay.get("control_mode") or "none"),
+        "reason": str(overlay.get("reason") or ""),
+        "operator_wording": str(overlay.get("operator_wording") or ""),
+        "talk_track": str(demo.get("talk_track") or ""),
+        "next_checks": list(overlay.get("next_checks") or []),
+        "chosen_evidence_ids": list(overlay.get("chosen_evidence_ids") or []),
+        "rejected_alternatives": list(overlay.get("rejected_alternatives") or []),
+        "decision_path": dict(demo.get("decision_path") or {}) if isinstance(demo.get("decision_path"), dict) else {},
+        "proofs": dict(demo.get("proofs") or {}) if isinstance(demo.get("proofs"), dict) else {},
+        "epd": {
+            "ts": str(epd_last.get("ts") or ""),
+            "state": str(epd_render.get("state") or ""),
+            "mode_label": str(epd_render.get("mode_label") or ""),
+            "risk_status": str(epd_render.get("risk_status") or ""),
+            "ssid": str(epd_render.get("ssid") or ""),
+            "suspicion": _as_int(epd_render.get("suspicion"), 0),
+        },
+    }
 
 
 def _assist_rationale(ai_result: Dict[str, Any]) -> List[str]:
@@ -4612,7 +4651,7 @@ def api_triage_audit():
 @app.route("/api/demo/scenarios", methods=["GET"])
 @require_token()
 def api_demo_scenarios():
-    payload, code = _run_demo_runner("list")
+    payload, code = _run_demo_runner("list", "--format", "json")
     return jsonify(payload), code
 
 
@@ -4640,6 +4679,12 @@ def api_demo_capabilities():
             "boundary": DemoScenarioRunner.capability_boundary(),
         }
     ), 200
+
+
+@app.route("/api/demo/state", methods=["GET"])
+@require_token()
+def api_demo_state():
+    return jsonify(_demo_state_payload()), 200
 
 
 @app.route("/api/demo/explanation/latest", methods=["GET"])
@@ -4677,11 +4722,28 @@ def api_demo_run(scenario_id: str):
     scenario = str(scenario_id or "").strip()
     if not scenario:
         return jsonify({"ok": False, "error": "scenario_id is required"}), 400
-    payload, code = _run_demo_runner("run", scenario)
-    if code == 200 and isinstance(payload, dict) and payload.get("ok") and isinstance(payload.get("result"), dict):
-        overlay = build_demo_overlay(payload["result"])
-        write_demo_overlay(overlay)
-        payload["overlay"] = overlay
+    payload, code = _run_demo_runner("run", scenario, "--format", "json", "--apply-overlay")
+    return jsonify(payload), code
+
+
+@app.route("/api/demo/flow", methods=["POST"])
+@require_token()
+def api_demo_flow():
+    body = request.get_json(silent=True) or {}
+    cmd = ["flow", "--format", "json"]
+    scenarios = body.get("scenarios")
+    if isinstance(scenarios, list):
+        cleaned = [str(item).strip() for item in scenarios if str(item).strip()]
+        if cleaned:
+            cmd.extend(["--scenarios", ",".join(cleaned)])
+    hold_sec_raw = body.get("hold_sec")
+    if hold_sec_raw not in (None, ""):
+        cmd.extend(["--hold-sec", str(_as_int(hold_sec_raw, 0))])
+    if body.get("keep_final"):
+        cmd.append("--keep-final")
+    if body.get("refresh_epd"):
+        cmd.append("--refresh-epd")
+    payload, code = _run_demo_runner(*cmd)
     return jsonify(payload), code
 
 

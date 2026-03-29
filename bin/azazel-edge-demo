@@ -1,62 +1,241 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export PYTHONPATH="${ROOT_DIR}/py:${PYTHONPATH:-}"
-
-exec python3 - "$@" <<'PY'
+#!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import sys
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, List
 
-from azazel_edge.demo import DemoScenarioPack, DemoScenarioRunner
+ROOT_DIR = Path(__file__).resolve().parents[1]
+PY_ROOT = ROOT_DIR / "py"
+if str(PY_ROOT) not in sys.path:
+    sys.path.insert(0, str(PY_ROOT))
+os.environ["PYTHONPATH"] = str(PY_ROOT) + (f":{os.environ['PYTHONPATH']}" if os.environ.get("PYTHONPATH") else "")
+
+from azazel_edge.demo import DemoPlaybackRunner, scenario_summary
 
 
-def _usage() -> int:
-    print("Usage: azazel-edge-demo list | azazel-edge-demo run <scenario_id>", file=sys.stderr)
-    return 2
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="azazel-edge-demo",
+        description="Run deterministic Azazel-Edge demo scenarios.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    list_parser = sub.add_parser("list", help="List demo scenarios")
+    list_parser.add_argument("--format", choices=("json", "text"), default="json")
+
+    run_parser = sub.add_parser("run", help="Run a single demo scenario")
+    run_parser.add_argument("scenario_id")
+    run_parser.add_argument("--apply-overlay", action="store_true", help="Write the replay result into demo overlay state")
+    run_parser.add_argument("--refresh-epd", action="store_true", help="Trigger an immediate EPD refresh after overlay change")
+    run_parser.add_argument("--format", choices=("json", "text"), default="json")
+    run_parser.add_argument("--state-out", help="Write a compact state JSON to this path")
+
+    flow_parser = sub.add_parser("flow", help="Run multiple demo scenarios in sequence")
+    flow_parser.add_argument("--hold-sec", type=int, default=None, help="Override per-scenario hold seconds")
+    flow_parser.add_argument("--keep-final", action="store_true", help="Keep the last overlay active instead of clearing it")
+    flow_parser.add_argument("--refresh-epd", action="store_true", help="Trigger EPD refresh after each overlay change")
+    flow_parser.add_argument("--format", choices=("json", "text"), default="json")
+    flow_parser.add_argument("--state-out", help="Write a compact flow state JSON to this path")
+    flow_parser.add_argument("--scenarios", help="Comma-separated scenario list in playback order")
+
+    clear_parser = sub.add_parser("clear", help="Clear the demo overlay")
+    clear_parser.add_argument("--refresh-epd", action="store_true", help="Trigger an immediate EPD refresh after clearing")
+    clear_parser.add_argument("--format", choices=("json", "text"), default="json")
+    clear_parser.add_argument("--state-out", help="Write a compact clear state JSON to this path")
+
+    menu_parser = sub.add_parser("menu", help="Interactive demo menu")
+    menu_parser.add_argument("--refresh-epd", action="store_true", help="Trigger EPD refresh after each selected action")
+    menu_parser.add_argument("--state-out", help="Write the last selected compact state JSON to this path")
+    return parser
 
 
-def _list_payload() -> Dict[str, Any]:
-    pack = DemoScenarioPack().scenarios()
-    items = []
-    for scenario_id, item in sorted(pack.items()):
-        items.append(
-            {
-                "scenario_id": scenario_id,
-                "description": item.get("description", ""),
-                "event_count": len(item.get("events", [])),
+def _write_state_out(path_value: str | None, payload: Dict[str, Any]) -> None:
+    if not path_value:
+        return
+    path = Path(path_value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _print_text(payload: Dict[str, Any], command: str) -> None:
+    if command == "list":
+        for item in payload.get("items", []):
+            print(
+                f"{item.get('scenario_id')} | title={item.get('title')} | "
+                f"attack={item.get('attack_label') or '-'} | hold={item.get('default_hold_sec')}s"
+            )
+        return
+
+    if command == "run":
+        summary = scenario_summary(payload)
+        print(f"SCENARIO: {summary['scenario_id']}")
+        print(f"TITLE: {summary['title']}")
+        print(f"ATTACK: {summary['attack_label'] or '-'}")
+        print(f"ACTION: {summary['action'] or '-'}")
+        print(f"CONTROL: {summary['control_mode'] or '-'}")
+        print(f"SUMMARY: {summary['summary'] or '-'}")
+        print(f"TALK: {summary['talk_track'] or summary['operator_wording'] or '-'}")
+        print(f"OVERLAY: {'written' if summary['overlay_written'] else 'not-written'}")
+        return
+
+    if command == "flow":
+        print("DEMO FLOW")
+        for step in payload.get("scenarios", []):
+            print(
+                f"{step.get('index')}. {step.get('scenario_id')} | title={step.get('title')} | "
+                f"action={step.get('action') or '-'} | hold={step.get('hold_sec')}s"
+            )
+        print(f"KEEP_FINAL: {bool(payload.get('keep_final'))}")
+        print(f"OVERLAY_CLEARED: {bool(payload.get('overlay_cleared'))}")
+        return
+
+    if command == "clear":
+        print("CLEARED")
+
+
+def _menu_options(runner: DemoPlaybackRunner) -> List[tuple[str, str, str]]:
+    options = []
+    for index, item in enumerate(runner.list_items(), start=1):
+        label = str(item.get("title") or item.get("scenario_id") or f"scenario-{index}")
+        options.append((str(index), str(item.get("scenario_id") or ""), label))
+    options.append((str(len(options) + 1), "flow", "Run full demo flow"))
+    options.append((str(len(options) + 1), "clear", "Clear all demo state"))
+    options.append(("0", "exit", "Exit"))
+    return options
+
+
+def _render_menu(runner: DemoPlaybackRunner) -> None:
+    print("AZAZEL-EDGE DEMO MENU")
+    for key, _action, label in _menu_options(runner):
+        print(f"{key}. {label}")
+
+
+def _menu_loop(
+    runner: DemoPlaybackRunner,
+    *,
+    refresh_epd: bool = False,
+    state_out: str | None = None,
+) -> int:
+    while True:
+        _render_menu(runner)
+        try:
+            choice = input("Select action: ").strip()
+        except EOFError:
+            return 0
+        selected = next((item for item in _menu_options(runner) if item[0] == choice), None)
+        if not selected:
+            print("Unknown selection")
+            continue
+        _key, action, _label = selected
+        if action == "exit":
+            print("EXIT")
+            return 0
+        if action == "flow":
+            payload = runner.run_flow(refresh_epd=refresh_epd, keep_final=True)
+            summary = {
+                "ok": bool(payload.get("ok")),
+                "mode": "demo_flow",
+                "scenarios": payload.get("scenarios", []),
+                "keep_final": bool(payload.get("keep_final")),
+                "overlay_cleared": bool(payload.get("overlay_cleared")),
             }
-        )
-    return {"ok": True, "items": items}
+            _write_state_out(state_out, summary)
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+            continue
+        if action == "clear":
+            payload = runner.clear(refresh_epd=refresh_epd)
+            summary = {"ok": bool(payload.get("ok")), "cleared": bool(payload.get("cleared"))}
+            _write_state_out(state_out, summary)
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+            continue
+        payload = runner.run_scenario(action, apply_overlay=True, refresh_epd=refresh_epd)
+        summary = scenario_summary(payload)
+        _write_state_out(state_out, summary)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
-        return _usage()
+    parser = build_parser()
+    args = parser.parse_args(argv[1:])
+    runner = DemoPlaybackRunner()
 
-    command = str(argv[1]).strip().lower()
-    if command == "list":
-        print(json.dumps(_list_payload(), ensure_ascii=False, indent=2))
+    if args.command == "list":
+        payload = {"ok": True, "items": runner.list_items()}
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            _print_text(payload, "list")
         return 0
 
-    if command == "run":
-        if len(argv) < 3:
-            return _usage()
-        scenario_id = str(argv[2]).strip()
+    if args.command == "run":
         try:
-            result = DemoScenarioRunner().run(scenario_id)
+            payload = runner.run_scenario(
+                args.scenario_id,
+                apply_overlay=bool(args.apply_overlay),
+                refresh_epd=bool(args.refresh_epd),
+            )
         except KeyError as exc:
             print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
             return 1
-        print(json.dumps({"ok": True, "result": result}, ensure_ascii=False, indent=2))
+        summary = scenario_summary(payload)
+        _write_state_out(args.state_out, summary)
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            _print_text(payload, "run")
         return 0
 
-    return _usage()
+    if args.command == "flow":
+        requested = (
+            [item.strip() for item in str(args.scenarios or "").split(",") if item.strip()]
+            if args.scenarios
+            else runner.stage_order()
+        )
+        known = set(runner.stage_order())
+        unknown = [item for item in requested if item not in known]
+        if unknown:
+            print(json.dumps({"ok": False, "error": f"unknown_scenarios:{','.join(unknown)}"}), file=sys.stderr)
+            return 2
+        payload = runner.run_flow(
+            scenario_ids=requested,
+            hold_sec=args.hold_sec,
+            apply_overlay=True,
+            refresh_epd=bool(args.refresh_epd),
+            keep_final=bool(args.keep_final),
+        )
+        summary = {
+            "ok": bool(payload.get("ok")),
+            "mode": "demo_flow",
+            "scenarios": payload.get("scenarios", []),
+            "keep_final": bool(payload.get("keep_final")),
+            "overlay_cleared": bool(payload.get("overlay_cleared")),
+        }
+        _write_state_out(args.state_out, summary)
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            _print_text(payload, "flow")
+        return 0
+
+    if args.command == "clear":
+        payload = runner.clear(refresh_epd=bool(args.refresh_epd))
+        _write_state_out(args.state_out, {"ok": True, "cleared": True})
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            _print_text(payload, "clear")
+        return 0
+
+    if args.command == "menu":
+        return _menu_loop(runner, refresh_epd=bool(args.refresh_epd), state_out=args.state_out)
+
+    parser.print_usage(sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
-PY

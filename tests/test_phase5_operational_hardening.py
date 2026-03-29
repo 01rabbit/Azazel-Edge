@@ -204,6 +204,47 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
         self.assertEqual(int(desired["suspicion"]), 67)
         self.assertEqual(desired["risk_status"], "SAFE")
 
+    def test_epd_demo_overlay_observe_raises_warning(self) -> None:
+        orig_read_demo_overlay = epd_refresh.read_demo_overlay
+        orig_is_demo_overlay_active = epd_refresh.is_demo_overlay_active
+        try:
+            epd_refresh.read_demo_overlay = lambda: {
+                "active": True,
+                "scenario_id": "noc_degraded_demo",
+                "action": "notify",
+                "soc_suspicion": 0,
+                "demo": {"title": "NOC degradation path"},
+            }
+            epd_refresh.is_demo_overlay_active = lambda overlay=None: True
+            desired = epd_refresh._desired_render_spec({"mode": "shield", "ssid": "AzazelNet", "upstream_if": "wlan0"})
+        finally:
+            epd_refresh.read_demo_overlay = orig_read_demo_overlay
+            epd_refresh.is_demo_overlay_active = orig_is_demo_overlay_active
+
+        self.assertEqual(desired["state"], "warning")
+        self.assertEqual(desired["msg"], "CHECK DEMO")
+
+    def test_epd_demo_overlay_throttle_raises_danger(self) -> None:
+        orig_read_demo_overlay = epd_refresh.read_demo_overlay
+        orig_is_demo_overlay_active = epd_refresh.is_demo_overlay_active
+        try:
+            epd_refresh.read_demo_overlay = lambda: {
+                "active": True,
+                "scenario_id": "mixed_correlation_demo",
+                "action": "throttle",
+                "soc_suspicion": 97,
+                "demo": {"attack_label": "SSH Brute Force"},
+            }
+            epd_refresh.is_demo_overlay_active = lambda overlay=None: True
+            desired = epd_refresh._desired_render_spec({"mode": "shield", "ssid": "AzazelNet", "upstream_if": "wlan0"})
+        finally:
+            epd_refresh.read_demo_overlay = orig_read_demo_overlay
+            epd_refresh.is_demo_overlay_active = orig_is_demo_overlay_active
+
+        self.assertEqual(desired["state"], "danger")
+        self.assertEqual(desired["msg"], "CHECK DEMO")
+        self.assertEqual(int(desired["suspicion"]), 97)
+
     def test_epd_normal_render_spec_keeps_ethernet_uplink(self) -> None:
         runtime_snapshot = Path(self.tmp.name) / "runtime_snapshot_eth.json"
         runtime_snapshot.write_text(
@@ -256,7 +297,7 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
 
         calls = []
         orig_run = epd_refresh.subprocess.run
-        epd_refresh.subprocess.run = lambda cmd, timeout=0, check=False: calls.append(cmd)  # type: ignore[assignment]
+        epd_refresh.subprocess.run = lambda cmd, **kwargs: calls.append(cmd)  # type: ignore[assignment]
         old_root = os.environ.get("AZAZEL_ROOT")
         os.environ["AZAZEL_ROOT"] = str(root)
         try:
@@ -304,7 +345,7 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
 
         calls = []
         orig_run = epd_refresh.subprocess.run
-        epd_refresh.subprocess.run = lambda cmd, timeout=0, check=False: calls.append(cmd)  # type: ignore[assignment]
+        epd_refresh.subprocess.run = lambda cmd, **kwargs: calls.append(cmd)  # type: ignore[assignment]
         old_root = os.environ.get("AZAZEL_ROOT")
         os.environ["AZAZEL_ROOT"] = str(root)
         try:
@@ -319,6 +360,49 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
         self.assertTrue(calls)
         self.assertIn("--uplink-type", calls[0])
         self.assertIn("ethernet", calls[0])
+
+    def test_epd_main_passes_suspicion_for_demo_danger_render(self) -> None:
+        root = Path(self.tmp.name) / "repo_danger"
+        py_dir = root / "py"
+        py_dir.mkdir(parents=True, exist_ok=True)
+        edge_script = py_dir / "azazel_edge_epd.py"
+        edge_script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+        epd_state = Path(self.tmp.name) / "epd_state_danger.json"
+        epd_state.write_text(json.dumps({"mode": "shield", "ssid": "AzazelNet", "upstream_if": "wlan0"}), encoding="utf-8")
+        epd_last = Path(self.tmp.name) / "epd_last_render_danger.json"
+
+        epd_refresh.EPD_STATE = epd_state
+        epd_refresh.EPD_LAST_RENDER = epd_last
+
+        calls = []
+        orig_run = epd_refresh.subprocess.run
+        orig_read_demo_overlay = epd_refresh.read_demo_overlay
+        orig_is_demo_overlay_active = epd_refresh.is_demo_overlay_active
+        epd_refresh.subprocess.run = lambda cmd, **kwargs: calls.append(cmd)  # type: ignore[assignment]
+        epd_refresh.read_demo_overlay = lambda: {
+            "active": True,
+            "scenario_id": "mixed_correlation_demo",
+            "action": "throttle",
+            "soc_suspicion": 97,
+        }
+        epd_refresh.is_demo_overlay_active = lambda overlay=None: True
+        old_root = os.environ.get("AZAZEL_ROOT")
+        os.environ["AZAZEL_ROOT"] = str(root)
+        try:
+            rc = epd_refresh.main()
+        finally:
+            epd_refresh.subprocess.run = orig_run  # type: ignore[assignment]
+            epd_refresh.read_demo_overlay = orig_read_demo_overlay
+            epd_refresh.is_demo_overlay_active = orig_is_demo_overlay_active
+            if old_root is None:
+                os.environ.pop("AZAZEL_ROOT", None)
+            else:
+                os.environ["AZAZEL_ROOT"] = old_root
+        self.assertEqual(rc, 0)
+        self.assertTrue(calls)
+        self.assertIn("--suspicion", calls[0])
+        self.assertIn("97", calls[0])
 
 
     def test_correlation_escalation_routes_low_risk_event_to_llm(self) -> None:

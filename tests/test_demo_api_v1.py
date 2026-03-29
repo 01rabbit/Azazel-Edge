@@ -18,6 +18,7 @@ class DemoApiV1Tests(unittest.TestCase):
             "load_token": webapp.load_token,
             "_run_demo_runner": webapp._run_demo_runner,
             "STATE_PATH": webapp.STATE_PATH,
+            "EPD_LAST_RENDER_PATH": webapp.EPD_LAST_RENDER_PATH,
             "read_demo_overlay": webapp.read_demo_overlay,
             "write_demo_overlay": webapp.write_demo_overlay,
             "clear_demo_overlay": webapp.clear_demo_overlay,
@@ -27,6 +28,7 @@ class DemoApiV1Tests(unittest.TestCase):
         webapp.load_token = lambda: None
         webapp.STATE_PATH = root / "ui_snapshot.json"
         webapp.STATE_PATH.write_text(json.dumps({"ok": True}), encoding="utf-8")
+        webapp.EPD_LAST_RENDER_PATH = root / "epd_last_render.json"
         self.overlay_path = root / "demo_overlay.json"
         webapp.read_demo_overlay = lambda: read_demo_overlay(self.overlay_path)
         webapp.write_demo_overlay = lambda payload: write_demo_overlay(payload, self.overlay_path)
@@ -37,6 +39,7 @@ class DemoApiV1Tests(unittest.TestCase):
         webapp.load_token = self._orig["load_token"]
         webapp._run_demo_runner = self._orig["_run_demo_runner"]
         webapp.STATE_PATH = self._orig["STATE_PATH"]
+        webapp.EPD_LAST_RENDER_PATH = self._orig["EPD_LAST_RENDER_PATH"]
         webapp.read_demo_overlay = self._orig["read_demo_overlay"]
         webapp.write_demo_overlay = self._orig["write_demo_overlay"]
         webapp.clear_demo_overlay = self._orig["clear_demo_overlay"]
@@ -61,22 +64,29 @@ class DemoApiV1Tests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["scenario_id"], "mixed_correlation_demo")
 
     def test_run_scenario_endpoint(self) -> None:
-        webapp._run_demo_runner = lambda *args: (
-            {
-                "ok": True,
-                "result": {
-                    "scenario_id": "noc_degraded_demo",
-                    "event_count": 3,
-                    "arbiter": {"action": "notify"},
+        calls = {}
+
+        def fake_runner(*args):
+            calls["args"] = args
+            return (
+                {
+                    "ok": True,
+                    "result": {
+                        "scenario_id": "noc_degraded_demo",
+                        "event_count": 3,
+                        "arbiter": {"action": "notify"},
+                    },
                 },
-            },
-            200,
-        )
+                200,
+            )
+
+        webapp._run_demo_runner = fake_runner
         response = self.client.post("/api/demo/run/noc_degraded_demo")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["result"]["arbiter"]["action"], "notify")
+        self.assertEqual(calls["args"], ("run", "noc_degraded_demo", "--format", "json", "--apply-overlay"))
 
     def test_run_unknown_scenario_bubbles_error(self) -> None:
         webapp._run_demo_runner = lambda *args: (
@@ -89,31 +99,87 @@ class DemoApiV1Tests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("unknown_scenario", payload["error"])
 
-    def test_run_scenario_persists_overlay(self) -> None:
-        written = {}
-        webapp._run_demo_runner = lambda *args: (
-            {
-                "ok": True,
-                "result": {
-                    "scenario_id": "mixed_correlation_demo",
-                    "description": "Cross-source demo",
-                    "event_count": 3,
-                    "noc": {"summary": {"status": "degraded"}},
-                    "soc": {"summary": {"status": "critical"}, "suspicion": {"score": 97}},
-                    "arbiter": {"action": "throttle", "reason": "correlated_signal"},
-                    "explanation": {"evidence_ids": ["soc-1"], "operator_wording": "demo wording"},
+    def test_run_scenario_endpoint_requests_overlay_write(self) -> None:
+        calls = {}
+
+        def fake_runner(*args):
+            calls["args"] = args
+            return (
+                {
+                    "ok": True,
+                    "result": {
+                        "scenario_id": "mixed_correlation_demo",
+                        "event_count": 3,
+                        "arbiter": {"action": "throttle"},
+                    },
+                    "overlay": {"active": True, "scenario_id": "mixed_correlation_demo", "action": "throttle"},
                 },
-            },
-            200,
-        )
-        webapp.build_demo_overlay = lambda result: {"active": True, "scenario_id": result["scenario_id"], "action": "throttle"}
-        webapp.write_demo_overlay = lambda payload: written.update(payload) or Path("/tmp/demo_overlay.json")
+                200,
+            )
+
+        webapp._run_demo_runner = fake_runner
         response = self.client.post("/api/demo/run/mixed_correlation_demo")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["overlay"]["active"])
-        self.assertEqual(written["scenario_id"], "mixed_correlation_demo")
+        self.assertEqual(calls["args"], ("run", "mixed_correlation_demo", "--format", "json", "--apply-overlay"))
+
+    def test_demo_state_endpoint_returns_compact_overlay(self) -> None:
+        overlay = build_demo_overlay(
+            {
+                "scenario_id": "mixed_correlation_demo",
+                "description": "Cross-source demo",
+                "event_count": 3,
+                "execution": {"mode": "deterministic_replay", "ai_used": False, "offline_demo": True},
+                "arbiter": {"action": "throttle", "reason": "correlated_signal", "control_mode": "route_preference"},
+                "explanation": {"operator_wording": "demo wording", "evidence_ids": ["soc-1"], "next_checks": ["review sigma"]},
+                "demo": {
+                    "title": "Correlation with Sigma and YARA support",
+                    "summary": "Cross-source evidence is reinforced by helper hits.",
+                    "attack_label": "SSH Brute Force",
+                    "talk_track": "demo talk track",
+                    "decision_path": {"final_policy": {"headline": "FINAL POLICY: THROTTLE"}},
+                    "proofs": {"policy": {"status": "active", "headline": "BOUNDED CONTROL SELECTED"}},
+                },
+                "presentation": {"title": "Correlation with Sigma and YARA support", "summary": "Cross-source evidence is reinforced by helper hits."},
+            }
+        )
+        write_demo_overlay(overlay, self.overlay_path)
+        webapp.EPD_LAST_RENDER_PATH.write_text(
+            json.dumps({"ts": "2026-03-29T12:00:00", "render": {"state": "danger", "risk_status": "CHECKING", "suspicion": 97}}),
+            encoding="utf-8",
+        )
+        response = self.client.get("/api/demo/state")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["active"])
+        self.assertEqual(payload["title"], "Correlation with Sigma and YARA support")
+        self.assertEqual(payload["attack_label"], "SSH Brute Force")
+        self.assertEqual(payload["decision_path"]["final_policy"]["headline"], "FINAL POLICY: THROTTLE")
+        self.assertEqual(payload["proofs"]["policy"]["status"], "active")
+        self.assertEqual(payload["epd"]["state"], "danger")
+
+    def test_demo_flow_endpoint_passes_requested_options(self) -> None:
+        calls = {}
+
+        def fake_runner(*args):
+            calls["args"] = args
+            return ({"ok": True, "mode": "demo_flow", "scenarios": []}, 200)
+
+        webapp._run_demo_runner = fake_runner
+        response = self.client.post(
+            "/api/demo/flow",
+            json={"scenarios": ["soc_redirect_demo", "mixed_correlation_demo"], "hold_sec": 0, "keep_final": True},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            calls["args"],
+            ("flow", "--format", "json", "--scenarios", "soc_redirect_demo,mixed_correlation_demo", "--hold-sec", "0", "--keep-final"),
+        )
 
     def test_clear_overlay_endpoint(self) -> None:
         cleared = {"done": False}

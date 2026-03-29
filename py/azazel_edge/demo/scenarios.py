@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict, List
 
 from azazel_edge.arbiter import ActionArbiter
@@ -12,6 +13,47 @@ class DemoScenarioPack:
         return {
             'soc_redirect_demo': {
                 'description': 'High-confidence SOC path leading to redirect-capable decision.',
+                'demo': {
+                    'title': 'High-confidence SOC path',
+                    'summary': 'Cross-source SOC evidence promotes bounded control and a clear explanation trail.',
+                    'attack_label': 'DNS C2 Beacon',
+                    'default_hold_sec': 8,
+                    'talk_track': 'Suricata and flow evidence raise a high-confidence SOC signal, so the deterministic demo path shows why the arbiter selects reversible control.',
+                    'decision_path': {
+                        'first_pass': {
+                            'headline': 'SOC SIGNAL: CRITICAL',
+                            'detail': 'The Suricata alert and failed TLS flow align on the same source / destination pair.',
+                        },
+                        'second_pass': {
+                            'headline': 'CORRELATION SUPPORT ACTIVE',
+                            'detail': 'Cross-source evidence keeps the case on the SOC path before the arbiter selects control.',
+                        },
+                        'final_policy': {
+                            'headline': 'FINAL POLICY: THROTTLE',
+                            'detail': 'The suspicious flow moves into reversible bounded control instead of immediate isolation.',
+                        },
+                    },
+                    'proofs': {
+                        'detection': {
+                            'status': 'active',
+                            'headline': 'SURICATA ALERT ACTIVE',
+                            'detail': 'The core trigger comes from Suricata and is reinforced by aligned flow evidence.',
+                            'evidence': 'sid=210001 | flow anomaly support',
+                        },
+                        'control': {
+                            'status': 'active',
+                            'headline': 'REVERSIBLE CONTROL READY',
+                            'detail': 'The arbiter keeps the response bounded and auditable.',
+                            'evidence': 'action=throttle | mode=route_preference',
+                        },
+                        'explanation': {
+                            'status': 'active',
+                            'headline': 'EXPLANATION PAYLOAD READY',
+                            'detail': 'The operator wording and next checks are available for replay surfaces.',
+                            'evidence': 'decision explanation emitted for demo overlay',
+                        },
+                    },
+                },
                 'events': [
                     {'event_id': 'soc-1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.5->192.168.40.10:443/TCP', 'severity': 88, 'confidence': 0.92, 'attrs': {'sid': 210001, 'attack_type': 'DNS C2 Beacon', 'category': 'Potentially Bad Traffic', 'target_port': 443, 'risk_score': 88, 'confidence_raw': 92, 'src_ip': '10.0.0.5', 'dst_ip': '192.168.40.10'}},
                     {'event_id': 'flow-1', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.0.5->192.168.40.10:443/TCP', 'severity': 45, 'confidence': 0.70, 'attrs': {'src_ip': '10.0.0.5', 'dst_ip': '192.168.40.10', 'dst_port': 443, 'flow_state': 'failed', 'app_proto': 'tls'}},
@@ -20,6 +62,47 @@ class DemoScenarioPack:
             },
             'noc_degraded_demo': {
                 'description': 'NOC degradation path with poor path health and degraded device state.',
+                'demo': {
+                    'title': 'NOC degradation path',
+                    'summary': 'Path and device health degrade without a dominant SOC threat signal.',
+                    'attack_label': 'Path / Service Degradation',
+                    'default_hold_sec': 8,
+                    'talk_track': 'This scenario keeps the focus on NOC evidence, showing that Azazel-Edge can separate service-health degradation from a primary attack response.',
+                    'decision_path': {
+                        'first_pass': {
+                            'headline': 'NOC HEALTH: CRITICAL',
+                            'detail': 'ICMP reachability, interface state, and system telemetry all degrade at once.',
+                        },
+                        'second_pass': {
+                            'headline': 'SOC THREAT SIGNAL: LOW',
+                            'detail': 'There is no comparable SOC signal, so the arbiter avoids stronger traffic control.',
+                        },
+                        'final_policy': {
+                            'headline': 'FINAL POLICY: NOTIFY',
+                            'detail': 'The operator is prompted to investigate the path and device state before escalation.',
+                        },
+                    },
+                    'proofs': {
+                        'availability': {
+                            'status': 'critical',
+                            'headline': 'PATH HEALTH DEGRADED',
+                            'detail': 'Reachability and interface evidence point to an uplink or path problem.',
+                            'evidence': 'icmp unreachable | iface eth1 down',
+                        },
+                        'device': {
+                            'status': 'critical',
+                            'headline': 'DEVICE HEALTH DEGRADED',
+                            'detail': 'Local resource pressure reinforces the NOC case.',
+                            'evidence': 'cpu=95% | mem=88% | temp=84C',
+                        },
+                        'policy': {
+                            'status': 'notify',
+                            'headline': 'HUMAN LOOP ACTIVE',
+                            'detail': 'The chosen action is operator notification instead of automatic containment.',
+                            'evidence': 'action=notify | mode=human_loop',
+                        },
+                    },
+                },
                 'events': [
                     {'event_id': 'icmp-1', 'source': 'noc_probe', 'kind': 'icmp_probe', 'subject': '192.168.40.1', 'severity': 80, 'confidence': 0.95, 'attrs': {'reachable': False}},
                     {'event_id': 'iface-1', 'source': 'noc_probe', 'kind': 'iface_stats', 'subject': 'eth1', 'severity': 70, 'confidence': 0.95, 'attrs': {'interface': 'eth1', 'operstate': 'down', 'carrier': 0}},
@@ -28,12 +111,94 @@ class DemoScenarioPack:
             },
             'mixed_correlation_demo': {
                 'description': 'Cross-source pair that demonstrates correlation, Sigma/YARA assist, and explanation payloads.',
+                'demo': {
+                    'title': 'Correlation with Sigma and YARA support',
+                    'summary': 'Cross-source evidence is reinforced by Sigma and YARA helper hits before bounded control is chosen.',
+                    'attack_label': 'SSH Brute Force',
+                    'default_hold_sec': 10,
+                    'talk_track': 'This replay shows the deterministic first pass, helper detections, and the final reversible-control decision in one compact sequence.',
+                    'decision_path': {
+                        'first_pass': {
+                            'headline': 'SSH SIGNAL: CRITICAL',
+                            'detail': 'The Suricata alert, flow summary, and syslog line line up on the same SSH service.',
+                        },
+                        'second_pass': {
+                            'headline': 'SIGMA / YARA SUPPORT',
+                            'detail': 'Helper rules strengthen confidence before the arbiter finalizes bounded control.',
+                        },
+                        'final_policy': {
+                            'headline': 'FINAL POLICY: THROTTLE',
+                            'detail': 'The suspicious flow moves into reversible control while preserving the main path.',
+                        },
+                    },
+                    'proofs': {
+                        'sigma': {
+                            'status': 'active',
+                            'headline': 'SIGMA SUPPORT ACTIVE',
+                            'detail': 'The SSH brute-force helper rule hits the Suricata evidence.',
+                            'evidence': 'sigma.ssh.bruteforce',
+                        },
+                        'yara': {
+                            'status': 'active',
+                            'headline': 'YARA SUPPORT ACTIVE',
+                            'detail': 'The sample reference aligns with the helper YARA rule.',
+                            'evidence': 'yara.loader.alpha',
+                        },
+                        'policy': {
+                            'status': 'active',
+                            'headline': 'BOUNDED CONTROL SELECTED',
+                            'detail': 'The chosen action remains reversible and audited.',
+                            'evidence': 'action=throttle | effect=traffic_shaping',
+                        },
+                    },
+                },
                 'events': [
                     {'event_id': 'soc-2', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.5->192.168.40.10:22/TCP', 'severity': 82, 'confidence': 0.88, 'attrs': {'sid': 210020, 'attack_type': 'SSH Brute Force', 'category': 'Attempted Administrator Privilege Gain', 'target_port': 22, 'risk_score': 82, 'confidence_raw': 88, 'src_ip': '10.0.0.5', 'dst_ip': '192.168.40.10', 'sample_name': 'loader_beacon_alpha'}, 'evidence_refs': ['sample:loader_beacon_alpha']},
                     {'event_id': 'flow-2', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.0.5->192.168.40.10:22/TCP', 'severity': 45, 'confidence': 0.70, 'attrs': {'src_ip': '10.0.0.5', 'dst_ip': '192.168.40.10', 'dst_port': 22, 'flow_state': 'failed', 'app_proto': 'ssh'}},
                     {'event_id': 'syslog-2', 'source': 'syslog_min', 'kind': 'syslog_line', 'subject': '10.0.0.5->192.168.40.10:22/TCP', 'severity': 60, 'confidence': 0.75, 'attrs': {'message': 'failed ssh auth burst', 'host': 'edge', 'tag': 'sshd'}},
                 ],
             },
+        }
+
+    def stage_order(self) -> List[str]:
+        return list(self.scenarios().keys())
+
+    def metadata_for(self, scenario_id: str) -> Dict[str, Any]:
+        scenario = self.scenarios().get(str(scenario_id)) or {}
+        return self._normalize_demo_metadata(str(scenario_id), scenario)
+
+    def list_items(self) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        for scenario_id, scenario in self.scenarios().items():
+            meta = self._normalize_demo_metadata(str(scenario_id), scenario)
+            items.append(
+                {
+                    'scenario_id': str(scenario_id),
+                    'title': str(meta.get('title') or scenario_id),
+                    'description': str(scenario.get('description') or ''),
+                    'summary': str(meta.get('summary') or ''),
+                    'attack_label': str(meta.get('attack_label') or ''),
+                    'default_hold_sec': int(meta.get('default_hold_sec') or 8),
+                    'event_count': len(scenario.get('events', [])),
+                }
+            )
+        return items
+
+    @staticmethod
+    def _normalize_demo_metadata(scenario_id: str, scenario: Dict[str, Any]) -> Dict[str, Any]:
+        raw = scenario.get('demo') if isinstance(scenario.get('demo'), dict) else {}
+        decision_path = raw.get('decision_path') if isinstance(raw.get('decision_path'), dict) else {}
+        proofs = raw.get('proofs') if isinstance(raw.get('proofs'), dict) else {}
+        title = str(raw.get('title') or scenario.get('description') or scenario_id)
+        summary = str(raw.get('summary') or scenario.get('description') or '')
+        return {
+            'title': title,
+            'summary': summary,
+            'attack_label': str(raw.get('attack_label') or ''),
+            'default_hold_sec': int(raw.get('default_hold_sec') or 8),
+            'talk_track': str(raw.get('talk_track') or ''),
+            'decision_path': copy.deepcopy(decision_path),
+            'proofs': copy.deepcopy(proofs),
         }
 
 
@@ -85,7 +250,8 @@ class DemoScenarioRunner:
             trace_id=f'demo:{scenario_id}',
             target='demo-target',
         )
-        return {
+        demo_meta = self.pack.metadata_for(str(scenario_id))
+        result = {
             'scenario_id': scenario_id,
             'description': scenario.get('description', ''),
             'event_count': len(events),
@@ -94,6 +260,7 @@ class DemoScenarioRunner:
                 'ai_used': False,
                 'live_telemetry': False,
                 'local_only': True,
+                'offline_demo': True,
                 'source': 'demo_scenario_pack',
             },
             'capability_boundary': self.capability_boundary(),
@@ -102,6 +269,17 @@ class DemoScenarioRunner:
             'arbiter': arbiter,
             'explanation': explanation,
         }
+        result['demo'] = {
+            **demo_meta,
+            'operator_wording': str(explanation.get('operator_wording') or ''),
+            'next_checks': list(explanation.get('next_checks') or []),
+        }
+        result['presentation'] = {
+            'title': str(demo_meta.get('title') or scenario_id),
+            'summary': str(demo_meta.get('summary') or scenario.get('description') or ''),
+            'attack_label': str(demo_meta.get('attack_label') or ''),
+        }
+        return result
 
     @classmethod
     def capability_boundary(cls) -> Dict[str, List[str]]:

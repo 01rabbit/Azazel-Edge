@@ -139,22 +139,14 @@ def _risk_status_from_snapshot() -> str:
 def _desired_render_spec(payload: Dict[str, Any]) -> Dict[str, Any]:
     overlay = read_demo_overlay()
     if is_demo_overlay_active(overlay):
-        user_state = str(overlay.get("soc_status") or "").strip().lower()
-        if user_state == "critical":
-            risk_status = "DECEPTION"
-        elif str(overlay.get("noc_status") or "").strip().lower() in ("critical", "degraded"):
-            risk_status = "LIMITED"
-        else:
-            risk_status = "CHECKING"
-        return {
-            "state": "normal",
-            "mode_label": "DEMO",
-            "ssid": str(overlay.get("scenario_id") or "demo")[:24],
-            "risk_status": risk_status,
-            "suspicion": int(overlay.get("soc_suspicion") or 0),
-            "signal": None,
-            "uplink_type": "unknown",
-        }
+        demo = overlay.get("demo") if isinstance(overlay.get("demo"), dict) else {}
+        overlay_score = _to_int_or_none(demo.get("score"))
+        overlay_suspicion = _to_int_or_none(overlay.get("soc_suspicion"))
+        danger_suspicion = max(0, min(100, overlay_score or overlay_suspicion or 0))
+        action = str(overlay.get("action") or "observe").strip().lower()
+        if action in ("observe", "notify") and danger_suspicion < 80:
+            return {"state": "warning", "msg": "CHECK DEMO"}
+        return {"state": "danger", "msg": "CHECK DEMO", "suspicion": danger_suspicion}
 
     mode = str(payload.get("mode", "")).strip().lower()
 
@@ -276,9 +268,17 @@ def main() -> int:
             cmd.extend(["--signal", str(desired.get("signal"))])
     else:
         cmd.extend(["--msg", str(desired.get("msg", "MODE"))])
+        if desired.get("state") == "danger":
+            cmd.extend(["--suspicion", str(desired.get("suspicion", 0))])
 
     try:
-        subprocess.run(cmd, timeout=45, check=False)
+        subprocess.run(
+            cmd,
+            timeout=45,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
     except Exception:
         return 0
     return 0

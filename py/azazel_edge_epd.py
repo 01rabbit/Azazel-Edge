@@ -68,6 +68,7 @@ ICON_WIFI_DISCONNECTED = "wifi_notconnected.png"  # No connection
 ICON_ETHERNET = "eth.png"            # Wired uplink
 ICON_WARNING = "warning.png"
 ICON_DANGER = "danger.png"
+ICON_SKULL = "skull.png"
 
 
 def check_icon_files(icon_dir: Path) -> None:
@@ -78,7 +79,7 @@ def check_icon_files(icon_dir: Path) -> None:
     required_icons = [
         ICON_WIFI_STRONG, ICON_WIFI_MEDIUM, ICON_WIFI_WEAK, ICON_WIFI_DISCONNECTED,
         ICON_ETHERNET,
-        ICON_WARNING, ICON_DANGER
+        ICON_WARNING, ICON_DANGER, ICON_SKULL
     ]
     missing = []
     
@@ -99,6 +100,7 @@ def check_icon_files(icon_dir: Path) -> None:
         print(f"  - {ICON_ETHERNET} (Ethernet icon - wired uplink)")
         print(f"  - {ICON_WARNING} (Warning icon for WARNING state)")
         print(f"  - {ICON_DANGER} (Danger icon for DANGER state)")
+        print(f"  - {ICON_SKULL} (Skull icon for critical DANGER state)")
         sys.exit(1)
 
 
@@ -542,7 +544,14 @@ def render_warning(msg: str, icon_dir: Path) -> Tuple[Image.Image, Image.Image]:
     return black_img, red_img
 
 
-def render_danger(msg: str, icon_dir: Path) -> Tuple[Image.Image, Image.Image]:
+def _danger_icon_name(suspicion: int = 0) -> str:
+    """Use skull for the most critical danger states."""
+    if int(suspicion) >= 90:
+        return ICON_SKULL
+    return ICON_WARNING
+
+
+def render_danger(msg: str, icon_dir: Path, suspicion: int = 0) -> Tuple[Image.Image, Image.Image]:
     """
     Render DANGER state:
     - Black background
@@ -563,8 +572,8 @@ def render_danger(msg: str, icon_dir: Path) -> Tuple[Image.Image, Image.Image]:
     # Message font is adaptive; SURICATA ALERT is forced to 2-line to avoid clipping.
     msg_max_width = EPD_WIDTH - 26
     
-    # Load warning icon
-    warning_icon_path = icon_dir / ICON_WARNING
+    # Escalate to the skull icon only for the highest-severity danger state.
+    warning_icon_path = icon_dir / _danger_icon_name(suspicion)
     warning_icon = load_icon_with_transparency(warning_icon_path, max_size=40)
     warning_icon_1bit = convert_to_1bit(warning_icon, invert=False)
     warning_icon_white = convert_to_1bit(warning_icon, invert=True)
@@ -886,8 +895,9 @@ Examples:
         black_img, red_img = render_warning(args.msg, icon_dir)
         render_spec["msg"] = str(args.msg or "")
     elif args.state == 'danger':
-        black_img, red_img = render_danger(args.msg, icon_dir)
+        black_img, red_img = render_danger(args.msg, icon_dir, args.suspicion)
         render_spec["msg"] = str(args.msg or "")
+        render_spec["suspicion"] = int(args.suspicion)
     elif args.state == 'stale':
         black_img, red_img = render_stale(args.msg, icon_dir)
         render_spec["msg"] = str(args.msg or "")

@@ -87,15 +87,22 @@ def build_demo_overlay(result: Dict[str, Any]) -> Dict[str, Any]:
     soc = result.get("soc") if isinstance(result.get("soc"), dict) else {}
     execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
     capability_boundary = result.get("capability_boundary") if isinstance(result.get("capability_boundary"), dict) else {}
+    demo = result.get("demo") if isinstance(result.get("demo"), dict) else {}
+    presentation = result.get("presentation") if isinstance(result.get("presentation"), dict) else {}
     return {
         "active": True,
         "ts": time.time(),
         "boot_id": _current_boot_id(),
         "scenario_id": str(result.get("scenario_id") or "demo"),
         "description": str(result.get("description") or ""),
+        "title": str(presentation.get("title") or demo.get("title") or result.get("scenario_id") or "demo"),
+        "summary": str(presentation.get("summary") or demo.get("summary") or result.get("description") or ""),
+        "attack_label": str(demo.get("attack_label") or presentation.get("attack_label") or ""),
         "event_count": int(result.get("event_count") or 0),
         "execution": execution,
         "capability_boundary": capability_boundary,
+        "presentation": presentation,
+        "demo": demo,
         "action": str(arbiter.get("action") or "observe"),
         "reason": str(arbiter.get("reason") or "demo_overlay"),
         "control_mode": str(arbiter.get("control_mode") or "none"),
