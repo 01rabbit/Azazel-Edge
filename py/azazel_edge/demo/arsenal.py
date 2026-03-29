@@ -190,19 +190,36 @@ class ArsenalDemoRunner:
         script = self.root_dir / "py" / "azazel_edge_epd_mode_refresh.py"
         if not script.exists():
             return {"ok": False, "error": "epd_refresh_script_missing"}
-        completed = subprocess.run(
-            [sys.executable, str(script)],
-            cwd=str(self.root_dir),
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        timeout_sec = float(os.environ.get("AZAZEL_EPD_REFRESH_TIMEOUT_SEC", "15") or "15")
+        try:
+            completed = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=str(self.root_dir),
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "ok": False,
+                "error": "epd_refresh_timeout",
+                "timeout_sec": timeout_sec,
+                "stdout": (exc.output or "").strip() if isinstance(exc.output, str) else "",
+                "stderr": (exc.stderr or "").strip() if isinstance(exc.stderr, str) else "",
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": f"epd_refresh_failed:{exc}",
+                "timeout_sec": timeout_sec,
+            }
         return {
             "ok": completed.returncode == 0,
             "exit_code": int(completed.returncode),
             "stdout": completed.stdout.strip(),
             "stderr": completed.stderr.strip(),
+            "timeout_sec": timeout_sec,
         }
 
     def _adapt_result(self, base_result: Dict[str, Any], meta: Dict[str, Any]) -> Dict[str, Any]:

@@ -139,10 +139,14 @@ def _risk_status_from_snapshot() -> str:
 def _desired_render_spec(payload: Dict[str, Any]) -> Dict[str, Any]:
     overlay = read_demo_overlay()
     if is_demo_overlay_active(overlay):
-        band = str((((overlay.get("arsenal_demo") or {}) if isinstance(overlay.get("arsenal_demo"), dict) else {}).get("band") or "")).strip().upper()
+        arsenal_demo = (overlay.get("arsenal_demo") or {}) if isinstance(overlay.get("arsenal_demo"), dict) else {}
+        band = str((arsenal_demo.get("band") or "")).strip().upper()
+        overlay_score = _to_int_or_none(arsenal_demo.get("score"))
+        overlay_suspicion = _to_int_or_none(overlay.get("soc_suspicion"))
+        danger_suspicion = max(0, min(100, overlay_score or overlay_suspicion or 0))
         if band == "WATCH":
             return {"state": "warning", "msg": "CHECK WEB"}
-        return {"state": "danger", "msg": "CHECK WEB"}
+        return {"state": "danger", "msg": "CHECK WEB", "suspicion": danger_suspicion}
 
     mode = str(payload.get("mode", "")).strip().lower()
 
@@ -264,9 +268,19 @@ def main() -> int:
             cmd.extend(["--signal", str(desired.get("signal"))])
     else:
         cmd.extend(["--msg", str(desired.get("msg", "MODE"))])
+        if desired.get("state") == "danger":
+            cmd.extend(["--suspicion", str(desired.get("suspicion", 0))])
 
     try:
-        subprocess.run(cmd, timeout=45, check=False)
+        # Keep renderer chatter off the caller's terminal; higher-level callers
+        # only care whether the refresh attempt completed.
+        subprocess.run(
+            cmd,
+            timeout=45,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
     except Exception:
         return 0
     return 0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -100,6 +101,23 @@ class ArsenalDemoRunnerV1Tests(unittest.TestCase):
         self.assertEqual(calls, ['arsenal_low_watch', 'arsenal_ollama_review', 'arsenal_decoy_redirect'])
         self.assertEqual(len(payload['mattermost_notifications']), 3)
         self.assertTrue(all(item.get('ok') for item in payload['mattermost_notifications']))
+
+    def test_refresh_epd_timeout_is_non_fatal(self) -> None:
+        import azazel_edge.demo.arsenal as arsenal_mod
+
+        original_run = arsenal_mod.subprocess.run
+        arsenal_mod.subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get('timeout', 15))
+        )  # type: ignore[assignment]
+        try:
+            payload = self.runner.run_stage('arsenal_low_watch', apply_overlay=True, refresh_epd=True)
+        finally:
+            arsenal_mod.subprocess.run = original_run  # type: ignore[assignment]
+
+        self.assertTrue(payload['ok'])
+        self.assertTrue(payload['overlay_written'])
+        self.assertFalse(payload['epd_refresh']['ok'])
+        self.assertEqual(payload['epd_refresh']['error'], 'epd_refresh_timeout')
 
     def test_notification_message_uses_arsenal_demo_url(self) -> None:
         import os
