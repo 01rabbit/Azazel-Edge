@@ -82,6 +82,33 @@ make run-discovery
 
 `arp-scan` must be installed on the host OS for real network discovery runs.
 
+On Debian-based systems:
+
+```bash
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y arp-scan
+```
+
+If your active LAN interface is not `eth0`, override it at runtime:
+
+```bash
+sudo env AZAZEL_TOPO_LITE_INTERFACE=eth1 PYTHONPATH=. python3 scripts/run_discovery.py
+```
+
+Run the discovery scheduler in one-shot mode:
+
+```bash
+sudo env AZAZEL_TOPO_LITE_INTERFACE=eth1 \
+AZAZEL_TOPO_LITE_SCHEDULER_MAX_RUNS=1 \
+PYTHONPATH=. python3 scripts/run_scheduler.py
+```
+
+Run the limited TCP probe after discovery:
+
+```bash
+PYTHONPATH=. python3 scripts/run_probe.py
+```
+
 ## Logs
 
 The scaffold writes JSONL logs by default:
@@ -104,5 +131,5 @@ make init-db
 - This scaffold is intentionally isolated from the existing Azazel-Edge web,
   control, and installer stack.
 - The workspace now includes a validated config loader, SQLite schema
-  initializer, a minimal repository layer, and an ARP discovery runner for
-  `#114`, `#112`, `#115`, and `#116`.
+  initializer, a minimal repository layer, an ARP discovery runner, and a
+  scheduler entrypoint for `#114`, `#112`, `#115`, `#116`, and `#117`.

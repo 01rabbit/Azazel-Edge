@@ -23,6 +23,12 @@ class ScanIntervals:
 
 
 @dataclass(slots=True)
+class ProbeConfig:
+    timeout_seconds: int = 2
+    concurrency: int = 32
+
+
+@dataclass(slots=True)
 class NotificationConfig:
     enabled: bool = False
     provider: str = "ntfy"
@@ -60,6 +66,7 @@ class TopoLiteConfig:
     database_path: str = "topo_lite.sqlite3"
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     scan_intervals: ScanIntervals = field(default_factory=ScanIntervals)
+    probe: ProbeConfig = field(default_factory=ProbeConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
     retention_period: RetentionConfig = field(default_factory=RetentionConfig)
@@ -116,6 +123,9 @@ def validate_config(config: TopoLiteConfig) -> None:
     for name, value in asdict(config.scan_intervals).items():
         if value <= 0:
             raise ValidationError(f"scan_intervals.{name} must be greater than zero")
+    for name, value in asdict(config.probe).items():
+        if value <= 0:
+            raise ValidationError(f"probe.{name} must be greater than zero")
     for name, value in asdict(config.retention_period).items():
         if value <= 0:
             raise ValidationError(f"retention_period.{name} must be greater than zero")
@@ -133,6 +143,7 @@ def _dict_to_config(data: dict[str, Any]) -> TopoLiteConfig:
         database_path=str(data["database_path"]),
         logging=LoggingConfig(**data["logging"]),
         scan_intervals=ScanIntervals(**data["scan_intervals"]),
+        probe=ProbeConfig(**data["probe"]),
         notification=NotificationConfig(**data["notification"]),
         auth=AuthConfig(**data["auth"]),
         retention_period=RetentionConfig(**data["retention_period"]),
@@ -178,6 +189,8 @@ def _apply_env_overrides(base: dict[str, Any], env: Mapping[str, str]) -> None:
         "AZAZEL_TOPO_LITE_DISCOVERY_INTERVAL_SECONDS": (("scan_intervals", "discovery_seconds"), int),
         "AZAZEL_TOPO_LITE_PROBE_INTERVAL_SECONDS": (("scan_intervals", "probe_seconds"), int),
         "AZAZEL_TOPO_LITE_DEEP_PROBE_INTERVAL_SECONDS": (("scan_intervals", "deep_probe_seconds"), int),
+        "AZAZEL_TOPO_LITE_PROBE_TIMEOUT_SECONDS": (("probe", "timeout_seconds"), int),
+        "AZAZEL_TOPO_LITE_PROBE_CONCURRENCY": (("probe", "concurrency"), int),
         "AZAZEL_TOPO_LITE_NOTIFICATION_ENABLED": (("notification", "enabled"), _parse_bool),
         "AZAZEL_TOPO_LITE_NOTIFICATION_PROVIDER": (("notification", "provider"), str),
         "AZAZEL_TOPO_LITE_NOTIFICATION_ENDPOINT": (("notification", "endpoint"), str),

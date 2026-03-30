@@ -27,6 +27,9 @@ scan_intervals:
   discovery_seconds: 300
   probe_seconds: 900
   deep_probe_seconds: 60
+probe:
+  timeout_seconds: 2
+  concurrency: 32
 notification:
   enabled: false
   provider: ntfy

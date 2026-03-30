@@ -19,7 +19,7 @@ echo "[1/16] Install OS dependencies"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3 python3-venv python3-pip \
-  network-manager iw curl dnsmasq nginx openssl \
+  network-manager iw curl dnsmasq nginx openssl arp-scan \
   python3-dev python3-numpy python3-pil python3-spidev \
   python3-rpi.gpio python3-gpiozero fonts-noto-cjk git
 

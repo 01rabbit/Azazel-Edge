@@ -4,4 +4,5 @@ __pycache__/
 rust/azazel-edge-core/target/
 topo_lite/.venv/
 topo_lite/logs/
+topo_lite/run/
 topo_lite/*.sqlite3
