@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Azazel-Topo-Lite</title>
+    <style>
+      :root {
+        --bg: #f3f0e8;
+        --panel: #fffdf7;
+        --ink: #1f2933;
+        --accent: #0c6d62;
+        --muted: #5b6670;
+        --border: #d8d2c4;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top left, #f9e9bf 0%, transparent 35%),
+          linear-gradient(160deg, var(--bg), #e7ecef);
+        color: var(--ink);
+      }
+
+      main {
+        max-width: 880px;
+        margin: 0 auto;
+        padding: 48px 20px 64px;
+      }
+
+      .hero,
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        box-shadow: 0 18px 45px rgba(31, 41, 51, 0.08);
+      }
+
+      .hero {
+        padding: 28px;
+        margin-bottom: 22px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(2rem, 4vw, 3.5rem);
+        line-height: 1;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .card {
+        padding: 22px;
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 18px;
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: rgba(12, 109, 98, 0.1);
+        color: var(--accent);
+        font-weight: 600;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: currentColor;
+      }
+
+      code {
+        padding: 0.1rem 0.35rem;
+        border-radius: 0.35rem;
+        background: rgba(31, 41, 51, 0.08);
+      }
+
+      pre {
+        margin: 18px 0 0;
+        padding: 16px;
+        overflow: auto;
+        border-radius: 14px;
+        background: #132029;
+        color: #f7fafc;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <p>Lightweight network visibility workspace</p>
+        <h1>Azazel-Topo-Lite</h1>
+        <p>
+          This scaffold provides a minimal Flask API, a static UI, and a clean
+          directory layout for the initial implementation line.
+        </p>
+        <div class="status" id="status">
+          <span class="dot"></span>
+          <span>Checking backend health...</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <p>
+          Backend health is fetched from <code>/health</code> on the local API.
+        </p>
+        <pre id="output">{}</pre>
+      </section>
+    </main>
+
+    <script>
+      async function loadStatus() {
+        const status = document.getElementById("status");
+        const output = document.getElementById("output");
+
+        try {
+          const configResponse = await fetch("./dev-config.json", {
+            cache: "no-store",
+          });
+          const config = await configResponse.json();
+          const backendBase =
+            config.backendBase ||
+            `${location.protocol}//${location.hostname}:18080`;
+          const response = await fetch(`${backendBase}/api/meta`);
+          const payload = await response.json();
+          status.innerHTML =
+            '<span class="dot"></span><span>Backend reachable</span>';
+          output.textContent = JSON.stringify(payload, null, 2);
+        } catch (error) {
+          status.innerHTML =
+            '<span class="dot"></span><span>Backend unavailable</span>';
+          output.textContent = JSON.stringify(
+            { error: String(error) },
+            null,
+            2
+          );
+        }
+      }
+
+      loadStatus();
+    </script>
+  </body>
+</html>

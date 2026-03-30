@@ -1,0 +1,4 @@
+from .schema import INITIAL_TABLES, SCHEMA_VERSION
+
+__all__ = ["INITIAL_TABLES", "SCHEMA_VERSION"]
+
