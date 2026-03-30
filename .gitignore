@@ -6,3 +6,4 @@ topo_lite/.venv/
 topo_lite/logs/
 topo_lite/run/
 topo_lite/*.sqlite3
+topo_lite/frontend/runtime-config.json

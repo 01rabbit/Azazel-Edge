@@ -511,7 +511,10 @@
       }
 
       async function loadConfig() {
-        const response = await fetch("./dev-config.json", { cache: "no-store" });
+        let response = await fetch("./runtime-config.json", { cache: "no-store" });
+        if (!response.ok) {
+          response = await fetch("./dev-config.json", { cache: "no-store" });
+        }
         const config = await response.json();
         backendBase = `http://${location.hostname}:${config.backendPort || 18080}`;
       }

@@ -50,8 +50,8 @@ def main() -> int:
     env["AZAZEL_TOPO_LITE_BACKEND_PORT"] = str(backend_port)
     env["AZAZEL_TOPO_LITE_BACKEND_HOST"] = BACKEND_HOST
 
-    config_path = WORKSPACE_ROOT / "frontend" / "dev-config.json"
-    config_path.write_text(
+    runtime_config_path = WORKSPACE_ROOT / "frontend" / "runtime-config.json"
+    runtime_config_path.write_text(
         json.dumps(
             {
                 "backendPort": backend_port,
