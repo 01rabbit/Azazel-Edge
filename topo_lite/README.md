@@ -186,6 +186,32 @@ curl -H 'Authorization: Bearer change-me-admin-token' \
 - Scheduler retries use bounded exponential backoff to avoid tight retry loops
   during repeated discovery failures.
 
+## systemd Deployment
+
+Topo-Lite now includes systemd assets under `topo_lite/systemd/`:
+
+- `azazel-topo-lite-api.service`
+- `azazel-topo-lite-scheduler.service`
+- `azazel-topo-lite-scanner.service`
+- `azazel-topo-lite.env.example`
+
+The default environment file path is `/etc/default/azazel-topo-lite`.
+After installing the workspace under `/opt/azazel-edge/topo_lite`, you can
+manage the services with:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now azazel-topo-lite-scheduler.service
+sudo systemctl enable --now azazel-topo-lite-scanner.service
+sudo systemctl enable --now azazel-topo-lite-api.service
+sudo systemctl status azazel-topo-lite-api.service
+sudo journalctl -u azazel-topo-lite-api.service -n 50 --no-pager
+```
+
+The migrated installer now copies these units and the default environment file.
+Set `ENABLE_TOPO_LITE=1` when running `installer/internal/install_migrated_tools.sh`
+if you want the services enabled automatically.
+
 ## Logs
 
 The scaffold writes JSONL logs by default:

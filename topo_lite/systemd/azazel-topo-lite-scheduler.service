@@ -1,0 +1,19 @@
+[Unit]
+Description=Azazel-Topo-Lite discovery scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/azazel-edge/topo_lite
+Environment="PYTHONPATH=/opt/azazel-edge/topo_lite"
+Environment="AZAZEL_TOPO_LITE_CONFIG=/opt/azazel-edge/topo_lite/config.yaml"
+EnvironmentFile=-/etc/default/azazel-topo-lite
+ExecStart=/opt/azazel-edge/venv/bin/python /opt/azazel-edge/topo_lite/scripts/run_scheduler.py
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

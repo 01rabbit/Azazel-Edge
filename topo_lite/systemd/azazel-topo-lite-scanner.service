@@ -1,0 +1,19 @@
+[Unit]
+Description=Azazel-Topo-Lite service probe scheduler
+After=network-online.target azazel-topo-lite-scheduler.service
+Wants=network-online.target azazel-topo-lite-scheduler.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/azazel-edge/topo_lite
+Environment="PYTHONPATH=/opt/azazel-edge/topo_lite"
+Environment="AZAZEL_TOPO_LITE_CONFIG=/opt/azazel-edge/topo_lite/config.yaml"
+EnvironmentFile=-/etc/default/azazel-topo-lite
+ExecStart=/opt/azazel-edge/venv/bin/python /opt/azazel-edge/topo_lite/scripts/run_probe_scheduler.py
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

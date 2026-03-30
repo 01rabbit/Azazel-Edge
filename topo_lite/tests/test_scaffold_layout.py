@@ -22,6 +22,26 @@ class ScaffoldLayoutTests(unittest.TestCase):
         self.assertTrue((WORKSPACE_ROOT / "frontend" / "index.html").is_file())
         self.assertTrue((WORKSPACE_ROOT / "frontend" / "host.html").is_file())
 
+    def test_systemd_assets_exist(self) -> None:
+        systemd_dir = WORKSPACE_ROOT / "systemd"
+        self.assertTrue((systemd_dir / "azazel-topo-lite-api.service").is_file())
+        self.assertTrue((systemd_dir / "azazel-topo-lite-scanner.service").is_file())
+        self.assertTrue((systemd_dir / "azazel-topo-lite-scheduler.service").is_file())
+        self.assertTrue((systemd_dir / "azazel-topo-lite.env.example").is_file())
+        self.assertTrue((WORKSPACE_ROOT / "scripts" / "run_web_stack.py").is_file())
+        self.assertTrue((WORKSPACE_ROOT / "scripts" / "run_probe_scheduler.py").is_file())
+
+    def test_systemd_units_include_environment_file_and_install_section(self) -> None:
+        for name in [
+            "azazel-topo-lite-api.service",
+            "azazel-topo-lite-scanner.service",
+            "azazel-topo-lite-scheduler.service",
+        ]:
+            text = (WORKSPACE_ROOT / "systemd" / name).read_text(encoding="utf-8")
+            self.assertIn("EnvironmentFile=-/etc/default/azazel-topo-lite", text)
+            self.assertIn("ExecStart=", text)
+            self.assertIn("WantedBy=multi-user.target", text)
+
     def test_schema_placeholder_matches_initial_issue_scope(self) -> None:
         self.assertEqual(SCHEMA_VERSION, "0.1.2")
         self.assertIn("hosts", INITIAL_TABLES)

@@ -8,6 +8,7 @@ ENABLE_HTTPS="${ENABLE_HTTPS:-1}"
 ENABLE_LOCAL_CA="${ENABLE_LOCAL_CA:-1}"
 ENABLE_SECURITY_STACK="${ENABLE_SECURITY_STACK:-1}"
 ENABLE_RUST_CORE="${ENABLE_RUST_CORE:-1}"
+ENABLE_TOPO_LITE="${ENABLE_TOPO_LITE:-0}"
 VENV_DIR="/opt/azazel-edge/venv"
 
 if [[ "${EUID}" -ne 0 ]]; then
@@ -66,7 +67,16 @@ install -d \
   /opt/azazel-edge/fonts \
   /opt/azazel-edge/images \
   /opt/azazel-edge/icons/epd \
-  /opt/azazel-edge/logs/tactics_engine
+  /opt/azazel-edge/logs/tactics_engine \
+  /opt/azazel-edge/topo_lite/backend \
+  /opt/azazel-edge/topo_lite/frontend \
+  /opt/azazel-edge/topo_lite/scanner \
+  /opt/azazel-edge/topo_lite/db \
+  /opt/azazel-edge/topo_lite/docs \
+  /opt/azazel-edge/topo_lite/scripts \
+  /opt/azazel-edge/topo_lite/systemd \
+  /opt/azazel-edge/topo_lite/run \
+  /opt/azazel-edge/topo_lite/logs
 
 echo "[3/16] Install azazel_edge core modules"
 install -m 0644 "$REPO_ROOT/py/azazel_edge/__init__.py" /opt/azazel-edge/py/azazel_edge/__init__.py
@@ -146,6 +156,28 @@ install -m 0644 "$REPO_ROOT/fonts/icbmss20.ttf" /opt/azazel-edge/fonts/icbmss20.
 install -m 0644 "$REPO_ROOT/icons/epd/"*.png /opt/azazel-edge/icons/epd/
 install -m 0644 "$REPO_ROOT/images/"* /opt/azazel-edge/images/
 
+echo "[7.5/16] Install Topo-Lite workspace"
+install -m 0644 "$REPO_ROOT/topo_lite/"*.py /opt/azazel-edge/topo_lite/
+install -m 0644 "$REPO_ROOT/topo_lite/Makefile" /opt/azazel-edge/topo_lite/Makefile
+install -m 0644 "$REPO_ROOT/topo_lite/README.md" /opt/azazel-edge/topo_lite/README.md
+install -m 0644 "$REPO_ROOT/topo_lite/requirements.txt" /opt/azazel-edge/topo_lite/requirements.txt
+install -m 0644 "$REPO_ROOT/topo_lite/config.yaml.example" /opt/azazel-edge/topo_lite/config.yaml.example
+install -m 0644 "$REPO_ROOT/topo_lite/backend/"*.py /opt/azazel-edge/topo_lite/backend/
+install -m 0644 "$REPO_ROOT/topo_lite/frontend/"*.html /opt/azazel-edge/topo_lite/frontend/
+install -m 0644 "$REPO_ROOT/topo_lite/frontend/"*.json /opt/azazel-edge/topo_lite/frontend/ 2>/dev/null || true
+install -m 0644 "$REPO_ROOT/topo_lite/scanner/"*.py /opt/azazel-edge/topo_lite/scanner/
+install -m 0644 "$REPO_ROOT/topo_lite/db/"*.py /opt/azazel-edge/topo_lite/db/
+install -m 0644 "$REPO_ROOT/topo_lite/docs/"*.md /opt/azazel-edge/topo_lite/docs/
+install -m 0755 "$REPO_ROOT/topo_lite/scripts/"*.py /opt/azazel-edge/topo_lite/scripts/
+install -m 0644 "$REPO_ROOT/topo_lite/systemd/"*.service /opt/azazel-edge/topo_lite/systemd/
+install -m 0644 "$REPO_ROOT/topo_lite/systemd/azazel-topo-lite.env.example" /opt/azazel-edge/topo_lite/systemd/azazel-topo-lite.env.example
+if [[ ! -f /opt/azazel-edge/topo_lite/config.yaml ]]; then
+  install -m 0644 "$REPO_ROOT/topo_lite/config.yaml.example" /opt/azazel-edge/topo_lite/config.yaml
+fi
+if [[ ! -f /etc/default/azazel-topo-lite ]]; then
+  install -m 0644 "$REPO_ROOT/topo_lite/systemd/azazel-topo-lite.env.example" /etc/default/azazel-topo-lite
+fi
+
 echo "[8/16] Build Python runtime (venv + pip)"
 if [[ ! -d "$VENV_DIR" ]]; then
   python3 -m venv "$VENV_DIR"
@@ -181,6 +213,9 @@ install -m 0644 "$REPO_ROOT/systemd/azazel-edge-opencanary.service" /etc/systemd
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-suricata.service" /etc/systemd/system/azazel-edge-suricata.service
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-ai-agent.service" /etc/systemd/system/azazel-edge-ai-agent.service
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-core.service" /etc/systemd/system/azazel-edge-core.service
+install -m 0644 "$REPO_ROOT/topo_lite/systemd/azazel-topo-lite-api.service" /etc/systemd/system/azazel-topo-lite-api.service
+install -m 0644 "$REPO_ROOT/topo_lite/systemd/azazel-topo-lite-scanner.service" /etc/systemd/system/azazel-topo-lite-scanner.service
+install -m 0644 "$REPO_ROOT/topo_lite/systemd/azazel-topo-lite-scheduler.service" /etc/systemd/system/azazel-topo-lite-scheduler.service
 systemctl daemon-reload
 
 echo "[11/16] Prepare runtime/config paths"
@@ -217,6 +252,11 @@ if [[ "$ENABLE_SERVICES" == "1" ]]; then
   systemctl enable --now azazel-edge-epd-refresh.timer
   systemctl enable --now azazel-edge-ai-agent.service
   systemctl enable --now azazel-edge-core.service
+  if [[ "$ENABLE_TOPO_LITE" == "1" ]]; then
+    systemctl enable --now azazel-topo-lite-scheduler.service
+    systemctl enable --now azazel-topo-lite-scanner.service
+    systemctl enable --now azazel-topo-lite-api.service
+  fi
   systemctl restart azazel-edge-control-daemon.service
   systemctl restart azazel-edge-web.service
 fi
