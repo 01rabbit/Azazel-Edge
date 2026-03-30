@@ -142,6 +142,18 @@ Run the limited TCP probe after discovery:
 PYTHONPATH=. python3 scripts/run_probe.py
 ```
 
+Run an immediate deep probe for the latest discovery run:
+
+```bash
+AZAZEL_TOPO_LITE_DEEP_PROBE_DISCOVERY_SCAN_RUN_ID=12 \
+PYTHONPATH=. python3 scripts/run_deep_probe.py
+```
+
+The discovery scheduler runs this automatically when it finds newly discovered
+hosts. `deep_probe.target_ports` controls the short follow-up probe, and
+`deep_probe.dedupe_window_seconds` prevents the same host from being deep
+probed repeatedly in a short span.
+
 Tune probe concurrency, retry, and batch size when a segment has many slow
 hosts:
 

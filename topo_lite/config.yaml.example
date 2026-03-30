@@ -33,6 +33,18 @@ probe:
   retry_count: 1
   retry_backoff_seconds: 0.25
   batch_size: 64
+deep_probe:
+  enabled: true
+  timeout_seconds: 1
+  target_ports:
+    - 22
+    - 80
+    - 443
+    - 445
+    - 631
+    - 3389
+    - 9100
+  dedupe_window_seconds: 900
 notification:
   enabled: false
   provider: ntfy

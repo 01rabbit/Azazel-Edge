@@ -277,6 +277,24 @@ class TopoLiteRepository:
             row = connection.execute("SELECT * FROM scan_runs WHERE id = ?", (run_id,)).fetchone()
         return row_to_dict(row)
 
+    def get_previous_scan_run(
+        self,
+        scan_kind: str,
+        *,
+        before_run_id: int,
+        statuses: tuple[str, ...] | None = None,
+    ) -> dict[str, Any] | None:
+        query = "SELECT * FROM scan_runs WHERE scan_kind = ? AND id < ?"
+        params: list[Any] = [scan_kind, before_run_id]
+        if statuses:
+            placeholders = ", ".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        query += " ORDER BY id DESC LIMIT 1"
+        with closing(self.connect()) as connection:
+            row = connection.execute(query, tuple(params)).fetchone()
+        return row_to_dict(row)
+
     def create_scan_run(
         self,
         *,

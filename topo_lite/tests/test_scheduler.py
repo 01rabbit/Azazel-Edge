@@ -140,6 +140,41 @@ class SchedulerTests(unittest.TestCase):
         self.assertIn("discovery_scheduler_started", events)
         self.assertIn("discovery_scheduler_stopped", events)
 
+    def test_scheduler_triggers_deep_probe_after_successful_discovery(self) -> None:
+        scheduler = DiscoveryScheduler(
+            config=self.config,
+            repository=self.repository,
+            loggers=self.loggers,
+            lock_path=self.lock_path,
+            sleep_fn=self.sleep_calls.append,
+        )
+
+        with patch("scanner.scheduler.discover_hosts", return_value={"scan_run_id": 71, "status": "completed"}), patch(
+            "scanner.scheduler.deep_probe_new_hosts",
+            return_value={"scan_run_id": 81, "status": "completed", "host_count": 1},
+        ) as deep_probe:
+            scheduler.run_forever(max_runs=1)
+
+        deep_probe.assert_called_once()
+        self.assertEqual(deep_probe.call_args.kwargs["discovery_scan_run_id"], 71)
+
+    def test_scheduler_skips_deep_probe_after_failed_discovery(self) -> None:
+        scheduler = DiscoveryScheduler(
+            config=self.config,
+            repository=self.repository,
+            loggers=self.loggers,
+            lock_path=self.lock_path,
+            retry_limit=0,
+            sleep_fn=self.sleep_calls.append,
+        )
+
+        with patch("scanner.scheduler.discover_hosts", return_value={"scan_run_id": 72, "status": "failed"}), patch(
+            "scanner.scheduler.deep_probe_new_hosts"
+        ) as deep_probe:
+            scheduler.run_forever(max_runs=1)
+
+        deep_probe.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

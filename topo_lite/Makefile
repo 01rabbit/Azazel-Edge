@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: run-dev run-web-stack lint test init-db run-discovery run-scheduler run-probe run-probe-scheduler run-classification run-diff
+.PHONY: run-dev run-web-stack lint test init-db run-discovery run-scheduler run-probe run-deep-probe run-probe-scheduler run-classification run-diff
 
 run-dev:
 	$(PYTHON) scripts/dev.py
@@ -25,6 +25,9 @@ run-scheduler:
 
 run-probe:
 	PYTHONPATH=. $(PYTHON) scripts/run_probe.py
+
+run-deep-probe:
+	PYTHONPATH=. $(PYTHON) scripts/run_deep_probe.py
 
 run-probe-scheduler:
 	PYTHONPATH=. $(PYTHON) scripts/run_probe_scheduler.py

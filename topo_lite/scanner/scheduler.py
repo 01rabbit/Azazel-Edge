@@ -11,6 +11,7 @@ from typing import Callable
 from configuration import TopoLiteConfig
 from db.repository import TopoLiteRepository
 from logging_utils import TopoLiteLoggers, append_audit_record, log_event
+from scanner.deep_probe import deep_probe_new_hosts
 from scanner.discovery import discover_hosts
 
 
@@ -126,6 +127,21 @@ class DiscoveryScheduler:
                     self.sleep_fn(delay_seconds)
                 else:
                     failures = 0
+                    deep_probe_result = deep_probe_new_hosts(
+                        config=self.config,
+                        repository=self.repository,
+                        loggers=self.loggers,
+                        discovery_scan_run_id=last_scan_run_id,
+                    )
+                    log_event(
+                        self.loggers.scanner,
+                        "scheduler_deep_probe_checked",
+                        "discovery scheduler evaluated deep probe",
+                        discovery_scan_run_id=last_scan_run_id,
+                        deep_probe_status=deep_probe_result["status"],
+                        deep_probe_scan_run_id=deep_probe_result["scan_run_id"],
+                        deep_probe_host_count=deep_probe_result["host_count"],
+                    )
                     if max_runs is not None and runs_completed >= max_runs:
                         break
                     self.sleep_fn(self.config.scan_intervals.discovery_seconds)

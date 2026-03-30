@@ -20,11 +20,18 @@ class ClassificationResult:
     reason: dict[str, object]
 
 
-def classify_hosts(repository: TopoLiteRepository, loggers: "TopoLiteLoggers | None" = None) -> dict[str, object]:
+def classify_hosts(
+    repository: TopoLiteRepository,
+    loggers: "TopoLiteLoggers | None" = None,
+    host_ids: list[int] | None = None,
+) -> dict[str, object]:
     updated = 0
     summary: dict[str, int] = {}
+    allowed_host_ids = set(host_ids or [])
     for host in repository.list_hosts():
         host_id = int(host["id"])
+        if allowed_host_ids and host_id not in allowed_host_ids:
+            continue
         result = classify_host(
             host=host,
             services=repository.list_services(host_id),

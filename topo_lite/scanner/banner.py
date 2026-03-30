@@ -37,6 +37,7 @@ def collect_banner_observations(
     config: "TopoLiteConfig",
     repository: TopoLiteRepository,
     loggers: "TopoLiteLoggers | None" = None,
+    host_ids: list[int] | None = None,
     http_fetcher: Callable[[str, str, int, float], dict[str, object] | None] | None = None,
     tls_fetcher: Callable[[str, int, float], dict[str, object] | None] | None = None,
     mdns_fetcher: Callable[[str], str | None] | None = None,
@@ -48,9 +49,12 @@ def collect_banner_observations(
     banner_timeout = min(float(config.probe.timeout_seconds), 2.0)
     observations: list[BannerObservation] = []
     errors: list[dict[str, object]] = []
+    allowed_host_ids = set(host_ids or [])
 
     for host in repository.list_hosts():
         host_id = int(host["id"])
+        if allowed_host_ids and host_id not in allowed_host_ids:
+            continue
         ip = str(host["ip"])
         services = [
             service

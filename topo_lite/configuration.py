@@ -33,6 +33,14 @@ class ProbeConfig:
 
 
 @dataclass(slots=True)
+class DeepProbeConfig:
+    enabled: bool = True
+    timeout_seconds: int = 1
+    target_ports: list[int] = field(default_factory=lambda: [22, 80, 443, 445, 631, 3389, 9100])
+    dedupe_window_seconds: int = 900
+
+
+@dataclass(slots=True)
 class NotificationConfig:
     enabled: bool = False
     provider: str = "ntfy"
@@ -86,6 +94,7 @@ class TopoLiteConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     scan_intervals: ScanIntervals = field(default_factory=ScanIntervals)
     probe: ProbeConfig = field(default_factory=ProbeConfig)
+    deep_probe: DeepProbeConfig = field(default_factory=DeepProbeConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
     retention_period: RetentionConfig = field(default_factory=RetentionConfig)
@@ -150,6 +159,19 @@ def validate_config(config: TopoLiteConfig) -> None:
             continue
         if value <= 0:
             raise ValidationError(f"probe.{name} must be greater than zero")
+    for name, value in asdict(config.deep_probe).items():
+        if name == "enabled":
+            continue
+        if name == "target_ports":
+            if not value:
+                raise ValidationError("deep_probe.target_ports must contain at least one port")
+            if len(set(value)) != len(value):
+                raise ValidationError("deep_probe.target_ports must not contain duplicates")
+            if any(port < 1 or port > 65535 for port in value):
+                raise ValidationError("deep_probe.target_ports must be within 1..65535")
+            continue
+        if value <= 0:
+            raise ValidationError(f"deep_probe.{name} must be greater than zero")
     for name, value in asdict(config.retention_period).items():
         if value <= 0:
             raise ValidationError(f"retention_period.{name} must be greater than zero")
@@ -186,6 +208,7 @@ def _dict_to_config(data: dict[str, Any]) -> TopoLiteConfig:
         logging=LoggingConfig(**data["logging"]),
         scan_intervals=ScanIntervals(**data["scan_intervals"]),
         probe=ProbeConfig(**data["probe"]),
+        deep_probe=DeepProbeConfig(**data["deep_probe"]),
         notification=NotificationConfig(**data["notification"]),
         auth=AuthConfig(**data["auth"]),
         retention_period=RetentionConfig(**data["retention_period"]),
@@ -237,6 +260,10 @@ def _apply_env_overrides(base: dict[str, Any], env: Mapping[str, str]) -> None:
         "AZAZEL_TOPO_LITE_PROBE_RETRY_COUNT": (("probe", "retry_count"), int),
         "AZAZEL_TOPO_LITE_PROBE_RETRY_BACKOFF_SECONDS": (("probe", "retry_backoff_seconds"), float),
         "AZAZEL_TOPO_LITE_PROBE_BATCH_SIZE": (("probe", "batch_size"), int),
+        "AZAZEL_TOPO_LITE_DEEP_PROBE_ENABLED": (("deep_probe", "enabled"), _parse_bool),
+        "AZAZEL_TOPO_LITE_DEEP_PROBE_TIMEOUT_SECONDS": (("deep_probe", "timeout_seconds"), int),
+        "AZAZEL_TOPO_LITE_DEEP_PROBE_TARGET_PORTS": (("deep_probe", "target_ports"), _parse_int_csv),
+        "AZAZEL_TOPO_LITE_DEEP_PROBE_DEDUPE_WINDOW_SECONDS": (("deep_probe", "dedupe_window_seconds"), int),
         "AZAZEL_TOPO_LITE_NOTIFICATION_ENABLED": (("notification", "enabled"), _parse_bool),
         "AZAZEL_TOPO_LITE_NOTIFICATION_PROVIDER": (("notification", "provider"), str),
         "AZAZEL_TOPO_LITE_NOTIFICATION_ENDPOINT": (("notification", "endpoint"), str),
