@@ -131,8 +131,7 @@
           });
           const config = await configResponse.json();
           const backendBase =
-            config.backendBase ||
-            `${location.protocol}//${location.hostname}:18080`;
+            `http://${location.hostname}:${config.backendPort || 18080}`;
           const response = await fetch(`${backendBase}/api/meta`);
           const payload = await response.json();
           status.innerHTML =

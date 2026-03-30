@@ -1,0 +1,41 @@
+interface: eth0
+subnets:
+  - 192.168.40.0/24
+target_ports:
+  - 22
+  - 53
+  - 80
+  - 123
+  - 139
+  - 443
+  - 445
+  - 631
+  - 3389
+  - 5353
+  - 8000
+  - 8080
+  - 8443
+  - 9100
+database_path: topo_lite.sqlite3
+logging:
+  level: INFO
+  app_log_path: logs/app.jsonl
+  access_log_path: logs/access.jsonl
+  audit_log_path: logs/audit.jsonl
+  scanner_log_path: logs/scanner.jsonl
+scan_intervals:
+  discovery_seconds: 300
+  probe_seconds: 900
+  deep_probe_seconds: 60
+notification:
+  enabled: false
+  provider: ntfy
+  endpoint: ""
+auth:
+  enabled: true
+  mode: local
+  token_required: true
+retention_period:
+  observations_days: 30
+  events_days: 90
+  scan_runs_days: 14

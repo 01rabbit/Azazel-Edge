@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 
+from configuration import default_config
 from db.schema import INITIAL_TABLES, SCHEMA_VERSION
 from scanner.discovery import build_default_job
 
@@ -25,6 +27,11 @@ class ScaffoldLayoutTests(unittest.TestCase):
         job = build_default_job()
         self.assertEqual(job.interval_seconds, 300)
         self.assertEqual(job.target_ports, [22, 80, 443])
+
+    def test_default_config_uses_sqlite_database_path(self) -> None:
+        config = default_config()
+        self.assertEqual(config.database_path, "topo_lite.sqlite3")
+        self.assertIn("192.168.40.0/24", config.subnets)
 
 
 if __name__ == "__main__":

@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 rust/azazel-edge-core/target/
+topo_lite/.venv/
+topo_lite/logs/
+topo_lite/*.sqlite3

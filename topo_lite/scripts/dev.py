@@ -13,6 +13,8 @@ from pathlib import Path
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_PORT = os.environ.get("AZAZEL_TOPO_LITE_BACKEND_PORT", "18080")
 FRONTEND_PORT = os.environ.get("AZAZEL_TOPO_LITE_FRONTEND_PORT", "18081")
+BACKEND_HOST = os.environ.get("AZAZEL_TOPO_LITE_BACKEND_HOST", "127.0.0.1")
+FRONTEND_HOST = os.environ.get("AZAZEL_TOPO_LITE_FRONTEND_HOST", "127.0.0.1")
 
 
 def _pick_port(preferred: str, reserved: set[int] | None = None) -> int:
@@ -46,14 +48,15 @@ def main() -> int:
     env = os.environ.copy()
     env.setdefault("PYTHONPATH", str(WORKSPACE_ROOT))
     env["AZAZEL_TOPO_LITE_BACKEND_PORT"] = str(backend_port)
+    env["AZAZEL_TOPO_LITE_BACKEND_HOST"] = BACKEND_HOST
 
     config_path = WORKSPACE_ROOT / "frontend" / "dev-config.json"
     config_path.write_text(
         json.dumps(
             {
-                "backendBase": f"http://127.0.0.1:{backend_port}",
                 "backendPort": backend_port,
                 "frontendPort": frontend_port,
+                "frontendHost": FRONTEND_HOST,
             },
             indent=2,
         )
@@ -73,7 +76,7 @@ def main() -> int:
             "http.server",
             str(frontend_port),
             "--bind",
-            "127.0.0.1",
+            FRONTEND_HOST,
             "--directory",
             str(WORKSPACE_ROOT / "frontend"),
         ],
@@ -81,8 +84,8 @@ def main() -> int:
         env=env,
     )
 
-    print(f"Azazel-Topo-Lite API: http://127.0.0.1:{backend_port}")
-    print(f"Azazel-Topo-Lite UI:  http://127.0.0.1:{frontend_port}")
+    print(f"Azazel-Topo-Lite API: http://{BACKEND_HOST}:{backend_port}")
+    print(f"Azazel-Topo-Lite UI:  http://{FRONTEND_HOST}:{frontend_port}")
     print("Press Ctrl-C to stop both processes.")
 
     def handle_signal(_signum, _frame):

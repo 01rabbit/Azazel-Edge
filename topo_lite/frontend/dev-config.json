@@ -1,5 +1,5 @@
 {
-  "backendBase": "http://127.0.0.1:18081",
-  "backendPort": 18081,
-  "frontendPort": 18082
+  "backendPort": 18080,
+  "frontendPort": 18081,
+  "frontendHost": "127.0.0.1"
 }
