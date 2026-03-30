@@ -20,6 +20,10 @@ def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row)
 
 
+def _coalesce_value(candidate: Any, fallback: Any) -> Any:
+    return fallback if candidate in {None, ""} else candidate
+
+
 class TopoLiteRepository:
     def __init__(self, database_path: str | Path) -> None:
         self.database_path = Path(database_path)
@@ -150,6 +154,68 @@ class TopoLiteRepository:
                 )
             row = connection.execute("SELECT * FROM services WHERE id = ?", (service_id,)).fetchone()
         return row_to_dict(row) or {}
+
+    def bulk_upsert_services_and_observations(
+        self,
+        *,
+        entries: list[dict[str, Any]],
+    ) -> int:
+        if not entries:
+            return 0
+
+        with self.transaction() as connection:
+            for entry in entries:
+                host_id = int(entry["host_id"])
+                proto = str(entry["proto"])
+                port = int(entry["port"])
+                state = str(entry["state"])
+                service_name = entry.get("service_name")
+                banner = entry.get("banner")
+                seen_at = str(entry.get("seen_at") or utc_now())
+                source = str(entry["source"])
+                payload = dict(entry["payload"])
+                observed_at = str(entry.get("observed_at") or seen_at)
+
+                existing = connection.execute(
+                    "SELECT * FROM services WHERE host_id = ? AND proto = ? AND port = ?",
+                    (host_id, proto, port),
+                ).fetchone()
+                if existing is None:
+                    connection.execute(
+                        """
+                        INSERT INTO services(host_id, proto, port, state, service_name, banner, first_seen, last_seen)
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (host_id, proto, port, state, service_name, banner, seen_at, seen_at),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE services
+                        SET state = ?,
+                            service_name = ?,
+                            banner = ?,
+                            last_seen = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            state,
+                            _coalesce_value(service_name, existing["service_name"]),
+                            _coalesce_value(banner, existing["banner"]),
+                            seen_at,
+                            int(existing["id"]),
+                        ),
+                    )
+
+                connection.execute(
+                    """
+                    INSERT INTO observations(host_id, source, observed_at, payload_json)
+                    VALUES(?, ?, ?, ?)
+                    """,
+                    (host_id, source, observed_at, json.dumps(payload, sort_keys=True)),
+                )
+
+        return len(entries)
 
     def list_services(self, host_id: int | None = None) -> list[dict[str, Any]]:
         query = "SELECT * FROM services"

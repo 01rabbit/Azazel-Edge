@@ -25,6 +25,8 @@ def main() -> int:
     max_runs = int(env_map["AZAZEL_TOPO_LITE_SCHEDULER_MAX_RUNS"]) if "AZAZEL_TOPO_LITE_SCHEDULER_MAX_RUNS" in env_map else None
     retry_limit = int(env_map.get("AZAZEL_TOPO_LITE_SCHEDULER_RETRY_LIMIT", "3"))
     retry_delay = int(env_map.get("AZAZEL_TOPO_LITE_SCHEDULER_RETRY_DELAY_SECONDS", "10"))
+    retry_backoff_multiplier = float(env_map.get("AZAZEL_TOPO_LITE_SCHEDULER_RETRY_BACKOFF_MULTIPLIER", "2.0"))
+    retry_max_delay_seconds = int(env_map.get("AZAZEL_TOPO_LITE_SCHEDULER_RETRY_MAX_DELAY_SECONDS", "60"))
     lock_path = env_map.get("AZAZEL_TOPO_LITE_SCHEDULER_LOCK_PATH", "run/discovery_scheduler.lock")
     scheduler = DiscoveryScheduler(
         config=config,
@@ -33,6 +35,8 @@ def main() -> int:
         lock_path=lock_path,
         retry_limit=retry_limit,
         retry_delay_seconds=retry_delay,
+        retry_backoff_multiplier=retry_backoff_multiplier,
+        retry_max_delay_seconds=retry_max_delay_seconds,
     )
     scheduler.install_signal_handlers()
     try:

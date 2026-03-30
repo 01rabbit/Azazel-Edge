@@ -482,6 +482,10 @@
                 </tbody>
               </table>
             </div>
+            <div class="auth-actions" style="margin-top: 16px;">
+              <button class="button-secondary" id="loadMoreButton" type="button" disabled>Load More</button>
+              <span class="status-message" id="inventoryPagingMeta">No pages loaded.</span>
+            </div>
           </section>
         </section>
       </div>
@@ -491,6 +495,12 @@
       const authStorageKey = "topoLiteAuth";
       let backendBase = "";
       let authState = loadStoredAuth();
+      let inventoryState = {
+        page: 1,
+        total: 0,
+        loaded: 0,
+        items: [],
+      };
 
       function loadStoredAuth() {
         try {
@@ -565,7 +575,7 @@
       function renderStats(items) {
         const roles = new Set(items.map((item) => item.role).filter(Boolean));
         const upHosts = items.filter((item) => item.status === "up").length;
-        document.getElementById("totalHosts").textContent = items.length;
+        document.getElementById("totalHosts").textContent = inventoryState.total;
         document.getElementById("visibleRows").textContent = items.length;
         document.getElementById("rolesInView").textContent = roles.size;
         document.getElementById("upHosts").textContent = upHosts;
@@ -587,6 +597,7 @@
         if (!items.length) {
           body.innerHTML = '<tr><td class="empty" colspan="10">No hosts match the current filters.</td></tr>';
           renderStats(items);
+          renderPagingMeta();
           return;
         }
 
@@ -605,15 +616,32 @@
           </tr>
         `).join("");
         renderStats(items);
+        renderPagingMeta();
       }
 
-      async function loadInventory() {
+      function renderPagingMeta() {
+        const loadMoreButton = document.getElementById("loadMoreButton");
+        const pagingMeta = document.getElementById("inventoryPagingMeta");
+        const remaining = Math.max(inventoryState.total - inventoryState.loaded, 0);
+
+        if (!inventoryState.loaded) {
+          pagingMeta.textContent = "No pages loaded.";
+          loadMoreButton.disabled = true;
+          return;
+        }
+
+        pagingMeta.textContent = `Loaded ${inventoryState.loaded} of ${inventoryState.total} hosts. ${remaining} remaining.`;
+        loadMoreButton.disabled = remaining === 0;
+      }
+
+      async function loadInventory({ append = false } = {}) {
         const status = document.getElementById("inventoryStatus");
         status.classList.remove("error");
-        status.textContent = "Loading inventory...";
+        status.textContent = append ? "Loading next page..." : "Loading inventory...";
         try {
+          const nextPage = append ? inventoryState.page + 1 : 1;
           const params = new URLSearchParams({
-            page: "1",
+            page: String(nextPage),
             page_size: document.getElementById("pageSize").value,
             q: document.getElementById("searchInput").value.trim(),
             role: document.getElementById("roleFilter").value,
@@ -622,9 +650,16 @@
             order: document.getElementById("sortOrder").value,
           });
           const payload = await apiFetch(`/api/hosts?${params.toString()}`);
-          renderRoleOptions(payload.items);
-          renderInventory(payload.items);
-          status.textContent = `Loaded ${payload.items.length} rows out of ${payload.total}.`;
+          const nextItems = append ? inventoryState.items.concat(payload.items) : payload.items;
+          inventoryState = {
+            page: nextPage,
+            total: payload.total,
+            loaded: nextItems.length,
+            items: nextItems,
+          };
+          renderRoleOptions(nextItems);
+          renderInventory(nextItems);
+          status.textContent = `Loaded ${inventoryState.loaded} rows out of ${payload.total}.`;
         } catch (error) {
           status.classList.add("error");
           status.textContent = String(error);
@@ -662,9 +697,11 @@
           // Keep logout resilient even if the previous session is gone.
         }
         clearAuthState();
+        inventoryState = { page: 1, total: 0, loaded: 0, items: [] };
         document.getElementById("inventoryBody").innerHTML =
           '<tr><td class="empty" colspan="10">Logged out. Sign in to load hosts.</td></tr>';
         document.getElementById("inventoryStatus").textContent = "Signed out.";
+        renderPagingMeta();
         await refreshAuthState();
       }
 
@@ -692,9 +729,14 @@
         document.getElementById("loginForm").addEventListener("submit", handleLogin);
         document.getElementById("logoutButton").addEventListener("click", handleLogout);
         document.getElementById("tokenForm").addEventListener("submit", handleToken);
+        document.getElementById("loadMoreButton").addEventListener("click", async () => {
+          await loadInventory({ append: true });
+        });
         document.getElementById("clearTokenButton").addEventListener("click", async () => {
           clearAuthState();
           document.getElementById("tokenInput").value = "";
+          inventoryState = { page: 1, total: 0, loaded: 0, items: [] };
+          renderPagingMeta();
           await refreshAuthState();
         });
 

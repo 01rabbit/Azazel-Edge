@@ -27,6 +27,9 @@ class ScanIntervals:
 class ProbeConfig:
     timeout_seconds: int = 2
     concurrency: int = 32
+    retry_count: int = 1
+    retry_backoff_seconds: float = 0.25
+    batch_size: int = 64
 
 
 @dataclass(slots=True)
@@ -141,6 +144,10 @@ def validate_config(config: TopoLiteConfig) -> None:
         if value <= 0:
             raise ValidationError(f"scan_intervals.{name} must be greater than zero")
     for name, value in asdict(config.probe).items():
+        if name == "retry_count":
+            if value < 0:
+                raise ValidationError("probe.retry_count must be greater than or equal to zero")
+            continue
         if value <= 0:
             raise ValidationError(f"probe.{name} must be greater than zero")
     for name, value in asdict(config.retention_period).items():
@@ -227,6 +234,9 @@ def _apply_env_overrides(base: dict[str, Any], env: Mapping[str, str]) -> None:
         "AZAZEL_TOPO_LITE_DEEP_PROBE_INTERVAL_SECONDS": (("scan_intervals", "deep_probe_seconds"), int),
         "AZAZEL_TOPO_LITE_PROBE_TIMEOUT_SECONDS": (("probe", "timeout_seconds"), int),
         "AZAZEL_TOPO_LITE_PROBE_CONCURRENCY": (("probe", "concurrency"), int),
+        "AZAZEL_TOPO_LITE_PROBE_RETRY_COUNT": (("probe", "retry_count"), int),
+        "AZAZEL_TOPO_LITE_PROBE_RETRY_BACKOFF_SECONDS": (("probe", "retry_backoff_seconds"), float),
+        "AZAZEL_TOPO_LITE_PROBE_BATCH_SIZE": (("probe", "batch_size"), int),
         "AZAZEL_TOPO_LITE_NOTIFICATION_ENABLED": (("notification", "enabled"), _parse_bool),
         "AZAZEL_TOPO_LITE_NOTIFICATION_PROVIDER": (("notification", "provider"), str),
         "AZAZEL_TOPO_LITE_NOTIFICATION_ENDPOINT": (("notification", "endpoint"), str),

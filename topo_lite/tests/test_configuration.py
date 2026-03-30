@@ -27,6 +27,9 @@ class ConfigurationTests(unittest.TestCase):
                     probe:
                       timeout_seconds: 5
                       concurrency: 16
+                      retry_count: 2
+                      retry_backoff_seconds: 0.5
+                      batch_size: 32
                     notification:
                       enabled: true
                       provider: ntfy
@@ -56,6 +59,9 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config.target_ports, [22, 443])
         self.assertEqual(config.probe.timeout_seconds, 5)
         self.assertEqual(config.probe.concurrency, 16)
+        self.assertEqual(config.probe.retry_count, 2)
+        self.assertEqual(config.probe.retry_backoff_seconds, 0.5)
+        self.assertEqual(config.probe.batch_size, 32)
         self.assertEqual(config.notification.endpoint, "https://ntfy.local/topic")
         self.assertEqual(config.retention_period.scan_runs_days, 3)
         self.assertEqual(config.logging.app_log_path, "logs/app.jsonl")
@@ -72,6 +78,9 @@ class ConfigurationTests(unittest.TestCase):
                 "AZAZEL_TOPO_LITE_RETENTION_EVENTS_DAYS": "21",
                 "AZAZEL_TOPO_LITE_APP_LOG_PATH": "/tmp/app.jsonl",
                 "AZAZEL_TOPO_LITE_PROBE_TIMEOUT_SECONDS": "7",
+                "AZAZEL_TOPO_LITE_PROBE_RETRY_COUNT": "3",
+                "AZAZEL_TOPO_LITE_PROBE_RETRY_BACKOFF_SECONDS": "0.75",
+                "AZAZEL_TOPO_LITE_PROBE_BATCH_SIZE": "48",
                 "AZAZEL_TOPO_LITE_AUTH_ADMIN_API_TOKEN": "override-admin-token",
                 "AZAZEL_TOPO_LITE_FRONTEND_HOST": "0.0.0.0",
                 "AZAZEL_TOPO_LITE_LOCAL_ONLY": "false",
@@ -83,6 +92,9 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config.retention_period.events_days, 21)
         self.assertEqual(config.logging.app_log_path, "/tmp/app.jsonl")
         self.assertEqual(config.probe.timeout_seconds, 7)
+        self.assertEqual(config.probe.retry_count, 3)
+        self.assertEqual(config.probe.retry_backoff_seconds, 0.75)
+        self.assertEqual(config.probe.batch_size, 48)
         self.assertEqual(config.auth.admin_api_token, "override-admin-token")
         self.assertEqual(config.exposure.frontend_bind_host, "0.0.0.0")
         self.assertEqual(config.exposure.allowed_cidrs, ["192.168.40.0/24", "10.0.0.0/24"])

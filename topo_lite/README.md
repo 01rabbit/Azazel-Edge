@@ -122,12 +122,27 @@ Run the discovery scheduler in one-shot mode:
 ```bash
 sudo env AZAZEL_TOPO_LITE_INTERFACE=eth1 \
 AZAZEL_TOPO_LITE_SCHEDULER_MAX_RUNS=1 \
+AZAZEL_TOPO_LITE_SCHEDULER_RETRY_DELAY_SECONDS=10 \
+AZAZEL_TOPO_LITE_SCHEDULER_RETRY_BACKOFF_MULTIPLIER=2.0 \
+AZAZEL_TOPO_LITE_SCHEDULER_RETRY_MAX_DELAY_SECONDS=60 \
 PYTHONPATH=. python3 scripts/run_scheduler.py
 ```
 
 Run the limited TCP probe after discovery:
 
 ```bash
+PYTHONPATH=. python3 scripts/run_probe.py
+```
+
+Tune probe concurrency, retry, and batch size when a segment has many slow
+hosts:
+
+```bash
+AZAZEL_TOPO_LITE_PROBE_CONCURRENCY=16 \
+AZAZEL_TOPO_LITE_PROBE_TIMEOUT_SECONDS=1 \
+AZAZEL_TOPO_LITE_PROBE_RETRY_COUNT=1 \
+AZAZEL_TOPO_LITE_PROBE_RETRY_BACKOFF_SECONDS=0.25 \
+AZAZEL_TOPO_LITE_PROBE_BATCH_SIZE=32 \
 PYTHONPATH=. python3 scripts/run_probe.py
 ```
 
@@ -160,6 +175,16 @@ Or call the API with a bearer token:
 curl -H 'Authorization: Bearer change-me-admin-token' \
   http://127.0.0.1:18080/api/hosts
 ```
+
+## Performance Controls
+
+- Probe concurrency, retry count, retry backoff, and DB write batch size are
+  configurable through `config.yaml` or environment variables.
+- The inventory UI loads the first page first and uses `Load More` for
+  additional pages, so the initial browser render stays lighter on larger
+  datasets.
+- Scheduler retries use bounded exponential backoff to avoid tight retry loops
+  during repeated discovery failures.
 
 ## Logs
 

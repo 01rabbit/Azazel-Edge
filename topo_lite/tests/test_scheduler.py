@@ -56,6 +56,8 @@ class SchedulerTests(unittest.TestCase):
             lock_path=self.lock_path,
             retry_limit=1,
             retry_delay_seconds=2,
+            retry_backoff_multiplier=3.0,
+            retry_max_delay_seconds=9,
             sleep_fn=self.sleep_calls.append,
         )
 
@@ -71,6 +73,32 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.failures, 2)
         self.assertEqual(self.sleep_calls, [2])
+
+    def test_scheduler_uses_exponential_backoff_until_max_delay(self) -> None:
+        scheduler = DiscoveryScheduler(
+            config=self.config,
+            repository=self.repository,
+            loggers=self.loggers,
+            lock_path=self.lock_path,
+            retry_limit=2,
+            retry_delay_seconds=2,
+            retry_backoff_multiplier=3.0,
+            retry_max_delay_seconds=5,
+            sleep_fn=self.sleep_calls.append,
+        )
+
+        with patch(
+            "scanner.scheduler.discover_hosts",
+            side_effect=[
+                {"scan_run_id": 41, "status": "failed"},
+                {"scan_run_id": 42, "status": "failed"},
+                {"scan_run_id": 43, "status": "failed"},
+            ],
+        ):
+            result = scheduler.run_forever(max_runs=5)
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(self.sleep_calls, [2.0, 5])
 
     def test_scheduler_lock_prevents_second_instance(self) -> None:
         scheduler_one = DiscoveryScheduler(

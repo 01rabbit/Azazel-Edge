@@ -120,6 +120,36 @@ class RepositoryTests(unittest.TestCase):
 
         self.assertEqual(len(self.repository.list_hosts()), 0)
 
+    def test_bulk_upsert_services_and_observations_persists_batch(self) -> None:
+        host = self.repository.upsert_host(ip="192.168.40.44", hostname="batch-host")
+
+        count = self.repository.bulk_upsert_services_and_observations(
+            entries=[
+                {
+                    "host_id": host["id"],
+                    "proto": "tcp",
+                    "port": 22,
+                    "state": "open",
+                    "source": "tcp-connect-probe",
+                    "payload": {"port": 22, "state": "open"},
+                    "seen_at": "2026-01-01T00:00:00Z",
+                },
+                {
+                    "host_id": host["id"],
+                    "proto": "tcp",
+                    "port": 443,
+                    "state": "closed",
+                    "source": "tcp-connect-probe",
+                    "payload": {"port": 443, "state": "closed"},
+                    "seen_at": "2026-01-01T00:00:01Z",
+                },
+            ]
+        )
+
+        self.assertEqual(count, 2)
+        self.assertEqual(len(self.repository.list_services(host["id"])), 2)
+        self.assertEqual(len(self.repository.list_observations(host["id"])), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

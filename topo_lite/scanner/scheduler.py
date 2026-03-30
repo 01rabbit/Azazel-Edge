@@ -36,6 +36,8 @@ class DiscoveryScheduler:
         lock_path: str | Path = "run/discovery_scheduler.lock",
         retry_limit: int = 3,
         retry_delay_seconds: int = 10,
+        retry_backoff_multiplier: float = 2.0,
+        retry_max_delay_seconds: int = 60,
         sleep_fn: Callable[[float], None] = time.sleep,
     ) -> None:
         self.config = config
@@ -44,6 +46,8 @@ class DiscoveryScheduler:
         self.lock_path = Path(lock_path)
         self.retry_limit = retry_limit
         self.retry_delay_seconds = retry_delay_seconds
+        self.retry_backoff_multiplier = retry_backoff_multiplier
+        self.retry_max_delay_seconds = retry_max_delay_seconds
         self.sleep_fn = sleep_fn
         self._stop_requested = False
         self._lock_file = None
@@ -113,7 +117,11 @@ class DiscoveryScheduler:
                             failures=failures,
                             last_scan_run_id=last_scan_run_id,
                         )
-                    self.sleep_fn(self.retry_delay_seconds)
+                    delay_seconds = min(
+                        self.retry_delay_seconds * (self.retry_backoff_multiplier ** max(failures - 1, 0)),
+                        self.retry_max_delay_seconds,
+                    )
+                    self.sleep_fn(delay_seconds)
                 else:
                     failures = 0
                     if max_runs is not None and runs_completed >= max_runs:
@@ -157,4 +165,3 @@ class DiscoveryScheduler:
         fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
         self._lock_file.close()
         self._lock_file = None
-

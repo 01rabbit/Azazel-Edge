@@ -30,6 +30,9 @@ scan_intervals:
 probe:
   timeout_seconds: 2
   concurrency: 32
+  retry_count: 1
+  retry_backoff_seconds: 0.25
+  batch_size: 64
 notification:
   enabled: false
   provider: ntfy
