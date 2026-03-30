@@ -113,6 +113,7 @@ def discover_hosts(
     host_count = 0
     observation_count = 0
     scanned_subnets = 0
+    discovered_hosts: list[dict[str, object]] = []
 
     if loggers is not None:
         from logging_utils import log_event
@@ -158,6 +159,15 @@ def discover_hosts(
                 source=result.source,
                 payload=asdict(result),
             )
+            discovered_hosts.append(
+                {
+                    "host_id": host["id"],
+                    "ip": result.ip,
+                    "mac": result.mac,
+                    "vendor": result.vendor,
+                    "subnet": result.subnet,
+                }
+            )
             host_count += 1
             observation_count += 1
 
@@ -171,6 +181,7 @@ def discover_hosts(
             "source": "arp-scan",
             "host_count": host_count,
             "observation_count": observation_count,
+            "discovered_hosts": sorted(discovered_hosts, key=lambda item: (str(item["ip"]), int(item["host_id"]))),
             "errors": errors,
         },
     )

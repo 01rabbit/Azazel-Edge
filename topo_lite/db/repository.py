@@ -174,6 +174,23 @@ class TopoLiteRepository:
             rows = connection.execute("SELECT * FROM events ORDER BY id").fetchall()
         return [dict(row) for row in rows]
 
+    def get_latest_scan_run(
+        self,
+        scan_kind: str,
+        *,
+        statuses: tuple[str, ...] | None = None,
+    ) -> dict[str, Any] | None:
+        query = "SELECT * FROM scan_runs WHERE scan_kind = ?"
+        params: list[Any] = [scan_kind]
+        if statuses:
+            placeholders = ", ".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        query += " ORDER BY id DESC LIMIT 1"
+        with closing(self.connect()) as connection:
+            row = connection.execute(query, tuple(params)).fetchone()
+        return row_to_dict(row)
+
     def get_scan_run(self, run_id: int) -> dict[str, Any] | None:
         with closing(self.connect()) as connection:
             row = connection.execute("SELECT * FROM scan_runs WHERE id = ?", (run_id,)).fetchone()
@@ -288,6 +305,13 @@ class TopoLiteRepository:
                 (host_id,),
             ).fetchone()
         return row_to_dict(row) or {}
+
+    def list_classifications(self) -> list[dict[str, Any]]:
+        with closing(self.connect()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM classifications ORDER BY host_id"
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def cleanup_history(
         self,

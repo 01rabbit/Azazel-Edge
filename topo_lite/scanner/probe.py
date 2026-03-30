@@ -100,6 +100,10 @@ def probe_hosts(
             "timeout_seconds": config.probe.timeout_seconds,
             "concurrency": config.probe.concurrency,
             "service_count": service_count,
+            "services": sorted(
+                [asdict(observation) for observation in observations],
+                key=lambda item: (int(item["host_id"]), str(item["proto"]), int(item["port"])),
+            ),
             "errors": errors,
         },
     )

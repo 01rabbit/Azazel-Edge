@@ -109,6 +109,12 @@ Run the limited TCP probe after discovery:
 PYTHONPATH=. python3 scripts/run_probe.py
 ```
 
+Generate diff events from the latest discovery/probe snapshots:
+
+```bash
+PYTHONPATH=. python3 scripts/run_diff.py
+```
+
 ## Logs
 
 The scaffold writes JSONL logs by default:
