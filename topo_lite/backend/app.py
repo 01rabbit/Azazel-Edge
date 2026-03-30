@@ -14,6 +14,7 @@ from auth import AuthenticatedUser, bootstrap_local_auth, build_authenticated_us
 from configuration import config_to_dict, load_config
 from db.repository import TopoLiteRepository
 from db.schema import initialize_database
+from exposure import evaluate_remote_access
 from logging_utils import append_audit_record, configure_logging, log_event, log_exception
 
 
@@ -29,6 +30,8 @@ def create_app(
     resolved_config_path = Path(config_path or env_map.get("AZAZEL_TOPO_LITE_CONFIG", WORKSPACE_ROOT / "config.yaml"))
     config = load_config(resolved_config_path if resolved_config_path.exists() else None, env=env_map)
     app.secret_key = config.auth.session_secret
+    app.config["TOPO_LITE_CONFIG"] = config
+    app.config["TOPO_LITE_CONFIG_PATH"] = str(resolved_config_path)
     initialize_database(config.database_path)
     repository = TopoLiteRepository(config.database_path)
     bootstrap_local_auth(repository, config.auth)
@@ -53,6 +56,18 @@ def create_app(
     def before_request() -> None:
         g.request_started_at = time.perf_counter()
         g.current_user = None
+        access = evaluate_remote_access(request.remote_addr, config.exposure)
+        if not access.allowed:
+            append_audit_record(
+                loggers.audit,
+                "network_access_denied",
+                actor="anonymous",
+                path=request.path,
+                method=request.method,
+                remote_addr=request.remote_addr,
+                reason=access.reason,
+            )
+            raise Forbidden("client address is not allowed")
         if request.method == "OPTIONS" and request.path.startswith("/api/"):
             return app.make_default_options_response()
         if not config.auth.enabled:
@@ -511,6 +526,7 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    host = os.environ.get("AZAZEL_TOPO_LITE_BACKEND_HOST", "127.0.0.1")
+    runtime_config = app.config["TOPO_LITE_CONFIG"]
+    host = os.environ.get("AZAZEL_TOPO_LITE_BACKEND_HOST", runtime_config.exposure.backend_bind_host)
     port = int(os.environ.get("AZAZEL_TOPO_LITE_BACKEND_PORT", "18080"))
     app.run(host=host, port=port, debug=False, use_reloader=False)

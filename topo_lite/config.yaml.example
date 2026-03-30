@@ -49,3 +49,8 @@ retention_period:
   observations_days: 30
   events_days: 90
   scan_runs_days: 14
+exposure:
+  backend_bind_host: 127.0.0.1
+  frontend_bind_host: 127.0.0.1
+  local_only: true
+  allowed_cidrs: []

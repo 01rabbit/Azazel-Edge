@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass, field
+from ipaddress import ip_network
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -57,6 +58,14 @@ class RetentionConfig:
 
 
 @dataclass(slots=True)
+class ExposureConfig:
+    backend_bind_host: str = "127.0.0.1"
+    frontend_bind_host: str = "127.0.0.1"
+    local_only: bool = True
+    allowed_cidrs: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class LoggingConfig:
     level: str = "INFO"
     app_log_path: str = "logs/app.jsonl"
@@ -77,6 +86,7 @@ class TopoLiteConfig:
     notification: NotificationConfig = field(default_factory=NotificationConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
     retention_period: RetentionConfig = field(default_factory=RetentionConfig)
+    exposure: ExposureConfig = field(default_factory=ExposureConfig)
 
 
 def default_config() -> TopoLiteConfig:
@@ -136,6 +146,18 @@ def validate_config(config: TopoLiteConfig) -> None:
     for name, value in asdict(config.retention_period).items():
         if value <= 0:
             raise ValidationError(f"retention_period.{name} must be greater than zero")
+    for name, value in asdict(config.exposure).items():
+        if name == "local_only":
+            continue
+        if name == "allowed_cidrs":
+            for cidr in value:
+                try:
+                    ip_network(cidr, strict=False)
+                except ValueError as error:
+                    raise ValidationError(f"exposure.allowed_cidrs contains an invalid CIDR: {cidr}") from error
+            continue
+        if not value.strip():
+            raise ValidationError(f"exposure.{name} must be a non-empty string")
     if config.notification.enabled and not config.notification.provider.strip():
         raise ValidationError("notification.provider must be set when notification is enabled")
     if config.auth.mode not in {"local"}:
@@ -160,6 +182,7 @@ def _dict_to_config(data: dict[str, Any]) -> TopoLiteConfig:
         notification=NotificationConfig(**data["notification"]),
         auth=AuthConfig(**data["auth"]),
         retention_period=RetentionConfig(**data["retention_period"]),
+        exposure=ExposureConfig(**data["exposure"]),
     )
 
 
@@ -220,6 +243,10 @@ def _apply_env_overrides(base: dict[str, Any], env: Mapping[str, str]) -> None:
         "AZAZEL_TOPO_LITE_RETENTION_OBSERVATIONS_DAYS": (("retention_period", "observations_days"), int),
         "AZAZEL_TOPO_LITE_RETENTION_EVENTS_DAYS": (("retention_period", "events_days"), int),
         "AZAZEL_TOPO_LITE_RETENTION_SCAN_RUNS_DAYS": (("retention_period", "scan_runs_days"), int),
+        "AZAZEL_TOPO_LITE_BACKEND_HOST": (("exposure", "backend_bind_host"), str),
+        "AZAZEL_TOPO_LITE_FRONTEND_HOST": (("exposure", "frontend_bind_host"), str),
+        "AZAZEL_TOPO_LITE_LOCAL_ONLY": (("exposure", "local_only"), _parse_bool),
+        "AZAZEL_TOPO_LITE_ALLOWED_CIDRS": (("exposure", "allowed_cidrs"), _parse_csv),
     }
 
     for env_name, (path, parser) in simple_overrides.items():

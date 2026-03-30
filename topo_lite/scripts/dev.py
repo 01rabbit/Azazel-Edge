@@ -9,12 +9,14 @@ import sys
 import time
 from pathlib import Path
 
-
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
+if str(WORKSPACE_ROOT) not in sys.path:
+    sys.path.insert(0, str(WORKSPACE_ROOT))
+
+from configuration import load_config
+
 BACKEND_PORT = os.environ.get("AZAZEL_TOPO_LITE_BACKEND_PORT", "18080")
 FRONTEND_PORT = os.environ.get("AZAZEL_TOPO_LITE_FRONTEND_PORT", "18081")
-BACKEND_HOST = os.environ.get("AZAZEL_TOPO_LITE_BACKEND_HOST", "127.0.0.1")
-FRONTEND_HOST = os.environ.get("AZAZEL_TOPO_LITE_FRONTEND_HOST", "127.0.0.1")
 
 
 def _pick_port(preferred: str, reserved: set[int] | None = None) -> int:
@@ -42,13 +44,19 @@ def _terminate(process: subprocess.Popen) -> None:
 
 
 def main() -> int:
+    config_path = Path(os.environ.get("AZAZEL_TOPO_LITE_CONFIG", WORKSPACE_ROOT / "config.yaml"))
+    config = load_config(config_path if config_path.exists() else None, env=os.environ)
+    backend_host = os.environ.get("AZAZEL_TOPO_LITE_BACKEND_HOST", config.exposure.backend_bind_host)
+    frontend_host = os.environ.get("AZAZEL_TOPO_LITE_FRONTEND_HOST", config.exposure.frontend_bind_host)
     backend_port = _pick_port(BACKEND_PORT)
     frontend_port = _pick_port(FRONTEND_PORT, reserved={backend_port})
 
     env = os.environ.copy()
     env.setdefault("PYTHONPATH", str(WORKSPACE_ROOT))
     env["AZAZEL_TOPO_LITE_BACKEND_PORT"] = str(backend_port)
-    env["AZAZEL_TOPO_LITE_BACKEND_HOST"] = BACKEND_HOST
+    env["AZAZEL_TOPO_LITE_BACKEND_HOST"] = backend_host
+    env["AZAZEL_TOPO_LITE_FRONTEND_PORT"] = str(frontend_port)
+    env["AZAZEL_TOPO_LITE_FRONTEND_HOST"] = frontend_host
 
     runtime_config_path = WORKSPACE_ROOT / "frontend" / "runtime-config.json"
     runtime_config_path.write_text(
@@ -56,7 +64,7 @@ def main() -> int:
             {
                 "backendPort": backend_port,
                 "frontendPort": frontend_port,
-                "frontendHost": FRONTEND_HOST,
+                "frontendHost": frontend_host,
             },
             indent=2,
         )
@@ -72,20 +80,14 @@ def main() -> int:
     frontend = subprocess.Popen(
         [
             sys.executable,
-            "-m",
-            "http.server",
-            str(frontend_port),
-            "--bind",
-            FRONTEND_HOST,
-            "--directory",
-            str(WORKSPACE_ROOT / "frontend"),
+            "scripts/serve_frontend.py",
         ],
         cwd=WORKSPACE_ROOT,
         env=env,
     )
 
-    print(f"Azazel-Topo-Lite API: http://{BACKEND_HOST}:{backend_port}")
-    print(f"Azazel-Topo-Lite UI:  http://{FRONTEND_HOST}:{frontend_port}")
+    print(f"Azazel-Topo-Lite API: http://{backend_host}:{backend_port}")
+    print(f"Azazel-Topo-Lite UI:  http://{frontend_host}:{frontend_port}")
     print("Press Ctrl-C to stop both processes.")
 
     def handle_signal(_signum, _frame):

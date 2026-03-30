@@ -28,15 +28,34 @@ Default local endpoints:
 - API: `http://127.0.0.1:18080`
 - UI: `http://127.0.0.1:18081`
 
+The default exposure policy is local-only. Both backend and frontend bind to
+`127.0.0.1` unless you change the config or export explicit environment
+variables.
+
 ### LAN access
 
-To expose the scaffold on the local network, bind both servers to `0.0.0.0`
-and choose explicit ports.
+To expose the scaffold on the local network, disable local-only mode, add an
+allowlist CIDR, and bind both servers to `0.0.0.0`.
+
+Example `config.yaml` override:
+
+```yaml
+exposure:
+  backend_bind_host: 0.0.0.0
+  frontend_bind_host: 0.0.0.0
+  local_only: false
+  allowed_cidrs:
+    - 192.168.40.0/24
+```
+
+You can also override the same settings via environment variables:
 
 ```bash
 cd topo_lite
 AZAZEL_TOPO_LITE_BACKEND_HOST=0.0.0.0 \
 AZAZEL_TOPO_LITE_FRONTEND_HOST=0.0.0.0 \
+AZAZEL_TOPO_LITE_LOCAL_ONLY=false \
+AZAZEL_TOPO_LITE_ALLOWED_CIDRS=192.168.40.0/24 \
 AZAZEL_TOPO_LITE_BACKEND_PORT=8081 \
 AZAZEL_TOPO_LITE_FRONTEND_PORT=8082 \
 make run-dev
@@ -46,6 +65,9 @@ Then open:
 
 - UI: `http://<your-host-ip>:8082/`
 - API: `http://<your-host-ip>:8081/health`
+
+Requests that originate outside the configured allowlist return `403` and are
+recorded in `logs/audit.jsonl`.
 
 This scaffold does not serve HTTPS yet.
 

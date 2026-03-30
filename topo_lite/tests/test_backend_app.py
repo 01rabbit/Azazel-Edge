@@ -207,6 +207,58 @@ class BackendAppTests(unittest.TestCase):
         self.assertEqual(response.headers["Access-Control-Allow-Origin"], "http://127.0.0.1:18081")
         self.assertEqual(response.headers["Access-Control-Allow-Credentials"], "true")
 
+    def test_local_only_mode_rejects_non_loopback_client(self) -> None:
+        response = self.client.get(
+            "/api/ping",
+            environ_overrides={"REMOTE_ADDR": "192.168.40.10"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "forbidden")
+
+        audit_lines = (self.logs_dir / "audit.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        audit_entry = json.loads(audit_lines[-1])
+        self.assertEqual(audit_entry["event"], "network_access_denied")
+        self.assertEqual(audit_entry["remote_addr"], "192.168.40.10")
+        self.assertEqual(audit_entry["reason"], "local_only")
+
+    def test_allowlisted_cidr_permits_remote_access(self) -> None:
+        config_path = Path(self.temp_dir.name) / "allowlist-config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "interface: eth0",
+                    "subnets:",
+                    "  - 192.168.40.0/24",
+                    f"database_path: {self.database_path}",
+                    "logging:",
+                    "  level: INFO",
+                    f"  app_log_path: {self.logs_dir / 'allow-app.jsonl'}",
+                    f"  access_log_path: {self.logs_dir / 'allow-access.jsonl'}",
+                    f"  audit_log_path: {self.logs_dir / 'allow-audit.jsonl'}",
+                    f"  scanner_log_path: {self.logs_dir / 'allow-scanner.jsonl'}",
+                    "exposure:",
+                    "  backend_bind_host: 0.0.0.0",
+                    "  frontend_bind_host: 0.0.0.0",
+                    "  local_only: false",
+                    "  allowed_cidrs:",
+                    "    - 192.168.40.0/24",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        allow_app = create_app(config_path=config_path)
+        allow_client = allow_app.test_client()
+
+        response = allow_client.get(
+            "/api/ping",
+            environ_overrides={"REMOTE_ADDR": "192.168.40.55"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["message"], "pong")
+
     def test_access_and_audit_logs_are_written_as_jsonl(self) -> None:
         self._login("admin", "change-me-admin-password")
         self.client.get("/api/meta")
