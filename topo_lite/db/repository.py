@@ -94,6 +94,11 @@ class TopoLiteRepository:
             rows = connection.execute("SELECT * FROM hosts ORDER BY id").fetchall()
         return [dict(row) for row in rows]
 
+    def get_host_by_ip(self, ip: str) -> dict[str, Any] | None:
+        with closing(self.connect()) as connection:
+            row = connection.execute("SELECT * FROM hosts WHERE ip = ?", (ip,)).fetchone()
+        return row_to_dict(row)
+
     def upsert_service(
         self,
         *,
@@ -312,6 +317,56 @@ class TopoLiteRepository:
                 "SELECT * FROM classifications ORDER BY host_id"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_classification(self, host_id: int) -> dict[str, Any] | None:
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM classifications WHERE host_id = ?",
+                (host_id,),
+            ).fetchone()
+        return row_to_dict(row)
+
+    def create_override(
+        self,
+        *,
+        host_id: int,
+        fixed_label: str | None = None,
+        fixed_role: str | None = None,
+        fixed_icon: str | None = None,
+        ignored: bool = False,
+        note: str | None = None,
+        created_at: str | None = None,
+    ) -> dict[str, Any]:
+        timestamp = created_at or utc_now()
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO overrides(host_id, fixed_label, fixed_role, fixed_icon, ignored, note, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (host_id, fixed_label, fixed_role, fixed_icon, 1 if ignored else 0, note, timestamp, timestamp),
+            )
+            row = connection.execute("SELECT * FROM overrides WHERE id = ?", (int(cursor.lastrowid),)).fetchone()
+        return row_to_dict(row) or {}
+
+    def list_overrides(self, host_id: int | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM overrides"
+        params: tuple[Any, ...] = ()
+        if host_id is not None:
+            query += " WHERE host_id = ?"
+            params = (host_id,)
+        query += " ORDER BY id DESC"
+        with closing(self.connect()) as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_latest_override(self, host_id: int) -> dict[str, Any] | None:
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM overrides WHERE host_id = ? ORDER BY id DESC LIMIT 1",
+                (host_id,),
+            ).fetchone()
+        return row_to_dict(row)
 
     def cleanup_history(
         self,

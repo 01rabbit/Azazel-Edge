@@ -24,6 +24,9 @@ class ConfigurationTests(unittest.TestCase):
                       discovery_seconds: 120
                       probe_seconds: 600
                       deep_probe_seconds: 30
+                    probe:
+                      timeout_seconds: 5
+                      concurrency: 16
                     notification:
                       enabled: true
                       provider: ntfy
@@ -45,6 +48,8 @@ class ConfigurationTests(unittest.TestCase):
 
         self.assertEqual(config.interface, "wlan0")
         self.assertEqual(config.target_ports, [22, 443])
+        self.assertEqual(config.probe.timeout_seconds, 5)
+        self.assertEqual(config.probe.concurrency, 16)
         self.assertEqual(config.notification.endpoint, "https://ntfy.local/topic")
         self.assertEqual(config.retention_period.scan_runs_days, 3)
         self.assertEqual(config.logging.app_log_path, "logs/app.jsonl")
@@ -57,12 +62,14 @@ class ConfigurationTests(unittest.TestCase):
                 "AZAZEL_TOPO_LITE_TARGET_PORTS": "22,8080,8443",
                 "AZAZEL_TOPO_LITE_RETENTION_EVENTS_DAYS": "21",
                 "AZAZEL_TOPO_LITE_APP_LOG_PATH": "/tmp/app.jsonl",
+                "AZAZEL_TOPO_LITE_PROBE_TIMEOUT_SECONDS": "7",
             },
         )
         self.assertEqual(config.interface, "br0")
         self.assertEqual(config.target_ports, [22, 8080, 8443])
         self.assertEqual(config.retention_period.events_days, 21)
         self.assertEqual(config.logging.app_log_path, "/tmp/app.jsonl")
+        self.assertEqual(config.probe.timeout_seconds, 7)
 
     def test_invalid_config_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

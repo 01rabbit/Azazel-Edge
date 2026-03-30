@@ -34,11 +34,34 @@ class RepositoryTests(unittest.TestCase):
 
         self.assertEqual(host["id"], host_again["id"])
         self.assertEqual(self.repository.get_host(host["id"])["vendor"], "Acme")
+        self.assertEqual(self.repository.get_host_by_ip("192.168.40.10")["id"], host["id"])
         self.assertEqual(service["service_name"], "jetdirect")
         self.assertEqual(event["event_type"], "new_host")
         self.assertEqual(len(self.repository.list_hosts()), 1)
         self.assertEqual(len(self.repository.list_services(host["id"])), 1)
         self.assertEqual(len(self.repository.list_events()), 1)
+
+    def test_latest_scan_run_classification_and_override_helpers(self) -> None:
+        host = self.repository.upsert_host(ip="192.168.40.21", hostname="desk-01")
+        self.repository.set_classification(
+            host_id=host["id"],
+            label="desktop",
+            confidence=0.91,
+            reason={"ports": [22, 443]},
+        )
+        override = self.repository.create_override(
+            host_id=host["id"],
+            fixed_label="managed-desktop",
+            ignored=False,
+            note="known asset",
+        )
+        run = self.repository.create_scan_run(scan_kind="inventory_snapshot")
+        self.repository.finish_scan_run(run["id"], status="completed", details={"baseline": True})
+
+        self.assertEqual(self.repository.get_classification(host["id"])["label"], "desktop")
+        self.assertEqual(self.repository.list_overrides(host["id"])[0]["id"], override["id"])
+        self.assertEqual(self.repository.get_latest_override(host["id"])["fixed_label"], "managed-desktop")
+        self.assertEqual(self.repository.get_latest_scan_run("inventory_snapshot", statuses=("completed",))["id"], run["id"])
 
     def test_scan_run_and_cleanup_flow(self) -> None:
         run = self.repository.create_scan_run(scan_kind="discovery", details={"source": "test"})

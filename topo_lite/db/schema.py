@@ -5,7 +5,7 @@ from contextlib import closing
 from pathlib import Path
 
 
-SCHEMA_VERSION = "0.1.0"
+SCHEMA_VERSION = "0.1.1"
 
 INITIAL_TABLES = (
     "hosts",
@@ -15,6 +15,7 @@ INITIAL_TABLES = (
     "edges",
     "scan_runs",
     "classifications",
+    "overrides",
 )
 
 DDL_STATEMENTS = (
@@ -105,6 +106,20 @@ DDL_STATEMENTS = (
         FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS overrides (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        host_id INTEGER NOT NULL,
+        fixed_label TEXT,
+        fixed_role TEXT,
+        fixed_icon TEXT,
+        ignored INTEGER NOT NULL DEFAULT 0,
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_hosts_last_seen ON hosts(last_seen)",
     "CREATE INDEX IF NOT EXISTS idx_hosts_mac ON hosts(mac)",
     "CREATE INDEX IF NOT EXISTS idx_services_host_id ON services(host_id)",
@@ -112,6 +127,7 @@ DDL_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)",
     "CREATE INDEX IF NOT EXISTS idx_scan_runs_started_at ON scan_runs(started_at)",
     "CREATE INDEX IF NOT EXISTS idx_observations_host_id ON observations(host_id)",
+    "CREATE INDEX IF NOT EXISTS idx_overrides_host_id ON overrides(host_id)",
 )
 
 
