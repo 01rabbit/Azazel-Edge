@@ -115,6 +115,30 @@ Generate diff events from the latest discovery/probe snapshots:
 PYTHONPATH=. python3 scripts/run_diff.py
 ```
 
+## Auth
+
+The API now requires authentication for detailed endpoints. The initial local
+accounts come from `config.yaml`:
+
+- admin: `admin` / `change-me-admin-password`
+- read-only: `viewer` / `change-me-viewer-password`
+
+Login with a session:
+
+```bash
+curl -c /tmp/topo-lite.cookie \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"change-me-admin-password"}' \
+  http://127.0.0.1:18080/api/auth/login
+```
+
+Or call the API with a bearer token:
+
+```bash
+curl -H 'Authorization: Bearer change-me-admin-token' \
+  http://127.0.0.1:18080/api/hosts
+```
+
 ## Logs
 
 The scaffold writes JSONL logs by default:

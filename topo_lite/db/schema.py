@@ -5,7 +5,7 @@ from contextlib import closing
 from pathlib import Path
 
 
-SCHEMA_VERSION = "0.1.1"
+SCHEMA_VERSION = "0.1.2"
 
 INITIAL_TABLES = (
     "hosts",
@@ -16,6 +16,8 @@ INITIAL_TABLES = (
     "scan_runs",
     "classifications",
     "overrides",
+    "users",
+    "api_tokens",
 )
 
 DDL_STATEMENTS = (
@@ -120,6 +122,29 @@ DDL_STATEMENTS = (
         FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE CASCADE
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS api_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        label TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        last_used_at TEXT,
+        UNIQUE(user_id, label),
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_hosts_last_seen ON hosts(last_seen)",
     "CREATE INDEX IF NOT EXISTS idx_hosts_mac ON hosts(mac)",
     "CREATE INDEX IF NOT EXISTS idx_services_host_id ON services(host_id)",
@@ -128,6 +153,8 @@ DDL_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_scan_runs_started_at ON scan_runs(started_at)",
     "CREATE INDEX IF NOT EXISTS idx_observations_host_id ON observations(host_id)",
     "CREATE INDEX IF NOT EXISTS idx_overrides_host_id ON overrides(host_id)",
+    "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)",
+    "CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id)",
 )
 
 

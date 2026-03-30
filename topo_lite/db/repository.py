@@ -89,6 +89,16 @@ class TopoLiteRepository:
             row = connection.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
         return row_to_dict(row)
 
+    def get_user(self, user_id: int) -> dict[str, Any] | None:
+        with closing(self.connect()) as connection:
+            row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return row_to_dict(row)
+
+    def get_user_by_username(self, username: str) -> dict[str, Any] | None:
+        with closing(self.connect()) as connection:
+            row = connection.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        return row_to_dict(row)
+
     def list_hosts(self) -> list[dict[str, Any]]:
         with closing(self.connect()) as connection:
             rows = connection.execute("SELECT * FROM hosts ORDER BY id").fetchall()
@@ -366,6 +376,98 @@ class TopoLiteRepository:
                 "SELECT * FROM overrides WHERE host_id = ? ORDER BY id DESC LIMIT 1",
                 (host_id,),
             ).fetchone()
+        return row_to_dict(row)
+
+    def upsert_user(
+        self,
+        *,
+        username: str,
+        password_hash: str,
+        role: str,
+        active: bool = True,
+        updated_at: str | None = None,
+    ) -> dict[str, Any]:
+        timestamp = updated_at or utc_now()
+        with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+            if existing is None:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO users(username, password_hash, role, active, created_at, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?)
+                    """,
+                    (username, password_hash, role, 1 if active else 0, timestamp, timestamp),
+                )
+                user_id = int(cursor.lastrowid)
+            else:
+                user_id = int(existing["id"])
+                connection.execute(
+                    """
+                    UPDATE users
+                    SET password_hash = ?, role = ?, active = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (password_hash, role, 1 if active else 0, timestamp, user_id),
+                )
+            row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return row_to_dict(row) or {}
+
+    def upsert_api_token(
+        self,
+        *,
+        user_id: int,
+        token_hash: str,
+        label: str,
+        created_at: str | None = None,
+    ) -> dict[str, Any]:
+        timestamp = created_at or utc_now()
+        with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM api_tokens WHERE user_id = ? AND label = ?",
+                (user_id, label),
+            ).fetchone()
+            if existing is None:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO api_tokens(user_id, token_hash, label, created_at)
+                    VALUES(?, ?, ?, ?)
+                    """,
+                    (user_id, token_hash, label, timestamp),
+                )
+                token_id = int(cursor.lastrowid)
+            else:
+                token_id = int(existing["id"])
+                connection.execute(
+                    """
+                    UPDATE api_tokens
+                    SET token_hash = ?, created_at = ?
+                    WHERE id = ?
+                    """,
+                    (token_hash, timestamp, token_id),
+                )
+            row = connection.execute("SELECT * FROM api_tokens WHERE id = ?", (token_id,)).fetchone()
+        return row_to_dict(row) or {}
+
+    def get_user_by_token_hash(self, token_hash: str) -> dict[str, Any] | None:
+        with self.transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT users.*
+                FROM api_tokens
+                JOIN users ON users.id = api_tokens.user_id
+                WHERE api_tokens.token_hash = ?
+                """,
+                (token_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                "UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?",
+                (utc_now(), token_hash),
+            )
         return row_to_dict(row)
 
     def cleanup_history(

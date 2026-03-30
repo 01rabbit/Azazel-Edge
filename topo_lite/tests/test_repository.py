@@ -63,6 +63,23 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(self.repository.get_latest_override(host["id"])["fixed_label"], "managed-desktop")
         self.assertEqual(self.repository.get_latest_scan_run("inventory_snapshot", statuses=("completed",))["id"], run["id"])
 
+    def test_user_and_api_token_helpers(self) -> None:
+        user = self.repository.upsert_user(
+            username="admin",
+            password_hash="pbkdf2_sha256$1$salt$deadbeef",
+            role="admin",
+        )
+        token = self.repository.upsert_api_token(
+            user_id=user["id"],
+            token_hash="abc123",
+            label="bootstrap-admin",
+        )
+
+        self.assertEqual(self.repository.get_user(user["id"])["username"], "admin")
+        self.assertEqual(self.repository.get_user_by_username("admin")["id"], user["id"])
+        self.assertEqual(self.repository.get_user_by_token_hash("abc123")["id"], user["id"])
+        self.assertEqual(token["label"], "bootstrap-admin")
+
     def test_scan_run_and_cleanup_flow(self) -> None:
         run = self.repository.create_scan_run(scan_kind="discovery", details={"source": "test"})
         finished = self.repository.finish_scan_run(run["id"], status="completed")

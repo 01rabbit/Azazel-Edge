@@ -19,7 +19,7 @@ class ScaffoldLayoutTests(unittest.TestCase):
             self.assertTrue((WORKSPACE_ROOT / name).is_dir(), name)
 
     def test_schema_placeholder_matches_initial_issue_scope(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, "0.1.1")
+        self.assertEqual(SCHEMA_VERSION, "0.1.2")
         self.assertIn("hosts", INITIAL_TABLES)
         self.assertIn("scan_runs", INITIAL_TABLES)
 

@@ -71,6 +71,12 @@ class BackendAppTests(unittest.TestCase):
             reason={"ports": [9100]},
         )
 
+    def _login(self, username: str, password: str):
+        return self.client.post(
+            "/api/auth/login",
+            json={"username": username, "password": password},
+        )
+
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
@@ -81,6 +87,7 @@ class BackendAppTests(unittest.TestCase):
         self.assertIn("log_paths", response.get_json())
 
     def test_meta_endpoint_lists_workspace_directories(self) -> None:
+        self._login("admin", "change-me-admin-password")
         response = self.client.get("/api/meta")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
@@ -90,6 +97,7 @@ class BackendAppTests(unittest.TestCase):
         self.assertEqual(payload["database"]["host_count"], 2)
 
     def test_hosts_endpoint_supports_filter_sort_and_pagination(self) -> None:
+        self._login("admin", "change-me-admin-password")
         response = self.client.get("/api/hosts?page=1&page_size=1&role=printer&sort=last_seen&order=desc")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
@@ -99,6 +107,7 @@ class BackendAppTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["role"], "printer")
 
     def test_host_detail_endpoint_returns_joined_data(self) -> None:
+        self._login("admin", "change-me-admin-password")
         response = self.client.get(f"/api/hosts/{self.host_one['id']}")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
@@ -109,6 +118,7 @@ class BackendAppTests(unittest.TestCase):
         self.assertEqual(len(payload["observations"]), 1)
 
     def test_services_events_scan_runs_and_topology_endpoints(self) -> None:
+        self._login("admin", "change-me-admin-password")
         services = self.client.get("/api/services?host_id=1").get_json()
         events = self.client.get("/api/events?event_type=new_host").get_json()
         scan_runs = self.client.get("/api/scan-runs?scan_kind=arp_discovery").get_json()
@@ -121,6 +131,7 @@ class BackendAppTests(unittest.TestCase):
         self.assertTrue(any(edge["type"] == "belongs_to" for edge in topology["edges"]))
 
     def test_create_override_endpoint_persists_record(self) -> None:
+        self._login("admin", "change-me-admin-password")
         response = self.client.post(
             "/api/overrides",
             json={
@@ -136,6 +147,7 @@ class BackendAppTests(unittest.TestCase):
         self.assertEqual(payload["fixed_label"], "trusted-printer")
 
     def test_api_errors_return_json(self) -> None:
+        self._login("admin", "change-me-admin-password")
         not_found = self.client.get("/api/hosts/999999")
         invalid = self.client.get("/api/hosts?sort=unknown")
 
@@ -144,7 +156,45 @@ class BackendAppTests(unittest.TestCase):
         self.assertEqual(invalid.status_code, 400)
         self.assertEqual(invalid.get_json()["error"], "bad_request")
 
+    def test_unauthenticated_requests_are_rejected(self) -> None:
+        response = self.client.get("/api/hosts/1")
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["error"], "unauthorized")
+
+    def test_read_only_user_cannot_call_admin_endpoint(self) -> None:
+        login = self._login("viewer", "change-me-viewer-password")
+        self.assertEqual(login.status_code, 200)
+        response = self.client.post(
+            "/api/overrides",
+            json={"host_id": self.host_one["id"], "fixed_label": "blocked"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "forbidden")
+
+    def test_api_token_auth_and_session_auth_both_work(self) -> None:
+        session_login = self._login("admin", "change-me-admin-password")
+        self.assertEqual(session_login.status_code, 200)
+        session_me = self.client.get("/api/auth/me")
+        token_me = self.client.get(
+            "/api/auth/me",
+            headers={"Authorization": "Bearer change-me-admin-token"},
+        )
+
+        self.assertEqual(session_me.status_code, 200)
+        self.assertEqual(session_me.get_json()["auth_method"], "session")
+        self.assertEqual(token_me.status_code, 200)
+        self.assertEqual(token_me.get_json()["auth_method"], "token")
+
+    def test_logout_clears_session(self) -> None:
+        self._login("admin", "change-me-admin-password")
+        logout = self.client.post("/api/auth/logout")
+        after_logout = self.client.get("/api/auth/me")
+
+        self.assertEqual(logout.status_code, 200)
+        self.assertEqual(after_logout.status_code, 401)
+
     def test_access_and_audit_logs_are_written_as_jsonl(self) -> None:
+        self._login("admin", "change-me-admin-password")
         self.client.get("/api/meta")
 
         access_lines = (self.logs_dir / "access.jsonl").read_text(encoding="utf-8").strip().splitlines()
@@ -155,8 +205,7 @@ class BackendAppTests(unittest.TestCase):
 
         self.assertEqual(access_entry["event"], "http_request")
         self.assertEqual(access_entry["path"], "/api/meta")
-        self.assertEqual(audit_entry["event"], "backend_startup")
-        self.assertEqual(audit_entry["actor"], "system")
+        self.assertIn(audit_entry["event"], {"backend_startup", "login_succeeded"})
 
 
 if __name__ == "__main__":

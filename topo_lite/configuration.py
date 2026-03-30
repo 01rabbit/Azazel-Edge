@@ -40,6 +40,13 @@ class AuthConfig:
     enabled: bool = True
     mode: str = "local"
     token_required: bool = True
+    session_secret: str = "change-me-topo-lite-session-secret"
+    admin_username: str = "admin"
+    admin_password: str = "change-me-admin-password"
+    admin_api_token: str = "change-me-admin-token"
+    readonly_username: str = "viewer"
+    readonly_password: str = "change-me-viewer-password"
+    readonly_api_token: str = "change-me-viewer-token"
 
 
 @dataclass(slots=True)
@@ -133,6 +140,12 @@ def validate_config(config: TopoLiteConfig) -> None:
         raise ValidationError("notification.provider must be set when notification is enabled")
     if config.auth.mode not in {"local"}:
         raise ValidationError("auth.mode must be 'local' in the initial implementation")
+    if config.auth.enabled:
+        for name, value in asdict(config.auth).items():
+            if name == "enabled" or name == "token_required":
+                continue
+            if not str(value).strip():
+                raise ValidationError(f"auth.{name} must be a non-empty string when auth is enabled")
 
 
 def _dict_to_config(data: dict[str, Any]) -> TopoLiteConfig:
@@ -197,6 +210,13 @@ def _apply_env_overrides(base: dict[str, Any], env: Mapping[str, str]) -> None:
         "AZAZEL_TOPO_LITE_AUTH_ENABLED": (("auth", "enabled"), _parse_bool),
         "AZAZEL_TOPO_LITE_AUTH_MODE": (("auth", "mode"), str),
         "AZAZEL_TOPO_LITE_AUTH_TOKEN_REQUIRED": (("auth", "token_required"), _parse_bool),
+        "AZAZEL_TOPO_LITE_AUTH_SESSION_SECRET": (("auth", "session_secret"), str),
+        "AZAZEL_TOPO_LITE_AUTH_ADMIN_USERNAME": (("auth", "admin_username"), str),
+        "AZAZEL_TOPO_LITE_AUTH_ADMIN_PASSWORD": (("auth", "admin_password"), str),
+        "AZAZEL_TOPO_LITE_AUTH_ADMIN_API_TOKEN": (("auth", "admin_api_token"), str),
+        "AZAZEL_TOPO_LITE_AUTH_READONLY_USERNAME": (("auth", "readonly_username"), str),
+        "AZAZEL_TOPO_LITE_AUTH_READONLY_PASSWORD": (("auth", "readonly_password"), str),
+        "AZAZEL_TOPO_LITE_AUTH_READONLY_API_TOKEN": (("auth", "readonly_api_token"), str),
         "AZAZEL_TOPO_LITE_RETENTION_OBSERVATIONS_DAYS": (("retention_period", "observations_days"), int),
         "AZAZEL_TOPO_LITE_RETENTION_EVENTS_DAYS": (("retention_period", "events_days"), int),
         "AZAZEL_TOPO_LITE_RETENTION_SCAN_RUNS_DAYS": (("retention_period", "scan_runs_days"), int),

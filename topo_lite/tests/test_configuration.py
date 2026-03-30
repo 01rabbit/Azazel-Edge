@@ -53,6 +53,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config.notification.endpoint, "https://ntfy.local/topic")
         self.assertEqual(config.retention_period.scan_runs_days, 3)
         self.assertEqual(config.logging.app_log_path, "logs/app.jsonl")
+        self.assertEqual(config.auth.admin_username, "admin")
 
     def test_env_overrides_take_precedence(self) -> None:
         config = load_config(
@@ -63,6 +64,7 @@ class ConfigurationTests(unittest.TestCase):
                 "AZAZEL_TOPO_LITE_RETENTION_EVENTS_DAYS": "21",
                 "AZAZEL_TOPO_LITE_APP_LOG_PATH": "/tmp/app.jsonl",
                 "AZAZEL_TOPO_LITE_PROBE_TIMEOUT_SECONDS": "7",
+                "AZAZEL_TOPO_LITE_AUTH_ADMIN_API_TOKEN": "override-admin-token",
             },
         )
         self.assertEqual(config.interface, "br0")
@@ -70,6 +72,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config.retention_period.events_days, 21)
         self.assertEqual(config.logging.app_log_path, "/tmp/app.jsonl")
         self.assertEqual(config.probe.timeout_seconds, 7)
+        self.assertEqual(config.auth.admin_api_token, "override-admin-token")
 
     def test_invalid_config_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

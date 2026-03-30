@@ -4,12 +4,12 @@ import ipaddress
 import os
 import time
 from pathlib import Path
-from typing import Any
-from typing import Mapping
+from typing import Any, Mapping
 
-from flask import Flask, g, jsonify, request
-from werkzeug.exceptions import BadRequest, HTTPException, NotFound
+from flask import Flask, g, jsonify, request, session
+from werkzeug.exceptions import BadRequest, Forbidden, HTTPException, NotFound, Unauthorized
 
+from auth import AuthenticatedUser, bootstrap_local_auth, build_authenticated_user, hash_api_token, verify_password
 from configuration import config_to_dict, load_config
 from db.repository import TopoLiteRepository
 from db.schema import initialize_database
@@ -27,8 +27,10 @@ def create_app(
     env_map = dict(env or os.environ)
     resolved_config_path = Path(config_path or env_map.get("AZAZEL_TOPO_LITE_CONFIG", WORKSPACE_ROOT / "config.yaml"))
     config = load_config(resolved_config_path if resolved_config_path.exists() else None, env=env_map)
+    app.secret_key = config.auth.session_secret
     initialize_database(config.database_path)
     repository = TopoLiteRepository(config.database_path)
+    bootstrap_local_auth(repository, config.auth)
     loggers = configure_logging(config.logging)
 
     log_event(
@@ -49,6 +51,34 @@ def create_app(
     @app.before_request
     def before_request() -> None:
         g.request_started_at = time.perf_counter()
+        g.current_user = None
+        if not config.auth.enabled:
+            return
+        if not request.path.startswith("/api/"):
+            return
+        if request.path in {"/api/ping", "/api/auth/login"}:
+            return
+        user = _authenticate_request(repository)
+        if user is None:
+            append_audit_record(
+                loggers.audit,
+                "auth_required",
+                actor="anonymous",
+                path=request.path,
+                method=request.method,
+            )
+            raise Unauthorized("authentication required")
+        g.current_user = user
+        if request.method == "POST" and request.path == "/api/overrides" and user.role != "admin":
+            append_audit_record(
+                loggers.audit,
+                "auth_forbidden",
+                actor=user.username,
+                path=request.path,
+                method=request.method,
+                role=user.role,
+            )
+            raise Forbidden("admin role required")
 
     @app.after_request
     def after_request(response):
@@ -94,6 +124,56 @@ def create_app(
     @app.get("/api/ping")
     def ping():
         return jsonify({"message": "pong"})
+
+    @app.post("/api/auth/login")
+    def login():
+        if not config.auth.enabled:
+            raise BadRequest("auth is disabled")
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise BadRequest("request body must be a JSON object")
+        username = payload.get("username")
+        password = payload.get("password")
+        if not isinstance(username, str) or not isinstance(password, str):
+            raise BadRequest("username and password must be strings")
+        user = repository.get_user_by_username(username.strip())
+        if user is None or not bool(user.get("active")) or not verify_password(password, str(user["password_hash"])):
+            append_audit_record(
+                loggers.audit,
+                "login_failed",
+                actor=username.strip() or "unknown",
+                path=request.path,
+                method=request.method,
+            )
+            raise Unauthorized("invalid credentials")
+        session.clear()
+        session["user_id"] = int(user["id"])
+        append_audit_record(
+            loggers.audit,
+            "login_succeeded",
+            actor=str(user["username"]),
+            path=request.path,
+            method=request.method,
+            role=str(user["role"]),
+        )
+        return jsonify(_serialize_user(build_authenticated_user(user, "session")))
+
+    @app.post("/api/auth/logout")
+    def logout():
+        user = _require_current_user()
+        append_audit_record(
+            loggers.audit,
+            "logout_succeeded",
+            actor=user.username,
+            path=request.path,
+            method=request.method,
+        )
+        session.clear()
+        return jsonify({"ok": True})
+
+    @app.get("/api/auth/me")
+    def auth_me():
+        return jsonify(_serialize_user(_require_current_user()))
 
     @app.get("/api/logs/meta")
     def logs_meta():
@@ -364,6 +444,44 @@ def _match_subnet(ip: str, subnets: list[str]) -> str | None:
         if address in network:
             return subnet
     return None
+
+
+def _authenticate_request(repository: TopoLiteRepository) -> AuthenticatedUser | None:
+    bearer = _extract_bearer_token()
+    if bearer:
+        user = repository.get_user_by_token_hash(hash_api_token(bearer))
+        if user is not None and bool(user.get("active")):
+            return build_authenticated_user(user, "token")
+    user_id = session.get("user_id")
+    if isinstance(user_id, int):
+        user = repository.get_user(user_id)
+        if user is not None and bool(user.get("active")):
+            return build_authenticated_user(user, "session")
+    return None
+
+
+def _extract_bearer_token() -> str | None:
+    header = request.headers.get("Authorization", "").strip()
+    if header.startswith("Bearer "):
+        token = header.removeprefix("Bearer ").strip()
+        return token or None
+    return None
+
+
+def _serialize_user(user: AuthenticatedUser) -> dict[str, Any]:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "auth_method": user.auth_method,
+    }
+
+
+def _require_current_user() -> AuthenticatedUser:
+    user = getattr(g, "current_user", None)
+    if not isinstance(user, AuthenticatedUser):
+        raise Unauthorized("authentication required")
+    return user
 
 
 app = create_app()

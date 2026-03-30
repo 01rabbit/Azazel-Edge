@@ -38,6 +38,13 @@ auth:
   enabled: true
   mode: local
   token_required: true
+  session_secret: change-me-topo-lite-session-secret
+  admin_username: admin
+  admin_password: change-me-admin-password
+  admin_api_token: change-me-admin-token
+  readonly_username: viewer
+  readonly_password: change-me-viewer-password
+  readonly_api_token: change-me-viewer-token
 retention_period:
   observations_days: 30
   events_days: 90
