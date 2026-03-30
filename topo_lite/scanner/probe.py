@@ -6,7 +6,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from typing import Callable, TYPE_CHECKING
 
+from classification import classify_hosts
 from db.repository import TopoLiteRepository
+from scanner.banner import collect_banner_observations
 
 if TYPE_CHECKING:
     from configuration import TopoLiteConfig
@@ -114,6 +116,12 @@ def probe_hosts(
         "closed": sum(1 for observation in observations if observation.state == "closed"),
         "timeout": sum(1 for observation in observations if observation.state == "timeout"),
     }
+    banner_summary = collect_banner_observations(
+        config=config,
+        repository=repository,
+        loggers=loggers,
+    )
+    classification_summary = classify_hosts(repository, loggers=loggers)
     duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
     average_attempts = round(
         sum(observation.attempts for observation in observations) / len(observations),
@@ -137,6 +145,8 @@ def probe_hosts(
             "duration_ms": duration_ms,
             "average_attempts": average_attempts,
             "state_counts": state_counts,
+            "banner_summary": banner_summary,
+            "classification_summary": classification_summary,
             "services": sorted(
                 [asdict(observation) for observation in observations],
                 key=lambda item: (int(item["host_id"]), str(item["proto"]), int(item["port"])),
@@ -160,6 +170,8 @@ def probe_hosts(
             duration_ms=duration_ms,
             average_attempts=average_attempts,
             state_counts=state_counts,
+            banner_observation_count=banner_summary["observation_count"],
+            classified_host_count=classification_summary["host_count"],
         )
 
     return {
@@ -170,6 +182,8 @@ def probe_hosts(
         "errors": errors,
         "duration_ms": duration_ms,
         "state_counts": state_counts,
+        "banner_summary": banner_summary,
+        "classification_summary": classification_summary,
     }
 
 

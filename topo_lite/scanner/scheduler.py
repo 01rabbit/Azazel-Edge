@@ -49,6 +49,7 @@ class DiscoveryScheduler:
         self.retry_backoff_multiplier = retry_backoff_multiplier
         self.retry_max_delay_seconds = retry_max_delay_seconds
         self.sleep_fn = sleep_fn
+        self.include_active_sources = os.environ.get("AZAZEL_TOPO_LITE_DISCOVERY_INCLUDE_ACTIVE_SOURCES", "false").strip().lower() in {"1", "true", "yes", "on"}
         self._stop_requested = False
         self._lock_file = None
 
@@ -89,6 +90,7 @@ class DiscoveryScheduler:
                     config=self.config,
                     repository=self.repository,
                     loggers=self.loggers,
+                    include_active_sources=self.include_active_sources,
                 )
                 last_scan_run_id = int(result["scan_run_id"])
                 runs_completed += 1

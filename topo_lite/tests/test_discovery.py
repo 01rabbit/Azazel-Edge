@@ -12,9 +12,13 @@ from logging_utils import configure_logging
 from scanner.discovery import (
     ArpDiscoveryResult,
     DiscoveryRunError,
+    SupplementalDiscoveryResult,
     build_arp_scan_command,
     build_job_from_config,
+    discover_supplemental_hosts,
     discover_hosts,
+    parse_dhcp_leases,
+    parse_ip_neigh_output,
     parse_arp_scan_output,
     run_arp_scan,
 )
@@ -87,6 +91,8 @@ Starting arp-scan 1.10.0 with 256 hosts
             repository=self.repository,
             runner=fake_runner,
             loggers=self.loggers,
+            arp_cache_reader=lambda: "",
+            dhcp_lease_reader=lambda: "",
         )
 
         hosts = self.repository.list_hosts()
@@ -124,6 +130,8 @@ Starting arp-scan 1.10.0 with 256 hosts
             repository=self.repository,
             runner=fake_runner,
             loggers=self.loggers,
+            arp_cache_reader=lambda: "",
+            dhcp_lease_reader=lambda: "",
         )
 
         self.assertEqual(result["status"], "partial_failed")
@@ -141,6 +149,8 @@ Starting arp-scan 1.10.0 with 256 hosts
             repository=self.repository,
             runner=failing_runner,
             loggers=self.loggers,
+            arp_cache_reader=lambda: "",
+            dhcp_lease_reader=lambda: "",
         )
 
         self.assertEqual(result["status"], "failed")
@@ -182,6 +192,8 @@ Starting arp-scan 1.10.0 with 256 hosts
                 stderr="permission denied",
             ),
             loggers=self.loggers,
+            arp_cache_reader=lambda: "",
+            dhcp_lease_reader=lambda: "",
         )
 
         self.assertEqual(result["status"], "failed")
@@ -193,10 +205,74 @@ Starting arp-scan 1.10.0 with 256 hosts
             repository=self.repository,
             runner=lambda command, timeout: (_ for _ in ()).throw(FileNotFoundError(2, "No such file", "arp-scan")),
             loggers=self.loggers,
+            arp_cache_reader=lambda: "",
+            dhcp_lease_reader=lambda: "",
         )
 
         self.assertEqual(result["status"], "failed")
         self.assertIn("arp-scan is not installed", result["errors"][0]["error"])
+
+    def test_parse_ip_neigh_output_and_dhcp_leases(self) -> None:
+        arp_cache = "192.168.40.50 dev eth0 lladdr aa:bb:cc:dd:ee:50 REACHABLE\n"
+        dhcp_leases = """
+lease 192.168.40.60 {
+  hardware ethernet aa:bb:cc:dd:ee:60;
+  client-hostname "sensor-60";
+}
+        """.strip()
+
+        arp_results = parse_ip_neigh_output(arp_cache, self.config.subnets)
+        dhcp_results = parse_dhcp_leases(dhcp_leases, self.config.subnets)
+
+        self.assertEqual(
+            arp_results,
+            [
+                SupplementalDiscoveryResult(
+                    ip="192.168.40.50",
+                    source="arp-cache",
+                    subnet="192.168.40.0/24",
+                    mac="aa:bb:cc:dd:ee:50",
+                )
+            ],
+        )
+        self.assertEqual(dhcp_results[0].hostname, "sensor-60")
+        self.assertEqual(dhcp_results[0].source, "dhcp-lease")
+
+    def test_discover_supplemental_hosts_collects_multiple_sources(self) -> None:
+        results, errors = discover_supplemental_hosts(
+            config=self.config,
+            known_ips={"192.168.40.1"},
+            include_active_sources=True,
+            arp_cache_reader=lambda: "192.168.40.10 dev eth0 lladdr aa:bb:cc:dd:ee:10 REACHABLE\n",
+            dhcp_lease_reader=lambda: 'lease 192.168.40.20 {\n  client-hostname "sensor-20";\n}\n',
+            ping_runner=lambda ip, timeout: ip == "192.168.40.30",
+            tcp_discovery_runner=lambda ip, ports, timeout: 443 if ip == "192.168.40.40" else None,
+        )
+
+        by_source = {item.source: item for item in results}
+        self.assertEqual(len(errors), 0)
+        self.assertEqual(by_source["arp-cache"].ip, "192.168.40.10")
+        self.assertEqual(by_source["dhcp-lease"].hostname, "sensor-20")
+        self.assertEqual(by_source["icmp-ping"].ip, "192.168.40.30")
+        self.assertEqual(by_source["tcp-connect-discovery"].metadata["open_port"], 443)
+
+    def test_discover_hosts_persists_supplemental_observations(self) -> None:
+        result = discover_hosts(
+            config=self.config,
+            repository=self.repository,
+            runner=lambda command, timeout: subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr=""),
+            loggers=self.loggers,
+            arp_cache_reader=lambda: "192.168.40.10 dev eth0 lladdr aa:bb:cc:dd:ee:10 REACHABLE\n",
+            dhcp_lease_reader=lambda: "",
+            ping_runner=lambda ip, timeout: False,
+            tcp_discovery_runner=lambda ip, ports, timeout: None,
+        )
+
+        self.assertIn("source_counts", result)
+        self.assertEqual(result["source_counts"]["arp-cache"], 1)
+        observations = self.repository.list_observations()
+        payloads = [json.loads(item["payload_json"]) for item in observations]
+        self.assertTrue(any(payload.get("source") == "arp-cache" for payload in payloads))
 
 
 if __name__ == "__main__":

@@ -102,6 +102,14 @@ cp config.yaml.example config.yaml
 make run-discovery
 ```
 
+Supplemental passive discovery reads the local ARP cache and DHCP lease data.
+To also enable active ICMP and TCP connect discovery for the configured
+subnets, set:
+
+```bash
+AZAZEL_TOPO_LITE_DISCOVERY_INCLUDE_ACTIVE_SOURCES=true make run-discovery
+```
+
 `arp-scan` must be installed on the host OS for real network discovery runs.
 
 On Debian-based systems:
@@ -150,6 +158,12 @@ Generate diff events from the latest discovery/probe snapshots:
 
 ```bash
 PYTHONPATH=. python3 scripts/run_diff.py
+```
+
+Re-run classification against the current host/service/observation set:
+
+```bash
+make run-classification
 ```
 
 ## Auth
