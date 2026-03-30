@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Azazel-Topo-Lite Host Detail</title>
+    <style>
+      :root {
+        --bg: #f3f4f7;
+        --panel: rgba(255, 255, 255, 0.94);
+        --ink: #18222c;
+        --muted: #66707b;
+        --line: #d5dde4;
+        --accent: #0f766e;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Aptos", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top right, rgba(165, 214, 167, 0.36), transparent 26%),
+          linear-gradient(180deg, #eef3f8, #f6f7f9);
+      }
+      main {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 24px 18px 40px;
+      }
+      .panel {
+        padding: 22px;
+        border-radius: 22px;
+        border: 1px solid rgba(255,255,255,0.8);
+        background: var(--panel);
+        box-shadow: 0 22px 56px rgba(24, 34, 44, 0.08);
+      }
+      .stack { display: grid; gap: 16px; }
+      h1, h2 { margin: 0; }
+      p { margin: 0; color: var(--muted); }
+      .facts {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .fact {
+        padding: 14px;
+        border-radius: 16px;
+        background: rgba(15,118,110,0.06);
+      }
+      .fact span { display: block; color: var(--muted); font-size: 0.84rem; }
+      .fact strong { display: block; margin-top: 6px; }
+      .list-card {
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.82);
+      }
+      ul { margin: 8px 0 0; padding-left: 18px; }
+      code {
+        display: block;
+        margin-top: 8px;
+        padding: 14px;
+        white-space: pre-wrap;
+        border-radius: 16px;
+        background: #10202b;
+        color: #eef6ff;
+      }
+      a { color: var(--accent); text-decoration: none; font-weight: 700; }
+      @media (max-width: 760px) {
+        .facts { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="stack">
+      <a href="./index.html">Back to inventory</a>
+      <section class="panel stack">
+        <div>
+          <p>Asset detail preview</p>
+          <h1 id="title">Loading host...</h1>
+        </div>
+        <div class="facts" id="facts"></div>
+      </section>
+
+      <section class="panel stack">
+        <div class="list-card">
+          <h2>Services</h2>
+          <ul id="servicesList"></ul>
+        </div>
+        <div class="list-card">
+          <h2>Events</h2>
+          <ul id="eventsList"></ul>
+        </div>
+        <div class="list-card">
+          <h2>Raw Payload</h2>
+          <code id="payloadBlock">{}</code>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const authState = JSON.parse(localStorage.getItem("topoLiteAuth") || "{}");
+
+      async function loadConfig() {
+        const response = await fetch("./dev-config.json", { cache: "no-store" });
+        const config = await response.json();
+        return `http://${location.hostname}:${config.backendPort || 18080}`;
+      }
+
+      async function apiFetch(base, path) {
+        const headers = {};
+        if (authState.mode === "token" && authState.token) {
+          headers.Authorization = `Bearer ${authState.token}`;
+        }
+        const response = await fetch(`${base}${path}`, {
+          headers,
+          credentials: "include",
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({ error: "request_failed" }));
+          throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
+        }
+        return response.json();
+      }
+
+      function renderList(target, items, formatter) {
+        const element = document.getElementById(target);
+        if (!items.length) {
+          element.innerHTML = "<li>No items.</li>";
+          return;
+        }
+        element.innerHTML = items.map((item) => `<li>${formatter(item)}</li>`).join("");
+      }
+
+      async function init() {
+        const id = new URLSearchParams(location.search).get("id");
+        const backendBase = await loadConfig();
+        const payload = await apiFetch(backendBase, `/api/hosts/${id}`);
+        document.getElementById("title").textContent = payload.hostname || payload.ip;
+        document.getElementById("facts").innerHTML = `
+          <div class="fact"><span>IP</span><strong>${payload.ip}</strong></div>
+          <div class="fact"><span>MAC</span><strong>${payload.mac || "-"}</strong></div>
+          <div class="fact"><span>Status</span><strong>${payload.status || "-"}</strong></div>
+          <div class="fact"><span>Vendor</span><strong>${payload.vendor || "-"}</strong></div>
+          <div class="fact"><span>Role</span><strong>${payload.classification?.label || "-"}</strong></div>
+          <div class="fact"><span>Confidence</span><strong>${payload.classification?.confidence ?? "-"}</strong></div>
+        `;
+        renderList("servicesList", payload.services || [], (item) => `${item.proto}/${item.port} (${item.state})`);
+        renderList("eventsList", payload.events || [], (item) => `${item.event_type}: ${item.summary}`);
+        document.getElementById("payloadBlock").textContent = JSON.stringify(payload, null, 2);
+      }
+
+      init().catch((error) => {
+        document.getElementById("title").textContent = "Failed to load host";
+        document.getElementById("payloadBlock").textContent = String(error);
+      });
+    </script>
+  </body>
+</html>

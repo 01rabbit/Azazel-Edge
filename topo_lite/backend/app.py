@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 from flask import Flask, g, jsonify, request, session
 from werkzeug.exceptions import BadRequest, Forbidden, HTTPException, NotFound, Unauthorized
@@ -52,6 +53,8 @@ def create_app(
     def before_request() -> None:
         g.request_started_at = time.perf_counter()
         g.current_user = None
+        if request.method == "OPTIONS" and request.path.startswith("/api/"):
+            return app.make_default_options_response()
         if not config.auth.enabled:
             return
         if not request.path.startswith("/api/"):
@@ -93,6 +96,13 @@ def create_app(
             remote_addr=request.remote_addr,
             duration_ms=duration_ms,
         )
+        origin = request.headers.get("Origin")
+        if request.path.startswith("/api/") and _is_allowed_origin(origin):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Vary"] = "Origin"
         return response
 
     @app.errorhandler(Exception)
@@ -444,6 +454,19 @@ def _match_subnet(ip: str, subnets: list[str]) -> str | None:
         if address in network:
             return subnet
     return None
+
+
+def _is_allowed_origin(origin: str | None) -> bool:
+    if not origin:
+        return False
+    parsed = urlparse(origin)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    hostname = parsed.hostname
+    if hostname in {"127.0.0.1", "localhost"}:
+        return True
+    request_host = request.host.split(":", 1)[0]
+    return hostname == request_host
 
 
 def _authenticate_request(repository: TopoLiteRepository) -> AuthenticatedUser | None:

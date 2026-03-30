@@ -3,15 +3,18 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Azazel-Topo-Lite</title>
+    <title>Azazel-Topo-Lite Inventory</title>
     <style>
       :root {
-        --bg: #f3f0e8;
-        --panel: #fffdf7;
-        --ink: #1f2933;
-        --accent: #0c6d62;
-        --muted: #5b6670;
-        --border: #d8d2c4;
+        --bg: #edf2eb;
+        --panel: rgba(255, 252, 246, 0.92);
+        --ink: #16221e;
+        --muted: #5d6c65;
+        --line: #c8d3cd;
+        --accent: #0f766e;
+        --accent-soft: rgba(15, 118, 110, 0.12);
+        --warn: #a16207;
+        --danger: #b91c1c;
       }
 
       * {
@@ -20,135 +23,694 @@
 
       body {
         margin: 0;
-        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-        background:
-          radial-gradient(circle at top left, #f9e9bf 0%, transparent 35%),
-          linear-gradient(160deg, var(--bg), #e7ecef);
         color: var(--ink);
+        font-family: "IBM Plex Sans", "Aptos", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(141, 204, 174, 0.4), transparent 28%),
+          radial-gradient(circle at right center, rgba(255, 212, 139, 0.35), transparent 22%),
+          linear-gradient(160deg, #edf2eb, #dbe6e3 52%, #edf2eb);
       }
 
       main {
-        max-width: 880px;
+        max-width: 1320px;
         margin: 0 auto;
-        padding: 48px 20px 64px;
+        padding: 32px 18px 56px;
+      }
+
+      .shell {
+        display: grid;
+        gap: 18px;
       }
 
       .hero,
-      .card {
+      .panel {
+        backdrop-filter: blur(16px);
         background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 20px;
-        box-shadow: 0 18px 45px rgba(31, 41, 51, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.6);
+        border-radius: 24px;
+        box-shadow: 0 24px 60px rgba(22, 34, 30, 0.08);
       }
 
       .hero {
+        display: grid;
+        gap: 20px;
         padding: 28px;
-        margin-bottom: 22px;
+      }
+
+      .hero-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: start;
+      }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-size: 0.78rem;
+        color: var(--muted);
       }
 
       h1 {
-        margin: 0 0 10px;
-        font-size: clamp(2rem, 4vw, 3.5rem);
-        line-height: 1;
+        margin: 0;
+        font-size: clamp(2rem, 4vw, 3.6rem);
+        line-height: 0.96;
       }
 
-      p {
-        margin: 0;
+      .lead {
+        margin: 10px 0 0;
+        max-width: 64ch;
         color: var(--muted);
         line-height: 1.6;
       }
 
-      .card {
-        padding: 22px;
+      .hero-actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
       }
 
-      .status {
+      .badge {
         display: inline-flex;
         align-items: center;
         gap: 10px;
-        margin-top: 18px;
         padding: 10px 14px;
         border-radius: 999px;
-        background: rgba(12, 109, 98, 0.1);
+        background: var(--accent-soft);
         color: var(--accent);
-        font-weight: 600;
+        font-weight: 700;
       }
 
-      .dot {
+      .badge.dot::before {
+        content: "";
         width: 10px;
         height: 10px;
         border-radius: 999px;
         background: currentColor;
       }
 
-      code {
-        padding: 0.1rem 0.35rem;
-        border-radius: 0.35rem;
-        background: rgba(31, 41, 51, 0.08);
+      .grid {
+        display: grid;
+        grid-template-columns: 340px minmax(0, 1fr);
+        gap: 18px;
       }
 
-      pre {
-        margin: 18px 0 0;
-        padding: 16px;
-        overflow: auto;
+      .panel {
+        padding: 20px;
+      }
+
+      .panel h2,
+      .panel h3 {
+        margin: 0 0 12px;
+        font-size: 1rem;
+      }
+
+      .panel p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .form-grid,
+      .filters {
+        display: grid;
+        gap: 12px;
+      }
+
+      .filters {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        margin-bottom: 16px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 0.84rem;
+        color: var(--muted);
+      }
+
+      input,
+      select,
+      button {
+        font: inherit;
+      }
+
+      input,
+      select {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
         border-radius: 14px;
-        background: #132029;
-        color: #f7fafc;
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--ink);
+      }
+
+      button {
+        border: 0;
+        border-radius: 14px;
+        padding: 11px 14px;
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      .button-primary {
+        background: var(--accent);
+        color: white;
+      }
+
+      .button-secondary {
+        background: rgba(22, 34, 30, 0.08);
+        color: var(--ink);
+      }
+
+      .auth-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .muted-card {
+        margin-top: 14px;
+        padding: 14px;
+        border-radius: 18px;
+        background: rgba(22, 34, 30, 0.05);
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .stat {
+        padding: 16px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.75);
+        border: 1px solid rgba(22, 34, 30, 0.06);
+      }
+
+      .stat strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 1.65rem;
+      }
+
+      .status-message {
+        min-height: 1.2rem;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .status-message.error {
+        color: var(--danger);
+      }
+
+      .inventory-wrap {
+        overflow: auto;
+        border-radius: 18px;
+        border: 1px solid rgba(22, 34, 30, 0.08);
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 980px;
+      }
+
+      th,
+      td {
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(22, 34, 30, 0.08);
+        text-align: left;
+        vertical-align: top;
+        white-space: nowrap;
+      }
+
+      th {
+        position: sticky;
+        top: 0;
+        background: rgba(245, 249, 247, 0.96);
+        color: var(--muted);
+        font-size: 0.8rem;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      tbody tr:hover {
+        background: rgba(15, 118, 110, 0.06);
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(22, 34, 30, 0.08);
+        color: var(--ink);
+        font-size: 0.84rem;
+        font-weight: 700;
+      }
+
+      .chip.up {
+        background: rgba(15, 118, 110, 0.14);
+        color: var(--accent);
+      }
+
+      .chip.down {
+        background: rgba(185, 28, 28, 0.12);
+        color: var(--danger);
+      }
+
+      .row-link {
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 700;
+      }
+
+      .empty {
+        padding: 28px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      @media (max-width: 1040px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .filters {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 640px) {
+        main {
+          padding: 18px 12px 32px;
+        }
+
+        .hero,
+        .panel {
+          border-radius: 18px;
+          padding: 16px;
+        }
+
+        .hero-top {
+          flex-direction: column;
+        }
+
+        .filters,
+        .stats {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
   </head>
   <body>
     <main>
-      <section class="hero">
-        <p>Lightweight network visibility workspace</p>
-        <h1>Azazel-Topo-Lite</h1>
-        <p>
-          This scaffold provides a minimal Flask API, a static UI, and a clean
-          directory layout for the initial implementation line.
-        </p>
-        <div class="status" id="status">
-          <span class="dot"></span>
-          <span>Checking backend health...</span>
-        </div>
-      </section>
+      <div class="shell">
+        <section class="hero">
+          <div class="hero-top">
+            <div>
+              <p class="eyebrow">Azazel-Topo-Lite</p>
+              <h1>Asset Inventory</h1>
+              <p class="lead">
+                Discovery, probe, and diff results are surfaced here as a searchable
+                host inventory. Login with a local account or an API token to inspect
+                the current network view.
+              </p>
+            </div>
+            <div class="hero-actions">
+              <span class="badge dot" id="backendBadge">Checking backend</span>
+              <span class="badge" id="authBadge">Signed out</span>
+            </div>
+          </div>
+        </section>
 
-      <section class="card">
-        <p>
-          Backend health is fetched from <code>/health</code> on the local API.
-        </p>
-        <pre id="output">{}</pre>
-      </section>
+        <section class="grid">
+          <aside class="panel">
+            <h2>Access</h2>
+            <p>Use a session login for browser access or drop in a bearer token for quick API-backed viewing.</p>
+
+            <form class="form-grid" id="loginForm">
+              <label>
+                Username
+                <input id="usernameInput" name="username" value="admin" autocomplete="username">
+              </label>
+              <label>
+                Password
+                <input id="passwordInput" name="password" type="password" value="change-me-admin-password" autocomplete="current-password">
+              </label>
+              <div class="auth-actions">
+                <button class="button-primary" type="submit">Login With Session</button>
+                <button class="button-secondary" id="logoutButton" type="button">Logout</button>
+              </div>
+            </form>
+
+            <div class="muted-card">
+              <form class="form-grid" id="tokenForm">
+                <label>
+                  API Token
+                  <input id="tokenInput" name="token" placeholder="change-me-admin-token">
+                </label>
+                <div class="auth-actions">
+                  <button class="button-secondary" type="submit">Use Token</button>
+                  <button class="button-secondary" id="clearTokenButton" type="button">Clear Token</button>
+                </div>
+              </form>
+            </div>
+
+            <div class="muted-card">
+              <h3>Current Session</h3>
+              <p id="sessionMeta">No authenticated session.</p>
+            </div>
+          </aside>
+
+          <section class="panel">
+            <div class="stats">
+              <div class="stat">
+                <span>Total Hosts</span>
+                <strong id="totalHosts">0</strong>
+              </div>
+              <div class="stat">
+                <span>Visible Rows</span>
+                <strong id="visibleRows">0</strong>
+              </div>
+              <div class="stat">
+                <span>Roles In View</span>
+                <strong id="rolesInView">0</strong>
+              </div>
+              <div class="stat">
+                <span>Up Hosts</span>
+                <strong id="upHosts">0</strong>
+              </div>
+            </div>
+
+            <div class="filters">
+              <label>
+                Search
+                <input id="searchInput" placeholder="IP, hostname, role">
+              </label>
+              <label>
+                Role
+                <select id="roleFilter">
+                  <option value="">All roles</option>
+                </select>
+              </label>
+              <label>
+                Status
+                <select id="statusFilter">
+                  <option value="">All status</option>
+                  <option value="up">up</option>
+                  <option value="down">down</option>
+                </select>
+              </label>
+              <label>
+                Sort
+                <select id="sortField">
+                  <option value="last_seen">last_seen</option>
+                  <option value="status">status</option>
+                  <option value="hostname">hostname</option>
+                  <option value="ip">ip</option>
+                </select>
+              </label>
+              <label>
+                Order
+                <select id="sortOrder">
+                  <option value="desc">desc</option>
+                  <option value="asc">asc</option>
+                </select>
+              </label>
+              <label>
+                Page Size
+                <select id="pageSize">
+                  <option value="25">25</option>
+                  <option value="50" selected>50</option>
+                  <option value="100">100</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="status-message" id="inventoryStatus">Waiting for login.</div>
+
+            <div class="inventory-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>IP</th>
+                    <th>MAC</th>
+                    <th>Vendor</th>
+                    <th>Hostname</th>
+                    <th>Role</th>
+                    <th>Confidence</th>
+                    <th>First Seen</th>
+                    <th>Last Seen</th>
+                    <th>Status</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody id="inventoryBody">
+                  <tr>
+                    <td class="empty" colspan="10">No data loaded yet.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </div>
     </main>
 
     <script>
-      async function loadStatus() {
-        const status = document.getElementById("status");
-        const output = document.getElementById("output");
+      const authStorageKey = "topoLiteAuth";
+      let backendBase = "";
+      let authState = loadStoredAuth();
 
+      function loadStoredAuth() {
         try {
-          const configResponse = await fetch("./dev-config.json", {
-            cache: "no-store",
-          });
-          const config = await configResponse.json();
-          const backendBase =
-            `http://${location.hostname}:${config.backendPort || 18080}`;
-          const response = await fetch(`${backendBase}/api/meta`);
-          const payload = await response.json();
-          status.innerHTML =
-            '<span class="dot"></span><span>Backend reachable</span>';
-          output.textContent = JSON.stringify(payload, null, 2);
-        } catch (error) {
-          status.innerHTML =
-            '<span class="dot"></span><span>Backend unavailable</span>';
-          output.textContent = JSON.stringify(
-            { error: String(error) },
-            null,
-            2
-          );
+          return JSON.parse(localStorage.getItem(authStorageKey) || "{}");
+        } catch (_error) {
+          return {};
         }
       }
 
-      loadStatus();
+      function saveAuthState(nextState) {
+        authState = nextState;
+        localStorage.setItem(authStorageKey, JSON.stringify(nextState));
+      }
+
+      function clearAuthState() {
+        authState = {};
+        localStorage.removeItem(authStorageKey);
+      }
+
+      async function loadConfig() {
+        const response = await fetch("./dev-config.json", { cache: "no-store" });
+        const config = await response.json();
+        backendBase = `http://${location.hostname}:${config.backendPort || 18080}`;
+      }
+
+      async function apiFetch(path, options = {}) {
+        const headers = new Headers(options.headers || {});
+        if (authState.mode === "token" && authState.token) {
+          headers.set("Authorization", `Bearer ${authState.token}`);
+        }
+        const response = await fetch(`${backendBase}${path}`, {
+          ...options,
+          headers,
+          credentials: "include",
+        });
+        if (!response.ok) {
+          const errorPayload = await response.json().catch(() => ({ error: "request_failed" }));
+          throw new Error(errorPayload.message || errorPayload.error || `HTTP ${response.status}`);
+        }
+        return response.json();
+      }
+
+      async function refreshAuthState() {
+        const backendBadge = document.getElementById("backendBadge");
+        const authBadge = document.getElementById("authBadge");
+        const sessionMeta = document.getElementById("sessionMeta");
+
+        try {
+          await apiFetch("/api/ping");
+          backendBadge.textContent = "Backend reachable";
+        } catch (error) {
+          backendBadge.textContent = "Backend unavailable";
+          sessionMeta.textContent = String(error);
+          return false;
+        }
+
+        try {
+          const me = await apiFetch("/api/auth/me");
+          authBadge.textContent = `${me.username} (${me.role})`;
+          sessionMeta.textContent = `Authenticated via ${me.auth_method}.`;
+          return true;
+        } catch (_error) {
+          authBadge.textContent = "Signed out";
+          sessionMeta.textContent = authState.mode === "token" ? "Stored token is not valid." : "No authenticated session.";
+          return false;
+        }
+      }
+
+      function renderStats(items) {
+        const roles = new Set(items.map((item) => item.role).filter(Boolean));
+        const upHosts = items.filter((item) => item.status === "up").length;
+        document.getElementById("totalHosts").textContent = items.length;
+        document.getElementById("visibleRows").textContent = items.length;
+        document.getElementById("rolesInView").textContent = roles.size;
+        document.getElementById("upHosts").textContent = upHosts;
+      }
+
+      function renderRoleOptions(items) {
+        const select = document.getElementById("roleFilter");
+        const current = select.value;
+        const roles = [...new Set(items.map((item) => item.role).filter(Boolean))].sort();
+        select.innerHTML = '<option value="">All roles</option>' +
+          roles.map((role) => `<option value="${role}">${role}</option>`).join("");
+        if (roles.includes(current)) {
+          select.value = current;
+        }
+      }
+
+      function renderInventory(items) {
+        const body = document.getElementById("inventoryBody");
+        if (!items.length) {
+          body.innerHTML = '<tr><td class="empty" colspan="10">No hosts match the current filters.</td></tr>';
+          renderStats(items);
+          return;
+        }
+
+        body.innerHTML = items.map((item) => `
+          <tr>
+            <td>${item.ip}</td>
+            <td>${item.mac || "-"}</td>
+            <td>${item.vendor || "-"}</td>
+            <td>${item.hostname || "-"}</td>
+            <td>${item.role || "-"}</td>
+            <td>${item.confidence == null ? "-" : Number(item.confidence).toFixed(2)}</td>
+            <td>${item.first_seen || "-"}</td>
+            <td>${item.last_seen || "-"}</td>
+            <td><span class="chip ${item.status || ""}">${item.status || "-"}</span></td>
+            <td><a class="row-link" href="./host.html?id=${item.id}">Open</a></td>
+          </tr>
+        `).join("");
+        renderStats(items);
+      }
+
+      async function loadInventory() {
+        const status = document.getElementById("inventoryStatus");
+        status.classList.remove("error");
+        status.textContent = "Loading inventory...";
+        try {
+          const params = new URLSearchParams({
+            page: "1",
+            page_size: document.getElementById("pageSize").value,
+            q: document.getElementById("searchInput").value.trim(),
+            role: document.getElementById("roleFilter").value,
+            status: document.getElementById("statusFilter").value,
+            sort: document.getElementById("sortField").value,
+            order: document.getElementById("sortOrder").value,
+          });
+          const payload = await apiFetch(`/api/hosts?${params.toString()}`);
+          renderRoleOptions(payload.items);
+          renderInventory(payload.items);
+          status.textContent = `Loaded ${payload.items.length} rows out of ${payload.total}.`;
+        } catch (error) {
+          status.classList.add("error");
+          status.textContent = String(error);
+        }
+      }
+
+      async function handleLogin(event) {
+        event.preventDefault();
+        const username = document.getElementById("usernameInput").value.trim();
+        const password = document.getElementById("passwordInput").value;
+        const status = document.getElementById("inventoryStatus");
+        status.classList.remove("error");
+        status.textContent = "Signing in...";
+        try {
+          const me = await apiFetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+          saveAuthState({ mode: "session", user: me.username });
+          await refreshAuthState();
+          await loadInventory();
+        } catch (error) {
+          status.classList.add("error");
+          status.textContent = String(error);
+        }
+      }
+
+      async function handleLogout() {
+        try {
+          if (authState.mode === "session") {
+            await apiFetch("/api/auth/logout", { method: "POST" });
+          }
+        } catch (_error) {
+          // Keep logout resilient even if the previous session is gone.
+        }
+        clearAuthState();
+        document.getElementById("inventoryBody").innerHTML =
+          '<tr><td class="empty" colspan="10">Logged out. Sign in to load hosts.</td></tr>';
+        document.getElementById("inventoryStatus").textContent = "Signed out.";
+        await refreshAuthState();
+      }
+
+      async function handleToken(event) {
+        event.preventDefault();
+        const token = document.getElementById("tokenInput").value.trim();
+        const status = document.getElementById("inventoryStatus");
+        if (!token) {
+          status.classList.add("error");
+          status.textContent = "Enter a token first.";
+          return;
+        }
+        saveAuthState({ mode: "token", token });
+        const ok = await refreshAuthState();
+        if (ok) {
+          await loadInventory();
+        } else {
+          status.classList.add("error");
+          status.textContent = "Token login failed.";
+        }
+      }
+
+      async function init() {
+        await loadConfig();
+        document.getElementById("loginForm").addEventListener("submit", handleLogin);
+        document.getElementById("logoutButton").addEventListener("click", handleLogout);
+        document.getElementById("tokenForm").addEventListener("submit", handleToken);
+        document.getElementById("clearTokenButton").addEventListener("click", async () => {
+          clearAuthState();
+          document.getElementById("tokenInput").value = "";
+          await refreshAuthState();
+        });
+
+        for (const id of ["searchInput", "roleFilter", "statusFilter", "sortField", "sortOrder", "pageSize"]) {
+          document.getElementById(id).addEventListener("change", loadInventory);
+        }
+        document.getElementById("searchInput").addEventListener("input", () => {
+          clearTimeout(window.__inventorySearchTimer);
+          window.__inventorySearchTimer = setTimeout(loadInventory, 180);
+        });
+
+        document.getElementById("tokenInput").value = authState.token || "";
+        const authenticated = await refreshAuthState();
+        if (authenticated) {
+          await loadInventory();
+        }
+      }
+
+      init();
     </script>
   </body>
 </html>

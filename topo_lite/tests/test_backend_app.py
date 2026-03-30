@@ -193,6 +193,20 @@ class BackendAppTests(unittest.TestCase):
         self.assertEqual(logout.status_code, 200)
         self.assertEqual(after_logout.status_code, 401)
 
+    def test_api_responses_include_cors_headers_for_frontend_origin(self) -> None:
+        response = self.client.open(
+            "/api/auth/login",
+            method="OPTIONS",
+            headers={
+                "Origin": "http://127.0.0.1:18081",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Access-Control-Allow-Origin"], "http://127.0.0.1:18081")
+        self.assertEqual(response.headers["Access-Control-Allow-Credentials"], "true")
+
     def test_access_and_audit_logs_are_written_as_jsonl(self) -> None:
         self._login("admin", "change-me-admin-password")
         self.client.get("/api/meta")

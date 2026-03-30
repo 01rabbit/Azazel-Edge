@@ -18,6 +18,10 @@ class ScaffoldLayoutTests(unittest.TestCase):
         for name in required:
             self.assertTrue((WORKSPACE_ROOT / name).is_dir(), name)
 
+    def test_inventory_and_host_detail_pages_exist(self) -> None:
+        self.assertTrue((WORKSPACE_ROOT / "frontend" / "index.html").is_file())
+        self.assertTrue((WORKSPACE_ROOT / "frontend" / "host.html").is_file())
+
     def test_schema_placeholder_matches_initial_issue_scope(self) -> None:
         self.assertEqual(SCHEMA_VERSION, "0.1.2")
         self.assertIn("hosts", INITIAL_TABLES)
