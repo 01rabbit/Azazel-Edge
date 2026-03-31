@@ -313,7 +313,7 @@ def create_app(
             "automatic_classification": classification,
             "override": override,
             "services": repository.list_services(host_id),
-            "events": [item for item in repository.list_events() if item.get("host_id") == host_id],
+            "events": [_serialize_event(item, repository) for item in repository.list_events() if item.get("host_id") == host_id],
             "observations": repository.list_observations(host_id),
         }
         return jsonify(payload)
@@ -329,7 +329,7 @@ def create_app(
 
     @app.get("/api/events")
     def events():
-        items = repository.list_events()
+        items = _serialize_events(repository)
         severity = request.args.get("severity")
         if severity:
             items = [item for item in items if item["severity"] == severity]
@@ -339,8 +339,29 @@ def create_app(
         host_id = request.args.get("host_id", type=int)
         if host_id is not None:
             items = [item for item in items if item.get("host_id") == host_id]
+        acknowledged = request.args.get("acknowledged")
+        if acknowledged == "true":
+            items = [item for item in items if item.get("acknowledged_at")]
+        elif acknowledged == "false":
+            items = [item for item in items if not item.get("acknowledged_at")]
         items = sorted(items, key=lambda item: int(item["id"]), reverse=True)
         return jsonify(_paginate(items))
+
+    @app.post("/api/events/<int:event_id>/acknowledge")
+    def acknowledge_event(event_id: int):
+        event = repository.get_event(event_id)
+        if event is None:
+            raise NotFound(f"event {event_id} not found")
+        user = _require_current_user()
+        updated = repository.acknowledge_event(event_id, actor=user.username)
+        append_audit_record(
+            loggers.audit,
+            "event_acknowledged",
+            actor=user.username,
+            event_id=event_id,
+            host_id=event.get("host_id"),
+        )
+        return jsonify(_serialize_event(updated, repository))
 
     @app.get("/api/topology")
     def topology():
@@ -569,6 +590,25 @@ def _build_effective_host_view(
         "ignored": ignored,
         "confidence": confidence,
         "classification": effective_classification,
+    }
+
+
+def _serialize_events(repository: TopoLiteRepository) -> list[dict[str, Any]]:
+    return [_serialize_event(item, repository) for item in repository.list_events()]
+
+
+def _serialize_event(event: dict[str, Any] | None, repository: TopoLiteRepository) -> dict[str, Any] | None:
+    if event is None:
+        return None
+    host = repository.get_host(int(event["host_id"])) if event.get("host_id") else None
+    return {
+        **event,
+        "host": {
+            "id": host["id"],
+            "ip": host["ip"],
+            "hostname": host["hostname"],
+        } if host else None,
+        "acknowledged": bool(event.get("acknowledged_at")),
     }
 
 

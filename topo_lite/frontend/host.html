@@ -57,6 +57,24 @@
         background: rgba(255,255,255,0.82);
       }
       ul { margin: 8px 0 0; padding-left: 18px; }
+      .stack-list {
+        display: grid;
+        gap: 12px;
+      }
+      .item {
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: rgba(15,118,110,0.05);
+      }
+      .item strong {
+        display: block;
+      }
+      .item span {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
       code {
         display: block;
         margin-top: 8px;
@@ -140,12 +158,20 @@
 
       <section class="panel stack">
         <div class="list-card">
+          <h2>Classification</h2>
+          <div id="classificationBlock" class="stack-list"></div>
+        </div>
+        <div class="list-card">
           <h2>Services</h2>
           <ul id="servicesList"></ul>
         </div>
         <div class="list-card">
           <h2>Events</h2>
           <ul id="eventsList"></ul>
+        </div>
+        <div class="list-card">
+          <h2>Observations</h2>
+          <div id="observationsBlock" class="stack-list"></div>
         </div>
         <div class="list-card">
           <h2>Override</h2>
@@ -226,6 +252,67 @@
         element.innerHTML = items.map((item) => `<li>${formatter(item)}</li>`).join("");
       }
 
+      function renderClassification(payload) {
+        const block = document.getElementById("classificationBlock");
+        const effective = payload.classification;
+        const automatic = payload.automatic_classification;
+        const parts = [];
+        if (effective) {
+          parts.push(`
+            <div class="item">
+              <strong>Effective classification</strong>
+              <span>label=${effective.label || "-"} role=${effective.role || "-"}</span>
+              <span>confidence=${effective.confidence ?? "-"} source=${effective.source || "-"}</span>
+              <span>icon=${effective.icon || "-"}</span>
+            </div>
+          `);
+        }
+        if (automatic) {
+          let reason = automatic.reason_json || "{}";
+          try {
+            reason = JSON.stringify(JSON.parse(reason), null, 2);
+          } catch (_error) {
+            reason = String(reason);
+          }
+          parts.push(`
+            <div class="item">
+              <strong>Automatic classification</strong>
+              <span>label=${automatic.label || "-"} confidence=${automatic.confidence ?? "-"}</span>
+              <code>${reason}</code>
+            </div>
+          `);
+        }
+        block.innerHTML = parts.join("") || '<div class="item"><strong>No classification yet.</strong></div>';
+      }
+
+      function renderObservations(observations) {
+        const block = document.getElementById("observationsBlock");
+        if (!observations.length) {
+          block.innerHTML = '<div class="item"><strong>No observations.</strong></div>';
+          return;
+        }
+        block.innerHTML = observations
+          .slice()
+          .reverse()
+          .slice(0, 12)
+          .map((item) => {
+            let payload = item.payload_json || "{}";
+            try {
+              payload = JSON.stringify(JSON.parse(payload), null, 2);
+            } catch (_error) {
+              payload = String(payload);
+            }
+            return `
+              <div class="item">
+                <strong>${item.source}</strong>
+                <span>${item.observed_at}</span>
+                <code>${payload}</code>
+              </div>
+            `;
+          })
+          .join("");
+      }
+
       let currentPayload = null;
       let backendBase = "";
       let hostId = "";
@@ -261,7 +348,9 @@
           <div class="fact"><span>Confidence</span><strong>${payload.classification?.confidence ?? "-"}</strong></div>
         `;
         renderList("servicesList", payload.services || [], (item) => `${item.proto}/${item.port} (${item.state})`);
-        renderList("eventsList", payload.events || [], (item) => `${item.event_type}: ${item.summary}`);
+        renderList("eventsList", payload.events || [], (item) => `${item.created_at} ${item.severity}: ${item.event_type}: ${item.summary}`);
+        renderClassification(payload);
+        renderObservations(payload.observations || []);
         document.getElementById("payloadBlock").textContent = JSON.stringify(payload, null, 2);
         applyOverrideForm(payload);
       }

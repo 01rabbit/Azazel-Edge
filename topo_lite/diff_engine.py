@@ -7,6 +7,7 @@ from db.repository import TopoLiteRepository
 
 
 SNAPSHOT_SCAN_KIND = "inventory_snapshot"
+MANAGEMENT_PORTS = {22, 445, 3389}
 
 
 def generate_inventory_diff(
@@ -27,6 +28,11 @@ def generate_inventory_diff(
         str(host["ip"]): dict(host)
         for host in previous_snapshot.get("hosts", [])
     }
+    previous_hosts_by_mac = {
+        str(host["mac"]): dict(host)
+        for host in previous_snapshot.get("hosts", [])
+        if host.get("mac")
+    }
     current_hosts = {
         str(host["ip"]): dict(host)
         for host in current_snapshot["hosts"]
@@ -44,6 +50,12 @@ def generate_inventory_diff(
                     repository.create_event(
                         host_id=int(current_host["host_id"]),
                         event_type="new_host",
+                        severity=_event_severity(
+                            "new_host",
+                            current_host=current_host,
+                            previous_host=None,
+                            previous_hosts_by_mac=previous_hosts_by_mac,
+                        ),
                         summary=f"new host discovered: {ip}",
                     )
                 )
@@ -52,12 +64,19 @@ def generate_inventory_diff(
                         repository.create_event(
                             host_id=int(current_host["host_id"]),
                             event_type="service_added",
+                            severity=_event_severity(
+                                "service_added",
+                                current_host=current_host,
+                                previous_host=None,
+                                service=service,
+                                previous_hosts_by_mac=previous_hosts_by_mac,
+                            ),
                             summary=f"service added on {ip}: {service['proto']}/{service['port']}",
                         )
                     )
                 continue
 
-            _append_change_events(repository, events, previous_host, current_host)
+            _append_change_events(repository, events, previous_host, current_host, previous_hosts_by_mac)
 
         for ip, previous_host in previous_hosts.items():
             if ip in current_hosts:
@@ -72,6 +91,12 @@ def generate_inventory_diff(
                     repository.create_event(
                         host_id=int(previous_host["host_id"]),
                         event_type="host_missing",
+                        severity=_event_severity(
+                            "host_missing",
+                            current_host=None,
+                            previous_host=previous_host,
+                            previous_hosts_by_mac=previous_hosts_by_mac,
+                        ),
                         summary=f"host missing after {missing_streak} scans: {ip}",
                     )
                 )
@@ -120,6 +145,10 @@ def build_inventory_snapshot(repository: TopoLiteRepository) -> dict[str, Any]:
         int(row["host_id"]): row
         for row in repository.list_classifications()
     }
+    overrides = {
+        int(row["host_id"]): row
+        for row in repository.list_overrides()
+    }
     probe_run = repository.get_latest_scan_run("service_probe", statuses=("completed", "partial_failed"))
     probe_services_by_host: dict[int, list[dict[str, Any]]] = {}
     probe_run_id: int | None = None
@@ -144,6 +173,11 @@ def build_inventory_snapshot(repository: TopoLiteRepository) -> dict[str, Any]:
         if host is None:
             continue
         classification = classifications.get(host_id)
+        override = overrides.get(host_id)
+        effective_role = (
+            str(override["fixed_role"]) if override and override.get("fixed_role")
+            else classification["label"] if classification else None
+        )
         hosts.append(
             {
                 "host_id": host_id,
@@ -151,7 +185,7 @@ def build_inventory_snapshot(repository: TopoLiteRepository) -> dict[str, Any]:
                 "mac": host["mac"],
                 "vendor": host["vendor"],
                 "hostname": host["hostname"],
-                "role": classification["label"] if classification else None,
+                "role": effective_role,
                 "open_services": sorted(
                     probe_services_by_host.get(host_id, []),
                     key=lambda service: (str(service["proto"]), int(service["port"])),
@@ -171,6 +205,7 @@ def _append_change_events(
     events: list[dict[str, Any]],
     previous_host: dict[str, Any],
     current_host: dict[str, Any],
+    previous_hosts_by_mac: dict[str, dict[str, Any]],
 ) -> None:
     host_id = int(current_host["host_id"])
     previous_hostname = previous_host.get("hostname")
@@ -180,6 +215,12 @@ def _append_change_events(
             repository.create_event(
                 host_id=host_id,
                 event_type="hostname_changed",
+                severity=_event_severity(
+                    "hostname_changed",
+                    current_host=current_host,
+                    previous_host=previous_host,
+                    previous_hosts_by_mac=previous_hosts_by_mac,
+                ),
                 summary=f"hostname changed on {current_host['ip']}: {previous_hostname!r} -> {current_hostname!r}",
             )
         )
@@ -191,6 +232,12 @@ def _append_change_events(
             repository.create_event(
                 host_id=host_id,
                 event_type="role_changed",
+                severity=_event_severity(
+                    "role_changed",
+                    current_host=current_host,
+                    previous_host=previous_host,
+                    previous_hosts_by_mac=previous_hosts_by_mac,
+                ),
                 summary=f"role changed on {current_host['ip']}: {previous_role!r} -> {current_role!r}",
             )
         )
@@ -208,6 +255,13 @@ def _append_change_events(
             repository.create_event(
                 host_id=host_id,
                 event_type="service_added",
+                severity=_event_severity(
+                    "service_added",
+                    current_host=current_host,
+                    previous_host=previous_host,
+                    service={"proto": proto, "port": port},
+                    previous_hosts_by_mac=previous_hosts_by_mac,
+                ),
                 summary=f"service added on {current_host['ip']}: {proto}/{port}",
             )
         )
@@ -216,9 +270,95 @@ def _append_change_events(
             repository.create_event(
                 host_id=host_id,
                 event_type="service_removed",
+                severity=_event_severity(
+                    "service_removed",
+                    current_host=current_host,
+                    previous_host=previous_host,
+                    service={"proto": proto, "port": port},
+                    previous_hosts_by_mac=previous_hosts_by_mac,
+                ),
                 summary=f"service removed on {current_host['ip']}: {proto}/{port}",
             )
         )
+
+
+def _event_severity(
+    event_type: str,
+    *,
+    current_host: dict[str, Any] | None,
+    previous_host: dict[str, Any] | None,
+    service: dict[str, Any] | None = None,
+    previous_hosts_by_mac: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    host = current_host or previous_host or {}
+    role = str(host.get("role") or "")
+    port = int(service["port"]) if service and service.get("port") is not None else None
+
+    if event_type == "new_host":
+        if _mac_changed_ip(current_host, previous_hosts_by_mac or {}):
+            return "high"
+        if _is_gateway_like(current_host):
+            return "high"
+        if _has_management_ports(current_host):
+            return "medium"
+        return "low"
+
+    if event_type == "host_missing":
+        if _is_gateway_like(previous_host):
+            return "high"
+        return "medium"
+
+    if event_type == "role_changed":
+        if _is_gateway_like(current_host) or _is_gateway_like(previous_host):
+            return "high"
+        if role in {"server", "network_device"} or str(previous_host.get("role") or "") in {"server", "network_device"}:
+            return "medium"
+        return "low"
+
+    if event_type == "hostname_changed":
+        return "medium" if _is_gateway_like(current_host) or _is_gateway_like(previous_host) else "low"
+
+    if event_type == "service_added":
+        if port in MANAGEMENT_PORTS:
+            if _is_gateway_like(current_host) or role in {"server", "network_device"}:
+                return "high"
+            return "medium"
+        return "low"
+
+    if event_type == "service_removed":
+        if port in MANAGEMENT_PORTS:
+            return "medium"
+        return "low"
+
+    return "info"
+
+
+def _is_gateway_like(host: dict[str, Any] | None) -> bool:
+    if not host:
+        return False
+    ip = str(host.get("ip") or "")
+    hostname = str(host.get("hostname") or "").lower()
+    role = str(host.get("role") or "").lower()
+    return ip.endswith(".1") or role == "network_device" or any(token in hostname for token in ("gateway", "router", "firewall"))
+
+
+def _has_management_ports(host: dict[str, Any] | None) -> bool:
+    if not host:
+        return False
+    ports = {int(service["port"]) for service in host.get("open_services", [])}
+    return bool(ports.intersection(MANAGEMENT_PORTS))
+
+
+def _mac_changed_ip(current_host: dict[str, Any] | None, previous_hosts_by_mac: dict[str, dict[str, Any]]) -> bool:
+    if not current_host:
+        return False
+    mac = current_host.get("mac")
+    if not mac:
+        return False
+    previous_host = previous_hosts_by_mac.get(str(mac))
+    if not previous_host:
+        return False
+    return str(previous_host.get("ip")) != str(current_host.get("ip"))
 
 
 def _load_snapshot(scan_run: dict[str, Any] | None) -> dict[str, Any]:

@@ -43,7 +43,7 @@ class ScaffoldLayoutTests(unittest.TestCase):
             self.assertIn("WantedBy=multi-user.target", text)
 
     def test_schema_placeholder_matches_initial_issue_scope(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, "0.1.2")
+        self.assertEqual(SCHEMA_VERSION, "0.1.3")
         self.assertIn("hosts", INITIAL_TABLES)
         self.assertIn("scan_runs", INITIAL_TABLES)
 

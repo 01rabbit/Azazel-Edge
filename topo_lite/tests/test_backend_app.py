@@ -130,6 +130,8 @@ class BackendAppTests(unittest.TestCase):
         self.assertEqual(scan_runs["total"], 1)
         self.assertTrue(any(node["type"] == "subnet" for node in topology["nodes"]))
         self.assertTrue(any(edge["type"] == "belongs_to" for edge in topology["edges"]))
+        self.assertEqual(events["items"][0]["host"]["ip"], "192.168.40.10")
+        self.assertFalse(events["items"][0]["acknowledged"])
 
     def test_create_override_endpoint_persists_record(self) -> None:
         self._login("admin", "change-me-admin-password")
@@ -228,6 +230,18 @@ class BackendAppTests(unittest.TestCase):
         self.assertEqual(not_found.get_json()["error"], "not_found")
         self.assertEqual(invalid.status_code, 400)
         self.assertEqual(invalid.get_json()["error"], "bad_request")
+
+    def test_event_acknowledge_endpoint_persists_state(self) -> None:
+        self._login("admin", "change-me-admin-password")
+        event = self.repository.list_events()[0]
+
+        response = self.client.post(f"/api/events/{event['id']}/acknowledge")
+        events = self.client.get("/api/events?acknowledged=true").get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["acknowledged"])
+        self.assertEqual(events["total"], 1)
+        self.assertEqual(events["items"][0]["acknowledged_by"], "admin")
 
     def test_unauthenticated_requests_are_rejected(self) -> None:
         response = self.client.get("/api/hosts/1")

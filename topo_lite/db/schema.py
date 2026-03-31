@@ -5,7 +5,7 @@ from contextlib import closing
 from pathlib import Path
 
 
-SCHEMA_VERSION = "0.1.2"
+SCHEMA_VERSION = "0.1.3"
 
 INITIAL_TABLES = (
     "hosts",
@@ -73,6 +73,8 @@ DDL_STATEMENTS = (
         severity TEXT NOT NULL DEFAULT 'info',
         summary TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        acknowledged_at TEXT,
+        acknowledged_by TEXT,
         FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE SET NULL
     )
     """,
@@ -168,6 +170,8 @@ def connect_db(database_path: str | Path) -> sqlite3.Connection:
 def ensure_schema(connection: sqlite3.Connection) -> None:
     for statement in DDL_STATEMENTS:
         connection.execute(statement)
+    _ensure_column(connection, "events", "acknowledged_at", "TEXT")
+    _ensure_column(connection, "events", "acknowledged_by", "TEXT")
     connection.execute(
         """
         INSERT INTO schema_metadata(key, value)
@@ -177,6 +181,14 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
         (SCHEMA_VERSION,),
     )
     connection.commit()
+
+
+def _ensure_column(connection: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+    existing_columns = {row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in rows}
+    if column in existing_columns:
+        return
+    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 def initialize_database(database_path: str | Path) -> Path:

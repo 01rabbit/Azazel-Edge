@@ -255,6 +255,31 @@ class TopoLiteRepository:
             rows = connection.execute("SELECT * FROM events ORDER BY id").fetchall()
         return [dict(row) for row in rows]
 
+    def get_event(self, event_id: int) -> dict[str, Any] | None:
+        with closing(self.connect()) as connection:
+            row = connection.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+        return row_to_dict(row)
+
+    def acknowledge_event(
+        self,
+        event_id: int,
+        *,
+        actor: str | None,
+        acknowledged_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        timestamp = acknowledged_at or utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE events
+                SET acknowledged_at = ?, acknowledged_by = ?
+                WHERE id = ?
+                """,
+                (timestamp, actor, event_id),
+            )
+            row = connection.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+        return row_to_dict(row)
+
     def get_latest_scan_run(
         self,
         scan_kind: str,

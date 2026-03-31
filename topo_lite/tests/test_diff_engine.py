@@ -65,6 +65,9 @@ class DiffEngineTests(unittest.TestCase):
         self.assertEqual(result["event_count"], 2)
         self.assertIn("new_host", event_types)
         self.assertIn("service_added", event_types)
+        severities = {event["event_type"]: event["severity"] for event in result["events"]}
+        self.assertEqual(severities["new_host"], "medium")
+        self.assertEqual(severities["service_added"], "medium")
 
     def test_hostname_service_and_missing_events_respect_threshold(self) -> None:
         host = self.repository.upsert_host(ip="192.168.40.30", hostname="old-name")
@@ -96,6 +99,47 @@ class DiffEngineTests(unittest.TestCase):
         self._write_probe_snapshot([])
         second_missing = generate_inventory_diff(self.repository, missing_threshold_runs=2)
         self.assertIn("host_missing", [event["event_type"] for event in second_missing["events"]])
+
+    def test_gateway_like_changes_raise_high_severity(self) -> None:
+        gateway = self.repository.upsert_host(ip="192.168.40.1", hostname="gateway-main")
+        self.repository.set_classification(
+            host_id=gateway["id"],
+            label="network_device",
+            confidence=0.95,
+            reason={"hostname": "gateway-main"},
+        )
+        self._write_discovery_snapshot(
+            [{"host_id": gateway["id"], "ip": gateway["ip"], "mac": "aa:bb:cc:dd:ee:01", "vendor": "Gateway", "subnet": "192.168.40.0/24"}]
+        )
+        self._write_probe_snapshot(
+            [{"host_id": gateway["id"], "ip": gateway["ip"], "proto": "tcp", "port": 443, "state": "open", "source": "tcp-connect-probe"}]
+        )
+        generate_inventory_diff(self.repository, missing_threshold_runs=1)
+
+        self._write_discovery_snapshot([])
+        self._write_probe_snapshot([])
+        result = generate_inventory_diff(self.repository, missing_threshold_runs=1)
+
+        host_missing = next(event for event in result["events"] if event["event_type"] == "host_missing")
+        self.assertEqual(host_missing["severity"], "high")
+
+    def test_same_mac_different_ip_new_host_is_high_severity(self) -> None:
+        first = self.repository.upsert_host(ip="192.168.40.50", mac="aa:bb:cc:dd:ee:50", hostname="device-a")
+        self._write_discovery_snapshot(
+            [{"host_id": first["id"], "ip": first["ip"], "mac": first["mac"], "vendor": "Vendor", "subnet": "192.168.40.0/24"}]
+        )
+        self._write_probe_snapshot([])
+        generate_inventory_diff(self.repository)
+
+        second = self.repository.upsert_host(ip="192.168.40.51", mac="aa:bb:cc:dd:ee:50", hostname="device-a")
+        self._write_discovery_snapshot(
+            [{"host_id": second["id"], "ip": second["ip"], "mac": second["mac"], "vendor": "Vendor", "subnet": "192.168.40.0/24"}]
+        )
+        self._write_probe_snapshot([])
+        result = generate_inventory_diff(self.repository)
+
+        new_host = next(event for event in result["events"] if event["event_type"] == "new_host")
+        self.assertEqual(new_host["severity"], "high")
 
     def _write_discovery_snapshot(self, discovered_hosts: list[dict[str, object]]) -> None:
         run = self.repository.create_scan_run(scan_kind="arp_discovery")

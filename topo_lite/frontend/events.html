@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Azazel-Topo-Lite Event Timeline</title>
+    <style>
+      :root {
+        --bg: #eef3ef;
+        --panel: rgba(255,255,255,0.92);
+        --ink: #14211d;
+        --muted: #64716b;
+        --line: #d1dad5;
+        --accent: #0f766e;
+        --high: #b91c1c;
+        --medium: #a16207;
+        --low: #2563eb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Aptos", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(151, 214, 188, 0.3), transparent 22%),
+          linear-gradient(180deg, #eef3ef, #f8faf8);
+      }
+      main {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 26px 18px 40px;
+        display: grid;
+        gap: 18px;
+      }
+      .panel {
+        padding: 20px;
+        border-radius: 22px;
+        background: var(--panel);
+        border: 1px solid rgba(255,255,255,0.8);
+        box-shadow: 0 24px 56px rgba(20, 33, 29, 0.08);
+      }
+      .filters {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 12px;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+      input, select, button {
+        font: inherit;
+      }
+      input, select {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.96);
+      }
+      button {
+        padding: 10px 14px;
+        border-radius: 14px;
+        border: 0;
+        cursor: pointer;
+        font-weight: 700;
+      }
+      .primary { background: var(--accent); color: white; }
+      .secondary { background: rgba(15,118,110,0.08); color: var(--ink); }
+      .timeline {
+        display: grid;
+        gap: 12px;
+      }
+      .event {
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid rgba(20,33,29,0.08);
+        background: rgba(255,255,255,0.9);
+      }
+      .event-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: start;
+      }
+      .chips {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .chip {
+        display: inline-flex;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+      .chip.high { background: rgba(185,28,28,0.12); color: var(--high); }
+      .chip.medium { background: rgba(161,98,7,0.12); color: var(--medium); }
+      .chip.low, .chip.info { background: rgba(37,99,235,0.12); color: var(--low); }
+      .summary {
+        margin: 8px 0 0;
+        color: var(--muted);
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+      dialog {
+        width: min(760px, calc(100vw - 24px));
+        border: 0;
+        border-radius: 20px;
+        padding: 0;
+        overflow: hidden;
+        box-shadow: 0 24px 56px rgba(20,33,29,0.2);
+      }
+      dialog::backdrop {
+        background: rgba(20, 33, 29, 0.4);
+      }
+      .dialog-body {
+        padding: 20px;
+        display: grid;
+        gap: 14px;
+      }
+      pre {
+        margin: 0;
+        padding: 14px;
+        border-radius: 14px;
+        background: #10202b;
+        color: #eef6ff;
+        overflow: auto;
+      }
+      .status {
+        min-height: 1.2rem;
+        color: var(--muted);
+      }
+      a { color: var(--accent); text-decoration: none; font-weight: 700; }
+      @media (max-width: 860px) {
+        .filters { grid-template-columns: 1fr 1fr; }
+      }
+      @media (max-width: 560px) {
+        .filters { grid-template-columns: 1fr; }
+        .event-top { flex-direction: column; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a href="./index.html">Back to inventory</a>
+      <section class="panel">
+        <h1>Event Timeline</h1>
+        <p class="summary">Track diff events, filter by severity or type, and acknowledge reviewed items.</p>
+      </section>
+
+      <section class="panel">
+        <div class="filters">
+          <label>
+            Severity
+            <select id="severityFilter">
+              <option value="">All severities</option>
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+              <option value="info">info</option>
+            </select>
+          </label>
+          <label>
+            Event Type
+            <select id="eventTypeFilter">
+              <option value="">All event types</option>
+              <option value="new_host">new_host</option>
+              <option value="host_missing">host_missing</option>
+              <option value="service_added">service_added</option>
+              <option value="service_removed">service_removed</option>
+              <option value="role_changed">role_changed</option>
+              <option value="hostname_changed">hostname_changed</option>
+            </select>
+          </label>
+          <label>
+            Acknowledged
+            <select id="ackFilter">
+              <option value="">All</option>
+              <option value="false">Unacknowledged</option>
+              <option value="true">Acknowledged</option>
+            </select>
+          </label>
+          <label>
+            Search
+            <input id="searchInput" placeholder="summary, host, IP">
+          </label>
+          <label>
+            Page Size
+            <select id="pageSize">
+              <option value="25">25</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions">
+          <button id="reloadButton" class="secondary" type="button">Reload</button>
+        </div>
+        <p class="status" id="timelineStatus">Loading timeline...</p>
+      </section>
+
+      <section class="panel">
+        <div id="timeline" class="timeline"></div>
+      </section>
+    </main>
+
+    <dialog id="eventDialog">
+      <div class="dialog-body">
+        <div class="actions">
+          <button id="closeDialog" class="secondary" type="button">Close</button>
+        </div>
+        <div id="dialogMeta"></div>
+        <pre id="dialogPayload">{}</pre>
+      </div>
+    </dialog>
+
+    <script>
+      const authState = JSON.parse(localStorage.getItem("topoLiteAuth") || "{}");
+      let backendBase = "";
+      let timelineItems = [];
+
+      async function loadConfig() {
+        let response = await fetch("./runtime-config.json", { cache: "no-store" });
+        if (!response.ok) {
+          response = await fetch("./dev-config.json", { cache: "no-store" });
+        }
+        const config = await response.json();
+        backendBase = `http://${location.hostname}:${config.backendPort || 18080}`;
+      }
+
+      async function apiFetch(path, options = {}) {
+        const headers = new Headers(options.headers || {});
+        if (authState.mode === "token" && authState.token) {
+          headers.set("Authorization", `Bearer ${authState.token}`);
+        }
+        if (options.body) {
+          headers.set("Content-Type", "application/json");
+        }
+        const response = await fetch(`${backendBase}${path}`, {
+          method: options.method || "GET",
+          headers,
+          credentials: "include",
+          body: options.body ? JSON.stringify(options.body) : undefined,
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({ error: "request_failed" }));
+          throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
+        }
+        return response.status === 204 ? null : response.json();
+      }
+
+      function filteredItems() {
+        const query = document.getElementById("searchInput").value.trim().toLowerCase();
+        return timelineItems.filter((item) => {
+          if (query) {
+            const haystack = [item.summary, item.host?.hostname, item.host?.ip, item.event_type].join(" ").toLowerCase();
+            if (!haystack.includes(query)) {
+              return false;
+            }
+          }
+          return true;
+        });
+      }
+
+      function renderTimeline() {
+        const target = document.getElementById("timeline");
+        const items = filteredItems();
+        if (!items.length) {
+          target.innerHTML = '<div class="event"><strong>No events match the current filters.</strong></div>';
+          return;
+        }
+        target.innerHTML = items.map((item) => `
+          <article class="event">
+            <div class="event-top">
+              <div>
+                <div class="chips">
+                  <span class="chip ${item.severity}">${item.severity}</span>
+                  <span class="chip info">${item.event_type}</span>
+                  ${item.acknowledged ? '<span class="chip low">acknowledged</span>' : ''}
+                </div>
+                <p class="summary">${item.summary}</p>
+                <p class="summary">${item.created_at} ${item.host ? `· ${item.host.hostname || item.host.ip} (${item.host.ip})` : ''}</p>
+              </div>
+            </div>
+            <div class="actions">
+              ${item.host ? `<a href="./host.html?id=${item.host.id}">Open host</a>` : ""}
+              <button class="secondary" type="button" data-open="${item.id}">Details</button>
+              ${!item.acknowledged ? `<button class="primary" type="button" data-ack="${item.id}">Acknowledge</button>` : ""}
+            </div>
+          </article>
+        `).join("");
+      }
+
+      function attachTimelineActions() {
+        document.querySelectorAll("[data-open]").forEach((button) => {
+          button.addEventListener("click", () => openDialog(Number(button.dataset.open)));
+        });
+        document.querySelectorAll("[data-ack]").forEach((button) => {
+          button.addEventListener("click", () => acknowledgeEvent(Number(button.dataset.ack)));
+        });
+      }
+
+      async function loadTimeline() {
+        const status = document.getElementById("timelineStatus");
+        status.textContent = "Loading timeline...";
+        const params = new URLSearchParams({
+          severity: document.getElementById("severityFilter").value,
+          event_type: document.getElementById("eventTypeFilter").value,
+          acknowledged: document.getElementById("ackFilter").value,
+          page: "1",
+          page_size: document.getElementById("pageSize").value,
+        });
+        try {
+          const payload = await apiFetch(`/api/events?${params.toString()}`);
+          timelineItems = payload.items;
+          renderTimeline();
+          attachTimelineActions();
+          status.textContent = `Loaded ${payload.items.length} of ${payload.total} events.`;
+        } catch (error) {
+          status.textContent = String(error);
+        }
+      }
+
+      function openDialog(eventId) {
+        const item = timelineItems.find((entry) => entry.id === eventId);
+        if (!item) {
+          return;
+        }
+        document.getElementById("dialogMeta").innerHTML = `
+          <strong>${item.event_type}</strong>
+          <p>${item.summary}</p>
+          <p>${item.created_at} · severity=${item.severity} · acknowledged=${item.acknowledged ? "yes" : "no"}</p>
+        `;
+        document.getElementById("dialogPayload").textContent = JSON.stringify(item, null, 2);
+        document.getElementById("eventDialog").showModal();
+      }
+
+      async function acknowledgeEvent(eventId) {
+        await apiFetch(`/api/events/${eventId}/acknowledge`, { method: "POST" });
+        await loadTimeline();
+      }
+
+      async function init() {
+        await loadConfig();
+        for (const id of ["severityFilter", "eventTypeFilter", "ackFilter", "pageSize"]) {
+          document.getElementById(id).addEventListener("change", loadTimeline);
+        }
+        document.getElementById("searchInput").addEventListener("input", renderTimeline);
+        document.getElementById("reloadButton").addEventListener("click", loadTimeline);
+        document.getElementById("closeDialog").addEventListener("click", () => {
+          document.getElementById("eventDialog").close();
+        });
+        await loadTimeline();
+      }
+
+      init().catch((error) => {
+        document.getElementById("timelineStatus").textContent = String(error);
+      });
+    </script>
+  </body>
+</html>

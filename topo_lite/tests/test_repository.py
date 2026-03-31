@@ -40,6 +40,9 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(len(self.repository.list_hosts()), 1)
         self.assertEqual(len(self.repository.list_services(host["id"])), 1)
         self.assertEqual(len(self.repository.list_events()), 1)
+        acknowledged = self.repository.acknowledge_event(event["id"], actor="admin")
+        self.assertEqual(acknowledged["acknowledged_by"], "admin")
+        self.assertIsNotNone(self.repository.get_event(event["id"])["acknowledged_at"])
 
     def test_latest_scan_run_classification_and_override_helpers(self) -> None:
         host = self.repository.upsert_host(ip="192.168.40.21", hostname="desk-01")
@@ -62,6 +65,7 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(self.repository.list_overrides(host["id"])[0]["id"], override["id"])
         self.assertEqual(self.repository.get_latest_override(host["id"])["fixed_label"], "managed-desktop")
         self.assertEqual(self.repository.get_latest_scan_run("inventory_snapshot", statuses=("completed",))["id"], run["id"])
+        self.assertIsNone(self.repository.get_previous_scan_run("inventory_snapshot", before_run_id=run["id"]))
 
     def test_user_and_api_token_helpers(self) -> None:
         user = self.repository.upsert_user(
