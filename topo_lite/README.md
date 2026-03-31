@@ -238,6 +238,38 @@ The migrated installer now copies these units and the default environment file.
 Set `ENABLE_TOPO_LITE=1` when running `installer/internal/install_migrated_tools.sh`
 if you want the services enabled automatically.
 
+## Backup and Recovery
+
+Create a timestamped backup bundle with the SQLite DB and current config:
+
+```bash
+cd topo_lite
+make backup-state
+```
+
+Restore a bundle back into the active workspace:
+
+```bash
+cd topo_lite
+PYTHONPATH=. python3 scripts/restore_state.py \
+  --bundle-dir backups/topo-lite-backup-YYYYMMDDTHHMMSSZ \
+  --restore-db \
+  --restore-config
+```
+
+If the DB is lost and you only want to restore config and rebuild state from
+fresh observations, initialize an empty DB and rerun discovery/probe/diff:
+
+```bash
+cd topo_lite
+make init-db
+make run-discovery
+make run-probe
+make run-diff
+```
+
+Detailed recovery notes are in [docs/recovery.md](./docs/recovery.md).
+
 ## Logs
 
 The scaffold writes JSONL logs by default:

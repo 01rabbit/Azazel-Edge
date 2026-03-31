@@ -21,6 +21,8 @@ class ScaffoldLayoutTests(unittest.TestCase):
     def test_inventory_and_host_detail_pages_exist(self) -> None:
         self.assertTrue((WORKSPACE_ROOT / "frontend" / "index.html").is_file())
         self.assertTrue((WORKSPACE_ROOT / "frontend" / "host.html").is_file())
+        self.assertTrue((WORKSPACE_ROOT / "frontend" / "events.html").is_file())
+        self.assertTrue((WORKSPACE_ROOT / "frontend" / "topology.html").is_file())
 
     def test_systemd_assets_exist(self) -> None:
         systemd_dir = WORKSPACE_ROOT / "systemd"

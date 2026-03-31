@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Azazel-Topo-Lite Topology</title>
+    <style>
+      :root {
+        --bg: #eef3f1;
+        --panel: rgba(255,255,255,0.93);
+        --ink: #15211d;
+        --muted: #63706a;
+        --line: #d0dad4;
+        --accent: #0f766e;
+        --accent-soft: rgba(15,118,110,0.08);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Aptos", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(137, 201, 173, 0.28), transparent 24%),
+          linear-gradient(180deg, #eef3f1, #f8faf9);
+      }
+      main {
+        max-width: 1340px;
+        margin: 0 auto;
+        padding: 26px 18px 42px;
+        display: grid;
+        gap: 18px;
+      }
+      .panel {
+        padding: 22px;
+        border-radius: 22px;
+        background: var(--panel);
+        border: 1px solid rgba(255,255,255,0.8);
+        box-shadow: 0 24px 56px rgba(21, 33, 29, 0.08);
+      }
+      .summary {
+        margin: 8px 0 0;
+        color: var(--muted);
+      }
+      .topology-grid {
+        display: grid;
+        gap: 16px;
+      }
+      .subnet {
+        padding: 18px;
+        border-radius: 20px;
+        border: 1px solid rgba(21,33,29,0.08);
+        background: rgba(255,255,255,0.88);
+        display: grid;
+        gap: 14px;
+      }
+      .subnet-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        align-items: start;
+      }
+      .node-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+      }
+      .node {
+        padding: 14px;
+        border-radius: 18px;
+        background: var(--accent-soft);
+        border: 1px solid rgba(15,118,110,0.08);
+      }
+      .node.gateway {
+        background: rgba(245, 158, 11, 0.12);
+      }
+      .node h3 {
+        margin: 0;
+        font-size: 1rem;
+      }
+      .node p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+      .chips {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+      .chip {
+        display: inline-flex;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(21,33,29,0.08);
+        color: var(--ink);
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+      .links {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+      .edge-list {
+        display: grid;
+        gap: 8px;
+      }
+      .edge {
+        padding: 10px 12px;
+        border-radius: 14px;
+        background: rgba(21,33,29,0.05);
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+      .status {
+        min-height: 1.2rem;
+        color: var(--muted);
+      }
+      a {
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 700;
+      }
+      @media (max-width: 720px) {
+        .subnet-top {
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a href="./index.html">Back to inventory</a>
+      <section class="panel">
+        <h1>Topology View</h1>
+        <p class="summary">Grouped logical topology from the current API snapshot. Hosts stay grouped by subnet, with gateway nodes highlighted and exposed services shown as edges.</p>
+      </section>
+      <section class="panel">
+        <p id="status" class="status">Loading topology...</p>
+        <div id="topologyGrid" class="topology-grid"></div>
+      </section>
+    </main>
+
+    <script>
+      const authState = JSON.parse(localStorage.getItem("topoLiteAuth") || "{}");
+      let backendBase = "";
+
+      async function loadConfig() {
+        let response = await fetch("./runtime-config.json", { cache: "no-store" });
+        if (!response.ok) {
+          response = await fetch("./dev-config.json", { cache: "no-store" });
+        }
+        const config = await response.json();
+        backendBase = `http://${location.hostname}:${config.backendPort || 18080}`;
+      }
+
+      async function apiFetch(path) {
+        const headers = new Headers();
+        if (authState.mode === "token" && authState.token) {
+          headers.set("Authorization", `Bearer ${authState.token}`);
+        }
+        const response = await fetch(`${backendBase}${path}`, {
+          headers,
+          credentials: "include",
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({ error: "request_failed" }));
+          throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
+        }
+        return response.json();
+      }
+
+      function groupTopology(payload) {
+        const nodes = new Map(payload.nodes.map((node) => [node.id, node]));
+        const subnets = payload.nodes.filter((node) => node.type === "subnet").map((subnet) => ({
+          ...subnet,
+          hosts: [],
+          services: [],
+          edges: [],
+        }));
+        const subnetMap = new Map(subnets.map((subnet) => [subnet.id, subnet]));
+
+        for (const edge of payload.edges) {
+          if (edge.type === "belongs_to") {
+            const host = nodes.get(edge.source);
+            const subnet = subnetMap.get(edge.target);
+            if (host && subnet) {
+              subnet.hosts.push(host);
+              subnet.edges.push(edge);
+            }
+          }
+        }
+
+        for (const edge of payload.edges) {
+          if (edge.type !== "exposes") {
+            continue;
+          }
+          const hostId = String(edge.source);
+          const serviceNode = nodes.get(edge.target);
+          for (const subnet of subnets) {
+            const host = subnet.hosts.find((item) => item.id === hostId);
+            if (!host || !serviceNode) {
+              continue;
+            }
+            subnet.services.push({
+              host,
+              service: serviceNode,
+              edge,
+            });
+          }
+        }
+
+        return subnets;
+      }
+
+      function renderTopology(payload) {
+        const subnets = groupTopology(payload);
+        const grid = document.getElementById("topologyGrid");
+        if (!subnets.length) {
+          grid.innerHTML = '<div class="subnet"><strong>No topology data available.</strong></div>';
+          return;
+        }
+        grid.innerHTML = subnets.map((subnet) => `
+          <section class="subnet">
+            <div class="subnet-top">
+              <div>
+                <h2>${subnet.label}</h2>
+                <p class="summary">${subnet.hosts.length} hosts · ${subnet.services.length} exposed services</p>
+              </div>
+              <div class="chips">
+                <span class="chip">belongs_to ${subnet.edges.length}</span>
+                <span class="chip">exposes ${subnet.services.length}</span>
+              </div>
+            </div>
+            <div class="node-row">
+              ${subnet.hosts.map((host) => `
+                <article class="node ${host.type}">
+                  <h3>${host.label}</h3>
+                  <p>${host.ip || ""}</p>
+                  <div class="chips">
+                    <span class="chip">${host.type}</span>
+                    <span class="chip">${host.role || "unclassified"}</span>
+                    <span class="chip">${host.status || "-"}</span>
+                  </div>
+                  <div class="links">
+                    <a href="./host.html?id=${String(host.id).split(":").pop()}">Open host</a>
+                  </div>
+                </article>
+              `).join("")}
+            </div>
+            <div class="edge-list">
+              ${subnet.services.map((item) => `
+                <div class="edge">
+                  ${item.host.label} exposes ${item.service.label}
+                </div>
+              `).join("") || '<div class="edge">No exposed services in this subnet.</div>'}
+            </div>
+          </section>
+        `).join("");
+      }
+
+      async function init() {
+        await loadConfig();
+        const status = document.getElementById("status");
+        try {
+          const payload = await apiFetch("/api/topology");
+          renderTopology(payload);
+          status.textContent = `Loaded ${payload.nodes.length} nodes and ${payload.edges.length} edges.`;
+        } catch (error) {
+          status.textContent = String(error);
+        }
+      }
+
+      init();
+    </script>
+  </body>
+</html>
