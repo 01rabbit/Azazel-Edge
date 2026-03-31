@@ -67,8 +67,63 @@
         color: #eef6ff;
       }
       a { color: var(--accent); text-decoration: none; font-weight: 700; }
+      .form-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+      input, textarea, button {
+        font: inherit;
+      }
+      input, textarea {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.95);
+      }
+      textarea {
+        min-height: 100px;
+        resize: vertical;
+      }
+      .span-2 {
+        grid-column: span 2;
+      }
+      .toggle {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--ink);
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      button {
+        padding: 10px 14px;
+        border-radius: 14px;
+        border: 0;
+        cursor: pointer;
+        font-weight: 700;
+      }
+      .primary { background: var(--accent); color: white; }
+      .secondary { background: rgba(15,118,110,0.08); color: var(--ink); }
+      .danger { background: rgba(185,28,28,0.12); color: #991b1b; }
+      .status {
+        min-height: 1.2rem;
+        color: var(--muted);
+      }
       @media (max-width: 760px) {
         .facts { grid-template-columns: 1fr; }
+        .form-grid { grid-template-columns: 1fr; }
+        .span-2 { grid-column: auto; }
       }
     </style>
   </head>
@@ -93,6 +148,36 @@
           <ul id="eventsList"></ul>
         </div>
         <div class="list-card">
+          <h2>Override</h2>
+          <p id="overrideStatus" class="status">Loading override state...</p>
+          <form id="overrideForm" class="form-grid">
+            <label>
+              Fixed label
+              <input id="fixedLabel" name="fixedLabel" type="text" placeholder="trusted-printer">
+            </label>
+            <label>
+              Fixed role
+              <input id="fixedRole" name="fixedRole" type="text" placeholder="printer">
+            </label>
+            <label>
+              Fixed icon
+              <input id="fixedIcon" name="fixedIcon" type="text" placeholder="printer">
+            </label>
+            <label class="toggle">
+              <input id="ignored" name="ignored" type="checkbox">
+              Ignore this host in inventory and topology
+            </label>
+            <label class="span-2">
+              Note
+              <textarea id="note" name="note" placeholder="known device"></textarea>
+            </label>
+            <div class="actions span-2">
+              <button class="primary" type="submit" id="saveOverride">Save override</button>
+              <button class="danger" type="button" id="deleteOverride">Delete override</button>
+            </div>
+          </form>
+        </div>
+        <div class="list-card">
           <h2>Raw Payload</h2>
           <code id="payloadBlock">{}</code>
         </div>
@@ -111,20 +196,25 @@
         return `http://${location.hostname}:${config.backendPort || 18080}`;
       }
 
-      async function apiFetch(base, path) {
+      async function apiFetch(base, path, options = {}) {
         const headers = {};
         if (authState.mode === "token" && authState.token) {
           headers.Authorization = `Bearer ${authState.token}`;
         }
+        if (options.body) {
+          headers["Content-Type"] = "application/json";
+        }
         const response = await fetch(`${base}${path}`, {
+          method: options.method || "GET",
           headers,
           credentials: "include",
+          body: options.body ? JSON.stringify(options.body) : undefined,
         });
         if (!response.ok) {
           const payload = await response.json().catch(() => ({ error: "request_failed" }));
           throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
         }
-        return response.json();
+        return response.status === 204 ? null : response.json();
       }
 
       function renderList(target, items, formatter) {
@@ -136,22 +226,80 @@
         element.innerHTML = items.map((item) => `<li>${formatter(item)}</li>`).join("");
       }
 
-      async function init() {
-        const id = new URLSearchParams(location.search).get("id");
-        const backendBase = await loadConfig();
-        const payload = await apiFetch(backendBase, `/api/hosts/${id}`);
+      let currentPayload = null;
+      let backendBase = "";
+      let hostId = "";
+
+      function applyOverrideForm(payload) {
+        const override = payload.override || {};
+        document.getElementById("fixedLabel").value = override.fixed_label || "";
+        document.getElementById("fixedRole").value = override.fixed_role || "";
+        document.getElementById("fixedIcon").value = override.fixed_icon || "";
+        document.getElementById("ignored").checked = Boolean(override.ignored);
+        document.getElementById("note").value = override.note || "";
+        document.getElementById("deleteOverride").disabled = !override.id;
+        const isAdmin = authState.role === "admin";
+        document.getElementById("saveOverride").disabled = !isAdmin;
+        document.getElementById("deleteOverride").disabled = !isAdmin || !override.id;
+        document.getElementById("overrideStatus").textContent = override.id
+          ? `Current override #${override.id} loaded.`
+          : isAdmin
+            ? "No override saved for this host."
+            : "Read-only session. Override editing is disabled.";
+      }
+
+      async function renderHost() {
+        currentPayload = await apiFetch(backendBase, `/api/hosts/${hostId}`);
+        const payload = currentPayload;
         document.getElementById("title").textContent = payload.hostname || payload.ip;
         document.getElementById("facts").innerHTML = `
           <div class="fact"><span>IP</span><strong>${payload.ip}</strong></div>
           <div class="fact"><span>MAC</span><strong>${payload.mac || "-"}</strong></div>
           <div class="fact"><span>Status</span><strong>${payload.status || "-"}</strong></div>
           <div class="fact"><span>Vendor</span><strong>${payload.vendor || "-"}</strong></div>
-          <div class="fact"><span>Role</span><strong>${payload.classification?.label || "-"}</strong></div>
+          <div class="fact"><span>Role</span><strong>${payload.role || "-"}</strong></div>
           <div class="fact"><span>Confidence</span><strong>${payload.classification?.confidence ?? "-"}</strong></div>
         `;
         renderList("servicesList", payload.services || [], (item) => `${item.proto}/${item.port} (${item.state})`);
         renderList("eventsList", payload.events || [], (item) => `${item.event_type}: ${item.summary}`);
         document.getElementById("payloadBlock").textContent = JSON.stringify(payload, null, 2);
+        applyOverrideForm(payload);
+      }
+
+      async function saveOverride(event) {
+        event.preventDefault();
+        const body = {
+          host_id: Number(hostId),
+          fixed_label: document.getElementById("fixedLabel").value.trim() || null,
+          fixed_role: document.getElementById("fixedRole").value.trim() || null,
+          fixed_icon: document.getElementById("fixedIcon").value.trim() || null,
+          ignored: document.getElementById("ignored").checked,
+          note: document.getElementById("note").value.trim() || null,
+        };
+        const overrideId = currentPayload?.override?.id;
+        if (overrideId) {
+          await apiFetch(backendBase, `/api/overrides/${overrideId}`, { method: "PUT", body });
+        } else {
+          await apiFetch(backendBase, "/api/overrides", { method: "POST", body });
+        }
+        await renderHost();
+      }
+
+      async function deleteOverride() {
+        const overrideId = currentPayload?.override?.id;
+        if (!overrideId) {
+          return;
+        }
+        await apiFetch(backendBase, `/api/overrides/${overrideId}`, { method: "DELETE" });
+        await renderHost();
+      }
+
+      async function init() {
+        hostId = new URLSearchParams(location.search).get("id");
+        backendBase = await loadConfig();
+        await renderHost();
+        document.getElementById("overrideForm").addEventListener("submit", saveOverride);
+        document.getElementById("deleteOverride").addEventListener("click", deleteOverride);
       }
 
       init().catch((error) => {

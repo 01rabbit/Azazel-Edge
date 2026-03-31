@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import time
 from pathlib import Path
@@ -87,7 +88,7 @@ def create_app(
             )
             raise Unauthorized("authentication required")
         g.current_user = user
-        if request.method == "POST" and request.path == "/api/overrides" and user.role != "admin":
+        if request.method in {"POST", "PUT", "DELETE"} and request.path.startswith("/api/overrides") and user.role != "admin":
             append_audit_record(
                 loggers.audit,
                 "auth_forbidden",
@@ -245,11 +246,18 @@ def create_app(
             host_id = int(row["id"])
             classification = classifications.get(host_id)
             override = overrides.get(host_id)
+            effective = _build_effective_host_view(row=row, classification=classification, override=override)
+            if effective["ignored"]:
+                continue
             item = {
                 **row,
-                "role": classification["label"] if classification else None,
-                "confidence": classification["confidence"] if classification else None,
+                "role": effective["role"],
+                "label": effective["label"],
+                "icon": effective["icon"],
+                "confidence": effective["confidence"],
+                "ignored": effective["ignored"],
                 "override": override,
+                "classification": effective["classification"],
             }
             items.append(item)
 
@@ -294,9 +302,15 @@ def create_app(
             raise NotFound(f"host {host_id} not found")
         classification = repository.get_classification(host_id)
         override = repository.get_latest_override(host_id)
+        effective = _build_effective_host_view(row=host, classification=classification, override=override)
         payload = {
             **host,
-            "classification": classification,
+            "role": effective["role"],
+            "label": effective["label"],
+            "icon": effective["icon"],
+            "ignored": effective["ignored"],
+            "classification": effective["classification"],
+            "automatic_classification": classification,
             "override": override,
             "services": repository.list_services(host_id),
             "events": [item for item in repository.list_events() if item.get("host_id") == host_id],
@@ -335,12 +349,24 @@ def create_app(
             int(item["host_id"]): item
             for item in repository.list_classifications()
         }
+        overrides = {
+            int(item["host_id"]): item
+            for item in repository.list_overrides()
+        }
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
         subnet_ids: set[str] = set()
 
         for host in hosts:
             host_id = int(host["id"])
+            override = overrides.get(host_id)
+            effective = _build_effective_host_view(
+                row=host,
+                classification=classifications.get(host_id),
+                override=override,
+            )
+            if effective["ignored"]:
+                continue
             ip = str(host["ip"])
             subnet = _match_subnet(ip, config.subnets)
             subnet_id = f"subnet:{subnet}" if subnet else "subnet:unknown"
@@ -355,7 +381,8 @@ def create_app(
                     "type": host_type,
                     "label": host.get("hostname") or ip,
                     "ip": ip,
-                    "role": classifications.get(host_id, {}).get("label"),
+                    "role": effective["role"],
+                    "icon": effective["icon"],
                     "status": host.get("status"),
                 }
             )
@@ -416,17 +443,63 @@ def create_app(
             fixed_label=_optional_string(payload.get("fixed_label")),
             fixed_role=_optional_string(payload.get("fixed_role")),
             fixed_icon=_optional_string(payload.get("fixed_icon")),
-            ignored=bool(payload.get("ignored", False)),
+            ignored=_optional_bool(payload.get("ignored"), default=False),
             note=_optional_string(payload.get("note")),
         )
         append_audit_record(
             loggers.audit,
             "override_created",
-            actor="system",
+            actor=_require_current_user().username,
             host_id=host_id,
             override_id=override["id"],
         )
         return jsonify(override), 201
+
+    @app.get("/api/overrides")
+    def list_overrides():
+        host_id = request.args.get("host_id", type=int)
+        items = repository.list_overrides(host_id)
+        return jsonify(_paginate(items))
+
+    @app.put("/api/overrides/<int:override_id>")
+    def update_override(override_id: int):
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise BadRequest("request body must be a JSON object")
+        existing = repository.get_override(override_id)
+        if existing is None:
+            raise NotFound(f"override {override_id} not found")
+        override = repository.update_override(
+            override_id,
+            fixed_label=_optional_string(payload.get("fixed_label")),
+            fixed_role=_optional_string(payload.get("fixed_role")),
+            fixed_icon=_optional_string(payload.get("fixed_icon")),
+            ignored=_optional_bool(payload.get("ignored"), default=bool(existing.get("ignored"))),
+            note=_optional_string(payload.get("note")),
+        )
+        append_audit_record(
+            loggers.audit,
+            "override_updated",
+            actor=_require_current_user().username,
+            host_id=existing["host_id"],
+            override_id=override_id,
+        )
+        return jsonify(override)
+
+    @app.delete("/api/overrides/<int:override_id>")
+    def delete_override(override_id: int):
+        existing = repository.get_override(override_id)
+        if existing is None:
+            raise NotFound(f"override {override_id} not found")
+        repository.delete_override(override_id)
+        append_audit_record(
+            loggers.audit,
+            "override_deleted",
+            actor=_require_current_user().username,
+            host_id=existing["host_id"],
+            override_id=override_id,
+        )
+        return jsonify({"ok": True, "deleted_id": override_id})
 
     return app
 
@@ -454,6 +527,49 @@ def _optional_string(value: object) -> str | None:
         raise BadRequest("override fields must be strings when provided")
     stripped = value.strip()
     return stripped or None
+
+
+def _optional_bool(value: object, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise BadRequest("ignored must be a boolean when provided")
+    return value
+
+
+def _build_effective_host_view(
+    *,
+    row: dict[str, Any],
+    classification: dict[str, Any] | None,
+    override: dict[str, Any] | None,
+) -> dict[str, Any]:
+    effective_role = str(override["fixed_role"]) if override and override.get("fixed_role") else (
+        str(classification["label"]) if classification and classification.get("label") else None
+    )
+    effective_label = str(override["fixed_label"]) if override and override.get("fixed_label") else effective_role
+    effective_icon = str(override["fixed_icon"]) if override and override.get("fixed_icon") else None
+    ignored = bool(override.get("ignored")) if override else False
+    confidence = 1.0 if override and (override.get("fixed_role") or override.get("fixed_label")) else (
+        classification["confidence"] if classification else None
+    )
+    effective_classification = None
+    if classification or override:
+        effective_classification = {
+            "label": effective_label,
+            "role": effective_role,
+            "confidence": confidence,
+            "source": "override" if override and (override.get("fixed_role") or override.get("fixed_label")) else "automatic",
+            "reason": json.loads(str(classification["reason_json"])) if classification and classification.get("reason_json") else None,
+            "icon": effective_icon,
+        }
+    return {
+        "role": effective_role,
+        "label": effective_label,
+        "icon": effective_icon,
+        "ignored": ignored,
+        "confidence": confidence,
+        "classification": effective_classification,
+    }
 
 
 def _match_subnet(ip: str, subnets: list[str]) -> str | None:

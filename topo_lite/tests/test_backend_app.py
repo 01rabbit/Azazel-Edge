@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from backend.app import create_app
+from classification import classify_hosts
 from db.repository import TopoLiteRepository
 
 
@@ -145,6 +146,78 @@ class BackendAppTests(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload["host_id"], self.host_one["id"])
         self.assertEqual(payload["fixed_label"], "trusted-printer")
+
+    def test_update_and_delete_override_endpoints(self) -> None:
+        self._login("admin", "change-me-admin-password")
+        created = self.client.post(
+            "/api/overrides",
+            json={
+                "host_id": self.host_one["id"],
+                "fixed_label": "known-printer",
+                "fixed_role": "printer",
+                "ignored": False,
+            },
+        ).get_json()
+
+        updated = self.client.put(
+            f"/api/overrides/{created['id']}",
+            json={
+                "fixed_label": "ignore-me",
+                "fixed_role": "iot",
+                "fixed_icon": "printer",
+                "ignored": True,
+                "note": "temporary suppression",
+            },
+        )
+        deleted = self.client.delete(f"/api/overrides/{created['id']}")
+
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.get_json()["fixed_role"], "iot")
+        self.assertEqual(updated.get_json()["ignored"], 1)
+        self.assertEqual(deleted.status_code, 200)
+        self.assertIsNone(self.repository.get_override(created["id"]))
+
+    def test_ignored_override_hides_host_from_inventory_and_topology(self) -> None:
+        self._login("admin", "change-me-admin-password")
+        self.client.post(
+            "/api/overrides",
+            json={
+                "host_id": self.host_one["id"],
+                "fixed_role": "printer",
+                "ignored": True,
+            },
+        )
+
+        hosts = self.client.get("/api/hosts").get_json()
+        topology = self.client.get("/api/topology").get_json()
+
+        returned_ids = {item["id"] for item in hosts["items"]}
+        topology_ids = {node["id"] for node in topology["nodes"]}
+        self.assertNotIn(self.host_one["id"], returned_ids)
+        self.assertNotIn(f"host:{self.host_one['id']}", topology_ids)
+
+    def test_effective_role_uses_override_after_reclassification(self) -> None:
+        self._login("admin", "change-me-admin-password")
+        self.client.post(
+            "/api/overrides",
+            json={
+                "host_id": self.host_two["id"],
+                "fixed_label": "trusted-workstation",
+                "fixed_role": "desktop",
+                "fixed_icon": "desktop",
+                "ignored": False,
+            },
+        )
+        classify_hosts(self.repository)
+
+        hosts = self.client.get("/api/hosts").get_json()
+        detail = self.client.get(f"/api/hosts/{self.host_two['id']}").get_json()
+        host_two = next(item for item in hosts["items"] if item["id"] == self.host_two["id"])
+
+        self.assertEqual(host_two["role"], "desktop")
+        self.assertEqual(host_two["label"], "trusted-workstation")
+        self.assertEqual(detail["classification"]["source"], "override")
+        self.assertEqual(detail["icon"], "desktop")
 
     def test_api_errors_return_json(self) -> None:
         self._login("admin", "change-me-admin-password")

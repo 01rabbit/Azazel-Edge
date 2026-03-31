@@ -462,6 +462,43 @@ class TopoLiteRepository:
             ).fetchone()
         return row_to_dict(row)
 
+    def get_override(self, override_id: int) -> dict[str, Any] | None:
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM overrides WHERE id = ?",
+                (override_id,),
+            ).fetchone()
+        return row_to_dict(row)
+
+    def update_override(
+        self,
+        override_id: int,
+        *,
+        fixed_label: str | None,
+        fixed_role: str | None,
+        fixed_icon: str | None,
+        ignored: bool,
+        note: str | None,
+        updated_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        timestamp = updated_at or utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE overrides
+                SET fixed_label = ?, fixed_role = ?, fixed_icon = ?, ignored = ?, note = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (fixed_label, fixed_role, fixed_icon, 1 if ignored else 0, note, timestamp, override_id),
+            )
+            row = connection.execute("SELECT * FROM overrides WHERE id = ?", (override_id,)).fetchone()
+        return row_to_dict(row)
+
+    def delete_override(self, override_id: int) -> bool:
+        with self.transaction() as connection:
+            cursor = connection.execute("DELETE FROM overrides WHERE id = ?", (override_id,))
+        return cursor.rowcount > 0
+
     def upsert_user(
         self,
         *,
