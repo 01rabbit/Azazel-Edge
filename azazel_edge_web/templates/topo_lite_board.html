@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="{{ tr('dashboard.html_lang', 'en') }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ tr('topo_lite.board.title', 'Azazel-Edge Internal LAN Board') }}</title>
+    <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+</head>
+<body data-page="topo-lite-board" data-audience="professional">
+    <header class="topbar">
+        <div class="brand-block">
+            <div class="brand-kicker">Azazel-Edge</div>
+            <h1>{{ tr('topo_lite.board.headline', 'Internal LAN Situation Board') }}</h1>
+            <p class="brand-subtitle">{{ tr('topo_lite.board.subtitle', 'Integrated NOC and SOC view for internal-LAN triage without a separate Topo-Lite login flow.') }}</p>
+        </div>
+        <div class="topbar-controls">
+            <div class="language-toggle" role="tablist" aria-label="{{ tr('lang.label', 'Language') }}">
+                <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
+                <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
+            </div>
+            <div class="topbar-links">
+                <a class="topbar-link" href="/">{{ tr('topo_lite.board.back_dashboard', 'Main Dashboard') }}</a>
+                <a class="topbar-link" href="/ops-comm">{{ tr('topo_lite.board.ops_comm', 'Ops Comm') }}</a>
+                <a class="topbar-link" href="/demo">{{ tr('topo_lite.board.demo', 'Demo') }}</a>
+            </div>
+            <div class="topbar-meta">
+                <div class="meta-item">
+                    <span class="meta-label">{{ tr('dashboard.mode', 'Mode') }}</span>
+                    <strong id="topoBoardMode">--</strong>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">{{ tr('dashboard.queue', 'Queue') }}</span>
+                    <strong id="topoBoardHosts">--</strong>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">{{ tr('dashboard.runbook_event', 'Freshness') }}</span>
+                    <strong id="topoBoardFreshness">--</strong>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="dashboard-shell topo-lite-board-shell">
+        <aside class="panel topo-lite-board-sidebar">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('topo_lite.board.navigation', 'Navigation') }}</div>
+                    <h2>{{ tr('topo_lite.board.one_screen', 'One-screen triage') }}</h2>
+                </div>
+            </div>
+            <nav class="topo-lite-board-nav">
+                <a href="#topoOverall">{{ tr('topo_lite.board.overall', 'Overall') }}</a>
+                <a href="#topoSoc">{{ tr('topo_lite.board.soc', 'SOC') }}</a>
+                <a href="#topoNoc">{{ tr('topo_lite.board.noc', 'NOC') }}</a>
+                <a href="#topoIr">{{ tr('topo_lite.board.ir', 'Incident Response') }}</a>
+                <a href="#topoAi">{{ tr('topo_lite.board.ai_support', 'AI Support') }}</a>
+            </nav>
+            <div class="topo-lite-board-sidefacts">
+                <div class="strip-pill">
+                    <span class="strip-label">{{ tr('topo_lite.board.target_segment', 'Target Segment') }}</span>
+                    <strong id="topoBoardSubnet">--</strong>
+                </div>
+                <div class="strip-pill">
+                    <span class="strip-label">{{ tr('topo_lite.board.interface', 'Interface') }}</span>
+                    <strong id="topoBoardInterface">--</strong>
+                </div>
+                <div class="strip-pill">
+                    <span class="strip-label">{{ tr('topo_lite.board.data_mode', 'Data Mode') }}</span>
+                    <strong id="topoBoardDataMode">--</strong>
+                </div>
+            </div>
+        </aside>
+
+        <section class="topo-lite-board-main">
+            <section class="panel topo-lite-board-banner" id="topoDataBanner" hidden>
+                <div class="panel-heading">
+                    <div>
+                        <div class="panel-kicker">{{ tr('topo_lite.board.synthetic', 'Synthetic Marker') }}</div>
+                        <h2 id="topoDataBannerTitle">{{ tr('topo_lite.board.synthetic_active', 'Synthetic internal-LAN story active') }}</h2>
+                    </div>
+                </div>
+                <p class="panel-note" id="topoDataBannerText">{{ tr('topo_lite.board.synthetic_note', 'This board is showing deterministic validation data, not live evidence.') }}</p>
+            </section>
+
+            <section class="panel" id="topoOverall">
+                <div class="panel-heading">
+                    <div>
+                        <div class="panel-kicker">{{ tr('topo_lite.board.overall', 'Overall') }}</div>
+                        <h2 id="topoOverallHeadline">{{ tr('topo_lite.board.loading', 'Loading internal LAN board') }}</h2>
+                    </div>
+                    <div class="panel-note" id="topoOverallSummary">{{ tr('topo_lite.board.loading_summary', 'Collecting Topo-Lite board payload.') }}</div>
+                </div>
+                <div class="topo-lite-kpi-grid">
+                    <article class="command-heat-cell status-neutral">
+                        <span>{{ tr('topo_lite.board.hosts', 'Hosts') }}</span>
+                        <strong id="topoHostTotal">-</strong>
+                    </article>
+                    <article class="command-heat-cell status-neutral">
+                        <span>{{ tr('topo_lite.board.open_services', 'Open Services') }}</span>
+                        <strong id="topoServiceTotal">-</strong>
+                    </article>
+                    <article class="command-heat-cell status-neutral">
+                        <span>{{ tr('topo_lite.board.high_events', 'High Events') }}</span>
+                        <strong id="topoHighEvents">-</strong>
+                    </article>
+                    <article class="command-heat-cell status-neutral">
+                        <span>{{ tr('topo_lite.board.subnets', 'Subnets') }}</span>
+                        <strong id="topoSubnetTotal">-</strong>
+                    </article>
+                </div>
+                <div class="topo-lite-summary-strip" id="topoRoleSummary"></div>
+            </section>
+
+            <div class="topo-lite-board-columns">
+                <section class="panel" id="topoSoc">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="panel-kicker">{{ tr('topo_lite.board.soc', 'SOC') }}</div>
+                            <h2>{{ tr('topo_lite.board.change_pressure', 'Change pressure') }}</h2>
+                        </div>
+                        <div class="panel-note">{{ tr('topo_lite.board.change_pressure_note', 'High-severity changes and recent events stay visible without leaving the board.') }}</div>
+                    </div>
+                    <div class="topo-lite-event-list" id="topoHighEventList"></div>
+                    <details class="topo-lite-foldout">
+                        <summary>{{ tr('topo_lite.board.recent_timeline', 'Recent timeline') }}</summary>
+                        <div class="topo-lite-event-list topo-lite-event-list-compact" id="topoRecentEventList"></div>
+                    </details>
+                </section>
+
+                <section class="panel" id="topoNoc">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="panel-kicker">{{ tr('topo_lite.board.noc', 'NOC') }}</div>
+                            <h2>{{ tr('topo_lite.board.topology_posture', 'Topology posture') }}</h2>
+                        </div>
+                        <div class="panel-note">{{ tr('topo_lite.board.topology_note', 'Hosts are grouped by internal segment and rendered as visual tiles before detailed text.') }}</div>
+                    </div>
+                    <div class="topo-lite-subnet-grid" id="topoSubnetGrid"></div>
+                </section>
+            </div>
+
+            <div class="topo-lite-board-columns">
+                <section class="panel" id="topoIr">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="panel-kicker">{{ tr('topo_lite.board.ir', 'Incident Response') }}</div>
+                            <h2>{{ tr('topo_lite.board.next_actions', 'Next actions') }}</h2>
+                        </div>
+                    </div>
+                    <ul class="action-list" id="topoIrActionList">
+                        <li>{{ tr('topo_lite.board.waiting_actions', 'Waiting for internal-LAN board payload.') }}</li>
+                    </ul>
+                    <details class="topo-lite-foldout">
+                        <summary>{{ tr('topo_lite.board.scan_freshness', 'Scan freshness') }}</summary>
+                        <div class="topo-lite-run-list" id="topoRunList"></div>
+                    </details>
+                </section>
+
+                <section class="panel" id="topoAi">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="panel-kicker">{{ tr('topo_lite.board.ai_support', 'AI Support') }}</div>
+                            <h2>{{ tr('topo_lite.board.operator_guidance', 'Operator guidance') }}</h2>
+                        </div>
+                    </div>
+                    <ul class="action-list" id="topoAiPromptList">
+                        <li>{{ tr('topo_lite.board.waiting_ai', 'Waiting for board synthesis.') }}</li>
+                    </ul>
+                    <details class="topo-lite-foldout">
+                        <summary>{{ tr('topo_lite.board.caveats', 'Caveats') }}</summary>
+                        <ul class="action-list" id="topoAiCaveatList"></ul>
+                    </details>
+                </section>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        window.AZAZEL_LANG = {{ ui_lang|tojson }};
+    </script>
+    <script src="/static/topo_lite_board.js?v={{ asset_version }}"></script>
+</body>
+</html>

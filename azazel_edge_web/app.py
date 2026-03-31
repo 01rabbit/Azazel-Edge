@@ -42,6 +42,8 @@ STATIC_ASSET_VERSION = str(int(time.time()))
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PY_ROOT = PROJECT_ROOT / "py"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 
@@ -176,6 +178,7 @@ MATTERMOST_COMMAND_ALIASES = [
     if item.strip()
 ]
 MATTERMOST_COMMAND_PRIMARY_TRIGGER = str(os.environ.get("AZAZEL_MATTERMOST_COMMAND_TRIGGER", "mio")).strip() or "mio"
+TOPO_LITE_API_BASE_URL = str(os.environ.get("AZAZEL_TOPO_LITE_API_BASE_URL", "http://127.0.0.1:8091")).rstrip("/")
 
 
 def _request_lang() -> str:
@@ -215,6 +218,192 @@ def _read_secret_file(path: Path) -> str:
     except Exception:
         return ""
     return ""
+
+
+def _topo_lite_fetch_json(path: str, timeout: float = 3.0) -> Dict[str, Any]:
+    url = f"{TOPO_LITE_API_BASE_URL}{path}"
+    req = Request(url, headers={"Accept": "application/json"}, method="GET")
+    with urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+    data = json.loads(raw)
+    return data if isinstance(data, dict) else {"ok": False, "error": "invalid_topo_lite_payload", "url": url}
+
+
+def _topo_lite_assign_subnet(ip_value: Any, subnets: List[str]) -> str:
+    ip_text = str(ip_value or "").strip()
+    if not ip_text:
+        return "unassigned"
+    try:
+        ip_obj = ipaddress.ip_address(ip_text)
+    except Exception:
+        return "unassigned"
+    for subnet in subnets:
+        try:
+            if ip_obj in ipaddress.ip_network(subnet, strict=False):
+                return subnet
+        except Exception:
+            continue
+    return "unassigned"
+
+
+def _topo_lite_icon_monogram(host: Dict[str, Any]) -> str:
+    icon = str(host.get("icon") or "").strip().upper()
+    if icon:
+        return icon[:2]
+    role = str(host.get("role") or "").strip().upper()
+    if role:
+        return role[:2]
+    hostname = str(host.get("hostname") or "").strip().upper()
+    if hostname:
+        return hostname[:2]
+    return "ND"
+
+
+def _topo_lite_support_prompts(events: List[Dict[str, Any]], counts: Dict[str, Any], synthetic: bool) -> List[str]:
+    prompts: List[str] = []
+    if synthetic:
+        prompts.append("Synthetic mode is active. Use this board for UI verification, not incident evidence.")
+    if int(counts.get("high_events") or 0) > 0:
+        prompts.append("Review the high-severity changes first and confirm whether they are expected internal-LAN transitions.")
+    if int(counts.get("server_count") or 0) > 0:
+        prompts.append("Check whether newly exposed server services match the intended internal segmentation policy.")
+    if int(counts.get("unknown_count") or 0) > 0:
+        prompts.append("Unknown hosts remain on the board. Confirm whether they are unmanaged assets or sample placeholders.")
+    if not prompts:
+        prompts.append("Internal-LAN posture looks steady. Verify scan freshness and synthetic/live mode before closing triage.")
+    return prompts[:4]
+
+
+def _topo_lite_board_payload() -> Dict[str, Any]:
+    try:
+        meta = _topo_lite_fetch_json("/api/meta")
+        hosts_payload = _topo_lite_fetch_json("/api/hosts?page=1&page_size=200&sort=last_seen&order=desc")
+        services_payload = _topo_lite_fetch_json("/api/services?page=1&page_size=200")
+        events_payload = _topo_lite_fetch_json("/api/events?page=1&page_size=80")
+        scan_runs_payload = _topo_lite_fetch_json("/api/scan-runs?page=1&page_size=20")
+    except Exception as error:
+        return {
+            "ok": False,
+            "status": "degraded",
+            "error": str(error),
+            "summary": "Topo-Lite backend is unavailable.",
+        }
+
+    config = meta.get("config") if isinstance(meta.get("config"), dict) else {}
+    data_mode = meta.get("data_mode") if isinstance(meta.get("data_mode"), dict) else {}
+    hosts = hosts_payload.get("items") if isinstance(hosts_payload.get("items"), list) else []
+    services = services_payload.get("items") if isinstance(services_payload.get("items"), list) else []
+    events = events_payload.get("items") if isinstance(events_payload.get("items"), list) else []
+    scan_runs = scan_runs_payload.get("items") if isinstance(scan_runs_payload.get("items"), list) else []
+    subnets = [str(item) for item in (config.get("subnets") or []) if str(item).strip()]
+
+    services_by_host: Dict[int, List[Dict[str, Any]]] = {}
+    for service in services:
+        try:
+            host_id = int(service.get("host_id"))
+        except Exception:
+            continue
+        services_by_host.setdefault(host_id, []).append(service)
+
+    subnet_groups: Dict[str, Dict[str, Any]] = {}
+    role_counts: Dict[str, int] = {}
+    for host in hosts:
+        subnet = _topo_lite_assign_subnet(host.get("ip"), subnets)
+        group = subnet_groups.setdefault(
+            subnet,
+            {
+                "subnet": subnet,
+                "hosts": [],
+                "service_count": 0,
+            },
+        )
+        host_services = services_by_host.get(int(host.get("id") or 0), [])
+        role = str(host.get("role") or "unknown").strip() or "unknown"
+        role_counts[role] = role_counts.get(role, 0) + 1
+        host_card = {
+            "id": host.get("id"),
+            "ip": host.get("ip"),
+            "hostname": host.get("hostname") or host.get("ip"),
+            "label": host.get("label") or host.get("hostname") or host.get("ip"),
+            "role": role,
+            "icon": host.get("icon"),
+            "status": host.get("status") or "unknown",
+            "vendor": host.get("vendor") or "-",
+            "confidence": host.get("confidence"),
+            "monogram": _topo_lite_icon_monogram(host),
+            "services": [
+                f"{item.get('proto')}/{item.get('port')}"
+                for item in host_services
+                if str(item.get("state") or "") == "open"
+            ][:6],
+        }
+        group["hosts"].append(host_card)
+        group["service_count"] += len(host_card["services"])
+
+    severity_counts = {"high": 0, "medium": 0, "low": 0, "info": 0}
+    for event in events:
+        severity = str(event.get("severity") or "info")
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+
+    high_events = [item for item in events if str(item.get("severity") or "") == "high"][:6]
+    recent_events = events[:8]
+    freshness = scan_runs[0] if scan_runs else {}
+    synthetic = bool(data_mode.get("synthetic"))
+    counts = {
+        "host_total": len(hosts),
+        "service_total": len([item for item in services if str(item.get("state") or "") == "open"]),
+        "event_total": len(events),
+        "high_events": severity_counts.get("high", 0),
+        "medium_events": severity_counts.get("medium", 0),
+        "low_events": severity_counts.get("low", 0),
+        "subnet_total": len(subnet_groups),
+        "network_device_count": role_counts.get("network_device", 0),
+        "server_count": role_counts.get("server", 0),
+        "unknown_count": role_counts.get("unknown", 0),
+    }
+    posture = "stable"
+    if counts["high_events"] > 0:
+        posture = "elevated"
+    elif counts["medium_events"] > 0:
+        posture = "watch"
+    if synthetic:
+        posture = "synthetic"
+
+    summary = "Internal-LAN board loaded."
+    if synthetic:
+        summary = "Synthetic internal-LAN story is active for topology and timeline validation."
+    elif not hosts:
+        summary = "No internal-LAN hosts are currently visible."
+    elif counts["high_events"] > 0:
+        summary = "Internal-LAN changes need attention before closing triage."
+
+    return {
+        "ok": True,
+        "status": posture,
+        "summary": summary,
+        "topo_lite": {
+            "config": {
+                "interface": config.get("interface"),
+                "subnets": subnets,
+                "auth_enabled": bool((config.get("auth") or {}).get("enabled")),
+            },
+            "data_mode": data_mode,
+            "counts": counts,
+            "severity_counts": severity_counts,
+            "subnets": sorted(subnet_groups.values(), key=lambda item: str(item["subnet"])),
+            "high_events": high_events,
+            "recent_events": recent_events,
+            "scan_runs": scan_runs[:6],
+            "freshness": freshness,
+            "ai_support": {
+                "prompts": _topo_lite_support_prompts(events, counts, synthetic=synthetic),
+                "caveats": [
+                    "Treat synthetic mode as validation-only and do not export it as live evidence." if synthetic else "Confirm scan freshness before escalating a quiet board.",
+                    "This board is scoped to the internal LAN and does not replace uplink diagnostics.",
+                ],
+            },
+        },
+    }
 
 
 def _read_mattermost_command_tokens() -> List[str]:
@@ -4227,6 +4416,12 @@ def ops_comm():
     return render_template("ops_comm.html", mattermost_open_url=open_url)
 
 
+@app.route("/topo-lite")
+def topo_lite_board():
+    """Integrated Topo-Lite board inside the Azazel-Edge shell."""
+    return render_template("topo_lite_board.html")
+
+
 @app.route("/api/state")
 @require_token(ok_payload=None)
 def api_state():
@@ -4239,6 +4434,14 @@ def api_state():
     state["mode"] = mode_state.get("mode", {})
     state["mode_runtime"] = mode_state
     return jsonify(state)
+
+
+@app.route("/api/topo-lite/board", methods=["GET"])
+@require_token()
+def api_topo_lite_board():
+    """GET /api/topo-lite/board - aggregated internal-LAN board payload."""
+    payload = _topo_lite_board_payload()
+    return jsonify(payload)
 
 
 @app.route("/api/state/stream")
