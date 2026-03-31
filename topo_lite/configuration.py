@@ -45,6 +45,14 @@ class NotificationConfig:
     enabled: bool = False
     provider: str = "ntfy"
     endpoint: str = ""
+    token: str = ""
+    rate_limit_seconds: int = 300
+
+
+@dataclass(slots=True)
+class IntegrationConfig:
+    enabled: bool = False
+    queue_path: str = "run/azazel-edge-events"
 
 
 @dataclass(slots=True)
@@ -96,6 +104,7 @@ class TopoLiteConfig:
     probe: ProbeConfig = field(default_factory=ProbeConfig)
     deep_probe: DeepProbeConfig = field(default_factory=DeepProbeConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)
+    integration: IntegrationConfig = field(default_factory=IntegrationConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
     retention_period: RetentionConfig = field(default_factory=RetentionConfig)
     exposure: ExposureConfig = field(default_factory=ExposureConfig)
@@ -189,6 +198,10 @@ def validate_config(config: TopoLiteConfig) -> None:
             raise ValidationError(f"exposure.{name} must be a non-empty string")
     if config.notification.enabled and not config.notification.provider.strip():
         raise ValidationError("notification.provider must be set when notification is enabled")
+    if config.notification.rate_limit_seconds <= 0:
+        raise ValidationError("notification.rate_limit_seconds must be greater than zero")
+    if config.integration.enabled and not config.integration.queue_path.strip():
+        raise ValidationError("integration.queue_path must be set when integration is enabled")
     if config.auth.mode not in {"local"}:
         raise ValidationError("auth.mode must be 'local' in the initial implementation")
     if config.auth.enabled:
@@ -210,6 +223,7 @@ def _dict_to_config(data: dict[str, Any]) -> TopoLiteConfig:
         probe=ProbeConfig(**data["probe"]),
         deep_probe=DeepProbeConfig(**data["deep_probe"]),
         notification=NotificationConfig(**data["notification"]),
+        integration=IntegrationConfig(**data.get("integration", {})),
         auth=AuthConfig(**data["auth"]),
         retention_period=RetentionConfig(**data["retention_period"]),
         exposure=ExposureConfig(**data["exposure"]),
@@ -267,6 +281,10 @@ def _apply_env_overrides(base: dict[str, Any], env: Mapping[str, str]) -> None:
         "AZAZEL_TOPO_LITE_NOTIFICATION_ENABLED": (("notification", "enabled"), _parse_bool),
         "AZAZEL_TOPO_LITE_NOTIFICATION_PROVIDER": (("notification", "provider"), str),
         "AZAZEL_TOPO_LITE_NOTIFICATION_ENDPOINT": (("notification", "endpoint"), str),
+        "AZAZEL_TOPO_LITE_NOTIFICATION_TOKEN": (("notification", "token"), str),
+        "AZAZEL_TOPO_LITE_NOTIFICATION_RATE_LIMIT_SECONDS": (("notification", "rate_limit_seconds"), int),
+        "AZAZEL_TOPO_LITE_INTEGRATION_ENABLED": (("integration", "enabled"), _parse_bool),
+        "AZAZEL_TOPO_LITE_INTEGRATION_QUEUE_PATH": (("integration", "queue_path"), str),
         "AZAZEL_TOPO_LITE_AUTH_ENABLED": (("auth", "enabled"), _parse_bool),
         "AZAZEL_TOPO_LITE_AUTH_MODE": (("auth", "mode"), str),
         "AZAZEL_TOPO_LITE_AUTH_TOKEN_REQUIRED": (("auth", "token_required"), _parse_bool),

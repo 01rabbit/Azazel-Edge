@@ -88,6 +88,27 @@ class ProbeSchedulerTests(unittest.TestCase):
         self.assertIn("probe_scheduler_started", events)
         self.assertIn("probe_scheduler_stopped", events)
 
+    def test_probe_scheduler_runs_post_processing_chain(self) -> None:
+        scheduler = ProbeScheduler(
+            config=self.config,
+            repository=self.repository,
+            loggers=self.loggers,
+            lock_path=self.lock_path,
+            sleep_fn=self.sleep_calls.append,
+        )
+
+        with patch("scanner.probe_scheduler.probe_hosts", return_value={"scan_run_id": 71, "status": "completed"}), \
+             patch("scanner.probe_scheduler.generate_inventory_diff", return_value={"event_count": 1, "events": [{"id": 1}]}), \
+             patch("scanner.probe_scheduler.dispatch_event_notifications", return_value={"sent": 1}), \
+             patch("scanner.probe_scheduler.export_azazel_events", return_value={"exported": 1}), \
+             patch("scanner.probe_scheduler.cleanup_retention_data", return_value={"deleted": {"events": 1, "observations": 2, "scan_runs": 3}}):
+            result = scheduler.run_forever(max_runs=1)
+
+        self.assertEqual(result.status, "stopped")
+        scanner_lines = Path(self.config.logging.scanner_log_path).read_text(encoding="utf-8").strip().splitlines()
+        events = [json.loads(line)["event"] for line in scanner_lines]
+        self.assertIn("probe_scheduler_post_processing_completed", events)
+
 
 if __name__ == "__main__":
     unittest.main()

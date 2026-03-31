@@ -49,6 +49,11 @@ notification:
   enabled: false
   provider: ntfy
   endpoint: ""
+  token: ""
+  rate_limit_seconds: 300
+integration:
+  enabled: false
+  queue_path: run/azazel-edge-events
 auth:
   enabled: true
   mode: local

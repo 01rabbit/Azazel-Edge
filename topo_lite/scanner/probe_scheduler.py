@@ -10,7 +10,11 @@ from typing import Callable
 
 from configuration import TopoLiteConfig
 from db.repository import TopoLiteRepository
+from diff_engine import generate_inventory_diff
+from integration_engine import export_azazel_events
 from logging_utils import TopoLiteLoggers, append_audit_record, log_event
+from notify_engine import dispatch_event_notifications
+from retention_engine import cleanup_retention_data
 from scanner.probe import probe_hosts
 
 
@@ -94,6 +98,45 @@ class ProbeScheduler:
                     )
                 else:
                     failures = 0
+                    try:
+                        diff_summary = generate_inventory_diff(self.repository)
+                        notify_summary = dispatch_event_notifications(
+                            config=self.config,
+                            repository=self.repository,
+                            loggers=self.loggers,
+                            events=diff_summary["events"],
+                        )
+                        export_summary = export_azazel_events(
+                            config=self.config,
+                            repository=self.repository,
+                            loggers=self.loggers,
+                            events=diff_summary["events"],
+                        )
+                        cleanup_summary = cleanup_retention_data(
+                            config=self.config,
+                            repository=self.repository,
+                            loggers=self.loggers,
+                        )
+                    except Exception as error:
+                        failures += 1
+                        log_event(
+                            self.loggers.scanner,
+                            "probe_scheduler_post_processing_failed",
+                            "probe scheduler post-processing failed",
+                            scan_run_id=last_scan_run_id,
+                            error=str(error),
+                        )
+                    else:
+                        log_event(
+                            self.loggers.scanner,
+                            "probe_scheduler_post_processing_completed",
+                            "probe scheduler post-processing completed",
+                            scan_run_id=last_scan_run_id,
+                            diff_event_count=diff_summary["event_count"],
+                            notified=notify_summary["sent"],
+                            exported=export_summary["exported"],
+                            deleted=cleanup_summary["deleted"],
+                        )
 
                 if max_runs is not None and runs_completed >= max_runs:
                     break

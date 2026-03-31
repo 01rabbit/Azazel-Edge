@@ -172,6 +172,24 @@ Generate diff events from the latest discovery/probe snapshots:
 PYTHONPATH=. python3 scripts/run_diff.py
 ```
 
+Dispatch pending notifications without waiting for another diff run:
+
+```bash
+make run-notify
+```
+
+Run retention cleanup manually:
+
+```bash
+make run-cleanup
+```
+
+Export high-severity events to the local Azazel-Edge queue:
+
+```bash
+make run-export-events
+```
+
 Re-run classification against the current host/service/observation set:
 
 ```bash
@@ -211,6 +229,8 @@ curl -H 'Authorization: Bearer change-me-admin-token' \
   datasets.
 - Scheduler retries use bounded exponential backoff to avoid tight retry loops
   during repeated discovery failures.
+- The probe scheduler now chains diff generation, notification delivery,
+  Azazel-Edge queue export, and retention cleanup after a successful probe run.
 
 ## systemd Deployment
 
@@ -237,6 +257,14 @@ sudo journalctl -u azazel-topo-lite-api.service -n 50 --no-pager
 The migrated installer now copies these units and the default environment file.
 Set `ENABLE_TOPO_LITE=1` when running `installer/internal/install_migrated_tools.sh`
 if you want the services enabled automatically.
+
+The environment file can also enable notifications and queue export:
+
+- `AZAZEL_TOPO_LITE_NOTIFICATION_ENABLED=true`
+- `AZAZEL_TOPO_LITE_NOTIFICATION_PROVIDER=ntfy` or `mattermost`
+- `AZAZEL_TOPO_LITE_NOTIFICATION_ENDPOINT=<webhook-or-topic-endpoint>`
+- `AZAZEL_TOPO_LITE_INTEGRATION_ENABLED=true`
+- `AZAZEL_TOPO_LITE_INTEGRATION_QUEUE_PATH=/opt/azazel-edge/topo_lite/run/azazel-edge-events`
 
 ## Backup and Recovery
 
@@ -269,6 +297,7 @@ make run-diff
 ```
 
 Detailed recovery notes are in [docs/recovery.md](./docs/recovery.md).
+Operational install/startup notes are in [docs/operations.md](./docs/operations.md).
 
 ## Logs
 
@@ -292,5 +321,6 @@ make init-db
 - This scaffold is intentionally isolated from the existing Azazel-Edge web,
   control, and installer stack.
 - The workspace now includes a validated config loader, SQLite schema
-  initializer, a minimal repository layer, an ARP discovery runner, and a
-  scheduler entrypoint for `#114`, `#112`, `#115`, `#116`, and `#117`.
+  initializer, a minimal repository layer, discovery/probe/diff orchestration,
+  notification delivery, retention cleanup, backup/restore, and Azazel-Edge
+  queue export through the current MVP and operations issues.

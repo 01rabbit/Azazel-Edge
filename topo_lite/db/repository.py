@@ -280,6 +280,46 @@ class TopoLiteRepository:
             row = connection.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
         return row_to_dict(row)
 
+    def mark_event_notification(
+        self,
+        event_id: int,
+        *,
+        attempted_at: str,
+        notified_at: str | None,
+        error: str | None,
+    ) -> dict[str, Any] | None:
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE events
+                SET notification_attempted_at = ?, notified_at = ?, notification_error = ?
+                WHERE id = ?
+                """,
+                (attempted_at, notified_at, error, event_id),
+            )
+            row = connection.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+        return row_to_dict(row)
+
+    def mark_event_export(
+        self,
+        event_id: int,
+        *,
+        attempted_at: str,
+        exported_at: str | None,
+        error: str | None,
+    ) -> dict[str, Any] | None:
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE events
+                SET integration_attempted_at = ?, exported_at = ?, integration_error = ?
+                WHERE id = ?
+                """,
+                (attempted_at, exported_at, error, event_id),
+            )
+            row = connection.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+        return row_to_dict(row)
+
     def get_latest_scan_run(
         self,
         scan_kind: str,

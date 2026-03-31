@@ -34,6 +34,11 @@ class ConfigurationTests(unittest.TestCase):
                       enabled: true
                       provider: ntfy
                       endpoint: https://ntfy.local/topic
+                      token: test-token
+                      rate_limit_seconds: 120
+                    integration:
+                      enabled: true
+                      queue_path: run/test-events
                     auth:
                       enabled: true
                       mode: local
@@ -66,6 +71,9 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config.deep_probe.timeout_seconds, 1)
         self.assertEqual(config.deep_probe.target_ports, [22, 80, 443, 445, 631, 3389, 9100])
         self.assertEqual(config.notification.endpoint, "https://ntfy.local/topic")
+        self.assertEqual(config.notification.token, "test-token")
+        self.assertEqual(config.notification.rate_limit_seconds, 120)
+        self.assertEqual(config.integration.queue_path, "run/test-events")
         self.assertEqual(config.retention_period.scan_runs_days, 3)
         self.assertEqual(config.logging.app_log_path, "logs/app.jsonl")
         self.assertEqual(config.auth.admin_username, "admin")
@@ -88,6 +96,9 @@ class ConfigurationTests(unittest.TestCase):
                 "AZAZEL_TOPO_LITE_DEEP_PROBE_TIMEOUT_SECONDS": "3",
                 "AZAZEL_TOPO_LITE_DEEP_PROBE_TARGET_PORTS": "22,443,9100",
                 "AZAZEL_TOPO_LITE_DEEP_PROBE_DEDUPE_WINDOW_SECONDS": "600",
+                "AZAZEL_TOPO_LITE_NOTIFICATION_RATE_LIMIT_SECONDS": "15",
+                "AZAZEL_TOPO_LITE_INTEGRATION_ENABLED": "true",
+                "AZAZEL_TOPO_LITE_INTEGRATION_QUEUE_PATH": "/tmp/topo-events",
                 "AZAZEL_TOPO_LITE_AUTH_ADMIN_API_TOKEN": "override-admin-token",
                 "AZAZEL_TOPO_LITE_FRONTEND_HOST": "0.0.0.0",
                 "AZAZEL_TOPO_LITE_LOCAL_ONLY": "false",
@@ -105,6 +116,9 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config.deep_probe.timeout_seconds, 3)
         self.assertEqual(config.deep_probe.target_ports, [22, 443, 9100])
         self.assertEqual(config.deep_probe.dedupe_window_seconds, 600)
+        self.assertEqual(config.notification.rate_limit_seconds, 15)
+        self.assertEqual(config.integration.enabled, True)
+        self.assertEqual(config.integration.queue_path, "/tmp/topo-events")
         self.assertEqual(config.auth.admin_api_token, "override-admin-token")
         self.assertEqual(config.exposure.frontend_bind_host, "0.0.0.0")
         self.assertEqual(config.exposure.allowed_cidrs, ["192.168.40.0/24", "10.0.0.0/24"])

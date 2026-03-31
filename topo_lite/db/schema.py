@@ -5,7 +5,7 @@ from contextlib import closing
 from pathlib import Path
 
 
-SCHEMA_VERSION = "0.1.3"
+SCHEMA_VERSION = "0.1.5"
 
 INITIAL_TABLES = (
     "hosts",
@@ -75,6 +75,12 @@ DDL_STATEMENTS = (
         created_at TEXT NOT NULL,
         acknowledged_at TEXT,
         acknowledged_by TEXT,
+        notification_attempted_at TEXT,
+        notified_at TEXT,
+        notification_error TEXT,
+        integration_attempted_at TEXT,
+        exported_at TEXT,
+        integration_error TEXT,
         FOREIGN KEY(host_id) REFERENCES hosts(id) ON DELETE SET NULL
     )
     """,
@@ -172,6 +178,12 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
     _ensure_column(connection, "events", "acknowledged_at", "TEXT")
     _ensure_column(connection, "events", "acknowledged_by", "TEXT")
+    _ensure_column(connection, "events", "notification_attempted_at", "TEXT")
+    _ensure_column(connection, "events", "notified_at", "TEXT")
+    _ensure_column(connection, "events", "notification_error", "TEXT")
+    _ensure_column(connection, "events", "integration_attempted_at", "TEXT")
+    _ensure_column(connection, "events", "exported_at", "TEXT")
+    _ensure_column(connection, "events", "integration_error", "TEXT")
     connection.execute(
         """
         INSERT INTO schema_metadata(key, value)

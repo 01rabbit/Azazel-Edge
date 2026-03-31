@@ -32,6 +32,9 @@ class ScaffoldLayoutTests(unittest.TestCase):
         self.assertTrue((systemd_dir / "azazel-topo-lite.env.example").is_file())
         self.assertTrue((WORKSPACE_ROOT / "scripts" / "run_web_stack.py").is_file())
         self.assertTrue((WORKSPACE_ROOT / "scripts" / "run_probe_scheduler.py").is_file())
+        self.assertTrue((WORKSPACE_ROOT / "scripts" / "run_notify.py").is_file())
+        self.assertTrue((WORKSPACE_ROOT / "scripts" / "run_cleanup.py").is_file())
+        self.assertTrue((WORKSPACE_ROOT / "scripts" / "run_export_events.py").is_file())
 
     def test_systemd_units_include_environment_file_and_install_section(self) -> None:
         for name in [
@@ -45,7 +48,7 @@ class ScaffoldLayoutTests(unittest.TestCase):
             self.assertIn("WantedBy=multi-user.target", text)
 
     def test_schema_placeholder_matches_initial_issue_scope(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, "0.1.3")
+        self.assertEqual(SCHEMA_VERSION, "0.1.5")
         self.assertIn("hosts", INITIAL_TABLES)
         self.assertIn("scan_runs", INITIAL_TABLES)
 
@@ -58,6 +61,9 @@ class ScaffoldLayoutTests(unittest.TestCase):
         config = default_config()
         self.assertEqual(config.database_path, "topo_lite.sqlite3")
         self.assertIn("192.168.40.0/24", config.subnets)
+
+    def test_operations_document_exists(self) -> None:
+        self.assertTrue((WORKSPACE_ROOT / "docs" / "operations.md").is_file())
 
 
 if __name__ == "__main__":

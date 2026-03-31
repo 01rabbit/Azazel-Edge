@@ -7,10 +7,8 @@ from pathlib import Path
 from configuration import load_config
 from db.repository import TopoLiteRepository
 from db.schema import initialize_database
-from diff_engine import generate_inventory_diff
-from integration_engine import export_azazel_events
 from logging_utils import configure_logging
-from notify_engine import dispatch_event_notifications
+from retention_engine import cleanup_retention_data
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
@@ -23,19 +21,10 @@ def main() -> int:
     initialize_database(config.database_path)
     repository = TopoLiteRepository(config.database_path)
     loggers = configure_logging(config.logging)
-    missing_threshold_runs = int(env_map.get("AZAZEL_TOPO_LITE_MISSING_THRESHOLD_RUNS", "2"))
-    result = generate_inventory_diff(repository, missing_threshold_runs=missing_threshold_runs)
-    result["notifications"] = dispatch_event_notifications(
+    result = cleanup_retention_data(
         config=config,
         repository=repository,
         loggers=loggers,
-        events=result["events"],
-    )
-    result["integration_exports"] = export_azazel_events(
-        config=config,
-        repository=repository,
-        loggers=loggers,
-        events=result["events"],
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0

@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: run-dev run-web-stack lint test init-db backup-state restore-state run-discovery run-scheduler run-probe run-deep-probe run-probe-scheduler run-classification run-diff
+.PHONY: run-dev run-web-stack lint test init-db backup-state restore-state run-discovery run-scheduler run-probe run-deep-probe run-probe-scheduler run-classification run-diff run-notify run-cleanup run-export-events
 
 run-dev:
 	$(PYTHON) scripts/dev.py
@@ -43,3 +43,12 @@ run-classification:
 
 run-diff:
 	PYTHONPATH=. $(PYTHON) scripts/run_diff.py
+
+run-notify:
+	PYTHONPATH=. $(PYTHON) scripts/run_notify.py
+
+run-cleanup:
+	PYTHONPATH=. $(PYTHON) scripts/run_cleanup.py
+
+run-export-events:
+	PYTHONPATH=. $(PYTHON) scripts/run_export_events.py
