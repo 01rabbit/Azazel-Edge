@@ -5,7 +5,7 @@ Wants=network-online.target azazel-edge-control-daemon.service
 
 [Service]
 Type=simple
-Environment="AZAZEL_WEB_HOST=127.0.0.1"
+Environment="AZAZEL_WEB_HOST=0.0.0.0"
 Environment="AZAZEL_WEB_PORT=8084"
 Environment="AZAZEL_WEB_WORKERS=2"
 Environment="AZAZEL_WEB_THREADS=4"
