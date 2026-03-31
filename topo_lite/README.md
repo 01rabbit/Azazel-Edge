@@ -30,7 +30,8 @@ Default local endpoints:
 
 The default exposure policy is local-only. Both backend and frontend bind to
 `127.0.0.1` unless you change the config or export explicit environment
-variables.
+variables. The default monitored segment is the Azazel internal LAN
+`br0` / `172.16.0.0/24`.
 
 ### LAN access
 
@@ -119,7 +120,7 @@ sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y arp-scan
 ```
 
-If your active LAN interface is not `eth0`, override it at runtime:
+If your active internal LAN interface is not `br0`, override it at runtime:
 
 ```bash
 sudo env AZAZEL_TOPO_LITE_INTERFACE=eth1 PYTHONPATH=. python3 scripts/run_discovery.py
@@ -198,8 +199,12 @@ make run-classification
 
 ## Auth
 
-The API now requires authentication for detailed endpoints. The initial local
-accounts come from `config.yaml`:
+The default emergency operator path no longer requires a separate Topo-Lite
+login. In the default config, `auth.enabled: false`, so the read path is meant
+to inherit the trusted Azazel-Edge boundary instead of forcing a fresh login.
+
+If you explicitly enable local auth in `config.yaml`, the initial accounts come
+from the auth block:
 
 - admin: `admin` / `change-me-admin-password`
 - read-only: `viewer` / `change-me-viewer-password`
@@ -219,6 +224,22 @@ Or call the API with a bearer token:
 curl -H 'Authorization: Bearer change-me-admin-token' \
   http://127.0.0.1:18080/api/hosts
 ```
+
+## Synthetic Internal-LAN Sample Data
+
+When the internal LAN is empty, you can seed a deterministic story that keeps
+inventory, topology, and timeline connected:
+
+```bash
+cd topo_lite
+make init-db
+make seed-sample-data
+```
+
+The seeded story uses the internal subnet `172.16.0.0/24` and creates linked
+hosts, services, classifications, scan runs, and events. The API exposes this
+state via `/api/meta`, and the UI adds a synthetic banner so the sample data is
+not mistaken for live evidence.
 
 ## Performance Controls
 

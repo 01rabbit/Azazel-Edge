@@ -19,6 +19,8 @@ class AuthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             repository = TopoLiteRepository(Path(tmp_dir) / "auth.sqlite3")
             config = default_config()
+            config.auth.enabled = True
+            config.auth.token_required = True
             bootstrap_local_auth(repository, config.auth)
 
             admin = repository.get_user_by_username(config.auth.admin_username)

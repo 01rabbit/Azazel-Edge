@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from configuration import config_to_dict, load_config
@@ -12,7 +13,11 @@ from logging_utils import append_audit_record, configure_logging, log_event
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Initialize the Azazel-Topo-Lite SQLite database.")
-    parser.add_argument("--config", default="config.yaml", help="Path to config YAML file")
+    parser.add_argument(
+        "--config",
+        default=os.environ.get("AZAZEL_TOPO_LITE_CONFIG", "config.yaml"),
+        help="Path to config YAML file",
+    )
     parser.add_argument("--db-path", default=None, help="Override the configured database path")
     args = parser.parse_args()
 

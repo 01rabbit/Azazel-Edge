@@ -103,6 +103,35 @@ class TopoLiteRepository:
             row = connection.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         return row_to_dict(row)
 
+    def set_metadata(self, key: str, value: str) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO schema_metadata(key, value)
+                VALUES(?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
+
+    def get_metadata(self, key: str) -> str | None:
+        with closing(self.connect()) as connection:
+            row = connection.execute("SELECT value FROM schema_metadata WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return None
+        return str(row["value"])
+
+    def list_metadata(self, prefix: str | None = None) -> dict[str, str]:
+        query = "SELECT key, value FROM schema_metadata"
+        params: tuple[Any, ...] = ()
+        if prefix is not None:
+            query += " WHERE key LIKE ?"
+            params = (f"{prefix}%",)
+        query += " ORDER BY key"
+        with closing(self.connect()) as connection:
+            rows = connection.execute(query, params).fetchall()
+        return {str(row["key"]): str(row["value"]) for row in rows}
+
     def list_hosts(self) -> list[dict[str, Any]]:
         with closing(self.connect()) as connection:
             rows = connection.execute("SELECT * FROM hosts ORDER BY id").fetchall()

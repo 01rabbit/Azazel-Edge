@@ -117,6 +117,15 @@
         min-height: 1.2rem;
         color: var(--muted);
       }
+      .data-banner {
+        display: none;
+        padding: 14px 16px;
+        border-radius: 18px;
+        border: 1px solid rgba(161, 98, 7, 0.28);
+        background: rgba(161, 98, 7, 0.12);
+        color: #7c5200;
+        font-weight: 700;
+      }
       a {
         color: var(--accent);
         text-decoration: none;
@@ -135,6 +144,7 @@
       <section class="panel">
         <h1>Topology View</h1>
         <p class="summary">Grouped logical topology from the current API snapshot. Hosts stay grouped by subnet, with gateway nodes highlighted and exposed services shown as edges.</p>
+        <div id="dataModeBanner" class="data-banner" style="margin-top: 14px;"></div>
       </section>
       <section class="panel">
         <p id="status" class="status">Loading topology...</p>
@@ -145,6 +155,7 @@
     <script>
       const authState = JSON.parse(localStorage.getItem("topoLiteAuth") || "{}");
       let backendBase = "";
+      let metaState = null;
 
       async function loadConfig() {
         let response = await fetch("./runtime-config.json", { cache: "no-store" });
@@ -153,6 +164,17 @@
         }
         const config = await response.json();
         backendBase = `http://${location.hostname}:${config.backendPort || 18080}`;
+      }
+
+      function renderDataModeBanner(meta) {
+        const banner = document.getElementById("dataModeBanner");
+        if (!meta?.data_mode?.synthetic) {
+          banner.style.display = "none";
+          banner.textContent = "";
+          return;
+        }
+        banner.style.display = "block";
+        banner.textContent = `${meta.data_mode.label || "Synthetic sample data"} active: topology nodes and timeline events belong to the same internal-LAN scenario.`;
       }
 
       async function apiFetch(path) {
@@ -169,6 +191,11 @@
           throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
         }
         return response.json();
+      }
+
+      async function loadMeta() {
+        metaState = await apiFetch("/api/meta");
+        renderDataModeBanner(metaState);
       }
 
       function groupTopology(payload) {
@@ -262,6 +289,7 @@
 
       async function init() {
         await loadConfig();
+        await loadMeta();
         const status = document.getElementById("status");
         try {
           const payload = await apiFetch("/api/topology");

@@ -207,6 +207,8 @@ def create_app(
 
     @app.get("/api/meta")
     def meta():
+        synthetic_metadata = repository.list_metadata(prefix="synthetic_")
+        synthetic_active = synthetic_metadata.get("synthetic_active") == "true"
         return jsonify(
             {
                 "project": "Azazel-Topo-Lite",
@@ -225,6 +227,12 @@ def create_app(
                     "db": str(WORKSPACE_ROOT / "db"),
                     "docs": str(WORKSPACE_ROOT / "docs"),
                     "scripts": str(WORKSPACE_ROOT / "scripts"),
+                },
+                "data_mode": {
+                    "synthetic": synthetic_active,
+                    "label": synthetic_metadata.get("synthetic_label"),
+                    "scenario": synthetic_metadata.get("synthetic_scenario"),
+                    "source": synthetic_metadata.get("synthetic_source"),
                 },
             }
         )

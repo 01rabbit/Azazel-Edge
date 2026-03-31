@@ -9,6 +9,14 @@ from configuration import ValidationError, load_config
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_default_config_targets_internal_lan_and_disables_auth(self) -> None:
+        config = load_config(None, env={})
+
+        self.assertEqual(config.interface, "br0")
+        self.assertEqual(config.subnets, ["172.16.0.0/24"])
+        self.assertFalse(config.auth.enabled)
+        self.assertFalse(config.auth.token_required)
+
     def test_load_config_from_yaml(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "config.yaml"

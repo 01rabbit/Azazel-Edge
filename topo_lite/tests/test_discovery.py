@@ -43,46 +43,46 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_parse_arp_scan_output_skips_non_result_lines(self) -> None:
         output = """
-Interface: eth0, type: EN10MB, MAC: aa:bb:cc:dd:ee:ff, IPv4: 192.168.40.89
+Interface: br0, type: EN10MB, MAC: aa:bb:cc:dd:ee:ff, IPv4: 172.16.0.254
 Starting arp-scan 1.10.0 with 256 hosts
-192.168.40.1\t00:11:22:33:44:55\tGateway Vendor
-192.168.40.20  aa:bb:cc:dd:ee:20   Printer Vendor
+172.16.0.1\t00:11:22:33:44:55\tGateway Vendor
+172.16.0.20  aa:bb:cc:dd:ee:20   Printer Vendor
 2 packets received by filter
         """.strip()
 
-        results = parse_arp_scan_output(output, subnet="192.168.40.0/24")
+        results = parse_arp_scan_output(output, subnet="172.16.0.0/24")
 
         self.assertEqual(
             results,
             [
                 ArpDiscoveryResult(
-                    ip="192.168.40.1",
+                    ip="172.16.0.1",
                     mac="00:11:22:33:44:55",
                     vendor="Gateway Vendor",
-                    subnet="192.168.40.0/24",
+                    subnet="172.16.0.0/24",
                 ),
                 ArpDiscoveryResult(
-                    ip="192.168.40.20",
+                    ip="172.16.0.20",
                     mac="aa:bb:cc:dd:ee:20",
                     vendor="Printer Vendor",
-                    subnet="192.168.40.0/24",
+                    subnet="172.16.0.0/24",
                 ),
             ],
         )
 
     def test_build_command_uses_interface_and_subnet(self) -> None:
         self.assertEqual(
-            build_arp_scan_command("eth0", "192.168.40.0/24"),
-            ["arp-scan", "--interface", "eth0", "192.168.40.0/24"],
+            build_arp_scan_command("br0", "172.16.0.0/24"),
+            ["arp-scan", "--interface", "br0", "172.16.0.0/24"],
         )
 
     def test_discover_hosts_persists_hosts_observations_and_scan_run(self) -> None:
         def fake_runner(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
-            self.assertEqual(command[-1], "192.168.40.0/24")
+            self.assertEqual(command[-1], "172.16.0.0/24")
             return subprocess.CompletedProcess(
                 args=command,
                 returncode=0,
-                stdout="192.168.40.1\t00:11:22:33:44:55\tGateway Vendor\n",
+                stdout="172.16.0.1\t00:11:22:33:44:55\tGateway Vendor\n",
                 stderr="",
             )
 
@@ -107,21 +107,21 @@ Starting arp-scan 1.10.0 with 256 hosts
         self.assertEqual(len(observations), 1)
         payload = json.loads(observations[0]["payload_json"])
         self.assertEqual(payload["source"], "arp-scan")
-        self.assertEqual(payload["subnet"], "192.168.40.0/24")
+        self.assertEqual(payload["subnet"], "172.16.0.0/24")
         self.assertEqual(len(scan_runs), 1)
         self.assertEqual(scan_runs[0]["status"], "completed")
 
     def test_discover_hosts_marks_partial_failure_when_one_subnet_times_out(self) -> None:
-        self.config.subnets = ["192.168.40.0/24", "192.168.50.0/24"]
+        self.config.subnets = ["172.16.0.0/24", "172.16.1.0/24"]
 
         def fake_runner(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
             subnet = command[-1]
-            if subnet == "192.168.50.0/24":
+            if subnet == "172.16.1.0/24":
                 raise subprocess.TimeoutExpired(command, timeout)
             return subprocess.CompletedProcess(
                 args=command,
                 returncode=0,
-                stdout="192.168.40.10\t00:aa:bb:cc:dd:10\tWorkstation Vendor\n",
+                stdout="172.16.0.10\t00:aa:bb:cc:dd:10\tWorkstation Vendor\n",
                 stderr="",
             )
 
@@ -213,9 +213,9 @@ Starting arp-scan 1.10.0 with 256 hosts
         self.assertIn("arp-scan is not installed", result["errors"][0]["error"])
 
     def test_parse_ip_neigh_output_and_dhcp_leases(self) -> None:
-        arp_cache = "192.168.40.50 dev eth0 lladdr aa:bb:cc:dd:ee:50 REACHABLE\n"
+        arp_cache = "172.16.0.50 dev br0 lladdr aa:bb:cc:dd:ee:50 REACHABLE\n"
         dhcp_leases = """
-lease 192.168.40.60 {
+lease 172.16.0.60 {
   hardware ethernet aa:bb:cc:dd:ee:60;
   client-hostname "sensor-60";
 }
@@ -228,9 +228,9 @@ lease 192.168.40.60 {
             arp_results,
             [
                 SupplementalDiscoveryResult(
-                    ip="192.168.40.50",
+                    ip="172.16.0.50",
                     source="arp-cache",
-                    subnet="192.168.40.0/24",
+                    subnet="172.16.0.0/24",
                     mac="aa:bb:cc:dd:ee:50",
                 )
             ],
@@ -241,19 +241,19 @@ lease 192.168.40.60 {
     def test_discover_supplemental_hosts_collects_multiple_sources(self) -> None:
         results, errors = discover_supplemental_hosts(
             config=self.config,
-            known_ips={"192.168.40.1"},
+            known_ips={"172.16.0.1"},
             include_active_sources=True,
-            arp_cache_reader=lambda: "192.168.40.10 dev eth0 lladdr aa:bb:cc:dd:ee:10 REACHABLE\n",
-            dhcp_lease_reader=lambda: 'lease 192.168.40.20 {\n  client-hostname "sensor-20";\n}\n',
-            ping_runner=lambda ip, timeout: ip == "192.168.40.30",
-            tcp_discovery_runner=lambda ip, ports, timeout: 443 if ip == "192.168.40.40" else None,
+            arp_cache_reader=lambda: "172.16.0.10 dev br0 lladdr aa:bb:cc:dd:ee:10 REACHABLE\n",
+            dhcp_lease_reader=lambda: 'lease 172.16.0.20 {\n  client-hostname "sensor-20";\n}\n',
+            ping_runner=lambda ip, timeout: ip == "172.16.0.30",
+            tcp_discovery_runner=lambda ip, ports, timeout: 443 if ip == "172.16.0.40" else None,
         )
 
         by_source = {item.source: item for item in results}
         self.assertEqual(len(errors), 0)
-        self.assertEqual(by_source["arp-cache"].ip, "192.168.40.10")
+        self.assertEqual(by_source["arp-cache"].ip, "172.16.0.10")
         self.assertEqual(by_source["dhcp-lease"].hostname, "sensor-20")
-        self.assertEqual(by_source["icmp-ping"].ip, "192.168.40.30")
+        self.assertEqual(by_source["icmp-ping"].ip, "172.16.0.30")
         self.assertEqual(by_source["tcp-connect-discovery"].metadata["open_port"], 443)
 
     def test_discover_hosts_persists_supplemental_observations(self) -> None:
@@ -262,7 +262,7 @@ lease 192.168.40.60 {
             repository=self.repository,
             runner=lambda command, timeout: subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr=""),
             loggers=self.loggers,
-            arp_cache_reader=lambda: "192.168.40.10 dev eth0 lladdr aa:bb:cc:dd:ee:10 REACHABLE\n",
+            arp_cache_reader=lambda: "172.16.0.10 dev br0 lladdr aa:bb:cc:dd:ee:10 REACHABLE\n",
             dhcp_lease_reader=lambda: "",
             ping_runner=lambda ip, timeout: False,
             tcp_discovery_runner=lambda ip, ports, timeout: None,

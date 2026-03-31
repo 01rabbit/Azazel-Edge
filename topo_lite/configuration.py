@@ -57,9 +57,9 @@ class IntegrationConfig:
 
 @dataclass(slots=True)
 class AuthConfig:
-    enabled: bool = True
+    enabled: bool = False
     mode: str = "local"
-    token_required: bool = True
+    token_required: bool = False
     session_secret: str = "change-me-topo-lite-session-secret"
     admin_username: str = "admin"
     admin_password: str = "change-me-admin-password"
@@ -95,8 +95,8 @@ class LoggingConfig:
 
 @dataclass(slots=True)
 class TopoLiteConfig:
-    interface: str = "eth0"
-    subnets: list[str] = field(default_factory=lambda: ["192.168.40.0/24"])
+    interface: str = "br0"
+    subnets: list[str] = field(default_factory=lambda: ["172.16.0.0/24"])
     target_ports: list[int] = field(default_factory=lambda: list(DEFAULT_TARGET_PORTS))
     database_path: str = "topo_lite.sqlite3"
     logging: LoggingConfig = field(default_factory=LoggingConfig)

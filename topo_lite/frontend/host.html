@@ -138,6 +138,15 @@
         min-height: 1.2rem;
         color: var(--muted);
       }
+      .data-banner {
+        display: none;
+        padding: 14px 16px;
+        border-radius: 18px;
+        border: 1px solid rgba(161, 98, 7, 0.28);
+        background: rgba(161, 98, 7, 0.12);
+        color: #7c5200;
+        font-weight: 700;
+      }
       @media (max-width: 760px) {
         .facts { grid-template-columns: 1fr; }
         .form-grid { grid-template-columns: 1fr; }
@@ -153,6 +162,7 @@
           <p>Asset detail preview</p>
           <h1 id="title">Loading host...</h1>
         </div>
+        <div id="dataModeBanner" class="data-banner"></div>
         <div class="facts" id="facts"></div>
       </section>
 
@@ -212,6 +222,7 @@
 
     <script>
       const authState = JSON.parse(localStorage.getItem("topoLiteAuth") || "{}");
+      let metaState = null;
 
       async function loadConfig() {
         let response = await fetch("./runtime-config.json", { cache: "no-store" });
@@ -220,6 +231,17 @@
         }
         const config = await response.json();
         return `http://${location.hostname}:${config.backendPort || 18080}`;
+      }
+
+      function renderDataModeBanner(meta) {
+        const banner = document.getElementById("dataModeBanner");
+        if (!meta?.data_mode?.synthetic) {
+          banner.style.display = "none";
+          banner.textContent = "";
+          return;
+        }
+        banner.style.display = "block";
+        banner.textContent = `${meta.data_mode.label || "Synthetic sample data"} active: this host detail belongs to the correlated internal-LAN sample story.`;
       }
 
       async function apiFetch(base, path, options = {}) {
@@ -241,6 +263,11 @@
           throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
         }
         return response.status === 204 ? null : response.json();
+      }
+
+      async function loadMeta(base) {
+        metaState = await apiFetch(base, "/api/meta");
+        renderDataModeBanner(metaState);
       }
 
       function renderList(target, items, formatter) {
@@ -386,6 +413,7 @@
       async function init() {
         hostId = new URLSearchParams(location.search).get("id");
         backendBase = await loadConfig();
+        await loadMeta(backendBase);
         await renderHost();
         document.getElementById("overrideForm").addEventListener("submit", saveOverride);
         document.getElementById("deleteOverride").addEventListener("click", deleteOverride);

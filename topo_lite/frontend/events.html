@@ -138,6 +138,15 @@
         min-height: 1.2rem;
         color: var(--muted);
       }
+      .data-banner {
+        display: none;
+        padding: 14px 16px;
+        border-radius: 18px;
+        border: 1px solid rgba(161, 98, 7, 0.28);
+        background: rgba(161, 98, 7, 0.12);
+        color: #7c5200;
+        font-weight: 700;
+      }
       a { color: var(--accent); text-decoration: none; font-weight: 700; }
       @media (max-width: 860px) {
         .filters { grid-template-columns: 1fr 1fr; }
@@ -154,6 +163,7 @@
       <section class="panel">
         <h1>Event Timeline</h1>
         <p class="summary">Track diff events, filter by severity or type, and acknowledge reviewed items.</p>
+        <div id="dataModeBanner" class="data-banner" style="margin-top: 14px;"></div>
       </section>
 
       <section class="panel">
@@ -225,6 +235,7 @@
     <script>
       const authState = JSON.parse(localStorage.getItem("topoLiteAuth") || "{}");
       let backendBase = "";
+      let metaState = null;
       let timelineItems = [];
 
       async function loadConfig() {
@@ -234,6 +245,17 @@
         }
         const config = await response.json();
         backendBase = `http://${location.hostname}:${config.backendPort || 18080}`;
+      }
+
+      function renderDataModeBanner(meta) {
+        const banner = document.getElementById("dataModeBanner");
+        if (!meta?.data_mode?.synthetic) {
+          banner.style.display = "none";
+          banner.textContent = "";
+          return;
+        }
+        banner.style.display = "block";
+        banner.textContent = `${meta.data_mode.label || "Synthetic sample data"} active: this timeline is linked to the internal-LAN topology story.`;
       }
 
       async function apiFetch(path, options = {}) {
@@ -255,6 +277,11 @@
           throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
         }
         return response.status === 204 ? null : response.json();
+      }
+
+      async function loadMeta() {
+        metaState = await apiFetch("/api/meta");
+        renderDataModeBanner(metaState);
       }
 
       function filteredItems() {
@@ -350,6 +377,7 @@
 
       async function init() {
         await loadConfig();
+        await loadMeta();
         for (const id of ["severityFilter", "eventTypeFilter", "ackFilter", "pageSize"]) {
           document.getElementById(id).addEventListener("change", loadTimeline);
         }

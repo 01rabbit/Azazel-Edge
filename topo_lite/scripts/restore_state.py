@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from backup_utils import restore_backup_bundle
@@ -12,7 +13,11 @@ from logging_utils import append_audit_record, configure_logging, log_event
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Restore an Azazel-Topo-Lite backup bundle.")
-    parser.add_argument("--config", default="config.yaml", help="Path to config YAML file")
+    parser.add_argument(
+        "--config",
+        default=os.environ.get("AZAZEL_TOPO_LITE_CONFIG", "config.yaml"),
+        help="Path to config YAML file",
+    )
     parser.add_argument("--bundle-dir", required=True, help="Backup bundle directory created by backup_state.py")
     parser.add_argument("--restore-db", action="store_true", help="Restore the SQLite database from the bundle")
     parser.add_argument("--restore-config", action="store_true", help="Restore the config file from the bundle")

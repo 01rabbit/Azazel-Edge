@@ -34,6 +34,8 @@ class FaultInjectionTests(unittest.TestCase):
         self.config.logging.scanner_log_path = str(self.temp_path / "scanner.jsonl")
         self.config.notification.enabled = True
         self.config.notification.endpoint = "https://ntfy.local/topic"
+        self.config.auth.enabled = True
+        self.config.auth.token_required = True
         self.repository = TopoLiteRepository(self.config.database_path)
         self.loggers = configure_logging(self.config.logging)
         host = self.repository.upsert_host(ip="192.168.40.77", hostname="fault-host", status="up")
@@ -91,9 +93,9 @@ class FaultInjectionTests(unittest.TestCase):
         config_path.write_text(
             "\n".join(
                 [
-                    "interface: eth0",
+                    "interface: br0",
                     "subnets:",
-                    "  - 192.168.40.0/24",
+                    "  - 172.16.0.0/24",
                     f"database_path: {self.config.database_path}",
                     "logging:",
                     "  level: INFO",
@@ -101,6 +103,10 @@ class FaultInjectionTests(unittest.TestCase):
                     f"  access_log_path: {self.temp_path / 'restart-access.jsonl'}",
                     f"  audit_log_path: {self.temp_path / 'restart-audit.jsonl'}",
                     f"  scanner_log_path: {self.temp_path / 'restart-scanner.jsonl'}",
+                    "auth:",
+                    "  enabled: true",
+                    "  mode: local",
+                    "  token_required: true",
                 ]
             )
             + "\n",

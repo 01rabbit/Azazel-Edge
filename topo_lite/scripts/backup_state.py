@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from backup_utils import create_backup_bundle
@@ -11,7 +12,11 @@ from logging_utils import append_audit_record, configure_logging, log_event
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Create an Azazel-Topo-Lite backup bundle.")
-    parser.add_argument("--config", default="config.yaml", help="Path to config YAML file")
+    parser.add_argument(
+        "--config",
+        default=os.environ.get("AZAZEL_TOPO_LITE_CONFIG", "config.yaml"),
+        help="Path to config YAML file",
+    )
     parser.add_argument("--output-dir", default="backups", help="Directory where backup bundles are created")
     args = parser.parse_args()
 

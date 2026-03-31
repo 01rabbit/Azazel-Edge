@@ -19,9 +19,9 @@ class BackendAppTests(unittest.TestCase):
         self.config_path.write_text(
             "\n".join(
                 [
-                    "interface: eth0",
+                    "interface: br0",
                     "subnets:",
-                    "  - 192.168.40.0/24",
+                    "  - 172.16.0.0/24",
                     f"database_path: {self.database_path}",
                     "logging:",
                     "  level: INFO",
@@ -29,6 +29,10 @@ class BackendAppTests(unittest.TestCase):
                     f"  access_log_path: {self.logs_dir / 'access.jsonl'}",
                     f"  audit_log_path: {self.logs_dir / 'audit.jsonl'}",
                     f"  scanner_log_path: {self.logs_dir / 'scanner.jsonl'}",
+                    "auth:",
+                    "  enabled: true",
+                    "  mode: local",
+                    "  token_required: true",
                 ]
             )
             + "\n",

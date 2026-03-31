@@ -1,6 +1,6 @@
-interface: eth0
+interface: br0
 subnets:
-  - 192.168.40.0/24
+  - 172.16.0.0/24
 target_ports:
   - 22
   - 53
@@ -55,9 +55,9 @@ integration:
   enabled: false
   queue_path: run/azazel-edge-events
 auth:
-  enabled: true
+  enabled: false
   mode: local
-  token_required: true
+  token_required: false
   session_secret: change-me-topo-lite-session-secret
   admin_username: admin
   admin_password: change-me-admin-password

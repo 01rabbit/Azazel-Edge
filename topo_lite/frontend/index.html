@@ -296,6 +296,16 @@
         text-align: center;
       }
 
+      .data-banner {
+        display: none;
+        padding: 14px 16px;
+        border-radius: 18px;
+        border: 1px solid rgba(161, 98, 7, 0.28);
+        background: rgba(161, 98, 7, 0.12);
+        color: #7c5200;
+        font-weight: 700;
+      }
+
       @media (max-width: 1040px) {
         .grid {
           grid-template-columns: 1fr;
@@ -342,23 +352,24 @@
               <h1>Asset Inventory</h1>
               <p class="lead">
                 Discovery, probe, and diff results are surfaced here as a searchable
-                host inventory. Login with a local account or an API token to inspect
-                the current network view.
+                host inventory. The default operating view targets the internal LAN
+                and is intended to open immediately on the trusted Azazel-Edge path.
               </p>
             </div>
             <div class="hero-actions">
               <span class="badge dot" id="backendBadge">Checking backend</span>
-              <span class="badge" id="authBadge">Signed out</span>
+              <span class="badge" id="authBadge">Checking access path</span>
               <a class="badge" href="./events.html">Open Timeline</a>
               <a class="badge" href="./topology.html">Open Topology</a>
             </div>
           </div>
+          <div id="dataModeBanner" class="data-banner"></div>
         </section>
 
         <section class="grid">
-          <aside class="panel">
+          <aside class="panel" id="accessPanel">
             <h2>Access</h2>
-            <p>Use a session login for browser access or drop in a bearer token for quick API-backed viewing.</p>
+            <p id="accessLead">Use a session login for browser access or drop in a bearer token for quick API-backed viewing.</p>
 
             <form class="form-grid" id="loginForm">
               <label>
@@ -459,7 +470,7 @@
               </label>
             </div>
 
-            <div class="status-message" id="inventoryStatus">Waiting for login.</div>
+            <div class="status-message" id="inventoryStatus">Loading inventory...</div>
 
             <div class="inventory-wrap">
               <table>
@@ -496,6 +507,7 @@
     <script>
       const authStorageKey = "topoLiteAuth";
       let backendBase = "";
+      let metaState = null;
       let authState = loadStoredAuth();
       let inventoryState = {
         page: 1,
@@ -531,6 +543,12 @@
         backendBase = `http://${location.hostname}:${config.backendPort || 18080}`;
       }
 
+      async function loadMeta() {
+        metaState = await apiFetch("/api/meta");
+        renderDataModeBanner(metaState);
+        applyAccessMode(metaState);
+      }
+
       async function apiFetch(path, options = {}) {
         const headers = new Headers(options.headers || {});
         if (authState.mode === "token" && authState.token) {
@@ -562,6 +580,12 @@
           return false;
         }
 
+        if (metaState?.config?.auth?.enabled === false) {
+          authBadge.textContent = "Trusted boundary";
+          sessionMeta.textContent = "Topo-Lite auth is disabled; access inherits the Azazel-Edge trust boundary.";
+          return true;
+        }
+
         try {
           const me = await apiFetch("/api/auth/me");
           authBadge.textContent = `${me.username} (${me.role})`;
@@ -572,6 +596,28 @@
           sessionMeta.textContent = authState.mode === "token" ? "Stored token is not valid." : "No authenticated session.";
           return false;
         }
+      }
+
+      function renderDataModeBanner(meta) {
+        const banner = document.getElementById("dataModeBanner");
+        if (!meta?.data_mode?.synthetic) {
+          banner.style.display = "none";
+          banner.textContent = "";
+          return;
+        }
+        banner.style.display = "block";
+        banner.textContent = `${meta.data_mode.label || "Synthetic sample data"} active: ${meta.data_mode.scenario || "story mode"}. Timeline and topology are linked for internal-LAN validation.`;
+      }
+
+      function applyAccessMode(meta) {
+        const accessPanel = document.getElementById("accessPanel");
+        const accessLead = document.getElementById("accessLead");
+        if (meta?.config?.auth?.enabled === false) {
+          accessPanel.style.display = "none";
+          accessLead.textContent = "This surface inherits the trusted Azazel-Edge operator path.";
+          return;
+        }
+        accessPanel.style.display = "";
       }
 
       function renderStats(items) {
@@ -728,6 +774,7 @@
 
       async function init() {
         await loadConfig();
+        await loadMeta();
         document.getElementById("loginForm").addEventListener("submit", handleLogin);
         document.getElementById("logoutButton").addEventListener("click", handleLogout);
         document.getElementById("tokenForm").addEventListener("submit", handleToken);

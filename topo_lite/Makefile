@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: run-dev run-web-stack lint test init-db backup-state restore-state run-discovery run-scheduler run-probe run-deep-probe run-probe-scheduler run-classification run-diff run-notify run-cleanup run-export-events
+.PHONY: run-dev run-web-stack lint test init-db seed-sample-data backup-state restore-state run-discovery run-scheduler run-probe run-deep-probe run-probe-scheduler run-classification run-diff run-notify run-cleanup run-export-events
 
 run-dev:
 	$(PYTHON) scripts/dev.py
@@ -16,6 +16,9 @@ test:
 
 init-db:
 	PYTHONPATH=. $(PYTHON) scripts/init_db.py
+
+seed-sample-data:
+	PYTHONPATH=. $(PYTHON) scripts/seed_internal_sample_data.py
 
 backup-state:
 	PYTHONPATH=. $(PYTHON) scripts/backup_state.py

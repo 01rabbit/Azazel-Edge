@@ -60,7 +60,7 @@ class ScaffoldLayoutTests(unittest.TestCase):
     def test_default_config_uses_sqlite_database_path(self) -> None:
         config = default_config()
         self.assertEqual(config.database_path, "topo_lite.sqlite3")
-        self.assertIn("192.168.40.0/24", config.subnets)
+        self.assertIn("172.16.0.0/24", config.subnets)
 
     def test_operations_document_exists(self) -> None:
         self.assertTrue((WORKSPACE_ROOT / "docs" / "operations.md").is_file())
