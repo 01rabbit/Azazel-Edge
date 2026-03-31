@@ -1823,6 +1823,35 @@ body.demo-overlay-active #healthSummaryLine {
     margin-top: 18px;
 }
 
+.topo-lite-inline-strip,
+.topo-lite-inline-grid {
+    margin-top: 14px;
+}
+
+.topo-lite-inline-host-clusters {
+    display: grid;
+    gap: 12px;
+}
+
+.topo-lite-inline-cluster {
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.topo-lite-inline-cluster-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.topo-lite-inline-cluster-head strong {
+    font-family: var(--font-mono);
+}
+
 .situation-card,
 .action-card,
 .evidence-card {

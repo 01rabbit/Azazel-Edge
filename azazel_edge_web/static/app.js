@@ -765,6 +765,125 @@ function updateTemporaryMission(actions) {
     updateGuidanceToggleSummary(doNotDo.length ? doNotDo.length : 1);
 }
 
+function updateTopoLiteInline(payload) {
+    const panel = document.getElementById('topoLiteInlinePanel');
+    if (!panel) return;
+
+    if (!payload || payload.ok === false) {
+        updateElement('topoLiteInlineSummary', tr('dashboard.topo_lite_summary_waiting', 'Waiting for Topo-Lite board payload.'));
+        updateElement('topoLiteInlineMode', '--');
+        updateElement('topoLiteInlineInterface', '--');
+        updateElement('topoLiteInlineSubnet', '--');
+        updateElement('topoLiteInlineHosts', '--');
+        updateElement('topoLiteInlineServices', '--');
+        updateElement('topoLiteInlineHighEvents', '--');
+        updateElement('topoLiteInlineDataMode', '--');
+        updateElement('topoLiteInlineFreshness', '--');
+        updateElement('topoLiteInlineHeadline', tr('dashboard.topo_lite_loading_headline', 'Loading internal LAN posture'));
+        updateElement('topoLiteInlineBody', payload?.summary || payload?.error || tr('dashboard.topo_lite_loading_body', 'The integrated board will place segment summary, event pressure, and guidance here after refresh.'));
+        updateElement('topoLiteInlineSeverityHigh', '-');
+        updateElement('topoLiteInlineSeverityMedium', '-');
+        updateElement('topoLiteInlineSeverityLow', '-');
+        updateElement('topoLiteInlineRoleSummary', '-');
+        renderList('topoLiteInlineEventList', [tr('dashboard.topo_lite_empty_events', 'No Topo-Lite events yet.')], (item) => item);
+        renderList('topoLiteInlinePromptList', [tr('dashboard.topo_lite_empty_advice', 'Waiting for integrated operator guidance.')], (item) => item);
+        renderList('topoLiteInlineCaveatList', [tr('dashboard.topo_lite_empty_caveats', 'No caveats yet.')], (item) => item);
+        const subnetList = document.getElementById('topoLiteInlineSubnetList');
+        if (subnetList) {
+            subnetList.innerHTML = `<div class="client-identity-empty">${escapeHtml(tr('dashboard.topo_lite_empty_hosts', 'No internal-LAN hosts are currently visible.'))}</div>`;
+        }
+        return;
+    }
+
+    const board = payload.topo_lite && typeof payload.topo_lite === 'object' ? payload.topo_lite : {};
+    const counts = board.counts && typeof board.counts === 'object' ? board.counts : {};
+    const config = board.config && typeof board.config === 'object' ? board.config : {};
+    const dataMode = board.data_mode && typeof board.data_mode === 'object' ? board.data_mode : {};
+    const severity = board.severity_counts && typeof board.severity_counts === 'object' ? board.severity_counts : {};
+    const freshness = board.freshness && typeof board.freshness === 'object' ? board.freshness : {};
+    const subnets = Array.isArray(board.subnets) ? board.subnets : [];
+    const events = Array.isArray(board.high_events) && board.high_events.length
+        ? board.high_events
+        : (Array.isArray(board.recent_events) ? board.recent_events : []);
+    const prompts = Array.isArray(board.ai_support?.prompts) ? board.ai_support.prompts : [];
+    const caveats = Array.isArray(board.ai_support?.caveats) ? board.ai_support.caveats : [];
+
+    updateElement('topoLiteInlineSummary', payload.summary || tr('dashboard.topo_lite_summary_ready', 'Integrated internal-LAN board is available.'));
+    updateElement('topoLiteInlineMode', String(payload.status || '--').toUpperCase());
+    updateElement('topoLiteInlineInterface', config.interface || '--');
+    updateElement('topoLiteInlineSubnet', Array.isArray(config.subnets) && config.subnets.length ? config.subnets.join(', ') : '--');
+    updateElement('topoLiteInlineHosts', String(counts.host_total ?? 0));
+    updateElement('topoLiteInlineServices', String(counts.service_total ?? 0));
+    updateElement('topoLiteInlineHighEvents', String(counts.high_events ?? 0));
+    updateElement('topoLiteInlineDataMode', dataMode.synthetic ? tr('dashboard.topo_lite_synthetic_mode', 'SYNTHETIC') : tr('dashboard.topo_lite_live_mode', 'LIVE'));
+    updateElement('topoLiteInlineFreshness', formatHumanDateTime(freshness.started_at || freshness.finished_at || ''));
+    updateElement(
+        'topoLiteInlineHeadline',
+        dataMode.synthetic
+            ? tr('dashboard.topo_lite_headline_synthetic', 'Synthetic internal-LAN validation is active')
+            : ((Number(counts.high_events || 0) > 0)
+                ? tr('dashboard.topo_lite_headline_attention', 'Internal LAN changes need review')
+                : tr('dashboard.topo_lite_headline_stable', 'Internal LAN posture is stable'))
+    );
+    updateElement(
+        'topoLiteInlineBody',
+        dataMode.synthetic
+            ? tr('dashboard.topo_lite_body_synthetic', 'This lower board is using deterministic internal-LAN sample data so topology and timeline can be verified without waiting for live discoveries.')
+            : (payload.summary || tr('dashboard.topo_lite_body_live', 'This lower board summarizes current internal-LAN hosts, service exposure, and recent changes in the same dashboard style.'))
+    );
+    updateElement('topoLiteInlineSeverityHigh', String(severity.high ?? counts.high_events ?? 0));
+    updateElement('topoLiteInlineSeverityMedium', String(severity.medium ?? counts.medium_events ?? 0));
+    updateElement('topoLiteInlineSeverityLow', String(severity.low ?? counts.low_events ?? 0));
+    updateElement(
+        'topoLiteInlineRoleSummary',
+        `${counts.network_device_count ?? 0} net / ${counts.server_count ?? 0} srv / ${counts.unknown_count ?? 0} unknown`
+    );
+
+    setPillTone('topoLiteInlineMode', dataMode.synthetic ? 'caution' : 'safe');
+    setPillTone('topoLiteInlineHighEvents', Number(counts.high_events || 0) > 0 ? 'danger' : (Number(counts.medium_events || 0) > 0 ? 'caution' : 'safe'));
+    setPillTone('topoLiteInlineDataMode', dataMode.synthetic ? 'caution' : 'safe');
+
+    renderList(
+        'topoLiteInlineEventList',
+        events.length ? events.slice(0, 5).map((item) => {
+            const host = item.host && typeof item.host === 'object' ? item.host : {};
+            const hostLabel = host.hostname || host.ip || '-';
+            return `${String(item.severity || 'info').toUpperCase()} | ${item.event_type || '-'} | ${hostLabel} | ${formatHumanDateTime(item.created_at || '')}`;
+        }) : [tr('dashboard.topo_lite_empty_events', 'No Topo-Lite events yet.')],
+        (item) => item,
+    );
+
+    const subnetList = document.getElementById('topoLiteInlineSubnetList');
+    if (subnetList) {
+        if (!subnets.length) {
+            subnetList.innerHTML = `<div class="client-identity-empty">${escapeHtml(tr('dashboard.topo_lite_empty_hosts', 'No internal-LAN hosts are currently visible.'))}</div>`;
+        } else {
+            subnetList.innerHTML = subnets.slice(0, 4).map((subnet) => {
+                const hosts = Array.isArray(subnet.hosts) ? subnet.hosts : [];
+                return `
+                    <article class="topo-lite-inline-cluster">
+                        <div class="topo-lite-inline-cluster-head">
+                            <strong>${escapeHtml(String(subnet.subnet || 'unassigned'))}</strong>
+                            <span class="client-identity-row-state ${Number(subnet.service_count || 0) > 0 ? 'status-safe' : 'status-neutral'}">${escapeHtml(String(subnet.service_count || 0))} svc</span>
+                        </div>
+                        <div class="client-identity-chip-grid">
+                            ${hosts.length ? hosts.slice(0, 10).map((host) => `
+                                <span class="client-identity-chip">
+                                    <span class="client-identity-chip-label">${escapeHtml(String(host.monogram || '--'))}</span>
+                                    <span>${escapeHtml(String(host.label || host.hostname || host.ip || '-'))}</span>
+                                </span>
+                            `).join('') : `<span class="client-identity-empty">${escapeHtml(tr('dashboard.topo_lite_empty_hosts', 'No internal-LAN hosts are currently visible.'))}</span>`}
+                        </div>
+                    </article>
+                `;
+            }).join('');
+        }
+    }
+
+    renderList('topoLiteInlinePromptList', prompts.length ? prompts.slice(0, 4) : [tr('dashboard.topo_lite_empty_advice', 'Waiting for integrated operator guidance.')], (item) => item);
+    renderList('topoLiteInlineCaveatList', caveats.length ? caveats.slice(0, 4) : [tr('dashboard.topo_lite_empty_caveats', 'No caveats yet.')], (item) => item);
+}
+
 async function refreshDashboard() {
     const progressSessionId = ensureProgressSessionId();
     const actionsUrl = new URL('/api/dashboard/actions', window.location.origin);
@@ -781,6 +900,7 @@ async function refreshDashboard() {
         ['handoff', handoffUrl.pathname + handoffUrl.search, false],
         ['evidence', '/api/dashboard/evidence', false],
         ['health', '/api/dashboard/health', false],
+        ['topoLite', '/api/topo-lite/board', false],
         ['state', '/api/state', true],
         ['mattermost', '/api/mattermost/status', false],
         ['capabilities', '/api/ai/capabilities', false],
@@ -819,6 +939,7 @@ async function refreshDashboard() {
     const handoff = resultMap.handoff?.data?.handoff_brief_pack || {};
     const evidence = resultMap.evidence?.data || {};
     const health = resultMap.health?.data || {};
+    const topoLite = resultMap.topoLite?.ok ? resultMap.topoLite.data : { ok: false, error: resultMap.topoLite?.error || '' };
     const state = resultMap.state?.data || {};
     const mattermost = resultMap.mattermost?.data || { reachable: false, command_triggers: [] };
     const capabilities = resultMap.capabilities?.data || { mattermost_triggers: [] };
@@ -851,6 +972,7 @@ async function refreshDashboard() {
         updateHandoffPack(handoff);
         syncOnboardingBanner();
         updateEvidenceBoard(evidence, health);
+        updateTopoLiteInline(topoLite);
         updateAssistant(actions, mattermost, capabilities);
         if (CURRENT_PAGE === 'demo') {
             updateReviewReadiness(resultMap.health, resultMap.demoCapabilities, demoOverlayResult);
