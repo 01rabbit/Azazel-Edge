@@ -1377,7 +1377,7 @@ body.demo-overlay-active #healthSummaryLine {
 
 .board-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1.6fr) 360px;
+    grid-template-columns: minmax(0, 1fr);
     gap: 18px;
 }
 
@@ -2450,11 +2450,6 @@ body.demo-overlay-active #healthSummaryLine {
     border-color: rgba(228, 109, 93, 0.24);
 }
 
-.assistant-rail {
-    display: grid;
-    align-content: start;
-}
-
 .assistant-heading .assistant-title-row h2 {
     margin-top: 4px;
 }
@@ -2684,9 +2679,6 @@ body.demo-overlay-active #healthSummaryLine {
         grid-template-columns: 1fr;
     }
 
-    .assistant-rail {
-        order: -1;
-    }
 }
 
 @media (max-width: 900px) {

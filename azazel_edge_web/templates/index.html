@@ -873,33 +873,31 @@
                 </section>
             </section>
 
-            <aside class="assistant-rail">
-                <section class="panel assistant-panel dashboard-view-panel" id="assistantPanel" data-dashboard-view="assistant" hidden>
-                    <div class="panel-heading assistant-heading">
-                        <div class="assistant-title-row">
-                            <img class="assistant-logo" src="/images/MIO_Logo.png" alt="M.I.O. logo">
-                            <div>
-                                <div class="panel-kicker">{{ tr('ops.command_workspace', 'Command Workspace') }}</div>
-                                <h2>{{ tr('ops.title', 'M.I.O. Ops Communication') }}</h2>
-                            </div>
-                        </div>
-                        <a id="assistantOpsCommLink" class="topbar-link" href="/ops-comm">{{ tr('ops.open_mattermost', 'Open Mattermost') }}</a>
-                    </div>
-                    <p class="assistant-intro">{{ tr('ops.workspace_note', 'Use this view when you need direct M.I.O. support, a safe user-facing message, or a reviewed runbook candidate.') }}</p>
-                    <div class="assistant-embedded-workspace">
-                        <iframe
-                            id="assistantOpsCommFrame"
-                            class="assistant-embedded-frame"
-                            title="{{ tr('ops.title', 'M.I.O. Ops Communication') }}"
-                            src="/ops-comm?embed=1&lang={{ ui_lang }}&audience=operator"></iframe>
-                    </div>
-                    <div class="assistant-shortcuts">
-                        <a id="assistantMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('ops.open_mattermost', 'Open Mattermost') }}</a>
-                    </div>
-                </section>
-
-            </aside>
         </div>
+
+        <section class="panel assistant-panel dashboard-view-panel" id="assistantPanel" data-dashboard-view="assistant" hidden>
+            <div class="panel-heading assistant-heading">
+                <div class="assistant-title-row">
+                    <img class="assistant-logo" src="/images/MIO_Logo.png" alt="M.I.O. logo">
+                    <div>
+                        <div class="panel-kicker">{{ tr('ops.command_workspace', 'Command Workspace') }}</div>
+                        <h2>{{ tr('ops.title', 'M.I.O. Ops Communication') }}</h2>
+                    </div>
+                </div>
+                <a id="assistantOpsCommLink" class="topbar-link" href="/ops-comm">{{ tr('ops.open_mattermost', 'Open Mattermost') }}</a>
+            </div>
+            <p class="assistant-intro">{{ tr('ops.workspace_note', 'Use this view when you need direct M.I.O. support, a safe user-facing message, or a reviewed runbook candidate.') }}</p>
+            <div class="assistant-embedded-workspace">
+                <iframe
+                    id="assistantOpsCommFrame"
+                    class="assistant-embedded-frame"
+                    title="{{ tr('ops.title', 'M.I.O. Ops Communication') }}"
+                    src="/ops-comm?embed=1&lang={{ ui_lang }}&audience=operator"></iframe>
+            </div>
+            <div class="assistant-shortcuts">
+                <a id="assistantMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('ops.open_mattermost', 'Open Mattermost') }}</a>
+            </div>
+        </section>
 
         <section class="panel evidence-board evidence-board-lowered pro-only dashboard-view-panel" id="evidenceBoardSection" data-dashboard-view="evidence" hidden>
             <div class="panel-heading">
