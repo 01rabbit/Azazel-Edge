@@ -458,6 +458,9 @@ function bindStaticHandlers() {
     document.getElementById('audienceProfessional')?.addEventListener('click', () => setAudience('professional'));
     document.getElementById('audienceTemporary')?.addEventListener('click', () => setAudience('temporary'));
     document.getElementById('showGuideBtn')?.addEventListener('click', reopenOnboardingGuide);
+    document.getElementById('commandSplitBoardBtn')?.addEventListener('click', () => {
+        applyDashboardView('split', { scroll: false, syncUrl: true, replace: true });
+    });
     document.querySelectorAll('.dashboard-side-link[data-dashboard-view-target]').forEach((button) => {
         if (!(button instanceof HTMLButtonElement)) return;
         button.addEventListener('click', () => {
@@ -2281,12 +2284,22 @@ function updateSplitBoard(summary, actions) {
     setGlanceCell('socGlanceCorrelation', socCorrelation.tone, socCorrelation.value);
     setGlanceCell('socGlanceTriage', socTriage.tone, socTriage.value);
     setGlanceCell('socGlanceVisibility', socVisibility.tone, socVisibility.value);
+    setGlanceCard('commandSocGlanceCard', 'commandSocGlanceState', socTone, splitHeadlineForTone(socTone));
+    setGlanceCell('commandSocGlanceThreat', socThreat.tone, socThreat.value);
+    setGlanceCell('commandSocGlanceCorrelation', socCorrelation.tone, socCorrelation.value);
+    setGlanceCell('commandSocGlanceTriage', socTriage.tone, socTriage.value);
+    setGlanceCell('commandSocGlanceVisibility', socVisibility.tone, socVisibility.value);
 
     setGlanceCard('nocGlanceCard', 'nocGlanceState', nocTone, splitHeadlineForTone(nocTone));
     setGlanceCell('nocGlancePath', nocPath.tone, nocPath.value);
     setGlanceCell('nocGlanceServices', nocServices.tone, nocServices.value);
     setGlanceCell('nocGlanceCapacity', nocCapacity.tone, nocCapacity.value);
     setGlanceCell('nocGlanceClients', nocClients.tone, nocClients.value);
+    setGlanceCard('commandNocGlanceCard', 'commandNocGlanceState', nocTone, splitHeadlineForTone(nocTone));
+    setGlanceCell('commandNocGlancePath', nocPath.tone, nocPath.value);
+    setGlanceCell('commandNocGlanceServices', nocServices.tone, nocServices.value);
+    setGlanceCell('commandNocGlanceCapacity', nocCapacity.tone, nocCapacity.value);
+    setGlanceCell('commandNocGlanceClients', nocClients.tone, nocClients.value);
     updateToggleSummary(
         'splitBoardDetailsToggle',
         tr('dashboard.split_board_details_summary', 'SOC {soc} | NOC {noc}', {

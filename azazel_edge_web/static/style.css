@@ -1006,6 +1006,26 @@ body.demo-overlay-active #healthSummaryLine {
     margin-bottom: 14px;
 }
 
+.command-split-summary {
+    margin-top: 18px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 16px;
+}
+
+.command-split-summary-heading {
+    margin-bottom: 12px;
+}
+
+.command-split-summary-heading h3 {
+    margin: 4px 0 0;
+    font-size: 1rem;
+    letter-spacing: 0.03em;
+}
+
+.command-split-grid {
+    margin-bottom: 0;
+}
+
 .split-glance-card {
     padding: 16px 18px;
     border-radius: var(--radius-md);

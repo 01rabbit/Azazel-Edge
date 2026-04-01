@@ -186,6 +186,69 @@
                     <strong id="freshnessRunbook">-</strong>
                 </div>
             </div>
+            <div class="command-split-summary">
+                <div class="panel-heading command-split-summary-heading">
+                    <div>
+                        <div class="panel-kicker">{{ tr('dashboard.split_board', 'SOC / NOC Split Board') }}</div>
+                        <h3>{{ tr('dashboard.command_split_summary', 'SOC / NOC snapshot in one glance') }}</h3>
+                    </div>
+                    <button type="button" class="context-ask-btn pro-only" id="commandSplitBoardBtn">{{ tr('dashboard.open_split_board', 'Open detailed split board') }}</button>
+                </div>
+                <div class="split-glance-grid command-split-grid" id="commandSplitSummaryGrid">
+                    <article class="split-glance-card status-neutral" id="commandSocGlanceCard">
+                        <div class="split-glance-header">
+                            <div>
+                                <div class="card-kicker">SOC</div>
+                                <h3 id="commandSocGlanceState">UNKNOWN</h3>
+                            </div>
+                        </div>
+                        <div class="split-glance-heat-grid">
+                            <div class="split-glance-cell status-neutral" id="commandSocGlanceThreat">
+                                <span>{{ tr('dashboard.threat', 'Threat') }}</span>
+                                <strong id="commandSocGlanceThreatValue">-</strong>
+                            </div>
+                            <div class="split-glance-cell status-neutral" id="commandSocGlanceCorrelation">
+                                <span>{{ tr('dashboard.correlation', 'Correlation') }}</span>
+                                <strong id="commandSocGlanceCorrelationValue">-</strong>
+                            </div>
+                            <div class="split-glance-cell status-neutral" id="commandSocGlanceVisibility">
+                                <span>{{ tr('dashboard.visibility_label', 'Visibility') }}</span>
+                                <strong id="commandSocGlanceVisibilityValue">-</strong>
+                            </div>
+                            <div class="split-glance-cell status-neutral" id="commandSocGlanceTriage">
+                                <span>{{ tr('dashboard.soc_triage_queue', 'SOC Triage Queue') }}</span>
+                                <strong id="commandSocGlanceTriageValue">-</strong>
+                            </div>
+                        </div>
+                    </article>
+                    <article class="split-glance-card status-neutral" id="commandNocGlanceCard">
+                        <div class="split-glance-header">
+                            <div>
+                                <div class="card-kicker">NOC</div>
+                                <h3 id="commandNocGlanceState">UNKNOWN</h3>
+                            </div>
+                        </div>
+                        <div class="split-glance-heat-grid">
+                            <div class="split-glance-cell status-neutral" id="commandNocGlancePath">
+                                <span>{{ tr('dashboard.path_health', 'Path Health') }}</span>
+                                <strong id="commandNocGlancePathValue">-</strong>
+                            </div>
+                            <div class="split-glance-cell status-neutral" id="commandNocGlanceServices">
+                                <span>{{ tr('dashboard.service_health', 'Service Health') }}</span>
+                                <strong id="commandNocGlanceServicesValue">-</strong>
+                            </div>
+                            <div class="split-glance-cell status-neutral" id="commandNocGlanceCapacity">
+                                <span>{{ tr('dashboard.capacity', 'Capacity') }}</span>
+                                <strong id="commandNocGlanceCapacityValue">-</strong>
+                            </div>
+                            <div class="split-glance-cell status-neutral" id="commandNocGlanceClients">
+                                <span>{{ tr('dashboard.client_inventory', 'Client Inventory') }}</span>
+                                <strong id="commandNocGlanceClientsValue">-</strong>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+            </div>
         </section>
 
         <section class="panel mission-row resource-guard-panel dashboard-view-panel" id="resourceGuardSection" data-dashboard-view="runtime" hidden>
