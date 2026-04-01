@@ -40,22 +40,27 @@
         </div>
     </header>
 
-    <main class="dashboard-shell topo-lite-board-shell">
-        <aside class="panel topo-lite-board-sidebar">
+    <main class="dashboard-shell">
+        <section class="panel demo-mode-banner" id="topoDataBanner" hidden>
             <div class="panel-heading">
                 <div>
-                    <div class="panel-kicker">{{ tr('topo_lite.board.navigation', 'Navigation') }}</div>
-                    <h2>{{ tr('topo_lite.board.one_screen', 'One-screen triage') }}</h2>
+                    <div class="panel-kicker">{{ tr('topo_lite.board.synthetic', 'Synthetic Marker') }}</div>
+                    <h2 id="topoDataBannerTitle">{{ tr('topo_lite.board.synthetic_active', 'Synthetic internal-LAN story active') }}</h2>
                 </div>
+                <a class="topbar-link" href="/">{{ tr('topo_lite.board.back_dashboard', 'Main Dashboard') }}</a>
             </div>
-            <nav class="topo-lite-board-nav">
-                <a href="#topoOverall">{{ tr('topo_lite.board.overall', 'Overall') }}</a>
-                <a href="#topoSoc">{{ tr('topo_lite.board.soc', 'SOC') }}</a>
-                <a href="#topoNoc">{{ tr('topo_lite.board.noc', 'NOC') }}</a>
-                <a href="#topoIr">{{ tr('topo_lite.board.ir', 'Incident Response') }}</a>
-                <a href="#topoAi">{{ tr('topo_lite.board.ai_support', 'AI Support') }}</a>
-            </nav>
-            <div class="topo-lite-board-sidefacts">
+            <p class="panel-note" id="topoDataBannerText">{{ tr('topo_lite.board.synthetic_note', 'This board is showing deterministic validation data, not live evidence.') }}</p>
+        </section>
+
+        <section class="panel evidence-board">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('topo_lite.board.overall', 'Overall') }}</div>
+                    <h2 id="topoOverallHeadline">{{ tr('topo_lite.board.loading', 'Loading internal LAN board') }}</h2>
+                </div>
+                <div class="panel-note" id="topoOverallSummary">{{ tr('topo_lite.board.loading_summary', 'Collecting Topo-Lite board payload.') }}</div>
+            </div>
+            <div class="strip-grid">
                 <div class="strip-pill">
                     <span class="strip-label">{{ tr('topo_lite.board.target_segment', 'Target Segment') }}</span>
                     <strong id="topoBoardSubnet">--</strong>
@@ -68,109 +73,120 @@
                     <span class="strip-label">{{ tr('topo_lite.board.data_mode', 'Data Mode') }}</span>
                     <strong id="topoBoardDataMode">--</strong>
                 </div>
+                <div class="strip-pill">
+                    <span class="strip-label">{{ tr('topo_lite.board.hosts', 'Hosts') }}</span>
+                    <strong id="topoHostTotal">--</strong>
+                </div>
+                <div class="strip-pill">
+                    <span class="strip-label">{{ tr('topo_lite.board.open_services', 'Open Services') }}</span>
+                    <strong id="topoServiceTotal">--</strong>
+                </div>
+                <div class="strip-pill strip-pill-alert">
+                    <span class="strip-label">{{ tr('topo_lite.board.high_events', 'High Events') }}</span>
+                    <strong id="topoHighEvents">--</strong>
+                </div>
+                <div class="strip-pill">
+                    <span class="strip-label">{{ tr('topo_lite.board.subnets', 'Subnets') }}</span>
+                    <strong id="topoSubnetTotal">--</strong>
+                </div>
+                <div class="strip-pill">
+                    <span class="strip-label">{{ tr('topo_lite.board.scan_freshness', 'Scan freshness') }}</span>
+                    <strong id="topoBoardFreshnessBody">--</strong>
+                </div>
             </div>
-        </aside>
-
-        <section class="topo-lite-board-main">
-            <section class="panel topo-lite-board-banner" id="topoDataBanner" hidden>
-                <div class="panel-heading">
-                    <div>
-                        <div class="panel-kicker">{{ tr('topo_lite.board.synthetic', 'Synthetic Marker') }}</div>
-                        <h2 id="topoDataBannerTitle">{{ tr('topo_lite.board.synthetic_active', 'Synthetic internal-LAN story active') }}</h2>
+            <div class="strip-grid topo-lite-inline-strip" id="topoRoleSummary"></div>
+            <div class="evidence-grid topo-lite-inline-grid">
+                <article class="evidence-card">
+                    <div class="card-kicker">{{ tr('topo_lite.board.change_pressure', 'Change pressure') }}</div>
+                    <div class="fact-list">
+                        <div class="fact-item"><span>{{ tr('dashboard.topo_lite_severity_high', 'High') }}</span><strong id="topoSeverityHigh">--</strong></div>
+                        <div class="fact-item"><span>{{ tr('dashboard.topo_lite_severity_medium', 'Medium') }}</span><strong id="topoSeverityMedium">--</strong></div>
+                        <div class="fact-item"><span>{{ tr('dashboard.topo_lite_severity_low', 'Low') }}</span><strong id="topoSeverityLow">--</strong></div>
                     </div>
-                </div>
-                <p class="panel-note" id="topoDataBannerText">{{ tr('topo_lite.board.synthetic_note', 'This board is showing deterministic validation data, not live evidence.') }}</p>
-            </section>
-
-            <section class="panel" id="topoOverall">
-                <div class="panel-heading">
-                    <div>
-                        <div class="panel-kicker">{{ tr('topo_lite.board.overall', 'Overall') }}</div>
-                        <h2 id="topoOverallHeadline">{{ tr('topo_lite.board.loading', 'Loading internal LAN board') }}</h2>
-                    </div>
-                    <div class="panel-note" id="topoOverallSummary">{{ tr('topo_lite.board.loading_summary', 'Collecting Topo-Lite board payload.') }}</div>
-                </div>
-                <div class="topo-lite-kpi-grid">
-                    <article class="command-heat-cell status-neutral">
-                        <span>{{ tr('topo_lite.board.hosts', 'Hosts') }}</span>
-                        <strong id="topoHostTotal">-</strong>
-                    </article>
-                    <article class="command-heat-cell status-neutral">
-                        <span>{{ tr('topo_lite.board.open_services', 'Open Services') }}</span>
-                        <strong id="topoServiceTotal">-</strong>
-                    </article>
-                    <article class="command-heat-cell status-neutral">
-                        <span>{{ tr('topo_lite.board.high_events', 'High Events') }}</span>
-                        <strong id="topoHighEvents">-</strong>
-                    </article>
-                    <article class="command-heat-cell status-neutral">
-                        <span>{{ tr('topo_lite.board.subnets', 'Subnets') }}</span>
-                        <strong id="topoSubnetTotal">-</strong>
-                    </article>
-                </div>
-                <div class="topo-lite-summary-strip" id="topoRoleSummary"></div>
-            </section>
-
-            <div class="topo-lite-board-columns">
-                <section class="panel" id="topoSoc">
-                    <div class="panel-heading">
-                        <div>
-                            <div class="panel-kicker">{{ tr('topo_lite.board.soc', 'SOC') }}</div>
-                            <h2>{{ tr('topo_lite.board.change_pressure', 'Change pressure') }}</h2>
-                        </div>
-                        <div class="panel-note">{{ tr('topo_lite.board.change_pressure_note', 'High-severity changes and recent events stay visible without leaving the board.') }}</div>
-                    </div>
-                    <div class="topo-lite-event-list" id="topoHighEventList"></div>
-                    <details class="topo-lite-foldout">
-                        <summary>{{ tr('topo_lite.board.recent_timeline', 'Recent timeline') }}</summary>
-                        <div class="topo-lite-event-list topo-lite-event-list-compact" id="topoRecentEventList"></div>
-                    </details>
-                </section>
-
-                <section class="panel" id="topoNoc">
-                    <div class="panel-heading">
-                        <div>
-                            <div class="panel-kicker">{{ tr('topo_lite.board.noc', 'NOC') }}</div>
-                            <h2>{{ tr('topo_lite.board.topology_posture', 'Topology posture') }}</h2>
-                        </div>
-                        <div class="panel-note">{{ tr('topo_lite.board.topology_note', 'Hosts are grouped by internal segment and rendered as visual tiles before detailed text.') }}</div>
-                    </div>
-                    <div class="topo-lite-subnet-grid" id="topoSubnetGrid"></div>
-                </section>
+                </article>
             </div>
+        </section>
 
-            <div class="topo-lite-board-columns">
-                <section class="panel" id="topoIr">
-                    <div class="panel-heading">
-                        <div>
-                            <div class="panel-kicker">{{ tr('topo_lite.board.ir', 'Incident Response') }}</div>
-                            <h2>{{ tr('topo_lite.board.next_actions', 'Next actions') }}</h2>
-                        </div>
-                    </div>
+        <section class="panel evidence-board">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('topo_lite.board.soc', 'SOC') }}</div>
+                    <h2>{{ tr('topo_lite.board.change_pressure', 'Change pressure') }}</h2>
+                </div>
+                <div class="panel-note">{{ tr('topo_lite.board.change_pressure_note', 'High-severity changes and recent events stay visible without leaving the board.') }}</div>
+            </div>
+            <div class="evidence-grid">
+                <article class="evidence-card">
+                    <div class="card-kicker">{{ tr('topo_lite.board.high_events', 'High Events') }}</div>
+                    <ul class="action-list" id="topoHighEventList">
+                        <li>{{ tr('dashboard.topo_lite_empty_events', 'No Topo-Lite events yet.') }}</li>
+                    </ul>
+                </article>
+                <article class="evidence-card">
+                    <div class="card-kicker">{{ tr('topo_lite.board.recent_timeline', 'Recent timeline') }}</div>
+                    <ul class="action-list" id="topoRecentEventList">
+                        <li>{{ tr('dashboard.topo_lite_empty_events', 'No Topo-Lite events yet.') }}</li>
+                    </ul>
+                </article>
+            </div>
+        </section>
+
+        <section class="panel evidence-board">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('topo_lite.board.noc', 'NOC Board') }}</div>
+                    <h2>{{ tr('topo_lite.board.topology_posture', 'Topology posture') }}</h2>
+                </div>
+                <div class="panel-note">{{ tr('topo_lite.board.topology_note', 'Hosts are grouped by internal segment and rendered as visual tiles before detailed text.') }}</div>
+            </div>
+            <div class="topo-lite-inline-host-clusters" id="topoSubnetGrid">
+                <div class="client-identity-empty">{{ tr('dashboard.topo_lite_empty_hosts', 'No internal-LAN hosts are currently visible.') }}</div>
+            </div>
+        </section>
+
+        <section class="panel evidence-board">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('topo_lite.board.ir', 'Incident Response') }}</div>
+                    <h2>{{ tr('topo_lite.board.next_actions', 'Next actions') }}</h2>
+                </div>
+            </div>
+            <div class="evidence-grid">
+                <article class="evidence-card">
+                    <div class="card-kicker">{{ tr('topo_lite.board.next_actions', 'Next actions') }}</div>
                     <ul class="action-list" id="topoIrActionList">
                         <li>{{ tr('topo_lite.board.waiting_actions', 'Waiting for internal-LAN board payload.') }}</li>
                     </ul>
-                    <details class="topo-lite-foldout">
-                        <summary>{{ tr('topo_lite.board.scan_freshness', 'Scan freshness') }}</summary>
-                        <div class="topo-lite-run-list" id="topoRunList"></div>
-                    </details>
-                </section>
+                </article>
+                <article class="evidence-card">
+                    <div class="card-kicker">{{ tr('topo_lite.board.scan_freshness', 'Scan freshness') }}</div>
+                    <ul class="action-list" id="topoRunList">
+                        <li>{{ tr('dashboard.topo_lite_summary_waiting', 'Waiting for Topo-Lite board payload.') }}</li>
+                    </ul>
+                </article>
+            </div>
+        </section>
 
-                <section class="panel" id="topoAi">
-                    <div class="panel-heading">
-                        <div>
-                            <div class="panel-kicker">{{ tr('topo_lite.board.ai_support', 'AI Support') }}</div>
-                            <h2>{{ tr('topo_lite.board.operator_guidance', 'Operator guidance') }}</h2>
-                        </div>
-                    </div>
+        <section class="panel evidence-board">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('topo_lite.board.ai_support', 'AI Support') }}</div>
+                    <h2>{{ tr('topo_lite.board.operator_guidance', 'Operator guidance') }}</h2>
+                </div>
+            </div>
+            <div class="evidence-grid">
+                <article class="evidence-card">
+                    <div class="card-kicker">{{ tr('topo_lite.board.operator_guidance', 'Operator guidance') }}</div>
                     <ul class="action-list" id="topoAiPromptList">
                         <li>{{ tr('topo_lite.board.waiting_ai', 'Waiting for board synthesis.') }}</li>
                     </ul>
-                    <details class="topo-lite-foldout">
-                        <summary>{{ tr('topo_lite.board.caveats', 'Caveats') }}</summary>
-                        <ul class="action-list" id="topoAiCaveatList"></ul>
-                    </details>
-                </section>
+                </article>
+                <article class="evidence-card">
+                    <div class="card-kicker">{{ tr('topo_lite.board.caveats', 'Caveats') }}</div>
+                    <ul class="action-list" id="topoAiCaveatList">
+                        <li>{{ tr('dashboard.topo_lite_empty_caveats', 'No caveats yet.') }}</li>
+                    </ul>
+                </article>
             </div>
         </section>
     </main>

@@ -36,6 +36,15 @@ function renderList(id, items, formatter) {
     element.innerHTML = items.map((item) => formatter(item)).join('');
 }
 
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function renderBanner(dataMode) {
     const banner = document.getElementById('topoDataBanner');
     const title = document.getElementById('topoDataBannerTitle');
@@ -50,6 +59,16 @@ function renderBanner(dataMode) {
     text.textContent = `Scenario ${dataMode.scenario || '-'} is active. Topology and timeline are deterministic and should not be treated as live evidence.`;
 }
 
+function setPillTone(id, tone) {
+    const element = document.getElementById(id);
+    const pill = element ? element.closest('.strip-pill, .freshness-pill') : null;
+    if (!pill) return;
+    pill.classList.remove('pill-safe', 'pill-caution', 'pill-danger');
+    if (tone === 'safe' || tone === 'caution' || tone === 'danger') {
+        pill.classList.add(`pill-${tone}`);
+    }
+}
+
 function renderRoleSummary(counts) {
     const target = document.getElementById('topoRoleSummary');
     if (!target) return;
@@ -59,50 +78,9 @@ function renderRoleSummary(counts) {
         { label: 'Unknown', value: counts.unknown_count },
     ].map((item) => `
         <div class="strip-pill">
-            <span class="strip-label">${item.label}</span>
-            <strong>${item.value ?? 0}</strong>
+            <span class="strip-label">${escapeHtml(item.label)}</span>
+            <strong>${escapeHtml(String(item.value ?? 0))}</strong>
         </div>
-    `).join('');
-}
-
-function renderHighEvents(items) {
-    const target = document.getElementById('topoHighEventList');
-    if (!target) return;
-    if (!items.length) {
-        target.innerHTML = '<article class="topo-lite-event-card"><strong>No high-severity events.</strong></article>';
-        return;
-    }
-    target.innerHTML = items.map((item) => `
-        <article class="topo-lite-event-card topo-lite-event-${item.severity}">
-            <div class="topo-lite-event-head">
-                <span class="topo-lite-severity-ring severity-${item.severity}"></span>
-                <div>
-                    <strong>${item.event_type}</strong>
-                    <p>${item.summary}</p>
-                </div>
-            </div>
-            <div class="panel-note">${item.created_at} · ${(item.host && (item.host.hostname || item.host.ip)) || 'unknown host'}</div>
-        </article>
-    `).join('');
-}
-
-function renderRecentEvents(items) {
-    const target = document.getElementById('topoRecentEventList');
-    if (!target) return;
-    if (!items.length) {
-        target.innerHTML = '<article class="topo-lite-event-card"><strong>No recent events.</strong></article>';
-        return;
-    }
-    target.innerHTML = items.map((item) => `
-        <article class="topo-lite-event-card topo-lite-event-compact">
-            <div class="topo-lite-event-head">
-                <span class="topo-lite-severity-ring severity-${item.severity}"></span>
-                <div>
-                    <strong>${item.event_type}</strong>
-                    <p>${item.summary}</p>
-                </div>
-            </div>
-        </article>
     `).join('');
 }
 
@@ -110,30 +88,21 @@ function renderSubnets(items) {
     const target = document.getElementById('topoSubnetGrid');
     if (!target) return;
     if (!items.length) {
-        target.innerHTML = '<article class="topo-lite-subnet-card"><strong>No subnet data available.</strong></article>';
+        target.innerHTML = '<div class="client-identity-empty">No subnet data available.</div>';
         return;
     }
     target.innerHTML = items.map((subnet) => `
-        <article class="topo-lite-subnet-card">
-            <div class="topo-lite-subnet-head">
-                <div>
-                    <strong>${subnet.subnet}</strong>
-                    <p>${subnet.hosts.length} hosts · ${subnet.service_count} visible services</p>
-                </div>
+        <article class="topo-lite-inline-cluster">
+            <div class="topo-lite-inline-cluster-head">
+                <strong>${escapeHtml(subnet.subnet)}</strong>
+                <span class="client-identity-row-state ${Number(subnet.service_count || 0) > 0 ? 'status-safe' : 'status-neutral'}">${escapeHtml(String(subnet.hosts.length || 0))} hosts</span>
             </div>
-            <div class="topo-lite-host-grid">
+            <div class="client-identity-chip-grid">
                 ${subnet.hosts.map((host) => `
-                    <div class="topo-lite-host-tile role-${host.role || 'unknown'}">
-                        <div class="topo-lite-host-mark">${host.monogram}</div>
-                        <div class="topo-lite-host-copy">
-                            <strong>${host.label}</strong>
-                            <span>${host.ip}</span>
-                            <span>${host.role || 'unknown'} · ${host.status || 'unknown'}</span>
-                        </div>
-                        <div class="topo-lite-chip-row">
-                            ${host.services.map((service) => `<span class="topo-lite-chip">${service}</span>`).join('')}
-                        </div>
-                    </div>
+                    <span class="client-identity-chip">
+                        <span class="client-identity-chip-label">${escapeHtml(host.monogram || '--')}</span>
+                        <span>${escapeHtml(host.label || host.hostname || host.ip || '-')}</span>
+                    </span>
                 `).join('')}
             </div>
         </article>
@@ -141,37 +110,24 @@ function renderSubnets(items) {
 }
 
 function renderRuns(items) {
-    const target = document.getElementById('topoRunList');
-    if (!target) return;
-    if (!items.length) {
-        target.innerHTML = '<div class="panel-note">No scan history available.</div>';
-        return;
-    }
-    target.innerHTML = items.map((item) => `
-        <article class="topo-lite-run-card">
-            <strong>${item.scan_kind}</strong>
-            <span>${item.status}</span>
-            <span>${item.started_at}</span>
-        </article>
-    `).join('');
-}
-
-function renderPrompts(items, caveats) {
-    renderList('topoAiPromptList', items, (item) => `<li>${item}</li>`);
-    renderList('topoAiCaveatList', caveats, (item) => `<li>${item}</li>`);
+    renderList(
+        'topoRunList',
+        items.length ? items.slice(0, 6).map((item) => `${item.scan_kind || '-'} | ${item.status || '-'} | ${item.started_at || '-'}`) : ['No scan history available.'],
+        (item) => `<li>${escapeHtml(item)}</li>`,
+    );
 }
 
 function renderIrActions(payload) {
     const actions = [];
-    if (payload.topo_lite.data_mode?.synthetic) {
+    if (payload.topo_lite?.data_mode?.synthetic) {
         actions.push('Synthetic mode is active. Confirm UI behavior before switching back to live evidence.');
     }
-    if ((payload.topo_lite.counts?.high_events || 0) > 0) {
+    if ((payload.topo_lite?.counts?.high_events || 0) > 0) {
         actions.push('Review the highlighted high-severity service changes and confirm whether they are expected internal-LAN transitions.');
     }
-    actions.push('Use the NOC section to confirm segment placement and the SOC section to confirm event chronology.');
-    actions.push('If the board looks unexpectedly empty, verify `br0` reachability and then decide whether to seed the sample dataset.');
-    renderList('topoIrActionList', actions, (item) => `<li>${item}</li>`);
+    actions.push('Use this page to confirm segment placement, recent change chronology, and operator guidance in one dashboard style.');
+    actions.push('If the board looks empty, verify internal-LAN reachability before seeding sample data again.');
+    renderList('topoIrActionList', actions, (item) => `<li>${escapeHtml(item)}</li>`);
 }
 
 function renderBoard(payload) {
@@ -180,15 +136,18 @@ function renderBoard(payload) {
         updateText('topoOverallSummary', payload?.summary || payload?.error || 'No payload.');
         return;
     }
+
     const board = payload.topo_lite || {};
     const counts = board.counts || {};
     const dataMode = board.data_mode || {};
     const freshness = board.freshness || {};
+    const severity = board.severity_counts || {};
 
     renderBanner(dataMode);
     updateText('topoBoardMode', payload.status || '-');
     updateText('topoBoardHosts', `${counts.host_total ?? 0}`);
     updateText('topoBoardFreshness', freshness.started_at || freshness.finished_at || '-');
+    updateText('topoBoardFreshnessBody', freshness.started_at || freshness.finished_at || '-');
     updateText('topoBoardSubnet', (board.config?.subnets || []).join(', ') || '-');
     updateText('topoBoardInterface', board.config?.interface || '-');
     updateText('topoBoardDataMode', dataMode.synthetic ? 'synthetic' : 'live');
@@ -200,13 +159,48 @@ function renderBoard(payload) {
     updateText('topoHighEvents', counts.high_events ?? 0);
     updateText('topoSubnetTotal', counts.subnet_total ?? 0);
 
+    setPillTone('topoBoardMode', dataMode.synthetic ? 'caution' : 'safe');
+    setPillTone('topoBoardDataMode', dataMode.synthetic ? 'caution' : 'safe');
+    setPillTone('topoHighEvents', Number(counts.high_events || 0) > 0 ? 'danger' : (Number(counts.medium_events || 0) > 0 ? 'caution' : 'safe'));
+
     renderRoleSummary(counts);
-    renderHighEvents(board.high_events || []);
-    renderRecentEvents(board.recent_events || []);
+
+    renderList(
+        'topoHighEventList',
+        (board.high_events || []).length ? board.high_events.slice(0, 6).map((item) => {
+            const host = item.host && typeof item.host === 'object' ? item.host : {};
+            return `${String(item.severity || 'info').toUpperCase()} | ${item.event_type || '-'} | ${host.hostname || host.ip || '-'} | ${item.summary || '-'}`;
+        }) : ['No high-severity events.'],
+        (item) => `<li>${escapeHtml(item)}</li>`,
+    );
+
+    renderList(
+        'topoRecentEventList',
+        (board.recent_events || []).length ? board.recent_events.slice(0, 8).map((item) => {
+            const host = item.host && typeof item.host === 'object' ? item.host : {};
+            return `${item.event_type || '-'} | ${host.hostname || host.ip || '-'} | ${item.created_at || '-'}`;
+        }) : ['No recent events.'],
+        (item) => `<li>${escapeHtml(item)}</li>`,
+    );
+
     renderSubnets(board.subnets || []);
     renderRuns(board.scan_runs || []);
     renderIrActions(payload);
-    renderPrompts(board.ai_support?.prompts || [], board.ai_support?.caveats || []);
+
+    renderList(
+        'topoAiPromptList',
+        (board.ai_support?.prompts || []).length ? board.ai_support.prompts : ['Waiting for board synthesis.'],
+        (item) => `<li>${escapeHtml(item)}</li>`,
+    );
+    renderList(
+        'topoAiCaveatList',
+        (board.ai_support?.caveats || []).length ? board.ai_support.caveats : ['No caveats yet.'],
+        (item) => `<li>${escapeHtml(item)}</li>`,
+    );
+
+    updateText('topoSeverityHigh', severity.high ?? counts.high_events ?? 0);
+    updateText('topoSeverityMedium', severity.medium ?? counts.medium_events ?? 0);
+    updateText('topoSeverityLow', severity.low ?? counts.low_events ?? 0);
 }
 
 async function refreshTopoLiteBoard() {
