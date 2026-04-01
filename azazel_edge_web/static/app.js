@@ -134,6 +134,16 @@ function applyDashboardView(view, options = {}) {
     }
 }
 
+function syncAssistantWorkspaceFrame() {
+    const frame = document.getElementById('assistantOpsCommFrame');
+    if (!(frame instanceof HTMLIFrameElement)) return;
+    const audience = currentAudience === 'temporary' ? 'beginner' : 'operator';
+    const nextSrc = `/ops-comm?embed=1&lang=${encodeURIComponent(CURRENT_LANG)}&audience=${encodeURIComponent(audience)}`;
+    if (frame.dataset.currentSrc === nextSrc) return;
+    frame.dataset.currentSrc = nextSrc;
+    frame.src = nextSrc;
+}
+
 function authHeaders() {
     return {
         'Content-Type': 'application/json',
@@ -436,6 +446,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindStaticHandlers();
     startHeaderClock();
     setAudience(currentAudience);
+    syncAssistantWorkspaceFrame();
     applyDashboardView(currentDashboardView, { scroll: false, syncUrl: true, replace: true });
     refreshDashboard();
     dashboardTimer = window.setInterval(refreshDashboard, POLL_INTERVAL_MS);
@@ -675,6 +686,7 @@ function setAudience(audience) {
     }
     updateTemporaryOpsCommLink('wifi');
     applyAudienceControlPolicy();
+    syncAssistantWorkspaceFrame();
     applyDashboardView(currentDashboardView, { scroll: false, syncUrl: true, replace: true });
     syncOnboardingBanner();
 }

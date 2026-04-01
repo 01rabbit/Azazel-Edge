@@ -4413,7 +4413,8 @@ def demo_page():
 def ops_comm():
     """Dedicated communication page for Mattermost + WebUI bridge."""
     open_url = MATTERMOST_OPEN_URL
-    return render_template("ops_comm.html", mattermost_open_url=open_url)
+    embed_mode = str(request.args.get("embed") or "").strip().lower() in {"1", "true", "yes", "on"}
+    return render_template("ops_comm.html", mattermost_open_url=open_url, embed_mode=embed_mode)
 
 
 @app.route("/topo-lite")

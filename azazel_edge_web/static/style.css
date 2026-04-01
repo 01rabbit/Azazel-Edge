@@ -2509,6 +2509,24 @@ body.demo-overlay-active #healthSummaryLine {
     white-space: pre-wrap;
 }
 
+.assistant-embedded-workspace {
+    margin-top: 8px;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 18px;
+    background: rgba(5, 10, 16, 0.58);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+
+.assistant-embedded-frame {
+    display: block;
+    width: 100%;
+    min-height: 1240px;
+    height: 1240px;
+    border: 0;
+    background: transparent;
+}
+
 .assistant-footer {
     display: grid;
     grid-template-columns: 1fr 1fr;

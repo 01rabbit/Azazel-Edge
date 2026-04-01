@@ -23,7 +23,7 @@
                 <button id="audienceTemporary" class="audience-btn active" data-audience="temporary">{{ tr('dashboard.temporary', 'Temporary') }}</button>
             </div>
             <div class="topbar-links">
-                <a id="askMioLink" class="topbar-link" href="#assistantPanel">{{ tr('dashboard.ask_mio', 'Ask M.I.O.') }}</a>
+                <a id="askMioLink" class="topbar-link" href="/?view=assistant">{{ tr('ops.title', 'M.I.O. Ops Communication') }}</a>
                 <button id="showGuideBtn" class="topbar-link topbar-link-button" type="button">{{ tr('dashboard.show_guide', 'Show Guide') }}</button>
                 <a id="openMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.open_mattermost', 'Open Mattermost') }}</a>
                 <a class="topbar-link" href="/topo-lite">{{ tr('topo_lite.board.noc', 'NOC Board') }}</a>
@@ -63,7 +63,7 @@
                 <button type="button" class="dashboard-side-link pro-only" data-dashboard-view-target="split">{{ tr('dashboard.split_board', 'SOC / NOC Split Board') }}</button>
                 <button type="button" class="dashboard-side-link" data-dashboard-view-target="clients">{{ tr('dashboard.client_identity_view', 'Client Identity View') }}</button>
                 <button type="button" class="dashboard-side-link" data-dashboard-view-target="action">{{ tr('dashboard.action_board', 'Action Board') }}</button>
-                <button type="button" class="dashboard-side-link" data-dashboard-view-target="assistant">{{ tr('dashboard.mio_assist', 'M.I.O. Assist') }}</button>
+                <button type="button" class="dashboard-side-link" data-dashboard-view-target="assistant">{{ tr('ops.title', 'M.I.O. Ops Communication') }}</button>
                 <button type="button" class="dashboard-side-link pro-only" data-dashboard-view-target="evidence">{{ tr('dashboard.evidence_timeline', 'Evidence & Timeline') }}</button>
                 <button type="button" class="dashboard-side-link" data-dashboard-view-target="topo">{{ tr('dashboard.topo_lite_integrated_title', 'Integrated Internal LAN Board') }}</button>
             </nav>
@@ -879,74 +879,22 @@
                         <div class="assistant-title-row">
                             <img class="assistant-logo" src="/images/MIO_Logo.png" alt="M.I.O. logo">
                             <div>
-                            <div class="panel-kicker">{{ tr('dashboard.mio_assist', 'M.I.O. Assist') }}</div>
-                            <h2>Mission Intelligence Operator</h2>
+                                <div class="panel-kicker">{{ tr('ops.command_workspace', 'Command Workspace') }}</div>
+                                <h2>{{ tr('ops.title', 'M.I.O. Ops Communication') }}</h2>
                             </div>
                         </div>
-                        <span class="assistant-status" id="mioStatusBadge">IDLE</span>
+                        <a id="assistantOpsCommLink" class="topbar-link" href="/ops-comm">{{ tr('ops.open_mattermost', 'Open Mattermost') }}</a>
                     </div>
-                    <p class="assistant-intro" id="mioCurrentAnswer">{{ tr('dashboard.mio_intro', 'M.I.O. will surface current recommendation, user guidance, and reviewed runbook candidates here.') }}</p>
-                    <div class="assistant-block">
-                                <div class="assistant-label">{{ tr('dashboard.current_recommendation', 'Current Recommendation') }}</div>
-                        <div id="mioRecommendation">-</div>
-                    </div>
-                    <details class="panel-fold-details" id="mioAssistDetails">
-                        <summary id="mioAssistDetailsToggle">{{ tr('dashboard.mio_details_show', 'Show M.I.O. details') }}</summary>
-                        <div class="assistant-block">
-                            <div class="assistant-label">Last Manual Ask</div>
-                            <div id="mioLastAsk">No manual query executed yet.</div>
-                        </div>
-                        <div class="assistant-block">
-                                    <div class="assistant-label">{{ tr('dashboard.recommended_runbook', 'Recommended Runbook') }}</div>
-                            <div id="mioRunbookSummary">No runbook selected.</div>
-                        </div>
-                        <div class="assistant-block">
-                            <div class="assistant-label">Rationale</div>
-                            <ul class="action-list" id="mioRationaleList">
-                                <li>{{ tr('dashboard.no_rationale_available', 'No rationale available.') }}</li>
-                            </ul>
-                        </div>
-                        <div class="assistant-block">
-                                    <div class="assistant-label">{{ tr('dashboard.user_guidance', 'User Guidance') }}</div>
-                            <div id="mioUserGuidance">-</div>
-                        </div>
-                        <div class="assistant-block pro-only">
-                                    <div class="assistant-label">{{ tr('dashboard.review', 'Review') }}</div>
-                            <div id="mioReview">-</div>
-                        </div>
-                    </details>
-                    <form id="mioAskForm" class="assistant-form">
-                        <label for="mioQuestion">{{ tr('dashboard.ask_from_dashboard', 'Ask M.I.O. from the dashboard') }}</label>
-                        <textarea id="mioQuestion" rows="4" placeholder="Example: Users report Wi-Fi failure on one floor. What should I verify first?"></textarea>
-                        <div class="assistant-shortcuts">
-                            <button type="button" class="shortcut-btn" data-question="{{ tr('dashboard.question_wifi_trouble', 'How should I guide a user who cannot connect to Wi-Fi?') }}">Wi-Fi Trouble</button>
-                            <button type="button" class="shortcut-btn" data-question="{{ tr('dashboard.question_dns_failure', 'What should I verify when DNS lookup fails?') }}">DNS Failure</button>
-                            <button type="button" class="shortcut-btn" data-question="{{ tr('dashboard.question_gateway_uplink', 'What should I verify when the gateway or uplink looks unhealthy?') }}">Gateway / Uplink</button>
-                            <button type="button" class="shortcut-btn" data-question="{{ tr('dashboard.question_service_status', 'What should I verify when a service appears unhealthy?') }}">Service Status</button>
-                        </div>
-                        <button type="submit" id="mioAskSubmit" class="assistant-submit">{{ tr('dashboard.ask_submit', 'Ask M.I.O.') }}</button>
-                    </form>
-                    <div class="assistant-response" id="mioAskResponse">No manual query executed yet.</div>
-                    <div class="assistant-block handoff-block">
-                        <div class="assistant-label">{{ tr('dashboard.handoff_brief_pack', 'Handoff Brief Pack') }}</div>
-                        <div class="handoff-summary" id="handoffPackSummary">{{ tr('dashboard.handoff_waiting', 'Preparing handoff pack.') }}</div>
-                        <div class="handoff-actions">
-                            <button type="button" class="shortcut-btn" id="handoffCopyBtn">{{ tr('dashboard.handoff_copy', 'Copy') }}</button>
-                            <a id="handoffOpsCommBtn" class="topbar-link" href="/ops-comm">{{ tr('dashboard.handoff_send_ops_comm', 'Send to Ops Comm') }}</a>
-                            <button type="button" class="shortcut-btn" id="handoffMattermostBtn">{{ tr('dashboard.handoff_send_mattermost', 'Send to Mattermost') }}</button>
-                        </div>
-                        <details class="panel-fold-details" id="handoffDetails">
-                            <summary id="handoffDetailsToggle">{{ tr('dashboard.handoff_details_show', 'Show handoff brief') }}</summary>
-                            <pre class="handoff-preview" id="handoffPreview">{{ tr('dashboard.handoff_waiting', 'Preparing handoff pack.') }}</pre>
-                        </details>
-                    </div>
-                    <div class="assistant-footer">
-                        <div><span class="assistant-label">Mattermost</span><strong id="mattermostState">-</strong></div>
-                        <div><span class="assistant-label">Triggers</span><strong id="mattermostTriggers">-</strong></div>
+                    <p class="assistant-intro">{{ tr('ops.workspace_note', 'Use this view when you need direct M.I.O. support, a safe user-facing message, or a reviewed runbook candidate.') }}</p>
+                    <div class="assistant-embedded-workspace">
+                        <iframe
+                            id="assistantOpsCommFrame"
+                            class="assistant-embedded-frame"
+                            title="{{ tr('ops.title', 'M.I.O. Ops Communication') }}"
+                            src="/ops-comm?embed=1&lang={{ ui_lang }}&audience=operator"></iframe>
                     </div>
                     <div class="assistant-shortcuts">
-                        <a id="assistantOpsCommLink" class="topbar-link" href="/ops-comm">Open Ops Comm</a>
-                        <a id="assistantMattermostLink" class="topbar-link" href="/ops-comm">Open Mattermost</a>
+                        <a id="assistantMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('ops.open_mattermost', 'Open Mattermost') }}</a>
                     </div>
                 </section>
 

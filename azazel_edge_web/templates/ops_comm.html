@@ -7,7 +7,8 @@
     <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
     <link rel="stylesheet" href="/static/ops_comm.css?v={{ asset_version }}">
 </head>
-<body class="ops-page">
+<body class="ops-page{% if embed_mode %} ops-embedded{% endif %}">
+    {% if not embed_mode %}
     <header class="topbar ops-topbar">
         <div class="ops-topbar-brand">
             <img class="ops-logo" src="/images/MIO_Logo.png" alt="M.I.O. Logo">
@@ -25,8 +26,9 @@
             <a class="topbar-link" id="mattermostLink" href="{{ mattermost_open_url or '#' }}" target="_blank" rel="noopener noreferrer">{{ tr('ops.open_mattermost', 'Open Mattermost') }}</a>
         </div>
     </header>
+    {% endif %}
 
-    <main class="ops-shell">
+    <main class="ops-shell{% if embed_mode %} ops-shell-embedded{% endif %}">
         <section class="panel ops-hero">
             <div class="ops-hero-main">
                 <div class="panel-heading">

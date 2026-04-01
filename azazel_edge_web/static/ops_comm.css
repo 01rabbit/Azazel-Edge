@@ -2,6 +2,11 @@
     min-height: 100vh;
 }
 
+.ops-page.ops-embedded {
+    min-height: 0;
+    background: transparent;
+}
+
 .ops-topbar {
     align-items: center;
 }
@@ -50,6 +55,12 @@
     max-width: 1540px;
     margin: 0 auto;
     padding: 24px 22px 64px;
+}
+
+.ops-shell.ops-shell-embedded {
+    max-width: none;
+    margin: 0;
+    padding: 0;
 }
 
 .ops-hero {
