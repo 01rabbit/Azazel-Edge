@@ -16,6 +16,7 @@
     --accent-steel: #a7c7d6;
     --shadow-lg: 0 24px 70px rgba(0, 0, 0, 0.34);
     --shadow-sm: 0 8px 20px rgba(0, 0, 0, 0.2);
+    --dashboard-topbar-height: 120px;
     --radius-lg: 24px;
     --radius-md: 16px;
     --radius-sm: 10px;
@@ -247,7 +248,7 @@ body[data-audience="professional"] .temp-only {
 
 .dashboard-side-menu {
     position: sticky;
-    top: 104px;
+    top: var(--dashboard-topbar-height);
     padding: 18px 18px 16px;
 }
 
@@ -311,7 +312,7 @@ body[data-audience="professional"] .temp-only {
 
 .topo-lite-board-sidebar {
     position: sticky;
-    top: 104px;
+    top: var(--dashboard-topbar-height);
 }
 
 .topo-lite-board-main {

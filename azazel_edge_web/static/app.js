@@ -24,6 +24,13 @@ let currentProgress = {};
 let currentHandoff = {};
 let onboardingStepIndex = 0;
 
+function syncDashboardTopbarOffset() {
+    const topbar = document.querySelector('.topbar');
+    if (!topbar) return;
+    const height = Math.ceil(topbar.getBoundingClientRect().height);
+    document.documentElement.style.setProperty('--dashboard-topbar-height', `${height}px`);
+}
+
 function advanceOnboardingStep() {
     onboardingStepIndex = (onboardingStepIndex + 1) % 3;
     syncOnboardingBanner();
@@ -363,6 +370,7 @@ function formatAssistResponse(result) {
 
 document.addEventListener('DOMContentLoaded', () => {
     document.documentElement.lang = CURRENT_LANG;
+    syncDashboardTopbarOffset();
     syncLanguageUi();
     bindStaticHandlers();
     startHeaderClock();
@@ -379,6 +387,8 @@ window.addEventListener('beforeunload', () => {
         clearInterval(headerClockTimer);
     }
 });
+
+window.addEventListener('resize', syncDashboardTopbarOffset);
 
 function bindStaticHandlers() {
     document.getElementById('langJaBtn')?.addEventListener('click', () => switchLanguage('ja'));
