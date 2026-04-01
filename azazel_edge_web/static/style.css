@@ -258,8 +258,10 @@ body[data-audience="professional"] .temp-only {
     margin-top: 8px;
 }
 
-.dashboard-side-nav a {
+.dashboard-side-nav a,
+.dashboard-side-link {
     display: block;
+    width: 100%;
     padding: 11px 13px;
     border-radius: 14px;
     text-decoration: none;
@@ -267,12 +269,23 @@ body[data-audience="professional"] .temp-only {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
     transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    appearance: none;
 }
 
-.dashboard-side-nav a:hover {
+.dashboard-side-nav a:hover,
+.dashboard-side-link:hover {
     background: rgba(116, 212, 255, 0.08);
     border-color: rgba(116, 212, 255, 0.2);
     transform: translateX(2px);
+}
+
+.dashboard-side-link.active {
+    background: rgba(116, 212, 255, 0.14);
+    border-color: rgba(116, 212, 255, 0.34);
+    box-shadow: inset 0 0 0 1px rgba(116, 212, 255, 0.12);
 }
 
 .demo-shell {

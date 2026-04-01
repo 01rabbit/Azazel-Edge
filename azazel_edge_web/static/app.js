@@ -1,5 +1,6 @@
 const AUTH_TOKEN = localStorage.getItem('azazel_token') || 'azazel-default-token-change-me';
 const AUDIENCE_KEY = 'azazel_dashboard_audience';
+const DASHBOARD_VIEW_KEY = 'azazel_dashboard_view';
 const LANG_KEY = 'azazel_lang';
 const PROGRESS_SESSION_KEY = 'azazel_operator_progress_session';
 const ONBOARDING_DISMISSED_KEY = 'azazel_dashboard_onboarding_v3_dismissed';
@@ -10,6 +11,7 @@ const CURRENT_PAGE = document.body?.dataset?.page || 'dashboard';
 
 let dashboardTimer = null;
 let currentAudience = resolveInitialAudience();
+let currentDashboardView = resolveInitialDashboardView();
 let latestState = {};
 let latestSummary = {};
 let latestMattermost = {};
@@ -71,6 +73,65 @@ function resolveInitialAudience() {
     const queryAudience = normalizeAudience(url.searchParams.get('audience'));
     const savedAudience = normalizeAudience(localStorage.getItem(AUDIENCE_KEY));
     return queryAudience || savedAudience || 'temporary';
+}
+
+function normalizeDashboardView(value) {
+    const text = String(value || '').trim().toLowerCase();
+    if (['posture', 'runtime', 'mission', 'state', 'split', 'clients', 'action', 'assistant', 'evidence', 'topo'].includes(text)) {
+        return text;
+    }
+    return '';
+}
+
+function resolveInitialDashboardView() {
+    const url = new URL(window.location.href);
+    const queryView = normalizeDashboardView(url.searchParams.get('view'));
+    const savedView = normalizeDashboardView(localStorage.getItem(DASHBOARD_VIEW_KEY));
+    return queryView || savedView || 'posture';
+}
+
+function dashboardViewPanels() {
+    return Array.from(document.querySelectorAll('.dashboard-view-panel[data-dashboard-view]'));
+}
+
+function isDashboardViewAvailable(view) {
+    return dashboardViewPanels().some((panel) => {
+        if (panel.dataset.dashboardView !== view) return false;
+        return !(currentAudience !== 'professional' && panel.classList.contains('pro-only'));
+    });
+}
+
+function syncDashboardViewControls(view) {
+    document.querySelectorAll('.dashboard-side-link[data-dashboard-view-target]').forEach((button) => {
+        if (!(button instanceof HTMLButtonElement)) return;
+        const active = button.dataset.dashboardViewTarget === view;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+}
+
+function applyDashboardView(view, options = {}) {
+    if (CURRENT_PAGE !== 'dashboard') return;
+    const { scroll = true, syncUrl = true, replace = true } = options;
+    const normalized = normalizeDashboardView(view) || 'posture';
+    const resolved = isDashboardViewAvailable(normalized) ? normalized : 'posture';
+    currentDashboardView = resolved;
+    dashboardViewPanels().forEach((panel) => {
+        const visible = panel.dataset.dashboardView === resolved;
+        panel.hidden = !visible;
+        panel.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    });
+    syncDashboardViewControls(resolved);
+    localStorage.setItem(DASHBOARD_VIEW_KEY, resolved);
+    if (syncUrl) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('view', resolved);
+        const historyMethod = replace ? 'replaceState' : 'pushState';
+        window.history[historyMethod]({}, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+    if (scroll) {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
 }
 
 function authHeaders() {
@@ -375,6 +436,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindStaticHandlers();
     startHeaderClock();
     setAudience(currentAudience);
+    applyDashboardView(currentDashboardView, { scroll: false, syncUrl: true, replace: true });
     refreshDashboard();
     dashboardTimer = window.setInterval(refreshDashboard, POLL_INTERVAL_MS);
 });
@@ -396,6 +458,12 @@ function bindStaticHandlers() {
     document.getElementById('audienceProfessional')?.addEventListener('click', () => setAudience('professional'));
     document.getElementById('audienceTemporary')?.addEventListener('click', () => setAudience('temporary'));
     document.getElementById('showGuideBtn')?.addEventListener('click', reopenOnboardingGuide);
+    document.querySelectorAll('.dashboard-side-link[data-dashboard-view-target]').forEach((button) => {
+        if (!(button instanceof HTMLButtonElement)) return;
+        button.addEventListener('click', () => {
+            applyDashboardView(button.dataset.dashboardViewTarget, { scroll: false, syncUrl: true, replace: true });
+        });
+    });
 
     document.getElementById('modePortalBtn')?.addEventListener('click', () => switchMode('portal'));
     document.getElementById('modeShieldBtn')?.addEventListener('click', () => switchMode('shield'));
@@ -604,6 +672,7 @@ function setAudience(audience) {
     }
     updateTemporaryOpsCommLink('wifi');
     applyAudienceControlPolicy();
+    applyDashboardView(currentDashboardView, { scroll: false, syncUrl: true, replace: true });
     syncOnboardingBanner();
 }
 

@@ -56,16 +56,16 @@
                 </div>
             </div>
             <nav class="dashboard-side-nav" aria-label="{{ tr('topo_lite.board.navigation', 'Navigation') }}">
-                <a href="#commandStripSection">{{ tr('dashboard.immediate_posture', 'Immediate posture') }}</a>
-                <a href="#resourceGuardSection">{{ tr('dashboard.resource_guard_title', 'Runtime health') }}</a>
-                <a href="#missionRowSection">{{ tr('dashboard.current_mission', 'Current Mission') }}</a>
-                <a href="#situationBoardSection">{{ tr('dashboard.operational_state', 'Operational state') }}</a>
-                <a href="#splitBoardSection">{{ tr('dashboard.split_board', 'SOC / NOC Split Board') }}</a>
-                <a href="#clientIdentitySection">{{ tr('dashboard.client_identity_view', 'Client Identity View') }}</a>
-                <a href="#actionBoardSection">{{ tr('dashboard.action_board', 'Action Board') }}</a>
-                <a href="#assistantPanel">{{ tr('dashboard.mio_assist', 'M.I.O. Assist') }}</a>
-                <a href="#evidenceBoardSection">{{ tr('dashboard.evidence_timeline', 'Evidence & Timeline') }}</a>
-                <a href="#topoLiteInlinePanel">{{ tr('dashboard.topo_lite_integrated_title', 'Integrated Internal LAN Board') }}</a>
+                <button type="button" class="dashboard-side-link active" data-dashboard-view-target="posture">{{ tr('dashboard.immediate_posture', 'Immediate posture') }}</button>
+                <button type="button" class="dashboard-side-link" data-dashboard-view-target="runtime">{{ tr('dashboard.resource_guard_title', 'Runtime health') }}</button>
+                <button type="button" class="dashboard-side-link" data-dashboard-view-target="mission">{{ tr('dashboard.current_mission', 'Current Mission') }}</button>
+                <button type="button" class="dashboard-side-link" data-dashboard-view-target="state">{{ tr('dashboard.operational_state', 'Operational state') }}</button>
+                <button type="button" class="dashboard-side-link pro-only" data-dashboard-view-target="split">{{ tr('dashboard.split_board', 'SOC / NOC Split Board') }}</button>
+                <button type="button" class="dashboard-side-link" data-dashboard-view-target="clients">{{ tr('dashboard.client_identity_view', 'Client Identity View') }}</button>
+                <button type="button" class="dashboard-side-link" data-dashboard-view-target="action">{{ tr('dashboard.action_board', 'Action Board') }}</button>
+                <button type="button" class="dashboard-side-link" data-dashboard-view-target="assistant">{{ tr('dashboard.mio_assist', 'M.I.O. Assist') }}</button>
+                <button type="button" class="dashboard-side-link pro-only" data-dashboard-view-target="evidence">{{ tr('dashboard.evidence_timeline', 'Evidence & Timeline') }}</button>
+                <button type="button" class="dashboard-side-link" data-dashboard-view-target="topo">{{ tr('dashboard.topo_lite_integrated_title', 'Integrated Internal LAN Board') }}</button>
             </nav>
         </aside>
         <div class="dashboard-main-stack">
@@ -93,7 +93,7 @@
                 </div>
             </div>
         </section>
-        <section class="command-strip panel" id="commandStripSection">
+        <section class="command-strip panel dashboard-view-panel" id="commandStripSection" data-dashboard-view="posture">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.command_strip', 'Command Strip') }}</div>
@@ -188,7 +188,7 @@
             </div>
         </section>
 
-        <section class="panel mission-row resource-guard-panel" id="resourceGuardSection">
+        <section class="panel mission-row resource-guard-panel dashboard-view-panel" id="resourceGuardSection" data-dashboard-view="runtime" hidden>
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.resource_guard', 'Resource Guard') }}</div>
@@ -247,7 +247,7 @@
             </div>
         </section>
 
-        <section class="panel mission-row" id="missionRowSection">
+        <section class="panel mission-row dashboard-view-panel" id="missionRowSection" data-dashboard-view="mission" hidden>
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.current_mission', 'Current Mission') }}</div>
@@ -280,7 +280,7 @@
             </div>
         </section>
 
-        <section class="panel temporary-mission-panel temp-only">
+        <section class="panel temporary-mission-panel temp-only dashboard-view-panel" id="temporaryMissionSection" data-dashboard-view="mission" hidden>
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.temporary_mission', 'Temporary Mission') }}</div>
@@ -317,7 +317,7 @@
 
         <div class="board-layout">
             <section class="board-main">
-                <section class="panel situation-board" id="situationBoardSection">
+                <section class="panel situation-board dashboard-view-panel" id="situationBoardSection" data-dashboard-view="state" hidden>
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.situation_board', 'Situation Board') }}</div>
@@ -371,7 +371,7 @@
                     </div>
                 </section>
 
-                <section class="panel split-board pro-only" id="splitBoardSection">
+                <section class="panel split-board pro-only dashboard-view-panel" id="splitBoardSection" data-dashboard-view="split" hidden>
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.split_board', 'SOC / NOC Split Board') }}</div>
@@ -553,7 +553,7 @@
                     </details>
                 </section>
 
-                <section class="panel client-identity-panel" id="clientIdentitySection">
+                <section class="panel client-identity-panel dashboard-view-panel" id="clientIdentitySection" data-dashboard-view="clients" hidden>
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.client_identity_view', 'Client Identity View') }}</div>
@@ -618,7 +618,7 @@
                     </details>
                 </section>
 
-                <section class="panel action-board" id="actionBoardSection">
+                <section class="panel action-board dashboard-view-panel" id="actionBoardSection" data-dashboard-view="action" hidden>
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.action_board', 'Action Board') }}</div>
@@ -811,7 +811,7 @@
             </section>
 
             <aside class="assistant-rail">
-                <section class="panel assistant-panel" id="assistantPanel">
+                <section class="panel assistant-panel dashboard-view-panel" id="assistantPanel" data-dashboard-view="assistant" hidden>
                     <div class="panel-heading assistant-heading">
                         <div class="assistant-title-row">
                             <img class="assistant-logo" src="/images/MIO_Logo.png" alt="M.I.O. logo">
@@ -890,7 +890,7 @@
             </aside>
         </div>
 
-        <section class="panel evidence-board evidence-board-lowered pro-only" id="evidenceBoardSection">
+        <section class="panel evidence-board evidence-board-lowered pro-only dashboard-view-panel" id="evidenceBoardSection" data-dashboard-view="evidence" hidden>
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.evidence_timeline', 'Evidence & Timeline') }}</div>
@@ -928,7 +928,7 @@
             </details>
         </section>
 
-        <section class="panel evidence-board evidence-board-lowered" id="topoLiteInlinePanel">
+        <section class="panel evidence-board evidence-board-lowered dashboard-view-panel" id="topoLiteInlinePanel" data-dashboard-view="topo" hidden>
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('topo_lite.board.noc', 'NOC Board') }}</div>
