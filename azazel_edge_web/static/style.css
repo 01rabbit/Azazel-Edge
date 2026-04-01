@@ -232,6 +232,48 @@ body[data-audience="professional"] .temp-only {
     padding: 32px 28px 80px; /* パディングを増やす */
 }
 
+.dashboard-shell-with-sidebar {
+    display: grid;
+    grid-template-columns: 248px minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+}
+
+.dashboard-main-stack {
+    display: grid;
+    gap: 18px;
+    min-width: 0;
+}
+
+.dashboard-side-menu {
+    position: sticky;
+    top: 104px;
+    padding: 18px 18px 16px;
+}
+
+.dashboard-side-nav {
+    display: grid;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.dashboard-side-nav a {
+    display: block;
+    padding: 11px 13px;
+    border-radius: 14px;
+    text-decoration: none;
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.dashboard-side-nav a:hover {
+    background: rgba(116, 212, 255, 0.08);
+    border-color: rgba(116, 212, 255, 0.2);
+    transform: translateX(2px);
+}
+
 .demo-shell {
     max-width: 1280px;
 }
@@ -2596,6 +2638,14 @@ body.demo-overlay-active #healthSummaryLine {
 }
 
 @media (max-width: 900px) {
+    .dashboard-shell-with-sidebar {
+        grid-template-columns: 1fr;
+    }
+
+    .dashboard-side-menu {
+        position: static;
+    }
+
     .topbar {
         flex-direction: column;
         align-items: stretch;

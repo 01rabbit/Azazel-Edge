@@ -47,7 +47,28 @@
         </div>
     </header>
 
-    <main class="dashboard-shell">
+    <main class="dashboard-shell dashboard-shell-with-sidebar">
+        <aside class="panel dashboard-side-menu" id="dashboardSideMenu">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('topo_lite.board.navigation', 'Navigation') }}</div>
+                    <h2>{{ tr('dashboard.title', 'Azazel-Edge Command Dashboard') }}</h2>
+                </div>
+            </div>
+            <nav class="dashboard-side-nav" aria-label="{{ tr('topo_lite.board.navigation', 'Navigation') }}">
+                <a href="#commandStripSection">{{ tr('dashboard.immediate_posture', 'Immediate posture') }}</a>
+                <a href="#resourceGuardSection">{{ tr('dashboard.resource_guard_title', 'Runtime health') }}</a>
+                <a href="#missionRowSection">{{ tr('dashboard.current_mission', 'Current Mission') }}</a>
+                <a href="#situationBoardSection">{{ tr('dashboard.operational_state', 'Operational state') }}</a>
+                <a href="#splitBoardSection">{{ tr('dashboard.split_board', 'SOC / NOC Split Board') }}</a>
+                <a href="#clientIdentitySection">{{ tr('dashboard.client_identity_view', 'Client Identity View') }}</a>
+                <a href="#actionBoardSection">{{ tr('dashboard.action_board', 'Action Board') }}</a>
+                <a href="#assistantPanel">{{ tr('dashboard.mio_assist', 'M.I.O. Assist') }}</a>
+                <a href="#evidenceBoardSection">{{ tr('dashboard.evidence_timeline', 'Evidence & Timeline') }}</a>
+                <a href="#topoLiteInlinePanel">{{ tr('dashboard.topo_lite_integrated_title', 'Integrated Internal LAN Board') }}</a>
+            </nav>
+        </aside>
+        <div class="dashboard-main-stack">
         <section class="panel demo-mode-banner" id="demoModeBanner" hidden>
             <div class="panel-heading">
                 <div>
@@ -72,7 +93,7 @@
                 </div>
             </div>
         </section>
-        <section class="command-strip panel">
+        <section class="command-strip panel" id="commandStripSection">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.command_strip', 'Command Strip') }}</div>
@@ -167,7 +188,7 @@
             </div>
         </section>
 
-        <section class="panel mission-row resource-guard-panel">
+        <section class="panel mission-row resource-guard-panel" id="resourceGuardSection">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.resource_guard', 'Resource Guard') }}</div>
@@ -226,7 +247,7 @@
             </div>
         </section>
 
-        <section class="panel mission-row">
+        <section class="panel mission-row" id="missionRowSection">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.current_mission', 'Current Mission') }}</div>
@@ -296,7 +317,7 @@
 
         <div class="board-layout">
             <section class="board-main">
-                <section class="panel situation-board">
+                <section class="panel situation-board" id="situationBoardSection">
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.situation_board', 'Situation Board') }}</div>
@@ -350,7 +371,7 @@
                     </div>
                 </section>
 
-                <section class="panel split-board pro-only">
+                <section class="panel split-board pro-only" id="splitBoardSection">
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.split_board', 'SOC / NOC Split Board') }}</div>
@@ -532,7 +553,7 @@
                     </details>
                 </section>
 
-                <section class="panel client-identity-panel">
+                <section class="panel client-identity-panel" id="clientIdentitySection">
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.client_identity_view', 'Client Identity View') }}</div>
@@ -597,7 +618,7 @@
                     </details>
                 </section>
 
-                <section class="panel action-board">
+                <section class="panel action-board" id="actionBoardSection">
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.action_board', 'Action Board') }}</div>
@@ -869,7 +890,7 @@
             </aside>
         </div>
 
-        <section class="panel evidence-board evidence-board-lowered pro-only">
+        <section class="panel evidence-board evidence-board-lowered pro-only" id="evidenceBoardSection">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.evidence_timeline', 'Evidence & Timeline') }}</div>
@@ -990,6 +1011,7 @@
                 </article>
             </div>
         </section>
+        </div>
     </main>
 
     <div id="toast" class="toast"></div>
