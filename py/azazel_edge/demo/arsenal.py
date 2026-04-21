@@ -291,6 +291,7 @@ class ArsenalDemoRunner:
         arsenal = result.get("arsenal_demo") if isinstance(result.get("arsenal_demo"), dict) else {}
         arbiter = result.get("arbiter") if isinstance(result.get("arbiter"), dict) else {}
         band = str(arsenal.get("band") or "").strip().upper()
+        title = str(arsenal.get("title") or result.get("scenario_id") or "Arsenal demo stage").strip()
         attack_label = str(arsenal.get("attack_label") or result.get("scenario_id") or "Unknown attack").strip()
         score = int(arsenal.get("score") or 0)
         action = str(arbiter.get("action") or "observe").strip() or "observe"
@@ -299,12 +300,15 @@ class ArsenalDemoRunner:
         ollama = decision_path.get("ollama_review") if isinstance(decision_path.get("ollama_review"), dict) else {}
         ollama_status = str(ollama.get("status") or "unknown").strip() or "unknown"
         severity = "WARNING" if band == "WATCH" else "DANGER"
-        open_url = self._arsenal_demo_url()
+        booth_url = self._arsenal_demo_url()
+        mattermost_url = self._mattermost_open_url()
         message = (
-            f"[{severity}] Azazel-Pi detected {attack_label}\n"
-            f"score={score} band={band} action={action} control={control_mode}\n"
+            f"[{severity}] Azazel-Pi Arsenal demo stage active\n"
+            f"title={title}\n"
+            f"attack={attack_label} score={score} band={band} action={action} control={control_mode}\n"
             f"ollama_review={ollama_status}\n"
-            f"webui={open_url}"
+            f"booth={booth_url}\n"
+            f"mattermost={mattermost_url}"
         )
 
         if self._mattermost_bot_token() and self._mattermost_channel_id():
@@ -371,7 +375,7 @@ class ArsenalDemoRunner:
             return explicit
         web_host = str(os.environ.get("AZAZEL_WEB_PUBLIC_HOST", "172.16.0.254")).strip() or "172.16.0.254"
         web_scheme = str(os.environ.get("AZAZEL_WEB_PUBLIC_SCHEME", "https")).strip() or "https"
-        return f"{web_scheme}://{web_host}/arsenal-demo"
+        return f"{web_scheme}://{web_host}/"
 
     def _mattermost_webhook_url(self) -> str:
         return str(os.environ.get("AZAZEL_MATTERMOST_ALERT_WEBHOOK_URL") or os.environ.get("AZAZEL_MATTERMOST_WEBHOOK_URL") or "").strip()

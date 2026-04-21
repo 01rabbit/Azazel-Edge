@@ -70,7 +70,7 @@ Evidence:
    - NOC evaluator and SOC evaluator are implemented under `py/azazel_edge/evaluators/`.
    - Action arbiter decides explicit actions with rejected alternatives and decision trace.
 3. **Operator plane**
-   - Flask app serves dashboard (`/`), demo (`/demo`), ops workspace (`/ops-comm`), and `/api/*`.
+   - Flask app serves the Arsenal booth landing page (`/`), dashboard (`/dashboard`), demo (`/demo`), ops workspace (`/ops-comm`), and `/api/*`.
    - Control daemon exposes Unix socket control plane at `/run/azazel-edge/control.sock`.
 4. **Optional AI assist plane**
    - AI agent consumes normalized events/manual queries and writes advisory/metrics/audit JSONL.
@@ -215,7 +215,9 @@ sudo systemctl status \
 
 ### Access endpoints (default installer assumptions)
 - Web backend (gunicorn): `http://127.0.0.1:8084/`
-- If internal network + HTTPS proxy are installed: `https://172.16.0.254/`
+- If internal network + HTTPS proxy are installed:
+  - Arsenal booth page: `https://172.16.0.254/`
+  - Operational dashboard: `https://172.16.0.254/dashboard`
 - Mattermost (if enabled): `http://172.16.0.254:8065/`
 
 ### API call example
@@ -230,6 +232,25 @@ curl -sS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/state | jq .
 bin/azazel-edge-demo list
 bin/azazel-edge-demo run mixed_correlation_demo
 ```
+
+### Arsenal-Demo port configuration
+
+To run Arsenal-Demo on a separate port (e.g., 8885), see [ARSENAL_DEMO_PORT_SETUP.md](docs/ARSENAL_DEMO_PORT_SETUP.md) for configuration options.
+
+**Development (temporary):**
+```bash
+AZAZEL_ARSENAL_DEMO_PORT=8885 AZAZEL_ARSENAL_DEMO_MODE=1 python3 azazel_edge_web/app.py
+```
+
+**Production (persistent):**
+```bash
+sudo cp systemd/azazel-edge-web.defaults.template /etc/default/azazel-edge-web
+# Edit /etc/default/azazel-edge-web to set:
+# AZAZEL_ARSENAL_DEMO_PORT=8885
+sudo systemctl restart azazel-edge-web
+```
+
+When you launch `python3 azazel_edge_web/app.py` directly, `AZAZEL_ARSENAL_DEMO_MODE=1` switches the whole Web UI process to `8885`. If you want both `8084` and `8885` to listen at the same time, use the systemd configuration above.
 
 ### Runbook broker CLI
 ```bash

@@ -13,13 +13,16 @@ from flask import (
     jsonify,
     request,
     render_template,
+    redirect,
     send_from_directory,
     send_file,
     Response,
     stream_with_context,
     has_request_context,
+    url_for,
 )
 import json
+import copy
 import os
 import socket
 import sys
@@ -65,6 +68,7 @@ try:
         propose_runbooks as runbook_propose,
         review_runbook_id as runbook_review_id,
     )
+    from azazel_edge.demo.scenarios import DemoScenarioPack
     from azazel_edge.triage import (
         TriageFlowEngine,
         TriageSessionStore,
@@ -102,6 +106,7 @@ except Exception:
     runbook_list = None
     runbook_propose = None
     runbook_review_id = None
+    DemoScenarioPack = None  # type: ignore
     TriageFlowEngine = None  # type: ignore
     TriageSessionStore = None  # type: ignore
     classify_intent_candidates = None  # type: ignore
@@ -150,6 +155,8 @@ EPD_LAST_RENDER_PATH = Path("/run/azazel-edge/epd_last_render.json")
 OPENCANARY_REDIRECT_STATE_PATH = Path("/run/azazel-edge/opencanary_redirect_state.json")
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
+# Arsenal-Demo specific port (defaults to BIND_PORT if not set)
+ARSENAL_DEMO_PORT = int(os.environ.get("AZAZEL_ARSENAL_DEMO_PORT", os.environ.get("AZAZEL_WEB_PORT", "8084")))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
 PORTAL_VIEWER_ENV_PATH = portal_env_candidates()[0]
 NTFY_CONFIG_PATHS = [
@@ -3139,13 +3146,21 @@ def _run_arsenal_demo_runner(*args: str) -> tuple[Dict[str, Any], int]:
 
 
 def _arsenal_demo_state_payload() -> Dict[str, Any]:
+    lang = _request_lang()
     overlay = read_demo_overlay()
     arsenal = overlay.get("arsenal_demo") if isinstance(overlay.get("arsenal_demo"), dict) else {}
+    scenario_id = str(overlay.get("scenario_id") or "")
+    localized_meta: Dict[str, Any] = {}
+    if DemoScenarioPack is not None and scenario_id:
+        try:
+            localized_meta = DemoScenarioPack().localized_arsenal_meta(scenario_id, lang=lang)
+        except Exception:
+            localized_meta = {}
     epd_last = _read_json_file(EPD_LAST_RENDER_PATH)
     epd_render = epd_last.get("render") if isinstance(epd_last, dict) and isinstance(epd_last.get("render"), dict) else {}
     redirect_state = _read_json_file(OPENCANARY_REDIRECT_STATE_PATH)
     active = bool(overlay.get("active")) and bool(arsenal)
-    proofs = arsenal.get("proofs") if isinstance(arsenal.get("proofs"), dict) else {}
+    proofs = copy.deepcopy(localized_meta.get("proofs") if isinstance(localized_meta.get("proofs"), dict) else (arsenal.get("proofs") if isinstance(arsenal.get("proofs"), dict) else {}))
     epd_ts = str(epd_last.get("ts") or "")
     epd_risk = str(epd_render.get("risk_status") or "")
     epd_mode = str(epd_render.get("mode_label") or "")
@@ -3182,17 +3197,17 @@ def _arsenal_demo_state_payload() -> Dict[str, Any]:
             "brand": "Azazel-Pi",
         },
         "active": active,
-        "scenario_id": str(overlay.get("scenario_id") or ""),
-        "title": str(arsenal.get("title") or overlay.get("scenario_id") or "idle"),
-        "attack_label": str(arsenal.get("attack_label") or ""),
+        "scenario_id": scenario_id,
+        "title": str(localized_meta.get("title") or arsenal.get("title") or overlay.get("scenario_id") or "idle"),
+        "attack_label": str(localized_meta.get("attack_label") or arsenal.get("attack_label") or ""),
         "score": int(arsenal.get("score") or 0),
         "band": str(arsenal.get("band") or "IDLE"),
         "action": str(overlay.get("action") or "observe"),
         "control_mode": str(overlay.get("control_mode") or "none"),
         "message": str(arsenal.get("state_message") or "Waiting for Arsenal demo stage."),
-        "talk_track": str(arsenal.get("talk_track") or overlay.get("operator_wording") or ""),
+        "talk_track": str(localized_meta.get("talk_track") or arsenal.get("talk_track") or overlay.get("operator_wording") or ""),
         "score_factors": list(arsenal.get("score_factors") or []),
-        "decision_path": dict(arsenal.get("decision_path") or {}) if isinstance(arsenal.get("decision_path"), dict) else {},
+        "decision_path": copy.deepcopy(localized_meta.get("decision_path") if isinstance(localized_meta.get("decision_path"), dict) else (arsenal.get("decision_path") if isinstance(arsenal.get("decision_path"), dict) else {})),
         "suricata_detection": bool(active),
         "offline_demo": bool(((overlay.get("execution") or {}) if isinstance(overlay.get("execution"), dict) else {}).get("offline_demo")),
         "proofs": proof_payload,
@@ -4303,6 +4318,16 @@ def _triage_progress_payload(progress: Any, lang: str) -> Dict[str, Any]:
 # Web UI Routes
 
 @app.route("/")
+def root_entry():
+    """Booth landing page: send visitors directly to the Arsenal demo surface."""
+    params: Dict[str, Any] = {}
+    lang = str(request.args.get("lang") or "").strip()
+    if lang:
+        params["lang"] = lang
+    return redirect(url_for("arsenal_demo_page", **params), code=302)
+
+
+@app.route("/dashboard")
 def index():
     """Main dashboard page"""
     return render_template("index.html")
@@ -4833,7 +4858,6 @@ def api_arsenal_demo_stages():
 
 
 @app.route("/api/arsenal-demo/state", methods=["GET"])
-@require_token()
 def api_arsenal_demo_state():
     return jsonify(_arsenal_demo_state_payload()), 200
 
@@ -5312,7 +5336,7 @@ if __name__ == "__main__":
     
     app.run(
         host=BIND_HOST,
-        port=BIND_PORT,
+        port=ARSENAL_DEMO_PORT if os.environ.get("AZAZEL_ARSENAL_DEMO_MODE") else BIND_PORT,
         debug=False,
         threaded=True
     )

@@ -1,5 +1,5 @@
 const LANG_KEY = 'azazel_lang';
-const ARSENAL_AUTH_TOKEN = localStorage.getItem('azazel_token') || 'azazel-default-token-change-me';
+const ARSENAL_AUTH_TOKEN = localStorage.getItem('azazel_token') || '';
 const ARSENAL_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
 const ARSENAL_I18N = window.AZAZEL_I18N || {};
 const ARSENAL_POLL_MS = 2500;
@@ -34,10 +34,13 @@ function syncLanguageUi() {
 }
 
 function arsenalHeaders() {
-    return {
-        'X-Auth-Token': ARSENAL_AUTH_TOKEN,
+    const headers = {
         'X-AZAZEL-LANG': ARSENAL_LANG,
     };
+    if (ARSENAL_AUTH_TOKEN) {
+        headers['X-Auth-Token'] = ARSENAL_AUTH_TOKEN;
+    }
+    return headers;
 }
 
 function setText(id, value) {

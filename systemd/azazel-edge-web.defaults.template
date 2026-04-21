@@ -1,0 +1,22 @@
+# Azazel-Edge Web UI defaults
+# Copy this file to /etc/default/azazel-edge-web and customize as needed
+
+# Standard Web UI port (default: 8084)
+# AZAZEL_WEB_PORT=8084
+
+# Arsenal-Demo specific port (optional)
+# If set to a different value, Gunicorn also listens on this port for /arsenal-demo
+# Default: uses AZAZEL_WEB_PORT value if not specified
+# AZAZEL_ARSENAL_DEMO_PORT=8885
+
+# Web UI bind address (default: 127.0.0.1)
+# AZAZEL_WEB_HOST=127.0.0.1
+
+# Gunicorn workers (default: 2)
+# AZAZEL_WEB_WORKERS=2
+
+# Gunicorn threads per worker (default: 4)
+# AZAZEL_WEB_THREADS=4
+
+# Graceful timeout for shutdown (default: 5)
+# AZAZEL_WEB_GRACEFUL_TIMEOUT=5

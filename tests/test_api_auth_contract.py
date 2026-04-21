@@ -43,7 +43,16 @@ class ApiAuthContractTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.get_json(), {"ok": False, "error": "Unauthorized"})
 
+    def test_arsenal_demo_state_is_public_for_booth_surface(self) -> None:
+        response = self.client.get("/api/arsenal-demo/state")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+
+    def test_root_redirects_to_arsenal_demo_surface(self) -> None:
+        response = self.client.get("/?lang=en", follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/arsenal-demo?lang=en")
+
 
 if __name__ == "__main__":
     unittest.main()
-

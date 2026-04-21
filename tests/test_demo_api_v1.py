@@ -251,6 +251,55 @@ class DemoApiV1Tests(unittest.TestCase):
         self.assertIn("langJaBtn", text)
         self.assertIn("langEnBtn", text)
 
+    def test_arsenal_state_endpoint_localizes_dynamic_overlay_text(self) -> None:
+        overlay = build_demo_overlay(
+            {
+                "scenario_id": "arsenal_throttle",
+                "event_count": 3,
+                "execution": {"mode": "deterministic_replay", "ai_used": False, "offline_demo": True},
+                "arbiter": {"action": "throttle", "reason": "arsenal_score_band:throttle", "control_mode": "traffic_shaping"},
+                "explanation": {"operator_wording": "demo wording", "evidence_ids": ["ars-1"]},
+            }
+        )
+        overlay["arsenal_demo"] = {
+            "title": "SSH brute force enters review band",
+            "attack_label": "SSH Brute Force",
+            "score": 73,
+            "band": "THROTTLE",
+            "state_message": "Traffic shaping is active with bounded delay / bandwidth control.",
+            "talk_track": "demo wording",
+            "score_factors": ["severity=3"],
+            "decision_path": {
+                "first_pass": {"headline": "MOCK-LLM SCORE 67", "detail": "The deterministic first pass lands inside the ambiguity band."},
+                "ollama_review": {"status": "used", "headline": "OLLAMA REVIEWED", "detail": "Local Ollama confirms repeated failed-auth behavior.", "evidence": "model=qwen3.5:2b"},
+                "final_policy": {"headline": "FINAL POLICY: THROTTLE", "detail": "Apply reversible tc shaping while the main segment stays online."},
+            },
+            "proofs": {
+                "tc": {"status": "active", "headline": "TC THROTTLE ACTIVE", "detail": "Bounded delay and bandwidth control are active on the suspicious flow.", "evidence": "netem delay 120ms + tbf rate 2mbit burst 32kbit"},
+                "firewall": {"status": "active", "headline": "MICRO-POLICY ACTIVE", "detail": "The suspicious flow is held inside a reversible policy lane.", "evidence": "nft counter: 48 packets / 5.2 KiB"},
+                "decoy": {"status": "standby", "headline": "DECOY ON HOLD", "detail": "OpenCanary redirect is still withheld while traffic shaping absorbs the flow.", "evidence": "Redirect selector stays below the redirect band."},
+                "offline": {"status": "active", "headline": "OFFLINE ACTIVE", "detail": "The score and enforcement decision are both computed locally.", "evidence": "No remote model or cloud API is required."},
+                "epd": {"status": "sync", "headline": "EPD SYNC READY", "detail": "The e-paper panel should raise DANGER and push attention toward the WebUI.", "evidence": "Expected panel state: DANGER / CHECK WEB."},
+            },
+        }
+        write_demo_overlay(overlay, self.overlay_path)
+
+        ja_response = self.client.get("/api/arsenal-demo/state", headers={"X-AZAZEL-LANG": "ja"})
+        en_response = self.client.get("/api/arsenal-demo/state", headers={"X-AZAZEL-LANG": "en"})
+
+        self.assertEqual(ja_response.status_code, 200)
+        self.assertEqual(en_response.status_code, 200)
+
+        ja_payload = ja_response.get_json()
+        en_payload = en_response.get_json()
+
+        self.assertEqual(ja_payload["title"], "SSH brute force が review 帯域へ入る")
+        self.assertEqual(en_payload["title"], "SSH brute force enters review band")
+        self.assertEqual(ja_payload["decision_path"]["first_pass"]["detail"], "決定論的な一次判定が曖昧帯域に入っています。")
+        self.assertEqual(en_payload["decision_path"]["first_pass"]["detail"], "The deterministic first pass lands inside the ambiguity band.")
+        self.assertEqual(ja_payload["proofs"]["tc"]["detail"], "不審フローに対して bounded delay と帯域制御が有効です。")
+        self.assertEqual(en_payload["proofs"]["tc"]["detail"], "Bounded delay and bandwidth control are active on the suspicious flow.")
+
 
 if __name__ == "__main__":
     unittest.main()

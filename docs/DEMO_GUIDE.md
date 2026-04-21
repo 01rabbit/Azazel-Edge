@@ -115,13 +115,14 @@ Menu actions:
 
 Open:
 
-- Dashboard: `https://172.16.0.254/`
+- Arsenal exhibition page: `https://172.16.0.254/`
+- Dashboard: `https://172.16.0.254/dashboard`
 - Ops workspace: `https://172.16.0.254/ops-comm`
-- Arsenal exhibition page: `https://172.16.0.254/arsenal-demo`
+- Arsenal compatibility alias: `https://172.16.0.254/arsenal-demo`
 
 Recommended exhibition surface:
 
-- use `/arsenal-demo` for Azazel-Pi-compatible booth presentation
+- use `/` for the booth landing page; `/arsenal-demo` remains as the compatibility alias
 - do not use the main dashboard if you want to avoid Azazel-Edge operator wording
 
 Recommended exhibition order:

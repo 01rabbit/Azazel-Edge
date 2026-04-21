@@ -1,10 +1,222 @@
 from __future__ import annotations
 
+import copy
+
 from typing import Any, Dict, List
 
 from azazel_edge.arbiter import ActionArbiter
 from azazel_edge.evaluators import NocEvaluator, SocEvaluator
 from azazel_edge.explanations import DecisionExplainer
+
+
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+ARSENAL_I18N_OVERRIDES: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "arsenal_low_watch": {
+        "ja": {
+            "title": "Ping sweep が WATCH 帯域へ入る",
+            "talk_track": "Suricata が ping sweep を検知しました。決定論的 Mock-LLM scorer は WATCH に入りますが、まだ可逆制御は発動しません。",
+            "attack_label": "Ping Sweep",
+            "decision_path": {
+                "first_pass": {
+                    "headline": "MOCK-LLM SCORE 38",
+                    "detail": "決定論的な一次判定が reconnaissance を分類し、ゲートウェイを WATCH に据え置きます。",
+                },
+                "ollama_review": {
+                    "headline": "OLLAMA 不要",
+                    "detail": "スコアが曖昧帯域の外側にあるため、一次判定をそのまま採用します。",
+                    "evidence": "曖昧帯域に入っていない",
+                },
+                "final_policy": {
+                    "headline": "FINAL POLICY: WATCH",
+                    "detail": "セグメントは維持したまま、記録と観測を継続します。",
+                },
+            },
+            "proofs": {
+                "tc": {
+                    "headline": "TC STANDBY",
+                    "detail": "WATCH 帯域では遅延や帯域制御はまだ有効化されていません。",
+                    "evidence": "tc qdisc 変更はまだ要求されていません。",
+                },
+                "firewall": {
+                    "headline": "MICRO-POLICY READY",
+                    "detail": "nftables / iptables は、スコアが制御閾値を超えるまで observe のままです。",
+                    "evidence": "不審フロー向けポリシーレーンを確保済み。",
+                },
+                "decoy": {
+                    "headline": "DECOY STANDBY",
+                    "detail": "OpenCanary redirect は武装済みですが、WATCH 帯域ではまだ選択されません。",
+                    "evidence": "redirect selector は idle のままです。",
+                },
+                "offline": {
+                    "headline": "OFFLINE ACTIVE",
+                    "detail": "Suricata、スコアリング、制御ロジックはすべてローカルで動作しています。",
+                    "evidence": "決定論 scorer とローカル制御経路のみを使用。",
+                },
+                "epd": {
+                    "headline": "EPD SYNC READY",
+                    "detail": "電子ペーパーは WARNING を表示し、詳細確認のために WebUI を開くよう促します。",
+                    "evidence": "想定パネル状態: WARNING / CHECK WEB",
+                },
+            },
+        },
+    },
+    "arsenal_throttle": {
+        "ja": {
+            "title": "SSH brute force が review 帯域へ入る",
+            "talk_track": "SSH brute force が曖昧帯域に入るため、ゲートウェイは Ollama によるローカル二次判定を行い、その後で bounded tc control を適用します。",
+            "attack_label": "SSH Brute Force",
+            "decision_path": {
+                "first_pass": {
+                    "headline": "MOCK-LLM SCORE 67",
+                    "detail": "決定論的な一次判定が曖昧帯域に入っています。",
+                },
+                "ollama_review": {
+                    "headline": "OLLAMA REVIEWED",
+                    "detail": "ローカル Ollama が failed-auth の反復挙動を確認し、bounded control を維持します。",
+                    "evidence": "model=qwen3.5:2b | verdict=throttle | confidence=0.78",
+                },
+                "final_policy": {
+                    "headline": "FINAL POLICY: THROTTLE",
+                    "detail": "メインセグメントを維持したまま、可逆な tc shaping を適用します。",
+                },
+            },
+            "proofs": {
+                "tc": {
+                    "headline": "TC THROTTLE ACTIVE",
+                    "detail": "不審フローに対して bounded delay と帯域制御が有効です。",
+                    "evidence": "netem delay 120ms + tbf rate 2mbit burst 32kbit",
+                },
+                "firewall": {
+                    "headline": "MICRO-POLICY ACTIVE",
+                    "detail": "不審なフローは可逆なポリシーレーンに収められています。",
+                    "evidence": "nft counter: 48 packets / 5.2 KiB",
+                },
+                "decoy": {
+                    "headline": "DECOY ON HOLD",
+                    "detail": "traffic shaping が吸収している間、OpenCanary redirect はまだ保留です。",
+                    "evidence": "redirect band にはまだ達していません。",
+                },
+                "offline": {
+                    "headline": "OFFLINE ACTIVE",
+                    "detail": "スコア判定も制御判断もローカルで完結しています。",
+                    "evidence": "リモートモデルや cloud API は不要です。",
+                },
+                "epd": {
+                    "headline": "EPD SYNC READY",
+                    "detail": "電子ペーパーは DANGER を表示し、WebUI への注意を促す想定です。",
+                    "evidence": "想定パネル状態: DANGER / CHECK WEB",
+                },
+            },
+        },
+    },
+    "arsenal_ollama_review": {
+        "ja": {
+            "title": "曖昧な admin login burst が Ollama review に入る",
+            "talk_track": "このケースでは一次判定だけでは安全に決め切れないため、ゲートウェイはローカル Ollama に admin login burst の再判定をさせた上で bounded control を適用します。",
+            "attack_label": "Suspicious Admin Login Burst",
+            "decision_path": {
+                "first_pass": {
+                    "headline": "MOCK-LLM SCORE 67",
+                    "detail": "決定論的な一次判定が曖昧帯域に入り、この段階だけでは安全に分類できません。",
+                },
+                "ollama_review": {
+                    "headline": "OLLAMA REVIEWED",
+                    "detail": "ローカル Ollama が repeated 401 burst、admin URI targeting、cross-source timing を相関し bounded control を確定します。",
+                    "evidence": "model=qwen3.5:2b | verdict=throttle | confidence=0.81",
+                },
+                "final_policy": {
+                    "headline": "FINAL POLICY: THROTTLE",
+                    "detail": "正規クライアントのサービス経路を保ちながら、可逆な tc shaping を適用します。",
+                },
+            },
+            "proofs": {
+                "tc": {
+                    "headline": "TC THROTTLE ACTIVE",
+                    "detail": "login burst の再判定中も bounded delay と帯域制御が有効です。",
+                    "evidence": "netem delay 90ms + tbf rate 3mbit burst 32kbit",
+                },
+                "firewall": {
+                    "headline": "MICRO-POLICY ACTIVE",
+                    "detail": "不審な admin endpoint は可逆なポリシーレーンに固定されています。",
+                    "evidence": "nft counter: 33 packets / 3.8 KiB on tcp dport 8443",
+                },
+                "decoy": {
+                    "headline": "DECOY ON HOLD",
+                    "detail": "リスクが redirect 帯域を超えるまでは OpenCanary redirect は保留です。",
+                    "evidence": "redirect selector は decoy threshold 未満です。",
+                },
+                "offline": {
+                    "headline": "OFFLINE ACTIVE",
+                    "detail": "決定論 scorer も Ollama review も gateway 内で完結しています。",
+                    "evidence": "review path に外部 API 依存はありません。",
+                },
+                "epd": {
+                    "headline": "EPD SYNC READY",
+                    "detail": "電子ペーパーは DANGER を表示し、WebUI への注意を促す想定です。",
+                    "evidence": "想定パネル状態: DANGER / CHECK WEB",
+                },
+            },
+        },
+    },
+    "arsenal_decoy_redirect": {
+        "ja": {
+            "title": "高信頼シグナルをデコイへ redirect する",
+            "talk_track": "スコアが最上位帯域に入ったため、ゲートウェイは本来セグメントを維持したまま、不審フローだけを OpenCanary デコイへ選択的に redirect します。",
+            "attack_label": "Exploit Probe / RCE Beacon",
+            "decision_path": {
+                "first_pass": {
+                    "headline": "MOCK-LLM SCORE 100",
+                    "detail": "決定論的な一次判定だけで最上位帯域に到達しています。",
+                },
+                "ollama_review": {
+                    "headline": "OLLAMA SKIPPED",
+                    "detail": "スコアがすでに決定的なため、二次 review は不要です。",
+                    "evidence": "redirect threshold を上回っている",
+                },
+                "final_policy": {
+                    "headline": "FINAL POLICY: DECOY REDIRECT",
+                    "detail": "メインセグメントを維持したまま、不審フローを OpenCanary へ誘導します。",
+                },
+            },
+            "proofs": {
+                "tc": {
+                    "headline": "TC GUARD ACTIVE",
+                    "detail": "redirect lane が有効な間も traffic shaping はガードレールとして残ります。",
+                    "evidence": "delay 80ms + ceiling 1mbit on suspicious lane",
+                },
+                "firewall": {
+                    "headline": "MICRO-POLICY ACTIVE",
+                    "detail": "不審フローは選択的 redirect ポリシーに固定されています。",
+                    "evidence": "nft dnat counter: 91 packets / 11.4 KiB",
+                },
+                "decoy": {
+                    "headline": "OPENCANARY REDIRECT",
+                    "detail": "不審フローは OpenCanary デコイサービスへ誘導されています。",
+                    "evidence": "Redirect hit count: 1 flow -> 172.16.0.77:443",
+                },
+                "offline": {
+                    "headline": "OFFLINE ACTIVE",
+                    "detail": "検知、スコア、redirect 判断はすべて gateway ローカルで完結しています。",
+                    "evidence": "Suricata + 決定論 scorer + ローカル policy path のみ",
+                },
+                "epd": {
+                    "headline": "EPD SYNC READY",
+                    "detail": "電子ペーパーは DANGER を表示し、WebUI への注意を促す想定です。",
+                    "evidence": "想定パネル状態: DANGER / CHECK WEB",
+                },
+            },
+        },
+    },
+}
 
 
 class DemoScenarioPack:
@@ -314,6 +526,22 @@ class DemoScenarioPack:
                 ],
             },
         }
+
+    def localized_arsenal_meta(self, stage_id: str, lang: str = "en") -> Dict[str, Any]:
+        scenario = self.scenarios().get(str(stage_id)) or {}
+        meta = scenario.get("arsenal") if isinstance(scenario.get("arsenal"), dict) else {}
+        if not isinstance(meta, dict):
+            return {}
+        if str(lang or "en").strip().lower() != "ja":
+            return copy.deepcopy(meta)
+        override = (
+            ARSENAL_I18N_OVERRIDES.get(str(stage_id), {}).get("ja", {})
+            if isinstance(ARSENAL_I18N_OVERRIDES.get(str(stage_id), {}), dict)
+            else {}
+        )
+        if not isinstance(override, dict) or not override:
+            return copy.deepcopy(meta)
+        return _deep_merge(meta, override)
 
 
 class DemoScenarioRunner:

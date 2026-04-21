@@ -118,13 +118,14 @@ bin/azazel-edge-arsenal-demo menu
 
 開く URL:
 
-- Dashboard: `https://172.16.0.254/`
+- Arsenal 展示ページ: `https://172.16.0.254/`
+- Dashboard: `https://172.16.0.254/dashboard`
 - Ops workspace: `https://172.16.0.254/ops-comm`
-- Arsenal 展示ページ: `https://172.16.0.254/arsenal-demo`
+- Arsenal 互換エイリアス: `https://172.16.0.254/arsenal-demo`
 
 展示で推奨する表示面:
 
-- Azazel-Pi 互換の見せ方にしたい場合は `/arsenal-demo` を使う
+- ブースの入口には `/` を使い、`/arsenal-demo` は互換エイリアスとして使う
 - Azazel-Edge の運用語彙を避けたい場合は通常の Dashboard を前面に出さない
 
 展示で推奨する見せ順:

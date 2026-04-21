@@ -119,12 +119,12 @@ class ArsenalDemoRunnerV1Tests(unittest.TestCase):
         self.assertFalse(payload['epd_refresh']['ok'])
         self.assertEqual(payload['epd_refresh']['error'], 'epd_refresh_timeout')
 
-    def test_notification_message_uses_arsenal_demo_url(self) -> None:
+    def test_notification_message_uses_booth_url_and_mattermost_link(self) -> None:
         import os
         captured = {}
         runner = ArsenalDemoRunner(root_dir=ROOT, overlay_path=self.overlay_path)
         original = os.environ.get('AZAZEL_ARSENAL_DEMO_URL')
-        os.environ['AZAZEL_ARSENAL_DEMO_URL'] = 'https://192.168.40.89/arsenal-demo'
+        os.environ['AZAZEL_ARSENAL_DEMO_URL'] = 'https://192.168.40.89/'
         try:
             def fake_api_post(path: str, payload: dict) -> dict:
                 captured['path'] = path
@@ -134,6 +134,7 @@ class ArsenalDemoRunnerV1Tests(unittest.TestCase):
             runner._mattermost_api_post = fake_api_post  # type: ignore[method-assign]
             runner._mattermost_bot_token = lambda: 'token'  # type: ignore[method-assign]
             runner._mattermost_channel_id = lambda: 'channel'  # type: ignore[method-assign]
+            runner._mattermost_open_url = lambda: 'http://172.16.0.254:8065/azazelops/channels/soc-noc'  # type: ignore[method-assign]
             result = runner.run_stage('arsenal_low_watch')['result']
             notify = runner._send_mattermost_notification(result)
         finally:
@@ -144,7 +145,8 @@ class ArsenalDemoRunnerV1Tests(unittest.TestCase):
 
         self.assertTrue(notify['ok'])
         self.assertEqual(captured['path'], '/api/v4/posts')
-        self.assertIn('webui=https://192.168.40.89/arsenal-demo', captured['payload']['message'])
+        self.assertIn('booth=https://192.168.40.89/', captured['payload']['message'])
+        self.assertIn('mattermost=http://172.16.0.254:8065/azazelops/channels/soc-noc', captured['payload']['message'])
 
 
 if __name__ == '__main__':

@@ -7,13 +7,15 @@ Wants=network-online.target azazel-edge-control-daemon.service
 Type=simple
 Environment="AZAZEL_WEB_HOST=127.0.0.1"
 Environment="AZAZEL_WEB_PORT=8084"
+# For Arsenal-Demo on a second listener, uncomment and set in /etc/default/azazel-edge-web:
+# AZAZEL_ARSENAL_DEMO_PORT=8885
 Environment="AZAZEL_WEB_WORKERS=2"
 Environment="AZAZEL_WEB_THREADS=4"
 Environment="AZAZEL_WEB_GRACEFUL_TIMEOUT=5"
 Environment="PYTHONPATH=/opt/azazel-edge:/opt/azazel-edge/py"
 EnvironmentFile=-/etc/default/azazel-edge-web
 ExecStartPre=/bin/rm -f /run/azazel-edge/demo_overlay.json
-ExecStart=/bin/bash -lc 'exec /opt/azazel-edge/venv/bin/gunicorn --workers "${AZAZEL_WEB_WORKERS}" --threads "${AZAZEL_WEB_THREADS}" --graceful-timeout "${AZAZEL_WEB_GRACEFUL_TIMEOUT}" --bind "${AZAZEL_WEB_HOST}:${AZAZEL_WEB_PORT}" --chdir /opt/azazel-edge --pythonpath /opt/azazel-edge:/opt/azazel-edge/py azazel_edge_web.app:app'
+ExecStart=/bin/bash -lc 'bind_args=(--bind "$${AZAZEL_WEB_HOST}:$${AZAZEL_WEB_PORT}"); if [[ -n "$${AZAZEL_ARSENAL_DEMO_PORT:-}" && "$${AZAZEL_ARSENAL_DEMO_PORT}" != "$${AZAZEL_WEB_PORT}" ]]; then bind_args+=(--bind "$${AZAZEL_WEB_HOST}:$${AZAZEL_ARSENAL_DEMO_PORT}"); fi; exec /opt/azazel-edge/venv/bin/gunicorn --workers "$${AZAZEL_WEB_WORKERS}" --threads "$${AZAZEL_WEB_THREADS}" --graceful-timeout "$${AZAZEL_WEB_GRACEFUL_TIMEOUT}" "$${bind_args[@]}" --chdir /opt/azazel-edge --pythonpath /opt/azazel-edge:/opt/azazel-edge/py azazel_edge_web.app:app'
 Restart=on-failure
 RestartSec=3
 KillMode=mixed

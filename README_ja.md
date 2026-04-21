@@ -70,7 +70,7 @@ optional AI assist path | 任意の AI 補助経路
    - NOC evaluator / SOC evaluator は `py/azazel_edge/evaluators/` 配下に実装。
    - Arbiter が却下理由付きで明示アクションを選択。
 3. **運用プレーン**
-   - Flask が dashboard (`/`), demo (`/demo`), ops workspace (`/ops-comm`), `/api/*` を提供。
+   - Flask が Arsenal 展示ページ (`/`), dashboard (`/dashboard`), demo (`/demo`), ops workspace (`/ops-comm`), `/api/*` を提供。
    - Control daemon は `/run/azazel-edge/control.sock` で制御を受け付け。
 4. **任意のAI補助プレーン**
    - AI agent が正規化イベント/手動問い合わせを処理し、advisory/metrics/audit JSONL を出力。
@@ -215,7 +215,9 @@ sudo systemctl status \
 
 ### 主要アクセス先（既定構成）
 - Webバックエンド: `http://127.0.0.1:8084/`
-- 内部ネットワーク + HTTPSプロキシ導入時: `https://172.16.0.254/`
+- 内部ネットワーク + HTTPSプロキシ導入時:
+  - Arsenal 展示ページ: `https://172.16.0.254/`
+  - 運用 dashboard: `https://172.16.0.254/dashboard`
 - Mattermost（有効時）: `http://172.16.0.254:8065/`
 
 ### API 例
@@ -230,6 +232,17 @@ curl -sS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/state | jq .
 bin/azazel-edge-demo list
 bin/azazel-edge-demo run mixed_correlation_demo
 ```
+
+### Arsenal-Demoポート設定
+
+Arsenal-Demo を別ポート（例：8885）で実行する場合は、[ARSENAL_DEMO_PORT_SETUP.md](docs/ARSENAL_DEMO_PORT_SETUP.md) を参照してください。
+
+```bash
+# クイックスタート: Arsenal-Demoをポート8885で直起動
+AZAZEL_ARSENAL_DEMO_PORT=8885 AZAZEL_ARSENAL_DEMO_MODE=1 python3 azazel_edge_web/app.py
+```
+
+`python3 azazel_edge_web/app.py` の直起動では、`AZAZEL_ARSENAL_DEMO_MODE=1` を付けると Web UI プロセス全体が `8885` で待ち受けます。`8084` と `8885` の両方を待ち受けたい場合は、下記の systemd 永続化設定を使ってください。
 
 ### RunbookブローカーCLI
 ```bash
