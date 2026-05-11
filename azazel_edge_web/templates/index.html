@@ -57,6 +57,15 @@
             </div>
             <p class="panel-note" id="demoModeBannerText">{{ tr('dashboard.demo_banner_default', 'A demo overlay is active. Review replay output on the dedicated demo page, not on the operational dashboard.') }}</p>
         </section>
+        <section class="panel demo-mode-banner" id="syntheticModeBanner" hidden>
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">Topo-Lite Synthetic Mode</div>
+                    <h2>Synthetic evidence is active</h2>
+                </div>
+            </div>
+            <p class="panel-note" id="syntheticModeBannerText">SYNTHETIC DATA - NOT LIVE EVIDENCE</p>
+        </section>
         <section class="onboarding-banner" id="beginnerOnboarding">
             <div class="onboarding-copy">
                 <div class="panel-kicker">{{ tr('dashboard.beginner_onboarding_kicker', 'Beginner Guide') }}</div>
@@ -889,12 +898,17 @@
                 </div>
                 <div class="panel-heading-actions">
                     <div class="panel-note" id="healthSummaryLine">-</div>
+                    <button type="button" class="context-ask-btn pro-only" id="topoliteSyntheticToggleBtn">Toggle Synthetic</button>
                     <button type="button" class="context-ask-btn pro-only" data-question="{{ tr('dashboard.question_evidence_timeline_summary', 'Summarize the current evidence and timeline, and explain what to verify in live telemetry.') }}">{{ tr('dashboard.ask_about_this', 'Ask about this') }}</button>
                 </div>
             </div>
             <details class="panel-fold-details" id="evidenceTimelineDetails">
                 <summary id="evidenceTimelineDetailsToggle">{{ tr('dashboard.evidence_timeline_details_show', 'Show evidence and history') }}</summary>
                 <div class="evidence-grid">
+                    <article class="evidence-card">
+                        <div class="card-kicker">Topo-Lite Topology (Synthetic)</div>
+                        <ul class="timeline-list" id="topoliteSyntheticTopology"></ul>
+                    </article>
                     <article class="evidence-card">
                                 <div class="card-kicker">{{ tr('dashboard.current_triggers', 'Current Triggers') }}</div>
                         <ul class="timeline-list" id="currentTriggersTimeline"></ul>

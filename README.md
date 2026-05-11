@@ -218,6 +218,9 @@ Install result (default scripts):
   - `AZAZEL_MANAGED_CLIENT_CIDRS` (`172.16.0.0/24` default)
   - `AZAZEL_INTERNAL_MONITOR_TARGET` (`172.16.0.254` default)
   - `AZAZEL_NOC_EXTRA_INTERFACES` (optional CSV for multi-segment probes)
+- Topo-Lite synthetic seed mode:
+  - `AZAZEL_TOPOLITE_SEED_MODE_PATH` (mode state file, default `/run/azazel-edge/topolite_seed_mode.json`)
+  - API: `POST /api/topolite/seed-mode` with `mode=live|synthetic` and optional `seed_id`
 
 ### Token auth
 - API token can be supplied by header `X-AZAZEL-TOKEN` (or `X-Auth-Token`) or `?token=`.
