@@ -37,6 +37,7 @@ class DashboardDataContractTests(unittest.TestCase):
             "read_demo_overlay": webapp.read_demo_overlay,
             "send_control_command_with_params": webapp.send_control_command_with_params,
             "_mattermost_send_message": webapp._mattermost_send_message,
+            "TOPOLITE_SEED_MODE_PATH": webapp.TOPOLITE_SEED_MODE_PATH,
         }
 
         webapp.STATE_PATH = root / "ui_snapshot.json"
@@ -49,6 +50,7 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.RUNBOOK_EVENT_LOG = root / "runbook-events.jsonl"
         webapp.TRIAGE_AUDIT_LOG = root / "triage-audit.jsonl"
         webapp.TRIAGE_AUDIT_FALLBACK_LOG = root / "triage-audit-fallback.jsonl"
+        webapp.TOPOLITE_SEED_MODE_PATH = root / "topolite_seed_mode.json"
         webapp.cp_read_snapshot_payload = None
         webapp.load_token = lambda: None
         webapp.AUTH_FAIL_OPEN = True
@@ -327,6 +329,7 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.send_control_command_with_params = self._orig["send_control_command_with_params"]
         webapp.OPERATOR_PROGRESS_PATH = self._orig["OPERATOR_PROGRESS_PATH"]
         webapp._mattermost_send_message = self._orig["_mattermost_send_message"]
+        webapp.TOPOLITE_SEED_MODE_PATH = self._orig["TOPOLITE_SEED_MODE_PATH"]
         self.tmp.cleanup()
 
     def test_dashboard_summary_contract(self) -> None:
@@ -802,6 +805,45 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["recent_ai_activity"][0]["runbook_id"], "rb.noc.dns.failure.check")
         self.assertEqual(payload["recent_runbook_events"][0]["action"], "preview")
         self.assertEqual(payload["recent_mode_changes"][0]["current_mode"], "shield")
+
+    def test_topolite_seed_mode_toggle_and_summary_reflection(self) -> None:
+        get_before = self.client.get("/api/topolite/seed-mode")
+        self.assertEqual(get_before.status_code, 200)
+        before_payload = get_before.get_json()
+        self.assertEqual(before_payload["topolite_seed_mode"]["mode"], "live")
+
+        update = self.client.post(
+            "/api/topolite/seed-mode",
+            json={"mode": "synthetic", "seed_id": "seed-alpha", "updated_by": "test"},
+        )
+        self.assertEqual(update.status_code, 200)
+        update_payload = update.get_json()
+        self.assertEqual(update_payload["topolite_seed_mode"]["mode"], "synthetic")
+        self.assertEqual(update_payload["topolite_seed_mode"]["seed_id"], "seed-alpha")
+        self.assertIn("story", update_payload["topolite_seed_mode"])
+
+        summary = self.client.get("/api/dashboard/summary")
+        self.assertEqual(summary.status_code, 200)
+        summary_payload = summary.get_json()
+        self.assertEqual(summary_payload["topolite"]["mode"], "synthetic")
+        self.assertEqual(summary_payload["topolite"]["data_source"], "synthetic")
+        self.assertTrue(summary_payload["topolite"]["watermark"])
+
+    def test_synthetic_mode_keeps_live_audit_sources_unchanged(self) -> None:
+        self.client.post(
+            "/api/topolite/seed-mode",
+            json={"mode": "synthetic", "seed_id": "seed-bravo", "updated_by": "test"},
+        )
+        evidence = self.client.get("/api/dashboard/evidence")
+        self.assertEqual(evidence.status_code, 200)
+        payload = evidence.get_json()
+        self.assertEqual(payload["data_source"], "synthetic")
+        self.assertTrue(payload["watermark"])
+        self.assertIn("synthetic_story", payload)
+
+        triage_rows = payload.get("recent_triage_audit") or []
+        if triage_rows:
+            self.assertTrue(all(str(item.get("source") or "") != "topolite_synthetic" for item in triage_rows))
         self.assertTrue(payload["current_triggers"])
         self.assertTrue(payload["decision_changes"])
         self.assertTrue(payload["operator_interactions"])

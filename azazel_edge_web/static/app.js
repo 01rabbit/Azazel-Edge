@@ -195,6 +195,22 @@ function updateDemoModeBanner(result) {
     }
 }
 
+function updateSyntheticModeBanner(summary, evidence) {
+    const banner = document.getElementById('syntheticModeBanner');
+    const text = document.getElementById('syntheticModeBannerText');
+    if (!banner || !text) return;
+    const mode = String(summary?.topolite?.mode || 'live').toLowerCase();
+    const isSynthetic = mode === 'synthetic' || String(evidence?.data_source || 'live') === 'synthetic';
+    banner.hidden = !isSynthetic;
+    if (isSynthetic) {
+        text.textContent = String(summary?.topolite?.watermark || evidence?.watermark || 'SYNTHETIC DATA - NOT LIVE EVIDENCE');
+    }
+    const toggle = document.getElementById('topoliteSyntheticToggleBtn');
+    if (toggle) {
+        toggle.textContent = isSynthetic ? 'Switch to Live' : 'Switch to Synthetic';
+    }
+}
+
 const shortcutQuestions = {
     wifi: tr('dashboard.question_wifi_trouble', 'How should I guide a user who cannot connect to Wi-Fi?'),
     reconnect: tr('dashboard.question_reconnect', 'How should I guide a user who cannot reconnect?'),
@@ -393,6 +409,7 @@ function bindStaticHandlers() {
     document.getElementById('modePortalBtn')?.addEventListener('click', () => switchMode('portal'));
     document.getElementById('modeShieldBtn')?.addEventListener('click', () => switchMode('shield'));
     document.getElementById('modeScapegoatBtn')?.addEventListener('click', () => switchMode('scapegoat'));
+    document.getElementById('topoliteSyntheticToggleBtn')?.addEventListener('click', toggleTopoliteSyntheticMode);
     document.getElementById('portalAssistBtn')?.addEventListener('click', openPortalViewer);
     document.getElementById('containBtn')?.addEventListener('click', () => executeAction('contain'));
     document.getElementById('releaseBtn')?.addEventListener('click', () => executeAction('release'));
@@ -565,6 +582,25 @@ function bindStaticHandlers() {
     });
 
     loadDemoScenarios();
+}
+
+async function toggleTopoliteSyntheticMode() {
+    const currentMode = String(latestSummary?.topolite?.mode || 'live').toLowerCase();
+    const nextMode = currentMode === 'synthetic' ? 'live' : 'synthetic';
+    try {
+        await fetchJson('/api/topolite/seed-mode', {
+            method: 'POST',
+            body: JSON.stringify({
+                mode: nextMode,
+                seed_id: String(latestSummary?.topolite?.seed_id || 'topolite-default'),
+                updated_by: 'dashboard',
+            }),
+        });
+        await refreshDashboard();
+        showToast(`Topo-Lite mode changed to ${nextMode.toUpperCase()}`, 'success');
+    } catch (error) {
+        showToast(`Topo-Lite mode change failed: ${error.message}`, 'error');
+    }
 }
 
 function buildOpsCommTriageUrl(intentId = '', question = '') {
@@ -779,6 +815,7 @@ async function refreshDashboard() {
     handoffUrl.searchParams.set('session_id', progressSessionId);
     const requests = [
         ['summary', '/api/dashboard/summary', true],
+        ['topoliteMode', '/api/topolite/seed-mode', false],
         ['actions', actionsUrl.pathname + actionsUrl.search, false],
         ['progress', progressUrl.pathname + progressUrl.search, false],
         ['handoff', handoffUrl.pathname + handoffUrl.search, false],
@@ -827,15 +864,26 @@ async function refreshDashboard() {
     const capabilities = resultMap.capabilities?.data || { mattermost_triggers: [] };
     const demoCapabilities = resultMap.demoCapabilities?.data || { boundary: {}, execution_mode: 'deterministic_replay' };
     const demoOverlay = resultMap.demoOverlay?.data?.overlay || {};
+    const topoliteMode = resultMap.topoliteMode?.data?.topolite_seed_mode || {};
 
     latestState = state || {};
     latestSummary = summary || {};
+    if (!latestSummary.topolite && topoliteMode && typeof topoliteMode === 'object') {
+        latestSummary.topolite = {
+            mode: topoliteMode.mode || 'live',
+            seed_id: topoliteMode.seed_id || 'topolite-default',
+            data_source: topoliteMode.mode === 'synthetic' ? 'synthetic' : 'live',
+            watermark: topoliteMode.watermark || '',
+            story: topoliteMode.story || {},
+        };
+    }
     latestMattermost = mattermost || {};
     currentProgress = progress || {};
     currentHandoff = handoff || {};
     demoOverlayResult = demoOverlay && demoOverlay.active ? demoOverlay : null;
     setDemoOverlayVisualState(!!demoOverlayResult);
     updateDemoModeBanner(demoOverlayResult);
+    updateSyntheticModeBanner(summary, resultMap.evidence?.data || {});
     if (!demoOverlayResult) {
         resetDemoOverlayPresentation();
     }
@@ -2481,6 +2529,13 @@ function updateEvidenceBoard(evidence, health) {
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
+    }));
+    const syntheticTopology = Array.isArray(evidence.synthetic_story?.topology) ? evidence.synthetic_story.topology : [];
+    renderTimeline('topoliteSyntheticTopology', syntheticTopology, (item) => ({
+        metaLeft: evidence.data_source === 'synthetic' ? 'synthetic' : '-',
+        metaRight: item.kind || '-',
+        title: item.label || item.id || '-',
+        detail: `state=${item.state || '-'}`,
     }));
 
     const stale = health.stale_flags || {};

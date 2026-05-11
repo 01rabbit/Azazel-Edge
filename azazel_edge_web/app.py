@@ -139,6 +139,7 @@ AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-l
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/azazel-edge/runbook-events.jsonl"))
 TRIAGE_AUDIT_LOG = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", "/var/log/azazel-edge/triage-audit.jsonl"))
 TRIAGE_AUDIT_FALLBACK_LOG = Path("/tmp/azazel-edge-triage-audit.jsonl")
+TOPOLITE_SEED_MODE_PATH = Path(os.environ.get("AZAZEL_TOPOLITE_SEED_MODE_PATH", "/run/azazel-edge/topolite_seed_mode.json"))
 SOT_AUDIT_LOG = Path(os.environ.get("AZAZEL_SOT_AUDIT_LOG", "/var/log/azazel-edge/sot-events.jsonl"))
 TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge/triage-sessions"))
 OPERATOR_PROGRESS_PATH = Path(os.environ.get("AZAZEL_OPERATOR_PROGRESS_PATH", "/run/azazel-edge/operator-progress.json"))
@@ -2031,6 +2032,12 @@ def _dashboard_noc_runbook_support(state: Dict[str, Any], lang: str) -> Dict[str
     noc_blast_radius = state.get("noc_blast_radius") if isinstance(state.get("noc_blast_radius"), dict) else {}
     noc_config_drift = state.get("noc_config_drift") if isinstance(state.get("noc_config_drift"), dict) else {}
     noc_incident_summary = state.get("noc_incident_summary") if isinstance(state.get("noc_incident_summary"), dict) else {}
+    topolite_mode = _read_topolite_seed_mode()
+    synthetic_story = (
+        _build_topolite_synthetic_story(str(topolite_mode.get("seed_id") or "topolite-default"))
+        if str(topolite_mode.get("mode") or "live") == "synthetic"
+        else {}
+    )
     return select_noc_runbook_support(
         {
             "summary": {
@@ -2128,6 +2135,64 @@ def _recent_mode_changes(mode_runtime: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _read_topolite_seed_mode() -> Dict[str, Any]:
+    fallback = {"mode": "live", "seed_id": "topolite-default", "updated_at": time.time(), "updated_by": "system"}
+    try:
+        if TOPOLITE_SEED_MODE_PATH.exists():
+            data = json.loads(TOPOLITE_SEED_MODE_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                mode = str(data.get("mode") or "live").strip().lower()
+                if mode not in {"live", "synthetic"}:
+                    mode = "live"
+                return {
+                    "mode": mode,
+                    "seed_id": str(data.get("seed_id") or "topolite-default"),
+                    "updated_at": _as_float(data.get("updated_at"), time.time()),
+                    "updated_by": str(data.get("updated_by") or "unknown"),
+                }
+    except Exception:
+        pass
+    return fallback
+
+
+def _write_topolite_seed_mode(mode: str, seed_id: str, updated_by: str) -> Dict[str, Any]:
+    payload = {
+        "mode": "synthetic" if str(mode).lower() == "synthetic" else "live",
+        "seed_id": str(seed_id or "topolite-default"),
+        "updated_at": time.time(),
+        "updated_by": str(updated_by or "unknown"),
+    }
+    TOPOLITE_SEED_MODE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TOPOLITE_SEED_MODE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
+def _build_topolite_synthetic_story(seed_id: str) -> Dict[str, Any]:
+    digest = hashlib.sha256(str(seed_id).encode("utf-8")).hexdigest()
+    n1 = int(digest[0:2], 16)
+    n2 = int(digest[2:4], 16)
+    n3 = int(digest[4:6], 16)
+    base_latency = 40 + (n1 % 35)
+    drop_pct = 2 + (n2 % 8)
+    impacted = 1 + (n3 % 5)
+    topology = [
+        {"id": "gw-br0", "kind": "gateway", "label": "Azazel Gateway (br0)", "state": "watch"},
+        {"id": "dns-resolver", "kind": "service", "label": "Resolver", "state": "degraded"},
+        {"id": "client-segment-a", "kind": "segment", "label": f"Clients {impacted}", "state": "affected"},
+    ]
+    timeline = [
+        {"ts_iso": "synthetic", "title": "Gateway jitter observed", "detail": f"latency={base_latency}ms", "kind": "topolite_synthetic"},
+        {"ts_iso": "synthetic", "title": "Resolver instability", "detail": f"packet_loss={drop_pct}%", "kind": "topolite_synthetic"},
+        {"ts_iso": "synthetic", "title": "Segment impact estimated", "detail": f"affected_clients={impacted}", "kind": "topolite_synthetic"},
+    ]
+    return {
+        "seed_id": str(seed_id),
+        "topology": topology,
+        "timeline": timeline,
+        "story_id": f"seed:{seed_id}",
+    }
+
+
 def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], advisory: Dict[str, Any]) -> Dict[str, Any]:
     lang = _request_lang()
     monitoring = get_monitoring_state()
@@ -2197,6 +2262,12 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     noc_config_drift = state.get("noc_config_drift") if isinstance(state.get("noc_config_drift"), dict) else {}
     noc_incident_summary = state.get("noc_incident_summary") if isinstance(state.get("noc_incident_summary"), dict) else {}
     monitor_scope = state.get("monitor_scope") if isinstance(state.get("monitor_scope"), dict) else {}
+    topolite_mode = _read_topolite_seed_mode()
+    synthetic_story = (
+        _build_topolite_synthetic_story(str(topolite_mode.get("seed_id") or "topolite-default"))
+        if str(topolite_mode.get("mode") or "live") == "synthetic"
+        else {}
+    )
     client_identity_view = _client_identity_view_payload(state)
     remote_peer_view = _remote_peer_view_payload(state)
     soc_attack_candidates = (
@@ -2245,6 +2316,13 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
             "internet_check": str(connection.get("internet_check") or ""),
         },
         "gateway": str(state.get("gateway_ip") or ""),
+        "topolite": {
+            "mode": str(topolite_mode.get("mode") or "live"),
+            "seed_id": str(topolite_mode.get("seed_id") or "topolite-default"),
+            "data_source": "synthetic" if str(topolite_mode.get("mode") or "live") == "synthetic" else "live",
+            "watermark": "SYNTHETIC DATA - NOT LIVE EVIDENCE" if str(topolite_mode.get("mode") or "live") == "synthetic" else "",
+            "story": synthetic_story if isinstance(synthetic_story, dict) else {},
+        },
         "service_health_summary": service_summary,
         "current_recommendation": str(state.get("recommendation") or advisory.get("recommendation") or ""),
         "normal_assurance": _normal_assurance_payload(
@@ -2912,10 +2990,26 @@ def _dashboard_evidence_payload(
     ai_activity = [_normalize_ai_activity(item) for item in llm_rows[-10:]]
     runbook_events = [_normalize_runbook_event(item) for item in runbook_rows[-10:]]
     triage_audit = [_normalize_triage_audit_event(item) for item in triage_rows[-10:]]
+    topolite_mode = _read_topolite_seed_mode()
+    is_synthetic = str(topolite_mode.get("mode") or "live") == "synthetic"
+    synthetic_story = _build_topolite_synthetic_story(str(topolite_mode.get("seed_id") or "topolite-default")) if is_synthetic else {}
     mode_runtime = get_mode_state()
     sections = _dashboard_evidence_sections(state, advisory, ai_activity, runbook_events, triage_audit, mode_runtime)
+    if is_synthetic and isinstance(synthetic_story.get("timeline"), list):
+        sections["current_triggers"] = [
+            {
+                "ts_iso": "synthetic",
+                "title": "Synthetic seed mode active",
+                "detail": f"seed_id={topolite_mode.get('seed_id')}",
+                "kind": "topolite_synthetic",
+            },
+            *[item for item in synthetic_story.get("timeline", []) if isinstance(item, dict)],
+        ][:6]
     return {
         "ok": True,
+        "data_source": "synthetic" if is_synthetic else "live",
+        "watermark": "SYNTHETIC DATA - NOT LIVE EVIDENCE" if is_synthetic else "",
+        "synthetic_story": synthetic_story if isinstance(synthetic_story, dict) else {},
         "recent_alerts": recent_alerts,
         "recent_ai_activity": ai_activity,
         "recent_runbook_events": runbook_events,
@@ -4908,6 +5002,38 @@ def api_demo_flow():
         cmd.append("--refresh-epd")
     payload, code = _run_demo_runner(*cmd)
     return jsonify(payload), code
+
+
+@app.route("/api/topolite/seed-mode", methods=["GET", "POST"])
+@require_token()
+def api_topolite_seed_mode():
+    if request.method == "GET":
+        payload = _read_topolite_seed_mode()
+        mode = str(payload.get("mode") or "live")
+        response = dict(payload)
+        if mode == "synthetic":
+            response["story"] = _build_topolite_synthetic_story(str(payload.get("seed_id") or "topolite-default"))
+            response["watermark"] = "SYNTHETIC DATA - NOT LIVE EVIDENCE"
+        else:
+            response["story"] = {}
+            response["watermark"] = ""
+        return jsonify({"ok": True, "topolite_seed_mode": response}), 200
+
+    body = request.get_json(silent=True) or {}
+    mode = str(body.get("mode") or "").strip().lower()
+    if mode not in {"live", "synthetic"}:
+        return jsonify({"ok": False, "error": "mode must be live or synthetic"}), 400
+    seed_id = str(body.get("seed_id") or "topolite-default").strip() or "topolite-default"
+    updated_by = str(body.get("updated_by") or request.remote_addr or "webui")
+    payload = _write_topolite_seed_mode(mode=mode, seed_id=seed_id, updated_by=updated_by)
+    response = dict(payload)
+    if mode == "synthetic":
+        response["story"] = _build_topolite_synthetic_story(seed_id)
+        response["watermark"] = "SYNTHETIC DATA - NOT LIVE EVIDENCE"
+    else:
+        response["story"] = {}
+        response["watermark"] = ""
+    return jsonify({"ok": True, "topolite_seed_mode": response}), 200
 
 
 @app.route("/api/dashboard/summary", methods=["GET"])
