@@ -328,7 +328,7 @@ PYTHONPATH=. .venv/bin/pytest -q
   - Rust の `maybe_enforce()` はフックのみ
 - `python3 py/azazel_edge_epd.py --help` は現時点で `ValueError: incomplete format` で失敗
 - CI workflow は未配置（`.github/workflows` が見つからない）
-- ルート `LICENSE` ファイルは未配置
+- ルート `LICENSE` ファイルを配置済み（MIT）
 
 ## 既知の問題（2026-03-15 時点）
 
@@ -358,4 +358,4 @@ GitHub の open issue 例:
 
 ## ライセンス
 
-このリポジトリのルートには `LICENSE` ファイルが存在しません（status: unknown）。
+このリポジトリは MIT License で公開されています。詳細は [LICENSE](LICENSE) を参照してください。
