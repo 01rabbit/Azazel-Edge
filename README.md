@@ -385,8 +385,10 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 See [GitHub Issues](https://github.com/01rabbit/Azazel-Edge/issues) for the current list.
 Priority items as of 2026-05-11:
 
-- #143 [Topo-Lite] 緊急時 triage の認証・内部ネットワーク・単一画面UI方針を確定 *(P0)*
 - #140 Epic: Azazel-Topo-Lite MVP *(P0)*
+- #173 [Topo-Lite] Default monitoring scope to internal network (br0/172.16.0.0/24) *(P0)*
+- #172 [Topo-Lite] Synthetic seed mode with strict live-evidence separation *(P0)*
+- #174 [Topo-Lite] Left-sidebar integration and single-screen visual triage UI *(P0)*
 
 ## Current Status
 
