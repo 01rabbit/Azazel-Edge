@@ -212,6 +212,12 @@ Install result (default scripts):
 - AI agent: `AZAZEL_OLLAMA_ENDPOINT`, `AZAZEL_LLM_MODEL_PRIMARY`, `AZAZEL_LLM_MODEL_DEGRADED`
 - Mattermost command trigger/token: `AZAZEL_MATTERMOST_COMMAND_TRIGGER`, `AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE`
 - Runbook controlled execution gate: `AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC`
+- Topo-Lite/NOC monitor scope:
+  - `AZAZEL_NOC_MONITOR_SCOPE` (`internal` default, or `external`)
+  - `AZAZEL_INTERNAL_BRIDGE_IF` (`br0` default)
+  - `AZAZEL_MANAGED_CLIENT_CIDRS` (`172.16.0.0/24` default)
+  - `AZAZEL_INTERNAL_MONITOR_TARGET` (`172.16.0.254` default)
+  - `AZAZEL_NOC_EXTRA_INTERFACES` (optional CSV for multi-segment probes)
 
 ### Token auth
 - API token can be supplied by header `X-AZAZEL-TOKEN` (or `X-Auth-Token`) or `?token=`.

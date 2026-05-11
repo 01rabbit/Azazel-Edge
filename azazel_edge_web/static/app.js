@@ -1085,6 +1085,7 @@ function applyDemoOverlay(result) {
     updateElement('networkGateway', 'demo-target');
     updateElement('networkInternet', action === 'notify' ? 'CHECK' : 'CONTROL');
     updateElement('networkPortal', 'N/A');
+    updateElement('networkScope', 'demo:synthetic');
     updateElement('networkDnsMismatch', '0');
     updateElement('networkSignals', joinList(result.noc?.summary?.reasons || []));
     updateElement('socThreatLevel', String(socStatus || 'quiet').toUpperCase());
@@ -2032,6 +2033,7 @@ function updateSituationBoard(summary, state, health, mattermost) {
     updateElement('networkGateway', summary.gateway || '-');
     updateElement('networkInternet', summary.uplink?.internet_check || '-');
     updateElement('networkPortal', summary.situation_board?.network_health?.captive_portal || '-');
+    updateElement('networkScope', summary.situation_board?.network_health?.monitor_scope?.label || '-');
     updateElement('networkDnsMismatch', String(summary.situation_board?.network_health?.dns_mismatch ?? 0));
     updateElement('networkSignals', joinList(summary.situation_board?.network_health?.signals));
 

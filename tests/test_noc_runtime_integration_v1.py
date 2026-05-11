@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,26 @@ from azazel_edge_control import daemon as control_daemon
 
 
 class NocRuntimeIntegrationV1Tests(unittest.TestCase):
+    def test_resolve_monitor_scope_defaults_to_internal(self) -> None:
+        with patch.dict(os.environ, {"AZAZEL_NOC_MONITOR_SCOPE": "internal"}, clear=False):
+            scope = control_daemon._resolve_monitor_scope(
+                {"up_if": "eth1", "gateway_ip": "192.168.40.1"},
+                {"down_if": "usb0"},
+            )
+        self.assertEqual(scope["mode"], "internal")
+        self.assertEqual(scope["up_if"], "br0")
+        self.assertEqual(scope["cidr"], "172.16.0.0/24")
+
+    def test_resolve_monitor_scope_supports_external_override(self) -> None:
+        with patch.dict(os.environ, {"AZAZEL_NOC_MONITOR_SCOPE": "external"}, clear=False):
+            scope = control_daemon._resolve_monitor_scope(
+                {"up_if": "eth1", "gateway_ip": "192.168.40.1"},
+                {"down_if": "usb0"},
+            )
+        self.assertEqual(scope["mode"], "external")
+        self.assertEqual(scope["up_if"], "eth1")
+        self.assertEqual(scope["gateway_ip"], "192.168.40.1")
+
     def test_build_noc_runtime_projection_maps_evaluation_into_dashboard_shape(self) -> None:
         evaluation = {
             "summary": {"status": "degraded", "degraded_mode": False, "reasons": ["capacity_health:degraded"]},
@@ -118,6 +139,8 @@ class NocRuntimeIntegrationV1Tests(unittest.TestCase):
         self.assertEqual(enriched["noc_capacity"]["state"], "elevated")
         self.assertEqual(enriched["noc_service_assurance"]["degraded_targets"], ["resolver-tcp"])
         self.assertEqual(enriched["noc_incident_summary"]["incident_id"], "incident:test")
+        self.assertEqual(enriched["monitor_scope"]["mode"], "internal")
+        self.assertIn("br0", enriched["monitor_scope"]["label"])
 
 
 if __name__ == "__main__":
