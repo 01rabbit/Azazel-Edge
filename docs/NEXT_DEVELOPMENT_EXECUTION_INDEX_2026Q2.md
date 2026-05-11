@@ -68,3 +68,13 @@ Rule:
 - README / docs への影響が反映済み
 - 監査ログ・運用境界に関わる変更は理由を明文化
 
+## Topo-Lite Execution Track (from #143 policy memo)
+
+Priority | Issue | Title | Labels | Depends on
+---|---|---|---|---
+P0 | #173 | [Topo-Lite] Default monitoring scope to internal network (br0/172.16.0.0/24) | `priority:P0`, `initiative:topo-lite`, `area:integration`, `area:ops`, `noc` | #140
+P0 | #172 | [Topo-Lite] Synthetic seed mode with strict live-evidence separation | `priority:P0`, `initiative:topo-lite`, `area:security`, `area:integration`, `soc`, `ui` | #173
+P0 | #174 | [Topo-Lite] Left-sidebar integration and single-screen visual triage UI | `priority:P0`, `initiative:topo-lite`, `area:integration`, `ui`, `soc`, `noc` | #173, #172
+
+Execution note:
+- #143 is policy-only and is considered complete once the above implementation issues are created and linked to #140.
