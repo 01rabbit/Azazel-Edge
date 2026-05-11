@@ -820,6 +820,23 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertFalse(payload["stale_flags"]["snapshot"])
         self.assertIn("idle_flags", payload)
         self.assertIn("ai_activity", payload["idle_flags"])
+        self.assertIn("ai_governance", payload)
+        self.assertIn("rates", payload["ai_governance"])
+        self.assertIn("ai_contribution", payload["ai_governance"]["rates"])
+        self.assertIn("fallback", payload["ai_governance"]["rates"])
+        self.assertIn("manual_route", payload["ai_governance"]["rates"])
+
+    def test_dashboard_ai_governance_endpoint_contract(self) -> None:
+        response = self.client.get("/api/dashboard/ai-governance")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertIn(payload["status"], {"ok", "stale", "unknown"})
+        self.assertIn("rates", payload)
+        self.assertIn("counts", payload)
+        self.assertIn("ai_contribution", payload["rates"])
+        self.assertIn("fallback", payload["rates"])
+        self.assertIn("manual_route", payload["rates"])
 
     def test_dashboard_index_renders_new_sections(self) -> None:
         response = self.client.get("/?lang=en")

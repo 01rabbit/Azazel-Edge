@@ -2944,6 +2944,7 @@ def _dashboard_health_payload(state: Dict[str, Any], metrics: Dict[str, Any], ll
         "runbook_events": bool(safe_idle and runbook_stale),
     }
     reachable, ping = _mattermost_ping()
+    ai_governance = _dashboard_ai_governance_payload(metrics, now_epoch=now_epoch)
     return {
         "ok": True,
         "stale_flags": {
@@ -2985,6 +2986,46 @@ def _dashboard_health_payload(state: Dict[str, Any], metrics: Dict[str, Any], ll
         "mattermost": {
             "reachable": reachable,
             "ping": ping,
+        },
+        "ai_governance": ai_governance,
+    }
+
+
+def _dashboard_ai_governance_payload(metrics: Dict[str, Any], *, now_epoch: float | None = None) -> Dict[str, Any]:
+    now = float(now_epoch if now_epoch is not None else time.time())
+    requests = _as_int(metrics.get("llm_requests"), 0)
+    completed = _as_int(metrics.get("llm_completed"), 0)
+    fallback_count = _as_int(metrics.get("llm_fallback_count"), 0)
+    fallback_rate = _as_float(metrics.get("llm_fallback_rate"), 0.0)
+    manual_requests = _as_int(metrics.get("manual_requests"), 0)
+    manual_routed = _as_int(metrics.get("manual_routed_count"), 0)
+    manual_completed = _as_int(metrics.get("manual_completed"), 0)
+    updated_age = _age_seconds(metrics.get("last_update_ts"), now_epoch=now)
+    stale = bool(updated_age is not None and updated_age > DASHBOARD_AI_STALE_SEC)
+
+    contribution_rate = (completed / requests) if requests > 0 else 0.0
+    manual_route_rate = (manual_routed / manual_requests) if manual_requests > 0 else 0.0
+    unknown = bool(requests <= 0 or updated_age is None)
+    status = "unknown" if unknown else ("stale" if stale else "ok")
+    return {
+        "ok": True,
+        "status": status,
+        "stale": stale,
+        "unknown": unknown,
+        "updated_at": _iso_from_epoch(metrics.get("last_update_ts")),
+        "age_sec": updated_age,
+        "rates": {
+            "ai_contribution": round(contribution_rate, 4),
+            "fallback": round(fallback_rate, 4),
+            "manual_route": round(manual_route_rate, 4),
+        },
+        "counts": {
+            "llm_requests": requests,
+            "llm_completed": completed,
+            "llm_fallback_count": fallback_count,
+            "manual_requests": manual_requests,
+            "manual_routed_count": manual_routed,
+            "manual_completed": manual_completed,
         },
     }
 
@@ -4961,6 +5002,13 @@ def api_dashboard_health():
     llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
     runbook_rows = _tail_jsonl(RUNBOOK_EVENT_LOG, limit=20)
     return jsonify(_dashboard_health_payload(state, metrics, llm_rows, runbook_rows)), 200
+
+
+@app.route("/api/dashboard/ai-governance", methods=["GET"])
+@require_token()
+def api_dashboard_ai_governance():
+    metrics = _read_json_file(AI_METRICS_PATH)
+    return jsonify(_dashboard_ai_governance_payload(metrics)), 200
 
 
 @app.route("/api/clients/trust", methods=["POST"])
