@@ -1,8 +1,11 @@
 # Azazel-Edge
 
-<p align="center">
-  <img alt="Language-English" src="https://img.shields.io/badge/Language-English-1f6feb?style=for-the-badge">
-</p>
+[![CI](https://github.com/01rabbit/Azazel-Edge/actions/workflows/ci.yml/badge.svg)](https://github.com/01rabbit/Azazel-Edge/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platform: Raspberry Pi](https://img.shields.io/badge/Platform-Raspberry%20Pi-C51A4A?logo=raspberry-pi)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-Core-000000?logo=rust)
+![Flask](https://img.shields.io/badge/Flask-Web%20API-000000?logo=flask)
 
 Azazel-Edge is a Raspberry Pi-oriented edge operations stack that combines:
 - internal network/gateway setup
@@ -11,16 +14,6 @@ Azazel-Edge is a Raspberry Pi-oriented edge operations stack that combines:
 - optional local AI assist (Ollama + Mattermost integration)
 
 This README is based on verified repository contents (code, scripts, tests, git history, GitHub issue/PR metadata) as of **2026-05-11**.
-
-<p align="center">
-  <img src="https://img.shields.io/badge/-Raspberry%20Pi-C51A4A.svg?logo=raspberry-pi&style=flat">
-  <img src="https://img.shields.io/badge/-Python-F9DC3E.svg?logo=python&style=flat">
-  <img src="https://img.shields.io/badge/-Rust-000000.svg?logo=rust&style=flat">
-  <img src="https://img.shields.io/badge/-Flask-000000.svg?logo=flask&style=flat">
-  <img src="https://img.shields.io/badge/-Mattermost-0058CC.svg?logo=mattermost&style=flat">
-  <img src="https://img.shields.io/badge/-Ollama-111111.svg?style=flat">
-  <a href="https://github.com/01rabbit/Azazel-Edge/actions/workflows/ci.yml"><img src="https://github.com/01rabbit/Azazel-Edge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-</p>
 
 ## What is Azazel-Edge?
 
