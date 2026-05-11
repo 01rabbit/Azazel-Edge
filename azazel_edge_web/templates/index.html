@@ -223,6 +223,18 @@
                     <p class="resource-guard-detail" id="resourceGuardLatencyDetail">-</p>
                 </article>
             </div>
+            <div class="mission-grid">
+                <article class="mission-card">
+                    <div class="card-kicker">{{ tr('dashboard.ai_governance_snapshot', 'AI Governance Snapshot') }}</div>
+                    <h3 id="aiGovernanceStatus">UNKNOWN</h3>
+                    <p class="card-summary" id="aiGovernanceSummary">{{ tr('dashboard.resource_guard_waiting', 'Waiting for runtime health telemetry.') }}</p>
+                    <div class="key-facts">
+                        <div class="fact-item"><span>{{ tr('dashboard.ai_contribution_rate', 'AI Contribution') }}</span><strong id="aiGovernanceContribution">-</strong></div>
+                        <div class="fact-item"><span>{{ tr('dashboard.fallback_rate', 'Fallback Rate') }}</span><strong id="aiGovernanceFallback">-</strong></div>
+                        <div class="fact-item"><span>{{ tr('dashboard.manual_route_rate', 'Manual Route') }}</span><strong id="aiGovernanceManualRoute">-</strong></div>
+                    </div>
+                </article>
+            </div>
         </section>
 
         <section class="panel mission-row">

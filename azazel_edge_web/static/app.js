@@ -845,6 +845,7 @@ async function refreshDashboard() {
         updateClientIdentityView(summary);
         updateCommandStrip(summary, health, failures);
         updateOperationalResourceGuard(health);
+        updateAIGovernanceSnapshot(health.ai_governance || {});
         updateSituationBoard(summary, state, health, mattermost);
         updateSplitBoard(summary, actions);
         updateActionBoard(actions, state);
@@ -3017,6 +3018,37 @@ function updateOperationalResourceGuard(health) {
     if (headline) {
         headline.textContent = overallStatus === 'status-danger' ? 'DEGRADED' : (overallStatus === 'status-caution' ? 'WATCH' : 'STABLE');
     }
+}
+
+function updateAIGovernanceSnapshot(governance) {
+    const status = String(governance?.status || 'unknown').toUpperCase();
+    const rates = governance?.rates || {};
+    const stale = Boolean(governance?.stale);
+    const unknown = Boolean(governance?.unknown);
+    const contributionPct = Math.round(Number(rates.ai_contribution ?? 0) * 100);
+    const fallbackPct = Math.round(Number(rates.fallback ?? 0) * 100);
+    const manualRoutePct = Math.round(Number(rates.manual_route ?? 0) * 100);
+    const updatedAt = String(governance?.updated_at || '-');
+    const age = governance?.age_sec;
+    let summary = tr(
+        'dashboard.ai_governance_summary_ok',
+        'Updated {updated} | AI contribution {contrib}% | fallback {fallback}% | manual route {manual}%',
+        { updated: updatedAt, contrib: contributionPct, fallback: fallbackPct, manual: manualRoutePct },
+    );
+    if (unknown) {
+        summary = tr('dashboard.ai_governance_summary_unknown', 'No AI governance sample yet.');
+    } else if (stale) {
+        summary = tr(
+            'dashboard.ai_governance_summary_stale',
+            'Governance metrics are stale ({age}s old).',
+            { age: Math.round(Number(age || 0)) },
+        );
+    }
+    updateElement('aiGovernanceStatus', status);
+    updateElement('aiGovernanceSummary', summary);
+    updateElement('aiGovernanceContribution', `${contributionPct}%`);
+    updateElement('aiGovernanceFallback', `${fallbackPct}%`);
+    updateElement('aiGovernanceManualRoute', `${manualRoutePct}%`);
 }
 
 function renderList(id, items, formatter) {
