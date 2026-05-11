@@ -897,6 +897,7 @@ async function refreshDashboard() {
         updateSituationBoard(summary, state, health, mattermost);
         updateSplitBoard(summary, actions);
         updateActionBoard(actions, state);
+        updateTopoliteSingleScreen(summary, evidence, actions);
         updateMissionRow(summary, actions);
         updateTemporaryMission(actions);
         updateProgressChecklist(progress);
@@ -2561,6 +2562,45 @@ function updateEvidenceBoard(evidence, health) {
             : ((Array.isArray(evidence.decision_changes) ? evidence.decision_changes.length : 0) > 0 || currentTriggers.length > 1
                 ? 'status-caution'
                 : 'status-safe'),
+    );
+}
+
+function updateTopoliteSingleScreen(summary, evidence, actions) {
+    const threat = String(summary?.soc_focus?.threat_level || 'unknown').toUpperCase();
+    const pathState = String(summary?.noc_focus?.path_health?.status || 'unknown').toUpperCase();
+    const actionName = String(actions?.current_action?.action || summary?.current_recommendation || 'observe').toUpperCase();
+    updateElement('topoliteThreatBadge', `THREAT:${threat}`);
+    updateElement('topolitePathBadge', `PATH:${pathState}`);
+    updateElement('topoliteActionBadge', `ACTION:${actionName}`);
+
+    const overview = [
+        `risk=${summary?.risk?.user_state || '-'} / suspicion=${summary?.risk?.suspicion ?? 0}`,
+        `uplink=${summary?.uplink?.up_if || '-'} gateway=${summary?.gateway || '-'}`,
+        `clients=${summary?.noc_focus?.client_inventory?.current ?? 0} affected=${summary?.noc_focus?.blast_radius?.affected_client_count ?? 0}`,
+    ];
+    renderList('topoliteOverviewList', overview, (item) => item);
+
+    const topology = Array.isArray(evidence?.synthetic_story?.topology)
+        ? evidence.synthetic_story.topology
+        : ((summary?.noc_focus?.blast_radius?.affected_segments || []).map((seg) => ({ kind: 'segment', label: String(seg), state: 'watch' })));
+    renderTimeline('topoliteTopologyTimeline', topology, (item) => ({
+        metaLeft: item.kind || 'node',
+        metaRight: item.state || '-',
+        title: item.label || item.id || '-',
+        detail: item.state ? `state=${item.state}` : '-',
+    }));
+
+    const timelineItems = Array.isArray(evidence?.current_triggers) ? evidence.current_triggers.slice(0, 6) : [];
+    renderTimeline('topoliteIncidentTimeline', timelineItems, (item) => ({
+        metaLeft: item.ts_iso || '-',
+        metaRight: item.kind || '-',
+        title: item.title || '-',
+        detail: item.detail || '-',
+    }));
+
+    updateElement(
+        'topoliteSingleScreenSummary',
+        `Threat ${threat} | Path ${pathState} | Action ${actionName} | Source ${String(evidence?.data_source || 'live').toUpperCase()}`,
     );
 }
 
