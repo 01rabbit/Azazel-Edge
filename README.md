@@ -319,6 +319,7 @@ Latest verified result (2026-03-15): **183 passed in 3.57s**
 - [Demo guide (Japanese)](docs/DEMO_GUIDE_JA.md)
 - [Post-demo main integration boundary (#104)](docs/POST_DEMO_MAIN_INTEGRATION_104.md)
 - [Post-demo socket permission model (#105)](docs/POST_DEMO_SOCKET_PERMISSION_MODEL_105.md)
+- [Next development execution index (2026Q2)](docs/NEXT_DEVELOPMENT_EXECUTION_INDEX_2026Q2.md)
 
 ## Limitations
 
