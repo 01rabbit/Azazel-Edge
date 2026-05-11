@@ -1,12 +1,7 @@
 # Azazel-Edge
 
 <p align="center">
-  <a href="./README.md">
-    <img alt="English" src="https://img.shields.io/badge/Language-English-1f6feb?style=for-the-badge">
-  </a>
-  <a href="./README_ja.md">
-    <img alt="日本語" src="https://img.shields.io/badge/Language-日本語-2ea44f?style=for-the-badge">
-  </a>
+  <img alt="Language-English" src="https://img.shields.io/badge/Language-English-1f6feb?style=for-the-badge">
 </p>
 
 Azazel-Edge is a Raspberry Pi-oriented edge operations stack that combines:
@@ -45,10 +40,6 @@ Azazel-Edge is a **lightweight SOC/NOC gateway for emergency operations**, desig
 - A replacement for a production SIEM or full-time SOC platform
 - An autonomous AI that makes decisions without operator confirmation
 - Cloud-dependent: all core functions work offline
-
-## Language Parity
-
-Translation rules and terminology alignment are maintained in [`docs/LANGUAGE_PARITY.md`](docs/LANGUAGE_PARITY.md).
 
 ## Verified Purpose
 
@@ -360,7 +351,6 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 |----------|-------------|
 | [AI Operation Guide](docs/AI_OPERATION_GUIDE.md) | LLM thresholds, daily checks, incident response |
 | [Demo Guide](docs/DEMO_GUIDE.md) | Deterministic demo replay walkthrough |
-| [Demo Guide (Japanese)](docs/DEMO_GUIDE_JA.md) | 日本語版デモ手順 |
 
 ### For developers
 
@@ -379,8 +369,8 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 |----------|-------------|
 | [AGENTS.md](AGENTS.md) | AI agent working charter — read before making any change |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Human contributor guide (branch, PR, test rules) |
-| [Language Parity](docs/LANGUAGE_PARITY.md) | README translation and terminology rules |
 | [Changelog](docs/CHANGELOG.md) | PR and feature traceability history |
+
 ## Limitations and Known Issues
 
 ### Design constraints (by intent)
