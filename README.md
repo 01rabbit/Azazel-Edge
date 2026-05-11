@@ -1,13 +1,11 @@
 # Azazel-Edge
 
-<p align="center">
-  <a href="./README.md">
-    <img alt="English" src="https://img.shields.io/badge/Language-English-1f6feb?style=for-the-badge">
-  </a>
-  <a href="./README_ja.md">
-    <img alt="日本語" src="https://img.shields.io/badge/Language-日本語-2ea44f?style=for-the-badge">
-  </a>
-</p>
+[![CI](https://github.com/01rabbit/Azazel-Edge/actions/workflows/ci.yml/badge.svg)](https://github.com/01rabbit/Azazel-Edge/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platform: Raspberry Pi](https://img.shields.io/badge/Platform-Raspberry%20Pi-C51A4A?logo=raspberry-pi)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-Core-000000?logo=rust)
+![Flask](https://img.shields.io/badge/Flask-Web%20API-000000?logo=flask)
 
 Azazel-Edge is a Raspberry Pi-oriented edge operations stack that combines:
 - internal network/gateway setup
@@ -15,34 +13,26 @@ Azazel-Edge is a Raspberry Pi-oriented edge operations stack that combines:
 - Web UI + API + runbook workflow for operators
 - optional local AI assist (Ollama + Mattermost integration)
 
-This README is based on verified repository contents (code, scripts, tests, git history, GitHub issue/PR metadata) as of **2026-03-15**.
+This README is based on verified repository contents (code, scripts, tests, git history, GitHub issue/PR metadata) as of **2026-05-11**.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/-Raspberry%20Pi-C51A4A.svg?logo=raspberry-pi&style=flat">
-  <img src="https://img.shields.io/badge/-Python-F9DC3E.svg?logo=python&style=flat">
-  <img src="https://img.shields.io/badge/-Rust-000000.svg?logo=rust&style=flat">
-  <img src="https://img.shields.io/badge/-Flask-000000.svg?logo=flask&style=flat">
-  <img src="https://img.shields.io/badge/-Mattermost-0058CC.svg?logo=mattermost&style=flat">
-  <img src="https://img.shields.io/badge/-Ollama-111111.svg?style=flat">
-</p>
+## What is Azazel-Edge?
 
-## Language Parity
+Azazel-Edge is a **lightweight SOC/NOC gateway for emergency operations**, designed to run on a Raspberry Pi.
 
-`README.md` and `README_ja.md` are maintained to carry the same technical meaning.
+**Who it's for**
+- Security staff running a temporary network segment (event venue, field office, training exercise)
+- Operators who need first-response triage without a full SIEM
+- Teams practicing incident response with a local, offline-capable stack
 
-- Commands, API paths, environment variables, service names, and file paths are kept identical across both files.
-- Differences between files should be wording/locale only, not behavior claims.
-- Dates and verification snapshots are intended to match across both files.
+**When to use it**
+- You need a working gateway + alert triage surface in under an hour
+- You have no cloud connectivity or want to keep traffic fully local
+- You want a deterministic decision engine with optional local AI assist (Ollama), not a black-box
 
-Terminology alignment used in both files:
-
-Canonical term | Japanese equivalent in `README_ja.md`
----|---
-deterministic demo replay | 決定論デモ
-operator workflow | 運用ワークフロー
-controlled execution | 制御実行
-token-protected endpoint | トークン保護エンドポイント
-optional AI assist path | 任意の AI 補助経路
+**What it is not**
+- A replacement for a production SIEM or full-time SOC platform
+- An autonomous AI that makes decisions without operator confirmation
+- Cloud-dependent: all core functions work offline
 
 ## Verified Purpose
 
@@ -62,6 +52,33 @@ Evidence:
 - AI agent runtime: `py/azazel_edge_ai/agent.py`, `systemd/azazel-edge-ai-agent.service`
 
 ## Core Architecture
+
+```mermaid
+flowchart LR
+    subgraph ingestion["Event Ingestion"]
+        SUP[Suricata EVE] --> RC[Rust Core]
+        RC --> EP[Evidence Plane]
+    end
+    subgraph evaluation["Deterministic Evaluation"]
+        EP --> NOC[NOC Evaluator]
+        EP --> SOC[SOC Evaluator]
+        NOC --> ARB[Action Arbiter]
+        SOC --> ARB
+    end
+    subgraph action["Operator Plane"]
+        ARB --> EXP[Decision Explanation]
+        EXP --> WEB[Web UI / API]
+        EXP --> NOTIF[Notification]
+    end
+    subgraph ai["AI Assist\n(optional)"]
+        EXP --> GOV[AI Governance]
+        GOV --> LLM[Ollama]
+        LLM --> GOV
+    end
+    WEB --> OPR([Operator])
+    NOTIF --> MM[Mattermost]
+    ARB --> AUD[Audit Logger]
+```
 
 1. **Event ingestion + normalization**
    - Rust core tails Suricata EVE (`AZAZEL_EVE_PATH`, default `/var/log/suricata/eve.json`) and emits normalized alert events.
@@ -91,13 +108,20 @@ Evidence:
 - CA metadata/download: `/api/certs/azazel-webui-local-ca/meta`, `/api/certs/azazel-webui-local-ca.crt`
 
 ### Primary API groups
-- state/stream: `/api/state`, `/api/state/stream`
-- control/mode/action: `/api/mode`, `/api/action`, `/api/wifi/*`, `/api/portal-viewer*`
-- dashboard views: `/api/dashboard/*`
-- triage: `/api/triage/*`
-- runbooks: `/api/runbooks*`
-- demo: `/api/demo/*`
-- AI/Mattermost: `/api/ai/*`, `/api/mattermost/*`
+
+| Group | Endpoints | Auth required |
+|-------|-----------|---------------|
+| State | `GET /api/state`, `GET /api/state/stream` | Yes |
+| Control | `POST /api/mode`, `POST /api/action`, `/api/wifi/*`, `/api/portal-viewer*` | Yes |
+| SoT | `POST /api/clients/trust`, `PUT/PATCH /api/sot/devices` | Yes |
+| Dashboard | `GET /api/dashboard/*` | Yes |
+| Triage | `/api/triage/*` | Yes |
+| Runbooks | `GET /api/runbooks`, `POST /api/runbooks/propose`, `POST /api/runbooks/act` | Yes |
+| Demo | `/api/demo/*` | Yes |
+| AI | `POST /api/ai/ask`, `GET /api/ai/capabilities` | Yes |
+| Mattermost | `POST /api/mattermost/command`, `POST /api/mattermost/message` | Token |
+| Health | `GET /health` | No |
+| CA cert | `GET /api/certs/*` | No |
 
 ### Socket interfaces
 - Control socket: `/run/azazel-edge/control.sock`
@@ -109,15 +133,9 @@ Evidence:
 - Legacy fail-open compatibility is controlled by `AZAZEL_AUTH_FAIL_OPEN` when token file is absent.
 - Managed default token file is `/etc/azazel-edge/web_token.txt` via `AZAZEL_WEB_TOKEN_FILE`.
 
-## Feature Traceability
+## Changelog
 
-Implemented capability | Code evidence | History evidence
----|---|---
-Dedicated demo workspace separated from live dashboard | `azazel_edge_web/app.py` (`/demo`), `azazel_edge_web/templates/demo.html` | PR #74, commit `d084852`
-NOC runtime projection integration | `py/azazel_edge_control/daemon.py`, `tests/test_noc_runtime_integration_v1.py` | PR #88, commit `8d3937a`
-SOC state dimensions integrated in runtime/UI | `py/azazel_edge/evaluators/soc.py`, `tests/test_soc_evaluator_v1.py` | PR #86, commits `a4a6fa0`, `bebdd13`
-Auth contract and i18n hardening | `azazel_edge_web/app.py`, `tests/test_api_auth_contract.py`, `tests/test_i18n_*` | PR #87, commit `72e9253`
-Beginner-default UI mode | `azazel_edge_web/templates/index.html`, `azazel_edge_web/static/app.js` | PR #95, commit `7773624`
+See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for the full implementation history and PR traceability.
 
 ## Requirements
 
@@ -154,12 +172,7 @@ sudo ENABLE_INTERNAL_NETWORK=1 \
      bash installer/internal/install_all.sh
 ```
 
-Main toggles:
-- `ENABLE_INTERNAL_NETWORK=1|0`
-- `ENABLE_APP_STACK=1|0`
-- `ENABLE_AI_RUNTIME=1|0`
-- `ENABLE_DEV_REMOTE_ACCESS=1|0`
-- `ENABLE_RUST_CORE=1|0`
+For all installer toggles and runtime variables, see [Configuration](#configuration).
 
 ### App stack only
 
@@ -225,6 +238,20 @@ TOKEN="$(cat ~/.azazel-edge/web_token.txt)"
 curl -sS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/state | jq .
 ```
 
+### SoT devices API contract
+- `PUT /api/sot/devices`
+  - Replaces the full `devices` array in SoT.
+  - Request body: `{"devices": [<SoT device objects>]}`.
+- `PATCH /api/sot/devices`
+  - Merge/upsert semantics by `id` only (no delete behavior).
+  - Existing device fields are preserved unless overwritten by payload fields.
+  - Request body: `{"devices": [<partial or full SoT device objects with id>]}`.
+- Both endpoints:
+  - Require token auth (`@require_token()`).
+  - Validate resulting full SoT via `SoTConfig.from_dict`.
+  - Append audit records to `AZAZEL_SOT_AUDIT_LOG` including `actor` (`X-AZAZEL-ACTOR` preferred, then caller address).
+  - Trigger re-evaluation through `refresh` after successful updates.
+
 ### Deterministic demo replay
 
 ```bash
@@ -267,7 +294,7 @@ Run:
 PYTHONPATH=. .venv/bin/pytest -q
 ```
 
-Latest verified result (2026-03-15): **183 passed in 3.57s**
+Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 
 ## Repository Layout
 
@@ -311,49 +338,66 @@ Latest verified result (2026-03-15): **183 passed in 3.57s**
 
 ## Documentation
 
-- [P0 runtime architecture](docs/P0_RUNTIME_ARCHITECTURE.md)
-- [AI operation guide](docs/AI_OPERATION_GUIDE.md)
-- [AI build and operation detail](docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL.md)
-- [M.I.O. persona profile](docs/MIO_PERSONA_PROFILE.md)
-- [Demo guide](docs/DEMO_GUIDE.md)
-- [Demo guide (Japanese)](docs/DEMO_GUIDE_JA.md)
-- [Post-demo main integration boundary (#104)](docs/POST_DEMO_MAIN_INTEGRATION_104.md)
-- [Post-demo socket permission model (#105)](docs/POST_DEMO_SOCKET_PERMISSION_MODEL_105.md)
-- [Next development execution index (2026Q2)](docs/NEXT_DEVELOPMENT_EXECUTION_INDEX_2026Q2.md)
+### For operators
 
-## Limitations
+| Document | Description |
+|----------|-------------|
+| [AI Operation Guide](docs/AI_OPERATION_GUIDE.md) | LLM thresholds, daily checks, incident response |
+| [Demo Guide](docs/DEMO_GUIDE.md) | Deterministic demo replay walkthrough |
 
-- Rust enforcement path is a placeholder by default:
+### For developers
+
+| Document | Description |
+|----------|-------------|
+| [P0 Runtime Architecture](docs/P0_RUNTIME_ARCHITECTURE.md) | Pipeline, modules, and constraints |
+| [AI Agent Build and Operation Detail](docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL.md) | AI agent internals |
+| [M.I.O. Persona Profile](docs/MIO_PERSONA_PROFILE.md) | Operator persona design spec |
+| [Post-demo Main Integration Boundary (#104)](docs/POST_DEMO_MAIN_INTEGRATION_104.md) | What is mainline vs. exhibition-only |
+| [Post-demo Socket Permission Model (#105)](docs/POST_DEMO_SOCKET_PERMISSION_MODEL_105.md) | Unix socket permission decisions |
+| [Next Development Execution Index 2026Q2](docs/NEXT_DEVELOPMENT_EXECUTION_INDEX_2026Q2.md) | Roadmap and execution plan |
+
+### For contributors (AI agents and humans)
+
+| Document | Description |
+|----------|-------------|
+| [AGENTS.md](AGENTS.md) | AI agent working charter — read before making any change |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Human contributor guide (branch, PR, test rules) |
+| [Changelog](docs/CHANGELOG.md) | PR and feature traceability history |
+
+## Limitations and Known Issues
+
+### Design constraints (by intent)
+
+- Rust enforcement path is inactive by default:
   - `AZAZEL_DEFENSE_ENFORCE=false` in `systemd/azazel-edge-core.service`
-  - `maybe_enforce()` in Rust core contains placeholder comment.
-- `python3 py/azazel_edge_epd.py --help` currently fails with `ValueError: incomplete format`.
-- CI workflow files are not present (`.github/workflows` not found in repository tree).
-- `LICENSE` file is present at repository root (MIT).
+  - `maybe_enforce()` in Rust core is a placeholder pending dry-run validation
+- AI assist is optional and bounded — the deterministic path works without Ollama
+- Ollama models above 2b parameters are not recommended for co-located deployments
+- Test count and runbook count are verified at each release; see CI results for current status.
 
-## Known Issues (as of 2026-03-15)
+### Known bugs
 
-Open GitHub issues include:
-- #96 P1着手: Azazelらしさラインの実装分解
-- #97 P1-1: M.I.O.文体統一レイヤ
-- #98 P1-2: Decision Trust Capsule
-- #99 P1-3: Handoff Brief Pack
-- #100 P1-4: 初動Progress Checklist
-- #101 P1-5: Beginnerオンボーディング
+- `python3 py/azazel_edge_epd.py --help` fails with `ValueError: incomplete format`
+
+### Open work items
+
+See [GitHub Issues](https://github.com/01rabbit/Azazel-Edge/issues) for the current list.
+Priority items as of 2026-05-11:
+
+- #149 Execution Plan 2026Q2: Enforcement/CI/Runtime Hardening Index *(P0)*
+- #143 [Topo-Lite] 緊急時 triage の認証・内部ネットワーク・単一画面UI方針を確定 *(P0)*
+- #140 Epic: Azazel-Topo-Lite MVP *(P0)*
+- #153 [P2] Implement Decision Trust Capsule for audit-grade explainability *(P1)*
+- #154 [P2] Correlation engine expansion: sequence and distributed patterns *(P1)*
+- #155 [P2] Add SoT dynamic update API with re-evaluation trigger *(P1)*
+- #157 [P3] Dashboard visibility: AI contribution/fallback metrics *(P1)*
+- #158 [P3] Notification fallback hardening (SMTP/Webhook + ack audit) *(P1)*
 
 ## Current Status
 
 - Recent merged PRs include #95, #94, #88, #87, #86 (UI, NOC runtime integration, auth/i18n, SOC maturation).
-- Repository currently contains **44** Python test modules and **15** runbook YAML definitions.
+- Repository currently contains **48** Python test modules and **15** runbook YAML definitions.
 - Deterministic demo scenarios available: `mixed_correlation_demo`, `noc_degraded_demo`, `soc_redirect_demo`.
-
-## Verification Notes
-
-Verified on 2026-03-15:
-- `PYTHONPATH=. .venv/bin/pytest -q` -> `183 passed`
-- `find tests -maxdepth 1 -type f -name 'test_*.py' | wc -l` -> `44`
-- `find runbooks -type f -name '*.yaml' | wc -l` -> `15`
-- `python3 py/azazel_edge_epd.py --help` -> fails (`ValueError: incomplete format`)
-- GitHub open issues include #96-#101 (`gh issue list --state open`)
 
 ## License
 

@@ -9,6 +9,16 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+VENV_PYTHON = ROOT_DIR / ".venv" / "bin" / "python3"
+
+if os.environ.get("AZAZEL_EDGE_DEMO_BOOTSTRAPPED") != "1" and VENV_PYTHON.exists():
+    current = Path(sys.executable).resolve()
+    target = VENV_PYTHON.resolve()
+    if current != target:
+        env = os.environ.copy()
+        env["AZAZEL_EDGE_DEMO_BOOTSTRAPPED"] = "1"
+        os.execvpe(str(target), [str(target), str(Path(__file__).resolve()), *sys.argv[1:]], env)
+
 PY_ROOT = ROOT_DIR / "py"
 if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
