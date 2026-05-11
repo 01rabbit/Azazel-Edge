@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# update-readme-stats — README の統計情報を現在の値に更新する
+# 使い方: bash bin/update-readme-stats
+set -euo pipefail
+
+TODAY=$(date +%Y-%m-%d)
+
+# テスト数を取得
+if [ -f .venv/bin/pytest ]; then
+  TEST_RESULT=$(PYTHONPATH=. .venv/bin/pytest -q 2>&1 | tail -1)
+else
+  echo "[warn] .venv not found. Run: python3 -m venv .venv && pip install -r requirements/runtime.txt"
+  TEST_RESULT="(venv not found)"
+fi
+
+TEST_COUNT=$(find tests -maxdepth 1 -type f -name 'test_*.py' | wc -l | tr -d ' ')
+RUNBOOK_COUNT=$(find runbooks -type f -name '*.yaml' | wc -l | tr -d ' ')
+
+echo "Today      : $TODAY"
+echo "Test result: $TEST_RESULT"
+echo "Test modules: $TEST_COUNT"
+echo "Runbooks   : $RUNBOOK_COUNT"
+echo ""
+echo "Update README.md and README_ja.md with these values manually,"
+echo "or use sed to automate (check sed syntax for your OS)."
