@@ -385,14 +385,8 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 See [GitHub Issues](https://github.com/01rabbit/Azazel-Edge/issues) for the current list.
 Priority items as of 2026-05-11:
 
-- #149 Execution Plan 2026Q2: Enforcement/CI/Runtime Hardening Index *(P0)*
 - #143 [Topo-Lite] 緊急時 triage の認証・内部ネットワーク・単一画面UI方針を確定 *(P0)*
 - #140 Epic: Azazel-Topo-Lite MVP *(P0)*
-- #153 [P2] Implement Decision Trust Capsule for audit-grade explainability *(P1)*
-- #154 [P2] Correlation engine expansion: sequence and distributed patterns *(P1)*
-- #155 [P2] Add SoT dynamic update API with re-evaluation trigger *(P1)*
-- #157 [P3] Dashboard visibility: AI contribution/fallback metrics *(P1)*
-- #158 [P3] Notification fallback hardening (SMTP/Webhook + ack audit) *(P1)*
 
 ## Current Status
 
