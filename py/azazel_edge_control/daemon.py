@@ -126,6 +126,43 @@ def _default_sot_payload() -> dict[str, Any]:
     }
 
 
+def _env_list(name: str) -> list[str]:
+    raw = str(os.environ.get(name, "")).strip()
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _resolve_monitor_scope(route: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, str]:
+    scope_mode = str(os.environ.get("AZAZEL_NOC_MONITOR_SCOPE", "internal")).strip().lower()
+    if scope_mode not in {"internal", "external"}:
+        scope_mode = "internal"
+    internal_if = str(os.environ.get("AZAZEL_INTERNAL_BRIDGE_IF", "br0")).strip() or "br0"
+    internal_cidr = str(os.environ.get("AZAZEL_MANAGED_CLIENT_CIDRS", "172.16.0.0/24")).strip() or "172.16.0.0/24"
+    internal_target = str(os.environ.get("AZAZEL_INTERNAL_MONITOR_TARGET", "172.16.0.254")).strip() or "172.16.0.254"
+    external_if = str(route.get("up_if") or "eth1").strip() or "eth1"
+    down_if = str(snapshot.get("down_if") or os.environ.get("AZAZEL_NOC_DOWN_INTERFACE", "usb0")).strip() or "usb0"
+
+    if scope_mode == "internal":
+        return {
+            "mode": "internal",
+            "label": f"internal:{internal_if} ({internal_cidr})",
+            "up_if": internal_if,
+            "down_if": down_if,
+            "gateway_ip": internal_target,
+            "cidr": internal_cidr,
+        }
+
+    return {
+        "mode": "external",
+        "label": f"external:{external_if}",
+        "up_if": external_if,
+        "down_if": down_if,
+        "gateway_ip": str(route.get("gateway_ip") or "").strip(),
+        "cidr": "",
+    }
+
+
 def _sot_candidates() -> list[Path]:
     candidates: list[Path] = []
     env_path = str(os.environ.get("AZAZEL_SOT_PATH", "")).strip()
@@ -1068,6 +1105,7 @@ def _compute_live_noc_projection(up_if: str, down_if: str, gateway_ip: str) -> d
                 up_interface=str(up_if or "eth1"),
                 down_interface=str(down_if or "usb0"),
                 gateway_ip=str(gateway_ip or ""),
+                extra_interfaces=_env_list("AZAZEL_NOC_EXTRA_INTERFACES"),
             )
             _NOC_ADAPTER_KEY = key
 
@@ -1107,6 +1145,8 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     enriched["gateway_ip"] = gateway_ip
     enriched.setdefault("down_if", "usb0")
     enriched.setdefault("down_ip", "10.12.194.1")
+    monitor_scope = _resolve_monitor_scope(route, enriched)
+    enriched["monitor_scope"] = monitor_scope
     if uplink_type == "ethernet":
         enriched["ssid"] = f"ETH:{up_if}" if up_if != "-" else "ETH"
 
@@ -1157,9 +1197,9 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     )
     try:
         noc_projection = _compute_live_noc_projection(
-            up_if=up_if,
-            down_if=str(enriched.get("down_if") or "usb0"),
-            gateway_ip=gateway_ip,
+            up_if=str(monitor_scope.get("up_if") or up_if),
+            down_if=str(monitor_scope.get("down_if") or enriched.get("down_if") or "usb0"),
+            gateway_ip=str(monitor_scope.get("gateway_ip") or gateway_ip),
         )
         if isinstance(noc_projection, dict):
             enriched.update(noc_projection)

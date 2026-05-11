@@ -69,7 +69,13 @@ def _window_severity(state: str) -> int:
 
 
 class NocProbeAdapter:
-    def __init__(self, up_interface: str = 'eth1', down_interface: str = 'usb0', gateway_ip: str = ''):
+    def __init__(
+        self,
+        up_interface: str = 'eth1',
+        down_interface: str = 'usb0',
+        gateway_ip: str = '',
+        extra_interfaces: Optional[List[str]] = None,
+    ):
         self.up_interface = up_interface
         self.down_interface = down_interface
         self.gateway_ip = gateway_ip
@@ -77,6 +83,7 @@ class NocProbeAdapter:
             up_interface=up_interface,
             down_interface=down_interface,
             gateway_ip=gateway_ip,
+            extra_interfaces=extra_interfaces,
         )
 
     def collect_snapshot(self) -> Dict[str, Any]:

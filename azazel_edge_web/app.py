@@ -2196,6 +2196,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     noc_blast_radius = state.get("noc_blast_radius") if isinstance(state.get("noc_blast_radius"), dict) else {}
     noc_config_drift = state.get("noc_config_drift") if isinstance(state.get("noc_config_drift"), dict) else {}
     noc_incident_summary = state.get("noc_incident_summary") if isinstance(state.get("noc_incident_summary"), dict) else {}
+    monitor_scope = state.get("monitor_scope") if isinstance(state.get("monitor_scope"), dict) else {}
     client_identity_view = _client_identity_view_payload(state)
     remote_peer_view = _remote_peer_view_payload(state)
     soc_attack_candidates = (
@@ -2280,6 +2281,12 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
                 "captive_portal": str(connection.get("captive_portal") or ""),
                 "internet_check": str(connection.get("internet_check") or ""),
                 "signals": network_health.get("signals") if isinstance(network_health.get("signals"), list) else [],
+                "monitor_scope": {
+                    "mode": str(monitor_scope.get("mode") or "internal"),
+                    "label": str(monitor_scope.get("label") or "internal:br0 (172.16.0.0/24)"),
+                    "interface": str(monitor_scope.get("up_if") or "br0"),
+                    "cidr": str(monitor_scope.get("cidr") or "172.16.0.0/24"),
+                },
             },
             "service_health": service_summary,
         },
