@@ -327,7 +327,7 @@ Latest verified result (2026-03-15): **183 passed in 3.57s**
   - `maybe_enforce()` in Rust core contains placeholder comment.
 - `python3 py/azazel_edge_epd.py --help` currently fails with `ValueError: incomplete format`.
 - CI workflow files are not present (`.github/workflows` not found in repository tree).
-- `LICENSE` file is not present at repository root.
+- `LICENSE` file is present at repository root (MIT).
 
 ## Known Issues (as of 2026-03-15)
 
@@ -356,4 +356,4 @@ Verified on 2026-03-15:
 
 ## License
 
-No top-level `LICENSE` file is present in this repository (status: unknown).
+This repository is licensed under the MIT License. See [LICENSE](LICENSE).
