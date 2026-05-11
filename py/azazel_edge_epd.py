@@ -839,10 +839,10 @@ Examples:
                        help='Display state')
     parser.add_argument('--ssid', help='Wi-Fi SSID (for normal state)')
     parser.add_argument('--mode-label', default='SHIELD', help='Gateway mode label shown above SSID (for normal state)')
-    parser.add_argument('--signal', type=int, help='Wi-Fi signal strength in dBm (negative, e.g., -55) or 0-100%')
+    parser.add_argument('--signal', type=int, help='Wi-Fi signal strength in dBm (negative, e.g., -55) or 0-100%%')
     parser.add_argument('--uplink-type', default='unknown', help='Uplink type for icon selection: wifi, ethernet, other')
     parser.add_argument('--risk-status', default='SAFE', help='Risk status (for normal state): SAFE, CHECKING, LIMITED, CONTAINED')
-    parser.add_argument('--suspicion', type=int, default=0, help='Suspicion score (for normal state, 0-100)')
+    parser.add_argument('--suspicion', type=int, default=0, help='Suspicion score (for normal state, 0-100%%)')
     parser.add_argument('--msg', help='Message (for warning/danger/stale states)')
     parser.add_argument('--dry-run', action='store_true',
                        help='Generate preview only, do not update EPD')
