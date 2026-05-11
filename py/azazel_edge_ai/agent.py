@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import grp
 import queue
 import socket
 import subprocess
@@ -44,6 +45,9 @@ except Exception:  # pragma: no cover
     review_runbook_id = None
 
 SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
+RUNTIME_DIR_MODE = int(str(os.environ.get("AZAZEL_RUNTIME_DIR_MODE", "0770")), 8)
+SOCKET_MODE = int(str(os.environ.get("AZAZEL_AI_SOCKET_MODE", "0660")), 8)
+RUNTIME_SOCKET_GROUP = str(os.environ.get("AZAZEL_RUNTIME_SOCKET_GROUP", ""))
 ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge/ai_advisory.json"))
 EVENT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", "/var/log/azazel-edge/ai-events.jsonl"))
 SNAPSHOT_PATH = Path(os.environ.get("AZAZEL_UI_SNAPSHOT", "/run/azazel-edge/ui_snapshot.json"))
@@ -174,6 +178,22 @@ CORR_STATE: Dict[str, list[Dict[str, Any]]] = {}
 
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _prepare_runtime_socket_dir(path: Path) -> None:
+    target = path.parent
+    target.mkdir(parents=True, exist_ok=True)
+    if RUNTIME_SOCKET_GROUP:
+        try:
+            gid = grp.getgrnam(RUNTIME_SOCKET_GROUP).gr_gid
+            os.chown(str(target), -1, gid)
+        except KeyError:
+            logger.warning("Runtime socket group not found: %s", RUNTIME_SOCKET_GROUP)
+        except PermissionError:
+            logger.warning("Insufficient permissions to set runtime socket directory group")
+        except Exception as exc:
+            logger.warning("Failed to set runtime socket directory group: %s", exc)
+    os.chmod(str(target), RUNTIME_DIR_MODE)
 
 
 def _metrics_snapshot() -> Dict[str, Any]:
@@ -1636,7 +1656,7 @@ def _handle_client(conn: socket.socket) -> None:
 
 
 def _serve() -> None:
-    _ensure_parent(SOCKET_PATH)
+    _prepare_runtime_socket_dir(SOCKET_PATH)
     _ensure_parent(METRICS_PATH)
     _ensure_parent(POLICY_PATH)
     if SOCKET_PATH.exists():
@@ -1644,7 +1664,13 @@ def _serve() -> None:
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(str(SOCKET_PATH))
-    os.chmod(SOCKET_PATH, 0o666)
+    if RUNTIME_SOCKET_GROUP:
+        try:
+            gid = grp.getgrnam(RUNTIME_SOCKET_GROUP).gr_gid
+            os.chown(str(SOCKET_PATH), -1, gid)
+        except Exception:
+            pass
+    os.chmod(SOCKET_PATH, SOCKET_MODE)
     srv.listen(16)
     srv.settimeout(1.0)
     worker = threading.Thread(target=_llm_worker, daemon=True)

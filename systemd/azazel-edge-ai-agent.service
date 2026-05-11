@@ -4,6 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/default/azazel-edge-security
 Environment="AZAZEL_LLM_MODEL_PRIMARY=qwen3.5:2b"
 Environment="AZAZEL_LLM_MODEL_DEGRADED=qwen3.5:0.8b"
 Environment="AZAZEL_OPS_MODEL=qwen3.5:2b"

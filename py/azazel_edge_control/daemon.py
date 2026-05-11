@@ -8,6 +8,7 @@ import json
 import time
 import sys
 import os
+import grp
 import logging
 import ipaddress
 import re
@@ -55,6 +56,9 @@ logger = logging.getLogger('azazel-edge-daemon')
 MODE_MANAGER = ModeManager(logger=logger)
 
 SOCKET_PATH = Path('/run/azazel-edge/control.sock')
+RUNTIME_DIR_MODE = int(str(os.environ.get("AZAZEL_RUNTIME_DIR_MODE", "0770")), 8)
+SOCKET_MODE = int(str(os.environ.get("AZAZEL_CONTROL_SOCKET_MODE", "0660")), 8)
+RUNTIME_SOCKET_GROUP = str(os.environ.get("AZAZEL_RUNTIME_SOCKET_GROUP", ""))
 AI_ADVISORY_PATH = Path("/run/azazel-edge/ai_advisory.json")
 PORTAL_VIEWER_SERVICE = "azazel-edge-portal-viewer.service"
 PORTAL_VIEWER_ENV_CANDIDATES = portal_env_candidates()
@@ -1453,14 +1457,22 @@ def stream_ui_snapshots(conn: socket.socket, interval_sec: float = 1.0) -> None:
         time.sleep(interval)
 
 def ensure_socket_dir():
-    """Create /run/azazel if needed"""
+    """Create runtime socket directory with least-privilege permissions."""
     SOCKET_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if RUNTIME_SOCKET_GROUP:
+        try:
+            gid = grp.getgrnam(RUNTIME_SOCKET_GROUP).gr_gid
+            os.chown(str(SOCKET_PATH.parent), -1, gid)
+        except KeyError:
+            logger.warning(f"Runtime socket group not found: {RUNTIME_SOCKET_GROUP}")
+        except PermissionError:
+            logger.warning("Insufficient permissions to set runtime socket directory group")
+        except Exception as exc:
+            logger.warning(f"Failed to set runtime socket directory group: {exc}")
     # Remove old socket if exists
     if SOCKET_PATH.exists():
         SOCKET_PATH.unlink()
-    
-    # Set directory permissions so any user can access
-    os.chmod(str(SOCKET_PATH.parent), 0o777)
+    os.chmod(str(SOCKET_PATH.parent), RUNTIME_DIR_MODE)
 
 
 def create_listener_socket() -> socket.socket:
@@ -1468,8 +1480,13 @@ def create_listener_socket() -> socket.socket:
     ensure_socket_dir()
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.bind(str(SOCKET_PATH))
-    # Make socket world-readable/writable for other processes
-    os.chmod(str(SOCKET_PATH), 0o666)
+    if RUNTIME_SOCKET_GROUP:
+        try:
+            gid = grp.getgrnam(RUNTIME_SOCKET_GROUP).gr_gid
+            os.chown(str(SOCKET_PATH), -1, gid)
+        except Exception:
+            pass
+    os.chmod(str(SOCKET_PATH), SOCKET_MODE)
     sock.listen(16)
     sock.settimeout(1.0)
     logger.info(f"Listening on {SOCKET_PATH}")

@@ -138,7 +138,9 @@ TRIAGE_AUDIT_LOG = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", "/var/log/aza
 TRIAGE_AUDIT_FALLBACK_LOG = Path("/tmp/azazel-edge-triage-audit.jsonl")
 TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge/triage-sessions"))
 OPERATOR_PROGRESS_PATH = Path(os.environ.get("AZAZEL_OPERATOR_PROGRESS_PATH", "/run/azazel-edge/operator-progress.json"))
-TOKEN_FILE = web_token_candidates()[0]
+_TOKEN_FILE_OVERRIDE = str(os.environ.get("AZAZEL_WEB_TOKEN_FILE", "")).strip()
+TOKEN_FILE = Path(_TOKEN_FILE_OVERRIDE) if _TOKEN_FILE_OVERRIDE else web_token_candidates()[0]
+AUTH_FAIL_OPEN = os.environ.get("AZAZEL_AUTH_FAIL_OPEN", "0") == "1"
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
 LOCAL_DEMO_RUNNER = PROJECT_ROOT / "bin" / "azazel-edge-demo"
 OPT_DEMO_RUNNER = Path("/opt/azazel-edge/bin/azazel-edge-demo")
@@ -2877,7 +2879,7 @@ def verify_token() -> bool:
     """リクエストのトークン検証（ヘッダーまたはクエリパラメータ）"""
     token = load_token()
     if not token:
-        return True  # トークン未設定の場合はスルー
+        return AUTH_FAIL_OPEN
     
     req_token = (
         request.headers.get('X-AZAZEL-TOKEN')
@@ -5217,7 +5219,10 @@ if __name__ == "__main__":
     if load_token():
         print(f"   🔒 Token authentication enabled")
     else:
-        print(f"   ⚠️  WARNING: No token configured (open access)")
+        if AUTH_FAIL_OPEN:
+            print(f"   ⚠️  WARNING: No token configured (fail-open enabled)")
+        else:
+            print(f"   ⚠️  WARNING: No token configured (API auth will deny protected endpoints)")
     
     app.run(
         host=BIND_HOST,

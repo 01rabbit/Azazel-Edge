@@ -8,11 +8,14 @@ import azazel_edge_web.app as webapp
 class OpsCommDemoUiV1Tests(unittest.TestCase):
     def setUp(self) -> None:
         self._orig_load_token = webapp.load_token
+        self._orig_auth_fail_open = webapp.AUTH_FAIL_OPEN
         webapp.load_token = lambda: None
+        webapp.AUTH_FAIL_OPEN = True
         self.client = webapp.app.test_client()
 
     def tearDown(self) -> None:
         webapp.load_token = self._orig_load_token
+        webapp.AUTH_FAIL_OPEN = self._orig_auth_fail_open
 
     def test_ops_comm_renders_demo_runner(self) -> None:
         response = self.client.get("/ops-comm?lang=en")

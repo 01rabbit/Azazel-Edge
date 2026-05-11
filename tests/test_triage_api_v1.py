@@ -13,12 +13,14 @@ class TriageApiV1Tests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self._orig = {
             "load_token": webapp.load_token,
+            "AUTH_FAIL_OPEN": webapp.AUTH_FAIL_OPEN,
             "_TRIAGE_STORE": webapp._TRIAGE_STORE,
             "_TRIAGE_ENGINE": webapp._TRIAGE_ENGINE,
             "TRIAGE_AUDIT_LOG": webapp.TRIAGE_AUDIT_LOG,
             "TRIAGE_AUDIT_FALLBACK_LOG": webapp.TRIAGE_AUDIT_FALLBACK_LOG,
         }
         webapp.load_token = lambda: None
+        webapp.AUTH_FAIL_OPEN = True
         store = TriageSessionStore(base_dir=self.tmp.name)
         audit_path = webapp.Path(self.tmp.name) / "triage-audit.jsonl"
         webapp._TRIAGE_STORE = store
@@ -29,6 +31,7 @@ class TriageApiV1Tests(unittest.TestCase):
 
     def tearDown(self) -> None:
         webapp.load_token = self._orig["load_token"]
+        webapp.AUTH_FAIL_OPEN = self._orig["AUTH_FAIL_OPEN"]
         webapp._TRIAGE_STORE = self._orig["_TRIAGE_STORE"]
         webapp._TRIAGE_ENGINE = self._orig["_TRIAGE_ENGINE"]
         webapp.TRIAGE_AUDIT_LOG = self._orig["TRIAGE_AUDIT_LOG"]

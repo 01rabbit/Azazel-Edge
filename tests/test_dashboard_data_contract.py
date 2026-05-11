@@ -28,6 +28,7 @@ class DashboardDataContractTests(unittest.TestCase):
             "TRIAGE_AUDIT_FALLBACK_LOG": webapp.TRIAGE_AUDIT_FALLBACK_LOG,
             "cp_read_snapshot_payload": webapp.cp_read_snapshot_payload,
             "load_token": webapp.load_token,
+            "AUTH_FAIL_OPEN": webapp.AUTH_FAIL_OPEN,
             "get_monitoring_state": webapp.get_monitoring_state,
             "get_mode_state": webapp.get_mode_state,
             "_mattermost_ping": webapp._mattermost_ping,
@@ -50,6 +51,7 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.TRIAGE_AUDIT_FALLBACK_LOG = root / "triage-audit-fallback.jsonl"
         webapp.cp_read_snapshot_payload = None
         webapp.load_token = lambda: None
+        webapp.AUTH_FAIL_OPEN = True
         webapp.get_monitoring_state = lambda: {
             "suricata": "ON",
             "opencanary": "OFF",
@@ -315,6 +317,7 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.TRIAGE_AUDIT_FALLBACK_LOG = self._orig["TRIAGE_AUDIT_FALLBACK_LOG"]
         webapp.cp_read_snapshot_payload = self._orig["cp_read_snapshot_payload"]
         webapp.load_token = self._orig["load_token"]
+        webapp.AUTH_FAIL_OPEN = self._orig["AUTH_FAIL_OPEN"]
         webapp.get_monitoring_state = self._orig["get_monitoring_state"]
         webapp.get_mode_state = self._orig["get_mode_state"]
         webapp._mattermost_ping = self._orig["_mattermost_ping"]

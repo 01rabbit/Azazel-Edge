@@ -5,6 +5,7 @@ Wants=azazel-edge-ai-agent.service
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/default/azazel-edge-security
 Environment="AZAZEL_EVE_PATH=/var/log/suricata/eve.json"
 Environment="AZAZEL_AI_SOCKET=/run/azazel-edge/ai-bridge.sock"
 Environment="AZAZEL_NORMALIZED_EVENT_LOG=/var/log/azazel-edge/normalized-events.jsonl"

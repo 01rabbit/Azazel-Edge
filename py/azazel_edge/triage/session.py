@@ -11,12 +11,18 @@ from .types import TriageSession
 
 
 TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge/triage-sessions"))
+TRIAGE_SESSION_FALLBACK_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_FALLBACK_DIR", "/tmp/azazel-edge/triage-sessions"))
 
 
 class TriageSessionStore:
     def __init__(self, base_dir: str | Path | None = None):
-        self.base_dir = Path(base_dir) if base_dir else TRIAGE_SESSION_DIR
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        preferred_dir = Path(base_dir) if base_dir else TRIAGE_SESSION_DIR
+        try:
+            preferred_dir.mkdir(parents=True, exist_ok=True)
+            self.base_dir = preferred_dir
+        except OSError:
+            TRIAGE_SESSION_FALLBACK_DIR.mkdir(parents=True, exist_ok=True)
+            self.base_dir = TRIAGE_SESSION_FALLBACK_DIR
 
     def _path_for(self, session_id: str) -> Path:
         return self.base_dir / f"{session_id}.json"
