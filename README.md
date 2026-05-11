@@ -7,6 +7,8 @@
 ![Rust](https://img.shields.io/badge/Rust-Core-000000?logo=rust)
 ![Flask](https://img.shields.io/badge/Flask-Web%20API-000000?logo=flask)
 
+![Azazel-Edge Banner](images/Azazel-Edge_Banner.png)
+
 Azazel-Edge is a Raspberry Pi-oriented edge operations stack that combines:
 - internal network/gateway setup
 - deterministic NOC/SOC evaluation and action selection
