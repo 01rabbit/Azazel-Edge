@@ -1,13 +1,12 @@
 # Azazel-Edge
 
+![Azazel-Edge Banner](images/Azazel-Edge_Banner.png)
 [![CI](https://github.com/01rabbit/Azazel-Edge/actions/workflows/ci.yml/badge.svg)](https://github.com/01rabbit/Azazel-Edge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Platform: Raspberry Pi](https://img.shields.io/badge/Platform-Raspberry%20Pi-C51A4A?logo=raspberry-pi)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-Core-000000?logo=rust)
 ![Flask](https://img.shields.io/badge/Flask-Web%20API-000000?logo=flask)
-
-![Azazel-Edge Banner](images/Azazel-Edge_Banner.png)
 
 Azazel-Edge is a Raspberry Pi-oriented edge operations stack that combines:
 - internal network/gateway setup
