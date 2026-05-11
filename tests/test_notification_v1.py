@@ -13,7 +13,7 @@ if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 
 from azazel_edge.audit import P0AuditLogger
-from azazel_edge.notify import DecisionNotifier, NtfyNotifier
+from azazel_edge.notify import DecisionNotifier, MattermostNotifier, NtfyNotifier, SmtpNotifier, WebhookNotifier
 
 
 class _DummyResponse:
@@ -67,6 +67,67 @@ class NotificationV1Tests(unittest.TestCase):
             )
         self.assertFalse(result['ok'])
         self.assertTrue(result['errors'])
+
+    def test_notifier_uses_failover_order_and_records_attempt_ack(self) -> None:
+        calls = []
+
+        def _fake_urlopen(req, timeout=5):
+            url = str(getattr(req, 'full_url', ''))
+            calls.append(url)
+            if 'mattermost.invalid' in url:
+                raise RuntimeError('mattermost down')
+            return _DummyResponse(202)
+
+        with tempfile.TemporaryDirectory() as tmp, patch('azazel_edge.notify.delivery.urlopen', side_effect=_fake_urlopen):
+            logger = P0AuditLogger(Path(tmp) / 'audit.jsonl')
+            notifier = DecisionNotifier(
+                [
+                    MattermostNotifier('http://mattermost.invalid/hook'),
+                    NtfyNotifier('http://127.0.0.1:8081', 'azazel-alerts'),
+                    WebhookNotifier('http://webhook.invalid/endpoint'),
+                ],
+                logger,
+            )
+            result = notifier.notify(
+                arbiter={'action': 'notify', 'reason': 'soc_high_but_noc_fragile', 'chosen_evidence_ids': ['ev-1']},
+                explanation={'operator_wording': 'Notify operator now.'},
+                target='edge-uplink',
+            )
+            rows = [json.loads(line) for line in (Path(tmp) / 'audit.jsonl').read_text(encoding='utf-8').splitlines()]
+
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['adapter'], 'ntfy')
+        self.assertEqual(result['ack'], 202)
+        self.assertEqual(result['attempts'][0]['adapter'], 'mattermost')
+        self.assertFalse(result['attempts'][0]['ok'])
+        self.assertEqual(result['attempts'][1]['adapter'], 'ntfy')
+        self.assertTrue(result['attempts'][1]['ok'])
+        self.assertEqual(rows[-1]['payload']['attempts'][1]['ack'], 202)
+        self.assertEqual(len(calls), 2)
+
+    def test_smtp_notifier_reports_ack(self) -> None:
+        class _FakeSMTP:
+            def __init__(self, host, port, timeout=5):
+                self.host = host
+                self.port = port
+                self.timeout = timeout
+                self.sent = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def send_message(self, msg):
+                self.sent = True
+
+        with patch('azazel_edge.notify.delivery.smtplib.SMTP', _FakeSMTP):
+            notifier = SmtpNotifier('127.0.0.1', 25, 'azazel@example.local', 'ops@example.local')
+            result = notifier.send({'action': 'notify', 'target': 'edge-uplink', 'reason': 'test', 'evidence_ids': [], 'level': 'warning'})
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['adapter'], 'smtp')
+        self.assertEqual(result['status'], 250)
 
 
 if __name__ == '__main__':
