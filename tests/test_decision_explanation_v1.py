@@ -29,7 +29,7 @@ class DecisionExplanationV1Tests(unittest.TestCase):
             },
             target='gateway',
         )
-        for key in ('why_chosen', 'why_not_others', 'evidence_ids', 'operator_wording', 'machine'):
+        for key in ('why_chosen', 'why_not_others', 'evidence_ids', 'operator_wording', 'machine', 'trust_capsule'):
             self.assertIn(key, result)
 
     def test_operator_wording_contains_action_and_rejected_reasons(self) -> None:

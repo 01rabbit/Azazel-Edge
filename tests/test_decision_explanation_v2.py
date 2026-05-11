@@ -71,6 +71,14 @@ class DecisionExplanationV2Tests(unittest.TestCase):
         self.assertIn('soc_states', result['why_chosen'])
         self.assertEqual(result['why_chosen']['soc_states']['security_visibility_state']['status'], 'partial')
         self.assertIn('SOC triage priority: now', result['operator_wording'])
+        self.assertIn('trust_capsule', result)
+        capsule = result['trust_capsule']
+        self.assertEqual(capsule['trace_id'], 'trace-23')
+        self.assertEqual(capsule['action'], 'redirect')
+        self.assertTrue(capsule['evidence_ids'])
+        self.assertTrue(capsule['hmac_sig'])
+        self.assertTrue(capsule['ai_contributed'])
+        self.assertTrue(capsule['ai_advice_hash'])
 
     def test_explanation_can_be_persisted_as_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -93,6 +101,7 @@ class DecisionExplanationV2Tests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['why_chosen']['action'], 'notify')
         self.assertEqual(rows[0]['evidence_ids'], result['evidence_ids'])
+        self.assertIn('trust_capsule', rows[0])
 
 
 if __name__ == '__main__':

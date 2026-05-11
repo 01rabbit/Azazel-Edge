@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from azazel_edge.knowledge import AttackDefendKnowledge
 from azazel_edge.triage import select_noc_runbook_support
+from .trust_capsule import build_trust_capsule
 
 
 class DecisionExplainer:
@@ -151,6 +152,7 @@ class DecisionExplainer:
                 'arbiter': arbiter,
             },
         }
+        explanation['trust_capsule'] = build_trust_capsule(explanation)
         if persist:
             self.write_jsonl(explanation)
         return explanation
