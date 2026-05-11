@@ -90,6 +90,7 @@ try:
         web_token_candidates,
         warn_if_legacy_path,
     )
+    from azazel_edge.sot import SoTConfig, SoTValidationError
 except Exception:
     cp_read_snapshot_payload = None
     cp_watch_snapshots = None
@@ -121,6 +122,8 @@ except Exception:
     runtime_snapshot_path_candidates = lambda: [Path("/run/azazel-edge/ui_snapshot.json"), Path("/run/azazel-zero/ui_snapshot.json")]  # type: ignore
     web_token_candidates = lambda: [Path.home() / ".azazel-edge" / "web_token.txt", Path.home() / ".azazel-zero" / "web_token.txt"]  # type: ignore
     warn_if_legacy_path = lambda *args, **kwargs: None  # type: ignore
+    SoTConfig = None  # type: ignore
+    SoTValidationError = ValueError  # type: ignore
 
 # Configuration
 _RUNTIME_STATE_PATHS = runtime_snapshot_path_candidates()
@@ -136,6 +139,7 @@ AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-l
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/azazel-edge/runbook-events.jsonl"))
 TRIAGE_AUDIT_LOG = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", "/var/log/azazel-edge/triage-audit.jsonl"))
 TRIAGE_AUDIT_FALLBACK_LOG = Path("/tmp/azazel-edge-triage-audit.jsonl")
+SOT_AUDIT_LOG = Path(os.environ.get("AZAZEL_SOT_AUDIT_LOG", "/var/log/azazel-edge/sot-events.jsonl"))
 TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge/triage-sessions"))
 OPERATOR_PROGRESS_PATH = Path(os.environ.get("AZAZEL_OPERATOR_PROGRESS_PATH", "/run/azazel-edge/operator-progress.json"))
 _TOKEN_FILE_OVERRIDE = str(os.environ.get("AZAZEL_WEB_TOKEN_FILE", "")).strip()
@@ -594,6 +598,100 @@ def _parse_json_dict_lenient(text: str) -> Dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+
+def _default_sot_payload() -> Dict[str, Any]:
+    return {
+        "devices": [],
+        "networks": [],
+        "services": [],
+        "expected_paths": [],
+    }
+
+
+def _sot_candidates() -> List[Path]:
+    candidates: List[Path] = []
+    env_path = str(os.environ.get("AZAZEL_SOT_PATH", "")).strip()
+    if env_path:
+        candidates.append(Path(env_path))
+    for cfg_dir in config_dir_candidates():
+        candidates.append(cfg_dir / "sot.yaml")
+        candidates.append(cfg_dir / "sot.json")
+    deduped: List[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped or [Path("/etc/azazel-edge/sot.yaml")]
+
+
+def _sot_target_path() -> Path:
+    for path in _sot_candidates():
+        if path.exists():
+            return path
+    return _sot_candidates()[0]
+
+
+def _read_sot_payload() -> Tuple[Dict[str, Any], Path]:
+    target = _sot_target_path()
+    if not target.exists():
+        return _default_sot_payload(), target
+    try:
+        if target.suffix.lower() in (".yaml", ".yml"):
+            try:
+                import yaml  # type: ignore
+            except Exception:
+                app.logger.warning("PyYAML is required to read SoT YAML")
+                return _default_sot_payload(), target
+            payload = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+        else:
+            payload = _parse_json_dict_lenient(target.read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+    return payload if isinstance(payload, dict) else _default_sot_payload(), target
+
+
+def _validate_sot_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if SoTConfig is None:
+        raise ValueError("sot_validation_unavailable")
+    return SoTConfig.from_dict(payload).to_dict()
+
+
+def _write_sot_payload(payload: Dict[str, Any], target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    if target.suffix.lower() in (".yaml", ".yml"):
+        try:
+            import yaml  # type: ignore
+        except Exception as exc:
+            raise RuntimeError("yaml_writer_unavailable") from exc
+        tmp.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    else:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(target)
+
+
+def _sot_device_diff(before_devices: List[Dict[str, Any]], after_devices: List[Dict[str, Any]]) -> Dict[str, int]:
+    before_ids = {str(item.get("id") or "").strip() for item in before_devices if isinstance(item, dict)}
+    after_ids = {str(item.get("id") or "").strip() for item in after_devices if isinstance(item, dict)}
+    before_ids.discard("")
+    after_ids.discard("")
+    added = len(after_ids - before_ids)
+    removed = len(before_ids - after_ids)
+    updated = 0
+    before_map = {str(item.get("id")): item for item in before_devices if isinstance(item, dict) and str(item.get("id") or "").strip()}
+    for row in after_devices:
+        if not isinstance(row, dict):
+            continue
+        row_id = str(row.get("id") or "").strip()
+        if not row_id or row_id not in before_map:
+            continue
+        if before_map[row_id] != row:
+            updated += 1
+    return {"added": added, "removed": removed, "updated": updated}
 
 
 def _tail_jsonl(path: Path, limit: int = 20) -> List[Dict[str, Any]]:
@@ -4885,6 +4983,92 @@ def api_clients_trust():
         },
     )
     return jsonify(result), (200 if result.get("ok") else 400)
+
+
+@app.route("/api/sot/devices", methods=["PUT"])
+@require_token()
+def api_sot_devices_put():
+    body = request.get_json(silent=True) or {}
+    devices = body.get("devices")
+    if not isinstance(devices, list):
+        return jsonify({"ok": False, "error": "devices_must_be_list"}), 400
+    current, target = _read_sot_payload()
+    candidate = dict(current)
+    candidate["devices"] = devices
+    try:
+        validated = _validate_sot_payload(candidate)
+    except (SoTValidationError, ValueError) as e:
+        return jsonify({"ok": False, "error": f"invalid_sot:{e}"}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    _write_sot_payload(validated, target)
+    diff = _sot_device_diff(list(current.get("devices") or []), list(validated.get("devices") or []))
+    _append_jsonl(
+        SOT_AUDIT_LOG,
+        {
+            "kind": "sot_devices_replaced",
+            "ts": time.time(),
+            "source": "web_api",
+            "path": str(target),
+            "device_count": len(validated.get("devices") or []),
+            "diff": diff,
+        },
+    )
+    refresh_result = send_control_command("refresh")
+    return jsonify({"ok": True, "path": str(target), "diff": diff, "refresh": refresh_result}), 200
+
+
+@app.route("/api/sot/devices", methods=["PATCH"])
+@require_token()
+def api_sot_devices_patch():
+    body = request.get_json(silent=True) or {}
+    updates = body.get("devices")
+    if not isinstance(updates, list):
+        return jsonify({"ok": False, "error": "devices_must_be_list"}), 400
+    current, target = _read_sot_payload()
+    current_devices = [item for item in list(current.get("devices") or []) if isinstance(item, dict)]
+    merged: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for row in current_devices:
+        row_id = str(row.get("id") or "").strip()
+        if not row_id:
+            continue
+        merged[row_id] = dict(row)
+        order.append(row_id)
+    for row in updates:
+        if not isinstance(row, dict):
+            return jsonify({"ok": False, "error": "device_item_must_be_object"}), 400
+        row_id = str(row.get("id") or "").strip()
+        if not row_id:
+            return jsonify({"ok": False, "error": "device_id_required"}), 400
+        if row_id not in merged:
+            merged[row_id] = {}
+            order.append(row_id)
+        merged[row_id].update(row)
+    candidate = dict(current)
+    candidate["devices"] = [merged[row_id] for row_id in order if row_id in merged]
+    try:
+        validated = _validate_sot_payload(candidate)
+    except (SoTValidationError, ValueError) as e:
+        return jsonify({"ok": False, "error": f"invalid_sot:{e}"}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    _write_sot_payload(validated, target)
+    diff = _sot_device_diff(current_devices, list(validated.get("devices") or []))
+    _append_jsonl(
+        SOT_AUDIT_LOG,
+        {
+            "kind": "sot_devices_patched",
+            "ts": time.time(),
+            "source": "web_api",
+            "path": str(target),
+            "patched_count": len(updates),
+            "device_count": len(validated.get("devices") or []),
+            "diff": diff,
+        },
+    )
+    refresh_result = send_control_command("refresh")
+    return jsonify({"ok": True, "path": str(target), "diff": diff, "refresh": refresh_result}), 200
 
 
 @app.route("/api/runbooks", methods=["GET"])
