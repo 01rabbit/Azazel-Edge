@@ -5,6 +5,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -18,6 +19,9 @@ struct Config {
     forward_ai: bool,
     forward_log: bool,
     defense_enforce: bool,
+    defense_dry_run: bool,
+    defense_iface: String,
+    defense_honeypot_port: u16,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,6 +49,15 @@ struct DefensiveDecision {
     delay_ms: u32,
     should_block: bool,
     should_honeypot: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EnforcementOutcome {
+    mode: String,
+    commands: Vec<String>,
+    executed_count: u32,
+    failed_count: u32,
+    errors: Vec<String>,
 }
 
 fn now_epoch() -> f64 {
@@ -83,6 +96,12 @@ fn load_config() -> Config {
         forward_ai: env_bool("AZAZEL_FORWARD_AI", true),
         forward_log: env_bool("AZAZEL_FORWARD_LOG", true),
         defense_enforce: env_bool("AZAZEL_DEFENSE_ENFORCE", false),
+        defense_dry_run: env_bool("AZAZEL_DEFENSE_DRY_RUN", true),
+        defense_iface: env::var("AZAZEL_DEFENSE_IFACE").unwrap_or_else(|_| "br0".to_string()),
+        defense_honeypot_port: env::var("AZAZEL_DEFENSE_HONEYPOT_PORT")
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(2222),
     }
 }
 
@@ -191,12 +210,156 @@ fn decide_defense(ev: &NormalizedEvent) -> DefensiveDecision {
     }
 }
 
-fn maybe_enforce(_ev: &NormalizedEvent, _decision: &DefensiveDecision, enforce: bool) {
-    if !enforce {
-        return;
+fn shell_quote(raw: &str) -> String {
+    if raw.is_empty() {
+        "''".to_string()
+    } else if raw
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '.' | '_' | '-' | '/'))
+    {
+        raw.to_string()
+    } else {
+        format!("'{}'", raw.replace('\'', "'\\''"))
     }
-    // Enforcement is intentionally disabled by default.
-    // In enforce mode, wire this path to nftables/tc commands.
+}
+
+fn command_to_string(argv: &[String]) -> String {
+    argv.iter()
+        .map(|part| shell_quote(part))
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+fn build_enforcement_commands(
+    ev: &NormalizedEvent,
+    decision: &DefensiveDecision,
+    iface: &str,
+    honeypot_port: u16,
+) -> Vec<Vec<String>> {
+    let mut out: Vec<Vec<String>> = Vec::new();
+
+    if decision.should_block {
+        out.push(vec![
+            "nft".to_string(),
+            "insert".to_string(),
+            "rule".to_string(),
+            "inet".to_string(),
+            "azazel_edge".to_string(),
+            "input".to_string(),
+            "ip".to_string(),
+            "saddr".to_string(),
+            ev.src_ip.clone(),
+            "drop".to_string(),
+        ]);
+    }
+
+    if decision.delay_ms > 0 {
+        out.push(vec![
+            "tc".to_string(),
+            "qdisc".to_string(),
+            "replace".to_string(),
+            "dev".to_string(),
+            iface.to_string(),
+            "root".to_string(),
+            "tbf".to_string(),
+            "rate".to_string(),
+            "256kbit".to_string(),
+            "burst".to_string(),
+            "32kbit".to_string(),
+            "latency".to_string(),
+            format!("{}ms", decision.delay_ms.max(100)),
+        ]);
+    }
+
+    if decision.should_honeypot {
+        out.push(vec![
+            "nft".to_string(),
+            "insert".to_string(),
+            "rule".to_string(),
+            "inet".to_string(),
+            "azazel_edge".to_string(),
+            "prerouting".to_string(),
+            "ip".to_string(),
+            "saddr".to_string(),
+            ev.src_ip.clone(),
+            "tcp".to_string(),
+            "dport".to_string(),
+            ev.target_port.to_string(),
+            "redirect".to_string(),
+            "to".to_string(),
+            honeypot_port.to_string(),
+        ]);
+    }
+
+    out
+}
+
+fn run_command(argv: &[String]) -> Result<(), String> {
+    if argv.is_empty() {
+        return Err("empty command".to_string());
+    }
+    let mut cmd = Command::new(&argv[0]);
+    if argv.len() > 1 {
+        cmd.args(&argv[1..]);
+    }
+    match cmd.status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!(
+            "command failed (exit={}): {}",
+            status.code().map(|v| v.to_string()).unwrap_or_else(|| "signal".to_string()),
+            command_to_string(argv)
+        )),
+        Err(e) => Err(format!("command exec error: {} ({})", e, command_to_string(argv))),
+    }
+}
+
+fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Config) -> EnforcementOutcome {
+    let commands = build_enforcement_commands(ev, decision, &cfg.defense_iface, cfg.defense_honeypot_port);
+    let rendered = commands
+        .iter()
+        .map(|argv| command_to_string(argv))
+        .collect::<Vec<String>>();
+
+    if commands.is_empty() {
+        return EnforcementOutcome {
+            mode: "disabled".to_string(),
+            commands: rendered,
+            executed_count: 0,
+            failed_count: 0,
+            errors: Vec::new(),
+        };
+    }
+
+    if !cfg.defense_enforce || cfg.defense_dry_run {
+        return EnforcementOutcome {
+            mode: "dry_run".to_string(),
+            commands: rendered,
+            executed_count: 0,
+            failed_count: 0,
+            errors: Vec::new(),
+        };
+    }
+
+    let mut executed_count = 0_u32;
+    let mut failed_count = 0_u32;
+    let mut errors: Vec<String> = Vec::new();
+    for cmd in &commands {
+        match run_command(cmd) {
+            Ok(_) => executed_count += 1,
+            Err(e) => {
+                failed_count += 1;
+                errors.push(e);
+            }
+        }
+    }
+
+    EnforcementOutcome {
+        mode: "enforced".to_string(),
+        commands: rendered,
+        executed_count,
+        failed_count,
+        errors,
+    }
 }
 
 fn append_json_line(path: &str, value: &Value) {
@@ -228,11 +391,12 @@ fn process_line(cfg: &Config, line: &str) {
     };
 
     let decision = decide_defense(&normalized);
-    maybe_enforce(&normalized, &decision, cfg.defense_enforce);
+    let enforcement = maybe_enforce(&normalized, &decision, cfg);
 
     let event = json!({
         "normalized": normalized,
         "defense": decision,
+        "enforcement": enforcement,
         "source": "suricata_eve",
         "pipeline": "rust_event_engine_v1",
     });
@@ -301,12 +465,82 @@ fn main() {
     };
 
     eprintln!(
-        "azazel-edge-core started: eve_path={}, ai_socket={}, from_start={}, poll_ms={}",
-        cfg.eve_path, cfg.ai_socket_path, cfg.from_start, cfg.poll_ms
+        "azazel-edge-core started: eve_path={}, ai_socket={}, from_start={}, poll_ms={}, defense_enforce={}, defense_dry_run={}, defense_iface={}, honeypot_port={}",
+        cfg.eve_path,
+        cfg.ai_socket_path,
+        cfg.from_start,
+        cfg.poll_ms,
+        cfg.defense_enforce,
+        cfg.defense_dry_run,
+        cfg.defense_iface,
+        cfg.defense_honeypot_port
     );
 
     loop {
         read_new_lines(&cfg, &mut offset);
         thread::sleep(Duration::from_millis(cfg.poll_ms));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_event() -> NormalizedEvent {
+        NormalizedEvent {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            src_ip: "10.0.0.8".to_string(),
+            dst_ip: "10.0.0.1".to_string(),
+            attack_type: "test".to_string(),
+            severity: 1,
+            target_port: 443,
+            protocol: "tcp".to_string(),
+            sid: 9999,
+            category: "test".to_string(),
+            event_type: "alert".to_string(),
+            action: "allowed".to_string(),
+            confidence: 90,
+            risk_score: 90,
+            ingest_epoch: 0.0,
+        }
+    }
+
+    #[test]
+    fn build_enforcement_commands_for_critical_event() {
+        let ev = sample_event();
+        let decision = decide_defense(&ev);
+        let commands = build_enforcement_commands(&ev, &decision, "br0", 2222);
+        assert!(!commands.is_empty());
+        let flat = commands
+            .iter()
+            .map(|c| c.join(" "))
+            .collect::<Vec<String>>()
+            .join("\n");
+        assert!(flat.contains("nft"));
+        assert!(flat.contains("redirect"));
+    }
+
+    #[test]
+    fn maybe_enforce_is_dry_run_when_enforce_is_false() {
+        let ev = sample_event();
+        let decision = decide_defense(&ev);
+        let cfg = Config {
+            eve_path: "".to_string(),
+            ai_socket_path: "".to_string(),
+            normalized_log_path: "".to_string(),
+            from_start: false,
+            poll_ms: 100,
+            forward_ai: false,
+            forward_log: false,
+            defense_enforce: false,
+            defense_dry_run: true,
+            defense_iface: "br0".to_string(),
+            defense_honeypot_port: 2222,
+        };
+        let outcome = maybe_enforce(&ev, &decision, &cfg);
+        assert_eq!(outcome.mode, "dry_run");
+        assert_eq!(outcome.executed_count, 0);
+        assert_eq!(outcome.failed_count, 0);
+        assert!(!outcome.commands.is_empty());
     }
 }
