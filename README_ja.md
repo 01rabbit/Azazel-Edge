@@ -105,8 +105,9 @@ optional AI assist path | 任意の AI 補助経路
 
 ### 認証挙動
 - 多くの `/api/*` エンドポイントはトークン検証あり。
-- ただし token file が無い場合は `verify_token()` が通過させる実装。
-- token 候補には `~/.azazel-edge/web_token.txt` を含む（`web_token_candidates()` 参照）。
+- installer 管理ランタイムでは `AZAZEL_AUTH_FAIL_OPEN=0` を既定とし、fail-closed 運用。
+- token file 不在時の互換 fail-open は `AZAZEL_AUTH_FAIL_OPEN` で制御。
+- 管理時の token file は `AZAZEL_WEB_TOKEN_FILE` 経由で `/etc/azazel-edge/web_token.txt`。
 
 ## 機能トレーサビリティ
 
@@ -316,6 +317,8 @@ PYTHONPATH=. .venv/bin/pytest -q
 - [M.I.O. persona profile](docs/MIO_PERSONA_PROFILE.md)
 - [Demo guide](docs/DEMO_GUIDE.md)
 - [Demo guide (Japanese)](docs/DEMO_GUIDE_JA.md)
+- [Post-demo main integration boundary (#104)](docs/POST_DEMO_MAIN_INTEGRATION_104.md)
+- [Post-demo socket permission model (#105)](docs/POST_DEMO_SOCKET_PERMISSION_MODEL_105.md)
 
 ## 制約
 

@@ -105,8 +105,9 @@ Evidence:
 
 ### Authentication behavior
 - Most `/api/*` endpoints are token-protected.
-- If token file is absent, token checks are bypassed (`verify_token()` in `azazel_edge_web/app.py`).
-- Token file candidates include `~/.azazel-edge/web_token.txt` (see `web_token_candidates()` usage).
+- Installer-managed runtime sets fail-closed by default (`AZAZEL_AUTH_FAIL_OPEN=0`).
+- Legacy fail-open compatibility is controlled by `AZAZEL_AUTH_FAIL_OPEN` when token file is absent.
+- Managed default token file is `/etc/azazel-edge/web_token.txt` via `AZAZEL_WEB_TOKEN_FILE`.
 
 ## Feature Traceability
 
@@ -316,6 +317,8 @@ Latest verified result (2026-03-15): **183 passed in 3.57s**
 - [M.I.O. persona profile](docs/MIO_PERSONA_PROFILE.md)
 - [Demo guide](docs/DEMO_GUIDE.md)
 - [Demo guide (Japanese)](docs/DEMO_GUIDE_JA.md)
+- [Post-demo main integration boundary (#104)](docs/POST_DEMO_MAIN_INTEGRATION_104.md)
+- [Post-demo socket permission model (#105)](docs/POST_DEMO_SOCKET_PERMISSION_MODEL_105.md)
 
 ## Limitations
 

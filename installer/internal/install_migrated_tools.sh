@@ -133,6 +133,7 @@ install -m 0644 "$REPO_ROOT/azazel_edge_web/static/app.js" /opt/azazel-edge/azaz
 install -m 0644 "$REPO_ROOT/azazel_edge_web/static/ops_comm.js" /opt/azazel-edge/azazel_edge_web/static/ops_comm.js
 install -m 0644 "$REPO_ROOT/azazel_edge_web/static/ops_comm.css" /opt/azazel-edge/azazel_edge_web/static/ops_comm.css
 install -m 0644 "$REPO_ROOT/azazel_edge_web/static/style.css" /opt/azazel-edge/azazel_edge_web/static/style.css
+install -m 0644 "$REPO_ROOT/azazel_edge_web/templates/demo.html" /opt/azazel-edge/azazel_edge_web/templates/demo.html
 install -m 0644 "$REPO_ROOT/azazel_edge_web/templates/index.html" /opt/azazel-edge/azazel_edge_web/templates/index.html
 install -m 0644 "$REPO_ROOT/azazel_edge_web/templates/ops_comm.html" /opt/azazel-edge/azazel_edge_web/templates/ops_comm.html
 install -m 0644 "$REPO_ROOT/py/azazel_edge_menu.py" /opt/azazel-edge/py/azazel_edge_menu.py
@@ -167,6 +168,7 @@ install -m 0755 "$REPO_ROOT/bin/azazel-edge-inject-test-events" /usr/local/bin/a
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-demo" /usr/local/bin/azazel-edge-demo
 install -m 0755 "$REPO_ROOT/installer/internal/set_dev_remote_access.sh" /opt/azazel-edge/set_dev_remote_access.sh
 install -m 0755 "$REPO_ROOT/installer/internal/install_ai_runtime.sh" /opt/azazel-edge/install_ai_runtime.sh
+install -m 0755 "$REPO_ROOT/installer/internal/provision_web_token.sh" /opt/azazel-edge/provision_web_token.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_workspace.sh" /opt/azazel-edge/provision_mattermost_workspace.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_command.sh" /opt/azazel-edge/provision_mattermost_command.sh
 install -m 0755 "$REPO_ROOT/installer/internal/verify_runtime_sync.sh" /opt/azazel-edge/verify_runtime_sync.sh
@@ -185,6 +187,29 @@ systemctl daemon-reload
 
 echo "[11/16] Prepare runtime/config paths"
 install -d /etc/azazel-edge /var/log/azazel-edge /run/azazel-edge
+WEB_ENV="/etc/default/azazel-edge-web"
+touch "$WEB_ENV"
+if ! grep -q '^AZAZEL_WEB_TOKEN_FILE=' "$WEB_ENV"; then
+  echo 'AZAZEL_WEB_TOKEN_FILE=/etc/azazel-edge/web_token.txt' >> "$WEB_ENV"
+fi
+if ! grep -q '^AZAZEL_AUTH_FAIL_OPEN=' "$WEB_ENV"; then
+  echo 'AZAZEL_AUTH_FAIL_OPEN=0' >> "$WEB_ENV"
+fi
+/opt/azazel-edge/provision_web_token.sh
+SECURITY_ENV="/etc/default/azazel-edge-security"
+touch "$SECURITY_ENV"
+if ! grep -q '^AZAZEL_RUNTIME_DIR_MODE=' "$SECURITY_ENV"; then
+  echo 'AZAZEL_RUNTIME_DIR_MODE=0770' >> "$SECURITY_ENV"
+fi
+if ! grep -q '^AZAZEL_CONTROL_SOCKET_MODE=' "$SECURITY_ENV"; then
+  echo 'AZAZEL_CONTROL_SOCKET_MODE=0660' >> "$SECURITY_ENV"
+fi
+if ! grep -q '^AZAZEL_AI_SOCKET_MODE=' "$SECURITY_ENV"; then
+  echo 'AZAZEL_AI_SOCKET_MODE=0660' >> "$SECURITY_ENV"
+fi
+if ! grep -q '^AZAZEL_RUNTIME_SOCKET_GROUP=' "$SECURITY_ENV"; then
+  echo 'AZAZEL_RUNTIME_SOCKET_GROUP=' >> "$SECURITY_ENV"
+fi
 if [[ ! -f /run/azazel-edge/ui_snapshot.json ]]; then
   cat > /run/azazel-edge/ui_snapshot.json <<'EOD'
 {"now_time":"","ssid":"-","user_state":"CHECKING","recommendation":"Initializing","evidence":[],"snapshot_epoch":0}

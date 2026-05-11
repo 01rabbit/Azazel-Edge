@@ -1,4 +1,4 @@
-const AUTH_TOKEN = localStorage.getItem('azazel_token') || 'azazel-default-token-change-me';
+const AUTH_TOKEN = String(localStorage.getItem('azazel_token') || '').trim();
 const LANG_KEY = 'azazel_lang';
 const PROGRESS_SESSION_KEY = 'azazel_operator_progress_session';
 const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
@@ -139,11 +139,14 @@ function renderShortcuts() {
 }
 
 function authHeaders() {
-    return {
+    const headers = {
         'Content-Type': 'application/json',
-        'X-Auth-Token': AUTH_TOKEN,
         'X-AZAZEL-LANG': CURRENT_LANG,
     };
+    if (AUTH_TOKEN) {
+        headers['X-Auth-Token'] = AUTH_TOKEN;
+    }
+    return headers;
 }
 
 function setText(id, text) {

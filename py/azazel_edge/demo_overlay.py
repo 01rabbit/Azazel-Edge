@@ -75,7 +75,13 @@ def _is_overlay_invalid(payload: Dict[str, Any]) -> bool:
         return True
     boot_id = str(payload.get("boot_id") or "").strip()
     current_boot_id = _current_boot_id()
-    if not boot_id or not current_boot_id:
+    # When boot ID cannot be read on this platform/environment, accept only
+    # overlays that also omit boot_id. If boot_id is present we cannot verify
+    # it, so treat it as invalid.
+    if not current_boot_id:
+        return bool(boot_id)
+    # If we can read current boot ID, require overlays to carry one.
+    if not boot_id:
         return True
     return boot_id != current_boot_id
 

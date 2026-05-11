@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/default/azazel-edge-security
 ExecStart=/usr/local/bin/azazel-edge-control-daemon
 Restart=always
 RestartSec=3

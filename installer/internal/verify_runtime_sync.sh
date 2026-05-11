@@ -20,6 +20,7 @@ azazel_edge_web/static/app.js
 azazel_edge_web/static/ops_comm.js
 azazel_edge_web/static/ops_comm.css
 azazel_edge_web/static/style.css
+azazel_edge_web/templates/demo.html
 azazel_edge_web/templates/index.html
 azazel_edge_web/templates/ops_comm.html
 py/azazel_edge/__init__.py

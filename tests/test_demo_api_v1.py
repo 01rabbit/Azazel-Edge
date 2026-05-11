@@ -16,6 +16,7 @@ class DemoApiV1Tests(unittest.TestCase):
         root = Path(self.tmp.name)
         self._orig = {
             "load_token": webapp.load_token,
+            "AUTH_FAIL_OPEN": webapp.AUTH_FAIL_OPEN,
             "_run_demo_runner": webapp._run_demo_runner,
             "STATE_PATH": webapp.STATE_PATH,
             "EPD_LAST_RENDER_PATH": webapp.EPD_LAST_RENDER_PATH,
@@ -26,6 +27,7 @@ class DemoApiV1Tests(unittest.TestCase):
             "_trigger_demo_clear_side_effects": webapp._trigger_demo_clear_side_effects,
         }
         webapp.load_token = lambda: None
+        webapp.AUTH_FAIL_OPEN = True
         webapp.STATE_PATH = root / "ui_snapshot.json"
         webapp.STATE_PATH.write_text(json.dumps({"ok": True}), encoding="utf-8")
         webapp.EPD_LAST_RENDER_PATH = root / "epd_last_render.json"
@@ -37,6 +39,7 @@ class DemoApiV1Tests(unittest.TestCase):
 
     def tearDown(self) -> None:
         webapp.load_token = self._orig["load_token"]
+        webapp.AUTH_FAIL_OPEN = self._orig["AUTH_FAIL_OPEN"]
         webapp._run_demo_runner = self._orig["_run_demo_runner"]
         webapp.STATE_PATH = self._orig["STATE_PATH"]
         webapp.EPD_LAST_RENDER_PATH = self._orig["EPD_LAST_RENDER_PATH"]

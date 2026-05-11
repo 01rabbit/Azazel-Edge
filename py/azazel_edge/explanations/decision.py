@@ -12,7 +12,11 @@ from azazel_edge.triage import select_noc_runbook_support
 class DecisionExplainer:
     def __init__(self, output_path: str | Path = '/var/log/azazel-edge/decision-explanations.jsonl'):
         self.output_path = Path(output_path)
-        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            self.output_path = Path("/tmp/azazel-edge/decision-explanations.jsonl")
+            self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.knowledge = AttackDefendKnowledge()
 
     def explain(
