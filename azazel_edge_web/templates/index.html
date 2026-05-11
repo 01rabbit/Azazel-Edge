@@ -801,6 +801,19 @@
             </section>
 
             <aside class="assistant-rail">
+                <section class="panel topolite-nav-panel" id="topoliteNavPanel">
+                    <div class="panel-heading">
+                        <div>
+                            <div class="panel-kicker">Topo-Lite</div>
+                            <h2>Single-Screen Triage</h2>
+                        </div>
+                    </div>
+                    <nav class="topolite-nav-links" aria-label="Topo-Lite Sections">
+                        <a class="topolite-nav-link" href="#topoliteSingleScreen">Overview</a>
+                        <a class="topolite-nav-link" href="#topoliteTopologyCard">Topology</a>
+                        <a class="topolite-nav-link" href="#topoliteTimelineCard">Timeline</a>
+                    </nav>
+                </section>
                 <section class="panel assistant-panel" id="assistantPanel">
                     <div class="panel-heading assistant-heading">
                         <div class="assistant-title-row">
@@ -879,6 +892,35 @@
 
             </aside>
         </div>
+
+        <section class="panel topolite-single-screen pro-only" id="topoliteSingleScreen">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">Topo-Lite</div>
+                    <h2>Visual triage in one screen</h2>
+                </div>
+                <div class="panel-note" id="topoliteSingleScreenSummary">Waiting for topology/timeline synthesis.</div>
+            </div>
+            <div class="topolite-single-grid">
+                <article class="evidence-card">
+                    <div class="card-kicker">Overview</div>
+                    <div class="topolite-badge-row" id="topoliteBadgeRow">
+                        <span class="topolite-badge" id="topoliteThreatBadge">THREAT:-</span>
+                        <span class="topolite-badge" id="topolitePathBadge">PATH:-</span>
+                        <span class="topolite-badge" id="topoliteActionBadge">ACTION:-</span>
+                    </div>
+                    <ul class="timeline-list" id="topoliteOverviewList"></ul>
+                </article>
+                <article class="evidence-card" id="topoliteTopologyCard">
+                    <div class="card-kicker">Topology</div>
+                    <ul class="timeline-list" id="topoliteTopologyTimeline"></ul>
+                </article>
+                <article class="evidence-card" id="topoliteTimelineCard">
+                    <div class="card-kicker">Timeline</div>
+                    <ul class="timeline-list" id="topoliteIncidentTimeline"></ul>
+                </article>
+            </div>
+        </section>
 
         <section class="panel evidence-board evidence-board-lowered pro-only">
             <div class="panel-heading">
