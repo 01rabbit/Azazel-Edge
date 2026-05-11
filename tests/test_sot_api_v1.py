@@ -105,6 +105,7 @@ class SotApiV1Tests(unittest.TestCase):
                     }
                 ]
             },
+            headers={"X-AZAZEL-ACTOR": "operator:alice"},
         )
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
@@ -118,6 +119,8 @@ class SotApiV1Tests(unittest.TestCase):
 
         rows = [json.loads(line) for line in self.audit_path.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(rows[-1]["kind"], "sot_devices_replaced")
+        self.assertEqual(rows[-1]["actor"], "operator:alice")
+        self.assertIn("remote_addr", rows[-1])
 
     def test_patch_merges_existing_device(self) -> None:
         response = self.client.patch(

@@ -93,6 +93,7 @@ optional AI assist path | 任意の AI 補助経路
 ### 主要 API 群
 - state/stream: `/api/state`, `/api/state/stream`
 - control/mode/action: `/api/mode`, `/api/action`, `/api/wifi/*`, `/api/portal-viewer*`
+- SoT 更新: `POST /api/clients/trust`, `PUT/PATCH /api/sot/devices`
 - dashboard: `/api/dashboard/*`
 - triage: `/api/triage/*`
 - runbooks: `/api/runbooks*`
@@ -224,6 +225,20 @@ sudo systemctl status \
 TOKEN="$(cat ~/.azazel-edge/web_token.txt)"
 curl -sS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/state | jq .
 ```
+
+### SoT devices API 契約
+- `PUT /api/sot/devices`
+  - SoT の `devices` 配列を全置換します。
+  - リクエスト: `{"devices": [<SoT device object>]}`。
+- `PATCH /api/sot/devices`
+  - `id` 単位の merge/upsert（削除セマンティクスなし）。
+  - 既存フィールドは、payload で上書きした項目以外は保持されます。
+  - リクエスト: `{"devices": [<id を含む partial/full SoT device object>]}`。
+- 両エンドポイント共通:
+  - token 認証が必要（`@require_token()`）。
+  - 更新後の SoT 全体を `SoTConfig.from_dict` で検証。
+  - `AZAZEL_SOT_AUDIT_LOG` に監査ログを記録（`actor` は `X-AZAZEL-ACTOR` 優先、次に接続元アドレス）。
+  - 更新成功時に `refresh` を実行して再評価をトリガー。
 
 ### 決定論デモ
 

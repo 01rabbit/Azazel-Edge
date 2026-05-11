@@ -93,6 +93,7 @@ Evidence:
 ### Primary API groups
 - state/stream: `/api/state`, `/api/state/stream`
 - control/mode/action: `/api/mode`, `/api/action`, `/api/wifi/*`, `/api/portal-viewer*`
+- SoT updates: `POST /api/clients/trust`, `PUT/PATCH /api/sot/devices`
 - dashboard views: `/api/dashboard/*`
 - triage: `/api/triage/*`
 - runbooks: `/api/runbooks*`
@@ -224,6 +225,20 @@ sudo systemctl status \
 TOKEN="$(cat ~/.azazel-edge/web_token.txt)"
 curl -sS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/state | jq .
 ```
+
+### SoT devices API contract
+- `PUT /api/sot/devices`
+  - Replaces the full `devices` array in SoT.
+  - Request body: `{"devices": [<SoT device objects>]}`.
+- `PATCH /api/sot/devices`
+  - Merge/upsert semantics by `id` only (no delete behavior).
+  - Existing device fields are preserved unless overwritten by payload fields.
+  - Request body: `{"devices": [<partial or full SoT device objects with id>]}`.
+- Both endpoints:
+  - Require token auth (`@require_token()`).
+  - Validate resulting full SoT via `SoTConfig.from_dict`.
+  - Append audit records to `AZAZEL_SOT_AUDIT_LOG` including `actor` (`X-AZAZEL-ACTOR` preferred, then caller address).
+  - Trigger re-evaluation through `refresh` after successful updates.
 
 ### Deterministic demo replay
 

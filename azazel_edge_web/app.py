@@ -694,6 +694,21 @@ def _sot_device_diff(before_devices: List[Dict[str, Any]], after_devices: List[D
     return {"added": added, "removed": removed, "updated": updated}
 
 
+def _request_actor() -> Dict[str, str]:
+    actor = (
+        str(request.headers.get("X-AZAZEL-ACTOR") or "").strip()
+        or str(request.headers.get("X-Forwarded-User") or "").strip()
+        or str(request.headers.get("X-Auth-User") or "").strip()
+        or str(request.remote_addr or "").strip()
+        or "unknown"
+    )
+    return {
+        "actor": actor[:96],
+        "remote_addr": str(request.remote_addr or "").strip(),
+        "user_agent": str(request.headers.get("User-Agent") or "").strip()[:180],
+    }
+
+
 def _tail_jsonl(path: Path, limit: int = 20) -> List[Dict[str, Any]]:
     rows: deque[Dict[str, Any]] = deque(maxlen=max(1, int(limit)))
     try:
@@ -5003,12 +5018,14 @@ def api_sot_devices_put():
         return jsonify({"ok": False, "error": str(e)}), 500
     _write_sot_payload(validated, target)
     diff = _sot_device_diff(list(current.get("devices") or []), list(validated.get("devices") or []))
+    actor = _request_actor()
     _append_jsonl(
         SOT_AUDIT_LOG,
         {
             "kind": "sot_devices_replaced",
             "ts": time.time(),
             "source": "web_api",
+            **actor,
             "path": str(target),
             "device_count": len(validated.get("devices") or []),
             "diff": diff,
@@ -5055,12 +5072,14 @@ def api_sot_devices_patch():
         return jsonify({"ok": False, "error": str(e)}), 500
     _write_sot_payload(validated, target)
     diff = _sot_device_diff(current_devices, list(validated.get("devices") or []))
+    actor = _request_actor()
     _append_jsonl(
         SOT_AUDIT_LOG,
         {
             "kind": "sot_devices_patched",
             "ts": time.time(),
             "source": "web_api",
+            **actor,
             "path": str(target),
             "patched_count": len(updates),
             "device_count": len(validated.get("devices") or []),
