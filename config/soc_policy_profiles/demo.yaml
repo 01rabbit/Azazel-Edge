@@ -1,0 +1,27 @@
+version: soc-policy-demo-v1
+notes: Demo profile for visible deterministic transitions in exhibition mode.
+
+action_mapping:
+  strong_soc:
+    confidence_min: 50
+  throttle:
+    confidence_min: 55
+    blast_min: 35
+  redirect:
+    suspicion_min: 85
+    confidence_min: 75
+    blast_min: 60
+  isolate:
+    suspicion_min: 92
+    confidence_min: 85
+    blast_min: 70
+
+suppression_defaults:
+  src_ips: []
+  dst_ips: []
+  sid: []
+  attack_types: []
+  categories: []
+  expected_scanners: []
+  lab_segments: []
+  maintenance_windows: []

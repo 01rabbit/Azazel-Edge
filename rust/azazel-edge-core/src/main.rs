@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::fs::{self, File, OpenOptions};
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -20,6 +22,9 @@ struct Config {
     forward_log: bool,
     defense_enforce: bool,
     defense_dry_run: bool,
+    defense_enforce_level: String,
+    defense_action_ttl_sec: u64,
+    defense_allow_high_impact_auto: bool,
     defense_iface: String,
     defense_honeypot_port: u16,
 }
@@ -44,20 +49,44 @@ struct NormalizedEvent {
 
 #[derive(Debug, Clone, Serialize)]
 struct DefensiveDecision {
-    decision: String,
+    action: String,
     reason: String,
+    policy_reason: String,
     delay_ms: u32,
-    should_block: bool,
-    should_honeypot: bool,
+    target: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EnforcementPlan {
+    action: String,
+    target: String,
+    apply_commands: Vec<String>,
+    rollback_commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EnforcementStatus {
+    enforce_enabled: bool,
+    enforce_level: String,
+    dry_run: bool,
+    high_impact_auto: bool,
+    allowed_actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct EnforcementOutcome {
     mode: String,
-    commands: Vec<String>,
+    trace_id: String,
+    selected_action: String,
+    target: String,
+    policy_reason: String,
+    command_plan: Vec<String>,
+    rollback_plan: Vec<String>,
     executed_count: u32,
     failed_count: u32,
     errors: Vec<String>,
+    rollback_hint: String,
+    result: String,
 }
 
 fn now_epoch() -> f64 {
@@ -97,6 +126,12 @@ fn load_config() -> Config {
         forward_log: env_bool("AZAZEL_FORWARD_LOG", true),
         defense_enforce: env_bool("AZAZEL_DEFENSE_ENFORCE", false),
         defense_dry_run: env_bool("AZAZEL_DEFENSE_DRY_RUN", true),
+        defense_enforce_level: env::var("AZAZEL_DEFENSE_ENFORCE_LEVEL").unwrap_or_else(|_| "advisory".to_string()),
+        defense_action_ttl_sec: env::var("AZAZEL_DEFENSE_ACTION_TTL_SEC")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(300),
+        defense_allow_high_impact_auto: env_bool("AZAZEL_DEFENSE_ALLOW_HIGH_IMPACT_AUTO", false),
         defense_iface: env::var("AZAZEL_DEFENSE_IFACE").unwrap_or_else(|_| "br0".to_string()),
         defense_honeypot_port: env::var("AZAZEL_DEFENSE_HONEYPOT_PORT")
             .ok()
@@ -112,60 +147,24 @@ fn build_normalized_event(v: &Value) -> Option<NormalizedEvent> {
     }
 
     let alert = v.get("alert").and_then(|x| x.as_object())?;
-    let severity = alert
-        .get("severity")
-        .and_then(|x| x.as_u64())
-        .unwrap_or(3)
-        .min(10) as u8;
+    let severity = alert.get("severity").and_then(|x| x.as_u64()).unwrap_or(3).min(10) as u8;
     let sid = alert.get("sid").and_then(|x| x.as_u64()).unwrap_or(0);
-    let attack_type = alert
-        .get("signature")
-        .and_then(|x| x.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let category = alert
-        .get("category")
-        .and_then(|x| x.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let attack_type = alert.get("signature").and_then(|x| x.as_str()).unwrap_or("unknown").to_string();
+    let category = alert.get("category").and_then(|x| x.as_str()).unwrap_or("unknown").to_string();
 
-    let dst_port = v
-        .get("dest_port")
-        .and_then(|x| x.as_u64())
-        .unwrap_or(0)
-        .min(u16::MAX as u64) as u16;
+    let dst_port = v.get("dest_port").and_then(|x| x.as_u64()).unwrap_or(0).min(u16::MAX as u64) as u16;
 
-    let protocol = v
-        .get("proto")
-        .and_then(|x| x.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let protocol = v.get("proto").and_then(|x| x.as_str()).unwrap_or("unknown").to_string();
 
-    let action = alert
-        .get("action")
-        .and_then(|x| x.as_str())
-        .unwrap_or("allowed")
-        .to_string();
+    let action = alert.get("action").and_then(|x| x.as_str()).unwrap_or("allowed").to_string();
 
     let risk_score = ((11_u16.saturating_sub(severity as u16)) * 9).min(100) as u8;
     let confidence = if sid > 0 { 90 } else { 50 };
 
     Some(NormalizedEvent {
-        ts: v
-            .get("timestamp")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string(),
-        src_ip: v
-            .get("src_ip")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string(),
-        dst_ip: v
-            .get("dest_ip")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string(),
+        ts: v.get("timestamp").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        src_ip: v.get("src_ip").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        dst_ip: v.get("dest_ip").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         attack_type,
         severity,
         target_port: dst_port,
@@ -183,40 +182,53 @@ fn build_normalized_event(v: &Value) -> Option<NormalizedEvent> {
 fn decide_defense(ev: &NormalizedEvent) -> DefensiveDecision {
     if ev.severity <= 1 {
         return DefensiveDecision {
-            decision: "block_and_honeypot".to_string(),
+            action: "isolate".to_string(),
             reason: format!("critical severity sid={}", ev.sid),
+            policy_reason: "severity_critical_contains_immediately".to_string(),
             delay_ms: 0,
-            should_block: true,
-            should_honeypot: true,
+            target: ev.src_ip.clone(),
         };
     }
-
     if ev.severity <= 2 {
         return DefensiveDecision {
-            decision: "delay_and_observe".to_string(),
+            action: "redirect".to_string(),
             reason: format!("high severity sid={}", ev.sid),
+            policy_reason: "severity_high_redirect_to_decoy".to_string(),
             delay_ms: 800,
-            should_block: false,
-            should_honeypot: true,
+            target: format!("{}:{}", ev.src_ip, ev.target_port),
         };
     }
-
+    if ev.severity == 3 {
+        return DefensiveDecision {
+            action: "throttle".to_string(),
+            reason: format!("elevated severity sid={}", ev.sid),
+            policy_reason: "severity_elevated_throttle_reversible".to_string(),
+            delay_ms: 1000,
+            target: ev.src_ip.clone(),
+        };
+    }
+    if ev.severity == 4 {
+        return DefensiveDecision {
+            action: "notify".to_string(),
+            reason: format!("moderate severity sid={}", ev.sid),
+            policy_reason: "severity_moderate_operator_notification".to_string(),
+            delay_ms: 0,
+            target: ev.src_ip.clone(),
+        };
+    }
     DefensiveDecision {
-        decision: "observe".to_string(),
+        action: "observe".to_string(),
         reason: "normal baseline telemetry".to_string(),
+        policy_reason: "baseline_observe_only".to_string(),
         delay_ms: 0,
-        should_block: false,
-        should_honeypot: false,
+        target: ev.src_ip.clone(),
     }
 }
 
 fn shell_quote(raw: &str) -> String {
     if raw.is_empty() {
         "''".to_string()
-    } else if raw
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '.' | '_' | '-' | '/'))
-    {
+    } else if raw.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '.' | '_' | '-' | '/')) {
         raw.to_string()
     } else {
         format!("'{}'", raw.replace('\'', "'\\''"))
@@ -224,74 +236,58 @@ fn shell_quote(raw: &str) -> String {
 }
 
 fn command_to_string(argv: &[String]) -> String {
-    argv.iter()
-        .map(|part| shell_quote(part))
-        .collect::<Vec<String>>()
-        .join(" ")
+    argv.iter().map(|part| shell_quote(part)).collect::<Vec<String>>().join(" ")
 }
 
-fn build_enforcement_commands(
-    ev: &NormalizedEvent,
-    decision: &DefensiveDecision,
-    iface: &str,
-    honeypot_port: u16,
-) -> Vec<Vec<String>> {
-    let mut out: Vec<Vec<String>> = Vec::new();
+fn parse_shell_words(line: &str) -> Vec<String> {
+    line.split_whitespace().map(|s| s.to_string()).collect::<Vec<String>>()
+}
 
-    if decision.should_block {
-        out.push(vec![
-            "nft".to_string(),
-            "insert".to_string(),
-            "rule".to_string(),
-            "inet".to_string(),
-            "azazel_edge".to_string(),
-            "input".to_string(),
-            "ip".to_string(),
-            "saddr".to_string(),
-            ev.src_ip.clone(),
-            "drop".to_string(),
+fn build_enforcement_plan(ev: &NormalizedEvent, decision: &DefensiveDecision, iface: &str, honeypot_port: u16) -> EnforcementPlan {
+    let mut apply: Vec<Vec<String>> = Vec::new();
+    let mut rollback: Vec<Vec<String>> = Vec::new();
+
+    if decision.action == "isolate" {
+        apply.push(vec![
+            "nft".to_string(), "insert".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+            "input".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "drop".to_string(),
+        ]);
+        rollback.push(vec![
+            "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+            "input".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "drop".to_string(),
         ]);
     }
 
-    if decision.delay_ms > 0 {
-        out.push(vec![
-            "tc".to_string(),
-            "qdisc".to_string(),
-            "replace".to_string(),
-            "dev".to_string(),
-            iface.to_string(),
-            "root".to_string(),
-            "tbf".to_string(),
-            "rate".to_string(),
-            "256kbit".to_string(),
-            "burst".to_string(),
-            "32kbit".to_string(),
-            "latency".to_string(),
-            format!("{}ms", decision.delay_ms.max(100)),
+    if decision.action == "throttle" {
+        apply.push(vec![
+            "tc".to_string(), "qdisc".to_string(), "replace".to_string(), "dev".to_string(), iface.to_string(), "root".to_string(),
+            "tbf".to_string(), "rate".to_string(), "256kbit".to_string(), "burst".to_string(), "32kbit".to_string(),
+            "latency".to_string(), format!("{}ms", decision.delay_ms.max(100)),
+        ]);
+        rollback.push(vec![
+            "tc".to_string(), "qdisc".to_string(), "del".to_string(), "dev".to_string(), iface.to_string(), "root".to_string(),
         ]);
     }
 
-    if decision.should_honeypot {
-        out.push(vec![
-            "nft".to_string(),
-            "insert".to_string(),
-            "rule".to_string(),
-            "inet".to_string(),
-            "azazel_edge".to_string(),
-            "prerouting".to_string(),
-            "ip".to_string(),
-            "saddr".to_string(),
-            ev.src_ip.clone(),
-            "tcp".to_string(),
-            "dport".to_string(),
-            ev.target_port.to_string(),
-            "redirect".to_string(),
-            "to".to_string(),
-            honeypot_port.to_string(),
+    if decision.action == "redirect" {
+        apply.push(vec![
+            "nft".to_string(), "insert".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+            "prerouting".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "tcp".to_string(),
+            "dport".to_string(), ev.target_port.to_string(), "redirect".to_string(), "to".to_string(), honeypot_port.to_string(),
+        ]);
+        rollback.push(vec![
+            "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+            "prerouting".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "tcp".to_string(),
+            "dport".to_string(), ev.target_port.to_string(), "redirect".to_string(), "to".to_string(), honeypot_port.to_string(),
         ]);
     }
 
-    out
+    EnforcementPlan {
+        action: decision.action.clone(),
+        target: decision.target.clone(),
+        apply_commands: apply.iter().map(|argv| command_to_string(argv)).collect::<Vec<String>>(),
+        rollback_commands: rollback.iter().map(|argv| command_to_string(argv)).collect::<Vec<String>>(),
+    }
 }
 
 fn run_command(argv: &[String]) -> Result<(), String> {
@@ -313,38 +309,103 @@ fn run_command(argv: &[String]) -> Result<(), String> {
     }
 }
 
-fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Config) -> EnforcementOutcome {
-    let commands = build_enforcement_commands(ev, decision, &cfg.defense_iface, cfg.defense_honeypot_port);
-    let rendered = commands
-        .iter()
-        .map(|argv| command_to_string(argv))
-        .collect::<Vec<String>>();
+fn action_allowlist(level: &str, high_impact_auto: bool) -> Vec<String> {
+    match level {
+        "full-auto" => vec!["observe", "notify", "throttle", "redirect", "isolate"].iter().map(|s| s.to_string()).collect(),
+        "semi-auto" => {
+            let mut base = vec!["observe", "notify", "throttle"].iter().map(|s| s.to_string()).collect::<Vec<String>>();
+            if high_impact_auto {
+                base.push("redirect".to_string());
+                base.push("isolate".to_string());
+            }
+            base
+        }
+        _ => vec!["observe".to_string(), "notify".to_string()],
+    }
+}
 
-    if commands.is_empty() {
+fn enforcement_status(cfg: &Config) -> EnforcementStatus {
+    let level = cfg.defense_enforce_level.to_ascii_lowercase();
+    EnforcementStatus {
+        enforce_enabled: cfg.defense_enforce,
+        enforce_level: level.clone(),
+        dry_run: cfg.defense_dry_run,
+        high_impact_auto: cfg.defense_allow_high_impact_auto,
+        allowed_actions: action_allowlist(&level, cfg.defense_allow_high_impact_auto),
+    }
+}
+
+fn calc_trace_id(ev: &NormalizedEvent, decision: &DefensiveDecision) -> String {
+    let mut hasher = DefaultHasher::new();
+    ev.ts.hash(&mut hasher);
+    ev.src_ip.hash(&mut hasher);
+    ev.dst_ip.hash(&mut hasher);
+    ev.sid.hash(&mut hasher);
+    decision.action.hash(&mut hasher);
+    format!("trace-{:#x}", hasher.finish())
+}
+
+fn should_execute_action(action: &str, cfg: &Config) -> (bool, String) {
+    if !cfg.defense_enforce {
+        return (false, "enforce_disabled".to_string());
+    }
+    let level = cfg.defense_enforce_level.to_ascii_lowercase();
+    if level == "advisory" {
+        return (false, "advisory_mode".to_string());
+    }
+    let allowed = action_allowlist(&level, cfg.defense_allow_high_impact_auto);
+    if allowed.iter().any(|x| x == action) {
+        (true, "policy_permitted".to_string())
+    } else {
+        (false, "approval_required_for_high_impact_action".to_string())
+    }
+}
+
+fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Config) -> EnforcementOutcome {
+    let trace_id = calc_trace_id(ev, decision);
+    let plan = build_enforcement_plan(ev, decision, &cfg.defense_iface, cfg.defense_honeypot_port);
+
+    if plan.apply_commands.is_empty() {
         return EnforcementOutcome {
             mode: "disabled".to_string(),
-            commands: rendered,
+            trace_id,
+            selected_action: decision.action.clone(),
+            target: decision.target.clone(),
+            policy_reason: decision.policy_reason.clone(),
+            command_plan: plan.apply_commands.clone(),
+            rollback_plan: plan.rollback_commands.clone(),
             executed_count: 0,
             failed_count: 0,
             errors: Vec::new(),
+            rollback_hint: "no_runtime_change".to_string(),
+            result: "no_disruptive_action".to_string(),
         };
     }
 
-    if !cfg.defense_enforce || cfg.defense_dry_run {
+    let (allowed_by_policy, policy_gate_reason) = should_execute_action(&decision.action, cfg);
+    if cfg.defense_dry_run || !allowed_by_policy {
         return EnforcementOutcome {
-            mode: "dry_run".to_string(),
-            commands: rendered,
+            mode: if cfg.defense_dry_run { "dry_run".to_string() } else { "policy_gated".to_string() },
+            trace_id,
+            selected_action: decision.action.clone(),
+            target: decision.target.clone(),
+            policy_reason: format!("{}:{}", decision.policy_reason, policy_gate_reason),
+            command_plan: plan.apply_commands.clone(),
+            rollback_plan: plan.rollback_commands.clone(),
             executed_count: 0,
             failed_count: 0,
             errors: Vec::new(),
+            rollback_hint: "set AZAZEL_DEFENSE_ENFORCE_LEVEL=full-auto or explicit high-impact approval policy".to_string(),
+            result: "planned_not_applied".to_string(),
         };
     }
 
     let mut executed_count = 0_u32;
     let mut failed_count = 0_u32;
     let mut errors: Vec<String> = Vec::new();
-    for cmd in &commands {
-        match run_command(cmd) {
+    for cmd in &plan.apply_commands {
+        let argv = parse_shell_words(cmd);
+        match run_command(&argv) {
             Ok(_) => executed_count += 1,
             Err(e) => {
                 failed_count += 1;
@@ -355,10 +416,17 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
 
     EnforcementOutcome {
         mode: "enforced".to_string(),
-        commands: rendered,
+        trace_id,
+        selected_action: decision.action.clone(),
+        target: decision.target.clone(),
+        policy_reason: decision.policy_reason.clone(),
+        command_plan: plan.apply_commands,
+        rollback_plan: plan.rollback_commands,
         executed_count,
         failed_count,
         errors,
+        rollback_hint: format!("temporary action ttl={}s; execute rollback_plan when control is no longer needed", cfg.defense_action_ttl_sec),
+        result: if failed_count > 0 { "partial_failure".to_string() } else { "applied".to_string() },
     }
 }
 
@@ -397,6 +465,7 @@ fn process_line(cfg: &Config, line: &str) {
         "normalized": normalized,
         "defense": decision,
         "enforcement": enforcement,
+        "enforcement_status": enforcement_status(cfg),
         "source": "suricata_eve",
         "pipeline": "rust_event_engine_v1",
     });
@@ -458,20 +527,18 @@ fn main() {
         let _ = fs::create_dir_all(parent);
     }
 
-    let mut offset = if cfg.from_start {
-        0
-    } else {
-        fs::metadata(&cfg.eve_path).map(|m| m.len()).unwrap_or(0)
-    };
+    let mut offset = if cfg.from_start { 0 } else { fs::metadata(&cfg.eve_path).map(|m| m.len()).unwrap_or(0) };
 
     eprintln!(
-        "azazel-edge-core started: eve_path={}, ai_socket={}, from_start={}, poll_ms={}, defense_enforce={}, defense_dry_run={}, defense_iface={}, honeypot_port={}",
+        "azazel-edge-core started: eve_path={}, ai_socket={}, from_start={}, poll_ms={}, defense_enforce={}, defense_dry_run={}, defense_enforce_level={}, high_impact_auto={}, defense_iface={}, honeypot_port={}",
         cfg.eve_path,
         cfg.ai_socket_path,
         cfg.from_start,
         cfg.poll_ms,
         cfg.defense_enforce,
         cfg.defense_dry_run,
+        cfg.defense_enforce_level,
+        cfg.defense_allow_high_impact_auto,
         cfg.defense_iface,
         cfg.defense_honeypot_port
     );
@@ -505,26 +572,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn build_enforcement_commands_for_critical_event() {
-        let ev = sample_event();
-        let decision = decide_defense(&ev);
-        let commands = build_enforcement_commands(&ev, &decision, "br0", 2222);
-        assert!(!commands.is_empty());
-        let flat = commands
-            .iter()
-            .map(|c| c.join(" "))
-            .collect::<Vec<String>>()
-            .join("\n");
-        assert!(flat.contains("nft"));
-        assert!(flat.contains("redirect"));
-    }
-
-    #[test]
-    fn maybe_enforce_is_dry_run_when_enforce_is_false() {
-        let ev = sample_event();
-        let decision = decide_defense(&ev);
-        let cfg = Config {
+    fn sample_cfg() -> Config {
+        Config {
             eve_path: "".to_string(),
             ai_socket_path: "".to_string(),
             normalized_log_path: "".to_string(),
@@ -534,13 +583,64 @@ mod tests {
             forward_log: false,
             defense_enforce: false,
             defense_dry_run: true,
+            defense_enforce_level: "advisory".to_string(),
+            defense_action_ttl_sec: 300,
+            defense_allow_high_impact_auto: false,
             defense_iface: "br0".to_string(),
             defense_honeypot_port: 2222,
-        };
+        }
+    }
+
+    #[test]
+    fn build_enforcement_plan_for_critical_event() {
+        let ev = sample_event();
+        let decision = decide_defense(&ev);
+        let plan = build_enforcement_plan(&ev, &decision, "br0", 2222);
+        assert!(!plan.apply_commands.is_empty());
+        let flat = plan.apply_commands.join("\n");
+        assert!(flat.contains("nft"));
+    }
+
+    #[test]
+    fn maybe_enforce_is_dry_run_when_enforce_is_false() {
+        let ev = sample_event();
+        let decision = decide_defense(&ev);
+        let mut cfg = sample_cfg();
+        cfg.defense_enforce = false;
+        cfg.defense_dry_run = true;
         let outcome = maybe_enforce(&ev, &decision, &cfg);
         assert_eq!(outcome.mode, "dry_run");
         assert_eq!(outcome.executed_count, 0);
         assert_eq!(outcome.failed_count, 0);
-        assert!(!outcome.commands.is_empty());
+        assert!(!outcome.command_plan.is_empty());
+    }
+
+    #[test]
+    fn advisory_level_never_applies_disruptive_commands() {
+        let ev = sample_event();
+        let decision = decide_defense(&ev);
+        let mut cfg = sample_cfg();
+        cfg.defense_enforce = true;
+        cfg.defense_dry_run = false;
+        cfg.defense_enforce_level = "advisory".to_string();
+        let outcome = maybe_enforce(&ev, &decision, &cfg);
+        assert_eq!(outcome.mode, "policy_gated");
+        assert_eq!(outcome.executed_count, 0);
+    }
+
+    #[test]
+    fn semi_auto_blocks_high_impact_without_approval() {
+        let allowed = action_allowlist("semi-auto", false);
+        assert!(allowed.contains(&"throttle".to_string()));
+        assert!(!allowed.contains(&"isolate".to_string()));
+        assert!(!allowed.contains(&"redirect".to_string()));
+    }
+
+    #[test]
+    fn full_auto_allows_high_impact() {
+        let allowed = action_allowlist("full-auto", false);
+        assert!(allowed.contains(&"throttle".to_string()));
+        assert!(allowed.contains(&"redirect".to_string()));
+        assert!(allowed.contains(&"isolate".to_string()));
     }
 }

@@ -243,6 +243,8 @@ Install result (default scripts):
   - `AZAZEL_ALERT_ESCALATION_COUNT_THRESHOLD` (default `5`)
 - SOC policy:
   - `AZAZEL_SOC_POLICY_PATH` (default `config/soc_policy.yaml`)
+  - profiles: `config/soc_policy_profiles/{conservative,balanced,demo}.yaml`
+  - dry-run helper: `bin/azazel-soc-policy-dry-run`
 
 ### Token auth
 - API token can be supplied by header `X-AZAZEL-TOKEN` (or `X-Auth-Token`) or `?token=`.
@@ -395,21 +397,23 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 | [AGENTS.md](AGENTS.md) | AI agent working charter — read before making any change |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Human contributor guide (branch, PR, test rules) |
 | [Changelog](docs/CHANGELOG.md) | PR and feature traceability history |
+| [Release Verification Guide](docs/RELEASE_VERIFICATION_GUIDE.md) | Checksum/SBOM/dependency scan verification workflow |
 
 ## Limitations and Known Issues
 
 ### Design constraints (by intent)
 
-- Rust enforcement path is inactive by default:
-  - `AZAZEL_DEFENSE_ENFORCE=false` in `systemd/azazel-edge-core.service`
-  - `maybe_enforce()` in Rust core is a placeholder pending dry-run validation
+- Rust enforcement is fail-safe by default:
+  - `AZAZEL_DEFENSE_ENFORCE=false` and `AZAZEL_DEFENSE_ENFORCE_LEVEL=advisory` keep runtime advisory-only
+  - staged mode support: `advisory`, `semi-auto`, `full-auto`
+  - optional high-impact auto gate: `AZAZEL_DEFENSE_ALLOW_HIGH_IMPACT_AUTO=false`
 - AI assist is optional and bounded — the deterministic path works without Ollama
 - Ollama models above 2b parameters are not recommended for co-located deployments
 - Test count and runbook count are verified at each release; see CI results for current status.
 
 ### Known bugs
 
-- `python3 py/azazel_edge_epd.py --help` fails with `ValueError: incomplete format`
+- None currently tracked in this document. Use GitHub Issues for current defects.
 
 ### Open work items
 

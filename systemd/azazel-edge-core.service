@@ -12,6 +12,10 @@ Environment="AZAZEL_NORMALIZED_EVENT_LOG=/var/log/azazel-edge/normalized-events.
 Environment="AZAZEL_FORWARD_AI=true"
 Environment="AZAZEL_FORWARD_LOG=true"
 Environment="AZAZEL_DEFENSE_ENFORCE=false"
+Environment="AZAZEL_DEFENSE_DRY_RUN=true"
+Environment="AZAZEL_DEFENSE_ENFORCE_LEVEL=advisory"
+Environment="AZAZEL_DEFENSE_ACTION_TTL_SEC=300"
+Environment="AZAZEL_DEFENSE_ALLOW_HIGH_IMPACT_AUTO=false"
 ExecStart=/usr/local/bin/azazel-edge-core
 Restart=always
 RestartSec=2

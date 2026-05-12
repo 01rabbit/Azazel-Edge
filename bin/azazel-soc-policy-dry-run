@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHONPATH="${ROOT_DIR}/py:${PYTHONPATH:-}" exec python3 "${ROOT_DIR}/py/azazel_edge/soc_policy_dry_run.py" "$@"
+

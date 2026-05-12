@@ -10,6 +10,21 @@ permissions:
   contents: read
 
 jobs:
+  lint-python:
+    name: Python static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Compile Python sources
+        run: |
+          python -m compileall -q py azazel_edge_web
+
   test-python:
     name: Python tests
     runs-on: ubuntu-latest
@@ -87,3 +102,17 @@ jobs:
           path: |
             sbom-runtime.cdx.json
             pip-audit-runtime.json
+
+      - name: Generate SHA-256 checksums for key artifacts
+        run: |
+          sha256sum installer/internal/install_all.sh > release-checksums.sha256
+          sha256sum installer/internal/install_migrated_tools.sh >> release-checksums.sha256
+          sha256sum installer/internal/install_ai_runtime.sh >> release-checksums.sha256
+          sha256sum sbom-runtime.cdx.json >> release-checksums.sha256
+          sha256sum pip-audit-runtime.json >> release-checksums.sha256
+
+      - name: Upload checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-checksums
+          path: release-checksums.sha256

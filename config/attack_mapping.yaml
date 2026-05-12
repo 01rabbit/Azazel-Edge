@@ -1,0 +1,22 @@
+version: attack-mapping-v1
+rules:
+  - technique_id: T1071
+    technique_name: Application Layer Protocol
+    tactic: command-and-control
+    confidence: 80
+    sid: [210001]
+    attack_type_contains: ["dns", "beacon", "c2"]
+    category_contains: ["potentially bad traffic"]
+    service_contains: ["dns", "http", "tls"]
+  - technique_id: T1110
+    technique_name: Brute Force
+    tactic: credential-access
+    confidence: 75
+    attack_type_contains: ["brute", "login", "authentication"]
+    category_contains: ["attempted-admin"]
+    service_contains: ["ssh", "rdp", "smb"]
+  - technique_id: T1595
+    technique_name: Active Scanning
+    tactic: reconnaissance
+    confidence: 70
+    attack_type_contains: ["scan", "probe", "recon"]

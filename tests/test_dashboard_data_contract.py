@@ -914,10 +914,12 @@ class DashboardDataContractTests(unittest.TestCase):
     def test_dashboard_trends_endpoint_contract(self) -> None:
         self.client.get("/api/dashboard/health")
         self.client.get("/api/dashboard/health")
-        response = self.client.get("/api/dashboard/trends?limit=10")
+        response = self.client.get("/api/dashboard/trends?limit=10&window_sec=3600")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload["ok"])
+        self.assertIn("status", payload)
+        self.assertIn("storage_warning", payload)
         self.assertIn("points", payload)
         self.assertIn("summary", payload)
         self.assertGreaterEqual(payload["summary"]["samples"], 1)
@@ -925,6 +927,9 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("queue_depth", first)
         self.assertIn("llm_fallback_rate", first)
         self.assertIn("stale_snapshot", first)
+        self.assertIn("cpu_percent", first)
+        self.assertIn("memory_percent", first)
+        self.assertIn("temperature_c", first)
 
     def test_dashboard_ai_governance_endpoint_contract(self) -> None:
         response = self.client.get("/api/dashboard/ai-governance")
