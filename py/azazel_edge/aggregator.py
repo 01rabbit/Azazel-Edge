@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import hmac as _hmac
+import json as _json
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List
+
+# Fixed audit event kind constants
+AEVT_NODE_REGISTER = "aggregator.node.register"
+AEVT_INGEST_ACCEPT = "aggregator.ingest.accept"
+AEVT_INGEST_REJECT = "aggregator.ingest.reject"
+AEVT_NODE_QUARANTINE = "aggregator.node.quarantine"
 
 
 @dataclass(frozen=True)
@@ -21,12 +30,52 @@ class FreshnessPolicy:
         return max(self.stale_after_sec + 1, self.poll_interval_sec * self.offline_multiplier)
 
 
+def _stable_json(obj: Any) -> str:
+    return _json.dumps(obj, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _sha256_hex(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _hmac_sha256_hex(secret: bytes, message: str) -> str:
+    return _hmac.new(secret, message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def compute_ingest_sig(summary_without_sig: Dict[str, Any], node_id: str, generated_at: float, secret: bytes) -> str:
+    """Compute the HMAC-SHA256 ingest signature for a node to attach as `sig`."""
+    digest = _sha256_hex(_stable_json(summary_without_sig))
+    claims: Dict[str, Any] = {
+        "digest": digest,
+        "generated_at": float(generated_at),
+        "node_id": str(node_id),
+    }
+    return _hmac_sha256_hex(secret, _stable_json(claims))
+
+
+def verify_ingest_sig(summary_without_sig: Dict[str, Any], node_id: str, generated_at: float, sig_hex: str, secret: bytes) -> bool:
+    """Verify the HMAC-SHA256 ingest signature in constant time."""
+    expected = compute_ingest_sig(summary_without_sig, node_id, generated_at, secret)
+    return _hmac.compare_digest(expected, str(sig_hex or "").lower())
+
+
 class AggregatorRegistry:
-    def __init__(self, policy: FreshnessPolicy | None = None) -> None:
+    def __init__(
+        self,
+        policy: FreshnessPolicy | None = None,
+        *,
+        hmac_secret: bytes | None = None,
+        sig_required: bool = False,
+        replay_window_sec: int = 300,
+    ) -> None:
         self.policy = policy or FreshnessPolicy()
+        self.hmac_secret = hmac_secret
+        self.sig_required = bool(sig_required)
+        self.replay_window_sec = max(1, int(replay_window_sec))
         self._lock = threading.Lock()
         self._nodes: Dict[str, Dict[str, Any]] = {}
         self._summaries: Dict[str, Dict[str, Any]] = {}
+        self._seen: Dict[str, float] = {}  # replay cache: key → expiry epoch
 
     def register_node(self, node_id: str, site_id: str, node_label: str = "", trust_fingerprint: str = "") -> Dict[str, Any]:
         nid = str(node_id or "").strip()
@@ -39,13 +88,13 @@ class AggregatorRegistry:
         with self._lock:
             row = self._nodes.get(nid, {})
             created_at = float(row.get("created_at") or now)
-            status = str(row.get("status") or "active")
+            # Admin re-registration always resets to active, clearing any quarantine
             updated = {
                 "node_id": nid,
                 "site_id": sid,
                 "node_label": str(node_label or "").strip(),
                 "trust_fingerprint": str(trust_fingerprint or "").strip(),
-                "status": status,
+                "status": "active",
                 "created_at": created_at,
                 "updated_at": now,
             }
@@ -73,7 +122,41 @@ class AggregatorRegistry:
         generated_at = _coerce_epoch(timestamps.get("generated_at"), default=now)
         if generated_at > now + 300:
             raise ValueError("generated_at_in_future")
+
+        # Compute digest over payload without the sig field
+        payload_for_digest = {k: v for k, v in summary.items() if k != "sig"}
+        digest = _sha256_hex(_stable_json(payload_for_digest))
+        replay_key = f"{node_id}\x00{generated_at}\x00{digest}"
+
+        # Signature verification (stateless — before acquiring the lock)
+        sig = str(summary.get("sig") or "").strip()
+        sig_fail = False
+        if self.hmac_secret is not None or self.sig_required:
+            if not sig:
+                raise ValueError("sig_missing")
+            if self.hmac_secret is not None:
+                if not verify_ingest_sig(payload_for_digest, node_id, generated_at, sig, self.hmac_secret):
+                    sig_fail = True
+
         with self._lock:
+            if sig_fail:
+                # Auto-quarantine: node stays registered but can no longer ingest
+                if node_id in self._nodes:
+                    self._nodes[node_id]["status"] = "quarantined"
+                    self._nodes[node_id]["updated_at"] = now
+                raise ValueError("sig_invalid")
+
+            node_rec = self._nodes.get(node_id)
+            if (self.hmac_secret is not None or self.sig_required) and node_rec is None:
+                raise ValueError("node_not_registered")
+            if node_rec is not None and str(node_rec.get("status") or "active") == "quarantined":
+                raise ValueError("node_quarantined")
+
+            # Replay detection
+            self._prune_seen(now)
+            if replay_key in self._seen:
+                raise ValueError("replay_detected")
+
             existing = self._summaries.get(node_id)
             if isinstance(existing, dict):
                 prev_generated_at = _coerce_epoch(
@@ -82,7 +165,10 @@ class AggregatorRegistry:
                 )
                 if generated_at < prev_generated_at:
                     raise ValueError("older_summary_rejected")
-            self._summaries[node_id] = dict(summary)
+
+            self._seen[replay_key] = now + self.replay_window_sec
+            # Strip sig before storing
+            self._summaries[node_id] = {k: v for k, v in summary.items() if k != "sig"}
             if node_id not in self._nodes:
                 self._nodes[node_id] = {
                     "node_id": node_id,
@@ -126,6 +212,11 @@ class AggregatorRegistry:
                 }
             )
         return result
+
+    def _prune_seen(self, now: float) -> None:
+        expired = [k for k, exp in self._seen.items() if exp <= now]
+        for k in expired:
+            del self._seen[k]
 
 
 def _coerce_epoch(value: Any, default: float) -> float:
