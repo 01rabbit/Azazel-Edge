@@ -159,6 +159,12 @@ Web dashboard alert queue の閾値調整（`/etc/default/azazel-edge-web`）:
 - `AZAZEL_ALERT_QUEUE_WATCH_THRESHOLD`（default: `50`）
 - `AZAZEL_ALERT_QUEUE_ESCALATE_THRESHOLD`（default: `90`）
 
+Aggregator freshness 判定の調整（`/etc/default/azazel-edge-web`）:
+
+- `AZAZEL_AGGREGATOR_POLL_INTERVAL_SEC`（default: `30`）
+- `AZAZEL_AGGREGATOR_STALE_MULTIPLIER`（default: `2`）
+- `AZAZEL_AGGREGATOR_OFFLINE_MULTIPLIER`（default: `6`）
+
 ## 9. 運用ルール
 
 - Suricata優先。LLMは補助であり、検知可用性を犠牲にしない。

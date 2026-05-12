@@ -5,6 +5,18 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Aggregator MVP scaffold (design-to-implementation bridge):
+  - in-memory node registry with registration and summary ingest
+  - freshness classification (`fresh` / `stale` / `offline`)
+  - protected APIs: `/api/aggregator/nodes/register`, `/api/aggregator/ingest/summary`, `/api/aggregator/nodes`
+  - regression tests for registry behavior and API role enforcement
+- Multi-node Azazel Aggregator architecture design baseline:
+  - node identity/registration model
+  - minimal summary schema
+  - stale/offline behavior model
+  - communication security assumptions
+  - phased roadmap (`MVP` / `field-ready` / `extended`)
+  - explicit out-of-scope boundaries
 - Tamper-evident audit log chaining in `P0AuditLogger` with `chain_prev` and `chain_hash`.
 - Audit chain verifier: `P0AuditLogger.verify_chain(path)` to detect tampering.
 - CI supply-chain baseline job:

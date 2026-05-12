@@ -92,6 +92,7 @@ try:
         warn_if_legacy_path,
     )
     from azazel_edge.sot import SoTConfig, SoTValidationError
+    from azazel_edge.aggregator import AggregatorRegistry, FreshnessPolicy
 except Exception:
     cp_read_snapshot_payload = None
     cp_watch_snapshots = None
@@ -125,6 +126,8 @@ except Exception:
     warn_if_legacy_path = lambda *args, **kwargs: None  # type: ignore
     SoTConfig = None  # type: ignore
     SoTValidationError = ValueError  # type: ignore
+    AggregatorRegistry = None  # type: ignore
+    FreshnessPolicy = None  # type: ignore
 
 # Configuration
 _RUNTIME_STATE_PATHS = runtime_snapshot_path_candidates()
@@ -195,6 +198,20 @@ MATTERMOST_COMMAND_ALIASES = [
     if item.strip()
 ]
 MATTERMOST_COMMAND_PRIMARY_TRIGGER = str(os.environ.get("AZAZEL_MATTERMOST_COMMAND_TRIGGER", "mio")).strip() or "mio"
+AGGREGATOR_POLL_INTERVAL_SEC = max(5, int(os.environ.get("AZAZEL_AGGREGATOR_POLL_INTERVAL_SEC", "30")))
+AGGREGATOR_STALE_MULTIPLIER = max(2, int(os.environ.get("AZAZEL_AGGREGATOR_STALE_MULTIPLIER", "2")))
+AGGREGATOR_OFFLINE_MULTIPLIER = max(3, int(os.environ.get("AZAZEL_AGGREGATOR_OFFLINE_MULTIPLIER", "6")))
+
+if AggregatorRegistry is not None and FreshnessPolicy is not None:
+    _AGGREGATOR_REGISTRY = AggregatorRegistry(
+        policy=FreshnessPolicy(
+            poll_interval_sec=AGGREGATOR_POLL_INTERVAL_SEC,
+            stale_multiplier=AGGREGATOR_STALE_MULTIPLIER,
+            offline_multiplier=AGGREGATOR_OFFLINE_MULTIPLIER,
+        )
+    )
+else:
+    _AGGREGATOR_REGISTRY = None
 
 
 def _request_lang() -> str:
@@ -4988,6 +5005,70 @@ def api_state():
     state["mode"] = mode_state.get("mode", {})
     state["mode_runtime"] = mode_state
     return jsonify(state)
+
+
+@app.route("/api/aggregator/nodes/register", methods=["POST"])
+@require_token(min_role="admin")
+def api_aggregator_register_node():
+    if _AGGREGATOR_REGISTRY is None:
+        return jsonify({"ok": False, "error": "aggregator_registry_unavailable"}), 500
+    body = request.get_json(silent=True) or {}
+    node_id = str(body.get("node_id") or "").strip()
+    site_id = str(body.get("site_id") or "").strip()
+    node_label = str(body.get("node_label") or "").strip()
+    trust_fingerprint = str(body.get("trust_fingerprint") or "").strip()
+    try:
+        node = _AGGREGATOR_REGISTRY.register_node(
+            node_id=node_id,
+            site_id=site_id,
+            node_label=node_label,
+            trust_fingerprint=trust_fingerprint,
+        )
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "node": node}), 200
+
+
+@app.route("/api/aggregator/ingest/summary", methods=["POST"])
+@require_token(min_role="operator")
+def api_aggregator_ingest_summary():
+    if _AGGREGATOR_REGISTRY is None:
+        return jsonify({"ok": False, "error": "aggregator_registry_unavailable"}), 500
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "payload_must_be_object"}), 400
+    try:
+        result = _AGGREGATOR_REGISTRY.ingest_summary(body)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify(result), 200
+
+
+@app.route("/api/aggregator/nodes", methods=["GET"])
+@require_token()
+def api_aggregator_nodes():
+    if _AGGREGATOR_REGISTRY is None:
+        return jsonify({"ok": False, "error": "aggregator_registry_unavailable"}), 500
+    items = _AGGREGATOR_REGISTRY.list_nodes()
+    counters = {
+        "fresh": 0,
+        "stale": 0,
+        "offline": 0,
+    }
+    for row in items:
+        state = str(row.get("freshness") or "offline")
+        if state not in counters:
+            counters["offline"] += 1
+        else:
+            counters[state] += 1
+    return jsonify(
+        {
+            "ok": True,
+            "items": items,
+            "counts": counters,
+            "poll_interval_sec": AGGREGATOR_POLL_INTERVAL_SEC,
+        }
+    ), 200
 
 
 @app.route("/api/state/stream")

@@ -9,6 +9,7 @@ Entry point for all documents in this directory.
 | File | Audience | Description | Last Updated |
 |------|----------|-------------|--------------|
 | [P0_RUNTIME_ARCHITECTURE.md](P0_RUNTIME_ARCHITECTURE.md) | Developer | Decision pipeline, implementation modules, and P0 constraints | 2026-03-10 |
+| [AZAZEL_AGGREGATOR_ARCHITECTURE.md](AZAZEL_AGGREGATOR_ARCHITECTURE.md) | Developer / Operator | Multi-node Azazel Aggregator design baseline and phased roadmap | 2026-05-12 |
 | [SOC_POLICY_GUIDE.md](SOC_POLICY_GUIDE.md) | Developer / Operator | Deterministic SOC policy tuning and safety constraints | 2026-05-12 |
 | [ATTACK_MAPPING_GUIDE.md](ATTACK_MAPPING_GUIDE.md) | Developer / Operator | ATT&CK mapping rules, limits, and maintenance guidance | 2026-05-12 |
 | [POST_DEMO_MAIN_INTEGRATION_104.md](POST_DEMO_MAIN_INTEGRATION_104.md) | Developer | Integration boundary between exhibition-only assets and mainline | 2026-05-11 |
