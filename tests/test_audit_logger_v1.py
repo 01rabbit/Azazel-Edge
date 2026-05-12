@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sys
 import tempfile
 import unittest
@@ -30,6 +31,40 @@ class AuditLoggerV1Tests(unittest.TestCase):
         for record in records:
             for field in ('ts', 'kind', 'trace_id', 'source'):
                 self.assertIn(field, record)
+            self.assertIn('chain_prev', record)
+            self.assertIn('chain_hash', record)
+
+    def test_chain_hash_links_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'audit.jsonl'
+            logger = P0AuditLogger(path)
+            logger.log_event_receive('trace-1', 'suricata_eve', event_id='ev-1')
+            logger.log_action_decision('trace-1', 'arbiter', action='notify')
+            rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+
+        self.assertEqual(rows[0]['chain_prev'], '')
+        self.assertEqual(rows[1]['chain_prev'], rows[0]['chain_hash'])
+        for row in rows:
+            without_hash = dict(row)
+            expected = row['chain_hash']
+            without_hash.pop('chain_hash', None)
+            canon = json.dumps(without_hash, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('utf-8')
+            self.assertEqual(expected, hashlib.sha256(canon).hexdigest())
+
+    def test_verify_chain_detects_tamper(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'audit.jsonl'
+            logger = P0AuditLogger(path)
+            logger.log_event_receive('trace-1', 'suricata_eve', event_id='ev-1')
+            logger.log_action_decision('trace-1', 'arbiter', action='notify')
+            self.assertTrue(P0AuditLogger.verify_chain(path)['ok'])
+
+            rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+            rows[1]['action'] = 'isolate'
+            path.write_text('\n'.join(json.dumps(row, separators=(',', ':')) for row in rows) + '\n', encoding='utf-8')
+            result = P0AuditLogger.verify_chain(path)
+            self.assertFalse(result['ok'])
+            self.assertIn('chain_hash_mismatch_at:2', result['error'])
 
     def test_invalid_kind_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
