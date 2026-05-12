@@ -7,6 +7,11 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-Core-000000?logo=rust)
 ![Flask](https://img.shields.io/badge/Flask-Web%20API-000000?logo=flask)
+![Black Hat USA 2025 Arsenal](https://img.shields.io/badge/Black%20Hat%20USA%202025-Arsenal-111111)
+![Black Hat Asia 2026 Arsenal](https://img.shields.io/badge/Black%20Hat%20Asia%202026-Arsenal-111111)
+![Black Hat USA 2026 Arsenal](https://img.shields.io/badge/Black%20Hat%20USA%202026-Arsenal-111111)
+
+Note: Azazel-Edge is the successor project to Azazel-Pi; Black Hat USA 2025 and Black Hat Asia 2026 Arsenal presentations were delivered under the Azazel-Pi name.
 
 Azazel-Edge is a Raspberry Pi-oriented edge operations stack that combines:
 - internal network/gateway setup
