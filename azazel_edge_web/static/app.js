@@ -821,6 +821,7 @@ async function refreshDashboard() {
         ['handoff', handoffUrl.pathname + handoffUrl.search, false],
         ['evidence', '/api/dashboard/evidence', false],
         ['health', '/api/dashboard/health', false],
+        ['trends', '/api/dashboard/trends?limit=60', false],
         ['state', '/api/state', true],
         ['mattermost', '/api/mattermost/status', false],
         ['capabilities', '/api/ai/capabilities', false],
@@ -859,6 +860,7 @@ async function refreshDashboard() {
     const handoff = resultMap.handoff?.data?.handoff_brief_pack || {};
     const evidence = resultMap.evidence?.data || {};
     const health = resultMap.health?.data || {};
+    const trends = resultMap.trends?.data || {};
     const state = resultMap.state?.data || {};
     const mattermost = resultMap.mattermost?.data || { reachable: false, command_triggers: [] };
     const capabilities = resultMap.capabilities?.data || { mattermost_triggers: [] };
@@ -903,7 +905,7 @@ async function refreshDashboard() {
         updateProgressChecklist(progress);
         updateHandoffPack(handoff);
         syncOnboardingBanner();
-        updateEvidenceBoard(evidence, health);
+        updateEvidenceBoard(evidence, health, trends);
         updateAssistant(actions, mattermost, capabilities);
         if (CURRENT_PAGE === 'demo') {
             updateReviewReadiness(resultMap.health, resultMap.demoCapabilities, demoOverlayResult);
@@ -2489,7 +2491,7 @@ function syncOnboardingBanner() {
     if (target) target.classList.add('onboarding-highlight');
 }
 
-function updateEvidenceBoard(evidence, health) {
+function updateEvidenceBoard(evidence, health, trends) {
     const currentTriggers = Array.isArray(evidence.current_triggers) && evidence.current_triggers.length
         ? evidence.current_triggers
         : [{
@@ -2537,6 +2539,78 @@ function updateEvidenceBoard(evidence, health) {
         metaRight: item.kind || '-',
         title: item.label || item.id || '-',
         detail: `state=${item.state || '-'}`,
+    }));
+    const alertQueues = evidence.alert_queues || {};
+    const queueItems = [];
+    const nowCount = Number(alertQueues.now?.count || 0);
+    const watchCount = Number(alertQueues.watch?.count || 0);
+    const backlogCount = Number(alertQueues.backlog?.count || 0);
+    queueItems.push({
+        ts_iso: '-',
+        kind: 'queue',
+        title: tr('dashboard.alert_queue_counts', 'now={now} watch={watch} backlog={backlog}', {
+            now: nowCount,
+            watch: watchCount,
+            backlog: backlogCount,
+        }),
+        detail: tr('dashboard.alert_queue_counts_detail', 'Alert pressure split by deterministic risk bands.'),
+    });
+    const topNow = Array.isArray(alertQueues.now?.items) ? alertQueues.now.items.slice(0, 2) : [];
+    const topEsc = Array.isArray(alertQueues.escalation_candidates) ? alertQueues.escalation_candidates.slice(0, 2) : [];
+    topNow.forEach((item) => {
+        queueItems.push({
+            ts_iso: item.ts_iso || '-',
+            kind: 'now',
+            title: `${item.attack_type || '-'} (${item.risk_score || 0})`,
+            detail: `src=${item.src_ip || '-'} dst=${item.dst_ip || '-'} sid=${item.sid || 0}`,
+        });
+    });
+    topEsc.forEach((item) => {
+        queueItems.push({
+            ts_iso: item.ts_iso || '-',
+            kind: 'escalate',
+            title: tr('dashboard.alert_queue_escalation', 'Escalation candidate'),
+            detail: `${item.attack_type || '-'} | ${item.recommendation || '-'}`,
+        });
+    });
+    renderTimeline('alertQueuesTimeline', queueItems, (item) => ({
+        metaLeft: item.ts_iso || '-',
+        metaRight: item.kind || '-',
+        title: item.title || '-',
+        detail: item.detail || '-',
+    }));
+
+    const trendPoints = Array.isArray(trends?.points) ? trends.points : [];
+    const trendSummary = trends?.summary || {};
+    const trendRows = [];
+    trendRows.push({
+        ts_iso: '-',
+        kind: 'summary',
+        title: tr('dashboard.trend_samples', 'samples={samples} window={window}s', {
+            samples: Number(trendSummary.samples || 0),
+            window: Number(trendSummary.window_sec || 0),
+        }),
+        detail: tr('dashboard.trend_fallback_avg', 'fallback avg={avg}', {
+            avg: Number(trendSummary.llm_fallback_rate?.avg || 0).toFixed(3),
+        }),
+    });
+    const latestTrend = trendPoints.length ? trendPoints[trendPoints.length - 1] : null;
+    if (latestTrend) {
+        trendRows.push({
+            ts_iso: latestTrend.ts_iso || '-',
+            kind: 'latest',
+            title: tr('dashboard.trend_latest_queue', 'queue={depth}/{capacity}', {
+                depth: Number(latestTrend.queue_depth || 0),
+                capacity: Number(latestTrend.queue_capacity || 0),
+            }),
+            detail: `latency_ema=${Number(latestTrend.llm_latency_ms_ema || 0).toFixed(1)}ms stale(snapshot=${latestTrend.stale_snapshot ? 'yes' : 'no'}, ai=${latestTrend.stale_ai_metrics ? 'yes' : 'no'})`,
+        });
+    }
+    renderTimeline('dashboardTrendsTimeline', trendRows, (item) => ({
+        metaLeft: item.ts_iso || '-',
+        metaRight: item.kind || '-',
+        title: item.title || '-',
+        detail: item.detail || '-',
     }));
 
     const stale = health.stale_flags || {};

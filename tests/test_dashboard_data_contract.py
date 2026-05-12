@@ -1022,6 +1022,8 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("Open Ops Comm", text)
         self.assertIn('id="evidenceTimelineDetails"', text)
         self.assertIn('id="evidenceTimelineDetailsToggle"', text)
+        self.assertIn('id="alertQueuesTimeline"', text)
+        self.assertIn('id="dashboardTrendsTimeline"', text)
         self.assertIn("Current Triggers", text)
         self.assertIn("Decision Changes", text)
         self.assertIn("Operator Interactions", text)
