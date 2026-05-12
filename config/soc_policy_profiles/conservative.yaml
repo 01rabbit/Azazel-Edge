@@ -1,0 +1,27 @@
+version: soc-policy-conservative-v1
+notes: Prioritize service stability; delay high-impact controls.
+
+action_mapping:
+  strong_soc:
+    confidence_min: 70
+  throttle:
+    confidence_min: 75
+    blast_min: 55
+  redirect:
+    suspicion_min: 94
+    confidence_min: 88
+    blast_min: 80
+  isolate:
+    suspicion_min: 98
+    confidence_min: 94
+    blast_min: 90
+
+suppression_defaults:
+  src_ips: []
+  dst_ips: []
+  sid: []
+  attack_types: []
+  categories: []
+  expected_scanners: []
+  lab_segments: []
+  maintenance_windows: []

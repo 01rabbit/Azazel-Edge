@@ -1,0 +1,27 @@
+version: soc-policy-balanced-v1
+notes: Balanced response between containment speed and availability.
+
+action_mapping:
+  strong_soc:
+    confidence_min: 60
+  throttle:
+    confidence_min: 65
+    blast_min: 45
+  redirect:
+    suspicion_min: 90
+    confidence_min: 82
+    blast_min: 70
+  isolate:
+    suspicion_min: 95
+    confidence_min: 90
+    blast_min: 80
+
+suppression_defaults:
+  src_ips: []
+  dst_ips: []
+  sid: []
+  attack_types: []
+  categories: []
+  expected_scanners: []
+  lab_segments: []
+  maintenance_windows: []

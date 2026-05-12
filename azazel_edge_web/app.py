@@ -3310,6 +3310,9 @@ def _dashboard_trend_point_payload(
     stale_flags = health.get("stale_flags") if isinstance(health.get("stale_flags"), dict) else {}
     ai_governance = health.get("ai_governance") if isinstance(health.get("ai_governance"), dict) else {}
     rates = ai_governance.get("rates") if isinstance(ai_governance.get("rates"), dict) else {}
+    internal = state.get("internal") if isinstance(state.get("internal"), dict) else {}
+    noc_capacity = state.get("noc_capacity") if isinstance(state.get("noc_capacity"), dict) else {}
+    connection = state.get("connection") if isinstance(state.get("connection"), dict) else {}
     return {
         "ts": now,
         "ts_iso": _iso_from_epoch(now),
@@ -3323,6 +3326,11 @@ def _dashboard_trend_point_payload(
         "stale_snapshot": bool(stale_flags.get("snapshot")),
         "stale_ai_metrics": bool(stale_flags.get("ai_metrics")),
         "ai_contribution_rate": _as_float(rates.get("ai_contribution"), 0.0),
+        "cpu_percent": _as_float(internal.get("cpu_percent"), 0.0),
+        "memory_percent": _as_float(internal.get("memory_percent") or internal.get("mem_percent"), 0.0),
+        "temperature_c": _as_float(internal.get("temperature_c"), 0.0),
+        "iface_utilization_pct": _as_float(noc_capacity.get("utilization_pct"), 0.0),
+        "internet_check": str(connection.get("internet_check") or ""),
     }
 
 
@@ -3351,11 +3359,12 @@ def _record_dashboard_trend_point(state: Dict[str, Any], metrics: Dict[str, Any]
         pass
 
 
-def _dashboard_trends_payload(limit: int = 120) -> Dict[str, Any]:
+def _dashboard_trends_payload(limit: int = 120, window_sec: int = 0) -> Dict[str, Any]:
     safe_limit = max(1, min(limit, DASHBOARD_TRENDS_LIMIT))
     rows = _tail_jsonl(DASHBOARD_TRENDS_PATH, limit=max(safe_limit * 2, 40))
     now_epoch = time.time()
-    retention = max(60.0, DASHBOARD_TRENDS_RETENTION_SEC)
+    requested_window = max(0, int(window_sec))
+    retention = max(60.0, float(requested_window) if requested_window > 0 else DASHBOARD_TRENDS_RETENTION_SEC)
     filtered: List[Dict[str, Any]] = []
     for row in rows:
         ts = _as_float(row.get("ts"), 0.0)
@@ -3366,15 +3375,27 @@ def _dashboard_trends_payload(limit: int = 120) -> Dict[str, Any]:
         filtered.append(row)
     points = filtered[-safe_limit:]
     if not points:
-        return {"ok": True, "points": [], "summary": {"samples": 0}}
+        return {
+            "ok": True,
+            "status": "missing" if not DASHBOARD_TRENDS_PATH.exists() else "empty",
+            "storage_warning": "trend_storage_missing_or_empty",
+            "points": [],
+            "summary": {"samples": 0},
+        }
 
     queue_depth_values = [_as_int(item.get("queue_depth"), 0) for item in points]
     fallback_values = [_as_float(item.get("llm_fallback_rate"), 0.0) for item in points]
     latency_values = [_as_float(item.get("llm_latency_ms_ema"), 0.0) for item in points]
+    cpu_values = [_as_float(item.get("cpu_percent"), 0.0) for item in points]
+    mem_values = [_as_float(item.get("memory_percent"), 0.0) for item in points]
+    temp_values = [_as_float(item.get("temperature_c"), 0.0) for item in points]
+    iface_values = [_as_float(item.get("iface_utilization_pct"), 0.0) for item in points]
     snapshot_stale_count = sum(1 for item in points if bool(item.get("stale_snapshot")))
     ai_stale_count = sum(1 for item in points if bool(item.get("stale_ai_metrics")))
     return {
         "ok": True,
+        "status": "ok",
+        "storage_warning": "",
         "points": points,
         "summary": {
             "samples": len(points),
@@ -3393,6 +3414,26 @@ def _dashboard_trends_payload(limit: int = 120) -> Dict[str, Any]:
                 "min": round(min(latency_values), 2),
                 "max": round(max(latency_values), 2),
                 "avg": round(sum(latency_values) / len(latency_values), 2),
+            },
+            "cpu_percent": {
+                "min": round(min(cpu_values), 2),
+                "max": round(max(cpu_values), 2),
+                "avg": round(sum(cpu_values) / len(cpu_values), 2),
+            },
+            "memory_percent": {
+                "min": round(min(mem_values), 2),
+                "max": round(max(mem_values), 2),
+                "avg": round(sum(mem_values) / len(mem_values), 2),
+            },
+            "temperature_c": {
+                "min": round(min(temp_values), 2),
+                "max": round(max(temp_values), 2),
+                "avg": round(sum(temp_values) / len(temp_values), 2),
+            },
+            "iface_utilization_pct": {
+                "min": round(min(iface_values), 2),
+                "max": round(max(iface_values), 2),
+                "avg": round(sum(iface_values) / len(iface_values), 2),
             },
             "stale_flags": {
                 "snapshot_count": snapshot_stale_count,
@@ -5592,7 +5633,8 @@ def api_dashboard_health():
 @require_token()
 def api_dashboard_trends():
     limit = _as_int(request.args.get("limit"), 120)
-    return jsonify(_dashboard_trends_payload(limit=limit)), 200
+    window_sec = _as_int(request.args.get("window_sec"), 0)
+    return jsonify(_dashboard_trends_payload(limit=limit, window_sec=window_sec)), 200
 
 
 @app.route("/api/dashboard/ai-governance", methods=["GET"])
