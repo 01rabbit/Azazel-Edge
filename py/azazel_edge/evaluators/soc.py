@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Tuple
 
 from azazel_edge.correlation import AdvancedCorrelator
+from azazel_edge.knowledge.attack_mapping import load_attack_mapping, map_attack_techniques
 from azazel_edge.sigma import MiniSigmaExecutor
 from azazel_edge.ti import ThreatIntelFeed
 from azazel_edge.yara import MiniYaraMatcher
@@ -207,6 +208,7 @@ class SocEvaluator:
         self._seen_external_destinations: set[str] = set()
         self._seen_route_markers: set[str] = set()
         self._seen_visible_services: set[str] = set()
+        self.attack_mapping = load_attack_mapping()
 
     def evaluate(self, events: Iterable[Any], sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         payloads = _to_payloads(events)
@@ -224,7 +226,7 @@ class SocEvaluator:
 
         suspicion = self._evaluate_suspicion(actionable_soc_payloads, flow_payloads, ti_matches, correlation, yara_hits, sot_diff=sot_diff)
         confidence = self._evaluate_confidence(actionable_soc_payloads)
-        technique_likelihood, attack_candidates = self._evaluate_technique_likelihood(actionable_soc_payloads, flow_payloads, ti_matches, correlation, sigma_hits, sot_diff=sot_diff)
+        technique_likelihood, attack_candidates, attack_techniques = self._evaluate_technique_likelihood(actionable_soc_payloads, flow_payloads, ti_matches, correlation, sigma_hits, sot_diff=sot_diff)
         asset_target_criticality = self._evaluate_asset_target_criticality(actionable_soc_payloads, flow_payloads)
         blast_radius = self._evaluate_blast_radius(actionable_soc_payloads, flow_payloads, criticality=asset_target_criticality)
         entity_risk_state = self._evaluate_entity_risk_state(actionable_payloads)
@@ -296,6 +298,7 @@ class SocEvaluator:
                 'status': _bucket(worst),
                 'reasons': summary_reasons,
                 'attack_candidates': attack_candidates,
+                'attack_techniques': attack_techniques,
                 'ti_matches': [match.to_dict() for match in ti_matches],
                 'correlation': correlation,
                 'sigma_hits': sigma_hits,
@@ -395,12 +398,13 @@ class SocEvaluator:
             reasons.append('consistent_signal')
         return _make_dimension(score, reasons, evidence_ids)
 
-    def _evaluate_technique_likelihood(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any], correlation: Dict[str, Any], sigma_hits: List[Dict[str, Any]], sot_diff: Dict[str, Any] | None = None) -> Tuple[Dict[str, Any], List[str]]:
+    def _evaluate_technique_likelihood(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], ti_matches: List[Any], correlation: Dict[str, Any], sigma_hits: List[Dict[str, Any]], sot_diff: Dict[str, Any] | None = None) -> Tuple[Dict[str, Any], List[str], List[Dict[str, Any]]]:
         if not payloads:
-            return _make_dimension(0, ['no_soc_events'], []), []
+            return _make_dimension(0, ['no_soc_events'], []), [], []
         evidence_ids: List[str] = []
         reasons: List[str] = []
         candidates: List[str] = []
+        mapped_rows: List[Dict[str, Any]] = []
         score = 20
         for payload in payloads:
             evidence_ids.append(str(payload.get('event_id') or ''))
@@ -414,6 +418,7 @@ class SocEvaluator:
             if int(attrs.get('risk_score') or payload.get('severity') or 0) >= 80:
                 score = max(score, 85)
                 reasons.append('high_risk_signature')
+            mapped_rows.extend(map_attack_techniques(payload, self.attack_mapping))
         if not reasons and payloads:
             score = max(score, 35)
             reasons.append('generic_suricata_signal')
@@ -439,7 +444,19 @@ class SocEvaluator:
         if sot_diff and sot_diff.get('unauthorized_services'):
             score = max(score, 60)
             reasons.append('unauthorized_service_support')
-        return _make_dimension(score, reasons, evidence_ids), sorted(dict.fromkeys(candidates))
+        uniq_map: Dict[str, Dict[str, Any]] = {}
+        for row in mapped_rows:
+            key = f"{row.get('technique_id')}|{row.get('tactic')}"
+            prev = uniq_map.get(key)
+            if prev is None or int(row.get('confidence') or 0) > int(prev.get('confidence') or 0):
+                uniq_map[key] = row
+        mapped = list(uniq_map.values())[:8]
+        for row in mapped:
+            tid = str(row.get('technique_id') or '').strip()
+            tname = str(row.get('technique_name') or '').strip()
+            if tid and tid != 'unmapped':
+                candidates.append(f"{tid} {tname}".strip())
+        return _make_dimension(score, reasons, evidence_ids), sorted(dict.fromkeys(candidates)), mapped
 
     def _evaluate_blast_radius(self, payloads: List[Dict[str, Any]], flow_payloads: List[Dict[str, Any]], criticality: Dict[str, Any] | None = None) -> Dict[str, Any]:
         if not payloads:

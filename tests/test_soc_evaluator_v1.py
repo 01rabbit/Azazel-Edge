@@ -114,6 +114,8 @@ class SocEvaluatorV1Tests(unittest.TestCase):
         self.assertIn('attack_candidates', result['summary'])
         self.assertTrue(result['summary']['attack_candidates'])
         self.assertIn('T1071 Application Layer Protocol', result['summary']['attack_candidates'])
+        self.assertIn('attack_techniques', result['summary'])
+        self.assertTrue(result['summary']['attack_techniques'])
 
     def test_handoff_payload_is_fixed_schema(self) -> None:
         evaluator = SocEvaluator()

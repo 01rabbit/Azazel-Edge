@@ -33,6 +33,10 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - structured enforcement outcome with trace_id, selected action, target, command plan, result, and rollback hint
 - SOC policy dry-run helper (`bin/azazel-soc-policy-dry-run`) and profile examples (`conservative`, `balanced`, `demo`).
 - Dashboard trends expanded with CPU/memory/temperature/interface utilization fields and windowed trend query support.
+- ATT&CK evidence enrichment baseline:
+  - `config/attack_mapping.yaml` mapping rules with confidence
+  - mapped/unmapped handling in SOC evaluator summary (`attack_techniques`)
+  - mapping schema validation + mapped/unmapped/conflict tests
 
 ### Changed
 - Dependency review CI job now runs only when repository variable `ENABLE_DEPENDENCY_REVIEW` is set to `true`.
