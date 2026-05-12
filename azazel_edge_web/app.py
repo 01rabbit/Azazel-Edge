@@ -246,6 +246,15 @@ DASHBOARD_SNAPSHOT_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_SNAPSHOT_S
 DASHBOARD_AI_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_AI_STALE_SEC", "120"))
 DASHBOARD_EVENT_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_EVENT_STALE_SEC", "300"))
 DASHBOARD_ASSIST_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_ASSIST_STALE_SEC", "90"))
+DASHBOARD_TRENDS_PATH = Path(os.environ.get("AZAZEL_DASHBOARD_TRENDS_PATH", "/run/azazel-edge/dashboard-trends.jsonl"))
+DASHBOARD_TRENDS_WRITE_INTERVAL_SEC = float(os.environ.get("AZAZEL_DASHBOARD_TRENDS_WRITE_INTERVAL_SEC", "15"))
+DASHBOARD_TRENDS_RETENTION_SEC = float(os.environ.get("AZAZEL_DASHBOARD_TRENDS_RETENTION_SEC", "3600"))
+DASHBOARD_TRENDS_LIMIT = int(os.environ.get("AZAZEL_DASHBOARD_TRENDS_LIMIT", "240"))
+ALERT_QUEUE_NOW_THRESHOLD = int(os.environ.get("AZAZEL_ALERT_QUEUE_NOW_THRESHOLD", "80"))
+ALERT_QUEUE_WATCH_THRESHOLD = int(os.environ.get("AZAZEL_ALERT_QUEUE_WATCH_THRESHOLD", "50"))
+ALERT_QUEUE_ESCALATE_THRESHOLD = int(os.environ.get("AZAZEL_ALERT_QUEUE_ESCALATE_THRESHOLD", "90"))
+_dashboard_trends_lock = threading.Lock()
+_dashboard_trends_last_write_ts = 0.0
 _TRIAGE_STORE = TriageSessionStore(base_dir=TRIAGE_SESSION_DIR) if TriageSessionStore is not None else None
 _TRIAGE_ENGINE = TriageFlowEngine(store=_TRIAGE_STORE) if TriageFlowEngine is not None and _TRIAGE_STORE is not None else None
 _CA_CERT_FILENAME = "azazel-webui-local-ca.crt"
@@ -2085,6 +2094,58 @@ def _normalize_alert_event(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _dashboard_alert_queues_payload(state: Dict[str, Any], recent_alerts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    now_threshold = max(0, min(100, _as_int(ALERT_QUEUE_NOW_THRESHOLD, 80)))
+    watch_threshold = max(0, min(now_threshold, _as_int(ALERT_QUEUE_WATCH_THRESHOLD, 50)))
+    escalate_threshold = max(now_threshold, min(100, _as_int(ALERT_QUEUE_ESCALATE_THRESHOLD, 90)))
+    now_items: List[Dict[str, Any]] = []
+    watch_items: List[Dict[str, Any]] = []
+    backlog_items: List[Dict[str, Any]] = []
+    escalation_candidates: List[Dict[str, Any]] = []
+    for alert in recent_alerts:
+        risk = _as_int(alert.get("risk_score"), 0)
+        severity = _as_int(alert.get("severity"), 0)
+        recommendation = str(alert.get("recommendation") or "").lower()
+        compact = {
+            "ts_iso": str(alert.get("ts_iso") or ""),
+            "src_ip": str(alert.get("src_ip") or ""),
+            "dst_ip": str(alert.get("dst_ip") or ""),
+            "sid": _as_int(alert.get("sid"), 0),
+            "risk_score": risk,
+            "risk_level": str(alert.get("risk_level") or ""),
+            "attack_type": str(alert.get("attack_type") or ""),
+            "recommendation": str(alert.get("recommendation") or ""),
+        }
+        if risk >= now_threshold:
+            now_items.append(compact)
+        elif risk >= watch_threshold:
+            watch_items.append(compact)
+        else:
+            backlog_items.append(compact)
+
+        if risk >= escalate_threshold or "isolate" in recommendation or "redirect" in recommendation or "throttle" in recommendation or (severity > 0 and severity <= 1):
+            escalation_candidates.append(compact)
+
+    second_pass_soc = state.get("second_pass_soc") if isinstance(state.get("second_pass_soc"), dict) else {}
+    suppression = second_pass_soc.get("suppression_exception_state") if isinstance(second_pass_soc.get("suppression_exception_state"), dict) else {}
+    return {
+        "now": {"count": len(now_items), "items": now_items[:5]},
+        "watch": {"count": len(watch_items), "items": watch_items[:5]},
+        "backlog": {"count": len(backlog_items), "items": backlog_items[:5]},
+        "escalation_candidates": escalation_candidates[:5],
+        "suppression": {
+            "status": str(suppression.get("status") or "normal"),
+            "suppressed_count": _as_int(suppression.get("suppressed_count"), _as_int(second_pass_soc.get("suppressed_count"), 0)),
+            "exception_count": _as_int(suppression.get("exception_count"), 0),
+        },
+        "thresholds": {
+            "now": now_threshold,
+            "watch": watch_threshold,
+            "escalate": escalate_threshold,
+        },
+    }
+
+
 def _normalize_ai_activity(item: Dict[str, Any]) -> Dict[str, Any]:
     response = item.get("response") if isinstance(item.get("response"), dict) else {}
     ts = _as_float(item.get("ts"), 0.0)
@@ -2987,6 +3048,7 @@ def _dashboard_evidence_payload(
     recent_alerts = [_normalize_alert_event(item) for item in alert_rows[-10:]]
     if not recent_alerts and advisory:
         recent_alerts = [_normalize_alert_event({"advisory": advisory, "event": {}})]
+    alert_queues = _dashboard_alert_queues_payload(state, recent_alerts)
     ai_activity = [_normalize_ai_activity(item) for item in llm_rows[-10:]]
     runbook_events = [_normalize_runbook_event(item) for item in runbook_rows[-10:]]
     triage_audit = [_normalize_triage_audit_event(item) for item in triage_rows[-10:]]
@@ -3015,6 +3077,7 @@ def _dashboard_evidence_payload(
         "recent_runbook_events": runbook_events,
         "recent_triage_audit": triage_audit,
         "recent_mode_changes": _recent_mode_changes(mode_runtime),
+        "alert_queues": alert_queues,
         "current_triggers": sections["current_triggers"],
         "decision_changes": sections["decision_changes"],
         "operator_interactions": sections["operator_interactions"],
@@ -3046,7 +3109,7 @@ def _dashboard_health_payload(state: Dict[str, Any], metrics: Dict[str, Any], ll
     }
     reachable, ping = _mattermost_ping()
     ai_governance = _dashboard_ai_governance_payload(metrics, now_epoch=now_epoch)
-    return {
+    payload = {
         "ok": True,
         "stale_flags": {
             "snapshot": bool(snapshot_age is not None and snapshot_age > DASHBOARD_SNAPSHOT_STALE_SEC),
@@ -3090,6 +3153,8 @@ def _dashboard_health_payload(state: Dict[str, Any], metrics: Dict[str, Any], ll
         },
         "ai_governance": ai_governance,
     }
+    _record_dashboard_trend_point(state, metrics, payload, now_epoch=now_epoch)
+    return payload
 
 
 def _dashboard_ai_governance_payload(metrics: Dict[str, Any], *, now_epoch: float | None = None) -> Dict[str, Any]:
@@ -3129,6 +3194,98 @@ def _dashboard_ai_governance_payload(metrics: Dict[str, Any], *, now_epoch: floa
             "manual_completed": manual_completed,
         },
     }
+
+
+def _dashboard_trend_point_payload(
+    state: Dict[str, Any],
+    metrics: Dict[str, Any],
+    health: Dict[str, Any],
+    *,
+    now_epoch: float | None = None,
+) -> Dict[str, Any]:
+    now = float(now_epoch if now_epoch is not None else time.time())
+    queue = health.get("queue") if isinstance(health.get("queue"), dict) else {}
+    llm = health.get("llm") if isinstance(health.get("llm"), dict) else {}
+    stale_flags = health.get("stale_flags") if isinstance(health.get("stale_flags"), dict) else {}
+    ai_governance = health.get("ai_governance") if isinstance(health.get("ai_governance"), dict) else {}
+    rates = ai_governance.get("rates") if isinstance(ai_governance.get("rates"), dict) else {}
+    return {
+        "ts": now,
+        "ts_iso": _iso_from_epoch(now),
+        "state": str(state.get("user_state") or ""),
+        "queue_depth": _as_int(queue.get("depth"), _as_int(metrics.get("queue_depth"), 0)),
+        "queue_capacity": _as_int(queue.get("capacity"), _as_int(metrics.get("queue_capacity"), 0)),
+        "queue_max_seen": _as_int(queue.get("max_seen"), _as_int(metrics.get("queue_max_seen"), 0)),
+        "llm_fallback_rate": _as_float(llm.get("fallback_rate"), _as_float(metrics.get("llm_fallback_rate"), 0.0)),
+        "llm_latency_ms_ema": _as_float(llm.get("latency_ms_ema"), _as_float(metrics.get("llm_latency_ms_ema"), 0.0)),
+        "manual_routed_count": _as_int(llm.get("manual_routed_count"), _as_int(metrics.get("manual_routed_count"), 0)),
+        "stale_snapshot": bool(stale_flags.get("snapshot")),
+        "stale_ai_metrics": bool(stale_flags.get("ai_metrics")),
+        "ai_contribution_rate": _as_float(rates.get("ai_contribution"), 0.0),
+    }
+
+
+def _record_dashboard_trend_point(state: Dict[str, Any], metrics: Dict[str, Any], health: Dict[str, Any], *, now_epoch: float | None = None) -> None:
+    global _dashboard_trends_last_write_ts
+    now = float(now_epoch if now_epoch is not None else time.time())
+    with _dashboard_trends_lock:
+        if _dashboard_trends_last_write_ts and now - _dashboard_trends_last_write_ts < max(1.0, DASHBOARD_TRENDS_WRITE_INTERVAL_SEC):
+            return
+        _dashboard_trends_last_write_ts = now
+    point = _dashboard_trend_point_payload(state, metrics, health, now_epoch=now)
+    _append_jsonl(DASHBOARD_TRENDS_PATH, point)
+
+
+def _dashboard_trends_payload(limit: int = 120) -> Dict[str, Any]:
+    safe_limit = max(1, min(limit, DASHBOARD_TRENDS_LIMIT))
+    rows = _tail_jsonl(DASHBOARD_TRENDS_PATH, limit=max(safe_limit * 2, 40))
+    now_epoch = time.time()
+    retention = max(60.0, DASHBOARD_TRENDS_RETENTION_SEC)
+    filtered: List[Dict[str, Any]] = []
+    for row in rows:
+        ts = _as_float(row.get("ts"), 0.0)
+        if ts <= 0:
+            continue
+        if now_epoch - ts > retention:
+            continue
+        filtered.append(row)
+    points = filtered[-safe_limit:]
+    if not points:
+        return {"ok": True, "points": [], "summary": {"samples": 0}}
+
+    queue_depth_values = [_as_int(item.get("queue_depth"), 0) for item in points]
+    fallback_values = [_as_float(item.get("llm_fallback_rate"), 0.0) for item in points]
+    latency_values = [_as_float(item.get("llm_latency_ms_ema"), 0.0) for item in points]
+    snapshot_stale_count = sum(1 for item in points if bool(item.get("stale_snapshot")))
+    ai_stale_count = sum(1 for item in points if bool(item.get("stale_ai_metrics")))
+    return {
+        "ok": True,
+        "points": points,
+        "summary": {
+            "samples": len(points),
+            "window_sec": int(round(max(0.0, _as_float(points[-1].get("ts"), 0.0) - _as_float(points[0].get("ts"), 0.0)))),
+            "queue_depth": {
+                "min": min(queue_depth_values),
+                "max": max(queue_depth_values),
+                "avg": round(sum(queue_depth_values) / len(queue_depth_values), 4),
+            },
+            "llm_fallback_rate": {
+                "min": round(min(fallback_values), 4),
+                "max": round(max(fallback_values), 4),
+                "avg": round(sum(fallback_values) / len(fallback_values), 4),
+            },
+            "llm_latency_ms_ema": {
+                "min": round(min(latency_values), 2),
+                "max": round(max(latency_values), 2),
+                "avg": round(sum(latency_values) / len(latency_values), 2),
+            },
+            "stale_flags": {
+                "snapshot_count": snapshot_stale_count,
+                "ai_metrics_count": ai_stale_count,
+            },
+        },
+    }
+
 
 def verify_token() -> bool:
     """リクエストのトークン検証（ヘッダーまたはクエリパラメータ）"""
@@ -5135,6 +5292,13 @@ def api_dashboard_health():
     llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
     runbook_rows = _tail_jsonl(RUNBOOK_EVENT_LOG, limit=20)
     return jsonify(_dashboard_health_payload(state, metrics, llm_rows, runbook_rows)), 200
+
+
+@app.route("/api/dashboard/trends", methods=["GET"])
+@require_token()
+def api_dashboard_trends():
+    limit = _as_int(request.args.get("limit"), 120)
+    return jsonify(_dashboard_trends_payload(limit=limit)), 200
 
 
 @app.route("/api/dashboard/ai-governance", methods=["GET"])

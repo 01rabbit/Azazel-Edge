@@ -11,6 +11,13 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - CycloneDX SBOM generation (`sbom-runtime.cdx.json`)
   - Dependency vulnerability scan baseline (`pip-audit-runtime.json`)
   - Artifact upload for supply-chain outputs
+- Dashboard evidence alert queue aggregation (`now/watch/backlog`) with suppression snapshot and escalation candidate projection.
+- Lightweight dashboard trends API (`/api/dashboard/trends`) backed by JSONL time-series points for queue depth, fallback rate, latency EMA, and stale flags.
+- Dashboard evidence panel cards for Alert Queues and Trend Snapshot (wired to deterministic evidence and trends APIs).
+- Tunable alert-queue thresholds via env vars:
+  - `AZAZEL_ALERT_QUEUE_NOW_THRESHOLD`
+  - `AZAZEL_ALERT_QUEUE_WATCH_THRESHOLD`
+  - `AZAZEL_ALERT_QUEUE_ESCALATE_THRESHOLD`
 
 ### Changed
 - Dependency review CI job now runs only when repository variable `ENABLE_DEPENDENCY_REVIEW` is set to `true`.
