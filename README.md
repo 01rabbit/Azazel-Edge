@@ -226,6 +226,10 @@ Install result (default scripts):
 - Topo-Lite synthetic seed mode:
   - `AZAZEL_TOPOLITE_SEED_MODE_PATH` (mode state file, default `/run/azazel-edge/topolite_seed_mode.json`)
   - API: `POST /api/topolite/seed-mode` with `mode=live|synthetic` and optional `seed_id`
+- Alert queue classification thresholds:
+  - `AZAZEL_ALERT_QUEUE_NOW_THRESHOLD` (default `80`)
+  - `AZAZEL_ALERT_QUEUE_WATCH_THRESHOLD` (default `50`)
+  - `AZAZEL_ALERT_QUEUE_ESCALATE_THRESHOLD` (default `90`)
 
 ### Token auth
 - API token can be supplied by header `X-AZAZEL-TOKEN` (or `X-Auth-Token`) or `?token=`.

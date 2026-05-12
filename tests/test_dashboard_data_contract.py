@@ -29,6 +29,9 @@ class DashboardDataContractTests(unittest.TestCase):
             "DASHBOARD_TRENDS_PATH": webapp.DASHBOARD_TRENDS_PATH,
             "DASHBOARD_TRENDS_WRITE_INTERVAL_SEC": webapp.DASHBOARD_TRENDS_WRITE_INTERVAL_SEC,
             "_dashboard_trends_last_write_ts": webapp._dashboard_trends_last_write_ts,
+            "ALERT_QUEUE_NOW_THRESHOLD": webapp.ALERT_QUEUE_NOW_THRESHOLD,
+            "ALERT_QUEUE_WATCH_THRESHOLD": webapp.ALERT_QUEUE_WATCH_THRESHOLD,
+            "ALERT_QUEUE_ESCALATE_THRESHOLD": webapp.ALERT_QUEUE_ESCALATE_THRESHOLD,
             "cp_read_snapshot_payload": webapp.cp_read_snapshot_payload,
             "load_token": webapp.load_token,
             "AUTH_FAIL_OPEN": webapp.AUTH_FAIL_OPEN,
@@ -56,6 +59,9 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.DASHBOARD_TRENDS_PATH = root / "dashboard-trends.jsonl"
         webapp.DASHBOARD_TRENDS_WRITE_INTERVAL_SEC = 0.0
         webapp._dashboard_trends_last_write_ts = 0.0
+        webapp.ALERT_QUEUE_NOW_THRESHOLD = 80
+        webapp.ALERT_QUEUE_WATCH_THRESHOLD = 50
+        webapp.ALERT_QUEUE_ESCALATE_THRESHOLD = 90
         webapp.TOPOLITE_SEED_MODE_PATH = root / "topolite_seed_mode.json"
         webapp.cp_read_snapshot_payload = None
         webapp.load_token = lambda: None
@@ -326,6 +332,9 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.DASHBOARD_TRENDS_PATH = self._orig["DASHBOARD_TRENDS_PATH"]
         webapp.DASHBOARD_TRENDS_WRITE_INTERVAL_SEC = self._orig["DASHBOARD_TRENDS_WRITE_INTERVAL_SEC"]
         webapp._dashboard_trends_last_write_ts = self._orig["_dashboard_trends_last_write_ts"]
+        webapp.ALERT_QUEUE_NOW_THRESHOLD = self._orig["ALERT_QUEUE_NOW_THRESHOLD"]
+        webapp.ALERT_QUEUE_WATCH_THRESHOLD = self._orig["ALERT_QUEUE_WATCH_THRESHOLD"]
+        webapp.ALERT_QUEUE_ESCALATE_THRESHOLD = self._orig["ALERT_QUEUE_ESCALATE_THRESHOLD"]
         webapp.cp_read_snapshot_payload = self._orig["cp_read_snapshot_payload"]
         webapp.load_token = self._orig["load_token"]
         webapp.AUTH_FAIL_OPEN = self._orig["AUTH_FAIL_OPEN"]
@@ -816,9 +825,25 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("watch", payload["alert_queues"])
         self.assertIn("backlog", payload["alert_queues"])
         self.assertIn("escalation_candidates", payload["alert_queues"])
+        self.assertEqual(payload["alert_queues"]["thresholds"]["now"], 80)
+        self.assertEqual(payload["alert_queues"]["thresholds"]["watch"], 50)
+        self.assertEqual(payload["alert_queues"]["thresholds"]["escalate"], 90)
         self.assertEqual(payload["recent_ai_activity"][0]["runbook_id"], "rb.noc.dns.failure.check")
         self.assertEqual(payload["recent_runbook_events"][0]["action"], "preview")
         self.assertEqual(payload["recent_mode_changes"][0]["current_mode"], "shield")
+
+    def test_dashboard_evidence_alert_queue_thresholds_are_tunable(self) -> None:
+        webapp.ALERT_QUEUE_NOW_THRESHOLD = 60
+        webapp.ALERT_QUEUE_WATCH_THRESHOLD = 40
+        webapp.ALERT_QUEUE_ESCALATE_THRESHOLD = 70
+        response = self.client.get("/api/dashboard/evidence")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        queues = payload["alert_queues"]
+        self.assertEqual(queues["thresholds"]["now"], 60)
+        self.assertEqual(queues["thresholds"]["watch"], 40)
+        self.assertEqual(queues["thresholds"]["escalate"], 70)
+        self.assertEqual(queues["now"]["count"], 1)
 
     def test_topolite_seed_mode_toggle_and_summary_reflection(self) -> None:
         get_before = self.client.get("/api/topolite/seed-mode")

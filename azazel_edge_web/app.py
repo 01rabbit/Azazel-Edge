@@ -250,6 +250,9 @@ DASHBOARD_TRENDS_PATH = Path(os.environ.get("AZAZEL_DASHBOARD_TRENDS_PATH", "/ru
 DASHBOARD_TRENDS_WRITE_INTERVAL_SEC = float(os.environ.get("AZAZEL_DASHBOARD_TRENDS_WRITE_INTERVAL_SEC", "15"))
 DASHBOARD_TRENDS_RETENTION_SEC = float(os.environ.get("AZAZEL_DASHBOARD_TRENDS_RETENTION_SEC", "3600"))
 DASHBOARD_TRENDS_LIMIT = int(os.environ.get("AZAZEL_DASHBOARD_TRENDS_LIMIT", "240"))
+ALERT_QUEUE_NOW_THRESHOLD = int(os.environ.get("AZAZEL_ALERT_QUEUE_NOW_THRESHOLD", "80"))
+ALERT_QUEUE_WATCH_THRESHOLD = int(os.environ.get("AZAZEL_ALERT_QUEUE_WATCH_THRESHOLD", "50"))
+ALERT_QUEUE_ESCALATE_THRESHOLD = int(os.environ.get("AZAZEL_ALERT_QUEUE_ESCALATE_THRESHOLD", "90"))
 _dashboard_trends_lock = threading.Lock()
 _dashboard_trends_last_write_ts = 0.0
 _TRIAGE_STORE = TriageSessionStore(base_dir=TRIAGE_SESSION_DIR) if TriageSessionStore is not None else None
@@ -2092,6 +2095,9 @@ def _normalize_alert_event(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _dashboard_alert_queues_payload(state: Dict[str, Any], recent_alerts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    now_threshold = max(0, min(100, _as_int(ALERT_QUEUE_NOW_THRESHOLD, 80)))
+    watch_threshold = max(0, min(now_threshold, _as_int(ALERT_QUEUE_WATCH_THRESHOLD, 50)))
+    escalate_threshold = max(now_threshold, min(100, _as_int(ALERT_QUEUE_ESCALATE_THRESHOLD, 90)))
     now_items: List[Dict[str, Any]] = []
     watch_items: List[Dict[str, Any]] = []
     backlog_items: List[Dict[str, Any]] = []
@@ -2110,14 +2116,14 @@ def _dashboard_alert_queues_payload(state: Dict[str, Any], recent_alerts: List[D
             "attack_type": str(alert.get("attack_type") or ""),
             "recommendation": str(alert.get("recommendation") or ""),
         }
-        if risk >= 80:
+        if risk >= now_threshold:
             now_items.append(compact)
-        elif risk >= 50:
+        elif risk >= watch_threshold:
             watch_items.append(compact)
         else:
             backlog_items.append(compact)
 
-        if risk >= 90 or "isolate" in recommendation or "redirect" in recommendation or "throttle" in recommendation or (severity > 0 and severity <= 1):
+        if risk >= escalate_threshold or "isolate" in recommendation or "redirect" in recommendation or "throttle" in recommendation or (severity > 0 and severity <= 1):
             escalation_candidates.append(compact)
 
     second_pass_soc = state.get("second_pass_soc") if isinstance(state.get("second_pass_soc"), dict) else {}
@@ -2131,6 +2137,11 @@ def _dashboard_alert_queues_payload(state: Dict[str, Any], recent_alerts: List[D
             "status": str(suppression.get("status") or "normal"),
             "suppressed_count": _as_int(suppression.get("suppressed_count"), _as_int(second_pass_soc.get("suppressed_count"), 0)),
             "exception_count": _as_int(suppression.get("exception_count"), 0),
+        },
+        "thresholds": {
+            "now": now_threshold,
+            "watch": watch_threshold,
+            "escalate": escalate_threshold,
         },
     }
 
