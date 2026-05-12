@@ -92,7 +92,14 @@ try:
         warn_if_legacy_path,
     )
     from azazel_edge.sot import SoTConfig, SoTValidationError
-    from azazel_edge.aggregator import AggregatorRegistry, FreshnessPolicy
+    from azazel_edge.aggregator import (
+        AggregatorRegistry,
+        FreshnessPolicy,
+        AEVT_NODE_REGISTER,
+        AEVT_INGEST_ACCEPT,
+        AEVT_INGEST_REJECT,
+        AEVT_NODE_QUARANTINE,
+    )
 except Exception:
     cp_read_snapshot_payload = None
     cp_watch_snapshots = None
@@ -201,6 +208,14 @@ MATTERMOST_COMMAND_PRIMARY_TRIGGER = str(os.environ.get("AZAZEL_MATTERMOST_COMMA
 AGGREGATOR_POLL_INTERVAL_SEC = max(5, int(os.environ.get("AZAZEL_AGGREGATOR_POLL_INTERVAL_SEC", "30")))
 AGGREGATOR_STALE_MULTIPLIER = max(2, int(os.environ.get("AZAZEL_AGGREGATOR_STALE_MULTIPLIER", "2")))
 AGGREGATOR_OFFLINE_MULTIPLIER = max(3, int(os.environ.get("AZAZEL_AGGREGATOR_OFFLINE_MULTIPLIER", "6")))
+_agg_hmac_key_raw = os.environ.get("AZAZEL_AGGREGATOR_INGEST_HMAC_KEY", "")
+AGGREGATOR_INGEST_HMAC_SECRET: bytes | None = _agg_hmac_key_raw.encode("utf-8") if _agg_hmac_key_raw else None
+AGGREGATOR_SIG_REQUIRED = os.environ.get("AZAZEL_AGGREGATOR_SIG_REQUIRED", "false").lower() in ("1", "true", "yes")
+AGGREGATOR_REPLAY_WINDOW_SEC = max(30, int(os.environ.get("AZAZEL_AGGREGATOR_REPLAY_WINDOW_SEC", "300")))
+AGGREGATOR_AUDIT_LOG = Path(
+    str(os.environ.get("AZAZEL_AGGREGATOR_AUDIT_LOG", "/var/log/azazel-edge/aggregator-events.jsonl")).strip()
+    or "/var/log/azazel-edge/aggregator-events.jsonl"
+)
 
 if AggregatorRegistry is not None and FreshnessPolicy is not None:
     _AGGREGATOR_REGISTRY = AggregatorRegistry(
@@ -208,7 +223,10 @@ if AggregatorRegistry is not None and FreshnessPolicy is not None:
             poll_interval_sec=AGGREGATOR_POLL_INTERVAL_SEC,
             stale_multiplier=AGGREGATOR_STALE_MULTIPLIER,
             offline_multiplier=AGGREGATOR_OFFLINE_MULTIPLIER,
-        )
+        ),
+        hmac_secret=AGGREGATOR_INGEST_HMAC_SECRET,
+        sig_required=AGGREGATOR_SIG_REQUIRED,
+        replay_window_sec=AGGREGATOR_REPLAY_WINDOW_SEC,
     )
 else:
     _AGGREGATOR_REGISTRY = None
@@ -3605,6 +3623,31 @@ def _audit_authz_event(
         app.logger.warning(f"authz audit logging failed: {e}")
 
 
+def _audit_aggregator_event(
+    *,
+    event: str,
+    node_id: str,
+    trace_id: str = "",
+    reason: str = "",
+    **extra: Any,
+) -> None:
+    try:
+        _append_jsonl(
+            AGGREGATOR_AUDIT_LOG,
+            {
+                "ts": time.time(),
+                "event": str(event),
+                "node_id": str(node_id or ""),
+                "trace_id": str(trace_id or _request_trace_id()),
+                "principal": str(getattr(g, "auth_principal", "") or ""),
+                "reason": str(reason or ""),
+                **extra,
+            },
+        )
+    except Exception as e:
+        app.logger.warning(f"aggregator audit logging failed: {e}")
+
+
 def _unauthorized_response(*, ok_payload: Optional[bool] = False, status_code: int = 403) -> tuple[Response, int]:
     if ok_payload is None:
         payload: Dict[str, Any] = {"error": "Unauthorized"}
@@ -5025,7 +5068,10 @@ def api_aggregator_register_node():
             trust_fingerprint=trust_fingerprint,
         )
     except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
+        err = str(e)
+        _audit_aggregator_event(event=AEVT_NODE_REGISTER, node_id=node_id, reason=err, accepted=False)
+        return jsonify({"ok": False, "error": err}), 400
+    _audit_aggregator_event(event=AEVT_NODE_REGISTER, node_id=node_id, reason="ok", accepted=True)
     return jsonify({"ok": True, "node": node}), 200
 
 
@@ -5037,10 +5083,30 @@ def api_aggregator_ingest_summary():
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({"ok": False, "error": "payload_must_be_object"}), 400
+    node_id_hint = ""
+    try:
+        node_hint = body.get("node") if isinstance(body.get("node"), dict) else {}
+        node_id_hint = str(node_hint.get("node_id") or "").strip()
+    except Exception:
+        pass
     try:
         result = _AGGREGATOR_REGISTRY.ingest_summary(body)
     except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
+        err = str(e)
+        event = AEVT_NODE_QUARANTINE if err == "sig_invalid" else AEVT_INGEST_REJECT
+        _audit_aggregator_event(
+            event=event,
+            node_id=node_id_hint,
+            trace_id=str(body.get("trace_id") or ""),
+            reason=err,
+        )
+        return jsonify({"ok": False, "error": err}), 400
+    _audit_aggregator_event(
+        event=AEVT_INGEST_ACCEPT,
+        node_id=result["node_id"],
+        trace_id=result["trace_id"],
+        reason="ok",
+    )
     return jsonify(result), 200
 
 
