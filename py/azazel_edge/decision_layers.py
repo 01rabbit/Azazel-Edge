@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 from azazel_edge.evaluators import SocEvaluator
 from azazel_edge.evidence_plane import adapt_flow_record, adapt_suricata_record
+from azazel_edge.policy import load_soc_policy
 
 
 def _normalized_confidence_from_risk(risk_score: int) -> int:
@@ -70,7 +71,13 @@ class DecisionLayers:
     """
 
     def __init__(self, soc_evaluator: SocEvaluator | None = None):
-        self.soc_evaluator = soc_evaluator or SocEvaluator()
+        if soc_evaluator is not None:
+            self.soc_evaluator = soc_evaluator
+        else:
+            policy = load_soc_policy()
+            suppression_policy = policy.get("suppression_defaults") if isinstance(policy.get("suppression_defaults"), dict) else {}
+            self.soc_evaluator = SocEvaluator(suppression_policy=suppression_policy)
+        self.soc_policy = load_soc_policy()
 
     def enrich_with_second_pass(self, event: Dict[str, Any], advisory: Dict[str, Any]) -> Dict[str, Any]:
         suricata_event = adapt_suricata_record(_build_suricata_record(event, advisory))
@@ -115,5 +122,9 @@ class DecisionLayers:
                 'behavior_sequence_state': soc.get('behavior_sequence_state', {}) if isinstance(soc.get('behavior_sequence_state'), dict) else {},
                 'triage_priority_state': soc.get('triage_priority_state', {}) if isinstance(soc.get('triage_priority_state'), dict) else {},
                 'evidence_ids': list(soc.get('evidence_ids') or []),
+                'policy': {
+                    'version': str(self.soc_policy.get("version") or "soc-policy-default-v1"),
+                    'hash': str(self.soc_policy.get("hash") or "default"),
+                },
             },
         }

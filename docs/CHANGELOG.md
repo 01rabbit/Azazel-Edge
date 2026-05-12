@@ -18,6 +18,15 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `AZAZEL_ALERT_QUEUE_NOW_THRESHOLD`
   - `AZAZEL_ALERT_QUEUE_WATCH_THRESHOLD`
   - `AZAZEL_ALERT_QUEUE_ESCALATE_THRESHOLD`
+- Auth hardening baseline:
+  - fail-closed role-based API auth (`viewer/operator/responder/admin`)
+  - optional mTLS fingerprint enforcement for action-capable endpoints
+  - authorization audit log with principal, role, trace_id, requested action, and decision result
+- Alert aggregation baseline with suppression window, aggregation window, and escalation count threshold.
+- SOC policy baseline:
+  - `config/soc_policy.yaml`
+  - `AZAZEL_SOC_POLICY_PATH`
+  - policy version/hash attached to arbiter decisions
 
 ### Changed
 - Dependency review CI job now runs only when repository variable `ENABLE_DEPENDENCY_REVIEW` is set to `true`.

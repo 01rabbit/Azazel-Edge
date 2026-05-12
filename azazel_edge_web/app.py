@@ -18,6 +18,7 @@ from flask import (
     Response,
     stream_with_context,
     has_request_context,
+    g,
 )
 import json
 import os
@@ -146,6 +147,17 @@ OPERATOR_PROGRESS_PATH = Path(os.environ.get("AZAZEL_OPERATOR_PROGRESS_PATH", "/
 _TOKEN_FILE_OVERRIDE = str(os.environ.get("AZAZEL_WEB_TOKEN_FILE", "")).strip()
 TOKEN_FILE = Path(_TOKEN_FILE_OVERRIDE) if _TOKEN_FILE_OVERRIDE else web_token_candidates()[0]
 AUTH_FAIL_OPEN = os.environ.get("AZAZEL_AUTH_FAIL_OPEN", "0") == "1"
+AUTH_TOKENS_FILE = Path(str(os.environ.get("AZAZEL_AUTH_TOKENS_FILE", "/etc/azazel-edge/auth_tokens.json")).strip() or "/etc/azazel-edge/auth_tokens.json")
+AUTHZ_AUDIT_LOG = Path(str(os.environ.get("AZAZEL_AUTHZ_AUDIT_LOG", "/var/log/azazel-edge/authz-events.jsonl")).strip() or "/var/log/azazel-edge/authz-events.jsonl")
+AUTH_MTLS_REQUIRED = str(os.environ.get("AZAZEL_AUTH_MTLS_REQUIRED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+AUTH_MTLS_HEADER = str(os.environ.get("AZAZEL_AUTH_MTLS_HEADER", "X-Client-Cert-Fingerprint")).strip() or "X-Client-Cert-Fingerprint"
+AUTH_MTLS_FINGERPRINTS = {
+    item.strip().lower()
+    for item in str(os.environ.get("AZAZEL_AUTH_MTLS_FINGERPRINTS", "")).split(",")
+    if item.strip()
+}
+AUTH_MTLS_FINGERPRINTS_FILE = Path(str(os.environ.get("AZAZEL_AUTH_MTLS_FINGERPRINTS_FILE", "/etc/azazel-edge/client-cert-fingerprints.txt")).strip() or "/etc/azazel-edge/client-cert-fingerprints.txt")
+_ROLE_RANK: Dict[str, int] = {"viewer": 10, "operator": 20, "responder": 30, "admin": 40}
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
 LOCAL_DEMO_RUNNER = PROJECT_ROOT / "bin" / "azazel-edge-demo"
 OPT_DEMO_RUNNER = Path("/opt/azazel-edge/bin/azazel-edge-demo")
@@ -253,6 +265,9 @@ DASHBOARD_TRENDS_LIMIT = int(os.environ.get("AZAZEL_DASHBOARD_TRENDS_LIMIT", "24
 ALERT_QUEUE_NOW_THRESHOLD = int(os.environ.get("AZAZEL_ALERT_QUEUE_NOW_THRESHOLD", "80"))
 ALERT_QUEUE_WATCH_THRESHOLD = int(os.environ.get("AZAZEL_ALERT_QUEUE_WATCH_THRESHOLD", "50"))
 ALERT_QUEUE_ESCALATE_THRESHOLD = int(os.environ.get("AZAZEL_ALERT_QUEUE_ESCALATE_THRESHOLD", "90"))
+ALERT_SUPPRESSION_WINDOW_SEC = int(os.environ.get("AZAZEL_ALERT_SUPPRESSION_WINDOW_SEC", "120"))
+ALERT_AGGREGATION_WINDOW_SEC = int(os.environ.get("AZAZEL_ALERT_AGGREGATION_WINDOW_SEC", "300"))
+ALERT_ESCALATION_COUNT_THRESHOLD = int(os.environ.get("AZAZEL_ALERT_ESCALATION_COUNT_THRESHOLD", "5"))
 _dashboard_trends_lock = threading.Lock()
 _dashboard_trends_last_write_ts = 0.0
 _TRIAGE_STORE = TriageSessionStore(base_dir=TRIAGE_SESSION_DIR) if TriageSessionStore is not None else None
@@ -2146,6 +2161,90 @@ def _dashboard_alert_queues_payload(state: Dict[str, Any], recent_alerts: List[D
     }
 
 
+def _dashboard_alert_aggregation_payload(recent_alerts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    now_epoch = time.time()
+    suppression_window = max(30, int(ALERT_SUPPRESSION_WINDOW_SEC))
+    aggregation_window = max(suppression_window, int(ALERT_AGGREGATION_WINDOW_SEC))
+    escalation_count = max(2, int(ALERT_ESCALATION_COUNT_THRESHOLD))
+    groups: Dict[str, Dict[str, Any]] = {}
+    for alert in recent_alerts:
+        ts = _as_float(alert.get("ts"), 0.0)
+        if ts <= 0 or now_epoch - ts > aggregation_window:
+            continue
+        src = str(alert.get("src_ip") or "-")
+        dst = str(alert.get("dst_ip") or "-")
+        sid = _as_int(alert.get("sid"), 0)
+        attack_type = str(alert.get("attack_type") or "-")
+        risk_level = str(alert.get("risk_level") or "-")
+        key = f"{src}|{dst}|{sid}|{attack_type}|{risk_level}"
+        row = groups.setdefault(
+            key,
+            {
+                "key": key,
+                "src_ip": src,
+                "dst_ip": dst,
+                "sid": sid,
+                "attack_type": attack_type,
+                "risk_level": risk_level,
+                "first_ts": ts,
+                "last_ts": ts,
+                "count": 0,
+                "suppressed_count": 0,
+                "risk_score_max": 0,
+                "recommendation": str(alert.get("recommendation") or ""),
+            },
+        )
+        row["count"] = _as_int(row.get("count"), 0) + 1
+        row["first_ts"] = min(_as_float(row.get("first_ts"), ts), ts)
+        row["last_ts"] = max(_as_float(row.get("last_ts"), ts), ts)
+        row["risk_score_max"] = max(_as_int(row.get("risk_score_max"), 0), _as_int(alert.get("risk_score"), 0))
+
+    group_items = sorted(groups.values(), key=lambda x: (_as_int(x.get("count"), 0), _as_int(x.get("risk_score_max"), 0)), reverse=True)
+    summaries: List[Dict[str, Any]] = []
+    escalations: List[Dict[str, Any]] = []
+    suppressed_total = 0
+    for row in group_items:
+        count = _as_int(row.get("count"), 0)
+        suppressed = max(0, count - 1)
+        row["suppressed_count"] = suppressed
+        suppressed_total += suppressed
+        last_ts = _as_float(row.get("last_ts"), 0.0)
+        escalated = bool(count >= escalation_count or _as_int(row.get("risk_score_max"), 0) >= ALERT_QUEUE_ESCALATE_THRESHOLD)
+        summary = {
+            "key": str(row.get("key") or ""),
+            "src_ip": str(row.get("src_ip") or ""),
+            "dst_ip": str(row.get("dst_ip") or ""),
+            "sid": _as_int(row.get("sid"), 0),
+            "attack_type": str(row.get("attack_type") or ""),
+            "risk_level": str(row.get("risk_level") or ""),
+            "risk_score_max": _as_int(row.get("risk_score_max"), 0),
+            "count": count,
+            "suppressed_count": suppressed,
+            "first_ts_iso": _iso_from_epoch(_as_float(row.get("first_ts"), 0.0)),
+            "last_ts_iso": _iso_from_epoch(last_ts),
+            "recently_suppressed": bool(now_epoch - last_ts <= suppression_window and suppressed > 0),
+            "escalated": escalated,
+            "reason": (
+                f"count>={escalation_count}"
+                if count >= escalation_count
+                else (f"risk>={ALERT_QUEUE_ESCALATE_THRESHOLD}" if _as_int(row.get("risk_score_max"), 0) >= ALERT_QUEUE_ESCALATE_THRESHOLD else "normal")
+            ),
+            "notification_summary": f"{count} similar alerts from {row.get('src_ip')} to {row.get('dst_ip')} in {aggregation_window}s",
+        }
+        summaries.append(summary)
+        if escalated:
+            escalations.append(summary)
+    return {
+        "window_sec": aggregation_window,
+        "suppression_window_sec": suppression_window,
+        "escalation_count_threshold": escalation_count,
+        "group_count": len(summaries),
+        "suppressed_total": suppressed_total,
+        "groups": summaries[:10],
+        "escalation_queue": escalations[:10],
+    }
+
+
 def _normalize_ai_activity(item: Dict[str, Any]) -> Dict[str, Any]:
     response = item.get("response") if isinstance(item.get("response"), dict) else {}
     ts = _as_float(item.get("ts"), 0.0)
@@ -3049,6 +3148,7 @@ def _dashboard_evidence_payload(
     if not recent_alerts and advisory:
         recent_alerts = [_normalize_alert_event({"advisory": advisory, "event": {}})]
     alert_queues = _dashboard_alert_queues_payload(state, recent_alerts)
+    alert_aggregation = _dashboard_alert_aggregation_payload(recent_alerts)
     ai_activity = [_normalize_ai_activity(item) for item in llm_rows[-10:]]
     runbook_events = [_normalize_runbook_event(item) for item in runbook_rows[-10:]]
     triage_audit = [_normalize_triage_audit_event(item) for item in triage_rows[-10:]]
@@ -3078,6 +3178,7 @@ def _dashboard_evidence_payload(
         "recent_triage_audit": triage_audit,
         "recent_mode_changes": _recent_mode_changes(mode_runtime),
         "alert_queues": alert_queues,
+        "alert_aggregation": alert_aggregation,
         "current_triggers": sections["current_triggers"],
         "decision_changes": sections["decision_changes"],
         "operator_interactions": sections["operator_interactions"],
@@ -3234,6 +3335,20 @@ def _record_dashboard_trend_point(state: Dict[str, Any], metrics: Dict[str, Any]
         _dashboard_trends_last_write_ts = now
     point = _dashboard_trend_point_payload(state, metrics, health, now_epoch=now)
     _append_jsonl(DASHBOARD_TRENDS_PATH, point)
+    try:
+        rows = _tail_jsonl(DASHBOARD_TRENDS_PATH, limit=max(DASHBOARD_TRENDS_LIMIT * 2, 120))
+        min_ts = now - max(60.0, DASHBOARD_TRENDS_RETENTION_SEC)
+        kept = [row for row in rows if _as_float(row.get("ts"), 0.0) >= min_ts]
+        if len(kept) > DASHBOARD_TRENDS_LIMIT:
+            kept = kept[-DASHBOARD_TRENDS_LIMIT:]
+        if len(kept) != len(rows):
+            DASHBOARD_TRENDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            DASHBOARD_TRENDS_PATH.write_text(
+                "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in kept),
+                encoding="utf-8",
+            )
+    except Exception:
+        pass
 
 
 def _dashboard_trends_payload(limit: int = 120) -> Dict[str, Any]:
@@ -3287,18 +3402,149 @@ def _dashboard_trends_payload(limit: int = 120) -> Dict[str, Any]:
     }
 
 
-def verify_token() -> bool:
-    """リクエストのトークン検証（ヘッダーまたはクエリパラメータ）"""
-    token = load_token()
-    if not token:
-        return AUTH_FAIL_OPEN
-    
+def _normalize_role(role: str, default: str = "viewer") -> str:
+    role_norm = str(role or "").strip().lower()
+    return role_norm if role_norm in _ROLE_RANK else default
+
+
+def _role_allows(actual_role: str, required_role: str) -> bool:
+    return _ROLE_RANK.get(_normalize_role(actual_role), 0) >= _ROLE_RANK.get(_normalize_role(required_role), 0)
+
+
+def _request_trace_id() -> str:
+    header_value = str(request.headers.get("X-Trace-Id") or request.headers.get("X-Azazel-Trace-Id") or "").strip()
+    if header_value:
+        return header_value[:80]
+    body = request.get_json(silent=True) or {}
+    if isinstance(body, dict):
+        body_trace = str(body.get("trace_id") or "").strip()
+        if body_trace:
+            return body_trace[:80]
+    return ""
+
+
+def _request_action_hint() -> str:
+    endpoint = str(request.endpoint or "")
+    path = str(request.path or "")
+    if "/api/action/" in path:
+        return path.rsplit("/", 1)[-1]
+    body = request.get_json(silent=True) or {}
+    if isinstance(body, dict):
+        explicit = str(body.get("action") or "").strip().lower()
+        if explicit:
+            return explicit[:64]
+    if "runbook" in endpoint:
+        action = str((body or {}).get("action") or "").strip().lower()
+        runbook_id = str((body or {}).get("runbook_id") or "").strip()
+        if runbook_id or action:
+            return f"runbook:{action or '-'}:{runbook_id or '-'}"[:120]
+    return endpoint[:80]
+
+
+def _load_mtls_allowlist() -> set[str]:
+    allowed = set(AUTH_MTLS_FINGERPRINTS)
+    try:
+        if AUTH_MTLS_FINGERPRINTS_FILE.exists():
+            for line in AUTH_MTLS_FINGERPRINTS_FILE.read_text(encoding="utf-8").splitlines():
+                item = line.strip().lower()
+                if item and not item.startswith("#"):
+                    allowed.add(item)
+    except Exception:
+        pass
+    return allowed
+
+
+def _load_auth_tokens() -> List[Dict[str, str]]:
+    try:
+        if AUTH_TOKENS_FILE.exists():
+            payload = _parse_json_dict_lenient(AUTH_TOKENS_FILE.read_text(encoding="utf-8"))
+            items = payload.get("tokens") if isinstance(payload.get("tokens"), list) else payload.get("items")
+            if isinstance(items, list):
+                out: List[Dict[str, str]] = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    token = str(item.get("token") or "").strip()
+                    if not token:
+                        continue
+                    out.append(
+                        {
+                            "token": token,
+                            "principal": str(item.get("principal") or "unknown").strip() or "unknown",
+                            "role": _normalize_role(str(item.get("role") or "viewer"), default="viewer"),
+                        }
+                    )
+                if out:
+                    return out
+    except Exception:
+        pass
+    legacy = load_token()
+    if legacy:
+        return [{"token": legacy, "principal": "legacy-token", "role": "admin"}]
+    return []
+
+
+def _authenticate_request() -> Dict[str, Any]:
     req_token = (
-        request.headers.get('X-AZAZEL-TOKEN')
-        or request.headers.get('X-Auth-Token')
-        or request.args.get('token')
+        request.headers.get("X-AZAZEL-TOKEN")
+        or request.headers.get("X-Auth-Token")
+        or request.args.get("token")
     )
-    return req_token == token
+    req_token = str(req_token or "").strip()
+    token_items = _load_auth_tokens()
+    if not token_items:
+        return {"ok": bool(AUTH_FAIL_OPEN), "principal": "anonymous", "role": "admin" if AUTH_FAIL_OPEN else "viewer", "reason": "auth_material_missing"}
+    if not req_token:
+        return {"ok": False, "principal": "anonymous", "role": "viewer", "reason": "missing_token"}
+    for item in token_items:
+        if req_token == str(item.get("token") or ""):
+            return {"ok": True, "principal": str(item.get("principal") or "unknown"), "role": _normalize_role(str(item.get("role") or "viewer")), "reason": "ok"}
+    return {"ok": False, "principal": "anonymous", "role": "viewer", "reason": "token_mismatch"}
+
+
+def _authorize_mtls(required_role: str) -> Dict[str, Any]:
+    if not AUTH_MTLS_REQUIRED:
+        return {"ok": True, "reason": "mtls_not_required"}
+    if _ROLE_RANK.get(_normalize_role(required_role), 0) < _ROLE_RANK["operator"]:
+        return {"ok": True, "reason": "mtls_not_required_for_viewer"}
+    observed = str(request.headers.get(AUTH_MTLS_HEADER) or "").strip().lower()
+    if not observed:
+        return {"ok": False, "reason": "mtls_header_missing"}
+    allowlist = _load_mtls_allowlist()
+    if not allowlist:
+        return {"ok": False, "reason": "mtls_allowlist_empty"}
+    if observed not in allowlist:
+        return {"ok": False, "reason": "mtls_fingerprint_mismatch"}
+    return {"ok": True, "reason": "ok"}
+
+
+def _audit_authz_event(
+    *,
+    allowed: bool,
+    required_role: str,
+    principal: str,
+    role: str,
+    reason: str,
+) -> None:
+    try:
+        _append_jsonl(
+            AUTHZ_AUDIT_LOG,
+            {
+                "ts": time.time(),
+                "trace_id": _request_trace_id(),
+                "endpoint": str(request.path or ""),
+                "method": str(request.method or ""),
+                "requested_action": _request_action_hint(),
+                "required_role": _normalize_role(required_role),
+                "principal": str(principal or "anonymous"),
+                "role": _normalize_role(role),
+                "allowed": bool(allowed),
+                "reason": str(reason or ""),
+                "remote_addr": str(request.remote_addr or ""),
+            },
+        )
+    except Exception as e:
+        app.logger.warning(f"authz audit logging failed: {e}")
 
 
 def _unauthorized_response(*, ok_payload: Optional[bool] = False, status_code: int = 403) -> tuple[Response, int]:
@@ -3309,14 +3555,62 @@ def _unauthorized_response(*, ok_payload: Optional[bool] = False, status_code: i
     return jsonify(payload), int(status_code)
 
 
-def require_token(*, ok_payload: Optional[bool] = False, status_code: int = 403) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+def require_token(
+    *,
+    ok_payload: Optional[bool] = False,
+    status_code: int = 403,
+    min_role: str = "viewer",
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Endpoint decorator that centralizes token verification responses."""
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
         def wrapped(*args: Any, **kwargs: Any) -> Any:
-            if not verify_token():
+            required_role = _normalize_role(min_role, default="viewer")
+            auth = _authenticate_request()
+            role = _normalize_role(str(auth.get("role") or "viewer"))
+            principal = str(auth.get("principal") or "anonymous")
+            if not bool(auth.get("ok")):
+                _audit_authz_event(
+                    allowed=False,
+                    required_role=required_role,
+                    principal=principal,
+                    role=role,
+                    reason=str(auth.get("reason") or "auth_failed"),
+                )
+                if AUTH_FAIL_OPEN:
+                    app.logger.warning("AUTH_FAIL_OPEN active: allowing request despite auth failure")
+                else:
+                    return _unauthorized_response(ok_payload=ok_payload, status_code=status_code)
+            mtls = _authorize_mtls(required_role)
+            if not bool(mtls.get("ok")):
+                _audit_authz_event(
+                    allowed=False,
+                    required_role=required_role,
+                    principal=principal,
+                    role=role,
+                    reason=str(mtls.get("reason") or "mtls_failed"),
+                )
                 return _unauthorized_response(ok_payload=ok_payload, status_code=status_code)
+            if not _role_allows(role, required_role):
+                _audit_authz_event(
+                    allowed=False,
+                    required_role=required_role,
+                    principal=principal,
+                    role=role,
+                    reason="insufficient_role",
+                )
+                return _unauthorized_response(ok_payload=ok_payload, status_code=status_code)
+            g.auth_principal = principal
+            g.auth_role = role
+            g.auth_required_role = required_role
+            _audit_authz_event(
+                allowed=True,
+                required_role=required_role,
+                principal=principal,
+                role=role,
+                reason=str(auth.get("reason") or "ok"),
+            )
             return func(*args, **kwargs)
 
         return wrapped
@@ -4750,7 +5044,7 @@ def api_portal_viewer_open():
 
 
 @app.route("/api/mode", methods=["GET"])
-@require_token()
+@require_token(min_role="viewer")
 def api_mode_get():
     """GET /api/mode - Return current mode metadata."""
     payload = get_mode_state()
@@ -4759,7 +5053,7 @@ def api_mode_get():
 
 
 @app.route("/api/mode", methods=["POST"])
-@require_token()
+@require_token(min_role="admin")
 def api_mode_set():
     """POST /api/mode - Switch mode via control daemon."""
     body = request.get_json(silent=True) or {}
@@ -5215,7 +5509,7 @@ def api_dashboard_actions():
 
 
 @app.route("/api/operator-progress", methods=["GET", "POST"])
-@require_token()
+@require_token(min_role="operator")
 def api_operator_progress():
     lang = _request_lang()
     body = request.get_json(silent=True) or {}
@@ -5245,7 +5539,7 @@ def api_operator_progress():
 
 
 @app.route("/api/dashboard/handoff", methods=["GET", "POST"])
-@require_token()
+@require_token(min_role="operator")
 def api_dashboard_handoff():
     lang = _request_lang()
     body = request.get_json(silent=True) or {}
@@ -5346,7 +5640,7 @@ def api_clients_trust():
 
 
 @app.route("/api/sot/devices", methods=["PUT"])
-@require_token()
+@require_token(min_role="admin")
 def api_sot_devices_put():
     body = request.get_json(silent=True) or {}
     devices = body.get("devices")
@@ -5381,7 +5675,7 @@ def api_sot_devices_put():
 
 
 @app.route("/api/sot/devices", methods=["PATCH"])
-@require_token()
+@require_token(min_role="admin")
 def api_sot_devices_patch():
     body = request.get_json(silent=True) or {}
     updates = body.get("devices")
@@ -5479,7 +5773,7 @@ def api_runbooks_review(runbook_id: str):
 
 
 @app.route("/api/runbooks/execute", methods=["POST"])
-@require_token()
+@require_token(min_role="operator")
 def api_runbooks_execute():
     body = request.get_json(silent=True) or {}
     dry_run = bool(body.get("dry_run", True))
@@ -5512,7 +5806,7 @@ def api_runbooks_propose():
 
 
 @app.route("/api/runbooks/act", methods=["POST"])
-@require_token()
+@require_token(min_role="operator")
 def api_runbooks_act():
     body = request.get_json(silent=True) or {}
     result, code = _run_runbook_action(body)
@@ -5520,7 +5814,7 @@ def api_runbooks_act():
 
 
 @app.route("/api/mattermost/message", methods=["POST"])
-@require_token()
+@require_token(min_role="operator")
 def api_mattermost_message():
     body = request.get_json(silent=True) or {}
     message = str(body.get("message") or "").strip()
@@ -5614,7 +5908,7 @@ def api_mattermost_messages():
 
 
 @app.route("/api/action", methods=["POST"])
-@require_token(ok_payload=None)
+@require_token(ok_payload=None, min_role="responder")
 def api_action_new():
     """POST /api/action - Execute control action (AI Coding Spec v1 format)"""
 
@@ -5642,7 +5936,7 @@ def api_action_new():
 
 
 @app.route("/api/action/<action>", methods=["POST"])
-@require_token()
+@require_token(min_role="responder")
 def api_action(action: str):
     """POST /api/action/<action> - Execute control action (legacy format)"""
 
@@ -5676,7 +5970,7 @@ def api_wifi_scan():
 
 
 @app.route("/api/wifi/connect", methods=["POST"])
-@require_token(status_code=401)
+@require_token(status_code=401, min_role="operator")
 def api_wifi_connect():
     """POST /api/wifi/connect - Connect to Wi-Fi AP"""
 
