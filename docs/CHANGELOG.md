@@ -37,6 +37,10 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `config/attack_mapping.yaml` mapping rules with confidence
   - mapped/unmapped handling in SOC evaluator summary (`attack_techniques`)
   - mapping schema validation + mapped/unmapped/conflict tests
+- Supply-chain CI baseline completion:
+  - lightweight Python static check job (`compileall`)
+  - release checksum artifact generation (`release-checksums.sha256`)
+  - release verification documentation (`docs/RELEASE_VERIFICATION_GUIDE.md`)
 
 ### Changed
 - Dependency review CI job now runs only when repository variable `ENABLE_DEPENDENCY_REVIEW` is set to `true`.

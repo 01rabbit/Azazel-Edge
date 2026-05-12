@@ -397,6 +397,7 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 | [AGENTS.md](AGENTS.md) | AI agent working charter — read before making any change |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Human contributor guide (branch, PR, test rules) |
 | [Changelog](docs/CHANGELOG.md) | PR and feature traceability history |
+| [Release Verification Guide](docs/RELEASE_VERIFICATION_GUIDE.md) | Checksum/SBOM/dependency scan verification workflow |
 
 ## Limitations and Known Issues
 

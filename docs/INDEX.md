@@ -34,6 +34,7 @@ Entry point for all documents in this directory.
 |------|----------|-------------|--------------|
 | [NEXT_DEVELOPMENT_EXECUTION_INDEX_2026Q2.md](NEXT_DEVELOPMENT_EXECUTION_INDEX_2026Q2.md) | Developer | 2026Q2 implementation plan index | - |
 | [CHANGELOG.md](CHANGELOG.md) | Developer | PR and feature traceability history | - |
+| [RELEASE_VERIFICATION_GUIDE.md](RELEASE_VERIFICATION_GUIDE.md) | Developer / Operator | Checksum, SBOM, and release verification baseline | 2026-05-12 |
 
 ---
 
