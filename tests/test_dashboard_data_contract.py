@@ -26,6 +26,9 @@ class DashboardDataContractTests(unittest.TestCase):
             "RUNBOOK_EVENT_LOG": webapp.RUNBOOK_EVENT_LOG,
             "TRIAGE_AUDIT_LOG": webapp.TRIAGE_AUDIT_LOG,
             "TRIAGE_AUDIT_FALLBACK_LOG": webapp.TRIAGE_AUDIT_FALLBACK_LOG,
+            "DASHBOARD_TRENDS_PATH": webapp.DASHBOARD_TRENDS_PATH,
+            "DASHBOARD_TRENDS_WRITE_INTERVAL_SEC": webapp.DASHBOARD_TRENDS_WRITE_INTERVAL_SEC,
+            "_dashboard_trends_last_write_ts": webapp._dashboard_trends_last_write_ts,
             "cp_read_snapshot_payload": webapp.cp_read_snapshot_payload,
             "load_token": webapp.load_token,
             "AUTH_FAIL_OPEN": webapp.AUTH_FAIL_OPEN,
@@ -50,6 +53,9 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.RUNBOOK_EVENT_LOG = root / "runbook-events.jsonl"
         webapp.TRIAGE_AUDIT_LOG = root / "triage-audit.jsonl"
         webapp.TRIAGE_AUDIT_FALLBACK_LOG = root / "triage-audit-fallback.jsonl"
+        webapp.DASHBOARD_TRENDS_PATH = root / "dashboard-trends.jsonl"
+        webapp.DASHBOARD_TRENDS_WRITE_INTERVAL_SEC = 0.0
+        webapp._dashboard_trends_last_write_ts = 0.0
         webapp.TOPOLITE_SEED_MODE_PATH = root / "topolite_seed_mode.json"
         webapp.cp_read_snapshot_payload = None
         webapp.load_token = lambda: None
@@ -317,6 +323,9 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.RUNBOOK_EVENT_LOG = self._orig["RUNBOOK_EVENT_LOG"]
         webapp.TRIAGE_AUDIT_LOG = self._orig["TRIAGE_AUDIT_LOG"]
         webapp.TRIAGE_AUDIT_FALLBACK_LOG = self._orig["TRIAGE_AUDIT_FALLBACK_LOG"]
+        webapp.DASHBOARD_TRENDS_PATH = self._orig["DASHBOARD_TRENDS_PATH"]
+        webapp.DASHBOARD_TRENDS_WRITE_INTERVAL_SEC = self._orig["DASHBOARD_TRENDS_WRITE_INTERVAL_SEC"]
+        webapp._dashboard_trends_last_write_ts = self._orig["_dashboard_trends_last_write_ts"]
         webapp.cp_read_snapshot_payload = self._orig["cp_read_snapshot_payload"]
         webapp.load_token = self._orig["load_token"]
         webapp.AUTH_FAIL_OPEN = self._orig["AUTH_FAIL_OPEN"]
@@ -802,6 +811,11 @@ class DashboardDataContractTests(unittest.TestCase):
         payload = response.get_json()
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["recent_alerts"][0]["sid"], 210001)
+        self.assertIn("alert_queues", payload)
+        self.assertIn("now", payload["alert_queues"])
+        self.assertIn("watch", payload["alert_queues"])
+        self.assertIn("backlog", payload["alert_queues"])
+        self.assertIn("escalation_candidates", payload["alert_queues"])
         self.assertEqual(payload["recent_ai_activity"][0]["runbook_id"], "rb.noc.dns.failure.check")
         self.assertEqual(payload["recent_runbook_events"][0]["action"], "preview")
         self.assertEqual(payload["recent_mode_changes"][0]["current_mode"], "shield")
@@ -867,6 +881,22 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("ai_contribution", payload["ai_governance"]["rates"])
         self.assertIn("fallback", payload["ai_governance"]["rates"])
         self.assertIn("manual_route", payload["ai_governance"]["rates"])
+        self.assertTrue(webapp.DASHBOARD_TRENDS_PATH.exists())
+
+    def test_dashboard_trends_endpoint_contract(self) -> None:
+        self.client.get("/api/dashboard/health")
+        self.client.get("/api/dashboard/health")
+        response = self.client.get("/api/dashboard/trends?limit=10")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertIn("points", payload)
+        self.assertIn("summary", payload)
+        self.assertGreaterEqual(payload["summary"]["samples"], 1)
+        first = payload["points"][0]
+        self.assertIn("queue_depth", first)
+        self.assertIn("llm_fallback_rate", first)
+        self.assertIn("stale_snapshot", first)
 
     def test_dashboard_ai_governance_endpoint_contract(self) -> None:
         response = self.client.get("/api/dashboard/ai-governance")
