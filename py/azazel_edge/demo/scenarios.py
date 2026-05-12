@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from azazel_edge.arbiter import ActionArbiter
 from azazel_edge.evaluators import NocEvaluator, SocEvaluator
 from azazel_edge.explanations import DecisionExplainer
+from azazel_edge.policy import load_soc_policy
 
 
 class DemoScenarioPack:
@@ -231,7 +232,7 @@ class DemoScenarioRunner:
             sigma_rules=[{'id': 'sigma.ssh.bruteforce', 'title': 'SSH brute force support', 'source': 'suricata_eve', 'kind': 'alert', 'attrs': {'target_port': 22}, 'min_severity': 70}],
             yara_rules=[{'id': 'yara.loader.alpha', 'title': 'Loader alpha helper', 'contains_any': ['loader_beacon_alpha'], 'source': 'suricata_eve'}],
         )
-        self.arbiter = ActionArbiter()
+        self.arbiter = ActionArbiter(policy=load_soc_policy())
         self.explainer = DecisionExplainer(output_path='/tmp/azazel-edge-demo-explanations.jsonl')
 
     def run(self, scenario_id: str) -> Dict[str, Any]:

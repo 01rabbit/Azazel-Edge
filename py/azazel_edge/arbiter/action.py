@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
+import hashlib
+
+
+def _to_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
 
 
 class ActionArbiter:
@@ -44,6 +52,34 @@ class ActionArbiter:
         },
     }
 
+    def __init__(self, policy: Dict[str, Any] | None = None):
+        base = policy if isinstance(policy, dict) else {}
+        action_mapping = base.get("action_mapping") if isinstance(base.get("action_mapping"), dict) else {}
+        self.policy = {
+            "version": str(base.get("version") or "soc-policy-v1"),
+            "notes": str(base.get("notes") or ""),
+            "action_mapping": {
+                "isolate": {
+                    "suspicion_min": _to_int((action_mapping.get("isolate") or {}).get("suspicion_min"), 95),
+                    "confidence_min": _to_int((action_mapping.get("isolate") or {}).get("confidence_min"), 90),
+                    "blast_min": _to_int((action_mapping.get("isolate") or {}).get("blast_min"), 80),
+                },
+                "redirect": {
+                    "suspicion_min": _to_int((action_mapping.get("redirect") or {}).get("suspicion_min"), 90),
+                    "confidence_min": _to_int((action_mapping.get("redirect") or {}).get("confidence_min"), 80),
+                    "blast_min": _to_int((action_mapping.get("redirect") or {}).get("blast_min"), 70),
+                },
+                "throttle": {
+                    "confidence_min": _to_int((action_mapping.get("throttle") or {}).get("confidence_min"), 60),
+                    "blast_min": _to_int((action_mapping.get("throttle") or {}).get("blast_min"), 40),
+                },
+                "strong_soc": {
+                    "confidence_min": _to_int((action_mapping.get("strong_soc") or {}).get("confidence_min"), 60),
+                },
+            },
+        }
+        self.policy_hash = hashlib.sha256(str(self.policy).encode("utf-8")).hexdigest()[:16]
+
     def decide(self, noc: Dict[str, Any], soc: Dict[str, Any], client_impact: Dict[str, Any] | None = None) -> Dict[str, Any]:
         self._validate_schema(noc, self.REQUIRED_NOC_KEYS, 'noc')
         self._validate_schema(soc, self.REQUIRED_SOC_KEYS, 'soc')
@@ -61,17 +97,35 @@ class ActionArbiter:
         control_mode = 'none'
 
         noc_fragile = availability_label in {'poor', 'critical'} or path_label in {'poor', 'critical'} or device_label in {'poor', 'critical'}
-        strong_soc = suspicion_label in {'high', 'critical'} and confidence_score >= 60
+        mapping = self.policy["action_mapping"]
+        strong_soc = suspicion_label in {'high', 'critical'} and confidence_score >= int(mapping["strong_soc"]["confidence_min"])
 
-        if strong_soc and not noc_fragile and suspicion_score >= 95 and confidence_score >= 90 and blast_score >= 80:
+        if (
+            strong_soc
+            and not noc_fragile
+            and suspicion_score >= int(mapping["isolate"]["suspicion_min"])
+            and confidence_score >= int(mapping["isolate"]["confidence_min"])
+            and blast_score >= int(mapping["isolate"]["blast_min"])
+        ):
             action = 'isolate'
             reason = 'soc_extreme_and_target_is_narrow_enough'
             control_mode = 'segment_isolation'
-        elif strong_soc and not noc_fragile and suspicion_score >= 90 and confidence_score >= 80 and blast_score >= 70:
+        elif (
+            strong_soc
+            and not noc_fragile
+            and suspicion_score >= int(mapping["redirect"]["suspicion_min"])
+            and confidence_score >= int(mapping["redirect"]["confidence_min"])
+            and blast_score >= int(mapping["redirect"]["blast_min"])
+        ):
             action = 'redirect'
             reason = 'soc_high_confidence_redirect_is_preferred'
             control_mode = 'opencanary_redirect'
-        elif strong_soc and not noc_fragile and blast_score >= 40:
+        elif (
+            strong_soc
+            and not noc_fragile
+            and confidence_score >= int(mapping["throttle"]["confidence_min"])
+            and blast_score >= int(mapping["throttle"]["blast_min"])
+        ):
             action = 'throttle'
             reason = 'soc_high_and_reversible_control_is_safe'
             control_mode = 'route_preference'
@@ -114,6 +168,10 @@ class ActionArbiter:
             'client_impact': client_impact or {},
             'action_profile': action_profile,
             'decision_trace': decision_trace,
+            'policy': {
+                'version': self.policy.get("version"),
+                'hash': self.policy_hash,
+            },
         }
 
     @staticmethod

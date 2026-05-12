@@ -217,6 +217,14 @@ Install result (default scripts):
 - AI agent: `AZAZEL_OLLAMA_ENDPOINT`, `AZAZEL_LLM_MODEL_PRIMARY`, `AZAZEL_LLM_MODEL_DEGRADED`
 - Mattermost command trigger/token: `AZAZEL_MATTERMOST_COMMAND_TRIGGER`, `AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE`
 - Runbook controlled execution gate: `AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC`
+- Auth hardening / RBAC:
+  - `AZAZEL_AUTH_FAIL_OPEN` (default `0` fail-closed)
+  - `AZAZEL_AUTH_TOKENS_FILE` (role-mapped API tokens, default `/etc/azazel-edge/auth_tokens.json`)
+  - `AZAZEL_AUTHZ_AUDIT_LOG` (authorization decision audit log)
+  - `AZAZEL_AUTH_MTLS_REQUIRED` (`0|1`, optional hardened mode)
+  - `AZAZEL_AUTH_MTLS_HEADER` (client fingerprint header key, default `X-Client-Cert-Fingerprint`)
+  - `AZAZEL_AUTH_MTLS_FINGERPRINTS` (CSV allowlist)
+  - `AZAZEL_AUTH_MTLS_FINGERPRINTS_FILE` (line-based allowlist file)
 - Topo-Lite/NOC monitor scope:
   - `AZAZEL_NOC_MONITOR_SCOPE` (`internal` default, or `external`)
   - `AZAZEL_INTERNAL_BRIDGE_IF` (`br0` default)
@@ -230,6 +238,11 @@ Install result (default scripts):
   - `AZAZEL_ALERT_QUEUE_NOW_THRESHOLD` (default `80`)
   - `AZAZEL_ALERT_QUEUE_WATCH_THRESHOLD` (default `50`)
   - `AZAZEL_ALERT_QUEUE_ESCALATE_THRESHOLD` (default `90`)
+  - `AZAZEL_ALERT_SUPPRESSION_WINDOW_SEC` (default `120`)
+  - `AZAZEL_ALERT_AGGREGATION_WINDOW_SEC` (default `300`)
+  - `AZAZEL_ALERT_ESCALATION_COUNT_THRESHOLD` (default `5`)
+- SOC policy:
+  - `AZAZEL_SOC_POLICY_PATH` (default `config/soc_policy.yaml`)
 
 ### Token auth
 - API token can be supplied by header `X-AZAZEL-TOKEN` (or `X-Auth-Token`) or `?token=`.
