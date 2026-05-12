@@ -245,6 +245,10 @@ Install result (default scripts):
   - `AZAZEL_SOC_POLICY_PATH` (default `config/soc_policy.yaml`)
   - profiles: `config/soc_policy_profiles/{conservative,balanced,demo}.yaml`
   - dry-run helper: `bin/azazel-soc-policy-dry-run`
+- Aggregator freshness tuning (MVP scaffold):
+  - `AZAZEL_AGGREGATOR_POLL_INTERVAL_SEC` (default `30`)
+  - `AZAZEL_AGGREGATOR_STALE_MULTIPLIER` (default `2`)
+  - `AZAZEL_AGGREGATOR_OFFLINE_MULTIPLIER` (default `6`)
 
 ### Token auth
 - API token can be supplied by header `X-AZAZEL-TOKEN` (or `X-Auth-Token`) or `?token=`.
