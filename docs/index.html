@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Azazel-Edge is an emergency SOC/NOC gateway for Raspberry Pi with deterministic decision logic and optional local AI advisory." />
+  <title>Azazel-Edge | Emergency SOC/NOC Gateway</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <div class="hero-brand">
+          <img class="hero-logo" src="images/Azazel-Edge_logo.png" alt="Azazel-Edge logo" />
+          <div>
+            <p class="hero-brand-label">Azazel-Edge</p>
+            <p class="hero-brand-subtitle">Emergency SOC/NOC gateway</p>
+          </div>
+        </div>
+        <p class="eyebrow">Black Hat Arsenal / Raspberry Pi Ready</p>
+        <h1>Emergency field operations, locally controlled.</h1>
+        <p class="hero-text">A lightweight gateway for urgent SOC/NOC triage, built to run on Raspberry Pi with deterministic evaluation and bounded AI assistance.</p>
+        <p class="hero-text-secondary">現場対応に特化した Raspberry Pi で動く、決定論的な SOC/NOC ゲートウェイ。</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://github.com/01rabbit/Azazel-Edge" target="_blank" rel="noopener">View GitHub</a>
+          <a class="button button-secondary" href="https://01rabbit.github.io/Azazel-Edge/README.html" target="_blank" rel="noopener">Explore docs</a>
+        </div>
+      </div>
+      <div class="hero-panel">
+        <img class="hero-banner" src="images/Azazel-Edge_Banner.png" alt="Azazel-Edge banner" />
+        <div class="panel-card">
+          <span class="panel-tag">Operator-first design</span>
+          <h2>Local by default</h2>
+          <p>Offline-capable architecture with deterministic rules, where AI is advisory only and never the sole decision maker.</p>
+          <p class="lang-secondary">オフライン運用を前提とし、AI は補助に限定し、判断はすべて決定論エンジンが行います。</p>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="section intro-grid">
+        <article>
+          <h2>What it does</h2>
+          <p>Azazel-Edge delivers a compact SOC/NOC gateway for emergency use. It runs on Raspberry Pi, visualizes internal network traffic, evaluates threat state, and supports operator workflows.</p>
+          <p class="lang-secondary">Azazel-Edge は、緊急運用向けのコンパクトな SOC/NOC ゲートウェイです。Raspberry Pi で動作し、内部ネットワーク、脅威判定、運用ワークフローを提供します。</p>
+        </article>
+        <article>
+          <h2>Approach</h2>
+          <p>Deterministic evaluation is the primary path. AI is used only as advisory support, ensuring decisions remain transparent and auditable.</p>
+          <p class="lang-secondary">決定論評価が主体です。AI は補助としてのみ使われ、判断は透明かつ監査可能に保たれます。</p>
+        </article>
+      </section>
+
+      <section class="section feature-grid">
+        <h2>Key features</h2>
+        <div class="feature-cards">
+          <div class="feature-card">
+            <h3>Offline first</h3>
+            <p>Minimize cloud dependency and run core capabilities entirely on-premises for field or event deployments.</p>
+            <p class="lang-secondary">クラウド依存を最小化し、フィールドやイベント現場でローカルだけで動かせます。</p>
+          </div>
+          <div class="feature-card">
+            <h3>Deterministic logic</h3>
+            <p>NOC and SOC evaluations are fixed-rule based, producing one of five clear actions: observe, notify, throttle, redirect, isolate.</p>
+            <p class="lang-secondary">NOC/SOC の評価はルールベースで、observe／notify／throttle／redirect／isolate の 5 つの行動を明確に出します。</p>
+          </div>
+          <div class="feature-card">
+            <h3>AI advisory</h3>
+            <p>Local Ollama integration generates advice, summaries, and candidate insights without letting AI act unilaterally.</p>
+            <p class="lang-secondary">Ollama と連携して助言や要約を生成し、AI が単独で行動することはありません。</p>
+          </div>
+          <div class="feature-card">
+            <h3>Runbook workflow</h3>
+            <p>Operator guidance and controlled execution are backed by structured runbooks for fast, repeatable incident response.</p>
+            <p class="lang-secondary">構造化されたランブックで、迅速かつ再現性の高い対応を支援します。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section architecture">
+        <h2>Architecture</h2>
+        <div class="architecture-grid">
+          <div class="architecture-card">
+            <h3>Evidence Plane</h3>
+            <p>Normalizes events from sources like Suricata EVE and feeds them into the deterministic evaluation flow.</p>
+            <p class="lang-secondary">Suricata EVE などのイベントを正規化し、決定論評価に渡します。</p>
+          </div>
+          <div class="architecture-card">
+            <h3>NOC / SOC Evaluator</h3>
+            <p>Separately assesses network and security state, producing a traceable evaluation for the arbiter.</p>
+            <p class="lang-secondary">ネットワークとセキュリティを別々に評価し、アービタに渡す判定を生成します。</p>
+          </div>
+          <div class="architecture-card">
+            <h3>Action Arbiter</h3>
+            <p>Selects a single action with supporting rationale and logs the decision for audit and operator review.</p>
+            <p class="lang-secondary">サポート理由とともにアクションを選択し、監査・レビュー用に記録します。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section use-cases">
+        <h2>Use cases</h2>
+        <div class="use-case-list">
+          <div class="use-case-item">
+            <p>• Temporary venue network monitoring</p>
+            <p class="lang-secondary">イベント会場の臨時ネットワーク監視</p>
+          </div>
+          <div class="use-case-item">
+            <p>• Disaster response command post support</p>
+            <p class="lang-secondary">災害対応拠点の初動 SOC/NOC 支援</p>
+          </div>
+          <div class="use-case-item">
+            <p>• Security exercise and red-team field operations</p>
+            <p class="lang-secondary">セキュリティ演習やレッドチームの即席運用基盤</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>Azazel-Edge | Raspberry Pi-ready emergency operations stack</p>
+      <p><a href="https://github.com/01rabbit/Azazel-Edge" target="_blank" rel="noopener">GitHub repository</a></p>
+    </footer>
+  </div>
+</body>
+</html>
