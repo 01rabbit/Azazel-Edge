@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
@@ -25,6 +26,46 @@ class P0AuditLogger:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._last_chain_hash = self._read_last_chain_hash()
+
+    def _read_last_chain_hash(self) -> str:
+        if not self.path.exists():
+            return ''
+        try:
+            lines = self.path.read_text(encoding='utf-8').splitlines()
+        except Exception:
+            return ''
+        if not lines:
+            return ''
+        try:
+            last = json.loads(lines[-1])
+        except Exception:
+            return ''
+        return str(last.get('chain_hash') or '')
+
+    @staticmethod
+    def _compute_chain_hash(record: Dict[str, Any]) -> str:
+        canon = json.dumps(record, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        return hashlib.sha256(canon).hexdigest()
+
+    @classmethod
+    def verify_chain(cls, path: str | Path) -> Dict[str, Any]:
+        log_path = Path(path)
+        if not log_path.exists():
+            return {'ok': True, 'entries': 0, 'error': ''}
+        lines = log_path.read_text(encoding='utf-8').splitlines()
+        prev = ''
+        for idx, line in enumerate(lines, start=1):
+            row = json.loads(line)
+            if str(row.get('chain_prev') or '') != prev:
+                return {'ok': False, 'entries': idx - 1, 'error': f'chain_prev_mismatch_at:{idx}'}
+            row_for_hash = dict(row)
+            actual = str(row_for_hash.pop('chain_hash', '') or '')
+            expected = cls._compute_chain_hash(row_for_hash)
+            if actual != expected:
+                return {'ok': False, 'entries': idx - 1, 'error': f'chain_hash_mismatch_at:{idx}'}
+            prev = actual
+        return {'ok': True, 'entries': len(lines), 'error': ''}
 
     def log(self, kind: str, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
         if kind not in VALID_KINDS:
@@ -34,10 +75,13 @@ class P0AuditLogger:
             'kind': kind,
             'trace_id': str(trace_id),
             'source': str(source),
+            'chain_prev': self._last_chain_hash,
         }
         record.update(payload)
+        record['chain_hash'] = self._compute_chain_hash(record)
         with self.path.open('a', encoding='utf-8') as fh:
             fh.write(json.dumps(record, ensure_ascii=True, separators=(',', ':')) + '\n')
+        self._last_chain_hash = str(record['chain_hash'])
         return record
 
     def log_event_receive(self, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
