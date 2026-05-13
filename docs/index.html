@@ -3,169 +3,428 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Azazel-Edge is an emergency SOC/NOC gateway for Raspberry Pi with deterministic decision logic and optional local AI advisory." />
+  <meta name="description" content="Azazel-Edge — Emergency SOC/NOC gateway for Raspberry Pi with deterministic decision logic and optional local AI advisory." />
   <title>Azazel-Edge | Emergency SOC/NOC Gateway</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+
+  <!-- Top status bar -->
+  <div class="topbar">
+    <div class="topbar-inner">
+      <span class="topbar-label">AZAZEL-EDGE</span>
+      <span class="topbar-sep">|</span>
+      <span class="beacon-wrap"><span class="beacon"></span>OPERATIONAL</span>
+      <span class="topbar-sep">|</span>
+      <span class="topbar-badges">
+        <span class="tbadge">Black Hat USA 2025 Arsenal</span>
+        <span class="tbadge">Black Hat Asia 2026 Arsenal</span>
+        <span class="tbadge">Black Hat USA 2026 Arsenal</span>
+      </span>
+    </div>
+  </div>
+
   <div class="page-shell">
+
+    <!-- ============================================================
+         HERO
+    ============================================================ -->
     <header class="hero">
-      <div class="hero-copy">
+      <div class="hero-left">
         <div class="hero-brand">
           <img class="hero-logo" src="images/Azazel-Edge_logo.png" alt="Azazel-Edge logo" />
-          <div>
-            <p class="hero-brand-label">Azazel-Edge</p>
-            <p class="hero-brand-subtitle">Emergency SOC/NOC gateway</p>
+          <div class="hero-brand-text">
+            <span class="hero-brand-name">AZAZEL-EDGE</span>
+            <span class="hero-brand-sub">Emergency SOC/NOC Gateway</span>
           </div>
         </div>
-        <p class="eyebrow">Black Hat Arsenal / Raspberry Pi Ready</p>
-        <h1>Emergency field operations, locally controlled.</h1>
-        <p class="hero-text">A lightweight gateway for urgent SOC/NOC triage, built to run on Raspberry Pi with deterministic evaluation and bounded AI assistance.</p>
-        <p class="hero-text-secondary">現場対応に特化した Raspberry Pi で動く、決定論的な SOC/NOC ゲートウェイ。</p>
+
+        <h1 class="hero-headline">
+          Field ops,<br><span class="accent">locally controlled.</span>
+        </h1>
+
+        <p class="hero-text">
+          Lightweight gateway for emergency triage. Runs on Raspberry Pi.
+          Deterministic evaluation engine — AI is advisory only, never the decision maker.
+        </p>
+        <p class="hero-text-ja">
+          Raspberry Pi で動く決定論的 SOC/NOC ゲートウェイ。クラウド不要、AI は補助のみ。
+        </p>
+
         <div class="hero-actions">
-          <a class="button button-primary" href="https://github.com/01rabbit/Azazel-Edge" target="_blank" rel="noopener">View GitHub</a>
-          <a class="button button-secondary" href="https://01rabbit.github.io/Azazel-Edge/README.html" target="_blank" rel="noopener">Explore docs</a>
+          <a class="btn btn-primary" href="https://github.com/01rabbit/Azazel-Edge" target="_blank" rel="noopener">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></svg>
+            GitHub
+          </a>
+          <a class="btn btn-secondary" href="OPERATOR_GUIDE.md">Operator Guide</a>
+          <a class="btn btn-ghost" href="CHANGELOG.md">Changelog</a>
         </div>
       </div>
-      <div class="hero-panel">
-        <img class="hero-banner" src="images/Azazel-Edge_Banner.png" alt="Azazel-Edge banner" />
-        <div class="panel-card">
-          <span class="panel-tag">Operator-first design</span>
-          <h2>Local by default</h2>
-          <p>Offline-capable architecture with deterministic rules, where AI is advisory only and never the sole decision maker.</p>
-          <p class="lang-secondary">オフライン運用を前提とし、AI は補助に限定し、判断はすべて決定論エンジンが行います。</p>
+
+      <div class="hero-right">
+        <div class="terminal-window">
+          <div class="terminal-bar">
+            <span class="tdot tdot-red"></span>
+            <span class="tdot tdot-yellow"></span>
+            <span class="tdot tdot-green"></span>
+            <span class="ttitle">azazel-edge — bash — 80×24</span>
+          </div>
+          <div class="terminal-body" aria-label="Terminal output example">
+<pre class="tpre"><span class="tc-prompt">$</span> <span class="tc-cmd">sudo systemctl status azazel-edge</span>
+<span class="tc-out">● azazel-edge.service - Azazel Edge Core</span>
+<span class="tc-out">   Active: <span class="tc-green">active (running)</span> since 04:21:13 UTC</span>
+<span class="tc-out">   Main PID: 1337</span>
+
+<span class="tc-prompt">$</span> <span class="tc-cmd">azazel status</span>
+<span class="tc-dim">┌── AZAZEL-EDGE STATUS ──────────────────┐</span>
+<span class="tc-dim">│</span> NOC state  : <span class="tc-amber">DEGRADED</span>                 <span class="tc-dim">│</span>
+<span class="tc-dim">│</span> SOC state  : <span class="tc-red">ELEVATED</span>                 <span class="tc-dim">│</span>
+<span class="tc-dim">│</span> Action     : <span class="tc-cyan">NOTIFY</span>                   <span class="tc-dim">│</span>
+<span class="tc-dim">│</span> Active alerts : <span class="tc-amber">3</span>                      <span class="tc-dim">│</span>
+<span class="tc-dim">│</span> Uptime     : <span class="tc-green">02:14:37</span>                 <span class="tc-dim">│</span>
+<span class="tc-dim">└────────────────────────────────────────┘</span>
+
+<span class="tc-prompt">$</span> <span class="tc-cursor">_</span></pre>
+          </div>
         </div>
       </div>
     </header>
 
     <main>
-      <section class="section intro-grid">
-        <article>
-          <h2>What it does</h2>
-          <p>Azazel-Edge delivers a compact SOC/NOC gateway for emergency use. It runs on Raspberry Pi, visualizes internal network traffic, evaluates threat state, and supports operator workflows.</p>
-          <p class="lang-secondary">Azazel-Edge は、緊急運用向けのコンパクトな SOC/NOC ゲートウェイです。Raspberry Pi で動作し、内部ネットワーク、脅威判定、運用ワークフローを提供します。</p>
-        </article>
-        <article>
-          <h2>Approach</h2>
-          <p>Deterministic evaluation is the primary path. AI is used only as advisory support, ensuring decisions remain transparent and auditable.</p>
-          <p class="lang-secondary">決定論評価が主体です。AI は補助としてのみ使われ、判断は透明かつ監査可能に保たれます。</p>
-        </article>
+
+      <!-- ============================================================
+           FIVE ACTIONS
+      ============================================================ -->
+      <section class="section">
+        <div class="section-head">
+          <span class="section-tag">// DETERMINISTIC ENGINE</span>
+          <h2>Five actions. No ambiguity.</h2>
+          <p class="section-desc">The arbiter selects exactly one action per evaluation cycle, with a traceable decision log and rejected alternatives. AI advice is input — not the verdict.</p>
+        </div>
+        <div class="actions-strip">
+          <div class="action-card action-observe">
+            <span class="action-num">01</span>
+            <span class="action-name">OBSERVE</span>
+            <span class="action-desc">Monitor and collect. No active response required.</span>
+          </div>
+          <div class="action-arrow">→</div>
+          <div class="action-card action-notify">
+            <span class="action-num">02</span>
+            <span class="action-name">NOTIFY</span>
+            <span class="action-desc">Alert operator. Escalation required.</span>
+          </div>
+          <div class="action-arrow">→</div>
+          <div class="action-card action-throttle">
+            <span class="action-num">03</span>
+            <span class="action-name">THROTTLE</span>
+            <span class="action-desc">Rate-limit traffic from suspect source.</span>
+          </div>
+          <div class="action-arrow">→</div>
+          <div class="action-card action-redirect">
+            <span class="action-num">04</span>
+            <span class="action-name">REDIRECT</span>
+            <span class="action-desc">Divert traffic to analysis path.</span>
+          </div>
+          <div class="action-arrow">→</div>
+          <div class="action-card action-isolate">
+            <span class="action-num">05</span>
+            <span class="action-name">ISOLATE</span>
+            <span class="action-desc">Cut off host from network segment.</span>
+          </div>
+        </div>
       </section>
 
-      <section class="section feature-grid">
-        <h2>Key features</h2>
-        <div class="feature-cards">
+      <!-- ============================================================
+           WHAT IT IS / ISN'T
+      ============================================================ -->
+      <section class="section about-grid">
+        <div class="about-card">
+          <span class="section-tag">// WHAT IT IS</span>
+          <h2>Deploy in under an hour.</h2>
+          <p>Azazel-Edge turns a Raspberry Pi into an emergency SOC/NOC gateway. Internal network, DHCP, NAT forwarding, threat triage, and operator UI — all from one installer.</p>
+          <p class="lang-ja">Raspberry Pi を即席の SOC/NOC ゲートウェイに変えます。内部ネットワーク・DHCP・NAT・脅威トリアージ・オペレータ UI を1つのインストーラで。</p>
+          <ul class="check-list">
+            <li>Temporary venue / field office</li>
+            <li>No cloud, no SIEM required</li>
+            <li>Working gateway + triage in &lt;1 hr</li>
+          </ul>
+        </div>
+        <div class="about-card about-card-dark">
+          <span class="section-tag">// WHAT IT IS NOT</span>
+          <h2>Not a black box.</h2>
+          <p>Every decision is deterministic and auditable. AI advisory via Ollama is optional and bounded — all core functions work fully offline without it.</p>
+          <p class="lang-ja">すべての判断は決定論的で監査可能。AI アドバイザリは補助のみ。クラウドなしで完全動作します。</p>
+          <ul class="check-list check-list-no">
+            <li>Not a production SIEM replacement</li>
+            <li>Not an autonomous AI decision maker</li>
+            <li>Not cloud-dependent</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ============================================================
+           ARCHITECTURE
+      ============================================================ -->
+      <section class="section">
+        <div class="section-head">
+          <span class="section-tag">// ARCHITECTURE</span>
+          <h2>Event pipeline</h2>
+        </div>
+        <div class="arch-pipeline">
+          <div class="arch-stage">
+            <div class="arch-stage-label">INGESTION</div>
+            <div class="arch-stage-items">
+              <span class="arch-item">Suricata EVE</span>
+              <span class="arch-item">NetFlow v5</span>
+              <span class="arch-item">SNMP Poller</span>
+              <span class="arch-item">Wazuh</span>
+            </div>
+            <div class="arch-stage-core">
+              <span class="arch-core">Rust Core</span>
+              <span class="arch-core-sub">normalize + bridge</span>
+            </div>
+          </div>
+          <div class="arch-connector">
+            <div class="arch-conn-line"></div>
+            <span class="arch-conn-label">Evidence<br>Plane</span>
+          </div>
+          <div class="arch-stage">
+            <div class="arch-stage-label">EVALUATION</div>
+            <div class="arch-stage-items">
+              <span class="arch-item">NOC Evaluator</span>
+              <span class="arch-item">SOC Evaluator</span>
+            </div>
+            <div class="arch-stage-core">
+              <span class="arch-core arch-core-accent">Action Arbiter</span>
+              <span class="arch-core-sub">deterministic · auditable</span>
+            </div>
+          </div>
+          <div class="arch-connector">
+            <div class="arch-conn-line"></div>
+            <span class="arch-conn-label">Decision<br>+ Audit</span>
+          </div>
+          <div class="arch-stage">
+            <div class="arch-stage-label">OPERATOR PLANE</div>
+            <div class="arch-stage-items">
+              <span class="arch-item">Web UI / API</span>
+              <span class="arch-item">Mattermost</span>
+              <span class="arch-item">Audit Log</span>
+              <span class="arch-item">TAXII 2.1</span>
+            </div>
+          </div>
+        </div>
+        <div class="arch-ai-row">
+          <span class="arch-ai-label">AI ASSIST (optional)</span>
+          <span class="arch-ai-chain">
+            <span class="arch-ai-node">AI Governance</span>
+            <span>→</span>
+            <span class="arch-ai-node">Ollama LLM</span>
+            <span>→</span>
+            <span class="arch-ai-note">advisory only — arbiter has final say</span>
+          </span>
+        </div>
+      </section>
+
+      <!-- ============================================================
+           FEATURES
+      ============================================================ -->
+      <section class="section">
+        <div class="section-head">
+          <span class="section-tag">// CAPABILITIES</span>
+          <h2>Built for field use</h2>
+        </div>
+        <div class="features-grid">
           <div class="feature-card">
-            <h3>Offline first</h3>
-            <p>Minimize cloud dependency and run core capabilities entirely on-premises for field or event deployments.</p>
-            <p class="lang-secondary">クラウド依存を最小化し、フィールドやイベント現場でローカルだけで動かせます。</p>
+            <div class="feature-icon-row">
+              <span class="feature-icon">◈</span>
+              <h3>Offline first</h3>
+            </div>
+            <p>Zero cloud dependency. Deploy to event venues, disaster sites, or air-gapped network segments.</p>
+            <p class="lang-ja">クラウド不要。イベント会場・災害現場・エアギャップ環境で動作します。</p>
           </div>
           <div class="feature-card">
-            <h3>Deterministic logic</h3>
-            <p>NOC and SOC evaluations are fixed-rule based, producing one of five clear actions: observe, notify, throttle, redirect, isolate.</p>
-            <p class="lang-secondary">NOC/SOC の評価はルールベースで、observe／notify／throttle／redirect／isolate の 5 つの行動を明確に出します。</p>
+            <div class="feature-icon-row">
+              <span class="feature-icon">◈</span>
+              <h3>Deterministic logic</h3>
+            </div>
+            <p>Fixed-rule NOC and SOC evaluators produce exactly one action with a traceable decision explanation.</p>
+            <p class="lang-ja">固定ルールの NOC/SOC 評価器が決定論的に1アクションと説明を出力します。</p>
           </div>
           <div class="feature-card">
-            <h3>AI advisory</h3>
-            <p>Local Ollama integration generates advice, summaries, and candidate insights without letting AI act unilaterally.</p>
-            <p class="lang-secondary">Ollama と連携して助言や要約を生成し、AI が単独で行動することはありません。</p>
+            <div class="feature-icon-row">
+              <span class="feature-icon">◈</span>
+              <h3>AI advisory</h3>
+            </div>
+            <p>Local Ollama integration for narrative summaries. AI is bounded — advises only, arbiter decides.</p>
+            <p class="lang-ja">ローカル Ollama で要約・助言を生成。AI は補助のみ、判断はアービタです。</p>
           </div>
           <div class="feature-card">
-            <h3>Runbook workflow</h3>
-            <p>Operator guidance and controlled execution are backed by structured runbooks for fast, repeatable incident response.</p>
-            <p class="lang-secondary">構造化されたランブックで、迅速かつ再現性の高い対応を支援します。</p>
+            <div class="feature-icon-row">
+              <span class="feature-icon">◈</span>
+              <h3>Runbook workflow</h3>
+            </div>
+            <p>Structured runbooks guide operator response for fast, repeatable, auditable incident handling.</p>
+            <p class="lang-ja">構造化ランブックで迅速・再現可能なインシデント対応を実現します。</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon-row">
+              <span class="feature-icon">◈</span>
+              <h3>Multi-source ingestion</h3>
+            </div>
+            <p>Suricata EVE, NetFlow v5, SNMP polling, Wazuh — all normalized via Rust core into a unified evidence plane.</p>
+            <p class="lang-ja">Suricata・NetFlow・SNMP・Wazuh を Rust コアで正規化し統合します。</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon-row">
+              <span class="feature-icon">◈</span>
+              <h3>STIX / TAXII export</h3>
+            </div>
+            <p>Read-only TAXII 2.1 API and STIX exporter for intel sharing and downstream tool integration.</p>
+            <p class="lang-ja">TAXII 2.1 API と STIX エクスポートで脅威インテリジェンス共有に対応。</p>
           </div>
         </div>
       </section>
 
-      <section class="section architecture">
-        <h2>Architecture</h2>
-        <div class="architecture-grid">
-          <div class="architecture-card">
-            <h3>Evidence Plane</h3>
-            <p>Normalizes events from sources like Suricata EVE and feeds them into the deterministic evaluation flow.</p>
-            <p class="lang-secondary">Suricata EVE などのイベントを正規化し、決定論評価に渡します。</p>
+      <!-- ============================================================
+           QUICK START
+      ============================================================ -->
+      <section class="section">
+        <div class="section-head">
+          <span class="section-tag">// QUICK START</span>
+          <h2>From zero to gateway</h2>
+        </div>
+        <div class="terminal-window terminal-wide">
+          <div class="terminal-bar">
+            <span class="tdot tdot-red"></span>
+            <span class="tdot tdot-yellow"></span>
+            <span class="tdot tdot-green"></span>
+            <span class="ttitle">install.sh — Azazel-Edge</span>
           </div>
-          <div class="architecture-card">
-            <h3>NOC / SOC Evaluator</h3>
-            <p>Separately assesses network and security state, producing a traceable evaluation for the arbiter.</p>
-            <p class="lang-secondary">ネットワークとセキュリティを別々に評価し、アービタに渡す判定を生成します。</p>
-          </div>
-          <div class="architecture-card">
-            <h3>Action Arbiter</h3>
-            <p>Selects a single action with supporting rationale and logs the decision for audit and operator review.</p>
-            <p class="lang-secondary">サポート理由とともにアクションを選択し、監査・レビュー用に記録します。</p>
+          <div class="terminal-body">
+<pre class="tpre"><span class="tc-comment"># 1. Clone the repository</span>
+<span class="tc-prompt">$</span> <span class="tc-cmd">git clone https://github.com/01rabbit/Azazel-Edge.git && cd Azazel-Edge</span>
+
+<span class="tc-comment"># 2. Run the interactive installer (Raspberry Pi OS / Debian)</span>
+<span class="tc-prompt">$</span> <span class="tc-cmd">sudo bash installer/install.sh</span>
+
+<span class="tc-comment"># 3. Optional: add SNMP and NetFlow v5 sensors</span>
+<span class="tc-prompt">$</span> <span class="tc-cmd">sudo bash installer/install_sensors.sh</span>
+
+<span class="tc-comment"># 4. Verify service is running</span>
+<span class="tc-prompt">$</span> <span class="tc-cmd">sudo systemctl status azazel-edge</span>
+
+<span class="tc-comment"># 5. Launch deterministic demo (no live traffic required)</span>
+<span class="tc-prompt">$</span> <span class="tc-cmd">azazel-edge-demo</span>
+<span class="tc-green">▶  Demo running at http://localhost:5000</span></pre>
           </div>
         </div>
       </section>
 
-      <section class="section use-cases">
-        <h2>Use cases</h2>
-        <div class="use-case-list">
-          <div class="use-case-item">
-            <p>• Temporary venue network monitoring</p>
-            <p class="lang-secondary">イベント会場の臨時ネットワーク監視</p>
+      <!-- ============================================================
+           USE CASES
+      ============================================================ -->
+      <section class="section">
+        <div class="section-head">
+          <span class="section-tag">// USE CASES</span>
+          <h2>When to deploy</h2>
+        </div>
+        <div class="usecases-grid">
+          <div class="usecase-card">
+            <span class="usecase-num">01</span>
+            <h3>Event venue monitoring</h3>
+            <p>Temporary network segment at conferences, CTF events, or competition venues needing first-response triage without a full SIEM.</p>
+            <p class="lang-ja">CTF・カンファレンス・競技会場などの臨時ネットワーク監視に。</p>
           </div>
-          <div class="use-case-item">
-            <p>• Disaster response command post support</p>
-            <p class="lang-secondary">災害対応拠点の初動 SOC/NOC 支援</p>
+          <div class="usecase-card">
+            <span class="usecase-num">02</span>
+            <h3>Disaster response</h3>
+            <p>Stand up a command post SOC/NOC at a disaster site with no cloud connectivity in under an hour.</p>
+            <p class="lang-ja">災害対応拠点でクラウドなしの即席 SOC/NOC を短時間で構築できます。</p>
           </div>
-          <div class="use-case-item">
-            <p>• Security exercise and red-team field operations</p>
-            <p class="lang-secondary">セキュリティ演習やレッドチームの即席運用基盤</p>
+          <div class="usecase-card">
+            <span class="usecase-num">03</span>
+            <h3>Red team / exercises</h3>
+            <p>Field operations baseline for security exercises, red team engagements, and incident response training environments.</p>
+            <p class="lang-ja">レッドチーム・演習・IR トレーニングの即席運用基盤として。</p>
           </div>
         </div>
       </section>
 
-      <section class="section architecture">
-        <h2>Operations and Deployment Docs</h2>
-        <div class="architecture-grid">
-          <div class="architecture-card">
-            <h3>Operator Pack</h3>
-            <p><a href="OPERATOR_GUIDE.md">OPERATOR_GUIDE.md</a></p>
-            <p><a href="OPERATOR_GUIDE_JA.md">OPERATOR_GUIDE_JA.md</a></p>
-            <p><a href="STATUS_CARD.md">STATUS_CARD.md</a></p>
-            <p><a href="FIELD_DEPLOYMENT_GUIDE.md">FIELD_DEPLOYMENT_GUIDE.md</a></p>
+      <!-- ============================================================
+           DOCS
+      ============================================================ -->
+      <section class="section">
+        <div class="section-head">
+          <span class="section-tag">// DOCUMENTATION</span>
+          <h2>Operator resources</h2>
+        </div>
+        <div class="docs-grid">
+          <div class="docs-group">
+            <div class="docs-group-hdr">OPERATOR PACK</div>
+            <ul class="docs-list">
+              <li><a href="OPERATOR_GUIDE.md">OPERATOR_GUIDE.md</a></li>
+              <li><a href="OPERATOR_GUIDE_JA.md">OPERATOR_GUIDE_JA.md</a></li>
+              <li><a href="STATUS_CARD.md">STATUS_CARD.md</a></li>
+              <li><a href="FIELD_DEPLOYMENT_GUIDE.md">FIELD_DEPLOYMENT_GUIDE.md</a></li>
+            </ul>
           </div>
-          <div class="architecture-card">
-            <h3>Infrastructure Pack</h3>
-            <p><a href="PHYSICAL_SETUP_GUIDE.md">PHYSICAL_SETUP_GUIDE.md</a></p>
-            <p><a href="POWER_PLAYBOOK.md">POWER_PLAYBOOK.md</a></p>
-            <p><a href="VEHICLE_DEPLOYMENT_GUIDE.md">VEHICLE_DEPLOYMENT_GUIDE.md</a></p>
+          <div class="docs-group">
+            <div class="docs-group-hdr">INFRASTRUCTURE PACK</div>
+            <ul class="docs-list">
+              <li><a href="PHYSICAL_SETUP_GUIDE.md">PHYSICAL_SETUP_GUIDE.md</a></li>
+              <li><a href="POWER_PLAYBOOK.md">POWER_PLAYBOOK.md</a></li>
+              <li><a href="VEHICLE_DEPLOYMENT_GUIDE.md">VEHICLE_DEPLOYMENT_GUIDE.md</a></li>
+            </ul>
           </div>
-          <div class="architecture-card">
-            <h3>Integration and Policy Pack</h3>
-            <p><a href="WAZUH_INTEGRATION_GUIDE.md">WAZUH_INTEGRATION_GUIDE.md</a></p>
-            <p><a href="HUMANITARIAN_PARTNER_GUIDE.md">HUMANITARIAN_PARTNER_GUIDE.md</a></p>
-            <p><a href="PRIVACY_AND_LEGAL.md">PRIVACY_AND_LEGAL.md</a></p>
-            <p><a href="MAINTENANCE_CHECKLIST.md">MAINTENANCE_CHECKLIST.md</a></p>
+          <div class="docs-group">
+            <div class="docs-group-hdr">INTEGRATION PACK</div>
+            <ul class="docs-list">
+              <li><a href="WAZUH_INTEGRATION_GUIDE.md">WAZUH_INTEGRATION_GUIDE.md</a></li>
+              <li><a href="HUMANITARIAN_PARTNER_GUIDE.md">HUMANITARIAN_PARTNER_GUIDE.md</a></li>
+              <li><a href="PRIVACY_AND_LEGAL.md">PRIVACY_AND_LEGAL.md</a></li>
+              <li><a href="MAINTENANCE_CHECKLIST.md">MAINTENANCE_CHECKLIST.md</a></li>
+            </ul>
+          </div>
+          <div class="docs-group">
+            <div class="docs-group-hdr">AI AGENT &amp; CHANGELOG</div>
+            <ul class="docs-list">
+              <li><a href="AI_OPERATION_GUIDE.md">AI_OPERATION_GUIDE.md</a></li>
+              <li><a href="AI_OPERATION_GUIDE_JA.md">AI_OPERATION_GUIDE_JA.md</a></li>
+              <li><a href="CHANGELOG.md">CHANGELOG.md</a></li>
+              <li><a href="INDEX.md">INDEX.md</a></li>
+            </ul>
           </div>
         </div>
       </section>
 
-      <section class="section architecture">
-        <h2>Implementation Records</h2>
-        <div class="architecture-grid">
-          <div class="architecture-card">
-            <h3>Cycle delivery map</h3>
-            <p><a href="IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md">IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md</a></p>
-            <p>Verified mapping from implementation issues to modules, impact, and validation commands.</p>
-          </div>
-          <div class="architecture-card">
-            <h3>Change history</h3>
-            <p><a href="CHANGELOG.md">CHANGELOG.md</a></p>
-            <p><a href="INDEX.md">INDEX.md</a></p>
-            <p><a href="DOCUMENT_LANGUAGE_POLICY.md">DOCUMENT_LANGUAGE_POLICY.md</a></p>
-            <p>Track feature evolution and current documentation entry points.</p>
-          </div>
-        </div>
-      </section>
     </main>
 
+    <!-- ============================================================
+         FOOTER
+    ============================================================ -->
     <footer class="footer">
-      <p>Azazel-Edge | Raspberry Pi-ready emergency operations stack</p>
-      <p><a href="https://github.com/01rabbit/Azazel-Edge" target="_blank" rel="noopener">GitHub repository</a></p>
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <img src="images/Azazel-Edge_logo.png" alt="Azazel-Edge" class="footer-logo" />
+          <span class="footer-brand-name">Azazel-Edge</span>
+        </div>
+        <div class="footer-meta">
+          <span>MIT License</span>
+          <span class="footer-sep">·</span>
+          <a href="https://github.com/01rabbit/Azazel-Edge" target="_blank" rel="noopener">GitHub</a>
+          <span class="footer-sep">·</span>
+          <span>Raspberry Pi Ready</span>
+          <span class="footer-sep">·</span>
+          <span>Successor to Azazel-Pi</span>
+        </div>
+        <p class="footer-note">Black Hat Arsenal — USA 2025 · Asia 2026 · USA 2026</p>
+      </div>
     </footer>
-  </div>
+
+  </div><!-- /page-shell -->
+
 </body>
 </html>
