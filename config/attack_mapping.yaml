@@ -20,3 +20,35 @@ rules:
     tactic: reconnaissance
     confidence: 70
     attack_type_contains: ["scan", "probe", "recon"]
+
+  - technique_id: T1566
+    technique_name: Phishing
+    tactic: initial-access
+    confidence: 75
+    sid: [9901201, 9901202, 9901203]
+    attack_type_contains: ["phish", "social-engineering", "fake"]
+    category_contains: ["social-engineering"]
+
+  - technique_id: T1557
+    technique_name: Adversary-in-the-Middle
+    tactic: credential-access
+    confidence: 80
+    sid: [9901211]
+    attack_type_contains: ["arp", "spoof", "mitm"]
+    category_contains: ["bad-unknown"]
+
+  - technique_id: T1046
+    technique_name: Network Service Discovery
+    tactic: discovery
+    confidence: 70
+    sid: [9901221, 9901222]
+    attack_type_contains: ["scan", "probe"]
+    category_contains: ["network-scan"]
+
+  - technique_id: T1048
+    technique_name: Exfiltration Over Alternative Protocol
+    tactic: exfiltration
+    confidence: 65
+    sid: [9901231, 9901232]
+    attack_type_contains: ["dns", "tunnel", "exfil"]
+    category_contains: ["policy-violation"]
