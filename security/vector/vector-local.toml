@@ -1,0 +1,47 @@
+# Azazel-Edge Vector configuration - local mode
+# Suricata EVE JSON -> local JSONL archive
+# ARM64/Raspberry Pi 5 native; no cloud dependencies
+# Install: curl --proto '=https' --tlsv1.2 -sSfL https://sh.vector.dev | bash
+
+[sources.suricata_eve]
+type = "file"
+include = ["/var/log/suricata/eve.json"]
+read_from = "end"
+ignore_older_secs = 86400
+
+[sources.opencanary_log]
+type = "file"
+include = ["/var/log/azazel-edge/opencanary/*.log"]
+read_from = "end"
+ignore_older_secs = 86400
+
+[transforms.parse_suricata]
+type = "remap"
+inputs = ["suricata_eve"]
+source = '''
+  .source_type = "suricata"
+  parsed, err = parse_json(.message)
+  if err == null {
+    . = merge(., parsed)
+  }
+  del(.message)
+'''
+
+[transforms.parse_opencanary]
+type = "remap"
+inputs = ["opencanary_log"]
+source = '''
+  .source_type = "opencanary"
+'''
+
+[sinks.local_suricata_archive]
+type = "file"
+inputs = ["parse_suricata"]
+path = "/var/log/azazel-edge/vector/suricata-%Y-%m-%d.jsonl"
+encoding.codec = "json"
+
+[sinks.local_opencanary_archive]
+type = "file"
+inputs = ["parse_opencanary"]
+path = "/var/log/azazel-edge/vector/opencanary-%Y-%m-%d.jsonl"
+encoding.codec = "json"

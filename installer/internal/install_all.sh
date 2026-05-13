@@ -8,6 +8,7 @@ ENABLE_APP_STACK="${ENABLE_APP_STACK:-1}"
 ENABLE_AI_RUNTIME="${ENABLE_AI_RUNTIME:-1}"
 ENABLE_DEV_REMOTE_ACCESS="${ENABLE_DEV_REMOTE_ACCESS:-0}"
 ENABLE_RUST_CORE="${ENABLE_RUST_CORE:-1}"
+ENABLE_VECTOR="${ENABLE_VECTOR:-0}"
 
 # MODE=open|close (used only when ENABLE_DEV_REMOTE_ACCESS=1)
 DEV_REMOTE_MODE="${DEV_REMOTE_MODE:-open}"
@@ -24,6 +25,7 @@ echo "ENABLE_APP_STACK=${ENABLE_APP_STACK}"
 echo "ENABLE_AI_RUNTIME=${ENABLE_AI_RUNTIME}"
 echo "ENABLE_DEV_REMOTE_ACCESS=${ENABLE_DEV_REMOTE_ACCESS}"
 echo "ENABLE_RUST_CORE=${ENABLE_RUST_CORE}"
+echo "ENABLE_VECTOR=${ENABLE_VECTOR}"
 echo "DEV_REMOTE_MODE=${DEV_REMOTE_MODE}"
 
 if [[ "${ENABLE_INTERNAL_NETWORK}" == "1" ]]; then
@@ -52,6 +54,13 @@ if [[ "${ENABLE_DEV_REMOTE_ACCESS}" == "1" ]]; then
   MODE="${DEV_REMOTE_MODE}" "${REPO_ROOT}/installer/internal/set_dev_remote_access.sh"
 else
   echo "[all/5] Skip dev remote access setup"
+fi
+
+if [[ "${ENABLE_VECTOR}" == "1" ]]; then
+  echo "[all/6] Install Vector log aggregator"
+  VECTOR_MODE="${VECTOR_MODE:-local}" "${REPO_ROOT}/installer/internal/install_vector.sh"
+else
+  echo "[all/6] Skip Vector (set ENABLE_VECTOR=1 to enable)"
 fi
 
 echo "Unified installation completed."

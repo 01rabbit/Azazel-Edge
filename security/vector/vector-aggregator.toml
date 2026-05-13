@@ -1,0 +1,20 @@
+# Azazel-Edge Vector configuration - aggregator mode
+# Receives log lines from multiple nodes and archives locally.
+
+[sources.edge_udp]
+type = "socket"
+mode = "udp"
+address = "0.0.0.0:5514"
+
+[transforms.tag_node]
+type = "remap"
+inputs = ["edge_udp"]
+source = '''
+  .ingest = "azazel-aggregator"
+'''
+
+[sinks.aggregate_archive]
+type = "file"
+inputs = ["tag_node"]
+path = "/var/log/azazel-edge/vector/aggregate-%Y-%m-%d.jsonl"
+encoding.codec = "json"

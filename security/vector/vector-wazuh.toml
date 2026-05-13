@@ -1,0 +1,37 @@
+# Azazel-Edge Vector configuration - Wazuh forwarding mode
+# Suricata EVE + OpenCanary -> Wazuh Manager syslog input
+# Set WAZUH_MANAGER_HOST env var before enabling this mode
+
+[sources.suricata_eve]
+type = "file"
+include = ["/var/log/suricata/eve.json"]
+read_from = "end"
+ignore_older_secs = 86400
+
+[transforms.to_cef]
+type = "remap"
+inputs = ["suricata_eve"]
+source = '''
+  parsed, err = parse_json(.message)
+  if err == null {
+    sig_id = to_string(get!(parsed, ["alert", "signature_id"])) ?? "0"
+    sig    = get(parsed, ["alert", "signature"]) ?? "unknown"
+    sev    = to_string(get!(parsed, ["alert", "severity"])) ?? "3"
+    src_ip = get(parsed, ["src_ip"]) ?? "-"
+    dst_ip = get(parsed, ["dest_ip"]) ?? "-"
+    .message = "CEF:0|Azazel-Edge|Suricata|1.0|" + sig_id + "|" + to_string!(sig) + "|" + sev + "|src=" + to_string!(src_ip) + " dst=" + to_string!(dst_ip)
+  }
+'''
+
+[sinks.wazuh_syslog]
+type = "socket"
+inputs = ["to_cef"]
+address = "${WAZUH_MANAGER_HOST}:514"
+mode = "udp"
+encoding.codec = "text"
+
+[sinks.local_archive_wazuh_mode]
+type = "file"
+inputs = ["to_cef"]
+path = "/var/log/azazel-edge/vector/suricata-forwarded-%Y-%m-%d.jsonl"
+encoding.codec = "json"

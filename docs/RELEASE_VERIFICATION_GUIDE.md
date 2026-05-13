@@ -32,3 +32,21 @@ Review both artifacts before promoting a release to field deployment.
 ## Scope note
 
 This project currently uses a practical baseline and is not claiming full SLSA or enterprise signing compliance.
+
+## Optional integration smoke checks
+
+When `ENABLE_VECTOR=1` is used during installation:
+
+```bash
+systemctl is-active azazel-edge-vector
+vector --version
+test -f /etc/azazel-edge/vector/vector.toml
+```
+
+When Wazuh Agent is installed via `installer/internal/install_wazuh_agent.sh`:
+
+```bash
+systemctl is-active wazuh-agent
+test -x /var/ossec/active-response/bin/azazel-block.sh
+grep -q "/etc/azazel-edge/vector" /var/ossec/etc/ossec.conf
+```
