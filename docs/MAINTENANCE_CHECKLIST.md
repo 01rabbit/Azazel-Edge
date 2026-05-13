@@ -1,10 +1,9 @@
 # MAINTENANCE CHECKLIST
 
 ## Purpose
-Scheduled maintenance procedure checklist.
+Scheduled maintenance checklist for annual, quarterly, and pre-deployment cycles.
 
-## Japanese Summary
-年次・四半期・出動前の保守チェック項目です。
+Supplementary JA: 年次・四半期・出動前の保守チェック項目。
 
 ## Annual
 - Full boot test

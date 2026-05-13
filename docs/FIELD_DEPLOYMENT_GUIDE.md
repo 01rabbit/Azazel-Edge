@@ -3,8 +3,7 @@
 ## Purpose
 Rapid deployment checklist for first responders.
 
-## Japanese Summary
-現場展開を短時間で実施するためのチェックリストです。
+Supplementary JA: 現場展開を短時間で実施するためのチェックリスト。
 
 ## Stages
 - Pre-deployment: verify hardware and configs.

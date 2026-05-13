@@ -382,7 +382,10 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 | Document | Description |
 |----------|-------------|
 | [AI Operation Guide](docs/AI_OPERATION_GUIDE.md) | LLM thresholds, daily checks, incident response |
+| [AI Operation Guide (JA)](docs/AI_OPERATION_GUIDE_JA.md) | 日本語版 AI 運用要領 |
 | [Demo Guide](docs/DEMO_GUIDE.md) | Deterministic demo replay walkthrough |
+| [Operator Guide](docs/OPERATOR_GUIDE.md) | Field operator quick start and first-response workflow |
+| [Operator Guide (JA)](docs/OPERATOR_GUIDE_JA.md) | 日本語版オペレータガイド |
 
 ### For developers
 
@@ -390,7 +393,9 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 |----------|-------------|
 | [P0 Runtime Architecture](docs/P0_RUNTIME_ARCHITECTURE.md) | Pipeline, modules, and constraints |
 | [AI Agent Build and Operation Detail](docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL.md) | AI agent internals |
+| [AI Agent Build and Operation Detail (JA)](docs/AI_AGENT_BUILD_AND_OPERATION_DETAIL_JA.md) | 日本語版 AI エージェント構築・運用詳細 |
 | [M.I.O. Persona Profile](docs/MIO_PERSONA_PROFILE.md) | Operator persona design spec |
+| [M.I.O. Persona Profile (JA)](docs/MIO_PERSONA_PROFILE_JA.md) | 日本語版 M.I.O. ペルソナ仕様 |
 | [Post-demo Main Integration Boundary (#104)](docs/POST_DEMO_MAIN_INTEGRATION_104.md) | What is mainline vs. exhibition-only |
 | [Post-demo Socket Permission Model (#105)](docs/POST_DEMO_SOCKET_PERMISSION_MODEL_105.md) | Unix socket permission decisions |
 | [Next Development Execution Index 2026Q2](docs/NEXT_DEVELOPMENT_EXECUTION_INDEX_2026Q2.md) | Roadmap and execution plan |
@@ -404,6 +409,7 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 | [Changelog](docs/CHANGELOG.md) | PR and feature traceability history |
 | [Implementation Cycle Feature Inventory](docs/IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md) | Verified feature inventory for Epic #196 implementation cycle |
 | [Release Verification Guide](docs/RELEASE_VERIFICATION_GUIDE.md) | Checksum/SBOM/dependency scan verification workflow |
+| [Document Language Policy](docs/DOCUMENT_LANGUAGE_POLICY.md) | English-first documentation policy and EN/JA split map |
 
 ## Limitations and Known Issues
 

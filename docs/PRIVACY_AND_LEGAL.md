@@ -3,8 +3,7 @@
 ## Purpose
 Data handling and legal baseline memo.
 
-## Japanese Summary
-収集データ、保持、開示、法務上の基本方針を整理したメモです。
+Supplementary JA: 収集データ、保持、開示、法務方針の整理メモ。
 
 ## Data Scope
 - IP addresses

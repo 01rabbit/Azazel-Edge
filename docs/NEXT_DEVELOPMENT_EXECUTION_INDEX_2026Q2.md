@@ -1,12 +1,11 @@
 # Next Development Execution Index (2026Q2)
 
-Last updated: 2026-05-11  
+Last updated: 2026-05-13
 Tracking Epic: #149
 
 ## Purpose
-
-このドキュメントは、次の開発サイクルを「誰が・どの環境でも・同じ順序で」実行できるようにするための実行インデックスです。  
-Issue の優先度、タグ、依存関係、環境別の実施手順を固定します。
+This index defines a repeatable execution order for the next development cycle across environments.
+It fixes issue priority, tags, dependencies, and environment-specific execution expectations.
 
 ## Work Index
 
@@ -27,12 +26,11 @@ P4 | #159 | Add repository LICENSE and align README legal metadata | `priority:P
 
 Environment | Primary goal | Minimum setup | Must-run checks
 ---|---|---|---
-macOS/Linux dev | 実装・単体テスト | `python3.10+`, `rust`, `.venv` | `PYTHONPATH=py:. pytest -q`, `cargo test` (core)
-Ubuntu CI | 自動回帰検知 | GitHub Actions runner | workflow green (`pytest` + `cargo test`)
-Raspberry Pi runtime | systemd/権限/実挙動検証 | Suricata, systemd, `/run/azazel-edge` | service status, socket mode, API path checks
+macOS/Linux dev | Implementation and unit tests | `python3.10+`, `rust`, `.venv` | `PYTHONPATH=py:. pytest -q`, `cargo test` (core)
+Ubuntu CI | Automated regression detection | GitHub Actions runner | workflow green (`pytest` + `cargo test`)
+Raspberry Pi runtime | systemd/permission/runtime validation | Suricata, systemd, `/run/azazel-edge` | service status, socket mode, API path checks
 
 ## Execution Order (Strict)
-
 1. `#150` (enforce path)
 2. `#151` (CI baseline)
 3. `#152` (EPD crash)
@@ -41,32 +39,19 @@ Raspberry Pi runtime | systemd/権限/実挙動検証 | Suricata, systemd, `/run
 6. `#159` (license)
 
 ## Ownership Split (Parallel-safe)
-
-- **Runtime/Defense owner**: `#150`, `#152`
-- **Platform/CI owner**: `#151`, `#156`, `#159`
-- **SOC/AI owner**: `#153`, `#154`, `#157`
-- **Ops/Integration owner**: `#155`, `#158`
+- Runtime/Defense owner: `#150`, `#152`
+- Platform/CI owner: `#151`, `#156`, `#159`
+- SOC/AI owner: `#153`, `#154`, `#157`
+- Ops/Integration owner: `#155`, `#158`
 
 Rule:
-- 同一ファイル群を跨ぐ実装は、先に owner 間で write scope を宣言してから着手する。
-
-## Branch/PR Convention
-
-- Branch: `feature/<area>-i<issue-number>-<short-name>`
-  - Example: `feature/rust-i150-enforce-path`
-- PR title: `[#<issue>] <short summary>`
-- PR body must include:
-  - Scope
-  - Risk
-  - Rollback
-  - Validation commands
+- For cross-cutting file sets, declare write scope among owners before implementation starts.
 
 ## Definition of Done (Common)
-
-- issue の acceptance 条件を満たす
-- 追加テストが緑
-- README / docs への影響が反映済み
-- 監査ログ・運用境界に関わる変更は理由を明文化
+- Acceptance criteria are satisfied.
+- Added tests are green.
+- README/docs impacts are reflected.
+- Audit or operational boundary changes include explicit rationale.
 
 ## Topo-Lite Execution Track (from #143 policy memo)
 
@@ -75,6 +60,3 @@ Priority | Issue | Title | Labels | Depends on
 P0 | #173 | [Topo-Lite] Default monitoring scope to internal network (br0/172.16.0.0/24) | `priority:P0`, `initiative:topo-lite`, `area:integration`, `area:ops`, `noc` | #140
 P0 | #172 | [Topo-Lite] Synthetic seed mode with strict live-evidence separation | `priority:P0`, `initiative:topo-lite`, `area:security`, `area:integration`, `soc`, `ui` | #173
 P0 | #174 | [Topo-Lite] Left-sidebar integration and single-screen visual triage UI | `priority:P0`, `initiative:topo-lite`, `area:integration`, `ui`, `soc`, `noc` | #173, #172
-
-Execution note:
-- #143 is policy-only and is considered complete once the above implementation issues are created and linked to #140.

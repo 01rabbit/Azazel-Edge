@@ -3,8 +3,7 @@
 ## Purpose
 Guide for Wazuh Agent and Vector integration paths.
 
-## Japanese Summary
-Wazuh連携の2方式（Agent / Vector転送）と確認手順を示します。
+Supplementary JA: Wazuh連携の2方式（Agent / Vector）と確認手順。
 
 ## Method A: Wazuh Agent
 - Install with `installer/internal/install_wazuh_agent.sh`.

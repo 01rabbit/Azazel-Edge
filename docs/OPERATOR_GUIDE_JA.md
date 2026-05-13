@@ -1,41 +1,42 @@
 # OPERATOR GUIDE (JA)
 
-## Purpose
-Primary operator guide for non-expert shelter staff and volunteers.
+## 目的
+避難所スタッフ・ボランティア向けの運用手順です。
+最初の15分で起動し、状態表示を確認し、安全な一次対応を行うことを目的とします。
 
-## Japanese Summary
-この文書は、避難所スタッフ向けの運用手順です。最初の15分で起動し、状態表示を見て、最小限の安全対応を実施できることを目的にします。
+## 1. クイックスタート（15分）
+1. 電源、LAN、表示ケーブルを接続する。
+2. 起動し、サービスが立ち上がるまで待つ。
+3. `systemctl is-active azazel-edge-web azazel-edge-control-daemon` を確認する。
+4. ローカルネットワーク端末からダッシュボードを開く。
+5. 現在の色状態と推奨アクションを確認する。
 
-## 1. Quick Start (15 minutes)
-1. Connect power, LAN, and display cables.
-2. Boot the device and wait for service start.
-3. Verify `systemctl is-active azazel-edge-web azazel-edge-control-daemon`.
-4. Open dashboard from local network browser.
-5. Confirm current posture and first action.
+## 2. e-Paper 状態と初動
+- GREEN: 監視継続、定期確認を実施。
+- YELLOW: 初期確認を実施し、状態を安定維持。
+- RED: インシデントとして扱い、承認済み Runbook で対応し即時エスカレーション。
 
-## 2. e-Paper State and Action
-- GREEN: Continue monitoring and confirm periodic updates.
-- YELLOW: Run initial checks and keep current mode stable.
-- RED: Escalate to operator review and avoid destructive changes.
-
-## 3. FAQ (sample)
-- Q: Wi-Fiがつながらない
-  A: 1台か全体かを先に確認し、Runbook候補へ進む。
+## 3. FAQ（現場向け）
+- Q: Wi-Fi がつながらない
+  A: 1台だけか全体かを先に切り分け、Runbook 候補へ進む。
 - Q: 表示が赤になった
-  A: 現在の推奨を確認し、手順どおりに1つずつ実施する。
+  A: 現在推奨を確認し、承認済み手順を1つずつ実施する。
 - Q: 再起動方法
   A: 記録を確認後、承認済み手順で実施する。
 
-## 4. Emergency Contact Sheet
-| Role | Name | Contact |
-|------|------|---------|
-| Shift lead | | |
-| Network support | | |
-| Escalation | | |
+## 4. 緊急連絡表
+| 役割 | 氏名 | 連絡先 |
+|------|------|--------|
+| 当番責任者 | | |
+| ネットワーク担当 | | |
+| エスカレーション先 | | |
 
-## 5. Equipment Checklist
-- Raspberry Pi unit
-- SD card
-- Power adapter
-- LAN cable
-- e-Paper display
+## 5. 機材チェックリスト
+- Raspberry Pi 本体
+- SD カード
+- 電源アダプタ
+- LAN ケーブル
+- e-Paper ディスプレイ
+
+## 6. English Version
+英語版は `docs/OPERATOR_GUIDE.md` を参照してください。

@@ -3,8 +3,7 @@
 ## Purpose
 Power selection and runtime estimate guide.
 
-## Japanese Summary
-電源構成ごとの運転時間目安と注意点をまとめます。
+Supplementary JA: 電源構成ごとの運転時間目安と注意点。
 
 | Configuration | Capacity | Runtime (13W load) | Runtime (full 90W load) |
 |---|---|---|---|

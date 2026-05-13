@@ -1,10 +1,9 @@
 # HUMANITARIAN PARTNER GUIDE
 
 ## Purpose
-Onboarding for NGO and humanitarian operations partners.
+Onboarding guidance for NGO and humanitarian operation partners.
 
-## Japanese Summary
-人道支援団体向けの導入概要と運用上の注意です。
+Supplementary JA: 人道支援団体向けの導入概要と運用上の注意。
 
 ## Topics
 - Operational fit for shelter, clinic, and distribution networks.

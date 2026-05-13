@@ -3,8 +3,7 @@
 ## Purpose
 Hardware assembly and cable routing reference.
 
-## Japanese Summary
-配線、ラベル、設置前確認をまとめた物理設置ガイドです。
+Supplementary JA: 配線、ラベル、設置前確認をまとめた物理設置ガイド。
 
 ## Cable Routing (ASCII)
 `[Power] -> [DC input]`

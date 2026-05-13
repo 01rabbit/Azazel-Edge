@@ -3,20 +3,19 @@
 ## Purpose
 Single-page quick reference for shelter wall posting.
 
-## Japanese Summary
-現場に掲示する1枚カードです。色ごとの次の行動を簡潔に示します。
+Supplementary JA: 現場掲示用の1枚カード（色ごとの次アクション）。
 
-## GREEN / 緑
+## GREEN
 - Baseline stable.
 - Keep monitoring.
 - Follow normal checklist.
 
-## YELLOW / 黄
+## YELLOW
 - Check freshness and queue.
 - Confirm affected scope.
 - Avoid uncontrolled restarts.
 
-## RED / 赤
+## RED
 - Treat as active incident.
 - Follow reviewed runbook.
 - Escalate immediately.
