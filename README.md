@@ -19,7 +19,7 @@ Azazel-Edge is a Raspberry Pi-oriented edge operations stack that combines:
 - Web UI + API + runbook workflow for operators
 - optional local AI assist (Ollama + Mattermost integration)
 
-This README is based on verified repository contents (code, scripts, tests, git history, GitHub issue/PR metadata) as of **2026-05-11**.
+This README is based on verified repository contents (code, scripts, tests, git history, GitHub issue/PR metadata) as of **2026-05-13**.
 
 ## What is Azazel-Edge?
 
@@ -142,6 +142,7 @@ flowchart LR
 ## Changelog
 
 See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for the full implementation history and PR traceability.
+See [`docs/IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md`](docs/IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md) for the current execution cycle feature inventory.
 
 ## Requirements
 
@@ -252,7 +253,7 @@ Install result (default scripts):
 
 ### Token auth
 - API token can be supplied by header `X-AZAZEL-TOKEN` (or `X-Auth-Token`) or `?token=`.
-- If no token file exists, protected endpoints become effectively open.
+- Default runtime posture is fail-closed (`AZAZEL_AUTH_FAIL_OPEN=0`): missing token material must not open protected endpoints.
 
 ## Usage
 
@@ -401,6 +402,7 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 | [AGENTS.md](AGENTS.md) | AI agent working charter — read before making any change |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Human contributor guide (branch, PR, test rules) |
 | [Changelog](docs/CHANGELOG.md) | PR and feature traceability history |
+| [Implementation Cycle Feature Inventory](docs/IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md) | Verified feature inventory for Epic #196 implementation cycle |
 | [Release Verification Guide](docs/RELEASE_VERIFICATION_GUIDE.md) | Checksum/SBOM/dependency scan verification workflow |
 
 ## Limitations and Known Issues
@@ -422,12 +424,7 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 ### Open work items
 
 See [GitHub Issues](https://github.com/01rabbit/Azazel-Edge/issues) for the current list.
-Priority items as of 2026-05-11:
-
-- #140 Epic: Azazel-Topo-Lite MVP *(P0)*
-- #173 [Topo-Lite] Default monitoring scope to internal network (br0/172.16.0.0/24) *(P0)*
-- #172 [Topo-Lite] Synthetic seed mode with strict live-evidence separation *(P0)*
-- #174 [Topo-Lite] Left-sidebar integration and single-screen visual triage UI *(P0)*
+Priority items are tracked in GitHub Issues and may change daily.
 
 ## Current Status
 

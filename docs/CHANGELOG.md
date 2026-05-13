@@ -53,10 +53,25 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - lightweight Python static check job (`compileall`)
   - release checksum artifact generation (`release-checksums.sha256`)
   - release verification documentation (`docs/RELEASE_VERIFICATION_GUIDE.md`)
+- Notification transport hardening line:
+  - Syslog CEF notifier adapter (`SyslogCEFNotifier`)
+  - offline queue notifier with recovery flush (`OfflineQueueNotifier`)
+  - summary-only transfer mode in `DecisionNotifier`
+- Installer/runtime integration line:
+  - Vector installer + service/config baseline
+  - Wazuh ARM64 installer baseline
+  - periodic self-test timer/service and helper script
+  - encrypted storage default installer path (`SKIP_LUKS=1` opt-out)
+  - captive portal consent page and registration API baseline
+- Operations/deployment documentation pack:
+  - operator/deployment/legal/maintenance guides
+  - docs index and GitHub Pages docs landing refresh
+  - implementation cycle feature inventory (`docs/IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md`)
 
 ### Changed
 - Dependency review CI job now runs only when repository variable `ENABLE_DEPENDENCY_REVIEW` is set to `true`.
   - This avoids false CI failures on repositories where Dependency Graph is disabled.
+- README refreshed to align with current runtime capabilities and fail-closed posture.
 
 ## [2026-05-12]
 
