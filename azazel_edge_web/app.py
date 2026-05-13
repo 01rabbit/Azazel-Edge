@@ -34,6 +34,7 @@ from functools import wraps
 from collections import deque
 from pathlib import Path
 from datetime import datetime
+from datetime import timezone
 from typing import Dict, Any, Optional, Iterator, Tuple, List, Callable
 from urllib.request import Request, urlopen
 from urllib.parse import urlparse, quote
@@ -100,6 +101,7 @@ try:
         AEVT_INGEST_REJECT,
         AEVT_NODE_QUARANTINE,
     )
+    from azazel_edge.integrations import STIXExporter
 except Exception:
     cp_read_snapshot_payload = None
     cp_watch_snapshots = None
@@ -135,6 +137,7 @@ except Exception:
     SoTValidationError = ValueError  # type: ignore
     AggregatorRegistry = None  # type: ignore
     FreshnessPolicy = None  # type: ignore
+    STIXExporter = None  # type: ignore
 
 # Configuration
 _RUNTIME_STATE_PATHS = runtime_snapshot_path_candidates()
@@ -217,6 +220,7 @@ AGGREGATOR_AUDIT_LOG = Path(
     str(os.environ.get("AZAZEL_AGGREGATOR_AUDIT_LOG", "/var/log/azazel-edge/aggregator-events.jsonl")).strip()
     or "/var/log/azazel-edge/aggregator-events.jsonl"
 )
+TAXII_COLLECTION_ID = "azazel-edge-decisions"
 
 if AggregatorRegistry is not None and FreshnessPolicy is not None:
     _AGGREGATOR_REGISTRY = AggregatorRegistry(
@@ -797,6 +801,29 @@ def _tail_first_existing_jsonl(paths: List[Path], limit: int = 20) -> List[Dict[
         if rows:
             return rows
     return []
+
+
+def _taxii_response(payload: Dict[str, Any], status: int = 200) -> Response:
+    return Response(
+        json.dumps(payload, ensure_ascii=False),
+        status=status,
+        mimetype="application/taxii+json;version=2.1",
+    )
+
+
+def _added_after_epoch(value: str) -> Optional[float]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return float(dt.timestamp())
+    except Exception:
+        return None
 
 
 def _load_captive_registry() -> Dict[str, Any]:
@@ -5159,6 +5186,59 @@ def api_aggregator_nodes():
             "poll_interval_sec": AGGREGATOR_POLL_INTERVAL_SEC,
         }
     ), 200
+
+
+@app.route("/taxii2/", methods=["GET"])
+@require_token()
+def taxii_discovery():
+    payload = {
+        "title": "Azazel-Edge TAXII 2.1 Server",
+        "description": "Emergency shelter gateway threat intelligence",
+        "contact": "azazel-edge",
+        "api_roots": ["/taxii2/"],
+    }
+    return _taxii_response(payload)
+
+
+@app.route("/taxii2/collections/", methods=["GET"])
+@require_token()
+def taxii_collections():
+    payload = {
+        "collections": [
+            {
+                "id": TAXII_COLLECTION_ID,
+                "title": "Azazel-Edge Arbiter Decisions",
+                "description": "STIX 2.1 sightings and indicators from deterministic triage",
+                "can_read": True,
+                "can_write": False,
+                "media_types": ["application/stix+json;version=2.1"],
+            }
+        ]
+    }
+    return _taxii_response(payload)
+
+
+@app.route(f"/taxii2/collections/{TAXII_COLLECTION_ID}/objects/", methods=["GET"])
+@require_token()
+def taxii_collection_objects():
+    limit_raw = str(request.args.get("limit", "50")).strip()
+    try:
+        limit = int(limit_raw)
+    except Exception:
+        limit = 50
+    limit = max(1, min(200, limit))
+    added_after = _added_after_epoch(str(request.args.get("added_after", "") or ""))
+    exporter = STIXExporter() if STIXExporter is not None else None
+    if exporter is None:
+        return _taxii_response({"more": False, "next": None, "objects": []})
+    source = TRIAGE_AUDIT_LOG if TRIAGE_AUDIT_LOG.exists() else TRIAGE_AUDIT_FALLBACK_LOG
+    bundle = exporter.export_audit_window(source, max_entries=limit, since_epoch=added_after)
+    payload = {
+        "more": False,
+        "next": None,
+        "objects": list(bundle.get("objects") or []),
+    }
+    return _taxii_response(payload)
 
 
 @app.route("/api/state/stream")
