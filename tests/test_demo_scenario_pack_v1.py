@@ -19,10 +19,23 @@ class DemoScenarioPackV1Tests(unittest.TestCase):
         self.assertIn('soc_redirect_demo', scenarios)
         self.assertIn('noc_degraded_demo', scenarios)
         self.assertIn('mixed_correlation_demo', scenarios)
+        self.assertIn('disaster_phishing_demo', scenarios)
+        self.assertIn('evacuation_network_demo', scenarios)
         items = pack.list_items()
         self.assertEqual(items[0]['scenario_id'], 'soc_redirect_demo')
         self.assertEqual(items[0]['title'], 'High-confidence SOC path')
         self.assertEqual(items[2]['attack_label'], 'SSH Brute Force')
+        for scenario_id in ('disaster_phishing_demo', 'evacuation_network_demo'):
+            self.assertIn('description', scenarios[scenario_id])
+            self.assertIn('demo', scenarios[scenario_id])
+            self.assertIn('events', scenarios[scenario_id])
+            self.assertIn('scoring', scenarios[scenario_id])
+            scoring = scenarios[scenario_id]['scoring']
+            self.assertIn('scenario_id', scoring)
+            self.assertIn('response_time_sec', scoring)
+            self.assertIn('correct_action', scoring)
+            self.assertIn('runbook_proposed', scoring)
+            self.assertIn('drills_completed', scoring)
 
     def test_runner_executes_pipeline(self) -> None:
         result = DemoScenarioRunner().run('mixed_correlation_demo')

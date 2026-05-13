@@ -159,6 +159,78 @@ class DemoScenarioPack:
                     {'event_id': 'syslog-2', 'source': 'syslog_min', 'kind': 'syslog_line', 'subject': '10.0.0.5->192.168.40.10:22/TCP', 'severity': 60, 'confidence': 0.75, 'attrs': {'message': 'failed ssh auth burst', 'host': 'edge', 'tag': 'sshd'}},
                 ],
             },
+            'disaster_phishing_demo': {
+                'description': 'Disaster shelter phishing attack with fake government domain indicators.',
+                'demo': {
+                    'title': 'Disaster phishing triage',
+                    'summary': 'A fake relief/government portal pattern is detected and routed to bounded SOC response.',
+                    'attack_label': 'Disaster Phishing',
+                    'default_hold_sec': 8,
+                    'talk_track': 'The replay highlights social-engineering signals and keeps action bounded for operator review.',
+                    'decision_path': {
+                        'first_pass': {
+                            'headline': 'SOC SIGNAL: SOCIAL ENGINEERING',
+                            'detail': 'Suricata phishing indicators and DNS anomaly support align on the same source.',
+                        },
+                        'second_pass': {
+                            'headline': 'ATT&CK SUPPORT: T1566',
+                            'detail': 'Mapping and category support reinforce phishing triage confidence.',
+                        },
+                        'final_policy': {
+                            'headline': 'FINAL POLICY: REDIRECT OR NOTIFY',
+                            'detail': 'The deterministic path keeps response reversible and operator-auditable.',
+                        },
+                    },
+                },
+                'events': [
+                    {'event_id': 'soc-p1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.23->192.168.40.12:80/TCP', 'severity': 82, 'confidence': 0.88, 'attrs': {'sid': 9901201, 'attack_type': 'phishing/social-engineering', 'category': 'social-engineering', 'target_port': 80, 'risk_score': 82, 'confidence_raw': 88, 'src_ip': '10.0.0.23', 'dst_ip': '192.168.40.12'}},
+                    {'event_id': 'dns-p1', 'source': 'syslog_min', 'kind': 'dns_query', 'subject': 'gov-login.example', 'severity': 60, 'confidence': 0.70, 'attrs': {'query': 'gov-login.example', 'result': 'resolved'}},
+                    {'event_id': 'flow-p1', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.0.23->192.168.40.12:80/TCP', 'severity': 45, 'confidence': 0.65, 'attrs': {'src_ip': '10.0.0.23', 'dst_ip': '192.168.40.12', 'dst_port': 80, 'flow_state': 'suspicious', 'app_proto': 'http'}},
+                ],
+                'scoring': {
+                    'scenario_id': 'disaster_phishing_demo',
+                    'response_time_sec': None,
+                    'correct_action': None,
+                    'runbook_proposed': None,
+                    'drills_completed': 0,
+                },
+            },
+            'evacuation_network_demo': {
+                'description': 'Shelter entry network degradation with DHCP stress and ARP spoof indicators.',
+                'demo': {
+                    'title': 'Evacuation network stress drill',
+                    'summary': 'NOC degradation and ARP threat indicators are correlated before bounded control is selected.',
+                    'attack_label': 'ARP Spoof + DHCP Degradation',
+                    'default_hold_sec': 9,
+                    'talk_track': 'The replay demonstrates NOC/SOC split handling under evacuation-time network instability.',
+                    'decision_path': {
+                        'first_pass': {
+                            'headline': 'NOC HEALTH: DEGRADED',
+                            'detail': 'Path health and lease behavior degrade during high client churn.',
+                        },
+                        'second_pass': {
+                            'headline': 'SOC SIGNAL: ARP SPOOF',
+                            'detail': 'Gateway impersonation pattern increases suspicion on a specific source.',
+                        },
+                        'final_policy': {
+                            'headline': 'FINAL POLICY: THROTTLE THEN ISOLATE REVIEW',
+                            'detail': 'Deterministic response starts reversible and escalates only with sustained evidence.',
+                        },
+                    },
+                },
+                'events': [
+                    {'event_id': 'noc-e1', 'source': 'noc_probe', 'kind': 'service_health', 'subject': 'dhcp', 'severity': 75, 'confidence': 0.90, 'attrs': {'service': 'dhcp', 'state': 'degraded'}},
+                    {'event_id': 'soc-e1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': 'arp-gateway', 'severity': 80, 'confidence': 0.86, 'attrs': {'sid': 9901211, 'attack_type': 'arp spoof', 'category': 'bad-unknown', 'target_port': 0, 'risk_score': 80, 'confidence_raw': 86, 'src_ip': '10.0.0.77', 'dst_ip': '192.168.40.1'}},
+                    {'event_id': 'noc-e2', 'source': 'noc_probe', 'kind': 'dhcp_leases', 'subject': 'lease-pool', 'severity': 68, 'confidence': 0.82, 'attrs': {'lease_failures': 15, 'pool_utilization': 95}},
+                ],
+                'scoring': {
+                    'scenario_id': 'evacuation_network_demo',
+                    'response_time_sec': None,
+                    'correct_action': None,
+                    'runbook_proposed': None,
+                    'drills_completed': 0,
+                },
+            },
         }
 
     def stage_order(self) -> List[str]:

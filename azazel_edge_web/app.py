@@ -5757,6 +5757,82 @@ def api_dashboard_handoff():
     return jsonify({"ok": True, "handoff_brief_pack": pack}), 200
 
 
+@app.route("/api/handoff/summary", methods=["GET"])
+@require_token()
+def api_handoff_summary():
+    lang = _request_lang()
+    output_format = str(request.args.get("format") or "").strip().lower()
+    sot_payload, _target = _read_sot_payload()
+    rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG, TRIAGE_AUDIT_FALLBACK_LOG], limit=20)
+
+    user_state = str((sot_payload.get("risk") or {}).get("user_state") or sot_payload.get("user_state") or "").strip().upper()
+    if user_state in {"CRITICAL", "ALERT", "LIMITED", "DANGER"}:
+        posture = "attention"
+    elif user_state in {"WATCH", "ELEVATED", "SUSPECTED"}:
+        posture = "watch"
+    else:
+        posture = "normal"
+
+    primary_concern = str(sot_payload.get("recommendation") or "")
+    if not primary_concern:
+        for item in reversed(rows):
+            message = str(item.get("message") or item.get("detail") or item.get("title") or "").strip()
+            if message:
+                primary_concern = message
+                break
+    if not primary_concern:
+        primary_concern = (
+            "現在の主要懸念は記録されていません。"
+            if lang == "ja"
+            else "No primary concern is currently recorded."
+        )
+
+    actions_taken: List[str] = []
+    for item in reversed(rows):
+        action = str(item.get("action") or "")
+        decision = str(item.get("decision") or "")
+        if action:
+            actions_taken.append(action)
+        elif decision:
+            actions_taken.append(decision)
+        if len(actions_taken) >= 5:
+            break
+
+    latest_ai = _tail_jsonl(AI_LLM_LOG, limit=5)
+    do_now = ""
+    do_not_do = ""
+    if latest_ai:
+        candidate = latest_ai[-1]
+        response = candidate.get("response") if isinstance(candidate.get("response"), dict) else {}
+        do_now = str(response.get("answer") or response.get("user_message") or "").strip()
+        do_not_do = str(response.get("operator_note") or "").strip()
+
+    payload = {
+        "ok": True,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "posture": posture,
+        "primary_concern": primary_concern,
+        "actions_taken": actions_taken,
+        "do_now": do_now,
+        "do_not_do": do_not_do,
+        "next_shift_notes": "",
+    }
+
+    if output_format == "print":
+        lines = [
+            "Azazel-Edge Shift Handoff Summary",
+            f"generated_at: {payload['generated_at']}",
+            f"posture: {payload['posture']}",
+            f"primary_concern: {payload['primary_concern']}",
+            f"actions_taken: {', '.join(payload['actions_taken']) if payload['actions_taken'] else '-'}",
+            f"do_now: {payload['do_now'] or '-'}",
+            f"do_not_do: {payload['do_not_do'] or '-'}",
+            "next_shift_notes:",
+        ]
+        return Response("\n".join(lines) + "\n", mimetype="text/plain")
+    return jsonify(payload), 200
+
+
 @app.route("/api/dashboard/evidence", methods=["GET"])
 @require_token()
 def api_dashboard_evidence():
