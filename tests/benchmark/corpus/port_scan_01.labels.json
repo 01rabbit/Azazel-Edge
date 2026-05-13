@@ -1,0 +1,1 @@
+{"session_id":"port_scan_01","attack_category":"port_scan","attack_technique":"T1046","description":"Internal rapid scan","expected_detection":true,"expected_action":["notify","throttle","redirect"],"expected_sid":[9901221],"session_objective":"service_discovery","breach_condition":"Scan completes without alert"}

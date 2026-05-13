@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:00:30.000000+0000","event_type":"alert","src_ip":"10.0.0.52","src_port":53000,"dest_ip":"8.8.8.8","dest_port":53,"proto":"UDP","alert":{"signature_id":9901232,"signature":"AZAZEL DNS exfil high-frequency domain pattern","severity":2,"category":"data-exfiltration"}}

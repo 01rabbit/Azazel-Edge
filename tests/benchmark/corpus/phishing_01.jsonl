@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:00:00.000000+0000","event_type":"alert","src_ip":"10.0.0.99","src_port":54321,"dest_ip":"172.16.0.1","dest_port":80,"proto":"TCP","alert":{"signature_id":9901201,"signature":"AZAZEL DISASTER phishing - fake government domain","severity":2,"category":"social-engineering"}}

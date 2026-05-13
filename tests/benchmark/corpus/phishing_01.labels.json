@@ -1,0 +1,1 @@
+{"session_id":"phishing_01","attack_category":"phishing","attack_technique":"T1566","description":"Fake government disaster relief website credential harvest","expected_detection":true,"expected_action":["notify","redirect","isolate"],"expected_sid":[9901201],"session_objective":"credential_capture","breach_condition":"HTTP POST to /login succeeds without Suricata alert"}

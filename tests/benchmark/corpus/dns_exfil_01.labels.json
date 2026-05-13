@@ -1,0 +1,1 @@
+{"session_id":"dns_exfil_01","attack_category":"dns_exfil","attack_technique":"T1048","description":"DNS tunnel high-frequency","expected_detection":true,"expected_action":["notify","redirect","isolate"],"expected_sid":[9901232],"session_objective":"data_exfiltration","breach_condition":"Exfiltration succeeds without alert"}

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="${REPO_ROOT}/py:${REPO_ROOT}"
+PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  PYTHON_BIN="python3"
+fi
+
+CMD="${1:-help}"
+
+case "${CMD}" in
+  pipeline)
+    "${PYTHON_BIN}" -m azazel_edge.benchmark.pipeline_latency --iterations 1000
+    ;;
+  startup)
+    if ! systemctl --version >/dev/null 2>&1; then
+      echo "ERROR: startup benchmark requires systemd"
+      exit 1
+    fi
+    "${PYTHON_BIN}" -m azazel_edge.benchmark.startup_timer
+    ;;
+  accuracy)
+    "${PYTHON_BIN}" -m azazel_edge.benchmark.detection_accuracy --corpus "${REPO_ROOT}/tests/benchmark/corpus"
+    ;;
+  report)
+    "${PYTHON_BIN}" -m azazel_edge.benchmark.report --output "${REPO_ROOT}/docs"
+    ;;
+  all)
+    "${BASH_SOURCE[0]}" pipeline
+    "${BASH_SOURCE[0]}" accuracy
+    "${BASH_SOURCE[0]}" report
+    ;;
+  *)
+    echo "Usage: azazel-bench {pipeline|startup|accuracy|report|all}"
+    exit 1
+    ;;
+esac

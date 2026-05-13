@@ -12,6 +12,7 @@ Entry point for all documents in this directory.
 | [AZAZEL_AGGREGATOR_ARCHITECTURE.md](AZAZEL_AGGREGATOR_ARCHITECTURE.md) | Developer / Operator | Multi-node Azazel Aggregator design baseline and phased roadmap | 2026-05-12 |
 | [SOC_POLICY_GUIDE.md](SOC_POLICY_GUIDE.md) | Developer / Operator | Deterministic SOC policy tuning and safety constraints | 2026-05-12 |
 | [ATTACK_MAPPING_GUIDE.md](ATTACK_MAPPING_GUIDE.md) | Developer / Operator | ATT&CK mapping rules, limits, and maintenance guidance | 2026-05-12 |
+| [BENCHMARK_DEFINITIONS.md](BENCHMARK_DEFINITIONS.md) | Developer / Operator | Reproducible benchmark definitions for operational, latency, power, and breach metrics | 2026-05-13 |
 | [POST_DEMO_MAIN_INTEGRATION_104.md](POST_DEMO_MAIN_INTEGRATION_104.md) | Developer | Integration boundary between exhibition-only assets and mainline | 2026-05-11 |
 | [POST_DEMO_SOCKET_PERMISSION_MODEL_105.md](POST_DEMO_SOCKET_PERMISSION_MODEL_105.md) | Developer | Unix socket permission model decisions | - |
 
@@ -38,6 +39,7 @@ Entry point for all documents in this directory.
 |------|----------|-------------|--------------|
 | [NEXT_DEVELOPMENT_EXECUTION_INDEX_2026Q2.md](NEXT_DEVELOPMENT_EXECUTION_INDEX_2026Q2.md) | Developer | 2026Q2 implementation plan index | - |
 | [IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md](IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md) | Developer / Operator | Verified feature inventory for Epic #196 delivery cycle | 2026-05-13 |
+| [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) | Developer / Operator | Benchmark output template and generated reproducibility record | 2026-05-13 |
 | [CHANGELOG.md](CHANGELOG.md) | Developer | PR and feature traceability history | - |
 | [RELEASE_VERIFICATION_GUIDE.md](RELEASE_VERIFICATION_GUIDE.md) | Developer / Operator | Checksum, SBOM, and release verification baseline | 2026-05-12 |
 

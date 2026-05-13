@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:00:10.000000+0000","event_type":"alert","src_ip":"10.0.0.50","src_port":0,"dest_ip":"172.16.0.1","dest_port":0,"proto":"ARP","alert":{"signature_id":9901211,"signature":"AZAZEL ARP spoof gateway impersonation","severity":2,"category":"man-in-the-middle"}}

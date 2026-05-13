@@ -1,0 +1,1 @@
+{"session_id":"c2_beacon_01","attack_category":"c2_beacon","attack_technique":"T1071","description":"Periodic small POST beacon","expected_detection":true,"expected_action":["notify","redirect","isolate"],"expected_sid":[9901251],"session_objective":"c2_channel","breach_condition":"C2 beacon established without alert"}

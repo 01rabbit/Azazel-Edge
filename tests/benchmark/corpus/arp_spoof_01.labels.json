@@ -1,0 +1,1 @@
+{"session_id":"arp_spoof_01","attack_category":"arp_spoof","attack_technique":"T1557","description":"Gateway impersonation","expected_detection":true,"expected_action":["notify","redirect","isolate"],"expected_sid":[9901211],"session_objective":"mitm","breach_condition":"ARP poisoning succeeds without alert"}

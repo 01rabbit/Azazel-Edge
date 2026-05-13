@@ -1,0 +1,120 @@
+{
+  "generated_at": "2026-05-13T10:58:32.091354+00:00",
+  "hardware": "TBD",
+  "commit": "eea897b",
+  "test_baseline": "328 passed, 62 subtests passed",
+  "os": "macOS-26.5-arm64-arm-64bit",
+  "python_version": "3.10.20",
+  "suricata_version": "TBD",
+  "load_condition": "synthetic EVE replay",
+  "network_conditions": "offline synthetic corpus",
+  "pipeline": {
+    "iterations": 200,
+    "stages": {
+      "T2_eve_parse": {
+        "mean_ms": 0.003,
+        "median_ms": 0.003,
+        "p95_ms": 0.004,
+        "p99_ms": 0.007,
+        "min_ms": 0.003,
+        "max_ms": 0.009,
+        "stdev_ms": 0.001
+      },
+      "T3_evidence_dispatch": {
+        "mean_ms": 0.01,
+        "median_ms": 0.01,
+        "p95_ms": 0.013,
+        "p99_ms": 0.026,
+        "min_ms": 0.009,
+        "max_ms": 0.032,
+        "stdev_ms": 0.002
+      },
+      "T4_evaluators": {
+        "mean_ms": 0.117,
+        "median_ms": 0.117,
+        "p95_ms": 0.131,
+        "p99_ms": 0.171,
+        "min_ms": 0.104,
+        "max_ms": 0.199,
+        "stdev_ms": 0.011
+      },
+      "T5_arbiter": {
+        "mean_ms": 0.008,
+        "median_ms": 0.008,
+        "p95_ms": 0.01,
+        "p99_ms": 0.021,
+        "min_ms": 0.007,
+        "max_ms": 0.022,
+        "stdev_ms": 0.002
+      }
+    },
+    "total_pipeline_mean_ms": 0.138,
+    "total_pipeline_p95_ms": 0.158
+  },
+  "accuracy": {
+    "corpus_path": "tests/benchmark/corpus",
+    "hardware": "software-only (EVE replay)",
+    "total_sessions": 5,
+    "detected": 5,
+    "breached": 0,
+    "detection_rate_pct": 100.0,
+    "breach_rate_pct": 0.0,
+    "per_session": [
+      {
+        "session_id": "arp_spoof_01",
+        "category": "arp_spoof",
+        "technique": "T1557",
+        "detected": true,
+        "action": "throttle",
+        "breach": false,
+        "matched_sids": [
+          9901211
+        ]
+      },
+      {
+        "session_id": "c2_beacon_01",
+        "category": "c2_beacon",
+        "technique": "T1071",
+        "detected": true,
+        "action": "throttle",
+        "breach": false,
+        "matched_sids": [
+          9901251
+        ]
+      },
+      {
+        "session_id": "dns_exfil_01",
+        "category": "dns_exfil",
+        "technique": "T1048",
+        "detected": true,
+        "action": "throttle",
+        "breach": false,
+        "matched_sids": [
+          9901232
+        ]
+      },
+      {
+        "session_id": "phishing_01",
+        "category": "phishing",
+        "technique": "T1566",
+        "detected": true,
+        "action": "throttle",
+        "breach": false,
+        "matched_sids": [
+          9901201
+        ]
+      },
+      {
+        "session_id": "port_scan_01",
+        "category": "port_scan",
+        "technique": "T1046",
+        "detected": true,
+        "action": "throttle",
+        "breach": false,
+        "matched_sids": [
+          9901221
+        ]
+      }
+    ]
+  }
+}

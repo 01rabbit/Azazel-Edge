@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:00:20.000000+0000","event_type":"alert","src_ip":"10.0.0.51","src_port":43210,"dest_ip":"172.16.0.1","dest_port":22,"proto":"TCP","alert":{"signature_id":9901221,"signature":"AZAZEL SCAN internal host rapid port scan","severity":2,"category":"network-scan"}}
