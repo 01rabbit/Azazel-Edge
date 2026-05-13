@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT_DEFAULT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 REPO_ROOT="${REPO_ROOT:-$REPO_ROOT_DEFAULT}"
 ENABLE_SERVICES="${ENABLE_SERVICES:-1}"
+SKIP_LUKS="${SKIP_LUKS:-0}"
 SECURITY_ROOT="/opt/azazel-edge/security"
 SECURITY_ENV="/etc/default/azazel-edge-security"
 
@@ -42,6 +43,15 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 DEBIAN_FRONTEND=noninteractive apt-get install -y suricata
 systemctl enable --now docker.service
+
+if [[ "${SKIP_LUKS}" != "1" ]]; then
+  echo "[security] Install encrypted storage baseline"
+  if [[ -x "${ASSET_ROOT}/installer/internal/install_encrypted_storage.sh" ]]; then
+    "${ASSET_ROOT}/installer/internal/install_encrypted_storage.sh" || true
+  fi
+else
+  echo "[security] Skip encrypted storage baseline (SKIP_LUKS=1)"
+fi
 
 echo "[security] Install compose project files"
 install -d \
