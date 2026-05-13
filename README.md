@@ -2,16 +2,17 @@
 
 ![Azazel-Edge Banner](images/Azazel-Edge_Banner.png)
 [![CI](https://github.com/01rabbit/Azazel-Edge/actions/workflows/ci.yml/badge.svg)](https://github.com/01rabbit/Azazel-Edge/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/01rabbit/Azazel-Edge)](https://github.com/01rabbit/Azazel-Edge/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-index-blue)](docs/INDEX.md)
 ![Platform: Raspberry Pi](https://img.shields.io/badge/Platform-Raspberry%20Pi-C51A4A?logo=raspberry-pi)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-Core-000000?logo=rust)
 ![Flask](https://img.shields.io/badge/Flask-Web%20API-000000?logo=flask)
-![Black Hat USA 2025 Arsenal](https://img.shields.io/badge/Black%20Hat%20USA%202025-Arsenal-111111)
-![Black Hat Asia 2026 Arsenal](https://img.shields.io/badge/Black%20Hat%20Asia%202026-Arsenal-111111)
-![Black Hat USA 2026 Arsenal](https://img.shields.io/badge/Black%20Hat%20USA%202026-Arsenal-111111)
+[![Black Hat Arsenal](https://img.shields.io/badge/Black%20Hat-Arsenal%202025--2026-111111)](https://www.blackhat.com/)
 
-Note: Azazel-Edge is the successor project to Azazel-Pi; Black Hat USA 2025 and Black Hat Asia 2026 Arsenal presentations were delivered under the Azazel-Pi name.
+Track record: This project line has been presented through Black Hat Arsenal review tracks (2025-2026).  
+Azazel-Edge is the successor project to Azazel-Pi; earlier accepted sessions were presented under the Azazel-Pi name.
 
 Azazel-Edge is a Raspberry Pi-oriented edge operations stack that combines:
 - internal network/gateway setup
