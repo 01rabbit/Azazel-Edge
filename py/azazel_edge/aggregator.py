@@ -5,6 +5,10 @@ import hmac as _hmac
 import json as _json
 import threading
 import time
+import urllib.error
+import urllib.request
+import uuid
+import ssl
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
@@ -77,7 +81,14 @@ class AggregatorRegistry:
         self._summaries: Dict[str, Dict[str, Any]] = {}
         self._seen: Dict[str, float] = {}  # replay cache: key → expiry epoch
 
-    def register_node(self, node_id: str, site_id: str, node_label: str = "", trust_fingerprint: str = "") -> Dict[str, Any]:
+    def register_node(
+        self,
+        node_id: str,
+        site_id: str,
+        node_label: str = "",
+        trust_fingerprint: str = "",
+        poll_url: str = "",
+    ) -> Dict[str, Any]:
         nid = str(node_id or "").strip()
         sid = str(site_id or "").strip()
         if not nid:
@@ -94,6 +105,7 @@ class AggregatorRegistry:
                 "site_id": sid,
                 "node_label": str(node_label or "").strip(),
                 "trust_fingerprint": str(trust_fingerprint or "").strip(),
+                "poll_url": str(poll_url or "").strip(),
                 "status": "active",
                 "created_at": created_at,
                 "updated_at": now,
@@ -246,3 +258,87 @@ def _freshness_status(last_seen_epoch: float, now_epoch: float, policy: Freshnes
     if age <= float(policy.offline_after_sec):
         return "stale"
     return "offline"
+
+
+class PollError(RuntimeError):
+    pass
+
+
+class AggregatorPoller:
+    def __init__(
+        self,
+        registry: AggregatorRegistry,
+        poll_interval_sec: int = 30,
+        node_timeout_sec: int = 5,
+        hmac_secret: bytes | None = None,
+    ) -> None:
+        self.registry = registry
+        self.poll_interval_sec = max(5, int(poll_interval_sec))
+        self.node_timeout_sec = max(2, int(node_timeout_sec))
+        self.hmac_secret = hmac_secret
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True, name="aggregator-poller")
+        self._thread.start()
+
+    def stop(self, timeout_sec: float = 5.0) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout_sec)
+
+    def poll_node_once(self, node_id: str, node_url: str) -> Dict[str, Any]:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            req = urllib.request.Request(
+                str(node_url),
+                headers={"Accept": "application/json", "X-Azazel-Poller": "1"},
+            )
+            with urllib.request.urlopen(req, timeout=self.node_timeout_sec, context=ctx) as resp:
+                raw = resp.read(1_048_576)
+            payload = _json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise PollError(f"poll_invalid_payload:{node_id}")
+            return payload
+        except Exception as exc:
+            raise PollError(f"poll_failed:{node_id}:{exc}") from exc
+
+    def _poll_loop(self) -> None:
+        while not self._stop_event.wait(timeout=self.poll_interval_sec):
+            nodes = self.registry.list_nodes()
+            for node in nodes:
+                if self._stop_event.is_set():
+                    break
+                node_id = str(node.get("node_id") or "").strip()
+                poll_url = str(node.get("poll_url") or "").strip()
+                if not node_id or not poll_url:
+                    continue
+                if str(node.get("status") or "").strip() == "quarantined":
+                    continue
+                try:
+                    summary = self.poll_node_once(node_id, poll_url)
+                    if not isinstance(summary.get("node"), dict):
+                        summary["node"] = {"node_id": node_id, "site_id": str(node.get("site_id") or "").strip()}
+                    if not summary.get("trace_id"):
+                        summary["trace_id"] = f"pull-{uuid.uuid4().hex[:12]}"
+                    timestamps = summary.get("timestamps") if isinstance(summary.get("timestamps"), dict) else {}
+                    if not timestamps.get("generated_at"):
+                        summary["timestamps"] = {"generated_at": time.time()}
+                    if self.hmac_secret:
+                        payload_for_sig = {k: v for k, v in summary.items() if k != "sig"}
+                        ts = _coerce_epoch(
+                            ((summary.get("timestamps") if isinstance(summary.get("timestamps"), dict) else {}) or {}).get(
+                                "generated_at"
+                            ),
+                            default=time.time(),
+                        )
+                        summary["sig"] = compute_ingest_sig(payload_for_sig, node_id, ts, self.hmac_secret)
+                    self.registry.ingest_summary(summary)
+                except Exception:
+                    continue

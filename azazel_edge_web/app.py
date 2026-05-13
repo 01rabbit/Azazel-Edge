@@ -95,13 +95,14 @@ try:
     from azazel_edge.sot import SoTConfig, SoTValidationError
     from azazel_edge.aggregator import (
         AggregatorRegistry,
+        AggregatorPoller,
         FreshnessPolicy,
         AEVT_NODE_REGISTER,
         AEVT_INGEST_ACCEPT,
         AEVT_INGEST_REJECT,
         AEVT_NODE_QUARANTINE,
     )
-    from azazel_edge.integrations import STIXExporter
+    from azazel_edge.integrations import STIXExporter, TAXIIPushClient
 except Exception:
     cp_read_snapshot_payload = None
     cp_watch_snapshots = None
@@ -136,8 +137,10 @@ except Exception:
     SoTConfig = None  # type: ignore
     SoTValidationError = ValueError  # type: ignore
     AggregatorRegistry = None  # type: ignore
+    AggregatorPoller = None  # type: ignore
     FreshnessPolicy = None  # type: ignore
     STIXExporter = None  # type: ignore
+    TAXIIPushClient = None  # type: ignore
 
 # Configuration
 _RUNTIME_STATE_PATHS = runtime_snapshot_path_candidates()
@@ -210,6 +213,7 @@ MATTERMOST_COMMAND_ALIASES = [
 ]
 MATTERMOST_COMMAND_PRIMARY_TRIGGER = str(os.environ.get("AZAZEL_MATTERMOST_COMMAND_TRIGGER", "mio")).strip() or "mio"
 AGGREGATOR_POLL_INTERVAL_SEC = max(5, int(os.environ.get("AZAZEL_AGGREGATOR_POLL_INTERVAL_SEC", "30")))
+AGGREGATOR_NODE_TIMEOUT_SEC = max(2, int(os.environ.get("AZAZEL_AGGREGATOR_NODE_TIMEOUT_SEC", "5")))
 AGGREGATOR_STALE_MULTIPLIER = max(2, int(os.environ.get("AZAZEL_AGGREGATOR_STALE_MULTIPLIER", "2")))
 AGGREGATOR_OFFLINE_MULTIPLIER = max(3, int(os.environ.get("AZAZEL_AGGREGATOR_OFFLINE_MULTIPLIER", "6")))
 _agg_hmac_key_raw = os.environ.get("AZAZEL_AGGREGATOR_INGEST_HMAC_KEY", "")
@@ -235,6 +239,16 @@ if AggregatorRegistry is not None and FreshnessPolicy is not None:
     )
 else:
     _AGGREGATOR_REGISTRY = None
+
+if _AGGREGATOR_REGISTRY is not None and AggregatorPoller is not None:
+    _AGGREGATOR_POLLER = AggregatorPoller(
+        registry=_AGGREGATOR_REGISTRY,
+        poll_interval_sec=AGGREGATOR_POLL_INTERVAL_SEC,
+        node_timeout_sec=AGGREGATOR_NODE_TIMEOUT_SEC,
+        hmac_secret=AGGREGATOR_INGEST_HMAC_SECRET,
+    )
+else:
+    _AGGREGATOR_POLLER = None
 
 
 def _request_lang() -> str:
@@ -5111,12 +5125,14 @@ def api_aggregator_register_node():
     site_id = str(body.get("site_id") or "").strip()
     node_label = str(body.get("node_label") or "").strip()
     trust_fingerprint = str(body.get("trust_fingerprint") or "").strip()
+    poll_url = str(body.get("poll_url") or "").strip()
     try:
         node = _AGGREGATOR_REGISTRY.register_node(
             node_id=node_id,
             site_id=site_id,
             node_label=node_label,
             trust_fingerprint=trust_fingerprint,
+            poll_url=poll_url,
         )
     except ValueError as e:
         err = str(e)
@@ -5124,6 +5140,24 @@ def api_aggregator_register_node():
         return jsonify({"ok": False, "error": err}), 400
     _audit_aggregator_event(event=AEVT_NODE_REGISTER, node_id=node_id, reason="ok", accepted=True)
     return jsonify({"ok": True, "node": node}), 200
+
+
+@app.route("/api/aggregator/poller/start", methods=["POST"])
+@require_token(min_role="admin")
+def api_aggregator_poller_start():
+    if _AGGREGATOR_POLLER is None:
+        return jsonify({"ok": False, "error": "aggregator_poller_unavailable"}), 500
+    _AGGREGATOR_POLLER.start()
+    return jsonify({"ok": True, "status": "started"}), 200
+
+
+@app.route("/api/aggregator/poller/stop", methods=["POST"])
+@require_token(min_role="admin")
+def api_aggregator_poller_stop():
+    if _AGGREGATOR_POLLER is None:
+        return jsonify({"ok": False, "error": "aggregator_poller_unavailable"}), 500
+    _AGGREGATOR_POLLER.stop()
+    return jsonify({"ok": True, "status": "stopped"}), 200
 
 
 @app.route("/api/aggregator/ingest/summary", methods=["POST"])
@@ -5239,6 +5273,65 @@ def taxii_collection_objects():
         "objects": list(bundle.get("objects") or []),
     }
     return _taxii_response(payload)
+
+
+@app.route("/api/taxii/push/test", methods=["POST"])
+@require_token(min_role="admin")
+def api_taxii_push_test():
+    if TAXIIPushClient is None:
+        return jsonify({"ok": False, "error": "taxii_push_client_unavailable"}), 500
+    body = request.get_json(silent=True) or {}
+    collection_url = str(body.get("collection_url") or "").strip()
+    token = str(body.get("token") or "").strip()
+    verify_tls = bool(body.get("verify_tls", True))
+    timeout_sec = int(body.get("timeout_sec") or 10)
+    client = TAXIIPushClient(
+        collection_url=collection_url,
+        token=token,
+        verify_tls=verify_tls,
+        timeout_sec=timeout_sec,
+    )
+    result = client.test_connection()
+    return jsonify(
+        {
+            "ok": bool(result.ok),
+            "status_code": result.status_code,
+            "error": result.error,
+            "target_url": result.target_url,
+        }
+    ), (200 if result.ok else 502)
+
+
+@app.route("/api/taxii/push", methods=["POST"])
+@require_token(min_role="admin")
+def api_taxii_push():
+    if TAXIIPushClient is None or STIXExporter is None:
+        return jsonify({"ok": False, "error": "taxii_push_unavailable"}), 500
+    body = request.get_json(silent=True) or {}
+    collection_url = str(body.get("collection_url") or "").strip()
+    token = str(body.get("token") or "").strip()
+    verify_tls = bool(body.get("verify_tls", True))
+    max_entries = max(1, min(5000, int(body.get("max_entries") or 100)))
+    timeout_sec = int(body.get("timeout_sec") or 10)
+    exporter = STIXExporter()
+    source = TRIAGE_AUDIT_LOG if TRIAGE_AUDIT_LOG.exists() else TRIAGE_AUDIT_FALLBACK_LOG
+    bundle = exporter.export_audit_window(source, max_entries=max_entries)
+    client = TAXIIPushClient(
+        collection_url=collection_url,
+        token=token,
+        verify_tls=verify_tls,
+        timeout_sec=timeout_sec,
+    )
+    result = client.push_bundle(bundle)
+    return jsonify(
+        {
+            "ok": bool(result.ok),
+            "status_code": result.status_code,
+            "error": result.error,
+            "objects_pushed": int(result.objects_pushed),
+            "target_url": result.target_url,
+        }
+    ), (200 if result.ok else 502)
 
 
 @app.route("/api/state/stream")

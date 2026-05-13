@@ -197,10 +197,19 @@ python3 -m azazel_edge.integrations.stix_export \
   --max-entries 200
 ```
 
-### 7.5 Aggregator -> TAXII push (future)
+### 7.5 Aggregator -> TAXII push
 
 Aggregator can push STIX bundles from multiple nodes to a central TAXII 2.1
-server. This path is `[planned]` and not yet implemented.
+server.
+
+Implemented trigger endpoints:
+- `POST /api/taxii/push/test` (admin token): connectivity check to remote TAXII endpoint
+- `POST /api/taxii/push` (admin token): export recent STIX bundle from local audit and push to remote collection
+
+Client implementation:
+- `py/azazel_edge/integrations/taxii_push.py` (`TAXIIPushClient`)
+- stdlib `urllib` based (no extra dependency)
+- best-effort push result model (`ok`, `status_code`, `error`, `objects_pushed`)
 
 ## 8. Security Assumptions and Controls
 

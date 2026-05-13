@@ -34,8 +34,10 @@ from wifi_scan import scan_wifi, get_wireless_interface, check_networkmanager
 from mode_manager import ModeManager
 from wifi_connect import connect_wifi, update_state_json
 from azazel_edge.evaluators import NocEvaluator
-from azazel_edge.evidence_plane import NocProbeAdapter, build_client_inventory
+from azazel_edge.evidence_plane import EvidenceBus, EvidencePlaneService, NocProbeAdapter, build_client_inventory
 from azazel_edge.sensors.network_health import NetworkHealthMonitor
+from azazel_edge.sensors.wifi_channel_scanner import scan_wifi_channels
+from azazel_edge.sensors.wifi_scanner import scan_and_parse
 from azazel_edge.path_schema import (
     config_dir_candidates,
     first_minute_config_candidates,
@@ -109,6 +111,12 @@ _SNAPSHOT_CACHE: dict[str, Any] = {
 }
 _NOC_ADAPTER: Optional[NocProbeAdapter] = None
 _NOC_ADAPTER_KEY = ""
+_WIFI_EVIDENCE_SERVICE = EvidencePlaneService(EvidenceBus())
+_WIFI_SENSOR_STOP = threading.Event()
+POLL_INTERVALS = {
+    "wifi_channel_scan": 60.0,
+}
+_LAST_POLL_TS: dict[str, float] = {key: 0.0 for key in POLL_INTERVALS.keys()}
 SOT_CACHE_LOCK = threading.Lock()
 _SOT_CACHE: dict[str, Any] = {
     "path": "",
@@ -124,6 +132,36 @@ def _default_sot_payload() -> dict[str, Any]:
         "services": [],
         "expected_paths": [],
     }
+
+
+def _should_poll(name: str, now: float | None = None) -> bool:
+    interval = float(POLL_INTERVALS.get(name, 0.0))
+    if interval <= 0:
+        return False
+    current = float(now if now is not None else time.time())
+    prev = float(_LAST_POLL_TS.get(name, 0.0))
+    if current - prev < interval:
+        return False
+    _LAST_POLL_TS[name] = current
+    return True
+
+
+def _wifi_sensor_loop() -> None:
+    interface = str(os.environ.get("AZAZEL_WIFI_SCAN_IFACE", "wlan0")).strip() or "wlan0"
+    shelter_ssid = str(os.environ.get("AZAZEL_SHELTER_SSID", "")).strip()
+    while not _WIFI_SENSOR_STOP.wait(1.0):
+        try:
+            if not _should_poll("wifi_channel_scan"):
+                continue
+            scan_result = scan_wifi_channels(interface)
+            _WIFI_EVIDENCE_SERVICE.dispatch_wifi_scan(scan_result if isinstance(scan_result, dict) else {})
+            if shelter_ssid:
+                nearby = scan_result.get("nearby_aps") if isinstance(scan_result, dict) else []
+                if not isinstance(nearby, list) or not nearby:
+                    nearby = scan_and_parse(interface, deduplicate=False, keep_hidden=True)
+                _WIFI_EVIDENCE_SERVICE.dispatch_rogue_ap(shelter_ssid, nearby if isinstance(nearby, list) else [])
+        except Exception as exc:
+            logger.debug(f"wifi sensor poll skipped: {exc}")
 
 
 def _env_list(name: str) -> list[str]:
@@ -1810,6 +1848,7 @@ def main():
     sock = create_listener_socket()
     threading.Thread(target=warm_snapshot_cache_once, daemon=True).start()
     threading.Thread(target=snapshot_refresh_loop, daemon=True).start()
+    threading.Thread(target=_wifi_sensor_loop, daemon=True).start()
 
     try:
         while True:
@@ -1832,6 +1871,7 @@ def main():
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
+        _WIFI_SENSOR_STOP.set()
         sock.close()
         if SOCKET_PATH.exists():
             SOCKET_PATH.unlink()
