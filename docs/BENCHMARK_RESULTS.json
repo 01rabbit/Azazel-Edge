@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-05-13T10:58:32.091354+00:00",
+  "generated_at": "2026-05-13T11:58:48.985971+00:00",
   "hardware": "TBD",
-  "commit": "eea897b",
+  "commit": "1707a88",
   "test_baseline": "328 passed, 62 subtests passed",
   "os": "macOS-26.5-arm64-arm-64bit",
-  "python_version": "3.10.20",
+  "python_version": "3.10.4",
   "suricata_version": "TBD",
   "load_condition": "synthetic EVE replay",
   "network_conditions": "offline synthetic corpus",
@@ -12,44 +12,44 @@
     "iterations": 200,
     "stages": {
       "T2_eve_parse": {
-        "mean_ms": 0.003,
-        "median_ms": 0.003,
-        "p95_ms": 0.004,
-        "p99_ms": 0.007,
-        "min_ms": 0.003,
-        "max_ms": 0.009,
+        "mean_ms": 0.005,
+        "median_ms": 0.005,
+        "p95_ms": 0.005,
+        "p99_ms": 0.009,
+        "min_ms": 0.005,
+        "max_ms": 0.017,
         "stdev_ms": 0.001
       },
       "T3_evidence_dispatch": {
-        "mean_ms": 0.01,
-        "median_ms": 0.01,
-        "p95_ms": 0.013,
-        "p99_ms": 0.026,
-        "min_ms": 0.009,
-        "max_ms": 0.032,
-        "stdev_ms": 0.002
+        "mean_ms": 0.015,
+        "median_ms": 0.014,
+        "p95_ms": 0.015,
+        "p99_ms": 0.023,
+        "min_ms": 0.014,
+        "max_ms": 0.028,
+        "stdev_ms": 0.001
       },
       "T4_evaluators": {
-        "mean_ms": 0.117,
-        "median_ms": 0.117,
-        "p95_ms": 0.131,
-        "p99_ms": 0.171,
-        "min_ms": 0.104,
-        "max_ms": 0.199,
+        "mean_ms": 0.18,
+        "median_ms": 0.178,
+        "p95_ms": 0.191,
+        "p99_ms": 0.226,
+        "min_ms": 0.175,
+        "max_ms": 0.301,
         "stdev_ms": 0.011
       },
       "T5_arbiter": {
-        "mean_ms": 0.008,
-        "median_ms": 0.008,
-        "p95_ms": 0.01,
-        "p99_ms": 0.021,
-        "min_ms": 0.007,
-        "max_ms": 0.022,
-        "stdev_ms": 0.002
+        "mean_ms": 0.011,
+        "median_ms": 0.011,
+        "p95_ms": 0.012,
+        "p99_ms": 0.016,
+        "min_ms": 0.011,
+        "max_ms": 0.017,
+        "stdev_ms": 0.001
       }
     },
-    "total_pipeline_mean_ms": 0.138,
-    "total_pipeline_p95_ms": 0.158
+    "total_pipeline_mean_ms": 0.211,
+    "total_pipeline_p95_ms": 0.223
   },
   "accuracy": {
     "corpus_path": "tests/benchmark/corpus",
