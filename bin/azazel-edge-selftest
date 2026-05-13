@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# azazel-edge-selftest - Periodic hardware and config health check
+set -euo pipefail
+
+LOG_DIR="/var/log/azazel-edge"
+OUT_JSON="${LOG_DIR}/selftest_latest.json"
+TMP_FILE="/tmp/azazel_sdtest"
+FAILURES=()
+WARNINGS=()
+
+mkdir -p "${LOG_DIR}"
+
+warn() {
+  WARNINGS+=("$1")
+}
+
+fail() {
+  FAILURES+=("$1")
+}
+
+check_sd_write_speed() {
+  local speed
+  if speed="$({ /usr/bin/time -f '%e' dd if=/dev/zero of="${TMP_FILE}" bs=1M count=10 oflag=direct status=none; } 2>&1)"; then
+    :
+  else
+    fail "sd_write_test_failed"
+    rm -f "${TMP_FILE}"
+    return
+  fi
+  rm -f "${TMP_FILE}"
+  local sec mbps
+  sec="${speed}"
+  if [[ "${sec}" == "0" || "${sec}" == "0.0" ]]; then
+    return
+  fi
+  mbps=$(awk -v s="${sec}" 'BEGIN { printf "%.2f", 10.0 / s }')
+  awk -v v="${mbps}" 'BEGIN { exit (v < 5.0 ? 0 : 1) }' && warn "sd_write_speed_low:${mbps}MBps"
+}
+
+check_mmc_errors() {
+  local c
+  c=$(dmesg | grep -c "mmc0.*error" || true)
+  if [[ "${c}" -gt 0 ]]; then
+    warn "mmc_error_count:${c}"
+  fi
+}
+
+check_log_growth_forecast() {
+  local used pct
+  used=$(du -sm "${LOG_DIR}" 2>/dev/null | awk '{print $1}')
+  used=${used:-0}
+  pct=$(df -P "${LOG_DIR}" | awk 'NR==2 {gsub("%","",$5); print $5}')
+  pct=${pct:-0}
+  # Simple 30-day forecast heuristic: if current usage already > 80%, warn
+  if [[ "${pct}" -ge 80 ]]; then
+    warn "disk_fill_forecast_high:${pct}%"
+  fi
+}
+
+check_config_integrity() {
+  if [[ -f /etc/azazel-edge/.config_checksums ]]; then
+    if ! sha256sum --check /etc/azazel-edge/.config_checksums >/dev/null 2>&1; then
+      fail "config_checksum_failed"
+    fi
+  else
+    warn "config_checksums_missing"
+  fi
+}
+
+check_service_health() {
+  local svc
+  for svc in azazel-edge-web azazel-edge-control-daemon azazel-edge-suricata azazel-edge-opencanary; do
+    if ! systemctl is-active --quiet "${svc}"; then
+      fail "service_inactive:${svc}"
+    fi
+  done
+}
+
+check_python_smoke() {
+  if [[ -x /opt/azazel-edge/venv/bin/pytest ]]; then
+    if ! PYTHONPATH=/opt/azazel-edge /opt/azazel-edge/venv/bin/pytest /opt/azazel-edge/tests/test_epd_cli_help_v1.py -q --tb=no >/dev/null 2>&1; then
+      fail "python_smoke_failed"
+    fi
+  else
+    warn "pytest_runtime_missing"
+  fi
+}
+
+emit_epd_warning_if_failed() {
+  if [[ ${#FAILURES[@]} -gt 0 ]]; then
+    local reason
+    reason="${FAILURES[0]}"
+    if command -v azazel-edge-epd >/dev/null 2>&1; then
+      azazel-edge-epd --state warning --msg "SELFTEST FAILED: ${reason}" --dry-run || true
+    fi
+  fi
+}
+
+write_json() {
+  local status
+  if [[ ${#FAILURES[@]} -gt 0 ]]; then
+    status="failed"
+  elif [[ ${#WARNINGS[@]} -gt 0 ]]; then
+    status="warning"
+  else
+    status="ok"
+  fi
+
+  {
+    echo "{"
+    echo "  \"generated_at\": \"$(date -Iseconds)\"," 
+    echo "  \"status\": \"${status}\"," 
+    echo "  \"failures\": ["
+    local i
+    for ((i=0; i<${#FAILURES[@]}; i++)); do
+      printf '    "%s"' "${FAILURES[$i]}"
+      [[ $i -lt $((${#FAILURES[@]}-1)) ]] && printf ','
+      echo
+    done
+    echo "  ],"
+    echo "  \"warnings\": ["
+    for ((i=0; i<${#WARNINGS[@]}; i++)); do
+      printf '    "%s"' "${WARNINGS[$i]}"
+      [[ $i -lt $((${#WARNINGS[@]}-1)) ]] && printf ','
+      echo
+    done
+    echo "  ]"
+    echo "}"
+  } > "${OUT_JSON}"
+}
+
+check_sd_write_speed
+check_mmc_errors
+check_log_growth_forecast
+check_config_integrity
+check_service_health
+check_python_smoke
+emit_epd_warning_if_failed
+write_json
+
+echo "selftest completed: ${OUT_JSON}"

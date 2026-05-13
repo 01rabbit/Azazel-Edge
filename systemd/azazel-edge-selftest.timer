@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Azazel-Edge selftest quarterly
+
+[Timer]
+OnBootSec=5min
+OnCalendar=quarterly
+AccuracySec=1h
+Unit=azazel-edge-selftest.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -37,6 +37,21 @@ Entry point for all documents in this directory.
 | [CHANGELOG.md](CHANGELOG.md) | Developer | PR and feature traceability history | - |
 | [RELEASE_VERIFICATION_GUIDE.md](RELEASE_VERIFICATION_GUIDE.md) | Developer / Operator | Checksum, SBOM, and release verification baseline | 2026-05-12 |
 
+## Operations and Deployment
+
+| File | Audience | Description | Last Updated |
+|------|----------|-------------|--------------|
+| [OPERATOR_GUIDE_JA.md](OPERATOR_GUIDE_JA.md) | Shelter staff / volunteers | 日本語運用マニュアル（非専門者向け） | 2026-05-13 |
+| [STATUS_CARD.md](STATUS_CARD.md) | Shelter wall / laminated | e-Paper status quick-reference card | 2026-05-13 |
+| [PHYSICAL_SETUP_GUIDE.md](PHYSICAL_SETUP_GUIDE.md) | Deployer | Hardware labeling and cable guide | 2026-05-13 |
+| [POWER_PLAYBOOK.md](POWER_PLAYBOOK.md) | Deployer | Power configuration and runtime estimates | 2026-05-13 |
+| [FIELD_DEPLOYMENT_GUIDE.md](FIELD_DEPLOYMENT_GUIDE.md) | First responder | Rapid deploy checklist | 2026-05-13 |
+| [VEHICLE_DEPLOYMENT_GUIDE.md](VEHICLE_DEPLOYMENT_GUIDE.md) | Military / Civil defense | Vehicle deployment guide for constrained environments | 2026-05-13 |
+| [WAZUH_INTEGRATION_GUIDE.md](WAZUH_INTEGRATION_GUIDE.md) | Developer / Integrator | Wazuh Agent and Vector integration guide | 2026-05-13 |
+| [HUMANITARIAN_PARTNER_GUIDE.md](HUMANITARIAN_PARTNER_GUIDE.md) | NGO / International org | Partner onboarding guide | 2026-05-13 |
+| [PRIVACY_AND_LEGAL.md](PRIVACY_AND_LEGAL.md) | Municipal officer / Legal | Data handling and legal basis memo | 2026-05-13 |
+| [MAINTENANCE_CHECKLIST.md](MAINTENANCE_CHECKLIST.md) | Operator / Asset manager | Scheduled maintenance procedures | 2026-05-13 |
+
 ---
 
 If `Last Updated` is `-`, check the target document metadata.
