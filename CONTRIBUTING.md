@@ -38,6 +38,6 @@ See AGENTS.md §3.4 for the full list. The short version:
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements/runtime.txt
-PYTHONPATH=. pytest -q
+pip install -r requirements/dev.txt
+PYTHONPATH=py:. .venv/bin/pytest -q
 ```

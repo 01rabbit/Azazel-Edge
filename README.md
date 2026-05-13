@@ -312,14 +312,14 @@ python3 py/azazel_edge_runbook_broker.py propose --question "Wi-Fi intermittent 
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -U pip wheel setuptools
-pip install -r requirements/runtime.txt
+pip install -r requirements/dev.txt
 ```
 
 ### Local run (without systemd)
 ```bash
-PYTHONPATH=. python3 azazel_edge_web/app.py
-PYTHONPATH=. python3 py/azazel_edge_control/daemon.py
-PYTHONPATH=. python3 py/azazel_edge_ai/agent.py
+PYTHONPATH=py:. .venv/bin/python azazel_edge_web/app.py
+PYTHONPATH=py:. .venv/bin/python py/azazel_edge_control/daemon.py
+PYTHONPATH=py:. .venv/bin/python py/azazel_edge_ai/agent.py
 ```
 
 Notes:
@@ -330,7 +330,7 @@ Notes:
 
 Run:
 ```bash
-PYTHONPATH=. .venv/bin/pytest -q
+PYTHONPATH=py:. .venv/bin/pytest -q
 ```
 
 Latest verified result (2026-05-11): **224 passed, 16 subtests passed**

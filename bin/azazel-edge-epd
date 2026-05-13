@@ -1,3 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
-PYTHONPATH="/opt/azazel-edge/py:${PYTHONPATH:-}" exec /opt/azazel-edge/venv/bin/python /opt/azazel-edge/py/azazel_edge_epd.py "$@"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_BIN="${AZAZEL_VENV_PYTHON:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  if [[ -x "${ROOT_DIR}/.venv/bin/python" ]]; then
+    PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
+  else
+    PYTHON_BIN="/opt/azazel-edge/venv/bin/python"
+  fi
+fi
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  echo "Python venv not found. Create ${ROOT_DIR}/.venv or set AZAZEL_VENV_PYTHON." >&2
+  exit 1
+fi
+PYTHONPATH="${ROOT_DIR}:${ROOT_DIR}/py:${PYTHONPATH:-}" exec "${PYTHON_BIN}" "${ROOT_DIR}/py/azazel_edge_epd.py" "$@"

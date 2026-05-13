@@ -1,0 +1,2 @@
+-r runtime.txt
+pytest>=9,<10
