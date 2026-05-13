@@ -177,6 +177,7 @@ BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
 PORTAL_VIEWER_ENV_PATH = portal_env_candidates()[0]
+CAPTIVE_REGISTRY_PATH = Path(str(os.environ.get("AZAZEL_CAPTIVE_REGISTRY_PATH", "/var/lib/azazel-edge/captive-allowlist.json")).strip() or "/var/lib/azazel-edge/captive-allowlist.json")
 NTFY_CONFIG_PATHS = [
     Path(os.environ.get("AZAZEL_CONFIG_PATH", str(first_minute_config_candidates()[0]))),
     Path("configs/first_minute.yaml"),
@@ -796,6 +797,26 @@ def _tail_first_existing_jsonl(paths: List[Path], limit: int = 20) -> List[Dict[
         if rows:
             return rows
     return []
+
+
+def _load_captive_registry() -> Dict[str, Any]:
+    try:
+        if not CAPTIVE_REGISTRY_PATH.exists():
+            return {"clients": []}
+        payload = _parse_json_dict_lenient(CAPTIVE_REGISTRY_PATH.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return {"clients": []}
+        clients = payload.get("clients")
+        if not isinstance(clients, list):
+            payload["clients"] = []
+        return payload
+    except Exception:
+        return {"clients": []}
+
+
+def _save_captive_registry(payload: Dict[str, Any]) -> None:
+    CAPTIVE_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CAPTIVE_REGISTRY_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -5232,6 +5253,61 @@ def api_portal_viewer_open():
         "portal_viewer": portal_state,
         "daemon": daemon_result,
     }), 200
+
+
+# Captive consent endpoint must be reachable before token issuance.
+@app.route("/captive", methods=["GET"])
+def captive_consent_page():
+    return render_template("captive_consent.html"), 200
+
+
+# Captive registration endpoint is intentionally unauthenticated for first-contact onboarding.
+@app.route("/api/captive/register", methods=["POST"])
+def api_captive_register():
+    body = request.get_json(silent=True) or {}
+    agree = bool(body.get("agree"))
+    if not agree:
+        return jsonify({"ok": False, "error": "consent_required"}), 400
+    operator_name = str(body.get("operator_name") or "").strip()[:96]
+    mac = str(
+        body.get("mac")
+        or request.headers.get("X-AZAZEL-CLIENT-MAC")
+        or request.headers.get("X-Client-MAC")
+        or ""
+    ).strip().lower()
+    ip = str(body.get("ip") or request.headers.get("X-Forwarded-For") or request.remote_addr or "").strip()
+    if not mac and not ip:
+        return jsonify({"ok": False, "error": "mac_or_ip_required"}), 400
+
+    registry = _load_captive_registry()
+    clients = registry.get("clients") if isinstance(registry.get("clients"), list) else []
+    deduped: List[Dict[str, Any]] = []
+    key = f"{mac}|{ip}"
+    seen_target = False
+    for row in clients:
+        if not isinstance(row, dict):
+            continue
+        row_key = f"{str(row.get('mac') or '').strip().lower()}|{str(row.get('ip') or '').strip()}"
+        if row_key == key:
+            if seen_target:
+                continue
+            seen_target = True
+            row = dict(row)
+            row["operator_name"] = operator_name or str(row.get("operator_name") or "")
+            row["agreed_at"] = datetime.now().isoformat(timespec="seconds")
+        deduped.append(row)
+    if not seen_target:
+        deduped.append(
+            {
+                "mac": mac,
+                "ip": ip,
+                "operator_name": operator_name,
+                "agreed_at": datetime.now().isoformat(timespec="seconds"),
+            }
+        )
+    registry["clients"] = deduped
+    _save_captive_registry(registry)
+    return jsonify({"ok": True, "registered": True, "count": len(deduped)}), 200
 
 
 @app.route("/api/mode", methods=["GET"])

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="{{ tr('dashboard.html_lang', 'ja') }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ tr('captive.consent.title', 'Emergency Shelter Network - Notice') }}</title>
+  <style>
+    body { font-family: sans-serif; background: #f7f7f5; margin: 0; padding: 24px; color: #1c1c1c; }
+    .card { max-width: 680px; margin: 0 auto; background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 20px; }
+    h1 { margin: 0 0 12px; font-size: 1.4rem; }
+    p { line-height: 1.6; }
+    label { display: block; margin: 14px 0 6px; font-weight: 600; }
+    input[type=text] { width: 100%; padding: 10px; border: 1px solid #bbb; border-radius: 6px; }
+    .check { margin: 14px 0; }
+    button { background: #1f4d66; color: #fff; border: 0; border-radius: 6px; padding: 10px 16px; cursor: pointer; }
+    .footer { margin-top: 20px; color: #444; font-size: 0.9rem; }
+    .msg { margin-top: 12px; color: #0b5; }
+    .err { margin-top: 12px; color: #b00; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>{{ tr('captive.consent.title', 'Emergency Shelter Network - Notice') }}</h1>
+    <p>{{ tr('captive.consent.monitoring_notice', 'This connection is monitored for security purposes') }}</p>
+
+    <form id="consentForm">
+      <label for="operatorName">{{ tr('captive.consent.operator_label', 'Deployed by') }}</label>
+      <input id="operatorName" name="operator_name" type="text" required>
+
+      <div class="check">
+        <label>
+          <input id="agree" type="checkbox" required>
+          {{ tr('captive.consent.agree_label', 'I understand and agree') }}
+        </label>
+      </div>
+
+      <button type="submit">{{ tr('captive.consent.submit', 'Connect') }}</button>
+    </form>
+
+    <div id="ok" class="msg" style="display:none;"></div>
+    <div id="err" class="err" style="display:none;"></div>
+
+    <div class="footer">{{ tr('captive.consent.footer', 'Operated by: {operator} | Contact: {contact}', operator='Azazel-Edge', contact='local operator') }}</div>
+  </div>
+
+  <script>
+    const form = document.getElementById('consentForm');
+    const ok = document.getElementById('ok');
+    const err = document.getElementById('err');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      ok.style.display = 'none';
+      err.style.display = 'none';
+      const payload = {
+        operator_name: document.getElementById('operatorName').value,
+        agree: document.getElementById('agree').checked,
+      };
+      try {
+        const resp = await fetch('/api/captive/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) throw new Error(data.error || 'register_failed');
+        ok.textContent = 'Registered.';
+        ok.style.display = 'block';
+      } catch (e2) {
+        err.textContent = String(e2.message || e2);
+        err.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>
