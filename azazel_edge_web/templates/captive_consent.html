@@ -16,10 +16,28 @@
     .footer { margin-top: 20px; color: #444; font-size: 0.9rem; }
     .msg { margin-top: 12px; color: #0b5; }
     .err { margin-top: 12px; color: #b00; }
+    .lang-switch { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    .lang-switch a {
+      display: inline-block;
+      padding: 6px 10px;
+      border: 1px solid #bbb;
+      border-radius: 999px;
+      text-decoration: none;
+      color: #1c1c1c;
+      font-size: 0.9rem;
+    }
+    .lang-switch a.active { background: #1f4d66; color: #fff; border-color: #1f4d66; }
   </style>
 </head>
 <body>
   <div class="card">
+    <div class="lang-switch">
+      <a href="/captive?lang=ja" class="{% if ui_lang == 'ja' %}active{% endif %}">日本語</a>
+      <a href="/captive?lang=en" class="{% if ui_lang == 'en' %}active{% endif %}">English</a>
+      <a href="/captive?lang=es" class="{% if ui_lang == 'es' %}active{% endif %}">Español</a>
+      <a href="/captive?lang=uk" class="{% if ui_lang == 'uk' %}active{% endif %}">Українська</a>
+      <a href="/captive?lang=tl" class="{% if ui_lang == 'tl' %}active{% endif %}">Tagalog</a>
+    </div>
     <h1>{{ tr('captive.consent.title', 'Emergency Shelter Network - Notice') }}</h1>
     <p>{{ tr('captive.consent.monitoring_notice', 'This connection is monitored for security purposes') }}</p>
 

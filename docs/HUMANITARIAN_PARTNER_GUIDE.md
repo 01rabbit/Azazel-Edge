@@ -82,7 +82,15 @@ Emergency legal rationale reference:
   - Open GitHub Issue with `[field-report]` style title/labeling policy
 
 - Translation contributions:
-  - Extend `SUPPORTED_LANGS` and `UI_STRINGS` in `py/azazel_edge/i18n.py`
+  - Partial captive portal translations are accepted for initial rollout.
+
+### Contributing translations
+
+To add a new language to the captive portal:
+1. Add the language code to `SUPPORTED_LANGS` in `py/azazel_edge/i18n.py`
+2. Add a dict with the required `captive.consent.*` keys (minimum set)
+3. Run `PYTHONPATH=. pytest tests/test_i18n_multilang_v1.py -v`
+4. Submit a PR with the language code and sample render (`/captive?lang=<code>`)
 
 - Commercial support:
   - No commercial support contract is currently provided

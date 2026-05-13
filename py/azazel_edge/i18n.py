@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List
 
-SUPPORTED_LANGS = ("ja", "en")
+SUPPORTED_LANGS = ("ja", "en", "es", "uk", "tl")
 DEFAULT_LANG = "ja"
 
 
@@ -1785,16 +1785,57 @@ REVIEW_TEXT_MAP_JA: Dict[str, str] = {
 
 def normalize_lang(lang: Any) -> str:
     value = str(lang or "").strip().lower()
+    if value.startswith("es"):
+        return "es"
+    if value.startswith("uk"):
+        return "uk"
+    if value.startswith("tl"):
+        return "tl"
     if value.startswith("en"):
         return "en"
     return "ja"
 
 
+CAPTIVE_PORTAL_PARTIAL_STRINGS: Dict[str, Dict[str, str]] = {
+    "es": {
+        "captive.consent.title": "Red de Emergencia - Aviso",
+        "captive.consent.monitoring_notice": "Esta conexion esta supervisada por motivos de seguridad",
+        "captive.consent.operator_label": "Instalado por",
+        "captive.consent.agree_label": "Entiendo y acepto",
+        "captive.consent.submit": "Conectar",
+        "captive.consent.footer": "Operado por: {operator} | Contacto: {contact}",
+    },
+    "uk": {
+        "captive.consent.title": "Мережа екстреної допомоги - Повідомлення",
+        "captive.consent.monitoring_notice": "Це з'єднання контролюється з міркувань безпеки",
+        "captive.consent.operator_label": "Розгорнуто",
+        "captive.consent.agree_label": "Я розумію та погоджуюсь",
+        "captive.consent.submit": "Підключитися",
+        "captive.consent.footer": "Управляє: {operator} | Контакт: {contact}",
+    },
+    "tl": {
+        "captive.consent.title": "Emergency Network - Abiso",
+        "captive.consent.monitoring_notice": "Ang koneksyong ito ay sinusubaybayan para sa seguridad",
+        "captive.consent.operator_label": "Na-deploy ng",
+        "captive.consent.agree_label": "Naiintindihan ko at sumasang-ayon",
+        "captive.consent.submit": "Kumonekta",
+        "captive.consent.footer": "Pinapatakbo ng: {operator} | Makipag-ugnayan: {contact}",
+    },
+}
+
+
 def translate(key: str, lang: Any = None, default: str | None = None, **kwargs: Any) -> str:
+    requested = str(lang or "").strip().lower()
     lang_norm = normalize_lang(lang)
-    base = UI_STRINGS.get(lang_norm, {}).get(key)
+    if requested and not requested.startswith(("ja", "en", "es", "uk", "tl")):
+        lang_norm = "en"
+    base = CAPTIVE_PORTAL_PARTIAL_STRINGS.get(lang_norm, {}).get(key)
     if base is None:
-        base = UI_STRINGS.get("en", {}).get(key, default if default is not None else key)
+        base = UI_STRINGS.get(lang_norm, {}).get(key)
+    if base is None:
+        base = UI_STRINGS.get("en", {}).get(key)
+    if base is None:
+        base = default if default is not None else key
     try:
         return str(base).format(**kwargs)
     except Exception:
