@@ -8,7 +8,7 @@
 1. 電源、LAN、表示ケーブルを接続する。
 2. 起動し、サービスが立ち上がるまで待つ。
 3. `systemctl is-active azazel-edge-web azazel-edge-control-daemon` を確認する。
-4. ローカルネットワーク端末からダッシュボードを開く。
+4. ダッシュボード `http://<pi-ip>:8080` を開く。
 5. 現在の色状態と推奨アクションを確認する。
 
 ## 2. e-Paper 状態と初動
@@ -40,3 +40,25 @@
 
 ## 6. English Version
 英語版は `docs/OPERATOR_GUIDE.md` を参照してください。
+
+## 7. エスカレーション判断ツリー
+
+```text
+GREEN  -> 監視継続 -> 通常チェックを継続
+YELLOW -> ダッシュボード確認 -> 必要時に承認済みRunbook実施
+RED    -> 即時エスカレーション -> 承認済みRunbookのみ実行
+```
+
+原則:
+- 未承認の破壊的操作は実施しない。
+
+## 8. よくあるエラーメッセージ
+
+- `auth_failed`:
+  認証トークン不備。トークン設定を確認して再試行。
+- `control_socket_unavailable`:
+  制御デーモン未応答。サービス状態とソケットを確認。
+- `aggregator_registry_unavailable`:
+  集約レジストリ未使用/未初期化。ローカル運用は継続可能。
+- `runbook_not_found`:
+  Runbook ID 不一致。一覧更新後に再選択。

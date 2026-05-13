@@ -164,7 +164,45 @@ Behavior:
 - Never overwrite newer node snapshot with an older timestamp.
 - Conflict resolution rule: `newer generated_at` wins; equal timestamp with different digest -> mark `conflict` and audit.
 
-## 7. Security Assumptions and Controls
+## 7. Threat Intelligence Export (STIX 2.1 / TAXII 2.1)
+
+### 7.1 Purpose
+
+Azazel-Edge can export arbiter decisions as STIX 2.1 objects, enabling
+integration with threat intelligence platforms and peer exchange between
+shelter or humanitarian operation environments.
+
+### 7.2 Export paths
+
+| Path | Description | Auth |
+|---|---|---|
+| `GET /taxii2/` | TAXII 2.1 API root discovery | token |
+| `GET /taxii2/collections/` | Collection manifest | token |
+| `GET /taxii2/collections/azazel-edge-decisions/objects/` | STIX bundle objects from recent decisions | token |
+
+### 7.3 Object types produced
+
+- `sighting`: one per arbiter decision (`action`, `evidence_ids`, `timestamp`)
+- `indicator`: one per Suricata alert with ATT&CK mapping context when available
+- `course-of-action`: one per arbiter action type
+
+### 7.4 Offline bundle export
+
+For air-gapped environments, use the CLI exporter:
+
+```bash
+python3 -m azazel_edge.integrations.stix_export \
+  --audit-log /var/log/azazel-edge/triage-audit.jsonl \
+  --output /tmp/azazel-stix-bundle.json \
+  --max-entries 200
+```
+
+### 7.5 Aggregator -> TAXII push (future)
+
+Aggregator can push STIX bundles from multiple nodes to a central TAXII 2.1
+server. This path is `[planned]` and not yet implemented.
+
+## 8. Security Assumptions and Controls
 
 1. Trust bootstrap is explicit.
 Node identity and trust material are pre-registered (or approved via operator flow) before `active`.
@@ -188,7 +226,7 @@ If signature verification or trust mapping fails, summary is not accepted and no
 7. Audit continuity.
 Registration, ingest accept/reject, stale/offline transitions, and conflict events are audit-logged with reason.
 
-## 8. Aggregated Dashboard Model
+## 9. Aggregated Dashboard Model
 
 Fleet dashboard minimum cards:
 - Node Count: `active / stale / offline / quarantined`
@@ -204,7 +242,7 @@ Per-node panel minimum:
 - recent actions summary
 - latest audit chain tip indicator
 
-## 9. Out of Scope (Intentional)
+## 10. Out of Scope (Intentional)
 
 The following are explicitly excluded from this design phase and MVP:
 - Centralized raw log storage and long-term SIEM retention
@@ -213,9 +251,9 @@ The following are explicitly excluded from this design phase and MVP:
 - Full historical analytics warehouse
 - Multi-tenant RBAC complexity beyond baseline operator/admin roles
 
-## 10. Implementation Roadmap
+## 11. Implementation Roadmap
 
-## 10.1 MVP
+## 11.1 MVP
 
 Scope:
 - Node registration table (`pending/active/quarantined/retired`)
@@ -230,7 +268,7 @@ Exit criteria:
 - At least 10 nodes can be tracked with bounded memory footprint
 - Staleness/offline behavior proven via tests/simulation
 
-## 10.2 Field-Ready
+## 11.2 Field-Ready
 
 Scope:
 - Push mode endpoint
@@ -243,7 +281,7 @@ Exit criteria:
 - Intermittent-link deployments can maintain coherent fleet view
 - Operator can rotate node trust without node redeploy
 
-## 10.3 Extended
+## 11.3 Extended
 
 Scope:
 - Optional MQTT transport adapter
@@ -253,17 +291,18 @@ Scope:
 Exit criteria:
 - Multi-site distributed operations can share high-level posture without SIEM scope creep
 
-## 11. Implementation Notes
+## 12. Implementation Notes
 
 - Keep implementation isolated from `Action Arbiter` execution logic.
 - Never bypass `AI Assist Governance` for any future aggregator-side AI summary assistance.
 - Reuse existing dashboard trends/alert queue primitives where possible to reduce complexity.
 
-## 12. Mapping to Issue #186 Acceptance Criteria
+## 13. Mapping to Issue #186 Acceptance Criteria
 
 - Architecture document under `docs/`: satisfied by this document.
 - Minimal node summary schema: Section 5.
 - Stale/offline behavior: Section 6.
-- Security assumptions: Section 7.
-- Roadmap MVP/field-ready/extended: Section 10.
-- Intentional out-of-scope: Section 9.
+- STIX/TAXII export: Section 7.
+- Security assumptions: Section 8.
+- Roadmap MVP/field-ready/extended: Section 11.
+- Intentional out-of-scope: Section 10.

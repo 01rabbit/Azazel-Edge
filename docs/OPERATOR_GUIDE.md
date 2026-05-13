@@ -9,7 +9,7 @@ Primary field operation guide for non-expert shelter staff and volunteers.
 3. Verify:
    - `systemctl is-active azazel-edge-web`
    - `systemctl is-active azazel-edge-control-daemon`
-4. Open dashboard from a local-network browser.
+4. Open dashboard from a local-network browser at `http://<pi-ip>:8080`.
 5. Confirm posture color and recommended first action.
 
 ## 2. e-Paper State and Immediate Action
@@ -41,3 +41,25 @@ Primary field operation guide for non-expert shelter staff and volunteers.
 
 ## 6. Japanese Version
 For full Japanese wording, see `docs/OPERATOR_GUIDE_JA.md`.
+
+## 7. Escalation Decision Tree
+
+```text
+GREEN  -> monitor -> continue normal checklist
+YELLOW -> check dashboard -> follow reviewed runbook if needed
+RED    -> escalate immediately -> run approved runbook only
+```
+
+Principle:
+- Do not perform destructive or unapproved actions outside reviewed runbooks.
+
+## 8. Common Error Messages
+
+- `auth_failed`:
+  token missing/invalid. Confirm token source and retry.
+- `control_socket_unavailable`:
+  control daemon unavailable. Check service state and socket path.
+- `aggregator_registry_unavailable`:
+  aggregator store unavailable. Continue local deterministic operations.
+- `runbook_not_found`:
+  runbook ID mismatch. Refresh list and confirm current runbook catalog.
