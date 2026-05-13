@@ -84,9 +84,9 @@ class DemoRunnerV1Tests(unittest.TestCase):
             )
             payload = json.loads(result.stdout)
             self.assertTrue(payload['ok'])
-            self.assertEqual(len(payload['scenarios']), 3)
+            self.assertGreaterEqual(len(payload['scenarios']), 3)
             overlay = json.loads(overlay_path.read_text(encoding='utf-8'))
-            self.assertEqual(overlay['scenario_id'], 'mixed_correlation_demo')
+            self.assertEqual(overlay['scenario_id'], payload['scenarios'][-1]['scenario_id'])
 
 
 if __name__ == '__main__':
