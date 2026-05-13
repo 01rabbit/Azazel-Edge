@@ -2406,6 +2406,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
         (snapshot_age is not None and snapshot_age > DASHBOARD_SNAPSHOT_STALE_SEC)
         or (ai_age is not None and ai_age > DASHBOARD_AI_STALE_SEC)
     )
+    ai_governance = _dashboard_ai_governance_payload(metrics, now_epoch=now_epoch)
     service_summary = {
         "suricata": monitoring.get("suricata", "UNKNOWN"),
         "opencanary": monitoring.get("opencanary", "UNKNOWN"),
@@ -2535,6 +2536,8 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
             "internet_reachability": str(connection.get("internet_check") or ""),
             "direct_critical_count": _as_int(state.get("suricata_critical"), 0),
             "deferred_count": _as_int(metrics.get("deferred_count"), 0),
+            "ai_contribution_rate": _as_float((ai_governance.get("rates") or {}).get("ai_contribution"), 0.0),
+            "ai_fallback_rate": _as_float((ai_governance.get("rates") or {}).get("fallback"), 0.0),
             "stale_warning": stale_warning,
             "ask_mio_url": "/ops-comm",
             "mattermost_url": MATTERMOST_OPEN_URL,

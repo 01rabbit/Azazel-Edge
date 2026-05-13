@@ -1122,6 +1122,8 @@ function applyDemoOverlay(result) {
     updateElement('stripCritical', String(socStatus === 'critical' ? evidenceIds.length || 1 : 0));
     updateElement('stripDeferred', '0');
     updateElement('stripQueue', 'demo');
+    updateElement('stripAiContribution', '-');
+    updateElement('stripAiFallback', '-');
     updateElement('stripStale', 'NO');
 
     updateElement('postureState', `${userState} / ${stateName}`);
@@ -2037,6 +2039,10 @@ function updateCommandStrip(summary, health, failures = []) {
     updateElement('stripCritical', String(strip.direct_critical_count ?? 0));
     updateElement('stripDeferred', String(strip.deferred_count ?? 0));
     updateElement('stripQueue', `${health.queue?.depth ?? 0} / ${health.queue?.capacity ?? 0}`);
+    const aiContributionPct = Math.round(Number(strip.ai_contribution_rate ?? 0) * 100);
+    const aiFallbackPct = Math.round(Number(strip.ai_fallback_rate ?? 0) * 100);
+    updateElement('stripAiContribution', `${aiContributionPct}%`);
+    updateElement('stripAiFallback', `${aiFallbackPct}%`);
     updateElement('stripStale', strip.stale_warning ? 'YES' : 'NO');
     const baseNote = strip.stale_warning
         ? (CURRENT_LANG === 'ja'
@@ -2059,6 +2065,8 @@ function updateCommandStrip(summary, health, failures = []) {
     const queueCapacity = Number(health.queue?.capacity || 0);
     const queueRatio = queueCapacity > 0 ? queueDepth / queueCapacity : 0;
     setPillTone('stripQueue', queueRatio >= 0.8 ? 'danger' : (queueRatio >= 0.4 ? 'caution' : 'safe'));
+    setPillTone('stripAiContribution', aiContributionPct >= 40 ? 'safe' : 'caution');
+    setPillTone('stripAiFallback', aiFallbackPct >= 50 ? 'danger' : (aiFallbackPct >= 20 ? 'caution' : 'safe'));
     setPillTone('stripStale', strip.stale_warning ? 'danger' : 'safe');
     setPillTone('freshnessSnapshot', health.stale_flags?.snapshot ? 'danger' : 'safe');
     setPillTone('freshnessAiMetrics', health.stale_flags?.ai_metrics ? 'danger' : 'safe');
