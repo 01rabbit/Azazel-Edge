@@ -1,0 +1,20 @@
+[Unit]
+Description=Azazel-Edge Vector log aggregator
+Documentation=https://vector.dev
+After=network.target azazel-edge-suricata.service
+Wants=azazel-edge-suricata.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/azazel-edge-vector
+ExecStart=/usr/bin/vector --config /etc/azazel-edge/vector/vector.toml
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=azazel-vector
+MemoryMax=64M
+CPUQuota=10%
+
+[Install]
+WantedBy=multi-user.target
