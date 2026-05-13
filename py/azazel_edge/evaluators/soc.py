@@ -4,16 +4,29 @@ import hashlib
 import ipaddress
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
 from azazel_edge.correlation import AdvancedCorrelator
 from azazel_edge.knowledge.attack_mapping import load_attack_mapping, map_attack_techniques
 from azazel_edge.sigma import MiniSigmaExecutor
-from azazel_edge.ti import ThreatIntelFeed
+from azazel_edge.ti import ThreatIntelFeed, load_ti_feed
 from azazel_edge.yara import MiniYaraMatcher
 
 
 def _to_payloads(events: Iterable[Any]) -> List[Dict[str, Any]]:
+    allowed_sources = {
+        'suricata_eve',
+        'flow_min',
+        'syslog_min',
+        'captive_portal',
+        'web_api',
+        'runbook',
+        'audit',
+        'config_drift',
+        'noc_inventory',
+        'snmp_poller',
+    }
     payloads: List[Dict[str, Any]] = []
     for event in events:
         if hasattr(event, 'to_dict'):
@@ -22,7 +35,7 @@ def _to_payloads(events: Iterable[Any]) -> List[Dict[str, Any]]:
             payload = dict(event)
         else:
             continue
-        if str(payload.get('source') or '') in {'suricata_eve', 'flow_min', 'syslog_min'}:
+        if str(payload.get('source') or '') in allowed_sources:
             payloads.append(payload)
     return payloads
 
@@ -161,6 +174,46 @@ def _candidate_hits(text: str) -> List[str]:
     return hits
 
 
+def _load_default_ti_feed() -> ThreatIntelFeed | None:
+    root = Path(__file__).resolve().parents[3]
+    candidates = (
+        root / 'config' / 'ti' / 'disaster_ioc.yaml',
+        root / 'config' / 'ti' / 'shelter_phishing.yaml',
+    )
+    merged: List[Dict[str, Any]] = []
+    for path in candidates:
+        try:
+            feed = load_ti_feed(path)
+        except Exception:
+            continue
+        merged.extend(feed.indicators)
+    if not merged:
+        return None
+    return ThreatIntelFeed(merged)
+
+
+def _load_default_sigma_rules() -> List[Dict[str, Any]]:
+    root = Path(__file__).resolve().parents[3]
+    candidates = (
+        root / 'config' / 'sigma' / 'disaster_shelter.yaml',
+        root / 'config' / 'sigma' / 'network_anomaly.yaml',
+    )
+    rules: List[Dict[str, Any]] = []
+    for path in candidates:
+        try:
+            import yaml
+
+            payload = yaml.safe_load(path.read_text(encoding='utf-8'))
+            if not isinstance(payload, dict) or not isinstance(payload.get('rules'), list):
+                continue
+            for item in payload.get('rules', []):
+                if isinstance(item, dict):
+                    rules.append(dict(item))
+        except Exception:
+            continue
+    return rules
+
+
 class SocEvaluator:
     """
     Deterministic SOC evaluator.
@@ -179,9 +232,9 @@ class SocEvaluator:
         suppression_policy: Dict[str, Any] | None = None,
         criticality: Dict[str, Any] | None = None,
     ):
-        self.ti_feed = ti_feed
+        self.ti_feed = ti_feed or _load_default_ti_feed()
         self.correlator = AdvancedCorrelator()
-        self.sigma = MiniSigmaExecutor(sigma_rules)
+        self.sigma = MiniSigmaExecutor(sigma_rules if sigma_rules is not None else _load_default_sigma_rules())
         self.yara = MiniYaraMatcher(yara_rules)
         self.max_entities = max(8, int(max_entities))
         self.max_entity_evidence_ids = max(4, int(max_entity_evidence_ids))
@@ -221,7 +274,7 @@ class SocEvaluator:
         actionable_payloads = actionable_soc_payloads + flow_payloads
         ti_matches = self._match_ti(actionable_soc_payloads)
         correlation = self.correlator.correlate(actionable_payloads)
-        sigma_hits = self.sigma.match(actionable_payloads)
+        sigma_hits = self.sigma.match(payloads)
         yara_hits = self.yara.match(actionable_payloads)
 
         suspicion = self._evaluate_suspicion(actionable_soc_payloads, flow_payloads, ti_matches, correlation, yara_hits, sot_diff=sot_diff)
@@ -506,6 +559,7 @@ class SocEvaluator:
             return []
         ips: List[str] = []
         domains: List[str] = []
+        urls: List[str] = []
         for payload in payloads:
             attrs = payload.get('attrs', {})
             src, dst = _parse_subject(str(payload.get('subject') or ''))
@@ -517,7 +571,11 @@ class SocEvaluator:
                 value = str(attrs.get(key) or '').strip()
                 if value:
                     domains.append(value)
-        return self.ti_feed.match(ips=ips, domains=domains)
+            for key in ('url', 'uri', 'http_url', 'path'):
+                value = str(attrs.get(key) or '').strip()
+                if value:
+                    urls.append(value)
+        return self.ti_feed.match(ips=ips, domains=domains, urls=urls)
 
     def _evaluate_entity_risk_state(self, payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
         store: Dict[str, Dict[str, Any]] = {}

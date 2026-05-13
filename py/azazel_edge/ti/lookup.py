@@ -15,6 +15,7 @@ class ThreatIntelMatch:
     confidence: int
     source: str
     note: str
+    technique_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -23,6 +24,7 @@ class ThreatIntelMatch:
             'confidence': self.confidence,
             'source': self.source,
             'note': self.note,
+            'technique_id': self.technique_id,
         }
 
 
@@ -30,11 +32,14 @@ class ThreatIntelFeed:
     def __init__(self, indicators: List[Dict[str, Any]]):
         self.indicators = [dict(item) for item in indicators if isinstance(item, dict)]
 
-    def match(self, ips: List[str], domains: List[str]) -> List[ThreatIntelMatch]:
+    def match(self, ips: List[str], domains: List[str], urls: List[str] | None = None) -> List[ThreatIntelMatch]:
         ip_set = {str(x).strip() for x in ips if str(x).strip()}
         domain_set = {str(x).strip().lower() for x in domains if str(x).strip()}
+        url_candidates = [str(x).strip().lower() for x in (urls or []) if str(x).strip()]
         matches: List[ThreatIntelMatch] = []
         for indicator in self.indicators:
+            if bool(indicator.get('inactive')):
+                continue
             indicator_type = str(indicator.get('type') or '').lower()
             value = str(indicator.get('value') or '').strip()
             if not indicator_type or not value:
@@ -44,6 +49,9 @@ class ThreatIntelFeed:
                 matched = True
             elif indicator_type == 'domain' and value.lower() in domain_set:
                 matched = True
+            elif indicator_type == 'url':
+                needle = value.lower()
+                matched = any(needle in candidate for candidate in url_candidates)
             if matched:
                 matches.append(ThreatIntelMatch(
                     indicator_type=indicator_type,
@@ -51,6 +59,7 @@ class ThreatIntelFeed:
                     confidence=max(0, min(int(indicator.get('confidence') or 50), 100)),
                     source=str(indicator.get('source') or 'local_feed'),
                     note=str(indicator.get('note') or ''),
+                    technique_id=str(indicator.get('technique_id') or ''),
                 ))
         return matches
 

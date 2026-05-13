@@ -1,0 +1,27 @@
+# Azazel-Edge Sigma-compatible Rules - Network Anomaly Pack
+# Last updated: 2026-05-13
+
+rules:
+  - id: "AZNET-001"
+    title: "Excessive new client registrations"
+    source: "captive_portal"
+    kind: "network_anomaly"
+    subject_contains: "register"
+    min_severity: 2
+    mitre_technique: "T1078"
+
+  - id: "AZNET-002"
+    title: "SoT device identity mismatch"
+    source: "noc_inventory"
+    kind: "identity_anomaly"
+    subject_contains: "expected_link_mismatch"
+    min_severity: 2
+    mitre_technique: "T1557"
+
+  - id: "AZNET-003"
+    title: "SNMP poll failure on known device"
+    source: "snmp_poller"
+    kind: "availability"
+    subject_contains: "poll_failed"
+    min_severity: 2
+    mitre_technique: "T1498"

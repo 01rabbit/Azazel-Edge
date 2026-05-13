@@ -1,0 +1,68 @@
+# Azazel-Edge Threat Intelligence Feed - Disaster Context
+# Last updated: 2026-05-13
+
+indicators:
+  - type: domain
+    value: "saigai-kyufu.net"
+    confidence: 85
+    source: "disaster_phishing_corpus"
+    note: "Fake disaster relief payment site pattern"
+    technique_id: "T1566"
+    tags: [phishing, disaster, ja]
+
+  - type: domain
+    value: "mynumber-kojin.com"
+    confidence: 90
+    source: "disaster_phishing_corpus"
+    note: "Fake MyNumber portal pattern"
+    technique_id: "T1566"
+    tags: [phishing, disaster, ja, mynumber]
+
+  - type: domain
+    value: "disaster-relief-fund.net"
+    confidence: 80
+    source: "disaster_phishing_corpus"
+    note: "Generic disaster relief phishing pattern"
+    technique_id: "T1566"
+    tags: [phishing, disaster, en]
+
+  - type: url
+    value: "/kyufu/apply"
+    confidence: 60
+    source: "disaster_phishing_corpus"
+    note: "Common path on fake relief sites"
+    technique_id: "T1566"
+    tags: [phishing, disaster, url_pattern]
+
+  - type: ip
+    value: "198.51.100.42"
+    confidence: 75
+    source: "test_corpus"
+    note: "Documentation range test IOC"
+    technique_id: "T1071"
+    tags: [c2, beacon]
+    inactive: false
+
+  - type: domain
+    value: "exfil-tunnel.example"
+    confidence: 70
+    source: "test_corpus"
+    note: "DNS tunnel test vector"
+    technique_id: "T1048"
+    tags: [dns_exfil, tunnel]
+
+  - type: ip
+    value: "169.254.100.1"
+    confidence: 65
+    source: "local_lan_watch"
+    note: "APIPA impersonation pattern"
+    technique_id: "T1557"
+    tags: [arp_spoof, mitm]
+
+  - type: domain
+    value: "inactive-disaster-fake.example"
+    confidence: 50
+    source: "test_corpus"
+    note: "Inactive test indicator"
+    technique_id: "T1566"
+    inactive: true

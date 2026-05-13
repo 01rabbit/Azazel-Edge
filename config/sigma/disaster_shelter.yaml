@@ -1,0 +1,45 @@
+# Azazel-Edge Sigma-compatible Rules - Disaster Shelter Context
+# Last updated: 2026-05-13
+
+rules:
+  - id: "AZSH-001"
+    title: "Repeated captive portal bypass attempt"
+    source: "captive_portal"
+    kind: "auth_anomaly"
+    subject_contains: "bypass"
+    min_severity: 2
+    attrs:
+      category: "auth"
+    mitre_technique: "T1078"
+
+  - id: "AZSH-002"
+    title: "Operator credential brute force"
+    source: "web_api"
+    kind: "auth_anomaly"
+    subject_contains: "login_failed"
+    min_severity: 3
+    mitre_technique: "T1110"
+
+  - id: "AZSH-003"
+    title: "Runbook approval bypass attempt"
+    source: "runbook"
+    kind: "policy_violation"
+    subject_contains: "requires_approval"
+    min_severity: 3
+    mitre_technique: "T1548"
+
+  - id: "AZSH-004"
+    title: "Audit log write failure"
+    source: "audit"
+    kind: "defense_evasion"
+    subject_contains: "write_failed"
+    min_severity: 4
+    mitre_technique: "T1562"
+
+  - id: "AZSH-005"
+    title: "Config file modification detected"
+    source: "config_drift"
+    kind: "config_change"
+    subject_contains: "changed"
+    min_severity: 2
+    mitre_technique: "T1565"

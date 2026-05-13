@@ -1,0 +1,15 @@
+# Azazel-Edge Threat Intelligence Feed - Shelter Phishing Extension
+# Last updated: 2026-05-13
+
+indicators:
+  - {type: domain, value: "hinan-portal-support.net", confidence: 82, source: "shelter_phishing_corpus", note: "Fake shelter support portal", technique_id: "T1566", tags: [phishing, shelter]}
+  - {type: domain, value: "evacuation-benefit-help.com", confidence: 78, source: "shelter_phishing_corpus", note: "Fake evacuation benefit site", technique_id: "T1566", tags: [phishing, shelter]}
+  - {type: domain, value: "safety-check-japan.org", confidence: 74, source: "shelter_phishing_corpus", note: "Fake safety check domain", technique_id: "T1566", tags: [phishing, ja]}
+  - {type: domain, value: "emergency-voucher-center.net", confidence: 79, source: "shelter_phishing_corpus", note: "Voucher lure domain", technique_id: "T1566", tags: [phishing]}
+  - {type: domain, value: "kyuen-shinsei.jp", confidence: 84, source: "shelter_phishing_corpus", note: "Relief application lure", technique_id: "T1566", tags: [phishing, ja]}
+  - {type: domain, value: "city-aid-login.com", confidence: 73, source: "shelter_phishing_corpus", note: "Municipal aid login spoof", technique_id: "T1566", tags: [phishing]}
+  - {type: domain, value: "cash-relief-now.net", confidence: 76, source: "shelter_phishing_corpus", note: "Instant cash lure", technique_id: "T1566", tags: [phishing]}
+  - {type: domain, value: "hinanjo-wifi-update.com", confidence: 77, source: "shelter_phishing_corpus", note: "Shelter Wi-Fi update lure", technique_id: "T1566", tags: [phishing, wifi]}
+  - {type: url, value: "/relief/verify", confidence: 62, source: "shelter_phishing_corpus", note: "Credential harvest path", technique_id: "T1566", tags: [url_pattern]}
+  - {type: url, value: "/mynumber/recovery", confidence: 65, source: "shelter_phishing_corpus", note: "Identity lure path", technique_id: "T1566", tags: [url_pattern]}
+  - {type: url, value: "/support/apply/grant", confidence: 61, source: "shelter_phishing_corpus", note: "Grant-application lure path", technique_id: "T1566", tags: [url_pattern]}
