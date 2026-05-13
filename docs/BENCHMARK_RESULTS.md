@@ -1,8 +1,8 @@
 # Azazel-Edge Benchmark Results
 
-Generated: 2026-05-13T10:58:32.091354+00:00  
+Generated: 2026-05-13T11:58:48.985971+00:00  
 Hardware: TBD  
-Commit: eea897b  
+Commit: 1707a88  
 Test suite baseline: 328 passed, 62 subtests passed
 
 ---
@@ -11,12 +11,12 @@ Test suite baseline: 328 passed, 62 subtests passed
 
 | Stage | Mean (ms) | Median (ms) | p95 (ms) | p99 (ms) |
 |---|---|---|---|---|
-| T2_eve_parse | 0.003 | 0.003 | 0.004 | 0.007 |
-| T3_evidence_dispatch | 0.01 | 0.01 | 0.013 | 0.026 |
-| T4_evaluators | 0.117 | 0.117 | 0.131 | 0.171 |
-| T5_arbiter | 0.008 | 0.008 | 0.01 | 0.021 |
+| T2_eve_parse | 0.005 | 0.005 | 0.005 | 0.009 |
+| T3_evidence_dispatch | 0.015 | 0.014 | 0.015 | 0.023 |
+| T4_evaluators | 0.18 | 0.178 | 0.191 | 0.226 |
+| T5_arbiter | 0.011 | 0.011 | 0.012 | 0.016 |
 
-Total pipeline p95: 0.158 ms
+Total pipeline p95: 0.223 ms
 
 ## B-3: Detection Accuracy
 

@@ -5,6 +5,14 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- (none yet)
+
+### Changed
+- (none yet)
+
+## [0.1.0] - 2026-05-13
+
+### Added
 - Aggregator MVP scaffold (design-to-implementation bridge):
   - in-memory node registry with registration and summary ingest
   - freshness classification (`fresh` / `stale` / `offline`)
