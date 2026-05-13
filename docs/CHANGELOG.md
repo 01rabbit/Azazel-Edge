@@ -67,11 +67,24 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - operator/deployment/legal/maintenance guides
   - docs index and GitHub Pages docs landing refresh
   - implementation cycle feature inventory (`docs/IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md`)
+- Cycle 3 implementation line:
+  - aggregator pull-mode polling engine and admin poller control API
+  - disaster-context TI IOC feeds with default SOC load path
+  - MiniSigma YAML rule packs with default SOC integration
+  - Wi-Fi congestion and rogue-AP Evidence Plane dispatch integration
+  - TAXII 2.1 outbound push client and admin push/test APIs
+  - optional SNMP/NetFlow sensor systemd units + installer wiring
+  - captive portal multilingual baseline (`es`, `uk`, `tl`) with safe fallback
+  - cycle tracker documentation/index updates (`#242`-`#249`)
 
 ### Changed
 - Dependency review CI job now runs only when repository variable `ENABLE_DEPENDENCY_REVIEW` is set to `true`.
   - This avoids false CI failures on repositories where Dependency Graph is disabled.
 - README refreshed to align with current runtime capabilities and fail-closed posture.
+- Local developer runtime execution standardized on `.venv`:
+  - new `bin/azazel-edge-dev` helper (`bootstrap`, `test`, `python`)
+  - launcher scripts prefer repository `.venv` with `/opt/azazel-edge/venv` fallback
+  - development dependency split introduced via `requirements/dev.txt`
 
 ## [2026-05-12]
 

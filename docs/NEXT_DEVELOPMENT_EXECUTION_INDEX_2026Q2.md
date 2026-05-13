@@ -60,3 +60,16 @@ Priority | Issue | Title | Labels | Depends on
 P0 | #173 | [Topo-Lite] Default monitoring scope to internal network (br0/172.16.0.0/24) | `priority:P0`, `initiative:topo-lite`, `area:integration`, `area:ops`, `noc` | #140
 P0 | #172 | [Topo-Lite] Synthetic seed mode with strict live-evidence separation | `priority:P0`, `initiative:topo-lite`, `area:security`, `area:integration`, `soc`, `ui` | #173
 P0 | #174 | [Topo-Lite] Left-sidebar integration and single-screen visual triage UI | `priority:P0`, `initiative:topo-lite`, `area:integration`, `ui`, `soc`, `noc` | #173, #172
+
+## Cycle 3 Execution Track (2026-05-13)
+
+Priority | Issue | Title | Labels | Depends on
+---|---|---|---|---
+P1 | #249 | [planning] cycle 3 implementation tracker | `epic`, `planning`, `priority:P1`, `area:quality`, `area:runtime` | -
+P1 | #242 | [integration] aggregator pull-mode polling engine | `planning`, `priority:P1`, `area:integration`, `area:runtime`, `area:api` | #249
+P1 | #243 | [ai] TI feed IOC seed data and SOC load path | `planning`, `priority:P1`, `area:ai`, `area:security`, `area:quality`, `soc` | #249
+P1 | #244 | [soc] sigma rule packs and evaluator integration | `planning`, `priority:P1`, `soc`, `area:security`, `area:quality` | #243
+P1 | #245 | [evidence] Wi-Fi sensors to Evidence Plane dispatch integration | `planning`, `priority:P1`, `noc`, `area:integration`, `area:runtime`, `area:quality` | #249
+P1 | #246 | [ops] systemd units for SNMP poller and NetFlow receiver | `planning`, `priority:P1`, `area:ops`, `area:runtime` | #249
+P1 | #247 | [ui] captive portal multilingual expansion (es/uk/tl) | `planning`, `priority:P1`, `ui`, `ops:beginner`, `area:api`, `area:quality` | #249
+P1 | #248 | [integration] aggregator TAXII 2.1 push client and API trigger | `planning`, `priority:P1`, `area:integration`, `area:api`, `area:security`, `area:quality` | #249
