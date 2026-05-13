@@ -1,0 +1,24 @@
+[Unit]
+Description=Azazel-Edge NetFlow v5 Receiver - flow data evidence bridge
+Documentation=https://github.com/01rabbit/Azazel-Edge
+After=network.target azazel-edge-control-daemon.service
+Wants=azazel-edge-control-daemon.service
+DefaultDependencies=no
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/azazel-edge-sensors
+ExecStart=/opt/azazel-edge/venv/bin/python3 -m azazel_edge.sensors.netflow_receiver --host "${NETFLOW_LISTEN_HOST:-0.0.0.0}" --port "${NETFLOW_PORT:-2055}"
+Restart=on-failure
+RestartSec=30s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=azazel-netflow
+MemoryMax=48M
+CPUQuota=8%
+User=azazel
+Group=azazel
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,24 @@
+[Unit]
+Description=Azazel-Edge SNMP Poller - network device monitoring bridge
+Documentation=https://github.com/01rabbit/Azazel-Edge
+After=network.target azazel-edge-control-daemon.service
+Wants=azazel-edge-control-daemon.service
+DefaultDependencies=no
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/azazel-edge-sensors
+ExecStart=/opt/azazel-edge/venv/bin/python3 -m azazel_edge.sensors.snmp_poller --targets "${SNMP_TARGETS:-[]}" --interval "${SNMP_POLL_INTERVAL_SEC:-60}"
+Restart=on-failure
+RestartSec=30s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=azazel-snmp
+MemoryMax=32M
+CPUQuota=5%
+User=azazel
+Group=azazel
+
+[Install]
+WantedBy=multi-user.target
+

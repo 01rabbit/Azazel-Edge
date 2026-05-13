@@ -35,6 +35,14 @@ This project currently uses a practical baseline and is not claiming full SLSA o
 
 ## Optional integration smoke checks
 
+Sensor installer and unit verification:
+
+```bash
+bash -n installer/internal/install_sensors.sh
+systemd-analyze verify systemd/azazel-edge-snmp-poller.service
+systemd-analyze verify systemd/azazel-edge-netflow-receiver.service
+```
+
 When `ENABLE_VECTOR=1` is used during installation:
 
 ```bash

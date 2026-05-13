@@ -41,6 +41,9 @@ systemctl status azazel-edge-web azazel-edge-control-daemon azazel-edge-core aza
 
 Expected:
 - required units are active for installed profile
+- when sensor services are enabled, also confirm:
+  - `azazel-edge-snmp-poller`
+  - `azazel-edge-netflow-receiver`
 
 - [ ] Validate log rotation behavior.
 
