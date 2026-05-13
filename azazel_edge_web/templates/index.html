@@ -990,6 +990,41 @@
                 </div>
             </details>
         </section>
+
+        <section class="panel" id="aggregatorPanel" hidden>
+            <div class="panel-heading">
+                <div class="panel-title-group">
+                    <div class="panel-kicker">{{ tr('dashboard.aggregator_kicker', 'Multi-Node') }}</div>
+                    <h2 class="panel-title">{{ tr('dashboard.aggregator_title', 'Node Fleet Status') }}</h2>
+                </div>
+                <p class="panel-note" id="aggregatorPanelNote">
+                    {{ tr('dashboard.aggregator_note', 'Aggregated freshness and risk posture across registered nodes.') }}
+                </p>
+            </div>
+
+            <div class="aggregator-counters" id="aggregatorCounters">
+                <div class="aggregator-counter" id="aggCountFresh">
+                    <span class="agg-count-num" id="aggFreshNum">--</span>
+                    <span class="agg-count-label">{{ tr('dashboard.aggregator_fresh', 'Fresh') }}</span>
+                </div>
+                <div class="aggregator-counter agg-warn" id="aggCountStale">
+                    <span class="agg-count-num" id="aggStaleNum">--</span>
+                    <span class="agg-count-label">{{ tr('dashboard.aggregator_stale', 'Stale') }}</span>
+                </div>
+                <div class="aggregator-counter agg-crit" id="aggCountOffline">
+                    <span class="agg-count-num" id="aggOfflineNum">--</span>
+                    <span class="agg-count-label">{{ tr('dashboard.aggregator_offline', 'Offline') }}</span>
+                </div>
+            </div>
+
+            <ul class="aggregator-node-list" id="aggregatorNodeList" aria-label="{{ tr('dashboard.aggregator_node_list_label', 'Node list') }}">
+                <li class="aggregator-node-placeholder" id="aggregatorPlaceholder">
+                    {{ tr('dashboard.aggregator_no_nodes', 'No nodes registered. Use /api/aggregator/nodes/register to add a node.') }}
+                </li>
+            </ul>
+
+            <p class="panel-note aggregator-last-updated" id="aggregatorLastUpdated"></p>
+        </section>
     </main>
 
     <div id="toast" class="toast"></div>

@@ -805,6 +805,7 @@ function updateTemporaryMission(actions) {
 }
 
 async function refreshDashboard() {
+    fetchAggregatorStatus();
     const progressSessionId = ensureProgressSessionId();
     const actionsUrl = new URL('/api/dashboard/actions', window.location.origin);
     actionsUrl.searchParams.set('audience', currentAudience);
@@ -928,6 +929,84 @@ async function refreshDashboard() {
         }
     } else {
         lastRefreshWarning = '';
+    }
+}
+
+function buildAggregatorNodeRow(node) {
+    const freshness = String(node?.freshness || 'offline').toLowerCase();
+    const status = String(node?.status || 'active').toLowerCase();
+    const label = String(node?.node_label || node?.node_id || '-');
+    const site = String(node?.site_id || '');
+    const posture = String(node?.summary?.posture || '');
+    const action = String(node?.summary?.last_action || '');
+    const freshnessClass = freshness === 'fresh'
+        ? 'status-ok'
+        : freshness === 'stale'
+            ? 'status-warn'
+            : 'status-crit';
+    const quarantineTag = status === 'quarantined'
+        ? `<span class="agg-tag agg-tag-quarantine">${escapeHtml(tr('dashboard.aggregator_quarantined', 'Quarantined'))}</span>`
+        : '';
+    const lastSeen = node?.last_seen_epoch
+        ? new Date(Number(node.last_seen_epoch) * 1000).toLocaleTimeString()
+        : '--';
+    return `<li class="aggregator-node-row ${freshnessClass}">
+        <div class="agg-node-identity">
+            <strong class="agg-node-label">${escapeHtml(label)}</strong>
+            <span class="agg-node-site">${escapeHtml(site)}</span>
+            ${quarantineTag}
+        </div>
+        <div class="agg-node-status">
+            <span class="agg-freshness-badge agg-freshness-${escapeAttribute(freshness)}">${escapeHtml(freshness)}</span>
+            ${posture ? `<span class="agg-posture">${escapeHtml(posture)}</span>` : ''}
+            ${action ? `<span class="agg-action">${escapeHtml(action)}</span>` : ''}
+            <span class="agg-lastseen">${escapeHtml(lastSeen)}</span>
+        </div>
+    </li>`;
+}
+
+function renderAggregatorPanel(data) {
+    const counts = data?.counts || {};
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const fresh = Number(counts.fresh || 0);
+    const stale = Number(counts.stale || 0);
+    const offline = Number(counts.offline || 0);
+
+    updateElement('aggFreshNum', String(fresh));
+    updateElement('aggStaleNum', String(stale));
+    updateElement('aggOfflineNum', String(offline));
+
+    const list = document.getElementById('aggregatorNodeList');
+    if (list) {
+        if (!items.length) {
+            list.innerHTML = `<li class="aggregator-node-placeholder" id="aggregatorPlaceholder">${escapeHtml(tr('dashboard.aggregator_no_nodes', 'No nodes registered. Use /api/aggregator/nodes/register to add a node.'))}</li>`;
+        } else {
+            list.innerHTML = items.map((node) => buildAggregatorNodeRow(node)).join('');
+        }
+    }
+    const stamp = new Date().toLocaleString();
+    updateElement(
+        'aggregatorLastUpdated',
+        tr('dashboard.aggregator_last_polled', 'Last polled: {ts}', { ts: stamp }),
+    );
+}
+
+async function fetchAggregatorStatus() {
+    const panel = document.getElementById('aggregatorPanel');
+    if (!panel) return;
+    try {
+        const resp = await fetch('/api/aggregator/nodes', { headers: authHeaders() });
+        if (!resp.ok) {
+            if (resp.status === 401 || resp.status === 403 || resp.status === 500) {
+                panel.hidden = true;
+            }
+            return;
+        }
+        panel.hidden = false;
+        const data = await resp.json();
+        renderAggregatorPanel(data);
+    } catch (_err) {
+        // network error: keep last rendered state
     }
 }
 
