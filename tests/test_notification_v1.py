@@ -129,6 +129,45 @@ class NotificationV1Tests(unittest.TestCase):
         self.assertEqual(result['adapter'], 'smtp')
         self.assertEqual(result['status'], 250)
 
+    def test_summary_only_mode_strips_evidence_ids(self) -> None:
+        captured = {}
+
+        class _CaptureNotifier:
+            def send(self, payload):
+                captured.update(payload)
+                return {'ok': True, 'adapter': 'capture', 'status': 200}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = P0AuditLogger(Path(tmp) / 'audit.jsonl')
+            notifier = DecisionNotifier([_CaptureNotifier()], logger, summary_only=True)
+            result = notifier.notify(
+                arbiter={'action': 'notify', 'reason': 'soc_high_but_noc_fragile', 'chosen_evidence_ids': ['ev-1', 'ev-2']},
+                explanation={'operator_wording': 'Notify operator now.'},
+                target='edge-uplink',
+            )
+        self.assertTrue(result['ok'])
+        self.assertEqual(captured.get('evidence_ids'), [])
+
+    def test_summary_only_mode_truncates_operator_wording(self) -> None:
+        captured = {}
+
+        class _CaptureNotifier:
+            def send(self, payload):
+                captured.update(payload)
+                return {'ok': True, 'adapter': 'capture', 'status': 200}
+
+        long_text = 'x' * 260
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = P0AuditLogger(Path(tmp) / 'audit.jsonl')
+            notifier = DecisionNotifier([_CaptureNotifier()], logger, summary_only=True)
+            result = notifier.notify(
+                arbiter={'action': 'notify', 'reason': 'soc_high_but_noc_fragile', 'chosen_evidence_ids': ['ev-1']},
+                explanation={'operator_wording': long_text},
+                target='edge-uplink',
+            )
+        self.assertTrue(result['ok'])
+        self.assertEqual(len(str(captured.get('operator_wording') or '')), 200)
+
 
 if __name__ == '__main__':
     unittest.main()
