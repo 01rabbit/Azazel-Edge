@@ -1,3 +1,32 @@
 alert tcp any any -> $HOME_NET 12222 (msg:"AZAZEL OPENCANARY SSH probe"; flags:S; flow:to_server; classtype:attempted-recon; sid:9901101; rev:1;)
 alert tcp any any -> $HOME_NET 18080 (msg:"AZAZEL OPENCANARY HTTP probe"; flags:S; flow:to_server; classtype:attempted-recon; sid:9901102; rev:1;)
 alert tcp any any -> $HOME_NET [12222,18080] (msg:"AZAZEL OPENCANARY repeated access"; flags:S; flow:to_server; threshold:type both, track by_src, count 8, seconds 60; classtype:attempted-recon; sid:9901103; rev:1;)
+
+# ============================================================
+# AZAZEL-EDGE DISASTER SHELTER THREAT RULES
+# SID range: 9901201-9901299
+# Context: Emergency shelter Wi-Fi, 100-person scale
+# Covers: disaster phishing, fake AP, ARP spoofing, port scan
+# ============================================================
+
+# --- Fake captive portal / phishing ---
+alert http any any -> $HOME_NET any (msg:"AZAZEL DISASTER phishing - fake government domain"; content:"gov."; http_host; nocase; content:"login"; http_uri; nocase; flow:to_client; classtype:social-engineering; sid:9901201; rev:1;)
+alert http any any -> $HOME_NET any (msg:"AZAZEL DISASTER phishing - fake MyNumber portal"; content:"mynumber"; http_host; nocase; flow:to_client; classtype:social-engineering; sid:9901202; rev:1;)
+alert http any any -> $HOME_NET any (msg:"AZAZEL DISASTER phishing - fake disaster relief site"; content:"saigai"; http_host; nocase; flow:to_client; classtype:social-engineering; sid:9901203; rev:1;)
+
+# --- ARP spoofing / gateway impersonation ---
+alert arp any any -> any any (msg:"AZAZEL ARP spoof - gateway impersonation detected"; arp.opcode:2; arp.spa:!$HOME_NET; classtype:bad-unknown; sid:9901211; rev:1;)
+
+# --- Rapid port scanning from internal ---
+alert tcp $HOME_NET any -> any any (msg:"AZAZEL SCAN internal host rapid port scan"; flags:S; threshold:type both, track by_src, count 30, seconds 10; classtype:network-scan; sid:9901221; rev:1;)
+alert tcp any any -> $HOME_NET any (msg:"AZAZEL SCAN external rapid port scan on shelter network"; flags:S; threshold:type both, track by_src, count 30, seconds 10; classtype:network-scan; sid:9901222; rev:1;)
+
+# --- DNS exfiltration / suspicious DNS tunnel ---
+alert dns any any -> any any (msg:"AZAZEL DNS exfil - unusually long DNS query"; dns.query; content:"."; dsize:>100; classtype:policy-violation; sid:9901231; rev:1;)
+alert dns any any -> any any (msg:"AZAZEL DNS tunnel - high-frequency DNS queries"; dns.query; threshold:type both, track by_src, count 50, seconds 10; classtype:policy-violation; sid:9901232; rev:1;)
+
+# --- Credential harvesting patterns ---
+alert http any any -> $HOME_NET any (msg:"AZAZEL CREDENTIAL harvest - password field in GET request"; content:"password="; http_uri; nocase; flow:to_server; classtype:policy-violation; sid:9901241; rev:1;)
+
+# --- C2 beacon patterns (disaster APT) ---
+alert http $HOME_NET any -> any any (msg:"AZAZEL C2 beacon - periodic small HTTP POST"; content:"POST"; http_method; dsize:<200; threshold:type both, track by_src, count 10, seconds 60; classtype:trojan-activity; sid:9901251; rev:1;)
