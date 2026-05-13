@@ -34,6 +34,7 @@ Entry point for all documents in this directory.
 | File | Audience | Description | Last Updated |
 |------|----------|-------------|--------------|
 | [NEXT_DEVELOPMENT_EXECUTION_INDEX_2026Q2.md](NEXT_DEVELOPMENT_EXECUTION_INDEX_2026Q2.md) | Developer | 2026Q2 implementation plan index | - |
+| [IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md](IMPLEMENTATION_CYCLE_2026Q2_FEATURE_INVENTORY.md) | Developer / Operator | Verified feature inventory for Epic #196 delivery cycle | 2026-05-13 |
 | [CHANGELOG.md](CHANGELOG.md) | Developer | PR and feature traceability history | - |
 | [RELEASE_VERIFICATION_GUIDE.md](RELEASE_VERIFICATION_GUIDE.md) | Developer / Operator | Checksum, SBOM, and release verification baseline | 2026-05-12 |
 
