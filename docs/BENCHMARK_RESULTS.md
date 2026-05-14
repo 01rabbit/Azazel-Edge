@@ -1,9 +1,11 @@
 # Azazel-Edge Benchmark Results
 
-Generated: 2026-05-13T11:58:48.985971+00:00  
-Hardware: TBD  
-Commit: 1707a88  
-Test suite baseline: 328 passed, 62 subtests passed
+Generated: 2026-05-14T12:59:11.833583+00:00  
+Hardware: software-only  
+Benchmark mode: software-only-eve-replay  
+Claim scope: deterministic pipeline regression  
+Commit: 38f3a6d  
+Test suite baseline: see CI and release notes
 
 ---
 
@@ -11,12 +13,12 @@ Test suite baseline: 328 passed, 62 subtests passed
 
 | Stage | Mean (ms) | Median (ms) | p95 (ms) | p99 (ms) |
 |---|---|---|---|---|
-| T2_eve_parse | 0.005 | 0.005 | 0.005 | 0.009 |
-| T3_evidence_dispatch | 0.015 | 0.014 | 0.015 | 0.023 |
-| T4_evaluators | 0.18 | 0.178 | 0.191 | 0.226 |
-| T5_arbiter | 0.011 | 0.011 | 0.012 | 0.016 |
+| T2_eve_parse | 0.005 | 0.005 | 0.005 | 0.006 |
+| T3_evidence_dispatch | 0.014 | 0.014 | 0.015 | 0.015 |
+| T4_evaluators | 0.178 | 0.176 | 0.194 | 0.218 |
+| T5_arbiter | 0.011 | 0.011 | 0.012 | 0.017 |
 
-Total pipeline p95: 0.223 ms
+Total pipeline p95: 0.226 ms
 
 ## B-3: Detection Accuracy
 
@@ -34,5 +36,6 @@ Total pipeline p95: 0.223 ms
 
 ## Notes
 
-- Power and startup hardware benchmarks must be run on Raspberry Pi and updated manually.
-- The 12% breach-rate statement remains preliminary until reproduced with hardware validation.
+- This suite validates deterministic pipeline behavior under software-only EVE replay.
+- It does not claim inline forwarding throughput, live Suricata capture capacity, nftables/tc enforcement latency, OpenCanary redirect realism, or co-located Ollama/Mattermost performance.
+- Power and startup hardware benchmarks must be run on Raspberry Pi hardware-in-the-loop plans.

@@ -20,7 +20,7 @@ Azazel-Edge is a Raspberry Pi-oriented edge operations stack that combines:
 - Web UI + API + runbook workflow for operators
 - optional local AI assist (Ollama + Mattermost integration)
 
-This README is based on verified repository contents (code, scripts, tests, git history, GitHub issue/PR metadata) as of **2026-05-13**.
+This README is based on verified repository contents (code, scripts, tests, git history, GitHub issue/PR metadata) as of **2026-05-14**.
 
 ## What is Azazel-Edge?
 
@@ -334,7 +334,9 @@ Run:
 PYTHONPATH=py:. .venv/bin/pytest -q
 ```
 
-Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
+Status guidance:
+- Use the CI badge and latest GitHub release notes as the source of current validation status.
+- Avoid treating static README test counts as authoritative across commits.
 
 ## Repository Layout
 
@@ -400,6 +402,9 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 | [Post-demo Main Integration Boundary (#104)](docs/POST_DEMO_MAIN_INTEGRATION_104.md) | What is mainline vs. exhibition-only |
 | [Post-demo Socket Permission Model (#105)](docs/POST_DEMO_SOCKET_PERMISSION_MODEL_105.md) | Unix socket permission decisions |
 | [Next Development Execution Index 2026Q2](docs/NEXT_DEVELOPMENT_EXECUTION_INDEX_2026Q2.md) | Roadmap and execution plan |
+| [Arsenal Demo Profile](docs/ARSENAL_DEMO_PROFILE.md) | Reproducible deterministic demo profile |
+| [Deployment Profiles](docs/DEPLOYMENT_PROFILES.md) | Core/Demo/SOC/NOC/Heavy-lab profile matrix |
+| [Benchmark Scope and HIL Plan](docs/BENCHMARK_SCOPE_AND_HIL_PLAN.md) | Scope boundary and hardware-in-the-loop plan |
 
 ### For contributors (AI agents and humans)
 
@@ -423,6 +428,8 @@ Latest verified result (2026-05-11): **224 passed, 16 subtests passed**
 - AI assist is optional and bounded — the deterministic path works without Ollama
 - Ollama models above 2b parameters are not recommended for co-located deployments
 - Test count and runbook count are verified at each release; see CI results for current status.
+- Redirect behavior uses prepared lightweight decoys with protocol-aware mapping (v0.1.1 hardening line), not per-event decoy spawning.
+- Benchmark outputs are scoped to software-only deterministic replay unless hardware-in-the-loop evidence is explicitly provided.
 
 ### Known bugs
 
@@ -435,9 +442,10 @@ Priority items are tracked in GitHub Issues and may change daily.
 
 ## Current Status
 
-- Recent merged PRs include #95, #94, #88, #87, #86 (UI, NOC runtime integration, auth/i18n, SOC maturation).
-- Repository currently contains **48** Python test modules and **15** runbook YAML definitions.
+- Latest release: `v0.1.0`.
+- Current hardening line: `v0.1.1` readiness tasks (redirect safety, demo reproducibility profile, deployment profile clarity, benchmark claim boundary).
 - Deterministic demo scenarios available: `mixed_correlation_demo`, `noc_degraded_demo`, `soc_redirect_demo`.
+- Optional integrations remain optional; deterministic core operation does not require Ollama/Mattermost/Wazuh/Vector/Aggregator.
 
 ## License
 

@@ -5,10 +5,23 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- (none yet)
+- Protocol-aware redirect policy baseline for prepared decoy services:
+  - redirect mapping by destination port
+  - unsupported-port deterministic fallback action
+  - compatibility fallback to `AZAZEL_DEFENSE_HONEYPOT_PORT` when policy file is absent
+  - enforcement metadata for mapping/fallback traceability
+- Arsenal demo profile runbook (`docs/ARSENAL_DEMO_PROFILE.md`).
+- Deployment profile matrix (`docs/DEPLOYMENT_PROFILES.md`) for constrained hardware clarity.
+- Benchmark scope boundary and hardware-in-the-loop plan (`docs/BENCHMARK_SCOPE_AND_HIL_PLAN.md`).
+- Benchmark report metadata fields:
+  - `benchmark_mode`
+  - `hardware`
+  - `claim_scope`
 
 ### Changed
-- (none yet)
+- README testing/current status wording to avoid stale validation claims.
+- Benchmark report wording to identify software-only EVE replay scope.
+- SOC policy guide updated with prepared decoy redirect model notes.
 
 ## [0.1.0] - 2026-05-13
 
