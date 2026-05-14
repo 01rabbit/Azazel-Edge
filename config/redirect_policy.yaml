@@ -1,0 +1,9 @@
+redirect_policy:
+  enabled: true
+  prepared_ports:
+    22: 12222
+    80: 18080
+    8080: 18080
+  unsupported_port_action: notify
+  high_risk_unsupported_port_action: isolate
+  scan_burst_action: throttle

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -27,6 +28,9 @@ struct Config {
     defense_allow_high_impact_auto: bool,
     defense_iface: String,
     defense_honeypot_port: u16,
+    redirect_policy_path: String,
+    redirect_policy: Option<RedirectPolicyConfig>,
+    redirect_policy_source: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -87,6 +91,55 @@ struct EnforcementOutcome {
     errors: Vec<String>,
     rollback_hint: String,
     result: String,
+    metadata: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RedirectPolicyRoot {
+    redirect_policy: Option<RedirectPolicyConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RedirectPolicyConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    prepared_ports: HashMap<u16, u16>,
+    #[serde(default = "default_notify")]
+    unsupported_port_action: String,
+    #[serde(default = "default_isolate")]
+    high_risk_unsupported_port_action: String,
+    #[serde(default = "default_throttle")]
+    scan_burst_action: String,
+}
+
+fn default_notify() -> String {
+    "notify".to_string()
+}
+
+fn default_isolate() -> String {
+    "isolate".to_string()
+}
+
+fn default_throttle() -> String {
+    "throttle".to_string()
+}
+
+fn normalize_safe_action(raw: &str, default_action: &str) -> String {
+    match raw.to_ascii_lowercase().as_str() {
+        "observe" | "notify" | "throttle" | "redirect" | "isolate" => raw.to_ascii_lowercase(),
+        _ => default_action.to_string(),
+    }
+}
+
+fn load_redirect_policy(path: &str) -> Result<Option<RedirectPolicyConfig>, String> {
+    let source = Path::new(path);
+    if !source.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(source).map_err(|e| format!("redirect_policy_read_failed:{}", e))?;
+    let parsed: RedirectPolicyRoot = serde_yaml::from_str(&raw).map_err(|e| format!("redirect_policy_parse_failed:{}", e))?;
+    Ok(parsed.redirect_policy)
 }
 
 fn now_epoch() -> f64 {
@@ -111,6 +164,16 @@ fn load_config() -> Config {
             from_start = true;
         }
     }
+
+    let redirect_policy_path = env::var("AZAZEL_REDIRECT_POLICY_PATH").unwrap_or_else(|_| "config/redirect_policy.yaml".to_string());
+    let (redirect_policy, redirect_policy_source) = match load_redirect_policy(&redirect_policy_path) {
+        Ok(Some(policy)) => (Some(policy), format!("file:{}", redirect_policy_path)),
+        Ok(None) => (None, "env_honeypot_fallback".to_string()),
+        Err(e) => {
+            eprintln!("redirect policy load failed, using honeypot fallback: {}", e);
+            (None, format!("invalid_file_env_fallback:{}", redirect_policy_path))
+        }
+    };
 
     Config {
         eve_path: env::var("AZAZEL_EVE_PATH").unwrap_or_else(|_| "/var/log/suricata/eve.json".to_string()),
@@ -137,6 +200,9 @@ fn load_config() -> Config {
             .ok()
             .and_then(|v| v.parse::<u16>().ok())
             .unwrap_or(2222),
+        redirect_policy_path,
+        redirect_policy,
+        redirect_policy_source,
     }
 }
 
@@ -363,15 +429,21 @@ fn should_execute_action(action: &str, cfg: &Config) -> (bool, String) {
 
 fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Config) -> EnforcementOutcome {
     let trace_id = calc_trace_id(ev, decision);
-    let plan = build_enforcement_plan(ev, decision, &cfg.defense_iface, cfg.defense_honeypot_port);
+    let (effective_decision, redirect_meta) = resolve_redirect_decision(ev, decision, cfg);
+    let selected_decoy_port = redirect_meta
+        .get("selected_decoy_port")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u16)
+        .unwrap_or(cfg.defense_honeypot_port);
+    let plan = build_enforcement_plan(ev, &effective_decision, &cfg.defense_iface, selected_decoy_port);
 
     if plan.apply_commands.is_empty() {
         return EnforcementOutcome {
             mode: "disabled".to_string(),
             trace_id,
-            selected_action: decision.action.clone(),
-            target: decision.target.clone(),
-            policy_reason: decision.policy_reason.clone(),
+            selected_action: effective_decision.action.clone(),
+            target: effective_decision.target.clone(),
+            policy_reason: effective_decision.policy_reason.clone(),
             command_plan: plan.apply_commands.clone(),
             rollback_plan: plan.rollback_commands.clone(),
             executed_count: 0,
@@ -379,17 +451,18 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
             errors: Vec::new(),
             rollback_hint: "no_runtime_change".to_string(),
             result: "no_disruptive_action".to_string(),
+            metadata: redirect_meta,
         };
     }
 
-    let (allowed_by_policy, policy_gate_reason) = should_execute_action(&decision.action, cfg);
+    let (allowed_by_policy, policy_gate_reason) = should_execute_action(&effective_decision.action, cfg);
     if cfg.defense_dry_run || !allowed_by_policy {
         return EnforcementOutcome {
             mode: if cfg.defense_dry_run { "dry_run".to_string() } else { "policy_gated".to_string() },
             trace_id,
-            selected_action: decision.action.clone(),
-            target: decision.target.clone(),
-            policy_reason: format!("{}:{}", decision.policy_reason, policy_gate_reason),
+            selected_action: effective_decision.action.clone(),
+            target: effective_decision.target.clone(),
+            policy_reason: format!("{}:{}", effective_decision.policy_reason, policy_gate_reason),
             command_plan: plan.apply_commands.clone(),
             rollback_plan: plan.rollback_commands.clone(),
             executed_count: 0,
@@ -397,6 +470,7 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
             errors: Vec::new(),
             rollback_hint: "set AZAZEL_DEFENSE_ENFORCE_LEVEL=full-auto or explicit high-impact approval policy".to_string(),
             result: "planned_not_applied".to_string(),
+            metadata: redirect_meta,
         };
     }
 
@@ -417,9 +491,9 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
     EnforcementOutcome {
         mode: "enforced".to_string(),
         trace_id,
-        selected_action: decision.action.clone(),
-        target: decision.target.clone(),
-        policy_reason: decision.policy_reason.clone(),
+        selected_action: effective_decision.action.clone(),
+        target: effective_decision.target.clone(),
+        policy_reason: effective_decision.policy_reason.clone(),
         command_plan: plan.apply_commands,
         rollback_plan: plan.rollback_commands,
         executed_count,
@@ -427,6 +501,62 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
         errors,
         rollback_hint: format!("temporary action ttl={}s; execute rollback_plan when control is no longer needed", cfg.defense_action_ttl_sec),
         result: if failed_count > 0 { "partial_failure".to_string() } else { "applied".to_string() },
+        metadata: redirect_meta,
+    }
+}
+
+fn resolve_redirect_decision(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Config) -> (DefensiveDecision, Value) {
+    let mut metadata = json!({
+        "original_dst_port": ev.target_port,
+        "selected_decoy_port": Value::Null,
+        "redirect_policy_source": cfg.redirect_policy_source,
+        "redirect_mapping_matched": false,
+        "unsupported_port_fallback": "",
+        "fallback_reason": "",
+    });
+    if decision.action != "redirect" {
+        return (decision.clone(), metadata);
+    }
+
+    match &cfg.redirect_policy {
+        Some(policy) => {
+            if !policy.enabled {
+                metadata["selected_decoy_port"] = json!(cfg.defense_honeypot_port);
+                metadata["redirect_mapping_matched"] = json!(true);
+                metadata["fallback_reason"] = json!("policy_disabled_env_honeypot_fallback");
+                return (decision.clone(), metadata);
+            }
+            if let Some(mapped) = policy.prepared_ports.get(&ev.target_port) {
+                metadata["selected_decoy_port"] = json!(mapped);
+                metadata["redirect_mapping_matched"] = json!(true);
+                metadata["fallback_reason"] = json!("prepared_mapping");
+                return (decision.clone(), metadata);
+            }
+
+            let high_risk = ev.risk_score >= 80 || ev.severity <= 2;
+            let fallback = if high_risk {
+                normalize_safe_action(&policy.high_risk_unsupported_port_action, "isolate")
+            } else {
+                normalize_safe_action(&policy.unsupported_port_action, "notify")
+            };
+            metadata["unsupported_port_fallback"] = json!(fallback.clone());
+            metadata["fallback_reason"] = json!(if high_risk {
+                "unsupported_port_high_risk"
+            } else {
+                "unsupported_port_default"
+            });
+            let mut adjusted = decision.clone();
+            adjusted.action = fallback.clone();
+            adjusted.policy_reason = format!("{}:{}", decision.policy_reason, metadata["fallback_reason"].as_str().unwrap_or("unsupported_port"));
+            adjusted.reason = format!("{}; unsupported port={} fallback={}", decision.reason, ev.target_port, fallback);
+            return (adjusted, metadata);
+        }
+        None => {
+            metadata["selected_decoy_port"] = json!(cfg.defense_honeypot_port);
+            metadata["redirect_mapping_matched"] = json!(true);
+            metadata["fallback_reason"] = json!("no_redirect_policy_file_env_honeypot_fallback");
+            (decision.clone(), metadata)
+        }
     }
 }
 
@@ -585,11 +715,14 @@ mod tests {
             defense_dry_run: true,
             defense_enforce_level: "advisory".to_string(),
             defense_action_ttl_sec: 300,
-            defense_allow_high_impact_auto: false,
-            defense_iface: "br0".to_string(),
-            defense_honeypot_port: 2222,
-        }
+        defense_allow_high_impact_auto: false,
+        defense_iface: "br0".to_string(),
+        defense_honeypot_port: 2222,
+        redirect_policy_path: "config/redirect_policy.yaml".to_string(),
+        redirect_policy: None,
+        redirect_policy_source: "env_honeypot_fallback".to_string(),
     }
+}
 
     #[test]
     fn build_enforcement_plan_for_critical_event() {
@@ -642,5 +775,109 @@ mod tests {
         assert!(allowed.contains(&"throttle".to_string()));
         assert!(allowed.contains(&"redirect".to_string()));
         assert!(allowed.contains(&"isolate".to_string()));
+    }
+
+    fn cfg_with_redirect_policy() -> Config {
+        let mut cfg = sample_cfg();
+        cfg.redirect_policy = Some(RedirectPolicyConfig {
+            enabled: true,
+            prepared_ports: HashMap::from([(22_u16, 12222_u16), (80_u16, 18080_u16), (8080_u16, 18080_u16)]),
+            unsupported_port_action: "notify".to_string(),
+            high_risk_unsupported_port_action: "isolate".to_string(),
+            scan_burst_action: "throttle".to_string(),
+        });
+        cfg.redirect_policy_source = "file:config/redirect_policy.yaml".to_string();
+        cfg
+    }
+
+    #[test]
+    fn mapped_ssh_redirect_uses_prepared_port() {
+        let mut ev = sample_event();
+        ev.severity = 2;
+        ev.target_port = 22;
+        let decision = decide_defense(&ev);
+        assert_eq!(decision.action, "redirect");
+        let cfg = cfg_with_redirect_policy();
+        let outcome = maybe_enforce(&ev, &decision, &cfg);
+        assert_eq!(outcome.selected_action, "redirect");
+        assert!(outcome.command_plan.join("\n").contains("to 12222"));
+        assert_eq!(outcome.metadata.get("redirect_mapping_matched").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn mapped_http_redirect_uses_prepared_port() {
+        let mut ev = sample_event();
+        ev.severity = 2;
+        ev.target_port = 80;
+        let decision = decide_defense(&ev);
+        let cfg = cfg_with_redirect_policy();
+        let outcome = maybe_enforce(&ev, &decision, &cfg);
+        assert_eq!(outcome.selected_action, "redirect");
+        assert!(outcome.command_plan.join("\n").contains("to 18080"));
+    }
+
+    #[test]
+    fn unsupported_port_falls_back_to_notify() {
+        let mut ev = sample_event();
+        ev.severity = 2;
+        ev.target_port = 5432;
+        ev.risk_score = 40;
+        let decision = decide_defense(&ev);
+        let cfg = cfg_with_redirect_policy();
+        let outcome = maybe_enforce(&ev, &decision, &cfg);
+        assert_eq!(outcome.selected_action, "notify");
+        assert!(outcome.command_plan.is_empty());
+        assert_eq!(outcome.metadata.get("unsupported_port_fallback").and_then(|v| v.as_str()), Some("notify"));
+    }
+
+    #[test]
+    fn unsupported_high_risk_port_can_fallback_to_isolate() {
+        let mut ev = sample_event();
+        ev.severity = 2;
+        ev.target_port = 5432;
+        ev.risk_score = 95;
+        let decision = decide_defense(&ev);
+        let cfg = cfg_with_redirect_policy();
+        let outcome = maybe_enforce(&ev, &decision, &cfg);
+        assert_eq!(outcome.selected_action, "isolate");
+        assert!(outcome.command_plan.join("\n").contains("input"));
+        assert_eq!(outcome.metadata.get("unsupported_port_fallback").and_then(|v| v.as_str()), Some("isolate"));
+    }
+
+    #[test]
+    fn invalid_redirect_policy_is_rejected() {
+        let parsed = serde_yaml::from_str::<RedirectPolicyRoot>("redirect_policy: [invalid");
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn missing_redirect_policy_falls_back_to_honeypot_env() {
+        let mut ev = sample_event();
+        ev.severity = 2;
+        ev.target_port = 2222;
+        let decision = decide_defense(&ev);
+        let mut cfg = sample_cfg();
+        cfg.redirect_policy = None;
+        cfg.redirect_policy_source = "env_honeypot_fallback".to_string();
+        cfg.defense_honeypot_port = 2222;
+        let outcome = maybe_enforce(&ev, &decision, &cfg);
+        assert_eq!(outcome.selected_action, "redirect");
+        assert!(outcome.command_plan.join("\n").contains("to 2222"));
+    }
+
+    #[test]
+    fn enforcement_gate_still_blocks_high_impact_redirect() {
+        let mut ev = sample_event();
+        ev.severity = 2;
+        ev.target_port = 22;
+        let decision = decide_defense(&ev);
+        let mut cfg = cfg_with_redirect_policy();
+        cfg.defense_enforce = true;
+        cfg.defense_dry_run = false;
+        cfg.defense_enforce_level = "semi-auto".to_string();
+        cfg.defense_allow_high_impact_auto = false;
+        let outcome = maybe_enforce(&ev, &decision, &cfg);
+        assert_eq!(outcome.mode, "policy_gated");
+        assert_eq!(outcome.executed_count, 0);
     }
 }
