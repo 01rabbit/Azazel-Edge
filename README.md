@@ -442,8 +442,8 @@ Priority items are tracked in GitHub Issues and may change daily.
 
 ## Current Status
 
-- Latest release: `v0.1.0`.
-- Current hardening line: `v0.1.1` readiness tasks (redirect safety, demo reproducibility profile, deployment profile clarity, benchmark claim boundary).
+- Latest release: `v0.1.1`.
+- `v0.1.1` hardening line completed (redirect safety, demo reproducibility profile, deployment profile clarity, benchmark claim boundary).
 - Deterministic demo scenarios available: `mixed_correlation_demo`, `noc_degraded_demo`, `soc_redirect_demo`.
 - Optional integrations remain optional; deterministic core operation does not require Ollama/Mattermost/Wazuh/Vector/Aggregator.
 

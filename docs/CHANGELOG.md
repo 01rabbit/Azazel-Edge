@@ -4,11 +4,14 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-14
+
 ### Added
 - Protocol-aware redirect policy baseline for prepared decoy services:
   - redirect mapping by destination port
   - unsupported-port deterministic fallback action
-  - compatibility fallback to `AZAZEL_DEFENSE_HONEYPOT_PORT` when policy file is absent
+  - compatibility fallback to `AZAZEL_DEFENSE_HONEYPOT_PORT` only when policy file is absent
+  - fail-safe `notify` fallback when redirect policy is invalid or disabled
   - enforcement metadata for mapping/fallback traceability
 - Arsenal demo profile runbook (`docs/ARSENAL_DEMO_PROFILE.md`).
 - Deployment profile matrix (`docs/DEPLOYMENT_PROFILES.md`) for constrained hardware clarity.

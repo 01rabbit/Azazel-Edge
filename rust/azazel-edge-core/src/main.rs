@@ -170,8 +170,8 @@ fn load_config() -> Config {
         Ok(Some(policy)) => (Some(policy), format!("file:{}", redirect_policy_path)),
         Ok(None) => (None, "env_honeypot_fallback".to_string()),
         Err(e) => {
-            eprintln!("redirect policy load failed, using honeypot fallback: {}", e);
-            (None, format!("invalid_file_env_fallback:{}", redirect_policy_path))
+            eprintln!("redirect policy load failed, using fail-safe notify fallback: {}", e);
+            (None, format!("invalid_file_notify_fallback:{}", redirect_policy_path))
         }
     };
 
@@ -521,10 +521,13 @@ fn resolve_redirect_decision(ev: &NormalizedEvent, decision: &DefensiveDecision,
     match &cfg.redirect_policy {
         Some(policy) => {
             if !policy.enabled {
-                metadata["selected_decoy_port"] = json!(cfg.defense_honeypot_port);
-                metadata["redirect_mapping_matched"] = json!(true);
-                metadata["fallback_reason"] = json!("policy_disabled_env_honeypot_fallback");
-                return (decision.clone(), metadata);
+                metadata["unsupported_port_fallback"] = json!("notify");
+                metadata["fallback_reason"] = json!("policy_disabled");
+                let mut adjusted = decision.clone();
+                adjusted.action = "notify".to_string();
+                adjusted.policy_reason = format!("{}:policy_disabled", decision.policy_reason);
+                adjusted.reason = format!("{}; redirect policy disabled, fallback=notify", decision.reason);
+                return (adjusted, metadata);
             }
             if let Some(mapped) = policy.prepared_ports.get(&ev.target_port) {
                 metadata["selected_decoy_port"] = json!(mapped);
@@ -552,10 +555,19 @@ fn resolve_redirect_decision(ev: &NormalizedEvent, decision: &DefensiveDecision,
             return (adjusted, metadata);
         }
         None => {
-            metadata["selected_decoy_port"] = json!(cfg.defense_honeypot_port);
-            metadata["redirect_mapping_matched"] = json!(true);
-            metadata["fallback_reason"] = json!("no_redirect_policy_file_env_honeypot_fallback");
-            (decision.clone(), metadata)
+            if cfg.redirect_policy_source.starts_with("env_honeypot_fallback") {
+                metadata["selected_decoy_port"] = json!(cfg.defense_honeypot_port);
+                metadata["redirect_mapping_matched"] = json!(true);
+                metadata["fallback_reason"] = json!("no_redirect_policy_file_env_honeypot_fallback");
+                return (decision.clone(), metadata);
+            }
+            metadata["unsupported_port_fallback"] = json!("notify");
+            metadata["fallback_reason"] = json!("invalid_redirect_policy");
+            let mut adjusted = decision.clone();
+            adjusted.action = "notify".to_string();
+            adjusted.policy_reason = format!("{}:invalid_redirect_policy", decision.policy_reason);
+            adjusted.reason = format!("{}; redirect policy invalid, fallback=notify", decision.reason);
+            (adjusted, metadata)
         }
     }
 }
@@ -851,6 +863,21 @@ mod tests {
     }
 
     #[test]
+    fn invalid_redirect_policy_falls_back_to_notify() {
+        let mut ev = sample_event();
+        ev.severity = 2;
+        ev.target_port = 2222;
+        let decision = decide_defense(&ev);
+        let mut cfg = sample_cfg();
+        cfg.redirect_policy = None;
+        cfg.redirect_policy_source = "invalid_file_notify_fallback:config/redirect_policy.yaml".to_string();
+        let outcome = maybe_enforce(&ev, &decision, &cfg);
+        assert_eq!(outcome.selected_action, "notify");
+        assert!(outcome.command_plan.is_empty());
+        assert_eq!(outcome.metadata.get("fallback_reason").and_then(|v| v.as_str()), Some("invalid_redirect_policy"));
+    }
+
+    #[test]
     fn missing_redirect_policy_falls_back_to_honeypot_env() {
         let mut ev = sample_event();
         ev.severity = 2;
@@ -863,6 +890,22 @@ mod tests {
         let outcome = maybe_enforce(&ev, &decision, &cfg);
         assert_eq!(outcome.selected_action, "redirect");
         assert!(outcome.command_plan.join("\n").contains("to 2222"));
+    }
+
+    #[test]
+    fn disabled_redirect_policy_falls_back_to_notify() {
+        let mut ev = sample_event();
+        ev.severity = 2;
+        ev.target_port = 22;
+        let decision = decide_defense(&ev);
+        let mut cfg = cfg_with_redirect_policy();
+        if let Some(policy) = cfg.redirect_policy.as_mut() {
+            policy.enabled = false;
+        }
+        let outcome = maybe_enforce(&ev, &decision, &cfg);
+        assert_eq!(outcome.selected_action, "notify");
+        assert!(outcome.command_plan.is_empty());
+        assert_eq!(outcome.metadata.get("fallback_reason").and_then(|v| v.as_str()), Some("policy_disabled"));
     }
 
     #[test]
