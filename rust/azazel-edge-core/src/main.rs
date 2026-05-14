@@ -533,7 +533,7 @@ fn resolve_redirect_decision(ev: &NormalizedEvent, decision: &DefensiveDecision,
                 return (decision.clone(), metadata);
             }
 
-            let high_risk = ev.risk_score >= 80 || ev.severity <= 2;
+            let high_risk = ev.risk_score >= 80 || ev.severity >= 4;
             let fallback = if high_risk {
                 normalize_safe_action(&policy.high_risk_unsupported_port_action, "isolate")
             } else {
