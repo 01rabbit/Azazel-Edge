@@ -30,3 +30,11 @@ The 12% figure has been cited in presentations as a breach-rate estimate.
 The claim requires corpus, enforcement mode, and baseline clarification.
 Until reproducibly measured, treat it as preliminary field observation.
 The `azazel-bench accuracy` command provides reproducible software-path detection metrics.
+
+## Scope boundary
+
+Current repository benchmark outputs are software-only EVE replay benchmarks for deterministic pipeline regression.
+They are not full hardware-in-the-loop forwarding or enforcement performance claims.
+
+See:
+- `docs/BENCHMARK_SCOPE_AND_HIL_PLAN.md`

@@ -43,9 +43,11 @@ def generate(output_dir: Path) -> Dict[str, Any]:
 
     data: Dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "hardware": os.environ.get("AZAZEL_BENCH_HARDWARE", "TBD"),
+        "benchmark_mode": os.environ.get("AZAZEL_BENCH_MODE", "software-only-eve-replay"),
+        "hardware": os.environ.get("AZAZEL_BENCH_HARDWARE", "software-only"),
+        "claim_scope": os.environ.get("AZAZEL_BENCH_CLAIM_SCOPE", "deterministic pipeline regression"),
         "commit": _git_commit(),
-        "test_baseline": "328 passed, 62 subtests passed",
+        "test_baseline": os.environ.get("AZAZEL_BENCH_TEST_BASELINE", "see CI and release notes"),
         "os": platform.platform(),
         "python_version": platform.python_version(),
         "suricata_version": os.environ.get("AZAZEL_BENCH_SURICATA", "TBD"),
@@ -61,6 +63,8 @@ def generate(output_dir: Path) -> Dict[str, Any]:
 
 Generated: {data['generated_at']}  
 Hardware: {data['hardware']}  
+Benchmark mode: {data['benchmark_mode']}  
+Claim scope: {data['claim_scope']}  
 Commit: {data['commit']}  
 Test suite baseline: {data['test_baseline']}
 
@@ -84,8 +88,9 @@ Total pipeline p95: {data['pipeline'].get('total_pipeline_p95_ms', 'n/a')} ms
 
 ## Notes
 
-- Power and startup hardware benchmarks must be run on Raspberry Pi and updated manually.
-- The 12% breach-rate statement remains preliminary until reproduced with hardware validation.
+- This suite validates deterministic pipeline behavior under software-only EVE replay.
+- It does not claim inline forwarding throughput, live Suricata capture capacity, nftables/tc enforcement latency, OpenCanary redirect realism, or co-located Ollama/Mattermost performance.
+- Power and startup hardware benchmarks must be run on Raspberry Pi hardware-in-the-loop plans.
 """
     (output_dir / "BENCHMARK_RESULTS.md").write_text(md, encoding="utf-8")
     return data
