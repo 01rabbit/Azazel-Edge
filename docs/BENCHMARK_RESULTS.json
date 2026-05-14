@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-05-14T12:59:11.833583+00:00",
+  "generated_at": "2026-05-14T12:59:44.850554+00:00",
   "benchmark_mode": "software-only-eve-replay",
   "hardware": "software-only",
   "claim_scope": "deterministic pipeline regression",
-  "commit": "38f3a6d",
+  "commit": "b1114eb",
   "test_baseline": "see CI and release notes",
   "os": "macOS-26.5-arm64-arm-64bit",
   "python_version": "3.10.4",
@@ -19,38 +19,38 @@
         "p95_ms": 0.005,
         "p99_ms": 0.006,
         "min_ms": 0.005,
-        "max_ms": 0.008,
+        "max_ms": 0.01,
         "stdev_ms": 0.0
       },
       "T3_evidence_dispatch": {
         "mean_ms": 0.014,
         "median_ms": 0.014,
         "p95_ms": 0.015,
-        "p99_ms": 0.015,
+        "p99_ms": 0.019,
         "min_ms": 0.014,
-        "max_ms": 0.017,
-        "stdev_ms": 0.0
+        "max_ms": 0.026,
+        "stdev_ms": 0.001
       },
       "T4_evaluators": {
-        "mean_ms": 0.178,
-        "median_ms": 0.176,
+        "mean_ms": 0.18,
+        "median_ms": 0.178,
         "p95_ms": 0.194,
-        "p99_ms": 0.218,
-        "min_ms": 0.173,
-        "max_ms": 0.229,
+        "p99_ms": 0.222,
+        "min_ms": 0.171,
+        "max_ms": 0.234,
         "stdev_ms": 0.008
       },
       "T5_arbiter": {
         "mean_ms": 0.011,
         "median_ms": 0.011,
         "p95_ms": 0.012,
-        "p99_ms": 0.017,
+        "p99_ms": 0.022,
         "min_ms": 0.011,
-        "max_ms": 0.019,
+        "max_ms": 0.023,
         "stdev_ms": 0.001
       }
     },
-    "total_pipeline_mean_ms": 0.208,
+    "total_pipeline_mean_ms": 0.21,
     "total_pipeline_p95_ms": 0.226
   },
   "accuracy": {
