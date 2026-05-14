@@ -1,4 +1,4 @@
-# Azazel-Edge v0.1.1 Release Notes (Draft)
+# Azazel-Edge v0.1.1 Release Notes 
 
 ## Theme
 
