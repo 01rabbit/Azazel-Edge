@@ -1,10 +1,10 @@
 # Azazel-Edge Benchmark Results
 
-Generated: 2026-05-14T12:57:24.551930+00:00  
+Generated: 2026-05-14T12:59:11.833583+00:00  
 Hardware: software-only  
 Benchmark mode: software-only-eve-replay  
 Claim scope: deterministic pipeline regression  
-Commit: f59bd53  
+Commit: 38f3a6d  
 Test suite baseline: see CI and release notes
 
 ---
@@ -13,12 +13,12 @@ Test suite baseline: see CI and release notes
 
 | Stage | Mean (ms) | Median (ms) | p95 (ms) | p99 (ms) |
 |---|---|---|---|---|
-| T2_eve_parse | 0.006 | 0.005 | 0.007 | 0.032 |
-| T3_evidence_dispatch | 0.018 | 0.016 | 0.027 | 0.082 |
-| T4_evaluators | 0.2 | 0.191 | 0.256 | 0.369 |
-| T5_arbiter | 0.013 | 0.012 | 0.015 | 0.06 |
+| T2_eve_parse | 0.005 | 0.005 | 0.005 | 0.006 |
+| T3_evidence_dispatch | 0.014 | 0.014 | 0.015 | 0.015 |
+| T4_evaluators | 0.178 | 0.176 | 0.194 | 0.218 |
+| T5_arbiter | 0.011 | 0.011 | 0.012 | 0.017 |
 
-Total pipeline p95: 0.305 ms
+Total pipeline p95: 0.226 ms
 
 ## B-3: Detection Accuracy
 
