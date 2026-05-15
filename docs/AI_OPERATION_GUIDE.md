@@ -27,6 +27,18 @@ Operational rule:
 4. AI assist runs only when governance conditions allow.
 5. Audit logging records adopt/fallback outcomes.
 
+### 3.1 AI Assist Governance Scope Contract
+- Governance in-scope:
+  - Calls that exchange normalized assist payloads with keys in `advice / summary / candidate` and optional `runbook_candidates / attack_candidates`.
+  - Typical entrypoint: `py/azazel_edge/ai_governance.py`.
+- Governance out-of-scope:
+  - Runtime analyst inference in `py/azazel_edge_ai/agent.py` (`verdict/confidence/...` contract).
+  - Ops coach and manual query contracts in `py/azazel_edge_ai/agent.py`.
+- Required for out-of-scope paths:
+  - Keep deterministic path primary (no direct action execution by AI).
+  - Emit audit scope records with explicit `in_scope=false` and reason.
+  - Keep output contracts bounded and fail closed to fallback behavior.
+
 ## 4. Key Thresholds and Guards
 - Ambiguous band: `AZAZEL_LLM_AMBIG_MIN=60`, `AZAZEL_LLM_AMBIG_MAX=79`
 - Correlation controls: `AZAZEL_CORR_*`

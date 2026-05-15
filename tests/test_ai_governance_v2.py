@@ -69,6 +69,37 @@ class AIGovernanceV2Tests(unittest.TestCase):
         self.assertEqual(rows[-2]['decision'], 'rejected')
         self.assertEqual(rows[-1]['decision'], 'fallback')
 
+    def test_extra_output_keys_are_rejected_to_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / 'ai.jsonl'
+            gov = AIGovernance(P0AuditLogger(log_path))
+            result = gov.invoke(
+                context={'trace_id': 't24d', 'source': 'ops_comm', 'intent': 'summary'},
+                raw_payload={'trace_id': 't24d', 'source': 'ops_comm', 'summary': 'Need wording support'},
+                invoker=lambda payload: {
+                    'advice': 'x',
+                    'summary': 'y',
+                    'candidate': 'z',
+                    'unexpected': 'not-allowed',
+                },
+            )
+            rows = [json.loads(line) for line in log_path.read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(result['summary'], 'Need wording support')
+        self.assertEqual(rows[-1]['decision'], 'fallback')
+
+    def test_blocked_intent_is_audited(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / 'ai.jsonl'
+            gov = AIGovernance(P0AuditLogger(log_path))
+            result = gov.invoke(
+                context={'trace_id': 't24e', 'source': 'ops_comm', 'intent': 'execute'},
+                raw_payload={'trace_id': 't24e', 'source': 'ops_comm', 'summary': 'blocked path'},
+                invoker=lambda payload: {'advice': 'must not execute', 'summary': '', 'candidate': ''},
+            )
+            rows = [json.loads(line) for line in log_path.read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(result['advice'], '')
+        self.assertEqual(rows[-1]['decision'], 'blocked')
+
 
 if __name__ == '__main__':
     unittest.main()

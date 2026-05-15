@@ -43,6 +43,10 @@ try:
     from azazel_edge.runbook_review import review_runbook_id
 except Exception:  # pragma: no cover
     review_runbook_id = None
+try:
+    from azazel_edge.audit import P0AuditLogger
+except Exception:  # pragma: no cover
+    P0AuditLogger = None  # type: ignore
 
 SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
 RUNTIME_DIR_MODE = int(str(os.environ.get("AZAZEL_RUNTIME_DIR_MODE", "0770")), 8)
@@ -55,6 +59,7 @@ LLM_DEFERRED_LOG_PATH = Path(os.environ.get("AZAZEL_AI_DEFERRED_LOG", "/var/log/
 LLM_RESULT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-llm.jsonl"))
 METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_metrics.json"))
 POLICY_PATH = Path(os.environ.get("AZAZEL_AI_POLICY", "/run/azazel-edge/ai_runtime_policy.json"))
+AI_AUDIT_PATH = Path(os.environ.get("AZAZEL_AI_AUDIT_LOG", "/var/log/azazel-edge/ai-audit.jsonl"))
 METRICS_HEARTBEAT_SEC = max(5.0, float(os.environ.get("AZAZEL_AI_METRICS_HEARTBEAT_SEC", "15")))
 LLM_ENABLED = os.environ.get("AZAZEL_LLM_ENABLED", "1") == "1"
 LLM_ENDPOINT = os.environ.get("AZAZEL_OLLAMA_ENDPOINT", "http://127.0.0.1:11434")
@@ -174,6 +179,43 @@ RUNTIME_POLICY: Dict[str, Any] = {"mode": "normal", "updated_at": 0.0, "reason":
 _LAST_OPS_ESCALATE_TS = 0.0
 CORR_LOCK = threading.Lock()
 CORR_STATE: Dict[str, list[Dict[str, Any]]] = {}
+
+
+def _build_ai_audit_logger() -> Any | None:
+    if P0AuditLogger is None:
+        return None
+    try:
+        return P0AuditLogger(AI_AUDIT_PATH)
+    except Exception:
+        try:
+            fallback = Path("/tmp/azazel-edge-ai-audit.jsonl")
+            fallback.parent.mkdir(parents=True, exist_ok=True)
+            return P0AuditLogger(fallback)
+        except Exception:
+            return None
+
+
+AI_AUDIT = _build_ai_audit_logger()
+
+
+def _audit_ai_scope(trace_id: str, source: str, intent: str, in_scope: bool, reason: str) -> None:
+    if AI_AUDIT is None:
+        return
+    try:
+        AI_AUDIT.log(
+            "ai_assist",
+            trace_id=(trace_id or "n/a"),
+            source=(source or "ai_agent"),
+            stage="scope",
+            decision="in_scope" if in_scope else "out_of_scope",
+            payload={
+                "intent": str(intent or ""),
+                "in_scope": bool(in_scope),
+                "reason": str(reason or ""),
+            },
+        )
+    except Exception:
+        return
 
 
 def _ensure_parent(path: Path) -> None:
@@ -749,6 +791,13 @@ def _run_manual_query(
 
     routed = _manual_router_response(q, sender=sender, source=source, context=ctx)
     if routed is not None:
+        _audit_ai_scope(
+            trace_id=str(ctx.get("trace_id") or ""),
+            source=str(source or "manual_query"),
+            intent="manual_query",
+            in_scope=False,
+            reason="manual_router_static_path",
+        )
         _metrics_inc("manual_routed_count", 1)
         _metrics_inc("manual_completed", 1)
         _append_jsonl(
@@ -768,6 +817,13 @@ def _run_manual_query(
 
     allowed, why = _ops_coach_allowed()
     if not allowed:
+        _audit_ai_scope(
+            trace_id=str(ctx.get("trace_id") or ""),
+            source=str(source or "manual_query"),
+            intent="manual_query",
+            in_scope=False,
+            reason=why,
+        )
         return {"status": "skipped", "reason": why, "model": OPS_COACH_MODEL}
 
     latest = _latest_advisory_snapshot()
@@ -792,6 +848,13 @@ def _run_manual_query(
 
     errors: list[dict[str, str]] = []
     overall_started = time.time()
+    _audit_ai_scope(
+        trace_id=str(ctx.get("trace_id") or ""),
+        source=str(source or "manual_query"),
+        intent="manual_query",
+        in_scope=False,
+        reason="manual_query_schema_outside_ai_governance_contract",
+    )
     for idx, model in enumerate(MANUAL_MODEL_CHAIN):
         if (time.time() - overall_started) >= MANUAL_TOTAL_TIMEOUT_SEC:
             errors.append({"model": model, "reason": "manual_total_timeout_exceeded"})
@@ -853,6 +916,13 @@ def _run_ops_coach(advisory: Dict[str, Any], verdict: str, confidence: float, re
     global _LAST_OPS_ESCALATE_TS
     allowed, why = _ops_coach_allowed()
     if not allowed:
+        _audit_ai_scope(
+            trace_id=str(advisory.get("trace_id") or ""),
+            source="ops_coach",
+            intent="ops_coach",
+            in_scope=False,
+            reason=why,
+        )
         return {"status": "skipped", "reason": why, "model": OPS_COACH_MODEL, "trigger": trigger_reason}
 
     coach_payload = {
@@ -865,6 +935,13 @@ def _run_ops_coach(advisory: Dict[str, Any], verdict: str, confidence: float, re
         "recommendation": advisory.get("recommendation", ""),
     }
     errors: list[dict[str, str]] = []
+    _audit_ai_scope(
+        trace_id=str(advisory.get("trace_id") or ""),
+        source="ops_coach",
+        intent="ops_coach",
+        in_scope=False,
+        reason="ops_coach_schema_outside_ai_governance_contract",
+    )
     for idx, model in enumerate(OPS_MODEL_CHAIN):
         try:
             coach = _ollama_chat(
@@ -1245,6 +1322,13 @@ def _call_llm_with_retry(payload: Dict[str, Any], model: str) -> tuple[Dict[str,
 def _process_llm_task(task: Dict[str, Any]) -> Dict[str, Any]:
     event = task.get("event", {})
     advisory = task.get("advisory", {})
+    _audit_ai_scope(
+        trace_id=str(advisory.get("trace_id") or ""),
+        source="llm_analyst",
+        intent="analyst_inference",
+        in_scope=False,
+        reason="analyst_schema_outside_ai_governance_contract",
+    )
     if bool(task.get("ops_only")):
         ops = _run_ops_coach(
             advisory,

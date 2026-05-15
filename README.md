@@ -332,6 +332,12 @@ Notes:
 Run:
 ```bash
 PYTHONPATH=py:. .venv/bin/pytest -q
+cd rust/azazel-edge-core && cargo test
+```
+
+Or use the unified helper:
+```bash
+bin/azazel-edge-dev test-all
 ```
 
 Status guidance:

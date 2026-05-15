@@ -22,6 +22,7 @@ Examples: `feat/decision-trust-capsule`, `fix/epd-help-crash`, `docs/readme-reor
 - 1 PR = 1 purpose. Do not mix unrelated changes.
 - Every PR must include:
   - [ ] `PYTHONPATH=. pytest -q` passes
+  - [ ] `cd rust/azazel-edge-core && cargo test` passes (if Rust touched or validation scope includes Rust)
   - [ ] Related documentation updated in the same PR
   - [ ] Deterministic First principle not violated
   - [ ] Raspberry Pi constraints not broken
@@ -40,4 +41,8 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements/dev.txt
 PYTHONPATH=py:. .venv/bin/pytest -q
+cd rust/azazel-edge-core && cargo test
+
+# unified helper
+bin/azazel-edge-dev test-all
 ```

@@ -6,10 +6,22 @@ VENV_DIR="${ROOT_DIR}/.venv"
 PYTHON_BIN="${VENV_DIR}/bin/python"
 PIP_BIN="${VENV_DIR}/bin/pip"
 PYTEST_BIN="${VENV_DIR}/bin/pytest"
+RUST_CORE_DIR="${ROOT_DIR}/rust/azazel-edge-core"
 
 ensure_venv() {
   if [[ ! -x "${PYTHON_BIN}" ]]; then
     python3 -m venv "${VENV_DIR}"
+  fi
+}
+
+ensure_cargo() {
+  if ! command -v cargo >/dev/null 2>&1; then
+    cat <<'EOF' >&2
+error: cargo is required for Rust verification but was not found.
+Install Rust toolchain, then retry:
+  https://rustup.rs/
+EOF
+    exit 127
   fi
 }
 
@@ -27,6 +39,17 @@ case "${cmd}" in
     export PYTHONPATH="${ROOT_DIR}:${ROOT_DIR}/py:${PYTHONPATH:-}"
     "${PYTEST_BIN}" -q "$@"
     ;;
+  rust-test)
+    ensure_cargo
+    (cd "${RUST_CORE_DIR}" && cargo test "$@")
+    ;;
+  test-all)
+    ensure_venv
+    ensure_cargo
+    export PYTHONPATH="${ROOT_DIR}:${ROOT_DIR}/py:${PYTHONPATH:-}"
+    "${PYTEST_BIN}" -q
+    (cd "${RUST_CORE_DIR}" && cargo test)
+    ;;
   python)
     ensure_venv
     export PYTHONPATH="${ROOT_DIR}:${ROOT_DIR}/py:${PYTHONPATH:-}"
@@ -37,6 +60,8 @@ case "${cmd}" in
 Usage:
   bin/azazel-edge-dev bootstrap      # create .venv and install runtime deps
   bin/azazel-edge-dev test [args...] # run pytest in .venv
+  bin/azazel-edge-dev rust-test      # run cargo test (rust/azazel-edge-core)
+  bin/azazel-edge-dev test-all       # run pytest then cargo test
   bin/azazel-edge-dev python ...     # run python in .venv
 EOF
     ;;

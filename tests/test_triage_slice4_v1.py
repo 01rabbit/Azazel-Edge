@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import json
 
 ROOT = Path(__file__).resolve().parents[1]
 PY_ROOT = ROOT / 'py'
@@ -54,6 +55,7 @@ class TriageSlice4Tests(unittest.TestCase):
 
     def test_noc_selector_keeps_runbook_deterministic_when_ai_helper_is_used(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / 'ai.jsonl'
             payload = select_noc_runbook_support(
                 {
                     'incident_summary': {'probable_cause': 'service_assurance_failure'},
@@ -62,7 +64,7 @@ class TriageSlice4Tests(unittest.TestCase):
                 audience='professional',
                 lang='en',
                 context={'trace_id': 'trace-53b'},
-                ai_governance=AIGovernance(P0AuditLogger(Path(tmp) / 'ai.jsonl')),
+                ai_governance=AIGovernance(P0AuditLogger(log_path)),
                 ai_invoker=lambda payload: {
                     'summary': 'Operator wording helper suggests confirming resolver service first.',
                     'advice': 'Keep the read-only service checks ahead of any action change.',
@@ -71,9 +73,31 @@ class TriageSlice4Tests(unittest.TestCase):
                 },
                 source='dashboard',
             )
+            rows = [json.loads(line) for line in log_path.read_text(encoding='utf-8').splitlines()]
         self.assertEqual(payload['runbook_candidate_id'], 'rb.noc.service.status.check')
         self.assertTrue(payload['ai_used'])
         self.assertEqual(payload['operator_note'], 'Operator wording helper suggests confirming resolver service first.')
+        self.assertEqual(rows[-1]['decision'], 'adopted')
+
+    def test_noc_selector_falls_back_when_ai_output_contract_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / 'ai.jsonl'
+            payload = select_noc_runbook_support(
+                {
+                    'incident_summary': {'probable_cause': 'resolution_failure'},
+                    'resolution_health': {'label': 'failed', 'failed_targets': ['example.com'], 'evidence_ids': ['ev-dns-2']},
+                },
+                audience='professional',
+                lang='en',
+                context={'trace_id': 'trace-53c'},
+                ai_governance=AIGovernance(P0AuditLogger(log_path)),
+                ai_invoker=lambda payload: {'bad': 'schema'},
+                source='dashboard',
+            )
+            rows = [json.loads(line) for line in log_path.read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(payload['runbook_candidate_id'], 'rb.noc.dns.failure.check')
+        self.assertTrue(payload['ai_used'])
+        self.assertEqual(rows[-1]['decision'], 'fallback')
 
 
 if __name__ == '__main__':

@@ -75,6 +75,16 @@ Guardrails:
 - Limit output class to `advice / summary / candidate`.
 - Audit `adopt / fallback` decisions.
 
+Governance scope:
+- In scope:
+  - Operator-facing runbook support and wording assist that consume or produce `advice / summary / candidate`
+  - NOC/SOC support calls from deterministic outputs (post-evaluator/arbiter)
+- Out of scope:
+  - Analyst model scoring payloads in `py/azazel_edge_ai/agent.py` (`verdict/confidence/reason/suggested_action/escalation` schema)
+  - Ops coach structured responses (`runbook_id/summary/operator_note`) in `py/azazel_edge_ai/agent.py`
+  - Manual ask structured responses (`answer/confidence/runbook_id/operator_note/user_message`) in `py/azazel_edge_ai/agent.py`
+- Out-of-scope calls must still emit audit scope records (`in_scope=false`) and must not bypass deterministic evaluator/arbiter decisions.
+
 ### 3.8 Notification
 - [`delivery.py`](/home/azazel/Azazel-Edge/py/azazel_edge/notify/delivery.py)
 
