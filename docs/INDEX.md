@@ -27,6 +27,8 @@ Entry point for all documents in this directory.
 | File | Audience | Description | Last Updated |
 |------|----------|-------------|--------------|
 | [AI_OPERATION_GUIDE.md](AI_OPERATION_GUIDE.md) | Operator / Developer | LLM thresholds, daily checks, and incident response (EN) | 2026-05-13 |
+| [API_REFERENCE.md](API_REFERENCE.md) | Developer / Operator | API surface map and authoritative links | 2026-05-16 |
+| [CONFIGURATION.md](CONFIGURATION.md) | Developer / Operator | Configuration surface map and authoritative links | 2026-05-16 |
 | [AI_OPERATION_GUIDE_JA.md](AI_OPERATION_GUIDE_JA.md) | Operator / Developer | AI運用要領（日本語版） | 2026-03-10 |
 | [AI_AGENT_BUILD_AND_OPERATION_DETAIL.md](AI_AGENT_BUILD_AND_OPERATION_DETAIL.md) | Developer | AI agent internals and build steps (EN) | 2026-05-13 |
 | [AI_AGENT_BUILD_AND_OPERATION_DETAIL_JA.md](AI_AGENT_BUILD_AND_OPERATION_DETAIL_JA.md) | Developer | エージェントAI構築手順書（日本語版） | 2026-03-08 |

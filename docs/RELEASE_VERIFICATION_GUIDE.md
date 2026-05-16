@@ -28,6 +28,13 @@ Review both artifacts before promoting a release to field deployment.
 - Use signed tags for release points.
 - Keep release notes linked to merged PRs and issue IDs.
 - Keep `docs/CHANGELOG.md` updated per release.
+- Keep `docs/API_REFERENCE.md` and `docs/CONFIGURATION.md` aligned with the released API/configuration surface.
+
+## Documentation sync checks (release gate)
+
+Before release cut, confirm:
+- If API routes/contract changed since previous release, `docs/API_REFERENCE.md` was reviewed and updated.
+- If environment variables, policy paths, or runtime toggles changed since previous release, `docs/CONFIGURATION.md` was reviewed and updated.
 
 ## Scope note
 
