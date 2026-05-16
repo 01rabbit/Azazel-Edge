@@ -1,0 +1,11 @@
+concept_id: deterministic-edge-decision-support
+label: Deterministic Edge Decision Support
+status: demonstrated
+stage_order:
+  - mixed_correlation_demo
+  - soc_redirect_demo
+scenarios:
+  - id: mixed_correlation_demo
+    role: deterministic correlation and explanation path
+  - id: soc_redirect_demo
+    role: bounded action selection under strong SOC signal

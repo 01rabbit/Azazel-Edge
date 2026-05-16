@@ -246,6 +246,7 @@ Install result (default scripts):
 - SOC policy:
   - `AZAZEL_SOC_POLICY_PATH` (default `config/soc_policy.yaml`)
   - profiles: `config/soc_policy_profiles/{conservative,balanced,demo}.yaml`
+  - concept mapping layer: `configs/profiles/*.yaml`
   - dry-run helper: `bin/azazel-soc-policy-dry-run`
 - Aggregator freshness tuning (MVP scaffold):
   - `AZAZEL_AGGREGATOR_POLL_INTERVAL_SEC` (default `30`)
@@ -357,6 +358,8 @@ Status guidance:
 | `systemd/` | Services and timers |
 | `security/` | Compose stacks and security-side assets |
 | `installer/` | Unified installer and staged install scripts |
+| `configs/profiles/` | Concept-profile configuration mapping layer |
+| `demos/concepts/` | Concept-oriented deterministic demo pack mapping |
 | `docs/` | Public architecture, AI operation, persona, and demo documentation |
 | `tests/` | Unit and regression coverage |
 

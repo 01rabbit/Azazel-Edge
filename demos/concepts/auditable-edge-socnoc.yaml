@@ -1,0 +1,11 @@
+concept_id: auditable-edge-socnoc
+label: Auditable Edge SOC/NOC
+status: concept_profile
+stage_order:
+  - mixed_correlation_demo
+  - disaster_phishing_demo
+scenarios:
+  - id: mixed_correlation_demo
+    role: explanation trace and rejected-alternatives review
+  - id: disaster_phishing_demo
+    role: social-engineering triage with auditable operator handoff

@@ -1,0 +1,17 @@
+id: deterministic-edge-decision-support
+title: Deterministic Edge Decision Support
+status: demonstrated
+intent:
+  reproducibility_priority: true
+  deterministic_primary: true
+  bounded_actions_only: true
+policy:
+  baseline_path: config/soc_policy_profiles/balanced.yaml
+  rationale: balanced thresholds for repeatable NOC/SOC decision behavior
+runtime:
+  recommended_control_mode: active
+  notes:
+    - Preserve evaluator split and explicit arbiter trace.
+    - Prefer reversible controls before stronger containment.
+demo:
+  concept_pack: demos/concepts/deterministic-edge-decision-support.yaml

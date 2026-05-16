@@ -11,6 +11,8 @@ Entry point for all documents in this directory.
 | [concepts/evolution-map.md](concepts/evolution-map.md) | Operator / Developer | Concept profile map for a single Azazel-Edge core platform | 2026-05-16 |
 | [arsenal/README.md](arsenal/README.md) | Operator / Presenter | Public Black Hat Arsenal history and policy | 2026-05-16 |
 | [architecture/decision-loop.md](architecture/decision-loop.md) | Developer / Operator | Stable deterministic decision loop overview | 2026-05-16 |
+| [../configs/profiles/README.md](../configs/profiles/README.md) | Developer / Operator | Concept-to-configuration mapping layer | 2026-05-16 |
+| [../demos/concepts/README.md](../demos/concepts/README.md) | Operator / Presenter | Concept-oriented demo scenario grouping | 2026-05-16 |
 | [P0_RUNTIME_ARCHITECTURE.md](P0_RUNTIME_ARCHITECTURE.md) | Developer | Decision pipeline, implementation modules, and P0 constraints | 2026-03-10 |
 | [AZAZEL_AGGREGATOR_ARCHITECTURE.md](AZAZEL_AGGREGATOR_ARCHITECTURE.md) | Developer / Operator | Multi-node Azazel Aggregator design baseline and phased roadmap | 2026-05-12 |
 | [SOC_POLICY_GUIDE.md](SOC_POLICY_GUIDE.md) | Developer / Operator | Deterministic SOC policy tuning and safety constraints | 2026-05-12 |

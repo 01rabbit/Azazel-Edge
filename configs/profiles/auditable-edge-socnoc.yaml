@@ -1,0 +1,17 @@
+id: auditable-edge-socnoc
+title: Auditable Edge SOC/NOC
+status: concept_profile
+intent:
+  auditability_priority: true
+  deterministic_primary: true
+  explainability_required: true
+policy:
+  baseline_path: config/soc_policy_profiles/conservative.yaml
+  rationale: conservative thresholds to reduce unnecessary high-impact actions
+runtime:
+  recommended_control_mode: active
+  notes:
+    - Emphasize decision explanation and trace continuity.
+    - Maintain fail-closed defaults for protected interfaces.
+demo:
+  concept_pack: demos/concepts/auditable-edge-socnoc.yaml

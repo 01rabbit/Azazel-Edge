@@ -1,0 +1,11 @@
+concept_id: offline-edge-ai-socnoc
+label: Offline Edge-AI SOC/NOC
+status: demonstrated
+stage_order:
+  - mixed_correlation_demo
+  - noc_degraded_demo
+scenarios:
+  - id: mixed_correlation_demo
+    role: local deterministic triage with optional AI narrative support
+  - id: noc_degraded_demo
+    role: offline-friendly NOC degradation response walkthrough
