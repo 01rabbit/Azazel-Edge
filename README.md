@@ -72,6 +72,7 @@ flowchart LR
 ```
 
 Full architecture:
+- [Interactive Architecture Flow (HTML)](docs/architecture/azazel_edge_arch.html)
 - [Decision Loop](docs/architecture/decision-loop.md)
 - [Deception Routing](docs/architecture/deception-routing.md)
 - [Local AI Triage](docs/architecture/local-ai-triage.md)

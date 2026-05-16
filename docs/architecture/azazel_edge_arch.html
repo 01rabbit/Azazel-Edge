@@ -1,0 +1,2196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Azazel-Edge — Architecture & Flows</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e2e8f0;height:100vh;overflow:hidden;display:flex;flex-direction:column;font-size:13px}
+/* HEADER */
+.hd{padding:12px 18px 8px;border-bottom:1px solid #1e2535;flex-shrink:0}
+.hd h1{font-size:16px;font-weight:700;color:#f1f5f9;margin-bottom:3px}
+.hd p{font-size:11px;color:#64748b;max-width:700px;line-height:1.5}
+/* LEGEND */
+.legend{display:flex;gap:14px;padding:7px 18px;border-bottom:1px solid #1e2535;flex-shrink:0;flex-wrap:wrap;align-items:center}
+.leg-item{display:flex;align-items:center;gap:5px;font-size:11px;color:#94a3b8}
+.leg-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+/* BODY */
+.body{display:flex;flex:1;min-height:0}
+/* DIAGRAM */
+.diag-wrap{flex:1;overflow:auto;padding:14px 18px;min-width:0}
+.diag{display:flex;gap:0;align-items:flex-start;position:relative;width:max-content}
+/* COLUMN */
+.col{display:flex;flex-direction:column;gap:7px;width:158px;flex-shrink:0}
+.col-head{font-size:9px;color:#475569;letter-spacing:.12em;text-transform:uppercase;padding:0 2px 5px;border-bottom:1px solid #1e2535;margin-bottom:1px;white-space:nowrap}
+/* NODE */
+.node{border:1px solid #1e2535;border-radius:5px;padding:7px 9px;cursor:default;transition:border-color .12s,opacity .12s,box-shadow .12s;position:relative;background:#131720}
+.node .n-dot{width:5px;height:5px;border-radius:50%;position:absolute;top:8px;right:8px}
+.node .n-label{font-size:11.5px;font-weight:500;color:#e2e8f0;margin-bottom:1px;padding-right:10px}
+.node .n-sub{font-size:10px;color:#475569;line-height:1.35}
+.node.lit{border-color:var(--nc) !important;box-shadow:0 0 0 1px var(--nc),0 0 10px rgba(0,0,0,.4);background:#1a2030;z-index:1}
+.node.dim{opacity:.2}
+/* GAP between columns */
+.col-gap{width:36px;flex-shrink:0}
+/* SVG overlay */
+.conn-svg{position:absolute;top:0;left:0;pointer-events:none}
+/* RIGHT PANEL */
+.panel{width:280px;flex-shrink:0;border-left:1px solid #1e2535;display:flex;flex-direction:column;overflow:hidden}
+.p-flows{flex:1;overflow-y:auto;padding:10px 10px 6px}
+.p-flows::-webkit-scrollbar{width:3px}
+.p-flows::-webkit-scrollbar-thumb{background:#1e2535}
+/* GROUP */
+.grp-head{font-size:9px;color:#475569;text-transform:uppercase;letter-spacing:.12em;padding:10px 4px 5px;border-bottom:1px solid #1e2535;margin-bottom:4px}
+.grp-head:first-child{padding-top:2px}
+/* FLOW BUTTON */
+.fb{width:100%;text-align:left;padding:7px 9px;border-radius:4px;background:transparent;border:1px solid transparent;color:#94a3b8;cursor:pointer;margin-bottom:3px;transition:all .1s;display:block}
+.fb:hover{background:#161d28;border-color:#1e2535;color:#e2e8f0}
+.fb.active{background:#1a2333;border-color:#2d4068;color:#f1f5f9}
+.fb .ft{font-size:11.5px;font-weight:500;display:block;margin-bottom:1px}
+.fb .fd{font-size:10px;color:#475569;line-height:1.4;display:block}
+.fb.active .fd{color:#64748b}
+/* CLEAR */
+.clear-btn{width:calc(100% - 20px);margin:6px 10px;text-align:center;padding:5px;font-size:10px;color:#475569;background:transparent;border:1px solid #1e2535;border-radius:4px;cursor:pointer;display:block}
+.clear-btn:hover{color:#94a3b8;border-color:#334155}
+/* STEPS PANEL */
+.p-steps{border-top:1px solid #1e2535;flex-shrink:0;overflow-y:auto;max-height:38vh;padding:10px}
+.p-steps::-webkit-scrollbar{width:3px}
+.p-steps::-webkit-scrollbar-thumb{background:#1e2535}
+.steps-head{font-size:9px;color:#475569;text-transform:uppercase;letter-spacing:.12em;margin-bottom:8px}
+.step{display:flex;gap:8px;margin-bottom:9px}
+.step-n{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;background:#1e293b;color:#64748b;border:1px solid #2d3f55}
+.step-b .sf{font-size:11px;font-weight:500;color:#e2e8f0}
+.step-b .sl{font-size:10px;color:#64748b;margin-top:1px}
+.no-sel{font-size:11px;color:#475569;text-align:center;padding:16px 0}
+</style>
+</head>
+<body>
+<div class="hd"><h1 id="ttl"></h1><p id="sub"></p></div>
+<div class="legend" id="leg"></div>
+<div class="body">
+  <div class="diag-wrap"><div class="diag" id="diag"></div></div>
+  <div class="panel">
+    <div class="p-flows" id="pf"></div>
+    <button class="clear-btn" id="clr">Clear selection</button>
+    <div class="p-steps">
+      <div class="steps-head">STEPS</div>
+      <div id="sl"><div class="no-sel">Select a flow →</div></div>
+    </div>
+  </div>
+</div>
+<script>
+const D={
+  "title": "Azazel-Edge — Architecture & Flows",
+  "subtitle": "Every component and data path. Pick a flow to highlight the path and see what gets passed at each step.",
+  "legend": [
+    {
+      "label": "Detection",
+      "color": "#f97316"
+    },
+    {
+      "label": "Decision",
+      "color": "#ef4444"
+    },
+    {
+      "label": "AI assist",
+      "color": "#a855f7"
+    },
+    {
+      "label": "Enforcement",
+      "color": "#3b82f6"
+    },
+    {
+      "label": "Notification",
+      "color": "#22c55e"
+    },
+    {
+      "label": "Storage",
+      "color": "#64748b"
+    },
+    {
+      "label": "External",
+      "color": "#0ea5e9"
+    }
+  ],
+  "columns": [
+    {
+      "id": "input",
+      "label": "INPUT SOURCES"
+    },
+    {
+      "id": "plane",
+      "label": "EVIDENCE PLANE"
+    },
+    {
+      "id": "eval",
+      "label": "EVALUATORS"
+    },
+    {
+      "id": "decision",
+      "label": "DECISION"
+    },
+    {
+      "id": "enforce",
+      "label": "ENFORCEMENT"
+    },
+    {
+      "id": "output",
+      "label": "OUTPUT / STORAGE"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "suricata",
+      "col": "input",
+      "label": "Suricata IDS",
+      "sub": "EVE JSON · 13 rules",
+      "color": "#f97316",
+      "row": 0
+    },
+    {
+      "id": "opencanary",
+      "col": "input",
+      "label": "OpenCanary",
+      "sub": "Honeypot / decoy",
+      "color": "#f97316",
+      "row": 1
+    },
+    {
+      "id": "snmp",
+      "col": "input",
+      "label": "SNMP Poller",
+      "sub": "Device health",
+      "color": "#64748b",
+      "row": 2
+    },
+    {
+      "id": "netflow",
+      "col": "input",
+      "label": "NetFlow v5",
+      "sub": "Flow data",
+      "color": "#64748b",
+      "row": 3
+    },
+    {
+      "id": "wifi",
+      "col": "input",
+      "label": "Wi-Fi Scanner",
+      "sub": "Channel / rogue AP",
+      "color": "#64748b",
+      "row": 4
+    },
+    {
+      "id": "syslog",
+      "col": "input",
+      "label": "Syslog / Wazuh",
+      "sub": "Host events / FIM",
+      "color": "#0ea5e9",
+      "row": 5
+    },
+    {
+      "id": "captive",
+      "col": "input",
+      "label": "Captive Portal",
+      "sub": "User consent / MAC reg",
+      "color": "#22c55e",
+      "row": 6
+    },
+    {
+      "id": "mattermost",
+      "col": "input",
+      "label": "Mattermost /mio",
+      "sub": "Operator commands",
+      "color": "#a855f7",
+      "row": 7
+    },
+    {
+      "id": "evplane",
+      "col": "plane",
+      "label": "Evidence Plane",
+      "sub": "Unified event bus",
+      "color": "#f97316",
+      "row": 1
+    },
+    {
+      "id": "sot",
+      "col": "plane",
+      "label": "SoT",
+      "sub": "Device/network registry",
+      "color": "#64748b",
+      "row": 3
+    },
+    {
+      "id": "configdrift",
+      "col": "plane",
+      "label": "Config Drift",
+      "sub": "Change detection",
+      "color": "#64748b",
+      "row": 4
+    },
+    {
+      "id": "ti_feed",
+      "col": "plane",
+      "label": "TI Feed",
+      "sub": "disaster_ioc.yaml",
+      "color": "#f97316",
+      "row": 5
+    },
+    {
+      "id": "sigma",
+      "col": "plane",
+      "label": "Sigma Rules",
+      "sub": "Host-layer detection",
+      "color": "#f97316",
+      "row": 6
+    },
+    {
+      "id": "noc",
+      "col": "eval",
+      "label": "NOC Evaluator",
+      "sub": "Health · ICMP CPU ARP",
+      "color": "#0ea5e9",
+      "row": 1
+    },
+    {
+      "id": "soc",
+      "col": "eval",
+      "label": "SOC Evaluator",
+      "sub": "Threat · ATT&CK TI Sigma",
+      "color": "#f97316",
+      "row": 3
+    },
+    {
+      "id": "soc_policy",
+      "col": "eval",
+      "label": "SOC Policy",
+      "sub": "conservative/balanced/demo",
+      "color": "#64748b",
+      "row": 5
+    },
+    {
+      "id": "arbiter",
+      "col": "decision",
+      "label": "Action Arbiter",
+      "sub": "Deterministic 5-action",
+      "color": "#ef4444",
+      "row": 1
+    },
+    {
+      "id": "explain",
+      "col": "decision",
+      "label": "Decision Explanation",
+      "sub": "why_chosen · evidence_ids",
+      "color": "#ef4444",
+      "row": 3
+    },
+    {
+      "id": "mio",
+      "col": "decision",
+      "label": "M.I.O. (Ollama)",
+      "sub": "qwen3:4b — advisory only",
+      "color": "#a855f7",
+      "row": 5
+    },
+    {
+      "id": "runbook",
+      "col": "decision",
+      "label": "Runbook Broker",
+      "sub": "15 runbooks · approval gate",
+      "color": "#a855f7",
+      "row": 7
+    },
+    {
+      "id": "rustcore",
+      "col": "enforce",
+      "label": "Rust Core",
+      "sub": "advisory/semi/full-auto",
+      "color": "#3b82f6",
+      "row": 0
+    },
+    {
+      "id": "iptables",
+      "col": "enforce",
+      "label": "iptables isolate",
+      "sub": "FORWARD/INPUT DROP",
+      "color": "#3b82f6",
+      "row": 1
+    },
+    {
+      "id": "tc",
+      "col": "enforce",
+      "label": "tc throttle",
+      "sub": "Rate-limit netem/tbf",
+      "color": "#3b82f6",
+      "row": 2
+    },
+    {
+      "id": "redirect_hp",
+      "col": "enforce",
+      "label": "Redirect → Honeypot",
+      "sub": "Scapegoat DNAT",
+      "color": "#3b82f6",
+      "row": 3
+    },
+    {
+      "id": "luks",
+      "col": "enforce",
+      "label": "LUKS Storage",
+      "sub": "Encrypted secrets",
+      "color": "#3b82f6",
+      "row": 4
+    },
+    {
+      "id": "audit",
+      "col": "output",
+      "label": "Audit Logger",
+      "sub": "Tamper-evident chain",
+      "color": "#64748b",
+      "row": 0
+    },
+    {
+      "id": "notify",
+      "col": "output",
+      "label": "Notifications",
+      "sub": "Ntfy Mattermost SMTP CEF",
+      "color": "#22c55e",
+      "row": 1
+    },
+    {
+      "id": "dashboard",
+      "col": "output",
+      "label": "Dashboard / API",
+      "sub": "Flask RBAC mTLS",
+      "color": "#22c55e",
+      "row": 2
+    },
+    {
+      "id": "aggregator",
+      "col": "output",
+      "label": "Aggregator",
+      "sub": "Multi-node fleet",
+      "color": "#0ea5e9",
+      "row": 3
+    },
+    {
+      "id": "stix",
+      "col": "output",
+      "label": "STIX / TAXII",
+      "sub": "Threat intel export",
+      "color": "#0ea5e9",
+      "row": 4
+    },
+    {
+      "id": "epaper",
+      "col": "output",
+      "label": "e-Paper Display",
+      "sub": "OOB status indicator",
+      "color": "#22c55e",
+      "row": 5
+    },
+    {
+      "id": "vector",
+      "col": "output",
+      "label": "Vector → SIEM",
+      "sub": "CEF/Syslog forwarding",
+      "color": "#64748b",
+      "row": 6
+    },
+    {
+      "id": "wazuh_mgr",
+      "col": "output",
+      "label": "Wazuh Manager",
+      "sub": "FIM SCA active response",
+      "color": "#0ea5e9",
+      "row": 7
+    }
+  ],
+  "flow_groups": [
+    {
+      "group": "Detection & Response",
+      "flows": [
+        {
+          "id": "phishing_detect",
+          "title": "Phishing attack detected",
+          "desc": "Fake gov domain → Suricata SID 9901201 → SOC scores T1566 → redirect to honeypot",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "ti_feed",
+            "soc",
+            "arbiter",
+            "explain",
+            "redirect_hp",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "EVE alert SID 9901201"
+            },
+            {
+              "from": "ti_feed",
+              "to": "soc",
+              "label": "Domain in disaster_ioc.yaml"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "EvidenceEvent dispatched"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "T1566 score 82"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action=redirect chosen"
+            },
+            {
+              "from": "explain",
+              "to": "redirect_hp",
+              "label": "iptables DNAT to OpenCanary"
+            },
+            {
+              "from": "explain",
+              "to": "notify",
+              "label": "Mattermost alert"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "Tamper-evident chain entry"
+            }
+          ]
+        },
+        {
+          "id": "arp_spoof",
+          "title": "ARP spoofing / MITM",
+          "desc": "Gateway impersonation SID 9901211 → NOC LINK_DRIFT + SOC T1557 → isolate in full-auto",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "noc",
+            "sot",
+            "soc",
+            "arbiter",
+            "explain",
+            "rustcore",
+            "iptables",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "EVE alert SID 9901211"
+            },
+            {
+              "from": "sot",
+              "to": "noc",
+              "label": "Expected topology reference"
+            },
+            {
+              "from": "evplane",
+              "to": "noc",
+              "label": "LINK_DRIFT detected"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "T1557 MITM score 88"
+            },
+            {
+              "from": "noc",
+              "to": "arbiter",
+              "label": "fragile=True"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "High confidence"
+            },
+            {
+              "from": "arbiter",
+              "to": "rustcore",
+              "label": "action=isolate → full-auto"
+            },
+            {
+              "from": "rustcore",
+              "to": "iptables",
+              "label": "iptables DROP applied"
+            },
+            {
+              "from": "explain",
+              "to": "notify",
+              "label": "Operator alerted"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "Chain entry written"
+            }
+          ]
+        },
+        {
+          "id": "port_scan",
+          "title": "Internal port scan",
+          "desc": "Rapid scan from shelter client SID 9901221 → throttle applied",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "soc",
+            "arbiter",
+            "explain",
+            "tc",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "EVE alert SID 9901221 (30 SYN/10s)"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "T1046 score 70"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "Scan pattern confirmed"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action=throttle"
+            },
+            {
+              "from": "explain",
+              "to": "tc",
+              "label": "tc tbf rate-limit applied"
+            },
+            {
+              "from": "explain",
+              "to": "notify",
+              "label": "Alert dispatched"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "Chain entry written"
+            }
+          ]
+        },
+        {
+          "id": "dns_exfil",
+          "title": "DNS exfiltration attempt",
+          "desc": "High-frequency DNS queries SID 9901232 → notify + throttle",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "soc",
+            "arbiter",
+            "explain",
+            "tc",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "EVE alert SID 9901232 (50 queries/10s)"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "T1048 exfil score 65"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "DNS tunnel confidence 65%"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action=throttle"
+            },
+            {
+              "from": "explain",
+              "to": "tc",
+              "label": "DNS rate-limit applied"
+            },
+            {
+              "from": "explain",
+              "to": "notify",
+              "label": "Operator alerted"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "Chain entry written"
+            }
+          ]
+        },
+        {
+          "id": "c2_beacon",
+          "title": "C2 beacon detected",
+          "desc": "Periodic small HTTP POST SID 9901251 → isolate",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "soc",
+            "ti_feed",
+            "arbiter",
+            "explain",
+            "iptables",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "EVE alert SID 9901251"
+            },
+            {
+              "from": "ti_feed",
+              "to": "soc",
+              "label": "IP in TI feed (T1071)"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "T1071 C2 score 90"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "High severity"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action=isolate"
+            },
+            {
+              "from": "explain",
+              "to": "iptables",
+              "label": "Source IP blocked"
+            },
+            {
+              "from": "explain",
+              "to": "notify",
+              "label": "Critical alert"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "Chain entry written"
+            }
+          ]
+        },
+        {
+          "id": "ai_assist",
+          "title": "AI assist — ambiguous zone",
+          "desc": "Score 40–79: M.I.O. provides advisory advice. Arbiter still decides deterministically.",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "soc",
+            "arbiter",
+            "mio",
+            "explain",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "Low-confidence alert"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "Score 58 (ambiguous band)"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "Ambiguous zone triggered"
+            },
+            {
+              "from": "arbiter",
+              "to": "mio",
+              "label": "Governance-sanitized payload sent"
+            },
+            {
+              "from": "mio",
+              "to": "explain",
+              "label": "advice=notify (advisory only)"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "Deterministic decision made"
+            },
+            {
+              "from": "explain",
+              "to": "notify",
+              "label": "Alert + M.I.O. note"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "Chain entry written"
+            }
+          ]
+        },
+        {
+          "id": "multi_node",
+          "title": "Multi-node aggregation",
+          "desc": "Aggregator collects fleet status, exports STIX bundle to central TAXII server.",
+          "nodes": [
+            "evplane",
+            "explain",
+            "audit",
+            "aggregator",
+            "stix",
+            "dashboard"
+          ],
+          "steps": [
+            {
+              "from": "evplane",
+              "to": "explain",
+              "label": "Per-node triage complete"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "Local chain written"
+            },
+            {
+              "from": "explain",
+              "to": "aggregator",
+              "label": "Summary pushed to hub"
+            },
+            {
+              "from": "aggregator",
+              "to": "stix",
+              "label": "STIX 2.1 bundle built"
+            },
+            {
+              "from": "stix",
+              "to": "dashboard",
+              "label": "Fleet posture view updated"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Runbooks — NOC",
+      "flows": [
+        {
+          "id": "rb_noc_status",
+          "title": "Service Status Check",
+          "desc": "Confirm affected function → inspect journal before any restart.",
+          "nodes": [
+            "dashboard",
+            "runbook",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "dashboard",
+              "to": "runbook",
+              "label": "rb.noc.service.status.check triggered"
+            },
+            {
+              "from": "runbook",
+              "to": "dashboard",
+              "label": "Confirm affected service function"
+            },
+            {
+              "from": "runbook",
+              "to": "dashboard",
+              "label": "If inactive: inspect journal first"
+            },
+            {
+              "from": "runbook",
+              "to": "audit",
+              "label": "Check result logged"
+            }
+          ]
+        },
+        {
+          "id": "rb_noc_restart",
+          "title": "Controlled Service Restart",
+          "desc": "Requires operator approval before execution. Preview impact first.",
+          "nodes": [
+            "dashboard",
+            "runbook",
+            "arbiter",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "dashboard",
+              "to": "runbook",
+              "label": "rb.noc.service.restart.controlled triggered"
+            },
+            {
+              "from": "runbook",
+              "to": "dashboard",
+              "label": "Confirm fault is real (not UI desync)"
+            },
+            {
+              "from": "runbook",
+              "to": "arbiter",
+              "label": "requires_approval=true gate"
+            },
+            {
+              "from": "arbiter",
+              "to": "notify",
+              "label": "Approval request sent to operator"
+            },
+            {
+              "from": "runbook",
+              "to": "dashboard",
+              "label": "Re-check status after execution"
+            },
+            {
+              "from": "runbook",
+              "to": "audit",
+              "label": "Restart event logged"
+            }
+          ]
+        },
+        {
+          "id": "rb_noc_dhcp",
+          "title": "DHCP Failure Intake",
+          "desc": "Single device vs. multiple → check interface → escalate if mass failure.",
+          "nodes": [
+            "dashboard",
+            "runbook",
+            "noc",
+            "sot",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "dashboard",
+              "to": "runbook",
+              "label": "rb.noc.dhcp.failure.check triggered"
+            },
+            {
+              "from": "runbook",
+              "to": "noc",
+              "label": "Confirm single vs. multi-device failure"
+            },
+            {
+              "from": "runbook",
+              "to": "sot",
+              "label": "Check affected interface / SSID"
+            },
+            {
+              "from": "noc",
+              "to": "runbook",
+              "label": "UI snapshot + lease state"
+            },
+            {
+              "from": "runbook",
+              "to": "notify",
+              "label": "Escalate if mass failure"
+            },
+            {
+              "from": "runbook",
+              "to": "audit",
+              "label": "Intake logged"
+            }
+          ]
+        },
+        {
+          "id": "rb_noc_dns",
+          "title": "DNS Failure Intake",
+          "desc": "IP reachable but no hostname → check resolver vs. uplink vs. captive portal.",
+          "nodes": [
+            "dashboard",
+            "runbook",
+            "noc",
+            "captive",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "dashboard",
+              "to": "runbook",
+              "label": "rb.noc.dns.failure.check triggered"
+            },
+            {
+              "from": "runbook",
+              "to": "noc",
+              "label": "Confirm IP reachable, hostname not"
+            },
+            {
+              "from": "runbook",
+              "to": "captive",
+              "label": "Check captive portal state"
+            },
+            {
+              "from": "runbook",
+              "to": "noc",
+              "label": "Compare DNS config with uplink"
+            },
+            {
+              "from": "runbook",
+              "to": "notify",
+              "label": "Escalate if mismatch confirmed"
+            },
+            {
+              "from": "runbook",
+              "to": "audit",
+              "label": "DNS check logged"
+            }
+          ]
+        },
+        {
+          "id": "rb_noc_route",
+          "title": "Default Route Check",
+          "desc": "Confirm upstream interface and gateway vs. UI snapshot.",
+          "nodes": [
+            "dashboard",
+            "runbook",
+            "noc",
+            "sot",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "dashboard",
+              "to": "runbook",
+              "label": "rb.noc.default-route.check triggered"
+            },
+            {
+              "from": "runbook",
+              "to": "noc",
+              "label": "Confirm upstream interface + gateway"
+            },
+            {
+              "from": "sot",
+              "to": "runbook",
+              "label": "Compare with UI snapshot"
+            },
+            {
+              "from": "runbook",
+              "to": "audit",
+              "label": "Route check logged"
+            }
+          ]
+        },
+        {
+          "id": "rb_noc_uisnapshot",
+          "title": "UI Snapshot Check",
+          "desc": "Compare ui_snapshot values with actual route → check daemon health if mismatch.",
+          "nodes": [
+            "dashboard",
+            "runbook",
+            "noc",
+            "mio",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "dashboard",
+              "to": "runbook",
+              "label": "rb.noc.ui-snapshot.check triggered"
+            },
+            {
+              "from": "runbook",
+              "to": "noc",
+              "label": "Compare snapshot vs. actual route"
+            },
+            {
+              "from": "runbook",
+              "to": "mio",
+              "label": "If mismatch: check control-daemon"
+            },
+            {
+              "from": "runbook",
+              "to": "audit",
+              "label": "Snapshot check logged"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Runbooks — SOC",
+      "flows": [
+        {
+          "id": "rb_soc_triage",
+          "title": "Basic Alert Triage",
+          "desc": "Signature → source/dest → recurrence check → compare tactical score before dismissal.",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "soc",
+            "runbook",
+            "explain",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "runbook",
+              "label": "rb.soc.alert.triage.basic triggered"
+            },
+            {
+              "from": "runbook",
+              "to": "soc",
+              "label": "Confirm signature, severity, src, dst"
+            },
+            {
+              "from": "soc",
+              "to": "runbook",
+              "label": "Check recurrence pattern"
+            },
+            {
+              "from": "runbook",
+              "to": "explain",
+              "label": "Compare with tactical score"
+            },
+            {
+              "from": "runbook",
+              "to": "notify",
+              "label": "Escalate if impact unclear"
+            },
+            {
+              "from": "runbook",
+              "to": "audit",
+              "label": "Triage decision logged"
+            }
+          ]
+        },
+        {
+          "id": "rb_soc_contain",
+          "title": "Contain Recommendation Review",
+          "desc": "Verify not a false positive → confirm user impact → approval required before containment.",
+          "nodes": [
+            "soc",
+            "runbook",
+            "arbiter",
+            "explain",
+            "iptables",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "soc",
+              "to": "runbook",
+              "label": "rb.soc.contain.recommend triggered"
+            },
+            {
+              "from": "runbook",
+              "to": "soc",
+              "label": "Verify not a known false positive"
+            },
+            {
+              "from": "runbook",
+              "to": "arbiter",
+              "label": "requires_approval=true gate"
+            },
+            {
+              "from": "arbiter",
+              "to": "notify",
+              "label": "Supervisor approval requested"
+            },
+            {
+              "from": "explain",
+              "to": "iptables",
+              "label": "Containment applied on approval"
+            },
+            {
+              "from": "runbook",
+              "to": "audit",
+              "label": "Contain decision logged"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Runbooks — OPS",
+      "flows": [
+        {
+          "id": "rb_ops_epd",
+          "title": "EPD State Check",
+          "desc": "Compare e-Paper rendered state with WebUI and TUI. Inspect refresh timer if mismatch.",
+          "nodes": [
+            "dashboard",
+            "runbook",
+            "epaper",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "dashboard",
+              "to": "runbook",
+              "label": "rb.ops.epd.state.check triggered"
+            },
+            {
+              "from": "runbook",
+              "to": "epaper",
+              "label": "Compare EPD state with WebUI"
+            },
+            {
+              "from": "runbook",
+              "to": "dashboard",
+              "label": "Inspect epd refresh timer if mismatch"
+            },
+            {
+              "from": "runbook",
+              "to": "audit",
+              "label": "EPD check logged"
+            }
+          ]
+        },
+        {
+          "id": "rb_ops_ai",
+          "title": "Recent AI Log Review",
+          "desc": "Review LLM completions and failures. Check Ollama latency + memory if failures repeat.",
+          "nodes": [
+            "mio",
+            "runbook",
+            "dashboard",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "mio",
+              "to": "runbook",
+              "label": "rb.ops.logs.ai.recent triggered"
+            },
+            {
+              "from": "runbook",
+              "to": "mio",
+              "label": "Review recent LLM completions"
+            },
+            {
+              "from": "runbook",
+              "to": "dashboard",
+              "label": "Compare with Ollama latency + memory"
+            },
+            {
+              "from": "runbook",
+              "to": "audit",
+              "label": "AI log review recorded"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Runbooks — User",
+      "flows": [
+        {
+          "id": "rb_user_onboard",
+          "title": "Device Onboarding Guide",
+          "desc": "Tell user exact SSID → connect once → if captive portal fails twice, escalate to NOC.",
+          "nodes": [
+            "captive",
+            "runbook",
+            "mio",
+            "notify"
+          ],
+          "steps": [
+            {
+              "from": "runbook",
+              "to": "mio",
+              "label": "rb.user.device-onboarding-guide triggered"
+            },
+            {
+              "from": "mio",
+              "to": "notify",
+              "label": "Tell user: exact SSID to select"
+            },
+            {
+              "from": "mio",
+              "to": "notify",
+              "label": "Connect once, wait for result screen"
+            },
+            {
+              "from": "mio",
+              "to": "notify",
+              "label": "If fails twice: move to NOC intake"
+            }
+          ]
+        },
+        {
+          "id": "rb_user_netissue",
+          "title": "First Contact — Network Trouble",
+          "desc": "What stopped first? One device or all? Do not reboot repeatedly.",
+          "nodes": [
+            "runbook",
+            "mio",
+            "noc",
+            "notify"
+          ],
+          "steps": [
+            {
+              "from": "runbook",
+              "to": "mio",
+              "label": "rb.user.first-contact.network-issue triggered"
+            },
+            {
+              "from": "mio",
+              "to": "notify",
+              "label": "Ask: what stopped working first"
+            },
+            {
+              "from": "mio",
+              "to": "notify",
+              "label": "One device or all devices affected?"
+            },
+            {
+              "from": "mio",
+              "to": "noc",
+              "label": "Do not reboot until checks complete"
+            }
+          ]
+        },
+        {
+          "id": "rb_user_status",
+          "title": "Incident Status Brief",
+          "desc": "What is known → what is being checked → what to avoid doing until next update.",
+          "nodes": [
+            "runbook",
+            "mio",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "runbook",
+              "to": "mio",
+              "label": "rb.user.incident-status-brief triggered"
+            },
+            {
+              "from": "mio",
+              "to": "notify",
+              "label": "State what is currently known"
+            },
+            {
+              "from": "mio",
+              "to": "notify",
+              "label": "State what check is in progress"
+            },
+            {
+              "from": "mio",
+              "to": "notify",
+              "label": "State what to avoid + next update ETA"
+            },
+            {
+              "from": "runbook",
+              "to": "audit",
+              "label": "Brief logged"
+            }
+          ]
+        },
+        {
+          "id": "rb_user_portal",
+          "title": "User Portal Access Guide",
+          "desc": "Stay on SSID → open normal site once → if portal absent after retry, escalate.",
+          "nodes": [
+            "captive",
+            "runbook",
+            "mio",
+            "notify"
+          ],
+          "steps": [
+            {
+              "from": "runbook",
+              "to": "mio",
+              "label": "rb.user.portal-access-guide triggered"
+            },
+            {
+              "from": "mio",
+              "to": "notify",
+              "label": "Stay on SSID, open any website once"
+            },
+            {
+              "from": "captive",
+              "to": "runbook",
+              "label": "Confirm portal appears or not"
+            },
+            {
+              "from": "mio",
+              "to": "notify",
+              "label": "If no portal after one retry: escalate"
+            }
+          ]
+        },
+        {
+          "id": "rb_user_reconnect",
+          "title": "User Reconnect Guide",
+          "desc": "Disable/re-enable Wi-Fi once → reconnect to expected SSID only → escalate if fails twice.",
+          "nodes": [
+            "captive",
+            "runbook",
+            "mio",
+            "noc",
+            "notify"
+          ],
+          "steps": [
+            {
+              "from": "runbook",
+              "to": "mio",
+              "label": "rb.user.reconnect-guide triggered"
+            },
+            {
+              "from": "mio",
+              "to": "notify",
+              "label": "Disable/re-enable Wi-Fi once"
+            },
+            {
+              "from": "mio",
+              "to": "captive",
+              "label": "Reconnect to expected SSID only"
+            },
+            {
+              "from": "mio",
+              "to": "noc",
+              "label": "If fails twice: escalate to NOC"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Demo Scenarios",
+      "flows": [
+        {
+          "id": "demo_phishing",
+          "title": "disaster_phishing_demo",
+          "desc": "Replay: fake government domain phishing attack with scoring and action selection.",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "soc",
+            "ti_feed",
+            "arbiter",
+            "explain",
+            "redirect_hp",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "Synthetic EVE: SID 9901201"
+            },
+            {
+              "from": "ti_feed",
+              "to": "soc",
+              "label": "TI match: T1566"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "Score 82 → redirect"
+            },
+            {
+              "from": "explain",
+              "to": "redirect_hp",
+              "label": "DNAT to OpenCanary"
+            },
+            {
+              "from": "explain",
+              "to": "notify",
+              "label": "Alert dispatched"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "scoring.correct_action evaluated"
+            }
+          ]
+        },
+        {
+          "id": "demo_evacuation",
+          "title": "evacuation_network_demo",
+          "desc": "Replay: DHCP starvation + ARP spoof detected. NOC health + SOC threat convergence.",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "noc",
+            "sot",
+            "soc",
+            "arbiter",
+            "explain",
+            "iptables",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "Synthetic EVE: SID 9901211 ARP"
+            },
+            {
+              "from": "sot",
+              "to": "noc",
+              "label": "Topology ref checked"
+            },
+            {
+              "from": "noc",
+              "to": "arbiter",
+              "label": "DHCP degraded + ARP threat"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "T1557 score 88"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action=isolate"
+            },
+            {
+              "from": "explain",
+              "to": "iptables",
+              "label": "Source blocked"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "scoring.response_time_sec recorded"
+            }
+          ]
+        },
+        {
+          "id": "demo_mixed",
+          "title": "mixed_correlation_demo",
+          "desc": "Replay: multiple correlated events across NOC and SOC evaluators.",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "noc",
+            "soc",
+            "arbiter",
+            "explain",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "Multiple EVE events"
+            },
+            {
+              "from": "evplane",
+              "to": "noc",
+              "label": "Health degradation signal"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "Threat correlation signal"
+            },
+            {
+              "from": "noc",
+              "to": "arbiter",
+              "label": "fragile=True"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "Combined score"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "Correlated decision"
+            },
+            {
+              "from": "explain",
+              "to": "notify",
+              "label": "Alert sent"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "Correlation chain logged"
+            }
+          ]
+        },
+        {
+          "id": "demo_noc_degraded",
+          "title": "noc_degraded_demo",
+          "desc": "Replay: NOC health drops, ICMP fails, service degraded. Operator runbook suggested.",
+          "nodes": [
+            "snmp",
+            "netflow",
+            "evplane",
+            "noc",
+            "arbiter",
+            "explain",
+            "runbook",
+            "notify",
+            "dashboard"
+          ],
+          "steps": [
+            {
+              "from": "snmp",
+              "to": "evplane",
+              "label": "ifOperStatus degraded"
+            },
+            {
+              "from": "netflow",
+              "to": "evplane",
+              "label": "Flow anomaly"
+            },
+            {
+              "from": "evplane",
+              "to": "noc",
+              "label": "Probe aggregated"
+            },
+            {
+              "from": "noc",
+              "to": "arbiter",
+              "label": "fragile=True"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action=notify"
+            },
+            {
+              "from": "explain",
+              "to": "runbook",
+              "label": "Service status runbook suggested"
+            },
+            {
+              "from": "explain",
+              "to": "dashboard",
+              "label": "Posture=WATCH"
+            }
+          ]
+        },
+        {
+          "id": "demo_soc_redirect",
+          "title": "soc_redirect_demo",
+          "desc": "Replay: SOC scores above redirect threshold, scapegoat gateway engaged.",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "soc",
+            "arbiter",
+            "explain",
+            "redirect_hp",
+            "opencanary",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "High-severity alert"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "Score > 75"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "Redirect threshold crossed"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action=redirect"
+            },
+            {
+              "from": "explain",
+              "to": "redirect_hp",
+              "label": "DNAT rule applied"
+            },
+            {
+              "from": "redirect_hp",
+              "to": "opencanary",
+              "label": "Attacker lands in honeypot"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "Redirect logged"
+            }
+          ]
+        },
+        {
+          "id": "demo_offline",
+          "title": "offline_demo",
+          "desc": "Replay: WAN severed. OfflineQueue accumulates. On recovery, auto-flush to SIEM.",
+          "nodes": [
+            "evplane",
+            "arbiter",
+            "explain",
+            "notify",
+            "vector",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "evplane",
+              "to": "arbiter",
+              "label": "Triage continues offline"
+            },
+            {
+              "from": "explain",
+              "to": "notify",
+              "label": "OfflineQueue: payloads queued locally"
+            },
+            {
+              "from": "notify",
+              "to": "vector",
+              "label": "WAN recovered: auto-flush to SIEM"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "Queue depth tracked in audit"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Benchmark Corpus",
+      "flows": [
+        {
+          "id": "bench_phishing",
+          "title": "Corpus: Phishing (T1566)",
+          "desc": "EVE replay: fake gov domain credential harvest. Expected: detect + redirect. Breach = POST succeeds.",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "soc",
+            "arbiter",
+            "explain",
+            "redirect_hp"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "phishing_01.jsonl replayed"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "SID 9901201 matched"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "T1566 score ≥ threshold"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action != observe → DETECTED"
+            },
+            {
+              "from": "explain",
+              "to": "redirect_hp",
+              "label": "Breach prevented"
+            }
+          ]
+        },
+        {
+          "id": "bench_arp",
+          "title": "Corpus: ARP Spoof (T1557)",
+          "desc": "EVE replay: gateway impersonation. Expected: detect + isolate. Breach = ARP poisoning succeeds.",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "noc",
+            "soc",
+            "arbiter",
+            "explain",
+            "iptables"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "arp_spoof_01.jsonl replayed"
+            },
+            {
+              "from": "evplane",
+              "to": "noc",
+              "label": "LINK_DRIFT flagged"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "SID 9901211 → T1557"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action=isolate → DETECTED"
+            },
+            {
+              "from": "explain",
+              "to": "iptables",
+              "label": "Breach prevented"
+            }
+          ]
+        },
+        {
+          "id": "bench_scan",
+          "title": "Corpus: Port Scan (T1046)",
+          "desc": "EVE replay: internal rapid scan. Expected: detect + throttle. Breach = scan completes undetected.",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "soc",
+            "arbiter",
+            "explain",
+            "tc"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "port_scan_01.jsonl replayed"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "SID 9901221 → T1046"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action=throttle → DETECTED"
+            },
+            {
+              "from": "explain",
+              "to": "tc",
+              "label": "Breach mitigated"
+            }
+          ]
+        },
+        {
+          "id": "bench_exfil",
+          "title": "Corpus: DNS Exfil (T1048)",
+          "desc": "EVE replay: DNS tunnel high-frequency. Expected: detect + throttle. Breach = exfil succeeds.",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "soc",
+            "arbiter",
+            "explain",
+            "tc"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "dns_exfil_01.jsonl replayed"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "SID 9901232 → T1048"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action=throttle → DETECTED"
+            },
+            {
+              "from": "explain",
+              "to": "tc",
+              "label": "Breach mitigated"
+            }
+          ]
+        },
+        {
+          "id": "bench_c2",
+          "title": "Corpus: C2 Beacon (T1071)",
+          "desc": "EVE replay: periodic small POST. Expected: detect + isolate. Breach = C2 channel established.",
+          "nodes": [
+            "suricata",
+            "evplane",
+            "soc",
+            "ti_feed",
+            "arbiter",
+            "explain",
+            "iptables"
+          ],
+          "steps": [
+            {
+              "from": "suricata",
+              "to": "evplane",
+              "label": "c2_beacon_01.jsonl replayed"
+            },
+            {
+              "from": "ti_feed",
+              "to": "soc",
+              "label": "IP matched in TI feed"
+            },
+            {
+              "from": "evplane",
+              "to": "soc",
+              "label": "SID 9901251 → T1071"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "action=isolate → DETECTED"
+            },
+            {
+              "from": "explain",
+              "to": "iptables",
+              "label": "Breach prevented"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Install & Config",
+      "flows": [
+        {
+          "id": "install_full",
+          "title": "Full installation sequence",
+          "desc": "install_all.sh: network baseline → app stack → AI runtime → Vector → sensors",
+          "nodes": [
+            "rustcore",
+            "luks",
+            "evplane",
+            "mio",
+            "vector",
+            "wazuh_mgr",
+            "dashboard",
+            "epaper"
+          ],
+          "steps": [
+            {
+              "from": "rustcore",
+              "to": "evplane",
+              "label": "[1] Internal network baseline"
+            },
+            {
+              "from": "evplane",
+              "to": "dashboard",
+              "label": "[3] App stack installed"
+            },
+            {
+              "from": "mio",
+              "to": "dashboard",
+              "label": "[4] AI runtime (Ollama) deployed"
+            },
+            {
+              "from": "evplane",
+              "to": "vector",
+              "label": "[6] Vector log aggregator (opt-in)"
+            },
+            {
+              "from": "evplane",
+              "to": "wazuh_mgr",
+              "label": "[7] SNMP/NetFlow sensors (opt-in)"
+            },
+            {
+              "from": "luks",
+              "to": "evplane",
+              "label": "LUKS encryption default-on"
+            }
+          ]
+        },
+        {
+          "id": "policy_conservative",
+          "title": "SOC Policy: conservative",
+          "desc": "Prioritize service stability. Delay high-impact controls. Best for untrained operators.",
+          "nodes": [
+            "soc_policy",
+            "soc",
+            "arbiter",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "soc_policy",
+              "to": "soc",
+              "label": "conservative profile loaded"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "Higher threshold for isolate/redirect"
+            },
+            {
+              "from": "arbiter",
+              "to": "notify",
+              "label": "Prefer notify over intervention"
+            },
+            {
+              "from": "arbiter",
+              "to": "audit",
+              "label": "Policy version hash in decision"
+            }
+          ]
+        },
+        {
+          "id": "policy_balanced",
+          "title": "SOC Policy: balanced",
+          "desc": "Balanced containment speed vs. availability. Default for trained operators.",
+          "nodes": [
+            "soc_policy",
+            "soc",
+            "arbiter",
+            "notify",
+            "iptables",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "soc_policy",
+              "to": "soc",
+              "label": "balanced profile loaded"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "Standard thresholds"
+            },
+            {
+              "from": "arbiter",
+              "to": "notify",
+              "label": "notify / throttle / redirect as scored"
+            },
+            {
+              "from": "arbiter",
+              "to": "iptables",
+              "label": "isolate on high confidence"
+            },
+            {
+              "from": "arbiter",
+              "to": "audit",
+              "label": "Policy version hash in decision"
+            }
+          ]
+        },
+        {
+          "id": "policy_demo",
+          "title": "SOC Policy: demo",
+          "desc": "Visible deterministic transitions for exhibition mode. Lower thresholds to trigger all 5 actions.",
+          "nodes": [
+            "soc_policy",
+            "soc",
+            "arbiter",
+            "explain",
+            "redirect_hp",
+            "iptables",
+            "tc",
+            "notify",
+            "audit"
+          ],
+          "steps": [
+            {
+              "from": "soc_policy",
+              "to": "soc",
+              "label": "demo profile loaded"
+            },
+            {
+              "from": "soc",
+              "to": "arbiter",
+              "label": "Lower thresholds for all actions"
+            },
+            {
+              "from": "arbiter",
+              "to": "explain",
+              "label": "All 5 actions demonstrable"
+            },
+            {
+              "from": "explain",
+              "to": "audit",
+              "label": "Full decision trace visible"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+};
+let active=null;let svgEl=null;
+
+document.getElementById('ttl').textContent=D.title;
+document.getElementById('sub').textContent=D.subtitle;
+const leg=document.getElementById('leg');
+D.legend.forEach(l=>{const d=document.createElement('div');d.className='leg-item';d.innerHTML=`<div class="leg-dot" style="background:${l.color}"></div>${l.label}`;leg.appendChild(d);});
+
+// Build node lookup
+const nodeById={};D.nodes.forEach(n=>nodeById[n.id]=n);
+
+// Build columns
+const colOrder=D.columns.map(c=>c.id);
+const colMap={};D.columns.forEach(c=>colMap[c.id]=c);
+const byCol={};colOrder.forEach(c=>byCol[c]=[]);
+D.nodes.forEach(n=>{if(byCol[n.col])byCol[n.col].push(n);});
+Object.values(byCol).forEach(a=>a.sort((a,b)=>a.row-b.row));
+
+const diag=document.getElementById('diag');
+const nels={};
+
+colOrder.forEach((cid,ci)=>{
+  if(ci>0){const g=document.createElement('div');g.className='col-gap';g.id='gap-'+cid;diag.appendChild(g);}
+  const col=document.createElement('div');col.className='col';col.id='col-'+cid;
+  const h=document.createElement('div');h.className='col-head';h.textContent=colMap[cid].label;col.appendChild(h);
+  byCol[cid].forEach(n=>{
+    const el=document.createElement('div');el.className='node';el.id='nd-'+n.id;
+    el.style.setProperty('--nc',n.color);
+    el.innerHTML=`<div class="n-dot" style="background:${n.color}"></div><div class="n-label">${n.label}</div><div class="n-sub">${n.sub}</div>`;
+    col.appendChild(el);nels[n.id]=el;
+  });
+  diag.appendChild(col);
+});
+
+// Build flow panel with groups
+const pf=document.getElementById('pf');
+// Collect all flows with group tag
+const allFlows=[];
+D.flow_groups.forEach(g=>{
+  const gh=document.createElement('div');gh.className='grp-head';gh.textContent=g.group+' ('+g.flows.length+')';pf.appendChild(gh);
+  g.flows.forEach(f=>{
+    allFlows.push(f);
+    const btn=document.createElement('button');btn.className='fb';btn.id='fb-'+f.id;
+    btn.innerHTML=`<span class="ft">${f.title}</span><span class="fd">${f.desc}</span>`;
+    btn.onclick=()=>pick(f.id);
+    pf.appendChild(btn);
+  });
+});
+
+document.getElementById('clr').onclick=()=>clear();
+
+function pick(id){
+  active=id;
+  const f=allFlows.find(x=>x.id===id);
+  document.querySelectorAll('.fb').forEach(b=>b.classList.remove('active'));
+  document.getElementById('fb-'+id)?.classList.add('active');
+  Object.keys(nels).forEach(nid=>{
+    nels[nid].classList.remove('lit','dim');
+    nels[nid].classList.add(f.nodes.includes(nid)?'lit':'dim');
+  });
+  renderSteps(f);
+  drawArrows(f);
+}
+
+function clear(){
+  active=null;
+  document.querySelectorAll('.fb').forEach(b=>b.classList.remove('active'));
+  Object.values(nels).forEach(el=>el.classList.remove('lit','dim'));
+  document.getElementById('sl').innerHTML='<div class="no-sel">Select a flow →</div>';
+  if(svgEl){svgEl.remove();svgEl=null;}
+}
+
+function renderSteps(f){
+  const sl=document.getElementById('sl');sl.innerHTML='';
+  f.steps.forEach((s,i)=>{
+    const fn=nodeById[s.from],tn=nodeById[s.to];
+    const d=document.createElement('div');d.className='step';
+    d.innerHTML=`<div class="step-n">${i+1}</div><div class="step-b">
+      <div class="sf"><span style="color:${fn?.color||'#94a3b8'}">${fn?.label||s.from}</span><span style="color:#334155"> → </span><span style="color:${tn?.color||'#94a3b8'}">${tn?.label||s.to}</span></div>
+      <div class="sl">${s.label}</div></div>`;
+    sl.appendChild(d);
+  });
+}
+
+function drawArrows(f){
+  if(svgEl){svgEl.remove();svgEl=null;}
+  if(!f)return;
+  const dw=document.getElementById('diag-wrap')||diag.parentElement;
+  const dr=diag.getBoundingClientRect();
+  const sw=diag.scrollWidth,sh=diag.scrollHeight;
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('class','conn-svg');
+  svg.style.cssText=`position:absolute;top:0;left:0;width:${sw}px;height:${sh}px;pointer-events:none`;
+  svg.setAttribute('viewBox',`0 0 ${sw} ${sh}`);
+  const defs=document.createElementNS('http://www.w3.org/2000/svg','defs');
+  ['grn','org'].forEach((id,i)=>{
+    const m=document.createElementNS('http://www.w3.org/2000/svg','marker');
+    m.setAttribute('id','arr-'+id);m.setAttribute('markerWidth','7');m.setAttribute('markerHeight','7');
+    m.setAttribute('refX','6');m.setAttribute('refY','3');m.setAttribute('orient','auto');
+    const p=document.createElementNS('http://www.w3.org/2000/svg','polygon');
+    p.setAttribute('points','0 0,7 3,0 6');p.setAttribute('fill',i===0?'#4ade80':'#f97316');
+    m.appendChild(p);defs.appendChild(m);
+  });
+  svg.appendChild(defs);
+
+  const diagRect=diag.getBoundingClientRect();
+  const dsx=diag.parentElement.scrollLeft,dsy=diag.parentElement.scrollTop;
+
+  f.steps.forEach(s=>{
+    const fe=nels[s.from],te=nels[s.to];if(!fe||!te)return;
+    const fr=fe.getBoundingClientRect(),tr=te.getBoundingClientRect();
+    const fx=fr.right-diagRect.left+dsx-2;
+    const fy=(fr.top+fr.bottom)/2-diagRect.top+dsy;
+    const tx=tr.left-diagRect.left+dsx+2;
+    const ty=(tr.top+tr.bottom)/2-diagRect.top+dsy;
+    const sameCol=fr.left===tr.left;
+    const fromNode=nodeById[s.from];
+    const color=fromNode?.color||'#4ade80';
+    const markId=color==='#f97316'?'arr-org':'arr-grn';
+
+    let d;
+    if(sameCol){
+      // same column: route around
+      const mx=Math.max(fx+40,tx+40);
+      d=`M${fx},${fy} C${mx},${fy} ${mx},${ty} ${tx},${ty}`;
+    } else {
+      const cx1=fx+(tx-fx)*.45,cx2=tx-(tx-fx)*.45;
+      d=`M${fx},${fy} C${cx1},${fy} ${cx2},${ty} ${tx},${ty}`;
+    }
+    const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d',d);
+    path.setAttribute('stroke',color);
+    path.setAttribute('stroke-width','1.5');
+    path.setAttribute('fill','none');
+    path.setAttribute('stroke-opacity','0.75');
+    path.setAttribute('marker-end','url(#'+markId+')');
+    svg.appendChild(path);
+  });
+  diag.style.position='relative';
+  diag.insertBefore(svg,diag.firstChild);
+  svgEl=svg;
+}
+
+window.addEventListener('resize',()=>{if(active)pick(active);});
+</script>
+</body>
+</html>
