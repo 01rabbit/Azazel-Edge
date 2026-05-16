@@ -386,6 +386,11 @@ Status guidance:
 
 ## Documentation
 
+Azazel-Edge is documented as a single core platform with multiple operational concept profiles.
+- [Concept Profiles](docs/concepts/evolution-map.md)
+- [Arsenal Demonstrations](docs/arsenal/README.md)
+- [Core Architecture](docs/architecture/decision-loop.md)
+
 ### For operators
 
 | Document | Description |
