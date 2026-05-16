@@ -4,6 +4,10 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Added interactive architecture flow document link to `README.md` and introduced `docs/architecture/azazel_edge_arch.html`.
+- Synced benchmark report artifacts in `docs/BENCHMARK_RESULTS.json` and `docs/BENCHMARK_RESULTS.md` after validation rerun.
+
 ## [0.1.1] - 2026-05-14
 
 ### Added
