@@ -24,6 +24,7 @@ Examples: `feat/decision-trust-capsule`, `fix/epd-help-crash`, `docs/readme-reor
   - [ ] `PYTHONPATH=. pytest -q` passes
   - [ ] `cd rust/azazel-edge-core && cargo test` passes (if Rust touched or validation scope includes Rust)
   - [ ] Related documentation updated in the same PR
+  - [ ] If API surface or runtime configuration changed, update `docs/API_REFERENCE.md` and/or `docs/CONFIGURATION.md` in the same PR
   - [ ] Deterministic First principle not violated
   - [ ] Raspberry Pi constraints not broken
 

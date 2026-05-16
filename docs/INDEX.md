@@ -11,6 +11,8 @@ Entry point for all documents in this directory.
 | [concepts/evolution-map.md](concepts/evolution-map.md) | Operator / Developer | Concept profile map for a single Azazel-Edge core platform | 2026-05-16 |
 | [arsenal/README.md](arsenal/README.md) | Operator / Presenter | Public Black Hat Arsenal history and policy | 2026-05-16 |
 | [architecture/decision-loop.md](architecture/decision-loop.md) | Developer / Operator | Stable deterministic decision loop overview | 2026-05-16 |
+| [../configs/profiles/README.md](../configs/profiles/README.md) | Developer / Operator | Concept-to-configuration mapping layer | 2026-05-16 |
+| [../demos/concepts/README.md](../demos/concepts/README.md) | Operator / Presenter | Concept-oriented demo scenario grouping | 2026-05-16 |
 | [P0_RUNTIME_ARCHITECTURE.md](P0_RUNTIME_ARCHITECTURE.md) | Developer | Decision pipeline, implementation modules, and P0 constraints | 2026-03-10 |
 | [AZAZEL_AGGREGATOR_ARCHITECTURE.md](AZAZEL_AGGREGATOR_ARCHITECTURE.md) | Developer / Operator | Multi-node Azazel Aggregator design baseline and phased roadmap | 2026-05-12 |
 | [SOC_POLICY_GUIDE.md](SOC_POLICY_GUIDE.md) | Developer / Operator | Deterministic SOC policy tuning and safety constraints | 2026-05-12 |
@@ -25,6 +27,8 @@ Entry point for all documents in this directory.
 | File | Audience | Description | Last Updated |
 |------|----------|-------------|--------------|
 | [AI_OPERATION_GUIDE.md](AI_OPERATION_GUIDE.md) | Operator / Developer | LLM thresholds, daily checks, and incident response (EN) | 2026-05-13 |
+| [API_REFERENCE.md](API_REFERENCE.md) | Developer / Operator | API surface map and authoritative links | 2026-05-16 |
+| [CONFIGURATION.md](CONFIGURATION.md) | Developer / Operator | Configuration surface map and authoritative links | 2026-05-16 |
 | [AI_OPERATION_GUIDE_JA.md](AI_OPERATION_GUIDE_JA.md) | Operator / Developer | AI運用要領（日本語版） | 2026-03-10 |
 | [AI_AGENT_BUILD_AND_OPERATION_DETAIL.md](AI_AGENT_BUILD_AND_OPERATION_DETAIL.md) | Developer | AI agent internals and build steps (EN) | 2026-05-13 |
 | [AI_AGENT_BUILD_AND_OPERATION_DETAIL_JA.md](AI_AGENT_BUILD_AND_OPERATION_DETAIL_JA.md) | Developer | エージェントAI構築手順書（日本語版） | 2026-03-08 |

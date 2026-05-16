@@ -1,0 +1,11 @@
+concept_id: field-deployable-scapegoat-gateway
+label: Field-Deployable Scapegoat Gateway
+status: concept_profile
+stage_order:
+  - evacuation_network_demo
+  - soc_redirect_demo
+scenarios:
+  - id: evacuation_network_demo
+    role: field network instability and containment posture review
+  - id: soc_redirect_demo
+    role: redirect-capable bounded response with deception context

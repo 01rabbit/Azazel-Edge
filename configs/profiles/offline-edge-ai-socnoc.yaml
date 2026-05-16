@@ -1,0 +1,18 @@
+id: offline-edge-ai-socnoc
+title: Offline Edge-AI SOC/NOC
+status: demonstrated
+intent:
+  local_first: true
+  cloud_required: false
+  deterministic_primary: true
+  ai_assist_optional: true
+policy:
+  baseline_path: config/soc_policy_profiles/demo.yaml
+  rationale: visible deterministic transitions for constrained offline demo/training contexts
+runtime:
+  recommended_control_mode: active
+  notes:
+    - Keep deterministic path authoritative.
+    - AI assist remains advisory through governance.
+demo:
+  concept_pack: demos/concepts/offline-edge-ai-socnoc.yaml

@@ -1,0 +1,17 @@
+id: field-deployable-scapegoat-gateway
+title: Field-Deployable Scapegoat Gateway
+status: concept_profile
+intent:
+  rapid_deploy_priority: true
+  deception_assist_allowed: true
+  deterministic_primary: true
+policy:
+  baseline_path: config/soc_policy_profiles/balanced.yaml
+  rationale: preserve operational responsiveness while keeping bounded controls
+runtime:
+  recommended_control_mode: active
+  notes:
+    - Use prepared redirect mappings only.
+    - Keep rollback/review workflow explicit for field operators.
+demo:
+  concept_pack: demos/concepts/field-deployable-scapegoat-gateway.yaml
