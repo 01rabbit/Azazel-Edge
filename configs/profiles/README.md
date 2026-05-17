@@ -14,6 +14,7 @@ Current runtime policy loading remains controlled by:
 |---|---|---|
 | `offline-edge-ai-socnoc` | `config/soc_policy_profiles/demo.yaml` | `demos/concepts/offline-edge-ai-socnoc.yaml` |
 | `deterministic-edge-decision-support` | `config/soc_policy_profiles/balanced.yaml` | `demos/concepts/deterministic-edge-decision-support.yaml` |
+| `auditable-emergency-socnoc` | `config/soc_policy_profiles/conservative.yaml` | `demos/concepts/auditable-emergency-socnoc.yaml` |
 | `auditable-edge-socnoc` | `config/soc_policy_profiles/conservative.yaml` | `demos/concepts/auditable-edge-socnoc.yaml` |
 | `field-deployable-scapegoat-gateway` | `config/soc_policy_profiles/balanced.yaml` | `demos/concepts/field-deployable-scapegoat-gateway.yaml` |
 

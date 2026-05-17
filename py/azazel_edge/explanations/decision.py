@@ -31,7 +31,11 @@ class DecisionExplainer:
     ) -> Dict[str, Any]:
         action = str(arbiter.get('action') or 'observe')
         reason = str(arbiter.get('reason') or 'unspecified')
+        release_condition = str(arbiter.get('release_condition') or '')
         control_mode = str(arbiter.get('control_mode') or 'none')
+        policy_info = arbiter.get('policy', {}) if isinstance(arbiter.get('policy'), dict) else {}
+        policy_profile = str(policy_info.get('version') or '')
+        config_hash = str(policy_info.get('hash') or '')
         client_impact = arbiter.get('client_impact', {}) if isinstance(arbiter.get('client_impact'), dict) else {}
         chosen_evidence_ids = [str(x) for x in arbiter.get('chosen_evidence_ids', []) if str(x)]
         rejected = arbiter.get('rejected_alternatives', []) if isinstance(arbiter.get('rejected_alternatives'), list) else []
@@ -63,7 +67,10 @@ class DecisionExplainer:
             'format_version': 'v2',
             'action': action,
             'reason': reason,
+            'release_condition': release_condition,
             'control_mode': control_mode,
+            'policy_profile': policy_profile,
+            'config_hash': config_hash,
             'noc_status': noc_summary.get('status', 'unknown'),
             'soc_status': soc_summary.get('status', 'unknown'),
             'target': target,
@@ -141,6 +148,12 @@ class DecisionExplainer:
             'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'trace_id': str(trace_id or ''),
             'format_version': 'v2',
+            'selected_action': action,
+            'reason': reason,
+            'rejected_actions': [str(item.get('action') or '') for item in why_not_others if str(item.get('action') or '')],
+            'release_condition': release_condition,
+            'policy_profile': policy_profile,
+            'config_hash': config_hash,
             'why_chosen': why_chosen,
             'why_not_others': why_not_others,
             'evidence_ids': chosen_evidence_ids,

@@ -23,6 +23,9 @@ Azazel-Edge is not a production SIEM replacement, not an autonomous AI defender,
 
 **Who this is for:** security operators, field defenders, incident responders, training teams, and researchers working with constrained local networks.
 
+2025 -> 2026 evolution line:
+- `Deployable` focus (rapid portable edge setup) -> `Auditable` focus (explainable deterministic decisions, rejected alternatives, and reviewable trace evidence)
+
 ## Requirements
 
 | Requirement | Detail |
@@ -111,6 +114,7 @@ Different operational profiles are documented as concept profiles, not forks.
 - [Evolution Map](docs/concepts/evolution-map.md)
 - [Offline Edge-AI SOC/NOC](docs/concepts/offline-edge-ai-socnoc.md)
 - [Deterministic Edge Decision Support](docs/concepts/deterministic-edge-decision-support.md)
+- [Auditable Emergency SOC/NOC](docs/concepts/auditable-emergency-socnoc.md)
 - [Auditable Edge SOC/NOC](docs/concepts/auditable-edge-socnoc.md)
 - [Field-Deployable Scapegoat Gateway](docs/concepts/field-deployable-scapegoat-gateway.md)
 

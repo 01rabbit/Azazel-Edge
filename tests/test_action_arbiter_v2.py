@@ -48,6 +48,7 @@ class ActionArbiterV2Tests(unittest.TestCase):
         )
         self.assertEqual(result['action'], 'redirect')
         self.assertEqual(result['control_mode'], 'opencanary_redirect')
+        self.assertEqual(result['release_condition'], 'no_repeated_failures_for_300_seconds')
 
     def test_isolate_for_extreme_signal_with_low_impact(self) -> None:
         arbiter = ActionArbiter()
@@ -58,6 +59,7 @@ class ActionArbiterV2Tests(unittest.TestCase):
         )
         self.assertEqual(result['action'], 'isolate')
         self.assertEqual(result['control_mode'], 'segment_isolation')
+        self.assertEqual(result['release_condition'], 'manual_review_and_no_high_risk_signals_for_600_seconds')
 
     def test_high_client_impact_blocks_control_actions(self) -> None:
         arbiter = ActionArbiter()
@@ -68,6 +70,7 @@ class ActionArbiterV2Tests(unittest.TestCase):
         )
         self.assertEqual(result['action'], 'notify')
         self.assertEqual(result['reason'], 'client_impact_too_high_for_control')
+        self.assertEqual(result['release_condition'], 'operator_acknowledged_or_signal_stabilized')
 
 
 if __name__ == '__main__':

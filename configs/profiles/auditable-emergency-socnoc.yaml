@@ -1,0 +1,19 @@
+id: auditable-emergency-socnoc
+title: Auditable Emergency SOC/NOC
+status: concept_profile
+intent:
+  auditability_priority: true
+  deterministic_primary: true
+  explainability_required: true
+  non_specialist_operator_support: true
+policy:
+  baseline_path: config/soc_policy_profiles/conservative.yaml
+  rationale: preserve reversible controls and evidence-first explanation under emergency operation
+runtime:
+  recommended_control_mode: active
+  notes:
+    - Prioritize explanation quality before additional sensor breadth.
+    - Preserve fail-closed defaults for protected interfaces.
+    - Keep operation local-first for constrained connectivity.
+demo:
+  concept_pack: demos/concepts/auditable-emergency-socnoc.yaml

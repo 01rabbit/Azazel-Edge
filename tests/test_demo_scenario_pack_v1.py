@@ -21,6 +21,12 @@ class DemoScenarioPackV1Tests(unittest.TestCase):
         self.assertIn('mixed_correlation_demo', scenarios)
         self.assertIn('disaster_phishing_demo', scenarios)
         self.assertIn('evacuation_network_demo', scenarios)
+        self.assertIn('shelter_baseline_demo', scenarios)
+        self.assertIn('shelter_scan_detect_demo', scenarios)
+        self.assertIn('shelter_ssh_bruteforce_demo', scenarios)
+        self.assertIn('shelter_redirect_decoy_demo', scenarios)
+        self.assertIn('shelter_audit_review_demo', scenarios)
+        self.assertIn('shelter_operator_handoff_demo', scenarios)
         items = pack.list_items()
         self.assertEqual(items[0]['scenario_id'], 'soc_redirect_demo')
         self.assertEqual(items[0]['title'], 'High-confidence SOC path')
@@ -48,6 +54,13 @@ class DemoScenarioPackV1Tests(unittest.TestCase):
         self.assertEqual(result['demo']['attack_label'], 'SSH Brute Force')
         self.assertIn('second_pass', result['demo']['decision_path'])
         self.assertIn('policy', result['demo']['proofs'])
+
+    def test_runner_executes_shelter_profile_scenario(self) -> None:
+        result = DemoScenarioRunner().run('shelter_ssh_bruteforce_demo')
+        self.assertEqual(result['scenario_id'], 'shelter_ssh_bruteforce_demo')
+        self.assertIn(result['arbiter']['action'], {'notify', 'throttle', 'redirect', 'isolate', 'observe'})
+        self.assertIn('release_condition', result['arbiter'])
+        self.assertIn('rejected_actions', result['explanation'])
 
 
 if __name__ == '__main__':

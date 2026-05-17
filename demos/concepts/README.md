@@ -8,6 +8,7 @@ These files provide concept-oriented grouping and sequencing metadata.
 ## Packs
 - `offline-edge-ai-socnoc.yaml`
 - `deterministic-edge-decision-support.yaml`
+- `auditable-emergency-socnoc.yaml`
 - `auditable-edge-socnoc.yaml`
 - `field-deployable-scapegoat-gateway.yaml`
 

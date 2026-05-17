@@ -144,6 +144,7 @@ function resetDemoOverlayPresentation() {
     updateElement('demoSocStatus', '-');
     updateElement('demoAction', '-');
     updateElement('demoReason', '-');
+    updateElement('demoReleaseCondition', '-');
     updateElement('demoSafetyReversible', '-');
     updateElement('demoSafetyApproval', '-');
     updateElement('demoSafetyAudited', '-');
@@ -167,6 +168,7 @@ function resetDemoOverlayPresentation() {
     renderList('demoNextChecks', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
     renderList('demoEvidenceIds', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
     renderList('demoRejectedAlternatives', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
+    renderList('demoRejectedActions', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
 }
 
 function updateDemoModeBanner(result) {
@@ -1062,9 +1064,11 @@ async function runDemoScenario() {
     updateElement('demoSocStatus', '-');
     updateElement('demoAction', '-');
     updateElement('demoReason', '-');
+    updateElement('demoReleaseCondition', '-');
     renderList('demoNextChecks', [tr('dashboard.demo_waiting_output', 'Waiting for scenario output')], (item) => item);
     renderList('demoEvidenceIds', [tr('dashboard.demo_waiting_output', 'Waiting for scenario output')], (item) => item);
     renderList('demoRejectedAlternatives', [tr('dashboard.demo_waiting_output', 'Waiting for scenario output')], (item) => item);
+    renderList('demoRejectedActions', [tr('dashboard.demo_waiting_output', 'Waiting for scenario output')], (item) => item);
     const statusBadge = document.getElementById('demoStatusBadge');
     updateElement('demoStatusBadge', 'RUNNING');
     if (statusBadge) statusBadge.className = 'assistant-status status-caution';
@@ -1076,7 +1080,10 @@ async function runDemoScenario() {
         updateElement('demoNocStatus', result.noc?.summary?.status || '-');
         updateElement('demoSocStatus', result.soc?.summary?.status || '-');
         updateElement('demoAction', result.arbiter?.action || '-');
-        updateElement('demoReason', result.arbiter?.reason || '-');
+        const releaseCondition = String(result.arbiter?.release_condition || result.explanation?.release_condition || '').trim();
+        const reasonLabel = String(result.arbiter?.reason || '-');
+        updateElement('demoReason', releaseCondition ? `${reasonLabel} | release: ${releaseCondition}` : reasonLabel);
+        updateElement('demoReleaseCondition', releaseCondition || '-');
         updateElement('demoOperatorWording', result.explanation?.operator_wording || tr('dashboard.demo_no_explanation', 'No explanation returned.'));
         renderList('demoNextChecks', result.explanation?.next_checks || [], (item) => item);
         renderList('demoEvidenceIds', result.explanation?.evidence_ids || result.arbiter?.chosen_evidence_ids || [], (item) => item);
@@ -1085,6 +1092,7 @@ async function runDemoScenario() {
             result.explanation?.why_not_others || result.arbiter?.rejected_alternatives || [],
             (item) => `${item.action || '-'}: ${item.reason || '-'}`,
         );
+        renderList('demoRejectedActions', result.explanation?.rejected_actions || [], (item) => item);
         updateElement('demoResponse', JSON.stringify(result, null, 2));
         updateElement('demoStatusBadge', 'DONE');
         if (statusBadge) statusBadge.className = 'assistant-status status-safe';
@@ -1147,6 +1155,7 @@ function applyDemoOverlay(result) {
     const socStatus = String(result.soc_status || raw.soc?.summary?.status || '-').trim();
     const action = String(result.action || raw.arbiter?.action || '-').trim();
     const reason = String(result.reason || raw.arbiter?.reason || '-').trim();
+    const releaseCondition = String(result.release_condition || raw.arbiter?.release_condition || raw.explanation?.release_condition || '').trim();
     const suspicion = Number(result.soc_suspicion || raw.soc?.suspicion?.score || 0);
     const evidenceIds = Array.isArray(result.chosen_evidence_ids)
         ? result.chosen_evidence_ids
@@ -1169,13 +1178,18 @@ function applyDemoOverlay(result) {
     updateElement('demoNocStatus', nocStatus || '-');
     updateElement('demoSocStatus', socStatus || '-');
     updateElement('demoAction', action || '-');
-    updateElement('demoReason', reason || '-');
+    updateElement('demoReason', releaseCondition ? `${reason || '-'} | release: ${releaseCondition}` : (reason || '-'));
+    updateElement('demoReleaseCondition', releaseCondition || '-');
     updateElement('demoOperatorWording', operatorWording || tr('dashboard.demo_no_explanation', 'No explanation returned.'));
     renderList('demoNextChecks', nextChecks.length ? nextChecks : [tr('dashboard.demo_no_next_checks', 'No next checks')], (item) => item);
     renderList('demoEvidenceIds', evidenceIds.length ? evidenceIds : [tr('dashboard.demo_no_evidence', 'No evidence ids')], (item) => item);
     renderList('demoRejectedAlternatives', rejected.length ? rejected : [tr('dashboard.demo_no_rejections', 'No rejected alternatives')], (item) =>
         typeof item === 'string' ? item : `${item.action || '-'}: ${item.reason || '-'}`,
     );
+    const rejectedActions = Array.isArray(result.rejected_actions)
+        ? result.rejected_actions
+        : (Array.isArray(raw.explanation?.rejected_actions) ? raw.explanation.rejected_actions : []);
+    renderList('demoRejectedActions', rejectedActions.length ? rejectedActions : [tr('dashboard.demo_no_rejected_actions', 'No rejected actions')], (item) => item);
     updateElement('demoResponse', JSON.stringify(raw && Object.keys(raw).length ? raw : result, null, 2));
     setDemoOverlayVisualState(true);
     updateElement('demoStatusBadge', 'DEMO ACTIVE');
@@ -1280,7 +1294,18 @@ function applyDemoOverlay(result) {
         tr('dashboard.soc_status_line', 'SOC status: {status}', { status: socStatus }),
         tr('dashboard.reason_line', 'Reason: {reason}', { reason }),
     ], (item) => item);
-    renderList('nextActionsList', nextChecks.length ? nextChecks : [tr('dashboard.demo_review_action_path', 'Review {action} path for {scenario}.', { action, scenario: scenarioId })], (item) => item);
+    const runbookSupport = raw.explanation?.why_chosen?.runbook_support && typeof raw.explanation.why_chosen.runbook_support === 'object'
+        ? raw.explanation.why_chosen.runbook_support
+        : {};
+    const suggestedRunbookId = String(runbookSupport.runbook_candidate_id || '').trim();
+    const suggestedRunbookTitle = String((runbookSupport.reviewed_runbook && runbookSupport.reviewed_runbook.title) || suggestedRunbookId || '').trim();
+    const suggestedRunbookReason = String(runbookSupport.why_this_runbook || '').trim();
+    const handoffRunbookId = 'rb.ops.operator.handoff.audit-review';
+    const handoffStep = tr('dashboard.demo_handoff_runbook_step', 'Prepare operator handoff evidence using {runbook}.', { runbook: handoffRunbookId });
+    const nextActionItems = nextChecks.length
+        ? [...nextChecks, handoffStep]
+        : [tr('dashboard.demo_review_action_path', 'Review {action} path for {scenario}.', { action, scenario: scenarioId }), handoffStep];
+    renderList('nextActionsList', nextActionItems, (item) => item);
     renderList('doNotDoList', [
         tr('dashboard.demo_do_not_1', 'Do not treat demo output as live telemetry.'),
         tr('dashboard.demo_do_not_2', 'Do not change gateway mode based on demo data alone.'),
@@ -1297,16 +1322,22 @@ function applyDemoOverlay(result) {
         tr('dashboard.action_board_guidance_details_summary', 'Ask {ask} | Tell {tell} | Avoid {avoid}', { ask: 1, tell: 1, avoid: 2 }),
         'status-caution',
     );
-    updateElement('runbookTitle', tr('dashboard.demo_runbook_title', 'Demo scenario summary'));
-    updateElement('runbookId', scenarioId);
-    updateElement('runbookEffect', tr('dashboard.display_only', 'display_only'));
-    updateElement('runbookApproval', tr('dashboard.not_applicable', 'Not applicable'));
-    renderList('runbookSteps', nextChecks.length ? nextChecks : [tr('dashboard.demo_runbook_step_1', 'Inspect explanation output'), tr('dashboard.demo_runbook_step_2', 'Compare with live telemetry before acting')], (item) => item);
+    updateElement('runbookTitle', suggestedRunbookTitle || tr('dashboard.demo_runbook_title', 'Demo scenario summary'));
+    updateElement('runbookId', suggestedRunbookId || handoffRunbookId);
+    updateElement('runbookEffect', tr('dashboard.operator_guidance', 'operator_guidance'));
+    updateElement('runbookApproval', tr('dashboard.not_required', 'Not required'));
+    const runbookSteps = nextChecks.length
+        ? [...nextChecks, handoffStep]
+        : [tr('dashboard.demo_runbook_step_1', 'Inspect explanation output'), tr('dashboard.demo_runbook_step_2', 'Compare with live telemetry before acting'), handoffStep];
+    if (suggestedRunbookReason) {
+        runbookSteps.unshift(tr('dashboard.demo_runbook_reason', 'Runbook reason: {reason}', { reason: suggestedRunbookReason }));
+    }
+    renderList('runbookSteps', runbookSteps, (item) => item);
     updateToggleSummary(
         'actionBoardRunbookDetailsToggle',
         tr('dashboard.action_board_runbook_details_summary', 'Steps {steps} | Approval {approval}', {
-            steps: nextChecks.length || 2,
-            approval: tr('dashboard.not_applicable', 'Not applicable'),
+            steps: runbookSteps.length,
+            approval: tr('dashboard.not_required', 'Not required'),
         }),
         'status-neutral',
     );

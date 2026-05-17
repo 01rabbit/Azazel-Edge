@@ -36,3 +36,4 @@ The profile depends on Decision Loop determinism, Evidence Model consistency, an
 - [Decision Loop](../architecture/decision-loop.md)
 - [Evidence Model](../architecture/evidence-model.md)
 - [Local AI Triage](../architecture/local-ai-triage.md)
+- [Auditable Profile Translation Matrix](auditable-profile-diff.md)

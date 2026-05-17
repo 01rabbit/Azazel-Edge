@@ -1,0 +1,23 @@
+concept_id: auditable-emergency-socnoc
+label: Auditable Emergency SOC/NOC
+status: concept_profile
+stage_order:
+  - shelter_baseline_demo
+  - shelter_scan_detect_demo
+  - shelter_ssh_bruteforce_demo
+  - shelter_redirect_decoy_demo
+  - shelter_audit_review_demo
+  - shelter_operator_handoff_demo
+scenarios:
+  - id: shelter_baseline_demo
+    role: establish deterministic baseline in shelter network
+  - id: shelter_scan_detect_demo
+    role: explain observe or notify for early reconnaissance
+  - id: shelter_ssh_bruteforce_demo
+    role: explain throttle action for repeated authentication failures
+  - id: shelter_redirect_decoy_demo
+    role: explain redirect decision to OpenCanary path
+  - id: shelter_audit_review_demo
+    role: review explanation, rejected alternatives, and release condition
+  - id: shelter_operator_handoff_demo
+    role: hand off evidence and reasoning from non-specialist operator to specialist

@@ -162,6 +162,8 @@ class DemoApiV1Tests(unittest.TestCase):
         self.assertEqual(payload["attack_label"], "SSH Brute Force")
         self.assertEqual(payload["decision_path"]["final_policy"]["headline"], "FINAL POLICY: THROTTLE")
         self.assertEqual(payload["proofs"]["policy"]["status"], "active")
+        self.assertIn("release_condition", payload)
+        self.assertIn("rejected_actions", payload)
         self.assertEqual(payload["epd"]["state"], "danger")
 
     def test_demo_flow_endpoint_passes_requested_options(self) -> None:
