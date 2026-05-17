@@ -147,6 +147,7 @@ class ActionArbiter:
         rejected = self._rejected_alternatives(action, noc_fragile=noc_fragile, strong_soc=strong_soc, blast_score=blast_score)
         chosen_evidence_ids = self._chosen_evidence_ids(action, noc, soc)
         action_profile = self.action_profile(action)
+        release_condition = self._release_condition(action)
         decision_trace = self._decision_trace(
             noc=noc,
             soc=soc,
@@ -163,6 +164,7 @@ class ActionArbiter:
             'action': action,
             'reason': reason,
             'control_mode': control_mode,
+            'release_condition': release_condition,
             'chosen_evidence_ids': chosen_evidence_ids,
             'rejected_alternatives': rejected,
             'client_impact': client_impact or {},
@@ -173,6 +175,16 @@ class ActionArbiter:
                 'hash': self.policy_hash,
             },
         }
+
+    @staticmethod
+    def _release_condition(action: str) -> str:
+        if action in {'throttle', 'redirect'}:
+            return 'no_repeated_failures_for_300_seconds'
+        if action == 'isolate':
+            return 'manual_review_and_no_high_risk_signals_for_600_seconds'
+        if action == 'notify':
+            return 'operator_acknowledged_or_signal_stabilized'
+        return 'observe_only_no_control_applied'
 
     @staticmethod
     def _validate_schema(payload: Dict[str, Any], required: set[str], name: str) -> None:

@@ -3968,11 +3968,13 @@ def _demo_state_payload() -> Dict[str, Any]:
         "action": str(overlay.get("action") or "observe"),
         "control_mode": str(overlay.get("control_mode") or "none"),
         "reason": str(overlay.get("reason") or ""),
+        "release_condition": str(overlay.get("release_condition") or ""),
         "operator_wording": str(overlay.get("operator_wording") or ""),
         "talk_track": str(demo.get("talk_track") or ""),
         "next_checks": list(overlay.get("next_checks") or []),
         "chosen_evidence_ids": list(overlay.get("chosen_evidence_ids") or []),
         "rejected_alternatives": list(overlay.get("rejected_alternatives") or []),
+        "rejected_actions": list(overlay.get("rejected_actions") or []),
         "decision_path": dict(demo.get("decision_path") or {}) if isinstance(demo.get("decision_path"), dict) else {},
         "proofs": dict(demo.get("proofs") or {}) if isinstance(demo.get("proofs"), dict) else {},
         "epd": {

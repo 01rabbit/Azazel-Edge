@@ -80,6 +80,9 @@ sudo docker logs --tail 100 azazel-edge-ollama
 - Controlled execution remains gated by:
   - `AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC=1`
   - Runbook-level `requires_approval=true`
+- Operator handoff review baseline:
+  - `runbooks/ops/rb.ops.operator.handoff.audit-review.yaml`
+  - Review `trace_id`, selected action, rejected alternatives, release condition, and evidence continuity before specialist escalation.
 
 ## 10. Language Policy
 - This file is the English base document.

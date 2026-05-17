@@ -231,6 +231,84 @@ class DemoScenarioPack:
                     'drills_completed': 0,
                 },
             },
+            'shelter_baseline_demo': {
+                'description': 'Shelter network baseline with normal service health and low SOC signal.',
+                'demo': {
+                    'title': 'Shelter baseline',
+                    'summary': 'Establish a deterministic baseline before emergency events.',
+                    'attack_label': 'Baseline / Normal',
+                    'default_hold_sec': 6,
+                },
+                'events': [
+                    {'event_id': 'sh-b1', 'source': 'noc_probe', 'kind': 'icmp_probe', 'subject': '192.168.50.1', 'severity': 0, 'confidence': 0.95, 'attrs': {'reachable': True}},
+                    {'event_id': 'sh-b2', 'source': 'noc_probe', 'kind': 'service_health', 'subject': 'dns', 'severity': 0, 'confidence': 0.90, 'attrs': {'service': 'dns', 'state': 'healthy'}},
+                ],
+            },
+            'shelter_scan_detect_demo': {
+                'description': 'Early reconnaissance pattern in shelter network; deterministic path favors observe/notify.',
+                'demo': {
+                    'title': 'Shelter scan detect',
+                    'summary': 'Detect reconnaissance and keep response bounded for operator review.',
+                    'attack_label': 'Reconnaissance Scan',
+                    'default_hold_sec': 8,
+                },
+                'events': [
+                    {'event_id': 'sh-s1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.41->192.168.50.10:80/TCP', 'severity': 58, 'confidence': 0.70, 'attrs': {'sid': 220100, 'attack_type': 'port scan', 'category': 'Attempted Information Leak', 'target_port': 80, 'risk_score': 58, 'confidence_raw': 70, 'src_ip': '10.0.0.41', 'dst_ip': '192.168.50.10'}},
+                    {'event_id': 'sh-s2', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.0.41->192.168.50.10:80/TCP', 'severity': 40, 'confidence': 0.60, 'attrs': {'src_ip': '10.0.0.41', 'dst_ip': '192.168.50.10', 'dst_port': 80, 'flow_state': 'suspicious', 'app_proto': 'http'}},
+                ],
+            },
+            'shelter_ssh_bruteforce_demo': {
+                'description': 'Repeated SSH authentication failures from same source in shelter operation.',
+                'demo': {
+                    'title': 'Shelter SSH brute force',
+                    'summary': 'Deterministic SOC signal drives reversible control with clear explanation.',
+                    'attack_label': 'SSH Brute Force',
+                    'default_hold_sec': 9,
+                },
+                'events': [
+                    {'event_id': 'sh-ssh1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.42->192.168.50.22:22/TCP', 'severity': 82, 'confidence': 0.88, 'attrs': {'sid': 220200, 'attack_type': 'SSH Brute Force', 'category': 'Attempted Administrator Privilege Gain', 'target_port': 22, 'risk_score': 82, 'confidence_raw': 88, 'src_ip': '10.0.0.42', 'dst_ip': '192.168.50.22'}},
+                    {'event_id': 'sh-ssh2', 'source': 'syslog_min', 'kind': 'syslog_line', 'subject': '10.0.0.42->192.168.50.22:22/TCP', 'severity': 60, 'confidence': 0.75, 'attrs': {'message': 'failed ssh auth burst', 'host': 'shelter-edge', 'tag': 'sshd'}},
+                    {'event_id': 'sh-ssh3', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.0.42->192.168.50.22:22/TCP', 'severity': 45, 'confidence': 0.68, 'attrs': {'src_ip': '10.0.0.42', 'dst_ip': '192.168.50.22', 'dst_port': 22, 'flow_state': 'failed', 'app_proto': 'ssh'}},
+                ],
+            },
+            'shelter_redirect_decoy_demo': {
+                'description': 'Exploit-like behavior in shelter network with redirect path to OpenCanary.',
+                'demo': {
+                    'title': 'Shelter redirect to decoy',
+                    'summary': 'High-confidence SOC signal selects redirect with auditable rationale.',
+                    'attack_label': 'Exploit-like Behavior',
+                    'default_hold_sec': 9,
+                },
+                'events': [
+                    {'event_id': 'sh-r1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.43->192.168.50.30:443/TCP', 'severity': 90, 'confidence': 0.93, 'attrs': {'sid': 220300, 'attack_type': 'Exploit Attempt', 'category': 'Web Application Attack', 'target_port': 443, 'risk_score': 90, 'confidence_raw': 93, 'src_ip': '10.0.0.43', 'dst_ip': '192.168.50.30'}},
+                    {'event_id': 'sh-r2', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.0.43->192.168.50.30:443/TCP', 'severity': 50, 'confidence': 0.73, 'attrs': {'src_ip': '10.0.0.43', 'dst_ip': '192.168.50.30', 'dst_port': 443, 'flow_state': 'failed', 'app_proto': 'tls'}},
+                ],
+            },
+            'shelter_audit_review_demo': {
+                'description': 'Audit-focused replay emphasizing explanation, rejected alternatives, and release condition.',
+                'demo': {
+                    'title': 'Shelter audit review',
+                    'summary': 'Replay for reviewer workflow and post-incident accountability.',
+                    'attack_label': 'Audit Review',
+                    'default_hold_sec': 6,
+                },
+                'events': [
+                    {'event_id': 'sh-a1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.44->192.168.50.40:22/TCP', 'severity': 80, 'confidence': 0.85, 'attrs': {'sid': 220400, 'attack_type': 'SSH Brute Force', 'category': 'Attempted Administrator Privilege Gain', 'target_port': 22, 'risk_score': 80, 'confidence_raw': 85, 'src_ip': '10.0.0.44', 'dst_ip': '192.168.50.40'}},
+                ],
+            },
+            'shelter_operator_handoff_demo': {
+                'description': 'Operator handoff replay from non-specialist to specialist with preserved evidence trail.',
+                'demo': {
+                    'title': 'Shelter operator handoff',
+                    'summary': 'Show handoff-ready output backed by deterministic explanation artifacts.',
+                    'attack_label': 'Operator Handoff',
+                    'default_hold_sec': 6,
+                },
+                'events': [
+                    {'event_id': 'sh-h1', 'source': 'noc_probe', 'kind': 'service_health', 'subject': 'internet-uplink', 'severity': 62, 'confidence': 0.85, 'attrs': {'service': 'uplink', 'state': 'degraded'}},
+                    {'event_id': 'sh-h2', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.45->192.168.50.50:80/TCP', 'severity': 70, 'confidence': 0.78, 'attrs': {'sid': 220500, 'attack_type': 'suspicious web access', 'category': 'Potentially Bad Traffic', 'target_port': 80, 'risk_score': 70, 'confidence_raw': 78, 'src_ip': '10.0.0.45', 'dst_ip': '192.168.50.50'}},
+                ],
+            },
         }
 
     def stage_order(self) -> List[str]:

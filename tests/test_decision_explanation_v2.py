@@ -48,9 +48,11 @@ class DecisionExplanationV2Tests(unittest.TestCase):
                 'action': 'redirect',
                 'reason': 'soc_high_confidence_redirect_is_preferred',
                 'control_mode': 'opencanary_redirect',
+                'release_condition': 'no_repeated_failures_for_300_seconds',
                 'client_impact': {'score': 25, 'affected_client_count': 1, 'critical_client_count': 0},
                 'chosen_evidence_ids': ['ev-1'],
                 'rejected_alternatives': [],
+                'policy': {'version': 'shelter_balanced', 'hash': 'sha256:demo123'},
             },
             target='edge-uplink',
             trace_id='trace-23',
@@ -58,6 +60,10 @@ class DecisionExplanationV2Tests(unittest.TestCase):
         self.assertEqual(result['format_version'], 'v2')
         self.assertEqual(result['trace_id'], 'trace-23')
         self.assertIn('next_checks', result)
+        self.assertEqual(result['selected_action'], 'redirect')
+        self.assertEqual(result['release_condition'], 'no_repeated_failures_for_300_seconds')
+        self.assertEqual(result['policy_profile'], 'shelter_balanced')
+        self.assertEqual(result['config_hash'], 'sha256:demo123')
         self.assertIn('attack_candidates', result['why_chosen'])
         self.assertIn('ATT&CK candidates', result['operator_wording'])
         self.assertEqual(result['why_chosen']['affected_scope']['affected_segments'], ['lan-a'])
@@ -87,14 +93,16 @@ class DecisionExplanationV2Tests(unittest.TestCase):
             result = explainer.explain(
                 noc={'summary': {'status': 'poor'}},
                 soc={'summary': {'status': 'high', 'attack_candidates': [], 'ti_matches': []}},
-                arbiter={
-                    'action': 'notify',
-                    'reason': 'soc_high_but_noc_fragile',
-                    'control_mode': 'none',
-                    'client_impact': {'score': 0, 'affected_client_count': 0, 'critical_client_count': 0},
-                    'chosen_evidence_ids': ['ev-1'],
-                    'rejected_alternatives': [],
-                },
+            arbiter={
+                'action': 'notify',
+                'reason': 'soc_high_but_noc_fragile',
+                'control_mode': 'none',
+                'release_condition': 'operator_acknowledged_or_signal_stabilized',
+                'client_impact': {'score': 0, 'affected_client_count': 0, 'critical_client_count': 0},
+                'chosen_evidence_ids': ['ev-1'],
+                'rejected_alternatives': [],
+                'policy': {'version': 'auditable_emergency_socnoc', 'hash': 'sha256:zzz'},
+            },
                 persist=True,
             )
             rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]

@@ -34,9 +34,8 @@ Last updated: 2026-05-13
 - `docs/OPERATOR_GUIDE.md` (EN)
 - `docs/OPERATOR_GUIDE_JA.md` (JA)
 
-### C. Governance charter split
-- `AGENTS.md`: existing governance charter (current authoritative source)
-- `AGENTS_EN.md`: English reference summary
+### C. Governance charter
+- `AGENTS.md`: authoritative governance charter (English)
 
 ## Maintenance Rules
 - When editing a split document pair, update both EN and JA versions in the same PR when behavior changes.

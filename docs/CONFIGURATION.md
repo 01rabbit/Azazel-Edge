@@ -6,7 +6,7 @@ This document is the configuration entry point for Azazel-Edge.
 
 - Runtime defaults and environment files under `/etc/default/azazel-edge-*`
 - Deterministic SOC policy files under `config/soc_policy*.yaml`
-- Concept-to-profile mapping under `configs/profiles/*.yaml`
+- Concept-to-profile mapping under `concept_profiles/*.yaml`
 - Installer toggles under `installer/internal/*.sh`
 
 ## Key Configuration Domains
@@ -23,7 +23,7 @@ This document is the configuration entry point for Azazel-Edge.
 - SOC threshold and redirect policy controls: [SOC Policy Guide](SOC_POLICY_GUIDE.md)
 - Deployment profile intent and scope: [Deployment Profiles](DEPLOYMENT_PROFILES.md)
 - Socket/runtime permission posture: [Post-demo Socket Permission Model (#105)](POST_DEMO_SOCKET_PERMISSION_MODEL_105.md)
-- Concept-profile mapping layer: [../configs/profiles/README.md](../configs/profiles/README.md)
+- Concept-profile mapping layer: [../concept_profiles/README.md](../concept_profiles/README.md)
 
 ## Implementation Sources
 

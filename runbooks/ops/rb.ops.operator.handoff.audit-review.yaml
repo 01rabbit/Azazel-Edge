@@ -1,0 +1,23 @@
+id: rb.ops.operator.handoff.audit-review
+title: Operator Handoff Audit Review
+domain: ops
+audience: operator
+risk: medium
+effect: operator_guidance
+requires_approval: false
+args_schema:
+  type: object
+  properties:
+    trace_id:
+      type: string
+      maxLength: 120
+    scenario:
+      type: string
+      maxLength: 120
+  required: [trace_id]
+steps:
+  - Confirm `trace_id`, selected action, and reason from Decision Explanation.
+  - Review rejected alternatives and release condition before proposing any escalation.
+  - Check chosen evidence IDs and attach missing context for specialist review.
+  - Record operator observations and handoff summary in the ticket or incident log.
+user_message_template: "引き継ぎ準備を行います。trace_id と判断理由、却下アクション、解除条件を確認します。"
