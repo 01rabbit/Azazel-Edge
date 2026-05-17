@@ -151,7 +151,7 @@ Primary entry points:
 | `azazel_edge_web/` | Flask backend, dashboard, ops-comm UI |
 | `rust/azazel-edge-core/` | Rust defense core |
 | `runbooks/` | Runbook registry |
-| `configs/profiles/` | Concept-to-configuration mapping layer |
+| `concept_profiles/` | Concept-to-configuration mapping layer |
 | `demos/concepts/` | Concept-oriented deterministic demo grouping |
 | `docs/` | Architecture, concept, operations, and reference documentation |
 

@@ -7,6 +7,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - Added interactive architecture flow document link to `README.md` and introduced `docs/architecture/azazel_edge_arch.html`.
 - Synced benchmark report artifacts in `docs/BENCHMARK_RESULTS.json` and `docs/BENCHMARK_RESULTS.md` after validation rerun.
+- Consolidated AI governance charter to a single authoritative `AGENTS.md` (English) and removed `AGENTS_EN.md`.
+- Renamed concept profile mapping directory from `configs/profiles/` to `concept_profiles/` and updated documentation references accordingly.
 
 ## [0.1.1] - 2026-05-14
 
