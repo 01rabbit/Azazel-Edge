@@ -16,7 +16,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _DEFAULT_EXPLANATIONS_PATH = "/var/log/azazel-edge/decision-explanations.jsonl"
 _DEFAULT_AUDIT_ENV_VAR = "AZAZEL_TRIAGE_AUDIT_PATH"
@@ -27,23 +27,26 @@ _DEFAULT_AUDIT_PATH = "/var/log/azazel-edge/triage-audit.jsonl"
 # Helpers — read-only file operations only
 # ---------------------------------------------------------------------------
 
-def _load_explanations(path: Path) -> List[Dict[str, Any]]:
-    """Load all JSONL records from an explanations file.  Returns [] if the
-    file does not exist or is empty.  Skips blank/malformed lines silently."""
+def _load_explanations(path: Path) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Load all JSONL records from an explanations file.
+
+    Returns ``([], None)`` if the file does not exist or is empty.
+    Returns ``([], error)`` on the first malformed non-blank line.
+    """
     if not path.exists():
-        return []
+        return [], None
     records: List[Dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         line = line.strip()
         if not line:
             continue
         try:
             obj = json.loads(line)
         except Exception:
-            continue
+            return [], f"invalid explanation JSONL at line {line_no}: {path}"
         if isinstance(obj, dict):
             records.append(obj)
-    return records
+    return records, None
 
 
 def _select_record(
@@ -55,7 +58,7 @@ def _select_record(
         return None
     if trace_id is None:
         return records[-1]
-    for rec in records:
+    for rec in reversed(records):
         if str(rec.get("trace_id") or "") == trace_id:
             return rec
     return None
@@ -243,7 +246,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ------------------------------------------------------------------
     # Load explanations (READ-ONLY)
     # ------------------------------------------------------------------
-    records = _load_explanations(explanations_path)
+    records, parse_error = _load_explanations(explanations_path)
+    if parse_error:
+        print(f"[audit-review] {parse_error}", file=sys.stderr)
+        return 3
     if not records:
         print(
             f"[audit-review] explanations file is missing or empty: {explanations_path}",

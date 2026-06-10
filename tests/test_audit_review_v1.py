@@ -272,6 +272,92 @@ class AuditReviewV1Tests(unittest.TestCase):
             self.assertIn("trace-last", output2)
 
     # ------------------------------------------------------------------
+    # Test 5: duplicate trace-id uses the latest matching record
+    # ------------------------------------------------------------------
+    def test_trace_id_selection_uses_latest_matching_record(self) -> None:
+        """When the same trace_id appears multiple times, the newest one wins."""
+        import azazel_edge.audit_review as audit_review
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            exp_path = tmp_path / "decision-explanations.jsonl"
+            audit_path = tmp_path / "triage-audit.jsonl"
+
+            first = _build_explanation_record(tmp_path, "trace-dup", exp_path)
+            second = _build_explanation_record(tmp_path, "trace-dup", exp_path)
+
+            lines = exp_path.read_text(encoding="utf-8").splitlines()
+            rows = [json.loads(line) for line in lines]
+            rows[0]["operator_wording"] = "older duplicate record"
+            rows[1]["operator_wording"] = "newer duplicate record"
+            exp_path.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            logger = P0AuditLogger(audit_path)
+            logger.log_action_decision(
+                trace_id="trace-dup", source="arbiter", action=first["selected_action"]
+            )
+            logger.log_action_decision(
+                trace_id="trace-dup", source="arbiter", action=second["selected_action"]
+            )
+
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                exit_code = audit_review.main(
+                    argv=[
+                        "--explanations-path", str(exp_path),
+                        "--audit-path", str(audit_path),
+                        "--trace-id", "trace-dup",
+                    ]
+                )
+            output = buf.getvalue()
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("newer duplicate record", output)
+            self.assertNotIn("older duplicate record", output)
+
+    # ------------------------------------------------------------------
+    # Test 6: malformed explanations JSONL returns exit 3
+    # ------------------------------------------------------------------
+    def test_malformed_explanations_jsonl_exit_3(self) -> None:
+        """Malformed explanation JSONL must fail closed with exit code 3."""
+        import azazel_edge.audit_review as audit_review
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            exp_path = tmp_path / "decision-explanations.jsonl"
+            audit_path = tmp_path / "triage-audit.jsonl"
+
+            _build_explanation_record(tmp_path, "trace-bheu-05", exp_path)
+            with exp_path.open("a", encoding="utf-8") as handle:
+                handle.write('{"broken": \n')
+
+            logger = P0AuditLogger(audit_path)
+            logger.log_action_decision(
+                trace_id="trace-bheu-05", source="arbiter", action="redirect"
+            )
+
+            stdout_buf = io.StringIO()
+            stderr_buf = io.StringIO()
+            old_stderr = sys.stderr
+            try:
+                sys.stderr = stderr_buf
+                with redirect_stdout(stdout_buf):
+                    exit_code = audit_review.main(
+                        argv=[
+                            "--explanations-path", str(exp_path),
+                            "--audit-path", str(audit_path),
+                        ]
+                    )
+            finally:
+                sys.stderr = old_stderr
+
+            self.assertEqual(exit_code, 3)
+            self.assertIn("invalid explanation JSONL", stderr_buf.getvalue())
+
+    # ------------------------------------------------------------------
     # Bonus: missing explanations file returns exit 2
     # ------------------------------------------------------------------
     def test_missing_explanations_file_exit_2(self) -> None:
