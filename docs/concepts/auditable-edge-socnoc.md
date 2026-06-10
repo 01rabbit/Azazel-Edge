@@ -37,3 +37,7 @@ The profile depends on Decision Loop determinism, Evidence Model consistency, an
 - [Evidence Model](../architecture/evidence-model.md)
 - [Local AI Triage](../architecture/local-ai-triage.md)
 - [Auditable Profile Translation Matrix](auditable-profile-diff.md)
+
+## Related Planning Documents
+- [Black Hat Europe Arsenal CFP Draft (not accepted)](../cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md)
+- [Paper: Auditable Edge SOC/NOC Gateway](../papers/auditable-edge-socnoc-europe.md)

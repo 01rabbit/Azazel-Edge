@@ -42,6 +42,15 @@ Entry point for all documents in this directory.
 | [DEMO_GUIDE.md](DEMO_GUIDE.md) | Operator | Deterministic demo replay walkthrough | - |
 | [ARSENAL_DEMO_PROFILE.md](ARSENAL_DEMO_PROFILE.md) | Operator / Presenter | Fixed Black Hat Arsenal demo profile and fallback runbook | 2026-05-14 |
 
+## CFP Drafts and Papers
+
+Pre-acceptance planning material. CFP drafts are not accepted-appearance records and must not be moved to `docs/arsenal/` unless accepted.
+
+| File | Audience | Description | Last Updated |
+|------|----------|-------------|--------------|
+| [cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md](cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md) | Presenter / Reviewer | Black Hat Europe Arsenal CFP draft for the Auditable Edge SOC/NOC profile (not accepted) | 2026-06-10 |
+| [papers/auditable-edge-socnoc-europe.md](papers/auditable-edge-socnoc-europe.md) | Reviewer / Researcher | Paper-style technical description of the Auditable Edge SOC/NOC gateway concept | 2026-06-10 |
+
 ## Planning and Records
 
 | File | Audience | Description | Last Updated |
