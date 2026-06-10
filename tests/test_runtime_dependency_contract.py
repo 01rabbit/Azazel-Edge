@@ -54,7 +54,7 @@ def _third_party_imports() -> set[str]:
                 top = module.split(".", 1)[0]
                 if not top or top in stdlib:
                     continue
-                if top in {"azazel_edge", "azazel_edge_ai", "azazel_edge_control", "azazel_edge_web", "tests"}:
+                if top in {"azazel_edge", "azazel_edge_ai", "azazel_edge_control", "azazel_edge_web", "tests", "tools"}:
                     continue
                 if top in local_mods or top in local_pkgs:
                     continue
