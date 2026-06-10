@@ -101,6 +101,41 @@ it works end-to-end until an integration test is in place.
 
 Status of Rust → Python trace_id threading: **Prototype**
 
+## Rejected-alternatives & release-condition coverage (per stream)
+
+Traceability fields sourced from the `ActionArbiter` output dict and propagated
+additively to downstream records.  No decision logic or enforcement behavior is
+altered by these additions.
+
+| Stream | rejected_alternatives | release_condition | Source / note |
+|---|---|---|---|
+| v2 explanation (`DecisionExplainer.explain()`) | Present (`why_not_others`) | Present | From arbiter output; part of the canonical operator record. |
+| `ActionArbiter` output dict | Present (`rejected_alternatives`) | Present (`release_condition`) | Source of truth; computed once per `decide()` call. |
+| OpenCanary redirect record + audit `action_decision` | Now present | Now present | Sourced from arbiter output at `evaluate()` time; propagated to `apply()` audit call. |
+| Tactics-engine `DecisionLogger` | Omitted | Omitted | Low-level engine/scoring trace by design; engine config_hash is distinct from the SOC policy_profile. |
+| Demo replay summary (`scenario_summary()`) | Not directly present (available via the `explanation` record) | Now surfaced | `release_condition` added to summary return; `rejected_alternatives` accessible through the full explanation record. |
+
+## config_hash & policy_profile coverage (per stream)
+
+| Stream | config_hash | policy_profile | Source / note |
+|---|---|---|---|
+| v2 explanation (`DecisionExplainer.explain()`) | Present | Present | From arbiter `policy.hash` / `policy.version`. |
+| OpenCanary redirect record + audit `action_decision` | Now present | Now present | Sourced from arbiter `policy.hash` / `policy.version` at `evaluate()` time. |
+| Demo replay summary (`scenario_summary()`) | Now surfaced | Now surfaced | Drawn from `result['explanation']['config_hash']` / `['policy_profile']`. |
+| Tactics-engine `DecisionLogger` | Present (engine config hash) | N/A | Engine-internal config hash; not SOC-policy-scoped.  `policy_profile` is intentionally absent — this is an engine trace, not the operator decision record. |
+
+**Reproducibility note.**
+
+Implemented: per-stream `config_hash` and `policy_profile` are now present on
+the OpenCanary redirect record, the `P0AuditLogger` `action_decision` record,
+and the demo replay summary — all sourced from the single `ActionArbiter` output
+dict and never recomputed.  The v2 explanation already carried these fields.
+
+Planned (not yet done): full cross-output reproducibility packaging — a
+structured bundle that ties the arbiter snapshot, the v2 explanation record, the
+audit chain segment, and the redirect state file together under a single
+incident-scoped manifest — remains future work.
+
 ## Related Documents
 - [Decision Loop](decision-loop.md)
 - [P0 Runtime Architecture](../P0_RUNTIME_ARCHITECTURE.md)

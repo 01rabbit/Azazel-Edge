@@ -53,6 +53,10 @@ class OpenCanaryRedirectController:
             'opencanary': target,
             'expires_at': expires_at.isoformat(timespec='seconds'),
             'evidence_ids': [str(x) for x in arbiter.get('chosen_evidence_ids', []) if str(x)],
+            'release_condition': str(arbiter.get('release_condition') or ''),
+            'rejected_alternatives': arbiter.get('rejected_alternatives', []) if isinstance(arbiter.get('rejected_alternatives'), list) else [],
+            'config_hash': str((arbiter.get('policy') or {}).get('hash') or ''),
+            'policy_profile': str((arbiter.get('policy') or {}).get('version') or ''),
         }
 
     def apply(self, decision: Dict[str, Any]) -> Dict[str, Any]:
@@ -69,6 +73,10 @@ class OpenCanaryRedirectController:
             target_ip=str(decision.get('target_ip') or ''),
             evidence_ids=decision.get('evidence_ids', []),
             reason=str(decision.get('reason') or ''),
+            release_condition=str(decision.get('release_condition') or ''),
+            rejected_alternatives=decision.get('rejected_alternatives', []),
+            config_hash=str(decision.get('config_hash') or ''),
+            policy_profile=str(decision.get('policy_profile') or ''),
         )
         return {'ok': True, 'applied': True, 'state_path': str(self.state_path)}
 

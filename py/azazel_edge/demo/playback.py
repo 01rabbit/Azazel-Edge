@@ -157,6 +157,9 @@ def scenario_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
         "next_checks": list(result.get("explanation", {}).get("next_checks") or []),
         "overlay_written": bool(payload.get("overlay_written") or payload.get("overlay")),
         "epd_refresh": payload.get("epd_refresh"),
+        "config_hash": str(result.get("explanation", {}).get("config_hash") or ""),
+        "policy_profile": str(result.get("explanation", {}).get("policy_profile") or ""),
+        "release_condition": str(result.get("explanation", {}).get("release_condition") or ""),
     }
 
 
