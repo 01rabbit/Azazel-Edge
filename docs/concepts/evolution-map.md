@@ -21,6 +21,12 @@ deployment model, and security value.
 | Black Hat Asia 2026 | Offline Edge-AI SOC/NOC | Azazel-Pi: Offline Edge-AI SOC/NOC Gateway with Mock-LLM Scoring and Ollama Fallback |
 | Black Hat USA 2026 | Deterministic Edge Decision Support | Azazel-Edge: Deterministic Edge Decision Support for Constrained SOC/NOC Operations |
 
+## CFP Candidates (Not Accepted)
+
+| Target Event | Concept | Status |
+|---|---|---|
+| Black Hat Europe (candidate) | Auditable Edge SOC/NOC | CFP draft only — not accepted, not scheduled. See [CFP draft](../cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md). |
+
 ## Design Principle
 
 The repository should not be forked for each regional presentation.

@@ -118,6 +118,10 @@ Different operational profiles are documented as concept profiles, not forks.
 - [Auditable Edge SOC/NOC](docs/concepts/auditable-edge-socnoc.md)
 - [Field-Deployable Scapegoat Gateway](docs/concepts/field-deployable-scapegoat-gateway.md)
 
+Pre-acceptance planning material (not accepted appearances):
+- [Black Hat Europe Arsenal CFP Draft](docs/cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md)
+- [Paper: Auditable Edge SOC/NOC Gateway](docs/papers/auditable-edge-socnoc-europe.md)
+
 ## Arsenal Demonstrations
 
 Only accepted and public Black Hat Arsenal appearances are recorded here.
