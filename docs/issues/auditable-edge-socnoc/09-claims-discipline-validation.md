@@ -25,9 +25,10 @@ under `docs/arsenal/` before acceptance.
 ## Tasks
 
 - [ ] Add a check that scans `README.md` and `docs/` and fails on forbidden hype
-      phrases (case-insensitive): "world's first", "military-grade", "unbreakable",
-      "guaranteed protection", "autonomous AI defender", and close variants. Exclude
-      the check's own forbidden-phrase list from matching itself.
+      phrases (case-insensitive), including superlative-first claims, militarized
+      marketing language, absolute-breakage claims, protection guarantees, and
+      self-governing-defender wording. Exclude the check's own forbidden-phrase
+      list from matching itself.
 - [ ] Add a check that fails if any file under `docs/arsenal/` contains a
       "Black Hat Europe" reference (pre-acceptance guard).
 - [ ] Add a check that fails if any file matching `docs/arsenal/auditable-edge-socnoc-cfp-*.md`

@@ -110,7 +110,7 @@ Dependency-ordered. Each step states why it precedes the next.
   - new claims-discipline test from Issue 09 (e.g. `tests/test_claims_discipline_v1.py`)
 - **Claims-discipline grep set** (must return no matches in `README.md` and `docs/`,
   outside of the explicit "forbidden phrases" lists that name them):
-  - `grep -rniE "world'?s first|military[- ]grade|unbreakable|guaranteed protection|autonomous AI defender" README.md docs/`
+  - `python -m tools.claims_discipline`
   - `grep -rni "black hat europe" docs/arsenal/` (must be empty pre-acceptance)
   - `ls docs/arsenal/blackhat-europe-*.md` (must not exist pre-acceptance)
 - **Demo replay verification**:
