@@ -309,6 +309,62 @@ class DemoScenarioPack:
                     {'event_id': 'sh-h2', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.45->192.168.50.50:80/TCP', 'severity': 70, 'confidence': 0.78, 'attrs': {'sid': 220500, 'attack_type': 'suspicious web access', 'category': 'Potentially Bad Traffic', 'target_port': 80, 'risk_score': 70, 'confidence_raw': 78, 'src_ip': '10.0.0.45', 'dst_ip': '192.168.50.50'}},
                 ],
             },
+            'auditable_edge_socnoc': {
+                'description': 'Regulated EU edge segment: high-confidence SOC signal drives auditable reversible control with a full local decision record.',
+                'demo': {
+                    'title': 'Auditable Edge SOC/NOC — EU Regulated Segment',
+                    'summary': 'Cross-source SOC evidence from a regulated EU edge node promotes bounded reversible control, producing a complete offline audit record without any cloud dependency.',
+                    'attack_label': 'DNS C2 Beacon (EU Segment)',
+                    'default_hold_sec': 8,
+                    'talk_track': 'Suricata and flow evidence raise a high-confidence SOC signal on a privacy-sensitive EU edge segment. The deterministic replay shows why the arbiter selects auditable reversible control, how the decision record is produced locally, and what the operator sees before any action is taken.',
+                    'decision_path': {
+                        'first_pass': {
+                            'headline': 'SOC SIGNAL: CRITICAL (REGULATED SEGMENT)',
+                            'detail': 'The Suricata alert and failed TLS flow align on the same source / destination pair within the regulated EU edge segment.',
+                        },
+                        'second_pass': {
+                            'headline': 'CORRELATION SUPPORT ACTIVE',
+                            'detail': 'Cross-source evidence keeps the case on the SOC path; the local-first decision record is written before the arbiter selects control.',
+                        },
+                        'final_policy': {
+                            'headline': 'FINAL POLICY: AUDITABLE REVERSIBLE CONTROL',
+                            'detail': 'The suspicious flow moves into bounded reversible control. The config hash and policy profile are embedded in the offline audit record for post-action review.',
+                        },
+                    },
+                    'proofs': {
+                        'detection': {
+                            'status': 'active',
+                            'headline': 'SURICATA ALERT ACTIVE (EU SEGMENT)',
+                            'detail': 'The core trigger comes from Suricata and is reinforced by aligned flow evidence captured within the local regulated segment.',
+                            'evidence': 'sid=210001 | flow anomaly support | segment=eu-regulated',
+                        },
+                        'control': {
+                            'status': 'active',
+                            'headline': 'AUDITABLE REVERSIBLE CONTROL READY',
+                            'detail': 'The arbiter keeps the response bounded and reversible; the operator may inspect or cancel before the control takes effect.',
+                            'evidence': 'action=throttle | mode=route_preference | audit_chain=local',
+                        },
+                        'explanation': {
+                            'status': 'active',
+                            'headline': 'OFFLINE AUDIT RECORD READY',
+                            'detail': 'The explanation payload carries config_hash and policy_profile for post-action accountability. No data leaves the local segment.',
+                            'evidence': 'config_hash embedded | policy_profile embedded | local-first decision record',
+                        },
+                    },
+                },
+                'events': [
+                    {'event_id': 'eu-soc-1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.1.5->192.168.60.10:443/TCP', 'severity': 88, 'confidence': 0.92, 'attrs': {'sid': 210001, 'attack_type': 'DNS C2 Beacon', 'category': 'Potentially Bad Traffic', 'target_port': 443, 'risk_score': 88, 'confidence_raw': 92, 'src_ip': '10.0.1.5', 'dst_ip': '192.168.60.10'}},
+                    {'event_id': 'eu-flow-1', 'source': 'flow_min', 'kind': 'flow_summary', 'subject': '10.0.1.5->192.168.60.10:443/TCP', 'severity': 45, 'confidence': 0.70, 'attrs': {'src_ip': '10.0.1.5', 'dst_ip': '192.168.60.10', 'dst_port': 443, 'flow_state': 'failed', 'app_proto': 'tls'}},
+                    {'event_id': 'eu-probe-1', 'source': 'noc_probe', 'kind': 'icmp_probe', 'subject': '192.168.60.1', 'severity': 0, 'confidence': 0.95, 'attrs': {'reachable': True}},
+                ],
+                'scoring': {
+                    'scenario_id': 'auditable_edge_socnoc',
+                    'response_time_sec': None,
+                    'correct_action': None,
+                    'runbook_proposed': None,
+                    'drills_completed': 0,
+                },
+            },
         }
 
     def stage_order(self) -> List[str]:
