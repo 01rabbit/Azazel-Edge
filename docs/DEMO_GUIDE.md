@@ -229,8 +229,22 @@ Then refresh the dashboard.
 
 That is valid. The replay runner uses the same deterministic scenario pack.
 
+## Audit Review (read-only)
+
+After a scenario run, use `bin/azazel-edge-audit-review` to walk the decision
+through its v2 explanation record and verify the hash-chained audit log.
+The command is read-only; it makes no writes and no policy changes.
+
+```bash
+bin/azazel-edge-audit-review --compact
+```
+
+See [Arsenal Demo Profile — Section 8](ARSENAL_DEMO_PROFILE.md) for full usage,
+exit codes, and the read-only contract.
+
 ## Related Documents
 
 - [AI operation guide](docs/AI_OPERATION_GUIDE.md)
 - [M.I.O. persona profile](docs/MIO_PERSONA_PROFILE.md)
 - [P0 runtime architecture](docs/P0_RUNTIME_ARCHITECTURE.md)
+- [Arsenal Demo Profile](docs/ARSENAL_DEMO_PROFILE.md)
