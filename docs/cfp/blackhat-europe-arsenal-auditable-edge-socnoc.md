@@ -48,7 +48,7 @@ Azazel-Edge is a single core platform presented through concept profiles; this s
 - **P0 audit logger** — hash-chained, tamper-evident JSONL.
 - **AI governance layer** — local Ollama only, advisory output only, every call audited; AI cannot decide actions.
 - **OpenCanary redirect decision path** — evaluates arbiter plus SOC thresholds and records redirect decisions to state JSON, JSONL, and the audit chain.
-- **Review surfaces** — Web API endpoints (`/api/triage/audit`, `/api/demo/explanation/latest`, dashboard APIs), a unified CLI, and a TUI.
+- **Review surfaces** — Web API endpoints (`/api/triage/audit`, `/api/demo/explanation/latest`, dashboard APIs), a unified CLI, a TUI, and the read-only `bin/azazel-edge-audit-review` command (decision → explanation → audit-chain walk, no state modification).
 
 ## Why This Fits Black Hat Europe Arsenal
 
@@ -77,7 +77,7 @@ The demo is staged and replay-based, designed for a booth and for offline operat
 4. **Policy dry-run.** Replay the same events against a candidate SOC policy profile and compare reported policy hash and would-be decisions.
 5. **Optional local AI assist (shown separately).** Demonstrate that local AI only summarizes and hints, and that its invocation is audited and cannot change the decision.
 
-Demo scenarios: the deterministic showcase uses the existing `mixed_correlation_demo` scenario. A dedicated Europe-flavored scenario id `auditable_edge_socnoc` is **Planned** and does not exist yet; do not present it as available.
+Demo scenarios: the deterministic showcase uses the **`auditable_edge_socnoc`** scenario (available in the demo pack). It drives a high-confidence SOC bounded reversible-control decision (action=throttle) with non-empty rejected alternatives, a release condition, and `config_hash`/`policy_profile` in the local decision record, reviewable read-only via `bin/azazel-edge-audit-review`.
 
 If anything fails, the deterministic replay path is the final fallback, consistent with the Arsenal demo profile.
 
@@ -98,6 +98,8 @@ If anything fails, the deterministic replay path is the final fallback, consiste
 | Local AI assist with enforced governance | Implemented | `py/azazel_edge_ai/agent.py` (local Ollama only), `py/azazel_edge/ai_governance.py`; AI cannot select/modify actions. |
 | Local-first raw-log handling (default) | Implemented | Default Vector config writes only to local files; no raw-log egress path. |
 | Review surfaces (Web API, CLI, TUI) | Implemented | `/api/triage/audit`, `/api/demo/explanation/latest`, dashboard APIs. |
+| Read-only audit review command | Implemented | `bin/azazel-edge-audit-review`; read-only, presents the decision → explanation → audit-chain walk without modifying any state. |
+| Europe demo scenario `auditable_edge_socnoc` | Implemented | Available in the demo pack; drives action=throttle with non-empty rejected alternatives, release condition, and `config_hash`/`policy_profile` in the local decision record. |
 
 ## Planned / Prototype Capabilities
 
@@ -109,7 +111,6 @@ If anything fails, the deterministic replay path is the final fallback, consiste
 | Unified incident evidence bundle export | Planned | Partial export paths exist; unified package format is in progress. |
 | Automated release-condition orchestration | Planned | Release conditions are recorded as reviewable strings; no automated rollback executes them. |
 | Live network redirect/isolation enforcement | Prototype | Code path exists in the Rust core behind `AZAZEL_DEFENSE_ENFORCE=true`; defaults to false with dry-run mode, rollback commands recorded, no automated tests. Never the demo default. |
-| Dedicated Europe demo scenario `auditable_edge_socnoc` | Planned | Does not exist yet; concept demo pack currently references `mixed_correlation_demo` and `disaster_phishing_demo`. |
 
 ## Safety and Ethical Boundaries
 
@@ -122,10 +123,50 @@ If anything fails, the deterministic replay path is the final fallback, consiste
 ## Reviewer Notes
 
 - **Demo-default vs opt-in.** The demo default is deterministic replay with `ai_used = false` and no live enforcement. Live Suricata input and live network enforcement are opt-in and must preserve immediate fallback to replay-only mode.
-- **Honest status.** Items marked Prototype (end-to-end `trace_id` threading, runtime profile switching) and Planned (full reproducibility packaging, unified evidence bundle export, automated release-condition orchestration, the `auditable_edge_socnoc` scenario) are not finished; please treat the tables above as authoritative.
+- **Honest status.** Items marked Prototype (end-to-end `trace_id` threading, runtime profile switching) and Planned (full reproducibility packaging, unified evidence bundle export, automated release-condition orchestration) are not finished; please treat the tables above as authoritative.
 - **Evidence for reviewers.** The behavior described is backed by the test suite at [`../../tests/`](../../tests/), including arbiter, audit-logger (with tamper detection), AI-governance, and config-drift tests.
 - **Privacy posture.** Raw logs never need to leave the site; the only external forwarding is an optional, non-default opt-in (normalized alerts via Wazuh CEF).
 - **No acceptance implied.** This is a draft submission, not a confirmed appearance.
+
+## Claims & Safety Sign-off
+
+Recorded 2026-06-11.
+
+- **Hype scan result.** The three documents reviewed (`docs/cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md`, `docs/papers/auditable-edge-socnoc-europe.md`, `docs/roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md`) were scanned for the project's forbidden-hype phrase set (defined in `tools/claims_discipline.py` and the roadmap validation section); the only match was the checker's own definition list and a `grep` example, not a capability claim. No non-negated hype phrase was found in the draft, paper, or roadmap prose. Sign-off is **not blocked**.
+- **Implemented/Prototype/Planned label review.** Capability status labels were reviewed against repository state. The `auditable_edge_socnoc` scenario and `bin/azazel-edge-audit-review` command are now reflected as Implemented. Per-stream `config_hash`/`policy_profile` and rejected-alternatives/release-condition traceability are reflected as Implemented. The remaining Prototype items (end-to-end `trace_id` threading, runtime profile switching) and Planned items (full reproducibility packaging, unified evidence bundle export, automated release-condition orchestration) remain accurately labelled.
+- **AI-advisory boundary.** The AI-advisory-only and audited boundary is stated accurately: local AI assist cannot select or modify an arbiter action (enforced in code and tests); every AI invocation is audited. This is stated in the Safety and Ethical Boundaries section and the Tool Description.
+- **Enforcement-off-by-default boundary.** The `AZAZEL_DEFENSE_ENFORCE` off-by-default and dry-run posture is stated accurately in the Safety and Ethical Boundaries section and in the Reviewer Notes.
+- **Human proofread.** A final human proofread of the full draft against the submission form has not yet been completed. This remains an open item before submission.
+
+## Abstract Variants
+
+The two variants below restate only claims already present in this draft. No new claims are introduced.
+
+### Short Abstract
+
+Azazel-Edge is a local-first edge SOC/NOC gateway built around a deterministic decision loop rather than an opaque AI defender. Telemetry is normalized into compact evidence, scored by separate NOC and SOC evaluators, and resolved by an Action Arbiter that selects exactly one of five bounded responses: observe, notify, throttle, redirect, isolate. Each decision produces a structured explanation record — the selected action, the rejected alternatives and why they were not chosen, a human-readable release condition, the active policy profile, a configuration hash, and a trace id — and is appended to a hash-chained, tamper-evident audit log. Local AI assist is strictly advisory: it can summarize, hint, and help phrase explanations, but it cannot select or modify an action. Raw logs stay on the device by default. The Arsenal demo runs as a deterministic replay on Raspberry Pi-class hardware, offline-capable, so reviewers can inspect the same explanation JSONL and audit chain an operator would use to justify a decision after the fact.
+
+(1045 characters)
+
+### Detailed Abstract
+
+Many "AI for defense" tools ask operators to trust a black-box verdict. In privacy-sensitive and regulated environments this is a poor fit: reviewers, auditors, and incident handlers need to know why a control was applied, what else was considered, and how to reverse it. Azazel-Edge takes the opposite stance. The deterministic decision loop is authoritative; AI is advisory only and always runs after the decision is made.
+
+The pipeline is small and inspectable. Edge telemetry (for example Suricata EVE events and local probes) is normalized into Evidence Plane records. Two separate deterministic evaluators score state: a NOC evaluator across nine health dimensions and a SOC evaluator whose policy is loaded from a YAML policy file whose SHA-256 hash is computed at load time. Policy thresholds are applied, and the Action Arbiter selects one bounded action from a fixed set — observe, notify, throttle, redirect, isolate — where each action declares whether it is reversible, whether it requires approval, and whether it is audited.
+
+Every decision is explained in machine- and operator-readable form. The DecisionExplainer writes `format_version` "v2" JSONL records containing, among other fields: `selected_action`, `reason`, `rejected_actions` with `why_not_others`, `release_condition` (a human-readable string describing what must hold before the action is relaxed), `policy_profile`, `config_hash`, `trace_id`, `why_chosen`, `evidence_ids`, `next_checks`, and `operator_wording` for plain-language handoff. The record is sealed with an HMAC-signed trust capsule. In parallel, the P0 audit logger appends each event to a hash-chained JSONL log (`chain_prev` / `chain_hash` per record), making after-the-fact tampering detectable; the test suite includes tamper-detection cases.
+
+Local-first handling is the default. The shipped Vector configuration writes only to local files, and no code path sends raw logs to external APIs. AI assist talks only to a local Ollama instance on `127.0.0.1`; an AI governance layer strips raw-log keys before any model call, restricts AI output to advice, summary, and candidate fields, and audits every invocation. The AI cannot pick or alter an arbiter action — this is enforced in code and in tests. Deception is defensive and bounded: a redirect decision can divert selected flows toward prepared OpenCanary decoys, but the Python path records and audits the redirect decision and a recorded enforcement plan; actual network enforcement lives in the Rust core, is opt-in, and is dry-run by default with rollback commands recorded.
+
+Reproducibility is built into the workflow. Three SOC policy profiles (balanced, conservative, demo) are selectable, and a policy dry-run CLI replays normalized events against a candidate policy and reports the policy hash and would-be decisions before anything ships. A deterministic replay demo runner tags every run `execution.mode = deterministic_replay` and `ai_used = false`, so the demo is stable and explainable.
+
+Azazel-Edge does not guarantee legal or regulatory compliance. It supports operator accountability and after-the-fact explanation in regulated contexts by making decisions reviewable, reversible, and traceable.
+
+(3176 characters)
+
+---
+
+*Confirm against the official Black Hat Europe Arsenal submission-form character limits before submission.*
 
 ## Links to Repository Documents
 

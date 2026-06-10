@@ -52,6 +52,7 @@ Pre-acceptance planning material. CFP drafts are not accepted-appearance records
 | [papers/auditable-edge-socnoc-europe.md](papers/auditable-edge-socnoc-europe.md) | Reviewer / Researcher | Paper-style technical description of the Auditable Edge SOC/NOC gateway concept | 2026-06-10 |
 | [roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md](roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md) | Developer / Presenter | Submission- and demo-readiness roadmap for the Auditable Edge SOC/NOC profile | 2026-06-10 |
 | [issues/blackhat-europe/README.md](issues/blackhat-europe/README.md) | Developer | Issue drafts (gh-registerable) for Black Hat Europe CFP readiness | 2026-06-10 |
+| [BHEU_ARSENAL_DRY_RUN_CHECKLIST.md](BHEU_ARSENAL_DRY_RUN_CHECKLIST.md) | Developer / Presenter | Pre-submission / pre-event rehearsal checklist for Black Hat Europe Arsenal (not accepted; on-hardware run is a human step) | 2026-06-11 |
 
 ## Planning and Records
 
