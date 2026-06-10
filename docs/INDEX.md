@@ -42,17 +42,17 @@ Entry point for all documents in this directory.
 | [DEMO_GUIDE.md](DEMO_GUIDE.md) | Operator | Deterministic demo replay walkthrough | - |
 | [ARSENAL_DEMO_PROFILE.md](ARSENAL_DEMO_PROFILE.md) | Operator / Presenter | Fixed Black Hat Arsenal demo profile and fallback runbook | 2026-05-14 |
 
-## CFP Drafts and Papers
+## Candidate CFP Drafts and Planning
 
-Pre-acceptance planning material. CFP drafts are not accepted-appearance records and must not be moved to `docs/arsenal/` unless accepted.
+Pre-acceptance planning material. These documents support submission preparation and candidate concepts only. They are not accepted-appearance records and must not be moved to `docs/arsenal/` unless accepted.
 
 | File | Audience | Description | Last Updated |
 |------|----------|-------------|--------------|
-| [cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md](cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md) | Presenter / Reviewer | Black Hat Europe Arsenal CFP draft for the Auditable Edge SOC/NOC profile (not accepted) | 2026-06-10 |
-| [papers/auditable-edge-socnoc-europe.md](papers/auditable-edge-socnoc-europe.md) | Reviewer / Researcher | Paper-style technical description of the Auditable Edge SOC/NOC gateway concept | 2026-06-10 |
-| [roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md](roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md) | Developer / Presenter | Submission- and demo-readiness roadmap for the Auditable Edge SOC/NOC profile | 2026-06-10 |
-| [issues/blackhat-europe/README.md](issues/blackhat-europe/README.md) | Developer | Issue drafts (gh-registerable) for Black Hat Europe CFP readiness | 2026-06-10 |
-| [BHEU_ARSENAL_DRY_RUN_CHECKLIST.md](BHEU_ARSENAL_DRY_RUN_CHECKLIST.md) | Developer / Presenter | Pre-submission / pre-event rehearsal checklist for Black Hat Europe Arsenal (not accepted; on-hardware run is a human step) | 2026-06-11 |
+| [cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md](cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md) | Presenter / Reviewer | Candidate CFP draft for the Auditable Edge SOC/NOC profile (not accepted) | 2026-06-10 |
+| [papers/auditable-edge-socnoc-paper.md](papers/auditable-edge-socnoc-paper.md) | Reviewer / Researcher | Paper-style technical description of the Auditable Edge SOC/NOC gateway concept | 2026-06-10 |
+| [roadmaps/auditable-edge-socnoc-cfp-roadmap.md](roadmaps/auditable-edge-socnoc-cfp-roadmap.md) | Developer / Presenter | Submission-preparation roadmap for the Auditable Edge SOC/NOC profile | 2026-06-10 |
+| [issues/auditable-edge-socnoc/README.md](issues/auditable-edge-socnoc/README.md) | Developer | Issue drafts (gh-registerable) for candidate CFP readiness | 2026-06-10 |
+| [auditable-edge-socnoc-cfp-dry-run-checklist.md](auditable-edge-socnoc-cfp-dry-run-checklist.md) | Developer / Presenter | Pre-submission rehearsal checklist for the Auditable Edge SOC/NOC candidate CFP | 2026-06-11 |
 
 ## Planning and Records
 

@@ -1,6 +1,6 @@
 # Auditable Edge SOC/NOC Gateway for Privacy-Sensitive and Constrained Operations
 
-*Status note: this is a concept-profile document supporting a CFP draft for Black Hat Europe Arsenal. It is not a record of an accepted appearance and makes no claim of acceptance. Sibling concept profiles have been demonstrated as Asia 2026 and USA 2026 profiles; the profile described here is a concept profile.*
+*Status note: this is a concept-profile document supporting a candidate CFP draft. It is not a record of an accepted appearance and makes no claim of acceptance. Sibling concept profiles have been demonstrated as Asia 2026 and USA 2026 profiles; the profile described here is a candidate concept profile.*
 
 ## Abstract
 

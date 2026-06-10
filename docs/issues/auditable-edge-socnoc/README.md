@@ -1,8 +1,6 @@
-# Black Hat Europe Issue Drafts
+# Auditable Edge SOC/NOC Issue Drafts
 
-This directory holds issue drafts for making the Auditable Edge SOC/NOC concept
-profile CFP-submission-ready and demo-ready for a Black Hat Europe Arsenal
-application. Nothing here implies acceptance, scheduling, or review by Black Hat.
+This directory holds issue drafts for making the Auditable Edge SOC/NOC concept profile CFP-submission-ready and demo-ready as candidate submission-preparation material. Nothing here implies acceptance, scheduling, or review by any event.
 
 These are source-controlled issue bodies, not registered issues. Each file is a
 self-contained issue body with a suggested `gh` registration command in an HTML
@@ -14,15 +12,15 @@ Each file's header comment gives the exact command. The general form is:
 
 ```sh
 gh issue create \
-  --title "[BHEU] <title>" \
-  --body-file docs/issues/blackhat-europe/NN-<slug>.md \
-  --label "blackhat-europe" --label "<documentation|demo|tooling|testing|audit>"
+  --title "[CFP] <title>" \
+  --body-file docs/issues/auditable-edge-socnoc/NN-<slug>.md \
+  --label "auditable-edge-socnoc-cfp" --label "<documentation|demo|tooling|testing|audit>"
 ```
 
-Create the `blackhat-europe` label once if it does not exist:
+Create the `auditable-edge-socnoc-cfp` label once if it does not exist:
 
 ```sh
-gh label create blackhat-europe --description "Black Hat Europe Arsenal CFP readiness" --color "5319e7"
+gh label create auditable-edge-socnoc-cfp --description "candidate CFP readiness for the Auditable Edge SOC/NOC profile" --color "5319e7"
 ```
 
 ## Files
@@ -38,4 +36,4 @@ gh label create blackhat-europe --description "Black Hat Europe Arsenal CFP read
 - `09-claims-discipline-validation.md`
 - `10-arsenal-demo-dry-run-checklist.md`
 
-See the roadmap: `docs/roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md`.
+See the roadmap: `docs/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`.

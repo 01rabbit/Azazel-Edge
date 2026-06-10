@@ -1,9 +1,9 @@
 <!--
 Register with:
 gh issue create \
-  --title "[BHEU] Audit trace viewer / CLI review path" \
-  --body-file docs/issues/blackhat-europe/05-audit-trace-viewer-cli-review-path.md \
-  --label "blackhat-europe" --label "tooling" --label "documentation"
+  --title "[CFP] Audit trace viewer / CLI review path" \
+  --body-file docs/issues/auditable-edge-socnoc/05-audit-trace-viewer-cli-review-path.md \
+  --label "auditable-edge-socnoc-cfp" --label "tooling" --label "documentation"
 -->
 
 ## Summary

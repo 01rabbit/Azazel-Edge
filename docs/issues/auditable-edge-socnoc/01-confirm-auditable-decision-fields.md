@@ -1,9 +1,9 @@
 <!--
 Register with:
 gh issue create \
-  --title "[BHEU] Confirm current auditable decision fields" \
-  --body-file docs/issues/blackhat-europe/01-confirm-auditable-decision-fields.md \
-  --label "blackhat-europe" --label "testing" --label "audit"
+  --title "[CFP] Confirm current auditable decision fields" \
+  --body-file docs/issues/auditable-edge-socnoc/01-confirm-auditable-decision-fields.md \
+  --label "auditable-edge-socnoc-cfp" --label "testing" --label "audit"
 -->
 
 ## Summary
@@ -56,7 +56,7 @@ makes the field set the demo walk depends on resistant to regression.
 - `py/azazel_edge/explanations/decision.py` (read-only reference)
 - `py/azazel_edge/arbiter/action.py` (read-only reference)
 - `tests/` (new test, e.g. `tests/test_decision_explanation_fields_v1.py`)
-- `docs/roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md` (cross-reference)
+- `docs/roadmaps/auditable-edge-socnoc-cfp-roadmap.md` (cross-reference)
 
 ## Dependencies
 

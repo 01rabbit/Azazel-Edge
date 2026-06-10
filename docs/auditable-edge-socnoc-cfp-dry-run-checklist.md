@@ -1,13 +1,13 @@
-# Black Hat Europe Arsenal — Pre-Submission / Pre-Event Rehearsal Checklist
+# Auditable Edge SOC/NOC — CFP Rehearsal Checklist
 
 **Status: rehearsal tracking artifact.**
-This document tracks preparation steps for a Black Hat Europe Arsenal submission that has **not been accepted**. Nothing here implies Black Hat acceptance, scheduling, or appearance. All on-Raspberry-Pi run checkboxes are left unchecked because the actual hardware run is a human step that cannot be pre-confirmed in this document.
+This document tracks preparation steps for a candidate CFP submission that has **not been accepted**. Nothing here implies acceptance, scheduling, or appearance. All on-Raspberry-Pi run checkboxes are left unchecked because the actual hardware run is a human step that cannot be pre-confirmed in this document.
 
 ---
 
 ## Offline Rehearsal Checklist
 
-Steps adapted from the "Demo Readiness Checklist" in [`docs/roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md`](roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md).
+Steps adapted from the "Demo Readiness Checklist" in [`docs/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`](roadmaps/auditable-edge-socnoc-cfp-roadmap.md).
 
 ### Environment Setup
 
@@ -149,4 +149,4 @@ A: No. Azazel-Edge is explicitly not an autonomous AI defender. The authoritativ
 
 ---
 
-*No Black Hat Europe acceptance implied. This is a pre-submission and pre-event rehearsal tracking artifact.*
+*No event acceptance implied. This is a pre-submission rehearsal tracking artifact.*

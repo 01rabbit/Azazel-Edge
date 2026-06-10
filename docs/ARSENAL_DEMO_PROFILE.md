@@ -114,7 +114,7 @@ bin/azazel-edge-audit-review
 Select a specific trace:
 
 ```bash
-bin/azazel-edge-audit-review --trace-id trace-bheu-05
+bin/azazel-edge-audit-review --trace-id trace-audit-review-01
 ```
 
 Condensed output for booth screens:

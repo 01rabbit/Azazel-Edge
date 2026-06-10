@@ -1,9 +1,9 @@
 <!--
 Register with:
 gh issue create \
-  --title "[BHEU] Arsenal demo dry-run checklist" \
-  --body-file docs/issues/blackhat-europe/10-arsenal-demo-dry-run-checklist.md \
-  --label "blackhat-europe" --label "demo"
+  --title "[CFP] Arsenal demo dry-run checklist" \
+  --body-file docs/issues/auditable-edge-socnoc/10-arsenal-demo-dry-run-checklist.md \
+  --label "auditable-edge-socnoc-cfp" --label "demo"
 -->
 
 ## Summary

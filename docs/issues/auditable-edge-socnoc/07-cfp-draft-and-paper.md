@@ -1,9 +1,9 @@
 <!--
 Register with:
 gh issue create \
-  --title "[BHEU] CFP draft and paper" \
-  --body-file docs/issues/blackhat-europe/07-cfp-draft-and-paper.md \
-  --label "blackhat-europe" --label "documentation"
+  --title "[CFP] CFP draft and paper" \
+  --body-file docs/issues/auditable-edge-socnoc/07-cfp-draft-and-paper.md \
+  --label "auditable-edge-socnoc-cfp" --label "documentation"
 -->
 
 ## Summary
@@ -24,8 +24,8 @@ Hat submission-form character limits, and a final proofread before submission.
 
 Already done (commit ff8ef98), recorded for traceability:
 
-- [x] CFP draft written: `docs/cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md`.
-- [x] Paper written: `docs/papers/auditable-edge-socnoc-europe.md`.
+- [x] CFP draft written: `docs/cfp/auditable-edge-socnoc-cfp-arsenal-auditable-edge-socnoc.md`.
+- [x] Paper written: `docs/papers/auditable-edge-socnoc-paper.md`.
 - [x] `docs/INDEX.md` "CFP Drafts and Papers" section added.
 - [x] README links added.
 - [x] Evolution-map "CFP Candidates (Not Accepted)" section added.
@@ -39,7 +39,7 @@ Remaining:
       Implemented/Prototype/Planned label matches ground truth, and that AI-advisory
       / enforcement-off-by-default boundaries are stated accurately. (Use the Issue
       09 check.)
-- [ ] Fit the short and detailed abstracts to the actual Black Hat Europe Arsenal
+- [ ] Fit the short and detailed abstracts to the actual candidate Arsenal
       submission-form character limits, without introducing new claims.
 - [ ] Final proofread of the CFP draft and paper before submission.
 
@@ -55,8 +55,8 @@ Remaining:
 
 ## Files Likely Affected
 
-- `docs/cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md`
-- `docs/papers/auditable-edge-socnoc-europe.md`
+- `docs/cfp/auditable-edge-socnoc-cfp-arsenal-auditable-edge-socnoc.md`
+- `docs/papers/auditable-edge-socnoc-paper.md`
 
 ## Dependencies
 

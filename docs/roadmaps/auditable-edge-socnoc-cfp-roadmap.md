@@ -1,25 +1,28 @@
-# Roadmap: Black Hat Europe Auditable Edge SOC/NOC
+# Roadmap: Auditable Edge SOC/NOC CFP Preparation
+
+> Status: CFP preparation / candidate concept roadmap.
+> This document does not represent an accepted Black Hat Arsenal appearance.
 
 Status: planning artifact for a CFP submission draft. This roadmap describes work
-toward *submission readiness and demo readiness* for a Black Hat Europe Arsenal
-application. It does not imply that Black Hat Europe has reviewed, accepted, or
+toward *submission readiness and demo readiness* for a candidate Arsenal
+application. It does not imply that any event has reviewed, accepted, or
 scheduled anything. All status labels use the project convention:
 Implemented / Prototype / Planned / Conceptual / Unknown.
 
 ## Goal
 
 Make the Auditable Edge SOC/NOC concept profile of the single Azazel-Edge core
-platform CFP-submission-ready and demo-ready for a Black Hat Europe Arsenal
+platform CFP-submission-ready and demo-ready for a future Arsenal
 application, with every claim in the submission and demo backed by verifiable
 repository state (code, tests, configuration, and recorded outputs). The
-emphasis is European: privacy-sensitive, regulated, auditable, explainable,
+emphasis is privacy-sensitive, regulated, auditable, explainable,
 local-first operation.
 
 ## Scope
 
 - Documentation that records, rather than overstates, current capability.
 - Schema documentation and validation for the decision-explanation records.
-- A dedicated, non-disaster Europe demo scenario for deterministic replay.
+- A dedicated, privacy-sensitive auditable demo scenario for deterministic replay.
 - Read-only operator review tooling for the decision -> explanation -> audit walk.
 - Claims-discipline checks that fail on hype and on premature `docs/arsenal/` entries.
 - A pre-submission and pre-event rehearsal checklist.
@@ -28,12 +31,12 @@ local-first operation.
 
 - Any new attack capability or attack automation. All work is defensive,
   documentation, auditability, demo, or operations support.
-- MEA field-deployment, disaster, shelter, or emergency framing for the Europe
+- MEA field-deployment, disaster, shelter, or emergency framing for this
   profile.
 - Live network enforcement enabled by default (`AZAZEL_DEFENSE_ENFORCE` stays
   off by default; demo stays dry-run / replay).
 - Any claim or implication of legal or regulatory compliance guarantees.
-- A repository split, fork, or a long-lived Europe branch.
+- A repository split, fork, or a long-lived regional branch.
 - Moving CFP material into `docs/arsenal/` or otherwise implying acceptance.
 - Changes under `installer/`, `security/`, or `systemd/` (human approval required
   per `AGENTS.md`).
@@ -45,28 +48,28 @@ local-first operation.
 | M1 | Evidence verification — make the 2026-06-10 field audit repeatable and document the canonical schema | 01, 02 |
 | M2 | Traceability gaps — extend rejected-alternatives / release-condition and config-hash / policy-profile coverage across decision-bearing streams | 03, 04 |
 | M3 | Review experience — read-only operator review command and reviewer walk-through | 05 |
-| M4 | Europe demo — add the `auditable_edge_socnoc` deterministic replay scenario | 06 |
+| M4 | Auditable demo — add the `auditable_edge_socnoc` deterministic replay scenario | 06 |
 | M5 | Submission package — finish claims/safety review and docs navigation (both mostly done) | 07, 08 |
 | M6 | Discipline and dry run — automated claims-discipline check and the pre-event rehearsal checklist | 09, 10 |
 
 ## Issue Breakdown
 
-Per-issue detail lives in `docs/issues/blackhat-europe/`. This table summarizes
+Per-issue detail lives in `docs/issues/auditable-edge-socnoc/`. This table summarizes
 only the issue, the status of the *underlying capability* it builds on, and the
 primary issue file.
 
 | Issue | Title | Underlying capability status | File |
 |---|---|---|---|
-| 01 | Confirm current auditable decision fields | Implemented (fields verified 2026-06-10; issue makes verification repeatable) | `docs/issues/blackhat-europe/01-confirm-auditable-decision-fields.md` |
-| 02 | Normalize decision-explanation JSONL schema | Implemented (v2 writer); trace_id threading is Prototype | `docs/issues/blackhat-europe/02-normalize-decision-explanation-jsonl.md` |
-| 03 | Add rejected alternatives and release conditions where missing | Implemented (main arbiter path); gap in other streams | `docs/issues/blackhat-europe/03-add-rejected-alternatives-release-conditions.md` |
-| 04 | Config hash / policy profile traceability | Implemented (explanation records); Planned (full packaging) | `docs/issues/blackhat-europe/04-config-hash-policy-profile-traceability.md` |
-| 05 | Audit trace viewer / CLI review path | Implemented (web + CLI + TUI surfaces); adds read-only review command | `docs/issues/blackhat-europe/05-audit-trace-viewer-cli-review-path.md` |
-| 06 | Europe demo scenario `auditable_edge_socnoc` | Planned (scenario does not exist) | `docs/issues/blackhat-europe/06-europe-demo-auditable-edge-socnoc.md` |
-| 07 | CFP draft and paper | Implemented (draft + paper landed in commit ff8ef98); residual review tasks | `docs/issues/blackhat-europe/07-cfp-draft-and-paper.md` |
-| 08 | Docs navigation / README links | Implemented (README + INDEX links landed); residual navigation tasks | `docs/issues/blackhat-europe/08-docs-navigation-readme-links.md` |
-| 09 | Claims-discipline validation | Planned (no automated check yet) | `docs/issues/blackhat-europe/09-claims-discipline-validation.md` |
-| 10 | Arsenal demo dry-run checklist | Planned (rehearsal artifact) | `docs/issues/blackhat-europe/10-arsenal-demo-dry-run-checklist.md` |
+| 01 | Confirm current auditable decision fields | Implemented (fields verified 2026-06-10; issue makes verification repeatable) | `docs/issues/auditable-edge-socnoc/01-confirm-auditable-decision-fields.md` |
+| 02 | Normalize decision-explanation JSONL schema | Implemented (v2 writer); trace_id threading is Prototype | `docs/issues/auditable-edge-socnoc/02-normalize-decision-explanation-jsonl.md` |
+| 03 | Add rejected alternatives and release conditions where missing | Implemented (main arbiter path); gap in other streams | `docs/issues/auditable-edge-socnoc/03-add-rejected-alternatives-release-conditions.md` |
+| 04 | Config hash / policy profile traceability | Implemented (explanation records); Planned (full packaging) | `docs/issues/auditable-edge-socnoc/04-config-hash-policy-profile-traceability.md` |
+| 05 | Audit trace viewer / CLI review path | Implemented (web + CLI + TUI surfaces); adds read-only review command | `docs/issues/auditable-edge-socnoc/05-audit-trace-viewer-cli-review-path.md` |
+| 06 | Auditable demo scenario `auditable_edge_socnoc` | Planned (scenario does not exist) | `docs/issues/auditable-edge-socnoc/06-europe-demo-auditable-edge-socnoc.md` |
+| 07 | CFP draft and paper | Implemented (draft + paper landed in commit ff8ef98); residual review tasks | `docs/issues/auditable-edge-socnoc/07-cfp-draft-and-paper.md` |
+| 08 | Docs navigation / README links | Implemented (README + INDEX links landed); residual navigation tasks | `docs/issues/auditable-edge-socnoc/08-docs-navigation-readme-links.md` |
+| 09 | Claims-discipline validation | Planned (no automated check yet) | `docs/issues/auditable-edge-socnoc/09-claims-discipline-validation.md` |
+| 10 | Arsenal demo dry-run checklist | Planned (rehearsal artifact) | `docs/issues/auditable-edge-socnoc/10-arsenal-demo-dry-run-checklist.md` |
 
 ## Implementation Order
 
@@ -84,7 +87,7 @@ Dependency-ordered. Each step states why it precedes the next.
    `policy_profile` coverage; advances the Planned reproducibility-packaging item.
 5. **Issue 05** — Build the read-only review command on top of the now-verified
    fields and chain, so the reviewer walk is exercising real, consistent data.
-6. **Issue 06** — Add the Europe demo scenario, which the review command and the
+6. **Issue 06** — Add the auditable demo scenario, which the review command and the
    documented schema let us showcase end to end.
 7. **Issue 09** — Stand up the claims-discipline check before finalizing
    submission text, so the text is validated automatically.

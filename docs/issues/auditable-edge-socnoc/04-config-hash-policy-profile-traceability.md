@@ -1,9 +1,9 @@
 <!--
 Register with:
 gh issue create \
-  --title "[BHEU] Config hash / policy profile traceability across outputs" \
-  --body-file docs/issues/blackhat-europe/04-config-hash-policy-profile-traceability.md \
-  --label "blackhat-europe" --label "audit" --label "documentation"
+  --title "[CFP] Config hash / policy profile traceability across outputs" \
+  --body-file docs/issues/auditable-edge-socnoc/04-config-hash-policy-profile-traceability.md \
+  --label "auditable-edge-socnoc-cfp" --label "audit" --label "documentation"
 -->
 
 ## Summary

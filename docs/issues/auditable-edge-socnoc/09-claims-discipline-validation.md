@@ -1,9 +1,9 @@
 <!--
 Register with:
 gh issue create \
-  --title "[BHEU] Claims-discipline validation" \
-  --body-file docs/issues/blackhat-europe/09-claims-discipline-validation.md \
-  --label "blackhat-europe" --label "testing" --label "documentation"
+  --title "[CFP] Claims-discipline validation" \
+  --body-file docs/issues/auditable-edge-socnoc/09-claims-discipline-validation.md \
+  --label "auditable-edge-socnoc-cfp" --label "testing" --label "documentation"
 -->
 
 ## Summary
@@ -11,7 +11,7 @@ gh issue create \
 Add an automated check (a validation script or pytest, e.g.
 `tests/test_claims_discipline_v1.py`) that fails on forbidden hype phrasing in
 README and docs, on any "Black Hat Europe" reference inside `docs/arsenal/`, and on
-any file matching `blackhat-europe-*.md` inside `docs/arsenal/`. Optionally wire it
+any file matching `auditable-edge-socnoc-cfp-*.md` inside `docs/arsenal/`. Optionally wire it
 into CI (noting that CI changes need review).
 
 ## Rationale
@@ -30,7 +30,7 @@ under `docs/arsenal/` before acceptance.
       the check's own forbidden-phrase list from matching itself.
 - [ ] Add a check that fails if any file under `docs/arsenal/` contains a
       "Black Hat Europe" reference (pre-acceptance guard).
-- [ ] Add a check that fails if any file matching `docs/arsenal/blackhat-europe-*.md`
+- [ ] Add a check that fails if any file matching `docs/arsenal/auditable-edge-socnoc-cfp-*.md`
       exists (pre-acceptance guard).
 - [ ] Implement as a pytest (e.g. `tests/test_claims_discipline_v1.py`) and/or a
       runnable script, so it works locally and in the validation grep set.
@@ -42,7 +42,7 @@ under `docs/arsenal/` before acceptance.
 
 - [ ] The check fails when a forbidden hype phrase is present in README or docs.
 - [ ] The check fails when `docs/arsenal/` contains a "Black Hat Europe" reference.
-- [ ] The check fails when a `docs/arsenal/blackhat-europe-*.md` file exists.
+- [ ] The check fails when a `docs/arsenal/auditable-edge-socnoc-cfp-*.md` file exists.
 - [ ] The check passes against the current repository state.
 - [ ] A seeded-violation test demonstrates each failure path.
 

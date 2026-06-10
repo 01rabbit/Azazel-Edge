@@ -1,9 +1,9 @@
 <!--
 Register with:
 gh issue create \
-  --title "[BHEU] Add rejected alternatives and release conditions where missing" \
-  --body-file docs/issues/blackhat-europe/03-add-rejected-alternatives-release-conditions.md \
-  --label "blackhat-europe" --label "audit" --label "testing"
+  --title "[CFP] Add rejected alternatives and release conditions where missing" \
+  --body-file docs/issues/auditable-edge-socnoc/03-add-rejected-alternatives-release-conditions.md \
+  --label "auditable-edge-socnoc-cfp" --label "audit" --label "testing"
 -->
 
 ## Summary

@@ -39,7 +39,7 @@ The profile depends on Decision Loop determinism, Evidence Model consistency, an
 - [Auditable Profile Translation Matrix](auditable-profile-diff.md)
 
 ## Related Planning Documents
-- [Black Hat Europe Arsenal CFP Draft (not accepted)](../cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md)
-- [Paper: Auditable Edge SOC/NOC Gateway](../papers/auditable-edge-socnoc-europe.md)
-- [Roadmap: Black Hat Europe Auditable Edge SOC/NOC](../roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md)
-- [Issue drafts for CFP readiness](../issues/blackhat-europe/README.md)
+- [Candidate CFP Draft (not accepted)](../cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md)
+- [Paper: Auditable Edge SOC/NOC Gateway](../papers/auditable-edge-socnoc-paper.md)
+- [CFP Preparation Roadmap](../roadmaps/auditable-edge-socnoc-cfp-roadmap.md)
+- [Issue drafts for candidate CFP readiness](../issues/auditable-edge-socnoc/README.md)

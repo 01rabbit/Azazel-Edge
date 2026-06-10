@@ -1,5 +1,8 @@
 # Black Hat Europe Arsenal CFP Draft: Auditable Edge SOC/NOC Gateway
 
+> Status: CFP draft / submission preparation.
+> This document does not represent an accepted Black Hat Arsenal appearance.
+
 Status: CFP draft — not an accepted appearance. This document must not be moved to `docs/arsenal/` unless accepted.
 
 This is a submission draft for a Black Hat Europe Arsenal proposal. Nothing here implies that the tool has been reviewed, selected, or scheduled. It describes one concept profile of the single Azazel-Edge core platform, framed for privacy-sensitive and regulated operations.
@@ -132,7 +135,7 @@ If anything fails, the deterministic replay path is the final fallback, consiste
 
 Recorded 2026-06-11.
 
-- **Hype scan result.** The three documents reviewed (`docs/cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md`, `docs/papers/auditable-edge-socnoc-europe.md`, `docs/roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md`) were scanned for the project's forbidden-hype phrase set (defined in `tools/claims_discipline.py` and the roadmap validation section); the only match was the checker's own definition list and a `grep` example, not a capability claim. No non-negated hype phrase was found in the draft, paper, or roadmap prose. Sign-off is **not blocked**.
+- **Hype scan result.** The three documents reviewed (`docs/cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md`, `docs/papers/auditable-edge-socnoc-paper.md`, `docs/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`) were scanned for the project's forbidden-hype phrase set (defined in `tools/claims_discipline.py` and the roadmap validation section); the only match was the checker's own definition list and a `grep` example, not a capability claim. No non-negated hype phrase was found in the draft, paper, or roadmap prose. Sign-off is **not blocked**.
 - **Implemented/Prototype/Planned label review.** Capability status labels were reviewed against repository state. The `auditable_edge_socnoc` scenario and `bin/azazel-edge-audit-review` command are now reflected as Implemented. Per-stream `config_hash`/`policy_profile` and rejected-alternatives/release-condition traceability are reflected as Implemented. The remaining Prototype items (end-to-end `trace_id` threading, runtime profile switching) and Planned items (full reproducibility packaging, unified evidence bundle export, automated release-condition orchestration) remain accurately labelled.
 - **AI-advisory boundary.** The AI-advisory-only and audited boundary is stated accurately: local AI assist cannot select or modify an arbiter action (enforced in code and tests); every AI invocation is audited. This is stated in the Safety and Ethical Boundaries section and the Tool Description.
 - **Enforcement-off-by-default boundary.** The `AZAZEL_DEFENSE_ENFORCE` off-by-default and dry-run posture is stated accurately in the Safety and Ethical Boundaries section and in the Reviewer Notes.

@@ -1,15 +1,15 @@
 <!--
 Register with:
 gh issue create \
-  --title "[BHEU] Europe demo scenario auditable_edge_socnoc" \
-  --body-file docs/issues/blackhat-europe/06-europe-demo-auditable-edge-socnoc.md \
-  --label "blackhat-europe" --label "demo" --label "testing"
+  --title "[CFP] privacy-sensitive auditable demo scenario auditable_edge_socnoc" \
+  --body-file docs/issues/auditable-edge-socnoc/06-europe-demo-auditable-edge-socnoc.md \
+  --label "auditable-edge-socnoc-cfp" --label "demo" --label "testing"
 -->
 
 ## Summary
 
 Add a new deterministic replay scenario with id `auditable_edge_socnoc` to
-`DemoScenarioPack`, framed for privacy-sensitive, regulated, local-first European
+`DemoScenarioPack`, framed for privacy-sensitive, regulated, local-first
 operation, that exercises a decision with rejected alternatives, a release
 condition, `config_hash` / `policy_profile` display, and the audit-chain review.
 Register it in the concept pack. Do not use any disaster, shelter, or emergency
@@ -17,9 +17,9 @@ narrative, and do not rename or delete any existing scenario id.
 
 ## Rationale
 
-The CFP draft and paper currently note that a dedicated Europe scenario
+The CFP draft and paper currently note that a dedicated auditable scenario
 `auditable_edge_socnoc` is Planned and does not exist; the concept pack reuses
-`mixed_correlation_demo` and `disaster_phishing_demo`. The Europe-facing demo
+`mixed_correlation_demo` and `disaster_phishing_demo`. The candidate auditable demo
 needs a scenario whose narrative matches the profile (auditable, explainable,
 local-first, regulated) rather than a disaster/shelter framing, and that directly
 showcases the auditable decision record and the audit-chain walk.
@@ -65,7 +65,7 @@ showcases the auditable decision record and the audit-chain walk.
 
 - `py/azazel_edge/demo/scenarios.py` (new scenario)
 - `demos/concepts/auditable-edge-socnoc.yaml` (registration)
-- `docs/cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md` (Demo Plan reference)
+- `docs/cfp/auditable-edge-socnoc-cfp-arsenal-auditable-edge-socnoc.md` (Demo Plan reference)
 - `tests/test_demo_scenario_pack_v1.py` (new assertions)
 
 ## Dependencies

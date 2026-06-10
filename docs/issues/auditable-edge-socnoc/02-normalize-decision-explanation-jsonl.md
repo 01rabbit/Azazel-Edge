@@ -1,9 +1,9 @@
 <!--
 Register with:
 gh issue create \
-  --title "[BHEU] Normalize decision-explanation JSONL schema" \
-  --body-file docs/issues/blackhat-europe/02-normalize-decision-explanation-jsonl.md \
-  --label "blackhat-europe" --label "documentation" --label "testing"
+  --title "[CFP] Normalize decision-explanation JSONL schema" \
+  --body-file docs/issues/auditable-edge-socnoc/02-normalize-decision-explanation-jsonl.md \
+  --label "auditable-edge-socnoc-cfp" --label "documentation" --label "testing"
 -->
 
 ## Summary
@@ -67,7 +67,7 @@ verified and has no integration test.
 - tactics-engine `DecisionLogger` module (second stream; reference / mapping)
 - `docs/architecture/evidence-model.md` (schema documentation cross-reference)
 - `tests/test_decision_explanation_v2.py` style (new schema-validation test)
-- `docs/roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md`
+- `docs/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`
 
 ## Dependencies
 

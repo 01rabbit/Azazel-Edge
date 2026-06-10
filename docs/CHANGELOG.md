@@ -5,8 +5,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- Black Hat Europe Arsenal CFP draft (`docs/cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md`) and paper-style concept document (`docs/papers/auditable-edge-socnoc-europe.md`) for the Auditable Edge SOC/NOC profile (pre-acceptance planning material; not accepted-appearance records).
-- Submission/demo-readiness roadmap (`docs/roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md`) and gh-registerable issue drafts (`docs/issues/blackhat-europe/`) for the Auditable Edge SOC/NOC profile.
+- Candidate CFP draft (`docs/cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md`) and paper-style concept document (`docs/papers/auditable-edge-socnoc-paper.md`) for the Auditable Edge SOC/NOC profile (pre-acceptance planning material; not accepted-appearance records).
+- Submission-preparation roadmap (`docs/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`) and gh-registerable issue drafts (`docs/issues/auditable-edge-socnoc/`) for the Auditable Edge SOC/NOC profile.
 
 ### Changed
 
