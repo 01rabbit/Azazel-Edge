@@ -2,10 +2,10 @@ concept_id: auditable-edge-socnoc
 label: Auditable Edge SOC/NOC
 status: concept_profile
 stage_order:
+  - auditable_edge_socnoc
   - mixed_correlation_demo
-  - disaster_phishing_demo
 scenarios:
+  - id: auditable_edge_socnoc
+    role: regulated EU edge segment — auditable reversible control decision with offline audit-chain review; demonstrates config_hash and policy_profile in the local decision record
   - id: mixed_correlation_demo
     role: explanation trace and rejected-alternatives review
-  - id: disaster_phishing_demo
-    role: social-engineering triage with auditable operator handoff
