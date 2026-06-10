@@ -17,7 +17,7 @@ Define a concept profile for privacy-sensitive and regulated operations where ex
 | Capability | Status | Notes |
 |---|---|---|
 | Deterministic action decisions with rationale | Implemented | Decision explanation fields are required in core path. |
-| Audit logging with `trace_id` correlation | Implemented | Audit logger is part of runtime baseline. |
+| Audit logging with `trace_id` correlation | Implemented | Audit logger is part of runtime baseline. End-to-end `trace_id` threading across the Rust/Python boundary remains Prototype. |
 | Structured evidence export for external review | Planned | Existing exports exist in parts of stack; unified profile-level packaging remains planned. |
 | Reproducibility metadata (`config hash` alignment) | Planned | Policy/hash references exist; broader reproducibility packaging is not yet complete. |
 
@@ -41,3 +41,5 @@ The profile depends on Decision Loop determinism, Evidence Model consistency, an
 ## Related Planning Documents
 - [Black Hat Europe Arsenal CFP Draft (not accepted)](../cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md)
 - [Paper: Auditable Edge SOC/NOC Gateway](../papers/auditable-edge-socnoc-europe.md)
+- [Roadmap: Black Hat Europe Auditable Edge SOC/NOC](../roadmaps/blackhat-europe-auditable-edge-socnoc-roadmap.md)
+- [Issue drafts for CFP readiness](../issues/blackhat-europe/README.md)

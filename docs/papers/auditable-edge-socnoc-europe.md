@@ -344,9 +344,9 @@ enforcement.
 The auditable concept pack (`demos/concepts/auditable-edge-socnoc.yaml`) currently
 references two existing scenarios: `mixed_correlation_demo`, used to exercise the
 explanation trace and rejected-alternatives review, and `disaster_phishing_demo`,
-used for social-engineering triage with auditable operator handoff. A dedicated
-Europe-framed scenario with the id `auditable_edge_socnoc` does **not exist yet** and
-is **(Planned)**; the concept pack reuses the two existing scenarios above.
+an existing scenario id the pack currently reuses for coverage until a dedicated
+Europe scenario lands. A dedicated Europe-framed scenario with the id
+`auditable_edge_socnoc` does **not exist yet** and is **(Planned)**; see Section 11.
 
 Reviewers can inspect the outputs along the same paths operators would use: the v2
 decision-explanation JSONL at
