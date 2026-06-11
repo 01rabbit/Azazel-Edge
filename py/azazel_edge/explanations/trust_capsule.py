@@ -2,18 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from azazel_edge._util import stable_json as _stable_json
+
 
 def _utc_iso_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _stable_json(payload: Dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
 def _ai_advice_hash(ai_payload: Dict[str, Any] | None) -> str | None:

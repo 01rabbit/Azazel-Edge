@@ -6,57 +6,53 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-PY_ROOT = ROOT / 'py'
-if str(PY_ROOT) not in sys.path:
-    sys.path.insert(0, str(PY_ROOT))
-
 from azazel_edge.explanations import DecisionExplainer
 
 
 class DecisionExplanationV2Tests(unittest.TestCase):
     def test_explanation_contains_structured_v2_fields(self) -> None:
-        explainer = DecisionExplainer(output_path=Path('/tmp/unused-decision-explanations.jsonl'))
-        result = explainer.explain(
-            noc={
-                'summary': {'status': 'good', 'blast_radius': {'affected_uplinks': ['eth1'], 'affected_segments': ['lan-a'], 'affected_client_count': 2}},
-                'affected_scope': {'affected_uplinks': ['eth1'], 'affected_segments': ['lan-a'], 'affected_client_count': 2},
-                'config_drift_health': {
-                    'label': 'degraded',
-                    'reasons': ['config_drift_detected', 'config_drift:uplink_preference.preferred_uplink'],
-                    'rollback_hint': 'review_changed_fields_and_restore_last_known_good',
+        with tempfile.TemporaryDirectory() as tmp:
+            explainer = DecisionExplainer(output_path=Path(tmp) / 'unused-decision-explanations.jsonl')
+            result = explainer.explain(
+                noc={
+                    'summary': {'status': 'good', 'blast_radius': {'affected_uplinks': ['eth1'], 'affected_segments': ['lan-a'], 'affected_client_count': 2}},
+                    'affected_scope': {'affected_uplinks': ['eth1'], 'affected_segments': ['lan-a'], 'affected_client_count': 2},
+                    'config_drift_health': {
+                        'label': 'degraded',
+                        'reasons': ['config_drift_detected', 'config_drift:uplink_preference.preferred_uplink'],
+                        'rollback_hint': 'review_changed_fields_and_restore_last_known_good',
+                    },
+                    'incident_summary': {
+                        'incident_id': 'incident:abc123',
+                        'probable_cause': 'resolution_failure',
+                        'confidence': 0.88,
+                    },
                 },
-                'incident_summary': {
-                    'incident_id': 'incident:abc123',
-                    'probable_cause': 'resolution_failure',
-                    'confidence': 0.88,
+                soc={
+                    'summary': {'status': 'critical', 'attack_candidates': ['T1071 Application Layer Protocol'], 'ai_attack_candidates': ['T1190 Exploit Public-Facing Application'], 'ti_matches': [{'indicator_type': 'ip', 'value': '10.0.0.5'}], 'visibility_status': 'partial', 'suppressed_count': 2, 'triage_now_count': 1},
+                    'security_visibility_state': {'status': 'partial', 'missing_sources': ['syslog_min']},
+                    'suppression_exception_state': {'status': 'partial', 'suppressed_count': 2, 'exception_count': 1},
+                    'asset_target_criticality': {'status': 'critical_targets_observed', 'critical_target_count': 1},
+                    'exposure_change_state': {'status': 'expanding'},
+                    'confidence_provenance': {'adjusted_score': 78, 'supports': ['ti_match']},
+                    'behavior_sequence_state': {'status': 'multi_stage'},
+                    'triage_priority_state': {'status': 'now', 'now': [{'id': 'inc-1', 'kind': 'incident', 'score': 90}]},
+                    'incident_campaign_state': {'status': 'active'},
+                    'entity_risk_state': {'entity_count': 3},
                 },
-            },
-            soc={
-                'summary': {'status': 'critical', 'attack_candidates': ['T1071 Application Layer Protocol'], 'ai_attack_candidates': ['T1190 Exploit Public-Facing Application'], 'ti_matches': [{'indicator_type': 'ip', 'value': '10.0.0.5'}], 'visibility_status': 'partial', 'suppressed_count': 2, 'triage_now_count': 1},
-                'security_visibility_state': {'status': 'partial', 'missing_sources': ['syslog_min']},
-                'suppression_exception_state': {'status': 'partial', 'suppressed_count': 2, 'exception_count': 1},
-                'asset_target_criticality': {'status': 'critical_targets_observed', 'critical_target_count': 1},
-                'exposure_change_state': {'status': 'expanding'},
-                'confidence_provenance': {'adjusted_score': 78, 'supports': ['ti_match']},
-                'behavior_sequence_state': {'status': 'multi_stage'},
-                'triage_priority_state': {'status': 'now', 'now': [{'id': 'inc-1', 'kind': 'incident', 'score': 90}]},
-                'incident_campaign_state': {'status': 'active'},
-                'entity_risk_state': {'entity_count': 3},
-            },
-            arbiter={
-                'action': 'redirect',
-                'reason': 'soc_high_confidence_redirect_is_preferred',
-                'control_mode': 'opencanary_redirect',
-                'release_condition': 'no_repeated_failures_for_300_seconds',
-                'client_impact': {'score': 25, 'affected_client_count': 1, 'critical_client_count': 0},
-                'chosen_evidence_ids': ['ev-1'],
-                'rejected_alternatives': [],
-                'policy': {'version': 'shelter_balanced', 'hash': 'sha256:demo123'},
-            },
-            target='edge-uplink',
-            trace_id='trace-23',
-        )
+                arbiter={
+                    'action': 'redirect',
+                    'reason': 'soc_high_confidence_redirect_is_preferred',
+                    'control_mode': 'opencanary_redirect',
+                    'release_condition': 'no_repeated_failures_for_300_seconds',
+                    'client_impact': {'score': 25, 'affected_client_count': 1, 'critical_client_count': 0},
+                    'chosen_evidence_ids': ['ev-1'],
+                    'rejected_alternatives': [],
+                    'policy': {'version': 'shelter_balanced', 'hash': 'sha256:demo123'},
+                },
+                target='edge-uplink',
+                trace_id='trace-23',
+            )
         self.assertEqual(result['format_version'], 'v2')
         self.assertEqual(result['trace_id'], 'trace-23')
         self.assertIn('next_checks', result)

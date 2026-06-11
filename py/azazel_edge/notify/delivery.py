@@ -3,21 +3,17 @@ from __future__ import annotations
 import json
 import logging
 import smtplib
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib.request import Request, urlopen
 from email.message import EmailMessage
 
+from azazel_edge._util import iso_utc_now
 from azazel_edge.audit import P0AuditLogger
 
 
 class NotificationError(RuntimeError):
     pass
-
-
-def iso_utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec='milliseconds')
 
 
 class NtfyNotifier:

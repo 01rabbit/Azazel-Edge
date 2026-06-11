@@ -12,6 +12,8 @@ import ssl
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
+from azazel_edge._util import stable_json as _stable_json
+
 # Fixed audit event kind constants
 AEVT_NODE_REGISTER = "aggregator.node.register"
 AEVT_INGEST_ACCEPT = "aggregator.ingest.accept"
@@ -32,10 +34,6 @@ class FreshnessPolicy:
     @property
     def offline_after_sec(self) -> int:
         return max(self.stale_after_sec + 1, self.poll_interval_sec * self.offline_multiplier)
-
-
-def _stable_json(obj: Any) -> str:
-    return _json.dumps(obj, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
 def _sha256_hex(text: str) -> str:

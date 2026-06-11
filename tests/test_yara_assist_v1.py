@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-PY_ROOT = ROOT / 'py'
-if str(PY_ROOT) not in sys.path:
-    sys.path.insert(0, str(PY_ROOT))
 
 from azazel_edge.evaluators import SocEvaluator
 from azazel_edge.evidence_plane import EvidenceEvent
@@ -68,18 +64,19 @@ class YaraAssistV1Tests(unittest.TestCase):
             'source': 'suricata_eve',
         }])
         soc = evaluator.evaluate([_event()])
-        explanation = DecisionExplainer(output_path=Path('/tmp/unused-yara.jsonl')).explain(
-            noc={'summary': {'status': 'good'}},
-            soc=soc,
-            arbiter={
-                'action': 'notify',
-                'reason': 'soc_high_but_noc_fragile',
-                'control_mode': 'none',
-                'client_impact': {'score': 0, 'affected_client_count': 0, 'critical_client_count': 0},
-                'chosen_evidence_ids': soc['evidence_ids'],
-                'rejected_alternatives': [],
-            },
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            explanation = DecisionExplainer(output_path=Path(tmp) / 'unused-yara.jsonl').explain(
+                noc={'summary': {'status': 'good'}},
+                soc=soc,
+                arbiter={
+                    'action': 'notify',
+                    'reason': 'soc_high_but_noc_fragile',
+                    'control_mode': 'none',
+                    'client_impact': {'score': 0, 'affected_client_count': 0, 'critical_client_count': 0},
+                    'chosen_evidence_ids': soc['evidence_ids'],
+                    'rejected_alternatives': [],
+                },
+            )
         self.assertIn('yara_hits', explanation['why_chosen'])
         self.assertIn('YARA', explanation['operator_wording'])
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Dict, List
+
+from azazel_edge._util import iso_utc_now
 
 REQUIRED_FIELDS = (
     'event_id',
@@ -16,10 +17,6 @@ REQUIRED_FIELDS = (
     'confidence',
     'attrs',
 )
-
-
-def iso_utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec='milliseconds')
 
 
 def make_event_id(ts: str, source: str, kind: str, subject: str, attrs: Dict[str, Any]) -> str:

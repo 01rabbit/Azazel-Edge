@@ -6,13 +6,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
+from azazel_edge._util import ensure_parent as _ensure_parent
+
 DEMO_OVERLAY_PATH = Path(os.environ.get("AZAZEL_DEMO_OVERLAY", "/run/azazel-edge/demo_overlay.json"))
 DEMO_OVERLAY_MAX_AGE_SEC = int(os.environ.get("AZAZEL_DEMO_OVERLAY_MAX_AGE_SEC", "120"))
 BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
-
-
-def _ensure_parent(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def read_demo_overlay(path: Path | None = None) -> Dict[str, Any]:

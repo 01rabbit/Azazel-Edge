@@ -25,13 +25,9 @@ Explanation record fields (DecisionExplainer.explain result, format_version='v2'
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-PY_ROOT = ROOT / 'py'
-if str(PY_ROOT) not in sys.path:
-    sys.path.insert(0, str(PY_ROOT))
 
 from azazel_edge.arbiter import ActionArbiter
 from azazel_edge.explanations import DecisionExplainer
@@ -76,8 +72,10 @@ class AuditableDecisionFieldsV1Tests(unittest.TestCase):
             self.soc,
             client_impact={'score': 20, 'critical_client_count': 0},
         )
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.explanation = DecisionExplainer(
-            output_path=Path('/tmp/unused-decision-explanations.jsonl')
+            output_path=Path(self.tmp.name) / 'unused-decision-explanations.jsonl'
         ).explain(
             noc=self.noc,
             soc=self.soc,
