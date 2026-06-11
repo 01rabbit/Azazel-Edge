@@ -71,6 +71,7 @@ Historical planning and issue-body artifacts retained for traceability. These do
 | [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) | Developer / Operator | Benchmark output template and generated reproducibility record | 2026-05-13 |
 | [CHANGELOG.md](CHANGELOG.md) | Developer | PR and feature traceability history | - |
 | [RELEASE_VERIFICATION_GUIDE.md](RELEASE_VERIFICATION_GUIDE.md) | Developer / Operator | Checksum, SBOM, and release verification baseline | 2026-05-12 |
+| [refactor-proposals.md](refactor-proposals.md) | Developer | Proposal-only follow-up refactors from the safety-first pass | 2026-06-11 |
 
 ## Operations and Deployment
 
