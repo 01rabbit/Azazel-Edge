@@ -57,7 +57,7 @@ logging.basicConfig(
 logger = logging.getLogger('azazel-edge-daemon')
 MODE_MANAGER = ModeManager(logger=logger)
 
-SOCKET_PATH = Path('/run/azazel-edge/control.sock')
+SOCKET_PATH = Path(os.environ.get("AZAZEL_CONTROL_SOCKET", "/run/azazel-edge/control.sock"))
 RUNTIME_DIR_MODE = int(str(os.environ.get("AZAZEL_RUNTIME_DIR_MODE", "0770")), 8)
 SOCKET_MODE = int(str(os.environ.get("AZAZEL_CONTROL_SOCKET_MODE", "0660")), 8)
 RUNTIME_SOCKET_GROUP = str(os.environ.get("AZAZEL_RUNTIME_SOCKET_GROUP", ""))

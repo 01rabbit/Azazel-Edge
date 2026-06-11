@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from azazel_edge.knowledge import AttackDefendKnowledge
-from azazel_edge.triage import select_noc_runbook_support
 from .schema import validate_v2_explanation
 from .trust_capsule import build_trust_capsule
 
@@ -32,6 +31,7 @@ class DecisionExplainer:
         target: str = 'azazel-edge',
         trace_id: str = '',
         persist: bool = False,
+        runbook_support: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         action = str(arbiter.get('action') or 'observe')
         reason = str(arbiter.get('reason') or 'unspecified')
@@ -65,7 +65,15 @@ class DecisionExplainer:
         sigma_hits = soc_summary.get('sigma_hits', []) if isinstance(soc_summary.get('sigma_hits'), list) else []
         yara_hits = soc_summary.get('yara_hits', []) if isinstance(soc_summary.get('yara_hits'), list) else []
         visualization = self.knowledge.build_visualization(attack_candidates, soc_summary.get('ti_matches', []))
-        runbook_support = select_noc_runbook_support(noc if isinstance(noc, dict) else {}, audience='professional', lang='en')
+        if runbook_support is None:
+            try:
+                from azazel_edge.triage import select_noc_runbook_support
+
+                runbook_support = select_noc_runbook_support(noc if isinstance(noc, dict) else {}, audience='professional', lang='en')
+            except Exception:
+                runbook_support = {}
+        elif not isinstance(runbook_support, dict):
+            runbook_support = {}
         next_checks = self._next_checks(action, noc_summary, soc_summary, client_impact)
         why_chosen = {
             'format_version': 'v2',

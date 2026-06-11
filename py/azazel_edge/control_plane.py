@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import time
 from pathlib import Path
@@ -8,7 +9,7 @@ from typing import Any, Dict, Generator, Optional, Tuple
 
 from .path_schema import command_path_candidates, snapshot_path_candidates, warn_if_legacy_path
 
-CONTROL_SOCKET = Path("/run/azazel-edge/control.sock")
+CONTROL_SOCKET = Path(os.environ.get("AZAZEL_CONTROL_SOCKET", "/run/azazel-edge/control.sock"))
 
 
 def _socket_request(
