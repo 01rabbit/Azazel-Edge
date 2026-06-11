@@ -8,6 +8,8 @@ from pathlib import Path
 
 from azazel_edge.explanations import DecisionExplainer, validate_v2_explanation
 from azazel_edge.audit import P0AuditLogger
+from tests.helpers import noc
+from tests.helpers import soc
 
 
 # ---------------------------------------------------------------------------
@@ -16,30 +18,21 @@ from azazel_edge.audit import P0AuditLogger
 #  blast=72/high, client_impact={'score':20,'critical_client_count':0})
 # ---------------------------------------------------------------------------
 
-def _dim(score: int, label: str, evidence_ids: list) -> dict:
-    return {'score': score, 'label': label, 'reasons': [], 'evidence_ids': evidence_ids}
-
-
 def _noc_good() -> dict:
-    return {
-        'availability': _dim(95, 'good', ['noc-a']),
-        'path_health': _dim(95, 'good', ['noc-p']),
-        'device_health': _dim(95, 'good', ['noc-d']),
-        'client_health': _dim(95, 'good', ['noc-c']),
-        'summary': {'status': 'good', 'reasons': []},
-        'evidence_ids': ['noc-a', 'noc-p', 'noc-d', 'noc-c'],
-    }
+    return noc()
 
 
 def _soc_critical() -> dict:
-    return {
-        'suspicion': _dim(92, 'critical', ['soc-s']),
-        'confidence': _dim(84, 'critical', ['soc-c']),
-        'technique_likelihood': _dim(60, 'high', ['soc-t']),
-        'blast_radius': _dim(72, 'high', ['soc-b']),
-        'summary': {'status': 'critical', 'reasons': []},
-        'evidence_ids': ['soc-s', 'soc-c', 'soc-t', 'soc-b'],
-    }
+    return soc(
+        suspicion=92,
+        suspicion_label='critical',
+        confidence=84,
+        confidence_label='critical',
+        blast=72,
+        blast_label='high',
+        technique=60,
+        technique_label='high',
+    )
 
 
 def _make_redirect_record(trace_id: str = 'trace-schema-v1-test') -> dict:

@@ -10,21 +10,12 @@ from azazel_edge.arbiter import ActionArbiter
 from azazel_edge.audit import P0AuditLogger
 from azazel_edge.demo.playback import scenario_summary
 from azazel_edge.opencanary_redirect import OpenCanaryRedirectController
-
-
-def _dim(score: int, label: str, evidence_ids: list) -> dict:
-    return {'score': score, 'label': label, 'reasons': [], 'evidence_ids': evidence_ids}
+from tests.helpers import noc
+from tests.helpers import soc
 
 
 def _noc_all_good() -> dict:
-    return {
-        'availability': _dim(98, 'good', ['noc-a']),
-        'path_health': _dim(98, 'good', ['noc-p']),
-        'device_health': _dim(98, 'good', ['noc-d']),
-        'client_health': _dim(98, 'good', ['noc-c']),
-        'summary': {'status': 'good', 'reasons': []},
-        'evidence_ids': ['noc-a', 'noc-p', 'noc-d', 'noc-c'],
-    }
+    return noc()
 
 
 def _soc_redirect_eligible() -> dict:
@@ -34,14 +25,16 @@ def _soc_redirect_eligible() -> dict:
     but not isolate gate (suspicion>=95, confidence>=90, blast>=80).
     Also satisfies OpenCanaryRedirectController threshold (suspicion>=80, confidence>=70).
     """
-    return {
-        'suspicion': _dim(92, 'critical', ['soc-s']),
-        'confidence': _dim(84, 'critical', ['soc-c']),
-        'technique_likelihood': _dim(70, 'high', ['soc-t']),
-        'blast_radius': _dim(72, 'high', ['soc-b']),
-        'summary': {'status': 'critical', 'reasons': []},
-        'evidence_ids': ['soc-s', 'soc-c', 'soc-t', 'soc-b'],
-    }
+    return soc(
+        suspicion=92,
+        suspicion_label='critical',
+        confidence=84,
+        confidence_label='critical',
+        blast=72,
+        blast_label='high',
+        technique=70,
+        technique_label='high',
+    )
 
 
 class DecisionStreamTraceabilityV1Tests(unittest.TestCase):

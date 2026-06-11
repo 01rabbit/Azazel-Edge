@@ -5,32 +5,8 @@ import unittest
 from pathlib import Path
 
 from azazel_edge.arbiter import ActionArbiter
-
-
-def _dim(score: int, label: str, evidence_ids: list[str]) -> dict:
-    return {'score': score, 'label': label, 'reasons': [], 'evidence_ids': evidence_ids}
-
-
-def _noc(availability='good', path='good', device='good', client='good') -> dict:
-    return {
-        'availability': _dim(95, availability, ['noc-a']),
-        'path_health': _dim(95, path, ['noc-p']),
-        'device_health': _dim(95, device, ['noc-d']),
-        'client_health': _dim(95, client, ['noc-c']),
-        'summary': {'status': 'good', 'reasons': []},
-        'evidence_ids': ['noc-a', 'noc-p', 'noc-d', 'noc-c'],
-    }
-
-
-def _soc(suspicion=20, suspicion_label='low', confidence=30, confidence_label='low', blast=20, blast_label='low') -> dict:
-    return {
-        'suspicion': _dim(suspicion, suspicion_label, ['soc-s']),
-        'confidence': _dim(confidence, confidence_label, ['soc-c']),
-        'technique_likelihood': _dim(40, 'medium', ['soc-t']),
-        'blast_radius': _dim(blast, blast_label, ['soc-b']),
-        'summary': {'status': suspicion_label, 'reasons': []},
-        'evidence_ids': ['soc-s', 'soc-c', 'soc-t', 'soc-b'],
-    }
+from tests.helpers import noc as _noc
+from tests.helpers import soc as _soc
 
 
 class ActionArbiterV2Tests(unittest.TestCase):

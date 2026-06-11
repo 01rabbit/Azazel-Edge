@@ -6,30 +6,21 @@ from pathlib import Path
 
 from azazel_edge.arbiter import ActionArbiter
 from azazel_edge.impact import ClientImpactScorer
-
-
-def _noc() -> dict:
-    dim = lambda score, label, ids: {'score': score, 'label': label, 'reasons': [], 'evidence_ids': ids}
-    return {
-        'availability': dim(95, 'good', ['noc-a']),
-        'path_health': dim(95, 'good', ['noc-p']),
-        'device_health': dim(95, 'good', ['noc-d']),
-        'client_health': dim(95, 'good', ['noc-c']),
-        'summary': {'status': 'good', 'reasons': []},
-        'evidence_ids': ['noc-a', 'noc-p', 'noc-d', 'noc-c'],
-    }
+from tests.helpers import noc as _noc
+from tests.helpers import soc
 
 
 def _soc() -> dict:
-    dim = lambda score, label, ids: {'score': score, 'label': label, 'reasons': [], 'evidence_ids': ids}
-    return {
-        'suspicion': dim(85, 'critical', ['soc-s']),
-        'confidence': dim(85, 'critical', ['soc-c']),
-        'technique_likelihood': dim(80, 'critical', ['soc-t']),
-        'blast_radius': dim(70, 'high', ['soc-b']),
-        'summary': {'status': 'critical', 'reasons': []},
-        'evidence_ids': ['soc-s', 'soc-c', 'soc-t', 'soc-b'],
-    }
+    return soc(
+        suspicion=85,
+        suspicion_label='critical',
+        confidence=85,
+        confidence_label='critical',
+        blast=70,
+        blast_label='high',
+        technique=80,
+        technique_label='critical',
+    )
 
 
 class ClientImpactScoreV1Tests(unittest.TestCase):
