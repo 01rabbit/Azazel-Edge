@@ -67,6 +67,7 @@ class AgentAdvisoryContractV1Tests(unittest.TestCase):
             advisory = agent._build_advisory(event)
 
         self.assertEqual(advisory["risk_score"], 72)
+        self.assertEqual(advisory["trace_id"], "trace-deadbeef")
         self.assertEqual(advisory["risk_level"], "HIGH")
         self.assertEqual(advisory["attack_type"], "ET SCAN suspicious inbound")
         self.assertEqual(advisory["src_ip"], "10.0.0.9")
@@ -77,6 +78,34 @@ class AgentAdvisoryContractV1Tests(unittest.TestCase):
         self.assertEqual(advisory["score_engine"], "tactical_scorer_v1")
         self.assertEqual(advisory["second_pass"]["status"], "completed")
         self.assertEqual(advisory["correlation"], {"force_llm": False})
+
+    def test_build_advisory_generates_trace_id_when_enforcement_trace_is_missing(self) -> None:
+        event = {
+            "normalized": {
+                "sid": 2402001,
+                "severity": 2,
+                "attack_type": "fixture",
+                "category": "test",
+                "action": "allowed",
+                "target_port": 22,
+                "protocol": "TCP",
+            }
+        }
+
+        with patch.object(agent, "SCORER", _FixedScorer()), patch.object(
+            agent, "DECISION_LAYERS", _FixedDecisionLayers()
+        ), patch.object(agent, "DECISION_LOGGER", _NoopDecisionLogger()), patch.object(
+            agent, "_evaluate_correlation", return_value={"force_llm": False}
+        ), patch.object(agent, "_metrics_inc"), patch.object(
+            agent, "_LAST_RISK_SCORE", 0
+        ), patch.object(
+            agent, "_LAST_STATE_NAME", "NORMAL"
+        ), patch.object(
+            agent.secrets, "token_hex", return_value="0123456789abcdef"
+        ):
+            advisory = agent._build_advisory(event)
+
+        self.assertEqual(advisory["trace_id"], "trace-0123456789abcdef")
 
 
 if __name__ == "__main__":

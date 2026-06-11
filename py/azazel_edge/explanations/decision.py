@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
 from azazel_edge.knowledge import AttackDefendKnowledge
 from azazel_edge.triage import select_noc_runbook_support
+from .schema import validate_v2_explanation
 from .trust_capsule import build_trust_capsule
+
+logger = logging.getLogger(__name__)
 
 
 class DecisionExplainer:
@@ -171,6 +175,9 @@ class DecisionExplainer:
         return explanation
 
     def write_jsonl(self, explanation: Dict[str, Any]) -> None:
+        problems = validate_v2_explanation(explanation)
+        if problems:
+            logger.warning("invalid_v2_decision_explanation: %s", "; ".join(problems))
         with self.output_path.open('a', encoding='utf-8') as fh:
             fh.write(json.dumps(explanation, ensure_ascii=True, separators=(',', ':')) + '\n')
 

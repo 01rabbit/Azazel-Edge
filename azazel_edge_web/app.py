@@ -856,8 +856,7 @@ def _load_captive_registry() -> Dict[str, Any]:
 
 
 def _save_captive_registry(payload: Dict[str, Any]) -> None:
-    CAPTIVE_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CAPTIVE_REGISTRY_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_json_file(CAPTIVE_REGISTRY_PATH, payload)
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -2419,8 +2418,7 @@ def _write_topolite_seed_mode(mode: str, seed_id: str, updated_by: str) -> Dict[
         "updated_at": time.time(),
         "updated_by": str(updated_by or "unknown"),
     }
-    TOPOLITE_SEED_MODE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    TOPOLITE_SEED_MODE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_json_file(TOPOLITE_SEED_MODE_PATH, payload)
     return payload
 
 
@@ -3441,22 +3439,24 @@ def _record_dashboard_trend_point(state: Dict[str, Any], metrics: Dict[str, Any]
         if _dashboard_trends_last_write_ts and now - _dashboard_trends_last_write_ts < max(1.0, DASHBOARD_TRENDS_WRITE_INTERVAL_SEC):
             return
         _dashboard_trends_last_write_ts = now
-    point = _dashboard_trend_point_payload(state, metrics, health, now_epoch=now)
-    _append_jsonl(DASHBOARD_TRENDS_PATH, point)
-    try:
-        rows = _tail_jsonl(DASHBOARD_TRENDS_PATH, limit=max(DASHBOARD_TRENDS_LIMIT * 2, 120))
-        min_ts = now - max(60.0, DASHBOARD_TRENDS_RETENTION_SEC)
-        kept = [row for row in rows if _as_float(row.get("ts"), 0.0) >= min_ts]
-        if len(kept) > DASHBOARD_TRENDS_LIMIT:
-            kept = kept[-DASHBOARD_TRENDS_LIMIT:]
-        if len(kept) != len(rows):
-            DASHBOARD_TRENDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            DASHBOARD_TRENDS_PATH.write_text(
-                "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in kept),
-                encoding="utf-8",
-            )
-    except Exception:
-        pass
+        point = _dashboard_trend_point_payload(state, metrics, health, now_epoch=now)
+        _append_jsonl(DASHBOARD_TRENDS_PATH, point)
+        try:
+            rows = _tail_jsonl(DASHBOARD_TRENDS_PATH, limit=max(DASHBOARD_TRENDS_LIMIT * 2, 120))
+            min_ts = now - max(60.0, DASHBOARD_TRENDS_RETENTION_SEC)
+            kept = [row for row in rows if _as_float(row.get("ts"), 0.0) >= min_ts]
+            if len(kept) > DASHBOARD_TRENDS_LIMIT:
+                kept = kept[-DASHBOARD_TRENDS_LIMIT:]
+            if len(kept) != len(rows):
+                DASHBOARD_TRENDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+                tmp = DASHBOARD_TRENDS_PATH.with_suffix(DASHBOARD_TRENDS_PATH.suffix + ".tmp")
+                tmp.write_text(
+                    "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in kept),
+                    encoding="utf-8",
+                )
+                tmp.replace(DASHBOARD_TRENDS_PATH)
+        except Exception:
+            pass
 
 
 def _dashboard_trends_payload(limit: int = 120, window_sec: int = 0) -> Dict[str, Any]:

@@ -9,7 +9,6 @@ from azazel_edge.audit import P0AuditLogger
 
 
 class P0AuditLoggerConcurrencyV1Tests(unittest.TestCase):
-    @unittest.skip("Phase 3 enables this after P0AuditLogger.log() is locked")
     def test_concurrent_log_appends_preserve_hash_chain(self) -> None:
         thread_count = 8
         writes_per_thread = 25

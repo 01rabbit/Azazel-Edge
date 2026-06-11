@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -261,9 +262,14 @@ class SocEvaluator:
         self._seen_external_destinations: set[str] = set()
         self._seen_route_markers: set[str] = set()
         self._seen_visible_services: set[str] = set()
+        self._lock = threading.Lock()
         self.attack_mapping = load_attack_mapping()
 
     def evaluate(self, events: Iterable[Any], sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        with self._lock:
+            return self._evaluate_unlocked(events, sot_diff=sot_diff)
+
+    def _evaluate_unlocked(self, events: Iterable[Any], sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         payloads = _to_payloads(events)
         soc_payloads = [item for item in payloads if str(item.get('source') or '') == 'suricata_eve']
         flow_payloads = [item for item in payloads if str(item.get('source') or '') == 'flow_min']

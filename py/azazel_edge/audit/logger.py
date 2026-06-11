@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
@@ -26,6 +27,7 @@ class P0AuditLogger:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
         self._last_chain_hash = self._read_last_chain_hash()
 
     def _read_last_chain_hash(self) -> str:
@@ -70,19 +72,20 @@ class P0AuditLogger:
     def log(self, kind: str, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
         if kind not in VALID_KINDS:
             raise ValueError(f'invalid_audit_kind:{kind}')
-        record = {
-            'ts': datetime.now(timezone.utc).isoformat(timespec='milliseconds'),
-            'kind': kind,
-            'trace_id': str(trace_id),
-            'source': str(source),
-            'chain_prev': self._last_chain_hash,
-        }
-        record.update(payload)
-        record['chain_hash'] = self._compute_chain_hash(record)
-        with self.path.open('a', encoding='utf-8') as fh:
-            fh.write(json.dumps(record, ensure_ascii=True, separators=(',', ':')) + '\n')
-        self._last_chain_hash = str(record['chain_hash'])
-        return record
+        with self._lock:
+            record = {
+                'ts': datetime.now(timezone.utc).isoformat(timespec='milliseconds'),
+                'kind': kind,
+                'trace_id': str(trace_id),
+                'source': str(source),
+                'chain_prev': self._last_chain_hash,
+            }
+            record.update(payload)
+            record['chain_hash'] = self._compute_chain_hash(record)
+            with self.path.open('a', encoding='utf-8') as fh:
+                fh.write(json.dumps(record, ensure_ascii=True, separators=(',', ':')) + '\n')
+            self._last_chain_hash = str(record['chain_hash'])
+            return record
 
     def log_event_receive(self, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
         return self.log('event_receive', trace_id=trace_id, source=source, **payload)

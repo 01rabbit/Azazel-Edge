@@ -107,6 +107,16 @@ class DecisionExplanationV2Tests(unittest.TestCase):
         self.assertEqual(rows[0]['evidence_ids'], result['evidence_ids'])
         self.assertIn('trust_capsule', rows[0])
 
+    def test_invalid_persisted_explanation_warns_but_still_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'decision-explanations.jsonl'
+            explainer = DecisionExplainer(output_path=path)
+            with self.assertLogs('azazel_edge.explanations.decision', level='WARNING') as logs:
+                explainer.write_jsonl({'format_version': 'v2'})
+            rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(rows, [{'format_version': 'v2'}])
+        self.assertTrue(any('invalid_v2_decision_explanation' in line for line in logs.output))
+
 
 if __name__ == '__main__':
     unittest.main()

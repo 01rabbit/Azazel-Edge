@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import queue
+import threading
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -12,14 +13,16 @@ class EvidenceBus:
     def __init__(self, fanout_path: Optional[Path] = None, queue_max: int = 1024):
         self.fanout_path = Path(fanout_path) if fanout_path else None
         self.queue: 'queue.Queue[Dict[str, object]]' = queue.Queue(maxsize=max(1, int(queue_max)))
+        self._fanout_lock = threading.Lock()
 
     def publish(self, event: EvidenceEvent | Dict[str, object]) -> Dict[str, object]:
         payload = event.to_dict() if isinstance(event, EvidenceEvent) else EvidenceEvent.from_dict(event).to_dict()
         self.queue.put_nowait(payload)
         if self.fanout_path is not None:
-            self.fanout_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.fanout_path.open('a', encoding='utf-8') as fh:
-                fh.write(json.dumps(payload, ensure_ascii=False) + '\n')
+            with self._fanout_lock:
+                self.fanout_path.parent.mkdir(parents=True, exist_ok=True)
+                with self.fanout_path.open('a', encoding='utf-8') as fh:
+                    fh.write(json.dumps(payload, ensure_ascii=False) + '\n')
         return payload
 
     def publish_many(self, events: Iterable[EvidenceEvent | Dict[str, object]]) -> List[Dict[str, object]]:
