@@ -2,7 +2,7 @@
 Register with:
 gh issue create \
   --title "[CFP] Claims-discipline validation" \
-  --body-file docs/issues/auditable-edge-socnoc/09-claims-discipline-validation.md \
+  --body-file docs/archive/issues/auditable-edge-socnoc/09-claims-discipline-validation.md \
   --label "auditable-edge-socnoc-cfp" --label "testing" --label "documentation"
 -->
 

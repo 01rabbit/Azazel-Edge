@@ -41,5 +41,5 @@ The profile depends on Decision Loop determinism, Evidence Model consistency, an
 ## Related Planning Documents
 - [Candidate CFP Draft (not accepted)](../cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md)
 - [Paper: Auditable Edge SOC/NOC Gateway](../papers/auditable-edge-socnoc-paper.md)
-- [CFP Preparation Roadmap](../roadmaps/auditable-edge-socnoc-cfp-roadmap.md)
-- [Issue drafts for candidate CFP readiness](../issues/auditable-edge-socnoc/README.md)
+- [CFP Preparation Roadmap](../archive/roadmaps/auditable-edge-socnoc-cfp-roadmap.md)
+- [Issue drafts for candidate CFP readiness](../archive/issues/auditable-edge-socnoc/README.md)

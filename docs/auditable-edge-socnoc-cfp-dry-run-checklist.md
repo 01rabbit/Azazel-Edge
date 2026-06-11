@@ -7,7 +7,7 @@ This document tracks preparation steps for a candidate CFP submission that has *
 
 ## Offline Rehearsal Checklist
 
-Steps adapted from the "Demo Readiness Checklist" in [`docs/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`](roadmaps/auditable-edge-socnoc-cfp-roadmap.md).
+Steps adapted from the "Demo Readiness Checklist" in [`docs/archive/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`](archive/roadmaps/auditable-edge-socnoc-cfp-roadmap.md).
 
 ### Environment Setup
 

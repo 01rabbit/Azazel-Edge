@@ -2,7 +2,7 @@
 Register with:
 gh issue create \
   --title "[CFP] privacy-sensitive auditable demo scenario auditable_edge_socnoc" \
-  --body-file docs/issues/auditable-edge-socnoc/06-europe-demo-auditable-edge-socnoc.md \
+  --body-file docs/archive/issues/auditable-edge-socnoc/06-europe-demo-auditable-edge-socnoc.md \
   --label "auditable-edge-socnoc-cfp" --label "demo" --label "testing"
 -->
 

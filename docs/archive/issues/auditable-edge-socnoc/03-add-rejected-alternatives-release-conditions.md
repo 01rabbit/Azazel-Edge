@@ -2,7 +2,7 @@
 Register with:
 gh issue create \
   --title "[CFP] Add rejected alternatives and release conditions where missing" \
-  --body-file docs/issues/auditable-edge-socnoc/03-add-rejected-alternatives-release-conditions.md \
+  --body-file docs/archive/issues/auditable-edge-socnoc/03-add-rejected-alternatives-release-conditions.md \
   --label "auditable-edge-socnoc-cfp" --label "audit" --label "testing"
 -->
 

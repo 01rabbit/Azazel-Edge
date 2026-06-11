@@ -2,7 +2,7 @@
 Register with:
 gh issue create \
   --title "[CFP] Confirm current auditable decision fields" \
-  --body-file docs/issues/auditable-edge-socnoc/01-confirm-auditable-decision-fields.md \
+  --body-file docs/archive/issues/auditable-edge-socnoc/01-confirm-auditable-decision-fields.md \
   --label "auditable-edge-socnoc-cfp" --label "testing" --label "audit"
 -->
 
@@ -56,7 +56,7 @@ makes the field set the demo walk depends on resistant to regression.
 - `py/azazel_edge/explanations/decision.py` (read-only reference)
 - `py/azazel_edge/arbiter/action.py` (read-only reference)
 - `tests/` (new test, e.g. `tests/test_decision_explanation_fields_v1.py`)
-- `docs/roadmaps/auditable-edge-socnoc-cfp-roadmap.md` (cross-reference)
+- `docs/archive/roadmaps/auditable-edge-socnoc-cfp-roadmap.md` (cross-reference)
 
 ## Dependencies
 

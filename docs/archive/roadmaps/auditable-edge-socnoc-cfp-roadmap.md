@@ -1,11 +1,11 @@
 # Roadmap: Auditable Edge SOC/NOC CFP Preparation
 
-> Status: CFP preparation / candidate concept roadmap.
+> Status: archived CFP-preparation roadmap.
 > This document does not represent an accepted Black Hat Arsenal appearance.
 
-Status: planning artifact for a CFP submission draft. This roadmap describes work
-toward *submission readiness and demo readiness* for a candidate Arsenal
-application. It does not imply that any event has reviewed, accepted, or
+Status: archived planning artifact for a CFP submission draft. The linked work
+items were completed or superseded and the roadmap is retained for historical
+traceability. It does not imply that any event has reviewed, accepted, or
 scheduled anything. All status labels use the project convention:
 Implemented / Prototype / Planned / Conceptual / Unknown.
 
@@ -54,22 +54,22 @@ local-first operation.
 
 ## Issue Breakdown
 
-Per-issue detail lives in `docs/issues/auditable-edge-socnoc/`. This table summarizes
+Per-issue detail lives in `docs/archive/issues/auditable-edge-socnoc/`. This table summarizes
 only the issue, the status of the *underlying capability* it builds on, and the
 primary issue file.
 
 | Issue | Title | Underlying capability status | File |
 |---|---|---|---|
-| 01 | Confirm current auditable decision fields | Implemented (fields verified 2026-06-10; issue makes verification repeatable) | `docs/issues/auditable-edge-socnoc/01-confirm-auditable-decision-fields.md` |
-| 02 | Normalize decision-explanation JSONL schema | Implemented (v2 writer); trace_id threading is Prototype | `docs/issues/auditable-edge-socnoc/02-normalize-decision-explanation-jsonl.md` |
-| 03 | Add rejected alternatives and release conditions where missing | Implemented (main arbiter path); gap in other streams | `docs/issues/auditable-edge-socnoc/03-add-rejected-alternatives-release-conditions.md` |
-| 04 | Config hash / policy profile traceability | Implemented (explanation records); Planned (full packaging) | `docs/issues/auditable-edge-socnoc/04-config-hash-policy-profile-traceability.md` |
-| 05 | Audit trace viewer / CLI review path | Implemented (web + CLI + TUI surfaces); adds read-only review command | `docs/issues/auditable-edge-socnoc/05-audit-trace-viewer-cli-review-path.md` |
-| 06 | Auditable demo scenario `auditable_edge_socnoc` | Planned (scenario does not exist) | `docs/issues/auditable-edge-socnoc/06-europe-demo-auditable-edge-socnoc.md` |
-| 07 | CFP draft and paper | Implemented (draft + paper landed in commit ff8ef98); residual review tasks | `docs/issues/auditable-edge-socnoc/07-cfp-draft-and-paper.md` |
-| 08 | Docs navigation / README links | Implemented (README + INDEX links landed); residual navigation tasks | `docs/issues/auditable-edge-socnoc/08-docs-navigation-readme-links.md` |
-| 09 | Claims-discipline validation | Planned (no automated check yet) | `docs/issues/auditable-edge-socnoc/09-claims-discipline-validation.md` |
-| 10 | Arsenal demo dry-run checklist | Planned (rehearsal artifact) | `docs/issues/auditable-edge-socnoc/10-arsenal-demo-dry-run-checklist.md` |
+| 01 | Confirm current auditable decision fields | Implemented (fields verified 2026-06-10; issue makes verification repeatable) | `docs/archive/issues/auditable-edge-socnoc/01-confirm-auditable-decision-fields.md` |
+| 02 | Normalize decision-explanation JSONL schema | Implemented (v2 writer); trace_id threading is Prototype | `docs/archive/issues/auditable-edge-socnoc/02-normalize-decision-explanation-jsonl.md` |
+| 03 | Add rejected alternatives and release conditions where missing | Implemented (main arbiter path); gap in other streams | `docs/archive/issues/auditable-edge-socnoc/03-add-rejected-alternatives-release-conditions.md` |
+| 04 | Config hash / policy profile traceability | Implemented (explanation records); Planned (full packaging) | `docs/archive/issues/auditable-edge-socnoc/04-config-hash-policy-profile-traceability.md` |
+| 05 | Audit trace viewer / CLI review path | Implemented (web + CLI + TUI surfaces); adds read-only review command | `docs/archive/issues/auditable-edge-socnoc/05-audit-trace-viewer-cli-review-path.md` |
+| 06 | Auditable demo scenario `auditable_edge_socnoc` | Implemented (scenario landed; archive retained for planning traceability) | `docs/archive/issues/auditable-edge-socnoc/06-europe-demo-auditable-edge-socnoc.md` |
+| 07 | CFP draft and paper | Implemented (draft + paper landed in commit ff8ef98); residual review tasks | `docs/archive/issues/auditable-edge-socnoc/07-cfp-draft-and-paper.md` |
+| 08 | Docs navigation / README links | Implemented (README + INDEX links landed); residual navigation tasks | `docs/archive/issues/auditable-edge-socnoc/08-docs-navigation-readme-links.md` |
+| 09 | Claims-discipline validation | Implemented (automated check landed; archive retained for planning traceability) | `docs/archive/issues/auditable-edge-socnoc/09-claims-discipline-validation.md` |
+| 10 | Arsenal demo dry-run checklist | Implemented (rehearsal artifact landed) | `docs/archive/issues/auditable-edge-socnoc/10-arsenal-demo-dry-run-checklist.md` |
 
 ## Implementation Order
 

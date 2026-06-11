@@ -2,7 +2,7 @@
 Register with:
 gh issue create \
   --title "[CFP] Arsenal demo dry-run checklist" \
-  --body-file docs/issues/auditable-edge-socnoc/10-arsenal-demo-dry-run-checklist.md \
+  --body-file docs/archive/issues/auditable-edge-socnoc/10-arsenal-demo-dry-run-checklist.md \
   --label "auditable-edge-socnoc-cfp" --label "demo"
 -->
 

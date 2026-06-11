@@ -2,7 +2,7 @@
 Register with:
 gh issue create \
   --title "[CFP] CFP draft and paper" \
-  --body-file docs/issues/auditable-edge-socnoc/07-cfp-draft-and-paper.md \
+  --body-file docs/archive/issues/auditable-edge-socnoc/07-cfp-draft-and-paper.md \
   --label "auditable-edge-socnoc-cfp" --label "documentation"
 -->
 

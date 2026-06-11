@@ -50,9 +50,17 @@ Pre-acceptance planning material. These documents support submission preparation
 |------|----------|-------------|--------------|
 | [cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md](cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md) | Presenter / Reviewer | Candidate CFP draft for the Auditable Edge SOC/NOC profile (not accepted) | 2026-06-10 |
 | [papers/auditable-edge-socnoc-paper.md](papers/auditable-edge-socnoc-paper.md) | Reviewer / Researcher | Paper-style technical description of the Auditable Edge SOC/NOC gateway concept | 2026-06-10 |
-| [roadmaps/auditable-edge-socnoc-cfp-roadmap.md](roadmaps/auditable-edge-socnoc-cfp-roadmap.md) | Developer / Presenter | Submission-preparation roadmap for the Auditable Edge SOC/NOC profile | 2026-06-10 |
-| [issues/auditable-edge-socnoc/README.md](issues/auditable-edge-socnoc/README.md) | Developer | Issue drafts (gh-registerable) for candidate CFP readiness | 2026-06-10 |
 | [auditable-edge-socnoc-cfp-dry-run-checklist.md](auditable-edge-socnoc-cfp-dry-run-checklist.md) | Developer / Presenter | Pre-submission rehearsal checklist for the Auditable Edge SOC/NOC candidate CFP | 2026-06-11 |
+
+## Archive
+
+Historical planning and issue-body artifacts retained for traceability. These documents are archived because the associated work is complete or superseded; they remain in-repo so links, change history, and reviewer evidence stay intact.
+
+| File | Audience | Description | Last Updated |
+|------|----------|-------------|--------------|
+| [archive/README.md](archive/README.md) | Developer / Reviewer | Archive policy and retained planning-material index | 2026-06-11 |
+| [archive/roadmaps/auditable-edge-socnoc-cfp-roadmap.md](archive/roadmaps/auditable-edge-socnoc-cfp-roadmap.md) | Developer / Presenter | Archived submission-preparation roadmap for the Auditable Edge SOC/NOC profile | 2026-06-11 |
+| [archive/issues/auditable-edge-socnoc/README.md](archive/issues/auditable-edge-socnoc/README.md) | Developer | Archived issue drafts for candidate CFP readiness work | 2026-06-11 |
 
 ## Planning and Records
 

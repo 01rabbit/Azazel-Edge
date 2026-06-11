@@ -2,7 +2,7 @@
 Register with:
 gh issue create \
   --title "[CFP] Audit trace viewer / CLI review path" \
-  --body-file docs/issues/auditable-edge-socnoc/05-audit-trace-viewer-cli-review-path.md \
+  --body-file docs/archive/issues/auditable-edge-socnoc/05-audit-trace-viewer-cli-review-path.md \
   --label "auditable-edge-socnoc-cfp" --label "tooling" --label "documentation"
 -->
 
