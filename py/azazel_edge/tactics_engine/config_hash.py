@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+from azazel_edge.path_schema import first_minute_config_candidates
+
 logger = logging.getLogger("tactics_engine.config_hash")
 
 
@@ -58,7 +60,7 @@ class ConfigHash:
         if content_bytes is None:
             default_paths = [
                 Path("configs/first_minute.yaml"),
-                Path("/etc/azazel-edge/first_minute.yaml"),
+                *first_minute_config_candidates(schema="v2"),
                 Path("/opt/azazel-edge/configs/first_minute.yaml"),
             ]
             for p in default_paths:

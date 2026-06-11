@@ -7,11 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-PY_ROOT = REPO_ROOT / "py"
-if str(PY_ROOT) not in sys.path:
-    sys.path.insert(0, str(PY_ROOT))
+from unittest.mock import patch
 
 from azazel_edge_ai import agent
 import azazel_edge_epd_mode_refresh as epd_refresh
@@ -144,15 +140,13 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
         self.assertEqual(int(metrics["processed_events"]), 1)
 
     def test_llm_failure_uses_fallback_policy(self) -> None:
-        orig_ollama_chat = agent._ollama_chat
         agent.LLM_ENABLED = True
         agent.LLM_RETRY_MAX = 1
 
         def _always_fail(*_args, **_kwargs) -> dict:
             raise TimeoutError("simulated_timeout")
 
-        agent._ollama_chat = _always_fail
-        try:
+        with patch.object(agent, "_ollama_chat", _always_fail):
             event = {
                 "normalized": {
                     "sid": 200002,
@@ -180,8 +174,6 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
             self.assertGreaterEqual(int(metrics["llm_failed"]), 1)
             self.assertGreaterEqual(int(metrics["llm_fallback_count"]), 1)
             self.assertGreaterEqual(int(metrics["llm_retried"]), 1)
-        finally:
-            agent._ollama_chat = orig_ollama_chat
 
     def test_epd_uses_runtime_snapshot_suspicion(self) -> None:
         runtime_snapshot = Path(self.tmp.name) / "runtime_snapshot.json"
@@ -432,7 +424,6 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
         self.assertGreaterEqual(int(metrics.get("llm_requests", 0)), 1)
 
     def test_invalid_analyst_schema_falls_back(self) -> None:
-        orig_ollama_chat = agent._ollama_chat
         agent.LLM_ENABLED = True
         agent.LLM_RETRY_MAX = 0
 
@@ -445,8 +436,7 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
                 "escalation": "maybe",
             }
 
-        agent._ollama_chat = _bad_schema
-        try:
+        with patch.object(agent, "_ollama_chat", _bad_schema):
             event = {
                 "normalized": {
                     "sid": 220001,
@@ -469,8 +459,6 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
             self.assertEqual(processed["llm"]["status"], "fallback")
             self.assertIn("analyst_", processed["llm"]["reason"])
             self.assertGreaterEqual(int(metrics.get("llm_schema_invalid_count", 0)), 1)
-        finally:
-            agent._ollama_chat = orig_ollama_chat
 
 
 if __name__ == "__main__":

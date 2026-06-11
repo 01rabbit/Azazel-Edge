@@ -2,7 +2,7 @@
 Register with:
 gh issue create \
   --title "[CFP] Normalize decision-explanation JSONL schema" \
-  --body-file docs/issues/auditable-edge-socnoc/02-normalize-decision-explanation-jsonl.md \
+  --body-file docs/archive/issues/auditable-edge-socnoc/02-normalize-decision-explanation-jsonl.md \
   --label "auditable-edge-socnoc-cfp" --label "documentation" --label "testing"
 -->
 
@@ -67,7 +67,7 @@ verified and has no integration test.
 - tactics-engine `DecisionLogger` module (second stream; reference / mapping)
 - `docs/architecture/evidence-model.md` (schema documentation cross-reference)
 - `tests/test_decision_explanation_v2.py` style (new schema-validation test)
-- `docs/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`
+- `docs/archive/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`
 
 ## Dependencies
 

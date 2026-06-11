@@ -25,44 +25,31 @@ Explanation record fields (DecisionExplainer.explain result, format_version='v2'
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-PY_ROOT = ROOT / 'py'
-if str(PY_ROOT) not in sys.path:
-    sys.path.insert(0, str(PY_ROOT))
-
 from azazel_edge.arbiter import ActionArbiter
 from azazel_edge.explanations import DecisionExplainer
-
-
-def _dim(score: int, label: str, evidence_ids: list) -> dict:
-    return {'score': score, 'label': label, 'reasons': [], 'evidence_ids': evidence_ids}
+from tests.helpers import noc
+from tests.helpers import soc
 
 
 def _redirect_noc() -> dict:
     """All NOC dimensions healthy — required so redirect is selected over notify."""
-    return {
-        'availability': _dim(95, 'good', ['noc-a']),
-        'path_health': _dim(95, 'good', ['noc-p']),
-        'device_health': _dim(95, 'good', ['noc-d']),
-        'client_health': _dim(95, 'good', ['noc-c']),
-        'summary': {'status': 'good', 'reasons': []},
-        'evidence_ids': ['noc-a', 'noc-p', 'noc-d', 'noc-c'],
-    }
+    return noc()
 
 
 def _redirect_soc() -> dict:
     """High-suspicion SOC signal that drives a redirect decision."""
-    return {
-        'suspicion': _dim(92, 'critical', ['soc-s']),
-        'confidence': _dim(84, 'critical', ['soc-c']),
-        'technique_likelihood': _dim(40, 'medium', ['soc-t']),
-        'blast_radius': _dim(72, 'high', ['soc-b']),
-        'summary': {'status': 'critical', 'reasons': []},
-        'evidence_ids': ['soc-s', 'soc-c', 'soc-t', 'soc-b'],
-    }
+    return soc(
+        suspicion=92,
+        suspicion_label='critical',
+        confidence=84,
+        confidence_label='critical',
+        blast=72,
+        blast_label='high',
+    )
 
 
 class AuditableDecisionFieldsV1Tests(unittest.TestCase):
@@ -76,8 +63,10 @@ class AuditableDecisionFieldsV1Tests(unittest.TestCase):
             self.soc,
             client_impact={'score': 20, 'critical_client_count': 0},
         )
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.explanation = DecisionExplainer(
-            output_path=Path('/tmp/unused-decision-explanations.jsonl')
+            output_path=Path(self.tmp.name) / 'unused-decision-explanations.jsonl'
         ).explain(
             noc=self.noc,
             soc=self.soc,

@@ -30,14 +30,33 @@ import ipaddress
 import hashlib
 import queue
 import threading
-from functools import wraps
 from collections import deque
 from pathlib import Path
 from datetime import datetime
 from datetime import timezone
-from typing import Dict, Any, Optional, Iterator, Tuple, List, Callable
+from typing import Dict, Any, Optional, Iterator, Tuple, List
 from urllib.request import Request, urlopen
 from urllib.parse import urlparse, quote
+
+from azazel_edge_web.io_helpers import (
+    _append_jsonl,
+    _parse_json_dict_lenient,
+    _read_json_file,
+    _tail_first_existing_jsonl,
+    _tail_jsonl,
+    _write_json_file,
+)
+from azazel_edge_web.auth import (
+    _audit_authz_event,
+    _authenticate_request,
+    _authorize_mtls,
+    _load_auth_tokens,
+    _load_mtls_allowlist,
+    _normalize_role,
+    _role_allows,
+    _unauthorized_response,
+    require_token,
+)
 
 app = Flask(__name__)
 STATIC_ASSET_VERSION = str(int(time.time()))
@@ -638,47 +657,6 @@ def load_token() -> Optional[str]:
     return None
 
 
-def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-
-
-def _write_json_file(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
-
-
-def _read_json_file(path: Path) -> Dict[str, Any]:
-    try:
-        if path.exists():
-            data = _parse_json_dict_lenient(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-    except Exception:
-        return {}
-    return {}
-
-
-def _parse_json_dict_lenient(text: str) -> Dict[str, Any]:
-    raw = str(text or "").strip()
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        pass
-    try:
-        decoder = json.JSONDecoder()
-        parsed, _idx = decoder.raw_decode(raw)
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        return {}
-
-
 def _default_sot_payload() -> Dict[str, Any]:
     return {
         "devices": [],
@@ -788,35 +766,6 @@ def _request_actor() -> Dict[str, str]:
     }
 
 
-def _tail_jsonl(path: Path, limit: int = 20) -> List[Dict[str, Any]]:
-    rows: deque[Dict[str, Any]] = deque(maxlen=max(1, int(limit)))
-    try:
-        if not path.exists():
-            return []
-        with path.open("r", encoding="utf-8") as f:
-            for raw in f:
-                line = raw.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(payload, dict):
-                    rows.append(payload)
-    except Exception:
-        return []
-    return list(rows)
-
-
-def _tail_first_existing_jsonl(paths: List[Path], limit: int = 20) -> List[Dict[str, Any]]:
-    for path in paths:
-        rows = _tail_jsonl(path, limit=limit)
-        if rows:
-            return rows
-    return []
-
-
 def _taxii_response(payload: Dict[str, Any], status: int = 200) -> Response:
     return Response(
         json.dumps(payload, ensure_ascii=False),
@@ -856,8 +805,7 @@ def _load_captive_registry() -> Dict[str, Any]:
 
 
 def _save_captive_registry(payload: Dict[str, Any]) -> None:
-    CAPTIVE_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CAPTIVE_REGISTRY_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_json_file(CAPTIVE_REGISTRY_PATH, payload)
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -2419,8 +2367,7 @@ def _write_topolite_seed_mode(mode: str, seed_id: str, updated_by: str) -> Dict[
         "updated_at": time.time(),
         "updated_by": str(updated_by or "unknown"),
     }
-    TOPOLITE_SEED_MODE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    TOPOLITE_SEED_MODE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_json_file(TOPOLITE_SEED_MODE_PATH, payload)
     return payload
 
 
@@ -3441,22 +3388,24 @@ def _record_dashboard_trend_point(state: Dict[str, Any], metrics: Dict[str, Any]
         if _dashboard_trends_last_write_ts and now - _dashboard_trends_last_write_ts < max(1.0, DASHBOARD_TRENDS_WRITE_INTERVAL_SEC):
             return
         _dashboard_trends_last_write_ts = now
-    point = _dashboard_trend_point_payload(state, metrics, health, now_epoch=now)
-    _append_jsonl(DASHBOARD_TRENDS_PATH, point)
-    try:
-        rows = _tail_jsonl(DASHBOARD_TRENDS_PATH, limit=max(DASHBOARD_TRENDS_LIMIT * 2, 120))
-        min_ts = now - max(60.0, DASHBOARD_TRENDS_RETENTION_SEC)
-        kept = [row for row in rows if _as_float(row.get("ts"), 0.0) >= min_ts]
-        if len(kept) > DASHBOARD_TRENDS_LIMIT:
-            kept = kept[-DASHBOARD_TRENDS_LIMIT:]
-        if len(kept) != len(rows):
-            DASHBOARD_TRENDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            DASHBOARD_TRENDS_PATH.write_text(
-                "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in kept),
-                encoding="utf-8",
-            )
-    except Exception:
-        pass
+        point = _dashboard_trend_point_payload(state, metrics, health, now_epoch=now)
+        _append_jsonl(DASHBOARD_TRENDS_PATH, point)
+        try:
+            rows = _tail_jsonl(DASHBOARD_TRENDS_PATH, limit=max(DASHBOARD_TRENDS_LIMIT * 2, 120))
+            min_ts = now - max(60.0, DASHBOARD_TRENDS_RETENTION_SEC)
+            kept = [row for row in rows if _as_float(row.get("ts"), 0.0) >= min_ts]
+            if len(kept) > DASHBOARD_TRENDS_LIMIT:
+                kept = kept[-DASHBOARD_TRENDS_LIMIT:]
+            if len(kept) != len(rows):
+                DASHBOARD_TRENDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+                tmp = DASHBOARD_TRENDS_PATH.with_suffix(DASHBOARD_TRENDS_PATH.suffix + ".tmp")
+                tmp.write_text(
+                    "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in kept),
+                    encoding="utf-8",
+                )
+                tmp.replace(DASHBOARD_TRENDS_PATH)
+        except Exception:
+            pass
 
 
 def _dashboard_trends_payload(limit: int = 120, window_sec: int = 0) -> Dict[str, Any]:
@@ -3543,15 +3492,6 @@ def _dashboard_trends_payload(limit: int = 120, window_sec: int = 0) -> Dict[str
     }
 
 
-def _normalize_role(role: str, default: str = "viewer") -> str:
-    role_norm = str(role or "").strip().lower()
-    return role_norm if role_norm in _ROLE_RANK else default
-
-
-def _role_allows(actual_role: str, required_role: str) -> bool:
-    return _ROLE_RANK.get(_normalize_role(actual_role), 0) >= _ROLE_RANK.get(_normalize_role(required_role), 0)
-
-
 def _request_trace_id() -> str:
     header_value = str(request.headers.get("X-Trace-Id") or request.headers.get("X-Azazel-Trace-Id") or "").strip()
     if header_value:
@@ -3582,112 +3522,6 @@ def _request_action_hint() -> str:
     return endpoint[:80]
 
 
-def _load_mtls_allowlist() -> set[str]:
-    allowed = set(AUTH_MTLS_FINGERPRINTS)
-    try:
-        if AUTH_MTLS_FINGERPRINTS_FILE.exists():
-            for line in AUTH_MTLS_FINGERPRINTS_FILE.read_text(encoding="utf-8").splitlines():
-                item = line.strip().lower()
-                if item and not item.startswith("#"):
-                    allowed.add(item)
-    except Exception:
-        pass
-    return allowed
-
-
-def _load_auth_tokens() -> List[Dict[str, str]]:
-    try:
-        if AUTH_TOKENS_FILE.exists():
-            payload = _parse_json_dict_lenient(AUTH_TOKENS_FILE.read_text(encoding="utf-8"))
-            items = payload.get("tokens") if isinstance(payload.get("tokens"), list) else payload.get("items")
-            if isinstance(items, list):
-                out: List[Dict[str, str]] = []
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    token = str(item.get("token") or "").strip()
-                    if not token:
-                        continue
-                    out.append(
-                        {
-                            "token": token,
-                            "principal": str(item.get("principal") or "unknown").strip() or "unknown",
-                            "role": _normalize_role(str(item.get("role") or "viewer"), default="viewer"),
-                        }
-                    )
-                if out:
-                    return out
-    except Exception:
-        pass
-    legacy = load_token()
-    if legacy:
-        return [{"token": legacy, "principal": "legacy-token", "role": "admin"}]
-    return []
-
-
-def _authenticate_request() -> Dict[str, Any]:
-    req_token = (
-        request.headers.get("X-AZAZEL-TOKEN")
-        or request.headers.get("X-Auth-Token")
-        or request.args.get("token")
-    )
-    req_token = str(req_token or "").strip()
-    token_items = _load_auth_tokens()
-    if not token_items:
-        return {"ok": bool(AUTH_FAIL_OPEN), "principal": "anonymous", "role": "admin" if AUTH_FAIL_OPEN else "viewer", "reason": "auth_material_missing"}
-    if not req_token:
-        return {"ok": False, "principal": "anonymous", "role": "viewer", "reason": "missing_token"}
-    for item in token_items:
-        if req_token == str(item.get("token") or ""):
-            return {"ok": True, "principal": str(item.get("principal") or "unknown"), "role": _normalize_role(str(item.get("role") or "viewer")), "reason": "ok"}
-    return {"ok": False, "principal": "anonymous", "role": "viewer", "reason": "token_mismatch"}
-
-
-def _authorize_mtls(required_role: str) -> Dict[str, Any]:
-    if not AUTH_MTLS_REQUIRED:
-        return {"ok": True, "reason": "mtls_not_required"}
-    if _ROLE_RANK.get(_normalize_role(required_role), 0) < _ROLE_RANK["operator"]:
-        return {"ok": True, "reason": "mtls_not_required_for_viewer"}
-    observed = str(request.headers.get(AUTH_MTLS_HEADER) or "").strip().lower()
-    if not observed:
-        return {"ok": False, "reason": "mtls_header_missing"}
-    allowlist = _load_mtls_allowlist()
-    if not allowlist:
-        return {"ok": False, "reason": "mtls_allowlist_empty"}
-    if observed not in allowlist:
-        return {"ok": False, "reason": "mtls_fingerprint_mismatch"}
-    return {"ok": True, "reason": "ok"}
-
-
-def _audit_authz_event(
-    *,
-    allowed: bool,
-    required_role: str,
-    principal: str,
-    role: str,
-    reason: str,
-) -> None:
-    try:
-        _append_jsonl(
-            AUTHZ_AUDIT_LOG,
-            {
-                "ts": time.time(),
-                "trace_id": _request_trace_id(),
-                "endpoint": str(request.path or ""),
-                "method": str(request.method or ""),
-                "requested_action": _request_action_hint(),
-                "required_role": _normalize_role(required_role),
-                "principal": str(principal or "anonymous"),
-                "role": _normalize_role(role),
-                "allowed": bool(allowed),
-                "reason": str(reason or ""),
-                "remote_addr": str(request.remote_addr or ""),
-            },
-        )
-    except Exception as e:
-        app.logger.warning(f"authz audit logging failed: {e}")
-
-
 def _audit_aggregator_event(
     *,
     event: str,
@@ -3711,77 +3545,6 @@ def _audit_aggregator_event(
         )
     except Exception as e:
         app.logger.warning(f"aggregator audit logging failed: {e}")
-
-
-def _unauthorized_response(*, ok_payload: Optional[bool] = False, status_code: int = 403) -> tuple[Response, int]:
-    if ok_payload is None:
-        payload: Dict[str, Any] = {"error": "Unauthorized"}
-    else:
-        payload = {"ok": bool(ok_payload), "error": "Unauthorized"}
-    return jsonify(payload), int(status_code)
-
-
-def require_token(
-    *,
-    ok_payload: Optional[bool] = False,
-    status_code: int = 403,
-    min_role: str = "viewer",
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Endpoint decorator that centralizes token verification responses."""
-
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        @wraps(func)
-        def wrapped(*args: Any, **kwargs: Any) -> Any:
-            required_role = _normalize_role(min_role, default="viewer")
-            auth = _authenticate_request()
-            role = _normalize_role(str(auth.get("role") or "viewer"))
-            principal = str(auth.get("principal") or "anonymous")
-            if not bool(auth.get("ok")):
-                _audit_authz_event(
-                    allowed=False,
-                    required_role=required_role,
-                    principal=principal,
-                    role=role,
-                    reason=str(auth.get("reason") or "auth_failed"),
-                )
-                if AUTH_FAIL_OPEN:
-                    app.logger.warning("AUTH_FAIL_OPEN active: allowing request despite auth failure")
-                else:
-                    return _unauthorized_response(ok_payload=ok_payload, status_code=status_code)
-            mtls = _authorize_mtls(required_role)
-            if not bool(mtls.get("ok")):
-                _audit_authz_event(
-                    allowed=False,
-                    required_role=required_role,
-                    principal=principal,
-                    role=role,
-                    reason=str(mtls.get("reason") or "mtls_failed"),
-                )
-                return _unauthorized_response(ok_payload=ok_payload, status_code=status_code)
-            if not _role_allows(role, required_role):
-                _audit_authz_event(
-                    allowed=False,
-                    required_role=required_role,
-                    principal=principal,
-                    role=role,
-                    reason="insufficient_role",
-                )
-                return _unauthorized_response(ok_payload=ok_payload, status_code=status_code)
-            g.auth_principal = principal
-            g.auth_role = role
-            g.auth_required_role = required_role
-            _audit_authz_event(
-                allowed=True,
-                required_role=required_role,
-                principal=principal,
-                role=role,
-                reason=str(auth.get("reason") or "ok"),
-            )
-            return func(*args, **kwargs)
-
-        return wrapped
-
-    return decorator
 
 
 def _review_context_from_request(body: Dict[str, Any] | None = None) -> Dict[str, Any]:

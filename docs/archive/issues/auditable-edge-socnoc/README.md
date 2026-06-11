@@ -1,6 +1,8 @@
 # Auditable Edge SOC/NOC Issue Drafts
 
-This directory holds issue drafts for making the Auditable Edge SOC/NOC concept profile CFP-submission-ready and demo-ready as candidate submission-preparation material. Nothing here implies acceptance, scheduling, or review by any event.
+Archived issue drafts for the completed Auditable Edge SOC/NOC CFP-readiness workstream.
+These files remain as historical planning artifacts and traceability records.
+Nothing here implies acceptance, scheduling, or review by any event.
 
 These are source-controlled issue bodies, not registered issues. Each file is a
 self-contained issue body with a suggested `gh` registration command in an HTML
@@ -13,7 +15,7 @@ Each file's header comment gives the exact command. The general form is:
 ```sh
 gh issue create \
   --title "[CFP] <title>" \
-  --body-file docs/issues/auditable-edge-socnoc/NN-<slug>.md \
+  --body-file docs/archive/issues/auditable-edge-socnoc/NN-<slug>.md \
   --label "auditable-edge-socnoc-cfp" --label "<documentation|demo|tooling|testing|audit>"
 ```
 
@@ -36,4 +38,4 @@ gh label create auditable-edge-socnoc-cfp --description "candidate CFP readiness
 - `09-claims-discipline-validation.md`
 - `10-arsenal-demo-dry-run-checklist.md`
 
-See the roadmap: `docs/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`.
+See the roadmap: `docs/archive/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`.

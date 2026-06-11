@@ -2,7 +2,7 @@
 Register with:
 gh issue create \
   --title "[CFP] Config hash / policy profile traceability across outputs" \
-  --body-file docs/issues/auditable-edge-socnoc/04-config-hash-policy-profile-traceability.md \
+  --body-file docs/archive/issues/auditable-edge-socnoc/04-config-hash-policy-profile-traceability.md \
   --label "auditable-edge-socnoc-cfp" --label "audit" --label "documentation"
 -->
 

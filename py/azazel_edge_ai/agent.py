@@ -8,6 +8,7 @@ import logging
 import os
 import grp
 import queue
+import secrets
 import socket
 import subprocess
 import sys
@@ -47,6 +48,7 @@ try:
     from azazel_edge.audit import P0AuditLogger
 except Exception:  # pragma: no cover
     P0AuditLogger = None  # type: ignore
+from azazel_edge._util import ensure_parent as _ensure_parent
 
 SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
 RUNTIME_DIR_MODE = int(str(os.environ.get("AZAZEL_RUNTIME_DIR_MODE", "0770")), 8)
@@ -141,6 +143,7 @@ _LAST_RISK_SCORE = 0
 _LAST_STATE_NAME = "NORMAL"
 LLM_QUEUE: "queue.Queue[Dict[str, Any]]" = queue.Queue(maxsize=LLM_QUEUE_MAX)
 IO_LOCK = threading.Lock()
+APPEND_LOCK = threading.Lock()
 METRICS_LOCK = threading.Lock()
 METRICS: Dict[str, Any] = {
     "processed_events": 0,
@@ -216,10 +219,6 @@ def _audit_ai_scope(trace_id: str, source: str, intent: str, in_scope: bool, rea
         )
     except Exception:
         return
-
-
-def _ensure_parent(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _prepare_runtime_socket_dir(path: Path) -> None:
@@ -1009,6 +1008,15 @@ def _user_state(state_name: str) -> str:
     return m.get(state_name, "CHECKING")
 
 
+def _event_trace_id(event: Dict[str, Any]) -> str:
+    enforcement = event.get("enforcement") if isinstance(event, dict) else {}
+    if isinstance(enforcement, dict):
+        trace_id = str(enforcement.get("trace_id") or "").strip()
+        if trace_id:
+            return trace_id
+    return f"trace-{secrets.token_hex(8)}"
+
+
 def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
     global _LAST_RISK_SCORE, _LAST_STATE_NAME
 
@@ -1029,6 +1037,7 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
 
     advisory = {
         "ts": time.time(),
+        "trace_id": _event_trace_id(event),
         "source": "ai_agent",
         "decision_pipeline": {
             "first_pass": {
@@ -1580,9 +1589,10 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
 
 
 def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
-    _ensure_parent(path)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    with APPEND_LOCK:
+        _ensure_parent(path)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:

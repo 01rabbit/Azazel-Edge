@@ -8,14 +8,10 @@ from typing import Any
 
 import yaml
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PY_ROOT = PROJECT_ROOT / "py"
-if str(PY_ROOT) not in sys.path:
-    sys.path.insert(0, str(PY_ROOT))
-
 from azazel_edge.runbooks import _validate_runbook_doc
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNBOOK_ROOT = PROJECT_ROOT / "runbooks"
 PLACEHOLDER_RE = re.compile(r"\$\{([a-zA-Z0-9_]+)\}")
 

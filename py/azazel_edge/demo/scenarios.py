@@ -7,6 +7,7 @@ from azazel_edge.arbiter import ActionArbiter
 from azazel_edge.evaluators import NocEvaluator, SocEvaluator
 from azazel_edge.explanations import DecisionExplainer
 from azazel_edge.policy import load_soc_policy
+from azazel_edge.triage import select_noc_runbook_support
 
 
 class DemoScenarioPack:
@@ -448,6 +449,7 @@ class DemoScenarioRunner:
         events = scenario.get('events', [])
         noc_eval = self.noc.evaluate(events)
         soc_eval = self.soc.evaluate(events)
+        runbook_support = select_noc_runbook_support(noc_eval, audience='professional', lang='en')
         client_impact = {'score': 0, 'affected_client_count': 0, 'critical_client_count': 0}
         arbiter = self.arbiter.decide(self.noc.to_arbiter_input(noc_eval), self.soc.to_arbiter_input(soc_eval), client_impact=client_impact)
         explanation = self.explainer.explain(
@@ -456,6 +458,7 @@ class DemoScenarioRunner:
             arbiter=arbiter,
             trace_id=f'demo:{scenario_id}',
             target='demo-target',
+            runbook_support=runbook_support,
         )
         demo_meta = self.pack.metadata_for(str(scenario_id))
         result = {

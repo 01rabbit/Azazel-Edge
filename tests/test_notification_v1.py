@@ -7,11 +7,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[1]
-PY_ROOT = ROOT / 'py'
-if str(PY_ROOT) not in sys.path:
-    sys.path.insert(0, str(PY_ROOT))
-
 from azazel_edge.audit import P0AuditLogger
 from azazel_edge.notify import DecisionNotifier, MattermostNotifier, NtfyNotifier, SmtpNotifier, WebhookNotifier
 
