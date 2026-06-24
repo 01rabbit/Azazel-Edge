@@ -282,9 +282,14 @@ def _build_report(args: argparse.Namespace) -> Dict[str, Any]:
         "warnings": [],
     }
     if not args.skip_github:
-        github_loaded = _load_github_issues(args.repo, links)
-        github["issues"] = github_loaded["issues"]
-        github["warnings"] = github_loaded["warnings"]
+        try:
+            github_loaded = _load_github_issues(args.repo, links)
+            github["issues"] = github_loaded["issues"]
+            github["warnings"] = github_loaded["warnings"]
+        except ValueError as exc:
+            github["warnings"].append(
+                f"gh lookup unavailable ({exc}); pass --skip-github to suppress"
+            )
 
     freeze_check: Optional[Dict[str, Any]] = None
     if args.include_freeze_check:

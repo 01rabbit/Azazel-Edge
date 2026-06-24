@@ -143,7 +143,7 @@ def _run_booth_verify(args: argparse.Namespace) -> Dict[str, Any]:
     if not args.verify_services:
         cmd.append("--skip-services")
     result = _run_command(cmd)
-    if result.returncode != 0:
+    if result.returncode not in (0, 1):
         stderr = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
         raise ValueError(f"booth verify failed: {stderr}")
     payload = _load_json(result.stdout, context="azazel-edge-bhusa-verify")
