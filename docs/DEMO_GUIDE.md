@@ -50,6 +50,9 @@ It also does not replace the live Tactical first-pass path. The replay exists to
 
 If you only show one scenario, use `mixed_correlation_demo`.
 
+For BHUSA 2026, treat `mixed_correlation_demo` as the frozen primary booth
+scenario unless a clear demo blocker requires replacement.
+
 ## Prerequisites
 
 Confirm the following before starting:
@@ -74,6 +77,13 @@ Run a scenario:
 
 ```bash
 bin/azazel-edge-demo run mixed_correlation_demo
+```
+
+BHUSA 2026 compact booth path:
+
+```bash
+bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-audit-review --compact
 ```
 
 ### Web UI
@@ -241,6 +251,13 @@ bin/azazel-edge-audit-review --compact
 
 See [Arsenal Demo Profile — Section 8](ARSENAL_DEMO_PROFILE.md) for full usage,
 exit codes, and the read-only contract.
+
+BHUSA-specific replay procedure:
+- [BHUSA 2026 Replay Runbook](arsenal/bhusa-2026-replay-runbook.md)
+- [BHUSA 2026 Live Boundary](arsenal/bhusa-2026-live-boundary.md)
+- [BHUSA 2026 Booth Runbook](arsenal/bhusa-2026-booth-runbook.md)
+- [BHUSA 2026 Freeze Candidate](arsenal/bhusa-2026-freeze-candidate.md)
+- [BHUSA 2026 Final Command Sheet](arsenal/bhusa-2026-final-command-sheet.md)
 
 ## Related Documents
 

@@ -33,6 +33,7 @@ The public Arsenal description emphasizes inspectable deterministic replay so ev
 ## References
 
 - `docs/ARSENAL_DEMO_PROFILE.md`
+- `docs/arsenal/bhusa-2026-replay-runbook.md`
 - `docs/arsenal/blackhat-usa-2026.md`
 - `docs/concepts/deterministic-edge-decision-support.md`
 - `bin/azazel-edge-demo`

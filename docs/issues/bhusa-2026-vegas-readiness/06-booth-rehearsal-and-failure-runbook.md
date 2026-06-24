@@ -40,6 +40,7 @@ Public session:
 ## References
 
 - `docs/ARSENAL_DEMO_PROFILE.md`
+- `docs/arsenal/bhusa-2026-booth-runbook.md`
 - `docs/arsenal/blackhat-usa-2026.md`
 - `bin/azazel-edge-demo`
 - `bin/azazel-edge-audit-review`

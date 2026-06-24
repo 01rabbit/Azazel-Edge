@@ -33,6 +33,7 @@ The public Arsenal description emphasizes an explicit and auditable local decisi
 ## References
 
 - `docs/ARSENAL_DEMO_PROFILE.md`
+- `docs/arsenal/bhusa-2026-audit-walkthrough.md`
 - `bin/azazel-edge-audit-review`
 - `tests/test_audit_review_v1.py`
 - `py/azazel_edge/explanations/decision.py`

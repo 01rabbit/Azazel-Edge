@@ -38,10 +38,19 @@ Replay-only demo (default):
 - safest for Arsenal booth
 - stable evaluator output
 - no dependency on live packet generation
+- presentation technique for booth stability only
+- does not replace the normal live Tactical first-pass path
+- freeze the booth primary scenario to `mixed_correlation_demo` unless a clear demo blocker appears
 
 Live-assisted demo:
 - includes Suricata EVE live path
 - must preserve immediate fallback to replay-only mode
+- remains subordinate to the same deterministic evaluator and Action Arbiter path
+
+Boundary statement:
+- normal operation uses live Tactical first-pass triage when available
+- BHUSA 2026 booth operation prefers deterministic replay for short-session stability
+- booth replay must never be described as the normal operating model
 
 ## 5. Pre-demo checklist
 
@@ -73,6 +82,17 @@ curl -fsS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/aggregator/nod
 
 Final fallback rule:
 - the deterministic replay path must remain the final fallback.
+
+## BHUSA 2026 booth message
+
+Presenter note:
+- [BHUSA 2026 Booth Message](arsenal/bhusa-2026-booth-message.md)
+- [BHUSA 2026 Replay Runbook](arsenal/bhusa-2026-replay-runbook.md)
+- [BHUSA 2026 Audit Walkthrough](arsenal/bhusa-2026-audit-walkthrough.md)
+- [BHUSA 2026 Live Boundary](arsenal/bhusa-2026-live-boundary.md)
+- [BHUSA 2026 Booth Runbook](arsenal/bhusa-2026-booth-runbook.md)
+- [BHUSA 2026 Freeze Candidate](arsenal/bhusa-2026-freeze-candidate.md)
+- [BHUSA 2026 Final Command Sheet](arsenal/bhusa-2026-final-command-sheet.md)
 
 ## 7. What not to show first
 

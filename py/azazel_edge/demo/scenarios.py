@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import copy
+import os
+from pathlib import Path
 from typing import Any, Dict, List
 
 from azazel_edge.arbiter import ActionArbiter
+from azazel_edge.audit import P0AuditLogger
 from azazel_edge.evaluators import NocEvaluator, SocEvaluator
 from azazel_edge.explanations import DecisionExplainer
 from azazel_edge.policy import load_soc_policy
@@ -411,6 +414,9 @@ class DemoScenarioPack:
 
 
 class DemoScenarioRunner:
+    DEMO_EXPLANATIONS_PATH = Path('/tmp/azazel-edge-demo-explanations.jsonl')
+    DEMO_AUDIT_PATH = Path('/tmp/azazel-edge-demo-triage-audit.jsonl')
+
     CAPABILITY_BOUNDARY = {
         'implemented_now': [
             'deterministic_evidence_to_evaluation_pipeline',
@@ -433,6 +439,8 @@ class DemoScenarioRunner:
     }
 
     def __init__(self):
+        explanations_path = Path(os.environ.get('AZAZEL_DEMO_EXPLANATIONS_PATH', str(self.DEMO_EXPLANATIONS_PATH)))
+        audit_path = Path(os.environ.get('AZAZEL_DEMO_AUDIT_PATH', str(self.DEMO_AUDIT_PATH)))
         self.pack = DemoScenarioPack()
         self.noc = NocEvaluator()
         self.soc = SocEvaluator(
@@ -440,12 +448,16 @@ class DemoScenarioRunner:
             yara_rules=[{'id': 'yara.loader.alpha', 'title': 'Loader alpha helper', 'contains_any': ['loader_beacon_alpha'], 'source': 'suricata_eve'}],
         )
         self.arbiter = ActionArbiter(policy=load_soc_policy())
-        self.explainer = DecisionExplainer(output_path='/tmp/azazel-edge-demo-explanations.jsonl')
+        self.explanations_path = explanations_path
+        self.audit_path = audit_path
+        self.explainer = DecisionExplainer(output_path=self.explanations_path)
+        self.audit = P0AuditLogger(self.audit_path)
 
     def run(self, scenario_id: str) -> Dict[str, Any]:
         scenario = self.pack.scenarios().get(str(scenario_id))
         if not scenario:
             raise KeyError(f'unknown_scenario:{scenario_id}')
+        trace_id = f'demo:{scenario_id}'
         events = scenario.get('events', [])
         noc_eval = self.noc.evaluate(events)
         soc_eval = self.soc.evaluate(events)
@@ -456,9 +468,33 @@ class DemoScenarioRunner:
             noc=noc_eval,
             soc=soc_eval,
             arbiter=arbiter,
-            trace_id=f'demo:{scenario_id}',
+            trace_id=trace_id,
             target='demo-target',
+            persist=True,
             runbook_support=runbook_support,
+        )
+        self.audit.log_evaluation(
+            trace_id=trace_id,
+            source='demo_noc_evaluator',
+            status=str(noc_eval.get('summary', {}).get('status') or ''),
+            evidence_ids=list(noc_eval.get('evidence_ids') or []),
+        )
+        self.audit.log_evaluation(
+            trace_id=trace_id,
+            source='demo_soc_evaluator',
+            status=str(soc_eval.get('summary', {}).get('status') or ''),
+            evidence_ids=list(soc_eval.get('evidence_ids') or []),
+        )
+        self.audit.log_action_decision(
+            trace_id=trace_id,
+            source='demo_arbiter',
+            action=str(arbiter.get('action') or ''),
+            reason=str(arbiter.get('reason') or ''),
+            release_condition=str(arbiter.get('release_condition') or ''),
+            policy_profile=str(arbiter.get('policy', {}).get('version') or ''),
+            config_hash=str(arbiter.get('policy', {}).get('hash') or ''),
+            evidence_ids=list(explanation.get('evidence_ids') or []),
+            rejected_actions=list(explanation.get('rejected_actions') or []),
         )
         demo_meta = self.pack.metadata_for(str(scenario_id))
         result = {
@@ -466,12 +502,15 @@ class DemoScenarioRunner:
             'description': scenario.get('description', ''),
             'event_count': len(events),
             'execution': {
+                'trace_id': trace_id,
                 'mode': 'deterministic_replay',
                 'ai_used': False,
                 'live_telemetry': False,
                 'local_only': True,
                 'offline_demo': True,
                 'source': 'demo_scenario_pack',
+                'explanations_path': str(self.explanations_path),
+                'audit_path': str(self.audit_path),
             },
             'capability_boundary': self.capability_boundary(),
             'noc': noc_eval,

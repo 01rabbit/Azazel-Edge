@@ -41,6 +41,8 @@ The talk track must make clear that Azazel-Edge is a deterministic edge decision
 ## References
 
 - `docs/arsenal/blackhat-usa-2026.md`
+- `docs/arsenal/bhusa-2026-booth-message.md`
+- `docs/arsenal/bhusa-2026-talk-track.md`
 - `docs/ARSENAL_DEMO_PROFILE.md`
 - `docs/concepts/deterministic-edge-decision-support.md`
 - `docs/P0_RUNTIME_ARCHITECTURE.md`

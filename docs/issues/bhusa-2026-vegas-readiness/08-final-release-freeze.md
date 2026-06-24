@@ -33,5 +33,7 @@ Before the Arsenal session, prioritize repeatability, documentation accuracy, an
 
 - `docs/ARSENAL_DEMO_PROFILE.md`
 - `docs/arsenal/blackhat-usa-2026.md`
+- `docs/arsenal/bhusa-2026-freeze-candidate.md`
+- `docs/arsenal/bhusa-2026-final-command-sheet.md`
 - `docs/RELEASE_VERIFICATION_GUIDE.md`
 - `docs/CHANGELOG.md`

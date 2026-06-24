@@ -3716,9 +3716,22 @@ def _demo_state_payload() -> Dict[str, Any]:
     overlay = read_demo_overlay()
     demo = overlay.get("demo") if isinstance(overlay.get("demo"), dict) else {}
     presentation = overlay.get("presentation") if isinstance(overlay.get("presentation"), dict) else {}
+    execution = overlay.get("execution") if isinstance(overlay.get("execution"), dict) else {}
     epd_last = _read_json_file(EPD_LAST_RENDER_PATH)
     epd_render = epd_last.get("render") if isinstance(epd_last, dict) and isinstance(epd_last.get("render"), dict) else {}
     active = bool(overlay.get("active"))
+    trace_id = str(overlay.get("trace_id") or execution.get("trace_id") or "")
+    explanations_path = str(overlay.get("explanations_path") or execution.get("explanations_path") or "")
+    audit_path = str(overlay.get("audit_path") or execution.get("audit_path") or "")
+    audit_review_command = ""
+    if trace_id and explanations_path and audit_path:
+        audit_review_command = (
+            "bin/azazel-edge-audit-review "
+            f"--explanations-path {quote(explanations_path)} "
+            f"--audit-path {quote(audit_path)} "
+            f"--trace-id {quote(trace_id)} "
+            "--compact"
+        )
     return {
         "ok": True,
         "active": active,
@@ -3732,12 +3745,22 @@ def _demo_state_payload() -> Dict[str, Any]:
         "control_mode": str(overlay.get("control_mode") or "none"),
         "reason": str(overlay.get("reason") or ""),
         "release_condition": str(overlay.get("release_condition") or ""),
+        "trace_id": trace_id,
+        "policy_profile": str(overlay.get("policy_profile") or ""),
+        "config_hash": str(overlay.get("config_hash") or ""),
+        "explanations_path": explanations_path,
+        "audit_path": audit_path,
+        "audit_review_command": audit_review_command,
         "operator_wording": str(overlay.get("operator_wording") or ""),
         "talk_track": str(demo.get("talk_track") or ""),
         "next_checks": list(overlay.get("next_checks") or []),
         "chosen_evidence_ids": list(overlay.get("chosen_evidence_ids") or []),
         "rejected_alternatives": list(overlay.get("rejected_alternatives") or []),
         "rejected_actions": list(overlay.get("rejected_actions") or []),
+        "noc_status": str(overlay.get("noc_status") or ""),
+        "noc_reasons": list(overlay.get("noc_reasons") or []),
+        "soc_status": str(overlay.get("soc_status") or ""),
+        "soc_reasons": list(overlay.get("soc_reasons") or []),
         "decision_path": dict(demo.get("decision_path") or {}) if isinstance(demo.get("decision_path"), dict) else {},
         "proofs": dict(demo.get("proofs") or {}) if isinstance(demo.get("proofs"), dict) else {},
         "epd": {

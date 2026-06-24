@@ -24,3 +24,10 @@ Before Vegas, do not rebrand Azazel-Edge as an autonomous AI SOC or cloud SOC re
 4. Audit and explanation walkthrough
 5. Live Tactical first-pass boundary and fallback
 6. Booth rehearsal and failure runbook
+7. Docs sync with public Black Hat description
+8. Final release freeze and no-risk rule
+
+## Tracking
+
+- Detailed execution plan: `09-vegas-readiness-tracking.md`
+- Fine-grained work plan: `70-detailed-execution-plan.md`

@@ -129,6 +129,9 @@ Only accepted and public Black Hat Arsenal appearances are recorded here.
 - [Black Hat Asia 2026](docs/arsenal/blackhat-asia-2026.md)
 - [Black Hat USA 2026](docs/arsenal/blackhat-usa-2026.md)
 
+BHUSA 2026 presenter note:
+- [BHUSA 2026 Booth Message](docs/arsenal/bhusa-2026-booth-message.md)
+
 See [Arsenal Demonstration History](docs/arsenal/README.md).
 
 ## Documentation Map

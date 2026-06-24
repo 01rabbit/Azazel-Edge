@@ -40,6 +40,16 @@ Before release cut, confirm:
 
 This project currently uses a practical baseline and is not claiming full SLSA or enterprise signing compliance.
 
+## BHUSA 2026 booth freeze note
+
+For the Black Hat USA 2026 booth demo, use the dedicated freeze and command
+documents rather than this generic guide alone:
+
+- `docs/arsenal/bhusa-2026-freeze-candidate.md`
+- `docs/arsenal/bhusa-2026-final-command-sheet.md`
+- `bin/azazel-edge-bhusa-verify`
+- `bin/azazel-edge-bhusa-freeze-check`
+
 ## Optional integration smoke checks
 
 Sensor installer and unit verification:

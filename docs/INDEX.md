@@ -41,6 +41,15 @@ Entry point for all documents in this directory.
 |------|----------|-------------|--------------|
 | [DEMO_GUIDE.md](DEMO_GUIDE.md) | Operator | Deterministic demo replay walkthrough | - |
 | [ARSENAL_DEMO_PROFILE.md](ARSENAL_DEMO_PROFILE.md) | Operator / Presenter | Fixed Black Hat Arsenal demo profile and fallback runbook | 2026-05-14 |
+| [arsenal/blackhat-usa-2026.md](arsenal/blackhat-usa-2026.md) | Operator / Presenter | Accepted Black Hat USA 2026 public session entry | 2026-06-23 |
+| [arsenal/bhusa-2026-booth-message.md](arsenal/bhusa-2026-booth-message.md) | Presenter | 90-second booth message and wording guardrails | 2026-06-23 |
+| [arsenal/bhusa-2026-talk-track.md](arsenal/bhusa-2026-talk-track.md) | Presenter | Canonical diagram, 5-minute walkthrough, and full booth outline | 2026-06-23 |
+| [arsenal/bhusa-2026-replay-runbook.md](arsenal/bhusa-2026-replay-runbook.md) | Operator / Presenter | Frozen replay scenario, repeatability, reset, and replay fallback steps | 2026-06-23 |
+| [arsenal/bhusa-2026-audit-walkthrough.md](arsenal/bhusa-2026-audit-walkthrough.md) | Presenter / Reviewer | 2-minute audit walkthrough, negative-path note, and sample transcript | 2026-06-23 |
+| [arsenal/bhusa-2026-live-boundary.md](arsenal/bhusa-2026-live-boundary.md) | Presenter / Operator | Live-assisted vs replay-only boundary and booth failure matrix | 2026-06-23 |
+| [arsenal/bhusa-2026-booth-runbook.md](arsenal/bhusa-2026-booth-runbook.md) | Operator / Presenter | Booth health checks, fallback flow, rehearsal protocol, and reset steps | 2026-06-23 |
+| [arsenal/bhusa-2026-freeze-candidate.md](arsenal/bhusa-2026-freeze-candidate.md) | Developer / Presenter | Freeze window, allowed changes, and booth-device verification gate | 2026-06-23 |
+| [arsenal/bhusa-2026-final-command-sheet.md](arsenal/bhusa-2026-final-command-sheet.md) | Operator / Presenter | Single-page booth command reference for replay, audit, reset, and fallback | 2026-06-23 |
 
 ## Candidate CFP Drafts and Planning
 

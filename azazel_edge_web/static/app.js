@@ -145,6 +145,11 @@ function resetDemoOverlayPresentation() {
     updateElement('demoAction', '-');
     updateElement('demoReason', '-');
     updateElement('demoReleaseCondition', '-');
+    updateElement('demoTraceId', '-');
+    updateElement('demoPolicyProfile', '-');
+    updateElement('demoConfigHash', '-');
+    updateElement('demoAuditPath', '-');
+    updateElement('demoAuditReviewCommand', tr('dashboard.no_demo_response', 'Run a scenario to preview the deterministic pipeline.'));
     updateElement('demoSafetyReversible', '-');
     updateElement('demoSafetyApproval', '-');
     updateElement('demoSafetyAudited', '-');
@@ -169,6 +174,24 @@ function resetDemoOverlayPresentation() {
     renderList('demoEvidenceIds', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
     renderList('demoRejectedAlternatives', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
     renderList('demoRejectedActions', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
+    renderList('demoNocReasons', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
+    renderList('demoSocReasons', [tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.')], (item) => item);
+}
+
+function buildDemoAuditReviewCommand(raw = {}) {
+    const execution = raw.execution && typeof raw.execution === 'object' ? raw.execution : {};
+    const explanation = raw.explanation && typeof raw.explanation === 'object' ? raw.explanation : {};
+    const traceId = String(explanation.trace_id || execution.trace_id || '').trim();
+    const explanationsPath = String(execution.explanations_path || '/tmp/azazel-edge-demo-explanations.jsonl').trim();
+    const auditPath = String(execution.audit_path || '/tmp/azazel-edge-demo-triage-audit.jsonl').trim();
+    if (!traceId) return '-';
+    return [
+        'bin/azazel-edge-audit-review',
+        `--explanations-path ${explanationsPath}`,
+        `--audit-path ${auditPath}`,
+        `--trace-id ${traceId}`,
+        '--compact',
+    ].join(' ');
 }
 
 function updateDemoModeBanner(result) {
@@ -581,6 +604,11 @@ function bindStaticHandlers() {
     });
     document.getElementById('reviewOpenExplanationBtn')?.addEventListener('click', () => {
         void openAuthenticatedJson('/api/demo/explanation/latest', 'Azazel-Edge Latest Explanation');
+    });
+    document.getElementById('demoCopyAuditCommandBtn')?.addEventListener('click', async () => {
+        const text = String(document.getElementById('demoAuditReviewCommand')?.textContent || '').trim();
+        const ok = await copyTextToClipboard(text);
+        showToast(ok ? tr('dashboard.audit_command_copied', 'Audit review command copied.') : tr('dashboard.audit_command_copy_failed', 'Could not copy audit review command.'), ok ? 'info' : 'error');
     });
 
     loadDemoScenarios();
@@ -1084,6 +1112,11 @@ async function runDemoScenario() {
         const reasonLabel = String(result.arbiter?.reason || '-');
         updateElement('demoReason', releaseCondition ? `${reasonLabel} | release: ${releaseCondition}` : reasonLabel);
         updateElement('demoReleaseCondition', releaseCondition || '-');
+        updateElement('demoTraceId', String(result.explanation?.trace_id || result.execution?.trace_id || '-'));
+        updateElement('demoPolicyProfile', String(result.explanation?.policy_profile || '-'));
+        updateElement('demoConfigHash', String(result.explanation?.config_hash || '-'));
+        updateElement('demoAuditPath', String(result.execution?.audit_path || '-'));
+        updateElement('demoAuditReviewCommand', buildDemoAuditReviewCommand(result));
         updateElement('demoOperatorWording', result.explanation?.operator_wording || tr('dashboard.demo_no_explanation', 'No explanation returned.'));
         renderList('demoNextChecks', result.explanation?.next_checks || [], (item) => item);
         renderList('demoEvidenceIds', result.explanation?.evidence_ids || result.arbiter?.chosen_evidence_ids || [], (item) => item);
@@ -1093,6 +1126,8 @@ async function runDemoScenario() {
             (item) => `${item.action || '-'}: ${item.reason || '-'}`,
         );
         renderList('demoRejectedActions', result.explanation?.rejected_actions || [], (item) => item);
+        renderList('demoNocReasons', result.noc?.summary?.reasons || [], (item) => item);
+        renderList('demoSocReasons', result.soc?.summary?.reasons || [], (item) => item);
         updateElement('demoResponse', JSON.stringify(result, null, 2));
         updateElement('demoStatusBadge', 'DONE');
         if (statusBadge) statusBadge.className = 'assistant-status status-safe';
@@ -1167,6 +1202,10 @@ function applyDemoOverlay(result) {
         ? result.rejected_alternatives
         : (Array.isArray(raw.explanation?.why_not_others) ? raw.explanation.why_not_others : []);
     const operatorWording = String(result.operator_wording || raw.explanation?.operator_wording || '').trim();
+    const traceId = String(result.trace_id || raw.explanation?.trace_id || raw.execution?.trace_id || '').trim();
+    const policyProfile = String(result.policy_profile || raw.explanation?.policy_profile || '').trim();
+    const configHash = String(result.config_hash || raw.explanation?.config_hash || '').trim();
+    const auditPath = String(result.audit_path || raw.execution?.audit_path || '').trim();
     applyDemoDerivedFields({
         scenario_id: scenarioId,
         event_count: Number(result.event_count || raw.event_count || 0),
@@ -1180,6 +1219,11 @@ function applyDemoOverlay(result) {
     updateElement('demoAction', action || '-');
     updateElement('demoReason', releaseCondition ? `${reason || '-'} | release: ${releaseCondition}` : (reason || '-'));
     updateElement('demoReleaseCondition', releaseCondition || '-');
+    updateElement('demoTraceId', traceId || '-');
+    updateElement('demoPolicyProfile', policyProfile || '-');
+    updateElement('demoConfigHash', configHash || '-');
+    updateElement('demoAuditPath', auditPath || '-');
+    updateElement('demoAuditReviewCommand', buildDemoAuditReviewCommand(raw && Object.keys(raw).length ? raw : result));
     updateElement('demoOperatorWording', operatorWording || tr('dashboard.demo_no_explanation', 'No explanation returned.'));
     renderList('demoNextChecks', nextChecks.length ? nextChecks : [tr('dashboard.demo_no_next_checks', 'No next checks')], (item) => item);
     renderList('demoEvidenceIds', evidenceIds.length ? evidenceIds : [tr('dashboard.demo_no_evidence', 'No evidence ids')], (item) => item);
@@ -1190,6 +1234,8 @@ function applyDemoOverlay(result) {
         ? result.rejected_actions
         : (Array.isArray(raw.explanation?.rejected_actions) ? raw.explanation.rejected_actions : []);
     renderList('demoRejectedActions', rejectedActions.length ? rejectedActions : [tr('dashboard.demo_no_rejected_actions', 'No rejected actions')], (item) => item);
+    renderList('demoNocReasons', Array.isArray(result.noc_reasons) ? result.noc_reasons : (Array.isArray(raw.noc?.summary?.reasons) ? raw.noc.summary.reasons : []), (item) => item);
+    renderList('demoSocReasons', Array.isArray(result.soc_reasons) ? result.soc_reasons : (Array.isArray(raw.soc?.summary?.reasons) ? raw.soc.summary.reasons : []), (item) => item);
     updateElement('demoResponse', JSON.stringify(raw && Object.keys(raw).length ? raw : result, null, 2));
     setDemoOverlayVisualState(true);
     updateElement('demoStatusBadge', 'DEMO ACTIVE');

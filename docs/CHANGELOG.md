@@ -7,6 +7,18 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Candidate CFP draft (`docs/cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md`) and paper-style concept document (`docs/papers/auditable-edge-socnoc-paper.md`) for the Auditable Edge SOC/NOC profile (pre-acceptance planning material; not accepted-appearance records).
 - Submission-preparation roadmap (`docs/archive/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`) and gh-registerable issue drafts (`docs/archive/issues/auditable-edge-socnoc/`) for the Auditable Edge SOC/NOC profile.
+- BHUSA 2026 booth-preparation document set covering docs sync, talk track, replay runbook, audit walkthrough, booth decision-support view, live/replay boundary, rehearsal runbook, freeze candidate, and final command sheet.
+- BHUSA 2026 status helper (`bin/azazel-edge-bhusa-status`) to summarize recorded rehearsals, optional freeze-check results, and GitHub child issue state in one snapshot.
+- BHUSA 2026 readiness reports now embed the status snapshot and persist `status.json` through report/archive/freeze-record artifacts.
+- BHUSA 2026 issue helper can now render a parent roadmap progress comment from the current readiness snapshot.
+- BHUSA 2026 status helper can now render and write the repository `15-status.md` tracking document from the live readiness snapshot.
+- BHUSA 2026 issue helper can now sync the created-issue links doc from live GitHub child issue state.
+- BHUSA 2026 issue helper can now persist the parent roadmap progress comment as a repo artifact.
+- BHUSA 2026 issue helper can now persist the parent issue child-links comment as a repo artifact.
+- BHUSA 2026 prep helper now includes `repo-sync` to refresh repo-side status and issue-tracking artifacts in one command.
+- BHUSA 2026 prep helper now includes `daily-pack` to refresh repo-side tracking artifacts and generate the operator pack in one command.
+- BHUSA 2026 prep helper now includes `candidate-pack` to refresh tracking artifacts, generate the operator/freeze packs, and run the local freeze gate in one command.
+- BHUSA 2026 candidate-pack output now includes a concise freeze-readiness summary with open-issue and blocker counts.
 
 ### Changed
 

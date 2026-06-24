@@ -130,6 +130,25 @@
                     </div>
                 </div>
 
+                <div class="demo-card-grid">
+                    <div class="assistant-block demo-metric-card">
+                        <div class="assistant-label">{{ tr('dashboard.traceability', 'Traceability') }}</div>
+                        <div class="fact-list compact-list">
+                            <div class="fact-item"><span>{{ tr('dashboard.trace_id', 'Trace ID') }}</span><strong id="demoTraceId">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.policy_profile', 'Policy Profile') }}</span><strong id="demoPolicyProfile">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.config_hash', 'Config Hash') }}</span><strong id="demoConfigHash">-</strong></div>
+                            <div class="fact-item"><span>{{ tr('dashboard.audit_chain_path', 'Audit Path') }}</span><strong id="demoAuditPath">-</strong></div>
+                        </div>
+                    </div>
+                    <div class="assistant-block demo-copy-card">
+                        <div class="assistant-label">{{ tr('dashboard.audit_review_command', 'Audit Review Command') }}</div>
+                        <pre class="assistant-response demo-raw-response" id="demoAuditReviewCommand">{{ tr('dashboard.no_demo_response', 'Run a scenario to preview the deterministic pipeline.') }}</pre>
+                        <div class="assistant-shortcuts demo-shortcuts">
+                            <button type="button" class="shortcut-btn" id="demoCopyAuditCommandBtn">{{ tr('dashboard.copy_audit_command', 'Copy Audit Command') }}</button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="demo-copy-grid">
                     <div class="assistant-block demo-copy-card">
                         <div class="assistant-label">{{ tr('ops.operator_wording', 'Operator wording') }}</div>
@@ -153,6 +172,21 @@
                     <div class="assistant-block demo-copy-card">
                         <div class="assistant-label">{{ tr('dashboard.rejected_alternatives', 'Rejected Alternatives') }}</div>
                         <ul class="action-list" id="demoRejectedAlternatives">
+                            <li>{{ tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.') }}</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="demo-copy-grid">
+                    <div class="assistant-block demo-copy-card">
+                        <div class="assistant-label">{{ tr('dashboard.noc_reasons', 'NOC Reasons') }}</div>
+                        <ul class="action-list" id="demoNocReasons">
+                            <li>{{ tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.') }}</li>
+                        </ul>
+                    </div>
+                    <div class="assistant-block demo-copy-card">
+                        <div class="assistant-label">{{ tr('dashboard.soc_reasons', 'SOC Reasons') }}</div>
+                        <ul class="action-list" id="demoSocReasons">
                             <li>{{ tr('dashboard.no_demo_overlay_active', 'No demo overlay is active.') }}</li>
                         </ul>
                     </div>

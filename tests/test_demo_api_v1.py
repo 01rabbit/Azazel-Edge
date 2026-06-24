@@ -134,9 +134,25 @@ class DemoApiV1Tests(unittest.TestCase):
                 "scenario_id": "mixed_correlation_demo",
                 "description": "Cross-source demo",
                 "event_count": 3,
-                "execution": {"mode": "deterministic_replay", "ai_used": False, "offline_demo": True},
+                "execution": {
+                    "mode": "deterministic_replay",
+                    "ai_used": False,
+                    "offline_demo": True,
+                    "trace_id": "demo:mixed_correlation_demo",
+                    "explanations_path": "/tmp/azazel-edge-demo-explanations.jsonl",
+                    "audit_path": "/tmp/azazel-edge-demo-triage-audit.jsonl",
+                },
                 "arbiter": {"action": "throttle", "reason": "correlated_signal", "control_mode": "route_preference"},
-                "explanation": {"operator_wording": "demo wording", "evidence_ids": ["soc-1"], "next_checks": ["review sigma"]},
+                "explanation": {
+                    "trace_id": "demo:mixed_correlation_demo",
+                    "operator_wording": "demo wording",
+                    "evidence_ids": ["soc-1"],
+                    "next_checks": ["review sigma"],
+                    "policy_profile": "soc-policy-default-v1",
+                    "config_hash": "0ce8c7b59ef2b2ce",
+                },
+                "noc": {"summary": {"status": "degraded", "reasons": ["client_health:degraded"]}},
+                "soc": {"summary": {"status": "critical", "reasons": ["suspicion:critical"]}},
                 "demo": {
                     "title": "Correlation with Sigma and YARA support",
                     "summary": "Cross-source evidence is reinforced by helper hits.",
@@ -164,6 +180,13 @@ class DemoApiV1Tests(unittest.TestCase):
         self.assertEqual(payload["proofs"]["policy"]["status"], "active")
         self.assertIn("release_condition", payload)
         self.assertIn("rejected_actions", payload)
+        self.assertEqual(payload["trace_id"], "demo:mixed_correlation_demo")
+        self.assertEqual(payload["policy_profile"], "soc-policy-default-v1")
+        self.assertEqual(payload["config_hash"], "0ce8c7b59ef2b2ce")
+        self.assertEqual(payload["audit_path"], "/tmp/azazel-edge-demo-triage-audit.jsonl")
+        self.assertIn("--trace-id demo%3Amixed_correlation_demo", payload["audit_review_command"])
+        self.assertEqual(payload["noc_reasons"], ["client_health:degraded"])
+        self.assertEqual(payload["soc_reasons"], ["suspicion:critical"])
         self.assertEqual(payload["epd"]["state"], "danger")
 
     def test_demo_flow_endpoint_passes_requested_options(self) -> None:

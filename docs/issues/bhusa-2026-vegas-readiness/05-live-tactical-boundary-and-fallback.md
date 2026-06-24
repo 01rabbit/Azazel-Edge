@@ -32,6 +32,7 @@ The public description states that the live path is layered: Tactical Engine per
 ## References
 
 - `docs/ARSENAL_DEMO_PROFILE.md`
+- `docs/arsenal/bhusa-2026-live-boundary.md`
 - `docs/arsenal/blackhat-usa-2026.md`
 - `docs/architecture/decision-loop.md`
 - `py/azazel_edge/`
