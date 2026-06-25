@@ -306,7 +306,24 @@ def _render_links_markdown(issues: List[Dict[str, Any]]) -> str:
 
 
 def _sync_links(args: argparse.Namespace) -> Dict[str, Any]:
-    issues = _load_child_issues(args.repo, args.parent)
+    try:
+        issues = _load_child_issues(args.repo, args.parent)
+    except ValueError as exc:
+        existing = Path(args.links_path)
+        fallback_markdown = existing.read_text(encoding="utf-8") if existing.exists() else _render_links_markdown([])
+        if args.write:
+            _write_text(Path(args.links_path), fallback_markdown)
+        return {
+            "ok": True,
+            "repo": args.repo,
+            "parent_issue": args.parent,
+            "links_path": args.links_path,
+            "issue_count": 0,
+            "issues": [],
+            "markdown": fallback_markdown,
+            "written": bool(args.write),
+            "warning": f"gh lookup unavailable ({exc}); sync-links using local placeholder",
+        }
     markdown = _render_links_markdown(issues)
     if args.write:
         _write_text(Path(args.links_path), markdown)
