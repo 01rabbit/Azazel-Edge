@@ -121,6 +121,57 @@ class EVEParser:
 
         return features
 
+    # Production parity: the keys returned here MUST stay byte-identical to the
+    # feature dict the live agent builds at agent.py:_build_advisory (suricata_sid,
+    # suricata_sev, suricata_signature, suricata_category, suricata_action,
+    # target_port, protocol). The benchmark replays through this so "replay" and
+    # "production" score the same alert identically. test_scorer_wiring_v1 pins it.
+    SCORER_FEATURE_KEYS = (
+        "suricata_sid",
+        "suricata_sev",
+        "suricata_signature",
+        "suricata_category",
+        "suricata_action",
+        "target_port",
+        "protocol",
+    )
+
+    def extract_scorer_features(self, eve_obj: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Raw EVE -> the exact feature dict TacticalScorer.score consumes in production.
+
+        Each field is defaulted independently (corruption tolerance: a malformed
+        field degrades to its default, never raises). Mirrors the production
+        normalizer mapping: suricata_signature <- attack_type (free text the
+        producer attaches), suricata_category <- alert.classtype.
+        """
+        if not isinstance(eve_obj, dict):
+            return None
+        alert = eve_obj.get("alert")
+        if not isinstance(alert, dict):
+            alert = {}
+
+        def _int(value: Any, default: int = 0) -> int:
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                return default
+
+        # Production sets suricata_signature from norm.attack_type ONLY (agent.py
+        # _build_advisory), with no classtype fallback -- mirror that exactly so replay
+        # and production score an identical alert identically, not just share keys.
+        attack_type = eve_obj.get("attack_type")
+
+        return {
+            "suricata_sid": _int(alert.get("sid") or alert.get("signature_id"), 0),
+            "suricata_sev": _int(alert.get("severity"), 0),
+            "suricata_signature": str(attack_type if isinstance(attack_type, str) else "")[:128],
+            "suricata_category": str(alert.get("category") or ""),
+            "suricata_action": str(alert.get("action") or eve_obj.get("action") or "allowed"),
+            "target_port": _int(eve_obj.get("dest_port") or eve_obj.get("target_port"), 0),
+            "protocol": str(eve_obj.get("proto") or eve_obj.get("protocol") or ""),
+        }
+
     def compute_event_digest(self, eve_obj: Dict[str, Any]) -> str:
         """
         EVE オブジェクトのダイジェスト（完全な行のsha256ではなく、重要フィールドのみ）

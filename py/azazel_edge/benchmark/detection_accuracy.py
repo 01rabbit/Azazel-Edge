@@ -11,6 +11,20 @@ from azazel_edge.evaluators.noc import NocEvaluator
 from azazel_edge.evaluators.soc import SocEvaluator
 from azazel_edge.evidence_plane.schema import EvidenceEvent
 from azazel_edge.tactics_engine.eve_parser import EVEParser
+from azazel_edge.tactics_engine.scorer import TacticalScorer
+
+# Score-band detection gate. Mirrors SUSPICION_HIGH_MIN / soc._bucket "high".
+# A single alert whose risk_score reaches this is "high" suspicion, and because
+# production back-fills confidence from risk (decision_layers._normalized_confidence_from_risk),
+# risk>=60 also clears the strong_soc confidence>=60 co-requisite.
+DETECT_MIN = 60
+
+# Pinned deterministic harness input. Real EVE carries no confidence field, so this
+# stands in for the production risk-derived value; >=70 so that after soc.py's single
+# -10 single-event penalty it is still >=60 (strong_soc requires confidence>=60).
+HARNESS_CONFIDENCE_RAW = 90
+
+_SCORER = TacticalScorer()
 
 
 @dataclass
@@ -23,6 +37,9 @@ class SessionResult:
     action_taken: str
     matched_sids: List[int]
     breach: bool
+    risk_score: int = 0
+    score_band_detected: bool = False
+    false_positive: bool = False
 
 
 @dataclass
@@ -32,6 +49,18 @@ class AccuracyResult:
     breached: int
     detection_rate_pct: float
     breach_rate_pct: float
+    # Detection metrics are computed over POSITIVE sessions only (expected_detection=true);
+    # false-positive metrics over BENIGN sessions (expected_detection=false). Mixing them
+    # (the pre-Step-0 behavior) made detection_rate meaningless once benign controls existed.
+    total_positive: int = 0
+    total_benign: int = 0
+    false_positive: int = 0
+    false_positive_rate_pct: float = 0.0
+    # Band telemetry over ALL sessions -- gives operators the LLM-load and dead-zone
+    # visibility the deferred ops/decoy-tuning decisions need (Step 4 of the eval plan).
+    llm_band_count: int = 0       # risk in [40,79] -> routed to the LLM advisory band
+    critical_count: int = 0       # risk >= 85 -> auto-ops escalation
+    dead_zone_count: int = 0      # risk in [80,84] -> MUST be 0 (display/ops disagree)
     sessions: List[SessionResult] = field(default_factory=list)
     corpus_path: str = ""
     hardware: str = "software-only (EVE replay)"
@@ -41,18 +70,29 @@ class AccuracyResult:
             "corpus_path": self.corpus_path,
             "hardware": self.hardware,
             "total_sessions": self.total_sessions,
+            "total_positive": self.total_positive,
+            "total_benign": self.total_benign,
             "detected": self.detected,
             "breached": self.breached,
+            "false_positive": self.false_positive,
             "detection_rate_pct": round(self.detection_rate_pct, 1),
             "breach_rate_pct": round(self.breach_rate_pct, 1),
+            "false_positive_rate_pct": round(self.false_positive_rate_pct, 1),
+            "llm_band_count": self.llm_band_count,
+            "critical_count": self.critical_count,
+            "dead_zone_count": self.dead_zone_count,
             "per_session": [
                 {
                     "session_id": s.session_id,
                     "category": s.attack_category,
                     "technique": s.technique,
+                    "expected_detection": s.expected_detection,
                     "detected": s.detected,
+                    "risk_score": s.risk_score,
+                    "score_band_detected": s.score_band_detected,
                     "action": s.action_taken,
                     "breach": s.breach,
+                    "false_positive": s.false_positive,
                     "matched_sids": s.matched_sids,
                 }
                 for s in self.sessions
@@ -65,17 +105,19 @@ class DetectionAccuracyBenchmark:
         self.corpus_dir = Path(corpus_dir)
 
     @staticmethod
-    def _to_event(parsed: Dict[str, Any]) -> EvidenceEvent:
+    def _to_event(parsed: Dict[str, Any], parser: EVEParser) -> EvidenceEvent:
         alert = parsed.get("alert") if isinstance(parsed.get("alert"), dict) else {}
         src = str(parsed.get("src_ip") or "-")
         dst = str(parsed.get("dest_ip") or "-")
         port = int(parsed.get("dest_port") or 0)
         proto = str(parsed.get("proto") or "-")
         sid = int(alert.get("signature_id") or alert.get("sid") or 0)
-        severity = int(alert.get("severity") or 2)
-        # Keep risk in "high" band so deterministic SOC/arbiter path is exercised.
-        risk_score = min(100, 75 + severity * 5)
-        confidence_raw = 90
+        # Run the REAL scorer on production-identical features instead of faking the
+        # risk with 75 + severity*5. This is the whole point of Step 0: the benchmark
+        # now exercises scorer.py, so detection/FP numbers reflect the live judge.
+        features = parser.extract_scorer_features(parsed) or {}
+        risk_score, _factors = _SCORER.score_with_features(features)
+        confidence_raw = HARNESS_CONFIDENCE_RAW
         return EvidenceEvent.build(
             ts=str(parsed.get("timestamp") or ""),
             source="suricata_eve",
@@ -89,7 +131,7 @@ class DetectionAccuracyBenchmark:
                 "dst_ip": dst,
                 "target_port": port,
                 "protocol": proto,
-                "attack_type": str(alert.get("category") or ""),
+                "attack_type": str(parsed.get("attack_type") or alert.get("category") or ""),
                 "category": str(alert.get("category") or ""),
                 "risk_score": risk_score,
                 "confidence_raw": confidence_raw,
@@ -112,6 +154,7 @@ class DetectionAccuracyBenchmark:
 
         events: List[Dict[str, Any]] = []
         matched_sids: List[int] = []
+        max_risk = 0
         for line in eve_path.read_text(encoding="utf-8").splitlines():
             payload = line.strip()
             if not payload:
@@ -119,17 +162,23 @@ class DetectionAccuracyBenchmark:
             parsed = parser.parse_line(payload)
             if not parsed:
                 continue
-            event = self._to_event(parsed).to_dict()
+            event = self._to_event(parsed, parser).to_dict()
             events.append(event)
             sid = int(event.get("attrs", {}).get("sid") or 0)
             if sid:
                 matched_sids.append(sid)
+            max_risk = max(max_risk, int(event.get("attrs", {}).get("risk_score") or 0))
 
         noc_result = noc_eval.evaluate(events)
         soc_result = soc_eval.evaluate(events)
         decision = arbiter.decide(noc_eval.to_arbiter_input(noc_result), soc_eval.to_arbiter_input(soc_result))
         action = str(decision.get("action") or "observe")
+        # Two detection signals, recorded separately (see Step 0 spec): the arbiter
+        # containment outcome and the score-band signal. They are made to coincide
+        # (risk>=DETECT_MIN => high suspicion => strong_soc), but we surface both so a
+        # divergence is visible rather than hidden.
         detected = action != "observe"
+        score_band_detected = max_risk >= DETECT_MIN
         expected = bool(labels.get("expected_detection", True))
 
         return SessionResult(
@@ -141,6 +190,9 @@ class DetectionAccuracyBenchmark:
             action_taken=action,
             matched_sids=matched_sids,
             breach=(expected and not detected),
+            risk_score=max_risk,
+            score_band_detected=score_band_detected,
+            false_positive=(not expected and detected),
         )
 
     def run(self) -> AccuracyResult:
@@ -153,14 +205,29 @@ class DetectionAccuracyBenchmark:
             sessions.append(self._replay_session(eve_file, labels))
 
         total = len(sessions)
-        detected = sum(1 for s in sessions if s.detected)
-        breached = sum(1 for s in sessions if s.breach)
+        positives = [s for s in sessions if s.expected_detection]
+        benign = [s for s in sessions if not s.expected_detection]
+        total_positive = len(positives)
+        total_benign = len(benign)
+        detected = sum(1 for s in positives if s.detected)
+        breached = sum(1 for s in positives if s.breach)
+        false_positive = sum(1 for s in benign if s.false_positive)
+        llm_band_count = sum(1 for s in sessions if 40 <= s.risk_score <= 79)
+        critical_count = sum(1 for s in sessions if s.risk_score >= 85)
+        dead_zone_count = sum(1 for s in sessions if 80 <= s.risk_score <= 84)
         return AccuracyResult(
             total_sessions=total,
+            total_positive=total_positive,
+            total_benign=total_benign,
             detected=detected,
             breached=breached,
-            detection_rate_pct=(detected / total * 100.0) if total else 0.0,
-            breach_rate_pct=(breached / total * 100.0) if total else 0.0,
+            false_positive=false_positive,
+            detection_rate_pct=(detected / total_positive * 100.0) if total_positive else 0.0,
+            breach_rate_pct=(breached / total_positive * 100.0) if total_positive else 0.0,
+            false_positive_rate_pct=(false_positive / total_benign * 100.0) if total_benign else 0.0,
+            llm_band_count=llm_band_count,
+            critical_count=critical_count,
+            dead_zone_count=dead_zone_count,
             sessions=sessions,
             corpus_path=str(self.corpus_dir),
         )

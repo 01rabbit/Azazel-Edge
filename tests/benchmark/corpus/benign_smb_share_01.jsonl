@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:02:20.000000+0000","event_type":"alert","src_ip":"10.0.0.62","src_port":52002,"dest_ip":"10.0.0.20","dest_port":445,"proto":"TCP","attack_type":"file_share","alert":{"signature_id":0,"signature":"informational internal SMB session","severity":3,"category":"tcp-connection"}}

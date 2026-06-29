@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:03:30.000000+0000","event_type":"alert","src_ip":"10.0.0.73","src_port":55030,"dest_ip":"10.0.0.21","dest_port":3389,"proto":"TCP","attack_type":"remote_desktop","alert":{"signature_id":0,"signature":"internal RDP session to ops workstation","severity":2,"category":"tcp-connection"}}

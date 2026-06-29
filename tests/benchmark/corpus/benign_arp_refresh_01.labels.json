@@ -1,0 +1,1 @@
+{"session_id":"benign_arp_refresh_01","attack_category":"benign","attack_technique":"","description":"Normal ARP cache refresh from a legitimate host","expected_detection":false,"expected_action":["observe"],"expected_sid":[],"session_objective":"arp_refresh","breach_condition":"none"}

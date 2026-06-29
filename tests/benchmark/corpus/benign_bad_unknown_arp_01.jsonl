@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:03:10.000000+0000","event_type":"alert","src_ip":"10.0.0.71","src_port":0,"dest_ip":"172.16.0.1","dest_port":0,"proto":"ARP","attack_type":"arp_anomaly","alert":{"signature_id":0,"signature":"low-confidence ARP anomaly","severity":2,"category":"bad-unknown"}}
