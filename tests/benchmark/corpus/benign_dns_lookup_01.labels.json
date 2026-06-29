@@ -1,0 +1,1 @@
+{"session_id":"benign_dns_lookup_01","attack_category":"benign","attack_technique":"","description":"Routine internal DNS resolution","expected_detection":false,"expected_action":["observe"],"expected_sid":[],"session_objective":"name_resolution","breach_condition":"none"}

@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:02:40.000000+0000","event_type":"alert","src_ip":"10.0.0.64","src_port":0,"dest_ip":"10.0.0.1","dest_port":0,"proto":"ARP","attack_type":"arp_refresh","alert":{"signature_id":0,"signature":"informational ARP cache refresh","severity":3,"category":"not-suspicious"}}

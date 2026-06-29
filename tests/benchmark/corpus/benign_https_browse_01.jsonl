@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:02:10.000000+0000","event_type":"alert","src_ip":"10.0.0.61","src_port":51001,"dest_ip":"93.184.216.34","dest_port":443,"proto":"TCP","attack_type":"web_browse","alert":{"signature_id":0,"signature":"informational outbound TLS session","severity":3,"category":"not-suspicious"}}

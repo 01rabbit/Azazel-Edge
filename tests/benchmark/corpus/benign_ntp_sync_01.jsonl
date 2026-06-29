@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:02:30.000000+0000","event_type":"alert","src_ip":"10.0.0.63","src_port":53003,"dest_ip":"10.0.0.1","dest_port":123,"proto":"UDP","attack_type":"ntp_sync","alert":{"signature_id":0,"signature":"informational NTP time sync","severity":3,"category":"misc-activity"}}
