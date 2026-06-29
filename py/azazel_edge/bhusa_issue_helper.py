@@ -306,7 +306,16 @@ def _render_links_markdown(issues: List[Dict[str, Any]]) -> str:
 
 
 def _sync_links(args: argparse.Namespace) -> Dict[str, Any]:
-    issues = _load_child_issues(args.repo, args.parent)
+    # Degrade gracefully when GitHub is unreachable (no `gh`, unauthenticated, or
+    # offline) instead of hard-failing the whole repo-sync. This mirrors the
+    # established pattern in bhusa_status._build (gh failure -> warning, not crash),
+    # and keeps CI / offline-booth runs deterministic without live GitHub access.
+    warnings: List[str] = []
+    try:
+        issues = _load_child_issues(args.repo, args.parent)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        issues = []
+        warnings.append(f"gh issue list unavailable ({exc}); links rendered without live GitHub state")
     markdown = _render_links_markdown(issues)
     if args.write:
         _write_text(Path(args.links_path), markdown)
@@ -317,6 +326,8 @@ def _sync_links(args: argparse.Namespace) -> Dict[str, Any]:
         "links_path": args.links_path,
         "issue_count": len(issues),
         "issues": issues,
+        "github_available": not warnings,
+        "warnings": warnings,
         "markdown": markdown,
         "written": bool(args.write),
     }
