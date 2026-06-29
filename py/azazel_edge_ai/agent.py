@@ -93,6 +93,11 @@ OPS_MIN_MEM_AVAILABLE_MB = int(os.environ.get("AZAZEL_OPS_MIN_MEM_AVAILABLE_MB",
 OPS_MAX_SWAP_USED_MB = int(os.environ.get("AZAZEL_OPS_MAX_SWAP_USED_MB", "512"))
 OPS_ESCALATE_MIN_RISK = int(os.environ.get("AZAZEL_OPS_ESCALATE_MIN_RISK", "70"))
 OPS_ESCALATE_LOW_CONF = float(os.environ.get("AZAZEL_OPS_ESCALATE_LOW_CONF", "0.60"))
+# Single source of truth for the CRITICAL band. Display (_risk_level/_state_name/
+# _recommendation) and the auto-ops escalation at risk>=85 must agree, otherwise a
+# threat can land in an [80,84] dead zone where the display says CRITICAL but ops
+# does not escalate (or vice-versa). Ships WITH the scorer recalibration.
+CRITICAL_MIN = int(os.environ.get("AZAZEL_CRITICAL_MIN", "85"))
 OPS_ESCALATE_COOLDOWN_SEC = int(os.environ.get("AZAZEL_OPS_ESCALATE_COOLDOWN_SEC", "180"))
 MANUAL_KEEP_ALIVE = os.environ.get("AZAZEL_MANUAL_KEEP_ALIVE", "5m")
 MANUAL_NUM_PREDICT = int(os.environ.get("AZAZEL_MANUAL_NUM_PREDICT", "64"))
@@ -321,7 +326,7 @@ def _recompute_policy() -> None:
 
 
 def _risk_level(score: int) -> str:
-    if score >= 80:
+    if score >= CRITICAL_MIN:
         return "CRITICAL"
     if score >= 60:
         return "HIGH"
@@ -980,7 +985,7 @@ def _run_ops_coach(advisory: Dict[str, Any], verdict: str, confidence: float, re
 
 def _recommendation(ev: Dict[str, Any], score: int) -> str:
     port = int(ev.get("target_port") or 0)
-    if score >= 80:
+    if score >= CRITICAL_MIN:
         return f"Block source and route to decoy immediately (port={port})"
     if score >= 60:
         return f"Apply delay policy and increase telemetry (port={port})"
@@ -988,7 +993,7 @@ def _recommendation(ev: Dict[str, Any], score: int) -> str:
 
 
 def _state_name(score: int) -> str:
-    if score >= 80:
+    if score >= CRITICAL_MIN:
         return "CONTAIN"
     if score >= 60:
         return "DEGRADED"
