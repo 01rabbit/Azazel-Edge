@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:04:00.000000+0000","event_type":"alert","src_ip":"10.0.0.80","src_port":42000,"dest_ip":"203.0.113.20","dest_port":443,"proto":"TCP","attack_type":"C2ビーコン定期通信","alert":{"signature_id":9901251,"signature":"AZAZEL C2 beacon - periodic small HTTP POST","severity":2,"category":"trojan-activity"}}

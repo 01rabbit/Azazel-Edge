@@ -159,6 +159,12 @@ class ScorerWiringTests(unittest.TestCase):
         self.assertEqual(summary["total_positive"] + summary["total_benign"], summary["total_sessions"])
         self.assertGreater(summary["total_benign"], 0)
 
+    def test_band_telemetry_present_and_dead_zone_empty(self) -> None:
+        summary = self.result.summary()
+        for key in ("llm_band_count", "critical_count", "dead_zone_count"):
+            self.assertIn(key, summary)
+        self.assertEqual(summary["dead_zone_count"], 0, "a session landed in the [80,84] dead zone")
+
 
 if __name__ == "__main__":
     unittest.main()

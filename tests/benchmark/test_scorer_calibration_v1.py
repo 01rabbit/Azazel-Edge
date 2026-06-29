@@ -120,6 +120,59 @@ class ScorerCalibrationTests(unittest.TestCase):
         self.assertGreaterEqual(threat, DETECT_MIN, "real exfil SID on same classtype should detect")
         self.assertGreaterEqual(threat - benign, SEPARATION_MARGIN)
 
+    def test_non_english_attack_type_detects_via_sid(self) -> None:
+        """A Japanese attack_type matches no English token, but the SID still carries it."""
+        jp = [s for s in self.pos if s.session_id == "c2_beacon_jp_01"]
+        self.assertTrue(jp and jp[0].detected and jp[0].risk_score >= CRITICAL_MIN)
+        # unit: same SID, non-English label -> still c2-weighted; SID 0 + unmapped -> not.
+        scorer = TacticalScorer()
+        with_sid, _ = scorer.score_with_features({
+            "suricata_sid": 9901251, "suricata_sev": 2, "suricata_signature": "C2ビーコン",
+            "suricata_category": "trojan-activity", "target_port": 443,
+        })
+        no_class, _ = scorer.score_with_features({
+            "suricata_sid": 0, "suricata_sev": 2, "suricata_signature": "C2ビーコン",
+            "suricata_category": "unknown", "target_port": 443,
+        })
+        self.assertGreaterEqual(with_sid, CRITICAL_MIN)
+        self.assertLess(no_class, 40)
+
+    def test_blocked_action_does_not_suppress_detection(self) -> None:
+        """A real threat reported as action=blocked must still detect (old scorer did -8)."""
+        blk = [s for s in self.pos if s.session_id == "arp_spoof_blocked_01"]
+        self.assertTrue(blk and blk[0].detected and blk[0].risk_score >= DETECT_MIN)
+
+    def test_ablation_threat_weight_drives_detection(self) -> None:
+        """Zeroing the threat signal must drop a detected positive below the gate."""
+        scorer = TacticalScorer()
+        detected, _ = scorer.score_with_features({
+            "suricata_sid": 9901251, "suricata_sev": 2, "suricata_signature": "",
+            "suricata_category": "trojan-activity", "target_port": 443,
+        })
+        ablated, _ = scorer.score_with_features({
+            "suricata_sid": 0, "suricata_sev": 2, "suricata_signature": "",
+            "suricata_category": "unknown", "target_port": 443,
+        })
+        self.assertGreaterEqual(detected, DETECT_MIN)
+        self.assertLess(ablated, DETECT_MIN)
+
+    def test_base_row_coverage_guards_provisional_severities(self) -> None:
+        """
+        The severity base curve is a single-point fit on an all-sev2/3 corpus; rows 1
+        and 4 are provisional pending hardware measurement. Fail loudly if a session
+        starts relying on an unmeasured base row, so nobody trusts it silently.
+        """
+        severities = set()
+        for eve_file in CORPUS.glob("*.jsonl"):
+            line = eve_file.read_text(encoding="utf-8").strip().splitlines()[0]
+            import json as _json
+            severities.add(int(_json.loads(line).get("alert", {}).get("severity") or 0))
+        self.assertTrue(
+            severities <= {2, 3},
+            f"corpus exercises base rows {severities}; rows 1/4 are provisional "
+            "(measure classtype->priority->severity on hardware before relying on them)",
+        )
+
     def test_adversarial_benign_severity2_not_flagged(self) -> None:
         """
         sev-2 benign on shared classtypes / admin ports -- the cases the OLD additive

@@ -56,6 +56,11 @@ class AccuracyResult:
     total_benign: int = 0
     false_positive: int = 0
     false_positive_rate_pct: float = 0.0
+    # Band telemetry over ALL sessions -- gives operators the LLM-load and dead-zone
+    # visibility the deferred ops/decoy-tuning decisions need (Step 4 of the eval plan).
+    llm_band_count: int = 0       # risk in [40,79] -> routed to the LLM advisory band
+    critical_count: int = 0       # risk >= 85 -> auto-ops escalation
+    dead_zone_count: int = 0      # risk in [80,84] -> MUST be 0 (display/ops disagree)
     sessions: List[SessionResult] = field(default_factory=list)
     corpus_path: str = ""
     hardware: str = "software-only (EVE replay)"
@@ -73,6 +78,9 @@ class AccuracyResult:
             "detection_rate_pct": round(self.detection_rate_pct, 1),
             "breach_rate_pct": round(self.breach_rate_pct, 1),
             "false_positive_rate_pct": round(self.false_positive_rate_pct, 1),
+            "llm_band_count": self.llm_band_count,
+            "critical_count": self.critical_count,
+            "dead_zone_count": self.dead_zone_count,
             "per_session": [
                 {
                     "session_id": s.session_id,
@@ -204,6 +212,9 @@ class DetectionAccuracyBenchmark:
         detected = sum(1 for s in positives if s.detected)
         breached = sum(1 for s in positives if s.breach)
         false_positive = sum(1 for s in benign if s.false_positive)
+        llm_band_count = sum(1 for s in sessions if 40 <= s.risk_score <= 79)
+        critical_count = sum(1 for s in sessions if s.risk_score >= 85)
+        dead_zone_count = sum(1 for s in sessions if 80 <= s.risk_score <= 84)
         return AccuracyResult(
             total_sessions=total,
             total_positive=total_positive,
@@ -214,6 +225,9 @@ class DetectionAccuracyBenchmark:
             detection_rate_pct=(detected / total_positive * 100.0) if total_positive else 0.0,
             breach_rate_pct=(breached / total_positive * 100.0) if total_positive else 0.0,
             false_positive_rate_pct=(false_positive / total_benign * 100.0) if total_benign else 0.0,
+            llm_band_count=llm_band_count,
+            critical_count=critical_count,
+            dead_zone_count=dead_zone_count,
             sessions=sessions,
             corpus_path=str(self.corpus_dir),
         )
