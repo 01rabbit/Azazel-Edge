@@ -29,6 +29,14 @@ class ScoreBreakdown:
     factors: List[str]
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    """Coerce to int, degrading a malformed value to default rather than raising."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
 # AZAZEL deception/honeypot SIDs. Pinned to security/suricata/azazel-lite.rules by
 # test_scorer_calibration_v1; NOT a 9901xxx wildcard, so future 9902xxx SIDs do not
 # silently inherit the deception floor.
@@ -131,12 +139,14 @@ class TacticalScorer:
     _DECOY_PORTS = {12222, 18080}
 
     def score(self, features: Dict[str, Any]) -> ScoreBreakdown:
-        severity = int(features.get("suricata_sev") or 0)
-        sid = int(features.get("suricata_sid") or 0)
+        # Coerce defensively: score()/score_with_features() are public and a JSON-origin
+        # string field must degrade to a default, not raise (determinism contract).
+        severity = _as_int(features.get("suricata_sev"))
+        sid = _as_int(features.get("suricata_sid"))
         signature = str(features.get("suricata_signature") or "").lower()
         category = str(features.get("suricata_category") or "").lower()
         action = str(features.get("suricata_action") or "allowed").lower()
-        target_port = int(features.get("target_port") or 0)
+        target_port = _as_int(features.get("target_port"))
 
         factors: List[str] = [f"severity={severity}"]
 

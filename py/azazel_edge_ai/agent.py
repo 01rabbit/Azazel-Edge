@@ -381,7 +381,7 @@ def _should_escalate_to_ops(
     risk_score = int(advisory.get("risk_score") or 0)
     if llm_status != "completed":
         return True, "llm_not_completed"
-    if risk_score >= 85:
+    if risk_score >= CRITICAL_MIN:
         return True, "critical_risk"
     if llm_escalation:
         return True, "llm_escalation_flag"
@@ -1164,7 +1164,7 @@ def _route_llm(event: Dict[str, Any], advisory: Dict[str, Any]) -> None:
             "status": "skipped_non_ambiguous",
             "reason": route_reason,
         }
-        if int(advisory.get("risk_score") or 0) >= 85:
+        if int(advisory.get("risk_score") or 0) >= CRITICAL_MIN:
             try:
                 LLM_QUEUE.put_nowait(
                     {

@@ -157,14 +157,15 @@ class EVEParser:
             except (ValueError, TypeError):
                 return default
 
-        # Production sets suricata_signature from norm.attack_type, NOT the rule msg.
+        # Production sets suricata_signature from norm.attack_type ONLY (agent.py
+        # _build_advisory), with no classtype fallback -- mirror that exactly so replay
+        # and production score an identical alert identically, not just share keys.
         attack_type = eve_obj.get("attack_type")
-        signature_src = attack_type if isinstance(attack_type, str) and attack_type else alert.get("category")
 
         return {
             "suricata_sid": _int(alert.get("sid") or alert.get("signature_id"), 0),
             "suricata_sev": _int(alert.get("severity"), 0),
-            "suricata_signature": str(signature_src or "")[:128],
+            "suricata_signature": str(attack_type if isinstance(attack_type, str) else "")[:128],
             "suricata_category": str(alert.get("category") or ""),
             "suricata_action": str(alert.get("action") or eve_obj.get("action") or "allowed"),
             "target_port": _int(eve_obj.get("dest_port") or eve_obj.get("target_port"), 0),

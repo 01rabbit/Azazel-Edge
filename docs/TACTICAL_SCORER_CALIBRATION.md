@@ -49,6 +49,10 @@ display); a test asserts no single-event corpus session scores in `[80,84]`.
    reaches 40. The `+5` SID bonus is gated on a real class or a deception SID.
 3. **Ports corroborate, never manufacture.** Admin/web/dns `+8` only when
    `threat_weight > 0`; decoy ports `+10` always (honeypot-only, TP by construction).
+   A class-less hit on a decoy port lands at the LLM advisory floor (40) by design —
+   below the 60 detection gate, but worth a second opinion since decoy ports are
+   suspicious by construction. In practice such hits also carry an OpenCanary SID
+   (9901101-103) and are floored to 60 anyway.
 4. **Action is neutral-or-positive.** `blocked/drop/rejected -> +2`; everything else
    `+0`. Never subtract — an attacker who influences the reported verdict must not be
    able to suppress the score.
