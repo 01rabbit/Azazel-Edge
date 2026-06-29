@@ -195,9 +195,18 @@ class BhusaPrepV1Tests(unittest.TestCase):
             self.assertTrue(payload["repo_sync"]["status"]["freeze_check"]["ok"])
             self.assertEqual(len(payload["repo_sync"]["status"]["freeze_check"]["offline_doc_checks"]), 1)
             self.assertIn("candidate_summary", payload)
-            self.assertTrue(payload["candidate_summary"]["freeze_gate_ok"])
-            self.assertEqual(payload["candidate_summary"]["open_child_issue_count"], 8)
-            self.assertFalse(payload["candidate_summary"]["ready_for_freeze"])
+            summary = payload["candidate_summary"]
+            open_issues = [
+                item for item in payload["repo_sync"]["status"]["github"].get("issues", [])
+                if item.get("state") == "OPEN"
+            ]
+            self.assertTrue(summary["freeze_gate_ok"])
+            self.assertEqual(summary["open_child_issue_count"], len(open_issues))
+            self.assertEqual(summary["blocker_count"], summary["open_child_issue_count"])
+            self.assertEqual(
+                summary["ready_for_freeze"],
+                summary["freeze_gate_ok"] and summary["open_child_issue_count"] == 0,
+            )
             self.assertTrue((out_root / "ops-pack" / "offline-bundle" / "INDEX.md").exists())
             self.assertTrue((out_root / "freeze-pack" / "freeze-record" / "FREEZE_RECORD.md").exists())
             self.assertTrue(payload["freeze_gate"]["ok"])
