@@ -102,6 +102,37 @@ class ScorerCalibrationTests(unittest.TestCase):
         })
         self.assertLess(s, 40)
 
+    def test_shared_classtype_disambiguated_by_sid(self) -> None:
+        """
+        The crux of the design: policy-violation/bad-unknown are shared by benign traffic
+        AND real AZAZEL threats. The SAME classtype+port must dampen when there is no
+        threat SID, but clear the detection gate when carried on a real AZAZEL SID.
+        """
+        scorer = TacticalScorer()
+        shared = {"suricata_sev": 2, "suricata_signature": "", "target_port": 53}
+        benign, _ = scorer.score_with_features(
+            {**shared, "suricata_sid": 0, "suricata_category": "policy-violation"}
+        )
+        threat, _ = scorer.score_with_features(
+            {**shared, "suricata_sid": 9901232, "suricata_category": "policy-violation"}
+        )
+        self.assertLess(benign, 40, "benign on shared classtype should dampen")
+        self.assertGreaterEqual(threat, DETECT_MIN, "real exfil SID on same classtype should detect")
+        self.assertGreaterEqual(threat - benign, SEPARATION_MARGIN)
+
+    def test_adversarial_benign_severity2_not_flagged(self) -> None:
+        """
+        sev-2 benign on shared classtypes / admin ports -- the cases the OLD additive
+        scorer pushed to >=60 (55 base +5 sid +4 action +8 port). All must stay <40.
+        """
+        adversarial = [s for s in self.benign if "adversarial" in (s.technique or "")
+                       or s.session_id.startswith(("benign_cleartext", "benign_bad_unknown",
+                                                    "benign_smb_admin", "benign_rdp_admin"))]
+        self.assertGreaterEqual(len(adversarial), 4)
+        for s in adversarial:
+            self.assertLess(s.risk_score, 40, f"{s.session_id} (sev2 adversarial benign) flagged")
+            self.assertEqual(s.action_taken, "observe")
+
 
 if __name__ == "__main__":
     unittest.main()

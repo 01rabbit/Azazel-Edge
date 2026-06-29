@@ -28,12 +28,15 @@ The harness now runs the real `TacticalScorer` on production-identical features 
 previously hardcoded `risk_score = 75 + severity*5` and never called the scorer). What
 is intentionally deferred to the scorer recalibration (ranks 2-5), NOT silently assumed:
 
-- **Benign resolution**: 5 benign control *sessions* today, not the 30 benign *events*
-  the target spec wants. Event-level FP resolution and an independently-captured benign
-  set are follow-ups.
-- **Adversarial benign**: severity-2 benign catch-alls (which the *current* scorer would
-  wrongly flag) are deliberately omitted until the dampeners exist, otherwise they would
-  just be a known-red test. Add them together with the dampener changes.
+- **Benign resolution**: 9 benign control *sessions* today (5 baseline + 4 adversarial),
+  not the 30 benign *events* the target spec wants. Event-level FP resolution and an
+  independently-captured benign set are follow-ups.
+- **Adversarial benign** (`benign_cleartext_http`, `benign_bad_unknown_arp`,
+  `benign_smb_admin_sev2`, `benign_rdp_admin_sev2`): severity-2 benign traffic on the
+  SHARED catch-all classtypes (`policy-violation`, `bad-unknown`) and on admin ports —
+  the cases the old additive scorer pushed to >=60 (55 base +5 sid +4 action +8 port).
+  The SID-keyed dampener crushes them to 25 while a real AZAZEL threat on the SAME
+  classtype is lifted by its SID; `test_scorer_calibration_v1` pins both halves.
 - **Severity spread**: all sessions are severity 2 (no rule sets `priority:`/`severity:`).
   Measure the classtype->priority->severity mapping on real hardware before trusting the
   per-severity base curve.
