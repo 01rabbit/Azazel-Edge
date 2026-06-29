@@ -16,6 +16,7 @@ Entry point for all documents in this directory.
 | [P0_RUNTIME_ARCHITECTURE.md](P0_RUNTIME_ARCHITECTURE.md) | Developer | Decision pipeline, implementation modules, and P0 constraints | 2026-03-10 |
 | [AZAZEL_AGGREGATOR_ARCHITECTURE.md](AZAZEL_AGGREGATOR_ARCHITECTURE.md) | Developer / Operator | Multi-node Azazel Aggregator design baseline and phased roadmap | 2026-05-12 |
 | [SOC_POLICY_GUIDE.md](SOC_POLICY_GUIDE.md) | Developer / Operator | Deterministic SOC policy tuning and safety constraints | 2026-05-12 |
+| [TACTICAL_SCORER_CALIBRATION.md](TACTICAL_SCORER_CALIBRATION.md) | Developer | Rule-based first-pass scorer model, detection gate, and calibration decisions | 2026-06-29 |
 | [ATTACK_MAPPING_GUIDE.md](ATTACK_MAPPING_GUIDE.md) | Developer / Operator | ATT&CK mapping rules, limits, and maintenance guidance | 2026-05-12 |
 | [BENCHMARK_DEFINITIONS.md](BENCHMARK_DEFINITIONS.md) | Developer / Operator | Reproducible benchmark definitions for operational, latency, power, and breach metrics | 2026-05-13 |
 | [BENCHMARK_SCOPE_AND_HIL_PLAN.md](BENCHMARK_SCOPE_AND_HIL_PLAN.md) | Developer / Operator | Benchmark claim boundary and staged hardware-in-the-loop plan | 2026-05-14 |
