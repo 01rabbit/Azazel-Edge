@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Tuple
 
-from .path_schema import command_path_candidates, snapshot_path_candidates, warn_if_legacy_path
+from .path_schema import command_path_candidates, runtime_snapshot_path_candidates, warn_if_legacy_path
 
 CONTROL_SOCKET = Path(os.environ.get("AZAZEL_CONTROL_SOCKET", "/run/azazel-edge/control.sock"))
 
@@ -100,11 +100,7 @@ def watch_snapshots(
 
 
 def read_snapshot_from_files(logger: Any = None) -> Tuple[Optional[Dict[str, Any]], Optional[Path]]:
-    candidates = snapshot_path_candidates()
-    runtime_only = [p for p in candidates if str(p).startswith("/run/")]
-    if not runtime_only:
-        runtime_only = candidates[:2]
-    for path in runtime_only:
+    for path in runtime_snapshot_path_candidates():
         try:
             if not path.exists():
                 continue

@@ -97,15 +97,25 @@ def defaults_file_candidates(schema: Optional[str] = None) -> list[Path]:
     return [Path(f"/etc/default/{primary_name}"), Path(f"/etc/default/{legacy_name}")]
 
 
+def snapshot_override_path() -> Optional[Path]:
+    """Explicit snapshot location (AZAZEL_UI_SNAPSHOT), e.g. for non-Linux dev hosts."""
+    raw = str(os.environ.get("AZAZEL_UI_SNAPSHOT", "")).strip()
+    return Path(raw) if raw else None
+
+
 def snapshot_path_candidates(schema: Optional[str] = None, home: Optional[Path] = None) -> list[Path]:
     run_primary, run_legacy = runtime_dir_candidates(schema)
     home_primary, home_legacy = _home_candidates(schema, home=home)
-    return [
+    candidates = [
         run_primary / "ui_snapshot.json",
         run_legacy / "ui_snapshot.json",
         home_primary / "run" / "ui_snapshot.json",
         home_legacy / "run" / "ui_snapshot.json",
     ]
+    override = snapshot_override_path()
+    if override is not None:
+        candidates.insert(0, override)
+    return _dedupe_paths(candidates)
 
 
 def command_path_candidates(schema: Optional[str] = None, home: Optional[Path] = None) -> list[Path]:
@@ -148,6 +158,9 @@ def opencanary_config_candidates(schema: Optional[str] = None, repo_root: Option
 
 
 def runtime_snapshot_path_candidates(schema: Optional[str] = None, home: Optional[Path] = None) -> list[Path]:
+    override = snapshot_override_path()
+    if override is not None:
+        return [override]
     paths = [p for p in snapshot_path_candidates(schema=schema, home=home) if str(p).startswith("/run/")]
     if paths:
         return paths

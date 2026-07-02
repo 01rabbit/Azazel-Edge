@@ -5,6 +5,7 @@ decision_logger.py - DecisionExplanation JSONL ロギング
 
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -95,10 +96,11 @@ class DecisionLogger:
         """
         Args:
             output_dir: JSONL出力先ディレクトリ
-                       デフォルト: /opt/azazel-edge/logs/tactics_engine
+                       デフォルト: $AZAZEL_DECISION_LOG_DIR または /opt/azazel-edge/logs/tactics_engine
         """
         if output_dir is None:
-            self.output_dir = Path("/opt/azazel-edge/logs/tactics_engine")
+            env_dir = str(os.environ.get("AZAZEL_DECISION_LOG_DIR", "")).strip()
+            self.output_dir = Path(env_dir) if env_dir else Path("/opt/azazel-edge/logs/tactics_engine")
         else:
             self.output_dir = Path(output_dir)
 

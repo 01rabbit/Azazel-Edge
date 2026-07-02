@@ -112,7 +112,8 @@ LLM_PROMPT_SYSTEM = (
     "You are M.I.O. (Mission Intelligence Operator), a calm tactical analyst. "
     "Return strict minified JSON only. "
     "Keys: verdict, confidence, reason, suggested_action, escalation. "
-    "reason<=80 chars, suggested_action<=80 chars, confidence=0.0..1.0. "
+    "verdict must be exactly one of: allow, monitor, block, deceive, escalate, hold. "
+    "reason<=80 chars, suggested_action<=80 chars, confidence=0.0..1.0, escalation=true|false. "
     "Prefer precise, conditional wording over hard certainty."
 )
 OPS_PROMPT_SYSTEM = (
@@ -1229,7 +1230,14 @@ def _extract_json_payload(text: str) -> Dict[str, Any]:
         end = body.rfind("}")
         if start != -1 and end != -1 and end > start:
             body = body[start : end + 1]
-    parsed = json.loads(body)
+    try:
+        parsed = json.loads(body)
+    except Exception:
+        # Small local models sometimes emit doubled braces ({{...}}); strip and retry.
+        inner = body
+        while inner.startswith("{{") and inner.endswith("}}"):
+            inner = inner[1:-1].strip()
+        parsed = json.loads(inner)
     return parsed if isinstance(parsed, dict) else {}
 
 
