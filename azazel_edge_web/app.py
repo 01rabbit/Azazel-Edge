@@ -314,6 +314,11 @@ def _read_mattermost_command_tokens() -> List[str]:
 
 MATTERMOST_COMMAND_TOKENS = _read_mattermost_command_tokens()
 MATTERMOST_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MATTERMOST_TIMEOUT_SEC", "8"))
+# The reachability ping runs on the dashboard hot path (every refresh, from
+# multiple endpoints). Keep its timeout short and cache the result so an
+# unreachable Mattermost cannot saturate the web worker threads.
+MATTERMOST_PING_TIMEOUT_SEC = float(os.environ.get("AZAZEL_MATTERMOST_PING_TIMEOUT_SEC", "2"))
+MATTERMOST_PING_CACHE_TTL_SEC = float(os.environ.get("AZAZEL_MATTERMOST_PING_CACHE_TTL_SEC", "15"))
 MATTERMOST_FETCH_LIMIT = int(os.environ.get("AZAZEL_MATTERMOST_FETCH_LIMIT", "40"))
 DASHBOARD_SNAPSHOT_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_SNAPSHOT_STALE_SEC", "30"))
 DASHBOARD_AI_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_AI_STALE_SEC", "120"))
@@ -4540,19 +4545,47 @@ def _mattermost_mode() -> str:
     return "disabled"
 
 
-def _mattermost_ping() -> tuple[bool, Dict[str, Any]]:
+def _mattermost_ping_uncached() -> tuple[bool, Dict[str, Any]]:
     try:
         req = Request(
             f"{MATTERMOST_BASE_URL}/api/v4/system/ping",
             headers={"Accept": "application/json"},
             method="GET",
         )
-        with urlopen(req, timeout=MATTERMOST_TIMEOUT_SEC) as resp:
+        with urlopen(req, timeout=MATTERMOST_PING_TIMEOUT_SEC) as resp:
             payload_raw = resp.read().decode("utf-8", errors="replace")
         payload = json.loads(payload_raw) if payload_raw else {}
         return True, payload if isinstance(payload, dict) else {}
     except Exception as e:
         return False, {"error": str(e)}
+
+
+_MATTERMOST_PING_LOCK = threading.Lock()
+_MATTERMOST_PING_CACHE: Dict[str, Any] = {"ts": 0.0, "value": (False, {"error": "not_checked"})}
+
+
+def _mattermost_ping(force: bool = False) -> tuple[bool, Dict[str, Any]]:
+    """Reachability ping with a short TTL cache.
+
+    Called on every dashboard refresh from several endpoints; without caching
+    an unreachable Mattermost would block a worker thread per request and
+    saturate the web server. Refresh is single-flight: while one thread probes,
+    concurrent callers return the last cached value instead of piling up.
+    """
+    now = time.time()
+    cache = _MATTERMOST_PING_CACHE
+    if not force and (now - float(cache.get("ts") or 0.0)) < MATTERMOST_PING_CACHE_TTL_SEC:
+        return cache["value"]
+    if not _MATTERMOST_PING_LOCK.acquire(blocking=False):
+        # Another thread is already refreshing; serve the last known value.
+        return cache["value"]
+    try:
+        value = _mattermost_ping_uncached()
+        cache["value"] = value
+        cache["ts"] = time.time()
+        return value
+    finally:
+        _MATTERMOST_PING_LOCK.release()
 
 
 def _mattermost_api_request(method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
