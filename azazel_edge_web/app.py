@@ -58,6 +58,11 @@ from azazel_edge_web.auth import (
     require_token,
 )
 
+# When launched directly (bin/azazel-edge-web -> `python azazel_edge_web/app.py`)
+# this module is registered as "__main__"; auth.py resolves shared state via
+# sys.modules["azazel_edge_web.app"], so register an alias for that case.
+sys.modules.setdefault("azazel_edge_web.app", sys.modules[__name__])
+
 app = Flask(__name__)
 STATIC_ASSET_VERSION = str(int(time.time()))
 
@@ -93,14 +98,6 @@ try:
         list_flows as triage_list_flows,
         select_noc_runbook_support,
         select_runbooks_for_diagnostic_state,
-    )
-    from azazel_edge.demo_overlay import (
-        DEMO_OVERLAY_PATH,
-        build_demo_overlay,
-        clear_demo_overlay,
-        purge_demo_artifacts,
-        read_demo_overlay,
-        write_demo_overlay,
     )
     from azazel_edge.path_schema import (
         config_dir_candidates,
@@ -140,12 +137,6 @@ except Exception:
     triage_list_flows = None  # type: ignore
     select_noc_runbook_support = None  # type: ignore
     select_runbooks_for_diagnostic_state = None  # type: ignore
-    DEMO_OVERLAY_PATH = Path("/run/azazel-edge/demo_overlay.json")
-    build_demo_overlay = lambda result: {"active": True, "raw_result": result}  # type: ignore
-    clear_demo_overlay = lambda: None  # type: ignore
-    purge_demo_artifacts = lambda: None  # type: ignore
-    read_demo_overlay = lambda: {}  # type: ignore
-    write_demo_overlay = lambda payload: DEMO_OVERLAY_PATH  # type: ignore
     config_dir_candidates = lambda: [Path("/etc/azazel-edge"), Path("/etc/azazel-zero")]  # type: ignore
     first_minute_config_candidates = lambda: [Path("/etc/azazel-edge/first_minute.yaml"), Path("/etc/azazel-zero/first_minute.yaml")]  # type: ignore
     mode_state_candidates = lambda: [Path("/etc/azazel/mode.json"), Path("/etc/azazel-edge/mode.json"), Path("/etc/azazel-zero/mode.json")]  # type: ignore
@@ -194,9 +185,6 @@ AUTH_MTLS_FINGERPRINTS = {
 AUTH_MTLS_FINGERPRINTS_FILE = Path(str(os.environ.get("AZAZEL_AUTH_MTLS_FINGERPRINTS_FILE", "/etc/azazel-edge/client-cert-fingerprints.txt")).strip() or "/etc/azazel-edge/client-cert-fingerprints.txt")
 _ROLE_RANK: Dict[str, int] = {"viewer": 10, "operator": 20, "responder": 30, "admin": 40}
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
-LOCAL_DEMO_RUNNER = PROJECT_ROOT / "bin" / "azazel-edge-demo"
-OPT_DEMO_RUNNER = Path("/opt/azazel-edge/bin/azazel-edge-demo")
-USR_LOCAL_DEMO_RUNNER = Path("/usr/local/bin/azazel-edge-demo")
 EPD_LAST_RENDER_PATH = Path("/run/azazel-edge/epd_last_render.json")
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
@@ -909,33 +897,6 @@ def _blank_ai_context() -> Dict[str, Any]:
     }
 
 
-def _demo_overlay_is_active() -> bool:
-    payload = read_demo_overlay()
-    return bool(payload.get("active")) if isinstance(payload, dict) else False
-
-
-def _trigger_demo_clear_side_effects() -> None:
-    # EPD keeps the last rendered frame until refreshed, so clear should force
-    # one live redraw instead of waiting for the timer. Call the refresh script
-    # directly instead of systemctl to avoid polkit / interactive auth failures.
-    # Run it synchronously with a realistic timeout so the hardware actually
-    # leaves demo mode before the request returns.
-    commands = [
-        ["/usr/local/bin/azazel-edge-epd-refresh"],
-    ]
-    for cmd in commands:
-        try:
-            subprocess.run(
-                cmd,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=45,
-            )
-        except Exception:
-            continue
-
-
 def _dashboard_visible_ai_context(state: Dict[str, Any], advisory: Dict[str, Any], llm_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     latest_ai = _latest_ai_context(advisory, llm_rows)
     ai_age = _age_seconds(latest_ai.get("ts"))
@@ -945,8 +906,6 @@ def _dashboard_visible_ai_context(state: Dict[str, Any], advisory: Dict[str, Any
     internal = state.get("internal") if isinstance(state.get("internal"), dict) else {}
     suspicion = _as_int(internal.get("suspicion"), 0)
     latest_source = str(latest_ai.get("source") or "").lower()
-    if latest_source == "dashboard_demo" and not _demo_overlay_is_active():
-        return _blank_ai_context()
     if latest_source == "dashboard" and user_state == "SAFE" and suspicion <= 0:
         return _blank_ai_context()
     return latest_ai
@@ -3658,122 +3617,6 @@ def _assist_handoff_payload() -> Dict[str, str]:
     }
 
 
-def _resolve_demo_runner() -> Path:
-    candidates = [USR_LOCAL_DEMO_RUNNER, OPT_DEMO_RUNNER, LOCAL_DEMO_RUNNER]
-    for path in candidates:
-        try:
-            if path.exists() and os.access(path, os.X_OK):
-                return path
-        except Exception:
-            continue
-    return LOCAL_DEMO_RUNNER
-
-
-def _run_demo_runner(*args: str) -> tuple[Dict[str, Any], int]:
-    runner = _resolve_demo_runner()
-    cmd = [str(runner), *[str(x) for x in args]]
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(PY_ROOT) + (f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else "")
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=20,
-            env=env,
-            cwd=str(PROJECT_ROOT),
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "demo_runner_timeout", "command": cmd}, 504
-    except Exception as e:
-        return {"ok": False, "error": str(e), "command": cmd}, 500
-
-    stdout = str(result.stdout or "").strip()
-    stderr = str(result.stderr or "").strip()
-    payload: Dict[str, Any] = {}
-    if stdout:
-        try:
-            payload = json.loads(stdout)
-        except Exception:
-            payload = {"ok": False, "error": "invalid_demo_runner_output", "stdout": stdout}
-    if result.returncode != 0:
-        if not payload:
-            payload = {"ok": False}
-        payload.setdefault("error", stderr or f"demo_runner_exit_{result.returncode}")
-        payload["stderr"] = stderr
-        payload["returncode"] = result.returncode
-        payload["command"] = cmd
-        error_text = str(payload.get("error", ""))
-        return payload, 400 if "unknown_scenario" in error_text or "unknown_scenarios" in error_text else 500
-
-    if not payload:
-        payload = {"ok": True}
-    payload["runner"] = str(runner)
-    return payload, 200
-
-
-def _demo_state_payload() -> Dict[str, Any]:
-    overlay = read_demo_overlay()
-    demo = overlay.get("demo") if isinstance(overlay.get("demo"), dict) else {}
-    presentation = overlay.get("presentation") if isinstance(overlay.get("presentation"), dict) else {}
-    execution = overlay.get("execution") if isinstance(overlay.get("execution"), dict) else {}
-    epd_last = _read_json_file(EPD_LAST_RENDER_PATH)
-    epd_render = epd_last.get("render") if isinstance(epd_last, dict) and isinstance(epd_last.get("render"), dict) else {}
-    active = bool(overlay.get("active"))
-    trace_id = str(overlay.get("trace_id") or execution.get("trace_id") or "")
-    explanations_path = str(overlay.get("explanations_path") or execution.get("explanations_path") or "")
-    audit_path = str(overlay.get("audit_path") or execution.get("audit_path") or "")
-    audit_review_command = ""
-    if trace_id and explanations_path and audit_path:
-        audit_review_command = (
-            "bin/azazel-edge-audit-review "
-            f"--explanations-path {quote(explanations_path)} "
-            f"--audit-path {quote(audit_path)} "
-            f"--trace-id {quote(trace_id)} "
-            "--compact"
-        )
-    return {
-        "ok": True,
-        "active": active,
-        "scenario_id": str(overlay.get("scenario_id") or ""),
-        "title": str(overlay.get("title") or presentation.get("title") or demo.get("title") or "idle"),
-        "summary": str(overlay.get("summary") or presentation.get("summary") or demo.get("summary") or ""),
-        "attack_label": str(overlay.get("attack_label") or demo.get("attack_label") or presentation.get("attack_label") or ""),
-        "description": str(overlay.get("description") or ""),
-        "event_count": int(overlay.get("event_count") or 0),
-        "action": str(overlay.get("action") or "observe"),
-        "control_mode": str(overlay.get("control_mode") or "none"),
-        "reason": str(overlay.get("reason") or ""),
-        "release_condition": str(overlay.get("release_condition") or ""),
-        "trace_id": trace_id,
-        "policy_profile": str(overlay.get("policy_profile") or ""),
-        "config_hash": str(overlay.get("config_hash") or ""),
-        "explanations_path": explanations_path,
-        "audit_path": audit_path,
-        "audit_review_command": audit_review_command,
-        "operator_wording": str(overlay.get("operator_wording") or ""),
-        "talk_track": str(demo.get("talk_track") or ""),
-        "next_checks": list(overlay.get("next_checks") or []),
-        "chosen_evidence_ids": list(overlay.get("chosen_evidence_ids") or []),
-        "rejected_alternatives": list(overlay.get("rejected_alternatives") or []),
-        "rejected_actions": list(overlay.get("rejected_actions") or []),
-        "noc_status": str(overlay.get("noc_status") or ""),
-        "noc_reasons": list(overlay.get("noc_reasons") or []),
-        "soc_status": str(overlay.get("soc_status") or ""),
-        "soc_reasons": list(overlay.get("soc_reasons") or []),
-        "decision_path": dict(demo.get("decision_path") or {}) if isinstance(demo.get("decision_path"), dict) else {},
-        "proofs": dict(demo.get("proofs") or {}) if isinstance(demo.get("proofs"), dict) else {},
-        "epd": {
-            "ts": str(epd_last.get("ts") or ""),
-            "state": str(epd_render.get("state") or ""),
-            "mode_label": str(epd_render.get("mode_label") or ""),
-            "risk_status": str(epd_render.get("risk_status") or ""),
-            "ssid": str(epd_render.get("ssid") or ""),
-            "suspicion": _as_int(epd_render.get("suspicion"), 0),
-        },
-    }
-
-
 def _assist_rationale(ai_result: Dict[str, Any]) -> List[str]:
     rationale: List[str] = []
     status = str(ai_result.get("status") or "").strip()
@@ -4876,12 +4719,6 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/demo")
-def demo_page():
-    """Dedicated demo and review workspace."""
-    return render_template("demo.html")
-
-
 @app.route("/ops-comm")
 def ops_comm():
     """Dedicated communication page for Mattermost + WebUI bridge."""
@@ -5582,105 +5419,6 @@ def api_triage_audit():
     rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG, TRIAGE_AUDIT_FALLBACK_LOG], limit=limit)
     items = [_normalize_triage_audit_event(item) for item in rows[-limit:]]
     return jsonify({"ok": True, "items": items, "count": len(items)}), 200
-
-
-@app.route("/api/demo/scenarios", methods=["GET"])
-@require_token()
-def api_demo_scenarios():
-    payload, code = _run_demo_runner("list", "--format", "json")
-    return jsonify(payload), code
-
-
-@app.route("/api/demo/overlay", methods=["GET"])
-@require_token()
-def api_demo_overlay():
-    payload = read_demo_overlay()
-    return jsonify({"ok": True, "overlay": payload, "active": bool(payload.get("active"))}), 200
-
-
-@app.route("/api/demo/capabilities", methods=["GET"])
-@require_token()
-def api_demo_capabilities():
-    try:
-        from azazel_edge.demo import DemoScenarioRunner
-    except Exception as exc:
-        return jsonify({"ok": False, "error": f"demo_capabilities_unavailable:{exc}"}), 500
-    return jsonify(
-        {
-            "ok": True,
-            "execution_mode": "deterministic_replay",
-            "ai_used_in_core_path": False,
-            "live_telemetry_required": False,
-            "local_only_in_core_path": True,
-            "boundary": DemoScenarioRunner.capability_boundary(),
-        }
-    ), 200
-
-
-@app.route("/api/demo/state", methods=["GET"])
-@require_token()
-def api_demo_state():
-    return jsonify(_demo_state_payload()), 200
-
-
-@app.route("/api/demo/explanation/latest", methods=["GET"])
-@require_token()
-def api_demo_explanation_latest():
-    payload = read_demo_overlay()
-    if not payload.get("active"):
-        return jsonify({"ok": False, "error": "no_active_demo_overlay"}), 404
-    raw = payload.get("raw_result") if isinstance(payload.get("raw_result"), dict) else {}
-    explanation = raw.get("explanation") if isinstance(raw.get("explanation"), dict) else {}
-    if not explanation:
-        return jsonify({"ok": False, "error": "no_explanation_available"}), 404
-    return jsonify(
-        {
-            "ok": True,
-            "scenario_id": payload.get("scenario_id"),
-            "action": payload.get("action"),
-            "explanation": explanation,
-        }
-    ), 200
-
-
-@app.route("/api/demo/overlay/clear", methods=["POST"])
-@require_token()
-def api_demo_overlay_clear():
-    clear_demo_overlay()
-    purge_demo_artifacts()
-    _trigger_demo_clear_side_effects()
-    return jsonify({"ok": True, "cleared": True}), 200
-
-
-@app.route("/api/demo/run/<scenario_id>", methods=["POST"])
-@require_token()
-def api_demo_run(scenario_id: str):
-    scenario = str(scenario_id or "").strip()
-    if not scenario:
-        return jsonify({"ok": False, "error": "scenario_id is required"}), 400
-    payload, code = _run_demo_runner("run", scenario, "--format", "json", "--apply-overlay")
-    return jsonify(payload), code
-
-
-@app.route("/api/demo/flow", methods=["POST"])
-@require_token()
-def api_demo_flow():
-    body = request.get_json(silent=True) or {}
-    cmd = ["flow", "--format", "json"]
-    scenarios = body.get("scenarios")
-    if isinstance(scenarios, list):
-        cleaned = [str(item).strip() for item in scenarios if str(item).strip()]
-        if cleaned:
-            cmd.extend(["--scenarios", ",".join(cleaned)])
-    hold_sec_raw = body.get("hold_sec")
-    if hold_sec_raw not in (None, ""):
-        cmd.extend(["--hold-sec", str(_as_int(hold_sec_raw, 0))])
-    if body.get("keep_final"):
-        cmd.append("--keep-final")
-    if body.get("refresh_epd"):
-        cmd.append("--refresh-epd")
-    payload, code = _run_demo_runner(*cmd)
-    return jsonify(payload), code
 
 
 @app.route("/api/topolite/seed-mode", methods=["GET", "POST"])

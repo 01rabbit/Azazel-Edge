@@ -8,7 +8,6 @@ from pathlib import Path
 
 from azazel_edge.arbiter import ActionArbiter
 from azazel_edge.audit import P0AuditLogger
-from azazel_edge.demo.playback import scenario_summary
 from azazel_edge.opencanary_redirect import OpenCanaryRedirectController
 from tests.helpers import noc
 from tests.helpers import soc
@@ -182,44 +181,6 @@ class DecisionStreamTraceabilityV1Tests(unittest.TestCase):
         # Audit chain integrity must remain intact
         chain_result = P0AuditLogger.verify_chain(audit_path)
         self.assertTrue(chain_result['ok'], f"Audit chain broken: {chain_result.get('error')}")
-
-    # ------------------------------------------------------------------
-    # Test 3: scenario_summary() surfaces config_hash, policy_profile, release_condition
-    # ------------------------------------------------------------------
-    def test_scenario_summary_surfaces_traceability_fields(self) -> None:
-        payload = {
-            'ok': True,
-            'result': {
-                'scenario_id': 'test-traceability',
-                'arbiter': {'action': 'redirect', 'control_mode': 'opencanary_redirect'},
-                'explanation': {
-                    'config_hash': 'abc123policyfix',
-                    'policy_profile': 'soc-policy-v1',
-                    'release_condition': 'no_repeated_failures_for_300_seconds',
-                    'operator_wording': 'Redirect active.',
-                    'next_checks': ['check-1'],
-                },
-                'demo': {'title': 'Test scenario'},
-            },
-        }
-
-        summary = scenario_summary(payload)
-
-        self.assertEqual(
-            summary.get('config_hash'),
-            'abc123policyfix',
-            "scenario_summary must surface config_hash from explanation",
-        )
-        self.assertEqual(
-            summary.get('policy_profile'),
-            'soc-policy-v1',
-            "scenario_summary must surface policy_profile from explanation",
-        )
-        self.assertEqual(
-            summary.get('release_condition'),
-            'no_repeated_failures_for_300_seconds',
-            "scenario_summary must surface release_condition from explanation",
-        )
 
     # ------------------------------------------------------------------
     # Test 4: evaluate() returns False when redirect is not warranted —
