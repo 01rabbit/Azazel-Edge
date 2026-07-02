@@ -102,7 +102,7 @@ bin/azazel-edge-bhusa-prep full-pack --force
 ## Primary replay path
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 ```
 
 ## Compact audit review
@@ -134,22 +134,28 @@ bin/azazel-edge-audit-review \
   --json
 ```
 
-## Write replay overlay for booth page
+## Live dashboard demo (fabricated EVE traffic, real dashboard)
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo --apply-overlay
+bin/azazel-edge-dummy-eve flow
 ```
 
-## Clear booth overlay
+Background noise with periodic attack bursts:
 
 ```bash
-bin/azazel-edge-demo clear
+bin/azazel-edge-dummy-eve stream --attack-every 60
+```
+
+## Clear deterministic replay artifacts
+
+```bash
+bin/azazel-edge-scenario-replay clear
 ```
 
 ## Replay-only fallback path
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 bin/azazel-edge-audit-review \
   --explanations-path /tmp/azazel-edge-demo-explanations.jsonl \
   --audit-path /tmp/azazel-edge-demo-triage-audit.jsonl \
@@ -160,7 +166,7 @@ bin/azazel-edge-audit-review \
 ## Reset between rehearsal blocks
 
 ```bash
-bin/azazel-edge-demo clear
+bin/azazel-edge-scenario-replay clear
 rm -f /tmp/bhusa-2026-replay-state.json
 rm -f /tmp/azazel-edge-demo-explanations.jsonl /tmp/azazel-edge-demo-triage-audit.jsonl
 ```

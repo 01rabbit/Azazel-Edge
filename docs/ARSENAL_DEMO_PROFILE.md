@@ -1,6 +1,6 @@
 # Arsenal Demo Profile
 
-Last updated: 2026-05-14
+Last updated: 2026-07-02
 
 ## 1. Purpose
 
@@ -19,9 +19,11 @@ This demo shows the deterministic edge SOC/NOC decision loop. It is not a full S
 Mandatory:
 - `azazel-edge-web`
 - `azazel-edge-control-daemon`
-- deterministic replay CLI (`bin/azazel-edge-demo`)
+- deterministic replay CLI (`bin/azazel-edge-scenario-replay`)
 - `azazel-edge-core` when live Suricata path is included
 - `azazel-edge-opencanary` when redirect behavior is shown
+- `bin/azazel-edge-dummy-eve` when a live dashboard demo (fabricated EVE
+  traffic through the real pipeline) is included
 
 Optional:
 - Mattermost
@@ -34,17 +36,22 @@ Optional:
 
 ## 4. Demo modes
 
-Replay-only demo (default):
+Deterministic scenario replay (default, offline):
 - safest for Arsenal booth
 - stable evaluator output
 - no dependency on live packet generation
-- presentation technique for booth stability only
+- reproducible artifacts for verification/rehearsal/freeze tooling
 - does not replace the normal live Tactical first-pass path
 - freeze the booth primary scenario to `mixed_correlation_demo` unless a clear demo blocker appears
 
-Live-assisted demo:
-- includes Suricata EVE live path
-- must preserve immediate fallback to replay-only mode
+Live dashboard demo (`bin/azazel-edge-dummy-eve`):
+- fabricates Suricata EVE alerts into `eve.json`; the real pipeline (Rust
+  core -> AI agent -> control daemon) processes them and the real
+  operational dashboard displays the result
+- no separate demo screen — what is shown is the same dashboard used in
+  production, which removes any "is the demo faked?" doubt
+- must preserve immediate fallback to deterministic scenario replay if the
+  live path is unstable
 - remains subordinate to the same deterministic evaluator and Action Arbiter path
 
 Boundary statement:
@@ -59,8 +66,8 @@ systemctl status azazel-edge-web --no-pager
 systemctl status azazel-edge-control-daemon --no-pager
 systemctl status azazel-edge-core --no-pager
 systemctl status azazel-edge-opencanary --no-pager
-bin/azazel-edge-demo list
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay list
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 ```
 
 Recommended API sanity checks:
@@ -73,7 +80,10 @@ curl -fsS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/aggregator/nod
 
 ## 6. Failure fallback
 
-- Suricata failure: switch to replay-only path immediately.
+- Suricata failure: switch to deterministic scenario replay immediately.
+- dummy-eve/live dashboard demo failure: fall back to
+  `bin/azazel-edge-scenario-replay run mixed_correlation_demo` and the CLI
+  audit review path.
 - OpenCanary failure: continue replay demo without redirect execution path.
 - Mattermost failure: continue local Web UI + audit walkthrough.
 - Ollama failure: continue deterministic core story (AI assist is optional).
@@ -183,7 +193,7 @@ After running a scenario, show the audit review path to demonstrate end-to-end
 traceability:
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 bin/azazel-edge-audit-review --compact
 ```
 

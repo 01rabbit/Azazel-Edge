@@ -1,10 +1,22 @@
 # Azazel-Edge Demo Guide
 
-Last updated: 2026-03-12
+Last updated: 2026-07-02
 
 ## Purpose
 
-Azazel-Edge includes a deterministic demo pack for showing how the system behaves without polluting live runtime state.
+Azazel-Edge has two distinct ways to show how the system behaves, and they are
+kept deliberately separate so there is never a "is the demo faked?" question:
+
+1. **Deterministic offline scenario replay** — fabricates evidence in-process
+   and runs it through the real decision pipeline (NOC/SOC evaluation,
+   Action Arbiter, Decision Explanation, hash-chained audit log) without
+   touching live runtime state. Used for reproducible verification,
+   rehearsal, and Black Hat Arsenal (BHUSA) freeze artifacts.
+2. **Live dashboard demo with fabricated EVE traffic** — `bin/azazel-edge-dummy-eve`
+   writes fabricated Suricata EVE alerts into `eve.json`. The real pipeline
+   (Rust core -> AI agent -> control daemon) ingests and processes them like
+   any other event, and the result is shown on the **real, operational
+   dashboard** — there is no separate demo screen or overlay.
 
 In live operation, Azazel-Edge uses a layered path:
 
@@ -12,23 +24,19 @@ In live operation, Azazel-Edge uses a layered path:
 2. Evidence Plane and deterministic evaluators add second-pass context
 3. AI remains supplemental for explanation and operator help
 
-A demo replay shows this path:
+Both demo paths exercise this same pipeline; neither path adds a parallel
+"presentation only" surface. Fabricated dummy-eve traffic also doubles as
+system test input, since it flows through the identical processing path as
+real traffic.
 
-1. Evidence is normalized into a shared model
-2. NOC and SOC are evaluated separately
-3. Action Arbiter selects an explicit action
-4. Decision Explanation records why that action won
-5. Dashboard, `ops-comm`, TUI, and EPD can reflect the replay through a temporary demo overlay
-
-The demo pack is a replay path. It is not live telemetry injection.
-It also does not replace the live Tactical first-pass path. The replay exists to show the deterministic NOC/SOC/arbiter pipeline in a controlled way.
-
-## What the Demo Proves
+## What the Demos Prove
 
 - Azazel-Edge does not rely on AI for the primary decision path
 - NOC and SOC are evaluated separately before action selection
 - Actions remain explicit, reviewable, and auditable
-- Demo results can be shown without contaminating live control state
+- Scenario replay results can be shown without contaminating live runtime state
+- Live dummy-eve demos are processed by the same pipeline operators see in
+  production — nothing is faked in a separate view
 
 ## Available Scenarios
 
@@ -57,62 +65,64 @@ scenario unless a clear demo blocker requires replacement.
 
 Confirm the following before starting:
 
-- `bin/azazel-edge-demo list` succeeds
-- `bin/azazel-edge-demo run mixed_correlation_demo` succeeds
+- `bin/azazel-edge-scenario-replay list` succeeds
+- `bin/azazel-edge-scenario-replay run mixed_correlation_demo` succeeds
 - Web UI returns `status=ok` from `/health`
-- Dashboard can load `/api/demo/scenarios`
+- Dashboard loads at `http://127.0.0.1:8084/` (or the configured HTTPS front)
 - `ops-comm` is reachable if you want to demonstrate M.I.O. guidance
 
 ## Quick Start
 
-### CLI
+### Deterministic Audit Replay (offline, reproducible)
 
 List scenarios:
 
 ```bash
-bin/azazel-edge-demo list
+bin/azazel-edge-scenario-replay list
 ```
 
 Run a scenario:
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 ```
 
 BHUSA 2026 compact booth path:
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 bin/azazel-edge-audit-review --compact
 ```
 
-### Web UI
+This path writes reproducible artifacts to
+`/tmp/azazel-edge-demo-explanations.jsonl` and
+`/tmp/azazel-edge-demo-triage-audit.jsonl`, and uses trace ids like
+`demo:mixed_correlation_demo`. It does not touch the live dashboard.
 
-Open:
+### Live Dashboard Demo (fabricated EVE traffic, real pipeline)
 
-- Dashboard: `https://172.16.0.254/`
-- Ops workspace: `https://172.16.0.254/ops-comm`
+Staged attack flow, visible on the real dashboard:
 
-In the dashboard:
+```bash
+bin/azazel-edge-dummy-eve flow
+```
 
-1. Open `Scenario Replay`
-2. Select a scenario
-3. Click `Run Demo`
-4. Review the overlay result cards
-5. Click `Clear Demo Overlay` when finished
+Background benign noise with periodic attack bursts (good for a running booth):
 
-## What Changes During a Demo
+```bash
+bin/azazel-edge-dummy-eve stream --attack-every 60
+```
 
-When a demo runs, the system applies a temporary overlay to presentation surfaces.
+Open the real, operational dashboard to watch results arrive:
 
-Affected surfaces:
+- Dashboard: `http://127.0.0.1:8084/` (or `https://172.16.0.254/` if HTTPS
+  front-end is configured)
+- Ops workspace: `/ops-comm`
 
-- Dashboard
-- `ops-comm`
-- TUI
-- EPD
-
-The demo overlay changes presentation only. It does not replace the live control plane as the source of truth.
+There is no separate demo page or overlay — `dummy-eve` writes into
+`eve.json`, the Rust core parses it, the AI agent and control daemon process
+it exactly as they would real Suricata alerts, and the outcome appears on the
+same dashboard operators use in production.
 
 ## What to Show on Screen
 
@@ -135,24 +145,24 @@ Avoid starting with raw JSON. Use the summary cards first.
 ### Short Version
 
 ```text
-Azazel-Edge separates NOC and SOC evaluation, chooses an explicit action, records why it was selected, and can replay that path without contaminating live runtime state.
+Azazel-Edge separates NOC and SOC evaluation, chooses an explicit action, records why it was selected, and can replay that path deterministically for reproducibility -- or show it live against fabricated traffic on the same dashboard operators use day to day.
 ```
 
 ### If Asked About AI
 
 ```text
-AI is assistive here. In live operation, Tactical Engine still handles the first-minute pass. The demo replays the deterministic second-pass evaluation path.
+AI is assistive here. In live operation, Tactical Engine still handles the first-minute pass. The scenario replay exercises the deterministic second-pass evaluation path; the live dummy-eve demo exercises the full pipeline end to end.
 ```
 
 ### If Asked Whether This Is Live
 
 ```text
-No. This is a deterministic replay path designed for reproducibility. The live operator surfaces exist separately.
+The scenario replay is a deterministic, offline path designed for reproducibility -- it does not touch the live dashboard. The dummy-eve demo is live: it fabricates Suricata-format alerts, but the entire downstream pipeline and dashboard are the real production system.
 ```
 
 ## M.I.O. Demonstration
 
-After running a scenario, continue in one of these ways:
+After running a scenario or a dummy-eve flow, continue in one of these ways:
 
 ### Dashboard
 
@@ -172,72 +182,42 @@ After running a scenario, continue in one of these ways:
 Example:
 
 ```text
-/mio Explain why this demo selected throttle and what should be checked next.
-```
-
-## Web API
-
-List scenarios:
-
-```bash
-curl -sS -H "X-AZAZEL-TOKEN: <token>" \
-  http://127.0.0.1:8084/api/demo/scenarios | jq
-```
-
-Run a scenario:
-
-```bash
-curl -sS -X POST -H "X-AZAZEL-TOKEN: <token>" \
-  http://127.0.0.1:8084/api/demo/run/mixed_correlation_demo | jq
-```
-
-Clear the overlay:
-
-```bash
-curl -sS -X POST -H "X-AZAZEL-TOKEN: <token>" \
-  http://127.0.0.1:8084/api/demo/overlay/clear | jq
-```
-
-Read the latest overlay state:
-
-```bash
-curl -sS -H "X-AZAZEL-TOKEN: <token>" \
-  http://127.0.0.1:8084/api/demo/overlay | jq
+/mio Explain why this scenario selected throttle and what should be checked next.
 ```
 
 ## Troubleshooting
 
-### `Scenario Replay` is empty
+### Scenario replay fails on the CLI
+
+Re-run with `--format text` for a compact human-readable summary:
+
+```bash
+bin/azazel-edge-scenario-replay run mixed_correlation_demo --format text
+```
+
+Check that the audit and explanation artifact paths are writable
+(`/tmp/azazel-edge-demo-explanations.jsonl`,
+`/tmp/azazel-edge-demo-triage-audit.jsonl`, or their
+`AZAZEL_DEMO_EXPLANATIONS_PATH` / `AZAZEL_DEMO_AUDIT_PATH` overrides).
+
+### dummy-eve events do not appear on the dashboard
 
 Check:
 
-- `/api/demo/scenarios`
-- whether the Web UI was started from the repository root
+- `bin/azazel-edge-dummy-eve` is writing to the same `eve.json` path the Rust
+  core is configured to read (`--eve-path`, or `$AZAZEL_EVE_PATH`)
+- `azazel-edge-core`, `azazel-edge-ai-agent`, and `azazel-edge-control-daemon`
+  are all running
+- the Web UI was started from the repository root and reaches `/health`
 
-### Scenario replay fails in Web UI
-
-Run the same scenario in CLI:
-
-```bash
-bin/azazel-edge-demo run mixed_correlation_demo
-```
-
-If CLI works, the replay path is healthy and the problem is in the web layer.
-
-### Demo overlay does not clear
-
-Use:
+### You need to reset between demo runs
 
 ```bash
-curl -sS -X POST -H "X-AZAZEL-TOKEN: <token>" \
-  http://127.0.0.1:8084/api/demo/overlay/clear | jq
+bin/azazel-edge-scenario-replay clear
 ```
 
-Then refresh the dashboard.
-
-### You need to fall back to CLI-only demo
-
-That is valid. The replay runner uses the same deterministic scenario pack.
+This removes the deterministic replay artifacts only; it has no effect on
+the live dashboard or dummy-eve output.
 
 ## Audit Review (read-only)
 

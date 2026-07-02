@@ -56,7 +56,9 @@ Systemd units consume this file:
    - `systemctl status azazel-edge-control-daemon azazel-edge-ai-agent azazel-edge-core`
 4. Confirm end-to-end paths:
    - Web API control path works (`/api/action`, `/api/mode`)
-   - Demo/event forwarding path works (`/api/demo/*`, core -> ai-bridge forwarding)
+   - Event forwarding path works (core -> ai-bridge forwarding); this can be
+     exercised live with `bin/azazel-edge-dummy-eve flow` or offline with
+     `bin/azazel-edge-scenario-replay run mixed_correlation_demo`
 
 ## Compatibility Note
 

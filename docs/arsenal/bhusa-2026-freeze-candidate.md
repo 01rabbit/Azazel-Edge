@@ -79,13 +79,13 @@ bin/azazel-edge-bhusa-freeze-record --force
 bin/azazel-edge-bhusa-archive --force
 bin/azazel-edge-bhusa-freeze-check
 bin/azazel-edge-bhusa-verify
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 bin/azazel-edge-audit-review \
   --explanations-path /tmp/azazel-edge-demo-explanations.jsonl \
   --audit-path /tmp/azazel-edge-demo-triage-audit.jsonl \
   --trace-id demo:mixed_correlation_demo \
   --compact
-bin/azazel-edge-demo clear
+bin/azazel-edge-scenario-replay clear
 ```
 
 Also confirm:

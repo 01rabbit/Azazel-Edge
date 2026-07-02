@@ -51,7 +51,7 @@ Azazel-Edge is a single core platform presented through concept profiles; this s
 - **P0 audit logger** — hash-chained, tamper-evident JSONL.
 - **AI governance layer** — local Ollama only, advisory output only, every call audited; AI cannot decide actions.
 - **OpenCanary redirect decision path** — evaluates arbiter plus SOC thresholds and records redirect decisions to state JSON, JSONL, and the audit chain.
-- **Review surfaces** — Web API endpoints (`/api/triage/audit`, `/api/demo/explanation/latest`, dashboard APIs), a unified CLI, a TUI, and the read-only `bin/azazel-edge-audit-review` command (decision → explanation → audit-chain walk, no state modification).
+- **Review surfaces** — Web API endpoints (`/api/triage/audit`, dashboard APIs), a unified CLI, a TUI, and the read-only `bin/azazel-edge-audit-review` command (decision → explanation → audit-chain walk, no state modification).
 
 ## Why This Fits Black Hat Europe Arsenal
 
@@ -74,11 +74,12 @@ European SOC/NOC teams increasingly operate under privacy and accountability exp
 
 The demo is staged and replay-based, designed for a booth and for offline operation on Raspberry Pi-class hardware.
 
-1. **Deterministic path (primary).** Run a replay scenario in `deterministic_replay` mode (`ai_used = false`). Show evidence normalization, separate NOC/SOC scoring, and the Action Arbiter selecting one bounded action.
-2. **Explanation review (live).** Open the latest explanation record via CLI or the Web UI (`/api/demo/explanation/latest`) and walk the fields: `selected_action`, `rejected_actions` / `why_not_others`, `release_condition`, `policy_profile`, `config_hash`, `trace_id`, `operator_wording`.
-3. **Audit chain review (live).** Inspect the hash-chained audit log (`/api/triage/audit`) and show how a modified record breaks the chain.
+1. **Deterministic path (primary).** Run `bin/azazel-edge-scenario-replay run <scenario_id>` in `deterministic_replay` mode (`ai_used = false`). Show evidence normalization, separate NOC/SOC scoring, and the Action Arbiter selecting one bounded action.
+2. **Explanation review (live).** Open the latest explanation record via `bin/azazel-edge-audit-review` and walk the fields: `selected_action`, `rejected_actions` / `why_not_others`, `release_condition`, `policy_profile`, `config_hash`, `trace_id`, `operator_wording`.
+3. **Audit chain review (live).** Inspect the hash-chained audit log (`/api/triage/audit` or `bin/azazel-edge-audit-review`) and show how a modified record breaks the chain.
 4. **Policy dry-run.** Replay the same events against a candidate SOC policy profile and compare reported policy hash and would-be decisions.
 5. **Optional local AI assist (shown separately).** Demonstrate that local AI only summarizes and hints, and that its invocation is audited and cannot change the decision.
+6. **Optional live dashboard demo.** `bin/azazel-edge-dummy-eve` fabricates Suricata EVE alerts that flow through the real pipeline (Rust core -> AI agent -> control daemon) onto the real operational dashboard, if a live-feeling demo is preferred over the offline replay path.
 
 Demo scenarios: the deterministic showcase uses the **`auditable_edge_socnoc`** scenario (available in the demo pack). It drives a high-confidence SOC bounded reversible-control decision (action=throttle) with non-empty rejected alternatives, a release condition, and `config_hash`/`policy_profile` in the local decision record, reviewable read-only via `bin/azazel-edge-audit-review`.
 
@@ -96,11 +97,11 @@ If anything fails, the deterministic replay path is the final fallback, consiste
 | Three SOC policy profiles (balanced/conservative/demo) | Implemented | `config/soc_policy_profiles/`; selected via `AZAZEL_SOC_POLICY_PATH`. |
 | Config drift auditing (per-file SHA-256 baselines) | Implemented | `py/azazel_edge/config_drift.py`. |
 | SOC policy dry-run CLI | Implemented | `bin/azazel-soc-policy-dry-run`; reports policy hash and would-be decisions. |
-| Deterministic replay demo runner (11 scenarios) | Implemented | `bin/azazel-edge-demo`, `py/azazel_edge/demo/scenarios.py`; tagged `deterministic_replay`, `ai_used = false`. |
+| Deterministic replay demo runner (11 scenarios) | Implemented | `bin/azazel-edge-scenario-replay`, `py/azazel_edge/scenario_replay.py`; tagged `deterministic_replay`, `ai_used = false`. |
 | OpenCanary redirect decision path (decision + audit) | Implemented | `py/azazel_edge/opencanary_redirect.py`, `config/redirect_policy.yaml`; records decisions to state JSON, JSONL, audit chain. |
 | Local AI assist with enforced governance | Implemented | `py/azazel_edge_ai/agent.py` (local Ollama only), `py/azazel_edge/ai_governance.py`; AI cannot select/modify actions. |
 | Local-first raw-log handling (default) | Implemented | Default Vector config writes only to local files; no raw-log egress path. |
-| Review surfaces (Web API, CLI, TUI) | Implemented | `/api/triage/audit`, `/api/demo/explanation/latest`, dashboard APIs. |
+| Review surfaces (Web API, CLI, TUI) | Implemented | `/api/triage/audit`, dashboard APIs, `bin/azazel-edge-audit-review`. |
 | Read-only audit review command | Implemented | `bin/azazel-edge-audit-review`; read-only, presents the decision → explanation → audit-chain walk without modifying any state. |
 | Europe demo scenario `auditable_edge_socnoc` | Implemented | Available in the demo pack; drives action=throttle with non-empty rejected alternatives, release condition, and `config_hash`/`policy_profile` in the local decision record. |
 

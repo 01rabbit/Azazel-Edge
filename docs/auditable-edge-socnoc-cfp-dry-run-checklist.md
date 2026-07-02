@@ -17,7 +17,7 @@ Steps adapted from the "Demo Readiness Checklist" in [`docs/archive/roadmaps/aud
 
 ### Step 1 — Deterministic Replay: `auditable_edge_socnoc` scenario
 
-- [ ] Run `bin/azazel-edge-demo run auditable_edge_socnoc` offline on target hardware.
+- [ ] Run `bin/azazel-edge-scenario-replay run auditable_edge_socnoc` offline on target hardware.
 - [ ] Confirm output reports `execution.mode = deterministic_replay` and `ai_used = false`.
 - [ ] Confirm the scenario drives a high-confidence SOC bounded reversible-control decision (`action=throttle`).
 - [ ] Confirm `rejected_alternatives` list is non-empty (at minimum one alternative recorded with a reason).
@@ -28,7 +28,7 @@ Steps adapted from the "Demo Readiness Checklist" in [`docs/archive/roadmaps/aud
 
 ### Step 2 — v2 Explanation Field Walk-Through
 
-- [ ] Open the latest explanation record (via `bin/azazel-edge-audit-review` or `/api/demo/explanation/latest`).
+- [ ] Open the latest explanation record (via `bin/azazel-edge-audit-review`).
 - [ ] Walk through each auditable field with the audience:
   - `selected_action`
   - `rejected_actions` / `why_not_others` (show that alternatives were considered and recorded)
@@ -78,7 +78,7 @@ Steps adapted from the "Demo Readiness Checklist" in [`docs/archive/roadmaps/aud
 
 - [ ] Simulate a failure condition (e.g., telemetry feed unavailable, AI assist unavailable).
 - [ ] Confirm the deterministic replay path remains functional with no live telemetry and no live enforcement.
-- [ ] Confirm `bin/azazel-edge-demo run auditable_edge_socnoc` completes successfully in fallback (replay-only) mode.
+- [ ] Confirm `bin/azazel-edge-scenario-replay run auditable_edge_socnoc` completes successfully in fallback (replay-only) mode.
 - [ ] Confirm no live network redirection or enforcement is triggered in fallback mode.
 
 **Target time for fallback drill: ~3 minutes.**

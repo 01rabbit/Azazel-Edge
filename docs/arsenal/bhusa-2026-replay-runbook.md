@@ -22,27 +22,28 @@ demo blocker is found.
 List scenarios:
 
 ```bash
-bin/azazel-edge-demo list
+bin/azazel-edge-scenario-replay list
 ```
 
 Run the primary booth scenario:
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 ```
 
 Run and save a compact state snapshot for later inspection:
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo \
+bin/azazel-edge-scenario-replay run mixed_correlation_demo \
   --state-out /tmp/bhusa-2026-replay-state.json
 ```
 
-If the Web UI demo page is part of the presentation, write the overlay and keep
-the same scenario visible on replay surfaces:
+If a live dashboard demo is part of the presentation, use `dummy-eve` to feed
+fabricated traffic through the real pipeline instead — it shows on the same
+dashboard operators use, not a separate overlay:
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo --apply-overlay
+bin/azazel-edge-dummy-eve flow
 ```
 
 Show read-only audit review immediately after replay:
@@ -55,10 +56,10 @@ bin/azazel-edge-audit-review \
   --compact
 ```
 
-Clear the overlay when moving to a clean next visitor state:
+Clear the replay artifacts when moving to a clean next visitor state:
 
 ```bash
-bin/azazel-edge-demo clear
+bin/azazel-edge-scenario-replay clear
 ```
 
 ## What must be visible in the replay output
@@ -83,7 +84,7 @@ changes:
 ```bash
 for i in 1 2 3 4 5; do
   echo "RUN:$i"
-  bin/azazel-edge-demo run mixed_correlation_demo --format json >/tmp/bhusa-run-$i.json
+  bin/azazel-edge-scenario-replay run mixed_correlation_demo --format json >/tmp/bhusa-run-$i.json
 done
 ```
 
@@ -112,7 +113,7 @@ Allowed to vary:
 CLI-only reset:
 
 ```bash
-bin/azazel-edge-demo clear
+bin/azazel-edge-scenario-replay clear
 rm -f /tmp/bhusa-2026-replay-state.json
 ```
 
@@ -124,8 +125,7 @@ rm -f /tmp/azazel-edge-demo-explanations.jsonl
 ```
 
 This reset is acceptable between rehearsal blocks. It should not be required
-between ordinary booth visitors unless the presenter explicitly wants to clear
-overlay state.
+between ordinary booth visitors.
 
 ## Fallback rule
 
@@ -148,7 +148,7 @@ This repository can verify software determinism and command behavior in CI, but
 Raspberry Pi-class booth verification must still be completed on the target
 device before Vegas:
 
-- `bin/azazel-edge-demo list`
-- `bin/azazel-edge-demo run mixed_correlation_demo`
+- `bin/azazel-edge-scenario-replay list`
+- `bin/azazel-edge-scenario-replay run mixed_correlation_demo`
 - `bin/azazel-edge-audit-review --compact`
 - repeatability check across 5 consecutive runs

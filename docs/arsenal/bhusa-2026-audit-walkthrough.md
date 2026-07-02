@@ -19,7 +19,7 @@ control-plane state.
 ### Step 1: run the replay
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 ```
 
 What to say:
@@ -118,7 +118,7 @@ Recovery commands:
 
 ```bash
 rm -f /tmp/azazel-edge-demo-explanations.jsonl /tmp/azazel-edge-demo-triage-audit.jsonl
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 bin/azazel-edge-audit-review \
   --explanations-path /tmp/azazel-edge-demo-explanations.jsonl \
   --audit-path /tmp/azazel-edge-demo-triage-audit.jsonl \
