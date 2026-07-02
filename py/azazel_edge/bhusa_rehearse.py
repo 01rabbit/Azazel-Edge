@@ -120,7 +120,7 @@ def _record_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
     parser.add_argument(
         "--clear-after",
         action="store_true",
-        help="Run azazel-edge-demo clear after verification and record the result.",
+        help="Run azazel-edge-scenario-replay clear after verification and record the result.",
     )
     parser.add_argument("--json", dest="json_output", action="store_true", help="Emit machine-readable JSON")
 
@@ -179,7 +179,7 @@ def _record_run(args: argparse.Namespace) -> Dict[str, Any]:
 
     clear_payload: Dict[str, Any] = {"requested": bool(args.clear_after), "ok": None}
     if args.clear_after:
-        clear_cmd = [str(BIN_DIR / "azazel-edge-demo"), "clear", "--format", "json"]
+        clear_cmd = [str(BIN_DIR / "azazel-edge-scenario-replay"), "clear", "--format", "json"]
         clear_started = time.monotonic()
         clear_result = _run_command(clear_cmd)
         clear_duration_sec = round(time.monotonic() - clear_started, 3)
@@ -191,7 +191,7 @@ def _record_run(args: argparse.Namespace) -> Dict[str, Any]:
             clear_payload["ok"] = False
             clear_payload["detail"] = stderr
         else:
-            clear_json = _load_json(clear_result.stdout, context="azazel-edge-demo clear")
+            clear_json = _load_json(clear_result.stdout, context="azazel-edge-scenario-replay clear")
             clear_payload["ok"] = bool(clear_json.get("ok"))
             clear_payload["detail"] = clear_json
             if not clear_payload["ok"]:

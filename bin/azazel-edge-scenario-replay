@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Deterministic offline scenario replay for verification and rehearsal.
+
+Evaluates a fabricated scenario in-process through the real decision pipeline
+and writes reproducible explanation/audit artifacts. Backs the Black Hat
+Arsenal (bhusa_*) verify/rehearse/freeze tooling. Not a UI surface.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any, Dict, List
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+VENV_PYTHON = ROOT_DIR / ".venv" / "bin" / "python3"
+
+if os.environ.get("AZAZEL_EDGE_SCENARIO_BOOTSTRAPPED") != "1" and VENV_PYTHON.exists():
+    current = Path(sys.executable).resolve()
+    target = VENV_PYTHON.resolve()
+    if current != target:
+        env = os.environ.copy()
+        env["AZAZEL_EDGE_SCENARIO_BOOTSTRAPPED"] = "1"
+        os.execvpe(str(target), [str(target), str(Path(__file__).resolve()), *sys.argv[1:]], env)
+
+PY_ROOT = ROOT_DIR / "py"
+if str(PY_ROOT) not in sys.path:
+    sys.path.insert(0, str(PY_ROOT))
+os.environ["PYTHONPATH"] = str(PY_ROOT) + (f":{os.environ['PYTHONPATH']}" if os.environ.get("PYTHONPATH") else "")
+
+from azazel_edge.scenario_replay import ScenarioReplayRunner, scenario_summary
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="azazel-edge-scenario-replay",
+        description="Run deterministic Azazel-Edge scenario replays (offline, AI-free).",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    list_parser = sub.add_parser("list", help="List available scenarios")
+    list_parser.add_argument("--format", choices=("json", "text"), default="json")
+
+    run_parser = sub.add_parser("run", help="Run a single scenario replay")
+    run_parser.add_argument("scenario_id")
+    run_parser.add_argument("--format", choices=("json", "text"), default="json")
+    run_parser.add_argument("--state-out", help="Write a compact state JSON to this path")
+
+    clear_parser = sub.add_parser("clear", help="Remove replay explanation/audit artifacts")
+    clear_parser.add_argument("--format", choices=("json", "text"), default="json")
+    return parser
+
+
+def _write_state_out(path_value: str | None, payload: Dict[str, Any]) -> None:
+    if not path_value:
+        return
+    path = Path(path_value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _print_run_text(payload: Dict[str, Any]) -> None:
+    summary = scenario_summary(payload)
+    print(f"SCENARIO: {summary['scenario_id']}")
+    print(f"TITLE: {summary['title']}")
+    print(f"ATTACK: {summary['attack_label'] or '-'}")
+    print(f"ACTION: {summary['action'] or '-'}")
+    print(f"CONTROL: {summary['control_mode'] or '-'}")
+    print(f"SUMMARY: {summary['summary'] or '-'}")
+    print(f"TALK: {summary['talk_track'] or summary['operator_wording'] or '-'}")
+
+
+def main(argv: List[str]) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv[1:])
+    runner = ScenarioReplayRunner()
+
+    if args.command == "list":
+        payload = {"ok": True, "items": runner.pack.list_items()}
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            for item in payload["items"]:
+                print(f"{item.get('scenario_id')} | title={item.get('title')} | attack={item.get('attack_label') or '-'}")
+        return 0
+
+    if args.command == "run":
+        try:
+            result = runner.run(args.scenario_id)
+        except KeyError as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+            return 1
+        payload = {"ok": True, "result": result}
+        _write_state_out(args.state_out, scenario_summary(payload))
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            _print_run_text(payload)
+        return 0
+
+    if args.command == "clear":
+        removed: List[str] = []
+        for path in (runner.explanations_path, runner.audit_path):
+            try:
+                p = Path(path)
+                if p.exists():
+                    p.unlink()
+                    removed.append(str(p))
+            except Exception:
+                continue
+        payload = {"ok": True, "cleared": True, "removed": removed}
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print("CLEARED")
+        return 0
+
+    parser.print_usage(sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

@@ -168,7 +168,7 @@ def _verify_demo_run(
     explanations_path: str,
     audit_path: str,
 ) -> tuple[Dict[str, Any], Dict[str, Any], List[str], str]:
-    demo_cmd = [str(BIN_DIR / "azazel-edge-demo"), "run", scenario, "--format", "json"]
+    demo_cmd = [str(BIN_DIR / "azazel-edge-scenario-replay"), "run", scenario, "--format", "json"]
     result = _run_command(
         demo_cmd,
         extra_env={
@@ -181,7 +181,7 @@ def _verify_demo_run(
         stderr = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
         return {}, {}, [f"demo run failed: {stderr}"], " ".join(demo_cmd)
 
-    payload = _load_json(result.stdout, context="azazel-edge-demo")
+    payload = _load_json(result.stdout, context="azazel-edge-scenario-replay")
     demo_result = payload.get("result")
     if not isinstance(demo_result, dict):
         return payload, {}, ["demo run returned no result object"], " ".join(demo_cmd)

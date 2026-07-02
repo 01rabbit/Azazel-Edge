@@ -77,7 +77,7 @@ class BhusaArchiveV1Tests(unittest.TestCase):
             self.assertTrue((archive_dir / "readiness-report" / "status.json").exists())
             commands = (archive_dir / "ARCHIVED_COMMANDS.md").read_text(encoding="utf-8")
             self.assertIn("Expected compact output snippet", commands)
-            self.assertIn("azazel-edge-demo run mixed_correlation_demo", commands)
+            self.assertIn("azazel-edge-scenario-replay run mixed_correlation_demo", commands)
             self.assertTrue(payload["status_json_path"].endswith("status.json"))
 
 
