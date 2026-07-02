@@ -20,7 +20,6 @@ azazel_edge_web/static/app.js
 azazel_edge_web/static/ops_comm.js
 azazel_edge_web/static/ops_comm.css
 azazel_edge_web/static/style.css
-azazel_edge_web/templates/demo.html
 azazel_edge_web/templates/index.html
 azazel_edge_web/templates/ops_comm.html
 py/azazel_edge/__init__.py
@@ -28,7 +27,8 @@ py/azazel_edge/control_plane.py
 py/azazel_edge/path_schema.py
 py/azazel_edge/ai_governance.py
 py/azazel_edge/config_drift.py
-py/azazel_edge/demo_overlay.py
+py/azazel_edge/scenario_replay.py
+py/azazel_edge/dummy_eve.py
 py/azazel_edge/opencanary_redirect.py
 py/azazel_edge/runbooks.py
 py/azazel_edge/runbook_review.py
@@ -55,7 +55,9 @@ security/opencanary/opencanary.conf
 security/suricata/azazel-lite.rules
 rust/azazel-edge-core/Cargo.toml
 rust/azazel-edge-core/src/main.rs
-bin/azazel-edge-demo
+bin/azazel-edge-scenario-replay
+bin/azazel-edge-dummy-eve
+bin/azazel-edge-audit-review
 bin/azazel-edge-web
 bin/azazel-edge-ai-agent
 bin/azazel-edge-control-daemon
@@ -68,7 +70,6 @@ mapfile -t DIRS <<'EOF'
 py/azazel_edge/arbiter
 py/azazel_edge/audit
 py/azazel_edge/correlation
-py/azazel_edge/demo
 py/azazel_edge/evaluators
 py/azazel_edge/evidence_plane
 py/azazel_edge/explanations

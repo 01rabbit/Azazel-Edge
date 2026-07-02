@@ -43,7 +43,7 @@ from azazel_edge.path_schema import (
     first_minute_config_candidates,
     migrate_schema,
     portal_env_candidates,
-    snapshot_path_candidates,
+    runtime_snapshot_path_candidates,
     status as path_schema_status,
     warn_if_legacy_path,
 )
@@ -742,11 +742,7 @@ def load_control_flags() -> dict:
 
 
 def _snapshot_candidates() -> list[Path]:
-    candidates = snapshot_path_candidates(home=Path.home())
-    runtime_only = [p for p in candidates if str(p).startswith("/run/")]
-    if runtime_only:
-        return runtime_only
-    return candidates[:2]
+    return runtime_snapshot_path_candidates(home=Path.home())
 
 
 def _parse_json_dict_lenient(text: str) -> dict[str, Any]:

@@ -2,7 +2,7 @@
 
 This directory groups deterministic replay scenarios by operational concept profile.
 
-Runtime scenario definitions remain in `py/azazel_edge/demo/scenarios.py`.
+Runtime scenario definitions remain in `py/azazel_edge/scenario_replay.py`.
 These files provide concept-oriented grouping and sequencing metadata.
 
 ## Packs
@@ -14,5 +14,4 @@ These files provide concept-oriented grouping and sequencing metadata.
 
 ## Compatibility
 No scenario IDs are renamed here. Existing IDs remain valid for:
-- `bin/azazel-edge-demo run <scenario_id>`
-- `/api/demo/run/<scenario_id>`
+- `bin/azazel-edge-scenario-replay run <scenario_id>`

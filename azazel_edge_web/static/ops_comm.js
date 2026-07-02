@@ -6,7 +6,6 @@ const I18N = window.AZAZEL_I18N || {};
 const STATUS_INTERVAL_MS = 8000;
 let lastQuestion = '';
 let currentAudience = 'operator';
-let demoScenarios = [];
 let triageIntentItems = [];
 let triageSession = null;
 
@@ -192,26 +191,7 @@ function resetAiPanels() {
     setText('handoffResult', `${tr('ops.handoff', 'Handoff')}: -`);
 }
 
-function formatDemoSummary(result) {
-    const noc = result?.noc?.summary?.status || '-';
-    const soc = result?.soc?.summary?.status || '-';
-    const action = result?.arbiter?.action || '-';
-    const reason = result?.arbiter?.reason || '-';
-    return `${tr('ops.scenario', 'Scenario')}=${result?.scenario_id || '-'} | NOC=${noc} | SOC=${soc} | action=${action} | reason=${reason}`;
-}
 
-function buildDemoQuestion(result) {
-    const scenarioId = result?.scenario_id || 'demo';
-    const noc = result?.noc?.summary?.status || '-';
-    const soc = result?.soc?.summary?.status || '-';
-    const action = result?.arbiter?.action || '-';
-    const reason = result?.arbiter?.reason || '-';
-    return tr(
-        'ops.demo_question_template',
-        'Explain why demo {scenario} resulted in NOC={noc} SOC={soc} action={action} reason={reason}, and list the next checks.',
-        { scenario: scenarioId, noc, soc, action, reason },
-    );
-}
 
 function renderAiPanels(data) {
     const surfaceMessages = data.surface_messages && typeof data.surface_messages === 'object' ? data.surface_messages : {};
@@ -707,100 +687,9 @@ async function loadCapabilities() {
     }
 }
 
-function updateDemoScenarioDescription() {
-    const select = document.getElementById('demoScenarioSelect');
-    const selected = String(select?.value || '').trim();
-    const item = demoScenarios.find((row) => row.scenario_id === selected) || demoScenarios[0];
-    if (!item) {
-        setText('demoScenarioDescription', tr('ops.no_scenario_available', 'No scenario available.'));
-        return;
-    }
-    if (select && !select.value) select.value = item.scenario_id;
-    setText('demoScenarioDescription', `${item.description || '-'} | events=${item.event_count ?? 0}`);
-}
 
-async function loadDemoScenarios() {
-    const select = document.getElementById('demoScenarioSelect');
-    if (!select) return;
-    try {
-        const res = await fetch('/api/demo/scenarios', { headers: authHeaders() });
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
-            setText('demoScenarioDescription', tr('ops.demo_load_failed', 'Failed to load scenarios: {error}', { error: data.error || 'unknown error' }));
-            return;
-        }
-        demoScenarios = Array.isArray(data.items) ? data.items : [];
-        if (!demoScenarios.length) {
-            select.innerHTML = '<option value=\"\">No scenario</option>';
-            setText('demoScenarioDescription', tr('ops.no_scenario_available', 'No scenario available.'));
-            return;
-        }
-        select.innerHTML = demoScenarios
-            .map((item) => `<option value="${escapeHtml(item.scenario_id)}">${escapeHtml(item.scenario_id)}</option>`)
-            .join('');
-        updateDemoScenarioDescription();
-    } catch (e) {
-        setText('demoScenarioDescription', tr('ops.demo_load_failed', 'Failed to load scenarios: {error}', { error: String(e) }));
-    }
-}
 
-async function runDemoScenario() {
-    const select = document.getElementById('demoScenarioSelect');
-    const scenarioId = String(select?.value || '').trim();
-    if (!scenarioId) {
-        setText('demoResult', tr('ops.scenario_required', 'Scenario is required.'));
-        return;
-    }
-    setText('demoResult', tr('ops.demo_running', 'Running demo scenario...'));
-    setText('demoOperatorSummary', tr('ops.demo_preparing', 'Operator wording: preparing replay...'));
-    setText('demoNextChecks', tr('ops.demo_waiting', 'Next checks: waiting for result...'));
-    try {
-        const res = await fetch(`/api/demo/run/${encodeURIComponent(scenarioId)}`, {
-            method: 'POST',
-            headers: authHeaders(),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
-            setText('demoResult', tr('ops.demo_failed', 'Demo failed: {error}', { error: data.error || 'unknown error' }));
-            return;
-        }
-        const result = data.result || {};
-        setText('demoResult', formatDemoSummary(result));
-        setText(
-            'demoOperatorSummary',
-            tr('ops.operator_wording_line', 'Operator wording: {value}', { value: result.explanation?.operator_wording || '-' }),
-        );
-        setText(
-            'demoNextChecks',
-            tr('ops.next_checks_line', 'Next checks: {value}', { value: (result.explanation?.next_checks || []).join(' | ') || '-' }),
-        );
-        const question = buildDemoQuestion(result);
-        const messageInput = document.getElementById('messageInput');
-        if (messageInput) messageInput.value = question;
-        await askAi(question);
-    } catch (e) {
-        setText('demoResult', tr('ops.demo_failed', 'Demo failed: {error}', { error: String(e) }));
-    }
-}
 
-async function clearDemoOverlay() {
-    try {
-        const res = await fetch('/api/demo/overlay/clear', {
-            method: 'POST',
-            headers: authHeaders(),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
-            setText('demoResult', tr('ops.demo_failed', 'Demo failed: {error}', { error: data.error || 'unknown error' }));
-            return;
-        }
-        setText('demoResult', tr('ops.demo_cleared', 'Demo overlay cleared.'));
-        setText('demoOperatorSummary', `${tr('ops.operator_wording', 'Operator wording')}: -`);
-        setText('demoNextChecks', `${tr('ops.next_checks', 'Next checks')}: -`);
-    } catch (e) {
-        setText('demoResult', tr('ops.demo_failed', 'Demo failed: {error}', { error: String(e) }));
-    }
-}
 
 async function loadRunbookCandidates(question) {
     const q = String(question || '').trim();
@@ -1011,9 +900,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const sendBtn = document.getElementById('sendBtn');
     const askAiBtn = document.getElementById('askAiBtn');
     const messageInput = document.getElementById('messageInput');
-    const demoRunBtn = document.getElementById('demoRunBtn');
-    const demoClearBtn = document.getElementById('demoClearBtn');
-    const demoScenarioSelect = document.getElementById('demoScenarioSelect');
     const operatorBtn = document.getElementById('audienceOperatorBtn');
     const beginnerBtn = document.getElementById('audienceBeginnerBtn');
     const triageClassifyBtn = document.getElementById('triageClassifyBtn');
@@ -1033,8 +919,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (sendBtn) sendBtn.addEventListener('click', sendMessage);
     if (askAiBtn) askAiBtn.addEventListener('click', askAi);
-    if (demoRunBtn) demoRunBtn.addEventListener('click', runDemoScenario);
-    if (demoClearBtn) demoClearBtn.addEventListener('click', clearDemoOverlay);
     if (triageClassifyBtn) triageClassifyBtn.addEventListener('click', classifyTriageText);
     if (triageAnswerBtn) triageAnswerBtn.addEventListener('click', async () => {
         const input = document.getElementById('triageTextAnswer');
@@ -1055,7 +939,6 @@ document.addEventListener('DOMContentLoaded', () => {
             await classifyTriageText();
         }
     });
-    if (demoScenarioSelect) demoScenarioSelect.addEventListener('change', updateDemoScenarioDescription);
     if (operatorBtn) operatorBtn.addEventListener('click', () => {
         currentAudience = 'operator';
         syncAudienceUi();
@@ -1101,7 +984,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loadProgress();
     loadTriageAudit();
     loadCapabilities();
-    loadDemoScenarios();
     loadTriageIntents();
     const params = queryParams();
     const audienceParam = String(params.get('audience') || '').trim().toLowerCase();

@@ -214,7 +214,12 @@ fn build_normalized_event(v: &Value) -> Option<NormalizedEvent> {
 
     let alert = v.get("alert").and_then(|x| x.as_object())?;
     let severity = alert.get("severity").and_then(|x| x.as_u64()).unwrap_or(3).min(10) as u8;
-    let sid = alert.get("sid").and_then(|x| x.as_u64()).unwrap_or(0);
+    // Standard Suricata EVE uses "signature_id"; accept legacy/custom "sid" as fallback.
+    let sid = alert
+        .get("signature_id")
+        .or_else(|| alert.get("sid"))
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
     let attack_type = alert.get("signature").and_then(|x| x.as_str()).unwrap_or("unknown").to_string();
     let category = alert.get("category").and_then(|x| x.as_str()).unwrap_or("unknown").to_string();
 

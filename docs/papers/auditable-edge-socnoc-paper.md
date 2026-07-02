@@ -352,8 +352,8 @@ Reviewers can inspect the outputs along the same paths operators would use: the 
 decision-explanation JSONL at
 `/var/log/azazel-edge/decision-explanations.jsonl`, the hash-chained audit log via
 the `verify_chain` mechanism, and the Web/CLI/TUI review surfaces — including the
-`/api/triage/audit` and `/api/demo/explanation/latest` endpoints and the SOC policy
-dry-run CLI.
+`/api/triage/audit` endpoint, the read-only `bin/azazel-edge-audit-review` command,
+and the SOC policy dry-run CLI.
 
 ## 10. Limitations
 

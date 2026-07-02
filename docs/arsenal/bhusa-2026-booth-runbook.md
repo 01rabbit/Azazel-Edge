@@ -14,10 +14,10 @@ Session:
 
 - [ ] Booth machine booted and stable
 - [ ] `bin/azazel-edge-bhusa-verify` succeeds on the booth machine
-- [ ] `bin/azazel-edge-demo list` succeeds
-- [ ] `bin/azazel-edge-demo run mixed_correlation_demo` succeeds
+- [ ] `bin/azazel-edge-scenario-replay list` succeeds
+- [ ] `bin/azazel-edge-scenario-replay run mixed_correlation_demo` succeeds
 - [ ] `bin/azazel-edge-audit-review --explanations-path /tmp/azazel-edge-demo-explanations.jsonl --audit-path /tmp/azazel-edge-demo-triage-audit.jsonl --trace-id demo:mixed_correlation_demo --compact` succeeds
-- [ ] demo page loads if Web UI is part of the plan
+- [ ] real dashboard loads if a live `dummy-eve` demo is part of the plan
 - [ ] one offline copy of BHUSA docs is present on the booth machine
 
 Offline bundle command:
@@ -50,9 +50,9 @@ systemctl status azazel-edge-opencanary --no-pager
 
 Interpretation:
 
-- `azazel-edge-web`: required for demo page
+- `azazel-edge-web`: required for the real operational dashboard
 - `azazel-edge-control-daemon`: required for consistent control-plane story
-- `azazel-edge-core`: required only when showing live-assisted Suricata path
+- `azazel-edge-core`: required only when showing the live `dummy-eve` / Suricata path
 - `azazel-edge-opencanary`: optional unless redirect path is part of the live discussion
 
 ## Deterministic replay checklist
@@ -67,7 +67,7 @@ Primary commands:
 
 ```bash
 bin/azazel-edge-bhusa-verify
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 bin/azazel-edge-audit-review \
   --explanations-path /tmp/azazel-edge-demo-explanations.jsonl \
   --audit-path /tmp/azazel-edge-demo-triage-audit.jsonl \
@@ -84,14 +84,14 @@ bin/azazel-edge-audit-review \
 
 ## Web UI fallback to CLI and JSON logs
 
-If the demo page fails:
+If the live dashboard demo fails:
 
 1. run the replay in CLI
 2. run compact audit review
 3. if needed, print the last full JSON with:
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo --format json
+bin/azazel-edge-scenario-replay run mixed_correlation_demo --format json
 ```
 
 This is an acceptable booth path.
@@ -122,16 +122,16 @@ Do not attempt to repair live-assisted mode during active visitor explanation.
 ## Reset procedure between rehearsal blocks
 
 ```bash
-bin/azazel-edge-demo clear
+bin/azazel-edge-scenario-replay clear
 rm -f /tmp/bhusa-2026-replay-state.json
 rm -f /tmp/azazel-edge-demo-explanations.jsonl /tmp/azazel-edge-demo-triage-audit.jsonl
 ```
 
-Between ordinary visitors, only `bin/azazel-edge-demo clear` is normally needed.
+Between ordinary visitors, only `bin/azazel-edge-scenario-replay clear` is normally needed.
 
 ## Final booth laptop layout
 
-- Left: demo page or terminal
+- Left: real dashboard or terminal
 - Right: talk notes or booth message
 - One terminal reserved for replay and audit review commands
 - One offline text copy of key commands available without browser dependency

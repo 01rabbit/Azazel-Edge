@@ -36,7 +36,6 @@ install -d \
   /opt/azazel-edge/py/azazel_edge/arbiter \
   /opt/azazel-edge/py/azazel_edge/audit \
   /opt/azazel-edge/py/azazel_edge/correlation \
-  /opt/azazel-edge/py/azazel_edge/demo \
   /opt/azazel-edge/py/azazel_edge/evaluators \
   /opt/azazel-edge/py/azazel_edge/evidence_plane \
   /opt/azazel-edge/py/azazel_edge/explanations \
@@ -76,7 +75,8 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge/cli_unified.py" /opt/azazel-edge/py/a
 install -m 0644 "$REPO_ROOT/py/azazel_edge/cli_unified_textual.py" /opt/azazel-edge/py/azazel_edge/cli_unified_textual.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/ai_governance.py" /opt/azazel-edge/py/azazel_edge/ai_governance.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/config_drift.py" /opt/azazel-edge/py/azazel_edge/config_drift.py
-install -m 0644 "$REPO_ROOT/py/azazel_edge/demo_overlay.py" /opt/azazel-edge/py/azazel_edge/demo_overlay.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/scenario_replay.py" /opt/azazel-edge/py/azazel_edge/scenario_replay.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/dummy_eve.py" /opt/azazel-edge/py/azazel_edge/dummy_eve.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/opencanary_redirect.py" /opt/azazel-edge/py/azazel_edge/opencanary_redirect.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/runbooks.py" /opt/azazel-edge/py/azazel_edge/runbooks.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/runbook_review.py" /opt/azazel-edge/py/azazel_edge/runbook_review.py
@@ -92,7 +92,6 @@ for package in \
   arbiter \
   audit \
   correlation \
-  demo \
   evaluators \
   evidence_plane \
   explanations \
@@ -133,7 +132,6 @@ install -m 0644 "$REPO_ROOT/azazel_edge_web/static/app.js" /opt/azazel-edge/azaz
 install -m 0644 "$REPO_ROOT/azazel_edge_web/static/ops_comm.js" /opt/azazel-edge/azazel_edge_web/static/ops_comm.js
 install -m 0644 "$REPO_ROOT/azazel_edge_web/static/ops_comm.css" /opt/azazel-edge/azazel_edge_web/static/ops_comm.css
 install -m 0644 "$REPO_ROOT/azazel_edge_web/static/style.css" /opt/azazel-edge/azazel_edge_web/static/style.css
-install -m 0644 "$REPO_ROOT/azazel_edge_web/templates/demo.html" /opt/azazel-edge/azazel_edge_web/templates/demo.html
 install -m 0644 "$REPO_ROOT/azazel_edge_web/templates/index.html" /opt/azazel-edge/azazel_edge_web/templates/index.html
 install -m 0644 "$REPO_ROOT/azazel_edge_web/templates/ops_comm.html" /opt/azazel-edge/azazel_edge_web/templates/ops_comm.html
 install -m 0644 "$REPO_ROOT/py/azazel_edge_menu.py" /opt/azazel-edge/py/azazel_edge_menu.py
@@ -165,7 +163,9 @@ install -m 0755 "$REPO_ROOT/bin/azazel-edge-control-daemon" /usr/local/bin/azaze
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-ai-agent" /usr/local/bin/azazel-edge-ai-agent
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-runbook-broker" /usr/local/bin/azazel-edge-runbook-broker
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-inject-test-events" /usr/local/bin/azazel-edge-inject-test-events
-install -m 0755 "$REPO_ROOT/bin/azazel-edge-demo" /usr/local/bin/azazel-edge-demo
+install -m 0755 "$REPO_ROOT/bin/azazel-edge-scenario-replay" /usr/local/bin/azazel-edge-scenario-replay
+install -m 0755 "$REPO_ROOT/bin/azazel-edge-dummy-eve" /usr/local/bin/azazel-edge-dummy-eve
+install -m 0755 "$REPO_ROOT/bin/azazel-edge-audit-review" /usr/local/bin/azazel-edge-audit-review
 install -m 0755 "$REPO_ROOT/installer/internal/set_dev_remote_access.sh" /opt/azazel-edge/set_dev_remote_access.sh
 install -m 0755 "$REPO_ROOT/installer/internal/install_ai_runtime.sh" /opt/azazel-edge/install_ai_runtime.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_web_token.sh" /opt/azazel-edge/provision_web_token.sh

@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER = ROOT / "bin" / "azazel-edge-demo"
+RUNNER = ROOT / "bin" / "azazel-edge-scenario-replay"
 AUDIT_REVIEW = ROOT / "bin" / "azazel-edge-audit-review"
 
 

@@ -1,3 +1,15 @@
+"""Deterministic, offline, AI-free scenario replay.
+
+Fabricated scenarios are evaluated in-process through the real decision
+pipeline (NOC/SOC evaluators -> arbiter -> explanation -> audit) so the
+resulting explanation/audit artifacts are byte-reproducible. This backs the
+Black Hat Arsenal (bhusa_*) verification / rehearsal / freeze tooling.
+
+This is NOT a UI surface: there is no operator-facing "demo screen". For
+live demos, fabricated packets are injected into the real pipeline via
+``azazel_edge.dummy_eve`` and shown on the real operational dashboard.
+"""
+
 from __future__ import annotations
 
 import copy
@@ -13,7 +25,7 @@ from azazel_edge.policy import load_soc_policy
 from azazel_edge.triage import select_noc_runbook_support
 
 
-class DemoScenarioPack:
+class ScenarioReplayPack:
     def scenarios(self) -> Dict[str, Dict[str, Any]]:
         return {
             'soc_redirect_demo': {
@@ -413,7 +425,7 @@ class DemoScenarioPack:
         }
 
 
-class DemoScenarioRunner:
+class ScenarioReplayRunner:
     DEMO_EXPLANATIONS_PATH = Path('/tmp/azazel-edge-demo-explanations.jsonl')
     DEMO_AUDIT_PATH = Path('/tmp/azazel-edge-demo-triage-audit.jsonl')
 
@@ -441,7 +453,7 @@ class DemoScenarioRunner:
     def __init__(self):
         explanations_path = Path(os.environ.get('AZAZEL_DEMO_EXPLANATIONS_PATH', str(self.DEMO_EXPLANATIONS_PATH)))
         audit_path = Path(os.environ.get('AZAZEL_DEMO_AUDIT_PATH', str(self.DEMO_AUDIT_PATH)))
-        self.pack = DemoScenarioPack()
+        self.pack = ScenarioReplayPack()
         self.noc = NocEvaluator()
         self.soc = SocEvaluator(
             sigma_rules=[{'id': 'sigma.ssh.bruteforce', 'title': 'SSH brute force support', 'source': 'suricata_eve', 'kind': 'alert', 'attrs': {'target_port': 22}, 'min_severity': 70}],
@@ -533,3 +545,29 @@ class DemoScenarioRunner:
     @classmethod
     def capability_boundary(cls) -> Dict[str, List[str]]:
         return {key: list(value) for key, value in cls.CAPABILITY_BOUNDARY.items()}
+
+
+def scenario_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    meta = result.get("demo") if isinstance(result.get("demo"), dict) else {}
+    presentation = result.get("presentation") if isinstance(result.get("presentation"), dict) else {}
+    arbiter = result.get("arbiter") if isinstance(result.get("arbiter"), dict) else {}
+    explanation = result.get("explanation") if isinstance(result.get("explanation"), dict) else {}
+    return {
+        "ok": bool(payload.get("ok")),
+        "scenario_id": str(result.get("scenario_id") or ""),
+        "title": str(presentation.get("title") or meta.get("title") or result.get("scenario_id") or ""),
+        "summary": str(presentation.get("summary") or meta.get("summary") or result.get("description") or ""),
+        "attack_label": str(meta.get("attack_label") or presentation.get("attack_label") or ""),
+        "action": str(arbiter.get("action") or ""),
+        "control_mode": str(arbiter.get("control_mode") or ""),
+        "operator_wording": str(explanation.get("operator_wording") or ""),
+        "talk_track": str(meta.get("talk_track") or ""),
+        "next_checks": list(explanation.get("next_checks") or []),
+        "config_hash": str(explanation.get("config_hash") or ""),
+        "policy_profile": str(explanation.get("policy_profile") or ""),
+        "release_condition": str(explanation.get("release_condition") or ""),
+    }
+
+
+__all__ = ["ScenarioReplayPack", "ScenarioReplayRunner", "scenario_summary"]

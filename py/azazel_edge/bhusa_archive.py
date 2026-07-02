@@ -126,7 +126,7 @@ def _run_report(archive_dir: Path, record_path: str, explanations_path: str, aud
 
 def _run_demo_and_audit(args: argparse.Namespace, archive_dir: Path) -> Dict[str, Any]:
     explanations_path, audit_path = _evidence_paths(args)
-    demo_cmd = [str(BIN_DIR / "azazel-edge-demo"), "run", args.scenario, "--format", "json"]
+    demo_cmd = [str(BIN_DIR / "azazel-edge-scenario-replay"), "run", args.scenario, "--format", "json"]
     demo_result = subprocess.run(
         demo_cmd,
         cwd=str(ROOT_DIR),
@@ -142,7 +142,7 @@ def _run_demo_and_audit(args: argparse.Namespace, archive_dir: Path) -> Dict[str
     if demo_result.returncode != 0:
         stderr = demo_result.stderr.strip() or demo_result.stdout.strip() or f"exit {demo_result.returncode}"
         raise ValueError(f"demo replay for archive failed: {stderr}")
-    demo_json = _load_json(demo_result.stdout, context="azazel-edge-demo")
+    demo_json = _load_json(demo_result.stdout, context="azazel-edge-scenario-replay")
     _write_text(archive_dir / "evidence" / "demo-run.json", json.dumps(demo_json, ensure_ascii=False, indent=2) + "\n")
 
     compact_cmd = [

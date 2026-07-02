@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "azazel-edge-web",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/mao/Documents/GitHub/Azazel-Edge && source tools/macdev/env.sh && export AZAZEL_WEB_PORT=\"${PORT:-8084}\" && exec .venv/bin/python azazel_edge_web/app.py"],
+      "port": 8084,
+      "autoPort": true
+    }
+  ]
+}

@@ -84,7 +84,7 @@ Do not say:
 ## Minimal booth fallback commands
 
 ```bash
-bin/azazel-edge-demo run mixed_correlation_demo
+bin/azazel-edge-scenario-replay run mixed_correlation_demo
 bin/azazel-edge-audit-review \
   --explanations-path /tmp/azazel-edge-demo-explanations.jsonl \
   --audit-path /tmp/azazel-edge-demo-triage-audit.jsonl \

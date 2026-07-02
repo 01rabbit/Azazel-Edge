@@ -14,14 +14,13 @@
             <div class="ops-brand-copy">
                 <div class="brand-kicker">{{ tr('ops.brand_kicker', 'Mission Intelligence Operator') }}</div>
                 <h1>{{ tr('ops.title', 'M.I.O. Ops Communication') }}</h1>
-                <p class="ops-brand-subtitle">{{ tr('ops.subtitle', 'Operator-facing command workspace for SOC and NOC support, runbook guidance, and demo replay.') }}</p>
+                <p class="ops-brand-subtitle">{{ tr('ops.subtitle', 'Operator-facing command workspace for SOC and NOC support and runbook guidance.') }}</p>
             </div>
         </div>
         <div class="ops-topbar-links">
             <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
             <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
             <a class="topbar-link" href="/">{{ tr('ops.dashboard', 'Dashboard') }}</a>
-            <a class="topbar-link" href="/demo">{{ tr('dashboard.demo_link', 'Demo') }}</a>
             <a class="topbar-link" id="mattermostLink" href="{{ mattermost_open_url or '#' }}" target="_blank" rel="noopener noreferrer">{{ tr('ops.open_mattermost', 'Open Mattermost') }}</a>
         </div>
     </header>
@@ -177,22 +176,6 @@
                 <div class="assistant-label">{{ tr('ops.triage_audit', 'Triage Audit') }}</div>
                 <div id="triageAuditEmpty" class="ops-result">{{ tr('ops.triage_audit_empty', 'No triage audit entries yet') }}</div>
                 <ul id="triageAuditList" class="ops-message-list"></ul>
-            </section>
-
-            <section class="card ops-demo-card">
-                <div class="assistant-label">{{ tr('ops.demo_runner', 'Demo Runner') }}</div>
-                <label class="ops-label" for="demoScenarioSelect">{{ tr('ops.scenario', 'Scenario') }}</label>
-                <select id="demoScenarioSelect" class="ops-input">
-                    <option value="">{{ tr('ops.loading', 'Loading...') }}</option>
-                </select>
-                <div id="demoScenarioDescription" class="ops-result">-</div>
-                <div class="ops-actions">
-                    <button class="btn btn-primary" id="demoRunBtn">{{ tr('ops.run_demo', 'Run Demo') }}</button>
-                    <button class="btn btn-secondary" id="demoClearBtn">{{ tr('ops.clear_overlay', 'Clear Overlay') }}</button>
-                </div>
-                <div id="demoResult" class="ops-result ops-result-strong">{{ tr('ops.no_scenario', 'No scenario executed yet.') }}</div>
-                <div id="demoOperatorSummary" class="ops-result">{{ tr('ops.operator_wording', 'Operator wording') }}: -</div>
-                <div id="demoNextChecks" class="ops-result">{{ tr('ops.next_checks', 'Next checks') }}: -</div>
             </section>
 
             <section class="card ops-messages-card">

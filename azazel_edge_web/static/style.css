@@ -64,13 +64,6 @@ body {
     }
 }
 
-body.demo-overlay-active {
-    background:
-        radial-gradient(circle at 12% 12%, rgba(224, 164, 88, 0.24), transparent 28%),
-        radial-gradient(circle at 86% 16%, rgba(228, 109, 93, 0.16), transparent 22%),
-        linear-gradient(145deg, #18120d, #211812 42%, #0f151b 100%);
-}
-
 body::before {
     content: "";
     position: fixed;
@@ -232,32 +225,11 @@ body[data-audience="professional"] .temp-only {
     padding: 32px 28px 80px; /* パディングを増やす */
 }
 
-.demo-shell {
-    max-width: 1280px;
-}
-
-.demo-page-grid {
-    display: grid;
-    grid-template-columns: 1.15fr 0.85fr;
-    gap: 18px;
-    align-items: start;
-}
-
-.demo-mode-banner {
+.synthetic-mode-banner {
     padding: 18px 22px;
     margin-bottom: 18px;
     border-color: rgba(224, 164, 88, 0.28);
     background: linear-gradient(145deg, rgba(57, 42, 20, 0.42), rgba(24, 27, 34, 0.88));
-}
-
-.demo-mode-banner-static {
-    border-color: rgba(116, 212, 255, 0.24);
-    background: linear-gradient(145deg, rgba(30, 66, 92, 0.32), rgba(17, 30, 46, 0.7));
-}
-
-.demo-panel,
-.review-panel {
-    overflow: hidden;
 }
 
 /* Aggregator fleet counters */
@@ -408,98 +380,6 @@ body[data-audience="professional"] .temp-only {
     margin-top: 0.5rem;
 }
 
-.demo-sidebar {
-    position: sticky;
-    top: 96px;
-}
-
-.demo-hero-grid,
-.demo-card-grid,
-.demo-copy-grid {
-    display: grid;
-    gap: 14px;
-}
-
-.demo-hero-grid {
-    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
-    margin-top: 8px;
-    margin-bottom: 18px;
-}
-
-.demo-card-grid,
-.demo-copy-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin-top: 16px;
-}
-
-.demo-control-card,
-.demo-result-block,
-.demo-metric-card,
-.demo-copy-card,
-.review-summary-banner {
-    margin-top: 0;
-}
-
-.demo-control-card {
-    min-height: 100%;
-}
-
-.demo-shortcuts {
-    margin-top: 14px;
-}
-
-.demo-result-block {
-    padding: 18px 18px 20px;
-    border-radius: 18px;
-    background: linear-gradient(145deg, rgba(255,255,255,0.055), rgba(255,255,255,0.028));
-    border: 1px solid rgba(116, 212, 255, 0.12);
-}
-
-.demo-kpi-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
-    margin-top: 12px;
-}
-
-.demo-kpi {
-    min-height: 92px;
-    padding: 14px 14px 12px;
-    border-radius: 14px;
-    background: rgba(10, 15, 20, 0.34);
-    border: 1px solid rgba(255,255,255,0.06);
-}
-
-.demo-kpi strong {
-    display: block;
-    margin-top: 10px;
-    font-size: 1.08rem;
-    line-height: 1.2;
-    color: var(--text-main);
-}
-
-.demo-kpi-wide {
-    grid-column: span 2;
-}
-
-.demo-metric-card,
-.demo-copy-card {
-    min-height: 100%;
-    padding: 18px 18px 20px;
-    border-radius: 18px;
-    background: rgba(11, 18, 24, 0.44);
-    border: 1px solid rgba(255,255,255,0.06);
-}
-
-.demo-copy-card #demoOperatorWording {
-    line-height: 1.62;
-    color: var(--text-main);
-}
-
-.review-summary-banner {
-    margin-bottom: 16px;
-}
-
 .panel {
     background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.025));
     border: 1px solid var(--line-soft);
@@ -539,85 +419,6 @@ body[data-audience="professional"] .temp-only {
     box-shadow: var(--shadow-sm);
     background: rgba(255,255,255,0.04);
     flex: 0 0 auto;
-}
-
-.demo-select {
-    width: 100%;
-    margin-top: 8px;
-    padding: 12px 14px;
-    border-radius: 12px;
-    border: 1px solid var(--line-soft);
-    background: rgba(255,255,255,0.04);
-    color: var(--text-main);
-    font: inherit;
-}
-
-.demo-description {
-    margin-top: 10px;
-    color: var(--text-dim);
-    line-height: 1.45;
-}
-
-.demo-boundary-banner {
-    display: grid;
-    gap: 8px;
-    margin-top: 16px;
-    padding: 14px 16px;
-    border-radius: 16px;
-    border: 1px solid rgba(116, 212, 255, 0.28);
-    background: linear-gradient(145deg, rgba(30, 66, 92, 0.38), rgba(17, 30, 46, 0.7));
-}
-
-.demo-boundary-banner strong {
-    color: #cceeff;
-    font-family: var(--font-mono);
-    letter-spacing: 0.04em;
-}
-
-.demo-boundary-banner span {
-    color: var(--text-main);
-    line-height: 1.5;
-}
-
-.review-panel .action-list {
-    margin-top: 10px;
-}
-
-.demo-raw-panel {
-    margin-top: 16px;
-    border-top: 1px solid rgba(255,255,255,0.06);
-    padding-top: 16px;
-}
-
-body.demo-overlay-active .demo-panel,
-body.demo-overlay-active .command-strip,
-body.demo-overlay-active .assistant-panel,
-body.demo-overlay-active .posture-card {
-    border-color: rgba(224, 164, 88, 0.32);
-    box-shadow: 0 0 0 1px rgba(224, 164, 88, 0.10), var(--shadow-lg);
-}
-
-body.demo-overlay-active #commandStripNote,
-body.demo-overlay-active #healthSummaryLine {
-    color: #ffd7a7;
-}
-
-.demo-raw-panel summary {
-    cursor: pointer;
-    color: var(--text-dim);
-    list-style: none;
-}
-
-.demo-raw-panel summary::-webkit-details-marker {
-    display: none;
-}
-
-.demo-raw-response {
-    margin-top: 12px;
-    max-height: 280px;
-    overflow: auto;
-    font-family: var(--font-mono);
-    font-size: 0.88rem;
 }
 
 .command-strip {
@@ -2416,12 +2217,6 @@ body.demo-overlay-active #healthSummaryLine {
 .status-caution { color: var(--accent-amber); }
 .status-danger { color: var(--accent-red); }
 .status-neutral { color: var(--accent-steel); }
-.status-demo {
-    color: #ffe2b8;
-    background: linear-gradient(145deg, rgba(224, 164, 88, 0.22), rgba(228, 109, 93, 0.14));
-    border-color: rgba(224, 164, 88, 0.42);
-    box-shadow: 0 0 0 1px rgba(224, 164, 88, 0.12), 0 8px 20px rgba(224, 164, 88, 0.12);
-}
 
 .toast {
     position: fixed;
@@ -2492,28 +2287,6 @@ body.demo-overlay-active #healthSummaryLine {
 
     .board-layout {
         grid-template-columns: 1fr;
-    }
-
-    .demo-page-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .demo-sidebar {
-        position: static;
-    }
-
-    .demo-hero-grid,
-    .demo-card-grid,
-    .demo-copy-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .demo-kpi-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .demo-kpi-wide {
-        grid-column: span 2;
     }
 
     .split-glance-grid,

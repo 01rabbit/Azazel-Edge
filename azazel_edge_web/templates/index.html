@@ -26,7 +26,6 @@
                 <a id="askMioLink" class="topbar-link" href="#assistantPanel">{{ tr('dashboard.ask_mio', 'Ask M.I.O.') }}</a>
                 <button id="showGuideBtn" class="topbar-link topbar-link-button" type="button">{{ tr('dashboard.show_guide', 'Show Guide') }}</button>
                 <a id="openMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.open_mattermost', 'Open Mattermost') }}</a>
-                <a class="topbar-link" href="/demo">{{ tr('dashboard.demo_link', 'Demo') }}</a>
             </div>
             <div class="topbar-meta">
                 <div class="meta-item">
@@ -47,17 +46,7 @@
     </header>
 
     <main class="dashboard-shell">
-        <section class="panel demo-mode-banner" id="demoModeBanner" hidden>
-            <div class="panel-heading">
-                <div>
-                    <div class="panel-kicker">{{ tr('dashboard.demo_overlay', 'Demo Overlay') }}</div>
-                    <h2>{{ tr('dashboard.operational_dashboard_live', 'Operational dashboard remains live') }}</h2>
-                </div>
-                <a class="topbar-link" href="/demo">{{ tr('dashboard.open_demo_page', 'Open Demo Page') }}</a>
-            </div>
-            <p class="panel-note" id="demoModeBannerText">{{ tr('dashboard.demo_banner_default', 'A demo overlay is active. Review replay output on the dedicated demo page, not on the operational dashboard.') }}</p>
-        </section>
-        <section class="panel demo-mode-banner" id="syntheticModeBanner" hidden>
+        <section class="panel synthetic-mode-banner" id="syntheticModeBanner" hidden>
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">Topo-Lite Synthetic Mode</div>

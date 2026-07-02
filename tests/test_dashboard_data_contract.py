@@ -40,7 +40,6 @@ class DashboardDataContractTests(unittest.TestCase):
             "_mattermost_ping": webapp._mattermost_ping,
             "_service_active": webapp._service_active,
             "_send_ai_manual_query": webapp._send_ai_manual_query,
-            "read_demo_overlay": webapp.read_demo_overlay,
             "send_control_command_with_params": webapp.send_control_command_with_params,
             "_mattermost_send_message": webapp._mattermost_send_message,
             "TOPOLITE_SEED_MODE_PATH": webapp.TOPOLITE_SEED_MODE_PATH,
@@ -343,7 +342,6 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp._mattermost_ping = self._orig["_mattermost_ping"]
         webapp._service_active = self._orig["_service_active"]
         webapp._send_ai_manual_query = self._orig["_send_ai_manual_query"]
-        webapp.read_demo_overlay = self._orig["read_demo_overlay"]
         webapp.send_control_command_with_params = self._orig["send_control_command_with_params"]
         webapp.OPERATOR_PROGRESS_PATH = self._orig["OPERATOR_PROGRESS_PATH"]
         webapp._mattermost_send_message = self._orig["_mattermost_send_message"]
@@ -784,38 +782,6 @@ class DashboardDataContractTests(unittest.TestCase):
         labels = [item["label"] for item in remote["items"]]
         self.assertEqual(labels, ["8.8.8.8", "1.1.1.1"])
 
-    def test_dashboard_actions_hides_dashboard_demo_context_when_overlay_is_inactive(self) -> None:
-        now = time.time()
-        webapp.read_demo_overlay = lambda: {}
-        webapp.AI_LLM_LOG.write_text(
-            json.dumps(
-                {
-                    "ts": now - 1,
-                    "kind": "manual_query_completed",
-                    "source": "dashboard_demo",
-                    "sender": "Dashboard",
-                    "question": "Demo scenario noc_degraded_demo",
-                    "model": "manual_router",
-                    "response": {
-                        "status": "completed",
-                        "answer": "Demo explanation",
-                        "runbook_id": "rb.noc.dns.failure.check",
-                        "operator_note": "demo only",
-                        "user_message": "demo only",
-                        "runbook_review": {"final_status": "approved"},
-                    },
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        response = self.client.get("/api/dashboard/actions")
-        self.assertEqual(response.status_code, 200)
-        payload = response.get_json()
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["mio"]["status"], "idle")
-        self.assertEqual(payload["mio"]["answer"], "")
-
     def test_dashboard_evidence_contract(self) -> None:
         response = self.client.get("/api/dashboard/evidence")
         self.assertEqual(response.status_code, 200)
@@ -1067,7 +1033,6 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("Background History", text)
         self.assertIn("Triage Audit", text)
         self.assertIn("Supporting history and audit trail", text)
-        self.assertIn("Open Demo Page", text)
         self.assertIn('id="topoliteNavPanel"', text)
         self.assertIn('id="topoliteSingleScreen"', text)
         self.assertIn('id="topoliteTopologyCard"', text)
@@ -1096,8 +1061,6 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("表示言語", text)
         self.assertIn("専門家詳細", text)
         self.assertIn("初心者", text)
-        self.assertIn("デモ表示", text)
-        self.assertIn("実務ダッシュボードは live のままです", text)
         self.assertIn("Service Health", text)
         self.assertIn("NOC Focus", text)
         self.assertIn("Action Board", text)
@@ -1121,18 +1084,6 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertNotIn("アクションボード", text)
         self.assertNotIn("主要デーモン", text)
         self.assertNotIn("Wi-Fi に繋がらない利用者へどう案内するか", text)
-
-    def test_demo_page_renders_replay_and_review_sections(self) -> None:
-        response = self.client.get("/demo?lang=en")
-        self.assertEqual(response.status_code, 200)
-        text = response.get_data(as_text=True)
-        self.assertIn("Demo Runner", text)
-        self.assertIn("Scenario Replay", text)
-        self.assertIn("Run Demo", text)
-        self.assertIn("Review Readiness", text)
-        self.assertIn("Capability Boundary and Resource Guard", text)
-        self.assertIn("Open Latest Explanation", text)
-        self.assertNotIn('id="resourceGuardQueue"', text)
 
     def test_manual_ai_ask_enriches_rationale_and_handoff(self) -> None:
         webapp._send_ai_manual_query = lambda **_: {
