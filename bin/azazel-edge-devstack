@@ -1,0 +1,459 @@
+#!/usr/bin/env bash
+# azazel-edge-devstack: one-shot macOS dev-runtime launcher.
+# Brings up the full Azazel dev stack (control daemon, AI agent, rust core, web)
+# with one command, and can tear it down or report status. macOS dev only --
+# all state lives under $AZAZEL_DEV_STATE, never the Linux appliance paths.
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# --- colors / markers -------------------------------------------------------
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'
+  C_GREEN=$'\033[32m'; C_RED=$'\033[31m'; C_YELLOW=$'\033[33m'; C_CYAN=$'\033[36m'
+else
+  C_RESET=""; C_BOLD=""; C_GREEN=""; C_RED=""; C_YELLOW=""; C_CYAN=""
+fi
+OK="${C_GREEN}✓${C_RESET}"; BAD="${C_RED}✗${C_RESET}"; WAIT="${C_YELLOW}…${C_RESET}"
+
+info() { printf '%s\n' "${C_CYAN}$*${C_RESET}"; }
+warn() { printf '%s\n' "${C_YELLOW}WARN:${C_RESET} $*" >&2; }
+err()  { printf '%s\n' "${C_RED}ERROR:${C_RESET} $*" >&2; }
+
+# --- environment ------------------------------------------------------------
+# env.sh sets every AZAZEL_* var, PYTHONPATH and the dev state dir. It only sets
+# env, it starts nothing. It also unsets its own RUN_DIR/LOG_DIR locals, so we
+# re-derive ours from $AZAZEL_DEV_STATE below.
+# shellcheck source=/dev/null
+source "${ROOT_DIR}/tools/macdev/env.sh"
+
+# Dev override: env.sh does NOT set AZAZEL_MATTERMOST_HOST, so the web app / AI
+# agent would default to the appliance IP 172.16.0.254. In dev Mattermost runs
+# on OrbStack at localhost:8065 -- point at it unless the user already chose.
+export AZAZEL_MATTERMOST_HOST="${AZAZEL_MATTERMOST_HOST:-127.0.0.1}"
+
+RUN_DIR="${AZAZEL_DEV_STATE}/run"
+LOG_DIR="${AZAZEL_DEV_STATE}/log"
+DEVSTACK_RUN="${RUN_DIR}/devstack"
+DEVSTACK_LOG="${LOG_DIR}/devstack"
+mkdir -p "${DEVSTACK_RUN}" "${DEVSTACK_LOG}" "${AZAZEL_DEV_STATE}/suricata"
+
+VENV_PY="${ROOT_DIR}/.venv/bin/python"
+RUST_CORE_DIR="${ROOT_DIR}/rust/azazel-edge-core"
+RUST_CORE_BIN="${RUST_CORE_DIR}/target/release/azazel-edge-core"
+MM_COMPOSE="${ROOT_DIR}/security/docker-compose.mattermost.yml"
+MM_URL="http://localhost:8065"
+MM_PING="${MM_URL}/api/v4/system/ping"
+
+# Long-running components, in startup order. dummy-eve is opt-in (--inject).
+COMPONENTS=(control-daemon ai-agent rust-core web dummy-eve)
+
+# --- pid / process helpers --------------------------------------------------
+pid_file() { printf '%s/%s.pid' "${DEVSTACK_RUN}" "$1"; }
+log_file() { printf '%s/%s.log' "${DEVSTACK_LOG}" "$1"; }
+
+# is_running <name> -- true if the recorded PID is alive.
+is_running() {
+  local pf; pf="$(pid_file "$1")"
+  [[ -f "${pf}" ]] || return 1
+  local pid; pid="$(cat "${pf}" 2>/dev/null || true)"
+  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
+}
+
+comp_pid() { cat "$(pid_file "$1")" 2>/dev/null || true; }
+
+# start_component <name> <log> <cmd...> -- launch detached, record PID.
+start_component() {
+  # Args: <name> <log> <cmd...>. The <log> arg is redundant (lf is derived from
+  # <name>) but callers pass it for readability, so drop both before running the
+  # command -- otherwise the log path leaks into "$@" and nohup tries to exec it.
+  local name="$1"; shift 2
+  local lf; lf="$(log_file "${name}")"
+  if is_running "${name}"; then
+    printf '  %s %-14s already running (pid %s)\n' "${OK}" "${name}" "$(comp_pid "${name}")"
+    return 0
+  fi
+  : >"${lf}"
+  # Detach so the component survives this launcher exiting and the controlling
+  # terminal closing: nohup ignores SIGHUP, </dev/null frees stdin, disown drops
+  # it from the job table. Grandchild keeps running as a background daemon.
+  #
+  # Freshly-created log files can occasionally be denied for the first write
+  # right after truncation (seen under some sandboxed/managed shells); retry
+  # the launch a couple of times with a short backoff before giving up.
+  local attempt pid
+  for attempt in 1 2 3; do
+    nohup "$@" >>"${lf}" 2>&1 </dev/null &
+    pid=$!
+    disown "${pid}" 2>/dev/null || true
+    sleep 0.3
+    if kill -0 "${pid}" 2>/dev/null; then
+      echo "${pid}" >"$(pid_file "${name}")"
+      printf '  %s %-14s started (pid %s)\n' "${WAIT}" "${name}" "${pid}"
+      return 0
+    fi
+    if (( attempt < 3 )); then
+      sleep 0.5
+    fi
+  done
+  err "${name}: failed to start after ${attempt} attempts, see ${lf}"
+  return 1
+}
+
+# stop_component <name> -- TERM then KILL, remove pid file.
+stop_component() {
+  local name="$1"
+  if ! is_running "${name}"; then
+    rm -f "$(pid_file "${name}")"
+    printf '  %s %-14s not running\n' "${BAD}" "${name}"
+    return 0
+  fi
+  local pid; pid="$(comp_pid "${name}")"
+  kill "${pid}" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.25
+  done
+  if kill -0 "${pid}" 2>/dev/null; then
+    kill -9 "${pid}" 2>/dev/null || true
+  fi
+  rm -f "$(pid_file "${name}")"
+  printf '  %s %-14s stopped (was pid %s)\n' "${OK}" "${name}" "${pid}"
+}
+
+# --- readiness waiters (all with timeout) -----------------------------------
+# wait_for_socket <path> <timeout_s>
+wait_for_socket() {
+  local path="$1" timeout="$2" waited=0
+  while [[ ! -S "${path}" ]]; do
+    sleep 0.25; waited=$((waited + 1))
+    if (( waited >= timeout * 4 )); then return 1; fi
+  done
+  return 0
+}
+
+# wait_for_tcp <host> <port> <timeout_s>
+wait_for_tcp() {
+  local host="$1" port="$2" timeout="$3" waited=0
+  while ! (exec 3<>"/dev/tcp/${host}/${port}") 2>/dev/null; do
+    exec 3>&- 2>/dev/null || true
+    sleep 0.25; waited=$((waited + 1))
+    if (( waited >= timeout * 4 )); then return 1; fi
+  done
+  exec 3>&- 2>/dev/null || true
+  return 0
+}
+
+# wait_for_http <url> <timeout_s> -- 2xx/3xx counts as up.
+wait_for_http() {
+  local url="$1" timeout="$2" waited=0 code
+  while :; do
+    code="$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 3 "${url}" 2>/dev/null || echo 000)"
+    [[ "${code}" =~ ^[23] ]] && return 0
+    sleep 1; waited=$((waited + 1))
+    if (( waited >= timeout )); then return 1; fi
+  done
+}
+
+http_ok() {
+  local url="$1" code
+  code="$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 3 "${url}" 2>/dev/null || echo 000)"
+  [[ "${code}" =~ ^[23] ]]
+}
+
+# --- docker / mattermost ----------------------------------------------------
+docker_ready() {
+  command -v docker >/dev/null 2>&1 || return 1
+  docker info >/dev/null 2>&1
+}
+
+mattermost_up() { http_ok "${MM_PING}"; }
+
+ensure_mattermost() {
+  if mattermost_up; then
+    printf '  %s %-14s already up (%s)\n' "${OK}" "mattermost" "${MM_URL}"
+    return 0
+  fi
+  if ! docker_ready; then
+    warn "docker unavailable -- skipping Mattermost; continuing with azazel-only stack."
+    return 0
+  fi
+  printf '  %s %-14s starting via docker compose…\n' "${WAIT}" "mattermost"
+  MATTERMOST_SITE_URL="${MM_URL}" \
+  MATTERMOST_ALLOWED_UNTRUSTED_INTERNAL_CONNECTIONS="host.docker.internal" \
+    "${ROOT_DIR}/bin/azazel-edge-compose" -f "${MM_COMPOSE}" up -d >/dev/null 2>&1 || {
+      warn "docker compose up failed -- continuing without Mattermost."
+      return 0
+    }
+  if wait_for_http "${MM_PING}" 90; then
+    printf '  %s %-14s ready (%s)\n' "${OK}" "mattermost" "${MM_URL}"
+  else
+    warn "Mattermost did not become ready within 90s -- continuing anyway."
+  fi
+}
+
+# --- ollama check (never managed, only probed) ------------------------------
+OLLAMA_TAGS="${AZAZEL_OLLAMA_ENDPOINT%/}/api/tags"
+OLLAMA_MODEL="qwen3.5:2b"
+
+check_ollama() {
+  local body
+  body="$(curl -fsS --max-time 3 "${OLLAMA_TAGS}" 2>/dev/null || true)"
+  if [[ -z "${body}" ]]; then
+    warn "ollama not reachable at ${AZAZEL_OLLAMA_ENDPOINT} -- AI agent will degrade."
+    warn "  start it with:  open -a Ollama"
+    return 1
+  fi
+  printf '  %s %-14s reachable (%s)\n' "${OK}" "ollama" "${AZAZEL_OLLAMA_ENDPOINT}"
+  if ! grep -q "${OLLAMA_MODEL}" <<<"${body}"; then
+    warn "ollama model '${OLLAMA_MODEL}' not present -- pull it with:  ollama pull ${OLLAMA_MODEL}"
+  fi
+  return 0
+}
+
+ollama_status() { curl -fsS --max-time 3 "${OLLAMA_TAGS}" >/dev/null 2>&1; }
+
+# --- preflight --------------------------------------------------------------
+preflight() {
+  info "${C_BOLD}Preflight${C_RESET}"
+  # venv
+  if [[ ! -x "${VENV_PY}" ]]; then
+    printf '  %s %-14s missing -- running bootstrap…\n' "${WAIT}" "venv"
+    "${ROOT_DIR}/bin/azazel-edge-dev" bootstrap
+  fi
+  printf '  %s %-14s %s\n' "${OK}" "venv" "${VENV_PY}"
+
+  # rust core build
+  if [[ ! -x "${RUST_CORE_BIN}" ]]; then
+    printf '  %s %-14s not built -- cargo build --release (may take minutes)…\n' "${WAIT}" "rust-core"
+    ( cd "${RUST_CORE_DIR}" && cargo build --release )
+  fi
+  printf '  %s %-14s %s\n' "${OK}" "rust-core" "${RUST_CORE_BIN}"
+
+  # ollama (warn-only)
+  check_ollama || true
+
+  # mattermost (we own its lifecycle)
+  ensure_mattermost
+  echo
+}
+
+# --- launchers for each component -------------------------------------------
+launch_control_daemon() {
+  start_component control-daemon "$(log_file control-daemon)" \
+    "${ROOT_DIR}/bin/azazel-edge-control-daemon"
+  if wait_for_socket "${AZAZEL_CONTROL_SOCKET}" 15; then
+    printf '  %s %-14s socket ready\n' "${OK}" "control-daemon"
+  else
+    err "control-daemon socket ${AZAZEL_CONTROL_SOCKET} not ready within 15s"
+    return 1
+  fi
+}
+
+launch_ai_agent() {
+  start_component ai-agent "$(log_file ai-agent)" \
+    "${ROOT_DIR}/bin/azazel-edge-ai-agent"
+  if wait_for_socket "${AZAZEL_AI_SOCKET}" 20; then
+    printf '  %s %-14s socket ready\n' "${OK}" "ai-agent"
+  else
+    warn "ai-agent socket ${AZAZEL_AI_SOCKET} not ready within 20s (ollama may be down) -- continuing"
+  fi
+}
+
+launch_rust_core() {
+  # Dev safe-mode env for the rust core (matches systemd/azazel-edge-core.service).
+  AZAZEL_DEFENSE_DRY_RUN=true \
+  AZAZEL_DEFENSE_ENFORCE=false \
+  AZAZEL_DEFENSE_ENFORCE_LEVEL=advisory \
+  AZAZEL_FORWARD_AI=true \
+  AZAZEL_FORWARD_LOG=true \
+    start_component rust-core "$(log_file rust-core)" "${RUST_CORE_BIN}"
+}
+
+launch_web() {
+  start_component web "$(log_file web)" "${ROOT_DIR}/bin/azazel-edge-web"
+  if wait_for_tcp "${AZAZEL_WEB_HOST}" "${AZAZEL_WEB_PORT}" 20; then
+    printf '  %s %-14s listening on %s:%s\n' "${OK}" "web" "${AZAZEL_WEB_HOST}" "${AZAZEL_WEB_PORT}"
+  else
+    err "web did not accept on ${AZAZEL_WEB_HOST}:${AZAZEL_WEB_PORT} within 20s"
+    return 1
+  fi
+}
+
+launch_dummy_eve() {
+  # Continuous benign-noise + periodic attack bursts, writing to the dev eve.json.
+  start_component dummy-eve "$(log_file dummy-eve)" \
+    "${ROOT_DIR}/bin/azazel-edge-dummy-eve" --eve-path "${AZAZEL_EVE_PATH}" stream
+}
+
+# --- summary ----------------------------------------------------------------
+read_web_token() {
+  [[ -s "${AZAZEL_WEB_TOKEN_FILE}" ]] && tr -d '[:space:]' <"${AZAZEL_WEB_TOKEN_FILE}"
+}
+
+print_summary() {
+  local token; token="$(read_web_token || true)"
+  local dash="http://${AZAZEL_WEB_HOST}:${AZAZEL_WEB_PORT}/"
+  [[ -n "${token}" ]] && dash="${dash}?token=${token}"
+  echo
+  info "${C_BOLD}Azazel dev stack${C_RESET}"
+  printf '  %-12s %s\n' "Dashboard:" "${dash}"
+  printf '  %-12s %s\n' "Mattermost:" "${MM_URL}"
+  if ollama_status; then
+    printf '  %-12s %s (%s up%s)\n' "Ollama:" "${AZAZEL_OLLAMA_ENDPOINT}" "${C_GREEN}" "${C_RESET}"
+  else
+    printf '  %-12s %s (%sdown%s)\n' "Ollama:" "${AZAZEL_OLLAMA_ENDPOINT}" "${C_YELLOW}" "${C_RESET}"
+  fi
+  echo "  Components:"
+  local c
+  for c in "${COMPONENTS[@]}"; do
+    if is_running "${c}"; then
+      printf '    %s %-14s pid %s\n' "${OK}" "${c}" "$(comp_pid "${c}")"
+    else
+      printf '    %s %-14s stopped\n' "${BAD}" "${c}"
+    fi
+  done
+}
+
+# --- subcommands ------------------------------------------------------------
+cmd_up() {
+  local inject=0 all=0
+  for a in "$@"; do
+    case "${a}" in
+      --inject) inject=1 ;;
+      --all) all=1 ;;
+      *) err "unknown flag for up: ${a}"; exit 2 ;;
+    esac
+  done
+
+  preflight
+  # --all means also (re)start external deps -- restart Mattermost if requested.
+  if (( all )) && docker_ready; then
+    info "--all: (re)starting Mattermost"
+    MATTERMOST_SITE_URL="${MM_URL}" \
+    MATTERMOST_ALLOWED_UNTRUSTED_INTERNAL_CONNECTIONS="host.docker.internal" \
+      "${ROOT_DIR}/bin/azazel-edge-compose" -f "${MM_COMPOSE}" up -d >/dev/null 2>&1 || true
+    wait_for_http "${MM_PING}" 90 || warn "Mattermost not ready after --all restart"
+  fi
+
+  info "${C_BOLD}Starting components${C_RESET}"
+  launch_control_daemon
+  launch_ai_agent
+  launch_rust_core
+  launch_web
+  if (( inject )); then
+    launch_dummy_eve
+  fi
+
+  print_summary
+}
+
+cmd_down() {
+  local all=0
+  for a in "$@"; do
+    case "${a}" in
+      --all) all=1 ;;
+      *) err "unknown flag for down: ${a}"; exit 2 ;;
+    esac
+  done
+  info "${C_BOLD}Stopping components${C_RESET}"
+  # Reverse startup order.
+  local c
+  for (( i=${#COMPONENTS[@]}-1; i>=0; i-- )); do
+    c="${COMPONENTS[$i]}"
+    stop_component "${c}"
+  done
+  # By default leave Mattermost + ollama running. --all also stops Mattermost.
+  if (( all )); then
+    if docker_ready; then
+      info "--all: stopping Mattermost"
+      "${ROOT_DIR}/bin/azazel-edge-compose" -f "${MM_COMPOSE}" down >/dev/null 2>&1 \
+        && printf '  %s %-14s stopped\n' "${OK}" "mattermost" \
+        || warn "docker compose down failed"
+    else
+      warn "docker unavailable -- cannot stop Mattermost"
+    fi
+  fi
+  # ollama is never touched.
+}
+
+cmd_status() {
+  info "${C_BOLD}Azazel dev stack status${C_RESET}"
+  local c
+  for c in "${COMPONENTS[@]}"; do
+    if is_running "${c}"; then
+      printf '  %s %-14s running (pid %s)\n' "${OK}" "${c}" "$(comp_pid "${c}")"
+    else
+      printf '  %s %-14s stopped\n' "${BAD}" "${c}"
+    fi
+  done
+  echo "  --- external ---"
+  if ollama_status; then
+    printf '  %s %-14s reachable (%s)\n' "${OK}" "ollama" "${AZAZEL_OLLAMA_ENDPOINT}"
+  else
+    printf '  %s %-14s unreachable (%s)\n' "${BAD}" "ollama" "${AZAZEL_OLLAMA_ENDPOINT}"
+  fi
+  if mattermost_up; then
+    printf '  %s %-14s reachable (%s)\n' "${OK}" "mattermost" "${MM_URL}"
+  else
+    printf '  %s %-14s unreachable (%s)\n' "${BAD}" "mattermost" "${MM_URL}"
+  fi
+}
+
+cmd_restart() {
+  cmd_down
+  echo
+  cmd_up "$@"
+}
+
+cmd_logs() {
+  local comp="${1:-}"
+  if [[ -z "${comp}" ]]; then
+    info "Available logs (${DEVSTACK_LOG}):"
+    local f
+    for f in "${DEVSTACK_LOG}"/*.log; do
+      [[ -e "${f}" ]] || { echo "  (none yet)"; break; }
+      printf '  %s\n' "$(basename "${f}" .log)"
+    done
+    return 0
+  fi
+  local lf; lf="$(log_file "${comp}")"
+  if [[ ! -f "${lf}" ]]; then
+    err "no log for component '${comp}' (looked at ${lf})"
+    return 1
+  fi
+  info "== ${comp} (${lf}) =="
+  tail -n 200 "${lf}"
+}
+
+usage() {
+  cat <<EOF
+${C_BOLD}azazel-edge-devstack${C_RESET} -- one-shot macOS dev-runtime launcher
+
+Usage:
+  azazel-edge-devstack up [--inject] [--all]   Bring up the stack (default cmd)
+  azazel-edge-devstack down [--all]            Stop azazel processes (--all also Mattermost)
+  azazel-edge-devstack status                  Show component + ollama/Mattermost state
+  azazel-edge-devstack restart [--inject]      down then up
+  azazel-edge-devstack logs [component]        Tail a component log (or list logs)
+
+  --inject   also start dummy-eve test-event injector
+  --all      up: (re)start external deps; down: also stop Mattermost (never ollama)
+EOF
+}
+
+main() {
+  local cmd="${1:-up}"
+  shift || true
+  case "${cmd}" in
+    up)       cmd_up "$@" ;;
+    down)     cmd_down "$@" ;;
+    status)   cmd_status "$@" ;;
+    restart)  cmd_restart "$@" ;;
+    logs)     cmd_logs "$@" ;;
+    -h|--help|help) usage ;;
+    *) err "unknown command: ${cmd}"; usage; exit 2 ;;
+  esac
+}
+
+main "$@"
