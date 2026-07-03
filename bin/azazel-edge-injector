@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# azazel-edge-injector -- self-contained test-event injection tool + demo menu.
+#
+# Runs standalone (no devstack required): it sources the macOS dev environment
+# itself, so the fabricated Suricata EVE alerts land on the dev eve.json that
+# azazel-edge-core tails. Two modes:
+#
+#   azazel-edge-injector                 # interactive menu (demo / test screen)
+#   azazel-edge-injector <dummy-eve args># pass-through CLI, e.g.
+#                                        #   azazel-edge-injector emit --scenario port_scan --count 5
+#                                        #   azazel-edge-injector list
+#
+# For a live demo, start the pipeline first (bin/azazel-edge-devstack up), then
+# drive attacks from this menu and watch the real dashboard react.
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# --- self-contained environment --------------------------------------------
+# env.sh sets AZAZEL_EVE_PATH, PYTHONPATH, the dev state dir, etc. Sourcing it
+# here is what makes the tool work on its own.
+# shellcheck source=/dev/null
+source "${ROOT_DIR}/tools/macdev/env.sh"
+
+EVE_PATH="${AZAZEL_EVE_PATH}"
+RUN_DIR="${AZAZEL_DEV_STATE}/run"
+LOG_DIR="${AZAZEL_DEV_STATE}/log"
+STREAM_PID="${RUN_DIR}/injector-stream.pid"
+STREAM_LOG="${LOG_DIR}/injector-stream.log"
+DUMMY_EVE="${ROOT_DIR}/bin/azazel-edge-dummy-eve"
+WEB_URL="http://${AZAZEL_WEB_HOST:-127.0.0.1}:${AZAZEL_WEB_PORT:-8084}"
+mkdir -p "${RUN_DIR}" "${LOG_DIR}" "$(dirname "${EVE_PATH}")"
+
+# --- colors -----------------------------------------------------------------
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'
+  C_GREEN=$'\033[32m'; C_RED=$'\033[31m'; C_YELLOW=$'\033[33m'; C_CYAN=$'\033[36m'
+else
+  C_RESET=""; C_BOLD=""; C_GREEN=""; C_RED=""; C_YELLOW=""; C_CYAN=""
+fi
+
+# --- pass-through CLI mode --------------------------------------------------
+# Any argument => act as a thin standalone wrapper around dummy-eve (which
+# already has list/emit/flow/stream subcommands), with the dev eve path wired
+# in. This is the "works on its own" entrypoint for scripted/CI use.
+if (( $# > 0 )); then
+  exec "${DUMMY_EVE}" --eve-path "${EVE_PATH}" "$@"
+fi
+
+# --- helpers (menu mode) ----------------------------------------------------
+eve_count() { [[ -f "${EVE_PATH}" ]] && wc -l <"${EVE_PATH}" | tr -d ' ' || echo 0; }
+
+stream_running() {
+  [[ -f "${STREAM_PID}" ]] || return 1
+  local pid; pid="$(cat "${STREAM_PID}" 2>/dev/null || true)"
+  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
+}
+
+pipeline_up() { curl -fsS -o /dev/null --max-time 2 "${WEB_URL}" 2>/dev/null; }
+
+pause() { read -r -p "  ${C_CYAN}Enter to continue…${C_RESET} " _; }
+
+# List scenarios as a numbered array; fills SCEN_IDS / SCEN_DESC.
+declare -a SCEN_IDS=() SCEN_DESC=()
+load_scenarios() {
+  SCEN_IDS=(); SCEN_DESC=()
+  local id rest
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    id="${line%% *}"; rest="${line#"${id}"}"
+    SCEN_IDS+=("${id}")
+    SCEN_DESC+=("$(printf '%s' "${rest}" | sed 's/^ *//')")
+  done < <("${DUMMY_EVE}" list 2>/dev/null)
+}
+
+# --- menu actions -----------------------------------------------------------
+act_list() {
+  printf '\n%sScenarios%s\n' "${C_BOLD}" "${C_RESET}"
+  "${DUMMY_EVE}" list
+  echo
+  pause
+}
+
+act_emit() {
+  load_scenarios
+  echo
+  printf '%sPick a scenario to fire%s\n' "${C_BOLD}" "${C_RESET}"
+  local i
+  for i in "${!SCEN_IDS[@]}"; do
+    printf '  %2d) %-14s %s\n' "$((i + 1))" "${SCEN_IDS[$i]}" "${SCEN_DESC[$i]}"
+  done
+  local choice; read -r -p "  number (blank=cancel): " choice
+  [[ -z "${choice}" ]] && return 0
+  if ! [[ "${choice}" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#SCEN_IDS[@]} )); then
+    printf '  %sinvalid selection%s\n' "${C_RED}" "${C_RESET}"; return 0
+  fi
+  local scen="${SCEN_IDS[$((choice - 1))]}"
+  local count; read -r -p "  how many events [5]: " count; count="${count:-5}"
+  printf '  %sfiring%s %s x%s -> %s\n' "${C_YELLOW}" "${C_RESET}" "${scen}" "${count}" "${EVE_PATH}"
+  "${DUMMY_EVE}" --eve-path "${EVE_PATH}" emit --scenario "${scen}" --count "${count}" --interval 0.3
+  echo; pause
+}
+
+act_flow() {
+  echo
+  printf '%sStaged attack flow%s (benign -> recon -> scan -> c2 -> exfil)\n' "${C_BOLD}" "${C_RESET}"
+  local count; read -r -p "  events per stage [5]: " count; count="${count:-5}"
+  local hold; read -r -p "  pause between stages (s) [4]: " hold; hold="${hold:-4}"
+  printf '  %srunning flow…%s (watch %s)\n' "${C_YELLOW}" "${C_RESET}" "${WEB_URL}"
+  "${DUMMY_EVE}" --eve-path "${EVE_PATH}" flow --count "${count}" --hold "${hold}"
+  echo; pause
+}
+
+act_stream_start() {
+  if stream_running; then
+    printf '  %sstream already running (pid %s)%s\n' "${C_YELLOW}" "$(cat "${STREAM_PID}")" "${C_RESET}"
+    pause; return 0
+  fi
+  : >"${STREAM_LOG}"
+  nohup "${DUMMY_EVE}" --eve-path "${EVE_PATH}" stream >>"${STREAM_LOG}" 2>&1 </dev/null &
+  local pid=$!; disown "${pid}" 2>/dev/null || true
+  echo "${pid}" >"${STREAM_PID}"
+  printf '  %sstream started%s (pid %s) -- benign noise + periodic attack bursts\n' \
+    "${C_GREEN}" "${C_RESET}" "${pid}"
+  pause
+}
+
+act_stream_stop() {
+  if ! stream_running; then
+    printf '  %sno stream running%s\n' "${C_YELLOW}" "${C_RESET}"; rm -f "${STREAM_PID}"; pause; return 0
+  fi
+  local pid; pid="$(cat "${STREAM_PID}")"
+  kill "${pid}" 2>/dev/null || true
+  for _ in $(seq 1 12); do kill -0 "${pid}" 2>/dev/null || break; sleep 0.25; done
+  kill -9 "${pid}" 2>/dev/null || true
+  rm -f "${STREAM_PID}"
+  printf '  %sstream stopped%s (was pid %s)\n' "${C_GREEN}" "${C_RESET}" "${pid}"
+  pause
+}
+
+act_tail() {
+  echo
+  if [[ ! -s "${EVE_PATH}" ]]; then
+    printf '  %seve.json is empty%s (%s)\n' "${C_YELLOW}" "${C_RESET}" "${EVE_PATH}"; pause; return 0
+  fi
+  printf '%sLast events%s (%s)\n' "${C_BOLD}" "${C_RESET}" "${EVE_PATH}"
+  tail -n 8 "${EVE_PATH}" | while IFS= read -r line; do
+    printf '%s\n' "${line}" | "${ROOT_DIR}/.venv/bin/python" -c \
+      'import sys,json;
+[print("  {:<12} sid={} {}".format(d.get("attack_type","?"), d.get("alert",{}).get("signature_id","?"), d.get("alert",{}).get("signature",""))) for d in [json.loads(sys.stdin.read())]]' \
+      2>/dev/null || printf '  %s\n' "${line:0:100}"
+  done
+  echo; pause
+}
+
+act_reset() {
+  read -r -p "  truncate ${EVE_PATH}? [y/N] " yn
+  if [[ "${yn}" =~ ^[Yy]$ ]]; then : >"${EVE_PATH}"; printf '  %seve.json reset%s\n' "${C_GREEN}" "${C_RESET}"; fi
+  pause
+}
+
+print_header() {
+  clear 2>/dev/null || true
+  local st="stopped" stc="${C_RED}"
+  stream_running && { st="running (pid $(cat "${STREAM_PID}"))"; stc="${C_GREEN}"; }
+  local pl="down" plc="${C_YELLOW}"
+  pipeline_up && { pl="up"; plc="${C_GREEN}"; }
+  printf '%s╭─ Azazel-Edge Injector ─ demo / test control panel ─╮%s\n' "${C_BOLD}" "${C_RESET}"
+  printf '   eve.json : %s  (%s events)\n' "${EVE_PATH}" "$(eve_count)"
+  printf '   stream   : %s%s%s\n' "${stc}" "${st}" "${C_RESET}"
+  printf '   pipeline : %s%s%s  (dashboard %s)\n' "${plc}" "${pl}" "${C_RESET}" "${WEB_URL}"
+  if ! pipeline_up; then
+    printf '   %shint: run `bin/azazel-edge-devstack up` so injected events reach the dashboard%s\n' \
+      "${C_YELLOW}" "${C_RESET}"
+  fi
+  printf '%s╰────────────────────────────────────────────────────╯%s\n' "${C_BOLD}" "${C_RESET}"
+}
+
+menu() {
+  while :; do
+    print_header
+    cat <<EOF
+
+  ${C_BOLD}1${C_RESET}) シナリオ一覧を表示            (list)
+  ${C_BOLD}2${C_RESET}) 単発シナリオを発火            (emit)
+  ${C_BOLD}3${C_RESET}) 攻撃フローを実行              (staged flow)
+  ${C_BOLD}4${C_RESET}) 連続ストリームを開始          (background)
+  ${C_BOLD}5${C_RESET}) 連続ストリームを停止
+  ${C_BOLD}6${C_RESET}) eve.json の直近イベントを表示
+  ${C_BOLD}7${C_RESET}) eve.json をリセット
+  ${C_BOLD}q${C_RESET}) 終了
+EOF
+    local sel; read -r -p $'\n  > ' sel
+    case "${sel}" in
+      1) act_list ;;
+      2) act_emit ;;
+      3) act_flow ;;
+      4) act_stream_start ;;
+      5) act_stream_stop ;;
+      6) act_tail ;;
+      7) act_reset ;;
+      q|Q) echo "  bye"; break ;;
+      *) : ;;
+    esac
+  done
+}
+
+menu

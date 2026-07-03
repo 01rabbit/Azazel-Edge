@@ -22,6 +22,8 @@ Entry point for all documents in this directory.
 | [BENCHMARK_SCOPE_AND_HIL_PLAN.md](BENCHMARK_SCOPE_AND_HIL_PLAN.md) | Developer / Operator | Benchmark claim boundary and staged hardware-in-the-loop plan | 2026-05-14 |
 | [POST_DEMO_MAIN_INTEGRATION_104.md](POST_DEMO_MAIN_INTEGRATION_104.md) | Developer | Integration boundary between exhibition-only assets and mainline | 2026-05-11 |
 | [POST_DEMO_SOCKET_PERMISSION_MODEL_105.md](POST_DEMO_SOCKET_PERMISSION_MODEL_105.md) | Developer | Unix socket permission model decisions | - |
+| [DEV_LOCAL_STACK.md](DEV_LOCAL_STACK.md) | Developer | macOS local dev stack launcher (`bin/azazel-edge-devstack`) usage (EN) | 2026-07-03 |
+| [DEV_LOCAL_STACK_JA.md](DEV_LOCAL_STACK_JA.md) | Developer | ローカル開発スタック起動ツール利用手順（日本語版） | 2026-07-03 |
 
 ## AI Operations
 

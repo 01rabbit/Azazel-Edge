@@ -33,6 +33,8 @@ Last updated: 2026-05-13
 - `docs/MIO_PERSONA_PROFILE_JA.md` (JA)
 - `docs/OPERATOR_GUIDE.md` (EN)
 - `docs/OPERATOR_GUIDE_JA.md` (JA)
+- `docs/DEV_LOCAL_STACK.md` (EN)
+- `docs/DEV_LOCAL_STACK_JA.md` (JA)
 
 ### C. Governance charter
 - `AGENTS.md`: authoritative governance charter (English)
