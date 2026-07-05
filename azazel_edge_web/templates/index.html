@@ -301,6 +301,7 @@
                         <strong id="resourceGuardQueueValue">-</strong>
                     </div>
                     <div class="resource-guard-meter" aria-hidden="true"><span id="resourceGuardQueueBar" class="resource-guard-meter-fill"></span></div>
+                    <div class="az-spark-slot" id="azSparkQueue" aria-hidden="true"></div>
                     <p class="resource-guard-detail" id="resourceGuardQueueDetail">-</p>
                 </article>
                 <article class="mission-card resource-guard-visual-card">
@@ -309,6 +310,7 @@
                         <strong id="resourceGuardFallbackValue">-</strong>
                     </div>
                     <div class="resource-guard-meter" aria-hidden="true"><span id="resourceGuardFallbackBar" class="resource-guard-meter-fill"></span></div>
+                    <div class="az-spark-slot" id="azSparkFallback" aria-hidden="true"></div>
                     <p class="resource-guard-detail" id="resourceGuardFallbackDetail">-</p>
                 </article>
                 <article class="mission-card resource-guard-visual-card">
@@ -317,6 +319,7 @@
                         <strong id="resourceGuardLatencyValue">-</strong>
                     </div>
                     <div class="resource-guard-meter" aria-hidden="true"><span id="resourceGuardLatencyBar" class="resource-guard-meter-fill"></span></div>
+                    <div class="az-spark-slot" id="azSparkLatency" aria-hidden="true"></div>
                     <p class="resource-guard-detail" id="resourceGuardLatencyDetail">-</p>
                 </article>
             </div>
@@ -419,7 +422,10 @@
                                     <div class="card-kicker">{{ tr('dashboard.threat_posture', 'Threat Posture') }}</div>
                                     <h3 id="postureState">--</h3>
                                 </div>
-                                <div class="risk-score" id="riskScore">0</div>
+                                <div class="risk-score-wrap">
+                                    <div class="risk-score" id="riskScore">0</div>
+                                    <div class="az-spark-slot az-spark-slot-risk" id="azSparkRisk" aria-hidden="true"></div>
+                                </div>
                             </div>
                             <p class="card-summary" id="postureRecommendation">-</p>
                             <div class="fact-list">

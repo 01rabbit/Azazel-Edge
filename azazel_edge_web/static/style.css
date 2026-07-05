@@ -946,6 +946,40 @@ body[data-audience="professional"] .temp-only {
     background: linear-gradient(90deg, rgba(228, 109, 93, 0.94), rgba(255, 148, 148, 0.94));
 }
 
+.az-spark-slot {
+    margin-top: 8px;
+    height: 32px;           /* reserved height: fixed regardless of content so no layout shift */
+    width: 100%;
+    min-width: 0;
+}
+
+.az-spark-slot svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+/* Tone reuses the existing global .status-safe/.status-caution/.status-danger color rules via currentColor. */
+.az-spark-slot svg.status-safe    { color: var(--accent-green); }
+.az-spark-slot svg.status-caution { color: var(--accent-amber); }
+.az-spark-slot svg.status-danger  { color: var(--accent-red); }
+
+.az-spark-line {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.az-spark-area {
+    fill: currentColor;
+    opacity: 0.15;
+    stroke: none;
+}
+
 .resource-guard-detail {
     margin: 10px 0 0;
     color: var(--text-dim);
@@ -1628,6 +1662,14 @@ body[data-audience="professional"] .temp-only {
     align-items: center;
 }
 
+.risk-score-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
 .risk-score {
     width: clamp(78px, 6vw, 100px);
     height: clamp(78px, 6vw, 100px);
@@ -1639,6 +1681,17 @@ body[data-audience="professional"] .temp-only {
     color: var(--text-main);
     background: rgba(255,255,255,0.07);
     border: 1px solid var(--line-strong);
+}
+
+.az-spark-slot-risk {
+    height: 28px;
+    width: 72px;            /* small companion sparkline beside the numeric score, not full card width */
+    flex-shrink: 0;
+    margin-top: 0;          /* override .az-spark-slot's default top margin; spacing handled by wrap gap */
+}
+
+@media (max-width: 480px) {
+    .az-spark-slot-risk { display: none; } /* value text remains visible; sparkline is a bonus, not load-bearing */
 }
 
 .card-summary,

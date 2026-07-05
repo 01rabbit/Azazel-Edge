@@ -36,6 +36,67 @@ let azAttnPrevDirectCritical = null;
 let azAttnBandTimer = null;
 const azAttnReducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
+// az-spark: lightweight trend sparklines (Issue #300, item 4)
+const AZ_SPARK_CAP = 45;
+const azSparkHistory = new Map(); // key -> number[]
+
+function azSparkPush(key, value) {
+    const v = Number(value);
+    if (!Number.isFinite(v)) return;
+    let arr = azSparkHistory.get(key);
+    if (!arr) { arr = []; azSparkHistory.set(key, arr); }
+    arr.push(v);
+    if (arr.length > AZ_SPARK_CAP) arr.shift();
+}
+
+function azSparkRender(key, slotId, tone) {
+    const slot = document.getElementById(slotId);
+    if (!slot) return;
+    const data = azSparkHistory.get(key) || [];
+    if (data.length < 2) {
+        slot.textContent = ''; // clear any prior svg; reserved height keeps layout stable
+        return;
+    }
+    const W = 100, H = 30, PAD = 2;
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    const span = max - min;
+    const stepX = W / (data.length - 1);
+    const points = data.map((v, i) => {
+        const x = i * stepX;
+        const y = span === 0
+            ? H / 2
+            : (H - PAD) - ((v - min) / span) * (H - PAD * 2);
+        return [x, y];
+    });
+    const lineD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(' ');
+    const areaD = `${lineD} L${W},${H} L0,${H} Z`;
+
+    let svg = slot.firstElementChild;
+    let linePath, areaPath;
+    if (!svg || svg.tagName.toLowerCase() !== 'svg') {
+        svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+        svg.setAttribute('preserveAspectRatio', 'none');
+        svg.setAttribute('aria-hidden', 'true');
+        areaPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        areaPath.setAttribute('class', 'az-spark-area');
+        linePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        linePath.setAttribute('class', 'az-spark-line');
+        svg.appendChild(areaPath);
+        svg.appendChild(linePath);
+        slot.textContent = '';
+        slot.appendChild(svg);
+    } else {
+        areaPath = svg.querySelector('.az-spark-area');
+        linePath = svg.querySelector('.az-spark-line');
+    }
+    svg.classList.remove('status-safe', 'status-caution', 'status-danger');
+    svg.classList.add(tone || 'status-safe');
+    areaPath.setAttribute('d', areaD);
+    linePath.setAttribute('d', lineD);
+}
+
 function advanceOnboardingStep() {
     onboardingStepIndex = (onboardingStepIndex + 1) % 3;
     syncOnboardingBanner();
@@ -822,7 +883,7 @@ async function refreshDashboard() {
         updateHeader(state, mattermost);
         updateClientIdentityView(summary);
         updateCommandStrip(summary, health, failures);
-        updateOperationalResourceGuard(health);
+        updateOperationalResourceGuard(health, Boolean(resultMap.health?.ok));
         updateAIGovernanceSnapshot(health.ai_governance || {});
         updateSituationBoard(summary, state, health, mattermost);
         updateSplitBoard(summary, actions);
@@ -1747,6 +1808,8 @@ function updateSituationBoard(summary, state, health, mattermost) {
 
     updateElement('postureState', `${risk.user_state || '--'} / ${risk.state_name || '--'}`);
     azAttnUpdateRiskScore(risk.suspicion ?? 0, postureTone);
+    azSparkPush('risk', risk.suspicion ?? 0);
+    azSparkRender('risk', 'azSparkRisk', postureTone);
     updateElement('postureRecommendation', summary.current_recommendation || '-');
     updateElement('postureCurrentRecommendation', summary.current_recommendation || '-');
     updateElement('postureConfidence', summary.situation_board?.threat_posture?.confidence ? `${summary.situation_board.threat_posture.confidence}` : '-');
@@ -2612,7 +2675,7 @@ async function openAuthenticatedJson(path, title) {
 }
 
 
-function updateOperationalResourceGuard(health) {
+function updateOperationalResourceGuard(health, healthOk = true) {
     const queue = health?.queue || {};
     const llm = health?.llm || {};
     const staleFlags = health?.stale_flags || {};
@@ -2704,6 +2767,14 @@ function updateOperationalResourceGuard(health) {
     setMeterFill('resourceGuardQueueBar', queuePct, queueTone);
     setMeterFill('resourceGuardFallbackBar', fallbackPct, fallbackTone);
     setMeterFill('resourceGuardLatencyBar', latencyPct, latencyTone);
+    if (healthOk) {
+        azSparkPush('queue', queuePct);
+        azSparkPush('fallback', fallbackPct);
+        azSparkPush('latency', latencyPct);
+    }
+    azSparkRender('queue', 'azSparkQueue', queueTone);
+    azSparkRender('fallback', 'azSparkFallback', fallbackTone);
+    azSparkRender('latency', 'azSparkLatency', latencyTone);
     if (headline) {
         headline.textContent = overallStatus === 'status-danger' ? 'DEGRADED' : (overallStatus === 'status-caution' ? 'WATCH' : 'STABLE');
     }
