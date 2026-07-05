@@ -64,7 +64,7 @@ With `--all`, external dependencies (currently: Mattermost on OrbStack, via `sec
 The runtime runs in **safe mode**: defense enforcement is dry-run/advisory only, matching `AZAZEL_DEFENSE_DRY_RUN=true` / `AZAZEL_DEFENSE_ENFORCE_LEVEL=advisory` in `tools/macdev/env.sh`.
 
 ## Injector — test/demo control panel
-`bin/azazel-edge-injector` is a **self-contained** front-end for the `dummy-eve` test-event generator. It sources the dev environment itself, so it runs standalone — no need to have `devstack` up first — and writes fabricated Suricata EVE alerts to the dev `eve.json` that the Rust core tails.
+`bin/azazel-edge-injector` is a **self-contained** front-end for the `dummy-eve` test-event generator, intended for development, testing, and live demos alike. It auto-detects its environment (`macdev` profile when `tools/macdev/env.sh` exists on a Mac, `appliance` profile otherwise — override with `AZAZEL_INJECTOR_PROFILE`), so it runs standalone — no need to have `devstack` up first — and writes fabricated Suricata EVE alerts to the `eve.json` that the Rust core tails (dev: `~/.azazel-edge-dev/suricata/eve.json`, appliance: `/var/log/suricata/eve.json`).
 
 Two modes:
 

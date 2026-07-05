@@ -30,7 +30,6 @@ export AZAZEL_TRIAGE_SESSION_DIR="$RUN_DIR/triage-sessions"
 export AZAZEL_OPERATOR_PROGRESS_PATH="$RUN_DIR/operator-progress.json"
 export AZAZEL_RUNBOOK_EVENT_LOG="$LOG_DIR/runbook-events.jsonl"
 export AZAZEL_TRIAGE_AUDIT_PATH="$LOG_DIR/triage-audit.jsonl"
-export AZAZEL_DEMO_OVERLAY="$RUN_DIR/demo_overlay.json"
 
 # --- control plane / daemon ---
 export AZAZEL_CONTROL_SOCKET="$RUN_DIR/control.sock"

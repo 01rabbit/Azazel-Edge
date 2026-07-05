@@ -15,7 +15,7 @@ Targets:
 Socket | Primary callers | Notes
 ---|---|---
 `/run/azazel-edge/control.sock` | Web UI process, local CLI/helpers | Used for operator actions and runtime status calls
-`/run/azazel-edge/ai-bridge.sock` | Rust core, local helper (`azazel-edge-inject-test-events`) | Used for normalized event forwarding and manual query path
+`/run/azazel-edge/ai-bridge.sock` | Rust core | Used for normalized event forwarding and manual query path (test events enter upstream via `azazel-edge-injector` / `dummy-eve` -> `eve.json` -> Rust core)
 
 ## Runtime Permission Policy
 

@@ -162,9 +162,9 @@ install -m 0755 "$REPO_ROOT/bin/azazel-edge-epd-refresh" /usr/local/bin/azazel-e
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-control-daemon" /usr/local/bin/azazel-edge-control-daemon
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-ai-agent" /usr/local/bin/azazel-edge-ai-agent
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-runbook-broker" /usr/local/bin/azazel-edge-runbook-broker
-install -m 0755 "$REPO_ROOT/bin/azazel-edge-inject-test-events" /usr/local/bin/azazel-edge-inject-test-events
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-scenario-replay" /usr/local/bin/azazel-edge-scenario-replay
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-dummy-eve" /usr/local/bin/azazel-edge-dummy-eve
+install -m 0755 "$REPO_ROOT/bin/azazel-edge-injector" /usr/local/bin/azazel-edge-injector
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-audit-review" /usr/local/bin/azazel-edge-audit-review
 install -m 0755 "$REPO_ROOT/installer/internal/set_dev_remote_access.sh" /opt/azazel-edge/set_dev_remote_access.sh
 install -m 0755 "$REPO_ROOT/installer/internal/install_ai_runtime.sh" /opt/azazel-edge/install_ai_runtime.sh

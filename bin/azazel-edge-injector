@@ -1,35 +1,66 @@
 #!/usr/bin/env bash
 # azazel-edge-injector -- self-contained test-event injection tool + demo menu.
 #
-# Runs standalone (no devstack required): it sources the macOS dev environment
-# itself, so the fabricated Suricata EVE alerts land on the dev eve.json that
-# azazel-edge-core tails. Two modes:
+# Injects fabricated Suricata EVE alerts into the eve.json that
+# azazel-edge-core tails, so the REAL pipeline (core -> AI agent -> control
+# daemon -> dashboard) reacts. Intended for development, testing, AND live
+# demos (Arsenal booth included): the audience watches the same dashboard
+# operators use, not a demo-only screen. Two modes:
 #
 #   azazel-edge-injector                 # interactive menu (demo / test screen)
 #   azazel-edge-injector <dummy-eve args># pass-through CLI, e.g.
 #                                        #   azazel-edge-injector emit --scenario port_scan --count 5
 #                                        #   azazel-edge-injector list
 #
-# For a live demo, start the pipeline first (bin/azazel-edge-devstack up), then
-# drive attacks from this menu and watch the real dashboard react.
+# Start the pipeline first (dev: bin/azazel-edge-devstack up; appliance: the
+# azazel-edge-* systemd services), then drive attacks from this menu.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# --- self-contained environment --------------------------------------------
-# env.sh sets AZAZEL_EVE_PATH, PYTHONPATH, the dev state dir, etc. Sourcing it
-# here is what makes the tool work on its own.
-# shellcheck source=/dev/null
-source "${ROOT_DIR}/tools/macdev/env.sh"
+# --- environment detection ---------------------------------------------------
+# macdev profile: tools/macdev/env.sh present on a Mac -> dev eve.json and
+# state under ~/.azazel-edge-dev. appliance profile: no macdev env -> the same
+# defaults dummy-eve uses on the appliance (/var/log/suricata/eve.json),
+# injector state under /tmp. Override with AZAZEL_INJECTOR_PROFILE=macdev|appliance
+# or the individual AZAZEL_* variables.
+MACDEV_ENV="${ROOT_DIR}/tools/macdev/env.sh"
+if [[ -z "${AZAZEL_INJECTOR_PROFILE:-}" ]]; then
+  if [[ "$(uname -s)" == "Darwin" && -f "${MACDEV_ENV}" ]]; then
+    AZAZEL_INJECTOR_PROFILE="macdev"
+  else
+    AZAZEL_INJECTOR_PROFILE="appliance"
+  fi
+fi
 
-EVE_PATH="${AZAZEL_EVE_PATH}"
-RUN_DIR="${AZAZEL_DEV_STATE}/run"
-LOG_DIR="${AZAZEL_DEV_STATE}/log"
+if [[ "${AZAZEL_INJECTOR_PROFILE}" == "macdev" ]]; then
+  # shellcheck source=/dev/null
+  source "${MACDEV_ENV}"
+  RUN_DIR="${AZAZEL_DEV_STATE}/run"
+  LOG_DIR="${AZAZEL_DEV_STATE}/log"
+  PIPELINE_HINT='run `bin/azazel-edge-devstack up` so injected events reach the dashboard'
+else
+  RUN_DIR="${AZAZEL_INJECTOR_STATE:-/tmp/azazel-edge-injector}"
+  LOG_DIR="${RUN_DIR}"
+  PIPELINE_HINT='check `systemctl status azazel-edge-web azazel-edge-core` so injected events reach the dashboard'
+fi
+
+EVE_PATH="${AZAZEL_EVE_PATH:-/var/log/suricata/eve.json}"
 STREAM_PID="${RUN_DIR}/injector-stream.pid"
 STREAM_LOG="${LOG_DIR}/injector-stream.log"
 DUMMY_EVE="${ROOT_DIR}/bin/azazel-edge-dummy-eve"
 WEB_URL="http://${AZAZEL_WEB_HOST:-127.0.0.1}:${AZAZEL_WEB_PORT:-8084}"
-mkdir -p "${RUN_DIR}" "${LOG_DIR}" "$(dirname "${EVE_PATH}")"
+mkdir -p "${RUN_DIR}" "${LOG_DIR}" 2>/dev/null || true
+mkdir -p "$(dirname "${EVE_PATH}")" 2>/dev/null || true
+
+# Same python resolution as dummy-eve: repo venv (dev), appliance venv, PATH.
+if [[ -x "${ROOT_DIR}/.venv/bin/python" ]]; then
+  PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
+elif [[ -x "/opt/azazel-edge/venv/bin/python" ]]; then
+  PYTHON_BIN="/opt/azazel-edge/venv/bin/python"
+else
+  PYTHON_BIN="$(command -v python3)"
+fi
 
 # --- colors -----------------------------------------------------------------
 if [[ -t 1 ]]; then
@@ -145,7 +176,7 @@ act_tail() {
   fi
   printf '%sLast events%s (%s)\n' "${C_BOLD}" "${C_RESET}" "${EVE_PATH}"
   tail -n 8 "${EVE_PATH}" | while IFS= read -r line; do
-    printf '%s\n' "${line}" | "${ROOT_DIR}/.venv/bin/python" -c \
+    printf '%s\n' "${line}" | "${PYTHON_BIN}" -c \
       'import sys,json;
 [print("  {:<12} sid={} {}".format(d.get("attack_type","?"), d.get("alert",{}).get("signature_id","?"), d.get("alert",{}).get("signature",""))) for d in [json.loads(sys.stdin.read())]]' \
       2>/dev/null || printf '  %s\n' "${line:0:100}"
@@ -166,12 +197,12 @@ print_header() {
   local pl="down" plc="${C_YELLOW}"
   pipeline_up && { pl="up"; plc="${C_GREEN}"; }
   printf '%s╭─ Azazel-Edge Injector ─ demo / test control panel ─╮%s\n' "${C_BOLD}" "${C_RESET}"
+  printf '   profile  : %s\n' "${AZAZEL_INJECTOR_PROFILE}"
   printf '   eve.json : %s  (%s events)\n' "${EVE_PATH}" "$(eve_count)"
   printf '   stream   : %s%s%s\n' "${stc}" "${st}" "${C_RESET}"
   printf '   pipeline : %s%s%s  (dashboard %s)\n' "${plc}" "${pl}" "${C_RESET}" "${WEB_URL}"
   if ! pipeline_up; then
-    printf '   %shint: run `bin/azazel-edge-devstack up` so injected events reach the dashboard%s\n' \
-      "${C_YELLOW}" "${C_RESET}"
+    printf '   %shint: %s%s\n' "${C_YELLOW}" "${PIPELINE_HINT}" "${C_RESET}"
   fi
   printf '%s╰────────────────────────────────────────────────────╯%s\n' "${C_BOLD}" "${C_RESET}"
 }
