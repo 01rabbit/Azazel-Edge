@@ -1012,15 +1012,15 @@
             </details>
         </section>
 
-        <section class="panel" id="aggregatorPanel" hidden>
+        <section class="panel aggregator-panel" id="aggregatorPanel" hidden>
             <div class="panel-heading">
-                <div class="panel-title-group">
+                <div>
                     <div class="panel-kicker">{{ tr('dashboard.aggregator_kicker', 'Multi-Node') }}</div>
-                    <h2 class="panel-title">{{ tr('dashboard.aggregator_title', 'Node Fleet Status') }}</h2>
+                    <h2>{{ tr('dashboard.aggregator_title', 'Node Fleet Status') }}</h2>
                 </div>
-                <p class="panel-note" id="aggregatorPanelNote">
+                <div class="panel-note" id="aggregatorPanelNote">
                     {{ tr('dashboard.aggregator_note', 'Aggregated freshness and risk posture across registered nodes.') }}
-                </p>
+                </div>
             </div>
 
             <div class="aggregator-counters" id="aggregatorCounters">
