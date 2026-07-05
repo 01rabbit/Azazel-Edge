@@ -32,6 +32,18 @@ source "${ROOT_DIR}/tools/macdev/env.sh"
 # on OrbStack at localhost:8065 -- point at it unless the user already chose.
 export AZAZEL_MATTERMOST_HOST="${AZAZEL_MATTERMOST_HOST:-127.0.0.1}"
 
+# Mattermost workspace credentials (bot token / webhook / channel id) written
+# by tools/macdev/provision-mattermost.sh. Without them the web app runs with
+# Mattermost integration in "disabled" mode; with them it gets full bot_api
+# mode. Run the provisioner once after first `up` to create this file.
+MM_WEB_ENV="${AZAZEL_DEV_STATE}/mattermost-web.env"
+if [[ -f "${MM_WEB_ENV}" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "${MM_WEB_ENV}"
+  set +a
+fi
+
 RUN_DIR="${AZAZEL_DEV_STATE}/run"
 LOG_DIR="${AZAZEL_DEV_STATE}/log"
 DEVSTACK_RUN="${RUN_DIR}/devstack"
