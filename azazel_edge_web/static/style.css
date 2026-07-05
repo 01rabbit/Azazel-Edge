@@ -233,152 +233,178 @@ body[data-audience="professional"] .temp-only {
     background: linear-gradient(145deg, rgba(57, 42, 20, 0.42), rgba(24, 27, 34, 0.88));
 }
 
-/* Aggregator fleet counters */
+/* Aggregator fleet panel — shares the standard panel/tile visual language */
+.aggregator-panel {
+    padding: 22px 24px 24px;
+    margin-top: 18px;
+}
+
 .aggregator-counters {
-    display: flex;
-    gap: 1rem;
-    margin: 0.75rem 0;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
 }
 
 .aggregator-counter {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 0.5rem 1rem;
-    border: 1px solid var(--line-soft, #ddd);
-    border-radius: 6px;
-    min-width: 5rem;
+    min-width: 0;
+    padding: 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(145deg, rgba(167, 199, 214, 0.1), rgba(13, 20, 26, 0.88));
+    box-shadow: var(--shadow-sm);
 }
 
 .aggregator-counter.agg-warn {
-    border-color: var(--accent-amber, #e8a000);
+    background: linear-gradient(145deg, rgba(224, 164, 88, 0.14), rgba(13, 20, 26, 0.88));
+    border-color: rgba(224, 164, 88, 0.28);
 }
 
 .aggregator-counter.agg-crit {
-    border-color: var(--accent-red, #c0392b);
+    background: linear-gradient(145deg, rgba(228, 109, 93, 0.16), rgba(13, 20, 26, 0.88));
+    border-color: rgba(228, 109, 93, 0.3);
 }
 
 .agg-count-num {
-    font-size: 1.8rem;
-    font-weight: 700;
-    line-height: 1;
+    display: block;
+    font-size: clamp(1.7rem, 3.2vw, 2.3rem);
+    line-height: 1.05;
+    font-family: var(--font-mono);
+    color: var(--text-main);
 }
 
 .agg-count-label {
-    font-size: 0.75rem;
-    color: var(--text-soft, #666);
-    margin-top: 0.25rem;
+    display: block;
+    font-size: 0.74rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+    margin-top: 10px;
 }
 
 /* Node list */
 .aggregator-node-list {
     list-style: none;
-    margin: 0;
+    margin: 14px 0 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
+    display: grid;
+    gap: 10px;
 }
 
 .aggregator-node-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.5rem 0.75rem;
-    border-left: 3px solid var(--line-soft, #ddd);
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.05);
+    padding: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-left-width: 4px;
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.03);
+    box-shadow: var(--shadow-sm);
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: 10px;
 }
 
 .aggregator-node-row.status-ok {
-    border-left-color: var(--accent-green, #27ae60);
+    border-left-color: rgba(127, 211, 155, 0.95);
 }
 
 .aggregator-node-row.status-warn {
-    border-left-color: var(--accent-amber, #e8a000);
+    border-left-color: rgba(224, 164, 88, 0.95);
 }
 
 .aggregator-node-row.status-crit {
-    border-left-color: var(--accent-red, #c0392b);
+    border-left-color: rgba(228, 109, 93, 0.95);
 }
 
 .agg-node-identity {
     display: flex;
-    gap: 0.5rem;
+    gap: 8px;
     align-items: baseline;
     flex-wrap: wrap;
 }
 
 .agg-node-label {
-    font-weight: 600;
+    font-weight: 700;
+    overflow-wrap: anywhere;
 }
 
 .agg-node-site {
     font-size: 0.8rem;
-    color: var(--text-soft, #666);
+    color: var(--text-soft);
 }
 
 .agg-node-status {
     display: flex;
-    gap: 0.5rem;
+    gap: 8px;
     align-items: center;
     flex-wrap: wrap;
     font-size: 0.82rem;
 }
 
 .agg-freshness-badge {
-    padding: 0.1rem 0.4rem;
-    border-radius: 3px;
-    font-size: 0.75rem;
-    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
+    font-family: var(--font-mono);
+    border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .agg-freshness-fresh {
-    background: #d4edda;
-    color: #155724;
+    background: rgba(127, 211, 155, 0.14);
+    border-color: rgba(127, 211, 155, 0.24);
+    color: rgba(214, 247, 223, 0.95);
 }
 
 .agg-freshness-stale {
-    background: #fff3cd;
-    color: #856404;
+    background: rgba(224, 164, 88, 0.14);
+    border-color: rgba(224, 164, 88, 0.28);
+    color: rgba(255, 234, 207, 0.96);
 }
 
 .agg-freshness-offline {
-    background: #f8d7da;
-    color: #721c24;
+    background: rgba(228, 109, 93, 0.16);
+    border-color: rgba(228, 109, 93, 0.28);
+    color: rgba(255, 213, 213, 0.96);
 }
 
 .agg-tag {
-    padding: 0.1rem 0.4rem;
-    border-radius: 3px;
-    font-size: 0.75rem;
-    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-family: var(--font-mono);
+    border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .agg-tag-quarantine {
-    background: #f8d7da;
-    color: #721c24;
+    background: rgba(228, 109, 93, 0.16);
+    border-color: rgba(228, 109, 93, 0.28);
+    color: rgba(255, 213, 213, 0.96);
 }
 
 .agg-lastseen {
-    color: var(--text-soft, #888);
-    font-size: 0.75rem;
+    color: var(--text-soft);
+    font-size: 0.76rem;
+    font-family: var(--font-mono);
 }
 
 .aggregator-node-placeholder {
-    color: var(--text-soft, #888);
-    font-style: italic;
-    padding: 0.5rem 0;
+    color: var(--text-dim);
+    padding: 4px 0;
 }
 
 .aggregator-last-updated {
-    font-size: 0.75rem;
-    color: var(--text-soft, #888);
-    margin-top: 0.5rem;
+    font-size: 0.76rem;
+    color: var(--text-soft);
+    margin-top: 12px;
 }
 
 .panel {
@@ -1085,7 +1111,7 @@ body[data-audience="professional"] .temp-only {
 }
 
 .topolite-nav-panel {
-    padding: 18px 20px;
+    padding: 22px 24px 24px;
     margin-bottom: 14px;
 }
 
@@ -1107,6 +1133,7 @@ body[data-audience="professional"] .temp-only {
 
 .topolite-single-screen {
     margin-top: 18px;
+    padding: 22px 24px 24px;
 }
 
 .topolite-single-grid {
