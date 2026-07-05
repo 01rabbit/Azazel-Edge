@@ -7,43 +7,54 @@
     <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
 <body data-audience="temporary" data-page="dashboard">
-    <header class="topbar">
-        <div class="brand-block">
-            <div class="brand-kicker">Azazel-Edge</div>
-            <h1>{{ tr('dashboard.title', 'Azazel-Edge Command Dashboard') }}</h1>
-            <p class="brand-subtitle">{{ tr('dashboard.brand.subtitle', 'SOC/NOC situation board for operator and temporary-response workflows.') }}</p>
+    <div class="topbar-attn-stack">
+        <header class="topbar">
+            <div class="brand-block">
+                <div class="brand-kicker">Azazel-Edge</div>
+                <h1>{{ tr('dashboard.title', 'Azazel-Edge Command Dashboard') }}</h1>
+                <p class="brand-subtitle">{{ tr('dashboard.brand.subtitle', 'SOC/NOC situation board for operator and temporary-response workflows.') }}</p>
+            </div>
+            <div class="topbar-controls">
+                <div class="language-toggle" role="tablist" aria-label="{{ tr('lang.label', 'Language') }}">
+                    <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
+                    <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
+                </div>
+                <div class="audience-toggle" role="tablist" aria-label="Audience Mode">
+                    <button id="audienceProfessional" class="audience-btn" data-audience="professional">{{ tr('dashboard.professional', 'Professional') }}</button>
+                    <button id="audienceTemporary" class="audience-btn active" data-audience="temporary">{{ tr('dashboard.temporary', 'Temporary') }}</button>
+                </div>
+                <div class="topbar-links">
+                    <a id="askMioLink" class="topbar-link" href="#assistantPanel">{{ tr('dashboard.ask_mio', 'Ask M.I.O.') }}</a>
+                    <button id="showGuideBtn" class="topbar-link topbar-link-button" type="button">{{ tr('dashboard.show_guide', 'Show Guide') }}</button>
+                    <a id="openMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.open_mattermost', 'Open Mattermost') }}</a>
+                </div>
+                <div class="topbar-meta">
+                    <div class="meta-item">
+                        <span class="meta-label">CPU</span>
+                        <strong id="headerCpuUsage">--%</strong>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">MEM</span>
+                        <strong id="headerMemUsage">--%</strong>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">TEMP</span>
+                        <strong id="headerCpuTemp">--°C</strong>
+                    </div>
+                    <div class="meta-clock" id="headerClock">--:--:--</div>
+                </div>
+            </div>
+        </header>
+
+        <div id="globalAlertBand" class="az-attn-band" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="az-attn-band-inner">
+                <span class="az-attn-band-icon" aria-hidden="true">⚠</span>
+                <span class="az-attn-band-message" id="globalAlertBandMessage"></span>
+                <button type="button" class="az-attn-band-dismiss" id="globalAlertBandDismiss"
+                        aria-label="{{ tr('dashboard.alert_band.dismiss_label', 'Dismiss') }}">×</button>
+            </div>
         </div>
-        <div class="topbar-controls">
-            <div class="language-toggle" role="tablist" aria-label="{{ tr('lang.label', 'Language') }}">
-                <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
-                <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
-            </div>
-            <div class="audience-toggle" role="tablist" aria-label="Audience Mode">
-                <button id="audienceProfessional" class="audience-btn" data-audience="professional">{{ tr('dashboard.professional', 'Professional') }}</button>
-                <button id="audienceTemporary" class="audience-btn active" data-audience="temporary">{{ tr('dashboard.temporary', 'Temporary') }}</button>
-            </div>
-            <div class="topbar-links">
-                <a id="askMioLink" class="topbar-link" href="#assistantPanel">{{ tr('dashboard.ask_mio', 'Ask M.I.O.') }}</a>
-                <button id="showGuideBtn" class="topbar-link topbar-link-button" type="button">{{ tr('dashboard.show_guide', 'Show Guide') }}</button>
-                <a id="openMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.open_mattermost', 'Open Mattermost') }}</a>
-            </div>
-            <div class="topbar-meta">
-                <div class="meta-item">
-                    <span class="meta-label">CPU</span>
-                    <strong id="headerCpuUsage">--%</strong>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">MEM</span>
-                    <strong id="headerMemUsage">--%</strong>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">TEMP</span>
-                    <strong id="headerCpuTemp">--°C</strong>
-                </div>
-                <div class="meta-clock" id="headerClock">--:--:--</div>
-            </div>
-        </div>
-    </header>
+    </div>
 
     <main class="dashboard-shell">
         <section class="panel synthetic-mode-banner" id="syntheticModeBanner" hidden>

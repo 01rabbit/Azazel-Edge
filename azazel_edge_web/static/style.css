@@ -2244,6 +2244,110 @@ body[data-audience="professional"] .temp-only {
 .toast.error { border-color: rgba(228, 109, 93, 0.35); }
 .toast.info { border-color: rgba(116, 212, 255, 0.35); }
 
+/* ---- az-attn: transition-attention system ---- */
+
+@keyframes az-attn-danger {
+    0%   { box-shadow: 0 0 0 0 rgba(228, 109, 93, 0.85); transform: scale(1); }
+    8%   { box-shadow: 0 0 0 10px rgba(228, 109, 93, 0.35); transform: scale(1.015); }
+    20%  { box-shadow: 0 0 0 2px rgba(228, 109, 93, 0.55); transform: scale(1); }
+    35%  { box-shadow: 0 0 0 10px rgba(228, 109, 93, 0.30); transform: scale(1.01); }
+    55%  { box-shadow: 0 0 0 2px rgba(228, 109, 93, 0.40); transform: scale(1); }
+    100% { box-shadow: 0 0 0 0 rgba(228, 109, 93, 0); transform: scale(1); }
+}
+
+@keyframes az-attn-caution {
+    0%   { box-shadow: 0 0 0 0 rgba(224, 164, 88, 0.55); }
+    40%  { box-shadow: 0 0 0 6px rgba(224, 164, 88, 0.22); }
+    100% { box-shadow: 0 0 0 0 rgba(224, 164, 88, 0); }
+}
+
+/* Danger: strong, ~5s, one shot. Caution: subtler, ~2s, one shot. Neither loops. */
+.az-attn-pulse-danger  { animation: az-attn-danger 5s ease-out 1; }
+.az-attn-pulse-caution { animation: az-attn-caution 2s ease-out 1; }
+
+/* Risk score color transition (class itself reuses existing .status-safe/.status-caution/.status-danger,
+   defined above — no new color rule needed, just a smoothing transition + bump pop). */
+.risk-score { transition: color 0.25s ease; }
+
+@keyframes az-attn-riskscore-bump {
+    0%   { transform: scale(1); }
+    30%  { transform: scale(1.08); }
+    100% { transform: scale(1); }
+}
+.az-attn-riskscore-bump { animation: az-attn-riskscore-bump 420ms ease-out 1; }
+
+/* Topbar + global alert band are wrapped together so the band stays pinned right under the
+   (always-sticky) topbar no matter how far the operator has scrolled the long dashboard body.
+   Sticking the wrapper (rather than hard-coding a `top` offset on the band equal to the topbar's
+   height) keeps this correct even though the topbar's rendered height varies by language,
+   viewport width, and responsive breakpoint. */
+.topbar-attn-stack {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+}
+
+/* Global alert band: lives between topbar and main, collapsed by default. */
+.az-attn-band {
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-6px);
+    pointer-events: none;
+    /* Only opacity/transform participate in the transition (compositor-only, no layout
+       recalculation on every frame). max-height still toggles between states, but as an
+       instantaneous (single-reflow) property change rather than an animated one, since this
+       is a Raspberry-Pi-hosted UI and repeated layout thrash during a transition is expensive. */
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    background: linear-gradient(135deg, rgba(228, 109, 93, 0.18), rgba(13, 20, 26, 0.95));
+    border-bottom: 1px solid rgba(228, 109, 93, 0.4);
+    position: relative;
+    z-index: 49; /* under .topbar within the shared .topbar-attn-stack sticky context */
+}
+.az-attn-band.az-attn-band-show {
+    /* Generous cap (not an animated property, see above) so longer i18n strings (e.g. ja
+       hero-transition text) have room to wrap onto 2-3 lines without being clipped. */
+    max-height: 200px;
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+.az-attn-band-inner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    color: var(--text-main);
+    font-family: var(--font-ui);
+}
+.az-attn-band-message { flex: 1; font-weight: 600; }
+.az-attn-band-dismiss {
+    background: transparent;
+    border: 1px solid var(--line-soft);
+    color: var(--text-main);
+    border-radius: var(--radius-sm);
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 2px 10px;
+    cursor: pointer;
+}
+
+/* Reduced motion: no keyframe animation anywhere; band + risk score change state instantly. */
+@media (prefers-reduced-motion: reduce) {
+    .az-attn-pulse-danger,
+    .az-attn-pulse-caution,
+    .az-attn-riskscore-bump {
+        animation: none !important;
+        box-shadow: none !important;
+        transform: none !important;
+    }
+    .az-attn-band,
+    .az-attn-band.az-attn-band-show {
+        transition: none !important;
+    }
+    .risk-score { transition: none !important; }
+}
+
 @media (max-width: 1240px) {
     .command-glance-band {
         grid-template-columns: 1fr;
