@@ -29,6 +29,7 @@ const AZ_ATTN_DANGER_MS = 5000;   // must equal CSS .az-attn-pulse-danger animat
 const AZ_ATTN_CAUTION_MS = 2000;  // must equal CSS .az-attn-pulse-caution animation-duration
 const azAttnToneMemory = new Map();    // elementId -> last-seen normalized tone
 const azAttnActivePulses = new Map();  // elementId -> { cls, expiresAt }
+const azAttnPendingPulses = new Map(); // elementId -> { el, cls, durationMs }, deferred while inside a closed <details>
 let azAttnFirstSnapshotDone = false;   // flips true after refreshDashboard() tick #1 fully renders
 let azAttnPrevHeroTone = null;
 let azAttnPrevDirectCritical = null;
@@ -331,6 +332,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.documentElement.lang = CURRENT_LANG;
     syncLanguageUi();
     bindStaticHandlers();
+    azAttnBindFoldCatchup();
     startHeaderClock();
     setAudience(currentAudience);
     refreshDashboard();
@@ -1701,6 +1703,37 @@ function updateCommandStrip(summary, health, failures = []) {
     setPillTone('freshnessAiMetrics', health.stale_flags?.ai_metrics ? 'danger' : 'safe');
     setPillTone('freshnessAiActivity', health.stale_flags?.ai_activity ? 'danger' : (idleFlags.ai_activity ? 'caution' : 'safe'));
     setPillTone('freshnessRunbook', health.stale_flags?.runbook_events ? 'danger' : (idleFlags.runbook_events ? 'caution' : 'safe'));
+    azFoldUpdateCommandStripBadge();
+}
+
+// az-strip-fold: worst-tone aggregation badge for the collapsed runtime-pills fold (Issue #300, item 2)
+function azFoldUpdateCommandStripBadge() {
+    const hiddenPillIds = ['stripDeferred', 'stripQueue', 'stripAiContribution', 'stripAiFallback',
+        'freshnessSnapshot', 'freshnessAiMetrics', 'freshnessAiActivity', 'freshnessRunbook'];
+    let worst = 'status-safe';
+    let flagged = 0;
+    hiddenPillIds.forEach((id) => {
+        const valueEl = document.getElementById(id);
+        const pill = valueEl ? valueEl.closest('.strip-pill, .freshness-pill') : null;
+        if (!pill) return;
+        let tone = 'status-safe';
+        if (pill.classList.contains('pill-danger')) tone = 'status-danger';
+        else if (pill.classList.contains('pill-caution')) tone = 'status-caution';
+        if (tone !== 'status-safe') flagged += 1;
+        worst = strongestTone(worst, tone);
+    });
+    const badge = document.getElementById('commandStripFoldBadge');
+    if (badge) {
+        badge.className = `toggle-summary-badge ${worst}`;
+        badge.textContent = summaryBadgeLabel(worst);
+    }
+    const text = document.getElementById('commandStripFoldText');
+    if (text) {
+        text.className = `toggle-summary-text ${worst}`;
+        text.textContent = flagged > 0
+            ? tr('dashboard.command_strip_fold_summary', '{count} hidden | worst {tone}', { count: flagged, tone: summaryBadgeLabel(worst) })
+            : tr('dashboard.command_strip_details_show', 'Show runtime pills');
+    }
 }
 
 function updateSituationBoard(summary, state, health, mattermost) {
@@ -2820,6 +2853,7 @@ function azAttnNormalizeTone(tone) {
 }
 
 function azAttnCancelPulse(elId, el) {
+    azAttnPendingPulses.delete(elId);
     const entry = azAttnActivePulses.get(elId);
     if (entry) {
         azAttnActivePulses.delete(elId);
@@ -2832,11 +2866,25 @@ function azAttnCancelPulse(elId, el) {
             if (entry.onEnd) el.removeEventListener('animationend', entry.onEnd);
         }
     }
+    // Defensive: strip any stale pulse class even if the map entry was already lost/expired
+    // (e.g. via azAttnReapply's own expiry check), so a stuck pulse can never survive a tone
+    // change back to safe.
+    if (el) el.classList.remove('az-attn-pulse-caution', 'az-attn-pulse-danger');
 }
 
 function azAttnStartPulse(elId, el, cls, durationMs) {
     if (!el || azAttnReducedMotion) return;
     azAttnCancelPulse(elId, el);
+    const details = el.closest('details');
+    if (details && !details.open) {
+        // CSS animations never run on content inside a closed <details> (browsers hide its
+        // contents much like display:none), so 'animationend' would never fire and the pulse
+        // class + map entry would sit dormant indefinitely. Defer: replay the pulse fresh once
+        // the fold is opened (see azAttnBindFoldCatchup), instead of leaving a stuck class or
+        // firing a misleading replay later disconnected from the tone change.
+        azAttnPendingPulses.set(elId, { el, cls, durationMs });
+        return;
+    }
     const onEnd = (ev) => {
         if (ev.target !== el) return;
         el.classList.remove(cls);
@@ -2846,6 +2894,22 @@ function azAttnStartPulse(elId, el, cls, durationMs) {
     azAttnActivePulses.set(elId, { cls, expiresAt: Date.now() + durationMs, onEnd });
     el.classList.add(cls);
     el.addEventListener('animationend', onEnd);
+}
+
+// Replay any pulses deferred by azAttnStartPulse while their element sat inside a closed
+// <details> fold, once that fold is opened — otherwise the "something changed" cue never
+// reaches the operator for pills tucked away in a collapsed fold (Issue #300 round-3 regression).
+function azAttnBindFoldCatchup() {
+    document.querySelectorAll('details.panel-fold-details').forEach((details) => {
+        details.addEventListener('toggle', () => {
+            if (!details.open) return;
+            azAttnPendingPulses.forEach((pending, elId) => {
+                if (!details.contains(pending.el)) return;
+                azAttnPendingPulses.delete(elId);
+                azAttnStartPulse(elId, pending.el, pending.cls, pending.durationMs);
+            });
+        });
+    });
 }
 
 // Re-attach an in-flight pulse class after the caller has just overwritten el.className wholesale.

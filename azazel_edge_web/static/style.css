@@ -955,7 +955,7 @@ body[data-audience="professional"] .temp-only {
 
 .strip-grid {
     display: grid;
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 12px;
 }
 
@@ -964,6 +964,21 @@ body[data-audience="professional"] .temp-only {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 12px;
     margin-top: 12px;
+}
+
+.az-strip-fold-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.az-strip-fold.panel-fold-details {
+    margin-top: 16px;
+}
+
+.az-strip-fold summary {
+    justify-content: flex-start;
 }
 
 .strip-pill {
@@ -2421,7 +2436,7 @@ body[data-audience="professional"] .temp-only {
     }
 
     .strip-grid {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     .command-heatmap {
@@ -2432,7 +2447,8 @@ body[data-audience="professional"] .temp-only {
         grid-template-columns: 1fr;
     }
 
-    .freshness-grid {
+    .freshness-grid,
+    .az-strip-fold-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
@@ -2485,7 +2501,8 @@ body[data-audience="professional"] .temp-only {
     .temporary-mission-grid,
     .resource-guard-visuals,
     .strip-grid,
-    .freshness-grid {
+    .freshness-grid,
+    .az-strip-fold-grid {
         grid-template-columns: 1fr;
     }
 
