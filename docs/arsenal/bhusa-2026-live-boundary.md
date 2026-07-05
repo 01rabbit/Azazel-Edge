@@ -7,29 +7,36 @@ and the Black Hat USA 2026 booth demonstration path.
 
 - Normal operation: live Tactical first-pass triage remains the primary runtime
   path for time-sensitive events.
-- Booth operation: deterministic replay is the preferred presentation path.
-- Replay is a presentation technique only. It must never be presented as the
-  normal operating model.
+- Booth operation: live injection through the real pipeline
+  (`azazel-edge-injector` / `dummy-eve` -> real dashboard) is the preferred
+  presentation path, with deterministic replay as the immediate one-step
+  fallback.
+- Injected traffic and replay are presentation techniques only. Neither must
+  be presented as the normal operating model (normal input is real telemetry).
 
 ## Side-by-side boundary
 
 | Topic | Normal operation | BHUSA 2026 booth path |
 |---|---|---|
-| Event source | Live Suricata, probes, syslog, and runtime telemetry | Deterministic replay scenario |
-| First minute | Tactical Engine triages live events | Replay starts after live-first-minute concerns |
-| Stability goal | Fast response under changing conditions | Stable explanation and auditability in a short session |
+| Event source | Live Suricata, probes, syslog, and runtime telemetry | Injected test events through the real pipeline (fallback: deterministic replay) |
+| First minute | Tactical Engine triages live events | Injected events triaged by the same live pipeline |
+| Stability goal | Fast response under changing conditions | Real system reaction first; stable explanation and auditability in a short session |
 | AI role | Optional post-decision assist | Optional post-decision assist only |
-| Live packet generation | Allowed when runtime requires it | Not required |
+| Live packet generation | Allowed when runtime requires it | Fabricated EVE injection only (no real packet generation required) |
 | Final fallback | Local deterministic logic | Replay-only with local audit review |
 
 ## Preferred booth order
 
-1. Replay-only with `mixed_correlation_demo`
-2. Replay plus audit walkthrough
-3. Optional Web UI or reviewer page
-4. Optional live-assisted explanation only if immediate fallback is available
+1. Live injection on the real dashboard (`azazel-edge-injector` menu or the
+   frozen `dummy-eve` commands) — the audience watches the production system
+   react to injected test data
+2. Audit walkthrough: replay `mixed_correlation_demo` plus compact audit
+   review (fixed trace id, known expected output)
+3. Optional Web UI or reviewer page deep-dive
+4. Replay-only presentation at any point the live path is unstable
 
-Do not invert this order at the booth.
+The live path must be abandoned for replay-only in one step, without
+troubleshooting in front of visitors.
 
 ## Live-assisted allowed only if all conditions hold
 
@@ -72,12 +79,13 @@ switch to replay-only.
 
 Say:
 - live Tactical first-pass path
-- deterministic replay booth path
+- injected test data through the real pipeline, on the real dashboard
+- deterministic replay fallback path
 - same downstream deterministic evaluators and arbiter
 - replay-only final fallback
 
 Do not say:
-- replay is how the system normally operates
+- injected traffic or replay is how the system normally operates
 - live demonstration is required to prove the decision logic
 - optional AI is necessary for explanation
 

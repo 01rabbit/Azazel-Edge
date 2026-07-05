@@ -17,7 +17,8 @@ Session:
 - [ ] `bin/azazel-edge-scenario-replay list` succeeds
 - [ ] `bin/azazel-edge-scenario-replay run mixed_correlation_demo` succeeds
 - [ ] `bin/azazel-edge-audit-review --explanations-path /tmp/azazel-edge-demo-explanations.jsonl --audit-path /tmp/azazel-edge-demo-triage-audit.jsonl --trace-id demo:mixed_correlation_demo --compact` succeeds
-- [ ] real dashboard loads if a live `dummy-eve` demo is part of the plan
+- [ ] real dashboard loads (required: the primary demo is live injection on the real dashboard)
+- [ ] `bin/azazel-edge-injector list` succeeds and `bin/azazel-edge-dummy-eve flow` reaches the dashboard
 - [ ] one offline copy of BHUSA docs is present on the booth machine
 
 Offline bundle command:
@@ -52,18 +53,33 @@ Interpretation:
 
 - `azazel-edge-web`: required for the real operational dashboard
 - `azazel-edge-control-daemon`: required for consistent control-plane story
-- `azazel-edge-core`: required only when showing the live `dummy-eve` / Suricata path
+- `azazel-edge-core`: required for the primary live-injection path (`azazel-edge-injector` / `dummy-eve`)
 - `azazel-edge-opencanary`: optional unless redirect path is part of the live discussion
 
-## Deterministic replay checklist
+## Live injection checklist (primary path)
+
+- [ ] injected events appear on the real dashboard within the expected delay
+- [ ] presenter narrates: test data in, production pipeline reacts — no demo screen
+- [ ] `bin/azazel-edge-injector` menu ready in a terminal (or the frozen `dummy-eve` commands)
+- [ ] one-step switch to replay-only rehearsed
+
+Primary commands:
+
+```bash
+bin/azazel-edge-injector                      # interactive scenario menu
+bin/azazel-edge-dummy-eve flow                # frozen single staged flow
+bin/azazel-edge-dummy-eve stream --attack-every 60
+```
+
+## Deterministic replay checklist (fallback + audit walkthrough)
 
 - [ ] use `mixed_correlation_demo`
-- [ ] keep replay as the preferred booth path
+- [ ] keep replay as the immediate fallback and the audit-walkthrough surface
 - [ ] confirm `execution.mode = deterministic_replay`
 - [ ] confirm `execution.ai_used = false`
 - [ ] confirm selected action, rejected alternatives, trace ID, policy profile, and config hash are visible
 
-Primary commands:
+Fallback / audit commands:
 
 ```bash
 bin/azazel-edge-bhusa-verify
@@ -177,4 +193,6 @@ During at least one rehearsal:
 
 - no code edits unless a true demo blocker exists
 - no feature additions
-- prefer replay-only over risky live-assisted improvisation
+- lead with live injection while it is stable; at the first sign of
+  instability switch to replay-only in one step — never improvise repairs
+  during visitor explanation

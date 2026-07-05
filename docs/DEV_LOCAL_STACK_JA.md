@@ -64,7 +64,7 @@ bin/azazel-edge-devstack up --inject
 ランタイムは**セーフモード**で動作します。防御機能はドライラン／アドバイザリのみで、`tools/macdev/env.sh` の `AZAZEL_DEFENSE_DRY_RUN=true` / `AZAZEL_DEFENSE_ENFORCE_LEVEL=advisory` に対応します。
 
 ## インジェクター — テスト／デモ操作パネル
-`bin/azazel-edge-injector` は、テストイベント生成ツール `dummy-eve` の**自己完結型**フロントエンドです。開発環境（`tools/macdev/env.sh`）を自身で読み込むため、**devstack を起動していなくても単体で動作**し、Rust コアが監視する開発用 `eve.json` に模擬 Suricata EVE アラートを書き込みます。
+`bin/azazel-edge-injector` は、テストイベント生成ツール `dummy-eve` の**自己完結型**フロントエンドで、開発・試験・ライブデモ共用です。環境を自動判別（Mac 上に `tools/macdev/env.sh` があれば `macdev` プロファイル、なければ `appliance` プロファイル。`AZAZEL_INJECTOR_PROFILE` で上書き可）するため、**devstack を起動していなくても単体で動作**し、Rust コアが監視する `eve.json`（開発: `~/.azazel-edge-dev/suricata/eve.json`、アプライアンス: `/var/log/suricata/eve.json`）に模擬 Suricata EVE アラートを書き込みます。
 
 2 つのモードがあります:
 

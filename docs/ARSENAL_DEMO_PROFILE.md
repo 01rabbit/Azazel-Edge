@@ -36,28 +36,37 @@ Optional:
 
 ## 4. Demo modes
 
-Deterministic scenario replay (default, offline):
-- safest for Arsenal booth
-- stable evaluator output
-- no dependency on live packet generation
-- reproducible artifacts for verification/rehearsal/freeze tooling
-- does not replace the normal live Tactical first-pass path
-- freeze the booth primary scenario to `mixed_correlation_demo` unless a clear demo blocker appears
-
-Live dashboard demo (`bin/azazel-edge-dummy-eve`):
-- fabricates Suricata EVE alerts into `eve.json`; the real pipeline (Rust
-  core -> AI agent -> control daemon) processes them and the real
+Live dashboard demo (primary — `bin/azazel-edge-injector` / `bin/azazel-edge-dummy-eve`):
+- injects fabricated Suricata EVE alerts into `eve.json`; the real pipeline
+  (Rust core -> AI agent -> control daemon) processes them and the real
   operational dashboard displays the result
-- no separate demo screen — what is shown is the same dashboard used in
-  production, which removes any "is the demo faked?" doubt
-- must preserve immediate fallback to deterministic scenario replay if the
-  live path is unstable
+- the demo shows the production system reacting to injected test data, not a
+  demo-purpose feature: no separate demo screen, which removes any
+  "is the demo faked?" doubt
+- `bin/azazel-edge-injector` is the interactive scenario menu (list / emit /
+  staged flow / stream, with live pipeline status); `bin/azazel-edge-dummy-eve`
+  is the scripted CLI equivalent for frozen command sheets
+- works on the appliance and the dev Mac (profile auto-detection)
+- must preserve immediate one-step fallback to deterministic scenario replay
+  if the live path is unstable
 - remains subordinate to the same deterministic evaluator and Action Arbiter path
+
+Deterministic scenario replay (immediate fallback + verification, offline):
+- stable evaluator output, reproducible artifacts for
+  verification/rehearsal/freeze tooling
+- no dependency on live packet generation — survives total booth-environment
+  failure, so it is the final fallback
+- best surface for the audit walkthrough (fixed trace id, known expected output)
+- does not replace the normal live Tactical first-pass path
+- freeze the fallback scenario to `mixed_correlation_demo` unless a clear demo blocker appears
 
 Boundary statement:
 - normal operation uses live Tactical first-pass triage when available
-- BHUSA 2026 booth operation prefers deterministic replay for short-session stability
-- booth replay must never be described as the normal operating model
+- BHUSA 2026 booth operation leads with live injection through the real
+  pipeline; deterministic replay is the immediate fallback for short-session
+  stability and the backbone of the audit walkthrough
+- neither injected traffic nor booth replay must be described as the normal
+  operating model (normal input is real telemetry)
 
 ## 5. Pre-demo checklist
 

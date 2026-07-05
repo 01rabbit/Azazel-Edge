@@ -99,7 +99,22 @@ This now prints a concise candidate summary including `ready_for_freeze`,
 bin/azazel-edge-bhusa-prep full-pack --force
 ```
 
-## Primary replay path
+## Primary live demo (injected test data, real dashboard)
+
+Interactive scenario menu:
+
+```bash
+bin/azazel-edge-injector
+```
+
+Frozen commands (no menu):
+
+```bash
+bin/azazel-edge-dummy-eve flow
+bin/azazel-edge-dummy-eve stream --attack-every 60
+```
+
+## Replay path (fallback + audit walkthrough)
 
 ```bash
 bin/azazel-edge-scenario-replay run mixed_correlation_demo
@@ -132,18 +147,6 @@ bin/azazel-edge-audit-review \
   --audit-path /tmp/azazel-edge-demo-triage-audit.jsonl \
   --trace-id demo:mixed_correlation_demo \
   --json
-```
-
-## Live dashboard demo (fabricated EVE traffic, real dashboard)
-
-```bash
-bin/azazel-edge-dummy-eve flow
-```
-
-Background noise with periodic attack bursts:
-
-```bash
-bin/azazel-edge-dummy-eve stream --attack-every 60
 ```
 
 ## Clear deterministic replay artifacts
