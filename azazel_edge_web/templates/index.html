@@ -6,7 +6,7 @@
     <title>{{ tr('dashboard.title', 'Azazel-Edge Command Dashboard') }}</title>
     <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
-<body data-audience="temporary" data-page="dashboard">
+<body data-audience="temporary" data-page="dashboard" class="az-boot">
     <div class="topbar-attn-stack">
         <header class="topbar">
             <div class="brand-block">
@@ -40,6 +40,13 @@
                     <div class="meta-item">
                         <span class="meta-label">TEMP</span>
                         <strong id="headerCpuTemp">--°C</strong>
+                    </div>
+                    <div class="meta-item" id="connStateChip" role="status" aria-live="polite" tabindex="0"
+                         aria-label="{{ tr('dashboard.conn_state.aria_label', 'Connection status') }}"
+                         aria-describedby="connStateChipDesc" title="">
+                        <span class="meta-label">{{ tr('dashboard.conn_state.label', 'LINK') }}</span>
+                        <strong id="connStateChipValue">{{ tr('dashboard.conn_state.initializing', 'INIT') }}</strong>
+                        <span id="connStateChipDesc" class="sr-only"></span>
                     </div>
                     <div class="meta-clock" id="headerClock">--:--:--</div>
                 </div>

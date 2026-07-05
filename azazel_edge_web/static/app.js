@@ -14,6 +14,8 @@ let latestState = {};
 let latestSummary = {};
 let latestMattermost = {};
 let lastRefreshWarning = '';
+let lastSuccessfulPollMs = null;
+let azConnConsecutiveFailures = 0;
 let showNormalClients = false;
 let headerClockTimer = null;
 let headerClockBaseMs = null;
@@ -782,6 +784,7 @@ async function refreshDashboard() {
     if (hardFailures.length > 0) {
         console.error('Dashboard refresh failed:', hardFailures);
         showToast(tr('dashboard.refresh_failed', 'Dashboard refresh failed: {error}', { error: hardFailures.join(' | ') }), 'error');
+        azConnSetState(false);
         return;
     }
 
@@ -832,9 +835,17 @@ async function refreshDashboard() {
         updateAssistant(actions, mattermost, capabilities);
         updateControlButtons(summary, state);
         azAttnFirstSnapshotDone = true;
+        document.body.classList.remove('az-boot');
+        azConnSetState(true);
     } catch (error) {
         console.error('Dashboard render failed:', error);
         showToast(tr('dashboard.render_failed', 'Dashboard render failed: {error}', { error: error.message }), 'error');
+        // Required fetches already succeeded (hardFailures check above returned early otherwise),
+        // so the connection itself is live even though this render pass hit a bug. Clear the boot
+        // dimming and reflect that live state instead of leaving az-boot/the conn chip stuck at
+        // their initial INIT values forever on every subsequent render-failing poll.
+        document.body.classList.remove('az-boot');
+        azConnSetState(true);
         return;
     }
 
@@ -2860,6 +2871,38 @@ function azAttnNotePanelTone(elId, el, rawTone) {
     if (tone === 'status-danger') azAttnStartPulse(elId, el, 'az-attn-pulse-danger', AZ_ATTN_DANGER_MS);
     else if (tone === 'status-caution') azAttnStartPulse(elId, el, 'az-attn-pulse-caution', AZ_ATTN_CAUTION_MS);
     else azAttnCancelPulse(elId, el);
+}
+
+// Connection-state chip (Issue #300, item 5): distinguishes booting/waiting from an unreachable API.
+function azConnSetState(ok) {
+    const chip = document.getElementById('connStateChip');
+    const valueEl = document.getElementById('connStateChipValue');
+    const descEl = document.getElementById('connStateChipDesc');
+    if (!chip || !valueEl) return;
+    chip.classList.remove('status-safe', 'status-caution', 'status-danger');
+    if (ok) {
+        azConnConsecutiveFailures = 0;
+        lastSuccessfulPollMs = Date.now();
+        chip.classList.add('status-safe');
+        valueEl.textContent = tr('dashboard.conn_state.live', 'LIVE');
+        chip.title = '';
+        if (descEl) descEl.textContent = '';
+    } else {
+        azConnConsecutiveFailures += 1;
+        const hadPriorSuccess = lastSuccessfulPollMs !== null;
+        // caution on the first failure after a prior success, escalate to danger if it persists;
+        // straight to danger if we've never had a successful snapshot yet.
+        const tone = hadPriorSuccess && azConnConsecutiveFailures === 1 ? 'status-caution' : 'status-danger';
+        chip.classList.add(tone);
+        valueEl.textContent = tr('dashboard.conn_state.offline', 'OFFLINE');
+        // Mirror the tooltip into a visible-on-focus sr-only node: `title` only ever surfaces on
+        // mouse hover, which keyboard and touch/kiosk operators can never trigger.
+        const lastSuccessText = hadPriorSuccess
+            ? tr('dashboard.conn_state.last_success', 'Last successful update: {time}', { time: new Date(lastSuccessfulPollMs).toLocaleTimeString() })
+            : '';
+        chip.title = lastSuccessText;
+        if (descEl) descEl.textContent = lastSuccessText;
+    }
 }
 
 // Two band-trigger conditions can fire within the same synchronous refresh tick (e.g. a single
