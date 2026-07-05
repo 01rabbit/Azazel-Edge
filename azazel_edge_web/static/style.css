@@ -200,6 +200,7 @@ body[data-audience="professional"] .temp-only {
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-wrap: wrap;
 }
 
 .meta-item,
@@ -232,152 +233,178 @@ body[data-audience="professional"] .temp-only {
     background: linear-gradient(145deg, rgba(57, 42, 20, 0.42), rgba(24, 27, 34, 0.88));
 }
 
-/* Aggregator fleet counters */
+/* Aggregator fleet panel — shares the standard panel/tile visual language */
+.aggregator-panel {
+    padding: 22px 24px 24px;
+    margin-top: 18px;
+}
+
 .aggregator-counters {
-    display: flex;
-    gap: 1rem;
-    margin: 0.75rem 0;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
 }
 
 .aggregator-counter {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 0.5rem 1rem;
-    border: 1px solid var(--line-soft, #ddd);
-    border-radius: 6px;
-    min-width: 5rem;
+    min-width: 0;
+    padding: 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(145deg, rgba(167, 199, 214, 0.1), rgba(13, 20, 26, 0.88));
+    box-shadow: var(--shadow-sm);
 }
 
 .aggregator-counter.agg-warn {
-    border-color: var(--accent-amber, #e8a000);
+    background: linear-gradient(145deg, rgba(224, 164, 88, 0.14), rgba(13, 20, 26, 0.88));
+    border-color: rgba(224, 164, 88, 0.28);
 }
 
 .aggregator-counter.agg-crit {
-    border-color: var(--accent-red, #c0392b);
+    background: linear-gradient(145deg, rgba(228, 109, 93, 0.16), rgba(13, 20, 26, 0.88));
+    border-color: rgba(228, 109, 93, 0.3);
 }
 
 .agg-count-num {
-    font-size: 1.8rem;
-    font-weight: 700;
-    line-height: 1;
+    display: block;
+    font-size: clamp(1.7rem, 3.2vw, 2.3rem);
+    line-height: 1.05;
+    font-family: var(--font-mono);
+    color: var(--text-main);
 }
 
 .agg-count-label {
-    font-size: 0.75rem;
-    color: var(--text-soft, #666);
-    margin-top: 0.25rem;
+    display: block;
+    font-size: 0.74rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+    margin-top: 10px;
 }
 
 /* Node list */
 .aggregator-node-list {
     list-style: none;
-    margin: 0;
+    margin: 14px 0 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
+    display: grid;
+    gap: 10px;
 }
 
 .aggregator-node-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.5rem 0.75rem;
-    border-left: 3px solid var(--line-soft, #ddd);
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.05);
+    padding: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-left-width: 4px;
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.03);
+    box-shadow: var(--shadow-sm);
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: 10px;
 }
 
 .aggregator-node-row.status-ok {
-    border-left-color: var(--accent-green, #27ae60);
+    border-left-color: rgba(127, 211, 155, 0.95);
 }
 
 .aggregator-node-row.status-warn {
-    border-left-color: var(--accent-amber, #e8a000);
+    border-left-color: rgba(224, 164, 88, 0.95);
 }
 
 .aggregator-node-row.status-crit {
-    border-left-color: var(--accent-red, #c0392b);
+    border-left-color: rgba(228, 109, 93, 0.95);
 }
 
 .agg-node-identity {
     display: flex;
-    gap: 0.5rem;
+    gap: 8px;
     align-items: baseline;
     flex-wrap: wrap;
 }
 
 .agg-node-label {
-    font-weight: 600;
+    font-weight: 700;
+    overflow-wrap: anywhere;
 }
 
 .agg-node-site {
     font-size: 0.8rem;
-    color: var(--text-soft, #666);
+    color: var(--text-soft);
 }
 
 .agg-node-status {
     display: flex;
-    gap: 0.5rem;
+    gap: 8px;
     align-items: center;
     flex-wrap: wrap;
     font-size: 0.82rem;
 }
 
 .agg-freshness-badge {
-    padding: 0.1rem 0.4rem;
-    border-radius: 3px;
-    font-size: 0.75rem;
-    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
+    font-family: var(--font-mono);
+    border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .agg-freshness-fresh {
-    background: #d4edda;
-    color: #155724;
+    background: rgba(127, 211, 155, 0.14);
+    border-color: rgba(127, 211, 155, 0.24);
+    color: rgba(214, 247, 223, 0.95);
 }
 
 .agg-freshness-stale {
-    background: #fff3cd;
-    color: #856404;
+    background: rgba(224, 164, 88, 0.14);
+    border-color: rgba(224, 164, 88, 0.28);
+    color: rgba(255, 234, 207, 0.96);
 }
 
 .agg-freshness-offline {
-    background: #f8d7da;
-    color: #721c24;
+    background: rgba(228, 109, 93, 0.16);
+    border-color: rgba(228, 109, 93, 0.28);
+    color: rgba(255, 213, 213, 0.96);
 }
 
 .agg-tag {
-    padding: 0.1rem 0.4rem;
-    border-radius: 3px;
-    font-size: 0.75rem;
-    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-family: var(--font-mono);
+    border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .agg-tag-quarantine {
-    background: #f8d7da;
-    color: #721c24;
+    background: rgba(228, 109, 93, 0.16);
+    border-color: rgba(228, 109, 93, 0.28);
+    color: rgba(255, 213, 213, 0.96);
 }
 
 .agg-lastseen {
-    color: var(--text-soft, #888);
-    font-size: 0.75rem;
+    color: var(--text-soft);
+    font-size: 0.76rem;
+    font-family: var(--font-mono);
 }
 
 .aggregator-node-placeholder {
-    color: var(--text-soft, #888);
-    font-style: italic;
-    padding: 0.5rem 0;
+    color: var(--text-dim);
+    padding: 4px 0;
 }
 
 .aggregator-last-updated {
-    font-size: 0.75rem;
-    color: var(--text-soft, #888);
-    margin-top: 0.5rem;
+    font-size: 0.76rem;
+    color: var(--text-soft);
+    margin-top: 12px;
 }
 
 .panel {
@@ -457,7 +484,7 @@ body[data-audience="professional"] .temp-only {
 .command-glance-hero strong {
     display: block;
     margin-top: 10px;
-    font-size: clamp(1.6rem, 2.8vw, 2.25rem);
+    font-size: clamp(2.1rem, 4.2vw, 3.1rem);
     line-height: 1.05;
     letter-spacing: 0.04em;
 }
@@ -520,7 +547,7 @@ body[data-audience="professional"] .temp-only {
 
 .command-heat-cell span {
     display: block;
-    font-size: 0.74rem;
+    font-size: 0.8rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--text-soft);
@@ -529,7 +556,7 @@ body[data-audience="professional"] .temp-only {
 .command-heat-cell strong {
     display: block;
     margin-top: 12px;
-    font-size: 1rem;
+    font-size: clamp(1.15rem, 2.2vw, 1.5rem);
     line-height: 1.2;
     letter-spacing: 0.04em;
     overflow-wrap: anywhere;
@@ -735,8 +762,9 @@ body[data-audience="professional"] .temp-only {
 
 .split-glance-header h3 {
     margin: 4px 0 0;
-    font-size: 1.25rem;
+    font-size: clamp(1.5rem, 2.4vw, 1.85rem);
     letter-spacing: 0.04em;
+    overflow-wrap: anywhere;
 }
 
 .split-glance-heat-grid {
@@ -944,6 +972,40 @@ body[data-audience="professional"] .temp-only {
     background: linear-gradient(90deg, rgba(228, 109, 93, 0.94), rgba(255, 148, 148, 0.94));
 }
 
+.az-spark-slot {
+    margin-top: 8px;
+    height: 32px;           /* reserved height: fixed regardless of content so no layout shift */
+    width: 100%;
+    min-width: 0;
+}
+
+.az-spark-slot svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+/* Tone reuses the existing global .status-safe/.status-caution/.status-danger color rules via currentColor. */
+.az-spark-slot svg.status-safe    { color: var(--accent-green); }
+.az-spark-slot svg.status-caution { color: var(--accent-amber); }
+.az-spark-slot svg.status-danger  { color: var(--accent-red); }
+
+.az-spark-line {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.az-spark-area {
+    fill: currentColor;
+    opacity: 0.15;
+    stroke: none;
+}
+
 .resource-guard-detail {
     margin: 10px 0 0;
     color: var(--text-dim);
@@ -953,7 +1015,7 @@ body[data-audience="professional"] .temp-only {
 
 .strip-grid {
     display: grid;
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 12px;
 }
 
@@ -962,6 +1024,21 @@ body[data-audience="professional"] .temp-only {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 12px;
     margin-top: 12px;
+}
+
+.az-strip-fold-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.az-strip-fold.panel-fold-details {
+    margin-top: 16px;
+}
+
+.az-strip-fold summary {
+    justify-content: flex-start;
 }
 
 .strip-pill {
@@ -989,7 +1066,8 @@ body[data-audience="professional"] .temp-only {
 .strip-pill strong {
     display: block;
     margin-top: 8px;
-    font-size: 1.05rem;
+    font-size: clamp(1.3rem, 2vw, 1.6rem);
+    overflow-wrap: anywhere;
 }
 
 .strip-pill-alert strong {
@@ -1033,7 +1111,7 @@ body[data-audience="professional"] .temp-only {
 }
 
 .topolite-nav-panel {
-    padding: 18px 20px;
+    padding: 22px 24px 24px;
     margin-bottom: 14px;
 }
 
@@ -1055,6 +1133,7 @@ body[data-audience="professional"] .temp-only {
 
 .topolite-single-screen {
     margin-top: 18px;
+    padding: 22px 24px 24px;
 }
 
 .topolite-single-grid {
@@ -1113,9 +1192,10 @@ body[data-audience="professional"] .temp-only {
 .client-identity-tile strong {
     display: block;
     margin-top: 12px;
-    font-size: clamp(1.35rem, 2.5vw, 1.9rem);
+    font-size: clamp(1.7rem, 3.2vw, 2.3rem);
     line-height: 1.05;
     font-family: var(--font-mono);
+    overflow-wrap: anywhere;
 }
 
 .client-identity-tile.status-safe {
@@ -1609,17 +1689,36 @@ body[data-audience="professional"] .temp-only {
     align-items: center;
 }
 
+.risk-score-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
 .risk-score {
-    width: 78px;
-    height: 78px;
+    width: clamp(78px, 6vw, 100px);
+    height: clamp(78px, 6vw, 100px);
     border-radius: 24px;
     display: grid;
     place-items: center;
-    font-size: 1.8rem;
+    font-size: clamp(2.1rem, 4vw, 2.6rem);
     font-weight: 700;
     color: var(--text-main);
     background: rgba(255,255,255,0.07);
     border: 1px solid var(--line-strong);
+}
+
+.az-spark-slot-risk {
+    height: 28px;
+    width: 72px;            /* small companion sparkline beside the numeric score, not full card width */
+    flex-shrink: 0;
+    margin-top: 0;          /* override .az-spark-slot's default top margin; spacing handled by wrap gap */
+}
+
+@media (max-width: 480px) {
+    .az-spark-slot-risk { display: none; } /* value text remains visible; sparkline is a bonus, not load-bearing */
 }
 
 .card-summary,
@@ -1681,6 +1780,12 @@ body[data-audience="professional"] .temp-only {
 .service-chip span,
 .service-chip strong {
     display: block;
+}
+
+.service-chip strong {
+    font-size: clamp(1.1rem, 1.8vw, 1.35rem);
+    font-weight: 600;
+    overflow-wrap: anywhere;
 }
 
 .service-chip span {
@@ -2244,6 +2349,147 @@ body[data-audience="professional"] .temp-only {
 .toast.error { border-color: rgba(228, 109, 93, 0.35); }
 .toast.info { border-color: rgba(116, 212, 255, 0.35); }
 
+/* ---- az-attn: transition-attention system ---- */
+
+@keyframes az-attn-danger {
+    0%   { box-shadow: 0 0 0 0 rgba(228, 109, 93, 0.85); transform: scale(1); }
+    8%   { box-shadow: 0 0 0 10px rgba(228, 109, 93, 0.35); transform: scale(1.015); }
+    20%  { box-shadow: 0 0 0 2px rgba(228, 109, 93, 0.55); transform: scale(1); }
+    35%  { box-shadow: 0 0 0 10px rgba(228, 109, 93, 0.30); transform: scale(1.01); }
+    55%  { box-shadow: 0 0 0 2px rgba(228, 109, 93, 0.40); transform: scale(1); }
+    100% { box-shadow: 0 0 0 0 rgba(228, 109, 93, 0); transform: scale(1); }
+}
+
+@keyframes az-attn-caution {
+    0%   { box-shadow: 0 0 0 0 rgba(224, 164, 88, 0.55); }
+    40%  { box-shadow: 0 0 0 6px rgba(224, 164, 88, 0.22); }
+    100% { box-shadow: 0 0 0 0 rgba(224, 164, 88, 0); }
+}
+
+/* Danger: strong, ~5s, one shot. Caution: subtler, ~2s, one shot. Neither loops. */
+.az-attn-pulse-danger  { animation: az-attn-danger 5s ease-out 1; }
+.az-attn-pulse-caution { animation: az-attn-caution 2s ease-out 1; }
+
+/* Risk score color transition (class itself reuses existing .status-safe/.status-caution/.status-danger,
+   defined above — no new color rule needed, just a smoothing transition + bump pop). */
+.risk-score { transition: color 0.25s ease; }
+
+@keyframes az-attn-riskscore-bump {
+    0%   { transform: scale(1); }
+    30%  { transform: scale(1.08); }
+    100% { transform: scale(1); }
+}
+.az-attn-riskscore-bump { animation: az-attn-riskscore-bump 420ms ease-out 1; }
+
+/* Topbar + global alert band are wrapped together so the band stays pinned right under the
+   (always-sticky) topbar no matter how far the operator has scrolled the long dashboard body.
+   Sticking the wrapper (rather than hard-coding a `top` offset on the band equal to the topbar's
+   height) keeps this correct even though the topbar's rendered height varies by language,
+   viewport width, and responsive breakpoint. */
+.topbar-attn-stack {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+}
+
+/* Global alert band: lives between topbar and main, collapsed by default. */
+.az-attn-band {
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-6px);
+    pointer-events: none;
+    /* Only opacity/transform participate in the transition (compositor-only, no layout
+       recalculation on every frame). max-height still toggles between states, but as an
+       instantaneous (single-reflow) property change rather than an animated one, since this
+       is a Raspberry-Pi-hosted UI and repeated layout thrash during a transition is expensive. */
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    background: linear-gradient(135deg, rgba(228, 109, 93, 0.18), rgba(13, 20, 26, 0.95));
+    border-bottom: 1px solid rgba(228, 109, 93, 0.4);
+    position: relative;
+    z-index: 49; /* under .topbar within the shared .topbar-attn-stack sticky context */
+}
+.az-attn-band.az-attn-band-show {
+    /* Generous cap (not an animated property, see above) so longer i18n strings (e.g. ja
+       hero-transition text) have room to wrap onto 2-3 lines without being clipped. */
+    max-height: 200px;
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+.az-attn-band-inner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    color: var(--text-main);
+    font-family: var(--font-ui);
+}
+.az-attn-band-message { flex: 1; font-weight: 600; }
+.az-attn-band-dismiss {
+    background: transparent;
+    border: 1px solid var(--line-soft);
+    color: var(--text-main);
+    border-radius: var(--radius-sm);
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 2px 10px;
+    cursor: pointer;
+}
+
+/* Reduced motion: no keyframe animation anywhere; band + risk score change state instantly. */
+@media (prefers-reduced-motion: reduce) {
+    .az-attn-pulse-danger,
+    .az-attn-pulse-caution,
+    .az-attn-riskscore-bump {
+        animation: none !important;
+        box-shadow: none !important;
+        transform: none !important;
+    }
+    .az-attn-band,
+    .az-attn-band.az-attn-band-show {
+        transition: none !important;
+    }
+    .risk-score { transition: none !important; }
+}
+
+/* Boot/offline placeholder clarity (Issue #300 item 5) */
+.az-boot .command-glance-hero strong,
+.az-boot .command-heat-cell strong,
+.az-boot .risk-score,
+.az-boot .client-identity-tile strong,
+.az-boot .strip-pill strong,
+.az-boot .split-glance-header h3,
+.az-boot .service-chip strong,
+.az-boot .meta-item:not(#connStateChip) strong {
+    opacity: 0.45;
+}
+
+#connStateChip strong {
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+}
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+#connStateChip.status-safe    { border-color: rgba(127, 211, 155, 0.34); }
+#connStateChip.status-caution { border-color: rgba(224, 164, 88, 0.34); }
+#connStateChip.status-danger  { border-color: rgba(228, 109, 93, 0.38); }
+/* .meta-item strong pins color to --text-main, which otherwise beats the status-* tone classes
+   toggled on #connStateChip itself (they only style the div, not the nested <strong>). Without
+   these, LIVE/OFFLINE never visibly changes color, only the faint chip border does. */
+#connStateChip.status-safe    #connStateChipValue { color: var(--accent-green); }
+#connStateChip.status-caution #connStateChipValue { color: var(--accent-amber); }
+#connStateChip.status-danger  #connStateChipValue { color: var(--accent-red); }
+
 @media (max-width: 1240px) {
     .command-glance-band {
         grid-template-columns: 1fr;
@@ -2270,7 +2516,7 @@ body[data-audience="professional"] .temp-only {
     }
 
     .strip-grid {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     .command-heatmap {
@@ -2281,7 +2527,8 @@ body[data-audience="professional"] .temp-only {
         grid-template-columns: 1fr;
     }
 
-    .freshness-grid {
+    .freshness-grid,
+    .az-strip-fold-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
@@ -2334,7 +2581,8 @@ body[data-audience="professional"] .temp-only {
     .temporary-mission-grid,
     .resource-guard-visuals,
     .strip-grid,
-    .freshness-grid {
+    .freshness-grid,
+    .az-strip-fold-grid {
         grid-template-columns: 1fr;
     }
 

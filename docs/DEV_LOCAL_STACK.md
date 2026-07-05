@@ -85,6 +85,18 @@ State is kept under `~/.azazel-edge-dev/`:
 - PID files: `~/.azazel-edge-dev/run/devstack/`
 - Logs: `~/.azazel-edge-dev/log/devstack/`
 
+## Mattermost workspace provisioning
+`up` only starts the Mattermost containers — a fresh instance has no admin, team, channel, or tokens, so the dashboard's Mattermost integration runs in `disabled` mode. Provision the workspace once:
+
+```bash
+tools/macdev/provision-mattermost.sh
+bin/azazel-edge-devstack restart
+```
+
+This is the dev twin of the appliance's `installer/internal/provision_mattermost_workspace.sh` / `provision_mattermost_command.sh`: it creates the `azazelops` admin (system admin, via `mmctl --local` inside the container), the `azazelops` team, the `soc-noc` channel, a bot token, an incoming webhook, and the `/mio` + `/azops` slash commands (callback: `http://host.docker.internal:8084/api/mattermost/command`). Credentials land under `~/.azazel-edge-dev/` (`mattermost-web.env`, `mattermost-credentials.env`, `mattermost-command-token*`); `azazel-edge-devstack` sources `mattermost-web.env` automatically, which switches the web app to full `bot_api` mode. The script is idempotent — re-run it any time (e.g. after wiping the Mattermost volumes).
+
+Log in at `http://localhost:8065` with the credentials from `~/.azazel-edge-dev/mattermost-credentials.env` (default: `azazel.ops@example.local` / `AzazelOps!2026`).
+
 ## Troubleshooting
 
 **ollama not reachable**
@@ -102,6 +114,9 @@ Confirm OrbStack is running and the containers are up:
 docker compose -f security/docker-compose.mattermost.yml ps
 ```
 Use `bin/azazel-edge-devstack up --all` to (re)start Mattermost along with the rest of the stack.
+
+**Dashboard shows Mattermost mode `disabled` / `webhook` instead of `bot_api`**
+The workspace has not been provisioned (or `~/.azazel-edge-dev/mattermost-web.env` is missing). Run `tools/macdev/provision-mattermost.sh`, then `bin/azazel-edge-devstack restart`.
 
 **Port already in use**
 Another process may be bound to a port the stack needs (dashboard, control socket, or Mattermost's `8065`). Check `bin/azazel-edge-devstack status` for what the launcher thinks is running, and use `lsof -i :<port>` to find the conflicting process.

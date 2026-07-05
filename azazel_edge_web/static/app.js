@@ -14,6 +14,8 @@ let latestState = {};
 let latestSummary = {};
 let latestMattermost = {};
 let lastRefreshWarning = '';
+let lastSuccessfulPollMs = null;
+let azConnConsecutiveFailures = 0;
 let showNormalClients = false;
 let headerClockTimer = null;
 let headerClockBaseMs = null;
@@ -21,6 +23,79 @@ let headerClockSeedMs = null;
 let currentProgress = {};
 let currentHandoff = {};
 let onboardingStepIndex = 0;
+
+// az-attn: status-transition attention system (Issue #300, item 1)
+const AZ_ATTN_DANGER_MS = 5000;   // must equal CSS .az-attn-pulse-danger animation-duration
+const AZ_ATTN_CAUTION_MS = 2000;  // must equal CSS .az-attn-pulse-caution animation-duration
+const azAttnToneMemory = new Map();    // elementId -> last-seen normalized tone
+const azAttnActivePulses = new Map();  // elementId -> { cls, expiresAt }
+const azAttnPendingPulses = new Map(); // elementId -> { el, cls, durationMs }, deferred while inside a closed <details>
+let azAttnFirstSnapshotDone = false;   // flips true after refreshDashboard() tick #1 fully renders
+let azAttnPrevHeroTone = null;
+let azAttnPrevDirectCritical = null;
+let azAttnBandTimer = null;
+const azAttnReducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+// az-spark: lightweight trend sparklines (Issue #300, item 4)
+const AZ_SPARK_CAP = 45;
+const azSparkHistory = new Map(); // key -> number[]
+
+function azSparkPush(key, value) {
+    const v = Number(value);
+    if (!Number.isFinite(v)) return;
+    let arr = azSparkHistory.get(key);
+    if (!arr) { arr = []; azSparkHistory.set(key, arr); }
+    arr.push(v);
+    if (arr.length > AZ_SPARK_CAP) arr.shift();
+}
+
+function azSparkRender(key, slotId, tone) {
+    const slot = document.getElementById(slotId);
+    if (!slot) return;
+    const data = azSparkHistory.get(key) || [];
+    if (data.length < 2) {
+        slot.textContent = ''; // clear any prior svg; reserved height keeps layout stable
+        return;
+    }
+    const W = 100, H = 30, PAD = 2;
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    const span = max - min;
+    const stepX = W / (data.length - 1);
+    const points = data.map((v, i) => {
+        const x = i * stepX;
+        const y = span === 0
+            ? H / 2
+            : (H - PAD) - ((v - min) / span) * (H - PAD * 2);
+        return [x, y];
+    });
+    const lineD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(' ');
+    const areaD = `${lineD} L${W},${H} L0,${H} Z`;
+
+    let svg = slot.firstElementChild;
+    let linePath, areaPath;
+    if (!svg || svg.tagName.toLowerCase() !== 'svg') {
+        svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+        svg.setAttribute('preserveAspectRatio', 'none');
+        svg.setAttribute('aria-hidden', 'true');
+        areaPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        areaPath.setAttribute('class', 'az-spark-area');
+        linePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        linePath.setAttribute('class', 'az-spark-line');
+        svg.appendChild(areaPath);
+        svg.appendChild(linePath);
+        slot.textContent = '';
+        slot.appendChild(svg);
+    } else {
+        areaPath = svg.querySelector('.az-spark-area');
+        linePath = svg.querySelector('.az-spark-line');
+    }
+    svg.classList.remove('status-safe', 'status-caution', 'status-danger');
+    svg.classList.add(tone || 'status-safe');
+    areaPath.setAttribute('d', areaD);
+    linePath.setAttribute('d', lineD);
+}
 
 function advanceOnboardingStep() {
     onboardingStepIndex = (onboardingStepIndex + 1) % 3;
@@ -318,6 +393,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.documentElement.lang = CURRENT_LANG;
     syncLanguageUi();
     bindStaticHandlers();
+    azAttnBindFoldCatchup();
     startHeaderClock();
     setAudience(currentAudience);
     refreshDashboard();
@@ -339,6 +415,7 @@ function bindStaticHandlers() {
     document.getElementById('audienceProfessional')?.addEventListener('click', () => setAudience('professional'));
     document.getElementById('audienceTemporary')?.addEventListener('click', () => setAudience('temporary'));
     document.getElementById('showGuideBtn')?.addEventListener('click', reopenOnboardingGuide);
+    document.getElementById('globalAlertBandDismiss')?.addEventListener('click', azAttnHideAlertBand);
 
     document.getElementById('modePortalBtn')?.addEventListener('click', () => switchMode('portal'));
     document.getElementById('modeShieldBtn')?.addEventListener('click', () => switchMode('shield'));
@@ -770,6 +847,7 @@ async function refreshDashboard() {
     if (hardFailures.length > 0) {
         console.error('Dashboard refresh failed:', hardFailures);
         showToast(tr('dashboard.refresh_failed', 'Dashboard refresh failed: {error}', { error: hardFailures.join(' | ') }), 'error');
+        azConnSetState(false);
         return;
     }
 
@@ -805,7 +883,7 @@ async function refreshDashboard() {
         updateHeader(state, mattermost);
         updateClientIdentityView(summary);
         updateCommandStrip(summary, health, failures);
-        updateOperationalResourceGuard(health);
+        updateOperationalResourceGuard(health, Boolean(resultMap.health?.ok));
         updateAIGovernanceSnapshot(health.ai_governance || {});
         updateSituationBoard(summary, state, health, mattermost);
         updateSplitBoard(summary, actions);
@@ -819,9 +897,18 @@ async function refreshDashboard() {
         updateEvidenceBoard(evidence, health, trends);
         updateAssistant(actions, mattermost, capabilities);
         updateControlButtons(summary, state);
+        azAttnFirstSnapshotDone = true;
+        document.body.classList.remove('az-boot');
+        azConnSetState(true);
     } catch (error) {
         console.error('Dashboard render failed:', error);
         showToast(tr('dashboard.render_failed', 'Dashboard render failed: {error}', { error: error.message }), 'error');
+        // Required fetches already succeeded (hardFailures check above returned early otherwise),
+        // so the connection itself is live even though this render pass hit a bug. Clear the boot
+        // dimming and reflect that live state instead of leaving az-boot/the conn chip stuck at
+        // their initial INIT values forever on every subsequent render-failing poll.
+        document.body.classList.remove('az-boot');
+        azConnSetState(true);
         return;
     }
 
@@ -1091,6 +1178,7 @@ function updateClientIdentityView(summary) {
         const tile = document.getElementById(tileId);
         if (!tile) return;
         tile.className = `client-identity-tile ${tone}`;
+        azAttnNotePanelTone(tileId, tile, tone);
     };
 
     const toggle = document.getElementById('clientIdentityToggle');
@@ -1397,12 +1485,14 @@ function setPillTone(valueId, tone) {
     if (tone === 'safe' || tone === 'caution' || tone === 'danger') {
         pill.classList.add(`pill-${tone}`);
     }
+    azAttnNotePanelTone(valueId, pill, tone);
 }
 
 function setHeatTone(cellId, tone, value) {
     const cell = document.getElementById(cellId);
     if (cell) {
         cell.className = `command-heat-cell ${tone || 'status-neutral'}`;
+        azAttnNotePanelTone(cellId, cell, tone);
     }
     updateElement(`${cellId}Value`, value);
 }
@@ -1424,6 +1514,7 @@ function setGlanceCell(cellId, tone, value) {
     const cell = document.getElementById(cellId);
     if (cell) {
         cell.className = `split-glance-cell ${tone || 'status-neutral'}`;
+        azAttnNotePanelTone(cellId, cell, tone);
     }
     updateElement(`${cellId}Value`, value);
 }
@@ -1432,6 +1523,7 @@ function setGlanceCard(cardId, stateId, tone, value) {
     const card = document.getElementById(cardId);
     if (card) {
         card.className = `split-glance-card ${tone || 'status-neutral'}`;
+        azAttnNotePanelTone(cardId, card, tone);
     }
     updateElement(stateId, value);
 }
@@ -1606,6 +1698,8 @@ function updateCommandGlance(summary, health, failures = []) {
     const hero = document.getElementById('commandGlanceHero');
     if (hero) {
         hero.className = `command-glance-hero ${overallTone}`;
+        azAttnNotePanelTone('commandGlanceHero', hero, overallTone);
+        azAttnCheckHeroForBand(overallTone);
     }
     updateElement('commandGlanceHeadline', splitHeadlineForTone(overallTone));
     updateElement(
@@ -1634,6 +1728,7 @@ function updateCommandStrip(summary, health, failures = []) {
     updateElement('stripUplink', strip.current_uplink || '--');
     updateElement('stripInternet', strip.internet_reachability || '--');
     updateElement('stripCritical', String(strip.direct_critical_count ?? 0));
+    azAttnCheckCriticalForBand(Number(strip.direct_critical_count ?? 0));
     updateElement('stripDeferred', String(strip.deferred_count ?? 0));
     updateElement('stripQueue', `${health.queue?.depth ?? 0} / ${health.queue?.capacity ?? 0}`);
     const aiContributionPct = Math.round(Number(strip.ai_contribution_rate ?? 0) * 100);
@@ -1669,16 +1764,52 @@ function updateCommandStrip(summary, health, failures = []) {
     setPillTone('freshnessAiMetrics', health.stale_flags?.ai_metrics ? 'danger' : 'safe');
     setPillTone('freshnessAiActivity', health.stale_flags?.ai_activity ? 'danger' : (idleFlags.ai_activity ? 'caution' : 'safe'));
     setPillTone('freshnessRunbook', health.stale_flags?.runbook_events ? 'danger' : (idleFlags.runbook_events ? 'caution' : 'safe'));
+    azFoldUpdateCommandStripBadge();
+}
+
+// az-strip-fold: worst-tone aggregation badge for the collapsed runtime-pills fold (Issue #300, item 2)
+function azFoldUpdateCommandStripBadge() {
+    const hiddenPillIds = ['stripDeferred', 'stripQueue', 'stripAiContribution', 'stripAiFallback',
+        'freshnessSnapshot', 'freshnessAiMetrics', 'freshnessAiActivity', 'freshnessRunbook'];
+    let worst = 'status-safe';
+    let flagged = 0;
+    hiddenPillIds.forEach((id) => {
+        const valueEl = document.getElementById(id);
+        const pill = valueEl ? valueEl.closest('.strip-pill, .freshness-pill') : null;
+        if (!pill) return;
+        let tone = 'status-safe';
+        if (pill.classList.contains('pill-danger')) tone = 'status-danger';
+        else if (pill.classList.contains('pill-caution')) tone = 'status-caution';
+        if (tone !== 'status-safe') flagged += 1;
+        worst = strongestTone(worst, tone);
+    });
+    const badge = document.getElementById('commandStripFoldBadge');
+    if (badge) {
+        badge.className = `toggle-summary-badge ${worst}`;
+        badge.textContent = summaryBadgeLabel(worst);
+    }
+    const text = document.getElementById('commandStripFoldText');
+    if (text) {
+        text.className = `toggle-summary-text ${worst}`;
+        text.textContent = flagged > 0
+            ? tr('dashboard.command_strip_fold_summary', '{count} hidden | worst {tone}', { count: flagged, tone: summaryBadgeLabel(worst) })
+            : tr('dashboard.command_strip_details_show', 'Show runtime pills');
+    }
 }
 
 function updateSituationBoard(summary, state, health, mattermost) {
     const risk = summary.risk || {};
     const postureTone = toneForRisk(risk.user_state, risk.suspicion);
     const postureCard = document.getElementById('postureCard');
-    if (postureCard) postureCard.className = `situation-card posture-card ${postureTone}`;
+    if (postureCard) {
+        postureCard.className = `situation-card posture-card ${postureTone}`;
+        azAttnNotePanelTone('postureCard', postureCard, postureTone);
+    }
 
     updateElement('postureState', `${risk.user_state || '--'} / ${risk.state_name || '--'}`);
-    updateElement('riskScore', String(risk.suspicion ?? 0));
+    azAttnUpdateRiskScore(risk.suspicion ?? 0, postureTone);
+    azSparkPush('risk', risk.suspicion ?? 0);
+    azSparkRender('risk', 'azSparkRisk', postureTone);
     updateElement('postureRecommendation', summary.current_recommendation || '-');
     updateElement('postureCurrentRecommendation', summary.current_recommendation || '-');
     updateElement('postureConfidence', summary.situation_board?.threat_posture?.confidence ? `${summary.situation_board.threat_posture.confidence}` : '-');
@@ -2544,7 +2675,7 @@ async function openAuthenticatedJson(path, title) {
 }
 
 
-function updateOperationalResourceGuard(health) {
+function updateOperationalResourceGuard(health, healthOk = true) {
     const queue = health?.queue || {};
     const llm = health?.llm || {};
     const staleFlags = health?.stale_flags || {};
@@ -2636,6 +2767,14 @@ function updateOperationalResourceGuard(health) {
     setMeterFill('resourceGuardQueueBar', queuePct, queueTone);
     setMeterFill('resourceGuardFallbackBar', fallbackPct, fallbackTone);
     setMeterFill('resourceGuardLatencyBar', latencyPct, latencyTone);
+    if (healthOk) {
+        azSparkPush('queue', queuePct);
+        azSparkPush('fallback', fallbackPct);
+        azSparkPush('latency', latencyPct);
+    }
+    azSparkRender('queue', 'azSparkQueue', queueTone);
+    azSparkRender('fallback', 'azSparkFallback', fallbackTone);
+    azSparkRender('latency', 'azSparkLatency', latencyTone);
     if (headline) {
         headline.textContent = overallStatus === 'status-danger' ? 'DEGRADED' : (overallStatus === 'status-caution' ? 'WATCH' : 'STABLE');
     }
@@ -2774,6 +2913,217 @@ function toneForStatus(status) {
     if (['off', 'fail', 'failed', 'error', 'critical', 'unreachable'].includes(text)) return 'status-danger';
     if (['warning', 'deferred', 'queued', 'checking', 'preparing', 'reconnecting'].includes(text)) return 'status-caution';
     return 'status-neutral';
+}
+
+// ---- az-attn: status-transition attention system (Issue #300, item 1) ----
+
+function azAttnNormalizeTone(tone) {
+    const t = String(tone || '').trim();
+    if (!t) return 'status-neutral';
+    return t.startsWith('status-') ? t : `status-${t}`;
+}
+
+function azAttnCancelPulse(elId, el) {
+    azAttnPendingPulses.delete(elId);
+    const entry = azAttnActivePulses.get(elId);
+    if (entry) {
+        azAttnActivePulses.delete(elId);
+        if (el) {
+            el.classList.remove(entry.cls);
+            // Must mirror the listener attached in azAttnStartPulse: if a pulse is pre-empted
+            // (e.g. a new tone change arrives before the old pulse's animation-duration
+            // elapses) before 'animationend' ever fires, that listener would otherwise stay
+            // bound to el forever.
+            if (entry.onEnd) el.removeEventListener('animationend', entry.onEnd);
+        }
+    }
+    // Defensive: strip any stale pulse class even if the map entry was already lost/expired
+    // (e.g. via azAttnReapply's own expiry check), so a stuck pulse can never survive a tone
+    // change back to safe.
+    if (el) el.classList.remove('az-attn-pulse-caution', 'az-attn-pulse-danger');
+}
+
+function azAttnStartPulse(elId, el, cls, durationMs) {
+    if (!el || azAttnReducedMotion) return;
+    azAttnCancelPulse(elId, el);
+    const details = el.closest('details');
+    if (details && !details.open) {
+        // CSS animations never run on content inside a closed <details> (browsers hide its
+        // contents much like display:none), so 'animationend' would never fire and the pulse
+        // class + map entry would sit dormant indefinitely. Defer: replay the pulse fresh once
+        // the fold is opened (see azAttnBindFoldCatchup), instead of leaving a stuck class or
+        // firing a misleading replay later disconnected from the tone change.
+        azAttnPendingPulses.set(elId, { el, cls, durationMs });
+        return;
+    }
+    const onEnd = (ev) => {
+        if (ev.target !== el) return;
+        el.classList.remove(cls);
+        azAttnActivePulses.delete(elId);
+        el.removeEventListener('animationend', onEnd);
+    };
+    azAttnActivePulses.set(elId, { cls, expiresAt: Date.now() + durationMs, onEnd });
+    el.classList.add(cls);
+    el.addEventListener('animationend', onEnd);
+}
+
+// Replay any pulses deferred by azAttnStartPulse while their element sat inside a closed
+// <details> fold, once that fold is opened — otherwise the "something changed" cue never
+// reaches the operator for pills tucked away in a collapsed fold (Issue #300 round-3 regression).
+function azAttnBindFoldCatchup() {
+    document.querySelectorAll('details.panel-fold-details').forEach((details) => {
+        details.addEventListener('toggle', () => {
+            if (!details.open) return;
+            azAttnPendingPulses.forEach((pending, elId) => {
+                if (!details.contains(pending.el)) return;
+                azAttnPendingPulses.delete(elId);
+                azAttnStartPulse(elId, pending.el, pending.cls, pending.durationMs);
+            });
+        });
+    });
+}
+
+// Re-attach an in-flight pulse class after the caller has just overwritten el.className wholesale.
+// Calling classList.add with the SAME class name here, in the same synchronous tick as the caller's
+// className overwrite (no forced reflow in between), does NOT restart the CSS animation — browsers
+// coalesce same-tick class mutations into one style recalc, so a still-running animation continues
+// uninterrupted instead of retriggering every 4s poll.
+function azAttnReapply(elId, el) {
+    if (!el) return;
+    const entry = azAttnActivePulses.get(elId);
+    if (!entry) return;
+    if (Date.now() >= entry.expiresAt) { azAttnActivePulses.delete(elId); return; }
+    el.classList.add(entry.cls);
+}
+
+// Call AFTER el.className has already been (re)assigned by the caller.
+function azAttnNotePanelTone(elId, el, rawTone) {
+    const tone = azAttnNormalizeTone(rawTone);
+    const prev = azAttnToneMemory.get(elId);
+    azAttnToneMemory.set(elId, tone);
+    if (!el || !azAttnFirstSnapshotDone) return; // suppress on initial '-' -> real-value population
+    if (prev === tone) { azAttnReapply(elId, el); return; }
+    if (tone === 'status-danger') azAttnStartPulse(elId, el, 'az-attn-pulse-danger', AZ_ATTN_DANGER_MS);
+    else if (tone === 'status-caution') azAttnStartPulse(elId, el, 'az-attn-pulse-caution', AZ_ATTN_CAUTION_MS);
+    else azAttnCancelPulse(elId, el);
+}
+
+// Connection-state chip (Issue #300, item 5): distinguishes booting/waiting from an unreachable API.
+function azConnSetState(ok) {
+    const chip = document.getElementById('connStateChip');
+    const valueEl = document.getElementById('connStateChipValue');
+    const descEl = document.getElementById('connStateChipDesc');
+    if (!chip || !valueEl) return;
+    chip.classList.remove('status-safe', 'status-caution', 'status-danger');
+    if (ok) {
+        azConnConsecutiveFailures = 0;
+        lastSuccessfulPollMs = Date.now();
+        chip.classList.add('status-safe');
+        valueEl.textContent = tr('dashboard.conn_state.live', 'LIVE');
+        chip.title = '';
+        if (descEl) descEl.textContent = '';
+    } else {
+        azConnConsecutiveFailures += 1;
+        const hadPriorSuccess = lastSuccessfulPollMs !== null;
+        // caution on the first failure after a prior success, escalate to danger if it persists;
+        // straight to danger if we've never had a successful snapshot yet.
+        const tone = hadPriorSuccess && azConnConsecutiveFailures === 1 ? 'status-caution' : 'status-danger';
+        chip.classList.add(tone);
+        valueEl.textContent = tr('dashboard.conn_state.offline', 'OFFLINE');
+        // Mirror the tooltip into a visible-on-focus sr-only node: `title` only ever surfaces on
+        // mouse hover, which keyboard and touch/kiosk operators can never trigger.
+        const lastSuccessText = hadPriorSuccess
+            ? tr('dashboard.conn_state.last_success', 'Last successful update: {time}', { time: new Date(lastSuccessfulPollMs).toLocaleTimeString() })
+            : '';
+        chip.title = lastSuccessText;
+        if (descEl) descEl.textContent = lastSuccessText;
+    }
+}
+
+// Two band-trigger conditions can fire within the same synchronous refresh tick (e.g. a single
+// correlated incident both flips the hero to danger AND bumps the direct-critical count).
+// Buffer messages that arrive before the microtask flush instead of letting the second call
+// unconditionally overwrite the first, so neither alert is silently lost.
+let azAttnBandPendingMessages = [];
+let azAttnBandFlushQueued = false;
+
+function azAttnShowAlertBand(message) {
+    if (!message) return;
+    azAttnBandPendingMessages.push(message);
+    if (azAttnBandFlushQueued) return;
+    azAttnBandFlushQueued = true;
+    Promise.resolve().then(azAttnFlushAlertBand);
+}
+
+function azAttnFlushAlertBand() {
+    azAttnBandFlushQueued = false;
+    const messages = azAttnBandPendingMessages;
+    azAttnBandPendingMessages = [];
+    if (messages.length === 0) return;
+    const band = document.getElementById('globalAlertBand');
+    const msgEl = document.getElementById('globalAlertBandMessage');
+    if (!band || !msgEl) return;
+    msgEl.textContent = messages.join('  •  ');
+    band.classList.add('az-attn-band-show');
+    if (azAttnBandTimer) window.clearTimeout(azAttnBandTimer);
+    azAttnBandTimer = window.setTimeout(azAttnHideAlertBand, 12000);
+}
+
+function azAttnHideAlertBand() {
+    const band = document.getElementById('globalAlertBand');
+    if (band) band.classList.remove('az-attn-band-show');
+    if (azAttnBandTimer) { window.clearTimeout(azAttnBandTimer); azAttnBandTimer = null; }
+}
+
+// Scope: band fires ONLY on (a) hero transition into danger, (b) direct-critical count increasing.
+// (Per-panel pulses above already cover every other watched element generically.)
+function azAttnCheckHeroForBand(overallTone) {
+    const tone = azAttnNormalizeTone(overallTone);
+    const prev = azAttnPrevHeroTone;
+    azAttnPrevHeroTone = tone;
+    if (!azAttnFirstSnapshotDone || prev === tone || tone !== 'status-danger') return;
+    const area = tr('dashboard.alert_band.area_overall', 'Overall status');
+    azAttnShowAlertBand(tr('dashboard.alert_band.transition', '{area} just changed to DANGER — check immediately.', { area }));
+}
+
+function azAttnCheckCriticalForBand(count) {
+    const prev = azAttnPrevDirectCritical;
+    azAttnPrevDirectCritical = count;
+    if (!azAttnFirstSnapshotDone || prev === null || !(count > prev)) return;
+    const label = tr('dashboard.direct_critical', 'Direct Critical');
+    azAttnShowAlertBand(tr('dashboard.alert_band.critical_increase', '{label} increased to {count}.', { label, count }));
+}
+
+function azAttnUpdateRiskScore(value, tone) {
+    const el = document.getElementById('riskScore');
+    if (!el) return;
+    const target = Number(value) || 0;
+    const toneCls = azAttnNormalizeTone(tone);
+    el.classList.remove('status-safe', 'status-caution', 'status-danger', 'status-neutral');
+    el.classList.add(toneCls);
+
+    const previous = Number(el.dataset.azAttnValue ?? target);
+    el.dataset.azAttnValue = String(target);
+
+    if (!azAttnFirstSnapshotDone || azAttnReducedMotion || previous === target) {
+        el.textContent = String(target);
+        return;
+    }
+    if (!azAttnReducedMotion) {
+        el.classList.remove('az-attn-riskscore-bump');
+        void el.offsetWidth; // force reflow so the bump can retrigger on consecutive changes
+        el.classList.add('az-attn-riskscore-bump');
+    }
+    const start = performance.now();
+    const DURATION = 450; // ms; short + terminating rAF, no continuous loop
+    function step(now) {
+        const p = Math.min(1, (now - start) / DURATION);
+        const eased = 1 - Math.pow(1 - p, 2);
+        el.textContent = String(Math.round(previous + (target - previous) * eased));
+        if (p < 1) window.requestAnimationFrame(step);
+        else el.textContent = String(target);
+    }
+    window.requestAnimationFrame(step);
 }
 
 function capitalize(value) {

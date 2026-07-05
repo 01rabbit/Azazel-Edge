@@ -6,44 +6,62 @@
     <title>{{ tr('dashboard.title', 'Azazel-Edge Command Dashboard') }}</title>
     <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
-<body data-audience="temporary" data-page="dashboard">
-    <header class="topbar">
-        <div class="brand-block">
-            <div class="brand-kicker">Azazel-Edge</div>
-            <h1>{{ tr('dashboard.title', 'Azazel-Edge Command Dashboard') }}</h1>
-            <p class="brand-subtitle">{{ tr('dashboard.brand.subtitle', 'SOC/NOC situation board for operator and temporary-response workflows.') }}</p>
+<body data-audience="temporary" data-page="dashboard" class="az-boot">
+    <div class="topbar-attn-stack">
+        <header class="topbar">
+            <div class="brand-block">
+                <div class="brand-kicker">Azazel-Edge</div>
+                <h1>{{ tr('dashboard.title', 'Azazel-Edge Command Dashboard') }}</h1>
+                <p class="brand-subtitle">{{ tr('dashboard.brand.subtitle', 'SOC/NOC situation board for operator and temporary-response workflows.') }}</p>
+            </div>
+            <div class="topbar-controls">
+                <div class="language-toggle" role="tablist" aria-label="{{ tr('lang.label', 'Language') }}">
+                    <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
+                    <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
+                </div>
+                <div class="audience-toggle" role="tablist" aria-label="Audience Mode">
+                    <button id="audienceProfessional" class="audience-btn" data-audience="professional">{{ tr('dashboard.professional', 'Professional') }}</button>
+                    <button id="audienceTemporary" class="audience-btn active" data-audience="temporary">{{ tr('dashboard.temporary', 'Temporary') }}</button>
+                </div>
+                <div class="topbar-links">
+                    <a id="askMioLink" class="topbar-link" href="#assistantPanel">{{ tr('dashboard.ask_mio', 'Ask M.I.O.') }}</a>
+                    <button id="showGuideBtn" class="topbar-link topbar-link-button" type="button">{{ tr('dashboard.show_guide', 'Show Guide') }}</button>
+                    <a id="openMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.open_mattermost', 'Open Mattermost') }}</a>
+                </div>
+                <div class="topbar-meta">
+                    <div class="meta-item">
+                        <span class="meta-label">CPU</span>
+                        <strong id="headerCpuUsage">--%</strong>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">MEM</span>
+                        <strong id="headerMemUsage">--%</strong>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">TEMP</span>
+                        <strong id="headerCpuTemp">--°C</strong>
+                    </div>
+                    <div class="meta-item" id="connStateChip" role="status" aria-live="polite" tabindex="0"
+                         aria-label="{{ tr('dashboard.conn_state.aria_label', 'Connection status') }}"
+                         aria-describedby="connStateChipDesc" title="">
+                        <span class="meta-label">{{ tr('dashboard.conn_state.label', 'LINK') }}</span>
+                        <strong id="connStateChipValue">{{ tr('dashboard.conn_state.initializing', 'INIT') }}</strong>
+                        <span id="connStateChipDesc" class="sr-only"></span>
+                    </div>
+                    <div class="meta-clock" id="headerClock">--:--:--</div>
+                </div>
+            </div>
+        </header>
+
+        <div id="globalAlertBand" class="az-attn-band" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="az-attn-band-inner">
+                <span class="az-attn-band-icon" aria-hidden="true">⚠</span>
+                <span class="az-attn-band-message" id="globalAlertBandMessage"></span>
+                <button type="button" class="az-attn-band-dismiss" id="globalAlertBandDismiss"
+                        aria-label="{{ tr('dashboard.alert_band.dismiss_label', 'Dismiss') }}">×</button>
+            </div>
         </div>
-        <div class="topbar-controls">
-            <div class="language-toggle" role="tablist" aria-label="{{ tr('lang.label', 'Language') }}">
-                <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
-                <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
-            </div>
-            <div class="audience-toggle" role="tablist" aria-label="Audience Mode">
-                <button id="audienceProfessional" class="audience-btn" data-audience="professional">{{ tr('dashboard.professional', 'Professional') }}</button>
-                <button id="audienceTemporary" class="audience-btn active" data-audience="temporary">{{ tr('dashboard.temporary', 'Temporary') }}</button>
-            </div>
-            <div class="topbar-links">
-                <a id="askMioLink" class="topbar-link" href="#assistantPanel">{{ tr('dashboard.ask_mio', 'Ask M.I.O.') }}</a>
-                <button id="showGuideBtn" class="topbar-link topbar-link-button" type="button">{{ tr('dashboard.show_guide', 'Show Guide') }}</button>
-                <a id="openMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.open_mattermost', 'Open Mattermost') }}</a>
-            </div>
-            <div class="topbar-meta">
-                <div class="meta-item">
-                    <span class="meta-label">CPU</span>
-                    <strong id="headerCpuUsage">--%</strong>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">MEM</span>
-                    <strong id="headerMemUsage">--%</strong>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">TEMP</span>
-                    <strong id="headerCpuTemp">--°C</strong>
-                </div>
-                <div class="meta-clock" id="headerClock">--:--:--</div>
-            </div>
-        </div>
-    </header>
+    </div>
 
     <main class="dashboard-shell">
         <section class="panel synthetic-mode-banner" id="syntheticModeBanner" hidden>
@@ -110,7 +128,7 @@
                     </article>
                 </div>
             </div>
-            <div class="strip-grid">
+            <div class="strip-grid" id="azStripGridPrimary">
                 <div class="strip-pill">
                     <span class="strip-label">{{ tr('dashboard.mode', 'Mode') }}</span>
                     <strong id="stripMode">--</strong>
@@ -132,44 +150,117 @@
                     <strong id="stripCritical">0</strong>
                 </div>
                 <div class="strip-pill">
-                    <span class="strip-label">{{ tr('dashboard.deferred', 'Deferred') }}</span>
-                    <strong id="stripDeferred">0</strong>
-                </div>
-                <div class="strip-pill">
-                    <span class="strip-label">{{ tr('dashboard.queue', 'Queue') }}</span>
-                    <strong id="stripQueue">0 / 0</strong>
-                </div>
-                <div class="strip-pill">
-                    <span class="strip-label">{{ tr('dashboard.ai_contribution_rate', 'AI Contribution') }}</span>
-                    <strong id="stripAiContribution">0%</strong>
-                </div>
-                <div class="strip-pill">
-                    <span class="strip-label">{{ tr('dashboard.fallback_rate', 'Fallback Rate') }}</span>
-                    <strong id="stripAiFallback">0%</strong>
-                </div>
-                <div class="strip-pill">
                     <span class="strip-label">{{ tr('dashboard.stale', 'Stale') }}</span>
                     <strong id="stripStale">NO</strong>
                 </div>
             </div>
-            <div class="freshness-grid">
-                <div class="freshness-pill">
-                    <span class="strip-label">{{ tr('dashboard.snapshot', 'Snapshot') }}</span>
-                    <strong id="freshnessSnapshot">-</strong>
+            <details class="panel-fold-details az-strip-fold" id="commandStripDetails">
+                <summary id="commandStripDetailsToggle">
+                    <span class="toggle-summary-badge status-neutral" id="commandStripFoldBadge">{{ tr('dashboard.glance_unsettled', 'UNSETTLED') }}</span>
+                    <span class="toggle-summary-text" id="commandStripFoldText">{{ tr('dashboard.command_strip_details_show', 'Show runtime pills') }}</span>
+                </summary>
+                <div class="az-strip-fold-grid" id="azStripGridSecondary">
+                    <div class="strip-pill">
+                        <span class="strip-label">{{ tr('dashboard.deferred', 'Deferred') }}</span>
+                        <strong id="stripDeferred">0</strong>
+                    </div>
+                    <div class="strip-pill">
+                        <span class="strip-label">{{ tr('dashboard.queue', 'Queue') }}</span>
+                        <strong id="stripQueue">0 / 0</strong>
+                    </div>
+                    <div class="strip-pill">
+                        <span class="strip-label">{{ tr('dashboard.ai_contribution_rate', 'AI Contribution') }}</span>
+                        <strong id="stripAiContribution">0%</strong>
+                    </div>
+                    <div class="strip-pill">
+                        <span class="strip-label">{{ tr('dashboard.fallback_rate', 'Fallback Rate') }}</span>
+                        <strong id="stripAiFallback">0%</strong>
+                    </div>
                 </div>
-                <div class="freshness-pill">
-                    <span class="strip-label">{{ tr('dashboard.ai_metrics', 'AI Metrics') }}</span>
-                    <strong id="freshnessAiMetrics">-</strong>
+                <div class="freshness-grid">
+                    <div class="freshness-pill">
+                        <span class="strip-label">{{ tr('dashboard.snapshot', 'Snapshot') }}</span>
+                        <strong id="freshnessSnapshot">-</strong>
+                    </div>
+                    <div class="freshness-pill">
+                        <span class="strip-label">{{ tr('dashboard.ai_metrics', 'AI Metrics') }}</span>
+                        <strong id="freshnessAiMetrics">-</strong>
+                    </div>
+                    <div class="freshness-pill">
+                        <span class="strip-label">{{ tr('dashboard.ai_activity', 'AI Activity') }}</span>
+                        <strong id="freshnessAiActivity">-</strong>
+                    </div>
+                    <div class="freshness-pill">
+                        <span class="strip-label">{{ tr('dashboard.runbook_event', 'Runbook Event') }}</span>
+                        <strong id="freshnessRunbook">-</strong>
+                    </div>
                 </div>
-                <div class="freshness-pill">
-                    <span class="strip-label">{{ tr('dashboard.ai_activity', 'AI Activity') }}</span>
-                    <strong id="freshnessAiActivity">-</strong>
+            </details>
+        </section>
+
+        <section class="panel client-identity-panel">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('dashboard.client_identity_view', 'Client Identity View') }}</div>
+                    <h2>{{ tr('dashboard.client_identity_title', 'Who is affected right now') }}</h2>
                 </div>
-                <div class="freshness-pill">
-                    <span class="strip-label">{{ tr('dashboard.runbook_event', 'Runbook Event') }}</span>
-                    <strong id="freshnessRunbook">-</strong>
+                <div class="panel-heading-actions">
+                    <div class="panel-note" id="clientIdentitySummary">{{ tr('dashboard.client_identity_summary_waiting', 'Waiting for client identity data.') }}</div>
+                    <button type="button" class="context-ask-btn" id="clientIdentityToggle">{{ tr('dashboard.client_identity_toggle_show_normal', 'Show normal too') }}</button>
                 </div>
             </div>
+            <div class="client-identity-tile-grid">
+                <article class="client-identity-tile status-neutral" id="clientIdentityCurrentTile">
+                    <span>{{ tr('dashboard.current_label', 'Current') }}</span>
+                    <strong id="clientIdentityCurrentCount">0</strong>
+                </article>
+                <article class="client-identity-tile status-neutral" id="clientIdentityEthTile">
+                    <span>{{ tr('dashboard.client_identity_family_eth', 'ETH') }}</span>
+                    <strong id="clientIdentityEthCount">0</strong>
+                </article>
+                <article class="client-identity-tile status-neutral" id="clientIdentityWlanTile">
+                    <span>{{ tr('dashboard.client_identity_family_wlan', 'WLAN') }}</span>
+                    <strong id="clientIdentityWlanCount">0</strong>
+                </article>
+                <article class="client-identity-tile status-danger" id="clientIdentityAnomalyTile">
+                    <span>{{ tr('dashboard.anomaly_label', 'Anomaly') }}</span>
+                    <strong id="clientIdentityAnomalyCount">0</strong>
+                </article>
+                <article class="client-identity-tile status-neutral" id="clientIdentityUnidentifiedTile">
+                    <span>{{ tr('dashboard.unidentified_label', 'Unidentified') }}</span>
+                    <strong id="clientIdentityUnidentifiedCount">0</strong>
+                </article>
+                <article class="client-identity-tile status-safe" id="clientIdentityNormalTile">
+                    <span>{{ tr('dashboard.client_identity_state_normal', 'NORMAL') }}</span>
+                    <strong id="clientIdentityNormalCount">0</strong>
+                </article>
+            </div>
+            <div class="client-identity-legend" id="clientIdentityLegend">
+                <span class="client-identity-legend-item">
+                    <span class="client-identity-legend-swatch legend-trusted"></span>
+                    <span>{{ tr('dashboard.client_identity_legend_trusted', 'Trusted') }}</span>
+                </span>
+                <span class="client-identity-legend-item">
+                    <span class="client-identity-legend-swatch legend-unidentified"></span>
+                    <span>{{ tr('dashboard.client_identity_legend_unidentified', 'Unidentified') }}</span>
+                </span>
+                <span class="client-identity-legend-item">
+                    <span class="client-identity-legend-swatch legend-suspicious"></span>
+                    <span>{{ tr('dashboard.client_identity_legend_suspicious', 'Suspicious candidate') }}</span>
+                </span>
+            </div>
+            <details class="client-identity-details" id="clientIdentityDetails">
+                <summary id="clientIdentityDetailsToggle">{{ tr('dashboard.client_identity_details_show', 'Show endpoint details') }}</summary>
+                <div class="client-identity-list" id="clientIdentityList">
+                    <div>{{ tr('dashboard.client_identity_empty', 'No client identity data.') }}</div>
+                </div>
+            </details>
+            <details class="client-identity-details remote-peers-details" id="remotePeersDetails">
+                <summary id="remotePeersDetailsToggle">{{ tr('dashboard.remote_peers_show', 'Show remote peers') }}</summary>
+                <div class="client-identity-list remote-peer-list" id="remotePeersList">
+                    <div>{{ tr('dashboard.remote_peers_empty', 'No remote peers in the current top talkers.') }}</div>
+                </div>
+            </details>
         </section>
 
         <section class="panel mission-row resource-guard-panel">
@@ -210,6 +301,7 @@
                         <strong id="resourceGuardQueueValue">-</strong>
                     </div>
                     <div class="resource-guard-meter" aria-hidden="true"><span id="resourceGuardQueueBar" class="resource-guard-meter-fill"></span></div>
+                    <div class="az-spark-slot" id="azSparkQueue" aria-hidden="true"></div>
                     <p class="resource-guard-detail" id="resourceGuardQueueDetail">-</p>
                 </article>
                 <article class="mission-card resource-guard-visual-card">
@@ -218,6 +310,7 @@
                         <strong id="resourceGuardFallbackValue">-</strong>
                     </div>
                     <div class="resource-guard-meter" aria-hidden="true"><span id="resourceGuardFallbackBar" class="resource-guard-meter-fill"></span></div>
+                    <div class="az-spark-slot" id="azSparkFallback" aria-hidden="true"></div>
                     <p class="resource-guard-detail" id="resourceGuardFallbackDetail">-</p>
                 </article>
                 <article class="mission-card resource-guard-visual-card">
@@ -226,6 +319,7 @@
                         <strong id="resourceGuardLatencyValue">-</strong>
                     </div>
                     <div class="resource-guard-meter" aria-hidden="true"><span id="resourceGuardLatencyBar" class="resource-guard-meter-fill"></span></div>
+                    <div class="az-spark-slot" id="azSparkLatency" aria-hidden="true"></div>
                     <p class="resource-guard-detail" id="resourceGuardLatencyDetail">-</p>
                 </article>
             </div>
@@ -328,7 +422,10 @@
                                     <div class="card-kicker">{{ tr('dashboard.threat_posture', 'Threat Posture') }}</div>
                                     <h3 id="postureState">--</h3>
                                 </div>
-                                <div class="risk-score" id="riskScore">0</div>
+                                <div class="risk-score-wrap">
+                                    <div class="risk-score" id="riskScore">0</div>
+                                    <div class="az-spark-slot az-spark-slot-risk" id="azSparkRisk" aria-hidden="true"></div>
+                                </div>
                             </div>
                             <p class="card-summary" id="postureRecommendation">-</p>
                             <div class="fact-list">
@@ -546,71 +643,6 @@
                                 </div>
                             </div>
                             </article>
-                        </div>
-                    </details>
-                </section>
-
-                <section class="panel client-identity-panel">
-                    <div class="panel-heading">
-                        <div>
-                            <div class="panel-kicker">{{ tr('dashboard.client_identity_view', 'Client Identity View') }}</div>
-                            <h2>{{ tr('dashboard.client_identity_title', 'Who is affected right now') }}</h2>
-                        </div>
-                        <div class="panel-heading-actions">
-                            <div class="panel-note" id="clientIdentitySummary">{{ tr('dashboard.client_identity_summary_waiting', 'Waiting for client identity data.') }}</div>
-                            <button type="button" class="context-ask-btn" id="clientIdentityToggle">{{ tr('dashboard.client_identity_toggle_show_normal', 'Show normal too') }}</button>
-                        </div>
-                    </div>
-                    <div class="client-identity-tile-grid">
-                        <article class="client-identity-tile status-neutral" id="clientIdentityCurrentTile">
-                            <span>{{ tr('dashboard.current_label', 'Current') }}</span>
-                            <strong id="clientIdentityCurrentCount">0</strong>
-                        </article>
-                        <article class="client-identity-tile status-neutral" id="clientIdentityEthTile">
-                            <span>{{ tr('dashboard.client_identity_family_eth', 'ETH') }}</span>
-                            <strong id="clientIdentityEthCount">0</strong>
-                        </article>
-                        <article class="client-identity-tile status-neutral" id="clientIdentityWlanTile">
-                            <span>{{ tr('dashboard.client_identity_family_wlan', 'WLAN') }}</span>
-                            <strong id="clientIdentityWlanCount">0</strong>
-                        </article>
-                        <article class="client-identity-tile status-danger" id="clientIdentityAnomalyTile">
-                            <span>{{ tr('dashboard.anomaly_label', 'Anomaly') }}</span>
-                            <strong id="clientIdentityAnomalyCount">0</strong>
-                        </article>
-                        <article class="client-identity-tile status-neutral" id="clientIdentityUnidentifiedTile">
-                            <span>{{ tr('dashboard.unidentified_label', 'Unidentified') }}</span>
-                            <strong id="clientIdentityUnidentifiedCount">0</strong>
-                        </article>
-                        <article class="client-identity-tile status-safe" id="clientIdentityNormalTile">
-                            <span>{{ tr('dashboard.client_identity_state_normal', 'NORMAL') }}</span>
-                            <strong id="clientIdentityNormalCount">0</strong>
-                        </article>
-                    </div>
-                    <div class="client-identity-legend" id="clientIdentityLegend">
-                        <span class="client-identity-legend-item">
-                            <span class="client-identity-legend-swatch legend-trusted"></span>
-                            <span>{{ tr('dashboard.client_identity_legend_trusted', 'Trusted') }}</span>
-                        </span>
-                        <span class="client-identity-legend-item">
-                            <span class="client-identity-legend-swatch legend-unidentified"></span>
-                            <span>{{ tr('dashboard.client_identity_legend_unidentified', 'Unidentified') }}</span>
-                        </span>
-                        <span class="client-identity-legend-item">
-                            <span class="client-identity-legend-swatch legend-suspicious"></span>
-                            <span>{{ tr('dashboard.client_identity_legend_suspicious', 'Suspicious candidate') }}</span>
-                        </span>
-                    </div>
-                    <details class="client-identity-details" id="clientIdentityDetails">
-                        <summary id="clientIdentityDetailsToggle">{{ tr('dashboard.client_identity_details_show', 'Show endpoint details') }}</summary>
-                        <div class="client-identity-list" id="clientIdentityList">
-                            <div>{{ tr('dashboard.client_identity_empty', 'No client identity data.') }}</div>
-                        </div>
-                    </details>
-                    <details class="client-identity-details remote-peers-details" id="remotePeersDetails">
-                        <summary id="remotePeersDetailsToggle">{{ tr('dashboard.remote_peers_show', 'Show remote peers') }}</summary>
-                        <div class="client-identity-list remote-peer-list" id="remotePeersList">
-                            <div>{{ tr('dashboard.remote_peers_empty', 'No remote peers in the current top talkers.') }}</div>
                         </div>
                     </details>
                 </section>
@@ -980,15 +1012,15 @@
             </details>
         </section>
 
-        <section class="panel" id="aggregatorPanel" hidden>
+        <section class="panel aggregator-panel" id="aggregatorPanel" hidden>
             <div class="panel-heading">
-                <div class="panel-title-group">
+                <div>
                     <div class="panel-kicker">{{ tr('dashboard.aggregator_kicker', 'Multi-Node') }}</div>
-                    <h2 class="panel-title">{{ tr('dashboard.aggregator_title', 'Node Fleet Status') }}</h2>
+                    <h2>{{ tr('dashboard.aggregator_title', 'Node Fleet Status') }}</h2>
                 </div>
-                <p class="panel-note" id="aggregatorPanelNote">
+                <div class="panel-note" id="aggregatorPanelNote">
                     {{ tr('dashboard.aggregator_note', 'Aggregated freshness and risk posture across registered nodes.') }}
-                </p>
+                </div>
             </div>
 
             <div class="aggregator-counters" id="aggregatorCounters">
