@@ -11,6 +11,16 @@ touched, confirms zero behavior change to BHUSA-relevant demo paths, and
 defines a per-adapter rollback point. Whether the adapters themselves are
 implemented next is gated on review of this note.
 
+**Scope boundary — CTI is deferred.** Edge has no CTI integration today, and
+connecting Edge to Azazel-CTI is a **next-fiscal-year-onward (FY2027+) plan**,
+not current work. Accordingly, only the schema-serialization adapters that
+operate on data Edge *already* produces are near-term-applicable: the Decision
+Explanation, Trust capsule, and Audit projections (§3). The CTI ingest client
+and context-response consumer (§4) are documented here for completeness and to
+capture the finding that they do not exist yet — but they are **out of scope
+for the current cycle** and are not a near-term deliverable. This note can be
+adopted for the §3 projections without waiting on any CTI work.
+
 ## 1. Prerequisite and dependency pinning
 
 - Depends on `azazel-common` `v0.1.0` (schema-only) — already tagged and
@@ -33,8 +43,9 @@ event input → Evidence Plane normalization → NOC/SOC evaluators → policy
 thresholds → Action Arbiter → **Decision Explanation** → notify/AI assist →
 **Audit logging**.
 
-Only the two **bold** stages (plus the outbound CTI exchange, which does not
-yet exist — see §4) are serialization boundaries. Everything upstream of the
+Only the two **bold** stages are serialization boundaries for the current
+cycle. (An outbound CTI exchange would be a third boundary, but it does not
+exist yet and is deferred to FY2027+ — see §4.) Everything upstream of the
 Decision Explanation is decision logic and is out of scope (§5). The arbiter
 still decides; Common only standardizes how that decision is written down and
 transmitted.
@@ -141,7 +152,7 @@ commit and its own rollback point.
   here; resolving the duality is a pre-existing Edge concern (B1), not part of
   this adapter work. Revisit once B1 is resolved.
 
-## 4. CTI client — NET-NEW code, no existing call site to adapt
+## 4. CTI client — DEFERRED to FY2027+ (no existing call site, and not built now)
 
 **Load-bearing finding:** Edge currently has **no CTI HTTP client**. There is
 no code that POSTs to `/v1/events`, `/v1/flows`, `/v1/reactions`, or
@@ -149,7 +160,11 @@ no code that POSTs to `/v1/events`, `/v1/flows`, `/v1/reactions`, or
 (`matches`/`behavioral_cti`/`advisory_notice`/`limitations`). Verified by
 repo-wide search (no matches for those endpoints or fields).
 
-Consequences for `migration-plan.md` Phase 3:
+**This is not a gap to close in the current cycle.** Connecting Edge to
+Azazel-CTI is a next-fiscal-year-onward (FY2027+) plan. The material below
+scopes that future work so it is not re-derived later; it is **not** a
+near-term deliverable, and nothing in §3 depends on it. When the CTI
+integration cycle eventually starts:
 
 - The CTI request-builders (`CtiEventBatch`/`CtiFlowBatch`/`CtiReactionBatch`/
   `CtiContextRequest`) and the `CtiContextResponse` parser are **new code**,
@@ -169,11 +184,11 @@ Consequences for `migration-plan.md` Phase 3:
     lookup (no HTTP). A `CtiContextResponse.matches` consumer would be a new
     online path alongside this offline one, not a replacement.
 - **Advisory-only fail-closed reminder (contract, not just schema):** per
-  `Azazel-Common/docs/contracts.md` §2, when the new CTI client is written, a
-  response that fails validation, times out, or is unreachable **must** be
-  treated as "no advisory context available" and must **not** raise into
-  Edge's decision path. `behavioral_cti` absent is normal, not an error. The
-  deterministic path in `decision-loop.md` stays authoritative.
+  `Azazel-Common/docs/contracts.md` §2, if/when the CTI client is eventually
+  written, a response that fails validation, times out, or is unreachable
+  **must** be treated as "no advisory context available" and must **not** raise
+  into Edge's decision path. `behavioral_cti` absent is normal, not an error.
+  The deterministic path in `decision-loop.md` stays authoritative.
 - **HTTP note:** existing outbound code uses stdlib `urllib` (upstream/taxii/
   aggregator) even though `requests` is declared in `runtime.txt`. The CTI
   client should match the surrounding `urllib` style unless a deliberate
@@ -226,8 +241,12 @@ Rollback points, in dependency order:
 2. Decision Explanation projection in `explanations/decision.py`.
 3. Trust capsule projection in `explanations/trust_capsule.py`.
 4. Audit projection in `audit/logger.py` (separate stream).
-5. (New) CTI ingest client + context-response parser (new module under
-   `integrations/`), introduced as a Common consumer from the first commit.
+
+Item 5 below is **not part of the current cycle** — deferred to FY2027+:
+
+5. (Deferred) CTI ingest client + context-response parser (new module under
+   `integrations/`), introduced as a Common consumer from the first commit,
+   only when the CTI integration cycle begins.
 
 ## 8. Open questions for review (feed Issue 3)
 
@@ -242,6 +261,8 @@ Rollback points, in dependency order:
 3. Reconcile `TrustCapsule` field names (`hmac_sig`↔`hmac`,
    `timestamp`↔`issued_at`) and the absent `config_hash` — Common change vs.
    Edge-side mapping.
-4. Since no CTI client exists, confirm the CTI request/response schemas against
-   the real Azazel-CTI API is entirely Issue 3's job (there is nothing to
-   retrofit here) before Edge writes the client.
+4. Since no CTI client exists **and CTI integration is deferred to FY2027+**,
+   validating the CTI request/response schemas against the real Azazel-CTI API
+   is entirely Issue 3's job on the Common side (there is nothing to retrofit in
+   Edge now). No Edge CTI work is scheduled for the current cycle; §3 adoption
+   proceeds independently of it.
