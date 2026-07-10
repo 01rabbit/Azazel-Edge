@@ -5,6 +5,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- EPD-on-Web preview for Azazel-Edge: read-only, viewer-gated web routes that expose the physical e-paper panel state — `GET /api/epd` (mode/state plus raw `epd_state.json`, desired render spec, and last-drawn frame), `GET /api/epd/preview.png` (pixel-parity PNG rendered in-memory by the real `py/azazel_edge_epd.py` renderer, fail-closed `503` when the renderer/assets are unavailable), and `GET /dev/epd` (self-contained dark-themed dev page). Adds `AZAZEL_EPD_RUNTIME_DIR` / `AZAZEL_EPD_STATE_PATH` / `AZAZEL_EPD_LAST_RENDER_PATH` dev overrides. See `docs/API_REFERENCE.md` and `docs/CONFIGURATION.md`.
+- Design-only integration plan `docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md` (2026-07-09) describing the azazel-common contract adapter for Edge; documents planning intent only (no shipped code), with Edge↔CTI integration deferred to FY2027+.
 - Candidate CFP draft (`docs/cfp/blackhat-europe-arsenal-auditable-edge-socnoc.md`) and paper-style concept document (`docs/papers/auditable-edge-socnoc-paper.md`) for the Auditable Edge SOC/NOC profile (pre-acceptance planning material; not accepted-appearance records).
 - Submission-preparation roadmap (`docs/archive/roadmaps/auditable-edge-socnoc-cfp-roadmap.md`) and gh-registerable issue drafts (`docs/archive/issues/auditable-edge-socnoc/`) for the Auditable Edge SOC/NOC profile.
 - BHUSA 2026 booth-preparation document set covering docs sync, talk track, replay runbook, audit walkthrough, booth decision-support view, live/replay boundary, rehearsal runbook, freeze candidate, and final command sheet.
