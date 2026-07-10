@@ -168,7 +168,7 @@ Azazel-Edge is one form in the **Azazel** family (naming spec: `Azazel-<Form> <R
 Forms: Gadget/Edge/Boot, Roles: Gateway/Shield/Probe). The umbrella doctrine hub is
 the [Azazel](https://github.com/01rabbit/Azazel) project ("Cyber Scapegoat Gateway").
 
-| Form | Codename | Class | Role in the series |
+| Form | Designation | Class | Role in the series |
 |---|---|---|---|
 | **Azazel-Edge** | AZ-01 (formerly Azazel-Pi) | Resident edge-class gateway (Pi 5) | This repository — deterministic edge SOC/NOC gateway |
 | Azazel-Gadget | AZ-02 (formerly Azazel-Zero) | USB-gadget-class portable device | Portable companion gateway; ships an EPD-on-Web dev preview |
