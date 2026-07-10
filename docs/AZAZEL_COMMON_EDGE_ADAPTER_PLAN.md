@@ -18,8 +18,11 @@
 > ("Edge is the most mature tool, so it must be Fabric's top consumer"), Edge
 > also ships a **StatusView** emit/read-back path (`py/azazel_edge/fabric_view.py`
 > → `ui_status_view.json`, surfaced on `GET /api/state` as `status_view`) — more
-> Fabric coverage than any sibling. `azazel-fabric` is pinned in
-> `requirements/runtime.txt` at the merged commit (v0.3.0 tag pending). The §3.4
+> Fabric coverage than any sibling. `azazel-fabric` is pinned in the optional
+> `requirements/fabric.txt` at the merged commit (v0.3.0 tag pending): the
+> Fabric repository is private, so unauthenticated environments (CI) cannot
+> resolve the pin — installing that file activates the projections, and every
+> integration point is a guarded no-op without it. The §3.4
 > second decision stream remains deferred, and the §4 CTI client remains FY2027+.
 > The §8 open questions are resolved as-implemented (see §8). The design body
 > below is retained as the authority for the projection mappings.

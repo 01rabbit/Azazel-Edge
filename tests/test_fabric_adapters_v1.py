@@ -22,6 +22,17 @@ from azazel_edge.explanations import DecisionExplainer
 from azazel_edge.explanations import fabric_adapter as expl_fabric
 from azazel_edge import fabric_view
 
+try:  # the shared library is an optional extra (requirements/fabric.txt)
+    import azazel_fabric  # noqa: F401
+
+    HAVE_FABRIC = True
+except Exception:  # pragma: no cover - CI runs without the private package
+    HAVE_FABRIC = False
+
+needs_fabric = unittest.skipUnless(
+    HAVE_FABRIC, "azazel-fabric not installed (optional extra; see requirements/fabric.txt)"
+)
+
 
 def _sample_explain(explainer: DecisionExplainer):
     return explainer.explain(
@@ -41,6 +52,7 @@ def _sample_explain(explainer: DecisionExplainer):
 
 
 class DecisionProjectionTests(unittest.TestCase):
+    @needs_fabric
     def test_projection_written_with_expected_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "decision-explanations.jsonl"
@@ -57,6 +69,7 @@ class DecisionProjectionTests(unittest.TestCase):
             self.assertEqual(row["release_condition"], "noc_recovers")
             self.assertIsInstance(row["confidence"], float)
 
+    @needs_fabric
     def test_trust_capsule_projection_field_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "decision-explanations.jsonl"
@@ -99,6 +112,7 @@ class DecisionProjectionTests(unittest.TestCase):
 
 
 class AuditProjectionTests(unittest.TestCase):
+    @needs_fabric
     def test_projection_to_separate_file_and_chain_untouched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             chain = Path(tmp) / "audit.jsonl"
@@ -160,6 +174,7 @@ class StatusViewTests(unittest.TestCase):
         "attack": {"suricata_alert": True},
     }
 
+    @needs_fabric
     def test_build_status_view_carries_full_snapshot(self) -> None:
         view = fabric_view.status_view_from_snapshot(self.SNAP)
         self.assertIsNotNone(view)
@@ -170,6 +185,7 @@ class StatusViewTests(unittest.TestCase):
         # Peer, not subset: the whole snapshot rides in product_view.
         self.assertEqual(data["product_view"]["edge_snapshot"], self.SNAP)
 
+    @needs_fabric
     def test_write_alongside_and_noop_without_package(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             snap_path = Path(tmp) / "ui_snapshot.json"
@@ -222,6 +238,7 @@ class ApiStateStatusViewTests(unittest.TestCase):
         self.assertIn("status_view", body)
         self.assertIsNone(body["status_view"])
 
+    @needs_fabric
     def test_status_view_key_populated_when_present(self) -> None:
         view = fabric_view.status_view_from_snapshot(StatusViewTests.SNAP)
         self.snap_path.with_name("ui_status_view.json").write_text(view.model_dump_json(), encoding="utf-8")

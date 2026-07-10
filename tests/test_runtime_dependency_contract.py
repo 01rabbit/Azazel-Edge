@@ -69,10 +69,10 @@ def test_runtime_dependencies_cover_imports():
     module_to_requirement = {
         "PIL": "pillow",
         "yaml": "pyyaml",
-        # Shared contracts library: import namespace azazel_fabric, dist azazel-fabric.
-        "azazel_fabric": "azazel-fabric",
     }
     optional_modules = {
+        # Optional Fabric integration extra (requirements/fabric.txt); guarded import.
+        "azazel_fabric",
         # Hardware-only dependency provided by device-specific setup.
         "waveshare_epd",
     }

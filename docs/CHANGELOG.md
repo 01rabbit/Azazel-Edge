@@ -4,6 +4,12 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Azazel-Fabric の pin をオプションの `requirements/fabric.txt` に分離(Fabric
+  リポジトリは private のため、無認証環境 = CI では解決不能。全統合点は
+  ガード付き no-op なので未導入でも動作は同一。導入時のみ射影が有効化)。
+
 ### Added
 - Azazel-Fabric adoption — Phase 3 (2026-07-10): Edge now ships the three §3
   emit-alongside projections from `docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md` plus
