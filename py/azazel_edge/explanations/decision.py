@@ -188,6 +188,15 @@ class DecisionExplainer:
             logger.warning("invalid_v2_decision_explanation: %s", "; ".join(problems))
         with self.output_path.open('a', encoding='utf-8') as fh:
             fh.write(json.dumps(explanation, ensure_ascii=True, separators=(',', ':')) + '\n')
+        # Emit-alongside: additionally project into the shared Azazel-Fabric
+        # DecisionExplanation/TrustCapsule shapes on separate streams. Best-effort,
+        # never perturbs the Edge-native write above (plan §3.1/§3.2).
+        try:
+            from .fabric_adapter import project_decision_explanation
+
+            project_decision_explanation(explanation, self.output_path)
+        except Exception:  # pragma: no cover - defensive; projection is advisory-only
+            pass
 
     @staticmethod
     def _operator_wording(

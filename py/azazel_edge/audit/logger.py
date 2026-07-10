@@ -85,6 +85,15 @@ class P0AuditLogger:
             with self.path.open('a', encoding='utf-8') as fh:
                 fh.write(json.dumps(record, ensure_ascii=True, separators=(',', ':')) + '\n')
             self._last_chain_hash = str(record['chain_hash'])
+            # Emit-alongside: project into the shared Azazel-Fabric AuditEvent on a
+            # SEPARATE, non-interleaved file. The chained log above is complete and
+            # untouched; verify_chain() is unaffected (plan §3.3). Best-effort.
+            try:
+                from .fabric_adapter import project_audit_record
+
+                project_audit_record(record, self.path)
+            except Exception:  # pragma: no cover - defensive; projection is advisory-only
+                pass
             return record
 
     def log_event_receive(self, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:

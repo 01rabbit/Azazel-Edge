@@ -10,10 +10,24 @@
 > it stays cross-referenced as `AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md` from
 > `docs/INDEX.md` and from the Fabric repo's docs.
 
-Status: **Design note / proposal only.** No adapter code is written by this
-document, and no existing Edge behavior is changed. This is the deliverable for
-Issue 5 in `Azazel-Common/docs/issue-breakdown.md`, implementing the planning
-step of `Azazel-Common/docs/migration-plan.md` Phase 3.
+> **2026-07-10 status update — Phase 3 IMPLEMENTED.** The §3 adapters are now
+> shipped in Edge per this plan: the DecisionExplanation projection (§3.1), the
+> TrustCapsule projection (§3.2), and the AuditEvent projection (§3.3) — each an
+> emit-alongside, guarded (`try: import azazel_fabric`) no-op-when-absent path
+> with zero behavior change. Beyond the original scope, and at owner direction
+> ("Edge is the most mature tool, so it must be Fabric's top consumer"), Edge
+> also ships a **StatusView** emit/read-back path (`py/azazel_edge/fabric_view.py`
+> → `ui_status_view.json`, surfaced on `GET /api/state` as `status_view`) — more
+> Fabric coverage than any sibling. `azazel-fabric` is pinned in
+> `requirements/runtime.txt` at the merged commit (v0.3.0 tag pending). The §3.4
+> second decision stream remains deferred, and the §4 CTI client remains FY2027+.
+> The §8 open questions are resolved as-implemented (see §8). The design body
+> below is retained as the authority for the projection mappings.
+
+Status: **Design note / proposal — now implemented (Phase 3, 2026-07-10).** The
+plan below defined the adapters; they are now built as described. This was the
+deliverable for Issue 5 in `Azazel-Common/docs/issue-breakdown.md`, implementing
+the planning step of `Azazel-Common/docs/migration-plan.md` Phase 3.
 
 This note identifies the *exact* call sites in Edge that would serialize
 through `azazel_common` schemas, states explicitly which code is **not**
@@ -258,21 +272,39 @@ Item 5 below is **not part of the current cycle** — deferred to FY2027+:
    `integrations/`), introduced as a Common consumer from the first commit,
    only when the CTI integration cycle begins.
 
-## 8. Open questions for review (feed Issue 3)
+## 8. Open questions — RESOLVED as implemented (2026-07-10)
 
-1. Confirm `DecisionExplanation` stays an interop *projection*, not a
-   replacement for Edge's richer v2 record — so the `why_chosen` (dict→str) and
-   `selected_action` (dict→`ActionIntent`) narrowing is acceptable at the
-   boundary.
-2. Decide how the audit hash-chain (`chain_prev`/`chain_hash`) is represented
-   through `AuditEvent` — carry in `payload` for v0.1.0, or promote to a
-   dedicated chain-of-custody field in a later Common release
-   (`audit/chain.py`, Phase 5).
-3. Reconcile `TrustCapsule` field names (`hmac_sig`↔`hmac`,
-   `timestamp`↔`issued_at`) and the absent `config_hash` — Common change vs.
-   Edge-side mapping.
-4. Since no CTI client exists **and CTI integration is deferred to FY2027+**,
-   validating the CTI request/response schemas against the real Azazel-CTI API
-   is entirely Issue 3's job on the Common side (there is nothing to retrofit in
-   Edge now). No Edge CTI work is scheduled for the current cycle; §3 adoption
-   proceeds independently of it.
+1. **`DecisionExplanation` stays an interop projection, not a replacement.**
+   *Resolved:* accepted. Edge keeps writing its richer v2
+   `decision-explanations.jsonl` unchanged; the Fabric projection is written to
+   a **separate** `fabric-decision-explanations.jsonl`. The lossy narrowing is
+   applied at the boundary: `why_chosen` dict → the top-level `reason` string,
+   `selected_action` name → an assembled `ActionIntent`
+   (`kind`/`target`/`issued_by=edge_arbiter`/`evidence`/`trace_id`), and
+   `why_not_others` `{action,reason}` → `"action: reason"` strings.
+   Implementation: `py/azazel_edge/explanations/fabric_adapter.py`.
+2. **Audit hash-chain representation through `AuditEvent`.**
+   *Resolved:* carry `chain_prev`/`chain_hash` (plus `source`) inside
+   `AuditEvent.payload` for now — Fabric does not (yet) model a chain, and a
+   dedicated chain-of-custody field stays a future Fabric extension. `event_id`
+   is synthesized from `chain_hash` (chain position is Edge's record identity).
+   Critically, the projection is written to a **separate, non-interleaved** file
+   (`<name>.fabric.jsonl`), so the original chained log and `verify_chain()` are
+   never perturbed. Implementation: `py/azazel_edge/audit/fabric_adapter.py`.
+3. **`TrustCapsule` field reconciliation.**
+   *Resolved:* done Edge-side as a projection mapping (no Fabric change):
+   `hmac_sig` → `hmac`, `timestamp` → `issued_at`, and the `config_hash` absent
+   from Edge's capsule is sourced from the explanation's top-level `config_hash`.
+   Written to a separate `fabric-trust-capsules.jsonl`; Edge's own capsule is
+   untouched. Implementation: `explanations/fabric_adapter.py`.
+4. **CTI schema validation stays a Fabric-side concern.**
+   *Unchanged:* no CTI client exists in Edge and CTI integration remains
+   deferred to FY2027+. §3 adoption proceeded independently, as planned.
+
+**Beyond §8 — StatusView (owner-directed scope extension).** Edge additionally
+builds `azazel_fabric.view.StatusView` from its runtime snapshot via
+`build_status_view`/`derive_posture` and writes `ui_status_view.json` alongside
+`ui_snapshot.json`, carrying the whole snapshot under
+`product_view={"edge_snapshot": …}` (peer-not-subset). It is surfaced read-back
+on `GET /api/state` as the `status_view` key (null when the package is absent).
+Implementation: `py/azazel_edge/fabric_view.py` and `azazel_edge_web/app.py`.

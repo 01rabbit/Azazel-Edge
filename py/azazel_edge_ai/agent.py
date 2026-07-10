@@ -1599,6 +1599,15 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
     snapshot["connection"] = connection
 
     _write_json(SNAPSHOT_PATH, snapshot)
+    # Emit-alongside: write the shared Azazel-Fabric StatusView next to the
+    # snapshot (ui_status_view.json). Best-effort, never raises, no-op without
+    # the azazel_fabric package (owner-directed scope extension).
+    try:
+        from azazel_edge.fabric_view import write_status_view_alongside
+
+        write_status_view_alongside(snapshot, [SNAPSHOT_PATH], logger=logger)
+    except Exception:  # pragma: no cover - defensive; StatusView is advisory-only
+        pass
 
 
 def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:

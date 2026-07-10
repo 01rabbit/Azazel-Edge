@@ -27,7 +27,9 @@ def _runtime_requirement_names() -> set[str]:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        normalized = line.split(">=")[0].split("==")[0].split("<")[0].strip().lower()
+        # Handle PEP 508 URL pins ("name @ git+https://...") by taking the name.
+        base = line.split("@", 1)[0]
+        normalized = base.split(">=")[0].split("==")[0].split("<")[0].strip().lower()
         if normalized:
             names.add(normalized)
     return names
@@ -67,6 +69,8 @@ def test_runtime_dependencies_cover_imports():
     module_to_requirement = {
         "PIL": "pillow",
         "yaml": "pyyaml",
+        # Shared contracts library: import namespace azazel_fabric, dist azazel-fabric.
+        "azazel_fabric": "azazel-fabric",
     }
     optional_modules = {
         # Hardware-only dependency provided by device-specific setup.

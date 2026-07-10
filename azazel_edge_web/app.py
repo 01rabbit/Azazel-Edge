@@ -4192,6 +4192,27 @@ def read_state() -> Dict[str, Any]:
         }
 
 
+def read_status_view() -> Optional[Dict[str, Any]]:
+    """Read the shared Azazel-Fabric StatusView written beside the snapshot.
+
+    The agent writes ``ui_status_view.json`` next to ``ui_snapshot.json`` when
+    the ``azazel_fabric`` package is installed (see
+    ``azazel_edge.fabric_view``). Returns the view as a dict, or ``None`` when
+    it is unavailable (package absent, not yet written, or unreadable). Never
+    raises into the caller.
+    """
+    for base in (STATE_PATH, FALLBACK_STATE_PATH):
+        try:
+            view_path = Path(base).with_name("ui_status_view.json")
+            if view_path.exists():
+                data = json.loads(view_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+        except Exception:  # pragma: no cover - defensive; status_view is advisory-only
+            continue
+    return None
+
+
 def _normalize_status_payload(payload: Dict[str, Any], action: str = "") -> Dict[str, Any]:
     """Normalize Status API payload shape."""
     if payload.get("status") == "ok" and "ok" not in payload:
@@ -4797,6 +4818,9 @@ def api_state():
     mode_state = get_mode_state()
     state["mode"] = mode_state.get("mode", {})
     state["mode_runtime"] = mode_state
+    # Shared Azazel-Fabric StatusView, emitted alongside the snapshot when the
+    # azazel_fabric package is installed; null when unavailable.
+    state["status_view"] = read_status_view()
     return jsonify(state)
 
 
