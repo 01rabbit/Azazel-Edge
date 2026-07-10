@@ -162,22 +162,17 @@ Primary entry points:
 | `demos/concepts/` | Concept-oriented deterministic demo grouping |
 | `docs/` | Architecture, concept, operations, and reference documentation |
 
-## Azazel Series / Related Repositories
+## Azazel Series
 
-Azazel-Edge is one form in the **Azazel** family (naming spec: `Azazel-<Form> <Role>`;
-Forms: Gadget/Edge/Boot, Roles: Gateway/Shield/Probe). The umbrella doctrine hub is
-the [Azazel](https://github.com/01rabbit/Azazel) project ("Cyber Scapegoat Gateway").
+Azazel-Edge (**AZ-01**, codename `SENTINEL`) is one product of the **Azazel** series
+("Cyber Scapegoat Gateway"). The series map, naming specification, AZ designations,
+and doctrine live in the umbrella repository: [01rabbit/Azazel](https://github.com/01rabbit/Azazel).
 
-| Form | Designation | Class | Role in the series |
-|---|---|---|---|
-| **Azazel-Edge** | AZ-01 (formerly Azazel-Pi) | Resident edge-class gateway (Pi 5) | This repository — deterministic edge SOC/NOC gateway |
-| Azazel-Gadget | AZ-02 (formerly Azazel-Zero) | USB-gadget-class portable device | Portable companion gateway; ships an EPD-on-Web dev preview |
-| Azazel-Boot | AZ-03 | Reserved | Reserved form; no repository yet |
-| [Azazel-Knowledge](https://github.com/01rabbit/Azazel-Knowledge) | AZ-04 (formerly Azazel-CTI; formal name: Azazel-Knowledge Advisor) | Advisory-only on-prem CTI node (Pi 4) | Deterministic threat-context advice; never commands — Edge's arbiter keeps final authority and functions fully without it |
-| [Azazel-Fabric](https://github.com/01rabbit/Azazel-Fabric) | AZ-05 (formerly Azazel-Common; formal name: Azazel-Fabric Contract) | shared contracts library | Shared Pydantic contracts (`azazel_fabric` from v0.3.0; `azazel_common` in the v0.1.0/v0.2.0 tags); Edge is the top consumer — shipping DecisionExplanation / TrustCapsule / AuditEvent projections + a StatusView (guarded, emit-alongside, zero behavior change; see [Edge adapter plan](docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md)) |
-
-Azazel-Edge and Azazel-Gadget are MIT-licensed. See the [Azazel](https://github.com/01rabbit/Azazel)
-umbrella project for series-wide doctrine.
+Edge-local integration note: Edge is the largest consumer of the shared
+[Azazel-Fabric](https://github.com/01rabbit/Azazel-Fabric) contracts (guarded,
+emit-alongside, zero behavior change) — see
+[docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md](docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md)
+and `requirements/fabric.txt`.
 
 ## License
 
