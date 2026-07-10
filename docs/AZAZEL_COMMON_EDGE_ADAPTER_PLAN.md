@@ -1,5 +1,15 @@
 # Azazel-Common Edge Adapter Plan
 
+> **2026-07-10 naming update:** Azazel-Common was renamed **Azazel-Covenant**
+> (AZ-05) on 2026-07-10. From `v0.3.0` the import namespace is
+> `azazel_covenant`; the `v0.1.0`/`v0.2.0` tags referenced below keep the
+> original `azazel_common` import name and `azazel-common` dist name. This
+> plan's body below retains the names that were current when it was written
+> (`Azazel-Common`/`azazel_common`); any future adapter code should target the
+> new `azazel_covenant` namespace instead. The file itself is not renamed —
+> it stays cross-referenced as `AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md` from
+> `docs/INDEX.md` and from the Covenant repo's docs.
+
 Status: **Design note / proposal only.** No adapter code is written by this
 document, and no existing Edge behavior is changed. This is the deliverable for
 Issue 5 in `Azazel-Common/docs/issue-breakdown.md`, implementing the planning
@@ -161,7 +171,7 @@ no code that POSTs to `/v1/events`, `/v1/flows`, `/v1/reactions`, or
 repo-wide search (no matches for those endpoints or fields).
 
 **This is not a gap to close in the current cycle.** Connecting Edge to
-Azazel-CTI is a next-fiscal-year-onward (FY2027+) plan. The material below
+Azazel-CTI (now Azazel-Grimoire) is a next-fiscal-year-onward (FY2027+) plan. The material below
 scopes that future work so it is not re-derived later; it is **not** a
 near-term deliverable, and nothing in §3 depends on it. When the CTI
 integration cycle eventually starts:

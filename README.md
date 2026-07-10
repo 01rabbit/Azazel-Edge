@@ -173,8 +173,8 @@ the [Azazel](https://github.com/01rabbit/Azazel) project ("Cyber Scapegoat Gatew
 | **Azazel-Edge** | AZ-01 (formerly Azazel-Pi) | Resident edge-class gateway (Pi 5) | This repository — deterministic edge SOC/NOC gateway |
 | Azazel-Gadget | AZ-02 (formerly Azazel-Zero) | USB-gadget-class portable device | Portable companion gateway; ships an EPD-on-Web dev preview |
 | Azazel-Boot | AZ-03 | Reserved | Reserved form; no repository yet |
-| Azazel-CTI | working name (formal name deferred) | Advisory-only on-prem CTI node (Pi 4) | Deterministic threat-context advice; never commands — Edge's arbiter keeps final authority and functions fully without it |
-| Azazel-Common | shared contracts library | `pip install azazel-common` | Shared Pydantic contracts (`azazel_common`); Edge integration is design-only today (see [Edge adapter plan](docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md)) |
+| [Azazel-Grimoire](https://github.com/01rabbit/Azazel-Grimoire) | AZ-04 (formerly Azazel-CTI; formal name: Azazel-Grimoire Advisor) | Advisory-only on-prem CTI node (Pi 4) | Deterministic threat-context advice; never commands — Edge's arbiter keeps final authority and functions fully without it |
+| [Azazel-Covenant](https://github.com/01rabbit/Azazel-Covenant) | AZ-05 (formerly Azazel-Common) | shared contracts library | Shared Pydantic contracts (`azazel_covenant` from v0.3.0; `azazel_common` in the v0.1.0/v0.2.0 tags); Edge integration is design-only today (see [Edge adapter plan](docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md)) |
 
 Azazel-Edge and Azazel-Gadget are MIT-licensed. See the [Azazel](https://github.com/01rabbit/Azazel)
 umbrella project for series-wide doctrine.
