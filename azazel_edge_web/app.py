@@ -20,6 +20,7 @@ from flask import (
     has_request_context,
     g,
 )
+import io
 import json
 import os
 import socket
@@ -152,6 +153,20 @@ except Exception:
     STIXExporter = None  # type: ignore
     TAXIIPushClient = None  # type: ignore
 
+# EPD (e-paper) renderer + desired-render logic live in py/ (already on sys.path).
+# Import defensively: azazel_edge_epd calls sys.exit() at import time when Pillow
+# is unavailable, so we must also swallow SystemExit and keep the web app alive.
+try:  # pragma: no cover - exercised indirectly by /api/epd routes
+    import azazel_edge_epd as _epd_renderer  # noqa: F401
+except (Exception, SystemExit):
+    _epd_renderer = None  # type: ignore
+try:  # pragma: no cover - exercised indirectly by /api/epd routes
+    from azazel_edge_epd_mode_refresh import (  # noqa: F401
+        _desired_render_spec as _epd_desired_render_spec,
+    )
+except (Exception, SystemExit):
+    _epd_desired_render_spec = None  # type: ignore
+
 # Configuration
 _RUNTIME_STATE_PATHS = runtime_snapshot_path_candidates()
 STATE_PATH = _RUNTIME_STATE_PATHS[0]  # Share TUI snapshot
@@ -185,7 +200,19 @@ AUTH_MTLS_FINGERPRINTS = {
 AUTH_MTLS_FINGERPRINTS_FILE = Path(str(os.environ.get("AZAZEL_AUTH_MTLS_FINGERPRINTS_FILE", "/etc/azazel-edge/client-cert-fingerprints.txt")).strip() or "/etc/azazel-edge/client-cert-fingerprints.txt")
 _ROLE_RANK: Dict[str, int] = {"viewer": 10, "operator": 20, "responder": 30, "admin": 40}
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "images"
-EPD_LAST_RENDER_PATH = Path("/run/azazel-edge/epd_last_render.json")
+# EPD runtime state. The renderer + orchestrator hardcode the edge-tier runtime
+# dir (/run/azazel-edge) regardless of path schema, so we mirror that here rather
+# than routing through runtime_dir_candidates() (which would resolve to the
+# legacy azazel-gadget name under schema v1). AZAZEL_EPD_RUNTIME_DIR lets a dev
+# host point these at a writable directory without hardware.
+EPD_RUNTIME_DIR = Path(os.environ.get("AZAZEL_EPD_RUNTIME_DIR", "").strip() or "/run/azazel-edge")
+EPD_STATE_PATH = Path(
+    os.environ.get("AZAZEL_EPD_STATE_PATH", "").strip() or str(EPD_RUNTIME_DIR / "epd_state.json")
+)
+EPD_LAST_RENDER_PATH = Path(
+    os.environ.get("AZAZEL_EPD_LAST_RENDER_PATH", "").strip()
+    or str(EPD_RUNTIME_DIR / "epd_last_render.json")
+)
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
@@ -5166,6 +5193,298 @@ def api_mode_set():
     )
     code = 200 if result.get("ok") else 500
     return jsonify(result), code
+
+
+# --- EPD (e-paper) web preview -------------------------------------------------
+# "EPD-on-Web": expose what the physical 2.13" panel shows, plus a pixel-parity
+# PNG rendered with the real renderer (Edge's differentiator over Gadget's HTML
+# approximation). Read-only, viewer role, fail-closed.
+
+_EPD_REQUIRED_ICONS = (
+    "wifi_3.png",
+    "wifi_2.png",
+    "wifi_1.png",
+    "wifi_notconnected.png",
+    "eth.png",
+    "warning.png",
+    "danger.png",
+    "skull.png",
+)
+_EPD_REQUIRED_FONTS = ("StardosStencilBold-9mzn.ttf", "icbmss20.ttf")
+
+
+def _epd_read_json(path: Path) -> Dict[str, Any]:
+    """Best-effort read of an EPD runtime JSON file (never raises)."""
+    try:
+        p = Path(path)
+        if p.exists():
+            data = _parse_json_dict_lenient(p.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+    return {}
+
+
+def _epd_last_render_spec() -> Dict[str, Any]:
+    """Return the render spec the panel last physically drew, if recorded."""
+    payload = _epd_read_json(EPD_LAST_RENDER_PATH)
+    if isinstance(payload, dict):
+        render = payload.get("render")
+        if isinstance(render, dict) and render.get("state"):
+            return render
+        if payload.get("state"):
+            return payload
+    return {}
+
+
+def _epd_desired_spec(state_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Compute the desired render spec from epd_state.json (imported logic)."""
+    if _epd_desired_render_spec is None:
+        return {}
+    try:
+        return dict(_epd_desired_render_spec(dict(state_payload or {})))
+    except Exception:
+        return {}
+
+
+def _epd_panel_spec(state_payload: Dict[str, Any], last_render: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+    """Best-effort "what the panel currently shows".
+
+    Prefer the last physically drawn frame (epd_last_render.json) for true
+    pixel-parity; fall back to the desired spec computed from epd_state.json;
+    finally fall back to a visible WARNING screen (fail-closed, never blank).
+    """
+    if last_render:
+        return last_render, "last_render"
+    desired = _epd_desired_spec(state_payload)
+    if desired:
+        return desired, "desired"
+    return {"state": "warning", "msg": "NO STATE"}, "fallback"
+
+
+def _epd_asset_dirs() -> Tuple[Path, Path]:
+    """Resolve fonts/ and icons/epd/ relative to the renderer's repo root.
+
+    Mirrors how the EPD CLI resolves assets (parent of py/), so preview output
+    matches the physical panel regardless of the web app's own location.
+    """
+    if _epd_renderer is not None and getattr(_epd_renderer, "__file__", None):
+        root = Path(_epd_renderer.__file__).resolve().parent.parent
+    else:
+        root = PROJECT_ROOT
+    return root / "fonts", root / "icons" / "epd"
+
+
+def _epd_render_png_bytes(spec: Dict[str, Any]) -> bytes:
+    """Render a render-spec into an RGB PNG, compositing exactly like
+    save_preview(). Raises RuntimeError on any unavailability (fail-closed)."""
+    renderer = _epd_renderer
+    if renderer is None:
+        raise RuntimeError("epd_renderer_unavailable")
+
+    fonts_dir, icon_dir = _epd_asset_dirs()
+    for name in _EPD_REQUIRED_FONTS:
+        if not (fonts_dir / name).exists():
+            raise RuntimeError("epd_font_missing")
+    for name in _EPD_REQUIRED_ICONS:
+        if not (icon_dir / name).exists():
+            raise RuntimeError("epd_icon_missing")
+
+    state = str((spec or {}).get("state", "")).strip().lower() or "warning"
+    try:
+        if state == "normal":
+            raw_signal = spec.get("signal")
+            try:
+                signal = int(raw_signal) if raw_signal is not None else None
+            except Exception:
+                signal = None
+            try:
+                suspicion = int(spec.get("suspicion", 0) or 0)
+            except Exception:
+                suspicion = 0
+            black_img, red_img = renderer.render_normal(
+                str(spec.get("ssid", "") or ""),
+                icon_dir,
+                signal,
+                str(spec.get("risk_status", "SAFE") or "SAFE"),
+                suspicion,
+                str(spec.get("mode_label", "SHIELD") or "SHIELD"),
+                str(spec.get("uplink_type", "unknown") or "unknown"),
+            )
+        elif state == "danger":
+            try:
+                suspicion = int(spec.get("suspicion", 0) or 0)
+            except Exception:
+                suspicion = 0
+            black_img, red_img = renderer.render_danger(
+                str(spec.get("msg", "") or ""), icon_dir, suspicion
+            )
+        elif state == "stale":
+            black_img, red_img = renderer.render_stale(str(spec.get("msg", "") or ""), icon_dir)
+        else:  # warning + any unknown state -> visible WARNING (fail-safe)
+            black_img, red_img = renderer.render_warning(str(spec.get("msg", "") or ""), icon_dir)
+
+        black_img, red_img = renderer.apply_display_rotation(black_img, red_img)
+
+        from PIL import Image as _PILImage  # Pillow is a hard runtime dep
+
+        width, height = black_img.size
+        composite = _PILImage.new("RGB", (width, height), (255, 255, 255))
+        black_px = black_img.load()
+        red_px = red_img.load()
+        comp_px = composite.load()
+        for y in range(height):
+            for x in range(width):
+                if black_px[x, y] == 0:
+                    comp_px[x, y] = (0, 0, 0)
+                elif red_px[x, y] == 0:
+                    comp_px[x, y] = (255, 0, 0)
+        buf = io.BytesIO()
+        composite.save(buf, format="PNG")
+        return buf.getvalue()
+    except (Exception, SystemExit) as exc:
+        raise RuntimeError(f"epd_render_failed: {exc}") from None
+
+
+@app.route("/api/epd", methods=["GET"])
+@require_token(min_role="viewer")
+def api_epd():
+    """GET /api/epd - Describe what the e-paper panel shows (advisory, read-only).
+
+    Returns the raw epd_state.json, the desired render spec (mode->frame logic),
+    the last physically drawn frame (epd_last_render.json), and the effective
+    "panel" spec (last_render preferred, then desired).
+    """
+    state_payload = _epd_read_json(EPD_STATE_PATH)
+    last_render = _epd_last_render_spec()
+    desired = _epd_desired_spec(state_payload)
+    panel, source = _epd_panel_spec(state_payload, last_render)
+
+    if _epd_desired_render_spec is None:
+        note = "desired-render logic unavailable; showing raw state and last render only"
+    elif source == "last_render":
+        note = "panel reflects the last physically drawn frame (epd_last_render.json)"
+    elif source == "desired":
+        note = "no last_render recorded; panel reflects the desired frame computed from epd_state.json"
+    else:
+        note = "no epd_state.json or last_render available; panel defaults to a WARNING screen"
+
+    return jsonify(
+        {
+            "ok": True,
+            "mode": str((state_payload or {}).get("mode", "") or "unknown"),
+            "state": str((panel or {}).get("state", "") or "unknown"),
+            "panel": panel,
+            "panel_source": source,
+            "desired": desired,
+            "epd_state": state_payload,
+            "last_render": last_render,
+            "renderer_available": _epd_renderer is not None,
+            "note": note,
+        }
+    ), 200
+
+
+@app.route("/api/epd/preview.png", methods=["GET"])
+@require_token(min_role="viewer")
+def api_epd_preview_png():
+    """GET /api/epd/preview.png - Pixel-parity PNG of the actual panel frame."""
+    state_payload = _epd_read_json(EPD_STATE_PATH)
+    last_render = _epd_last_render_spec()
+    panel, _source = _epd_panel_spec(state_payload, last_render)
+    try:
+        png_bytes = _epd_render_png_bytes(panel)
+    except RuntimeError as exc:
+        reason = str(exc).split(":", 1)[0].strip() or "epd_render_failed"
+        app.logger.warning("EPD preview render failed: %s", reason)
+        return jsonify({"ok": False, "error": reason}), 503
+    return Response(png_bytes, mimetype="image/png")
+
+
+_DEV_EPD_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Azazel-Edge - EPD on Web (dev)</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0b0d10; color: #d7dce1;
+         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 15px; letter-spacing: .08em; text-transform: uppercase;
+       color: #8aa0b6; font-weight: 600; margin: 0 0 16px; }
+  .panel { background: #14181d; border: 1px solid #232a31; border-radius: 10px;
+           padding: 16px; margin-bottom: 16px; }
+  .frame { display: flex; justify-content: center; }
+  img#epd { image-rendering: pixelated; width: 500px; max-width: 100%;
+            height: auto; background: #fff; border: 1px solid #2c343c; border-radius: 4px; }
+  .meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px;
+          font-size: 13px; margin-top: 14px; }
+  .meta dt { color: #6f8296; }
+  .meta dd { margin: 0; color: #e7edf3; word-break: break-word; }
+  .err { color: #ff6b6b; }
+  footer { color: #52606d; font-size: 11px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Azazel-Edge &middot; EPD on Web (dev)</h1>
+  <div class="panel frame"><img id="epd" alt="EPD panel preview"></div>
+  <div class="panel">
+    <dl class="meta">
+      <dt>mode</dt><dd id="m-mode">-</dd>
+      <dt>state</dt><dd id="m-state">-</dd>
+      <dt>source</dt><dd id="m-source">-</dd>
+      <dt>note</dt><dd id="m-note">-</dd>
+      <dt>status</dt><dd id="m-status">loading&hellip;</dd>
+    </dl>
+    <footer>Preview refreshes every ~5s; state polls every ~2s. Advisory only.</footer>
+  </div>
+</main>
+<script>
+(function () {
+  var params = new URLSearchParams(window.location.search);
+  var token = params.get("token") || "";
+  function withToken(url) {
+    return token ? (url + (url.indexOf("?") === -1 ? "?" : "&") + "token=" + encodeURIComponent(token)) : url;
+  }
+  var img = document.getElementById("epd");
+  function refreshImage() {
+    img.src = withToken("/api/epd/preview.png?_=" + Date.now());
+  }
+  function txt(id, v) { document.getElementById(id).textContent = v; }
+  function poll() {
+    fetch(withToken("/api/epd"), { headers: { "Accept": "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        txt("m-mode", d.mode || "-");
+        txt("m-state", d.state || "-");
+        txt("m-source", d.panel_source || "-");
+        txt("m-note", d.note || "-");
+        var s = document.getElementById("m-status");
+        s.textContent = "ok"; s.className = "";
+      })
+      .catch(function () {
+        var s = document.getElementById("m-status");
+        s.textContent = "poll failed"; s.className = "err";
+      });
+  }
+  refreshImage();
+  poll();
+  setInterval(refreshImage, 5000);
+  setInterval(poll, 2000);
+})();
+</script>
+</body>
+</html>"""
+
+
+@app.route("/dev/epd", methods=["GET"])
+@require_token(min_role="viewer")
+def dev_epd_page():
+    """GET /dev/epd - Self-contained dev page for the EPD-on-Web preview."""
+    return Response(_DEV_EPD_HTML, mimetype="text/html")
 
 
 @app.route("/api/certs/azazel-webui-local-ca/meta")

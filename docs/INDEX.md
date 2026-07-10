@@ -24,7 +24,7 @@ Entry point for all documents in this directory.
 | [POST_DEMO_SOCKET_PERMISSION_MODEL_105.md](POST_DEMO_SOCKET_PERMISSION_MODEL_105.md) | Developer | Unix socket permission model decisions | - |
 | [DEV_LOCAL_STACK.md](DEV_LOCAL_STACK.md) | Developer | macOS local dev stack launcher (`bin/azazel-edge-devstack`) usage (EN) | 2026-07-03 |
 | [DEV_LOCAL_STACK_JA.md](DEV_LOCAL_STACK_JA.md) | Developer | ローカル開発スタック起動ツール利用手順（日本語版） | 2026-07-03 |
-| [AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md](AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md) | Developer | Plan to serialize Edge decision/audit output and CTI payloads through the shared `azazel-common` schema (design note, no behavior change) | 2026-07-09 |
+| [AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md](AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md) | Developer | Plan to serialize Edge decision/audit output and CTI payloads through the shared `azazel-common` schema (design note, no behavior change) — Azazel-Common is now Azazel-Fabric (AZ-05) | 2026-07-09 |
 
 ## AI Operations
 

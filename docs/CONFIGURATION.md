@@ -25,6 +25,24 @@ This document is the configuration entry point for Azazel-Edge.
 - Socket/runtime permission posture: [Post-demo Socket Permission Model (#105)](POST_DEMO_SOCKET_PERMISSION_MODEL_105.md)
 - Concept-profile mapping layer: [../concept_profiles/README.md](../concept_profiles/README.md)
 
+## EPD Web Preview
+
+The "EPD on Web" routes (`/api/epd`, `/api/epd/preview.png`, `/dev/epd`; see
+[API Reference](API_REFERENCE.md)) read the e-paper runtime state. On hardware
+these live under `/run/azazel-edge/`. For dev hosts without the panel, the
+runtime directory can be redirected via environment variables (following the
+same `AZAZEL_*` path-override precedent used elsewhere in `azazel_edge_web/app.py`):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AZAZEL_EPD_RUNTIME_DIR` | `/run/azazel-edge` | Base dir for both EPD state files below |
+| `AZAZEL_EPD_STATE_PATH` | `$AZAZEL_EPD_RUNTIME_DIR/epd_state.json` | Explicit override for the desired-frame input |
+| `AZAZEL_EPD_LAST_RENDER_PATH` | `$AZAZEL_EPD_RUNTIME_DIR/epd_last_render.json` | Explicit override for the last-drawn-frame record |
+| `DISPLAY_ROTATION_DEG` | `180` | Panel orientation compensation applied before preview/display (read by the renderer) |
+
+These paths intentionally track the edge-tier runtime name regardless of
+`AZAZEL_PATH_SCHEMA`, matching the EPD renderer and orchestrator.
+
 ## Implementation Sources
 
 - Policy loader: `py/azazel_edge/policy.py`
