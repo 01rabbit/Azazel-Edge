@@ -9,6 +9,6 @@
 # environment with GitHub credentials for 01rabbit/Azazel-Fabric (developer
 # machine, provisioned appliance). CI intentionally does not install this file.
 #
-# Import namespace: azazel_fabric. Pinned to the exact commit merged to main
-# (v0.3.0 pending tag); switch to @v0.3.0 once the tag is published.
-azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@ce357af727ca2d7ddd3c108bd6843c682b4dee8b
+# Import namespace: azazel_fabric. Tag-pinned per Azazel-Fabric
+# design-principles.md §6.
+azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.3.0
