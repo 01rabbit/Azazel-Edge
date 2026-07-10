@@ -4,7 +4,42 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Azazel-Fabric の pin をオプションの `requirements/fabric.txt` に分離(Fabric
+  リポジトリは private のため、無認証環境 = CI では解決不能。全統合点は
+  ガード付き no-op なので未導入でも動作は同一。導入時のみ射影が有効化)。
+
 ### Added
+- Azazel-Fabric adoption — Phase 3 (2026-07-10): Edge now ships the three §3
+  emit-alongside projections from `docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md` plus
+  an owner-directed StatusView extension, making Edge the top consumer of the
+  shared contracts library. All paths are guarded (`try: import azazel_fabric`)
+  and are exact no-ops when the package is absent — zero behavior change:
+  - **DecisionExplanation projection** (§3.1): each persisted v2 decision
+    explanation is additionally serialized as
+    `azazel_fabric.schema.DecisionExplanation` to a separate
+    `fabric-decision-explanations.jsonl` stream; Edge's own
+    `decision-explanations.jsonl` is byte-for-byte unchanged. Lossy interop
+    projection (`why_chosen` dict→str, `selected_action` name→`ActionIntent`,
+    `why_not_others` flattened to strings).
+  - **TrustCapsule projection** (§3.2): emitted as
+    `azazel_fabric.schema.TrustCapsule` to `fabric-trust-capsules.jsonl` with
+    the plan's field mapping (`hmac_sig`→`hmac`, `timestamp`→`issued_at`,
+    `config_hash` sourced from the explanation).
+  - **AuditEvent projection** (§3.3): `P0AuditLogger.log()` additionally
+    projects `azazel_fabric.schema.AuditEvent` to a separate, non-interleaved
+    sibling file (`<name>.fabric.jsonl`) so the hash chain and `verify_chain()`
+    are never perturbed. `tactics_engine/decision_logger.py` is left untouched
+    (§3.4, deferred).
+  - **StatusView emit + surface** (scope extension, owner-directed): new
+    `py/azazel_edge/fabric_view.py` builds `azazel_fabric.view.StatusView` from
+    the runtime snapshot (carrying the full snapshot under
+    `product_view.edge_snapshot`) and writes `ui_status_view.json` alongside
+    `ui_snapshot.json`. `GET /api/state` gains a `status_view` key (null when
+    unavailable). See `docs/API_REFERENCE.md`.
+  - Pins `azazel-fabric` in `requirements/runtime.txt` at the exact merged
+    commit (v0.3.0 tag pending).
 - Documentation updates for the Azazel series naming change (2026-07-10): Azazel-CTI → Azazel-Knowledge (AZ-04) and Azazel-Common → Azazel-Fabric (AZ-05). Updated the README series table, `docs/INDEX.md`, and added a naming-update status note to `docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md` (file not renamed; body text and `azazel_common` references pre-`v0.3.0` are left as originally written).
 - EPD-on-Web preview for Azazel-Edge: read-only, viewer-gated web routes that expose the physical e-paper panel state — `GET /api/epd` (mode/state plus raw `epd_state.json`, desired render spec, and last-drawn frame), `GET /api/epd/preview.png` (pixel-parity PNG rendered in-memory by the real `py/azazel_edge_epd.py` renderer, fail-closed `503` when the renderer/assets are unavailable), and `GET /dev/epd` (self-contained dark-themed dev page). Adds `AZAZEL_EPD_RUNTIME_DIR` / `AZAZEL_EPD_STATE_PATH` / `AZAZEL_EPD_LAST_RENDER_PATH` dev overrides. See `docs/API_REFERENCE.md` and `docs/CONFIGURATION.md`.
 - Design-only integration plan `docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md` (2026-07-09) describing the azazel-common contract adapter for Edge; documents planning intent only (no shipped code), with Edge↔CTI integration deferred to FY2027+.

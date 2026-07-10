@@ -86,6 +86,27 @@ that shows `preview.png` (refreshed ~5s with a cache-busting query) and polls
 `/api/epd` (~2s) for `mode`/`state`/`source`/`note`. Token-gated at the viewer
 role; pass `?token=…`, which the page propagates to its API/image requests.
 
+## State API — shared Fabric StatusView
+
+### GET /api/state
+
+Returns the current runtime state (the control-plane / `ui_snapshot.json`
+payload) plus `monitoring`, `portal_viewer`, `mode`, and `mode_runtime`.
+
+As of Phase 3 of the [Edge adapter plan](AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md),
+the response additionally carries a **`status_view`** key: the shared
+[Azazel-Fabric](https://github.com/01rabbit/Azazel-Fabric)
+`azazel_fabric.view.StatusView` projection of the current snapshot, emitted
+alongside `ui_snapshot.json` as `ui_status_view.json`.
+
+- `status_view` is a `StatusView` object (`product`, `mode`, `posture`,
+  `headline`, `reasons`, `operator_wording`, `health[]`, `evidence_ids[]`, and
+  the full snapshot under `product_view.edge_snapshot`).
+- `status_view` is **`null`** when the `azazel_fabric` package is not installed,
+  or the view has not been written yet — the key is always present. All existing
+  `/api/state` fields are unchanged; this key is purely additive and never gates
+  Edge behavior.
+
 ## Compatibility Note
 
 API contract details evolve with implementation.

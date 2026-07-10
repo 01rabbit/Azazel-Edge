@@ -5,3 +5,7 @@ textual>=0.70,<1
 Pillow>=10,<12
 requests>=2.32,<3
 PyYAML>=6,<7
+# Azazel-Fabric shared contracts are an OPTIONAL extra: see requirements/fabric.txt.
+# (The Fabric repository is private, so unauthenticated environments — e.g. CI —
+# cannot resolve the git pin; every Fabric integration point is a guarded no-op
+# without the package.)

@@ -27,7 +27,9 @@ def _runtime_requirement_names() -> set[str]:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        normalized = line.split(">=")[0].split("==")[0].split("<")[0].strip().lower()
+        # Handle PEP 508 URL pins ("name @ git+https://...") by taking the name.
+        base = line.split("@", 1)[0]
+        normalized = base.split(">=")[0].split("==")[0].split("<")[0].strip().lower()
         if normalized:
             names.add(normalized)
     return names
@@ -69,6 +71,8 @@ def test_runtime_dependencies_cover_imports():
         "yaml": "pyyaml",
     }
     optional_modules = {
+        # Optional Fabric integration extra (requirements/fabric.txt); guarded import.
+        "azazel_fabric",
         # Hardware-only dependency provided by device-specific setup.
         "waveshare_epd",
     }
