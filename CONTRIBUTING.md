@@ -21,7 +21,7 @@ Examples: `feat/decision-trust-capsule`, `fix/epd-help-crash`, `docs/readme-reor
 
 - 1 PR = 1 purpose. Do not mix unrelated changes.
 - Every PR must include:
-  - [ ] `PYTHONPATH=. pytest -q` passes
+  - [ ] `PYTHONPATH=. pytest -q` passes (baseline: 502 passing; pre-existing `bhusa` sandbox-only failures in constrained/offline environments are not your responsibility)
   - [ ] `cd rust/azazel-edge-core && cargo test` passes (if Rust touched or validation scope includes Rust)
   - [ ] Related documentation updated in the same PR
   - [ ] If API surface or runtime configuration changed, update `docs/API_REFERENCE.md` and/or `docs/CONFIGURATION.md` in the same PR
@@ -47,3 +47,11 @@ cd rust/azazel-edge-core && cargo test
 # unified helper
 bin/azazel-edge-dev test-all
 ```
+
+## Security
+
+Found a vulnerability? Report it privately per [SECURITY.md](SECURITY.md) — never via a public issue.
+
+## License
+
+By contributing, you agree your contributions are licensed under the project's [MIT License](LICENSE).

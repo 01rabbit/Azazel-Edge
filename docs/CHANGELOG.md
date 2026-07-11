@@ -26,6 +26,7 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ガード付き no-op なので未導入でも動作は同一。導入時のみ射影が有効化)。
 
 ### Added
+- Added `SECURITY.md` (private GitHub Security Advisory reporting process, response targets, and appliance-flavored in/out-of-scope boundary between scapegoat/deception surfaces and the protected segment / control plane). Aligned `CONTRIBUTING.md` with a "Security" section pointing to it and a "License" section (MIT), and updated the pytest checklist line with the current baseline (502 passing; known `bhusa` sandbox-only failures in constrained/offline environments).
 - Azazel-Fabric adoption — Phase 3 (2026-07-10): Edge now ships the three §3
   emit-alongside projections from `docs/AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md` plus
   an owner-directed StatusView extension, making Edge the top consumer of the
