@@ -27,6 +27,23 @@
 > The §8 open questions are resolved as-implemented (see §8). The design body
 > below is retained as the authority for the projection mappings.
 
+> **2026-07-11 status update — pin bumped to v0.4.0; audit adapter now
+> delegates to `azazel_fabric.audit`.** `requirements/fabric.txt` is pinned at
+> the `v0.4.0` tag. The §3.3 AuditEvent projection
+> (`py/azazel_edge/audit/fabric_adapter.py`) no longer hand-rolls the
+> `AuditEvent(...)` envelope or calls `model_dump_json()` directly — it
+> delegates envelope construction to `azazel_fabric.audit.project_audit_event`
+> (v0.4.0) and serialization to `azazel_fabric.audit.to_jsonl_line`, passing
+> Edge's own `chain_hash`-based `event_id` through explicitly so the shared
+> helper's `make_event_id` convention never overrides it. The hash-chain write
+> path (`P0AuditLogger`) and its `verify_chain()` are untouched. The field set
+> on the emitted `AuditEvent` is unchanged; line formatting changed from
+> Pydantic's `model_dump_json()` to `to_jsonl_line`'s sorted-key/compact JSON
+> (content-identical, not byte-identical — see `docs/CHANGELOG.md`). The §3.1
+> DecisionExplanation and §3.2 TrustCapsule projections, and the StatusView
+> path, are unchanged by this update — v0.4.0 does not add a schema-shape
+> helper for those.
+
 Status: **Design note / proposal — now implemented (Phase 3, 2026-07-10).** The
 plan below defined the adapters; they are now built as described. This was the
 deliverable for Issue 5 in `Azazel-Common/docs/issue-breakdown.md`, implementing

@@ -240,7 +240,14 @@ class ApiStateStatusViewTests(unittest.TestCase):
 
     @needs_fabric
     def test_status_view_key_populated_when_present(self) -> None:
-        view = fabric_view.status_view_from_snapshot(StatusViewTests.SNAP)
+        # This endpoint only needs *some* valid StatusView on disk to prove it
+        # reads back and surfaces one — the mapping from an Edge snapshot is
+        # already covered by StatusViewTests above — so build the fixture with
+        # azazel_fabric.testing.make_status_view instead of round-tripping
+        # through fabric_view's own mapping logic.
+        from azazel_fabric.testing import make_status_view
+
+        view = make_status_view(product="edge", posture="contain")
         self.snap_path.with_name("ui_status_view.json").write_text(view.model_dump_json(), encoding="utf-8")
         res = self.client.get("/api/state")
         self.assertEqual(res.status_code, 200)

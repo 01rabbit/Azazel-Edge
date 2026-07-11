@@ -8,6 +8,23 @@ shared ``azazel_fabric.schema.AuditEvent`` envelope and appended to a
 
 The shared package is imported optionally: if ``azazel_fabric`` is not
 installed this is a safe no-op. No function here ever raises into its caller.
+
+**v0.4.0 update:** the projection now delegates to
+``azazel_fabric.audit.project_audit_event`` (envelope construction) and
+``azazel_fabric.audit.to_jsonl_line`` (serialization) instead of hand-rolling
+an ``AuditEvent(...)`` call and ``model_dump_json()``. This is a pure
+plumbing change: the ``event_id`` convention below (``chain_hash``, falling
+back to ``trace_id:kind``) is passed explicitly to ``project_audit_event``,
+so it is *not* overridden by that helper's own ``make_event_id`` default —
+Edge's chain-hash-based id scheme is unchanged. The field set on the emitted
+``AuditEvent`` is unchanged. The one observable difference is serialization
+formatting: ``to_jsonl_line`` writes compact, key-sorted JSON
+(``json.dumps(..., sort_keys=True, separators=(",", ":"))``) where the
+previous code used Pydantic's default ``model_dump_json()`` (insertion-order
+keys, space-padded separators). Line content is semantically identical
+(same keys, same values) — no consumer parses these lines positionally or by
+byte comparison, so this is treated as within "drop-in, zero behavior
+change."
 """
 
 from __future__ import annotations
@@ -20,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 try:  # optional dependency — pinned in requirements/runtime.txt, absent is fine
     from azazel_fabric.schema import AuditEvent
+    from azazel_fabric.audit import project_audit_event, to_jsonl_line
 
     HAVE_AZAZEL_FABRIC = True
 except Exception:  # pragma: no cover - exercised only when the dep is absent
@@ -45,6 +63,12 @@ def build_audit_event(record: Dict[str, Any]) -> "Optional[AuditEvent]":
     in ``AuditEvent.payload`` (Fabric does not model a hash chain);
     ``config_hash``/``hmac`` stay ``None`` (not on the base record). Returns
     ``None`` if Fabric is not installed.
+
+    Envelope construction delegates to ``azazel_fabric.audit.project_audit_event``
+    (v0.4.0). Edge's own ``event_id`` is computed here and passed through
+    explicitly, so ``project_audit_event``'s ``make_event_id`` default (a
+    ``product:event_type:timestamp`` convention) never applies — Edge keeps its
+    chain-hash-based id scheme.
     """
     if not HAVE_AZAZEL_FABRIC:
         return None
@@ -60,13 +84,13 @@ def build_audit_event(record: Dict[str, Any]) -> "Optional[AuditEvent]":
         # Fall back to a positional identity when the chain hash is unavailable.
         event_id = f"{record.get('trace_id') or ''}:{record.get('kind') or ''}"
 
-    return AuditEvent(
-        event_id=event_id,
-        trace_id=str(record.get("trace_id") or ""),
-        timestamp=str(record.get("ts") or ""),
+    return project_audit_event(
         product="edge",
         event_type=str(record.get("kind") or ""),
+        timestamp=str(record.get("ts") or ""),
+        trace_id=str(record.get("trace_id") or ""),
         payload=payload,
+        event_id=event_id,
         config_hash=None,
         hmac=None,
     )
@@ -76,7 +100,10 @@ def project_audit_record(record: Dict[str, Any], native_path: Path) -> None:
     """Append a Fabric AuditEvent projection to the sibling stream. Best-effort.
 
     A no-op when Fabric is absent; never raises into the caller and never writes
-    to the chained ``native_path``.
+    to the chained ``native_path``. Serialization delegates to
+    ``azazel_fabric.audit.to_jsonl_line`` (v0.4.0) — see the module docstring
+    for the (purely cosmetic) formatting difference from the prior
+    ``model_dump_json()`` call.
     """
     if not HAVE_AZAZEL_FABRIC:
         return
@@ -87,6 +114,6 @@ def project_audit_record(record: Dict[str, Any], native_path: Path) -> None:
         out_path = fabric_stream_path(Path(native_path))
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with out_path.open("a", encoding="utf-8") as fh:
-            fh.write(event.model_dump_json() + "\n")
+            fh.write(to_jsonl_line(event) + "\n")
     except Exception as exc:  # pragma: no cover - defensive; must never raise
         logger.debug("fabric_audit_projection_failed: %s", exc)

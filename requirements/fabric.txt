@@ -11,4 +11,4 @@
 #
 # Import namespace: azazel_fabric. Tag-pinned per Azazel-Fabric
 # design-principles.md §6.
-azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.3.0
+azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.4.0
