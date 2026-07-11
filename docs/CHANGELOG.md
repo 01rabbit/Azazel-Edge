@@ -6,6 +6,21 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Azazel-Fabric の pin を `v0.3.0` → `v0.4.0` に更新(`requirements/fabric.txt`)。
+  `py/azazel_edge/audit/fabric_adapter.py` の AuditEvent 射影を、v0.4.0 で追加
+  された `azazel_fabric.audit.project_audit_event`/`to_jsonl_line` に委譲する
+  よう小さくリファクタ(ドロップイン、挙動変更ゼロ)。`event_id` は従来どおり
+  Edge 側の `chain_hash`(フォールバック `trace_id:kind`)規約を明示的に渡すため
+  `project_audit_event` の `make_event_id` デフォルトには委譲しない。ハッシュ
+  チェーン書込み経路(`P0AuditLogger`)は無変更。emit されるフィールド集合は
+  不変だが、シリアライズが Pydantic の `model_dump_json()`(挿入順・空白区切り)
+  から `to_jsonl_line`(キーソート・コンパクト区切り)に変わり、
+  `<name>.fabric.jsonl` の行はバイト同一ではなくなった(内容は意味的に同一。
+  このストリームを行位置/バイト比較で読むコンシューマは存在しない)。
+  `tests/test_fabric_adapters_v1.py` の `ApiStateStatusViewTests` を
+  `azazel_fabric.testing.make_status_view` で簡素化(StatusView のマッピング
+  ロジック自体は `StatusViewTests` で別途検証済みのため、API 読み戻しテストは
+  Edge 独自のスナップショット変換に依存しない汎用フィクスチャへ切替)。
 - Azazel-Fabric の pin をオプションの `requirements/fabric.txt` に分離(Fabric
   リポジトリは private のため、無認証環境 = CI では解決不能。全統合点は
   ガード付き no-op なので未導入でも動作は同一。導入時のみ射影が有効化)。
