@@ -21,6 +21,7 @@ Hat USA 2026 session:
 - [BHUSA 2026 Booth Runbook](bhusa-2026-booth-runbook.md)
 - [BHUSA 2026 Freeze Candidate](bhusa-2026-freeze-candidate.md)
 - [BHUSA 2026 Final Command Sheet](bhusa-2026-final-command-sheet.md)
+- [BHUSA 2026 Recorded Demo Command Sheet](bhusa-2026-recorded-demo-command-sheet.md)
 
 ## Policy
 - Do not add future event files before acceptance is public.
