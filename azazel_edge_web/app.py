@@ -2445,6 +2445,15 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
         top_dst = ""
         top_sid = 0
         top_severity = 0
+        # An expired advisory must not keep driving SOC threat state. Without
+        # this, a stale second-pass SOC block (e.g. yesterday's attack) still
+        # pins the threat glance to CRITICAL below (see soc_status_from_second_pass),
+        # so an idle/benign board never returns to quiet. Clear the stale
+        # second-pass detail so the threat level falls back to the live snapshot
+        # signals (quiet when suspicion and suricata counts are clear).
+        second_pass_detail = {}
+        second_pass_soc = {}
+        second_pass_status = "idle"
     path_scope = ("全 uplink 利用者" if lang == "ja" else "all uplink clients") if str(connection.get("internet_check") or "").upper() == "FAIL" else (
         ("DNS 影響利用者" if lang == "ja" else "dns-affected clients") if _as_int(network_health.get("dns_mismatch"), 0) > 0 else ("広域影響なし" if lang == "ja" else "no broad impact indicated")
     )

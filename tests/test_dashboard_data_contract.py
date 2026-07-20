@@ -446,6 +446,38 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(state["user_state"], "CHECKING")
         self.assertEqual(state["source"], "ERROR")
 
+    def test_stale_advisory_does_not_pin_threat_critical(self) -> None:
+        # A live-but-idle snapshot whose advisory the daemon flagged as expired
+        # must not keep the threat glance at CRITICAL from the old second-pass SOC.
+        now = time.time()
+        state = {
+            "ok": True,
+            "snapshot_epoch": now,
+            "now_time": "12:00:00",
+            "user_state": "CHECKING",
+            "internal": {"state_name": "PROBE", "suspicion": 0, "decay": 0},
+            "suricata_critical": 0,
+            "suricata_warning": 0,
+            "attack": {"stale_advisory_expired": True},
+            "connection": {"internet_check": "UNKNOWN"},
+            "network_health": {"status": "SUSPECTED", "signals": []},
+        }
+        advisory = {
+            "ts": now - 90000,  # ~25h old
+            "attack_type": "SSH Brute Force",
+            "second_pass": {"status": "complete", "soc": {"status": "critical"}},
+        }
+        webapp.cp_read_snapshot_payload = None
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+        webapp.AI_ADVISORY_PATH.write_text(json.dumps(advisory), encoding="utf-8")
+
+        response = self.client.get("/api/dashboard/summary")
+        self.assertEqual(response.status_code, 200)
+        soc_focus = response.get_json()["soc_focus"]
+        self.assertEqual(soc_focus["threat_level"], "quiet")
+        # The expired advisory's attack label must not leak through either.
+        self.assertNotIn("SSH Brute Force", str(soc_focus.get("attack_type", "")))
+
     def test_dashboard_summary_normal_assurance_stale_snapshot_cannot_be_normal(self) -> None:
         state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
         metrics = json.loads(webapp.AI_METRICS_PATH.read_text(encoding="utf-8"))
