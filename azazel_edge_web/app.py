@@ -4151,8 +4151,47 @@ def get_mode_state() -> Dict[str, Any]:
     }
 
 
+def _bootstrap_checking_state(source: str, note: str = "") -> Dict[str, Any]:
+    """Safe CHECKING default for when no snapshot is available yet.
+
+    Mirrors the control daemon's bootstrap seed (``_default_snapshot_seed`` in
+    ``azazel_edge_control.daemon``) so a freshly started stack renders an
+    "initializing / checking" dashboard instead of a hard error. Kept
+    ``ok=True`` on purpose: ``/api/state`` and ``/api/dashboard/summary`` are the
+    dashboard's only *required* fetches, and returning ``ok=False`` here makes the
+    frontend throw and show its error toast + red connection chip before the
+    daemon has had a chance to write its first snapshot. The ``bootstrap`` flag,
+    ``source``, and ``bootstrap_reason`` let callers and telemetry tell this
+    placeholder apart from a real snapshot.
+    """
+    payload: Dict[str, Any] = {
+        "ok": True,
+        "bootstrap": True,
+        "source": source,
+        "now_time": time.strftime("%H:%M:%S"),
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "user_state": "CHECKING",
+        "internal": {"state_name": "PROBE", "suspicion": 0, "decay": 0},
+        "recommendation": "Initializing",
+        "connection": {
+            "wifi_state": "DISCONNECTED",
+            "internet_check": "UNKNOWN",
+        },
+        "evidence": [],
+    }
+    if note:
+        payload["bootstrap_reason"] = note
+    return payload
+
+
 def read_state() -> Dict[str, Any]:
-    """Read snapshot from control-plane first, then filesystem fallback."""
+    """Read snapshot from control-plane first, then filesystem fallback.
+
+    When no snapshot is available yet (cold start before the control daemon has
+    seeded ``ui_snapshot.json``) a bootstrap ``CHECKING`` state is returned rather
+    than an error, so the dashboard shows "initializing" instead of a hard
+    failure. See :func:`_bootstrap_checking_state`.
+    """
     try:
         if cp_read_snapshot_payload is not None:
             data, source = cp_read_snapshot_payload(prefer_control_plane=True, logger=app.logger)
@@ -4167,15 +4206,13 @@ def read_state() -> Dict[str, Any]:
         if not path.exists():
             # Try fallback path (for dev/testing)
             path = FALLBACK_STATE_PATH
-        
+
         if not path.exists():
-            return {
-                "ok": False,
-                "error": "ui_snapshot.json not found",
-                "source": "NONE",
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%S")
-            }
-        
+            # Cold start: the daemon has not seeded a snapshot yet. Return a
+            # benign CHECKING placeholder instead of an error so the UI renders
+            # "initializing" rather than an error toast + red connection chip.
+            return _bootstrap_checking_state("NONE", "ui_snapshot.json not found")
+
         warn_if_legacy_path(path, logger=app.logger)
         data = _parse_json_dict_lenient(path.read_text(encoding="utf-8"))
         if not data:
@@ -4185,11 +4222,10 @@ def read_state() -> Dict[str, Any]:
         data["now_time"] = time.strftime("%H:%M:%S")
         return data
     except Exception as e:
-        return {
-            "ok": False,
-            "error": f"Failed to read state: {str(e)}",
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S")
-        }
+        # Degrade to a CHECKING placeholder rather than surfacing a hard error to
+        # the dashboard's required fetches; log the real cause for diagnostics.
+        app.logger.warning("read_state failed, returning bootstrap CHECKING state: %s", e)
+        return _bootstrap_checking_state("ERROR", f"read failed: {e}")
 
 
 def read_status_view() -> Optional[Dict[str, Any]]:

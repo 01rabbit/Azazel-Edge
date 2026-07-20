@@ -414,6 +414,38 @@ class DashboardDataContractTests(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload["now_time"], "23:59:58")
 
+    def test_api_state_cold_start_returns_checking_not_error(self) -> None:
+        # Cold start: no snapshot on disk and no control-plane reader.
+        webapp.cp_read_snapshot_payload = None
+        webapp.STATE_PATH.unlink(missing_ok=True)
+        webapp.FALLBACK_STATE_PATH.unlink(missing_ok=True)
+
+        response = self.client.get("/api/state")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        # Must NOT be a hard error (that would trip the frontend error toast).
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload.get("bootstrap"))
+        self.assertEqual(payload["user_state"], "CHECKING")
+        self.assertEqual(payload["source"], "NONE")
+
+        # The other required fetch (dashboard summary) must also stay ok on cold start.
+        summary = self.client.get("/api/dashboard/summary")
+        self.assertEqual(summary.status_code, 200)
+        self.assertIsNot(summary.get_json().get("ok"), False)
+
+    def test_read_state_read_failure_degrades_to_checking(self) -> None:
+        # A genuine read failure should degrade to CHECKING rather than raise/error.
+        webapp.cp_read_snapshot_payload = None
+        webapp.STATE_PATH.write_text("{ not valid json", encoding="utf-8")
+        webapp.FALLBACK_STATE_PATH.unlink(missing_ok=True)
+
+        state = webapp.read_state()
+        self.assertTrue(state["ok"])
+        self.assertTrue(state.get("bootstrap"))
+        self.assertEqual(state["user_state"], "CHECKING")
+        self.assertEqual(state["source"], "ERROR")
+
     def test_dashboard_summary_normal_assurance_stale_snapshot_cannot_be_normal(self) -> None:
         state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
         metrics = json.loads(webapp.AI_METRICS_PATH.read_text(encoding="utf-8"))
