@@ -8,12 +8,29 @@ Borrowed/trimmed from Azazel-Gadget first_minute probes + wifi safety checks.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+
+
+def _dev_healthy_baseline() -> bool:
+    """True when the dev-only healthy-baseline override is enabled.
+
+    Set ``AZAZEL_DEV_HEALTHY_BASELINE=1`` (only in the macOS dev profile, see
+    ``tools/macdev/env.sh``) to present a clean SAFE baseline on a development
+    host that lacks the Linux probes (``ip``/``iw``/``dig``) and real uplink.
+    Never set on an appliance/production deployment.
+    """
+    return str(os.environ.get("AZAZEL_DEV_HEALTHY_BASELINE", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 class NetworkHealthMonitor:
@@ -31,6 +48,24 @@ class NetworkHealthMonitor:
 
     def assess(self, iface: str, gateway_ip: str = "") -> Dict[str, Any]:
         now = time.time()
+        if _dev_healthy_baseline():
+            # Dev host has no Linux link/route/dns probes; present a clean SAFE
+            # baseline so an idle dashboard is green and an injected attack shows
+            # a clear visual change. Dev-only (see _dev_healthy_baseline).
+            return {
+                "status": "SAFE",
+                "internet_check": "OK",
+                "iface": str(iface or "-"),
+                "link": {"connected": "1"},
+                "signals": [],
+                "wifi_tags": [],
+                "captive_portal": "NO",
+                "captive_portal_reason": "DEV_BASELINE",
+                "dns_mismatch": 0,
+                "route_anomaly": False,
+                "dev_baseline": True,
+                "checked_at_epoch": now,
+            }
         if self._last_result and (now - self._last_ts) < self.cache_ttl_sec:
             return dict(self._last_result)
 

@@ -94,6 +94,20 @@ NETWORK_HEALTH = NetworkHealthMonitor(
     captive_url=os.environ.get("AZAZEL_CAPTIVE_CHECK_URL", "http://connectivitycheck.gstatic.com/generate_204"),
 )
 SURICATA_ADVISORY_TTL_SEC = int(os.environ.get("AZAZEL_SURICATA_ADVISORY_TTL_SEC", "300"))
+
+
+def _dev_healthy_baseline() -> bool:
+    """True when the dev-only healthy-baseline override is enabled.
+
+    Set ``AZAZEL_DEV_HEALTHY_BASELINE=1`` only in the macOS dev profile
+    (``tools/macdev/env.sh``); never on an appliance/production deployment.
+    """
+    return str(os.environ.get("AZAZEL_DEV_HEALTHY_BASELINE", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 NOC_REFRESH_SEC = max(5.0, float(os.environ.get("AZAZEL_NOC_REFRESH_SEC", "20")))
 NOC_EVALUATOR = NocEvaluator()
 NOC_CACHE_LOCK = threading.Lock()
@@ -1229,16 +1243,23 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     connection["captive_portal_reason"] = str(
         health.get("captive_portal_reason", connection.get("captive_portal_reason", "NOT_CHECKED"))
     )
-    try:
-        noc_projection = _compute_live_noc_projection(
-            up_if=str(monitor_scope.get("up_if") or up_if),
-            down_if=str(monitor_scope.get("down_if") or enriched.get("down_if") or "usb0"),
-            gateway_ip=str(monitor_scope.get("gateway_ip") or gateway_ip),
-        )
-        if isinstance(noc_projection, dict):
-            enriched.update(noc_projection)
-    except Exception as exc:
-        logger.debug(f"Failed to evaluate live NOC projection: {exc}")
+    if _dev_healthy_baseline():
+        # Dev host cannot run the live NOC probes, so the projection would report
+        # a degraded path/service baseline. Skip it under the dev-only override so
+        # the idle dashboard reads healthy; real evidence still flows through the
+        # SOC/threat path and drives the visible change on injection.
+        logger.debug("dev healthy baseline: skipping live NOC projection")
+    else:
+        try:
+            noc_projection = _compute_live_noc_projection(
+                up_if=str(monitor_scope.get("up_if") or up_if),
+                down_if=str(monitor_scope.get("down_if") or enriched.get("down_if") or "usb0"),
+                gateway_ip=str(monitor_scope.get("gateway_ip") or gateway_ip),
+            )
+            if isinstance(noc_projection, dict):
+                enriched.update(noc_projection)
+        except Exception as exc:
+            logger.debug(f"Failed to evaluate live NOC projection: {exc}")
 
     user_state = str(enriched.get("user_state", "") or "").upper()
     signals = health.get("signals", []) if isinstance(health.get("signals"), list) else []

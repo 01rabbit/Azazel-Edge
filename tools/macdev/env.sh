@@ -54,6 +54,14 @@ export AZAZEL_LLM_NUM_THREAD="${AZAZEL_LLM_NUM_THREAD:-4}"
 
 export AZAZEL_DECISION_LOG_DIR="$LOG_DIR/tactics_engine"
 
+# --- dev healthy baseline ---
+# Dev host lacks systemd services and the Linux link/route/dns probes, so the
+# dashboard would otherwise show SERVICES OFF / PATH DEGRADED at idle. This
+# dev-only override presents a clean SAFE baseline (services ON, network health
+# SAFE, live NOC projection skipped) so an idle board is green and an injected
+# attack produces a clear visual change. NEVER set this on an appliance.
+export AZAZEL_DEV_HEALTHY_BASELINE="${AZAZEL_DEV_HEALTHY_BASELINE:-1}"
+
 # --- rust core ---
 export AZAZEL_EVE_PATH="$AZAZEL_DEV_STATE/suricata/eve.json"
 export AZAZEL_NORMALIZED_EVENT_LOG="$LOG_DIR/normalized-events.jsonl"

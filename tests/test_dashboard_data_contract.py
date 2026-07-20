@@ -478,6 +478,38 @@ class DashboardDataContractTests(unittest.TestCase):
         # The expired advisory's attack label must not leak through either.
         self.assertNotIn("SSH Brute Force", str(soc_focus.get("attack_type", "")))
 
+    def test_dev_healthy_baseline_reports_services_on(self) -> None:
+        import os
+
+        prev = os.environ.get("AZAZEL_DEV_HEALTHY_BASELINE")
+        try:
+            os.environ["AZAZEL_DEV_HEALTHY_BASELINE"] = "1"
+            # setUp monkeypatches these; exercise the real implementations.
+            real_service_active = self._orig["_service_active"]
+            real_monitoring = self._orig["get_monitoring_state"]
+            self.assertTrue(webapp._dev_healthy_baseline())
+            self.assertTrue(real_service_active("azazel-edge-web"))
+            monitoring = real_monitoring()
+            self.assertEqual(monitoring["suricata"], "ON")
+            self.assertEqual(monitoring["opencanary"], "ON")
+            self.assertEqual(monitoring["ntfy"], "ON")
+        finally:
+            if prev is None:
+                os.environ.pop("AZAZEL_DEV_HEALTHY_BASELINE", None)
+            else:
+                os.environ["AZAZEL_DEV_HEALTHY_BASELINE"] = prev
+
+    def test_dev_healthy_baseline_off_by_default(self) -> None:
+        import os
+
+        prev = os.environ.get("AZAZEL_DEV_HEALTHY_BASELINE")
+        try:
+            os.environ.pop("AZAZEL_DEV_HEALTHY_BASELINE", None)
+            self.assertFalse(webapp._dev_healthy_baseline())
+        finally:
+            if prev is not None:
+                os.environ["AZAZEL_DEV_HEALTHY_BASELINE"] = prev
+
     def test_dashboard_summary_normal_assurance_stale_snapshot_cannot_be_normal(self) -> None:
         state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
         metrics = json.loads(webapp.AI_METRICS_PATH.read_text(encoding="utf-8"))

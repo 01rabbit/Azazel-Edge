@@ -3873,8 +3873,27 @@ def _pid_running(pid_path: Path, expected_cmd: str = "") -> bool:
     return True
 
 
+def _dev_healthy_baseline() -> bool:
+    """True when the dev-only healthy-baseline override is enabled.
+
+    Set ``AZAZEL_DEV_HEALTHY_BASELINE=1`` only in the macOS dev profile
+    (``tools/macdev/env.sh``). On a dev host the systemd/pid service probes below
+    always report OFF even though devstack is running the components, so this
+    override reports them healthy for a clean baseline. Never set on an
+    appliance/production deployment.
+    """
+    return str(os.environ.get("AZAZEL_DEV_HEALTHY_BASELINE", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _service_active(service: str) -> bool:
     """Check systemd service status without requiring root."""
+    if _dev_healthy_baseline():
+        return True
     try:
         result = subprocess.run(
             ["/bin/systemctl", "is-active", service],
@@ -4100,6 +4119,11 @@ def _container_running(name: str) -> bool:
 
 def get_monitoring_state() -> Dict[str, str]:
     """Return ON/OFF status for local monitoring daemons."""
+    if _dev_healthy_baseline():
+        # Dev profile: the monitor daemons are represented by the devstack event
+        # pipeline (dummy-eve feeds the eve.json the core tails). Report them ON so
+        # the baseline reads clean; dev-only (see _dev_healthy_baseline).
+        return {"opencanary": "ON", "suricata": "ON", "ntfy": "ON"}
     # Prefer systemd state to avoid pidfile permission issues
     opencanary_ok = (
         _service_active("opencanary@az_canary.service")
