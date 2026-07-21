@@ -2445,6 +2445,15 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
         top_dst = ""
         top_sid = 0
         top_severity = 0
+        # An expired advisory must not keep driving SOC threat state. Without
+        # this, a stale second-pass SOC block (e.g. yesterday's attack) still
+        # pins the threat glance to CRITICAL below (see soc_status_from_second_pass),
+        # so an idle/benign board never returns to quiet. Clear the stale
+        # second-pass detail so the threat level falls back to the live snapshot
+        # signals (quiet when suspicion and suricata counts are clear).
+        second_pass_detail = {}
+        second_pass_soc = {}
+        second_pass_status = "idle"
     path_scope = ("全 uplink 利用者" if lang == "ja" else "all uplink clients") if str(connection.get("internet_check") or "").upper() == "FAIL" else (
         ("DNS 影響利用者" if lang == "ja" else "dns-affected clients") if _as_int(network_health.get("dns_mismatch"), 0) > 0 else ("広域影響なし" if lang == "ja" else "no broad impact indicated")
     )
@@ -3864,8 +3873,27 @@ def _pid_running(pid_path: Path, expected_cmd: str = "") -> bool:
     return True
 
 
+def _dev_healthy_baseline() -> bool:
+    """True when the dev-only healthy-baseline override is enabled.
+
+    Set ``AZAZEL_DEV_HEALTHY_BASELINE=1`` only in the macOS dev profile
+    (``tools/macdev/env.sh``). On a dev host the systemd/pid service probes below
+    always report OFF even though devstack is running the components, so this
+    override reports them healthy for a clean baseline. Never set on an
+    appliance/production deployment.
+    """
+    return str(os.environ.get("AZAZEL_DEV_HEALTHY_BASELINE", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _service_active(service: str) -> bool:
     """Check systemd service status without requiring root."""
+    if _dev_healthy_baseline():
+        return True
     try:
         result = subprocess.run(
             ["/bin/systemctl", "is-active", service],
@@ -4091,6 +4119,11 @@ def _container_running(name: str) -> bool:
 
 def get_monitoring_state() -> Dict[str, str]:
     """Return ON/OFF status for local monitoring daemons."""
+    if _dev_healthy_baseline():
+        # Dev profile: the monitor daemons are represented by the devstack event
+        # pipeline (dummy-eve feeds the eve.json the core tails). Report them ON so
+        # the baseline reads clean; dev-only (see _dev_healthy_baseline).
+        return {"opencanary": "ON", "suricata": "ON", "ntfy": "ON"}
     # Prefer systemd state to avoid pidfile permission issues
     opencanary_ok = (
         _service_active("opencanary@az_canary.service")
@@ -4151,8 +4184,47 @@ def get_mode_state() -> Dict[str, Any]:
     }
 
 
+def _bootstrap_checking_state(source: str, note: str = "") -> Dict[str, Any]:
+    """Safe CHECKING default for when no snapshot is available yet.
+
+    Mirrors the control daemon's bootstrap seed (``_default_snapshot_seed`` in
+    ``azazel_edge_control.daemon``) so a freshly started stack renders an
+    "initializing / checking" dashboard instead of a hard error. Kept
+    ``ok=True`` on purpose: ``/api/state`` and ``/api/dashboard/summary`` are the
+    dashboard's only *required* fetches, and returning ``ok=False`` here makes the
+    frontend throw and show its error toast + red connection chip before the
+    daemon has had a chance to write its first snapshot. The ``bootstrap`` flag,
+    ``source``, and ``bootstrap_reason`` let callers and telemetry tell this
+    placeholder apart from a real snapshot.
+    """
+    payload: Dict[str, Any] = {
+        "ok": True,
+        "bootstrap": True,
+        "source": source,
+        "now_time": time.strftime("%H:%M:%S"),
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "user_state": "CHECKING",
+        "internal": {"state_name": "PROBE", "suspicion": 0, "decay": 0},
+        "recommendation": "Initializing",
+        "connection": {
+            "wifi_state": "DISCONNECTED",
+            "internet_check": "UNKNOWN",
+        },
+        "evidence": [],
+    }
+    if note:
+        payload["bootstrap_reason"] = note
+    return payload
+
+
 def read_state() -> Dict[str, Any]:
-    """Read snapshot from control-plane first, then filesystem fallback."""
+    """Read snapshot from control-plane first, then filesystem fallback.
+
+    When no snapshot is available yet (cold start before the control daemon has
+    seeded ``ui_snapshot.json``) a bootstrap ``CHECKING`` state is returned rather
+    than an error, so the dashboard shows "initializing" instead of a hard
+    failure. See :func:`_bootstrap_checking_state`.
+    """
     try:
         if cp_read_snapshot_payload is not None:
             data, source = cp_read_snapshot_payload(prefer_control_plane=True, logger=app.logger)
@@ -4167,15 +4239,13 @@ def read_state() -> Dict[str, Any]:
         if not path.exists():
             # Try fallback path (for dev/testing)
             path = FALLBACK_STATE_PATH
-        
+
         if not path.exists():
-            return {
-                "ok": False,
-                "error": "ui_snapshot.json not found",
-                "source": "NONE",
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%S")
-            }
-        
+            # Cold start: the daemon has not seeded a snapshot yet. Return a
+            # benign CHECKING placeholder instead of an error so the UI renders
+            # "initializing" rather than an error toast + red connection chip.
+            return _bootstrap_checking_state("NONE", "ui_snapshot.json not found")
+
         warn_if_legacy_path(path, logger=app.logger)
         data = _parse_json_dict_lenient(path.read_text(encoding="utf-8"))
         if not data:
@@ -4185,11 +4255,10 @@ def read_state() -> Dict[str, Any]:
         data["now_time"] = time.strftime("%H:%M:%S")
         return data
     except Exception as e:
-        return {
-            "ok": False,
-            "error": f"Failed to read state: {str(e)}",
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S")
-        }
+        # Degrade to a CHECKING placeholder rather than surfacing a hard error to
+        # the dashboard's required fetches; log the real cause for diagnostics.
+        app.logger.warning("read_state failed, returning bootstrap CHECKING state: %s", e)
+        return _bootstrap_checking_state("ERROR", f"read failed: {e}")
 
 
 def read_status_view() -> Optional[Dict[str, Any]]:

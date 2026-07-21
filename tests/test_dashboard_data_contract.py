@@ -414,6 +414,102 @@ class DashboardDataContractTests(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload["now_time"], "23:59:58")
 
+    def test_api_state_cold_start_returns_checking_not_error(self) -> None:
+        # Cold start: no snapshot on disk and no control-plane reader.
+        webapp.cp_read_snapshot_payload = None
+        webapp.STATE_PATH.unlink(missing_ok=True)
+        webapp.FALLBACK_STATE_PATH.unlink(missing_ok=True)
+
+        response = self.client.get("/api/state")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        # Must NOT be a hard error (that would trip the frontend error toast).
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload.get("bootstrap"))
+        self.assertEqual(payload["user_state"], "CHECKING")
+        self.assertEqual(payload["source"], "NONE")
+
+        # The other required fetch (dashboard summary) must also stay ok on cold start.
+        summary = self.client.get("/api/dashboard/summary")
+        self.assertEqual(summary.status_code, 200)
+        self.assertIsNot(summary.get_json().get("ok"), False)
+
+    def test_read_state_read_failure_degrades_to_checking(self) -> None:
+        # A genuine read failure should degrade to CHECKING rather than raise/error.
+        webapp.cp_read_snapshot_payload = None
+        webapp.STATE_PATH.write_text("{ not valid json", encoding="utf-8")
+        webapp.FALLBACK_STATE_PATH.unlink(missing_ok=True)
+
+        state = webapp.read_state()
+        self.assertTrue(state["ok"])
+        self.assertTrue(state.get("bootstrap"))
+        self.assertEqual(state["user_state"], "CHECKING")
+        self.assertEqual(state["source"], "ERROR")
+
+    def test_stale_advisory_does_not_pin_threat_critical(self) -> None:
+        # A live-but-idle snapshot whose advisory the daemon flagged as expired
+        # must not keep the threat glance at CRITICAL from the old second-pass SOC.
+        now = time.time()
+        state = {
+            "ok": True,
+            "snapshot_epoch": now,
+            "now_time": "12:00:00",
+            "user_state": "CHECKING",
+            "internal": {"state_name": "PROBE", "suspicion": 0, "decay": 0},
+            "suricata_critical": 0,
+            "suricata_warning": 0,
+            "attack": {"stale_advisory_expired": True},
+            "connection": {"internet_check": "UNKNOWN"},
+            "network_health": {"status": "SUSPECTED", "signals": []},
+        }
+        advisory = {
+            "ts": now - 90000,  # ~25h old
+            "attack_type": "SSH Brute Force",
+            "second_pass": {"status": "complete", "soc": {"status": "critical"}},
+        }
+        webapp.cp_read_snapshot_payload = None
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+        webapp.AI_ADVISORY_PATH.write_text(json.dumps(advisory), encoding="utf-8")
+
+        response = self.client.get("/api/dashboard/summary")
+        self.assertEqual(response.status_code, 200)
+        soc_focus = response.get_json()["soc_focus"]
+        self.assertEqual(soc_focus["threat_level"], "quiet")
+        # The expired advisory's attack label must not leak through either.
+        self.assertNotIn("SSH Brute Force", str(soc_focus.get("attack_type", "")))
+
+    def test_dev_healthy_baseline_reports_services_on(self) -> None:
+        import os
+
+        prev = os.environ.get("AZAZEL_DEV_HEALTHY_BASELINE")
+        try:
+            os.environ["AZAZEL_DEV_HEALTHY_BASELINE"] = "1"
+            # setUp monkeypatches these; exercise the real implementations.
+            real_service_active = self._orig["_service_active"]
+            real_monitoring = self._orig["get_monitoring_state"]
+            self.assertTrue(webapp._dev_healthy_baseline())
+            self.assertTrue(real_service_active("azazel-edge-web"))
+            monitoring = real_monitoring()
+            self.assertEqual(monitoring["suricata"], "ON")
+            self.assertEqual(monitoring["opencanary"], "ON")
+            self.assertEqual(monitoring["ntfy"], "ON")
+        finally:
+            if prev is None:
+                os.environ.pop("AZAZEL_DEV_HEALTHY_BASELINE", None)
+            else:
+                os.environ["AZAZEL_DEV_HEALTHY_BASELINE"] = prev
+
+    def test_dev_healthy_baseline_off_by_default(self) -> None:
+        import os
+
+        prev = os.environ.get("AZAZEL_DEV_HEALTHY_BASELINE")
+        try:
+            os.environ.pop("AZAZEL_DEV_HEALTHY_BASELINE", None)
+            self.assertFalse(webapp._dev_healthy_baseline())
+        finally:
+            if prev is not None:
+                os.environ["AZAZEL_DEV_HEALTHY_BASELINE"] = prev
+
     def test_dashboard_summary_normal_assurance_stale_snapshot_cannot_be_normal(self) -> None:
         state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
         metrics = json.loads(webapp.AI_METRICS_PATH.read_text(encoding="utf-8"))
