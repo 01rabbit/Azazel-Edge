@@ -72,14 +72,29 @@ SURICATA_COUNT_DECAY_WINDOW_SEC = max(1.0, float(os.environ.get("AZAZEL_SURICATA
 # Hard ceiling so a sustained event storm still cannot grow the tallies without
 # bound (decay reclaims them once activity subsides).
 SURICATA_COUNT_MAX = max(1, int(os.environ.get("AZAZEL_SURICATA_COUNT_MAX", "99")))
+# The lifetime METRICS["deferred_count"] counter never resets (see _metrics_inc
+# call sites), so a single LLM-queue-full burst during an attack would pin the
+# "Deferred" strip pill to caution for the rest of the process life, including
+# all the benign traffic afterward. `deferred_recent` (persisted alongside the
+# suricata tallies in the UI snapshot) is a windowed view of the same signal:
+# it is bumped by however much the lifetime counter grew since the last
+# snapshot write, then ages back to zero after this many seconds of no new
+# deferrals - same decay shape as SURICATA_COUNT_DECAY_WINDOW_SEC, just a
+# shorter window since queue-full pressure is meant to be a transient signal.
+DEFERRED_RECENT_DECAY_WINDOW_SEC = max(1.0, float(os.environ.get("AZAZEL_DEFERRED_RECENT_DECAY_SEC", "60")))
 
 
-def _decay_suricata_count(prev: int, elapsed_sec: float) -> int:
-    """Linearly age a severity tally toward zero across the decay window."""
+def _decay_suricata_count(prev: int, elapsed_sec: float, window_sec: float = SURICATA_COUNT_DECAY_WINDOW_SEC) -> int:
+    """Linearly age a tally toward zero across a decay window.
+
+    Despite the name (kept for backward compatibility with existing callers
+    and tests), this is a generic "age a monotonic-ish counter back toward
+    zero" helper - `deferred_recent` below reuses it with a shorter window.
+    """
     value = max(0, int(prev))
     if value <= 0 or elapsed_sec <= 0:
         return min(SURICATA_COUNT_MAX, value)
-    factor = max(0.0, 1.0 - (float(elapsed_sec) / SURICATA_COUNT_DECAY_WINDOW_SEC))
+    factor = max(0.0, 1.0 - (float(elapsed_sec) / window_sec))
     # Round (not floor) so a small tally survives most of the window instead of
     # truncating to zero on the very next event; a full window of quiet still
     # reclaims it to zero (factor == 0).
@@ -1544,6 +1559,19 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
         else:
             info = min(SURICATA_COUNT_MAX, info + 1)
 
+    # FIX A: windowed/decaying view of the lifetime deferred_count metric (see
+    # DEFERRED_RECENT_DECAY_WINDOW_SEC above). Age the prior recent-deferrals
+    # tally the same way the suricata tallies are aged above, then fold in
+    # however much the lifetime counter grew since the last snapshot write.
+    # This is what the "Deferred" strip pill should key its tone on - NOT the
+    # raw lifetime count, which only ever goes up.
+    with METRICS_LOCK:
+        deferred_lifetime = int(METRICS.get("deferred_count", 0) or 0)
+    prev_deferred_lifetime = int(snapshot.get("deferred_lifetime_at_snapshot", 0) or 0)
+    prev_deferred_recent = int(snapshot.get("deferred_recent", 0) or 0)
+    deferred_recent = _decay_suricata_count(prev_deferred_recent, elapsed, DEFERRED_RECENT_DECAY_WINDOW_SEC)
+    deferred_recent = min(SURICATA_COUNT_MAX, deferred_recent + max(0, deferred_lifetime - prev_deferred_lifetime))
+
     reasons = snapshot.get("reasons", [])
     if not isinstance(reasons, list):
         reasons = []
@@ -1569,6 +1597,12 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
     snapshot["suricata_critical"] = critical
     snapshot["suricata_warning"] = warning
     snapshot["suricata_info"] = info
+    # FIX A (continued): persist the decayed "recent deferrals" signal plus the
+    # lifetime-count bookmark used to compute its next delta. `deferred_recent`
+    # is what UI tone should read; the lifetime `deferred_count` metric (see
+    # llm_metrics below) is kept untouched for audit.
+    snapshot["deferred_recent"] = deferred_recent
+    snapshot["deferred_lifetime_at_snapshot"] = deferred_lifetime
     snapshot["llm"] = advisory.get("llm", {})
     snapshot["ops_coach"] = advisory.get("ops_coach", {})
     snapshot["decision_pipeline"] = advisory.get("decision_pipeline", {})
@@ -1593,10 +1627,16 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
         snapshot["ssid"] = f"ETH:{up_if}" if up_if != "-" else "ETH"
     else:
         snapshot["ssid"] = str(snapshot.get("ssid") or "-")
+    suricata_sid = int(advisory.get("suricata_sid", 0) or 0)
+    # FIX B: only flag an actual suricata alert (severity 1-2, sid present),
+    # not benign dummy-eve traffic (severity>=3, sid==0). Previously this was
+    # hardcoded True for every advisory including benign, which is a
+    # data-quality landmine for audit/STIX export even though no current UI
+    # tone reads this field.
     snapshot["attack"] = {
-        "suricata_alert": True,
+        "suricata_alert": bool(severity and severity <= 2 and suricata_sid),
         "suricata_severity": severity,
-        "suricata_sid": int(advisory.get("suricata_sid", 0)),
+        "suricata_sid": suricata_sid,
         "canary_target_alert": False,
         "canary_delay_active": False,
         "canary_delay_target_count": 0,

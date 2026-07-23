@@ -1615,6 +1615,7 @@ function summarizePathState(summary) {
 }
 
 function summarizeCorrelationState(correlation) {
+    const hasData = !!correlation && typeof correlation === 'object' && Object.keys(correlation).length > 0;
     const status = String(correlation?.status || 'unknown').toLowerCase();
     const reasonCount = Array.isArray(correlation?.reasons) ? correlation.reasons.length : 0;
     if (['confirmed', 'correlated', 'active', 'matched'].includes(status)) {
@@ -1625,6 +1626,18 @@ function summarizeCorrelationState(correlation) {
     }
     if (['none', 'clear', 'normal', 'idle'].includes(status)) {
         return { tone: 'status-safe', value: status.toUpperCase() };
+    }
+    // FIX C: no correlation data at all (empty/missing correlation object, or
+    // an explicit "unknown" status - the two are indistinguishable from the
+    // caller) means "no correlation among threats", which is a GOOD state on
+    // a benign board, not an unknown/degraded one. Read it as SAFE/NONE so a
+    // fully benign board can settle the SOC glance to NORMAL instead of being
+    // stuck at neutral forever. This does not hide real attacks: threat_level
+    // elevated/critical drives socThreat to status-danger/caution, which
+    // still wins strongestTone(socThreat.tone, socCorrelation.tone, ...) in
+    // the SOC glance headline regardless of what this cell reads.
+    if (!hasData || status === 'unknown') {
+        return { tone: 'status-safe', value: 'NONE' };
     }
     return { tone: 'status-neutral', value: status.toUpperCase() };
 }
@@ -1752,7 +1765,13 @@ function updateCommandStrip(summary, health, failures = []) {
     setPillTone('stripRisk', toneForRisk(summary.risk?.user_state, summary.risk?.suspicion).replace('status-', ''));
     setPillTone('stripInternet', summarizePathState(summary).tone.replace('status-', ''));
     setPillTone('stripCritical', Number(strip.direct_critical_count || 0) > 0 ? 'danger' : 'safe');
-    setPillTone('stripDeferred', Number(strip.deferred_count || 0) > 0 ? 'caution' : 'safe');
+    // FIX A: deferred_count is a lifetime monotonic counter (never decreases),
+    // so keying tone off it would pin this pill to caution forever after the
+    // first LLM-queue-full event. deferred_recent is the windowed/decaying
+    // view of the same signal (agent.py `_update_ui_snapshot`); it ages back
+    // to zero once queue-full pressure stops, so the pill reflects CURRENT
+    // pressure, not history. deferred_count is still shown as text for audit.
+    setPillTone('stripDeferred', Number(strip.deferred_recent || 0) > 0 ? 'caution' : 'safe');
     const queueDepth = Number(health.queue?.depth || 0);
     const queueCapacity = Number(health.queue?.capacity || 0);
     const queueRatio = queueCapacity > 0 ? queueDepth / queueCapacity : 0;

@@ -2544,7 +2544,15 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
             "current_uplink": str(state.get("up_if") or ""),
             "internet_reachability": str(connection.get("internet_check") or ""),
             "direct_critical_count": _as_int(state.get("suricata_critical"), 0),
+            # Lifetime counter, kept for audit - never decreases. UI tone must
+            # NOT use this field; see deferred_recent below.
             "deferred_count": _as_int(metrics.get("deferred_count"), 0),
+            # Windowed/decaying view of deferred_count (agent.py FIX A) - ages
+            # back to zero after a dwell once new deferrals stop, so a queue-
+            # full burst during an attack does not pin the "Deferred" pill to
+            # caution for the rest of the process life. This is what app.js
+            # should key the pill TONE on.
+            "deferred_recent": _as_int(state.get("deferred_recent"), 0),
             "ai_contribution_rate": _as_float((ai_governance.get("rates") or {}).get("ai_contribution"), 0.0),
             "ai_fallback_rate": _as_float((ai_governance.get("rates") or {}).get("fallback"), 0.0),
             "stale_warning": stale_warning,
