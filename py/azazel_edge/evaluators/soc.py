@@ -11,8 +11,34 @@ from typing import Any, Dict, Iterable, List, Tuple
 from azazel_edge.correlation import AdvancedCorrelator
 from azazel_edge.knowledge.attack_mapping import load_attack_mapping, map_attack_techniques
 from azazel_edge.sigma import MiniSigmaExecutor
+from azazel_edge.tactics_engine.scorer import DECEPTION_SIDS
 from azazel_edge.ti import ThreatIntelFeed, load_ti_feed
 from azazel_edge.yara import MiniYaraMatcher
+
+
+# Benign Suricata classtypes. Kept in lockstep with scorer._BENIGN_CLASSTYPES: an
+# event carrying one of these categories with NO corroborating threat signal is
+# ordinary background traffic (web browse / DNS / NTP), not a detection. Used to
+# stop benign protocol tokens ("dns_lookup" -> "dns") from being read as attack
+# technique keywords, mirroring the Tactical Engine's "detection must be EARNED"
+# stance on the second-pass side.
+_BENIGN_CATEGORIES = frozenset(
+    {
+        'not-suspicious',
+        'unknown',
+        'misc-activity',
+        'protocol-command-decode',
+        'tcp-connection',
+        'policy-violation',
+        'bad-unknown',
+        '',
+    }
+)
+
+# First-pass risk below this floor is "auto-dismiss" per scorer.py's calibration
+# (< 40 sits below the LLM advisory floor). Impact/incident machinery must not
+# manufacture active incidents from such sub-threshold background events.
+_INCIDENT_RISK_FLOOR = 40
 
 
 def _to_payloads(events: Iterable[Any]) -> List[Dict[str, Any]]:
@@ -162,8 +188,15 @@ def _in_maintenance_window(ts: datetime, windows: List[Dict[str, Any]]) -> bool:
     return False
 
 
-def _candidate_hits(text: str) -> List[str]:
-    lowered = text.lower()
+def _candidate_hits(attack_type: str, category: str) -> List[str]:
+    # Benign background traffic (category in the benign set, e.g. "not-suspicious")
+    # is NOT a detection: its attack_type is a bare protocol name ("dns_lookup",
+    # "web_browse") that would otherwise substring-collide with technique keywords
+    # ('dns' -> T1071, 'http' -> T1071). Skip keyword matching entirely for it so
+    # possibility-of-technique is never inferred from a clean protocol label.
+    if str(category or '').strip().lower() in _BENIGN_CATEGORIES:
+        return []
+    lowered = f'{attack_type} {category}'.lower()
     mapping = {
         'T1595 Active Scanning': ['scan', 'scanner', 'recon'],
         'T1110 Brute Force': ['brute', 'password', 'login attempt', 'authentication'],
@@ -269,6 +302,76 @@ class SocEvaluator:
         with self._lock:
             return self._evaluate_unlocked(events, sot_diff=sot_diff)
 
+    @staticmethod
+    def _is_benign_background_payload(payload: Dict[str, Any]) -> bool:
+        """
+        True for a SOC payload that is ordinary background traffic: a benign
+        classtype, first-pass risk below the auto-dismiss floor, and no AZAZEL
+        deception SID. Such an event carries no threat signal and must not seed
+        threat-shaped state (incidents, exposure expansion). Non-SOC evidence
+        (e.g. flow_min) is never classified benign here -- only suricata alerts
+        carry the category/sid/risk needed to judge this.
+        """
+        if str(payload.get('source') or '') != 'suricata_eve':
+            return False
+        attrs = payload.get('attrs', {}) if isinstance(payload.get('attrs'), dict) else {}
+        category = str(attrs.get('category') or '').strip().lower()
+        try:
+            sid = int(attrs.get('sid') or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        try:
+            risk = int(attrs.get('risk_score') or payload.get('severity') or 0)
+        except (TypeError, ValueError):
+            risk = 0
+        return category in _BENIGN_CATEGORIES and risk < _INCIDENT_RISK_FLOOR and sid not in DECEPTION_SIDS
+
+    @staticmethod
+    def _has_deception_signal(payloads: List[Dict[str, Any]]) -> bool:
+        for payload in payloads:
+            attrs = payload.get('attrs', {}) if isinstance(payload.get('attrs'), dict) else {}
+            try:
+                sid = int(attrs.get('sid') or 0)
+            except (TypeError, ValueError):
+                sid = 0
+            if sid in DECEPTION_SIDS:
+                return True
+        return False
+
+    @staticmethod
+    def _is_threat_present(
+        suspicion: Dict[str, Any],
+        ti_matches: List[Any],
+        correlation: Dict[str, Any],
+        sigma_hits: List[Dict[str, Any]],
+        yara_hits: List[Dict[str, Any]],
+        deception_signal: bool,
+    ) -> bool:
+        """
+        Threat-presence gate (Deterministic First).
+
+        blast_radius (impact) and technique_likelihood (possibility) describe the
+        *consequence* or *potential* of an event, not whether a threat is actually
+        present. Confidence describes how sure we are about a signal we may not
+        have. None of them alone establishes threat presence. Presence is
+        established only by a corroborated threat signal: an elevated suspicion
+        score, a TI/sigma/yara hit, a correlation cluster, a high-risk signature,
+        or an AZAZEL deception SID. When none of these fire the traffic is treated
+        as benign background and the headline is capped to "low" regardless of how
+        large the impact/possibility surfaces look. Any single real corroboration
+        restores full sensitivity, so real attacks are unaffected.
+        """
+        suspicion_reasons = suspicion.get('reasons') or []
+        return bool(
+            str(suspicion.get('label') or 'low') != 'low'
+            or ti_matches
+            or sigma_hits
+            or yara_hits
+            or int(correlation.get('top_score') or 0) >= 50
+            or any(str(reason).startswith('high_risk_sid') for reason in suspicion_reasons)
+            or deception_signal
+        )
+
     def _evaluate_unlocked(self, events: Iterable[Any], sot_diff: Dict[str, Any] | None = None) -> Dict[str, Any]:
         payloads = _to_payloads(events)
         soc_payloads = [item for item in payloads if str(item.get('source') or '') == 'suricata_eve']
@@ -288,6 +391,15 @@ class SocEvaluator:
         technique_likelihood, attack_candidates, attack_techniques = self._evaluate_technique_likelihood(actionable_soc_payloads, flow_payloads, ti_matches, correlation, sigma_hits, sot_diff=sot_diff)
         asset_target_criticality = self._evaluate_asset_target_criticality(actionable_soc_payloads, flow_payloads)
         blast_radius = self._evaluate_blast_radius(actionable_soc_payloads, flow_payloads, criticality=asset_target_criticality)
+        deception_signal = self._has_deception_signal(actionable_soc_payloads)
+        threat_present = self._is_threat_present(
+            suspicion=suspicion,
+            ti_matches=ti_matches,
+            correlation=correlation,
+            sigma_hits=sigma_hits,
+            yara_hits=yara_hits,
+            deception_signal=deception_signal,
+        )
         entity_risk_state = self._evaluate_entity_risk_state(actionable_payloads)
         incident_campaign_state = self._evaluate_incident_campaign_state(actionable_soc_payloads, flow_payloads)
         exposure_change_state = self._evaluate_exposure_change_state(actionable_soc_payloads, flow_payloads)
@@ -313,14 +425,24 @@ class SocEvaluator:
             suppression_state=suppression_exception_state,
             criticality_state=asset_target_criticality,
             exposure_state=exposure_change_state,
+            threat_present=threat_present,
         )
 
-        worst = max(
-            int(suspicion['score']),
-            int(confidence['score']),
-            int(technique_likelihood['score']),
-            int(blast_radius['score']),
-        ) if payloads else 0
+        # SUMMARY status is a threat-presence headline, not a max over every
+        # surface. Impact (blast_radius), possibility (technique_likelihood) and
+        # confidence must not independently push the headline above the actual
+        # corroborated threat signal. With no threat present the headline is
+        # capped to the suspicion signal (benign background -> "low"); with any
+        # corroboration the full worst-of computation is restored unchanged.
+        if threat_present:
+            worst = max(
+                int(suspicion['score']),
+                int(confidence['score']),
+                int(technique_likelihood['score']),
+                int(blast_radius['score']),
+            ) if payloads else 0
+        else:
+            worst = int(suspicion['score']) if payloads else 0
         summary_reasons = []
         for name, dim in (
             ('suspicion', suspicion),
@@ -328,7 +450,10 @@ class SocEvaluator:
             ('technique_likelihood', technique_likelihood),
             ('blast_radius', blast_radius),
         ):
-            if dim['label'] != 'low':
+            # Suspicion always reports. The impact/possibility/confidence surfaces
+            # only decorate the headline when a threat is actually present, so a
+            # benign "low" summary is not annotated with critical blast radius.
+            if dim['label'] != 'low' and (threat_present or name == 'suspicion'):
                 summary_reasons.append(f'{name}:{dim["label"]}')
         if str(security_visibility_state.get('status') or '') != 'good':
             summary_reasons.append(f'visibility:{security_visibility_state.get("status")}')
@@ -468,8 +593,7 @@ class SocEvaluator:
         for payload in payloads:
             evidence_ids.append(str(payload.get('event_id') or ''))
             attrs = payload.get('attrs', {})
-            text = f"{attrs.get('attack_type') or ''} {attrs.get('category') or ''}"
-            hits = _candidate_hits(text)
+            hits = _candidate_hits(str(attrs.get('attack_type') or ''), str(attrs.get('category') or ''))
             if hits:
                 candidates.extend(hits)
                 score = max(score, 70)
@@ -700,38 +824,40 @@ class SocEvaluator:
         if self.ti_feed is not None and len(getattr(self.ti_feed, 'indicators', [])) <= 0:
             ti_status = 'empty'
 
+        # suricata_eve is the PRIMARY/required visibility source. flow_min and
+        # syslog_min are architecturally optional in this deployment: the dummy-eve
+        # generator and the live pipeline never emit them, so their absence is
+        # "not applicable", not a coverage gap. Visibility is judged on the primary
+        # source only -- absent optional sources must not manufacture a caution on
+        # every (benign) board. A real gap (stale or genuinely-absent SOC evidence)
+        # still downgrades below 'good'.
+        soc_stale = 'suricata_eve' in stale_sources
         if soc_count == 0 and flow_count == 0 and syslog_count == 0:
             status = 'blind'
             reasons.append('no_soc_or_flow_or_syslog_evidence')
+        elif soc_count == 0:
+            # No primary SOC evidence, even though an optional source produced data.
+            status = 'degraded'
+            missing_sources.append('suricata_eve')
+            reasons.append('missing_suricata_evidence')
+        elif soc_stale:
+            # Primary evidence present but stale -- a genuine visibility gap.
+            status = 'partial'
         else:
-            if soc_count == 0:
-                missing_sources.append('suricata_eve')
-                reasons.append('missing_suricata_evidence')
-            if flow_count == 0:
-                missing_sources.append('flow_min')
-                reasons.append('missing_flow_evidence')
-            if syslog_count == 0:
-                missing_sources.append('syslog_min')
-                reasons.append('missing_syslog_evidence')
-            if stale_sources:
-                reasons.extend(f'stale_{name}' for name in stale_sources)
-            if ti_status == 'unconfigured':
-                reasons.append('ti_feed_unconfigured')
-            elif ti_status == 'empty':
-                reasons.append('ti_feed_empty')
+            status = 'good'
+            reasons.append('soc_visibility')
 
-            if soc_count > 0 and flow_count > 0 and not stale_sources:
-                status = 'good'
-                reasons.append('multi_source_visibility')
-            elif soc_count > 0 or flow_count > 0:
-                status = 'partial'
-            else:
-                status = 'degraded'
+        if stale_sources:
+            reasons.extend(f'stale_{name}' for name in stale_sources)
+        if ti_status == 'unconfigured':
+            reasons.append('ti_feed_unconfigured')
+        elif ti_status == 'empty':
+            reasons.append('ti_feed_empty')
 
-        total_sources = 3
-        present_sources = sum(1 for count in (soc_count, flow_count, syslog_count) if count > 0)
+        # Coverage/trust are keyed on the primary source and staleness only; the
+        # absence of optional sources carries no penalty.
         stale_penalty = min(40, len(stale_sources) * 15)
-        missing_penalty = min(40, (total_sources - present_sources) * 15)
+        missing_penalty = 40 if soc_count == 0 else 0
         ti_penalty = 10 if ti_status in {'unconfigured', 'empty'} else 0
         coverage_score = max(0, min(100, 100 - stale_penalty - missing_penalty - ti_penalty))
         trust_penalty = min(60, stale_penalty + missing_penalty + ti_penalty)
@@ -967,6 +1093,21 @@ class SocEvaluator:
             event_id = str(payload.get('event_id') or '')
             ts = _parse_ts(payload.get('ts')) or now_ts
 
+            # Threat-presence gate for incident activation. An incident is a
+            # standing "something is happening here" marker; opening one off a
+            # sub-threshold benign background event (risk < auto-dismiss floor,
+            # no deception SID) manufactures a permanent "active campaign" from
+            # clean traffic. Only events carrying real threat signal open or
+            # refresh an incident. Corroborated attacks (risk >= floor or an
+            # AZAZEL deception SID) are unaffected.
+            category = str(attrs.get('category') or '').strip().lower()
+            try:
+                sid_val = int(attrs.get('sid') or 0)
+            except (TypeError, ValueError):
+                sid_val = 0
+            if risk < _INCIDENT_RISK_FLOOR and sid_val not in DECEPTION_SIDS and category in _BENIGN_CATEGORIES:
+                continue
+
             fingerprint = f'{src}|{dst}|{port}|{attack_type}'
             incident_id = 'inc-' + hashlib.sha256(fingerprint.encode('utf-8')).hexdigest()[:12]
             row = self._incident_store.setdefault(
@@ -1121,6 +1262,13 @@ class SocEvaluator:
         expected_change = False
 
         for payload in soc_payloads + flow_payloads:
+            # Benign background destinations (clean DNS/NTP/HTTPS to the fixed pool)
+            # are not exposure risk: first contact with them must not read as
+            # "exposure expanding". Skip them so they neither count as new nor seed
+            # the seen-sets; a later real threat to the same destination is still
+            # correctly flagged as new exposure.
+            if self._is_benign_background_payload(payload):
+                continue
             attrs = payload.get('attrs', {}) if isinstance(payload.get('attrs'), dict) else {}
             src, dst = _parse_subject(str(payload.get('subject') or ''))
             dst = dst or str(attrs.get('dst_ip') or '')
@@ -1379,6 +1527,7 @@ class SocEvaluator:
         suppression_state: Dict[str, Any],
         criticality_state: Dict[str, Any],
         exposure_state: Dict[str, Any],
+        threat_present: bool = True,
     ) -> Dict[str, Any]:
         suspicion_score = int(suspicion.get('score') or 0)
         confidence_score = int(confidence.get('score') or 0)
@@ -1386,13 +1535,20 @@ class SocEvaluator:
         critical_score = int(criticality_state.get('score') or 0)
         exposure_score = int(exposure_state.get('score') or 0)
 
-        base = int(
-            (suspicion_score * 0.35)
-            + (confidence_score * 0.25)
-            + (blast_score * 0.20)
-            + (critical_score * 0.10)
-            + (exposure_score * 0.10)
-        )
+        if threat_present:
+            base = int(
+                (suspicion_score * 0.35)
+                + (confidence_score * 0.25)
+                + (blast_score * 0.20)
+                + (critical_score * 0.10)
+                + (exposure_score * 0.10)
+            )
+        else:
+            # No corroborated threat: impact/criticality/exposure describe
+            # consequence surfaces, not triage pressure. Prioritization falls back
+            # to the actual detection signals (suspicion + confidence) so benign
+            # background traffic settles to idle/backlog instead of "watch".
+            base = int((suspicion_score * 0.35) + (confidence_score * 0.25))
         if str(visibility_state.get('status') or '') == 'blind':
             base = min(100, base + 10)
         if str(suppression_state.get('status') or '') in {'heavy', 'partial-heavy'}:
@@ -1431,6 +1587,12 @@ class SocEvaluator:
         evidence_ids: List[str] = []
         for row in rows:
             score = int(row['score'])
+            # Do not populate the triage queue from benign background: with no
+            # corroborated threat there is nothing to triage, and a zero-risk row
+            # is not a work item. Suppressing these keeps the "SOC Triage Queue"
+            # tile empty on a quiet board instead of showing a benign BACKLOG.
+            if not threat_present or score <= 0:
+                continue
             item = {
                 'id': str(row['id']),
                 'kind': str(row['kind']),

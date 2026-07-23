@@ -307,6 +307,52 @@ class SocEvaluatorV1Tests(unittest.TestCase):
         self.assertIn('top_priority_ids', triage)
         self.assertIn(triage['status'], {'now', 'watch', 'backlog', 'idle'})
 
+    def test_benign_background_batch_stays_quiet(self) -> None:
+        # Booth demo background stream: sid=0, benign classtype, first-pass risk
+        # dampened to 25. Diversity of src/dst/service (benign fan-out) inflates
+        # blast_radius, and protocol names would collide with technique keywords,
+        # but with no corroborated threat the headline must stay quiet.
+        evaluator = SocEvaluator()
+        benign = [
+            _event('10.0.0.121->203.0.113.10:443/TCP', 25, 50, 'web_browse', 'not-suspicious', 443, 0),
+            _event('10.0.0.110->8.8.8.8:53/UDP', 25, 50, 'dns_lookup', 'not-suspicious', 53, 0),
+            _event('10.0.0.237->198.51.100.7:123/UDP', 25, 50, 'ntp_sync', 'not-suspicious', 123, 0),
+            _event('10.0.0.200->203.0.113.25:443/TCP', 25, 50, 'web_browse', 'not-suspicious', 443, 0),
+            _event('10.0.0.140->203.0.113.25:53/UDP', 25, 50, 'dns_lookup', 'not-suspicious', 53, 0),
+        ]
+        result = evaluator.evaluate(benign)
+        # Core invariant: quiet headline regardless of blast_radius/technique.
+        self.assertEqual(result['summary']['status'], 'low')
+        # Benign protocol tokens must not be read as attack techniques.
+        self.assertEqual(result['technique_likelihood']['label'], 'low')
+        self.assertNotIn('attack_keyword_match', result['technique_likelihood']['reasons'])
+        # No triage pressure and no active incident campaign from clean traffic.
+        self.assertNotIn(result['triage_priority_state']['status'], {'now', 'watch'})
+        self.assertEqual(int(result['incident_campaign_state']['active_count']), 0)
+        self.assertNotIn('incident:active', result['summary']['reasons'])
+        # Visibility must not paint caution: flow_min/syslog_min are optional in
+        # this deployment, so soc-only evidence resolves to 'good', not 'partial'.
+        self.assertNotEqual(result['security_visibility_state']['status'], 'partial')
+        self.assertEqual(result['security_visibility_state']['status'], 'good')
+        # The triage queue must be empty on a quiet board -- no benign backlog.
+        self.assertEqual(result['triage_priority_state']['backlog'], [])
+        self.assertEqual(result['triage_priority_state']['now'], [])
+        self.assertEqual(result['triage_priority_state']['watch'], [])
+        # First contact with benign destinations is not exposure expansion.
+        self.assertNotEqual(result['exposure_change_state']['status'], 'expanding')
+
+    def test_real_attack_batch_still_escalates(self) -> None:
+        # Positive control: high-risk signatures must remain fully sensitive after
+        # the threat-presence gate. Same fan-out shape as the benign batch.
+        evaluator = SocEvaluator()
+        attack = [
+            _event('10.0.0.5->192.168.40.10:443/TCP', 92, 90, 'TLS C2 Beacon', 'Trojan Activity', 443, 210020),
+            _event('10.0.0.5->192.168.40.20:53/UDP', 88, 85, 'DNS Tunnel Exfil', 'Trojan Activity', 53, 210021),
+        ]
+        result = evaluator.evaluate(attack)
+        self.assertIn(result['summary']['status'], {'high', 'critical'})
+        self.assertEqual(int(result['incident_campaign_state']['active_count']) > 0, True)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -418,6 +418,48 @@ cmd_restart() {
   cmd_up "$@"
 }
 
+# cmd_reset -- deterministic clean slate for demo takes.
+# Stops the stack, purges every piece of ACCUMULATED runtime state that would
+# otherwise make a re-run non-identical (snapshot counters, the TTL-held
+# advisory, lifetime metrics, the normalized-event log, trend history, the eve
+# feed, and the /tmp CLI-replay artifacts), then brings the stack back up to a
+# verified-green baseline. Idempotent: the starting point is the same no matter
+# what the previous take left behind. Auth token, policy and captive registry
+# are intentionally preserved so the dashboard URL/token stays valid.
+# Pass-through flags (e.g. --inject / --all) are forwarded to the final `up`.
+cmd_reset() {
+  info "${C_BOLD}Resetting dev stack to a clean baseline${C_RESET}"
+  cmd_down
+  echo
+  info "${C_BOLD}Purging accumulated runtime state${C_RESET}"
+  # Files whose contents drift between runs and change what the live board shows.
+  local f
+  for f in \
+      "${AZAZEL_UI_SNAPSHOT:-}" \
+      "${AZAZEL_AI_ADVISORY:-}" \
+      "${AZAZEL_AI_METRICS:-}" \
+      "${AZAZEL_NORMALIZED_EVENT_LOG:-}" \
+      "${AZAZEL_DASHBOARD_TRENDS_PATH:-}"; do
+    if [[ -n "${f}" && -e "${f}" ]]; then
+      rm -f "${f}" && printf '  %s removed %s\n' "${OK}" "$(basename "${f}")"
+    fi
+  done
+  # Empty (do not delete) the eve feed so the rust core's tail-follow keeps its
+  # inode when it restarts and reads a clean, zero-event file.
+  if [[ -n "${AZAZEL_EVE_PATH:-}" ]]; then
+    : >"${AZAZEL_EVE_PATH}" && printf '  %s emptied %s\n' "${OK}" "$(basename "${AZAZEL_EVE_PATH}")"
+  fi
+  # On-camera CLI audit/explanation artifacts (deterministic-replay writes here).
+  rm -f /tmp/azazel-edge-demo-*.jsonl 2>/dev/null || true
+  printf '  %s /tmp CLI-replay artifacts cleared\n' "${OK}"
+  # Per-attendee triage sessions.
+  if [[ -n "${AZAZEL_TRIAGE_SESSION_DIR:-}" && -d "${AZAZEL_TRIAGE_SESSION_DIR}" ]]; then
+    rm -f "${AZAZEL_TRIAGE_SESSION_DIR}"/* 2>/dev/null || true
+  fi
+  echo
+  cmd_up "$@"
+}
+
 cmd_logs() {
   local comp="${1:-}"
   if [[ -z "${comp}" ]]; then
@@ -447,6 +489,7 @@ Usage:
   azazel-edge-devstack down [--all]            Stop azazel processes (--all also Mattermost)
   azazel-edge-devstack status                  Show component + ollama/Mattermost state
   azazel-edge-devstack restart [--inject]      down then up
+  azazel-edge-devstack reset [--inject] [--all]  Clean slate: down, purge runtime state, up (deterministic baseline)
   azazel-edge-devstack logs [component]        Tail a component log (or list logs)
 
   --inject   also start dummy-eve test-event injector
@@ -462,6 +505,7 @@ main() {
     down)     cmd_down "$@" ;;
     status)   cmd_status "$@" ;;
     restart)  cmd_restart "$@" ;;
+    reset)    cmd_reset "$@" ;;
     logs)     cmd_logs "$@" ;;
     -h|--help|help) usage ;;
     *) err "unknown command: ${cmd}"; usage; exit 2 ;;
