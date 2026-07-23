@@ -330,6 +330,16 @@ class SocEvaluatorV1Tests(unittest.TestCase):
         self.assertNotIn(result['triage_priority_state']['status'], {'now', 'watch'})
         self.assertEqual(int(result['incident_campaign_state']['active_count']), 0)
         self.assertNotIn('incident:active', result['summary']['reasons'])
+        # Visibility must not paint caution: flow_min/syslog_min are optional in
+        # this deployment, so soc-only evidence resolves to 'good', not 'partial'.
+        self.assertNotEqual(result['security_visibility_state']['status'], 'partial')
+        self.assertEqual(result['security_visibility_state']['status'], 'good')
+        # The triage queue must be empty on a quiet board -- no benign backlog.
+        self.assertEqual(result['triage_priority_state']['backlog'], [])
+        self.assertEqual(result['triage_priority_state']['now'], [])
+        self.assertEqual(result['triage_priority_state']['watch'], [])
+        # First contact with benign destinations is not exposure expansion.
+        self.assertNotEqual(result['exposure_change_state']['status'], 'expanding')
 
     def test_real_attack_batch_still_escalates(self) -> None:
         # Positive control: high-risk signatures must remain fully sensitive after

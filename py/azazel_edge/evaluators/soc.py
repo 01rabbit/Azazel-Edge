@@ -303,6 +303,30 @@ class SocEvaluator:
             return self._evaluate_unlocked(events, sot_diff=sot_diff)
 
     @staticmethod
+    def _is_benign_background_payload(payload: Dict[str, Any]) -> bool:
+        """
+        True for a SOC payload that is ordinary background traffic: a benign
+        classtype, first-pass risk below the auto-dismiss floor, and no AZAZEL
+        deception SID. Such an event carries no threat signal and must not seed
+        threat-shaped state (incidents, exposure expansion). Non-SOC evidence
+        (e.g. flow_min) is never classified benign here -- only suricata alerts
+        carry the category/sid/risk needed to judge this.
+        """
+        if str(payload.get('source') or '') != 'suricata_eve':
+            return False
+        attrs = payload.get('attrs', {}) if isinstance(payload.get('attrs'), dict) else {}
+        category = str(attrs.get('category') or '').strip().lower()
+        try:
+            sid = int(attrs.get('sid') or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        try:
+            risk = int(attrs.get('risk_score') or payload.get('severity') or 0)
+        except (TypeError, ValueError):
+            risk = 0
+        return category in _BENIGN_CATEGORIES and risk < _INCIDENT_RISK_FLOOR and sid not in DECEPTION_SIDS
+
+    @staticmethod
     def _has_deception_signal(payloads: List[Dict[str, Any]]) -> bool:
         for payload in payloads:
             attrs = payload.get('attrs', {}) if isinstance(payload.get('attrs'), dict) else {}
@@ -800,38 +824,40 @@ class SocEvaluator:
         if self.ti_feed is not None and len(getattr(self.ti_feed, 'indicators', [])) <= 0:
             ti_status = 'empty'
 
+        # suricata_eve is the PRIMARY/required visibility source. flow_min and
+        # syslog_min are architecturally optional in this deployment: the dummy-eve
+        # generator and the live pipeline never emit them, so their absence is
+        # "not applicable", not a coverage gap. Visibility is judged on the primary
+        # source only -- absent optional sources must not manufacture a caution on
+        # every (benign) board. A real gap (stale or genuinely-absent SOC evidence)
+        # still downgrades below 'good'.
+        soc_stale = 'suricata_eve' in stale_sources
         if soc_count == 0 and flow_count == 0 and syslog_count == 0:
             status = 'blind'
             reasons.append('no_soc_or_flow_or_syslog_evidence')
+        elif soc_count == 0:
+            # No primary SOC evidence, even though an optional source produced data.
+            status = 'degraded'
+            missing_sources.append('suricata_eve')
+            reasons.append('missing_suricata_evidence')
+        elif soc_stale:
+            # Primary evidence present but stale -- a genuine visibility gap.
+            status = 'partial'
         else:
-            if soc_count == 0:
-                missing_sources.append('suricata_eve')
-                reasons.append('missing_suricata_evidence')
-            if flow_count == 0:
-                missing_sources.append('flow_min')
-                reasons.append('missing_flow_evidence')
-            if syslog_count == 0:
-                missing_sources.append('syslog_min')
-                reasons.append('missing_syslog_evidence')
-            if stale_sources:
-                reasons.extend(f'stale_{name}' for name in stale_sources)
-            if ti_status == 'unconfigured':
-                reasons.append('ti_feed_unconfigured')
-            elif ti_status == 'empty':
-                reasons.append('ti_feed_empty')
+            status = 'good'
+            reasons.append('soc_visibility')
 
-            if soc_count > 0 and flow_count > 0 and not stale_sources:
-                status = 'good'
-                reasons.append('multi_source_visibility')
-            elif soc_count > 0 or flow_count > 0:
-                status = 'partial'
-            else:
-                status = 'degraded'
+        if stale_sources:
+            reasons.extend(f'stale_{name}' for name in stale_sources)
+        if ti_status == 'unconfigured':
+            reasons.append('ti_feed_unconfigured')
+        elif ti_status == 'empty':
+            reasons.append('ti_feed_empty')
 
-        total_sources = 3
-        present_sources = sum(1 for count in (soc_count, flow_count, syslog_count) if count > 0)
+        # Coverage/trust are keyed on the primary source and staleness only; the
+        # absence of optional sources carries no penalty.
         stale_penalty = min(40, len(stale_sources) * 15)
-        missing_penalty = min(40, (total_sources - present_sources) * 15)
+        missing_penalty = 40 if soc_count == 0 else 0
         ti_penalty = 10 if ti_status in {'unconfigured', 'empty'} else 0
         coverage_score = max(0, min(100, 100 - stale_penalty - missing_penalty - ti_penalty))
         trust_penalty = min(60, stale_penalty + missing_penalty + ti_penalty)
@@ -1236,6 +1262,13 @@ class SocEvaluator:
         expected_change = False
 
         for payload in soc_payloads + flow_payloads:
+            # Benign background destinations (clean DNS/NTP/HTTPS to the fixed pool)
+            # are not exposure risk: first contact with them must not read as
+            # "exposure expanding". Skip them so they neither count as new nor seed
+            # the seen-sets; a later real threat to the same destination is still
+            # correctly flagged as new exposure.
+            if self._is_benign_background_payload(payload):
+                continue
             attrs = payload.get('attrs', {}) if isinstance(payload.get('attrs'), dict) else {}
             src, dst = _parse_subject(str(payload.get('subject') or ''))
             dst = dst or str(attrs.get('dst_ip') or '')
@@ -1554,6 +1587,12 @@ class SocEvaluator:
         evidence_ids: List[str] = []
         for row in rows:
             score = int(row['score'])
+            # Do not populate the triage queue from benign background: with no
+            # corroborated threat there is nothing to triage, and a zero-risk row
+            # is not a work item. Suppressing these keeps the "SOC Triage Queue"
+            # tile empty on a quiet board instead of showing a benign BACKLOG.
+            if not threat_present or score <= 0:
+                continue
             item = {
                 'id': str(row['id']),
                 'kind': str(row['kind']),
