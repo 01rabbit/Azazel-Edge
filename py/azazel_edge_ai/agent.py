@@ -63,6 +63,27 @@ METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_met
 POLICY_PATH = Path(os.environ.get("AZAZEL_AI_POLICY", "/run/azazel-edge/ai_runtime_policy.json"))
 AI_AUDIT_PATH = Path(os.environ.get("AZAZEL_AI_AUDIT_LOG", "/var/log/azazel-edge/ai-audit.jsonl"))
 METRICS_HEARTBEAT_SEC = max(5.0, float(os.environ.get("AZAZEL_AI_METRICS_HEARTBEAT_SEC", "15")))
+# Rolling suricata severity tallies in the UI snapshot decay linearly to zero over
+# this window of no new same-severity events, so a long-running / idle booth does
+# not accumulate unbounded counts that keep the dashboard escalated. Aligned with
+# daemon.SURICATA_ADVISORY_TTL_SEC (stale-advisory TTL) so the display and the
+# tallies age out on the same clock.
+SURICATA_COUNT_DECAY_WINDOW_SEC = max(1.0, float(os.environ.get("AZAZEL_SURICATA_COUNT_DECAY_SEC", "300")))
+# Hard ceiling so a sustained event storm still cannot grow the tallies without
+# bound (decay reclaims them once activity subsides).
+SURICATA_COUNT_MAX = max(1, int(os.environ.get("AZAZEL_SURICATA_COUNT_MAX", "99")))
+
+
+def _decay_suricata_count(prev: int, elapsed_sec: float) -> int:
+    """Linearly age a severity tally toward zero across the decay window."""
+    value = max(0, int(prev))
+    if value <= 0 or elapsed_sec <= 0:
+        return min(SURICATA_COUNT_MAX, value)
+    factor = max(0.0, 1.0 - (float(elapsed_sec) / SURICATA_COUNT_DECAY_WINDOW_SEC))
+    # Round (not floor) so a small tally survives most of the window instead of
+    # truncating to zero on the very next event; a full window of quiet still
+    # reclaims it to zero (factor == 0).
+    return min(SURICATA_COUNT_MAX, int(round(value * factor)))
 LLM_ENABLED = os.environ.get("AZAZEL_LLM_ENABLED", "1") == "1"
 LLM_ENDPOINT = os.environ.get("AZAZEL_OLLAMA_ENDPOINT", "http://127.0.0.1:11434")
 LLM_MODEL_PRIMARY = os.environ.get("AZAZEL_LLM_MODEL_PRIMARY", os.environ.get("AZAZEL_LLM_MODEL", "qwen3.5:2b"))
@@ -1507,16 +1528,21 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
             snapshot = {}
 
     severity = int(advisory.get("suricata_severity") or 0)
-    critical = int(snapshot.get("suricata_critical", 0) or 0)
-    warning = int(snapshot.get("suricata_warning", 0) or 0)
-    info = int(snapshot.get("suricata_info", 0) or 0)
+    # Age the prior tallies before folding in this event: counts decay toward zero
+    # over SURICATA_COUNT_DECAY_WINDOW_SEC of quiet, so idle/benign operation
+    # returns the dashboard toward "quiet" instead of ratcheting up forever.
+    prev_epoch = float(snapshot.get("snapshot_epoch") or 0.0)
+    elapsed = max(0.0, now - prev_epoch) if prev_epoch > 0 else 0.0
+    critical = _decay_suricata_count(int(snapshot.get("suricata_critical", 0) or 0), elapsed)
+    warning = _decay_suricata_count(int(snapshot.get("suricata_warning", 0) or 0), elapsed)
+    info = _decay_suricata_count(int(snapshot.get("suricata_info", 0) or 0), elapsed)
     if count_suricata:
         if severity <= 1:
-            critical += 1
+            critical = min(SURICATA_COUNT_MAX, critical + 1)
         elif severity == 2:
-            warning += 1
+            warning = min(SURICATA_COUNT_MAX, warning + 1)
         else:
-            info += 1
+            info = min(SURICATA_COUNT_MAX, info + 1)
 
     reasons = snapshot.get("reasons", [])
     if not isinstance(reasons, list):
