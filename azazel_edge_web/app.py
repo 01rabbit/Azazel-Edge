@@ -181,6 +181,9 @@ AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-l
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/azazel-edge/runbook-events.jsonl"))
 TRIAGE_AUDIT_LOG = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", "/var/log/azazel-edge/triage-audit.jsonl"))
 TRIAGE_AUDIT_FALLBACK_LOG = Path("/tmp/azazel-edge-triage-audit.jsonl")
+DECISION_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DECISION_EXPLANATIONS_PATH", "/var/log/azazel-edge/decision-explanations.jsonl"))
+BOOTH_DEMO_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DEMO_EXPLANATIONS_PATH", "/tmp/azazel-edge-demo-explanations.jsonl"))
+BOOTH_INPUT_PROVENANCE_PATH = Path(os.environ.get("AZAZEL_BOOTH_INPUT_PROVENANCE_PATH", "/run/azazel-edge/booth-input.json"))
 TOPOLITE_SEED_MODE_PATH = Path(os.environ.get("AZAZEL_TOPOLITE_SEED_MODE_PATH", "/run/azazel-edge/topolite_seed_mode.json"))
 SOT_AUDIT_LOG = Path(os.environ.get("AZAZEL_SOT_AUDIT_LOG", "/var/log/azazel-edge/sot-events.jsonl"))
 TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge/triage-sessions"))
@@ -4869,12 +4872,131 @@ def _triage_progress_payload(progress: Any, lang: str) -> Dict[str, Any]:
     return payload
 
 
+def _latest_booth_explanation() -> Tuple[Dict[str, Any], str]:
+    """Return the newest valid native decision explanation without exposing paths.
+
+    The booth surface is deliberately a read-only projection of the same
+    explanation artifacts used by the audit-review CLI.  It never evaluates a
+    scenario, synthesizes a decision, or writes an audit record.
+    """
+    newest: Tuple[Dict[str, Any], str, float] = ({}, "", -1.0)
+    for path, kind in ((DECISION_EXPLANATIONS_PATH, "live"), (BOOTH_DEMO_EXPLANATIONS_PATH, "deterministic_replay")):
+        for row in _tail_jsonl(path, limit=32):
+            if not isinstance(row, dict):
+                continue
+            required = ("trace_id", "selected_action", "policy_profile", "config_hash")
+            if not all(str(row.get(key) or "").strip() for key in required):
+                continue
+            stamp = _as_float(row.get("ts"), 0.0)
+            if not stamp:
+                try:
+                    stamp = path.stat().st_mtime
+                except OSError:
+                    stamp = 0.0
+            if stamp >= newest[2]:
+                newest = (row, kind, stamp)
+    return newest[0], newest[1]
+
+
+def _booth_focus_payload() -> Dict[str, Any]:
+    """Read-only Decision Focus projection over operational state and audit record."""
+    state = read_state()
+    record, record_kind = _latest_booth_explanation()
+    if not record:
+        return {"ok": True, "available": False, "status": "initializing" if bool(state.get("bootstrap")) else "decision_unavailable"}
+
+    machine = record.get("machine") if isinstance(record.get("machine"), dict) else {}
+    noc_summary = machine.get("noc_summary") if isinstance(machine.get("noc_summary"), dict) else {}
+    soc_summary = machine.get("soc_summary") if isinstance(machine.get("soc_summary"), dict) else {}
+    why_chosen = record.get("why_chosen") if isinstance(record.get("why_chosen"), dict) else {}
+    impact = why_chosen.get("client_impact") if isinstance(why_chosen.get("client_impact"), dict) else {}
+    rejected = record.get("why_not_others") if isinstance(record.get("why_not_others"), list) else []
+    why_not = [
+        {"action": str(item.get("action") or "").upper(), "reason": str(item.get("reason") or "")}
+        for item in rejected if isinstance(item, dict) and str(item.get("action") or "")
+    ][:3]
+    evidence = [str(item) for item in (record.get("evidence_ids") or []) if str(item)][:4]
+    execution = state.get("execution") if isinstance(state.get("execution"), dict) else {}
+    is_replay = record_kind == "deterministic_replay" or str(execution.get("mode") or "") == "deterministic_replay"
+    provenance_meta = _read_json_file(BOOTH_INPUT_PROVENANCE_PATH)
+    provenance_valid = _as_float(provenance_meta.get("expires_at"), 0.0) >= time.time()
+    input_provenance = str(execution.get("input_provenance") or state.get("input_provenance") or (provenance_meta.get("kind") if provenance_valid else "") or "").strip().lower()
+    injected_test = input_provenance in {"injected_test", "dummy_eve", "test_input"}
+    dry_run = str(execution.get("enforcement") or state.get("enforcement_mode") or "dry_run").lower() != "enforced"
+    internal = state.get("internal") if isinstance(state.get("internal"), dict) else {}
+    network_health = state.get("network_health") if isinstance(state.get("network_health"), dict) else {}
+    second_pass = state.get("second_pass") if isinstance(state.get("second_pass"), dict) else {}
+    snapshot_soc = second_pass.get("soc") if isinstance(second_pass.get("soc"), dict) else {}
+    snapshot_noc = str(network_health.get("status") or "").upper()
+    snapshot_soc_status = str(snapshot_soc.get("status") or "").upper()
+    if not snapshot_noc:
+        snapshot_noc = str(noc_summary.get("status") or why_chosen.get("noc_status") or "UNKNOWN").upper()
+    if not snapshot_soc_status:
+        suspicion = _as_int(internal.get("suspicion"), 0)
+        snapshot_soc_status = ("CRITICAL" if _as_int(state.get("suricata_critical"), 0) > 0 or suspicion >= 85 else "WATCH" if suspicion > 0 else str(soc_summary.get("status") or why_chosen.get("soc_status") or "UNKNOWN")).upper()
+    snapshot_age = _age_seconds(state.get("snapshot_epoch"))
+    status_fresh = is_replay or (snapshot_age is not None and snapshot_age <= DASHBOARD_SNAPSHOT_STALE_SEC)
+    mio_prompt = "Explain the current NOC/SOC state and the deterministic decision. Do not propose a decision change."
+    if snapshot_noc not in {"HEALTHY", "NORMAL", "SAFE", "OK"}:
+        mio_prompt = "Why is the NOC state degraded, what should I verify next, and what evidence supports it? Do not change the decision."
+    elif snapshot_soc_status not in {"QUIET", "SAFE", "NORMAL", "OK"}:
+        mio_prompt = "What SOC evidence raised this state, and what should I verify next? Do not change the decision."
+    return {
+        "ok": True,
+        "available": True,
+        "mode": {
+            "kind": "deterministic_replay" if is_replay else "live_test_input",
+            "label": "DETERMINISTIC REPLAY — LOCAL / OFFLINE" if is_replay else ("LIVE TEST INPUT — REAL PIPELINE" if injected_test else "LIVE PIPELINE — INPUT SOURCE UNMARKED"),
+            "test_input": injected_test,
+            "local_offline": bool(is_replay or execution.get("local_only") or execution.get("offline_demo")),
+        },
+        "decision": {
+            "action": str(record.get("selected_action") or "OBSERVE").upper(),
+            "reason": str(record.get("reason") or "Decision explanation is available."),
+            "noc_status": snapshot_noc,
+            "soc_status": snapshot_soc_status,
+            "evidence_ids": evidence,
+            "why_not_others": why_not,
+            "release_condition": str(record.get("release_condition") or "Not recorded."),
+        },
+        "audit": {
+            "trace_id": str(record.get("trace_id") or ""),
+            "policy_profile": str(record.get("policy_profile") or ""),
+            "config_hash": str(record.get("config_hash") or ""),
+            "format_version": str(record.get("format_version") or "v2"),
+        },
+        "safety": {
+            "dry_run": dry_run,
+            "gateway": "OPERATOR-OWNED GATEWAY",
+            "ai_role": "AI IS NOT DECISION AUTHORITY",
+        },
+        "impact": {
+            "threat": snapshot_soc_status,
+            "path": snapshot_noc,
+            "affected_clients": _as_int(impact.get("affected_client_count"), 0),
+        },
+        "state": {"fresh": status_fresh, "snapshot_age_sec": snapshot_age},
+        "mio": {
+            "available": status_fresh,
+            "recommended": snapshot_noc not in {"HEALTHY", "NORMAL", "SAFE", "OK"} or snapshot_soc_status not in {"QUIET", "SAFE", "NORMAL", "OK"},
+            "advisory_label": "M.I.O. ADVISORY — POST-DECISION ONLY",
+            "url": f"/ops-comm?lang=en&audience=operator&message={quote(mio_prompt)}",
+        },
+    }
+
+
 # Web UI Routes
 
 @app.route("/")
 def index():
     """Main dashboard page"""
     return render_template("index.html")
+
+
+@app.route("/booth-focus")
+def booth_focus():
+    """Read-only high-legibility view for short Arsenal booth walkthroughs."""
+    return render_template("booth_focus.html")
 
 
 @app.route("/ops-comm")
@@ -4899,6 +5021,12 @@ def api_state():
     # azazel_fabric package is installed; null when unavailable.
     state["status_view"] = read_status_view()
     return jsonify(state)
+
+
+@app.route("/api/booth-focus", methods=["GET"])
+@require_token()
+def api_booth_focus():
+    return jsonify(_booth_focus_payload()), 200
 
 
 @app.route("/api/aggregator/nodes/register", methods=["POST"])

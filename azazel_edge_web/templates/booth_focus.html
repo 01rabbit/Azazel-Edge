@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Azazel-Edge — Decision Focus</title><link rel="stylesheet" href="/static/booth_focus.css?v={{ asset_version }}"></head>
+<body><main class="focus-shell" aria-live="polite">
+  <header><div><span class="kicker">AZAZEL-EDGE · DECISION FOCUS</span><h1>Is NOC healthy? Is SOC quiet?</h1></div><a href="/?lang=en" class="link">Open full dashboard ↗</a></header>
+  <section id="unavailable" class="unavailable" hidden><strong>Dashboard data unavailable</strong><p id="unavailableDetail">Switch to deterministic replay fallback.</p><a href="/?lang=en" class="link">Open full dashboard ↗</a></section>
+  <section id="focusContent" hidden>
+    <div id="modeBanner" class="mode-banner">CONNECTING…</div>
+    <section class="posture-grid" aria-label="NOC and SOC posture">
+      <article class="posture noc"><span class="kicker">NOC · SERVICE AND PATH</span><strong id="noc">—</strong><p>Can users and services use the network?</p></article>
+      <article class="posture soc"><span class="kicker">SOC · THREAT EVIDENCE</span><strong id="soc">—</strong><p>Is there credible security evidence requiring attention?</p></article>
+    </section>
+    <section class="decision"><div><span class="kicker">DETERMINISTIC ARBITER · SELECTED ACTION</span><strong id="action">—</strong><p id="reason">Waiting for decision explanation.</p></div><div class="evidence"><span class="kicker">WHY THIS ACTION</span><b>Selected evidence</b><span id="evidence">—</span><p><b>Release:</b> <span id="release">—</span></p></div></section>
+    <section class="why"><span class="kicker">WHY NOT A STRONGER ACTION?</span><div id="whyNot">—</div></section>
+    <section class="bottom-grid"><article class="safety"><span class="kicker">SAFETY BOUNDARY</span><div><b id="dryRun">DRY RUN</b><b>OPERATOR-OWNED GATEWAY</b><b>AI IS NOT DECISION AUTHORITY</b></div><p id="inputNotice">—</p></article><article class="audit"><span class="kicker">AUDIT TRAIL · READ ONLY</span><dl><div><dt>Trace</dt><dd id="trace">—</dd></div><div><dt>Policy</dt><dd id="policy">—</dd></div><div><dt>Config</dt><dd id="hash">—</dd></div></dl></article><article id="mioCard" class="mio"><span class="kicker">NEED EXPLANATION?</span><p>Get a guided explanation of this state and evidence. It cannot change the decision.</p><a id="mioLink" class="mio-link" href="/ops-comm">Explain this state ↗</a></article></section>
+  </section>
+</main><script src="/static/booth_focus.js?v={{ asset_version }}"></script></body></html>

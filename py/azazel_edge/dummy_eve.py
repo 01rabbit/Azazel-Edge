@@ -224,6 +224,23 @@ def _default_eve_path() -> Path:
     return Path(os.environ.get("AZAZEL_EVE_PATH", "/var/log/suricata/eve.json"))
 
 
+def _write_booth_input_provenance(scenario: str) -> None:
+    """Mark generated EVE as temporary test input for the read-only UI.
+
+    This is presentation metadata only: it is never read by evaluators or the
+    arbiter, and expires so ordinary live telemetry cannot be mislabeled.
+    """
+    path = Path(os.environ.get("AZAZEL_BOOTH_INPUT_PROVENANCE_PATH", "/run/azazel-edge/booth-input.json"))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        path.write_text(json.dumps({"kind": "injected_test", "scenario": scenario, "started_at": now, "expires_at": now + 300}, separators=(",", ":")), encoding="utf-8")
+    except OSError:
+        # Injection must still reach the real pipeline if the optional display
+        # marker cannot be persisted on a development host.
+        return
+
+
 class EveWriter:
     def __init__(self, path: Optional[Path], dry_run: bool = False):
         self.path = path
@@ -250,6 +267,8 @@ def cmd_list(_args: argparse.Namespace) -> int:
 def cmd_emit(args: argparse.Namespace) -> int:
     gen = EveGenerator(src_prefix=args.src_prefix, dst_ip=args.dst_ip, rng=random.Random(args.seed))
     writer = EveWriter(Path(args.eve_path) if args.eve_path else _default_eve_path(), dry_run=args.dry_run)
+    if not args.dry_run:
+        _write_booth_input_provenance(args.scenario)
     sent = 0
     for event in gen.iter_scenario(args.scenario, args.count):
         writer.write(event)
@@ -266,6 +285,8 @@ def cmd_flow(args: argparse.Namespace) -> int:
     gen = EveGenerator(src_prefix=args.src_prefix, dst_ip=args.dst_ip, rng=random.Random(args.seed))
     writer = EveWriter(Path(args.eve_path) if args.eve_path else _default_eve_path(), dry_run=args.dry_run)
     stages = [s.strip() for s in args.stages.split(",") if s.strip()] or list(DEFAULT_FLOW)
+    if not args.dry_run:
+        _write_booth_input_provenance("flow:" + ",".join(stages))
     for index, scenario_id in enumerate(stages):
         print(f"[stage {index + 1}/{len(stages)}] {scenario_id} (count={args.count})")
         for event in gen.iter_scenario(scenario_id, args.count):
@@ -282,6 +303,8 @@ def cmd_stream(args: argparse.Namespace) -> int:
     gen = EveGenerator(src_prefix=args.src_prefix, dst_ip=args.dst_ip, rng=random.Random(args.seed))
     writer = EveWriter(Path(args.eve_path) if args.eve_path else _default_eve_path(), dry_run=args.dry_run)
     attack_ids = [s for s in _SCENARIOS if s != "benign"]
+    if not args.dry_run:
+        _write_booth_input_provenance("stream")
     interval = 1.0 / max(0.1, args.rate)
     next_attack = time.monotonic() + args.attack_every
     print(f"streaming benign noise at {args.rate}/s, attack burst every {args.attack_every}s (Ctrl-C to stop)")
