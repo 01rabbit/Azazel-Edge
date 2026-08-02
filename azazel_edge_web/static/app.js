@@ -846,8 +846,15 @@ async function refreshDashboard() {
 
     if (hardFailures.length > 0) {
         console.error('Dashboard refresh failed:', hardFailures);
-        showToast(tr('dashboard.refresh_failed', 'Dashboard refresh failed: {error}', { error: hardFailures.join(' | ') }), 'error');
         azConnSetState(false);
+        // Tolerate a single transient slow poll before alarming. The single-process
+        // dev web server can briefly starve /api/state or /api/dashboard/summary while
+        // the heavy /api/dashboard/evidence request holds a worker; surfacing a toast
+        // (and OFFLINE chip) on a one-cycle blip makes the booth screen flicker. Only
+        // notify once the failure persists across polls.
+        if (azConnConsecutiveFailures >= 2) {
+            showToast(tr('dashboard.refresh_failed', 'Dashboard refresh failed: {error}', { error: hardFailures.join(' | ') }), 'error');
+        }
         return;
     }
 
@@ -3044,10 +3051,16 @@ function azConnSetState(ok) {
     } else {
         azConnConsecutiveFailures += 1;
         const hadPriorSuccess = lastSuccessfulPollMs !== null;
-        // caution on the first failure after a prior success, escalate to danger if it persists;
-        // straight to danger if we've never had a successful snapshot yet.
-        const tone = hadPriorSuccess && azConnConsecutiveFailures === 1 ? 'status-caution' : 'status-danger';
-        chip.classList.add(tone);
+        // Tolerate a single transient failure after a prior success: keep the last-good
+        // LIVE chip for one blip so a one-cycle slow poll (dev web server briefly starving
+        // /api/state while /api/dashboard/evidence holds a worker) doesn't flap the link
+        // indicator OFFLINE on the booth screen. Escalate to OFFLINE only once the failure
+        // persists (>=2 consecutive), or immediately if we've never had a successful snapshot.
+        if (hadPriorSuccess && azConnConsecutiveFailures < 2) {
+            chip.classList.add('status-safe');
+            return;
+        }
+        chip.classList.add('status-danger');
         valueEl.textContent = tr('dashboard.conn_state.offline', 'OFFLINE');
         // Mirror the tooltip into a visible-on-focus sr-only node: `title` only ever surfaces on
         // mouse hover, which keyboard and touch/kiosk operators can never trigger.
