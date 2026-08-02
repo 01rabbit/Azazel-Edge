@@ -334,9 +334,17 @@ cmd_up() {
     case "${a}" in
       --inject) inject=1 ;;
       --all) all=1 ;;
+      --demo-fast) export AZAZEL_DEMO_FAST=1 ;;
       *) err "unknown flag for up: ${a}"; exit 2 ;;
     esac
   done
+
+  # Booth/demo profile: collapse refresh/cache cadences so an injected alert
+  # shows on the dashboard within a few seconds instead of up to ~30s. Only
+  # affects display timing (no decision logic), and only when explicitly asked.
+  if [[ "${AZAZEL_DEMO_FAST:-}" == "1" ]]; then
+    info "--demo-fast: dashboard reacts in ~3s (display cadence only; decisions unchanged)"
+  fi
 
   preflight
   # --all means also (re)start external deps -- restart Mattermost if requested.
@@ -485,15 +493,16 @@ usage() {
 ${C_BOLD}azazel-edge-devstack${C_RESET} -- one-shot macOS dev-runtime launcher
 
 Usage:
-  azazel-edge-devstack up [--inject] [--all]   Bring up the stack (default cmd)
+  azazel-edge-devstack up [--inject] [--all] [--demo-fast]   Bring up the stack (default cmd)
   azazel-edge-devstack down [--all]            Stop azazel processes (--all also Mattermost)
   azazel-edge-devstack status                  Show component + ollama/Mattermost state
   azazel-edge-devstack restart [--inject]      down then up
   azazel-edge-devstack reset [--inject] [--all]  Clean slate: down, purge runtime state, up (deterministic baseline)
   azazel-edge-devstack logs [component]        Tail a component log (or list logs)
 
-  --inject   also start dummy-eve test-event injector
-  --all      up: (re)start external deps; down: also stop Mattermost (never ollama)
+  --inject     also start dummy-eve test-event injector
+  --all        up: (re)start external deps; down: also stop Mattermost (never ollama)
+  --demo-fast  up: dashboard reacts to injections in ~3s (booth pacing; display cadence only)
 EOF
 }
 
