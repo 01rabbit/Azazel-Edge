@@ -310,7 +310,11 @@ def _dashboard_poll_ms() -> int:
         except (TypeError, ValueError):
             pass
     demo_fast = str(os.environ.get("AZAZEL_DEMO_FAST", "")).strip().lower() in {"1", "true", "yes", "on"}
-    return 1500 if demo_fast else 4000
+    # Matches the demo-fast snapshot cache TTL (~3s): polling faster than the data
+    # can change only doubles load on the single-process dev web server (11 fetches
+    # per refresh) and starves the heaviest endpoint (/api/dashboard/evidence),
+    # which surfaces as an OFFLINE/STALE link chip. 3s stays snappy without that.
+    return 3000 if demo_fast else 4000
 
 
 @app.context_processor

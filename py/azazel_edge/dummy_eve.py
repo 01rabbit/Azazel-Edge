@@ -235,6 +235,43 @@ def _default_eve_path() -> Path:
     return Path(os.environ.get("AZAZEL_EVE_PATH", "/var/log/suricata/eve.json"))
 
 
+def _resolve_eve_path(args: argparse.Namespace) -> Path:
+    """Resolve the EVE output path and guard the classic dev footgun.
+
+    When a dev stack is running but this shell never sourced ``tools/macdev/env.sh``,
+    ``AZAZEL_EVE_PATH`` is unset, so we would silently append to the default
+    ``/var/log/suricata/eve.json`` — a file the dev stack never tails — and the
+    dashboard would never react. Detect that case and tell the operator exactly
+    how to fix it, instead of failing silently.
+    """
+    if args.eve_path:
+        return Path(args.eve_path)
+    env_path = os.environ.get("AZAZEL_EVE_PATH")
+    if env_path:
+        return Path(env_path)
+
+    default = Path("/var/log/suricata/eve.json")
+    dev_candidates = []
+    dev_state = os.environ.get("AZAZEL_DEV_STATE")
+    if dev_state:
+        dev_candidates.append(Path(dev_state) / "suricata" / "eve.json")
+    dev_candidates.append(Path.home() / ".azazel-edge-dev" / "suricata" / "eve.json")
+    for candidate in dev_candidates:
+        if candidate != default and candidate.exists():
+            print(
+                f"WARNING: AZAZEL_EVE_PATH is not set, so events go to {default}, "
+                f"but a dev stack feed exists at {candidate}.",
+                file=sys.stderr,
+            )
+            print(
+                "         The dashboard reads the dev feed, so it will NOT react. Fix: "
+                "run `source tools/macdev/env.sh` in this shell, then re-run the injector.",
+                file=sys.stderr,
+            )
+            break
+    return default
+
+
 def _write_booth_input_provenance(scenario: str) -> None:
     """Mark generated EVE as temporary test input for the read-only UI.
 
@@ -277,8 +314,10 @@ def cmd_list(_args: argparse.Namespace) -> int:
 
 def cmd_emit(args: argparse.Namespace) -> int:
     gen = EveGenerator(src_prefix=args.src_prefix, dst_ip=args.dst_ip, rng=random.Random(args.seed))
-    writer = EveWriter(Path(args.eve_path) if args.eve_path else _default_eve_path(), dry_run=args.dry_run)
+    eve_path = _resolve_eve_path(args)
+    writer = EveWriter(eve_path, dry_run=args.dry_run)
     if not args.dry_run:
+        print(f"writing EVE alerts to {eve_path}")
         _write_booth_input_provenance(args.scenario)
     sent = 0
     for event in gen.iter_scenario(args.scenario, args.count):
@@ -294,9 +333,11 @@ def cmd_emit(args: argparse.Namespace) -> int:
 
 def cmd_flow(args: argparse.Namespace) -> int:
     gen = EveGenerator(src_prefix=args.src_prefix, dst_ip=args.dst_ip, rng=random.Random(args.seed))
-    writer = EveWriter(Path(args.eve_path) if args.eve_path else _default_eve_path(), dry_run=args.dry_run)
+    eve_path = _resolve_eve_path(args)
+    writer = EveWriter(eve_path, dry_run=args.dry_run)
     stages = [s.strip() for s in args.stages.split(",") if s.strip()] or list(DEFAULT_FLOW)
     if not args.dry_run:
+        print(f"writing EVE alerts to {eve_path}")
         _write_booth_input_provenance("flow:" + ",".join(stages))
     for index, scenario_id in enumerate(stages):
         print(f"[stage {index + 1}/{len(stages)}] {scenario_id} (count={args.count})")
@@ -312,9 +353,11 @@ def cmd_flow(args: argparse.Namespace) -> int:
 
 def cmd_stream(args: argparse.Namespace) -> int:
     gen = EveGenerator(src_prefix=args.src_prefix, dst_ip=args.dst_ip, rng=random.Random(args.seed))
-    writer = EveWriter(Path(args.eve_path) if args.eve_path else _default_eve_path(), dry_run=args.dry_run)
+    eve_path = _resolve_eve_path(args)
+    writer = EveWriter(eve_path, dry_run=args.dry_run)
     attack_ids = [s for s in _SCENARIOS if s != "benign"]
     if not args.dry_run:
+        print(f"writing EVE alerts to {eve_path}")
         _write_booth_input_provenance("stream")
     interval = 1.0 / max(0.1, args.rate)
     next_attack = time.monotonic() + args.attack_every
