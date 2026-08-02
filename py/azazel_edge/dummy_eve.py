@@ -119,6 +119,17 @@ _register(
 
 _register(
     Scenario(
+        scenario_id="ssh_bruteforce",
+        title="SSH brute force",
+        description="Repeated SSH authentication failures from one source (port 22).",
+        templates=[
+            AlertTemplate(9901261, "AZAZEL SSH brute-force - repeated auth failures", "attempted-admin", "ssh_bruteforce", severity=1, dest_ports=(22,)),
+        ],
+    )
+)
+
+_register(
+    Scenario(
         scenario_id="c2_beacon",
         title="C2 beacon",
         description="Periodic small HTTP POST to external host.",
