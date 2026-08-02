@@ -1051,6 +1051,17 @@
 
     <div id="toast" class="toast"></div>
     <script>
+        // Persist the URL ?token= into localStorage so the SPA's API polls
+        // (which authenticate via the X-Auth-Token header, read from
+        // localStorage) succeed on first load in any fresh browser. Without
+        // this, the initial page render authenticates via the query param but
+        // every subsequent /api/* poll sends an empty token and 401s.
+        (function () {
+            try {
+                var t = new URLSearchParams(location.search).get('token');
+                if (t) { localStorage.setItem('azazel_token', t); }
+            } catch (e) { /* no-op: token stays as previously stored */ }
+        })();
         window.AZAZEL_LANG = {{ ui_lang|tojson }};
         window.AZAZEL_I18N = {{ ui_catalog|tojson }};
         window.AZAZEL_POLL_MS = {{ ui_poll_ms|tojson }};

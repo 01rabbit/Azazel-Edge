@@ -187,6 +187,7 @@
     </main>
 
     <script>
+        (function(){try{var t=new URLSearchParams(location.search).get('token');if(t)localStorage.setItem('azazel_token',t);}catch(e){}})();
         window.AZAZEL_LANG = {{ ui_lang|tojson }};
         window.AZAZEL_I18N = {{ ui_catalog|tojson }};
     </script>
