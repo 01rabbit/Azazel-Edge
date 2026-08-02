@@ -28,5 +28,8 @@ alert dns any any -> any any (msg:"AZAZEL DNS tunnel - high-frequency DNS querie
 # --- Credential harvesting patterns ---
 alert http any any -> $HOME_NET any (msg:"AZAZEL CREDENTIAL harvest - password field in GET request"; content:"password="; http_uri; nocase; flow:to_server; classtype:policy-violation; sid:9901241; rev:1;)
 
+# --- SSH brute force (repeated auth attempts to port 22) ---
+alert tcp any any -> $HOME_NET 22 (msg:"AZAZEL SSH brute-force - repeated auth failures"; flags:S; flow:to_server; threshold:type both, track by_src, count 10, seconds 60; classtype:attempted-admin; sid:9901261; rev:1;)
+
 # --- C2 beacon patterns (disaster APT) ---
 alert http $HOME_NET any -> any any (msg:"AZAZEL C2 beacon - periodic small HTTP POST"; content:"POST"; http_method; dsize:<200; threshold:type both, track by_src, count 10, seconds 60; classtype:trojan-activity; sid:9901251; rev:1;)
