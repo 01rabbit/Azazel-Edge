@@ -89,8 +89,40 @@ RATE_LIMITS = {
 PORTAL_DEFAULT_START_URL = "http://neverssl.com"
 _LAST_CPU_TOTAL: float | None = None
 _LAST_CPU_IDLE: float | None = None
+
+
+def _demo_fast() -> bool:
+    """True when the booth/demo fast-reaction profile is enabled.
+
+    Set ``AZAZEL_DEMO_FAST=1`` (dev/booth only, e.g. ``devstack up --demo-fast``)
+    to collapse the dashboard reaction time: an injected alert reflects on the
+    board within a few seconds instead of up to ~30s. It only lowers refresh /
+    cache cadences — never any decision logic — so the deterministic outcome is
+    unchanged. NEVER set it on an appliance/production deployment, where the
+    slower cadences deliberately damp probe/telemetry cost.
+    """
+    return str(os.environ.get("AZAZEL_DEMO_FAST", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+_DEMO_FAST = _demo_fast()
+
+
+def _timing_default(env_key: str, prod_default: str, demo_default: str) -> str:
+    """Resolve a timing knob: an explicit env override always wins; otherwise
+    demo-fast picks the snappy default and production picks the damped one."""
+    override = os.environ.get(env_key)
+    if override is not None and str(override).strip() != "":
+        return override
+    return demo_default if _DEMO_FAST else prod_default
+
+
 NETWORK_HEALTH = NetworkHealthMonitor(
-    cache_ttl_sec=float(os.environ.get("AZAZEL_HEALTH_CACHE_TTL", "25")),
+    cache_ttl_sec=float(_timing_default("AZAZEL_HEALTH_CACHE_TTL", "25", "3")),
     captive_url=os.environ.get("AZAZEL_CAPTIVE_CHECK_URL", "http://connectivitycheck.gstatic.com/generate_204"),
 )
 SURICATA_ADVISORY_TTL_SEC = int(os.environ.get("AZAZEL_SURICATA_ADVISORY_TTL_SEC", "300"))
@@ -108,7 +140,7 @@ def _dev_healthy_baseline() -> bool:
         "yes",
         "on",
     }
-NOC_REFRESH_SEC = max(5.0, float(os.environ.get("AZAZEL_NOC_REFRESH_SEC", "20")))
+NOC_REFRESH_SEC = max(2.0 if _DEMO_FAST else 5.0, float(_timing_default("AZAZEL_NOC_REFRESH_SEC", "20", "3")))
 NOC_EVALUATOR = NocEvaluator()
 NOC_CACHE_LOCK = threading.Lock()
 _NOC_CACHE: dict[str, Any] = {
@@ -116,8 +148,8 @@ _NOC_CACHE: dict[str, Any] = {
     "ts": 0.0,
     "payload": {},
 }
-SNAPSHOT_CACHE_TTL_SEC = 30.0
-SNAPSHOT_REFRESH_INTERVAL_SEC = max(10.0, float(os.environ.get("AZAZEL_SNAPSHOT_REFRESH_SEC", "12")))
+SNAPSHOT_CACHE_TTL_SEC = float(_timing_default("AZAZEL_SNAPSHOT_CACHE_TTL_SEC", "30", "3"))
+SNAPSHOT_REFRESH_INTERVAL_SEC = max(2.0 if _DEMO_FAST else 10.0, float(_timing_default("AZAZEL_SNAPSHOT_REFRESH_SEC", "12", "3")))
 SNAPSHOT_CACHE_LOCK = threading.Lock()
 _SNAPSHOT_CACHE: dict[str, Any] = {
     "ts": 0.0,
@@ -1519,7 +1551,7 @@ def read_ui_snapshot() -> dict[str, Any]:
         logger.debug(f"Failed to read mode status: {exc}")
     acquired_cache_lock = SNAPSHOT_CACHE_LOCK.acquire(blocking=False)
     if not acquired_cache_lock:
-        cached = _snapshot_cache_get(max_age_sec=30.0)
+        cached = _snapshot_cache_get(max_age_sec=SNAPSHOT_CACHE_TTL_SEC)
         if cached is not None:
             return cached
         for path in _snapshot_candidates():

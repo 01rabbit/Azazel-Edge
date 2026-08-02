@@ -299,12 +299,27 @@ def _tr(key: str, default: str | None = None, **kwargs: Any) -> str:
     return i18n_translate(key, lang=_request_lang(), default=default, **kwargs)
 
 
+def _dashboard_poll_ms() -> int:
+    """Front-end dashboard poll cadence in ms. An explicit override always wins;
+    otherwise demo-fast (AZAZEL_DEMO_FAST=1) polls snappily so an injected alert
+    surfaces almost immediately, while production keeps the calmer 4s cadence."""
+    override = os.environ.get("AZAZEL_DASHBOARD_POLL_MS")
+    if override is not None and str(override).strip() != "":
+        try:
+            return max(500, int(float(override)))
+        except (TypeError, ValueError):
+            pass
+    demo_fast = str(os.environ.get("AZAZEL_DEMO_FAST", "")).strip().lower() in {"1", "true", "yes", "on"}
+    return 1500 if demo_fast else 4000
+
+
 @app.context_processor
 def _inject_i18n() -> Dict[str, Any]:
     lang = _request_lang()
     return {
         "ui_lang": lang,
         "ui_catalog": i18n_ui_catalog(lang),
+        "ui_poll_ms": _dashboard_poll_ms(),
         "asset_version": STATIC_ASSET_VERSION,
         "tr": lambda key, default=None, **kwargs: i18n_translate(key, lang=lang, default=default, **kwargs),
     }
