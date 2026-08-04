@@ -339,6 +339,14 @@ def _apply_language_headers(response: Response) -> Response:
     lang = _request_lang()
     response.headers["Content-Language"] = lang
     response.set_cookie("azazel_lang", lang, max_age=31536000, samesite="Lax")
+    # Live dashboard data must never be served from the browser cache. Without an
+    # explicit directive, Chromium/Brave heuristically cache these JSON GETs and
+    # replay a stale (e.g. all-green) /api/state for a minute or more — the board
+    # then freezes and the header clock (seeded from state.now_time) jumps
+    # backwards on the stale response. Mark every /api/ response no-store, but
+    # leave endpoints that already set Cache-Control (the SSE streams) untouched.
+    if request.path.startswith("/api/") and "Cache-Control" not in response.headers:
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
