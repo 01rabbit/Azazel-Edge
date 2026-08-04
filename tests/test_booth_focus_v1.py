@@ -30,16 +30,18 @@ class BoothFocusTests(unittest.TestCase):
             setattr(webapp, name, value)
         self.tmp.cleanup()
 
-    def _write_record(self, action: str) -> None:
-        record = {
+    def _record(self, action: str, noc: str = "degraded", soc: str = "critical") -> dict:
+        return {
             "trace_id": f"demo:{action.lower()}", "format_version": "v2", "selected_action": action,
             "reason": "deterministic test decision", "policy_profile": "demo", "config_hash": "sha256:test",
             "evidence_ids": ["ev-soc-1", "ev-noc-1"], "release_condition": "evidence decays",
             "why_not_others": [{"action": "isolate", "reason": "Containment gate not satisfied"}],
             "why_chosen": {"client_impact": {"affected_client_count": 2}},
-            "machine": {"noc_summary": {"status": "degraded"}, "soc_summary": {"status": "critical"}},
+            "machine": {"noc_summary": {"status": noc}, "soc_summary": {"status": soc}},
         }
-        webapp.BOOTH_DEMO_EXPLANATIONS_PATH.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    def _write_record(self, action: str, noc: str = "degraded", soc: str = "critical") -> None:
+        webapp.BOOTH_DEMO_EXPLANATIONS_PATH.write_text(json.dumps(self._record(action, noc, soc)) + "\n", encoding="utf-8")
 
     def test_focus_projects_real_explanation_fields_for_replay(self) -> None:
         self._write_record("throttle")
@@ -61,8 +63,18 @@ class BoothFocusTests(unittest.TestCase):
             payload = self.client.get("/api/booth-focus").get_json()
             self.assertEqual(payload["decision"]["action"], action.upper())
 
-    def test_mio_is_not_promoted_when_snapshot_is_normal(self) -> None:
-        self._write_record("observe")
+    def test_mio_is_not_promoted_when_replay_posture_is_normal(self) -> None:
+        # A replay reporting an all-good posture needs no advisory prompt.
+        self._write_record("observe", noc="good", soc="low")
+        payload = self.client.get("/api/booth-focus").get_json()
+        self.assertEqual(payload["decision"]["noc_status"], "GOOD")
+        self.assertEqual(payload["decision"]["soc_status"], "LOW")
+        self.assertFalse(payload["mio"]["recommended"])
+
+    def test_replay_posture_ignores_a_contradicting_live_snapshot(self) -> None:
+        # The live snapshot describes a different (idle) pipeline. Letting it win
+        # would make the screen contradict the replay CLI output being presented.
+        self._write_record("throttle", noc="degraded", soc="critical")
         webapp.STATE_PATH.write_text(json.dumps({
             "snapshot_epoch": 1,
             "execution": {"mode": "deterministic_replay", "local_only": True},
@@ -70,7 +82,36 @@ class BoothFocusTests(unittest.TestCase):
             "second_pass": {"soc": {"status": "safe"}},
         }), encoding="utf-8")
         payload = self.client.get("/api/booth-focus").get_json()
-        self.assertFalse(payload["mio"]["recommended"])
+        self.assertEqual(payload["decision"]["noc_status"], "DEGRADED")
+        self.assertEqual(payload["decision"]["soc_status"], "CRITICAL")
+
+    def test_live_posture_still_prefers_the_snapshot(self) -> None:
+        record = self._record("observe", noc="degraded", soc="critical")
+        webapp.DECISION_EXPLANATIONS_PATH.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        webapp.STATE_PATH.write_text(json.dumps({
+            "snapshot_epoch": 1,
+            "network_health": {"status": "healthy"},
+            "second_pass": {"soc": {"status": "safe"}},
+        }), encoding="utf-8")
+        payload = self.client.get("/api/booth-focus").get_json()
+        self.assertNotEqual(payload["mode"]["kind"], "deterministic_replay")
+        self.assertEqual(payload["decision"]["noc_status"], "HEALTHY")
+        self.assertEqual(payload["decision"]["soc_status"], "SAFE")
+
+    def test_all_four_rejected_alternatives_are_projected(self) -> None:
+        record = self._record("throttle")
+        record["why_not_others"] = [
+            {"action": "observe", "reason": "insufficient_response_for_detected_threat"},
+            {"action": "notify", "reason": "operator_notification_not_primary_choice"},
+            {"action": "redirect", "reason": "redirect_gate_not_satisfied"},
+            {"action": "isolate", "reason": "isolate_gate_not_satisfied"},
+        ]
+        webapp.BOOTH_DEMO_EXPLANATIONS_PATH.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        payload = self.client.get("/api/booth-focus").get_json()
+        self.assertEqual(
+            [item["action"] for item in payload["decision"]["why_not_others"]],
+            ["OBSERVE", "NOTIFY", "REDIRECT", "ISOLATE"],
+        )
 
     def test_focus_reports_missing_decision_without_placeholder_cards(self) -> None:
         payload = self.client.get("/api/booth-focus").get_json()

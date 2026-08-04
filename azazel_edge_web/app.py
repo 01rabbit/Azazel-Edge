@@ -184,6 +184,11 @@ TRIAGE_AUDIT_FALLBACK_LOG = Path("/tmp/azazel-edge-triage-audit.jsonl")
 DECISION_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DECISION_EXPLANATIONS_PATH", "/var/log/azazel-edge/decision-explanations.jsonl"))
 BOOTH_DEMO_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DEMO_EXPLANATIONS_PATH", "/tmp/azazel-edge-demo-explanations.jsonl"))
 BOOTH_INPUT_PROVENANCE_PATH = Path(os.environ.get("AZAZEL_BOOTH_INPUT_PROVENANCE_PATH", "/run/azazel-edge/booth-input.json"))
+# Booth Focus reads both the live snapshot vocabulary (SAFE/HEALTHY) and the
+# evaluator vocabulary a deterministic replay emits (good/low).  Keep these in
+# sync with OK_NOC / OK_SOC in static/booth_focus.js.
+BOOTH_OK_NOC = {"HEALTHY", "NORMAL", "SAFE", "OK", "GOOD"}
+BOOTH_OK_SOC = {"QUIET", "SAFE", "NORMAL", "OK", "LOW"}
 TOPOLITE_SEED_MODE_PATH = Path(os.environ.get("AZAZEL_TOPOLITE_SEED_MODE_PATH", "/run/azazel-edge/topolite_seed_mode.json"))
 SOT_AUDIT_LOG = Path(os.environ.get("AZAZEL_SOT_AUDIT_LOG", "/var/log/azazel-edge/sot-events.jsonl"))
 TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge/triage-sessions"))
@@ -4933,7 +4938,7 @@ def _booth_focus_payload() -> Dict[str, Any]:
     why_not = [
         {"action": str(item.get("action") or "").upper(), "reason": str(item.get("reason") or "")}
         for item in rejected if isinstance(item, dict) and str(item.get("action") or "")
-    ][:3]
+    ][:4]
     evidence = [str(item) for item in (record.get("evidence_ids") or []) if str(item)][:4]
     execution = state.get("execution") if isinstance(state.get("execution"), dict) else {}
     is_replay = record_kind == "deterministic_replay" or str(execution.get("mode") or "") == "deterministic_replay"
@@ -4946,19 +4951,26 @@ def _booth_focus_payload() -> Dict[str, Any]:
     network_health = state.get("network_health") if isinstance(state.get("network_health"), dict) else {}
     second_pass = state.get("second_pass") if isinstance(state.get("second_pass"), dict) else {}
     snapshot_soc = second_pass.get("soc") if isinstance(second_pass.get("soc"), dict) else {}
-    snapshot_noc = str(network_health.get("status") or "").upper()
-    snapshot_soc_status = str(snapshot_soc.get("status") or "").upper()
-    if not snapshot_noc:
-        snapshot_noc = str(noc_summary.get("status") or why_chosen.get("noc_status") or "UNKNOWN").upper()
-    if not snapshot_soc_status:
-        suspicion = _as_int(internal.get("suspicion"), 0)
-        snapshot_soc_status = ("CRITICAL" if _as_int(state.get("suricata_critical"), 0) > 0 or suspicion >= 85 else "WATCH" if suspicion > 0 else str(soc_summary.get("status") or why_chosen.get("soc_status") or "UNKNOWN")).upper()
+    record_noc = str(noc_summary.get("status") or why_chosen.get("noc_status") or "").upper()
+    record_soc = str(soc_summary.get("status") or why_chosen.get("soc_status") or "").upper()
+    if is_replay:
+        # A replay is self-contained: its own evaluator output is the only honest
+        # source here.  The live snapshot describes a different (idle) pipeline,
+        # so preferring it would contradict the CLI output the presenter just read.
+        snapshot_noc = record_noc or "UNKNOWN"
+        snapshot_soc_status = record_soc or "UNKNOWN"
+    else:
+        snapshot_noc = str(network_health.get("status") or "").upper() or record_noc or "UNKNOWN"
+        snapshot_soc_status = str(snapshot_soc.get("status") or "").upper()
+        if not snapshot_soc_status:
+            suspicion = _as_int(internal.get("suspicion"), 0)
+            snapshot_soc_status = ("CRITICAL" if _as_int(state.get("suricata_critical"), 0) > 0 or suspicion >= 85 else "WATCH" if suspicion > 0 else record_soc or "UNKNOWN").upper()
     snapshot_age = _age_seconds(state.get("snapshot_epoch"))
     status_fresh = is_replay or (snapshot_age is not None and snapshot_age <= DASHBOARD_SNAPSHOT_STALE_SEC)
     mio_prompt = "Explain the current NOC/SOC state and the deterministic decision. Do not propose a decision change."
-    if snapshot_noc not in {"HEALTHY", "NORMAL", "SAFE", "OK"}:
+    if snapshot_noc not in BOOTH_OK_NOC:
         mio_prompt = "Why is the NOC state degraded, what should I verify next, and what evidence supports it? Do not change the decision."
-    elif snapshot_soc_status not in {"QUIET", "SAFE", "NORMAL", "OK"}:
+    elif snapshot_soc_status not in BOOTH_OK_SOC:
         mio_prompt = "What SOC evidence raised this state, and what should I verify next? Do not change the decision."
     return {
         "ok": True,
@@ -4997,7 +5009,7 @@ def _booth_focus_payload() -> Dict[str, Any]:
         "state": {"fresh": status_fresh, "snapshot_age_sec": snapshot_age},
         "mio": {
             "available": status_fresh,
-            "recommended": snapshot_noc not in {"HEALTHY", "NORMAL", "SAFE", "OK"} or snapshot_soc_status not in {"QUIET", "SAFE", "NORMAL", "OK"},
+            "recommended": snapshot_noc not in BOOTH_OK_NOC or snapshot_soc_status not in BOOTH_OK_SOC,
             "advisory_label": "M.I.O. ADVISORY — POST-DECISION ONLY",
             "url": f"/ops-comm?lang=en&audience=operator&message={quote(mio_prompt)}",
         },
