@@ -747,7 +747,20 @@ function seedHeaderClock(rawTime) {
     if (match) {
         now.setHours(Number(match[1]), Number(match[2]), Number(match[3]), 0);
     }
-    headerClockBaseMs = now.getTime();
+    const candidateMs = now.getTime();
+    // Never step the displayed clock backwards. Snapshots are cached for a few
+    // seconds server-side, so consecutive renders can carry the SAME (older)
+    // now_time; re-seeding from it used to rewind the clock by the elapsed
+    // interval on every render — the visible "clock jumps back" bug. Accept
+    // forward seeds, ignore backward ones (tolerating day-wrap).
+    if (headerClockBaseMs != null && headerClockSeedMs != null) {
+        const displayedMs = headerClockBaseMs + Math.max(0, Date.now() - headerClockSeedMs);
+        const rewindMs = displayedMs - candidateMs;
+        if (rewindMs > 0 && rewindMs < 6 * 3600 * 1000) {
+            return;
+        }
+    }
+    headerClockBaseMs = candidateMs;
     headerClockSeedMs = Date.now();
     renderHeaderClock();
 }
@@ -809,7 +822,37 @@ function updateTemporaryMission(actions) {
     updateGuidanceToggleSummary(doNotDo.length ? doNotDo.length : 1);
 }
 
+// Single-flight + ordering guards. The poll interval fires unconditionally, so
+// one slow cycle (e.g. /api/dashboard/evidence under load) used to overlap with
+// the next ones: dozens of concurrent request batches piled up (up to
+// net::ERR_INSUFFICIENT_RESOURCES), and cycles completed out of order, so an
+// OLDER snapshot rendered after a newer one — the board stalled for minutes and
+// the header clock visibly jumped backwards. Guard all three failure modes:
+// never start a cycle while one is in flight, bound each request with a
+// timeout, and never render a snapshot older than the last one shown.
+let refreshInFlight = false;
+let lastRenderedSnapshotEpoch = 0;
+const REQUEST_TIMEOUT_MS = 8000;
+
+function requestTimeoutSignal() {
+    try {
+        return AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    } catch (e) {
+        return undefined; // very old browser: no timeout, previous behavior
+    }
+}
+
 async function refreshDashboard() {
+    if (refreshInFlight) return;
+    refreshInFlight = true;
+    try {
+        await refreshDashboardOnce();
+    } finally {
+        refreshInFlight = false;
+    }
+}
+
+async function refreshDashboardOnce() {
     fetchAggregatorStatus();
     const progressSessionId = ensureProgressSessionId();
     const actionsUrl = new URL('/api/dashboard/actions', window.location.origin);
@@ -836,7 +879,7 @@ async function refreshDashboard() {
     const resolved = await Promise.all(
         requests.map(async ([name, path, required]) => {
             try {
-                const data = await fetchJson(path);
+                const data = await fetchJson(path, { signal: requestTimeoutSignal() });
                 return [name, { ok: true, data, required }];
             } catch (error) {
                 return [name, { ok: false, error: error.message || String(error), required }];
@@ -864,6 +907,17 @@ async function refreshDashboard() {
             showToast(tr('dashboard.refresh_failed', 'Dashboard refresh failed: {error}', { error: hardFailures.join(' | ') }), 'error');
         }
         return;
+    }
+
+    // Ordering guard: even with the single-flight gate, never let an older
+    // control-plane snapshot overwrite a newer one on screen (this is what made
+    // the header clock jump backwards). snapshot_epoch is wall-clock seconds.
+    const incomingSnapshotEpoch = Number(resultMap.state?.data?.snapshot_epoch || 0);
+    if (incomingSnapshotEpoch && incomingSnapshotEpoch < lastRenderedSnapshotEpoch) {
+        return;
+    }
+    if (incomingSnapshotEpoch) {
+        lastRenderedSnapshotEpoch = incomingSnapshotEpoch;
     }
 
     const summary = resultMap.summary?.data || {};
