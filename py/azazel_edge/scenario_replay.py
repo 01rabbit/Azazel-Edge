@@ -255,9 +255,24 @@ class ScenarioReplayPack:
                     'attack_label': 'Baseline / Normal',
                     'default_hold_sec': 6,
                 },
+                'sot': {
+                    'devices': [
+                        {'ip': '192.168.50.21', 'mac': '02:00:5e:50:00:21', 'name': 'shelter-client-a'},
+                        {'ip': '192.168.50.22', 'mac': '02:00:5e:50:00:22', 'name': 'shelter-client-b'},
+                    ],
+                    'networks': [{'cidr': '192.168.50.0/24', 'name': 'shelter-lan'}],
+                },
                 'events': [
                     {'event_id': 'sh-b1', 'source': 'noc_probe', 'kind': 'icmp_probe', 'subject': '192.168.50.1', 'severity': 0, 'confidence': 0.95, 'attrs': {'reachable': True}},
-                    {'event_id': 'sh-b2', 'source': 'noc_probe', 'kind': 'service_health', 'subject': 'dns', 'severity': 0, 'confidence': 0.90, 'attrs': {'service': 'dns', 'state': 'healthy'}},
+                    # 'state' is matched against 'ON' by the availability evaluator;
+                    # 'healthy' scored as service_off and kept the baseline degraded.
+                    {'event_id': 'sh-b2', 'source': 'noc_probe', 'kind': 'service_health', 'subject': 'dns', 'severity': 0, 'confidence': 0.90, 'attrs': {'target': 'dns', 'state': 'ON', 'substate': 'running', 'result': 'success'}},
+                    # DHCP and ARP agree with each other and with the inventory
+                    # above, so client_health has real evidence to score good.
+                    {'event_id': 'sh-b3', 'source': 'noc_inventory', 'kind': 'dhcp_lease', 'subject': '192.168.50.21', 'severity': 0, 'confidence': 0.95, 'attrs': {'ip': '192.168.50.21', 'mac': '02:00:5e:50:00:21'}},
+                    {'event_id': 'sh-b4', 'source': 'noc_inventory', 'kind': 'dhcp_lease', 'subject': '192.168.50.22', 'severity': 0, 'confidence': 0.95, 'attrs': {'ip': '192.168.50.22', 'mac': '02:00:5e:50:00:22'}},
+                    {'event_id': 'sh-b5', 'source': 'noc_inventory', 'kind': 'arp_entry', 'subject': '192.168.50.21', 'severity': 0, 'confidence': 0.95, 'attrs': {'ip': '192.168.50.21', 'mac': '02:00:5e:50:00:21', 'state': 'REACHABLE'}},
+                    {'event_id': 'sh-b6', 'source': 'noc_inventory', 'kind': 'arp_entry', 'subject': '192.168.50.22', 'severity': 0, 'confidence': 0.95, 'attrs': {'ip': '192.168.50.22', 'mac': '02:00:5e:50:00:22', 'state': 'REACHABLE'}},
                 ],
             },
             'shelter_scan_detect_demo': {
@@ -471,7 +486,12 @@ class ScenarioReplayRunner:
             raise KeyError(f'unknown_scenario:{scenario_id}')
         trace_id = f'demo:{scenario_id}'
         events = scenario.get('events', [])
-        noc_eval = self.noc.evaluate(events)
+        # A scenario may carry its own source-of-truth inventory. Without one the
+        # NOC evaluator enters degraded_mode ('sot_missing'), which is correct for
+        # scenarios that deliberately have no inventory but hides a genuine
+        # all-good baseline.
+        sot = scenario.get('sot')
+        noc_eval = self.noc.evaluate(events, sot=sot if isinstance(sot, dict) else None)
         soc_eval = self.soc.evaluate(events)
         runbook_support = select_noc_runbook_support(noc_eval, audience='professional', lang='en')
         client_impact = {'score': 0, 'affected_client_count': 0, 'critical_client_count': 0}

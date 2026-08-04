@@ -91,6 +91,38 @@ bin/azazel-edge-audit-review \
   --compact
 ```
 
+## Replay on screen (`/booth-focus`)
+
+The full dashboard (`/`) reads live pipeline state and **never** reacts to a
+replay — the replay is offline and in-process. The screen that projects a replay
+is `/booth-focus`, which renders the newest decision explanation on disk.
+
+Order matters. `azazel-edge-devstack reset` deletes
+`/tmp/azazel-edge-demo-*.jsonl`, so a replay run before a reset leaves the view
+empty:
+
+```bash
+bin/azazel-edge-devstack reset
+bin/azazel-edge-scenario-replay run shelter_baseline_demo
+open "http://127.0.0.1:8084/booth-focus?token=$(tr -d '[:space:]' < ~/.azazel-edge-dev/web_token.txt)"
+```
+
+- [ ] `/booth-focus` is open on the booth screen, not `/`
+- [ ] the replay was run **after** the last `devstack reset`
+- [ ] the banner reads `DETERMINISTIC REPLAY — LOCAL / OFFLINE`
+- [ ] NOC/SOC on screen match the CLI output (the view reads the replay record,
+      not the live snapshot)
+
+Baseline-then-threat pairing for the walkthrough:
+
+```bash
+bin/azazel-edge-scenario-replay run shelter_baseline_demo   # GOOD / LOW  -> OBSERVE
+bin/azazel-edge-scenario-replay run mixed_correlation_demo  # DEGRADED / CRITICAL -> THROTTLE
+```
+
+`shelter_baseline_demo` is the only all-good posture in the pack; every other
+scenario carries a NOC or SOC signal by design.
+
 ## Audit review checklist
 
 - [ ] compact review shows `schema:OK`
