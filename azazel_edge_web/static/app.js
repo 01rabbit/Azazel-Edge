@@ -9,8 +9,6 @@ const I18N = window.AZAZEL_I18N || {};
 const CURRENT_PAGE = document.body?.dataset?.page || 'dashboard';
 
 let dashboardTimer = null;
-let stateStream = null;
-let lastStreamRefreshMs = 0;
 let currentAudience = resolveInitialAudience();
 let latestState = {};
 let latestSummary = {};
@@ -408,34 +406,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // (throttled) tick.
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshDashboard(); });
     window.addEventListener('focus', refreshDashboard);
-    // Real-time server push (SSE). The setInterval poll above is throttled hard
-    // by the browser in unfocused/background windows, so during a demo the board
-    // can stall for minutes while the operator drives commands from a terminal.
-    // The server already streams control-plane snapshots at /api/state/stream;
-    // subscribing refreshes the board on each pushed change. SSE delivery is
-    // network-driven, not timer-driven, so it is NOT subject to background-timer
-    // throttling — the board updates without any click or focus. Debounced so a
-    // ~1s push cadence doesn't multiply fetch load on the single dev web worker.
-    // The interval + focus listeners above remain as a fallback if SSE drops.
-    if (AUTH_TOKEN) {
-        try {
-            stateStream = new EventSource('/api/state/stream?token=' + encodeURIComponent(AUTH_TOKEN));
-            stateStream.addEventListener('state', () => {
-                const now = Date.now();
-                if (now - lastStreamRefreshMs < 2000) return;
-                lastStreamRefreshMs = now;
-                refreshDashboard();
-            });
-        } catch (e) { /* SSE unavailable: poll + focus fallback remains */ }
-    }
 });
 
 window.addEventListener('beforeunload', () => {
     if (dashboardTimer) {
         clearInterval(dashboardTimer);
-    }
-    if (stateStream) {
-        try { stateStream.close(); } catch (e) { /* ignore */ }
     }
     if (headerClockTimer) {
         clearInterval(headerClockTimer);
