@@ -398,6 +398,14 @@ document.addEventListener('DOMContentLoaded', () => {
     setAudience(currentAudience);
     refreshDashboard();
     dashboardTimer = window.setInterval(refreshDashboard, POLL_INTERVAL_MS);
+    // Chromium/Brave throttle setInterval in unfocused or backgrounded windows,
+    // so a side-by-side dashboard can lag minutes behind the backend while the
+    // operator drives commands from a terminal. Force an immediate refresh the
+    // moment the page regains focus or visibility, so clicking the dashboard
+    // shows the current control-plane state at once instead of on the next
+    // (throttled) tick.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshDashboard(); });
+    window.addEventListener('focus', refreshDashboard);
 });
 
 window.addEventListener('beforeunload', () => {
