@@ -235,7 +235,7 @@ class ScenarioReplayPack:
                     },
                 },
                 'events': [
-                    {'event_id': 'noc-e1', 'source': 'noc_probe', 'kind': 'service_health', 'subject': 'dhcp', 'severity': 75, 'confidence': 0.90, 'attrs': {'service': 'dhcp', 'state': 'degraded'}},
+                    {'event_id': 'noc-e1', 'source': 'noc_probe', 'kind': 'service_health', 'subject': 'dhcp', 'severity': 75, 'confidence': 0.90, 'attrs': {'target': 'dhcp', 'state': 'ON', 'substate': 'degraded', 'result': 'success'}},
                     {'event_id': 'soc-e1', 'source': 'suricata_eve', 'kind': 'alert', 'subject': 'arp-gateway', 'severity': 80, 'confidence': 0.86, 'attrs': {'sid': 9901211, 'attack_type': 'arp spoof', 'category': 'bad-unknown', 'target_port': 0, 'risk_score': 80, 'confidence_raw': 86, 'src_ip': '10.0.0.77', 'dst_ip': '192.168.40.1'}},
                     {'event_id': 'noc-e2', 'source': 'noc_probe', 'kind': 'dhcp_leases', 'subject': 'lease-pool', 'severity': 68, 'confidence': 0.82, 'attrs': {'lease_failures': 15, 'pool_utilization': 95}},
                 ],
@@ -336,7 +336,7 @@ class ScenarioReplayPack:
                     'default_hold_sec': 6,
                 },
                 'events': [
-                    {'event_id': 'sh-h1', 'source': 'noc_probe', 'kind': 'service_health', 'subject': 'internet-uplink', 'severity': 62, 'confidence': 0.85, 'attrs': {'service': 'uplink', 'state': 'degraded'}},
+                    {'event_id': 'sh-h1', 'source': 'noc_probe', 'kind': 'service_health', 'subject': 'internet-uplink', 'severity': 62, 'confidence': 0.85, 'attrs': {'target': 'internet-uplink', 'state': 'ON', 'substate': 'degraded', 'result': 'success'}},
                     {'event_id': 'sh-h2', 'source': 'suricata_eve', 'kind': 'alert', 'subject': '10.0.0.45->192.168.50.50:80/TCP', 'severity': 70, 'confidence': 0.78, 'attrs': {'sid': 220500, 'attack_type': 'suspicious web access', 'category': 'Potentially Bad Traffic', 'target_port': 80, 'risk_score': 70, 'confidence_raw': 78, 'src_ip': '10.0.0.45', 'dst_ip': '192.168.50.50'}},
                 ],
             },
