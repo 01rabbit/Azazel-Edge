@@ -1023,7 +1023,10 @@ async function fetchAggregatorStatus() {
 
 async function fetchJson(path, options = {}) {
     const headers = Object.assign({}, options.headers || {}, { 'X-Auth-Token': AUTH_TOKEN, 'X-AZAZEL-LANG': CURRENT_LANG });
-    const response = await fetch(path, { ...options, headers });
+    // Never let the browser serve a cached snapshot of live dashboard state:
+    // Brave/Chromium otherwise replay a stale /api/state for minutes, freezing
+    // the board and rewinding the header clock. Force a fresh network fetch.
+    const response = await fetch(path, { cache: 'no-store', ...options, headers });
     const payload = await response.json();
     if (!response.ok || payload.ok === false) {
         throw new Error(payload.error || `Request failed: ${path}`);
