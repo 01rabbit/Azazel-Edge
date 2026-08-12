@@ -4,9 +4,9 @@
 # deception shadow/replay boundary. Without it, Fabric integrations remain
 # optional and baseline Edge behavior is unchanged.
 #
-# This exact commit is the current development contract baseline for AZ-06.
-# Replace it with an exact tagged v0.5.x release after Azazel-Fabric#9 is
-# released; never follow a branch from a field deployment.
+# This exact commit is the current development contract + shared golden-fixture
+# baseline for AZ-06. Replace it with an exact tagged v0.5.x release after
+# Azazel-Fabric#9 is released; never follow a branch from a field deployment.
 #
 # Import namespace: azazel_fabric.
-azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@c6534df82e0f2f5ebb5b08377643c2c145550f13
+azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@46aa07ad7810006527371f3de30928d02c539937
