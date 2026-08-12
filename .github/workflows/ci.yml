@@ -42,6 +42,9 @@ jobs:
           . .venv/bin/activate
           pip install -U pip wheel setuptools
           pip install -r requirements/runtime.txt
+          # Fabric remains optional at runtime, but CI installs the exact pin so
+          # AZ-06 shadow/replay contract integration is exercised on every change.
+          pip install -r requirements/fabric.txt
           pip install pytest
 
       - name: Normalize local tooling permissions
