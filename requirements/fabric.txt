@@ -1,14 +1,12 @@
 # Azazel-Fabric shared contracts — OPTIONAL integration extra.
 #
-# Installing this file activates Edge's Fabric projections (DecisionExplanation /
-# TrustCapsule / AuditEvent emit-alongside streams and the StatusView emit +
-# /api/state read-back). Without it every integration point is a guarded no-op
-# and Edge behaves identically.
+# Installing this file activates Edge's Fabric projections and the AZ-06
+# deception shadow/replay boundary. Without it, Fabric integrations remain
+# optional and baseline Edge behavior is unchanged.
 #
-# The Azazel-Fabric repository is private: resolving this pin requires an
-# environment with GitHub credentials for 01rabbit/Azazel-Fabric (developer
-# machine, provisioned appliance). CI intentionally does not install this file.
+# This exact commit is the current development contract baseline for AZ-06.
+# Replace it with an exact tagged v0.5.x release after Azazel-Fabric#9 is
+# released; never follow a branch from a field deployment.
 #
-# Import namespace: azazel_fabric. Tag-pinned per Azazel-Fabric
-# design-principles.md §6.
-azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.4.0
+# Import namespace: azazel_fabric.
+azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@c6534df82e0f2f5ebb5b08377643c2c145550f13
