@@ -297,7 +297,9 @@ def _request_lang() -> str:
     query_lang = request.args.get("lang") if has_request_context() else ""
     header_lang = request.headers.get("X-AZAZEL-LANG") if has_request_context() else ""
     cookie_lang = request.cookies.get("azazel_lang") if has_request_context() else ""
-    return normalize_lang(query_lang or header_lang or cookie_lang or "ja")
+    # WebUI baseline language is English; Japanese (and the partial captive
+    # catalogs) stay available via explicit ?lang= / header / cookie choice.
+    return normalize_lang(query_lang or header_lang or cookie_lang or "en")
 
 
 def _tr(key: str, default: str | None = None, **kwargs: Any) -> str:

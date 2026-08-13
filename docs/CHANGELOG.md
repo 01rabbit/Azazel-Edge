@@ -16,6 +16,16 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   server-side instead of once per endpoint. Per-panel endpoints unchanged;
   documented in `docs/API_REFERENCE.md`.
 
+### Changed
+
+- WebUI baseline language is now English: with no explicit `?lang=` /
+  `X-AZAZEL-LANG` header / `azazel_lang` cookie / saved browser choice, pages
+  render in English (`Content-Language: en`). Japanese remains fully available
+  via the existing 日本語/English toggle, and an explicit or previously saved
+  choice always wins. Aligns the UI with the repository language policy
+  (English default, Japanese supplemental). Non-web surfaces (notifications,
+  runbook wording defaults) are unchanged.
+
 ### Removed
 
 - Dashboard audience split (Beginner/Professional toggle): the Simple view

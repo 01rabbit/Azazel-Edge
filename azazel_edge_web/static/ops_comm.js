@@ -1,7 +1,7 @@
 const AUTH_TOKEN = String(localStorage.getItem('azazel_token') || '').trim();
 const LANG_KEY = 'azazel_lang';
 const PROGRESS_SESSION_KEY = 'azazel_operator_progress_session';
-const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
+const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'en';
 const I18N = window.AZAZEL_I18N || {};
 const STATUS_INTERVAL_MS = 8000;
 let lastQuestion = '';

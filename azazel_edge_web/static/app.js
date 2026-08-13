@@ -5,7 +5,7 @@ const ONBOARDING_DISMISSED_KEY = 'azazel_dashboard_onboarding_v3_dismissed';
 const FOLD_STATE_KEY = 'azazel_dashboard_folds_v1';
 const WORKSPACE_KEY = 'azazel_dashboard_workspace';
 const POLL_INTERVAL_MS = Number(window.AZAZEL_POLL_MS) > 0 ? Number(window.AZAZEL_POLL_MS) : 4000;
-const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
+const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'en';
 const I18N = window.AZAZEL_I18N || {};
 const CURRENT_PAGE = document.body?.dataset?.page || 'dashboard';
 
