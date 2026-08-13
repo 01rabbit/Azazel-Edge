@@ -83,6 +83,187 @@ body[data-audience="professional"] .temp-only {
     display: none !important;
 }
 
+/* Workspace axis (docs/architecture/socnoc-workspace-design.md): professional
+   audience only — Temporary mode keeps its single simplified flow. .soc-scope
+   blocks vanish in the NOC workspace and vice versa; unscoped blocks are
+   shared. Panel order is re-composed per domain so each workspace leads with
+   its primary objects (5-second rule: most important content top-left). */
+body[data-audience="professional"][data-workspace="noc"] .soc-scope {
+    display: none !important;
+}
+
+body[data-audience="professional"][data-workspace="soc"] .noc-scope {
+    display: none !important;
+}
+
+body[data-audience="professional"][data-workspace="noc"] .dashboard-shell,
+body[data-audience="professional"][data-workspace="soc"] .dashboard-shell {
+    display: flex;
+    flex-direction: column;
+}
+
+/* NOC: glance -> who is affected -> path/service boards -> runtime -> fleet */
+body[data-audience="professional"][data-workspace="noc"] .synthetic-mode-banner { order: 0; }
+body[data-audience="professional"][data-workspace="noc"] .onboarding-banner { order: 1; }
+body[data-audience="professional"][data-workspace="noc"] #commandStripPanel { order: 2; }
+body[data-audience="professional"][data-workspace="noc"] #clientIdentityPanel { order: 3; }
+body[data-audience="professional"][data-workspace="noc"] .board-layout { order: 4; }
+body[data-audience="professional"][data-workspace="noc"] #resourceGuardPanel { order: 5; }
+body[data-audience="professional"][data-workspace="noc"] #aggregatorPanel { order: 6; }
+body[data-audience="professional"][data-workspace="noc"] #topoliteSingleScreen { order: 7; }
+body[data-audience="professional"][data-workspace="noc"] #missionPanel { order: 8; }
+body[data-audience="professional"][data-workspace="noc"] .temporary-mission-panel { order: 9; }
+
+/* Simple workspace: three verdict tiles (Overall / SOC / NOC), available in
+   BOTH audiences and the default landing view. Everything else in the shell
+   is hidden except the synthetic-data warning banner (safety requirement). */
+.simple-view {
+    display: none;
+}
+
+body[data-workspace="simple"] .simple-view {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+body[data-workspace="simple"] .dashboard-shell > :not(.simple-view):not(.synthetic-mode-banner) {
+    display: none !important;
+}
+
+body[data-workspace="simple"] .section-nav,
+body[data-workspace="simple"] .back-to-top {
+    display: none !important;
+}
+
+.simple-tile {
+    appearance: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 26px 30px 44px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--line-soft);
+    border-left: 6px solid var(--accent-steel);
+    background: var(--bg-panel);
+    box-shadow: var(--shadow-sm);
+}
+
+.simple-tile:hover {
+    border-color: var(--line-strong);
+    border-left-width: 6px;
+}
+
+.simple-kicker {
+    font-size: 0.78rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+}
+
+.simple-verdict {
+    font-size: 3.4rem;
+    font-weight: 700;
+    line-height: 1.05;
+}
+
+.simple-overall .simple-verdict {
+    font-size: 4.4rem;
+}
+
+.simple-reason {
+    color: var(--text-dim);
+    font-size: 1.05rem;
+    line-height: 1.5;
+}
+
+.simple-action {
+    margin-top: 8px;
+    font-size: 1.02rem;
+}
+
+.simple-action-label {
+    color: var(--accent-cyan);
+    margin-right: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.82rem;
+}
+
+.simple-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.simple-chip {
+    border: 1px solid var(--line-soft);
+    border-radius: 999px;
+    padding: 5px 13px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+
+.simple-chip.status-safe { color: var(--accent-green); border-color: rgba(127, 211, 155, 0.35); }
+.simple-chip.status-caution { color: var(--accent-amber); border-color: rgba(224, 164, 88, 0.4); }
+.simple-chip.status-danger { color: var(--accent-red); border-color: rgba(228, 109, 93, 0.45); }
+
+.simple-drill {
+    position: absolute;
+    right: 26px;
+    bottom: 16px;
+    color: var(--text-soft);
+    font-size: 0.85rem;
+}
+
+.simple-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.simple-tile.status-safe { border-left-color: var(--accent-green); }
+.simple-tile.status-safe .simple-verdict { color: var(--accent-green); }
+.simple-tile.status-caution { border-left-color: var(--accent-amber); }
+.simple-tile.status-caution .simple-verdict { color: var(--accent-amber); }
+.simple-tile.status-danger { border-left-color: var(--accent-red); }
+.simple-tile.status-danger .simple-verdict { color: var(--accent-red); }
+.simple-tile.status-neutral { border-left-color: var(--accent-steel); }
+.simple-tile.status-neutral .simple-verdict { color: var(--text-soft); }
+
+@media (max-width: 900px) {
+    .simple-row {
+        grid-template-columns: 1fr;
+    }
+
+    .simple-verdict {
+        font-size: 2.6rem;
+    }
+
+    .simple-overall .simple-verdict {
+        font-size: 3.2rem;
+    }
+}
+
+/* SOC: glance -> posture/split/action -> evidence & timeline -> topology */
+body[data-audience="professional"][data-workspace="soc"] .synthetic-mode-banner { order: 0; }
+body[data-audience="professional"][data-workspace="soc"] .onboarding-banner { order: 1; }
+body[data-audience="professional"][data-workspace="soc"] #commandStripPanel { order: 2; }
+body[data-audience="professional"][data-workspace="soc"] .board-layout { order: 3; }
+body[data-audience="professional"][data-workspace="soc"] #evidencePanel { order: 4; }
+body[data-audience="professional"][data-workspace="soc"] #topoliteSingleScreen { order: 5; }
+body[data-audience="professional"][data-workspace="soc"] #missionPanel { order: 6; }
+body[data-audience="professional"][data-workspace="soc"] #clientIdentityPanel { order: 7; }
+body[data-audience="professional"][data-workspace="soc"] #resourceGuardPanel { order: 8; }
+body[data-audience="professional"][data-workspace="soc"] .temporary-mission-panel { order: 9; }
+body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { order: 10; }
+
 .topbar {
     position: sticky;
     top: 0;
@@ -129,7 +310,12 @@ body[data-audience="professional"] .temp-only {
 .topbar-controls {
     display: flex;
     align-items: flex-start;
-    gap: 18px;
+    /* The controls row (language + audience + workspace + links + meta) is
+       wider than one row on most screens — wrap instead of crushing the meta
+       chips into a single narrow column. */
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 12px 18px;
 }
 
 .audience-toggle {
@@ -218,6 +404,109 @@ body[data-audience="professional"] .temp-only {
     display: block;
     font-family: var(--font-mono);
     color: var(--text-main);
+}
+
+/* Freshness chip: amber once the last successful poll is several intervals old */
+#freshnessChip.status-caution { border-color: rgba(224, 164, 88, 0.34); }
+#freshnessChip.status-caution strong { color: var(--accent-amber); }
+
+.meta-actions {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+}
+
+.meta-action-btn {
+    appearance: none;
+    cursor: pointer;
+    min-width: 44px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.045);
+    border: 1px solid var(--line-soft);
+    color: var(--text-main);
+    font: inherit;
+    font-size: 1.05rem;
+    line-height: 1;
+}
+
+.meta-action-btn:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.meta-action-btn.active {
+    border-color: rgba(224, 164, 88, 0.45);
+    color: var(--accent-amber);
+    background: rgba(224, 164, 88, 0.12);
+}
+
+.meta-action-btn.meta-action-busy {
+    animation: az-refresh-spin 0.9s linear infinite;
+}
+
+@keyframes az-refresh-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Sticky section navigation (part of the .topbar-attn-stack sticky context) */
+.section-nav {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    overflow-x: auto;
+    padding: 8px 32px;
+    background: rgba(10, 15, 20, 0.86);
+    backdrop-filter: blur(18px);
+    border-bottom: 1px solid var(--line-soft);
+    scrollbar-width: thin;
+}
+
+.section-nav-link {
+    flex: 0 0 auto;
+    text-decoration: none;
+    color: var(--text-dim);
+    border: 1px solid transparent;
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    letter-spacing: 0.04em;
+}
+
+.section-nav-link:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.section-nav-link.active {
+    color: var(--text-main);
+    border-color: rgba(116, 212, 255, 0.4);
+    background: rgba(116, 212, 255, 0.12);
+}
+
+/* Anchor jumps must land below the sticky topbar + section nav; the JS keeps
+   --az-sticky-offset in sync with the measured stack height. */
+.dashboard-shell section[id] {
+    scroll-margin-top: var(--az-sticky-offset, 190px);
+}
+
+.back-to-top {
+    position: fixed;
+    right: 22px;
+    bottom: 22px;
+    z-index: 60;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    background: var(--bg-panel-strong);
+    color: var(--text-main);
+    font-size: 1.2rem;
+    cursor: pointer;
+    box-shadow: var(--shadow-sm);
+}
+
+.back-to-top:hover {
+    background: rgba(116, 212, 255, 0.16);
 }
 
 .dashboard-shell {
@@ -1108,27 +1397,6 @@ body[data-audience="professional"] .temp-only {
 .evidence-board,
 .assistant-panel {
     padding: 22px 24px 24px;
-}
-
-.topolite-nav-panel {
-    padding: 22px 24px 24px;
-    margin-bottom: 14px;
-}
-
-.topolite-nav-links {
-    display: grid;
-    gap: 8px;
-    margin-top: 10px;
-}
-
-.topolite-nav-link {
-    display: block;
-    text-decoration: none;
-    color: var(--text-main);
-    border: 1px solid var(--line-soft);
-    border-radius: 10px;
-    padding: 8px 10px;
-    background: rgba(255, 255, 255, 0.04);
 }
 
 .topolite-single-screen {
@@ -2318,6 +2586,50 @@ body[data-audience="professional"] .temp-only {
     font-size: 0.94rem;
 }
 
+/* Evidence keyword filter (Evidence & Timeline panel heading) */
+.evidence-filter-input {
+    appearance: none;
+    font: inherit;
+    font-size: 0.9rem;
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--line-soft);
+    border-radius: 999px;
+    padding: 8px 14px;
+    min-width: 220px;
+}
+
+.evidence-filter-input:focus {
+    outline: none;
+    border-color: rgba(116, 212, 255, 0.45);
+}
+
+.evidence-filter-input::placeholder {
+    color: var(--text-soft);
+}
+
+/* "+N more" expander appended by paintTimeline when rows exceed the cap */
+.timeline-more {
+    padding: 8px 0;
+}
+
+.timeline-more-btn {
+    appearance: none;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.85rem;
+    color: var(--accent-cyan);
+    background: transparent;
+    border: 1px dashed var(--line-soft);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    width: 100%;
+}
+
+.timeline-more-btn:hover {
+    background: rgba(116, 212, 255, 0.08);
+}
+
 .status-safe { color: var(--accent-green); }
 .status-caution { color: var(--accent-amber); }
 .status-danger { color: var(--accent-red); }
@@ -2451,6 +2763,7 @@ body[data-audience="professional"] .temp-only {
         transition: none !important;
     }
     .risk-score { transition: none !important; }
+    .meta-action-btn.meta-action-busy { animation: none !important; }
 }
 
 /* Boot/offline placeholder clarity (Issue #300 item 5) */
@@ -2565,6 +2878,15 @@ body[data-audience="professional"] .temp-only {
 
     .topbar-meta {
         flex-wrap: wrap;
+    }
+
+    .section-nav {
+        padding: 8px 16px;
+    }
+
+    .evidence-filter-input {
+        min-width: 0;
+        width: 100%;
     }
 
     .situation-grid,

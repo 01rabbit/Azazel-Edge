@@ -3,6 +3,8 @@ const AUDIENCE_KEY = 'azazel_dashboard_audience';
 const LANG_KEY = 'azazel_lang';
 const PROGRESS_SESSION_KEY = 'azazel_operator_progress_session';
 const ONBOARDING_DISMISSED_KEY = 'azazel_dashboard_onboarding_v3_dismissed';
+const FOLD_STATE_KEY = 'azazel_dashboard_folds_v1';
+const WORKSPACE_KEY = 'azazel_dashboard_workspace';
 const POLL_INTERVAL_MS = Number(window.AZAZEL_POLL_MS) > 0 ? Number(window.AZAZEL_POLL_MS) : 4000;
 const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
 const I18N = window.AZAZEL_I18N || {};
@@ -10,6 +12,7 @@ const CURRENT_PAGE = document.body?.dataset?.page || 'dashboard';
 
 let dashboardTimer = null;
 let currentAudience = resolveInitialAudience();
+let currentWorkspace = resolveInitialWorkspace();
 let latestState = {};
 let latestSummary = {};
 let latestMattermost = {};
@@ -23,6 +26,24 @@ let headerClockSeedMs = null;
 let currentProgress = {};
 let currentHandoff = {};
 let onboardingStepIndex = 0;
+let pollingPaused = false;
+
+// Evidence timeline filter + show-more state. Timeline renders keep their full
+// row set here so the filter and the "+N more" expanders can repaint without
+// waiting for the next poll.
+let evidenceFilterText = '';
+const timelineLastRows = new Map(); // timeline element id -> { rows, maxVisible }
+const timelineExpanded = new Set(); // timeline element ids the operator expanded
+const EVIDENCE_FILTER_IDS = new Set([
+    'alertQueuesTimeline',
+    'dashboardTrendsTimeline',
+    'topoliteSyntheticTopology',
+    'currentTriggersTimeline',
+    'decisionChangesTimeline',
+    'operatorInteractionsTimeline',
+    'backgroundHistoryTimeline',
+    'triageAuditTimeline',
+]);
 
 // az-attn: status-transition attention system (Issue #300, item 1)
 const AZ_ATTN_DANGER_MS = 5000;   // must equal CSS .az-attn-pulse-danger animation-duration
@@ -139,6 +160,49 @@ function resolveInitialAudience() {
     return queryAudience || savedAudience || 'temporary';
 }
 
+// Workspace axis (docs/architecture/socnoc-workspace-design.md): orthogonal to
+// the audience axis. 'all' keeps the classic combined board; 'noc'/'soc'
+// reorder the panels around that domain's primary objects and hide the other
+// domain's detail-only blocks. Professional audience only — the CSS gate
+// requires data-audience="professional", so Temporary mode is unaffected.
+function normalizeWorkspace(value) {
+    const text = String(value || '').trim().toLowerCase();
+    return ['simple', 'all', 'noc', 'soc'].includes(text) ? text : '';
+}
+
+function resolveInitialWorkspace() {
+    const url = new URL(window.location.href);
+    const queryWorkspace = normalizeWorkspace(url.searchParams.get('workspace'));
+    const savedWorkspace = normalizeWorkspace(localStorage.getItem(WORKSPACE_KEY));
+    return queryWorkspace || savedWorkspace || 'simple';
+}
+
+// Fold ids opened by default per workspace. Applied only when the operator has
+// never explicitly toggled that fold — explicit choices are persisted by the
+// fold-state mechanism and always win.
+const WORKSPACE_FOLD_DEFAULTS = {
+    soc: ['splitBoardDetails', 'evidenceTimelineDetails'],
+    noc: ['splitBoardDetails', 'clientIdentityDetails'],
+};
+
+function setWorkspace(workspace) {
+    currentWorkspace = normalizeWorkspace(workspace) || 'simple';
+    localStorage.setItem(WORKSPACE_KEY, currentWorkspace);
+    document.body.dataset.workspace = currentWorkspace;
+    [['workspaceSimpleBtn', 'simple'], ['workspaceAllBtn', 'all'], ['workspaceNocBtn', 'noc'], ['workspaceSocBtn', 'soc']].forEach(([id, ws]) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.classList.toggle('active', currentWorkspace === ws);
+        btn.setAttribute('aria-pressed', currentWorkspace === ws ? 'true' : 'false');
+    });
+    const saved = readFoldState();
+    (WORKSPACE_FOLD_DEFAULTS[currentWorkspace] || []).forEach((foldId) => {
+        if (Object.prototype.hasOwnProperty.call(saved, foldId)) return;
+        const details = document.getElementById(foldId);
+        if (details) details.open = true;
+    });
+}
+
 function authHeaders() {
     const headers = {
         'Content-Type': 'application/json',
@@ -192,11 +256,13 @@ function syncLanguageUi() {
         jaBtn.classList.toggle('active', CURRENT_LANG === 'ja');
         jaBtn.classList.toggle('lang-active-ja', CURRENT_LANG === 'ja');
         jaBtn.classList.remove('lang-active-en');
+        jaBtn.setAttribute('aria-pressed', CURRENT_LANG === 'ja' ? 'true' : 'false');
     }
     if (enBtn) {
         enBtn.classList.toggle('active', CURRENT_LANG === 'en');
         enBtn.classList.toggle('lang-active-en', CURRENT_LANG === 'en');
         enBtn.classList.remove('lang-active-ja');
+        enBtn.setAttribute('aria-pressed', CURRENT_LANG === 'en' ? 'true' : 'false');
     }
 }
 
@@ -216,7 +282,9 @@ function updateSyntheticModeBanner(summary, evidence) {
     }
     const toggle = document.getElementById('topoliteSyntheticToggleBtn');
     if (toggle) {
-        toggle.textContent = isSynthetic ? 'Switch to Live' : 'Switch to Synthetic';
+        toggle.textContent = isSynthetic
+            ? tr('dashboard.switch_to_live', 'Switch to Live')
+            : tr('dashboard.switch_to_synthetic', 'Switch to Synthetic');
     }
 }
 
@@ -393,9 +461,13 @@ document.addEventListener('DOMContentLoaded', () => {
     document.documentElement.lang = CURRENT_LANG;
     syncLanguageUi();
     bindStaticHandlers();
+    bindFoldPersistence();
     azAttnBindFoldCatchup();
+    bindSectionNav();
+    bindBackToTop();
     startHeaderClock();
     setAudience(currentAudience);
+    setWorkspace(currentWorkspace);
     refreshDashboard();
     dashboardTimer = window.setInterval(refreshDashboard, POLL_INTERVAL_MS);
     // Chromium/Brave throttle setInterval in unfocused or backgrounded windows,
@@ -417,13 +489,131 @@ window.addEventListener('beforeunload', () => {
     }
 });
 
+// Persist <details> fold state across reloads. Without this every page refresh
+// re-collapsed all 13 disclosure folds, losing whatever depth the operator had
+// opened mid-incident.
+function readFoldState() {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(FOLD_STATE_KEY) || '{}');
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function bindFoldPersistence() {
+    const saved = readFoldState();
+    document.querySelectorAll('details[id]').forEach((details) => {
+        if (Object.prototype.hasOwnProperty.call(saved, details.id)) {
+            details.open = Boolean(saved[details.id]);
+        }
+        // Persist on summary click (covers keyboard activation too — browsers
+        // synthesize a click for Enter/Space on <summary>), NOT on 'toggle':
+        // programmatic opens (saved-state restore, workspace fold defaults)
+        // also fire 'toggle', and recording those would turn a default into a
+        // fake "explicit operator choice".
+        details.querySelector('summary')?.addEventListener('click', () => {
+            window.setTimeout(() => {
+                const current = readFoldState();
+                current[details.id] = details.open;
+                try {
+                    localStorage.setItem(FOLD_STATE_KEY, JSON.stringify(current));
+                } catch (e) { /* storage unavailable: fold state simply stays session-local */ }
+            }, 0);
+        });
+    });
+}
+
+// Sticky section navigation: measures the sticky topbar stack so anchor jumps
+// land below it, and highlights the section currently in view.
+function bindSectionNav() {
+    const nav = document.getElementById('sectionNav');
+    if (!nav) return;
+    const stack = document.querySelector('.topbar-attn-stack');
+    const syncStickyOffset = () => {
+        if (!stack) return;
+        document.documentElement.style.setProperty('--az-sticky-offset', `${stack.offsetHeight + 14}px`);
+    };
+    syncStickyOffset();
+    window.addEventListener('resize', syncStickyOffset);
+
+    const links = Array.from(nav.querySelectorAll('.section-nav-link'));
+    const linkById = new Map();
+    links.forEach((link) => {
+        const targetId = String(link.getAttribute('href') || '').replace(/^#/, '');
+        if (targetId) linkById.set(targetId, link);
+    });
+    if (!('IntersectionObserver' in window)) return;
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const link = linkById.get(entry.target.id);
+            if (!link) return;
+            links.forEach((candidate) => candidate.classList.toggle('active', candidate === link));
+        });
+    }, { rootMargin: '-25% 0px -65% 0px' });
+    linkById.forEach((_link, targetId) => {
+        const target = document.getElementById(targetId);
+        if (target) observer.observe(target);
+    });
+}
+
+function bindBackToTop() {
+    const btn = document.getElementById('backToTopBtn');
+    if (!btn) return;
+    const sync = () => { btn.hidden = window.scrollY < 600; };
+    window.addEventListener('scroll', sync, { passive: true });
+    sync();
+    btn.addEventListener('click', () => {
+        window.scrollTo({ top: 0, behavior: azAttnReducedMotion ? 'auto' : 'smooth' });
+    });
+}
+
 function bindStaticHandlers() {
     document.getElementById('langJaBtn')?.addEventListener('click', () => switchLanguage('ja'));
     document.getElementById('langEnBtn')?.addEventListener('click', () => switchLanguage('en'));
     document.getElementById('audienceProfessional')?.addEventListener('click', () => setAudience('professional'));
     document.getElementById('audienceTemporary')?.addEventListener('click', () => setAudience('temporary'));
+    document.getElementById('workspaceSimpleBtn')?.addEventListener('click', () => setWorkspace('simple'));
+    document.getElementById('workspaceAllBtn')?.addEventListener('click', () => setWorkspace('all'));
+    document.getElementById('workspaceNocBtn')?.addEventListener('click', () => setWorkspace('noc'));
+    document.getElementById('workspaceSocBtn')?.addEventListener('click', () => setWorkspace('soc'));
+    // Simple-view drill-downs. NOC/SOC workspaces are professional-audience
+    // concepts; Temporary drills into the classic combined board instead.
+    document.getElementById('simpleOverallTile')?.addEventListener('click', () => setWorkspace('all'));
+    document.getElementById('simpleSocTile')?.addEventListener('click', () => {
+        setWorkspace(currentAudience === 'professional' ? 'soc' : 'all');
+    });
+    document.getElementById('simpleNocTile')?.addEventListener('click', () => {
+        setWorkspace(currentAudience === 'professional' ? 'noc' : 'all');
+    });
     document.getElementById('showGuideBtn')?.addEventListener('click', reopenOnboardingGuide);
     document.getElementById('globalAlertBandDismiss')?.addEventListener('click', azAttnHideAlertBand);
+    document.getElementById('refreshNowBtn')?.addEventListener('click', async (event) => {
+        const btn = event.currentTarget;
+        btn.classList.add('meta-action-busy');
+        try {
+            await refreshDashboard(true);
+        } finally {
+            btn.classList.remove('meta-action-busy');
+        }
+    });
+    document.getElementById('pollPauseBtn')?.addEventListener('click', () => setPollingPaused(!pollingPaused));
+    document.getElementById('evidenceFilterInput')?.addEventListener('input', (event) => {
+        evidenceFilterText = String(event.target.value || '').trim();
+        EVIDENCE_FILTER_IDS.forEach((id) => paintTimeline(id));
+    });
+    // "+N more" expanders are rebuilt with each timeline repaint, so handle them
+    // via delegation instead of per-button listeners.
+    document.addEventListener('click', (event) => {
+        const btn = event.target instanceof Element ? event.target.closest('.timeline-more-btn') : null;
+        if (!btn) return;
+        const id = String(btn.dataset.timelineId || '');
+        if (!id) return;
+        if (timelineExpanded.has(id)) timelineExpanded.delete(id);
+        else timelineExpanded.add(id);
+        paintTimeline(id);
+    });
 
     document.getElementById('modePortalBtn')?.addEventListener('click', () => switchMode('portal'));
     document.getElementById('modeShieldBtn')?.addEventListener('click', () => switchMode('shield'));
@@ -432,8 +622,9 @@ function bindStaticHandlers() {
     document.getElementById('portalAssistBtn')?.addEventListener('click', openPortalViewer);
     document.getElementById('containBtn')?.addEventListener('click', () => executeAction('contain'));
     document.getElementById('releaseBtn')?.addEventListener('click', () => executeAction('release'));
-    document.getElementById('clientIdentityToggle')?.addEventListener('click', () => {
+    document.getElementById('clientIdentityToggle')?.addEventListener('click', (event) => {
         showNormalClients = !showNormalClients;
+        event.currentTarget.setAttribute('aria-pressed', showNormalClients ? 'true' : 'false');
         updateClientIdentityView(latestSummary);
     });
     document.getElementById('clientIdentityList')?.addEventListener('change', async (event) => {
@@ -628,8 +819,12 @@ function setAudience(audience) {
     currentAudience = normalizeAudience(audience) || 'temporary';
     localStorage.setItem(AUDIENCE_KEY, currentAudience);
     document.body.dataset.audience = currentAudience;
-    document.getElementById('audienceProfessional')?.classList.toggle('active', currentAudience === 'professional');
-    document.getElementById('audienceTemporary')?.classList.toggle('active', currentAudience === 'temporary');
+    const professionalBtn = document.getElementById('audienceProfessional');
+    const temporaryBtn = document.getElementById('audienceTemporary');
+    professionalBtn?.classList.toggle('active', currentAudience === 'professional');
+    professionalBtn?.setAttribute('aria-pressed', currentAudience === 'professional' ? 'true' : 'false');
+    temporaryBtn?.classList.toggle('active', currentAudience === 'temporary');
+    temporaryBtn?.setAttribute('aria-pressed', currentAudience === 'temporary' ? 'true' : 'false');
     updateElement('audienceSummary', currentAudience === 'temporary'
         ? tr('dashboard.temporary_summary', 'Temporary mode prioritizes simpler wording, safe next steps, and user-facing guidance.')
         : tr('dashboard.professional_summary', 'Professional mode shows deeper evidence, review status, and control context.'));
@@ -770,7 +965,10 @@ function startHeaderClock() {
         clearInterval(headerClockTimer);
     }
     seedHeaderClock('');
-    headerClockTimer = window.setInterval(renderHeaderClock, 1000);
+    headerClockTimer = window.setInterval(() => {
+        renderHeaderClock();
+        renderFreshnessAge();
+    }, 1000);
 }
 
 function updateMissionRow(summary, actions) {
@@ -842,13 +1040,38 @@ function requestTimeoutSignal() {
     }
 }
 
-async function refreshDashboard() {
+// forceArg must be compared with === true: this function is also bound directly
+// as a focus/visibilitychange handler, where the first argument is an Event.
+async function refreshDashboard(forceArg = false) {
+    const force = forceArg === true;
+    if (pollingPaused && !force) return;
     if (refreshInFlight) return;
     refreshInFlight = true;
     try {
         await refreshDashboardOnce();
     } finally {
         refreshInFlight = false;
+    }
+}
+
+function setPollingPaused(paused) {
+    pollingPaused = Boolean(paused);
+    const btn = document.getElementById('pollPauseBtn');
+    if (btn) {
+        btn.setAttribute('aria-pressed', pollingPaused ? 'true' : 'false');
+        btn.classList.toggle('active', pollingPaused);
+        const label = pollingPaused
+            ? tr('dashboard.resume_updates', 'Resume auto-refresh')
+            : tr('dashboard.pause_updates', 'Pause auto-refresh');
+        btn.setAttribute('aria-label', label);
+        btn.title = label;
+        btn.innerHTML = pollingPaused ? '&#x25b6;' : '&#x23f8;';
+    }
+    azConnRenderChip();
+    if (!pollingPaused) {
+        // Resume with an immediate refresh so the board catches up at once
+        // instead of waiting for the next interval tick.
+        refreshDashboard(true);
     }
 }
 
@@ -966,6 +1189,9 @@ async function refreshDashboardOnce() {
         updateEvidenceBoard(evidence, health, trends);
         updateAssistant(actions, mattermost, capabilities);
         updateControlButtons(summary, state);
+        // Must run after updateCommandStrip: the Overall tile reuses the
+        // hero summary wording rendered there.
+        updateSimpleView(summary, health, actions, failures);
         azAttnFirstSnapshotDone = true;
         document.body.classList.remove('az-boot');
         azConnSetState(true);
@@ -1054,15 +1280,18 @@ function renderAggregatorPanel(data) {
 async function fetchAggregatorStatus() {
     const panel = document.getElementById('aggregatorPanel');
     if (!panel) return;
+    const fleetNavLink = document.getElementById('sectionNavFleet');
     try {
         const resp = await fetch('/api/aggregator/nodes', { headers: authHeaders() });
         if (!resp.ok) {
             if (resp.status === 401 || resp.status === 403 || resp.status === 500) {
                 panel.hidden = true;
+                if (fleetNavLink) fleetNavLink.hidden = true;
             }
             return;
         }
         panel.hidden = false;
+        if (fleetNavLink) fleetNavLink.hidden = false;
         const data = await resp.json();
         renderAggregatorPanel(data);
     } catch (_err) {
@@ -1805,6 +2034,129 @@ function updateCommandGlance(summary, health, failures = []) {
     setHeatTone('commandHeatAi', ai.tone, ai.value);
 }
 
+// ---- Simple view: three verdict tiles (Overall / SOC / NOC) --------------
+// Verdicts reuse the SAME deterministic summarize* helpers and strongestTone
+// aggregation as the Command Strip hero and the SOC/NOC glance cards, so the
+// Simple tile can never disagree with the full board. When inputs are stale
+// the verdict is withheld (UNKNOWN) instead of showing a possibly false green.
+
+function simpleVerdictForTone(tone) {
+    if (tone === 'status-danger') return tr('dashboard.simple_bad', 'BAD');
+    if (tone === 'status-caution') return tr('dashboard.simple_watch', 'WATCH');
+    if (tone === 'status-safe') return tr('dashboard.simple_good', 'GOOD');
+    return tr('dashboard.simple_checking', 'CHECKING');
+}
+
+function setSimpleTile(tileId, verdictId, tone, verdict) {
+    const tile = document.getElementById(tileId);
+    if (tile) {
+        tile.classList.remove('status-safe', 'status-caution', 'status-danger', 'status-neutral');
+        tile.classList.add(tone || 'status-neutral');
+    }
+    updateElement(verdictId, verdict);
+}
+
+function simpleChip(label, tone = '') {
+    return `<span class="simple-chip ${escapeAttribute(tone)}">${escapeHtml(label)}</span>`;
+}
+
+function updateSimpleView(summary, health, actions, failures = []) {
+    if (!document.getElementById('simpleViewPanel')) return;
+    const stale = Boolean(summary.command_strip?.stale_warning);
+    const strip = summary.command_strip || {};
+    const soc = summary.soc_focus || {};
+    const noc = summary.noc_focus || {};
+    const triage = soc.triage_priority || {};
+
+    const threat = summarizeThreatState(summary);
+    const path = summarizePathState(summary);
+    const services = summarizeServiceState(summary.service_health_summary || {});
+    const clients = summarizeClientState(summary);
+    const telemetry = summarizeTelemetryState(summary, health, failures);
+    const ai = summarizeAiState(summary, health);
+    const clientBaselineTone = clients.tone === 'status-neutral' ? 'status-safe' : clients.tone;
+    const overallTone = strongestTone(threat.tone, path.tone, services.tone, clientBaselineTone, telemetry.tone, ai.tone);
+
+    const socVisibility = summarizeVisibilityState(soc.visibility || {});
+    const socTone = strongestTone(
+        threat.tone,
+        summarizeCorrelationState(soc.correlation || {}).tone,
+        summarizeTriageState(triage).tone,
+        socVisibility.tone,
+    );
+    const nocServices = summarizeServiceState(noc.service_health || {});
+    const nocCapacity = summarizeCapacityState(noc.capacity || {});
+    const nocParts = [
+        { label: tr('dashboard.heat_path', 'Path'), state: path },
+        { label: tr('dashboard.heat_services', 'Services'), state: nocServices },
+        { label: tr('dashboard.capacity', 'Capacity'), state: nocCapacity },
+        { label: tr('dashboard.heat_clients', 'Clients'), state: clients },
+    ];
+    const nocTone = strongestTone(...nocParts.map((part) => part.state.tone));
+
+    const unknownVerdict = tr('dashboard.simple_unknown', 'UNKNOWN (STALE)');
+    const staleReason = tr('dashboard.simple_stale_reason', 'Inputs are stale; verdict withheld. Check freshness first.');
+
+    // Overall tile
+    if (stale) {
+        setSimpleTile('simpleOverallTile', 'simpleOverallVerdict', 'status-neutral', unknownVerdict);
+        updateElement('simpleOverallReason', staleReason);
+    } else {
+        setSimpleTile('simpleOverallTile', 'simpleOverallVerdict', overallTone, simpleVerdictForTone(overallTone));
+        // Same wording as the Command Strip hero summary, already rendered
+        // earlier in this refresh pass.
+        updateElement('simpleOverallReason', document.getElementById('commandGlanceSummary')?.textContent || '-');
+    }
+    const doNext = Array.isArray(actions.do_next) ? actions.do_next : [];
+    updateElement('simpleOverallAction', doNext[0] || summary.current_recommendation || '-');
+
+    // SOC tile
+    const nowCount = Array.isArray(triage.now) ? triage.now.length : 0;
+    const watchCount = Array.isArray(triage.watch) ? triage.watch.length : 0;
+    const backlogCount = Array.isArray(triage.backlog) ? triage.backlog.length : 0;
+    if (stale) {
+        setSimpleTile('simpleSocTile', 'simpleSocVerdict', 'status-neutral', unknownVerdict);
+        updateElement('simpleSocReason', staleReason);
+    } else {
+        setSimpleTile('simpleSocTile', 'simpleSocVerdict', socTone, simpleVerdictForTone(socTone));
+        updateElement('simpleSocReason', socTone === 'status-safe'
+            ? tr('dashboard.simple_soc_ok', 'No active threat evidence.')
+            : `${soc.attack_type || tr('dashboard.no_attack_type', 'No current attack type')} | ${soc.top_source || '-'} → ${soc.top_destination || '-'}`);
+    }
+    const socChips = document.getElementById('simpleSocChips');
+    if (socChips) {
+        socChips.innerHTML = [
+            simpleChip(`NOW ${nowCount}`, nowCount > 0 ? 'status-danger' : 'status-safe'),
+            simpleChip(`WATCH ${watchCount}`, watchCount > 0 ? 'status-caution' : ''),
+            simpleChip(`BACKLOG ${backlogCount}`),
+            simpleChip(`${tr('dashboard.visibility_label', 'Visibility')} ${socVisibility.value}`, socVisibility.tone),
+        ].join('');
+    }
+
+    // NOC tile
+    if (stale) {
+        setSimpleTile('simpleNocTile', 'simpleNocVerdict', 'status-neutral', unknownVerdict);
+        updateElement('simpleNocReason', staleReason);
+    } else {
+        setSimpleTile('simpleNocTile', 'simpleNocVerdict', nocTone, simpleVerdictForTone(nocTone));
+        const degraded = nocParts
+            .filter((part) => part.state.tone === 'status-caution' || part.state.tone === 'status-danger')
+            .map((part) => `${part.label}: ${part.state.value}`);
+        updateElement('simpleNocReason', degraded.length
+            ? degraded.join(' | ')
+            : tr('dashboard.simple_noc_ok', 'Path, services, capacity, and clients look normal.'));
+    }
+    const nocChips = document.getElementById('simpleNocChips');
+    if (nocChips) {
+        nocChips.innerHTML = [
+            simpleChip(`${tr('dashboard.uplink', 'Uplink')} ${strip.current_uplink || '--'}`),
+            simpleChip(`${tr('dashboard.internet', 'Internet')} ${strip.internet_reachability || '--'}`, path.tone),
+            simpleChip(`${tr('dashboard.heat_services', 'Services')} ${nocServices.value}`, nocServices.tone),
+            simpleChip(`${tr('dashboard.heat_clients', 'Clients')} ${clients.value}`, clients.tone),
+        ].join('');
+    }
+}
+
 function updateCommandStrip(summary, health, failures = []) {
     const strip = summary.command_strip || {};
     const idleFlags = health.idle_flags || {};
@@ -2332,34 +2684,34 @@ function updateEvidenceBoard(evidence, health, trends) {
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
 
     renderTimeline('decisionChangesTimeline', evidence.decision_changes || [], (item) => ({
         metaLeft: item.ts_iso || '-',
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
 
     renderTimeline('operatorInteractionsTimeline', evidence.operator_interactions || [], (item) => ({
         metaLeft: item.ts_iso || '-',
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
 
     renderTimeline('backgroundHistoryTimeline', evidence.background_history || [], (item) => ({
         metaLeft: item.ts_iso || '-',
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
     renderTimeline('triageAuditTimeline', evidence.triage_audit || [], (item) => ({
         metaLeft: item.ts_iso || '-',
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
     const syntheticTopology = Array.isArray(evidence.synthetic_story?.topology) ? evidence.synthetic_story.topology : [];
     renderTimeline('topoliteSyntheticTopology', syntheticTopology, (item) => ({
         metaLeft: evidence.data_source === 'synthetic' ? 'synthetic' : '-',
@@ -2382,8 +2734,10 @@ function updateEvidenceBoard(evidence, health, trends) {
         }),
         detail: tr('dashboard.alert_queue_counts_detail', 'Alert pressure split by deterministic risk bands.'),
     });
-    const topNow = Array.isArray(alertQueues.now?.items) ? alertQueues.now.items.slice(0, 2) : [];
-    const topEsc = Array.isArray(alertQueues.escalation_candidates) ? alertQueues.escalation_candidates.slice(0, 2) : [];
+    // Keep more context available than the initial view shows: paintTimeline caps
+    // the visible rows and offers a "+N more" expander for the rest.
+    const topNow = Array.isArray(alertQueues.now?.items) ? alertQueues.now.items.slice(0, 8) : [];
+    const topEsc = Array.isArray(alertQueues.escalation_candidates) ? alertQueues.escalation_candidates.slice(0, 4) : [];
     topNow.forEach((item) => {
         queueItems.push({
             ts_iso: item.ts_iso || '-',
@@ -2405,7 +2759,7 @@ function updateEvidenceBoard(evidence, health, trends) {
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 5 });
 
     const trendPoints = Array.isArray(trends?.points) ? trends.points : [];
     const trendSummary = trends?.summary || {};
@@ -2491,13 +2845,13 @@ function updateTopoliteSingleScreen(summary, evidence, actions) {
         detail: item.state ? `state=${item.state}` : '-',
     }));
 
-    const timelineItems = Array.isArray(evidence?.current_triggers) ? evidence.current_triggers.slice(0, 6) : [];
+    const timelineItems = Array.isArray(evidence?.current_triggers) ? evidence.current_triggers.slice(0, 12) : [];
     renderTimeline('topoliteIncidentTimeline', timelineItems, (item) => ({
         metaLeft: item.ts_iso || '-',
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
 
     updateElement(
         'topoliteSingleScreenSummary',
@@ -2552,7 +2906,10 @@ function updateAssistant(actions, mattermost, capabilities) {
 function updateControlButtons(summary) {
     const currentMode = String(summary.mode?.current_mode || 'shield').toLowerCase();
     ['portal', 'shield', 'scapegoat'].forEach((mode) => {
-        document.getElementById(`mode${capitalize(mode)}Btn`)?.classList.toggle('active', currentMode === mode);
+        const btn = document.getElementById(`mode${capitalize(mode)}Btn`);
+        if (!btn) return;
+        btn.classList.toggle('active', currentMode === mode);
+        btn.setAttribute('aria-pressed', currentMode === mode ? 'true' : 'false');
     });
     applyAudienceControlPolicy();
 }
@@ -2905,7 +3262,7 @@ function updateAIGovernanceSnapshot(governance) {
 function renderList(id, items, formatter) {
     const el = document.getElementById(id);
     if (!el) return;
-    const rows = Array.isArray(items) && items.length ? items : ['No data'];
+    const rows = Array.isArray(items) && items.length ? items : [tr('dashboard.no_data', 'No data')];
     el.innerHTML = rows.map((item) => `<li>${escapeHtml(formatter(item))}</li>`).join('');
 }
 
@@ -2947,23 +3304,51 @@ function escapeAttribute(value) {
         .replaceAll('>', '&gt;');
 }
 
-function renderTimeline(id, items, formatter) {
+function renderTimeline(id, items, formatter, opts = {}) {
+    const rows = Array.isArray(items) ? items.map((item) => formatter(item)) : [];
+    timelineLastRows.set(id, { rows, maxVisible: Number(opts.maxVisible) > 0 ? Number(opts.maxVisible) : null });
+    paintTimeline(id);
+}
+
+// Repaint a timeline from its stored rows, applying the evidence keyword filter
+// (evidence-board timelines only) and the "+N more" cap without refetching.
+function paintTimeline(id) {
     const el = document.getElementById(id);
     if (!el) return;
-    if (!Array.isArray(items) || items.length === 0) {
-        el.innerHTML = '<li><div class="timeline-title">No recent entries</div></li>';
+    const entry = timelineLastRows.get(id) || { rows: [], maxVisible: null };
+    const filterActive = Boolean(evidenceFilterText) && EVIDENCE_FILTER_IDS.has(id);
+    let rows = entry.rows;
+    if (filterActive) {
+        const query = evidenceFilterText.toLowerCase();
+        rows = rows.filter((row) => [row.metaLeft, row.metaRight, row.title, row.detail]
+            .some((value) => String(value || '').toLowerCase().includes(query)));
+    }
+    if (rows.length === 0) {
+        const message = filterActive
+            ? tr('dashboard.evidence_filter_no_match', 'No entries match the filter.')
+            : tr('dashboard.no_recent_entries', 'No recent entries');
+        el.innerHTML = `<li><div class="timeline-title">${escapeHtml(message)}</div></li>`;
         return;
     }
-    el.innerHTML = items.map((item) => {
-        const row = formatter(item);
-        return `
+    // A filtered view already shows only matches, so the cap is not applied there.
+    const cap = filterActive ? null : entry.maxVisible;
+    const collapsible = Boolean(cap) && rows.length > cap;
+    const expanded = timelineExpanded.has(id);
+    const visible = collapsible && !expanded ? rows.slice(0, cap) : rows;
+    let html = visible.map((row) => `
             <li>
                 <div class="timeline-meta"><span>${escapeHtml(row.metaLeft || '-')}</span><span>${escapeHtml(row.metaRight || '-')}</span></div>
                 <div class="timeline-title">${escapeHtml(row.title || '-')}</div>
                 <div class="timeline-detail">${escapeHtml(row.detail || '-')}</div>
             </li>
-        `;
-    }).join('');
+        `).join('');
+    if (collapsible) {
+        const label = expanded
+            ? tr('dashboard.timeline_show_less', 'Show less')
+            : tr('dashboard.timeline_show_more', 'Show {count} more', { count: rows.length - visible.length });
+        html += `<li class="timeline-more"><button type="button" class="timeline-more-btn" data-timeline-id="${escapeAttribute(id)}" aria-expanded="${expanded ? 'true' : 'false'}">${escapeHtml(label)}</button></li>`;
+    }
+    el.innerHTML = html;
 }
 
 function updateServiceChip(id, value) {
@@ -3100,40 +3485,84 @@ function azAttnNotePanelTone(elId, el, rawTone) {
 }
 
 // Connection-state chip (Issue #300, item 5): distinguishes booting/waiting from an unreachable API.
+let azConnLastOk = null; // null until the first poll completes
+
 function azConnSetState(ok) {
+    if (ok) {
+        azConnConsecutiveFailures = 0;
+        lastSuccessfulPollMs = Date.now();
+    } else {
+        azConnConsecutiveFailures += 1;
+    }
+    azConnLastOk = ok;
+    azConnRenderChip();
+    renderFreshnessAge();
+}
+
+function azConnRenderChip() {
     const chip = document.getElementById('connStateChip');
     const valueEl = document.getElementById('connStateChipValue');
     const descEl = document.getElementById('connStateChipDesc');
     if (!chip || !valueEl) return;
+    const hadPriorSuccess = lastSuccessfulPollMs !== null;
+    // Mirror the tooltip into a visible-on-focus sr-only node: `title` only ever surfaces on
+    // mouse hover, which keyboard and touch/kiosk operators can never trigger.
+    const lastSuccessText = hadPriorSuccess
+        ? tr('dashboard.conn_state.last_success', 'Last successful update: {time}', { time: new Date(lastSuccessfulPollMs).toLocaleTimeString() })
+        : '';
     chip.classList.remove('status-safe', 'status-caution', 'status-danger');
-    if (ok) {
-        azConnConsecutiveFailures = 0;
-        lastSuccessfulPollMs = Date.now();
+    if (pollingPaused) {
+        chip.classList.add('status-caution');
+        valueEl.textContent = tr('dashboard.conn_state.paused', 'PAUSED');
+        chip.title = lastSuccessText;
+        if (descEl) descEl.textContent = lastSuccessText;
+        return;
+    }
+    if (azConnLastOk === null) return; // still booting: keep the INIT placeholder
+    if (azConnLastOk) {
         chip.classList.add('status-safe');
         valueEl.textContent = tr('dashboard.conn_state.live', 'LIVE');
         chip.title = '';
         if (descEl) descEl.textContent = '';
-    } else {
-        azConnConsecutiveFailures += 1;
-        const hadPriorSuccess = lastSuccessfulPollMs !== null;
-        // Tolerate a single transient failure after a prior success: keep the last-good
-        // LIVE chip for one blip so a one-cycle slow poll (dev web server briefly starving
-        // /api/state while /api/dashboard/evidence holds a worker) doesn't flap the link
-        // indicator OFFLINE on the booth screen. Escalate to OFFLINE only once the failure
-        // persists (>=2 consecutive), or immediately if we've never had a successful snapshot.
-        if (hadPriorSuccess && azConnConsecutiveFailures < 2) {
-            chip.classList.add('status-safe');
-            return;
+        return;
+    }
+    // Tolerate a single transient failure after a prior success: keep the last-good
+    // LIVE chip for one blip so a one-cycle slow poll (dev web server briefly starving
+    // /api/state while /api/dashboard/evidence holds a worker) doesn't flap the link
+    // indicator OFFLINE on the booth screen. Escalate to OFFLINE only once the failure
+    // persists (>=2 consecutive), or immediately if we've never had a successful snapshot.
+    if (hadPriorSuccess && azConnConsecutiveFailures < 2) {
+        chip.classList.add('status-safe');
+        return;
+    }
+    chip.classList.add('status-danger');
+    valueEl.textContent = tr('dashboard.conn_state.offline', 'OFFLINE');
+    chip.title = lastSuccessText;
+    if (descEl) descEl.textContent = lastSuccessText;
+}
+
+// "UPD" freshness chip: seconds since the last successful poll, re-rendered by
+// the shared 1s header-clock interval so the age visibly counts up between polls.
+function renderFreshnessAge() {
+    const el = document.getElementById('freshnessAgeValue');
+    if (!el) return;
+    if (lastSuccessfulPollMs === null) {
+        el.textContent = '-';
+        return;
+    }
+    const ageMs = Math.max(0, Date.now() - lastSuccessfulPollMs);
+    const sec = Math.round(ageMs / 1000);
+    el.textContent = sec < 60
+        ? `${sec}s`
+        : `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, '0')}s`;
+    const chipEl = document.getElementById('freshnessChip');
+    if (chipEl) {
+        chipEl.classList.remove('status-caution');
+        // Flag visibly stale data once several poll intervals have passed with
+        // no successful refresh (also counts up while paused, on purpose).
+        if (ageMs >= Math.max(POLL_INTERVAL_MS * 3, 15000)) {
+            chipEl.classList.add('status-caution');
         }
-        chip.classList.add('status-danger');
-        valueEl.textContent = tr('dashboard.conn_state.offline', 'OFFLINE');
-        // Mirror the tooltip into a visible-on-focus sr-only node: `title` only ever surfaces on
-        // mouse hover, which keyboard and touch/kiosk operators can never trigger.
-        const lastSuccessText = hadPriorSuccess
-            ? tr('dashboard.conn_state.last_success', 'Last successful update: {time}', { time: new Date(lastSuccessfulPollMs).toLocaleTimeString() })
-            : '';
-        chip.title = lastSuccessText;
-        if (descEl) descEl.textContent = lastSuccessText;
     }
 }
 

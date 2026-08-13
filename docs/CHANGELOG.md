@@ -4,6 +4,51 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Simple view as the dashboard's default landing screen: three verdict tiles
+  answering "Overall — are we safe? / SOC — any threat? / NOC — is the network
+  healthy?", each with a one-line reason, the top "Do now" action, and
+  glance chips; click a tile to drill into the full board or the SOC/NOC
+  workspace. Verdicts have four states (GOOD/WATCH/BAD and UNKNOWN when
+  inputs are stale — a stale snapshot never renders a false green) and reuse
+  the existing deterministic `summarize*`/`strongestTone` logic, so the Simple
+  tile can never disagree with the full board. Available in both audiences;
+  the workspace toggle is now `Simple | All | NOC | SOC` (NOC/SOC still
+  professional-only). Design rationale added to
+  `docs/architecture/socnoc-workspace-design.md`.
+
+- SOC / NOC workspace modes for the dashboard (design note:
+  `docs/architecture/socnoc-workspace-design.md`, informed by SIEM/SOC/NOC
+  dashboard design research — role-specific views over a single pane of glass,
+  the 5-second rule, alert-by-exception, NOC glanceability). A topbar
+  `All | NOC | SOC` toggle (professional audience only, persisted, `?workspace=`
+  override) re-composes the existing panels per domain: the SOC workspace leads
+  with posture → SOC/NOC split → action board → evidence timelines (split and
+  evidence folds auto-open), hiding NOC-only detail blocks; the NOC workspace
+  leads with client identity → path/service boards → runtime health → node
+  fleet, hiding the threat-posture card, SOC detail split card, and the
+  evidence audit board. Cross-domain glance cards are never hidden (the
+  doctrine requires checking the other domain before stronger control). Fold
+  persistence now records only explicit summary clicks so workspace defaults
+  don't overwrite operator choices. No new endpoints or payload changes.
+
+- Dashboard usability pass (post-BHUSA 2026 polish, roadmap #283): sticky
+  section navigation over the dashboard panels (audience-aware; absorbs and
+  replaces the old Topo-Lite mini nav panel) with a back-to-top button;
+  `<details>` fold state now persists across reloads (localStorage);
+  header freshness controls — an "UPD" seconds-since-last-update chip that
+  turns amber when stale, a manual refresh button, and a pause/resume
+  auto-refresh toggle (LINK chip shows `PAUSED`); evidence timelines gained a
+  keyword filter and "+N more" expanders instead of silent `.slice()`
+  truncation (alert queues now keep up to 8 now / 4 escalation entries
+  available). Accessibility: `aria-pressed` on language/audience/mode/pause
+  toggles, `role="group"` instead of misused `role="tablist"`.
+  i18n: ~25 hardcoded English strings in `index.html` and the JS timeline
+  empty-state/`Switch to Live` labels now go through `tr()` with new ja/en
+  catalog keys. No API surface change; dashboard payload contracts unchanged
+  (`tests/test_dashboard_data_contract.py` extended for the new elements).
+
 ### Changed
 
 - Azazel-Fabric の pin を `v0.3.0` → `v0.4.0` に更新(`requirements/fabric.txt`)。
