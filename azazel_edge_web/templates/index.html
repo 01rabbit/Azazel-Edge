@@ -23,10 +23,11 @@
                     <button id="audienceProfessional" class="audience-btn" data-audience="professional" aria-pressed="false">{{ tr('dashboard.professional', 'Professional') }}</button>
                     <button id="audienceTemporary" class="audience-btn active" data-audience="temporary" aria-pressed="true">{{ tr('dashboard.temporary', 'Temporary') }}</button>
                 </div>
-                <div class="audience-toggle workspace-toggle pro-only" role="group" aria-label="{{ tr('dashboard.workspace_label', 'Workspace') }}">
-                    <button id="workspaceAllBtn" class="audience-btn active" data-workspace="all" aria-pressed="true">{{ tr('dashboard.workspace_all', 'All') }}</button>
-                    <button id="workspaceNocBtn" class="audience-btn" data-workspace="noc" aria-pressed="false">{{ tr('dashboard.workspace_noc', 'NOC') }}</button>
-                    <button id="workspaceSocBtn" class="audience-btn" data-workspace="soc" aria-pressed="false">{{ tr('dashboard.workspace_soc', 'SOC') }}</button>
+                <div class="audience-toggle workspace-toggle" role="group" aria-label="{{ tr('dashboard.workspace_label', 'Workspace') }}">
+                    <button id="workspaceSimpleBtn" class="audience-btn active" data-workspace="simple" aria-pressed="true">{{ tr('dashboard.workspace_simple', 'Simple') }}</button>
+                    <button id="workspaceAllBtn" class="audience-btn" data-workspace="all" aria-pressed="false">{{ tr('dashboard.workspace_all', 'All') }}</button>
+                    <button id="workspaceNocBtn" class="audience-btn pro-only" data-workspace="noc" aria-pressed="false">{{ tr('dashboard.workspace_noc', 'NOC') }}</button>
+                    <button id="workspaceSocBtn" class="audience-btn pro-only" data-workspace="soc" aria-pressed="false">{{ tr('dashboard.workspace_soc', 'SOC') }}</button>
                 </div>
                 <div class="topbar-links">
                     <a class="topbar-link" href="/booth-focus?lang=en">Decision Focus</a>
@@ -104,6 +105,32 @@
                 </div>
             </div>
             <p class="panel-note" id="syntheticModeBannerText">{{ tr('dashboard.synthetic_watermark', 'SYNTHETIC DATA - NOT LIVE EVIDENCE') }}</p>
+        </section>
+
+        <section class="simple-view" id="simpleViewPanel" aria-label="{{ tr('dashboard.workspace_simple', 'Simple') }}">
+            <button type="button" class="simple-tile simple-overall status-neutral" id="simpleOverallTile">
+                <span class="simple-kicker">{{ tr('dashboard.simple_overall_kicker', 'Overall — Are we safe right now?') }}</span>
+                <strong class="simple-verdict" id="simpleOverallVerdict">{{ tr('dashboard.simple_checking', 'CHECKING') }}</strong>
+                <span class="simple-reason" id="simpleOverallReason">{{ tr('dashboard.waiting_snapshot', 'Waiting for control-plane snapshot') }}</span>
+                <span class="simple-action"><span class="simple-action-label">{{ tr('dashboard.simple_do_now', 'Do now') }}</span> <strong id="simpleOverallAction">-</strong></span>
+                <span class="simple-drill">{{ tr('dashboard.simple_drill_overall', 'Open the full board') }} ▸</span>
+            </button>
+            <div class="simple-row">
+                <button type="button" class="simple-tile simple-soc status-neutral" id="simpleSocTile">
+                    <span class="simple-kicker">{{ tr('dashboard.simple_soc_kicker', 'SOC — Any threat activity?') }}</span>
+                    <strong class="simple-verdict" id="simpleSocVerdict">{{ tr('dashboard.simple_checking', 'CHECKING') }}</strong>
+                    <span class="simple-reason" id="simpleSocReason">{{ tr('dashboard.waiting_snapshot', 'Waiting for control-plane snapshot') }}</span>
+                    <span class="simple-chips" id="simpleSocChips"></span>
+                    <span class="simple-drill">{{ tr('dashboard.simple_drill_soc', 'Open SOC details') }} ▸</span>
+                </button>
+                <button type="button" class="simple-tile simple-noc status-neutral" id="simpleNocTile">
+                    <span class="simple-kicker">{{ tr('dashboard.simple_noc_kicker', 'NOC — Is the network healthy?') }}</span>
+                    <strong class="simple-verdict" id="simpleNocVerdict">{{ tr('dashboard.simple_checking', 'CHECKING') }}</strong>
+                    <span class="simple-reason" id="simpleNocReason">{{ tr('dashboard.waiting_snapshot', 'Waiting for control-plane snapshot') }}</span>
+                    <span class="simple-chips" id="simpleNocChips"></span>
+                    <span class="simple-drill">{{ tr('dashboard.simple_drill_noc', 'Open NOC details') }} ▸</span>
+                </button>
+            </div>
         </section>
         <section class="onboarding-banner" id="beginnerOnboarding">
             <div class="onboarding-copy">

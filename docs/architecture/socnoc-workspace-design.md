@@ -53,12 +53,44 @@ design principles (Luzmo, InfluxData, Sisense).
 
 ## The workspace axis
 
-`body[data-workspace]` ∈ `all` (default) | `noc` | `soc`, persisted in
-`localStorage` and overridable via `?workspace=`. The toggle lives in the
-topbar next to the audience toggle and is **professional-audience only**; in
-Temporary audience the workspace rules do not apply (`.pro-only` hides the
-toggle and the CSS gate requires `data-audience="professional"`), so beginner
-mode keeps its single simplified flow.
+`body[data-workspace]` ∈ `simple` (default) | `all` | `noc` | `soc`, persisted
+in `localStorage` and overridable via `?workspace=`. The toggle lives in the
+topbar next to the audience toggle. `simple` and `all` are available to both
+audiences; the `noc`/`soc` buttons and CSS rules are **professional-audience
+only** (`.pro-only` + a CSS gate on `data-audience="professional"`), so
+beginner mode keeps a simplified flow.
+
+## Simple workspace (default landing view)
+
+The primary question hierarchy proposed by the operator and confirmed by the
+5-second-rule research: *Is the overall situation good or bad? Below that: is
+SOC good or bad, is NOC good or bad? Click to drill deeper only when needed.*
+
+Three verdict tiles, and nothing else on screen (except the synthetic-data
+warning banner, which is a safety requirement and always shows):
+
+1. **Overall** — one large verdict + one-line reason + **one "Do now" action**
+   (decision-support doctrine: never a bare status without the next step).
+   Click → `all` workspace.
+2. **SOC — Any threat activity?** — verdict + reason + NOW/WATCH/BACKLOG and
+   visibility chips. Click → `soc` workspace (professional) / `all`
+   (temporary).
+3. **NOC — Is the network healthy?** — verdict + reason (the degraded
+   components, e.g. `Path: DEGRADED | Clients: 3 ANOM`) + uplink / internet /
+   services / clients chips. Click → `noc` workspace (professional) / `all`
+   (temporary).
+
+Design rules that keep the simplification honest:
+
+- **Four states, not two**: GOOD (green) / WATCH (amber) / BAD (red) /
+  **UNKNOWN (STALE)** (gray). When `command_strip.stale_warning` is set the
+  verdict is withheld — a stale snapshot must never render a false green.
+- **No new judgment logic**: verdicts reuse the exact `summarize*` helpers and
+  `strongestTone` aggregation that drive the Command Strip hero and the
+  SOC/NOC glance cards, so the Simple tile can never disagree with the full
+  board, and the deterministic audit story ("why this color") is unchanged.
+- **Reason + action always attached**: a verdict with no reason forces a
+  click every time and defeats the simplification.
 
 Scoping classes mirror the audience mechanism:
 

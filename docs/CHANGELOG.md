@@ -6,6 +6,18 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Simple view as the dashboard's default landing screen: three verdict tiles
+  answering "Overall — are we safe? / SOC — any threat? / NOC — is the network
+  healthy?", each with a one-line reason, the top "Do now" action, and
+  glance chips; click a tile to drill into the full board or the SOC/NOC
+  workspace. Verdicts have four states (GOOD/WATCH/BAD and UNKNOWN when
+  inputs are stale — a stale snapshot never renders a false green) and reuse
+  the existing deterministic `summarize*`/`strongestTone` logic, so the Simple
+  tile can never disagree with the full board. Available in both audiences;
+  the workspace toggle is now `Simple | All | NOC | SOC` (NOC/SOC still
+  professional-only). Design rationale added to
+  `docs/architecture/socnoc-workspace-design.md`.
+
 - SOC / NOC workspace modes for the dashboard (design note:
   `docs/architecture/socnoc-workspace-design.md`, informed by SIEM/SOC/NOC
   dashboard design research — role-specific views over a single pane of glass,

@@ -167,14 +167,14 @@ function resolveInitialAudience() {
 // requires data-audience="professional", so Temporary mode is unaffected.
 function normalizeWorkspace(value) {
     const text = String(value || '').trim().toLowerCase();
-    return ['all', 'noc', 'soc'].includes(text) ? text : '';
+    return ['simple', 'all', 'noc', 'soc'].includes(text) ? text : '';
 }
 
 function resolveInitialWorkspace() {
     const url = new URL(window.location.href);
     const queryWorkspace = normalizeWorkspace(url.searchParams.get('workspace'));
     const savedWorkspace = normalizeWorkspace(localStorage.getItem(WORKSPACE_KEY));
-    return queryWorkspace || savedWorkspace || 'all';
+    return queryWorkspace || savedWorkspace || 'simple';
 }
 
 // Fold ids opened by default per workspace. Applied only when the operator has
@@ -186,10 +186,10 @@ const WORKSPACE_FOLD_DEFAULTS = {
 };
 
 function setWorkspace(workspace) {
-    currentWorkspace = normalizeWorkspace(workspace) || 'all';
+    currentWorkspace = normalizeWorkspace(workspace) || 'simple';
     localStorage.setItem(WORKSPACE_KEY, currentWorkspace);
     document.body.dataset.workspace = currentWorkspace;
-    [['workspaceAllBtn', 'all'], ['workspaceNocBtn', 'noc'], ['workspaceSocBtn', 'soc']].forEach(([id, ws]) => {
+    [['workspaceSimpleBtn', 'simple'], ['workspaceAllBtn', 'all'], ['workspaceNocBtn', 'noc'], ['workspaceSocBtn', 'soc']].forEach(([id, ws]) => {
         const btn = document.getElementById(id);
         if (!btn) return;
         btn.classList.toggle('active', currentWorkspace === ws);
@@ -574,9 +574,19 @@ function bindStaticHandlers() {
     document.getElementById('langEnBtn')?.addEventListener('click', () => switchLanguage('en'));
     document.getElementById('audienceProfessional')?.addEventListener('click', () => setAudience('professional'));
     document.getElementById('audienceTemporary')?.addEventListener('click', () => setAudience('temporary'));
+    document.getElementById('workspaceSimpleBtn')?.addEventListener('click', () => setWorkspace('simple'));
     document.getElementById('workspaceAllBtn')?.addEventListener('click', () => setWorkspace('all'));
     document.getElementById('workspaceNocBtn')?.addEventListener('click', () => setWorkspace('noc'));
     document.getElementById('workspaceSocBtn')?.addEventListener('click', () => setWorkspace('soc'));
+    // Simple-view drill-downs. NOC/SOC workspaces are professional-audience
+    // concepts; Temporary drills into the classic combined board instead.
+    document.getElementById('simpleOverallTile')?.addEventListener('click', () => setWorkspace('all'));
+    document.getElementById('simpleSocTile')?.addEventListener('click', () => {
+        setWorkspace(currentAudience === 'professional' ? 'soc' : 'all');
+    });
+    document.getElementById('simpleNocTile')?.addEventListener('click', () => {
+        setWorkspace(currentAudience === 'professional' ? 'noc' : 'all');
+    });
     document.getElementById('showGuideBtn')?.addEventListener('click', reopenOnboardingGuide);
     document.getElementById('globalAlertBandDismiss')?.addEventListener('click', azAttnHideAlertBand);
     document.getElementById('refreshNowBtn')?.addEventListener('click', async (event) => {
@@ -1179,6 +1189,9 @@ async function refreshDashboardOnce() {
         updateEvidenceBoard(evidence, health, trends);
         updateAssistant(actions, mattermost, capabilities);
         updateControlButtons(summary, state);
+        // Must run after updateCommandStrip: the Overall tile reuses the
+        // hero summary wording rendered there.
+        updateSimpleView(summary, health, actions, failures);
         azAttnFirstSnapshotDone = true;
         document.body.classList.remove('az-boot');
         azConnSetState(true);
@@ -2019,6 +2032,129 @@ function updateCommandGlance(summary, health, failures = []) {
     setHeatTone('commandHeatClients', clients.tone, clients.value);
     setHeatTone('commandHeatTelemetry', telemetry.tone, telemetry.value);
     setHeatTone('commandHeatAi', ai.tone, ai.value);
+}
+
+// ---- Simple view: three verdict tiles (Overall / SOC / NOC) --------------
+// Verdicts reuse the SAME deterministic summarize* helpers and strongestTone
+// aggregation as the Command Strip hero and the SOC/NOC glance cards, so the
+// Simple tile can never disagree with the full board. When inputs are stale
+// the verdict is withheld (UNKNOWN) instead of showing a possibly false green.
+
+function simpleVerdictForTone(tone) {
+    if (tone === 'status-danger') return tr('dashboard.simple_bad', 'BAD');
+    if (tone === 'status-caution') return tr('dashboard.simple_watch', 'WATCH');
+    if (tone === 'status-safe') return tr('dashboard.simple_good', 'GOOD');
+    return tr('dashboard.simple_checking', 'CHECKING');
+}
+
+function setSimpleTile(tileId, verdictId, tone, verdict) {
+    const tile = document.getElementById(tileId);
+    if (tile) {
+        tile.classList.remove('status-safe', 'status-caution', 'status-danger', 'status-neutral');
+        tile.classList.add(tone || 'status-neutral');
+    }
+    updateElement(verdictId, verdict);
+}
+
+function simpleChip(label, tone = '') {
+    return `<span class="simple-chip ${escapeAttribute(tone)}">${escapeHtml(label)}</span>`;
+}
+
+function updateSimpleView(summary, health, actions, failures = []) {
+    if (!document.getElementById('simpleViewPanel')) return;
+    const stale = Boolean(summary.command_strip?.stale_warning);
+    const strip = summary.command_strip || {};
+    const soc = summary.soc_focus || {};
+    const noc = summary.noc_focus || {};
+    const triage = soc.triage_priority || {};
+
+    const threat = summarizeThreatState(summary);
+    const path = summarizePathState(summary);
+    const services = summarizeServiceState(summary.service_health_summary || {});
+    const clients = summarizeClientState(summary);
+    const telemetry = summarizeTelemetryState(summary, health, failures);
+    const ai = summarizeAiState(summary, health);
+    const clientBaselineTone = clients.tone === 'status-neutral' ? 'status-safe' : clients.tone;
+    const overallTone = strongestTone(threat.tone, path.tone, services.tone, clientBaselineTone, telemetry.tone, ai.tone);
+
+    const socVisibility = summarizeVisibilityState(soc.visibility || {});
+    const socTone = strongestTone(
+        threat.tone,
+        summarizeCorrelationState(soc.correlation || {}).tone,
+        summarizeTriageState(triage).tone,
+        socVisibility.tone,
+    );
+    const nocServices = summarizeServiceState(noc.service_health || {});
+    const nocCapacity = summarizeCapacityState(noc.capacity || {});
+    const nocParts = [
+        { label: tr('dashboard.heat_path', 'Path'), state: path },
+        { label: tr('dashboard.heat_services', 'Services'), state: nocServices },
+        { label: tr('dashboard.capacity', 'Capacity'), state: nocCapacity },
+        { label: tr('dashboard.heat_clients', 'Clients'), state: clients },
+    ];
+    const nocTone = strongestTone(...nocParts.map((part) => part.state.tone));
+
+    const unknownVerdict = tr('dashboard.simple_unknown', 'UNKNOWN (STALE)');
+    const staleReason = tr('dashboard.simple_stale_reason', 'Inputs are stale; verdict withheld. Check freshness first.');
+
+    // Overall tile
+    if (stale) {
+        setSimpleTile('simpleOverallTile', 'simpleOverallVerdict', 'status-neutral', unknownVerdict);
+        updateElement('simpleOverallReason', staleReason);
+    } else {
+        setSimpleTile('simpleOverallTile', 'simpleOverallVerdict', overallTone, simpleVerdictForTone(overallTone));
+        // Same wording as the Command Strip hero summary, already rendered
+        // earlier in this refresh pass.
+        updateElement('simpleOverallReason', document.getElementById('commandGlanceSummary')?.textContent || '-');
+    }
+    const doNext = Array.isArray(actions.do_next) ? actions.do_next : [];
+    updateElement('simpleOverallAction', doNext[0] || summary.current_recommendation || '-');
+
+    // SOC tile
+    const nowCount = Array.isArray(triage.now) ? triage.now.length : 0;
+    const watchCount = Array.isArray(triage.watch) ? triage.watch.length : 0;
+    const backlogCount = Array.isArray(triage.backlog) ? triage.backlog.length : 0;
+    if (stale) {
+        setSimpleTile('simpleSocTile', 'simpleSocVerdict', 'status-neutral', unknownVerdict);
+        updateElement('simpleSocReason', staleReason);
+    } else {
+        setSimpleTile('simpleSocTile', 'simpleSocVerdict', socTone, simpleVerdictForTone(socTone));
+        updateElement('simpleSocReason', socTone === 'status-safe'
+            ? tr('dashboard.simple_soc_ok', 'No active threat evidence.')
+            : `${soc.attack_type || tr('dashboard.no_attack_type', 'No current attack type')} | ${soc.top_source || '-'} → ${soc.top_destination || '-'}`);
+    }
+    const socChips = document.getElementById('simpleSocChips');
+    if (socChips) {
+        socChips.innerHTML = [
+            simpleChip(`NOW ${nowCount}`, nowCount > 0 ? 'status-danger' : 'status-safe'),
+            simpleChip(`WATCH ${watchCount}`, watchCount > 0 ? 'status-caution' : ''),
+            simpleChip(`BACKLOG ${backlogCount}`),
+            simpleChip(`${tr('dashboard.visibility_label', 'Visibility')} ${socVisibility.value}`, socVisibility.tone),
+        ].join('');
+    }
+
+    // NOC tile
+    if (stale) {
+        setSimpleTile('simpleNocTile', 'simpleNocVerdict', 'status-neutral', unknownVerdict);
+        updateElement('simpleNocReason', staleReason);
+    } else {
+        setSimpleTile('simpleNocTile', 'simpleNocVerdict', nocTone, simpleVerdictForTone(nocTone));
+        const degraded = nocParts
+            .filter((part) => part.state.tone === 'status-caution' || part.state.tone === 'status-danger')
+            .map((part) => `${part.label}: ${part.state.value}`);
+        updateElement('simpleNocReason', degraded.length
+            ? degraded.join(' | ')
+            : tr('dashboard.simple_noc_ok', 'Path, services, capacity, and clients look normal.'));
+    }
+    const nocChips = document.getElementById('simpleNocChips');
+    if (nocChips) {
+        nocChips.innerHTML = [
+            simpleChip(`${tr('dashboard.uplink', 'Uplink')} ${strip.current_uplink || '--'}`),
+            simpleChip(`${tr('dashboard.internet', 'Internet')} ${strip.internet_reachability || '--'}`, path.tone),
+            simpleChip(`${tr('dashboard.heat_services', 'Services')} ${nocServices.value}`, nocServices.tone),
+            simpleChip(`${tr('dashboard.heat_clients', 'Clients')} ${clients.value}`, clients.tone),
+        ].join('');
+    }
 }
 
 function updateCommandStrip(summary, health, failures = []) {

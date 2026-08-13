@@ -114,6 +114,143 @@ body[data-audience="professional"][data-workspace="noc"] #topoliteSingleScreen {
 body[data-audience="professional"][data-workspace="noc"] #missionPanel { order: 8; }
 body[data-audience="professional"][data-workspace="noc"] .temporary-mission-panel { order: 9; }
 
+/* Simple workspace: three verdict tiles (Overall / SOC / NOC), available in
+   BOTH audiences and the default landing view. Everything else in the shell
+   is hidden except the synthetic-data warning banner (safety requirement). */
+.simple-view {
+    display: none;
+}
+
+body[data-workspace="simple"] .simple-view {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+body[data-workspace="simple"] .dashboard-shell > :not(.simple-view):not(.synthetic-mode-banner) {
+    display: none !important;
+}
+
+body[data-workspace="simple"] .section-nav,
+body[data-workspace="simple"] .back-to-top {
+    display: none !important;
+}
+
+.simple-tile {
+    appearance: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 26px 30px 44px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--line-soft);
+    border-left: 6px solid var(--accent-steel);
+    background: var(--bg-panel);
+    box-shadow: var(--shadow-sm);
+}
+
+.simple-tile:hover {
+    border-color: var(--line-strong);
+    border-left-width: 6px;
+}
+
+.simple-kicker {
+    font-size: 0.78rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+}
+
+.simple-verdict {
+    font-size: 3.4rem;
+    font-weight: 700;
+    line-height: 1.05;
+}
+
+.simple-overall .simple-verdict {
+    font-size: 4.4rem;
+}
+
+.simple-reason {
+    color: var(--text-dim);
+    font-size: 1.05rem;
+    line-height: 1.5;
+}
+
+.simple-action {
+    margin-top: 8px;
+    font-size: 1.02rem;
+}
+
+.simple-action-label {
+    color: var(--accent-cyan);
+    margin-right: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.82rem;
+}
+
+.simple-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.simple-chip {
+    border: 1px solid var(--line-soft);
+    border-radius: 999px;
+    padding: 5px 13px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+
+.simple-chip.status-safe { color: var(--accent-green); border-color: rgba(127, 211, 155, 0.35); }
+.simple-chip.status-caution { color: var(--accent-amber); border-color: rgba(224, 164, 88, 0.4); }
+.simple-chip.status-danger { color: var(--accent-red); border-color: rgba(228, 109, 93, 0.45); }
+
+.simple-drill {
+    position: absolute;
+    right: 26px;
+    bottom: 16px;
+    color: var(--text-soft);
+    font-size: 0.85rem;
+}
+
+.simple-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.simple-tile.status-safe { border-left-color: var(--accent-green); }
+.simple-tile.status-safe .simple-verdict { color: var(--accent-green); }
+.simple-tile.status-caution { border-left-color: var(--accent-amber); }
+.simple-tile.status-caution .simple-verdict { color: var(--accent-amber); }
+.simple-tile.status-danger { border-left-color: var(--accent-red); }
+.simple-tile.status-danger .simple-verdict { color: var(--accent-red); }
+.simple-tile.status-neutral { border-left-color: var(--accent-steel); }
+.simple-tile.status-neutral .simple-verdict { color: var(--text-soft); }
+
+@media (max-width: 900px) {
+    .simple-row {
+        grid-template-columns: 1fr;
+    }
+
+    .simple-verdict {
+        font-size: 2.6rem;
+    }
+
+    .simple-overall .simple-verdict {
+        font-size: 3.2rem;
+    }
+}
+
 /* SOC: glance -> posture/split/action -> evidence & timeline -> topology */
 body[data-audience="professional"][data-workspace="soc"] .synthetic-mode-banner { order: 0; }
 body[data-audience="professional"][data-workspace="soc"] .onboarding-banner { order: 1; }
