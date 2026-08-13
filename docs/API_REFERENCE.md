@@ -107,6 +107,44 @@ alongside `ui_snapshot.json` as `ui_status_view.json`.
   `/api/state` fields are unchanged; this key is purely additive and never gates
   Edge behavior.
 
+## Dashboard Bundle API
+
+### GET /api/dashboard/bundle
+
+One-request snapshot for the WebUI dashboard poll. Aggregates the per-panel
+dashboard payloads the frontend previously fetched with ~11 parallel requests
+per tick, so a poll either fully succeeds or fully fails and the heavy
+evidence build can no longer starve `/api/state` behind a busy worker.
+
+Auth: token required (`viewer` or higher), same as the per-panel endpoints.
+
+Query parameters:
+
+- `session_id` — operator-progress / handoff scope (same as
+  `/api/operator-progress` and `/api/dashboard/handoff`)
+- `audience` (default `professional`), `surface` (default `dashboard`) —
+  forwarded to the actions payload builder
+- `trends_limit` (default `60`) — forwarded to the trends payload builder
+
+Response keys (each matching the corresponding per-panel endpoint's shape):
+
+| Key | Same shape as |
+| --- | --- |
+| `summary` | `GET /api/dashboard/summary` |
+| `actions` | `GET /api/dashboard/actions` |
+| `health` | `GET /api/dashboard/health` |
+| `evidence` | `GET /api/dashboard/evidence` |
+| `trends` | `GET /api/dashboard/trends` |
+| `state` | `GET /api/state` (including `status_view`) |
+| `topolite_seed_mode` | `GET /api/topolite/seed-mode` |
+| `mattermost` | `GET /api/mattermost/status` |
+| `operator_progress_state` | `GET /api/operator-progress` (`operator`+ role only, else `null`) |
+| `handoff_brief_pack` | `GET /api/dashboard/handoff` (`operator`+ role only, else `null`) |
+
+The role-gated keys are always present; a `viewer` caller receives `null` for
+both so the response shape stays stable. All per-panel endpoints remain
+available unchanged.
+
 ## Compatibility Note
 
 API contract details evolve with implementation.

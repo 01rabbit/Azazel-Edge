@@ -55,10 +55,9 @@ design principles (Luzmo, InfluxData, Sisense).
 
 `body[data-workspace]` ∈ `simple` (default) | `all` | `noc` | `soc`, persisted
 in `localStorage` and overridable via `?workspace=`. The toggle lives in the
-topbar next to the audience toggle. `simple` and `all` are available to both
-audiences; the `noc`/`soc` buttons and CSS rules are **professional-audience
-only** (`.pro-only` + a CSS gate on `data-audience="professional"`), so
-beginner mode keeps a simplified flow.
+topbar. The former Beginner/Professional audience axis has been removed: the
+Simple workspace now serves the "show me less" need, and every workspace is
+available to every operator.
 
 ## Simple workspace (default landing view)
 
@@ -73,12 +72,10 @@ warning banner, which is a safety requirement and always shows):
    (decision-support doctrine: never a bare status without the next step).
    Click → `all` workspace.
 2. **SOC — Any threat activity?** — verdict + reason + NOW/WATCH/BACKLOG and
-   visibility chips. Click → `soc` workspace (professional) / `all`
-   (temporary).
+   visibility chips. Click → `soc` workspace.
 3. **NOC — Is the network healthy?** — verdict + reason (the degraded
    components, e.g. `Path: DEGRADED | Clients: 3 ANOM`) + uplink / internet /
-   services / clients chips. Click → `noc` workspace (professional) / `all`
-   (temporary).
+   services / clients chips. Click → `noc` workspace.
 
 Design rules that keep the simplification honest:
 
@@ -101,7 +98,7 @@ Scoping classes mirror the audience mechanism:
 ## SOC workspace (threat evidence → bounded decision)
 
 Order (top to bottom): Command Strip → Situation/Split/Action board (posture
-card, SOC/NOC split with details auto-opened, action board, M.I.O. rail) →
+card, SOC/NOC split with details auto-opened, action board, handoff rail) →
 Evidence & Timeline (auto-opened; keyword filter) → Topo-Lite → Mission →
 Client Identity → Runtime health.
 
@@ -115,7 +112,7 @@ Client Identity → Runtime health.
 
 Order: Command Strip → Client Identity (details auto-opened) → Situation/Split
 board (network health, service chips, NOC split details auto-opened, action
-board, M.I.O. rail) → Runtime health (queue/latency meters) → Node Fleet →
+board, handoff rail) → Runtime health (queue/latency meters) → Node Fleet →
 Topo-Lite → Mission.
 
 - Keeps the **SOC glance card** (is a threat driving this outage?) but hides

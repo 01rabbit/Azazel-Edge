@@ -297,7 +297,9 @@ def _request_lang() -> str:
     query_lang = request.args.get("lang") if has_request_context() else ""
     header_lang = request.headers.get("X-AZAZEL-LANG") if has_request_context() else ""
     cookie_lang = request.cookies.get("azazel_lang") if has_request_context() else ""
-    return normalize_lang(query_lang or header_lang or cookie_lang or "ja")
+    # WebUI baseline language is English; Japanese (and the partial captive
+    # catalogs) stay available via explicit ?lang= / header / cookie choice.
+    return normalize_lang(query_lang or header_lang or cookie_lang or "en")
 
 
 def _tr(key: str, default: str | None = None, **kwargs: Any) -> str:
@@ -6256,6 +6258,109 @@ def api_dashboard_trends():
     limit = _as_int(request.args.get("limit"), 120)
     window_sec = _as_int(request.args.get("window_sec"), 0)
     return jsonify(_dashboard_trends_payload(limit=limit, window_sec=window_sec)), 200
+
+
+@app.route("/api/dashboard/bundle", methods=["GET"])
+@require_token()
+def api_dashboard_bundle():
+    """GET /api/dashboard/bundle - One-request snapshot for the dashboard poll.
+
+    Aggregates the per-panel dashboard payloads the WebUI previously fetched
+    with ~11 parallel requests per poll tick. A single request keeps the small
+    worker pool from starving /api/state behind the heavy evidence build (the
+    documented OFFLINE-flicker failure mode) and hands the client one atomic
+    snapshot. Shared inputs (state.json, AI metrics/advisory, JSONL tails) are
+    read once and reused across the payload builders instead of once per
+    endpoint.
+
+    Role-gated blocks (operator_progress_state, handoff_brief_pack) are
+    included only when the caller's role allows them; for viewers they are
+    null so the response shape stays stable. The per-panel endpoints remain
+    available unchanged.
+
+    Query params: session_id (progress/handoff scope), audience, surface,
+    trends_limit.
+    """
+    lang = _request_lang()
+    audience = str(request.args.get("audience") or "professional").strip() or "professional"
+    surface = str(request.args.get("surface") or "dashboard").strip() or "dashboard"
+    session_id = _normalize_progress_session_id(request.args.get("session_id"))
+
+    state = read_state()
+    metrics = _read_json_file(AI_METRICS_PATH)
+    advisory = _read_json_file(AI_ADVISORY_PATH)
+    alert_rows = _tail_jsonl(AI_EVENT_LOG, limit=20)
+    llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
+    runbook_rows = _tail_jsonl(RUNBOOK_EVENT_LOG, limit=20)
+    triage_rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG, TRIAGE_AUDIT_FALLBACK_LOG], limit=20)
+
+    summary = _dashboard_summary_payload(state, metrics, advisory)
+    actions = _dashboard_actions_payload(state, advisory, metrics, llm_rows, audience=audience, surface=surface)
+    health = _dashboard_health_payload(state, metrics, llm_rows, runbook_rows)
+    evidence = _dashboard_evidence_payload(state, advisory, alert_rows, llm_rows, runbook_rows, triage_rows)
+    trends = _dashboard_trends_payload(limit=_as_int(request.args.get("trends_limit"), 60), window_sec=0)
+
+    # Same enrichments as GET /api/state.
+    state_payload = dict(state)
+    state_payload["monitoring"] = get_monitoring_state()
+    state_payload["portal_viewer"] = get_portal_viewer_state()
+    mode_state = get_mode_state()
+    state_payload["mode"] = mode_state.get("mode", {})
+    state_payload["mode_runtime"] = mode_state
+    state_payload["status_view"] = read_status_view()
+
+    # Same shape as GET /api/topolite/seed-mode.
+    topolite_payload = _read_topolite_seed_mode()
+    topolite_response = dict(topolite_payload)
+    if str(topolite_payload.get("mode") or "live") == "synthetic":
+        topolite_response["story"] = _build_topolite_synthetic_story(
+            str(topolite_payload.get("seed_id") or "topolite-default")
+        )
+        topolite_response["watermark"] = "SYNTHETIC DATA - NOT LIVE EVIDENCE"
+    else:
+        topolite_response["story"] = {}
+        topolite_response["watermark"] = ""
+
+    # Same shape as GET /api/mattermost/status (_mattermost_ping is TTL-cached
+    # and single-flight, so an unreachable Mattermost cannot stall the bundle).
+    reachable, ping_payload = _mattermost_ping()
+    mattermost = {
+        "ok": True,
+        "reachable": reachable,
+        "base_url": MATTERMOST_BASE_URL,
+        "open_url": MATTERMOST_OPEN_URL,
+        "mode": _mattermost_mode(),
+        "channel_id": MATTERMOST_CHANNEL_ID,
+        "command_enabled": bool(MATTERMOST_COMMAND_TOKENS),
+        "command_endpoint": "/api/mattermost/command",
+        "command_triggers": [MATTERMOST_COMMAND_PRIMARY_TRIGGER, *MATTERMOST_COMMAND_ALIASES],
+        "ping": ping_payload,
+    }
+
+    operator_progress = None
+    handoff_pack = None
+    if _role_allows(str(getattr(g, "auth_role", "viewer")), "operator"):
+        operator_progress = _operator_progress_payload(summary, actions, session_id=session_id, lang=lang)
+        handoff_pack = _handoff_brief_pack_payload(summary, actions, health, operator_progress, lang=lang)
+
+    return (
+        jsonify(
+            {
+                "ok": True,
+                "summary": summary,
+                "actions": actions,
+                "health": health,
+                "evidence": evidence,
+                "trends": trends,
+                "state": state_payload,
+                "topolite_seed_mode": topolite_response,
+                "mattermost": mattermost,
+                "operator_progress_state": operator_progress,
+                "handoff_brief_pack": handoff_pack,
+            }
+        ),
+        200,
+    )
 
 
 @app.route("/api/dashboard/ai-governance", methods=["GET"])

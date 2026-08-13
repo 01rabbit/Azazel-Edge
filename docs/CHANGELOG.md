@@ -6,6 +6,42 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `GET /api/dashboard/bundle`: one-request snapshot for the dashboard poll,
+  aggregating summary / actions / health / evidence / trends / state /
+  topolite seed mode / Mattermost status plus role-gated operator-progress
+  and handoff blocks (null for viewers). The WebUI now polls this single
+  endpoint instead of ~11 parallel requests per tick — removing the
+  documented worker-starvation / OFFLINE-flicker failure mode and reading
+  shared inputs (state.json, AI metrics/advisory, JSONL tails) once
+  server-side instead of once per endpoint. Per-panel endpoints unchanged;
+  documented in `docs/API_REFERENCE.md`.
+
+### Changed
+
+- WebUI baseline language is now English: with no explicit `?lang=` /
+  `X-AZAZEL-LANG` header / `azazel_lang` cookie / saved browser choice, pages
+  render in English (`Content-Language: en`). Japanese remains fully available
+  via the existing 日本語/English toggle, and an explicit or previously saved
+  choice always wins. Aligns the UI with the repository language policy
+  (English default, Japanese supplemental). Non-web surfaces (notifications,
+  runbook wording defaults) are unchanged.
+
+### Removed
+
+- Dashboard audience split (Beginner/Professional toggle): the Simple view
+  now serves the "show me less" need, so the audience axis, the
+  `pro-only`/`temp-only` gating, the Temporary Mission panel, the temporary
+  triage / ask-tell blocks, and the dashboard progress-checklist block are
+  gone. The workspace toggle (`Simple | All | NOC | SOC`) is fully available
+  to every operator; `/api/dashboard/actions` still accepts `audience` for
+  other surfaces (the dashboard always requests professional wording).
+- Dashboard routes to the AI assist (M.I.O.): the topbar "Ask M.I.O." link,
+  the M.I.O. assist rail (ask form, shortcuts, rationale/review blocks), and
+  the per-panel "Ask about this" buttons are removed. The rail now hosts a
+  deterministic Handoff panel (brief pack, copy, send to Ops Comm /
+  Mattermost, Mattermost reachability). The `/api/ai/*` endpoints and the
+  Ops Comm surface are unchanged.
+
 - Simple view as the dashboard's default landing screen: three verdict tiles
   answering "Overall — are we safe? / SOC — any threat? / NOC — is the network
   healthy?", each with a one-line reason, the top "Do now" action, and

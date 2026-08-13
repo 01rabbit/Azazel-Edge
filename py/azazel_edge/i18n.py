@@ -819,6 +819,10 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "dashboard.simple_soc_ok": "アクティブな脅威証跡はありません。",
         "dashboard.simple_noc_ok": "経路・サービス・容量・クライアントは正常です。",
         "dashboard.simple_stale_reason": "データが古いため判定を保留しています。まず鮮度を確認してください。",
+        "dashboard.nav_handoff": "ハンドオフ",
+        "dashboard.handoff_panel_title": "引き継ぎブリーフ",
+        "dashboard.action_board_note": "決定論的に合成された、有界な次のアクションとオペレータ操作。",
+        "dashboard.action_board_guidance_details_summary_v2": "禁止事項 {avoid}",
     },
     "en": {
         "lang.label": "Language",
@@ -1618,6 +1622,10 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "dashboard.simple_soc_ok": "No active threat evidence.",
         "dashboard.simple_noc_ok": "Path, services, capacity, and clients look normal.",
         "dashboard.simple_stale_reason": "Inputs are stale; verdict withheld. Check freshness first.",
+        "dashboard.nav_handoff": "Handoff",
+        "dashboard.handoff_panel_title": "Shift handoff",
+        "dashboard.action_board_note": "Bounded next actions and operator controls, synthesized deterministically.",
+        "dashboard.action_board_guidance_details_summary_v2": "Avoid {avoid}",
     },
 }
 

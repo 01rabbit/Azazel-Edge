@@ -1007,6 +1007,38 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("fallback", payload["rates"])
         self.assertIn("manual_route", payload["rates"])
 
+    def test_dashboard_bundle_contract(self) -> None:
+        response = self.client.get("/api/dashboard/bundle?session_id=ops-test&trends_limit=10")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        for key in (
+            "summary",
+            "actions",
+            "health",
+            "evidence",
+            "trends",
+            "state",
+            "topolite_seed_mode",
+            "mattermost",
+            "operator_progress_state",
+            "handoff_brief_pack",
+        ):
+            self.assertIn(key, payload)
+        # Bundle sub-payloads must keep the per-panel endpoints' shapes.
+        summary = self.client.get("/api/dashboard/summary").get_json()
+        self.assertEqual(set(payload["summary"].keys()), set(summary.keys()))
+        state = self.client.get("/api/state").get_json()
+        self.assertEqual(set(payload["state"].keys()), set(state.keys()))
+        health = self.client.get("/api/dashboard/health").get_json()
+        self.assertEqual(set(payload["health"].keys()), set(health.keys()))
+        self.assertTrue(payload["mattermost"]["reachable"])
+        # AUTH_FAIL_OPEN maps the caller to admin, so the role-gated blocks
+        # must be present (a plain viewer would receive null for both).
+        self.assertIsInstance(payload["operator_progress_state"], dict)
+        self.assertIsInstance(payload["handoff_brief_pack"], dict)
+        self.assertIn("brief_text", payload["handoff_brief_pack"])
+
     def test_dashboard_index_renders_new_sections(self) -> None:
         response = self.client.get("/?lang=en")
         self.assertEqual(response.status_code, 200)
@@ -1017,10 +1049,9 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn('id="onboardingTitle"', text)
         self.assertIn('id="onboardingBody"', text)
         self.assertIn('id="onboardingNextBtn"', text)
-        self.assertIn("Audience Mode", text)
-        self.assertIn('data-audience="temporary"', text)
-        self.assertIn("Beginner", text)
-        self.assertIn("Professional Detail", text)
+        self.assertNotIn("data-audience", text)
+        self.assertNotIn('id="audienceProfessional"', text)
+        self.assertNotIn('id="audienceTemporary"', text)
         self.assertIn("Current Mission", text)
         self.assertIn("What the operator should do now", text)
         self.assertIn("Primary Objective", text)
@@ -1040,8 +1071,7 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn('id="nocGlanceClients"', text)
         self.assertIn("Threat Evidence Summary", text)
         self.assertIn("Rejected Stronger Actions", text)
-        self.assertIn("Temporary Mission", text)
-        self.assertIn("Safe first response for the person in front of you", text)
+        self.assertNotIn('id="temporaryMissionHeadline"', text)
         self.assertIn("Immediate Action", text)
         self.assertIn('id="decisionTrustCapsule"', text)
         self.assertIn('id="trustCapsuleSummary"', text)
@@ -1051,10 +1081,7 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn('id="actionBoardPrimaryDetailsToggle"', text)
         self.assertIn('id="actionBoardGuidanceDetails"', text)
         self.assertIn('id="actionBoardGuidanceDetailsToggle"', text)
-        self.assertIn('id="progressChecklistSummary"', text)
-        self.assertIn('id="progressChecklistList"', text)
-        self.assertIn('id="progressBlockedReason"', text)
-        self.assertIn('id="progressBlockedSaveBtn"', text)
+        self.assertNotIn('id="progressChecklistList"', text)
         self.assertIn('id="actionBoardRunbookDetails"', text)
         self.assertIn('id="actionBoardRunbookDetailsToggle"', text)
         self.assertIn('id="actionBoardDecisionDetails"', text)
@@ -1113,11 +1140,10 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn('id="handoffCopyBtn"', text)
         self.assertIn('id="handoffMattermostBtn"', text)
         self.assertIn('id="handoffPreview"', text)
-        self.assertIn('id="mioAssistDetails"', text)
-        self.assertIn('id="mioAssistDetailsToggle"', text)
-        self.assertIn("Last Manual Ask", text)
+        self.assertNotIn('id="mioAssistDetails"', text)
+        self.assertNotIn('id="mioAskForm"', text)
+        self.assertIn('id="handoffPanel"', text)
         self.assertIn("Recommended Runbook", text)
-        self.assertIn("Rationale", text)
         self.assertIn("Open Ops Comm", text)
         self.assertIn('id="evidenceTimelineDetails"', text)
         self.assertIn('id="evidenceTimelineDetailsToggle"', text)
@@ -1149,13 +1175,11 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn('id="topoliteTimelineCard"', text)
         self.assertIn('id="topoliteTopologyTimeline"', text)
         self.assertIn('id="topoliteIncidentTimeline"', text)
-        self.assertIn("temporaryOpsCommLink", text)
-        self.assertIn("Ask M.I.O.", text)
+        self.assertNotIn("temporaryOpsCommLink", text)
+        self.assertNotIn('id="askMioLink"', text)
         self.assertIn("Why now", text)
         self.assertIn("Do Not Do", text)
         self.assertIn("Escalate if", text)
-        self.assertIn("Reconnect", text)
-        self.assertIn("Onboarding", text)
         self.assertIn("Portal", text)
         self.assertIn('id="modePortalBtn"', text)
         self.assertIn('id="modeShieldBtn"', text)
@@ -1169,8 +1193,8 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(response.headers.get("Content-Language"), "ja")
         text = response.get_data(as_text=True)
         self.assertIn("表示言語", text)
-        self.assertIn("専門家詳細", text)
-        self.assertIn("初心者", text)
+        self.assertIn("シンプル", text)
+        self.assertIn("総合", text)
         self.assertIn("Service Health", text)
         self.assertIn("NOC Focus", text)
         self.assertIn("Action Board", text)
