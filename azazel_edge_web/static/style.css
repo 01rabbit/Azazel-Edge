@@ -220,6 +220,109 @@ body[data-audience="professional"] .temp-only {
     color: var(--text-main);
 }
 
+/* Freshness chip: amber once the last successful poll is several intervals old */
+#freshnessChip.status-caution { border-color: rgba(224, 164, 88, 0.34); }
+#freshnessChip.status-caution strong { color: var(--accent-amber); }
+
+.meta-actions {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+}
+
+.meta-action-btn {
+    appearance: none;
+    cursor: pointer;
+    min-width: 44px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.045);
+    border: 1px solid var(--line-soft);
+    color: var(--text-main);
+    font: inherit;
+    font-size: 1.05rem;
+    line-height: 1;
+}
+
+.meta-action-btn:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.meta-action-btn.active {
+    border-color: rgba(224, 164, 88, 0.45);
+    color: var(--accent-amber);
+    background: rgba(224, 164, 88, 0.12);
+}
+
+.meta-action-btn.meta-action-busy {
+    animation: az-refresh-spin 0.9s linear infinite;
+}
+
+@keyframes az-refresh-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Sticky section navigation (part of the .topbar-attn-stack sticky context) */
+.section-nav {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    overflow-x: auto;
+    padding: 8px 32px;
+    background: rgba(10, 15, 20, 0.86);
+    backdrop-filter: blur(18px);
+    border-bottom: 1px solid var(--line-soft);
+    scrollbar-width: thin;
+}
+
+.section-nav-link {
+    flex: 0 0 auto;
+    text-decoration: none;
+    color: var(--text-dim);
+    border: 1px solid transparent;
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    letter-spacing: 0.04em;
+}
+
+.section-nav-link:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.section-nav-link.active {
+    color: var(--text-main);
+    border-color: rgba(116, 212, 255, 0.4);
+    background: rgba(116, 212, 255, 0.12);
+}
+
+/* Anchor jumps must land below the sticky topbar + section nav; the JS keeps
+   --az-sticky-offset in sync with the measured stack height. */
+.dashboard-shell section[id] {
+    scroll-margin-top: var(--az-sticky-offset, 190px);
+}
+
+.back-to-top {
+    position: fixed;
+    right: 22px;
+    bottom: 22px;
+    z-index: 60;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    background: var(--bg-panel-strong);
+    color: var(--text-main);
+    font-size: 1.2rem;
+    cursor: pointer;
+    box-shadow: var(--shadow-sm);
+}
+
+.back-to-top:hover {
+    background: rgba(116, 212, 255, 0.16);
+}
+
 .dashboard-shell {
     max-width: 1540px;
     margin: 0 auto;
@@ -1108,27 +1211,6 @@ body[data-audience="professional"] .temp-only {
 .evidence-board,
 .assistant-panel {
     padding: 22px 24px 24px;
-}
-
-.topolite-nav-panel {
-    padding: 22px 24px 24px;
-    margin-bottom: 14px;
-}
-
-.topolite-nav-links {
-    display: grid;
-    gap: 8px;
-    margin-top: 10px;
-}
-
-.topolite-nav-link {
-    display: block;
-    text-decoration: none;
-    color: var(--text-main);
-    border: 1px solid var(--line-soft);
-    border-radius: 10px;
-    padding: 8px 10px;
-    background: rgba(255, 255, 255, 0.04);
 }
 
 .topolite-single-screen {
@@ -2318,6 +2400,50 @@ body[data-audience="professional"] .temp-only {
     font-size: 0.94rem;
 }
 
+/* Evidence keyword filter (Evidence & Timeline panel heading) */
+.evidence-filter-input {
+    appearance: none;
+    font: inherit;
+    font-size: 0.9rem;
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--line-soft);
+    border-radius: 999px;
+    padding: 8px 14px;
+    min-width: 220px;
+}
+
+.evidence-filter-input:focus {
+    outline: none;
+    border-color: rgba(116, 212, 255, 0.45);
+}
+
+.evidence-filter-input::placeholder {
+    color: var(--text-soft);
+}
+
+/* "+N more" expander appended by paintTimeline when rows exceed the cap */
+.timeline-more {
+    padding: 8px 0;
+}
+
+.timeline-more-btn {
+    appearance: none;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.85rem;
+    color: var(--accent-cyan);
+    background: transparent;
+    border: 1px dashed var(--line-soft);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    width: 100%;
+}
+
+.timeline-more-btn:hover {
+    background: rgba(116, 212, 255, 0.08);
+}
+
 .status-safe { color: var(--accent-green); }
 .status-caution { color: var(--accent-amber); }
 .status-danger { color: var(--accent-red); }
@@ -2451,6 +2577,7 @@ body[data-audience="professional"] .temp-only {
         transition: none !important;
     }
     .risk-score { transition: none !important; }
+    .meta-action-btn.meta-action-busy { animation: none !important; }
 }
 
 /* Boot/offline placeholder clarity (Issue #300 item 5) */
@@ -2565,6 +2692,15 @@ body[data-audience="professional"] .temp-only {
 
     .topbar-meta {
         flex-wrap: wrap;
+    }
+
+    .section-nav {
+        padding: 8px 16px;
+    }
+
+    .evidence-filter-input {
+        min-width: 0;
+        width: 100%;
     }
 
     .situation-grid,

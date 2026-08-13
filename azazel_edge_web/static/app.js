@@ -3,6 +3,7 @@ const AUDIENCE_KEY = 'azazel_dashboard_audience';
 const LANG_KEY = 'azazel_lang';
 const PROGRESS_SESSION_KEY = 'azazel_operator_progress_session';
 const ONBOARDING_DISMISSED_KEY = 'azazel_dashboard_onboarding_v3_dismissed';
+const FOLD_STATE_KEY = 'azazel_dashboard_folds_v1';
 const POLL_INTERVAL_MS = Number(window.AZAZEL_POLL_MS) > 0 ? Number(window.AZAZEL_POLL_MS) : 4000;
 const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
 const I18N = window.AZAZEL_I18N || {};
@@ -23,6 +24,24 @@ let headerClockSeedMs = null;
 let currentProgress = {};
 let currentHandoff = {};
 let onboardingStepIndex = 0;
+let pollingPaused = false;
+
+// Evidence timeline filter + show-more state. Timeline renders keep their full
+// row set here so the filter and the "+N more" expanders can repaint without
+// waiting for the next poll.
+let evidenceFilterText = '';
+const timelineLastRows = new Map(); // timeline element id -> { rows, maxVisible }
+const timelineExpanded = new Set(); // timeline element ids the operator expanded
+const EVIDENCE_FILTER_IDS = new Set([
+    'alertQueuesTimeline',
+    'dashboardTrendsTimeline',
+    'topoliteSyntheticTopology',
+    'currentTriggersTimeline',
+    'decisionChangesTimeline',
+    'operatorInteractionsTimeline',
+    'backgroundHistoryTimeline',
+    'triageAuditTimeline',
+]);
 
 // az-attn: status-transition attention system (Issue #300, item 1)
 const AZ_ATTN_DANGER_MS = 5000;   // must equal CSS .az-attn-pulse-danger animation-duration
@@ -192,11 +211,13 @@ function syncLanguageUi() {
         jaBtn.classList.toggle('active', CURRENT_LANG === 'ja');
         jaBtn.classList.toggle('lang-active-ja', CURRENT_LANG === 'ja');
         jaBtn.classList.remove('lang-active-en');
+        jaBtn.setAttribute('aria-pressed', CURRENT_LANG === 'ja' ? 'true' : 'false');
     }
     if (enBtn) {
         enBtn.classList.toggle('active', CURRENT_LANG === 'en');
         enBtn.classList.toggle('lang-active-en', CURRENT_LANG === 'en');
         enBtn.classList.remove('lang-active-ja');
+        enBtn.setAttribute('aria-pressed', CURRENT_LANG === 'en' ? 'true' : 'false');
     }
 }
 
@@ -216,7 +237,9 @@ function updateSyntheticModeBanner(summary, evidence) {
     }
     const toggle = document.getElementById('topoliteSyntheticToggleBtn');
     if (toggle) {
-        toggle.textContent = isSynthetic ? 'Switch to Live' : 'Switch to Synthetic';
+        toggle.textContent = isSynthetic
+            ? tr('dashboard.switch_to_live', 'Switch to Live')
+            : tr('dashboard.switch_to_synthetic', 'Switch to Synthetic');
     }
 }
 
@@ -393,7 +416,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.documentElement.lang = CURRENT_LANG;
     syncLanguageUi();
     bindStaticHandlers();
+    bindFoldPersistence();
     azAttnBindFoldCatchup();
+    bindSectionNav();
+    bindBackToTop();
     startHeaderClock();
     setAudience(currentAudience);
     refreshDashboard();
@@ -417,6 +443,79 @@ window.addEventListener('beforeunload', () => {
     }
 });
 
+// Persist <details> fold state across reloads. Without this every page refresh
+// re-collapsed all 13 disclosure folds, losing whatever depth the operator had
+// opened mid-incident.
+function readFoldState() {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(FOLD_STATE_KEY) || '{}');
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function bindFoldPersistence() {
+    const saved = readFoldState();
+    document.querySelectorAll('details[id]').forEach((details) => {
+        if (Object.prototype.hasOwnProperty.call(saved, details.id)) {
+            details.open = Boolean(saved[details.id]);
+        }
+        details.addEventListener('toggle', () => {
+            const current = readFoldState();
+            current[details.id] = details.open;
+            try {
+                localStorage.setItem(FOLD_STATE_KEY, JSON.stringify(current));
+            } catch (e) { /* storage unavailable: fold state simply stays session-local */ }
+        });
+    });
+}
+
+// Sticky section navigation: measures the sticky topbar stack so anchor jumps
+// land below it, and highlights the section currently in view.
+function bindSectionNav() {
+    const nav = document.getElementById('sectionNav');
+    if (!nav) return;
+    const stack = document.querySelector('.topbar-attn-stack');
+    const syncStickyOffset = () => {
+        if (!stack) return;
+        document.documentElement.style.setProperty('--az-sticky-offset', `${stack.offsetHeight + 14}px`);
+    };
+    syncStickyOffset();
+    window.addEventListener('resize', syncStickyOffset);
+
+    const links = Array.from(nav.querySelectorAll('.section-nav-link'));
+    const linkById = new Map();
+    links.forEach((link) => {
+        const targetId = String(link.getAttribute('href') || '').replace(/^#/, '');
+        if (targetId) linkById.set(targetId, link);
+    });
+    if (!('IntersectionObserver' in window)) return;
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const link = linkById.get(entry.target.id);
+            if (!link) return;
+            links.forEach((candidate) => candidate.classList.toggle('active', candidate === link));
+        });
+    }, { rootMargin: '-25% 0px -65% 0px' });
+    linkById.forEach((_link, targetId) => {
+        const target = document.getElementById(targetId);
+        if (target) observer.observe(target);
+    });
+}
+
+function bindBackToTop() {
+    const btn = document.getElementById('backToTopBtn');
+    if (!btn) return;
+    const sync = () => { btn.hidden = window.scrollY < 600; };
+    window.addEventListener('scroll', sync, { passive: true });
+    sync();
+    btn.addEventListener('click', () => {
+        window.scrollTo({ top: 0, behavior: azAttnReducedMotion ? 'auto' : 'smooth' });
+    });
+}
+
 function bindStaticHandlers() {
     document.getElementById('langJaBtn')?.addEventListener('click', () => switchLanguage('ja'));
     document.getElementById('langEnBtn')?.addEventListener('click', () => switchLanguage('en'));
@@ -424,6 +523,31 @@ function bindStaticHandlers() {
     document.getElementById('audienceTemporary')?.addEventListener('click', () => setAudience('temporary'));
     document.getElementById('showGuideBtn')?.addEventListener('click', reopenOnboardingGuide);
     document.getElementById('globalAlertBandDismiss')?.addEventListener('click', azAttnHideAlertBand);
+    document.getElementById('refreshNowBtn')?.addEventListener('click', async (event) => {
+        const btn = event.currentTarget;
+        btn.classList.add('meta-action-busy');
+        try {
+            await refreshDashboard(true);
+        } finally {
+            btn.classList.remove('meta-action-busy');
+        }
+    });
+    document.getElementById('pollPauseBtn')?.addEventListener('click', () => setPollingPaused(!pollingPaused));
+    document.getElementById('evidenceFilterInput')?.addEventListener('input', (event) => {
+        evidenceFilterText = String(event.target.value || '').trim();
+        EVIDENCE_FILTER_IDS.forEach((id) => paintTimeline(id));
+    });
+    // "+N more" expanders are rebuilt with each timeline repaint, so handle them
+    // via delegation instead of per-button listeners.
+    document.addEventListener('click', (event) => {
+        const btn = event.target instanceof Element ? event.target.closest('.timeline-more-btn') : null;
+        if (!btn) return;
+        const id = String(btn.dataset.timelineId || '');
+        if (!id) return;
+        if (timelineExpanded.has(id)) timelineExpanded.delete(id);
+        else timelineExpanded.add(id);
+        paintTimeline(id);
+    });
 
     document.getElementById('modePortalBtn')?.addEventListener('click', () => switchMode('portal'));
     document.getElementById('modeShieldBtn')?.addEventListener('click', () => switchMode('shield'));
@@ -432,8 +556,9 @@ function bindStaticHandlers() {
     document.getElementById('portalAssistBtn')?.addEventListener('click', openPortalViewer);
     document.getElementById('containBtn')?.addEventListener('click', () => executeAction('contain'));
     document.getElementById('releaseBtn')?.addEventListener('click', () => executeAction('release'));
-    document.getElementById('clientIdentityToggle')?.addEventListener('click', () => {
+    document.getElementById('clientIdentityToggle')?.addEventListener('click', (event) => {
         showNormalClients = !showNormalClients;
+        event.currentTarget.setAttribute('aria-pressed', showNormalClients ? 'true' : 'false');
         updateClientIdentityView(latestSummary);
     });
     document.getElementById('clientIdentityList')?.addEventListener('change', async (event) => {
@@ -628,8 +753,12 @@ function setAudience(audience) {
     currentAudience = normalizeAudience(audience) || 'temporary';
     localStorage.setItem(AUDIENCE_KEY, currentAudience);
     document.body.dataset.audience = currentAudience;
-    document.getElementById('audienceProfessional')?.classList.toggle('active', currentAudience === 'professional');
-    document.getElementById('audienceTemporary')?.classList.toggle('active', currentAudience === 'temporary');
+    const professionalBtn = document.getElementById('audienceProfessional');
+    const temporaryBtn = document.getElementById('audienceTemporary');
+    professionalBtn?.classList.toggle('active', currentAudience === 'professional');
+    professionalBtn?.setAttribute('aria-pressed', currentAudience === 'professional' ? 'true' : 'false');
+    temporaryBtn?.classList.toggle('active', currentAudience === 'temporary');
+    temporaryBtn?.setAttribute('aria-pressed', currentAudience === 'temporary' ? 'true' : 'false');
     updateElement('audienceSummary', currentAudience === 'temporary'
         ? tr('dashboard.temporary_summary', 'Temporary mode prioritizes simpler wording, safe next steps, and user-facing guidance.')
         : tr('dashboard.professional_summary', 'Professional mode shows deeper evidence, review status, and control context.'));
@@ -770,7 +899,10 @@ function startHeaderClock() {
         clearInterval(headerClockTimer);
     }
     seedHeaderClock('');
-    headerClockTimer = window.setInterval(renderHeaderClock, 1000);
+    headerClockTimer = window.setInterval(() => {
+        renderHeaderClock();
+        renderFreshnessAge();
+    }, 1000);
 }
 
 function updateMissionRow(summary, actions) {
@@ -842,13 +974,38 @@ function requestTimeoutSignal() {
     }
 }
 
-async function refreshDashboard() {
+// forceArg must be compared with === true: this function is also bound directly
+// as a focus/visibilitychange handler, where the first argument is an Event.
+async function refreshDashboard(forceArg = false) {
+    const force = forceArg === true;
+    if (pollingPaused && !force) return;
     if (refreshInFlight) return;
     refreshInFlight = true;
     try {
         await refreshDashboardOnce();
     } finally {
         refreshInFlight = false;
+    }
+}
+
+function setPollingPaused(paused) {
+    pollingPaused = Boolean(paused);
+    const btn = document.getElementById('pollPauseBtn');
+    if (btn) {
+        btn.setAttribute('aria-pressed', pollingPaused ? 'true' : 'false');
+        btn.classList.toggle('active', pollingPaused);
+        const label = pollingPaused
+            ? tr('dashboard.resume_updates', 'Resume auto-refresh')
+            : tr('dashboard.pause_updates', 'Pause auto-refresh');
+        btn.setAttribute('aria-label', label);
+        btn.title = label;
+        btn.innerHTML = pollingPaused ? '&#x25b6;' : '&#x23f8;';
+    }
+    azConnRenderChip();
+    if (!pollingPaused) {
+        // Resume with an immediate refresh so the board catches up at once
+        // instead of waiting for the next interval tick.
+        refreshDashboard(true);
     }
 }
 
@@ -1054,15 +1211,18 @@ function renderAggregatorPanel(data) {
 async function fetchAggregatorStatus() {
     const panel = document.getElementById('aggregatorPanel');
     if (!panel) return;
+    const fleetNavLink = document.getElementById('sectionNavFleet');
     try {
         const resp = await fetch('/api/aggregator/nodes', { headers: authHeaders() });
         if (!resp.ok) {
             if (resp.status === 401 || resp.status === 403 || resp.status === 500) {
                 panel.hidden = true;
+                if (fleetNavLink) fleetNavLink.hidden = true;
             }
             return;
         }
         panel.hidden = false;
+        if (fleetNavLink) fleetNavLink.hidden = false;
         const data = await resp.json();
         renderAggregatorPanel(data);
     } catch (_err) {
@@ -2332,34 +2492,34 @@ function updateEvidenceBoard(evidence, health, trends) {
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
 
     renderTimeline('decisionChangesTimeline', evidence.decision_changes || [], (item) => ({
         metaLeft: item.ts_iso || '-',
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
 
     renderTimeline('operatorInteractionsTimeline', evidence.operator_interactions || [], (item) => ({
         metaLeft: item.ts_iso || '-',
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
 
     renderTimeline('backgroundHistoryTimeline', evidence.background_history || [], (item) => ({
         metaLeft: item.ts_iso || '-',
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
     renderTimeline('triageAuditTimeline', evidence.triage_audit || [], (item) => ({
         metaLeft: item.ts_iso || '-',
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
     const syntheticTopology = Array.isArray(evidence.synthetic_story?.topology) ? evidence.synthetic_story.topology : [];
     renderTimeline('topoliteSyntheticTopology', syntheticTopology, (item) => ({
         metaLeft: evidence.data_source === 'synthetic' ? 'synthetic' : '-',
@@ -2382,8 +2542,10 @@ function updateEvidenceBoard(evidence, health, trends) {
         }),
         detail: tr('dashboard.alert_queue_counts_detail', 'Alert pressure split by deterministic risk bands.'),
     });
-    const topNow = Array.isArray(alertQueues.now?.items) ? alertQueues.now.items.slice(0, 2) : [];
-    const topEsc = Array.isArray(alertQueues.escalation_candidates) ? alertQueues.escalation_candidates.slice(0, 2) : [];
+    // Keep more context available than the initial view shows: paintTimeline caps
+    // the visible rows and offers a "+N more" expander for the rest.
+    const topNow = Array.isArray(alertQueues.now?.items) ? alertQueues.now.items.slice(0, 8) : [];
+    const topEsc = Array.isArray(alertQueues.escalation_candidates) ? alertQueues.escalation_candidates.slice(0, 4) : [];
     topNow.forEach((item) => {
         queueItems.push({
             ts_iso: item.ts_iso || '-',
@@ -2405,7 +2567,7 @@ function updateEvidenceBoard(evidence, health, trends) {
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 5 });
 
     const trendPoints = Array.isArray(trends?.points) ? trends.points : [];
     const trendSummary = trends?.summary || {};
@@ -2491,13 +2653,13 @@ function updateTopoliteSingleScreen(summary, evidence, actions) {
         detail: item.state ? `state=${item.state}` : '-',
     }));
 
-    const timelineItems = Array.isArray(evidence?.current_triggers) ? evidence.current_triggers.slice(0, 6) : [];
+    const timelineItems = Array.isArray(evidence?.current_triggers) ? evidence.current_triggers.slice(0, 12) : [];
     renderTimeline('topoliteIncidentTimeline', timelineItems, (item) => ({
         metaLeft: item.ts_iso || '-',
         metaRight: item.kind || '-',
         title: item.title || '-',
         detail: item.detail || '-',
-    }));
+    }), { maxVisible: 6 });
 
     updateElement(
         'topoliteSingleScreenSummary',
@@ -2552,7 +2714,10 @@ function updateAssistant(actions, mattermost, capabilities) {
 function updateControlButtons(summary) {
     const currentMode = String(summary.mode?.current_mode || 'shield').toLowerCase();
     ['portal', 'shield', 'scapegoat'].forEach((mode) => {
-        document.getElementById(`mode${capitalize(mode)}Btn`)?.classList.toggle('active', currentMode === mode);
+        const btn = document.getElementById(`mode${capitalize(mode)}Btn`);
+        if (!btn) return;
+        btn.classList.toggle('active', currentMode === mode);
+        btn.setAttribute('aria-pressed', currentMode === mode ? 'true' : 'false');
     });
     applyAudienceControlPolicy();
 }
@@ -2905,7 +3070,7 @@ function updateAIGovernanceSnapshot(governance) {
 function renderList(id, items, formatter) {
     const el = document.getElementById(id);
     if (!el) return;
-    const rows = Array.isArray(items) && items.length ? items : ['No data'];
+    const rows = Array.isArray(items) && items.length ? items : [tr('dashboard.no_data', 'No data')];
     el.innerHTML = rows.map((item) => `<li>${escapeHtml(formatter(item))}</li>`).join('');
 }
 
@@ -2947,23 +3112,51 @@ function escapeAttribute(value) {
         .replaceAll('>', '&gt;');
 }
 
-function renderTimeline(id, items, formatter) {
+function renderTimeline(id, items, formatter, opts = {}) {
+    const rows = Array.isArray(items) ? items.map((item) => formatter(item)) : [];
+    timelineLastRows.set(id, { rows, maxVisible: Number(opts.maxVisible) > 0 ? Number(opts.maxVisible) : null });
+    paintTimeline(id);
+}
+
+// Repaint a timeline from its stored rows, applying the evidence keyword filter
+// (evidence-board timelines only) and the "+N more" cap without refetching.
+function paintTimeline(id) {
     const el = document.getElementById(id);
     if (!el) return;
-    if (!Array.isArray(items) || items.length === 0) {
-        el.innerHTML = '<li><div class="timeline-title">No recent entries</div></li>';
+    const entry = timelineLastRows.get(id) || { rows: [], maxVisible: null };
+    const filterActive = Boolean(evidenceFilterText) && EVIDENCE_FILTER_IDS.has(id);
+    let rows = entry.rows;
+    if (filterActive) {
+        const query = evidenceFilterText.toLowerCase();
+        rows = rows.filter((row) => [row.metaLeft, row.metaRight, row.title, row.detail]
+            .some((value) => String(value || '').toLowerCase().includes(query)));
+    }
+    if (rows.length === 0) {
+        const message = filterActive
+            ? tr('dashboard.evidence_filter_no_match', 'No entries match the filter.')
+            : tr('dashboard.no_recent_entries', 'No recent entries');
+        el.innerHTML = `<li><div class="timeline-title">${escapeHtml(message)}</div></li>`;
         return;
     }
-    el.innerHTML = items.map((item) => {
-        const row = formatter(item);
-        return `
+    // A filtered view already shows only matches, so the cap is not applied there.
+    const cap = filterActive ? null : entry.maxVisible;
+    const collapsible = Boolean(cap) && rows.length > cap;
+    const expanded = timelineExpanded.has(id);
+    const visible = collapsible && !expanded ? rows.slice(0, cap) : rows;
+    let html = visible.map((row) => `
             <li>
                 <div class="timeline-meta"><span>${escapeHtml(row.metaLeft || '-')}</span><span>${escapeHtml(row.metaRight || '-')}</span></div>
                 <div class="timeline-title">${escapeHtml(row.title || '-')}</div>
                 <div class="timeline-detail">${escapeHtml(row.detail || '-')}</div>
             </li>
-        `;
-    }).join('');
+        `).join('');
+    if (collapsible) {
+        const label = expanded
+            ? tr('dashboard.timeline_show_less', 'Show less')
+            : tr('dashboard.timeline_show_more', 'Show {count} more', { count: rows.length - visible.length });
+        html += `<li class="timeline-more"><button type="button" class="timeline-more-btn" data-timeline-id="${escapeAttribute(id)}" aria-expanded="${expanded ? 'true' : 'false'}">${escapeHtml(label)}</button></li>`;
+    }
+    el.innerHTML = html;
 }
 
 function updateServiceChip(id, value) {
@@ -3100,40 +3293,84 @@ function azAttnNotePanelTone(elId, el, rawTone) {
 }
 
 // Connection-state chip (Issue #300, item 5): distinguishes booting/waiting from an unreachable API.
+let azConnLastOk = null; // null until the first poll completes
+
 function azConnSetState(ok) {
+    if (ok) {
+        azConnConsecutiveFailures = 0;
+        lastSuccessfulPollMs = Date.now();
+    } else {
+        azConnConsecutiveFailures += 1;
+    }
+    azConnLastOk = ok;
+    azConnRenderChip();
+    renderFreshnessAge();
+}
+
+function azConnRenderChip() {
     const chip = document.getElementById('connStateChip');
     const valueEl = document.getElementById('connStateChipValue');
     const descEl = document.getElementById('connStateChipDesc');
     if (!chip || !valueEl) return;
+    const hadPriorSuccess = lastSuccessfulPollMs !== null;
+    // Mirror the tooltip into a visible-on-focus sr-only node: `title` only ever surfaces on
+    // mouse hover, which keyboard and touch/kiosk operators can never trigger.
+    const lastSuccessText = hadPriorSuccess
+        ? tr('dashboard.conn_state.last_success', 'Last successful update: {time}', { time: new Date(lastSuccessfulPollMs).toLocaleTimeString() })
+        : '';
     chip.classList.remove('status-safe', 'status-caution', 'status-danger');
-    if (ok) {
-        azConnConsecutiveFailures = 0;
-        lastSuccessfulPollMs = Date.now();
+    if (pollingPaused) {
+        chip.classList.add('status-caution');
+        valueEl.textContent = tr('dashboard.conn_state.paused', 'PAUSED');
+        chip.title = lastSuccessText;
+        if (descEl) descEl.textContent = lastSuccessText;
+        return;
+    }
+    if (azConnLastOk === null) return; // still booting: keep the INIT placeholder
+    if (azConnLastOk) {
         chip.classList.add('status-safe');
         valueEl.textContent = tr('dashboard.conn_state.live', 'LIVE');
         chip.title = '';
         if (descEl) descEl.textContent = '';
-    } else {
-        azConnConsecutiveFailures += 1;
-        const hadPriorSuccess = lastSuccessfulPollMs !== null;
-        // Tolerate a single transient failure after a prior success: keep the last-good
-        // LIVE chip for one blip so a one-cycle slow poll (dev web server briefly starving
-        // /api/state while /api/dashboard/evidence holds a worker) doesn't flap the link
-        // indicator OFFLINE on the booth screen. Escalate to OFFLINE only once the failure
-        // persists (>=2 consecutive), or immediately if we've never had a successful snapshot.
-        if (hadPriorSuccess && azConnConsecutiveFailures < 2) {
-            chip.classList.add('status-safe');
-            return;
+        return;
+    }
+    // Tolerate a single transient failure after a prior success: keep the last-good
+    // LIVE chip for one blip so a one-cycle slow poll (dev web server briefly starving
+    // /api/state while /api/dashboard/evidence holds a worker) doesn't flap the link
+    // indicator OFFLINE on the booth screen. Escalate to OFFLINE only once the failure
+    // persists (>=2 consecutive), or immediately if we've never had a successful snapshot.
+    if (hadPriorSuccess && azConnConsecutiveFailures < 2) {
+        chip.classList.add('status-safe');
+        return;
+    }
+    chip.classList.add('status-danger');
+    valueEl.textContent = tr('dashboard.conn_state.offline', 'OFFLINE');
+    chip.title = lastSuccessText;
+    if (descEl) descEl.textContent = lastSuccessText;
+}
+
+// "UPD" freshness chip: seconds since the last successful poll, re-rendered by
+// the shared 1s header-clock interval so the age visibly counts up between polls.
+function renderFreshnessAge() {
+    const el = document.getElementById('freshnessAgeValue');
+    if (!el) return;
+    if (lastSuccessfulPollMs === null) {
+        el.textContent = '-';
+        return;
+    }
+    const ageMs = Math.max(0, Date.now() - lastSuccessfulPollMs);
+    const sec = Math.round(ageMs / 1000);
+    el.textContent = sec < 60
+        ? `${sec}s`
+        : `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, '0')}s`;
+    const chipEl = document.getElementById('freshnessChip');
+    if (chipEl) {
+        chipEl.classList.remove('status-caution');
+        // Flag visibly stale data once several poll intervals have passed with
+        // no successful refresh (also counts up while paused, on purpose).
+        if (ageMs >= Math.max(POLL_INTERVAL_MS * 3, 15000)) {
+            chipEl.classList.add('status-caution');
         }
-        chip.classList.add('status-danger');
-        valueEl.textContent = tr('dashboard.conn_state.offline', 'OFFLINE');
-        // Mirror the tooltip into a visible-on-focus sr-only node: `title` only ever surfaces on
-        // mouse hover, which keyboard and touch/kiosk operators can never trigger.
-        const lastSuccessText = hadPriorSuccess
-            ? tr('dashboard.conn_state.last_success', 'Last successful update: {time}', { time: new Date(lastSuccessfulPollMs).toLocaleTimeString() })
-            : '';
-        chip.title = lastSuccessText;
-        if (descEl) descEl.textContent = lastSuccessText;
     }
 }
 
