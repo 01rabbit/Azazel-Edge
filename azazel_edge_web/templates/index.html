@@ -23,6 +23,11 @@
                     <button id="audienceProfessional" class="audience-btn" data-audience="professional" aria-pressed="false">{{ tr('dashboard.professional', 'Professional') }}</button>
                     <button id="audienceTemporary" class="audience-btn active" data-audience="temporary" aria-pressed="true">{{ tr('dashboard.temporary', 'Temporary') }}</button>
                 </div>
+                <div class="audience-toggle workspace-toggle pro-only" role="group" aria-label="{{ tr('dashboard.workspace_label', 'Workspace') }}">
+                    <button id="workspaceAllBtn" class="audience-btn active" data-workspace="all" aria-pressed="true">{{ tr('dashboard.workspace_all', 'All') }}</button>
+                    <button id="workspaceNocBtn" class="audience-btn" data-workspace="noc" aria-pressed="false">{{ tr('dashboard.workspace_noc', 'NOC') }}</button>
+                    <button id="workspaceSocBtn" class="audience-btn" data-workspace="soc" aria-pressed="false">{{ tr('dashboard.workspace_soc', 'SOC') }}</button>
+                </div>
                 <div class="topbar-links">
                     <a class="topbar-link" href="/booth-focus?lang=en">Decision Focus</a>
                     <a id="askMioLink" class="topbar-link" href="#assistantPanel">{{ tr('dashboard.ask_mio', 'Ask M.I.O.') }}</a>
@@ -85,7 +90,7 @@
             <a class="section-nav-link" href="#actionBoardPanel">{{ tr('dashboard.nav_actions', 'Actions') }}</a>
             <a class="section-nav-link" href="#assistantPanel">{{ tr('dashboard.nav_mio', 'M.I.O.') }}</a>
             <a class="section-nav-link pro-only" href="#topoliteSingleScreen">{{ tr('dashboard.nav_topolite', 'Topo-Lite') }}</a>
-            <a class="section-nav-link pro-only" href="#evidencePanel">{{ tr('dashboard.nav_evidence', 'Evidence') }}</a>
+            <a class="section-nav-link pro-only soc-scope" href="#evidencePanel">{{ tr('dashboard.nav_evidence', 'Evidence') }}</a>
             <a class="section-nav-link" href="#aggregatorPanel" id="sectionNavFleet" hidden>{{ tr('dashboard.nav_fleet', 'Fleet') }}</a>
         </nav>
     </div>
@@ -443,7 +448,7 @@
                         <div class="panel-note">{{ tr('dashboard.shared_state', 'Shared state source for WebUI, TUI, and EPD alignment') }}</div>
                     </div>
                     <div class="situation-grid">
-                        <article class="situation-card posture-card" id="postureCard">
+                        <article class="situation-card posture-card soc-scope" id="postureCard">
                             <div class="card-title-row">
                                 <div>
                                     <div class="card-kicker">{{ tr('dashboard.threat_posture', 'Threat Posture') }}</div>
@@ -463,7 +468,7 @@
                             </div>
                         </article>
 
-                        <article class="situation-card">
+                        <article class="situation-card noc-scope">
                             <div class="card-kicker">{{ tr('dashboard.network_health', 'Network Health') }}</div>
                             <h3 id="networkHealthTitle">{{ tr('dashboard.uplink_route', 'Uplink and route') }}</h3>
                             <div class="fact-list">
@@ -557,7 +562,7 @@
                     <details class="split-board-details" id="splitBoardDetails">
                         <summary id="splitBoardDetailsToggle">{{ tr('dashboard.split_board_details_show', 'Show SOC / NOC details') }}</summary>
                         <div class="split-grid">
-                            <article class="split-card soc-split-card">
+                            <article class="split-card soc-split-card soc-scope">
                             <div class="split-card-header">
                                 <div>
                                     <div class="card-kicker">{{ tr('dashboard.threat_summary', 'Threat Evidence Summary') }}</div>
@@ -612,7 +617,7 @@
                             </div>
                             </article>
 
-                            <article class="split-card noc-split-card">
+                            <article class="split-card noc-split-card noc-scope">
                             <div class="split-card-header">
                                 <div>
                                     <div class="card-kicker">{{ tr('dashboard.noc_focus', 'NOC Focus') }}</div>
@@ -975,7 +980,7 @@
             </div>
         </section>
 
-        <section class="panel evidence-board evidence-board-lowered pro-only" id="evidencePanel">
+        <section class="panel evidence-board evidence-board-lowered pro-only soc-scope" id="evidencePanel">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.evidence_timeline', 'Evidence & Timeline') }}</div>

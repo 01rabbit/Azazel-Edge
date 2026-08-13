@@ -6,6 +6,21 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- SOC / NOC workspace modes for the dashboard (design note:
+  `docs/architecture/socnoc-workspace-design.md`, informed by SIEM/SOC/NOC
+  dashboard design research — role-specific views over a single pane of glass,
+  the 5-second rule, alert-by-exception, NOC glanceability). A topbar
+  `All | NOC | SOC` toggle (professional audience only, persisted, `?workspace=`
+  override) re-composes the existing panels per domain: the SOC workspace leads
+  with posture → SOC/NOC split → action board → evidence timelines (split and
+  evidence folds auto-open), hiding NOC-only detail blocks; the NOC workspace
+  leads with client identity → path/service boards → runtime health → node
+  fleet, hiding the threat-posture card, SOC detail split card, and the
+  evidence audit board. Cross-domain glance cards are never hidden (the
+  doctrine requires checking the other domain before stronger control). Fold
+  persistence now records only explicit summary clicks so workspace defaults
+  don't overwrite operator choices. No new endpoints or payload changes.
+
 - Dashboard usability pass (post-BHUSA 2026 polish, roadmap #283): sticky
   section navigation over the dashboard panels (audience-aware; absorbs and
   replaces the old Topo-Lite mini nav panel) with a back-to-top button;

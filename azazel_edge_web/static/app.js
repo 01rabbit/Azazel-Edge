@@ -4,6 +4,7 @@ const LANG_KEY = 'azazel_lang';
 const PROGRESS_SESSION_KEY = 'azazel_operator_progress_session';
 const ONBOARDING_DISMISSED_KEY = 'azazel_dashboard_onboarding_v3_dismissed';
 const FOLD_STATE_KEY = 'azazel_dashboard_folds_v1';
+const WORKSPACE_KEY = 'azazel_dashboard_workspace';
 const POLL_INTERVAL_MS = Number(window.AZAZEL_POLL_MS) > 0 ? Number(window.AZAZEL_POLL_MS) : 4000;
 const CURRENT_LANG = window.AZAZEL_LANG || localStorage.getItem(LANG_KEY) || 'ja';
 const I18N = window.AZAZEL_I18N || {};
@@ -11,6 +12,7 @@ const CURRENT_PAGE = document.body?.dataset?.page || 'dashboard';
 
 let dashboardTimer = null;
 let currentAudience = resolveInitialAudience();
+let currentWorkspace = resolveInitialWorkspace();
 let latestState = {};
 let latestSummary = {};
 let latestMattermost = {};
@@ -156,6 +158,49 @@ function resolveInitialAudience() {
     const queryAudience = normalizeAudience(url.searchParams.get('audience'));
     const savedAudience = normalizeAudience(localStorage.getItem(AUDIENCE_KEY));
     return queryAudience || savedAudience || 'temporary';
+}
+
+// Workspace axis (docs/architecture/socnoc-workspace-design.md): orthogonal to
+// the audience axis. 'all' keeps the classic combined board; 'noc'/'soc'
+// reorder the panels around that domain's primary objects and hide the other
+// domain's detail-only blocks. Professional audience only — the CSS gate
+// requires data-audience="professional", so Temporary mode is unaffected.
+function normalizeWorkspace(value) {
+    const text = String(value || '').trim().toLowerCase();
+    return ['all', 'noc', 'soc'].includes(text) ? text : '';
+}
+
+function resolveInitialWorkspace() {
+    const url = new URL(window.location.href);
+    const queryWorkspace = normalizeWorkspace(url.searchParams.get('workspace'));
+    const savedWorkspace = normalizeWorkspace(localStorage.getItem(WORKSPACE_KEY));
+    return queryWorkspace || savedWorkspace || 'all';
+}
+
+// Fold ids opened by default per workspace. Applied only when the operator has
+// never explicitly toggled that fold — explicit choices are persisted by the
+// fold-state mechanism and always win.
+const WORKSPACE_FOLD_DEFAULTS = {
+    soc: ['splitBoardDetails', 'evidenceTimelineDetails'],
+    noc: ['splitBoardDetails', 'clientIdentityDetails'],
+};
+
+function setWorkspace(workspace) {
+    currentWorkspace = normalizeWorkspace(workspace) || 'all';
+    localStorage.setItem(WORKSPACE_KEY, currentWorkspace);
+    document.body.dataset.workspace = currentWorkspace;
+    [['workspaceAllBtn', 'all'], ['workspaceNocBtn', 'noc'], ['workspaceSocBtn', 'soc']].forEach(([id, ws]) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.classList.toggle('active', currentWorkspace === ws);
+        btn.setAttribute('aria-pressed', currentWorkspace === ws ? 'true' : 'false');
+    });
+    const saved = readFoldState();
+    (WORKSPACE_FOLD_DEFAULTS[currentWorkspace] || []).forEach((foldId) => {
+        if (Object.prototype.hasOwnProperty.call(saved, foldId)) return;
+        const details = document.getElementById(foldId);
+        if (details) details.open = true;
+    });
 }
 
 function authHeaders() {
@@ -422,6 +467,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindBackToTop();
     startHeaderClock();
     setAudience(currentAudience);
+    setWorkspace(currentWorkspace);
     refreshDashboard();
     dashboardTimer = window.setInterval(refreshDashboard, POLL_INTERVAL_MS);
     // Chromium/Brave throttle setInterval in unfocused or backgrounded windows,
@@ -461,12 +507,19 @@ function bindFoldPersistence() {
         if (Object.prototype.hasOwnProperty.call(saved, details.id)) {
             details.open = Boolean(saved[details.id]);
         }
-        details.addEventListener('toggle', () => {
-            const current = readFoldState();
-            current[details.id] = details.open;
-            try {
-                localStorage.setItem(FOLD_STATE_KEY, JSON.stringify(current));
-            } catch (e) { /* storage unavailable: fold state simply stays session-local */ }
+        // Persist on summary click (covers keyboard activation too — browsers
+        // synthesize a click for Enter/Space on <summary>), NOT on 'toggle':
+        // programmatic opens (saved-state restore, workspace fold defaults)
+        // also fire 'toggle', and recording those would turn a default into a
+        // fake "explicit operator choice".
+        details.querySelector('summary')?.addEventListener('click', () => {
+            window.setTimeout(() => {
+                const current = readFoldState();
+                current[details.id] = details.open;
+                try {
+                    localStorage.setItem(FOLD_STATE_KEY, JSON.stringify(current));
+                } catch (e) { /* storage unavailable: fold state simply stays session-local */ }
+            }, 0);
         });
     });
 }
@@ -521,6 +574,9 @@ function bindStaticHandlers() {
     document.getElementById('langEnBtn')?.addEventListener('click', () => switchLanguage('en'));
     document.getElementById('audienceProfessional')?.addEventListener('click', () => setAudience('professional'));
     document.getElementById('audienceTemporary')?.addEventListener('click', () => setAudience('temporary'));
+    document.getElementById('workspaceAllBtn')?.addEventListener('click', () => setWorkspace('all'));
+    document.getElementById('workspaceNocBtn')?.addEventListener('click', () => setWorkspace('noc'));
+    document.getElementById('workspaceSocBtn')?.addEventListener('click', () => setWorkspace('soc'));
     document.getElementById('showGuideBtn')?.addEventListener('click', reopenOnboardingGuide);
     document.getElementById('globalAlertBandDismiss')?.addEventListener('click', azAttnHideAlertBand);
     document.getElementById('refreshNowBtn')?.addEventListener('click', async (event) => {

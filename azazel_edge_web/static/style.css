@@ -83,6 +83,50 @@ body[data-audience="professional"] .temp-only {
     display: none !important;
 }
 
+/* Workspace axis (docs/architecture/socnoc-workspace-design.md): professional
+   audience only — Temporary mode keeps its single simplified flow. .soc-scope
+   blocks vanish in the NOC workspace and vice versa; unscoped blocks are
+   shared. Panel order is re-composed per domain so each workspace leads with
+   its primary objects (5-second rule: most important content top-left). */
+body[data-audience="professional"][data-workspace="noc"] .soc-scope {
+    display: none !important;
+}
+
+body[data-audience="professional"][data-workspace="soc"] .noc-scope {
+    display: none !important;
+}
+
+body[data-audience="professional"][data-workspace="noc"] .dashboard-shell,
+body[data-audience="professional"][data-workspace="soc"] .dashboard-shell {
+    display: flex;
+    flex-direction: column;
+}
+
+/* NOC: glance -> who is affected -> path/service boards -> runtime -> fleet */
+body[data-audience="professional"][data-workspace="noc"] .synthetic-mode-banner { order: 0; }
+body[data-audience="professional"][data-workspace="noc"] .onboarding-banner { order: 1; }
+body[data-audience="professional"][data-workspace="noc"] #commandStripPanel { order: 2; }
+body[data-audience="professional"][data-workspace="noc"] #clientIdentityPanel { order: 3; }
+body[data-audience="professional"][data-workspace="noc"] .board-layout { order: 4; }
+body[data-audience="professional"][data-workspace="noc"] #resourceGuardPanel { order: 5; }
+body[data-audience="professional"][data-workspace="noc"] #aggregatorPanel { order: 6; }
+body[data-audience="professional"][data-workspace="noc"] #topoliteSingleScreen { order: 7; }
+body[data-audience="professional"][data-workspace="noc"] #missionPanel { order: 8; }
+body[data-audience="professional"][data-workspace="noc"] .temporary-mission-panel { order: 9; }
+
+/* SOC: glance -> posture/split/action -> evidence & timeline -> topology */
+body[data-audience="professional"][data-workspace="soc"] .synthetic-mode-banner { order: 0; }
+body[data-audience="professional"][data-workspace="soc"] .onboarding-banner { order: 1; }
+body[data-audience="professional"][data-workspace="soc"] #commandStripPanel { order: 2; }
+body[data-audience="professional"][data-workspace="soc"] .board-layout { order: 3; }
+body[data-audience="professional"][data-workspace="soc"] #evidencePanel { order: 4; }
+body[data-audience="professional"][data-workspace="soc"] #topoliteSingleScreen { order: 5; }
+body[data-audience="professional"][data-workspace="soc"] #missionPanel { order: 6; }
+body[data-audience="professional"][data-workspace="soc"] #clientIdentityPanel { order: 7; }
+body[data-audience="professional"][data-workspace="soc"] #resourceGuardPanel { order: 8; }
+body[data-audience="professional"][data-workspace="soc"] .temporary-mission-panel { order: 9; }
+body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { order: 10; }
+
 .topbar {
     position: sticky;
     top: 0;
@@ -129,7 +173,12 @@ body[data-audience="professional"] .temp-only {
 .topbar-controls {
     display: flex;
     align-items: flex-start;
-    gap: 18px;
+    /* The controls row (language + audience + workspace + links + meta) is
+       wider than one row on most screens — wrap instead of crushing the meta
+       chips into a single narrow column. */
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 12px 18px;
 }
 
 .audience-toggle {

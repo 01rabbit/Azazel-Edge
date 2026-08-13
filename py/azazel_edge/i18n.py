@@ -799,6 +799,10 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "dashboard.alert_queues": "アラートキュー",
         "dashboard.trend_snapshot": "トレンドスナップショット",
         "dashboard.topolite_synthetic_topology": "Topo-Lite トポロジ (合成)",
+        "dashboard.workspace_label": "ワークスペース",
+        "dashboard.workspace_all": "総合",
+        "dashboard.workspace_noc": "NOC",
+        "dashboard.workspace_soc": "SOC",
     },
     "en": {
         "lang.label": "Language",
@@ -1578,6 +1582,10 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "dashboard.alert_queues": "Alert Queues",
         "dashboard.trend_snapshot": "Trend Snapshot",
         "dashboard.topolite_synthetic_topology": "Topo-Lite Topology (Synthetic)",
+        "dashboard.workspace_label": "Workspace",
+        "dashboard.workspace_all": "All",
+        "dashboard.workspace_noc": "NOC",
+        "dashboard.workspace_soc": "SOC",
     },
 }
 
