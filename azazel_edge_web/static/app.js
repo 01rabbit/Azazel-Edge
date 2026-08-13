@@ -1,5 +1,4 @@
 const AUTH_TOKEN = String(localStorage.getItem('azazel_token') || '').trim();
-const AUDIENCE_KEY = 'azazel_dashboard_audience';
 const LANG_KEY = 'azazel_lang';
 const PROGRESS_SESSION_KEY = 'azazel_operator_progress_session';
 const ONBOARDING_DISMISSED_KEY = 'azazel_dashboard_onboarding_v3_dismissed';
@@ -11,19 +10,16 @@ const I18N = window.AZAZEL_I18N || {};
 const CURRENT_PAGE = document.body?.dataset?.page || 'dashboard';
 
 let dashboardTimer = null;
-let currentAudience = resolveInitialAudience();
 let currentWorkspace = resolveInitialWorkspace();
 let latestState = {};
 let latestSummary = {};
 let latestMattermost = {};
-let lastRefreshWarning = '';
 let lastSuccessfulPollMs = null;
 let azConnConsecutiveFailures = 0;
 let showNormalClients = false;
 let headerClockTimer = null;
 let headerClockBaseMs = null;
 let headerClockSeedMs = null;
-let currentProgress = {};
 let currentHandoff = {};
 let onboardingStepIndex = 0;
 let pollingPaused = false;
@@ -146,25 +142,10 @@ function tr(key, fallback, vars = null) {
     });
 }
 
-function normalizeAudience(value) {
-    const text = String(value || '').trim().toLowerCase();
-    if (['temporary', 'beginner', 'casual'].includes(text)) return 'temporary';
-    if (['professional', 'operator', 'pro', 'expert'].includes(text)) return 'professional';
-    return '';
-}
-
-function resolveInitialAudience() {
-    const url = new URL(window.location.href);
-    const queryAudience = normalizeAudience(url.searchParams.get('audience'));
-    const savedAudience = normalizeAudience(localStorage.getItem(AUDIENCE_KEY));
-    return queryAudience || savedAudience || 'temporary';
-}
-
-// Workspace axis (docs/architecture/socnoc-workspace-design.md): orthogonal to
-// the audience axis. 'all' keeps the classic combined board; 'noc'/'soc'
-// reorder the panels around that domain's primary objects and hide the other
-// domain's detail-only blocks. Professional audience only — the CSS gate
-// requires data-audience="professional", so Temporary mode is unaffected.
+// Workspace axis (docs/architecture/socnoc-workspace-design.md): 'simple' is
+// the default three-tile landing view; 'all' is the classic combined board;
+// 'noc'/'soc' reorder the panels around that domain's primary objects and
+// hide the other domain's detail-only blocks.
 function normalizeWorkspace(value) {
     const text = String(value || '').trim().toLowerCase();
     return ['simple', 'all', 'noc', 'soc'].includes(text) ? text : '';
@@ -288,175 +269,6 @@ function updateSyntheticModeBanner(summary, evidence) {
     }
 }
 
-const shortcutQuestions = {
-    wifi: tr('dashboard.question_wifi_trouble', 'How should I guide a user who cannot connect to Wi-Fi?'),
-    reconnect: tr('dashboard.question_reconnect', 'How should I guide a user who cannot reconnect?'),
-    onboarding: tr('dashboard.question_onboarding', 'How should I guide a first-time onboarding user?'),
-    dns: tr('dashboard.question_dns_failure', 'What should I verify when DNS lookup fails?'),
-    uplink: tr('dashboard.question_gateway_uplink', 'What should I verify when the gateway or uplink looks unhealthy?'),
-    service: tr('dashboard.question_service_status', 'What should I verify when a service appears unhealthy?'),
-    portal: tr('dashboard.question_portal', 'How should I guide a user when the portal does not appear?'),
-};
-
-const triageIntentBySymptom = {
-    wifi: 'wifi_connectivity',
-    reconnect: 'wifi_reconnect',
-    onboarding: 'wifi_onboarding',
-    dns: 'dns_resolution',
-    uplink: 'uplink_reachability',
-    service: 'service_status',
-    portal: 'portal_access',
-};
-
-const temporaryFlows = {
-    wifi: {
-        ask: CURRENT_LANG === 'ja' ? [
-            '最初に失敗している端末はどれですか？',
-            '端末から SSID は見えていますか？',
-            '問題は 1 台だけですか、それとも複数台ですか？'
-        ] : [
-            'Which device is failing first?',
-            'Does the device see the SSID at all?',
-            'Is this only one device or multiple devices?'
-        ],
-        tell: CURRENT_LANG === 'ja' ? [
-            '端末の再起動を繰り返さないでください。',
-            '単一端末の問題か、広域の Wi-Fi 問題かを確認しています。'
-        ] : [
-            'Do not repeatedly reboot the device yet.',
-            'We are checking whether this is a single-device issue or a wider Wi-Fi issue.'
-        ],
-    },
-    reconnect: {
-        ask: CURRENT_LANG === 'ja' ? [
-            '以前は正常に接続できていましたか？',
-            '場所の移動やパスワード変更の後に失敗し始めましたか？',
-            '問題は 1 台だけですか？'
-        ] : [
-            'Was the user connected successfully before?',
-            'Did the failure start after moving location or after a password change?',
-            'Is the problem only on one device?'
-        ],
-        tell: CURRENT_LANG === 'ja' ? [
-            '保存済みプロファイルの問題か、広域の無線問題かを確認しています。',
-            '当面は通常利用位置の近くで待機し、再接続の連打は避けてください。'
-        ] : [
-            'We are checking whether this is a saved-profile issue or a broader wireless issue.',
-            'Please keep the device near the normal usage area and avoid repeated reconnect attempts for the moment.'
-        ],
-    },
-    onboarding: {
-        ask: CURRENT_LANG === 'ja' ? [
-            'この端末がネットワークへ参加するのは初めてですか？',
-            '端末から想定の SSID は見えていますか？',
-            '標準のオンボーディング手順どおりに進めていますか？'
-        ] : [
-            'Is this the first time this device is joining the network?',
-            'Can the device see the expected SSID?',
-            'Is the user following the standard onboarding steps?'
-        ],
-        tell: CURRENT_LANG === 'ja' ? [
-            'ネットワーク設定変更の前に、オンボーディング経路を先に確認しています。',
-            '端末名と、どの手順で止まったかを控えてください。'
-        ] : [
-            'We are checking the onboarding path first before changing any network settings.',
-            'Please prepare the device name and the exact step where the user got stuck.'
-        ],
-    },
-    dns: {
-        ask: CURRENT_LANG === 'ja' ? [
-            'どのサイトまたはホスト名が開けませんか？',
-            'IP アドレス直打ちでは開けますか？',
-            '複数の利用者に影響していますか？'
-        ] : [
-            'Which site or hostname fails to open?',
-            'Does access by IP address work?',
-            'Is the issue affecting multiple users?'
-        ],
-        tell: CURRENT_LANG === 'ja' ? [
-            'まず名前解決の状態を確認しています。',
-            'DNS と gateway を確認する間、そのまま接続状態を維持してください。'
-        ] : [
-            'We are checking name resolution first.',
-            'Please keep the device connected while we verify DNS and gateway status.'
-        ],
-    },
-    uplink: {
-        ask: CURRENT_LANG === 'ja' ? [
-            '全利用者に影響していますか、それとも一部の区画だけですか？',
-            '問題はいつ始まりましたか？',
-            '外部サイトへまったく到達できませんか？'
-        ] : [
-            'Are all users affected or only one area?',
-            'When did the problem start?',
-            'Is any external site reachable at all?'
-        ],
-        tell: CURRENT_LANG === 'ja' ? [
-            '上位回線と gateway 到達性を確認しています。',
-            '最初の確認が終わるまでケーブル変更やモード変更は行わないでください。'
-        ] : [
-            'We are checking upstream connectivity and gateway reachability.',
-            'Please avoid changing cables or mode settings until the first check completes.'
-        ],
-    },
-    service: {
-        ask: CURRENT_LANG === 'ja' ? [
-            'どの機能が使えないように見えますか？',
-            'UI 表示の問題ですか、それとも本当に機能停止ですか？',
-            '最後に正常に使えたのはいつですか？'
-        ] : [
-            'Which function appears unavailable?',
-            'Is the UI wrong, or is the function really down?',
-            'When was the last successful use?'
-        ],
-        tell: CURRENT_LANG === 'ja' ? [
-            '再起動前に実サービス状態を確認しています。',
-            'status と journal を確認する間、そのままお待ちください。'
-        ] : [
-            'We are confirming actual service status before any restart.',
-            'Please wait while we check status and journal information.'
-        ],
-    },
-    portal: {
-        ask: CURRENT_LANG === 'ja' ? [
-            '接続後にブラウザは表示されますか？',
-            '通常サイトを入力すると何か表示されますか？',
-            '問題は 1 人だけですか、それとも複数人ですか？'
-        ] : [
-            'Does the device show a browser at all after connecting?',
-            'Can the user reach any page by typing a normal website address?',
-            'Is this one user or multiple users?'
-        ],
-        tell: CURRENT_LANG === 'ja' ? [
-            'ポータルトリガーかブラウザ転送が失われていないか確認しています。',
-            '最初の確認が終わるまで、接続を維持したままお待ちください。'
-        ] : [
-            'We are checking whether the portal trigger or browser redirection is missing.',
-            'Please stay connected and avoid switching Wi-Fi networks until the first check completes.'
-        ],
-    },
-};
-
-function formatAssistResponse(result) {
-    const lines = [];
-    const surfaceMessages = result.surface_messages && typeof result.surface_messages === 'object' ? result.surface_messages : {};
-    const preferred = surfaceMessages.dashboard || result.surface_message || result.answer || '-';
-    lines.push(preferred);
-    const rationale = Array.isArray(result.rationale) && result.rationale.length
-        ? result.rationale.join(' | ')
-        : '-';
-    lines.push(`${tr('api.rationale', 'Rationale')}: ${rationale}`);
-    lines.push(`${tr('api.user_guidance', 'User Guidance')}: ${result.user_message || '-'}`);
-    lines.push(`${tr('api.suggested_runbook', 'Suggested Runbook')}: ${result.runbook_id || tr('api.no_suggestion', 'no suggestion')}`);
-    lines.push(`${tr('api.review_prefix', 'Review')}: ${result.runbook_review?.final_status || tr('dashboard.no_review_data', 'No review data')}`);
-    const handoff = result.handoff && typeof result.handoff === 'object' ? result.handoff : {};
-    const handoffParts = [];
-    if (handoff.ops_comm) handoffParts.push(`Ops Comm ${handoff.ops_comm}`);
-    if (handoff.mattermost) handoffParts.push(`Mattermost ${handoff.mattermost}`);
-    lines.push(`${tr('api.continue', 'Continue')}: ${handoffParts.length ? handoffParts.join(' / ') : '-'}`);
-    return lines.join('\n\n');
-}
-
 document.addEventListener('DOMContentLoaded', () => {
     document.documentElement.lang = CURRENT_LANG;
     syncLanguageUi();
@@ -466,7 +278,6 @@ document.addEventListener('DOMContentLoaded', () => {
     bindSectionNav();
     bindBackToTop();
     startHeaderClock();
-    setAudience(currentAudience);
     setWorkspace(currentWorkspace);
     refreshDashboard();
     dashboardTimer = window.setInterval(refreshDashboard, POLL_INTERVAL_MS);
@@ -572,21 +383,14 @@ function bindBackToTop() {
 function bindStaticHandlers() {
     document.getElementById('langJaBtn')?.addEventListener('click', () => switchLanguage('ja'));
     document.getElementById('langEnBtn')?.addEventListener('click', () => switchLanguage('en'));
-    document.getElementById('audienceProfessional')?.addEventListener('click', () => setAudience('professional'));
-    document.getElementById('audienceTemporary')?.addEventListener('click', () => setAudience('temporary'));
     document.getElementById('workspaceSimpleBtn')?.addEventListener('click', () => setWorkspace('simple'));
     document.getElementById('workspaceAllBtn')?.addEventListener('click', () => setWorkspace('all'));
     document.getElementById('workspaceNocBtn')?.addEventListener('click', () => setWorkspace('noc'));
     document.getElementById('workspaceSocBtn')?.addEventListener('click', () => setWorkspace('soc'));
-    // Simple-view drill-downs. NOC/SOC workspaces are professional-audience
-    // concepts; Temporary drills into the classic combined board instead.
+    // Simple-view drill-downs.
     document.getElementById('simpleOverallTile')?.addEventListener('click', () => setWorkspace('all'));
-    document.getElementById('simpleSocTile')?.addEventListener('click', () => {
-        setWorkspace(currentAudience === 'professional' ? 'soc' : 'all');
-    });
-    document.getElementById('simpleNocTile')?.addEventListener('click', () => {
-        setWorkspace(currentAudience === 'professional' ? 'noc' : 'all');
-    });
+    document.getElementById('simpleSocTile')?.addEventListener('click', () => setWorkspace('soc'));
+    document.getElementById('simpleNocTile')?.addEventListener('click', () => setWorkspace('noc'));
     document.getElementById('showGuideBtn')?.addEventListener('click', reopenOnboardingGuide);
     document.getElementById('globalAlertBandDismiss')?.addEventListener('click', azAttnHideAlertBand);
     document.getElementById('refreshNowBtn')?.addEventListener('click', async (event) => {
@@ -670,94 +474,6 @@ function bindStaticHandlers() {
         }
     });
 
-    document.querySelectorAll('.shortcut-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            const question = btn.dataset.question || '';
-            const area = document.getElementById('mioQuestion');
-            if (area) area.value = question;
-            if (question) askMio(question);
-        });
-    });
-
-    document.querySelectorAll('.context-ask-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            const question = btn.dataset.question || '';
-            const area = document.getElementById('mioQuestion');
-            if (area) area.value = question;
-            if (question) askMio(question);
-        });
-    });
-
-    document.querySelectorAll('.temp-flow-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            const symptom = String(btn.dataset.symptom || '').trim();
-            applyTemporaryFlow(symptom);
-            updateTemporaryOpsCommLink(symptom);
-        });
-    });
-
-    document.getElementById('mioAskForm')?.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const area = document.getElementById('mioQuestion');
-        const question = String(area?.value || '').trim();
-        if (!question) {
-            showToast(tr('dashboard.question_required', 'Enter a question first.'), 'info');
-            return;
-        }
-        await askMio(question);
-    });
-
-    document.getElementById('progressChecklistList')?.addEventListener('change', async (event) => {
-        const target = event.target;
-        if (!(target instanceof HTMLInputElement) || !target.classList.contains('progress-checklist-checkbox')) return;
-        try {
-            await fetchJson('/api/operator-progress', {
-                method: 'POST',
-                headers: authHeaders(),
-                body: JSON.stringify({
-                    session_id: ensureProgressSessionId(),
-                    item_id: target.dataset.itemId || '',
-                    done: target.checked,
-                }),
-            });
-            await refreshDashboard();
-        } catch (error) {
-            target.checked = !target.checked;
-            showToast(error.message || String(error), 'error');
-        }
-    });
-    document.getElementById('progressBlockedSaveBtn')?.addEventListener('click', async () => {
-        const reason = String(document.getElementById('progressBlockedReason')?.value || '').trim();
-        try {
-            await fetchJson('/api/operator-progress', {
-                method: 'POST',
-                headers: authHeaders(),
-                body: JSON.stringify({
-                    session_id: ensureProgressSessionId(),
-                    blocked_reason: reason,
-                    blocked_prompt: currentProgress.blocked_prompt || '',
-                }),
-            });
-            await refreshDashboard();
-        } catch (error) {
-            showToast(error.message || String(error), 'error');
-        }
-    });
-    document.getElementById('progressBlockedClearBtn')?.addEventListener('click', async () => {
-        try {
-            await fetchJson('/api/operator-progress', {
-                method: 'POST',
-                headers: authHeaders(),
-                body: JSON.stringify({
-                    session_id: ensureProgressSessionId(),
-                    clear_blocked: true,
-                }),
-            });
-            await refreshDashboard();
-        } catch (error) {
-            showToast(error.message || String(error), 'error');
-        }
-    });
     document.getElementById('handoffCopyBtn')?.addEventListener('click', async () => {
         try {
             const ok = await copyTextToClipboard(currentHandoff.brief_text || '');
@@ -797,67 +513,6 @@ async function toggleTopoliteSyntheticMode() {
     } catch (error) {
         showToast(`Topo-Lite mode change failed: ${error.message}`, 'error');
     }
-}
-
-function buildOpsCommTriageUrl(intentId = '', question = '') {
-    const url = new URL('/ops-comm', window.location.origin);
-    url.searchParams.set('lang', CURRENT_LANG);
-    url.searchParams.set('audience', currentAudience === 'temporary' ? 'beginner' : 'operator');
-    if (intentId) url.searchParams.set('triage_intent', intentId);
-    if (question) url.searchParams.set('message', question);
-    return `${url.pathname}${url.search}`;
-}
-
-function updateTemporaryOpsCommLink(symptom = 'wifi') {
-    const link = document.getElementById('temporaryOpsCommLink');
-    if (!link) return;
-    const key = triageIntentBySymptom[symptom] ? symptom : 'wifi';
-    link.href = buildOpsCommTriageUrl(triageIntentBySymptom[key], shortcutQuestions[key] || '');
-}
-
-function setAudience(audience) {
-    currentAudience = normalizeAudience(audience) || 'temporary';
-    localStorage.setItem(AUDIENCE_KEY, currentAudience);
-    document.body.dataset.audience = currentAudience;
-    const professionalBtn = document.getElementById('audienceProfessional');
-    const temporaryBtn = document.getElementById('audienceTemporary');
-    professionalBtn?.classList.toggle('active', currentAudience === 'professional');
-    professionalBtn?.setAttribute('aria-pressed', currentAudience === 'professional' ? 'true' : 'false');
-    temporaryBtn?.classList.toggle('active', currentAudience === 'temporary');
-    temporaryBtn?.setAttribute('aria-pressed', currentAudience === 'temporary' ? 'true' : 'false');
-    updateElement('audienceSummary', currentAudience === 'temporary'
-        ? tr('dashboard.temporary_summary', 'Temporary mode prioritizes simpler wording, safe next steps, and user-facing guidance.')
-        : tr('dashboard.professional_summary', 'Professional mode shows deeper evidence, review status, and control context.'));
-    if (currentAudience === 'temporary') {
-        applyTemporaryFlow('wifi', false);
-    }
-    updateTemporaryOpsCommLink('wifi');
-    applyAudienceControlPolicy();
-    syncOnboardingBanner();
-}
-
-function applyAudienceControlPolicy() {
-    const temporary = currentAudience === 'temporary';
-    ['modePortalBtn', 'modeShieldBtn', 'modeScapegoatBtn'].forEach((id) => {
-        const btn = document.getElementById(id);
-        if (!btn) return;
-        btn.disabled = temporary;
-        btn.title = temporary ? tr('dashboard.temp_do_not_do_default', 'Do not change mode or restart services until the first checks are done.') : '';
-    });
-}
-
-function applyTemporaryFlow(symptom, triggerAsk = true) {
-    const selected = temporaryFlows[symptom] ? symptom : 'wifi';
-    const flow = temporaryFlows[selected];
-    updateTemporaryOpsCommLink(selected);
-    renderList('temporaryAskList', flow.ask || [], (item) => item);
-    renderList('temporaryTellList', flow.tell || [], (item) => item);
-    updateGuidanceToggleSummary();
-    if (!triggerAsk) return;
-    const question = document.querySelector(`.temp-flow-btn[data-symptom="${selected}"]`)?.dataset.question || shortcutQuestions[selected] || '';
-    const area = document.getElementById('mioQuestion');
-    if (area) area.value = question;
-    if (question) askMio(question);
 }
 
 function formatLocalDateTime(rawValue) {
@@ -973,51 +628,20 @@ function startHeaderClock() {
 
 function updateMissionRow(summary, actions) {
     const recommendation = String(summary.current_recommendation || '-').trim();
-    const userGuidance = String(actions.current_user_guidance || '').trim();
     const doNext = Array.isArray(actions.do_next) ? actions.do_next : [];
     const whyNow = Array.isArray(actions.why_now) ? actions.why_now : [];
     const doNotDo = Array.isArray(actions.do_not_do) ? actions.do_not_do : [];
 
-    const temporary = currentAudience === 'temporary';
-    const headline = temporary
-        ? (userGuidance || doNext[0] || recommendation || tr('dashboard.mission_headline_temporary_fallback', 'Guide the user safely.'))
-        : (doNext[0] || recommendation || tr('dashboard.mission_headline_professional_fallback', 'Review current operator action.'));
-    const summaryLine = temporary
-        ? tr('dashboard.mission_summary_temporary', 'Temporary mode reduces the task to a safe first response and a user-facing explanation.')
-        : tr('dashboard.mission_summary_professional', 'Professional mode compresses the first operator action, the current reason, and the non-negotiable safety rails.');
-    const focusItems = temporary
-        ? ([
-            ...(Array.isArray(actions.current_operator_actions) ? actions.current_operator_actions.slice(0, 2) : []),
-            ...(doNext.slice(0, 1)),
-        ].filter(Boolean))
-        : doNext.slice(0, 3);
+    const headline = doNext[0] || recommendation || tr('dashboard.mission_headline_professional_fallback', 'Review current operator action.');
+    const summaryLine = tr('dashboard.mission_summary_professional', 'Professional mode compresses the first operator action, the current reason, and the non-negotiable safety rails.');
+    const focusItems = doNext.slice(0, 3);
     const safetyItems = doNotDo.length ? doNotDo.slice(0, 3) : [tr('dashboard.mission_safety_default', 'Do not act on stale data without confirming freshness.')];
 
     updateElement('missionHeadline', headline || '-');
     updateElement('missionSummary', summaryLine);
-    updateElement('missionAudienceNote', temporary
-        ? tr('dashboard.mission_note_temporary', 'Temporary mode places the first safe action and the user-facing instruction ahead of deep evidence.')
-        : tr('dashboard.mission_note_professional', 'Professional mode places the first operator action and the causal summary ahead of deep history.'));
     renderList('missionReasonList', whyNow.length ? whyNow.slice(0, 3) : [tr('dashboard.waiting_causal_summary_ui', 'Waiting for causal summary.')], (item) => item);
     renderList('missionFocusList', focusItems.length ? focusItems : [tr('dashboard.waiting_next_checks_ui', 'Waiting for next checks.')], (item) => item);
     renderList('missionSafetyList', safetyItems, (item) => item);
-}
-
-function updateTemporaryMission(actions) {
-    const doNext = Array.isArray(actions.do_next) ? actions.do_next : [];
-    const doNotDo = Array.isArray(actions.do_not_do) ? actions.do_not_do : [];
-    const askItems = Array.from(document.querySelectorAll('#temporaryAskList li'))
-        .map((item) => item.textContent || '')
-        .filter(Boolean);
-    const tellItems = Array.from(document.querySelectorAll('#temporaryTellList li'))
-        .map((item) => item.textContent || '')
-        .filter(Boolean);
-    updateElement('temporaryMissionHeadline', actions.current_user_guidance || doNext[0] || tr('dashboard.temp_headline_fallback', 'Guide the user safely.'));
-    updateElement('temporaryMissionSummary', tr('dashboard.temp_summary_ui', 'Temporary mode compresses the first safe response, the interview prompts, and the forbidden actions into one block.'));
-    renderList('temporaryMissionAskList', askItems, (item) => item);
-    renderList('temporaryMissionTellList', tellItems, (item) => item);
-    renderList('temporaryMissionDoNotDoList', doNotDo.length ? doNotDo : [tr('dashboard.temp_do_not_do_default', 'Do not change mode or restart services until the first checks are done.')], (item) => item);
-    updateGuidanceToggleSummary(doNotDo.length ? doNotDo.length : 1);
 }
 
 // Single-flight + ordering guards. The poll interval fires unconditionally, so
@@ -1077,57 +701,27 @@ function setPollingPaused(paused) {
 
 async function refreshDashboardOnce() {
     fetchAggregatorStatus();
-    const progressSessionId = ensureProgressSessionId();
-    const actionsUrl = new URL('/api/dashboard/actions', window.location.origin);
-    actionsUrl.searchParams.set('audience', currentAudience);
-    actionsUrl.searchParams.set('surface', 'dashboard');
-    const progressUrl = new URL('/api/operator-progress', window.location.origin);
-    progressUrl.searchParams.set('session_id', progressSessionId);
-    const handoffUrl = new URL('/api/dashboard/handoff', window.location.origin);
-    handoffUrl.searchParams.set('session_id', progressSessionId);
-    const requests = [
-        ['summary', '/api/dashboard/summary', true],
-        ['topoliteMode', '/api/topolite/seed-mode', false],
-        ['actions', actionsUrl.pathname + actionsUrl.search, false],
-        ['progress', progressUrl.pathname + progressUrl.search, false],
-        ['handoff', handoffUrl.pathname + handoffUrl.search, false],
-        ['evidence', '/api/dashboard/evidence', false],
-        ['health', '/api/dashboard/health', false],
-        ['trends', '/api/dashboard/trends?limit=60', false],
-        ['state', '/api/state', true],
-        ['mattermost', '/api/mattermost/status', false],
-        ['capabilities', '/api/ai/capabilities', false],
-    ];
+    // One request per tick (GET /api/dashboard/bundle) instead of the former
+    // ~11 parallel fetches. The fan-out used to let the heavy evidence build
+    // hold a worker and starve /api/state, flapping the LINK chip OFFLINE;
+    // the bundle reads shared inputs once server-side and returns one atomic
+    // snapshot, so a poll either fully succeeds or fully fails.
+    const bundleUrl = new URL('/api/dashboard/bundle', window.location.origin);
+    bundleUrl.searchParams.set('session_id', ensureProgressSessionId());
+    bundleUrl.searchParams.set('surface', 'dashboard');
+    bundleUrl.searchParams.set('trends_limit', '60');
 
-    const resolved = await Promise.all(
-        requests.map(async ([name, path, required]) => {
-            try {
-                const data = await fetchJson(path, { signal: requestTimeoutSignal() });
-                return [name, { ok: true, data, required }];
-            } catch (error) {
-                return [name, { ok: false, error: error.message || String(error), required }];
-            }
-        })
-    );
-
-    const resultMap = Object.fromEntries(resolved);
-    const failures = Object.entries(resultMap)
-        .filter(([, item]) => !item.ok)
-        .map(([name, item]) => `${name}: ${item.error}`);
-    const hardFailures = Object.entries(resultMap)
-        .filter(([, item]) => !item.ok && item.required)
-        .map(([name, item]) => `${name}: ${item.error}`);
-
-    if (hardFailures.length > 0) {
-        console.error('Dashboard refresh failed:', hardFailures);
+    let bundle;
+    try {
+        bundle = await fetchJson(bundleUrl.pathname + bundleUrl.search, { signal: requestTimeoutSignal() });
+    } catch (error) {
+        const message = error.message || String(error);
+        console.error('Dashboard refresh failed:', message);
         azConnSetState(false);
-        // Tolerate a single transient slow poll before alarming. The single-process
-        // dev web server can briefly starve /api/state or /api/dashboard/summary while
-        // the heavy /api/dashboard/evidence request holds a worker; surfacing a toast
-        // (and OFFLINE chip) on a one-cycle blip makes the booth screen flicker. Only
-        // notify once the failure persists across polls.
+        // Tolerate a single transient slow poll before alarming, so a one-cycle
+        // blip does not flicker a toast onto the booth screen.
         if (azConnConsecutiveFailures >= 2) {
-            showToast(tr('dashboard.refresh_failed', 'Dashboard refresh failed: {error}', { error: hardFailures.join(' | ') }), 'error');
+            showToast(tr('dashboard.refresh_failed', 'Dashboard refresh failed: {error}', { error: message }), 'error');
         }
         return;
     }
@@ -1135,7 +729,7 @@ async function refreshDashboardOnce() {
     // Ordering guard: even with the single-flight gate, never let an older
     // control-plane snapshot overwrite a newer one on screen (this is what made
     // the header clock jump backwards). snapshot_epoch is wall-clock seconds.
-    const incomingSnapshotEpoch = Number(resultMap.state?.data?.snapshot_epoch || 0);
+    const incomingSnapshotEpoch = Number(bundle.state?.snapshot_epoch || 0);
     if (incomingSnapshotEpoch && incomingSnapshotEpoch < lastRenderedSnapshotEpoch) {
         return;
     }
@@ -1143,17 +737,15 @@ async function refreshDashboardOnce() {
         lastRenderedSnapshotEpoch = incomingSnapshotEpoch;
     }
 
-    const summary = resultMap.summary?.data || {};
-    const actions = resultMap.actions?.data || {};
-    const progress = resultMap.progress?.data?.operator_progress_state || {};
-    const handoff = resultMap.handoff?.data?.handoff_brief_pack || {};
-    const evidence = resultMap.evidence?.data || {};
-    const health = resultMap.health?.data || {};
-    const trends = resultMap.trends?.data || {};
-    const state = resultMap.state?.data || {};
-    const mattermost = resultMap.mattermost?.data || { reachable: false, command_triggers: [] };
-    const capabilities = resultMap.capabilities?.data || { mattermost_triggers: [] };
-    const topoliteMode = resultMap.topoliteMode?.data?.topolite_seed_mode || {};
+    const summary = bundle.summary || {};
+    const actions = bundle.actions || {};
+    const handoff = bundle.handoff_brief_pack || {};
+    const evidence = bundle.evidence || {};
+    const health = bundle.health || {};
+    const trends = bundle.trends || {};
+    const state = bundle.state || {};
+    const mattermost = bundle.mattermost || { reachable: false, command_triggers: [] };
+    const topoliteMode = bundle.topolite_seed_mode || {};
 
     latestState = state || {};
     latestSummary = summary || {};
@@ -1167,54 +759,40 @@ async function refreshDashboardOnce() {
         };
     }
     latestMattermost = mattermost || {};
-    currentProgress = progress || {};
     currentHandoff = handoff || {};
-    updateSyntheticModeBanner(summary, resultMap.evidence?.data || {});
+    updateSyntheticModeBanner(summary, evidence);
 
     try {
         updateHeader(state, mattermost);
         updateClientIdentityView(summary);
-        updateCommandStrip(summary, health, failures);
-        updateOperationalResourceGuard(health, Boolean(resultMap.health?.ok));
+        updateCommandStrip(summary, health, []);
+        updateOperationalResourceGuard(health, true);
         updateAIGovernanceSnapshot(health.ai_governance || {});
         updateSituationBoard(summary, state, health, mattermost);
         updateSplitBoard(summary, actions);
         updateActionBoard(actions, state);
         updateTopoliteSingleScreen(summary, evidence, actions);
         updateMissionRow(summary, actions);
-        updateTemporaryMission(actions);
-        updateProgressChecklist(progress);
         updateHandoffPack(handoff);
         syncOnboardingBanner();
         updateEvidenceBoard(evidence, health, trends);
-        updateAssistant(actions, mattermost, capabilities);
+        updateCommStatus(mattermost);
         updateControlButtons(summary, state);
         // Must run after updateCommandStrip: the Overall tile reuses the
         // hero summary wording rendered there.
-        updateSimpleView(summary, health, actions, failures);
+        updateSimpleView(summary, health, actions, []);
         azAttnFirstSnapshotDone = true;
         document.body.classList.remove('az-boot');
         azConnSetState(true);
     } catch (error) {
         console.error('Dashboard render failed:', error);
         showToast(tr('dashboard.render_failed', 'Dashboard render failed: {error}', { error: error.message }), 'error');
-        // Required fetches already succeeded (hardFailures check above returned early otherwise),
-        // so the connection itself is live even though this render pass hit a bug. Clear the boot
-        // dimming and reflect that live state instead of leaving az-boot/the conn chip stuck at
-        // their initial INIT values forever on every subsequent render-failing poll.
+        // The bundle fetch already succeeded, so the connection itself is live
+        // even though this render pass hit a bug. Clear the boot dimming and
+        // reflect that live state instead of leaving az-boot/the conn chip
+        // stuck at their initial INIT values on every render-failing poll.
         document.body.classList.remove('az-boot');
         azConnSetState(true);
-        return;
-    }
-
-    if (failures.length > 0) {
-        const warning = tr('dashboard.partial_refresh', 'Partial refresh: {error}', { error: failures.join(' | ') });
-        if (warning !== lastRefreshWarning) {
-            showToast(warning, 'info');
-            lastRefreshWarning = warning;
-        }
-    } else {
-        lastRefreshWarning = '';
     }
 }
 
@@ -2468,9 +2046,7 @@ function updateActionBoard(actions, state) {
     const trustCapsule = actions.decision_trust_capsule || {};
     updateElement(
         'trustCapsuleSummary',
-        currentAudience === 'temporary'
-            ? (trustCapsule.beginner_summary || tr('dashboard.trust_summary_waiting', 'Waiting for trust synthesis.'))
-            : (trustCapsule.professional_summary || trustCapsule.beginner_summary || tr('dashboard.trust_summary_waiting', 'Waiting for trust synthesis.')),
+        trustCapsule.professional_summary || trustCapsule.beginner_summary || tr('dashboard.trust_summary_waiting', 'Waiting for trust synthesis.'),
     );
     updateElement('trustCapsuleConfidence', trustCapsule.confidence_label || '-');
     updateElement('trustCapsuleConfidenceSource', trustCapsule.confidence_source || '-');
@@ -2569,41 +2145,6 @@ function updateActionBoard(actions, state) {
             ? 'status-safe'
             : (String(mode.current_mode || '').toLowerCase() === 'scapegoat' ? 'status-caution' : 'status-neutral'),
     );
-}
-
-function updateProgressChecklist(progress) {
-    const payload = progress && typeof progress === 'object' ? progress : {};
-    const items = Array.isArray(payload.items) ? payload.items : [];
-    const nextItem = payload.next_item && typeof payload.next_item === 'object' ? payload.next_item : null;
-    updateElement(
-        'progressChecklistSummary',
-        tr('dashboard.progress_checklist_summary', 'Done {done}/{total} | Next {next}', {
-            done: Number(payload.done_count || 0),
-            total: Number(payload.total_count || 0),
-            next: nextItem?.label || tr('dashboard.progress_next_none', 'All clear'),
-        }),
-    );
-    const list = document.getElementById('progressChecklistList');
-    if (list) {
-        if (!items.length) {
-            list.innerHTML = `<div>${escapeHtml(tr('dashboard.progress_checklist_waiting', 'Waiting for progress state.'))}</div>`;
-        } else {
-            list.innerHTML = items.map((item) => `
-                <div class="progress-checklist-item ${item.done ? 'done' : ''}">
-                    <input type="checkbox" class="progress-checklist-checkbox" data-item-id="${escapeAttribute(item.id || '')}" ${item.done ? 'checked' : ''}>
-                    <label>
-                        <strong>${escapeHtml(item.label || '-')}</strong>
-                        <span>${escapeHtml(item.detail || '-')}</span>
-                    </label>
-                </div>
-            `).join('');
-        }
-    }
-    const blockedReason = document.getElementById('progressBlockedReason');
-    if (blockedReason && document.activeElement !== blockedReason) {
-        blockedReason.value = payload.blocked_reason || '';
-    }
-    updateElement('progressBlockedPrompt', payload.blocked_prompt || tr('dashboard.progress_blocked_prompt_default', 'Ask what changed first, when it started, and whether this is one device or many.'));
 }
 
 function updateHandoffPack(handoff) {
@@ -2859,48 +2400,11 @@ function updateTopoliteSingleScreen(summary, evidence, actions) {
     );
 }
 
-function updateAssistant(actions, mattermost, capabilities) {
-    const mio = actions.mio || {};
-    const surfaceMessages = mio.surface_messages && typeof mio.surface_messages === 'object' ? mio.surface_messages : {};
-    const dashboardSurface = surfaceMessages.dashboard || mio.surface_message || mio.answer || actions.current_recommendation || '-';
-    updateElement('mioCurrentAnswer', dashboardSurface);
-    updateElement('mioRecommendation', actions.current_recommendation || '-');
-    const askedAt = mio.asked_at ? formatHumanDateTime(mio.asked_at) : '';
-    const lastAsk = mio.question
-        ? `${mio.question}${askedAt ? ` | ${askedAt}` : ''}${mio.source ? ` | ${mio.source}` : ''}`
-        : tr('dashboard.no_manual_query', 'No manual query executed yet.');
-    updateElement('mioLastAsk', lastAsk);
-    const mioRunbook = mio.runbook || actions.suggested_runbook || {};
-    const runbookSummary = mioRunbook.title
-        ? `${mioRunbook.title}${mioRunbook.id ? ` | ${mioRunbook.id}` : ''}${mioRunbook.effect ? ` | ${mioRunbook.effect}` : ''}`
-        : tr('dashboard.no_runbook_selected', 'No runbook selected.');
-    updateElement('mioRunbookSummary', runbookSummary);
-    renderList('mioRationaleList', mio.rationale || [], (item) => item);
-    updateElement('mioUserGuidance', actions.current_user_guidance || '-');
-    updateElement('mioReview', mio.review?.final_status || tr('dashboard.no_review_data', 'No review data'));
+// Comm status in the handoff rail: Mattermost reachability + link targets.
+function updateCommStatus(mattermost) {
     updateElement('mattermostState', mattermost.reachable ? tr('dashboard.state_reachable', 'reachable') : tr('dashboard.state_unreachable', 'unreachable'));
-    updateElement('mattermostTriggers', joinList(mattermost.command_triggers || capabilities.mattermost_triggers || []));
-    const opsCommLink = document.getElementById('assistantOpsCommLink');
-    if (opsCommLink) opsCommLink.href = mio.handoff?.ops_comm || '/ops-comm';
     const mattermostLink = document.getElementById('assistantMattermostLink');
-    if (mattermostLink) mattermostLink.href = mio.handoff?.mattermost || mattermost.open_url || '/ops-comm';
-
-    const statusBadge = document.getElementById('mioStatusBadge');
-    if (statusBadge) {
-        const status = String(mio.status || 'idle').toUpperCase();
-        statusBadge.textContent = status;
-        statusBadge.className = `assistant-status ${toneForStatus(status)}`;
-    }
-    updateToggleSummary(
-        'mioAssistDetailsToggle',
-        tr('dashboard.mio_details_summary', 'Rationale {count} | Review {review}', {
-            count: Array.isArray(mio.rationale) ? mio.rationale.length : 0,
-            review: mio.review?.final_status || tr('dashboard.no_review_data', 'No review data'),
-        }),
-        ['failed', 'error', 'rejected'].includes(String(mio.review?.final_status || '').toLowerCase())
-            ? 'status-danger'
-            : (Array.isArray(mio.rationale) && mio.rationale.length > 0 ? 'status-neutral' : 'status-safe'),
-    );
+    if (mattermostLink) mattermostLink.href = mattermost.open_url || '/ops-comm';
 }
 
 function updateControlButtons(summary) {
@@ -2911,7 +2415,6 @@ function updateControlButtons(summary) {
         btn.classList.toggle('active', currentMode === mode);
         btn.setAttribute('aria-pressed', currentMode === mode ? 'true' : 'false');
     });
-    applyAudienceControlPolicy();
 }
 
 async function switchMode(mode) {
@@ -3043,62 +2546,6 @@ async function saveClientProfile(form) {
     showToast(tr('dashboard.client_profile_saved', 'Endpoint profile saved'), 'success');
     await refreshDashboard();
 }
-
-async function askMio(question) {
-    return askMioWithOptions(question, {});
-}
-
-async function askMioWithOptions(question, options = {}) {
-    const submit = document.getElementById('mioAskSubmit');
-    const responseBox = document.getElementById('mioAskResponse');
-    const silent = Boolean(options.silent);
-    const extraContext = options.context && typeof options.context === 'object' ? options.context : {};
-    if (submit) submit.disabled = true;
-    if (responseBox) responseBox.textContent = tr('dashboard.mio_analyzing', 'M.I.O. is analyzing...');
-
-    try {
-        const result = await fetchJson('/api/ai/ask', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                question,
-                lang: CURRENT_LANG,
-                sender: 'Dashboard',
-                source: options.source || 'dashboard',
-                context: Object.assign({ audience: currentAudience, lang: CURRENT_LANG }, extraContext),
-            }),
-        });
-        if (responseBox) {
-            responseBox.textContent = formatAssistResponse(result);
-        }
-        const surfaceMessages = result.surface_messages && typeof result.surface_messages === 'object' ? result.surface_messages : {};
-        updateElement('mioCurrentAnswer', surfaceMessages.dashboard || result.surface_message || result.answer || '-');
-        updateElement('mioUserGuidance', result.user_message || '-');
-        updateElement('mioReview', result.runbook_review?.final_status || tr('dashboard.no_review_data', 'No review data'));
-        renderList('mioRationaleList', result.rationale || [], (item) => item);
-        const askedAt = new Date().toISOString();
-        updateElement('mioLastAsk', `${question}${askedAt ? ` | ${formatHumanDateTime(askedAt)}` : ''} | dashboard`);
-        updateElement('mioRunbookSummary', result.runbook_id || tr('dashboard.no_runbook_selected', 'No runbook selected.'));
-        const opsCommLink = document.getElementById('assistantOpsCommLink');
-        if (opsCommLink) opsCommLink.href = result.handoff?.ops_comm || '/ops-comm';
-        const mattermostLink = document.getElementById('assistantMattermostLink');
-        if (mattermostLink) mattermostLink.href = result.handoff?.mattermost || latestMattermost.open_url || '/ops-comm';
-        const statusBadge = document.getElementById('mioStatusBadge');
-        if (statusBadge) {
-            statusBadge.textContent = String(result.status || 'completed').toUpperCase();
-            statusBadge.className = `assistant-status ${toneForStatus(result.status || 'completed')}`;
-        }
-        if (!silent) showToast(tr('dashboard.mio_response_received', 'M.I.O. response received'), 'success');
-        return result;
-    } catch (error) {
-        if (responseBox) responseBox.textContent = `${tr('dashboard.mio_request_failed', 'M.I.O. request failed')}: ${error.message}`;
-        if (!silent) showToast(`${tr('dashboard.mio_request_failed', 'M.I.O. request failed')}: ${error.message}`, 'error');
-        throw error;
-    } finally {
-        if (submit) submit.disabled = false;
-    }
-}
-
 
 async function openAuthenticatedJson(path, title) {
     const popup = window.open('', '_blank', 'noopener,noreferrer');
@@ -3279,20 +2726,11 @@ function updateToggleSummary(id, text, tone = 'status-neutral') {
     `;
 }
 
-function updateGuidanceToggleSummary(doNotDoCount = null) {
-    const askCount = Array.from(document.querySelectorAll('#temporaryAskList li')).filter((item) => (item.textContent || '').trim()).length;
-    const tellCount = Array.from(document.querySelectorAll('#temporaryTellList li')).filter((item) => (item.textContent || '').trim()).length;
-    const avoidCount = doNotDoCount == null
-        ? Array.from(document.querySelectorAll('#doNotDoList li')).filter((item) => (item.textContent || '').trim()).length
-        : doNotDoCount;
+function updateGuidanceToggleSummary(doNotDoCount = 0) {
     updateToggleSummary(
         'actionBoardGuidanceDetailsToggle',
-        tr('dashboard.action_board_guidance_details_summary', 'Ask {ask} | Tell {tell} | Avoid {avoid}', {
-            ask: askCount,
-            tell: tellCount,
-            avoid: avoidCount,
-        }),
-        avoidCount > 0 ? 'status-caution' : ((askCount + tellCount) > 0 ? 'status-neutral' : 'status-safe'),
+        tr('dashboard.action_board_guidance_details_summary_v2', 'Avoid {avoid}', { avoid: doNotDoCount }),
+        doNotDoCount > 0 ? 'status-caution' : 'status-safe',
     );
 }
 

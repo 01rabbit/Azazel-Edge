@@ -75,48 +75,38 @@ body::before {
     opacity: 0.24;
 }
 
-body[data-audience="temporary"] .pro-only {
-    display: none !important;
-}
-
-body[data-audience="professional"] .temp-only {
-    display: none !important;
-}
-
-/* Workspace axis (docs/architecture/socnoc-workspace-design.md): professional
-   audience only — Temporary mode keeps its single simplified flow. .soc-scope
+/* Workspace axis (docs/architecture/socnoc-workspace-design.md): .soc-scope
    blocks vanish in the NOC workspace and vice versa; unscoped blocks are
    shared. Panel order is re-composed per domain so each workspace leads with
    its primary objects (5-second rule: most important content top-left). */
-body[data-audience="professional"][data-workspace="noc"] .soc-scope {
+body[data-workspace="noc"] .soc-scope {
     display: none !important;
 }
 
-body[data-audience="professional"][data-workspace="soc"] .noc-scope {
+body[data-workspace="soc"] .noc-scope {
     display: none !important;
 }
 
-body[data-audience="professional"][data-workspace="noc"] .dashboard-shell,
-body[data-audience="professional"][data-workspace="soc"] .dashboard-shell {
+body[data-workspace="noc"] .dashboard-shell,
+body[data-workspace="soc"] .dashboard-shell {
     display: flex;
     flex-direction: column;
 }
 
 /* NOC: glance -> who is affected -> path/service boards -> runtime -> fleet */
-body[data-audience="professional"][data-workspace="noc"] .synthetic-mode-banner { order: 0; }
-body[data-audience="professional"][data-workspace="noc"] .onboarding-banner { order: 1; }
-body[data-audience="professional"][data-workspace="noc"] #commandStripPanel { order: 2; }
-body[data-audience="professional"][data-workspace="noc"] #clientIdentityPanel { order: 3; }
-body[data-audience="professional"][data-workspace="noc"] .board-layout { order: 4; }
-body[data-audience="professional"][data-workspace="noc"] #resourceGuardPanel { order: 5; }
-body[data-audience="professional"][data-workspace="noc"] #aggregatorPanel { order: 6; }
-body[data-audience="professional"][data-workspace="noc"] #topoliteSingleScreen { order: 7; }
-body[data-audience="professional"][data-workspace="noc"] #missionPanel { order: 8; }
-body[data-audience="professional"][data-workspace="noc"] .temporary-mission-panel { order: 9; }
+body[data-workspace="noc"] .synthetic-mode-banner { order: 0; }
+body[data-workspace="noc"] .onboarding-banner { order: 1; }
+body[data-workspace="noc"] #commandStripPanel { order: 2; }
+body[data-workspace="noc"] #clientIdentityPanel { order: 3; }
+body[data-workspace="noc"] .board-layout { order: 4; }
+body[data-workspace="noc"] #resourceGuardPanel { order: 5; }
+body[data-workspace="noc"] #aggregatorPanel { order: 6; }
+body[data-workspace="noc"] #topoliteSingleScreen { order: 7; }
+body[data-workspace="noc"] #missionPanel { order: 8; }
 
-/* Simple workspace: three verdict tiles (Overall / SOC / NOC), available in
-   BOTH audiences and the default landing view. Everything else in the shell
-   is hidden except the synthetic-data warning banner (safety requirement). */
+/* Simple workspace: three verdict tiles (Overall / SOC / NOC), the default
+   landing view. Everything else in the shell is hidden except the
+   synthetic-data warning banner (safety requirement). */
 .simple-view {
     display: none;
 }
@@ -252,17 +242,16 @@ body[data-workspace="simple"] .back-to-top {
 }
 
 /* SOC: glance -> posture/split/action -> evidence & timeline -> topology */
-body[data-audience="professional"][data-workspace="soc"] .synthetic-mode-banner { order: 0; }
-body[data-audience="professional"][data-workspace="soc"] .onboarding-banner { order: 1; }
-body[data-audience="professional"][data-workspace="soc"] #commandStripPanel { order: 2; }
-body[data-audience="professional"][data-workspace="soc"] .board-layout { order: 3; }
-body[data-audience="professional"][data-workspace="soc"] #evidencePanel { order: 4; }
-body[data-audience="professional"][data-workspace="soc"] #topoliteSingleScreen { order: 5; }
-body[data-audience="professional"][data-workspace="soc"] #missionPanel { order: 6; }
-body[data-audience="professional"][data-workspace="soc"] #clientIdentityPanel { order: 7; }
-body[data-audience="professional"][data-workspace="soc"] #resourceGuardPanel { order: 8; }
-body[data-audience="professional"][data-workspace="soc"] .temporary-mission-panel { order: 9; }
-body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { order: 10; }
+body[data-workspace="soc"] .synthetic-mode-banner { order: 0; }
+body[data-workspace="soc"] .onboarding-banner { order: 1; }
+body[data-workspace="soc"] #commandStripPanel { order: 2; }
+body[data-workspace="soc"] .board-layout { order: 3; }
+body[data-workspace="soc"] #evidencePanel { order: 4; }
+body[data-workspace="soc"] #topoliteSingleScreen { order: 5; }
+body[data-workspace="soc"] #missionPanel { order: 6; }
+body[data-workspace="soc"] #clientIdentityPanel { order: 7; }
+body[data-workspace="soc"] #resourceGuardPanel { order: 8; }
+body[data-workspace="soc"] #aggregatorPanel { order: 10; }
 
 .topbar {
     position: sticky;
@@ -291,22 +280,8 @@ body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { orde
 
 .brand-block h1,
 .panel-heading h2,
-.assistant-heading h2 {
-    margin: 6px 0 0;
-    font-size: 1.85rem;
-    line-height: 1.05;
-}
-
 .brand-subtitle,
 .panel-note,
-.assistant-intro,
-#healthSummaryLine,
-#audienceSummary {
-    margin: 8px 0 0;
-    color: var(--text-dim);
-    line-height: 1.45;
-}
-
 .topbar-controls {
     display: flex;
     align-items: flex-start;
@@ -331,13 +306,6 @@ body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { orde
 .mode-btn,
 .quick-btn,
 .shortcut-btn,
-.assistant-submit {
-    appearance: none;
-    border: 0;
-    cursor: pointer;
-    font: inherit;
-}
-
 .audience-btn {
     padding: 12px 16px; /* パディングを増やす */
     border-radius: 999px;
@@ -719,24 +687,6 @@ body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { orde
     gap: 10px;
 }
 
-.assistant-title-row {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    min-width: 0;
-}
-
-.assistant-logo {
-    width: 68px;
-    height: 68px;
-    object-fit: cover;
-    border-radius: 14px;
-    border: 1px solid var(--line-strong);
-    box-shadow: var(--shadow-sm);
-    background: rgba(255,255,255,0.04);
-    flex: 0 0 auto;
-}
-
 .command-strip {
     padding: 22px 24px;
     margin-bottom: 18px;
@@ -960,12 +910,6 @@ body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { orde
 .mission-grid {
     display: grid;
     grid-template-columns: 1.35fr 1fr 1fr;
-    gap: 14px;
-}
-
-.temporary-mission-grid {
-    display: grid;
-    grid-template-columns: 1.2fr 1fr 1fr 1fr;
     gap: 14px;
 }
 
@@ -2139,79 +2083,11 @@ body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { orde
     transition: box-shadow 180ms ease;
 }
 
-.progress-checklist-block {
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    padding-top: 14px;
-}
-
-.progress-checklist-summary,
-.handoff-summary {
-    color: var(--text-soft);
-    margin-top: 6px;
-}
-
-.progress-checklist-list {
-    display: grid;
-    gap: 10px;
-    margin-top: 12px;
-}
-
-.progress-checklist-item {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 10px;
-    align-items: flex-start;
-    padding: 10px 12px;
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.progress-checklist-item.done {
-    border-color: rgba(93, 207, 145, 0.28);
-    background: rgba(93, 207, 145, 0.08);
-}
-
-.progress-checklist-item label {
-    display: grid;
-    gap: 4px;
-    cursor: pointer;
-}
-
-.progress-checklist-item strong {
-    color: var(--text-main);
-}
-
-.progress-checklist-item span {
-    color: var(--text-soft);
-    font-size: 0.88rem;
-}
-
-.progress-blocked-box {
-    display: grid;
-    gap: 8px;
-    margin-top: 14px;
-    padding: 12px;
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.035);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.progress-blocked-box textarea {
-    width: 100%;
-    resize: vertical;
-}
-
-.progress-blocked-prompt {
-    color: var(--text-soft);
-    font-size: 0.92rem;
-}
-
-.progress-blocked-actions,
-.handoff-actions {
+.assistant-shortcuts {
     display: flex;
-    gap: 10px;
     flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 16px;
 }
 
 .handoff-block {
@@ -2397,42 +2273,11 @@ body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { orde
     color: var(--accent-steel);
 }
 
-.guidance-warning {
-    margin-top: 16px;
-    padding: 12px 14px;
-    border-radius: 12px;
-    background: rgba(224, 164, 88, 0.1);
-    border: 1px solid rgba(224, 164, 88, 0.18);
-    color: #ffd39b;
-}
-
 .mode-button-row,
 .quick-actions,
-.assistant-shortcuts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 16px;
-}
-
-.temporary-triage-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 12px;
-}
-
 .mode-btn,
 .quick-btn,
 .shortcut-btn,
-.assistant-submit {
-    padding: 11px 14px;
-    border-radius: 14px;
-    color: var(--text-main);
-    background: rgba(255,255,255,0.06);
-    border: 1px solid var(--line-soft);
-}
-
 .mode-btn.active {
     background: linear-gradient(145deg, rgba(116, 212, 255, 0.16), rgba(224, 164, 88, 0.16));
     border-color: var(--line-strong);
@@ -2487,10 +2332,6 @@ body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { orde
     align-content: start;
 }
 
-.assistant-heading .assistant-title-row h2 {
-    margin-top: 4px;
-}
-
 .assistant-status {
     display: inline-flex;
     align-items: center;
@@ -2507,38 +2348,6 @@ body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { orde
     margin-top: 14px;
     padding-top: 14px;
     border-top: 1px solid rgba(255,255,255,0.06);
-}
-
-.assistant-form {
-    display: grid;
-    gap: 12px;
-    margin-top: 18px;
-}
-
-.assistant-form label {
-    color: var(--text-dim);
-}
-
-.assistant-form textarea {
-    width: 100%;
-    padding: 14px;
-    border-radius: 16px;
-    border: 1px solid var(--line-soft);
-    background: rgba(255,255,255,0.04);
-    color: var(--text-main);
-    font: inherit;
-    resize: vertical;
-}
-
-.assistant-response {
-    margin-top: 16px;
-    padding: 14px;
-    min-height: 92px;
-    border-radius: 16px;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid var(--line-soft);
-    line-height: 1.55;
-    white-space: pre-wrap;
 }
 
 .assistant-footer {
@@ -2824,11 +2633,7 @@ body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { orde
         grid-template-columns: 1fr;
     }
 
-    .temporary-mission-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .strip-grid {
+        .strip-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
@@ -2900,15 +2705,7 @@ body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { orde
     .noc-split-grid,
     .noc-lower-grid,
     .mission-grid,
-    .temporary-mission-grid,
-    .resource-guard-visuals,
-    .strip-grid,
-    .freshness-grid,
-    .az-strip-fold-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .assistant-footer,
+        .assistant-footer,
     .service-grid {
         grid-template-columns: 1fr;
     }
@@ -2917,12 +2714,7 @@ body[data-audience="professional"][data-workspace="soc"] #aggregatorPanel { orde
         grid-template-columns: 1fr;
     }
 
-    .assistant-logo {
-        width: 54px;
-        height: 54px;
-    }
-
-    .dashboard-shell {
+        .dashboard-shell {
         padding: 18px 14px 42px;
     }
 
