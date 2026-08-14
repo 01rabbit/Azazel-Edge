@@ -876,6 +876,12 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "dashboard.col_share": "割合",
         "dashboard.col_state": "状態",
         "dashboard.runtime_meters_title": "ランタイムメーター",
+        "dashboard.decision_rationale_soc": "SOC 管轄の根拠 — なぜこの状態か",
+        "dashboard.decision_rationale_noc": "NOC 管轄の根拠 — なぜこの状態か",
+        "dashboard.decision_card_noc_title": "決定根拠 — NOC 管轄",
+        "dashboard.decision_no_record": "決定説明レコードはまだ記録されていません。",
+        "dashboard.decision_audit_meta": "trace {trace} · policy {policy} · cfg {config} · evidence {evidence} · {enforcement}",
+        "dashboard.enforced_label": "ENFORCED",
     },
     "en": {
         "lang.label": "Language",
@@ -1732,6 +1738,12 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "dashboard.col_share": "share",
         "dashboard.col_state": "state",
         "dashboard.runtime_meters_title": "Runtime meters",
+        "dashboard.decision_rationale_soc": "SOC rationale — why this state",
+        "dashboard.decision_rationale_noc": "NOC rationale — why this state",
+        "dashboard.decision_card_noc_title": "Decision rationale — NOC",
+        "dashboard.decision_no_record": "No decision explanation recorded yet.",
+        "dashboard.decision_audit_meta": "trace {trace} · policy {policy} · cfg {config} · evidence {evidence} · {enforcement}",
+        "dashboard.enforced_label": "ENFORCED",
     },
 }
 

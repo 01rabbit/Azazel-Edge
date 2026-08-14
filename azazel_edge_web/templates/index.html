@@ -253,9 +253,13 @@
                     <div class="focus-card focus-decision">
                         <div class="focus-card-kicker">{{ tr('dashboard.decision_card_title', 'Decision — what the arbiter chose') }}</div>
                         <h3 id="socDecisionAction">-</h3>
+                        <p class="focus-decision-reason" id="socDecisionReason">-</p>
+                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.decision_rationale_soc', 'SOC rationale — why this state') }}</div>
                         <ul class="action-list" id="socDecisionWhyList"><li>-</li></ul>
                         <div class="focus-card-kicker focus-sub">{{ tr('dashboard.decision_card_rejected', 'Why not stronger') }}</div>
                         <ul class="action-list focus-rejected" id="socDecisionRejectedList"><li>-</li></ul>
+                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.release_condition', 'Release Condition') }}</div>
+                        <p class="focus-decision-release" id="socDecisionRelease">-</p>
                         <div class="focus-card-note" id="socDecisionMeta">-</div>
                     </div>
                     <div class="focus-card">
@@ -330,6 +334,15 @@
                     <div class="focus-card-note">{{ tr('dashboard.top_talkers_note', 'noc capacity top sources joined with the client identity view.') }}</div>
                 </div>
                 <div class="focus-side">
+                    <div class="focus-card focus-decision">
+                        <div class="focus-card-kicker">{{ tr('dashboard.decision_card_noc_title', 'Decision rationale — NOC') }}</div>
+                        <h3 id="nocDecisionAction">-</h3>
+                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.decision_rationale_noc', 'NOC rationale — why this state') }}</div>
+                        <ul class="action-list" id="nocDecisionRationaleList"><li>-</li></ul>
+                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.release_condition', 'Release Condition') }}</div>
+                        <p class="focus-decision-release" id="nocDecisionRelease">-</p>
+                        <div class="focus-card-note" id="nocDecisionMeta">-</div>
+                    </div>
                     <div class="focus-card">
                         <div class="focus-card-kicker">{{ tr('dashboard.runtime_meters_title', 'Runtime meters') }}</div>
                         <div class="focus-meter-label" id="nocMeterQueueLabel">-</div>

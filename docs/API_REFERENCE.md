@@ -141,6 +141,14 @@ Response keys (each matching the corresponding per-panel endpoint's shape):
 | `operator_progress_state` | `GET /api/operator-progress` (`operator`+ role only, else `null`) |
 | `handoff_brief_pack` | `GET /api/dashboard/handoff` (`operator`+ role only, else `null`) |
 | `activity` | bundle-only: deterministic time-bucketed alert activity (below) |
+| `decision_focus` | `GET /api/booth-focus` (v2 decision-explanation projection) |
+
+`decision_focus` additionally carries a `domains` key (also present on
+`GET /api/booth-focus`): per-jurisdiction evaluator rationale from the same
+v2 explanation record — `domains.noc` / `domains.soc`, each
+`{status, reasons[]}` (up to 4 reasons). This is the "why this state" story
+rendered on the SOC/NOC focus screens alongside `decision.why_not_others`,
+`decision.release_condition`, and the `audit` trace/policy/config refs.
 
 `activity` re-aggregates the tailed AI event log through the same
 `_normalize_alert_event` normalizer and risk bands as the alert queues —

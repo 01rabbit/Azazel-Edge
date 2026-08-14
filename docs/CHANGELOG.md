@@ -23,6 +23,15 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     (clients → edge → uplink → gateway → internet; the edge-local answer to
     a geo map), a top-talkers table joined with the client identity view,
     runtime meters, and service chips.
+  - **BHUSA 2026 decision rationale per jurisdiction**: the booth-focus
+    payload now exposes `domains.noc` / `domains.soc` (per-domain evaluator
+    `reasons` from the same v2 explanation record), and the bundle carries
+    the whole projection as `decision_focus`. The SOC focus panel's decision
+    card shows the arbiter's pick, the SOC evaluator rationale, why-not-
+    stronger, the release condition, and the audit line (trace · policy ·
+    config hash · evidence ids · DRY RUN/ENFORCED); the NOC focus panel
+    gains the mirrored card with the NOC jurisdiction's rationale. Falls
+    back to the live actions payload when no explanation record exists.
   - Backend: the dashboard bundle gains an `activity` key — time-bucketed
     alert counts (1h/2min, 6h/20min) banded with the same thresholds and
     `_normalize_alert_event` normalizer as the alert queues; queue item caps

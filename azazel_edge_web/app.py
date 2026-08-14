@@ -5055,6 +5055,19 @@ def _booth_focus_payload() -> Dict[str, Any]:
             "why_not_others": why_not,
             "release_condition": str(record.get("release_condition") or "Not recorded."),
         },
+        # Per-domain evaluator rationale from the same v2 explanation record —
+        # the "why this state" story shown per jurisdiction on the SOC/NOC
+        # focus screens (BHUSA 2026 audit walkthrough fields).
+        "domains": {
+            "noc": {
+                "status": snapshot_noc,
+                "reasons": [str(item) for item in (noc_summary.get("reasons") or []) if str(item)][:4],
+            },
+            "soc": {
+                "status": snapshot_soc_status,
+                "reasons": [str(item) for item in (soc_summary.get("reasons") or []) if str(item)][:4],
+            },
+        },
         "audit": {
             "trace_id": str(record.get("trace_id") or ""),
             "policy_profile": str(record.get("policy_profile") or ""),
@@ -6359,6 +6372,10 @@ def api_dashboard_bundle():
     evidence = _dashboard_evidence_payload(state, advisory, alert_rows, llm_rows, runbook_rows, triage_rows)
     trends = _dashboard_trends_payload(limit=_as_int(request.args.get("trends_limit"), 60), window_sec=0)
     activity = _dashboard_activity_payload(alert_rows_full)
+    # Same shape as GET /api/booth-focus: the v2 decision-explanation
+    # projection (why chosen / why not others / release condition / audit
+    # refs / per-domain rationale) rendered on the SOC/NOC focus screens.
+    decision_focus = _booth_focus_payload()
 
     # Same enrichments as GET /api/state.
     state_payload = dict(state)
@@ -6413,6 +6430,7 @@ def api_dashboard_bundle():
                 "evidence": evidence,
                 "trends": trends,
                 "activity": activity,
+                "decision_focus": decision_focus,
                 "state": state_payload,
                 "topolite_seed_mode": topolite_response,
                 "mattermost": mattermost,

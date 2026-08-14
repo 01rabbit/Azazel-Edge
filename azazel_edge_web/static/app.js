@@ -759,6 +759,7 @@ async function refreshDashboardOnce() {
     const health = bundle.health || {};
     const trends = bundle.trends || {};
     const activity = bundle.activity || {};
+    const decisionFocus = bundle.decision_focus || {};
     const state = bundle.state || {};
     const mattermost = bundle.mattermost || { reachable: false, command_triggers: [] };
     const topoliteMode = bundle.topolite_seed_mode || {};
@@ -797,8 +798,8 @@ async function refreshDashboardOnce() {
         // Must run after updateCommandStrip: the Overall tile reuses the
         // hero summary wording rendered there.
         updateSimpleView(summary, health, actions, [], evidence, activity, state);
-        updateSocFocus(summary, evidence, actions, activity, state);
-        updateNocFocus(summary, health, state);
+        updateSocFocus(summary, evidence, actions, activity, state, decisionFocus);
+        updateNocFocus(summary, health, state, decisionFocus);
         azAttnFirstSnapshotDone = true;
         document.body.classList.remove('az-boot');
         azConnSetState(true);
@@ -1915,7 +1916,24 @@ function paintTriageTable() {
     }).join('');
 }
 
-function updateSocFocus(summary, evidence, actions, activity, state) {
+// BHUSA 2026 audit-walkthrough line: trace / policy profile / config hash /
+// evidence ids / enforcement mode from the v2 decision-explanation record —
+// the same artifacts the audit-review CLI reads (read-only projection).
+function renderDecisionAudit(metaId, decisionFocus) {
+    const audit = decisionFocus?.audit || {};
+    const safety = decisionFocus?.safety || {};
+    const decision = decisionFocus?.decision || {};
+    const evidence = Array.isArray(decision.evidence_ids) ? decision.evidence_ids : [];
+    updateElement(metaId, tr('dashboard.decision_audit_meta', 'trace {trace} · policy {policy} · cfg {config} · evidence {evidence} · {enforcement}', {
+        trace: audit.trace_id || '-',
+        policy: audit.policy_profile || '-',
+        config: String(audit.config_hash || '-').slice(0, 12),
+        evidence: evidence.length ? evidence.join(', ') : '-',
+        enforcement: safety.dry_run === false ? tr('dashboard.enforced_label', 'ENFORCED') : 'DRY RUN',
+    }));
+}
+
+function updateSocFocus(summary, evidence, actions, activity, state, decisionFocus) {
     if (!document.getElementById('socFocusPanel')) return;
     const aq = evidence.alert_queues || {};
     const nowCount = Number(aq.now?.count || 0);
@@ -1967,31 +1985,67 @@ function updateSocFocus(summary, evidence, actions, activity, state) {
     });
     paintTriageTable();
 
-    // Decision card: the arbiter's current pick and the rejected stronger moves.
+    // Decision card: the BHUSA 2026 v2 explanation fields — the arbiter's
+    // pick with the SOC jurisdiction's evaluator rationale. Falls back to the
+    // live actions payload when no explanation record exists yet.
+    const decisionAvailable = Boolean(decisionFocus?.available);
+    const decision = decisionFocus?.decision || {};
+    const socReasons = Array.isArray(decisionFocus?.domains?.soc?.reasons) ? decisionFocus.domains.soc.reasons : [];
     const doNext = Array.isArray(actions.do_next) ? actions.do_next : [];
-    updateElement('socDecisionAction', doNext[0] || summary.current_recommendation || '-');
-    renderList('socDecisionWhyList',
-        (Array.isArray(actions.why_now) && actions.why_now.length) ? actions.why_now.slice(0, 3) : [tr('dashboard.waiting_causal_summary_ui', 'Waiting for causal summary.')],
-        (item) => item);
-    const rejected = Array.isArray(actions.rejected_stronger_actions) ? actions.rejected_stronger_actions : [];
+    updateElement('socDecisionAction', decisionAvailable
+        ? (decision.action || '-')
+        : (doNext[0] || summary.current_recommendation || '-'));
+    updateElement('socDecisionReason', decisionAvailable
+        ? (decision.reason || '-')
+        : tr('dashboard.decision_no_record', 'No decision explanation recorded yet.'));
+    const socWhy = socReasons.length
+        ? socReasons
+        : ((Array.isArray(actions.why_now) && actions.why_now.length)
+            ? actions.why_now.slice(0, 3)
+            : [tr('dashboard.waiting_causal_summary_ui', 'Waiting for causal summary.')]);
+    renderList('socDecisionWhyList', socWhy, (item) => item);
+    const whyNot = (Array.isArray(decision.why_not_others) && decision.why_not_others.length)
+        ? decision.why_not_others
+        : (Array.isArray(actions.rejected_stronger_actions) ? actions.rejected_stronger_actions : []);
     renderList('socDecisionRejectedList',
-        rejected.length ? rejected.slice(0, 3) : [tr('dashboard.no_stronger_rejection_summary', 'No stronger-action rejection summary.')],
+        whyNot.length ? whyNot.slice(0, 3) : [tr('dashboard.no_stronger_rejection_summary', 'No stronger-action rejection summary.')],
         (item) => (typeof item === 'object' && item !== null) ? `${item.action || '-'} — ${item.reason || '-'}` : String(item));
-    const capsule = actions.decision_trust_capsule || {};
-    const aiRole = actions.decision_path?.ai_role || '-';
-    updateElement('socDecisionMeta', tr('dashboard.decision_card_meta', 'confidence {confidence} · evidence {evidence} · AI role: {ai}', {
-        confidence: capsule.confidence_label || '-',
-        evidence: Number(capsule.evidence_count ?? 0),
-        ai: aiRole,
-    }));
+    updateElement('socDecisionRelease', decisionAvailable ? (decision.release_condition || '-') : '-');
+    if (decisionAvailable) {
+        renderDecisionAudit('socDecisionMeta', decisionFocus);
+    } else {
+        const capsule = actions.decision_trust_capsule || {};
+        updateElement('socDecisionMeta', tr('dashboard.decision_card_meta', 'confidence {confidence} · evidence {evidence} · AI role: {ai}', {
+            confidence: capsule.confidence_label || '-',
+            evidence: Number(capsule.evidence_count ?? 0),
+            ai: actions.decision_path?.ai_role || '-',
+        }));
+    }
 
     renderActivityBars('socActivityBars', activity?.h6);
 }
 
 // ---- NOC focus screen -----------------------------------------------------
 
-function updateNocFocus(summary, health, state) {
+function updateNocFocus(summary, health, state, decisionFocus) {
     if (!document.getElementById('nocFocusPanel')) return;
+    // Decision rationale — NOC jurisdiction (same v2 explanation record as
+    // the SOC card; NOC health preempts engagement value in the doctrine).
+    const decisionAvailable = Boolean(decisionFocus?.available);
+    const decision = decisionFocus?.decision || {};
+    const nocReasons = Array.isArray(decisionFocus?.domains?.noc?.reasons) ? decisionFocus.domains.noc.reasons : [];
+    updateElement('nocDecisionAction', decisionAvailable
+        ? (decision.action || '-')
+        : (summary.current_recommendation || '-'));
+    renderList('nocDecisionRationaleList',
+        nocReasons.length ? nocReasons : [tr('dashboard.no_path_signal_summary', 'No path signal summary.')],
+        (item) => item);
+    updateElement('nocDecisionRelease', decisionAvailable ? (decision.release_condition || '-') : '-');
+    if (decisionAvailable) {
+        renderDecisionAudit('nocDecisionMeta', decisionFocus);
+    } else {
+        updateElement('nocDecisionMeta', tr('dashboard.decision_no_record', 'No decision explanation recorded yet.'));
+    }
     const strip = summary.command_strip || {};
     const noc = summary.noc_focus || {};
     const pathHealth = noc.path_health || {};

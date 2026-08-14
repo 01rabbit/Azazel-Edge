@@ -1019,6 +1019,7 @@ class DashboardDataContractTests(unittest.TestCase):
             "evidence",
             "trends",
             "activity",
+            "decision_focus",
             "state",
             "topolite_seed_mode",
             "mattermost",
@@ -1187,9 +1188,12 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn('id="triageTable"', text)
         self.assertIn('id="triageFilterInput"', text)
         self.assertIn('id="socDecisionAction"', text)
+        self.assertIn('id="socDecisionRelease"', text)
         self.assertIn('id="socActivityBars"', text)
         self.assertIn('id="nocFocusPanel"', text)
         self.assertIn('id="nocPathStrip"', text)
+        self.assertIn('id="nocDecisionAction"', text)
+        self.assertIn('id="nocDecisionRationaleList"', text)
         self.assertIn('id="topTalkersTable"', text)
         self.assertIn('id="topoliteSingleScreen"', text)
         self.assertIn('id="topoliteTopologyCard"', text)
