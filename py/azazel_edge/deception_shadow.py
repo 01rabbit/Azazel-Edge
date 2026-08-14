@@ -156,7 +156,15 @@ def evaluate_az06_shadow(
         if host.storage_free_mb < tier.minimum.storage_mb:
             reasons.append("insufficient_storage")
 
-    unverified = [c.component_id for c in package.components if not c.image.verified]
+    # Verified OCI provenance is required for the components this placement
+    # would actually materialize; an unselected optional component does not
+    # block the placement (matching AZ-06's live-gate semantics).
+    selected_components = set(placement.component_ids)
+    unverified = [
+        c.component_id
+        for c in package.components
+        if c.component_id in selected_components and not c.image.verified
+    ]
     if unverified:
         reasons.append("unverified_oci_provenance")
 

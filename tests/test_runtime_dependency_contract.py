@@ -73,6 +73,11 @@ def test_runtime_dependencies_cover_imports():
     optional_modules = {
         # Optional Fabric integration extra (requirements/fabric.txt); guarded import.
         "azazel_fabric",
+        # Optional AZ-06 integration: the shadow/replay E2E tests skip unless
+        # azazel-deception is installed (pytest.importorskip).
+        "azazel_deception",
+        # Test-only dependency (requirements/dev.txt); the suite runs under pytest.
+        "pytest",
         # Hardware-only dependency provided by device-specific setup.
         "waveshare_epd",
     }
