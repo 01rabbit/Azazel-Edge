@@ -1018,6 +1018,8 @@ class DashboardDataContractTests(unittest.TestCase):
             "health",
             "evidence",
             "trends",
+            "activity",
+            "decision_focus",
             "state",
             "topolite_seed_mode",
             "mattermost",
@@ -1025,6 +1027,15 @@ class DashboardDataContractTests(unittest.TestCase):
             "handoff_brief_pack",
         ):
             self.assertIn(key, payload)
+        # Activity aggregation: fixed windows, band-count buckets.
+        activity = payload["activity"]
+        self.assertEqual(activity["h1"]["window_sec"], 3600)
+        self.assertEqual(activity["h1"]["bucket_sec"], 120)
+        self.assertEqual(len(activity["h1"]["buckets"]), 30)
+        self.assertEqual(activity["h6"]["window_sec"], 21600)
+        self.assertEqual(len(activity["h6"]["buckets"]), 18)
+        for bucket in activity["h1"]["buckets"]:
+            self.assertEqual(set(bucket.keys()), {"normal", "watch", "critical"})
         # Bundle sub-payloads must keep the per-panel endpoints' shapes.
         summary = self.client.get("/api/dashboard/summary").get_json()
         self.assertEqual(set(payload["summary"].keys()), set(summary.keys()))
@@ -1170,6 +1181,20 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn('id="simpleOverallTile"', text)
         self.assertIn('id="simpleSocTile"', text)
         self.assertIn('id="simpleNocTile"', text)
+        self.assertIn('id="simpleKpiGrid"', text)
+        self.assertIn('id="simpleActivityBars"', text)
+        self.assertIn('id="pipelineEvents"', text)
+        self.assertIn('id="socFocusPanel"', text)
+        self.assertIn('id="triageTable"', text)
+        self.assertIn('id="triageFilterInput"', text)
+        self.assertIn('id="socDecisionAction"', text)
+        self.assertIn('id="socDecisionRelease"', text)
+        self.assertIn('id="socActivityBars"', text)
+        self.assertIn('id="nocFocusPanel"', text)
+        self.assertIn('id="nocPathStrip"', text)
+        self.assertIn('id="nocDecisionAction"', text)
+        self.assertIn('id="nocDecisionRationaleList"', text)
+        self.assertIn('id="topTalkersTable"', text)
         self.assertIn('id="topoliteSingleScreen"', text)
         self.assertIn('id="topoliteTopologyCard"', text)
         self.assertIn('id="topoliteTimelineCard"', text)

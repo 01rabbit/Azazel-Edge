@@ -407,6 +407,21 @@ function bindStaticHandlers() {
         evidenceFilterText = String(event.target.value || '').trim();
         EVIDENCE_FILTER_IDS.forEach((id) => paintTimeline(id));
     });
+    document.getElementById('triageFilterInput')?.addEventListener('input', (event) => {
+        triageTextFilter = String(event.target.value || '').trim();
+        paintTriageTable();
+    });
+    document.querySelectorAll('.triage-band-chip').forEach((chip) => {
+        chip.addEventListener('click', () => {
+            triageBandFilter = String(chip.dataset.band || 'all');
+            document.querySelectorAll('.triage-band-chip').forEach((candidate) => {
+                const active = candidate === chip;
+                candidate.classList.toggle('active', active);
+                candidate.setAttribute('aria-pressed', active ? 'true' : 'false');
+            });
+            paintTriageTable();
+        });
+    });
     // "+N more" expanders are rebuilt with each timeline repaint, so handle them
     // via delegation instead of per-button listeners.
     document.addEventListener('click', (event) => {
@@ -743,6 +758,8 @@ async function refreshDashboardOnce() {
     const evidence = bundle.evidence || {};
     const health = bundle.health || {};
     const trends = bundle.trends || {};
+    const activity = bundle.activity || {};
+    const decisionFocus = bundle.decision_focus || {};
     const state = bundle.state || {};
     const mattermost = bundle.mattermost || { reachable: false, command_triggers: [] };
     const topoliteMode = bundle.topolite_seed_mode || {};
@@ -780,7 +797,9 @@ async function refreshDashboardOnce() {
         updateControlButtons(summary, state);
         // Must run after updateCommandStrip: the Overall tile reuses the
         // hero summary wording rendered there.
-        updateSimpleView(summary, health, actions, []);
+        updateSimpleView(summary, health, actions, [], evidence, activity, state);
+        updateSocFocus(summary, evidence, actions, activity, state, decisionFocus);
+        updateNocFocus(summary, health, state, decisionFocus);
         azAttnFirstSnapshotDone = true;
         document.body.classList.remove('az-boot');
         azConnSetState(true);
@@ -1638,7 +1657,7 @@ function simpleChip(label, tone = '') {
     return `<span class="simple-chip ${escapeAttribute(tone)}">${escapeHtml(label)}</span>`;
 }
 
-function updateSimpleView(summary, health, actions, failures = []) {
+function updateSimpleView(summary, health, actions, failures = [], evidence = {}, activity = {}, state = {}) {
     if (!document.getElementById('simpleViewPanel')) return;
     const stale = Boolean(summary.command_strip?.stale_warning);
     const strip = summary.command_strip || {};
@@ -1732,6 +1751,422 @@ function updateSimpleView(summary, health, actions, failures = []) {
             simpleChip(`${tr('dashboard.heat_services', 'Services')} ${nocServices.value}`, nocServices.tone),
             simpleChip(`${tr('dashboard.heat_clients', 'Clients')} ${clients.value}`, clients.tone),
         ].join('');
+    }
+
+    // KPI strip (Splunk-style key indicators with ~1min trend arrows).
+    const aq = evidence.alert_queues || {};
+    const suspicion = Number(summary.risk?.suspicion ?? 0);
+    updateElement('simpleKpiRiskValue', String(Math.round(suspicion)));
+    renderKpiDelta('simpleKpiRiskDelta', azKpiDelta('simple.risk', suspicion));
+    updateElement('simpleKpiRiskDetail', String(summary.risk?.user_state || '-'));
+    setKpiTone('simpleKpiRisk', toneForRisk(summary.risk?.user_state, suspicion));
+
+    const queueNow = Number(aq.now?.count || 0);
+    const queueWatch = Number(aq.watch?.count || 0);
+    const queueBacklog = Number(aq.backlog?.count || 0);
+    updateElement('simpleKpiNowValue', String(queueNow));
+    renderKpiDelta('simpleKpiNowDelta', azKpiDelta('simple.now', queueNow));
+    updateElement('simpleKpiNowDetail', tr('dashboard.kpi_now_queue_detail', 'watch {watch} · backlog {backlog}', { watch: queueWatch, backlog: queueBacklog }));
+    setKpiTone('simpleKpiNow', queueNow > 0 ? 'status-danger' : (queueWatch > 0 ? 'status-caution' : 'status-safe'));
+
+    const critical = Number(strip.direct_critical_count ?? 0);
+    const warning = Number(state.suricata_warning ?? 0);
+    updateElement('simpleKpiCriticalValue', String(critical));
+    renderKpiDelta('simpleKpiCriticalDelta', azKpiDelta('simple.critical', critical));
+    updateElement('simpleKpiCriticalDetail', tr('dashboard.kpi_warning_detail', 'warning {count}', { count: warning }));
+    setKpiTone('simpleKpiCritical', critical > 0 ? 'status-danger' : (warning > 0 ? 'status-caution' : 'status-safe'));
+
+    const inventory = noc.client_inventory || {};
+    const impacted = Number(noc.blast_radius?.affected_client_count || 0);
+    updateElement('simpleKpiClientsValue', String(impacted));
+    renderKpiDelta('simpleKpiClientsDelta', azKpiDelta('simple.impacted', impacted));
+    updateElement('simpleKpiClientsDetail', tr('dashboard.kpi_of_current', 'of {count} current', { count: Number(inventory.current_client_count || 0) }));
+    setKpiTone('simpleKpiClients', impacted > 0 ? 'status-caution' : 'status-safe');
+
+    updateElement('simpleKpiUplinkValue', String(strip.current_uplink || '--').toUpperCase());
+    updateElement('simpleKpiUplinkDetail', `${tr('dashboard.internet', 'Internet')} ${strip.internet_reachability || '--'}`);
+    setKpiTone('simpleKpiUplink', path.tone);
+
+    const svc = serviceCounts(summary.service_health_summary || {});
+    updateElement('simpleKpiServicesValue', svc.total ? `${svc.on}/${svc.total}` : '-');
+    updateElement('simpleKpiServicesDetail', nocServices.value);
+    setKpiTone('simpleKpiServices', nocServices.tone);
+
+    // Activity strip + deterministic pipeline funnel (events → signals →
+    // queued → action) over the last hour.
+    renderActivityBars('simpleActivityBars', activity?.h1);
+    const h1 = activity?.h1 || {};
+    updateElement('pipelineEvents', String(Number(h1.events ?? 0)));
+    updateElement('pipelineSignals', String(Number(h1.signals ?? 0)));
+    updateElement('pipelineQueued', String(queueNow + queueWatch));
+    const recommendation = String(summary.current_recommendation || '').trim();
+    updateElement('pipelineAction', recommendation ? '1' : '0');
+    updateElement('pipelineNote', tr('dashboard.pipeline_note_action', 'evidence → evaluators → arbiter → {action}', {
+        action: recommendation ? (recommendation.length > 48 ? `${recommendation.slice(0, 48)}…` : recommendation) : '-',
+    }));
+}
+
+// ---- Focus-screen building blocks (Simple+/SOC/NOC screens) ---------------
+
+// KPI deltas: current value vs ~60s ago, session-local memory. Purely a
+// display affordance (Splunk-style trend arrows); resets on reload.
+const azKpiHistory = new Map(); // key -> [{t, v}]
+
+function azKpiDelta(key, value) {
+    const now = Date.now();
+    const v = Number(value);
+    if (!Number.isFinite(v)) return null;
+    let arr = azKpiHistory.get(key);
+    if (!arr) { arr = []; azKpiHistory.set(key, arr); }
+    arr.push({ t: now, v });
+    while (arr.length && now - arr[0].t > 150000) arr.shift();
+    const ref = arr.find((sample) => now - sample.t >= 55000);
+    if (!ref) return null;
+    return v - ref.v;
+}
+
+function renderKpiDelta(id, delta) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (delta === null || delta === undefined) {
+        el.textContent = '';
+        el.className = 'focus-kpi-delta delta-flat';
+        return;
+    }
+    if (delta === 0) {
+        el.textContent = '—';
+        el.className = 'focus-kpi-delta delta-flat';
+        return;
+    }
+    el.textContent = `${delta > 0 ? '▲' : '▼'}${Math.abs(Math.round(delta))}`;
+    el.className = `focus-kpi-delta ${delta > 0 ? 'delta-up' : 'delta-down'}`;
+}
+
+function setKpiTone(id, tone) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove('status-safe', 'status-caution', 'status-danger', 'status-neutral');
+    el.classList.add(tone || 'status-neutral');
+}
+
+// Band-colored bucket bars from the bundle's activity aggregation.
+function renderActivityBars(containerId, windowPayload) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    const buckets = Array.isArray(windowPayload?.buckets) ? windowPayload.buckets : [];
+    if (!buckets.length) {
+        el.innerHTML = '';
+        return;
+    }
+    const totals = buckets.map((b) => Number(b.normal || 0) + Number(b.watch || 0) + Number(b.critical || 0));
+    const max = Math.max(1, ...totals);
+    el.innerHTML = buckets.map((b, i) => {
+        const total = totals[i];
+        const cls = Number(b.critical || 0) > 0 ? 'band-critical' : (Number(b.watch || 0) > 0 ? 'band-watch' : '');
+        const pct = total > 0 ? Math.max(6, Math.round((total / max) * 100)) : 0;
+        return `<i class="${cls}" style="height:${pct}%"></i>`;
+    }).join('');
+}
+
+function formatBytesShort(value) {
+    const n = Number(value) || 0;
+    if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    if (n >= 1024 * 1024) return `${Math.round(n / (1024 * 1024))} MB`;
+    if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+    return `${n} B`;
+}
+
+function serviceCounts(serviceSummary) {
+    const entries = Object.entries(serviceSummary || {});
+    const on = entries.filter(([, value]) => ['on', 'ok', 'active'].includes(String(value || '').toLowerCase())).length;
+    return { on, total: entries.length };
+}
+
+// ---- SOC focus screen -----------------------------------------------------
+
+let triageBandFilter = 'all';
+let triageTextFilter = '';
+let triageRows = [];
+
+function paintTriageTable() {
+    const body = document.getElementById('triageTableBody');
+    if (!body) return;
+    const query = triageTextFilter.toLowerCase();
+    const rows = triageRows.filter((row) => {
+        if (triageBandFilter !== 'all' && row.band !== triageBandFilter) return false;
+        if (!query) return true;
+        return [row.ts_iso, row.src_ip, row.dst_ip, String(row.sid), row.attack_type]
+            .some((v) => String(v || '').toLowerCase().includes(query));
+    });
+    if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="5">${escapeHtml(tr('dashboard.triage_table_empty', 'No queued alerts in this view.'))}</td></tr>`;
+        return;
+    }
+    const bandTone = { now: 'status-danger', watch: 'status-caution', backlog: 'status-neutral' };
+    body.innerHTML = rows.map((row) => {
+        const riskTone = row.band === 'now' ? 'status-danger' : (row.band === 'watch' ? 'status-caution' : 'status-neutral');
+        const timeText = String(row.ts_iso || '-').replace('T', ' ').slice(11, 19) || '-';
+        return `<tr>
+            <td>${escapeHtml(timeText)}</td>
+            <td><span class="focus-badge ${bandTone[row.band] || 'status-neutral'}">${escapeHtml(row.band.toUpperCase())}</span></td>
+            <td><strong>${escapeHtml(row.src_ip || '-')}</strong> → ${escapeHtml(row.dst_ip || '-')}</td>
+            <td>${escapeHtml(String(row.sid || '-'))} · ${escapeHtml(row.attack_type || '-')}</td>
+            <td><span class="focus-badge ${riskTone}">${escapeHtml(String(row.risk_score ?? '-'))}</span></td>
+        </tr>`;
+    }).join('');
+}
+
+// BHUSA 2026 audit-walkthrough line: trace / policy profile / config hash /
+// evidence ids / enforcement mode from the v2 decision-explanation record —
+// the same artifacts the audit-review CLI reads (read-only projection).
+function renderDecisionAudit(metaId, decisionFocus) {
+    const audit = decisionFocus?.audit || {};
+    const safety = decisionFocus?.safety || {};
+    const decision = decisionFocus?.decision || {};
+    const evidence = Array.isArray(decision.evidence_ids) ? decision.evidence_ids : [];
+    updateElement(metaId, tr('dashboard.decision_audit_meta', 'trace {trace} · policy {policy} · cfg {config} · evidence {evidence} · {enforcement}', {
+        trace: audit.trace_id || '-',
+        policy: audit.policy_profile || '-',
+        config: String(audit.config_hash || '-').slice(0, 12),
+        evidence: evidence.length ? evidence.join(', ') : '-',
+        enforcement: safety.dry_run === false ? tr('dashboard.enforced_label', 'ENFORCED') : 'DRY RUN',
+    }));
+}
+
+function updateSocFocus(summary, evidence, actions, activity, state, decisionFocus) {
+    if (!document.getElementById('socFocusPanel')) return;
+    const aq = evidence.alert_queues || {};
+    const nowCount = Number(aq.now?.count || 0);
+    const watchCount = Number(aq.watch?.count || 0);
+    const backlogCount = Number(aq.backlog?.count || 0);
+    updateElement('socKpiNowValue', String(nowCount));
+    renderKpiDelta('socKpiNowDelta', azKpiDelta('soc.now', nowCount));
+    setKpiTone('socKpiNow', nowCount > 0 ? 'status-danger' : 'status-safe');
+    updateElement('socKpiWatchValue', String(watchCount));
+    setKpiTone('socKpiWatch', watchCount > 0 ? 'status-caution' : 'status-safe');
+    updateElement('socKpiBacklogValue', String(backlogCount));
+    setKpiTone('socKpiBacklog', 'status-neutral');
+
+    const critical = Number(summary.command_strip?.direct_critical_count ?? 0);
+    const warning = Number(state.suricata_warning ?? 0);
+    updateElement('socKpiCriticalValue', `${critical}/${warning}`);
+    setKpiTone('socKpiCritical', critical > 0 ? 'status-danger' : (warning > 0 ? 'status-caution' : 'status-safe'));
+
+    const visibility = summarizeVisibilityState(summary.soc_focus?.visibility || {});
+    updateElement('socKpiVisibilityValue', visibility.value);
+    setKpiTone('socKpiVisibility', visibility.tone);
+
+    // Oldest unhandled NOW alert (MTTA-style pressure signal).
+    const nowItems = Array.isArray(aq.now?.items) ? aq.now.items : [];
+    let oldestMs = null;
+    nowItems.forEach((item) => {
+        const t = Date.parse(String(item.ts_iso || ''));
+        if (Number.isFinite(t) && (oldestMs === null || t < oldestMs)) oldestMs = t;
+    });
+    if (oldestMs === null) {
+        updateElement('socKpiOldestValue', '-');
+        updateElement('socKpiOldestDetail', tr('dashboard.kpi_oldest_none', 'no NOW alerts'));
+        setKpiTone('socKpiOldest', 'status-safe');
+    } else {
+        const ageMin = Math.max(0, Math.floor((Date.now() - oldestMs) / 60000));
+        updateElement('socKpiOldestValue', ageMin < 60 ? `${ageMin}m` : `${Math.floor(ageMin / 60)}h${ageMin % 60}m`);
+        updateElement('socKpiOldestDetail', tr('dashboard.kpi_oldest_since', 'unhandled since {time}', {
+            time: new Date(oldestMs).toLocaleTimeString().slice(0, 5),
+        }));
+        setKpiTone('socKpiOldest', ageMin >= 30 ? 'status-danger' : (ageMin >= 10 ? 'status-caution' : 'status-safe'));
+    }
+
+    // Triage table rows from the deterministic queue bands.
+    triageRows = [];
+    [['now', aq.now?.items], ['watch', aq.watch?.items], ['backlog', aq.backlog?.items]].forEach(([band, items]) => {
+        (Array.isArray(items) ? items : []).forEach((item) => {
+            triageRows.push({ band, ...item });
+        });
+    });
+    paintTriageTable();
+
+    // Decision card: the BHUSA 2026 v2 explanation fields — the arbiter's
+    // pick with the SOC jurisdiction's evaluator rationale. Falls back to the
+    // live actions payload when no explanation record exists yet.
+    const decisionAvailable = Boolean(decisionFocus?.available);
+    const decision = decisionFocus?.decision || {};
+    const socReasons = Array.isArray(decisionFocus?.domains?.soc?.reasons) ? decisionFocus.domains.soc.reasons : [];
+    const doNext = Array.isArray(actions.do_next) ? actions.do_next : [];
+    updateElement('socDecisionAction', decisionAvailable
+        ? (decision.action || '-')
+        : (doNext[0] || summary.current_recommendation || '-'));
+    updateElement('socDecisionReason', decisionAvailable
+        ? (decision.reason || '-')
+        : tr('dashboard.decision_no_record', 'No decision explanation recorded yet.'));
+    const socWhy = socReasons.length
+        ? socReasons
+        : ((Array.isArray(actions.why_now) && actions.why_now.length)
+            ? actions.why_now.slice(0, 3)
+            : [tr('dashboard.waiting_causal_summary_ui', 'Waiting for causal summary.')]);
+    renderList('socDecisionWhyList', socWhy, (item) => item);
+    const whyNot = (Array.isArray(decision.why_not_others) && decision.why_not_others.length)
+        ? decision.why_not_others
+        : (Array.isArray(actions.rejected_stronger_actions) ? actions.rejected_stronger_actions : []);
+    renderList('socDecisionRejectedList',
+        whyNot.length ? whyNot.slice(0, 3) : [tr('dashboard.no_stronger_rejection_summary', 'No stronger-action rejection summary.')],
+        (item) => (typeof item === 'object' && item !== null) ? `${item.action || '-'} — ${item.reason || '-'}` : String(item));
+    updateElement('socDecisionRelease', decisionAvailable ? (decision.release_condition || '-') : '-');
+    if (decisionAvailable) {
+        renderDecisionAudit('socDecisionMeta', decisionFocus);
+    } else {
+        const capsule = actions.decision_trust_capsule || {};
+        updateElement('socDecisionMeta', tr('dashboard.decision_card_meta', 'confidence {confidence} · evidence {evidence} · AI role: {ai}', {
+            confidence: capsule.confidence_label || '-',
+            evidence: Number(capsule.evidence_count ?? 0),
+            ai: actions.decision_path?.ai_role || '-',
+        }));
+    }
+
+    renderActivityBars('socActivityBars', activity?.h6);
+}
+
+// ---- NOC focus screen -----------------------------------------------------
+
+function updateNocFocus(summary, health, state, decisionFocus) {
+    if (!document.getElementById('nocFocusPanel')) return;
+    // Decision rationale — NOC jurisdiction (same v2 explanation record as
+    // the SOC card; NOC health preempts engagement value in the doctrine).
+    const decisionAvailable = Boolean(decisionFocus?.available);
+    const decision = decisionFocus?.decision || {};
+    const nocReasons = Array.isArray(decisionFocus?.domains?.noc?.reasons) ? decisionFocus.domains.noc.reasons : [];
+    updateElement('nocDecisionAction', decisionAvailable
+        ? (decision.action || '-')
+        : (summary.current_recommendation || '-'));
+    renderList('nocDecisionRationaleList',
+        nocReasons.length ? nocReasons : [tr('dashboard.no_path_signal_summary', 'No path signal summary.')],
+        (item) => item);
+    updateElement('nocDecisionRelease', decisionAvailable ? (decision.release_condition || '-') : '-');
+    if (decisionAvailable) {
+        renderDecisionAudit('nocDecisionMeta', decisionFocus);
+    } else {
+        updateElement('nocDecisionMeta', tr('dashboard.decision_no_record', 'No decision explanation recorded yet.'));
+    }
+    const strip = summary.command_strip || {};
+    const noc = summary.noc_focus || {};
+    const pathHealth = noc.path_health || {};
+    const inventory = noc.client_inventory || {};
+    const blast = noc.blast_radius || {};
+    const capacity = noc.capacity || {};
+    const path = summarizePathState(summary);
+    const clients = summarizeClientState(summary);
+    const clientBaselineTone = clients.tone === 'status-neutral' ? 'status-safe' : clients.tone;
+    const services = summarizeServiceState(summary.service_health_summary || {});
+    const svc = serviceCounts(summary.service_health_summary || {});
+
+    updateElement('nocKpiUplinkValue', String(strip.current_uplink || '--').toUpperCase());
+    updateElement('nocKpiUplinkDetail', `${tr('dashboard.gateway', 'Gateway')} ${state.gateway_ip || '-'}`);
+    setKpiTone('nocKpiUplink', toneForStatus(pathHealth.uplink) === 'status-neutral' ? path.tone : toneForStatus(pathHealth.uplink));
+    updateElement('nocKpiInternetValue', String(strip.internet_reachability || '--').toUpperCase());
+    updateElement('nocKpiInternetDetail', `${tr('dashboard.captive_portal', 'Captive Portal')} ${state.connection?.captive_portal || '-'}`);
+    setKpiTone('nocKpiInternet', path.tone);
+
+    const utilization = Number(capacity.utilization_pct);
+    const capState = summarizeCapacityState(capacity);
+    updateElement('nocKpiCapacityValue', Number.isFinite(utilization) ? `${Math.round(utilization)}%` : capState.value);
+    renderKpiDelta('nocKpiCapacityDelta', Number.isFinite(utilization) ? azKpiDelta('noc.capacity', utilization) : null);
+    updateElement('nocKpiCapacityDetail', String(capacity.state || 'unknown'));
+    setKpiTone('nocKpiCapacity', capState.tone);
+
+    const current = Number(inventory.current_client_count || 0);
+    updateElement('nocKpiClientsValue', String(current));
+    updateElement('nocKpiClientsDetail', tr('dashboard.kpi_clients_detail', '{unknown} unknown · {unauthorized} unauthorized', {
+        unknown: Number(inventory.unknown_client_count || 0),
+        unauthorized: Number(inventory.unauthorized_client_count || 0),
+    }));
+    setKpiTone('nocKpiClients', clientBaselineTone);
+
+    const impacted = Number(blast.affected_client_count || 0);
+    updateElement('nocKpiImpactedValue', String(impacted));
+    updateElement('nocKpiImpactedDetail', joinList(blast.affected_segments));
+    setKpiTone('nocKpiImpacted', impacted > 0 ? 'status-caution' : 'status-safe');
+
+    updateElement('nocKpiServicesValue', svc.total ? `${svc.on}/${svc.total}` : '-');
+    updateElement('nocKpiServicesDetail', services.value);
+    setKpiTone('nocKpiServices', services.tone);
+
+    // Path strip: the edge-local topology answer to a geo map.
+    const stripEl = document.getElementById('nocPathStrip');
+    if (stripEl) {
+        const hops = [
+            { title: tr('dashboard.hop_clients', 'Clients ×{count}', { count: current }), state: clients.value, tone: clientBaselineTone },
+            { title: 'Azazel-Edge', state: String(summary.mode?.current_mode || state.mode?.current_mode || '-').toUpperCase(), tone: 'status-safe' },
+            { title: tr('dashboard.uplink', 'Uplink'), state: String(pathHealth.uplink || strip.current_uplink || '-').toUpperCase(), tone: toneForStatus(pathHealth.uplink) },
+            { title: `GW ${state.gateway_ip || '-'}`, state: String(pathHealth.gateway || '-').toUpperCase(), tone: toneForStatus(pathHealth.gateway) },
+            { title: tr('dashboard.internet', 'Internet'), state: String(pathHealth.internet || strip.internet_reachability || '-').toUpperCase(), tone: toneForStatus(pathHealth.internet) },
+        ];
+        const rank = { 'status-safe': 0, 'status-neutral': 1, 'status-caution': 2, 'status-danger': 3 };
+        stripEl.innerHTML = hops.map((hop, i) => {
+            const hopHtml = `<div class="path-hop ${hop.tone}"><div class="path-hop-title">${escapeHtml(hop.title)}</div><div class="path-hop-state">${escapeHtml(hop.state || '-')}</div></div>`;
+            if (i === hops.length - 1) return hopHtml;
+            const linkTone = rank[hop.tone] >= rank[hops[i + 1].tone] ? hop.tone : hops[i + 1].tone;
+            return hopHtml + `<span class="path-link ${linkTone === 'status-safe' ? '' : linkTone}"></span>`;
+        }).join('');
+    }
+
+    // Top talkers joined with the client identity view. The per-source list
+    // lives on the raw snapshot (state.noc_capacity.top_sources); the summary
+    // projection only carries the single top_talker string.
+    const talkersBody = document.getElementById('topTalkersBody');
+    if (talkersBody) {
+        const rawSources = state.noc_capacity?.top_sources || capacity.top_sources;
+        const sources = Array.isArray(rawSources) ? rawSources.slice(0, 6) : [];
+        const identityItems = Array.isArray(noc.client_identity_view?.items) ? noc.client_identity_view.items : [];
+        const byIp = new Map(identityItems.map((item) => [String(item.ip || ''), item]));
+        const maxBytes = Math.max(1, ...sources.map((s) => Number(s.bytes) || 0));
+        if (!sources.length) {
+            talkersBody.innerHTML = `<tr><td colspan="4">${escapeHtml(tr('dashboard.top_talkers_empty', 'No top-talker telemetry in the current window.'))}</td></tr>`;
+        } else {
+            talkersBody.innerHTML = sources.map((src) => {
+                const ip = String(src.src_ip || src.id || '-');
+                const identity = byIp.get(ip);
+                const name = identity?.display_name && identity.display_name !== ip ? ` ${identity.display_name}` : '';
+                const stateText = identity ? String(identity.state || (identity.trusted ? 'trusted' : 'unknown')) : '-';
+                const stateTone = ['unauthorized', 'mismatch', 'missing'].includes(stateText)
+                    ? 'status-danger'
+                    : (stateText === 'unknown' ? 'status-neutral' : 'status-safe');
+                const share = Math.max(3, Math.round(((Number(src.bytes) || 0) / maxBytes) * 100));
+                const shareTone = share >= 60 ? ' status-caution' : '';
+                return `<tr>
+                    <td><strong>${escapeHtml(ip)}</strong>${escapeHtml(name)}</td>
+                    <td>${escapeHtml(formatBytesShort(src.bytes))}</td>
+                    <td><span class="share-bar${shareTone}" style="width:${Math.min(90, share)}px"></span></td>
+                    <td><span class="focus-badge ${stateTone}">${escapeHtml(stateText)}</span></td>
+                </tr>`;
+            }).join('');
+        }
+    }
+
+    // Runtime meters (same math as the resource guard).
+    const queue = health.queue || {};
+    const llm = health.llm || {};
+    const depth = Number(queue.depth ?? 0);
+    const cap = Number(queue.capacity ?? 0);
+    const queuePct = cap > 0 ? Math.min(100, (depth / cap) * 100) : 0;
+    const fallbackPct = Math.min(100, Math.max(0, Number(llm.fallback_rate ?? 0) * 100));
+    const latencyEma = Number(llm.latency_ms_ema ?? 0);
+    const latencyPct = Math.min(100, Math.max(0, (latencyEma / 1500) * 100));
+    updateElement('nocMeterQueueLabel', `${tr('dashboard.queue', 'Queue')} ${depth}/${cap}`);
+    setMeterFill('nocMeterQueueBar', queuePct, queuePct >= 90 ? 'status-danger' : (queuePct >= 65 ? 'status-caution' : 'status-safe'));
+    updateElement('nocMeterFallbackLabel', `${tr('dashboard.fallback_rate', 'Fallback Rate')} ${Math.round(fallbackPct)}%`);
+    setMeterFill('nocMeterFallbackBar', fallbackPct, fallbackPct >= 50 ? 'status-danger' : (fallbackPct >= 20 ? 'status-caution' : 'status-safe'));
+    updateElement('nocMeterLatencyLabel', `${tr('dashboard.latency', 'Latency')} ${Math.round(latencyEma)} ms`);
+    setMeterFill('nocMeterLatencyBar', latencyPct, latencyPct >= 85 ? 'status-danger' : (latencyPct >= 55 ? 'status-caution' : 'status-safe'));
+
+    const chips = document.getElementById('nocServiceChips');
+    if (chips) {
+        const entries = Object.entries(summary.service_health_summary || {});
+        chips.innerHTML = entries.length
+            ? entries.map(([name, value]) => {
+                const tone = toneForStatus(value);
+                const cls = tone === 'status-safe' ? 'status-safe' : (tone === 'status-danger' ? 'status-danger' : (tone === 'status-caution' ? 'status-caution' : ''));
+                return `<span class="simple-chip ${cls}">${escapeHtml(name)} ${escapeHtml(String(value || '-').toUpperCase())}</span>`;
+            }).join('')
+            : `<span class="simple-chip">${escapeHtml(tr('dashboard.no_data', 'No data'))}</span>`;
     }
 }
 

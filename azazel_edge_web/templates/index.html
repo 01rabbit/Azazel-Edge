@@ -126,7 +126,240 @@
                     <span class="simple-drill">{{ tr('dashboard.simple_drill_noc', 'Open NOC details') }} ▸</span>
                 </button>
             </div>
+            <div class="focus-kpi-grid" id="simpleKpiGrid">
+                <div class="focus-kpi" id="simpleKpiRisk">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.risk', 'Risk') }}</span>
+                    <strong class="focus-kpi-value"><span id="simpleKpiRiskValue">-</span><span class="focus-kpi-delta" id="simpleKpiRiskDelta"></span></strong>
+                    <span class="focus-kpi-detail" id="simpleKpiRiskDetail">-</span>
+                </div>
+                <div class="focus-kpi" id="simpleKpiNow">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.kpi_now_queue', 'Now Queue') }}</span>
+                    <strong class="focus-kpi-value"><span id="simpleKpiNowValue">-</span><span class="focus-kpi-delta" id="simpleKpiNowDelta"></span></strong>
+                    <span class="focus-kpi-detail" id="simpleKpiNowDetail">-</span>
+                </div>
+                <div class="focus-kpi" id="simpleKpiCritical">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.direct_critical', 'Direct Critical') }}</span>
+                    <strong class="focus-kpi-value"><span id="simpleKpiCriticalValue">-</span><span class="focus-kpi-delta" id="simpleKpiCriticalDelta"></span></strong>
+                    <span class="focus-kpi-detail" id="simpleKpiCriticalDetail">-</span>
+                </div>
+                <div class="focus-kpi" id="simpleKpiClients">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.impacted_label', 'Impacted') }}</span>
+                    <strong class="focus-kpi-value"><span id="simpleKpiClientsValue">-</span><span class="focus-kpi-delta" id="simpleKpiClientsDelta"></span></strong>
+                    <span class="focus-kpi-detail" id="simpleKpiClientsDetail">-</span>
+                </div>
+                <div class="focus-kpi" id="simpleKpiUplink">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.uplink', 'Uplink') }}</span>
+                    <strong class="focus-kpi-value focus-kpi-value-text" id="simpleKpiUplinkValue">-</strong>
+                    <span class="focus-kpi-detail" id="simpleKpiUplinkDetail">-</span>
+                </div>
+                <div class="focus-kpi" id="simpleKpiServices">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.heat_services', 'Services') }}</span>
+                    <strong class="focus-kpi-value focus-kpi-value-text" id="simpleKpiServicesValue">-</strong>
+                    <span class="focus-kpi-detail" id="simpleKpiServicesDetail">-</span>
+                </div>
+            </div>
+            <div class="simple-lower">
+                <div class="focus-card simple-activity">
+                    <div class="focus-card-kicker">{{ tr('dashboard.activity_strip_title', 'Activity — last 60 min') }}</div>
+                    <div class="activity-bars" id="simpleActivityBars" aria-hidden="true"></div>
+                    <div class="focus-card-note">{{ tr('dashboard.activity_strip_note', 'amber = watch band, red = critical band, cyan = normal telemetry') }}</div>
+                </div>
+                <div class="focus-card simple-pipeline">
+                    <div class="focus-card-kicker">{{ tr('dashboard.pipeline_title', 'Pipeline — last 60 min') }}</div>
+                    <div class="pipeline-row" id="simplePipelineRow">
+                        <span class="pipeline-stage"><strong id="pipelineEvents">-</strong><span>{{ tr('dashboard.pipeline_events', 'events') }}</span></span>
+                        <span class="pipeline-arrow">→</span>
+                        <span class="pipeline-stage"><strong id="pipelineSignals">-</strong><span>{{ tr('dashboard.pipeline_signals', 'signals') }}</span></span>
+                        <span class="pipeline-arrow">→</span>
+                        <span class="pipeline-stage"><strong id="pipelineQueued">-</strong><span>{{ tr('dashboard.pipeline_queued', 'now/watch') }}</span></span>
+                        <span class="pipeline-arrow">→</span>
+                        <span class="pipeline-stage"><strong id="pipelineAction">-</strong><span>{{ tr('dashboard.pipeline_action', 'action') }}</span></span>
+                    </div>
+                    <div class="focus-card-note" id="pipelineNote">{{ tr('dashboard.pipeline_note', 'deterministic pipeline: evidence → evaluators → arbiter') }}</div>
+                </div>
+            </div>
         </section>
+        <section class="panel focus-panel soc-focus-panel" id="socFocusPanel">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('dashboard.soc_focus_kicker', 'SOC Focus') }}</div>
+                    <h2>{{ tr('dashboard.soc_focus_title', 'Threat triage at a glance') }}</h2>
+                </div>
+            </div>
+            <div class="focus-kpi-grid">
+                <div class="focus-kpi" id="socKpiNow">
+                    <span class="focus-kpi-kicker">NOW</span>
+                    <strong class="focus-kpi-value"><span id="socKpiNowValue">-</span><span class="focus-kpi-delta" id="socKpiNowDelta"></span></strong>
+                    <span class="focus-kpi-detail">{{ tr('dashboard.kpi_now_detail', 'act this shift') }}</span>
+                </div>
+                <div class="focus-kpi" id="socKpiWatch">
+                    <span class="focus-kpi-kicker">WATCH</span>
+                    <strong class="focus-kpi-value"><span id="socKpiWatchValue">-</span></strong>
+                    <span class="focus-kpi-detail">{{ tr('dashboard.kpi_watch_detail', 'recheck soon') }}</span>
+                </div>
+                <div class="focus-kpi" id="socKpiBacklog">
+                    <span class="focus-kpi-kicker">BACKLOG</span>
+                    <strong class="focus-kpi-value"><span id="socKpiBacklogValue">-</span></strong>
+                    <span class="focus-kpi-detail">{{ tr('dashboard.kpi_backlog_detail', 'review at handoff') }}</span>
+                </div>
+                <div class="focus-kpi" id="socKpiCritical">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.critical_warning_label', 'Critical / Warning') }}</span>
+                    <strong class="focus-kpi-value focus-kpi-value-text" id="socKpiCriticalValue">-</strong>
+                    <span class="focus-kpi-detail">{{ tr('dashboard.kpi_critical_detail', 'suricata direct') }}</span>
+                </div>
+                <div class="focus-kpi" id="socKpiVisibility">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.visibility_label', 'Visibility') }}</span>
+                    <strong class="focus-kpi-value focus-kpi-value-text" id="socKpiVisibilityValue">-</strong>
+                    <span class="focus-kpi-detail">{{ tr('dashboard.kpi_visibility_detail', 'sensors reporting') }}</span>
+                </div>
+                <div class="focus-kpi" id="socKpiOldest">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.kpi_oldest_now', 'Oldest NOW age') }}</span>
+                    <strong class="focus-kpi-value focus-kpi-value-text" id="socKpiOldestValue">-</strong>
+                    <span class="focus-kpi-detail" id="socKpiOldestDetail">-</span>
+                </div>
+            </div>
+            <div class="focus-columns">
+                <div class="focus-card">
+                    <div class="focus-card-kicker">{{ tr('dashboard.triage_table_title', 'Triage queue — deterministic bands') }}</div>
+                    <div class="triage-filter-row">
+                        <label class="sr-only" for="triageFilterInput">{{ tr('dashboard.triage_filter_label', 'Filter triage rows') }}</label>
+                        <input type="search" class="evidence-filter-input" id="triageFilterInput"
+                               placeholder="{{ tr('dashboard.evidence_filter_placeholder', 'Filter by keyword (IP, SID, kind...)') }}"
+                               autocomplete="off" spellcheck="false">
+                        <div class="triage-band-chips" role="group" aria-label="{{ tr('dashboard.triage_band_filter', 'Band filter') }}">
+                            <button type="button" class="triage-band-chip active" data-band="all" aria-pressed="true">{{ tr('dashboard.band_all', 'all') }}</button>
+                            <button type="button" class="triage-band-chip band-now" data-band="now" aria-pressed="false">NOW</button>
+                            <button type="button" class="triage-band-chip band-watch" data-band="watch" aria-pressed="false">WATCH</button>
+                            <button type="button" class="triage-band-chip band-backlog" data-band="backlog" aria-pressed="false">BACKLOG</button>
+                        </div>
+                    </div>
+                    <div class="focus-table-wrap">
+                        <table class="focus-table" id="triageTable">
+                            <thead>
+                                <tr>
+                                    <th>{{ tr('dashboard.col_time', 'time') }}</th>
+                                    <th>{{ tr('dashboard.col_band', 'band') }}</th>
+                                    <th>{{ tr('dashboard.col_src_dst', 'src → dst') }}</th>
+                                    <th>{{ tr('dashboard.col_sid_type', 'sid / type') }}</th>
+                                    <th>{{ tr('dashboard.col_risk', 'risk') }}</th>
+                                </tr>
+                            </thead>
+                            <tbody id="triageTableBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="focus-card-note">{{ tr('dashboard.triage_table_note', 'Rows are the deterministic alert-queue bands, not a raw event stream.') }}</div>
+                </div>
+                <div class="focus-side">
+                    <div class="focus-card focus-decision">
+                        <div class="focus-card-kicker">{{ tr('dashboard.decision_card_title', 'Decision — what the arbiter chose') }}</div>
+                        <h3 id="socDecisionAction">-</h3>
+                        <p class="focus-decision-reason" id="socDecisionReason">-</p>
+                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.decision_rationale_soc', 'SOC rationale — why this state') }}</div>
+                        <ul class="action-list" id="socDecisionWhyList"><li>-</li></ul>
+                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.decision_card_rejected', 'Why not stronger') }}</div>
+                        <ul class="action-list focus-rejected" id="socDecisionRejectedList"><li>-</li></ul>
+                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.release_condition', 'Release Condition') }}</div>
+                        <p class="focus-decision-release" id="socDecisionRelease">-</p>
+                        <div class="focus-card-note" id="socDecisionMeta">-</div>
+                    </div>
+                    <div class="focus-card">
+                        <div class="focus-card-kicker">{{ tr('dashboard.alerts_over_time_title', 'Alerts over time — 6 h') }}</div>
+                        <div class="activity-bars" id="socActivityBars" aria-hidden="true"></div>
+                        <div class="focus-card-note">{{ tr('dashboard.alerts_over_time_note', 'band-colored counts per 20 min window') }}</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel focus-panel noc-focus-panel" id="nocFocusPanel">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('dashboard.noc_focus_kicker', 'NOC Focus') }}</div>
+                    <h2>{{ tr('dashboard.noc_focus_title', 'Path, capacity, and clients at a glance') }}</h2>
+                </div>
+            </div>
+            <div class="focus-kpi-grid">
+                <div class="focus-kpi" id="nocKpiUplink">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.uplink', 'Uplink') }}</span>
+                    <strong class="focus-kpi-value focus-kpi-value-text" id="nocKpiUplinkValue">-</strong>
+                    <span class="focus-kpi-detail" id="nocKpiUplinkDetail">-</span>
+                </div>
+                <div class="focus-kpi" id="nocKpiInternet">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.internet', 'Internet') }}</span>
+                    <strong class="focus-kpi-value focus-kpi-value-text" id="nocKpiInternetValue">-</strong>
+                    <span class="focus-kpi-detail" id="nocKpiInternetDetail">-</span>
+                </div>
+                <div class="focus-kpi" id="nocKpiCapacity">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.capacity', 'Capacity') }}</span>
+                    <strong class="focus-kpi-value"><span id="nocKpiCapacityValue">-</span><span class="focus-kpi-delta" id="nocKpiCapacityDelta"></span></strong>
+                    <span class="focus-kpi-detail" id="nocKpiCapacityDetail">-</span>
+                </div>
+                <div class="focus-kpi" id="nocKpiClients">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.heat_clients', 'Clients') }}</span>
+                    <strong class="focus-kpi-value"><span id="nocKpiClientsValue">-</span></strong>
+                    <span class="focus-kpi-detail" id="nocKpiClientsDetail">-</span>
+                </div>
+                <div class="focus-kpi" id="nocKpiImpacted">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.impacted_label', 'Impacted') }}</span>
+                    <strong class="focus-kpi-value"><span id="nocKpiImpactedValue">-</span></strong>
+                    <span class="focus-kpi-detail" id="nocKpiImpactedDetail">-</span>
+                </div>
+                <div class="focus-kpi" id="nocKpiServices">
+                    <span class="focus-kpi-kicker">{{ tr('dashboard.heat_services', 'Services') }}</span>
+                    <strong class="focus-kpi-value focus-kpi-value-text" id="nocKpiServicesValue">-</strong>
+                    <span class="focus-kpi-detail" id="nocKpiServicesDetail">-</span>
+                </div>
+            </div>
+            <div class="focus-card">
+                <div class="focus-card-kicker">{{ tr('dashboard.path_health_title', 'Path health — client to internet') }}</div>
+                <div class="path-strip" id="nocPathStrip"></div>
+                <div class="focus-card-note">{{ tr('dashboard.path_health_note', 'Deterministic per-hop states from connection, network health, and path signals.') }}</div>
+            </div>
+            <div class="focus-columns focus-columns-noc">
+                <div class="focus-card">
+                    <div class="focus-card-kicker">{{ tr('dashboard.top_talkers_title', 'Top talkers — current window') }}</div>
+                    <div class="focus-table-wrap">
+                        <table class="focus-table" id="topTalkersTable">
+                            <thead>
+                                <tr>
+                                    <th>{{ tr('dashboard.col_client', 'client') }}</th>
+                                    <th>{{ tr('dashboard.col_bytes', 'bytes') }}</th>
+                                    <th>{{ tr('dashboard.col_share', 'share') }}</th>
+                                    <th>{{ tr('dashboard.col_state', 'state') }}</th>
+                                </tr>
+                            </thead>
+                            <tbody id="topTalkersBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="focus-card-note">{{ tr('dashboard.top_talkers_note', 'noc capacity top sources joined with the client identity view.') }}</div>
+                </div>
+                <div class="focus-side">
+                    <div class="focus-card focus-decision">
+                        <div class="focus-card-kicker">{{ tr('dashboard.decision_card_noc_title', 'Decision rationale — NOC') }}</div>
+                        <h3 id="nocDecisionAction">-</h3>
+                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.decision_rationale_noc', 'NOC rationale — why this state') }}</div>
+                        <ul class="action-list" id="nocDecisionRationaleList"><li>-</li></ul>
+                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.release_condition', 'Release Condition') }}</div>
+                        <p class="focus-decision-release" id="nocDecisionRelease">-</p>
+                        <div class="focus-card-note" id="nocDecisionMeta">-</div>
+                    </div>
+                    <div class="focus-card">
+                        <div class="focus-card-kicker">{{ tr('dashboard.runtime_meters_title', 'Runtime meters') }}</div>
+                        <div class="focus-meter-label" id="nocMeterQueueLabel">-</div>
+                        <div class="resource-guard-meter"><span id="nocMeterQueueBar" class="resource-guard-meter-fill"></span></div>
+                        <div class="focus-meter-label" id="nocMeterFallbackLabel">-</div>
+                        <div class="resource-guard-meter"><span id="nocMeterFallbackBar" class="resource-guard-meter-fill"></span></div>
+                        <div class="focus-meter-label" id="nocMeterLatencyLabel">-</div>
+                        <div class="resource-guard-meter"><span id="nocMeterLatencyBar" class="resource-guard-meter-fill"></span></div>
+                    </div>
+                    <div class="focus-card">
+                        <div class="focus-card-kicker">{{ tr('dashboard.service_health', 'Service Health') }}</div>
+                        <div class="simple-chips" id="nocServiceChips"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section class="onboarding-banner" id="beginnerOnboarding">
             <div class="onboarding-copy">
                 <div class="panel-kicker">{{ tr('dashboard.beginner_onboarding_kicker', 'Beginner Guide') }}</div>

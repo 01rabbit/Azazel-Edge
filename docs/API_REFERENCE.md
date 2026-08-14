@@ -140,6 +140,28 @@ Response keys (each matching the corresponding per-panel endpoint's shape):
 | `mattermost` | `GET /api/mattermost/status` |
 | `operator_progress_state` | `GET /api/operator-progress` (`operator`+ role only, else `null`) |
 | `handoff_brief_pack` | `GET /api/dashboard/handoff` (`operator`+ role only, else `null`) |
+| `activity` | bundle-only: deterministic time-bucketed alert activity (below) |
+| `decision_focus` | `GET /api/booth-focus` (v2 decision-explanation projection) |
+
+`decision_focus` additionally carries a `domains` key (also present on
+`GET /api/booth-focus`): per-jurisdiction evaluator rationale from the same
+v2 explanation record — `domains.noc` / `domains.soc`, each
+`{status, reasons[]}` (up to 4 reasons). This is the "why this state" story
+rendered on the SOC/NOC focus screens alongside `decision.why_not_others`,
+`decision.release_condition`, and the `audit` trace/policy/config refs.
+
+`activity` re-aggregates the tailed AI event log through the same
+`_normalize_alert_event` normalizer and risk bands as the alert queues —
+no new data source, no new judgment logic:
+
+- `h1` — last 60 min in 30 × 2-min buckets; `h6` — last 6 h in 18 × 20-min
+  buckets. Each bucket is `{normal, watch, critical}` counts; each window
+  also reports `events` (total rows) and `signals` (watch+critical rows).
+- `thresholds` — the `now`/`watch` risk thresholds used for banding.
+
+Note: alert-queue `items` caps were raised from 5 to 12 per band (8 for
+escalation candidates) so the SOC workspace triage table can render them
+directly; `count` fields are unchanged.
 
 The role-gated keys are always present; a `viewer` caller receives `null` for
 both so the response shape stays stable. All per-panel endpoints remain
