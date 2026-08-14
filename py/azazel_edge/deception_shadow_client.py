@@ -9,6 +9,11 @@ enforcement. The wire protocol is owned by AZ-06
 (`azazel_deception.runtime.shadow_server`); this module mirrors its envelope
 canonicalization and HMAC-SHA256 transport signature.
 
+:class:`HeartbeatLoop` extends this to a steady-state posture: an
+authenticated heartbeat on an interval plus an automatic reconciliation pass
+that compares Edge's authoritative active set against what AZ-06 reports
+locally, surfacing any divergence to a caller-supplied reporting hook.
+
 Authority rule: nothing returned by AZ-06 can create or upgrade authority.
 Every response is checked to be `descriptive_only` with
 `enforcement_applied=False`; anything else fails closed. AZ-06 stays
@@ -21,9 +26,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import threading
 import time
 import urllib.request
 import uuid
+from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -170,6 +177,45 @@ class Az06ShadowClient:
             "terminate", {"environment_id": environment_id, "decision": decision}
         )
 
+    def heartbeat(
+        self,
+        edge_sequence: int | None = None,
+        edge_active_environment_ids: Iterable[str] | None = None,
+    ) -> dict[str, Any]:
+        """Poll an AZ-06 node for liveness and a small health summary.
+
+        Purely observational: the response tells Edge whether the node is
+        reachable, authentic, and what it believes is running. It cannot make
+        Edge do anything, and Edge sending its own active set here is a
+        statement of authority, not a request for AZ-06 to act on it.
+        """
+
+        payload: dict[str, Any] = {}
+        if edge_sequence is not None:
+            payload["edge_sequence"] = int(edge_sequence)
+        if edge_active_environment_ids is not None:
+            payload["edge_active_environment_ids"] = [
+                str(environment_id) for environment_id in edge_active_environment_ids
+            ]
+        return self.request("heartbeat", payload)
+
+    def reconcile(self, edge_active_environment_ids: Iterable[str]) -> dict[str, Any]:
+        """Ask AZ-06 how local runtime state diverges from Edge's active set.
+
+        Edge supplies the authoritative set; AZ-06 answers descriptively. Any
+        remediation of a reported divergence is an Edge decision (or the
+        operator kill switch) made after this call, never a side effect of it.
+        """
+
+        return self.request(
+            "reconcile",
+            {
+                "edge_active_environment_ids": [
+                    str(environment_id) for environment_id in edge_active_environment_ids
+                ]
+            },
+        )
+
     # -- bootstrap session ---------------------------------------------------
 
     def run_bootstrap_session(
@@ -311,3 +357,206 @@ class Az06ShadowClient:
         trace["duration_seconds"] = round(time.time() - started, 3)
         trace["outcome"] = "shadow_complete"
         return trace
+
+
+class HeartbeatLoop:
+    """Background liveness + state-reconciliation loop against one AZ-06 node.
+
+    Every ``interval_seconds`` the loop sends one authenticated heartbeat and,
+    on success, one reconcile request carrying the *Edge-supplied* active
+    environment set (from the ``edge_active_environment_ids`` callable). If
+    AZ-06 reports the two views are not consistent, ``on_divergence`` is
+    invoked with the divergence dict.
+
+    Authority model: the callback is a reporting hook and decides nothing. It
+    cannot activate, terminate, or reconcile anything — Edge (the caller)
+    remains the sole authority and must issue a decision or use the operator
+    kill switch to act on a reported divergence. AZ-06 acts on nothing either.
+
+    Fail-closed liveness: any transport, authentication, or rejection error
+    marks the loop unhealthy, is counted as a consecutive failure, and never
+    escapes the thread. The loop keeps retrying on its interval until
+    :meth:`stop`, because AZ-06 is optional — an unreachable node must degrade
+    to "unhealthy, no fresh state", never to a crash or a stalled Edge.
+    """
+
+    def __init__(
+        self,
+        client: Az06ShadowClient,
+        *,
+        interval_seconds: float = 30.0,
+        max_age_seconds: float | None = None,
+        edge_active_environment_ids: Callable[[], Iterable[str]] | None = None,
+        on_divergence: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        if interval_seconds <= 0:
+            raise ValueError("interval_seconds must be positive")
+        self._client = client
+        self.interval_seconds = float(interval_seconds)
+        # Default staleness window tolerates two missed beats before the last
+        # success stops counting as "recent".
+        self.max_age_seconds = (
+            float(max_age_seconds)
+            if max_age_seconds is not None
+            else self.interval_seconds * 3.0
+        )
+        self._edge_active = edge_active_environment_ids or (lambda: [])
+        self._on_divergence = on_divergence
+        self._lock = threading.Lock()
+        self._stopping = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._edge_sequence = 0
+        self._failure_count = 0
+        self._last_result: dict[str, Any] | None = None
+        self._last_divergence: dict[str, Any] | None = None
+        self._last_error: str | None = None
+        self._last_success_monotonic: float | None = None
+
+    # -- observable state ----------------------------------------------------
+
+    @property
+    def is_healthy(self) -> bool:
+        """True iff the last heartbeat succeeded and is younger than max_age.
+
+        Fail-closed on both counts: a failed most-recent attempt is unhealthy
+        immediately, and an old success goes stale on its own even if the
+        thread stopped ticking entirely.
+        """
+
+        with self._lock:
+            if self._failure_count or self._last_success_monotonic is None:
+                return False
+            return (
+                time.monotonic() - self._last_success_monotonic
+            ) <= self.max_age_seconds
+
+    @property
+    def last_result(self) -> dict[str, Any] | None:
+        """Result payload of the last successful heartbeat, if any."""
+
+        with self._lock:
+            return self._last_result
+
+    @property
+    def last_divergence(self) -> dict[str, Any] | None:
+        with self._lock:
+            return self._last_divergence
+
+    @property
+    def last_error(self) -> str | None:
+        with self._lock:
+            return self._last_error
+
+    @property
+    def failure_count(self) -> int:
+        """Consecutive failed heartbeats; reset to zero by any success."""
+
+        with self._lock:
+            return self._failure_count
+
+    # -- lifecycle -----------------------------------------------------------
+
+    def start(self) -> None:
+        if self._thread is not None:
+            raise RuntimeError("heartbeat loop is already running")
+        self._stopping.clear()
+        self._thread = threading.Thread(
+            target=self._run, name="az06-heartbeat-loop", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self, timeout: float = 10.0) -> None:
+        self._stopping.set()
+        thread = self._thread
+        self._thread = None
+        if thread is not None:
+            thread.join(timeout=timeout)
+
+    def __enter__(self) -> "HeartbeatLoop":
+        self.start()
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        self.stop()
+
+    def wait_until_healthy(self, timeout: float, poll_seconds: float = 0.02) -> bool:
+        """Block until the loop is healthy or ``timeout`` elapses."""
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.is_healthy:
+                return True
+            time.sleep(poll_seconds)
+        return self.is_healthy
+
+    # -- loop body -----------------------------------------------------------
+
+    def _run(self) -> None:
+        while not self._stopping.is_set():
+            self._tick()
+            self._stopping.wait(self.interval_seconds)
+
+    def _tick(self) -> None:
+        """Run one heartbeat + reconcile pass. Never raises."""
+
+        try:
+            edge_active = [
+                str(environment_id) for environment_id in self._edge_active()
+            ]
+            with self._lock:
+                self._edge_sequence += 1
+                sequence = self._edge_sequence
+            result = self._ok_result(
+                self._client.heartbeat(
+                    edge_sequence=sequence,
+                    edge_active_environment_ids=edge_active,
+                ),
+                "heartbeat",
+            )
+            reconcile = self._ok_result(
+                self._client.reconcile(edge_active), "reconcile"
+            )
+        except Exception as exc:  # fail closed; the thread must survive anything
+            with self._lock:
+                self._failure_count += 1
+                self._last_error = f"{exc.__class__.__name__}: {exc}"
+            return
+
+        divergence = reconcile.get("divergence")
+        with self._lock:
+            self._failure_count = 0
+            self._last_error = None
+            self._last_result = result
+            self._last_divergence = divergence
+            self._last_success_monotonic = time.monotonic()
+
+        if isinstance(divergence, dict) and divergence.get("consistent") is not True:
+            self._report_divergence(divergence)
+
+    @staticmethod
+    def _ok_result(response: dict[str, Any], action: str) -> dict[str, Any]:
+        if response.get("status") != "ok":
+            raise ShadowTransportError(
+                f"shadow {action} rejected: {response.get('reason_codes')}"
+            )
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise ShadowTransportError(f"shadow {action} returned no result object")
+        return result
+
+    def _report_divergence(self, divergence: dict[str, Any]) -> None:
+        """Hand the divergence report to the caller's hook, defensively.
+
+        A broken reporting hook is not an AZ-06 liveness failure, so it does
+        not mark the loop unhealthy — but it must never kill the loop either.
+        """
+
+        if self._on_divergence is None:
+            return
+        try:
+            self._on_divergence(divergence)
+        except Exception as exc:
+            with self._lock:
+                self._last_error = (
+                    f"on_divergence callback failed: {exc.__class__.__name__}: {exc}"
+                )
