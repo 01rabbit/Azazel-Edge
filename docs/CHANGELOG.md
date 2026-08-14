@@ -6,6 +6,29 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Focus screens informed by commercial SIEM/SOC/NOC dashboard patterns
+  (design notes in `docs/architecture/socnoc-workspace-design.md`):
+  - **Simple+**: the Simple landing view gains a Splunk-style KPI strip
+    (Risk / Now queue / Direct critical / Impacted clients / Uplink /
+    Services, with ~1-min trend arrows), a band-colored 60-min activity
+    strip, and a deterministic pipeline funnel
+    (`events → signals → now/watch → action`).
+  - **SOC Focus panel** (SOC workspace): NOW/WATCH/BACKLOG + critical +
+    visibility + oldest-unhandled-NOW KPIs, a real triage **table** over the
+    deterministic queue bands (band chips + keyword filter), a Decision card
+    (arbiter's pick, why, why-not-stronger, confidence/evidence/AI role),
+    and a 6-hour alerts-over-time strip.
+  - **NOC Focus panel** (NOC workspace): uplink/internet/capacity/clients/
+    impacted/services KPIs, a five-hop **path health strip**
+    (clients → edge → uplink → gateway → internet; the edge-local answer to
+    a geo map), a top-talkers table joined with the client identity view,
+    runtime meters, and service chips.
+  - Backend: the dashboard bundle gains an `activity` key — time-bucketed
+    alert counts (1h/2min, 6h/20min) banded with the same thresholds and
+    `_normalize_alert_event` normalizer as the alert queues; queue item caps
+    raised 5→12 per band (8 for escalation) for the triage table. Documented
+    in `docs/API_REFERENCE.md`.
+
 - `GET /api/dashboard/bundle`: one-request snapshot for the dashboard poll,
   aggregating summary / actions / health / evidence / trends / state /
   topolite seed mode / Mattermost status plus role-gated operator-progress

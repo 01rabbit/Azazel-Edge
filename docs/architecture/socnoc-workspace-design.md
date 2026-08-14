@@ -129,6 +129,33 @@ mechanism and always win):
 - SOC: open SOC/NOC split details and Evidence & Timeline.
 - NOC: open SOC/NOC split details and Client Identity endpoint details.
 
+## Focus screens (second pass, commercial-dashboard informed)
+
+A second design pass reviewed Splunk ES Security Posture, IBM QRadar Network
+Visibility, an analyst-queue console, a Grafana SOC standup board, and a
+radial-timeline SIEM view, and adopted what fits an edge-local deterministic
+appliance:
+
+- **Adopted**: big-number KPI tiles with trend deltas (Splunk Key
+  Indicators); severity-banded time strips and an analyst work-queue table
+  (analyst console); network summary numbers and top talkers (QRadar); the
+  events→signals→insights funnel (radial view's sidebar) re-told as the
+  deterministic pipeline `events → signals → now/watch → action`.
+- **Rejected**: radial time charts (low information density on Pi-class
+  rendering), geo maps and donut charts (an edge node has no meaningful
+  geography; band lanes read faster) — the five-hop **path health strip** is
+  the local replacement for the geo map — and threshold-less raw count tiles
+  (violates alert-by-exception).
+
+Implementation: `#socFocusPanel` / `#nocFocusPanel` render only in their own
+workspace and sit directly under the Command Strip; the Simple view gains the
+KPI strip, activity strip, and pipeline funnel. All verdict/band logic reuses
+the existing `summarize*` helpers and alert-queue thresholds; the only new
+backend surface is the bundle's `activity` aggregation (same normalizer, same
+thresholds). The SOC decision card is populated from the actions payload
+(selected action, `why_now`, `rejected_stronger_actions`, trust capsule) — the
+piece no commercial SIEM shows.
+
 ## Non-goals / future work
 
 - No second data path: both workspaces render from the same poll cycle and the

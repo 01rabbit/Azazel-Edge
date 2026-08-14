@@ -2217,10 +2217,12 @@ def _dashboard_alert_queues_payload(state: Dict[str, Any], recent_alerts: List[D
     second_pass_soc = state.get("second_pass_soc") if isinstance(state.get("second_pass_soc"), dict) else {}
     suppression = second_pass_soc.get("suppression_exception_state") if isinstance(second_pass_soc.get("suppression_exception_state"), dict) else {}
     return {
-        "now": {"count": len(now_items), "items": now_items[:5]},
-        "watch": {"count": len(watch_items), "items": watch_items[:5]},
-        "backlog": {"count": len(backlog_items), "items": backlog_items[:5]},
-        "escalation_candidates": escalation_candidates[:5],
+        # 12/8 caps (was 5): the SOC workspace triage table renders these rows
+        # directly, so keep more context available than the glance views show.
+        "now": {"count": len(now_items), "items": now_items[:12]},
+        "watch": {"count": len(watch_items), "items": watch_items[:12]},
+        "backlog": {"count": len(backlog_items), "items": backlog_items[:12]},
+        "escalation_candidates": escalation_candidates[:8],
         "suppression": {
             "status": str(suppression.get("status") or "normal"),
             "suppressed_count": _as_int(suppression.get("suppressed_count"), _as_int(second_pass_soc.get("suppressed_count"), 0)),
@@ -2231,6 +2233,59 @@ def _dashboard_alert_queues_payload(state: Dict[str, Any], recent_alerts: List[D
             "watch": watch_threshold,
             "escalate": escalate_threshold,
         },
+    }
+
+
+def _dashboard_activity_payload(recent_alerts: List[Dict[str, Any]], *, now_epoch: float | None = None) -> Dict[str, Any]:
+    """Deterministic time-bucketed alert activity for the Simple/SOC strips.
+
+    Buckets the tailed AI event rows into fixed windows (1h/2min and 6h/20min),
+    classifying each row into the same risk bands as the alert queues
+    (normal < watch threshold <= watch < now threshold <= critical). Purely a
+    re-aggregation of the existing event log — no new data source, no new
+    judgment logic.
+    """
+    now_ts = float(now_epoch if now_epoch is not None else time.time())
+    now_threshold = max(0, min(100, _as_int(ALERT_QUEUE_NOW_THRESHOLD, 80)))
+    watch_threshold = max(0, min(now_threshold, _as_int(ALERT_QUEUE_WATCH_THRESHOLD, 50)))
+    # The raw log rows are nested ({"event": ..., "advisory": ...}); run them
+    # through the same normalizer the evidence timeline uses so risk banding
+    # here can never disagree with the alert queues.
+    normalized_rows = [_normalize_alert_event(alert) for alert in recent_alerts]
+
+    def build(window_sec: int, bucket_sec: int) -> Dict[str, Any]:
+        count = max(1, window_sec // bucket_sec)
+        buckets = [{"normal": 0, "watch": 0, "critical": 0} for _ in range(count)]
+        events = 0
+        signals = 0
+        for alert in normalized_rows:
+            ts = _as_float(alert.get("ts"), 0.0)
+            if ts <= 0:
+                continue
+            age = now_ts - ts
+            if age < 0 or age >= window_sec:
+                continue
+            idx = count - 1 - int(age // bucket_sec)
+            if idx < 0 or idx >= count:
+                continue
+            risk = _as_int(alert.get("risk_score"), 0)
+            band = "critical" if risk >= now_threshold else ("watch" if risk >= watch_threshold else "normal")
+            buckets[idx][band] += 1
+            events += 1
+            if band != "normal":
+                signals += 1
+        return {
+            "window_sec": window_sec,
+            "bucket_sec": bucket_sec,
+            "buckets": buckets,
+            "events": events,
+            "signals": signals,
+        }
+
+    return {
+        "h1": build(3600, 120),
+        "h6": build(21600, 1200),
+        "thresholds": {"now": now_threshold, "watch": watch_threshold},
     }
 
 
@@ -6289,7 +6344,11 @@ def api_dashboard_bundle():
     state = read_state()
     metrics = _read_json_file(AI_METRICS_PATH)
     advisory = _read_json_file(AI_ADVISORY_PATH)
-    alert_rows = _tail_jsonl(AI_EVENT_LOG, limit=20)
+    # 400-row tail: _tail_jsonl scans the whole file either way (deque cap only
+    # bounds memory), and the activity buckets need up to 6h of events. The
+    # evidence payload keeps its own 20-row view of the same list.
+    alert_rows_full = _tail_jsonl(AI_EVENT_LOG, limit=400)
+    alert_rows = alert_rows_full[-20:]
     llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
     runbook_rows = _tail_jsonl(RUNBOOK_EVENT_LOG, limit=20)
     triage_rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG, TRIAGE_AUDIT_FALLBACK_LOG], limit=20)
@@ -6299,6 +6358,7 @@ def api_dashboard_bundle():
     health = _dashboard_health_payload(state, metrics, llm_rows, runbook_rows)
     evidence = _dashboard_evidence_payload(state, advisory, alert_rows, llm_rows, runbook_rows, triage_rows)
     trends = _dashboard_trends_payload(limit=_as_int(request.args.get("trends_limit"), 60), window_sec=0)
+    activity = _dashboard_activity_payload(alert_rows_full)
 
     # Same enrichments as GET /api/state.
     state_payload = dict(state)
@@ -6352,6 +6412,7 @@ def api_dashboard_bundle():
                 "health": health,
                 "evidence": evidence,
                 "trends": trends,
+                "activity": activity,
                 "state": state_payload,
                 "topolite_seed_mode": topolite_response,
                 "mattermost": mattermost,

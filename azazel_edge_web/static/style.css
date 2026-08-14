@@ -93,16 +93,366 @@ body[data-workspace="soc"] .dashboard-shell {
     flex-direction: column;
 }
 
+/* Focus panels: purpose-built SOC/NOC screen headers, visible only in their
+   own workspace. Shared building blocks (.focus-kpi, .focus-table, .path-strip,
+   .activity-bars, .pipeline-row) are also reused by the Simple view. */
+.focus-panel {
+    display: none;
+    padding: 22px 24px 24px;
+}
+
+body[data-workspace="soc"] .soc-focus-panel {
+    display: block;
+}
+
+body[data-workspace="noc"] .noc-focus-panel {
+    display: block;
+}
+
+.focus-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.focus-kpi {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 12px 16px;
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.focus-kpi-kicker {
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+}
+
+.focus-kpi-value {
+    font-family: var(--font-mono);
+    font-size: 1.9rem;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.focus-kpi-value-text {
+    font-size: 1.2rem;
+    padding-top: 5px;
+}
+
+.focus-kpi-detail {
+    font-size: 0.78rem;
+    color: var(--text-soft);
+}
+
+.focus-kpi.status-safe .focus-kpi-value { color: var(--accent-green); }
+.focus-kpi.status-caution .focus-kpi-value { color: var(--accent-amber); }
+.focus-kpi.status-danger .focus-kpi-value { color: var(--accent-red); }
+.focus-kpi.status-neutral .focus-kpi-value { color: var(--accent-steel); }
+
+.focus-kpi-delta {
+    font-size: 0.8rem;
+    margin-left: 6px;
+    vertical-align: 4px;
+}
+
+.focus-kpi-delta.delta-up { color: var(--accent-red); }
+.focus-kpi-delta.delta-down { color: var(--accent-green); }
+.focus-kpi-delta.delta-flat { color: var(--text-soft); }
+
+.focus-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 2.1fr) minmax(0, 1fr);
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.focus-columns-noc {
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+}
+
+.focus-side {
+    display: grid;
+    gap: 12px;
+    align-content: start;
+}
+
+.focus-card {
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.03);
+    padding: 14px 18px;
+}
+
+.focus-card-kicker {
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+    margin-bottom: 8px;
+}
+
+.focus-card-kicker.focus-sub {
+    margin-top: 12px;
+}
+
+.focus-card-note {
+    color: var(--text-soft);
+    font-size: 0.78rem;
+    margin-top: 8px;
+}
+
+.focus-decision {
+    border-left: 5px solid var(--accent-amber);
+}
+
+.focus-decision h3 {
+    margin: 2px 0 8px;
+    font-size: 1.35rem;
+    color: var(--accent-amber);
+}
+
+.focus-rejected li {
+    color: var(--text-soft);
+}
+
+.focus-table-wrap {
+    overflow-x: auto;
+}
+
+.focus-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.focus-table th {
+    color: var(--text-soft);
+    text-align: left;
+    font-weight: 400;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line-strong);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.focus-table td {
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+}
+
+.focus-table td strong {
+    color: var(--text-main);
+}
+
+.focus-badge {
+    display: inline-block;
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+}
+
+.focus-badge.status-danger { background: rgba(228, 109, 93, 0.18); color: var(--accent-red); }
+.focus-badge.status-caution { background: rgba(224, 164, 88, 0.18); color: var(--accent-amber); }
+.focus-badge.status-safe { background: rgba(127, 211, 155, 0.15); color: var(--accent-green); }
+.focus-badge.status-neutral { background: rgba(167, 199, 214, 0.12); color: var(--accent-steel); }
+
+.triage-filter-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+
+.triage-filter-row .evidence-filter-input {
+    flex: 1;
+    min-width: 160px;
+}
+
+.triage-band-chips {
+    display: flex;
+    gap: 6px;
+}
+
+.triage-band-chip {
+    appearance: none;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--line-soft);
+    border-radius: 999px;
+    padding: 5px 12px;
+}
+
+.triage-band-chip.active {
+    color: var(--text-main);
+    border-color: rgba(116, 212, 255, 0.4);
+    background: rgba(116, 212, 255, 0.12);
+}
+
+.triage-band-chip.band-now.active { color: var(--accent-red); border-color: rgba(228, 109, 93, 0.45); background: rgba(228, 109, 93, 0.12); }
+.triage-band-chip.band-watch.active { color: var(--accent-amber); border-color: rgba(224, 164, 88, 0.45); background: rgba(224, 164, 88, 0.12); }
+
+.activity-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 48px;
+    margin-top: 4px;
+}
+
+.activity-bars i {
+    display: block;
+    flex: 1;
+    min-height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: rgba(116, 212, 255, 0.5);
+}
+
+.activity-bars i.band-watch { background: rgba(224, 164, 88, 0.75); }
+.activity-bars i.band-critical { background: rgba(228, 109, 93, 0.85); }
+
+.simple-lower {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    gap: 12px;
+}
+
+.pipeline-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-mono);
+    flex-wrap: wrap;
+}
+
+.pipeline-stage {
+    display: flex;
+    flex-direction: column;
+}
+
+.pipeline-stage strong {
+    font-size: 1.25rem;
+    color: var(--text-main);
+}
+
+.pipeline-stage span {
+    font-size: 0.66rem;
+    color: var(--text-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+.pipeline-arrow {
+    color: var(--text-soft);
+}
+
+.path-strip {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-top: 4px;
+}
+
+.path-hop {
+    flex: 1;
+    text-align: center;
+    border: 1px solid var(--line-soft);
+    border-radius: 12px;
+    padding: 10px 6px;
+    background: rgba(255, 255, 255, 0.03);
+    min-width: 0;
+}
+
+.path-hop-title {
+    font-size: 0.7rem;
+    color: var(--text-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.path-hop-state {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    margin-top: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.path-hop.status-safe { border-color: rgba(127, 211, 155, 0.4); }
+.path-hop.status-safe .path-hop-state { color: var(--accent-green); }
+.path-hop.status-caution { border-color: rgba(224, 164, 88, 0.5); }
+.path-hop.status-caution .path-hop-state { color: var(--accent-amber); }
+.path-hop.status-danger { border-color: rgba(228, 109, 93, 0.55); }
+.path-hop.status-danger .path-hop-state { color: var(--accent-red); }
+.path-hop.status-neutral .path-hop-state { color: var(--accent-steel); }
+
+.path-link {
+    width: 30px;
+    height: 2px;
+    flex: 0 0 auto;
+    background: var(--line-strong);
+}
+
+.path-link.status-caution { background: rgba(224, 164, 88, 0.7); }
+.path-link.status-danger { background: rgba(228, 109, 93, 0.7); }
+
+.focus-meter-label {
+    color: var(--text-soft);
+    font-size: 0.78rem;
+    margin-top: 8px;
+}
+
+.share-bar {
+    display: inline-block;
+    height: 8px;
+    border-radius: 4px;
+    background: rgba(116, 212, 255, 0.5);
+    vertical-align: middle;
+}
+
+.share-bar.status-caution { background: rgba(224, 164, 88, 0.7); }
+
+@media (max-width: 1240px) {
+    .focus-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .focus-columns, .focus-columns-noc, .simple-lower { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+    .focus-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .path-strip { flex-wrap: wrap; gap: 6px; }
+    .path-link { display: none; }
+    .path-hop { flex: 1 1 40%; }
+}
+
 /* NOC: glance -> who is affected -> path/service boards -> runtime -> fleet */
 body[data-workspace="noc"] .synthetic-mode-banner { order: 0; }
 body[data-workspace="noc"] .onboarding-banner { order: 1; }
 body[data-workspace="noc"] #commandStripPanel { order: 2; }
-body[data-workspace="noc"] #clientIdentityPanel { order: 3; }
-body[data-workspace="noc"] .board-layout { order: 4; }
-body[data-workspace="noc"] #resourceGuardPanel { order: 5; }
-body[data-workspace="noc"] #aggregatorPanel { order: 6; }
-body[data-workspace="noc"] #topoliteSingleScreen { order: 7; }
-body[data-workspace="noc"] #missionPanel { order: 8; }
+body[data-workspace="noc"] #nocFocusPanel { order: 3; }
+body[data-workspace="noc"] #clientIdentityPanel { order: 4; }
+body[data-workspace="noc"] .board-layout { order: 5; }
+body[data-workspace="noc"] #resourceGuardPanel { order: 6; }
+body[data-workspace="noc"] #aggregatorPanel { order: 7; }
+body[data-workspace="noc"] #topoliteSingleScreen { order: 8; }
+body[data-workspace="noc"] #missionPanel { order: 9; }
 
 /* Simple workspace: three verdict tiles (Overall / SOC / NOC), the default
    landing view. Everything else in the shell is hidden except the
@@ -245,12 +595,13 @@ body[data-workspace="simple"] .back-to-top {
 body[data-workspace="soc"] .synthetic-mode-banner { order: 0; }
 body[data-workspace="soc"] .onboarding-banner { order: 1; }
 body[data-workspace="soc"] #commandStripPanel { order: 2; }
-body[data-workspace="soc"] .board-layout { order: 3; }
-body[data-workspace="soc"] #evidencePanel { order: 4; }
-body[data-workspace="soc"] #topoliteSingleScreen { order: 5; }
-body[data-workspace="soc"] #missionPanel { order: 6; }
-body[data-workspace="soc"] #clientIdentityPanel { order: 7; }
-body[data-workspace="soc"] #resourceGuardPanel { order: 8; }
+body[data-workspace="soc"] #socFocusPanel { order: 3; }
+body[data-workspace="soc"] .board-layout { order: 4; }
+body[data-workspace="soc"] #evidencePanel { order: 5; }
+body[data-workspace="soc"] #topoliteSingleScreen { order: 6; }
+body[data-workspace="soc"] #missionPanel { order: 7; }
+body[data-workspace="soc"] #clientIdentityPanel { order: 8; }
+body[data-workspace="soc"] #resourceGuardPanel { order: 9; }
 body[data-workspace="soc"] #aggregatorPanel { order: 10; }
 
 .topbar {

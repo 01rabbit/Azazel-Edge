@@ -140,6 +140,20 @@ Response keys (each matching the corresponding per-panel endpoint's shape):
 | `mattermost` | `GET /api/mattermost/status` |
 | `operator_progress_state` | `GET /api/operator-progress` (`operator`+ role only, else `null`) |
 | `handoff_brief_pack` | `GET /api/dashboard/handoff` (`operator`+ role only, else `null`) |
+| `activity` | bundle-only: deterministic time-bucketed alert activity (below) |
+
+`activity` re-aggregates the tailed AI event log through the same
+`_normalize_alert_event` normalizer and risk bands as the alert queues —
+no new data source, no new judgment logic:
+
+- `h1` — last 60 min in 30 × 2-min buckets; `h6` — last 6 h in 18 × 20-min
+  buckets. Each bucket is `{normal, watch, critical}` counts; each window
+  also reports `events` (total rows) and `signals` (watch+critical rows).
+- `thresholds` — the `now`/`watch` risk thresholds used for banding.
+
+Note: alert-queue `items` caps were raised from 5 to 12 per band (8 for
+escalation candidates) so the SOC workspace triage table can render them
+directly; `count` fields are unchanged.
 
 The role-gated keys are always present; a `viewer` caller receives `null` for
 both so the response shape stays stable. All per-panel endpoints remain
