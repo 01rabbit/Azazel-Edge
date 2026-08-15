@@ -11,7 +11,7 @@ Covered, per the Deception -> Edge -> Knowledge interlock contract:
 * observation batches relay successfully, untouched, to ``POST
   /v1/deception-observations``;
 * a valid ``EffectivenessAdvisory`` from ``GET
-  /v1/deception-advisories/{environment_id}`` is returned and verified;
+  /v1/deception-effectiveness?environment_id=`` is returned and verified;
 * a response claiming executable/verdict/authority is rejected fail-closed;
 * a Knowledge outage degrades to "advisory unavailable" fail-open, without
   raising;
@@ -126,7 +126,7 @@ class _StubHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({"received": True}).encode("utf-8"))
 
     def do_GET(self) -> None:  # noqa: N802
-        if not self.path.startswith("/v1/deception-advisories/"):
+        if not self.path.startswith("/v1/deception-effectiveness"):
             self.send_response(404)
             self.end_headers()
             return
@@ -228,9 +228,9 @@ def test_observations_relay_successfully_and_untouched(server):
     received = server.state.received_batches[0]
     assert received["schema_version"] == "deception-observation-batch/v0.1"
     assert received["source_edge_node_id"] == EDGE_NODE_ID
-    assert received["observations"] == [observation]
+    assert received["items"] == [observation]
     assert (
-        received["observations"][0]["lure_id"] == HOSTILE_LOOKING_LURE_ID
+        received["items"][0]["lure_id"] == HOSTILE_LOOKING_LURE_ID
     )
 
     # Configurable, non-hardcoded bearer auth actually made it onto the wire.

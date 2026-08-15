@@ -61,7 +61,7 @@ except ImportError:  # Fabric remains an optional Edge integration dependency.
 logger = logging.getLogger(__name__)
 
 DEFAULT_INGEST_PATH = "/v1/deception-observations"
-DEFAULT_ADVISORY_PATH_TEMPLATE = "/v1/deception-advisories/{environment_id}"
+DEFAULT_ADVISORY_PATH_TEMPLATE = "/v1/deception-effectiveness?environment_id={environment_id}"
 INGEST_BATCH_SCHEMA = "deception-observation-batch/v0.1"
 
 # HTTP statuses treated as ordinary, expected backpressure: the batch was
@@ -241,11 +241,17 @@ class KnowledgeIngestClient:
                     detail=f"authority invariant violated: {exc}",
                 )
 
+        # Knowledge's AZ-04 ingest envelope is keyed by `items` + `environment_id`
+        # (its api/contracts.py boundary type-enforces the batch on those markers);
+        # the extra provenance keys are ignored by that boundary. All observations
+        # in one relay batch share an environment_id, so derive it from the batch.
+        environment_id = str(observations[0].get("environment_id", ""))
         envelope = {
             "schema_version": INGEST_BATCH_SCHEMA,
             "source_edge_node_id": self.edge_node_id,
             "submitted_at": _utcnow_iso(),
-            "observations": observations,
+            "environment_id": environment_id,
+            "items": observations,
         }
         headers = {"Content-Type": "application/json"}
         headers.update(self.auth.to_headers())
