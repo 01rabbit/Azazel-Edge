@@ -1,0 +1,889 @@
+/* =============================================================================
+   SENTINEL Decision Console — visual design system + tier navigation
+   -----------------------------------------------------------------------------
+   Loaded AFTER style.css. This sheet re-skins the existing (contract-frozen)
+   dashboard DOM into an industrial, tactical decision-support instrument and
+   adds the 4-tier information architecture + deterministic decision pipeline.
+
+   Design law: "Normal is quiet. Exceptions demand attention."
+   No new decision logic; state comes entirely from the existing status-* classes
+   that app.js already assigns from the deterministic backend payloads.
+   ========================================================================== */
+
+:root {
+    /* Industrial instrument palette (quiet, low-glow) */
+    --bg-0: #0B0E11;
+    --bg-1: #11161B;
+    --bg-2: #181E24;
+    --bg-panel: #10151A;
+    --bg-panel-strong: #131A21;
+    --bg-inset: #0C1116;
+
+    --line-soft: rgba(148, 176, 194, 0.12);
+    --line-strong: rgba(148, 176, 194, 0.26);
+
+    --text-main: #E8EEF2;
+    --text-dim: #AEBECA;
+    --text-soft: #8195A3;
+
+    /* Semantic colors — meaning, not decoration. Keep the palette small. */
+    --accent-cyan: #6FC8E6;   /* navigation / interaction / informational */
+    --accent-green: #5FC98A;  /* verified healthy ONLY */
+    --accent-amber: #E0A65C;  /* watch / operator consideration */
+    --accent-red: #E4594C;    /* critical / immediate attention */
+    --accent-steel: #7C93A3;  /* unknown / stale / unavailable */
+
+    --shadow-lg: 0 10px 28px rgba(0, 0, 0, 0.42);
+    --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.30);
+
+    /* Restrained radii — precision instrument, not a glass card */
+    --radius-lg: 8px;
+    --radius-md: 6px;
+    --radius-sm: 4px;
+
+    --font-mono: "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace;
+
+    /* Tier accent used by the active nav item + pipeline rail */
+    --sentinel-rail: var(--accent-cyan);
+}
+
+/* Flat industrial ground — no radial neon glows. A very faint vertical grid
+   evokes a rack instrument without becoming a "hacker movie" screen. */
+body {
+    background: var(--bg-0) !important;
+}
+
+body::before {
+    background:
+        repeating-linear-gradient(90deg, rgba(148, 176, 194, 0.028) 0 1px, transparent 1px 96px) !important;
+    opacity: 0.5 !important;
+}
+
+/* Numeric / identifier legibility — tactical readouts are monospaced. */
+.strip-pill strong,
+.freshness-pill strong,
+.command-heat-cell strong,
+.client-identity-tile strong,
+.meta-item strong,
+.meta-clock,
+#headerCpuUsage, #headerMemUsage, #headerCpuTemp,
+.split-glance-cell strong {
+    font-family: var(--font-mono);
+    letter-spacing: 0.01em;
+}
+
+/* -----------------------------------------------------------------------------
+   Topbar — quieter, flatter command header
+   -------------------------------------------------------------------------- */
+/* Compact, thin command bar (target design). Contract text stays in the DOM;
+   the marketing subtitle is hidden, and the AZ-01 SENTINEL designation is added
+   next to the product mark via a pseudo-element (no markup change). */
+.topbar {
+    background: linear-gradient(180deg, var(--bg-1), var(--bg-0)) !important;
+    border-bottom: 1px solid var(--line-strong);
+    box-shadow: none !important;
+    padding: 12px 22px !important;
+    align-items: center !important;
+    gap: 14px;
+}
+.brand-kicker {
+    letter-spacing: 0.28em !important;
+    color: var(--accent-cyan);
+}
+/* Dashboard-only designation (scoped so it does not bleed onto the M.I.O. page,
+   which shares .brand-kicker but carries its own product mark). */
+.brand-block .brand-kicker::after {
+    content: " · AZ-01 SENTINEL";
+    color: var(--text-soft);
+    letter-spacing: 0.18em;
+}
+.brand-block h1 {
+    letter-spacing: 0.02em;
+    font-size: 1.05rem !important;
+    margin: 2px 0 0 !important;
+    white-space: nowrap;
+}
+.brand-subtitle { display: none !important; }
+.topbar-meta .meta-item strong { font-size: 0.82rem; }
+
+/* -----------------------------------------------------------------------------
+   Panels — instrument bays: squared, matte, hairline borders
+   -------------------------------------------------------------------------- */
+.panel {
+    background: var(--bg-panel) !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: var(--radius-lg) !important;
+    box-shadow: var(--shadow-sm) !important;
+    backdrop-filter: none !important;
+}
+.panel-kicker {
+    letter-spacing: 0.24em !important;
+    color: var(--text-soft) !important;
+}
+.panel-heading h2 {
+    letter-spacing: 0.01em;
+}
+
+/* =============================================================================
+   4-TIER NAVIGATION SHELL
+   ========================================================================== */
+/* On mobile the nav is a static top strip. On desktop it becomes a sticky left
+   rail whose sticky offset clears the sticky topbar (height measured into
+   --sentinel-topbar-h by sentinel.js), so it never tucks behind it. */
+.sentinel-tier-nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    margin: 0 0 14px;
+    background: var(--bg-1);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-md);
+}
+.sentinel-tier-nav__group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+.sentinel-tier-btn {
+    appearance: none;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.82rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: 8px 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.sentinel-tier-btn:hover {
+    color: var(--text-main);
+    background: rgba(148, 176, 194, 0.06);
+}
+.sentinel-tier-btn[aria-current="page"],
+.sentinel-tier-btn.is-active {
+    color: var(--bg-0);
+    background: var(--sentinel-rail);
+    border-color: var(--sentinel-rail);
+    font-weight: 700;
+}
+/* A per-tier status dot — colored ONLY when that tier is not-normal. */
+.sentinel-tier-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-steel);
+    flex: 0 0 auto;
+}
+.sentinel-tier-btn[aria-current="page"] .sentinel-tier-dot {
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+}
+/* State encoded by SHAPE + FILL as well as color, so it is not color-only:
+   ok = solid fill, watch/critical = solid + ring (thicker for critical),
+   unknown = hollow outline. Screen readers get the word via #sentinelStatus*. */
+.sentinel-tier-dot.is-ok { background: var(--accent-green); }
+.sentinel-tier-dot.is-watch {
+    background: var(--accent-amber);
+    box-shadow: 0 0 0 2px rgba(224, 166, 92, 0.4);
+}
+.sentinel-tier-dot.is-critical {
+    background: var(--accent-red);
+    box-shadow: 0 0 0 3px rgba(228, 89, 76, 0.5);
+}
+.sentinel-tier-dot.is-unknown {
+    background: transparent;
+    border: 1.5px solid var(--accent-steel);
+}
+
+/* SOC/NOC workspace tabs render at the top of the OPERATIONS content. */
+.sentinel-ops-tabs { margin: 0 0 4px; }
+
+/* Tier visibility: elements WITHOUT data-tier (banners, nav, pipeline) always
+   show. A panel is hidden when its tier is not the active tier. Audience rules
+   (.pro-only / .temp-only) still apply on top — a panel shows only when BOTH
+   agree. */
+body[data-tier-active="overview"]   [data-tier]:not([data-tier~="overview"]),
+body[data-tier-active="operations"] [data-tier]:not([data-tier~="operations"]),
+body[data-tier-active="evidence"]   [data-tier]:not([data-tier~="evidence"]),
+body[data-tier-active="system"]     [data-tier]:not([data-tier~="system"]) {
+    display: none !important;
+}
+/* SOC/NOC sub-filter inside OPERATIONS. Panels tagged data-op are hidden when a
+   specific side is selected and they belong to the other side. */
+body[data-tier-active="operations"][data-op-active="soc"] [data-op="noc"],
+body[data-tier-active="operations"][data-op-active="noc"] [data-op="soc"] {
+    display: none !important;
+}
+
+/* Empty-tier note (rendered by sentinel.js when audience hides all of a tier). */
+.sentinel-tier-empty {
+    display: none;
+    margin: 0 0 14px;
+    padding: 20px 22px;
+    background: var(--bg-panel);
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--radius-lg);
+    color: var(--text-dim);
+}
+.sentinel-tier-empty.is-visible { display: block; }
+.sentinel-tier-empty strong { color: var(--text-main); }
+
+/* =============================================================================
+   LEFT SIDEBAR LAYOUT (desktop) — vertical console rail like the target design.
+   The dashboard shell becomes a 2-column grid: a persistent left nav rail and
+   the scrolling content column. Collapses back to a top bar on narrow screens.
+   ========================================================================== */
+.sentinel-nav-foot {
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: auto;
+    padding: 12px 12px 4px;
+    border-top: 1px solid var(--line-soft);
+}
+.sentinel-nav-foot__label {
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    color: var(--text-dim);
+}
+.sentinel-nav-foot__auth {
+    font-size: 0.62rem;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--accent-steel);
+}
+.sentinel-content { min-width: 0; }
+
+@media (min-width: 901px) {
+    .dashboard-shell {
+        display: grid;
+        grid-template-columns: 210px minmax(0, 1fr);
+        gap: 22px;
+        align-items: start;
+    }
+    .sentinel-tier-nav {
+        position: sticky;
+        top: calc(var(--sentinel-topbar-h, 84px) + 12px);
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        margin: 0;
+        min-height: calc(100vh - var(--sentinel-topbar-h, 84px) - 24px);
+    }
+    .sentinel-tier-nav__group {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        width: 100%;
+    }
+    .sentinel-tier-btn {
+        width: 100%;
+        justify-content: flex-start;
+    }
+    .sentinel-nav-foot { display: flex; }
+}
+
+/* Shared app frame — the same left sidebar beside page content on the M.I.O.
+   page, so the left menu is fixed/consistent across the console and /ops-comm. */
+a.sentinel-tier-btn, a.sentinel-nav-link { text-decoration: none; }
+.sentinel-nav-link.is-active { color: var(--bg-0); background: var(--accent-cyan); border-color: var(--accent-cyan); font-weight: 700; }
+.sentinel-appframe, .sentinel-appframe__content { min-width: 0; }
+@media (min-width: 901px) {
+    .sentinel-appframe {
+        display: grid;
+        grid-template-columns: 210px minmax(0, 1fr);
+        gap: 22px;
+        padding: 0 clamp(16px, 4vw, 40px);
+        align-items: start;
+    }
+    .sentinel-appframe .sentinel-tier-nav {
+        position: static;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        margin: 18px 0 0;
+        min-height: 0;
+    }
+    .sentinel-appframe .sentinel-tier-nav__group { flex-direction: column; align-items: stretch; gap: 4px; width: 100%; }
+    .sentinel-appframe .sentinel-tier-btn { width: 100%; justify-content: flex-start; }
+    .sentinel-appframe .sentinel-nav-foot { display: flex; }
+    .sentinel-appframe__content .ops-shell { padding-left: 0; padding-right: 0; }
+}
+
+/* =============================================================================
+   STATE SEMANTICS — quiet normal, exceptions surface.
+   Status classes are assigned by app.js from deterministic payloads:
+   status-neutral | status-ok | status-safe | status-warn | status-caution | status-danger
+   Never render neutral/unknown as green.
+   ========================================================================== */
+.command-glance-hero,
+.command-heat-cell,
+.split-glance-cell,
+.client-identity-tile {
+    border: 1px solid var(--line-soft);
+    border-left-width: 3px;
+    border-left-color: var(--accent-steel);
+    background: var(--bg-inset) !important;
+    transition: none;
+}
+
+/* Left status rail encodes state by color AND stays legible without color via
+   the text app.js writes into each cell. */
+.status-neutral { border-left-color: var(--accent-steel) !important; }
+.status-ok,
+.status-safe { border-left-color: var(--accent-green) !important; }
+.status-warn,
+.status-caution { border-left-color: var(--accent-amber) !important; }
+.status-danger { border-left-color: var(--accent-red) !important; }
+
+/* Value color follows state, but green is reserved for verified-healthy only. */
+.command-heat-cell.status-ok strong,
+.command-heat-cell.status-safe strong,
+.split-glance-cell.status-ok strong,
+.split-glance-cell.status-safe strong { color: var(--accent-green); }
+.command-heat-cell.status-warn strong,
+.command-heat-cell.status-caution strong,
+.split-glance-cell.status-warn strong,
+.split-glance-cell.status-caution strong { color: var(--accent-amber); }
+.command-heat-cell.status-danger strong,
+.split-glance-cell.status-danger strong { color: var(--accent-red); }
+.command-heat-cell.status-neutral strong,
+.split-glance-cell.status-neutral strong { color: var(--text-soft); }
+
+/* The command hero (Visual Baseline / posture) is the first-read surface. */
+.command-glance-hero {
+    border-left-width: 4px;
+}
+.command-glance-hero.status-danger {
+    background: linear-gradient(180deg, rgba(228, 89, 76, 0.10), var(--bg-inset)) !important;
+}
+.command-glance-hero.status-warn,
+.command-glance-hero.status-caution {
+    background: linear-gradient(180deg, rgba(224, 166, 92, 0.08), var(--bg-inset)) !important;
+}
+
+/* Direct-critical pill must read as alarm when non-zero (handled by app.js class),
+   but stay quiet at zero. */
+.strip-pill-alert { border-color: var(--line-soft); }
+
+/* Synthetic-mode banner — unmistakable, never mistaken for live evidence. */
+.synthetic-mode-banner {
+    border: 1px solid var(--accent-amber) !important;
+    background: linear-gradient(180deg, rgba(224, 166, 92, 0.12), var(--bg-panel)) !important;
+}
+.synthetic-mode-banner .panel-kicker { color: var(--accent-amber) !important; }
+
+/* =============================================================================
+   DECISION PIPELINE STRIP — SENSE → EVALUATE → DECIDE → CONTROL → AUDIT
+   A navigation/status rail, not decoration. Reflects deterministic decision_path.
+   ========================================================================== */
+.sentinel-pipeline {
+    margin: 18px 0 6px;
+    padding: 12px 14px;
+    background: var(--bg-1);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-md);
+}
+.sentinel-pipeline__title {
+    font-size: 0.68rem;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+    margin: 0 0 10px;
+}
+.sentinel-pipeline__rail {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: stretch;
+}
+.sentinel-stage {
+    flex: 1 1 130px;
+    min-width: 120px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    background: var(--bg-inset);
+    border: 1px solid var(--line-soft);
+    border-left: 3px solid var(--accent-steel);
+    border-radius: var(--radius-sm);
+    position: relative;
+}
+.sentinel-stage__name {
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+.sentinel-stage__num {
+    font-family: var(--font-mono);
+    color: var(--accent-cyan);
+    font-size: 0.7rem;
+}
+.sentinel-stage__value {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--text-main);
+    word-break: break-word;
+}
+.sentinel-stage__meta {
+    font-size: 0.68rem;
+    color: var(--text-soft);
+}
+/* Stage arrow between items on wide screens. */
+.sentinel-stage:not(:last-child)::after {
+    content: "\203A";
+    position: absolute;
+    right: -8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--line-strong);
+    font-size: 1rem;
+    z-index: 1;
+}
+@media (max-width: 720px) {
+    .sentinel-stage:not(:last-child)::after { content: none; }
+}
+.sentinel-stage.is-ok { border-left-color: var(--accent-green); }
+.sentinel-stage.is-watch { border-left-color: var(--accent-amber); }
+.sentinel-stage.is-critical { border-left-color: var(--accent-red); }
+.sentinel-stage.is-unknown { border-left-color: var(--accent-steel); }
+.sentinel-stage.is-unknown .sentinel-stage__value { color: var(--text-soft); }
+
+/* =============================================================================
+   DECISION CONSOLE — bespoke OVERVIEW layout matching the target design:
+   Posture + Active Control → NOC/SOC/DECISION triad → Why/Rejected →
+   Recent evidence/Audit. Populated by sentinel.js from live payloads; the
+   preserved classic panels remain in the DOM behind a "detailed panels" toggle.
+   ========================================================================== */
+.sentinel-console { display: flex; flex-direction: column; gap: 14px; }
+.sentinel-console__head { display: flex; align-items: center; justify-content: space-between; }
+/* M.I.O. is reached from the sidebar / console, not the top bar. */
+.sentinel-nav-link {
+    display: inline-block; width: 100%; margin-top: 6px; text-align: left;
+    font-size: 0.74rem; letter-spacing: 0.08em; color: var(--accent-cyan);
+    text-decoration: none; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 7px 12px;
+}
+.sentinel-nav-link:hover { color: var(--text-main); background: rgba(148, 176, 194, 0.06); }
+/* Retired top-bar controls (superseded by the console + left nav). Kept in the
+   DOM for the render contract, hidden from the refined UI. */
+.audience-toggle,
+a.topbar-link[href^="/booth-focus"],
+#askMioLink,
+#showGuideBtn,
+#beginnerOnboarding { display: none !important; }
+.sentinel-card__kicker { font-size: 0.66rem; letter-spacing: 0.22em; text-transform: uppercase; color: var(--text-soft); margin-bottom: 8px; }
+
+.sentinel-console__topgrid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 14px; }
+.sentinel-console__triad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.sentinel-console__whygrid,
+.sentinel-console__evgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+.sentinel-console article {
+    background: var(--bg-panel); border: 1px solid var(--line-soft);
+    border-left: 3px solid var(--accent-steel); border-radius: var(--radius-md);
+    padding: 16px 18px; min-width: 0;
+}
+.sentinel-posture, .sentinel-control { position: relative; }
+.sentinel-icon-slot { position: absolute; top: 16px; right: 18px; width: 44px; height: 44px; color: var(--text-soft); }
+.sentinel-icon-slot svg { width: 100%; height: 100%; display: block; }
+.sentinel-icon-slot.tone-ok { color: var(--accent-green); }
+.sentinel-icon-slot.tone-watch { color: var(--accent-amber); }
+.sentinel-icon-slot.tone-critical { color: var(--accent-red); }
+.sentinel-icon-slot.tone-unknown { color: var(--accent-steel); }
+.sentinel-posture__word { display: block; font-size: 2.6rem; line-height: 1.05; letter-spacing: 0.02em; }
+.sentinel-posture__desc { margin: 8px 0 0; color: var(--text-dim); font-size: 0.9rem; line-height: 1.45; }
+.sentinel-control__word { display: block; font-size: 1.55rem; letter-spacing: 0.04em; margin-bottom: 10px; font-family: var(--font-mono); }
+.sentinel-triad-card > strong { display: block; font-size: 1.3rem; letter-spacing: 0.02em; margin-bottom: 10px; }
+
+.sentinel-kv { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.sentinel-kv > div { display: flex; justify-content: space-between; gap: 12px; }
+.sentinel-kv dt { color: var(--text-soft); font-size: 0.78rem; }
+.sentinel-kv dd { margin: 0; font-family: var(--font-mono); font-size: 0.82rem; color: var(--text-main); }
+.sentinel-kv--audit dd { color: var(--accent-cyan); }
+
+.sentinel-triad__list, .sentinel-why__list, .sentinel-rejected__list, .sentinel-recentev__list {
+    list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px;
+}
+.sentinel-triad__list li { display: flex; justify-content: space-between; gap: 10px; font-size: 0.82rem; color: var(--text-soft); }
+.sentinel-triad__list li b { font-family: var(--font-mono); color: var(--text-main); font-weight: 600; }
+.sentinel-why__list li { font-size: 0.85rem; color: var(--text-dim); line-height: 1.4; padding-left: 14px; position: relative; }
+.sentinel-why__list li::before { content: "\203A"; position: absolute; left: 0; color: var(--accent-cyan); }
+.sentinel-rejected__list li { display: flex; gap: 10px; font-size: 0.82rem; }
+.sentinel-rejected__list .rej-action { font-family: var(--font-mono); color: var(--accent-amber); min-width: 82px; text-transform: uppercase; }
+.sentinel-rejected__list .rej-reason { color: var(--text-soft); }
+.sentinel-recentev__list li { display: flex; gap: 10px; font-size: 0.82rem; }
+.sentinel-recentev__list .ev-time { font-family: var(--font-mono); color: var(--text-soft); min-width: 68px; }
+.sentinel-recentev__list .ev-label { color: var(--text-dim); }
+
+/* Big state words colored by status (green reserved for verified-healthy). */
+.sentinel-console .status-ok > strong, .sentinel-console .status-safe > strong { color: var(--accent-green); }
+.sentinel-console .status-warn > strong, .sentinel-console .status-caution > strong { color: var(--accent-amber); }
+.sentinel-console .status-danger > strong { color: var(--accent-red); }
+.sentinel-console .status-neutral > strong { color: var(--text-soft); }
+
+/* Fidelity swap: bespoke consoles vs the preserved classic panels. */
+body:not(.sentinel-fidelity) #sentinelOverviewConsole,
+body:not(.sentinel-fidelity) #sentinelSocConsole,
+body:not(.sentinel-fidelity) #sentinelNocConsole,
+body:not(.sentinel-fidelity) #sentinelEvidenceConsole,
+body:not(.sentinel-fidelity) #sentinelSystemConsole { display: none !important; }
+body.sentinel-fidelity .command-strip,
+body.sentinel-fidelity .mission-row:not(.resource-guard-panel),
+body.sentinel-fidelity .temporary-mission-panel,
+body.sentinel-fidelity .situation-board,
+body.sentinel-fidelity .action-board,
+body.sentinel-fidelity .assistant-panel,
+body.sentinel-fidelity .split-board,
+body.sentinel-fidelity .client-identity-panel,
+body.sentinel-fidelity .topolite-nav-panel,
+body.sentinel-fidelity .topolite-single-screen,
+body.sentinel-fidelity .evidence-board,
+body.sentinel-fidelity .resource-guard-panel,
+body.sentinel-fidelity .aggregator-panel { display: none !important; }
+
+@media (max-width: 900px) {
+    .sentinel-console__topgrid, .sentinel-console__triad,
+    .sentinel-console__whygrid, .sentinel-console__evgrid,
+    .sentinel-ops-grid2, .sentinel-ev-layout { grid-template-columns: 1fr !important; }
+}
+
+/* =============================================================================
+   OPERATIONS / EVIDENCE / SYSTEM bespoke consoles
+   ========================================================================== */
+.sentinel-opsconsole, .sentinel-evconsole, .sentinel-sysconsole { display: flex; flex-direction: column; gap: 14px; }
+/* The [hidden] attribute must win over the flex/grid display rules below,
+   otherwise inactive sub-tab panels (audit/list/raw, services/fleet/config) leak. */
+.sentinel-evconsole [hidden], .sentinel-sysconsole [hidden] { display: none !important; }
+.sentinel-opsconsole article, .sentinel-evconsole .sentinel-ev-main,
+.sentinel-evconsole .sentinel-ev-detail, .sentinel-sysconsole article {
+    background: var(--bg-panel); border: 1px solid var(--line-soft);
+    border-radius: var(--radius-md); padding: 16px 18px; min-width: 0;
+}
+.sentinel-ops-status { border-left: 3px solid var(--accent-steel); }
+.sentinel-ops-status__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.sentinel-ops-status__head > div:first-child > strong { display: block; font-size: 1.6rem; letter-spacing: 0.03em; }
+.sentinel-ops-status.status-ok > .sentinel-ops-status__head strong,
+.sentinel-ops-status.status-safe > .sentinel-ops-status__head strong { color: var(--accent-green); }
+.sentinel-ops-status.status-warn > .sentinel-ops-status__head strong,
+.sentinel-ops-status.status-caution > .sentinel-ops-status__head strong { color: var(--accent-amber); }
+.sentinel-ops-status.status-danger > .sentinel-ops-status__head strong { color: var(--accent-red); }
+.sentinel-ops-metrics { display: flex; gap: 22px; flex-wrap: wrap; }
+.som { display: flex; flex-direction: column; gap: 3px; }
+.som span { font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-soft); }
+.som b { font-family: var(--font-mono); font-size: 1.15rem; color: var(--text-main); }
+.sentinel-ops-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+/* MITRE ATT&CK technique chips + enrichment badges (adopted SIEM elements). */
+.sentinel-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.sentinel-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 0.76rem; color: var(--text-dim);
+    background: var(--bg-inset); border: 1px solid var(--line-soft); border-radius: 999px; padding: 4px 10px; }
+.sentinel-chip b { font-family: var(--font-mono); color: var(--accent-cyan); }
+.sentinel-chip--empty { color: var(--text-soft); }
+.sentinel-enrich { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.sentinel-badge { font-size: 0.68rem; letter-spacing: 0.06em; color: var(--text-dim); background: rgba(148, 176, 194, 0.06);
+    border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 3px 8px; font-family: var(--font-mono); }
+
+/* Evidence pipeline funnel (Events -> Signals -> Now -> Watch). */
+.sentinel-evpipe { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; }
+.evp { flex: 1 1 auto; min-width: 60px; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px;
+    background: var(--bg-inset); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); position: relative; }
+.evp span { font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-soft); }
+.evp b { font-family: var(--font-mono); font-size: 1.1rem; color: var(--text-main); }
+.evp-arrow::before { content: "\203A"; position: absolute; left: -8px; top: 50%; transform: translateY(-50%); color: var(--line-strong); }
+
+/* Threat categories — horizontal bars. */
+.sentinel-catbars { display: flex; flex-direction: column; gap: 8px; }
+.catbar-row { display: grid; grid-template-columns: minmax(0, 1fr) 90px 22px; gap: 10px; align-items: center; font-size: 0.8rem; color: var(--text-dim); }
+.catbar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catbar-track { height: 6px; background: var(--bg-inset); border-radius: 3px; overflow: hidden; }
+.catbar-fill { display: block; height: 100%; background: var(--accent-cyan); border-radius: 3px; }
+.catbar-count { font-family: var(--font-mono); color: var(--text-main); text-align: right; }
+
+/* Evidence time-range toolbar. */
+.sentinel-ev-toolbar { display: flex; align-items: center; gap: 10px; margin: 4px 0 2px; flex-wrap: wrap; }
+.sentinel-ev-toolbar__label { font-size: 0.66rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-soft); }
+.sentinel-range { display: flex; gap: 4px; }
+.sentinel-range-btn { appearance: none; cursor: pointer; font: inherit; font-size: 0.72rem; color: var(--text-soft);
+    background: transparent; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 4px 10px; font-family: var(--font-mono); }
+.sentinel-range-btn.is-active { color: var(--accent-cyan); border-color: var(--line-strong); background: var(--bg-inset); }
+.sentinel-range-btn:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: 2px; }
+.sentinel-ev-count { font-size: 0.7rem; color: var(--text-soft); font-family: var(--font-mono); margin-left: auto; }
+.sentinel-ev-table .evrow { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-dim); padding: 5px 4px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; overflow-x: auto; }
+
+/* sparkline */
+.sentinel-spark { height: 46px; }
+.sentinel-spark--wide { height: 64px; }
+.sentinel-spark svg { width: 100%; height: 100%; display: block; }
+.sentinel-spark .spk-area { fill: rgba(111, 200, 230, 0.14); }
+.sentinel-spark .spk-line { fill: none; stroke: var(--accent-cyan); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+
+/* sub-tabs (evidence / system) */
+.sentinel-subtabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line-soft); padding-bottom: 6px; flex-wrap: wrap; }
+.sentinel-subtab {
+    appearance: none; cursor: pointer; font: inherit; font-size: 0.74rem; letter-spacing: 0.12em;
+    color: var(--text-soft); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 6px 12px;
+}
+.sentinel-subtab:hover { color: var(--text-main); }
+.sentinel-subtab.is-active { color: var(--accent-cyan); border-color: var(--line-strong); background: var(--bg-inset); }
+.sentinel-subtab:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: 2px; }
+
+/* evidence timeline + detail drawer */
+.sentinel-ev-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+.sentinel-ev-timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.sentinel-ev-timeline li {
+    display: grid; grid-template-columns: 76px 1fr auto; gap: 12px; align-items: center;
+    padding: 9px 6px; border-bottom: 1px solid var(--line-soft); cursor: pointer; font-size: 0.84rem;
+    border-left: 2px solid var(--accent-steel);
+}
+.sentinel-ev-timeline li:hover, .sentinel-ev-timeline li.is-selected { background: var(--bg-inset); }
+.sentinel-ev-timeline li:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: -2px; }
+.sentinel-ev-timeline li.tone-warn { border-left-color: var(--accent-amber); }
+.sentinel-ev-timeline li.tone-crit { border-left-color: var(--accent-red); }
+.sentinel-ev-timeline .evt-time { font-family: var(--font-mono); color: var(--text-soft); }
+.sentinel-ev-timeline .evt-label { color: var(--text-dim); }
+.sentinel-ev-timeline .evt-tag { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.08em; color: var(--accent-amber); }
+.sentinel-ev-timeline .evt-tag.tag-crit { color: var(--accent-red); }
+.sentinel-ev-timeline .evt-tag.tag-info { color: var(--accent-cyan); }
+.sentinel-ev-detail dt { font-size: 0.72rem; }
+.sentinel-ev-raw { margin: 0; font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; }
+.sentinel-ev-audit { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.sentinel-ev-audit li { display: grid; grid-template-columns: 96px 1fr; gap: 12px; font-size: 0.82rem; color: var(--text-dim); padding: 6px; border-bottom: 1px solid var(--line-soft); }
+.sentinel-ev-audit .aud-time { font-family: var(--font-mono); color: var(--text-soft); }
+
+/* system tiles */
+.sentinel-systiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.systile { display: flex; flex-direction: column; gap: 8px; border-left: 3px solid var(--accent-steel); }
+.systile span { font-size: 0.66rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-soft); }
+.systile strong { font-family: var(--font-mono); font-size: 1.7rem; color: var(--text-main); }
+.systile.status-warn strong { color: var(--accent-amber); }
+.systile.status-danger strong { color: var(--accent-red); }
+.systile.status-ok strong { color: var(--accent-green); }
+.sentinel-sysrow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.sysr { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; background: var(--bg-panel); border: 1px solid var(--line-soft); border-radius: var(--radius-md); }
+.sysr span { font-size: 0.64rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-soft); }
+.sysr b { font-family: var(--font-mono); color: var(--text-main); }
+/* Per-tile mini sparkline + overlaid multi-series resource history. */
+.systile-spark { height: 22px; margin-top: 4px; }
+.systile-spark svg { width: 100%; height: 100%; display: block; }
+.systile-spark .spk-area { fill: rgba(111, 200, 230, 0.12); }
+.systile-spark .spk-line { fill: none; stroke: var(--accent-cyan); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.sentinel-spark--tall { height: 92px; }
+.sentinel-reshist-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.sentinel-reslegend { display: flex; gap: 14px; }
+.sentinel-reslegend .rl { font-size: 0.64rem; letter-spacing: 0.1em; display: flex; align-items: center; gap: 5px; color: var(--text-soft); }
+.sentinel-reslegend .rl::before { content: ""; width: 11px; height: 2px; display: inline-block; }
+.sentinel-reslegend .rl-cpu::before { background: var(--accent-cyan); }
+.sentinel-reslegend .rl-mem::before { background: var(--accent-green); }
+.sentinel-reslegend .rl-temp::before { background: var(--accent-amber); }
+.sentinel-spark .spk-line.spk-cpu { stroke: var(--accent-cyan); }
+.sentinel-spark .spk-line.spk-mem { stroke: var(--accent-green); }
+.sentinel-spark .spk-line.spk-temp { stroke: var(--accent-amber); }
+
+/* State-transition highlight — a single, non-repeating fade (not a blink). */
+@keyframes sentinelFlash {
+    0% { box-shadow: 0 0 0 0 rgba(111, 200, 230, 0); }
+    18% { box-shadow: 0 0 0 3px rgba(111, 200, 230, 0.5); }
+    100% { box-shadow: 0 0 0 0 rgba(111, 200, 230, 0); }
+}
+.sentinel-flash { animation: sentinelFlash 1.3s ease-out 1; }
+@media (prefers-reduced-motion: reduce) { .sentinel-flash { animation: none; } }
+
+/* SYSTEM · SERVICES cards */
+.sentinel-svc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+.sentinel-svc-card { background: var(--bg-panel); border: 1px solid var(--line-soft); border-left: 3px solid var(--accent-steel); border-radius: var(--radius-md); padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+.sentinel-svc-card.status-ok { border-left-color: var(--accent-green); }
+.sentinel-svc-card.status-critical { border-left-color: var(--accent-red); }
+.svc-name { font-family: var(--font-mono); font-size: 0.9rem; color: var(--text-main); letter-spacing: 0.04em; }
+.svc-role { font-size: 0.76rem; color: var(--text-dim); }
+.svc-unit { font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-soft); }
+.svc-state { margin-top: 4px; font-family: var(--font-mono); font-size: 0.82rem; color: var(--text-soft); }
+.sentinel-svc-card.status-ok .svc-state { color: var(--accent-green); }
+.sentinel-svc-card.status-critical .svc-state { color: var(--accent-red); }
+
+/* SYSTEM · FLEET node fabric */
+.sentinel-fabric { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-top: 10px; }
+.fabric-node { background: var(--bg-panel); border: 1px solid var(--line-soft); border-radius: var(--radius-md); padding: 14px 16px; display: flex; flex-direction: column; gap: 5px; }
+.fabric-node.is-self { border-color: var(--accent-cyan); }
+.fabric-node.is-planned { border-style: dashed; opacity: 0.85; }
+.fabric-node.is-capability { border-left: 3px solid var(--accent-amber); }
+.fabric-node__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fabric-node__code { font-family: var(--font-mono); font-size: 0.64rem; letter-spacing: 0.12em; color: var(--accent-cyan); text-transform: uppercase; }
+.fabric-node__status { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.06em; color: var(--text-soft); }
+.fabric-node.status-ok .fabric-node__status { color: var(--accent-green); }
+.fabric-node.status-watch .fabric-node__status { color: var(--accent-amber); }
+.fabric-node.status-critical .fabric-node__status { color: var(--accent-red); }
+.fabric-node__name { font-size: 0.95rem; color: var(--text-main); }
+.fabric-node__line { font-size: 0.74rem; color: var(--text-dim); }
+.sentinel-fabric-note { margin: 12px 0 0; font-size: 0.76rem; color: var(--text-soft); }
+
+/* SYSTEM · CONFIGURATION groups */
+.sentinel-config { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.sentinel-config-group { background: var(--bg-panel); border: 1px solid var(--line-soft); border-radius: var(--radius-md); padding: 16px 18px; }
+.sentinel-config-group .sentinel-card__kicker { margin-bottom: 10px; }
+@media (max-width: 560px) { .sentinel-svc-grid, .sentinel-fabric, .sentinel-config { grid-template-columns: 1fr; } }
+
+/* NOC · client roster table */
+.sentinel-client-table { display: flex; flex-direction: column; }
+.client-row { display: grid; grid-template-columns: 116px minmax(0, 1.4fr) 130px 74px 80px; gap: 10px; align-items: center; padding: 7px 4px; border-bottom: 1px solid var(--line-soft); font-size: 0.8rem; color: var(--text-dim); }
+.client-head { color: var(--text-soft); font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; }
+.client-row.is-attn { background: rgba(224, 166, 92, 0.06); }
+.client-state { font-family: var(--font-mono); font-size: 0.66rem; padding: 2px 6px; border-radius: var(--radius-sm); border-left: 2px solid var(--accent-steel); }
+.client-state.status-ok { border-left-color: var(--accent-green); color: var(--accent-green); }
+.client-state.status-warn { border-left-color: var(--accent-amber); color: var(--accent-amber); }
+.client-state.status-danger { border-left-color: var(--accent-red); color: var(--accent-red); }
+.client-host { color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.client-mac, .client-link, .client-trust { font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-soft); }
+
+/* NOC · bandwidth meter + external peers */
+.sentinel-meter { margin-bottom: 12px; }
+.sentinel-meter__lab { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-soft); margin-bottom: 5px; }
+.sentinel-meter__lab b { font-family: var(--font-mono); color: var(--text-main); }
+.sentinel-meter__track { height: 8px; background: var(--bg-inset); border-radius: 4px; overflow: hidden; }
+.sentinel-meter__fill { height: 100%; background: var(--accent-green); }
+.sentinel-meter__fill.is-watch { background: var(--accent-amber); }
+.sentinel-meter__fill.is-critical { background: var(--accent-red); }
+.talker { font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-dim); padding: 3px 0; }
+
+/* Planned/advisory tag (honest label for not-yet-built capabilities). */
+.sentinel-planned { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 10px 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); color: var(--text-soft); font-size: 0.76rem; line-height: 1.4; }
+.sentinel-planned__tag { font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.1em; color: var(--accent-amber); border: 1px solid var(--accent-amber); border-radius: 3px; padding: 2px 6px; flex: 0 0 auto; }
+
+@media (max-width: 900px) {
+    .sentinel-systiles, .sentinel-sysrow { grid-template-columns: repeat(2, 1fr); }
+    .sentinel-ev-layout { grid-template-columns: 1fr; }
+}
+
+/* =============================================================================
+   ACCESSIBILITY
+   ========================================================================== */
+.sentinel-tier-btn:focus-visible,
+.sentinel-stage:focus-visible {
+    outline: 2px solid var(--accent-cyan);
+    outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+    .sentinel-tier-btn,
+    .sentinel-stage,
+    .command-glance-hero { transition: none !important; }
+}
+
+/* =============================================================================
+   RESPONSIVE
+   ========================================================================== */
+@media (max-width: 900px) {
+    .sentinel-tier-nav { gap: 4px; padding: 6px 8px; }
+    .sentinel-tier-btn { padding: 8px 10px; font-size: 0.78rem; letter-spacing: 0.10em; }
+}
+@media (max-width: 560px) {
+    .sentinel-tier-nav {
+        position: static;
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
+    }
+    .sentinel-stage { flex: 1 1 100%; }
+}
+
+/* ==========================================================================
+   WORKSPACE-AXIS COMPAT
+   The classic dashboard added a workspace axis (simple/all/noc/soc) whose
+   "simple" value — the classic default set by app.js — hides every
+   .dashboard-shell child except .simple-view. The SENTINEL console drives
+   visibility through its own tier axis (overview/operations/evidence/system),
+   so in fidelity mode that blanket hide would erase the console shell (tier
+   nav + content) and blank the board. Keep the shell visible regardless of the
+   workspace value; the tier axis still governs which panels show within it.
+   ========================================================================== */
+body.sentinel-fidelity[data-workspace] .dashboard-shell > .sentinel-tier-nav {
+    display: flex !important;
+}
+body.sentinel-fidelity[data-workspace] .dashboard-shell > .sentinel-content {
+    display: block !important;
+}
+
+/* ==========================================================================
+   OPERATIONS · folded-in focus content (triage table / path strip / top
+   talkers / runtime meters / per-domain decision rationale). Data already
+   arrives in the dashboard bundle; these bring the SENTINEL operations tier to
+   parity with the classic SOC/NOC focus screens it replaced.
+   ========================================================================== */
+
+/* shared tone badge (matches the client-roster convention) */
+.tri-band, .tri-risk, .talker-idn {
+    display: inline-block; font-family: var(--font-mono); font-size: 0.64rem;
+    padding: 2px 6px; border-radius: var(--radius-sm);
+    border-left: 2px solid var(--accent-steel); color: var(--text-soft);
+}
+.tri-band.status-ok, .tri-risk.status-ok, .talker-idn.status-ok { border-left-color: var(--accent-green); color: var(--accent-green); }
+.tri-band.status-warn, .tri-risk.status-warn, .talker-idn.status-warn { border-left-color: var(--accent-amber); color: var(--accent-amber); }
+.tri-band.status-danger, .tri-risk.status-danger, .talker-idn.status-danger { border-left-color: var(--accent-red); color: var(--accent-red); }
+
+/* SOC · triage queue table */
+.sentinel-triage { margin-top: 14px; }
+.sentinel-triage-bands { margin-left: auto; }
+.sentinel-triage-table { display: flex; flex-direction: column; margin-top: 8px; }
+.tri-row { display: grid; grid-template-columns: 74px 62px minmax(0, 1.5fr) minmax(0, 1.2fr) 52px; gap: 10px; align-items: center; padding: 6px 4px; border-bottom: 1px solid var(--line-soft); font-size: 0.78rem; color: var(--text-dim); }
+.tri-head { color: var(--text-soft); font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; }
+.tri-empty { color: var(--text-soft); font-style: italic; grid-template-columns: 1fr; }
+.tri-time { font-family: var(--font-mono); color: var(--text-soft); }
+.tri-flow { font-family: var(--font-mono); color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tri-sid { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* NOC · path strip (Clients -> Edge -> Uplink -> GW -> Internet) */
+.sentinel-pathstrip-card { margin-top: 14px; }
+.sentinel-pathstrip { display: flex; align-items: stretch; flex-wrap: wrap; gap: 0; }
+.sp-hop { flex: 1 1 90px; min-width: 90px; padding: 8px 10px; background: var(--bg-inset); border-radius: var(--radius-sm); border-left: 3px solid var(--accent-steel); }
+.sp-hop.is-ok { border-left-color: var(--accent-green); }
+.sp-hop.is-watch { border-left-color: var(--accent-amber); }
+.sp-hop.is-critical { border-left-color: var(--accent-red); }
+.sp-hop__title { font-size: 0.68rem; color: var(--text-soft); margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-hop__state { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-main); }
+.sp-link { align-self: center; flex: 0 0 16px; height: 2px; background: var(--line-strong); }
+.sp-link.is-watch { background: var(--accent-amber); }
+.sp-link.is-critical { background: var(--accent-red); }
+
+/* NOC · top talkers table */
+.sentinel-talker-table { display: flex; flex-direction: column; }
+.talker-row { display: grid; grid-template-columns: minmax(0, 1.5fr) 80px 1fr 92px; gap: 10px; align-items: center; padding: 6px 4px; border-bottom: 1px solid var(--line-soft); font-size: 0.78rem; color: var(--text-dim); }
+.talker-head { color: var(--text-soft); font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; }
+.talker-empty { color: var(--text-soft); font-style: italic; grid-template-columns: 1fr; }
+.talker-src { font-family: var(--font-mono); color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.talker-src b { color: var(--text-main); }
+.talker-vol { font-family: var(--font-mono); color: var(--text-soft); }
+.talker-share { display: block; height: 8px; background: var(--bg-inset); border-radius: 4px; overflow: hidden; }
+.talker-share__bar { display: block; height: 100%; background: var(--accent-cyan); }
+.talker-share__bar.is-watch { background: var(--accent-amber); }
+
+/* NOC · runtime meters group (reuses .sentinel-meter) */
+.sentinel-meters { margin-top: 4px; }
+
+/* per-domain decision release/audit strip under the why-list */
+.sentinel-decrel { margin-top: 10px; }
+
+/* ==========================================================================
+   SYSTEM · AZ-06 Azazel-Deception effectiveness (advisory-only). Newest
+   backend capability surfaced in the SENTINEL fleet view. Observational only —
+   Edge remains the sole engagement authority; nothing here steers a decision.
+   ========================================================================== */
+.sentinel-az06 { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.sentinel-az06-badge { font-family: var(--font-mono); font-size: 0.64rem; letter-spacing: 0.08em; padding: 2px 8px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); color: var(--text-soft); }
+.sentinel-az06-badge.is-ok { border-color: var(--accent-green); color: var(--accent-green); }
+.sentinel-az06-badge.is-unknown { border-color: var(--accent-steel); color: var(--text-soft); }
+.sentinel-gate { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.gate-row { display: grid; grid-template-columns: 18px 1fr; gap: 8px; align-items: center; font-size: 0.78rem; }
+.gate-mark { font-family: var(--font-mono); text-align: center; }
+.gate-row.is-met .gate-mark { color: var(--accent-green); }
+.gate-row.is-met .gate-label { color: var(--text-main); }
+.gate-row.is-pending .gate-mark { color: var(--text-soft); }
+.gate-row.is-pending .gate-label { color: var(--text-soft); }

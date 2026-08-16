@@ -6,6 +6,7 @@
     <title>{{ tr('ops.title', 'M.I.O. Ops Communication') }}</title>
     <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
     <link rel="stylesheet" href="/static/ops_comm.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="/static/sentinel.css?v={{ asset_version }}">
 </head>
 <body class="ops-page">
     <header class="topbar ops-topbar">
@@ -25,6 +26,21 @@
         </div>
     </header>
 
+    <div class="sentinel-appframe">
+        <nav class="sentinel-tier-nav" aria-label="SENTINEL console tiers">
+            <div class="sentinel-tier-nav__group" role="list">
+                <a class="sentinel-tier-btn" href="/?tier=overview"><span class="sentinel-tier-dot" aria-hidden="true"></span>OVERVIEW</a>
+                <a class="sentinel-tier-btn" href="/?tier=operations"><span class="sentinel-tier-dot" aria-hidden="true"></span>OPERATIONS</a>
+                <a class="sentinel-tier-btn" href="/?tier=evidence"><span class="sentinel-tier-dot" aria-hidden="true"></span>EVIDENCE</a>
+                <a class="sentinel-tier-btn" href="/?tier=system"><span class="sentinel-tier-dot" aria-hidden="true"></span>SYSTEM</a>
+            </div>
+            <a class="sentinel-nav-link is-active" href="/ops-comm" aria-current="page">Ask M.I.O.</a>
+            <div class="sentinel-nav-foot">
+                <span class="sentinel-nav-foot__label">M.I.O.</span>
+                <span class="sentinel-nav-foot__auth">AI authority: NONE</span>
+            </div>
+        </nav>
+        <div class="sentinel-appframe__content">
     <main class="ops-shell">
         <section class="panel ops-hero">
             <div class="ops-hero-main">
@@ -185,6 +201,8 @@
             </section>
         </section>
     </main>
+        </div>
+    </div>
 
     <script>
         (function(){try{var t=new URLSearchParams(location.search).get('token');if(t)localStorage.setItem('azazel_token',t);}catch(e){}})();

@@ -6328,6 +6328,79 @@ def api_dashboard_trends():
     return jsonify(_dashboard_trends_payload(limit=limit, window_sec=window_sec)), 200
 
 
+def _deception_az06_payload() -> Dict[str, Any]:
+    """AZ-06 Azazel-Deception advisory-only status for the SENTINEL console.
+
+    Everything surfaced here is advisory/observational. AZ-06 (the external
+    Deception Host) materializes deception and reports effectiveness; Azazel-Edge
+    remains the sole deterministic engagement authority and never treats any of
+    this as a decision input (see docs/architecture/azazel-deception-integration.md).
+    Enforcement is never applied from this path. Built fail-open: a missing Fabric
+    contract or an unconfigured Knowledge endpoint degrades to a quiet
+    "unavailable/unconfigured" state and never breaks the dashboard bundle.
+    """
+    shadow_ready = False
+    try:
+        from azazel_edge.deception_shadow import fabric_available
+
+        shadow_ready = bool(fabric_available())
+    except Exception:
+        shadow_ready = False
+
+    advisory: Dict[str, Any] = {"available": False, "reason": "unconfigured", "detail": None, "advisory": None}
+    try:
+        base_url = str(os.environ.get("AZ_KNOWLEDGE_BASE_URL", "")).strip()
+        env_id = (
+            str(os.environ.get("AZAZEL_DECEPTION_ENVIRONMENT_ID", "")).strip()
+            or str(os.environ.get("AZAZEL_NODE_ID", "")).strip()
+            or "edge-local"
+        )
+        if base_url:
+            from azazel_edge.deception_effectiveness_client import (
+                EffectivenessAdvisoryReader,
+                KnowledgeAuthConfig,
+                OptionalEffectivenessAdvisorySource,
+            )
+
+            reader = EffectivenessAdvisoryReader(base_url, auth=KnowledgeAuthConfig.from_env())
+            result = OptionalEffectivenessAdvisorySource(reader).consult(env_id)
+            advisory = {
+                "available": bool(result.available),
+                "reason": str(result.reason or ""),
+                "detail": result.detail,
+                "advisory": result.advisory if result.available else None,
+            }
+    except Exception:
+        advisory = {"available": False, "reason": "error", "detail": None, "advisory": None}
+
+    # Live-activation readiness. Integration mode today is shadow/replay only (no
+    # attacker-facing containers). These are the preconditions the doc lists for
+    # moving beyond shadow-only; only the two the WebUI can actually observe are
+    # ever marked met — the rest remain "not confirmed" from this display.
+    live_gate = [
+        {"label": "Fabric deception contracts loaded", "met": shadow_ready},
+        {"label": "Effectiveness advisory reachable", "met": bool(advisory.get("available"))},
+        {"label": "Package digest / signature / provenance validation", "met": False},
+        {"label": "Decision-ID binding + anti-replay enforcement", "met": False},
+        {"label": "Egress isolation + heartbeat / state reconciliation", "met": False},
+        {"label": "Kill switch / timeout / teardown / reset-ack", "met": False},
+        {"label": "ARM64 + AMD64 live proof", "met": False},
+    ]
+    return {
+        "ok": True,
+        "mode": "shadow_only",
+        "enforcement_applied": False,
+        "shadow_evaluator_ready": shadow_ready,
+        "effectiveness_advisory": advisory,
+        "authority": {
+            "edge": "decide / enforce / activation / expiry / heartbeat / terminate",
+            "az06": "capability discovery / package validation / placement / decoy lifecycle / interaction evidence",
+            "note": "AI IS NOT DECISION AUTHORITY · advisory-only",
+        },
+        "live_gate": live_gate,
+    }
+
+
 @app.route("/api/dashboard/bundle", methods=["GET"])
 @require_token()
 def api_dashboard_bundle():
@@ -6436,6 +6509,7 @@ def api_dashboard_bundle():
                 "mattermost": mattermost,
                 "operator_progress_state": operator_progress,
                 "handoff_brief_pack": handoff_pack,
+                "deception_az06": _deception_az06_payload(),
             }
         ),
         200,

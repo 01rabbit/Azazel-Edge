@@ -521,3 +521,17 @@
         align-items: stretch;
     }
 }
+
+/* =============================================================================
+   Refined "Ask M.I.O." — reduce information overload.
+   Focus the page on the ask + M.I.O. response. Secondary tooling (bridge status,
+   capabilities, progress, triage navigator, runbook candidates, audit, message
+   history) is kept in the DOM (render contract) but hidden; those surfaces live
+   on the dashboard's Operations / Evidence tiers.
+   ========================================================================== */
+.ops-hero-side,
+.ops-lower-grid,
+.ops-audience { display: none !important; }
+.ops-hero { grid-template-columns: 1fr !important; max-width: 960px; margin: 0 auto; }
+.ops-brand-subtitle { display: none; }
+.ops-brand-copy h1 { font-size: 1.35rem; }
