@@ -5,8 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ tr('dashboard.title', 'Azazel-Edge Command Dashboard') }}</title>
     <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="/static/sentinel.css?v={{ asset_version }}">
 </head>
-<body data-page="dashboard" class="az-boot">
+<body data-audience="temporary" data-page="dashboard" class="az-boot">
     <div class="topbar-attn-stack">
         <header class="topbar">
             <div class="brand-block">
@@ -15,18 +16,17 @@
                 <p class="brand-subtitle">{{ tr('dashboard.brand.subtitle', 'SOC/NOC situation board for operator and temporary-response workflows.') }}</p>
             </div>
             <div class="topbar-controls">
-                <div class="language-toggle" role="group" aria-label="{{ tr('lang.label', 'Language') }}">
-                    <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja" aria-pressed="{{ 'true' if ui_lang == 'ja' else 'false' }}">{{ tr('lang.ja', '日本語') }}</button>
-                    <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en" aria-pressed="{{ 'true' if ui_lang == 'en' else 'false' }}">{{ tr('lang.en', 'English') }}</button>
+                <div class="language-toggle" role="tablist" aria-label="{{ tr('lang.label', 'Language') }}">
+                    <button id="langJaBtn" class="audience-btn{% if ui_lang == 'ja' %} active lang-active-ja{% endif %}" data-lang="ja">{{ tr('lang.ja', '日本語') }}</button>
+                    <button id="langEnBtn" class="audience-btn{% if ui_lang == 'en' %} active lang-active-en{% endif %}" data-lang="en">{{ tr('lang.en', 'English') }}</button>
                 </div>
-                <div class="audience-toggle workspace-toggle" role="group" aria-label="{{ tr('dashboard.workspace_label', 'Workspace') }}">
-                    <button id="workspaceSimpleBtn" class="audience-btn active" data-workspace="simple" aria-pressed="true">{{ tr('dashboard.workspace_simple', 'Simple') }}</button>
-                    <button id="workspaceAllBtn" class="audience-btn" data-workspace="all" aria-pressed="false">{{ tr('dashboard.workspace_all', 'All') }}</button>
-                    <button id="workspaceNocBtn" class="audience-btn" data-workspace="noc" aria-pressed="false">{{ tr('dashboard.workspace_noc', 'NOC') }}</button>
-                    <button id="workspaceSocBtn" class="audience-btn" data-workspace="soc" aria-pressed="false">{{ tr('dashboard.workspace_soc', 'SOC') }}</button>
+                <div class="audience-toggle" role="tablist" aria-label="Audience Mode">
+                    <button id="audienceProfessional" class="audience-btn" data-audience="professional">{{ tr('dashboard.professional', 'Professional') }}</button>
+                    <button id="audienceTemporary" class="audience-btn active" data-audience="temporary">{{ tr('dashboard.temporary', 'Temporary') }}</button>
                 </div>
                 <div class="topbar-links">
                     <a class="topbar-link" href="/booth-focus?lang=en">Decision Focus</a>
+                    <a id="askMioLink" class="topbar-link" href="#assistantPanel">{{ tr('dashboard.ask_mio', 'Ask M.I.O.') }}</a>
                     <button id="showGuideBtn" class="topbar-link topbar-link-button" type="button">{{ tr('dashboard.show_guide', 'Show Guide') }}</button>
                     <a id="openMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.open_mattermost', 'Open Mattermost') }}</a>
                 </div>
@@ -50,18 +50,6 @@
                         <strong id="connStateChipValue">{{ tr('dashboard.conn_state.initializing', 'INIT') }}</strong>
                         <span id="connStateChipDesc" class="sr-only"></span>
                     </div>
-                    <div class="meta-item" id="freshnessChip" title="{{ tr('dashboard.updated_title', 'Time since the last successful update') }}">
-                        <span class="meta-label">{{ tr('dashboard.updated_label', 'UPD') }}</span>
-                        <strong id="freshnessAgeValue">-</strong>
-                    </div>
-                    <div class="meta-actions">
-                        <button type="button" class="meta-action-btn" id="refreshNowBtn"
-                                aria-label="{{ tr('dashboard.refresh_now', 'Refresh now') }}"
-                                title="{{ tr('dashboard.refresh_now', 'Refresh now') }}">&#x21bb;</button>
-                        <button type="button" class="meta-action-btn" id="pollPauseBtn" aria-pressed="false"
-                                aria-label="{{ tr('dashboard.pause_updates', 'Pause auto-refresh') }}"
-                                title="{{ tr('dashboard.pause_updates', 'Pause auto-refresh') }}">&#x23f8;</button>
-                    </div>
                     <div class="meta-clock" id="headerClock">--:--:--</div>
                 </div>
             </div>
@@ -75,292 +63,361 @@
                         aria-label="{{ tr('dashboard.alert_band.dismiss_label', 'Dismiss') }}">×</button>
             </div>
         </div>
-
-        <nav class="section-nav" id="sectionNav" aria-label="{{ tr('dashboard.section_nav_label', 'Dashboard sections') }}">
-            <a class="section-nav-link" href="#commandStripPanel">{{ tr('dashboard.nav_glance', 'Glance') }}</a>
-            <a class="section-nav-link" href="#clientIdentityPanel">{{ tr('dashboard.nav_clients', 'Clients') }}</a>
-            <a class="section-nav-link" href="#resourceGuardPanel">{{ tr('dashboard.nav_runtime', 'Runtime') }}</a>
-            <a class="section-nav-link" href="#missionPanel">{{ tr('dashboard.nav_mission', 'Mission') }}</a>
-            <a class="section-nav-link" href="#situationPanel">{{ tr('dashboard.nav_situation', 'Situation') }}</a>
-            <a class="section-nav-link" href="#splitBoardPanel">{{ tr('dashboard.nav_socnoc', 'SOC / NOC') }}</a>
-            <a class="section-nav-link" href="#actionBoardPanel">{{ tr('dashboard.nav_actions', 'Actions') }}</a>
-            <a class="section-nav-link" href="#handoffPanel">{{ tr('dashboard.nav_handoff', 'Handoff') }}</a>
-            <a class="section-nav-link" href="#topoliteSingleScreen">{{ tr('dashboard.nav_topolite', 'Topo-Lite') }}</a>
-            <a class="section-nav-link soc-scope" href="#evidencePanel">{{ tr('dashboard.nav_evidence', 'Evidence') }}</a>
-            <a class="section-nav-link" href="#aggregatorPanel" id="sectionNavFleet" hidden>{{ tr('dashboard.nav_fleet', 'Fleet') }}</a>
-        </nav>
     </div>
 
-    <main class="dashboard-shell">
+    <main class="dashboard-shell" id="dashboardMain">
+        <nav class="sentinel-tier-nav" id="sentinelTierNav" aria-label="SENTINEL console tiers">
+            <div class="sentinel-tier-nav__group" role="list">
+                <button type="button" class="sentinel-tier-btn" id="sentinelTierOverview" data-sentinel-tier="overview" aria-current="page">
+                    <span class="sentinel-tier-dot" id="sentinelDotOverview" aria-hidden="true"></span>OVERVIEW<span class="sr-only" id="sentinelStatusOverview"></span>
+                </button>
+                <button type="button" class="sentinel-tier-btn" id="sentinelTierOperations" data-sentinel-tier="operations">
+                    <span class="sentinel-tier-dot" id="sentinelDotOperations" aria-hidden="true"></span>OPERATIONS<span class="sr-only" id="sentinelStatusOperations"></span>
+                </button>
+                <button type="button" class="sentinel-tier-btn" id="sentinelTierEvidence" data-sentinel-tier="evidence">
+                    <span class="sentinel-tier-dot" id="sentinelDotEvidence" aria-hidden="true"></span>EVIDENCE<span class="sr-only" id="sentinelStatusEvidence"></span>
+                </button>
+                <button type="button" class="sentinel-tier-btn" id="sentinelTierSystem" data-sentinel-tier="system">
+                    <span class="sentinel-tier-dot" id="sentinelDotSystem" aria-hidden="true"></span>SYSTEM<span class="sr-only" id="sentinelStatusSystem"></span>
+                </button>
+            </div>
+            <a class="sentinel-nav-link" id="sentinelAskMioLink" href="/ops-comm">Ask M.I.O.</a>
+            <div class="sentinel-nav-foot">
+                <span class="sentinel-nav-foot__label">M.I.O.</span>
+                <span class="sentinel-nav-foot__auth">AI authority: NONE</span>
+            </div>
+        </nav>
+        <div class="sentinel-content" id="sentinelContent">
+        <div class="sentinel-tier-empty" id="sentinelTierEmpty" role="status" aria-live="polite">
+            <strong>Professional detail required.</strong>
+            <span id="sentinelTierEmptyText">Switch Audience Mode to "Professional" to inspect this tier.</span>
+        </div>
         <section class="panel synthetic-mode-banner" id="syntheticModeBanner" hidden>
             <div class="panel-heading">
                 <div>
-                    <div class="panel-kicker">{{ tr('dashboard.synthetic_kicker', 'Topo-Lite Synthetic Mode') }}</div>
-                    <h2>{{ tr('dashboard.synthetic_title', 'Synthetic evidence is active') }}</h2>
+                    <div class="panel-kicker">Topo-Lite Synthetic Mode</div>
+                    <h2>Synthetic evidence is active</h2>
                 </div>
             </div>
-            <p class="panel-note" id="syntheticModeBannerText">{{ tr('dashboard.synthetic_watermark', 'SYNTHETIC DATA - NOT LIVE EVIDENCE') }}</p>
+            <p class="panel-note" id="syntheticModeBannerText">SYNTHETIC DATA - NOT LIVE EVIDENCE</p>
         </section>
-
-        <section class="simple-view" id="simpleViewPanel" aria-label="{{ tr('dashboard.workspace_simple', 'Simple') }}">
-            <button type="button" class="simple-tile simple-overall status-neutral" id="simpleOverallTile">
-                <span class="simple-kicker">{{ tr('dashboard.simple_overall_kicker', 'Overall — Are we safe right now?') }}</span>
-                <strong class="simple-verdict" id="simpleOverallVerdict">{{ tr('dashboard.simple_checking', 'CHECKING') }}</strong>
-                <span class="simple-reason" id="simpleOverallReason">{{ tr('dashboard.waiting_snapshot', 'Waiting for control-plane snapshot') }}</span>
-                <span class="simple-action"><span class="simple-action-label">{{ tr('dashboard.simple_do_now', 'Do now') }}</span> <strong id="simpleOverallAction">-</strong></span>
-                <span class="simple-drill">{{ tr('dashboard.simple_drill_overall', 'Open the full board') }} ▸</span>
-            </button>
-            <div class="simple-row">
-                <button type="button" class="simple-tile simple-soc status-neutral" id="simpleSocTile">
-                    <span class="simple-kicker">{{ tr('dashboard.simple_soc_kicker', 'SOC — Any threat activity?') }}</span>
-                    <strong class="simple-verdict" id="simpleSocVerdict">{{ tr('dashboard.simple_checking', 'CHECKING') }}</strong>
-                    <span class="simple-reason" id="simpleSocReason">{{ tr('dashboard.waiting_snapshot', 'Waiting for control-plane snapshot') }}</span>
-                    <span class="simple-chips" id="simpleSocChips"></span>
-                    <span class="simple-drill">{{ tr('dashboard.simple_drill_soc', 'Open SOC details') }} ▸</span>
-                </button>
-                <button type="button" class="simple-tile simple-noc status-neutral" id="simpleNocTile">
-                    <span class="simple-kicker">{{ tr('dashboard.simple_noc_kicker', 'NOC — Is the network healthy?') }}</span>
-                    <strong class="simple-verdict" id="simpleNocVerdict">{{ tr('dashboard.simple_checking', 'CHECKING') }}</strong>
-                    <span class="simple-reason" id="simpleNocReason">{{ tr('dashboard.waiting_snapshot', 'Waiting for control-plane snapshot') }}</span>
-                    <span class="simple-chips" id="simpleNocChips"></span>
-                    <span class="simple-drill">{{ tr('dashboard.simple_drill_noc', 'Open NOC details') }} ▸</span>
-                </button>
-            </div>
-            <div class="focus-kpi-grid" id="simpleKpiGrid">
-                <div class="focus-kpi" id="simpleKpiRisk">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.risk', 'Risk') }}</span>
-                    <strong class="focus-kpi-value"><span id="simpleKpiRiskValue">-</span><span class="focus-kpi-delta" id="simpleKpiRiskDelta"></span></strong>
-                    <span class="focus-kpi-detail" id="simpleKpiRiskDetail">-</span>
+        <section class="sentinel-pipeline" id="sentinelPipeline" aria-label="Deterministic decision pipeline">
+            <p class="sentinel-pipeline__title">Decision Pipeline — Evidence to Audit</p>
+            <div class="sentinel-pipeline__rail" id="sentinelPipelineRail">
+                <div class="sentinel-stage is-unknown" id="pipelineSense" tabindex="0" data-sentinel-stage="sense" role="group" aria-label="Sense stage">
+                    <span class="sentinel-stage__name"><span class="sentinel-stage__num">01</span>SENSE</span>
+                    <span class="sentinel-stage__value" id="pipelineSenseValue">—</span>
+                    <span class="sentinel-stage__meta" id="pipelineSenseMeta">Evidence intake</span>
                 </div>
-                <div class="focus-kpi" id="simpleKpiNow">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.kpi_now_queue', 'Now Queue') }}</span>
-                    <strong class="focus-kpi-value"><span id="simpleKpiNowValue">-</span><span class="focus-kpi-delta" id="simpleKpiNowDelta"></span></strong>
-                    <span class="focus-kpi-detail" id="simpleKpiNowDetail">-</span>
+                <div class="sentinel-stage is-unknown" id="pipelineEvaluate" tabindex="0" data-sentinel-stage="evaluate" role="group" aria-label="Evaluate stage">
+                    <span class="sentinel-stage__name"><span class="sentinel-stage__num">02</span>EVALUATE</span>
+                    <span class="sentinel-stage__value" id="pipelineEvaluateValue">—</span>
+                    <span class="sentinel-stage__meta" id="pipelineEvaluateMeta">NOC / SOC</span>
                 </div>
-                <div class="focus-kpi" id="simpleKpiCritical">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.direct_critical', 'Direct Critical') }}</span>
-                    <strong class="focus-kpi-value"><span id="simpleKpiCriticalValue">-</span><span class="focus-kpi-delta" id="simpleKpiCriticalDelta"></span></strong>
-                    <span class="focus-kpi-detail" id="simpleKpiCriticalDetail">-</span>
+                <div class="sentinel-stage is-unknown" id="pipelineDecide" tabindex="0" data-sentinel-stage="decide" role="group" aria-label="Decide stage">
+                    <span class="sentinel-stage__name"><span class="sentinel-stage__num">03</span>DECIDE</span>
+                    <span class="sentinel-stage__value" id="pipelineDecideValue">—</span>
+                    <span class="sentinel-stage__meta" id="pipelineDecideMeta">Arbiter</span>
                 </div>
-                <div class="focus-kpi" id="simpleKpiClients">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.impacted_label', 'Impacted') }}</span>
-                    <strong class="focus-kpi-value"><span id="simpleKpiClientsValue">-</span><span class="focus-kpi-delta" id="simpleKpiClientsDelta"></span></strong>
-                    <span class="focus-kpi-detail" id="simpleKpiClientsDetail">-</span>
+                <div class="sentinel-stage is-unknown" id="pipelineControl" tabindex="0" data-sentinel-stage="control" role="group" aria-label="Control stage">
+                    <span class="sentinel-stage__name"><span class="sentinel-stage__num">04</span>CONTROL</span>
+                    <span class="sentinel-stage__value" id="pipelineControlValue">—</span>
+                    <span class="sentinel-stage__meta" id="pipelineControlMeta">Bounded action</span>
                 </div>
-                <div class="focus-kpi" id="simpleKpiUplink">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.uplink', 'Uplink') }}</span>
-                    <strong class="focus-kpi-value focus-kpi-value-text" id="simpleKpiUplinkValue">-</strong>
-                    <span class="focus-kpi-detail" id="simpleKpiUplinkDetail">-</span>
-                </div>
-                <div class="focus-kpi" id="simpleKpiServices">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.heat_services', 'Services') }}</span>
-                    <strong class="focus-kpi-value focus-kpi-value-text" id="simpleKpiServicesValue">-</strong>
-                    <span class="focus-kpi-detail" id="simpleKpiServicesDetail">-</span>
-                </div>
-            </div>
-            <div class="simple-lower">
-                <div class="focus-card simple-activity">
-                    <div class="focus-card-kicker">{{ tr('dashboard.activity_strip_title', 'Activity — last 60 min') }}</div>
-                    <div class="activity-bars" id="simpleActivityBars" aria-hidden="true"></div>
-                    <div class="focus-card-note">{{ tr('dashboard.activity_strip_note', 'amber = watch band, red = critical band, cyan = normal telemetry') }}</div>
-                </div>
-                <div class="focus-card simple-pipeline">
-                    <div class="focus-card-kicker">{{ tr('dashboard.pipeline_title', 'Pipeline — last 60 min') }}</div>
-                    <div class="pipeline-row" id="simplePipelineRow">
-                        <span class="pipeline-stage"><strong id="pipelineEvents">-</strong><span>{{ tr('dashboard.pipeline_events', 'events') }}</span></span>
-                        <span class="pipeline-arrow">→</span>
-                        <span class="pipeline-stage"><strong id="pipelineSignals">-</strong><span>{{ tr('dashboard.pipeline_signals', 'signals') }}</span></span>
-                        <span class="pipeline-arrow">→</span>
-                        <span class="pipeline-stage"><strong id="pipelineQueued">-</strong><span>{{ tr('dashboard.pipeline_queued', 'now/watch') }}</span></span>
-                        <span class="pipeline-arrow">→</span>
-                        <span class="pipeline-stage"><strong id="pipelineAction">-</strong><span>{{ tr('dashboard.pipeline_action', 'action') }}</span></span>
-                    </div>
-                    <div class="focus-card-note" id="pipelineNote">{{ tr('dashboard.pipeline_note', 'deterministic pipeline: evidence → evaluators → arbiter') }}</div>
+                <div class="sentinel-stage is-unknown" id="pipelineAudit" tabindex="0" data-sentinel-stage="audit" role="group" aria-label="Audit stage">
+                    <span class="sentinel-stage__name"><span class="sentinel-stage__num">05</span>AUDIT</span>
+                    <span class="sentinel-stage__value" id="pipelineAuditValue">—</span>
+                    <span class="sentinel-stage__meta" id="pipelineAuditMeta">Trace</span>
                 </div>
             </div>
         </section>
-        <section class="panel focus-panel soc-focus-panel" id="socFocusPanel">
-            <div class="panel-heading">
-                <div>
-                    <div class="panel-kicker">{{ tr('dashboard.soc_focus_kicker', 'SOC Focus') }}</div>
-                    <h2>{{ tr('dashboard.soc_focus_title', 'Threat triage at a glance') }}</h2>
-                </div>
+        <section class="sentinel-console" id="sentinelOverviewConsole" data-tier="overview" aria-label="Decision console">
+            <div class="sentinel-console__head">
+                <div class="panel-kicker">Decision Console</div>
             </div>
-            <div class="focus-kpi-grid">
-                <div class="focus-kpi" id="socKpiNow">
-                    <span class="focus-kpi-kicker">NOW</span>
-                    <strong class="focus-kpi-value"><span id="socKpiNowValue">-</span><span class="focus-kpi-delta" id="socKpiNowDelta"></span></strong>
-                    <span class="focus-kpi-detail">{{ tr('dashboard.kpi_now_detail', 'act this shift') }}</span>
-                </div>
-                <div class="focus-kpi" id="socKpiWatch">
-                    <span class="focus-kpi-kicker">WATCH</span>
-                    <strong class="focus-kpi-value"><span id="socKpiWatchValue">-</span></strong>
-                    <span class="focus-kpi-detail">{{ tr('dashboard.kpi_watch_detail', 'recheck soon') }}</span>
-                </div>
-                <div class="focus-kpi" id="socKpiBacklog">
-                    <span class="focus-kpi-kicker">BACKLOG</span>
-                    <strong class="focus-kpi-value"><span id="socKpiBacklogValue">-</span></strong>
-                    <span class="focus-kpi-detail">{{ tr('dashboard.kpi_backlog_detail', 'review at handoff') }}</span>
-                </div>
-                <div class="focus-kpi" id="socKpiCritical">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.critical_warning_label', 'Critical / Warning') }}</span>
-                    <strong class="focus-kpi-value focus-kpi-value-text" id="socKpiCriticalValue">-</strong>
-                    <span class="focus-kpi-detail">{{ tr('dashboard.kpi_critical_detail', 'suricata direct') }}</span>
-                </div>
-                <div class="focus-kpi" id="socKpiVisibility">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.visibility_label', 'Visibility') }}</span>
-                    <strong class="focus-kpi-value focus-kpi-value-text" id="socKpiVisibilityValue">-</strong>
-                    <span class="focus-kpi-detail">{{ tr('dashboard.kpi_visibility_detail', 'sensors reporting') }}</span>
-                </div>
-                <div class="focus-kpi" id="socKpiOldest">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.kpi_oldest_now', 'Oldest NOW age') }}</span>
-                    <strong class="focus-kpi-value focus-kpi-value-text" id="socKpiOldestValue">-</strong>
-                    <span class="focus-kpi-detail" id="socKpiOldestDetail">-</span>
-                </div>
+            <div class="sentinel-console__topgrid">
+                <article class="sentinel-posture status-neutral" id="consolePosture">
+                    <div class="sentinel-icon-slot" id="consolePostureIcon" aria-hidden="true"></div>
+                    <div class="sentinel-card__kicker">System Posture</div>
+                    <strong class="sentinel-posture__word" id="consolePostureWord">—</strong>
+                    <p class="sentinel-posture__desc" id="consolePostureDesc"></p>
+                </article>
+                <article class="sentinel-control status-neutral" id="consoleControl">
+                    <div class="sentinel-icon-slot" id="consoleControlIcon" aria-hidden="true"></div>
+                    <div class="sentinel-card__kicker">Active Control</div>
+                    <strong class="sentinel-control__word" id="consoleControlWord">—</strong>
+                    <dl class="sentinel-kv">
+                        <div><dt>Policy</dt><dd id="consoleControlPolicy">—</dd></div>
+                        <div><dt>Mode</dt><dd id="consoleControlMode">—</dd></div>
+                    </dl>
+                </article>
             </div>
-            <div class="focus-columns">
-                <div class="focus-card">
-                    <div class="focus-card-kicker">{{ tr('dashboard.triage_table_title', 'Triage queue — deterministic bands') }}</div>
-                    <div class="triage-filter-row">
-                        <label class="sr-only" for="triageFilterInput">{{ tr('dashboard.triage_filter_label', 'Filter triage rows') }}</label>
-                        <input type="search" class="evidence-filter-input" id="triageFilterInput"
-                               placeholder="{{ tr('dashboard.evidence_filter_placeholder', 'Filter by keyword (IP, SID, kind...)') }}"
-                               autocomplete="off" spellcheck="false">
-                        <div class="triage-band-chips" role="group" aria-label="{{ tr('dashboard.triage_band_filter', 'Band filter') }}">
-                            <button type="button" class="triage-band-chip active" data-band="all" aria-pressed="true">{{ tr('dashboard.band_all', 'all') }}</button>
-                            <button type="button" class="triage-band-chip band-now" data-band="now" aria-pressed="false">NOW</button>
-                            <button type="button" class="triage-band-chip band-watch" data-band="watch" aria-pressed="false">WATCH</button>
-                            <button type="button" class="triage-band-chip band-backlog" data-band="backlog" aria-pressed="false">BACKLOG</button>
-                        </div>
-                    </div>
-                    <div class="focus-table-wrap">
-                        <table class="focus-table" id="triageTable">
-                            <thead>
-                                <tr>
-                                    <th>{{ tr('dashboard.col_time', 'time') }}</th>
-                                    <th>{{ tr('dashboard.col_band', 'band') }}</th>
-                                    <th>{{ tr('dashboard.col_src_dst', 'src → dst') }}</th>
-                                    <th>{{ tr('dashboard.col_sid_type', 'sid / type') }}</th>
-                                    <th>{{ tr('dashboard.col_risk', 'risk') }}</th>
-                                </tr>
-                            </thead>
-                            <tbody id="triageTableBody"></tbody>
-                        </table>
-                    </div>
-                    <div class="focus-card-note">{{ tr('dashboard.triage_table_note', 'Rows are the deterministic alert-queue bands, not a raw event stream.') }}</div>
-                </div>
-                <div class="focus-side">
-                    <div class="focus-card focus-decision">
-                        <div class="focus-card-kicker">{{ tr('dashboard.decision_card_title', 'Decision — what the arbiter chose') }}</div>
-                        <h3 id="socDecisionAction">-</h3>
-                        <p class="focus-decision-reason" id="socDecisionReason">-</p>
-                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.decision_rationale_soc', 'SOC rationale — why this state') }}</div>
-                        <ul class="action-list" id="socDecisionWhyList"><li>-</li></ul>
-                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.decision_card_rejected', 'Why not stronger') }}</div>
-                        <ul class="action-list focus-rejected" id="socDecisionRejectedList"><li>-</li></ul>
-                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.release_condition', 'Release Condition') }}</div>
-                        <p class="focus-decision-release" id="socDecisionRelease">-</p>
-                        <div class="focus-card-note" id="socDecisionMeta">-</div>
-                    </div>
-                    <div class="focus-card">
-                        <div class="focus-card-kicker">{{ tr('dashboard.alerts_over_time_title', 'Alerts over time — 6 h') }}</div>
-                        <div class="activity-bars" id="socActivityBars" aria-hidden="true"></div>
-                        <div class="focus-card-note">{{ tr('dashboard.alerts_over_time_note', 'band-colored counts per 20 min window') }}</div>
-                    </div>
-                </div>
+            <div class="sentinel-console__triad">
+                <article class="sentinel-triad-card status-neutral" id="consoleNoc">
+                    <div class="sentinel-card__kicker">NOC</div>
+                    <strong id="consoleNocState">—</strong>
+                    <ul class="sentinel-triad__list" id="consoleNocList"></ul>
+                </article>
+                <article class="sentinel-triad-card status-neutral" id="consoleSoc">
+                    <div class="sentinel-card__kicker">SOC</div>
+                    <strong id="consoleSocState">—</strong>
+                    <ul class="sentinel-triad__list" id="consoleSocList"></ul>
+                </article>
+                <article class="sentinel-triad-card status-neutral" id="consoleDecision">
+                    <div class="sentinel-card__kicker">Decision</div>
+                    <strong id="consoleDecisionState">—</strong>
+                    <ul class="sentinel-triad__list" id="consoleDecisionList"></ul>
+                </article>
+            </div>
+            <div class="sentinel-console__whygrid">
+                <article class="sentinel-why">
+                    <div class="sentinel-card__kicker">Why this decision</div>
+                    <ul class="sentinel-why__list" id="consoleWhyList"></ul>
+                </article>
+                <article class="sentinel-rejected">
+                    <div class="sentinel-card__kicker">Rejected options</div>
+                    <ul class="sentinel-rejected__list" id="consoleRejectedList"></ul>
+                </article>
+            </div>
+            <div class="sentinel-console__evgrid">
+                <article class="sentinel-recentev">
+                    <div class="sentinel-card__kicker">Recent evidence</div>
+                    <ul class="sentinel-recentev__list" id="consoleEvidenceList"></ul>
+                </article>
+                <article class="sentinel-audit">
+                    <div class="sentinel-card__kicker">Audit trail</div>
+                    <dl class="sentinel-kv sentinel-kv--audit">
+                        <div><dt>Trace ID</dt><dd id="consoleAuditTrace">—</dd></div>
+                        <div><dt>Policy</dt><dd id="consoleAuditPolicy">—</dd></div>
+                        <div><dt>Config</dt><dd id="consoleAuditConfig">—</dd></div>
+                        <div><dt>Actor</dt><dd id="consoleAuditActor">—</dd></div>
+                    </dl>
+                </article>
             </div>
         </section>
-
-        <section class="panel focus-panel noc-focus-panel" id="nocFocusPanel">
-            <div class="panel-heading">
-                <div>
-                    <div class="panel-kicker">{{ tr('dashboard.noc_focus_kicker', 'NOC Focus') }}</div>
-                    <h2>{{ tr('dashboard.noc_focus_title', 'Path, capacity, and clients at a glance') }}</h2>
+        <div class="sentinel-subtabs sentinel-ops-tabs" id="sentinelOpsSubnav" data-tier="operations" role="group" aria-label="Operations workspace">
+            <button type="button" class="sentinel-subtab is-active" id="sentinelOpSoc" data-sentinel-op="soc" aria-pressed="true">SOC</button>
+            <button type="button" class="sentinel-subtab" id="sentinelOpNoc" data-sentinel-op="noc" aria-pressed="false">NOC</button>
+        </div>
+        <section class="sentinel-opsconsole" id="sentinelSocConsole" data-tier="operations" data-op="soc" aria-label="SOC operations">
+            <article class="sentinel-ops-status status-neutral" id="socConsoleCard">
+                <div class="sentinel-ops-status__head">
+                    <div><div class="sentinel-card__kicker">SOC Status</div><strong id="socConsoleStatus">—</strong></div>
+                    <div class="sentinel-ops-metrics">
+                        <div class="som"><span>Evidence</span><b id="socMetricEvidence">—</b></div>
+                        <div class="som"><span>Critical</span><b id="socMetricCritical">—</b></div>
+                        <div class="som"><span>Watch</span><b id="socMetricWatch">—</b></div>
+                        <div class="som"><span>Sources</span><b id="socMetricSources">—</b></div>
+                        <div class="som"><span>Risk Score</span><b id="socMetricRisk">—</b></div>
+                    </div>
                 </div>
+            </article>
+            <div class="sentinel-ops-grid2">
+                <article><div class="sentinel-card__kicker">Risk over time</div><div class="sentinel-spark sentinel-spark--tall" id="socRiskSpark"></div></article>
+                <article><div class="sentinel-card__kicker">Top evidence</div><ul class="sentinel-recentev__list" id="socTopEvidenceList"></ul></article>
             </div>
-            <div class="focus-kpi-grid">
-                <div class="focus-kpi" id="nocKpiUplink">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.uplink', 'Uplink') }}</span>
-                    <strong class="focus-kpi-value focus-kpi-value-text" id="nocKpiUplinkValue">-</strong>
-                    <span class="focus-kpi-detail" id="nocKpiUplinkDetail">-</span>
-                </div>
-                <div class="focus-kpi" id="nocKpiInternet">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.internet', 'Internet') }}</span>
-                    <strong class="focus-kpi-value focus-kpi-value-text" id="nocKpiInternetValue">-</strong>
-                    <span class="focus-kpi-detail" id="nocKpiInternetDetail">-</span>
-                </div>
-                <div class="focus-kpi" id="nocKpiCapacity">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.capacity', 'Capacity') }}</span>
-                    <strong class="focus-kpi-value"><span id="nocKpiCapacityValue">-</span><span class="focus-kpi-delta" id="nocKpiCapacityDelta"></span></strong>
-                    <span class="focus-kpi-detail" id="nocKpiCapacityDetail">-</span>
-                </div>
-                <div class="focus-kpi" id="nocKpiClients">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.heat_clients', 'Clients') }}</span>
-                    <strong class="focus-kpi-value"><span id="nocKpiClientsValue">-</span></strong>
-                    <span class="focus-kpi-detail" id="nocKpiClientsDetail">-</span>
-                </div>
-                <div class="focus-kpi" id="nocKpiImpacted">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.impacted_label', 'Impacted') }}</span>
-                    <strong class="focus-kpi-value"><span id="nocKpiImpactedValue">-</span></strong>
-                    <span class="focus-kpi-detail" id="nocKpiImpactedDetail">-</span>
-                </div>
-                <div class="focus-kpi" id="nocKpiServices">
-                    <span class="focus-kpi-kicker">{{ tr('dashboard.heat_services', 'Services') }}</span>
-                    <strong class="focus-kpi-value focus-kpi-value-text" id="nocKpiServicesValue">-</strong>
-                    <span class="focus-kpi-detail" id="nocKpiServicesDetail">-</span>
-                </div>
+            <article>
+                <div class="sentinel-card__kicker">MITRE ATT&amp;CK techniques</div>
+                <div class="sentinel-chips" id="socAttackChips"></div>
+                <div class="sentinel-enrich" id="socEnrich"></div>
+            </article>
+            <div class="sentinel-ops-grid2">
+                <article><div class="sentinel-card__kicker">Evidence pipeline</div>
+                    <div class="sentinel-evpipe" id="socEvPipe">
+                        <div class="evp"><span>Events</span><b id="socPipeEvents">—</b></div>
+                        <div class="evp evp-arrow"><span>Signals</span><b id="socPipeSignals">—</b></div>
+                        <div class="evp evp-arrow"><span>Now</span><b id="socPipeNow">—</b></div>
+                        <div class="evp evp-arrow"><span>Watch</span><b id="socPipeWatch">—</b></div>
+                    </div>
+                </article>
+                <article><div class="sentinel-card__kicker">Threat categories</div><div class="sentinel-catbars" id="socThreatCats"></div></article>
             </div>
-            <div class="focus-card">
-                <div class="focus-card-kicker">{{ tr('dashboard.path_health_title', 'Path health — client to internet') }}</div>
-                <div class="path-strip" id="nocPathStrip"></div>
-                <div class="focus-card-note">{{ tr('dashboard.path_health_note', 'Deterministic per-hop states from connection, network health, and path signals.') }}</div>
-            </div>
-            <div class="focus-columns focus-columns-noc">
-                <div class="focus-card">
-                    <div class="focus-card-kicker">{{ tr('dashboard.top_talkers_title', 'Top talkers — current window') }}</div>
-                    <div class="focus-table-wrap">
-                        <table class="focus-table" id="topTalkersTable">
-                            <thead>
-                                <tr>
-                                    <th>{{ tr('dashboard.col_client', 'client') }}</th>
-                                    <th>{{ tr('dashboard.col_bytes', 'bytes') }}</th>
-                                    <th>{{ tr('dashboard.col_share', 'share') }}</th>
-                                    <th>{{ tr('dashboard.col_state', 'state') }}</th>
-                                </tr>
-                            </thead>
-                            <tbody id="topTalkersBody"></tbody>
-                        </table>
-                    </div>
-                    <div class="focus-card-note">{{ tr('dashboard.top_talkers_note', 'noc capacity top sources joined with the client identity view.') }}</div>
-                </div>
-                <div class="focus-side">
-                    <div class="focus-card focus-decision">
-                        <div class="focus-card-kicker">{{ tr('dashboard.decision_card_noc_title', 'Decision rationale — NOC') }}</div>
-                        <h3 id="nocDecisionAction">-</h3>
-                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.decision_rationale_noc', 'NOC rationale — why this state') }}</div>
-                        <ul class="action-list" id="nocDecisionRationaleList"><li>-</li></ul>
-                        <div class="focus-card-kicker focus-sub">{{ tr('dashboard.release_condition', 'Release Condition') }}</div>
-                        <p class="focus-decision-release" id="nocDecisionRelease">-</p>
-                        <div class="focus-card-note" id="nocDecisionMeta">-</div>
-                    </div>
-                    <div class="focus-card">
-                        <div class="focus-card-kicker">{{ tr('dashboard.runtime_meters_title', 'Runtime meters') }}</div>
-                        <div class="focus-meter-label" id="nocMeterQueueLabel">-</div>
-                        <div class="resource-guard-meter"><span id="nocMeterQueueBar" class="resource-guard-meter-fill"></span></div>
-                        <div class="focus-meter-label" id="nocMeterFallbackLabel">-</div>
-                        <div class="resource-guard-meter"><span id="nocMeterFallbackBar" class="resource-guard-meter-fill"></span></div>
-                        <div class="focus-meter-label" id="nocMeterLatencyLabel">-</div>
-                        <div class="resource-guard-meter"><span id="nocMeterLatencyBar" class="resource-guard-meter-fill"></span></div>
-                    </div>
-                    <div class="focus-card">
-                        <div class="focus-card-kicker">{{ tr('dashboard.service_health', 'Service Health') }}</div>
-                        <div class="simple-chips" id="nocServiceChips"></div>
+            <article class="sentinel-triage">
+                <div class="sentinel-console__head">
+                    <div class="sentinel-card__kicker">Triage queue</div>
+                    <div class="sentinel-range sentinel-triage-bands" id="socTriageBands" role="group" aria-label="Triage band filter">
+                        <button type="button" class="sentinel-range-btn is-active" data-tri-band="all" aria-pressed="true">All</button>
+                        <button type="button" class="sentinel-range-btn" data-tri-band="now" aria-pressed="false">Now</button>
+                        <button type="button" class="sentinel-range-btn" data-tri-band="watch" aria-pressed="false">Watch</button>
+                        <button type="button" class="sentinel-range-btn" data-tri-band="backlog" aria-pressed="false">Backlog</button>
                     </div>
                 </div>
+                <div class="sentinel-triage-table" id="socTriageTable"></div>
+            </article>
+            <div class="sentinel-console__whygrid">
+                <article class="sentinel-why">
+                    <div class="sentinel-card__kicker">Why this decision (SOC)</div>
+                    <ul class="sentinel-why__list" id="socWhyList"></ul>
+                    <dl class="sentinel-kv sentinel-kv--audit sentinel-decrel">
+                        <div><dt>Release</dt><dd id="socReleaseCond">—</dd></div>
+                        <div><dt>Trace</dt><dd id="socAuditTrace">—</dd></div>
+                        <div><dt>Policy</dt><dd id="socAuditPolicy">—</dd></div>
+                    </dl>
+                </article>
+                <article class="sentinel-rejected">
+                    <div class="sentinel-card__kicker">Rejected options</div>
+                    <ul class="sentinel-rejected__list" id="socRejectedList"></ul>
+                </article>
             </div>
         </section>
-
-        <section class="onboarding-banner" id="beginnerOnboarding">
+        <section class="sentinel-opsconsole" id="sentinelNocConsole" data-tier="operations" data-op="noc" aria-label="NOC operations">
+            <div class="sentinel-console__head"><div class="panel-kicker">NOC — Path &amp; Service Health</div></div>
+            <article class="sentinel-ops-status status-neutral" id="nocConsoleCard">
+                <div class="sentinel-ops-status__head">
+                    <div><div class="sentinel-card__kicker">NOC Status</div><strong id="nocConsoleStatus">—</strong></div>
+                    <div class="sentinel-ops-metrics">
+                        <div class="som"><span>Uplink</span><b id="nocMetricUplink">—</b></div>
+                        <div class="som"><span>Internet</span><b id="nocMetricInternet">—</b></div>
+                        <div class="som"><span>Services</span><b id="nocMetricServices">—</b></div>
+                        <div class="som"><span>Clients</span><b id="nocMetricClients">—</b></div>
+                        <div class="som"><span>Capacity</span><b id="nocMetricCapacity">—</b></div>
+                    </div>
+                </div>
+            </article>
+            <div class="sentinel-ops-grid2">
+                <article><div class="sentinel-card__kicker">Service health</div><ul class="sentinel-triad__list" id="nocServiceList"></ul></article>
+                <article><div class="sentinel-card__kicker">Capacity &amp; blast radius</div><ul class="sentinel-triad__list" id="nocCapacityList"></ul></article>
+            </div>
+            <article>
+                <div class="sentinel-console__head"><div class="sentinel-card__kicker">Client roster &amp; management</div><div class="panel-note" id="nocClientSummary"></div></div>
+                <div class="sentinel-client-table" id="nocClientRoster"></div>
+            </article>
+            <div class="sentinel-ops-grid2">
+                <article>
+                    <div class="sentinel-card__kicker">Bandwidth &amp; utilization</div>
+                    <div class="sentinel-bw" id="nocBandwidth"></div>
+                    <div class="sentinel-bwtalkers" id="nocTopTalkers"></div>
+                </article>
+                <article>
+                    <div class="sentinel-card__kicker">Traffic control (attack-time)</div>
+                    <div class="sentinel-tc" id="nocTrafficControl"></div>
+                    <div class="sentinel-planned" id="nocQosPlanned">
+                        <span class="sentinel-planned__tag">PLANNED</span>
+                        <span>Per-user bandwidth allocation &amp; traffic priority (QoS) — requires per-client accounting + a tc class hierarchy; not yet available.</span>
+                    </div>
+                </article>
+            </div>
+            <article class="sentinel-pathstrip-card">
+                <div class="sentinel-card__kicker">Network path health</div>
+                <div class="sentinel-pathstrip" id="nocPathStrip"></div>
+            </article>
+            <div class="sentinel-ops-grid2">
+                <article>
+                    <div class="sentinel-card__kicker">Top talkers</div>
+                    <div class="sentinel-talker-table" id="nocTopTalkerTable"></div>
+                </article>
+                <article>
+                    <div class="sentinel-card__kicker">Runtime health</div>
+                    <div class="sentinel-meters" id="nocRuntimeMeters"></div>
+                </article>
+            </div>
+            <div class="sentinel-console__whygrid">
+                <article class="sentinel-why">
+                    <div class="sentinel-card__kicker">Why this decision (NOC)</div>
+                    <ul class="sentinel-why__list" id="nocWhyList"></ul>
+                    <dl class="sentinel-kv sentinel-kv--audit sentinel-decrel">
+                        <div><dt>Release</dt><dd id="nocReleaseCond">—</dd></div>
+                        <div><dt>Trace</dt><dd id="nocAuditTrace">—</dd></div>
+                        <div><dt>Policy</dt><dd id="nocAuditPolicy">—</dd></div>
+                    </dl>
+                </article>
+                <article class="sentinel-rejected">
+                    <div class="sentinel-card__kicker">Rejected options</div>
+                    <ul class="sentinel-rejected__list" id="nocRejectedList"></ul>
+                </article>
+            </div>
+        </section>
+        <section class="sentinel-evconsole" id="sentinelEvidenceConsole" data-tier="evidence" aria-label="Evidence timeline">
+            <div class="sentinel-subtabs" role="group" aria-label="Evidence views">
+                <button type="button" class="sentinel-subtab is-active" data-ev-view="timeline" aria-pressed="true">TIMELINE</button>
+                <button type="button" class="sentinel-subtab" data-ev-view="list" aria-pressed="false">EVIDENCE LIST</button>
+                <button type="button" class="sentinel-subtab" data-ev-view="audit" aria-pressed="false">AUDIT TRAIL</button>
+                <button type="button" class="sentinel-subtab" data-ev-view="raw" aria-pressed="false">RAW DATA</button>
+            </div>
+            <div class="sentinel-ev-toolbar">
+                <span class="sentinel-ev-toolbar__label">Range</span>
+                <div class="sentinel-range" role="group" aria-label="Time range">
+                    <button type="button" class="sentinel-range-btn" data-ev-range="900" aria-pressed="false">15m</button>
+                    <button type="button" class="sentinel-range-btn" data-ev-range="3600" aria-pressed="false">1h</button>
+                    <button type="button" class="sentinel-range-btn" data-ev-range="86400" aria-pressed="false">24h</button>
+                    <button type="button" class="sentinel-range-btn is-active" data-ev-range="0" aria-pressed="true">All</button>
+                </div>
+                <span class="sentinel-ev-count" id="evCount"></span>
+            </div>
+            <div class="sentinel-ev-layout">
+                <div class="sentinel-ev-main">
+                    <ul class="sentinel-ev-timeline" id="evTimeline" data-ev-panel="timeline"></ul>
+                    <div class="sentinel-ev-table" id="evList" data-ev-panel="list" hidden></div>
+                    <ul class="sentinel-ev-audit" id="evAudit" data-ev-panel="audit" hidden></ul>
+                    <pre class="sentinel-ev-raw" id="evRaw" data-ev-panel="raw" hidden></pre>
+                </div>
+                <aside class="sentinel-ev-detail" id="evDetail" aria-live="polite">
+                    <div class="sentinel-card__kicker">Detail</div>
+                    <dl class="sentinel-kv">
+                        <div><dt>Time</dt><dd id="evdTime">—</dd></div>
+                        <div><dt>Source</dt><dd id="evdSource">—</dd></div>
+                        <div><dt>Destination</dt><dd id="evdDest">—</dd></div>
+                        <div><dt>Protocol</dt><dd id="evdProto">—</dd></div>
+                        <div><dt>Severity</dt><dd id="evdSeverity">—</dd></div>
+                        <div><dt>Policy</dt><dd id="evdPolicy">—</dd></div>
+                        <div><dt>Rule ID</dt><dd id="evdRule">—</dd></div>
+                        <div><dt>Evidence ID</dt><dd id="evdEid">—</dd></div>
+                        <div><dt>Trace ID</dt><dd id="evdTrace">—</dd></div>
+                    </dl>
+                </aside>
+            </div>
+        </section>
+        <section class="sentinel-sysconsole" id="sentinelSystemConsole" data-tier="system" aria-label="System runtime">
+            <div class="sentinel-subtabs" role="group" aria-label="System views">
+                <button type="button" class="sentinel-subtab is-active" data-sys-view="runtime" aria-pressed="true">RUNTIME</button>
+                <button type="button" class="sentinel-subtab" data-sys-view="services" aria-pressed="false">SERVICES</button>
+                <button type="button" class="sentinel-subtab" data-sys-view="fleet" aria-pressed="false">FLEET</button>
+                <button type="button" class="sentinel-subtab" data-sys-view="config" aria-pressed="false">CONFIGURATION</button>
+            </div>
+            <div data-sys-panel="runtime">
+                <div class="sentinel-systiles">
+                    <article class="systile status-neutral" id="sysCpuTile"><span>CPU</span><strong id="sysCpu">—</strong><div class="systile-spark" id="sysCpuSpark"></div></article>
+                    <article class="systile status-neutral" id="sysMemTile"><span>MEMORY</span><strong id="sysMem">—</strong><div class="systile-spark" id="sysMemSpark"></div></article>
+                    <article class="systile status-neutral" id="sysDiskTile"><span>DISK</span><strong id="sysDisk">—</strong><div class="systile-spark" id="sysDiskSpark"></div></article>
+                    <article class="systile status-neutral" id="sysTempTile"><span>TEMPERATURE</span><strong id="sysTemp">—</strong><div class="systile-spark" id="sysTempSpark"></div></article>
+                </div>
+                <div class="sentinel-sysrow">
+                    <div class="sysr"><span>UPLINK</span><b id="sysUplink">—</b></div>
+                    <div class="sysr"><span>SERVICES</span><b id="sysServices">—</b></div>
+                    <div class="sysr"><span>AZAZEL CORE</span><b id="sysCore">—</b></div>
+                    <div class="sysr"><span>AI RUNTIME (M.I.O.)</span><b id="sysAi">—</b></div>
+                </div>
+                <article>
+                    <div class="sentinel-reshist-head">
+                        <div class="sentinel-card__kicker">Resource history</div>
+                        <div class="sentinel-reslegend"><span class="rl rl-cpu">CPU</span><span class="rl rl-mem">MEM</span><span class="rl rl-temp">TEMP</span></div>
+                    </div>
+                    <div class="sentinel-spark sentinel-spark--tall" id="sysResSpark"></div>
+                </article>
+            </div>
+            <div class="sentinel-svc-grid" data-sys-panel="services" id="sysServicesGrid" hidden></div>
+            <div data-sys-panel="fleet" id="sysFleetPanel" hidden>
+                <div class="sentinel-card__kicker">Node fabric — Azazel series</div>
+                <div class="sentinel-fabric" id="sysFabric"></div>
+                <p class="sentinel-fabric-note" id="sysFabricNote"></p>
+                <div class="sentinel-az06" id="sysAz06Panel">
+                    <div class="sentinel-console__head">
+                        <div class="sentinel-card__kicker">AZ-06 Azazel-Deception — effectiveness (advisory-only)</div>
+                        <span class="sentinel-az06-badge" id="sysAz06Mode">—</span>
+                    </div>
+                    <dl class="sentinel-kv sentinel-kv--audit">
+                        <div><dt>Shadow evaluator</dt><dd id="sysAz06Shadow">—</dd></div>
+                        <div><dt>Effectiveness advisory</dt><dd id="sysAz06Advisory">—</dd></div>
+                        <div><dt>Enforcement</dt><dd id="sysAz06Enforce">—</dd></div>
+                        <div><dt>Authority</dt><dd id="sysAz06Authority">—</dd></div>
+                    </dl>
+                    <div class="sentinel-card__kicker" style="margin-top:12px">Live-activation readiness</div>
+                    <ul class="sentinel-gate" id="sysAz06Gate"></ul>
+                </div>
+            </div>
+            <div class="sentinel-config" data-sys-panel="config" id="sysConfigPanel" hidden></div>
+        </section>
+        <section class="onboarding-banner" id="beginnerOnboarding" data-tier="overview">
             <div class="onboarding-copy">
                 <div class="panel-kicker">{{ tr('dashboard.beginner_onboarding_kicker', 'Beginner Guide') }}</div>
                 <h2 id="onboardingTitle">{{ tr('dashboard.beginner_onboarding_title', 'Start with the first three blocks') }}</h2>
@@ -374,7 +431,7 @@
                 </div>
             </div>
         </section>
-        <section class="command-strip panel" id="commandStripPanel">
+        <section class="command-strip panel" data-tier="overview">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.command_strip', 'Command Strip') }}</div>
@@ -485,7 +542,7 @@
             </details>
         </section>
 
-        <section class="panel client-identity-panel" id="clientIdentityPanel">
+        <section class="panel client-identity-panel" data-tier="operations" data-op="noc">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.client_identity_view', 'Client Identity View') }}</div>
@@ -493,7 +550,7 @@
                 </div>
                 <div class="panel-heading-actions">
                     <div class="panel-note" id="clientIdentitySummary">{{ tr('dashboard.client_identity_summary_waiting', 'Waiting for client identity data.') }}</div>
-                    <button type="button" class="context-ask-btn" id="clientIdentityToggle" aria-pressed="false">{{ tr('dashboard.client_identity_toggle_show_normal', 'Show normal too') }}</button>
+                    <button type="button" class="context-ask-btn" id="clientIdentityToggle">{{ tr('dashboard.client_identity_toggle_show_normal', 'Show normal too') }}</button>
                 </div>
             </div>
             <div class="client-identity-tile-grid">
@@ -550,7 +607,7 @@
             </details>
         </section>
 
-        <section class="panel mission-row resource-guard-panel" id="resourceGuardPanel">
+        <section class="panel mission-row resource-guard-panel" data-tier="system">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.resource_guard', 'Resource Guard') }}</div>
@@ -624,13 +681,13 @@
             </div>
         </section>
 
-        <section class="panel mission-row" id="missionPanel">
+        <section class="panel mission-row" data-tier="overview">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.current_mission', 'Current Mission') }}</div>
                     <h2>{{ tr('dashboard.operator_now', 'What the operator should do now') }}</h2>
                 </div>
-                <div class="panel-note">{{ tr('dashboard.mission_note', 'Mission row compresses the current goal, the first checks, and the safety rails.') }}</div>
+                <div class="panel-note" id="missionAudienceNote">{{ tr('dashboard.mission_note', 'Mission row compresses the current goal, the first checks, and the safety rails.') }}</div>
             </div>
             <div class="mission-grid">
                 <article class="mission-card mission-card-primary">
@@ -657,11 +714,44 @@
             </div>
         </section>
 
-        
+        <section class="panel temporary-mission-panel temp-only" data-tier="overview">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-kicker">{{ tr('dashboard.temporary_mission', 'Temporary Mission') }}</div>
+                    <h2>{{ tr('dashboard.safe_first_response', 'Safe first response for the person in front of you') }}</h2>
+                </div>
+                <div class="panel-note">{{ tr('dashboard.temp_note', 'Temporary mode keeps the first action, the user-facing wording, and the forbidden moves in one block.') }}</div>
+            </div>
+            <div class="temporary-mission-grid">
+                <article class="mission-card mission-card-primary">
+                    <div class="card-kicker">{{ tr('dashboard.first_action', 'First Action') }}</div>
+                    <h3 id="temporaryMissionHeadline">{{ tr('dashboard.guide_user_safely', 'Guide the user safely.') }}</h3>
+                    <p class="card-summary" id="temporaryMissionSummary">{{ tr('dashboard.temp_first_action_placeholder', 'Temporary mode will place the first safe action here.') }}</p>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">{{ tr('dashboard.ask_user', 'Ask the User') }}</div>
+                    <ul class="action-list" id="temporaryMissionAskList">
+                        <li>{{ tr('dashboard.choose_symptom', 'Choose one symptom card to start guided triage.') }}</li>
+                    </ul>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">{{ tr('dashboard.tell_user', 'Tell the User') }}</div>
+                    <ul class="action-list" id="temporaryMissionTellList">
+                        <li>{{ tr('dashboard.wait_instruction', 'We are checking the current state. Please wait for the next instruction.') }}</li>
+                    </ul>
+                </article>
+                <article class="mission-card">
+                    <div class="card-kicker">{{ tr('dashboard.do_not_do', 'Do Not Do') }}</div>
+                    <ul class="action-list" id="temporaryMissionDoNotDoList">
+                        <li>{{ tr('dashboard.no_mode_change', 'Do not change mode or restart services until the first checks are done.') }}</li>
+                    </ul>
+                </article>
+            </div>
+        </section>
 
         <div class="board-layout">
             <section class="board-main">
-                <section class="panel situation-board" id="situationPanel">
+                <section class="panel situation-board" data-tier="overview">
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.situation_board', 'Situation Board') }}</div>
@@ -670,7 +760,7 @@
                         <div class="panel-note">{{ tr('dashboard.shared_state', 'Shared state source for WebUI, TUI, and EPD alignment') }}</div>
                     </div>
                     <div class="situation-grid">
-                        <article class="situation-card posture-card soc-scope" id="postureCard">
+                        <article class="situation-card posture-card" id="postureCard">
                             <div class="card-title-row">
                                 <div>
                                     <div class="card-kicker">{{ tr('dashboard.threat_posture', 'Threat Posture') }}</div>
@@ -686,11 +776,11 @@
                                 <div class="fact-item"><span>{{ tr('dashboard.recommendation', 'Recommendation') }}</span><strong id="postureCurrentRecommendation">-</strong></div>
                                 <div class="fact-item"><span>{{ tr('dashboard.confidence', 'Confidence') }}</span><strong id="postureConfidence">-</strong></div>
                                 <div class="fact-item"><span>{{ tr('dashboard.last_alert', 'Last Alert') }}</span><strong id="postureLastAlert">-</strong></div>
-                                <div class="fact-item"><span>{{ tr('dashboard.llm_status', 'LLM Status') }}</span><strong id="postureLlmStatus">-</strong></div>
+                                <div class="fact-item pro-only"><span>{{ tr('dashboard.llm_status', 'LLM Status') }}</span><strong id="postureLlmStatus">-</strong></div>
                             </div>
                         </article>
 
-                        <article class="situation-card noc-scope">
+                        <article class="situation-card">
                             <div class="card-kicker">{{ tr('dashboard.network_health', 'Network Health') }}</div>
                             <h3 id="networkHealthTitle">{{ tr('dashboard.uplink_route', 'Uplink and route') }}</h3>
                             <div class="fact-list">
@@ -698,9 +788,9 @@
                                 <div class="fact-item"><span>{{ tr('dashboard.gateway', 'Gateway') }}</span><strong id="networkGateway">-</strong></div>
                                 <div class="fact-item"><span>{{ tr('dashboard.internet', 'Internet') }}</span><strong id="networkInternet">-</strong></div>
                                 <div class="fact-item"><span>{{ tr('dashboard.captive_portal', 'Captive Portal') }}</span><strong id="networkPortal">-</strong></div>
-                                <div class="fact-item"><span>{{ tr('dashboard.monitoring_scope', 'Monitoring Scope') }}</span><strong id="networkScope">-</strong></div>
-                                <div class="fact-item"><span>{{ tr('dashboard.dns_mismatch', 'DNS Mismatch') }}</span><strong id="networkDnsMismatch">0</strong></div>
-                                <div class="fact-item"><span>{{ tr('dashboard.signals', 'Signals') }}</span><strong id="networkSignals">-</strong></div>
+                                <div class="fact-item"><span>Monitoring Scope</span><strong id="networkScope">-</strong></div>
+                                <div class="fact-item pro-only"><span>{{ tr('dashboard.dns_mismatch', 'DNS Mismatch') }}</span><strong id="networkDnsMismatch">0</strong></div>
+                                <div class="fact-item pro-only"><span>{{ tr('dashboard.signals', 'Signals') }}</span><strong id="networkSignals">-</strong></div>
                             </div>
                         </article>
 
@@ -719,7 +809,7 @@
                     </div>
                 </section>
 
-                <section class="panel split-board" id="splitBoardPanel">
+                <section class="panel split-board pro-only" data-tier="operations">
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.split_board', 'SOC / NOC Split Board') }}</div>
@@ -784,12 +874,13 @@
                     <details class="split-board-details" id="splitBoardDetails">
                         <summary id="splitBoardDetailsToggle">{{ tr('dashboard.split_board_details_show', 'Show SOC / NOC details') }}</summary>
                         <div class="split-grid">
-                            <article class="split-card soc-split-card soc-scope">
+                            <article class="split-card soc-split-card">
                             <div class="split-card-header">
                                 <div>
                                     <div class="card-kicker">{{ tr('dashboard.threat_summary', 'Threat Evidence Summary') }}</div>
                                     <h3 id="socThreatLevel">quiet</h3>
                                 </div>
+                                <button type="button" class="context-ask-btn pro-only" data-question="{{ tr('dashboard.question_threat_evidence_summary', 'Summarize the current threat evidence and explain why a stronger action is not selected.') }}">{{ tr('dashboard.ask_about_this', 'Ask about this') }}</button>
                             </div>
                             <p class="card-summary" id="socThreatSummary">{{ tr('dashboard.no_threat_summary', 'No active threat evidence summary.') }}</p>
                             <div class="fact-list compact-list">
@@ -838,12 +929,13 @@
                             </div>
                             </article>
 
-                            <article class="split-card noc-split-card noc-scope">
+                            <article class="split-card noc-split-card">
                             <div class="split-card-header">
                                 <div>
                                     <div class="card-kicker">{{ tr('dashboard.noc_focus', 'NOC Focus') }}</div>
                                     <h3 id="nocPathStatus">unknown</h3>
                                 </div>
+                                <button type="button" class="context-ask-btn" data-question="{{ tr('dashboard.question_noc_summary', 'Summarize the current path, service, and client impact, and explain where to verify first.') }}">{{ tr('dashboard.ask_about_this', 'Ask about this') }}</button>
                             </div>
                                 <div class="noc-split-grid">
                                     <div class="split-subcard noc-path-card">
@@ -899,21 +991,22 @@
                     </details>
                 </section>
 
-                <section class="panel action-board" id="actionBoardPanel">
+                <section class="panel action-board" data-tier="overview">
                     <div class="panel-heading">
                         <div>
                             <div class="panel-kicker">{{ tr('dashboard.action_board', 'Action Board') }}</div>
                             <h2>{{ tr('dashboard.next_actions_controls', 'Next actions and operator controls') }}</h2>
                         </div>
                         <div class="panel-heading-actions">
-                            <div class="panel-note">{{ tr('dashboard.action_board_note', 'Bounded next actions and operator controls, synthesized deterministically.') }}</div>
+                            <div class="panel-note" id="audienceSummary">{{ tr('dashboard.temporary_summary', 'Temporary mode prioritizes simpler wording, safe next steps, and user-facing guidance.') }}</div>
+                            <button type="button" class="context-ask-btn pro-only" data-question="{{ tr('dashboard.question_action_board_summary', 'Summarize the current action board and explain what to do now and what to avoid.') }}">{{ tr('dashboard.ask_about_this', 'Ask about this') }}</button>
                         </div>
                     </div>
                     <div class="action-grid">
                         <article class="action-card emphasis-card primary-action-card">
                             <div class="card-kicker">{{ tr('dashboard.immediate_action', 'Immediate Action') }}</div>
-                            <h3 id="priorityActionTitle">{{ tr('dashboard.waiting_action_synthesis', 'Waiting for action synthesis') }}</h3>
-                            <p class="card-summary" id="priorityActionSummary">{{ tr('dashboard.priority_action_placeholder', 'The highest priority action will appear here before detailed controls.') }}</p>
+                            <h3 id="priorityActionTitle">Waiting for action synthesis</h3>
+                            <p class="card-summary" id="priorityActionSummary">The highest priority action will appear here before detailed controls.</p>
                             <div class="trust-capsule trust-tone-neutral" id="decisionTrustCapsule">
                                 <div class="trust-capsule-header">
                                     <div class="assistant-label">{{ tr('dashboard.decision_trust_capsule', 'Decision Trust') }}</div>
@@ -926,7 +1019,7 @@
                                     <span>{{ tr('dashboard.trust_evidence', 'Evidence') }}</span>
                                     <strong id="trustCapsuleEvidence">0</strong>
                                 </div>
-                                <div class="trust-capsule-detail">
+                                <div class="trust-capsule-detail pro-only">
                                     <div class="action-subsection">
                                         <div class="assistant-label">{{ tr('dashboard.trust_why_this', 'Why this') }}</div>
                                         <ul class="action-list" id="trustCapsuleWhyList">
@@ -963,19 +1056,64 @@
                             <p id="userGuidanceText">-</p>
                             <details class="action-board-details" id="actionBoardGuidanceDetails">
                                 <summary id="actionBoardGuidanceDetailsToggle">{{ tr('dashboard.action_board_guidance_details_show', 'Show guidance details') }}</summary>
-                                                                                                                                                                <div class="action-subsection">
-                                    <div class="assistant-label">{{ tr('dashboard.do_not_do', 'Do Not Do') }}</div>
+                                <div class="action-subsection temp-only">
+                                    <div class="assistant-label">Temporary Triage</div>
+                                    <div class="temporary-triage-buttons">
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="wifi" data-question="{{ tr('dashboard.question_wifi_trouble', 'How should I guide a user who cannot connect to Wi-Fi?') }}">Wi-Fi</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="reconnect" data-question="{{ tr('dashboard.question_reconnect', 'How should I guide a user who cannot reconnect?') }}">Reconnect</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="onboarding" data-question="{{ tr('dashboard.question_onboarding', 'How should I guide a first-time onboarding user?') }}">Onboarding</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="dns" data-question="{{ tr('dashboard.question_dns_failure', 'What should I verify when DNS lookup fails?') }}">DNS</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="uplink" data-question="{{ tr('dashboard.question_gateway_uplink', 'What should I verify when the gateway or uplink looks unhealthy?') }}">Uplink</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="service" data-question="{{ tr('dashboard.question_service_status', 'What should I verify when a service appears unhealthy?') }}">Service</button>
+                                        <button type="button" class="shortcut-btn temp-flow-btn" data-symptom="portal" data-question="{{ tr('dashboard.question_portal', 'How should I guide a user when the portal does not appear?') }}">Portal</button>
+                                    </div>
+                                    <div class="temporary-triage-handoff">
+                                        <a id="temporaryOpsCommLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.continue_ops_comm', 'Continue in Ops Comm') }}</a>
+                                    </div>
+                                </div>
+                                <div class="action-subsection temp-only progress-checklist-block">
+                                    <div class="assistant-label">{{ tr('dashboard.progress_checklist', 'Progress Checklist') }}</div>
+                                    <div class="progress-checklist-summary" id="progressChecklistSummary">{{ tr('dashboard.progress_checklist_waiting', 'Waiting for progress state.') }}</div>
+                                    <div class="progress-checklist-list" id="progressChecklistList">
+                                        <div>{{ tr('dashboard.progress_checklist_waiting', 'Waiting for progress state.') }}</div>
+                                    </div>
+                                    <div class="progress-blocked-box" id="progressBlockedBox">
+                                        <label for="progressBlockedReason">{{ tr('dashboard.progress_blocked_reason_label', 'Blocked reason') }}</label>
+                                        <textarea id="progressBlockedReason" rows="2" placeholder="{{ tr('dashboard.progress_blocked_reason_placeholder', 'Why are you blocked right now?') }}"></textarea>
+                                        <div class="progress-blocked-prompt" id="progressBlockedPrompt">{{ tr('dashboard.progress_blocked_prompt_default', 'Ask what changed first, when it started, and whether this is one device or many.') }}</div>
+                                        <div class="progress-blocked-actions">
+                                            <button type="button" class="shortcut-btn" id="progressBlockedSaveBtn">{{ tr('dashboard.progress_blocked_save', 'Save blocked state') }}</button>
+                                            <button type="button" class="shortcut-btn" id="progressBlockedClearBtn">{{ tr('dashboard.progress_blocked_clear', 'Clear blocked state') }}</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="action-subsection temp-only">
+                                    <div class="assistant-label">Ask the user</div>
+                                    <ul class="action-list" id="temporaryAskList">
+                                        <li>Choose one symptom card to start guided triage.</li>
+                                    </ul>
+                                </div>
+                                <div class="action-subsection temp-only">
+                                    <div class="assistant-label">Tell the user</div>
+                                    <ul class="action-list" id="temporaryTellList">
+                                        <li>We are checking the current state. Please wait for the next instruction.</li>
+                                    </ul>
+                                </div>
+                                <div class="action-subsection">
+                                    <div class="assistant-label">Do not do</div>
                                     <ul class="action-list" id="doNotDoList">
                                         <li>{{ tr('dashboard.no_restricted_action', 'No restricted action') }}</li>
                                     </ul>
                                 </div>
-                                <div class="action-subsection">
-                                    <div class="assistant-label">{{ tr('dashboard.escalate_if', 'Escalate if') }}</div>
+                                <div class="action-subsection pro-only">
+                                    <div class="assistant-label">Escalate if</div>
                                     <ul class="action-list" id="escalateIfList">
                                         <li>{{ tr('dashboard.no_escalation_condition', 'No escalation condition') }}</li>
                                     </ul>
                                 </div>
-                                
+                                <div class="guidance-warning temp-only" id="temporaryWarningBox">
+                                    Temporary mode suppresses dangerous actions and prioritizes safe instructions for the person in front of you.
+                                </div>
                             </details>
                         </article>
 
@@ -986,8 +1124,8 @@
                                 <summary id="actionBoardRunbookDetailsToggle">{{ tr('dashboard.action_board_runbook_details_show', 'Show runbook and decision details') }}</summary>
                                 <div class="fact-list compact-list">
                                     <div class="fact-item"><span>ID</span><strong id="runbookId">-</strong></div>
-                                    <div class="fact-item"><span>{{ tr('dashboard.effect_label', 'Effect') }}</span><strong id="runbookEffect">-</strong></div>
-                                    <div class="fact-item"><span>{{ tr('dashboard.approval_label', 'Approval') }}</span><strong id="runbookApproval">-</strong></div>
+                                    <div class="fact-item"><span>Effect</span><strong id="runbookEffect">-</strong></div>
+                                    <div class="fact-item"><span>Approval</span><strong id="runbookApproval">-</strong></div>
                                 </div>
                                 <ul class="step-list" id="runbookSteps">
                                         <li>{{ tr('dashboard.waiting_synthesis', 'Waiting for control-plane synthesis') }}</li>
@@ -996,7 +1134,7 @@
                             </details>
                         </article>
 
-                        <article class="action-card">
+                        <article class="action-card pro-only">
                             <div class="card-kicker">{{ tr('dashboard.decision_path', 'Decision Path') }}</div>
                             <p class="card-summary" id="decisionPathSummary">{{ tr('dashboard.decision_path_intro', 'Tactical first-pass decides quickly. Deterministic second-pass adds context before operator assist and AI explanation.') }}</p>
                             <details class="action-board-details" id="actionBoardDecisionDetails">
@@ -1010,7 +1148,7 @@
                             </details>
                         </article>
 
-                        <article class="action-card">
+                        <article class="action-card pro-only">
                             <div class="card-kicker">{{ tr('dashboard.rejected_stronger_actions', 'Rejected Stronger Actions') }}</div>
                             <p class="card-summary">{{ tr('dashboard.threat_impact', 'Separate the threat case from the path and service case before you decide on stronger control.') }}</p>
                             <details class="action-board-details" id="actionBoardRejectedDetails">
@@ -1023,21 +1161,21 @@
 
                         <article class="action-card control-card">
                             <div class="card-kicker">{{ tr('dashboard.gateway_controls', 'Gateway Controls') }}</div>
-                            <div class="mode-button-row" role="group" aria-label="{{ tr('dashboard.gateway_controls', 'Gateway Controls') }}">
-                                <button class="mode-btn" id="modePortalBtn" aria-pressed="false">Portal</button>
-                                <button class="mode-btn" id="modeShieldBtn" aria-pressed="false">Shield</button>
-                                <button class="mode-btn" id="modeScapegoatBtn" aria-pressed="false">Scapegoat</button>
+                            <div class="mode-button-row">
+                                <button class="mode-btn" id="modePortalBtn">Portal</button>
+                                <button class="mode-btn" id="modeShieldBtn">Shield</button>
+                                <button class="mode-btn" id="modeScapegoatBtn">Scapegoat</button>
                             </div>
                             <details class="action-board-details" id="actionBoardControlDetails">
                                 <summary id="actionBoardControlDetailsToggle">{{ tr('dashboard.action_board_control_details_show', 'Show control details') }}</summary>
                                 <div class="fact-list compact-list">
-                                    <div class="fact-item"><span>{{ tr('dashboard.last_change_label', 'Last Change') }}</span><strong id="modeLastChange">-</strong></div>
-                                    <div class="fact-item"><span>{{ tr('dashboard.requested_by_label', 'Requested By') }}</span><strong id="modeRequestedBy">-</strong></div>
+                                    <div class="fact-item"><span>Last Change</span><strong id="modeLastChange">-</strong></div>
+                                    <div class="fact-item"><span>Requested By</span><strong id="modeRequestedBy">-</strong></div>
                                 </div>
                                 <div class="quick-actions">
                                     <button class="quick-btn" id="portalAssistBtn">Portal Assist</button>
-                                    <button class="quick-btn quick-btn-caution" id="containBtn">Contain</button>
-                                    <button class="quick-btn quick-btn-caution" id="releaseBtn">Release</button>
+                                    <button class="quick-btn quick-btn-caution pro-only" id="containBtn">Contain</button>
+                                    <button class="quick-btn quick-btn-caution pro-only" id="releaseBtn">Release</button>
                                 </div>
                             </details>
                         </article>
@@ -1046,14 +1184,74 @@
             </section>
 
             <aside class="assistant-rail">
-                <section class="panel assistant-panel" id="handoffPanel">
+                <section class="panel topolite-nav-panel" id="topoliteNavPanel" data-tier="operations" data-op="noc">
                     <div class="panel-heading">
                         <div>
-                            <div class="panel-kicker">{{ tr('dashboard.handoff_brief_pack', 'Handoff Brief Pack') }}</div>
-                            <h2>{{ tr('dashboard.handoff_panel_title', 'Shift handoff') }}</h2>
+                            <div class="panel-kicker">Topo-Lite</div>
+                            <h2>Single-Screen Triage</h2>
                         </div>
                     </div>
+                    <nav class="topolite-nav-links" aria-label="Topo-Lite Sections">
+                        <a class="topolite-nav-link" href="#topoliteSingleScreen">Overview</a>
+                        <a class="topolite-nav-link" href="#topoliteTopologyCard">Topology</a>
+                        <a class="topolite-nav-link" href="#topoliteTimelineCard">Timeline</a>
+                    </nav>
+                </section>
+                <section class="panel assistant-panel" id="assistantPanel" data-tier="overview">
+                    <div class="panel-heading assistant-heading">
+                        <div class="assistant-title-row">
+                            <img class="assistant-logo" src="/images/MIO_Logo.png" alt="M.I.O. logo">
+                            <div>
+                            <div class="panel-kicker">{{ tr('dashboard.mio_assist', 'M.I.O. Assist') }}</div>
+                            <h2>Mission Intelligence Operator</h2>
+                            </div>
+                        </div>
+                        <span class="assistant-status" id="mioStatusBadge">IDLE</span>
+                    </div>
+                    <p class="assistant-intro" id="mioCurrentAnswer">{{ tr('dashboard.mio_intro', 'M.I.O. will surface current recommendation, user guidance, and reviewed runbook candidates here.') }}</p>
+                    <div class="assistant-block">
+                                <div class="assistant-label">{{ tr('dashboard.current_recommendation', 'Current Recommendation') }}</div>
+                        <div id="mioRecommendation">-</div>
+                    </div>
+                    <details class="panel-fold-details" id="mioAssistDetails">
+                        <summary id="mioAssistDetailsToggle">{{ tr('dashboard.mio_details_show', 'Show M.I.O. details') }}</summary>
+                        <div class="assistant-block">
+                            <div class="assistant-label">Last Manual Ask</div>
+                            <div id="mioLastAsk">No manual query executed yet.</div>
+                        </div>
+                        <div class="assistant-block">
+                                    <div class="assistant-label">{{ tr('dashboard.recommended_runbook', 'Recommended Runbook') }}</div>
+                            <div id="mioRunbookSummary">No runbook selected.</div>
+                        </div>
+                        <div class="assistant-block">
+                            <div class="assistant-label">Rationale</div>
+                            <ul class="action-list" id="mioRationaleList">
+                                <li>{{ tr('dashboard.no_rationale_available', 'No rationale available.') }}</li>
+                            </ul>
+                        </div>
+                        <div class="assistant-block">
+                                    <div class="assistant-label">{{ tr('dashboard.user_guidance', 'User Guidance') }}</div>
+                            <div id="mioUserGuidance">-</div>
+                        </div>
+                        <div class="assistant-block pro-only">
+                                    <div class="assistant-label">{{ tr('dashboard.review', 'Review') }}</div>
+                            <div id="mioReview">-</div>
+                        </div>
+                    </details>
+                    <form id="mioAskForm" class="assistant-form">
+                        <label for="mioQuestion">{{ tr('dashboard.ask_from_dashboard', 'Ask M.I.O. from the dashboard') }}</label>
+                        <textarea id="mioQuestion" rows="4" placeholder="Example: Users report Wi-Fi failure on one floor. What should I verify first?"></textarea>
+                        <div class="assistant-shortcuts">
+                            <button type="button" class="shortcut-btn" data-question="{{ tr('dashboard.question_wifi_trouble', 'How should I guide a user who cannot connect to Wi-Fi?') }}">Wi-Fi Trouble</button>
+                            <button type="button" class="shortcut-btn" data-question="{{ tr('dashboard.question_dns_failure', 'What should I verify when DNS lookup fails?') }}">DNS Failure</button>
+                            <button type="button" class="shortcut-btn" data-question="{{ tr('dashboard.question_gateway_uplink', 'What should I verify when the gateway or uplink looks unhealthy?') }}">Gateway / Uplink</button>
+                            <button type="button" class="shortcut-btn" data-question="{{ tr('dashboard.question_service_status', 'What should I verify when a service appears unhealthy?') }}">Service Status</button>
+                        </div>
+                        <button type="submit" id="mioAskSubmit" class="assistant-submit">{{ tr('dashboard.ask_submit', 'Ask M.I.O.') }}</button>
+                    </form>
+                    <div class="assistant-response" id="mioAskResponse">No manual query executed yet.</div>
                     <div class="assistant-block handoff-block">
+                        <div class="assistant-label">{{ tr('dashboard.handoff_brief_pack', 'Handoff Brief Pack') }}</div>
                         <div class="handoff-summary" id="handoffPackSummary">{{ tr('dashboard.handoff_waiting', 'Preparing handoff pack.') }}</div>
                         <div class="handoff-actions">
                             <button type="button" class="shortcut-btn" id="handoffCopyBtn">{{ tr('dashboard.handoff_copy', 'Copy') }}</button>
@@ -1067,27 +1265,28 @@
                     </div>
                     <div class="assistant-footer">
                         <div><span class="assistant-label">Mattermost</span><strong id="mattermostState">-</strong></div>
+                        <div><span class="assistant-label">Triggers</span><strong id="mattermostTriggers">-</strong></div>
                     </div>
                     <div class="assistant-shortcuts">
-                        <a id="assistantOpsCommLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.open_ops_comm', 'Open Ops Comm') }}</a>
-                        <a id="assistantMattermostLink" class="topbar-link" href="/ops-comm">{{ tr('dashboard.open_mattermost', 'Open Mattermost') }}</a>
+                        <a id="assistantOpsCommLink" class="topbar-link" href="/ops-comm">Open Ops Comm</a>
+                        <a id="assistantMattermostLink" class="topbar-link" href="/ops-comm">Open Mattermost</a>
                     </div>
                 </section>
 
             </aside>
         </div>
 
-        <section class="panel topolite-single-screen" id="topoliteSingleScreen">
+        <section class="panel topolite-single-screen pro-only" id="topoliteSingleScreen" data-tier="evidence">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">Topo-Lite</div>
-                    <h2>{{ tr('dashboard.topolite_title', 'Visual triage in one screen') }}</h2>
+                    <h2>Visual triage in one screen</h2>
                 </div>
-                <div class="panel-note" id="topoliteSingleScreenSummary">{{ tr('dashboard.topolite_waiting', 'Waiting for topology/timeline synthesis.') }}</div>
+                <div class="panel-note" id="topoliteSingleScreenSummary">Waiting for topology/timeline synthesis.</div>
             </div>
             <div class="topolite-single-grid">
                 <article class="evidence-card">
-                    <div class="card-kicker">{{ tr('dashboard.overview_label', 'Overview') }}</div>
+                    <div class="card-kicker">Overview</div>
                     <div class="topolite-badge-row" id="topoliteBadgeRow">
                         <span class="topolite-badge" id="topoliteThreatBadge">THREAT:-</span>
                         <span class="topolite-badge" id="topolitePathBadge">PATH:-</span>
@@ -1096,17 +1295,17 @@
                     <ul class="timeline-list" id="topoliteOverviewList"></ul>
                 </article>
                 <article class="evidence-card" id="topoliteTopologyCard">
-                    <div class="card-kicker">{{ tr('dashboard.topology_label', 'Topology') }}</div>
+                    <div class="card-kicker">Topology</div>
                     <ul class="timeline-list" id="topoliteTopologyTimeline"></ul>
                 </article>
                 <article class="evidence-card" id="topoliteTimelineCard">
-                    <div class="card-kicker">{{ tr('dashboard.timeline_label', 'Timeline') }}</div>
+                    <div class="card-kicker">Timeline</div>
                     <ul class="timeline-list" id="topoliteIncidentTimeline"></ul>
                 </article>
             </div>
         </section>
 
-        <section class="panel evidence-board evidence-board-lowered soc-scope" id="evidencePanel">
+        <section class="panel evidence-board evidence-board-lowered pro-only" data-tier="evidence">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.evidence_timeline', 'Evidence & Timeline') }}</div>
@@ -1114,26 +1313,23 @@
                 </div>
                 <div class="panel-heading-actions">
                     <div class="panel-note" id="healthSummaryLine">-</div>
-                    <label class="sr-only" for="evidenceFilterInput">{{ tr('dashboard.evidence_filter_label', 'Filter evidence entries') }}</label>
-                    <input type="search" class="evidence-filter-input" id="evidenceFilterInput"
-                           placeholder="{{ tr('dashboard.evidence_filter_placeholder', 'Filter by keyword (IP, SID, kind...)') }}"
-                           autocomplete="off" spellcheck="false">
-                    <button type="button" class="context-ask-btn" id="topoliteSyntheticToggleBtn">{{ tr('dashboard.toggle_synthetic', 'Toggle Synthetic') }}</button>
+                    <button type="button" class="context-ask-btn pro-only" id="topoliteSyntheticToggleBtn">Toggle Synthetic</button>
+                    <button type="button" class="context-ask-btn pro-only" data-question="{{ tr('dashboard.question_evidence_timeline_summary', 'Summarize the current evidence and timeline, and explain what to verify in live telemetry.') }}">{{ tr('dashboard.ask_about_this', 'Ask about this') }}</button>
                 </div>
             </div>
             <details class="panel-fold-details" id="evidenceTimelineDetails">
                 <summary id="evidenceTimelineDetailsToggle">{{ tr('dashboard.evidence_timeline_details_show', 'Show evidence and history') }}</summary>
                 <div class="evidence-grid">
                     <article class="evidence-card">
-                        <div class="card-kicker">{{ tr('dashboard.alert_queues', 'Alert Queues') }}</div>
+                        <div class="card-kicker">Alert Queues</div>
                         <ul class="timeline-list" id="alertQueuesTimeline"></ul>
                     </article>
                     <article class="evidence-card">
-                        <div class="card-kicker">{{ tr('dashboard.trend_snapshot', 'Trend Snapshot') }}</div>
+                        <div class="card-kicker">Trend Snapshot</div>
                         <ul class="timeline-list" id="dashboardTrendsTimeline"></ul>
                     </article>
                     <article class="evidence-card">
-                        <div class="card-kicker">{{ tr('dashboard.topolite_synthetic_topology', 'Topo-Lite Topology (Synthetic)') }}</div>
+                        <div class="card-kicker">Topo-Lite Topology (Synthetic)</div>
                         <ul class="timeline-list" id="topoliteSyntheticTopology"></ul>
                     </article>
                     <article class="evidence-card">
@@ -1144,11 +1340,11 @@
                         <div class="card-kicker">{{ tr('dashboard.decision_changes', 'Decision Changes') }}</div>
                         <ul class="timeline-list" id="decisionChangesTimeline"></ul>
                     </article>
-                    <article class="evidence-card">
+                    <article class="evidence-card pro-only">
                         <div class="card-kicker">{{ tr('dashboard.operator_interactions', 'Operator Interactions') }}</div>
                         <ul class="timeline-list" id="operatorInteractionsTimeline"></ul>
                     </article>
-                    <article class="evidence-card">
+                    <article class="evidence-card pro-only">
                         <div class="card-kicker">{{ tr('dashboard.background_history', 'Background History') }}</div>
                         <ul class="timeline-list" id="backgroundHistoryTimeline"></ul>
                     </article>
@@ -1160,7 +1356,7 @@
             </details>
         </section>
 
-        <section class="panel aggregator-panel" id="aggregatorPanel" hidden>
+        <section class="panel aggregator-panel" id="aggregatorPanel" hidden data-tier="system">
             <div class="panel-heading">
                 <div>
                     <div class="panel-kicker">{{ tr('dashboard.aggregator_kicker', 'Multi-Node') }}</div>
@@ -1194,11 +1390,9 @@
 
             <p class="panel-note aggregator-last-updated" id="aggregatorLastUpdated"></p>
         </section>
+        </div>
     </main>
 
-    <button type="button" class="back-to-top" id="backToTopBtn" hidden
-            aria-label="{{ tr('dashboard.back_to_top', 'Back to top') }}"
-            title="{{ tr('dashboard.back_to_top', 'Back to top') }}">&#x2191;</button>
     <div id="toast" class="toast"></div>
     <script>
         // Persist the URL ?token= into localStorage so the SPA's API polls
@@ -1217,5 +1411,6 @@
         window.AZAZEL_POLL_MS = {{ ui_poll_ms|tojson }};
     </script>
     <script src="/static/app.js?v={{ asset_version }}"></script>
+    <script src="/static/sentinel.js?v={{ asset_version }}"></script>
 </body>
 </html>

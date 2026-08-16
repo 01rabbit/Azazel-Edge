@@ -13,6 +13,9 @@ let dashboardTimer = null;
 let currentWorkspace = resolveInitialWorkspace();
 let latestState = {};
 let latestSummary = {};
+// Last aggregator/nodes snapshot, kept so the SENTINEL console overlay can
+// read peer-Edge fabric state from the shared poll instead of fetching again.
+let latestAggregator = {};
 let latestMattermost = {};
 let lastSuccessfulPollMs = null;
 let azConnConsecutiveFailures = 0;
@@ -803,6 +806,17 @@ async function refreshDashboardOnce() {
         azAttnFirstSnapshotDone = true;
         document.body.classList.remove('az-boot');
         azConnSetState(true);
+        // SENTINEL console hook: hand the freshly-rendered deterministic payloads
+        // to the tier/pipeline controller (sentinel.js). This reuses the existing
+        // single-flight poll — no extra requests — so the decision pipeline and
+        // tier status dots stay in lockstep with the board and never fabricate state.
+        try {
+            document.dispatchEvent(new CustomEvent('azazel:refresh', {
+                detail: { summary, actions, evidence, health, state, trends, boothFocus: decisionFocus || {}, aggregator: latestAggregator || {}, deceptionAz06: bundle.deception_az06 || {} },
+            }));
+        } catch (hookError) {
+            /* no-op: the console overlay is progressive enhancement only */
+        }
     } catch (error) {
         console.error('Dashboard render failed:', error);
         showToast(tr('dashboard.render_failed', 'Dashboard render failed: {error}', { error: error.message }), 'error');
@@ -890,6 +904,7 @@ async function fetchAggregatorStatus() {
         panel.hidden = false;
         if (fleetNavLink) fleetNavLink.hidden = false;
         const data = await resp.json();
+        latestAggregator = data || {};
         renderAggregatorPanel(data);
     } catch (_err) {
         // network error: keep last rendered state
