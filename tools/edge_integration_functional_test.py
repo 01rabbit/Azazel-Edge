@@ -91,6 +91,30 @@ AZ06_NODE_ID = "az06-func-node"
 REFERENCE_PACKAGE = "examples/packages/municipal-linux-v1/package.yaml"
 REFERENCE_COMPOSE = "runtime/compose/reference-linux.compose.yaml"
 
+# A deterministic, docker-capable capability snapshot injected into the
+# in-process AZ-06 server (one-command mode) so the descriptive plan builds
+# identically on any dev host — including machines with no Docker. This is safe
+# precisely because shadow/replay starts nothing and enforces nothing: the caps
+# only shape a descriptive plan, never a live placement. Mirrors AZ-06's own
+# scripts/dev/serve_shadow.py. Manual mode does not use this — the external
+# server owns its capability reporting.
+_SYNTHETIC_CAPS = {
+    "node_id": "az06-func-node",
+    "architecture": "amd64",
+    "cpu_cores": 4,
+    "memory_mb": 8192,
+    "storage_free_mb": 65536,
+    "runtime_adapters": {"docker_compose": True},
+    "kvm_available": False,
+    "gpu_available": False,
+}
+
+
+def _synthetic_capabilities() -> dict:
+    from azazel_fabric.deception_contracts import HostCapabilities
+
+    return HostCapabilities.model_validate(_SYNTHETIC_CAPS).model_dump(mode="json")
+
 
 def _log(msg: str) -> None:
     print(f"[edge-func] {msg}", flush=True)
@@ -308,6 +332,11 @@ def _shadow_server(args: argparse.Namespace, tmp: Path) -> Iterator[_ShadowServe
         package_path=package_path,
         state_root=tmp / "shadow-state",
         compose_file=deception_root / REFERENCE_COMPOSE,
+        # Inject a docker-capable snapshot so the descriptive plan builds on any
+        # dev host (no Docker required — shadow/replay starts nothing). Without
+        # this, a host with no Docker reports an unusable adapter and Edge's
+        # local evaluator returns rejected_by_local_evaluation.
+        capability_provider=_synthetic_capabilities,
     )
     server = ShadowReplayHTTPServer(service)
     server.start()
