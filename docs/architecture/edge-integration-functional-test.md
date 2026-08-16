@@ -45,6 +45,70 @@ Azazel-Fabric/      (v0.6.0 shared contracts, imported by all three)
 No single repo's CI installs all three packages together, so this is a **dev
 harness, not a CI test**.
 
+## Prepare all peers in one local environment
+
+Do this once. Check the four repos out side by side, then install AZ-06
+Deception and Knowledge (plus the Fabric v0.6.0 contracts they share) into a
+**single** virtualenv. Edge itself is not pip-installed — the harness puts its
+`py/` tree on `sys.path` — but running the harness from that same venv is what
+puts all four on one interpreter.
+
+```bash
+# 0) siblings side by side
+#    workspace/
+#      Azazel-Edge/  Azazel-Deception/  Azazel-Knowledge/  Azazel-Fabric/
+cd workspace
+for r in Edge Deception Knowledge Fabric; do
+    [ -d "Azazel-$r" ] || git clone https://github.com/01rabbit/Azazel-$r.git
+done
+
+# 1) one shared venv for every peer (run the harness from this venv too)
+python3.11 -m venv .venv && source .venv/bin/activate
+python -m pip install -U pip
+
+# 2) Fabric FIRST from the local checkout, so the git-pinned `@v0.6.0`
+#    dependency in Deception/Knowledge is already satisfied locally.
+pip install -e ./Azazel-Fabric
+
+# 3) Deception + Knowledge as editable installs, WITHOUT re-resolving the
+#    pinned git Fabric URL (that would re-fetch it over the network and shadow
+#    the local checkout). Add their runtime deps explicitly.
+pip install -e ./Azazel-Deception --no-deps
+pip install -e ./Azazel-Knowledge --no-deps
+pip install "PyYAML>=6.0" idna PyNaCl \
+            "fastapi>=0.115,<1" "pydantic>=2,<3" "uvicorn>=0.30,<1"
+```
+
+> Network-allowed alternative: if the venv may reach GitHub, skip `--no-deps`
+> and let pip fetch Fabric itself — `pip install -e ./Azazel-Deception` and
+> `pip install -e './Azazel-Knowledge[api]'`. The `[api]` extra pulls
+> fastapi/uvicorn/pydantic and the same tag-pinned Fabric. The local-first
+> recipe above is preferred because it keeps one editable Fabric shared by all
+> peers and needs no network.
+
+Verify the shared interpreter sees every peer at the same Fabric:
+
+```bash
+python - <<'PY'
+import azazel_fabric, azazel_deception, azazel_knowledge
+print("fabric   ", azazel_fabric.__version__)       # 0.6.0
+print("deception", azazel_deception.__file__)
+print("knowledge", azazel_knowledge.__file__)
+PY
+```
+
+With that venv active, **one-command mode already works end to end** — it
+starts the AZ-06 shadow server in-process and the Knowledge API + worker as
+subprocesses on this same interpreter:
+
+```bash
+cd Azazel-Edge
+python tools/edge_integration_functional_test.py
+```
+
+The rest of this document covers that one-command run and the manual run where
+you start each peer by hand.
+
 ## One-command mode (default)
 
 The harness starts the AZ-06 shadow server in-process and the Knowledge API +
