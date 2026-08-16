@@ -72,3 +72,7 @@ Capability drift, runtime-version drift, route/policy drift, resource exhaustion
 ## LLM boundary
 
 AZ-06 may use LLM assistance during package preparation, but Edge never accepts LLM output as live authority. Runtime LLM availability is not required for approved package execution.
+
+## Integrated functional test
+
+`tools/edge_integration_functional_test.py` drives this integration end-to-end from Edge against a locally-running AZ-06 shadow server and Azazel-Knowledge — covering both the shadow/replay + heartbeat seam and the advisory-only effectiveness loop (AZ-06 facts → Edge relay → Knowledge advisory). See [edge-integration-functional-test.md](edge-integration-functional-test.md) for the harness and the local startup procedures for each peer system.
