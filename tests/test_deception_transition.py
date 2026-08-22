@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import pytest
 
-from azazel_fabric.deception_contracts import verify_decision_signature
-
 from azazel_edge.deception_transition import (
     TransitionDecisionError,
     build_transition_decision,
     derive_decision_id,
     transition_decision_from_arbiter,
+)
+
+try:  # Canonical decision-signing lands in Fabric#9 (>= 0.8.0).
+    from azazel_fabric.deception_contracts import verify_decision_signature
+    _SIGNING = True
+except ImportError:  # pragma: no cover
+    verify_decision_signature = None
+    _SIGNING = False
+
+_needs_signing = pytest.mark.skipif(
+    not _SIGNING, reason="requires azazel_fabric >= 0.8.0 (decision_signing, Fabric#9)"
 )
 
 AS_OF = "2026-08-21T00:00:00+00:00"
@@ -47,6 +56,7 @@ def test_build_produces_canonical_decision():
 
 # -- determinism -------------------------------------------------------------
 
+@_needs_signing
 def test_build_is_deterministic():
     a = build_transition_decision(**_kw(), key=_KEY)
     b = build_transition_decision(**_kw(), key=_KEY)
@@ -80,6 +90,7 @@ def test_bad_as_of_rejected():
 
 # -- signing -----------------------------------------------------------------
 
+@_needs_signing
 def test_signed_decision_verifies_and_unsigned_has_no_signature():
     unsigned = build_transition_decision(**_kw())
     assert "decision_signature" not in unsigned
@@ -90,6 +101,7 @@ def test_signed_decision_verifies_and_unsigned_has_no_signature():
 
 # -- from arbiter ------------------------------------------------------------
 
+@_needs_signing
 def test_from_arbiter_carries_evidence_and_reason():
     arbiter = {
         "action": "redirect",
@@ -107,6 +119,7 @@ def test_from_arbiter_carries_evidence_and_reason():
 
 # -- end-to-end interop with the AZ-06 consumer (skip if not installed) ------
 
+@_needs_signing
 def test_edge_produced_decision_drives_az06_consumer():
     az06 = pytest.importorskip("azazel_deception.runtime.transitions")
     transport = pytest.importorskip("azazel_deception.runtime.transport")

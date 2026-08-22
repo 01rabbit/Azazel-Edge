@@ -28,10 +28,12 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
 
-from azazel_fabric.deception_contracts import (
-    EnvironmentTransitionDecision,
-    sign_decision,
-)
+from azazel_fabric.deception_contracts import EnvironmentTransitionDecision
+
+try:  # Canonical decision-signing lands in Fabric#9 (>= 0.8.0); optional here.
+    from azazel_fabric.deception_contracts import sign_decision
+except ImportError:  # pragma: no cover - exercised only on an older pinned Fabric
+    sign_decision = None
 
 _EXECUTABLE_STATUSES = frozenset({"accepted", "modified"})
 
@@ -140,6 +142,11 @@ def build_transition_decision(
 
     payload = decision.model_dump(mode="json")
     if key is not None:
+        if sign_decision is None:
+            raise TransitionDecisionError(
+                "signing a decision requires azazel_fabric >= 0.8.0 "
+                "(deception_contracts.decision_signing, Fabric#9)"
+            )
         payload = sign_decision(payload, key)
     return payload
 
