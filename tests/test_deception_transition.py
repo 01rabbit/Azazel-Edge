@@ -71,6 +71,24 @@ def test_derive_decision_id_is_stable_and_distinct():
     assert derive_decision_id(**{**base, "as_of": "2027-01-01T00:00:00+00:00"}) != derive_decision_id(**base)
 
 
+def test_derive_decision_id_no_delimiter_collision():
+    # A control character embedded in one field must not let two semantically
+    # different tuples hash to the same id (would collide AZ-06 anti-replay
+    # slots and wrongly reject a legit transition). Regression for the former
+    # \x1f-delimiter-join.
+    a = derive_decision_id(environment_id="A\x1fB", current_state="C",
+                           target_state="D", as_of="T")
+    b = derive_decision_id(environment_id="A", current_state="B\x1fC",
+                           target_state="D", as_of="T")
+    assert a != b
+    # evidence boundary likewise cannot be smuggled across fields
+    c = derive_decision_id(environment_id="e", current_state="s", target_state="t",
+                           as_of="T", evidence_refs=["x", "y"])
+    d = derive_decision_id(environment_id="e", current_state="s", target_state="t",
+                           as_of="T", evidence_refs=["x\x1ey"])
+    assert c != d
+
+
 # -- validation --------------------------------------------------------------
 
 def test_non_executable_status_rejected():

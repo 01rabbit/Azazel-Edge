@@ -25,6 +25,7 @@ Doctrine:
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
 
@@ -70,16 +71,25 @@ def derive_decision_id(
     Two distinct transitions (different environment/state/time/evidence) get
     distinct ids, so AZ-06's one-shot anti-replay ledger admits each exactly
     once; identical inputs reproduce the same id (replayable). Never random.
+
+    The inputs are encoded as unambiguous JSON (not delimiter-joined), so a
+    control character embedded in one field can never make two semantically
+    different tuples hash to the same id -- which would otherwise collide their
+    AZ-06 anti-replay slots and wrongly reject a legitimate transition.
     """
 
-    parts = [
-        environment_id,
-        current_state,
-        target_state,
-        as_of,
-        "\x1e".join(str(e) for e in evidence_refs),
-    ]
-    digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:24]
+    canonical = json.dumps(
+        [
+            environment_id,
+            current_state,
+            target_state,
+            as_of,
+            [str(e) for e in evidence_refs],
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
     return f"edge-transition-{digest}"
 
 
