@@ -87,10 +87,12 @@ class DecisionProjectionTests(unittest.TestCase):
             self.assertTrue(row["issued_at"])
 
     def test_native_stream_byte_identical_with_and_without_adapter(self) -> None:
-        # The native stream stamps a wall-clock `ts` (explanations/decision.py).
-        # Freeze it across both runs so this test isolates the ONLY variable it
-        # means to check -- adapter on vs off -- instead of flaking whenever the
-        # two runs happen to straddle a 1-second boundary.
+        # The native stream stamps wall-clock values from TWO sources: the `ts`
+        # in explanations/decision.py (datetime.now) and `reviewed_at` from the
+        # runbook review embedded via NOC runbook support (int(time.time())).
+        # Freeze BOTH across the two runs so this test isolates the ONLY variable
+        # it means to check -- adapter on vs off -- instead of flaking whenever
+        # the two runs happen to straddle a 1-second boundary.
         frozen = datetime(2026, 8, 22, 12, 0, 0, tzinfo=timezone.utc)
 
         class _FrozenDateTime(datetime):
@@ -98,7 +100,8 @@ class DecisionProjectionTests(unittest.TestCase):
             def now(cls, tz=None):
                 return frozen.astimezone(tz) if tz is not None else frozen
 
-        with mock.patch("azazel_edge.explanations.decision.datetime", _FrozenDateTime):
+        with mock.patch("azazel_edge.explanations.decision.datetime", _FrozenDateTime), \
+                mock.patch("time.time", return_value=1766000000.0):
             # Adapter enabled.
             with tempfile.TemporaryDirectory() as tmp:
                 out = Path(tmp) / "decision-explanations.jsonl"
