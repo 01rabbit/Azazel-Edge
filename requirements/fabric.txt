@@ -5,8 +5,11 @@
 # optional and baseline Edge behavior is unchanged.
 #
 # Pin policy: an exact tagged release, never a branch and never a development
-# commit, for field deployment. v0.6.0 adds the AZ-06 effectiveness-observation & transition contracts; v0.5.0 is the
+# commit, for field deployment. v0.8.0 adds the canonical Edge-decision transport
+# signature (decision_signing) + golden decision vectors, activating the signed
+# EnvironmentTransitionDecision producer and its cross-repo interop tests; v0.6.0
+# added the AZ-06 effectiveness-observation & transition contracts; v0.5.0 is the
 # deception-environment contract baseline (Azazel-Fabric#9).
 #
 # Import namespace: azazel_fabric.
-azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.6.0
+azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.8.0
