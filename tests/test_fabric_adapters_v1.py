@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -86,19 +87,34 @@ class DecisionProjectionTests(unittest.TestCase):
             self.assertTrue(row["issued_at"])
 
     def test_native_stream_byte_identical_with_and_without_adapter(self) -> None:
-        # Adapter enabled.
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "decision-explanations.jsonl"
-            _sample_explain(DecisionExplainer(output_path=out))
-            native_on = out.read_bytes()
-        # Adapter disabled (simulate azazel_fabric absent).
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(expl_fabric, "HAVE_AZAZEL_FABRIC", False):
-            out = Path(tmp) / "decision-explanations.jsonl"
-            _sample_explain(DecisionExplainer(output_path=out))
-            native_off = out.read_bytes()
-            # No projection files at all when the package is absent.
-            self.assertFalse(out.with_name(expl_fabric.DECISION_PROJECTION_NAME).exists())
-            self.assertFalse(out.with_name(expl_fabric.TRUST_PROJECTION_NAME).exists())
+        # The native stream stamps wall-clock values from TWO sources: the `ts`
+        # in explanations/decision.py (datetime.now) and `reviewed_at` from the
+        # runbook review embedded via NOC runbook support (int(time.time())).
+        # Freeze BOTH across the two runs so this test isolates the ONLY variable
+        # it means to check -- adapter on vs off -- instead of flaking whenever
+        # the two runs happen to straddle a 1-second boundary.
+        frozen = datetime(2026, 8, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+        class _FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen.astimezone(tz) if tz is not None else frozen
+
+        with mock.patch("azazel_edge.explanations.decision.datetime", _FrozenDateTime), \
+                mock.patch("time.time", return_value=1766000000.0):
+            # Adapter enabled.
+            with tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / "decision-explanations.jsonl"
+                _sample_explain(DecisionExplainer(output_path=out))
+                native_on = out.read_bytes()
+            # Adapter disabled (simulate azazel_fabric absent).
+            with tempfile.TemporaryDirectory() as tmp, mock.patch.object(expl_fabric, "HAVE_AZAZEL_FABRIC", False):
+                out = Path(tmp) / "decision-explanations.jsonl"
+                _sample_explain(DecisionExplainer(output_path=out))
+                native_off = out.read_bytes()
+                # No projection files at all when the package is absent.
+                self.assertFalse(out.with_name(expl_fabric.DECISION_PROJECTION_NAME).exists())
+                self.assertFalse(out.with_name(expl_fabric.TRUST_PROJECTION_NAME).exists())
         self.assertEqual(native_on, native_off)
 
     def test_adapter_failure_never_raises_into_caller(self) -> None:

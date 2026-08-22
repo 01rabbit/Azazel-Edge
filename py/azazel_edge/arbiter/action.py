@@ -14,6 +14,12 @@ def _to_int(value: Any, default: int) -> int:
 class ActionArbiter:
     REQUIRED_NOC_KEYS = {'availability', 'path_health', 'device_health', 'client_health', 'summary', 'evidence_ids'}
     REQUIRED_SOC_KEYS = {'suspicion', 'confidence', 'technique_likelihood', 'blast_radius', 'summary', 'evidence_ids'}
+    # NOC health labels that make the network "fragile" — aggressive controls
+    # (throttle/redirect/isolate) are suppressed under any of these. 'unknown'
+    # is included deliberately: missing/empty/malformed NOC health is NOT
+    # evidence of a healthy network, so it must degrade conservatively (fail
+    # safe) rather than be treated as 'good' and clear the way for isolation.
+    _FRAGILE_LABELS = frozenset({'poor', 'critical', 'unknown'})
     ACTION_PROFILES = {
         'observe': {
             'reversible': True,
@@ -84,19 +90,27 @@ class ActionArbiter:
         self._validate_schema(noc, self.REQUIRED_NOC_KEYS, 'noc')
         self._validate_schema(soc, self.REQUIRED_SOC_KEYS, 'soc')
 
-        availability_label = str(noc.get('availability', {}).get('label') or 'good')
-        path_label = str(noc.get('path_health', {}).get('label') or 'good')
-        device_label = str(noc.get('device_health', {}).get('label') or 'good')
-        suspicion_score = int(soc.get('suspicion', {}).get('score') or 0)
-        suspicion_label = str(soc.get('suspicion', {}).get('label') or 'low')
-        blast_score = int(soc.get('blast_radius', {}).get('score') or 0)
-        confidence_score = int(soc.get('confidence', {}).get('score') or 0)
+        # Null-safe extraction: a required key present with a non-dict value
+        # (e.g. None) or an empty health object must NOT crash or read as
+        # healthy. NOC health defaults to 'unknown' (treated as fragile); SOC
+        # signals default to their conservative floor (low / 0 → no escalation).
+        availability_label = self._health_label(noc, 'availability')
+        path_label = self._health_label(noc, 'path_health')
+        device_label = self._health_label(noc, 'device_health')
+        suspicion_score = _to_int(self._section(soc, 'suspicion').get('score'), 0)
+        suspicion_label = str(self._section(soc, 'suspicion').get('label') or 'low')
+        blast_score = _to_int(self._section(soc, 'blast_radius').get('score'), 0)
+        confidence_score = _to_int(self._section(soc, 'confidence').get('score'), 0)
 
         action = 'observe'
         reason = 'baseline'
         control_mode = 'none'
 
-        noc_fragile = availability_label in {'poor', 'critical'} or path_label in {'poor', 'critical'} or device_label in {'poor', 'critical'}
+        noc_fragile = (
+            availability_label in self._FRAGILE_LABELS
+            or path_label in self._FRAGILE_LABELS
+            or device_label in self._FRAGILE_LABELS
+        )
         mapping = self.policy["action_mapping"]
         strong_soc = suspicion_label in {'high', 'critical'} and confidence_score >= int(mapping["strong_soc"]["confidence_min"])
 
@@ -132,7 +146,7 @@ class ActionArbiter:
         elif strong_soc:
             action = 'notify'
             reason = 'soc_high_but_noc_fragile'
-        elif availability_label in {'poor', 'critical'} or path_label in {'poor', 'critical'} or device_label in {'poor', 'critical'}:
+        elif noc_fragile:
             action = 'notify'
             reason = 'noc_degraded_requires_operator_attention'
 
@@ -195,23 +209,46 @@ class ActionArbiter:
             raise ValueError(f'{name}_missing_keys:' + ','.join(missing))
 
     @staticmethod
-    def _chosen_evidence_ids(action: str, noc: Dict[str, Any], soc: Dict[str, Any]) -> List[str]:
-        chosen: List[str] = []
+    def _section(source: Dict[str, Any], key: str) -> Dict[str, Any]:
+        # A required key present with a non-dict value (e.g. None from a partial
+        # collector payload) must not crash `.get('label')`/`.get('score')`.
+        # Treat any non-dict section as empty so extraction degrades safely.
+        section = source.get(key)
+        return section if isinstance(section, dict) else {}
+
+    @classmethod
+    def _health_label(cls, source: Dict[str, Any], key: str) -> str:
+        # Missing / empty / non-dict health -> 'unknown' (a fragile label), never
+        # 'good'. Unknown NOC state must degrade conservatively, not clear the
+        # gate for aggressive control.
+        label = cls._section(source, key).get('label')
+        return str(label) if label else 'unknown'
+
+    @classmethod
+    def _evidence_ids(cls, source: Dict[str, Any], key: str) -> List[Any]:
+        ids = cls._section(source, key).get('evidence_ids', [])
+        return list(ids) if isinstance(ids, (list, tuple)) else []
+
+    @classmethod
+    def _chosen_evidence_ids(cls, action: str, noc: Dict[str, Any], soc: Dict[str, Any]) -> List[str]:
+        chosen: List[Any] = []
         if action == 'observe':
-            chosen.extend(noc.get('evidence_ids', []))
-            chosen.extend(soc.get('evidence_ids', []))
+            top_noc = noc.get('evidence_ids', [])
+            top_soc = soc.get('evidence_ids', [])
+            chosen.extend(top_noc if isinstance(top_noc, (list, tuple)) else [])
+            chosen.extend(top_soc if isinstance(top_soc, (list, tuple)) else [])
         elif action == 'notify':
             for key in ('availability', 'path_health', 'device_health', 'capacity_health', 'client_inventory_health', 'config_drift_health'):
-                chosen.extend(noc.get(key, {}).get('evidence_ids', []))
-            chosen.extend(soc.get('suspicion', {}).get('evidence_ids', []))
+                chosen.extend(cls._evidence_ids(noc, key))
+            chosen.extend(cls._evidence_ids(soc, 'suspicion'))
         else:
-            chosen.extend(soc.get('suspicion', {}).get('evidence_ids', []))
-            chosen.extend(soc.get('blast_radius', {}).get('evidence_ids', []))
-            chosen.extend(noc.get('availability', {}).get('evidence_ids', []))
-            chosen.extend(noc.get('path_health', {}).get('evidence_ids', []))
-            chosen.extend(noc.get('capacity_health', {}).get('evidence_ids', []))
-            chosen.extend(noc.get('client_inventory_health', {}).get('evidence_ids', []))
-            chosen.extend(noc.get('config_drift_health', {}).get('evidence_ids', []))
+            chosen.extend(cls._evidence_ids(soc, 'suspicion'))
+            chosen.extend(cls._evidence_ids(soc, 'blast_radius'))
+            chosen.extend(cls._evidence_ids(noc, 'availability'))
+            chosen.extend(cls._evidence_ids(noc, 'path_health'))
+            chosen.extend(cls._evidence_ids(noc, 'capacity_health'))
+            chosen.extend(cls._evidence_ids(noc, 'client_inventory_health'))
+            chosen.extend(cls._evidence_ids(noc, 'config_drift_health'))
         return sorted(dict.fromkeys(str(x) for x in chosen if str(x)))
 
     @staticmethod
@@ -273,17 +310,20 @@ class ActionArbiter:
             'selected_reason': reason,
             'noc_fragile': bool(noc_fragile),
             'strong_soc': bool(strong_soc),
-            'availability_label': str(noc.get('availability', {}).get('label') or 'unknown'),
-            'path_label': str(noc.get('path_health', {}).get('label') or 'unknown'),
-            'device_label': str(noc.get('device_health', {}).get('label') or 'unknown'),
-            'capacity_label': str(noc.get('capacity_health', {}).get('label') or 'unknown'),
-            'client_inventory_label': str(noc.get('client_inventory_health', {}).get('label') or 'unknown'),
-            'config_drift_label': str(noc.get('config_drift_health', {}).get('label') or 'unknown'),
-            'suspicion_label': str(soc.get('suspicion', {}).get('label') or 'unknown'),
-            'suspicion_score': int(soc.get('suspicion', {}).get('score') or 0),
-            'confidence_score': int(confidence_score or 0),
-            'blast_score': int(blast_score or 0),
-            'client_impact_score': int(client_impact.get('score') or 0),
-            'critical_client_count': int(client_impact.get('critical_client_count') or 0),
+            # Labels use the SAME fallback the decision math used (_health_label
+            # -> 'unknown'), so the audit trace can never claim a different NOC
+            # state than the one the decision was actually computed from.
+            'availability_label': cls._health_label(noc, 'availability'),
+            'path_label': cls._health_label(noc, 'path_health'),
+            'device_label': cls._health_label(noc, 'device_health'),
+            'capacity_label': cls._health_label(noc, 'capacity_health'),
+            'client_inventory_label': cls._health_label(noc, 'client_inventory_health'),
+            'config_drift_label': cls._health_label(noc, 'config_drift_health'),
+            'suspicion_label': str(cls._section(soc, 'suspicion').get('label') or 'unknown'),
+            'suspicion_score': _to_int(cls._section(soc, 'suspicion').get('score'), 0),
+            'confidence_score': _to_int(confidence_score, 0),
+            'blast_score': _to_int(blast_score, 0),
+            'client_impact_score': _to_int((client_impact or {}).get('score'), 0),
+            'critical_client_count': _to_int((client_impact or {}).get('critical_client_count'), 0),
             'safety_profile': cls.action_profile(action),
         }
