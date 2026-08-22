@@ -89,6 +89,28 @@ def test_derive_decision_id_no_delimiter_collision():
     assert c != d
 
 
+def test_materially_different_decisions_get_distinct_ids():
+    # A decision id must bind status, the expiry window (ttl), and reason_codes,
+    # not only environment/state/time/evidence. Otherwise two decisions that
+    # differ only in one of those collide on one id, and AZ-06's anti-replay
+    # ledger (keyed purely on decision_id) rejects the second, independently
+    # signed decision as a replay of the first -- silently blackholing a
+    # legitimate corrected/re-scoped decision.
+    base = _kw()
+    assert (
+        build_transition_decision(**base, status="accepted")["decision_id"]
+        != build_transition_decision(**base, status="modified")["decision_id"]
+    )
+    assert (
+        build_transition_decision(**_kw(ttl_seconds=60))["decision_id"]
+        != build_transition_decision(**_kw(ttl_seconds=315360000))["decision_id"]
+    )
+    assert (
+        build_transition_decision(**base)["decision_id"]
+        != build_transition_decision(**base, reason_codes=["soc_redirect"])["decision_id"]
+    )
+
+
 # -- validation --------------------------------------------------------------
 
 def test_non_executable_status_rejected():
@@ -99,6 +121,20 @@ def test_non_executable_status_rejected():
 def test_non_positive_ttl_rejected():
     with pytest.raises(TransitionDecisionError, match="ttl_seconds"):
         build_transition_decision(**_kw(ttl_seconds=0))
+
+
+def test_oversized_ttl_raises_transition_decision_error():
+    # A ttl large enough to overflow datetime arithmetic must fail closed with
+    # the module's own error type, not leak a raw OverflowError to callers that
+    # catch TransitionDecisionError.
+    with pytest.raises(TransitionDecisionError, match="ttl_seconds"):
+        build_transition_decision(**_kw(ttl_seconds=10 ** 18))
+
+
+def test_bool_ttl_rejected():
+    # bool is an int subclass; True must not sneak through as ttl_seconds=1.
+    with pytest.raises(TransitionDecisionError, match="ttl_seconds"):
+        build_transition_decision(**_kw(ttl_seconds=True))
 
 
 def test_bad_as_of_rejected():
@@ -161,3 +197,29 @@ def test_edge_produced_decision_drives_az06_consumer():
     )
     assert result["status"] == "shadow_simulated"
     assert result["edge_decision_id"] == signed["decision_id"]
+
+
+@_needs_signing
+def test_distinct_windows_are_not_false_replays_on_consumer(tmp_path):
+    # Regression: two decisions identical except for their expiry window must get
+    # distinct ids so the consumer's one-shot ledger admits BOTH, rather than
+    # rejecting the second as a replay of the first (which would happen if the id
+    # were blind to ttl/expiry).
+    az06 = pytest.importorskip("azazel_deception.runtime.transitions")
+    transport = pytest.importorskip("azazel_deception.runtime.transport")
+    state_mod = pytest.importorskip("azazel_deception.runtime.state")
+    testing = pytest.importorskip("azazel_fabric.testing")
+
+    executor = az06.TransitionExecutor.strict(
+        testing.make_transition_catalog(),
+        decision_authenticator=transport.HmacDecisionAuthenticator(_KEY),
+        state=state_mod.RuntimeStateStore(tmp_path),
+    )
+    common = dict(environment_id="env-1", current_state="baseline",
+                  transition_id="open-smb-share", as_of=AS_OF)
+    d_short = build_transition_decision(**_kw(ttl_seconds=60), key=_KEY)
+    d_long = build_transition_decision(**_kw(ttl_seconds=315360000), key=_KEY)
+    assert d_short["decision_id"] != d_long["decision_id"]
+    assert executor.execute(edge_decision=d_short, **common)["status"] == "shadow_simulated"
+    # The second, genuinely distinct decision is NOT treated as a replay.
+    assert executor.execute(edge_decision=d_long, **common)["status"] == "shadow_simulated"

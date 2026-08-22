@@ -64,13 +64,25 @@ def derive_decision_id(
     current_state: str,
     target_state: str,
     as_of: str,
+    status: str = "accepted",
+    expires_at: str | None = None,
     evidence_refs: Iterable[str] = (),
+    reason_codes: Iterable[str] = (),
 ) -> str:
     """Deterministically derive a unique decision id from the salient inputs.
 
-    Two distinct transitions (different environment/state/time/evidence) get
-    distinct ids, so AZ-06's one-shot anti-replay ledger admits each exactly
+    Two *materially distinct* decisions get distinct ids, so AZ-06's one-shot
+    anti-replay ledger (keyed purely on ``decision_id``) admits each exactly
     once; identical inputs reproduce the same id (replayable). Never random.
+
+    The id binds every field that makes a decision distinct -- not only
+    environment/state/time/evidence but also ``status``, the ``expires_at``
+    validity bound, and ``reason_codes``. Omitting any of these would let two
+    decisions that differ only in, say, status ("accepted" vs "modified") or
+    window (a 60s vs a 10-year expiry) collide on one id: the consumer would
+    then reject the second, independently-signed decision as a replay of the
+    first, silently blackholing a legitimate corrected/re-scoped decision (and
+    making *which* window/status is actually consumed depend on arrival order).
 
     The inputs are encoded as unambiguous JSON (not delimiter-joined), so a
     control character embedded in one field can never make two semantically
@@ -84,7 +96,10 @@ def derive_decision_id(
             current_state,
             target_state,
             as_of,
+            status,
+            expires_at,
             [str(e) for e in evidence_refs],
+            [str(r) for r in reason_codes],
         ],
         ensure_ascii=False,
         separators=(",", ":"),
@@ -120,11 +135,20 @@ def build_transition_decision(
         raise TransitionDecisionError(
             f"status must be one of {sorted(_EXECUTABLE_STATUSES)}, got {status!r}"
         )
-    if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
+    # bool is an int subclass; reject it explicitly so True/False can't pass as a ttl.
+    if not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or ttl_seconds <= 0:
         raise TransitionDecisionError("ttl_seconds must be a positive integer")
 
     effective_dt = _parse_iso_aware(as_of, field="as_of")
-    expires_dt = effective_dt + timedelta(seconds=ttl_seconds)
+    try:
+        # A very large ttl overflows timedelta/datetime arithmetic; keep the
+        # module's contract that bad inputs raise TransitionDecisionError rather
+        # than leaking a raw OverflowError to callers catching the former.
+        expires_dt = effective_dt + timedelta(seconds=ttl_seconds)
+    except (OverflowError, ValueError, OSError) as exc:
+        raise TransitionDecisionError(
+            f"ttl_seconds is out of range for a valid expiry: {ttl_seconds!r}"
+        ) from exc
     evidence = [str(e) for e in evidence_refs]
     reasons = [str(r) for r in reason_codes]
     decision_id = decision_id or derive_decision_id(
@@ -132,7 +156,10 @@ def build_transition_decision(
         current_state=current_state,
         target_state=target_state,
         as_of=as_of,
+        status=status,
+        expires_at=expires_dt.isoformat(),
         evidence_refs=evidence,
+        reason_codes=reasons,
     )
 
     try:
