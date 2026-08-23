@@ -6,7 +6,7 @@ from typing import Any, Mapping, Sequence
 from .contracts import MioHypothesis, MioRecommendation, MioSituationFrame
 
 
-FORBIDDEN_DIRECTIVE_KEYS = {"execute", "must_action", "override", "command", "shell", "activate", "enforce"}
+FORBIDDEN_DIRECTIVE_KEYS = {"execute", "must_action", "override", "command", "shell", "activate", "enforce", "executable"}
 ALLOWED_RECOMMENDED_ACTIONS = {"", "OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
 
 
@@ -22,9 +22,20 @@ class GroundingValidator:
 
     def validate_raw(self, payload: Mapping[str, Any]) -> GroundingResult:
         errors: list[str] = []
-        for key in payload:
-            if str(key).lower() in FORBIDDEN_DIRECTIVE_KEYS:
-                errors.append(f"forbidden_directive_key:{key}")
+
+        def walk(value: Any, path: str = "") -> None:
+            if isinstance(value, Mapping):
+                for key, nested in value.items():
+                    key_text = str(key)
+                    child_path = f"{path}.{key_text}" if path else key_text
+                    if key_text.lower() in FORBIDDEN_DIRECTIVE_KEYS:
+                        errors.append(f"forbidden_directive_key:{child_path}")
+                    walk(nested, child_path)
+            elif isinstance(value, (list, tuple)):
+                for index, nested in enumerate(value):
+                    walk(nested, f"{path}[{index}]")
+
+        walk(payload)
         refs = payload.get("evidence_refs", ())
         if isinstance(refs, (list, tuple)):
             for ref in refs:
