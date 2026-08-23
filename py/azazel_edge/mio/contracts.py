@@ -47,6 +47,8 @@ class ReasoningState(str, Enum):
     COMPLETE = "complete"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     BUDGET_EXHAUSTED = "budget_exhausted"
+    STALE_SUPERSEDED = "stale_superseded"
+    OPERATOR_CANCELLED = "operator_cancelled"
     VALIDATION_REJECTED = "validation_rejected"
     DEPENDENCY_UNAVAILABLE = "dependency_unavailable"
     ERROR_FALLBACK = "error_fallback"
