@@ -30,19 +30,21 @@ class StructuredTransport(Protocol):
     def __call__(self, task: str, prompt: str) -> Mapping[str, Any]: ...
 
 
-def _endpoint_kind(endpoint: str, *, allowed_hosts: set[str], allow_private_network: bool) -> str:
+def _endpoint_kind(endpoint: str, *, allow_private_network: bool) -> str:
     parsed = urlparse(endpoint)
     if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
         return 'rejected'
     host = parsed.hostname.lower()
-    if host in allowed_hosts:
-        return 'loopback_or_explicit'
+    if host == 'localhost':
+        return 'loopback'
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
+        # No arbitrary DNS names in the M.I.O. model path. This deliberately
+        # prevents an "allowed host" knob from becoming accidental cloud fallback.
         return 'rejected'
     if address.is_loopback:
-        return 'loopback_or_explicit'
+        return 'loopback'
     if allow_private_network and address.is_private and not address.is_link_local:
         return 'private_lan'
     return 'rejected'
@@ -66,7 +68,6 @@ class OllamaStructuredTransport:
     num_predict: int = 768
     num_thread: int = 2
     allow_private_network: bool = False
-    allowed_hosts: Sequence[str] = ('127.0.0.1', 'localhost', '::1')
     bearer_token: str = ''
     last_model: str = ''
 
@@ -81,11 +82,7 @@ class OllamaStructuredTransport:
         self.bearer_token = str(self.bearer_token or '')
         if not self.models:
             raise ValueError('mio_no_models_configured')
-        kind = _endpoint_kind(
-            self.endpoint,
-            allowed_hosts={str(x).lower() for x in self.allowed_hosts},
-            allow_private_network=bool(self.allow_private_network),
-        )
+        kind = _endpoint_kind(self.endpoint, allow_private_network=bool(self.allow_private_network))
         if kind == 'rejected':
             raise ValueError('mio_endpoint_not_local_or_allowed_private')
         if kind == 'private_lan':
