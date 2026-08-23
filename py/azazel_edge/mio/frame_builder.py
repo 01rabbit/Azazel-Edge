@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 from .contracts import DEFENSIVE_STATES, MioSituationFrame
@@ -73,9 +73,10 @@ class MioSituationFrameBuilder:
     attacker-controlled/sensitive data exposure.
     """
 
-    def __init__(self, *, max_event_refs: int = 32, stale_after_seconds: int = 300):
+    def __init__(self, *, max_event_refs: int = 32, stale_after_seconds: int = 300, future_clock_skew_seconds: int = 5):
         self.max_event_refs = max(1, min(int(max_event_refs), 64))
         self.stale_after_seconds = max(1, int(stale_after_seconds))
+        self.future_clock_skew_seconds = max(0, min(int(future_clock_skew_seconds), 60))
 
     def build(
         self,
@@ -95,6 +96,9 @@ class MioSituationFrameBuilder:
         state = str(current_defensive_state or '').upper()
         if state not in DEFENSIVE_STATES:
             raise ValueError('invalid_current_defensive_state')
+        created = _parse_ts(created_at)
+        if created is None:
+            raise ValueError('invalid_frame_created_at')
 
         noc = _as_mapping(noc_evaluation)
         soc = _as_mapping(soc_evaluation)
@@ -155,10 +159,12 @@ class MioSituationFrameBuilder:
             if ts is not None and (newest_ts is None or ts > newest_ts):
                 newest_ts = ts
 
-        created = _parse_ts(created_at) or datetime.now(timezone.utc)
         if newest_ts is None:
             freshness_seconds = self.stale_after_seconds + 1
             unknowns.append('NO_TIMESTAMPED_EVIDENCE')
+        elif newest_ts > created + timedelta(seconds=self.future_clock_skew_seconds):
+            freshness_seconds = self.stale_after_seconds + 1
+            unknowns.append('EVIDENCE_TIMESTAMP_FUTURE')
         else:
             freshness_seconds = max(0, int((created - newest_ts).total_seconds()))
             if freshness_seconds > self.stale_after_seconds:
