@@ -101,6 +101,44 @@ def test_frame_builder_marks_fragile_noc_high_soc_as_competing_constraint():
     assert 'NO_TIMESTAMPED_EVIDENCE' in frame.unknowns
 
 
+def test_frame_builder_rejects_invalid_created_at():
+    with pytest.raises(ValueError, match='invalid_frame_created_at'):
+        MioSituationFrameBuilder().build(
+            events=[],
+            noc_evaluation={},
+            soc_evaluation={},
+            current_defensive_state='OBSERVE',
+            mission='test',
+            trace_id='t',
+            frame_id='f',
+            created_at='not-a-time',
+        )
+
+
+def test_frame_builder_treats_future_evidence_as_stale_unknown():
+    event = EvidenceEvent.build(
+        ts='2026-08-23T00:01:00Z',
+        source='suricata_eve',
+        kind='alert',
+        subject='subject',
+        severity=10,
+        confidence=0.5,
+        attrs={},
+    )
+    frame = MioSituationFrameBuilder(stale_after_seconds=300, future_clock_skew_seconds=5).build(
+        events=[event],
+        noc_evaluation={'summary': {'status': 'good'}, 'evidence_ids': []},
+        soc_evaluation={'summary': {'status': 'low'}, 'evidence_ids': []},
+        current_defensive_state='OBSERVE',
+        mission='test',
+        trace_id='t',
+        frame_id='f',
+        created_at='2026-08-23T00:00:00Z',
+    )
+    assert 'EVIDENCE_TIMESTAMP_FUTURE' in frame.unknowns
+    assert frame.freshness_seconds > 300
+
+
 def test_governed_adapter_allows_existing_ambiguous_suricata_gate_without_logging_prompt():
     audit = FakeAudit()
     transport = FakeTransport({'hypotheses': [{'statement': 'credential attack'}]})
@@ -143,13 +181,27 @@ def test_ollama_transport_rejects_public_or_arbitrary_dns_endpoint_by_default():
         OllamaStructuredTransport(endpoint='http://8.8.8.8:11434', models=('qwen3.5:2b',))
 
 
-def test_ollama_transport_private_lan_requires_explicit_opt_in():
+def test_ollama_transport_private_lan_requires_opt_in_tls_and_auth():
     with pytest.raises(ValueError, match='mio_endpoint_not_local_or_allowed_private'):
         OllamaStructuredTransport(endpoint='http://192.168.10.5:11434', models=('qwen3.5:2b',))
+    with pytest.raises(ValueError, match='mio_private_endpoint_requires_https'):
+        OllamaStructuredTransport(
+            endpoint='http://192.168.10.5:11434',
+            models=('qwen3.5:2b',),
+            allow_private_network=True,
+            bearer_token='token',
+        )
+    with pytest.raises(ValueError, match='mio_private_endpoint_requires_auth'):
+        OllamaStructuredTransport(
+            endpoint='https://192.168.10.5:11434',
+            models=('qwen3.5:2b',),
+            allow_private_network=True,
+        )
     transport = OllamaStructuredTransport(
-        endpoint='http://192.168.10.5:11434',
+        endpoint='https://192.168.10.5:11434',
         models=('qwen3.5:2b', 'qwen3.5:0.8b'),
         allow_private_network=True,
+        bearer_token='test-token',
     )
     assert tuple(transport.models) == ('qwen3.5:2b', 'qwen3.5:0.8b')
 
