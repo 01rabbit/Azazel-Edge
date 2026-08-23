@@ -13,10 +13,12 @@ from .contracts import (
     ReasoningState,
 )
 from .grounding import GroundingValidator
+from .model_adapter import MioModelBlocked, MioModelUnavailable
 from .playbook import PromptCompiler, ReasoningPlaybook
 from .trace import ReasoningTrace
 
 ModelInvoker = Callable[[str, str], Mapping[str, Any]]
+CancelCheck = Callable[[], bool]
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,7 @@ class ReasoningBudget:
     max_broker_calls: int = 3
     max_hypotheses: int = 4
     max_gaps: int = 3
+    max_frame_age_seconds: int = 300
 
 
 @dataclass(frozen=True)
@@ -53,20 +56,50 @@ class BoundedReasoningLoop:
         self.compiler = compiler or PromptCompiler()
         self.budget = budget or ReasoningBudget()
 
-    def run(self, *, frame: MioSituationFrame, playbook: ReasoningPlaybook, cycle_id: str) -> ReasoningOutcome:
+    @staticmethod
+    def _is_cancelled(cancel_check: CancelCheck | None) -> bool:
+        if cancel_check is None:
+            return False
+        try:
+            return bool(cancel_check())
+        except Exception:
+            return True
+
+    def run(
+        self,
+        *,
+        frame: MioSituationFrame,
+        playbook: ReasoningPlaybook,
+        cycle_id: str,
+        cancel_check: CancelCheck | None = None,
+    ) -> ReasoningOutcome:
         trace = ReasoningTrace(trace_id=frame.trace_id, cycle_id=cycle_id)
         errors: list[str] = []
         model_calls = 0
         broker_calls = 0
         trace.record(state=ReasoningState.FRAME_READY.value, kind="frame", payload={"frame_id": frame.frame_id})
 
+        if frame.freshness_seconds > max(0, int(self.budget.max_frame_age_seconds)):
+            errors.append('frame_stale')
+            return self._finish(trace, ReasoningState.STALE_SUPERSEDED, (), (), None, errors)
+        if self._is_cancelled(cancel_check):
+            errors.append('operator_cancelled')
+            return self._finish(trace, ReasoningState.OPERATOR_CANCELLED, (), (), None, errors)
+
         try:
             prompt = self.compiler.compile(frame=frame, playbook=playbook, task="generate_hypotheses")
             raw_h = self.model("generate_hypotheses", prompt)
             model_calls += 1
+        except (MioModelBlocked, MioModelUnavailable) as exc:
+            errors.append(f"model_dependency_unavailable:{str(exc)[:120]}")
+            return self._finish(trace, ReasoningState.DEPENDENCY_UNAVAILABLE, (), (), None, errors)
         except Exception as exc:
             errors.append(f"model_hypothesis_error:{str(exc)[:120]}")
             return self._finish(trace, ReasoningState.ERROR_FALLBACK, (), (), None, errors)
+
+        if self._is_cancelled(cancel_check):
+            errors.append('operator_cancelled')
+            return self._finish(trace, ReasoningState.OPERATOR_CANCELLED, (), (), None, errors)
 
         items = raw_h.get("hypotheses", []) if isinstance(raw_h, Mapping) else []
         if not isinstance(items, list):
@@ -90,6 +123,9 @@ class BoundedReasoningLoop:
         try:
             raw_g = self.model("identify_evidence_gaps", prompt)
             model_calls += 1
+        except (MioModelBlocked, MioModelUnavailable) as exc:
+            errors.append(f"model_dependency_unavailable:{str(exc)[:120]}")
+            return self._finish(trace, ReasoningState.DEPENDENCY_UNAVAILABLE, hypotheses, (), None, errors)
         except Exception as exc:
             errors.append(f"model_gap_error:{str(exc)[:120]}")
             return self._finish(trace, ReasoningState.ERROR_FALLBACK, hypotheses, (), None, errors)
@@ -106,6 +142,9 @@ class BoundedReasoningLoop:
         additional_refs: list[str] = []
         broker_summaries: list[dict[str, Any]] = []
         for index, gap in enumerate(sorted(gaps, key=lambda g: g.priority, reverse=True)):
+            if self._is_cancelled(cancel_check):
+                errors.append('operator_cancelled')
+                return self._finish(trace, ReasoningState.OPERATOR_CANCELLED, hypotheses, gaps, None, errors)
             if broker_calls >= self.budget.max_broker_calls:
                 errors.append("broker_budget_exhausted")
                 break
@@ -149,6 +188,10 @@ class BoundedReasoningLoop:
         if model_calls >= self.budget.max_model_calls:
             errors.append("model_budget_exhausted_before_recommendation")
             return self._finish(trace, ReasoningState.BUDGET_EXHAUSTED, hypotheses, gaps, None, errors)
+        if self._is_cancelled(cancel_check):
+            errors.append('operator_cancelled')
+            return self._finish(trace, ReasoningState.OPERATOR_CANCELLED, hypotheses, gaps, None, errors)
+
         prompt = self.compiler.compile(
             frame=frame,
             playbook=playbook,
@@ -158,6 +201,9 @@ class BoundedReasoningLoop:
         )
         try:
             raw_r = self.model("recommend", prompt)
+        except (MioModelBlocked, MioModelUnavailable) as exc:
+            errors.append(f"model_dependency_unavailable:{str(exc)[:120]}")
+            return self._finish(trace, ReasoningState.DEPENDENCY_UNAVAILABLE, hypotheses, gaps, None, errors)
         except Exception as exc:
             errors.append(f"model_recommend_error:{str(exc)[:120]}")
             return self._finish(trace, ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None, errors)
