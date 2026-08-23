@@ -7,7 +7,7 @@ from .contracts import MioEvidenceGap, MioHypothesis, MioRecommendation, MioSitu
 
 
 FORBIDDEN_DIRECTIVE_KEYS = {"execute", "must_action", "override", "command", "shell", "activate", "enforce", "executable"}
-ALLOWED_RECOMMENDED_ACTIONS = {"", "OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
+ALLOWED_RECOMMENDED_ACTIONS = {"OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
 
 
 @dataclass(frozen=True)
@@ -59,7 +59,13 @@ class GroundingValidator:
                 seen_ids.add(hypothesis.hypothesis_id)
             if not hypothesis.statement:
                 errors.append(f"empty_statement:{hypothesis.hypothesis_id}")
-            refs = set(hypothesis.supporting_evidence_refs) | set(hypothesis.contradicting_evidence_refs)
+
+            supporting = set(hypothesis.supporting_evidence_refs)
+            contradicting = set(hypothesis.contradicting_evidence_refs)
+            for ref in sorted(supporting & contradicting):
+                errors.append(f"conflicting_hypothesis_evidence_ref:{hypothesis.hypothesis_id}:{ref}")
+
+            refs = supporting | contradicting
             for ref in refs:
                 if ref not in self._allowed_refs:
                     errors.append(f"unknown_hypothesis_ref:{hypothesis.hypothesis_id}:{ref}")
@@ -98,8 +104,16 @@ class GroundingValidator:
         errors: list[str] = []
         if recommendation.executable:
             errors.append("recommendation_must_not_be_executable")
-        if recommendation.recommended_action not in ALLOWED_RECOMMENDED_ACTIONS:
+        if not recommendation.summary.strip():
+            errors.append("empty_recommendation_summary")
+        if not recommendation.rationale.strip():
+            errors.append("empty_recommendation_rationale")
+        if not recommendation.recommended_action.strip():
+            errors.append("empty_recommended_action")
+        elif recommendation.recommended_action not in ALLOWED_RECOMMENDED_ACTIONS:
             errors.append("unknown_recommended_action")
+        if not recommendation.evidence_refs:
+            errors.append("empty_recommendation_evidence_refs")
         for ref in recommendation.evidence_refs:
             if ref not in self._allowed_refs:
                 errors.append(f"unknown_recommendation_ref:{ref}")
