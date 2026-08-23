@@ -23,7 +23,7 @@ CancelCheck = Callable[[], bool]
 
 @dataclass(frozen=True)
 class ReasoningBudget:
-    max_model_calls: int = 3
+    max_model_calls: int = 4
     max_broker_calls: int = 3
     max_hypotheses: int = 4
     max_gaps: int = 3
@@ -185,6 +185,60 @@ class BoundedReasoningLoop:
                 payload={"request_id": result.request_id, "ok": result.ok, "evidence_refs": list(result.evidence_refs)},
             )
 
+        # New evidence must be allowed to strengthen, weaken, falsify, or leave
+        # hypotheses unresolved before a recommendation is produced. This step
+        # is skipped when no capability returned a result, avoiding a pointless
+        # model call on constrained hardware.
+        if broker_summaries:
+            if model_calls >= self.budget.max_model_calls:
+                errors.append("model_budget_exhausted_before_hypothesis_update")
+                return self._finish(trace, ReasoningState.BUDGET_EXHAUSTED, hypotheses, gaps, None, errors)
+            if self._is_cancelled(cancel_check):
+                errors.append('operator_cancelled')
+                return self._finish(trace, ReasoningState.OPERATOR_CANCELLED, hypotheses, gaps, None, errors)
+            prompt = self.compiler.compile(
+                frame=frame,
+                playbook=playbook,
+                hypotheses=hypotheses,
+                broker_results=broker_summaries,
+                task="update_hypotheses",
+            )
+            try:
+                raw_u = self.model("update_hypotheses", prompt)
+                model_calls += 1
+            except (MioModelBlocked, MioModelUnavailable) as exc:
+                errors.append(f"model_dependency_unavailable:{str(exc)[:120]}")
+                return self._finish(trace, ReasoningState.DEPENDENCY_UNAVAILABLE, hypotheses, gaps, None, errors)
+            except Exception as exc:
+                errors.append(f"model_hypothesis_update_error:{str(exc)[:120]}")
+                return self._finish(trace, ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None, errors)
+            if not isinstance(raw_u, Mapping):
+                errors.append("hypothesis_update_not_mapping")
+                return self._finish(trace, ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None, errors)
+            raw_update_check = GroundingValidator(frame, additional_evidence_refs=additional_refs).validate_raw(raw_u)
+            if not raw_update_check.ok:
+                errors.extend(raw_update_check.errors)
+                return self._finish(trace, ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None, errors)
+            update_items = raw_u.get("hypotheses", [])
+            if not isinstance(update_items, list):
+                errors.append("updated_hypotheses_not_list")
+                return self._finish(trace, ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None, errors)
+            updated_hypotheses = tuple(
+                MioHypothesis.from_mapping(item, ordinal=i + 1)
+                for i, item in enumerate(update_items[: self.budget.max_hypotheses])
+                if isinstance(item, Mapping)
+            )
+            updated_check = GroundingValidator(frame, additional_evidence_refs=additional_refs).validate_hypotheses(updated_hypotheses)
+            if not updated_check.ok:
+                errors.extend(updated_check.errors)
+                return self._finish(trace, ReasoningState.VALIDATION_REJECTED, updated_hypotheses, gaps, None, errors)
+            hypotheses = updated_hypotheses
+            trace.record(
+                state=ReasoningState.HYPOTHESES_UPDATED.value,
+                kind="hypotheses_updated",
+                payload={"ids": [h.hypothesis_id for h in hypotheses], "evidence_refs": list(dict.fromkeys(additional_refs))[:32]},
+            )
+
         if model_calls >= self.budget.max_model_calls:
             errors.append("model_budget_exhausted_before_recommendation")
             return self._finish(trace, ReasoningState.BUDGET_EXHAUSTED, hypotheses, gaps, None, errors)
@@ -201,6 +255,7 @@ class BoundedReasoningLoop:
         )
         try:
             raw_r = self.model("recommend", prompt)
+            model_calls += 1
         except (MioModelBlocked, MioModelUnavailable) as exc:
             errors.append(f"model_dependency_unavailable:{str(exc)[:120]}")
             return self._finish(trace, ReasoningState.DEPENDENCY_UNAVAILABLE, hypotheses, gaps, None, errors)
@@ -232,7 +287,7 @@ class BoundedReasoningLoop:
         trace.record(
             state=ReasoningState.COMPLETE.value,
             kind="complete",
-            payload={"model_calls": model_calls + 1, "broker_calls": broker_calls},
+            payload={"model_calls": model_calls, "broker_calls": broker_calls},
         )
         return ReasoningOutcome(ReasoningState.COMPLETE, hypotheses, gaps, recommendation, tuple(errors), trace.events())
 
