@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from .contracts import MioHypothesis, MioRecommendation, MioSituationFrame
+from .contracts import MioEvidenceGap, MioHypothesis, MioRecommendation, MioSituationFrame
 
 
 FORBIDDEN_DIRECTIVE_KEYS = {"execute", "must_action", "override", "command", "shell", "activate", "enforce", "executable"}
@@ -49,13 +49,49 @@ class GroundingValidator:
             errors.append("no_hypotheses")
         if len(hypotheses) > 6:
             errors.append("too_many_hypotheses")
+        seen_ids: set[str] = set()
         for hypothesis in hypotheses:
+            if not hypothesis.hypothesis_id:
+                errors.append("empty_hypothesis_id")
+            elif hypothesis.hypothesis_id in seen_ids:
+                errors.append(f"duplicate_hypothesis_id:{hypothesis.hypothesis_id}")
+            else:
+                seen_ids.add(hypothesis.hypothesis_id)
             if not hypothesis.statement:
                 errors.append(f"empty_statement:{hypothesis.hypothesis_id}")
             refs = set(hypothesis.supporting_evidence_refs) | set(hypothesis.contradicting_evidence_refs)
             for ref in refs:
                 if ref not in self._allowed_refs:
                     errors.append(f"unknown_hypothesis_ref:{hypothesis.hypothesis_id}:{ref}")
+        return GroundingResult(not errors, tuple(errors))
+
+    def validate_evidence_gaps(
+        self,
+        gaps: Sequence[MioEvidenceGap],
+        *,
+        hypotheses: Sequence[MioHypothesis],
+        allowed_capabilities: Sequence[str],
+    ) -> GroundingResult:
+        errors: list[str] = []
+        hypothesis_ids = {item.hypothesis_id for item in hypotheses}
+        allowed = {str(item) for item in allowed_capabilities}
+        seen_gap_ids: set[str] = set()
+        for gap in gaps:
+            if not gap.gap_id:
+                errors.append("empty_gap_id")
+            elif gap.gap_id in seen_gap_ids:
+                errors.append(f"duplicate_gap_id:{gap.gap_id}")
+            else:
+                seen_gap_ids.add(gap.gap_id)
+            if not gap.question:
+                errors.append(f"empty_gap_question:{gap.gap_id}")
+            if not gap.capability:
+                errors.append(f"empty_gap_capability:{gap.gap_id}")
+            elif gap.capability not in allowed:
+                errors.append(f"capability_not_allowed_by_playbook:{gap.capability}")
+            for hypothesis_id in gap.discriminates_hypothesis_ids:
+                if hypothesis_id not in hypothesis_ids:
+                    errors.append(f"unknown_gap_hypothesis:{gap.gap_id}:{hypothesis_id}")
         return GroundingResult(not errors, tuple(errors))
 
     def validate_recommendation(self, recommendation: MioRecommendation) -> GroundingResult:
