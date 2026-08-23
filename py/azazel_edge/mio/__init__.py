@@ -1,5 +1,6 @@
 from .broker import CapabilityBroker, CapabilityBrokerError, CapabilitySpec
 from .contracts import (
+    DEFENSIVE_STATES,
     HypothesisStatus,
     MioCapabilityRequest,
     MioCapabilityResult,
@@ -9,7 +10,15 @@ from .contracts import (
     MioSituationFrame,
     ReasoningState,
 )
+from .frame_builder import MioSituationFrameBuilder
 from .grounding import GroundingResult, GroundingValidator
+from .model_adapter import (
+    GovernedMioModelAdapter,
+    MioModelBlocked,
+    MioModelError,
+    MioModelUnavailable,
+    OllamaStructuredTransport,
+)
 from .playbook import DEFAULT_PLAYBOOKS, PromptCompiler, ReasoningPlaybook
 from .reasoning import BoundedReasoningLoop, ReasoningBudget, ReasoningOutcome
 from .replay import ReplayFixture, run_replay
@@ -21,6 +30,8 @@ __all__ = [
     "CapabilityBrokerError",
     "CapabilitySpec",
     "DEFAULT_PLAYBOOKS",
+    "DEFENSIVE_STATES",
+    "GovernedMioModelAdapter",
     "GroundingResult",
     "GroundingValidator",
     "HypothesisStatus",
@@ -28,8 +39,13 @@ __all__ = [
     "MioCapabilityResult",
     "MioEvidenceGap",
     "MioHypothesis",
+    "MioModelBlocked",
+    "MioModelError",
+    "MioModelUnavailable",
     "MioRecommendation",
     "MioSituationFrame",
+    "MioSituationFrameBuilder",
+    "OllamaStructuredTransport",
     "PromptCompiler",
     "ReasoningBudget",
     "ReasoningOutcome",
