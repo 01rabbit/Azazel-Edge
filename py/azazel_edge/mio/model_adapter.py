@@ -30,29 +30,32 @@ class StructuredTransport(Protocol):
     def __call__(self, task: str, prompt: str) -> Mapping[str, Any]: ...
 
 
-def _endpoint_allowed(endpoint: str, *, allowed_hosts: set[str], allow_private_network: bool) -> bool:
+def _endpoint_kind(endpoint: str, *, allowed_hosts: set[str], allow_private_network: bool) -> str:
     parsed = urlparse(endpoint)
-    if parsed.scheme != 'http' or not parsed.hostname:
-        return False
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
+        return 'rejected'
     host = parsed.hostname.lower()
     if host in allowed_hosts:
-        return True
+        return 'loopback_or_explicit'
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
-        return False
+        return 'rejected'
     if address.is_loopback:
-        return True
-    return bool(allow_private_network and address.is_private and not address.is_link_local)
+        return 'loopback_or_explicit'
+    if allow_private_network and address.is_private and not address.is_link_local:
+        return 'private_lan'
+    return 'rejected'
 
 
 @dataclass
 class OllamaStructuredTransport:
     """Small, bounded Ollama JSON transport for local/on-prem inference.
 
-    Default endpoint policy is loopback-only. A private LAN address requires an
-    explicit `allow_private_network=True` opt-in; arbitrary DNS/public endpoints
-    are not accepted. This keeps cloud fallback out of the default M.I.O. path.
+    Default endpoint policy is loopback-only. A private LAN endpoint requires
+    explicit opt-in, HTTPS, and a bearer token (for an authenticated local
+    reverse proxy or equivalent). Public endpoints and arbitrary DNS names are
+    rejected so cloud fallback cannot appear accidentally.
     """
 
     endpoint: str = 'http://127.0.0.1:11434'
@@ -64,6 +67,7 @@ class OllamaStructuredTransport:
     num_thread: int = 2
     allow_private_network: bool = False
     allowed_hosts: Sequence[str] = ('127.0.0.1', 'localhost', '::1')
+    bearer_token: str = ''
     last_model: str = ''
 
     def __post_init__(self) -> None:
@@ -74,14 +78,22 @@ class OllamaStructuredTransport:
         self.num_predict = max(32, min(int(self.num_predict), 4096))
         self.num_thread = max(1, min(int(self.num_thread), 32))
         self.models = tuple(str(model).strip()[:128] for model in self.models if str(model).strip())
+        self.bearer_token = str(self.bearer_token or '')
         if not self.models:
             raise ValueError('mio_no_models_configured')
-        if not _endpoint_allowed(
+        kind = _endpoint_kind(
             self.endpoint,
             allowed_hosts={str(x).lower() for x in self.allowed_hosts},
             allow_private_network=bool(self.allow_private_network),
-        ):
+        )
+        if kind == 'rejected':
             raise ValueError('mio_endpoint_not_local_or_allowed_private')
+        if kind == 'private_lan':
+            parsed = urlparse(self.endpoint)
+            if parsed.scheme != 'https':
+                raise ValueError('mio_private_endpoint_requires_https')
+            if not self.bearer_token:
+                raise ValueError('mio_private_endpoint_requires_auth')
 
     def __call__(self, task: str, prompt: str) -> Mapping[str, Any]:
         if not isinstance(prompt, str) or not prompt:
@@ -112,10 +124,13 @@ class OllamaStructuredTransport:
             },
         }
         data = json.dumps(body, separators=(',', ':'), ensure_ascii=True).encode('utf-8')
+        headers = {'Content-Type': 'application/json', 'User-Agent': 'azazel-edge-mio-shadow/1'}
+        if self.bearer_token:
+            headers['Authorization'] = 'Bearer ' + self.bearer_token
         request = urllib.request.Request(
             self.endpoint + '/api/generate',
             data=data,
-            headers={'Content-Type': 'application/json', 'User-Agent': 'azazel-edge-mio-shadow/1'},
+            headers=headers,
             method='POST',
         )
         try:
