@@ -10,9 +10,13 @@ def _bounded_text(value: Any, limit: int) -> str:
 
 
 def _bounded_unique(values: Sequence[Any] | None, *, limit: int, item_limit: int = 160) -> tuple[str, ...]:
+    # Strings are sequences in Python, but treating a malformed model string as
+    # a list of characters would silently create bogus evidence/ID entries.
+    if not isinstance(values, (list, tuple)):
+        return ()
     out: list[str] = []
     seen: set[str] = set()
-    for raw in values or ():
+    for raw in values:
         value = _bounded_text(raw, item_limit)
         if not value or value in seen:
             continue
@@ -21,6 +25,17 @@ def _bounded_unique(values: Sequence[Any] | None, *, limit: int, item_limit: int
         if len(out) >= limit:
             break
     return tuple(out)
+
+
+def _sequence_len(value: Any) -> int:
+    return len(value) if isinstance(value, (list, tuple)) else 0
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
 
 
 DEFENSIVE_STATES = {"OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
@@ -74,12 +89,13 @@ class MioSituationFrame:
 
     @classmethod
     def build(cls, *, frame_id: str, trace_id: str, created_at: str, mission: str, current_defensive_state: str, threat_level: str, noc_summary: str = "", soc_summary: str = "", known_facts: Sequence[Any] | None = None, unknowns: Sequence[Any] | None = None, contradictions: Sequence[Any] | None = None, evidence_refs: Sequence[Any] | None = None, knowledge_refs: Sequence[Any] | None = None, freshness_seconds: int = 0) -> "MioSituationFrame":
-        source_counts = {"known_facts": len(known_facts or ()), "unknowns": len(unknowns or ()), "contradictions": len(contradictions or ()), "evidence_refs": len(evidence_refs or ()), "knowledge_refs": len(knowledge_refs or ())}
+        source_counts = {"known_facts": _sequence_len(known_facts), "unknowns": _sequence_len(unknowns), "contradictions": _sequence_len(contradictions), "evidence_refs": _sequence_len(evidence_refs), "knowledge_refs": _sequence_len(knowledge_refs)}
         caps = {"known_facts": 16, "unknowns": 12, "contradictions": 8, "evidence_refs": 32, "knowledge_refs": 16}
         defensive_state = _bounded_text(current_defensive_state, 24).upper()
         if defensive_state not in DEFENSIVE_STATES:
             raise ValueError("invalid_defensive_state")
-        return cls(frame_id=_bounded_text(frame_id, 96), trace_id=_bounded_text(trace_id, 96), created_at=_bounded_text(created_at, 64), mission=_bounded_text(mission, 240), current_defensive_state=defensive_state, threat_level=_bounded_text(threat_level, 24).upper(), noc_summary=_bounded_text(noc_summary, 480), soc_summary=_bounded_text(soc_summary, 480), known_facts=_bounded_unique(known_facts, limit=caps["known_facts"]), unknowns=_bounded_unique(unknowns, limit=caps["unknowns"]), contradictions=_bounded_unique(contradictions, limit=caps["contradictions"]), evidence_refs=_bounded_unique(evidence_refs, limit=caps["evidence_refs"], item_limit=128), knowledge_refs=_bounded_unique(knowledge_refs, limit=caps["knowledge_refs"], item_limit=128), freshness_seconds=max(0, min(int(freshness_seconds), 86400)), truncated=any(source_counts[key] > caps[key] for key in caps))
+        freshness = max(0, min(_safe_int(freshness_seconds, 86400), 86400))
+        return cls(frame_id=_bounded_text(frame_id, 96), trace_id=_bounded_text(trace_id, 96), created_at=_bounded_text(created_at, 64), mission=_bounded_text(mission, 240), current_defensive_state=defensive_state, threat_level=_bounded_text(threat_level, 24).upper(), noc_summary=_bounded_text(noc_summary, 480), soc_summary=_bounded_text(soc_summary, 480), known_facts=_bounded_unique(known_facts, limit=caps["known_facts"]), unknowns=_bounded_unique(unknowns, limit=caps["unknowns"]), contradictions=_bounded_unique(contradictions, limit=caps["contradictions"]), evidence_refs=_bounded_unique(evidence_refs, limit=caps["evidence_refs"], item_limit=128), knowledge_refs=_bounded_unique(knowledge_refs, limit=caps["knowledge_refs"], item_limit=128), freshness_seconds=freshness, truncated=any(source_counts[key] > caps[key] for key in caps))
 
     def to_dict(self) -> dict[str, Any]:
         return {"frame_id": self.frame_id, "trace_id": self.trace_id, "created_at": self.created_at, "mission": self.mission, "current_defensive_state": self.current_defensive_state, "threat_level": self.threat_level, "noc_summary": self.noc_summary, "soc_summary": self.soc_summary, "known_facts": list(self.known_facts), "unknowns": list(self.unknowns), "contradictions": list(self.contradictions), "evidence_refs": list(self.evidence_refs), "knowledge_refs": list(self.knowledge_refs), "freshness_seconds": self.freshness_seconds, "truncated": self.truncated}
@@ -120,7 +136,7 @@ class MioEvidenceGap:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any], *, ordinal: int) -> "MioEvidenceGap":
-        return cls(gap_id=_bounded_text(payload.get("gap_id") or f"g{ordinal}", 96), question=_bounded_text(payload.get("question"), 300), discriminates_hypothesis_ids=_bounded_unique(payload.get("discriminates_hypothesis_ids"), limit=8, item_limit=96), capability=_bounded_text(payload.get("capability"), 96), priority=max(0, min(int(payload.get("priority", 50)), 100)))
+        return cls(gap_id=_bounded_text(payload.get("gap_id") or f"g{ordinal}", 96), question=_bounded_text(payload.get("question"), 300), discriminates_hypothesis_ids=_bounded_unique(payload.get("discriminates_hypothesis_ids"), limit=8, item_limit=96), capability=_bounded_text(payload.get("capability"), 96), priority=max(0, min(_safe_int(payload.get("priority", 50), 50), 100)))
 
 
 @dataclass(frozen=True)
