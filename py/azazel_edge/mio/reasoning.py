@@ -137,6 +137,14 @@ class BoundedReasoningLoop:
             for i, item in enumerate(gap_items[: self.budget.max_gaps])
             if isinstance(item, Mapping)
         )
+        gap_check = GroundingValidator(frame).validate_evidence_gaps(
+            gaps,
+            hypotheses=hypotheses,
+            allowed_capabilities=playbook.allowed_capabilities,
+        )
+        if not gap_check.ok:
+            errors.extend(gap_check.errors)
+            return self._finish(trace, ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None, errors)
         trace.record(state=ReasoningState.EVIDENCE_GAPS_IDENTIFIED.value, kind="evidence_gaps", payload={"ids": [g.gap_id for g in gaps]})
 
         additional_refs: list[str] = []
