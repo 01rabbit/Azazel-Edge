@@ -59,7 +59,6 @@ class GroundingValidator:
                 seen_ids.add(hypothesis.hypothesis_id)
             if not hypothesis.statement:
                 errors.append(f"empty_statement:{hypothesis.hypothesis_id}")
-
             supporting = set(hypothesis.supporting_evidence_refs)
             contradicting = set(hypothesis.contradicting_evidence_refs)
             for ref in sorted(supporting & contradicting):

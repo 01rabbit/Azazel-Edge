@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
+import azazel_edge.mio.model_adapter as model_adapter
 from azazel_edge.ai_governance import AIGovernance
 from azazel_edge.evidence_plane.schema import EvidenceEvent
 from azazel_edge.mio import (
@@ -204,6 +207,31 @@ def test_ollama_transport_private_lan_requires_opt_in_tls_and_auth():
         bearer_token='test-token',
     )
     assert tuple(transport.models) == ('qwen3.5:2b', 'qwen3.5:0.8b')
+
+
+def test_ollama_transport_disables_thinking_for_structured_json(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, _limit):
+            return b'{"response":"{\\"hypotheses\\":[]}"}'
+
+    def fake_urlopen(request, timeout):
+        captured['body'] = json.loads(request.data.decode('utf-8'))
+        captured['timeout'] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(model_adapter.urllib.request, 'urlopen', fake_urlopen)
+    transport = OllamaStructuredTransport(models=('qwen3.5:2b',))
+
+    assert transport('generate_hypotheses', 'safe prompt') == {'hypotheses': []}
+    assert captured['body']['think'] is False
 
 
 def test_reasoning_stops_before_model_when_frame_is_stale():

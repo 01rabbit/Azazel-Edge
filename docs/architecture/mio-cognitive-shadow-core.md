@@ -116,6 +116,8 @@ The output schema is task-specific:
 
 The explicit revision task is important: new broker evidence must be allowed to strengthen, weaken, falsify, or leave hypotheses unresolved **before** the final recommendation. This preserves the white-hacker sequence rather than jumping directly from evidence collection to advice.
 
+For both initial hypothesis generation and revision, trusted control requires a per-hypothesis evidence reference to have exactly one role: supporting or contradicting, never both. Evidence whose role is ambiguous is retained as an explicit `missing_evidence` or `assumptions` entry, rather than being placed in either evidence list. A no-escalation recommendation must use `OBSERVE` explicitly; M.I.O. never represents it with an empty action.
+
 ### `broker.py`
 
 Provides a static typed allowlist of read-only evidence capabilities with per-capability and per-cycle call budgets plus result-size bounds.
@@ -147,6 +149,7 @@ Transport properties:
 Rejects:
 
 - fabricated evidence references
+- a per-hypothesis evidence reference used as both supporting and contradicting
 - duplicate hypothesis IDs
 - Evidence Gaps referencing nonexistent hypotheses
 - Evidence Gaps requesting capabilities outside the selected Playbook

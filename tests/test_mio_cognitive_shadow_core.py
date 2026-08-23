@@ -149,6 +149,42 @@ def test_hypothesis_update_cannot_invent_evidence_reference():
     assert any("unknown_hypothesis_ref" in error for error in outcome.errors)
 
 
+@pytest.mark.parametrize("contradictory_task", ("generate_hypotheses", "update_hypotheses"))
+def test_hypothesis_evidence_role_conflict_fails_closed(contradictory_task):
+    def model(task, prompt):
+        if task == "generate_hypotheses":
+            return {"hypotheses": [{
+                "hypothesis_id": "h1",
+                "statement": "attack",
+                "supporting_evidence_refs": ["ev:ssh:1"],
+                "contradicting_evidence_refs": ["ev:ssh:1"] if contradictory_task == task else [],
+            }]}
+        if task == "identify_evidence_gaps":
+            return {"evidence_gaps": [{
+                "gap_id": "g1",
+                "question": "flow?",
+                "discriminates_hypothesis_ids": ["h1"],
+                "capability": "query_flow_summary",
+                "priority": 90,
+            }]}
+        if task == "update_hypotheses":
+            return {"hypotheses": [{
+                "hypothesis_id": "h1",
+                "statement": "attack",
+                "supporting_evidence_refs": ["ev:ssh:1"],
+                "contradicting_evidence_refs": ["ev:ssh:1"] if contradictory_task == task else [],
+            }]}
+        raise AssertionError(task)
+
+    broker = CapabilityBroker({"query_flow_summary": CapabilitySpec(lambda _: {"evidence_refs": ["ev:flow:1"]})})
+    outcome = BoundedReasoningLoop(model=model, broker=broker).run(
+        frame=frame(), playbook=DEFAULT_PLAYBOOKS["auth-ambiguity-v1"], cycle_id=f"conflict-{contradictory_task}"
+    )
+
+    assert outcome.state is ReasoningState.VALIDATION_REJECTED
+    assert "conflicting_hypothesis_evidence_ref:h1:ev:ssh:1" in outcome.errors
+
+
 def test_reasoning_loop_fails_closed_on_model_directive():
     def model(task, prompt):
         if task == "generate_hypotheses":
