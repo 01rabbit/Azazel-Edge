@@ -113,6 +113,11 @@ class OllamaStructuredTransport:
             'prompt': prompt,
             'stream': False,
             'format': 'json',
+            # Qwen 3.5 on Ollama otherwise places structured content in the
+            # envelope's `thinking` field and may leave `response` empty.
+            # M.I.O. consumes only the bounded final structured response; raw
+            # chain-of-thought is neither required nor accepted as authority.
+            'think': False,
             'options': {
                 'num_ctx': self.num_ctx,
                 'num_predict': self.num_predict,
