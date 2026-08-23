@@ -1,21 +1,30 @@
 # M.I.O. Cognitive Shadow Core
 
-Status: initial test-stage implementation for issues #361-#366, #372, #376, and #377.
+Status: test-stage implementation for issues #361-#366, #370, #372, #376, and #377.
 
 ## Scope
 
-This module establishes the first executable M.I.O. cognitive substrate without changing production enforcement behavior.
+This module establishes the executable M.I.O. cognitive substrate without changing production enforcement behavior.
 
-It is deliberately **shadow/replay only**:
+It remains deliberately **shadow/replay only**:
 
 ```text
-Evidence / deterministic state
+Evidence Plane + deterministic NOC/SOC outputs + current Defensive State
+        |
+        v
+MioSituationFrameBuilder
         |
         v
 MioSituationFrame
         |
         v
-Reasoning Playbook
+Reasoning Playbook + bounded task schema
+        |
+        v
+existing AIGovernance authorization gate
+        |
+        v
+local/on-prem structured model
         |
         v
 multiple hypotheses
@@ -33,7 +42,7 @@ Grounding Validator
 M.I.O. Recommendation (executable=false)
 ```
 
-No code in `py/azazel_edge/mio/` calls the Action Arbiter, enforcement handlers, nftables/iptables/tc, Docker, AZ-06 activation, or arbitrary shell/HTTP facilities.
+No code in `py/azazel_edge/mio/` calls the Action Arbiter, enforcement handlers, nftables/iptables/tc, Docker, AZ-06 activation, or arbitrary shell execution.
 
 ## Authority boundary
 
@@ -41,7 +50,8 @@ No code in `py/azazel_edge/mio/` calls the Action Arbiter, enforcement handlers,
 - M.I.O. output is advisory data only.
 - `MioRecommendation.executable` is always `False`.
 - Recommended action vocabulary is bounded to `OBSERVE / NOTIFY / THROTTLE / REDIRECT / ISOLATE`, but a recommendation does not set Defensive State.
-- Runtime integration with the existing governed AI path is intentionally deferred until the shadow/replay contracts and adversarial tests are stable.
+- The current Defensive State is input context; it is not selected by the model.
+- M.I.O. model failure, governance refusal, stale context, or cancellation terminates only the reasoning cycle. Baseline Edge operation continues.
 
 ## Components
 
@@ -56,24 +66,67 @@ Defines bounded local contracts for:
 - advisory recommendation
 - reasoning state
 
-The SituationFrame limits list cardinality and text size so small local models receive a compact state instead of unbounded raw logs.
+The SituationFrame limits list cardinality and text size so small local models receive compact state instead of unbounded raw logs.
+
+### `frame_builder.py`
+
+Builds a `MioSituationFrame` from normalized Evidence Plane records and deterministic NOC/SOC evaluation dictionaries.
+
+Privacy/context-minimization rules:
+
+- raw event `attrs`, log messages, and subjects are **not** copied into the model frame;
+- detailed records remain referenced by `evidence_id` and are retrieved only through typed capabilities;
+- deterministic reason strings are reduced to reason taxonomy codes rather than retaining subject/value suffixes;
+- malformed frame timestamps are rejected;
+- future-dated evidence outside a small clock-skew allowance is treated as stale/unknown rather than fresh.
+
+This builder performs no model call and no network call.
 
 ### `playbook.py`
 
 Defines versioned Reasoning Playbooks and a deterministic prompt/context compiler.
 
+Initial families:
+
+1. authentication ambiguity
+2. scan/recon ambiguity
+3. exploit-signal ambiguity
+4. NOC-vs-SOC ambiguity
+5. friction/reaction analysis
+6. deception-observation interpretation
+
 The compiler separates:
 
-- `TRUSTED_CONTROL`: versioned instructions and playbook method
-- `UNTRUSTED_DATA`: SituationFrame, hypotheses, and capability results
+- `TRUSTED_CONTROL`: versioned method, claim boundaries, budgets, and per-task output schema;
+- `UNTRUSTED_DATA`: SituationFrame, hypotheses, and capability results.
 
-Attacker-controlled strings remain data even if they contain instruction-like text.
+The output schema is task-specific (`generate_hypotheses`, `identify_evidence_gaps`, `recommend`) to make 0.8B/2B-class models solve a narrow structured task rather than a general SOC problem.
 
 ### `broker.py`
 
 Provides a static typed allowlist of read-only evidence capabilities with per-capability and per-cycle call budgets plus result-size bounds.
 
 It intentionally has no shell, arbitrary filesystem path, arbitrary HTTP, Docker socket, packet-control, or enforcement primitive.
+
+### `model_adapter.py`
+
+Provides the first governed local structured-model adapter.
+
+Governance properties:
+
+- every model task passes the existing `AIGovernance.should_invoke` policy through the new reusable `authorize()` seam;
+- current automation scope therefore remains restricted by the repository's existing policy (for example ambiguous/uncertain Suricata candidate use); this PR does not silently widen AI invocation;
+- raw compiled prompts are not persisted in the AI audit; only task name + prompt digest + bounded model/result metadata are recorded;
+- model output remains `adopted_pending_grounding` until M.I.O.'s deterministic validator accepts it.
+
+Transport properties:
+
+- default endpoint is loopback Ollama only;
+- model chain defaults to `qwen3.5:2b` then `qwen3.5:0.8b`;
+- response size, timeout, context, prediction, and thread counts are bounded;
+- public IPs and arbitrary DNS endpoints are rejected;
+- a private-LAN on-prem endpoint requires explicit opt-in, HTTPS, and bearer authentication;
+- there is no automatic public/cloud fallback.
 
 ### `grounding.py`
 
@@ -82,7 +135,7 @@ Rejects:
 - fabricated evidence references
 - unsupported recommendation actions
 - executable recommendations
-- directive-like fields such as `execute`, `override`, `activate`, or `enforce`
+- directive-like fields such as `execute`, `override`, `activate`, `enforce`, or `executable`, including nested occurrences
 
 This validation is deterministic; an LLM never judges another LLM's authority.
 
@@ -99,7 +152,16 @@ FRAME_READY
  -> COMPLETE
 ```
 
-Failure paths include validation rejection, budget exhaustion, dependency/model error fallback, and broker refusal.
+Terminal/fallback paths currently include:
+
+- `STALE_SUPERSEDED`
+- `OPERATOR_CANCELLED`
+- `BUDGET_EXHAUSTED`
+- `VALIDATION_REJECTED`
+- `DEPENDENCY_UNAVAILABLE`
+- `ERROR_FALLBACK`
+
+Stale frames and immediate operator cancellation stop **before the first model call**.
 
 ### `trace.py`
 
@@ -107,22 +169,55 @@ Records a minimized replay trace with separate trace/cycle identifiers. Raw prom
 
 ### `replay.py`
 
-Provides the first deterministic replay harness seam. Tests currently use a fake structured model so the orchestration and authority boundaries can be verified independently of Ollama/model quality.
+Provides the deterministic replay seam. Unit tests use fake structured models so orchestration, boundary, and degradation behavior can be tested independently of model quality.
+
+### `bin/azazel-mio-shadow-replay`
+
+Manual test runner for a real local 2B/0.8B Ollama chain.
+
+Example using the checked-in normalized fixture:
+
+```bash
+python bin/azazel-mio-shadow-replay \
+  --fixture tests/fixtures/mio/auth_ambiguity_shadow.json \
+  --playbook auth-ambiguity-v1
+```
+
+This command only prints a reasoning result and writes AI governance audit metadata. It never calls the Action Arbiter or enforcement.
+
+For a private-LAN accelerator, the current test-stage transport requires all of:
+
+```text
+--allow-private-network
+https://<private-ip>:<port>
+AZAZEL_MIO_BEARER_TOKEN=<token>
+```
+
+The bearer token is read from an environment variable rather than a command-line argument.
 
 ## Test-stage boundary
 
-This implementation is ready for unit/replay testing of the cognitive mechanics. It is **not** yet permission to:
+This implementation is ready for:
+
+- unit tests of contracts/budgets/grounding;
+- replay tests with normalized deterministic snapshots;
+- prompt-injection and malformed-output fixtures;
+- local 2B/0.8B model quality experiments;
+- model-down/governance-blocked/stale/cancelled degradation testing.
+
+It is **not** permission to:
 
 - feed M.I.O. output into live Arbiter inputs;
-- activate Knowledge or Deception as runtime dependencies;
-- enable live local-model invocation outside the existing AI-governance path;
-- enable enforcement from M.I.O. recommendations.
+- make Knowledge or Deception a synchronous runtime dependency;
+- enable enforcement from M.I.O. recommendations;
+- broaden AI invocation policy without separate review;
+- treat private-LAN model access as production-ready merely because the transport can authenticate to a test endpoint.
 
-Those steps remain gated by the later integration issues and adversarial review #373.
+Operational influence remains gated by #373 adversarial review and the later cross-product integration issues.
 
-## Initial test coverage
+## Current test coverage
 
-`tests/test_mio_cognitive_shadow_core.py` verifies:
+`tests/test_mio_cognitive_shadow_core.py` covers:
 
 - SituationFrame bounding/normalization;
 - trusted vs untrusted context separation;
@@ -132,11 +227,25 @@ Those steps remain gated by the later integration issues and adversarial review 
 - fail-closed rejection of model-supplied execution directives;
 - versioned playbook replay selection.
 
-## Next test-stage work
+`tests/test_mio_shadow_runtime_integration.py` adds:
 
-1. Add deterministic builders from real Evidence Plane/evaluator snapshots into `MioSituationFrame`.
-2. Expand playbooks to exploit, NOC-vs-SOC, friction-reaction, and deception-observation families.
-3. Add stale-frame/cancellation/concurrency semantics.
-4. Add resource profiling and adversarial fixtures to the #372 harness.
-5. Define a governed local-model adapter that extends, rather than bypasses, `ai_governance.py`.
-6. Begin #373 hostile review before any operational input to Engagement/Deception.
+- deterministic NOC/SOC summary -> compact frame behavior;
+- raw attribute/subject minimization;
+- invalid/future timestamp handling;
+- existing AIGovernance allow/block behavior;
+- prompt non-retention in audit;
+- public/private endpoint restrictions;
+- authenticated TLS requirement for private-LAN inference;
+- stale-frame no-model-call behavior;
+- model dependency degradation;
+- operator cancellation before inference.
+
+## Remaining before the #373 gate
+
+1. Add broader adversarial replay corpus (cross-trace refs, Unicode/delimiter injection, malformed model envelopes, capability spoofing, concurrent cycles).
+2. Add measured Pi-class resource/latency profiling for 0.8B/2B.
+3. Add deterministic capability implementations backed by real read-only Evidence/health/trace stores (current replay broker can use static fixture results).
+4. Add reasoning-cycle concurrency/backpressure ownership and explicit supersession across live shadow cycles.
+5. Run the dedicated #373 hostile review and remediate all critical/high findings.
+
+No Engagement/Deception operational influence should be enabled before that gate passes.
