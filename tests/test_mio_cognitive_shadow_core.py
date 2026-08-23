@@ -95,7 +95,7 @@ def test_grounding_rejects_fabricated_reference_and_nested_directive():
     assert "forbidden_directive_key:nested.execute" in result.errors
 
 
-def test_reasoning_loop_completes_in_shadow_with_fake_model_and_broker():
+def test_reasoning_loop_completes_after_evidence_driven_hypothesis_update():
     calls = []
 
     def model(task, prompt):
@@ -107,6 +107,11 @@ def test_reasoning_loop_completes_in_shadow_with_fake_model_and_broker():
             ]}
         if task == "identify_evidence_gaps":
             return {"evidence_gaps": [{"gap_id": "g1", "question": "What is the source flow pattern?", "discriminates_hypothesis_ids": ["h-attack", "h-benign"], "capability": "query_flow_summary", "priority": 90}]}
+        if task == "update_hypotheses":
+            return {"hypotheses": [
+                {"hypothesis_id": "h-attack", "statement": "Credential attack", "status": "strengthened", "supporting_evidence_refs": ["ev:ssh:1", "ev:flow:1"], "falsification_conditions": ["known admin automation confirmed"]},
+                {"hypothesis_id": "h-benign", "statement": "Misconfigured admin automation", "status": "weakened", "supporting_evidence_refs": ["ev:ssh:2"], "contradicting_evidence_refs": ["ev:flow:1"], "falsification_conditions": ["source shifts protocol after friction"]},
+            ], "revision_summary": "Flow evidence strengthened attack and weakened benign automation."}
         if task == "recommend":
             return {"summary": "Continue bounded observation", "recommended_action": "NOTIFY", "rationale": "Flow evidence supports further investigation without stronger control.", "evidence_refs": ["ev:ssh:1", "ev:flow:1"], "limitations": ["actor intent unknown"]}
         raise AssertionError(task)
@@ -119,8 +124,29 @@ def test_reasoning_loop_completes_in_shadow_with_fake_model_and_broker():
     assert outcome.recommendation is not None
     assert outcome.recommendation.recommended_action == "NOTIFY"
     assert outcome.recommendation.executable is False
-    assert calls == ["generate_hypotheses", "identify_evidence_gaps", "recommend"]
+    assert outcome.hypotheses[0].status.value == "strengthened"
+    assert "ev:flow:1" in outcome.hypotheses[0].supporting_evidence_refs
+    assert calls == ["generate_hypotheses", "identify_evidence_gaps", "update_hypotheses", "recommend"]
+    assert any(item.state == "hypotheses_updated" for item in outcome.trace)
     assert outcome.trace[-1].state == "complete"
+
+
+def test_hypothesis_update_cannot_invent_evidence_reference():
+    def model(task, prompt):
+        if task == "generate_hypotheses":
+            return {"hypotheses": [{"hypothesis_id": "h1", "statement": "attack", "supporting_evidence_refs": ["ev:ssh:1"]}]}
+        if task == "identify_evidence_gaps":
+            return {"evidence_gaps": [{"gap_id": "g1", "question": "flow?", "discriminates_hypothesis_ids": ["h1"], "capability": "query_flow_summary", "priority": 90}]}
+        if task == "update_hypotheses":
+            return {"hypotheses": [{"hypothesis_id": "h1", "statement": "attack", "status": "strengthened", "supporting_evidence_refs": ["ev:invented"]}]}
+        raise AssertionError(task)
+
+    broker = CapabilityBroker({"query_flow_summary": CapabilitySpec(lambda _: {"evidence_refs": ["ev:flow:1"]})})
+    outcome = BoundedReasoningLoop(model=model, broker=broker).run(
+        frame=frame(), playbook=DEFAULT_PLAYBOOKS["auth-ambiguity-v1"], cycle_id="cycle-bad-update"
+    )
+    assert outcome.state is ReasoningState.VALIDATION_REJECTED
+    assert any("unknown_hypothesis_ref" in error for error in outcome.errors)
 
 
 def test_reasoning_loop_fails_closed_on_model_directive():
