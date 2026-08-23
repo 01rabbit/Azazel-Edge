@@ -36,6 +36,13 @@ Evidence Gaps
 Typed read-only Capability Broker
         |
         v
+additional evidence
+        |
+        v
+Hypothesis Revision
+(strengthen / weaken / falsify / unresolved)
+        |
+        v
 Grounding Validator
         |
         v
@@ -66,7 +73,7 @@ Defines bounded local contracts for:
 - advisory recommendation
 - reasoning state
 
-The SituationFrame limits list cardinality and text size so small local models receive compact state instead of unbounded raw logs.
+The SituationFrame limits list cardinality and text size so small local models receive compact state instead of unbounded raw logs. Structured model output is treated as malformed unless list-shaped fields are actual arrays; a string is never silently split into character-sized references. Numeric fields such as Evidence Gap priority use bounded deterministic fallbacks instead of raising through the reasoning loop.
 
 ### `frame_builder.py`
 
@@ -100,7 +107,14 @@ The compiler separates:
 - `TRUSTED_CONTROL`: versioned method, claim boundaries, budgets, and per-task output schema;
 - `UNTRUSTED_DATA`: SituationFrame, hypotheses, and capability results.
 
-The output schema is task-specific (`generate_hypotheses`, `identify_evidence_gaps`, `recommend`) to make 0.8B/2B-class models solve a narrow structured task rather than a general SOC problem.
+The output schema is task-specific:
+
+1. `generate_hypotheses`
+2. `identify_evidence_gaps`
+3. `update_hypotheses`
+4. `recommend`
+
+The explicit revision task is important: new broker evidence must be allowed to strengthen, weaken, falsify, or leave hypotheses unresolved **before** the final recommendation. This preserves the white-hacker sequence rather than jumping directly from evidence collection to advice.
 
 ### `broker.py`
 
@@ -114,7 +128,7 @@ Provides the first governed local structured-model adapter.
 
 Governance properties:
 
-- every model task passes the existing `AIGovernance.should_invoke` policy through the new reusable `authorize()` seam;
+- every model task passes the existing `AIGovernance.should_invoke` policy through the reusable `authorize()` seam;
 - current automation scope therefore remains restricted by the repository's existing policy (for example ambiguous/uncertain Suricata candidate use); this PR does not silently widen AI invocation;
 - raw compiled prompts are not persisted in the AI audit; only task name + prompt digest + bounded model/result metadata are recorded;
 - model output remains `adopted_pending_grounding` until M.I.O.'s deterministic validator accepts it.
@@ -125,7 +139,7 @@ Transport properties:
 - model chain defaults to `qwen3.5:2b` then `qwen3.5:0.8b`;
 - response size, timeout, context, prediction, and thread counts are bounded;
 - public IPs and arbitrary DNS endpoints are rejected;
-- a private-LAN on-prem endpoint requires explicit opt-in, HTTPS, and bearer authentication;
+- a private-LAN on-prem endpoint must be a private IP literal and requires explicit opt-in, HTTPS, and bearer authentication;
 - there is no automatic public/cloud fallback.
 
 ### `grounding.py`
@@ -133,6 +147,9 @@ Transport properties:
 Rejects:
 
 - fabricated evidence references
+- duplicate hypothesis IDs
+- Evidence Gaps referencing nonexistent hypotheses
+- Evidence Gaps requesting capabilities outside the selected Playbook
 - unsupported recommendation actions
 - executable recommendations
 - directive-like fields such as `execute`, `override`, `activate`, `enforce`, or `executable`, including nested occurrences
@@ -148,9 +165,12 @@ FRAME_READY
  -> HYPOTHESES_READY
  -> EVIDENCE_GAPS_IDENTIFIED
  -> REQUEST_PLANNED / EVIDENCE_COLLECTED
+ -> HYPOTHESES_UPDATED (when evidence was returned)
  -> RECOMMENDATION_READY
  -> COMPLETE
 ```
+
+The default model-call ceiling is four calls for a cycle that actually retrieves additional evidence. If no capability result exists, hypothesis revision is skipped to avoid a useless inference call on constrained hardware.
 
 Terminal/fallback paths currently include:
 
@@ -165,7 +185,7 @@ Stale frames and immediate operator cancellation stop **before the first model c
 
 ### `trace.py`
 
-Records a minimized replay trace with separate trace/cycle identifiers. Raw prompts and raw logs are intentionally not retained.
+Records a minimized replay trace with separate trace/cycle identifiers. Raw prompts and raw logs are intentionally not retained. The trace now records `HYPOTHESES_UPDATED` so a replay can show which newly retrieved evidence changed the working interpretation before recommendation.
 
 ### `replay.py`
 
@@ -217,32 +237,17 @@ Operational influence remains gated by #373 adversarial review and the later cro
 
 ## Current test coverage
 
-`tests/test_mio_cognitive_shadow_core.py` covers:
+`tests/test_mio_cognitive_shadow_core.py` covers the core cognitive loop, including explicit evidence-driven hypothesis revision and rejection of invented evidence during revision.
 
-- SituationFrame bounding/normalization;
-- trusted vs untrusted context separation;
-- Capability Broker allowlisting and budgets;
-- fabricated-reference/directive rejection;
-- complete hypothesis -> gap -> evidence -> recommendation replay;
-- fail-closed rejection of model-supplied execution directives;
-- versioned playbook replay selection.
+`tests/test_mio_shadow_runtime_integration.py` covers deterministic NOC/SOC frame construction, raw-data minimization, timestamp handling, existing AI-governance allow/block behavior, prompt non-retention, endpoint restrictions, stale/model-down/cancel degradation, and private-LAN TLS/auth requirements.
 
-`tests/test_mio_shadow_runtime_integration.py` adds:
+`tests/test_mio_frame_builder_with_evaluators.py` feeds real `NocEvaluator` and `SocEvaluator` result shapes into the builder and verifies evidence linkage without copying IP/subject content into the model frame.
 
-- deterministic NOC/SOC summary -> compact frame behavior;
-- raw attribute/subject minimization;
-- invalid/future timestamp handling;
-- existing AIGovernance allow/block behavior;
-- prompt non-retention in audit;
-- public/private endpoint restrictions;
-- authenticated TLS requirement for private-LAN inference;
-- stale-frame no-model-call behavior;
-- model dependency degradation;
-- operator cancellation before inference.
+`tests/test_mio_adversarial_schema.py` covers malformed array fields, nonnumeric priority, duplicate hypothesis IDs, invalid Evidence Gap hypothesis references, explicit hypothesis-revision schema, and arbitrary-DNS endpoint rejection.
 
 ## Remaining before the #373 gate
 
-1. Add broader adversarial replay corpus (cross-trace refs, Unicode/delimiter injection, malformed model envelopes, capability spoofing, concurrent cycles).
+1. Add broader adversarial replay corpus (cross-trace refs, Unicode/delimiter injection, malformed Ollama envelopes, capability spoofing, concurrent cycles).
 2. Add measured Pi-class resource/latency profiling for 0.8B/2B.
 3. Add deterministic capability implementations backed by real read-only Evidence/health/trace stores (current replay broker can use static fixture results).
 4. Add reasoning-cycle concurrency/backpressure ownership and explicit supersession across live shadow cycles.
