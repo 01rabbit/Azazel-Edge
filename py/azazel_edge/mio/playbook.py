@@ -87,9 +87,12 @@ class PromptCompiler:
             "hypotheses": [h.to_dict() for h in hypotheses],
             "broker_results": list(broker_results),
         }
-        untrusted_json = json.dumps(untrusted, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
-        if len(untrusted_json) > self.max_untrusted_chars:
-            untrusted_json = untrusted_json[: self.max_untrusted_chars]
+        untrusted_json = self._bounded_untrusted_json(
+            untrusted,
+            frame=frame,
+            hypotheses=hypotheses,
+            broker_results=broker_results,
+        )
         return (
             "TRUSTED_CONTROL\n"
             + json.dumps(trusted, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
@@ -97,3 +100,57 @@ class PromptCompiler:
             + untrusted_json
             + "\nEND_UNTRUSTED_DATA"
         )
+
+    def _bounded_untrusted_json(
+        self,
+        untrusted: Mapping[str, Any],
+        *,
+        frame: MioSituationFrame,
+        hypotheses: Sequence[MioHypothesis],
+        broker_results: Sequence[Mapping[str, Any]],
+    ) -> str:
+        def render(value: Mapping[str, Any]) -> str:
+            return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+
+        rendered = render(untrusted)
+        if len(rendered) <= self.max_untrusted_chars:
+            return rendered
+
+        reduced = {
+            "situation_frame": frame.to_dict(),
+            "hypotheses": [
+                {
+                    "hypothesis_id": h.hypothesis_id,
+                    "statement": h.statement,
+                    "status": h.status.value,
+                    "supporting_evidence_refs": list(h.supporting_evidence_refs),
+                    "contradicting_evidence_refs": list(h.contradicting_evidence_refs),
+                }
+                for h in hypotheses
+            ],
+            "broker_results": [],
+            "truncation": {"broker_results_omitted": len(broker_results)},
+        }
+        rendered = render(reduced)
+        if len(rendered) <= self.max_untrusted_chars:
+            return rendered
+
+        minimal = {
+            "situation_frame": {
+                "frame_id": frame.frame_id,
+                "trace_id": frame.trace_id,
+                "current_defensive_state": frame.current_defensive_state,
+                "threat_level": frame.threat_level,
+                "evidence_refs": list(frame.evidence_refs),
+            },
+            "hypotheses": [
+                {"hypothesis_id": h.hypothesis_id, "statement": h.statement[:160]}
+                for h in hypotheses
+            ],
+            "broker_results": [],
+            "truncation": {
+                "context_reduced": True,
+                "broker_results_omitted": len(broker_results),
+            },
+        }
+        return render(minimal)
