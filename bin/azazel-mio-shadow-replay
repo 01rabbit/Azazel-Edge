@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Run one M.I.O. shadow reasoning cycle from a normalized JSON fixture.
+
+This helper is test-only: it does not call the Action Arbiter or enforcement.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any, Mapping
+
+ROOT = Path(__file__).resolve().parents[1]
+PY_ROOT = ROOT / 'py'
+if str(PY_ROOT) not in sys.path:
+    sys.path.insert(0, str(PY_ROOT))
+
+from azazel_edge.ai_governance import AIGovernance
+from azazel_edge.audit import P0AuditLogger
+from azazel_edge.mio import (
+    BoundedReasoningLoop,
+    CapabilityBroker,
+    CapabilitySpec,
+    DEFAULT_PLAYBOOKS,
+    GovernedMioModelAdapter,
+    MioSituationFrameBuilder,
+    OllamaStructuredTransport,
+)
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _load_fixture(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(payload, dict):
+        raise ValueError('fixture_must_be_object')
+    return payload
+
+
+def _static_broker(payload: Mapping[str, Any]) -> CapabilityBroker:
+    capabilities: dict[str, CapabilitySpec] = {}
+    raw_caps = _mapping(payload.get('capabilities'))
+    for name, result in raw_caps.items():
+        if not isinstance(name, str) or not isinstance(result, Mapping):
+            continue
+        frozen = dict(result)
+
+        def handler(_arguments, value=frozen):
+            return dict(value)
+
+        capabilities[name] = CapabilitySpec(handler, max_calls_per_cycle=2, max_result_chars=4096)
+    return CapabilityBroker(capabilities, max_total_calls=4)
+
+
+def _outcome_json(outcome) -> dict[str, Any]:
+    return {
+        'state': outcome.state.value,
+        'hypotheses': [item.to_dict() for item in outcome.hypotheses],
+        'evidence_gaps': [
+            {
+                'gap_id': item.gap_id,
+                'question': item.question,
+                'discriminates_hypothesis_ids': list(item.discriminates_hypothesis_ids),
+                'capability': item.capability,
+                'priority': item.priority,
+            }
+            for item in outcome.evidence_gaps
+        ],
+        'recommendation': None
+        if outcome.recommendation is None
+        else {
+            'advisory_id': outcome.recommendation.advisory_id,
+            'summary': outcome.recommendation.summary,
+            'recommended_action': outcome.recommendation.recommended_action,
+            'rationale': outcome.recommendation.rationale,
+            'evidence_refs': list(outcome.recommendation.evidence_refs),
+            'limitations': list(outcome.recommendation.limitations),
+            'executable': False,
+        },
+        'errors': list(outcome.errors),
+        'trace': [
+            {
+                'trace_id': item.trace_id,
+                'cycle_id': item.cycle_id,
+                'seq': item.seq,
+                'state': item.state,
+                'kind': item.kind,
+                'payload': dict(item.payload),
+            }
+            for item in outcome.trace
+        ],
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description='Run one M.I.O. shadow/replay reasoning cycle; never enforces actions.')
+    parser.add_argument('--fixture', required=True, type=Path)
+    parser.add_argument('--playbook', default='auth-ambiguity-v1', choices=sorted(DEFAULT_PLAYBOOKS))
+    parser.add_argument('--endpoint', default='http://127.0.0.1:11434')
+    parser.add_argument('--primary-model', default='qwen3.5:2b')
+    parser.add_argument('--degraded-model', default='qwen3.5:0.8b')
+    parser.add_argument('--source', default='suricata_eve')
+    parser.add_argument('--risk-band', default='ambiguous')
+    parser.add_argument('--allow-private-network', action='store_true')
+    parser.add_argument('--bearer-token-env', default='AZAZEL_MIO_BEARER_TOKEN')
+    parser.add_argument('--audit-path', type=Path, default=Path('/tmp/azazel-edge-mio-shadow-audit.jsonl'))
+    args = parser.parse_args()
+
+    fixture = _load_fixture(args.fixture)
+    trace_id = str(fixture.get('trace_id') or 'mio-shadow')[:96]
+    frame_id = str(fixture.get('frame_id') or (trace_id + ':frame'))[:96]
+    created_at = str(fixture.get('created_at') or '')
+    if not created_at:
+        raise ValueError('fixture_created_at_required')
+
+    frame = MioSituationFrameBuilder().build(
+        events=fixture.get('events', []) if isinstance(fixture.get('events'), list) else [],
+        noc_evaluation=_mapping(fixture.get('noc_evaluation')),
+        soc_evaluation=_mapping(fixture.get('soc_evaluation')),
+        current_defensive_state=str(fixture.get('current_defensive_state') or 'OBSERVE'),
+        mission=str(fixture.get('mission') or 'Offline defensive reasoning')[:240],
+        trace_id=trace_id,
+        frame_id=frame_id,
+        created_at=created_at,
+        knowledge_refs=fixture.get('knowledge_refs', []) if isinstance(fixture.get('knowledge_refs'), list) else [],
+    )
+
+    token = os.environ.get(args.bearer_token_env, '') if args.bearer_token_env else ''
+    transport = OllamaStructuredTransport(
+        endpoint=args.endpoint,
+        models=(args.primary_model, args.degraded_model),
+        allow_private_network=bool(args.allow_private_network),
+        bearer_token=token,
+    )
+    governance = AIGovernance(P0AuditLogger(args.audit_path))
+    model = GovernedMioModelAdapter(
+        governance=governance,
+        transport=transport,
+        trace_id=trace_id,
+        source=args.source,
+        risk_band=args.risk_band,
+    )
+    loop = BoundedReasoningLoop(model=model, broker=_static_broker(fixture))
+    outcome = loop.run(
+        frame=frame,
+        playbook=DEFAULT_PLAYBOOKS[args.playbook],
+        cycle_id=str(fixture.get('cycle_id') or (trace_id + ':cycle'))[:96],
+    )
+    print(json.dumps(_outcome_json(outcome), ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if outcome.state.value == 'complete' else 2
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
