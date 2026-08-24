@@ -12,6 +12,55 @@ from urllib.parse import urlparse
 from azazel_edge.ai_governance import AIGovernance
 
 
+_STRING_ARRAY = {"type": "array", "items": {"type": "string"}}
+_HYPOTHESIS_SCHEMA = {
+    "type": "object",
+    "required": ["hypothesis_id", "statement", "supporting_evidence_refs", "contradicting_evidence_refs", "assumptions", "missing_evidence"],
+    "properties": {
+        "hypothesis_id": {"type": "string", "minLength": 1},
+        "statement": {"type": "string", "minLength": 1},
+        "status": {"type": "string"},
+        "supporting_evidence_refs": _STRING_ARRAY,
+        "contradicting_evidence_refs": _STRING_ARRAY,
+        "assumptions": _STRING_ARRAY,
+        "falsification_conditions": _STRING_ARRAY,
+        "expected_observations": _STRING_ARRAY,
+        "missing_evidence": _STRING_ARRAY,
+    },
+}
+_TASK_RESPONSE_SCHEMAS: dict[str, Mapping[str, Any]] = {
+    "generate_hypotheses": {
+        "type": "object",
+        "required": ["hypotheses"],
+        "properties": {"hypotheses": {"type": "array", "minItems": 1, "items": _HYPOTHESIS_SCHEMA}},
+    },
+    "identify_evidence_gaps": {
+        "type": "object",
+        "required": ["evidence_gaps"],
+        "properties": {"evidence_gaps": {"type": "array", "items": {"type": "object"}}},
+    },
+    "update_hypotheses": {
+        "type": "object",
+        "required": ["hypotheses", "revision_summary"],
+        "properties": {
+            "hypotheses": {"type": "array", "minItems": 1, "items": _HYPOTHESIS_SCHEMA},
+            "revision_summary": {"type": "string"},
+        },
+    },
+    "recommend": {
+        "type": "object",
+        "required": ["summary", "recommended_action", "rationale", "evidence_refs", "limitations"],
+        "properties": {
+            "summary": {"type": "string", "minLength": 1},
+            "recommended_action": {"type": "string", "enum": ["OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"]},
+            "rationale": {"type": "string", "minLength": 1},
+            "evidence_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "limitations": _STRING_ARRAY,
+        },
+    },
+}
+
+
 class MioModelError(RuntimeError):
     pass
 
@@ -112,7 +161,10 @@ class OllamaStructuredTransport:
             'model': model,
             'prompt': prompt,
             'stream': False,
-            'format': 'json',
+            # A task-specific JSON Schema prevents constrained models from
+            # returning a syntactically valid but semantically empty object.
+            # Grounding remains the authority for reference identity/roles.
+            'format': _TASK_RESPONSE_SCHEMAS.get(task, 'json'),
             # Qwen 3.5 on Ollama otherwise places structured content in the
             # envelope's `thinking` field and may leave `response` empty.
             # M.I.O. consumes only the bounded final structured response; raw

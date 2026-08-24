@@ -190,7 +190,7 @@ def test_update_hypotheses_prompt_has_explicit_schema():
         task='update_hypotheses',
     )
     assert 'revision_summary' in prompt
-    assert 'strengthened' in prompt
+    assert 'unresolved' in prompt
 
 
 def test_arbitrary_dns_model_endpoint_is_rejected_even_if_private_network_enabled():

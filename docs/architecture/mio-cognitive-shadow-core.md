@@ -116,7 +116,7 @@ The output schema is task-specific:
 
 The explicit revision task is important: new broker evidence must be allowed to strengthen, weaken, falsify, or leave hypotheses unresolved **before** the final recommendation. This preserves the white-hacker sequence rather than jumping directly from evidence collection to advice.
 
-For both initial hypothesis generation and revision, trusted control requires a per-hypothesis evidence reference to have exactly one role: supporting or contradicting, never both. Evidence whose role is ambiguous is retained as an explicit `missing_evidence` or `assumptions` entry, rather than being placed in either evidence list. A no-escalation recommendation must use `OBSERVE` explicitly; M.I.O. never represents it with an empty action.
+For both initial hypothesis generation and revision, trusted control requires a per-hypothesis evidence reference to have exactly one role: supporting or contradicting, never both. Evidence whose role is ambiguous is retained as an explicit `missing_evidence` or `assumptions` entry, rather than being placed in either evidence list. Prompt examples contain only concrete evidence IDs available in the current frame/broker results—never literal placeholder IDs—and Ollama receives a task-specific JSON Schema that requires a non-empty advisory recommendation. A no-escalation recommendation must use `OBSERVE` explicitly; M.I.O. never represents it with an empty action.
 
 ### `broker.py`
 
@@ -247,6 +247,8 @@ Operational influence remains gated by #373 adversarial review and the later cro
 `tests/test_mio_frame_builder_with_evaluators.py` feeds real `NocEvaluator` and `SocEvaluator` result shapes into the builder and verifies evidence linkage without copying IP/subject content into the model frame.
 
 `tests/test_mio_adversarial_schema.py` covers malformed array fields, nonnumeric priority, duplicate hypothesis IDs, invalid Evidence Gap hypothesis references, explicit hypothesis-revision schema, and arbitrary-DNS endpoint rejection.
+
+`tests/test_mio_real_model_regressions.py` replays captured local `qwen3.5:2b` success output to `COMPLETE`, and an earlier empty-recommendation output to `VALIDATION_REJECTED`. The captured fixture is a regression artifact; every replay is still independently grounded before it can be accepted.
 
 ## Remaining before the #373 gate
 

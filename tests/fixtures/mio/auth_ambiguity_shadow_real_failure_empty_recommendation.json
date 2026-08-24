@@ -1,0 +1,40 @@
+{
+  "captured_with": {
+    "fixture": "auth_ambiguity_shadow.json",
+    "model": "qwen3.5:2b",
+    "transport": "local_ollama",
+    "prompt_revision": "pre-task-schema"
+  },
+  "model_outputs": {
+    "generate_hypotheses": {
+      "hypotheses": [
+        {
+          "hypothesis_id": "existing-or-short-id",
+          "statement": "bounded hypothesis",
+          "supporting_evidence_refs": [],
+          "contradicting_evidence_refs": ["sha256:fixture-noc-1", "sha256:fixture-ssh-1"],
+          "assumptions": [],
+          "falsification_conditions": ["observable condition"],
+          "expected_observations": [],
+          "missing_evidence": []
+        }
+      ]
+    },
+    "identify_evidence_gaps": {"evidence_gaps": []},
+    "recommend": {
+      "summary": "bounded advisory summary: investigating ambiguous SSH authentication behavior.",
+      "recommended_action": "",
+      "rationale": "",
+      "evidence_refs": [],
+      "limitations": []
+    }
+  },
+  "expected": {
+    "state": "validation_rejected",
+    "errors": [
+      "empty_recommendation_rationale",
+      "empty_recommended_action",
+      "empty_recommendation_evidence_refs"
+    ]
+  }
+}
