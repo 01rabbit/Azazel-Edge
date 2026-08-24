@@ -1,0 +1,81 @@
+{
+  "trace_id": "mio-fixture-auth-1",
+  "cycle_id": "mio-fixture-auth-1:cycle",
+  "frame_id": "mio-fixture-auth-1:frame",
+  "created_at": "2026-08-23T00:00:05Z",
+  "mission": "Investigate ambiguous SSH authentication while preserving availability",
+  "current_defensive_state": "OBSERVE",
+  "events": [
+    {
+      "event_id": "sha256:fixture-ssh-1",
+      "ts": "2026-08-23T00:00:00Z",
+      "source": "suricata_eve",
+      "kind": "alert",
+      "subject": "redacted-subject",
+      "severity": 65,
+      "confidence": 0.72,
+      "attrs": {
+        "category": "attempted-admin",
+        "risk_score": 65,
+        "message": "UNTRUSTED fixture content is intentionally not copied into MioSituationFrame"
+      }
+    }
+  ],
+  "noc_evaluation": {
+    "summary": {
+      "status": "good",
+      "degraded_mode": false,
+      "reasons": []
+    },
+    "evidence_ids": [
+      "sha256:fixture-noc-1"
+    ]
+  },
+  "soc_evaluation": {
+    "summary": {
+      "status": "high",
+      "reasons": [
+        "suspicion:high",
+        "triage:watch"
+      ]
+    },
+    "suspicion": {
+      "score": 68,
+      "label": "high"
+    },
+    "confidence": {
+      "score": 62,
+      "label": "high"
+    },
+    "blast_radius": {
+      "score": 30,
+      "label": "low"
+    },
+    "security_visibility_state": {
+      "status": "good"
+    },
+    "evidence_ids": [
+      "sha256:fixture-ssh-1"
+    ]
+  },
+  "capabilities": {
+    "query_flow_summary": {
+      "flow_pattern": "bursty repeated SSH attempts with no successful session in fixture window",
+      "evidence_refs": [
+        "sha256:fixture-flow-1"
+      ]
+    },
+    "query_recent_alerts": {
+      "summary": "authentication failures only",
+      "evidence_refs": [
+        "sha256:fixture-alert-summary-1"
+      ]
+    },
+    "lookup_behavior_pattern": {
+      "match": "no prior exact pattern in fixture knowledge",
+      "evidence_refs": [
+        "sha256:fixture-behavior-1"
+      ]
+    }
+  }
+}

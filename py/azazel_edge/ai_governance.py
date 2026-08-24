@@ -30,6 +30,10 @@ class AIGovernance:
     def __init__(self, audit_logger: P0AuditLogger):
         self.audit = audit_logger
 
+    @staticmethod
+    def empty_output() -> Dict[str, Any]:
+        return {'advice': '', 'summary': '', 'candidate': '', 'runbook_candidates': [], 'attack_candidates': []}
+
     def should_invoke(self, context: Dict[str, Any]) -> Tuple[bool, str]:
         intent = str(context.get('intent') or '')
         source = str(context.get('source') or '')
@@ -53,6 +57,62 @@ class AIGovernance:
         for key in FORBIDDEN_KEYS:
             sanitized.pop(key, None)
         return sanitized
+
+    def authorize(self, context: Dict[str, Any], raw_payload: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+        """Apply the repository AI invocation gate and audit the decision.
+
+        This is the reusable pre-invocation seam for structured advisory clients
+        such as the M.I.O. shadow reasoning adapter. It intentionally does not
+        validate a domain-specific model response; callers must apply their own
+        deterministic schema/grounding validation after invocation.
+        """
+        trace_id = str(context.get('trace_id') or raw_payload.get('trace_id') or '')
+        source = str(context.get('source') or raw_payload.get('source') or 'ai_governance')
+        allowed, decision_reason = self.should_invoke(context)
+        sanitized = self.sanitize_payload(raw_payload)
+        self.audit.log(
+            'ai_assist',
+            trace_id=trace_id,
+            source=source,
+            stage='input',
+            decision=decision_reason,
+            payload=sanitized,
+        )
+        if not allowed:
+            self.audit.log(
+                'ai_assist',
+                trace_id=trace_id,
+                source=source,
+                stage='decision',
+                decision='blocked',
+                payload=self.empty_output(),
+            )
+        return allowed, decision_reason, sanitized
+
+    def record_structured_result(
+        self,
+        *,
+        trace_id: str,
+        source: str,
+        candidate_scope: str,
+        decision: str,
+        metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        """Audit structured advisory completion without retaining raw prompts/output."""
+        payload: Dict[str, Any] = {'candidate_scope': str(candidate_scope or '')[:96]}
+        if isinstance(metadata, dict):
+            for key in ('task', 'model', 'response_chars', 'error'):
+                if key in metadata:
+                    value = metadata.get(key)
+                    payload[key] = str(value)[:160] if value is not None else ''
+        self.audit.log(
+            'ai_assist',
+            trace_id=str(trace_id or ''),
+            source=str(source or 'ai_governance'),
+            stage='output',
+            decision=str(decision or 'unknown'),
+            payload=payload,
+        )
 
     def validate_output(self, output: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(output, dict):
@@ -97,27 +157,9 @@ class AIGovernance:
     ) -> Dict[str, Any]:
         trace_id = str(context.get('trace_id') or raw_payload.get('trace_id') or '')
         source = str(context.get('source') or raw_payload.get('source') or 'ai_governance')
-        allowed, decision_reason = self.should_invoke(context)
-        sanitized = self.sanitize_payload(raw_payload)
-        self.audit.log(
-            'ai_assist',
-            trace_id=trace_id,
-            source=source,
-            stage='input',
-            decision=decision_reason,
-            payload=sanitized,
-        )
+        allowed, _decision_reason, sanitized = self.authorize(context, raw_payload)
         if not allowed:
-            result = {'advice': '', 'summary': '', 'candidate': '', 'runbook_candidates': [], 'attack_candidates': []}
-            self.audit.log(
-                'ai_assist',
-                trace_id=trace_id,
-                source=source,
-                stage='decision',
-                decision='blocked',
-                payload=result,
-            )
-            return result
+            return self.empty_output()
         output = invoker(sanitized)
         try:
             validated = self.validate_output(output)
