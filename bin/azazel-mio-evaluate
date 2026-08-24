@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Run recorded M.I.O. evaluation scenarios with no network or live model."""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "py"))
+
+from azazel_edge.mio.evaluation import evaluate_scenario, load_scenarios
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Offline M.I.O. invariant replay; never calls a model or enforcement.")
+    parser.add_argument("--scenarios", type=Path, default=ROOT / "tests/fixtures/mio/evaluation_core.json")
+    parser.add_argument("--fixture-root", type=Path, default=ROOT / "tests/fixtures/mio")
+    args = parser.parse_args()
+    results = [evaluate_scenario(item, fixture_root=args.fixture_root) for item in load_scenarios(args.scenarios)]
+    print(json.dumps({"network": "disabled", "live_model": "disabled", "results": results}, indent=2, sort_keys=True))
+    return 0 if all(item["passed"] for item in results) else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
