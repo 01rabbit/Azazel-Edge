@@ -66,7 +66,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
             outcome_id="outcome-test",
         )
 
-    def test_guardrail_pass_allows_supported_delay(self) -> None:
+    def test_guardrail_pass_allows_supported_delay_without_fake_precision(self) -> None:
         objective = self._objective(
             {"source": "noc_impact", "metric": "impact_score", "max": 20}
         )
@@ -78,6 +78,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
             tactical_effect="DELAY",
         )
         self.assertEqual(result.assessment, EffectAssessmentStatus.SUPPORTED)
+        self.assertIsNone(result.confidence)
 
     def test_guardrail_violation_blocks_supported_delay(self) -> None:
         objective = self._objective(
@@ -92,6 +93,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
         )
         self.assertEqual(result.assessment, EffectAssessmentStatus.UNSUPPORTED)
         self.assertEqual(result.reason_code, "policy_guardrail_violated")
+        self.assertIsNone(result.confidence)
 
     def test_missing_guardrail_evidence_is_inconclusive(self) -> None:
         objective = self._objective(
@@ -106,6 +108,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
         )
         self.assertEqual(result.assessment, EffectAssessmentStatus.INCONCLUSIVE)
         self.assertEqual(result.reason_code, "guardrail_evidence_missing_or_invalid")
+        self.assertIsNone(result.confidence)
 
     def test_ambiguous_guardrail_contract_is_inconclusive(self) -> None:
         objective = self._objective(
@@ -119,6 +122,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
             tactical_effect="DELAY",
         )
         self.assertEqual(result.assessment, EffectAssessmentStatus.INCONCLUSIVE)
+        self.assertIsNone(result.confidence)
 
 
 if __name__ == "__main__":
