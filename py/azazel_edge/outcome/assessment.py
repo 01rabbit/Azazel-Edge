@@ -40,9 +40,10 @@ def assess_tactical_effect(
     """Deterministically assess whether evidence supports a tactical effect objective.
 
     Tactical support is fail-closed: the mechanism must be independently observed,
-    correlation must be exact, the outcome must carry explicit causal support, and
-    any policy-owned guardrails attached to the objective must be evaluable and pass.
-    A requested throttle or provider command success alone can never become ``DELAY``.
+    correlation must be exact, the outcome must carry explicit causal support, the
+    objective must have versioned policy provenance, and any policy-owned guardrails
+    must be evaluable and pass. A requested throttle or provider command success alone
+    can never become ``DELAY``.
 
     v1 deliberately emits no numeric confidence because no calibration corpus exists.
     ``confidence=None`` is the honest representation until calibration is proven.
@@ -59,6 +60,9 @@ def assess_tactical_effect(
         raise ValueError("mechanism/outcome decision correlation mismatch")
     if mechanism.mechanism_id != outcome.mechanism_id:
         raise ValueError("mechanism/outcome mechanism correlation mismatch")
+
+    if not objective.policy_version.strip() or objective.policy_version == "unversioned":
+        return _inconclusive(objective, outcome, effect, refs, "policy_version_unverified")
 
     if mechanism.status is not MechanismStatus.OBSERVED:
         return _inconclusive(objective, outcome, effect, refs, "mechanism_postcondition_not_observed")
