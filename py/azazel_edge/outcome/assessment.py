@@ -40,10 +40,11 @@ def assess_tactical_effect(
     """Deterministically assess whether evidence supports a tactical effect objective.
 
     Tactical support is fail-closed: the mechanism must be independently observed,
-    correlation must be exact, the outcome must carry explicit causal support, the
-    objective must have versioned policy provenance, and any policy-owned guardrails
-    must be evaluable and pass. A requested throttle or provider command success alone
-    can never become ``DELAY``.
+    correlation must be exact, the outcome must carry explicit causal support and
+    usable telemetry coverage, unresolved confounders must be absent, the objective
+    must have versioned policy provenance, and policy-owned guardrails must be
+    evaluable and pass. A requested throttle or provider command success alone can
+    never become ``DELAY``.
 
     v1 deliberately emits no numeric confidence because no calibration corpus exists.
     ``confidence=None`` is the honest representation until calibration is proven.
@@ -77,6 +78,12 @@ def assess_tactical_effect(
         return _inconclusive(objective, outcome, effect, refs, "causal_support_inconclusive")
     if outcome.causal_support is CausalSupport.UNSUPPORTED:
         return _unsupported(objective, outcome, effect, refs, "causal_support_unsupported")
+
+    if not _coverage_usable(outcome.telemetry_coverage):
+        return _inconclusive(objective, outcome, effect, refs, "telemetry_coverage_missing_or_insufficient")
+
+    if not _confounders_resolved(outcome.confounders):
+        return _inconclusive(objective, outcome, effect, refs, "unresolved_confounders")
 
     guardrail_result = _evaluate_guardrails(objective.guardrails, outcome)
     if guardrail_result is None:
@@ -115,6 +122,36 @@ def assess_tactical_effect(
     # supported. Until then, they remain inconclusive rather than being inferred from
     # an action name or a caller-supplied outcome label.
     return _inconclusive(objective, outcome, effect, refs, "tactical_effect_rule_not_implemented")
+
+
+def _coverage_usable(coverage: Mapping[str, Any]) -> bool:
+    """Require explicit non-zero normalized baseline/post coverage for v1 claims.
+
+    v1 does not invent a quality threshold such as 0.8. It only prevents missing,
+    zero, negative, or out-of-range coverage from being silently treated as adequate.
+    A future calibrated policy may introduce stricter thresholds.
+    """
+
+    baseline = _number(coverage.get("baseline"))
+    post = _number(coverage.get("post"))
+    if baseline is None or post is None:
+        return False
+    return 0.0 < baseline <= 1.0 and 0.0 < post <= 1.0
+
+
+def _confounders_resolved(confounders: Any) -> bool:
+    """Known confounders must be explicitly resolved before supporting a claim.
+
+    Empty confounder lists are acceptable. Any recorded confounder without an explicit
+    ``resolved: true`` remains a reason to keep the tactical assessment inconclusive.
+    """
+
+    if not confounders:
+        return True
+    for raw in confounders:
+        if not isinstance(raw, Mapping) or raw.get("resolved") is not True:
+            return False
+    return True
 
 
 def _evaluate_guardrails(
