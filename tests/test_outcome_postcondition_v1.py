@@ -110,9 +110,10 @@ class TrafficShapingPostconditionTests(unittest.TestCase):
                         {
                             "kind": "tbf",
                             "root": True,
-                            # iproute2 internal rate representation may be raw bytes/s.
+                            # iproute2 stores rate as raw bytes/s and get_size64()
+                            # interprets 32kbit as 32 * 1024 / 8 = 4096 bytes.
                             "rate": 32000,
-                            "burst": 4000,
+                            "burst": 4096,
                             "lat": 1_000_000,
                         }
                     ],
@@ -130,6 +131,7 @@ class TrafficShapingPostconditionTests(unittest.TestCase):
         probe = verified.observed_parameters["postcondition_probe"]
         self.assertEqual(probe["verification_strength"], "exact")
         self.assertEqual(probe["basis"], "tc_root_tbf_parameter_readback_match")
+        self.assertEqual(probe["expected"]["burst_bytes"], 4096)
         self.assertEqual(runner.calls, [argv])
         self.assertTrue(any(ref.startswith("postcondition:") for ref in verified.evidence_refs))
 
@@ -140,7 +142,7 @@ class TrafficShapingPostconditionTests(unittest.TestCase):
             {
                 argv: command_result(
                     argv,
-                    [{"kind": "tbf", "root": True, "rate": 64000, "burst": 4000, "lat": 1_000_000}],
+                    [{"kind": "tbf", "root": True, "rate": 64000, "burst": 4096, "lat": 1_000_000}],
                 )
             }
         )
@@ -350,7 +352,7 @@ class AuthorityAndFailureTests(unittest.TestCase):
     def test_arbitrary_provider_stdout_is_not_persisted(self) -> None:
         bundle = from_rust_event(rust_event("throttle"))
         argv = ("tc", "-j", "qdisc", "show", "dev", "br0")
-        payload = [{"kind": "tbf", "root": True, "rate": 32000, "burst": 4000, "lat": 1_000_000}]
+        payload = [{"kind": "tbf", "root": True, "rate": 32000, "burst": 4096, "lat": 1_000_000}]
         result = ReadOnlyCommandResult(
             argv=argv,
             returncode=0,
