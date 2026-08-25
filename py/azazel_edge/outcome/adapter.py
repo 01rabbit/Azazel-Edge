@@ -42,16 +42,20 @@ def _execution_status(enforcement: Mapping[str, Any], action: str) -> ExecutionS
         return ExecutionStatus.REJECTED
     if mode == "dry_run":
         return ExecutionStatus.UNVERIFIED
-    if result == "partial_failure" or (executed_count > 0 and failed_count > 0):
-        return ExecutionStatus.PARTIAL
-    if mode == "enforced" and result == "applied" and failed_count == 0:
-        return ExecutionStatus.APPLIED
-    if action == "observe" and result == "no_disruptive_action":
-        return ExecutionStatus.APPLIED
-    if action == "notify":
-        return ExecutionStatus.UNVERIFIED
     if failed_count > 0 and executed_count == 0:
         return ExecutionStatus.FAILED
+    if failed_count > 0 and executed_count > 0:
+        return ExecutionStatus.PARTIAL
+    if result == "partial_failure":
+        return ExecutionStatus.UNVERIFIED
+    if mode == "enforced" and result == "applied" and failed_count == 0:
+        return ExecutionStatus.APPLIED
+    # observe is an intentional no-runtime-change action. It is complete by definition.
+    if action == "observe" and result == "no_disruptive_action":
+        return ExecutionStatus.APPLIED
+    # The Rust core currently selects notify but does not prove delivery to an external notifier.
+    if action == "notify":
+        return ExecutionStatus.UNVERIFIED
     return ExecutionStatus.UNVERIFIED
 
 
@@ -65,9 +69,12 @@ def _mechanism_kind(action: str) -> MechanismKind:
     }.get(action, MechanismKind.UNKNOWN)
 
 
-def _mechanism_status(status: ExecutionStatus) -> MechanismStatus:
-    if status is ExecutionStatus.APPLIED:
+def _mechanism_status(status: ExecutionStatus, action: str) -> MechanismStatus:
+    if status is ExecutionStatus.APPLIED and action == "observe":
         return MechanismStatus.OBSERVED
+    if status is ExecutionStatus.APPLIED:
+        # A zero exit status proves provider command completion, not postcondition state.
+        return MechanismStatus.UNVERIFIED
     if status is ExecutionStatus.PARTIAL:
         return MechanismStatus.DISPUTED
     if status in {ExecutionStatus.REJECTED, ExecutionStatus.FAILED}:
@@ -125,6 +132,7 @@ def _observed_parameters(
         "result": str(enforcement.get("result") or ""),
         "mode": str(enforcement.get("mode") or ""),
         "metadata": dict(_as_mapping(enforcement.get("metadata"))),
+        "verification_basis": "provider_command_exit_status_only",
     }
 
 
@@ -149,9 +157,13 @@ def from_rust_event(event: Mapping[str, Any]) -> ShadowRecordBundle:
     dst_ip = str(normalized.get("dst_ip") or "")
     sid = str(normalized.get("sid") or "0")
     action = _action_kind(event)
+    if not ts:
+        raise ValueError("normalized.ts is required for canonical shadow evidence")
 
-    incident_id = _stable_id("incident", src_ip, dst_ip, sid)
     decision_id = trace_id or _stable_id("decision", ts, src_ip, dst_ip, sid, action)
+    # No authoritative incident/session identity is proven by the Rust record today.
+    # Use a per-decision synthetic incident id rather than guessing cross-event grouping.
+    incident_id = _stable_id("incident", decision_id)
     action_id = _stable_id("action", decision_id, action)
     execution_id = _stable_id("execution", decision_id, enforcement.get("mode"), enforcement.get("result"))
     mechanism_id = _stable_id("mechanism", execution_id, action)
@@ -162,7 +174,8 @@ def from_rust_event(event: Mapping[str, Any]) -> ShadowRecordBundle:
     scope = _scope(event, action, command_plan)
     params = _observed_parameters(action, command_plan, rollback_plan, enforcement)
 
-    evidence_ref = f"rust-trace:{decision_id}"
+    provider = str(event.get("pipeline") or RUST_PROVIDER)
+    evidence_ref = f"{provider}:{decision_id}"
     error_code = ""
     errors = enforcement.get("errors")
     if isinstance(errors, list) and errors:
@@ -174,7 +187,7 @@ def from_rust_event(event: Mapping[str, Any]) -> ShadowRecordBundle:
         action_id=action_id,
         execution_id=execution_id,
         action_kind=action,
-        provider=RUST_PROVIDER,
+        provider=provider,
         scope=scope,
         requested_parameters={
             "target": enforcement.get("target") or defense.get("target"),
@@ -183,9 +196,9 @@ def from_rust_event(event: Mapping[str, Any]) -> ShadowRecordBundle:
         },
         applied_parameters=params if status in {ExecutionStatus.APPLIED, ExecutionStatus.PARTIAL} else {},
         status=status,
-        requested_at=ts or "unverified",
-        started_at="unverified",
-        completed_at="unverified",
+        requested_at=ts,
+        started_at="",
+        completed_at="",
         reversible=bool(rollback_plan),
         release_ref="rollback_plan" if rollback_plan else "",
         error_code=error_code,
@@ -200,8 +213,8 @@ def from_rust_event(event: Mapping[str, Any]) -> ShadowRecordBundle:
         mechanism_kind=_mechanism_kind(action),
         scope=scope,
         observed_parameters=params,
-        status=_mechanism_status(status),
-        observed_at=ts or "unverified",
+        status=_mechanism_status(status, action),
+        observed_at=ts,
         reversible=bool(rollback_plan),
         evidence_refs=(evidence_ref,),
         producer="azazel_edge.outcome.rust_adapter",
