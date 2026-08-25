@@ -61,6 +61,12 @@ class EffectAssessmentStatus(str, Enum):
     INCONCLUSIVE = "inconclusive"
 
 
+class CausalSupport(str, Enum):
+    SUPPORTED = "supported"
+    UNSUPPORTED = "unsupported"
+    INCONCLUSIVE = "inconclusive"
+
+
 class ActionLifecycle(str, Enum):
     ACTIVE = "active"
     SUPERSEDED = "superseded"
@@ -209,6 +215,9 @@ class OutcomeRecord:
     operator_override: Mapping[str, Any]
     termination_reason: str
     assessment: OutcomeAssessment = OutcomeAssessment.INCONCLUSIVE
+    causal_support: CausalSupport = CausalSupport.INCONCLUSIVE
+    telemetry_coverage: Mapping[str, Any] = field(default_factory=dict)
+    confounders: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     evidence_refs: Sequence[str] = field(default_factory=tuple)
     observed_at: str = field(default_factory=utc_now)
     producer: str = "azazel_edge.outcome"
