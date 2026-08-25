@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
-import os
+import math
 import re
 import shutil
 import subprocess
@@ -23,10 +23,13 @@ from .contracts import (
 _INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
 _NUMBER_UNIT_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)([A-Za-z]+)?$")
 _TRUSTED_BINARY_SEARCH_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+_MAX_PROBE_TIMEOUT_SECONDS = 5.0
+_MAX_STDOUT_BYTES = 1024 * 1024
+_MAX_STDERR_BYTES = 64 * 1024
 
 
 class ReadOnlyCommandRejected(ValueError):
-    """Raised when a caller attempts to use the probe runner for a mutating command."""
+    """Raised when a caller attempts to use the probe runner outside its safe contract."""
 
 
 @dataclass(frozen=True)
@@ -44,35 +47,52 @@ class ReadOnlyRunner(Protocol):
 class SubprocessReadOnlyRunner:
     """Subprocess runner restricted to exact read-only tc/nft query shapes.
 
-    It never invokes a shell, accepts no caller-controlled subcommand shape, ignores
-    the process PATH when resolving tc/nft, and is deliberately unsuitable for
-    enforcement, rollback, repair, or release.
+    It never invokes a shell, ignores the process PATH and loader environment, bounds
+    runtime/output, and is deliberately unsuitable for enforcement, rollback, repair,
+    or release.
     """
 
     def run(self, argv: Sequence[str], *, timeout_seconds: float) -> ReadOnlyCommandResult:
         args = tuple(str(value) for value in argv)
         if not _is_allowed_read_only_query(args):
             raise ReadOnlyCommandRejected(f"command is outside read-only probe allowlist: {args!r}")
+
+        timeout = float(timeout_seconds)
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ReadOnlyCommandRejected("probe timeout must be a finite positive number")
+        timeout = min(max(0.1, timeout), _MAX_PROBE_TIMEOUT_SECONDS)
+
         binary = shutil.which(args[0], path=_TRUSTED_BINARY_SEARCH_PATH)
         if not binary:
             raise OSError(f"read-only probe binary not found in trusted path: {args[0]}")
-        env = dict(os.environ)
-        env["LC_ALL"] = "C"
-        env["PATH"] = _TRUSTED_BINARY_SEARCH_PATH
+
+        # Deliberately do not inherit os.environ. In particular, loader variables such
+        # as LD_PRELOAD/LD_LIBRARY_PATH must never influence a privileged probe.
+        env = {
+            "LC_ALL": "C",
+            "LANG": "C",
+            "PATH": _TRUSTED_BINARY_SEARCH_PATH,
+        }
         completed = subprocess.run(
             (binary, *args[1:]),
             shell=False,
             capture_output=True,
             text=True,
-            timeout=max(0.1, float(timeout_seconds)),
+            timeout=timeout,
             check=False,
             env=env,
         )
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
+        if len(stdout.encode("utf-8", errors="replace")) > _MAX_STDOUT_BYTES:
+            raise OSError("read-only probe stdout exceeded safety bound")
+        if len(stderr.encode("utf-8", errors="replace")) > _MAX_STDERR_BYTES:
+            raise OSError("read-only probe stderr exceeded safety bound")
         return ReadOnlyCommandResult(
             argv=args,
             returncode=int(completed.returncode),
-            stdout=completed.stdout or "",
-            stderr=completed.stderr or "",
+            stdout=stdout,
+            stderr=stderr,
         )
 
 
