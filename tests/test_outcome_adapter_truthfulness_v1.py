@@ -60,6 +60,12 @@ class AdapterTruthfulnessTests(unittest.TestCase):
         self.assertEqual(bundle.execution.applied_parameters["failed_count"], 1)
         self.assertFalse(bundle.execution.applied_parameters["individual_command_mapping_verified"])
 
+    def test_disruptive_applied_with_zero_executed_commands_is_unverified(self) -> None:
+        bundle = from_rust_event(rust_event(result="applied", executed_count=0, failed_count=0))
+        self.assertEqual(bundle.execution.status.value, "unverified")
+        self.assertEqual(bundle.execution.applied_parameters, {})
+        self.assertEqual(bundle.mechanism.status.value, "unverified")
+
 
 if __name__ == "__main__":
     unittest.main()
