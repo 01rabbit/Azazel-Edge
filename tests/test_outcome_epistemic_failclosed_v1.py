@@ -40,7 +40,7 @@ class EpistemicFailClosedTests(unittest.TestCase):
             evidence_refs=("evidence:mechanism",),
         )
 
-    def _outcome(self, *, coverage: dict, confounders: tuple[dict, ...]) -> OutcomeRecord:
+    def _make_outcome(self, *, coverage: dict, confounders: tuple[dict, ...]) -> OutcomeRecord:
         objective = self._objective()
         return OutcomeRecord(
             incident_id="incident-epistemic",
@@ -67,7 +67,7 @@ class EpistemicFailClosedTests(unittest.TestCase):
 
     def test_missing_or_zero_coverage_cannot_support_delay(self) -> None:
         objective = self._objective()
-        outcome = self._outcome(coverage={"baseline": 1.0, "post": 0.0}, confounders=())
+        outcome = self._make_outcome(coverage={"baseline": 1.0, "post": 0.0}, confounders=())
         result = assess_tactical_effect(
             mechanism=self._mechanism(),
             objective=objective,
@@ -79,7 +79,7 @@ class EpistemicFailClosedTests(unittest.TestCase):
 
     def test_unresolved_confounder_cannot_support_delay(self) -> None:
         objective = self._objective()
-        outcome = self._outcome(
+        outcome = self._make_outcome(
             coverage={"baseline": 1.0, "post": 1.0},
             confounders=({"kind": "operator_intervention", "resolved": False},),
         )
