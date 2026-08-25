@@ -1,7 +1,7 @@
 """Outcome-as-Evidence v1 shadow contracts.
 
-This package is deliberately non-authoritative. Live defensive execution remains in
-the existing Rust event-engine enforcement path.
+This package is deliberately non-authoritative. Live defensive execution and release
+remain in the existing Rust event-engine control plane.
 """
 
 from .adapter import from_rust_event
@@ -24,11 +24,17 @@ from .contracts import (
     TacticalEffectAssessment,
 )
 from .observer import ShadowOutcomeObserver
+from .ownership import expected_ownership, verify_mechanism_postcondition
 from .postcondition import (
     ReadOnlyCommandRejected,
     ReadOnlyCommandResult,
     SubprocessReadOnlyRunner,
-    verify_mechanism_postcondition,
+)
+from .release_evidence import (
+    ReleaseEvidenceRecord,
+    ReleaseEvidenceStatus,
+    from_rust_release_event,
+    reconcile_release_evidence,
 )
 from .replay import ReplayExecutionForbidden, ReplayExecutionProvider
 
@@ -47,6 +53,8 @@ __all__ = [
     "OutcomeRecord",
     "ReadOnlyCommandRejected",
     "ReadOnlyCommandResult",
+    "ReleaseEvidenceRecord",
+    "ReleaseEvidenceStatus",
     "ReplayExecutionForbidden",
     "ReplayExecutionProvider",
     "ShadowMode",
@@ -55,6 +63,9 @@ __all__ = [
     "SubprocessReadOnlyRunner",
     "TacticalEffectAssessment",
     "assess_tactical_effect",
+    "expected_ownership",
     "from_rust_event",
+    "from_rust_release_event",
+    "reconcile_release_evidence",
     "verify_mechanism_postcondition",
 ]
