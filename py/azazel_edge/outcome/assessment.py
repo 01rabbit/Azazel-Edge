@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from .contracts import (
+    AppliedMechanism,
     CausalSupport,
     EffectAssessmentStatus,
     EffectObjective,
     MechanismKind,
+    MechanismStatus,
     OutcomeAssessment,
     OutcomeRecord,
     TacticalEffectAssessment,
@@ -23,43 +25,38 @@ _TIME_METRICS = {
 
 def assess_tactical_effect(
     *,
-    mechanism_kind: MechanismKind,
+    mechanism: AppliedMechanism,
     objective: EffectObjective,
     outcome: OutcomeRecord,
     tactical_effect: str,
 ) -> TacticalEffectAssessment:
     """Deterministically assess whether evidence supports a tactical effect.
 
-    The function is intentionally conservative. A requested throttle never becomes
-    ``DELAY`` solely from the action name or a command plan.
+    Tactical support is fail-closed: the mechanism must be independently observed,
+    correlation must be exact, and the outcome must carry explicit causal support.
+    A requested throttle or provider command success alone can never become ``DELAY``.
     """
 
     effect = tactical_effect.upper().strip()
-    refs = tuple(dict.fromkeys((*outcome.evidence_refs,)))
+    refs = tuple(dict.fromkeys((*mechanism.evidence_refs, *outcome.evidence_refs)))
+
+    if objective.decision_id != outcome.decision_id:
+        raise ValueError("objective/outcome decision correlation mismatch")
+    if objective.objective_id != outcome.objective_id:
+        raise ValueError("objective/outcome objective correlation mismatch")
+    if mechanism.decision_id != outcome.decision_id:
+        raise ValueError("mechanism/outcome decision correlation mismatch")
+    if mechanism.mechanism_id != outcome.mechanism_id:
+        raise ValueError("mechanism/outcome mechanism correlation mismatch")
+
+    if mechanism.status is not MechanismStatus.OBSERVED:
+        return _inconclusive(objective, outcome, effect, refs, "mechanism_postcondition_not_observed")
 
     if outcome.assessment is OutcomeAssessment.INCONCLUSIVE:
-        return TacticalEffectAssessment(
-            outcome_id=outcome.outcome_id,
-            mechanism_id=outcome.mechanism_id,
-            objective_id=objective.objective_id,
-            tactical_effect=effect,
-            assessment=EffectAssessmentStatus.INCONCLUSIVE,
-            confidence=0.0,
-            reason_code="outcome_inconclusive",
-            evidence_refs=refs,
-        )
+        return _inconclusive(objective, outcome, effect, refs, "outcome_inconclusive")
 
     if not refs:
-        return TacticalEffectAssessment(
-            outcome_id=outcome.outcome_id,
-            mechanism_id=outcome.mechanism_id,
-            objective_id=objective.objective_id,
-            tactical_effect=effect,
-            assessment=EffectAssessmentStatus.INCONCLUSIVE,
-            confidence=0.0,
-            reason_code="missing_evidence_refs",
-            evidence_refs=(),
-        )
+        return _inconclusive(objective, outcome, effect, (), "missing_evidence_refs")
 
     if outcome.causal_support is CausalSupport.INCONCLUSIVE:
         return _inconclusive(objective, outcome, effect, refs, "causal_support_inconclusive")
@@ -67,7 +64,7 @@ def assess_tactical_effect(
         return _unsupported(objective, outcome, effect, refs, "causal_support_unsupported")
 
     if effect == "DELAY":
-        if mechanism_kind is not MechanismKind.TRAFFIC_SHAPING:
+        if mechanism.mechanism_kind is not MechanismKind.TRAFFIC_SHAPING:
             return _unsupported(objective, outcome, effect, refs, "delay_requires_traffic_shaping_mechanism")
         if objective.metric not in _TIME_METRICS or objective.direction != "increase":
             return _inconclusive(objective, outcome, effect, refs, "delay_requires_time_metric_increase_objective")
@@ -87,7 +84,7 @@ def assess_tactical_effect(
                 tactical_effect=effect,
                 assessment=EffectAssessmentStatus.SUPPORTED,
                 confidence=0.75 if outcome.assessment is OutcomeAssessment.PARTIALLY_EFFECTIVE else 0.9,
-                reason_code="time_metric_increased_with_explicit_causal_support",
+                reason_code="observed_mechanism_time_metric_increased_with_explicit_causal_support",
                 evidence_refs=refs,
             )
         return _unsupported(objective, outcome, effect, refs, "time_metric_did_not_support_delay")
