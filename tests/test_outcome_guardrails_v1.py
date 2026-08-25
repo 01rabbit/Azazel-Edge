@@ -42,7 +42,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
             objective_id="objective-test",
         )
 
-    def _outcome(self, objective: EffectObjective, *, noc_impact: dict) -> OutcomeRecord:
+    def _make_outcome(self, objective: EffectObjective, *, noc_impact: dict) -> OutcomeRecord:
         return OutcomeRecord(
             incident_id="incident-test",
             decision_id="decision-test",
@@ -70,7 +70,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
         objective = self._objective(
             {"source": "noc_impact", "metric": "impact_score", "max": 20}
         )
-        outcome = self._outcome(objective, noc_impact={"impact_score": 10})
+        outcome = self._make_outcome(objective, noc_impact={"impact_score": 10})
         result = assess_tactical_effect(
             mechanism=self._mechanism(),
             objective=objective,
@@ -84,7 +84,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
         objective = self._objective(
             {"source": "noc_impact", "metric": "impact_score", "max": 20}
         )
-        outcome = self._outcome(objective, noc_impact={"impact_score": 30})
+        outcome = self._make_outcome(objective, noc_impact={"impact_score": 30})
         result = assess_tactical_effect(
             mechanism=self._mechanism(),
             objective=objective,
@@ -99,7 +99,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
         objective = self._objective(
             {"source": "noc_impact", "metric": "impact_score", "max": 20}
         )
-        outcome = self._outcome(objective, noc_impact={})
+        outcome = self._make_outcome(objective, noc_impact={})
         result = assess_tactical_effect(
             mechanism=self._mechanism(),
             objective=objective,
@@ -114,7 +114,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
         objective = self._objective(
             {"source": "noc_impact", "metric": "impact_score", "min": 0, "max": 20}
         )
-        outcome = self._outcome(objective, noc_impact={"impact_score": 10})
+        outcome = self._make_outcome(objective, noc_impact={"impact_score": 10})
         result = assess_tactical_effect(
             mechanism=self._mechanism(),
             objective=objective,
@@ -129,7 +129,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
             {"source": "noc_impact", "metric": "impact_score", "max": 20},
             policy_version="unversioned",
         )
-        outcome = self._outcome(objective, noc_impact={"impact_score": 10})
+        outcome = self._make_outcome(objective, noc_impact={"impact_score": 10})
         result = assess_tactical_effect(
             mechanism=self._mechanism(),
             objective=objective,
