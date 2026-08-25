@@ -1,0 +1,217 @@
+from __future__ import annotations
+
+import hashlib
+from typing import Any, Mapping
+
+from .contracts import (
+    ActionExecutionReceipt,
+    AppliedMechanism,
+    Correlation,
+    ExecutionStatus,
+    MechanismKind,
+    MechanismStatus,
+    ShadowRecordBundle,
+)
+
+
+RUST_PROVIDER = "rust_event_engine_v1"
+
+
+def _stable_id(prefix: str, *parts: object) -> str:
+    raw = "\x1f".join(str(part) for part in parts).encode("utf-8", errors="replace")
+    return f"{prefix}-{hashlib.sha256(raw).hexdigest()[:24]}"
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _action_kind(event: Mapping[str, Any]) -> str:
+    enforcement = _as_mapping(event.get("enforcement"))
+    defense = _as_mapping(event.get("defense"))
+    return str(enforcement.get("selected_action") or defense.get("action") or "unknown").lower()
+
+
+def _execution_status(enforcement: Mapping[str, Any], action: str) -> ExecutionStatus:
+    mode = str(enforcement.get("mode", "")).lower()
+    result = str(enforcement.get("result", "")).lower()
+    failed_count = int(enforcement.get("failed_count") or 0)
+    executed_count = int(enforcement.get("executed_count") or 0)
+
+    if mode == "policy_gated":
+        return ExecutionStatus.REJECTED
+    if mode == "dry_run":
+        return ExecutionStatus.UNVERIFIED
+    if result == "partial_failure" or (executed_count > 0 and failed_count > 0):
+        return ExecutionStatus.PARTIAL
+    if mode == "enforced" and result == "applied" and failed_count == 0:
+        return ExecutionStatus.APPLIED
+    if action == "observe" and result == "no_disruptive_action":
+        return ExecutionStatus.APPLIED
+    if action == "notify":
+        return ExecutionStatus.UNVERIFIED
+    if failed_count > 0 and executed_count == 0:
+        return ExecutionStatus.FAILED
+    return ExecutionStatus.UNVERIFIED
+
+
+def _mechanism_kind(action: str) -> MechanismKind:
+    return {
+        "throttle": MechanismKind.TRAFFIC_SHAPING,
+        "redirect": MechanismKind.REDIRECTION,
+        "isolate": MechanismKind.ISOLATION,
+        "notify": MechanismKind.NOTIFICATION,
+        "observe": MechanismKind.OBSERVATION_ONLY,
+    }.get(action, MechanismKind.UNKNOWN)
+
+
+def _mechanism_status(status: ExecutionStatus) -> MechanismStatus:
+    if status is ExecutionStatus.APPLIED:
+        return MechanismStatus.OBSERVED
+    if status is ExecutionStatus.PARTIAL:
+        return MechanismStatus.DISPUTED
+    if status in {ExecutionStatus.REJECTED, ExecutionStatus.FAILED}:
+        return MechanismStatus.NOT_OBSERVED
+    if status is ExecutionStatus.RELEASED:
+        return MechanismStatus.RELEASED
+    return MechanismStatus.UNVERIFIED
+
+
+def _extract_iface(command_plan: list[str]) -> str:
+    for command in command_plan:
+        parts = command.split()
+        if parts[:3] == ["tc", "qdisc", "replace"] and "dev" in parts:
+            idx = parts.index("dev")
+            if idx + 1 < len(parts):
+                return parts[idx + 1]
+    return ""
+
+
+def _scope(event: Mapping[str, Any], action: str, command_plan: list[str]) -> dict[str, Any]:
+    normalized = _as_mapping(event.get("normalized"))
+    src_ip = str(normalized.get("src_ip") or "")
+    target_port = normalized.get("target_port")
+    if action == "throttle":
+        # Current Rust plan installs a root qdisc on the configured interface.
+        # Do not mislabel this as attacker-scoped simply because the decision target is an IP.
+        return {
+            "scope_kind": "interface_root_qdisc",
+            "interface": _extract_iface(command_plan),
+            "decision_subject_ip": src_ip,
+        }
+    if action == "redirect":
+        return {
+            "scope_kind": "source_ip_and_destination_port",
+            "source_ip": src_ip,
+            "destination_port": target_port,
+        }
+    if action == "isolate":
+        return {"scope_kind": "source_ip", "source_ip": src_ip}
+    return {"scope_kind": "logical_action", "subject_ip": src_ip}
+
+
+def _observed_parameters(
+    action: str,
+    command_plan: list[str],
+    rollback_plan: list[str],
+    enforcement: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "action": action,
+        "apply_commands": command_plan,
+        "rollback_commands": rollback_plan,
+        "executed_count": int(enforcement.get("executed_count") or 0),
+        "failed_count": int(enforcement.get("failed_count") or 0),
+        "result": str(enforcement.get("result") or ""),
+        "mode": str(enforcement.get("mode") or ""),
+        "metadata": dict(_as_mapping(enforcement.get("metadata"))),
+    }
+
+
+def from_rust_event(event: Mapping[str, Any]) -> ShadowRecordBundle:
+    """Normalize an existing Rust event-engine record into shadow evidence contracts.
+
+    This function never executes, retries, releases, or authorizes an action. The Rust
+    event engine remains the source of execution facts. Missing facts are represented
+    as ``unverified`` rather than inferred.
+    """
+
+    normalized = _as_mapping(event.get("normalized"))
+    defense = _as_mapping(event.get("defense"))
+    enforcement = _as_mapping(event.get("enforcement"))
+
+    if not normalized or not defense or not enforcement:
+        raise ValueError("rust event must contain normalized, defense and enforcement objects")
+
+    trace_id = str(enforcement.get("trace_id") or "")
+    ts = str(normalized.get("ts") or "")
+    src_ip = str(normalized.get("src_ip") or "")
+    dst_ip = str(normalized.get("dst_ip") or "")
+    sid = str(normalized.get("sid") or "0")
+    action = _action_kind(event)
+
+    incident_id = _stable_id("incident", src_ip, dst_ip, sid)
+    decision_id = trace_id or _stable_id("decision", ts, src_ip, dst_ip, sid, action)
+    action_id = _stable_id("action", decision_id, action)
+    execution_id = _stable_id("execution", decision_id, enforcement.get("mode"), enforcement.get("result"))
+    mechanism_id = _stable_id("mechanism", execution_id, action)
+
+    command_plan = [str(v) for v in enforcement.get("command_plan", []) if isinstance(v, str)]
+    rollback_plan = [str(v) for v in enforcement.get("rollback_plan", []) if isinstance(v, str)]
+    status = _execution_status(enforcement, action)
+    scope = _scope(event, action, command_plan)
+    params = _observed_parameters(action, command_plan, rollback_plan, enforcement)
+
+    evidence_ref = f"rust-trace:{decision_id}"
+    error_code = ""
+    errors = enforcement.get("errors")
+    if isinstance(errors, list) and errors:
+        error_code = "provider_command_failure"
+
+    receipt = ActionExecutionReceipt(
+        incident_id=incident_id,
+        decision_id=decision_id,
+        action_id=action_id,
+        execution_id=execution_id,
+        action_kind=action,
+        provider=RUST_PROVIDER,
+        scope=scope,
+        requested_parameters={
+            "target": enforcement.get("target") or defense.get("target"),
+            "policy_reason": enforcement.get("policy_reason") or defense.get("policy_reason"),
+            "command_plan": command_plan,
+        },
+        applied_parameters=params if status in {ExecutionStatus.APPLIED, ExecutionStatus.PARTIAL} else {},
+        status=status,
+        requested_at=ts or "unverified",
+        started_at="unverified",
+        completed_at="unverified",
+        reversible=bool(rollback_plan),
+        release_ref="rollback_plan" if rollback_plan else "",
+        error_code=error_code,
+        provider_evidence_refs=(evidence_ref,),
+        producer="azazel_edge.outcome.rust_adapter",
+        idempotency_key=execution_id,
+    )
+    mechanism = AppliedMechanism(
+        mechanism_id=mechanism_id,
+        execution_id=execution_id,
+        decision_id=decision_id,
+        mechanism_kind=_mechanism_kind(action),
+        scope=scope,
+        observed_parameters=params,
+        status=_mechanism_status(status),
+        observed_at=ts or "unverified",
+        reversible=bool(rollback_plan),
+        evidence_refs=(evidence_ref,),
+        producer="azazel_edge.outcome.rust_adapter",
+    )
+    correlation = Correlation(
+        incident_id=incident_id,
+        decision_id=decision_id,
+        action_id=action_id,
+        execution_id=execution_id,
+        mechanism_id=mechanism_id,
+        reasoning_trace_id=trace_id,
+    )
+    return ShadowRecordBundle(correlation=correlation, execution=receipt, mechanism=mechanism)
