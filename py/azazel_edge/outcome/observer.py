@@ -64,23 +64,29 @@ def iter_jsonl(
             time.sleep(max(0.05, poll_seconds))
 
 
-def _rotate_if_needed(path: Path, incoming_bytes: int, max_bytes: int) -> None:
-    if max_bytes <= 0 or not path.exists():
-        return
+def _ensure_capacity(path: Path, incoming_bytes: int, max_bytes: int) -> bool:
+    if max_bytes <= 0:
+        return True
+    if incoming_bytes > max_bytes:
+        # One pathological record must not defeat the retention bound.
+        return False
+    if not path.exists():
+        return True
     try:
         current_bytes = path.stat().st_size
     except OSError:
-        return
+        return False
     if current_bytes + incoming_bytes <= max_bytes:
-        return
+        return True
 
     archive = Path(f"{path}.1")
     try:
         archive.unlink(missing_ok=True)
         path.replace(archive)
     except OSError:
-        # Shadow retention failure must never interact with the live control path.
-        return
+        # Shadow evidence may be dropped; uncontrolled disk growth is worse.
+        return False
+    return True
 
 
 def append_jsonl(
@@ -94,7 +100,8 @@ def append_jsonl(
     for value in values:
         line = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
         encoded_bytes = len(line.encode("utf-8"))
-        _rotate_if_needed(path, encoded_bytes, max_bytes)
+        if not _ensure_capacity(path, encoded_bytes, max_bytes):
+            continue
         try:
             with path.open("a", encoding="utf-8", buffering=1) as stream:
                 stream.write(line)
