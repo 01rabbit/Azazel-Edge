@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from azazel_edge.outcome import from_rust_event
+from azazel_edge.outcome import MechanismKind, from_rust_event
 
 
 def rust_event(*, result: str = "applied", executed_count: int = 1, failed_count: int = 0) -> dict:
@@ -68,6 +68,30 @@ class AdapterTruthfulnessTests(unittest.TestCase):
         self.assertEqual(bundle.execution.lifecycle.value, "unverified")
         self.assertEqual(bundle.execution.applied_parameters, {})
         self.assertEqual(bundle.mechanism.status.value, "unverified")
+
+    def test_provider_trace_and_effective_fallback_action_remain_distinct(self) -> None:
+        event = rust_event(result="no_disruptive_action", executed_count=0, failed_count=0)
+        # Rust calculates trace_id before redirect policy fallback. The enforcement
+        # record may therefore keep the original redirect trace while selecting a
+        # different effective action. Preserve the trace as decision provenance and
+        # represent the effective action separately rather than rewriting history.
+        event["defense"]["action"] = "redirect"
+        event["enforcement"].update(
+            {
+                "mode": "disabled",
+                "selected_action": "notify",
+                "policy_reason": "redirect_policy:unsupported_port_default",
+                "command_plan": [],
+                "rollback_plan": [],
+            }
+        )
+        bundle = from_rust_event(event)
+        self.assertEqual(bundle.execution.decision_id, "trace-test-truth")
+        self.assertEqual(bundle.correlation.reasoning_trace_id, "trace-test-truth")
+        self.assertEqual(bundle.execution.action_kind, "notify")
+        self.assertEqual(bundle.mechanism.mechanism_kind, MechanismKind.NOTIFICATION)
+        self.assertEqual(bundle.execution.status.value, "unverified")
+        self.assertIn("unsupported_port_default", bundle.execution.requested_parameters["policy_reason"])
 
 
 if __name__ == "__main__":
