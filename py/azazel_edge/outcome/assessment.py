@@ -62,7 +62,8 @@ def assess_tactical_effect(
     if mechanism.mechanism_id != outcome.mechanism_id:
         raise ValueError("mechanism/outcome mechanism correlation mismatch")
 
-    if not objective.policy_version.strip() or objective.policy_version == "unversioned":
+    policy_version = objective.policy_version
+    if not isinstance(policy_version, str) or not policy_version.strip() or policy_version == "unversioned":
         return _inconclusive(objective, outcome, effect, refs, "policy_version_unverified")
 
     if mechanism.status is not MechanismStatus.OBSERVED:
@@ -132,6 +133,8 @@ def _coverage_usable(coverage: Mapping[str, Any]) -> bool:
     A future calibrated policy may introduce stricter thresholds.
     """
 
+    if not isinstance(coverage, Mapping):
+        return False
     baseline = _number(coverage.get("baseline"))
     post = _number(coverage.get("post"))
     if baseline is None or post is None:
@@ -184,11 +187,14 @@ def _evaluate_guardrails(
         metric = str(raw.get("metric") or "")
         if source not in _GUARDRAIL_SOURCES or not metric:
             return None
+        source_map = source_maps[source]
+        if not isinstance(source_map, Mapping):
+            return None
         has_min = "min" in raw
         has_max = "max" in raw
         if has_min == has_max:
             return None
-        observed = _number(source_maps[source].get(metric))
+        observed = _number(source_map.get(metric))
         threshold = _number(raw.get("min") if has_min else raw.get("max"))
         if observed is None or threshold is None:
             return None
