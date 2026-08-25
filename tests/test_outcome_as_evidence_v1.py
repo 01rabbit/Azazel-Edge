@@ -126,7 +126,7 @@ class TacticalEffectTests(unittest.TestCase):
             direction="increase",
             target_or_range={"minimum_delta": 500},
             observation_window={"seconds": 30},
-            guardrails=({"metric": "noc_impact", "max": 20},),
+            guardrails=({"source": "noc_impact", "metric": "impact_score", "max": 20},),
             policy_version="test-v1",
             objective_id="objective-test-1",
         )
@@ -166,7 +166,7 @@ class TacticalEffectTests(unittest.TestCase):
             post_metrics={"connection_latency_ms": after},
             adversary_response={},
             asset_impact={},
-            noc_impact={},
+            noc_impact={"impact_score": 0},
             resource_impact={},
             operator_override={},
             termination_reason="window_complete",
