@@ -15,6 +15,7 @@ from .contracts import (
 
 
 RUST_PROVIDER = "rust_event_engine_v1"
+_DISRUPTIVE_ACTIONS = {"throttle", "redirect", "isolate"}
 
 
 def _stable_id(prefix: str, *parts: object) -> str:
@@ -49,6 +50,12 @@ def _execution_status(enforcement: Mapping[str, Any], action: str) -> ExecutionS
     if result == "partial_failure":
         return ExecutionStatus.UNVERIFIED
     if mode == "enforced" and result == "applied" and failed_count == 0:
+        # A disruptive provider cannot truthfully be marked applied if it reports
+        # that it executed zero commands. Current Rust normally cannot emit this
+        # combination, but the normalization boundary remains fail-closed for
+        # malformed/legacy/provider records.
+        if action in _DISRUPTIVE_ACTIONS and executed_count <= 0:
+            return ExecutionStatus.UNVERIFIED
         return ExecutionStatus.APPLIED
     # observe is an intentional no-runtime-change action. It is complete by definition.
     if action == "observe" and result == "no_disruptive_action":
