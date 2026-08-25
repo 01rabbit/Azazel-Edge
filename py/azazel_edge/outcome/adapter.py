@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from .contracts import (
     ActionExecutionReceipt,
+    ActionLifecycle,
     AppliedMechanism,
     Correlation,
     ExecutionStatus,
@@ -64,6 +65,18 @@ def _execution_status(enforcement: Mapping[str, Any], action: str) -> ExecutionS
     if action == "notify":
         return ExecutionStatus.UNVERIFIED
     return ExecutionStatus.UNVERIFIED
+
+
+def _action_lifecycle(status: ExecutionStatus) -> ActionLifecycle:
+    return {
+        ExecutionStatus.APPLIED: ActionLifecycle.ACTIVE,
+        ExecutionStatus.PARTIAL: ActionLifecycle.UNVERIFIED,
+        ExecutionStatus.REJECTED: ActionLifecycle.REJECTED,
+        ExecutionStatus.FAILED: ActionLifecycle.FAILED,
+        ExecutionStatus.EXPIRED: ActionLifecycle.EXPIRED,
+        ExecutionStatus.RELEASED: ActionLifecycle.RELEASED,
+        ExecutionStatus.UNVERIFIED: ActionLifecycle.UNVERIFIED,
+    }[status]
 
 
 def _mechanism_kind(action: str) -> MechanismKind:
@@ -199,6 +212,7 @@ def from_rust_event(event: Mapping[str, Any]) -> ShadowRecordBundle:
     command_plan = [str(v) for v in enforcement.get("command_plan", []) if isinstance(v, str)]
     rollback_plan = [str(v) for v in enforcement.get("rollback_plan", []) if isinstance(v, str)]
     status = _execution_status(enforcement, action)
+    lifecycle = _action_lifecycle(status)
     mechanism_status = _mechanism_status(status, action)
     scope = _scope(event, action, command_plan)
     provider_summary = _provider_execution_summary(enforcement)
@@ -234,6 +248,7 @@ def from_rust_event(event: Mapping[str, Any]) -> ShadowRecordBundle:
         error_code=error_code,
         provider_evidence_refs=(evidence_ref,),
         producer="azazel_edge.outcome.rust_adapter",
+        lifecycle=lifecycle,
         idempotency_key=execution_id,
     )
     mechanism = AppliedMechanism(
