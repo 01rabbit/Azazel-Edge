@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -19,6 +20,7 @@ from .contracts import (
 
 
 _INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
+_NUMBER_UNIT_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)([A-Za-z]+)?$")
 
 
 class ReadOnlyCommandRejected(ValueError):
@@ -38,15 +40,14 @@ class ReadOnlyRunner(Protocol):
 
 
 class SubprocessReadOnlyRunner:
-    """Minimal subprocess runner restricted to exact read-only tc/nft query shapes.
+    """Subprocess runner restricted to exact read-only tc/nft query shapes.
 
-    This runner is deliberately unsuitable for enforcement. It never invokes a shell,
-    accepts no arbitrary subcommands, and rejects every argv shape outside the small
-    G1a query allowlist.
+    It never invokes a shell, accepts no caller-controlled subcommand shape, and is
+    deliberately unsuitable for enforcement, rollback, repair, or release.
     """
 
     def run(self, argv: Sequence[str], *, timeout_seconds: float) -> ReadOnlyCommandResult:
-        args = tuple(str(v) for v in argv)
+        args = tuple(str(value) for value in argv)
         if not _is_allowed_read_only_query(args):
             raise ReadOnlyCommandRejected(f"command is outside read-only probe allowlist: {args!r}")
         env = dict(os.environ)
@@ -75,14 +76,12 @@ def verify_mechanism_postcondition(
     runner: ReadOnlyRunner,
     timeout_seconds: float = 2.0,
 ) -> AppliedMechanism:
-    """Independently verify a current Edge mechanism with read-only host queries.
+    """Verify a mechanism postcondition using read-only host state.
 
-    G1a does not execute, retry, release, repair, or authorize anything. It only
-    upgrades an existing disruptive ``AppliedMechanism`` from ``unverified`` to
-    ``observed`` when a narrowly-scoped postcondition can be read back from the host.
-
-    A provider receipt must already be ``applied``. Partial/rejected/failed/dry-run
-    receipts are never upgraded by this function even if a similar host state exists.
+    G1a never executes, retries, repairs, releases, or authorizes an action. A
+    disruptive mechanism is promoted to ``observed`` only when an already-applied
+    provider receipt correlates exactly and the expected host/network state is read
+    back with sufficient parameter specificity.
     """
 
     _validate_correlation(execution, mechanism)
@@ -92,6 +91,7 @@ def verify_mechanism_postcondition(
             mechanism,
             status=mechanism.status,
             basis="execution_not_applied",
+            verification_strength="none",
             probe={"execution_status": execution.status.value},
         )
 
@@ -102,11 +102,12 @@ def verify_mechanism_postcondition(
             return _verify_redirection(execution, mechanism, runner, timeout_seconds)
         if mechanism.mechanism_kind is MechanismKind.ISOLATION:
             return _verify_isolation(execution, mechanism, runner, timeout_seconds)
-    except (ReadOnlyCommandRejected, ValueError, TypeError, json.JSONDecodeError) as exc:
+    except (ReadOnlyCommandRejected, ValueError, TypeError, json.JSONDecodeError, OverflowError) as exc:
         return _with_probe_result(
             mechanism,
             status=MechanismStatus.UNVERIFIED,
             basis="probe_input_or_parse_error",
+            verification_strength="none",
             probe={"error": type(exc).__name__},
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -114,15 +115,15 @@ def verify_mechanism_postcondition(
             mechanism,
             status=MechanismStatus.UNVERIFIED,
             basis="probe_runtime_error",
+            verification_strength="none",
             probe={"error": type(exc).__name__},
         )
 
-    # Notification delivery and other future provider types need their own evidence
-    # source. G1a must not use tc/nft state to infer them.
     return _with_probe_result(
         mechanism,
         status=mechanism.status,
         basis="no_postcondition_probe_for_mechanism",
+        verification_strength="none",
         probe={"mechanism_kind": mechanism.mechanism_kind.value},
     )
 
@@ -137,8 +138,7 @@ def _verify_traffic_shaping(
     if scope.get("scope_kind") != "interface_root_qdisc":
         raise ValueError("traffic shaping requires interface_root_qdisc scope")
     interface = _validated_interface(scope.get("interface"))
-    if not _requested_plan_has_tbf(execution, interface):
-        raise ValueError("requested plan does not contain the expected root tbf qdisc")
+    expected = _requested_tbf_semantics(execution, interface)
 
     result = runner.run(("tc", "-j", "qdisc", "show", "dev", interface), timeout_seconds=timeout_seconds)
     if result.returncode != 0:
@@ -146,22 +146,49 @@ def _verify_traffic_shaping(
             mechanism,
             status=MechanismStatus.UNVERIFIED,
             basis="tc_query_failed",
+            verification_strength="none",
             probe=_result_summary(result),
         )
+
     payload = json.loads(result.stdout or "[]")
     if not isinstance(payload, list):
         raise ValueError("tc JSON must be a list")
-    matched = any(
-        isinstance(item, Mapping)
-        and str(item.get("kind") or "").lower() == "tbf"
-        and item.get("root") is True
-        for item in payload
-    )
+
+    saw_root_tbf = False
+    saw_complete_candidate = False
+    for item in payload:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("kind") or "").lower() != "tbf" or item.get("root") is not True:
+            continue
+        saw_root_tbf = True
+        candidate = _readback_tbf_semantics(item)
+        if candidate is None:
+            continue
+        saw_complete_candidate = True
+        if _tbf_semantics_equal(expected, candidate):
+            return _with_probe_result(
+                mechanism,
+                status=MechanismStatus.OBSERVED,
+                basis="tc_root_tbf_parameter_readback_match",
+                verification_strength="exact",
+                probe={**_result_summary(result), "expected": expected, "observed": candidate},
+            )
+
+    if saw_root_tbf and not saw_complete_candidate:
+        return _with_probe_result(
+            mechanism,
+            status=MechanismStatus.UNVERIFIED,
+            basis="tc_root_tbf_present_but_parameters_unverifiable",
+            verification_strength="partial",
+            probe=_result_summary(result),
+        )
     return _with_probe_result(
         mechanism,
-        status=MechanismStatus.OBSERVED if matched else MechanismStatus.NOT_OBSERVED,
-        basis="tc_root_tbf_readback_match" if matched else "tc_root_tbf_not_found",
-        probe=_result_summary(result),
+        status=MechanismStatus.NOT_OBSERVED,
+        basis="tc_root_tbf_parameter_match_not_found",
+        verification_strength="exact",
+        probe={**_result_summary(result), "expected": expected},
     )
 
 
@@ -189,6 +216,7 @@ def _verify_redirection(
             mechanism,
             status=MechanismStatus.UNVERIFIED,
             basis="nft_prerouting_query_failed",
+            verification_strength="none",
             probe=_result_summary(result),
         )
     payload = json.loads(result.stdout or "{}")
@@ -197,7 +225,13 @@ def _verify_redirection(
         mechanism,
         status=MechanismStatus.OBSERVED if matched else MechanismStatus.NOT_OBSERVED,
         basis="nft_redirect_rule_readback_match" if matched else "nft_redirect_rule_not_found",
-        probe=_result_summary(result),
+        verification_strength="exact",
+        probe={
+            **_result_summary(result),
+            "source_ip": source_ip,
+            "destination_port": destination_port,
+            "redirect_port": redirect_port,
+        },
     )
 
 
@@ -223,6 +257,7 @@ def _verify_isolation(
             mechanism,
             status=MechanismStatus.UNVERIFIED,
             basis="nft_input_query_failed",
+            verification_strength="none",
             probe=_result_summary(result),
         )
     payload = json.loads(result.stdout or "{}")
@@ -231,7 +266,8 @@ def _verify_isolation(
         mechanism,
         status=MechanismStatus.OBSERVED if matched else MechanismStatus.NOT_OBSERVED,
         basis="nft_isolation_rule_readback_match" if matched else "nft_isolation_rule_not_found",
-        probe=_result_summary(result),
+        verification_strength="exact",
+        probe={**_result_summary(result), "source_ip": source_ip},
     )
 
 
@@ -266,16 +302,148 @@ def _requested_commands(execution: ActionExecutionReceipt) -> tuple[str, ...]:
     raw = execution.requested_parameters.get("command_plan")
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         return ()
-    return tuple(str(v) for v in raw if isinstance(v, str))
+    return tuple(str(value) for value in raw if isinstance(value, str))
 
 
-def _requested_plan_has_tbf(execution: ActionExecutionReceipt, interface: str) -> bool:
-    expected = ("tc", "qdisc", "replace", "dev", interface, "root", "tbf")
+def _requested_tbf_semantics(execution: ActionExecutionReceipt, interface: str) -> dict[str, int]:
+    expected_prefix = ("tc", "qdisc", "replace", "dev", interface, "root", "tbf")
     for command in _requested_commands(execution):
-        parts = tuple(command.split())
-        if parts[: len(expected)] == expected:
-            return True
-    return False
+        parts = command.split()
+        if tuple(parts[: len(expected_prefix)]) != expected_prefix:
+            continue
+        try:
+            rate = parts[parts.index("rate") + 1]
+            burst = parts[parts.index("burst") + 1]
+            latency = parts[parts.index("latency") + 1]
+        except (ValueError, IndexError) as exc:
+            raise ValueError("requested TBF command is missing rate/burst/latency") from exc
+        return {
+            "rate_bps": _parse_rate_bps(rate),
+            "burst_bytes": _parse_size_bytes(burst),
+            "latency_us": _parse_time_us(latency),
+        }
+    raise ValueError("requested plan does not contain expected root TBF command")
+
+
+def _readback_tbf_semantics(item: Mapping[str, Any]) -> dict[str, int] | None:
+    try:
+        return {
+            "rate_bps": _parse_readback_rate_bps(item.get("rate")),
+            "burst_bytes": _parse_readback_size_bytes(item.get("burst")),
+            "latency_us": _parse_readback_time_us(item.get("lat")),
+        }
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _tbf_semantics_equal(expected: Mapping[str, int], observed: Mapping[str, int]) -> bool:
+    # Kernel/iproute2 conversion can round burst/latency slightly. The tolerance is
+    # narrow and explicit; it is not a license to accept a different shaping policy.
+    rate_ok = _within_relative(expected["rate_bps"], observed["rate_bps"], 0.01)
+    burst_ok = _within_relative(expected["burst_bytes"], observed["burst_bytes"], 0.02)
+    latency_ok = abs(expected["latency_us"] - observed["latency_us"]) <= max(
+        1000, int(expected["latency_us"] * 0.02)
+    )
+    return rate_ok and burst_ok and latency_ok
+
+
+def _within_relative(expected: int, observed: int, tolerance: float) -> bool:
+    if expected <= 0 or observed < 0:
+        return False
+    return abs(expected - observed) <= max(1, int(expected * tolerance))
+
+
+def _parse_rate_bps(value: Any) -> int:
+    number, unit = _number_unit(value)
+    factors = {
+        "bit": 1,
+        "kbit": 1_000,
+        "mbit": 1_000_000,
+        "gbit": 1_000_000_000,
+        "bps": 8,
+        "kbps": 8_000,
+        "mbps": 8_000_000,
+        "gbps": 8_000_000_000,
+    }
+    unit = unit or "bit"
+    if unit not in factors:
+        raise ValueError("unsupported rate unit")
+    return int(round(number * factors[unit]))
+
+
+def _parse_readback_rate_bps(value: Any) -> int:
+    if isinstance(value, bool) or value is None:
+        raise ValueError("invalid readback rate")
+    if isinstance(value, (int, float)):
+        # iproute2 stores qdisc rates internally as bytes/s; JSON implementations in
+        # the field may expose either raw bytes/s or formatted bit/s. Numeric values
+        # are therefore normalized as raw bytes/s, while strings retain their units.
+        return int(round(float(value) * 8.0))
+    return _parse_rate_bps(value)
+
+
+def _parse_size_bytes(value: Any) -> int:
+    number, unit = _number_unit(value)
+    factors = {
+        "b": 1,
+        "byte": 1,
+        "bytes": 1,
+        "kb": 1_000,
+        "kbyte": 1_000,
+        "kbytes": 1_000,
+        "mb": 1_000_000,
+        "gb": 1_000_000_000,
+        "bit": 1 / 8,
+        "kbit": 1_000 / 8,
+        "mbit": 1_000_000 / 8,
+        "gbit": 1_000_000_000 / 8,
+    }
+    unit = unit or "b"
+    if unit not in factors:
+        raise ValueError("unsupported size unit")
+    result = number * factors[unit]
+    if result <= 0:
+        raise ValueError("size must be positive")
+    return int(round(result))
+
+
+def _parse_readback_size_bytes(value: Any) -> int:
+    if isinstance(value, bool) or value is None:
+        raise ValueError("invalid readback size")
+    if isinstance(value, (int, float)):
+        return int(round(float(value)))
+    return _parse_size_bytes(value)
+
+
+def _parse_time_us(value: Any) -> int:
+    number, unit = _number_unit(value)
+    factors = {"us": 1, "usec": 1, "ms": 1_000, "msec": 1_000, "s": 1_000_000, "sec": 1_000_000}
+    unit = unit or "us"
+    if unit not in factors:
+        raise ValueError("unsupported time unit")
+    result = number * factors[unit]
+    if result < 0:
+        raise ValueError("time must not be negative")
+    return int(round(result))
+
+
+def _parse_readback_time_us(value: Any) -> int:
+    if isinstance(value, bool) or value is None:
+        raise ValueError("invalid readback time")
+    if isinstance(value, (int, float)):
+        return int(round(float(value)))
+    return _parse_time_us(value)
+
+
+def _number_unit(value: Any) -> tuple[float, str]:
+    raw = str(value or "").strip().lower()
+    match = _NUMBER_UNIT_RE.fullmatch(raw)
+    if not match:
+        raise ValueError(f"invalid numeric unit value: {raw!r}")
+    number = float(match.group(1))
+    if number < 0:
+        raise ValueError("numeric unit value must not be negative")
+    return number, (match.group(2) or "").lower()
 
 
 def _requested_redirect_port(
@@ -375,16 +543,12 @@ def _nft_has_source_drop_rule(payload: Any, source_ip: str) -> bool:
     for exprs in _rule_exprs(payload, chain="input"):
         if str(_match_value(exprs, "ip", "saddr") or "") != source_ip:
             continue
-        for expr in exprs:
-            verdict = expr.get("drop")
-            if verdict is not None:
-                return True
+        if any("drop" in expr for expr in exprs):
+            return True
     return False
 
 
 def _result_summary(result: ReadOnlyCommandResult) -> dict[str, Any]:
-    # Do not copy arbitrary provider stdout into durable evidence. The parsed
-    # postcondition and small error summary are sufficient for this v1 record.
     return {
         "argv": list(result.argv),
         "returncode": result.returncode,
@@ -397,28 +561,34 @@ def _with_probe_result(
     *,
     status: MechanismStatus,
     basis: str,
+    verification_strength: str,
     probe: Mapping[str, Any],
 ) -> AppliedMechanism:
-    observed = dict(mechanism.observed_parameters)
-    observed["postcondition_probe"] = {
+    observed_at = utc_now()
+    sanitized_probe = {
         "basis": basis,
-        "observed_at": utc_now(),
+        "verification_strength": verification_strength,
+        "observed_at": observed_at,
         **dict(probe),
     }
+    evidence_payload = json.dumps(sanitized_probe, sort_keys=True, separators=(",", ":"), default=str)
+    probe_ref = f"postcondition:{hashlib.sha256(evidence_payload.encode('utf-8')).hexdigest()[:24]}"
+    observed = dict(mechanism.observed_parameters)
+    observed["postcondition_probe"] = sanitized_probe
+    refs = tuple(dict.fromkeys((*mechanism.evidence_refs, probe_ref)))
     return replace(
         mechanism,
         status=status,
         observed_parameters=observed,
-        observed_at=utc_now(),
+        observed_at=observed_at,
+        evidence_refs=refs,
         producer="azazel_edge.outcome.postcondition",
     )
 
 
 def _is_allowed_read_only_query(argv: tuple[str, ...]) -> bool:
-    if len(argv) == 6 and argv[:4] == ("tc", "-j", "qdisc", "show") and argv[4] == "dev":
+    if len(argv) == 6 and argv[:5] == ("tc", "-j", "qdisc", "show", "dev"):
         return bool(_INTERFACE_RE.fullmatch(argv[5]))
-    if len(argv) == 8 and argv[:4] == ("nft", "-j", "list", "chain"):
-        return argv[4:7] == ("inet", "azazel_edge", "prerouting") and argv[7] == ""  # unreachable guard
     if argv == ("nft", "-j", "list", "chain", "inet", "azazel_edge", "prerouting"):
         return True
     if argv == ("nft", "-j", "list", "chain", "inet", "azazel_edge", "input"):
