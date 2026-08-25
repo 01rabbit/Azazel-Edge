@@ -5,6 +5,7 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Protocol, Sequence
@@ -21,6 +22,7 @@ from .contracts import (
 
 _INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
 _NUMBER_UNIT_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)([A-Za-z]+)?$")
+_TRUSTED_BINARY_SEARCH_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 class ReadOnlyCommandRejected(ValueError):
@@ -42,18 +44,23 @@ class ReadOnlyRunner(Protocol):
 class SubprocessReadOnlyRunner:
     """Subprocess runner restricted to exact read-only tc/nft query shapes.
 
-    It never invokes a shell, accepts no caller-controlled subcommand shape, and is
-    deliberately unsuitable for enforcement, rollback, repair, or release.
+    It never invokes a shell, accepts no caller-controlled subcommand shape, ignores
+    the process PATH when resolving tc/nft, and is deliberately unsuitable for
+    enforcement, rollback, repair, or release.
     """
 
     def run(self, argv: Sequence[str], *, timeout_seconds: float) -> ReadOnlyCommandResult:
         args = tuple(str(value) for value in argv)
         if not _is_allowed_read_only_query(args):
             raise ReadOnlyCommandRejected(f"command is outside read-only probe allowlist: {args!r}")
+        binary = shutil.which(args[0], path=_TRUSTED_BINARY_SEARCH_PATH)
+        if not binary:
+            raise OSError(f"read-only probe binary not found in trusted path: {args[0]}")
         env = dict(os.environ)
         env["LC_ALL"] = "C"
+        env["PATH"] = _TRUSTED_BINARY_SEARCH_PATH
         completed = subprocess.run(
-            args,
+            (binary, *args[1:]),
             shell=False,
             capture_output=True,
             text=True,
@@ -377,7 +384,7 @@ def _parse_readback_rate_bps(value: Any) -> int:
     if isinstance(value, (int, float)):
         # iproute2 stores qdisc rates internally as bytes/s; JSON implementations in
         # the field may expose either raw bytes/s or formatted bit/s. Numeric values
-        # are therefore normalized as raw bytes/s, while strings retain their units.
+        # are normalized as raw bytes/s, while strings retain their displayed units.
         return int(round(float(value) * 8.0))
     return _parse_rate_bps(value)
 
