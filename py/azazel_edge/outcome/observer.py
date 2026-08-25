@@ -10,6 +10,7 @@ from typing import Any
 
 from .adapter import from_rust_event
 from .contracts import ShadowMode
+from .release_evidence import from_rust_release_event
 
 
 DEFAULT_INPUT = "/var/log/azazel-edge/normalized-events.jsonl"
@@ -18,7 +19,7 @@ DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024 * 1024
 
 
 class ShadowOutcomeObserver:
-    """Passive observer for the existing Rust event-engine output.
+    """Passive observer for existing Rust execution and release evidence.
 
     It has no reference to an executor and therefore cannot authorize, retry, release,
     or override a defensive action.
@@ -30,6 +31,13 @@ class ShadowOutcomeObserver:
     def observe(self, event: Mapping[str, Any]) -> dict[str, Any] | None:
         if self.mode is ShadowMode.OFF:
             return None
+        if str(event.get("pipeline") or "") == "rust_release_engine_v1":
+            release = from_rust_release_event(event)
+            return {
+                "release_evidence": release.to_dict(),
+                "observer_mode": self.mode.value,
+                "effect_assessment": None,
+            }
         bundle = from_rust_event(event)
         record = bundle.to_dict()
         record["observer_mode"] = self.mode.value
@@ -68,7 +76,6 @@ def _ensure_capacity(path: Path, incoming_bytes: int, max_bytes: int) -> bool:
     if max_bytes <= 0:
         return True
     if incoming_bytes > max_bytes:
-        # One pathological record must not defeat the retention bound.
         return False
     if not path.exists():
         return True
@@ -84,7 +91,6 @@ def _ensure_capacity(path: Path, incoming_bytes: int, max_bytes: int) -> bool:
         archive.unlink(missing_ok=True)
         path.replace(archive)
     except OSError:
-        # Shadow evidence may be dropped; uncontrolled disk growth is worse.
         return False
     return True
 
@@ -106,7 +112,6 @@ def append_jsonl(
             with path.open("a", encoding="utf-8", buffering=1) as stream:
                 stream.write(line)
         except OSError:
-            # The observer is best-effort. It must not become a control-path dependency.
             continue
         count += 1
     return count
