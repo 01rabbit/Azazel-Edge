@@ -3,10 +3,12 @@ from __future__ import annotations
 import unittest
 
 from azazel_edge.outcome import (
+    AppliedMechanism,
     CausalSupport,
     EffectAssessmentStatus,
     EffectObjective,
     MechanismKind,
+    MechanismStatus,
     OutcomeAssessment,
     OutcomeRecord,
     ReplayExecutionForbidden,
@@ -74,8 +76,6 @@ class RustAdapterTests(unittest.TestCase):
         self.assertEqual(bundle.mechanism.scope["scope_kind"], "interface_root_qdisc")
         self.assertEqual(bundle.mechanism.scope["interface"], "br0")
         self.assertNotEqual(bundle.mechanism.mechanism_kind.value, "DELAY")
-        # Provider command exit=0 proves execution, not that the qdisc postcondition
-        # was independently observed on the host.
         self.assertEqual(bundle.execution.status.value, "applied")
         self.assertEqual(bundle.mechanism.status.value, "unverified")
 
@@ -122,6 +122,20 @@ class TacticalEffectTests(unittest.TestCase):
             objective_id="objective-test-1",
         )
 
+    def _mechanism(self, *, status: MechanismStatus = MechanismStatus.OBSERVED) -> AppliedMechanism:
+        return AppliedMechanism(
+            mechanism_id="mechanism-test",
+            execution_id="execution-test",
+            decision_id="trace-test-1",
+            mechanism_kind=MechanismKind.TRAFFIC_SHAPING,
+            scope={"scope_kind": "interface_root_qdisc", "interface": "br0"},
+            observed_parameters={"verification_basis": "fixture_postcondition"},
+            status=status,
+            observed_at="2026-08-26T00:00:01Z",
+            evidence_refs=("evidence:mechanism",),
+            producer="test_fixture",
+        )
+
     def _make_outcome(
         self,
         objective: EffectObjective,
@@ -155,11 +169,27 @@ class TacticalEffectTests(unittest.TestCase):
             outcome_id="outcome-test",
         )
 
+    def test_unverified_mechanism_cannot_support_delay(self) -> None:
+        objective = self._objective()
+        outcome = self._make_outcome(
+            objective,
+            assessment=OutcomeAssessment.EFFECTIVE,
+            causal_support=CausalSupport.SUPPORTED,
+        )
+        result = assess_tactical_effect(
+            mechanism=self._mechanism(status=MechanismStatus.UNVERIFIED),
+            objective=objective,
+            outcome=outcome,
+            tactical_effect="DELAY",
+        )
+        self.assertEqual(result.assessment, EffectAssessmentStatus.INCONCLUSIVE)
+        self.assertEqual(result.reason_code, "mechanism_postcondition_not_observed")
+
     def test_requested_throttle_does_not_prove_delay_when_outcome_inconclusive(self) -> None:
         objective = self._objective()
         outcome = self._make_outcome(objective, assessment=OutcomeAssessment.INCONCLUSIVE)
         result = assess_tactical_effect(
-            mechanism_kind=MechanismKind.TRAFFIC_SHAPING,
+            mechanism=self._mechanism(),
             objective=objective,
             outcome=outcome,
             tactical_effect="DELAY",
@@ -174,7 +204,7 @@ class TacticalEffectTests(unittest.TestCase):
             causal_support=CausalSupport.INCONCLUSIVE,
         )
         result = assess_tactical_effect(
-            mechanism_kind=MechanismKind.TRAFFIC_SHAPING,
+            mechanism=self._mechanism(),
             objective=objective,
             outcome=outcome,
             tactical_effect="DELAY",
@@ -182,7 +212,7 @@ class TacticalEffectTests(unittest.TestCase):
         self.assertEqual(result.assessment, EffectAssessmentStatus.INCONCLUSIVE)
         self.assertEqual(result.reason_code, "causal_support_inconclusive")
 
-    def test_delay_requires_time_metric_effective_outcome_and_causal_support(self) -> None:
+    def test_delay_requires_observed_mechanism_effective_outcome_and_causal_support(self) -> None:
         objective = self._objective()
         outcome = self._make_outcome(
             objective,
@@ -190,7 +220,7 @@ class TacticalEffectTests(unittest.TestCase):
             causal_support=CausalSupport.SUPPORTED,
         )
         result = assess_tactical_effect(
-            mechanism_kind=MechanismKind.TRAFFIC_SHAPING,
+            mechanism=self._mechanism(),
             objective=objective,
             outcome=outcome,
             tactical_effect="DELAY",
@@ -207,7 +237,7 @@ class TacticalEffectTests(unittest.TestCase):
             after=400,
         )
         result = assess_tactical_effect(
-            mechanism_kind=MechanismKind.TRAFFIC_SHAPING,
+            mechanism=self._mechanism(),
             objective=objective,
             outcome=outcome,
             tactical_effect="DELAY",
@@ -216,6 +246,19 @@ class TacticalEffectTests(unittest.TestCase):
 
     def test_missing_evidence_cannot_support_effect(self) -> None:
         objective = self._objective()
+        mechanism = self._mechanism()
+        mechanism = AppliedMechanism(
+            mechanism_id=mechanism.mechanism_id,
+            execution_id=mechanism.execution_id,
+            decision_id=mechanism.decision_id,
+            mechanism_kind=mechanism.mechanism_kind,
+            scope=mechanism.scope,
+            observed_parameters=mechanism.observed_parameters,
+            status=mechanism.status,
+            observed_at=mechanism.observed_at,
+            evidence_refs=(),
+            producer=mechanism.producer,
+        )
         outcome = self._make_outcome(
             objective,
             assessment=OutcomeAssessment.EFFECTIVE,
@@ -223,12 +266,38 @@ class TacticalEffectTests(unittest.TestCase):
             evidence_refs=(),
         )
         result = assess_tactical_effect(
-            mechanism_kind=MechanismKind.TRAFFIC_SHAPING,
+            mechanism=mechanism,
             objective=objective,
             outcome=outcome,
             tactical_effect="DELAY",
         )
         self.assertEqual(result.assessment, EffectAssessmentStatus.INCONCLUSIVE)
+
+    def test_correlation_mismatch_is_rejected(self) -> None:
+        objective = self._objective()
+        outcome = self._make_outcome(
+            objective,
+            assessment=OutcomeAssessment.EFFECTIVE,
+            causal_support=CausalSupport.SUPPORTED,
+        )
+        wrong = AppliedMechanism(
+            mechanism_id="other-mechanism",
+            execution_id="execution-test",
+            decision_id="trace-test-1",
+            mechanism_kind=MechanismKind.TRAFFIC_SHAPING,
+            scope={},
+            observed_parameters={},
+            status=MechanismStatus.OBSERVED,
+            observed_at="2026-08-26T00:00:01Z",
+            evidence_refs=("evidence:mechanism",),
+        )
+        with self.assertRaises(ValueError):
+            assess_tactical_effect(
+                mechanism=wrong,
+                objective=objective,
+                outcome=outcome,
+                tactical_effect="DELAY",
+            )
 
 
 class AuthorityBoundaryTests(unittest.TestCase):
