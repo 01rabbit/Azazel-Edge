@@ -23,6 +23,7 @@ The central rule is that **intent, execution, mechanism, outcome, and tactical e
 ## Locked invariants
 
 - `Action != AppliedMechanism != Outcome != TacticalEffect`.
+- requested command plan != provider-applied fact.
 - `throttle` is not evidence that `DELAY` occurred.
 - `redirect` is not evidence that diversion succeeded.
 - post-action improvement is not causal proof.
@@ -80,7 +81,9 @@ Execution-provider fact only. Status:
 unverified | applied | partial | rejected | failed | expired | released
 ```
 
-The receipt separates requested parameters from applied parameters and carries provider evidence references. `applied` means the execution provider reports successful command completion; it is deliberately distinct from an independently verified `AppliedMechanism` postcondition.
+The receipt separates requested parameters from applied facts. The complete command and rollback plans remain in `requested_parameters`. Current Rust `EnforcementOutcome` reports only aggregate executed/failed counts rather than a per-command receipt, so `applied_parameters` contains only those provider-reported aggregate facts and explicitly records `individual_command_mapping_verified=false`. In particular, a partial execution must never copy the entire requested plan into the applied side.
+
+`applied` means the execution provider reports successful command completion; it is deliberately distinct from an independently verified `AppliedMechanism` postcondition.
 
 ### AppliedMechanism
 
@@ -194,7 +197,7 @@ SHADOW_ASSESS
 | dry-run | execution `unverified` |
 | policy gate prevents action | execution `rejected`; mechanism `not_observed` |
 | all planned commands succeed | execution `applied`; disruptive mechanism remains `unverified` until postcondition evidence |
-| some commands succeed and some fail | execution `partial`; mechanism `disputed` |
+| some commands succeed and some fail | execution `partial`; mechanism `disputed`; exact applied-command identity remains unknown |
 | all attempted commands fail | execution `failed`; mechanism `not_observed` |
 | external notification delivery not proven | execution `unverified` |
 | missing baseline/post evidence | outcome/effect `inconclusive` |
@@ -224,9 +227,10 @@ py/azazel_edge/outcome/
 
 tests/test_outcome_as_evidence_v1.py
 tests/test_outcome_guardrails_v1.py
+tests/test_outcome_adapter_truthfulness_v1.py
 ```
 
-The focused test suite contains 22 semantic/authority/retention/guardrail cases covering execution-state normalization, effect-proof prerequisites, correlation rejection, replay authority, bounded shadow output, guardrail failure, and uncalibrated-confidence behavior.
+The focused test suite contains 24 semantic/authority/retention/guardrail/truthfulness cases covering execution-state normalization, requested-vs-applied separation, effect-proof prerequisites, correlation rejection, replay authority, bounded shadow output, guardrail failure, and uncalibrated-confidence behavior.
 
 The passive observer can normalize the existing Rust JSONL output:
 
