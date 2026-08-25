@@ -47,6 +47,7 @@ class AdapterTruthfulnessTests(unittest.TestCase):
         self.assertNotIn("command_plan", bundle.execution.applied_parameters)
         self.assertEqual(bundle.execution.applied_parameters["executed_count"], 1)
         self.assertFalse(bundle.execution.applied_parameters["individual_command_mapping_verified"])
+        self.assertEqual(bundle.execution.lifecycle.value, "active")
         self.assertEqual(bundle.mechanism.status.value, "unverified")
 
     def test_partial_failure_does_not_claim_which_requested_command_applied(self) -> None:
@@ -54,6 +55,7 @@ class AdapterTruthfulnessTests(unittest.TestCase):
             rust_event(result="partial_failure", executed_count=1, failed_count=1)
         )
         self.assertEqual(bundle.execution.status.value, "partial")
+        self.assertEqual(bundle.execution.lifecycle.value, "unverified")
         self.assertEqual(bundle.mechanism.status.value, "disputed")
         self.assertNotIn("command_plan", bundle.execution.applied_parameters)
         self.assertEqual(bundle.execution.applied_parameters["executed_count"], 1)
@@ -63,6 +65,7 @@ class AdapterTruthfulnessTests(unittest.TestCase):
     def test_disruptive_applied_with_zero_executed_commands_is_unverified(self) -> None:
         bundle = from_rust_event(rust_event(result="applied", executed_count=0, failed_count=0))
         self.assertEqual(bundle.execution.status.value, "unverified")
+        self.assertEqual(bundle.execution.lifecycle.value, "unverified")
         self.assertEqual(bundle.execution.applied_parameters, {})
         self.assertEqual(bundle.mechanism.status.value, "unverified")
 
