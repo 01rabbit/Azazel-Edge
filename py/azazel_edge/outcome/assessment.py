@@ -43,6 +43,9 @@ def assess_tactical_effect(
     correlation must be exact, the outcome must carry explicit causal support, and
     any policy-owned guardrails attached to the objective must be evaluable and pass.
     A requested throttle or provider command success alone can never become ``DELAY``.
+
+    v1 deliberately emits no numeric confidence because no calibration corpus exists.
+    ``confidence=None`` is the honest representation until calibration is proven.
     """
 
     effect = tactical_effect.upper().strip()
@@ -97,7 +100,7 @@ def assess_tactical_effect(
                 objective_id=objective.objective_id,
                 tactical_effect=effect,
                 assessment=EffectAssessmentStatus.SUPPORTED,
-                confidence=0.75 if outcome.assessment is OutcomeAssessment.PARTIALLY_EFFECTIVE else 0.9,
+                confidence=None,
                 reason_code="observed_mechanism_time_metric_increased_with_explicit_causal_support",
                 evidence_refs=refs,
             )
@@ -176,7 +179,7 @@ def _unsupported(
         objective_id=objective.objective_id,
         tactical_effect=effect,
         assessment=EffectAssessmentStatus.UNSUPPORTED,
-        confidence=0.9,
+        confidence=None,
         reason_code=reason,
         evidence_refs=refs,
     )
@@ -195,7 +198,7 @@ def _inconclusive(
         objective_id=objective.objective_id,
         tactical_effect=effect,
         assessment=EffectAssessmentStatus.INCONCLUSIVE,
-        confidence=0.0,
+        confidence=None,
         reason_code=reason,
         evidence_refs=refs,
     )
