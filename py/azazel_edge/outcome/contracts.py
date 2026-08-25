@@ -68,11 +68,13 @@ class CausalSupport(str, Enum):
 
 
 class ActionLifecycle(str, Enum):
+    UNVERIFIED = "unverified"
     ACTIVE = "active"
     SUPERSEDED = "superseded"
     RELEASED = "released"
     EXPIRED = "expired"
     FAILED = "failed"
+    REJECTED = "rejected"
 
 
 class ShadowMode(str, Enum):
@@ -128,7 +130,7 @@ class ActionExecutionReceipt:
     provider_evidence_refs: Sequence[str] = field(default_factory=tuple)
     producer: str = "azazel_edge.outcome"
     schema_version: str = SCHEMA_VERSION
-    lifecycle: ActionLifecycle = ActionLifecycle.ACTIVE
+    lifecycle: ActionLifecycle = ActionLifecycle.UNVERIFIED
     superseded_by_decision_id: str = ""
     idempotency_key: str = ""
     provider_sequence: str = ""
