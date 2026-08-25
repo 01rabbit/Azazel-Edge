@@ -142,8 +142,8 @@ def reconcile_release_evidence(
 
     expected = expected_ownership(execution)
     if expected is None:
-        # Legacy unowned actions cannot be retrospectively attributed to a release task.
         return execution, mechanism
+    _validate_provider_release_identity(execution, release)
     release_owner = _release_ownership(release)
     if expected != release_owner:
         raise ValueError("release evidence ownership mismatch")
@@ -202,6 +202,32 @@ def reconcile_release_evidence(
     )
 
 
+def _validate_provider_release_identity(
+    execution: ActionExecutionReceipt,
+    release: ReleaseEvidenceRecord,
+) -> None:
+    if execution.release_ref != release.release_task_id:
+        raise ValueError("release evidence task id does not match execution release reference")
+    applied = execution.applied_parameters
+    metadata = applied.get("metadata") if isinstance(applied, Mapping) else None
+    if not isinstance(metadata, Mapping):
+        raise ValueError("release evidence requires provider release metadata")
+    expected_task = str(metadata.get("release_task_id") or "")
+    expected_owner = str(metadata.get("release_owner_token") or "")
+    expected_resource = str(metadata.get("release_resource_key") or "")
+    expected_tc_handle = str(metadata.get("release_tc_handle") or "")
+    if expected_task != release.release_task_id:
+        raise ValueError("release evidence task id does not match provider metadata")
+    if expected_owner != release.owner_token:
+        raise ValueError("release evidence owner token does not match provider metadata")
+    if expected_resource != release.resource_key:
+        raise ValueError("release evidence resource key does not match provider metadata")
+    if release.action_kind == "throttle" and expected_tc_handle != release.tc_handle:
+        raise ValueError("release evidence tc handle does not match provider metadata")
+    if release.action_kind != "throttle" and expected_tc_handle:
+        raise ValueError("nft execution unexpectedly claims tc release handle")
+
+
 def _release_ownership(release: ReleaseEvidenceRecord) -> dict[str, str]:
     if release.action_kind == "throttle":
         return {"kind": "tc_handle", "value": release.tc_handle}
@@ -229,6 +255,8 @@ def _epoch(value: Any, name: str) -> float:
 
 def _nonnegative_int(value: Any, name: str) -> int:
     if isinstance(value, bool):
+        raise ValueError(f"{name} must be a non-negative integer")
+    if isinstance(value, float) and not value.is_integer():
         raise ValueError(f"{name} must be a non-negative integer")
     try:
         parsed = int(value)
