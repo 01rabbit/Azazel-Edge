@@ -22,7 +22,9 @@ G1a does not execute, retry, repair, release, authorize, or strengthen any defen
 ```text
 existing Rust decision/enforcement
         ↓
-ActionExecutionReceipt(status=applied)
+ActionExecutionReceipt(status=applied, lifecycle=active)
+        ↓
+AppliedMechanism(status=unverified)
         ↓
 read-only postcondition probe
         ↓
@@ -30,6 +32,10 @@ AppliedMechanism(status=observed|not_observed|unverified)
 ```
 
 The probe has no executor reference and no write command vocabulary.
+
+G1a is deliberately an **initial-verification transition only**. An already `observed`, `not_observed`, `disputed`, `released`, or `stale` mechanism is not re-opened or reclassified by this gate. Likewise, a non-`active` execution lifecycle is not probed. Release/expiry/reconciliation and later revalidation belong to G1b or later gates.
+
+This prevents an old `status=applied` receipt from resurrecting a mechanism after release or from attributing a later/pre-existing host state to the wrong lifecycle transition.
 
 ## Allowed host queries
 
@@ -53,13 +59,21 @@ The subprocess runner:
 - rejects stdout above 1 MiB or stderr above 64 KiB;
 - never persists arbitrary stdout into the mechanism record.
 
-## Correlation prerequisite
+The output bound is applied after subprocess capture in v1; therefore this is not yet a streaming-memory guarantee. The probe remains non-daemonized until G6/Pi-HIL resource validation.
+
+## Correlation and lifecycle prerequisites
 
 `execution.decision_id == mechanism.decision_id` and `execution.execution_id == mechanism.execution_id` are mandatory.
 
 A mismatch raises rather than guessing.
 
-Any execution status other than `applied` is ineligible for promotion. Dry-run, rejected, failed, partial, released, or otherwise non-applied provider facts cannot become an observed disruptive mechanism through G1a.
+All three initial-verification conditions are required:
+
+1. `execution.status == applied`;
+2. `execution.lifecycle == active`;
+3. `mechanism.status == unverified`.
+
+If any condition is false, G1a performs no host probe and returns the existing mechanism unchanged. Dry-run, rejected, failed, partial, released, stale, previously observed, previously absent, or otherwise ineligible states cannot be promoted by G1a.
 
 ## Traffic shaping verification
 
@@ -78,7 +92,7 @@ Outcomes:
 - root TBF exists but required parameters cannot be verified → `unverified`;
 - complete readback exists but parameters differ → `not_observed`.
 
-A generic/pre-existing root TBF is therefore not sufficient proof of the requested mechanism.
+A generic/pre-existing root TBF is therefore not sufficient proof of the requested mechanism. Even an exact match proves only that the requested postcondition is present at observation time; it does not by itself prove causality. Tactical effects still require separate Outcome/causal evidence.
 
 ## Redirection verification
 
@@ -104,7 +118,7 @@ Rule presence still does not prove containment effectiveness. That belongs to Ou
 
 Raw provider stdout is parsed transiently and is not copied into durable mechanism evidence.
 
-The mechanism receives a bounded `postcondition_probe` summary containing:
+A performed probe may add a bounded `postcondition_probe` summary containing:
 
 - basis/reason;
 - verification strength;
@@ -114,13 +128,15 @@ The mechanism receives a bounded `postcondition_probe` summary containing:
 - bounded stderr;
 - normalized expected/observed values where needed.
 
-A `postcondition:<digest>` evidence reference is appended to preserve provenance of the recorded probe summary.
+A `postcondition:<digest>` evidence reference is appended for a performed probe. Lifecycle-ineligible records are returned unchanged rather than manufacturing a new probe evidence reference.
 
 ## Failure semantics
 
 | Condition | Result |
 |---|---|
-| execution not `applied` | no probe; no promotion |
+| execution not `applied` | no probe; unchanged |
+| execution lifecycle not `active` | no probe; unchanged |
+| mechanism not `unverified` | no probe; unchanged |
 | correlation mismatch | reject |
 | invalid interface/IP/port | `unverified` |
 | query command rejected | `unverified` |
@@ -130,7 +146,7 @@ A `postcondition:<digest>` evidence reference is appended to preserve provenance
 | TBF parameters missing | `unverified` |
 | TBF/nft complete mismatch | `not_observed` |
 | exact current mechanism readback | `observed` |
-| unsupported mechanism kind | no promotion |
+| unsupported mechanism kind | unchanged |
 
 Unknown evidence never strengthens a live action or a tactical-effect claim.
 
