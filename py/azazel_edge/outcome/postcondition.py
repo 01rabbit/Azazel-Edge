@@ -378,13 +378,23 @@ def _parse_rate_bps(value: Any) -> int:
     number, unit = _number_unit(value)
     factors = {
         "bit": 1,
+        "kibit": 1_024,
         "kbit": 1_000,
+        "mibit": 1_024**2,
         "mbit": 1_000_000,
+        "gibit": 1_024**3,
         "gbit": 1_000_000_000,
+        "tibit": 1_024**4,
+        "tbit": 1_000_000_000_000,
         "bps": 8,
+        "kibps": 8 * 1_024,
         "kbps": 8_000,
+        "mibps": 8 * 1_024**2,
         "mbps": 8_000_000,
+        "gibps": 8 * 1_024**3,
         "gbps": 8_000_000_000,
+        "tibps": 8 * 1_024**4,
+        "tbps": 8_000_000_000_000,
     }
     unit = unit or "bit"
     if unit not in factors:
@@ -396,28 +406,27 @@ def _parse_readback_rate_bps(value: Any) -> int:
     if isinstance(value, bool) or value is None:
         raise ValueError("invalid readback rate")
     if isinstance(value, (int, float)):
-        # iproute2 stores qdisc rates internally as bytes/s; JSON implementations in
-        # the field may expose either raw bytes/s or formatted bit/s. Numeric values
-        # are normalized as raw bytes/s, while strings retain their displayed units.
+        # iproute2 stores qdisc rates internally as bytes/s; JSON numeric readback is
+        # normalized to bits/s before comparison with the requested CLI semantics.
         return int(round(float(value) * 8.0))
     return _parse_rate_bps(value)
 
 
 def _parse_size_bytes(value: Any) -> int:
+    """Mirror iproute2 get_size64() suffix semantics for current TBF CLI values."""
+
     number, unit = _number_unit(value)
     factors = {
         "b": 1,
-        "byte": 1,
-        "bytes": 1,
-        "kb": 1_000,
-        "kbyte": 1_000,
-        "kbytes": 1_000,
-        "mb": 1_000_000,
-        "gb": 1_000_000_000,
-        "bit": 1 / 8,
-        "kbit": 1_000 / 8,
-        "mbit": 1_000_000 / 8,
-        "gbit": 1_000_000_000 / 8,
+        "k": 1_024,
+        "kb": 1_024,
+        "m": 1_024**2,
+        "mb": 1_024**2,
+        "g": 1_024**3,
+        "gb": 1_024**3,
+        "kbit": 1_024 / 8,
+        "mbit": 1_024**2 / 8,
+        "gbit": 1_024**3 / 8,
     }
     unit = unit or "b"
     if unit not in factors:
