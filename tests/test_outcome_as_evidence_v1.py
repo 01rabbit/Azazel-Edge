@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from azazel_edge.outcome import (
     AppliedMechanism,
@@ -18,6 +20,7 @@ from azazel_edge.outcome import (
     assess_tactical_effect,
     from_rust_event,
 )
+from azazel_edge.outcome.observer import append_jsonl
 
 
 def rust_event(
@@ -107,6 +110,12 @@ class RustAdapterTests(unittest.TestCase):
         bundle = from_rust_event(event)
         self.assertEqual(bundle.execution.status.value, "failed")
         self.assertEqual(bundle.mechanism.status.value, "not_observed")
+
+    def test_missing_timestamp_is_rejected(self) -> None:
+        event = rust_event()
+        event["normalized"]["ts"] = ""
+        with self.assertRaises(ValueError):
+            from_rust_event(event)
 
 
 class TacticalEffectTests(unittest.TestCase):
@@ -319,6 +328,26 @@ class AuthorityBoundaryTests(unittest.TestCase):
         assert record is not None
         self.assertEqual(record["observer_mode"], "shadow_record")
         self.assertIsNone(record["effect_assessment"])
+
+
+class ObserverRetentionTests(unittest.TestCase):
+    def test_oversized_shadow_record_is_dropped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "outcome.jsonl"
+            written = append_jsonl(path, [{"payload": "x" * 200}], max_bytes=64)
+            self.assertEqual(written, 0)
+            self.assertFalse(path.exists())
+
+    def test_shadow_rotation_preserves_configured_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "outcome.jsonl"
+            records = [{"payload": "a" * 24}, {"payload": "b" * 24}]
+            written = append_jsonl(path, records, max_bytes=48)
+            self.assertEqual(written, 2)
+            self.assertTrue(path.exists())
+            self.assertTrue(Path(f"{path}.1").exists())
+            self.assertLessEqual(path.stat().st_size, 48)
+            self.assertLessEqual(Path(f"{path}.1").stat().st_size, 48)
 
 
 if __name__ == "__main__":
