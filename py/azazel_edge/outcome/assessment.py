@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .contracts import (
+    CausalSupport,
     EffectAssessmentStatus,
     EffectObjective,
     MechanismKind,
@@ -60,6 +61,11 @@ def assess_tactical_effect(
             evidence_refs=(),
         )
 
+    if outcome.causal_support is CausalSupport.INCONCLUSIVE:
+        return _inconclusive(objective, outcome, effect, refs, "causal_support_inconclusive")
+    if outcome.causal_support is CausalSupport.UNSUPPORTED:
+        return _unsupported(objective, outcome, effect, refs, "causal_support_unsupported")
+
     if effect == "DELAY":
         if mechanism_kind is not MechanismKind.TRAFFIC_SHAPING:
             return _unsupported(objective, outcome, effect, refs, "delay_requires_traffic_shaping_mechanism")
@@ -81,7 +87,7 @@ def assess_tactical_effect(
                 tactical_effect=effect,
                 assessment=EffectAssessmentStatus.SUPPORTED,
                 confidence=0.75 if outcome.assessment is OutcomeAssessment.PARTIALLY_EFFECTIVE else 0.9,
-                reason_code="time_metric_increased_with_effective_outcome",
+                reason_code="time_metric_increased_with_explicit_causal_support",
                 evidence_refs=refs,
             )
         return _unsupported(objective, outcome, effect, refs, "time_metric_did_not_support_delay")
