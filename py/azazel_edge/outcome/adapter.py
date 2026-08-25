@@ -117,22 +117,43 @@ def _scope(event: Mapping[str, Any], action: str, command_plan: list[str]) -> di
     return {"scope_kind": "logical_action", "subject_ip": src_ip}
 
 
-def _observed_parameters(
-    action: str,
-    command_plan: list[str],
-    rollback_plan: list[str],
-    enforcement: Mapping[str, Any],
-) -> dict[str, Any]:
+def _provider_execution_summary(enforcement: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only execution facts the current provider actually reports.
+
+    The Rust record exposes aggregate success/failure counts, not a per-command receipt.
+    Consequently a partial result cannot truthfully identify which requested command
+    was applied. Keep the complete plan on the requested side and record only the
+    provider's aggregate execution report here.
+    """
+
     return {
-        "action": action,
-        "apply_commands": command_plan,
-        "rollback_commands": rollback_plan,
         "executed_count": int(enforcement.get("executed_count") or 0),
         "failed_count": int(enforcement.get("failed_count") or 0),
         "result": str(enforcement.get("result") or ""),
         "mode": str(enforcement.get("mode") or ""),
         "metadata": dict(_as_mapping(enforcement.get("metadata"))),
+        "individual_command_mapping_verified": False,
+    }
+
+
+def _mechanism_observation_parameters(
+    action: str,
+    status: MechanismStatus,
+    provider_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    if action == "observe" and status is MechanismStatus.OBSERVED:
+        return {
+            "verification_basis": "no_runtime_change_action",
+            "provider_report": dict(provider_summary),
+        }
+    if status is MechanismStatus.NOT_OBSERVED:
+        return {
+            "verification_basis": "provider_report_no_successful_postcondition",
+            "provider_report": dict(provider_summary),
+        }
+    return {
         "verification_basis": "provider_command_exit_status_only",
+        "provider_report": dict(provider_summary),
     }
 
 
@@ -171,8 +192,9 @@ def from_rust_event(event: Mapping[str, Any]) -> ShadowRecordBundle:
     command_plan = [str(v) for v in enforcement.get("command_plan", []) if isinstance(v, str)]
     rollback_plan = [str(v) for v in enforcement.get("rollback_plan", []) if isinstance(v, str)]
     status = _execution_status(enforcement, action)
+    mechanism_status = _mechanism_status(status, action)
     scope = _scope(event, action, command_plan)
-    params = _observed_parameters(action, command_plan, rollback_plan, enforcement)
+    provider_summary = _provider_execution_summary(enforcement)
 
     provider = str(event.get("pipeline") or RUST_PROVIDER)
     evidence_ref = f"{provider}:{decision_id}"
@@ -193,8 +215,9 @@ def from_rust_event(event: Mapping[str, Any]) -> ShadowRecordBundle:
             "target": enforcement.get("target") or defense.get("target"),
             "policy_reason": enforcement.get("policy_reason") or defense.get("policy_reason"),
             "command_plan": command_plan,
+            "rollback_plan": rollback_plan,
         },
-        applied_parameters=params if status in {ExecutionStatus.APPLIED, ExecutionStatus.PARTIAL} else {},
+        applied_parameters=provider_summary if status in {ExecutionStatus.APPLIED, ExecutionStatus.PARTIAL} else {},
         status=status,
         requested_at=ts,
         started_at="",
@@ -212,8 +235,8 @@ def from_rust_event(event: Mapping[str, Any]) -> ShadowRecordBundle:
         decision_id=decision_id,
         mechanism_kind=_mechanism_kind(action),
         scope=scope,
-        observed_parameters=params,
-        status=_mechanism_status(status, action),
+        observed_parameters=_mechanism_observation_parameters(action, mechanism_status, provider_summary),
+        status=mechanism_status,
         observed_at=ts,
         reversible=bool(rollback_plan),
         evidence_refs=(evidence_ref,),
