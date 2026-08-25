@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from azazel_edge.outcome import (
+    CausalSupport,
     EffectAssessmentStatus,
     EffectObjective,
     MechanismKind,
@@ -73,6 +74,10 @@ class RustAdapterTests(unittest.TestCase):
         self.assertEqual(bundle.mechanism.scope["scope_kind"], "interface_root_qdisc")
         self.assertEqual(bundle.mechanism.scope["interface"], "br0")
         self.assertNotEqual(bundle.mechanism.mechanism_kind.value, "DELAY")
+        # Provider command exit=0 proves execution, not that the qdisc postcondition
+        # was independently observed on the host.
+        self.assertEqual(bundle.execution.status.value, "applied")
+        self.assertEqual(bundle.mechanism.status.value, "unverified")
 
     def test_dry_run_is_never_marked_applied(self) -> None:
         bundle = from_rust_event(
@@ -96,6 +101,13 @@ class RustAdapterTests(unittest.TestCase):
         self.assertEqual(bundle.mechanism.status.value, "disputed")
         self.assertEqual(bundle.execution.error_code, "provider_command_failure")
 
+    def test_single_failed_command_is_failed_not_partial(self) -> None:
+        event = rust_event(result="partial_failure", executed_count=0, failed_count=1)
+        event["enforcement"]["errors"] = ["test failure"]
+        bundle = from_rust_event(event)
+        self.assertEqual(bundle.execution.status.value, "failed")
+        self.assertEqual(bundle.mechanism.status.value, "not_observed")
+
 
 class TacticalEffectTests(unittest.TestCase):
     def _objective(self) -> EffectObjective:
@@ -115,6 +127,7 @@ class TacticalEffectTests(unittest.TestCase):
         objective: EffectObjective,
         *,
         assessment: OutcomeAssessment,
+        causal_support: CausalSupport = CausalSupport.INCONCLUSIVE,
         before: float = 120,
         after: float = 2200,
         evidence_refs: tuple[str, ...] = ("evidence:before", "evidence:after"),
@@ -135,6 +148,9 @@ class TacticalEffectTests(unittest.TestCase):
             operator_override={},
             termination_reason="window_complete",
             assessment=assessment,
+            causal_support=causal_support,
+            telemetry_coverage={"baseline": 1.0, "post": 1.0},
+            confounders=(),
             evidence_refs=evidence_refs,
             outcome_id="outcome-test",
         )
@@ -150,9 +166,29 @@ class TacticalEffectTests(unittest.TestCase):
         )
         self.assertEqual(result.assessment, EffectAssessmentStatus.INCONCLUSIVE)
 
-    def test_delay_requires_time_metric_and_effective_outcome(self) -> None:
+    def test_time_increase_without_causal_support_remains_inconclusive(self) -> None:
         objective = self._objective()
-        outcome = self._make_outcome(objective, assessment=OutcomeAssessment.EFFECTIVE)
+        outcome = self._make_outcome(
+            objective,
+            assessment=OutcomeAssessment.EFFECTIVE,
+            causal_support=CausalSupport.INCONCLUSIVE,
+        )
+        result = assess_tactical_effect(
+            mechanism_kind=MechanismKind.TRAFFIC_SHAPING,
+            objective=objective,
+            outcome=outcome,
+            tactical_effect="DELAY",
+        )
+        self.assertEqual(result.assessment, EffectAssessmentStatus.INCONCLUSIVE)
+        self.assertEqual(result.reason_code, "causal_support_inconclusive")
+
+    def test_delay_requires_time_metric_effective_outcome_and_causal_support(self) -> None:
+        objective = self._objective()
+        outcome = self._make_outcome(
+            objective,
+            assessment=OutcomeAssessment.EFFECTIVE,
+            causal_support=CausalSupport.SUPPORTED,
+        )
         result = assess_tactical_effect(
             mechanism_kind=MechanismKind.TRAFFIC_SHAPING,
             objective=objective,
@@ -166,6 +202,7 @@ class TacticalEffectTests(unittest.TestCase):
         outcome = self._make_outcome(
             objective,
             assessment=OutcomeAssessment.EFFECTIVE,
+            causal_support=CausalSupport.SUPPORTED,
             before=120,
             after=400,
         )
@@ -182,6 +219,7 @@ class TacticalEffectTests(unittest.TestCase):
         outcome = self._make_outcome(
             objective,
             assessment=OutcomeAssessment.EFFECTIVE,
+            causal_support=CausalSupport.SUPPORTED,
             evidence_refs=(),
         )
         result = assess_tactical_effect(
