@@ -248,7 +248,7 @@ class TacticalEffectAssessment:
     objective_id: str
     tactical_effect: str
     assessment: EffectAssessmentStatus
-    confidence: float
+    confidence: float | None
     reason_code: str
     evidence_refs: Sequence[str]
     producer: str = "azazel_edge.outcome"
@@ -266,8 +266,8 @@ class TacticalEffectAssessment:
         )
         if any(not str(value).strip() for value in required):
             raise ValueError("effect assessment requires complete correlation and reason_code")
-        if not 0.0 <= float(self.confidence) <= 1.0:
-            raise ValueError("confidence must be between 0 and 1")
+        if self.confidence is not None and not 0.0 <= float(self.confidence) <= 1.0:
+            raise ValueError("confidence must be null or between 0 and 1")
 
     def to_dict(self) -> dict[str, Any]:
         return _enum_dict(asdict(self))
