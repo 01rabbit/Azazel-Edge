@@ -27,6 +27,7 @@ The central rule is that **intent, execution, mechanism, outcome, and tactical e
 - `redirect` is not evidence that diversion succeeded.
 - post-action improvement is not causal proof.
 - provider command exit status is not proof of the resulting host/network postcondition.
+- a tactical-effect join with mismatched decision/objective/mechanism IDs is rejected, never guessed.
 - `inconclusive` is a valid and expected result.
 - observer/assessment failure cannot alter the existing deterministic defense path.
 - AI cannot authorize actions, create canonical provider execution facts, or mark tactical success.
@@ -93,7 +94,7 @@ OBSERVATION_ONLY
 UNKNOWN
 ```
 
-`DELAY` is intentionally not a mechanism.
+`DELAY` is intentionally not a mechanism. Tactical assessment requires the concrete `AppliedMechanism` record, not just a caller-supplied mechanism kind. A disruptive mechanism must have `status=observed` before it can support a tactical effect.
 
 ### EffectObjective
 
@@ -130,14 +131,16 @@ supported | unsupported | inconclusive
 
 v1 implements a conservative `DELAY` rule only when all of the following are explicit:
 
-1. mechanism is `TRAFFIC_SHAPING`;
-2. EffectObjective is a time metric with `direction=increase`;
-3. baseline/post evidence is present;
-4. OutcomeRecord is effective or partially effective;
-5. `causal_support=SUPPORTED`;
-6. policy target/guard requirements represented by the supplied objective/outcome are met.
+1. the correlated `AppliedMechanism` has `status=observed`;
+2. mechanism is `TRAFFIC_SHAPING`;
+3. decision/mechanism/objective correlation IDs match exactly;
+4. EffectObjective is a time metric with `direction=increase`;
+5. baseline/post evidence is present;
+6. OutcomeRecord is effective or partially effective;
+7. `causal_support=SUPPORTED`;
+8. policy target/guard requirements represented by the supplied objective/outcome are met.
 
-Without explicit causal support, time increase remains `inconclusive`. Other tactical effects remain `inconclusive` until effect-specific deterministic evidence rules are implemented.
+Without a verified mechanism postcondition or explicit causal support, time increase remains `inconclusive`. Other tactical effects remain `inconclusive` until effect-specific deterministic evidence rules are implemented.
 
 ## Correlation
 
@@ -157,6 +160,8 @@ reasoning_trace_id
 
 The Rust adapter derives stable shadow IDs from the existing trace/event context. Because authoritative cross-event incident/session identity is not yet grounded, v1 uses a per-decision synthetic incident ID instead of guessing that separate events belong to the same actor/session. These IDs provide replay/idempotency support; they are not a replacement for a future authoritative actor/session identity service.
 
+Tactical-effect assessment rejects mismatched `decision_id`, `objective_id`, or `mechanism_id` rather than correlating heuristically.
+
 ## Shadow modes
 
 ```text
@@ -167,7 +172,7 @@ SHADOW_ASSESS
 
 `SHADOW_RECORD` normalizes execution/mechanism evidence only.
 
-`SHADOW_ASSESS` does not by itself create a tactical claim. An EffectObjective, bounded observation window and explicit causal support are still required.
+`SHADOW_ASSESS` does not by itself create a tactical claim. An EffectObjective, verified mechanism postcondition, bounded observation window and explicit causal support are still required.
 
 ## Failure semantics
 
@@ -180,7 +185,9 @@ SHADOW_ASSESS
 | all attempted commands fail | execution `failed`; mechanism `not_observed` |
 | external notification delivery not proven | execution `unverified` |
 | missing baseline/post evidence | outcome/effect `inconclusive` |
+| mechanism postcondition unverified | tactical effect `inconclusive` |
 | metric changed but causal support missing | tactical effect `inconclusive` |
+| correlation mismatch | assessment join rejected |
 | observer unavailable or output write fails | live control unchanged |
 | Knowledge/Fabric/AI unavailable | live control unchanged |
 | replay attempts execution | fail closed |
@@ -203,6 +210,8 @@ py/azazel_edge/outcome/
 tests/test_outcome_as_evidence_v1.py
 ```
 
+The focused test module contains 18 semantic/authority/retention cases covering execution-state normalization, effect-proof prerequisites, correlation rejection, replay authority and bounded shadow output.
+
 The passive observer can normalize the existing Rust JSONL output:
 
 ```bash
@@ -213,7 +222,7 @@ PYTHONPATH=py python3 -m azazel_edge.outcome.observer \
 
 For live-follow experiments use `--follow`. By default, follow mode seeks to the current end of the input so a restart does not replay the full historical log. Use `--from-start` only when deliberate historical processing is desired.
 
-Shadow output is bounded by default to 50 MiB and rotates the previous file to `.1`; configure with `--max-output-bytes` or `AZAZEL_OUTCOME_MAX_BYTES`. A write/rotation failure remains a shadow-plane loss, not a control-plane failure.
+Shadow output is bounded by default to 50 MiB and rotates the previous file to `.1`; configure with `--max-output-bytes` or `AZAZEL_OUTCOME_MAX_BYTES`. A record larger than the configured bound, or a record that cannot be written without preserving the bound, is dropped. Evidence loss is preferable to turning the shadow observer into a disk-pressure/control-path risk.
 
 Do not install the observer as a default daemon until the Pi/HIL gate is passed.
 
@@ -233,7 +242,7 @@ Contract implemented, including causal support, telemetry coverage and confounde
 
 ### G4 — tactical effect
 
-`DELAY` assessment helper implemented only for explicit evidence-backed inputs with explicit causal support. No automatic runtime tactical claim is enabled.
+`DELAY` assessment helper is fail-closed on mechanism postcondition, correlation, evidence, causal support and policy target. No automatic runtime tactical claim is enabled.
 
 ### G5 — replay
 
