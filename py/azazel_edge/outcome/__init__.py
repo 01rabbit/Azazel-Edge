@@ -24,6 +24,12 @@ from .contracts import (
     TacticalEffectAssessment,
 )
 from .observer import ShadowOutcomeObserver
+from .postcondition import (
+    ReadOnlyCommandRejected,
+    ReadOnlyCommandResult,
+    SubprocessReadOnlyRunner,
+    verify_mechanism_postcondition,
+)
 from .replay import ReplayExecutionForbidden, ReplayExecutionProvider
 
 __all__ = [
@@ -39,12 +45,16 @@ __all__ = [
     "MechanismStatus",
     "OutcomeAssessment",
     "OutcomeRecord",
+    "ReadOnlyCommandRejected",
+    "ReadOnlyCommandResult",
     "ReplayExecutionForbidden",
     "ReplayExecutionProvider",
     "ShadowMode",
     "ShadowOutcomeObserver",
     "ShadowRecordBundle",
+    "SubprocessReadOnlyRunner",
     "TacticalEffectAssessment",
     "assess_tactical_effect",
     "from_rust_event",
+    "verify_mechanism_postcondition",
 ]
