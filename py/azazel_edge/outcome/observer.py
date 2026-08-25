@@ -4,8 +4,9 @@ import argparse
 import json
 import os
 import time
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any
 
 from .adapter import from_rust_event
 from .contracts import ShadowMode
@@ -13,6 +14,7 @@ from .contracts import ShadowMode
 
 DEFAULT_INPUT = "/var/log/azazel-edge/normalized-events.jsonl"
 DEFAULT_OUTPUT = "/var/log/azazel-edge/outcome-shadow.jsonl"
+DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024 * 1024
 
 
 class ShadowOutcomeObserver:
@@ -37,8 +39,16 @@ class ShadowOutcomeObserver:
         return record
 
 
-def iter_jsonl(path: Path, *, follow: bool = False, poll_seconds: float = 0.25) -> Iterator[Mapping[str, Any]]:
+def iter_jsonl(
+    path: Path,
+    *,
+    follow: bool = False,
+    poll_seconds: float = 0.25,
+    start_at_end: bool = False,
+) -> Iterator[Mapping[str, Any]]:
     with path.open("r", encoding="utf-8") as stream:
+        if follow and start_at_end:
+            stream.seek(0, 2)
         while True:
             line = stream.readline()
             if line:
@@ -54,13 +64,44 @@ def iter_jsonl(path: Path, *, follow: bool = False, poll_seconds: float = 0.25) 
             time.sleep(max(0.05, poll_seconds))
 
 
-def append_jsonl(path: Path, values: Iterable[Mapping[str, Any]]) -> int:
+def _rotate_if_needed(path: Path, incoming_bytes: int, max_bytes: int) -> None:
+    if max_bytes <= 0 or not path.exists():
+        return
+    try:
+        current_bytes = path.stat().st_size
+    except OSError:
+        return
+    if current_bytes + incoming_bytes <= max_bytes:
+        return
+
+    archive = Path(f"{path}.1")
+    try:
+        archive.unlink(missing_ok=True)
+        path.replace(archive)
+    except OSError:
+        # Shadow retention failure must never interact with the live control path.
+        return
+
+
+def append_jsonl(
+    path: Path,
+    values: Iterable[Mapping[str, Any]],
+    *,
+    max_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
+) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
-    with path.open("a", encoding="utf-8", buffering=1) as stream:
-        for value in values:
-            stream.write(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
-            count += 1
+    for value in values:
+        line = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+        encoded_bytes = len(line.encode("utf-8"))
+        _rotate_if_needed(path, encoded_bytes, max_bytes)
+        try:
+            with path.open("a", encoding="utf-8", buffering=1) as stream:
+                stream.write(line)
+        except OSError:
+            # The observer is best-effort. It must not become a control-path dependency.
+            continue
+        count += 1
     return count
 
 
@@ -79,21 +120,28 @@ def run(
     mode: ShadowMode,
     follow: bool,
     poll_seconds: float,
+    from_start: bool = False,
+    max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
 ) -> int:
     observer = ShadowOutcomeObserver(mode)
     if mode is ShadowMode.OFF:
         return 0
 
     def records() -> Iterator[Mapping[str, Any]]:
-        for event in iter_jsonl(input_path, follow=follow, poll_seconds=poll_seconds):
+        for event in iter_jsonl(
+            input_path,
+            follow=follow,
+            poll_seconds=poll_seconds,
+            start_at_end=follow and not from_start,
+        ):
             try:
                 record = observer.observe(event)
-            except ValueError:
+            except (ValueError, TypeError):
                 continue
             if record is not None:
                 yield record
 
-    return append_jsonl(output_path, records())
+    return append_jsonl(output_path, records(), max_bytes=max_output_bytes)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -106,7 +154,18 @@ def main(argv: list[str] | None = None) -> int:
         choices=[mode.value for mode in ShadowMode],
     )
     parser.add_argument("--follow", action="store_true")
+    parser.add_argument(
+        "--from-start",
+        action="store_true",
+        help="When following, process existing input before waiting for new records.",
+    )
     parser.add_argument("--poll-seconds", type=float, default=0.25)
+    parser.add_argument(
+        "--max-output-bytes",
+        type=int,
+        default=int(os.environ.get("AZAZEL_OUTCOME_MAX_BYTES", str(DEFAULT_MAX_OUTPUT_BYTES))),
+        help="Rotate outcome-shadow.jsonl to .1 before this bound is exceeded; <=0 disables rotation.",
+    )
     args = parser.parse_args(argv)
     mode = _mode_from_env(args.mode)
     run(
@@ -115,6 +174,8 @@ def main(argv: list[str] | None = None) -> int:
         mode=mode,
         follow=args.follow,
         poll_seconds=args.poll_seconds,
+        from_start=args.from_start,
+        max_output_bytes=args.max_output_bytes,
     )
     return 0
 
