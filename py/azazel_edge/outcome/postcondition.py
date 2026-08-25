@@ -12,6 +12,7 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from .contracts import (
     ActionExecutionReceipt,
+    ActionLifecycle,
     AppliedMechanism,
     ExecutionStatus,
     MechanismKind,
@@ -103,24 +104,23 @@ def verify_mechanism_postcondition(
     runner: ReadOnlyRunner,
     timeout_seconds: float = 2.0,
 ) -> AppliedMechanism:
-    """Verify a mechanism postcondition using read-only host state.
+    """Verify an initial mechanism postcondition using read-only host state.
 
-    G1a never executes, retries, repairs, releases, or authorizes an action. A
-    disruptive mechanism is promoted to ``observed`` only when an already-applied
-    provider receipt correlates exactly and the expected host/network state is read
-    back with sufficient parameter specificity.
+    G1a never executes, retries, repairs, releases, or authorizes an action. It is
+    deliberately limited to the first verification transition from an active applied
+    execution whose mechanism is still ``unverified``. Already observed, absent,
+    disputed, released, or stale mechanism states are not re-opened here; lifecycle
+    reconciliation belongs to later gates.
     """
 
     _validate_correlation(execution, mechanism)
 
     if execution.status is not ExecutionStatus.APPLIED:
-        return _with_probe_result(
-            mechanism,
-            status=mechanism.status,
-            basis="execution_not_applied",
-            verification_strength="none",
-            probe={"execution_status": execution.status.value},
-        )
+        return mechanism
+    if execution.lifecycle is not ActionLifecycle.ACTIVE:
+        return mechanism
+    if mechanism.status is not MechanismStatus.UNVERIFIED:
+        return mechanism
 
     try:
         if mechanism.mechanism_kind is MechanismKind.TRAFFIC_SHAPING:
@@ -146,13 +146,7 @@ def verify_mechanism_postcondition(
             probe={"error": type(exc).__name__},
         )
 
-    return _with_probe_result(
-        mechanism,
-        status=mechanism.status,
-        basis="no_postcondition_probe_for_mechanism",
-        verification_strength="none",
-        probe={"mechanism_kind": mechanism.mechanism_kind.value},
-    )
+    return mechanism
 
 
 def _verify_traffic_shaping(
