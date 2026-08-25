@@ -30,7 +30,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
             producer="test_fixture",
         )
 
-    def _objective(self, guardrail: dict) -> EffectObjective:
+    def _objective(self, guardrail: dict, *, policy_version: str = "test-v1") -> EffectObjective:
         return EffectObjective(
             decision_id="decision-test",
             metric="connection_latency_ms",
@@ -38,7 +38,7 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
             target_or_range={"minimum_delta": 500},
             observation_window={"seconds": 30},
             guardrails=(guardrail,),
-            policy_version="test-v1",
+            policy_version=policy_version,
             objective_id="objective-test",
         )
 
@@ -122,6 +122,22 @@ class TacticalEffectGuardrailTests(unittest.TestCase):
             tactical_effect="DELAY",
         )
         self.assertEqual(result.assessment, EffectAssessmentStatus.INCONCLUSIVE)
+        self.assertIsNone(result.confidence)
+
+    def test_unversioned_policy_objective_cannot_support_tactical_effect(self) -> None:
+        objective = self._objective(
+            {"source": "noc_impact", "metric": "impact_score", "max": 20},
+            policy_version="unversioned",
+        )
+        outcome = self._outcome(objective, noc_impact={"impact_score": 10})
+        result = assess_tactical_effect(
+            mechanism=self._mechanism(),
+            objective=objective,
+            outcome=outcome,
+            tactical_effect="DELAY",
+        )
+        self.assertEqual(result.assessment, EffectAssessmentStatus.INCONCLUSIVE)
+        self.assertEqual(result.reason_code, "policy_version_unverified")
         self.assertIsNone(result.confidence)
 
 
