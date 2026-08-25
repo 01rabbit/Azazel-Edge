@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from .contracts import (
     AppliedMechanism,
@@ -22,6 +22,13 @@ _TIME_METRICS = {
     "time_to_next_action_ms",
 }
 
+_GUARDRAIL_SOURCES = {
+    "post_metrics",
+    "noc_impact",
+    "resource_impact",
+    "asset_impact",
+}
+
 
 def assess_tactical_effect(
     *,
@@ -30,10 +37,11 @@ def assess_tactical_effect(
     outcome: OutcomeRecord,
     tactical_effect: str,
 ) -> TacticalEffectAssessment:
-    """Deterministically assess whether evidence supports a tactical effect.
+    """Deterministically assess whether evidence supports a tactical effect objective.
 
     Tactical support is fail-closed: the mechanism must be independently observed,
-    correlation must be exact, and the outcome must carry explicit causal support.
+    correlation must be exact, the outcome must carry explicit causal support, and
+    any policy-owned guardrails attached to the objective must be evaluable and pass.
     A requested throttle or provider command success alone can never become ``DELAY``.
     """
 
@@ -62,6 +70,12 @@ def assess_tactical_effect(
         return _inconclusive(objective, outcome, effect, refs, "causal_support_inconclusive")
     if outcome.causal_support is CausalSupport.UNSUPPORTED:
         return _unsupported(objective, outcome, effect, refs, "causal_support_unsupported")
+
+    guardrail_result = _evaluate_guardrails(objective.guardrails, outcome)
+    if guardrail_result is None:
+        return _inconclusive(objective, outcome, effect, refs, "guardrail_evidence_missing_or_invalid")
+    if guardrail_result is False:
+        return _unsupported(objective, outcome, effect, refs, "policy_guardrail_violated")
 
     if effect == "DELAY":
         if mechanism.mechanism_kind is not MechanismKind.TRAFFIC_SHAPING:
@@ -94,6 +108,51 @@ def assess_tactical_effect(
     # supported. Until then, they remain inconclusive rather than being inferred from
     # an action name or a caller-supplied outcome label.
     return _inconclusive(objective, outcome, effect, refs, "tactical_effect_rule_not_implemented")
+
+
+def _evaluate_guardrails(
+    guardrails: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] | Any,
+    outcome: OutcomeRecord,
+) -> bool | None:
+    """Evaluate a deliberately small v1 numeric guardrail contract.
+
+    Guardrails are policy-owned and use an explicit source so assessment never guesses
+    which impact map a metric belongs to. Example::
+
+        {"source": "noc_impact", "metric": "impact_score", "max": 20}
+
+    Exactly one of ``min`` or ``max`` must be present. Missing, malformed, or
+    non-numeric evidence returns ``None`` (inconclusive), never pass.
+    """
+
+    if not guardrails:
+        return True
+    source_maps: dict[str, Mapping[str, Any]] = {
+        "post_metrics": outcome.post_metrics,
+        "noc_impact": outcome.noc_impact,
+        "resource_impact": outcome.resource_impact,
+        "asset_impact": outcome.asset_impact,
+    }
+    for raw in guardrails:
+        if not isinstance(raw, Mapping):
+            return None
+        source = str(raw.get("source") or "")
+        metric = str(raw.get("metric") or "")
+        if source not in _GUARDRAIL_SOURCES or not metric:
+            return None
+        has_min = "min" in raw
+        has_max = "max" in raw
+        if has_min == has_max:
+            return None
+        observed = _number(source_maps[source].get(metric))
+        threshold = _number(raw.get("min") if has_min else raw.get("max"))
+        if observed is None or threshold is None:
+            return None
+        if has_min and observed < threshold:
+            return False
+        if has_max and observed > threshold:
+            return False
+    return True
 
 
 def _number(value: Any) -> float | None:
