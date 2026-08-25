@@ -28,6 +28,8 @@ The central rule is that **intent, execution, mechanism, outcome, and tactical e
 - post-action improvement is not causal proof.
 - provider command exit status is not proof of the resulting host/network postcondition.
 - a tactical-effect join with mismatched decision/objective/mechanism IDs is rejected, never guessed.
+- policy guardrails must be explicitly sourced and evaluable; missing guardrail evidence is inconclusive, never pass.
+- uncalibrated tactical confidence is represented as `null`; v1 must not invent numeric precision.
 - `inconclusive` is a valid and expected result.
 - observer/assessment failure cannot alter the existing deterministic defense path.
 - AI cannot authorize actions, create canonical provider execution facts, or mark tactical success.
@@ -107,6 +109,14 @@ Policy-owned observation/success criteria:
 - guardrails;
 - policy version.
 
+v1 guardrails are deliberately narrow and numeric. Every guardrail must identify an explicit source so the assessor never guesses where a value came from:
+
+```json
+{"source":"noc_impact","metric":"impact_score","max":20}
+```
+
+Allowed sources are `post_metrics`, `noc_impact`, `resource_impact`, and `asset_impact`. Exactly one of `min` or `max` is required. Missing, malformed, ambiguous, or non-numeric guardrail evidence makes tactical assessment `inconclusive`; an observed violation makes the policy objective `unsupported`.
+
 ### OutcomeRecord
 
 Bounded post-action observation includes:
@@ -138,9 +148,12 @@ v1 implements a conservative `DELAY` rule only when all of the following are exp
 5. baseline/post evidence is present;
 6. OutcomeRecord is effective or partially effective;
 7. `causal_support=SUPPORTED`;
-8. policy target/guard requirements represented by the supplied objective/outcome are met.
+8. every policy guardrail is well-formed, has evidence, and passes;
+9. the policy target/range is met when one is defined.
 
-Without a verified mechanism postcondition or explicit causal support, time increase remains `inconclusive`. Other tactical effects remain `inconclusive` until effect-specific deterministic evidence rules are implemented.
+Without a verified mechanism postcondition, explicit causal support, or evaluable guardrails, time increase remains `inconclusive`. Other tactical effects remain `inconclusive` until effect-specific deterministic evidence rules are implemented.
+
+`TacticalEffectAssessment.confidence` is nullable. v1 emits `null` because no calibration corpus exists; deterministic rule execution must not be confused with probabilistic confidence in the real-world claim.
 
 ## Correlation
 
@@ -172,7 +185,7 @@ SHADOW_ASSESS
 
 `SHADOW_RECORD` normalizes execution/mechanism evidence only.
 
-`SHADOW_ASSESS` does not by itself create a tactical claim. An EffectObjective, verified mechanism postcondition, bounded observation window and explicit causal support are still required.
+`SHADOW_ASSESS` does not by itself create a tactical claim. An EffectObjective, verified mechanism postcondition, bounded observation window, explicit causal support, and policy guardrail evidence are still required.
 
 ## Failure semantics
 
@@ -187,6 +200,8 @@ SHADOW_ASSESS
 | missing baseline/post evidence | outcome/effect `inconclusive` |
 | mechanism postcondition unverified | tactical effect `inconclusive` |
 | metric changed but causal support missing | tactical effect `inconclusive` |
+| guardrail evidence missing/malformed | tactical effect `inconclusive` |
+| guardrail violated | tactical effect objective `unsupported` |
 | correlation mismatch | assessment join rejected |
 | observer unavailable or output write fails | live control unchanged |
 | Knowledge/Fabric/AI unavailable | live control unchanged |
@@ -208,9 +223,10 @@ py/azazel_edge/outcome/
   observer.py
 
 tests/test_outcome_as_evidence_v1.py
+tests/test_outcome_guardrails_v1.py
 ```
 
-The focused test module contains 18 semantic/authority/retention cases covering execution-state normalization, effect-proof prerequisites, correlation rejection, replay authority and bounded shadow output.
+The focused test suite contains 22 semantic/authority/retention/guardrail cases covering execution-state normalization, effect-proof prerequisites, correlation rejection, replay authority, bounded shadow output, guardrail failure, and uncalibrated-confidence behavior.
 
 The passive observer can normalize the existing Rust JSONL output:
 
@@ -242,7 +258,7 @@ Contract implemented, including causal support, telemetry coverage and confounde
 
 ### G4 — tactical effect
 
-`DELAY` assessment helper is fail-closed on mechanism postcondition, correlation, evidence, causal support and policy target. No automatic runtime tactical claim is enabled.
+`DELAY` assessment helper is fail-closed on mechanism postcondition, correlation, evidence, causal support, policy guardrails and target/range. Numeric confidence remains unset until calibrated. No automatic runtime tactical claim is enabled.
 
 ### G5 — replay
 
