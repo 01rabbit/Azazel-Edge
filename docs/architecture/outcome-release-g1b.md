@@ -78,8 +78,13 @@ For a disruptive action (`throttle`, `redirect`, `isolate`):
 If step 2 fails, the disruptive action is not applied and the provider emits
 `mode=release_guard_failed`, `result=planned_not_applied`.
 
-This chooses failure to act over creating a temporary control that cannot later be
-reconciled safely.
+A repeated decision that resolves to an already-existing release-task identity is also
+blocked before apply. The existing task and its original TTL remain authoritative; a
+replayed historical event cannot re-apply a throttle, duplicate an nft rule, or extend
+the release deadline.
+
+This chooses failure to act over creating or re-creating a temporary control that
+cannot later be reconciled safely.
 
 ## Ownership model
 
@@ -99,7 +104,7 @@ when all of the following match:
 - source IP is expected;
 - redirect additionally matches destination TCP port and redirect port;
 - isolation additionally contains the drop verdict;
-- a numeric kernel rule handle exists.
+- a numeric non-zero kernel rule handle exists.
 
 Deletion is by the discovered kernel rule handle. An ownership comment attached to
 semantically different rule content is treated as an error and nothing is deleted.
@@ -123,6 +128,12 @@ TBF parameters. If another root qdisc/handle is present, it is not deleted.
 A newer successfully activated throttle may supersede an older throttle task for the
 same root qdisc resource. This supersession rule is not used for nft tasks.
 
+The qdisc major handle is a bounded namespace. If an older throttle is due while a
+newer `PREPARED` or `UNCERTAIN` throttle for the same root resource has the same
+kernel-visible handle, ownership is ambiguous after a crash window. The older release
+is therefore deferred with `retry_pending`; it does not issue a delete until the newer
+task has reconciled. A newer `ACTIVE` throttle supersedes the older task instead.
+
 ## Ledger
 
 Default path:
@@ -144,11 +155,11 @@ Properties:
 - mode `0600` on newly created ledger files;
 - regular-file / non-symlink check on the ledger itself;
 - finite non-negative time validation;
-- strict lifecycle vocabulary;
+- strict lifecycle vocabulary and transition guards;
 - bounded file size and task count;
 - bounded retained terminal history;
 - deterministic task identity;
-- duplicate/replayed provider input is idempotent and does not silently extend TTL.
+- duplicate/replayed task identity is fail-closed before apply and does not extend TTL.
 
 The default parent directory is expected to be deployment-controlled. Parent-directory
 permission/symlink hardening is part of deployment/Pi-HIL validation, not claimed by
@@ -170,6 +181,9 @@ PREPARED / ACTIVE / UNCERTAIN
 
 ACTIVE throttle
   └─ newer ACTIVE throttle owns same root slot ─→ SUPERSEDED
+
+older throttle due + newer PREPARED/UNCERTAIN throttle
+  └─ same root + same handle ───────────→ retry_pending (no delete)
 ```
 
 `SUPERSEDED` is not normalized as `RELEASED`. It records ownership replacement, not a
@@ -188,7 +202,9 @@ prepare → apply → crash before activation persistence
 After reboot, when the task is due, ownership readback resolves this ambiguity safely:
 
 - owned state absent → release postcondition is already satisfied;
-- owned state present → delete only that owned state and verify absence.
+- owned state present → delete only that owned state and verify absence;
+- ambiguous newer throttle with the same root/handle → defer the older delete until the
+  newer task reconciles.
 
 This does **not** retroactively prove that the mechanism was ever successfully applied.
 G1a observation remains the prerequisite for later shadow transition of an observed
@@ -228,7 +244,7 @@ only when:
 2. mechanism was independently `OBSERVED` by G1a;
 3. G1a recorded the same ownership marker;
 4. Rust release evidence has exact decision/action correlation;
-5. release owner matches the execution owner;
+5. release task/resource/owner matches the provider execution metadata;
 6. release status is `released`;
 7. release postcondition is explicitly `verified=true`.
 
@@ -253,16 +269,19 @@ Those claims remain in Outcome / Tactical Effect gates.
 | Condition | Behavior |
 |---|---|
 | release intent cannot be persisted before apply | block disruptive apply |
+| replayed task identity already exists | block disruptive re-apply; keep original TTL |
+| terminal/pre-existing task is asked to reactivate | reject lifecycle transition |
 | ledger corrupt/oversized/invalid | fail closed; no new guarded apply |
 | task not due | no release mutation |
 | owner marker absent at due time | release postcondition satisfied as owned state absent |
 | owner tag/handle exists with different semantics | do not delete; retry/error |
+| older throttle sees newer PREPARED/UNCERTAIN same handle | defer old delete; retry_pending |
 | rollback command fails | retry_pending |
 | delete succeeds but owned state remains | retry_pending |
 | verified owned absence | Rust may emit `released` |
 | Python sees `released` without `verified=true` | reject event |
 | Python has no prior owned G1a observation | do not mark shadow mechanism released |
-| wrong decision/action/owner | reject correlation |
+| wrong decision/action/task/resource/owner | reject correlation |
 
 ## Explicitly not solved by G1b
 
@@ -272,8 +291,8 @@ Those claims remain in Outcome / Tactical Effect gates.
 - authoritative cross-event actor/session identity;
 - end-to-end golden replay fixture (G5);
 - installer/systemd enablement;
-- actual Raspberry Pi tc/nft HIL syntax, restart, performance, disk-wear and resource
-  validation (G6);
+- actual Raspberry Pi tc/nft HIL syntax, restart, release polling cadence, performance,
+  disk-wear and resource validation (G6);
 - Presented Terrain / Belief / Counterfactual / MAGI / Co-Adaptation.
 
 G1b code remains subject to G6 before claiming production/Pi deployment readiness.
