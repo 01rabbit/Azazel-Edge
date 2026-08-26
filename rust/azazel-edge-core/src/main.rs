@@ -1,3 +1,9 @@
+mod release;
+
+use release::{
+    activate_release_task, build_release_task, cancel_release_task, mark_release_task_uncertain,
+    prepare_release_task, process_due_releases, ReleaseTask,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -25,6 +31,7 @@ struct Config {
     defense_dry_run: bool,
     defense_enforce_level: String,
     defense_action_ttl_sec: u64,
+    defense_release_ledger_path: String,
     defense_allow_high_impact_auto: bool,
     defense_iface: String,
     defense_honeypot_port: u16,
@@ -194,6 +201,8 @@ fn load_config() -> Config {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(300),
+        defense_release_ledger_path: env::var("AZAZEL_DEFENSE_RELEASE_LEDGER")
+            .unwrap_or_else(|_| "/var/lib/azazel-edge/release-ledger.json".to_string()),
         defense_allow_high_impact_auto: env_bool("AZAZEL_DEFENSE_ALLOW_HIGH_IMPACT_AUTO", false),
         defense_iface: env::var("AZAZEL_DEFENSE_IFACE").unwrap_or_else(|_| "br0".to_string()),
         defense_honeypot_port: env::var("AZAZEL_DEFENSE_HONEYPOT_PORT")
@@ -315,42 +324,85 @@ fn parse_shell_words(line: &str) -> Vec<String> {
 }
 
 fn build_enforcement_plan(ev: &NormalizedEvent, decision: &DefensiveDecision, iface: &str, honeypot_port: u16) -> EnforcementPlan {
+    build_enforcement_plan_owned(ev, decision, iface, honeypot_port, None)
+}
+
+fn build_enforcement_plan_owned(
+    ev: &NormalizedEvent,
+    decision: &DefensiveDecision,
+    iface: &str,
+    honeypot_port: u16,
+    release_task: Option<&ReleaseTask>,
+) -> EnforcementPlan {
     let mut apply: Vec<Vec<String>> = Vec::new();
     let mut rollback: Vec<Vec<String>> = Vec::new();
 
     if decision.action == "isolate" {
-        apply.push(vec![
+        let mut command = vec![
             "nft".to_string(), "insert".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
             "input".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "drop".to_string(),
-        ]);
-        rollback.push(vec![
-            "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
-            "input".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "drop".to_string(),
-        ]);
+        ];
+        if let Some(task) = release_task {
+            command.push("comment".to_string());
+            command.push(task.owner_token.clone());
+            rollback.push(vec![
+                "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+                "input".to_string(), "handle".to_string(), format!("<owned:{}>", task.owner_token),
+            ]);
+        } else {
+            rollback.push(vec![
+                "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+                "input".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "drop".to_string(),
+            ]);
+        }
+        apply.push(command);
     }
 
     if decision.action == "throttle" {
-        apply.push(vec![
+        let mut command = vec![
             "tc".to_string(), "qdisc".to_string(), "replace".to_string(), "dev".to_string(), iface.to_string(), "root".to_string(),
+        ];
+        if let Some(task) = release_task {
+            command.push("handle".to_string());
+            command.push(task.tc_handle.clone());
+        }
+        command.extend(vec![
             "tbf".to_string(), "rate".to_string(), "256kbit".to_string(), "burst".to_string(), "32kbit".to_string(),
             "latency".to_string(), format!("{}ms", decision.delay_ms.max(100)),
         ]);
-        rollback.push(vec![
+        apply.push(command);
+
+        let mut rollback_command = vec![
             "tc".to_string(), "qdisc".to_string(), "del".to_string(), "dev".to_string(), iface.to_string(), "root".to_string(),
-        ]);
+        ];
+        if let Some(task) = release_task {
+            rollback_command.push("handle".to_string());
+            rollback_command.push(task.tc_handle.clone());
+        }
+        rollback.push(rollback_command);
     }
 
     if decision.action == "redirect" {
-        apply.push(vec![
+        let mut command = vec![
             "nft".to_string(), "insert".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
             "prerouting".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "tcp".to_string(),
             "dport".to_string(), ev.target_port.to_string(), "redirect".to_string(), "to".to_string(), honeypot_port.to_string(),
-        ]);
-        rollback.push(vec![
-            "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
-            "prerouting".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "tcp".to_string(),
-            "dport".to_string(), ev.target_port.to_string(), "redirect".to_string(), "to".to_string(), honeypot_port.to_string(),
-        ]);
+        ];
+        if let Some(task) = release_task {
+            command.push("comment".to_string());
+            command.push(task.owner_token.clone());
+            rollback.push(vec![
+                "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+                "prerouting".to_string(), "handle".to_string(), format!("<owned:{}>", task.owner_token),
+            ]);
+        } else {
+            rollback.push(vec![
+                "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+                "prerouting".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "tcp".to_string(),
+                "dport".to_string(), ev.target_port.to_string(), "redirect".to_string(), "to".to_string(), honeypot_port.to_string(),
+            ]);
+        }
+        apply.push(command);
     }
 
     EnforcementPlan {
@@ -432,17 +484,53 @@ fn should_execute_action(action: &str, cfg: &Config) -> (bool, String) {
     }
 }
 
+fn add_release_metadata(metadata: &mut Value, task: Option<&ReleaseTask>, state: &str) {
+    if let Some(task) = task {
+        metadata["release_task_id"] = json!(task.task_id);
+        metadata["release_due_epoch"] = json!(task.due_epoch);
+        metadata["release_resource_key"] = json!(task.resource_key);
+        metadata["release_owner_token"] = json!(task.owner_token);
+        metadata["release_tc_handle"] = json!(task.tc_handle);
+        metadata["release_ledger_state"] = json!(state);
+    } else {
+        metadata["release_task_id"] = Value::Null;
+        metadata["release_due_epoch"] = Value::Null;
+        metadata["release_resource_key"] = Value::Null;
+        metadata["release_owner_token"] = Value::Null;
+        metadata["release_tc_handle"] = Value::Null;
+        metadata["release_ledger_state"] = json!(state);
+    }
+}
+
 fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Config) -> EnforcementOutcome {
     let trace_id = calc_trace_id(ev, decision);
-    let (effective_decision, redirect_meta) = resolve_redirect_decision(ev, decision, cfg);
+    let (effective_decision, mut redirect_meta) = resolve_redirect_decision(ev, decision, cfg);
     let selected_decoy_port = redirect_meta
         .get("selected_decoy_port")
         .and_then(|v| v.as_u64())
         .map(|v| v as u16)
         .unwrap_or(cfg.defense_honeypot_port);
-    let plan = build_enforcement_plan(ev, &effective_decision, &cfg.defense_iface, selected_decoy_port);
+    let release_task = build_release_task(
+        &trace_id,
+        &effective_decision.action,
+        &cfg.defense_iface,
+        &ev.src_ip,
+        ev.target_port,
+        selected_decoy_port,
+        effective_decision.delay_ms,
+        cfg.defense_action_ttl_sec,
+        now_epoch(),
+    );
+    let plan = build_enforcement_plan_owned(
+        ev,
+        &effective_decision,
+        &cfg.defense_iface,
+        selected_decoy_port,
+        release_task.as_ref(),
+    );
 
     if plan.apply_commands.is_empty() {
+        add_release_metadata(&mut redirect_meta, None, "not_applicable");
         return EnforcementOutcome {
             mode: "disabled".to_string(),
             trace_id,
@@ -462,6 +550,7 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
 
     let (allowed_by_policy, policy_gate_reason) = should_execute_action(&effective_decision.action, cfg);
     if cfg.defense_dry_run || !allowed_by_policy {
+        add_release_metadata(&mut redirect_meta, release_task.as_ref(), "planned_only");
         return EnforcementOutcome {
             mode: if cfg.defense_dry_run { "dry_run".to_string() } else { "policy_gated".to_string() },
             trace_id,
@@ -474,6 +563,47 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
             failed_count: 0,
             errors: Vec::new(),
             rollback_hint: "set AZAZEL_DEFENSE_ENFORCE_LEVEL=full-auto or explicit high-impact approval policy".to_string(),
+            result: "planned_not_applied".to_string(),
+            metadata: redirect_meta,
+        };
+    }
+
+    let task = match release_task.as_ref() {
+        Some(task) => task,
+        None => {
+            add_release_metadata(&mut redirect_meta, None, "ownership_unavailable");
+            return EnforcementOutcome {
+                mode: "release_guard_failed".to_string(),
+                trace_id,
+                selected_action: effective_decision.action.clone(),
+                target: effective_decision.target.clone(),
+                policy_reason: effective_decision.policy_reason.clone(),
+                command_plan: plan.apply_commands,
+                rollback_plan: plan.rollback_commands,
+                executed_count: 0,
+                failed_count: 0,
+                errors: vec!["disruptive action has no releasable ownership contract".to_string()],
+                rollback_hint: "disruptive action blocked before execution".to_string(),
+                result: "planned_not_applied".to_string(),
+                metadata: redirect_meta,
+            };
+        }
+    };
+
+    if let Err(error) = prepare_release_task(&cfg.defense_release_ledger_path, task) {
+        add_release_metadata(&mut redirect_meta, Some(task), "prepare_failed");
+        return EnforcementOutcome {
+            mode: "release_guard_failed".to_string(),
+            trace_id,
+            selected_action: effective_decision.action.clone(),
+            target: effective_decision.target.clone(),
+            policy_reason: effective_decision.policy_reason.clone(),
+            command_plan: plan.apply_commands,
+            rollback_plan: plan.rollback_commands,
+            executed_count: 0,
+            failed_count: 0,
+            errors: vec![format!("release_schedule_prepare_failed:{}", error)],
+            rollback_hint: "disruptive action blocked because durable release intent could not be persisted".to_string(),
             result: "planned_not_applied".to_string(),
             metadata: redirect_meta,
         };
@@ -493,6 +623,43 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
         }
     }
 
+    let ledger_state = if failed_count == 0 && executed_count > 0 {
+        match activate_release_task(&cfg.defense_release_ledger_path, &task.task_id, now_epoch()) {
+            Ok(_) => "active",
+            Err(error) => {
+                errors.push(format!("release_schedule_activation_failed:{}", error));
+                "prepared"
+            }
+        }
+    } else if executed_count > 0 {
+        match mark_release_task_uncertain(
+            &cfg.defense_release_ledger_path,
+            &task.task_id,
+            "provider_partial_apply",
+            now_epoch(),
+        ) {
+            Ok(_) => "uncertain",
+            Err(error) => {
+                errors.push(format!("release_schedule_uncertain_persist_failed:{}", error));
+                "prepared"
+            }
+        }
+    } else {
+        match cancel_release_task(
+            &cfg.defense_release_ledger_path,
+            &task.task_id,
+            "provider_apply_failed",
+            now_epoch(),
+        ) {
+            Ok(_) => "cancelled",
+            Err(error) => {
+                errors.push(format!("release_schedule_cancel_failed:{}", error));
+                "prepared"
+            }
+        }
+    };
+    add_release_metadata(&mut redirect_meta, Some(task), ledger_state);
+
     EnforcementOutcome {
         mode: "enforced".to_string(),
         trace_id,
@@ -504,7 +671,10 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
         executed_count,
         failed_count,
         errors,
-        rollback_hint: format!("temporary action ttl={}s; execute rollback_plan when control is no longer needed", cfg.defense_action_ttl_sec),
+        rollback_hint: format!(
+            "durable automatic release due after {}s; release remains unverified until owned-state absence readback",
+            cfg.defense_action_ttl_sec
+        ),
         result: if failed_count > 0 { "partial_failure".to_string() } else { "applied".to_string() },
         metadata: redirect_meta,
     }
@@ -627,6 +797,29 @@ fn process_line(cfg: &Config, line: &str) {
     println!("{}", event);
 }
 
+fn process_release_events(cfg: &Config) {
+    match process_due_releases(&cfg.defense_release_ledger_path, now_epoch()) {
+        Ok(outcomes) => {
+            for outcome in outcomes {
+                let event = json!({
+                    "release": outcome,
+                    "enforcement_status": enforcement_status(cfg),
+                    "source": "release_ledger",
+                    "pipeline": "rust_release_engine_v1",
+                });
+                if cfg.forward_log {
+                    append_json_line(&cfg.normalized_log_path, &event);
+                }
+                // G1b release records have a different schema from normalized alert events.
+                // Do not forward them to the AI socket until that receiver explicitly supports
+                // this contract. Release evidence is available through the canonical JSONL.
+                println!("{}", event);
+            }
+        }
+        Err(error) => eprintln!("release ledger processing failed: {}", error),
+    }
+}
+
 fn read_new_lines(cfg: &Config, offset: &mut u64) {
     let path = Path::new(&cfg.eve_path);
     let metadata = match fs::metadata(path) {
@@ -677,7 +870,7 @@ fn main() {
     let mut offset = if cfg.from_start { 0 } else { fs::metadata(&cfg.eve_path).map(|m| m.len()).unwrap_or(0) };
 
     eprintln!(
-        "azazel-edge-core started: eve_path={}, ai_socket={}, from_start={}, poll_ms={}, defense_enforce={}, defense_dry_run={}, defense_enforce_level={}, high_impact_auto={}, defense_iface={}, honeypot_port={}",
+        "azazel-edge-core started: eve_path={}, ai_socket={}, from_start={}, poll_ms={}, defense_enforce={}, defense_dry_run={}, defense_enforce_level={}, high_impact_auto={}, defense_iface={}, honeypot_port={}, release_ledger={}",
         cfg.eve_path,
         cfg.ai_socket_path,
         cfg.from_start,
@@ -687,11 +880,16 @@ fn main() {
         cfg.defense_enforce_level,
         cfg.defense_allow_high_impact_auto,
         cfg.defense_iface,
-        cfg.defense_honeypot_port
+        cfg.defense_honeypot_port,
+        cfg.defense_release_ledger_path
     );
 
+    // Reconcile due release work before reading new alerts. This runs even when new
+    // enforcement is disabled so a restart/config change cannot strand old temporary state.
+    process_release_events(&cfg);
     loop {
         read_new_lines(&cfg, &mut offset);
+        process_release_events(&cfg);
         thread::sleep(Duration::from_millis(cfg.poll_ms));
     }
 }
@@ -732,6 +930,7 @@ mod tests {
             defense_dry_run: true,
             defense_enforce_level: "advisory".to_string(),
             defense_action_ttl_sec: 300,
+            defense_release_ledger_path: "/tmp/azazel-edge-test-release-ledger.json".to_string(),
         defense_allow_high_impact_auto: false,
         defense_iface: "br0".to_string(),
         defense_honeypot_port: 2222,
@@ -752,6 +951,34 @@ mod tests {
     }
 
     #[test]
+    fn owned_isolation_plan_has_release_comment_and_handle_template() {
+        let ev = sample_event();
+        let decision = decide_defense(&ev);
+        let task = build_release_task(
+            "trace-test", "isolate", "br0", &ev.src_ip, ev.target_port, 2222, 0, 300, 100.0,
+        )
+        .unwrap();
+        let plan = build_enforcement_plan_owned(&ev, &decision, "br0", 2222, Some(&task));
+        assert!(plan.apply_commands.join("\n").contains(&task.owner_token));
+        assert!(plan.rollback_commands.join("\n").contains("handle"));
+    }
+
+    #[test]
+    fn owned_throttle_plan_has_unique_tc_handle() {
+        let mut ev = sample_event();
+        ev.severity = 3;
+        let decision = decide_defense(&ev);
+        let task = build_release_task(
+            "trace-test", "throttle", "br0", &ev.src_ip, ev.target_port, 2222, decision.delay_ms, 300, 100.0,
+        )
+        .unwrap();
+        let plan = build_enforcement_plan_owned(&ev, &decision, "br0", 2222, Some(&task));
+        let flat = plan.apply_commands.join("\n");
+        assert!(flat.contains("root handle"));
+        assert!(flat.contains(&task.tc_handle));
+    }
+
+    #[test]
     fn maybe_enforce_is_dry_run_when_enforce_is_false() {
         let ev = sample_event();
         let decision = decide_defense(&ev);
@@ -763,6 +990,10 @@ mod tests {
         assert_eq!(outcome.executed_count, 0);
         assert_eq!(outcome.failed_count, 0);
         assert!(!outcome.command_plan.is_empty());
+        assert_eq!(
+            outcome.metadata.get("release_ledger_state").and_then(Value::as_str),
+            Some("planned_only")
+        );
     }
 
     #[test]
