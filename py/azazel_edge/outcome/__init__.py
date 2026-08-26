@@ -37,6 +37,13 @@ from .release_evidence import (
     reconcile_release_evidence,
 )
 from .replay import ReplayExecutionForbidden, ReplayExecutionProvider
+from .telemetry import (
+    LinuxProcTelemetrySource,
+    ObjectiveTemplate,
+    OutcomeTelemetryCollector,
+    OutcomeTelemetryPolicy,
+    TelemetrySample,
+)
 
 __all__ = [
     "ActionExecutionReceipt",
@@ -47,10 +54,14 @@ __all__ = [
     "EffectAssessmentStatus",
     "EffectObjective",
     "ExecutionStatus",
+    "LinuxProcTelemetrySource",
     "MechanismKind",
     "MechanismStatus",
+    "ObjectiveTemplate",
     "OutcomeAssessment",
     "OutcomeRecord",
+    "OutcomeTelemetryCollector",
+    "OutcomeTelemetryPolicy",
     "ReadOnlyCommandRejected",
     "ReadOnlyCommandResult",
     "ReleaseEvidenceRecord",
@@ -62,6 +73,7 @@ __all__ = [
     "ShadowRecordBundle",
     "SubprocessReadOnlyRunner",
     "TacticalEffectAssessment",
+    "TelemetrySample",
     "assess_tactical_effect",
     "expected_ownership",
     "from_rust_event",
