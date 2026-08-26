@@ -1,0 +1,8 @@
+{
+  "schema_version": "cross-product-golden-manifest/v0.1",
+  "canonical_sha256": {
+    "cross_product_redirect_execution_v0.json": "d073a95d43c11c3a76decdae553bb27566446c7c5a5aaa910ca50c09c4b78507",
+    "cross_product_redirection_mechanism_v0.json": "1a695e1157b1c34159003aec09edf03f297712ed33dfdb5356c6895624d843c7",
+    "cross_product_presented_terrain_outcome_v0.json": "e189349552e4137ccbbbacf976048065f6867db432918ef5b9e671ab1b8f00a4"
+  }
+}

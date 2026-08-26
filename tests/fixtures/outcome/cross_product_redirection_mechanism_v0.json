@@ -1,0 +1,21 @@
+{
+  "authority_class": "producer_mechanism_fact",
+  "decision_ref": "decision-golden-redirect-1",
+  "evidence_refs": [
+    "edge:mechanism:golden:1"
+  ],
+  "execution_ref": "execution-golden-redirect-1",
+  "limitations": [],
+  "mechanism_kind": "redirection",
+  "observation_id": "mechanism-golden-redirection-1",
+  "observed_at": "2026-08-26T06:10:02Z",
+  "observed_parameters": {
+    "redirect_port": 12222,
+    "verification_basis": "nft_redirect_rule_readback_match"
+  },
+  "producer_node": "edge-golden-1",
+  "producer_product": "azazel-edge",
+  "schema_version": "outcome-mechanism/v0.1",
+  "status": "observed",
+  "trace_id": "trace-golden-redirect-1"
+}

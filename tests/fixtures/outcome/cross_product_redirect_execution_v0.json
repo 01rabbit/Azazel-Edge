@@ -1,0 +1,16 @@
+{
+  "action": "redirect",
+  "authority_class": "producer_execution_fact",
+  "decision_ref": "decision-golden-redirect-1",
+  "evidence_refs": [
+    "edge:execution:golden:1"
+  ],
+  "execution_ref": "execution-golden-redirect-1",
+  "observed_at": "2026-08-26T06:10:01Z",
+  "producer_node": "edge-golden-1",
+  "producer_product": "azazel-edge",
+  "release_ref": null,
+  "schema_version": "outcome-execution/v0.1",
+  "status": "applied",
+  "trace_id": "trace-golden-redirect-1"
+}
