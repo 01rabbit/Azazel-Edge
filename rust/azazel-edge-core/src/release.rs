@@ -104,6 +104,7 @@ impl ReleaseCommandRunner for SystemReleaseCommandRunner {
             .env("PATH", TRUSTED_DIRS.join(":"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
         let mut child = command
             .spawn()
             .map_err(|e| format!("release command spawn failed: {e}"))?;
@@ -140,6 +141,7 @@ impl ReleaseCommandRunner for SystemReleaseCommandRunner {
                 }
             }
         };
+
         let (stdout, stdout_exceeded) = out_reader
             .join()
             .map_err(|_| "release stdout reader panicked".to_string())??;
@@ -248,8 +250,13 @@ pub fn prepare_release_task(path: &str, task: &ReleaseTask) -> Result<(), String
     let mut ledger = load_ledger(path)?;
     if let Some(existing) = ledger.tasks.iter().find(|item| item.task_id == task.task_id) {
         if same_task_identity(existing, task) {
-            // Duplicate/replayed input is idempotent. It never silently extends TTL.
-            return Ok(());
+            // A repeated task identity means the same provider decision is being replayed.
+            // Never execute the disruptive apply again: an old throttle could otherwise
+            // replace a newer root qdisc, and duplicate nft rules would be created.
+            return Err(format!(
+                "release task already exists; replayed disruptive apply blocked (status={})",
+                existing.status
+            ));
         }
         return Err("release task id collision".to_string());
     }
@@ -287,6 +294,12 @@ pub fn activate_release_task(path: &str, task_id: &str, now_epoch: f64) -> Resul
         .find(|item| item.task_id == task_id)
         .cloned()
         .ok_or_else(|| "release task missing during activation".to_string())?;
+    if snapshot.status != "prepared" {
+        return Err(format!(
+            "release task cannot activate from status={}",
+            snapshot.status
+        ));
+    }
 
     // Only throttle uses replace on the same root qdisc resource. A successful newer
     // throttle replaces the older owned state, so the older lease can be superseded.
@@ -322,7 +335,7 @@ pub fn mark_release_task_uncertain(
     reason: &str,
     now_epoch: f64,
 ) -> Result<(), String> {
-    update_task_status(path, task_id, "uncertain", reason, now_epoch)
+    transition_task(path, task_id, &["prepared"], "uncertain", reason, now_epoch)
 }
 
 pub fn cancel_release_task(
@@ -331,12 +344,13 @@ pub fn cancel_release_task(
     reason: &str,
     now_epoch: f64,
 ) -> Result<(), String> {
-    update_task_status(path, task_id, "cancelled", reason, now_epoch)
+    transition_task(path, task_id, &["prepared"], "cancelled", reason, now_epoch)
 }
 
-fn update_task_status(
+fn transition_task(
     path: &str,
     task_id: &str,
+    allowed_from: &[&str],
     status: &str,
     reason: &str,
     now_epoch: f64,
@@ -351,6 +365,12 @@ fn update_task_status(
         .iter_mut()
         .find(|item| item.task_id == task_id)
         .ok_or_else(|| "release task missing".to_string())?;
+    if !allowed_from.iter().any(|value| *value == task.status) {
+        return Err(format!(
+            "invalid release lifecycle transition {} -> {status}",
+            task.status
+        ));
+    }
     task.status = status.to_string();
     task.updated_epoch = now_epoch;
     task.last_error = bounded_error(reason);
@@ -390,8 +410,8 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
             _ => continue,
         };
 
-        // A newer successful throttle owns the one root-qdisc slot. This test is not
-        // used for nft because independently-tagged nft rules can coexist safely.
+        // A newer successful throttle owns the one root-qdisc slot. This is not used
+        // for nft because independently-tagged nft rules can coexist safely.
         if current.action == "throttle" {
             if let Some(newer) = ledger.tasks.iter().find(|other| {
                 other.task_id != current.task_id
@@ -600,10 +620,12 @@ fn release_nft_rule<R: ReleaseCommandRunner>(
             json!({"verified": true, "owned_rule_count": 0}),
         ));
     }
+
     let mut command_count = 0_u32;
     let mut failed_count = 0_u32;
     let mut errors = Vec::new();
     for handle in handles {
+        let handle_string = handle.to_string();
         let argv = strings(&[
             "nft",
             "delete",
@@ -612,7 +634,7 @@ fn release_nft_rule<R: ReleaseCommandRunner>(
             "azazel_edge",
             chain,
             "handle",
-            &handle.to_string(),
+            &handle_string,
         ]);
         command_count += 1;
         match runner.run(&argv) {
@@ -711,6 +733,9 @@ fn nft_owned_handles<R: ReleaseCommandRunner>(
             .get("handle")
             .and_then(Value::as_u64)
             .ok_or_else(|| "owned nft rule missing numeric handle".to_string())?;
+        if handle == 0 {
+            return Err("owned nft rule has invalid zero handle".to_string());
+        }
         handles.push(handle);
     }
     Ok(handles)
@@ -1255,7 +1280,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_prepare_is_idempotent_and_does_not_extend_ttl() {
+    fn duplicate_prepare_blocks_replayed_apply_and_does_not_extend_ttl() {
         let path = test_path("ledger.json");
         let first = build_release_task(
             "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, 100.0,
@@ -1266,10 +1291,23 @@ mod tests {
         )
         .unwrap();
         prepare_release_task(&path, &first).unwrap();
-        prepare_release_task(&path, &replay).unwrap();
+        let error = prepare_release_task(&path, &replay).unwrap_err();
+        assert!(error.contains("replayed disruptive apply blocked"));
         let ledger = load_ledger(&path).unwrap();
         assert_eq!(ledger.tasks.len(), 1);
         assert_eq!(ledger.tasks[0].due_epoch, 400.0);
+    }
+
+    #[test]
+    fn terminal_task_cannot_be_reactivated() {
+        let path = test_path("ledger.json");
+        let task = build_release_task(
+            "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 1, 100.0,
+        )
+        .unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        cancel_release_task(&path, &task.task_id, "test", 100.5).unwrap();
+        assert!(activate_release_task(&path, &task.task_id, 101.0).is_err());
     }
 
     #[test]
@@ -1368,12 +1406,12 @@ mod tests {
     #[test]
     fn nft_release_deletes_only_owned_handle_and_verifies_absence_with_noise_expr() {
         let path = test_path("ledger.json");
-        let mut task = build_release_task(
+        let task = build_release_task(
             "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
         )
         .unwrap();
-        task.status = "active".to_string();
         prepare_release_task(&path, &task).unwrap();
+        activate_release_task(&path, &task.task_id, 100.5).unwrap();
         let owned = json!({"nftables": [{"rule": {
             "chain": "input",
             "handle": 42,
@@ -1406,12 +1444,12 @@ mod tests {
     #[test]
     fn ownership_tag_semantic_mismatch_never_deletes_rule() {
         let path = test_path("ledger.json");
-        let mut task = build_release_task(
+        let task = build_release_task(
             "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
         )
         .unwrap();
-        task.status = "active".to_string();
         prepare_release_task(&path, &task).unwrap();
+        activate_release_task(&path, &task.task_id, 100.5).unwrap();
         let poisoned = json!({"nftables": [{"rule": {
             "chain": "input",
             "handle": 42,
@@ -1430,12 +1468,12 @@ mod tests {
     #[test]
     fn tc_release_never_deletes_different_owner_handle() {
         let path = test_path("ledger.json");
-        let mut task = build_release_task(
+        let task = build_release_task(
             "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 1, 100.0,
         )
         .unwrap();
-        task.status = "active".to_string();
         prepare_release_task(&path, &task).unwrap();
+        activate_release_task(&path, &task.task_id, 100.5).unwrap();
         let runner = FakeRunner::new(vec![ok_json(json!([{
             "kind": "tbf", "root": true, "handle": "ffff:", "rate": 32000,
             "burst": 4096, "lat": 1_000_000
@@ -1461,7 +1499,6 @@ mod tests {
 
     #[test]
     fn malformed_nonfinite_or_unknown_status_ledger_is_rejected() {
-        let path = test_path("ledger.json");
         let task = build_release_task(
             "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
         )
@@ -1472,6 +1509,5 @@ mod tests {
         bad = task;
         bad.due_epoch = f64::INFINITY;
         assert!(validate_task(&bad).is_err());
-        let _ = path;
     }
 }
