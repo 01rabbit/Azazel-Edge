@@ -202,7 +202,10 @@ def _confounder_strings(confounders: Sequence[Mapping[str, Any]]) -> list[str]:
         if isinstance(label, str) and label.strip():
             result.append(label.strip())
         else:
-            result.append(json.dumps(safe, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+            encoded = json.dumps(safe, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            if len(encoded) > _MAX_STRING:
+                raise SharedOutcomeExportError("serialized confounder exceeds shared string bound")
+            result.append(encoded)
     return result
 
 
@@ -259,6 +262,7 @@ def assessment_to_shared_v0(
     correlation: Correlation,
     assessment: TacticalEffectAssessment,
     objective: EffectObjective,
+    outcome: OutcomeRecord,
     *,
     producer_node: str,
 ) -> dict[str, Any]:
@@ -272,9 +276,18 @@ def assessment_to_shared_v0(
         raise SharedOutcomeExportError("assessment objective does not match objective")
     if objective.decision_id != correlation.decision_id:
         raise SharedOutcomeExportError("objective decision does not match correlation")
+    if outcome.outcome_id != assessment.outcome_id:
+        raise SharedOutcomeExportError("assessment references a different outcome record")
+    if outcome.mechanism_id != assessment.mechanism_id:
+        raise SharedOutcomeExportError("assessment and outcome mechanism mismatch")
+    if outcome.objective_id != assessment.objective_id:
+        raise SharedOutcomeExportError("assessment and outcome objective mismatch")
+    _require_correlation(correlation, decision_id=outcome.decision_id, execution_id=outcome.execution_id)
     tactical_effect = assessment.tactical_effect.lower()
     if tactical_effect not in _TACTICAL_EFFECTS:
         raise SharedOutcomeExportError("tactical effect is not representable in shared v0.1")
+    if not outcome.observed_at.strip():
+        raise SharedOutcomeExportError("linked outcome lacks grounded observation timestamp")
     return {
         "schema_version": "tactical-effect-assessment/v0.1",
         "assessment_id": assessment.effect_assessment_id,
@@ -291,21 +304,7 @@ def assessment_to_shared_v0(
         "policy_ref": f"effect-objective:{objective.objective_id}:{objective.policy_version}",
         "evidence_refs": list(assessment.evidence_refs),
         "limitations": [assessment.reason_code] if assessment.assessment.value == "inconclusive" else [],
-        "observed_at": outcome_time_hint(assessment, objective),
+        "observed_at": outcome.observed_at,
         "executable": False,
         "authority_class": "producer_assessment_fact",
     }
-
-
-def outcome_time_hint(assessment: TacticalEffectAssessment, objective: EffectObjective) -> str:
-    """Return a deterministic descriptive time without inventing a fresh event time."""
-
-    window_end = objective.observation_window.get("end")
-    if isinstance(window_end, str) and window_end.strip():
-        return window_end
-    window_start = objective.observation_window.get("start")
-    if isinstance(window_start, str) and window_start.strip():
-        return window_start
-    raise SharedOutcomeExportError(
-        f"assessment {assessment.effect_assessment_id} lacks a grounded observation timestamp"
-    )
