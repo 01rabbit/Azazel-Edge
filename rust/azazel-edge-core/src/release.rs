@@ -12,7 +12,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const LEDGER_SCHEMA_VERSION: &str = "azazel-release-ledger/v1";
 const MAX_LEDGER_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_LEDGER_TASKS: usize = 4096;
-const MAX_TERMINAL_TASKS: usize = 512;
 const MAX_STDOUT_BYTES: usize = 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -257,11 +256,11 @@ pub fn prepare_release_task(path: &str, task: &ReleaseTask) -> Result<(), String
         }
         return Err("release task id collision".to_string());
     }
+    // Never auto-forget terminal identities. Forgetting a tombstone would let an old
+    // provider event become executable again. A full bounded ledger therefore fails
+    // closed until an explicit future migration/tombstone mechanism is introduced.
     if ledger.tasks.len() >= MAX_LEDGER_TASKS {
-        compact_ledger(&mut ledger);
-    }
-    if ledger.tasks.len() >= MAX_LEDGER_TASKS {
-        return Err("release ledger task limit reached".to_string());
+        return Err("release ledger task limit reached; disruptive apply blocked".to_string());
     }
     ledger.tasks.push(task.clone());
     save_ledger(path, &mut ledger)
@@ -1004,7 +1003,6 @@ fn load_ledger(path: &str) -> Result<ReleaseLedger, String> {
 }
 
 fn save_ledger(path: &str, ledger: &mut ReleaseLedger) -> Result<(), String> {
-    compact_ledger(ledger);
     let destination = Path::new(path);
     let parent = destination
         .parent()
@@ -1042,32 +1040,6 @@ fn save_ledger(path: &str, ledger: &mut ReleaseLedger) -> Result<(), String> {
         let _ = dir.sync_all();
     }
     Ok(())
-}
-
-fn compact_ledger(ledger: &mut ReleaseLedger) {
-    if ledger.tasks.len() <= MAX_TERMINAL_TASKS {
-        return;
-    }
-    let mut terminal: Vec<ReleaseTask> = ledger
-        .tasks
-        .iter()
-        .filter(|task| terminal_status(&task.status))
-        .cloned()
-        .collect();
-    terminal.sort_by(|a, b| {
-        b.updated_epoch
-            .partial_cmp(&a.updated_epoch)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    terminal.truncate(MAX_TERMINAL_TASKS);
-    let mut retained: Vec<ReleaseTask> = ledger
-        .tasks
-        .iter()
-        .filter(|task| !terminal_status(&task.status))
-        .cloned()
-        .collect();
-    retained.extend(terminal);
-    ledger.tasks = retained;
 }
 
 fn validate_task(task: &ReleaseTask) -> Result<(), String> {
@@ -1324,6 +1296,25 @@ mod tests {
     }
 
     #[test]
+    fn terminal_identity_is_retained_for_replay_guard() {
+        let path = test_path("ledger.json");
+        let task = build_release_task(
+            "trace-retained", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+        )
+        .unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        cancel_release_task(&path, &task.task_id, "test", 100.5).unwrap();
+        let replay = build_release_task(
+            "trace-retained", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 200.0,
+        )
+        .unwrap();
+        assert!(prepare_release_task(&path, &replay).is_err());
+        let ledger = load_ledger(&path).unwrap();
+        assert_eq!(ledger.tasks.len(), 1);
+        assert_eq!(ledger.tasks[0].status, "cancelled");
+    }
+
+    #[test]
     fn terminal_task_cannot_be_reactivated() {
         let path = test_path("ledger.json");
         let task = build_release_task(
@@ -1374,7 +1365,7 @@ mod tests {
     #[test]
     fn ambiguous_same_handle_newer_prepared_task_defers_old_throttle_release() {
         let path = test_path("ledger.json");
-        let mut old = build_release_task(
+        let old = build_release_task(
             "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, 100.0,
         )
         .unwrap();
@@ -1382,14 +1373,8 @@ mod tests {
             "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, 105.0,
         )
         .unwrap();
-        // Force the rare kernel-visible ownership collision that the guard must handle.
         newer.tc_handle = old.tc_handle.clone();
-        old.status = "active".to_string();
         prepare_release_task(&path, &old).unwrap();
-        // prepare requires a fresh status; persist old as prepared first then activate it.
-        let mut ledger = load_ledger(&path).unwrap();
-        ledger.tasks[0].status = "prepared".to_string();
-        save_ledger(&path, &mut ledger).unwrap();
         activate_release_task(&path, &old.task_id, 101.0).unwrap();
         prepare_release_task(&path, &newer).unwrap();
         let runner = FakeRunner::new(Vec::new());
