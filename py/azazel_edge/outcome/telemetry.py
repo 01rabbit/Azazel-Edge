@@ -14,16 +14,9 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
 from .adapter import from_rust_event
-from .contracts import (
-    CausalSupport,
-    EffectObjective,
-    ExecutionStatus,
-    OutcomeAssessment,
-    OutcomeRecord,
-)
+from .contracts import CausalSupport, EffectObjective, ExecutionStatus, OutcomeAssessment, OutcomeRecord
 from .observer import DEFAULT_INPUT, DEFAULT_MAX_OUTPUT_BYTES, append_jsonl
 from .release_evidence import ReleaseEvidenceStatus, from_rust_release_event
-
 
 POLICY_SCHEMA_VERSION = "outcome-telemetry-policy/v1"
 DEFAULT_OUTPUT = "/var/log/azazel-edge/outcome-telemetry.jsonl"
@@ -35,14 +28,8 @@ DEFAULT_MAX_PENDING = 128
 DEFAULT_MAX_SEEN_EXECUTIONS = 4096
 _DISRUPTIVE_ACTIONS = {"throttle", "redirect", "isolate"}
 _COUNTER_KEYS = (
-    "rx_bytes",
-    "rx_packets",
-    "rx_errors",
-    "rx_dropped",
-    "tx_bytes",
-    "tx_packets",
-    "tx_errors",
-    "tx_dropped",
+    "rx_bytes", "rx_packets", "rx_errors", "rx_dropped",
+    "tx_bytes", "tx_packets", "tx_errors", "tx_dropped",
 )
 
 
@@ -66,8 +53,7 @@ def _epoch_from_iso(value: Any) -> float | None:
 
 def _stable_id(prefix: str, *parts: Any) -> str:
     payload = "|".join(str(part) for part in parts)
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
-    return f"{prefix}-{digest}"
+    return f"{prefix}-{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:24]}"
 
 
 @dataclass(frozen=True)
@@ -110,52 +96,38 @@ class LinuxProcTelemetrySource:
 
         network: dict[str, int | float] = {}
         system: dict[str, int | float] = {}
-        coverage = {
-            "proc_net_dev": False,
-            "proc_loadavg": False,
-            "proc_meminfo": False,
-            "proc_uptime": False,
-        }
-        evidence_material: dict[str, Any] = {"interface": interface, "epoch": epoch}
+        coverage = {"proc_net_dev": False, "proc_loadavg": False, "proc_meminfo": False, "proc_uptime": False}
+        material: dict[str, Any] = {"interface": interface, "epoch": epoch}
 
         try:
-            raw = (self.proc_root / "net" / "dev").read_text(encoding="utf-8")
-            network = _parse_proc_net_dev(raw, interface)
+            network = _parse_proc_net_dev((self.proc_root / "net" / "dev").read_text(encoding="utf-8"), interface)
             coverage["proc_net_dev"] = bool(network)
-            evidence_material["net_dev"] = network
+            material["net_dev"] = network
         except OSError:
             pass
-
         try:
-            raw = (self.proc_root / "loadavg").read_text(encoding="utf-8")
-            values = _parse_loadavg(raw)
+            values = _parse_loadavg((self.proc_root / "loadavg").read_text(encoding="utf-8"))
             system.update(values)
             coverage["proc_loadavg"] = bool(values)
-            evidence_material["loadavg"] = values
+            material["loadavg"] = values
         except OSError:
             pass
-
         try:
-            raw = (self.proc_root / "meminfo").read_text(encoding="utf-8")
-            values = _parse_meminfo(raw)
+            values = _parse_meminfo((self.proc_root / "meminfo").read_text(encoding="utf-8"))
             system.update(values)
             coverage["proc_meminfo"] = bool(values)
-            evidence_material["meminfo"] = values
+            material["meminfo"] = values
         except OSError:
             pass
-
         try:
-            raw = (self.proc_root / "uptime").read_text(encoding="utf-8")
-            values = _parse_uptime(raw)
+            values = _parse_uptime((self.proc_root / "uptime").read_text(encoding="utf-8"))
             system.update(values)
             coverage["proc_uptime"] = bool(values)
-            evidence_material["uptime"] = values
+            material["uptime"] = values
         except OSError:
             pass
 
-        digest = hashlib.sha256(
-            json.dumps(evidence_material, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()[:24]
+        digest = hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:24]
         return TelemetrySample(
             epoch=epoch,
             observed_at=_iso(epoch),
@@ -199,8 +171,6 @@ class ObjectiveTemplate:
 
 
 class OutcomeTelemetryPolicy:
-    """Explicit operator/policy-owned mapping from action to EffectObjective template."""
-
     def __init__(self, templates: Mapping[str, ObjectiveTemplate], *, policy_ref: str) -> None:
         self.templates = {str(key).lower(): value for key, value in templates.items()}
         self.policy_ref = policy_ref
@@ -215,10 +185,8 @@ class OutcomeTelemetryPolicy:
         templates: dict[str, ObjectiveTemplate] = {}
         for action, raw in actions.items():
             name = str(action).strip().lower()
-            if name not in _DISRUPTIVE_ACTIONS:
-                raise ValueError(f"unsupported telemetry policy action: {name}")
-            if not isinstance(raw, Mapping):
-                raise ValueError(f"telemetry policy action {name} must be an object")
+            if name not in _DISRUPTIVE_ACTIONS or not isinstance(raw, Mapping):
+                raise ValueError(f"unsupported or malformed telemetry policy action: {name}")
             metric = str(raw.get("metric") or "").strip()
             direction = str(raw.get("direction") or "").strip().lower()
             if not metric or direction not in {"increase", "decrease", "within", "observe"}:
@@ -241,9 +209,7 @@ class OutcomeTelemetryPolicy:
                 guardrails=tuple(dict(value) for value in guardrails),
                 policy_version=str(raw.get("policy_version") or payload.get("policy_version") or "unversioned"),
             )
-        digest = hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()[:24]
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:24]
         return cls(templates, policy_ref=f"telemetry-policy:{source_ref}:{digest}")
 
     @classmethod
@@ -288,11 +254,7 @@ class _PendingObservation:
 
 
 class OutcomeTelemetryCollector:
-    """Passive bounded pre/post telemetry collector for G3.
-
-    It owns no execution or release capability. Collection never upgrades outcome
-    assessment or causal support beyond INCONCLUSIVE.
-    """
+    """Passive bounded pre/post telemetry collector. It never claims tactical success."""
 
     def __init__(
         self,
@@ -343,15 +305,11 @@ class OutcomeTelemetryCollector:
         now = time.time() if observed_epoch is None else float(observed_epoch)
         if not math.isfinite(now) or now < 0.0:
             return False
-
         if str(event.get("pipeline") or "") == "rust_release_engine_v1":
             return self._observe_release(event)
 
         normalized = event.get("normalized")
-        trigger_activity = None
-        if isinstance(normalized, Mapping):
-            trigger_activity = self._record_activity(event, normalized, now)
-
+        trigger_activity = self._record_activity(event, normalized, now) if isinstance(normalized, Mapping) else None
         try:
             bundle = from_rust_event(event)
         except (TypeError, ValueError):
@@ -365,9 +323,7 @@ class OutcomeTelemetryCollector:
             return False
         if execution.execution_id in self.seen_execution_ids:
             return False
-        if len(self.seen_execution_ids) >= self.max_seen_executions:
-            return False
-        if len(self.pending) >= self.max_pending:
+        if len(self.seen_execution_ids) >= self.max_seen_executions or len(self.pending) >= self.max_pending:
             return False
 
         pre_seconds, post_seconds = _window_seconds(objective.observation_window)
@@ -386,7 +342,7 @@ class OutcomeTelemetryCollector:
             pre_start_epoch=max(0.0, now - pre_seconds),
             planned_end_epoch=now + post_seconds,
             effective_end_epoch=now + post_seconds,
-            trigger_activity_ref=trigger_activity.evidence_ref if trigger_activity is not None else "",
+            trigger_activity_ref=trigger_activity.evidence_ref if trigger_activity else "",
             release_ref=execution.release_ref,
             release_owner_token=str(provider_metadata.get("release_owner_token") or ""),
             release_resource_key=str(provider_metadata.get("release_resource_key") or ""),
@@ -401,14 +357,8 @@ class OutcomeTelemetryCollector:
         now = time.time() if epoch is None else float(epoch)
         if not math.isfinite(now) or now < 0.0:
             return ()
-        due = [
-            execution_id
-            for execution_id, pending in self.pending.items()
-            if pending.effective_end_epoch <= now
-        ]
-        records: list[OutcomeRecord] = []
-        for execution_id in due:
-            records.append(self._build_outcome(self.pending.pop(execution_id), now))
+        due = [key for key, pending in self.pending.items() if pending.effective_end_epoch <= now]
+        records = [self._build_outcome(self.pending.pop(key), now) for key in due]
         self._prune(now)
         return tuple(records)
 
@@ -423,43 +373,36 @@ class OutcomeTelemetryCollector:
         for pending in self.pending.values():
             if pending.decision_id != release.decision_id or pending.action_kind != release.action_kind:
                 continue
-            if not pending.release_ref or release.release_task_id != pending.release_ref:
+            if release.release_task_id != pending.release_ref:
                 continue
-            if not pending.release_owner_token or release.owner_token != pending.release_owner_token:
+            if release.owner_token != pending.release_owner_token:
                 continue
-            if not pending.release_resource_key or release.resource_key != pending.release_resource_key:
+            if release.resource_key != pending.release_resource_key:
                 continue
-            pending.effective_end_epoch = min(
-                pending.effective_end_epoch,
-                max(pending.trigger_epoch, release.attempted_at_epoch),
-            )
+            if not all((pending.release_ref, pending.release_owner_token, pending.release_resource_key)):
+                continue
+            pending.effective_end_epoch = min(pending.effective_end_epoch, max(pending.trigger_epoch, release.attempted_at_epoch))
             pending.termination_reason = "owned_mechanism_released"
             matched = True
         return matched
 
-    def _record_activity(
-        self,
-        event: Mapping[str, Any],
-        normalized: Mapping[str, Any],
-        now: float,
-    ) -> ActivityEvent | None:
+    def _record_activity(self, event: Mapping[str, Any], normalized: Mapping[str, Any], now: float) -> ActivityEvent | None:
         src_ip = str(normalized.get("src_ip") or "")
         if not src_ip:
             return None
         epoch = _epoch_from_iso(normalized.get("ts"))
         if epoch is None:
             epoch = now
-        trace = ""
         enforcement = event.get("enforcement")
-        if isinstance(enforcement, Mapping):
-            trace = str(enforcement.get("trace_id") or "")
+        trace = str(enforcement.get("trace_id") or "") if isinstance(enforcement, Mapping) else ""
+        evidence_ref = f"rust-activity:{trace or _stable_id('event', epoch, src_ip)}"
         record = ActivityEvent(
             epoch=epoch,
             src_ip=src_ip,
             dst_ip=str(normalized.get("dst_ip") or ""),
             target_port=_safe_int(normalized.get("target_port")),
             sid=_safe_int(normalized.get("sid")),
-            evidence_ref=f"rust-activity:{trace or _stable_id('event', epoch, src_ip)}",
+            evidence_ref=evidence_ref,
         )
         self.activity.append(record)
         return record
@@ -468,66 +411,34 @@ class OutcomeTelemetryCollector:
         pre_samples = self._samples_between(pending.pre_start_epoch, pending.trigger_epoch, end_inclusive=False)
         post_samples = self._samples_between(pending.trigger_epoch, pending.effective_end_epoch, end_inclusive=True)
         pre_activity = tuple(
-            item
-            for item in self._activity_between(
-                pending.src_ip, pending.pre_start_epoch, pending.trigger_epoch, end_inclusive=False
-            )
+            item for item in self._activity_between(pending.src_ip, pending.pre_start_epoch, pending.trigger_epoch, end_inclusive=False)
             if item.evidence_ref != pending.trigger_activity_ref
         )
         post_activity = tuple(
-            item
-            for item in self._activity_between(
-                pending.src_ip, pending.trigger_epoch, pending.effective_end_epoch, end_inclusive=True
-            )
+            item for item in self._activity_between(pending.src_ip, pending.trigger_epoch, pending.effective_end_epoch, end_inclusive=True)
             if item.evidence_ref != pending.trigger_activity_ref
         )
-        baseline_metrics, baseline_flags = _window_metrics(
-            pre_samples,
-            pre_activity,
-            start_epoch=pending.pre_start_epoch,
-            end_epoch=pending.trigger_epoch,
-        )
-        post_metrics, post_flags = _window_metrics(
-            post_samples,
-            post_activity,
-            start_epoch=pending.trigger_epoch,
-            end_epoch=pending.effective_end_epoch,
-        )
+        baseline_metrics, baseline_flags = _window_metrics(pre_samples, pre_activity, start_epoch=pending.pre_start_epoch, end_epoch=pending.trigger_epoch)
+        post_metrics, post_flags = _window_metrics(post_samples, post_activity, start_epoch=pending.trigger_epoch, end_epoch=pending.effective_end_epoch)
+
         confounders: list[dict[str, Any]] = [
-            {
-                "code": "source_ip_is_not_actor_identity",
-                "detail": "activity correlation is source-IP scoped and does not assert attacker identity",
-            },
-            {
-                "code": "provider_execution_timestamp_unavailable",
-                "detail": "boundary uses collector receipt time because provider completion timestamp is not grounded",
-            },
+            {"code": "source_ip_is_not_actor_identity", "detail": "activity correlation is source-IP scoped and does not assert attacker identity"},
+            {"code": "provider_execution_timestamp_unavailable", "detail": "boundary uses collector receipt time because provider completion timestamp is not grounded"},
         ]
         if pending.mechanism_status != "observed":
-            confounders.append(
-                {
-                    "code": "mechanism_postcondition_not_observed",
-                    "detail": f"mechanism_status={pending.mechanism_status}",
-                }
-            )
+            confounders.append({"code": "mechanism_postcondition_not_observed", "detail": f"mechanism_status={pending.mechanism_status}"})
         if len(pre_samples) < 2:
             confounders.append({"code": "insufficient_pre_samples", "count": len(pre_samples)})
         if len(post_samples) < 2:
             confounders.append({"code": "insufficient_post_samples", "count": len(post_samples)})
         for flag in sorted(set((*baseline_flags, *post_flags))):
             confounders.append({"code": flag})
-        metric = pending.objective.metric
-        if metric not in baseline_metrics or metric not in post_metrics:
-            confounders.append({"code": "objective_metric_not_collected", "metric": metric})
+        if pending.objective.metric not in baseline_metrics or pending.objective.metric not in post_metrics:
+            confounders.append({"code": "objective_metric_not_collected", "metric": pending.objective.metric})
 
-        expected_pre = max(
-            1,
-            math.floor((pending.trigger_epoch - pending.pre_start_epoch) / self.sample_interval_seconds),
-        )
-        expected_post = max(
-            1,
-            math.floor((pending.effective_end_epoch - pending.trigger_epoch) / self.sample_interval_seconds),
-        )
+        expected_pre = max(1, math.floor((pending.trigger_epoch - pending.pre_start_epoch) / self.sample_interval_seconds))
+        expected_post = max(1, math.floor((pending.effective_end_epoch - pending.trigger_epoch) / self.sample_interval_seconds))
+        all_samples = (*pre_samples, *post_samples)
         coverage = {
             "collector": "outcome_g3_procfs_activity_v1",
             "policy_ref": self.policy.policy_ref,
@@ -543,15 +454,13 @@ class OutcomeTelemetryCollector:
             "post_activity_count": len(post_activity),
             "window_truncated_by_release": pending.effective_end_epoch < pending.planned_end_epoch,
             "sources": {
-                "proc_net_dev_sample_ratio": _coverage_ratio((*pre_samples, *post_samples), "proc_net_dev"),
-                "proc_loadavg_sample_ratio": _coverage_ratio((*pre_samples, *post_samples), "proc_loadavg"),
-                "proc_meminfo_sample_ratio": _coverage_ratio((*pre_samples, *post_samples), "proc_meminfo"),
+                "proc_net_dev_sample_ratio": _coverage_ratio(all_samples, "proc_net_dev"),
+                "proc_loadavg_sample_ratio": _coverage_ratio(all_samples, "proc_loadavg"),
+                "proc_meminfo_sample_ratio": _coverage_ratio(all_samples, "proc_meminfo"),
                 "rust_event_jsonl": bool(pre_activity or post_activity or pending.trigger_activity_ref),
             },
         }
-        first_followup_ms = None
-        if post_activity:
-            first_followup_ms = max(0.0, (post_activity[0].epoch - pending.trigger_epoch) * 1000.0)
+        first_followup_ms = max(0.0, (post_activity[0].epoch - pending.trigger_epoch) * 1000.0) if post_activity else None
         adversary_response = {
             "correlation_scope": "source_ip",
             "src_ip": pending.src_ip,
@@ -565,24 +474,14 @@ class OutcomeTelemetryCollector:
             "pre_memory_available_kib_min": baseline_metrics.get("memory_available_kib_min"),
             "post_memory_available_kib_min": post_metrics.get("memory_available_kib_min"),
         }
-        evidence_refs = tuple(
-            dict.fromkeys(
-                (
-                    *pending.execution_evidence_refs,
-                    self.policy.policy_ref,
-                    *(sample.evidence_ref for sample in pre_samples),
-                    *(sample.evidence_ref for sample in post_samples),
-                    *(item.evidence_ref for item in pre_activity),
-                    *(item.evidence_ref for item in post_activity),
-                )
-            )
-        )
-        outcome_id = _stable_id(
-            "outcome",
-            pending.execution_id,
-            pending.objective.objective_id,
-            f"{pending.effective_end_epoch:.6f}",
-        )
+        evidence_refs = tuple(dict.fromkeys((
+            *pending.execution_evidence_refs,
+            self.policy.policy_ref,
+            *(sample.evidence_ref for sample in pre_samples),
+            *(sample.evidence_ref for sample in post_samples),
+            *(item.evidence_ref for item in pre_activity),
+            *(item.evidence_ref for item in post_activity),
+        )))
         return OutcomeRecord(
             incident_id=pending.incident_id,
             decision_id=pending.decision_id,
@@ -610,31 +509,23 @@ class OutcomeTelemetryCollector:
             evidence_refs=evidence_refs,
             observed_at=_iso(observed_epoch),
             producer="azazel_edge.outcome.telemetry_g3",
-            outcome_id=outcome_id,
+            outcome_id=_stable_id("outcome", pending.execution_id, pending.objective.objective_id, f"{pending.effective_end_epoch:.6f}"),
         )
 
     def _samples_between(self, start: float, end: float, *, end_inclusive: bool) -> tuple[TelemetrySample, ...]:
-        return tuple(
-            sample
-            for sample in self.samples
-            if sample.epoch >= start and (sample.epoch <= end if end_inclusive else sample.epoch < end)
-        )
+        return tuple(sample for sample in self.samples if sample.epoch >= start and (sample.epoch <= end if end_inclusive else sample.epoch < end))
 
-    def _activity_between(
-        self,
-        src_ip: str,
-        start: float,
-        end: float,
-        *,
-        end_inclusive: bool,
-    ) -> tuple[ActivityEvent, ...]:
-        return tuple(
-            item
-            for item in self.activity
-            if item.src_ip == src_ip
-            and item.epoch >= start
-            and (item.epoch <= end if end_inclusive else item.epoch < end)
-        )
+    def _activity_between(self, src_ip: str, start: float, end: float, *, end_inclusive: bool) -> tuple[ActivityEvent, ...]:
+        seen: set[str] = set()
+        result: list[ActivityEvent] = []
+        for item in self.activity:
+            if item.src_ip != src_ip or item.epoch < start or not (item.epoch <= end if end_inclusive else item.epoch < end):
+                continue
+            if item.evidence_ref in seen:
+                continue
+            seen.add(item.evidence_ref)
+            result.append(item)
+        return tuple(result)
 
     def _prune(self, now: float) -> None:
         cutoff = max(0.0, now - self.buffer_seconds)
@@ -646,8 +537,7 @@ class OutcomeTelemetryCollector:
 
 def _window_seconds(window: Mapping[str, Any]) -> tuple[float, float]:
     try:
-        pre = float(window.get("pre_seconds"))
-        post = float(window.get("post_seconds"))
+        pre, post = float(window.get("pre_seconds")), float(window.get("post_seconds"))
     except (TypeError, ValueError) as exc:
         raise ValueError("observation_window requires numeric pre_seconds/post_seconds") from exc
     if not all(math.isfinite(value) and value > 0.0 for value in (pre, post)):
@@ -657,64 +547,43 @@ def _window_seconds(window: Mapping[str, Any]) -> tuple[float, float]:
     return pre, post
 
 
-def _window_metrics(
-    samples: Sequence[TelemetrySample],
-    activity: Sequence[ActivityEvent],
-    *,
-    start_epoch: float,
-    end_epoch: float,
-) -> tuple[dict[str, Any], tuple[str, ...]]:
-    metrics: dict[str, Any] = {}
-    flags: list[str] = []
+def _window_metrics(samples: Sequence[TelemetrySample], activity: Sequence[ActivityEvent], *, start_epoch: float, end_epoch: float) -> tuple[dict[str, Any], tuple[str, ...]]:
     duration = max(0.001, end_epoch - start_epoch)
-    metrics["window_seconds"] = duration
-    metrics["telemetry_sample_count"] = len(samples)
-    metrics["source_ip_event_count"] = len(activity)
-    metrics["source_ip_event_rate_hz"] = len(activity) / duration
-
+    metrics: dict[str, Any] = {
+        "window_seconds": duration,
+        "telemetry_sample_count": len(samples),
+        "source_ip_event_count": len(activity),
+        "source_ip_event_rate_hz": len(activity) / duration,
+    }
+    flags: list[str] = []
     event_epochs = sorted(item.epoch for item in activity)
     if len(event_epochs) >= 2:
-        intervals_ms = [
-            max(0.0, (right - left) * 1000.0)
-            for left, right in zip(event_epochs, event_epochs[1:])
-        ]
-        metrics["source_ip_interarrival_ms_median"] = statistics.median(intervals_ms)
-
+        metrics["source_ip_interarrival_ms_median"] = statistics.median(
+            max(0.0, (right - left) * 1000.0) for left, right in zip(event_epochs, event_epochs[1:])
+        )
     if samples:
-        load_values = [
-            float(sample.system["load1"])
-            for sample in samples
-            if isinstance(sample.system.get("load1"), (int, float))
-        ]
+        load_values = [float(sample.system["load1"]) for sample in samples if isinstance(sample.system.get("load1"), (int, float))]
+        memory_values = [float(sample.system["memory_available_kib"]) for sample in samples if isinstance(sample.system.get("memory_available_kib"), (int, float))]
         if load_values:
             metrics["system_load1_mean"] = statistics.fmean(load_values)
-        memory_values = [
-            float(sample.system["memory_available_kib"])
-            for sample in samples
-            if isinstance(sample.system.get("memory_available_kib"), (int, float))
-        ]
         if memory_values:
             metrics["memory_available_kib_min"] = min(memory_values)
-
     if len(samples) >= 2:
         first, last = samples[0], samples[-1]
         for key in _COUNTER_KEYS:
-            left = first.network.get(key)
-            right = last.network.get(key)
+            left, right = first.network.get(key), last.network.get(key)
             if not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
                 continue
             delta = float(right) - float(left)
             if delta < 0:
                 flags.append(f"counter_reset:{key}")
-                continue
-            metrics[f"interface_{key}_delta"] = delta
+            else:
+                metrics[f"interface_{key}_delta"] = delta
     return metrics, tuple(flags)
 
 
 def _coverage_ratio(samples: Sequence[TelemetrySample], key: str) -> float:
-    if not samples:
-        return 0.0
-    return sum(1 for sample in samples if sample.coverage.get(key) is True) / len(samples)
+    return 0.0 if not samples else sum(1 for sample in samples if sample.coverage.get(key) is True) / len(samples)
 
 
 def _parse_proc_net_dev(raw: str, interface: str) -> dict[str, int]:
@@ -728,19 +597,10 @@ def _parse_proc_net_dev(raw: str, interface: str) -> dict[str, int]:
         if len(fields) < 16:
             return {}
         try:
-            numbers = [int(value) for value in fields[:16]]
+            n = [int(value) for value in fields[:16]]
         except ValueError:
             return {}
-        return {
-            "rx_bytes": numbers[0],
-            "rx_packets": numbers[1],
-            "rx_errors": numbers[2],
-            "rx_dropped": numbers[3],
-            "tx_bytes": numbers[8],
-            "tx_packets": numbers[9],
-            "tx_errors": numbers[10],
-            "tx_dropped": numbers[11],
-        }
+        return {"rx_bytes": n[0], "rx_packets": n[1], "rx_errors": n[2], "rx_dropped": n[3], "tx_bytes": n[8], "tx_packets": n[9], "tx_errors": n[10], "tx_dropped": n[11]}
     return {}
 
 
@@ -755,43 +615,32 @@ def _parse_loadavg(raw: str) -> dict[str, float]:
 
 
 def _parse_meminfo(raw: str) -> dict[str, int]:
+    wanted = {"MemTotal": "memory_total_kib", "MemAvailable": "memory_available_kib", "SwapTotal": "swap_total_kib", "SwapFree": "swap_free_kib"}
     values: dict[str, int] = {}
-    wanted = {
-        "MemTotal": "memory_total_kib",
-        "MemAvailable": "memory_available_kib",
-        "SwapTotal": "swap_total_kib",
-        "SwapFree": "swap_free_kib",
-    }
     for line in raw.splitlines():
         if ":" not in line:
             continue
         name, value = line.split(":", 1)
         target = wanted.get(name)
-        if target is None:
+        if not target:
             continue
-        token = value.strip().split()[0] if value.strip() else ""
         try:
-            values[target] = int(token)
-        except ValueError:
+            values[target] = int(value.strip().split()[0])
+        except (ValueError, IndexError):
             continue
     return values
 
 
 def _parse_uptime(raw: str) -> dict[str, float]:
-    token = raw.strip().split()[0] if raw.strip() else ""
     try:
-        value = float(token)
-    except ValueError:
+        value = float(raw.strip().split()[0])
+    except (ValueError, IndexError):
         return {}
     return {"uptime_seconds": value} if math.isfinite(value) and value >= 0.0 else {}
 
 
 def _valid_interface(value: str) -> bool:
-    return (
-        bool(value)
-        and len(value) <= 15
-        and all(character.isalnum() or character in "_.:-" for character in value)
-    )
+    return bool(value) and len(value) <= 15 and all(ch.isalnum() or ch in "_.:-" for ch in value)
 
 
 def _safe_int(value: Any) -> int:
@@ -821,16 +670,10 @@ def run_live(
     sample_interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
 ) -> None:
-    """Run the passive G3 collector in foreground live-only mode.
-
-    Historical replay is deliberately not supported here. A valid pre-action baseline
-    requires this sampler to have been running before the live action record arrives.
-    """
-
-    policy = OutcomeTelemetryPolicy.from_file(policy_path)
+    """Foreground live-only collector. Historical procfs reconstruction is forbidden."""
     collector = OutcomeTelemetryCollector(
         source=LinuxProcTelemetrySource(),
-        policy=policy,
+        policy=OutcomeTelemetryPolicy.from_file(policy_path),
         interface=interface,
         sample_interval_seconds=sample_interval_seconds,
     )
@@ -839,11 +682,9 @@ def run_live(
         stream.seek(0, 2)
         while True:
             now_monotonic = time.monotonic()
-            now_epoch = time.time()
             if now_monotonic >= next_sample:
-                collector.record_sample(epoch=now_epoch)
+                collector.record_sample(epoch=time.time())
                 next_sample = now_monotonic + sample_interval_seconds
-
             saw_record = False
             while True:
                 position = stream.tell()
@@ -855,20 +696,11 @@ def run_live(
                 event = _decode_event(line)
                 if event is not None:
                     collector.observe_event(event, observed_epoch=time.time())
-
             outcomes = collector.finalize_due(epoch=time.time())
             if outcomes:
                 append_jsonl(
                     output_path,
-                    (
-                        {
-                            "schema_version": record.schema_version,
-                            "outcome": record.to_dict(),
-                            "collector_mode": "passive_g3",
-                            "effect_assessment": None,
-                        }
-                        for record in outcomes
-                    ),
+                    ({"schema_version": record.schema_version, "outcome": record.to_dict(), "collector_mode": "passive_g3", "effect_assessment": None} for record in outcomes),
                     max_bytes=max_output_bytes,
                 )
             if not saw_record:
@@ -883,11 +715,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interface", default=os.environ.get("AZAZEL_DEFENSE_IFACE", "br0"))
     parser.add_argument("--poll-seconds", type=float, default=0.25)
     parser.add_argument("--sample-interval-seconds", type=float, default=DEFAULT_SAMPLE_INTERVAL_SECONDS)
-    parser.add_argument(
-        "--max-output-bytes",
-        type=int,
-        default=int(os.environ.get("AZAZEL_OUTCOME_MAX_BYTES", str(DEFAULT_MAX_OUTPUT_BYTES))),
-    )
+    parser.add_argument("--max-output-bytes", type=int, default=int(os.environ.get("AZAZEL_OUTCOME_MAX_BYTES", str(DEFAULT_MAX_OUTPUT_BYTES))))
     args = parser.parse_args(argv)
     run_live(
         input_path=Path(args.input),
