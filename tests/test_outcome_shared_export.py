@@ -119,10 +119,7 @@ def _objective(decision_id: str) -> EffectObjective:
         metric="connection_latency_ms",
         direction="increase",
         target_or_range={"minimum_delta": 500},
-        observation_window={
-            "start": "2026-08-26T00:00:01Z",
-            "end": "2026-08-26T00:00:31Z",
-        },
+        observation_window={"seconds": 30},
         policy_version="policy-v1",
         objective_id="objective-1",
     )
@@ -169,11 +166,8 @@ def test_outcome_export_keeps_causality_and_tactical_verdict_out_of_fact_payload
     assert payload["confounders"] == ["source_ip_is_not_actor_identity"]
 
 
-def test_tactical_assessment_exports_only_as_non_executable_assessment():
-    bundle = from_rust_event(rust_event())
-    objective = _objective(bundle.correlation.decision_id)
-    outcome = _outcome(bundle, objective)
-    assessment = TacticalEffectAssessment(
+def _assessment(bundle, objective: EffectObjective, outcome: OutcomeRecord) -> TacticalEffectAssessment:
+    return TacticalEffectAssessment(
         outcome_id=outcome.outcome_id,
         mechanism_id=bundle.correlation.mechanism_id,
         objective_id=objective.objective_id,
@@ -184,14 +178,42 @@ def test_tactical_assessment_exports_only_as_non_executable_assessment():
         evidence_refs=("outcome:evidence:1",),
         effect_assessment_id="effect-1",
     )
+
+
+def test_tactical_assessment_exports_only_as_non_executable_assessment():
+    bundle = from_rust_event(rust_event())
+    objective = _objective(bundle.correlation.decision_id)
+    outcome = _outcome(bundle, objective)
+    assessment = _assessment(bundle, objective, outcome)
     correlation = replace(
         bundle.correlation,
         objective_id=objective.objective_id,
         outcome_id=outcome.outcome_id,
         effect_assessment_id=assessment.effect_assessment_id,
     )
-    payload = assessment_to_shared_v0(correlation, assessment, objective, producer_node="edge-1")
+    payload = assessment_to_shared_v0(
+        correlation, assessment, objective, outcome, producer_node="edge-1"
+    )
     assert payload["tactical_effect"] == "delay"
     assert payload["assessment"] == "inconclusive"
     assert payload["executable"] is False
     assert payload["policy_ref"].endswith(":policy-v1")
+    assert payload["observed_at"] == outcome.observed_at
+
+
+def test_tactical_assessment_rejects_different_linked_outcome():
+    bundle = from_rust_event(rust_event())
+    objective = _objective(bundle.correlation.decision_id)
+    outcome = _outcome(bundle, objective)
+    assessment = _assessment(bundle, objective, outcome)
+    correlation = replace(
+        bundle.correlation,
+        objective_id=objective.objective_id,
+        outcome_id=outcome.outcome_id,
+        effect_assessment_id=assessment.effect_assessment_id,
+    )
+    other = replace(outcome, outcome_id="outcome-other")
+    with pytest.raises(SharedOutcomeExportError, match="different outcome"):
+        assessment_to_shared_v0(
+            correlation, assessment, objective, other, producer_node="edge-1"
+        )
