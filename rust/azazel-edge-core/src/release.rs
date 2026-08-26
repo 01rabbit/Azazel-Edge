@@ -250,9 +250,6 @@ pub fn prepare_release_task(path: &str, task: &ReleaseTask) -> Result<(), String
     let mut ledger = load_ledger(path)?;
     if let Some(existing) = ledger.tasks.iter().find(|item| item.task_id == task.task_id) {
         if same_task_identity(existing, task) {
-            // A repeated task identity means the same provider decision is being replayed.
-            // Never execute the disruptive apply again: an old throttle could otherwise
-            // replace a newer root qdisc, and duplicate nft rules would be created.
             return Err(format!(
                 "release task already exists; replayed disruptive apply blocked (status={})",
                 existing.status
@@ -301,9 +298,6 @@ pub fn activate_release_task(path: &str, task_id: &str, now_epoch: f64) -> Resul
         ));
     }
 
-    // Only throttle uses replace on the same root qdisc resource. A successful newer
-    // throttle replaces the older owned state, so the older lease can be superseded.
-    // nft rules are independently tagged and must each reach their own release.
     if snapshot.action == "throttle" {
         for item in &mut ledger.tasks {
             if item.task_id != task_id
@@ -410,37 +404,68 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
             _ => continue,
         };
 
-        // A newer successful throttle owns the one root-qdisc slot. This is not used
-        // for nft because independently-tagged nft rules can coexist safely.
         if current.action == "throttle" {
-            if let Some(newer) = ledger.tasks.iter().find(|other| {
+            let newer = ledger.tasks.iter().find(|other| {
                 other.task_id != current.task_id
                     && other.action == "throttle"
                     && other.resource_key == current.resource_key
-                    && other.status == "active"
+                    && eligible_status(&other.status)
                     && other.created_epoch > current.created_epoch
-            }) {
+            });
+            if let Some(newer) = newer {
                 let newer_id = newer.task_id.clone();
-                if let Some(task) = ledger
-                    .tasks
-                    .iter_mut()
-                    .find(|task| task.task_id == current.task_id)
-                {
-                    task.status = "superseded".to_string();
-                    task.updated_epoch = now_epoch;
-                    task.last_error = format!("superseded_by:{newer_id}");
+                let newer_status = newer.status.clone();
+                let same_handle = newer.tc_handle == current.tc_handle;
+                if newer_status == "active" {
+                    if let Some(task) = ledger
+                        .tasks
+                        .iter_mut()
+                        .find(|task| task.task_id == current.task_id)
+                    {
+                        task.status = "superseded".to_string();
+                        task.updated_epoch = now_epoch;
+                        task.last_error = format!("superseded_by:{newer_id}");
+                    }
+                    outcomes.push(outcome_for(
+                        &current,
+                        now_epoch,
+                        "superseded",
+                        "superseded_by_newer_throttle",
+                        0,
+                        0,
+                        Vec::new(),
+                        json!({"verified": false, "reason": "newer_throttle_owner_exists"}),
+                    ));
+                    continue;
                 }
-                outcomes.push(outcome_for(
-                    &current,
-                    now_epoch,
-                    "superseded",
-                    "superseded_by_newer_throttle",
-                    0,
-                    0,
-                    Vec::new(),
-                    json!({"verified": false, "reason": "newer_throttle_owner_exists"}),
-                ));
-                continue;
+                if same_handle && matches!(newer_status.as_str(), "prepared" | "uncertain") {
+                    if let Some(task) = ledger
+                        .tasks
+                        .iter_mut()
+                        .find(|task| task.task_id == current.task_id)
+                    {
+                        task.updated_epoch = now_epoch;
+                        task.attempts = task.attempts.saturating_add(1);
+                        task.last_error = format!("ambiguous_newer_owner:{newer_id}:{newer_status}");
+                        task.next_attempt_epoch = now_epoch + retry_delay_seconds(task.attempts);
+                    }
+                    outcomes.push(outcome_for(
+                        &current,
+                        now_epoch,
+                        "retry_pending",
+                        "ambiguous_newer_throttle_owner",
+                        0,
+                        0,
+                        Vec::new(),
+                        json!({
+                            "verified": false,
+                            "reason": "same_tc_handle_owned_by_newer_unreconciled_task",
+                            "newer_task_id": newer_id,
+                            "newer_status": newer_status,
+                        }),
+                    ));
+                    continue;
+                }
             }
         }
 
@@ -1344,6 +1369,35 @@ mod tests {
                 .status,
             "active"
         );
+    }
+
+    #[test]
+    fn ambiguous_same_handle_newer_prepared_task_defers_old_throttle_release() {
+        let path = test_path("ledger.json");
+        let mut old = build_release_task(
+            "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, 100.0,
+        )
+        .unwrap();
+        let mut newer = build_release_task(
+            "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, 105.0,
+        )
+        .unwrap();
+        // Force the rare kernel-visible ownership collision that the guard must handle.
+        newer.tc_handle = old.tc_handle.clone();
+        old.status = "active".to_string();
+        prepare_release_task(&path, &old).unwrap();
+        // prepare requires a fresh status; persist old as prepared first then activate it.
+        let mut ledger = load_ledger(&path).unwrap();
+        ledger.tasks[0].status = "prepared".to_string();
+        save_ledger(&path, &mut ledger).unwrap();
+        activate_release_task(&path, &old.task_id, 101.0).unwrap();
+        prepare_release_task(&path, &newer).unwrap();
+        let runner = FakeRunner::new(Vec::new());
+        let outcomes = process_due_releases_with_runner(&path, 111.0, &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "retry_pending");
+        assert_eq!(outcomes[0].result, "ambiguous_newer_throttle_owner");
+        assert!(runner.calls.lock().unwrap().is_empty());
     }
 
     #[test]
