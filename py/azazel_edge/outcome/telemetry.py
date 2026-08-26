@@ -32,6 +32,7 @@ DEFAULT_BUFFER_SECONDS = 600.0
 DEFAULT_MAX_SAMPLES = 4096
 DEFAULT_MAX_ACTIVITY_EVENTS = 8192
 DEFAULT_MAX_PENDING = 128
+DEFAULT_MAX_SEEN_EXECUTIONS = 4096
 _DISRUPTIVE_ACTIONS = {"throttle", "redirect", "isolate"}
 _COUNTER_KEYS = (
     "rx_bytes",
@@ -96,12 +97,7 @@ class TelemetrySource(Protocol):
 
 
 class LinuxProcTelemetrySource:
-    """Read-only Linux telemetry source using procfs only.
-
-    The collector never shells out, opens an executor, changes qdisc/nft state, or
-    requires network access. Missing procfs components reduce coverage instead of
-    becoming a control-path failure.
-    """
+    """Read-only Linux telemetry source using procfs only."""
 
     def __init__(self, proc_root: Path | str = "/proc") -> None:
         self.proc_root = Path(proc_root)
@@ -132,28 +128,28 @@ class LinuxProcTelemetrySource:
 
         try:
             raw = (self.proc_root / "loadavg").read_text(encoding="utf-8")
-            load = _parse_loadavg(raw)
-            system.update(load)
-            coverage["proc_loadavg"] = bool(load)
-            evidence_material["loadavg"] = load
+            values = _parse_loadavg(raw)
+            system.update(values)
+            coverage["proc_loadavg"] = bool(values)
+            evidence_material["loadavg"] = values
         except OSError:
             pass
 
         try:
             raw = (self.proc_root / "meminfo").read_text(encoding="utf-8")
-            memory = _parse_meminfo(raw)
-            system.update(memory)
-            coverage["proc_meminfo"] = bool(memory)
-            evidence_material["meminfo"] = memory
+            values = _parse_meminfo(raw)
+            system.update(values)
+            coverage["proc_meminfo"] = bool(values)
+            evidence_material["meminfo"] = values
         except OSError:
             pass
 
         try:
             raw = (self.proc_root / "uptime").read_text(encoding="utf-8")
-            uptime = _parse_uptime(raw)
-            system.update(uptime)
-            coverage["proc_uptime"] = bool(uptime)
-            evidence_material["uptime"] = uptime
+            values = _parse_uptime(raw)
+            system.update(values)
+            coverage["proc_uptime"] = bool(values)
+            evidence_material["uptime"] = values
         except OSError:
             pass
 
@@ -234,13 +230,15 @@ class OutcomeTelemetryPolicy:
                 raise ValueError("target_or_range and observation_window must be mappings")
             if not isinstance(guardrails, Sequence) or isinstance(guardrails, (str, bytes)):
                 raise ValueError("guardrails must be a sequence")
+            if any(not isinstance(value, Mapping) for value in guardrails):
+                raise ValueError("every guardrail must be a mapping")
             _window_seconds(window)
             templates[name] = ObjectiveTemplate(
                 metric=metric,
                 direction=direction,
                 target_or_range=dict(target),
                 observation_window=dict(window),
-                guardrails=tuple(dict(value) for value in guardrails if isinstance(value, Mapping)),
+                guardrails=tuple(dict(value) for value in guardrails),
                 policy_version=str(raw.get("policy_version") or payload.get("policy_version") or "unversioned"),
             )
         digest = hashlib.sha256(
@@ -259,6 +257,13 @@ class OutcomeTelemetryPolicy:
         template = self.templates.get(str(action).lower())
         return template.instantiate(decision_id) if template is not None else None
 
+    def max_window_seconds(self) -> float:
+        maximum = 0.0
+        for template in self.templates.values():
+            pre, post = _window_seconds(template.observation_window)
+            maximum = max(maximum, pre, post)
+        return maximum
+
 
 @dataclass
 class _PendingObservation:
@@ -273,6 +278,10 @@ class _PendingObservation:
     pre_start_epoch: float
     planned_end_epoch: float
     effective_end_epoch: float
+    trigger_activity_ref: str = ""
+    release_ref: str = ""
+    release_owner_token: str = ""
+    release_resource_key: str = ""
     termination_reason: str = "observation_window_elapsed"
     execution_evidence_refs: tuple[str, ...] = ()
     mechanism_status: str = ""
@@ -281,9 +290,8 @@ class _PendingObservation:
 class OutcomeTelemetryCollector:
     """Passive bounded pre/post telemetry collector for G3.
 
-    It owns no execution or release capability. It always emits OutcomeRecord with
-    assessment and causal_support set to INCONCLUSIVE; later deterministic evidence
-    rules may evaluate those records, but collection alone never claims an effect.
+    It owns no execution or release capability. Collection never upgrades outcome
+    assessment or causal support beyond INCONCLUSIVE.
     """
 
     def __init__(
@@ -297,6 +305,7 @@ class OutcomeTelemetryCollector:
         max_samples: int = DEFAULT_MAX_SAMPLES,
         max_activity_events: int = DEFAULT_MAX_ACTIVITY_EVENTS,
         max_pending: int = DEFAULT_MAX_PENDING,
+        max_seen_executions: int = DEFAULT_MAX_SEEN_EXECUTIONS,
     ) -> None:
         if not _valid_interface(interface):
             raise ValueError("invalid telemetry interface")
@@ -304,7 +313,9 @@ class OutcomeTelemetryCollector:
             raise ValueError("sample interval must be finite and positive")
         if buffer_seconds <= 0 or not math.isfinite(buffer_seconds):
             raise ValueError("buffer_seconds must be finite and positive")
-        if min(max_samples, max_activity_events, max_pending) <= 0:
+        if policy.max_window_seconds() > buffer_seconds:
+            raise ValueError("collector buffer is shorter than policy observation window")
+        if min(max_samples, max_activity_events, max_pending, max_seen_executions) <= 0:
             raise ValueError("collector capacity bounds must be positive")
         self.source = source
         self.policy = policy
@@ -314,7 +325,9 @@ class OutcomeTelemetryCollector:
         self.samples: deque[TelemetrySample] = deque(maxlen=max_samples)
         self.activity: deque[ActivityEvent] = deque(maxlen=max_activity_events)
         self.pending: dict[str, _PendingObservation] = {}
+        self.seen_execution_ids: set[str] = set()
         self.max_pending = max_pending
+        self.max_seen_executions = max_seen_executions
 
     def record_sample(self, *, epoch: float | None = None) -> TelemetrySample | None:
         now = time.time() if epoch is None else float(epoch)
@@ -332,11 +345,12 @@ class OutcomeTelemetryCollector:
             return False
 
         if str(event.get("pipeline") or "") == "rust_release_engine_v1":
-            return self._observe_release(event, now)
+            return self._observe_release(event)
 
         normalized = event.get("normalized")
+        trigger_activity = None
         if isinstance(normalized, Mapping):
-            self._record_activity(event, normalized, now)
+            trigger_activity = self._record_activity(event, normalized, now)
 
         try:
             bundle = from_rust_event(event)
@@ -347,17 +361,19 @@ class OutcomeTelemetryCollector:
         if action not in _DISRUPTIVE_ACTIONS or execution.status is not ExecutionStatus.APPLIED:
             return False
         objective = self.policy.objective_for(action, execution.decision_id)
-        if objective is None:
+        if objective is None or objective.decision_id != execution.decision_id:
             return False
-        if objective.decision_id != execution.decision_id:
+        if execution.execution_id in self.seen_execution_ids:
             return False
-        if execution.execution_id in self.pending:
+        if len(self.seen_execution_ids) >= self.max_seen_executions:
             return False
         if len(self.pending) >= self.max_pending:
             return False
 
         pre_seconds, post_seconds = _window_seconds(objective.observation_window)
         src_ip = str(normalized.get("src_ip") or "") if isinstance(normalized, Mapping) else ""
+        metadata = execution.applied_parameters.get("metadata")
+        provider_metadata = metadata if isinstance(metadata, Mapping) else {}
         self.pending[execution.execution_id] = _PendingObservation(
             incident_id=execution.incident_id,
             decision_id=execution.decision_id,
@@ -370,9 +386,14 @@ class OutcomeTelemetryCollector:
             pre_start_epoch=max(0.0, now - pre_seconds),
             planned_end_epoch=now + post_seconds,
             effective_end_epoch=now + post_seconds,
+            trigger_activity_ref=trigger_activity.evidence_ref if trigger_activity is not None else "",
+            release_ref=execution.release_ref,
+            release_owner_token=str(provider_metadata.get("release_owner_token") or ""),
+            release_resource_key=str(provider_metadata.get("release_resource_key") or ""),
             execution_evidence_refs=tuple(execution.provider_evidence_refs),
             mechanism_status=bundle.mechanism.status.value,
         )
+        self.seen_execution_ids.add(execution.execution_id)
         self._prune(now)
         return True
 
@@ -387,12 +408,11 @@ class OutcomeTelemetryCollector:
         ]
         records: list[OutcomeRecord] = []
         for execution_id in due:
-            pending = self.pending.pop(execution_id)
-            records.append(self._build_outcome(pending, now))
+            records.append(self._build_outcome(self.pending.pop(execution_id), now))
         self._prune(now)
         return tuple(records)
 
-    def _observe_release(self, event: Mapping[str, Any], now: float) -> bool:
+    def _observe_release(self, event: Mapping[str, Any]) -> bool:
         try:
             release = from_rust_release_event(event)
         except (TypeError, ValueError):
@@ -403,6 +423,12 @@ class OutcomeTelemetryCollector:
         for pending in self.pending.values():
             if pending.decision_id != release.decision_id or pending.action_kind != release.action_kind:
                 continue
+            if not pending.release_ref or release.release_task_id != pending.release_ref:
+                continue
+            if not pending.release_owner_token or release.owner_token != pending.release_owner_token:
+                continue
+            if not pending.release_resource_key or release.resource_key != pending.release_resource_key:
+                continue
             pending.effective_end_epoch = min(
                 pending.effective_end_epoch,
                 max(pending.trigger_epoch, release.attempted_at_epoch),
@@ -411,10 +437,15 @@ class OutcomeTelemetryCollector:
             matched = True
         return matched
 
-    def _record_activity(self, event: Mapping[str, Any], normalized: Mapping[str, Any], now: float) -> None:
+    def _record_activity(
+        self,
+        event: Mapping[str, Any],
+        normalized: Mapping[str, Any],
+        now: float,
+    ) -> ActivityEvent | None:
         src_ip = str(normalized.get("src_ip") or "")
         if not src_ip:
-            return
+            return None
         epoch = _epoch_from_iso(normalized.get("ts"))
         if epoch is None:
             epoch = now
@@ -422,26 +453,33 @@ class OutcomeTelemetryCollector:
         enforcement = event.get("enforcement")
         if isinstance(enforcement, Mapping):
             trace = str(enforcement.get("trace_id") or "")
-        evidence_ref = f"rust-activity:{trace or _stable_id('event', epoch, src_ip)}"
-        self.activity.append(
-            ActivityEvent(
-                epoch=epoch,
-                src_ip=src_ip,
-                dst_ip=str(normalized.get("dst_ip") or ""),
-                target_port=_safe_int(normalized.get("target_port")),
-                sid=_safe_int(normalized.get("sid")),
-                evidence_ref=evidence_ref,
-            )
+        record = ActivityEvent(
+            epoch=epoch,
+            src_ip=src_ip,
+            dst_ip=str(normalized.get("dst_ip") or ""),
+            target_port=_safe_int(normalized.get("target_port")),
+            sid=_safe_int(normalized.get("sid")),
+            evidence_ref=f"rust-activity:{trace or _stable_id('event', epoch, src_ip)}",
         )
+        self.activity.append(record)
+        return record
 
     def _build_outcome(self, pending: _PendingObservation, observed_epoch: float) -> OutcomeRecord:
         pre_samples = self._samples_between(pending.pre_start_epoch, pending.trigger_epoch, end_inclusive=False)
         post_samples = self._samples_between(pending.trigger_epoch, pending.effective_end_epoch, end_inclusive=True)
-        pre_activity = self._activity_between(
-            pending.src_ip, pending.pre_start_epoch, pending.trigger_epoch, end_inclusive=False
+        pre_activity = tuple(
+            item
+            for item in self._activity_between(
+                pending.src_ip, pending.pre_start_epoch, pending.trigger_epoch, end_inclusive=False
+            )
+            if item.evidence_ref != pending.trigger_activity_ref
         )
-        post_activity = self._activity_between(
-            pending.src_ip, pending.trigger_epoch, pending.effective_end_epoch, end_inclusive=True
+        post_activity = tuple(
+            item
+            for item in self._activity_between(
+                pending.src_ip, pending.trigger_epoch, pending.effective_end_epoch, end_inclusive=True
+            )
+            if item.evidence_ref != pending.trigger_activity_ref
         )
         baseline_metrics, baseline_flags = _window_metrics(
             pre_samples,
@@ -458,11 +496,11 @@ class OutcomeTelemetryCollector:
         confounders: list[dict[str, Any]] = [
             {
                 "code": "source_ip_is_not_actor_identity",
-                "detail": "activity correlation is scoped to source IP and does not assert attacker identity",
+                "detail": "activity correlation is source-IP scoped and does not assert attacker identity",
             },
             {
                 "code": "provider_execution_timestamp_unavailable",
-                "detail": "observation boundary uses collector receipt time because provider completion timestamp is not grounded",
+                "detail": "boundary uses collector receipt time because provider completion timestamp is not grounded",
             },
         ]
         if pending.mechanism_status != "observed":
@@ -478,15 +516,9 @@ class OutcomeTelemetryCollector:
             confounders.append({"code": "insufficient_post_samples", "count": len(post_samples)})
         for flag in sorted(set((*baseline_flags, *post_flags))):
             confounders.append({"code": flag})
-
         metric = pending.objective.metric
         if metric not in baseline_metrics or metric not in post_metrics:
-            confounders.append(
-                {
-                    "code": "objective_metric_not_collected",
-                    "metric": metric,
-                }
-            )
+            confounders.append({"code": "objective_metric_not_collected", "metric": metric})
 
         expected_pre = max(
             1,
@@ -496,8 +528,6 @@ class OutcomeTelemetryCollector:
             1,
             math.floor((pending.effective_end_epoch - pending.trigger_epoch) / self.sample_interval_seconds),
         )
-        pre_ratio = min(1.0, len(pre_samples) / expected_pre)
-        post_ratio = min(1.0, len(post_samples) / expected_post)
         coverage = {
             "collector": "outcome_g3_procfs_activity_v1",
             "policy_ref": self.policy.policy_ref,
@@ -507,14 +537,16 @@ class OutcomeTelemetryCollector:
             "post_sample_count": len(post_samples),
             "expected_pre_samples": expected_pre,
             "expected_post_samples": expected_post,
-            "pre_sample_ratio": pre_ratio,
-            "post_sample_ratio": post_ratio,
+            "pre_sample_ratio": min(1.0, len(pre_samples) / expected_pre),
+            "post_sample_ratio": min(1.0, len(post_samples) / expected_post),
             "pre_activity_count": len(pre_activity),
             "post_activity_count": len(post_activity),
             "window_truncated_by_release": pending.effective_end_epoch < pending.planned_end_epoch,
             "sources": {
-                "procfs": bool(pre_samples or post_samples),
-                "rust_event_jsonl": bool(pre_activity or post_activity),
+                "proc_net_dev_sample_ratio": _coverage_ratio((*pre_samples, *post_samples), "proc_net_dev"),
+                "proc_loadavg_sample_ratio": _coverage_ratio((*pre_samples, *post_samples), "proc_loadavg"),
+                "proc_meminfo_sample_ratio": _coverage_ratio((*pre_samples, *post_samples), "proc_meminfo"),
+                "rust_event_jsonl": bool(pre_activity or post_activity or pending.trigger_activity_ref),
             },
         }
         first_followup_ms = None
@@ -576,7 +608,7 @@ class OutcomeTelemetryCollector:
             telemetry_coverage=coverage,
             confounders=tuple(confounders),
             evidence_refs=evidence_refs,
-            observed_at=_iso(min(observed_epoch, max(observed_epoch, pending.effective_end_epoch))),
+            observed_at=_iso(observed_epoch),
             producer="azazel_edge.outcome.telemetry_g3",
             outcome_id=outcome_id,
         )
@@ -669,15 +701,20 @@ def _window_metrics(
         for key in _COUNTER_KEYS:
             left = first.network.get(key)
             right = last.network.get(key)
-            metric_key = f"interface_{key}_delta"
             if not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
                 continue
             delta = float(right) - float(left)
             if delta < 0:
                 flags.append(f"counter_reset:{key}")
                 continue
-            metrics[metric_key] = delta
+            metrics[f"interface_{key}_delta"] = delta
     return metrics, tuple(flags)
+
+
+def _coverage_ratio(samples: Sequence[TelemetrySample], key: str) -> float:
+    if not samples:
+        return 0.0
+    return sum(1 for sample in samples if sample.coverage.get(key) is True) / len(samples)
 
 
 def _parse_proc_net_dev(raw: str, interface: str) -> dict[str, int]:
@@ -783,11 +820,11 @@ def run_live(
     poll_seconds: float = 0.25,
     sample_interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
-    from_start: bool = False,
 ) -> None:
-    """Run the passive G3 collector.
+    """Run the passive G3 collector in foreground live-only mode.
 
-    This is intentionally a foreground experiment and must not be daemonized before G6.
+    Historical replay is deliberately not supported here. A valid pre-action baseline
+    requires this sampler to have been running before the live action record arrives.
     """
 
     policy = OutcomeTelemetryPolicy.from_file(policy_path)
@@ -799,8 +836,7 @@ def run_live(
     )
     next_sample = time.monotonic()
     with input_path.open("r", encoding="utf-8") as stream:
-        if not from_start:
-            stream.seek(0, 2)
+        stream.seek(0, 2)
         while True:
             now_monotonic = time.monotonic()
             now_epoch = time.time()
@@ -847,7 +883,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interface", default=os.environ.get("AZAZEL_DEFENSE_IFACE", "br0"))
     parser.add_argument("--poll-seconds", type=float, default=0.25)
     parser.add_argument("--sample-interval-seconds", type=float, default=DEFAULT_SAMPLE_INTERVAL_SECONDS)
-    parser.add_argument("--from-start", action="store_true")
     parser.add_argument(
         "--max-output-bytes",
         type=int,
@@ -862,7 +897,6 @@ def main(argv: list[str] | None = None) -> int:
         poll_seconds=args.poll_seconds,
         sample_interval_seconds=args.sample_interval_seconds,
         max_output_bytes=args.max_output_bytes,
-        from_start=args.from_start,
     )
     return 0
 
