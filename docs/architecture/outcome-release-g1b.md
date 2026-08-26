@@ -157,13 +157,15 @@ Properties:
 - finite non-negative time validation;
 - strict lifecycle vocabulary and transition guards;
 - bounded file size and task count;
-- bounded retained terminal history;
 - deterministic task identity;
-- duplicate/replayed task identity is fail-closed before apply and does not extend TTL.
+- terminal task identities are retained as replay tombstones rather than automatically forgotten;
+- duplicate/replayed task identity is fail-closed before apply and does not extend TTL;
+- when the bounded ledger/task limit is reached, new disruptive apply is blocked rather than deleting old replay identities automatically.
 
 The default parent directory is expected to be deployment-controlled. Parent-directory
 permission/symlink hardening is part of deployment/Pi-HIL validation, not claimed by
-this slice.
+this slice. Long-term tombstone compaction/migration is also intentionally not automated
+in G1b because an unsafe forget operation can re-enable an old disruptive decision.
 
 ## Lifecycle
 
@@ -269,9 +271,10 @@ Those claims remain in Outcome / Tactical Effect gates.
 | Condition | Behavior |
 |---|---|
 | release intent cannot be persisted before apply | block disruptive apply |
-| replayed task identity already exists | block disruptive re-apply; keep original TTL |
+| replayed task identity already exists | block disruptive re-apply; keep original TTL/tombstone |
 | terminal/pre-existing task is asked to reactivate | reject lifecycle transition |
 | ledger corrupt/oversized/invalid | fail closed; no new guarded apply |
+| ledger/task limit reached | retain identities and block new disruptive apply; do not auto-forget tombstones |
 | task not due | no release mutation |
 | owner marker absent at due time | release postcondition satisfied as owned state absent |
 | owner tag/handle exists with different semantics | do not delete; retry/error |
@@ -290,6 +293,7 @@ Those claims remain in Outcome / Tactical Effect gates.
 - external notification delivery receipts;
 - authoritative cross-event actor/session identity;
 - end-to-end golden replay fixture (G5);
+- long-term tombstone compaction/migration and trace-id upgrade migration;
 - installer/systemd enablement;
 - actual Raspberry Pi tc/nft HIL syntax, restart, release polling cadence, performance,
   disk-wear and resource validation (G6);
