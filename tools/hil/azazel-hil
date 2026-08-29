@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Laptop-side R0 HIL bridge.  Keep this wrapper dependency-free for macOS.
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+exec python3 "$ROOT/tools/hil/azazel_hil.py" "$@"
