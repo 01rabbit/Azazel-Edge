@@ -34,6 +34,12 @@ def test_cli_parses_ssh_target_and_resume_session() -> None:
     assert (args.target, args.user, args.port, args.session, args.command) == ("pi.local", "edge", 2222, "r0-resume", "preflight")
 
 
+def test_prepare_can_check_without_updating_repo() -> None:
+    args = hil.parser().parse_args(["--target", "pi.local", "--session", "r0-resume", "prepare", "--no-update-repo"])
+    assert args.command == "prepare"
+    assert args.no_update_repo is True
+
+
 def test_redaction_never_leaks_private_key_or_bearer() -> None:
     value = "Authorization: Bearer abc.def\n-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----"
     cleaned = hil.redact(value)

@@ -127,8 +127,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--session", default=session_id(), help="Reuse this value to resume an interrupted session.")
     p.add_argument("--output", default=str(ROOT / "artifacts" / "hil"), help="Mac destination for raw artifacts and report.")
     sub = p.add_subparsers(dest="command", required=True)
-    for name in ("preflight", "bootstrap", "run", "doctor", "full"):
+    for name in ("preflight", "prepare", "bootstrap", "run", "doctor", "full"):
         q = sub.add_parser(name)
+        if name in ("prepare", "full"):
+            q.add_argument("--no-update-repo", action="store_true", help="Check readiness without fetch/pull; full updates a clean main checkout by default.")
         if name == "bootstrap":
             q.add_argument("--dry-run", action="store_true")
             q.add_argument("--install-required", action="store_true", help="Reserved explicit opt-in; current runner needs no package installation.")
@@ -144,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "collect":
         return collect(args)
     if args.command == "full":
-        stages = [("preflight", []), ("bootstrap", ["--dry-run"]), ("run", [])]
+        stages = [("preflight", []), ("prepare", ["--no-update-repo"] if args.no_update_repo else []), ("bootstrap", ["--dry-run"]), ("run", [])]
         if args.allow_service_restart:
             stages[-1][1] += ["--allow-service-restart"] + sum((["--service", x] for x in args.service), [])
         for action, extra in stages:
@@ -156,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
     extra: list[str] = []
     if args.command == "bootstrap":
         extra = (["--dry-run"] if args.dry_run else []) + (["--install-required"] if args.install_required else [])
+    if args.command == "prepare" and args.no_update_repo:
+        extra = ["--no-update-repo"]
     if args.command == "run" and args.allow_service_restart:
         extra = ["--allow-service-restart"] + sum((["--service", x] for x in args.service), [])
     try:

@@ -6,7 +6,7 @@ It does not alter the Edge authority model. M.I.O. remains a shadow/replay-only,
 
 ## Safety boundary
 
-Default commands are observation-only. They never install packages, pull models, clone or modify the Pi checkout, restart a service, or change routing, firewall, nftables, or `tc` qdiscs. `tc qdisc show` and `nft list ruleset` are independent, read-only postcondition observations—not applications of a mechanism.
+Default HIL tests are observation-only. They never install packages, pull models, clone a checkout, restart a service, or change routing, firewall, nftables, or `tc` qdiscs. `full` and `prepare` do synchronize a **clean `main` checkout** with `git fetch origin main` and `git pull --ff-only origin main` before HIL starts. A dirty checkout or a non-`main` branch blocks the run; the bridge never resets, stashes, checks out another branch, or overwrites local work. `tc qdisc show` and `nft list ruleset` are independent, read-only postcondition observations—not applications of a mechanism.
 
 SSH uses batch mode and `StrictHostKeyChecking=yes`; establish and verify the Pi's host key yourself before use. The SSH identity is passed to OpenSSH but its contents are never read, copied, or written into the result bundle. Bearer tokens, authorization values, password-like fields, and private-key blocks are redacted.
 
@@ -22,20 +22,23 @@ No Python package is installed on either host. The stdlib-only remote runner is 
 
 ## Exact workflow
 
-Run from the repository root. Replace the target and user with the Pi's values.
+Run from the repository root. Replace the target and user with the Pi's values. `run` requires the preparation gate from the same session, so `full` is the normal entrypoint.
 
 ```bash
-tools/hil/azazel-hil --target pi5.local --user azazel preflight
-tools/hil/azazel-hil --target pi5.local --user azazel bootstrap --dry-run
-tools/hil/azazel-hil --target pi5.local --user azazel run
-tools/hil/azazel-hil --target pi5.local --user azazel collect
+tools/hil/azazel-hil --target pi5.local --user azazel full
 ```
 
-`full` performs those same safe stages and writes a single paste-ready report:
+`full` performs preflight, repository/dependency preparation, bootstrap checks, and R0 tests, then writes a single paste-ready report:
 
 ```bash
 tools/hil/azazel-hil --target pi5.local --user azazel full
 # Copy artifacts/hil/r0-.../CHATGPT_PASTE.md into ChatGPT.
+```
+
+Before HIL, `prepare` verifies: clean `main`, fast-forward update, Git SHA, `pip check`, required Python imports, Rust/Cargo availability, and the repository's offline M.I.O. invariant replay. The latter has no network, live model, or enforcement path. To inspect readiness without changing the checkout, use:
+
+```bash
+tools/hil/azazel-hil --target pi5.local --user azazel prepare --no-update-repo
 ```
 
 For a non-default SSH port/key and Pi checkout:
@@ -48,6 +51,7 @@ tools/hil/azazel-hil --target 192.168.1.50 --user azazel --port 2222 \
 To resume without repeating passed test IDs, keep the session identifier:
 
 ```bash
+tools/hil/azazel-hil --target pi5.local --user azazel --session r0-20260829T010000Z-a1b2c3 prepare
 tools/hil/azazel-hil --target pi5.local --user azazel --session r0-20260829T010000Z-a1b2c3 run
 tools/hil/azazel-hil --target pi5.local --user azazel --session r0-20260829T010000Z-a1b2c3 collect
 ```

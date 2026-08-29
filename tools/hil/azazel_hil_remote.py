@@ -149,6 +149,57 @@ def bootstrap(rec: Recorder, dry_run: bool, install_required: bool) -> None:
     rec.test("bootstrap.dependencies", check)
 
 
+def prepare(rec: Recorder, repo: Path, update_repo: bool) -> None:
+    """Synchronize only a clean main checkout, then prove required runtime readiness."""
+    def check() -> tuple[str, int, dict[str, Any]]:
+        if not repo.is_dir() or not (repo / ".git").exists():
+            return "failed", 2, {"reason": "configured remote repo is not a Git checkout", "repo": str(repo)}
+        code, status = command(rec, "prepare.repository", ["git", "-C", str(repo), "status", "--porcelain"])
+        code_branch, branch = command(rec, "prepare.repository", ["git", "-C", str(repo), "branch", "--show-current"])
+        if code or code_branch or status["stdout"].strip():
+            return "failed", 2, {"reason": "refusing repository update: checkout has uncommitted changes", "branch": branch["stdout"].strip()}
+        if branch["stdout"].strip() != "main":
+            return "failed", 2, {"reason": "refusing repository update: checkout must be on main", "branch": branch["stdout"].strip()}
+        steps: dict[str, Any] = {"branch": "main", "update_requested": update_repo}
+        if update_repo:
+            fetch_code, fetch = command(rec, "prepare.repository", ["git", "-C", str(repo), "fetch", "origin", "main"], timeout=90)
+            pull_code, pull = command(rec, "prepare.repository", ["git", "-C", str(repo), "pull", "--ff-only", "origin", "main"], timeout=90)
+            steps.update({"fetch_exit": fetch_code, "pull_exit": pull_code, "pull_output": pull["stdout"][-500:]})
+            if fetch_code or pull_code:
+                return "failed", 2, {"reason": "repository could not be updated with fast-forward only", **steps}
+        sha_code, sha = command(rec, "prepare.repository", ["git", "-C", str(repo), "rev-parse", "HEAD"])
+        steps["git_sha"] = sha["stdout"].strip() if sha_code == 0 else "unavailable"
+        return "passed", 0, {"summary": "clean main checkout verified and synchronized" if update_repo else "clean main checkout verified; repository update intentionally skipped", **steps}
+    rec.test("prepare.repository", check)
+
+    def dependencies() -> tuple[str, int, dict[str, Any]]:
+        modules = ("flask", "requests", "yaml", "PIL", "rich", "textual")
+        check_code, pip_check = command(rec, "prepare.dependencies", ["python3", "-m", "pip", "check"])
+        import_code, imports = command(rec, "prepare.dependencies", ["python3", "-c", "import " + ",".join(modules)])
+        rust = {}
+        for name in ("rustc", "cargo"):
+            if shutil.which(name):
+                code, out = command(rec, "prepare.dependencies", [name, "--version"])
+                rust[name] = {"exit_code": code, "version": out["stdout"].strip()}
+            else:
+                rust[name] = {"reason": "not installed"}
+        ok = check_code == 0 and import_code == 0
+        return ("passed" if ok else "failed", 0 if ok else 2, {"summary": "Python dependency integrity and runtime imports checked", "pip_check": pip_check["stdout"][-500:], "imports_exit": import_code, "rust": rust})
+    rec.test("prepare.dependencies", dependencies)
+
+    def replay() -> tuple[str, int, dict[str, Any]]:
+        if not rec.complete("prepare.repository") or not rec.complete("prepare.dependencies"):
+            return "skipped", 0, {"reason": "repository or dependency readiness gate did not pass"}
+        code, out = command(rec, "prepare.offline_replay", ["python3", str(repo / "bin" / "azazel-mio-evaluate")], timeout=60)
+        return ("passed" if code == 0 else "failed", code, {"summary": "offline M.I.O. invariant replay before HIL; no network, model, or enforcement", "stdout_tail": out["stdout"][-500:]})
+    rec.test("prepare.offline_replay", replay)
+
+    def gate() -> tuple[str, int, dict[str, Any]]:
+        ready = all(rec.complete(test_id) for test_id in ("prepare.repository", "prepare.dependencies", "prepare.offline_replay"))
+        return ("passed" if ready else "failed", 0 if ready else 2, {"summary": "R0 start gate passed" if ready else "R0 start gate blocked; inspect preparation records"})
+    rec.test("prepare.gate", gate)
+
+
 def model_inventory() -> set[str]:
     try:
         output = subprocess.check_output(["ollama", "list"], text=True, stderr=subprocess.DEVNULL, timeout=20)
@@ -221,20 +272,26 @@ def doctor(rec: Recorder, repo: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("preflight", "bootstrap", "run", "doctor"))
+    parser.add_argument("action", choices=("preflight", "prepare", "bootstrap", "run", "doctor"))
     parser.add_argument("--session", required=True)
     parser.add_argument("--repo", default="~/Azazel-Edge")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--install-required", action="store_true")
+    parser.add_argument("--no-update-repo", action="store_true")
     parser.add_argument("--allow-service-restart", action="store_true")
     parser.add_argument("--service", action="append", default=[])
     args = parser.parse_args(argv)
     rec, repo = Recorder(args.session), Path(args.repo).expanduser()
     if args.action == "preflight": preflight(rec, repo)
     elif args.action == "bootstrap": bootstrap(rec, args.dry_run, args.install_required)
+    elif args.action == "prepare": prepare(rec, repo, not args.no_update_repo)
     elif args.action == "doctor": doctor(rec, repo)
     else:
         rec.emit("provenance", data=provenance(repo))
+        if not rec.complete("prepare.gate"):
+            rec.test("run.precondition", lambda: ("failed", 2, {"reason": "run requires a passed prepare.gate in this session; use full or prepare first"}))
+            print(json.dumps({"session": args.session, "events": str(rec.events), "action": args.action}, sort_keys=True))
+            return 2
         for model in MODELS: profile_model(rec, model)
         observer_checks(rec, repo)
         reconciliation(rec, args.service, args.allow_service_restart)
