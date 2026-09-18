@@ -22,6 +22,7 @@ This document is the configuration entry point for Azazel-Edge.
 - AI-related runtime tuning: [AI Operation Guide](AI_OPERATION_GUIDE.md)
 - SOC threshold and redirect policy controls: [SOC Policy Guide](SOC_POLICY_GUIDE.md)
 - Deployment profile intent and scope: [Deployment Profiles](DEPLOYMENT_PROFILES.md)
+- Generic x86_64 package and commissioning boundary: [x86_64 Integration Boundary](X86_64_INTEGRATION_BOUNDARY.md)
 - Socket/runtime permission posture: [Post-demo Socket Permission Model (#105)](POST_DEMO_SOCKET_PERMISSION_MODEL_105.md)
 - Concept-profile mapping layer: [../concept_profiles/README.md](../concept_profiles/README.md)
 
