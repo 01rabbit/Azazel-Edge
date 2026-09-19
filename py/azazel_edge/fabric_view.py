@@ -34,6 +34,19 @@ except Exception:  # pragma: no cover - exercised only when the dep is absent
 
 STATUS_VIEW_NAME = "ui_status_view.json"
 
+#: What the outward projection reports when a snapshot names no mode.
+#:
+#: This used to be the legacy name ``shield``, which asserted a posture nobody
+#: chose out of the absence of one. Absence is not a state -- the same rule
+#: Knowledge applies to a reported Defensive State, for the same reason
+#: (Azazel#62, Azazel-Edge#379/#390).
+#:
+#: It is deliberately not one of the canonical Defensive States either. The
+#: canonical five say what Edge *is doing*; this says only that the snapshot
+#: did not say. Substituting ``observe`` here would be indistinguishable from
+#: Edge actually observing.
+UNKNOWN_MODE_NAME = "unknown"
+
 
 def _evidence_ids(snap: Dict[str, Any]) -> List[str]:
     out: List[str] = []
@@ -87,7 +100,7 @@ def status_view_from_snapshot(
 
     internal = snap.get("internal") if isinstance(snap.get("internal"), dict) else {}
     state_word = internal.get("state_name") or snap.get("user_state")
-    resolved_mode = str(mode_name or snap.get("mode") or "shield").lower()
+    resolved_mode = str(mode_name or snap.get("mode") or UNKNOWN_MODE_NAME).lower()
     since = str(snap.get("now_time") or snap.get("snapshot_epoch") or "")
 
     recommendation = snap.get("recommendation")
