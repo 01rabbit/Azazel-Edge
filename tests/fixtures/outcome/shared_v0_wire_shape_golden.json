@@ -1,0 +1,236 @@
+{
+  "redirect/assessment": {
+    "assessment": "inconclusive",
+    "assessment_id": "effect-1",
+    "authority_class": "producer_assessment_fact",
+    "decision_ref": "trace-test-1",
+    "evaluator": "azazel_edge.outcome",
+    "evidence_refs": [
+      "outcome:evidence:1"
+    ],
+    "executable": false,
+    "execution_ref": "execution-73bba4bf961be450624dacbd",
+    "limitations": [
+      "causal_support_inconclusive"
+    ],
+    "mechanism_observation_ref": "mechanism-486a9a5fa9c3f3f677b56d44",
+    "observed_at": "2026-08-26T00:00:31Z",
+    "outcome_observation_refs": [
+      "outcome-1"
+    ],
+    "policy_ref": "effect-objective:objective-1:policy-v1",
+    "producer_node": "edge-1",
+    "producer_product": "azazel-edge",
+    "schema_version": "tactical-effect-assessment/v0.1",
+    "tactical_effect": "delay",
+    "trace_id": "trace-test-1"
+  },
+  "redirect/execution": {
+    "action": "redirect",
+    "authority_class": "producer_execution_fact",
+    "decision_ref": "trace-test-1",
+    "evidence_refs": [
+      "rust_event_engine_v1:trace-test-1"
+    ],
+    "execution_ref": "execution-73bba4bf961be450624dacbd",
+    "observed_at": "2026-08-26T00:00:00Z",
+    "producer_node": "edge-1",
+    "producer_product": "azazel-edge",
+    "release_ref": null,
+    "schema_version": "outcome-execution/v0.1",
+    "status": "applied",
+    "trace_id": "trace-test-1"
+  },
+  "redirect/mechanism": {
+    "authority_class": "producer_mechanism_fact",
+    "decision_ref": "trace-test-1",
+    "evidence_refs": [
+      "rust_event_engine_v1:trace-test-1"
+    ],
+    "execution_ref": "execution-73bba4bf961be450624dacbd",
+    "limitations": [],
+    "mechanism_kind": "redirection",
+    "observation_id": "mechanism-486a9a5fa9c3f3f677b56d44",
+    "observed_at": "2026-08-26T00:00:00Z",
+    "observed_parameters": {
+      "provider_report": {
+        "executed_count": 1,
+        "failed_count": 0,
+        "individual_command_mapping_verified": false,
+        "metadata": {},
+        "mode": "enforced",
+        "result": "applied"
+      },
+      "verification_basis": "provider_command_exit_status_only"
+    },
+    "producer_node": "edge-1",
+    "producer_product": "azazel-edge",
+    "schema_version": "outcome-mechanism/v0.1",
+    "status": "unverified",
+    "trace_id": "trace-test-1"
+  },
+  "redirect/outcome": {
+    "authority_class": "producer_outcome_fact",
+    "confounders": [
+      "source_ip_is_not_actor_identity"
+    ],
+    "decision_ref": "trace-test-1",
+    "evidence_refs": [
+      "outcome:evidence:1"
+    ],
+    "execution_ref": "execution-73bba4bf961be450624dacbd",
+    "mechanism_observation_ref": "mechanism-486a9a5fa9c3f3f677b56d44",
+    "observation_class": "edge_outcome_record",
+    "observation_id": "outcome-1",
+    "observation_values": {
+      "adversary_response": {
+        "retry_interval_ms": 1200
+      },
+      "asset_impact": {},
+      "baseline_metrics": {
+        "connection_latency_ms": 100
+      },
+      "noc_impact": {
+        "impact_score": 0
+      },
+      "operator_override": {},
+      "post_metrics": {
+        "connection_latency_ms": 900
+      },
+      "termination_reason": "window_complete"
+    },
+    "observed_at": "2026-08-26T00:00:31Z",
+    "phase": "after",
+    "producer_node": "edge-1",
+    "producer_product": "azazel-edge",
+    "resource_impact": {
+      "cpu_delta": 0.1
+    },
+    "schema_version": "outcome-observation/v0.1",
+    "subject_ref": null,
+    "telemetry_coverage": {
+      "baseline": 1.0,
+      "post": 1.0
+    },
+    "trace_id": "trace-test-1",
+    "window_end": "2026-08-26T00:00:31Z",
+    "window_start": "2026-08-26T00:00:01Z"
+  },
+  "throttle/assessment": {
+    "assessment": "inconclusive",
+    "assessment_id": "effect-1",
+    "authority_class": "producer_assessment_fact",
+    "decision_ref": "trace-test-1",
+    "evaluator": "azazel_edge.outcome",
+    "evidence_refs": [
+      "outcome:evidence:1"
+    ],
+    "executable": false,
+    "execution_ref": "execution-73bba4bf961be450624dacbd",
+    "limitations": [
+      "causal_support_inconclusive"
+    ],
+    "mechanism_observation_ref": "mechanism-e5301b313c53691b5daeeb35",
+    "observed_at": "2026-08-26T00:00:31Z",
+    "outcome_observation_refs": [
+      "outcome-1"
+    ],
+    "policy_ref": "effect-objective:objective-1:policy-v1",
+    "producer_node": "edge-1",
+    "producer_product": "azazel-edge",
+    "schema_version": "tactical-effect-assessment/v0.1",
+    "tactical_effect": "delay",
+    "trace_id": "trace-test-1"
+  },
+  "throttle/execution": {
+    "action": "throttle",
+    "authority_class": "producer_execution_fact",
+    "decision_ref": "trace-test-1",
+    "evidence_refs": [
+      "rust_event_engine_v1:trace-test-1"
+    ],
+    "execution_ref": "execution-73bba4bf961be450624dacbd",
+    "observed_at": "2026-08-26T00:00:00Z",
+    "producer_node": "edge-1",
+    "producer_product": "azazel-edge",
+    "release_ref": null,
+    "schema_version": "outcome-execution/v0.1",
+    "status": "applied",
+    "trace_id": "trace-test-1"
+  },
+  "throttle/mechanism": {
+    "authority_class": "producer_mechanism_fact",
+    "decision_ref": "trace-test-1",
+    "evidence_refs": [
+      "rust_event_engine_v1:trace-test-1"
+    ],
+    "execution_ref": "execution-73bba4bf961be450624dacbd",
+    "limitations": [],
+    "mechanism_kind": "traffic_shaping",
+    "observation_id": "mechanism-e5301b313c53691b5daeeb35",
+    "observed_at": "2026-08-26T00:00:00Z",
+    "observed_parameters": {
+      "provider_report": {
+        "executed_count": 1,
+        "failed_count": 0,
+        "individual_command_mapping_verified": false,
+        "metadata": {},
+        "mode": "enforced",
+        "result": "applied"
+      },
+      "verification_basis": "provider_command_exit_status_only"
+    },
+    "producer_node": "edge-1",
+    "producer_product": "azazel-edge",
+    "schema_version": "outcome-mechanism/v0.1",
+    "status": "unverified",
+    "trace_id": "trace-test-1"
+  },
+  "throttle/outcome": {
+    "authority_class": "producer_outcome_fact",
+    "confounders": [
+      "source_ip_is_not_actor_identity"
+    ],
+    "decision_ref": "trace-test-1",
+    "evidence_refs": [
+      "outcome:evidence:1"
+    ],
+    "execution_ref": "execution-73bba4bf961be450624dacbd",
+    "mechanism_observation_ref": "mechanism-e5301b313c53691b5daeeb35",
+    "observation_class": "edge_outcome_record",
+    "observation_id": "outcome-1",
+    "observation_values": {
+      "adversary_response": {
+        "retry_interval_ms": 1200
+      },
+      "asset_impact": {},
+      "baseline_metrics": {
+        "connection_latency_ms": 100
+      },
+      "noc_impact": {
+        "impact_score": 0
+      },
+      "operator_override": {},
+      "post_metrics": {
+        "connection_latency_ms": 900
+      },
+      "termination_reason": "window_complete"
+    },
+    "observed_at": "2026-08-26T00:00:31Z",
+    "phase": "after",
+    "producer_node": "edge-1",
+    "producer_product": "azazel-edge",
+    "resource_impact": {
+      "cpu_delta": 0.1
+    },
+    "schema_version": "outcome-observation/v0.1",
+    "subject_ref": null,
+    "telemetry_coverage": {
+      "baseline": 1.0,
+      "post": 1.0
+    },
+    "trace_id": "trace-test-1",
+    "window_end": "2026-08-26T00:00:31Z",
+    "window_start": "2026-08-26T00:00:01Z"
+  }
+}

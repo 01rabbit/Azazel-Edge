@@ -6,6 +6,8 @@ Pillow>=10,<12
 requests>=2.32,<3
 PyYAML>=6,<7
 # Azazel-Fabric shared contracts are an OPTIONAL extra: see requirements/fabric.txt.
-# (The Fabric repository is private, so unauthenticated environments — e.g. CI —
-# cannot resolve the git pin; every Fabric integration point is a guarded no-op
-# without the package.)
+# (Every Fabric integration point is a guarded no-op without the package, so the
+# deterministic path runs unchanged when it is absent. An earlier note here said
+# the Fabric repository was private and therefore unresolvable in CI; that is no
+# longer true — the pinned tag resolves from a public repository, and Edge CI
+# installs it.)

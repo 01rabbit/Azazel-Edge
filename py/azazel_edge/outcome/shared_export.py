@@ -1,7 +1,41 @@
+"""Project Edge's local outcome records onto Azazel-Fabric's shared contracts.
+
+Fabric owns the canonical form of these four records. Edge used to emit the
+same four ``schema_version`` values as literal dicts assembled here, byte-for-
+byte identical to Fabric's models by coincidence of maintenance rather than by
+construction (Azazel-Edge#413). This module now builds Fabric's models and
+dumps them, so the shape is Fabric's statement and a divergence is a build
+failure instead of a slow drift.
+
+**There is deliberately no fallback.** If Fabric is absent, or if a Fabric
+model rejects a record, this module raises. A record that Fabric did not
+validate must never travel as one that it did — a silent reversion to the old
+locally-shaped dict would reintroduce exactly the divergence this change
+removes, while looking like it had worked.
+
+Nothing on the deterministic decision or enforcement path imports this module.
+Edge's arbiter decides and enforces whether or not Fabric is installed; this is
+an export surface, and its unavailability costs an export, not a decision.
+"""
+
 from __future__ import annotations
 
 import json
 from typing import Any, Mapping, Sequence
+
+try:  # Fabric is an optional extra (requirements/fabric.txt), pinned to an exact tag.
+    from azazel_fabric.outcome_contracts import (
+        ExecutionRefV0,
+        MechanismObservationV0,
+        OutcomeObservationV0,
+        TacticalEffectAssessmentRefV0,
+    )
+
+    _FABRIC_UNAVAILABLE: Exception | None = None
+except ImportError as _exc:  # pragma: no cover - exercised by the absence test
+    ExecutionRefV0 = MechanismObservationV0 = None  # type: ignore[assignment]
+    OutcomeObservationV0 = TacticalEffectAssessmentRefV0 = None  # type: ignore[assignment]
+    _FABRIC_UNAVAILABLE = _exc
 
 from .contracts import (
     ActionExecutionReceipt,
@@ -17,6 +51,31 @@ from .contracts import (
 
 class SharedOutcomeExportError(ValueError):
     pass
+
+
+def _project(model_cls: Any, **fields: Any) -> dict[str, Any]:
+    """Build a Fabric model and return its canonical JSON-mode payload.
+
+    Every failure surfaces as ``SharedOutcomeExportError``. A Fabric model that
+    tightens — a narrowed ``Literal``, a new bound, a rejected directive-shaped
+    key — therefore fails loudly at the export boundary rather than being
+    routed around here.
+    """
+
+    if _FABRIC_UNAVAILABLE is not None:
+        raise SharedOutcomeExportError(
+            "azazel_fabric.outcome_contracts is unavailable, so the shared record "
+            "cannot be produced. This export has no local fallback by design: a "
+            "record Fabric did not validate must not travel as one that it did "
+            f"({_FABRIC_UNAVAILABLE})."
+        )
+    try:
+        model = model_cls(**fields)
+    except Exception as exc:  # pydantic ValidationError and anything it raises
+        raise SharedOutcomeExportError(
+            f"{model_cls.__name__} rejected this record: {exc}"
+        ) from exc
+    return model.model_dump(mode="json")
 
 
 _MECHANISM_MAP = {
@@ -138,20 +197,20 @@ def execution_to_shared_v0(
         raise SharedOutcomeExportError(f"execution status is not representable in shared v0.1: {receipt.status.value}")
     if not producer_node.strip():
         raise SharedOutcomeExportError("producer_node is required")
-    return {
-        "schema_version": "outcome-execution/v0.1",
-        "producer_product": "azazel-edge",
-        "producer_node": producer_node,
-        "trace_id": _trace_id(correlation),
-        "decision_ref": receipt.decision_id,
-        "execution_ref": receipt.execution_id,
-        "action": receipt.action_kind,
-        "status": status,
-        "observed_at": receipt.completed_at or receipt.started_at or receipt.requested_at,
-        "release_ref": receipt.release_ref or None,
-        "evidence_refs": list(receipt.provider_evidence_refs),
-        "authority_class": "producer_execution_fact",
-    }
+    return _project(
+        ExecutionRefV0,
+        producer_product="azazel-edge",
+        producer_node=producer_node,
+        trace_id=_trace_id(correlation),
+        decision_ref=receipt.decision_id,
+        execution_ref=receipt.execution_id,
+        action=receipt.action_kind,
+        status=status,
+        observed_at=receipt.completed_at or receipt.started_at or receipt.requested_at,
+        release_ref=receipt.release_ref or None,
+        evidence_refs=list(receipt.provider_evidence_refs),
+        authority_class="producer_execution_fact",
+    )
 
 
 def mechanism_to_shared_v0(
@@ -174,22 +233,22 @@ def mechanism_to_shared_v0(
     observed_parameters = _safe_fact_value(mechanism.observed_parameters)
     if not isinstance(observed_parameters, dict):
         raise SharedOutcomeExportError("mechanism observed_parameters must remain a mapping")
-    return {
-        "schema_version": "outcome-mechanism/v0.1",
-        "observation_id": mechanism.mechanism_id,
-        "producer_product": "azazel-edge",
-        "producer_node": producer_node,
-        "trace_id": _trace_id(correlation),
-        "decision_ref": mechanism.decision_id,
-        "execution_ref": mechanism.execution_id,
-        "mechanism_kind": mechanism_kind,
-        "status": mechanism.status.value,
-        "observed_parameters": observed_parameters,
-        "observed_at": mechanism.observed_at,
-        "evidence_refs": list(mechanism.evidence_refs),
-        "limitations": limitations,
-        "authority_class": "producer_mechanism_fact",
-    }
+    return _project(
+        MechanismObservationV0,
+        observation_id=mechanism.mechanism_id,
+        producer_product="azazel-edge",
+        producer_node=producer_node,
+        trace_id=_trace_id(correlation),
+        decision_ref=mechanism.decision_id,
+        execution_ref=mechanism.execution_id,
+        mechanism_kind=mechanism_kind,
+        status=mechanism.status.value,
+        observed_parameters=observed_parameters,
+        observed_at=mechanism.observed_at,
+        evidence_refs=list(mechanism.evidence_refs),
+        limitations=limitations,
+        authority_class="producer_mechanism_fact",
+    )
 
 
 def _confounder_strings(confounders: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -234,28 +293,28 @@ def outcome_to_shared_v0(
     resource_impact = _safe_fact_value(outcome.resource_impact)
     if not isinstance(telemetry, dict) or not isinstance(resource_impact, dict):
         raise SharedOutcomeExportError("outcome coverage/resource impact must be mappings")
-    return {
-        "schema_version": "outcome-observation/v0.1",
-        "observation_id": outcome.outcome_id,
-        "producer_product": "azazel-edge",
-        "producer_node": producer_node,
-        "trace_id": _trace_id(correlation),
-        "decision_ref": outcome.decision_id,
-        "execution_ref": outcome.execution_id,
-        "mechanism_observation_ref": outcome.mechanism_id,
-        "subject_ref": None,
-        "window_start": str(outcome.observation_window.get("start") or outcome.observed_at),
-        "window_end": str(outcome.observation_window.get("end") or outcome.observed_at),
-        "phase": "after",
-        "observation_class": "edge_outcome_record",
-        "observation_values": values,
-        "telemetry_coverage": telemetry,
-        "confounders": _confounder_strings(outcome.confounders),
-        "resource_impact": resource_impact,
-        "evidence_refs": list(outcome.evidence_refs),
-        "observed_at": outcome.observed_at,
-        "authority_class": "producer_outcome_fact",
-    }
+    return _project(
+        OutcomeObservationV0,
+        observation_id=outcome.outcome_id,
+        producer_product="azazel-edge",
+        producer_node=producer_node,
+        trace_id=_trace_id(correlation),
+        decision_ref=outcome.decision_id,
+        execution_ref=outcome.execution_id,
+        mechanism_observation_ref=outcome.mechanism_id,
+        subject_ref=None,
+        window_start=str(outcome.observation_window.get("start") or outcome.observed_at),
+        window_end=str(outcome.observation_window.get("end") or outcome.observed_at),
+        phase="after",
+        observation_class="edge_outcome_record",
+        observation_values=values,
+        telemetry_coverage=telemetry,
+        confounders=_confounder_strings(outcome.confounders),
+        resource_impact=resource_impact,
+        evidence_refs=list(outcome.evidence_refs),
+        observed_at=outcome.observed_at,
+        authority_class="producer_outcome_fact",
+    )
 
 
 def assessment_to_shared_v0(
@@ -288,23 +347,23 @@ def assessment_to_shared_v0(
         raise SharedOutcomeExportError("tactical effect is not representable in shared v0.1")
     if not outcome.observed_at.strip():
         raise SharedOutcomeExportError("linked outcome lacks grounded observation timestamp")
-    return {
-        "schema_version": "tactical-effect-assessment/v0.1",
-        "assessment_id": assessment.effect_assessment_id,
-        "producer_product": "azazel-edge",
-        "producer_node": producer_node,
-        "trace_id": _trace_id(correlation),
-        "decision_ref": correlation.decision_id,
-        "execution_ref": correlation.execution_id,
-        "mechanism_observation_ref": assessment.mechanism_id,
-        "outcome_observation_refs": [assessment.outcome_id],
-        "tactical_effect": tactical_effect,
-        "assessment": assessment.assessment.value,
-        "evaluator": assessment.producer,
-        "policy_ref": f"effect-objective:{objective.objective_id}:{objective.policy_version}",
-        "evidence_refs": list(assessment.evidence_refs),
-        "limitations": [assessment.reason_code] if assessment.assessment.value == "inconclusive" else [],
-        "observed_at": outcome.observed_at,
-        "executable": False,
-        "authority_class": "producer_assessment_fact",
-    }
+    return _project(
+        TacticalEffectAssessmentRefV0,
+        assessment_id=assessment.effect_assessment_id,
+        producer_product="azazel-edge",
+        producer_node=producer_node,
+        trace_id=_trace_id(correlation),
+        decision_ref=correlation.decision_id,
+        execution_ref=correlation.execution_id,
+        mechanism_observation_ref=assessment.mechanism_id,
+        outcome_observation_refs=[assessment.outcome_id],
+        tactical_effect=tactical_effect,
+        assessment=assessment.assessment.value,
+        evaluator=assessment.producer,
+        policy_ref=f"effect-objective:{objective.objective_id}:{objective.policy_version}",
+        evidence_refs=list(assessment.evidence_refs),
+        limitations=[assessment.reason_code] if assessment.assessment.value == "inconclusive" else [],
+        observed_at=outcome.observed_at,
+        executable=False,
+        authority_class="producer_assessment_fact",
+    )
