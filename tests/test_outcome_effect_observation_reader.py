@@ -36,6 +36,27 @@ from azazel_fabric.effect_contracts import (  # noqa: E402
     EffectObservation,
 )
 
+#: What Fabric raises when a payload is not a valid record.
+#:
+#: Derived from Fabric's behaviour rather than imported. The class is
+#: pydantic's, and Edge does not declare pydantic -- it arrives only with the
+#: Fabric extra, and `tests/test_runtime_dependency_contract.py` refuses an
+#: undeclared import. Adding pydantic to that test's allowance so this file
+#: could name a class would be weakening a guard to suit a test.
+#:
+#: The `else` below is not ceremony. If Fabric ever accepts a payload with no
+#: fields at all, that is a finding, and it surfaces here rather than as every
+#: refusal test in this file quietly passing against `type(None)`.
+try:
+    EffectObservation()
+except Exception as _probe:  # noqa: BLE001 - the class is what is wanted
+    ValidationError = type(_probe)
+else:  # pragma: no cover
+    raise AssertionError(
+        "EffectObservation accepted a payload with no fields; the refusal "
+        "tests below would then be asserting nothing"
+    )
+
 
 def an_effect(**overrides) -> DefensiveEffectRef:
     data = {
@@ -100,7 +121,7 @@ def test_the_record_is_fabrics_statement_and_is_not_restated_here():
 
 
 # --------------------------------------------------------------------------
-# Two narrowings Fabric does not make
+# A narrowing Edge made first, and Fabric now makes too
 # --------------------------------------------------------------------------
 
 
@@ -108,31 +129,131 @@ def test_the_record_is_fabrics_statement_and_is_not_restated_here():
     "claimed", ["producer_decision_ref", "advisory_inference", "planned_shadow", "stale_or_unknown"]
 )
 def test_an_observation_may_not_carry_a_decisions_authority(claimed):
-    """Measured: Fabric accepts every one of these on an observation.
+    """Refused twice, and the two refusals are not the same refusal.
 
-    `DefensiveEffectRef` refuses `observed_fact` and `active_materialized`
-    outright -- "that is an observation's claim to make, not an effect
-    reference's". The symmetric refusal is missing here, so a materializer's
-    observation can assert it carries a decision's authority. That is the
-    confusion `authority_class` exists to prevent.
+    This test was written when Fabric accepted every one of these on an
+    observation and asserted so: `assert EffectObservation(**payload)`, with
+    the comment "the contract itself lets it through". That was measured, it
+    was true, and it was the finding that became Fabric#52. `v0.9.0rc4`
+    refuses them, so the assertion inverted -- which is the correct outcome
+    for a test whose job was to record a gap until it closed.
+
+    Both refusals stay, for a reason that had to be corrected while making
+    this change. The first attempt said Edge's check covered the
+    Fabric-absent configuration; it does not -- `read_effect_observation`
+    returns early when Fabric is missing, so the check was never reached
+    there either. Between that and Fabric raising first, it was unreachable
+    in *both* configurations: a guard that existed and never ran.
+
+    It now runs before the model is built, which is what makes keeping it
+    worth anything. Fabric's refusal protects every consumer of the contract.
+    Edge's produces Edge's own sentence for an operator reading Edge's
+    context, instead of a pydantic dump, and does not assume the next change
+    to `AuthorityClass` narrows the way this one did.
     """
 
     payload = an_observation(status="completed", authority_class=claimed)
 
-    # The contract itself lets it through...
-    assert EffectObservation(**payload)
+    # The contract refuses to build it at all (Fabric#52, v0.9.0rc4)...
+    with pytest.raises(ValidationError):
+        EffectObservation(**payload)
 
-    # ...and this boundary does not.
+    # ...and this boundary refuses the payload without needing the contract.
     result = read_effect_observation(payload, effect=an_effect())
     assert result.observed is False
     assert "decision's authority" in result.reason
 
 
-def test_the_observer_classes_are_pinned_rather_than_derived():
-    """A set computed from Fabric's enum would be the thing it must narrow."""
+def test_edges_own_refusal_reaches_the_operator_before_fabrics_does():
+    """Otherwise Edge's sentence is dead code with a comment on it.
 
-    assert OBSERVER_AUTHORITY_CLASSES == {"observed_fact", "active_materialized"}
-    assert OBSERVER_AUTHORITY_CLASSES < {member.value for member in AuthorityClass}
+    Fabric refuses the same payload, so "is it refused" cannot tell whether
+    Edge's check ran. What distinguishes them is the reason a reader gets:
+    Edge's explains what an observer may claim, Fabric's is a validation dump.
+    Reordering the two lines in `_verified` flips this assertion, which is
+    what makes the ordering checked rather than merely intended.
+    """
+
+    result = read_effect_observation(
+        an_observation(status="completed", authority_class="producer_decision_ref"),
+        effect=an_effect(),
+    )
+
+    assert "decision's authority" in result.reason
+    assert "ValidationError" not in result.reason, (
+        "Fabric refused this before Edge did; Edge's check is unreachable and "
+        "the operator is reading a pydantic dump instead of an explanation"
+    )
+
+
+def test_an_unreadable_authority_claim_is_refused_as_what_it_said():
+    """Not coerced to the weakest class first.
+
+    Fabric maps an unknown value to `stale_or_unknown` so that an unparseable
+    record cannot escalate, which is right for Fabric. Doing it here would
+    make this boundary refuse a payload with a message naming a class the
+    payload never claimed, and an operator would go looking for a record that
+    does not exist.
+    """
+
+    result = read_effect_observation(
+        an_observation(status="completed", authority_class="not_a_class"),
+        effect=an_effect(),
+    )
+
+    assert result.observed is False
+    assert "not_a_class" in result.reason
+    assert "stale_or_unknown" not in result.reason
+
+
+def test_the_observer_classes_agree_with_fabrics_exactly():
+    """Two statements of one set; this is what keeps them the same one.
+
+    Until `v0.9.0rc4` this test asserted a strict subset -- Edge narrowing an
+    enum Fabric left wide. Fabric has since narrowed it to the same two, so a
+    subset assertion would now pass on an Edge set that had silently lost a
+    member, and "these agree" is the property that actually matters.
+
+    Edge still names the set literally rather than importing it. It has to:
+    `effect_observation_reader` is on the deterministic path and must work
+    with Fabric absent. That makes this a deliberate duplication, and a
+    deliberate duplication is one with a test under it -- which is the whole
+    difference between this and the coincidence of maintenance Azazel-Edge#413
+    found, where a local dataclass matched a Fabric model field for field and
+    nothing compared them.
+    """
+
+    from azazel_fabric.effect_contracts import OBSERVABLE_AUTHORITY_CLASSES
+
+    assert OBSERVER_AUTHORITY_CLASSES == {
+        member.value for member in OBSERVABLE_AUTHORITY_CLASSES
+    }
+
+
+def test_the_two_sides_still_partition_the_enum_between_them():
+    """What each side must refuse, derived from the enum rather than restated.
+
+    Enumerating from `AuthorityClass` is what lets a member added to Fabric
+    later be *seen* here: it lands in the complement, and the loop below asks
+    Edge to refuse it. A list kept in this file would cover exactly the four
+    classes that existed when it was written.
+    """
+
+    every = {member.value for member in AuthorityClass}
+    assert OBSERVER_AUTHORITY_CLASSES < every, (
+        "Fabric's enum no longer has anything an observation may not claim; "
+        "this boundary would then be narrowing nothing"
+    )
+
+    for claimed in sorted(every - OBSERVER_AUTHORITY_CLASSES):
+        result = read_effect_observation(
+            an_observation(status="completed", authority_class=claimed),
+            effect=an_effect(),
+        )
+        assert result.observed is False, (
+            f"{claimed!r} is not an observer class and this boundary read it "
+            "anyway"
+        )
 
 
 def test_edge_will_not_read_its_own_materialization_back_as_evidence():
