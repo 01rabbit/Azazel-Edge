@@ -25,6 +25,7 @@ import importlib
 import json
 import sys
 from dataclasses import replace
+import ast
 from pathlib import Path
 
 import pytest
@@ -163,15 +164,31 @@ def test_the_module_imports_the_contracts_from_fabric_not_from_a_local_copy():
 
 
 def test_nothing_on_the_deterministic_path_imports_this_export_surface():
-    """Fabric's absence may cost an export; it may never cost a decision."""
+    """Fabric's absence may cost an export; it may never cost a decision.
+
+    Checked by parsing imports, not by looking for the name. A text scan cannot
+    tell "imports this module" from "mentions it in a docstring", and it first
+    reported a false positive the moment another export surface cited this one
+    by name in its own explanation. A boundary check that a comment can break
+    gets worked around by deleting the comment.
+    """
 
     package_root = Path(__file__).resolve().parents[1] / "py" / "azazel_edge"
-    importers = [
-        path.relative_to(package_root).as_posix()
-        for path in package_root.rglob("*.py")
-        if path.name != "shared_export.py"
-        and "shared_export" in path.read_text(encoding="utf-8")
-    ]
+    importers = []
+    for path in sorted(package_root.rglob("*.py")):
+        if path.name == "shared_export.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").endswith(
+                "shared_export"
+            ):
+                importers.append(path.relative_to(package_root).as_posix())
+            elif isinstance(node, ast.Import) and any(
+                alias.name.endswith("shared_export") for alias in node.names
+            ):
+                importers.append(path.relative_to(package_root).as_posix())
+
     assert importers == [], (
         "shared_export is imported by product code: "
         f"{importers}. Fabric is an optional extra, so a decision or enforcement "
