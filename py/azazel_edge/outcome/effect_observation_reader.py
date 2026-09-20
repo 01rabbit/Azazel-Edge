@@ -131,18 +131,48 @@ def read_effect_observation(
     return ReadResult(observation=observation)
 
 
+def _claimed_authority(payload: Mapping[str, Any]) -> str:
+    """The raw claim, without asking Fabric to interpret it.
+
+    An unrecognized value comes back as itself rather than being coerced to
+    the weakest class. Fabric's coercion is right for Fabric -- an unknown
+    input must not escalate -- but here it would turn "I could not read this"
+    into `stale_or_unknown`, and this boundary would then refuse it with a
+    message naming a class the payload never claimed.
+    """
+
+    raw = payload.get("authority_class")
+    value = getattr(raw, "value", raw)
+    return value if isinstance(value, str) else repr(raw)
+
+
 def _verified(payload: Mapping[str, Any], effect: Any) -> Any:
     if not isinstance(payload, Mapping):
         raise ObservationRejected("an observation payload must be a mapping")
 
+    # Read before the model is built, and this ordering is load-bearing.
+    #
+    # It used to run after. That worked while Fabric accepted every authority
+    # class on an observation -- Edge's check was the only refusal there was.
+    # `v0.9.0rc4` refuses four of them itself (Fabric#52), which made the
+    # check below unreachable: Fabric raised first and an operator reading
+    # Edge's context got a pydantic dump where Edge had a sentence explaining
+    # what was wrong.
+    #
+    # Moving it up keeps it a guard rather than a comment. It also keeps the
+    # refusal Edge's own, which matters if Fabric ever widens the class again
+    # -- it narrowed in this direction once, and nothing says the next change
+    # goes the same way.
+    claimed = _claimed_authority(payload)
+    if claimed not in OBSERVER_AUTHORITY_CLASSES:
+        raise ObservationRejected(
+            f"observation {payload.get('observation_id', '<unidentified>')!r} "
+            f"claims {claimed!r}; an observer reports what it saw and does not "
+            "carry a decision's authority"
+        )
+
     observation = EffectObservation(**dict(payload))
 
-    if observation.authority_class.value not in OBSERVER_AUTHORITY_CLASSES:
-        raise ObservationRejected(
-            f"observation {observation.observation_id} claims "
-            f"{observation.authority_class.value!r}; an observer reports what it "
-            "saw and does not carry a decision's authority"
-        )
     if observation.materialization_producer == "azazel-edge":
         raise ObservationRejected(
             "Edge will not read its own materialization back as evidence; an "
