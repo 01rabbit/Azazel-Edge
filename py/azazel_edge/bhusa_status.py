@@ -4,9 +4,9 @@ import argparse
 import json
 import re
 import subprocess
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -18,14 +18,68 @@ DEFAULT_LINKS_PATH = ROOT_DIR / "docs" / "issues" / "bhusa-2026-vegas-readiness"
 DEFAULT_STATUS_DOC_PATH = ROOT_DIR / "docs" / "issues" / "bhusa-2026-vegas-readiness" / "15-status.md"
 LINK_PATTERN = re.compile(r"\[#(?P<number>\d+)\s+[^\]]+\]\((?P<url>[^)]+)\)")
 
+#: How long the optional GitHub lookup may take before it is given up on.
+#:
+#: An enrichment source with no timeout is not optional: a hung `gh` would
+#: hold the whole report open, which is the same outage as a crash with worse
+#: symptoms.
+GH_TIMEOUT_SEC = 20.0
 
-def _run_command(cmd: List[str]) -> subprocess.CompletedProcess[str]:
+#: Why the optional GitHub lookup produced nothing, as machine tokens.
+#:
+#: Separate values rather than one "unavailable" because an operator's next
+#: action differs: `gh_not_installed` is a workstation that never had the CLI,
+#: `gh_not_authenticated` is a credential to refresh, and `gh_rate_limited`
+#: is a wait. Collapsing them would make the report say "something went wrong"
+#: to someone who has to decide what to do about it.
+GH_NOT_INSTALLED = "gh_not_installed"
+GH_NOT_EXECUTABLE = "gh_not_executable"
+GH_TIMED_OUT = "gh_timed_out"
+GH_NOT_AUTHENTICATED = "gh_not_authenticated"
+GH_RATE_LIMITED = "gh_rate_limited"
+GH_FAILED = "gh_failed"
+GH_UNPARSEABLE = "gh_returned_unparseable_output"
+
+
+class GitHubUnavailable(Exception):
+    """The optional enrichment source produced nothing, and why.
+
+    Deliberately not a `ValueError`. A `ValueError` in this module means a
+    *required* local check could not run, and the two must not share a handler:
+    that is exactly how "GitHub is missing" came to be reported as a report
+    that could not be produced -- or, worse, not reported at all.
+    """
+
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(f"{reason}: {detail}")
+        self.reason = reason
+        self.detail = detail
+
+
+#: A source of `{issue number: payload}` for one repository.
+#:
+#: Injected so the degradation paths can be tested as themselves rather than
+#: by arranging a workstation that lacks `gh`. A test that has to remove a
+#: binary from `PATH` to reach a branch is a test that will stop reaching it
+#: the day the runner image changes, silently.
+IssueSource = Callable[[str], Dict[int, Dict[str, Any]]]
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+
+def _run_command(
+    cmd: List[str], *, timeout: Optional[float] = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
         cwd=str(ROOT_DIR),
         capture_output=True,
         text=True,
         check=False,
+        timeout=timeout,
     )
 
 
@@ -127,18 +181,66 @@ def _parse_issue_links(path: Path) -> List[Dict[str, Any]]:
     return issues
 
 
+def _classify_gh_failure(stderr: str, stdout: str, returncode: int) -> str:
+    """Name the failure an operator has to act on, from what `gh` said.
+
+    Matched case-insensitively against both streams because `gh` has moved
+    messages between them across versions, and a classifier that reads only
+    one would report `gh_failed` for a credential problem it could have named.
+    """
+
+    text = f"{stderr}\n{stdout}".lower()
+    if "rate limit" in text or "secondary rate" in text or "api rate" in text:
+        return GH_RATE_LIMITED
+    if (
+        "authentication" in text
+        or "not logged" in text
+        or "gh auth login" in text
+        or "requires authentication" in text
+        or "bad credentials" in text
+        or "401" in text
+    ):
+        return GH_NOT_AUTHENTICATED
+    return GH_FAILED
+
+
 def _load_github_issue_map(repo: str) -> Dict[int, Dict[str, Any]]:
+    """The default enrichment source. Raises `GitHubUnavailable`, never escapes.
+
+    Every way this can fail to produce data is a `GitHubUnavailable`. The
+    defect this replaces was narrower than it looked: `FileNotFoundError` from
+    a missing `gh` is not raised by `subprocess.run`'s return value but by the
+    call itself, so the `except ValueError` around it never saw it and the
+    traceback reached the operator instead of the report.
+    """
+
     cmd = ["gh", "issue", "list", "--repo", repo, "--limit", "100", "--json", "number,title,state,url"]
-    result = _run_command(cmd)
+    try:
+        result = _run_command(cmd, timeout=GH_TIMEOUT_SEC)
+    except FileNotFoundError as exc:
+        raise GitHubUnavailable(GH_NOT_INSTALLED, f"gh is not on PATH: {exc}") from exc
+    except PermissionError as exc:
+        raise GitHubUnavailable(GH_NOT_EXECUTABLE, f"gh is not executable: {exc}") from exc
+    except OSError as exc:
+        raise GitHubUnavailable(GH_FAILED, f"gh could not be started: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise GitHubUnavailable(
+            GH_TIMED_OUT, f"gh issue list exceeded {GH_TIMEOUT_SEC}s"
+        ) from exc
+
     if result.returncode != 0:
-        stderr = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
-        raise ValueError(f"gh issue list failed: {stderr}")
+        stderr = result.stderr.strip()
+        stdout = result.stdout.strip()
+        detail = stderr or stdout or f"exit {result.returncode}"
+        raise GitHubUnavailable(
+            _classify_gh_failure(stderr, stdout, result.returncode), detail
+        )
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"gh issue list returned invalid JSON: {exc}") from exc
+        raise GitHubUnavailable(GH_UNPARSEABLE, f"invalid JSON: {exc}") from exc
     if not isinstance(payload, list):
-        raise ValueError("gh issue list returned non-array JSON")
+        raise GitHubUnavailable(GH_UNPARSEABLE, "gh issue list returned non-array JSON")
     issues: Dict[int, Dict[str, Any]] = {}
     for item in payload:
         if not isinstance(item, dict):
@@ -153,8 +255,10 @@ def _load_github_issue_map(repo: str) -> Dict[int, Dict[str, Any]]:
     return issues
 
 
-def _load_github_issues(repo: str, links: List[Dict[str, Any]]) -> Dict[str, Any]:
-    issue_map = _load_github_issue_map(repo)
+def _load_github_issues(
+    repo: str, links: List[Dict[str, Any]], *, issue_source: IssueSource
+) -> Dict[str, Any]:
+    issue_map = issue_source(repo)
     issues: List[Dict[str, Any]] = []
     warnings: List[str] = []
     for item in links:
@@ -242,6 +346,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip GitHub child issue lookups and report only local evidence.",
     )
     parser.add_argument(
+        "--require-github",
+        action="store_true",
+        help=(
+            "Treat GitHub child issue state as required: exit non-zero and set "
+            "ok=false when it cannot be read. Off by default, because an "
+            "optional enrichment source being absent does not make the local "
+            "readiness evidence wrong."
+        ),
+    )
+    parser.add_argument(
         "--markdown",
         action="store_true",
         help="Emit the readiness status as repository-style Markdown instead of plain text.",
@@ -260,7 +374,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_report(args: argparse.Namespace) -> Dict[str, Any]:
+def _build_report(
+    args: argparse.Namespace,
+    *,
+    issue_source: Optional[IssueSource] = None,
+    now: Optional[Callable[[], str]] = None,
+) -> Dict[str, Any]:
+    issue_source = issue_source or _load_github_issue_map
+    now = now or _utc_now
     rehearsal_summary = _run_rehearsal_summary(args.record_path)
     full_variant = _find_variant(rehearsal_summary, "full")
 
@@ -273,23 +394,69 @@ def _build_report(args: argparse.Namespace) -> Dict[str, Any]:
     git["dirty"] = bool(git["dirty_files"])
 
     links = _parse_issue_links(Path(args.links_path))
-    github = {
+    # `open_issue_count` and `closed_issue_count` start as None, not 0. An
+    # absent external source must never render as "no open issues": that is
+    # the sentence an operator would read as "nothing left to close", and it
+    # would be produced by the lookup failing rather than by anything being
+    # true about the repository.
+    github: Dict[str, Any] = {
         "enabled": not args.skip_github,
+        "availability": "skipped" if args.skip_github else "unavailable",
+        "unavailable_reason": None if args.skip_github else GH_NOT_INSTALLED,
+        "unavailable_detail": None,
+        "observed_at": None,
         "repo": args.repo,
         "links_path": args.links_path,
         "linked_issue_count": len(links),
         "issues": [],
+        "open_issue_count": None,
+        "closed_issue_count": None,
         "warnings": [],
     }
-    if not args.skip_github:
+    if args.skip_github:
+        github["unavailable_reason"] = "skipped_by_operator"
+    else:
+        github["observed_at"] = now()
         try:
-            github_loaded = _load_github_issues(args.repo, links)
+            github_loaded = _load_github_issues(
+                args.repo, links, issue_source=issue_source
+            )
+        except GitHubUnavailable as exc:
+            github["availability"] = "unavailable"
+            github["unavailable_reason"] = exc.reason
+            github["unavailable_detail"] = exc.detail
+            github["warnings"].append(
+                f"GitHub issue state is unavailable ({exc.reason}: {exc.detail}); "
+                "the child-issue counts below are unknown, not zero"
+            )
+        else:
+            github["availability"] = "available"
+            github["unavailable_reason"] = None
             github["issues"] = github_loaded["issues"]
             github["warnings"] = github_loaded["warnings"]
-        except ValueError as exc:
-            github["warnings"].append(
-                f"gh lookup unavailable ({exc}); pass --skip-github to suppress"
+            github["open_issue_count"] = sum(
+                1 for item in github["issues"] if item.get("state") == "OPEN"
             )
+            github["closed_issue_count"] = sum(
+                1 for item in github["issues"] if item.get("state") == "CLOSED"
+            )
+
+    github_available = github["availability"] == "available"
+    limitations: List[Dict[str, Any]] = []
+    if not github_available:
+        limitations.append(
+            {
+                "subject": "github_child_issue_state",
+                "state": "unavailable",
+                "reason": github["unavailable_reason"],
+                "detail": github["unavailable_detail"],
+                "observed_at": github["observed_at"],
+                "effect": (
+                    "child-issue counts are unknown; this report cannot say "
+                    "whether any remain open"
+                ),
+            }
+        )
 
     freeze_check: Optional[Dict[str, Any]] = None
     if args.include_freeze_check:
@@ -304,14 +471,19 @@ def _build_report(args: argparse.Namespace) -> Dict[str, Any]:
         remaining_work.append(f"record {args.min_full_rehearsals - full_passes} more successful full rehearsals")
     if fallback_drills < args.min_fallback_drills:
         remaining_work.append(f"record {args.min_fallback_drills - fallback_drills} more fallback drills")
-    if github["enabled"]:
+    if github_available:
         remaining_work.extend(
             f"close child issue #{item.get('number')} ({item.get('title', 'unknown title')})" for item in open_issues
         )
         if github["warnings"]:
             remaining_work.append("repair GitHub issue visibility before using this as the final readiness source")
-    else:
+    elif github["availability"] == "skipped":
         remaining_work.append("GitHub issue state was skipped; rerun without --skip-github for final tracking")
+    else:
+        remaining_work.append(
+            f"GitHub issue state is unavailable ({github['unavailable_reason']}); "
+            "child-issue readiness is unknown until it can be read"
+        )
     if freeze_check is None:
         remaining_work.append("run --include-freeze-check on the booth candidate when you want a live readiness gate")
     elif not freeze_check.get("ok"):
@@ -322,12 +494,31 @@ def _build_report(args: argparse.Namespace) -> Dict[str, Any]:
     overall_state = "planning-complete"
     if rehearsal_ready:
         overall_state = "rehearsal-ready"
-    if rehearsal_ready and (args.skip_github or not open_issues) and (freeze_check is not None and freeze_check.get("ok")):
+    # `freeze-ready` requires the external source to have answered. Reaching
+    # it from `not open_issues` while the lookup failed would let an outage
+    # promote the report to its strongest verdict -- the absence of evidence
+    # read as evidence.
+    if (
+        rehearsal_ready
+        and github_available
+        and not open_issues
+        and (freeze_check is not None and freeze_check.get("ok"))
+    ):
         overall_state = "freeze-ready"
 
+    # `ok` is about the *required* local checks, which all ran to get here. An
+    # optional enrichment source being absent does not make the report wrong,
+    # so it does not make `ok` false -- unless the operator said, with
+    # --require-github, that a report without it is of no use to them.
+    ok = True
+    if getattr(args, "require_github", False) and not github_available:
+        ok = False
+
     return {
-        "ok": True,
+        "ok": ok,
         "overall_state": overall_state,
+        "limitations": limitations,
+        "require_github": bool(getattr(args, "require_github", False)),
         "session_date": args.session_date,
         "days_until_session": _days_until_session(args.session_date),
         "git": git,
@@ -342,6 +533,17 @@ def _build_report(args: argparse.Namespace) -> Dict[str, Any]:
         "freeze_check": freeze_check,
         "remaining_work": remaining_work,
     }
+
+
+def _count_or_unknown(value: Optional[int]) -> str:
+    """`unknown`, never `0`, when the source did not answer.
+
+    The whole defect in one function. `0` and "we could not find out" render
+    identically the moment either is allowed to be an integer, and the reader
+    has no way back from the rendered form to which one it was.
+    """
+
+    return "unknown" if value is None else str(value)
 
 
 def _format_text(report: Dict[str, Any]) -> str:
@@ -362,12 +564,17 @@ def _format_text(report: Dict[str, Any]) -> str:
         ),
         (
             "github: "
-            f"enabled={github.get('enabled')} "
+            f"availability={github.get('availability')} "
             f"linked={github.get('linked_issue_count')} "
-            f"open={len(open_issues)} "
+            f"open={_count_or_unknown(github.get('open_issue_count'))} "
             f"warnings={len(github.get('warnings', []))}"
         ),
     ]
+    if github.get("availability") != "available":
+        lines.append(
+            f"github_unavailable_because: {github.get('unavailable_reason')}"
+            + (f" ({github['unavailable_detail']})" if github.get("unavailable_detail") else "")
+        )
     if report.get("freeze_check") is None:
         lines.append("freeze_check: not_run")
     else:
@@ -395,10 +602,20 @@ def _format_markdown(report: Dict[str, Any]) -> str:
         f"- Full rehearsal passes: `{report['full_rehearsal_variant'].get('passes')}` / `{report['thresholds']['min_full_rehearsals']}`",
         f"- Fallback drill runs: `{report['rehearsal_summary'].get('fallback_drill_runs')}` / `{report['thresholds']['min_fallback_drills']}`",
         f"- GitHub linked child issues: `{github.get('linked_issue_count')}`",
-        f"- GitHub closed child issues: `{len(closed_issues)}`",
-        f"- GitHub open child issues: `{len(open_issues)}`",
+        f"- GitHub child issue state: `{github.get('availability')}`",
+        f"- GitHub closed child issues: `{_count_or_unknown(github.get('closed_issue_count'))}`",
+        f"- GitHub open child issues: `{_count_or_unknown(github.get('open_issue_count'))}`",
         "",
     ]
+    if report.get("limitations"):
+        lines.extend(["## Limitations", ""])
+        for item in report["limitations"]:
+            observed = item.get("observed_at") or "not attempted"
+            lines.append(
+                f"- `{item.get('subject')}` is `{item.get('state')}` "
+                f"(`{item.get('reason')}`, observed at `{observed}`): {item.get('effect')}"
+            )
+        lines.append("")
     if closed_issues:
         lines.extend(["## Closed Child Issues", ""])
         for item in closed_issues:
@@ -450,7 +667,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(markdown.rstrip())
     else:
         print(_format_text(report))
-    return 0
+
+    # 3, not 2. Exit 2 means the report could not be produced; this means it
+    # was produced and the operator asked to be failed when it is incomplete.
+    # One code for both would make a script unable to tell "no readiness
+    # evidence" from "readiness evidence without GitHub".
+    return 0 if report.get("ok", True) else 3
 
 
 if __name__ == "__main__":
