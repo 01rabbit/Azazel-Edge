@@ -19,6 +19,7 @@ What was already true, and is now held:
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -44,6 +45,91 @@ def test_the_canonical_vocabulary_is_exactly_five_values():
     """
 
     assert DEFENSIVE_STATES == set(CANONICAL)
+
+
+def test_edge_agrees_with_fabric_when_fabric_carries_the_vocabulary():
+    """The drift guard the other two tests cannot be.
+
+    Edge keeps its own `DEFENSIVE_STATES` on purpose. It is not the same thing
+    as Knowledge or Deception holding a copy: those are advisory consumers, and
+    a copy there is a second *definition* of a word they do not own. Edge is
+    the authority that produces the state, and its arbiter must keep working
+    with no `azazel_fabric` installed at all -- the deterministic control path
+    never depends on an optional package (see `audit/fabric_adapter.py` and
+    `fabric_view.py` for the same posture).
+
+    What Edge must not do is drift. If Fabric ever gains, loses or renames a
+    value, Edge staying green while disagreeing with the system-wide canon is
+    exactly the failure Azazel#62 exists to prevent. So: no import at module
+    scope, no dependency added, but when the pinned Fabric does carry the
+    vocabulary the two must be identical.
+
+    Skipping when Fabric is absent is deliberate and not a hole. The two tests
+    around this one pin Edge's vocabulary by literal regardless, so Edge is
+    never unguarded -- this one adds cross-product agreement on top, in the
+    environments that can see both.
+    """
+
+    fabric = pytest.importorskip(
+        "azazel_fabric.schema.defensive_state",
+        reason="pinned azazel_fabric predates the canonical vocabulary (Fabric#14)",
+    )
+
+    fabric_values = {member.value for member in fabric.DefensiveState}
+
+    assert fabric_values == DEFENSIVE_STATES, (
+        f"Edge and Fabric disagree about the canonical vocabulary: "
+        f"Edge has {sorted(DEFENSIVE_STATES)}, Fabric has {sorted(fabric_values)}. "
+        "One definition is the whole point of Azazel#62 -- reconcile them "
+        "rather than widening either side to accommodate the other."
+    )
+
+
+def test_the_fabric_pin_still_activates_the_drift_guard():
+    """A guard that stops guarding must not do it silently.
+
+    The test above skips when the pinned Fabric predates the vocabulary, which
+    is correct -- but it means reverting `requirements/fabric.txt` to an older
+    tag turns the drift guard off and everything stays green. Nothing would
+    say so. This reads the pin file itself, so the revert is what fails,
+    rather than the absence it would cause.
+
+    It checks the declared pin, not the installed distribution: the two can
+    differ in a stale local environment, and the tree is what CI installs from
+    and what a reviewer reads.
+    """
+
+    pin_file = Path(__file__).resolve().parents[1] / "requirements" / "fabric.txt"
+    pins = [
+        line.strip()
+        for line in pin_file.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+    assert len(pins) == 1, f"expected exactly one requirement in {pin_file.name}: {pins}"
+    tag = pins[0].rsplit("@", 1)[-1]
+
+    assert re.fullmatch(r"v\d+\.\d+\.\d+(rc\d+|a\d+|b\d+)?", tag), (
+        f"Fabric must be pinned to an exact tag, got {tag!r} -- "
+        "pinning a branch is what this file's own policy forbids"
+    )
+
+    # The vocabulary landed in v0.9.0rc2. Compared as a tuple so that v0.10.0
+    # and v1.0.0 read as newer, which a string comparison gets wrong.
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(?:rc(\d+))?", tag)
+    assert match is not None, f"unparseable pin {tag!r}"
+    release = tuple(int(part) for part in match.group(1, 2, 3))
+    candidate = int(match.group(4)) if match.group(4) else None
+    # A final release sorts after every candidate of the same version.
+    ordered = release + (candidate if candidate is not None else float("inf"),)
+
+    assert ordered >= (0, 9, 0, 2), (
+        f"the Fabric pin {tag} predates v0.9.0rc2, so "
+        "test_edge_agrees_with_fabric_when_fabric_carries_the_vocabulary now "
+        "skips and Edge is no longer checked against the canonical vocabulary. "
+        "If this downgrade is deliberate, say so here rather than letting the "
+        "guard go quiet."
+    )
 
 
 def test_the_arbiters_action_table_is_the_canonical_vocabulary():
