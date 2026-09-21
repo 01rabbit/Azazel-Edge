@@ -7,10 +7,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+#: Directories holding first-party Python.
+#:
+#: `packaging` joined the list with Edge#424, which put the Nexus Core
+#: packager in `packaging/nexus-core/`. Until then the scan treated anything
+#: outside three hardcoded directories as third party, so a first-party module
+#: in a new location was reported as an undeclared requirement. Widening this
+#: tuple does not weaken the check -- a genuine third-party import is still
+#: caught -- it tells the check where this repository's own code lives.
+FIRST_PARTY_DIRS = ("py", "azazel_edge_web", "tests", "packaging")
+
+
 def _python_files() -> list[Path]:
     files: list[Path] = []
-    for rel in ("py", "azazel_edge_web", "tests"):
-        files.extend((ROOT / rel).rglob("*.py"))
+    for rel in FIRST_PARTY_DIRS:
+        directory = ROOT / rel
+        if directory.is_dir():
+            files.extend(directory.rglob("*.py"))
     return files
 
 
