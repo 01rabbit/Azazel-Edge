@@ -122,6 +122,46 @@ asked to run rather than trusting that a default stayed a default.
 The package **starts nothing**. It declares how a supervisor should start the
 payload; bringing it up is the consumer's service manager's job.
 
+## 6b. The contract Nexus pins
+
+Azazel-Nexus verifies this package **without importing the packager**. The two
+repositories build and test separately, and a consumer that needed the
+producer's source in its own CI would be sharing an implementation rather than
+verifying a contract.
+
+So the shape is exported to `packaging/nexus-core/contract/`, three small JSON
+documents that both repositories commit:
+
+| file | what it fixes |
+| --- | --- |
+| `pin.json` | package name, version, architecture, both contract strings, the artifact and manifest filenames, `signed: false`, and what a consumer must do |
+| `manifest-schema.json` | every field of the manifest, as sorted dotted paths |
+| `health-schema.json` | every field of the health report, the posture check names, the healthy and unhealthy status words, and the four conditions |
+
+**They carry no digest and no timestamp.** That is what lets them stay
+byte-identical across rebuilds -- a contract that changed every time the
+binary was recompiled would be re-approved so often that nobody would read the
+diff. A change to one of these files always means the contract changed.
+
+Both schemas are **derived, not restated**: the manifest schema from
+`manifest_document`, the health schema by running the binary. A hand-written
+schema is a second description of the same thing, and the first time the two
+disagree it is the consumer that breaks, believing it verified something.
+
+The health schema is derived from **two** runs -- the observe-only default and
+one with enforcement enabled -- because the unhealthy branch has to be
+observed rather than asserted. Regeneration refuses if enforcement does not
+produce an unhealthy report and a non-zero exit, if the two reports differ in
+shape, or if the built binary disagrees with the tree's version.
+
+```sh
+python3 packaging/nexus-core/nexus_core_package.py --emit-contract
+```
+
+`tests/test_nexus_contract_export.py` regenerates into a temporary directory
+and asserts the committed files are byte-identical, so a field added to the
+manifest cannot reach a package without also reaching the contract.
+
 ## 7. Building it
 
 ```sh
@@ -130,6 +170,8 @@ python3 packaging/nexus-core/nexus_core_package.py --out dist/nexus-core
 ```
 
 Nothing under `installer/`, `security/` or `systemd/` is read or written.
+
+After changing anything the manifest or the health report carries, regenerate the contract (§6b) in the same commit.
 
 ## 8. What this does not establish
 

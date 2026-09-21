@@ -172,13 +172,43 @@ def build(root: Path, out_dir: Path) -> tuple[Path, Path]:
     archive = out_dir / f"{PACKAGE_NAME}-{version}-{ARCHITECTURE}.tar.gz"
     _write_archive(archive, payload)
 
-    manifest = {
+    manifest = manifest_document(
+        version=version,
+        artifact=archive.name,
+        digest=_digest(archive.read_bytes()),
+        components=[component.as_record() for component in components],
+    )
+
+    manifest_path = out_dir / f"{PACKAGE_NAME}-{version}-{ARCHITECTURE}.manifest.json"
+    manifest_bytes = (
+        json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    ).encode("utf-8")
+    manifest_path.write_bytes(manifest_bytes)
+    (out_dir / f"{manifest_path.name}.sha256").write_text(
+        f"{_digest(manifest_bytes)}  {manifest_path.name}\n", encoding="utf-8"
+    )
+    return archive, manifest_path
+
+
+def manifest_document(
+    *, version: str, artifact: str, digest: str, components: list[dict]
+) -> dict:
+    """The manifest, as a document, separated from writing it.
+
+    Extracted so the contract export below derives its schema from **this**
+    function rather than from a second description of it. A schema written by
+    hand is a schema that stops matching the first time a field is added, and
+    the consumer that trusted it would be verifying a shape nothing produces.
+    """
+
+    return {
+        "contract": MANIFEST_CONTRACT,
         "contract": MANIFEST_CONTRACT,
         "package": PACKAGE_NAME,
         "version": version,
         "architecture": ARCHITECTURE,
-        "artifact": archive.name,
-        "digest": _digest(archive.read_bytes()),
+        "artifact": artifact,
+        "digest": digest,
         "signed": False,
         "signed_reason": (
             "signing-key operations are out of scope for this artifact. An "
@@ -188,7 +218,7 @@ def build(root: Path, out_dir: Path) -> tuple[Path, Path]:
             "and this manifest together. A consumer must degrade rather than "
             "treat it as authenticity"
         ),
-        "components": [component.as_record() for component in components],
+        "components": list(components),
         "health": {
             "contract": HEALTH_CONTRACT,
             "kind": "cli",
@@ -234,16 +264,6 @@ def build(root: Path, out_dir: Path) -> tuple[Path, Path]:
         ],
     }
 
-    manifest_path = out_dir / f"{PACKAGE_NAME}-{version}-{ARCHITECTURE}.manifest.json"
-    manifest_bytes = (
-        json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
-    ).encode("utf-8")
-    manifest_path.write_bytes(manifest_bytes)
-    (out_dir / f"{manifest_path.name}.sha256").write_text(
-        f"{_digest(manifest_bytes)}  {manifest_path.name}\n", encoding="utf-8"
-    )
-    return archive, manifest_path
-
 
 def _write_archive(archive: Path, payload: Sequence[tuple[str, Path]]) -> None:
     """Byte-identical for identical inputs.
@@ -270,13 +290,221 @@ def _write_archive(archive: Path, payload: Sequence[tuple[str, Path]]) -> None:
                 tar.addfile(info, io.BytesIO(data))
 
 
+# -- the contract Nexus pins ------------------------------------------------
+#
+# Azazel-Nexus#44 verifies this package. It needs to know the *shape* it is
+# verifying, and it cannot import this module: the two repositories build and
+# test separately, and a consumer that needed the producer's source in its own
+# CI would not be verifying a contract, it would be sharing an implementation.
+#
+# So the shape is exported as three small documents that both repositories
+# commit. They contain **no digest and no timestamp**, which is what lets them
+# stay byte-identical across rebuilds: a contract that changed every time the
+# binary was recompiled would be re-approved so often that nobody would read
+# the diff.
+#
+# The schemas are derived from `manifest_document` and from the binary's own
+# `--health` output rather than restated. A hand-written schema is a second
+# description, and the first time the two disagree it is the consumer that
+# breaks, believing it verified something.
+
+CONTRACT_DIR = Path(__file__).resolve().parent / "contract"
+
+#: What a consumer pins. A version bump has to be written here, which means it
+#: shows up in the diff of both repositories rather than only in a filename.
+PIN_CONTRACT = "azazel-edge-core/nexus-pin/v1"
+SCHEMA_CONTRACT = "azazel-edge-core/contract-schema/v1"
+
+#: Placeholder values for deriving the manifest schema. They are never
+#: written into a package; a schema only needs the shape.
+_SCHEMA_DIGEST = "sha256:" + "0" * 64
+
+
+def key_paths(document: object, prefix: str = "") -> list[str]:
+    """Every field of a JSON document, as sorted dotted paths.
+
+    A list of objects contributes `name[].field`, because a consumer reading
+    `components` cares which fields each entry carries and not how many
+    entries a particular build happened to produce.
+    """
+
+    found: list[str] = []
+    if isinstance(document, dict):
+        for key in sorted(document):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            child = key_paths(document[key], path)
+            found.extend(child or [path])
+    elif isinstance(document, list):
+        merged: set[str] = set()
+        for item in document:
+            if isinstance(item, (dict, list)):
+                merged.update(key_paths(item, f"{prefix}[]"))
+        found.extend(sorted(merged))
+    return sorted(set(found))
+
+
+def manifest_schema() -> dict:
+    """The manifest's shape, derived from the function that writes manifests."""
+
+    document = manifest_document(
+        version="0.0.0",
+        artifact=f"{PACKAGE_NAME}-0.0.0-{ARCHITECTURE}.tar.gz",
+        digest=_SCHEMA_DIGEST,
+        components=[Component(path="bin/placeholder", digest=_SCHEMA_DIGEST, size=0).as_record()],
+    )
+    return {
+        "contract": SCHEMA_CONTRACT,
+        "describes": MANIFEST_CONTRACT,
+        "keys": key_paths(document),
+    }
+
+
+def health_schema(binary: Path) -> dict:
+    """The health report's shape, derived by running the binary twice.
+
+    Twice, because the unhealthy branch has to be observed rather than
+    asserted. A contract that documented only the healthy answer would let a
+    consumer be written that never tested the case it exists to catch.
+    """
+
+    healthy = _run_health(binary, {})
+    unhealthy = _run_health(binary, {"AZAZEL_DEFENSE_ENFORCE": "true"})
+    if healthy["report"]["status"] != "healthy" or healthy["code"] != 0:
+        raise BuildRefused(
+            "the binary does not report healthy under its own observe-only "
+            "defaults; the contract would document a posture it cannot reach"
+        )
+    if unhealthy["report"]["status"] != "unhealthy" or unhealthy["code"] == 0:
+        raise BuildRefused(
+            "enforcement enabled did not produce an unhealthy report and a "
+            "non-zero exit; a consumer could then read unhealthy as healthy"
+        )
+    keys = key_paths(healthy["report"])
+    if keys != key_paths(unhealthy["report"]):
+        raise BuildRefused(
+            "the healthy and unhealthy reports have different shapes; a "
+            "consumer parsing one would fail on the other"
+        )
+    return {
+        "contract": SCHEMA_CONTRACT,
+        "describes": HEALTH_CONTRACT,
+        "keys": keys,
+        "checks": sorted(check["name"] for check in healthy["report"]["checks"]),
+        "healthy_status": "healthy",
+        "unhealthy_status": unhealthy["report"]["status"],
+        "healthy_exit_code": 0,
+        "healthy_when": [
+            "the process exits 0",
+            "stdout parses as JSON",
+            "the report's contract equals the health contract",
+            "the report's status is the healthy status",
+        ],
+        "does_not_establish": [
+            "that the payload is running",
+        ],
+    }
+
+
+def _run_health(binary: Path, env_overrides: dict) -> dict:
+    import os
+
+    env = dict(os.environ)
+    env.update(env_overrides)
+    try:
+        completed = subprocess.run(
+            [str(binary), "--health"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+            cwd=str(ROOT),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BuildRefused(f"the payload binary does not answer --health: {exc}") from exc
+    try:
+        report = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise BuildRefused(f"--health did not print JSON: {exc}") from exc
+    return {"code": completed.returncode, "report": report}
+
+
+def pin_document(version: str) -> dict:
+    """Exactly what a consumer fixes. Nothing derived, nothing optional."""
+
+    return {
+        "contract": PIN_CONTRACT,
+        "package": PACKAGE_NAME,
+        "version": version,
+        "architecture": ARCHITECTURE,
+        "manifest_contract": MANIFEST_CONTRACT,
+        "health_contract": HEALTH_CONTRACT,
+        "artifact": f"{PACKAGE_NAME}-{version}-{ARCHITECTURE}.tar.gz",
+        "manifest": f"{PACKAGE_NAME}-{version}-{ARCHITECTURE}.manifest.json",
+        "signed": False,
+        "consumer_must": [
+            "re-derive the artifact digest and compare it with the manifest",
+            "treat a digest match as integrity against accidental change only, "
+            "because nothing here is signed",
+            "report package absence, a corrupt manifest, a version mismatch, a "
+            "digest mismatch, an unhealthy report and a not-running payload as "
+            "six separate findings",
+            "not claim edge-baseline-ready from accepting this package",
+        ],
+    }
+
+
+def contract_documents(root: Path) -> dict[str, dict]:
+    """The three documents, by filename."""
+
+    version = _version(root)
+    binary = root / dict(PAYLOAD)["bin/azazel-edge-core"]
+    if not binary.is_file():
+        raise BuildRefused(
+            f"{binary} is not built; the health contract is derived by running "
+            "the binary and is never written from memory"
+        )
+    _binary_reports(binary, version)
+    return {
+        "pin.json": pin_document(version),
+        "manifest-schema.json": manifest_schema(),
+        "health-schema.json": health_schema(binary),
+    }
+
+
+def write_contract(root: Path, out_dir: Path) -> list[Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+    for name, document in sorted(contract_documents(root).items()):
+        path = out_dir / name
+        path.write_bytes(
+            (json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode(
+                "utf-8"
+            )
+        )
+        written.append(path)
+    return written
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--out", type=Path, default=ROOT / "dist" / "nexus-core")
+    parser.add_argument(
+        "--emit-contract",
+        action="store_true",
+        help=(
+            "write the pin and schemas Azazel-Nexus commits, instead of "
+            "building a package"
+        ),
+    )
+    parser.add_argument("--contract-dir", type=Path, default=CONTRACT_DIR)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     try:
+        if args.emit_contract:
+            for path in write_contract(args.root, args.contract_dir):
+                print(path)
+            return 0
         archive, manifest = build(args.root, args.out)
     except BuildRefused as exc:
         print(f"refused: {exc}", file=sys.stderr)
