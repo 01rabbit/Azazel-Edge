@@ -860,8 +860,111 @@ fn read_new_lines(cfg: &Config, offset: &mut u64) {
     }
 }
 
+
+// -- the health and version contract Nexus consumes (Edge#424) -------------
+//
+// `docs/nexus-core-package.md` is the contract. Two rules shape the code
+// below and both are about *not* being mistaken for healthy.
+//
+// **A one-shot check establishes the binary, never the daemon.** `--health`
+// proves this executable is present, is this version, and can evaluate its
+// own posture. It does not prove anything is running. Nexus determines that
+// separately, which is why accepting a package never on its own produces
+// `edge-baseline-ready`.
+//
+// **Anything unevaluated is unhealthy.** A check that cannot be run reports
+// `ok: false` with the reason. There is no path that omits a check and still
+// reports `healthy`, because a reader counting green checks would not notice
+// one missing.
+//
+// The exit status and the `status` field agree, and Nexus is required to
+// insist on both plus the contract string: a truncated or garbled stdout then
+// cannot read as healthy.
+
+const HEALTH_CONTRACT: &str = "azazel-edge-core/health/v1";
+const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Debug, Clone)]
+struct HealthCheck {
+    name: &'static str,
+    ok: bool,
+    detail: String,
+}
+
+/// Evaluate the posture. Observe-only is the only posture this package ships.
+fn health_checks(cfg: &Config) -> Vec<HealthCheck> {
+    let mut checks = Vec::new();
+
+    checks.push(HealthCheck {
+        name: "enforcement_disabled",
+        ok: !cfg.defense_enforce,
+        detail: format!("AZAZEL_DEFENSE_ENFORCE={}", cfg.defense_enforce),
+    });
+    checks.push(HealthCheck {
+        name: "dry_run",
+        ok: cfg.defense_dry_run,
+        detail: format!("AZAZEL_DEFENSE_DRY_RUN={}", cfg.defense_dry_run),
+    });
+    checks.push(HealthCheck {
+        name: "advisory_level",
+        ok: cfg.defense_enforce_level == "advisory",
+        detail: format!("AZAZEL_DEFENSE_ENFORCE_LEVEL={}", cfg.defense_enforce_level),
+    });
+    checks.push(HealthCheck {
+        name: "high_impact_auto_disabled",
+        ok: !cfg.defense_allow_high_impact_auto,
+        detail: format!(
+            "AZAZEL_DEFENSE_ALLOW_HIGH_IMPACT_AUTO={}",
+            cfg.defense_allow_high_impact_auto
+        ),
+    });
+    checks.push(HealthCheck {
+        name: "redirect_policy_not_enforcing",
+        ok: !cfg.defense_enforce,
+        detail: format!("redirect_policy_source={}", cfg.redirect_policy_source),
+    });
+
+    checks
+}
+
+fn observe_only(checks: &[HealthCheck]) -> bool {
+    checks.iter().all(|c| c.ok)
+}
+
+fn health_report(cfg: &Config) -> Value {
+    let checks = health_checks(cfg);
+    let healthy = observe_only(&checks);
+    json!({
+        "contract": HEALTH_CONTRACT,
+        "status": if healthy { "healthy" } else { "unhealthy" },
+        "version": CORE_VERSION,
+        "observe_only": healthy,
+        "checks": checks
+            .iter()
+            .map(|c| json!({"name": c.name, "ok": c.ok, "detail": c.detail}))
+            .collect::<Vec<Value>>(),
+    })
+}
+
 fn main() {
     let cfg = load_config();
+
+    // The contract subcommands return before anything else happens. They read
+    // no file, write no file, open no socket and start no loop -- a health
+    // check that changed the node would be a health check nobody could run.
+    let args: Vec<String> = env::args().collect();
+    if args.iter().any(|a| a == "--version") {
+        println!("{}", CORE_VERSION);
+        return;
+    }
+    if args.iter().any(|a| a == "--health") {
+        let report = health_report(&cfg);
+        println!("{}", serde_json::to_string(&report).unwrap_or_default());
+        if report["status"] != "healthy" {
+            std::process::exit(1);
+        }
+        return;
+    }
 
     if let Some(parent) = Path::new(&cfg.normalized_log_path).parent() {
         let _ = fs::create_dir_all(parent);
