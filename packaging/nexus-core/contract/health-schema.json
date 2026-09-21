@@ -1,0 +1,32 @@
+{
+  "checks": [
+    "advisory_level",
+    "dry_run",
+    "enforcement_disabled",
+    "high_impact_auto_disabled",
+    "redirect_policy_not_enforcing"
+  ],
+  "contract": "azazel-edge-core/contract-schema/v1",
+  "describes": "azazel-edge-core/health/v1",
+  "does_not_establish": [
+    "that the payload is running"
+  ],
+  "healthy_exit_code": 0,
+  "healthy_status": "healthy",
+  "healthy_when": [
+    "the process exits 0",
+    "stdout parses as JSON",
+    "the report's contract equals the health contract",
+    "the report's status is the healthy status"
+  ],
+  "keys": [
+    "checks[].detail",
+    "checks[].name",
+    "checks[].ok",
+    "contract",
+    "observe_only",
+    "status",
+    "version"
+  ],
+  "unhealthy_status": "unhealthy"
+}

@@ -1,0 +1,17 @@
+{
+  "architecture": "x86_64",
+  "artifact": "azazel-edge-core-0.1.0-x86_64.tar.gz",
+  "consumer_must": [
+    "re-derive the artifact digest and compare it with the manifest",
+    "treat a digest match as integrity against accidental change only, because nothing here is signed",
+    "report package absence, a corrupt manifest, a version mismatch, a digest mismatch, an unhealthy report and a not-running payload as six separate findings",
+    "not claim edge-baseline-ready from accepting this package"
+  ],
+  "contract": "azazel-edge-core/nexus-pin/v1",
+  "health_contract": "azazel-edge-core/health/v1",
+  "manifest": "azazel-edge-core-0.1.0-x86_64.manifest.json",
+  "manifest_contract": "azazel-edge-core/package-manifest/v1",
+  "package": "azazel-edge-core",
+  "signed": false,
+  "version": "0.1.0"
+}
