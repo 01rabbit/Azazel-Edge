@@ -27,6 +27,7 @@ struct Config {
     poll_ms: u64,
     forward_ai: bool,
     forward_log: bool,
+    event_stdout: StdoutMode,
     defense_enforce: bool,
     defense_dry_run: bool,
     defense_enforce_level: String,
@@ -159,6 +160,71 @@ fn now_epoch() -> f64 {
     }
 }
 
+/// What each processed event prints to stdout, which a service manager usually
+/// keeps in its journal. `Full` is the historical behaviour. `Summary` keeps the
+/// decision and the posture but no address, target or command plan, for a
+/// deployment whose journal leaves the host. `Off` prints nothing per event.
+/// None of them changes a decision, the socket forward or the JSONL record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StdoutMode {
+    Full,
+    Summary,
+    Off,
+}
+
+fn stdout_mode(value: Option<String>) -> StdoutMode {
+    match value.as_deref().map(str::trim) {
+        None | Some("") | Some("full") => StdoutMode::Full,
+        Some("summary") => StdoutMode::Summary,
+        Some("off") => StdoutMode::Off,
+        Some(other) => {
+            eprintln!("AZAZEL_EVENT_STDOUT={:?} is not full|summary|off; using full", other);
+            StdoutMode::Full
+        }
+    }
+}
+
+/// The event as `Summary` prints it: the decision, Edge's posture and the
+/// enforcement outcome, without addresses, target or planned commands.
+fn summary_line(event: &Value) -> Value {
+    let pick = |path: &[&str]| -> Value {
+        let mut node = event;
+        for key in path {
+            match node.get(*key) {
+                Some(next) => node = next,
+                None => return Value::Null,
+            }
+        }
+        node.clone()
+    };
+    json!({
+        "summary": true,
+        "source": pick(&["source"]),
+        "pipeline": pick(&["pipeline"]),
+        "severity": pick(&["normalized", "severity"]),
+        "sid": pick(&["normalized", "sid"]),
+        "technique_ids": pick(&["normalized", "technique_ids"]),
+        "defense": {
+            "action": pick(&["defense", "action"]),
+            "policy_reason": pick(&["defense", "policy_reason"]),
+        },
+        "enforcement": {
+            "mode": pick(&["enforcement", "mode"]),
+            "result": pick(&["enforcement", "result"]),
+            "trace_id": pick(&["enforcement", "trace_id"]),
+        },
+        "enforcement_status": pick(&["enforcement_status"]),
+    })
+}
+
+fn print_event(mode: StdoutMode, event: &Value) {
+    match mode {
+        StdoutMode::Full => println!("{}", event),
+        StdoutMode::Summary => println!("{}", summary_line(event)),
+        StdoutMode::Off => {}
+    }
+}
+
 fn env_bool(name: &str, default: bool) -> bool {
     match env::var(name) {
         Ok(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
@@ -197,6 +263,7 @@ fn load_config() -> Config {
             .unwrap_or(200),
         forward_ai: env_bool("AZAZEL_FORWARD_AI", true),
         forward_log: env_bool("AZAZEL_FORWARD_LOG", true),
+        event_stdout: stdout_mode(env::var("AZAZEL_EVENT_STDOUT").ok()),
         defense_enforce: env_bool("AZAZEL_DEFENSE_ENFORCE", false),
         defense_dry_run: env_bool("AZAZEL_DEFENSE_DRY_RUN", true),
         defense_enforce_level: env::var("AZAZEL_DEFENSE_ENFORCE_LEVEL").unwrap_or_else(|_| "advisory".to_string()),
@@ -835,7 +902,7 @@ fn process_line(cfg: &Config, line: &str) {
         send_to_ai_socket(&cfg.ai_socket_path, &event);
     }
 
-    println!("{}", event);
+    print_event(cfg.event_stdout, &event);
 }
 
 fn process_release_events(cfg: &Config) {
@@ -854,7 +921,18 @@ fn process_release_events(cfg: &Config) {
                 // G1b release records have a different schema from normalized alert events.
                 // Do not forward them to the AI socket until that receiver explicitly supports
                 // this contract. Release evidence is available through the canonical JSONL.
-                println!("{}", event);
+                match cfg.event_stdout {
+                    StdoutMode::Full => println!("{}", event),
+                    // A release names its target; the summary keeps only that
+                    // one happened and Edge's posture.
+                    StdoutMode::Summary => println!("{}", json!({
+                        "summary": true,
+                        "source": "release_ledger",
+                        "pipeline": "rust_release_engine_v1",
+                        "enforcement_status": enforcement_status(cfg),
+                    })),
+                    StdoutMode::Off => {}
+                }
             }
         }
         Err(error) => eprintln!("release ledger processing failed: {}", error),
@@ -1063,6 +1141,43 @@ mod tests {
     }
 
     #[test]
+    fn stdout_mode_defaults_to_full_and_rejects_unknown_values() {
+        assert_eq!(stdout_mode(None), StdoutMode::Full);
+        assert_eq!(stdout_mode(Some("".into())), StdoutMode::Full);
+        assert_eq!(stdout_mode(Some("summary".into())), StdoutMode::Summary);
+        assert_eq!(stdout_mode(Some(" off ".into())), StdoutMode::Off);
+        assert_eq!(stdout_mode(Some("SUMMARY".into())), StdoutMode::Full);
+    }
+
+    #[test]
+    fn summary_line_keeps_the_decision_and_drops_addresses_and_plans() {
+        let eve = json!({
+            "event_type": "alert", "src_ip": "203.0.113.7", "dest_ip": "192.0.2.10",
+            "dest_port": 22, "proto": "TCP",
+            "alert": {"signature_id": 2001219, "severity": 1,
+                      "metadata": {"mitre_technique_id": ["T1110"]}}
+        });
+        let ev = build_normalized_event(&eve).expect("alert normalises");
+        let decision = decide_defense(&ev);
+        let cfg = sample_cfg();
+        let enforcement = maybe_enforce(&ev, &decision, &cfg);
+        let event = json!({
+            "normalized": ev, "defense": decision, "enforcement": enforcement,
+            "enforcement_status": enforcement_status(&cfg),
+            "source": "suricata_eve", "pipeline": "rust_event_engine_v1",
+        });
+        let line = summary_line(&event).to_string();
+        for leaked in ["203.0.113.7", "192.0.2.10", "command_plan", "target", "nft"] {
+            assert!(!line.contains(leaked), "summary leaked {leaked}: {line}");
+        }
+        let summary = summary_line(&event);
+        assert_eq!(summary["defense"]["action"], event["defense"]["action"]);
+        assert_eq!(summary["enforcement_status"], event["enforcement_status"]);
+        assert_eq!(summary["technique_ids"], json!(["T1110"]));
+        assert_eq!(summary["severity"], json!(1));
+    }
+
+    #[test]
     fn technique_ids_come_only_from_rule_metadata() {
         let eve = json!({
             "event_type": "alert",
@@ -1105,6 +1220,7 @@ mod tests {
             poll_ms: 100,
             forward_ai: false,
             forward_log: false,
+            event_stdout: StdoutMode::Full,
             defense_enforce: false,
             defense_dry_run: true,
             defense_enforce_level: "advisory".to_string(),
