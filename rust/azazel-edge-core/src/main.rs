@@ -15,11 +15,11 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
 struct Config {
@@ -875,12 +875,137 @@ const AI_FORWARD_QUEUE: usize = 1024;
 /// line, not forever.
 const AI_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
-static AI_FORWARDER: OnceLock<SyncSender<String>> = OnceLock::new();
+static AI_FORWARDER: OnceLock<SyncSender<Forward>> = OnceLock::new();
 static AI_FORWARD_DROPPED: AtomicU64 = AtomicU64::new(0);
 /// Lines the forwarder took off the queue but could not deliver (no
 /// listener, refused, or the write timed out). Counted apart from queue drops
 /// so a receiver that is absent reads differently from one that is slow.
 static AI_FORWARD_FAILED: AtomicU64 = AtomicU64::new(0);
+/// Event lines written to the receiver. A completed write is not proof the
+/// receiver kept the line; that is the receiver's own count.
+static AI_FORWARD_SENT: AtomicU64 = AtomicU64::new(0);
+
+/// The forward counts are reported to the same receiver as one closed-shape
+/// line, because stderr (the only other report) is rate limited by the
+/// journal under exactly the load that drops lines (#432).
+const FORWARD_STATS_SCHEMA: &str = "azazel-edge/forward-stats/v1";
+/// How often the loop considers a report; one is queued only when the counts
+/// differ from the last delivered report.
+const FORWARD_STATS_INTERVAL: Duration = Duration::from_secs(10);
+/// Unchanged counts are still reported this often, so a receiver that
+/// restarted learns them again and an old report can be told apart.
+const FORWARD_STATS_HEARTBEAT: Duration = Duration::from_secs(300);
+/// One report waits in the queue at a time; the forwarder clears this when it
+/// takes it.
+static FORWARD_STATS_QUEUED: AtomicBool = AtomicBool::new(false);
+/// The counts carried by the last report the receiver took.
+static FORWARD_STATS_DELIVERED: Mutex<Option<ForwardCounts>> = Mutex::new(None);
+/// This process's start, in epoch seconds: counts are cumulative since then.
+static PROCESS_START: OnceLock<u64> = OnceLock::new();
+
+/// What the forwarding thread carries.
+enum Forward {
+    /// One event, already serialised with its newline.
+    Line(String),
+    /// Report the forward counts. They are read when the forwarder reaches
+    /// this marker, so the report includes every line queued before it.
+    Stats,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ForwardCounts {
+    dropped: u64,
+    failed: u64,
+    sent: u64,
+}
+
+fn forward_counts() -> ForwardCounts {
+    ForwardCounts {
+        dropped: AI_FORWARD_DROPPED.load(Ordering::Relaxed),
+        failed: AI_FORWARD_FAILED.load(Ordering::Relaxed),
+        sent: AI_FORWARD_SENT.load(Ordering::Relaxed),
+    }
+}
+
+fn process_start() -> u64 {
+    *PROCESS_START.get_or_init(|| now_epoch() as u64)
+}
+
+fn forward_stats_line(counts: ForwardCounts, since: u64) -> String {
+    format!(
+        "{}\n",
+        json!({
+            "schema": FORWARD_STATS_SCHEMA,
+            "dropped": counts.dropped,
+            "failed": counts.failed,
+            "sent": counts.sent,
+            "since": since,
+        })
+    )
+}
+
+fn delivered_counts() -> Option<ForwardCounts> {
+    *FORWARD_STATS_DELIVERED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A report is due when the receiver has not taken these counts yet, or took
+/// them longer than a heartbeat ago (judged by when the last one was queued).
+fn forward_report_due(
+    current: ForwardCounts,
+    delivered: Option<ForwardCounts>,
+    since_queued: Option<Duration>,
+) -> bool {
+    delivered != Some(current) || since_queued.map_or(true, |d| d >= FORWARD_STATS_HEARTBEAT)
+}
+
+/// Paces the reports from the detection loop. Never waits: considering a
+/// report is a few atomic loads, and queueing one is a `try_send`.
+struct ForwardReporter {
+    last_check: Option<Instant>,
+    last_queued: Option<Instant>,
+}
+
+impl ForwardReporter {
+    fn new() -> Self {
+        ForwardReporter { last_check: None, last_queued: None }
+    }
+
+    /// `queue` queues one report and says whether it did.
+    fn tick(&mut self, now: Instant, queue: impl FnOnce() -> bool) {
+        if self.last_check.map_or(false, |c| now.duration_since(c) < FORWARD_STATS_INTERVAL) {
+            return;
+        }
+        self.last_check = Some(now);
+        let due = forward_report_due(
+            forward_counts(),
+            delivered_counts(),
+            self.last_queued.map(|q| now.duration_since(q)),
+        );
+        if due && queue() {
+            self.last_queued = Some(now);
+        }
+    }
+}
+
+/// Queue one report unless one is already waiting. A full queue costs this
+/// report only, and is not counted: it is not an event, and the next report
+/// carries the same cumulative counts.
+fn queue_forward_stats(socket_path: &str) -> bool {
+    if FORWARD_STATS_QUEUED.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+    match ai_forwarder(socket_path).try_send(Forward::Stats) {
+        Ok(()) => true,
+        Err(_) => {
+            FORWARD_STATS_QUEUED.store(false, Ordering::Release);
+            false
+        }
+    }
+}
+
+fn ai_forwarder(socket_path: &str) -> &'static SyncSender<Forward> {
+    AI_FORWARDER.get_or_init(|| start_ai_forwarder(socket_path.to_string()))
+}
 
 /// Hand an event to the forwarder thread; never wait for the receiver.
 ///
@@ -890,8 +1015,7 @@ static AI_FORWARD_FAILED: AtomicU64 = AtomicU64::new(0);
 /// loop only enqueues: when the queue is full the event is dropped and
 /// counted, and decisions, the JSONL record and stdout are unaffected.
 fn send_to_ai_socket(socket_path: &str, value: &Value) {
-    let sender = AI_FORWARDER.get_or_init(|| start_ai_forwarder(socket_path.to_string()));
-    match sender.try_send(format!("{}\n", value)) {
+    match ai_forwarder(socket_path).try_send(Forward::Line(format!("{}\n", value))) {
         Ok(()) => {}
         Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
             let dropped = AI_FORWARD_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
@@ -902,23 +1026,41 @@ fn send_to_ai_socket(socket_path: &str, value: &Value) {
     }
 }
 
-fn start_ai_forwarder(socket_path: String) -> SyncSender<String> {
-    let (sender, receiver) = sync_channel::<String>(AI_FORWARD_QUEUE);
+fn start_ai_forwarder(socket_path: String) -> SyncSender<Forward> {
+    let (sender, receiver) = sync_channel::<Forward>(AI_FORWARD_QUEUE);
     thread::spawn(move || forward_ai_lines(&socket_path, receiver));
     sender
 }
 
+fn deliver(socket_path: &str, line: &str) -> std::io::Result<()> {
+    let mut stream = UnixStream::connect(socket_path)?;
+    stream.set_write_timeout(Some(AI_WRITE_TIMEOUT))?;
+    stream.write_all(line.as_bytes())
+}
+
 /// One connection per line, as before; only this thread ever waits on it.
-fn forward_ai_lines(socket_path: &str, receiver: Receiver<String>) {
-    for line in receiver {
-        let delivered = UnixStream::connect(socket_path).and_then(|mut stream| {
-            stream.set_write_timeout(Some(AI_WRITE_TIMEOUT))?;
-            stream.write_all(line.as_bytes())
-        });
-        if delivered.is_err() {
-            let failed = AI_FORWARD_FAILED.fetch_add(1, Ordering::Relaxed) + 1;
-            if failed == 1 || failed % 1000 == 0 {
-                eprintln!("ai socket forward failed; {} event(s) not delivered so far", failed);
+fn forward_ai_lines(socket_path: &str, receiver: Receiver<Forward>) {
+    for item in receiver {
+        match item {
+            Forward::Line(line) => {
+                if deliver(socket_path, &line).is_ok() {
+                    AI_FORWARD_SENT.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    let failed = AI_FORWARD_FAILED.fetch_add(1, Ordering::Relaxed) + 1;
+                    if failed == 1 || failed % 1000 == 0 {
+                        eprintln!("ai socket forward failed; {} event(s) not delivered so far", failed);
+                    }
+                }
+            }
+            Forward::Stats => {
+                FORWARD_STATS_QUEUED.store(false, Ordering::Release);
+                let counts = forward_counts();
+                // A report that does not arrive is not counted; the next one
+                // is due because the delivered counts stay behind.
+                if deliver(socket_path, &forward_stats_line(counts, process_start())).is_ok() {
+                    *FORWARD_STATS_DELIVERED.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(counts);
+                }
             }
         }
     }
@@ -1161,9 +1303,14 @@ fn main() {
     // Reconcile due release work before reading new alerts. This runs even when new
     // enforcement is disabled so a restart/config change cannot strand old temporary state.
     process_release_events(&cfg);
+    process_start();
+    let mut reporter = ForwardReporter::new();
     loop {
         read_new_lines(&cfg, &mut offset);
         process_release_events(&cfg);
+        if cfg.forward_ai {
+            reporter.tick(Instant::now(), || queue_forward_stats(&cfg.ai_socket_path));
+        }
         thread::sleep(Duration::from_millis(cfg.poll_ms));
     }
 }
@@ -1218,13 +1365,147 @@ mod tests {
             .join(format!("az-edge-absent-{}.sock", std::process::id()));
         let _ = fs::remove_file(&path);
         let before = AI_FORWARD_FAILED.load(Ordering::Relaxed);
-        let (sender, receiver) = sync_channel::<String>(4);
+        let (sender, receiver) = sync_channel::<Forward>(4);
         for n in 0..3 {
-            sender.send(format!("{{\"n\":{}}}\n", n)).expect("queue");
+            sender.send(Forward::Line(format!("{{\"n\":{}}}\n", n))).expect("queue");
         }
         drop(sender);
         forward_ai_lines(&path.to_string_lossy(), receiver);
         assert!(AI_FORWARD_FAILED.load(Ordering::Relaxed) >= before + 3);
+    }
+
+    /// Tests that read or set the forward-report state hold this.
+    static FORWARD_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn forward_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        FORWARD_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn forward_stats_line_is_one_closed_shape_line() {
+        let counts = ForwardCounts { dropped: 460, failed: 7, sent: u64::MAX };
+        let line = forward_stats_line(counts, 1_790_000_000);
+        assert!(line.ends_with('\n') && line.matches('\n').count() == 1);
+        let value: Value = serde_json::from_str(line.trim_end()).expect("json");
+        let object = value.as_object().expect("object");
+        let mut keys: Vec<&str> = object.keys().map(|k| k.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, ["dropped", "failed", "schema", "sent", "since"]);
+        assert_eq!(value["schema"], "azazel-edge/forward-stats/v1");
+        assert_eq!(value["dropped"], 460);
+        assert_eq!(value["failed"], 7);
+        assert_eq!(value["sent"], u64::MAX);
+        assert_eq!(value["since"], 1_790_000_000u64);
+        // Nothing an event carries: no address, decision or plan.
+        assert!(!line.contains("normalized") && !line.contains("defense"));
+    }
+
+    #[test]
+    fn a_report_is_due_until_the_receiver_took_the_current_counts() {
+        let now = ForwardCounts { dropped: 1, failed: 2, sent: 3 };
+        let recent = Some(Duration::from_secs(10));
+        // Nothing delivered yet: report, including all-zero counts at start.
+        assert!(forward_report_due(ForwardCounts { dropped: 0, failed: 0, sent: 0 }, None, None));
+        assert!(forward_report_due(now, None, recent));
+        // Delivered and unchanged: quiet until the heartbeat.
+        assert!(!forward_report_due(now, Some(now), recent));
+        assert!(!forward_report_due(now, Some(now), Some(FORWARD_STATS_HEARTBEAT - Duration::from_secs(1))));
+        assert!(forward_report_due(now, Some(now), Some(FORWARD_STATS_HEARTBEAT)));
+        // Any count moved since the last delivered report: report.
+        for moved in [
+            ForwardCounts { dropped: 2, ..now },
+            ForwardCounts { failed: 3, ..now },
+            ForwardCounts { sent: 4, ..now },
+        ] {
+            assert!(forward_report_due(moved, Some(now), recent));
+        }
+    }
+
+    #[test]
+    fn reports_are_considered_at_most_once_per_interval() {
+        let _guard = forward_test_lock();
+        *FORWARD_STATS_DELIVERED.lock().unwrap() = None;
+        let start = Instant::now();
+        let mut reporter = ForwardReporter::new();
+        let mut queued = 0;
+        reporter.tick(start, || { queued += 1; true });
+        reporter.tick(start + Duration::from_secs(1), || { queued += 1; true });
+        reporter.tick(start + FORWARD_STATS_INTERVAL - Duration::from_millis(1), || { queued += 1; true });
+        assert_eq!(queued, 1);
+        // Still not delivered: the next interval tries again.
+        reporter.tick(start + FORWARD_STATS_INTERVAL, || { queued += 1; true });
+        assert_eq!(queued, 2);
+        // A report the queue refused is retried on the next interval too.
+        reporter.tick(start + FORWARD_STATS_INTERVAL * 2, || { queued += 1; false });
+        assert_eq!(queued, 3);
+        assert_eq!(reporter.last_queued, Some(start + FORWARD_STATS_INTERVAL));
+    }
+
+    #[test]
+    fn only_one_report_waits_in_the_queue() {
+        let _guard = forward_test_lock();
+        FORWARD_STATS_QUEUED.store(true, Ordering::Release);
+        // Returns before touching the forwarder: nothing more is queued.
+        assert!(!queue_forward_stats("/nonexistent/never-used.sock"));
+        assert!(FORWARD_STATS_QUEUED.load(Ordering::Acquire));
+        FORWARD_STATS_QUEUED.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn the_report_follows_the_lines_queued_before_it_on_the_same_socket() {
+        use std::io::Read;
+        use std::os::unix::net::UnixListener;
+        let _guard = forward_test_lock();
+        let dir = std::env::temp_dir().join(format!("az-edge-stats-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("intake.sock");
+        let _ = fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).expect("bind");
+        let reader = thread::spawn(move || {
+            let mut lines = Vec::new();
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut line = String::new();
+                stream.read_to_string(&mut line).expect("read");
+                lines.push(line);
+            }
+            lines
+        });
+        let before = forward_counts();
+        *FORWARD_STATS_DELIVERED.lock().unwrap() = None;
+        FORWARD_STATS_QUEUED.store(true, Ordering::Release);
+        let (sender, receiver) = sync_channel::<Forward>(4);
+        sender.send(Forward::Line("{\"n\":1}\n".to_string())).expect("queue");
+        sender.send(Forward::Line("{\"n\":2}\n".to_string())).expect("queue");
+        sender.send(Forward::Stats).expect("queue");
+        drop(sender);
+        forward_ai_lines(&path.to_string_lossy(), receiver);
+        let lines = reader.join().expect("reader");
+        assert_eq!(&lines[..2], ["{\"n\":1}\n", "{\"n\":2}\n"]);
+        let report: Value = serde_json::from_str(lines[2].trim_end()).expect("report");
+        assert_eq!(report["schema"], FORWARD_STATS_SCHEMA);
+        // Read when the marker was reached: both lines before it are in it.
+        assert!(report["sent"].as_u64().unwrap() >= before.sent + 2);
+        assert_eq!(report["since"].as_u64().unwrap(), process_start());
+        let delivered = delivered_counts().expect("delivered");
+        assert_eq!(delivered.sent, report["sent"].as_u64().unwrap());
+        assert!(!FORWARD_STATS_QUEUED.load(Ordering::Acquire), "marker not cleared");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_undelivered_report_leaves_the_next_one_due() {
+        let _guard = forward_test_lock();
+        let path = std::env::temp_dir()
+            .join(format!("az-edge-stats-absent-{}.sock", std::process::id()));
+        let _ = fs::remove_file(&path);
+        *FORWARD_STATS_DELIVERED.lock().unwrap() = None;
+        let (sender, receiver) = sync_channel::<Forward>(1);
+        sender.send(Forward::Stats).expect("queue");
+        drop(sender);
+        forward_ai_lines(&path.to_string_lossy(), receiver);
+        assert_eq!(delivered_counts(), None);
+        assert!(forward_report_due(forward_counts(), delivered_counts(), Some(Duration::ZERO)));
     }
 
     #[test]

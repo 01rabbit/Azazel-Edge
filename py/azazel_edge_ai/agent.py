@@ -1800,6 +1800,26 @@ def _handle_manual_query_request(req: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+FORWARD_STATS_SCHEMA = "azazel-edge/forward-stats/v1"
+_FORWARD_STATS_KEYS = ("dropped", "failed", "sent", "since")
+
+
+def _record_forward_stats(payload: Dict[str, Any]) -> None:
+    """Keep Edge Core's own forward counts as metrics; never treat them as an event.
+
+    The Rust core sends them on this socket (#432) so a receiver can see what
+    it could not deliver. Anything that does not fit the closed shape is ignored.
+    """
+    if set(payload) != {"schema", *_FORWARD_STATS_KEYS}:
+        return
+    values = [payload[key] for key in _FORWARD_STATS_KEYS]
+    if not all(type(v) is int and 0 <= v < 2**63 for v in values):
+        return
+    _metrics_update(**{f"core_forward_{key}": value for key, value in zip(_FORWARD_STATS_KEYS, values)})
+    with IO_LOCK:
+        _persist_metrics()
+
+
 def _handle_request_line(raw: str) -> Dict[str, Any] | None:
     text = raw.strip()
     if not text:
@@ -1810,6 +1830,10 @@ def _handle_request_line(raw: str) -> Dict[str, Any] | None:
         return {"ok": False, "error": "invalid_json"}
     if not isinstance(payload, dict):
         return {"ok": False, "error": "invalid_payload"}
+
+    if "schema" in payload and payload.get("schema") == FORWARD_STATS_SCHEMA:
+        _record_forward_stats(payload)
+        return None
 
     action = str(payload.get("action") or "").strip().lower()
     if action == "manual_query":
