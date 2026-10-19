@@ -122,6 +122,15 @@ asked to run rather than trusting that a default stayed a default.
 The package **starts nothing**. It declares how a supervisor should start the
 payload; bringing it up is the consumer's service manager's job.
 
+### Per-event stdout
+
+Each processed event is also printed to stdout, which a service manager keeps
+in its journal. By default the whole event is printed, including addresses,
+the target and the planned commands. `AZAZEL_EVENT_STDOUT=summary` prints the
+decision, the posture and the enforcement outcome without them, and `off`
+prints nothing per event (#429). The setting changes no decision, no socket
+forward and no JSONL record, and the health contract does not read it.
+
 ## 6b. The contract Nexus pins
 
 Azazel-Nexus verifies this package **without importing the packager**. The two
