@@ -21,6 +21,7 @@ class RustPythonEventContractV1Tests(unittest.TestCase):
                 "confidence": 70,
                 "risk_score": 72,
                 "ingest_epoch": 1781116800.0,
+                "technique_ids": ["T1046"],
             },
             "defense": {"action": "notify", "reason": "fixture"},
             "enforcement": {"trace_id": "trace-deadbeef"},
@@ -46,6 +47,7 @@ class RustPythonEventContractV1Tests(unittest.TestCase):
                 "confidence",
                 "risk_score",
                 "ingest_epoch",
+                "technique_ids",
             ],
         )
         self.assertEqual(sample_envelope["source"], "suricata_eve")
