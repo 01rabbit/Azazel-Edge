@@ -15,6 +15,9 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -865,10 +868,49 @@ fn append_json_line(path: &str, value: &Value) {
     }
 }
 
+/// Events waiting for the forwarder. Bounded: a receiver that stops reading
+/// costs at most this many queued lines, never the detection loop.
+const AI_FORWARD_QUEUE: usize = 1024;
+/// A connected receiver that stops reading costs the forwarder this long per
+/// line, not forever.
+const AI_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
+
+static AI_FORWARDER: OnceLock<SyncSender<String>> = OnceLock::new();
+static AI_FORWARD_DROPPED: AtomicU64 = AtomicU64::new(0);
+
+/// Hand an event to the forwarder thread; never wait for the receiver.
+///
+/// The receiver (for example a Nexus intake) is another process. A blocking
+/// `connect` to a listener that stopped accepting -- stopped, frozen, wedged --
+/// would otherwise stall detection itself once its backlog filled. Here the
+/// loop only enqueues: when the queue is full the event is dropped and
+/// counted, and decisions, the JSONL record and stdout are unaffected.
 fn send_to_ai_socket(socket_path: &str, value: &Value) {
-    if let Ok(mut stream) = UnixStream::connect(socket_path) {
-        let line = format!("{}\n", value);
-        let _ = stream.write_all(line.as_bytes());
+    let sender = AI_FORWARDER.get_or_init(|| start_ai_forwarder(socket_path.to_string()));
+    match sender.try_send(format!("{}\n", value)) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+            let dropped = AI_FORWARD_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
+            if dropped == 1 || dropped % 1000 == 0 {
+                eprintln!("ai socket forward queue full; {} event(s) dropped so far", dropped);
+            }
+        }
+    }
+}
+
+fn start_ai_forwarder(socket_path: String) -> SyncSender<String> {
+    let (sender, receiver) = sync_channel::<String>(AI_FORWARD_QUEUE);
+    thread::spawn(move || forward_ai_lines(&socket_path, receiver));
+    sender
+}
+
+/// One connection per line, as before; only this thread ever waits on it.
+fn forward_ai_lines(socket_path: &str, receiver: Receiver<String>) {
+    for line in receiver {
+        if let Ok(mut stream) = UnixStream::connect(socket_path) {
+            let _ = stream.set_write_timeout(Some(AI_WRITE_TIMEOUT));
+            let _ = stream.write_all(line.as_bytes());
+        }
     }
 }
 
@@ -1138,6 +1180,26 @@ mod tests {
             ingest_epoch: 0.0,
             technique_ids: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_wedged_receiver_never_blocks_the_caller() {
+        use std::os::unix::net::UnixListener;
+        use std::time::Instant;
+        let dir = std::env::temp_dir().join(format!("az-edge-fwd-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("wedged.sock");
+        let _ = fs::remove_file(&path);
+        // A listener that never accepts: its backlog fills and connect blocks.
+        let _listener = UnixListener::bind(&path).expect("bind");
+        let socket = path.to_string_lossy().to_string();
+        let started = Instant::now();
+        for n in 0..(AI_FORWARD_QUEUE + 4096) {
+            send_to_ai_socket(&socket, &json!({"n": n}));
+        }
+        assert!(started.elapsed() < Duration::from_secs(5), "the caller waited on the receiver");
+        assert!(AI_FORWARD_DROPPED.load(Ordering::Relaxed) > 0, "nothing was dropped and counted");
+        let _ = fs::remove_file(&path);
     }
 
     #[test]
