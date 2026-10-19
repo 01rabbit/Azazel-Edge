@@ -56,6 +56,9 @@ struct NormalizedEvent {
     confidence: u8,
     risk_score: u8,
     ingest_epoch: f64,
+    /// MITRE ATT&CK technique ids the rule itself declares, for consumers that
+    /// look up cited context. Never inferred, and never an input to a decision.
+    technique_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -256,7 +259,45 @@ fn build_normalized_event(v: &Value) -> Option<NormalizedEvent> {
         confidence,
         risk_score,
         ingest_epoch: now_epoch(),
+        technique_ids: rule_technique_ids(alert),
     })
+}
+
+const MAX_TECHNIQUE_IDS: usize = 8;
+
+/// `T1234` or `T1234.567`, the only shapes a technique id takes.
+fn is_technique_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let digits = |range: &[u8]| range.iter().all(|b| b.is_ascii_digit());
+    match bytes.len() {
+        5 => bytes[0] == b'T' && digits(&bytes[1..5]),
+        9 => bytes[0] == b'T' && digits(&bytes[1..5]) && bytes[5] == b'.' && digits(&bytes[6..9]),
+        _ => false,
+    }
+}
+
+/// The technique ids in the rule's own `metadata.mitre_technique_id`.
+///
+/// Suricata writes rule metadata as arrays of strings. Anything that is not a
+/// well-formed id is dropped rather than repaired, duplicates are removed, and
+/// at most `MAX_TECHNIQUE_IDS` are carried.
+fn rule_technique_ids(alert: &serde_json::Map<String, Value>) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    let values = alert
+        .get("metadata")
+        .and_then(|m| m.get("mitre_technique_id"))
+        .and_then(|v| v.as_array());
+    for value in values.into_iter().flatten() {
+        if let Some(id) = value.as_str() {
+            if is_technique_id(id) && !ids.iter().any(|seen| seen == id) {
+                ids.push(id.to_string());
+                if ids.len() == MAX_TECHNIQUE_IDS {
+                    break;
+                }
+            }
+        }
+    }
+    ids
 }
 
 fn decide_defense(ev: &NormalizedEvent) -> DefensiveDecision {
@@ -1017,7 +1058,42 @@ mod tests {
             confidence: 90,
             risk_score: 90,
             ingest_epoch: 0.0,
+            technique_ids: Vec::new(),
         }
+    }
+
+    #[test]
+    fn technique_ids_come_only_from_rule_metadata() {
+        let eve = json!({
+            "event_type": "alert",
+            "alert": {
+                "signature_id": 2001219,
+                "severity": 2,
+                "metadata": {"mitre_technique_id": [
+                    "T1110", "T1110.001", "T1110", "t1110", "T11100", "T1110.1",
+                    "T1046", "T1021", "T1078", "T1059", "T1071", "T1190", "T1133"
+                ]}
+            }
+        });
+        let ev = build_normalized_event(&eve).expect("alert normalises");
+        assert_eq!(
+            ev.technique_ids,
+            vec!["T1110", "T1110.001", "T1046", "T1021", "T1078", "T1059", "T1071", "T1190"]
+        );
+    }
+
+    #[test]
+    fn technique_ids_are_empty_without_metadata_and_do_not_change_decisions() {
+        let eve = json!({"event_type": "alert", "alert": {"signature_id": 1, "severity": 2}});
+        let ev = build_normalized_event(&eve).expect("alert normalises");
+        assert!(ev.technique_ids.is_empty());
+        let tagged_eve = json!({"event_type": "alert", "alert": {
+            "signature_id": 1, "severity": 2,
+            "metadata": {"mitre_technique_id": ["T1110"]}}});
+        let tagged = build_normalized_event(&tagged_eve).expect("alert normalises");
+        assert_eq!(tagged.technique_ids, vec!["T1110"]);
+        assert_eq!(decide_defense(&ev).action, decide_defense(&tagged).action);
+        assert_eq!(decide_defense(&ev).policy_reason, decide_defense(&tagged).policy_reason);
     }
 
     fn sample_cfg() -> Config {
