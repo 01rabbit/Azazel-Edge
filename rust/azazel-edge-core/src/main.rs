@@ -877,6 +877,10 @@ const AI_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
 static AI_FORWARDER: OnceLock<SyncSender<String>> = OnceLock::new();
 static AI_FORWARD_DROPPED: AtomicU64 = AtomicU64::new(0);
+/// Lines the forwarder took off the queue but could not deliver (no
+/// listener, refused, or the write timed out). Counted apart from queue drops
+/// so a receiver that is absent reads differently from one that is slow.
+static AI_FORWARD_FAILED: AtomicU64 = AtomicU64::new(0);
 
 /// Hand an event to the forwarder thread; never wait for the receiver.
 ///
@@ -907,9 +911,15 @@ fn start_ai_forwarder(socket_path: String) -> SyncSender<String> {
 /// One connection per line, as before; only this thread ever waits on it.
 fn forward_ai_lines(socket_path: &str, receiver: Receiver<String>) {
     for line in receiver {
-        if let Ok(mut stream) = UnixStream::connect(socket_path) {
-            let _ = stream.set_write_timeout(Some(AI_WRITE_TIMEOUT));
-            let _ = stream.write_all(line.as_bytes());
+        let delivered = UnixStream::connect(socket_path).and_then(|mut stream| {
+            stream.set_write_timeout(Some(AI_WRITE_TIMEOUT))?;
+            stream.write_all(line.as_bytes())
+        });
+        if delivered.is_err() {
+            let failed = AI_FORWARD_FAILED.fetch_add(1, Ordering::Relaxed) + 1;
+            if failed == 1 || failed % 1000 == 0 {
+                eprintln!("ai socket forward failed; {} event(s) not delivered so far", failed);
+            }
         }
     }
 }
@@ -1200,6 +1210,21 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5), "the caller waited on the receiver");
         assert!(AI_FORWARD_DROPPED.load(Ordering::Relaxed) > 0, "nothing was dropped and counted");
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn undeliverable_lines_are_counted_not_silently_dropped() {
+        let path = std::env::temp_dir()
+            .join(format!("az-edge-absent-{}.sock", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let before = AI_FORWARD_FAILED.load(Ordering::Relaxed);
+        let (sender, receiver) = sync_channel::<String>(4);
+        for n in 0..3 {
+            sender.send(format!("{{\"n\":{}}}\n", n)).expect("queue");
+        }
+        drop(sender);
+        forward_ai_lines(&path.to_string_lossy(), receiver);
+        assert!(AI_FORWARD_FAILED.load(Ordering::Relaxed) >= before + 3);
     }
 
     #[test]
