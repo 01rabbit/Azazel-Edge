@@ -1248,12 +1248,16 @@ mod tests {
     }
 
     fn test_path(name: &str) -> String {
+        // Tests run in parallel; two calls in the same clock tick would share
+        // a directory and each other's ledger, so a counter keeps them apart.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let dir = std::env::temp_dir().join(format!(
-            "azazel-release-test-{}-{stamp}",
+            "azazel-release-test-{}-{stamp}-{unique}",
             std::process::id()
         ));
         fs::create_dir_all(&dir).unwrap();
