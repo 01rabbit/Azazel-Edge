@@ -131,6 +131,36 @@ decision, the posture and the enforcement outcome without them, and `off`
 prints nothing per event (#429). The setting changes no decision, no socket
 forward and no JSONL record, and the health contract does not read it.
 
+### Forward counts (#432)
+
+Events go to the receiver on `AZAZEL_AI_SOCKET` (for Nexus, its intake) from a
+separate thread behind a bounded queue of 1024 lines (#431), so the detection
+loop never waits on the receiver. Lines it cannot hand over are counted:
+`dropped` when the queue was full, `failed` when connect or write failed, and
+`sent` for lines written. A count on stderr alone is not enough, because a
+service manager's journal rate limit suppresses stderr under exactly the load
+that drops lines.
+
+So the core also sends the counts to the same socket, as one closed-shape line
+on its own connection, through the same queue:
+
+```json
+{"schema":"azazel-edge/forward-stats/v1","dropped":0,"failed":0,"sent":2,"since":1790000000}
+```
+
+The counts are cumulative for this process; `since` is its start in epoch
+seconds, so a receiver can tell a restart. One report is sent at start, then
+the loop considers one every 10 s and queues it only when the counts differ
+from the last report the receiver took, and at least every 5 minutes. The
+counts are read when the forwarding thread reaches the report, so it covers
+every event queued before it. A report that cannot be queued or delivered is
+not counted and changes nothing else; the next one carries the same totals.
+At most one waits in the queue. With `AZAZEL_FORWARD_AI=false` nothing is
+sent. The report changes no decision, no stdout line and no JSONL record, and
+nothing comes back on the socket. Edge's own AI agent on the default socket
+keeps the counts as `core_forward_*` metrics and never treats the line as an
+event.
+
 ## 6b. The contract Nexus pins
 
 Azazel-Nexus verifies this package **without importing the packager**. The two

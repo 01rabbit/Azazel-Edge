@@ -111,6 +111,26 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
         epd_refresh.EPD_LAST_RENDER = self._orig["EPD_LAST_RENDER"]
         self.tmp.cleanup()
 
+    def test_core_forward_stats_are_metrics_not_an_event(self) -> None:
+        stats = {"schema": "azazel-edge/forward-stats/v1", "dropped": 460, "failed": 7,
+                 "sent": 1200, "since": 1790000000}
+        self.assertIsNone(agent._handle_line(json.dumps(stats)))
+        self.assertFalse(agent.ADVISORY_PATH.exists())
+        self.assertFalse(agent.EVENT_LOG_PATH.exists())
+        metrics = json.loads(agent.METRICS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(int(metrics["processed_events"]), 0)
+        self.assertEqual(metrics["core_forward_dropped"], 460)
+        self.assertEqual(metrics["core_forward_failed"], 7)
+        self.assertEqual(metrics["core_forward_sent"], 1200)
+        self.assertEqual(metrics["core_forward_since"], 1790000000)
+        # A malformed report is ignored whole, and is still not an event.
+        for bad in (dict(stats, dropped=-1), dict(stats, sent=True), dict(stats, extra=1)):
+            agent._handle_line(json.dumps(bad))
+        metrics = json.loads(agent.METRICS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(metrics["core_forward_dropped"], 460)
+        self.assertEqual(int(metrics["processed_events"]), 0)
+        self.assertFalse(agent.ADVISORY_PATH.exists())
+
     def test_suricata_to_snapshot_non_ambiguous_skip(self) -> None:
         agent.LLM_ENABLED = True
         event = {
