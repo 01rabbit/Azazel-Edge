@@ -469,3 +469,125 @@ def test_review_d_hand_made_one_sample_so07_pass_is_refused(tmp_path, so07_full_
     path = tmp_path / "SO-07-forged.json"
     path.write_text(json.dumps(record), encoding="utf-8")
     assert cli.main(["validate", str(path)]) == rec.EXIT_INVALID
+
+
+# ------------------------------- validator hardening (second review of #435)
+
+
+def test_duplicate_sample_id_is_rejected(clean_owner):
+    samples = [_sample(0, 1.0), _sample(1, 1.0), _sample(1, 1.0)]
+    record = _latency_record(samples)
+    errors = rec.validate_record(record)
+    assert any("duplicate sample_id 's1' (first at samples[1])" in e for e in errors), errors
+
+
+def test_duplicate_sample_id_in_a_genuine_so07_record_is_rejected(so07_full_record, real_table):
+    record = copy.deepcopy(so07_full_record)
+    samples = record["parts"][0]["samples"]
+    samples[1]["sample_id"] = samples[0]["sample_id"]
+    errors = rec.validate_record(record)
+    assert any("parts[0].samples[1]: duplicate sample_id" in e for e in errors), errors
+
+
+def test_so07_repeats_keep_sample_ids_unique(real_table):
+    record = so07_audit_ordering.run(seed=5, kinds=["action_decision"], repeats=2)
+    ids = [s["sample_id"] for s in record["parts"][0]["samples"]]
+    assert len(ids) == 20 and len(set(ids)) == 20
+    assert not any("duplicate sample_id" in e for e in rec.validate_record(record))
+
+
+@pytest.mark.parametrize(
+    "mutate, needle",
+    [
+        (lambda r: r.update(extra_claim="trust me"), "record: unknown field(s) ['extra_claim']"),
+        (lambda r: r["parts"][0].update(override="pass"), "parts[0]: unknown field(s) ['override']"),
+        (lambda r: r["parts"][0]["samples"][2].update(note="x"), "parts[0].samples[2]: unknown field(s) ['note']"),
+        (lambda r: r.update(notes="not a list"), "notes: not a list of strings"),
+    ],
+)
+def test_unknown_content_is_rejected(clean_owner, mutate, needle):
+    record = _latency_record([_sample(i, 1.0) for i in range(3)])
+    assert rec.validate_record(record) == []
+    mutate(record)
+    errors = rec.validate_record(record)
+    assert any(needle in e for e in errors), errors
+
+
+def test_sample_fields_are_per_objective(so07_full_record, real_table):
+    # A field one harness writes is still unknown in another objective's record.
+    record = copy.deepcopy(so07_full_record)
+    record["parts"][0]["samples"][0]["release_status"] = "ok"
+    errors = rec.validate_record(record)
+    assert any("unknown field(s) ['release_status']" in e for e in errors), errors
+
+
+def test_prerequisite_outside_the_definition_is_rejected(real_table):
+    spec = rec.OBJECTIVE_SPECS["SO-03"]["decision_durable_to_alert_enqueued"]
+    prereqs = [rec.prerequisite(p, True, "") for p in spec["prerequisites"]]
+    prereqs.append(rec.prerequisite("operator_vouches", True, ""))
+    record = _so03_pass_like([_sample(i, 1.0) for i in range(200)], prerequisites=prereqs)
+    errors = rec.validate_record(record)
+    assert any("prerequisite 'operator_vouches' is not in the SO-03 definition" in e for e in errors), errors
+
+
+def test_downgrade_prerequisite_is_still_accepted(monkeypatch):
+    monkeypatch.setattr(rec, "owner_block", lambda: {"repository": rec.OWNING_REPOSITORY, "commit": "", "worktree_clean": None})
+    record = _latency_record([_sample(i, 1.0) for i in range(3)])
+    assert record["parts"][0]["prerequisites"][-1]["id"] == rec.DOWNGRADE_PREREQUISITE
+    assert rec.validate_record(record) == []
+
+
+def test_crash_part_carries_only_the_crash_prerequisite(tmp_path, monkeypatch, real_table):
+    record = cli._crash_record("SO-04", RuntimeError("boom"))
+    assert rec.validate_record(record) == []
+    record["parts"][0]["prerequisites"].append(rec.prerequisite("core_binary_present", True, ""))
+    errors = rec.validate_record(record)
+    assert any("'core_binary_present' is not one a crash part carries" in e for e in errors), errors
+
+
+def test_genuine_so07_record_has_no_field_outside_the_schema(so07_full_record, real_table):
+    assert set(so07_full_record) <= rec.RECORD_FIELDS
+    for part in so07_full_record["parts"]:
+        assert set(part) <= rec.PART_FIELDS
+        for sample in part["samples"]:
+            assert set(sample) <= rec.SAMPLE_FIELDS["SO-07"]
+
+
+def test_genuine_so03_and_so04_records_have_no_field_outside_the_schema(tmp_path, real_table):
+    for oid, record in (
+        ("SO-03", so03_alert_queue.run(seed=1)),
+        ("SO-04", so04_lease_rollback.run(core_bin=tmp_path / "missing", seed=1)),
+    ):
+        assert set(record) <= rec.RECORD_FIELDS, oid
+        for part in record["parts"]:
+            assert set(part) <= rec.PART_FIELDS, oid
+            for sample in part["samples"]:
+                assert set(sample) <= rec.SAMPLE_FIELDS[oid], (oid, sorted(set(sample) - rec.SAMPLE_FIELDS[oid]))
+        assert rec.validate_record(record) == [], oid
+
+
+def test_expect_commit_rejects_another_commit(tmp_path, clean_owner):
+    record = _latency_record([_sample(i, 1.0) for i in range(3)])
+    assert rec.validate_record(record, expect_commit="a" * 40) == []
+    errors = rec.validate_record(record, expect_commit="b" * 40)
+    assert any("owner.commit: record names 'aaaa" in e and "expected 'bbbb" in e for e in errors), errors
+    path = tmp_path / "SO-03-x.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert cli.main(["validate", str(path)]) == rec.EXIT_PASS
+    assert cli.main(["validate", "--expect-commit", "a" * 40, str(path)]) == rec.EXIT_PASS
+    assert cli.main(["validate", "--expect-commit", "b" * 40, str(path)]) == rec.EXIT_INVALID
+
+
+def test_expect_commit_also_rejects_a_not_measurable_record(tmp_path, clean_owner):
+    record = _latency_record([_sample(0, 1.0)])
+    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
+    path = tmp_path / "SO-03-x.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert cli.main(["validate", "--expect-commit", "a" * 40, str(path)]) == rec.EXIT_NOT_MEASURABLE
+    assert cli.main(["validate", "--expect-commit", "c" * 40, str(path)]) == rec.EXIT_INVALID
+
+
+def test_ci_validate_step_pins_the_commit():
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    step = ci.split("- name: Re-validate records", 1)[1].split("- name:", 1)[0]
+    assert 'validate' in step and '--expect-commit "$GITHUB_SHA"' in step

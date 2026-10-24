@@ -1,12 +1,14 @@
 """Run service-objective harnesses or validate their records.
 
     python -m azazel_edge.service_objectives run --objective all --out-dir DIR
-    python -m azazel_edge.service_objectives validate DIR_OR_FILE...
+    python -m azazel_edge.service_objectives validate [--expect-commit SHA] DIR_OR_FILE...
 
 ``run`` writes one record per objective and exits 0 only if every record is a
 valid ``pass``: 1 if any failed, 2 if any could not be measured, 3 if a record
 is invalid or a harness crashed. A harness that crashes still leaves a
 ``not_measurable`` record behind; nothing is ever skipped into green.
+``validate --expect-commit SHA`` also rejects a record whose owner.commit is
+not SHA, so a record carried over from another commit cannot stand in.
 """
 
 from __future__ import annotations
@@ -112,7 +114,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
         return EXIT_INVALID
     code = 0
     for f in files:
-        errors = load_and_validate(f)
+        errors = load_and_validate(f, expect_commit=args.expect_commit)
         if errors:
             print(f"{f}: INVALID: " + "; ".join(errors))
             code = max(code, EXIT_INVALID)
@@ -132,6 +134,7 @@ def main(argv: List[str] | None = None) -> int:
     run_p.add_argument("--core-bin", default="")
     run_p.add_argument("--seed", type=int, default=None)
     val_p = sub.add_parser("validate")
+    val_p.add_argument("--expect-commit", default=None, metavar="SHA", help="reject a record whose owner.commit differs")
     val_p.add_argument("paths", nargs="+")
     args = parser.parse_args(argv)
     return cmd_run(args) if args.cmd == "run" else cmd_validate(args)

@@ -141,6 +141,47 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
 }
 KNOWN_OBJECTIVES = tuple(OBJECTIVE_SPECS)
 CRASH_PART = "harness_crashed"
+# Prerequisites a record may carry beyond its objective's row: the one
+# build_record adds when it downgrades a pass taken on an unidentifiable or
+# modified tree, and (on a crash part only) the one the CLI's crash record sets.
+DOWNGRADE_PREREQUISITE = "owner_commit_identified"
+CRASH_PREREQUISITE = "harness_completed"
+
+# The only fields a record, a part and a sample may carry. Anything else is
+# rejected, so a record cannot smuggle in content the validator never reads.
+# The sample fields are what each harness writes; adding one here is a schema
+# change and needs the same review as the harness change that adds it.
+RECORD_FIELDS = frozenset(
+    {
+        "schema", "objective_id", "title", "assignment_ref", "owner", "run",
+        "product_configuration", "clock", "method", "sample_rule", "parts",
+        "verdict", "evidence_class", "notes",
+    }
+)
+PART_FIELDS = frozenset({"name", "sample_rule", "samples", "pass_rule", "prerequisites", "gaps", "verdict"})
+_COMMON_SAMPLE_FIELDS = ("sample_id", "start_monotonic_ns", "end_monotonic_ns", "elapsed_ms", "start_event", "end_event")
+SAMPLE_FIELDS: Dict[str, frozenset] = {
+    "SO-03": frozenset(
+        _COMMON_SAMPLE_FIELDS
+        + ("action", "reason", "level", "enqueue_record_names_decision", "notification_audit_names_decision")
+    ),
+    "SO-04": frozenset(
+        _COMMON_SAMPLE_FIELDS
+        + (
+            "action_type", "condition", "due_epoch", "attempted_at_epoch",
+            "edge_reported_start_after_expiry_ms", "release_status", "release_result",
+            "observed_before_expiry",
+        )
+    ),
+    "SO-07": frozenset(
+        _COMMON_SAMPLE_FIELDS
+        + (
+            "record_kind", "injection_point", "record_pad_bytes", "pause_at_seq",
+            "reported_complete", "reported_complete_record_absent", "unreported_record_present",
+            "problems", "chain_after_restart", "violations",
+        )
+    ),
+}
 
 
 def spec_for(objective_id: str, part_name: str) -> Dict[str, Any]:
@@ -374,7 +415,7 @@ def build_record(
         for part in parts:
             part["prerequisites"].append(
                 prerequisite(
-                    "owner_commit_identified",
+                    DOWNGRADE_PREREQUISITE,
                     False,
                     "commit unknown or worktree modified; a pass must name the exact commit measured",
                 )
@@ -424,10 +465,17 @@ def _require(cond: bool, message: str, errors: List[str]) -> None:
         errors.append(message)
 
 
-def _validate_sample(sample: Any, where: str, errors: List[str]) -> None:
+def _reject_unknown_fields(obj: Mapping[str, Any], allowed: Iterable[str], where: str, errors: List[str]) -> None:
+    unknown = sorted(str(k) for k in obj if k not in allowed)
+    if unknown:
+        errors.append(f"{where}: unknown field(s) {unknown}")
+
+
+def _validate_sample(sample: Any, where: str, errors: List[str], allowed: Iterable[str] = _COMMON_SAMPLE_FIELDS) -> None:
     if not isinstance(sample, dict):
         errors.append(f"{where}: sample is not an object")
         return
+    _reject_unknown_fields(sample, allowed, where, errors)
     _require(isinstance(sample.get("sample_id"), str) and bool(sample.get("sample_id")), f"{where}: sample_id missing", errors)
     start = sample.get("start_monotonic_ns")
     end = sample.get("end_monotonic_ns")
@@ -479,16 +527,34 @@ def _so07_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[s
     }
 
 
+def _validate_sample_ids(samples: Sequence[Any], where: str, errors: List[str]) -> None:
+    seen: Dict[str, int] = {}
+    for sidx, sample in enumerate(samples):
+        sid = sample.get("sample_id") if isinstance(sample, dict) else None
+        if not isinstance(sid, str) or not sid:
+            continue
+        if sid in seen:
+            errors.append(f"{where}.samples[{sidx}]: duplicate sample_id {sid!r} (first at samples[{seen[sid]}])")
+        else:
+            seen[sid] = sidx
+
+
 def _validate_crash_part(part: Mapping[str, Any], where: str, errors: List[str]) -> str:
-    unmet = [p for p in part.get("prerequisites", []) if isinstance(p, dict) and p.get("id") == "harness_completed" and p.get("met") is False]
+    for p in part.get("prerequisites", []):
+        if isinstance(p, dict) and p.get("id") != CRASH_PREREQUISITE:
+            errors.append(f"{where}: prerequisite {p.get('id')!r} is not one a crash part carries")
+    unmet = [p for p in part.get("prerequisites", []) if isinstance(p, dict) and p.get("id") == CRASH_PREREQUISITE and p.get("met") is False]
     _require(bool(unmet), f"{where}: a crash part must carry the unmet harness_completed prerequisite", errors)
     _require(part.get("verdict") == VERDICT_NOT_MEASURABLE, f"{where}: a crash part is always not_measurable", errors)
     _require(not part.get("samples"), f"{where}: a crash part carries no samples", errors)
     return VERDICT_NOT_MEASURABLE
 
 
-def validate_record(record: Any) -> List[str]:
+def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List[str]:
     """Return every problem found. An empty list means the record is valid.
+
+    ``expect_commit``, when given, is the commit the caller knows was measured
+    (CI passes ``$GITHUB_SHA``); a record naming any other commit is rejected.
 
     The record is checked against ``OBJECTIVE_SPECS``, not against itself: the
     rule kind, bound, sample count, part names, and mandatory prerequisite and
@@ -504,6 +570,9 @@ def validate_record(record: Any) -> List[str]:
     for key, typ in _TOP_KEYS.items():
         if not isinstance(record.get(key), typ):
             errors.append(f"{key}: missing or not {typ.__name__}")
+    if "notes" in record and not (isinstance(record["notes"], list) and all(isinstance(n, str) for n in record["notes"])):
+        errors.append("notes: not a list of strings")
+    _reject_unknown_fields(record, RECORD_FIELDS, "record", errors)
     if errors:
         return errors
     _require(record["schema"] == RECORD_SCHEMA, "schema: unexpected value", errors)
@@ -516,6 +585,12 @@ def validate_record(record: Any) -> List[str]:
     owner = record["owner"]
     _require(owner.get("repository") == OWNING_REPOSITORY, "owner.repository: must be the owning repository", errors)
     _require(isinstance(owner.get("commit"), str), "owner.commit: missing", errors)
+    if expect_commit is not None:
+        _require(
+            owner.get("commit") == expect_commit,
+            f"owner.commit: record names {owner.get('commit')!r}, expected {expect_commit!r}",
+            errors,
+        )
     _require(isinstance(record["run"].get("run_id"), str) and bool(record["run"].get("run_id")), "run.run_id: missing", errors)
     _require(bool(record["clock"].get("name")), "clock.name: missing", errors)
     parts = record["parts"]
@@ -541,6 +616,8 @@ def validate_record(record: Any) -> List[str]:
                 errors.append(f"{where}.{key}: missing or not {typ.__name__}")
         if any(e.startswith(where + ".") for e in errors):
             continue
+        _reject_unknown_fields(part, PART_FIELDS, where, errors)
+        _validate_sample_ids(part["samples"], where, errors)
         if crashed:
             derived_parts.append(_validate_crash_part(part, where, errors))
             continue
@@ -571,8 +648,13 @@ def validate_record(record: Any) -> List[str]:
                     errors.append(f"{where}: gap {g.get('id')!r} declared non-blocking; every gap blocks the verdict")
             else:
                 errors.append(f"{where}: malformed gap")
+        allowed_prereqs = set(spec["prerequisites"]) | {DOWNGRADE_PREREQUISITE}
+        for p in declared_prereqs:
+            if p["id"] not in allowed_prereqs:
+                errors.append(f"{where}: prerequisite {p['id']!r} is not in the {objective} definition")
+        sample_fields = SAMPLE_FIELDS.get(objective, _COMMON_SAMPLE_FIELDS)
         for sidx, sample in enumerate(part["samples"]):
-            _validate_sample(sample, f"{where}.samples[{sidx}]", errors)
+            _validate_sample(sample, f"{where}.samples[{sidx}]", errors, sample_fields)
 
         # Effective prerequisites: what the record declares, with every
         # mandatory one it omits counted as unmet, and (for SO-07) the
@@ -636,9 +718,9 @@ def validate_record(record: Any) -> List[str]:
     return errors
 
 
-def load_and_validate(path: Path) -> List[str]:
+def load_and_validate(path: Path, *, expect_commit: Optional[str] = None) -> List[str]:
     try:
         record = json.loads(Path(path).read_text(encoding="utf-8"))
     except Exception as exc:
         return [f"unreadable record: {exc}"]
-    return validate_record(record)
+    return validate_record(record, expect_commit=expect_commit)
