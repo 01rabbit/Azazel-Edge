@@ -221,7 +221,8 @@ def run(
     started_ns = time.monotonic_ns()
     started_at = utc_now()
     rng = random.Random(seed)
-    core = Path(core_bin or os.environ.get("AZAZEL_EDGE_CORE_BIN") or DEFAULT_CORE_BIN)
+    # Absolute, because the daemon is started with the scratch directory as cwd.
+    core = Path(core_bin or os.environ.get("AZAZEL_EDGE_CORE_BIN") or DEFAULT_CORE_BIN).resolve()
     version = _version(core) if core.is_file() and os.access(core, os.X_OK) else None
     prerequisites = [
         prerequisite(
