@@ -55,13 +55,15 @@ from .record import (
     build_record,
     gap,
     prerequisite,
+    spec_for,
     utc_now,
 )
 
 OBJECTIVE_ID = "SO-03"
 TITLE = "P0 visual/voice alert queued after decision (within 2 seconds)"
-BOUND_MS = 2000.0
-REQUIRED_SAMPLES = 200
+SPEC = spec_for("SO-03", "decision_durable_to_alert_enqueued")
+BOUND_MS = SPEC["bound_ms"]
+REQUIRED_SAMPLES = SPEC["required_samples"]
 
 # Edge declares no visual/voice output device queue. A change that adds one
 # must name it here *and* wire the end event to it; until then the

@@ -55,6 +55,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .record import (
     RULE_ZERO_VIOLATIONS,
+    SO07_INJECTION_POINTS,
+    SO07_RECORD_PADS,
+    so07_sample_violations,
+    spec_for,
     build_part,
     build_record,
     gap,
@@ -64,17 +68,10 @@ from .record import (
 
 OBJECTIVE_ID = "SO-07"
 TITLE = "Audit ordering -- durable before reported complete (process-kill variant)"
-INJECTION_POINTS = (
-    "after_report",
-    "random_time",
-    "between_write_and_close",
-    "after_close_before_return",
-    "during_fabric_projection",
-)
+INJECTION_POINTS = SO07_INJECTION_POINTS
 PAUSE_POINTS = {"between_write_and_close", "after_close_before_return", "during_fabric_projection"}
-# 0: a record well under Python's 8 KiB write buffer; 16 KiB: one larger than
-# it, which the buffered writer passes straight to the kernel.
-RECORD_PADS = (0, 16 * 1024)
+RECORD_PADS = SO07_RECORD_PADS
+SPEC = spec_for("SO-07", "reported_complete_implies_record_present")
 PY_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -212,8 +209,7 @@ def _one_injection(work: Path, kind: str, point: str, pad: int, rng: random.Rand
         unreported_but_present = sum(1 for t in present if t.startswith(prefix + "-0") and t not in rep)
     # A sample that could not observe is malformed (violations = -1), which the
     # pass rule counts against the run rather than silently ignoring it.
-    violations = -1 if problems else len(absent or [])
-    return {
+    sample = {
         "sample_id": f"{kind}/{point}/pad{pad}",
         "record_kind": kind,
         "injection_point": point,
@@ -227,10 +223,11 @@ def _one_injection(work: Path, kind: str, point: str, pad: int, rng: random.Rand
         "reported_complete": len(reported),
         "reported_complete_record_absent": absent if absent is not None else None,
         "unreported_record_present": unreported_but_present,
-        "violations": violations,
         "problems": problems,
         "chain_after_restart": chain,
     }
+    sample["violations"] = so07_sample_violations(sample)
+    return sample
 
 
 def run(*, repeats: int = 1, seed: Optional[int] = None, kinds: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -275,7 +272,7 @@ def run(*, repeats: int = 1, seed: Optional[int] = None, kinds: Optional[List[st
             "kind": RULE_ZERO_VIOLATIONS,
             "description": "zero instances of 'reported complete, record absent', at every injection point",
         },
-        required_samples=len(all_kinds) * len(INJECTION_POINTS) * len(RECORD_PADS),
+        required_samples=SPEC["required_samples"],
         samples=samples,
         prerequisites=prerequisites,
         gaps=[],

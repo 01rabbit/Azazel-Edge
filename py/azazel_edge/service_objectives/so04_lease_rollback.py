@@ -65,12 +65,15 @@ from .record import (
     build_record,
     gap,
     prerequisite,
+    spec_for,
     utc_now,
 )
 
 OBJECTIVE_ID = "SO-04"
 TITLE = "Lease-expiry rollback starts (within 5 seconds of expiry)"
-BOUND_MS = 5000.0
+SPEC_START = spec_for("SO-04", "rollback_start_after_expiry")
+SPEC_COMPLETION = spec_for("SO-04", "rollback_completion")
+BOUND_MS = SPEC_START["bound_ms"]
 ACTION_TYPES = ("throttle", "isolate", "redirect")
 LEASES_PER_TYPE = 50
 LEDGER_SCHEMA = "azazel-release-ledger/v1"
@@ -366,7 +369,10 @@ def run(
             prerequisites.append(
                 prerequisite("load_phase_applied", flood_written > 0, f"{flood_written} synthetic EVE alerts written during the eve_flood phase")
             )
-    required = LEASES_PER_TYPE * len(ACTION_TYPES)
+    else:
+        for pid in ("core_daemon_started", "wall_clock_stable_during_run", "no_release_record_before_expiry", "load_phase_applied"):
+            prerequisites.append(prerequisite(pid, False, "not evaluated: the core binary is not runnable"))
+    required = SPEC_START["required_samples"]
     start_gaps = [
         gap(
             "SO04-END-RECORD-NOT-AUDIT-CHAIN",
@@ -398,8 +404,8 @@ def run(
     )
     completion_part = build_part(
         name="rollback_completion",
-        pass_rule={"kind": RULE_EVERY_SAMPLE_MAX, "bound_ms": 0.0, "description": "action-specific completion bound -- none declared"},
-        required_samples=required,
+        pass_rule={"kind": RULE_EVERY_SAMPLE_MAX, "bound_ms": SPEC_COMPLETION["bound_ms"], "description": "action-specific completion bound -- none declared"},
+        required_samples=SPEC_COMPLETION["required_samples"],
         samples=[],
         prerequisites=[prerequisite("per_action_completion_bound_declared", False, "no action type declares a rollback completion bound (OF-05)")],
         gaps=[gap("OF-05", "Completion is action-specific and no action type declares a bound; section 4.3 ROLLBACK_INCOMPLETE has no time bound.", refs=["OF-05"])],
