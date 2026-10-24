@@ -67,6 +67,57 @@ jobs:
           cd rust/azazel-edge-core
           cargo test
 
+  service-objectives:
+    # Program plan §8 rows owned by Edge (Edge#414): SO-03, SO-04, SO-07
+    # (process-kill). One JSON record per objective is uploaded as an artifact
+    # whatever the outcome. The run exits non-zero unless every record is a
+    # valid pass, so a row that cannot be measured yet keeps this job red
+    # rather than skipping into green. Nothing here enables enforcement.
+    name: Service objectives (§8 SO-03/04/07)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -U pip wheel setuptools
+          pip install -r requirements/runtime.txt
+          pip install -r requirements/fabric.txt
+
+      - name: Build the Rust core measured by SO-04
+        run: |
+          cd rust/azazel-edge-core
+          cargo build --release
+
+      - name: Run harnesses
+        run: |
+          . .venv/bin/activate
+          PYTHONPATH=.:py python -m azazel_edge.service_objectives run \
+            --objective all \
+            --core-bin rust/azazel-edge-core/target/release/azazel-edge-core \
+            --out-dir service-objective-records
+
+      - name: Re-validate records
+        if: always()
+        run: |
+          . .venv/bin/activate
+          PYTHONPATH=.:py python -m azazel_edge.service_objectives validate service-objective-records
+
+      - name: Upload records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-objective-records
+          path: service-objective-records/*.json
+          if-no-files-found: error
+
   dependency-review:
     name: Dependency review (PR)
     if: github.event_name == 'pull_request' && vars.ENABLE_DEPENDENCY_REVIEW == 'true'
