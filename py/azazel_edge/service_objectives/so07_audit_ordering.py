@@ -242,12 +242,17 @@ def run(*, repeats: int = 1, seed: Optional[int] = None, kinds: Optional[List[st
     with tempfile.TemporaryDirectory(prefix="so07-") as tmp:
         work = Path(tmp)
         idx = 0
-        for _ in range(max(1, int(repeats))):
+        n_repeats = max(1, int(repeats))
+        for rep in range(n_repeats):
             for kind in use_kinds:
                 for point in INJECTION_POINTS:
                     for pad in RECORD_PADS:
                         idx += 1
-                        samples.append(_one_injection(work, kind, point, pad, rng, idx))
+                        sample = _one_injection(work, kind, point, pad, rng, idx)
+                        if n_repeats > 1:
+                            # sample_id is unique per part; only the label changes.
+                            sample["sample_id"] += f"/r{rep}"
+                        samples.append(sample)
 
     covered = {(s["record_kind"], s["injection_point"]) for s in samples if not s["problems"]}
     missing = [f"{k}/{p}" for k in all_kinds for p in INJECTION_POINTS if (k, p) not in covered]

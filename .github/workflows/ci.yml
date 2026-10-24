@@ -108,7 +108,9 @@ jobs:
         if: always()
         run: |
           . .venv/bin/activate
-          PYTHONPATH=.:py python -m azazel_edge.service_objectives validate service-objective-records
+          PYTHONPATH=.:py python -m azazel_edge.service_objectives validate \
+            --expect-commit "$GITHUB_SHA" \
+            service-objective-records
 
       - name: Upload records
         if: always()
