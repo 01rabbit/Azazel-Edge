@@ -213,6 +213,8 @@ def test_exit_codes_reserve_zero_for_pass():
 
 
 def test_so03_measures_real_path_and_reports_gaps(real_table):
+    # 20 samples: too few for a verdict; every record prerequisite and the
+    # closure of both gaps are still recomputed from what was observed.
     record = so03_alert_queue.run(samples=20, seed=7)
     assert rec.validate_record(record) == []
     assert record["objective_id"] == "SO-03"
@@ -221,25 +223,23 @@ def test_so03_measures_real_path_and_reports_gaps(real_table):
     assert part["pass_rule"]["bound_ms"] == 2000.0
     assert part["sample_rule"]["required_samples"] == 200
     prereq = {p["id"]: p for p in part["prerequisites"]}
-    # Probed on every run, not assumed: the records Edge#414 added are observed.
-    assert prereq["enqueue_record_names_decision_id"]["met"] is True
-    assert prereq["enqueue_record_classifies_p0"]["met"] is True
-    assert prereq["decision_and_enqueue_records_fsynced"]["met"] is True
-    assert prereq["alert_audit_chain_verifies"]["met"] is True
-    # What still does not exist keeps the row not measurable.
-    assert prereq["visual_voice_delivery_queue_declared"]["met"] is False
-    assert {g["id"] for g in part["gaps"]} == {"SO03-NO-VISUAL-VOICE-QUEUE", "SO03-NO-P0-ALERT-PATH"}
+    for pid in rec.OBJECTIVE_SPECS["SO-03"]["decision_durable_to_alert_enqueued"]["prerequisites"]:
+        assert prereq[pid]["met"] is True, pid
+    assert part["gaps"] == []
     for s in part["samples"]:
-        assert s["action"] == "notify" and s["level"] == "critical"
-        assert s["end_monotonic_ns"] >= s["edge_enqueued_monotonic_ns"] >= s["start_monotonic_ns"]
-        assert s["enqueue_record_decision_id"] == s["sample_id"] == s["notification_audit_decision_id"]
+        assert s["action"] in ("throttle", "redirect", "isolate") or s["decision_suspicion_label"] == "critical"
+        assert sorted(r["channel"] for r in s["queue_records"]) == ["visual", "voice"]
+        for r in s["queue_records"]:
+            assert s["end_monotonic_ns"] >= r["enqueued_monotonic_ns"] >= s["start_monotonic_ns"]
+            assert r["decision_id"] == s["sample_id"]
 
 
-def test_so03_full_sample_count_is_still_not_a_pass(real_table):
+def test_so03_full_sample_count_passes_on_a_clean_tree(real_table, clean_owner):
     record = so03_alert_queue.run(seed=1)
     assert len(record["parts"][0]["samples"]) == 200
-    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert rec.validate_record(record) == []
+    assert record["verdict"] == rec.VERDICT_PASS
+    assert {s["action"] for s in record["parts"][0]["samples"]} == {"throttle", "redirect", "isolate", "notify"}
 
 
 # ------------------------------------------------------------------- SO-04

@@ -133,7 +133,7 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
             "kind": "every_sample_max_elapsed",
             "bound_ms": 2000.0,
             "required_samples": 200,
-            # The last three are recomputed from the samples by the validator.
+            # All but the chain check are recomputed from the samples by the validator.
             "prerequisites": (
                 "visual_voice_delivery_queue_declared",
                 "alert_audit_chain_verifies",
@@ -142,6 +142,14 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "decision_and_enqueue_records_fsynced",
             ),
             "gaps": (
+                "SO03-NO-VISUAL-VOICE-QUEUE",
+                "SO03-NO-P0-ALERT-PATH",
+            ),
+            # Closed only by recomputation from every sample (GAP_CLOSERS):
+            # each sample's end is the P0 queue's fsynced enqueue record, on
+            # both channels, naming the decision and built from its
+            # audit-chain record under the owner's P0 rule.
+            "gaps_closed_by_samples": (
                 "SO03-NO-VISUAL-VOICE-QUEUE",
                 "SO03-NO-P0-ALERT-PATH",
             ),
@@ -256,9 +264,10 @@ SAMPLE_FIELDS: Dict[str, frozenset] = {
     "SO-03": frozenset(
         _COMMON_SAMPLE_FIELDS
         + (
-            "action", "reason", "level", "enqueue_record_decision_id", "notification_audit_decision_id",
-            "enqueue_record_alert_class", "edge_enqueued_monotonic_ns", "decision_record_fsynced",
-            "enqueue_record_fsynced",
+            "action", "reason", "decision_suspicion_label", "decision_chain_hash",
+            "harness_log_call_monotonic_ns", "harness_log_returned_monotonic_ns",
+            "edge_decision_durable_monotonic_ns", "queue_records", "enqueue_result_durability",
+            "decision_record_fsynced", "enqueue_record_fsynced",
         )
     ),
     "SO-04": frozenset(
@@ -677,22 +686,103 @@ def _recomputed_latency_samples(samples: Sequence[Mapping[str, Any]]) -> List[Di
     return out
 
 
+# SO-03: the P0 queue and the owner's P0 rule (Edge#414, 2026-10-25), written
+# here independently of azazel_edge.notify.p0_alert so the validator does not
+# take the product's word for which decisions are P0.
+SO03_QUEUE_SCHEMA = "azazel-edge/p0-alert-queue/v1"
+SO03_CHANNELS = ("visual", "voice")
+SO03_P0_RULE = "edge-p0/v1:enforcement-bearing-or-soc-critical"
+SO03_ENFORCEMENT_ACTIONS = ("throttle", "redirect", "isolate")
+SO03_QUEUE_RECORD_FIELDS = frozenset(
+    {
+        "channel", "schema", "seq", "decision_id", "decision_chain_hash", "p0_class", "p0_basis", "p0_rule",
+        "enqueued_monotonic_ns", "decision_durable_monotonic_ns",
+    }
+)
+
+
+def so03_expected_p0_basis(action: Any, suspicion_label: Any) -> str:
+    """The owner's P0 rule: enforcement-bearing decision, or SOC critical."""
+
+    if isinstance(action, str) and action in SO03_ENFORCEMENT_ACTIONS:
+        return f"enforcement:{action}"
+    if suspicion_label == "critical":
+        return "soc_critical"
+    return ""
+
+
+def _so03_queue_records(sample: Mapping[str, Any]) -> Optional[List[Mapping[str, Any]]]:
+    """The sample's queue records, one per channel, or None if they are not exactly that."""
+
+    recs = sample.get("queue_records")
+    if not isinstance(recs, list) or len(recs) != len(SO03_CHANNELS):
+        return None
+    if not all(isinstance(r, dict) and set(r) == SO03_QUEUE_RECORD_FIELDS for r in recs):
+        return None
+    if sorted(r.get("channel") for r in recs if isinstance(r.get("channel"), str)) != sorted(SO03_CHANNELS):
+        return None
+    if not all(r.get("schema") == SO03_QUEUE_SCHEMA and _int(r.get("seq")) for r in recs):
+        return None
+    return recs
+
+
 def so03_enqueue_observed(sample: Mapping[str, Any]) -> bool:
-    """SO-03: the sample's enqueue record and notification audit record name
-    its decision (the sample id), and the Edge enqueue stamp lies inside the
-    sample's window, so the record is this sample's and not an earlier one."""
+    """SO-03: the sample's end is the P0 queue's enqueue record for its decision.
+
+    The start is the Edge-recorded instant the decision record was durable
+    (read after its fsync, inside the harness's call window); both channel
+    entries name the decision and the audit-chain record (by chain hash) the
+    alert was built from, carry that start, and were stamped inside the
+    sample's window.
+    """
 
     sid = sample.get("sample_id")
-    stamps = (sample.get("start_monotonic_ns"), sample.get("edge_enqueued_monotonic_ns"), sample.get("end_monotonic_ns"))
-    if not all(isinstance(v, int) and not isinstance(v, bool) for v in stamps):
+    start, end = sample.get("start_monotonic_ns"), sample.get("end_monotonic_ns")
+    call, returned = sample.get("harness_log_call_monotonic_ns"), sample.get("harness_log_returned_monotonic_ns")
+    chain = sample.get("decision_chain_hash")
+    if not all(_int(v) for v in (start, end, call, returned)):
         return False
-    return (
-        isinstance(sid, str)
-        and bool(sid)
-        and sample.get("enqueue_record_decision_id") == sid
-        and sample.get("notification_audit_decision_id") == sid
-        and stamps[0] <= stamps[1] <= stamps[2]
+    if not (isinstance(sid, str) and sid and isinstance(chain, str) and chain):
+        return False
+    if sample.get("edge_decision_durable_monotonic_ns") != start or not (call <= start <= returned):
+        return False
+    recs = _so03_queue_records(sample)
+    if recs is None:
+        return False
+    return all(
+        r.get("decision_id") == sid
+        and r.get("decision_chain_hash") == chain
+        and r.get("decision_durable_monotonic_ns") == start
+        and _int(r.get("enqueued_monotonic_ns"))
+        and start <= r["enqueued_monotonic_ns"] <= end
+        for r in recs
     )
+
+
+def so03_p0_classified(sample: Mapping[str, Any]) -> bool:
+    """Every queue record carries the P0 class the owner's rule gives the decision."""
+
+    expected = so03_expected_p0_basis(sample.get("action"), sample.get("decision_suspicion_label"))
+    recs = _so03_queue_records(sample)
+    return (
+        bool(expected)
+        and recs is not None
+        and all(r.get("p0_class") == "P0" and r.get("p0_basis") == expected and r.get("p0_rule") == SO03_P0_RULE for r in recs)
+    )
+
+
+def so03_records_fsynced(sample: Mapping[str, Any]) -> bool:
+    return (
+        sample.get("decision_record_fsynced") is True
+        and sample.get("enqueue_record_fsynced") is True
+        and sample.get("enqueue_result_durability") == "fsynced"
+    )
+
+
+def so03_end_observed(sample: Mapping[str, Any]) -> bool:
+    """The end event happened: a durable enqueue record for this decision."""
+
+    return so03_enqueue_observed(sample) and so03_records_fsynced(sample)
 
 
 def so03_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[str, bool]:
@@ -700,11 +790,28 @@ def so03_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[st
 
     items = list(samples)
     return {
+        "visual_voice_delivery_queue_declared": bool(items) and all(_so03_queue_records(s) is not None for s in items),
         "enqueue_record_names_decision_id": bool(items) and all(so03_enqueue_observed(s) for s in items),
-        "enqueue_record_classifies_p0": bool(items) and all(s.get("enqueue_record_alert_class") == "P0" for s in items),
-        "decision_and_enqueue_records_fsynced": bool(items)
-        and all(s.get("decision_record_fsynced") is True and s.get("enqueue_record_fsynced") is True for s in items),
+        "enqueue_record_classifies_p0": bool(items) and all(so03_p0_classified(s) for s in items),
+        "decision_and_enqueue_records_fsynced": bool(items) and all(so03_records_fsynced(s) for s in items),
     }
+
+
+def so03_visual_voice_queue_observed(samples: Sequence[Mapping[str, Any]]) -> bool:
+    """Closes SO03-NO-VISUAL-VOICE-QUEUE: every sample ended on a durable
+    enqueue record of the P0 queue, on both the visual and the voice channel."""
+
+    items = list(samples)
+    return bool(items) and all(isinstance(s, dict) and so03_end_observed(s) for s in items)
+
+
+def so03_p0_alert_path_observed(samples: Sequence[Mapping[str, Any]]) -> bool:
+    """Closes SO03-NO-P0-ALERT-PATH: in addition, every alert is P0 under the
+    owner's rule, recomputed from the decision fields, and names the
+    audit-chain record it was built from."""
+
+    items = list(samples)
+    return bool(items) and all(isinstance(s, dict) and so03_end_observed(s) and so03_p0_classified(s) for s in items)
 
 
 def _so02_surface_healthy(source_type: Any, value: Any) -> bool:
@@ -894,6 +1001,8 @@ def so04_monotonic_expiry_observed(samples: Sequence[Mapping[str, Any]]) -> bool
 # ``gaps_closed_by_samples``. A gap with no entry here can never be left out.
 GAP_CLOSERS = {
     "SO04-LEASE-EXPIRY-ON-WALL-CLOCK": so04_monotonic_expiry_observed,
+    "SO03-NO-VISUAL-VOICE-QUEUE": so03_visual_voice_queue_observed,
+    "SO03-NO-P0-ALERT-PATH": so03_p0_alert_path_observed,
 }
 
 
@@ -1107,6 +1216,11 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                         errors.append(f"{where}: prerequisite {p['id']!r} declared met but the samples do not show it")
                     p["met"] = bool(p["met"]) and so03_observed[p["id"]]
 
+        if objective == "SO-03" and part["name"] == "decision_durable_to_alert_enqueued":
+            so03_ends = [isinstance(sm, dict) and so03_end_observed(sm) for sm in part["samples"]]
+        else:
+            so03_ends = None
+
         if spec["kind"] == RULE_ZERO_VIOLATIONS:
             for sidx, sample in enumerate(part["samples"]):
                 if isinstance(sample, dict) and sample.get("violations") != so07_sample_violations(sample):
@@ -1141,6 +1255,15 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                         if p["met"] and not observed[p["id"]]:
                             errors.append(f"{where}: prerequisite {p['id']!r} declared met but the samples do not show it")
                         p["met"] = bool(p["met"]) and observed[p["id"]]
+            if so03_ends is not None:
+                # The end is the queue's durable enqueue record for the
+                # decision, recomputed; a sample without one never ended.
+                for sidx, ended in enumerate(so03_ends):
+                    if not ended:
+                        sample = part["samples"][sidx]
+                        if isinstance(sample, dict) and sample.get("end_monotonic_ns") is not None:
+                            errors.append(f"{where}.samples[{sidx}]: end given but the observed fields do not show a durable enqueue record for the decision")
+                        eval_samples[sidx]["elapsed_ms"] = None
             if objective == "SO-04" and part["name"] in ("rollback_start_after_expiry", "rollback_completion"):
                 dict_samples = [s for s in part["samples"] if isinstance(s, dict)]
                 if part["name"] == "rollback_start_after_expiry":

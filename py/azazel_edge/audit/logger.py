@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -75,6 +76,29 @@ class P0AuditLogger:
         self._last_chain_hash = self._read_last_chain_hash()
         # Durable-kind records written where the file system could not sync.
         self.fsync_unsupported_count = 0
+        # Observers of durable-kind records (Edge#414, SO-03: the P0 alert
+        # path). Called after the record's fsync, in chain order; a listener
+        # must not block, and whatever it does or raises never changes what
+        # log() writes, returns or raises.
+        self._durable_listeners: list = []
+
+    def add_durable_listener(self, listener: Any) -> None:
+        """Call ``listener(record_copy, durability, monotonic_ns)`` after each
+        durable-kind record. ``monotonic_ns`` is CLOCK_MONOTONIC read after the
+        fsync returned; ``durability`` is fsynced, fsync_unsupported or
+        fsync_failed. Observation only: the listener cannot alter the record."""
+
+        self._durable_listeners.append(listener)
+
+    def _notify_durable(self, record: Dict[str, Any], durability: str) -> None:
+        if not self._durable_listeners:
+            return
+        stamp = time.monotonic_ns()
+        for listener in list(self._durable_listeners):
+            try:
+                listener(json.loads(json.dumps(record)), durability, stamp)
+            except Exception:
+                _LOG.exception('durable-record listener failed; the record is unaffected')
 
     def _read_last_chain_hash(self) -> str:
         if not self.path.exists():
@@ -152,12 +176,14 @@ class P0AuditLogger:
                     if created:
                         synced = fsync_path(self.path.parent) and synced
                 except OSError as exc:
+                    self._notify_durable(record, 'fsync_failed')
                     raise AuditDurabilityError(exc.errno, f'audit_record_not_durable:{exc}') from exc
                 if synced:
                     durability = DURABILITY_FSYNCED
                 else:
                     durability = DURABILITY_UNSUPPORTED
                     self.fsync_unsupported_count += 1
+                self._notify_durable(record, durability)
             # Emit-alongside: project into the shared Azazel-Fabric AuditEvent on a
             # SEPARATE, non-interleaved file. The chained log above is complete and
             # untouched; verify_chain() is unaffected (plan §3.3). Best-effort.
