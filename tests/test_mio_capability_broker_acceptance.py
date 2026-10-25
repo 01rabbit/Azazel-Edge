@@ -661,3 +661,27 @@ def test_text_refuses_c1_bidi_and_lone_surrogates(text):
 
 def test_text_allows_newline_and_tab():
     assert _broker().submit(_req(arguments={"question": "line1\n\tline2"})).status == "ok"
+
+
+def test_same_capability_accepts_again_after_quarantined_worker_finishes():
+    release = threading.Event()
+    calls = {"n": 0}
+
+    def handler(_args):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            release.wait(5)
+        return {"x": 1}
+
+    broker = _broker(caps={"query_recent_alerts": CapabilitySpec(handler, timeout_seconds=0.05, max_calls_per_cycle=5)})
+    try:
+        assert broker.submit(_req()).status == "timeout"
+        assert broker.submit(_req(request_id="r2")).error == "capability_quarantined"
+    finally:
+        release.set()
+    for _ in range(200):
+        if broker.quarantined() == 0:
+            break
+        time.sleep(0.01)
+    assert broker.quarantined() == 0
+    assert broker.submit(_req(request_id="r3")).status == "ok"
