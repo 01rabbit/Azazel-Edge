@@ -1,0 +1,68 @@
+{
+  "schema": "azazel-edge/hostile-load-profile/v1",
+  "cites": "01rabbit/Azazel:docs/roadmaps/service-objective-assignments.md SO-04 sample rule (leases expiring under hostile load), OF-06 and SO-11 (shed at 120% of the declared quota); 01rabbit/Azazel-Edge#414; Edge#412 (the Rust azazel-edge-core is the enforcement authority, so the load is offered to it)",
+  "note": "PROVISIONAL. The hostile load SO-04 samples are taken under. Every rate below is derived from config/service_objectives/ingress_quota.json (OF-06) by the rules in this file; declarations.load_hostile_load_profile() recomputes each one and refuses the profile if any differs, so a change to the quota makes this file invalid until it is re-derived. The factors under owner_defaults are defaults chosen when the profile was written and await the owner's confirmation. Container numbers are not hardware evidence. Read only by the SO-04 harness and the validator; the core never reads it, and nothing here changes how the core reads, sheds or decides.",
+  "status": "provisional",
+  "hardware_class": "container, not hardware",
+  "ingress": "core_eve_reader",
+  "derived_from": "config/service_objectives/ingress_quota.json",
+  "core_default_poll_ms": 200,
+  "line_bytes": 600,
+  "rate_tolerance": 0.05,
+  "warmup_ms": 3000,
+  "hold_after_ms": 2000,
+  "quiet_gap_ms": 3000,
+  "audit_attribution_slack_ms": 2000,
+  "owner_defaults": {
+    "status": "pending owner confirmation",
+    "non_alert_factor": 1.2,
+    "background_alert_poll_fill": 0.2,
+    "flood_alert_poll_fill": 1.0,
+    "oversized_line_factor": 2.0,
+    "oversized_backlog_share": 0.25,
+    "why": "non_alert_factor 1.2 is SO-11's overload point (120% of the quota) applied to OF-06's only quota. flood_alert_poll_fill 1.0 offers exactly one full alerts_per_poll budget per default poll interval, the poll cap. background_alert_poll_fill 0.2 keeps alerts flowing beside the non-alert and malformed loads so that any alert loss would show there too. oversized_line_factor 2.0 makes each oversized line twice max_line_bytes; oversized_backlog_share 0.25 holds the oversized bytes to a quarter of backlog_bound_bytes per second, so the oversized lines alone never cross the backlog bound."
+  },
+  "rules": {
+    "non_alert": "rates_per_s summed over non_alert_kinds = round(quota.value * non_alert_factor), split equally over non_alert_kinds (each share must be a whole number). invalid_utf8 is a non-alert kind: the core classes it unparseable and draws it from the same bucket.",
+    "alert": "rates_per_s.alert = round(alert_poll_fill * quota.alerts_per_poll * 1000 / core_default_poll_ms): alert_poll_fill 1.0 fills one poll's alert budget every default poll interval (rust/azazel-edge-core/src/main.rs AZAZEL_EVE_POLL_MS default).",
+    "oversized": "oversized_line_bytes = round(oversized_line_factor * quota.max_line_bytes) and must exceed max_line_bytes; rates_per_s.oversized = oversized_backlog_share * quota.backlog_bound_bytes / oversized_line_bytes. Oversized lines are non-alert lines (no alert marker), so oversized_possible_alerts must stay 0.",
+    "warmup": "warmup_ms >= 1000 * quota.non_alert_burst / (non-alert rate - quota.value) for every phase over the quota: the bucket is empty, and shedding steady, before the phase's first lease expires.",
+    "attribution": "an ingress_shed summary belongs to the phase whose window (wall clock) contains its emitted_epoch, or ended at most audit_attribution_slack_ms before it; audit_attribution_slack_ms >= quota.audit_interval_ms and quiet_gap_ms > audit_attribution_slack_ms, so no summary can belong to two phases.",
+    "line_bytes": "every non-oversized line is padded to about line_bytes, as the SO-11 probe does (so11_ingress_probe.LINE_BYTES)."
+  },
+  "phases": [
+    {
+      "name": "non_alert_flood",
+      "non_alert_factor": 1.2,
+      "non_alert_kinds": ["flow", "dns", "stats", "http"],
+      "alert_poll_fill": 0.2,
+      "oversized_line_factor": 0,
+      "oversized_backlog_share": 0,
+      "oversized_line_bytes": 0,
+      "rates_per_s": {"alert": 1000, "flow": 750, "dns": 750, "stats": 750, "http": 750, "invalid_utf8": 0, "oversized": 0},
+      "derivation": "non-alert 2500 * 1.2 = 3000 lines/s over 4 kinds (750 each), above the 2500/s quota, so the core must shed; alerts 0.2 * 1000 * 1000 / 200 = 1000/s, none of which may be shed."
+    },
+    {
+      "name": "malformed_mix",
+      "non_alert_factor": 1.2,
+      "non_alert_kinds": ["flow", "dns", "stats", "http", "invalid_utf8"],
+      "alert_poll_fill": 0.2,
+      "oversized_line_factor": 2.0,
+      "oversized_backlog_share": 0.25,
+      "oversized_line_bytes": 2097152,
+      "rates_per_s": {"alert": 1000, "flow": 600, "dns": 600, "stats": 600, "http": 600, "invalid_utf8": 600, "oversized": 1.0},
+      "derivation": "non-alert 2500 * 1.2 = 3000 lines/s over 5 kinds including invalid UTF-8 (600 each); oversized lines of 2 * 1 MiB at 0.25 * 8 MiB / 2 MiB = 1 line/s, every one of which the core must skip and count; alerts 1000/s as above."
+    },
+    {
+      "name": "alert_flood",
+      "non_alert_factor": 0,
+      "non_alert_kinds": [],
+      "alert_poll_fill": 1.0,
+      "oversized_line_factor": 0,
+      "oversized_backlog_share": 0,
+      "oversized_line_bytes": 0,
+      "rates_per_s": {"alert": 5000, "flow": 0, "dns": 0, "stats": 0, "http": 0, "invalid_utf8": 0, "oversized": 0},
+      "derivation": "alerts 1.0 * 1000 * 1000 / 200 = 5000/s: one full alerts_per_poll budget per default poll interval, the poll cap; alerts are outside the quota and must all be decided."
+    }
+  ]
+}

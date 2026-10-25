@@ -1,4 +1,4 @@
-# Service-objective declarations (OF-05, OF-06, SO-02, SO-05)
+# Service-objective declarations (OF-05, OF-06, SO-04 hostile load, SO-02, SO-05)
 
 Tracking: #414  
 Assignment: `01rabbit/Azazel:docs/roadmaps/service-objective-assignments.md` (SO-02, SO-04, SO-05, SO-11, OF-05, OF-06)  
@@ -70,7 +70,8 @@ The `rollback_completion` part of the SO-04 record
 - **provisional is not evidence** — the gap `SO04-COMPLETION-BOUND-PROVISIONAL`
   is mandatory for the part. It stays until a hardware-derived declaration
   replaces the provisional one. `SO04-HOSTILE-LOAD-UNDECLARED` applies too,
-  because the sample rule is the same. `SO04-LEASE-EXPIRY-ON-WALL-CLOCK` is
+  because the sample rule is the same, and is closed the same way as for the
+  start half (see "SO-04 hostile-load profile" below). `SO04-LEASE-EXPIRY-ON-WALL-CLOCK` is
   listed under `gaps_closed_by_samples` for this part as for the start half: it
   may be left out only when the validator's own recomputation
   (`so04_monotonic_expiry_observed`) holds for every sample. An unfinished
@@ -234,9 +235,10 @@ against the provisional 5000 ms bounds, 0 violations. Wall clock stable in
 every part. The record is `not_measurable` for the same gaps as before
 (`SO04-HOSTILE-LOAD-UNDECLARED`, `SO04-COMPLETION-BOUND-PROVISIONAL`).
 
-`SO04-HOSTILE-LOAD-UNDECLARED` is left in place: a declared ingress quota is
-not a declared hostile-load profile, and the `eve_flood` phase is still a
-harness-chosen load.
+At the time `SO04-HOSTILE-LOAD-UNDECLARED` was left in place: a declared
+ingress quota is not a declared hostile-load profile, and the `eve_flood`
+phase was a harness-chosen load. The `eve_flood` phase has since been replaced
+by the declared profile below.
 
 ### Still open
 
@@ -250,6 +252,121 @@ harness-chosen load.
 - **Summaries pending at shutdown.** Counts from the last interval (under one
   second) are not flushed when the process is killed; the next process starts
   its cumulative totals at zero.
+
+## SO-04 hostile-load profile (declared, provisional, derived from OF-06)
+
+SO-04's sample rule asks for leases expiring under hostile load. Until OF-06
+nothing declared that load, so the harness flooded the core with a load it
+chose itself (`eve_flood`, 2000 alerts/s) and kept `SO04-HOSTILE-LOAD-UNDECLARED`.
+With the OF-06 quota declared and enforced by the core, and the core named the
+enforcement authority (Edge#412), the load can be declared against what the
+core enforces.
+
+### Where it lives
+
+`config/service_objectives/hostile_load_profile.json`
+(schema `azazel-edge/hostile-load-profile/v1`), read by
+`declarations.load_hostile_load_profile()`. The core never reads it; nothing in
+it changes how the core reads, sheds or decides. Status `provisional`, hardware
+class `container, not hardware`.
+
+**Every rate is derived from `ingress_quota.json`.** The loader re-derives each
+phase's rates from the quota file as it stands and refuses the whole profile
+(declares no phase) when any differs, when a phase is malformed, or when one of
+the three kinds of load below is missing. A change to the quota therefore
+invalidates the profile until it is re-derived, and a test checks the core's
+default poll interval (200 ms, `AZAZEL_EVE_POLL_MS` in `main.rs`) that the
+alert rule uses.
+
+| Phase | Non-alert lines/s | Alerts/s | Malformed | Rule |
+| --- | --- | --- | --- | --- |
+| `non_alert_flood` | 3000 (flow, dns, stats, http: 750 each) | 1000 | — | 2500 × 1.2; over the quota, so the core must shed |
+| `malformed_mix` | 3000 (flow, dns, stats, http, invalid UTF-8: 600 each) | 1000 | 1 oversized line/s of 2 MiB | 2500 × 1.2; oversized = 2 × `max_line_bytes`, at 0.25 × `backlog_bound_bytes` per second |
+| `alert_flood` | 0 | 5000 | — | `alerts_per_poll` 1000 per 200 ms poll: the poll cap |
+
+Alert rate rule: `alert_poll_fill × alerts_per_poll × 1000 / poll_ms`. Other
+lines are padded to about 600 bytes (as the SO-11 probe does). Timing:
+`warmup_ms` 3000 (the 1500-token bucket empties at 3000 − 2500 = 500 lines/s
+net in 3 s, and the loader checks this for every over-quota phase),
+`hold_after_ms` 2000, `quiet_gap_ms` 3000 between phases, and
+`audit_attribution_slack_ms` 2000 (at least the 1 s audit interval and below the
+quiet gap, so no `ingress_shed` summary can belong to two phases).
+
+**Defaults awaiting owner confirmation.** The factors under `owner_defaults`
+were chosen when the profile was written: `non_alert_factor` 1.2 (SO-11's
+overload point), `flood_alert_poll_fill` 1.0, `background_alert_poll_fill` 0.2,
+`oversized_line_factor` 2.0, `oversized_backlog_share` 0.25. The rates follow
+from them and from the quota; changing a factor means re-deriving the rates.
+
+### How SO-04 applies it
+
+Both SO-04 halves (`so04_lease_rollback.py`, `so04_rollback_completion.py`)
+use `so04_hostile_load.py`. Of the 50 leases per action type, 12 expire under
+each phase and 14 nominal (unloaded). The driver writes each phase's lines into
+the core's EVE input at the declared rates for the phase's window, each phase
+lease expires after the warm-up (plus a 0.5 s margin) and before the window
+ends, and after the run the harness waits until the core has decided every
+alert written. Each part carries a `hostile_load` observation: per phase, the
+window on `CLOCK_BOOTTIME` and the wall clock, the lines written per class, and
+the alerts the core decided (counted from the normalized log by the phase's
+signature ids); and the core's own `ingress-audit.jsonl` summaries as written.
+
+### When the gap closes
+
+`SO04-HOSTILE-LOAD-UNDECLARED` is listed under `gaps_closed_by_samples` for
+both SO-04 parts. A record may leave it out only when the validator's
+recomputation (`record.PART_GAP_CLOSERS` →
+`so04_hostile_load.hostile_load_problems`) finds nothing wrong. It reloads the
+profile and the quota from the tree and checks that:
+
+- the observation cites both files at their current SHA-256 and its windows
+  are on `CLOCK_BOOTTIME`;
+- every declared phase was applied: for every line class, the lines written
+  are within ±5% (at least one line) of the declared rate times the window, and
+  the window is at least the warm-up;
+- the core decided every alert written in every phase;
+- the core's summaries: `alerts_shed` 0 and `oversized_possible_alerts` 0 in
+  every one, the quota block equal to the declared quota, no summary missing
+  (cumulative totals equal the summed intervals), the audit not rotated; for
+  each over-quota phase, non-alert lines shed for the rate in the summaries
+  attributed to it (at least one, and at least what the bucket could not have
+  admitted); for each phase, the oversized lines the core skipped equal those
+  written;
+- every hostile sample's lease expired inside its phase's window after the
+  warm-up, on `CLOCK_BOOTTIME`, and every phase has a sample of every action
+  type; every other sample is `nominal`.
+
+A part without the observation, with a load short of its rate, or with an
+invalid profile in the tree keeps the gap. `SO04-COMPLETION-BOUND-PROVISIONAL`
+has no closer and stays on the completion part, so the SO-04 record stays
+`not_measurable` (`diagnostic_only`). `load_phase_applied` stays a run-health
+prerequisite (every declared phase was driven); `CI_DECLARED_PREREQUISITES`
+is unchanged (empty).
+
+**With both start-half gaps closed, the start part on its own derives `pass`**
+when its run-health prerequisites hold. The record's verdict is still the
+worst part's, `not_measurable`, and it is never gate evidence. The pass rests
+on a provisional profile whose factors await the owner's confirmation and on
+container numbers.
+
+### Container runs (not hardware evidence)
+
+Three runs of `run --objective SO-04` on this change (docker `--cap-add
+NET_ADMIN`, colima, aarch64, 2026-10-26). Every part 150/150 samples, 0
+violations, and `SO04-HOSTILE-LOAD-UNDECLARED` closed by the recomputation in
+all six parts.
+
+| Run | Start max | Completion max | Lines shed by the core (start / completion) | Oversized skipped | Alerts written = decided | Alerts shed |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 641.1 ms | 1260.8 ms | 7931 / 10373 | 9 / 9 | 63076 / 63309 | 0 |
+| 2 | 715.7 ms | 1197.6 ms | 8424 / 9740 | 9 / 9 | 63180 / 63121 | 0 |
+| 3 | 457.3 ms | 1344.1 ms | 7902 / 10977 | 9 / 9 | 63124 / 63320 | 0 |
+
+In runs 2 and 3 `wall_clock_stable_during_run` was unmet on the start part
+(drift −101.6 and −208.6 ms against 50 ms: the colima VM's wall clock was
+adjusted during the run), so those records are red under `--ci`; run 1 was
+clean (green, start part `pass`, record `not_measurable` on
+`SO04-COMPLETION-BOUND-PROVISIONAL`).
 
 ## SO-02 — source/interface failure visible (virtual-lab harness, not measurable)
 

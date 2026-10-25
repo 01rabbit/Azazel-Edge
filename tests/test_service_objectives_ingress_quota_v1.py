@@ -49,7 +49,8 @@ def test_the_declaration_is_provisional_container_derived_and_cites_its_basis():
     assert basis["runs"] == len(basis["observed_lines_per_s"])
     assert basis["min_observed_lines_per_s"] == min(basis["observed_lines_per_s"])
     assert quota["value"] <= basis["min_observed_lines_per_s"] / 2
-    # The SO-04 harness floods at 2000 alerts/s; the quota must not throttle it.
+    # The SO-04 harness used to flood at 2000 alerts/s against this value; its
+    # hostile load is now derived from it (hostile_load_profile.json).
     assert quota["value"] >= 2000
     assert loaded["sha256"]
 

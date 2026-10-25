@@ -38,11 +38,13 @@ harness removes the interfaces and the table it created when it finishes.
 Why it is still ``not_measurable``
 ----------------------------------
 The declared bounds are provisional: derived from a container run plus margin,
-not from hardware (gap ``SO04-COMPLETION-BOUND-PROVISIONAL``). Undeclared
-hostile load applies here too, because the sample rule is the same, and
-``SO04-LEASE-EXPIRY-ON-WALL-CLOCK`` is dropped only when every sample shows,
-by the start half's recomputation, that its lease expired on its monotonic
-deadline -- an unfinished sample never does.
+not from hardware (gap ``SO04-COMPLETION-BOUND-PROVISIONAL``, which no sample
+can close). The leases expire under the same declared hostile-load profile as
+the start half's (``so04_hostile_load``), and ``SO04-HOSTILE-LOAD-UNDECLARED``
+is dropped only by the same recomputation. ``SO04-LEASE-EXPIRY-ON-WALL-CLOCK``
+is dropped only when every sample shows, by the start half's recomputation,
+that its lease expired on its monotonic deadline -- an unfinished sample never
+does.
 
 A run killed by SIGTERM, SIGHUP or SIGINT stops the core and removes the
 interfaces and the table it created; nothing else is removed.
@@ -62,8 +64,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from . import so04_hostile_load
 from .declarations import (
     ROLLBACK_ACTION_TYPES,
+    load_hostile_load_profile,
     load_rollback_completion_bounds,
     undeclared_action_types,
 )
@@ -425,7 +429,7 @@ def build_samples(
     return samples
 
 
-def _gaps(samples: List[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+def _gaps(samples: List[Mapping[str, Any]], hostile_load: Optional[Mapping[str, Any]] = None, profile: Optional[Mapping[str, Any]] = None) -> List[Dict[str, Any]]:
     out = [
         gap(
             "SO04-COMPLETION-BOUND-PROVISIONAL",
@@ -444,12 +448,11 @@ def _gaps(samples: List[Mapping[str, Any]]) -> List[Dict[str, Any]]:
             "clock (an unfinished sample never shows it). The start is the start half's (lease_start).",
             refs=["rust/azazel-edge-core/src/release.rs (lease_expiry)"],
         ))
-    out.append(gap(
-        "SO04-HOSTILE-LOAD-UNDECLARED",
-        "The sample rule requires leases expiring under hostile load; no hostile-load profile or ingress quota "
-        "is declared (OF-06). The eve_flood phase is a harness-chosen load.",
-        refs=["OF-06"],
-    ))
+    # Closed exactly as for the start half: only when the validator's own
+    # recomputation shows the declared profile applied for every sample.
+    from .so04_lease_rollback import hostile_load_gap
+
+    out += hostile_load_gap(list(samples), hostile_load, profile if profile is not None else load_hostile_load_profile())
     return out
 
 
@@ -474,7 +477,11 @@ def declared_prerequisite(declaration: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def build_completion_part(
-    declaration: Mapping[str, Any], samples: List[Dict[str, Any]], prerequisites: List[Dict[str, Any]]
+    declaration: Mapping[str, Any],
+    samples: List[Dict[str, Any]],
+    prerequisites: List[Dict[str, Any]],
+    hostile_load: Optional[Mapping[str, Any]] = None,
+    profile: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     return build_part(
         name="rollback_completion",
@@ -482,8 +489,9 @@ def build_completion_part(
         required_samples=SPEC["required_samples"],
         samples=samples,
         prerequisites=prerequisites,
-        gaps=_gaps(samples),
+        gaps=_gaps(samples, hostile_load, profile),
         per_action_required=SPEC["per_action_samples"],
+        hostile_load=hostile_load,
     )
 
 
@@ -503,14 +511,16 @@ def measure(
     version: Optional[str],
     leases_per_type: int,
     seed: Optional[int] = None,
-    flood_rate_per_s: int = 2000,
     declaration: Optional[Mapping[str, Any]] = None,
+    profile: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run the core against leases with real owned state and build the completion part."""
 
     from . import so04_lease_rollback as so04
 
     decl = dict(declaration) if declaration is not None else load_rollback_completion_bounds()
+    profile = profile if profile is not None else load_hostile_load_profile()
+    hostile: Optional[Dict[str, Any]] = None
     bounds = decl.get("bounds_ms") or {}
     prerequisites = [declared_prerequisite(decl)]
     samples: List[Dict[str, Any]] = []
@@ -519,7 +529,7 @@ def measure(
     reason = "the core binary is not runnable" if version is None else owned.unavailable_reason()
     if reason is None:
         with _CleanupOnSignal(owned.cleanup):
-            samples, run_prereqs = _measure_with_owned_state(so04, owned, core, leases_per_type, rng, flood_rate_per_s, bounds)
+            samples, run_prereqs, hostile = _measure_with_owned_state(so04, owned, core, leases_per_type, rng, profile, bounds)
         prerequisites.extend(run_prereqs)
     else:
         prerequisites.append(prerequisite("core_binary_present", version is not None, f"{core}: version {version}"))
@@ -531,12 +541,11 @@ def measure(
             "wall_clock_stable_during_run",
         ):
             prerequisites.append(prerequisite(pid, False, f"not evaluated: {reason}"))
-    return build_completion_part(decl, samples, prerequisites)
+    return build_completion_part(decl, samples, prerequisites, hostile, profile)
 
 
-def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_type: int, rng, flood_rate_per_s: int, bounds):
+def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_type: int, rng, profile, bounds):
     prerequisites = [prerequisite("core_binary_present", True, f"{core}")]
-    per_phase = max(1, leases_per_type // 2)
     with tempfile.TemporaryDirectory(prefix="so04c-") as tmp:
         work = Path(tmp)
         ledger = work / "release-ledger.json"
@@ -549,13 +558,7 @@ def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_ty
         created_boot = so04.boottime_ns()
         this_boot = so04.boot_id()
         monotonic_leases = created_boot is not None and bool(this_boot)
-        plan = []
-        for phase_idx, phase in enumerate(("nominal", "eve_flood")):
-            count = per_phase if phase_idx == 0 else max(1, leases_per_type - per_phase)
-            for k in range(count):
-                for action in ROLLBACK_ACTION_TYPES:
-                    plan.append((action, phase_idx * per_phase + k, phase))
-        nominal_n = sum(1 for p in plan if p[2] == "nominal")
+        plan = so04_hostile_load.plan(leases_per_type, profile["phases"])
         # Installing state takes a while; expiries are set once it is done.
         leases: List[Dict[str, Any]] = []
         for action, index, phase in plan:
@@ -580,11 +583,9 @@ def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_ty
             # core is never started.
             for pid in ("core_daemon_started", "completion_confirmed_by_readback", "load_phase_applied", "wall_clock_stable_during_run"):
                 prerequisites.append(prerequisite(pid, False, "not evaluated: the harness could not create its inet azazel_edge table"))
-            return [], prerequisites
-        base = time.time() + 3.0
-        for j, lease in enumerate(leases):
-            slot = j if lease["_phase"] == "nominal" else j + 20
-            due = base + slot * 0.1 + rng.uniform(0.0, 0.05)
+            return [], prerequisites, None
+        dues, windows = so04_hostile_load.schedule([l["_phase"] for l in leases], time.time() + 3.0, rng, profile)
+        for lease, due in zip(leases, dues):
             lease["due_epoch"] = due
             lease["next_attempt_epoch"] = due
             if monotonic_leases:
@@ -603,33 +604,34 @@ def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_ty
             "AZAZEL_EVENT_STDOUT": "off",
             "AZAZEL_REDIRECT_POLICY_PATH": str(REPO_ROOT / "config" / "redirect_policy.yaml"),
         })
-        for key in ("AZAZEL_DEFENSE_ENFORCE", "AZAZEL_DEFENSE_DRY_RUN", "AZAZEL_DEFENSE_ENFORCE_LEVEL", "AZAZEL_EVE_POLL_MS"):
+        for key in ("AZAZEL_DEFENSE_ENFORCE", "AZAZEL_DEFENSE_DRY_RUN", "AZAZEL_DEFENSE_ENFORCE_LEVEL", "AZAZEL_EVE_POLL_MS", "AZAZEL_EVE_FROM_START"):
             env.pop(key, None)
         tail = _CompletionTail(events, so04.rollback_audit_path(ledger), {l["task_id"] for l in leases}, so04.boottime_ns)
         tail.start()
-        flood = so04._EveFlood(eve, flood_rate_per_s)
-        flood.start()
+        load = so04_hostile_load.HostileLoad(eve, profile, windows, so04.boottime_ns)
+        counter = so04_hostile_load.AlertCounter(events)
         stderr_path = work / "core.stderr"
         with stderr_path.open("w", encoding="utf-8") as err_fh:
             proc = subprocess.Popen([str(core)], cwd=str(work), env=env, stdout=subprocess.DEVNULL, stderr=err_fh)
             try:
-                flood_start = base + (nominal_n + 18) * 0.1
-                last_due = max(l["due_epoch"] for l in leases)
-                deadline = last_due + 30.0
-                while time.time() < deadline and not tail.done():
-                    now = time.time()
-                    if flood_start <= now <= last_due + 2.0:
-                        flood.active.set()
-                    elif now > last_due + 2.0:
-                        flood.active.clear()
+                load.start()
+                last_end = max([w[2] for w in windows] + [l["due_epoch"] for l in leases])
+                deadline = last_end + 30.0
+                while time.time() < deadline and not (tail.done() and load.finished.is_set()):
                     if proc.poll() is not None:
                         break
                     time.sleep(0.01)
+                load.stop.set()
+                load.join(timeout=10)
+                so04_hostile_load.drain(
+                    counter, load, timeout_s=90.0,
+                    audit_interval_s=profile["quota"]["audit_interval_ms"] / 1000.0 if profile.get("quota") else 1.0,
+                    alive=lambda: proc.poll() is None,
+                )
             finally:
                 # Also on a signal: the core is stopped before the state it
                 # would roll back is removed.
-                flood.active.clear()
-                flood.stop.set()
+                load.stop.set()
                 tail.stop.set()
                 tail.join(timeout=5)
                 proc.terminate()
@@ -638,8 +640,9 @@ def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_ty
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait(timeout=10)
-        flood.join(timeout=5)
+        load.join(timeout=10)
         tail.poll()
+        hostile = so04_hostile_load.observation(profile, load, counter, work, monotonic=monotonic_leases)
         drift_ns = (time.time_ns() - time.monotonic_ns()) - offset0
         stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace")
         absent_after = owned.present(leases)
@@ -656,7 +659,7 @@ def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_ty
             else "owned state still read back after a reported completion: " + ", ".join(unconfirmed[:10]),
         )
     )
-    prerequisites.append(prerequisite("load_phase_applied", flood.written > 0, f"{flood.written} synthetic EVE alerts written during the eve_flood phase"))
+    prerequisites.append(so04.load_prerequisite(profile, hostile))
     early = [s["sample_id"] for s in samples if s.get("observed_before_expiry")]
     prerequisites.append(
         prerequisite(
@@ -666,7 +669,7 @@ def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_ty
             f"completions observed before the declared expiry: {len(early)}",
         )
     )
-    return samples, prerequisites
+    return samples, prerequisites, hostile
 
 
 def per_action_summary(samples: List[Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:

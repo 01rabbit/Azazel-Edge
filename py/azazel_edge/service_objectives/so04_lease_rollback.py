@@ -51,8 +51,20 @@ the core's code, not something an outside observer can see, so it is shown by
 the core's own tests (``release.rs``), which stand a command runner in for
 ``tc``/``nft`` and look at the chain and the fsync count when it is first called.
 
-Why the start half is still ``not_measurable``
-----------------------------------------------
+Hostile load (``so04_hostile_load``)
+-----------------------------------
+Leases expire both unloaded (``nominal``) and under each phase of the
+declared hostile-load profile (``config/service_objectives/hostile_load_profile.json``):
+non-alert lines at 120% of the OF-06 quota, alerts at the per-poll cap, and a
+mix of invalid UTF-8 and oversized lines. The harness writes each phase into the
+core's EVE input at the declared rates for its window, and every phase lease
+expires after the warm-up that empties the core's non-alert bucket. The part
+carries the observation (``hostile_load``): what was written per class and
+when, the alerts the core decided, and the core's own ``ingress_shed``
+summaries.
+
+Gaps
+----
 The observed numbers are reported, but the part cannot be gate evidence while
 a gap remains:
 
@@ -63,9 +75,16 @@ a gap remains:
   not fire first. The validator recomputes this from the samples
   (``record.so04_monotonic_expiry_observed``); a record cannot drop the gap by
   saying so;
-* **hostile load is undeclared** (OF-06). The harness floods the core's EVE
-  input during half the samples, but that is the harness's own choice of load,
-  not a declared one.
+* ``SO04-HOSTILE-LOAD-UNDECLARED`` is reported unless the validator's
+  recomputation (``record.so04_hostile_load_applied``) shows the declared
+  profile applied for every sample: every phase written at its declared rate,
+  the core shedding over-quota non-alert lines, skipping every oversized line,
+  never shedding an alert and deciding every alert written, under the declared
+  quota, with every phase sampled for every action type inside its window.
+
+The profile is provisional: its factors are defaults awaiting the owner's
+confirmation, and what is measured under it is container evidence, not
+hardware evidence.
 """
 
 from __future__ import annotations
@@ -81,6 +100,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 from ..audit.logger import P0AuditLogger
+from . import so04_hostile_load
+from .declarations import load_hostile_load_profile
 from .record import (
     REPO_ROOT,
     RULE_EVERY_SAMPLE_MAX,
@@ -444,40 +465,6 @@ def start_record_prerequisites(
     )
 
 
-class _EveFlood(threading.Thread):
-    def __init__(self, path: Path, rate_per_s: int):
-        super().__init__(daemon=True)
-        self.path = path
-        self.rate = rate_per_s
-        self.active = threading.Event()
-        self.stop = threading.Event()
-        self.written = 0
-
-    def run(self) -> None:
-        batch = max(1, self.rate // 100)
-        n = 0
-        while not self.stop.is_set():
-            if not self.active.is_set():
-                time.sleep(0.005)
-                continue
-            lines = []
-            for _ in range(batch):
-                n += 1
-                lines.append(json.dumps({
-                    "timestamp": f"2026-01-01T00:00:{n % 60:02d}.{n % 1000000:06d}+0000",
-                    "event_type": "alert",
-                    "src_ip": f"203.0.113.{(n % 250) + 1}",
-                    "dest_ip": "192.0.2.10",
-                    "dest_port": 22,
-                    "proto": "TCP",
-                    "alert": {"signature_id": 2000000 + (n % 50), "signature": "so04 load", "category": "load", "severity": 1 + (n % 3)},
-                }))
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.write("\n".join(lines) + "\n")
-            self.written += batch
-            time.sleep(0.01)
-
-
 def _expiry_clock_counts(samples: List[Dict[str, Any]]) -> str:
     counts: Dict[str, int] = {}
     for s in samples:
@@ -494,16 +481,33 @@ def _version(core_bin: Path) -> Optional[str]:
     return out.stdout.strip() if out.returncode == 0 else None
 
 
+def hostile_load_gap(samples: List[Dict[str, Any]], hostile_load: Optional[Mapping[str, Any]], profile: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """``SO04-HOSTILE-LOAD-UNDECLARED``, unless the validator's own recomputation
+    (``so04_hostile_load.hostile_load_problems``) shows the declared profile
+    applied for every sample. Shared by both halves."""
+
+    problems = so04_hostile_load.hostile_load_problems(samples, hostile_load, profile) if samples else ["no samples"]
+    if not problems:
+        return []
+    return [gap(
+        "SO04-HOSTILE-LOAD-UNDECLARED",
+        "The sample rule requires leases expiring under hostile load. The declared profile "
+        "(config/service_objectives/hostile_load_profile.json, derived from the OF-06 ingress quota) is not shown "
+        "applied to every sample: " + "; ".join(problems[:8]) + (f" (+{len(problems) - 8} more)" if len(problems) > 8 else ""),
+        refs=["config/service_objectives/hostile_load_profile.json", "OF-06"],
+    )]
+
+
 def run(
     *,
     core_bin: Optional[Path] = None,
     leases_per_type: int = LEASES_PER_TYPE,
     seed: Optional[int] = None,
-    flood_rate_per_s: int = 2000,
 ) -> Dict[str, Any]:
     started_ns = time.monotonic_ns()
     started_at = utc_now()
     rng = random.Random(seed)
+    profile = load_hostile_load_profile()
     # Absolute, because the daemon is started with the scratch directory as cwd.
     core = Path(core_bin or os.environ.get("AZAZEL_EDGE_CORE_BIN") or DEFAULT_CORE_BIN).resolve()
     version = _version(core) if core.is_file() and os.access(core, os.X_OK) else None
@@ -516,10 +520,9 @@ def run(
     ]
     samples: List[Dict[str, Any]] = []
     daemon_info: Dict[str, Any] = {}
-    flood_written = 0
+    hostile: Optional[Dict[str, Any]] = None
     drift_ns: Optional[int] = None
     monotonic_leases = False
-    per_phase = max(1, leases_per_type // 2)
     if version is not None:
         with tempfile.TemporaryDirectory(prefix="so04-") as tmp:
             work = Path(tmp)
@@ -533,20 +536,11 @@ def run(
             this_boot = boot_id()
             monotonic_leases = created_boot is not None and bool(this_boot)
             leases: List[Dict[str, Any]] = []
-            plan: List[tuple[str, int, str]] = []
-            for phase_idx, phase in enumerate(("nominal", "eve_flood")):
-                count = per_phase if phase_idx == 0 else max(1, leases_per_type - per_phase)
-                for k in range(count):
-                    for action in ACTION_TYPES:
-                        plan.append((action, phase_idx * per_phase + k, phase))
-            # Expiries start 3 s after the ledger is written, 0.1 s apart with
-            # jitter so that some expire in the same sweep. The flood phase
-            # starts 2 s after the nominal phase's last expiry.
-            nominal_n = sum(1 for p in plan if p[2] == "nominal")
-            base = created + 3.0
-            for j, (action, index, phase) in enumerate(plan):
-                slot = j if phase == "nominal" else j + 20
-                due = base + slot * 0.1 + rng.uniform(0.0, 0.05)
+            plan = so04_hostile_load.plan(leases_per_type, profile["phases"])
+            # Expiries start 3 s after the ledger is written: nominal leases
+            # first, then each declared hostile-load phase in its own window.
+            dues, windows = so04_hostile_load.schedule([p[2] for p in plan], created + 3.0, rng, profile)
+            for (action, index, phase), due in zip(plan, dues):
                 if monotonic_leases:
                     # As build_release_task does: both deadlines are the same
                     # TTL added to clocks read together at creation.
@@ -572,30 +566,30 @@ def run(
                 "AZAZEL_EVENT_STDOUT": "off",
                 "AZAZEL_REDIRECT_POLICY_PATH": str(REPO_ROOT / "config" / "redirect_policy.yaml"),
             })
-            for key in ("AZAZEL_DEFENSE_ENFORCE", "AZAZEL_DEFENSE_DRY_RUN", "AZAZEL_DEFENSE_ENFORCE_LEVEL", "AZAZEL_EVE_POLL_MS"):
+            for key in ("AZAZEL_DEFENSE_ENFORCE", "AZAZEL_DEFENSE_DRY_RUN", "AZAZEL_DEFENSE_ENFORCE_LEVEL", "AZAZEL_EVE_POLL_MS", "AZAZEL_EVE_FROM_START"):
                 env.pop(key, None)
             chain = rollback_audit_path(ledger)
             tail = _Tail(events, chain, {l["task_id"] for l in leases})
             tail.start()
-            flood = _EveFlood(eve, flood_rate_per_s)
-            flood.start()
+            load = so04_hostile_load.HostileLoad(eve, profile, windows, boottime_ns)
+            counter = so04_hostile_load.AlertCounter(events)
             stderr_path = work / "core.stderr"
             with stderr_path.open("w", encoding="utf-8") as err_fh:
                 proc = subprocess.Popen([str(core)], cwd=str(work), env=env, stdout=subprocess.DEVNULL, stderr=err_fh)
-                flood_start = base + (nominal_n + 18) * 0.1
-                last_due = max(l["due_epoch"] for l in leases)
-                deadline = last_due + 30.0
-                while time.time() < deadline and not tail.done():
-                    now = time.time()
-                    if now >= flood_start and now <= last_due + 2.0:
-                        flood.active.set()
-                    elif now > last_due + 2.0:
-                        flood.active.clear()
+                load.start()
+                last_end = max([w[2] for w in windows] + [l["due_epoch"] for l in leases])
+                deadline = last_end + 30.0
+                while time.time() < deadline and not (tail.done() and load.finished.is_set()):
                     if proc.poll() is not None:
                         break
                     time.sleep(0.01)
-                flood.active.clear()
-                flood.stop.set()
+                load.stop.set()
+                load.join(timeout=10)
+                so04_hostile_load.drain(
+                    counter, load, timeout_s=90.0,
+                    audit_interval_s=profile["quota"]["audit_interval_ms"] / 1000.0 if profile.get("quota") else 1.0,
+                    alive=lambda: proc.poll() is None,
+                )
                 tail.stop.set()
                 tail.join(timeout=5)
                 exited_early = proc.poll()
@@ -605,8 +599,7 @@ def run(
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait(timeout=10)
-            flood.join(timeout=5)
-            flood_written = flood.written
+            hostile = so04_hostile_load.observation(profile, load, counter, work, monotonic=monotonic_leases)
             drift_ns = (time.time_ns() - time.monotonic_ns()) - offset0
             stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace")
             daemon_info = {
@@ -638,9 +631,7 @@ def run(
                 )
             )
             prerequisites.extend(record_prereqs)
-            prerequisites.append(
-                prerequisite("load_phase_applied", flood_written > 0, f"{flood_written} synthetic EVE alerts written during the eve_flood phase")
-            )
+            prerequisites.append(load_prerequisite(profile, hostile))
     else:
         for pid in (
             "core_daemon_started",
@@ -662,14 +653,7 @@ def run(
             "require. Samples by expiry_clock: " + _expiry_clock_counts(samples) + ".",
             refs=["rust/azazel-edge-core/src/release.rs (lease_expiry)"],
         ))
-    start_gaps += [
-        gap(
-            "SO04-HOSTILE-LOAD-UNDECLARED",
-            "The sample rule requires leases expiring under hostile load; no hostile-load profile or ingress quota is "
-            "declared (OF-06). The eve_flood phase is a harness-chosen load, not a declared one.",
-            refs=["OF-06"],
-        ),
-    ]
+    start_gaps += hostile_load_gap(samples, hostile, profile)
     start_part = build_part(
         name="rollback_start_after_expiry",
         pass_rule={"kind": RULE_EVERY_SAMPLE_MAX, "bound_ms": BOUND_MS, "description": "every sample starts <= 5 seconds after expiry"},
@@ -678,11 +662,12 @@ def run(
         prerequisites=prerequisites,
         gaps=start_gaps,
         per_action_required=SPEC_START.get("per_action_samples", 0),
+        hostile_load=hostile,
     )
     from . import so04_rollback_completion
 
     completion_part = so04_rollback_completion.measure(
-        core=core, version=version, leases_per_type=leases_per_type, seed=seed, flood_rate_per_s=flood_rate_per_s
+        core=core, version=version, leases_per_type=leases_per_type, seed=seed, profile=profile
     )
     return build_record(
         objective_id=OBJECTIVE_ID,
@@ -698,6 +683,14 @@ def run(
             "release_sweep_poll_ms": "Edge default (200)",
             "leases": "written as active into the release ledger before the daemon starts",
             "interface_identity": "not commissioned: Edge has no commissioning record; leases name iface 'br0' and no interface is touched",
+            "hostile_load_profile": {
+                "path": profile.get("path"),
+                "sha256": profile.get("sha256"),
+                "quota": profile.get("quota_path"),
+                "phases": [p["name"] for p in profile.get("phases") or []],
+                "problems": profile.get("problems"),
+                "status": "provisional; factors are defaults awaiting owner confirmation; container numbers, not hardware",
+            },
             "daemon": daemon_info,
         },
         clock={
@@ -719,13 +712,35 @@ def run(
             "required_samples": required,
             "per_action_type": LEASES_PER_TYPE,
             "taken": len(samples),
-            "conditions": ["nominal", "eve_flood (harness-chosen, not declared hostile load)", "operator plane unavailable (all samples)"],
+            "conditions": ["nominal"]
+            + [f"{p['name']} (declared hostile load, {profile.get('path')})" for p in profile.get("phases") or []]
+            + ["operator plane unavailable (all samples)"],
         },
         parts=[start_part, completion_part],
-        method="real azazel-edge-core daemon; leases injected into its release ledger; rollback audit chain and JSONL tailed from outside",
+        method="real azazel-edge-core daemon; leases injected into its release ledger; the declared hostile-load profile written into its EVE input; rollback audit chain, JSONL and ingress audit read from outside",
         notes=[
             "Rollback commands run against no owned state (no tc/nft privileges in the harness), so each first record is "
             "an attempt outcome such as release_attempt_failed/retry_pending or owned_state_already_absent. The row "
             "measures when rollback starts, not whether it succeeds.",
+            "The hostile-load profile is provisional: its rates are derived from the OF-06 ingress quota, its factors "
+            "are defaults awaiting the owner's confirmation, and the numbers measured under it are container numbers, "
+            "not hardware evidence.",
         ],
     )
+
+
+def load_prerequisite(profile: Mapping[str, Any], hostile: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """``load_phase_applied``: every declared phase was driven into the core (run health).
+
+    Whether it was driven *as declared* is the hostile-load gap's recomputation,
+    not this prerequisite.
+    """
+
+    phases = [p["name"] for p in profile.get("phases") or []]
+    observed = {o.get("name"): o for o in (hostile or {}).get("phases") or []}
+    driven = bool(phases) and all(sum((observed.get(n) or {}).get("written", {}).values() or [0]) > 0 for n in phases)
+    if not phases:
+        detail = f"no valid hostile-load profile: {profile.get('problems')}"
+    else:
+        detail = so04_hostile_load.phase_summary(hostile or {})
+    return prerequisite("load_phase_applied", driven, detail)

@@ -643,8 +643,10 @@ def test_a_failed_create_table_aborts_before_the_core_starts(monkeypatch, tmp_pa
     monkeypatch.setattr(comp.subprocess, "Popen", lambda *a, **k: pytest.fail("core started"))
     import random
 
-    samples, prereqs = comp._measure_with_owned_state(so04, owned, tmp_path / "core", 2, random.Random(0), 10, {})
-    assert samples == []
+    from azazel_edge.service_objectives.declarations import load_hostile_load_profile
+
+    samples, prereqs, hostile = comp._measure_with_owned_state(so04, owned, tmp_path / "core", 2, random.Random(0), load_hostile_load_profile(), {})
+    assert samples == [] and hostile is None
     met = {p["id"]: p["met"] for p in prereqs}
     assert set(met) == set(SPEC["prerequisites"]) - {"per_action_completion_bound_declared"}
     assert met["core_binary_present"] is True and not any(v for k, v in met.items() if k != "core_binary_present")

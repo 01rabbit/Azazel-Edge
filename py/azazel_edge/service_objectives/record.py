@@ -195,10 +195,14 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "SO04-HOSTILE-LOAD-UNDECLARED",
             ),
             # A record may leave these out only when its samples show, by
-            # recomputation (GAP_CLOSERS), that the missing thing exists.
-            # SO04-LEASE-EXPIRY-ON-WALL-CLOCK: every lease expired on its
-            # monotonic deadline and every start is measured from it.
-            "gaps_closed_by_samples": ("SO04-LEASE-EXPIRY-ON-WALL-CLOCK",),
+            # recomputation (GAP_CLOSERS, PART_GAP_CLOSERS), that the missing
+            # thing exists. SO04-LEASE-EXPIRY-ON-WALL-CLOCK: every lease
+            # expired on its monotonic deadline and every start is measured
+            # from it. SO04-HOSTILE-LOAD-UNDECLARED: the hostile-load profile
+            # (config/service_objectives/hostile_load_profile.json, derived
+            # from the OF-06 quota) was applied to the core as declared and
+            # every hostile sample's lease expired under it.
+            "gaps_closed_by_samples": ("SO04-LEASE-EXPIRY-ON-WALL-CLOCK", "SO04-HOSTILE-LOAD-UNDECLARED"),
         },
         # OF-05: the bound is per action type and comes from
         # config/service_objectives/rollback_completion_bounds.json, which the
@@ -225,8 +229,10 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
                 "SO04-HOSTILE-LOAD-UNDECLARED",
             ),
-            # Same start as the start half, so the same recomputation closes it.
-            "gaps_closed_by_samples": ("SO04-LEASE-EXPIRY-ON-WALL-CLOCK",),
+            # Same start and load as the start half, so the same
+            # recomputations close them. SO04-COMPLETION-BOUND-PROVISIONAL
+            # has no closer: it stays until a hardware-derived bound exists.
+            "gaps_closed_by_samples": ("SO04-LEASE-EXPIRY-ON-WALL-CLOCK", "SO04-HOSTILE-LOAD-UNDECLARED"),
         },
     },
     "SO-07": {
@@ -263,7 +269,10 @@ RECORD_FIELDS = frozenset(
         "verdict", "evidence_class", "notes",
     }
 )
-PART_FIELDS = frozenset({"name", "sample_rule", "samples", "pass_rule", "prerequisites", "gaps", "verdict"})
+PART_FIELDS = frozenset({"name", "sample_rule", "samples", "pass_rule", "prerequisites", "gaps", "verdict", "hostile_load"})
+# Parts that may carry the hostile_load observation (what load was applied and
+# what the core's ingress audit recorded), read by PART_GAP_CLOSERS.
+HOSTILE_LOAD_OBJECTIVES = frozenset({"SO-04"})
 _COMMON_SAMPLE_FIELDS = ("sample_id", "start_monotonic_ns", "end_monotonic_ns", "elapsed_ms", "start_event", "end_event")
 SAMPLE_FIELDS: Dict[str, frozenset] = {
     "SO-02": frozenset(
@@ -673,6 +682,7 @@ def build_part(
     prerequisites: List[Dict[str, Any]],
     gaps: List[Dict[str, Any]],
     per_action_required: int = 0,
+    hostile_load: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     evaluated = evaluate_rule(pass_rule, samples) if samples else {"sample_count": 0, "holds": False}
     rule = dict(pass_rule)
@@ -689,7 +699,7 @@ def build_part(
     if per_action_required:
         sample_rule["per_action_required"] = int(per_action_required)
         sample_rule["per_action_shortfall"] = per_action_shortfall(samples, per_action_required)
-    return {
+    part = {
         "name": name,
         "sample_rule": sample_rule,
         "samples": samples,
@@ -698,6 +708,9 @@ def build_part(
         "gaps": gaps,
         "verdict": verdict,
     }
+    if hostile_load is not None:
+        part["hostile_load"] = dict(hostile_load)
+    return part
 
 
 def build_record(
@@ -1228,6 +1241,34 @@ def _so04_completion_observed_prerequisites(
     }
 
 
+def so04_hostile_load_applied(samples: Sequence[Mapping[str, Any]], part: Mapping[str, Any]) -> bool:
+    """SO-04: the declared hostile-load profile was applied as declared for every sample.
+
+    Recomputed by ``so04_hostile_load.hostile_load_problems`` from the part's
+    ``hostile_load`` observation and the samples, against the profile and the
+    OF-06 quota as they stand in this tree, never against the record's copy.
+    """
+
+    from .so04_hostile_load import hostile_load_applied
+
+    return hostile_load_applied(samples, part.get("hostile_load"))
+
+
+# Like GAP_CLOSERS, but the recomputation needs the part as well as its
+# samples (the load observation is one per part, not one per sample).
+PART_GAP_CLOSERS = {
+    "SO04-HOSTILE-LOAD-UNDECLARED": so04_hostile_load_applied,
+}
+
+
+def _gap_closed(gid: str, samples: Sequence[Mapping[str, Any]], part: Mapping[str, Any]) -> bool:
+    if gid in GAP_CLOSERS:
+        return bool(GAP_CLOSERS[gid](samples))
+    if gid in PART_GAP_CLOSERS:
+        return bool(PART_GAP_CLOSERS[gid](samples, part))
+    return False
+
+
 def _validate_sample_ids(samples: Sequence[Any], where: str, errors: List[str]) -> None:
     seen: Dict[str, int] = {}
     for sidx, sample in enumerate(samples):
@@ -1321,6 +1362,8 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
         if any(e.startswith(where + ".") for e in errors):
             continue
         _reject_unknown_fields(part, PART_FIELDS, where, errors)
+        if "hostile_load" in part and (objective not in HOSTILE_LOAD_OBJECTIVES or not isinstance(part["hostile_load"], dict)):
+            errors.append(f"{where}.hostile_load: only an object, and only on {sorted(HOSTILE_LOAD_OBJECTIVES)} parts")
         _validate_sample_ids(part["samples"], where, errors)
         if crashed:
             derived_parts.append(_validate_crash_part(part, where, errors))
@@ -1398,7 +1441,7 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
         closed_gaps = {
             gid
             for gid in spec.get("gaps_closed_by_samples", ())
-            if gid in GAP_CLOSERS and len(dict_samples) == len(part["samples"]) and GAP_CLOSERS[gid](dict_samples)
+            if len(dict_samples) == len(part["samples"]) and _gap_closed(gid, dict_samples, part)
         }
         for gid in spec["gaps"]:
             if gid not in have_gaps and gid not in closed_gaps:
