@@ -75,6 +75,8 @@ Defines bounded local contracts for:
 
 The SituationFrame limits list cardinality and text size so small local models receive compact state instead of unbounded raw logs. Structured model output is treated as malformed unless list-shaped fields are actual arrays; a string is never silently split into character-sized references. Numeric fields such as Evidence Gap priority use bounded deterministic fallbacks instead of raising through the reasoning loop.
 
+The frame's schema version/owner, provenance vocabulary, canonical serialization, optional Knowledge/AZ-06 status, serialized-size/latency budgets, and trace-isolation guarantees are specified in [`mio-situation-frame.md`](mio-situation-frame.md).
+
 ### `frame_builder.py`
 
 Builds a `MioSituationFrame` from normalized Evidence Plane records and deterministic NOC/SOC evaluation dictionaries.

@@ -73,8 +73,15 @@ class MioSituationFrameBuilder:
     attacker-controlled/sensitive data exposure.
     """
 
-    def __init__(self, *, max_event_refs: int = 32, stale_after_seconds: int = 300, future_clock_skew_seconds: int = 5):
+    # Bounded input scan keeps build latency independent of raw traffic volume
+    # (documented in docs/architecture/mio-situation-frame.md).
+    MAX_EVENTS_SCANNED_CEILING = 4096
+
+    def __init__(self, *, max_event_refs: int = 32, stale_after_seconds: int = 300, future_clock_skew_seconds: int = 5, max_events_scanned: int = 1024):
+        # The builder keeps only immutable configuration; every build() uses
+        # call-local state so concurrent traces cannot cross-contaminate.
         self.max_event_refs = max(1, min(int(max_event_refs), 64))
+        self.max_events_scanned = max(1, min(int(max_events_scanned), self.MAX_EVENTS_SCANNED_CEILING))
         self.stale_after_seconds = max(1, int(stale_after_seconds))
         self.future_clock_skew_seconds = max(0, min(int(future_clock_skew_seconds), 60))
 
@@ -90,6 +97,8 @@ class MioSituationFrameBuilder:
         frame_id: str,
         created_at: str,
         knowledge_refs: Sequence[str] = (),
+        knowledge_status: str | None = None,
+        deception_status: str | None = None,
         explicit_unknowns: Sequence[str] = (),
         explicit_contradictions: Sequence[str] = (),
     ) -> MioSituationFrame:
@@ -141,19 +150,29 @@ class MioSituationFrameBuilder:
             contradictions.append('HIGH_SOC_RISK_WITH_FRAGILE_NOC')
 
         evidence_refs: list[str] = []
-        for source in (noc.get('evidence_ids'), soc.get('evidence_ids')):
+        evidence_sources: set[str] = set()
+        for source_name, source in (('noc_evaluation', noc.get('evidence_ids')), ('soc_evaluation', soc.get('evidence_ids'))):
             for ref in _as_list(source):
                 text = str(ref or '')
                 if text:
                     evidence_refs.append(text)
+                    evidence_sources.add(source_name)
 
         newest_ts: datetime | None = None
         event_ref_count = 0
+        events_scanned = 0
+        input_truncated = False
         for event in events:
+            if events_scanned >= self.max_events_scanned:
+                input_truncated = True
+                unknowns.append('EVENT_SCAN_TRUNCATED')
+                break
+            events_scanned += 1
             payload = _event_payload(event)
             event_id = str(payload.get('event_id') or '')
             if event_id and event_ref_count < self.max_event_refs:
                 evidence_refs.append(event_id)
+                evidence_sources.add('evidence_plane')
                 event_ref_count += 1
             ts = _parse_ts(payload.get('ts'))
             if ts is not None and (newest_ts is None or ts > newest_ts):
@@ -173,6 +192,17 @@ class MioSituationFrameBuilder:
         noc_text = f"status={noc_status}; reasons={','.join(_reason_code(x) for x in _as_list(noc_summary.get('reasons'))[:6] if _reason_code(x))}"
         soc_text = f"status={soc_status}; reasons={','.join(_reason_code(x) for x in _as_list(soc_summary.get('reasons'))[:6] if _reason_code(x))}"
 
+        provenance: dict[str, list[str]] = {
+            'known_facts': ['noc_evaluation', 'soc_evaluation'],
+            'unknowns': ['frame_builder'] + (['caller'] if explicit_unknowns else []),
+            'evidence_refs': sorted(evidence_sources),
+            'freshness_seconds': ['evidence_plane', 'frame_builder'],
+        }
+        if contradictions:
+            provenance['contradictions'] = ['frame_builder'] + (['caller'] if explicit_contradictions else [])
+        if knowledge_refs:
+            provenance['knowledge_refs'] = ['knowledge']
+
         return MioSituationFrame.build(
             frame_id=frame_id,
             trace_id=trace_id,
@@ -188,4 +218,8 @@ class MioSituationFrameBuilder:
             evidence_refs=evidence_refs,
             knowledge_refs=knowledge_refs,
             freshness_seconds=freshness_seconds,
+            knowledge_status=knowledge_status,
+            deception_status=deception_status,
+            provenance=provenance,
+            input_truncated=input_truncated,
         )
