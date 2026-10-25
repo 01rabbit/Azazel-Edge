@@ -110,7 +110,7 @@ def test_falsification_requires_contradicting_evidence_and_condition():
 
 def test_omitted_hypothesis_is_carried_forward_not_dropped():
     other = MioHypothesis.from_mapping({"hypothesis_id": "h2", "statement": "y", "status": "active"}, ordinal=2)
-    result = apply_hypothesis_update([h("active"), other], [h("strengthened")])
+    result = apply_hypothesis_update([h("active"), other], [h("strengthened", supporting_evidence_refs=["ev:a"])])
     assert result.ok is True
     assert [x.hypothesis_id for x in result.hypotheses] == ["h1", "h2"]
     assert any(e.hypothesis_id == "h2" and e.reason == "carried_forward_omitted_by_update" for e in result.audit)
@@ -144,7 +144,7 @@ def test_loop_rejects_falsification_without_evidence_and_hands_off():
     assert "falsified_without_contradicting_evidence:h-benign" in outcome.errors
     assert [x.status.value for x in outcome.hypotheses] == ["proposed", "proposed"]
     assert outcome.handoff is not None
-    assert [x["hypothesis_id"] for x in outcome.handoff.to_dict()["validated_hypotheses"]] == ["h-attack", "h-benign"]
+    assert [x["hypothesis_id"] for x in outcome.handoff.to_dict()["model_proposed_hypotheses"]] == ["h-attack", "h-benign"]
 
 
 def test_operator_cancel_marks_inflight_hypotheses_superseded_in_audit():
@@ -160,7 +160,7 @@ def test_operator_cancel_marks_inflight_hypotheses_superseded_in_audit():
     assert outcome.handoff is None
     superseded = [e for e in outcome.hypothesis_audit if e.to_status == "superseded"]
     assert [e.hypothesis_id for e in superseded] == ["h-attack", "h-benign"]
-    assert {e.reason for e in superseded} == {"operator_cancelled"}
+    assert {e.reason for e in superseded} == {"cycle_cancelled_by_operator"}
 
 
 # --- material frame supersession / trace isolation --------------------------
@@ -196,7 +196,7 @@ def test_newer_material_frame_supersedes_inflight_reasoning_and_late_result_is_d
     outcome = loop.run(frame=old, playbook=PLAYBOOK, cycle_id=ticket.cycle_id, cancel_check=coord.cancel_check(ticket), stale_check=coord.stale_check(ticket))
     assert outcome.state is ReasoningState.STALE_SUPERSEDED
     assert "superseded_by_newer_frame" in outcome.errors
-    assert {e.reason for e in outcome.hypothesis_audit if e.to_status == "superseded"} == {"stale_superseded"}
+    assert {e.reason for e in outcome.hypothesis_audit if e.to_status == "superseded"} == {"cycle_superseded_by_newer_frame"}
     late = coord.complete(ticket, outcome)
     assert (late.accepted, late.cycle_status) == (False, "superseded")
     assert coord.current("trace-1") is None
@@ -206,7 +206,7 @@ def test_newer_material_frame_supersedes_inflight_reasoning_and_late_result_is_d
 
 def test_stale_complete_result_arriving_after_supersession_is_never_current():
     coord = ReasoningCoordinator()
-    update = [dict(H_ATTACK, status="strengthened", supporting_evidence_refs=["ev:ssh:1", "ev:flow:1"]), dict(H_BENIGN, status="weakened")]
+    update = [dict(H_ATTACK, status="strengthened", supporting_evidence_refs=["ev:ssh:1", "ev:flow:1"]), dict(H_BENIGN, status="weakened", contradicting_evidence_refs=["ev:flow:1"])]
     loop = BoundedReasoningLoop(model=scripted_model(update), broker=FakeBroker())
     t_old = coord.begin(frame())
     outcome_old = loop.run(frame=frame(), playbook=PLAYBOOK, cycle_id=t_old.cycle_id)
@@ -245,7 +245,7 @@ def test_operator_cancel_then_late_result_is_discarded():
 
 def test_concurrent_traces_are_isolated():
     coord = ReasoningCoordinator()
-    update = [dict(H_ATTACK, status="strengthened", supporting_evidence_refs=["ev:ssh:1", "ev:flow:1"]), dict(H_BENIGN, status="weakened")]
+    update = [dict(H_ATTACK, status="strengthened", supporting_evidence_refs=["ev:ssh:1", "ev:flow:1"]), dict(H_BENIGN, status="weakened", contradicting_evidence_refs=["ev:flow:1"])]
     barrier = threading.Barrier(8)
     results = {}
 
@@ -263,7 +263,7 @@ def test_concurrent_traces_are_isolated():
     assert all(r.accepted for r in results.values())
     for i in range(8):
         current = coord.current(f"trace-{i}")
-        assert current.recommendation.advisory_id == f"trace-{i}:e0:c1:advisory"
+        assert current.recommendation.advisory_id.startswith(f"trace-{i}:e0:c") and current.recommendation.advisory_id.endswith(":advisory")
         assert {e.trace_id for e in current.trace} == {f"trace-{i}"}
         rows = coord.audit(f"trace-{i}")
         assert [r["event"] for r in rows] == ["cycle_started", "result_accepted"]
@@ -308,7 +308,7 @@ def test_restart_abandons_inflight_and_never_serves_old_advisory_as_current():
     assert restored.stale_check(inflight)() is True
 
     late = restored.complete(inflight, loop.run(frame=frame(trace_id="B"), playbook=PLAYBOOK, cycle_id=inflight.cycle_id))
-    assert (late.accepted, late.reason) == (False, "unknown_or_pre_restart_cycle")
+    assert (late.accepted, late.reason) == (False, "unknown_evicted_or_pre_restart_cycle")
     events = [r["event"] for r in restored.audit()]
     assert events[:3] == ["cycle_started", "result_accepted", "cycle_started"]  # pre-restart audit kept
     assert events[3:] == ["advisory_restored_as_stale", "cycle_abandoned_on_restart", "stale_result_discarded"]
@@ -316,7 +316,7 @@ def test_restart_abandons_inflight_and_never_serves_old_advisory_as_current():
     fresh = restored.run_cycle(loop, frame(trace_id="B"), PLAYBOOK)
     assert fresh.accepted is True
     assert restored.current("B").handoff.to_dict()["trace_id"] == "B"
-    assert restored._latest["B"] == "B:e1:c2"
+    assert restored._latest["B"] == "B:e1:c3"  # global sequence: IDs are never reused
 
 
 def test_restore_rejects_unknown_snapshot_schema():
@@ -381,3 +381,192 @@ def test_lifecycle_and_handoff_modules_have_no_authority_path():
         imports = [line for line in src.splitlines() if line.startswith(("import ", "from "))]
         assert all(("arbiter" not in line and "enforce" not in line and "deception" not in line and "os" != line.split()[1]) for line in imports), imports
         assert "os.environ" not in src and "getenv" not in src
+
+
+# --- review follow-ups (#445) --------------------------------------------------
+
+@pytest.mark.parametrize("status", ["strengthened", "weakened", "falsified", "superseded", "unresolved"])
+def test_first_round_hypotheses_must_enter_proposed_or_active(status):
+    def model(task, prompt):
+        return {"hypotheses": [dict(H_ATTACK, status=status, contradicting_evidence_refs=["ev:ssh:2"])]}
+
+    outcome = BoundedReasoningLoop(model=model, broker=FakeBroker()).run(frame=frame(), playbook=PLAYBOOK, cycle_id="c1")
+    assert outcome.state is ReasoningState.VALIDATION_REJECTED
+    assert outcome.errors == (f"initial_hypothesis_must_start_proposed:h-attack:{status}",)
+    assert outcome.hypothesis_audit == ()
+    assert outcome.handoff.to_dict()["model_proposed_hypotheses"] == []
+
+
+def test_strengthened_and_weakened_need_evidence():
+    assert apply_hypothesis_update([h("active")], [h("strengthened")]).errors == ("strengthened_without_supporting_evidence:h1",)
+    assert apply_hypothesis_update([h("active")], [h("weakened")]).errors == ("weakened_without_refuting_evidence_or_gap:h1",)
+    assert apply_hypothesis_update([h("active")], [h("weakened", missing_evidence=["no flow data"])]).ok is True
+    assert apply_hypothesis_update([h("active")], [h("weakened", contradicting_evidence_refs=["ev:a"])]).ok is True
+
+
+def test_lifecycle_refs_must_be_in_current_context():
+    result = apply_hypothesis_update([h("active")], [h("strengthened", supporting_evidence_refs=["ev:elsewhere"])], allowed_refs={"ev:a"})
+    assert result.errors == ("lifecycle_ref_outside_context:h1:ev:elsewhere",)
+
+
+def test_loop_rejects_strengthened_without_supporting_evidence():
+    update = [dict(H_ATTACK, status="strengthened", supporting_evidence_refs=[]), dict(H_BENIGN)]
+    outcome = BoundedReasoningLoop(model=scripted_model(update), broker=FakeBroker()).run(frame=frame(), playbook=PLAYBOOK, cycle_id="c1")
+    assert outcome.state is ReasoningState.VALIDATION_REJECTED
+    assert "strengthened_without_supporting_evidence:h-attack" in outcome.errors
+
+
+@pytest.mark.parametrize("terminal", ["falsified", "superseded"])
+def test_terminal_hypothesis_content_cannot_be_edited(terminal):
+    before = h(terminal, contradicting_evidence_refs=["ev:a"])
+    edited = h(terminal, contradicting_evidence_refs=["ev:a"], statement="rewritten")
+    assert apply_hypothesis_update([before], [edited]).errors == (f"terminal_hypothesis_modified:h1:{terminal}",)
+    same = apply_hypothesis_update([before], [before])
+    assert same.ok is True and same.audit == ()
+
+
+def test_handoff_labels_model_hypotheses_as_unverified():
+    update = [dict(H_ATTACK, status="strengthened", supporting_evidence_refs=["ev:ssh:1", "ev:flow:1"]), dict(H_BENIGN, status="weakened", contradicting_evidence_refs=["ev:flow:1"])]
+
+    def model(task, prompt):
+        if task == "recommend":
+            raise MioModelUnavailable("down")
+        return scripted_model(update)(task, prompt)
+
+    outcome = BoundedReasoningLoop(model=model, broker=FakeBroker()).run(frame=frame(), playbook=PLAYBOOK, cycle_id="c1")
+    assert outcome.state is ReasoningState.DEPENDENCY_UNAVAILABLE
+    payload = outcome.handoff.to_dict()
+    assert payload["model_contribution"] == "unverified_hypotheses_only"
+    assert "frame_derived_only" not in payload["limitations"] and "no_model_contribution" not in payload["limitations"]
+    assert "includes_unverified_model_hypotheses" in payload["limitations"]
+    strengthened = payload["model_proposed_hypotheses"][0]
+    assert strengthened == {"hypothesis_id": "h-attack", "model_status": "strengthened", "verification": "model_proposed_unverified", "statement": "Credential attack", "falsification_conditions": ["known admin automation confirmed"]}
+
+
+def test_handoff_cap_is_hard_even_for_oversized_playbook():
+    from dataclasses import replace
+    huge = replace(PLAYBOOK, playbook_id="p" * 500, discriminating_questions=tuple("q" * 5000 for _ in range(10)))
+    out = build_no_model_handoff(frame(), reason="x" * 500, playbook=huge)
+    assert len(out.to_canonical_json()) <= NO_MODEL_HANDOFF_MAX_BYTES
+
+
+def test_coordinator_state_is_bounded_over_many_traces():
+    coord = ReasoningCoordinator(max_traces=4, max_retained_cycles=8, max_audit_events=32)
+    loop = BoundedReasoningLoop(model=None, broker=FakeBroker())
+    for i in range(300):
+        assert coord.run_cycle(loop, frame(trace_id=f"t{i}"), PLAYBOOK).accepted
+    assert len(coord._cycles) <= 8
+    assert len(coord._latest) <= 8 and len(coord._current) <= 8
+    assert len(coord.audit()) == 32 and coord.audit_dropped > 0
+    assert coord.current("t0") is None and coord.current("t299") is not None
+    snap = coord.snapshot()
+    assert len(snap) < 32 * 1024
+    old = ReasoningCoordinator(max_retained_cycles=1)
+    t = old.begin(frame(trace_id="x"))
+    old.cancel("x")
+    old.run_cycle(loop, frame(trace_id="y"), PLAYBOOK)
+    assert old.complete(t, None).reason == "unknown_evicted_or_pre_restart_cycle"
+
+
+def test_audit_rows_are_size_bounded():
+    coord = ReasoningCoordinator()
+    t = coord.begin(frame())
+    coord.cancel("trace-1", reason="r" * 10_000)
+    hyps = tuple(MioHypothesis.from_mapping({"hypothesis_id": f"h{i}", "statement": "s" * 360, "supporting_evidence_refs": [f"e{j}" for j in range(16)]}, ordinal=i) for i in range(20))
+
+    class O:
+        state = ReasoningState.COMPLETE
+        hypotheses = hyps
+        recommendation = None
+
+    coord.complete(t, O())
+    for row in coord.audit():
+        assert len(json.dumps(row)) < 8192
+
+
+def _snap_payload():
+    coord = ReasoningCoordinator()
+    coord.run_cycle(BoundedReasoningLoop(model=None, broker=FakeBroker()), frame(), PLAYBOOK)
+    coord.begin(frame(trace_id="B"))
+    return json.loads(coord.snapshot())
+
+
+@pytest.mark.parametrize("tamper", [
+    lambda p: p.update(epoch=-1),
+    lambda p: p.update(epoch="1"),
+    lambda p: p.update(extra=1),
+    lambda p: p.pop("cycles"),
+    lambda p: p.update(next_cycle=0),
+    lambda p: p["cycles"][0].update(status="godmode"),
+    lambda p: p["cycles"][0].update(epoch=5),
+    lambda p: p["cycles"][0].update(epoch=-1),
+    lambda p: p["cycles"][0].pop("frame_id"),
+    lambda p: p["cycles"][0].update(trace_id=7),
+    lambda p: p["cycles"].append(dict(p["cycles"][0])),
+    lambda p: p["latest"].update({"trace-1": "nope"}),
+    lambda p: p.update(audit=[{"seq": "x", "event": 1}]),
+    lambda p: p.update(cycles={}),
+])
+def test_restore_rejects_tampered_snapshot_with_value_error(tamper):
+    payload = _snap_payload()
+    tamper(payload)
+    with pytest.raises(ValueError):
+        ReasoningCoordinator.restore(json.dumps(payload).encode("ascii"))
+
+
+@pytest.mark.parametrize("raw", [b"\xff\xfe", b"not json", b"[]", b"null"])
+def test_restore_rejects_malformed_bytes_with_value_error(raw):
+    with pytest.raises(ValueError):
+        ReasoningCoordinator.restore(raw)
+
+
+def test_restore_epoch_bumps_strictly():
+    payload = _snap_payload()
+    restored = ReasoningCoordinator.restore(json.dumps(payload).encode("ascii"))
+    assert restored.epoch == payload["epoch"] + 1
+    again = ReasoningCoordinator.restore(restored.snapshot())
+    assert again.epoch == restored.epoch + 1
+    with pytest.raises(ValueError):
+        ReasoningCoordinator(epoch=-1)
+
+
+def test_material_digest_canonicalizes_order_and_counts_truncation():
+    base = frame()
+    assert material_frame_digest(frame(known_facts=["same source", "20 SSH failures in 60s"], evidence_refs=["ev:ssh:2", "ev:ssh:1"])) == material_frame_digest(base)
+    from dataclasses import replace
+    assert material_frame_digest(replace(base, truncated=True)) != material_frame_digest(base)
+    assert material_frame_digest(frame(soc_summary="status=high; reasons=a")) != material_frame_digest(base)
+    assert material_frame_digest(frame(mission="different mission")) != material_frame_digest(base)
+
+
+def test_material_digest_on_real_frame_builder_output():
+    from azazel_edge.evaluators import NocEvaluator, SocEvaluator
+    from azazel_edge.evidence_plane import EvidenceEvent
+    from azazel_edge.mio import MioSituationFrameBuilder
+
+    def ev(ts, **kw):
+        return EvidenceEvent.build(ts=ts, confidence=0.9, **kw)
+
+    events = [
+        ev("2026-08-23T00:00:00Z", source="noc_probe", kind="icmp_probe", subject="gateway", severity=0, attrs={"target": "gateway", "reachable": True}, status="ok"),
+        ev("2026-08-23T00:00:01Z", source="suricata_eve", kind="alert", subject="10.0.0.5->192.168.40.10:22/TCP", severity=72, attrs={"sid": 210001, "attack_type": "SSH Brute Force Attempt", "target_port": 22, "risk_score": 72, "confidence_raw": 85}, status="alert"),
+    ]
+
+    def build(events_in, created_at, frame_id):
+        return MioSituationFrameBuilder().build(
+            events=events_in, noc_evaluation=NocEvaluator().evaluate(events_in), soc_evaluation=SocEvaluator().evaluate(events_in),
+            current_defensive_state="OBSERVE", mission="Investigate", trace_id="trace-real", frame_id=frame_id, created_at=created_at)
+
+    first = build(events, "2026-08-23T00:00:03Z", "f1")
+    later = build(list(reversed(events)), "2026-08-23T00:00:45Z", "f2")
+    assert first.freshness_seconds != later.freshness_seconds
+    assert first.canonical_digest() != later.canonical_digest()
+    assert material_frame_digest(first) == material_frame_digest(later)
+    coord = ReasoningCoordinator()
+    t1 = coord.begin(first)
+    assert coord.begin(later).deduplicated is True and coord.is_current(t1)
+
+    more = events + [ev("2026-08-23T00:00:30Z", source="suricata_eve", kind="alert", subject="10.0.0.6->192.168.40.10:22/TCP", severity=90, attrs={"sid": 210002, "attack_type": "SSH Brute Force Attempt", "target_port": 22, "risk_score": 90, "confidence_raw": 90}, status="alert")]
+    changed = build(more, "2026-08-23T00:00:46Z", "f3")
+    assert material_frame_digest(changed) != material_frame_digest(first)
+    assert coord.begin(changed).deduplicated is False and coord.stale_check(t1)() is True

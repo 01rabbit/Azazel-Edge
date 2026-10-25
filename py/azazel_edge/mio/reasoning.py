@@ -14,7 +14,15 @@ from .contracts import (
 )
 from .grounding import GroundingValidator
 from .handoff import NoModelHandoff, build_no_model_handoff
-from .lifecycle import HypothesisAuditEntry, apply_hypothesis_update, record_initial, supersede_all
+from .lifecycle import (
+    REASON_CYCLE_CANCELLED,
+    REASON_CYCLE_SUPERSEDED,
+    HypothesisAuditEntry,
+    apply_hypothesis_update,
+    record_initial,
+    supersede_all,
+    validate_initial_hypotheses,
+)
 from .model_adapter import MioModelBlocked, MioModelUnavailable
 from .playbook import PromptCompiler, ReasoningPlaybook
 from .trace import ReasoningTrace
@@ -155,6 +163,10 @@ class BoundedReasoningLoop:
         if not h_check.ok:
             errors.extend(h_check.errors)
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, (), None)
+        initial_errors = validate_initial_hypotheses(hypotheses)
+        if initial_errors:
+            errors.extend(initial_errors)
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, (), None)
         audit.extend(record_initial(hypotheses))
         validated[:] = hypotheses
         trace.record(state=ReasoningState.HYPOTHESES_READY.value, kind="hypotheses", payload={"ids": [h.hypothesis_id for h in hypotheses]})
@@ -283,7 +295,11 @@ class BoundedReasoningLoop:
             if not updated_check.ok:
                 errors.extend(updated_check.errors)
                 return finish(ReasoningState.VALIDATION_REJECTED, updated_hypotheses, gaps, None)
-            lifecycle = apply_hypothesis_update(hypotheses, updated_hypotheses)
+            lifecycle = apply_hypothesis_update(
+                hypotheses,
+                updated_hypotheses,
+                allowed_refs=set(frame.evidence_refs) | set(frame.knowledge_refs) | set(additional_refs),
+            )
             if not lifecycle.ok:
                 errors.extend(lifecycle.errors)
                 return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
@@ -362,9 +378,11 @@ class BoundedReasoningLoop:
         audit: list[HypothesisAuditEntry],
         validated: Sequence[MioHypothesis],
     ) -> ReasoningOutcome:
-        if state in (ReasoningState.STALE_SUPERSEDED, ReasoningState.OPERATOR_CANCELLED):
+        if state is ReasoningState.STALE_SUPERSEDED:
             # In-flight hypotheses of a dead cycle are retained, marked superseded.
-            audit.extend(supersede_all(validated, state.value))
+            audit.extend(supersede_all(validated, REASON_CYCLE_SUPERSEDED))
+        elif state is ReasoningState.OPERATOR_CANCELLED:
+            audit.extend(supersede_all(validated, REASON_CYCLE_CANCELLED))
         handoff = None
         if state in HANDOFF_STATES:
             handoff = build_no_model_handoff(frame, reason=state.value, playbook=playbook, hypotheses=validated)

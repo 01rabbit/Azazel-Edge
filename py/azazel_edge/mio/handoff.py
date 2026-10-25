@@ -2,10 +2,13 @@
 
 When the model is absent, blocked, invalid, or the cycle ends before a
 validated recommendation, the operator still gets a situation summary built
-only from the SituationFrame (and, optionally, the playbook and the
-hypotheses already validated in this cycle). No model output is used, the
-bytes are stable for identical inputs, and the handoff carries no action or
-authority: it is advisory text for a human.
+from the SituationFrame and, optionally, the playbook. The summary, guidance
+and lists are frame/playbook-derived only. If the model already proposed
+hypotheses that passed grounding/lifecycle checks this cycle, they are listed
+separately as ``model_proposed_hypotheses`` with ``verification:
+model_proposed_unverified`` and ``model_contribution`` says so; they are never
+presented as frame-derived. Bytes are stable for identical inputs, and the
+handoff carries no action or authority: it is advisory text for a human.
 """
 from __future__ import annotations
 
@@ -63,7 +66,7 @@ def build_no_model_handoff(
         "trace_id": frame.trace_id,
         "frame_digest": frame.canonical_digest(),
         "reason": reason[:64],
-        "model_contribution": "none",
+        "model_contribution": "unverified_hypotheses_only" if hypotheses else "none",
         "current_defensive_state": frame.current_defensive_state,
         "threat_level": frame.threat_level,
         "summary": summary,
@@ -73,34 +76,43 @@ def build_no_model_handoff(
         "evidence_refs": list(frame.evidence_refs[: c["evidence_refs"]]),
         "dependency_status": {"knowledge": frame.knowledge_status, "deception": frame.deception_status},
         "playbook": None,
-        "validated_hypotheses": [
-            {"hypothesis_id": h.hypothesis_id, "status": h.status.value, "statement": h.statement[:160], "falsification_conditions": list(h.falsification_conditions[:2])}
+        "model_proposed_hypotheses": [
+            {"hypothesis_id": h.hypothesis_id[:96], "model_status": h.status.value, "verification": "model_proposed_unverified", "statement": h.statement[:160], "falsification_conditions": [x[:160] for x in h.falsification_conditions[:2]]}
             for h in list(hypotheses)[: c["hypotheses"]]
         ],
         "operator_guidance": list(_OPERATOR_GUIDANCE),
-        "limitations": ["no_model_contribution", "frame_derived_only"] + (["frame_truncated"] if frame.truncated else []),
+        "limitations": (["includes_unverified_model_hypotheses", "summary_frame_derived"] if hypotheses else ["no_model_contribution", "frame_derived_only"]) + (["frame_truncated"] if frame.truncated else []),
     }
     if playbook is not None:
         payload["playbook"] = {
-            "playbook_id": playbook.playbook_id,
-            "version": playbook.version,
-            "check_next": list(playbook.discriminating_questions[: c["check_next"]]),
-            "stop_conditions": list(playbook.stop_conditions[: c["stop_conditions"]]),
-            "claim_boundaries": list(playbook.claim_boundaries[: c["claim_boundaries"]]),
+            "playbook_id": playbook.playbook_id[:96],
+            "version": playbook.version[:32],
+            "check_next": [x[:160] for x in playbook.discriminating_questions[: c["check_next"]]],
+            "stop_conditions": [x[:160] for x in playbook.stop_conditions[: c["stop_conditions"]]],
+            "claim_boundaries": [x[:160] for x in playbook.claim_boundaries[: c["claim_boundaries"]]],
         }
-    handoff = NoModelHandoff(payload)
-    # Deterministic shrink: drop list tails in a fixed order until in budget.
-    order = ("evidence_refs", "validated_hypotheses", "known_facts", "contradictions", "unknowns")
-    while len(handoff.to_canonical_json()) > NO_MODEL_HANDOFF_MAX_BYTES:
-        for key in order:
-            if payload[key]:
-                payload[key] = payload[key][:-1]
-                if "handoff_truncated" not in payload["limitations"]:
-                    payload["limitations"].append("handoff_truncated")
-                break
-        else:
+    # Deterministic shrink: drop list tails in a fixed order, then halve the
+    # summary, then drop the playbook block, until within budget.
+    order = ("evidence_refs", "model_proposed_hypotheses", "known_facts", "contradictions", "unknowns")
+
+    def size() -> int:
+        return len(NoModelHandoff(payload).to_canonical_json())
+
+    while size() > NO_MODEL_HANDOFF_MAX_BYTES:
+        if "handoff_truncated" not in payload["limitations"]:
+            payload["limitations"].append("handoff_truncated")
+            continue
+        key = next((k for k in order if payload[k]), None)
+        if key is not None:
+            payload[key] = payload[key][:-1]
+        elif payload["summary"]:
             payload["summary"] = payload["summary"][: len(payload["summary"]) // 2]
-            if not payload["summary"]:
-                break
-        handoff = NoModelHandoff(payload)
+        elif payload["playbook"] is not None:
+            payload["playbook"] = None
+        else:
+            break
+    handoff = NoModelHandoff(payload)
+    if len(handoff.to_canonical_json()) > NO_MODEL_HANDOFF_MAX_BYTES:
+        # Unreachable with bounded frame fields; refuse rather than exceed the cap.
+        raise ValueError("no_model_handoff_budget_unreachable")
     return handoff
