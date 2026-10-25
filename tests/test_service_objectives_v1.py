@@ -599,3 +599,173 @@ def test_ci_validate_step_pins_the_commit():
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     step = ci.split("- name: Re-validate records", 1)[1].split("- name:", 1)[0]
     assert 'validate' in step and '--expect-commit "$GITHUB_SHA"' in step
+
+
+# ------------------------------------------------- CI mode (--ci) exit status
+#
+# CI mode changes only the exit status: 0 iff every requested record exists,
+# is valid, its harness executed, and its verdict is pass or not_measurable.
+# A skipped / not-executed harness, an invalid or missing record, and a fail
+# stay red. The default mode is unchanged (tests above).
+
+
+@pytest.fixture
+def gapped_so03_spec(monkeypatch):
+    monkeypatch.setitem(
+        rec.OBJECTIVE_SPECS,
+        "SO-03",
+        {"latency": {"kind": rec.RULE_EVERY_SAMPLE_MAX, "bound_ms": 2000.0, "required_samples": 3, "prerequisites": (), "gaps": ("SO03-TEST-GAP",)}},
+    )
+
+
+def _gapped_record(samples):
+    part = rec.build_part(
+        name="latency",
+        pass_rule={"kind": rec.RULE_EVERY_SAMPLE_MAX, "bound_ms": 2000.0},
+        required_samples=3,
+        samples=samples,
+        prerequisites=[],
+        gaps=[rec.gap("SO03-TEST-GAP", "declared absence")],
+    )
+    return rec.build_record(
+        objective_id="SO-03", title="t", started_monotonic_ns=0, started_at=rec.utc_now(),
+        product_configuration={"product": "azazel-edge"}, clock={"name": "CLOCK_MONOTONIC"},
+        sample_rule={"required_samples": 3}, parts=[part], method="test",
+    )
+
+
+def test_ci_exit_pass_executed_is_zero(clean_owner):
+    record = _latency_record([_sample(i, 10.0) for i in range(3)])
+    assert rec.validate_record(record) == []
+    assert rec.not_executed_reasons(record) == []
+    assert rec.ci_exit_code_for(record, []) == rec.EXIT_PASS
+
+
+def test_ci_exit_fail_is_nonzero(clean_owner):
+    record = _latency_record([_sample(0, 10.0), _sample(1, 2500.0), _sample(2, 1.0)])
+    assert record["verdict"] == rec.VERDICT_FAIL
+    assert rec.ci_exit_code_for(record, rec.validate_record(record)) == rec.EXIT_FAIL
+
+
+def test_ci_exit_not_measurable_executed_with_declared_gap_is_zero(clean_owner, gapped_so03_spec):
+    # Even with a bound violated: the gap blocks the verdict, the verdict stays
+    # not_measurable, and CI goes green with the record shown in the summary.
+    record = _gapped_record([_sample(0, 10.0), _sample(1, 2500.0), _sample(2, 1.0)])
+    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
+    assert rec.validate_record(record) == []
+    assert rec.ci_exit_code_for(record, []) == rec.EXIT_PASS
+    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE  # never changed
+    assert rec.exit_code_for(record["verdict"]) == rec.EXIT_NOT_MEASURABLE  # default mode unchanged
+
+
+def test_ci_exit_not_executed_no_samples_is_nonzero(clean_owner):
+    # A missing prerequisite (no root, no lab) means nothing was measured.
+    record = _latency_record([], prerequisites=[rec.prerequisite("lab_built", False, "not root")])
+    assert rec.not_executed_reasons(record) == ["latency: 0/3 samples taken"]
+    assert rec.ci_exit_code_for(record, []) == rec.EXIT_NOT_EXECUTED
+
+
+def test_ci_exit_too_few_samples_is_nonzero(clean_owner):
+    record = _latency_record([_sample(0, 1.0)])
+    assert rec.validate_record(record) == []
+    assert rec.ci_exit_code_for(record, []) == rec.EXIT_NOT_EXECUTED
+
+
+def test_ci_exit_invalid_record_is_nonzero(clean_owner):
+    record = _latency_record([_sample(i, 1.0) for i in range(3)])
+    assert rec.ci_exit_code_for(record, ["tampered"]) == rec.EXIT_INVALID
+    bad = dict(record, verdict="skipped")
+    assert rec.ci_exit_code_for(bad, []) == rec.EXIT_INVALID
+    assert rec.ci_exit_code_for({}, []) == rec.EXIT_INVALID
+
+
+def test_ci_exit_crash_record_is_nonzero(real_table):
+    record = cli._crash_record("SO-03", RuntimeError("x"))
+    assert rec.validate_record(record) == []
+    assert rec.ci_exit_code_for(record, []) == rec.EXIT_NOT_EXECUTED
+
+
+def test_ci_exit_downgraded_pass_is_nonzero(monkeypatch):
+    monkeypatch.setattr(rec, "owner_block", lambda: {"repository": rec.OWNING_REPOSITORY, "commit": "a" * 40, "worktree_clean": False})
+    record = _latency_record([_sample(i, 1.0) for i in range(3)])
+    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
+    assert rec.ci_exit_code_for(record, []) == rec.EXIT_NOT_EXECUTED
+
+
+def test_ci_exit_per_action_shortfall_is_nonzero(monkeypatch):
+    monkeypatch.setitem(
+        rec.OBJECTIVE_SPECS, "SO-03",
+        {"latency": {"kind": rec.RULE_EVERY_SAMPLE_MAX, "bound_ms": 2000.0, "required_samples": 3, "per_action_samples": 2, "prerequisites": (), "gaps": ()}},
+    )
+    record = {"objective_id": "SO-03", "verdict": rec.VERDICT_NOT_MEASURABLE, "parts": [
+        {"name": "latency", "prerequisites": [], "samples": [dict(_sample(i, 1.0), action_type="throttle") for i in range(3)]}
+    ]}
+    reasons = rec.not_executed_reasons(record)
+    assert reasons and "per-action samples short" in reasons[0]
+
+
+def test_cli_run_ci_not_executed_is_nonzero_default_unchanged(tmp_path, real_table):
+    args = ["run", "--objective", "SO-04", "--core-bin", str(tmp_path / "none"), "--out-dir", str(tmp_path / "out")]
+    assert cli.main(args) == rec.EXIT_NOT_MEASURABLE
+    assert cli.main(args + ["--ci"]) == rec.EXIT_NOT_EXECUTED
+
+
+def test_cli_objective_list_syntax(tmp_path, monkeypatch, clean_owner, gapped_so03_spec):
+    calls = []
+
+    def fake(args):
+        def so03():
+            calls.append("SO-03")
+            return _gapped_record([_sample(i, 1.0) for i in range(3)])
+
+        def so07():
+            calls.append("SO-07")
+            return _gapped_record([])  # nothing measured
+
+        return {"SO-03": so03, "SO-07": so07}
+
+    monkeypatch.setattr(cli, "_harnesses", fake)
+    assert cli.main(["run", "--objective", "SO-03", "--ci", "--out-dir", str(tmp_path / "a")]) == rec.EXIT_PASS
+    assert cli.main(["run", "--objective", "SO-03,SO-07", "--ci", "--out-dir", str(tmp_path / "b")]) == rec.EXIT_NOT_EXECUTED
+    assert calls == ["SO-03", "SO-03", "SO-07"]
+    assert cli.parse_objectives("all") == list(cli.OBJECTIVES)
+    with pytest.raises(SystemExit):
+        cli.main(["run", "--objective", "SO-03,SO-99", "--out-dir", str(tmp_path / "c")])
+
+
+def test_cli_validate_ci_missing_record_and_summary(tmp_path, monkeypatch, clean_owner, gapped_so03_spec):
+    out = tmp_path / "recs"
+    rec.write_record(_gapped_record([_sample(i, 1.0) for i in range(3)]), out)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    assert cli.main(["validate", "--ci", "--objective", "SO-03", "--expect-commit", "a" * 40, str(out)]) == rec.EXIT_PASS
+    text = summary.read_text(encoding="utf-8")
+    assert "| SO-03 | latency | not_measurable | yes | 3/3 |" in text and "SO03-TEST-GAP" in text and "green" in text
+    # A requested objective without a record is red, and shown as missing.
+    assert cli.main(["validate", "--ci", "--objective", "SO-03,SO-04", str(out)]) == rec.EXIT_INVALID
+    assert "| SO-04 | no valid record | - | no |" in summary.read_text(encoding="utf-8")
+    # A record nobody asked for is not evidence for the job.
+    assert cli.main(["validate", "--ci", "--objective", "SO-07", str(out)]) == rec.EXIT_INVALID
+    # Default mode is unchanged: not_measurable exits 2.
+    assert cli.main(["validate", str(out)]) == rec.EXIT_NOT_MEASURABLE
+    with pytest.raises(SystemExit):
+        cli.main(["validate", "--ci", str(out)])
+
+
+def test_cli_validate_ci_not_executed_record_is_red(tmp_path, clean_owner):
+    out = tmp_path / "recs"
+    rec.write_record(_latency_record([]), out)
+    assert cli.main(["validate", str(out)]) == rec.EXIT_NOT_MEASURABLE
+    assert cli.main(["validate", "--ci", "--objective", "SO-03", str(out)]) == rec.EXIT_NOT_EXECUTED
+
+
+def test_ci_workflow_uses_ci_mode_and_keeps_so02_out_of_the_unprivileged_job():
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    job = ci.split("  service-objectives:\n", 1)[1].split("\n  service-objectives-lab:\n", 1)[0]
+    lab = ci.split("\n  service-objectives-lab:\n", 1)[1].split("\n  dependency-review:\n", 1)[0]
+    runs = [s for s in job.split("- name:") if "service_objectives run" in s]
+    assert runs and all("--ci" in s for s in runs)
+    assert all("SO-02" not in s and "--objective all" not in s for s in runs)
+    assert "validate --ci --objective SO-03,SO-04,SO-07" in " ".join(job.split())
+    assert "--ci" in lab and "--objective SO-02" in lab
+    assert "github.ref == 'refs/heads/main'" in lab and "workflow_dispatch" in lab

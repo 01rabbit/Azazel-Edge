@@ -57,6 +57,9 @@ EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_NOT_MEASURABLE = 2
 EXIT_INVALID = 3
+# CI mode only (``--ci``): the harness did not take its measurement (too few
+# samples, a crash, or a downgraded pass), whatever the verdict says.
+EXIT_NOT_EXECUTED = 4
 
 RULE_EVERY_SAMPLE_MAX = "every_sample_max_elapsed"
 RULE_ZERO_VIOLATIONS = "zero_violations"
@@ -346,6 +349,72 @@ def exit_code_for(verdict: str) -> int:
         VERDICT_FAIL: EXIT_FAIL,
         VERDICT_NOT_MEASURABLE: EXIT_NOT_MEASURABLE,
     }.get(verdict, EXIT_INVALID)
+
+
+def not_executed_reasons(record: Mapping[str, Any]) -> List[str]:
+    """Why a record shows that its harness did not actually measure. Empty: it did.
+
+    "Executed" is recomputed from the record's samples against the fixed
+    OBJECTIVE_SPECS row, never from a field the record sets: every part took at
+    least its required samples (and its per-action count where the row has
+    one), no part is a crash part, and no pass was downgraded for an
+    unidentified commit. A part that ran but is blocked by a declared gap or an
+    unmet declared prerequisite has still executed; one whose harness could not
+    start (no root, no lab, no core binary) has no samples and has not.
+    """
+
+    reasons: List[str] = []
+    parts = record.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return ["record has no parts"]
+    objective = record.get("objective_id")
+    for part in parts:
+        if not isinstance(part, Mapping):
+            reasons.append("part is not an object")
+            continue
+        name = part.get("name")
+        if name == CRASH_PART:
+            reasons.append(f"{name}: the harness crashed")
+            continue
+        unmet = {p.get("id") for p in part.get("prerequisites") or [] if isinstance(p, Mapping) and not p.get("met")}
+        for pid in (CRASH_PREREQUISITE, DOWNGRADE_PREREQUISITE):
+            if pid in unmet:
+                reasons.append(f"{name}: prerequisite {pid} unmet")
+        spec = OBJECTIVE_SPECS.get(str(objective), {}).get(str(name))
+        if spec is None:
+            reasons.append(f"{name}: not a part of {objective} in OBJECTIVE_SPECS")
+            continue
+        samples = part.get("samples")
+        taken = len(samples) if isinstance(samples, list) else 0
+        required = int(spec["required_samples"])
+        if taken == 0 or taken < required:
+            reasons.append(f"{name}: {taken}/{required} samples taken")
+            continue
+        shortfall = per_action_shortfall(samples, int(spec.get("per_action_samples", 0) or 0))
+        if shortfall:
+            reasons.append(f"{name}: per-action samples short {shortfall}")
+    return reasons
+
+
+def ci_exit_code_for(record: Mapping[str, Any], errors: Sequence[str]) -> int:
+    """Exit status of one record in CI mode (``--ci``). The verdict is never changed.
+
+    0 only for a structurally valid record whose harness executed and whose
+    verdict is ``pass`` or ``not_measurable`` (blocked by declared gaps, shown
+    in the step summary). Non-zero for an invalid record, a ``fail``, or a
+    harness that did not execute.
+    """
+
+    if errors:
+        return EXIT_INVALID
+    verdict = record.get("verdict")
+    if verdict not in VERDICTS:
+        return EXIT_INVALID
+    if verdict == VERDICT_FAIL:
+        return EXIT_FAIL
+    if not_executed_reasons(record):
+        return EXIT_NOT_EXECUTED
+    return EXIT_PASS
 
 
 def utc_now() -> str:
