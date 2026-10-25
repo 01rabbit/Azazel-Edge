@@ -77,8 +77,12 @@ used to generate (`/var/ossec/active-response/bin/azazel-block.sh`, an
 `iptables` DROP started by the Wazuh manager) as an exception pending an owner
 decision. The owner decided to remove it. The installer no longer writes the
 script, removes it from a host where an earlier version left it, and sets
-`<disabled>yes</disabled>` in the agent's `<active-response>` block so that no
-manager-side command runs on the host. The Wazuh agent (FIM and SCA) and
+`<disabled>yes</disabled>` in the agent's `<active-response>` block, then
+restarts a running agent (`systemctl try-restart`) so that no manager-side
+command runs on the host. This holds while that setting stays in effect: the
+Wazuh package's stock scripts such as `firewall-drop` stay on disk, and a
+package update or manual edit that re-enables active response is undone by
+re-running the installer. The Wazuh agent (FIM and SCA) and
 Vector forwarding remain optional integrations that send telemetry out and
 receive no action back (`docs/WAZUH_INTEGRATION_GUIDE.md`).
 

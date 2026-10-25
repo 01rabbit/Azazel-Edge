@@ -13,6 +13,13 @@ Defensive actions (`throttle`, `redirect`, `isolate`) come only from the Rust
 see `docs/X86_64_INTEGRATION_BOUNDARY.md`, "Decision and enforcement
 authority" (Edge#412).
 
+This rests on the agent setting `<disabled>yes</disabled>` in its
+`<active-response>` block staying in effect (see "No active response" below).
+The Wazuh package's stock active response scripts, such as `firewall-drop`,
+remain on disk under `/var/ossec/active-response/bin/`; a package update that
+rewrites `ossec.conf` or a manual edit can turn active response back on.
+Re-run the installer after such a change, and use the check below.
+
 ---
 
 ## Architecture Overview
@@ -100,7 +107,17 @@ Earlier versions of the installer generated
 the Wazuh Manager could start. It was a second enforcer outside the Rust core
 and has been removed (Edge#412). Re-running the installer on an upgraded host
 removes the script and disables active response on the agent; both steps are
-idempotent.
+idempotent. With `ENABLE_SERVICES=1` (the default) the installer then runs
+`systemctl try-restart wazuh-agent`, so an agent that was already running
+reloads `ossec.conf`; `wazuh-execd` keeps active response on until that
+restart. With `ENABLE_SERVICES=0` it prints a warning instead, and you restart
+the agent yourself (`sudo systemctl restart wazuh-agent`).
+
+The setting only holds while it stays in `ossec.conf`. Wazuh's stock active
+response scripts (`firewall-drop` and others) are not removed, because they
+belong to the Wazuh package. If a package update or a manual edit re-enables
+active response, re-run the installer (or set `<disabled>yes</disabled>` again
+and restart the agent).
 
 If the Wazuh Manager has `<command>` or `<active-response>` entries that name
 `azazel-block` (added by hand for the old script), remove them from the
@@ -111,8 +128,10 @@ supported path.
 To check an agent:
 ```bash
 test ! -e /var/ossec/active-response/bin/azazel-block.sh
-grep -A3 '<active-response>' /var/ossec/etc/ossec.conf
-# Expected: <disabled>yes</disabled>
+# Exits 0 only if every <active-response> block has <disabled>yes</disabled>
+python3 -c "import sys, xml.etree.ElementTree as ET; b = list(ET.parse('/var/ossec/etc/ossec.conf').getroot().iter('active-response')); sys.exit(0 if b and all((e.findtext('disabled') or '').strip() == 'yes' for e in b) else 1)"
+systemctl show -p ActiveEnterTimestamp wazuh-agent
+# Expected: later than the last change to /var/ossec/etc/ossec.conf
 ```
 
 ---
@@ -182,7 +201,11 @@ Wazuh との連携は Method A（Wazuh Agent）と Method B（Vector 転送）�
 
 Wazuh は観測専用です。防御アクション（throttle / redirect / isolate）を適用するのは
 Rust の `azazel-edge-core` だけで、Wazuh から Pi 上の通信を遮断する経路はありません
-（Edge#412）。
+（Edge#412）。ただしこれは、エージェントの `ossec.conf` で `<active-response>` の
+`<disabled>yes</disabled>` が有効であり続けることが前提です。Wazuh 標準の
+`firewall-drop` などのスクリプトはディスクに残るため、パッケージ更新や手動編集で
+再び有効になった場合はインストーラを再実行してください。インストーラは稼働中の
+エージェントを `systemctl try-restart` で再起動して設定を反映します。
 
 どちらも Wazuh Manager は別ホストで運用してください。
 同一 Pi での同居は非推奨です。

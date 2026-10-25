@@ -21,6 +21,8 @@ from __future__ import annotations
 import ast
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -346,6 +348,55 @@ def active_response_writers(installer_dir: Path) -> List[Tuple[str, str]]:
     return hits
 
 
+LEGACY_AR_SCRIPT = "/var/ossec/active-response/bin/azazel-block.sh"
+OSSEC_CONF = "/var/ossec/etc/ossec.conf"
+
+
+def _code_lines(script: Path) -> List[str]:
+    return [l.strip() for l in script.read_text(encoding="utf-8").splitlines() if l.strip() and not l.strip().startswith("#")]
+
+
+def removed_paths(script: Path) -> Set[str]:
+    """Paths an ``rm`` line in ``script`` removes, with earlier shell variables substituted."""
+
+    variables: Dict[str, str] = {}
+    removed: Set[str] = set()
+    for raw in script.read_text(encoding="utf-8").splitlines():
+        assign = _ASSIGN.match(raw)
+        if assign:
+            variables[assign.group(1)] = assign.group(2)
+            continue
+        line = raw.strip()
+        if line.startswith("#"):
+            continue
+        words = [w for w in re.split(r"[\s'\";&|()`<>]+", line) if w]
+        if words and words[0] == "rm":
+            for word in words[1:]:
+                if not word.startswith("-"):
+                    removed.add(_VAR_REF.sub(lambda m: variables.get(m.group(1), m.group(0)), word))
+    return removed
+
+
+def python_heredocs(script: Path) -> List[str]:
+    """Bodies of ``python3 - <<'TAG'`` heredocs in ``script``."""
+
+    bodies: List[str] = []
+    lines = script.read_text(encoding="utf-8").splitlines()
+    i = 0
+    while i < len(lines):
+        start = re.match(r"\s*python3\s+-\s+<<-?\s*['\"]?(\w+)['\"]?\s*$", lines[i])
+        i += 1
+        if not start:
+            continue
+        body: List[str] = []
+        while i < len(lines) and lines[i].strip() != start.group(1):
+            body.append(lines[i])
+            i += 1
+        bodies.append("\n".join(body) + "\n")
+        i += 1
+    return bodies
+
+
 # --- Python scan ------------------------------------------------------------
 
 
@@ -661,11 +712,50 @@ class WazuhActiveResponseTest(unittest.TestCase):
                 self.assertNotIn("defensive", reason.lower(), (script, line))
                 self.assertNotIn("active response", reason.lower(), (script, line))
 
-    def test_wazuh_installer_disables_agent_active_response(self) -> None:
+    def test_wazuh_installer_writes_no_command_registration(self) -> None:
         text = self.WAZUH_INSTALLER.read_text(encoding="utf-8")
-        self.assertIn("root.findall('active-response')", text)
-        self.assertIn("disabled.text = 'yes'", text)
         self.assertNotIn("<command>", text)
+        self.assertNotIn("'command'", text)
+
+    def test_wazuh_installer_removes_the_legacy_script(self) -> None:
+        self.assertIn(LEGACY_AR_SCRIPT, removed_paths(self.WAZUH_INSTALLER))
+
+    def test_wazuh_installer_restarts_a_running_agent(self) -> None:
+        # enable --now leaves a running agent on the old ossec.conf (upgrade).
+        lines = _code_lines(self.WAZUH_INSTALLER)
+        self.assertIn("systemctl try-restart wazuh-agent", lines)
+        ar_snippet = max(i for i, l in enumerate(lines) if l.startswith("python3 - <<"))
+        self.assertGreater(lines.index("systemctl try-restart wazuh-agent"), ar_snippet)
+
+    def _run_active_response_snippet(self, xml: str) -> "ET.Element":
+        import xml.etree.ElementTree as ET
+
+        snippets = [b for b in python_heredocs(self.WAZUH_INSTALLER) if "active-response" in b]
+        self.assertEqual(len(snippets), 1)
+        self.assertIn(OSSEC_CONF, snippets[0])
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = Path(tmp) / "ossec.conf"
+            conf.write_text(xml, encoding="utf-8")
+            code = snippets[0].replace(OSSEC_CONF, str(conf))
+            for _ in range(2):  # idempotent
+                subprocess.run([sys.executable, "-I", "-c", code], check=True, capture_output=True, timeout=30)
+            return ET.parse(conf).getroot()
+
+    def test_wazuh_installer_snippet_disables_active_response(self) -> None:
+        cases = [
+            "<ossec_config><client/><active-response><disabled>no</disabled>"
+            "<ca_store>etc/wpk_root.pem</ca_store></active-response></ossec_config>",
+            "<ossec_config><client/></ossec_config>",
+            "<ossec_config><active-response/><active-response><disabled>no</disabled></active-response></ossec_config>",
+        ]
+        for xml in cases:
+            with self.subTest(xml=xml):
+                root = self._run_active_response_snippet(xml)
+                blocks = list(root.iter("active-response"))
+                self.assertTrue(blocks)
+                for block in blocks:
+                    self.assertEqual([d.text for d in block.findall("disabled")], ["yes"])
+                self.assertEqual(root.find("client") is not None, "<client" in xml)  # rest kept
 
     def test_checker_catches_a_reintroduced_active_response_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

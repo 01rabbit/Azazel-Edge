@@ -65,7 +65,9 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `/var/ossec/active-response/bin/azazel-block.sh`, the `iptables` DROP script
   the Wazuh manager could start. It was a second enforcer outside the Rust
   `azazel-edge-core`. On upgrade the installer removes the script if present
-  and sets `<disabled>yes</disabled>` in the agent's `<active-response>` block.
+  and sets `<disabled>yes</disabled>` in the agent's `<active-response>` block,
+  then restarts an already-running agent (`systemctl try-restart`) so the
+  setting takes effect.
   The Wazuh agent (FIM and SCA) and Vector forwarding remain optional,
   observation-only integrations; defensive actions come only from the core.
   `tests/test_enforcement_boundary_inventory_v1.py` drops the exception entry,

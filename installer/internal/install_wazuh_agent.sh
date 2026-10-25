@@ -75,7 +75,7 @@ import xml.etree.ElementTree as ET
 
 tree = ET.parse('/var/ossec/etc/ossec.conf')
 root = tree.getroot()
-blocks = root.findall('active-response')
+blocks = list(root.iter('active-response'))
 if not blocks:
     blocks = [ET.SubElement(root, 'active-response')]
 for block in blocks:
@@ -92,7 +92,14 @@ echo "[wazuh-agent 5/5] Enable and start wazuh-agent"
 systemctl daemon-reload
 if [[ "${ENABLE_SERVICES}" == "1" ]]; then
   systemctl enable --now wazuh-agent
+  # enable --now leaves an already-running agent (an upgrade) on the old
+  # ossec.conf, and wazuh-execd keeps active response on until a restart.
+  # try-restart restarts it only if it is running.
+  systemctl try-restart wazuh-agent
   systemctl is-active wazuh-agent && echo "[wazuh-agent] Service started OK"
+elif systemctl is-active --quiet wazuh-agent; then
+  echo "[wazuh-agent] WARNING: wazuh-agent is running on the previous ossec.conf;"
+  echo "  active response stays enabled until: sudo systemctl restart wazuh-agent"
 fi
 
 echo "[wazuh-agent] Install complete."
