@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-from .contracts import DEFENSIVE_STATES, MioSituationFrame
+from .contracts import DEFENSIVE_STATES, MioSituationFrame, _safe_int
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -64,6 +64,19 @@ def _event_payload(event: Any) -> Mapping[str, Any]:
     return event if isinstance(event, Mapping) else {}
 
 
+def _best_unique(candidates: list[tuple[int, float, str]], keep: int) -> list[tuple[int, float, str]]:
+    out: list[tuple[int, float, str]] = []
+    seen: set[str] = set()
+    for item in sorted(candidates):
+        if item[2] in seen:
+            continue
+        seen.add(item[2])
+        out.append(item)
+        if len(out) >= keep:
+            break
+    return out
+
+
 class MioSituationFrameBuilder:
     """Build a bounded M.I.O. world-state from deterministic Edge outputs.
 
@@ -74,6 +87,8 @@ class MioSituationFrameBuilder:
     """
 
     def __init__(self, *, max_event_refs: int = 32, stale_after_seconds: int = 300, future_clock_skew_seconds: int = 5):
+        # The builder keeps only immutable configuration; every build() uses
+        # call-local state so concurrent traces cannot cross-contaminate.
         self.max_event_refs = max(1, min(int(max_event_refs), 64))
         self.stale_after_seconds = max(1, int(stale_after_seconds))
         self.future_clock_skew_seconds = max(0, min(int(future_clock_skew_seconds), 60))
@@ -90,6 +105,8 @@ class MioSituationFrameBuilder:
         frame_id: str,
         created_at: str,
         knowledge_refs: Sequence[str] = (),
+        knowledge_status: str | None = None,
+        deception_status: str | None = None,
         explicit_unknowns: Sequence[str] = (),
         explicit_contradictions: Sequence[str] = (),
     ) -> MioSituationFrame:
@@ -106,18 +123,15 @@ class MioSituationFrameBuilder:
         soc_summary = _as_mapping(soc.get('summary'))
 
         known_facts: list[str] = []
-        unknowns: list[str] = [str(x) for x in explicit_unknowns]
-        contradictions: list[str] = [str(x) for x in explicit_contradictions]
+        # Builder-derived safety markers come before caller-supplied ones so
+        # explicit_unknowns/contradictions can never crowd them out of the caps.
+        unknowns: list[str] = []
+        contradictions: list[str] = []
 
         noc_status = _status(noc_summary.get('status'))
         soc_status = _status(soc_summary.get('status'), 'low')
+        # Ordered most- to least-important: tail trimming drops reasons first.
         known_facts.extend((f'NOC_STATUS={noc_status.upper()}', f'SOC_STATUS={soc_status.upper()}'))
-
-        for prefix, summary in (('NOC', noc_summary), ('SOC', soc_summary)):
-            for raw_reason in _as_list(summary.get('reasons'))[:8]:
-                code = _reason_code(raw_reason)
-                if code:
-                    known_facts.append(f'{prefix}_REASON={code}')
 
         suspicion = _as_mapping(soc.get('suspicion'))
         confidence = _as_mapping(soc.get('confidence'))
@@ -128,6 +142,16 @@ class MioSituationFrameBuilder:
             known_facts.append(f'SOC_CONFIDENCE={_status(confidence.get("label"), "unknown").upper()}')
         if blast:
             known_facts.append(f'SOC_BLAST={_status(blast.get("label"), "unknown").upper()}')
+
+        # Interleave NOC/SOC reason codes so neither plane is starved by caps.
+        reason_lists = [
+            [f'{prefix}_REASON={code}' for code in (_reason_code(x) for x in _as_list(summary.get('reasons'))[:8]) if code]
+            for prefix, summary in (('NOC', noc_summary), ('SOC', soc_summary))
+        ]
+        for i in range(max(len(r) for r in reason_lists)):
+            for reasons in reason_lists:
+                if i < len(reasons):
+                    known_facts.append(reasons[i])
 
         visibility = _as_mapping(soc.get('security_visibility_state'))
         visibility_status = _status(visibility.get('status'))
@@ -141,23 +165,37 @@ class MioSituationFrameBuilder:
             contradictions.append('HIGH_SOC_RISK_WITH_FRAGILE_NOC')
 
         evidence_refs: list[str] = []
-        for source in (noc.get('evidence_ids'), soc.get('evidence_ids')):
+        evidence_sources: set[str] = set()
+        for source_name, source in (('noc_evaluation', noc.get('evidence_ids')), ('soc_evaluation', soc.get('evidence_ids'))):
             for ref in _as_list(source):
                 text = str(ref or '')
                 if text:
                     evidence_refs.append(text)
+                    evidence_sources.add(source_name)
 
+        # One cheap O(n) pass with O(max_event_refs) memory: freshness uses the
+        # newest timestamp of *all* events, and the referenced events are chosen
+        # by (severity desc, recency desc, event_id) so input order never matters.
         newest_ts: datetime | None = None
-        event_ref_count = 0
+        # Sort key: higher severity, then newer, then smaller event_id.
+        candidates: list[tuple[int, float, str]] = []
+        keep = self.max_event_refs
         for event in events:
             payload = _event_payload(event)
-            event_id = str(payload.get('event_id') or '')
-            if event_id and event_ref_count < self.max_event_refs:
-                evidence_refs.append(event_id)
-                event_ref_count += 1
             ts = _parse_ts(payload.get('ts'))
             if ts is not None and (newest_ts is None or ts > newest_ts):
                 newest_ts = ts
+            event_id = str(payload.get('event_id') or '')
+            if not event_id:
+                continue
+            severity = max(0, min(_safe_int(payload.get('severity')), 100))
+            candidates.append((-severity, -ts.timestamp() if ts is not None else float('inf'), event_id))
+            if len(candidates) >= 4 * keep:
+                candidates = _best_unique(candidates, keep)
+        selected = _best_unique(candidates, keep)
+        if selected:
+            evidence_sources.add('evidence_plane')
+        evidence_refs.extend(event_id for _sev, _ts, event_id in selected)
 
         if newest_ts is None:
             freshness_seconds = self.stale_after_seconds + 1
@@ -170,8 +208,22 @@ class MioSituationFrameBuilder:
             if freshness_seconds > self.stale_after_seconds:
                 unknowns.append('EVIDENCE_STALE')
 
+        unknowns.extend(str(x) for x in explicit_unknowns)
+        contradictions.extend(str(x) for x in explicit_contradictions)
+
         noc_text = f"status={noc_status}; reasons={','.join(_reason_code(x) for x in _as_list(noc_summary.get('reasons'))[:6] if _reason_code(x))}"
         soc_text = f"status={soc_status}; reasons={','.join(_reason_code(x) for x in _as_list(soc_summary.get('reasons'))[:6] if _reason_code(x))}"
+
+        provenance: dict[str, list[str]] = {
+            'known_facts': ['noc_evaluation', 'soc_evaluation'],
+            'unknowns': ['frame_builder'] + (['caller'] if explicit_unknowns else []),
+            'evidence_refs': sorted(evidence_sources),
+            'freshness_seconds': ['evidence_plane', 'frame_builder'],
+        }
+        if contradictions:
+            provenance['contradictions'] = ['frame_builder'] + (['caller'] if explicit_contradictions else [])
+        if knowledge_refs:
+            provenance['knowledge_refs'] = ['knowledge']
 
         return MioSituationFrame.build(
             frame_id=frame_id,
@@ -188,4 +240,7 @@ class MioSituationFrameBuilder:
             evidence_refs=evidence_refs,
             knowledge_refs=knowledge_refs,
             freshness_seconds=freshness_seconds,
+            knowledge_status=knowledge_status,
+            deception_status=deception_status,
+            provenance=provenance,
         )
