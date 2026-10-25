@@ -14,33 +14,45 @@ Definition (assignment section 3, SO-04):
   bound (OF-05). That half is reported ``not_measurable``, never passing.
 
 What is measured here
----------------------
+--------------------
 Edge's enforcement lease is the Rust core's release task
 (``rust/azazel-edge-core/src/release.rs``): ``ReleaseTask.due_epoch`` is the
 lease's declared expiry, and the core's sweep
 (``process_due_releases_with_runner``) attempts rollback once ``due_epoch`` has
-passed, then ``process_release_events`` (``src/main.rs``) appends a
-``rust_release_engine_v1`` record naming ``release_task_id`` with
-``attempted_at_epoch`` to the normalized-event JSONL.
+passed. Immediately before the first rollback command of each attempt, the core
+appends a ``rollback_started`` record naming the lease (``release_task_id``) and
+the decision (``trace_id``) to its rollback audit chain,
+``<ledger dir>/<ledger stem>.rollback-audit.jsonl``, and fsyncs it. That chain
+is in ``P0AuditLogger``'s format and verifies with ``verify_chain``. After the
+attempt, ``process_release_events`` (``src/main.rs``) appends the attempt's
+outcome, a ``rust_release_engine_v1`` record, to the normalized-event JSONL.
 
 The harness runs the **real, unmodified core binary** as a daemon. It writes
 active leases for each declared action type (``throttle``, ``isolate``,
 ``redirect`` -- the only ones ``build_release_task`` accepts) into the release
 ledger before the daemon starts, exactly in the ledger's own schema, then tails
-the JSONL from outside and timestamps the first record naming each lease. It
+both files from outside. A sample's end is the instant, on this host's
+``CLOCK_MONOTONIC``, at which the harness first sees the ``rollback_started``
+record naming that lease in the chain; when the harness then sees the lease's
+outcome in the JSONL, it checks that the start record was already there. It
 never enables enforcement; the daemon runs with Edge's defaults (enforcement
 off, dry-run on), and its rollback commands run against no owned state.
 
+That the record is durable *before the rollback command runs* is a property of
+the core's code, not something an outside observer can see, so it is shown by
+the core's own tests (``release.rs``), which stand a command runner in for
+``tc``/``nft`` and look at the chain and the fsync count when it is first called.
+
 Why the start half is still ``not_measurable``
 ----------------------------------------------
-The observed numbers are reported, but three things the definition needs are
+The observed numbers are reported, but two things the definition needs are
 absent, so the part cannot be gate evidence:
 
-* the record naming the lease is **not an audit-chain record** -- the
-  normalized-event JSONL is neither hash-chained nor fsynced, and it is written
-  after the attempt finishes, carrying the attempt's start time;
 * the lease's expiry is declared on the **wall clock** (``SystemTime``), not
-  the issuer's monotonic clock that section 4.3 requires;
+  the issuer's monotonic clock that section 4.3 requires. The start record
+  carries the core's monotonic and wall instants read together, but the
+  expiry itself exists only as a wall-clock instant, and when the core
+  releases is decided against the wall clock;
 * **hostile load is undeclared** (OF-06). The harness floods the core's EVE
   input during half the samples, but that is the harness's own choice of load,
   not a declared one.
@@ -56,8 +68,9 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
+from ..audit.logger import P0AuditLogger
 from .record import (
     REPO_ROOT,
     RULE_EVERY_SAMPLE_MAX,
@@ -80,6 +93,15 @@ LEDGER_SCHEMA = "azazel-release-ledger/v1"
 DEFAULT_CORE_BIN = REPO_ROOT / "rust" / "azazel-edge-core" / "target" / "release" / "azazel-edge-core"
 CLOCK_STEP_TOLERANCE_NS = 50_000_000
 IFACE = "br0"
+ROLLBACK_STARTED_KIND = "rollback_started"
+ROLLBACK_STARTED_SCHEMA = "azazel-edge/rollback-started/v1"
+_START_RECORD_INT_FIELDS = ("attempt", "lease_due_epoch_ns", "started_monotonic_ns", "started_wall_epoch_ns")
+
+
+def rollback_audit_path(ledger: Path) -> Path:
+    """Where the core writes its rollback audit chain (``release::rollback_audit_path``)."""
+
+    return ledger.with_name(f"{ledger.stem or 'release-ledger'}.rollback-audit.jsonl")
 
 
 def _fnv1a64(data: bytes) -> int:
@@ -131,45 +153,208 @@ def make_lease(action: str, index: int, created_epoch: float, due_epoch: float) 
 
 
 class _Tail(threading.Thread):
-    """Timestamps, on the harness monotonic clock, the first release record per lease."""
+    """Timestamps, on the harness monotonic clock, the first start record and outcome per lease.
 
-    def __init__(self, path: Path, wanted: set[str]):
+    The chain is read before the JSONL on every pass, and again when an
+    outcome names a lease whose start record has not been seen yet: the core
+    writes the start record before the attempt and the outcome after it, so a
+    start record missing at that second read was not there when the outcome was.
+    """
+
+    def __init__(self, events: Path, chain: Path, wanted: set[str]):
         super().__init__(daemon=True)
-        self.path = path
+        self.events = events
+        self.chain = chain
         self.wanted = set(wanted)
-        self.first: Dict[str, Dict[str, Any]] = {}
+        self.starts: Dict[str, Dict[str, Any]] = {}
+        self.outcomes: Dict[str, Dict[str, Any]] = {}
         self.stop = threading.Event()
+        self._offsets = {"chain": 0, "events": 0}
+        self._pending = {"chain": b"", "events": b""}
+        self._chain_lines = 0
+
+    def _read(self, name: str, path: Path) -> tuple[List[bytes], int]:
+        try:
+            with path.open("rb") as fh:
+                fh.seek(self._offsets[name])
+                chunk = fh.read()
+        except FileNotFoundError:
+            chunk = b""
+        # Taken after the read returns, so an observation is never earlier
+        # than the write it observed.
+        now = time.monotonic_ns()
+        if not chunk:
+            return [], now
+        self._offsets[name] += len(chunk)
+        lines = (self._pending[name] + chunk).split(b"\n")
+        self._pending[name] = lines.pop()
+        return lines, now
+
+    def poll_chain(self) -> None:
+        lines, now = self._read("chain", self.chain)
+        for raw in lines:
+            line_no = self._chain_lines
+            self._chain_lines += 1
+            try:
+                row = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(row, dict) or row.get("kind") != ROLLBACK_STARTED_KIND:
+                continue
+            tid = str(row.get("release_task_id") or "")
+            if tid in self.wanted and tid not in self.starts:
+                self.starts[tid] = {"observed_monotonic_ns": now, "chain_line": line_no, "row": row}
+
+    def poll_events(self) -> None:
+        lines, now = self._read("events", self.events)
+        for raw in lines:
+            if b"rust_release_engine_v1" not in raw:
+                continue
+            try:
+                event = json.loads(raw)
+            except Exception:
+                continue
+            release = event.get("release") or {}
+            tid = str(release.get("release_task_id") or "")
+            if tid not in self.wanted or tid in self.outcomes:
+                continue
+            if tid not in self.starts:
+                self.poll_chain()
+            self.outcomes[tid] = {
+                "observed_monotonic_ns": now,
+                "release": release,
+                "start_record_seen": tid in self.starts,
+            }
+
+    def done(self) -> bool:
+        return bool(self.wanted) and len(self.starts) == len(self.wanted) and len(self.outcomes) == len(self.wanted)
 
     def run(self) -> None:
-        offset = 0
-        pending = b""
         while not self.stop.is_set():
-            try:
-                with self.path.open("rb") as fh:
-                    fh.seek(offset)
-                    chunk = fh.read()
-            except FileNotFoundError:
-                chunk = b""
-            now = time.monotonic_ns()
-            if chunk:
-                offset += len(chunk)
-                data = pending + chunk
-                lines = data.split(b"\n")
-                pending = lines.pop()
-                for raw in lines:
-                    if b"rust_release_engine_v1" not in raw:
-                        continue
-                    try:
-                        event = json.loads(raw)
-                    except Exception:
-                        continue
-                    release = event.get("release") or {}
-                    tid = str(release.get("release_task_id") or "")
-                    if tid in self.wanted and tid not in self.first:
-                        self.first[tid] = {"observed_monotonic_ns": now, "release": release}
-            if self.wanted and len(self.first) == len(self.wanted):
+            self.poll_chain()
+            self.poll_events()
+            if self.done():
                 return
             time.sleep(0.002)
+
+
+def start_record_problems(row: Mapping[str, Any], lease: Mapping[str, Any]) -> List[str]:
+    """What is wrong with a ``rollback_started`` record for this lease, if anything."""
+
+    problems = []
+    if row.get("record_schema") != ROLLBACK_STARTED_SCHEMA:
+        problems.append("record_schema")
+    if row.get("release_task_id") != lease["task_id"]:
+        problems.append("release_task_id")
+    if row.get("trace_id") != lease["trace_id"]:
+        problems.append("trace_id")
+    for key in _START_RECORD_INT_FIELDS:
+        value = row.get(key)
+        if not isinstance(value, int) or isinstance(value, bool):
+            problems.append(key)
+    due = row.get("lease_due_epoch_ns")
+    if isinstance(due, int) and abs(due - round(lease["due_epoch"] * 1e9)) > 1000:
+        problems.append("lease_due_epoch_ns disagrees with the ledger")
+    return problems
+
+
+def build_samples(
+    leases: List[Dict[str, Any]],
+    starts: Mapping[str, Mapping[str, Any]],
+    outcomes: Mapping[str, Mapping[str, Any]],
+    offset0: int,
+) -> List[Dict[str, Any]]:
+    """One sample per lease, from what the tail observed. Pure, so it is testable without a core."""
+
+    samples: List[Dict[str, Any]] = []
+    for lease in leases:
+        start_ns = round(lease["due_epoch"] * 1e9) - offset0
+        row: Dict[str, Any] = {
+            "sample_id": lease["task_id"],
+            "action_type": lease["action"],
+            "condition": {"load": lease.get("_phase", "nominal"), "operator_plane": "unavailable (no operator service running)"},
+            "due_epoch": lease["due_epoch"],
+            "start_monotonic_ns": start_ns,
+            "start_event": "lease due_epoch from the release-ledger record, mapped onto the harness monotonic clock",
+            "end_event": "first rollback_started audit-chain record naming release_task_id, observed in the core's rollback audit chain",
+        }
+        seen = starts.get(lease["task_id"])
+        if seen:
+            observed = int(seen["observed_monotonic_ns"])
+            end = max(observed, start_ns)
+            record = seen["row"]
+            stamp = record.get("started_monotonic_ns")
+            row.update({
+                "end_monotonic_ns": end,
+                "elapsed_ms": round((end - start_ns) / 1e6, 3),
+                "start_record_chain_line": seen["chain_line"],
+                "start_record_attempt": record.get("attempt"),
+                "edge_recorded_start_monotonic_ns": stamp if isinstance(stamp, int) and not isinstance(stamp, bool) else None,
+                "observed_before_expiry": observed < start_ns,
+            })
+        else:
+            row.update({"end_monotonic_ns": None, "elapsed_ms": None})
+        outcome = outcomes.get(lease["task_id"])
+        if outcome:
+            release = outcome["release"]
+            row.update({
+                "attempted_at_epoch": release.get("attempted_at_epoch"),
+                "edge_reported_start_after_expiry_ms": round((float(release.get("attempted_at_epoch", 0)) - lease["due_epoch"]) * 1000, 3),
+                "release_status": release.get("status"),
+                "release_result": release.get("result"),
+                "start_record_before_outcome": bool(outcome["start_record_seen"]),
+            })
+        else:
+            row["start_record_before_outcome"] = None
+        samples.append(row)
+    return samples
+
+
+def start_record_prerequisites(
+    leases: List[Dict[str, Any]],
+    starts: Mapping[str, Mapping[str, Any]],
+    samples: List[Dict[str, Any]],
+    chain: Path,
+    offset0: int,
+) -> tuple[List[Dict[str, Any]], List[str]]:
+    """The two start-record prerequisites, and clock-offset findings for the wall-clock check."""
+
+    verified = P0AuditLogger.verify_chain(chain) if chain.exists() else {"ok": False, "entries": 0, "error": "no chain written"}
+    bad: List[str] = []
+    offsets: List[str] = []
+    for lease in leases:
+        seen = starts.get(lease["task_id"])
+        if not seen:
+            continue
+        record = seen["row"]
+        problems = start_record_problems(record, lease)
+        stamp = record.get("started_monotonic_ns")
+        if isinstance(stamp, int) and stamp > int(seen["observed_monotonic_ns"]):
+            problems.append("started_monotonic_ns later than the harness saw the record")
+        wall = record.get("started_wall_epoch_ns")
+        if isinstance(stamp, int) and isinstance(wall, int) and abs((wall - stamp) - offset0) > CLOCK_STEP_TOLERANCE_NS:
+            offsets.append(lease["task_id"])
+        if problems:
+            bad.append(f"{lease['task_id']}: {', '.join(problems)}")
+    chain_ok = bool(verified.get("ok")) and int(verified.get("entries") or 0) > 0 and not bad
+    chain_detail = (
+        f"verify_chain {verified}; {len(starts)} start record(s) for {len(leases)} lease(s)"
+        + ("" if not bad else "; malformed: " + "; ".join(bad[:10]))
+    )
+    reversed_ = [s["sample_id"] for s in samples if s.get("start_record_before_outcome") is not True]
+    order_ok = bool(samples) and not reversed_
+    order_detail = (
+        "every lease's start record was in the chain when its outcome appeared in the JSONL"
+        if order_ok
+        else "start record absent when the outcome appeared, or no outcome seen: " + ", ".join(reversed_[:20])
+    )
+    return (
+        [
+            prerequisite("rollback_start_chain_verifies", chain_ok, chain_detail),
+            prerequisite("rollback_start_recorded_before_outcome", order_ok, order_detail),
+        ],
+        offsets,
+    )
 
 
 class _EveFlood(threading.Thread):
@@ -281,7 +466,8 @@ def run(
             })
             for key in ("AZAZEL_DEFENSE_ENFORCE", "AZAZEL_DEFENSE_DRY_RUN", "AZAZEL_DEFENSE_ENFORCE_LEVEL", "AZAZEL_EVE_POLL_MS"):
                 env.pop(key, None)
-            tail = _Tail(events, {l["task_id"] for l in leases})
+            chain = rollback_audit_path(ledger)
+            tail = _Tail(events, chain, {l["task_id"] for l in leases})
             tail.start()
             flood = _EveFlood(eve, flood_rate_per_s)
             flood.start()
@@ -291,7 +477,7 @@ def run(
                 flood_start = base + (nominal_n + 18) * 0.1
                 last_due = max(l["due_epoch"] for l in leases)
                 deadline = last_due + 30.0
-                while time.time() < deadline and len(tail.first) < len(leases):
+                while time.time() < deadline and not tail.done():
                     now = time.time()
                     if now >= flood_start and now <= last_due + 2.0:
                         flood.active.set()
@@ -321,40 +507,17 @@ def run(
                 "stderr_tail": stderr_text[-800:],
                 "default_poll_ms": 200,
             }
-            for lease in leases:
-                start_ns = round(lease["due_epoch"] * 1e9) - offset0
-                seen = tail.first.get(lease["task_id"])
-                row: Dict[str, Any] = {
-                    "sample_id": lease["task_id"],
-                    "action_type": lease["action"],
-                    "condition": {"load": lease["_phase"], "operator_plane": "unavailable (no operator service running)"},
-                    "due_epoch": lease["due_epoch"],
-                    "start_monotonic_ns": start_ns,
-                    "start_event": "lease due_epoch from the release-ledger record, mapped onto the harness monotonic clock",
-                    "end_event": "first rust_release_engine_v1 record naming release_task_id observed in the normalized-event JSONL",
-                }
-                if seen:
-                    release = seen["release"]
-                    row.update({
-                        "end_monotonic_ns": max(seen["observed_monotonic_ns"], start_ns),
-                        "elapsed_ms": round((max(seen["observed_monotonic_ns"], start_ns) - start_ns) / 1e6, 3),
-                        "attempted_at_epoch": release.get("attempted_at_epoch"),
-                        "edge_reported_start_after_expiry_ms": round((float(release.get("attempted_at_epoch", 0)) - lease["due_epoch"]) * 1000, 3),
-                        "release_status": release.get("status"),
-                        "release_result": release.get("result"),
-                        "observed_before_expiry": seen["observed_monotonic_ns"] < start_ns,
-                    })
-                else:
-                    row.update({"end_monotonic_ns": None, "elapsed_ms": None})
-                samples.append(row)
+            samples = build_samples(leases, tail.starts, tail.outcomes, offset0)
+            record_prereqs, offset_steps = start_record_prerequisites(leases, tail.starts, samples, chain, offset0)
             prerequisites.append(
                 prerequisite("core_daemon_started", daemon_info["started"], "startup line seen on stderr" if daemon_info["started"] else "no startup line: " + stderr_text[-300:])
             )
             prerequisites.append(
                 prerequisite(
                     "wall_clock_stable_during_run",
-                    abs(drift_ns) <= CLOCK_STEP_TOLERANCE_NS,
+                    abs(drift_ns) <= CLOCK_STEP_TOLERANCE_NS and not offset_steps,
                     f"wall-minus-monotonic drift {drift_ns / 1e6:.3f} ms (tolerance {CLOCK_STEP_TOLERANCE_NS / 1e6:.0f} ms); "
+                    f"start records whose own wall/monotonic pair is off by more: {len(offset_steps)}; "
                     "the lease expiry is wall-clock, so a step would move it",
                 )
             )
@@ -363,28 +526,32 @@ def run(
                 prerequisite(
                     "no_release_record_before_expiry",
                     not early,
-                    "none" if not early else "observed before the declared expiry (clamped to 0 ms): " + ", ".join(early),
+                    "none" if not early else "start record observed before the declared expiry (clamped to 0 ms): " + ", ".join(early),
                 )
             )
+            prerequisites.extend(record_prereqs)
             prerequisites.append(
                 prerequisite("load_phase_applied", flood_written > 0, f"{flood_written} synthetic EVE alerts written during the eve_flood phase")
             )
     else:
-        for pid in ("core_daemon_started", "wall_clock_stable_during_run", "no_release_record_before_expiry", "load_phase_applied"):
+        for pid in (
+            "core_daemon_started",
+            "wall_clock_stable_during_run",
+            "no_release_record_before_expiry",
+            "load_phase_applied",
+            "rollback_start_chain_verifies",
+            "rollback_start_recorded_before_outcome",
+        ):
             prerequisites.append(prerequisite(pid, False, "not evaluated: the core binary is not runnable"))
     required = SPEC_START["required_samples"]
     start_gaps = [
         gap(
-            "SO04-END-RECORD-NOT-AUDIT-CHAIN",
-            "The record naming the lease is the rust_release_engine_v1 line in the normalized-event JSONL: not "
-            "hash-chained, not fsynced, and written after the attempt completes (it carries attempted_at_epoch). "
-            "Edge writes no audit-chain record stating that rollback has begun.",
-            refs=["rust/azazel-edge-core/src/main.rs (process_release_events)", "rust/azazel-edge-core/src/release.rs"],
-        ),
-        gap(
             "SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
-            "ReleaseTask.due_epoch is SystemTime (wall clock); the definition and section 4.3 require the issuer's "
-            "monotonic clock. The harness maps due_epoch onto its monotonic clock and checks for steps.",
+            "ReleaseTask.due_epoch is SystemTime (wall clock), and the sweep decides expiry against the wall clock; "
+            "the definition and section 4.3 require the issuer's monotonic clock. The harness maps due_epoch onto "
+            "its monotonic clock and checks for steps, and the rollback_started record carries the core's monotonic "
+            "and wall instants, but the lease declares no monotonic expiry. Declaring one changes when a lease is "
+            "released under a clock step, which is the owner's decision.",
             refs=["rust/azazel-edge-core/src/main.rs (now_epoch)"],
         ),
         gap(
@@ -430,6 +597,7 @@ def run(
             "name": "CLOCK_MONOTONIC",
             "source": "harness time.monotonic_ns() on the node running the core",
             "lease_clock": "wall clock (SystemTime) -- see SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
+            "end_clock": "harness CLOCK_MONOTONIC when the rollback_started record first appears in the chain; the record's own started_monotonic_ns is the core's CLOCK_MONOTONIC on the same host",
             "wall_minus_monotonic_drift_ns": drift_ns,
         },
         sample_rule={
@@ -439,7 +607,7 @@ def run(
             "conditions": ["nominal", "eve_flood (harness-chosen, not declared hostile load)", "operator plane unavailable (all samples)"],
         },
         parts=[start_part, completion_part],
-        method="real azazel-edge-core daemon; leases injected into its release ledger; JSONL tailed from outside",
+        method="real azazel-edge-core daemon; leases injected into its release ledger; rollback audit chain and JSONL tailed from outside",
         notes=[
             "Rollback commands run against no owned state (no tc/nft privileges in the harness), so each first record is "
             "an attempt outcome such as release_attempt_failed/retry_pending or owned_state_already_absent. The row "

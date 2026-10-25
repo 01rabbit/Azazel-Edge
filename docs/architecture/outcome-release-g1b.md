@@ -167,6 +167,34 @@ permission/symlink hardening is part of deployment/Pi-HIL validation, not claime
 this slice. Long-term tombstone compaction/migration is also intentionally not automated
 in G1b because an unsafe forget operation can re-enable an old disruptive decision.
 
+## Rollback-start audit chain
+
+Before the first rollback command of every release attempt, the core appends one
+`rollback_started` record to an audit chain beside the ledger and fsyncs it:
+
+```text
+<ledger dir>/<ledger stem>.rollback-audit.jsonl
+(default: /var/lib/azazel-edge/release-ledger.rollback-audit.jsonl)
+```
+
+- The chain is in `P0AuditLogger`'s format (`chain_prev` / `chain_hash`, SHA-256 over
+  the canonical JSON of the record) and verifies with `P0AuditLogger.verify_chain`.
+  The core is its only writer.
+- The record names the lease (`release_task_id`) and the decision (`trace_id`), and
+  carries `action`, `resource_key`, `owner_token`, `attempt`, the lease's declared
+  expiry as `lease_due_epoch_ns` (wall clock, as the ledger declares it), and
+  `started_monotonic_ns` / `started_wall_epoch_ns` read together on
+  `CLOCK_MONOTONIC` and the wall clock, plus `boot_id`. Instants are integers so the
+  Python verifier re-serialises them byte for byte. `record_schema` is
+  `azazel-edge/rollback-started/v1`.
+- A failure to write the record is reported on stderr and does not hold the rollback
+  back: releasing the lease is the safe direction.
+- A throttle superseded by a newer owner, or deferred for an ambiguous newer owner,
+  issues no rollback command and writes no record.
+
+The SO-04 harness (`py/azazel_edge/service_objectives/so04_lease_rollback.py`) uses
+this record as the end event of "rollback starts within 5 seconds of expiry".
+
 ## Lifecycle
 
 ```text
