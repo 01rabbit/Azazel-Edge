@@ -26,9 +26,24 @@ from .model_adapter import (
     MioModelUnavailable,
     OllamaStructuredTransport,
 )
-from .playbook import DEFAULT_PLAYBOOKS, PromptCompiler, ReasoningPlaybook
+from .claim_audit import ClaimAudit, ClaimAuditRecord, audit_claims
+from .evidence_gap_scoring import GapScore, score_evidence_gaps
+from .playbook import (
+    DEFAULT_PLAYBOOKS,
+    GENERIC_PLAYBOOK,
+    PlaybookSelection,
+    PromptCompiler,
+    ReasoningPlaybook,
+    playbook_digest,
+    guard_selection,
+    reasoning_provenance,
+    select_playbook,
+    selection_rules_digest,
+    template_digest,
+    validate_playbook,
+)
 from .reasoning import BoundedReasoningLoop, ReasoningBudget, ReasoningOutcome
-from .replay import ReplayFixture, run_replay
+from .replay import ReplayFixture, run_replay, run_selected
 from .evaluation import EvaluationScenario, evaluate_scenario, load_scenarios
 from .resource_profile import ResourceSample, ResourceTimer
 from .trace import ReasoningTrace, ReasoningTraceEvent
@@ -72,4 +87,19 @@ __all__ = [
     "ResourceSample",
     "ResourceTimer",
     "run_replay",
+    "run_selected",
+    "ClaimAudit",
+    "ClaimAuditRecord",
+    "audit_claims",
+    "GapScore",
+    "score_evidence_gaps",
+    "GENERIC_PLAYBOOK",
+    "PlaybookSelection",
+    "playbook_digest",
+    "reasoning_provenance",
+    "select_playbook",
+    "guard_selection",
+    "selection_rules_digest",
+    "template_digest",
+    "validate_playbook",
 ]

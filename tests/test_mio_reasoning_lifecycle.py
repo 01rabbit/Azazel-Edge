@@ -48,6 +48,9 @@ def frame(**overrides):
 
 
 class FakeBroker:
+    def names(self):  # registry consulted by #386 gap scoring
+        return ("query_flow_summary",)
+
     def execute(self, request):
         return MioCapabilityResult(request.request_id, request.capability, True, {"flow": "bursty"}, ("ev:flow:1",))
 
