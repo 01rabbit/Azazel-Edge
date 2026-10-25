@@ -1090,10 +1090,44 @@ fn value_u16(value: &Value) -> Option<u16> {
         .or_else(|| value.as_str().and_then(|v| v.parse::<u16>().ok()))
 }
 
+/// Locate the TBF readback fields (`rate`, `burst`, `lat`) in one `tc -j qdisc show`
+/// item. iproute2 with TBF JSON support (observed: 5.5, 6.1, 6.15) nests them under
+/// `options`; a flat top-level shape is accepted for compatibility. This is part of a
+/// safety check, so anything ambiguous fails closed (returns `None`): a non-object
+/// `options`, fields split across both locations, a field missing from the location
+/// that carries the others, or the same field present in both with different values.
+fn tbf_readback_fields(item: &Value) -> Option<[&Value; 3]> {
+    const KEYS: [&str; 3] = ["rate", "burst", "lat"];
+    let options = match item.get("options") {
+        None => None,
+        Some(Value::Object(map)) => Some(map),
+        Some(_) => return None,
+    };
+    let nested_any = options.is_some_and(|map| KEYS.iter().any(|key| map.contains_key(*key)));
+    let mut fields = [&Value::Null; 3];
+    for (slot, key) in fields.iter_mut().zip(KEYS) {
+        let top = item.get(key);
+        let nested = options.and_then(|map| map.get(key));
+        *slot = if nested_any {
+            let nested = nested?;
+            if top.is_some_and(|top| top != nested) {
+                return None;
+            }
+            nested
+        } else {
+            top?
+        };
+    }
+    Some(fields)
+}
+
 fn tbf_parameters_match(task: &ReleaseTask, item: &Value) -> bool {
-    let rate = item.get("rate").and_then(parse_readback_rate_bps);
-    let burst = item.get("burst").and_then(parse_readback_size_bytes);
-    let latency = item.get("lat").and_then(parse_readback_time_us);
+    let Some([rate, burst, latency]) = tbf_readback_fields(item) else {
+        return false;
+    };
+    let rate = parse_readback_rate_bps(rate);
+    let burst = parse_readback_size_bytes(burst);
+    let latency = parse_readback_time_us(latency);
     match (rate, burst, latency) {
         (Some(rate), Some(burst), Some(latency)) => {
             within_relative(task.expected_rate_bps, rate, 0.01)
@@ -1853,6 +1887,237 @@ mod tests {
         let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
         assert_eq!(outcomes[0].status, "released");
         assert_eq!(outcomes[0].result, "owned_state_already_absent");
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
+    }
+
+    // Captured verbatim from `tc -j qdisc show dev d0` after
+    // `tc qdisc replace dev d0 root handle 1a: tbf rate 256kbit burst 32kbit latency 1000ms`
+    // in a NET_ADMIN container. iproute2 5.5 (ss200127) emits the same shape.
+    const TC_JSON_IPROUTE2_6_15: &str = r#"[{"kind":"tbf","handle":"1a:","root":true,"refcnt":2,"options":{"rate":32000,"burst":4096,"lat":999999}}]"#;
+    const TC_JSON_IPROUTE2_6_1: &str = r#"[{"kind":"tbf","handle":"1a:","root":true,"refcnt":2,"options":{"rate":32000,"burst":4096,"lat":999999}}]"#;
+    // iproute2 4.15 (ss180129) has no TBF JSON printer and emits text inside `options`,
+    // which is not valid JSON.
+    const TC_JSON_IPROUTE2_4_15: &str = "[{\n        \"kind\": \"tbf\",\n        \"handle\": \"1a:\",\n        \"root\": true,\n        \"refcnt\": 2,\n        \"options\": {rate 256Kbit burst 4Kb lat 1000.0ms }\n    }\n]";
+
+    fn tbf_task() -> ReleaseTask {
+        build_release_task(
+            "trace-a",
+            "throttle",
+            "br0",
+            "10.0.0.8",
+            22,
+            12222,
+            1000,
+            1,
+            &LeaseNow::wall_only(100.0),
+        )
+        .unwrap()
+    }
+
+    fn captured_item(capture: &str, task: &ReleaseTask) -> Value {
+        let payload: Value =
+            serde_json::from_str(&capture.replace("\"1a:\"", &format!("\"{}\"", task.tc_handle)))
+                .unwrap();
+        payload.as_array().unwrap()[0].clone()
+    }
+
+    #[test]
+    fn tbf_parameters_are_read_from_options_in_captured_iproute2_json() {
+        let task = tbf_task();
+        assert!(tbf_parameters_match(
+            &task,
+            &captured_item(TC_JSON_IPROUTE2_6_15, &task)
+        ));
+        assert!(tbf_parameters_match(
+            &task,
+            &captured_item(TC_JSON_IPROUTE2_6_1, &task)
+        ));
+    }
+
+    #[test]
+    fn tbf_parameters_flat_top_level_shape_is_still_accepted() {
+        let task = tbf_task();
+        let flat = json!({"kind": "tbf", "root": true, "handle": task.tc_handle,
+            "rate": 32000, "burst": 4096, "lat": 999999});
+        assert!(tbf_parameters_match(&task, &flat));
+        let both_equal = json!({"kind": "tbf", "root": true, "handle": task.tc_handle,
+            "rate": 32000, "burst": 4096, "lat": 999999,
+            "options": {"rate": 32000, "burst": 4096, "lat": 999999}});
+        assert!(tbf_parameters_match(&task, &both_equal));
+    }
+
+    #[test]
+    fn tbf_parameters_options_values_are_compared_not_just_located() {
+        let task = tbf_task();
+        for (key, value) in [
+            ("rate", json!(64000)),
+            ("burst", json!(8192)),
+            ("lat", json!(50000)),
+        ] {
+            let mut item = captured_item(TC_JSON_IPROUTE2_6_15, &task);
+            item["options"][key] = value;
+            assert!(!tbf_parameters_match(&task, &item), "{key}");
+        }
+    }
+
+    #[test]
+    fn tbf_parameters_ambiguous_missing_or_mistyped_readback_fails_closed() {
+        let task = tbf_task();
+        let h = task.tc_handle.clone();
+        let refused = [
+            // same field in both places with different values
+            json!({"kind": "tbf", "root": true, "handle": h, "rate": 64000,
+                "options": {"rate": 32000, "burst": 4096, "lat": 999999}}),
+            json!({"kind": "tbf", "root": true, "handle": h, "lat": "1s",
+                "options": {"rate": 32000, "burst": 4096, "lat": 999999}}),
+            // a field missing from options
+            json!({"kind": "tbf", "root": true, "handle": h,
+                "options": {"rate": 32000, "burst": 4096}}),
+            // fields split across options and the top level
+            json!({"kind": "tbf", "root": true, "handle": h, "lat": 999999,
+                "options": {"rate": 32000, "burst": 4096}}),
+            // nothing at all
+            json!({"kind": "tbf", "root": true, "handle": h}),
+            json!({"kind": "tbf", "root": true, "handle": h, "options": {}}),
+            // options of an unexpected type
+            json!({"kind": "tbf", "root": true, "handle": h, "options": null,
+                "rate": 32000, "burst": 4096, "lat": 999999}),
+            json!({"kind": "tbf", "root": true, "handle": h, "options": "rate 256Kbit",
+                "rate": 32000, "burst": 4096, "lat": 999999}),
+            json!({"kind": "tbf", "root": true, "handle": h,
+                "options": [{"rate": 32000, "burst": 4096, "lat": 999999}]}),
+            // fields of an unexpected type
+            json!({"kind": "tbf", "root": true, "handle": h,
+                "options": {"rate": 32000.0, "burst": 4096, "lat": 999999}}),
+            json!({"kind": "tbf", "root": true, "handle": h,
+                "options": {"rate": true, "burst": 4096, "lat": 999999}}),
+            json!({"kind": "tbf", "root": true, "handle": h,
+                "options": {"rate": {"value": 32000}, "burst": 4096, "lat": 999999}}),
+            json!({"kind": "tbf", "root": true, "handle": h,
+                "options": {"rate": 32000, "burst": null, "lat": 999999}}),
+        ];
+        for item in refused {
+            assert!(!tbf_parameters_match(&task, &item), "{item}");
+        }
+    }
+
+    fn due_throttle(path: &str) -> ReleaseTask {
+        let task = tbf_task();
+        prepare_release_task(path, &task).unwrap();
+        activate_release_task(path, &task.task_id, 100.5).unwrap();
+        task
+    }
+
+    fn ok_raw(stdout: &str) -> Result<CommandResult, String> {
+        Ok(CommandResult {
+            returncode: 0,
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+        })
+    }
+
+    #[test]
+    fn tc_release_deletes_owned_tbf_reported_under_options_and_verifies_absence() {
+        for capture in [TC_JSON_IPROUTE2_6_15, TC_JSON_IPROUTE2_6_1] {
+            let path = test_path("ledger.json");
+            let task = due_throttle(&path);
+            let owned = capture.replace("\"1a:\"", &format!("\"{}\"", task.tc_handle));
+            let runner = FakeRunner::new(vec![
+                ok_raw(&owned),
+                ok_raw(""),
+                ok_raw(r#"[{"kind":"noqueue","handle":"0:","root":true,"refcnt":2,"options":{}}]"#),
+            ]);
+            let outcomes =
+                process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner)
+                    .unwrap();
+            assert_eq!(outcomes[0].status, "released");
+            assert_eq!(outcomes[0].result, "rollback_applied_and_absence_verified");
+            let calls = runner.calls.lock().unwrap();
+            assert_eq!(calls.len(), 3);
+            assert_eq!(
+                calls[1],
+                strings(&[
+                    "tc",
+                    "qdisc",
+                    "del",
+                    "dev",
+                    "br0",
+                    "root",
+                    "handle",
+                    &task.tc_handle
+                ])
+            );
+        }
+    }
+
+    #[test]
+    fn tc_release_never_deletes_when_options_readback_is_ambiguous_or_unparseable() {
+        let conflicting = |task: &ReleaseTask| {
+            json!([{"kind": "tbf", "root": true, "handle": task.tc_handle, "rate": 64000,
+                "options": {"rate": 32000, "burst": 4096, "lat": 999999}}])
+            .to_string()
+        };
+        let incomplete = |task: &ReleaseTask| {
+            json!([{"kind": "tbf", "root": true, "handle": task.tc_handle,
+                "options": {"rate": 32000, "burst": 4096}}])
+            .to_string()
+        };
+        let legacy_text = |task: &ReleaseTask| {
+            TC_JSON_IPROUTE2_4_15.replace("\"1a:\"", &format!("\"{}\"", task.tc_handle))
+        };
+        let cases: [&dyn Fn(&ReleaseTask) -> String; 3] = [&conflicting, &incomplete, &legacy_text];
+        for build in cases {
+            let path = test_path("ledger.json");
+            let task = due_throttle(&path);
+            let runner = FakeRunner::new(vec![ok_raw(&build(&task))]);
+            let outcomes =
+                process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner)
+                    .unwrap();
+            assert_eq!(outcomes[0].status, "retry_pending");
+            let calls = runner.calls.lock().unwrap();
+            assert_eq!(
+                calls.len(),
+                1,
+                "no tc qdisc del may follow a refused readback"
+            );
+        }
+    }
+
+    #[test]
+    fn tbf_parameters_options_path_keeps_the_existing_tolerance_boundaries() {
+        // expected: 256000 bit/s (1% -> 2560 bit/s = 320 B/s), 4096 B (2% -> 82 B),
+        // 1_000_000 us (max(1000, 2%) -> 20000 us). The options path must not widen these.
+        let task = tbf_task();
+        let at = |rate: u64, burst: u64, lat: u64| {
+            let mut item = captured_item(TC_JSON_IPROUTE2_6_15, &task);
+            item["options"] = json!({"rate": rate, "burst": burst, "lat": lat});
+            tbf_parameters_match(&task, &item)
+        };
+        assert!(at(32320, 4096, 1_000_000));
+        assert!(at(31680, 4096, 1_000_000));
+        assert!(!at(32321, 4096, 1_000_000));
+        assert!(!at(31679, 4096, 1_000_000));
+        assert!(at(32000, 4178, 1_000_000));
+        assert!(at(32000, 4014, 1_000_000));
+        assert!(!at(32000, 4179, 1_000_000));
+        assert!(!at(32000, 4013, 1_000_000));
+        assert!(at(32000, 4096, 1_020_000));
+        assert!(at(32000, 4096, 980_000));
+        assert!(!at(32000, 4096, 1_020_001));
+        assert!(!at(32000, 4096, 979_999));
+    }
+
+    #[test]
+    fn tc_release_never_deletes_a_non_tbf_qdisc_with_tbf_like_options() {
+        let path = test_path("ledger.json");
+        let task = due_throttle(&path);
+        let impostor = TC_JSON_IPROUTE2_6_15
+            .replace("\"1a:\"", &format!("\"{}\"", task.tc_handle))
+            .replace("\"kind\":\"tbf\"", "\"kind\":\"netem\"");
+        let runner = FakeRunner::new(vec![ok_raw(&impostor)]);
+        let outcomes =
+            process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
+        assert_eq!(outcomes[0].status, "retry_pending");
         assert_eq!(runner.calls.lock().unwrap().len(), 1);
     }
 
