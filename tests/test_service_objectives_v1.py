@@ -221,15 +221,18 @@ def test_so03_measures_real_path_and_reports_gaps(real_table):
     assert part["pass_rule"]["bound_ms"] == 2000.0
     assert part["sample_rule"]["required_samples"] == 200
     prereq = {p["id"]: p for p in part["prerequisites"]}
-    # Probed on every run, not assumed: the enqueue record does not name the decision.
-    assert prereq["enqueue_record_names_decision_id"]["met"] is False
+    # Probed on every run, not assumed: the records Edge#414 added are observed.
+    assert prereq["enqueue_record_names_decision_id"]["met"] is True
+    assert prereq["enqueue_record_classifies_p0"]["met"] is True
+    assert prereq["decision_and_enqueue_records_fsynced"]["met"] is True
+    assert prereq["alert_audit_chain_verifies"]["met"] is True
+    # What still does not exist keeps the row not measurable.
     assert prereq["visual_voice_delivery_queue_declared"]["met"] is False
-    assert prereq["synthetic_decisions_are_p0_stand_ins"]["met"] is True
-    assert {g["id"] for g in part["gaps"]} >= {"SO03-NO-VISUAL-VOICE-QUEUE", "SO03-ENQUEUE-RECORD-LACKS-DECISION-ID"}
+    assert {g["id"] for g in part["gaps"]} == {"SO03-NO-VISUAL-VOICE-QUEUE", "SO03-NO-P0-ALERT-PATH"}
     for s in part["samples"]:
         assert s["action"] == "notify" and s["level"] == "critical"
-        assert s["end_monotonic_ns"] >= s["start_monotonic_ns"]
-        assert s["enqueue_record_names_decision"] is False
+        assert s["end_monotonic_ns"] >= s["edge_enqueued_monotonic_ns"] >= s["start_monotonic_ns"]
+        assert s["enqueue_record_decision_id"] == s["sample_id"] == s["notification_audit_decision_id"]
 
 
 def test_so03_full_sample_count_is_still_not_a_pass(real_table):
@@ -414,7 +417,7 @@ def test_review_b_omitted_mandatory_prerequisites_and_gaps_are_refused(real_tabl
     record = _so03_pass_like([_sample(i, 1.0) for i in range(200)], prerequisites=[], gaps=[])
     errors = rec.validate_record(record)
     assert any("mandatory prerequisite 'enqueue_record_names_decision_id' omitted" in e for e in errors), errors
-    assert any("mandatory gap 'SO03-ENQUEUE-RECORD-LACKS-DECISION-ID' omitted" in e for e in errors), errors
+    assert any("mandatory gap 'SO03-NO-VISUAL-VOICE-QUEUE' omitted" in e for e in errors), errors
     assert any("record supports 'not_measurable'" in e for e in errors), errors
 
 
