@@ -127,3 +127,5 @@ Cancelled/superseded cycles get no handoff, since their frame is no longer curre
 ## Not in scope
 
 Live wiring of the coordinator into a running service and any #373 work.
+Trace identity, working memory, the durable audit projection and retention are
+in `mio-reasoning-trace.md` (#389).

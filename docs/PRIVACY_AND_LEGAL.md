@@ -36,6 +36,15 @@ Long-lived data:
 Captive consent records:
 - Retained until manual clear or full device reset.
 
+M.I.O. reasoning trace (advisory-only):
+- The M.I.O. trace audit library keeps IDs, digests, status codes and evidence
+  refs only; no prompts, model output, frame text or broker result data.
+  Size is bounded by file rotation (`max_file_bytes * max_files`). On disk
+  full or quota errors it drops records and withholds M.I.O. advisories; Edge
+  enforcement is unaffected. See `docs/architecture/mio-reasoning-trace.md`.
+- The no-model operator handoff masks credential, token and email-like
+  strings; IP addresses and hostnames are kept.
+
 Retention tuning:
 - Adjust Vector sink path/date and host logrotate policies based on
   deployment requirements.
