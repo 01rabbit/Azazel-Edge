@@ -167,6 +167,44 @@ permission/symlink hardening is part of deployment/Pi-HIL validation, not claime
 this slice. Long-term tombstone compaction/migration is also intentionally not automated
 in G1b because an unsafe forget operation can re-enable an old disruptive decision.
 
+## Rollback-start audit chain
+
+Before the first rollback command of every release attempt, the core appends one
+`rollback_started` record to an audit chain beside the ledger and fsyncs it:
+
+```text
+<ledger dir>/<ledger stem>.rollback-audit.jsonl
+(default: /var/lib/azazel-edge/release-ledger.rollback-audit.jsonl)
+```
+
+- The chain is in `P0AuditLogger`'s format (`chain_prev` / `chain_hash`, SHA-256 over
+  the canonical JSON of the record) and verifies with `P0AuditLogger.verify_chain`.
+  The core is its only writer.
+- The record names the lease (`release_task_id`) and the decision (`trace_id`), and
+  carries `action`, `resource_key`, `owner_token`, `attempt`, the lease's declared
+  expiry as `lease_due_epoch_ns` (wall clock, as the ledger declares it), and
+  `started_monotonic_ns` / `started_wall_epoch_ns` read together on
+  `CLOCK_MONOTONIC` and the wall clock, plus `boot_id`. Instants are integers so the
+  Python verifier re-serialises them byte for byte. `record_schema` is
+  `azazel-edge/rollback-started/v1`.
+- A failure to write the record does not hold the rollback back: releasing the lease
+  is the safe direction. It is reported on stderr and in the attempt's
+  `rust_release_engine_v1` outcome as `rollback_start_audit: "failed:<reason>"`
+  (`"recorded"` when written, `"not_applicable"` when no rollback command was issued).
+- A torn last line (a write cut short by a crash) is closed with a newline before the
+  next record, so that record is a line of its own. As in `P0AuditLogger`, the torn
+  line gives no chain head: the next record starts from an empty `chain_prev`, and
+  `verify_chain` fails at the torn line.
+- The directory entry is fsynced on the process's first append to the chain, and
+  retried on later appends until it succeeds.
+- The chain assumes one writer: a single `azazel-edge-core` unit. Two processes
+  appending to the same chain would fork it.
+- A throttle superseded by a newer owner, or deferred for an ambiguous newer owner,
+  issues no rollback command and writes no record.
+
+The SO-04 harness (`py/azazel_edge/service_objectives/so04_lease_rollback.py`) uses
+this record as the end event of "rollback starts within 5 seconds of expiry".
+
 ## Lifecycle
 
 ```text

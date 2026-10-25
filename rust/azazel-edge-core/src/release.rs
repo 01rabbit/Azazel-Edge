@@ -1,5 +1,6 @@
+use crate::audit_chain;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::IpAddr;
@@ -16,6 +17,12 @@ const MAX_STDOUT_BYTES: usize = 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const TRUSTED_DIRS: [&str; 4] = ["/usr/sbin", "/usr/bin", "/sbin", "/bin"];
+/// The audit-chain kind stating that rollback of a lease has begun (SO-04).
+pub const ROLLBACK_STARTED_KIND: &str = "rollback_started";
+/// The payload shape of a `rollback_started` record. The chain format itself
+/// is `P0AuditLogger`'s and is unchanged.
+pub const ROLLBACK_STARTED_SCHEMA: &str = "azazel-edge/rollback-started/v1";
+const ROLLBACK_AUDIT_SOURCE: &str = "azazel-edge-core/release_engine";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReleaseTask {
@@ -72,6 +79,12 @@ pub struct ReleaseOutcome {
     pub failed_count: u32,
     pub errors: Vec<String>,
     pub postcondition: Value,
+    /// Whether this attempt's `rollback_started` audit record was written:
+    /// `recorded`, `failed:<reason>`, or `not_applicable` when no rollback
+    /// command was issued (superseded or deferred). A failure never holds
+    /// the rollback back; this field is how it is seen besides stderr.
+    #[serde(default)]
+    pub rollback_start_audit: String,
 }
 
 #[derive(Debug, Clone)]
@@ -468,6 +481,20 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
             }
         }
 
+        // The record stating that rollback has begun is durable before the
+        // first rollback command runs. A failure to write it is reported but
+        // never holds the rollback back: releasing the lease is the safe
+        // direction, and a missing record is what the SO-04 harness detects.
+        let start_audit = match record_rollback_start(path, &current) {
+            Ok(()) => "recorded".to_string(),
+            Err(error) => {
+                eprintln!(
+                    "rollback start audit record failed: release_task_id={} error={}",
+                    current.task_id, error
+                );
+                bounded_error(&format!("failed:{error}"))
+            }
+        };
         let result = release_owned_state(&current, runner, now_epoch);
         if let Some(task) = ledger
             .tasks
@@ -492,9 +519,9 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
                 }
             }
         }
-        match result {
-            Ok(outcome) => outcomes.push(outcome),
-            Err(error) => outcomes.push(outcome_for(
+        let mut outcome = match result {
+            Ok(outcome) => outcome,
+            Err(error) => outcome_for(
                 &current,
                 now_epoch,
                 "retry_pending",
@@ -503,11 +530,62 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
                 1,
                 vec![bounded_error(&error)],
                 json!({"verified": false}),
-            )),
-        }
+            ),
+        };
+        outcome.rollback_start_audit = start_audit;
+        outcomes.push(outcome);
     }
     save_ledger(path, &mut ledger)?;
     Ok(outcomes)
+}
+
+/// The audit chain the release engine writes, beside the ledger it serves:
+/// `<dir>/<ledger stem>.rollback-audit.jsonl`. The core is its only writer.
+pub fn rollback_audit_path(ledger_path: &str) -> PathBuf {
+    let ledger = Path::new(ledger_path);
+    let stem = ledger
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("release-ledger");
+    ledger.with_file_name(format!("{stem}.rollback-audit.jsonl"))
+}
+
+/// Append and fsync the `rollback_started` record naming this lease
+/// (`release_task_id`) and the decision it came from (`trace_id`).
+///
+/// Instants are integer nanoseconds: `lease_due_epoch_ns` is the lease's own
+/// declared expiry (wall clock, as the ledger declares it), and
+/// `started_monotonic_ns` / `started_wall_epoch_ns` are read together just
+/// before the record is written, on `CLOCK_MONOTONIC` and the wall clock.
+fn record_rollback_start(ledger_path: &str, task: &ReleaseTask) -> Result<(), String> {
+    let monotonic = audit_chain::monotonic_ns();
+    let wall = audit_chain::wall_epoch_ns();
+    let due_ns = task.due_epoch * 1e9;
+    let lease_due_epoch_ns = if due_ns.is_finite() && due_ns >= 0.0 && due_ns < i64::MAX as f64 {
+        Value::from(due_ns.round() as i64)
+    } else {
+        Value::Null
+    };
+    let mut fields = Map::new();
+    fields.insert("ts".into(), json!(audit_chain::iso_utc_millis(wall.unwrap_or(0))));
+    fields.insert("kind".into(), json!(ROLLBACK_STARTED_KIND));
+    fields.insert("trace_id".into(), json!(task.trace_id));
+    fields.insert("source".into(), json!(ROLLBACK_AUDIT_SOURCE));
+    fields.insert("record_schema".into(), json!(ROLLBACK_STARTED_SCHEMA));
+    fields.insert("release_task_id".into(), json!(task.task_id));
+    fields.insert("action".into(), json!(task.action));
+    fields.insert("resource_key".into(), json!(task.resource_key));
+    fields.insert("owner_token".into(), json!(task.owner_token));
+    fields.insert("trigger".into(), json!("lease_expired"));
+    fields.insert("attempt".into(), json!(u64::from(task.attempts) + 1));
+    fields.insert("lease_due_epoch_ns".into(), lease_due_epoch_ns);
+    fields.insert("lease_clock".into(), json!("wall_clock"));
+    fields.insert("started_monotonic_ns".into(), monotonic.map(Value::from).unwrap_or(Value::Null));
+    fields.insert("started_wall_epoch_ns".into(), wall.map(Value::from).unwrap_or(Value::Null));
+    fields.insert("monotonic_clock".into(), json!("CLOCK_MONOTONIC"));
+    fields.insert("boot_id".into(), json!(audit_chain::boot_id()));
+    audit_chain::append(&rollback_audit_path(ledger_path), fields).map(|_| ())
 }
 
 fn release_owned_state<R: ReleaseCommandRunner>(
@@ -945,6 +1023,7 @@ fn outcome_for(
         failed_count,
         errors,
         postcondition,
+        rollback_start_audit: "not_applicable".to_string(),
     }
 }
 
@@ -1552,5 +1631,201 @@ mod tests {
         bad = task;
         bad.due_epoch = f64::INFINITY;
         assert!(validate_task(&bad).is_err());
+    }
+
+    struct OrderingRunner {
+        audit_path: PathBuf,
+        task_id: String,
+        seen_at_first_call: Mutex<Option<(bool, u64)>>,
+        calls: Mutex<u32>,
+    }
+
+    impl ReleaseCommandRunner for OrderingRunner {
+        fn run(&self, _argv: &[String]) -> Result<CommandResult, String> {
+            let mut calls = self.calls.lock().unwrap();
+            *calls += 1;
+            let mut seen = self.seen_at_first_call.lock().unwrap();
+            if seen.is_none() {
+                let text = fs::read_to_string(&self.audit_path).unwrap_or_default();
+                let present = text.lines().any(|line| {
+                    let row: Value = serde_json::from_str(line).unwrap_or(Value::Null);
+                    row["kind"] == json!(ROLLBACK_STARTED_KIND) && row["release_task_id"] == json!(self.task_id)
+                });
+                *seen = Some((present, audit_chain::SYNC_CALLS.with(|c| c.get())));
+            }
+            ok_json(json!({"nftables": []}))
+        }
+    }
+
+    fn rollback_rows(ledger: &str) -> Vec<Value> {
+        fs::read_to_string(rollback_audit_path(ledger))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    #[test]
+    // fsync(2) is counted by interposing the libc symbol; Linux only.
+    #[cfg_attr(not(target_os = "linux"), ignore)]
+    fn rollback_start_record_is_durable_before_the_first_rollback_command() {
+        let path = test_path("ledger.json");
+        let task = build_release_task(
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+        )
+        .unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        let runner = OrderingRunner {
+            audit_path: rollback_audit_path(&path),
+            task_id: task.task_id.clone(),
+            seen_at_first_call: Mutex::new(None),
+            calls: Mutex::new(0),
+        };
+        audit_chain::SYNC_CALLS.with(|c| c.set(0));
+        let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert!(*runner.calls.lock().unwrap() >= 1);
+        let (present, syncs) = runner.seen_at_first_call.lock().unwrap().unwrap();
+        assert!(present, "no rollback_started record when the first rollback command ran");
+        assert!(syncs >= 1, "the rollback_started record was not fsynced before the first rollback command");
+    }
+
+    #[test]
+    fn rollback_start_record_names_the_lease_and_decision_on_integer_clocks() {
+        let path = test_path("release-ledger.json");
+        assert!(rollback_audit_path(&path)
+            .to_string_lossy()
+            .ends_with("/release-ledger.rollback-audit.jsonl"));
+        let task = build_release_task(
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+        )
+        .unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        let before = audit_chain::monotonic_ns().unwrap();
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
+        let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        assert_eq!(outcomes[0].rollback_start_audit, "recorded");
+        let after = audit_chain::monotonic_ns().unwrap();
+        let rows = rollback_rows(&path);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row["kind"], json!("rollback_started"));
+        assert_eq!(row["record_schema"], json!(ROLLBACK_STARTED_SCHEMA));
+        assert_eq!(row["release_task_id"], json!(task.task_id));
+        assert_eq!(row["trace_id"], json!("trace-a"));
+        assert_eq!(row["action"], json!("isolate"));
+        assert_eq!(row["attempt"], json!(1));
+        assert_eq!(row["trigger"], json!("lease_expired"));
+        assert_eq!(row["lease_due_epoch_ns"], json!(101_000_000_000_i64));
+        assert_eq!(row["chain_prev"], json!(""));
+        let mono = row["started_monotonic_ns"].as_u64().unwrap();
+        assert!(before <= mono && mono <= after);
+        assert!(row["started_wall_epoch_ns"].as_i64().unwrap() > 0);
+        let mut unhashed = row.clone();
+        let hash = unhashed.as_object_mut().unwrap().remove("chain_hash").unwrap();
+        assert_eq!(
+            hash,
+            json!(audit_chain::sha256_hex(audit_chain::canonical_json(&unhashed).unwrap().as_bytes()))
+        );
+    }
+
+    #[test]
+    fn each_retry_records_its_own_start_on_the_same_chain() {
+        let path = test_path("ledger.json");
+        let task = build_release_task(
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+        )
+        .unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        let runner = FakeRunner::new(vec![Err("nft unavailable".to_string())]);
+        let first = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        assert_eq!(first[0].status, "retry_pending");
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
+        process_due_releases_with_runner(&path, 200.0, &runner).unwrap();
+        let rows = rollback_rows(&path);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["attempt"], json!(1));
+        assert_eq!(rows[1]["attempt"], json!(2));
+        assert_eq!(rows[1]["chain_prev"], rows[0]["chain_hash"]);
+    }
+
+    #[test]
+    fn a_superseded_throttle_writes_no_rollback_start_record() {
+        let path = test_path("ledger.json");
+        let mut old = build_release_task(
+            "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, 100.0,
+        )
+        .unwrap();
+        let mut newer = build_release_task(
+            "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, 105.0,
+        )
+        .unwrap();
+        // Both active, as a ledger written before activation superseded the
+        // older owner leaves them; the sweep then supersedes the older one.
+        old.status = "active".to_string();
+        newer.status = "active".to_string();
+        let mut ledger = ReleaseLedger::default();
+        ledger.tasks = vec![old.clone(), newer];
+        save_ledger(&path, &mut ledger).unwrap();
+        let runner = FakeRunner::new(Vec::new());
+        let outcomes = process_due_releases_with_runner(&path, 111.0, &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "superseded");
+        assert_eq!(outcomes[0].rollback_start_audit, "not_applicable");
+        assert!(runner.calls.lock().unwrap().is_empty());
+        assert!(rollback_rows(&path).is_empty(), "a superseded lease issued no rollback and must not claim one");
+    }
+
+    #[test]
+    fn an_ambiguous_deferred_throttle_writes_no_rollback_start_record() {
+        let path = test_path("ledger.json");
+        let old = build_release_task(
+            "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, 100.0,
+        )
+        .unwrap();
+        let mut newer = build_release_task(
+            "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, 105.0,
+        )
+        .unwrap();
+        newer.tc_handle = old.tc_handle.clone();
+        prepare_release_task(&path, &old).unwrap();
+        activate_release_task(&path, &old.task_id, 101.0).unwrap();
+        prepare_release_task(&path, &newer).unwrap();
+        let runner = FakeRunner::new(Vec::new());
+        let outcomes = process_due_releases_with_runner(&path, 111.0, &runner).unwrap();
+        assert_eq!(outcomes[0].result, "ambiguous_newer_throttle_owner");
+        assert_eq!(outcomes[0].rollback_start_audit, "not_applicable");
+        assert!(rollback_rows(&path).is_empty(), "a deferred lease issued no rollback and must not claim one");
+    }
+
+    #[test]
+    fn nothing_due_writes_no_rollback_start_record() {
+        let path = test_path("ledger.json");
+        let task = build_release_task(
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, 100.0,
+        )
+        .unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        let runner = FakeRunner::new(Vec::new());
+        process_due_releases_with_runner(&path, 101.0, &runner).unwrap();
+        assert!(!rollback_audit_path(&path).exists());
+    }
+
+    #[test]
+    fn an_unwritable_rollback_audit_chain_never_holds_the_rollback_back() {
+        let path = test_path("ledger.json");
+        let task = build_release_task(
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+        )
+        .unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        // A directory where the chain file should be: the append fails.
+        fs::create_dir_all(rollback_audit_path(&path)).unwrap();
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
+        let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
+        assert_eq!(outcomes[0].status, "released");
+        // The failure is visible in the outcome, not only on stderr.
+        assert!(outcomes[0].rollback_start_audit.starts_with("failed:"), "{}", outcomes[0].rollback_start_audit);
     }
 }

@@ -1,3 +1,4 @@
+mod audit_chain;
 mod release;
 
 use release::{

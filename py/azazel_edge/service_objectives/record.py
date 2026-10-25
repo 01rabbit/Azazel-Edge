@@ -109,9 +109,13 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "wall_clock_stable_during_run",
                 "no_release_record_before_expiry",
                 "load_phase_applied",
+                # The end event is the core's rollback_started audit-chain
+                # record: the chain must verify, and the record must already be
+                # there when the attempt's outcome appears.
+                "rollback_start_chain_verifies",
+                "rollback_start_recorded_before_outcome",
             ),
             "gaps": (
-                "SO04-END-RECORD-NOT-AUDIT-CHAIN",
                 "SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
                 "SO04-HOSTILE-LOAD-UNDECLARED",
             ),
@@ -170,7 +174,8 @@ SAMPLE_FIELDS: Dict[str, frozenset] = {
         + (
             "action_type", "condition", "due_epoch", "attempted_at_epoch",
             "edge_reported_start_after_expiry_ms", "release_status", "release_result",
-            "observed_before_expiry",
+            "observed_before_expiry", "start_record_chain_line", "start_record_attempt",
+            "edge_recorded_start_monotonic_ns", "start_record_before_outcome",
         )
     ),
     "SO-07": frozenset(
@@ -527,6 +532,19 @@ def _so07_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[s
     }
 
 
+def _so04_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[str, bool]:
+    """SO-04 start-record ordering, recomputed from the samples.
+
+    Every sample must show its start record in the chain when its outcome
+    appeared. A sample whose outcome was never seen did not show the order.
+    """
+
+    return {
+        "rollback_start_recorded_before_outcome": bool(samples)
+        and all(s.get("start_record_before_outcome") is True for s in samples),
+    }
+
+
 def _validate_sample_ids(samples: Sequence[Any], where: str, errors: List[str]) -> None:
     seen: Dict[str, int] = {}
     for sidx, sample in enumerate(samples):
@@ -561,7 +579,8 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
     gap ids are fixed per objective. Omitting a mandatory prerequisite or gap
     invalidates the record, and for the verdict it counts as unmet / present,
     so leaving something out can only make the verdict worse. For SO-07 the violations
-    and coverage are recomputed from each sample's observed fields.
+    and coverage, and for SO-04 the start-record ordering, are recomputed from
+    each sample's observed fields.
     """
 
     errors: List[str] = []
@@ -689,6 +708,13 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                         p["met"] = bool(p["met"]) and observed[p["id"]]
         else:
             eval_samples = _recomputed_latency_samples([s if isinstance(s, dict) else {} for s in part["samples"]])
+            if objective == "SO-04" and part["name"] == "rollback_start_after_expiry":
+                observed = _so04_observed_prerequisites([s for s in part["samples"] if isinstance(s, dict)])
+                for p in effective_prereqs:
+                    if p["id"] in observed:
+                        if p["met"] and not observed[p["id"]]:
+                            errors.append(f"{where}: prerequisite {p['id']!r} declared met but the samples do not show it")
+                        p["met"] = bool(p["met"]) and observed[p["id"]]
 
         evaluated = evaluate_rule(dict(rule, bound_ms=spec["bound_ms"]), eval_samples) if eval_samples else {"holds": False}
         claimed = rule.get("evaluated")
