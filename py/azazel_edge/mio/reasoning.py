@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
 from .broker import CapabilityBroker, CapabilityBrokerError
+from .claim_audit import audit_claims
 from .contracts import (
     MioCapabilityRequest,
     MioEvidenceGap,
@@ -12,6 +13,7 @@ from .contracts import (
     MioSituationFrame,
     ReasoningState,
 )
+from .evidence_gap_scoring import SCORING_POLICY_VERSION, score_evidence_gaps, scoring_policy_digest
 from .grounding import GroundingValidator
 from .handoff import NoModelHandoff, build_no_model_handoff
 from .lifecycle import (
@@ -24,7 +26,7 @@ from .lifecycle import (
     validate_initial_hypotheses,
 )
 from .model_adapter import MioModelBlocked, MioModelUnavailable
-from .playbook import PromptCompiler, ReasoningPlaybook
+from .playbook import PlaybookSelection, PromptCompiler, ReasoningPlaybook, reasoning_provenance
 from .trace import ReasoningTrace
 
 ModelInvoker = Callable[[str, str], Mapping[str, Any]]
@@ -111,6 +113,7 @@ class BoundedReasoningLoop:
         cycle_id: str,
         cancel_check: CancelCheck | None = None,
         stale_check: CancelCheck | None = None,
+        selection: PlaybookSelection | None = None,
     ) -> ReasoningOutcome:
         trace = ReasoningTrace(trace_id=frame.trace_id, cycle_id=cycle_id)
         errors: list[str] = []
@@ -123,6 +126,7 @@ class BoundedReasoningLoop:
             return self._finish(trace, state, hypotheses_out, gaps_out, recommendation_out, errors, frame=frame, playbook=playbook, audit=audit, validated=validated)
 
         trace.record(state=ReasoningState.FRAME_READY.value, kind="frame", payload={"frame_id": frame.frame_id})
+        trace.record(state=ReasoningState.FRAME_READY.value, kind="reasoning_provenance", payload=reasoning_provenance(playbook, selection))
 
         if frame.freshness_seconds > max(0, int(self.budget.max_frame_age_seconds)):
             errors.append('frame_stale')
@@ -204,7 +208,17 @@ class BoundedReasoningLoop:
 
         additional_refs: list[str] = []
         broker_summaries: list[dict[str, Any]] = []
-        for index, gap in enumerate(sorted(gaps, key=lambda g: g.priority, reverse=True)):
+        gap_scores = score_evidence_gaps(
+            gaps, hypotheses=hypotheses, allowed_capabilities=playbook.allowed_capabilities,
+            registered_capabilities=self.broker.names(), remaining_broker_calls=self.budget.max_broker_calls - broker_calls,
+        )
+        trace.record(
+            state=ReasoningState.EVIDENCE_GAPS_IDENTIFIED.value, kind="evidence_gap_scores",
+            payload={"policy_version": SCORING_POLICY_VERSION, "policy_digest": scoring_policy_digest(), "scores": [s.to_dict() for s in gap_scores]},
+        )
+        errors.extend(f"gap_not_eligible:{s.gap_id}:{r}" for s in gap_scores for r in s.ineligible_reasons)
+        gap_by_id = {g.gap_id: g for g in gaps}
+        for index, gap in enumerate(gap_by_id[s.gap_id] for s in gap_scores if s.eligible):
             interrupted = self._interrupted(cancel_check, stale_check, errors)
             if interrupted is not None:
                 return finish(interrupted, hypotheses, gaps, None)
@@ -344,6 +358,11 @@ class BoundedReasoningLoop:
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
         recommendation = MioRecommendation.from_mapping(raw_r, advisory_id=f"{cycle_id}:advisory")
         rec_check = GroundingValidator(frame, additional_evidence_refs=additional_refs).validate_recommendation(recommendation)
+        claim_audit = audit_claims(frame, hypotheses=hypotheses, recommendation=recommendation, imported_refs=additional_refs)
+        trace.record(state=ReasoningState.RECOMMENDATION_READY.value, kind="claim_audit", payload=claim_audit.to_dict())
+        if rec_check.ok and not claim_audit.ok:
+            errors.extend(claim_audit.errors())
+            return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, recommendation)
         if not rec_check.ok:
             errors.extend(rec_check.errors)
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, recommendation)
