@@ -698,6 +698,70 @@ class PeriodicAfterLinkEventTests(unittest.TestCase):
         self.assertLessEqual(len(monitor._refreshes), nm.MAX_TRACKED_REFRESHES)
 
 
+    def test_a_refresh_older_than_the_full_collection_does_not_override_it(self) -> None:
+        monitor = nm.LightweightNocMonitor(up_interface='br0', down_interface='usb0')
+        stale = [{'interface': 'br0', 'target': '1.1.1.1', 'scope': 'external', 'reachable': False, 'error': 'stale'}]
+        before = time.monotonic_ns()  # started before the full collection below
+        monitor._refreshes['br0'] = {'started_ns': before, 'path_probes': stale}
+        monitor._refresh_iface_stats = {'started_ns': before, 'rows': [{'interface': 'br0', 'operstate': 'down', 'carrier': 0}]}
+
+        def reachable(gw, interface=''):
+            return [{'interface': interface, 'target': '1.1.1.1', 'scope': 'external', 'reachable': True}]
+
+        patches = _quiet_collectors(collect_path_probes=reachable,
+                                    collect_iface_stats=lambda *a: [{'interface': 'br0', 'operstate': 'up', 'carrier': 1}])
+        for p in patches:
+            p.start()
+        try:
+            full = monitor.collect_snapshot()
+        finally:
+            for p in patches:
+                p.stop()
+        self.assertTrue(all(r['reachable'] for r in full['path_probes'] if r['interface'] == 'br0'))
+        self.assertNotIn('stale', [r.get('error') for r in full['path_probes']])
+        self.assertEqual(full['iface_stats'], [{'interface': 'br0', 'operstate': 'up', 'carrier': 1}])
+        self.assertNotIn('link_event_started_monotonic_ns', full['collection_timing'])
+
+    def test_apply_refreshes_uses_each_stamp(self) -> None:
+        snap = {'path_probes': [{'interface': 'a', 'v': 'full'}, {'interface': 'b', 'v': 'full'}], 'iface_stats': ['full']}
+        refreshes = {'a': {'started_ns': 50, 'path_probes': [{'interface': 'a', 'v': 'old'}]},
+                     'b': {'started_ns': 150, 'path_probes': [{'interface': 'b', 'v': 'new'}]}}
+        self.assertEqual(nm._apply_refreshes(snap, refreshes, {'started_ns': 60, 'rows': ['old']}, 100), 150)
+        self.assertEqual(sorted((r['interface'], r['v']) for r in snap['path_probes']), [('a', 'full'), ('b', 'new')])
+        self.assertEqual(snap['iface_stats'], ['full'])
+        self.assertIsNone(nm._apply_refreshes(snap, {}, {'started_ns': 60, 'rows': ['old']}, 100))
+        self.assertEqual(nm._apply_refreshes(snap, {}, {'started_ns': 160, 'rows': ['new']}, 100), 160)
+        self.assertEqual(snap['iface_stats'], ['new'])
+
+    def test_tracked_refreshes_evict_the_oldest_beyond_the_cap(self) -> None:
+        extra = [f'eth{i}' for i in range(nm.MAX_TRACKED_REFRESHES + 8)]
+        monitor = nm.LightweightNocMonitor(up_interface='br0', down_interface='usb0', extra_interfaces=extra)
+        monitor._last_snapshot = _base_snapshot()
+        with patch.object(nm, 'collect_icmp', side_effect=lambda t, interface='': {'interface': interface, 'target': t, 'reachable': False}), \
+             patch.object(nm, '_default_icmp_target', return_value='172.16.0.254'), \
+             patch.object(nm, 'collect_iface_stats', return_value=[]):
+            for iface in extra:
+                monitor.refresh_interfaces([iface])
+        self.assertEqual(len(monitor._refreshes), nm.MAX_TRACKED_REFRESHES)
+        self.assertEqual(sorted(monitor._refreshes), sorted(extra[-nm.MAX_TRACKED_REFRESHES:]))
+
+    def test_refresh_builds_on_a_full_collection_that_landed_meanwhile(self) -> None:
+        monitor = nm.LightweightNocMonitor(up_interface='br0', down_interface='usb0')
+        monitor._last_snapshot = _base_snapshot()
+        newer = dict(_base_snapshot(), resolution_probes=[{'name': 'example.com', 'resolved': False, 'error': 'newer'}])
+
+        def icmp(t, interface=''):
+            monitor._last_snapshot = newer  # a full collection finished while probing
+            return {'interface': interface, 'target': t, 'reachable': False}
+
+        with patch.object(nm, 'collect_icmp', side_effect=icmp), \
+             patch.object(nm, '_default_icmp_target', return_value='172.16.0.254'), \
+             patch.object(nm, 'collect_iface_stats', return_value=[]):
+            snap = monitor.refresh_interfaces(['br0'])
+        self.assertEqual(snap['resolution_probes'][0]['error'], 'newer')
+        self.assertTrue(all(not r['reachable'] for r in snap['path_probes'] if r['interface'] == 'br0'))
+
+
 class WatcherRobustnessTests(unittest.TestCase):
     @staticmethod
     def _sysfs(root: Path, oper: str, carrier: str) -> None:

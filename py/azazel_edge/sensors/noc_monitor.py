@@ -959,6 +959,10 @@ class LightweightNocMonitor:
                 failures.append({'collector': 'path_probes', 'error': f'{iface}: timed out after {INTERFACE_REFRESH_TIMEOUT_S}s'})
         stamp('path_probes', t0, 'ok' if len(refreshed) == len(targets) else ('timeout' if not errors else 'error'))
 
+        # A full collection that landed while the probes ran is a newer base.
+        latest = self._last_snapshot
+        if isinstance(latest, dict):
+            base = latest
         rows = [r for r in (base.get('path_probes') or []) if not (isinstance(r, dict) and r.get('interface') in refreshed)]
         for n, p in enumerate(probes):
             if p[0] in refreshed:
