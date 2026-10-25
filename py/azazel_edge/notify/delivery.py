@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import smtplib
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List
@@ -12,7 +13,22 @@ from email.message import EmailMessage
 
 from azazel_edge._util import iso_utc_now
 from azazel_edge.audit import P0AuditLogger
-from azazel_edge.audit.logger import fsync_path
+from azazel_edge.audit.logger import DURABILITY_FSYNCED, fsync_path
+
+try:  # POSIX: serialise queue writers across processes too.
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    _fcntl = None
+
+# One lock per queue file in this process, shared by every notifier on it.
+_QUEUE_LOCKS: Dict[str, threading.Lock] = {}
+_QUEUE_LOCKS_GUARD = threading.Lock()
+
+
+def _queue_lock(path: Path) -> threading.Lock:
+    key = os.path.abspath(str(path))
+    with _QUEUE_LOCKS_GUARD:
+        return _QUEUE_LOCKS.setdefault(key, threading.Lock())
 
 
 class NotificationError(RuntimeError):
@@ -231,61 +247,113 @@ class OfflineQueueNotifier:
             'boot_id': _boot_id(),
         }
 
+    class _Locked:
+        """Holds the in-process lock for the queue file and, on POSIX, an
+        exclusive flock on its sidecar lock file, so read-modify-write of the
+        queue is never interleaved."""
+
+        def __init__(self, queue_path: Path):
+            self.queue_path = queue_path
+            self.lock = _queue_lock(queue_path)
+            self.fh = None
+
+        def __enter__(self):
+            self.lock.acquire()
+            try:
+                if _fcntl is not None:
+                    self.fh = self.queue_path.with_name(self.queue_path.name + '.lock').open('a')
+                    _fcntl.flock(self.fh.fileno(), _fcntl.LOCK_EX)
+            except Exception:
+                if self.fh is not None:
+                    self.fh.close()
+                self.lock.release()
+                raise
+            return self
+
+        def __exit__(self, *exc):
+            try:
+                if self.fh is not None:
+                    _fcntl.flock(self.fh.fileno(), _fcntl.LOCK_UN)
+                    self.fh.close()
+            finally:
+                self.lock.release()
+            return False
+
+    def _read_entries(self) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        if self.queue_path.exists():
+            for line in self.queue_path.read_text(encoding='utf-8').splitlines():
+                try:
+                    entries.append(json.loads(line))
+                except Exception:
+                    pass
+        return entries
+
     def _write_entries(self, entries: List[Dict[str, Any]]) -> None:
         # Durable replace: a crash leaves either the old queue or the new one,
         # never a truncated file, and the new one is on disk before return.
-        tmp = self.queue_path.with_name(self.queue_path.name + '.tmp')
-        with tmp.open('w', encoding='utf-8') as fh:
-            for entry in entries:
-                fh.write(json.dumps(entry, ensure_ascii=True, separators=(',', ':')) + '\n')
-        fsync_path(tmp)
-        os.replace(tmp, self.queue_path)
+        # The temp name is unique per process and thread; a failed write
+        # removes it. Callers hold _Locked.
+        tmp = self.queue_path.with_name(f'{self.queue_path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
+        try:
+            with tmp.open('w', encoding='utf-8') as fh:
+                for entry in entries:
+                    fh.write(json.dumps(entry, ensure_ascii=True, separators=(',', ':')) + '\n')
+            fsync_path(tmp)
+            os.replace(tmp, self.queue_path)
+        except BaseException:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
         fsync_path(self.queue_path.parent)
 
     def send(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         summary = self._summary_payload(payload)
         try:
-            existing: List[Dict[str, Any]] = []
-            if self.queue_path.exists():
-                for line in self.queue_path.read_text(encoding='utf-8').splitlines():
-                    try:
-                        existing.append(json.loads(line))
-                    except Exception:
-                        pass
-            existing.append(summary)
-            if len(existing) > self.max_queue_entries:
-                existing = existing[-self.max_queue_entries:]
-            self._write_entries(existing)
+            with self._Locked(self.queue_path):
+                existing = self._read_entries()
+                existing.append(summary)
+                if len(existing) > self.max_queue_entries:
+                    existing = existing[-self.max_queue_entries:]
+                self._write_entries(existing)
             return {'ok': True, 'adapter': 'offline_queue', 'queued': len(existing)}
         except Exception as exc:
             return {'ok': False, 'adapter': 'offline_queue', 'error': str(exc)}
 
     def flush(self) -> Dict[str, Any]:
-        if not self.queue_path.exists():
-            return {'flushed': 0, 'failed': 0, 'remaining': 0}
-        entries: List[Dict[str, Any]] = []
-        for line in self.queue_path.read_text(encoding='utf-8').splitlines():
-            try:
-                entries.append(json.loads(line))
-            except Exception:
-                pass
-        flushed, failed, undelivered = 0, 0, []
+        # Snapshot under the lock, deliver outside it (a slow delegate must not
+        # hold up enqueue), then remove exactly the delivered entries under
+        # the lock, keeping anything enqueued meanwhile.
+        with self._Locked(self.queue_path):
+            if not self.queue_path.exists():
+                return {'flushed': 0, 'failed': 0, 'remaining': 0}
+            entries = self._read_entries()
+        flushed, failed = 0, 0
+        delivered: List[str] = []
         for entry in entries:
             try:
                 result = self.delegate.send(entry)
                 if result.get('ok'):
                     flushed += 1
+                    delivered.append(json.dumps(entry, sort_keys=True))
                 else:
                     failed += 1
-                    undelivered.append(entry)
             except Exception:
                 failed += 1
-                undelivered.append(entry)
-        if undelivered:
-            self._write_entries(undelivered)
-        else:
-            self.queue_path.unlink(missing_ok=True)
-        return {'flushed': flushed, 'failed': failed, 'remaining': len(undelivered)}
+        with self._Locked(self.queue_path):
+            remaining = self._read_entries()
+            for key in delivered:
+                for idx, entry in enumerate(remaining):
+                    if json.dumps(entry, sort_keys=True) == key:
+                        del remaining[idx]
+                        break
+            if remaining:
+                self._write_entries(remaining)
+            else:
+                self.queue_path.unlink(missing_ok=True)
+        return {'flushed': flushed, 'failed': failed, 'remaining': len(remaining)}
 
     def queue_depth(self) -> int:
         if not self.queue_path.exists():
@@ -308,11 +376,10 @@ class DecisionNotifier:
         action = str(arbiter.get('action') or '')
         if action != 'notify':
             result = {'ok': False, 'skipped': True, 'reason': 'action_not_notify'}
-            self.audit.log(
-                'notification', trace_id=target, source='decision_notifier', decision='skipped', payload=result,
-                decision_id=decision_id, alert_class='', alert_class_rule=ALERT_CLASS_RULE,
+            record = self._record(
+                target, 'skipped', result, {'decision_id': decision_id, 'alert_class': '', 'alert_class_rule': ALERT_CLASS_RULE}
             )
-            return result
+            return dict(result, **record)
 
         payload = {
             'action': action,
@@ -338,26 +405,56 @@ class DecisionNotifier:
         attempts: List[Dict[str, Any]] = []
         for notifier in self.notifiers:
             adapter = self._adapter_name(notifier)
+            # Only the send is retried on the next adapter. Recording the
+            # outcome is separate: a record that fails must neither re-send an
+            # alert that went out nor turn it into a failure.
             try:
                 result = notifier.send(send_payload)
-                ack = result.get('status')
-                attempts.append({'adapter': adapter, 'ok': True, 'ack': ack})
-                audit_result = {
-                    'ok': True,
-                    'adapter': result.get('adapter') or adapter,
-                    'ack': ack,
-                    'attempts': attempts,
-                    'payload': send_payload,
-                }
-                self.audit.log('notification', trace_id=target, source='decision_notifier', decision='sent', payload=audit_result, **record_fields)
-                return audit_result
             except Exception as exc:
                 errors.append(str(exc))
                 attempts.append({'adapter': adapter, 'ok': False, 'error': str(exc)})
+                continue
+            ack = result.get('status')
+            attempts.append({'adapter': adapter, 'ok': True, 'ack': ack})
+            audit_result = {
+                'ok': True,
+                'adapter': result.get('adapter') or adapter,
+                'ack': ack,
+                'attempts': attempts,
+                'payload': send_payload,
+            }
+            return dict(audit_result, **self._record(target, 'sent', audit_result, record_fields))
 
         failed = {'ok': False, 'errors': errors, 'attempts': attempts, 'payload': send_payload}
-        self.audit.log('notification', trace_id=target, source='decision_notifier', decision='failed', payload=failed, **record_fields)
-        return failed
+        return dict(failed, **self._record(target, 'failed', failed, record_fields))
+
+    def _record(self, target: str, decision: str, payload: Dict[str, Any], fields: Dict[str, Any]) -> Dict[str, Any]:
+        """Write the notification audit record; report, never raise, whether it
+        is durable. 'audit_record' is 'durable', 'not_durable' (written, but
+        fsync failed or the file system cannot sync) or 'not_written'."""
+
+        kwargs = dict(trace_id=target, source='decision_notifier', decision=decision, payload=payload, **fields)
+        try:
+            reporting = getattr(self.audit, 'log_reporting_durability', None)
+            if reporting is None:  # an audit logger that cannot say
+                self.audit.log('notification', **kwargs)
+                durability = 'durability_unknown'
+            else:
+                _, durability = reporting('notification', **kwargs)
+        except OSError as exc:
+            # AuditDurabilityError: appended to the chain, not durable.
+            # Any other OSError: the append itself failed.
+            from azazel_edge.audit import AuditDurabilityError
+
+            state = 'not_durable' if isinstance(exc, AuditDurabilityError) else 'not_written'
+            logging.getLogger(__name__).error('notification audit record %s: %s', state, exc)
+            return {'audit_record': state, 'audit_error': str(exc)}
+        except Exception as exc:
+            logging.getLogger(__name__).error('notification audit record not_written: %s', exc)
+            return {'audit_record': 'not_written', 'audit_error': str(exc)}
+        if durability == DURABILITY_FSYNCED:
+            return {'audit_record': 'durable'}
+        return {'audit_record': 'not_durable', 'audit_error': durability}
 
     def _payload_for_adapter(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if not self.summary_only:

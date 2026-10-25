@@ -1,3 +1,3 @@
-from .logger import P0AuditLogger
+from .logger import AuditDurabilityError, P0AuditLogger
 
-__all__ = ['P0AuditLogger']
+__all__ = ['AuditDurabilityError', 'P0AuditLogger']

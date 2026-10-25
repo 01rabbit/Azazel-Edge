@@ -205,14 +205,21 @@ def test_logger_raises_when_fsync_fails_but_keeps_the_chain(tmp_path, monkeypatc
     assert P0AuditLogger.verify_chain(path)["ok"] is True
 
 
-def test_logger_tolerates_a_file_system_that_cannot_sync(tmp_path, monkeypatch):
+def test_logger_tolerates_a_file_system_that_cannot_sync_and_says_so(tmp_path, monkeypatch, caplog):
     import errno
 
     def einval(fd):
         raise OSError(errno.EINVAL, "no sync here")
 
     monkeypatch.setattr(os, "fsync", einval)
-    P0AuditLogger(tmp_path / "audit.jsonl").log_action_decision("d", "s")
+    audit = P0AuditLogger(tmp_path / "audit.jsonl")
+    with caplog.at_level("WARNING", logger="azazel_edge.audit.logger"):
+        _, durability = audit.log_reporting_durability("action_decision", "d", "s")
+    assert durability == logger_mod.DURABILITY_UNSUPPORTED
+    assert audit.fsync_unsupported_count == 1
+    assert any("fsync_unsupported" in r.getMessage() for r in caplog.records)
+    # A kind outside DURABLE_KINDS says so instead of claiming durability.
+    assert audit.log_reporting_durability("event_receive", "e", "s")[1] == logger_mod.DURABILITY_NOT_REQUIRED
 
 
 def test_queue_is_replaced_durably(tmp_path, monkeypatch):
@@ -234,8 +241,150 @@ def test_queue_is_replaced_durably(tmp_path, monkeypatch):
     queue = OfflineQueueNotifier(qpath, delegate=None)
     assert queue.send({"action": "notify", "decision_id": "d1"})["ok"] is True
     assert events == [("fsync", "file"), ("replace", "queue.jsonl"), ("fsync", "dir")]
-    assert not (tmp_path / "queue.jsonl.tmp").exists()
+    assert list(tmp_path.glob("*.tmp")) == []
     assert queue.queue_depth() == 1
+
+
+# ------------------------------------------- send vs. record (review of #438)
+
+
+class _Counting:
+    def __init__(self, fail=False):
+        self.n = 0
+        self.fail = fail
+
+    def send(self, payload):
+        self.n += 1
+        if self.fail:
+            raise RuntimeError("down")
+        return {"ok": True, "adapter": "x", "status": 200}
+
+
+def _eio(fd):
+    import errno
+
+    raise OSError(errno.EIO, "io")
+
+
+def _rows(path):
+    return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_notification_fsync_failure_does_not_resend_or_raise(tmp_path, monkeypatch):
+    first, second = _Counting(), _Counting()
+    audit = P0AuditLogger(tmp_path / "audit.jsonl")
+    monkeypatch.setattr(os, "fsync", _eio)
+    result = DecisionNotifier([first, second], audit).notify(CRITICAL, {}, target="t", decision_id="d1")
+    monkeypatch.undo()
+    assert (first.n, second.n) == (1, 0)  # sent once, not re-sent on the next adapter
+    assert result["ok"] is True and result["adapter"] == "x"
+    assert result["audit_record"] == "not_durable" and "audit_record_not_durable" in result["audit_error"]
+    rows = _rows(tmp_path / "audit.jsonl")
+    assert [(r["kind"], r["decision"]) for r in rows] == [("notification", "sent")]
+    assert P0AuditLogger.verify_chain(tmp_path / "audit.jsonl")["ok"] is True
+
+
+def test_failed_send_stays_failed_when_its_record_is_not_durable(tmp_path, monkeypatch):
+    down = _Counting(fail=True)
+    audit = P0AuditLogger(tmp_path / "audit.jsonl")
+    monkeypatch.setattr(os, "fsync", _eio)
+    result = DecisionNotifier([down], audit).notify(CRITICAL, {}, target="t", decision_id="d1")
+    monkeypatch.undo()
+    assert down.n == 1
+    assert result["ok"] is False and result["audit_record"] == "not_durable"
+    assert [r["decision"] for r in _rows(tmp_path / "audit.jsonl")] == ["failed"]
+
+
+def test_notification_record_write_failure_is_reported_not_raised(tmp_path, monkeypatch):
+    first, second = _Counting(), _Counting()
+    audit = P0AuditLogger(tmp_path / "audit.jsonl")
+
+    def broken(self, *a, **k):
+        raise OSError(28, "no space")
+
+    monkeypatch.setattr(P0AuditLogger, "log_reporting_durability", broken)
+    result = DecisionNotifier([first, second], audit).notify(CRITICAL, {}, target="t", decision_id="d1")
+    assert (first.n, second.n) == (1, 0)
+    assert result["ok"] is True and result["audit_record"] == "not_written"
+
+
+def test_durable_notification_record_is_reported(tmp_path):
+    audit = P0AuditLogger(tmp_path / "audit.jsonl")
+    result = DecisionNotifier([_Counting()], audit).notify(CRITICAL, {}, target="t", decision_id="d1")
+    assert result["audit_record"] == "durable" and "audit_error" not in result
+    skipped = DecisionNotifier([_Counting()], audit).notify({"action": "observe"}, {}, target="t", decision_id="d2")
+    assert skipped["ok"] is False and skipped["skipped"] is True and skipped["audit_record"] == "durable"
+
+
+def test_notification_on_a_file_system_that_cannot_sync_is_reported_not_durable(tmp_path, monkeypatch):
+    import errno
+
+    def einval(fd):
+        raise OSError(errno.EINVAL, "no sync here")
+
+    first, second = _Counting(), _Counting()
+    audit = P0AuditLogger(tmp_path / "audit.jsonl")
+    monkeypatch.setattr(os, "fsync", einval)
+    result = DecisionNotifier([first, second], audit).notify(CRITICAL, {}, target="t", decision_id="d1")
+    assert (first.n, second.n) == (1, 0)
+    assert result["ok"] is True
+    assert result["audit_record"] == "not_durable" and result["audit_error"] == logger_mod.DURABILITY_UNSUPPORTED
+
+
+def test_concurrent_sends_keep_every_entry(tmp_path):
+    import threading
+
+    qpath = tmp_path / "q.jsonl"
+    queues = [OfflineQueueNotifier(qpath, delegate=None) for _ in range(2)]
+    errors = []
+
+    def worker(i):
+        for j in range(30):
+            r = queues[i % 2].send({"action": "notify", "decision_id": f"{i}-{j}"})
+            if not r["ok"]:
+                errors.append(r["error"])
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    ids = sorted(e["decision_id"] for e in _rows(qpath))
+    assert errors == []
+    assert ids == sorted(f"{i}-{j}" for i in range(4) for j in range(30))
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_failed_queue_write_removes_its_temp_file(tmp_path, monkeypatch):
+    def refuse(a, b):
+        raise OSError(13, "denied")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    result = OfflineQueueNotifier(tmp_path / "q.jsonl", delegate=None).send({"action": "notify"})
+    assert result["ok"] is False
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_flush_keeps_entries_enqueued_while_delivering(tmp_path):
+    qpath = tmp_path / "q.jsonl"
+
+    class Delegate:
+        def __init__(self):
+            self.queue = None
+
+        def send(self, entry):
+            if entry.get("decision_id") == "a":
+                self.queue.send({"action": "notify", "decision_id": "late"})
+            return {"ok": True}
+
+    d = Delegate()
+    queue = OfflineQueueNotifier(qpath, delegate=d)
+    d.queue = OfflineQueueNotifier(qpath, delegate=None)
+    queue.send({"action": "notify", "decision_id": "a"})
+    queue.send({"action": "notify", "decision_id": "b"})
+    result = queue.flush()
+    assert result == {"flushed": 2, "failed": 0, "remaining": 1}
+    assert [e["decision_id"] for e in _rows(qpath)] == ["late"]
 
 
 # ----------------------------------------------------------------- harness
@@ -320,14 +469,14 @@ def test_enqueue_record_naming_another_decision_is_not_measurable(clean_owner, c
 
 
 def test_notification_record_not_naming_the_decision_is_not_measurable(clean_owner, closed_table, monkeypatch):
-    real_log = P0AuditLogger.log
+    real_log = P0AuditLogger.log_reporting_durability
 
     def log(self, kind, trace_id, source, **payload):
         if kind == "notification":
             payload["decision_id"] = ""
         return real_log(self, kind, trace_id, source, **payload)
 
-    monkeypatch.setattr(P0AuditLogger, "log", log)
+    monkeypatch.setattr(P0AuditLogger, "log_reporting_durability", log)
     record = so03_alert_queue.run(seed=3)
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert _prereqs(record)["enqueue_record_names_decision_id"] is False

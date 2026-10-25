@@ -3,11 +3,14 @@ from __future__ import annotations
 import errno
 import json
 import hashlib
+import logging
 import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
+
+_LOG = logging.getLogger(__name__)
 
 
 VALID_KINDS = {
@@ -37,13 +40,29 @@ DURABLE_KINDS = frozenset({'action_decision', 'notification'})
 _FSYNC_UNSUPPORTED = frozenset({errno.EINVAL, getattr(errno, 'ENOTSUP', errno.EINVAL), getattr(errno, 'EOPNOTSUPP', errno.EINVAL)})
 
 
-def fsync_path(path: Path) -> None:
+# Durability of one log() call, as log_reporting_durability() returns it.
+DURABILITY_FSYNCED = 'fsynced'
+DURABILITY_UNSUPPORTED = 'fsync_unsupported'
+DURABILITY_NOT_REQUIRED = 'not_required'
+
+
+class AuditDurabilityError(OSError):
+    """The record was appended to the chain but could not be made durable."""
+
+
+def fsync_path(path: Path) -> bool:
+    """fsync one path. True when synced; False when the file system cannot
+    sync at all (logged at warning); any other error raises."""
+
     fd = os.open(str(path), os.O_RDONLY)
     try:
         os.fsync(fd)
+        return True
     except OSError as exc:
         if exc.errno not in _FSYNC_UNSUPPORTED:
             raise
+        _LOG.warning('fsync_unsupported path=%s errno=%s: record is written but not durable', path, exc.errno)
+        return False
     finally:
         os.close(fd)
 
@@ -54,6 +73,8 @@ class P0AuditLogger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._last_chain_hash = self._read_last_chain_hash()
+        # Durable-kind records written where the file system could not sync.
+        self.fsync_unsupported_count = 0
 
     def _read_last_chain_hash(self) -> str:
         if not self.path.exists():
@@ -95,6 +116,14 @@ class P0AuditLogger:
         return {'ok': True, 'entries': len(lines), 'error': ''}
 
     def log(self, kind: str, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
+        return self.log_reporting_durability(kind, trace_id, source, **payload)[0]
+
+    def log_reporting_durability(self, kind: str, trace_id: str, source: str, **payload: Any) -> Tuple[Dict[str, Any], str]:
+        """log(), also saying whether the record is durable: DURABILITY_FSYNCED,
+        DURABILITY_UNSUPPORTED (written; the file system cannot sync) or
+        DURABILITY_NOT_REQUIRED (a kind outside DURABLE_KINDS). An fsync error
+        raises AuditDurabilityError after the record is appended."""
+
         if kind not in VALID_KINDS:
             raise ValueError(f'invalid_audit_kind:{kind}')
         with self._lock:
@@ -111,15 +140,24 @@ class P0AuditLogger:
             with self.path.open('a', encoding='utf-8') as fh:
                 fh.write(json.dumps(record, ensure_ascii=True, separators=(',', ':')) + '\n')
             self._last_chain_hash = str(record['chain_hash'])
+            durability = DURABILITY_NOT_REQUIRED
             if kind in DURABLE_KINDS:
                 # After close, through a separate descriptor: fsync flushes the
                 # file, not the descriptor, and the write/close sequence above
                 # stays exactly what it was. A new file also needs its
                 # directory entry on disk. A failure raises: the caller must
                 # not be told a record is durable when it may not be.
-                fsync_path(self.path)
-                if created:
-                    fsync_path(self.path.parent)
+                try:
+                    synced = fsync_path(self.path)
+                    if created:
+                        synced = fsync_path(self.path.parent) and synced
+                except OSError as exc:
+                    raise AuditDurabilityError(exc.errno, f'audit_record_not_durable:{exc}') from exc
+                if synced:
+                    durability = DURABILITY_FSYNCED
+                else:
+                    durability = DURABILITY_UNSUPPORTED
+                    self.fsync_unsupported_count += 1
             # Emit-alongside: project into the shared Azazel-Fabric AuditEvent on a
             # SEPARATE, non-interleaved file. The chained log above is complete and
             # untouched; verify_chain() is unaffected (plan §3.3). Best-effort.
@@ -129,7 +167,7 @@ class P0AuditLogger:
                 project_audit_record(record, self.path)
             except Exception:  # pragma: no cover - defensive; projection is advisory-only
                 pass
-            return record
+            return record, durability
 
     def log_event_receive(self, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
         return self.log('event_receive', trace_id=trace_id, source=source, **payload)
