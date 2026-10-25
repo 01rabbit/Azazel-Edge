@@ -393,6 +393,7 @@ def test_full_listener_handoff_is_counted_not_blocking(tmp_path, monkeypatch):
     assert len(_all_rows(tmp_path / "a.jsonl")) == 6  # the chain is complete regardless
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 def test_listener_shutdown_signal_is_not_swallowed_and_writers_go_on(tmp_path):
     audit = P0AuditLogger(tmp_path / "a.jsonl")
 
