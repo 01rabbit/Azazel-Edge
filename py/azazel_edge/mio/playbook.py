@@ -501,9 +501,12 @@ _DIRECTIVE_VERBS = (
     "isolate", "throttle", "redirect", "block", "quarantine", "activate", "deactivate",
     "enforce", "execute", "exec", "run", "kill", "shutdown", "reboot", "transition",
     "override", "approve", "disable", "drop", "terminate", "deny", "ban", "delete", "wipe",
-    "stop", "restart",
+    "stop", "restart", "shut", "cut", "nuke", "disconnect", "sever", "erase",
 )
-_VERB_ALT = "|".join(_DIRECTIVE_VERBS)
+# Phrasal forms are regex fragments (whitespace-tolerant) and are tried first, so
+# "do not shut down the sensor" parses as one prohibited verb.
+_DIRECTIVE_PHRASES = (r"shut\s+down", r"shut\s+off", r"cut\s+off", r"power\s+off", r"power\s+down")
+_VERB_ALT = "|".join(_DIRECTIVE_PHRASES + _DIRECTIVE_VERBS)
 _DIRECTIVE_RE = re.compile(rf"\b({_VERB_ALT})\b", re.I)
 _PROHIBITION_RE = re.compile(
     rf"(?:do not|never) (?:{_VERB_ALT})(?: (?:or|and|nor) (?:{_VERB_ALT}))*(?P<rest>(?: [^,;:.!?\n]*)?)\Z",
