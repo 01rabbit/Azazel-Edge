@@ -1,6 +1,8 @@
 mod audit_chain;
+mod ingress;
 mod release;
 
+use ingress::{append_audit_record, IngressLimits, IngressReader, PollReport};
 use release::{
     activate_release_task, build_release_task, cancel_release_task, mark_release_task_uncertain,
     prepare_release_task, process_due_releases, LeaseNow, ReleaseTask,
@@ -10,9 +12,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::env;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::Command;
@@ -1067,13 +1069,9 @@ fn forward_ai_lines(socket_path: &str, receiver: Receiver<Forward>) {
     }
 }
 
-fn process_line(cfg: &Config, line: &str) {
-    let parsed: Value = match serde_json::from_str(line) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-
-    let normalized = match build_normalized_event(&parsed) {
+/// Decide one EVE record the ingress reader admitted.
+fn process_value(cfg: &Config, parsed: &Value) {
+    let normalized = match build_normalized_event(parsed) {
         Some(ev) => ev,
         None => return,
     };
@@ -1134,44 +1132,45 @@ fn process_release_events(cfg: &Config) {
     }
 }
 
-fn read_new_lines(cfg: &Config, offset: &mut u64) {
-    let path = Path::new(&cfg.eve_path);
-    let metadata = match fs::metadata(path) {
-        Ok(m) => m,
-        Err(_) => return,
-    };
-
-    let len = metadata.len();
-    if *offset > len {
-        *offset = 0;
+/// Where the ingress audit summaries go: next to the normalized event log,
+/// in their own file, so readers of that log never meet a record of another
+/// shape. No setting of its own: it follows `AZAZEL_NORMALIZED_EVENT_LOG`.
+fn ingress_audit_log_path(cfg: &Config) -> String {
+    match Path::new(&cfg.normalized_log_path).parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.join("ingress-audit.jsonl").to_string_lossy().into_owned(),
+        _ => "ingress-audit.jsonl".to_string(),
     }
+}
 
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return,
-    };
-
-    let mut reader = BufReader::new(file);
-    if reader.seek(SeekFrom::Start(*offset)).is_err() {
-        return;
+/// An ingress summary is written whatever the log and stdout settings are:
+/// shedding is never silent. It carries counts and bounds only, no address.
+/// The file copy is the audit record (0600, no symlink, fsync, size-capped);
+/// the console copy goes to stdout, or to stderr under
+/// `AZAZEL_EVENT_STDOUT=off` because that setting silences per-event output,
+/// not audit. If the file cannot be written the failure and the record both
+/// go to stderr.
+fn emit_ingress_record(cfg: &Config, record: &Value) {
+    let path = ingress_audit_log_path(cfg);
+    if let Err(error) = append_audit_record(Path::new(&path), record, IngressLimits::DECLARED.audit_log_cap_bytes) {
+        eprintln!("ingress audit write failed ({}): {}: {}", path, error, record);
     }
-
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let n = match reader.read_line(&mut line) {
-            Ok(n) => n,
-            Err(_) => break,
-        };
-        if n == 0 {
-            break;
-        }
-        process_line(cfg, line.trim_end());
+    match cfg.event_stdout {
+        StdoutMode::Full | StdoutMode::Summary => println!("{}", record),
+        StdoutMode::Off => eprintln!("{}", record),
     }
+}
 
-    if let Ok(pos) = reader.stream_position() {
-        *offset = pos;
+/// One iteration of the main loop: one bounded read of the EVE file, its
+/// audit summaries, then the release sweep. The read is bounded
+/// (`IngressLimits`), so the sweep runs on every iteration however much is
+/// waiting in the EVE file; whatever the read left is read next time.
+fn poll_iteration(cfg: &Config, ingress: &mut IngressReader, sweep: &mut dyn FnMut(&Config, &IngressReader)) -> PollReport {
+    let report = ingress.poll(Path::new(&cfg.eve_path), Instant::now(), |v| process_value(cfg, v));
+    for record in ingress.audit_records(Instant::now(), now_epoch()) {
+        emit_ingress_record(cfg, &record);
     }
+    sweep(cfg, ingress);
+    report
 }
 
 
@@ -1284,10 +1283,10 @@ fn main() {
         let _ = fs::create_dir_all(parent);
     }
 
-    let mut offset = if cfg.from_start { 0 } else { fs::metadata(&cfg.eve_path).map(|m| m.len()).unwrap_or(0) };
+    let offset = if cfg.from_start { 0 } else { fs::metadata(&cfg.eve_path).map(|m| m.len()).unwrap_or(0) };
 
     eprintln!(
-        "azazel-edge-core started: eve_path={}, ai_socket={}, from_start={}, poll_ms={}, defense_enforce={}, defense_dry_run={}, defense_enforce_level={}, high_impact_auto={}, defense_iface={}, honeypot_port={}, release_ledger={}",
+        "azazel-edge-core started: eve_path={}, ai_socket={}, from_start={}, poll_ms={}, defense_enforce={}, defense_dry_run={}, defense_enforce_level={}, high_impact_auto={}, defense_iface={}, honeypot_port={}, release_ledger={}, ingress_non_alert_per_sec={}, ingress_alerts_per_poll={}",
         cfg.eve_path,
         cfg.ai_socket_path,
         cfg.from_start,
@@ -1298,7 +1297,9 @@ fn main() {
         cfg.defense_allow_high_impact_auto,
         cfg.defense_iface,
         cfg.defense_honeypot_port,
-        cfg.defense_release_ledger_path
+        cfg.defense_release_ledger_path,
+        IngressLimits::DECLARED.non_alert_per_sec,
+        IngressLimits::DECLARED.alerts_per_poll
     );
 
     // Reconcile due release work before reading new alerts. This runs even when new
@@ -1306,13 +1307,18 @@ fn main() {
     process_release_events(&cfg);
     process_start();
     let mut reporter = ForwardReporter::new();
+    let mut ingress = IngressReader::new(offset, IngressLimits::DECLARED);
     loop {
-        read_new_lines(&cfg, &mut offset);
-        process_release_events(&cfg);
+        let report = poll_iteration(&cfg, &mut ingress, &mut |c, _| process_release_events(c));
         if cfg.forward_ai {
             reporter.tick(Instant::now(), || queue_forward_stats(&cfg.ai_socket_path));
         }
-        thread::sleep(Duration::from_millis(cfg.poll_ms));
+        // A poll that stopped on a per-poll budget left work in the file: the
+        // next one follows at once, so alerts are read at the Core's capacity
+        // and still with a release sweep between every bounded poll.
+        if !report.budget_exhausted() {
+            thread::sleep(Duration::from_millis(cfg.poll_ms));
+        }
     }
 }
 
@@ -1578,6 +1584,57 @@ mod tests {
         assert_eq!(tagged.technique_ids, vec!["T1110"]);
         assert_eq!(decide_defense(&ev).action, decide_defense(&tagged).action);
         assert_eq!(decide_defense(&ev).policy_reason, decide_defense(&tagged).policy_reason);
+    }
+
+    #[test]
+    fn the_release_sweep_runs_every_iteration_while_an_ingress_backlog_remains() {
+        let dir = std::env::temp_dir().join(format!("azazel-sweep-under-load-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let eve = dir.join("eve.json");
+        let limits = IngressLimits::DECLARED;
+        // Five polls' worth of alerts plus the same number of flow records,
+        // all present before the first poll: a flood the old reader would have
+        // read to the end before the sweep.
+        let total = limits.alerts_per_poll * 5;
+        let mut body = String::new();
+        for n in 0..total {
+            body.push_str(&format!(
+                "{{\"event_type\":\"alert\",\"src_ip\":\"203.0.113.1\",\"dest_ip\":\"192.0.2.10\",\"dest_port\":22,\"alert\":{{\"signature_id\":{},\"severity\":3}}}}\n",
+                n
+            ));
+            body.push_str(&format!("{{\"event_type\":\"flow\",\"n\":{}}}\n", n));
+        }
+        fs::write(&eve, &body).unwrap();
+        let len = body.len() as u64;
+        let mut cfg = sample_cfg();
+        cfg.eve_path = eve.to_string_lossy().into_owned();
+        cfg.normalized_log_path = dir.join("normalized-events.jsonl").to_string_lossy().into_owned();
+        cfg.event_stdout = StdoutMode::Off;
+        let mut ingress = IngressReader::new(0, limits);
+        let mut sweeps: Vec<u64> = Vec::new();
+        let mut iterations = 0;
+        while ingress.offset < len {
+            let report = poll_iteration(&cfg, &mut ingress, &mut |_, r| sweeps.push(r.offset));
+            iterations += 1;
+            assert!(report.alerts_admitted <= limits.alerts_per_poll);
+            assert!(report.examined <= limits.examine_per_poll);
+            if ingress.offset < len {
+                assert!(report.budget_exhausted(), "stopped early with work left: {:?}", report.stop);
+            }
+            assert_eq!(sweeps.len(), iterations, "one sweep per iteration");
+            assert!(iterations < 1000);
+        }
+        assert!(iterations >= 5, "the backlog took several iterations: {}", iterations);
+        // The first sweep ran with most of the flood still unread.
+        assert!(sweeps[0] < len / 2, "first sweep at offset {} of {}", sweeps[0], len);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_ingress_audit_log_sits_beside_the_normalized_log() {
+        let mut cfg = sample_cfg();
+        cfg.normalized_log_path = "/var/log/azazel-edge/normalized-events.jsonl".to_string();
+        assert_eq!(ingress_audit_log_path(&cfg), "/var/log/azazel-edge/ingress-audit.jsonl");
     }
 
     fn sample_cfg() -> Config {

@@ -104,66 +104,152 @@ parameters from the top level of `tc -j qdisc show`, iproute2 puts them under
 readback; in the runs above all 150 throttle rollbacks completed, and throttle
 is declared by the same rule as the others.
 
-## OF-06 — Core ingress quota (not declared: no mechanism exists)
+## OF-06 — Core ingress quota (declared, provisional, enforced)
 
-SO-11 asks for the SO-03, SO-04 and SO-07 pass rules to hold "at each declared
-ingress quota", and at 120% of the highest one for the quota to **shed**
-("a quota that is declared but not enforced fails this row"). A quota can only
-be declared provisionally if something already enforces it. Nothing does on
-the Core's ingress path, so Edge declares no ingress quota and adds no shedding
-mechanism here. That is a design decision for the owner.
+Owner decision on #414 (2026-10-25), as revised in the review of #452: bound
+the Core's EVE reader per poll; never shed or rate-limit alerts; hold
+non-alert lines to a declared quota and shed the lowest-importance types first
+(flow, dns, stats, then other); count what is shed and record it as a
+rate-bounded `ingress_shed` summary; never shed silently. This section records
+what was built.
 
-### What exists today
+### Where it lives
 
-| Place | Bounded? | Sheds? | Why it is not an ingress quota |
-| --- | --- | --- | --- |
-| `azazel-edge-core` EVE reader (`main.rs`, `read_new_lines`) | No | No | Reads every new line on each poll (200 ms) and decides each one. No line or rate limit, no drop counter. Under a flood the release sweep waits for the read to finish, which is what the SO-04 `eve_flood` phase shows. |
-| Core → AI socket forwarder (`main.rs`, `AI_FORWARD_QUEUE` = 1024, `AI_FORWARD_DROPPED`) | Yes | Yes, counted | Downstream of the decision. It protects detection from a slow receiver; every ingress line has already been decided and logged. It does not limit what the Core admits. |
-| AI agent LLM queue (`azazel_edge_ai/agent.py`, `AZAZEL_LLM_QUEUE_MAX` = 32) | Yes | Defers (`queue_full`) | Bounds advisory LLM work, not Core intake. |
-| `EvidenceBus` (`evidence_plane/bus.py`, `queue_max` = 1024) | Yes | No: `put_nowait` raises `queue.Full` | Not on the Core path; no drop policy or counter. |
+| What | Where |
+| --- | --- |
+| The bound (enforced) | `rust/azazel-edge-core/src/ingress.rs`, `IngressLimits::DECLARED` (compile-time constants; no environment variable raises or disables them) |
+| The declaration | `config/service_objectives/ingress_quota.json` (schema `azazel-edge/ingress-quota/v1`), read by `declarations.load_ingress_quotas()`. The core does not read it; a core unit test fails if it and `IngressLimits::DECLARED` differ, and a pytest checks the same from the Python side. |
+| The shed record | `ingress-audit.jsonl` beside the normalized event log (`AZAZEL_NORMALIZED_EVENT_LOG`'s directory): opened with `O_NOFOLLOW`, mode 0600, `fsync` after each record (at most about two a second), rotated to `ingress-audit.jsonl.1` at 16 MiB. Each record is also printed to stdout, or to stderr under `AZAZEL_EVENT_STDOUT=off` (that setting silences per-event output, not audit). If the file cannot be written, the error and the record go to stderr. Its own file, so readers of the normalized log never meet a record of another shape. |
+| SO-11 starting point | `py/azazel_edge/service_objectives/so11_ingress_probe.py` |
 
-There is no SO-11 harness in this repository, and none is added: with no
-declared quota, the row has nothing to iterate. `SO04-HOSTILE-LOAD-UNDECLARED`
-already keeps the SO-04 parts `not_measurable` for the same reason.
+**The declared quota is a non-alert quota.**
 
-### What would need to exist
+| Limit | Value | Applies to |
+| --- | --- | --- |
+| `value` (quota) | 2500 lines/s, token bucket of 1500 | non-alert lines |
+| `alerts_per_poll` | 1000 | alerts, per poll only (no rate) |
+| `examine_per_poll` | 6000 lines | every line, shed ones included |
+| `poll_work_limit_ms` | 500 ms | one poll's reading and deciding |
+| `max_line_bytes` | 1 MiB | a longer line is skipped to its newline and counted |
+| `backlog_bound_bytes` | 8 MiB unread | second-line shedding of non-alerts |
+| `alert_backlog_bound_bytes` | 256 MiB unread | record point for `ingress_alert_backlog`; nothing is dropped |
 
-1. **An enforced intake bound on the Core's ingress**, with a declared policy
-   for excess (drop or queue), a counter of what it shed, and a way for the
-   harness to read that counter from outside (for example a line on the
-   existing forward-stats channel, or the health surface).
-2. **A declaration** of each quota (unit, value, hardware class, status), in the
-   same form as the OF-05 file, that the SO-11 harness and validator read.
-3. **An SO-11 harness** that re-runs SO-03, SO-04 and SO-07 while offering
-   traffic at each declared quota, then once at 120% of the highest, and checks
-   that the shed counter moves at 120% and that admitted traffic still meets the
-   referenced rows.
+Status `provisional`, hardware class `container-aarch64, not hardware`.
 
-### Candidate locations
+**Basis.** The old reader had no bound, so its sustained decision rate is the
+Core's capacity on this path: 200000 pre-written alerts in the SO-04
+`eve_flood` line shape, read from the start, release build on main at
+`4b5242c`, enforcement off: 5641, 6768 and 7676 lines/s in three runs
+(colima, aarch64). The non-alert quota is less than half the minimum, rounded
+down to 500 (a non-alert line is parsed but not decided, so it costs no more
+than an alert), leaving at least half the capacity for alerts.
+`alerts_per_poll` is about 0.13–0.3 s of alert work at the measured per-alert
+cost, far below the SO-04 5 s bounds; `poll_work_limit_ms` caps a poll on a
+slower host. **Alerts are not throttled below capacity:** with a 60000-alert
+backlog, main and this tree decided 6495–6530 and 6502–6524 alerts/s in three
+alternating runs in the same container.
 
-- `read_new_lines` in `azazel-edge-core`: a per-poll line budget (lines beyond
-  it left for the next poll, i.e. queued in the file) or a token bucket over
-  decided events (excess dropped and counted).
-- A bounded channel between the EVE reader and the decision step, in the same
-  pattern as the AI forwarder: bounded `sync_channel`, `try_send`, an atomic
-  drop counter.
-- Suricata's own EVE output rate, outside Edge. This would make the quota a
-  sensor setting rather than a Core property.
+### How the reader behaves
 
-### Open questions for the owner
+Each poll the reader:
 
-- **Unit.** Events per second, lines per poll, or bytes per second? Per peer
-  (§5 R5 speaks of per-peer quotas) or for the whole node?
-- **Policy for excess.** Drop and count, or leave unread in the EVE file (queue)?
-  Queuing in the file delays decisions and the release sweep; dropping loses
-  detections. Should an alert from a source that already holds a lease be
-  admitted ahead of others?
-- **Order of work per poll.** Should the release sweep run before ingress is
-  drained, so rollback timing does not depend on ingress volume?
-- **Hardware classes.** Which classes are declared (Raspberry Pi 5, x86_64
-  appliance), and who runs the R7 hardware confirmation?
-- **Where the shed counter is reported**, so that a harness can read it without
-  privileged access to the Core.
+1. **Checks the file.** A new inode (rotation by rename) or a file shorter than
+   the offset (truncation) restarts at 0; the old file's unread bytes are
+   counted (`file_replacements`, `truncation_resets`, `unread_bytes_lost`).
+2. **Measures the backlog** (`len − offset`) and picks a backlog shed level: 0
+   up to 8 MiB, then one more class per further 8 MiB.
+3. **Reads raw bytes up to each newline**, at most `max_line_bytes + 1` at a
+   time. Invalid UTF-8 is decoded lossily, so a bad byte never stops the
+   reader; a line that does not parse is `unparseable`. A line still being
+   written (no newline yet) is left for the next poll. A line longer than
+   `max_line_bytes` is skipped up to its newline without being buffered, and
+   counted (`oversized_lines_skipped`; `oversized_possible_alerts` when its
+   first bytes carry `"event_type":"alert"`).
+4. **Admits every alert** it reaches. Alerts are never shed and never draw on
+   the bucket.
+5. **Admits a non-alert** only if the bucket still holds its class reserve
+   plus one token: flow keeps 3/8 of the burst in reserve, dns 2/8, stats 1/8,
+   other and unparseable none. Otherwise the line is shed at once
+   (`shed_by_reason.non_alert_rate`). Under overload the bucket hovers near
+   empty, so flow goes first, then dns, then stats. Past the backlog bound the
+   backlog level sheds classes whatever the bucket holds
+   (`shed_by_reason.backlog`). Unparseable lines might have been alerts, so
+   they are never shed ahead of flow, dns or stats; they share the last rank
+   with "other" and are counted under their own key.
+6. **Stops** after 1000 alerts, 6000 lines, 500 ms of work, at the end of the
+   file, or at a partial line. The offset has moved only past lines it
+   handled; everything else is read on the next poll.
+7. **Emits audit summaries**, at most one `ingress_shed` and one
+   `ingress_alert_backlog` per second, each only when there is something to
+   report, with per-class and per-reason counts for the interval and
+   cumulative totals (so a lost summary shows as a jump).
+8. **Runs the release sweep**, on every iteration (`poll_iteration` in
+   `main.rs`; tested with a five-poll flood already in the file). If the poll
+   stopped on a budget, the next poll follows without the 200 ms sleep, so a
+   flood is read at capacity with a sweep between bounded polls.
+
+**Alerts beyond capacity.** Alerts are never dropped. Beyond capacity they wait
+in the EVE file and are read oldest first. The backlog costs disk Suricata
+already wrote, not Core memory: the reader holds at most one line (≤ 1 MiB).
+Past 256 MiB unread an `ingress_alert_backlog` summary is recorded (once per
+second while it lasts, `alerts_shed: 0`) and reading continues. What a
+sustained alert flood costs is decision latency, and the summary is what makes
+that visible. Dropping alerts to keep latency low would trade a visible delay
+for an invisible miss; the owner chose the delay. The one exception is a line
+over 1 MiB, which is skipped to bound memory and counted, flagged when it
+looks like an alert.
+
+**Rotation.** Detected by inode and by size. A rotated file's unread tail is
+not read from the old inode; it is counted as lost. Reading the old file to its
+end before switching is not done.
+
+### SO-11 starting point (not a measurement)
+
+`python -m azazel_edge.service_objectives.so11_ingress_probe --core-bin PATH --out FILE`
+starts the real core and, for 40 s, writes flow, dns, stats and http records
+in equal parts at 120% of the declared quota (3000 lines/s, about 600 bytes
+each) together with 1000 alerts/s. It then checks the core's own output:
+shedding recorded, no alert shed, every alert decided, flow shed at least as
+much as dns and dns at least as much as stats, summaries at most one per
+interval. It reports `not_measurable` with gaps, because SO-11's referenced
+rows (SO-03, SO-04, SO-07) are not re-run at the quota, the quota is
+provisional and container-derived, SO-11 has no specification in `record.py`,
+and only one traffic mix is offered.
+
+One container run (colima, aarch64, 2026-10-25): 119997 non-alerts and 39999
+alerts written over 40 s; 19318 non-alerts shed, all for the non-alert rate
+(14433 flow, 4885 dns, 0 stats, 0 other; the expected excess at 120% is about
+20000), none by backlog (peak backlog 0.57 MB); 0 alerts shed and all 39999
+decided; 39 `ingress_shed` summaries at least 1.001 s apart.
+
+### SO-04 under the bound
+
+`python -m azazel_edge.service_objectives run --objective SO-04` on this tree
+(docker `--cap-add NET_ADMIN`, colima aarch64, `eve_flood` at 2000 alerts/s;
+alerts are outside the quota, so nothing was held back), two runs. Start:
+150/150 samples each, max 1119.8 ms and 1833.7 ms against the 5 s start
+bound, 0 violations. Completion: 150/150 each, max 975.6 / 1458.8 ms
+(throttle), 1071.8 / 1360.7 ms (isolate), 1048.2 / 1262.8 ms (redirect)
+against the provisional 5000 ms bounds, 0 violations. Wall clock stable in
+every part. The record is `not_measurable` for the same gaps as before
+(`SO04-HOSTILE-LOAD-UNDECLARED`, `SO04-COMPLETION-BOUND-PROVISIONAL`).
+
+`SO04-HOSTILE-LOAD-UNDECLARED` is left in place: a declared ingress quota is
+not a declared hostile-load profile, and the `eve_flood` phase is still a
+harness-chosen load.
+
+### Still open
+
+- **Hardware classes.** Only container-aarch64 is measured. Raspberry Pi 5 and
+  x86_64 appliance quotas, and the R7 hardware confirmation, are not done.
+- **Per peer.** §5 R5 speaks of per-peer quotas; this is one node-wide quota.
+- **A full SO-11 harness** re-running SO-03, SO-04 and SO-07 at the quota and
+  at 120% of it, with a `record.py` specification.
+- **Where else the counter is read.** The summaries are in a file and on
+  stdout; nothing forwards them to the AI socket or the health surface yet.
+- **Summaries pending at shutdown.** Counts from the last interval (under one
+  second) are not flushed when the process is killed; the next process starts
+  its cumulative totals at zero.
 
 ## SO-02 — source/interface failure visible (virtual-lab harness, not measurable)
 
