@@ -95,9 +95,10 @@ class P0AuditLogger:
         # was full (listeners slower than the writers).
         self.durable_handoff_dropped_total = 0
 
-    def add_durable_listener(self, listener: Any) -> None:
+    def add_durable_listener(self, listener: Any) -> str:
         """Call ``listener(record_copy, durability, monotonic_ns)`` for each
-        durable-kind record written after this call.
+        durable-kind record written after this call, and return the chain
+        hash of the last record written before it ('' for an empty chain).
 
         * ``monotonic_ns`` is CLOCK_MONOTONIC read right after the fsync
           returned; ``durability`` is fsynced, fsync_unsupported or
@@ -117,13 +118,20 @@ class P0AuditLogger:
           with or without listeners.
         """
 
-        self._durable_listeners.append(listener)
+        # Registered under the audit lock: every record after the returned
+        # chain hash reaches this listener; every record up to it is already
+        # in the file. A caller that also reads the file (the P0 relay's
+        # startup reconcile) reads only up to it, so nothing is seen twice.
+        with self._lock:
+            self._durable_listeners.append(listener)
+            registered_at = self._last_chain_hash
         with self._durable_wakeup:
             if self._durable_dispatcher is None or not self._durable_dispatcher.is_alive():
                 self._durable_dispatcher = threading.Thread(
                     target=self._dispatch_durable, name='audit-durable-dispatch', daemon=True
                 )
                 self._durable_dispatcher.start()
+        return registered_at
 
     def _handoff_durable(self, line: str, durability: str) -> None:
         # Called under self._lock: O(1) only.
