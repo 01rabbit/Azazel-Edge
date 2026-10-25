@@ -283,12 +283,13 @@ SAMPLE_FIELDS: Dict[str, frozenset] = {
         + (
             "action", "reason", "decision_suspicion_label", "decision_chain_hash",
             "decision_source", "core_pipeline", "core_sid", "harness_sid", "harness_expected_action",
-            "core_enforcement_mode", "core_effective_action",
+            "core_decided_action", "core_enforcement_mode", "core_effective_action",
             "harness_eve_append_monotonic_ns",
             "edge_decision_durable_monotonic_ns", "queue_records", "enqueue_result_durability",
             "decision_record_fsynced", "enqueue_record_fsynced",
-            # Diagnostic (EVE append to durable decision); never read for the verdict.
-            "core_event_to_decision_durable_ms",
+            # Diagnostics (where the time went); never read for the verdict.
+            "diag_core_poll_and_decision_ms", "diag_core_to_agent_ms",
+            "diag_agent_receive_to_durable_ms", "diag_durable_to_enqueue_ms",
         )
     ),
     "SO-04": frozenset(
@@ -880,22 +881,24 @@ def _so03_queue_records(sample: Mapping[str, Any]) -> Optional[List[Mapping[str,
 def so03_enqueue_observed(sample: Mapping[str, Any]) -> bool:
     """SO-03: the sample's end is the P0 queue's enqueue record for its decision.
 
-    The start is the Edge-recorded instant the decision record was durable
-    (read after its fsync, inside the harness's call window); both channel
-    entries name the decision and the audit-chain record (by chain hash) the
-    alert was built from, carry that start, and were stamped inside the
-    sample's window.
+    The start is the harness's EVE append (an upper bound of the core's
+    decision instant). The Edge-recorded instant the decision record was
+    durable (read after its fsync) lies between the start and the end; both
+    channel entries name the decision and the audit-chain record (by chain
+    hash) the alert was built from, carry that durable instant, and were
+    stamped between it and the end.
     """
 
     sid = sample.get("sample_id")
     start, end = sample.get("start_monotonic_ns"), sample.get("end_monotonic_ns")
     appended = sample.get("harness_eve_append_monotonic_ns")
+    durable = sample.get("edge_decision_durable_monotonic_ns")
     chain = sample.get("decision_chain_hash")
-    if not all(_int(v) for v in (start, end, appended)):
+    if not all(_int(v) for v in (start, end, appended, durable)):
         return False
     if not (isinstance(sid, str) and sid and isinstance(chain, str) and chain):
         return False
-    if sample.get("edge_decision_durable_monotonic_ns") != start or not (appended <= start <= end):
+    if start != appended or not (start <= durable <= end):
         return False
     recs = _so03_queue_records(sample)
     if recs is None:
@@ -903,10 +906,10 @@ def so03_enqueue_observed(sample: Mapping[str, Any]) -> bool:
     return all(
         r.get("decision_id") == sid
         and r.get("decision_chain_hash") == chain
-        and r.get("decision_durable_monotonic_ns") == start
+        and r.get("decision_durable_monotonic_ns") == durable
         and r.get("decision_record_durable") is True
         and _int(r.get("enqueued_monotonic_ns"))
-        and start <= r["enqueued_monotonic_ns"] <= end
+        and durable <= r["enqueued_monotonic_ns"] <= end
         for r in recs
     )
 
@@ -933,7 +936,9 @@ def so03_records_fsynced(sample: Mapping[str, Any]) -> bool:
 
 def so03_core_decision_observed(sample: Mapping[str, Any]) -> bool:
     """The sample's decision is the Rust core's, for the EVE alert the harness
-    wrote, and its queue entries carry what the core did with it."""
+    wrote; the alert is classified by what the core does (its effective
+    action), which is what the harness expected from the redirect policy;
+    and its queue entries carry what the core did with it."""
 
     mode = sample.get("core_enforcement_mode")
     recs = _so03_queue_records(sample)
@@ -942,7 +947,8 @@ def so03_core_decision_observed(sample: Mapping[str, Any]) -> bool:
         and sample.get("core_pipeline") == SO03_CORE_PIPELINE
         and _int(sample.get("core_sid"))
         and sample.get("core_sid") == sample.get("harness_sid")
-        and sample.get("action") == sample.get("harness_expected_action")
+        and isinstance(sample.get("core_decided_action"), str)
+        and sample.get("action") == sample.get("core_effective_action") == sample.get("harness_expected_action")
         and mode in SO03_CORE_ENFORCEMENT_MODES
         and isinstance(sample.get("core_effective_action"), str)
         and recs is not None

@@ -28,16 +28,21 @@ Every sample goes through the running path, product code unmodified:
    (fsynced) and the P0 relay its ``_serve`` attached enqueues one entry per
    channel (visual, voice) in the P0 queue (fsynced).
 
-* **start** -- the Edge-recorded ``CLOCK_MONOTONIC`` read right after the
-  decision record's fsync (the audit logger hands it to the relay; the queue
-  entries carry it). It must lie between the harness's EVE append and the
-  end.
+* **start** -- ``CLOCK_MONOTONIC`` read by the harness right before it
+  appends the EVE line: an upper bound of the instant the core decides, so
+  the core's poll, its decision, the forward to the agent and the agent's
+  durable record are all inside the measured interval. The Edge-recorded
+  instant of the durable decision record (read after its fsync, carried by
+  the queue entries) must lie between the start and the end.
 * **end** -- the relay reports the enqueue after the queue fsync; the harness
   reads the end instant there (``P0AlertRelay.on_relayed``, observation
   only). The harness then reads the entries back from the queue file and
-  checks that they name the decision, its chain hash, its start and what the
-  core did with it (enforcement mode, effective action), and watches
+  checks that they name the decision, its chain hash, its durable instant and
+  what the core did with it (enforcement mode, effective action), and watches
   ``os.fsync`` (observation only) for the inodes synced.
+* **P0** -- by what the core does (``enforcement.selected_action``): the
+  harness computes the expected effective action of every sample from the
+  redirect policy file, and the validator requires the core's to match.
 
 The validator recomputes every record prerequisite, each sample's end, the
 P0 class (from the decision's action, by the owner's rule, written
@@ -46,9 +51,10 @@ that did not come from the core's decision event (by source, pipeline, and
 the EVE sid the harness wrote) leaves
 ``SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS`` open.
 
-Diagnostic, not the measured interval: per sample, the time from the EVE
-append to the durable decision record (the core's poll interval, its decision
-and the forward to the agent), ``core_event_to_decision_durable_ms``.
+Diagnostics, not the verdict: per sample, the core's poll and decision
+(EVE append to the core's ingest stamp, wall clock), the core to the agent
+(wall clock), the agent's receipt to the durable record and the durable
+record to the enqueue (monotonic).
 
 Out of scope: rendering and speaking the queued alerts (no output device is
 added), the time to collect the alert into Suricata's EVE file, and the
@@ -113,9 +119,10 @@ QUEUE_RECORD_KEYS = (
     "enforcement_mode", "effective_action",
 )
 
-# The core's P0 decisions by EVE severity (decide_defense): 1 isolate,
+# The core's decisions by EVE severity (decide_defense): 1 isolate,
 # 2 redirect, 3 throttle. The core takes no SOC-labelled decision.
 P0_KINDS = (("isolate", 1), ("redirect", 2), ("throttle", 3))
+REDIRECT_POLICY = REPO_ROOT / "config" / "redirect_policy.yaml"
 # Destination ports drawn per sample: prepared redirect mappings and ports
 # the redirect policy falls back on (config/redirect_policy.yaml).
 DEST_PORTS = (22, 80, 8080, 443, 3389)
@@ -203,6 +210,8 @@ def agent_environment(work: Path, unit: Path = AGENT_UNIT) -> Dict[str, str]:
         "AZAZEL_AI_POLICY": str(work / "ai_runtime_policy.json"),
         "AZAZEL_AI_AUDIT_LOG": str(work / "log" / "ai-audit.jsonl"),
         "AZAZEL_DECISION_LOG_DIR": str(work / "tactics_engine"),
+        # The core's normalized log, as the core is started with it below.
+        "AZAZEL_NORMALIZED_EVENT_LOG": str(work / "normalized-events.jsonl"),
         "AZAZEL_RUNTIME_SOCKET_GROUP": "",
         # No model server is reached from a measurement: a closed local port.
         "AZAZEL_OLLAMA_ENDPOINT": "http://127.0.0.1:9",
@@ -268,7 +277,29 @@ def _version(core_bin: Path) -> Optional[str]:
     return out.stdout.strip() if out.returncode == 0 else None
 
 
-def _eve_line(i: int, severity: int, port: int) -> str:
+def expected_effective_action(decided: str, severity: int, port: int, policy_path: Path = REDIRECT_POLICY) -> str:
+    """What the core is expected to do (enforcement.selected_action) for one
+    sample, from the redirect policy file, written independently of the core:
+    a redirect to a prepared port stays a redirect; any other redirect of an
+    EVE severity-2 alert (risk score 81, high risk) takes the policy's
+    high-risk fallback."""
+
+    if decided != "redirect":
+        return decided
+    import yaml
+
+    policy = (yaml.safe_load(policy_path.read_text(encoding="utf-8")) or {}).get("redirect_policy") or {}
+    if not policy.get("enabled"):
+        return "notify"
+    if port in {int(k) for k in (policy.get("prepared_ports") or {})}:
+        return "redirect"
+    risk_score = min(100, (11 - severity) * 9)
+    if risk_score >= 80 or severity >= 4:
+        return str(policy.get("high_risk_unsupported_port_action") or "isolate")
+    return str(policy.get("unsupported_port_action") or "notify")
+
+
+def _eve_line(i: int, severity: int, port: int, sid: Optional[int] = None) -> str:
     return json.dumps({
         "timestamp": f"2026-01-01T00:{(i // 60) % 60:02d}:{i % 60:02d}.{i:06d}+0000",
         "event_type": "alert",
@@ -276,7 +307,7 @@ def _eve_line(i: int, severity: int, port: int) -> str:
         "dest_ip": "192.0.2.10",
         "dest_port": port,
         "proto": "TCP",
-        "alert": {"signature_id": SID_BASE + i, "signature": "so03 core decision", "category": "so03", "severity": severity},
+        "alert": {"signature_id": SID_BASE + i if sid is None else sid, "signature": "so03 core decision", "category": "so03", "severity": severity},
     })
 
 
@@ -354,17 +385,23 @@ def _wait(predicate, timeout: float) -> bool:  # type: ignore[no-untyped-def]
     return bool(predicate())
 
 
+def _ms(value: Optional[float]) -> Optional[float]:
+    return round(value, 3) if isinstance(value, (int, float)) else None
+
+
 def _sample(
     i: int, rng: random.Random, eve: Path, chain_path: Path, queue_path: Path, synced: List[tuple],
     relayed: List[tuple], relayed_cv: threading.Condition,
 ) -> Dict[str, Any]:
     kind, severity = P0_KINDS[i % len(P0_KINDS)]
     port = rng.choice(DEST_PORTS)
+    expected = expected_effective_action(kind, severity, port)
     sid = SID_BASE + i
     line = _eve_line(i, severity, port)
     with relayed_cv:
         del relayed[:]
     del synced[:]
+    append_epoch = time.time()
     append_ns = time.monotonic_ns()
     with eve.open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
@@ -381,12 +418,16 @@ def _sample(
     chain_hash = str(first.get("decision_chain_hash") or "")
     record = _chain_record(chain_path, chain_hash) if chain_hash else {}
     trace = record.get("decision_trace") if isinstance(record.get("decision_trace"), dict) else {}
+    received_ns = record.get("agent_received_monotonic_ns")
+    received_ns = received_ns if isinstance(received_ns, int) and not isinstance(received_ns, bool) else None
+    ingest_epoch = record.get("core_ingest_epoch")
+    received_epoch = record.get("agent_received_epoch")
     row = {
         "sample_id": decision_id or f"so03-sid-{sid}",
-        "start_monotonic_ns": durable_ns if durable_ns is not None else append_ns,
+        "start_monotonic_ns": append_ns,
         "end_monotonic_ns": end_ns,
         "elapsed_ms": None,
-        "start_event": "core decision's action_decision record fsynced by the AI agent service (Edge CLOCK_MONOTONIC read after the fsync, handed to the durable-record listener)",
+        "start_event": "harness appended the EVE alert line the core decides on (CLOCK_MONOTONIC before the append: an upper bound of the core's decision instant)",
         "end_event": "P0AlertQueue enqueue of the visual and voice entries naming the decision, fsynced (relay reported after the fsync)",
         "action": record.get("action"),
         "reason": record.get("reason"),
@@ -396,12 +437,17 @@ def _sample(
         "core_pipeline": record.get("core_pipeline"),
         "core_sid": record.get("sid"),
         "harness_sid": sid,
-        "harness_expected_action": kind,
+        "harness_expected_action": expected,
+        "core_decided_action": record.get("decided_action"),
         "core_enforcement_mode": record.get("enforcement_mode"),
         "core_effective_action": record.get("effective_action"),
         "harness_eve_append_monotonic_ns": append_ns,
         "edge_decision_durable_monotonic_ns": durable_ns,
-        "core_event_to_decision_durable_ms": round((durable_ns - append_ns) / 1e6, 3) if durable_ns is not None else None,
+        # Diagnostics (not the verdict): where the time went.
+        "diag_core_poll_and_decision_ms": _ms((ingest_epoch - append_epoch) * 1e3) if isinstance(ingest_epoch, (int, float)) else None,
+        "diag_core_to_agent_ms": _ms((received_epoch - ingest_epoch) * 1e3) if isinstance(received_epoch, (int, float)) and isinstance(ingest_epoch, (int, float)) else None,
+        "diag_agent_receive_to_durable_ms": _ms((durable_ns - received_ns) / 1e6) if durable_ns is not None and received_ns is not None else None,
+        "diag_durable_to_enqueue_ms": _ms((end_ns - durable_ns) / 1e6) if durable_ns is not None and end_ns is not None else None,
         "queue_records": queue_records,
         "enqueue_result_durability": result.get("durability"),
         "decision_record_fsynced": _inode(chain_path) in synced,
@@ -462,9 +508,11 @@ def _measure(core: Path, samples: int, rng: random.Random, synced: List[tuple], 
         server = threading.Thread(target=agent._serve, args=(stop,), name="so03-agent-service", daemon=True)
         server.start()
         try:
-            started = _wait(lambda: socket_path.exists() and agent.CORE_P0_RELAY is not None, START_WAIT_S)
+            started = _wait(lambda: socket_path.exists() and agent.CORE_RECORDER is not None, START_WAIT_S)
             relay = agent.CORE_P0_RELAY
-            info["agent_relay_attached"] = bool(started and relay is not None and relay.ready.wait(START_WAIT_S))
+            info["agent_relay_attached"] = bool(
+                started and relay is not None and relay.ready.wait(START_WAIT_S) and agent.CORE_RECORDER.ready.wait(START_WAIT_S)
+            )
             if not info["agent_relay_attached"]:
                 return rows
 
@@ -487,6 +535,11 @@ def _measure(core: Path, samples: int, rng: random.Random, synced: List[tuple], 
             rows = _run_core(core, work, socket_path, samples, take, info)
         finally:
             relay = agent.CORE_P0_RELAY
+            recorder = agent.CORE_RECORDER
+            if recorder is not None:
+                recorder.wait_idle(5.0)
+                recorder.stop(5.0)
+                info["recorder_counters"] = recorder.metrics()
             if relay is not None:
                 try:
                     agent.CORE_DECISION_AUDIT.wait_durable_listeners(5.0)
@@ -616,7 +669,13 @@ def run(*, core_bin: Optional[Path] = None, samples: int = REQUIRED_SAMPLES, see
         prerequisites=prerequisites,
         gaps=gaps,
     )
-    to_durable = sorted(r["core_event_to_decision_durable_ms"] for r in rows if isinstance(r.get("core_event_to_decision_durable_ms"), (int, float)))
+    def _summary(field: str) -> str:
+        vals = sorted(r[field] for r in rows if isinstance(r.get(field), (int, float)))
+        return f"{field} median {vals[len(vals) // 2]:.3f} ms max {vals[-1]:.3f} ms" if vals else f"{field} no value"
+
+    diagnostics = "; ".join(_summary(f) for f in (
+        "diag_core_poll_and_decision_ms", "diag_core_to_agent_ms", "diag_agent_receive_to_durable_ms", "diag_durable_to_enqueue_ms",
+    ))
     return build_record(
         objective_id=OBJECTIVE_ID,
         title=TITLE,
@@ -653,8 +712,8 @@ def run(*, core_bin: Optional[Path] = None, samples: int = REQUIRED_SAMPLES, see
         method="real Rust azazel-edge-core binary + AI agent service script (P0AuditLogger core decision chain, P0AlertRelay/P0AlertQueue), start stamped by the logger, end after the queue fsync",
         notes=[
             "action_decision records are fsynced (DURABLE_KINDS); the P0 queue append is fsynced before the relay reports it.",
-            "diagnostic, not a sample: EVE append to durable decision record (core poll, decision, forward, agent write): "
-            + (f"max {to_durable[-1]:.3f} ms, median {to_durable[len(to_durable) // 2]:.3f} ms" if to_durable else "no value"),
+            "diagnostic, not the verdict (the two first are wall clock, the others monotonic): " + diagnostics,
+            f"recorder counters {info.get('recorder_counters') or {}}",
             "diagnostic, not a sample: enqueue latency on a full queue (max_entries=%d): append at the bound %.3f ms, "
             "append that compacts at 2x the bound %.3f ms" % (full_queue["max_entries"], full_queue["append_ms"], full_queue["compact_ms"]),
             "the P0 path is observation and notification only: the core decides and acts before it forwards, it forwards without waiting, "

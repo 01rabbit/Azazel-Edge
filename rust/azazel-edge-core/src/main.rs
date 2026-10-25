@@ -1069,7 +1069,6 @@ fn forward_ai_lines(socket_path: &str, receiver: Receiver<Forward>) {
     }
 }
 
-/// Decide one EVE record the ingress reader admitted.
 /// The decision event the core writes to the normalized log and forwards to
 /// the AI socket. The AI agent (py/azazel_edge_ai/agent.py) records P0
 /// decisions from it for the P0 alert queue (Edge#414 SO-03), so its shape is
@@ -1085,6 +1084,7 @@ fn core_event(normalized: &NormalizedEvent, decision: &DefensiveDecision, enforc
     })
 }
 
+/// Decide one EVE record the ingress reader admitted.
 fn process_value(cfg: &Config, parsed: &Value) {
     let normalized = match build_normalized_event(parsed) {
         Some(ev) => ev,

@@ -1061,6 +1061,15 @@ def test_full_run_through_the_core_is_a_pass(genuine_pass):
     assert {s["action"] for s in samples} == {"isolate", "redirect", "throttle"}
     assert {s["core_enforcement_mode"] for s in samples} == {"dry_run"}
     assert all(s["decision_source"] == "azazel-edge-core" and s["core_sid"] == s["harness_sid"] for s in samples)
+    assert all(s["action"] == s["core_effective_action"] == s["harness_expected_action"] for s in samples)
+    # The fallbacks the policy applies to unprepared ports are sampled too.
+    assert any(s["core_decided_action"] == "redirect" and s["action"] == "isolate" for s in samples)
+    assert any(s["core_decided_action"] == "redirect" and s["action"] == "redirect" for s in samples)
+    # The 2 s run from the EVE append (an upper bound of the core's decision)
+    # to the durable enqueue: the core's poll, decision and forward are inside.
+    for s in samples:
+        assert s["start_monotonic_ns"] == s["harness_eve_append_monotonic_ns"] <= s["edge_decision_durable_monotonic_ns"] <= s["end_monotonic_ns"]
+        assert s["elapsed_ms"] == round((s["end_monotonic_ns"] - s["start_monotonic_ns"]) / 1e6, 3)
     assert max(s["elapsed_ms"] for s in samples) <= 2000.0
 
 
@@ -1105,6 +1114,8 @@ def test_validator_recomputes_from_samples(genuine_pass, mutate, prereq):
         lambda s: s.__setitem__("core_sid", s["harness_sid"] + 1),
         lambda s: s.__setitem__("core_sid", None),
         lambda s: s.__setitem__("harness_expected_action", "notify"),
+        lambda s: s.__setitem__("core_effective_action", "redirect" if s["core_effective_action"] != "redirect" else "isolate"),
+        lambda s: s.__setitem__("core_decided_action", None),
         lambda s: s.__setitem__("core_enforcement_mode", "unknown"),
         lambda s: s["queue_records"][1].__setitem__("enforcement_mode", "enforced"),
         lambda s: s["queue_records"][0].__setitem__("effective_action", "observe"),

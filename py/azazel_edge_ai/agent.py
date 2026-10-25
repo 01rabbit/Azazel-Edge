@@ -49,10 +49,11 @@ try:
 except Exception:  # pragma: no cover
     P0AuditLogger = None  # type: ignore
 try:
-    from azazel_edge.notify.p0_alert import attach_p0_alert_relay, classify_p0
+    from azazel_edge.notify.core_decisions import CoreDecisionRecorder
+    from azazel_edge.notify.p0_alert import attach_p0_alert_relay
 except Exception:  # pragma: no cover
+    CoreDecisionRecorder = None  # type: ignore
     attach_p0_alert_relay = None  # type: ignore
-    classify_p0 = None  # type: ignore
 from azazel_edge._util import ensure_parent as _ensure_parent
 
 SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
@@ -71,9 +72,10 @@ AI_AUDIT_PATH = Path(os.environ.get("AZAZEL_AI_AUDIT_LOG", "/var/log/azazel-edge
 # Rust azazel-edge-core is the authoritative decision and enforcement path;
 # Edge#414 SO-03). This agent is where the core's decisions arrive (the core
 # forwards every decision event to AI_SOCKET). A P0 decision is recorded as an
-# action_decision in its own audit chain, and the P0 relay (#453/#458) turns
-# that durable record into the visual/voice entries of the one P0 queue. Both
-# files sit beside the AI audit log; no setting of their own.
+# action_decision in its own audit chain (azazel_edge.notify.core_decisions),
+# and the P0 relay (#453/#458) turns that durable record into the visual/voice
+# entries of the one P0 queue. Both files sit beside the AI audit log; no
+# setting of their own.
 CORE_DECISION_AUDIT_PATH = AI_AUDIT_PATH.parent / "core-decision-audit.jsonl"
 P0_ALERT_QUEUE_PATH = AI_AUDIT_PATH.parent / "p0-alert-queue.jsonl"
 METRICS_HEARTBEAT_SEC = max(5.0, float(os.environ.get("AZAZEL_AI_METRICS_HEARTBEAT_SEC", "15")))
@@ -260,29 +262,30 @@ AI_AUDIT = _build_ai_audit_logger()
 # rust/azazel-edge-core/src/main.rs core_event()).
 CORE_EVENT_SOURCE = "suricata_eve"
 CORE_EVENT_PIPELINE = "rust_event_engine_v1"
-CORE_DECISION_SOURCE = "azazel-edge-core"
+# The core's own log of every decision event (same setting and default as the
+# core unit); read, bounded, at start to reconcile decisions this agent missed.
+CORE_NORMALIZED_EVENT_LOG = Path(os.environ.get("AZAZEL_NORMALIZED_EVENT_LOG", "/var/log/azazel-edge/normalized-events.jsonl"))
 # Set by _start_core_p0_path() when the service starts (_serve). None until
 # then: importing this module or calling the handlers directly records nothing.
 CORE_DECISION_AUDIT: Any | None = None
 CORE_P0_RELAY: Any | None = None
-_CORE_FORWARD_LOSS_LOCK = threading.Lock()
-_CORE_FORWARD_LOSS_SEEN: tuple[int, int] = (0, 0)
+CORE_RECORDER: Any | None = None
 
 
 def _start_core_p0_path() -> Any | None:
-    """Open the core decision audit chain and attach the P0 relay to it.
+    """Open the core decision chain, attach the P0 relay, start the recorder.
 
     Observation and notification only: nothing here decides, enforces or
     feeds back into the core. If the chain cannot be opened the agent runs as
-    before without the path; if only the relay cannot be attached, P0
+    before without the path. If only the relay cannot be attached, P0
     decisions are still recorded in the chain and the relay's startup
     reconcile (#458) enqueues them on the next start.
     """
 
-    global CORE_DECISION_AUDIT, CORE_P0_RELAY
-    if CORE_P0_RELAY is not None:
+    global CORE_DECISION_AUDIT, CORE_P0_RELAY, CORE_RECORDER
+    if CORE_RECORDER is not None:
         return CORE_P0_RELAY
-    if P0AuditLogger is None or attach_p0_alert_relay is None:
+    if P0AuditLogger is None or attach_p0_alert_relay is None or CoreDecisionRecorder is None:
         logger.error("core decision P0 alert path unavailable: notify/audit modules not importable")
         return None
     if CORE_DECISION_AUDIT is None:
@@ -295,107 +298,33 @@ def _start_core_p0_path() -> Any | None:
         CORE_P0_RELAY = attach_p0_alert_relay(CORE_DECISION_AUDIT, P0_ALERT_QUEUE_PATH)
     except Exception as exc:
         logger.error("p0 alert relay not attached to the core decision chain: %s", exc)
-        return None
+    CORE_RECORDER = CoreDecisionRecorder(CORE_DECISION_AUDIT, CORE_P0_RELAY, CORE_NORMALIZED_EVENT_LOG).start()
     return CORE_P0_RELAY
 
 
-def _int_field(value: Any) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-
-def _core_decision_payload(event: Dict[str, Any]) -> tuple[str, Dict[str, Any]] | None:
-    """(trace id, action_decision payload) for one core decision event, or None.
-
-    Copies the core's decision (decide_defense) and what the core did with it
-    (maybe_enforce: applied, dry run, gated) as the core sent them. Nothing is
-    re-decided here.
-    """
-
-    if event.get("source") != CORE_EVENT_SOURCE or event.get("pipeline") != CORE_EVENT_PIPELINE:
-        return None
-    defense = event.get("defense")
-    enforcement = event.get("enforcement")
-    if not isinstance(defense, dict) or not isinstance(enforcement, dict):
-        return None
-    trace_id = enforcement.get("trace_id")
-    action = defense.get("action")
-    if not (isinstance(trace_id, str) and trace_id and isinstance(action, str) and action):
-        return None
-    normalized = event.get("normalized") if isinstance(event.get("normalized"), dict) else {}
-    status = event.get("enforcement_status") if isinstance(event.get("enforcement_status"), dict) else {}
-    payload: Dict[str, Any] = {
-        "action": action,
-        "reason": str(defense.get("reason") or ""),
-        "policy_reason": str(defense.get("policy_reason") or ""),
-        "target": str(defense.get("target") or ""),
-        "effective_action": str(enforcement.get("selected_action") or ""),
-        "enforcement_mode": str(enforcement.get("mode") or ""),
-        "enforcement_result": str(enforcement.get("result") or ""),
-        "enforcement_executed_count": _int_field(enforcement.get("executed_count")),
-        "enforcement_failed_count": _int_field(enforcement.get("failed_count")),
-        "enforce_enabled": status.get("enforce_enabled") is True,
-        "enforce_dry_run": status.get("dry_run") is True,
-        "enforce_level": str(status.get("enforce_level") or ""),
-        "core_pipeline": CORE_EVENT_PIPELINE,
-        "sid": _int_field(normalized.get("sid")),
-        "severity": _int_field(normalized.get("severity")),
-        "event_ts": str(normalized.get("ts") or ""),
-    }
-    return trace_id, payload
-
-
 def _record_core_decision(event: Dict[str, Any]) -> None:
-    """Record a P0 core decision durably; the P0 relay alerts on the record.
+    """Hand a core decision event to the recorder. Never blocks, never raises:
+    the recorder's bounded queue and single writer do the fsynced writes."""
 
-    Never raises: a failure here is logged and the event is handled as
-    before. The core has already decided and acted when this runs, and it
-    forwards to this agent without waiting (a bounded queue it counts drops
-    from), so nothing here can stop or delay it.
-    """
-
-    audit = CORE_DECISION_AUDIT
-    if audit is None or classify_p0 is None:
+    recorder = CORE_RECORDER
+    if recorder is None:
         return
     try:
-        built = _core_decision_payload(event)
-        if built is None:
-            return
-        trace_id, payload = built
-        # The owner's P0 rule, applied to the record as it will be written:
-        # only P0 decisions are recorded (the core's own JSONL keeps them all).
-        if not classify_p0(dict(payload, kind="action_decision")):
-            return
-        audit.log_action_decision(trace_id=trace_id, source=CORE_DECISION_SOURCE, **payload)
+        recorder.submit(event)
     except Exception as exc:
-        logger.error("core decision not recorded for the P0 alert path: %s", exc)
+        logger.error("core decision not handed to the P0 alert path: %s", exc)
 
 
 def _note_core_forward_loss(dropped: int, failed: int, since: int) -> None:
-    """Write a relay_status record to the P0 queue when the core reports
-    events it could not hand to this agent. Those decisions never reached the
-    chain, so the relay cannot reconcile them; the queue says they are
-    missing. Never raises."""
+    """The core's count of events it could not hand to this agent, to the P0 queue."""
 
-    global _CORE_FORWARD_LOSS_SEEN
-    relay = CORE_P0_RELAY
-    if relay is None:
+    recorder = CORE_RECORDER
+    if recorder is None:
         return
-    with _CORE_FORWARD_LOSS_LOCK:
-        if (dropped, failed) == _CORE_FORWARD_LOSS_SEEN or not (dropped or failed):
-            _CORE_FORWARD_LOSS_SEEN = (dropped, failed)
-            return
-        _CORE_FORWARD_LOSS_SEEN = (dropped, failed)
     try:
-        relay.queue.append_status({
-            "event": "core_forward_loss",
-            "core_forward_dropped": dropped,
-            "core_forward_failed": failed,
-            "core_forward_since": since,
-            "note": "the core could not forward this many events (any action) to the agent since it started; "
-                    "P0 decisions among them are in the core's normalized event log, not in this queue",
-        })
+        recorder.note_forward_stats(dropped, failed, since)
     except Exception as exc:
-        logger.error("core forward loss not written to the P0 queue: %s", exc)
+        logger.error("core forward loss not reported: %s", exc)
 
 
 def _audit_ai_scope(trace_id: str, source: str, intent: str, in_scope: bool, reason: str) -> None:
