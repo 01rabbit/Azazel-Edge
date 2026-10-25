@@ -114,7 +114,12 @@ None of these consumes an `ActionArbiter` decision.
   no tool, a shell command reached through a variable, an inline interpreter
   script, or a library loaded by a computed name. The read-only check on
   `postcondition.py` sees literal argv only, so an argv held in a variable
-  passes it.
+  passes it. In shell files it does not see a tool named inside a quoted
+  string (`bash -c 'nft ...'`), behind a prefix command (`ssh`, `docker exec`)
+  or in a `{ ...; }` group, and the unit inventory only parses units written
+  with `cat > ... <<`; a unit written with `tee`, `printf` or `cat >>` is not
+  listed. An extra copy of an already-reviewed line in the same file also
+  passes, because the allowlist is a set of lines, not a count.
 - `ip` is not in the checked tool set. The string is too common in this tree
   (about twenty Python modules contain it, mostly as a field name) for the
   file-level check, and its state-changing uses here (`ip link`, `ip netns` in
