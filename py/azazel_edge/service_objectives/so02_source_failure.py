@@ -335,6 +335,7 @@ def _bounded_collection(value: Any) -> Optional[Dict[str, Any]]:
     return {
         "trigger": scalar(value.get("trigger")),
         "started_monotonic_ns": scalar(value.get("started_monotonic_ns")),
+        "link_event_started_monotonic_ns": scalar(value.get("link_event_started_monotonic_ns")),
         "duration_ms": scalar(value.get("duration_ms")),
         "collectors": collectors,
     }

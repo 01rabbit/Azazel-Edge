@@ -277,7 +277,20 @@ What Edge already does, and what the harness measures without changing it:
   per 2 s, bounded to 5 s). It is observation only: the same probes and
   evaluator, published sooner; the periodic loop stays the backstop. Each
   collector of the periodic collection also has an explicit upper bound
-  (`COLLECTOR_TIMEOUTS_S` in `py/azazel_edge/sensors/noc_monitor.py`).
+  (`COLLECTOR_TIMEOUTS_S` in `py/azazel_edge/sensors/noc_monitor.py`). This
+  changes behaviour only on overrun: a collector that overruns is reported as a
+  collector failure (the evaluator's usual `collector_failure` penalty) with
+  its empty default, as one that raised; path probes instead run one thread
+  per interface and report an overrunning interface's targets as unreachable
+  (`error: collector_timeout`), so a timeout never scores better than the
+  probes failing; name resolution, whose `timeout_sec` was previously
+  ignored, is now held to 5 s per name and reads as an unresolved name. These
+  values feed the operator surface only: the live NOC evaluation in the
+  control daemon is consumed by the snapshot, `/api/state` and the dashboard
+  payloads; the action arbiter and M.I.O. read NOC evaluations only in
+  replay, dry-run, benchmark and harness tools, never from this collection.
+  When a link-event refresh starts during a full collection, the full result
+  keeps the refresh's rows for that interface and its own rows for the rest.
   The harness measures only the total from injection to the surface. Each
   sample also carries diagnostic stages, never read for the verdict: wall-clock
   stamps (the injection, the `noc_runtime.updated_epoch` and `snapshot_epoch`

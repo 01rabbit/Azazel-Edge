@@ -28,7 +28,7 @@ def _slow(seconds: float, value):
 def _patched(**over):
     base = {
         'collect_icmp': lambda *a, **k: {'target': '172.16.0.254', 'reachable': True},
-        'collect_path_probes_multi': lambda *a, **k: [{'target': '1.1.1.1', 'interface': 'br0', 'scope': 'external', 'reachable': True}],
+        'collect_path_probes': lambda gw, interface='': [{'target': '1.1.1.1', 'interface': interface, 'scope': 'external', 'reachable': True}],
         'collect_dns_resolution': lambda name, *a, **k: {'name': name, 'resolved': True, 'answers': [], 'latency_ms': 1.0, 'probe': 'dns'},
         'collect_service_probes': lambda *a, **k: [],
         'collect_iface_stats': lambda *a, **k: [{'interface': 'br0', 'operstate': 'up', 'carrier': 1}],
@@ -127,11 +127,12 @@ class CollectionViewTests(unittest.TestCase):
         self.assertEqual(len(row['collector']), control_daemon.NOC_COLLECTION_VIEW_NAME_MAX)
         self.assertIsNone(row['duration_ms'])  # a bool is not a number
         self.assertLessEqual(len(row['outcome']), 16)
-        self.assertEqual(sorted(view), ['collectors', 'duration_ms', 'started_monotonic_ns', 'trigger'])
+        self.assertEqual(sorted(view), ['collectors', 'duration_ms', 'link_event_started_monotonic_ns', 'started_monotonic_ns', 'trigger'])
 
     def test_view_of_nothing_is_empty_not_an_error(self) -> None:
         view = control_daemon._noc_collection_view(None)
-        self.assertEqual(view, {'trigger': 'periodic', 'started_monotonic_ns': None, 'duration_ms': None, 'collectors': []})
+        self.assertEqual(view, {'trigger': 'periodic', 'started_monotonic_ns': None, 'link_event_started_monotonic_ns': None,
+                                'duration_ms': None, 'collectors': []})
         self.assertIsNone(control_daemon._noc_collection_view({'started_monotonic_ns': True})['started_monotonic_ns'])
 
     def test_projection_carries_the_collection(self) -> None:
@@ -149,7 +150,7 @@ class CollectionViewTests(unittest.TestCase):
             'collectors': [{'collector': 'c', 'started_offset_ms': 0.0, 'duration_ms': 1.0, 'outcome': 'ok', 'x': {'y': 1}}] * 30,
         }
         kept = so02._bounded_collection(value)
-        self.assertEqual(sorted(kept), ['collectors', 'duration_ms', 'started_monotonic_ns', 'trigger'])
+        self.assertEqual(sorted(kept), ['collectors', 'duration_ms', 'link_event_started_monotonic_ns', 'started_monotonic_ns', 'trigger'])
         self.assertEqual(len(kept['collectors']), 16)
         self.assertEqual(sorted(kept['collectors'][0]), ['collector', 'duration_ms', 'outcome', 'started_offset_ms'])
         self.assertIsNone(so02._bounded_collection(None))

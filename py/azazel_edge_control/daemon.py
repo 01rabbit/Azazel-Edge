@@ -1045,6 +1045,7 @@ def _noc_collection_view(timing: Any, trigger: str = "periodic") -> dict[str, An
         return round(float(value), 1) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
     started = timing.get("started_monotonic_ns")
+    merged = timing.get("link_event_started_monotonic_ns")
     collectors: list[dict[str, Any]] = []
     for row in timing.get("collectors") or []:
         if len(collectors) >= NOC_COLLECTION_VIEW_MAX_COLLECTORS:
@@ -1060,6 +1061,9 @@ def _noc_collection_view(timing: Any, trigger: str = "periodic") -> dict[str, An
     return {
         "trigger": str(trigger or "periodic")[:32],
         "started_monotonic_ns": int(started) if isinstance(started, int) and not isinstance(started, bool) else None,
+        # Set when a link-event refresh that started during this collection
+        # supplied the rows of its interfaces.
+        "link_event_started_monotonic_ns": int(merged) if isinstance(merged, int) and not isinstance(merged, bool) else None,
         "duration_ms": _num(timing.get("duration_ms")),
         "collectors": collectors,
     }
@@ -1234,8 +1238,13 @@ def _project_noc_events(events: list[Any], preferred_uplink: str, collection: di
 def _collection_started_ns(projection: Any) -> int:
     runtime = projection.get("noc_runtime") if isinstance(projection, dict) else None
     collection = runtime.get("collection") if isinstance(runtime, dict) else None
-    started = collection.get("started_monotonic_ns") if isinstance(collection, dict) else None
-    return int(started) if isinstance(started, int) and not isinstance(started, bool) else -1
+    if not isinstance(collection, dict):
+        return -1
+    # A periodic result that merged a later link-event refresh is as new as
+    # that refresh for the interface rows and newer for everything else.
+    stamps = [collection.get("started_monotonic_ns"), collection.get("link_event_started_monotonic_ns")]
+    stamps = [int(v) for v in stamps if isinstance(v, int) and not isinstance(v, bool)]
+    return max(stamps) if stamps else -1
 
 
 def _publish_noc_projection(key: str, projection: dict[str, Any], *, periodic: bool = True) -> dict[str, Any]:
@@ -1255,6 +1264,10 @@ def _publish_noc_projection(key: str, projection: dict[str, Any], *, periodic: b
             and cached
             and _collection_started_ns(cached) > started
         ):
+            if periodic:
+                # The full collection did run: keep the periodic schedule
+                # instead of re-collecting at once.
+                _NOC_CACHE["ts"] = time.time()
             return dict(cached)
         if periodic or str(_NOC_CACHE.get("key") or "") != key:
             _NOC_CACHE["ts"] = time.time()

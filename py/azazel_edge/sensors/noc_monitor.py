@@ -46,11 +46,15 @@ DEFAULT_SERVICE_PROBE_TARGETS = (
 # collector takes when healthy; the per-call timeouts inside the collectors
 # (ping -W 2, subprocess timeouts, socket timeouts) still apply first. A
 # collector that overruns is reported as a collector failure with its default
-# value, exactly as one that raised.
+# value, exactly as one that raised -- except path_probes, which runs one
+# thread per interface and, on overrun, keeps the rows collected and reports
+# the rest unreachable (collect_path_probes_bounded), so a timeout can never
+# look healthier than the probes failing. Name resolution has its own bound
+# (collect_dns_resolution timeout_sec, 5 s per name).
 COLLECTOR_TIMEOUTS_S: Dict[str, float] = {
     'iface_stats': 3.0,
     'path_probes': 30.0,
-    'resolution_probes': 8.0,
+    'resolution_probes': 15.0,
     'service_probes': 10.0,
     'icmp': 6.0,
     'cpu_mem_temp': 3.0,
@@ -63,6 +67,18 @@ DEFAULT_COLLECTOR_TIMEOUT_S = 10.0
 # its path probes run concurrently, each already bounded by ping -W 2 and a
 # 4 s subprocess timeout.
 INTERFACE_REFRESH_TIMEOUT_S = 5.0
+
+
+def _merge_refresh_rows(snapshot: Dict[str, Any], refresh: Dict[str, Any]) -> Dict[str, Any]:
+    interfaces = set(refresh.get('interfaces') or [])
+    merged: Dict[str, Any] = {}
+    if interfaces:
+        rows = [r for r in (snapshot.get('path_probes') or []) if not (isinstance(r, dict) and r.get('interface') in interfaces)]
+        rows.extend(refresh.get('path_probes') or [])
+        merged['path_probes'] = rows
+    if isinstance(refresh.get('iface_stats'), list):
+        merged['iface_stats'] = refresh['iface_stats']
+    return merged
 
 
 class CollectorTimeout(Exception):
@@ -179,6 +195,78 @@ def collect_path_probes_multi(gateway_ip: str, interfaces: Iterable[str]) -> Lis
     if not rows:
         rows.extend(collect_path_probes(gateway_ip, interface=''))
     return rows
+
+
+def collect_path_probes_bounded(
+    gateway_ip: str,
+    interfaces: Iterable[str],
+    timeout_s: float,
+) -> tuple[List[Dict[str, Any]], List[str]]:
+    """The path probes of every interface, one interface per thread, bounded.
+
+    Each interface runs exactly what ``collect_path_probes`` runs for it. An
+    interface whose probes have not finished within ``timeout_s`` contributes
+    one row per expected target with ``reachable: False`` and
+    ``error: 'collector_timeout'`` -- an overrun reads as unreachable, never
+    as missing (a missing row would look healthier than a failed one).
+    An interface whose probes raised gets the same rows with
+    ``error: 'collector_error: ...'``. Returns (rows, problems), one problem
+    string per interface that timed out or raised. Stray threads end on their
+    own: every ping is bounded by its 4 s subprocess timeout."""
+
+    ifaces: List[str] = []
+    for interface in interfaces:
+        iface = str(interface or '').strip()
+        if iface and iface not in ifaces:
+            ifaces.append(iface)
+    if not ifaces:
+        ifaces = ['']
+    results: Dict[str, List[Dict[str, Any]]] = {}
+    errors: Dict[str, BaseException] = {}
+
+    def run(iface: str) -> None:
+        try:
+            results[iface] = collect_path_probes(gateway_ip, interface=iface)
+        except BaseException as exc:  # handed back to the caller
+            errors[iface] = exc
+
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    threads = [threading.Thread(target=run, args=(i,), name=f'noc-path-{i or "default"}', daemon=True) for i in ifaces]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    done = dict(results)
+    failed = dict(errors)
+    if failed and not done and len(failed) == len(ifaces):
+        raise next(iter(failed.values()))
+    rows: List[Dict[str, Any]] = []
+    problems: List[str] = []
+    gateway = ''
+    for iface in ifaces:
+        if iface in done:
+            rows.extend(done[iface])
+            continue
+        problems.append(f'{iface or "default"}: ' + (f'timed out after {timeout_s}s' if iface not in failed else str(failed[iface])))
+        if not gateway:
+            try:
+                gateway = _default_icmp_target(gateway_ip)
+            except Exception:
+                gateway = str(gateway_ip or '')
+        expected = ([(gateway, 'gateway')] if gateway else []) + [(t, 'external') for t in EXTERNAL_PATH_TARGETS]
+        reason = 'collector_timeout' if iface not in failed else f'collector_error: {failed[iface]}'
+        for target, scope in expected:
+            rows.append({
+                'target': target,
+                'interface': iface,
+                'reachable': False,
+                'latency_ms': None,
+                'duration_ms': None,
+                'raw': '',
+                'scope': scope,
+                'error': reason,
+            })
+    return rows, problems
 
 
 def collect_iface_stats(interfaces: Iterable[str]) -> List[Dict[str, Any]]:
@@ -347,7 +435,7 @@ def _getaddrinfo_bounded(name: str, timeout_sec: float) -> List[Any]:
     return box.get('value') or []
 
 
-def collect_dns_resolution(name: str, timeout_sec: float = 2.0) -> Dict[str, Any]:
+def collect_dns_resolution(name: str, timeout_sec: float = 5.0) -> Dict[str, Any]:
     started = time.time()
     try:
         answers = _getaddrinfo_bounded(name, timeout_sec)
@@ -497,6 +585,9 @@ class LightweightNocMonitor:
         self.collector_timeouts_s = dict(COLLECTOR_TIMEOUTS_S)
         self._runner = _BoundedRunner()
         self._last_snapshot: Optional[Dict[str, Any]] = None
+        # The rows of the latest link-event refresh, so a full collection
+        # that started before it does not bring older rows for its interfaces back.
+        self._last_refresh: Optional[Dict[str, Any]] = None
 
     def monitored_interfaces(self) -> List[str]:
         seen: List[str] = []
@@ -707,14 +798,30 @@ class LightweightNocMonitor:
             [],
         )
         capacity_samples, capacity_pressure = self._compute_capacity_view(iface_stats if isinstance(iface_stats, list) else [])
-        path_probes = capture(
-            'path_probes',
-            lambda: collect_path_probes_multi(
+        # Path probes bound themselves (one thread per interface) so an
+        # overrun keeps the rows already collected and marks the rest
+        # unreachable instead of dropping them all.
+        path_bound = float(self.collector_timeouts_s.get('path_probes', DEFAULT_COLLECTOR_TIMEOUT_S))
+
+        def path_probes_bounded() -> List[Dict[str, Any]]:
+            rows, problems = collect_path_probes_bounded(
                 self.gateway_ip,
                 [self.up_interface, self.down_interface, *self.extra_interfaces],
-            ),
-            [],
-        )
+                path_bound,
+            )
+            if problems:
+                failures.append({'collector': 'path_probes', 'error': '; '.join(problems)})
+                path_timed_out.extend(p for p in problems if 'timed out' in p)
+            return rows
+
+        path_timed_out: List[str] = []
+        try:
+            path_probes = timed('path_probes', path_probes_bounded)
+        except Exception as exc:
+            failures.append({'collector': 'path_probes', 'error': str(exc)})
+            path_probes = []
+        if path_timed_out and timings and timings[-1]['collector'] == 'path_probes':
+            timings[-1]['outcome'] = 'timeout'
         resolution_probes = capture(
             'resolution_probes',
             lambda: [collect_dns_resolution(name) for name in self.resolution_targets],
@@ -747,6 +854,12 @@ class LightweightNocMonitor:
             'duration_ms': round((time.monotonic_ns() - collection_started_ns) / 1e6, 1),
             'collectors': timings,
         }
+        refresh = self._last_refresh
+        if isinstance(refresh, dict) and int(refresh.get('started_ns') or 0) > collection_started_ns:
+            # A link-event refresh started while this collection ran: its
+            # interface rows are newer than ours; everything else is ours.
+            snapshot.update(_merge_refresh_rows(snapshot, refresh))
+            snapshot['collection_timing']['link_event_started_monotonic_ns'] = int(refresh['started_ns'])
         self._last_snapshot = snapshot
         return snapshot
 
@@ -840,6 +953,12 @@ class LightweightNocMonitor:
         snapshot = dict(base)
         snapshot['path_probes'] = rows
         snapshot['iface_stats'] = iface_stats
+        self._last_refresh = {
+            'started_ns': started_ns,
+            'interfaces': list(refreshed),
+            'path_probes': [done[n] for n, p in enumerate(probes) if p[0] in refreshed],
+            'iface_stats': iface_stats if not any(f['collector'] == 'iface_stats' for f in failures) else None,
+        }
         rerun = {'iface_stats'} if not any(f['collector'] == 'iface_stats' for f in failures) else set()
         snapshot['collector_failures'] = [
             f for f in (base.get('collector_failures') or []) if not (isinstance(f, dict) and f.get('collector') in rerun)

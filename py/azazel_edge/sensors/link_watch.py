@@ -53,6 +53,10 @@ DEFAULT_DEBOUNCE_S = 0.25
 DEFAULT_MAX_DELAY_S = 1.0
 DEFAULT_MIN_INTERVAL_S = 2.0
 MAX_POLL_INTERVAL_S = 1.0
+# Messages read per wake-up, so a burst cannot delay a due re-evaluation.
+MAX_MESSAGES_PER_DRAIN = 64
+# Consecutive select()/socket errors before netlink is given up for sysfs polling.
+MAX_SOCKET_ERRORS = 3
 
 LinkState = Tuple[str, int]  # (operstate, carrier)
 
@@ -273,6 +277,7 @@ class LinkStateWatcher:
             self.mode, self.mode_detail = 'sysfs_poll', f'netlink unavailable ({exc}); polling sysfs every {self.poll_interval_s} s'
         logger.info(f'NOC link-state watch: {self.mode} ({self.mode_detail})')
         self.resync()
+        errors = 0
         try:
             while not self._stop.is_set():
                 wait = self.gate.wait_s()
@@ -280,8 +285,19 @@ class LinkStateWatcher:
                 if sock is not None:
                     try:
                         readable, _, _ = select.select([sock], [], [], timeout)
-                    except (OSError, ValueError):
-                        readable = []
+                        errors = 0
+                    except (OSError, ValueError) as exc:
+                        errors += 1
+                        if errors >= MAX_SOCKET_ERRORS:
+                            sock.close()
+                            sock = None
+                            self.mode, self.mode_detail = 'sysfs_poll', f'netlink failed ({exc}); polling sysfs every {self.poll_interval_s} s'
+                            logger.info(f'NOC link-state watch: {self.mode} ({self.mode_detail})')
+                        else:
+                            self._stop.wait(timeout)  # back off; never spin
+                        self.resync()
+                        self.fire_due()
+                        continue
                     if readable:
                         self._drain(sock)
                     # Interfaces that appear later get their baseline here.
@@ -298,7 +314,7 @@ class LinkStateWatcher:
             self.mode = 'stopped'
 
     def _drain(self, sock: socket.socket) -> None:
-        while True:
+        for _ in range(MAX_MESSAGES_PER_DRAIN):
             try:
                 data = sock.recv(65536)
             except BlockingIOError:
