@@ -797,3 +797,15 @@ def test_pin_count_needs_a_pin_specific_unit_word():
     assert "12" not in redact_text("pin: 12 fail")  # "fail" is a unit for other labels, not for PIN
     assert "12" not in redact_text("pin: 12 accounts")
     assert redact_text("pass: 12 accounts") == "pass: 12 accounts"
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("(pw: p)ss)", "([redacted:secret_kv])"),
+    ("(pw: rejected)", "(pw: rejected)"),
+    ("[token=a]b]", "[[redacted:secret_kv]]"),
+    ("(password: a)b) next", "([redacted:secret_kv]) next"),
+    ("(pw: hunter2), then", "([redacted:secret_kv]), then"),
+    ("(pw: hunter2). Done", "([redacted:secret_kv]). Done"),
+])
+def test_bracket_stop_requires_boundary_after_closer(text, expected):
+    assert redact_text(text) == expected
