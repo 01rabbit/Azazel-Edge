@@ -1,4 +1,11 @@
-from .broker import CapabilityBroker, CapabilityBrokerError, CapabilitySpec
+from .broker import (
+    CapabilityBroker,
+    CapabilityBrokerError,
+    CapabilitySpec,
+    CapabilityStatus,
+    CapabilityUnavailable,
+    ParamSpec,
+)
 from .contracts import (
     DEFENSIVE_STATES,
     HypothesisStatus,
@@ -31,6 +38,9 @@ __all__ = [
     "CapabilityBroker",
     "CapabilityBrokerError",
     "CapabilitySpec",
+    "CapabilityStatus",
+    "CapabilityUnavailable",
+    "ParamSpec",
     "DEFAULT_PLAYBOOKS",
     "DEFENSIVE_STATES",
     "GovernedMioModelAdapter",
