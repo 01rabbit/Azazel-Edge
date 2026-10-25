@@ -46,6 +46,7 @@ import queue as _queue_mod
 import threading
 import time
 from collections import OrderedDict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -66,6 +67,14 @@ DEFAULT_MAX_PENDING = 1024
 DEFAULT_RECONCILE_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_CHAIN_KEY_MAX_BYTES = 32 * 1024 * 1024
 DEFAULT_MAX_RECONCILE = 256
+# A decision older than this (EVE timestamp, else the core's ingest stamp,
+# against the current time) is not alerted by the reconcile: it is no longer
+# a current alert. 300 s is the core's default enforcement lease
+# (AZAZEL_DEFENSE_ACTION_TTL_SEC in systemd/azazel-edge-core.service): by
+# then the action the decision bore has been released.
+DEFAULT_RECONCILE_MAX_AGE_S = 300.0
+# How long stopping the recorder waits for the writer to drain.
+DEFAULT_STOP_DRAIN_S = 5.0
 _SEEN_MAX = 65536
 
 
@@ -136,6 +145,23 @@ def core_decision_payload(event: Mapping[str, Any]) -> Optional[Tuple[str, Dict[
     return f"core-{key[:32]}", payload
 
 
+def _event_epoch(payload: Mapping[str, Any]) -> Optional[float]:
+    """When the core's event happened: the EVE timestamp, else the core's
+    ingest stamp. None if neither can be read."""
+
+    ts = payload.get("event_ts")
+    if isinstance(ts, str) and ts:
+        text = ts.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+0000"
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+            try:
+                return datetime.strptime(text, fmt).timestamp()
+            except ValueError:
+                continue
+    return _num(payload.get("core_ingest_epoch"))
+
+
 def is_p0(payload: Mapping[str, Any]) -> bool:
     return bool(_p0.classify_p0(dict(payload, kind="action_decision")))
 
@@ -170,6 +196,7 @@ class CoreDecisionRecorder:
         reconcile_max_bytes: int = DEFAULT_RECONCILE_MAX_BYTES,
         chain_key_max_bytes: int = DEFAULT_CHAIN_KEY_MAX_BYTES,
         max_reconcile: int = DEFAULT_MAX_RECONCILE,
+        reconcile_max_age_s: float = DEFAULT_RECONCILE_MAX_AGE_S,
     ):
         self.audit = audit_logger
         self.relay = relay
@@ -177,6 +204,8 @@ class CoreDecisionRecorder:
         self.reconcile_max_bytes = int(reconcile_max_bytes)
         self.chain_key_max_bytes = int(chain_key_max_bytes)
         self.max_reconcile = int(max_reconcile)
+        self.reconcile_max_age_s = float(reconcile_max_age_s)
+        self._stopped = False
         self._pending: _queue_mod.Queue = _queue_mod.Queue(maxsize=max(1, int(max_pending)))
         self._lock = threading.Lock()
         self.handoff_dropped_total = 0
@@ -327,9 +356,11 @@ class CoreDecisionRecorder:
         status: Dict[str, Any] = {
             "event": "core_reconcile", "core_reconcile": "done", "core_reconciled": 0,
             "core_reconcile_skipped": 0, "core_reconcile_out_of_window": 0, "core_reconcile_unparseable": 0,
+            "core_reconcile_stale": 0, "core_reconcile_max_age_s": self.reconcile_max_age_s,
             "core_reconcile_log_truncated": False, "core_reconcile_newest_chain_decision_in_log": None,
         }
         chain_complete, oldest, newest = self._chain_keys()
+        now = time.time()
         if self.normalized_log_path is None:
             status["core_reconcile"] = "no_normalized_log_path"
         else:
@@ -363,6 +394,12 @@ class CoreDecisionRecorder:
                     # Older than the part of the chain read: whether it is
                     # already recorded cannot be told.
                     status["core_reconcile_out_of_window"] += 1
+                    continue
+                happened = _event_epoch(payload)
+                if happened is None or now - happened > self.reconcile_max_age_s:
+                    # Not a current alert any more (or its time is unknown):
+                    # counted, not alerted.
+                    status["core_reconcile_stale"] += 1
                     continue
                 payload["recorded_by"] = RECORDED_RECONCILE
                 candidates.append((trace_id, payload))
@@ -419,7 +456,17 @@ class CoreDecisionRecorder:
             self._thread.start()
         return self
 
-    def stop(self, timeout: float = 5.0) -> None:
+    def stop(self, timeout: float = DEFAULT_STOP_DRAIN_S) -> int:
+        """Stop taking work and drain what was handed over, for at most
+        ``timeout`` seconds. What is not drained by then is counted in a
+        ``relay_status`` record (``core_recorder_stopped``); the next start's
+        reconcile records it from the core's log. Returns that count."""
+
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout)
+        undrained = self.pending()
+        if not self._stopped:
+            self._stopped = True
+            self._status({"event": "core_recorder_stopped", "core_record_undrained": undrained})
+        return undrained

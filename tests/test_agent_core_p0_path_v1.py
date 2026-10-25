@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,17 @@ def core_event(action: str = "redirect", trace_id: str = "trace-0x1", sid: int =
     event["enforcement"]["trace_id"] = trace_id
     event["enforcement"]["mode"] = mode
     event["normalized"]["sid"] = sid
+    return event
+
+
+def _now_ts(offset_s: float = 0.0) -> str:
+    return datetime.fromtimestamp(time.time() + offset_s, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f+0000")
+
+
+def fresh(event: dict, offset_s: float = 0.0) -> dict:
+    """The event as if Suricata had stamped it ``offset_s`` seconds from now."""
+
+    event["normalized"]["ts"] = _now_ts(offset_s)
     return event
 
 
@@ -290,12 +302,16 @@ def test_decisions_taken_while_the_agent_is_down_are_reconciled_once(tmp_path, r
         assert sorted(r["sid"] for r in records) == sorted(down[:2])
         assert all(r["recorded_by"] == "startup_reconcile" for r in records)
         assert _wait(lambda: len(_alerts(agent.queue)) == 4)
+        # Marked as not live, with the event's own time.
+        assert all(r["reconciled"] is True and r["recorded_by"] == "startup_reconcile" and r["event_ts"] for r in _alerts(agent.queue))
         first = _statuses(agent.queue, "core_reconcile")
         assert len(first) == 1 and first[0]["core_reconciled"] == 2 and first[0]["core_reconcile"] == "done"
         # Live again.
         live = core.alert(3)
         assert _wait(lambda: len(_rows(agent.chain)) == 3)
         assert _rows(agent.chain)[-1]["sid"] == live and _rows(agent.chain)[-1]["recorded_by"] == "live"
+        assert _wait(lambda: len(_alerts(agent.queue)) == 6)
+        assert [r["reconciled"] for r in _alerts(agent.queue)[-2:]] == [False, False]
         # Restart: everything in the log is already in the chain.
         agent.stop()
         agent.start()
@@ -466,7 +482,7 @@ def test_reconcile_counts_what_it_could_not_read(tmp_path):
     audit = P0AuditLogger(tmp_path / "core-decision-audit.jsonl")
     relay = attach_p0_alert_relay(audit, tmp_path / "p0-alert-queue.jsonl")
     log = tmp_path / "normalized-events.jsonl"
-    lines = [json.dumps(core_event("isolate", f"t{n}", 9300100 + n)) for n in range(5)]
+    lines = [json.dumps(fresh(core_event("isolate", f"t{n}", 9300100 + n))) for n in range(5)]
     log.write_text("not json\n" + "\n".join(lines) + "\n" + '{"torn": ', encoding="utf-8")
     recorder = CoreDecisionRecorder(audit, relay, log, max_reconcile=3).start()
     try:
@@ -503,3 +519,84 @@ def test_the_start_path_is_idempotent_and_survives_an_unusable_directory(monkeyp
     finally:
         agent_mod.CORE_RECORDER.stop()
         relay.stop()
+
+
+def test_reconcile_does_not_alert_stale_decisions(tmp_path):
+    """First start (empty chain) on an old log: decisions older than the
+    bound are counted as stale, not alerted; recent ones are, marked as
+    reconciled."""
+
+    audit = P0AuditLogger(tmp_path / "core-decision-audit.jsonl")
+    relay = attach_p0_alert_relay(audit, tmp_path / "p0-alert-queue.jsonl")
+    log = tmp_path / "normalized-events.jsonl"
+    old = [fresh(core_event("isolate", f"o{n}", 9300200 + n), -3600 - n) for n in range(4)]
+    just_over = fresh(core_event("throttle", "o9", 9300209), -core_decisions.DEFAULT_RECONCILE_MAX_AGE_S - 5)
+    undated = core_event("isolate", "u", 9300210)
+    undated["normalized"]["ts"] = "not a time"
+    undated["normalized"].pop("ingest_epoch")
+    recent = fresh(core_event("throttle", "r", 9300211), -30)
+    log.write_text("".join(json.dumps(e) + "\n" for e in old + [just_over, undated, recent]), encoding="utf-8")
+    recorder = CoreDecisionRecorder(audit, relay, log).start()
+    try:
+        assert recorder.ready.wait(10)
+        status = recorder.last_reconcile
+        assert status["core_reconcile_stale"] == 6 and status["core_reconciled"] == 1
+        assert status["core_reconcile_max_age_s"] == core_decisions.DEFAULT_RECONCILE_MAX_AGE_S
+        assert [r["sid"] for r in _rows(audit.path)] == [9300211]
+        assert _wait(lambda: len(_alerts(relay.queue.path)) == 2)
+        alerts = _alerts(relay.queue.path)
+        assert all(r["reconciled"] is True and r["event_ts"] == recent["normalized"]["ts"] for r in alerts)
+        assert _statuses(relay.queue.path, "core_reconcile")[0]["core_reconcile_stale"] == 6
+    finally:
+        recorder.stop()
+        relay.stop()
+
+
+def test_live_alerts_are_not_marked_reconciled(tmp_path):
+    audit = P0AuditLogger(tmp_path / "core-decision-audit.jsonl")
+    relay = attach_p0_alert_relay(audit, tmp_path / "p0-alert-queue.jsonl")
+    recorder = CoreDecisionRecorder(audit, relay, None).start()
+    try:
+        recorder.submit(core_event("isolate", "l", 9300300))
+        assert _wait(lambda: len(_alerts(relay.queue.path)) == 2)
+        assert all(r["reconciled"] is False and r["recorded_by"] == "live" for r in _alerts(relay.queue.path))
+    finally:
+        recorder.stop()
+        relay.stop()
+
+
+def test_stop_drains_within_its_bound_and_counts_the_rest(tmp_path, monkeypatch):
+    real_fsync = os.fsync
+
+    def slow_fsync(fd):
+        time.sleep(0.2)
+        return real_fsync(fd)
+
+    audit = P0AuditLogger(tmp_path / "core-decision-audit.jsonl")
+    relay = attach_p0_alert_relay(audit, tmp_path / "p0-alert-queue.jsonl")
+    recorder = CoreDecisionRecorder(audit, relay, None).start()
+    assert recorder.ready.wait(10) and relay.ready.wait(10)
+    monkeypatch.setattr(os, "fsync", slow_fsync)
+    try:
+        for n in range(10):
+            recorder.submit(core_event("throttle", f"s{n}", 9300400 + n))
+        t0 = time.monotonic()
+        undrained = recorder.stop(timeout=0.5)
+        assert time.monotonic() - t0 < 1.5
+        assert undrained > 0
+    finally:
+        monkeypatch.setattr(os, "fsync", real_fsync)
+    assert _wait(lambda: any(s["core_record_undrained"] == undrained for s in _statuses(relay.queue.path, "core_recorder_stopped")))
+    assert recorder.stop() == recorder.pending()  # idempotent: one status record
+    relay.stop()
+
+
+def test_sigterm_drains_the_p0_path_before_the_service_exits(agent_service):
+    for n in range(20):
+        _send(agent_service.socket, core_event("isolate", f"t{n}", 9300500 + n))
+    agent_service.proc.send_signal(15)
+    assert agent_service.proc.wait(timeout=30) is not None
+    assert len(_rows(agent_service.chain)) == 20
+    stopped = _statuses(agent_service.queue, "core_recorder_stopped")
+    assert len(stopped) == 1 and stopped[0]["core_record_undrained"] == 0
+    assert len(_alerts(agent_service.queue)) == 40

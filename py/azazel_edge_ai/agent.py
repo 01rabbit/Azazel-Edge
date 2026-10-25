@@ -9,6 +9,7 @@ import os
 import grp
 import queue
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -270,6 +271,9 @@ CORE_NORMALIZED_EVENT_LOG = Path(os.environ.get("AZAZEL_NORMALIZED_EVENT_LOG", "
 CORE_DECISION_AUDIT: Any | None = None
 CORE_P0_RELAY: Any | None = None
 CORE_RECORDER: Any | None = None
+# On stop: how long queued connections and running handlers get to finish
+# before the P0 path is drained (each part of that drain has its own bound).
+SHUTDOWN_DRAIN_S = 5.0
 
 
 def _start_core_p0_path() -> Any | None:
@@ -300,6 +304,23 @@ def _start_core_p0_path() -> Any | None:
         logger.error("p0 alert relay not attached to the core decision chain: %s", exc)
     CORE_RECORDER = CoreDecisionRecorder(CORE_DECISION_AUDIT, CORE_P0_RELAY, CORE_NORMALIZED_EVENT_LOG).start()
     return CORE_P0_RELAY
+
+
+def _stop_core_p0_path() -> None:
+    """Drain the recorder (bounded), then let the relay enqueue what it was
+    handed (bounded). What is left is counted in the P0 queue and recorded
+    from the core's log at the next start. Never raises."""
+
+    recorder, relay, audit = CORE_RECORDER, CORE_P0_RELAY, CORE_DECISION_AUDIT
+    try:
+        if recorder is not None:
+            recorder.stop()
+        if relay is not None and audit is not None:
+            audit.wait_durable_listeners(5.0)
+            relay.wait_idle(5.0)
+            relay.stop(5.0)
+    except Exception as exc:
+        logger.error("core decision P0 alert path did not stop cleanly: %s", exc)
 
 
 def _record_core_decision(event: Dict[str, Any]) -> None:
@@ -1948,7 +1969,13 @@ def _handle_client(conn: socket.socket) -> None:
 
 
 def _serve(stop: threading.Event | None = None) -> None:
-    """Run the agent (the unit's ExecStart). ``stop`` ends the accept loop."""
+    """Run the agent (the unit's ExecStart). ``stop`` ends the accept loop;
+    in the main thread SIGTERM (systemd's stop) sets it, so the P0 path is
+    drained before the process exits."""
+    if stop is None:
+        stop = threading.Event()
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGTERM, lambda signum, frame: stop.set())
     _prepare_runtime_socket_dir(SOCKET_PATH)
     _ensure_parent(METRICS_PATH)
     _ensure_parent(POLICY_PATH)
@@ -1976,8 +2003,16 @@ def _serve(stop: threading.Event | None = None) -> None:
     logger.info("AI advisory agent listening on %s", SOCKET_PATH)
     last_heartbeat = time.time()
 
+    handlers: list[threading.Thread] = []
+
+    def _spawn(conn: socket.socket) -> None:
+        handlers[:] = [t for t in handlers if t.is_alive()]
+        t = threading.Thread(target=_handle_client, args=(conn,), daemon=True)
+        handlers.append(t)
+        t.start()
+
     try:
-        while stop is None or not stop.is_set():
+        while not stop.is_set():
             now = time.time()
             if now - last_heartbeat >= METRICS_HEARTBEAT_SEC:
                 _metrics_heartbeat()
@@ -1987,9 +2022,25 @@ def _serve(stop: threading.Event | None = None) -> None:
                 conn, _ = srv.accept()
             except socket.timeout:
                 continue
-            threading.Thread(target=_handle_client, args=(conn,), daemon=True).start()
+            _spawn(conn)
     finally:
+        # Stopping: take the connections already queued (the core counted
+        # them as sent), let the handlers finish (bounded), then drain the
+        # P0 path. Anything still missed is in the core's log and is
+        # reconciled at the next start.
+        deadline = time.monotonic() + SHUTDOWN_DRAIN_S
+        srv.setblocking(False)
+        while time.monotonic() < deadline:
+            try:
+                conn, _ = srv.accept()
+            except (BlockingIOError, socket.timeout, OSError):
+                break
+            conn.setblocking(True)
+            _spawn(conn)
         srv.close()
+        for t in list(handlers):
+            t.join(max(0.0, deadline - time.monotonic()))
+        _stop_core_p0_path()
 
 
 if __name__ == "__main__":

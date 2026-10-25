@@ -543,6 +543,13 @@ def build_p0_alerts(record: Mapping[str, Any], basis: str, durability: str, dura
         'effective_action': str(record.get('effective_action') or ''),
         'enforcement_mode': str(record.get('enforcement_mode') or ''),
         'enforcement_result': str(record.get('enforcement_result') or ''),
+        # Not a live alert: recorded by a startup reconcile (the core
+        # decision recorder's, or this relay's own from the chain). The
+        # event's own time says how old it is.
+        'reconciled': record.get('recorded_by') == 'startup_reconcile'
+        or durability in (DURABILITY_RECONCILED, DURABILITY_RECONCILED_FSYNCED),
+        'recorded_by': str(record.get('recorded_by') or ''),
+        'event_ts': str(record.get('event_ts') or ''),
     }
     return [dict(base, channel=channel) for channel in CHANNELS]
 

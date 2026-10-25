@@ -76,6 +76,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, Optional
 
@@ -301,7 +302,8 @@ def expected_effective_action(decided: str, severity: int, port: int, policy_pat
 
 def _eve_line(i: int, severity: int, port: int, sid: Optional[int] = None) -> str:
     return json.dumps({
-        "timestamp": f"2026-01-01T00:{(i // 60) % 60:02d}:{i % 60:02d}.{i:06d}+0000",
+        # The current time, as Suricata stamps an alert it has just seen.
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f+0000"),
         "event_type": "alert",
         "src_ip": f"203.0.113.{(i % 250) + 1}",
         "dest_ip": "192.0.2.10",
