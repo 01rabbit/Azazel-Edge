@@ -16,8 +16,9 @@ MUST NOT be applied automatically on a generic x86_64 host.
 The future `azazel-edge-runtime` x86_64 package MUST contain only the
 deterministic runtime and its non-topology-specific dependencies:
 
-- evidence intake, NOC/SOC evaluators, arbiter, explanations, audit, and
-  operator/API services;
+- evidence intake, NOC/SOC evaluators, the deterministic decision and
+  enforcement path (see "Decision and enforcement authority" below),
+  explanations, audit, and operator/API services;
 - service definitions that consume rendered configuration rather than discover
   or rename network interfaces themselves;
 - Suricata binaries, rules, and a disabled service template;
@@ -28,6 +29,102 @@ The package MUST NOT create bridges, change default routes, enable forwarding,
 start DHCP/NAT, bind a listener to a physical interface, or start Suricata
 capture during package installation. It MUST be usable with no external
 network connectivity once its verified assets are installed.
+
+## Decision and enforcement authority
+
+Decided by the owner on 2026-10-26 (Edge#412). This section names the
+component that "the deterministic arbiter" and "arbiter" (singular) refer to
+throughout this document, and lists every other place in the repository that
+runs a firewall tool.
+
+| Question | Answer |
+| --- | --- |
+| Authoritative decision and enforcement path, x86_64 profile | Rust `azazel-edge-core`: `decide_defense()` selects the action, `maybe_enforce()` applies it. Among the services Edge starts from its units, it is the only one that runs `nft` or `tc` to apply a defensive action (`throttle`, `redirect`, `isolate`). The repository has one other defensive path outside the core, the optional Wazuh active response below; it is an exception pending an owner decision. |
+| The other path | Python `py/azazel_edge/arbiter/action.py::ActionArbiter` is not an enforcement path. It is a deterministic copy of the decision used for scenario replay, benchmarks, dry runs and service-objective harnesses. It is neither removed nor subordinated, and nothing applies its output to the network. |
+| How a consumer verifies it | The systemd unit inventory and its `Exec*` lines, plus the firewall-tool inventory below. Exactly one unit (`azazel-edge-core.service`) starts the `azazel-edge-core` binary, no unit runs a firewall tool directly, and every Python module and installer line that runs one is in the reviewed lists below. `tests/test_enforcement_boundary_inventory_v1.py` checks this against the repository tree, and also pins the modules that import `ActionArbiter`. |
+| Constrained-device profile | The same answer for authority: the Rust core has no profile branch (architecture-specific code is limited to constants). The installed sets differ. The appliance installers copy units from `systemd/` and generate `azazel-internal-apply.service`; the x86_64 package built by `packaging/nexus-core/` (Edge#424) contains the `azazel-edge-core` binary and `config/redirect_policy.yaml`, no unit file and no Python. Neither set contains a second enforcer. |
+
+This statement names an existing path. It creates no new decision authority,
+enforcement authority, approval flag or bypass.
+
+### What "arbiter" means
+
+- **the deterministic arbiter** / **the arbiter** in this document and in
+  integration contracts: the Rust `azazel-edge-core` decision and enforcement
+  path.
+- **`ActionArbiter`**: the Python class. Documents that describe its
+  decision fields (rejected alternatives, release conditions, the bounded
+  action vocabulary) describe that decision record, not a path that changes
+  the network.
+
+### Shipped defaults
+
+`systemd/azazel-edge-core.service` ships with `AZAZEL_DEFENSE_ENFORCE=false`,
+`AZAZEL_DEFENSE_DRY_RUN=true`, `AZAZEL_DEFENSE_ENFORCE_LEVEL=advisory` and
+`AZAZEL_DEFENSE_ALLOW_HIGH_IMPACT_AUTO=false`, and the `packaging/nexus-core/`
+manifest declares the same observe-only environment. With these defaults the
+core decides and records but does not run enforcement commands.
+
+### Exception pending an owner decision: Wazuh active response
+
+`installer/internal/install_wazuh_agent.sh` is an optional installer. It
+generates `/var/ossec/active-response/bin/azazel-block.sh`, which runs
+`iptables -I FORWARD -s <ip> -j DROP` and `iptables -I INPUT -s <ip> -j DROP`
+on `add` and the matching `iptables -D` on `delete`. The Wazuh manager starts
+it (`docs/WAZUH_INTEGRATION_GUIDE.md`, "Active Response"). This is a
+defensive action outside the Rust core, decided by the Wazuh manager rather
+than by `decide_defense()`. Edge#412 does not settle whether it is removed,
+kept as a separately selected integration, or routed through the core; that
+is left to the owner. Until then it is listed here and pinned by the test, and
+a host that installs the Wazuh agent with active response has a second
+enforcer.
+
+### Baseline firewall written by installers
+
+These set up connectivity and the captive portal. They are not defensive
+actions and take no decision input.
+
+| Installer | What it writes or runs | Purpose |
+| --- | --- | --- |
+| `installer/internal/install_internal_network.sh` | `/etc/nftables.d/azazel-internal.nft` (NAT masquerade and forward accept), loaded with `nft -f`; `net.ipv4.ip_forward=1`; the runner `/usr/local/sbin/azazel-internal-apply` and the unit `azazel-internal-apply.service`, which reload the same file at boot; a read-only `nft list` in its verify step | Appliance internal network baseline |
+| `installer/internal/install_captive_portal.sh` | `/etc/nftables.d/azazel-captive.nft` (TCP port 80 redirect to the portal), loaded with `nft -f` | Captive portal |
+
+### Python code that runs `nft`, `tc` or `iptables`
+
+None of these consumes an `ActionArbiter` decision.
+
+| Module | What it runs | Classification |
+| --- | --- | --- |
+| `py/azazel_edge/outcome/postcondition.py` | `tc -j qdisc show`, `nft -j list chain` | Read-only observation of the core's enforcement postcondition |
+| `py/azazel_edge/service_objectives/so04_rollback_completion.py` | `tc`, `nft` on dummy interfaces it creates | SO-04 measurement harness, run by CI or an operator, not by a unit |
+| `tools/hil/azazel_hil_remote.py` | `tc qdisc show`, `nft list ruleset` | HIL tool, read-only observation |
+| `py/azazel_edge_control/wifi_connect.py` | `sysctl -w net.ipv4.ip_forward=1`, then `nft add table/chain/rule ... masquerade`, or `iptables -t nat -A POSTROUTING ... MASQUERADE` and two `iptables -A FORWARD` rules | Not a defensive action, but it changes network state. A request to `/api/wifi/connect` reaches the control daemon, whose `wifi_connect` calls `apply_nat` when a USB interface is present. Forwarding and the rules stay in place: there is no removal path. Each connect appends the rules again (`iptables -A`, `nft add rule`), so repeated connects leave duplicates; this is a known defect, recorded here and not changed by Edge#412. |
+
+### Limits of this statement
+
+- There is no released x86_64 artifact yet. The `packaging/nexus-core/` tool
+  builds a package but none has been published, and the appliance installers
+  copy units from the repository. The checks run against the repository tree;
+  the same inventory is what a consumer applies to an artifact once one exists.
+- Enforcement with `AZAZEL_DEFENSE_ENFORCE=true` has not been exercised on
+  hardware (HIL) for this statement. It describes which component holds the
+  authority, not that the enforcement is proven on a device.
+- The test guards against accidental drift, not against deliberate evasion.
+  It does not see an argv built entirely from variables in a module that names
+  no tool, a shell command reached through a variable, an inline interpreter
+  script, or a library loaded by a computed name. The read-only check on
+  `postcondition.py` sees literal argv only, so an argv held in a variable
+  passes it. In shell files it does not see a tool named inside a quoted
+  string (`bash -c 'nft ...'`), behind a prefix command (`ssh`, `docker exec`)
+  or in a `{ ...; }` group, and the unit inventory only parses units written
+  with `cat > ... <<`; a unit written with `tee`, `printf` or `cat >>` is not
+  listed. An extra copy of an already-reviewed line in the same file also
+  passes, because the allowlist is a set of lines, not a count.
+- `ip` is not in the checked tool set. The string is too common in this tree
+  (about twenty Python modules contain it, mostly as a field name) for the
+  file-level check, and its state-changing uses here (`ip link`, `ip netns` in
+  the SO-02 harness) move interfaces, not filtering policy. `ipset` and
+  `conntrack` are checked.
 
 ## Two-stage workflow
 
@@ -109,7 +206,9 @@ authority.
 
 If a resource, asset, trust, or health gate fails, the runtime MUST degrade to
 a lower capability state without transferring decision authority away from the
-deterministic arbiter.
+deterministic arbiter, which in this document always means the Rust
+`azazel-edge-core` decision and enforcement path named in "Decision and
+enforcement authority".
 
 ## Rollback and evidence
 

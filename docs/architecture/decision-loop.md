@@ -32,7 +32,10 @@ OBSERVE | NOTIFY | THROTTLE | REDIRECT | ISOLATE
 ```
 
 `ActionArbiter.ACTION_PROFILES` is keyed on exactly these five, so what Edge
-outwardly *is doing* maps 1:1 onto what the Arbiter selected. A test pins that
+outwardly *is doing* maps 1:1 onto what the Arbiter selected. (Here "Arbiter"
+means the Python `ActionArbiter` decision record; the path that applies a
+selected action is the Rust `azazel-edge-core`, see
+`docs/X86_64_INTEGRATION_BOUNDARY.md`.) A test pins that
 (`tests/test_defensive_state_vocabulary.py`); an added or renamed action fails
 there rather than quietly widening the vocabulary.
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Azazel-Edge Control Daemon (Unix socket action executor)
+Description=Azazel-Edge Control Daemon (mode state, display and Wi-Fi uplink over a Unix socket)
 After=network-online.target
 Wants=network-online.target
 

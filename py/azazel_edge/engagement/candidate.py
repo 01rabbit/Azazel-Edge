@@ -10,7 +10,9 @@ Flow (Azazel-Edge#319):
       -> engagement_event()             ->  EngagementEvent for audit / Knowledge
 
 Invariants:
-* The Action Arbiter remains the sole authority. This layer never selects,
+* The Action Arbiter remains the sole authority within this layer (it is a
+  decision record, not an enforcement path; see
+  docs/X86_64_INTEGRATION_BOUNDARY.md). This layer never selects,
   executes, or escalates — the accepted activity is derived from the arbiter's
   own ``decision['action']``; a candidate requesting a stronger activity is
   recorded as a downgrade, never applied.

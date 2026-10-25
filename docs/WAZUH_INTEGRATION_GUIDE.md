@@ -89,6 +89,11 @@ iptables -I FORWARD -s <attacker_ip> -j DROP
 iptables -I INPUT   -s <attacker_ip> -j DROP
 ```
 
+This block is applied by the Wazuh manager, outside the Rust `azazel-edge-core`
+decision and enforcement path. Edge#412 records it as an exception pending an
+owner decision; see `docs/X86_64_INTEGRATION_BOUNDARY.md`, "Exception pending an
+owner decision: Wazuh active response".
+
 To test active response manually from the Manager:
 ```bash
 /var/ossec/bin/agent_control -b <ip> -f azazel-block -u <agent_id>
