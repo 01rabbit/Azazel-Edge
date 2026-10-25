@@ -249,6 +249,8 @@ SAMPLE_FIELDS: Dict[str, frozenset] = {
             "baseline_healthy", "baseline_poll_started_monotonic_ns", "baseline_surface_value",
             "end_poll_started_monotonic_ns", "end_surface_value",
             "polls_after_injection", "poll_errors_after_injection", "recovered",
+            # Diagnostic stage stamps (wall clock); never read for the verdict.
+            "injection_wall_epoch", "end_noc_updated_epoch", "end_snapshot_epoch",
         )
     ),
     "SO-03": frozenset(
@@ -758,6 +760,37 @@ def so02_failure_observed(sample: Mapping[str, Any]) -> bool:
     return _so02_surface_failed(source_type, sample.get("end_surface_value"))
 
 
+def so02_sequence_problems(samples: Sequence[Any]) -> List[str]:
+    """SO-02 samples are one run's injections in order: each injected after the
+    previous one ended (or, if it never ended, after it began), from a baseline
+    polled after that, with a strictly later end and at least one poll seen. A
+    copied sample under a new id overlaps its original and is refused."""
+
+    problems: List[str] = []
+    prev_start: Optional[int] = None
+    prev_end: Optional[int] = None
+    for idx, s in enumerate(samples):
+        if not isinstance(s, dict):
+            continue
+        start, end, base = s.get("start_monotonic_ns"), s.get("end_monotonic_ns"), s.get("baseline_poll_started_monotonic_ns")
+        if not _int(start):
+            continue
+        if end is not None:
+            if not (_int(end) and end > start):
+                problems.append(f"samples[{idx}]: end must be strictly after the injection")
+            polls = s.get("polls_after_injection")
+            if not (_int(polls) and polls > 0):
+                problems.append(f"samples[{idx}]: an ended sample must have seen at least one poll after the injection")
+        if prev_start is not None:
+            floor = prev_end if prev_end is not None else prev_start
+            if start <= floor:
+                problems.append(f"samples[{idx}]: injected before the previous sample ended (overlapping or out of order)")
+            if _int(base) and base <= floor:
+                problems.append(f"samples[{idx}]: baseline polled before the previous sample ended")
+        prev_start, prev_end = start, (end if _int(end) else None)
+    return problems
+
+
 def so02_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[str, bool]:
     """SO-02 record prerequisites, recomputed from every sample's observed fields."""
 
@@ -1092,6 +1125,7 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
         else:
             eval_samples = _recomputed_latency_samples([s if isinstance(s, dict) else {} for s in part["samples"]])
             if objective == "SO-02" and part["name"] == "source_failure_visible":
+                errors.extend(f"{where}.{p}" for p in so02_sequence_problems(part["samples"]))
                 # An end counts only where the sample's own fields show the
                 # surface naming the source failed after a healthy baseline;
                 # otherwise the sample never ended, whatever its timestamps say.

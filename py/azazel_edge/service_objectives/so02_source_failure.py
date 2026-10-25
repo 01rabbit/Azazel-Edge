@@ -55,12 +55,24 @@ Why the row is still ``not_measurable``
 Safety
 ------
 Needs root and ``ip netns``. The harness refuses (``not_measurable``, nothing
-started) if a Suricata is already running or its pidfile exists, so it never
-kills a live node's capture. The control daemon is started with
-``suppress_auto_wifi: false`` so it never disconnects a host's Wi-Fi, and the
+started) if a Suricata is already running, its pidfile exists, or a lab
+namespace from an earlier run is left over, so it never kills a live node's
+capture. It also refuses without PyYAML, and before starting the control
+daemon it asks the daemon's own ``load_control_flags()`` (in the lab
+environment) and stops unless ``suppress_auto_wifi`` is ``false``. Without
+that the daemon would run ``nmcli`` against the host's NetworkManager. The
 dev-only healthy-baseline override is removed from every child's environment.
-Everything the harness starts is stopped, and both namespaces deleted, when it
-finishes or receives SIGTERM/SIGINT/SIGHUP.
+
+Teardown blocks SIGTERM/SIGINT/SIGHUP, stops every process found inside the
+lab namespaces by network-namespace inode (so a daemonized Suricata whose pid
+was never read is stopped too), removes ``/run/suricata.pid`` only if it names
+a Suricata the harness started, and deletes both namespaces. A harness killed
+with SIGKILL cannot clean up; the namespaces remain and the next run refuses.
+
+Process death is detected through the pidfile path (the lab has no systemd);
+the production ``systemctl is-active`` path is not measured. Only the total
+from injection to the surface is measured; wall-clock stage stamps are kept
+per sample for diagnosis and never read for the verdict.
 """
 
 from __future__ import annotations
@@ -124,7 +136,7 @@ port, token = sys.argv[1], sys.argv[2]
 req = urllib.request.Request("http://127.0.0.1:%s/api/state" % port, headers={"X-AZAZEL-TOKEN": token})
 while True:
     s = time.monotonic_ns()
-    row = {"s": s}
+    row = {"s": s, "w": time.time()}
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = json.loads(resp.read().decode("utf-8"))
@@ -132,7 +144,8 @@ while True:
         blast = body.get("noc_blast_radius") if isinstance(body.get("noc_blast_radius"), dict) else None
         row.update(ok=True, suricata=mon.get("suricata"),
                    uplinks=blast.get("affected_uplinks") if blast is not None else None,
-                   source=body.get("source"), snapshot_epoch=body.get("snapshot_epoch"))
+                   source=body.get("source"), snapshot_epoch=body.get("snapshot_epoch"),
+                   noc_updated_epoch=(body.get("noc_runtime") or {}).get("updated_epoch") if isinstance(body.get("noc_runtime"), dict) else None)
     except Exception as exc:
         row.update(ok=False, err=type(exc).__name__ + ": " + str(exc)[:200])
     row["e"] = time.monotonic_ns()
@@ -151,14 +164,45 @@ def _run(argv: List[str], timeout: float = CMD_TIMEOUT_S) -> subprocess.Complete
         return subprocess.CompletedProcess(argv, 127, "", str(exc))
 
 
+PROC_ROOT = Path("/proc")
+NETNS_ROOT = Path("/run/netns")
+LAB_NETNS_PREFIXES = ("so02e-", "so02p-")
+
+
 def _suricata_processes() -> List[int]:
     pids = []
-    for entry in Path("/proc").glob("[0-9]*"):
+    for entry in PROC_ROOT.glob("[0-9]*"):
         try:
             cmd = (entry / "cmdline").read_bytes().split(b"\0")[0]
         except OSError:
             continue
         if Path(cmd.decode("utf-8", "replace")).name.startswith("suricata"):
+            pids.append(int(entry.name))
+    return pids
+
+
+def _leftover_lab_netns() -> List[str]:
+    try:
+        return sorted(p.name for p in NETNS_ROOT.iterdir() if p.name.startswith(LAB_NETNS_PREFIXES))
+    except OSError:
+        return []
+
+
+def _pids_in_netns(ns_path: Path) -> List[int]:
+    """Every process whose network namespace is the one at ``ns_path``."""
+
+    try:
+        st = os.stat(ns_path)
+    except OSError:
+        return []
+    want = (st.st_dev, st.st_ino)
+    pids = []
+    for entry in PROC_ROOT.glob("[0-9]*"):
+        try:
+            nst = os.stat(entry / "ns" / "net")
+        except OSError:
+            continue
+        if (nst.st_dev, nst.st_ino) == want:
             pids.append(int(entry.name))
     return pids
 
@@ -176,6 +220,10 @@ def preflight() -> Dict[str, Any]:
     gunicorn = _run([sys.executable, "-c", "import gunicorn; print(gunicorn.__version__)"])
     if gunicorn.returncode != 0:
         problems.append("gunicorn not importable by this interpreter")
+    # Without PyYAML the control daemon ignores the lab's first_minute.yaml and
+    # suppresses auto Wi-Fi with nmcli, which reaches the host's NetworkManager.
+    if _run([sys.executable, "-c", "import yaml"]).returncode != 0:
+        problems.append("PyYAML not importable: the daemon could not read suppress_auto_wifi: false")
     version = ""
     if tools["suricata"]:
         out = _run([tools["suricata"], "-V"])
@@ -186,6 +234,9 @@ def preflight() -> Dict[str, Any]:
     running = _suricata_processes()
     if running:
         live.append(f"suricata already running (pid {running})")
+    leftover = _leftover_lab_netns()
+    if leftover:
+        live.append(f"lab namespaces left by an earlier run (killed with SIGKILL?): {leftover}")
     if shutil.which("systemctl"):
         for unit in ("suricata.service", "azazel-edge-suricata.service"):
             if _run(["systemctl", "is-active", unit], timeout=5).stdout.strip() == "active":
@@ -280,7 +331,7 @@ class _Lab:
         self.procs: List[subprocess.Popen] = []
         self.suricata_pid: Optional[int] = None
         self.netns_created: List[str] = []
-        self.pidfile_ours = False
+        self.started_pids: List[int] = []  # every Suricata pid this lab started
         self.env = self._env()
 
     def _env(self) -> Dict[str, str]:
@@ -360,7 +411,29 @@ class _Lab:
         self.procs.append(proc)
         return proc
 
-    def start_stack(self) -> None:
+    def verify_daemon_flags(self) -> str:
+        """Ask the daemon's own load_control_flags, in the lab environment,
+        whether it reads suppress_auto_wifi: false. Raises unless it does."""
+
+        code = (
+            "import json, sys; sys.path.insert(0, sys.argv[1]); import yaml, daemon; "
+            "print(json.dumps(daemon.load_control_flags()))"
+        )
+        out = _run(
+            ["ip", "netns", "exec", self.edge_ns, "env", "-i", *[f"{k}={v}" for k, v in self.env.items()],
+             sys.executable, "-c", code, str(REPO_ROOT / "py" / "azazel_edge_control")],
+            timeout=60,
+        )
+        try:
+            flags = json.loads(out.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            flags = None
+        if not isinstance(flags, dict) or flags.get("suppress_auto_wifi") is not False:
+            raise RuntimeError(f"daemon would suppress auto Wi-Fi (flags={flags!r}, rc={out.returncode}); not started")
+        return "load_control_flags() -> suppress_auto_wifi: false"
+
+    def start_stack(self) -> str:
+        verified = self.verify_daemon_flags()
         self._spawn("control-daemon", [sys.executable, str(REPO_ROOT / "py" / "azazel_edge_control" / "daemon.py")])
         self._spawn(
             "web",
@@ -370,6 +443,7 @@ class _Lab:
                 "--pythonpath", f"{REPO_ROOT}:{REPO_ROOT / 'py'}", "azazel_edge_web.app:app",
             ],
         )
+        return verified
 
     def start_poller(self) -> _Poller:
         proc = self._spawn("poller", [sys.executable, "-I", "-c", _POLLER, str(WEB_PORT), self.token], stdout=subprocess.PIPE, text=True)
@@ -377,10 +451,11 @@ class _Lab:
 
     def start_suricata(self) -> bool:
         if SURICATA_PIDFILE.exists():
-            if not self.pidfile_ours:
+            # Only a pidfile naming a Suricata this lab started, and which is
+            # gone, may be replaced; anything else is not ours.
+            if not self._pidfile_is_ours(dead_only=True):
                 return False
             SURICATA_PIDFILE.unlink()
-        self.pidfile_ours = True
         out = _run(
             [
                 "ip", "netns", "exec", self.edge_ns, "env", "-i", f"PATH={self.env['PATH']}",
@@ -398,10 +473,25 @@ class _Lab:
                 pid = int(SURICATA_PIDFILE.read_text().strip())
                 os.kill(pid, 0)
                 self.suricata_pid = pid
+                self.started_pids.append(pid)
                 return True
             except (OSError, ValueError):
                 time.sleep(0.1)
         return False
+
+    def _pidfile_is_ours(self, dead_only: bool = False) -> bool:
+        try:
+            pid = int(SURICATA_PIDFILE.read_text().strip())
+        except (OSError, ValueError):
+            return False
+        if pid not in self.started_pids:
+            return False
+        if dead_only:
+            try:
+                return "suricata" not in (PROC_ROOT / str(pid) / "cmdline").read_bytes().decode("utf-8", "replace")
+            except OSError:
+                return True
+        return True
 
     def inject(self, source_type: str) -> None:
         if source_type == SO02_CAPTURE_PROCESS:
@@ -421,13 +511,24 @@ class _Lab:
         return self._ip("-n", self.peer_ns, "link", "set", "so02peer0", "up").returncode == 0
 
     def teardown(self) -> None:
-        if self.suricata_pid is not None:
-            try:
-                os.kill(self.suricata_pid, signal.SIGTERM)
-            except OSError:
-                pass
-            _reap(self.suricata_pid, timeout=10)
-            self.suricata_pid = None
+        """Stop everything the lab started. SIGTERM/SIGINT/SIGHUP are blocked
+        while it runs so a second signal cannot abort the cleanup. A harness
+        killed with SIGKILL cannot clean up: its namespaces (and the processes
+        in them) remain, and the next run's preflight refuses until they are
+        removed."""
+
+        blocked = {signal.SIGTERM, signal.SIGINT, signal.SIGHUP}
+        try:
+            old = signal.pthread_sigmask(signal.SIG_BLOCK, blocked)
+        except (AttributeError, ValueError, OSError):
+            old = None
+        try:
+            self._teardown()
+        finally:
+            if old is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, old)
+
+    def _teardown(self) -> None:
         for proc in reversed(self.procs):
             if proc.poll() is None:
                 try:
@@ -442,7 +543,25 @@ class _Lab:
                     os.killpg(proc.pid, signal.SIGKILL)
                 except OSError:
                     pass
-        if self.pidfile_ours:
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+        # Whatever still runs inside the lab namespaces -- a daemonized
+        # Suricata whose pid was never read, or one started by a failed
+        # recovery -- is found by its network namespace, not by a pid we hold.
+        for ns in self.netns_created:
+            for sig, wait in ((signal.SIGTERM, 10.0), (signal.SIGKILL, 5.0)):
+                pids = [p for p in _pids_in_netns(NETNS_ROOT / ns) if p != os.getpid()]
+                for pid in pids:
+                    try:
+                        os.kill(pid, sig)
+                    except OSError:
+                        pass
+                for pid in pids:
+                    _reap(pid, timeout=wait)
+        self.suricata_pid = None
+        if SURICATA_PIDFILE.exists() and self._pidfile_is_ours():
             try:
                 SURICATA_PIDFILE.unlink()
             except OSError:
@@ -497,6 +616,10 @@ def _measure(lab: _Lab, poller: _Poller, samples: int, rows: List[Dict[str, Any]
             "polls_after_injection": 0,
             "poll_errors_after_injection": 0,
             "recovered": False,
+            # Diagnostic stage stamps (wall clock, never used for the verdict).
+            "injection_wall_epoch": None,
+            "end_noc_updated_epoch": None,
+            "end_snapshot_epoch": None,
         }
         if base_row is None:
             # No healthy baseline: nothing is injected, the sample never ends,
@@ -504,6 +627,7 @@ def _measure(lab: _Lab, poller: _Poller, samples: int, rows: List[Dict[str, Any]
             row["start_monotonic_ns"] = time.monotonic_ns()
             rows.append(row)
             return
+        row["injection_wall_epoch"] = time.time()
         start_ns = time.monotonic_ns()
         lab.inject(source_type)
         row["start_monotonic_ns"] = start_ns
@@ -514,6 +638,8 @@ def _measure(lab: _Lab, poller: _Poller, samples: int, rows: List[Dict[str, Any]
             row["end_poll_started_monotonic_ns"] = end_row["s"]
             row["end_surface_value"] = _surface_value(source_type, end_row)
             row["end_monotonic_ns"] = end_row["e"]
+            row["end_noc_updated_epoch"] = end_row.get("noc_updated_epoch")
+            row["end_snapshot_epoch"] = end_row.get("snapshot_epoch")
             if so02_failure_observed(row):
                 row["elapsed_ms"] = round((end_row["e"] - start_ns) / 1e6, 3)
             else:
@@ -553,7 +679,7 @@ def run(*, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None) -> Dict[
                     raise RuntimeError("Suricata did not start on the lab capture interface")
                 built = True
                 build_detail = f"namespaces {lab.edge_ns}/{lab.peer_ns}; {CAPTURE_IFACE} bridge with one veth port; {pre['suricata_version']}"
-                lab.start_stack()
+                notes.append("control daemon flags checked before start: " + lab.start_stack())
                 poller = lab.start_poller()
                 first, _, _ = poller.wait_for(_healthy, begun_after_ns=started_ns, timeout_s=STACK_START_TIMEOUT_S)
                 stack_ok = first is not None
@@ -568,6 +694,8 @@ def run(*, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None) -> Dict[
                 notes.append(f"harness stopped early: {exc}")
                 if not built:
                     build_detail = str(exc)
+                elif not stack_ok:
+                    stack_detail = str(exc)
             finally:
                 lab.teardown()
                 for sig, handler in previous.items():

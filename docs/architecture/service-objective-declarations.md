@@ -175,18 +175,38 @@ What Edge already does, and what the harness measures without changing it:
 - **Capture process death.** `GET /api/state` computes `monitoring.suricata`
   on every request (`azazel_edge_web/app.py` `get_monitoring_state`): `OFF`
   once the Suricata unit is inactive or the pid in `/run/suricata.pid` is gone.
+  The lab has no systemd, so it measures the pidfile-liveness path only; the
+  production `systemctl is-active` path is not measured.
 - **Capture interface link down.** The control daemon's NOC projection lists in
   `noc_blast_radius.affected_uplinks` every interface whose path probes fail
   (`py/azazel_edge/evaluators/noc.py` `_evaluate_affected_scope`). `br0` is
   Edge's default capture interface (`SURICATA_IFACE`) and internal monitor
-  bridge. The projection refreshes at most every `AZAZEL_NOC_REFRESH_SEC`
-  (default 20 s) and the snapshot every `AZAZEL_SNAPSHOT_REFRESH_SEC`
-  (default 12 s); the harness measures those defaults and does not shorten them.
+  bridge. The daemon's defaults are `AZAZEL_NOC_REFRESH_SEC` 20 s and
+  `AZAZEL_SNAPSHOT_REFRESH_SEC` 12 s; the harness runs on those defaults and
+  does not shorten them. It measures only the total from injection to the
+  surface. Each sample also carries wall-clock stage stamps (the injection,
+  the `noc_runtime.updated_epoch` and `snapshot_epoch` the surface showed at
+  the end) for diagnosis; they do not attribute the probe-collection time and
+  are never read for the verdict.
 
 The harness builds two network namespaces, runs the control daemon, the web UI
 under gunicorn and Suricata on `br0` inside them, injects each failure ten
-times, and polls the surface with a viewer-role token. It refuses to start when
-a Suricata is already running, so it never touches a live capture.
+times, and polls the surface with a viewer-role token.
+
+It refuses to start (record `not_measurable`, nothing created) when a Suricata
+is running, `/run/suricata.pid` exists, a lab namespace from an earlier run is
+left over, or PyYAML is missing. Without PyYAML the daemon would ignore the
+lab's `suppress_auto_wifi: false` and run `nmcli` against the host. Before it
+starts the daemon, it also asks the daemon's own `load_control_flags()`, in
+the lab environment, and stops unless the answer is `false`.
+
+On teardown, SIGTERM, SIGINT and SIGHUP are blocked. The harness stops every
+process inside its namespaces, found by network-namespace inode, so a
+daemonized Suricata whose pid was never read is stopped too. It removes
+`/run/suricata.pid` only if the file names a Suricata the harness started. A
+harness killed with SIGKILL cannot clean up: its `so02e-*`/`so02p-*`
+namespaces and the processes in them remain, and the next run refuses until
+they are removed (`ip netns pids <ns> | xargs -r kill; ip netns del <ns>`).
 
 The row stays `not_measurable` because of three gaps the owner has to close:
 the configuration is not Edge integrated into a Nexus Core install
@@ -202,8 +222,21 @@ No harness is built, because the behaviour SO-05 measures does not exist in Edge
 
 - **No `CORE ONLY` capability state.** No code, configuration or surface in this
   repository has such a state.
-- **Nothing reflects a local-model failure as a capability state.** The AI
-  agent's only runtime policy is `normal` / `degraded`
+
+What does reflect model failure today, and why it is not this state:
+
+- **`llm.status` on the surface** (`azazel_edge_web/app.py`
+  `situation_board.threat_posture.llm_status`, shown as "LLM Status"). It is
+  the outcome of the AI agent's last LLM call for an advisory
+  (`py/azazel_edge_ai/agent.py` `advisory["llm"]`): `fallback` with a reason
+  when the model call failed, or else `completed`, `queued`, `deferred`,
+  `skipped_non_ambiguous` or `disabled`. The daemon resets it to `idle` once
+  the advisory expires. It changes only when an ambiguous event triggers a
+  model call, so a model that dies while no such event arrives never changes
+  it. It reports one request, not the node's capability. Its reason goes to
+  the AI event JSONL, not to the audit chain.
+- **Nothing reflects a local-model failure as a capability state.** Beyond
+  `llm.status`, the AI agent's only runtime policy is `normal` / `degraded`
   (`py/azazel_edge_ai/agent.py` `_set_policy_mode`, `_recompute_policy`). It
   switches only on answer-quality ratios after at least 10 requests, chooses a
   smaller model, and is written to the policy and metrics files. It is not a

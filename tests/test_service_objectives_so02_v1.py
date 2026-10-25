@@ -47,7 +47,7 @@ def no_gap_table(monkeypatch):
 
 def _sample(i: int, source_type: str, elapsed_ms: float) -> dict:
     entry = rec.SO02_SURFACE[source_type]
-    start = 10_000_000_000 + i * 1_000_000_000
+    start = 10_000_000_000 + i * 100_000_000_000  # 100 s apart: no overlap
     end = start + int(elapsed_ms * 1e6)
     return {
         "sample_id": f"so02-{source_type}-{i:02d}",
@@ -285,9 +285,10 @@ class _FakePoller:
     """Answers wait_for from a script: per call, the delay after begun_after_ns
     and the row content, or None for "nothing seen"."""
 
-    def __init__(self, script):
+    def __init__(self, script, clock=None):
         self.script = list(script)
         self.calls = []
+        self.clock = clock
 
     def wait_for(self, predicate, *, begun_after_ns, timeout_s):
         self.calls.append(begun_after_ns)
@@ -297,6 +298,8 @@ class _FakePoller:
         delay_ns, row = step
         row = dict(row, s=begun_after_ns + delay_ns, e=begun_after_ns + delay_ns + 1_000_000, ok=True)
         assert predicate(row), row
+        if self.clock is not None:
+            self.clock.now = row["e"] + 1  # the response has arrived
         return row, 2, 0
 
 
@@ -315,15 +318,35 @@ class _FakeLab:
 HEALTHY = {"suricata": "ON", "uplinks": ["usb0"]}
 
 
-def test_measure_times_from_injection_to_the_failed_poll():
+class _Clock:
+    def __init__(self):
+        self.now = 5_000_000_000
+
+    def monotonic_ns(self):
+        self.now += 1000
+        return self.now
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    import time as _time
+    from types import SimpleNamespace
+
+    c = _Clock()
+    monkeypatch.setattr(so02, "time", SimpleNamespace(monotonic_ns=c.monotonic_ns, time=_time.time, monotonic=_time.monotonic, sleep=_time.sleep))
+    return c
+
+
+def test_measure_times_from_injection_to_the_failed_poll(clock):
     lab = _FakeLab()
-    poller = _FakePoller(
+    poller = _FakePoller(clock=clock, script=
         [
             (1, HEALTHY), (5_000_000, {"suricata": "OFF", "uplinks": ["usb0"]}),
             (1, HEALTHY), (30_000_000_000, {"suricata": "ON", "uplinks": ["br0", "usb0"]}),
-        ]
+        ],
     )
     rows = []
+    before = so02.time.monotonic_ns()
     so02._measure(lab, poller, 2, rows)
     assert [r["source_type"] for r in rows] == [PROC, IFACE]
     assert lab.events == [("inject", PROC), ("recover", PROC), ("inject", IFACE), ("recover", IFACE)]
@@ -332,6 +355,18 @@ def test_measure_times_from_injection_to_the_failed_poll():
         assert r["end_poll_started_monotonic_ns"] >= r["start_monotonic_ns"]
     assert 5 <= rows[0]["elapsed_ms"] < 10
     assert rows[1]["elapsed_ms"] > 30_000
+    # The waits are anchored where the definition puts them: each baseline
+    # after the previous recovery (never from the beginning of time), each end
+    # at the sample's own injection stamp.
+    base0, end0, base1, end1 = poller.calls
+    assert base0 >= before > 0
+    assert end0 == rows[0]["start_monotonic_ns"]
+    assert base1 > rows[0]["end_monotonic_ns"] and base1 > end0
+    assert end1 == rows[1]["start_monotonic_ns"]
+    # The end instant is when the failed poll's response arrived, not when it began.
+    for r in rows:
+        assert r["end_monotonic_ns"] - r["end_poll_started_monotonic_ns"] == 1_000_000
+    assert rec.so02_sequence_problems(rows) == []
 
 
 def test_measure_never_ends_a_sample_without_a_failed_poll():
@@ -392,3 +427,155 @@ def test_forged_end_is_recomputed_as_unfinished(clean_owner, no_gap_table):
     record["parts"][0]["samples"][0]["end_surface_value"] = "ON"
     errors = rec.validate_record(record)
     assert any("record supports 'fail'" in e for e in errors), errors
+
+
+# --------------------------------------------- forged runs (review of #442)
+
+
+def test_copied_samples_under_new_ids_are_refused(clean_owner, no_gap_table):
+    """Ten honest samples of each type, padded out by copying them under new
+    sample ids, overlap their originals in time and are refused."""
+
+    honest = _samples()[:10]
+    copies = []
+    for k, s in enumerate(honest):
+        c = copy.deepcopy(s)
+        c["sample_id"] = f"copy-{k}"
+        copies.append(c)
+    record = _record(honest + copies)
+    errors = rec.validate_record(record)
+    assert any("injected before the previous sample ended" in e for e in errors), errors
+
+
+@pytest.mark.parametrize(
+    "mutate, needle",
+    [
+        (lambda s: s.update(end_monotonic_ns=s["start_monotonic_ns"], elapsed_ms=0.0, end_poll_started_monotonic_ns=s["start_monotonic_ns"]), "strictly after"),
+        (lambda s: s.update(polls_after_injection=0), "at least one poll"),
+        (lambda s: s.update(baseline_poll_started_monotonic_ns=1), "baseline polled before"),
+    ],
+)
+def test_sequence_rules(clean_owner, mutate, needle):
+    record = _record(_samples())
+    mutate(record["parts"][0]["samples"][3])
+    errors = rec.validate_record(record)
+    assert any(needle in e for e in errors), errors
+
+
+def test_out_of_order_samples_are_refused(clean_owner):
+    record = _record(_samples())
+    ss = record["parts"][0]["samples"]
+    ss[4], ss[5] = ss[5], ss[4]
+    assert any("out of order" in e for e in rec.validate_record(record))
+
+
+class _FakeProc:
+    def __init__(self, lines):
+        self.stdout = iter(lines)
+
+    def poll(self):
+        return None
+
+
+def _line(**row):
+    import json as _json
+
+    return _json.dumps(row) + "\n"
+
+
+def test_real_poller_ignores_polls_begun_before_the_anchor():
+    lines = [
+        _line(s=100, e=150, ok=True, suricata="OFF"),   # failed, but begun before the injection
+        _line(s=199, e=260, ok=True, suricata="OFF"),   # still before
+        _line(s=200, e=230, ok=False, err="x"),          # after, error
+        _line(s=210, e=240, ok=True, suricata="ON"),
+        _line(s=300, e=340, ok=True, suricata="OFF"),   # the end
+    ]
+    poller = so02._Poller(_FakeProc(lines))
+    poller.thread.join(timeout=5)
+    row, seen, errors = poller.wait_for(lambda r: r.get("suricata") == "OFF", begun_after_ns=200, timeout_s=1)
+    assert row["s"] == 300 and row["e"] == 340
+    assert (seen, errors) == (3, 1)
+    none, seen, _ = poller.wait_for(lambda r: r.get("suricata") == "OFF", begun_after_ns=301, timeout_s=0.2)
+    assert none is None and seen == 0
+
+
+def _preflight_env(monkeypatch, tmp_path, *, pidfile=False, procs=(), netns=()):
+    monkeypatch.setattr(so02.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(so02.shutil, "which", lambda name: None if name == "systemctl" else f"/usr/bin/{name}")
+    monkeypatch.setattr(so02, "SURICATA_CONFIG", tmp_path / "suricata.yaml")
+    (tmp_path / "suricata.yaml").write_text("", encoding="utf-8")
+    monkeypatch.setattr(so02, "_run", lambda argv, timeout=0: so02.subprocess.CompletedProcess(argv, 0, "x 1\n", ""))
+    pid = tmp_path / "suricata.pid"
+    if pidfile:
+        pid.write_text("4242", encoding="utf-8")
+    monkeypatch.setattr(so02, "SURICATA_PIDFILE", pid)
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    for n, cmd in procs:
+        (proc / str(n)).mkdir()
+        (proc / str(n) / "cmdline").write_bytes(cmd)
+    monkeypatch.setattr(so02, "PROC_ROOT", proc)
+    ns = tmp_path / "netns"
+    ns.mkdir()
+    for name in netns:
+        (ns / name).write_text("", encoding="utf-8")
+    monkeypatch.setattr(so02, "NETNS_ROOT", ns)
+
+
+def test_preflight_clean(monkeypatch, tmp_path):
+    _preflight_env(monkeypatch, tmp_path, procs=[(1, b"/sbin/init\0")])
+    pre = so02.preflight()
+    assert pre["problems"] == [] and pre["live_capture"] == []
+
+
+@pytest.mark.parametrize(
+    "kw, needle",
+    [
+        ({"pidfile": True}, "suricata.pid exists"),
+        ({"procs": [(77, b"/usr/bin/suricata\0-i\0eth0\0")]}, "suricata already running (pid [77])"),
+        ({"netns": ["so02e-abc123"]}, "left by an earlier run"),
+    ],
+)
+def test_preflight_refuses_a_live_or_leftover_capture(monkeypatch, tmp_path, kw, needle):
+    _preflight_env(monkeypatch, tmp_path, **kw)
+    pre = so02.preflight()
+    assert any(needle in x for x in pre["live_capture"]), pre
+
+
+def test_preflight_refuses_without_pyyaml(monkeypatch, tmp_path):
+    _preflight_env(monkeypatch, tmp_path)
+    real = so02._run
+    monkeypatch.setattr(
+        so02,
+        "_run",
+        lambda argv, timeout=0: so02.subprocess.CompletedProcess(argv, 1 if argv[-1] == "import yaml" else 0, "x 1\n", ""),
+    )
+    del real
+    assert any("PyYAML" in p for p in so02.preflight()["problems"])
+
+
+def test_daemon_must_confirm_it_will_not_touch_wifi(monkeypatch, tmp_path):
+    lab = so02._Lab(tmp_path, "/usr/bin/suricata")
+    for out, ok in (('{"suppress_auto_wifi": true}', False), ("", False), ('{"suppress_auto_wifi": false}', True)):
+        monkeypatch.setattr(so02, "_run", lambda argv, timeout=0, out=out: so02.subprocess.CompletedProcess(argv, 0, out + "\n", ""))
+        if ok:
+            assert "false" in lab.verify_daemon_flags()
+        else:
+            with pytest.raises(RuntimeError):
+                lab.verify_daemon_flags()
+
+
+def test_pidfile_is_removed_only_if_it_names_our_suricata(monkeypatch, tmp_path):
+    pid = tmp_path / "suricata.pid"
+    monkeypatch.setattr(so02, "SURICATA_PIDFILE", pid)
+    monkeypatch.setattr(so02, "PROC_ROOT", tmp_path)
+    lab = so02._Lab(tmp_path / "w", "/usr/bin/suricata")
+    lab.started_pids = [111]
+    pid.write_text("222", encoding="utf-8")
+    assert lab._pidfile_is_ours() is False
+    pid.write_text("111", encoding="utf-8")
+    assert lab._pidfile_is_ours() is True
+    (tmp_path / "111").mkdir()
+    (tmp_path / "111" / "cmdline").write_bytes(b"suricata\0")
+    assert lab._pidfile_is_ours(dead_only=True) is False
