@@ -70,6 +70,7 @@ class DecisionStreamTraceabilityV1Tests(unittest.TestCase):
                 trace_id='trace-traceability-1',
                 config_path=config,
             )
+            controller.close()  # stop the P0 alert relay before the directory goes
 
         self.assertTrue(decision.get('redirect'), "evaluate() must return redirect=True")
 
@@ -152,6 +153,7 @@ class DecisionStreamTraceabilityV1Tests(unittest.TestCase):
                 for line in audit_path.read_text(encoding='utf-8').splitlines()
                 if line.strip()
             ]
+            controller.close()
 
         action_decision_records = [r for r in records if r.get('kind') == 'action_decision']
         self.assertEqual(len(action_decision_records), 1)
@@ -202,6 +204,7 @@ class DecisionStreamTraceabilityV1Tests(unittest.TestCase):
                 target_ip='192.168.40.50',
                 trace_id='trace-no-redirect',
             )
+            controller.close()
         self.assertFalse(decision.get('redirect'))
         self.assertEqual(decision.get('reason'), 'arbiter_not_redirect')
 

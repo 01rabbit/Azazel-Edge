@@ -35,6 +35,7 @@ class OpenCanaryRedirectV1Tests(unittest.TestCase):
                 config_path=config,
             )
             applied = controller.apply(decision)
+            controller.close()  # stop the P0 alert relay before the directory goes
         self.assertTrue(decision['redirect'])
         self.assertTrue(applied['applied'])
 
@@ -52,6 +53,7 @@ class OpenCanaryRedirectV1Tests(unittest.TestCase):
                 target_ip='192.168.40.50',
                 trace_id='trace-1',
             )
+            controller.close()
         self.assertFalse(decision['redirect'])
 
     def test_redirect_execution_is_audited(self) -> None:
@@ -74,6 +76,7 @@ class OpenCanaryRedirectV1Tests(unittest.TestCase):
             )
             controller.apply(decision)
             records = [json.loads(line) for line in audit_path.read_text(encoding='utf-8').splitlines()]
+            controller.close()
         self.assertEqual(records[-1]['kind'], 'action_decision')
         self.assertTrue(records[-1]['redirect'])
 

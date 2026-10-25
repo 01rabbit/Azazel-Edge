@@ -1,6 +1,7 @@
-"""SO-03 records (Edge#414): the decision record is durable, the enqueue record
-names the decision and carries a record-only P0 class, and the harness and
-validator measure from those records instead of from declarations.
+"""SO-03 records (Edge#414): the decision record is durable, and the
+DecisionNotifier/OfflineQueueNotifier enqueue record names the decision and
+carries a record-only alert class. The SO-03 harness and validator now measure
+the P0 alert path (tests/test_service_objectives_so03_p0_queue_v1.py).
 
 Most tests take a record away, or make it disagree, and expect the row to
 become not_measurable or fail -- never pass.
@@ -8,7 +9,6 @@ become not_measurable or fail -- never pass.
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import sys
@@ -24,32 +24,9 @@ from azazel_edge.audit import P0AuditLogger  # noqa: E402
 import azazel_edge.audit.logger as logger_mod  # noqa: E402
 from azazel_edge.notify import DecisionNotifier, OfflineQueueNotifier  # noqa: E402
 import azazel_edge.notify.delivery as delivery  # noqa: E402
-from azazel_edge.service_objectives import record as rec  # noqa: E402
-from azazel_edge.service_objectives import so03_alert_queue  # noqa: E402
 
-PART = "decision_durable_to_alert_enqueued"
 CRITICAL = {"action": "notify", "reason": "soc_high_but_noc_fragile", "chosen_evidence_ids": ["ev-1"]}
 WARNING = {"action": "notify", "reason": "noc_degraded_requires_operator_attention", "chosen_evidence_ids": ["ev-2"]}
-
-
-@pytest.fixture
-def clean_owner(monkeypatch):
-    monkeypatch.setattr(
-        rec, "owner_block", lambda: {"repository": rec.OWNING_REPOSITORY, "commit": "a" * 40, "worktree_clean": True}
-    )
-
-
-@pytest.fixture
-def closed_table(monkeypatch):
-    """The SO-03 row as it would be once the visual/voice queue and the P0 alert
-    path exist: same bound and sample count, those two gaps and the queue
-    prerequisite removed, every record prerequisite kept."""
-
-    row = dict(rec.OBJECTIVE_SPECS["SO-03"][PART])
-    row["prerequisites"] = tuple(p for p in row["prerequisites"] if p != "visual_voice_delivery_queue_declared")
-    row["gaps"] = ()
-    monkeypatch.setitem(rec.OBJECTIVE_SPECS, "SO-03", {PART: row})
-    return row
 
 
 class _Spy:
@@ -69,14 +46,6 @@ class _Spy:
     def synced(self, path: Path) -> int:
         st = os.stat(path)
         return self.calls.count((st.st_dev, st.st_ino))
-
-
-def _part(record):
-    return record["parts"][0]
-
-
-def _prereqs(record):
-    return {p["id"]: p["met"] for p in _part(record)["prerequisites"]}
 
 
 # ----------------------------------------------------------------- records
@@ -385,195 +354,6 @@ def test_flush_keeps_entries_enqueued_while_delivering(tmp_path):
     result = queue.flush()
     assert result == {"flushed": 2, "failed": 0, "remaining": 1}
     assert [e["decision_id"] for e in _rows(qpath)] == ["late"]
-
-
-# ----------------------------------------------------------------- harness
-
-
-def test_closed_table_full_run_passes(clean_owner, closed_table):
-    record = so03_alert_queue.run(seed=3)
-    assert rec.validate_record(record) == []
-    assert record["verdict"] == rec.VERDICT_PASS, _prereqs(record)
-    assert len(_part(record)["samples"]) == 200
-    assert all(_prereqs(record).values())
-
-
-def test_real_table_full_run_is_not_measurable_only_for_what_does_not_exist():
-    record = so03_alert_queue.run(seed=3)
-    assert rec.validate_record(record) == []
-    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
-    unmet = [k for k, v in _prereqs(record).items() if not v]
-    assert unmet == ["visual_voice_delivery_queue_declared"]
-    assert [g["id"] for g in _part(record)["gaps"]] == ["SO03-NO-VISUAL-VOICE-QUEUE", "SO03-NO-P0-ALERT-PATH"]
-
-
-def test_slow_enqueue_fails(clean_owner, closed_table, monkeypatch):
-    real = OfflineQueueNotifier.send
-    calls = {"n": 0}
-
-    def slow(self, payload):
-        calls["n"] += 1
-        if calls["n"] == 7:
-            time.sleep(2.05)
-        return real(self, payload)
-
-    monkeypatch.setattr(OfflineQueueNotifier, "send", slow)
-    record = so03_alert_queue.run(seed=3)
-    assert rec.validate_record(record) == []
-    assert record["verdict"] == rec.VERDICT_FAIL
-    assert _part(record)["pass_rule"]["evaluated"]["violations"] == 1
-
-
-def _without_decision_id(self, payload):
-    out = _real_summary(self, payload)
-    out["decision_id"] = ""
-    return out
-
-
-_real_summary = OfflineQueueNotifier._summary_payload
-
-
-def test_enqueue_record_missing_is_not_measurable(clean_owner, closed_table, monkeypatch):
-    monkeypatch.setattr(OfflineQueueNotifier, "send", lambda self, payload: {"ok": True, "adapter": "offline_queue"})
-    record = so03_alert_queue.run(seed=3)
-    assert rec.validate_record(record) == []
-    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
-    assert _prereqs(record)["enqueue_record_names_decision_id"] is False
-    # Each sample whose end event never happened is unfinished, not fast.
-    assert all(s["end_monotonic_ns"] is None for s in _part(record)["samples"])
-
-
-def test_enqueue_record_without_prerequisite_would_fail_not_pass(clean_owner, closed_table, monkeypatch):
-    # Even with the naming prerequisite dropped from the table, a sample with
-    # no record naming its decision is unfinished and the rule fails.
-    row = dict(closed_table)
-    row["prerequisites"] = ()
-    monkeypatch.setitem(rec.OBJECTIVE_SPECS, "SO-03", {PART: row})
-    monkeypatch.setattr(OfflineQueueNotifier, "_summary_payload", _without_decision_id)
-    record = so03_alert_queue.run(seed=3)
-    assert rec.validate_record(record) == []
-    assert record["verdict"] == rec.VERDICT_FAIL
-
-
-def test_enqueue_record_naming_another_decision_is_not_measurable(clean_owner, closed_table, monkeypatch):
-    def other(self, payload):
-        out = _real_summary(self, payload)
-        out["decision_id"] = "so03-decision-9999"
-        return out
-
-    monkeypatch.setattr(OfflineQueueNotifier, "_summary_payload", other)
-    record = so03_alert_queue.run(seed=3)
-    assert rec.validate_record(record) == []
-    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
-    assert _prereqs(record)["enqueue_record_names_decision_id"] is False
-
-
-def test_notification_record_not_naming_the_decision_is_not_measurable(clean_owner, closed_table, monkeypatch):
-    real_log = P0AuditLogger.log_reporting_durability
-
-    def log(self, kind, trace_id, source, **payload):
-        if kind == "notification":
-            payload["decision_id"] = ""
-        return real_log(self, kind, trace_id, source, **payload)
-
-    monkeypatch.setattr(P0AuditLogger, "log_reporting_durability", log)
-    record = so03_alert_queue.run(seed=3)
-    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
-    assert _prereqs(record)["enqueue_record_names_decision_id"] is False
-
-
-def test_stale_enqueue_stamp_is_not_this_samples_record(clean_owner, closed_table, monkeypatch):
-    def stale(self, payload):
-        out = _real_summary(self, payload)
-        out["enqueued_monotonic_ns"] = 1
-        return out
-
-    monkeypatch.setattr(OfflineQueueNotifier, "_summary_payload", stale)
-    record = so03_alert_queue.run(seed=3)
-    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
-    assert _prereqs(record)["enqueue_record_names_decision_id"] is False
-
-
-def test_missing_p0_class_is_not_measurable(clean_owner, closed_table, monkeypatch):
-    monkeypatch.setattr(delivery, "classify_alert", lambda action, level: "")
-    record = so03_alert_queue.run(seed=3)
-    assert rec.validate_record(record) == []
-    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
-    assert _prereqs(record)["enqueue_record_classifies_p0"] is False
-
-
-def test_decision_record_not_fsynced_is_not_measurable(clean_owner, closed_table, monkeypatch):
-    monkeypatch.setattr(logger_mod, "DURABLE_KINDS", frozenset({"notification"}))
-    record = so03_alert_queue.run(seed=3)
-    assert rec.validate_record(record) == []
-    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
-    assert _prereqs(record)["decision_and_enqueue_records_fsynced"] is False
-
-
-def test_enqueue_record_not_fsynced_is_not_measurable(clean_owner, closed_table, monkeypatch):
-    monkeypatch.setattr(delivery, "fsync_path", lambda path: None)
-    record = so03_alert_queue.run(seed=3)
-    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
-    assert _prereqs(record)["decision_and_enqueue_records_fsynced"] is False
-
-
-def test_broken_chain_is_not_measurable(clean_owner, closed_table, monkeypatch):
-    real = P0AuditLogger.verify_chain
-    monkeypatch.setattr(P0AuditLogger, "verify_chain", classmethod(lambda cls, path: dict(real(path), ok=False, error="x")))
-    record = so03_alert_queue.run(seed=3, samples=5)
-    assert _prereqs(record)["alert_audit_chain_verifies"] is False
-
-
-# --------------------------------------------------------------- validator
-
-
-@pytest.fixture(scope="module")
-def genuine_pass():
-    mp = pytest.MonkeyPatch()
-    try:
-        mp.setattr(rec, "owner_block", lambda: {"repository": rec.OWNING_REPOSITORY, "commit": "a" * 40, "worktree_clean": True})
-        row = dict(rec.OBJECTIVE_SPECS["SO-03"][PART])
-        row["prerequisites"] = tuple(p for p in row["prerequisites"] if p != "visual_voice_delivery_queue_declared")
-        row["gaps"] = ()
-        mp.setitem(rec.OBJECTIVE_SPECS, "SO-03", {PART: row})
-        record = so03_alert_queue.run(seed=5)
-        assert record["verdict"] == rec.VERDICT_PASS
-        yield record, row
-    finally:
-        mp.undo()
-
-
-@pytest.mark.parametrize(
-    "field,value,prereq",
-    [
-        ("enqueue_record_decision_id", "so03-decision-9999", "enqueue_record_names_decision_id"),
-        ("notification_audit_decision_id", None, "enqueue_record_names_decision_id"),
-        ("edge_enqueued_monotonic_ns", 1, "enqueue_record_names_decision_id"),
-        ("enqueue_record_alert_class", "", "enqueue_record_classifies_p0"),
-        ("decision_record_fsynced", False, "decision_and_enqueue_records_fsynced"),
-        ("enqueue_record_fsynced", False, "decision_and_enqueue_records_fsynced"),
-    ],
-)
-def test_validator_recomputes_record_prerequisites_from_samples(genuine_pass, monkeypatch, field, value, prereq):
-    record, row = genuine_pass
-    monkeypatch.setitem(rec.OBJECTIVE_SPECS, "SO-03", {PART: row})
-    forged = copy.deepcopy(record)
-    forged["parts"][0]["samples"][42][field] = value
-    errors = rec.validate_record(forged)
-    assert any(f"prerequisite {prereq!r} declared met but the samples do not show it" in e for e in errors), errors
-    assert any("record supports 'not_measurable'" in e for e in errors), errors
-
-
-def test_validator_accepts_the_genuine_pass(genuine_pass, monkeypatch):
-    record, row = genuine_pass
-    monkeypatch.setitem(rec.OBJECTIVE_SPECS, "SO-03", {PART: row})
-    assert rec.validate_record(record) == []
-
-
-def test_fixed_row_bound_and_samples_are_unchanged():
-    row = rec.OBJECTIVE_SPECS["SO-03"][PART]
-    assert row["bound_ms"] == 2000.0 and row["required_samples"] == 200 and row["kind"] == rec.RULE_EVERY_SAMPLE_MAX
-    assert set(rec.so03_observed_prerequisites([{}])) <= set(row["prerequisites"])
 
 
 def test_flush_keeps_entries_whose_delivery_failed(tmp_path):

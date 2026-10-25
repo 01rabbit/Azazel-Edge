@@ -8,6 +8,7 @@ from .delivery import (
     SyslogCEFNotifier,
     WebhookNotifier,
 )
+from .p0_alert import P0AlertQueue, P0AlertRelay, attach_p0_alert_relay, classify_p0
 
 __all__ = [
     'DecisionNotifier',
@@ -18,4 +19,8 @@ __all__ = [
     'SyslogCEFNotifier',
     'OfflineQueueNotifier',
     'NotificationError',
+    'P0AlertQueue',
+    'P0AlertRelay',
+    'attach_p0_alert_relay',
+    'classify_p0',
 ]

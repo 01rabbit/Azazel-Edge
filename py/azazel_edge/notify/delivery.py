@@ -40,9 +40,10 @@ class NotificationError(RuntimeError):
 
 # Alert class, recorded for measurement only (Edge#414, SO-03). Nothing reads
 # it to route, rank, suppress or escalate an alert: the adapters, their order
-# and the level are what they were before the class existed. Which decisions
-# are P0 is the owner's to define; this rule names the only alert Edge treats
-# as most urgent today (an arbiter 'notify' at level 'critical').
+# and the level are what they were before the class existed. It labels this
+# notifier's own alerts only. The owner's P0 definition (enforcement-bearing
+# decision or SOC critical) and the P0 visual/voice queue SO-03 measures are
+# in azazel_edge.notify.p0_alert.
 ALERT_CLASS_P0 = 'P0'
 ALERT_CLASS_RULE = 'edge-alert-class/v1:notify-at-critical-is-P0'
 
