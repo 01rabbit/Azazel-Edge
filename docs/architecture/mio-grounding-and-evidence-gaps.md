@@ -42,13 +42,29 @@ recommend ──► validate_raw + validate_recommendation + audit_claims ──
 
 ## Evidence-gap scoring (`score_evidence_gaps`)
 
-Policy `mio-evidence-gap-score` version `1.0.0`. The weights, cost classes and
-threshold are digested by `scoring_policy_digest()`; the digest and version are written
-to the `evidence_gap_scores` trace event, so a scoring change is visible in replay.
+Policy `mio-evidence-gap-score` version `1.1.0`. `scoring_policy_digest()` covers the
+version, the weights, the cost classes, the threshold and `RULE_LOGIC` (a canonical prose
+description of the rules); the digest and version are written to the
+`evidence_gap_scores` trace event. The digest cannot see code: **any change to the
+scoring logic must bump `SCORING_POLICY_VERSION` and update `RULE_LOGIC` in the same
+change.**
 
-The function is pure: identical inputs give identical output regardless of input order.
-Eligible gaps are ordered by score descending, then `gap_id` ascending. Ineligible gaps
+The function is pure and greedy: identical inputs give identical output regardless of
+input order. At each step the best eligible gap (score descending, then `gap_id`
+ascending) is chosen; its capability then counts as already collected for the remaining
+gaps and it consumes one unit of the remaining cycle broker budget. Ineligible gaps
 follow and are **never** sent to the broker.
+
+### Which model-controlled fields can move a score
+
+Only facts tied to the current, validated hypotheses count:
+
+- `targets` = the gap's `discriminates_hypothesis_ids` that name a current hypothesis
+  that is not `falsified`/`superseded` (duplicates and invented ids are ignored);
+- `targets_falsifiable_hypothesis` needs a non-blank falsification condition on a target;
+- the model's `priority` is a hint for **ordering only**: the eligibility threshold is
+  applied to the structural score (score minus `model_priority_hint`), so priority can
+  never lift a gap over the threshold on its own.
 
 ### Score rules (additive, integer)
 
@@ -85,6 +101,11 @@ tighter.
 
 ## Claim-to-reference audit (`audit_claims`)
 
+**Scope, stated plainly:** the audit checks that every cited ref *exists* in the current
+context and records *where it came from*. It does **not** judge whether a ref is relevant
+to, or actually supports, the claim text. Relevance remains a model/operator judgement,
+bounded by the playbook claim boundaries.
+
 Every cycle that reaches the recommendation step projects its output into claims and
 records one audit entry per claim in the `claim_audit` trace event
 (`schema: mio_claim_audit/v1`): claim id → cited refs (each with origin) → verdict.
@@ -94,19 +115,37 @@ records one audit entry per claim in the `claim_audit` trace event
 | `inference` | hypothesis with status proposed/active/unresolved/superseded | no | none; if unreferenced the verdict is `inference_unreferenced` (explicitly marked, not presented as fact) |
 | `evidence_assessment` | hypothesis `strengthened` | yes | ≥1 supporting ref |
 | `evidence_assessment` | hypothesis `falsified` | yes | ≥1 contradicting ref |
-| `evidence_assessment` | hypothesis `weakened` | yes | ≥1 ref of either kind |
+| `evidence_assessment` | hypothesis `weakened` | yes | ≥1 contradicting ref, or an explicit `missing_evidence` entry (verdict `weakened_by_named_gap`); a supporting-only ref does not count |
+| `evidence_assessment` | any hypothesis whose raw model `status` was not in the vocabulary | yes | always `unsupported_unparseable_status` |
 | `recommendation` | the advisory | yes | ≥1 evidence ref |
 
-Ref origins: `frame_evidence`, `frame_knowledge`, `broker_imported` (returned by the
-broker in this cycle, with the broker's own provenance/audit record), or `not_in_frame`.
+These rules are the same as the #385 lifecycle rules (`lifecycle._evidence_errors`),
+which usually reject such an update earlier; the claim audit is the per-claim record.
+`MioHypothesis.from_mapping` silently coerces an unknown status to `proposed`; the loop
+detects that from the raw model output (`unparseable_status_ids`) so the coercion is
+audited instead of silent.
 
-Verdicts: `supported`, `inference_unreferenced`, `unsupported_missing_refs`,
-`unsupported_unknown_ref` (any cited ref is `not_in_frame`).
+Ref origins: `frame_evidence`, `frame_knowledge`, `broker_imported` (returned by a broker
+result with `ok=True` in this cycle; refs on failed/timeout/stale results are not
+imported), or `not_in_frame`.
+
+Verdicts: `supported`, `inference_unreferenced`, `weakened_by_named_gap`,
+`unsupported_missing_refs`, `unsupported_unknown_ref` (any cited ref is `not_in_frame`),
+`unsupported_unparseable_status`.
 
 **Policy: `reject`.** If any material claim is unsupported, the cycle ends in
 `VALIDATION_REJECTED` with `unsupported_claim:<claim_id>:<verdict>` errors. Claims are
 never silently dropped while keeping the surrounding certainty, and never silently
 accepted. Edge's deterministic outputs are unaffected either way.
+
+## Deliberate behaviour changes in #386
+
+- Broker calls follow the greedy score order, not the model's raw `priority`.
+- Gaps that target no current hypothesis, name an unregistered capability, fall below
+  the threshold or exceed the cycle budget are dropped before the broker and reported as
+  `gap_not_eligible:<gap_id>:<code>` in the outcome errors (a cycle can still `COMPLETE`).
+- Only refs from successful broker results extend the cycle's allowed refs.
+- A generic-playbook cycle reports `generic_fallback:<reason>` in the outcome errors.
 
 ## Structural grounding (`GroundingValidator`)
 

@@ -7,14 +7,16 @@ recorded), and produces one audit record per claim:
 
     claim -> cited refs (with origin) -> verdict
 
-Unsupported material claims are never silently accepted. The configured policy
-is ``reject``: the cycle ends in ``VALIDATION_REJECTED`` with the claim ids in
+Unsupported material claims are never silently accepted. The audit checks that
+cited refs EXIST in the current context and records their ORIGIN; it does not
+judge whether a ref is relevant to, or actually supports, the claim text. The
+configured policy is ``reject``: the cycle ends in ``VALIDATION_REJECTED`` with the claim ids in
 the error list and the full audit in the trace. No LLM is consulted.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from .contracts import HypothesisStatus, MioHypothesis, MioRecommendation, MioSituationFrame
 
@@ -31,7 +33,9 @@ VERDICT_SUPPORTED = "supported"
 VERDICT_INFERENCE_UNREFERENCED = "inference_unreferenced"
 VERDICT_MISSING_REFS = "unsupported_missing_refs"
 VERDICT_UNKNOWN_REF = "unsupported_unknown_ref"
-UNSUPPORTED_VERDICTS = frozenset({VERDICT_MISSING_REFS, VERDICT_UNKNOWN_REF})
+VERDICT_UNPARSEABLE_STATUS = "unsupported_unparseable_status"
+VERDICT_NAMED_GAP = "weakened_by_named_gap"  # weakened with no refuting ref but an explicit missing_evidence entry
+UNSUPPORTED_VERDICTS = frozenset({VERDICT_MISSING_REFS, VERDICT_UNKNOWN_REF, VERDICT_UNPARSEABLE_STATUS})
 
 ORIGIN_FRAME = "frame_evidence"
 ORIGIN_KNOWLEDGE = "frame_knowledge"
@@ -106,24 +110,61 @@ def _record(claim_id: str, claim_class: str, refs: Sequence[str], required: Sequ
     return ClaimAuditRecord(claim_id, claim_class, material, with_origin, VERDICT_SUPPORTED)
 
 
+_VALID_STATUSES = frozenset(s.value for s in HypothesisStatus)
+
+
+def unparseable_status_ids(items: Sequence[Any]) -> tuple[str, ...]:
+    """Hypothesis ids whose raw model ``status`` is present but not a valid status.
+
+    ``MioHypothesis.from_mapping`` silently maps such a status to ``proposed``;
+    this makes that coercion visible so the audit can flag it. Ids are derived the
+    same way ``from_mapping`` derives them (``hypothesis_id`` or ``h<ordinal>``).
+    """
+    out: list[str] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, Mapping):
+            continue
+        raw = item.get("status")
+        if raw is None or (isinstance(raw, str) and raw in _VALID_STATUSES):
+            continue
+        hid = MioHypothesis.from_mapping(item, ordinal=index + 1).hypothesis_id
+        out.append(hid)
+    return tuple(dict.fromkeys(out))
+
+
 def audit_claims(
     frame: MioSituationFrame,
     *,
     hypotheses: Sequence[MioHypothesis] = (),
     recommendation: MioRecommendation | None = None,
     imported_refs: Sequence[str] = (),
+    unparseable_status: Sequence[str] = (),
 ) -> ClaimAudit:
-    """Deterministically audit every claim in the cycle output."""
+    """Deterministically audit every claim in the cycle output.
+
+    Evidence requirements match the #385 lifecycle rules
+    (``lifecycle._evidence_errors``): strengthened needs a supporting ref;
+    falsified needs a contradicting ref; weakened needs a contradicting ref or an
+    explicit ``missing_evidence`` entry (recorded as ``weakened_by_named_gap``).
+    ``imported_refs`` must contain only refs from broker results with ``ok=True``.
+    """
     imported = {str(x) for x in imported_refs}
+    bad_status = {str(x) for x in unparseable_status}
     records: list[ClaimAuditRecord] = []
     for h in hypotheses:
         refs = list(h.supporting_evidence_refs) + list(h.contradicting_evidence_refs)
-        if h.status is HypothesisStatus.STRENGTHENED:
+        if h.hypothesis_id in bad_status:
+            with_origin = tuple((ref, _origin(ref, frame, imported)) for ref in dict.fromkeys(refs))
+            records.append(ClaimAuditRecord(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, True, with_origin, VERDICT_UNPARSEABLE_STATUS, "model_status_not_in_vocabulary_coerced_to_proposed"))
+        elif h.status is HypothesisStatus.STRENGTHENED:
             records.append(_record(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, refs, h.supporting_evidence_refs, frame, imported))
         elif h.status is HypothesisStatus.FALSIFIED:
             records.append(_record(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, refs, h.contradicting_evidence_refs, frame, imported))
         elif h.status is HypothesisStatus.WEAKENED:
-            records.append(_record(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, refs, None, frame, imported))
+            record = _record(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, refs, h.contradicting_evidence_refs, frame, imported)
+            if record.verdict == VERDICT_MISSING_REFS and h.missing_evidence:
+                record = ClaimAuditRecord(record.claim_id, record.claim_class, True, record.refs, VERDICT_NAMED_GAP, "missing_evidence:" + "|".join(h.missing_evidence)[:160])
+            records.append(record)
         else:
             records.append(_record(f"hypothesis:{h.hypothesis_id}", CLASS_INFERENCE, refs, None, frame, imported))
     if recommendation is not None:

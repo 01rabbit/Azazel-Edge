@@ -21,7 +21,14 @@ def run_replay(loop: BoundedReasoningLoop, fixture: ReplayFixture) -> ReasoningO
     return loop.run(frame=fixture.frame, playbook=playbook, cycle_id=f"replay:{fixture.fixture_id}")
 
 
-def run_selected(loop: BoundedReasoningLoop, frame: MioSituationFrame, *, cycle_id: str) -> ReasoningOutcome:
-    """Run with deterministic playbook selection; the generic fallback is recorded in provenance."""
-    selection = select_playbook(frame)
+def run_selected(
+    loop: BoundedReasoningLoop, frame: MioSituationFrame, *, cycle_id: str, requested_id: str | None = None
+) -> ReasoningOutcome:
+    """Run with deterministic playbook selection.
+
+    ``requested_id`` is a trusted caller choice (operator config), never model
+    output; an unregistered id falls back to generic (``explicit_unknown_fallback``).
+    Any generic fallback is recorded in provenance and as ``generic_fallback:<reason>``.
+    """
+    selection = select_playbook(frame, requested_id=requested_id)
     return loop.run(frame=frame, playbook=selection.playbook, cycle_id=cycle_id, selection=selection)

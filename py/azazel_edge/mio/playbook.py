@@ -322,6 +322,18 @@ def playbook_digest(playbook: ReasoningPlaybook) -> str:
     return _canonical_digest(_playbook_section(playbook))
 
 
+def selection_rules_digest() -> str:
+    """Digest of the deterministic selection table (keyword families + order)."""
+    return _canonical_digest(
+        {
+            "rules": [[pid, sorted(words)] for pid, words in SELECTION_RULES],
+            "deception_rule": "deception-observation-v1 if deception_status == available",
+            "token_fields": ["mission", "soc_summary", "noc_summary"],
+            "tie_policy": "exactly one candidate selects it; zero or several select generic",
+        }
+    )
+
+
 def template_digest() -> str:
     """Canonical digest of the trusted template: rules, limits, schemas, envelope."""
     return _canonical_digest(
@@ -366,6 +378,7 @@ def reasoning_provenance(playbook: ReasoningPlaybook, selection: PlaybookSelecti
         "template_id": PROMPT_TEMPLATE_ID,
         "template_version": PROMPT_TEMPLATE_VERSION,
         "template_digest": template_digest(),
+        "selection_rules_digest": selection_rules_digest(),
     }
 
 
@@ -388,7 +401,10 @@ _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 
 
 def _frame_tokens(frame: MioSituationFrame) -> set[str]:
-    text = " ".join([frame.mission, frame.soc_summary, frame.noc_summary, *frame.known_facts]).lower()
+    # known_facts are excluded: they may carry attacker-derived strings verbatim.
+    # The summaries come from deterministic evaluators and the operator's mission,
+    # but may still echo attacker-influenced labels; see the selection doc.
+    text = " ".join([frame.mission, frame.soc_summary, frame.noc_summary]).lower()
     return set(_TOKEN_RE.findall(text))
 
 
@@ -397,6 +413,35 @@ def select_playbook(
     *,
     requested_id: str | None = None,
     playbooks: Mapping[str, ReasoningPlaybook] | None = None,
+) -> PlaybookSelection:
+    selection = _select_unvalidated(frame, requested_id=requested_id, playbooks=playbooks)
+    return guard_selection(selection.playbook, selection)
+
+
+def guard_selection(playbook: ReasoningPlaybook, selection: PlaybookSelection | None = None) -> PlaybookSelection:
+    """Runtime gate: a playbook that fails ``validate_playbook`` is never compiled.
+
+    It is replaced by the generic playbook with an audited reason. Capability
+    registration is enforced separately at gap-scoring time against the live
+    broker registry (``capability_not_registered_in_broker``), so an allowlisted
+    but unregistered capability can never be called.
+    """
+    violations = validate_playbook(playbook)
+    if not violations:
+        return selection or PlaybookSelection(playbook, "explicit", "caller_supplied")
+    return PlaybookSelection(
+        GENERIC_PLAYBOOK,
+        "invalid_playbook_fallback",
+        "playbook_failed_validation:" + violations[0][:96],
+        (str(getattr(playbook, "playbook_id", ""))[:64],),
+    )
+
+
+def _select_unvalidated(
+    frame: MioSituationFrame,
+    *,
+    requested_id: str | None,
+    playbooks: Mapping[str, ReasoningPlaybook] | None,
 ) -> PlaybookSelection:
     """Pick one reviewed playbook deterministically; fall back to the generic one.
 
@@ -446,13 +491,29 @@ _FORBIDDEN_CONTENT = (
     ("shell_syntax", re.compile(r"\$\(|`|&&|\|\||;|\bsudo\b|\bbash\b|\bsh\s+-c\b|\bcurl\b|\bwget\b|\brm\s+-", re.I)),
     ("secret_material", re.compile(r"\b(password|passwd|api[_-]?key|secret|token)\s*[:=]", re.I)),
 )
-# Enforcement / execution verbs. Allowed only inside a claim boundary that
-# forbids them ("do not ...", "never ...").
-_DIRECTIVE_RE = re.compile(
-    r"\b(isolate|throttle|redirect|block|quarantine|activate|deactivate|enforce|execute|executable|exec|run|kill|shutdown|reboot|transition|override|approve)\b",
+# Enforcement / execution verbs. Scanned over the WHOLE item, whatever prefix
+# it starts with. The only accepted use is a claim boundary that is a single
+# prohibition of the verbs themselves, e.g. "do not activate or transition
+# deception": ``(do not|never) VERB ((or|and|nor) VERB)* <object>`` where the
+# object contains no further directive verb and no clause punctuation. So
+# "Do not worry, isolate the host now" and "never mind; isolate it" are refused.
+_DIRECTIVE_VERBS = (
+    "isolate", "throttle", "redirect", "block", "quarantine", "activate", "deactivate",
+    "enforce", "execute", "exec", "run", "kill", "shutdown", "reboot", "transition",
+    "override", "approve", "disable", "drop", "terminate", "deny", "ban", "delete", "wipe",
+    "stop", "restart",
+)
+_VERB_ALT = "|".join(_DIRECTIVE_VERBS)
+_DIRECTIVE_RE = re.compile(rf"\b({_VERB_ALT})\b", re.I)
+_PROHIBITION_RE = re.compile(
+    rf"(?:do not|never) (?:{_VERB_ALT})(?: (?:or|and|nor) (?:{_VERB_ALT}))*(?P<rest>(?: [^,;:.!?\n]*)?)\Z",
     re.I,
 )
-_PROHIBITION_PREFIXES = ("do not ", "never ")
+
+
+def _is_pure_prohibition(text: str) -> bool:
+    match = _PROHIBITION_RE.match(text.strip())
+    return bool(match) and not _DIRECTIVE_RE.search(match.group("rest"))
 
 
 def validate_playbook(
@@ -498,7 +559,7 @@ def validate_playbook(
                 errors.append(f"forbidden_content:{code}:{location}")
         if _DIRECTIVE_RE.search(text):
             is_boundary = location.startswith("claim_boundaries[")
-            if not (is_boundary and text.strip().lower().startswith(_PROHIBITION_PREFIXES)):
+            if not (is_boundary and _is_pure_prohibition(text)):
                 errors.append(f"directive_language:{location}")
 
     registered = None if registered_capabilities is None else {str(x) for x in registered_capabilities}

@@ -35,8 +35,10 @@ from .playbook import (
     PromptCompiler,
     ReasoningPlaybook,
     playbook_digest,
+    guard_selection,
     reasoning_provenance,
     select_playbook,
+    selection_rules_digest,
     template_digest,
     validate_playbook,
 )
@@ -96,6 +98,8 @@ __all__ = [
     "playbook_digest",
     "reasoning_provenance",
     "select_playbook",
+    "guard_selection",
+    "selection_rules_digest",
     "template_digest",
     "validate_playbook",
 ]

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
 from .broker import CapabilityBroker, CapabilityBrokerError
-from .claim_audit import audit_claims
+from .claim_audit import audit_claims, unparseable_status_ids
 from .contracts import (
     MioCapabilityRequest,
     MioEvidenceGap,
@@ -26,11 +27,12 @@ from .lifecycle import (
     validate_initial_hypotheses,
 )
 from .model_adapter import MioModelBlocked, MioModelUnavailable
-from .playbook import PlaybookSelection, PromptCompiler, ReasoningPlaybook, reasoning_provenance
+from .playbook import PlaybookSelection, PromptCompiler, ReasoningPlaybook, guard_selection, reasoning_provenance
 from .trace import ReasoningTrace
 
 ModelInvoker = Callable[[str, str], Mapping[str, Any]]
 CancelCheck = Callable[[], bool]
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -126,7 +128,13 @@ class BoundedReasoningLoop:
             return self._finish(trace, state, hypotheses_out, gaps_out, recommendation_out, errors, frame=frame, playbook=playbook, audit=audit, validated=validated)
 
         trace.record(state=ReasoningState.FRAME_READY.value, kind="frame", payload={"frame_id": frame.frame_id})
+        selection = guard_selection(playbook, selection)  # invalid playbook -> generic, never compiled
+        playbook = selection.playbook
         trace.record(state=ReasoningState.FRAME_READY.value, kind="reasoning_provenance", payload=reasoning_provenance(playbook, selection))
+        if selection.is_generic_fallback:
+            errors.append(f"generic_fallback:{selection.reason}")
+            _LOG.warning("mio generic playbook fallback cycle=%s reason=%s", str(cycle_id)[:96], selection.reason)
+        bad_status: list[str] = []
 
         if frame.freshness_seconds > max(0, int(self.budget.max_frame_age_seconds)):
             errors.append('frame_stale')
@@ -163,6 +171,7 @@ class BoundedReasoningLoop:
             for i, item in enumerate(items[: self.budget.max_hypotheses])
             if isinstance(item, Mapping)
         )
+        bad_status.extend(unparseable_status_ids(items[: self.budget.max_hypotheses]))
         h_check = GroundingValidator(frame).validate_hypotheses(hypotheses)
         if not h_check.ok:
             errors.extend(h_check.errors)
@@ -245,7 +254,8 @@ class BoundedReasoningLoop:
             except CapabilityBrokerError as exc:
                 errors.append(str(exc))
                 continue
-            additional_refs.extend(result.evidence_refs)
+            if result.ok:  # only successful results count as broker-imported evidence
+                additional_refs.extend(result.evidence_refs)
             broker_summaries.append(
                 {
                     "request_id": result.request_id,
@@ -300,6 +310,7 @@ class BoundedReasoningLoop:
             if not isinstance(update_items, list):
                 errors.append("updated_hypotheses_not_list")
                 return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
+            bad_status.extend(unparseable_status_ids(update_items[: self.budget.max_hypotheses]))
             updated_hypotheses = tuple(
                 MioHypothesis.from_mapping(item, ordinal=i + 1)
                 for i, item in enumerate(update_items[: self.budget.max_hypotheses])
@@ -358,7 +369,7 @@ class BoundedReasoningLoop:
             return finish(ReasoningState.VALIDATION_REJECTED, hypotheses, gaps, None)
         recommendation = MioRecommendation.from_mapping(raw_r, advisory_id=f"{cycle_id}:advisory")
         rec_check = GroundingValidator(frame, additional_evidence_refs=additional_refs).validate_recommendation(recommendation)
-        claim_audit = audit_claims(frame, hypotheses=hypotheses, recommendation=recommendation, imported_refs=additional_refs)
+        claim_audit = audit_claims(frame, hypotheses=hypotheses, recommendation=recommendation, imported_refs=additional_refs, unparseable_status=bad_status)
         trace.record(state=ReasoningState.RECOMMENDATION_READY.value, kind="claim_audit", payload=claim_audit.to_dict())
         if rec_check.ok and not claim_audit.ok:
             errors.extend(claim_audit.errors())

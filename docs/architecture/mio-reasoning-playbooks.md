@@ -36,17 +36,33 @@ Deterministic, before any model call, no network retrieval, no model-supplied id
    An unregistered id does not raise and does not invent a playbook: it falls back to the
    generic playbook (`mode: explicit_unknown_fallback`, `reason: requested_playbook_not_registered`).
 2. Otherwise fixed keyword families (`SELECTION_RULES`) are matched as whole tokens over
-   the frame's `mission`, `soc_summary`, `noc_summary` and `known_facts`;
+   the frame's `mission`, `soc_summary` and `noc_summary` (`known_facts` are excluded
+   because they can carry attacker strings verbatim);
    `deception-observation-v1` is a candidate when `deception_status == "available"`.
 3. Exactly one candidate → that playbook (`mode: matched`).
    Zero → `generic-evidence-first-v1` (`reason: no_family_match`).
    More than one → `generic-evidence-first-v1` (`reason: ambiguous_family_match`, candidates listed).
 
-Frame text can be attacker-influenced. That is acceptable here because selection only
-chooses among reviewed playbooks: a wrong match changes the *method*, never the
-capabilities or authority available. `replay.run_selected()` runs a cycle this way;
-`replay.run_replay()` keeps refusing unknown fixture ids so evaluation fixtures stay
-pinned.
+**Selection input may be attacker-influenced.** The summaries are produced by
+deterministic evaluators and the operator, but they can echo attacker-chosen labels
+(signature names, usernames). Selection therefore only affects the *advisory prompt*: it
+chooses among reviewed playbooks, so a wrong match changes the method, never the
+capabilities, budgets or authority available. A future revision should select on
+structured evaluator fields (category/reason codes) instead of free text.
+
+Runtime gate (`guard_selection`): every cycle validates its playbook with
+`validate_playbook` before compiling. An invalid playbook is never compiled; the cycle
+runs the generic playbook with `selection_mode: invalid_playbook_fallback` and
+`selection_reason: playbook_failed_validation:<code>`. Capability registration is
+enforced at gap-scoring time against the live broker registry
+(`capability_not_registered_in_broker`), so an allowlisted but unregistered capability
+can never be called even though the content gate does not need the registry.
+
+Every generic fallback is visible three ways: the `reasoning_provenance` event
+(`generic_fallback: true`), the outcome errors (`generic_fallback:<reason>`), and a
+`WARNING` log line. `replay.run_selected(loop, frame, cycle_id=..., requested_id=...)`
+runs a cycle this way; `replay.run_replay()` keeps refusing unknown fixture ids so
+evaluation fixtures stay pinned.
 
 ## Provenance (`reasoning_provenance`)
 
@@ -57,13 +73,17 @@ Every cycle records a `reasoning_provenance` trace event
 - `generic_fallback` (true when the generic playbook ran), `selection_mode`,
   `selection_reason`, `selection_candidates`
 - `template_id` (`mio-prompt-compiler`), `template_version`, `template_digest`
+- `selection_rules_digest` (`selection_rules_digest()`: keyword families, order, token
+  fields, tie policy)
 
 `playbook_digest(p)` is `sha256:` over the canonical JSON (sorted keys, ASCII, no
 whitespace) of exactly the playbook section the compiler renders into
 `TRUSTED_CONTROL`. Any content change — wording, an added boundary, a removed
 capability, a version bump — changes the digest. `template_digest()` covers
 `TRUSTED_RULES`, the limits block, every task's output schema and the
-`TRUSTED_CONTROL`/`UNTRUSTED_DATA` envelope markers, plus the template version.
+`TRUSTED_CONTROL`/`UNTRUSTED_DATA` envelope markers, plus the template version. It does
+**not** cover compiler code (`PromptCompiler`, reduction/truncation logic): a change there
+must bump `PROMPT_TEMPLATE_VERSION`.
 
 ## Authoring a playbook
 
@@ -93,7 +113,7 @@ capability, a version bump — changes the digest. `template_digest()` covers
 | `forbidden_content:filesystem_path` | `/etc/…`, `~/…`, `C:\…` |
 | `forbidden_content:shell_syntax` | `$(`, backticks, `&&`, `;`, `sudo`, `curl`, `rm -` |
 | `forbidden_content:secret_material` | `password=`, `api_key:`, `token=` |
-| `directive_language` | enforcement/execution verbs (`isolate`, `throttle`, `redirect`, `block`, `activate`, `execute`, `run`, `transition`, `override`, `approve`, …) anywhere except a claim boundary that starts with `do not` / `never` |
+| `directive_language` | enforcement/execution verbs (`isolate`, `throttle`, `redirect`, `block`, `quarantine`, `activate`, `execute`, `run`, `kill`, `shutdown`, `disable`, `drop`, `terminate`, `deny`, `delete`, `transition`, `override`, `approve`, …) scanned over the whole item. The only exception is a claim boundary that is a single prohibition of the verbs themselves: `(do not|never) VERB (or VERB)* <object>` with no further verb and no clause punctuation. "Do not worry, isolate the host now" is refused |
 | `non_text_item`, `field_not_non_empty_tuple`, `bad_item_length`, `control_character` | callables, dicts, empty or oversized fields |
 | `invalid_capability_name`, `capability_not_registered` | capability names outside the broker grammar or registry |
 
