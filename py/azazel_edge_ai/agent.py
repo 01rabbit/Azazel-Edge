@@ -48,6 +48,11 @@ try:
     from azazel_edge.audit import P0AuditLogger
 except Exception:  # pragma: no cover
     P0AuditLogger = None  # type: ignore
+try:
+    from azazel_edge.notify.p0_alert import attach_p0_alert_relay, classify_p0
+except Exception:  # pragma: no cover
+    attach_p0_alert_relay = None  # type: ignore
+    classify_p0 = None  # type: ignore
 from azazel_edge._util import ensure_parent as _ensure_parent
 
 SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
@@ -62,6 +67,15 @@ LLM_RESULT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-
 METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_metrics.json"))
 POLICY_PATH = Path(os.environ.get("AZAZEL_AI_POLICY", "/run/azazel-edge/ai_runtime_policy.json"))
 AI_AUDIT_PATH = Path(os.environ.get("AZAZEL_AI_AUDIT_LOG", "/var/log/azazel-edge/ai-audit.jsonl"))
+# P0 alert path for the Rust core's decisions (Edge#412 owner decision: the
+# Rust azazel-edge-core is the authoritative decision and enforcement path;
+# Edge#414 SO-03). This agent is where the core's decisions arrive (the core
+# forwards every decision event to AI_SOCKET). A P0 decision is recorded as an
+# action_decision in its own audit chain, and the P0 relay (#453/#458) turns
+# that durable record into the visual/voice entries of the one P0 queue. Both
+# files sit beside the AI audit log; no setting of their own.
+CORE_DECISION_AUDIT_PATH = AI_AUDIT_PATH.parent / "core-decision-audit.jsonl"
+P0_ALERT_QUEUE_PATH = AI_AUDIT_PATH.parent / "p0-alert-queue.jsonl"
 METRICS_HEARTBEAT_SEC = max(5.0, float(os.environ.get("AZAZEL_AI_METRICS_HEARTBEAT_SEC", "15")))
 # Rolling suricata severity tallies in the UI snapshot decay linearly to zero over
 # this window of no new same-severity events, so a long-running / idle booth does
@@ -241,6 +255,147 @@ def _build_ai_audit_logger() -> Any | None:
 
 
 AI_AUDIT = _build_ai_audit_logger()
+
+# The core decision event this agent receives (rust_event_engine_v1 in
+# rust/azazel-edge-core/src/main.rs core_event()).
+CORE_EVENT_SOURCE = "suricata_eve"
+CORE_EVENT_PIPELINE = "rust_event_engine_v1"
+CORE_DECISION_SOURCE = "azazel-edge-core"
+# Set by _start_core_p0_path() when the service starts (_serve). None until
+# then: importing this module or calling the handlers directly records nothing.
+CORE_DECISION_AUDIT: Any | None = None
+CORE_P0_RELAY: Any | None = None
+_CORE_FORWARD_LOSS_LOCK = threading.Lock()
+_CORE_FORWARD_LOSS_SEEN: tuple[int, int] = (0, 0)
+
+
+def _start_core_p0_path() -> Any | None:
+    """Open the core decision audit chain and attach the P0 relay to it.
+
+    Observation and notification only: nothing here decides, enforces or
+    feeds back into the core. If the chain cannot be opened the agent runs as
+    before without the path; if only the relay cannot be attached, P0
+    decisions are still recorded in the chain and the relay's startup
+    reconcile (#458) enqueues them on the next start.
+    """
+
+    global CORE_DECISION_AUDIT, CORE_P0_RELAY
+    if CORE_P0_RELAY is not None:
+        return CORE_P0_RELAY
+    if P0AuditLogger is None or attach_p0_alert_relay is None:
+        logger.error("core decision P0 alert path unavailable: notify/audit modules not importable")
+        return None
+    if CORE_DECISION_AUDIT is None:
+        try:
+            CORE_DECISION_AUDIT = P0AuditLogger(CORE_DECISION_AUDIT_PATH)
+        except Exception as exc:
+            logger.error("core decision audit chain not opened (%s): %s", CORE_DECISION_AUDIT_PATH, exc)
+            return None
+    try:
+        CORE_P0_RELAY = attach_p0_alert_relay(CORE_DECISION_AUDIT, P0_ALERT_QUEUE_PATH)
+    except Exception as exc:
+        logger.error("p0 alert relay not attached to the core decision chain: %s", exc)
+        return None
+    return CORE_P0_RELAY
+
+
+def _int_field(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _core_decision_payload(event: Dict[str, Any]) -> tuple[str, Dict[str, Any]] | None:
+    """(trace id, action_decision payload) for one core decision event, or None.
+
+    Copies the core's decision (decide_defense) and what the core did with it
+    (maybe_enforce: applied, dry run, gated) as the core sent them. Nothing is
+    re-decided here.
+    """
+
+    if event.get("source") != CORE_EVENT_SOURCE or event.get("pipeline") != CORE_EVENT_PIPELINE:
+        return None
+    defense = event.get("defense")
+    enforcement = event.get("enforcement")
+    if not isinstance(defense, dict) or not isinstance(enforcement, dict):
+        return None
+    trace_id = enforcement.get("trace_id")
+    action = defense.get("action")
+    if not (isinstance(trace_id, str) and trace_id and isinstance(action, str) and action):
+        return None
+    normalized = event.get("normalized") if isinstance(event.get("normalized"), dict) else {}
+    status = event.get("enforcement_status") if isinstance(event.get("enforcement_status"), dict) else {}
+    payload: Dict[str, Any] = {
+        "action": action,
+        "reason": str(defense.get("reason") or ""),
+        "policy_reason": str(defense.get("policy_reason") or ""),
+        "target": str(defense.get("target") or ""),
+        "effective_action": str(enforcement.get("selected_action") or ""),
+        "enforcement_mode": str(enforcement.get("mode") or ""),
+        "enforcement_result": str(enforcement.get("result") or ""),
+        "enforcement_executed_count": _int_field(enforcement.get("executed_count")),
+        "enforcement_failed_count": _int_field(enforcement.get("failed_count")),
+        "enforce_enabled": status.get("enforce_enabled") is True,
+        "enforce_dry_run": status.get("dry_run") is True,
+        "enforce_level": str(status.get("enforce_level") or ""),
+        "core_pipeline": CORE_EVENT_PIPELINE,
+        "sid": _int_field(normalized.get("sid")),
+        "severity": _int_field(normalized.get("severity")),
+        "event_ts": str(normalized.get("ts") or ""),
+    }
+    return trace_id, payload
+
+
+def _record_core_decision(event: Dict[str, Any]) -> None:
+    """Record a P0 core decision durably; the P0 relay alerts on the record.
+
+    Never raises: a failure here is logged and the event is handled as
+    before. The core has already decided and acted when this runs, and it
+    forwards to this agent without waiting (a bounded queue it counts drops
+    from), so nothing here can stop or delay it.
+    """
+
+    audit = CORE_DECISION_AUDIT
+    if audit is None or classify_p0 is None:
+        return
+    try:
+        built = _core_decision_payload(event)
+        if built is None:
+            return
+        trace_id, payload = built
+        # The owner's P0 rule, applied to the record as it will be written:
+        # only P0 decisions are recorded (the core's own JSONL keeps them all).
+        if not classify_p0(dict(payload, kind="action_decision")):
+            return
+        audit.log_action_decision(trace_id=trace_id, source=CORE_DECISION_SOURCE, **payload)
+    except Exception as exc:
+        logger.error("core decision not recorded for the P0 alert path: %s", exc)
+
+
+def _note_core_forward_loss(dropped: int, failed: int, since: int) -> None:
+    """Write a relay_status record to the P0 queue when the core reports
+    events it could not hand to this agent. Those decisions never reached the
+    chain, so the relay cannot reconcile them; the queue says they are
+    missing. Never raises."""
+
+    global _CORE_FORWARD_LOSS_SEEN
+    relay = CORE_P0_RELAY
+    if relay is None:
+        return
+    with _CORE_FORWARD_LOSS_LOCK:
+        if (dropped, failed) == _CORE_FORWARD_LOSS_SEEN or not (dropped or failed):
+            _CORE_FORWARD_LOSS_SEEN = (dropped, failed)
+            return
+        _CORE_FORWARD_LOSS_SEEN = (dropped, failed)
+    try:
+        relay.queue.append_status({
+            "event": "core_forward_loss",
+            "core_forward_dropped": dropped,
+            "core_forward_failed": failed,
+            "core_forward_since": since,
+            "note": "the core could not forward this many events (any action) to the agent since it started; "
+                    "P0 decisions among them are in the core's normalized event log, not in this queue",
+        })
+    except Exception as exc:
+        logger.error("core forward loss not written to the P0 queue: %s", exc)
 
 
 def _audit_ai_scope(trace_id: str, source: str, intent: str, in_scope: bool, reason: str) -> None:
@@ -1741,6 +1896,7 @@ def _default_route_info() -> Dict[str, str]:
 
 
 def _handle_event(event: Dict[str, Any]) -> None:
+    _record_core_decision(event)
     advisory = _build_advisory(event)
     _metrics_inc("processed_events", 1)
     _route_llm(event, advisory)
@@ -1818,6 +1974,7 @@ def _record_forward_stats(payload: Dict[str, Any]) -> None:
     _metrics_update(**{f"core_forward_{key}": value for key, value in zip(_FORWARD_STATS_KEYS, values)})
     with IO_LOCK:
         _persist_metrics()
+    _note_core_forward_loss(payload["dropped"], payload["failed"], payload["since"])
 
 
 def _handle_request_line(raw: str) -> Dict[str, Any] | None:
@@ -1861,10 +2018,14 @@ def _handle_client(conn: socket.socket) -> None:
                         return
 
 
-def _serve() -> None:
+def _serve(stop: threading.Event | None = None) -> None:
+    """Run the agent (the unit's ExecStart). ``stop`` ends the accept loop."""
     _prepare_runtime_socket_dir(SOCKET_PATH)
     _ensure_parent(METRICS_PATH)
     _ensure_parent(POLICY_PATH)
+    # Before the socket exists, so every P0 decision the core sends to this
+    # service is recorded and relayed.
+    _start_core_p0_path()
     if SOCKET_PATH.exists():
         SOCKET_PATH.unlink()
 
@@ -1886,17 +2047,20 @@ def _serve() -> None:
     logger.info("AI advisory agent listening on %s", SOCKET_PATH)
     last_heartbeat = time.time()
 
-    while True:
-        now = time.time()
-        if now - last_heartbeat >= METRICS_HEARTBEAT_SEC:
-            _metrics_heartbeat()
-            _persist_metrics()
-            last_heartbeat = now
-        try:
-            conn, _ = srv.accept()
-        except socket.timeout:
-            continue
-        threading.Thread(target=_handle_client, args=(conn,), daemon=True).start()
+    try:
+        while stop is None or not stop.is_set():
+            now = time.time()
+            if now - last_heartbeat >= METRICS_HEARTBEAT_SEC:
+                _metrics_heartbeat()
+                _persist_metrics()
+                last_heartbeat = now
+            try:
+                conn, _ = srv.accept()
+            except socket.timeout:
+                continue
+            threading.Thread(target=_handle_client, args=(conn,), daemon=True).start()
+    finally:
+        srv.close()
 
 
 if __name__ == "__main__":

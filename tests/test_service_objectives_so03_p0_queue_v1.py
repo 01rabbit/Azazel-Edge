@@ -8,7 +8,9 @@ The path is observation and notification only: these tests also check that
 it never changes what the audit logger writes, returns or raises, and that a
 broken queue never reaches the decision path. The harness/validator tests take
 a record away, or make it disagree, and expect the row to become
-not_measurable or fail -- never pass -- and the two former gaps to come back.
+not_measurable or fail -- never pass -- and the former gaps to come back.
+The harness runs the real Rust core binary (built by the ``rust_core_bin``
+fixture) into the AI agent service script its unit's ExecStart runs.
 """
 
 from __future__ import annotations
@@ -855,6 +857,12 @@ def test_on_relayed_failure_is_contained(tmp_path):
 
 
 # ---------------------------------------------------------------- harness
+#
+# The harness drives the real path: the Rust core binary (rust_core_bin, see
+# conftest.py) decides, forwards to the AI agent service script the unit's
+# ExecStart runs, and the agent's relay enqueues. Each test below takes one
+# piece of that path away, or makes it disagree, and expects the row to lose
+# its pass.
 
 
 @pytest.fixture
@@ -862,6 +870,16 @@ def clean_owner(monkeypatch):
     monkeypatch.setattr(
         rec, "owner_block", lambda: {"repository": rec.OWNING_REPOSITORY, "commit": "a" * 40, "worktree_clean": True}
     )
+
+
+@pytest.fixture
+def small_row(monkeypatch):
+    """The SO-03 row with a small sample count, for mechanics only."""
+
+    row = dict(rec.OBJECTIVE_SPECS["SO-03"][PART])
+    row["required_samples"] = 9
+    monkeypatch.setitem(rec.OBJECTIVE_SPECS, "SO-03", {PART: row})
+    return row
 
 
 def _part(record):
@@ -876,148 +894,145 @@ def _gaps(record):
     return [g["id"] for g in _part(record)["gaps"]]
 
 
-@pytest.fixture
-def core_wired_table(monkeypatch):
-    """The SO-03 row as it would be once Edge#412 wires the core's decisions:
-    only the gap no sample can close is removed, to exercise the mechanics."""
-
-    row = dict(rec.OBJECTIVE_SPECS["SO-03"][PART])
-    row["gaps"] = GAPS
-    monkeypatch.setitem(rec.OBJECTIVE_SPECS, "SO-03", {PART: row})
-    return row
+def _run(core, samples=8, seed=3):
+    return so03_alert_queue.run(core_bin=core, samples=samples, seed=seed)
 
 
-def _no_core_gap(record):
-    record["parts"][0]["gaps"] = [g for g in record["parts"][0]["gaps"] if g["id"] != CORE_GAP]
-    return record
-
-
-def test_full_run_closes_both_gaps_but_is_never_a_pass_while_core_is_not_wired(clean_owner):
-    record = so03_alert_queue.run(seed=3)
+def test_without_the_core_binary_nothing_is_measured(clean_owner, tmp_path):
+    record = so03_alert_queue.run(core_bin=tmp_path / "absent-core", samples=4)
     assert rec.validate_record(record) == []
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
-    assert len(_part(record)["samples"]) == 200
-    assert _gaps(record) == [CORE_GAP]
-    assert all(_prereqs(record).values())
-    # Leaving the core gap out is refused: no sample closes it.
-    errors = rec.validate_record(_no_core_gap(copy.deepcopy(record)))
-    assert any(f"mandatory gap {CORE_GAP!r} omitted" in e for e in errors), errors
+    assert _part(record)["samples"] == []
+    assert _prereqs(record)["core_binary_present"] is False
+    assert _gaps(record) == list(ALL_GAPS)
 
 
-def test_core_gap_is_not_closable_by_samples():
-    row = rec.OBJECTIVE_SPECS["SO-03"][PART]
-    assert CORE_GAP in row["gaps"]
-    assert CORE_GAP not in row["gaps_closed_by_samples"] and CORE_GAP not in rec.GAP_CLOSERS
+def test_the_measured_agent_is_the_units_execstart_script():
+    unit = ROOT / "systemd" / "azazel-edge-ai-agent.service"
+    assert so03_alert_queue.agent_service_script(unit) == ROOT / "py" / "azazel_edge_ai" / "agent.py"
+    core_env = so03_alert_queue.unit_environment(ROOT / "systemd" / "azazel-edge-core.service")
+    assert core_env["AZAZEL_DEFENSE_ENFORCE"] == "false" and core_env["AZAZEL_DEFENSE_DRY_RUN"] == "true"
+    env = so03_alert_queue.core_environment(Path("/w"), Path("/w/s.sock"))
+    assert env["AZAZEL_DEFENSE_ENFORCE"] == "false" and env["AZAZEL_DEFENSE_DRY_RUN"] == "true"
+    assert env["AZAZEL_DEFENSE_ENFORCE_LEVEL"] == core_env["AZAZEL_DEFENSE_ENFORCE_LEVEL"]
 
 
-def test_mechanics_pass_once_core_is_wired(clean_owner, core_wired_table):
-    record = _no_core_gap(so03_alert_queue.run(seed=3))
-    part = _part(record)
-    part["verdict"] = rec.derive_verdict(
-        prerequisites=part["prerequisites"], gaps=part["gaps"], required_samples=200,
-        samples=part["samples"], evaluated=part["pass_rule"]["evaluated"], per_action_required=0,
-    )
-    record["verdict"], record["evidence_class"] = part["verdict"], "gate"
-    assert part["verdict"] == rec.VERDICT_PASS
-    assert rec.validate_record(record) == []
-
-
-def test_slow_enqueue_fails(clean_owner, core_wired_table, monkeypatch):
+def test_slow_enqueue_fails(clean_owner, small_row, rust_core_bin, monkeypatch):
     real = P0AlertQueue.enqueue
     calls = {"n": 0}
 
     def slow(self, alerts, extra=None):
         calls["n"] += 1
-        if calls["n"] == 7:
+        if calls["n"] == 4:
             time.sleep(2.05)
         return real(self, alerts, extra)
 
     monkeypatch.setattr(P0AlertQueue, "enqueue", slow)
-    record = _no_core_gap(so03_alert_queue.run(seed=3))
-    part = _part(record)
-    part["verdict"] = record["verdict"] = rec.derive_verdict(
-        prerequisites=part["prerequisites"], gaps=part["gaps"], required_samples=200,
-        samples=part["samples"], evaluated=part["pass_rule"]["evaluated"], per_action_required=0,
-    )
+    record = _run(rust_core_bin, samples=9)
     assert rec.validate_record(record) == []
     assert record["verdict"] == rec.VERDICT_FAIL
     assert _part(record)["pass_rule"]["evaluated"]["violations"] == 1
+    assert _gaps(record) == []
 
 
-def test_enqueue_without_a_record_is_not_measurable(clean_owner, monkeypatch):
+def test_relay_not_attached_by_the_service_is_not_measurable(clean_owner, rust_core_bin, monkeypatch):
+    def refuse(*a, **k):
+        raise OSError("relay refused")
+
+    # The agent service imports the attach function when it is loaded.
+    monkeypatch.setattr(p0_alert, "attach_p0_alert_relay", refuse)
+    record = _run(rust_core_bin, samples=3)
+    assert rec.validate_record(record) == []
+    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
+    assert _prereqs(record)["agent_service_relay_attached"] is False
+    assert _part(record)["samples"] == []
+    assert _gaps(record) == list(ALL_GAPS)
+
+
+def test_enqueue_without_a_record_is_not_measurable(clean_owner, rust_core_bin, monkeypatch):
     monkeypatch.setattr(P0AlertQueue, "enqueue", lambda self, alerts, extra=None: {"ok": True, "durability": "fsynced"})
-    record = so03_alert_queue.run(seed=3, samples=10)
+    record = _run(rust_core_bin, samples=6)
     assert rec.validate_record(record) == []
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert all(s["end_monotonic_ns"] is None for s in _part(record)["samples"])
     assert _gaps(record) == list(ALL_GAPS)
 
 
-def test_not_p0_decisions_are_not_alerted_and_not_measurable(clean_owner, monkeypatch):
+def test_not_p0_decisions_are_not_alerted_and_not_measurable(clean_owner, rust_core_bin, monkeypatch):
+    monkeypatch.setattr(so03_alert_queue, "END_WAIT_S", 1.0)
     monkeypatch.setattr(p0_alert, "classify_p0", lambda record: "")
-    record = so03_alert_queue.run(seed=3, samples=8)
+    record = _run(rust_core_bin, samples=4)
     assert rec.validate_record(record) == []
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert all(s["queue_records"] == [] for s in _part(record)["samples"])
     assert _gaps(record) == list(ALL_GAPS)
 
 
-def test_wrong_p0_basis_keeps_the_path_gap(clean_owner, monkeypatch):
+def test_wrong_p0_basis_keeps_the_path_gaps(clean_owner, rust_core_bin, monkeypatch):
     real = p0_alert.build_p0_alerts
     monkeypatch.setattr(
         p0_alert, "build_p0_alerts",
         lambda record, basis, durability, durable_ns: real(record, "enforcement:throttle", durability, durable_ns),
     )
-    record = so03_alert_queue.run(seed=3, samples=8)
+    record = _run(rust_core_bin, samples=6)
     assert rec.validate_record(record) == []
     assert _prereqs(record)["enqueue_record_classifies_p0"] is False
     assert _gaps(record) == ["SO03-NO-P0-ALERT-PATH", CORE_GAP]
 
 
-def test_one_channel_only_keeps_both_gaps(clean_owner, monkeypatch):
+def test_alert_without_the_cores_enforcement_mode_keeps_the_core_gap(clean_owner, rust_core_bin, monkeypatch):
+    real = p0_alert.build_p0_alerts
+    monkeypatch.setattr(p0_alert, "build_p0_alerts", lambda *a: [dict(x, enforcement_mode="") for x in real(*a)])
+    record = _run(rust_core_bin, samples=6)
+    assert rec.validate_record(record) == []
+    assert all(_prereqs(record).values())
+    assert _gaps(record) == [CORE_GAP]
+
+
+def test_one_channel_only_keeps_all_gaps(clean_owner, rust_core_bin, monkeypatch):
     real = p0_alert.build_p0_alerts
     monkeypatch.setattr(p0_alert, "build_p0_alerts", lambda *a: real(*a)[:1])
-    record = so03_alert_queue.run(seed=3, samples=8)
+    record = _run(rust_core_bin, samples=6)
     assert rec.validate_record(record) == []
     assert _prereqs(record)["visual_voice_delivery_queue_declared"] is False
     assert _gaps(record) == list(ALL_GAPS)
 
 
-def test_entries_naming_another_decision_are_not_this_samples(clean_owner, monkeypatch):
+def test_entries_naming_another_decision_are_not_this_samples(clean_owner, rust_core_bin, monkeypatch):
     real = p0_alert.build_p0_alerts
 
     def other(record, *a):
-        return [dict(x, decision_id="so03-decision-9999") for x in real(record, *a)]
+        return [dict(x, decision_id="trace-0x0") for x in real(record, *a)]
 
     monkeypatch.setattr(p0_alert, "build_p0_alerts", other)
-    record = so03_alert_queue.run(seed=3, samples=8)
+    record = _run(rust_core_bin, samples=6)
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert _prereqs(record)["enqueue_record_names_decision_id"] is False
 
 
-def test_decision_record_not_durable_is_not_measurable(clean_owner, monkeypatch):
+def test_decision_record_not_durable_is_not_measurable(clean_owner, rust_core_bin, monkeypatch):
     monkeypatch.setattr(logger_mod, "DURABLE_KINDS", frozenset({"notification"}))
-    monkeypatch.setattr(so03_alert_queue, "END_WAIT_S", 0.2)  # nothing is ever relayed
-    record = so03_alert_queue.run(seed=3, samples=4)
+    monkeypatch.setattr(so03_alert_queue, "END_WAIT_S", 1.0)  # nothing is ever relayed
+    record = _run(rust_core_bin, samples=3)
     assert rec.validate_record(record) == []
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert _prereqs(record)["decision_and_enqueue_records_fsynced"] is False
 
 
-def test_queue_not_fsynced_is_not_measurable(clean_owner, monkeypatch):
+def test_queue_not_fsynced_is_not_measurable(clean_owner, rust_core_bin, monkeypatch):
     monkeypatch.setattr(P0AlertQueue, "_fsync_fd", staticmethod(lambda fd: True))
     monkeypatch.setattr(p0_alert, "fsync_path", lambda path: True)
-    record = so03_alert_queue.run(seed=3, samples=8)
+    record = _run(rust_core_bin, samples=6)
     assert rec.validate_record(record) == []
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert _prereqs(record)["decision_and_enqueue_records_fsynced"] is False
     assert _gaps(record) == list(ALL_GAPS)
 
 
-def test_broken_chain_is_not_measurable(clean_owner, monkeypatch):
+def test_broken_chain_is_not_measurable(clean_owner, rust_core_bin, monkeypatch):
     real = P0AuditLogger.verify_chain
     monkeypatch.setattr(P0AuditLogger, "verify_chain", classmethod(lambda cls, path: dict(real(path), ok=False, error="x")))
-    record = so03_alert_queue.run(seed=3, samples=5)
+    record = _run(rust_core_bin, samples=4)
     assert _prereqs(record)["alert_audit_chain_verifies"] is False
 
 
@@ -1025,29 +1040,39 @@ def test_broken_chain_is_not_measurable(clean_owner, monkeypatch):
 
 
 @pytest.fixture(scope="module")
-def genuine_pass():
+def genuine_pass(rust_core_bin):
     mp = pytest.MonkeyPatch()
     try:
         mp.setattr(rec, "owner_block", lambda: {"repository": rec.OWNING_REPOSITORY, "commit": "a" * 40, "worktree_clean": True})
-        record = so03_alert_queue.run(seed=5)
-        # Every record prerequisite met and both closable gaps closed; only
-        # the core gap keeps it not_measurable.
-        assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
-        assert _gaps(record) == [CORE_GAP] and all(_prereqs(record).values())
+        record = so03_alert_queue.run(core_bin=rust_core_bin, seed=5)
         yield record
     finally:
         mp.undo()
 
 
+def test_full_run_through_the_core_is_a_pass(genuine_pass):
+    record = genuine_pass
+    assert rec.validate_record(record) == []
+    assert len(_part(record)["samples"]) == 200
+    assert _gaps(record) == []
+    assert all(_prereqs(record).values()), _prereqs(record)
+    assert record["verdict"] == rec.VERDICT_PASS
+    samples = _part(record)["samples"]
+    assert {s["action"] for s in samples} == {"isolate", "redirect", "throttle"}
+    assert {s["core_enforcement_mode"] for s in samples} == {"dry_run"}
+    assert all(s["decision_source"] == "azazel-edge-core" and s["core_sid"] == s["harness_sid"] for s in samples)
+    assert max(s["elapsed_ms"] for s in samples) <= 2000.0
+
+
 @pytest.mark.parametrize(
     "mutate,prereq",
     [
-        (lambda s: s["queue_records"][0].__setitem__("decision_id", "so03-decision-9999"), "enqueue_record_names_decision_id"),
+        (lambda s: s["queue_records"][0].__setitem__("decision_id", "trace-0x0"), "enqueue_record_names_decision_id"),
         (lambda s: s["queue_records"][1].__setitem__("decision_chain_hash", "0" * 64), "enqueue_record_names_decision_id"),
         (lambda s: s["queue_records"][0].__setitem__("enqueued_monotonic_ns", 1), "enqueue_record_names_decision_id"),
         (lambda s: s["queue_records"][0].__setitem__("decision_durable_monotonic_ns", 1), "enqueue_record_names_decision_id"),
         (lambda s: s.__setitem__("edge_decision_durable_monotonic_ns", 1), "enqueue_record_names_decision_id"),
-        (lambda s: s.__setitem__("harness_log_returned_monotonic_ns", s["start_monotonic_ns"] - 1), "enqueue_record_names_decision_id"),
+        (lambda s: s.__setitem__("harness_eve_append_monotonic_ns", s["start_monotonic_ns"] + 1), "enqueue_record_names_decision_id"),
         (lambda s: s["queue_records"].pop(), "visual_voice_delivery_queue_declared"),
         (lambda s: s["queue_records"][1].__setitem__("channel", "visual"), "visual_voice_delivery_queue_declared"),
         (lambda s: s["queue_records"][0].__setitem__("schema", "other"), "visual_voice_delivery_queue_declared"),
@@ -1069,6 +1094,38 @@ def test_validator_recomputes_from_samples(genuine_pass, mutate, prereq):
     assert any(f"prerequisite {prereq!r} declared met but the samples do not show it" in e for e in errors), errors
     # The closed gaps re-open: leaving them out is now refused.
     assert any("mandatory gap 'SO03-NO-P0-ALERT-PATH' omitted" in e for e in errors), errors
+    assert any(f"mandatory gap {CORE_GAP!r} omitted" in e for e in errors), errors
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda s: s.__setitem__("decision_source", "so03_harness_arbiter"),
+        lambda s: s.__setitem__("core_pipeline", "python_arbiter"),
+        lambda s: s.__setitem__("core_sid", s["harness_sid"] + 1),
+        lambda s: s.__setitem__("core_sid", None),
+        lambda s: s.__setitem__("harness_expected_action", "notify"),
+        lambda s: s.__setitem__("core_enforcement_mode", "unknown"),
+        lambda s: s["queue_records"][1].__setitem__("enforcement_mode", "enforced"),
+        lambda s: s["queue_records"][0].__setitem__("effective_action", "observe"),
+    ],
+)
+def test_core_gap_closes_only_on_core_decisions(genuine_pass, mutate):
+    forged = copy.deepcopy(genuine_pass)
+    mutate(forged["parts"][0]["samples"][17])
+    errors = rec.validate_record(forged)
+    assert any(f"mandatory gap {CORE_GAP!r} omitted" in e for e in errors), errors
+    assert not any("mandatory gap 'SO03-NO-P0-ALERT-PATH' omitted" in e for e in errors), errors
+
+
+def test_an_applied_enforcement_is_never_a_measurement(genuine_pass):
+    forged = copy.deepcopy(genuine_pass)
+    sample = forged["parts"][0]["samples"][3]
+    sample["core_enforcement_mode"] = "enforced"
+    for r in sample["queue_records"]:
+        r["enforcement_mode"] = "enforced"
+    errors = rec.validate_record(forged)
+    assert any("prerequisite 'core_enforcement_not_applied' declared met but the samples do not show it" in e for e in errors), errors
 
 
 def test_validator_refuses_an_end_without_a_durable_enqueue_record(genuine_pass):
@@ -1076,10 +1133,6 @@ def test_validator_refuses_an_end_without_a_durable_enqueue_record(genuine_pass)
     forged["parts"][0]["samples"][7]["queue_records"] = []
     errors = rec.validate_record(forged)
     assert any("samples[7]: end given but the observed fields do not show a durable enqueue record" in e for e in errors), errors
-
-
-def test_validator_accepts_the_genuine_pass(genuine_pass):
-    assert rec.validate_record(genuine_pass) == []
 
 
 def test_validator_p0_rule_is_independent_of_the_product():
@@ -1093,8 +1146,11 @@ def test_validator_p0_rule_is_independent_of_the_product():
 def test_fixed_row_bound_and_samples_are_unchanged():
     row = rec.OBJECTIVE_SPECS["SO-03"][PART]
     assert row["bound_ms"] == 2000.0 and row["required_samples"] == 200 and row["kind"] == rec.RULE_EVERY_SAMPLE_MAX
-    assert set(row["gaps"]) == set(ALL_GAPS) and set(row["gaps_closed_by_samples"]) == set(GAPS)
-    assert {g for g in rec.GAP_CLOSERS if g.startswith("SO03-")} == set(GAPS)
+    assert set(row["gaps"]) == set(ALL_GAPS) and set(row["gaps_closed_by_samples"]) == set(ALL_GAPS)
+    assert {g for g in rec.GAP_CLOSERS if g.startswith("SO03-")} == set(ALL_GAPS)
     assert rec.GAP_CLOSERS["SO03-NO-VISUAL-VOICE-QUEUE"] is rec.so03_visual_voice_queue_observed
     assert rec.GAP_CLOSERS["SO03-NO-P0-ALERT-PATH"] is rec.so03_p0_alert_path_observed
+    assert rec.GAP_CLOSERS[CORE_GAP] is rec.so03_core_decisions_relayed
     assert set(rec.so03_observed_prerequisites([{}])) <= set(row["prerequisites"])
+    # Run health is never excused in CI.
+    assert rec.CI_DECLARED_PREREQUISITES["SO-03"] == frozenset()

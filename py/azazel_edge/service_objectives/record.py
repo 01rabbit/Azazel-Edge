@@ -136,8 +136,15 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
             "kind": "every_sample_max_elapsed",
             "bound_ms": 2000.0,
             "required_samples": 200,
-            # All but the chain check are recomputed from the samples by the validator.
+            # The first three are run-health checks (the core binary ran, the
+            # agent service's own _serve attached the relay); the chain check
+            # is read from the chain; the rest are recomputed from the
+            # samples by the validator.
             "prerequisites": (
+                "core_binary_present",
+                "core_daemon_started",
+                "agent_service_relay_attached",
+                "core_enforcement_not_applied",
                 "visual_voice_delivery_queue_declared",
                 "alert_audit_chain_verifies",
                 "enqueue_record_names_decision_id",
@@ -147,12 +154,10 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
             "gaps": (
                 "SO03-NO-VISUAL-VOICE-QUEUE",
                 "SO03-NO-P0-ALERT-PATH",
-                # The Rust core's throttle/redirect/isolate decisions are not
-                # written as action_decision records through P0AuditLogger, so
-                # the P0 relay never sees them; which decision path is
-                # authoritative is Edge#412. No sample can close this one: it
-                # is deliberately absent from gaps_closed_by_samples, so SO-03
-                # stays not_measurable until that path is wired.
+                # Edge#412: the Rust core is the authoritative decision path.
+                # Closed only when every sample's alert came from a core
+                # decision event (source, pipeline and the EVE sid the harness
+                # wrote) and carries what the core did with it.
                 "SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS",
             ),
             # Closed only by recomputation from every sample (GAP_CLOSERS):
@@ -162,6 +167,7 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
             "gaps_closed_by_samples": (
                 "SO03-NO-VISUAL-VOICE-QUEUE",
                 "SO03-NO-P0-ALERT-PATH",
+                "SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS",
             ),
         },
     },
@@ -276,9 +282,13 @@ SAMPLE_FIELDS: Dict[str, frozenset] = {
         _COMMON_SAMPLE_FIELDS
         + (
             "action", "reason", "decision_suspicion_label", "decision_chain_hash",
-            "harness_log_call_monotonic_ns", "harness_log_returned_monotonic_ns",
+            "decision_source", "core_pipeline", "core_sid", "harness_sid", "harness_expected_action",
+            "core_enforcement_mode", "core_effective_action",
+            "harness_eve_append_monotonic_ns",
             "edge_decision_durable_monotonic_ns", "queue_records", "enqueue_result_durability",
             "decision_record_fsynced", "enqueue_record_fsynced",
+            # Diagnostic (EVE append to durable decision); never read for the verdict.
+            "core_event_to_decision_durable_ms",
         )
     ),
     "SO-04": frozenset(
@@ -829,8 +839,17 @@ SO03_QUEUE_RECORD_FIELDS = frozenset(
     {
         "channel", "schema", "record_type", "seq", "decision_id", "decision_chain_hash", "p0_class", "p0_basis",
         "p0_rule", "enqueued_monotonic_ns", "decision_durable_monotonic_ns", "decision_record_durable",
+        "enforcement_mode", "effective_action",
     }
 )
+# The authoritative decision path (Edge#412): the Rust core's decision event,
+# as the AI agent records it (py/azazel_edge_ai/agent.py).
+SO03_CORE_DECISION_SOURCE = "azazel-edge-core"
+SO03_CORE_PIPELINE = "rust_event_engine_v1"
+# maybe_enforce modes (rust/azazel-edge-core/src/main.rs). "enforced" means
+# the core ran nft/tc: a measurement must never see it.
+SO03_CORE_ENFORCEMENT_MODES = frozenset({"disabled", "dry_run", "policy_gated", "release_guard_failed", "enforced"})
+SO03_CORE_ENFORCEMENT_APPLIED = "enforced"
 
 
 def so03_expected_p0_basis(action: Any, suspicion_label: Any) -> str:
@@ -870,13 +889,13 @@ def so03_enqueue_observed(sample: Mapping[str, Any]) -> bool:
 
     sid = sample.get("sample_id")
     start, end = sample.get("start_monotonic_ns"), sample.get("end_monotonic_ns")
-    call, returned = sample.get("harness_log_call_monotonic_ns"), sample.get("harness_log_returned_monotonic_ns")
+    appended = sample.get("harness_eve_append_monotonic_ns")
     chain = sample.get("decision_chain_hash")
-    if not all(_int(v) for v in (start, end, call, returned)):
+    if not all(_int(v) for v in (start, end, appended)):
         return False
     if not (isinstance(sid, str) and sid and isinstance(chain, str) and chain):
         return False
-    if sample.get("edge_decision_durable_monotonic_ns") != start or not (call <= start <= returned):
+    if sample.get("edge_decision_durable_monotonic_ns") != start or not (appended <= start <= end):
         return False
     recs = _so03_queue_records(sample)
     if recs is None:
@@ -912,6 +931,28 @@ def so03_records_fsynced(sample: Mapping[str, Any]) -> bool:
     )
 
 
+def so03_core_decision_observed(sample: Mapping[str, Any]) -> bool:
+    """The sample's decision is the Rust core's, for the EVE alert the harness
+    wrote, and its queue entries carry what the core did with it."""
+
+    mode = sample.get("core_enforcement_mode")
+    recs = _so03_queue_records(sample)
+    return (
+        sample.get("decision_source") == SO03_CORE_DECISION_SOURCE
+        and sample.get("core_pipeline") == SO03_CORE_PIPELINE
+        and _int(sample.get("core_sid"))
+        and sample.get("core_sid") == sample.get("harness_sid")
+        and sample.get("action") == sample.get("harness_expected_action")
+        and mode in SO03_CORE_ENFORCEMENT_MODES
+        and isinstance(sample.get("core_effective_action"), str)
+        and recs is not None
+        and all(
+            r.get("enforcement_mode") == mode and r.get("effective_action") == sample.get("core_effective_action")
+            for r in recs
+        )
+    )
+
+
 def so03_end_observed(sample: Mapping[str, Any]) -> bool:
     """The end event happened: a durable enqueue record for this decision."""
 
@@ -927,6 +968,11 @@ def so03_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[st
         "enqueue_record_names_decision_id": bool(items) and all(so03_enqueue_observed(s) for s in items),
         "enqueue_record_classifies_p0": bool(items) and all(so03_p0_classified(s) for s in items),
         "decision_and_enqueue_records_fsynced": bool(items) and all(so03_records_fsynced(s) for s in items),
+        "core_enforcement_not_applied": bool(items) and all(
+            s.get("core_enforcement_mode") in SO03_CORE_ENFORCEMENT_MODES
+            and s.get("core_enforcement_mode") != SO03_CORE_ENFORCEMENT_APPLIED
+            for s in items
+        ),
     }
 
 
@@ -945,6 +991,18 @@ def so03_p0_alert_path_observed(samples: Sequence[Mapping[str, Any]]) -> bool:
 
     items = list(samples)
     return bool(items) and all(isinstance(s, dict) and so03_end_observed(s) and so03_p0_classified(s) for s in items)
+
+
+def so03_core_decisions_relayed(samples: Sequence[Mapping[str, Any]]) -> bool:
+    """Closes SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS: in addition, every
+    alert came from a Rust core decision (Edge#412) and names what the core
+    did with it."""
+
+    items = list(samples)
+    return bool(items) and all(
+        isinstance(s, dict) and so03_end_observed(s) and so03_p0_classified(s) and so03_core_decision_observed(s)
+        for s in items
+    )
 
 
 def _so02_surface_healthy(source_type: Any, value: Any) -> bool:
@@ -1136,6 +1194,7 @@ GAP_CLOSERS = {
     "SO04-LEASE-EXPIRY-ON-WALL-CLOCK": so04_monotonic_expiry_observed,
     "SO03-NO-VISUAL-VOICE-QUEUE": so03_visual_voice_queue_observed,
     "SO03-NO-P0-ALERT-PATH": so03_p0_alert_path_observed,
+    "SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS": so03_core_decisions_relayed,
 }
 
 

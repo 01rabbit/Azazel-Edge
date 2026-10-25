@@ -1070,6 +1070,21 @@ fn forward_ai_lines(socket_path: &str, receiver: Receiver<Forward>) {
 }
 
 /// Decide one EVE record the ingress reader admitted.
+/// The decision event the core writes to the normalized log and forwards to
+/// the AI socket. The AI agent (py/azazel_edge_ai/agent.py) records P0
+/// decisions from it for the P0 alert queue (Edge#414 SO-03), so its shape is
+/// pinned by tests/fixtures/rust_core_event_v1.json on both sides.
+fn core_event(normalized: &NormalizedEvent, decision: &DefensiveDecision, enforcement: &EnforcementOutcome, cfg: &Config) -> Value {
+    json!({
+        "normalized": normalized,
+        "defense": decision,
+        "enforcement": enforcement,
+        "enforcement_status": enforcement_status(cfg),
+        "source": "suricata_eve",
+        "pipeline": "rust_event_engine_v1",
+    })
+}
+
 fn process_value(cfg: &Config, parsed: &Value) {
     let normalized = match build_normalized_event(parsed) {
         Some(ev) => ev,
@@ -1078,15 +1093,7 @@ fn process_value(cfg: &Config, parsed: &Value) {
 
     let decision = decide_defense(&normalized);
     let enforcement = maybe_enforce(&normalized, &decision, cfg);
-
-    let event = json!({
-        "normalized": normalized,
-        "defense": decision,
-        "enforcement": enforcement,
-        "enforcement_status": enforcement_status(cfg),
-        "source": "suricata_eve",
-        "pipeline": "rust_event_engine_v1",
-    });
+    let event = core_event(&normalized, &decision, &enforcement, cfg);
 
     if cfg.forward_log {
         append_json_line(&cfg.normalized_log_path, &event);
@@ -1364,6 +1371,83 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5), "the caller waited on the receiver");
         assert!(AI_FORWARD_DROPPED.load(Ordering::Relaxed) > 0, "nothing was dropped and counted");
         let _ = fs::remove_file(&path);
+    }
+
+    /// The decision path never waits on the receiver of its events (the AI
+    /// agent, where the P0 alert path is attached): with a receiver that
+    /// never reads, every decision is still taken and logged at once.
+    #[test]
+    fn decisions_are_taken_and_logged_while_the_receiver_is_wedged() {
+        use std::os::unix::net::UnixListener;
+        use std::time::Instant;
+        let dir = std::env::temp_dir().join(format!("az-edge-decide-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("wedged.sock");
+        let log = dir.join("normalized-events.jsonl");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&log);
+        let _listener = UnixListener::bind(&path).expect("bind");
+        let mut cfg = sample_cfg();
+        cfg.forward_ai = true;
+        cfg.forward_log = true;
+        cfg.event_stdout = StdoutMode::Off;
+        cfg.ai_socket_path = path.to_string_lossy().to_string();
+        cfg.normalized_log_path = log.to_string_lossy().to_string();
+        // More than the queue plus the listener's backlog (the kernel caps it
+        // at net.core.somaxconn, 4096 by default): the receiver is wedged.
+        let n = AI_FORWARD_QUEUE + 8192;
+        let started = Instant::now();
+        for i in 0..n {
+            process_value(&cfg, &json!({
+                "event_type": "alert",
+                "timestamp": format!("2026-01-01T00:00:00.{:06}+0000", i),
+                "src_ip": "192.0.2.7",
+                "dest_ip": "192.0.2.1",
+                "dest_port": 22,
+                "proto": "TCP",
+                "alert": {"signature_id": 9_300_000 + i as u64, "signature": "wedged", "category": "test", "severity": 1 + (i % 3) as u64},
+            }));
+        }
+        assert!(started.elapsed() < Duration::from_secs(10), "deciding waited on the receiver");
+        let text = fs::read_to_string(&log).expect("normalized log");
+        let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).expect("json")).collect();
+        assert_eq!(lines.len(), n);
+        assert!(lines.iter().all(|v| v["enforcement"]["mode"] == "dry_run"));
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&log);
+    }
+
+    fn shape(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(map.iter().map(|(k, v)| (k.clone(), shape(v))).collect()),
+            Value::Array(_) => json!("array"),
+            Value::String(_) => json!("string"),
+            Value::Number(_) => json!("number"),
+            Value::Bool(_) => json!("bool"),
+            Value::Null => json!("null"),
+        }
+    }
+
+    /// The event the AI agent records P0 decisions from has the shape the
+    /// Python side is tested against (tests/fixtures/rust_core_event_v1.json).
+    #[test]
+    fn the_core_event_has_the_shape_the_agent_is_tested_against() {
+        let fixture: Value = serde_json::from_str(include_str!("../../../tests/fixtures/rust_core_event_v1.json")).expect("fixture");
+        let mut cfg = sample_cfg();
+        cfg.redirect_policy = load_redirect_policy(concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/redirect_policy.yaml")).expect("policy");
+        cfg.redirect_policy_source = "file:config/redirect_policy.yaml".to_string();
+        let mut ev = sample_event();
+        ev.severity = 2;
+        ev.target_port = 22;
+        ev.technique_ids = vec!["T1046".to_string()];
+        let decision = decide_defense(&ev);
+        let enforcement = maybe_enforce(&ev, &decision, &cfg);
+        let event = core_event(&ev, &decision, &enforcement, &cfg);
+        assert_eq!(shape(&event), shape(&fixture));
+        assert_eq!(event["source"], fixture["source"]);
+        assert_eq!(event["pipeline"], fixture["pipeline"]);
+        assert_eq!(event["defense"]["action"], fixture["defense"]["action"]);
+        assert_eq!(event["enforcement"]["mode"], fixture["enforcement"]["mode"]);
     }
 
     #[test]

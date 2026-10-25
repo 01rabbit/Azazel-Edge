@@ -72,7 +72,9 @@ jobs:
     # Program plan §8 rows owned by Edge (Edge#414): SO-03, SO-04, SO-07
     # (process-kill). SO-02 needs a lab and runs in service-objectives-lab,
     # not here. One JSON record per objective is uploaded as an artifact
-    # whatever the outcome. SO-03 and SO-07 run unprivileged; SO-04 runs as
+    # whatever the outcome. SO-03 drives the release core built below into
+    # the AI agent service (its default --core-bin is that build). SO-03 and
+    # SO-07 run unprivileged; SO-04 runs as
     # root because its completion half installs owned tc/nft state on dummy
     # interfaces (unprivileged it takes no samples and would be red).
     #
@@ -110,7 +112,7 @@ jobs:
           pip install -r requirements/runtime.txt
           pip install -r requirements/fabric.txt
 
-      - name: Build the Rust core measured by SO-04
+      - name: Build the Rust core measured by SO-03 and SO-04
         run: |
           cd rust/azazel-edge-core
           cargo build --release

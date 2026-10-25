@@ -20,14 +20,18 @@ enqueues. Losses (a full hand-off, a failed enqueue) are counted and written
 to the queue as standalone ``relay_status`` records; they never reach,
 delay or alter the decision path.
 
-Where the path is attached: ``OpenCanaryRedirectController`` attaches it to
-its decision logger when the controller is built; no Edge service builds that
-controller yet (only tests do), so no running service has the path today.
-The Rust core's throttle/redirect/isolate decisions are
-not written as ``action_decision`` records through ``P0AuditLogger`` at all,
-so they do not reach this path (Edge#412 decides which path is
-authoritative); SO-03 keeps the blocking gap
-``SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS`` until that lands.
+Where the path is attached:
+
+* the AI agent service (``systemd/azazel-edge-ai-agent.service``,
+  ``py/azazel_edge_ai/agent.py``) is where the Rust core (the authoritative
+  decision and enforcement path, Edge#412) forwards every decision event. At
+  start (``_serve``) the agent opens the core decision chain
+  ``core-decision-audit.jsonl`` and attaches this relay to it; each P0 core
+  decision is written there as an ``action_decision`` record carrying the
+  core's decision and what the core did with it (applied, dry run, gated).
+  This is the path SO-03 measures.
+* ``OpenCanaryRedirectController`` attaches it to its decision logger when
+  the controller is built; no Edge service builds that controller yet.
 """
 
 from __future__ import annotations
@@ -533,6 +537,12 @@ def build_p0_alerts(record: Mapping[str, Any], basis: str, durability: str, dura
         'suspicion_label': str(trace.get('suspicion_label') or ''),
         'target': str(record.get('target_ip') or record.get('target') or ''),
         'evidence_ids': [str(x) for x in evidence if str(x)],
+        # What the deciding component did with the decision, as its record
+        # says (the Rust core: applied, dry_run, policy_gated, ...); empty
+        # when the record does not say. Copied, never inferred.
+        'effective_action': str(record.get('effective_action') or ''),
+        'enforcement_mode': str(record.get('enforcement_mode') or ''),
+        'enforcement_result': str(record.get('enforcement_result') or ''),
     }
     return [dict(base, channel=channel) for channel in CHANNELS]
 
