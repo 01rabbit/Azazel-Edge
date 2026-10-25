@@ -38,7 +38,7 @@ def test_declaration_is_provisional_container_derived_and_cites_its_basis():
     d = decl.load_rollback_completion_bounds()
     assert d["problems"] == []
     assert d["path"] == "config/service_objectives/rollback_completion_bounds.json"
-    assert d["bounds_ms"] == {"isolate": 5000.0, "redirect": 5000.0}
+    assert d["bounds_ms"] == {"throttle": 5000.0, "isolate": 5000.0, "redirect": 5000.0}
     assert set(d["statuses"].values()) == {decl.PROVISIONAL}
     raw = json.loads(decl.ROLLBACK_COMPLETION_BOUNDS_PATH.read_text(encoding="utf-8"))
     for entry in raw["bounds"]:
@@ -47,8 +47,10 @@ def test_declaration_is_provisional_container_derived_and_cites_its_basis():
         assert basis["sample_count"] >= SPEC["required_samples"] // len(decl.ROLLBACK_ACTION_TYPES)
         # The stated margin rule reproduces the bound.
         assert entry["bound_ms"] == math.ceil(2 * basis["max_observed_ms"] / 1000) * 1000
-    assert [u["action_type"] for u in raw["undeclared"]] == ["throttle"]
-    assert decl.undeclared_action_types(d) == ["throttle"]
+        # Every sample of the basis completed.
+        assert basis["completed"] == basis["sample_count"]
+    assert "undeclared" not in raw
+    assert decl.undeclared_action_types(d) == []
 
 
 def test_declared_action_types_match_the_harness_and_the_core():
@@ -220,19 +222,37 @@ def _full_samples(skip=()):
     return comp.build_samples(leases, *_observed(leases, skip=skip), d["bounds_ms"], OFFSET0)
 
 
+@pytest.fixture
+def no_throttle(monkeypatch, tmp_path):
+    """A declaration file without a throttle bound."""
+
+    path = _write(tmp_path, [_entry("isolate", 5000), _entry("redirect", 5000)])
+    monkeypatch.setattr(decl, "ROLLBACK_COMPLETION_BOUNDS_PATH", path)
+    return path
+
+
 def test_record_cites_the_declaration_and_validates():
-    record = _record(_full_samples(skip=("throttle",)))
+    record = _record(_full_samples())
     part = record["parts"][1]
     d = decl.load_rollback_completion_bounds()
     assert part["pass_rule"]["declaration"] == d["path"]
     assert part["pass_rule"]["declaration_sha256"] == d["sha256"]
-    errors = rec.validate_record(json.loads(json.dumps(record)))
-    # The harness declared the bound prerequisite met; the file says otherwise.
-    assert any("'per_action_completion_bound_declared' declared met" in e for e in errors), errors
+    assert rec.validate_record(json.loads(json.dumps(record))) == []
+    # Every action type declared and every sample within its bound: still the
+    # provisional gap keeps it from passing.
+    assert part["pass_rule"]["evaluated"]["holds"] is True
     assert part["verdict"] == rec.VERDICT_NOT_MEASURABLE
 
 
-def test_undeclared_throttle_keeps_the_part_not_measurable_even_if_every_sample_completes():
+def test_a_bound_declared_met_against_a_file_without_it_is_refused(no_throttle):
+    record = _record(_full_samples(skip=("throttle",)))
+    errors = rec.validate_record(json.loads(json.dumps(record)))
+    # The harness declared the bound prerequisite met; the file says otherwise.
+    assert any("'per_action_completion_bound_declared' declared met" in e for e in errors), errors
+    assert record["parts"][1]["verdict"] == rec.VERDICT_NOT_MEASURABLE
+
+
+def test_undeclared_throttle_keeps_the_part_not_measurable_even_if_every_sample_completes(no_throttle):
     samples = _full_samples()
     prereqs = [rec.prerequisite(p, p != "per_action_completion_bound_declared", "") for p in SPEC["prerequisites"]]
     record = _record(samples, prereqs=prereqs)
@@ -614,3 +634,17 @@ def test_run_timeout_is_a_failure_not_an_exception(monkeypatch):
 
     monkeypatch.setattr(comp.subprocess, "run", boom)
     assert comp._run(["x"]).returncode == comp.TIMEOUT_RC
+
+
+def test_a_failed_create_table_aborts_before_the_core_starts(monkeypatch, tmp_path):
+    owned = comp.OwnedState()
+    owned.tc = owned.nft = owned.ip = "/bin/true"
+    monkeypatch.setattr(comp, "_run", lambda argv, stdin=None: _Res(1, "File exists") if argv[1:3] == ["create", "table"] else _Res(0))
+    monkeypatch.setattr(comp.subprocess, "Popen", lambda *a, **k: pytest.fail("core started"))
+    import random
+
+    samples, prereqs = comp._measure_with_owned_state(so04, owned, tmp_path / "core", 2, random.Random(0), 10, {})
+    assert samples == []
+    met = {p["id"]: p["met"] for p in prereqs}
+    assert set(met) == set(SPEC["prerequisites"]) - {"per_action_completion_bound_declared"}
+    assert met["core_binary_present"] is True and not any(v for k, v in met.items() if k != "core_binary_present")

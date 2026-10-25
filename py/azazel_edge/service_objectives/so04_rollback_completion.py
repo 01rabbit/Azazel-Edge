@@ -574,6 +574,13 @@ def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_ty
                 + ("" if not install_problems else f"; problems: {install_problems[:5]}"),
             )
         )
+        if not owned.created_table:
+            # The table could not be created (one exists, perhaps since the
+            # check, or it cannot be made): nothing to measure against, and the
+            # core is never started.
+            for pid in ("core_daemon_started", "completion_confirmed_by_readback", "load_phase_applied", "wall_clock_stable_during_run"):
+                prerequisites.append(prerequisite(pid, False, "not evaluated: the harness could not create its inet azazel_edge table"))
+            return [], prerequisites
         base = time.time() + 3.0
         for j, lease in enumerate(leases):
             slot = j if lease["_phase"] == "nominal" else j + 20

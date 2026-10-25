@@ -24,26 +24,27 @@ no bound in it changes when or how a lease is released.
 
 | Action type | Bound | Status | Hardware class | Basis |
 | --- | --- | --- | --- | --- |
-| `isolate` | 5000 ms | provisional | container-aarch64, not hardware | 3 runs, 150 samples, max observed 2094.8 ms (nominal max 776.8 ms) |
-| `redirect` | 5000 ms | provisional | container-aarch64, not hardware | 3 runs, 150 samples, max observed 2236.3 ms (nominal max 774.9 ms) |
-| `throttle` | — (undeclared) | — | — | no completion observed; see below |
+| `throttle` | 5000 ms | provisional | container-aarch64, not hardware | 3 runs, 150 samples (150 completed), max observed 2237.5 ms (nominal max 915.7 ms) |
+| `isolate` | 5000 ms | provisional | container-aarch64, not hardware | 3 runs, 150 samples (150 completed), max observed 2302.7 ms (nominal max 923.6 ms) |
+| `redirect` | 5000 ms | provisional | container-aarch64, not hardware | 3 runs, 150 samples (150 completed), max observed 2339.2 ms (nominal max 980.1 ms) |
 
 Margin rule: twice the maximum observed, rounded up to the next 1000 ms. Half
 of each run's leases expire while the harness writes 2000 synthetic EVE alerts
 per second into the core's input; that load dominates the maximum.
 
-The runs were taken on main after #439: every lease carried a monotonic deadline
-and expired on it (`expiry_clock: monotonic` in every sample), and start and end
-were both read on `CLOCK_BOOTTIME`.
+The runs were taken on main after #439 (monotonic lease deadlines) and #441
+(throttle TBF readback from `options`): every lease carried a monotonic deadline
+and expired on it (`expiry_clock: monotonic` in every sample), start and end
+were both read on `CLOCK_BOOTTIME`, and every rollback of every action type
+completed with `rollback_applied_and_absence_verified`.
 
-**The basis is not clean.** `wall_clock_stable_during_run` was unmet in one of
-the three runs: the wall-minus-monotonic drift was −108.6 ms against a 50 ms
-tolerance (the colima VM's wall clock was adjusted during the run). The elapsed
-times do not depend on the wall clock, but the run would not count as evidence.
-An earlier set of three runs, taken before #439 with the start mapped from the
-wall deadline, had the same problem (drift −111 to −206 ms, as found in review) and gave maxima of
-2446.3 ms (isolate) and 2618.3 ms (redirect). It is superseded and not used for
-the bounds; both maxima are still under 5000 ms.
+**The basis is not clean.** `wall_clock_stable_during_run` was unmet in all
+three runs: the wall-minus-monotonic drift was −107.0, −121.7 and −113.5 ms
+against a 50 ms tolerance (the colima VM's wall clock was adjusted during each
+run). The elapsed times do not depend on the wall clock, but no run would count
+as evidence. Earlier run sets (before #439, and before #441 when no throttle
+rollback completed) are superseded and not used for the bounds.
+
 ### How SO-04 cites it
 
 The `rollback_completion` part of the SO-04 record
@@ -63,7 +64,8 @@ The `rollback_completion` part of the SO-04 record
 - **never pass on missing** — a sample whose action type declares no bound is a
   violation, and `per_action_completion_bound_declared` is recomputed from the
   file and the samples. The sample rule is 50 per action type, checked per type
-  and not only as a total of 150 (the start half has the same check). With `throttle` undeclared, the part is
+  and not only as a total of 150 (the start half has the same check). If an
+  action type's bound were removed from the file, the part would be
   `not_measurable` whatever the samples show.
 - **provisional is not evidence** — the gap `SO04-COMPLETION-BOUND-PROVISIONAL`
   is mandatory for the part. It stays until a hardware-derived declaration
@@ -72,7 +74,7 @@ The `rollback_completion` part of the SO-04 record
   listed under `gaps_closed_by_samples` for this part as for the start half: it
   may be left out only when the validator's own recomputation
   (`so04_monotonic_expiry_observed`) holds for every sample. An unfinished
-  sample never satisfies it, so with throttle not completing it stays.
+  sample never satisfies it.
 
 Rollback completes only if there is owned state to roll back, so the harness
 installs it before the core starts: one TBF root qdisc per throttle lease on a
@@ -93,18 +95,14 @@ before the harness added it. On SIGTERM, SIGHUP or SIGINT the core is stopped
 and the harness's interfaces and table are removed; an `atexit` hook covers
 other interpreter exits.
 
-### Throttle: why no bound is declared
+### Throttle
 
-In every container sample with the lease's TBF qdisc present, the rollback
-attempt ended `release_attempt_failed` with
-`tc ownership handle exists with unexpected TBF parameters`. iproute2 6.15's
-`tc -j qdisc show` reports `rate`, `burst` and `lat` under `options`; the
-core's readback (`release.rs`, `tbf_parameters_match`) reads them from the top
-level of the qdisc object. The core therefore refuses to delete a qdisc it owns,
-and retries with backoff. No completion was observed, so there is nothing to
-derive a bound from. This is a finding, not changed here: fixing the readback
-changes what the release engine deletes and needs its own review and a fresh
-measurement.
+Before #441 no throttle bound could be declared: the core read the TBF
+parameters from the top level of `tc -j qdisc show`, iproute2 puts them under
+`options`, and every throttle rollback ended `release_attempt_failed` with
+`tc ownership handle exists with unexpected TBF parameters`. #441 fixed the
+readback; in the runs above all 150 throttle rollbacks completed, and throttle
+is declared by the same rule as the others.
 
 ## OF-06 — Core ingress quota (not declared: no mechanism exists)
 

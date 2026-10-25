@@ -265,7 +265,7 @@ The completion half of SO-04 (`so04_rollback_completion.py`) ends at the first
 `released` / `rollback_applied_and_absence_verified` outcome for the lease and is
 judged against the per-action bound Edge declares in
 `config/service_objectives/rollback_completion_bounds.json` (OF-05). Those bounds
-are provisional and container-derived, and `throttle` declares none; see
+are provisional and container-derived; see
 `docs/architecture/service-objective-declarations.md`.
 
 ## Lifecycle
