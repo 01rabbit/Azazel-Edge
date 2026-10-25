@@ -108,6 +108,8 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
             "kind": "every_sample_max_elapsed",
             "bound_ms": 5000.0,
             "required_samples": 150,
+            # 50 leases per declared action type (assignment SO-04 sample rule).
+            "per_action_samples": 50,
             "prerequisites": (
                 "core_binary_present",
                 "core_daemon_started",
@@ -140,6 +142,7 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
             "kind": "every_sample_max_elapsed_per_action",
             "bound_ms": None,
             "required_samples": 150,
+            "per_action_samples": 50,
             "prerequisites": (
                 "per_action_completion_bound_declared",
                 "owned_state_installed_before_expiry",
@@ -154,6 +157,8 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
                 "SO04-HOSTILE-LOAD-UNDECLARED",
             ),
+            # Same start as the start half, so the same recomputation closes it.
+            "gaps_closed_by_samples": ("SO04-LEASE-EXPIRY-ON-WALL-CLOCK",),
         },
     },
     "SO-07": {
@@ -417,6 +422,20 @@ def evaluate_rule(pass_rule: Mapping[str, Any], samples: Sequence[Mapping[str, A
     raise ValueError(f"unknown pass rule kind: {kind!r}")
 
 
+def per_action_shortfall(samples: Sequence[Mapping[str, Any]], required: int) -> Dict[str, int]:
+    """Declared action types with fewer than ``required`` samples, and their counts."""
+
+    if not required:
+        return {}
+    from .declarations import ROLLBACK_ACTION_TYPES
+
+    counts = {a: 0 for a in ROLLBACK_ACTION_TYPES}
+    for s in samples:
+        if s.get("action_type") in counts:
+            counts[s["action_type"]] += 1
+    return {a: n for a, n in counts.items() if n < int(required)}
+
+
 def derive_verdict(
     *,
     prerequisites: Sequence[Mapping[str, Any]],
@@ -424,12 +443,16 @@ def derive_verdict(
     required_samples: int,
     samples: Sequence[Mapping[str, Any]],
     evaluated: Mapping[str, Any],
+    per_action_required: int = 0,
 ) -> str:
     if any(not p.get("met") for p in prerequisites):
         return VERDICT_NOT_MEASURABLE
     if gaps:
         return VERDICT_NOT_MEASURABLE
     if len(samples) < int(required_samples) or not samples:
+        return VERDICT_NOT_MEASURABLE
+    # The total is not enough: every declared action type needs its own count.
+    if per_action_shortfall(samples, per_action_required):
         return VERDICT_NOT_MEASURABLE
     return VERDICT_PASS if evaluated.get("holds") else VERDICT_FAIL
 
@@ -442,6 +465,7 @@ def build_part(
     samples: List[Dict[str, Any]],
     prerequisites: List[Dict[str, Any]],
     gaps: List[Dict[str, Any]],
+    per_action_required: int = 0,
 ) -> Dict[str, Any]:
     evaluated = evaluate_rule(pass_rule, samples) if samples else {"sample_count": 0, "holds": False}
     rule = dict(pass_rule)
@@ -452,10 +476,15 @@ def build_part(
         required_samples=required_samples,
         samples=samples,
         evaluated=evaluated,
+        per_action_required=per_action_required,
     )
+    sample_rule: Dict[str, Any] = {"required_samples": int(required_samples)}
+    if per_action_required:
+        sample_rule["per_action_required"] = int(per_action_required)
+        sample_rule["per_action_shortfall"] = per_action_shortfall(samples, per_action_required)
     return {
         "name": name,
-        "sample_rule": {"required_samples": int(required_samples)},
+        "sample_rule": sample_rule,
         "samples": samples,
         "pass_rule": rule,
         "prerequisites": prerequisites,
@@ -855,6 +884,11 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                 errors.append(f"{where}.pass_rule.bounds_ms: the declaration gives {declaration['bounds_ms']}, record declares {rule.get('bounds_ms')!r}")
             if rule.get("declaration") != declaration["path"] or rule.get("declaration_sha256") != declaration["sha256"]:
                 errors.append(f"{where}.pass_rule.declaration: record does not cite {declaration['path']} at sha256 {declaration['sha256']}")
+        if part["sample_rule"].get("per_action_required", 0) != spec.get("per_action_samples", 0):
+            errors.append(
+                f"{where}.sample_rule.per_action_required: {objective} requires {spec.get('per_action_samples', 0)}, "
+                f"record declares {part['sample_rule'].get('per_action_required')!r}"
+            )
         required = part["sample_rule"].get("required_samples")
         if required != spec["required_samples"]:
             errors.append(f"{where}.sample_rule.required_samples: {objective} requires {spec['required_samples']}, record declares {required!r}")
@@ -955,6 +989,7 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
             required_samples=spec["required_samples"],
             samples=eval_samples,
             evaluated=evaluated,
+            per_action_required=spec.get("per_action_samples", 0),
         )
         if part["verdict"] != derived:
             errors.append(f"{where}.verdict: claims {part['verdict']!r} but the record supports {derived!r}")

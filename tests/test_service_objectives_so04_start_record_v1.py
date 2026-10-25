@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT / "py"))
 from azazel_edge.audit.logger import P0AuditLogger  # noqa: E402
 from azazel_edge.service_objectives import record as rec  # noqa: E402
 from azazel_edge.service_objectives import so04_lease_rollback as so04  # noqa: E402
+from azazel_edge.service_objectives import so04_rollback_completion  # noqa: E402
 
 CORE = ROOT / "rust" / "azazel-edge-core" / "target" / "release" / "azazel-edge-core"
 OFFSET0 = 1_700_000_000 * 10**9  # wall minus monotonic, in ns
@@ -95,6 +96,7 @@ def _part(samples, prereqs, *, gaps=True):
         samples=samples,
         prerequisites=prereqs,
         gaps=[rec.gap(g, "") for g in spec_gaps],
+        per_action_required=SPEC["per_action_samples"] if gaps else 0,
     )
 
 
@@ -257,14 +259,7 @@ def test_tail_flags_a_start_record_written_after_the_outcome(tmp_path):
 
 def _so04_record(samples, prereqs):
     start = _part(samples, prereqs)
-    completion = rec.build_part(
-        name="rollback_completion",
-        pass_rule={"kind": rec.RULE_EVERY_SAMPLE_MAX, "bound_ms": 0.0},
-        required_samples=150,
-        samples=[],
-        prerequisites=[rec.prerequisite("per_action_completion_bound_declared", False, "")],
-        gaps=[rec.gap("OF-05", "")],
-    )
+    completion = so04_rollback_completion.unmeasured_part("test")
     return rec.build_record(
         objective_id="SO-04",
         title="t",
@@ -276,6 +271,14 @@ def _so04_record(samples, prereqs):
         parts=[start, completion],
         method="test",
     )
+
+
+def test_the_record_helper_carries_a_valid_completion_part():
+    leases = _leases()
+    samples = so04.build_samples(leases, *_observations(leases), OFFSET0)
+    record = _so04_record(samples, [rec.prerequisite(p, False, "") for p in SPEC["prerequisites"]])
+    assert [e for e in rec.validate_record(record) if not e.startswith("parts[0]")] == []
+    assert record["parts"][1]["verdict"] == rec.VERDICT_NOT_MEASURABLE
 
 
 def test_validator_requires_the_start_record_prerequisites():

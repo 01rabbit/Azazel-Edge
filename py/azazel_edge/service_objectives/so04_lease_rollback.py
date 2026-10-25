@@ -316,6 +316,21 @@ def start_record_problems(row: Mapping[str, Any], lease: Mapping[str, Any]) -> L
     return problems
 
 
+def lease_start(lease: Mapping[str, Any], offset0: int) -> tuple[int, bool, str]:
+    """A sample's start for this lease: (instant, on CLOCK_BOOTTIME?, start_event).
+
+    Both SO-04 halves start here, so their starts are identical.
+    """
+
+    if isinstance(lease.get("due_boottime_ns"), int):
+        return int(lease["due_boottime_ns"]), True, "lease due_boottime_ns (its monotonic deadline, CLOCK_BOOTTIME) from the release-ledger record"
+    return (
+        round(lease["due_epoch"] * 1e9) - offset0,
+        False,
+        "lease due_epoch from the release-ledger record, mapped onto the harness monotonic clock",
+    )
+
+
 def build_samples(
     leases: List[Dict[str, Any]],
     starts: Mapping[str, Mapping[str, Any]],
@@ -326,13 +341,7 @@ def build_samples(
 
     samples: List[Dict[str, Any]] = []
     for lease in leases:
-        monotonic = isinstance(lease.get("due_boottime_ns"), int)
-        if monotonic:
-            start_ns = int(lease["due_boottime_ns"])
-            start_event = "lease due_boottime_ns (its monotonic deadline, CLOCK_BOOTTIME) from the release-ledger record"
-        else:
-            start_ns = round(lease["due_epoch"] * 1e9) - offset0
-            start_event = "lease due_epoch from the release-ledger record, mapped onto the harness monotonic clock"
+        start_ns, monotonic, start_event = lease_start(lease, offset0)
         row: Dict[str, Any] = {
             "sample_id": lease["task_id"],
             "action_type": lease["action"],
@@ -668,6 +677,7 @@ def run(
         samples=samples,
         prerequisites=prerequisites,
         gaps=start_gaps,
+        per_action_required=SPEC_START.get("per_action_samples", 0),
     )
     from . import so04_rollback_completion
 

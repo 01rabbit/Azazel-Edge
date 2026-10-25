@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "py"))
 from azazel_edge.audit.logger import P0AuditLogger  # noqa: E402
 from azazel_edge.service_objectives import record as rec  # noqa: E402
 from azazel_edge.service_objectives import so04_lease_rollback as so04  # noqa: E402
+from azazel_edge.service_objectives import so04_rollback_completion  # noqa: E402
 
 CORE = ROOT / "rust" / "azazel-edge-core" / "target" / "release" / "azazel-edge-core"
 SPEC = rec.OBJECTIVE_SPECS["SO-04"]["rollback_start_after_expiry"]
@@ -102,15 +103,9 @@ def _record(samples, *, with_gap: bool):
         samples=samples,
         prerequisites=[rec.prerequisite(p, True, "") for p in SPEC["prerequisites"]],
         gaps=[rec.gap(g, "") for g in gaps],
+        per_action_required=SPEC["per_action_samples"],
     )
-    completion = rec.build_part(
-        name="rollback_completion",
-        pass_rule={"kind": rec.RULE_EVERY_SAMPLE_MAX, "bound_ms": 0.0},
-        required_samples=150,
-        samples=[],
-        prerequisites=[rec.prerequisite("per_action_completion_bound_declared", False, "")],
-        gaps=[rec.gap("OF-05", "")],
-    )
+    completion = so04_rollback_completion.unmeasured_part("test")
     return rec.build_record(
         objective_id="SO-04",
         title="t",

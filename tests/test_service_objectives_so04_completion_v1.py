@@ -38,7 +38,7 @@ def test_declaration_is_provisional_container_derived_and_cites_its_basis():
     d = decl.load_rollback_completion_bounds()
     assert d["problems"] == []
     assert d["path"] == "config/service_objectives/rollback_completion_bounds.json"
-    assert d["bounds_ms"] == {"isolate": 5000.0, "redirect": 6000.0}
+    assert d["bounds_ms"] == {"isolate": 5000.0, "redirect": 5000.0}
     assert set(d["statuses"].values()) == {decl.PROVISIONAL}
     raw = json.loads(decl.ROLLBACK_COMPLETION_BOUNDS_PATH.read_text(encoding="utf-8"))
     for entry in raw["bounds"]:
@@ -186,6 +186,7 @@ def _start_part():
         samples=[],
         prerequisites=[rec.prerequisite(p, False, "") for p in START_SPEC["prerequisites"]],
         gaps=[rec.gap(g, "") for g in START_SPEC["gaps"]],
+        per_action_required=START_SPEC["per_action_samples"],
     )
 
 
@@ -198,6 +199,7 @@ def _record(samples, *, declaration=None, gaps=None, prereqs=None):
         samples=samples,
         prerequisites=prereqs if prereqs is not None else [rec.prerequisite(p, True, "") for p in SPEC["prerequisites"]],
         gaps=gaps if gaps is not None else [rec.gap(g, "") for g in SPEC["gaps"]],
+        per_action_required=SPEC["per_action_samples"],
     )
     return rec.build_record(
         objective_id="SO-04",
@@ -283,8 +285,9 @@ def test_validator_recomputes_installed_and_readback_from_samples():
 def test_over_bound_completion_is_counted():
     leases = _leases(50)
     d = decl.load_rollback_completion_bounds()
-    samples = comp.build_samples(leases, *_observed(leases, delay_ms=5500.0, skip=("throttle",)), d["bounds_ms"], OFFSET0)
-    ev = rec.evaluate_every_sample_max_per_action(samples, d["bounds_ms"])
+    bounds = {"isolate": 5000.0, "redirect": 6000.0}
+    samples = comp.build_samples(leases, *_observed(leases, delay_ms=5500.0, skip=("throttle",)), bounds, OFFSET0)
+    ev = rec.evaluate_every_sample_max_per_action(samples, bounds)
     # isolate (5000 ms) violated, redirect (6000 ms) holds, throttle undeclared.
     assert ev["per_action"]["isolate"]["violations"] == 50
     assert ev["per_action"]["redirect"]["violations"] == 0
@@ -342,3 +345,272 @@ def test_completion_harness_never_enables_enforcement():
     source = Path(comp.__file__).read_text(encoding="utf-8")
     assert '"AZAZEL_DEFENSE_ENFORCE":' not in source
     assert "env.pop(key, None)" in source
+
+
+# ------------------------------------------------- review follow-ups (Edge#440)
+
+BOOT = "11111111-2222-3333-4444-555555555555"
+BOOT0 = 5_000_000_000_000
+
+
+def _mono_leases(per_type=50):
+    out = []
+    for i in range(per_type):
+        for action in decl.ROLLBACK_ACTION_TYPES:
+            iface = comp.throttle_iface(i) if action == "throttle" else so04.IFACE
+            due = 1_700_000_100.0 + i * 0.1
+            lease = so04.make_lease(
+                action, i, 1_700_000_000.0, due, iface=iface,
+                due_boottime_ns=BOOT0 + round((due - 1_700_000_000.0) * 1e9), due_boot_id=BOOT,
+            )
+            lease["_phase"] = "nominal"
+            out.append(lease)
+    return out
+
+
+def _start_records(leases, delay_ns=100_000_000):
+    return {
+        l["task_id"]: {
+            "kind": "rollback_started",
+            "release_task_id": l["task_id"],
+            "expiry_clock": "monotonic",
+            "boot_id": BOOT,
+            "started_boottime_ns": l["due_boottime_ns"] + delay_ns,
+            "started_wall_epoch_ns": round(l["due_epoch"] * 1e9) + delay_ns,
+        }
+        for l in leases
+    }
+
+
+def _mono_observed(leases, *, delay_ms=500.0, skip=()):
+    completed, outcomes, installed, absent = {}, {}, {}, {}
+    for lease in leases:
+        tid = lease["task_id"]
+        installed[tid] = True
+        if lease["action"] in skip:
+            outcomes[tid] = [{"status": "retry_pending", "result": "release_attempt_failed"}]
+            absent[tid] = True
+            continue
+        release = {"status": "released", "result": comp.COMPLETED_RESULT}
+        outcomes[tid] = [release]
+        completed[tid] = {
+            "observed_boottime_ns": lease["due_boottime_ns"] + int(delay_ms * 1e6),
+            "observed_monotonic_ns": 0,  # a different clock: must not be used
+            "release": release,
+        }
+        absent[tid] = False
+    return completed, outcomes, installed, absent
+
+
+@pytest.mark.parametrize("monotonic", [True, False])
+def test_both_halves_start_identically(monotonic):
+    leases = _mono_leases(2) if monotonic else _leases(2)
+    start_samples = so04.build_samples(leases, {}, {}, OFFSET0)
+    comp_samples = comp.build_samples(leases, {}, {}, {}, {}, {}, OFFSET0)
+    for a, b in zip(start_samples, comp_samples):
+        assert a["sample_id"] == b["sample_id"]
+        assert a["start_monotonic_ns"] == b["start_monotonic_ns"]
+        assert a["sample_clock"] == b["sample_clock"]
+        assert a["start_event"] == b["start_event"]
+    if monotonic:
+        assert all(s["start_monotonic_ns"] == s["lease_due_boottime_ns"] for s in comp_samples)
+
+
+def test_completion_end_is_read_on_the_start_clock():
+    leases = _mono_leases(1)
+    samples = comp.build_samples(leases, *_mono_observed(leases), {}, OFFSET0, _start_records(leases))
+    assert all(s["sample_clock"] == "CLOCK_BOOTTIME" and s["elapsed_ms"] == 500.0 for s in samples)
+
+
+def _gap_ids(part):
+    return [g["id"] for g in part["gaps"]]
+
+
+def test_wall_clock_gap_closes_only_when_every_sample_recomputes():
+    d = {"path": "p", "sha256": "s", "bounds_ms": {a: 6000.0 for a in decl.ROLLBACK_ACTION_TYPES}}
+    leases = _mono_leases()
+    samples = comp.build_samples(leases, *_mono_observed(leases), d["bounds_ms"], OFFSET0, _start_records(leases))
+    assert rec.so04_monotonic_expiry_observed(samples)
+    part = comp.build_completion_part(d, samples, [])
+    assert "SO04-LEASE-EXPIRY-ON-WALL-CLOCK" not in _gap_ids(part)
+    assert "SO04-COMPLETION-BOUND-PROVISIONAL" in _gap_ids(part)
+    # One unfinished (throttle) lease keeps it open.
+    open_samples = comp.build_samples(leases, *_mono_observed(leases, skip=("throttle",)), d["bounds_ms"], OFFSET0, _start_records(leases))
+    assert "SO04-LEASE-EXPIRY-ON-WALL-CLOCK" in _gap_ids(comp.build_completion_part(d, open_samples, []))
+    # Legacy (wall-only) leases keep it open too.
+    legacy = _full_samples(skip=("throttle",))
+    assert "SO04-LEASE-EXPIRY-ON-WALL-CLOCK" in _gap_ids(comp.build_completion_part(d, legacy, []))
+
+
+def test_validator_refuses_a_dropped_wall_clock_gap_the_samples_do_not_close():
+    samples = _full_samples(skip=("throttle",))  # legacy leases
+    gaps = [rec.gap(g, "") for g in SPEC["gaps"] if g != "SO04-LEASE-EXPIRY-ON-WALL-CLOCK"]
+    errors = rec.validate_record(json.loads(json.dumps(_record(samples, gaps=gaps))))
+    assert any("mandatory gap 'SO04-LEASE-EXPIRY-ON-WALL-CLOCK' omitted" in e for e in errors), errors
+
+
+def test_validator_accepts_a_wall_clock_gap_closed_by_samples():
+    leases = _mono_leases()
+    d = decl.load_rollback_completion_bounds()
+    samples = comp.build_samples(leases, *_mono_observed(leases, skip=("throttle",)), d["bounds_ms"], OFFSET0, _start_records(leases))
+    # Throttle unfinished: the gap may not be dropped.
+    gaps = [rec.gap(g, "") for g in SPEC["gaps"] if g != "SO04-LEASE-EXPIRY-ON-WALL-CLOCK"]
+    errors = rec.validate_record(json.loads(json.dumps(_record(samples, gaps=gaps))))
+    assert any("'SO04-LEASE-EXPIRY-ON-WALL-CLOCK' omitted" in e for e in errors), errors
+
+
+def test_completion_tail_ignores_released_with_another_result(tmp_path):
+    lease = _leases(1)[0]
+    events, chain = tmp_path / "e.jsonl", tmp_path / "c.jsonl"
+    tail = comp._CompletionTail(events, chain, {lease["task_id"]}, lambda: 7)
+    line = lambda result: json.dumps({"pipeline": "rust_release_engine_v1", "release": {
+        "release_task_id": lease["task_id"], "status": "released", "result": result}}) + "\n"
+    events.write_text(line("owned_state_already_absent"), encoding="utf-8")
+    tail.poll()
+    assert lease["task_id"] not in tail.completed
+    assert len(tail.outcomes[lease["task_id"]]) == 1
+    with events.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"pipeline": "rust_release_engine_v1", "release": {
+            "release_task_id": lease["task_id"], "status": "retry_pending", "result": comp.COMPLETED_RESULT}}) + "\n")
+    tail.poll()
+    assert lease["task_id"] not in tail.completed
+    with events.open("a", encoding="utf-8") as fh:
+        fh.write(line(comp.COMPLETED_RESULT))
+    tail.poll()
+    assert tail.completed[lease["task_id"]]["observed_boottime_ns"] == 7
+    assert tail.done()
+
+
+def test_completion_tail_reads_the_first_start_record(tmp_path):
+    lease = _leases(1)[0]
+    events, chain = tmp_path / "e.jsonl", tmp_path / "c.jsonl"
+    chain.write_text(
+        json.dumps({"kind": "rollback_started", "release_task_id": lease["task_id"], "attempt": 1}) + "\n"
+        + json.dumps({"kind": "rollback_started", "release_task_id": lease["task_id"], "attempt": 2}) + "\n",
+        encoding="utf-8",
+    )
+    tail = comp._CompletionTail(events, chain, {lease["task_id"]}, lambda: None)
+    tail.poll()
+    assert tail.starts[lease["task_id"]]["attempt"] == 1
+
+
+def test_non_root_is_unavailable(monkeypatch):
+    monkeypatch.setattr(comp.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(comp, "_run", lambda *a, **k: pytest.fail("ran a tool as non-root"))
+    reason = comp.OwnedState().unavailable_reason()
+    assert reason and "not running as root" in reason
+
+
+def test_validator_judges_with_the_file_bounds_not_the_record_bounds(monkeypatch, tmp_path):
+    tight = _write(tmp_path, [_entry(a, 1, basis={"method": "m", "sample_count": 1, "max_observed_ms": 0.5, "margin_rule": "r"})
+                              for a in decl.ROLLBACK_ACTION_TYPES])
+    monkeypatch.setattr(decl, "ROLLBACK_COMPLETION_BOUNDS_PATH", tight)
+    loose = {"path": decl.load_rollback_completion_bounds()["path"], "sha256": decl.load_rollback_completion_bounds()["sha256"],
+             "bounds_ms": {a: 6000.0 for a in decl.ROLLBACK_ACTION_TYPES}}
+    leases = _leases(50)
+    samples = comp.build_samples(leases, *_observed(leases), loose["bounds_ms"], OFFSET0)
+    record = _record(samples, declaration=loose)
+    assert record["parts"][1]["pass_rule"]["evaluated"]["holds"] is True
+    errors = rec.validate_record(json.loads(json.dumps(record)))
+    # The 1 ms bounds in the file do not hold; the record's 6000 ms are ignored.
+    assert any("pass_rule.evaluated: disagrees with the samples" in e for e in errors), errors
+
+
+def test_per_action_counts_are_required_not_only_the_total():
+    samples = [{"action_type": "isolate", "elapsed_ms": 1.0}] * 100 + [{"action_type": "redirect", "elapsed_ms": 1.0}] * 50
+    ok = {"holds": True}
+    assert rec.derive_verdict(prerequisites=[], gaps=[], required_samples=150, samples=samples, evaluated=ok) == rec.VERDICT_PASS
+    assert rec.derive_verdict(
+        prerequisites=[], gaps=[], required_samples=150, samples=samples, evaluated=ok, per_action_required=50
+    ) == rec.VERDICT_NOT_MEASURABLE
+    assert rec.per_action_shortfall(samples, 50) == {"throttle": 0}
+    balanced = samples[:50] + samples[100:] + [{"action_type": "throttle", "elapsed_ms": 1.0}] * 50
+    assert rec.derive_verdict(
+        prerequisites=[], gaps=[], required_samples=150, samples=balanced, evaluated=ok, per_action_required=50
+    ) == rec.VERDICT_PASS
+    assert SPEC["per_action_samples"] == START_SPEC["per_action_samples"] == so04.LEASES_PER_TYPE == 50
+
+
+def test_validator_rejects_a_record_that_drops_the_per_action_rule():
+    record = _record(_full_samples(skip=("throttle",)))
+    del record["parts"][1]["sample_rule"]["per_action_required"]
+    errors = rec.validate_record(json.loads(json.dumps(record)))
+    assert any("per_action_required" in e for e in errors), errors
+
+
+class _Res:
+    def __init__(self, rc, stderr=""):
+        self.returncode, self.stdout, self.stderr = rc, "", stderr
+
+
+def test_install_touches_nothing_when_the_table_appears_after_the_check(monkeypatch):
+    owned = comp.OwnedState()
+    owned.tc = owned.nft = owned.ip = "/bin/true"
+    calls = []
+
+    def fake_run(argv, stdin=None):
+        calls.append(argv)
+        if argv[1:3] == ["create", "table"]:
+            return _Res(1, "File exists")
+        return _Res(0)
+
+    monkeypatch.setattr(comp, "_run", fake_run)
+    problems = owned.install(_leases(1))
+    assert problems and "create table" in problems[0]
+    assert owned.created_table is False and owned.created_ifaces == []
+    calls.clear()
+    owned.cleanup()
+    assert calls == []
+
+
+def test_install_never_adopts_an_existing_interface_but_tracks_a_timed_out_add(monkeypatch):
+    owned = comp.OwnedState()
+    owned.tc = owned.nft = owned.ip = "/bin/true"
+    leases = [l for l in _leases(2) if l["action"] == "throttle"]
+    existing = {leases[0]["iface"]}
+    made = set()
+
+    def fake_run(argv, stdin=None):
+        if argv[1:3] == ["link", "show"]:
+            return _Res(0 if argv[-1] in existing | made else 1)
+        if argv[1:3] == ["link", "add"]:
+            made.add(argv[3])
+            return _Res(comp.TIMEOUT_RC, "timed out")
+        return _Res(0)
+
+    monkeypatch.setattr(comp, "_run", fake_run)
+    problems = owned.install(leases)
+    assert any("already exists" in p for p in problems)
+    assert owned.created_ifaces == [leases[1]["iface"]]
+    assert owned.created_table is True
+
+
+def test_install_uses_create_for_table_and_chains(monkeypatch):
+    owned = comp.OwnedState()
+    owned.tc = owned.nft = owned.ip = "/bin/true"
+    seen = []
+    monkeypatch.setattr(comp, "_run", lambda argv, stdin=None: (seen.append((argv, stdin)), _Res(0))[1])
+    owned.install([l for l in _leases(1) if l["action"] != "throttle"])
+    assert seen[0][0][1:3] == ["create", "table"]
+    script = seen[1][1]
+    assert "add table" not in script and "add chain" not in script
+    assert script.count("create chain") == 2
+
+
+def test_sigterm_during_a_run_cleans_up_and_restores_handlers():
+    import signal
+
+    cleaned = []
+    before = signal.getsignal(signal.SIGTERM)
+    with pytest.raises(SystemExit):
+        with comp._CleanupOnSignal(lambda: cleaned.append(1)):
+            signal.raise_signal(signal.SIGTERM)
+    assert cleaned and signal.getsignal(signal.SIGTERM) is before
+
+
+def test_run_timeout_is_a_failure_not_an_exception(monkeypatch):
+    def boom(*a, **k):
+        raise comp.subprocess.TimeoutExpired(cmd="x", timeout=1)
+
+    monkeypatch.setattr(comp.subprocess, "run", boom)
+    assert comp._run(["x"]).returncode == comp.TIMEOUT_RC

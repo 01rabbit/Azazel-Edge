@@ -24,35 +24,55 @@ no bound in it changes when or how a lease is released.
 
 | Action type | Bound | Status | Hardware class | Basis |
 | --- | --- | --- | --- | --- |
-| `isolate` | 5000 ms | provisional | container-aarch64, not hardware | 3 runs, 150 samples, max observed 2446.3 ms (nominal max 836.8 ms) |
-| `redirect` | 6000 ms | provisional | container-aarch64, not hardware | 3 runs, 150 samples, max observed 2618.3 ms (nominal max 766.5 ms) |
+| `isolate` | 5000 ms | provisional | container-aarch64, not hardware | 3 runs, 150 samples, max observed 2094.8 ms (nominal max 776.8 ms) |
+| `redirect` | 5000 ms | provisional | container-aarch64, not hardware | 3 runs, 150 samples, max observed 2236.3 ms (nominal max 774.9 ms) |
 | `throttle` | — (undeclared) | — | — | no completion observed; see below |
 
 Margin rule: twice the maximum observed, rounded up to the next 1000 ms. Half
 of each run's leases expire while the harness writes 2000 synthetic EVE alerts
 per second into the core's input; that load dominates the maximum.
 
+The runs were taken on main after #439: every lease carried a monotonic deadline
+and expired on it (`expiry_clock: monotonic` in every sample), and start and end
+were both read on `CLOCK_BOOTTIME`.
+
+**The basis is not clean.** `wall_clock_stable_during_run` was unmet in one of
+the three runs: the wall-minus-monotonic drift was −108.6 ms against a 50 ms
+tolerance (the colima VM's wall clock was adjusted during the run). The elapsed
+times do not depend on the wall clock, but the run would not count as evidence.
+An earlier set of three runs, taken before #439 with the start mapped from the
+wall deadline, had the same problem (drift −111 to −206 ms, as found in review) and gave maxima of
+2446.3 ms (isolate) and 2618.3 ms (redirect). It is superseded and not used for
+the bounds; both maxima are still under 5000 ms.
 ### How SO-04 cites it
 
 The `rollback_completion` part of the SO-04 record
 (`so04_rollback_completion.py`):
 
-- **start** — the lease's declared expiry (`due_epoch`), as in the start half;
+- **start** — the start half's own start (`so04_lease_rollback.lease_start`):
+  the lease's monotonic deadline (`due_boottime_ns`, `CLOCK_BOOTTIME`), or the
+  wall deadline mapped onto `CLOCK_MONOTONIC` for a legacy lease. A test checks
+  that both halves give identical starts;
 - **end** — the first `rust_release_engine_v1` outcome naming the lease with
-  `status: released` and `result: rollback_applied_and_absence_verified`;
+  `status: released` and `result: rollback_applied_and_absence_verified`, read on
+  the clock the start is on;
 - **pass rule** — `every_sample_max_elapsed_per_action`: each sample against the
   bound its action type declares. The part carries the bounds, the declaration
   path and its SHA-256. The validator reloads the file from the tree and rejects
   a record whose bounds or digest differ.
 - **never pass on missing** — a sample whose action type declares no bound is a
   violation, and `per_action_completion_bound_declared` is recomputed from the
-  file and the samples. With `throttle` undeclared, the part is
+  file and the samples. The sample rule is 50 per action type, checked per type
+  and not only as a total of 150 (the start half has the same check). With `throttle` undeclared, the part is
   `not_measurable` whatever the samples show.
 - **provisional is not evidence** — the gap `SO04-COMPLETION-BOUND-PROVISIONAL`
   is mandatory for the part. It stays until a hardware-derived declaration
-  replaces the provisional one. The start half's
-  `SO04-LEASE-EXPIRY-ON-WALL-CLOCK` and `SO04-HOSTILE-LOAD-UNDECLARED` apply too,
-  because the start event and sample rule are the same.
+  replaces the provisional one. `SO04-HOSTILE-LOAD-UNDECLARED` applies too,
+  because the sample rule is the same. `SO04-LEASE-EXPIRY-ON-WALL-CLOCK` is
+  listed under `gaps_closed_by_samples` for this part as for the start half: it
+  may be left out only when the validator's own recomputation
+  (`so04_monotonic_expiry_observed`) holds for every sample. An unfinished
+  sample never satisfies it, so with throttle not completing it stays.
 
 Rollback completes only if there is owned state to roll back, so the harness
 installs it before the core starts: one TBF root qdisc per throttle lease on a
@@ -63,8 +83,15 @@ is confirmed from outside (`completion_confirmed_by_readback`). This needs
 root, `CAP_NET_ADMIN` and the dummy link type, e.g.
 `docker run --cap-add NET_ADMIN`. Without them, or when an `inet azazel_edge`
 table already exists (a live node's firewall, which the harness never
-touches), nothing is installed and the part is `not_measurable`. The harness
-deletes the interfaces and the table it created.
+touches), nothing is installed and the part is `not_measurable`.
+
+The harness removes only what it verifiably created. The table is made with
+`nft create table` (which fails if a table exists, even one that appeared after
+the check) and its chains with `create chain`; on failure nothing is touched
+and nothing is deleted. An interface is used only if it did not exist just
+before the harness added it. On SIGTERM, SIGHUP or SIGINT the core is stopped
+and the harness's interfaces and table are removed; an `atexit` hook covers
+other interpreter exits.
 
 ### Throttle: why no bound is declared
 
