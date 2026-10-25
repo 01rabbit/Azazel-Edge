@@ -159,7 +159,19 @@ key blocks (also unterminated), emails and long opaque tokens. Matching runs on
 an NFKC-normalised copy with zero-width chars removed and common
 Cyrillic/Greek confusables mapped, and the original span is replaced. Pure hex
 digests (32/40/64), digit runs, paths and structured refs (`ev:flow:<id>`) are
-kept. Masking runs before truncation so a cut cannot expose part of a token.
+kept. Short labels that also occur in SOC prose (`auth`, `pin`, `pass`, `pw`,
+`secret`, `token`) are kept only when the *whole* value is an ordinary phrase:
+it starts with a status word (`failed`, `none`, `expired`, `rejected`,
+`leaked`, ...) or a short count, and every word is a status word, an allowed
+ordinary word, or a count of at most three digits followed by a unit word
+(`pin: 3 hosts`; for `pin` the unit list is smaller). Any other word masks the
+whole value (`token: expired abc123`, `pin: 4821 ok`); if unsure, mask.
+`bearer token <x>` skips only the word "token" and then examines `<x>`.
+Strong labels (`password`, `api_key`, ...) are always masked. Unquoted values
+run to the field end; a closing bracket ends a value only when its opening
+bracket precedes the label (`(pw: x)`). Scheme-less `user:pass@host` and passwords with spaces in URL
+userinfo are masked; a plain email has no `:` and is handled by the email rule.
+Masking runs before truncation so a cut cannot expose part of a token.
 
 In the handoff, IDs (`trace_id`, `frame_id`, hypothesis IDs, evidence refs,
 playbook id/version) are kept only if they match `ID_GRAMMAR` and are not
