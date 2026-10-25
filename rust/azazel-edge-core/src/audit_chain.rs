@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -28,18 +28,56 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const HEAD_WINDOW: u64 = 64 * 1024;
 
 static APPEND_LOCK: Mutex<()> = Mutex::new(());
+/// Chain files whose directory entry this process has fsynced. A directory
+/// fsync that fails is retried on the next append rather than forgotten.
+static DIR_SYNCED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 #[cfg(test)]
 thread_local! {
+    /// fsync(2) calls made on this thread (Linux; see `fsync_probe`).
     pub static SYNC_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub static FAIL_NEXT_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Flush the file's data and metadata to stable storage.
-fn sync_durable(file: &File) -> io::Result<()> {
-    file.sync_all()?;
+/// Counts real `fsync(2)` calls in the test binary. It interposes the libc
+/// symbol that `File::sync_all` calls on Linux and forwards to the kernel, so
+/// the count moves only when an fsync actually reaches the kernel: removing a
+/// `sync_all` from the code under test removes its count.
+#[cfg(all(test, target_os = "linux"))]
+mod fsync_probe {
+    use std::os::raw::{c_int, c_long};
+    extern "C" {
+        fn syscall(number: c_long, ...) -> c_long;
+    }
+    #[cfg(target_arch = "x86_64")]
+    const SYS_FSYNC: c_long = 74;
+    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    const SYS_FSYNC: c_long = 82;
+    #[cfg(target_arch = "arm")]
+    const SYS_FSYNC: c_long = 118;
+
+    #[no_mangle]
+    pub extern "C" fn fsync(fd: c_int) -> c_int {
+        super::SYNC_CALLS.with(|c| c.set(c.get() + 1));
+        // SAFETY: the raw fsync system call takes one integer argument.
+        unsafe { syscall(SYS_FSYNC, fd as c_long) as c_int }
+    }
+}
+
+fn sync_dir(dir: &File) -> io::Result<()> {
     #[cfg(test)]
-    SYNC_CALLS.with(|c| c.set(c.get() + 1));
-    Ok(())
+    if FAIL_NEXT_DIR_SYNC.with(|c| c.replace(false)) {
+        return Err(io::Error::other("injected directory fsync failure"));
+    }
+    dir.sync_all()
+}
+
+/// What `append` needs to know about the end of the file.
+struct ChainHead {
+    /// `chain_hash` of the last line, or empty (as `P0AuditLogger` reads it).
+    prev: String,
+    /// The file does not end in a newline: its last line is a torn write.
+    torn_tail: bool,
 }
 
 /// The node's monotonic clock (`CLOCK_MONOTONIC`) in nanoseconds: the clock
@@ -164,19 +202,24 @@ fn contains_float(value: &Value) -> bool {
 /// The `chain_hash` of the last record, read the way
 /// `P0AuditLogger._read_last_chain_hash` reads it: the last line, or empty
 /// when the file is absent, empty, or ends in a line that does not parse.
-fn read_chain_head(path: &Path) -> Result<String, String> {
+fn read_chain_head(path: &Path) -> Result<ChainHead, String> {
     let mut file = match File::open(path) {
         Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Ok(ChainHead { prev: String::new(), torn_tail: false })
+        }
         Err(e) => return Err(format!("audit chain open failed: {e}")),
     };
     let len = file.metadata().map_err(|e| format!("audit chain metadata failed: {e}"))?.len();
     let mut start = len.saturating_sub(HEAD_WINDOW);
     let mut buf = Vec::new();
+    let mut torn_tail = None;
     loop {
         buf.clear();
         file.seek(SeekFrom::Start(start)).map_err(|e| format!("audit chain seek failed: {e}"))?;
         file.read_to_end(&mut buf).map_err(|e| format!("audit chain read failed: {e}"))?;
+        let torn_tail = *torn_tail.get_or_insert(!buf.is_empty() && buf.last() != Some(&b'\n'));
+        let head = |prev: String| Ok(ChainHead { prev, torn_tail });
         let mut body: &[u8] = &buf;
         if body.last() == Some(&b'\n') {
             body = &body[..body.len() - 1];
@@ -192,17 +235,18 @@ fn read_chain_head(path: &Path) -> Result<String, String> {
             None => {}
         }
         if body.is_empty() {
-            return Ok(String::new());
+            return head(String::new());
         }
         let last: Value = match serde_json::from_slice(body) {
             Ok(v) => v,
-            Err(_) => return Ok(String::new()),
+            Err(_) => return head(String::new()),
         };
-        return Ok(last
-            .get("chain_hash")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string());
+        return head(
+            last.get("chain_hash")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        );
     }
 }
 
@@ -216,24 +260,31 @@ pub fn append(path: &Path, fields: Map<String, Value>) -> Result<Value, String> 
     let _guard = APPEND_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let parent = path.parent().ok_or_else(|| "audit chain path has no parent".to_string())?;
     fs::create_dir_all(parent).map_err(|e| format!("audit chain mkdir failed: {e}"))?;
-    let existed = match fs::symlink_metadata(path) {
+    match fs::symlink_metadata(path) {
         Ok(meta) => {
             if meta.file_type().is_symlink() || !meta.is_file() {
                 return Err("audit chain must be a regular non-symlink file".to_string());
             }
-            true
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("audit chain metadata failed: {e}")),
-    };
-    let prev = read_chain_head(path)?;
+    }
+    let head = read_chain_head(path)?;
     let mut record = fields;
-    record.insert("chain_prev".to_string(), Value::String(prev));
+    record.insert("chain_prev".to_string(), Value::String(head.prev));
     let unhashed = Value::Object(record.clone());
     let hash = sha256_hex(canonical_json(&unhashed)?.as_bytes());
     record.insert("chain_hash".to_string(), Value::String(hash));
     let written = Value::Object(record);
-    let mut line = canonical_json(&written)?;
+    // A torn last line (a write cut short by a crash) is closed first, so the
+    // new record is a line of its own instead of being glued onto it. As in
+    // P0AuditLogger, the torn line gives no chain head and the new record
+    // starts from an empty chain_prev; verify_chain then fails at the torn line.
+    let mut line = String::new();
+    if head.torn_tail {
+        line.push('\n');
+    }
+    line.push_str(&canonical_json(&written)?);
     line.push('\n');
     let mut file = OpenOptions::new()
         .create(true)
@@ -243,11 +294,15 @@ pub fn append(path: &Path, fields: Map<String, Value>) -> Result<Value, String> 
         .map_err(|e| format!("audit chain open failed: {e}"))?;
     file.write_all(line.as_bytes())
         .map_err(|e| format!("audit chain write failed: {e}"))?;
-    sync_durable(&file).map_err(|e| format!("audit chain fsync failed: {e}"))?;
-    if !existed {
-        // A new file is durable only once its directory entry is.
+    file.sync_all().map_err(|e| format!("audit chain fsync failed: {e}"))?;
+    // The file is durable only once its directory entry is: fsync the
+    // directory on this process's first append to the file, and again on
+    // every later append until one succeeds.
+    let mut dir_synced = DIR_SYNCED.lock().unwrap_or_else(|p| p.into_inner());
+    if !dir_synced.iter().any(|p| p == path) {
         let dir = File::open(parent).map_err(|e| format!("audit chain dir open failed: {e}"))?;
-        sync_durable(&dir).map_err(|e| format!("audit chain dir fsync failed: {e}"))?;
+        sync_dir(&dir).map_err(|e| format!("audit chain dir fsync failed: {e}"))?;
+        dir_synced.push(path.to_path_buf());
     }
     Ok(written)
 }
@@ -357,6 +412,8 @@ mod tests {
     }
 
     #[test]
+    // fsync(2) is counted by interposing the libc symbol; Linux only.
+    #[cfg_attr(not(target_os = "linux"), ignore)]
     fn append_chains_and_fsyncs_every_record() {
         let path = test_path("chain");
         SYNC_CALLS.with(|c| c.set(0));
@@ -375,6 +432,57 @@ mod tests {
         let mut row: Value = serde_json::from_str(lines[1]).unwrap();
         let hash = row.as_object_mut().unwrap().remove("chain_hash").unwrap();
         assert_eq!(hash, json!(sha256_hex(canonical_json(&row).unwrap().as_bytes())));
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    fn lines(path: &Path) -> Vec<String> {
+        fs::read_to_string(path).unwrap().lines().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn a_record_after_a_torn_tail_is_a_line_of_its_own() {
+        let path = test_path("torn");
+        let mut fields = Map::new();
+        fields.insert("kind".into(), json!("k"));
+        let first = append(&path, fields.clone()).unwrap();
+        // A crash cut the next write short: no closing brace, no newline.
+        let mut fh = OpenOptions::new().append(true).open(&path).unwrap();
+        fh.write_all(br#"{"kind":"k","chain_prev":"#).unwrap();
+        drop(fh);
+        let after = append(&path, fields.clone()).unwrap();
+        let rows = lines(&path);
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert_eq!(rows[1], r#"{"kind":"k","chain_prev":"#);
+        let parsed: Value = serde_json::from_str(&rows[2]).expect("record after the torn line parses alone");
+        assert_eq!(parsed, after);
+        // The torn line gives no head, as in P0AuditLogger: chain_prev is empty.
+        assert_eq!(after["chain_prev"], json!(""));
+        assert_ne!(after["chain_prev"], first["chain_hash"]);
+        // The chain continues normally from the new record.
+        let next = append(&path, fields).unwrap();
+        assert_eq!(next["chain_prev"], after["chain_hash"]);
+        assert_eq!(lines(&path).len(), 4);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    // fsync(2) is counted by interposing the libc symbol; Linux only.
+    #[cfg_attr(not(target_os = "linux"), ignore)]
+    fn a_failed_directory_fsync_is_retried_on_the_next_append() {
+        let path = test_path("dirsync");
+        let mut fields = Map::new();
+        fields.insert("kind".into(), json!("k"));
+        SYNC_CALLS.with(|c| c.set(0));
+        FAIL_NEXT_DIR_SYNC.with(|c| c.set(true));
+        assert!(append(&path, fields.clone()).is_err());
+        // The record itself was written and fsynced; only the directory failed.
+        assert_eq!(SYNC_CALLS.with(|c| c.get()), 1);
+        assert_eq!(lines(&path).len(), 1);
+        append(&path, fields.clone()).unwrap();
+        // File and, retried, the directory.
+        assert_eq!(SYNC_CALLS.with(|c| c.get()), 3);
+        append(&path, fields).unwrap();
+        assert_eq!(SYNC_CALLS.with(|c| c.get()), 4);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

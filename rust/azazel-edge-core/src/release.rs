@@ -79,6 +79,12 @@ pub struct ReleaseOutcome {
     pub failed_count: u32,
     pub errors: Vec<String>,
     pub postcondition: Value,
+    /// Whether this attempt's `rollback_started` audit record was written:
+    /// `recorded`, `failed:<reason>`, or `not_applicable` when no rollback
+    /// command was issued (superseded or deferred). A failure never holds
+    /// the rollback back; this field is how it is seen besides stderr.
+    #[serde(default)]
+    pub rollback_start_audit: String,
 }
 
 #[derive(Debug, Clone)]
@@ -479,12 +485,16 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
         // first rollback command runs. A failure to write it is reported but
         // never holds the rollback back: releasing the lease is the safe
         // direction, and a missing record is what the SO-04 harness detects.
-        if let Err(error) = record_rollback_start(path, &current) {
-            eprintln!(
-                "rollback start audit record failed: release_task_id={} error={}",
-                current.task_id, error
-            );
-        }
+        let start_audit = match record_rollback_start(path, &current) {
+            Ok(()) => "recorded".to_string(),
+            Err(error) => {
+                eprintln!(
+                    "rollback start audit record failed: release_task_id={} error={}",
+                    current.task_id, error
+                );
+                bounded_error(&format!("failed:{error}"))
+            }
+        };
         let result = release_owned_state(&current, runner, now_epoch);
         if let Some(task) = ledger
             .tasks
@@ -509,9 +519,9 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
                 }
             }
         }
-        match result {
-            Ok(outcome) => outcomes.push(outcome),
-            Err(error) => outcomes.push(outcome_for(
+        let mut outcome = match result {
+            Ok(outcome) => outcome,
+            Err(error) => outcome_for(
                 &current,
                 now_epoch,
                 "retry_pending",
@@ -520,8 +530,10 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
                 1,
                 vec![bounded_error(&error)],
                 json!({"verified": false}),
-            )),
-        }
+            ),
+        };
+        outcome.rollback_start_audit = start_audit;
+        outcomes.push(outcome);
     }
     save_ledger(path, &mut ledger)?;
     Ok(outcomes)
@@ -1011,6 +1023,7 @@ fn outcome_for(
         failed_count,
         errors,
         postcondition,
+        rollback_start_audit: "not_applicable".to_string(),
     }
 }
 
@@ -1653,6 +1666,8 @@ mod tests {
     }
 
     #[test]
+    // fsync(2) is counted by interposing the libc symbol; Linux only.
+    #[cfg_attr(not(target_os = "linux"), ignore)]
     fn rollback_start_record_is_durable_before_the_first_rollback_command() {
         let path = test_path("ledger.json");
         let task = build_release_task(
@@ -1688,7 +1703,8 @@ mod tests {
         prepare_release_task(&path, &task).unwrap();
         let before = audit_chain::monotonic_ns().unwrap();
         let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
-        process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        assert_eq!(outcomes[0].rollback_start_audit, "recorded");
         let after = audit_chain::monotonic_ns().unwrap();
         let rows = rollback_rows(&path);
         assert_eq!(rows.len(), 1);
@@ -1734,6 +1750,55 @@ mod tests {
     }
 
     #[test]
+    fn a_superseded_throttle_writes_no_rollback_start_record() {
+        let path = test_path("ledger.json");
+        let mut old = build_release_task(
+            "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, 100.0,
+        )
+        .unwrap();
+        let mut newer = build_release_task(
+            "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, 105.0,
+        )
+        .unwrap();
+        // Both active, as a ledger written before activation superseded the
+        // older owner leaves them; the sweep then supersedes the older one.
+        old.status = "active".to_string();
+        newer.status = "active".to_string();
+        let mut ledger = ReleaseLedger::default();
+        ledger.tasks = vec![old.clone(), newer];
+        save_ledger(&path, &mut ledger).unwrap();
+        let runner = FakeRunner::new(Vec::new());
+        let outcomes = process_due_releases_with_runner(&path, 111.0, &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "superseded");
+        assert_eq!(outcomes[0].rollback_start_audit, "not_applicable");
+        assert!(runner.calls.lock().unwrap().is_empty());
+        assert!(rollback_rows(&path).is_empty(), "a superseded lease issued no rollback and must not claim one");
+    }
+
+    #[test]
+    fn an_ambiguous_deferred_throttle_writes_no_rollback_start_record() {
+        let path = test_path("ledger.json");
+        let old = build_release_task(
+            "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, 100.0,
+        )
+        .unwrap();
+        let mut newer = build_release_task(
+            "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, 105.0,
+        )
+        .unwrap();
+        newer.tc_handle = old.tc_handle.clone();
+        prepare_release_task(&path, &old).unwrap();
+        activate_release_task(&path, &old.task_id, 101.0).unwrap();
+        prepare_release_task(&path, &newer).unwrap();
+        let runner = FakeRunner::new(Vec::new());
+        let outcomes = process_due_releases_with_runner(&path, 111.0, &runner).unwrap();
+        assert_eq!(outcomes[0].result, "ambiguous_newer_throttle_owner");
+        assert_eq!(outcomes[0].rollback_start_audit, "not_applicable");
+        assert!(rollback_rows(&path).is_empty(), "a deferred lease issued no rollback and must not claim one");
+    }
+
+    #[test]
     fn nothing_due_writes_no_rollback_start_record() {
         let path = test_path("ledger.json");
         let task = build_release_task(
@@ -1760,5 +1825,7 @@ mod tests {
         let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
         assert_eq!(runner.calls.lock().unwrap().len(), 1);
         assert_eq!(outcomes[0].status, "released");
+        // The failure is visible in the outcome, not only on stderr.
+        assert!(outcomes[0].rollback_start_audit.starts_with("failed:"), "{}", outcomes[0].rollback_start_audit);
     }
 }

@@ -187,8 +187,18 @@ Before the first rollback command of every release attempt, the core appends one
   `CLOCK_MONOTONIC` and the wall clock, plus `boot_id`. Instants are integers so the
   Python verifier re-serialises them byte for byte. `record_schema` is
   `azazel-edge/rollback-started/v1`.
-- A failure to write the record is reported on stderr and does not hold the rollback
-  back: releasing the lease is the safe direction.
+- A failure to write the record does not hold the rollback back: releasing the lease
+  is the safe direction. It is reported on stderr and in the attempt's
+  `rust_release_engine_v1` outcome as `rollback_start_audit: "failed:<reason>"`
+  (`"recorded"` when written, `"not_applicable"` when no rollback command was issued).
+- A torn last line (a write cut short by a crash) is closed with a newline before the
+  next record, so that record is a line of its own. As in `P0AuditLogger`, the torn
+  line gives no chain head: the next record starts from an empty `chain_prev`, and
+  `verify_chain` fails at the torn line.
+- The directory entry is fsynced on the process's first append to the chain, and
+  retried on later appends until it succeeds.
+- The chain assumes one writer: a single `azazel-edge-core` unit. Two processes
+  appending to the same chain would fork it.
 - A throttle superseded by a newer owner, or deferred for an ambiguous newer owner,
   issues no rollback command and writes no record.
 
