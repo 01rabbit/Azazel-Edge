@@ -282,6 +282,7 @@ alert rule uses.
 | --- | --- | --- | --- | --- |
 | `non_alert_flood` | 3000 (flow, dns, stats, http: 750 each) | 1000 | — | 2500 × 1.2; over the quota, so the core must shed |
 | `malformed_mix` | 3000 (flow, dns, stats, http, invalid UTF-8: 600 each) | 1000 | 1 oversized line/s of 2 MiB | 2500 × 1.2; oversized = 2 × `max_line_bytes`, at 0.25 × `backlog_bound_bytes` per second |
+| `backlog_flood` | 30000 (flow, dns, stats, http: 7500 each), one burst per second | 1000 | — | 2500 × 12 (over 10 × the quota); each burst is about 18 MB, more than twice the 8 MiB `backlog_bound_bytes`, so the core's backlog shedding must act |
 | `alert_flood` | 0 | 5000 | — | `alerts_per_poll` 1000 per 200 ms poll: the poll cap |
 
 Alert rate rule: `alert_poll_fill × alerts_per_poll × 1000 / poll_ms`. Other
@@ -295,14 +296,18 @@ quiet gap, so no `ingress_shed` summary can belong to two phases).
 **Defaults awaiting owner confirmation.** The factors under `owner_defaults`
 were chosen when the profile was written: `non_alert_factor` 1.2 (SO-11's
 overload point), `flood_alert_poll_fill` 1.0, `background_alert_poll_fill` 0.2,
-`oversized_line_factor` 2.0, `oversized_backlog_share` 0.25. The rates follow
-from them and from the quota; changing a factor means re-deriving the rates.
+`oversized_line_factor` 2.0, `oversized_backlog_share` 0.25,
+`backlog_non_alert_factor` 12 and `backlog_burst_interval_ms` 1000. The rates
+follow from them and from the quota; changing a factor means re-deriving the
+rates. `rate_tolerance` (0.05) may be at most 0.2 and `shed_tolerance` (0.1)
+at most 0.2.
 
 ### How SO-04 applies it
 
 Both SO-04 halves (`so04_lease_rollback.py`, `so04_rollback_completion.py`)
-use `so04_hostile_load.py`. Of the 50 leases per action type, 12 expire under
-each phase and 14 nominal (unloaded). The driver writes each phase's lines into
+use `so04_hostile_load.py`. Of the 50 leases per action type,
+`leases_per_phase_per_action` (10) expire under each of the four phases and 10
+nominal (unloaded): 120 of 150 under load. The driver writes each phase's lines into
 the core's EVE input at the declared rates for the phase's window, each phase
 lease expires after the warm-up (plus a 0.5 s margin) and before the window
 ends, and after the run the harness waits until the core has decided every
@@ -328,13 +333,28 @@ profile and the quota from the tree and checks that:
 - the core's summaries: `alerts_shed` 0 and `oversized_possible_alerts` 0 in
   every one, the quota block equal to the declared quota, no summary missing
   (cumulative totals equal the summed intervals), the audit not rotated; for
-  each over-quota phase, non-alert lines shed for the rate in the summaries
-  attributed to it (at least one, and at least what the bucket could not have
-  admitted); for each phase, the oversized lines the core skipped equal those
-  written;
+  each over-quota phase, the lines shed in the summaries attributed to it are
+  at least `(1 − shed_tolerance)` × the excess (non-alert lines written minus
+  `value × window + non_alert_burst`, which no bucket could admit), at least
+  one of them for the rate, and the non-alert lines the core admitted there are
+  at most `value × (window + slack) + non_alert_burst`; container runs shed
+  1.28–1.96 × the excess, because the class reserves shed flow, dns and stats
+  before the bucket is empty. In the backlog phase the summaries must also show
+  lines shed for the backlog and a shed level of at least 1. For each phase, the
+  oversized lines the core skipped equal those written;
 - every hostile sample's lease expired inside its phase's window after the
-  warm-up, on `CLOCK_BOOTTIME`, and every phase has a sample of every action
-  type; every other sample is `nominal`.
+  warm-up, on `CLOCK_BOOTTIME`; every phase has at least
+  `leases_per_phase_per_action` samples of every action type, at least
+  `min_hostile_share` (0.8) of all samples are under a declared phase, and every
+  other sample is `nominal`.
+
+CI also checks this directly: after `validate --ci`, the `service-objectives`
+job runs `python -m azazel_edge.service_objectives.so04_hostile_load
+service-objective-records`, which fails unless both SO-04 parts pass the same
+recomputation and keep no gap but `SO04-COMPLETION-BOUND-PROVISIONAL` and
+`SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL`. The same job runs the real-core test of
+the driver (`-k real_core`), which is skipped in `test-python` because that job
+builds no core; the step fails unless the test passed.
 
 A part without the observation, with a load short of its rate, or with an
 invalid profile in the tree keeps the gap. `SO04-COMPLETION-BOUND-PROVISIONAL`
@@ -350,9 +370,13 @@ tree, never from the record (`record.PART_GAP_CLOSERS` →
 `so04_hostile_load.profile_confirmed_problems`). It may be left out only when
 
 - `hostile_load_profile.json` in the tree is valid and declares status
-  `confirmed` (the only statuses are `provisional` and `confirmed`; `confirmed`
-  with `owner_defaults.status` still pending makes the whole profile invalid),
-  and
+  `confirmed`. The only statuses are `provisional` and `confirmed`. `confirmed`
+  is accepted only with `owner_defaults.status` exactly `confirmed` and
+  `owner_defaults.confirmed_phase_factors` equal to every phase's current factors
+  (`non_alert_factor`, `alert_poll_fill`, `oversized_line_factor`,
+  `oversized_backlog_share`, `burst_interval_ms`); otherwise the whole profile
+  is invalid. A confirmation therefore names the values it confirmed, and a
+  later change to a factor undoes it; and
 - the part's load was taken against that very file (same path and SHA-256).
 
 There is no other way to close it: no approval flag, no environment variable.
@@ -369,7 +393,14 @@ clean run is green.
 
 ### Container runs (not hardware evidence)
 
-Three runs of `run --objective SO-04` on this change (docker `--cap-add
+With the four phases (after the review: backlog phase, 10 leases per phase and
+action type), one run on colima aarch64: every part 150/150, 0 violations,
+start max 488.0 ms; `backlog_flood` shed 227054 / 227110 lines (start /
+completion), 60000 / 70500 of them for the backlog, at shed level 2 / 3 with up
+to 18.6 / 29.4 MB unread; the recomputation found nothing in either part.
+`wall_clock_stable_during_run` was unmet in that run (colima clock drift).
+
+Earlier, with three phases (12 leases per phase), three runs of `run --objective SO-04` on this change (docker `--cap-add
 NET_ADMIN`, colima, aarch64, 2026-10-26), taken before
 `SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL` was added (the load and timing are
 unchanged by it). Every part 150/150 samples, 0 violations, and

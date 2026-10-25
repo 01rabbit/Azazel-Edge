@@ -558,7 +558,7 @@ def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_ty
         created_boot = so04.boottime_ns()
         this_boot = so04.boot_id()
         monotonic_leases = created_boot is not None and bool(this_boot)
-        plan = so04_hostile_load.plan(leases_per_type, profile["phases"])
+        plan = so04_hostile_load.plan(leases_per_type, profile)
         # Installing state takes a while; expiries are set once it is done.
         leases: List[Dict[str, Any]] = []
         for action, index, phase in plan:

@@ -55,8 +55,9 @@ Hostile load (``so04_hostile_load``)
 -----------------------------------
 Leases expire both unloaded (``nominal``) and under each phase of the
 declared hostile-load profile (``config/service_objectives/hostile_load_profile.json``):
-non-alert lines at 120% of the OF-06 quota, alerts at the per-poll cap, and a
-mix of invalid UTF-8 and oversized lines. The harness writes each phase into the
+non-alert lines at 120% of the OF-06 quota, alerts at the per-poll cap, a
+mix of invalid UTF-8 and oversized lines, and bursts of non-alert lines at 12
+times the quota that push the core into backlog shedding. The harness writes each phase into the
 core's EVE input at the declared rates for its window, and every phase lease
 expires after the warm-up that empties the core's non-alert bucket. The part
 carries the observation (``hostile_load``): what was written per class and
@@ -548,7 +549,7 @@ def run(
             this_boot = boot_id()
             monotonic_leases = created_boot is not None and bool(this_boot)
             leases: List[Dict[str, Any]] = []
-            plan = so04_hostile_load.plan(leases_per_type, profile["phases"])
+            plan = so04_hostile_load.plan(leases_per_type, profile)
             # Expiries start 3 s after the ledger is written: nominal leases
             # first, then each declared hostile-load phase in its own window.
             dues, windows = so04_hostile_load.schedule([p[2] for p in plan], created + 3.0, rng, profile)

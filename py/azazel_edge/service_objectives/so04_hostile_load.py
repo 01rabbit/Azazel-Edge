@@ -145,6 +145,7 @@ def hostile_load_problems(
     problems += audit_problems
     observed = {p.get("name"): p for p in hostile_load.get("phases") or [] if isinstance(p, dict)}
     tol = float(profile["rate_tolerance"])
+    shed_tol = float(profile["shed_tolerance"])
     warmup_ns = int(profile["warmup_ms"]) * 1_000_000
     slack_s = int(profile["audit_attribution_slack_ms"]) / 1000.0
     windows: Dict[str, Tuple[int, int]] = {}
@@ -180,18 +181,34 @@ def hostile_load_problems(
         mine = [r for r in shed if wws <= float(r["emitted_epoch"]) <= wwe + slack_s]
         if decl["non_alert_lines_per_s"] > quota["value"]:
             non_alert = sum(counts[c] for c in _NON_ALERT_COUNTED)
-            floor = non_alert - (quota["value"] * (duration + slack_s) + quota["non_alert_burst"])
+            # The excess no bucket could admit over the window, and the floor
+            # the core's shedding must reach (profile rule "shed").
+            excess = non_alert - (quota["value"] * duration + quota["non_alert_burst"])
+            floor = max(1, math.ceil((1.0 - shed_tol) * excess))
             got = sum(int(r["shed_total"]) for r in mine)
             by_rate = sum(int((r.get("shed_by_reason") or {}).get("non_alert_rate") or 0) for r in mine)
-            if got < max(1, math.ceil(floor)) or by_rate < 1:
+            admitted = sum(int(r.get("admitted") or 0) - int(r.get("alerts_admitted") or 0) for r in mine)
+            ceiling = quota["value"] * (duration + slack_s) + quota["non_alert_burst"]
+            if excess <= 0 or got < floor or by_rate < 1:
                 problems.append(
                     f"{where}: the core's summaries show {got} non-alert lines shed ({by_rate} for the rate) of {non_alert} "
-                    f"written above the {quota['value']}/s quota (at least {max(1, math.ceil(floor))} expected)"
+                    f"written; the excess over the {quota['value']}/s quota is {excess:.0f}, so at least {floor} expected"
                 )
+            if admitted > ceiling:
+                problems.append(f"{where}: the core admitted {admitted} non-alert lines, above the quota's {ceiling:.0f}")
+            if decl.get("backlog_phase"):
+                by_backlog = sum(int((r.get("shed_by_reason") or {}).get("backlog") or 0) for r in mine)
+                level = max((int(r.get("max_shed_level") or 0) for r in mine), default=0)
+                if by_backlog < 1 or level < 1:
+                    problems.append(
+                        f"{where}: a backlog phase, but the core's summaries show {by_backlog} lines shed for the backlog "
+                        f"at shed level {level}; its backlog shedding did not act"
+                    )
         skipped = sum(int(r["oversized_lines_skipped"]) for r in mine)
         if skipped != counts["oversized"]:
             problems.append(f"{where}: {counts['oversized']} oversized lines written, the core's summaries count {skipped} skipped")
     per_phase: Dict[Tuple[str, str], int] = {}
+    hostile_n = 0
     for idx, s in enumerate(samples):
         cond = s.get("condition") if isinstance(s, dict) else None
         load = cond.get("load") if isinstance(cond, dict) else None
@@ -201,16 +218,22 @@ def hostile_load_problems(
             problems.append(f"sample {idx}: load {load!r} is neither nominal nor a declared phase")
             continue
         per_phase[(load, s.get("action_type"))] = per_phase.get((load, s.get("action_type")), 0) + 1
+        hostile_n += 1
         if load not in windows:
             continue
         ws, we = windows[load]
         start = s.get("start_monotonic_ns")
         if s.get("sample_clock") != CLOCK or not _int(start) or not (ws + warmup_ns <= start <= we):
             problems.append(f"sample {s.get('sample_id')}: its lease did not expire inside the {load} window after the warm-up")
+    need = int(profile["leases_per_phase_per_action"])
     for decl in profile["phases"]:
         for action in ROLLBACK_ACTION_TYPES:
-            if not per_phase.get((decl["name"], action)):
-                problems.append(f"phase {decl['name']}: no {action} lease expired under it")
+            n = per_phase.get((decl["name"], action), 0)
+            if n < need:
+                problems.append(f"phase {decl['name']}: {n} {action} leases expired under it, at least {need} declared")
+    share = float(profile["min_hostile_share"])
+    if not samples or hostile_n < share * len(samples):
+        problems.append(f"{hostile_n} of {len(samples)} samples under a declared phase, below the declared share {share:.0%}")
     return problems
 
 
@@ -250,16 +273,21 @@ def profile_confirmed(samples: Sequence[Mapping[str, Any]], hostile_load: Any) -
 # -------------------------------------------------------------------- driver
 
 
-def plan(leases_per_type: int, phases: Sequence[Mapping[str, Any]]) -> List[Tuple[str, int, str]]:
+def plan(leases_per_type: int, profile: Mapping[str, Any]) -> List[Tuple[str, int, str]]:
     """(action, index, condition) per lease: nominal first, then each phase in order.
 
-    Each declared phase gets ``leases_per_type // (phases + 1)`` leases per
-    action type (at least one); nominal takes the rest. Without a valid profile
-    every lease is nominal.
+    Each declared phase gets the profile's ``leases_per_phase_per_action``
+    leases per action type and nominal takes the rest (a smaller run, as in
+    tests, splits evenly instead). Without a valid profile every lease is
+    nominal.
     """
 
-    names = [p["name"] for p in phases]
-    per_phase = max(1, leases_per_type // (len(names) + 1)) if names else 0
+    names = [p["name"] for p in profile.get("phases") or []]
+    per_phase = 0
+    if names:
+        per_phase = int(profile.get("leases_per_phase_per_action") or 0)
+        if per_phase < 1 or per_phase * len(names) > leases_per_type:
+            per_phase = max(1, leases_per_type // (len(names) + 1))
     nominal = max(0, leases_per_type - per_phase * len(names))
     out: List[Tuple[str, int, str]] = []
     index = 0
@@ -360,6 +388,8 @@ class HostileLoad(threading.Thread):
     def _run_window(self, fh, name: str, end_wall: float) -> None:
         index, phase = self.phases[name]
         rates = phase["rates_per_s"]
+        # A burst phase writes every class once per interval, all at once.
+        burst_s = int(phase.get("burst_interval_ms") or 0) / 1000.0
         lines = _Lines(index, int(self.profile["line_bytes"]), int(phase["oversized_line_bytes"]))
         written = {c: 0 for c in HOSTILE_LINE_CLASSES}
         nbytes = 0
@@ -368,6 +398,8 @@ class HostileLoad(threading.Thread):
         last_boot, last_wall = start_boot, start_wall
         while not self.stop.is_set():
             elapsed = time.monotonic() - t0
+            if burst_s:
+                elapsed = math.floor(elapsed / burst_s) * burst_s
             chunk: List[bytes] = []
             for cls in HOSTILE_LINE_CLASSES:
                 target = int(elapsed * float(rates[cls]))
@@ -527,7 +559,50 @@ def phase_summary(hostile_load: Mapping[str, Any]) -> str:
     return "; ".join(parts) + f"; core ingress audit: {len(shed)} ingress_shed summaries, {total} lines shed, {over} oversized skipped"
 
 
+def check_records(paths: Sequence[Path]) -> List[str]:
+    """CI: in every SO-04 record, both parts show the declared load applied
+    (the validator's recomputation) and keep no gap but the declared
+    provisional ones. Empty: they do. Reads only; changes no verdict."""
+
+    allowed = {"SO04-COMPLETION-BOUND-PROVISIONAL", "SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL"}
+    problems: List[str] = []
+    records = [p for p in paths if p.is_file()] + [q for p in paths if p.is_dir() for q in sorted(p.glob("SO-04-*.json"))]
+    if not records:
+        return ["no SO-04 record found"]
+    for path in records:
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            problems.append(f"{path}: unreadable: {exc}")
+            continue
+        if record.get("objective_id") != "SO-04":
+            continue
+        for part in record.get("parts") or []:
+            where = f"{path.name} {part.get('name')}"
+            found = hostile_load_problems(part.get("samples") or [], part.get("hostile_load"))
+            problems += [f"{where}: {p}" for p in found[:10]]
+            extra = sorted({g.get("id") for g in part.get("gaps") or []} - allowed)
+            if extra:
+                problems.append(f"{where}: gaps beyond the declared provisional ones: {extra}")
+    return problems
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    import argparse
+    import sys
+
+    ap = argparse.ArgumentParser(description="Check SO-04 records: the declared hostile load applied, only provisional gaps left.")
+    ap.add_argument("paths", nargs="+", type=Path)
+    args = ap.parse_args(argv)
+    problems = check_records(args.paths)
+    for p in problems:
+        print(p, file=sys.stderr)
+    print("SO-04 hostile load: " + ("applied as declared in every part; only provisional gaps remain" if not problems else f"{len(problems)} problem(s)"))
+    return 0 if not problems else 1
+
+
 __all__ = [
+    "check_records",
     "HostileLoad",
     "AlertCounter",
     "drain",
@@ -541,3 +616,7 @@ __all__ = [
     "read_audit",
     "schedule",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

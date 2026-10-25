@@ -302,7 +302,35 @@ def derived_phase_rates(phase: Mapping[str, Any], quota: Mapping[str, Any], poll
         rates["oversized"] = o_share * quota["backlog_bound_bytes"] / oversized_bytes
         if rates["oversized"] <= 0:
             raise ValueError("oversized_backlog_share gives no oversized lines")
-    return {"rates_per_s": rates, "non_alert_lines_per_s": non_alert_total, "oversized_line_bytes": oversized_bytes}
+    burst = phase.get("burst_interval_ms", 0)
+    if not isinstance(burst, int) or isinstance(burst, bool) or burst < 0:
+        raise ValueError("burst_interval_ms must be a non-negative integer")
+    return {
+        "rates_per_s": rates,
+        "non_alert_lines_per_s": non_alert_total,
+        "oversized_line_bytes": oversized_bytes,
+        "burst_interval_ms": burst,
+    }
+
+
+# The factors a phase declares; an owner's confirmation names these values.
+HOSTILE_PHASE_FACTORS = ("non_alert_factor", "alert_poll_fill", "oversized_line_factor", "oversized_backlog_share", "burst_interval_ms")
+
+
+def phase_factors(phases: Any) -> Dict[str, Dict[str, Any]]:
+    return {
+        ph.get("name"): {k: ph.get(k, 0 if k == "burst_interval_ms" else None) for k in HOSTILE_PHASE_FACTORS}
+        for ph in (phases if isinstance(phases, list) else [])
+        if isinstance(ph, dict)
+    }
+
+
+def burst_backlog_bytes(derived: Mapping[str, Any], line_bytes: int) -> float:
+    """Unread non-alert bytes one burst puts in front of the core (0 when written continuously)."""
+
+    if not derived.get("burst_interval_ms"):
+        return 0.0
+    return derived["non_alert_lines_per_s"] * derived["burst_interval_ms"] / 1000.0 * line_bytes
 
 
 def _hostile_phase_problems(phase: Any, quota: Mapping[str, Any], poll_ms: int) -> List[str]:
@@ -374,9 +402,12 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
     if doc.get("status") not in HOSTILE_PROFILE_STATUSES:
         problems.append(f"status {doc.get('status')!r} is not one of {list(HOSTILE_PROFILE_STATUSES)}")
     owner = doc.get("owner_defaults")
-    pending = not isinstance(owner, dict) or "pending" in str(owner.get("status", "pending"))
-    if doc.get("status") == CONFIRMED and pending:
-        problems.append("status is confirmed but owner_defaults.status is still pending")
+    if doc.get("status") == CONFIRMED:
+        # Confirmed only explicitly, and only for the values confirmed.
+        if not isinstance(owner, dict) or owner.get("status") != CONFIRMED:
+            problems.append("status is confirmed but owner_defaults.status is not exactly 'confirmed'")
+        elif owner.get("confirmed_phase_factors") != phase_factors(doc.get("phases")):
+            problems.append("owner_defaults.confirmed_phase_factors does not name every phase's current factors")
     if not isinstance(doc.get("hardware_class"), str) or not doc.get("hardware_class"):
         problems.append("hardware_class missing")
     quota = quota_decl["quotas"].get(doc.get("ingress")) if isinstance(doc.get("ingress"), str) else None
@@ -388,8 +419,16 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
         if not _positive_int(doc.get(key)):
             problems.append(f"{key} must be a positive integer")
     tol = doc.get("rate_tolerance")
-    if not _number(tol) or not (0 < tol < 0.5):
-        problems.append("rate_tolerance must be a number in (0, 0.5)")
+    if not _number(tol) or not (0 < tol <= 0.2):
+        problems.append("rate_tolerance must be a number in (0, 0.2]")
+    shed_tol = doc.get("shed_tolerance")
+    if not _number(shed_tol) or not (0 <= shed_tol <= 0.2):
+        problems.append("shed_tolerance must be a number in [0, 0.2]")
+    if not _positive_int(doc.get("leases_per_phase_per_action")):
+        problems.append("leases_per_phase_per_action must be a positive integer")
+    share = doc.get("min_hostile_share")
+    if not _number(share) or not (0 < share <= 1):
+        problems.append("min_hostile_share must be a number in (0, 1]")
     phases = doc.get("phases")
     if not isinstance(phases, list) or not phases:
         problems.append("phases is not a non-empty list")
@@ -426,6 +465,11 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
     fill_max = max((ph["alert_poll_fill"] for ph, _ in derived_all), default=0)
     if not any(d["non_alert_lines_per_s"] > quota["value"] for _, d in derived_all):
         problems.append("no phase offers non-alert lines above the quota")
+    if not any(
+        ph["non_alert_factor"] > 10 and burst_backlog_bytes(d, doc["line_bytes"]) >= 2 * quota["backlog_bound_bytes"]
+        for ph, d in derived_all
+    ):
+        problems.append("no backlog phase: non-alert lines over 10 times the quota, in bursts of at least twice backlog_bound_bytes")
     if fill_max < 1.0:
         problems.append("no phase offers alerts at the poll cap (alert_poll_fill >= 1)")
     if not any(r["invalid_utf8"] > 0 and r["oversized"] > 0 for r in rates):
@@ -437,6 +481,9 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
         out[key] = doc[key]
     out["rate_tolerance"] = float(tol)
     out["status"] = doc["status"]
+    out["shed_tolerance"] = float(shed_tol)
+    out["leases_per_phase_per_action"] = doc["leases_per_phase_per_action"]
+    out["min_hostile_share"] = float(share)
     out["phases"] = [
         {
             "name": ph["name"],
@@ -444,6 +491,8 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
             "non_alert_lines_per_s": d["non_alert_lines_per_s"],
             "oversized_line_bytes": d["oversized_line_bytes"],
             "alert_poll_fill": ph["alert_poll_fill"],
+            "burst_interval_ms": d["burst_interval_ms"],
+            "backlog_phase": burst_backlog_bytes(d, doc["line_bytes"]) >= 2 * quota["backlog_bound_bytes"],
         }
         for ph, d in derived_all
     ]

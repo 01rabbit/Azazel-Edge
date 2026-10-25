@@ -98,11 +98,28 @@ def test_the_default_poll_interval_is_the_cores():
     "mutate, expect",
     [
         pytest.param(lambda d: d["phases"][0]["rates_per_s"].update(flow=700), "rates_per_s.flow", id="a rate not derived from the quota"),
-        pytest.param(lambda d: d["phases"][2]["rates_per_s"].update(alert=4000), "rates_per_s.alert", id="alert flood off the poll cap"),
+        pytest.param(lambda d: d["phases"][3]["rates_per_s"].update(alert=4000), "rates_per_s.alert", id="alert flood off the poll cap"),
         pytest.param(lambda d: d["phases"][1].update(oversized_line_bytes=10), "oversized_line_bytes", id="oversized size not derived"),
         pytest.param(lambda d: d["phases"].pop(1), "no phase mixes invalid UTF-8 and oversized", id="no malformed phase"),
-        pytest.param(lambda d: d["phases"].pop(2), "no phase offers alerts at the poll cap", id="no alert flood"),
-        pytest.param(lambda d: d["phases"].pop(0) and d["phases"].pop(0), "above the quota", id="no non-alert flood"),
+        pytest.param(lambda d: d["phases"].pop(3), "no phase offers alerts at the poll cap", id="no alert flood"),
+        pytest.param(lambda d: [d["phases"].pop(0) for _ in range(3)], "above the quota", id="no non-alert flood"),
+        pytest.param(lambda d: d["phases"].pop(2), "no backlog phase", id="no backlog phase"),
+        pytest.param(lambda d: d["phases"][2].update(burst_interval_ms=100), "no backlog phase", id="backlog bursts below twice the bound"),
+        pytest.param(lambda d: d["phases"][2].update(burst_interval_ms=-1), "burst_interval_ms", id="negative burst interval"),
+        pytest.param(lambda d: d.update(rate_tolerance=0.3), "rate_tolerance", id="rate tolerance above 0.2"),
+        pytest.param(lambda d: d.update(shed_tolerance=0.5), "shed_tolerance", id="shed tolerance above 0.2"),
+        pytest.param(lambda d: d.update(leases_per_phase_per_action=0), "leases_per_phase_per_action", id="no phase sample floor"),
+        pytest.param(lambda d: d.update(min_hostile_share=0), "min_hostile_share", id="no hostile share"),
+        pytest.param(lambda d: d.update(status="confirmed"), "not exactly 'confirmed'", id="confirmed while the owner status is pending"),
+        pytest.param(
+            lambda d: d.update(status="confirmed") or d["owner_defaults"].update(status="confirmed by the owner"),
+            "not exactly 'confirmed'", id="owner status not exactly confirmed",
+        ),
+        pytest.param(
+            lambda d: d.update(status="confirmed") or d["owner_defaults"].update(status="confirmed", confirmed_phase_factors=decl.phase_factors(d["phases"]))
+            or d["phases"][0].update(non_alert_factor=1.6, rates_per_s=dict(d["phases"][0]["rates_per_s"], flow=1000, dns=1000, stats=1000, http=1000)),
+            "confirmed_phase_factors", id="factors changed after the confirmation",
+        ),
         pytest.param(lambda d: d.update(warmup_ms=1000), "warmup_ms", id="warm-up too short to empty the bucket"),
         pytest.param(lambda d: d.update(quiet_gap_ms=2000), "quiet_gap_ms", id="phases could share a summary"),
         pytest.param(lambda d: d.update(audit_attribution_slack_ms=500), "audit_interval_ms", id="slack below the audit interval"),
@@ -147,7 +164,7 @@ def test_an_unreadable_profile_declares_nothing(tmp_path):
 # ------------------------------------------------------------ recomputation
 
 
-def _audit_record(*, emitted, shed_total, oversized=0, cum_shed, cum_over, alerts_shed=0, quota=None):
+def _audit_record(*, emitted, shed_total, by_backlog=0, level=0, admitted=0, alerts_admitted=0, oversized=0, cum_shed, cum_over, alerts_shed=0, quota=None):
     q = dict(quota or QUOTA)
     return {
         "source": "core_ingress",
@@ -156,7 +173,10 @@ def _audit_record(*, emitted, shed_total, oversized=0, cum_shed, cum_over, alert
             "schema": "azazel-edge/ingress-shed/v1",
             "emitted_epoch": emitted,
             "shed_total": shed_total,
-            "shed_by_reason": {"non_alert_rate": shed_total, "backlog": 0},
+            "shed_by_reason": {"non_alert_rate": shed_total - by_backlog, "backlog": by_backlog},
+            "max_shed_level": level,
+            "admitted": admitted,
+            "alerts_admitted": alerts_admitted,
             "alerts_shed": alerts_shed,
             "oversized_lines_skipped": oversized,
             "oversized_possible_alerts": 0,
@@ -167,8 +187,19 @@ def _audit_record(*, emitted, shed_total, oversized=0, cum_shed, cum_over, alert
     }
 
 
+NON_ALERT = ("flow", "dns", "stats", "http", "invalid_utf8")
+
+
+def _excess(written):
+    return sum(written[c] for c in NON_ALERT) - (QUOTA["value"] * DURATION_S + QUOTA["non_alert_burst"])
+
+
 def _observation():
-    """A hostile_load block that shows the tree's profile applied as declared."""
+    """A hostile_load block that shows the tree's profile applied as declared.
+
+    Shed is 1.3 times the excess (container runs: 1.28-1.96), capped below
+    what was written; a backlog phase sheds half of it for the backlog.
+    """
 
     phases, audit = [], []
     cum_shed = cum_over = 0
@@ -188,11 +219,18 @@ def _observation():
             "alert_sid_base": hl.alert_sid_base(i),
             "alerts_decided": written["alert"],
         })
-        if p["non_alert_lines_per_s"] > QUOTA["value"] or written["oversized"]:
-            shed = (p["non_alert_lines_per_s"] - QUOTA["value"]) * 6 if p["non_alert_lines_per_s"] > QUOTA["value"] else 0
+        over = p["non_alert_lines_per_s"] > QUOTA["value"]
+        if over or written["oversized"]:
+            na = sum(written[c] for c in NON_ALERT)
+            shed = min(int(_excess(written) * 1.3), na - 1000) if over else 0
+            backlog = shed // 2 if p["backlog_phase"] else 0
             cum_shed += shed
             cum_over += written["oversized"]
-            audit.append(_audit_record(emitted=wall + DURATION_S / 2, shed_total=shed, oversized=written["oversized"], cum_shed=cum_shed, cum_over=cum_over))
+            audit.append(_audit_record(
+                emitted=wall + DURATION_S / 2, shed_total=shed, by_backlog=backlog, level=2 if backlog else 0,
+                admitted=na - shed + written["alert"], alerts_admitted=written["alert"],
+                oversized=written["oversized"], cum_shed=cum_shed, cum_over=cum_over,
+            ))
     return {
         "profile_path": PROFILE["path"],
         "profile_sha256": PROFILE["sha256"],
@@ -206,19 +244,53 @@ def _observation():
 
 
 def _samples(obs):
+    """The harness's split: per phase and action type the declared count, then nominal (hostile first)."""
+
     out = []
     warm = PROFILE["warmup_ms"] * 1_000_000
+    per = PROFILE["leases_per_phase_per_action"]
+    for o in obs["phases"]:
+        for action in so04.ACTION_TYPES:
+            for k in range(per):
+                out.append({
+                    "sample_id": f"{o['name']}-{action}-{k}",
+                    "action_type": action,
+                    "condition": {"load": o["name"]},
+                    "sample_clock": "CLOCK_BOOTTIME",
+                    "start_monotonic_ns": o["window_start_boottime_ns"] + warm + 500_000_000 + k * 100_000_000,
+                })
     for action in so04.ACTION_TYPES:
-        out.append({"sample_id": f"n-{action}", "action_type": action, "condition": {"load": "nominal"}, "sample_clock": "CLOCK_BOOTTIME", "start_monotonic_ns": 1})
-        for o in obs["phases"]:
-            out.append({
-                "sample_id": f"{o['name']}-{action}",
-                "action_type": action,
-                "condition": {"load": o["name"]},
-                "sample_clock": "CLOCK_BOOTTIME",
-                "start_monotonic_ns": o["window_start_boottime_ns"] + warm + 500_000_000,
-            })
+        for k in range(50 - per * len(obs["phases"])):
+            out.append({"sample_id": f"n-{action}-{k}", "action_type": action, "condition": {"load": "nominal"}, "sample_clock": "CLOCK_BOOTTIME", "start_monotonic_ns": 1 + k})
     return out
+
+
+def _resum(obs):
+    """Re-derive the cumulative totals after a mutation, so only the mutated count differs."""
+
+    cum = 0
+    for r in obs["ingress_audit"]:
+        cum += r["ingress_shed"]["shed_total"]
+        r["ingress_shed"]["cumulative_shed_total"] = cum
+
+
+def _shed_one_line_each(o, s):
+    for r in o["ingress_audit"]:
+        r["ingress_shed"].update(shed_total=1, shed_by_reason={"non_alert_rate": 1, "backlog": 0})
+    _resum(o)
+
+
+def _backlog_off(o, s):
+    b = _phase(o, "backlog_flood")
+    for r in o["ingress_audit"]:
+        if b["window_start_wall_epoch"] <= r["ingress_shed"]["emitted_epoch"] <= b["window_end_wall_epoch"]:
+            r["ingress_shed"]["shed_by_reason"] = {"non_alert_rate": r["ingress_shed"]["shed_total"], "backlog": 0}
+            r["ingress_shed"]["max_shed_level"] = 0
+
+
+def _admitted_over_quota(o, s):
+    r = o["ingress_audit"][0]["ingress_shed"]
+    r["admitted"] = r["alerts_admitted"] + QUOTA["value"] * 100
 
 
 def test_the_profile_applied_as_declared_closes_the_gap():
@@ -275,7 +347,16 @@ NEGATIVES = [
     ),
     pytest.param(lambda o, s: s[1].update(sample_clock="CLOCK_MONOTONIC"), "inside the", id="a sample on another clock"),
     pytest.param(lambda o, s: s[1]["condition"].update(load="eve_flood"), "neither nominal", id="an undeclared load"),
-    pytest.param(lambda o, s: [x["condition"].update(load="nominal") for x in s if x["action_type"] == "isolate"], "no isolate lease", id="an action type never under a phase"),
+    pytest.param(lambda o, s: [x["condition"].update(load="nominal") for x in s if x["action_type"] == "isolate"], "0 isolate leases", id="an action type never under a phase"),
+    # Review M1: a forged record with one line shed per summary (cumulative
+    # totals made consistent) must not pass as the excess shed.
+    pytest.param(_shed_one_line_each, "at least", id="one line shed per summary, cumulative consistent"),
+    pytest.param(_admitted_over_quota, "above the quota", id="the core admitted more than the quota"),
+    # Review M2: the record's samples mostly nominal.
+    pytest.param(lambda o, s: [x["condition"].update(load="nominal") for x in s[:141]], "below the declared share", id="141 of 150 samples nominal"),
+    pytest.param(lambda o, s: s[0]["condition"].update(load="nominal"), "at least 10 declared", id="one phase one lease short"),
+    # Review M3: the backlog phase without the core's backlog shedding.
+    pytest.param(_backlog_off, "backlog shedding did not act", id="backlog phase shed only by rate"),
 ]
 
 
@@ -403,12 +484,13 @@ def test_the_harness_reports_the_gap_with_its_reasons():
 # ------------------------------------------------- provisional profile gap
 
 
-def _confirmed_tree(tmp_path, monkeypatch, *, owner_status="confirmed by the owner on Edge#414"):
+def _confirmed_tree(tmp_path, monkeypatch, *, owner_status="confirmed"):
     """A temporary declaration with status confirmed, made the tree's profile."""
 
     doc = _doc()
     doc["status"] = "confirmed"
     doc["owner_defaults"]["status"] = owner_status
+    doc["owner_defaults"]["confirmed_phase_factors"] = decl.phase_factors(doc["phases"])
     path = tmp_path / "hostile_load_profile.json"
     path.write_text(json.dumps(doc), encoding="utf-8")
     monkeypatch.setattr(decl, "HOSTILE_LOAD_PROFILE_PATH", path)
@@ -459,7 +541,7 @@ def test_a_record_taken_against_the_provisional_profile_keeps_the_gap(tmp_path, 
 
 def test_confirmed_with_pending_owner_defaults_declares_nothing(tmp_path, monkeypatch):
     confirmed = _confirmed_tree(tmp_path, monkeypatch, owner_status="pending owner confirmation")
-    assert confirmed["phases"] == [] and any("still pending" in p for p in confirmed["problems"])
+    assert confirmed["phases"] == [] and any("not exactly 'confirmed'" in p for p in confirmed["problems"])
     obs = _cite(_observation(), confirmed)
     assert hl.profile_confirmed(_samples(obs), obs) is False
 
@@ -475,17 +557,22 @@ def test_a_part_without_samples_or_load_never_closes_the_provisional_gap(tmp_pat
 
 
 def test_the_plan_samples_every_phase_for_every_action_type():
-    plan = hl.plan(50, PROFILE["phases"])
+    plan = hl.plan(50, PROFILE)
+    per = PROFILE["leases_per_phase_per_action"]
     for action in so04.ACTION_TYPES:
         mine = [p for p in plan if p[0] == action]
         assert len(mine) == 50
         for phase in PROFILE["phases"]:
-            assert sum(1 for p in mine if p[2] == phase["name"]) == 50 // (len(PROFILE["phases"]) + 1)
+            assert sum(1 for p in mine if p[2] == phase["name"]) == per
+    # The harness's split meets the validator's floors.
+    hostile = sum(1 for p in plan if p[2] != hl.NOMINAL)
+    assert hostile >= PROFILE["min_hostile_share"] * len(plan)
+    assert per * len(PROFILE["phases"]) <= START_SPEC["per_action_samples"]
     assert len({(a, i) for a, i, _ in plan}) == len(plan)
 
 
 def test_the_schedule_puts_each_phase_lease_after_the_warm_up_and_inside_the_window():
-    plan = hl.plan(50, PROFILE["phases"])
+    plan = hl.plan(50, PROFILE)
     conds = [p[2] for p in plan]
     dues, windows = hl.schedule(conds, 1000.0, random.Random(1), PROFILE)
     assert [w[0] for w in windows] == [p["name"] for p in PROFILE["phases"]]
@@ -499,7 +586,7 @@ def test_the_schedule_puts_each_phase_lease_after_the_warm_up_and_inside_the_win
 
 
 def test_without_a_valid_profile_every_lease_is_nominal():
-    plan = hl.plan(4, [])
+    plan = hl.plan(4, {"phases": []})
     assert {p[2] for p in plan} == {hl.NOMINAL}
     dues, windows = hl.schedule([p[2] for p in plan], 0.0, random.Random(0), {"phases": []})
     assert windows == [] and len(dues) == len(plan)
@@ -577,3 +664,82 @@ def test_the_real_core_sheds_skips_and_decides_what_the_driver_writes():
     assert sum(r["oversized_lines_skipped"] for r in shed) == phase["written"]["oversized"] > 0
     assert sum(r["shed_total"] for r in shed) > 0
     assert all(r["alerts_shed"] == 0 for r in shed)
+
+
+def test_a_burst_phase_is_written_in_bursts(tmp_path):
+    """The backlog phase must reach the core as bursts, not as a smooth stream."""
+
+    phase = {
+        "name": "burst", "oversized_line_bytes": 0, "burst_interval_ms": 500,
+        "rates_per_s": {c: 0 for c in decl.HOSTILE_LINE_CLASSES} | {"flow": 200},
+    }
+    profile = {"phases": [phase], "line_bytes": 100}
+    eve = tmp_path / "eve.json"
+    eve.write_bytes(b"")
+    now = time.time()
+    load = hl.HostileLoad(eve, profile, [("burst", now, now + 1.3)], lambda: time.monotonic_ns())
+    sizes = set()
+    load.start()
+    while load.is_alive():
+        sizes.add(eve.read_bytes().count(b"\n"))
+        time.sleep(0.01)
+    sizes.add(eve.read_bytes().count(b"\n"))
+    # Lines per burst: 200/s * 0.5 s = 100; only whole bursts are ever seen.
+    assert sizes <= {0, 100, 200}, sizes
+    assert load.observed[0]["written"]["flow"] == 200
+
+
+def _ci_record(tmp_path, *, gaps=("SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL",), mutate=None):
+    obs = _observation()
+    samples = _samples(obs)
+    if mutate:
+        mutate(obs, samples)
+    record = {
+        "objective_id": "SO-04",
+        "parts": [
+            {"name": "rollback_start_after_expiry", "samples": samples, "hostile_load": obs, "gaps": [{"id": g} for g in gaps]},
+            {"name": "rollback_completion", "samples": samples, "hostile_load": obs,
+             "gaps": [{"id": "SO04-COMPLETION-BOUND-PROVISIONAL"}] + [{"id": g} for g in gaps]},
+        ],
+    }
+    path = tmp_path / "SO-04-x.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return tmp_path
+
+
+def test_the_ci_check_passes_only_the_declared_load_with_provisional_gaps(tmp_path):
+    assert hl.check_records([_ci_record(tmp_path)]) == []
+    assert hl.main([str(tmp_path)]) == 0
+
+
+@pytest.mark.parametrize(
+    "kwargs, expect",
+    [
+        pytest.param({"gaps": ("SO04-HOSTILE-LOAD-UNDECLARED",)}, "gaps beyond", id="hostile-load gap left in"),
+        pytest.param({"gaps": ("SO04-LEASE-EXPIRY-ON-WALL-CLOCK",)}, "gaps beyond", id="another gap left in"),
+        pytest.param({"mutate": _shed_one_line_each}, "at least", id="the recomputation fails"),
+    ],
+)
+def test_the_ci_check_fails_otherwise(tmp_path, kwargs, expect):
+    problems = hl.check_records([_ci_record(tmp_path, **kwargs)])
+    assert any(expect in p for p in problems), problems
+    assert hl.main([str(tmp_path)]) == 1
+
+
+def test_the_ci_check_fails_without_a_record(tmp_path):
+    assert hl.check_records([tmp_path]) == ["no SO-04 record found"]
+
+
+@pytest.mark.parametrize("ratio, closes", [(0.85, False), (0.95, True), (1.0, True)])
+def test_the_shed_floor_is_the_excess_less_the_declared_tolerance(ratio, closes):
+    """Review M1: one phase's shed just below / above (1 - shed_tolerance) x excess."""
+
+    assert PROFILE["shed_tolerance"] == pytest.approx(0.1)
+    obs = _observation()
+    phase = _phase(obs, "non_alert_flood")
+    record = next(r["ingress_shed"] for r in obs["ingress_audit"] if phase["window_start_wall_epoch"] <= r["ingress_shed"]["emitted_epoch"] <= phase["window_end_wall_epoch"])
+    shed = int(_excess(phase["written"]) * ratio)
+    record.update(shed_total=shed, shed_by_reason={"non_alert_rate": shed, "backlog": 0})
+    _resum(obs)
+    problems = hl.hostile_load_problems(_samples(obs), obs)
+    assert (problems == []) is closes, problems
