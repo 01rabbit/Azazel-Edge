@@ -38,8 +38,9 @@ written independently) and the closure of the two former gaps
 (``SO03-NO-VISUAL-VOICE-QUEUE``, ``SO03-NO-P0-ALERT-PATH``) from the samples.
 If any sample does not show its durable enqueue record, the gaps stay.
 
-Why this row is still ``not_measurable``: in production the relay is attached
-only by ``OpenCanaryRedirectController`` (its decision logger). The Rust core's
+Why this row is still ``not_measurable``: the relay is attached when an
+``OpenCanaryRedirectController`` is built (to its decision logger), and no
+Edge service builds that controller yet. The Rust core's
 throttle/redirect/isolate decisions are not written as ``action_decision``
 records through ``P0AuditLogger`` (``release.rs`` writes rollback audit only),
 so they never reach the P0 queue, and which decision path is authoritative is
@@ -47,7 +48,7 @@ Edge#412. The blocking gap ``SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS`` is
 not closable by samples; SO-03 is never a pass until that path is wired.
 
 Out of scope: rendering and speaking the queued alerts (no output device is
-added), and which Edge service attaches the path in production.
+added), and which Edge service builds the controller or attaches the path.
 """
 
 from __future__ import annotations
@@ -370,7 +371,7 @@ def run(*, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None) -> Dict[
         ),
         gap(
             "SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS",
-            "The P0 relay is attached to the OpenCanary redirect controller's decision logger only. The Rust core's "
+            "The P0 relay is attached when an OpenCanaryRedirectController is built (no Edge service builds one yet). The Rust core's "
             "throttle/redirect/isolate decisions are not written as action_decision records through P0AuditLogger "
             "(release.rs writes rollback audit only), so they never reach the P0 queue. Which decision path is "
             "authoritative is Edge#412. No sample closes this gap: SO-03 stays not_measurable until it is wired.",
@@ -423,7 +424,7 @@ def run(*, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None) -> Dict[
         method="real ActionArbiter + P0AuditLogger + P0AlertRelay/P0AlertQueue, start stamped by the logger, end after the queue fsync",
         notes=[
             "action_decision records are fsynced (DURABLE_KINDS); the P0 queue append is fsynced before the relay reports it.",
-            "the relay is attached in production only by OpenCanaryRedirectController; Rust core decisions do not reach it "
+            "the relay is attached when an OpenCanaryRedirectController is built, and no Edge service builds one yet; Rust core decisions do not reach it "
             "(gap SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS, Edge#412), so this row is never a pass today.",
             "diagnostic, not a sample: enqueue latency on a full queue (max_entries=%d): append at the bound %.3f ms, "
             "append that compacts at 2x the bound %.3f ms" % (full_queue["max_entries"], full_queue["append_ms"], full_queue["compact_ms"]),

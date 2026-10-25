@@ -537,20 +537,109 @@ def test_reconcile_is_bounded_and_counts_the_rest(tmp_path):
     assert started["reconciled"] == 2 and started["reconcile_skipped"] == 3
 
 
-def test_reconcile_never_duplicates_and_needs_a_cursor(tmp_path):
+def _started(qpath):
+    return [r for r in _status(qpath) if r.get("event") == "started"]
+
+
+def test_fresh_queue_replays_the_newest_p0_decisions_bounded(tmp_path):
     apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
     plain = P0AuditLogger(apath)
-    plain.log_action_decision("old", "s", action="isolate")  # before any relay: no cursor, no replay
-    audit = P0AuditLogger(apath)
-    relay = attach_p0_alert_relay(audit, qpath)
+    for i in range(4):
+        plain.log_action_decision(f"old-{i}", "s", action="isolate")
+    plain.log_action_decision("obs", "s", action="observe")
+    relay = attach_p0_alert_relay(P0AuditLogger(apath), qpath, max_reconcile=3)
     assert relay.ready.wait(5)
-    audit.log_action_decision("new", "s", action="isolate")
-    assert _wait(lambda: len(_rows(qpath)) == 2)
     relay.stop()
-    relay2 = attach_p0_alert_relay(P0AuditLogger(apath), qpath)  # nothing missed
-    assert relay2.ready.wait(5)
-    relay2.stop()
-    assert [r["decision_id"] for r in _rows(qpath)] == ["new", "new"]
+    assert [r["decision_id"] for r in _rows(qpath)[::2]] == ["old-1", "old-2", "old-3"]
+    started = _started(qpath)[-1]
+    assert started["reconcile"] == "fresh_queue"
+    assert started["reconciled"] == 3 and started["reconcile_skipped"] == 1 and started["unreconcilable"] == 0
+
+
+def test_rotated_chain_counts_unreconcilable_and_next_start_replays_only_new(tmp_path):
+    qpath = tmp_path / "q.jsonl"
+    old = P0AuditLogger(tmp_path / "old.jsonl")
+    first = attach_p0_alert_relay(old, qpath)
+    assert first.ready.wait(5)
+    old.log_action_decision("before-rotation", "s", action="isolate")
+    assert first.wait_idle(5)
+    first.stop()
+    # The chain is replaced (rotated): the queue's cursor is not in it.
+    apath = tmp_path / "a.jsonl"
+    plain = P0AuditLogger(apath)
+    plain.log_action_decision("q1", "s", action="throttle")
+    plain.log_action_decision("q-obs", "s", action="observe")
+    second = attach_p0_alert_relay(P0AuditLogger(apath), qpath)
+    assert second.ready.wait(5)
+    second.stop()
+    started = _started(qpath)[-1]
+    assert started["reconcile"] == "cursor_not_in_chain"
+    assert started["unreconcilable"] == 1 and started["reconciled"] == 0
+    assert [r["decision_id"] for r in _rows(qpath)[::2]] == ["before-rotation"]
+    # Unrelated advance while down, then one new P0: the next start resumes at
+    # the chain tail recorded by the previous start and replays only q2.
+    plain.log_action_decision("q-obs-2", "s", action="observe")
+    plain.log_action_decision("q2", "s", action="redirect")
+    third = attach_p0_alert_relay(P0AuditLogger(apath), qpath)
+    assert third.ready.wait(5)
+    third.stop()
+    started = _started(qpath)[-1]
+    assert started["reconcile"] == "cursor_found" and started["reconciled"] == 1
+    assert [r["decision_id"] for r in _rows(qpath)[::2]] == ["before-rotation", "q2"]
+
+
+@pytest.mark.parametrize("fsync_ok,label,durable", [(True, "reconciled_from_chain_fsynced", True), (False, "reconciled_from_chain", False)])
+def test_reconciled_durability_follows_the_fsync_result(tmp_path, monkeypatch, fsync_ok, label, durable):
+    apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
+    P0AuditLogger(apath).log_action_decision("old", "s", action="isolate")
+    real = P0AlertQueue._fsync_fd
+    monkeypatch.setattr(P0AlertQueue, "_fsync_fd", staticmethod(lambda fd: real(fd) and fsync_ok))
+    relay = attach_p0_alert_relay(P0AuditLogger(apath), qpath)
+    assert relay.ready.wait(5)
+    relay.stop()
+    rows = _rows(qpath)
+    assert len(rows) == 2
+    assert all(r["decision_record_durability"] == label and r["decision_record_durable"] is durable for r in rows)
+
+
+def test_listener_before_reconcile_window_never_enqueues_twice(tmp_path):
+    apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
+    audit = P0AuditLogger(apath)
+    relay = P0AlertRelay(P0AlertQueue(qpath), audit_path=apath, audit_logger=audit)
+    audit.add_durable_listener(relay.on_durable_record)
+    # Written after the listener is registered and before the relay starts:
+    # the record is both in the hand-off and in the chain reconcile reads.
+    audit.log_action_decision("both", "s", action="isolate")
+    assert audit.wait_durable_listeners()
+    assert relay.pending() == 1
+    relay.start()
+    assert relay.ready.wait(5) and relay.wait_idle(5)
+    relay.stop()
+    assert [r["decision_id"] for r in _rows(qpath)] == ["both", "both"]
+
+
+def test_reconcile_never_re_enqueues_what_the_queue_already_has(tmp_path):
+    apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
+    plain = P0AuditLogger(apath)
+    a = plain.log_action_decision("a", "s", action="isolate")
+    b = plain.log_action_decision("b", "s", action="isolate")
+    queue = P0AlertQueue(qpath)
+    P0AlertRelay(queue).relay(b, "fsynced", 1)
+    queue.append_status({"event": "test", "audit_cursor_chain_hash": a["chain_hash"]})  # a stale cursor
+    relay = attach_p0_alert_relay(P0AuditLogger(apath), qpath)
+    assert relay.ready.wait(5)
+    relay.stop()
+    assert [r["decision_id"] for r in _rows(qpath)] == ["b", "b"]
+    assert _started(qpath)[-1]["reconcile"] == "cursor_found"
+
+
+def test_pending_and_wait_idle_are_public(tmp_path):
+    relay = P0AlertRelay(P0AlertQueue(tmp_path / "q.jsonl"))
+    relay.on_durable_record(_decision("isolate", chain_hash="c" * 64), "fsynced", 1)
+    assert relay.pending() == 1 and relay.wait_idle(0.05) is False
+    relay.start()
+    assert relay.wait_idle(5) and relay.pending() == 0
+    relay.stop()
 
 
 def test_attach_is_idempotent_per_logger(tmp_path):

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -50,9 +49,7 @@ class OpenCanaryRedirectController:
             waiter = getattr(self.audit, 'wait_durable_listeners', None)
             if waiter is not None:
                 waiter(timeout)
-            deadline = time.monotonic() + timeout
-            while not relay._pending.empty() and time.monotonic() < deadline:
-                time.sleep(0.01)
+            relay.wait_idle(timeout)
             relay.stop(timeout)
         except Exception as exc:
             logging.getLogger(__name__).error('p0 alert relay stop: %s', exc)

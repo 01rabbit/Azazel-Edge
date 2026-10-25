@@ -21,7 +21,9 @@ to the queue as standalone ``relay_status`` records; they never reach,
 delay or alter the decision path.
 
 Where the path is attached: ``OpenCanaryRedirectController`` attaches it to
-its decision logger. The Rust core's throttle/redirect/isolate decisions are
+its decision logger when the controller is built; no Edge service builds that
+controller yet (only tests do), so no running service has the path today.
+The Rust core's throttle/redirect/isolate decisions are
 not written as ``action_decision`` records through ``P0AuditLogger`` at all,
 so they do not reach this path (Edge#412 decides which path is
 authoritative); SO-03 keeps the blocking gap
@@ -523,6 +525,7 @@ class P0AlertRelay:
         self._seen: Dict[str, None] = {}
         self._stop = threading.Event()
         self.ready = threading.Event()
+        self._outstanding = 0  # handed to the relay, not yet relayed
         self._thread: Optional[threading.Thread] = None
 
     # Audit logger listener. Must stay cheap and must not raise.
@@ -530,9 +533,12 @@ class P0AlertRelay:
         try:
             if not isinstance(record, dict) or record.get('kind') != 'action_decision':
                 return
+            with self._counters_lock:
+                self._outstanding += 1
             self._pending.put_nowait((record, durability, durable_ns))
         except _queue_mod.Full:
             with self._counters_lock:
+                self._outstanding -= 1
                 self.handoff_dropped_total += 1
             _LOG.error('p0 alert hand-off full; decision %s not alerted', record.get('trace_id'))
         except Exception:  # pragma: no cover - defensive
@@ -600,44 +606,66 @@ class P0AlertRelay:
         return result
 
     # ------------------------------------------------------------ reconcile
-    def _queue_cursor(self) -> str:
-        for row in reversed(self.queue.read_entries()):
-            cursor = row.get('audit_cursor_chain_hash')
-            if isinstance(cursor, str) and cursor:
-                return cursor
-        return ''
+    def _queue_cursor_and_hashes(self) -> tuple:
+        """The queue's last cursor, and the chain hashes it already alerts on."""
+
+        cursor = ''
+        hashes: List[str] = []
+        for row in self.queue.read_entries():
+            c = row.get('audit_cursor_chain_hash')
+            if isinstance(c, str) and c:
+                cursor = c
+            h = row.get('decision_chain_hash')
+            if row.get('record_type') == RECORD_ALERT and isinstance(h, str) and h:
+                hashes.append(h)
+        return cursor, hashes
 
     def reconcile(self) -> Dict[str, Any]:
-        """Enqueue P0 decisions the chain has after the queue's cursor.
+        """Enqueue P0 decisions in the audit chain that the queue does not have.
 
         The cursor is the last ``audit_cursor_chain_hash`` in the queue (every
-        alert and every relay_status record carries one). Records after it in
-        the audit chain were written while no relay was attached (a crash, a
-        restart); the newest ``max_reconcile`` P0 ones are enqueued now, the
-        rest counted. With no cursor, or one the chain no longer has (a new
-        queue, a rotated chain), nothing is replayed: the status record sets
-        the cursor for the next start. Either way a relay_status record is
-        written.
+        alert and every relay_status record carries one):
+
+        * ``cursor_found`` -- the P0 records after the cursor were written
+          while no relay was attached (a crash, a restart);
+        * ``fresh_queue`` -- the queue has no cursor: every P0 record in the
+          chain is a candidate;
+        * ``cursor_not_in_chain`` -- the chain no longer has the cursor (it
+          was rotated or replaced): which records were missed cannot be told,
+          so nothing is replayed; the P0 records in the chain the queue does
+          not alert on are counted as ``unreconcilable``.
+
+        Candidates are replayed newest first up to ``max_reconcile``, the rest
+        counted as ``reconcile_skipped``. Decisions the queue already alerts
+        on (by chain hash) are never enqueued again. A relay_status record
+        with the outcome is written, and its cursor (the chain's tail as read)
+        is where the next start resumes.
         """
 
-        status: Dict[str, Any] = {'event': 'started', 'cursor_found': False, 'reconciled': 0, 'reconcile_skipped': 0}
+        status: Dict[str, Any] = {
+            'event': 'started', 'reconcile': 'no_audit_path', 'cursor_found': False,
+            'reconciled': 0, 'reconcile_skipped': 0, 'unreconcilable': 0,
+        }
         tail = ''
         if self.audit_path is not None:
-            cursor = self._queue_cursor()
+            cursor, queued = self._queue_cursor_and_hashes()
+            for h in queued:
+                self._remember(h)
             lines: List[bytes] = []
+            synced = False
             try:
                 fd = os.open(str(self.audit_path), os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC)
             except FileNotFoundError:
                 fd = None
             if fd is not None:
                 try:
+                    # Make what is read durable before alerting on it; the
+                    # entries say whether that fsync happened.
                     synced = P0AlertQueue._fsync_fd(fd)
                     data = P0AlertQueue._read_all(fd)
                 finally:
                     os.close(fd)
                 lines = data.split(b'\n')[:-1]
-            else:
-                synced = False
             rows = P0AlertQueue._parse(lines)
             if rows:
                 tail = str(rows[-1].get('chain_hash') or '')
@@ -646,22 +674,44 @@ class P0AlertRelay:
                 for idx, row in enumerate(rows):
                     if row.get('chain_hash') == cursor:
                         start = idx + 1
+            fresh = [r for r in rows if classify_p0(r) and str(r.get('chain_hash') or '') not in self._seen]
             if start is not None:
-                status['cursor_found'] = True
-                missed = [r for r in rows[start:] if classify_p0(r)]
-                skipped = max(0, len(missed) - self.max_reconcile)
-                durability = DURABILITY_RECONCILED_FSYNCED if synced else DURABILITY_RECONCILED
-                done = 0
-                for r in missed[skipped:]:
-                    if self.relay(r, durability, None).get('ok'):
-                        done += 1
-                with self._counters_lock:
-                    self.reconciled_total += done
-                    self.reconcile_skipped_total += skipped
-                status.update(reconciled=done, reconcile_skipped=skipped)
+                status.update(reconcile='cursor_found', cursor_found=True)
+                missed = [r for r in rows[start:] if classify_p0(r) and str(r.get('chain_hash') or '') not in self._seen]
+            elif not cursor:
+                status['reconcile'] = 'fresh_queue'
+                missed = fresh
+            else:
+                status['reconcile'] = 'cursor_not_in_chain'
+                status['unreconcilable'] = len(fresh)
+                missed = []
+            skipped = max(0, len(missed) - self.max_reconcile)
+            durability = DURABILITY_RECONCILED_FSYNCED if synced else DURABILITY_RECONCILED
+            done = 0
+            for r in missed[skipped:]:
+                if self.relay(r, durability, None).get('ok'):
+                    done += 1
+            with self._counters_lock:
+                self.reconciled_total += done
+                self.reconcile_skipped_total += skipped
+            status.update(reconciled=done, reconcile_skipped=skipped)
         status['audit_cursor_chain_hash'] = tail
         self._write_status(status)
         return status
+
+    def pending(self) -> int:
+        """Decision records handed to the relay and not yet relayed."""
+
+        with self._counters_lock:
+            return self._outstanding
+
+    def wait_idle(self, timeout: float = 5.0) -> bool:
+        """Wait until every record handed to the relay so far is relayed."""
+
+        deadline = time.monotonic() + timeout
+        while self.pending() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        return not self.pending()
 
     def _write_status(self, status: Dict[str, Any]) -> None:
         metrics = self.metrics()
@@ -698,6 +748,9 @@ class P0AlertRelay:
                 self.relay(*item)
             except Exception as exc:  # pragma: no cover - relay() does not raise
                 _LOG.error('p0 alert relay error: %s', exc)
+            finally:
+                with self._counters_lock:
+                    self._outstanding -= 1
             self._report_losses()
 
     def start(self) -> 'P0AlertRelay':
