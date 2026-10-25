@@ -41,7 +41,8 @@ def test_the_declaration_is_provisional_container_derived_and_cites_its_basis():
     loaded = decl.load_ingress_quotas()
     assert loaded["problems"] == []
     quota = loaded["quotas"]["core_eve_reader"]
-    assert quota["unit"] == "eve_lines_per_second"
+    assert quota["unit"] == "eve_non_alert_lines_per_second"
+    assert "Alerts are never shed and never rate-limited" in quota["applies_to"]
     assert quota["status"] == "provisional"
     assert "not hardware" in quota["hardware_class"]
     basis = quota["basis"]
@@ -60,13 +61,20 @@ def test_the_declaration_matches_the_compiled_limits():
     block = block[: block.index("};")]
 
     def num(name):
-        m = re.search(rf"{name}: ([0-9_ *]+),", block)
+        m = re.search(rf"{name}: ([0-9_ *]+),", block) or re.search(rf"{name}: Duration::from_(millis|secs)\(([0-9_]+)\),", block)
         assert m, name
+        if m.lastindex == 2:
+            return int(m.group(2).replace("_", "")) * (1000 if m.group(1) == "secs" else 1)
         return eval(m.group(1).replace("_", ""), {})  # digits, spaces and * only
 
-    assert num("admit_per_sec") == quota["value"]
-    assert num("admit_per_poll") == quota["admit_per_poll"]
+    assert num("non_alert_per_sec") == quota["value"]
+    assert num("non_alert_burst") == quota["non_alert_burst"]
+    assert num("alerts_per_poll") == quota["alerts_per_poll"]
     assert num("examine_per_poll") == quota["examine_per_poll"]
+    assert num("poll_work_limit") == quota["poll_work_limit_ms"]
+    assert num("max_line_bytes") == quota["max_line_bytes"]
+    assert num("audit_interval") == quota["audit_interval_ms"]
+    assert num("audit_log_cap_bytes") == quota["audit_log_cap_bytes"]
     assert num("backlog_bound_bytes") == quota["backlog_bound_bytes"]
     assert num("alert_backlog_bound_bytes") == quota["alert_backlog_bound_bytes"]
 
@@ -86,7 +94,8 @@ def test_no_setting_raises_or_disables_the_bound():
         (lambda q: q.update(unit="bytes"), "unit"),
         (lambda q: q.update(value=0), "value"),
         (lambda q: q.update(value=True), "value"),
-        (lambda q: q.update(admit_per_poll=-1), "admit_per_poll"),
+        (lambda q: q.update(alerts_per_poll=-1), "alerts_per_poll"),
+        (lambda q: q.pop("max_line_bytes"), "max_line_bytes"),
         (lambda q: q.pop("hardware_class"), "hardware_class"),
         (lambda q: q.pop("basis"), "basis"),
         (lambda q: q["basis"].pop("margin_rule"), "margin_rule"),
@@ -128,6 +137,7 @@ def test_probe_lines_are_padded_and_typed():
     w = probe._Writer(Path("/dev/null"), 1, 0)
     alert = json.loads(w._line(0, "alert"))
     flow = json.loads(w._line(1, "flow"))
+    assert w.alert_rate == probe.ALERT_RATE
     assert alert["event_type"] == "alert" and "alert" in alert
     assert flow["event_type"] == "flow" and "alert" not in flow
     assert abs(len(w._line(2, "alert")) - probe.LINE_BYTES) < 50

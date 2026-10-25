@@ -139,8 +139,19 @@ def undeclared_action_types(declaration: Mapping[str, Any]) -> List[str]:
 
 INGRESS_QUOTA_PATH = DECLARATIONS_DIR / "ingress_quota.json"
 INGRESS_QUOTA_SCHEMA = "azazel-edge/ingress-quota/v1"
-INGRESS_QUOTA_UNIT = "eve_lines_per_second"
-_INGRESS_INT_KEYS = ("value", "admit_per_poll", "examine_per_poll", "backlog_bound_bytes", "alert_backlog_bound_bytes", "audit_interval_ms")
+INGRESS_QUOTA_UNIT = "eve_non_alert_lines_per_second"
+_INGRESS_INT_KEYS = (
+    "value",
+    "non_alert_burst",
+    "alerts_per_poll",
+    "examine_per_poll",
+    "poll_work_limit_ms",
+    "max_line_bytes",
+    "backlog_bound_bytes",
+    "alert_backlog_bound_bytes",
+    "audit_interval_ms",
+    "audit_log_cap_bytes",
+)
 _INGRESS_BASIS_KEYS = ("method", "runs", "min_observed_lines_per_s", "margin_rule")
 
 

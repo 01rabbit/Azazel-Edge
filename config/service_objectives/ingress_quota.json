@@ -5,14 +5,19 @@
   "quotas": [
     {
       "ingress": "core_eve_reader",
-      "unit": "eve_lines_per_second",
+      "unit": "eve_non_alert_lines_per_second",
       "value": 2500,
-      "admit_per_poll": 1500,
+      "non_alert_burst": 1500,
+      "alerts_per_poll": 1000,
       "examine_per_poll": 6000,
+      "poll_work_limit_ms": 500,
+      "max_line_bytes": 1048576,
       "backlog_bound_bytes": 8388608,
       "alert_backlog_bound_bytes": 268435456,
       "audit_interval_ms": 1000,
-      "excess_policy": "Lines beyond the rate or the per-poll bound stay unread in the EVE file and are read on later polls. Past backlog_bound_bytes of unread file, flow records are shed, then dns, stats and every other non-alert type at each further multiple of the bound. Alerts are never shed; past alert_backlog_bound_bytes an ingress_alert_backlog summary is recorded and alerts keep being read at the declared rate. Shed counts leave the core as at most one ingress_shed summary per audit interval in ingress-audit.jsonl beside the normalized event log.",
+      "audit_log_cap_bytes": 16777216,
+      "applies_to": "non-alert EVE lines only. Alerts are never shed and never rate-limited; they are bounded per poll only (alerts_per_poll, examine_per_poll, poll_work_limit_ms) so the release sweep runs between polls, and the next poll follows at once when a budget stopped the last one.",
+      "excess_policy": "A non-alert line that finds the token bucket below its class reserve is shed at once: flow keeps 3/8 of the burst in reserve, dns 2/8, stats 1/8, other and unparseable none, so flow is shed first, then dns, then stats. As a second line, past backlog_bound_bytes of unread file flow is shed whatever the bucket holds, and each further multiple of the bound adds dns, stats, then every other non-alert type. Unparseable lines (they might have been alerts) share the last rank and are counted apart. Lines longer than max_line_bytes are skipped to their newline and counted (oversized_lines_skipped, oversized_possible_alerts). Past alert_backlog_bound_bytes an ingress_alert_backlog summary is recorded and alerts keep being read. Counts leave the core as at most one ingress_shed summary per audit interval in ingress-audit.jsonl (0600, O_NOFOLLOW, fsync per record, rotated to .1 at audit_log_cap_bytes) beside the normalized event log, and on stdout (stderr when AZAZEL_EVENT_STDOUT=off).",
       "status": "provisional",
       "hardware_class": "container-aarch64, not hardware",
       "basis": {
@@ -25,11 +30,12 @@
           7676
         ],
         "min_observed_lines_per_s": 5641,
-        "margin_rule": "less than half the minimum observed sustained decision rate, rounded down to the next 500 lines/s; at or above the SO-04 harness's eve_flood rate (2000 EVE alerts/s) so SO-04 runs are not throttled by the quota",
-        "per_poll_rule": "admit_per_poll is 0.6 s of the quota, so the token bucket is not the limit while one poll's work plus the 200 ms poll interval stays under 0.6 s; examine_per_poll is four times admit_per_poll",
+        "margin_rule": "non-alert quota: less than half the minimum observed sustained alert decision rate (a non-alert line costs no more than an alert: it is parsed but not decided), rounded down to the next 500 lines/s, leaving at least half the measured capacity for alerts",
+        "per_poll_rule": "alerts_per_poll 1000: at the measured per-alert cost (130-177 us uncontended, up to about 300 us with other containers on the VM) one poll's alert work is about 0.13-0.3 s, far below the SO-04 5 s bounds; poll_work_limit_ms 500 caps it on a slower host. Polls that stop on a budget are not followed by the 200 ms sleep, so alert throughput stays near the measured capacity (see alert_throughput_check). non_alert_burst is 0.6 s of the quota; examine_per_poll is four times non_alert_burst",
         "backlog_rule": "backlog_bound_bytes (8 MiB) is several seconds of the quota at real EVE line sizes; alert_backlog_bound_bytes (256 MiB) is a hard record point, not a drop point",
-        "so04_check": "SO-04 harness re-run twice on the OF-06 tree (eve_flood 2000 alerts/s, below the quota): start max 2408.7 and 1415.7 ms (bound 5000 ms), completion max 1773.6 and 1592.9 ms over all action types (provisional bounds 5000 ms), 0 violations, 150/150 samples per part in both runs.",
-        "contended_check": "Re-measured the same way the same day while other containers ran on the same 2-CPU colima VM (main binary, 60000-line backlog, decisions over 8 s): 5252, 3348 and 3957 lines/s. All exceed the quota. Under that contention the OF-06 core admitted 2263-2493 lines/s against its 2500 lines/s token bucket: the quota is a ceiling, not a promise."
+        "contended_check": "Re-measured the same way the same day while other containers ran on the same 2-CPU colima VM (main binary, 60000-line backlog, decisions over 8 s): 5252, 3348 and 3957 lines/s. All exceed the non-alert quota.",
+        "alert_throughput_check": "Same container, 60000-alert backlog, decisions over 8 s, three alternating runs: main 6530, 6495, 6529 alerts/s; this tree 6502, 6504, 6524 alerts/s. Alerts are not throttled below capacity.",
+        "so04_check": "SO-04 harness re-run twice on this tree (eve_flood 2000 alerts/s; alerts are outside the quota): start max 1119.8 and 1833.7 ms (bound 5000 ms), completion max 1071.8 and 1458.8 ms over all action types (provisional bounds 5000 ms), 0 violations, 150/150 samples per part in both runs."
       }
     }
   ]

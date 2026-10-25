@@ -2,7 +2,7 @@ mod audit_chain;
 mod ingress;
 mod release;
 
-use ingress::{IngressLimits, IngressReader, PollReport};
+use ingress::{append_audit_record, IngressLimits, IngressReader, PollReport};
 use release::{
     activate_release_task, build_release_task, cancel_release_task, mark_release_task_uncertain,
     prepare_release_task, process_due_releases, LeaseNow, ReleaseTask,
@@ -1144,8 +1144,16 @@ fn ingress_audit_log_path(cfg: &Config) -> String {
 
 /// An ingress summary is written whatever the log and stdout settings are:
 /// shedding is never silent. It carries counts and bounds only, no address.
+/// The file copy is the audit record (0600, no symlink, fsync, size-capped);
+/// the console copy goes to stdout, or to stderr under
+/// `AZAZEL_EVENT_STDOUT=off` because that setting silences per-event output,
+/// not audit. If the file cannot be written the failure and the record both
+/// go to stderr.
 fn emit_ingress_record(cfg: &Config, record: &Value) {
-    append_json_line(&ingress_audit_log_path(cfg), record);
+    let path = ingress_audit_log_path(cfg);
+    if let Err(error) = append_audit_record(Path::new(&path), record, IngressLimits::DECLARED.audit_log_cap_bytes) {
+        eprintln!("ingress audit write failed ({}): {}: {}", path, error, record);
+    }
     match cfg.event_stdout {
         StdoutMode::Full | StdoutMode::Summary => println!("{}", record),
         StdoutMode::Off => eprintln!("{}", record),
@@ -1278,7 +1286,7 @@ fn main() {
     let offset = if cfg.from_start { 0 } else { fs::metadata(&cfg.eve_path).map(|m| m.len()).unwrap_or(0) };
 
     eprintln!(
-        "azazel-edge-core started: eve_path={}, ai_socket={}, from_start={}, poll_ms={}, defense_enforce={}, defense_dry_run={}, defense_enforce_level={}, high_impact_auto={}, defense_iface={}, honeypot_port={}, release_ledger={}, ingress_admit_per_sec={}, ingress_admit_per_poll={}",
+        "azazel-edge-core started: eve_path={}, ai_socket={}, from_start={}, poll_ms={}, defense_enforce={}, defense_dry_run={}, defense_enforce_level={}, high_impact_auto={}, defense_iface={}, honeypot_port={}, release_ledger={}, ingress_non_alert_per_sec={}, ingress_alerts_per_poll={}",
         cfg.eve_path,
         cfg.ai_socket_path,
         cfg.from_start,
@@ -1290,8 +1298,8 @@ fn main() {
         cfg.defense_iface,
         cfg.defense_honeypot_port,
         cfg.defense_release_ledger_path,
-        IngressLimits::DECLARED.admit_per_sec,
-        IngressLimits::DECLARED.admit_per_poll
+        IngressLimits::DECLARED.non_alert_per_sec,
+        IngressLimits::DECLARED.alerts_per_poll
     );
 
     // Reconcile due release work before reading new alerts. This runs even when new
@@ -1301,11 +1309,16 @@ fn main() {
     let mut reporter = ForwardReporter::new();
     let mut ingress = IngressReader::new(offset, IngressLimits::DECLARED);
     loop {
-        poll_iteration(&cfg, &mut ingress, &mut |c, _| process_release_events(c));
+        let report = poll_iteration(&cfg, &mut ingress, &mut |c, _| process_release_events(c));
         if cfg.forward_ai {
             reporter.tick(Instant::now(), || queue_forward_stats(&cfg.ai_socket_path));
         }
-        thread::sleep(Duration::from_millis(cfg.poll_ms));
+        // A poll that stopped on a per-poll budget left work in the file: the
+        // next one follows at once, so alerts are read at the Core's capacity
+        // and still with a release sweep between every bounded poll.
+        if !report.budget_exhausted() {
+            thread::sleep(Duration::from_millis(cfg.poll_ms));
+        }
     }
 }
 
@@ -1582,7 +1595,7 @@ mod tests {
         // Five polls' worth of alerts plus the same number of flow records,
         // all present before the first poll: a flood the old reader would have
         // read to the end before the sweep.
-        let total = limits.admit_per_poll * 5;
+        let total = limits.alerts_per_poll * 5;
         let mut body = String::new();
         for n in 0..total {
             body.push_str(&format!(
@@ -1603,13 +1616,13 @@ mod tests {
         while ingress.offset < len {
             let report = poll_iteration(&cfg, &mut ingress, &mut |_, r| sweeps.push(r.offset));
             iterations += 1;
-            assert!(report.admitted <= limits.admit_per_poll);
+            assert!(report.alerts_admitted <= limits.alerts_per_poll);
             assert!(report.examined <= limits.examine_per_poll);
+            if ingress.offset < len {
+                assert!(report.budget_exhausted(), "stopped early with work left: {:?}", report.stop);
+            }
             assert_eq!(sweeps.len(), iterations, "one sweep per iteration");
             assert!(iterations < 1000);
-            // The declared rate refills the bucket between real polls; do not
-            // wait for it here, the bound per poll is what is under test.
-            ingress.limits.admit_per_sec = u64::MAX / 4;
         }
         assert!(iterations >= 5, "the backlog took several iterations: {}", iterations);
         // The first sweep ran with most of the flood still unread.

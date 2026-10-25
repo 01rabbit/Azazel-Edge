@@ -5,15 +5,17 @@
 This is not an SO-11 measurement. SO-11 asks for the SO-03, SO-04 and SO-07
 pass rules to hold at each declared ingress quota and for the quota to shed at
 120% of the highest one. This probe covers only the second half for the one
-quota Edge declares (``config/service_objectives/ingress_quota.json``): it
-starts the real core (Edge defaults, enforcement off, AI forward off), writes a
-mix of EVE alerts and flow records at 120% of the declared rate, and checks
-from the core's own output that
+quota Edge declares (``config/service_objectives/ingress_quota.json``), a
+quota on non-alert lines: it starts the real core (Edge defaults, enforcement
+off, AI forward off), writes flow, dns, stats and http records at 120% of the
+declared rate together with alerts at ``ALERT_RATE``, and checks from the
+core's own output that
 
 * the core recorded shedding (``ingress_shed`` summaries in
   ``ingress-audit.jsonl``, beside the normalized event log),
 * nothing it shed was an alert (``alerts_shed`` 0, and every alert written
   was decided once the writer stopped and the backlog drained),
+* flow was shed at least as much as dns, dns at least as much as stats,
 * the summaries are rate-bounded (at most one per audit interval).
 
 The result is a plain JSON document with verdict ``not_measurable`` and the
@@ -38,26 +40,30 @@ from .declarations import load_ingress_quotas
 
 INGRESS = "core_eve_reader"
 OVERLOAD = 1.2
-# Padding makes each line about this many bytes, so the backlog reaches the
-# declared backlog bound within the run instead of after minutes.
-LINE_BYTES = 1500
+# Alerts offered alongside the non-alert overload. Alerts are outside the
+# quota; this is below the measured alert capacity so the run ends drained.
+ALERT_RATE = 1000
+NON_ALERT_KINDS = ("flow", "dns", "stats", "http")
+# Padding makes each line about this many bytes (closer to real EVE lines).
+LINE_BYTES = 600
 
 
 class _Writer(threading.Thread):
-    def __init__(self, path: Path, rate_per_s: float, duration_s: float):
+    def __init__(self, path: Path, rate_per_s: float, duration_s: float, alert_rate_per_s: float = ALERT_RATE):
         super().__init__(daemon=True)
         self.path = path
         self.rate = rate_per_s
+        self.alert_rate = alert_rate_per_s
         self.duration = duration_s
         self.alerts = 0
-        self.flows = 0
+        self.non_alerts = 0
 
     def _line(self, n: int, kind: str) -> str:
         base: Dict[str, Any] = {"timestamp": "2026-01-01T00:00:00.000000+0000", "event_type": kind, "src_ip": f"198.51.100.{n % 250 + 1}", "dest_ip": "192.0.2.10", "dest_port": 22, "proto": "TCP"}
         if kind == "alert":
             base["alert"] = {"signature_id": 3000000 + n % 50, "signature": "so11 probe", "category": "load", "severity": 3}
         else:
-            base["flow"] = {"pkts_toserver": n}
+            base[kind] = {"n": n}
         raw = json.dumps(base)
         base["pad"] = "x" * max(0, LINE_BYTES - len(raw) - 12)
         return json.dumps(base)
@@ -65,21 +71,21 @@ class _Writer(threading.Thread):
     def run(self) -> None:
         start = time.monotonic()
         n = 0
+        a = 0
         with self.path.open("a", encoding="utf-8") as fh:
             while True:
                 elapsed = time.monotonic() - start
                 if elapsed >= self.duration:
                     break
-                due = int(elapsed * self.rate)
                 lines: List[str] = []
-                while n < due:
-                    kind = "alert" if n % 2 == 0 else "flow"
-                    lines.append(self._line(n, kind))
-                    if kind == "alert":
-                        self.alerts += 1
-                    else:
-                        self.flows += 1
+                while n < int(elapsed * self.rate):
+                    lines.append(self._line(n, NON_ALERT_KINDS[n % len(NON_ALERT_KINDS)]))
+                    self.non_alerts += 1
                     n += 1
+                    while a < int(n * self.alert_rate / self.rate):
+                        lines.append(self._line(a, "alert"))
+                        self.alerts += 1
+                        a += 1
                 if lines:
                     fh.write("\n".join(lines) + "\n")
                     fh.flush()
@@ -167,16 +173,28 @@ def run(core_bin: Path, duration_s: float = 40.0, drain_timeout_s: float = 120.0
         "shedding_recorded": sum(by_type.values()) > 0,
         "alerts_never_shed": all(int(r.get("alerts_shed", 1)) == 0 for r in shed_records) and by_type.get("alert", 0) == 0,
         "every_alert_decided_after_drain": decided == writer.alerts,
+        "flow_shed_first_then_dns_then_stats": by_type.get("flow", 0) >= by_type.get("dns", 0) >= by_type.get("stats", 0),
         "summaries_rate_bounded": all(g >= interval_s * 0.95 for g in gaps_between),
     }
     result.update({
-        "offered": {"rate_lines_per_s": rate, "overload": OVERLOAD, "duration_s": round(written_s, 3), "alerts_written": writer.alerts, "flows_written": writer.flows, "line_bytes": LINE_BYTES},
-        "quota": {k: quota[k] for k in ("value", "unit", "admit_per_poll", "backlog_bound_bytes", "status", "hardware_class")},
+        "offered": {
+            "non_alert_rate_lines_per_s": rate,
+            "alert_rate_lines_per_s": ALERT_RATE,
+            "overload": OVERLOAD,
+            "duration_s": round(written_s, 3),
+            "alerts_written": writer.alerts,
+            "non_alerts_written": writer.non_alerts,
+            "non_alert_kinds": list(NON_ALERT_KINDS),
+            "line_bytes": LINE_BYTES,
+        },
+        "quota": {k: quota[k] for k in ("value", "unit", "non_alert_burst", "alerts_per_poll", "backlog_bound_bytes", "status", "hardware_class")},
         "observed": {
             "alerts_decided": decided,
             "drained_after_s": round(drained_s, 3),
             "shed_by_type": by_type,
             "shed_summaries": len(shed_records),
+            "non_alerts_admitted_in_summarised_intervals": sum(int(r.get("admitted", 0)) - int(r.get("alerts_admitted", 0)) for r in shed_records),
+            "shed_by_reason": {k: sum(int((r.get("shed_by_reason") or {}).get(k, 0)) for r in shed_records) for k in ("non_alert_rate", "backlog")},
             "max_shed_level": max((int(r.get("max_shed_level", 0)) for r in shed_records), default=0),
             "max_backlog_bytes": max((int(r.get("max_backlog_bytes", 0)) for r in shed_records), default=0),
             "min_seconds_between_summaries": round(min(gaps_between), 3) if gaps_between else None,
@@ -186,7 +204,7 @@ def run(core_bin: Path, duration_s: float = 40.0, drain_timeout_s: float = 120.0
             {"id": "SO11-REFERENCED-ROWS-NOT-RERUN", "summary": "SO-03, SO-04 and SO-07 are not re-run at the declared quota or at 120% of it; only the shedding half of SO-11 is probed."},
             {"id": "SO11-QUOTA-PROVISIONAL", "summary": "the quota is provisional and container-derived (container-aarch64, not hardware); no hardware class is declared."},
             {"id": "SO11-NOT-A-RECORD", "summary": "SO-11 has no specification in record.py; this output is not validated as a service-objective record."},
-            {"id": "SO11-SINGLE-MIX", "summary": "one traffic mix (half alerts, half flow, ~1.5 KB lines); dns/stats/other shedding is covered by core unit tests, not here."},
+            {"id": "SO11-SINGLE-MIX", "summary": "one traffic mix (flow/dns/stats/http in equal parts at 120% of the quota plus 1000 alerts/s, ~600-byte lines); backlog escalation and unparseable/oversized lines are covered by core unit tests, not here."},
         ],
     })
     if not all(checks.values()):
