@@ -704,7 +704,7 @@ def test_ordinary_soc_text_is_not_masked(text):
     ("pin: 1234", "[redacted:secret_kv]"),
     ("auth=s3cr3t", "[redacted:secret_kv]"),
     ("secret: hunter2", "[redacted:secret_kv]"),
-    ("Bearer abc)", "[redacted:bearer])"),
+    ("Bearer abc)", "[redacted:bearer]"),  # no opener before the label: mask through ")"
     ("password: failed", "[redacted:secret_kv]"),  # strong label always masks
     ("ftp://user:pa ss@host/x", "ftp://[redacted:url_userinfo]@host/x"),
     ("暗証番号 1234", "[redacted:secret_kv]"),
@@ -743,3 +743,57 @@ def test_rotation_removes_exactly_the_oldest_slot():
         assert single.append(_record(i)).written
     assert set(fs1.files) == {"/b.jsonl"} and set(fs1.removed) == {"/b.jsonl"}
     assert len(fs1.files["/b.jsonl"]) <= MAX_RECORD_BYTES
+
+
+# --- #449 review: weak-label relaxation must not leak ----------------------------
+
+@pytest.mark.parametrize("text, secret", [
+    ("pin: 1234 please", "1234"),
+    ("pin: 4821 ok", "4821"),
+    ("token: expired abc123", "abc123"),
+    ("token: valid Zm9vYmFy", "Zm9vYmFy"),
+    ("pw: failed 2024!", "2024"),
+    ("pw: none hunter2", "hunter2"),
+    ("auth: ok hunter2", "hunter2"),
+    ("secret: none mysecret", "mysecret"),
+    ("pass: 12 hunter2", "hunter2"),
+    ("auth: none password=x", "password=x"),
+    ("bearer token abcdef123456", "abcdef123456"),
+    ("bearer token hunter", "hunter"),
+    ("pin: 1234", "1234"),
+    ("pin: 12", "12"),
+    ("auth: admin", "admin"),
+])
+def test_weak_label_value_with_any_unknown_word_is_masked(text, secret):
+    out = redact_text(text)
+    assert secret not in out and "[redacted:" in out, out
+
+
+@pytest.mark.parametrize("text, tail", [
+    ("pw: p)ss", "ss"),
+    ("password=pa]ss", "ss"),
+    ("token=abc}def", "def"),
+    ("password: hunter2) trailing", "trailing"),
+])
+def test_closing_bracket_without_opener_does_not_end_value(text, tail):
+    out = redact_text(text)
+    assert tail not in out and out.startswith("[redacted:"), out
+
+
+def test_closing_bracket_ends_value_only_after_matching_opener():
+    assert redact_text("(password: hunter2) next") == "([redacted:secret_kv]) next"
+    assert redact_text("{token=abc123} ok") == "{[redacted:secret_kv]} ok"
+    assert redact_text('(password: "a)b") x') == "([redacted:secret_kv]) x"
+
+
+def test_bearer_token_skips_only_the_word_token():
+    assert redact_text("bearer token") == "bearer token"
+    assert redact_text("bearer token reuse across hosts") == "bearer token reuse across hosts"
+    assert redact_text("Authorization: Bearer token abc123") == "[redacted:auth_header]"
+
+
+def test_pin_count_needs_a_pin_specific_unit_word():
+    assert redact_text("pin: 3 hosts") == "pin: 3 hosts"
+    assert "12" not in redact_text("pin: 12 fail")  # "fail" is a unit for other labels, not for PIN
+    assert "12" not in redact_text("pin: 12 accounts")
+    assert redact_text("pass: 12 accounts") == "pass: 12 accounts"

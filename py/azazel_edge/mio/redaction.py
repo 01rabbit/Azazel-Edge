@@ -53,13 +53,18 @@ _LABEL_ANY = (
 _LEFT = r"(?<![A-Za-z0-9:/._-])(?:[A-Za-z0-9]+[-_])*"
 _RIGHT = r"(?![A-Za-z0-9])"
 # Quoted value to its closing quote; otherwise to the end of the field.
-# Closing brackets end an unquoted value so "(pw: x)" keeps its ")".
-_VALUE = r"""(?P<value>"[^"\r\n]*"?|'[^'\r\n]*'?|「[^」\r\n]*」?|[^\r\n,;&)\]}>]+)"""
+# Unquoted values run to the field end, closing brackets included; a closing
+# bracket only ends the value when its opening bracket precedes the label
+# ("(pw: x)"), see ``_value_end``.
+_VALUE = r"""(?P<value>"[^"\r\n]*"?|'[^'\r\n]*'?|「[^」\r\n]*」?|[^\r\n,;&]+)"""
 
 # Short labels that also occur in ordinary SOC prose ("auth: failed for admin",
-# "pin: 3 hosts", "token: expired"). For these, a status word or a count
-# followed by words is not treated as a secret value. Strong labels
-# (password, api_key, ...) are always masked.
+# "pin: 3 hosts", "token: expired"). For these the value is kept only when the
+# *whole* value is an ordinary phrase: it starts with a status word or a count,
+# every word is a status word, an allowed ordinary word, or a short count
+# followed by a unit word. Anything else (any unknown word, digits+letters,
+# a bare digit run) is masked. If unsure, mask. Strong labels (password,
+# api_key, ...) are always masked.
 _WEAK_LABELS = frozenset({"auth", "pin", "pass", "pw", "secret", "token"})
 _STATUS_WORDS = frozenset({
     "failed", "fail", "failure", "failures", "none", "null", "nil", "n/a", "na", "empty", "unset", "missing",
@@ -68,24 +73,76 @@ _STATUS_WORDS = frozenset({
     "true", "false", "yes", "no", "unknown", "leaked", "exposed", "compromised", "rotated", "reused", "reuse",
     "error", "errors", "timeout", "pending", "locked", "unlocked", "changed", "reset", "redacted", "detected",
 })
+_ORDINARY_WORDS = frozenset({
+    "for", "in", "on", "at", "to", "from", "by", "of", "via", "with", "after", "before", "and", "or", "the", "a", "an",
+    "admin", "root", "user", "users", "account", "accounts", "login", "logins", "repo", "repository", "host", "hosts",
+    "device", "devices", "session", "sessions", "retry", "later", "again", "across", "attempt", "attempts",
+})
+# Unit words that may follow a count. PIN gets a smaller list: a digit run
+# after "pin:" is a PIN unless a unit word follows.
+_UNIT_WORDS = frozenset({"host", "hosts", "attempt", "attempts", "device", "devices", "user", "users", "times", "sessions", "failures", "fail", "failed", "errors", "accounts"})
+_PIN_UNIT_WORDS = frozenset({"host", "hosts", "attempt", "attempts", "device", "devices", "users", "times", "failures"})
+_PAIRS = {"(": ")", "[": "]", "{": "}", "<": ">"}
 
 
-def _keep_ordinary_value(norm: str, m: "re.Match[str]") -> bool:
+def _ordinary_phrase(value: str, label: str) -> bool:
+    words = [w.lower().strip(".,!?:\"'「」") for w in value.split()]
+    words = [w for w in words if w]
+    if not words:
+        return False
+    units = _PIN_UNIT_WORDS if label == "pin" else _UNIT_WORDS
+    for i, w in enumerate(words):
+        if w in _STATUS_WORDS or (i > 0 and w in _ORDINARY_WORDS):
+            continue
+        if w.isdigit() and len(w) <= 3:
+            nxt = words[i + 1] if i + 1 < len(words) else ""
+            # "12 fail" (count + unit) or "fail: 3" (counter after a status word)
+            if nxt in units or (label != "pin" and i > 0 and words[i - 1] in _STATUS_WORDS and value.split()[i - 1].endswith(":")):
+                continue
+        return False
+    return True
+
+
+def _value_end(norm: str, m: "re.Match[str]") -> int:
+    """End of the value: at a closing bracket only if its opener precedes the label."""
+    vs, ve = m.span("value")
+    line_start = norm.rfind("\n", 0, m.start()) + 1
+    depth: list[str] = []
+    for ch in norm[line_start:m.start()]:
+        if ch in _PAIRS:
+            depth.append(_PAIRS[ch])
+        elif depth and ch == depth[-1]:
+            depth.pop()
+    if depth and norm[vs:vs + 1] not in "\"'「":
+        idx = norm.find(depth[-1], vs, ve)
+        if idx >= 0:
+            return idx
+    return ve
+
+
+def _kv_end(norm: str, m: "re.Match[str]") -> Optional[int]:
+    end = _value_end(norm, m)
     label = m.group("label").lower().lstrip("_-")
-    if label not in _WEAK_LABELS:
-        return False
-    value = m.group("value").strip().strip("\"'「」").strip()
-    parts = value.split(None, 1)
-    if not parts:
-        return False
-    first = parts[0].lower().rstrip(".!:")
-    if first in _STATUS_WORDS:
-        return True
-    return first.isdigit() and len(parts) > 1 and parts[1][:1].isalpha()
+    if label in _WEAK_LABELS and _ordinary_phrase(norm[m.start("value"):end], label):
+        return None
+    return end
+
+
+def _bearer_end(norm: str, m: "re.Match[str]") -> Optional[int]:
+    """``bearer token <x>``: skip only the word "token", then examine x."""
+    if m.group("skip") or m.group("bval").lower() in ("token", "tokens"):
+        bval = m.group("bval").lower().strip(".,!?")
+        if bval in ("token", "tokens") or bval in _ORDINARY_WORDS or bval in _STATUS_WORDS:
+            return None
+    return m.end()
 
 _HEX_DIGEST = re.compile(r"[0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64}", re.I)
 _REF_WORD = re.compile(r"[A-Za-z][A-Za-z0-9._-]*:[A-Za-z0-9._:/#-]+")
 _PREFIXED = r"(?:sk-|sk_live_|sk_test_|rk_live_|xox[abprs]-|gh[pousr]_|github_pat_|glpat-|AKIA|ASIA|AIza)"
+
+
+def _long_token_end(norm: str, m: "re.Match[str]") -> Optional[int]:
+    return None if _keep_long_token(norm, m) else m.end()
 
 
 def _keep_long_token(norm: str, m: "re.Match[str]") -> bool:
@@ -104,7 +161,8 @@ def _keep_long_token(norm: str, m: "re.Match[str]") -> bool:
     return bool(_REF_WORD.fullmatch(word)) and not re.match(_PREFIXED, tok)
 
 
-_Keep = Optional[Callable[[str, "re.Match[str]"], bool]]
+# A rule's optional callback returns the match end to mask, or None to skip.
+_Keep = Optional[Callable[[str, "re.Match[str]"], Optional[int]]]
 _RULES: tuple[tuple[str, "re.Pattern[str]", _Keep], ...] = (
     ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.S), None),
     ("url_userinfo", re.compile(r"(?<=://)[^\s/?#]+(?=@[^\s@/?#]+)"), None),
@@ -113,16 +171,16 @@ _RULES: tuple[tuple[str, "re.Pattern[str]", _Keep], ...] = (
     # Scheme-less "user:pass@host". A plain email has no ":" before "@".
     ("url_userinfo", re.compile(r"(?<![A-Za-z0-9._:/@-])(?!mailto:)[A-Za-z0-9._-]+:(?!//)[^\s@/:]+(?=@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)", re.I), None),
     ("auth_header", re.compile(r"(?<![A-Za-z0-9])(?:proxy-)?authorization\s*[:=][^\r\n,;]*", re.I), None),
-    ("bearer", re.compile(r"(?<![A-Za-z0-9])bearer(?:\s*[:=]\s*|\s+)(?!tokens?\b)[^\s,;)\]}>]+", re.I), None),
+    ("bearer", re.compile(r"(?<![A-Za-z0-9])bearer(?:\s*[:=]\s*|\s+)(?P<skip>tokens?\s+)?(?P<bval>[^\s,;]+)", re.I), _bearer_end),
     ("bearer", re.compile(r"(?<![A-Za-z0-9])basic\s+[A-Za-z0-9+/]{8,}={0,2}", re.I), None),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"), None),
     ("api_key", re.compile(r"(?<![A-Za-z0-9])" + _PREFIXED + r"[A-Za-z0-9_-]{6,}"), None),
-    ("secret_kv", re.compile(_LEFT + _LABEL_ANY + _RIGHT + r"\s*[:=]\s*" + _VALUE, re.I), _keep_ordinary_value),
-    ("secret_kv", re.compile(_LEFT + _LABEL_PW + r"(?:\s+(?:is|was)\s+|\s*は\s*)" + _VALUE, re.I), _keep_ordinary_value),
+    ("secret_kv", re.compile(_LEFT + _LABEL_ANY + _RIGHT + r"\s*[:=]\s*" + _VALUE, re.I), _kv_end),
+    ("secret_kv", re.compile(_LEFT + _LABEL_PW + r"(?:\s+(?:is|was)\s+|\s*は\s*)" + _VALUE, re.I), _kv_end),
     # Japanese label then a space: "暗証番号 1234".
-    ("secret_kv", re.compile(r"(?:パスワード|暗証番号|パスフレーズ|秘密鍵)\s+[A-Za-z0-9][^\s,;)\]}>]*"), None),
+    ("secret_kv", re.compile(r"(?:パスワード|暗証番号|パスフレーズ|秘密鍵)\s+[A-Za-z0-9][^\s,;]*"), None),
     ("email", re.compile(r"(?:(?<=[Mm][Aa][Ii][Ll][Tt][Oo]:)|(?<![:/A-Za-z0-9._%+-]))[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), None),
-    ("long_token", re.compile(r"(?<![A-Za-z0-9_+=-])[A-Za-z0-9_+=-]{32,}"), _keep_long_token),
+    ("long_token", re.compile(r"(?<![A-Za-z0-9_+=-])[A-Za-z0-9_+=-]{32,}"), _long_token_end),
 )
 _TOKEN_RULES = frozenset({"private_key", "url_userinfo", "bearer", "jwt", "api_key", "email", "long_token"})
 
@@ -134,9 +192,10 @@ def _spans(text: str, labels: frozenset[str] | None = None) -> list[tuple[int, i
         if labels is not None and label not in labels:
             continue
         for m in pattern.finditer(norm):
-            if m.end() == m.start() or (keep is not None and keep(norm, m)):
+            end = m.end() if keep is None else keep(norm, m)
+            if end is None or end <= m.start():
                 continue
-            spans.append((index[m.start()], index[m.end() - 1] + 1, label))
+            spans.append((index[m.start()], index[end - 1] + 1, label))
     spans.sort()
     merged: list[tuple[int, int, str]] = []
     for s, e, label in spans:
