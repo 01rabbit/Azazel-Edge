@@ -1,6 +1,6 @@
 # Security Policy
 
-Azazel-Edge (AZ-01, codename `SENTINEL`) is a deception/delay gateway that faces hostile traffic by design — scapegoat surfaces exist to be probed, bound, and slowed by attackers. The boundary that matters is not those surfaces; it is the line between them and the protected segment / control plane (deterministic arbiter, nftables/tc policy, audit chain, management interfaces).
+Azazel-Edge (AZ-01, codename `SENTINEL`) is a deception/delay gateway that faces hostile traffic by design — scapegoat surfaces exist to be probed, bound, and slowed by attackers. The boundary that matters is not those surfaces; it is the line between them and the protected segment / control plane (deterministic arbiter — the Rust `azazel-edge-core` decision and enforcement path, see `docs/X86_64_INTEGRATION_BOUNDARY.md` — nftables/tc policy, audit chain, management interfaces).
 
 ## Reporting a vulnerability
 

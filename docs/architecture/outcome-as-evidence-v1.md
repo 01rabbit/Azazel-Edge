@@ -51,7 +51,7 @@ NormalizedEvent
 
 `EnforcementOutcome` already records `trace_id`, selected action, target, policy reason, command and rollback plans, executed/failed counts, errors, result, and metadata. v1 treats that structure as provider evidence and normalizes it; it does not replace it.
 
-`py/azazel_edge/arbiter/action.py::ActionArbiter` remains an important deterministic decision implementation, but the repository also contains the independent Rust decision/enforcement path. Until the wiring is unified and proven, documentation must not call the Python ActionArbiter the sole live execution truth.
+`py/azazel_edge/arbiter/action.py::ActionArbiter` remains an important deterministic decision implementation, but it is not an enforcement path: nothing applies its output to the network. The authoritative decision and enforcement path is the Rust `decide_defense() -> maybe_enforce()` path above (Edge#412, `docs/X86_64_INTEGRATION_BOUNDARY.md`, "Decision and enforcement authority"). Documentation must not call the Python ActionArbiter a live execution truth.
 
 ### Current mechanism scope
 

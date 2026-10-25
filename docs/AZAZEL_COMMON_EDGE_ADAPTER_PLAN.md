@@ -245,7 +245,7 @@ untouched, with their role:
 
 | Component | Path | Role — why out of scope |
 |---|---|---|
-| Action Arbiter | `py/azazel_edge/arbiter/action.py` (`ActionArbiter` `:14`, `ACTION_PROFILES` `:17-53`) | Selects the one bounded action from NOC+SOC. Final decision authority stays singular and local (`Azazel-Common/docs/design-principles.md` §4.1). |
+| Action Arbiter | `py/azazel_edge/arbiter/action.py` (`ActionArbiter` `:14`, `ACTION_PROFILES` `:17-53`) | Selects the one bounded action from NOC+SOC for replay, benchmarks and dry runs. It is not an enforcement path; the singular, local decision and enforcement authority (`Azazel-Common/docs/design-principles.md` §4.1) is the Rust `azazel-edge-core` (`docs/X86_64_INTEGRATION_BOUNDARY.md`). |
 | NOC Evaluator | `py/azazel_edge/evaluators/noc.py` | Deterministic network/ops health scoring. Edge-specific judgment. |
 | SOC Evaluator | `py/azazel_edge/evaluators/soc.py` | Security evaluation (correlation, ATT&CK, Sigma/YARA, TI matching). Edge-specific detection logic. |
 | Evidence Plane | `py/azazel_edge/evidence_plane/` | Ingests/normalizes raw sensor evidence into `EvidenceEvent`s upstream of the evaluators. Input plane, not an output-serialization boundary. |
