@@ -579,3 +579,70 @@ def test_pidfile_is_removed_only_if_it_names_our_suricata(monkeypatch, tmp_path)
     (tmp_path / "111").mkdir()
     (tmp_path / "111" / "cmdline").write_bytes(b"suricata\0")
     assert lab._pidfile_is_ours(dead_only=True) is False
+
+
+# ------------------------------------------- teardown (re-review of #442)
+
+
+def test_pids_in_netns_matches_only_the_lab_namespace(monkeypatch, tmp_path):
+    proc = tmp_path / "proc"
+    netns = tmp_path / "netns"
+    netns.mkdir()
+    lab_ns = netns / "so02e-abc123"
+    lab_ns.write_text("", encoding="utf-8")  # a plain file stands in for the bind mount
+    for pid in (101, 202, 303):
+        (proc / str(pid) / "ns").mkdir(parents=True)
+    import os as _os
+
+    _os.link(lab_ns, proc / "101" / "ns" / "net")  # same (dev, inode): inside the lab
+    (proc / "202" / "ns" / "net").write_text("", encoding="utf-8")  # another namespace
+    # 303 has no readable ns/net (e.g. a zombie): never matched.
+    monkeypatch.setattr(so02, "PROC_ROOT", proc)
+    assert so02._pids_in_netns(lab_ns) == [101]
+    assert so02._pids_in_netns(netns / "absent") == []
+
+
+def _teardown_lab(monkeypatch, tmp_path, *, pids_in_ns=(), netns=("so02e-x",)):
+    lab = so02._Lab(tmp_path / "w", "/usr/bin/suricata")
+    lab.netns_created = list(netns)
+    killed, deleted, looked = [], [], []
+    monkeypatch.setattr(so02, "_pids_in_netns", lambda path: looked.append(path) or list(pids_in_ns))
+    monkeypatch.setattr(so02.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(so02, "_reap", lambda pid, timeout=0: None)
+    monkeypatch.setattr(lab, "_ip", lambda *a: deleted.append(a) or so02.subprocess.CompletedProcess(a, 0, "", ""))
+    return lab, killed, deleted, looked
+
+
+def test_teardown_kills_lab_processes_but_never_itself(monkeypatch, tmp_path):
+    me = so02.os.getpid()
+    lab, killed, deleted, _ = _teardown_lab(monkeypatch, tmp_path, pids_in_ns=(me, 4711))
+    monkeypatch.setattr(so02, "SURICATA_PIDFILE", tmp_path / "suricata.pid")
+    lab.teardown()
+    assert {pid for pid, _ in killed} == {4711}
+    assert ("netns", "del", "so02e-x") in deleted
+
+
+def test_teardown_leaves_a_foreign_pidfile(monkeypatch, tmp_path):
+    pidfile = tmp_path / "suricata.pid"
+    monkeypatch.setattr(so02, "SURICATA_PIDFILE", pidfile)
+    monkeypatch.setattr(so02, "PROC_ROOT", tmp_path / "proc")
+    lab, _, _, _ = _teardown_lab(monkeypatch, tmp_path)
+    lab.started_pids = [111]
+    pidfile.write_text("222", encoding="utf-8")
+    lab.teardown()
+    assert pidfile.read_text(encoding="utf-8") == "222"
+    pidfile.write_text("111", encoding="utf-8")
+    lab.netns_created = []
+    lab.teardown()
+    assert not pidfile.exists()
+
+
+def test_failed_netns_add_kills_nothing(monkeypatch, tmp_path):
+    lab, killed, _, looked = _teardown_lab(monkeypatch, tmp_path, pids_in_ns=(4711,), netns=())
+    monkeypatch.setattr(so02, "SURICATA_PIDFILE", tmp_path / "suricata.pid")
+    monkeypatch.setattr(lab, "_ip", lambda *a: so02.subprocess.CompletedProcess(a, 1, "", "File exists"))
+    with pytest.raises(RuntimeError):
+        lab.build()
+    assert lab.netns_created == []
+    lab.teardown()
+    assert looked == [] and killed == []
