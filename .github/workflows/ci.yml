@@ -127,6 +127,16 @@ jobs:
             tests/test_service_objectives_so04_hostile_load_v1.py -k real_core | tee real-core.log
           grep -Eq "^1 passed" real-core.log
 
+      - name: Real-nft test of the core's owned isolate/redirect leases (root)
+        # Edge#464. Treated like SO-04: root, inside a network namespace the
+        # test creates, against the release core built above with enforcement
+        # on and dry run off in that namespace only. The test-python job is not
+        # root, so it is skipped there; here it must run and pass, never skip.
+        run: |
+          sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_core_nft_owned_lease_v1.py | tee real-nft.log
+          grep -Eq "^1 passed" real-nft.log
+
       - name: Run SO-03 and SO-07 harnesses
         run: |
           . .venv/bin/activate
