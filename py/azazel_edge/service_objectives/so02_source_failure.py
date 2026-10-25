@@ -71,8 +71,10 @@ with SIGKILL cannot clean up; the namespaces remain and the next run refuses.
 
 Process death is detected through the pidfile path (the lab has no systemd);
 the production ``systemctl is-active`` path is not measured. Only the total
-from injection to the surface is measured; wall-clock stage stamps are kept
-per sample for diagnosis and never read for the verdict.
+from injection to the surface is measured; wall-clock stage stamps, and the
+NOC collection behind the end response (its trigger, CLOCK_MONOTONIC start and
+per-collector timings from ``noc_runtime.collection``), are kept per sample for
+diagnosis and never read for the verdict.
 """
 
 from __future__ import annotations
@@ -145,7 +147,8 @@ while True:
         row.update(ok=True, suricata=mon.get("suricata"),
                    uplinks=blast.get("affected_uplinks") if blast is not None else None,
                    source=body.get("source"), snapshot_epoch=body.get("snapshot_epoch"),
-                   noc_updated_epoch=(body.get("noc_runtime") or {}).get("updated_epoch") if isinstance(body.get("noc_runtime"), dict) else None)
+                   noc_updated_epoch=(body.get("noc_runtime") or {}).get("updated_epoch") if isinstance(body.get("noc_runtime"), dict) else None,
+                   noc_collection=(body.get("noc_runtime") or {}).get("collection") if isinstance(body.get("noc_runtime"), dict) else None)
     except Exception as exc:
         row.update(ok=False, err=type(exc).__name__ + ": " + str(exc)[:200])
     row["e"] = time.monotonic_ns()
@@ -312,6 +315,30 @@ def _failed(source_type: str) -> Callable[[Dict[str, Any]], bool]:
     if source_type == SO02_CAPTURE_PROCESS:
         return lambda row: row.get("suricata") == "OFF"
     return lambda row: isinstance(row.get("uplinks"), list) and CAPTURE_IFACE in row["uplinks"]
+
+
+def _bounded_collection(value: Any) -> Optional[Dict[str, Any]]:
+    """The NOC collection view as the surface returned it, bounded: a dict
+    with at most 16 collector rows of scalar fields, or None."""
+
+    if not isinstance(value, dict):
+        return None
+
+    def scalar(v: Any) -> Any:
+        return v if v is None or isinstance(v, (bool, int, float)) else str(v)[:64]
+
+    collectors = [
+        {k: scalar(row.get(k)) for k in ("collector", "started_offset_ms", "duration_ms", "outcome")}
+        for row in (value.get("collectors") if isinstance(value.get("collectors"), list) else [])[:16]
+        if isinstance(row, dict)
+    ]
+    return {
+        "trigger": scalar(value.get("trigger")),
+        "started_monotonic_ns": scalar(value.get("started_monotonic_ns")),
+        "link_event_started_monotonic_ns": scalar(value.get("link_event_started_monotonic_ns")),
+        "duration_ms": scalar(value.get("duration_ms")),
+        "collectors": collectors,
+    }
 
 
 def _surface_value(source_type: str, row: Optional[Dict[str, Any]]) -> Any:
@@ -620,6 +647,10 @@ def _measure(lab: _Lab, poller: _Poller, samples: int, rows: List[Dict[str, Any]
             "injection_wall_epoch": None,
             "end_noc_updated_epoch": None,
             "end_snapshot_epoch": None,
+            # The NOC collection behind the end response: its trigger, start
+            # (CLOCK_MONOTONIC, same host clock as the injection stamp) and
+            # per-collector timings. Diagnostic; never read for the verdict.
+            "end_noc_collection": None,
         }
         if base_row is None:
             # No healthy baseline: nothing is injected, the sample never ends,
@@ -640,6 +671,7 @@ def _measure(lab: _Lab, poller: _Poller, samples: int, rows: List[Dict[str, Any]
             row["end_monotonic_ns"] = end_row["e"]
             row["end_noc_updated_epoch"] = end_row.get("noc_updated_epoch")
             row["end_snapshot_epoch"] = end_row.get("snapshot_epoch")
+            row["end_noc_collection"] = _bounded_collection(end_row.get("noc_collection"))
             if so02_failure_observed(row):
                 row["elapsed_ms"] = round((end_row["e"] - start_ns) / 1e6, 3)
             else:

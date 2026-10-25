@@ -11,17 +11,12 @@ from azazel_edge.sensors.noc_monitor import LightweightNocMonitor
 
 class MultiSegmentNocV2Tests(unittest.TestCase):
     def test_monitor_can_probe_multiple_interfaces(self) -> None:
-        def fake_probe(gateway_ip: str, interfaces):
-            rows = []
-            for iface in interfaces:
-                iface = str(iface).strip()
-                if not iface:
-                    continue
-                rows.append({'target': '192.168.40.1', 'scope': 'gateway', 'reachable': iface == 'eth1', 'interface': iface})
-            return rows
+        def fake_probe(gateway_ip, interface=''):
+            iface = str(interface).strip()
+            return [{'target': '192.168.40.1', 'scope': 'gateway', 'reachable': iface == 'eth1', 'interface': iface}]
 
         with patch('azazel_edge.sensors.noc_monitor.collect_icmp', return_value={'target': '192.168.40.1', 'reachable': True}), \
-             patch('azazel_edge.sensors.noc_monitor.collect_path_probes_multi', side_effect=fake_probe), \
+             patch('azazel_edge.sensors.noc_monitor.collect_path_probes', side_effect=fake_probe), \
              patch('azazel_edge.sensors.noc_monitor.collect_iface_stats', return_value=[]), \
              patch('azazel_edge.sensors.noc_monitor.collect_cpu_mem_temp', return_value={}), \
              patch('azazel_edge.sensors.noc_monitor.collect_dhcp_leases', return_value=[]), \

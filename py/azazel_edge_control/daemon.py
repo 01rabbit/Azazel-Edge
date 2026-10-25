@@ -35,6 +35,7 @@ from mode_manager import ModeManager
 from wifi_connect import connect_wifi, update_state_json
 from azazel_edge.evaluators import NocEvaluator
 from azazel_edge.evidence_plane import EvidenceBus, EvidencePlaneService, NocProbeAdapter, build_client_inventory
+from azazel_edge.sensors.link_watch import LinkStateWatcher
 from azazel_edge.sensors.network_health import NetworkHealthMonitor
 from azazel_edge.sensors.wifi_channel_scanner import scan_wifi_channels
 from azazel_edge.sensors.wifi_scanner import scan_and_parse
@@ -143,6 +144,7 @@ def _dev_healthy_baseline() -> bool:
 NOC_REFRESH_SEC = max(2.0 if _DEMO_FAST else 5.0, float(_timing_default("AZAZEL_NOC_REFRESH_SEC", "20", "3")))
 NOC_EVALUATOR = NocEvaluator()
 NOC_CACHE_LOCK = threading.Lock()
+NOC_COLLECT_LOCK = threading.Lock()
 _NOC_CACHE: dict[str, Any] = {
     "key": "",
     "ts": 0.0,
@@ -151,12 +153,14 @@ _NOC_CACHE: dict[str, Any] = {
 SNAPSHOT_CACHE_TTL_SEC = float(_timing_default("AZAZEL_SNAPSHOT_CACHE_TTL_SEC", "30", "3"))
 SNAPSHOT_REFRESH_INTERVAL_SEC = max(2.0 if _DEMO_FAST else 10.0, float(_timing_default("AZAZEL_SNAPSHOT_REFRESH_SEC", "12", "3")))
 SNAPSHOT_CACHE_LOCK = threading.Lock()
+SNAPSHOT_WRITE_LOCK = threading.Lock()
 _SNAPSHOT_CACHE: dict[str, Any] = {
     "ts": 0.0,
     "payload": None,
 }
 _NOC_ADAPTER: Optional[NocProbeAdapter] = None
 _NOC_ADAPTER_KEY = ""
+_NOC_LINK_WATCHER: Optional[LinkStateWatcher] = None
 _WIFI_EVIDENCE_SERVICE = EvidencePlaneService(EvidenceBus())
 _WIFI_SENSOR_STOP = threading.Event()
 POLL_INTERVALS = {
@@ -1022,6 +1026,49 @@ def _traffic_top_sources(event_payloads: list[dict[str, Any]]) -> list[dict[str,
     return []
 
 
+NOC_COLLECTION_VIEW_MAX_COLLECTORS = 16
+NOC_COLLECTION_VIEW_NAME_MAX = 48
+
+
+def _noc_collection_view(timing: Any, trigger: str = "periodic") -> dict[str, Any]:
+    """Bounded, read-only view of how long one NOC collection took.
+
+    Diagnostic only: per-collector start offset and duration on
+    CLOCK_MONOTONIC, copied from the collector's own stamps. Nothing reads it
+    for a decision; it lets an operator (and the SO-02 harness) see which
+    collector a slow collection spent its time in.
+    """
+
+    timing = timing if isinstance(timing, dict) else {}
+
+    def _num(value: Any) -> float | None:
+        return round(float(value), 1) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    started = timing.get("started_monotonic_ns")
+    merged = timing.get("link_event_started_monotonic_ns")
+    collectors: list[dict[str, Any]] = []
+    for row in timing.get("collectors") or []:
+        if len(collectors) >= NOC_COLLECTION_VIEW_MAX_COLLECTORS:
+            break
+        if not isinstance(row, dict):
+            continue
+        collectors.append({
+            "collector": str(row.get("collector") or "")[:NOC_COLLECTION_VIEW_NAME_MAX],
+            "started_offset_ms": _num(row.get("started_offset_ms")),
+            "duration_ms": _num(row.get("duration_ms")),
+            "outcome": str(row.get("outcome") or "")[:16],
+        })
+    return {
+        "trigger": str(trigger or "periodic")[:32],
+        "started_monotonic_ns": int(started) if isinstance(started, int) and not isinstance(started, bool) else None,
+        # Set when a link-event refresh that started during this collection
+        # supplied the rows of its interfaces.
+        "link_event_started_monotonic_ns": int(merged) if isinstance(merged, int) and not isinstance(merged, bool) else None,
+        "duration_ms": _num(timing.get("duration_ms")),
+        "collectors": collectors,
+    }
+
+
 def _build_noc_runtime_projection(
     *,
     evaluation: dict[str, Any],
@@ -1029,6 +1076,7 @@ def _build_noc_runtime_projection(
     inventory_summary: dict[str, Any],
     inventory_sessions: list[dict[str, Any]] | None = None,
     preferred_uplink: str = "",
+    collection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     capacity = evaluation.get("capacity_health") if isinstance(evaluation.get("capacity_health"), dict) else {}
     service = evaluation.get("service_health") if isinstance(evaluation.get("service_health"), dict) else {}
@@ -1164,49 +1212,175 @@ def _build_noc_runtime_projection(
             "status": str(summary.get("status") or "unknown"),
             "evidence_count": int(len(evaluation.get("evidence_ids") or [])),
             "updated_epoch": time.time(),
+            "collection": collection if isinstance(collection, dict) else _noc_collection_view({}),
+            "link_watch": _link_watch_view(),
         },
     }
 
 
-def _compute_live_noc_projection(up_if: str, down_if: str, gateway_ip: str) -> dict[str, Any]:
-    global _NOC_ADAPTER, _NOC_ADAPTER_KEY
-    now = time.time()
-    key = f"{up_if}|{down_if}|{gateway_ip}"
-    refresh_sec = max(5.0, float(NOC_REFRESH_SEC))
+def _project_noc_events(events: list[Any], preferred_uplink: str, collection: dict[str, Any]) -> dict[str, Any]:
+    payloads = _event_payloads(events)
+    sot_payload, _sot_path = _load_sot_payload()
+    inventory = build_client_inventory(events, sot=sot_payload)
+    inventory_summary = inventory.get("summary") if isinstance(inventory.get("summary"), dict) else {}
+    inventory_sessions = inventory.get("sessions") if isinstance(inventory.get("sessions"), list) else []
+    evaluation = NOC_EVALUATOR.evaluate(events, sot=sot_payload)
+    return _build_noc_runtime_projection(
+        evaluation=evaluation,
+        event_payloads=payloads,
+        inventory_summary=inventory_summary,
+        inventory_sessions=inventory_sessions,
+        preferred_uplink=preferred_uplink,
+        collection=collection,
+    )
+
+
+def _collection_started_ns(projection: Any) -> int:
+    runtime = projection.get("noc_runtime") if isinstance(projection, dict) else None
+    collection = runtime.get("collection") if isinstance(runtime, dict) else None
+    if not isinstance(collection, dict):
+        return -1
+    # A periodic result that merged a later link-event refresh is as new as
+    # that refresh for the interface rows and newer for everything else.
+    stamps = [collection.get("started_monotonic_ns"), collection.get("link_event_started_monotonic_ns")]
+    stamps = [int(v) for v in stamps if isinstance(v, int) and not isinstance(v, bool)]
+    return max(stamps) if stamps else -1
+
+
+def _publish_noc_projection(key: str, projection: dict[str, Any], *, periodic: bool = True) -> dict[str, Any]:
+    """Cache ``projection`` unless a collection that *started* later has
+    already been published for the same scope (a link-event re-evaluation
+    overtaking a slow periodic collection); return what is now current.
+
+    A link-event publish (``periodic=False``) keeps the cache's refresh
+    stamp, so the periodic full collection stays on its own schedule."""
+
+    started = _collection_started_ns(projection)
     with NOC_CACHE_LOCK:
-        cache_ts = float(_NOC_CACHE.get("ts") or 0.0)
-        cache_key = str(_NOC_CACHE.get("key") or "")
-        cache_payload = _NOC_CACHE.get("payload")
-        if cache_key == key and isinstance(cache_payload, dict) and now - cache_ts < refresh_sec:
-            return dict(cache_payload)
-
-        if _NOC_ADAPTER is None or _NOC_ADAPTER_KEY != key:
-            _NOC_ADAPTER = NocProbeAdapter(
-                up_interface=str(up_if or "eth1"),
-                down_interface=str(down_if or "usb0"),
-                gateway_ip=str(gateway_ip or ""),
-                extra_interfaces=_env_list("AZAZEL_NOC_EXTRA_INTERFACES"),
-            )
-            _NOC_ADAPTER_KEY = key
-
-        events = _NOC_ADAPTER.collect()
-        payloads = _event_payloads(events)
-        sot_payload, _sot_path = _load_sot_payload()
-        inventory = build_client_inventory(events, sot=sot_payload)
-        inventory_summary = inventory.get("summary") if isinstance(inventory.get("summary"), dict) else {}
-        inventory_sessions = inventory.get("sessions") if isinstance(inventory.get("sessions"), list) else []
-        evaluation = NOC_EVALUATOR.evaluate(events, sot=sot_payload)
-        projection = _build_noc_runtime_projection(
-            evaluation=evaluation,
-            event_payloads=payloads,
-            inventory_summary=inventory_summary,
-            inventory_sessions=inventory_sessions,
-            preferred_uplink=up_if,
-        )
+        cached = _NOC_CACHE.get("payload")
+        if (
+            str(_NOC_CACHE.get("key") or "") == key
+            and isinstance(cached, dict)
+            and cached
+            and _collection_started_ns(cached) > started
+        ):
+            if periodic:
+                # The full collection did run: keep the periodic schedule
+                # instead of re-collecting at once.
+                _NOC_CACHE["ts"] = time.time()
+            return dict(cached)
+        if periodic or str(_NOC_CACHE.get("key") or "") != key:
+            _NOC_CACHE["ts"] = time.time()
         _NOC_CACHE["key"] = key
-        _NOC_CACHE["ts"] = now
         _NOC_CACHE["payload"] = projection
         return dict(projection)
+
+
+def _compute_live_noc_projection(up_if: str, down_if: str, gateway_ip: str) -> dict[str, Any]:
+    global _NOC_ADAPTER, _NOC_ADAPTER_KEY
+    key = f"{up_if}|{down_if}|{gateway_ip}"
+    refresh_sec = max(5.0, float(NOC_REFRESH_SEC))
+
+    def _fresh_cache() -> dict[str, Any] | None:
+        cache_payload = _NOC_CACHE.get("payload")
+        if (
+            str(_NOC_CACHE.get("key") or "") == key
+            and isinstance(cache_payload, dict)
+            and time.time() - float(_NOC_CACHE.get("ts") or 0.0) < refresh_sec
+        ):
+            return dict(cache_payload)
+        return None
+
+    with NOC_CACHE_LOCK:
+        cached = _fresh_cache()
+    if cached is not None:
+        return cached
+    # One full collection at a time. The cache lock is not held while
+    # collecting, so a link-event re-evaluation can publish meanwhile.
+    with NOC_COLLECT_LOCK:
+        with NOC_CACHE_LOCK:
+            cached = _fresh_cache()
+            if cached is not None:
+                return cached
+            if _NOC_ADAPTER is None or _NOC_ADAPTER_KEY != key:
+                _NOC_ADAPTER = NocProbeAdapter(
+                    up_interface=str(up_if or "eth1"),
+                    down_interface=str(down_if or "usb0"),
+                    gateway_ip=str(gateway_ip or ""),
+                    extra_interfaces=_env_list("AZAZEL_NOC_EXTRA_INTERFACES"),
+                )
+                _NOC_ADAPTER_KEY = key
+            adapter = _NOC_ADAPTER
+
+        noc_snapshot = adapter.collect_snapshot()
+        events = adapter.collect(noc_snapshot)
+        projection = _project_noc_events(
+            events, up_if, _noc_collection_view(noc_snapshot.get("collection_timing"), "periodic")
+        )
+        return _publish_noc_projection(key, projection)
+
+
+def _noc_monitored_interfaces() -> list[str]:
+    with NOC_CACHE_LOCK:
+        adapter = _NOC_ADAPTER
+    monitor = getattr(adapter, "monitor", None)
+    return list(monitor.monitored_interfaces()) if monitor is not None else []
+
+
+def _noc_link_event_reevaluate(interfaces: list[str]) -> None:
+    """Re-evaluate the NOC view of ``interfaces`` after a link-state change.
+
+    Observation only: the same probes and the same evaluator as the periodic
+    loop, run now for the changed interfaces, so the operator surface shows
+    the change sooner. Nothing is decided or enforced here."""
+
+    with NOC_CACHE_LOCK:
+        adapter, key = _NOC_ADAPTER, _NOC_ADAPTER_KEY
+    monitor = getattr(adapter, "monitor", None)
+    if adapter is None or monitor is None:
+        return
+    snapshot = monitor.refresh_interfaces(interfaces)
+    if not isinstance(snapshot, dict):
+        return
+    events = adapter.collect(snapshot)
+    projection = _project_noc_events(
+        events, str(adapter.up_interface), _noc_collection_view(snapshot.get("collection_timing"), "link_event")
+    )
+    _publish_noc_projection(key, projection, periodic=False)
+    _overlay_latest_noc_into_snapshot_cache()
+
+
+def _overlay_latest_noc(payload: Any) -> bool:
+    """Put the current NOC projection into a snapshot payload whose NOC view
+    comes from an earlier-started collection. True if it changed."""
+
+    snapshot = payload.get("snapshot") if isinstance(payload, dict) else None
+    if not isinstance(snapshot, dict) or "noc_runtime" not in snapshot:
+        return False
+    with NOC_CACHE_LOCK:
+        latest = _NOC_CACHE.get("payload")
+        latest = json.loads(json.dumps(latest, ensure_ascii=False)) if isinstance(latest, dict) and latest else None
+    if latest is None or _collection_started_ns(latest) <= _collection_started_ns(snapshot):
+        return False
+    snapshot.update(latest)
+    return True
+
+
+def _overlay_latest_noc_into_snapshot_cache() -> None:
+    with SNAPSHOT_WRITE_LOCK:
+        current = _SNAPSHOT_CACHE.get("payload")
+        if not isinstance(current, dict):
+            return
+        updated = json.loads(json.dumps(current, ensure_ascii=False))
+        if _overlay_latest_noc(updated):
+            _SNAPSHOT_CACHE["payload"] = updated
+
+
+def _link_watch_view() -> dict[str, Any]:
+    watcher = _NOC_LINK_WATCHER
+    if watcher is None:
+        return {"mode": "stopped", "reevaluations": 0}
+    return {"mode": str(watcher.mode)[:16], "reevaluations": int(watcher.gate.fired)}
 
 
 def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
@@ -1490,8 +1664,13 @@ def _snapshot_cache_get(max_age_sec: float = SNAPSHOT_CACHE_TTL_SEC) -> dict[str
 
 
 def _snapshot_cache_set(payload: dict[str, Any]) -> None:
-    _SNAPSHOT_CACHE["payload"] = json.loads(json.dumps(payload, ensure_ascii=False))
-    _SNAPSHOT_CACHE["ts"] = time.time()
+    with SNAPSHOT_WRITE_LOCK:
+        copied = json.loads(json.dumps(payload, ensure_ascii=False))
+        # A snapshot built around a slow periodic collection must not hide a
+        # link-event re-evaluation published while it was being built.
+        _overlay_latest_noc(copied)
+        _SNAPSHOT_CACHE["payload"] = copied
+        _SNAPSHOT_CACHE["ts"] = time.time()
 
 
 def _snapshot_payload_from_file(path: Path, data: dict[str, Any], mode_payload: dict[str, Any]) -> dict[str, Any]:
@@ -1560,7 +1739,11 @@ def read_ui_snapshot() -> dict[str, Any]:
                     continue
                 data = _parse_json_dict_lenient(path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    return _snapshot_payload_from_file(path, data, mode_payload)
+                    payload = _snapshot_payload_from_file(path, data, mode_payload)
+                    # The persisted snapshot predates any link-event
+                    # re-evaluation published while the refresh loop builds.
+                    _overlay_latest_noc(payload)
+                    return payload
             except Exception:
                 continue
 
@@ -1888,6 +2071,16 @@ def handle_client(conn, addr):
     finally:
         conn.close()
 
+def start_noc_link_watch() -> None:
+    """Start the link-state watch that re-evaluates a monitored interface on
+    a carrier/operstate change (netlink multicast; sysfs poll fallback).
+    The periodic snapshot loop stays the backstop."""
+    global _NOC_LINK_WATCHER
+    if _NOC_LINK_WATCHER is None:
+        _NOC_LINK_WATCHER = LinkStateWatcher(_noc_monitored_interfaces, _noc_link_event_reevaluate)
+        _NOC_LINK_WATCHER.start()
+
+
 def main():
     flags = load_control_flags()
     ensure_socket_dir()
@@ -1898,6 +2091,7 @@ def main():
     threading.Thread(target=warm_snapshot_cache_once, daemon=True).start()
     threading.Thread(target=snapshot_refresh_loop, daemon=True).start()
     threading.Thread(target=_wifi_sensor_loop, daemon=True).start()
+    start_noc_link_watch()
 
     try:
         while True:

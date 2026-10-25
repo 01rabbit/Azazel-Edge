@@ -269,6 +269,7 @@ SAMPLE_FIELDS: Dict[str, frozenset] = {
             "polls_after_injection", "poll_errors_after_injection", "recovered",
             # Diagnostic stage stamps (wall clock); never read for the verdict.
             "injection_wall_epoch", "end_noc_updated_epoch", "end_snapshot_epoch",
+            "end_noc_collection",
         )
     ),
     "SO-03": frozenset(
