@@ -259,6 +259,10 @@ HOSTILE_NON_ALERT_KINDS = ("flow", "dns", "stats", "http", "invalid_utf8")
 # pending. Only then may SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL be left out
 # (record.PART_GAP_CLOSERS). There is no other way to confirm it.
 CONFIRMED = "confirmed"
+# How long the SO-04 harness waits, after the last window, for the core to
+# decide every alert written (so04_hostile_load.drain). The backlog phase's
+# read-time cap may not exceed it: a summary later than the drain is never seen.
+HARNESS_DRAIN_TIMEOUT_MS = 90000
 HOSTILE_PROFILE_STATUSES = (PROVISIONAL, CONFIRMED)
 _HOSTILE_MS_KEYS = (
     "core_default_poll_ms", "line_bytes", "warmup_ms", "hold_after_ms", "quiet_gap_ms", "audit_attribution_slack_ms",
@@ -464,8 +468,8 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
         problems.append("audit_attribution_slack_ms is shorter than the quota's audit_interval_ms")
     if not doc["core_default_poll_ms"] <= doc["read_lag_cap_ms"] <= quota["audit_interval_ms"]:
         problems.append("read_lag_cap_ms must lie between one poll interval and the audit interval")
-    if doc["backlog_read_lag_cap_ms"] < doc["read_lag_cap_ms"]:
-        problems.append("backlog_read_lag_cap_ms must be at least read_lag_cap_ms")
+    if not doc["read_lag_cap_ms"] <= doc["backlog_read_lag_cap_ms"] <= HARNESS_DRAIN_TIMEOUT_MS:
+        problems.append(f"backlog_read_lag_cap_ms must lie between read_lag_cap_ms and the harness drain timeout ({HARNESS_DRAIN_TIMEOUT_MS} ms)")
     if doc["quiet_gap_ms"] <= doc["audit_attribution_slack_ms"]:
         problems.append("quiet_gap_ms must exceed audit_attribution_slack_ms, or a summary could belong to two phases")
     rates = [d["rates_per_s"] for _, d in derived_all]

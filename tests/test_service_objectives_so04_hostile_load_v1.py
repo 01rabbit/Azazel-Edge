@@ -118,6 +118,7 @@ def test_the_default_poll_interval_is_the_cores():
         pytest.param(lambda d: d.update(read_lag_cap_ms=3000), "read_lag_cap_ms", id="read lag cap above the audit interval"),
         pytest.param(lambda d: d.update(read_lag_cap_ms=100), "read_lag_cap_ms", id="read lag cap below a poll"),
         pytest.param(lambda d: d.update(backlog_read_lag_cap_ms=500), "backlog_read_lag_cap_ms", id="backlog cap below the read cap"),
+        pytest.param(lambda d: d.update(backlog_read_lag_cap_ms=decl.HARNESS_DRAIN_TIMEOUT_MS + 1), "backlog_read_lag_cap_ms", id="backlog cap beyond the drain"),
         pytest.param(lambda d: d.update(status="confirmed"), "not exactly 'confirmed'", id="confirmed while the owner status is pending"),
         pytest.param(
             lambda d: d.update(status="confirmed") or d["owner_defaults"].update(status="confirmed by the owner"),
@@ -958,3 +959,15 @@ def test_another_phases_alerts_read_late_do_not_cover_a_phase():
     _resum(obs)
     problems = hl.hostile_load_problems(_samples(obs), obs)
     assert any(p.startswith("phase backlog_flood:") and "account for" in p for p in problems), problems
+
+
+
+def test_the_backlog_cap_leaves_room_for_a_slow_runner():
+    """Review of #463 M3: run 40227211552 emitted the backlog phase's last
+    summary about 12 s after its window; the cap must leave a wide margin and
+    stay within the drain, and a record that late must still close."""
+
+    assert PROFILE["backlog_read_lag_cap_ms"] == 60000 <= decl.HARNESS_DRAIN_TIMEOUT_MS
+    obs = _observation()
+    _move_phase_summaries(obs, "backlog_flood", lambda ph: ph["window_end_wall_epoch"] + 12.0 * 2.4)
+    assert hl.hostile_load_problems(_samples(obs), obs) == []

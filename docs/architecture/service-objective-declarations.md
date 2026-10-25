@@ -369,10 +369,13 @@ profile and the quota from the tree and checks that:
   reports, so its emission time says when it was written, not how long the core
   read; tying `read_s` to it made the check flaky (a late honest summary
   stretched it, lowering the excess) and let a forged late summary lower the
-  floor. In the backlog phase the core may read long after the window (2.4 s on
-  a GitHub runner), so `read_s` runs to the last summary, at least the window
-  and at most window + `backlog_read_lag_cap_ms` (15000 ms); summaries emitted
-  after that are not counted as shed. With every summary adding up, claiming
+  floor. In the backlog phase the core may read long after the window (the largest lag
+  seen is about 12 s from the window end to its last summary, on a GitHub
+  runner), so `read_s` runs to the last summary, at least the window and at most
+  window + `backlog_read_lag_cap_ms` (60000 ms: five times that, and within the
+  harness's 90000 ms drain, which the loader checks); summaries emitted after
+  that are not counted as shed. Even at the cap the floor stays near 61000 lines;
+  honest records shed more than 170000. With every summary adding up, claiming
   fewer lines shed either raises `admitted` above the quota over `read_s` or
   lowers `examined` below what was written. In the backlog phase the summaries must also show
   lines shed for the backlog and a shed level of at least 1. For each phase, the
