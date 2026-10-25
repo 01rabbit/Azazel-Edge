@@ -85,9 +85,10 @@ a gap remains:
 
 * ``SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL`` is reported until the profile in
   the tree declares status ``confirmed`` and is the file the load was taken
-  against (``record.so04_hostile_load_profile_confirmed``). Its factors are
-  defaults awaiting the owner's confirmation, and what is measured under it is
-  container evidence, not hardware evidence.
+  against (``record.so04_hostile_load_profile_confirmed``). The owner
+  confirmed its factors as they stood on 2026-10-26; a later change to a factor
+  undoes that. What is measured under it is container evidence, not hardware
+  evidence.
 """
 
 from __future__ import annotations
@@ -104,7 +105,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from ..audit.logger import P0AuditLogger
 from . import so04_hostile_load
-from .declarations import HARNESS_DRAIN_TIMEOUT_MS, load_hostile_load_profile
+from .declarations import CONFIRMED, HARNESS_DRAIN_TIMEOUT_MS, load_hostile_load_profile
 from .record import (
     REPO_ROOT,
     RULE_EVERY_SAMPLE_MAX,
@@ -702,7 +703,11 @@ def run(
                 "quota": profile.get("quota_path"),
                 "phases": [p["name"] for p in profile.get("phases") or []],
                 "problems": profile.get("problems"),
-                "status": "provisional; factors are defaults awaiting owner confirmation; container numbers, not hardware",
+                "status": (
+                    "confirmed; factors confirmed by the owner; container numbers, not hardware"
+                    if profile.get("status") == CONFIRMED
+                    else "provisional; factors are defaults awaiting owner confirmation; container numbers, not hardware"
+                ),
             },
             "daemon": daemon_info,
         },
@@ -735,9 +740,14 @@ def run(
             "Rollback commands run against no owned state (no tc/nft privileges in the harness), so each first record is "
             "an attempt outcome such as release_attempt_failed/retry_pending or owned_state_already_absent. The row "
             "measures when rollback starts, not whether it succeeds.",
-            "The hostile-load profile is provisional: its rates are derived from the OF-06 ingress quota, its factors "
-            "are defaults awaiting the owner's confirmation, and the numbers measured under it are container numbers, "
-            "not hardware evidence.",
+            (
+                "The hostile-load profile is confirmed: its rates are derived from the OF-06 ingress quota, its factors "
+                "are confirmed by the owner, and the numbers measured under it are container numbers, not hardware evidence."
+                if profile.get("status") == CONFIRMED
+                else "The hostile-load profile is provisional: its rates are derived from the OF-06 ingress quota, its factors "
+                "are defaults awaiting the owner's confirmation, and the numbers measured under it are container numbers, "
+                "not hardware evidence."
+            ),
         ],
     )
 
