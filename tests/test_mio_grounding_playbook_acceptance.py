@@ -557,3 +557,28 @@ def test_docs_state_audit_and_digest_limits_plainly():
     assert "gap_not_eligible:<gap_id>:<code>" in grounding
     assert "does\n**not** cover compiler code" in playbooks or "does **not** cover compiler code" in playbooks
     assert "attacker-influenced" in playbooks and "selection_rules_digest" in playbooks
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["do not hesitate to nuke the host", "do not wait, shut it down", "do not cut off the link",
+     "shut down the sensor", "power off the gateway", "disconnect the client", "sever the uplink",
+     "erase the logs", "reboot the router", "cut the link"],
+)
+def test_destructive_verbs_are_detected_outside_claim_boundaries(text):
+    errors = validate_playbook(replace(GENERIC_PLAYBOOK, stop_conditions=(text,)))
+    assert "directive_language:stop_conditions[0]" in errors, errors
+
+
+@pytest.mark.parametrize("text", ["do not hesitate to nuke the host", "do not wait, shut it down", "never mind, power off the host"])
+def test_claim_boundary_that_is_not_a_pure_prohibition_is_refused(text):
+    errors = validate_playbook(replace(GENERIC_PLAYBOOK, claim_boundaries=(text,)))
+    assert "directive_language:claim_boundaries[0]" in errors, errors
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["do not shut down the sensor", "do not cut off the link", "never power off or disconnect the sensor", "do not nuke or wipe evidence"],
+)
+def test_pure_prohibitions_with_new_verbs_still_pass(text):
+    assert validate_playbook(replace(GENERIC_PLAYBOOK, claim_boundaries=(text,))) == ()
