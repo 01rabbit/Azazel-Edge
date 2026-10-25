@@ -549,6 +549,9 @@ class P0AlertRelay:
         self._stop = threading.Event()
         self.ready = threading.Event()
         self._outstanding = 0  # handed to the relay, not yet relayed
+        # Chain hash up to which reconcile reads (set by attach to the
+        # listener's registration point); None reads the whole chain.
+        self.reconcile_until: Optional[str] = None
         self._thread: Optional[threading.Thread] = None
 
     # Audit logger listener. Must stay cheap and must not raise.
@@ -690,6 +693,16 @@ class P0AlertRelay:
                     os.close(fd)
                 lines = data.split(b'\n')[:-1]
             rows = P0AlertQueue._parse(lines)
+            if self.reconcile_until is not None:
+                # Records after the listener's registration point reach the
+                # relay through the listener (with their durable stamp); the
+                # reconcile covers only what was written before it.
+                cut = 0
+                if self.reconcile_until:
+                    for idx, row in enumerate(rows):
+                        if row.get('chain_hash') == self.reconcile_until:
+                            cut = idx + 1
+                rows = rows[:cut]
             if rows:
                 tail = str(rows[-1].get('chain_hash') or '')
             start = None
@@ -810,6 +823,7 @@ def attach_p0_alert_relay(audit_logger: Any, queue_path: str | Path, **kwargs: A
         audit_logger=audit_logger,
         **kwargs,
     )
-    audit_logger.add_durable_listener(relay.on_durable_record)
+    registered_at = audit_logger.add_durable_listener(relay.on_durable_record)
+    relay.reconcile_until = registered_at if isinstance(registered_at, str) else None
     audit_logger._p0_alert_relay = relay
     return relay.start()

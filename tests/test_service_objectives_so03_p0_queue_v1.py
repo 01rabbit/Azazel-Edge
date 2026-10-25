@@ -669,6 +669,36 @@ def test_reconciled_durability_follows_the_fsync_result(tmp_path, monkeypatch, f
     assert all(r["decision_record_durability"] == label and r["decision_record_durable"] is durable for r in rows)
 
 
+def test_attach_reconciles_only_up_to_the_listener_registration(tmp_path):
+    """Records written after attach reach the relay through the listener (with
+    their durable stamp), never through the startup reconcile, however late the
+    relay thread gets to run."""
+
+    apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
+    P0AuditLogger(apath).log_action_decision("before", "s", action="isolate")
+    audit = P0AuditLogger(apath)
+    gate = threading.Event()
+    real = P0AlertRelay.reconcile
+
+    def late(self):
+        gate.wait(5)  # the relay thread is starved until after the live decision
+        return real(self)
+
+    import unittest.mock as mock
+
+    with mock.patch.object(P0AlertRelay, "reconcile", late):
+        relay = attach_p0_alert_relay(audit, qpath)
+        audit.log_action_decision("live", "s", action="throttle")
+        gate.set()
+        _settle(audit, relay)
+    relay.stop()
+    rows = {r["decision_id"]: r for r in _rows(qpath)}
+    assert rows["before"]["decision_record_durability"] == "reconciled_from_chain_fsynced"
+    assert rows["live"]["decision_record_durability"] == "fsynced"
+    assert isinstance(rows["live"]["decision_durable_monotonic_ns"], int)
+    assert len(_rows(qpath)) == 4
+
+
 def test_listener_before_reconcile_window_never_enqueues_twice(tmp_path):
     apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
     audit = P0AuditLogger(apath)
