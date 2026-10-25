@@ -259,8 +259,15 @@ HOSTILE_NON_ALERT_KINDS = ("flow", "dns", "stats", "http", "invalid_utf8")
 # pending. Only then may SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL be left out
 # (record.PART_GAP_CLOSERS). There is no other way to confirm it.
 CONFIRMED = "confirmed"
+# How long the SO-04 harness waits, after the last window, for the core to
+# decide every alert written (so04_hostile_load.drain). The backlog phase's
+# read-time cap may not exceed it: a summary later than the drain is never seen.
+HARNESS_DRAIN_TIMEOUT_MS = 90000
 HOSTILE_PROFILE_STATUSES = (PROVISIONAL, CONFIRMED)
-_HOSTILE_MS_KEYS = ("core_default_poll_ms", "line_bytes", "warmup_ms", "hold_after_ms", "quiet_gap_ms", "audit_attribution_slack_ms")
+_HOSTILE_MS_KEYS = (
+    "core_default_poll_ms", "line_bytes", "warmup_ms", "hold_after_ms", "quiet_gap_ms", "audit_attribution_slack_ms",
+    "read_lag_cap_ms", "backlog_read_lag_cap_ms",
+)
 
 
 def _number(value: Any) -> bool:
@@ -459,6 +466,10 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
             )
     if doc["audit_attribution_slack_ms"] < quota["audit_interval_ms"]:
         problems.append("audit_attribution_slack_ms is shorter than the quota's audit_interval_ms")
+    if not doc["core_default_poll_ms"] <= doc["read_lag_cap_ms"] <= quota["audit_interval_ms"]:
+        problems.append("read_lag_cap_ms must lie between one poll interval and the audit interval")
+    if not doc["read_lag_cap_ms"] <= doc["backlog_read_lag_cap_ms"] <= HARNESS_DRAIN_TIMEOUT_MS:
+        problems.append(f"backlog_read_lag_cap_ms must lie between read_lag_cap_ms and the harness drain timeout ({HARNESS_DRAIN_TIMEOUT_MS} ms)")
     if doc["quiet_gap_ms"] <= doc["audit_attribution_slack_ms"]:
         problems.append("quiet_gap_ms must exceed audit_attribution_slack_ms, or a summary could belong to two phases")
     rates = [d["rates_per_s"] for _, d in derived_all]
@@ -470,6 +481,11 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
         for ph, d in derived_all
     ):
         problems.append("no backlog phase: non-alert lines over 10 times the quota, in bursts of at least twice backlog_bound_bytes")
+    elif not derived_all[-1][1]["burst_interval_ms"] or burst_backlog_bytes(derived_all[-1][1], doc["line_bytes"]) < 2 * quota["backlog_bound_bytes"]:
+        # The core may still be reading a backlog phase after its window; as
+        # the last phase, its tail is covered by the harness's final drain and
+        # by the attribution of every later summary to it.
+        problems.append("the backlog phase must be the last phase")
     if fill_max < 1.0:
         problems.append("no phase offers alerts at the poll cap (alert_poll_fill >= 1)")
     if not any(r["invalid_utf8"] > 0 and r["oversized"] > 0 for r in rates):

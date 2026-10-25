@@ -66,6 +66,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from . import so04_hostile_load
 from .declarations import (
+    HARNESS_DRAIN_TIMEOUT_MS,
     ROLLBACK_ACTION_TYPES,
     load_hostile_load_profile,
     load_rollback_completion_bounds,
@@ -624,7 +625,7 @@ def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_ty
                 load.stop.set()
                 load.join(timeout=10)
                 so04_hostile_load.drain(
-                    counter, load, timeout_s=90.0,
+                    counter, load, timeout_s=HARNESS_DRAIN_TIMEOUT_MS / 1000.0,
                     audit_interval_s=profile["quota"]["audit_interval_ms"] / 1000.0 if profile.get("quota") else 1.0,
                     alive=lambda: proc.poll() is None,
                 )

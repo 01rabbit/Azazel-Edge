@@ -104,7 +104,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from ..audit.logger import P0AuditLogger
 from . import so04_hostile_load
-from .declarations import load_hostile_load_profile
+from .declarations import HARNESS_DRAIN_TIMEOUT_MS, load_hostile_load_profile
 from .record import (
     REPO_ROOT,
     RULE_EVERY_SAMPLE_MAX,
@@ -599,7 +599,7 @@ def run(
                 load.stop.set()
                 load.join(timeout=10)
                 so04_hostile_load.drain(
-                    counter, load, timeout_s=90.0,
+                    counter, load, timeout_s=HARNESS_DRAIN_TIMEOUT_MS / 1000.0,
                     audit_interval_s=profile["quota"]["audit_interval_ms"] / 1000.0 if profile.get("quota") else 1.0,
                     alive=lambda: proc.poll() is None,
                 )

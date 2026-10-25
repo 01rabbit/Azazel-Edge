@@ -45,6 +45,7 @@ from .declarations import (
 )
 
 NOMINAL = "nominal"
+WRITE_ORDER = tuple(c for c in HOSTILE_LINE_CLASSES if c != "alert") + ("alert",)
 CLOCK = "CLOCK_BOOTTIME"
 LEASE_SPACING_S = 0.1
 LEASE_JITTER_S = 0.05
@@ -97,10 +98,18 @@ def _audit_problems(audit: Sequence[Any], quota: Mapping[str, Any]) -> Tuple[Lis
         if not isinstance(block, dict) or any(block.get(k) != quota.get(q) for k, q in _QUOTA_BLOCK_KEYS.items()):
             problems.append(f"ingress_audit[{idx}]: the core's quota block differs from the declared quota")
         if isinstance(rec.get("ingress_shed"), dict):
-            fields = ("emitted_epoch", "shed_total", "oversized_lines_skipped", "oversized_possible_alerts", "cumulative_shed_total", "cumulative_oversized_lines_skipped")
-            if not all(_num(inner.get(k)) for k in fields) or not _int(inner.get("shed_total")):
+            fields = ("emitted_epoch", "shed_total", "admitted", "alerts_admitted", "examined", "oversized_lines_skipped", "oversized_possible_alerts", "cumulative_shed_total", "cumulative_oversized_lines_skipped")
+            if not all(_num(inner.get(k)) for k in fields) or not all(_int(inner.get(k)) for k in ("shed_total", "admitted", "alerts_admitted", "examined", "oversized_lines_skipped")):
                 problems.append(f"ingress_audit[{idx}]: ingress_shed summary lacks its counts")
                 continue
+            # Every line the core looked at was admitted, shed, or skipped as
+            # oversized (the profile writes no empty line), so the counts of
+            # one summary must add up (ingress.rs IngressReader::poll).
+            if inner["examined"] != inner["shed_total"] + inner["admitted"] + inner["oversized_lines_skipped"]:
+                problems.append(
+                    f"ingress_audit[{idx}]: examined {inner['examined']} is not shed {inner['shed_total']} + admitted "
+                    f"{inner['admitted']} + oversized {inner['oversized_lines_skipped']}"
+                )
             if inner.get("oversized_possible_alerts") != 0:
                 problems.append(f"ingress_audit[{idx}]: oversized_possible_alerts is {inner.get('oversized_possible_alerts')!r}; the profile writes no oversized alert")
             shed.append(inner)
@@ -147,8 +156,20 @@ def hostile_load_problems(
     tol = float(profile["rate_tolerance"])
     shed_tol = float(profile["shed_tolerance"])
     warmup_ns = int(profile["warmup_ms"]) * 1_000_000
-    slack_s = int(profile["audit_attribution_slack_ms"]) / 1000.0
+    lag_cap_s = int(profile["read_lag_cap_ms"]) / 1000.0
+    backlog_cap_s = int(profile["backlog_read_lag_cap_ms"]) / 1000.0
     windows: Dict[str, Tuple[int, int]] = {}
+    # Attribution (profile rule "attribution"): a summary belongs to the phase
+    # whose window started last before it was emitted, up to the next phase's
+    # window start; the last phase keeps every later summary. A core still
+    # reading a phase's backlog after its window therefore stays accounted to
+    # that phase, and nothing is written in the quiet gap before the next one.
+    starts = sorted(
+        (float(o["window_start_wall_epoch"]), n)
+        for n, o in observed.items()
+        if isinstance(o, dict) and _num(o.get("window_start_wall_epoch"))
+    )
+    until = {n: (starts[i + 1][0] if i + 1 < len(starts) else math.inf) for i, (_, n) in enumerate(starts)}
     for decl in profile["phases"]:
         name = decl["name"]
         obs = observed.get(name)
@@ -178,21 +199,45 @@ def hostile_load_problems(
                 problems.append(f"{where}: {n} {cls} lines in {duration:.3f} s, declared {decl['rates_per_s'][cls]}/s (+/-{tol:.0%})")
         if obs.get("alerts_decided") != counts["alert"]:
             problems.append(f"{where}: {counts['alert']} alerts written, {obs.get('alerts_decided')!r} decided by the core")
-        mine = [r for r in shed if wws <= float(r["emitted_epoch"]) <= wwe + slack_s]
+        mine = [r for r in shed if wws < float(r["emitted_epoch"]) <= until.get(name, math.inf)]
         if decl["non_alert_lines_per_s"] > quota["value"]:
             non_alert = sum(counts[c] for c in _NON_ALERT_COUNTED)
-            # The excess no bucket could admit over the window, and the floor
-            # the core's shedding must reach (profile rule "shed").
-            excess = non_alert - (quota["value"] * duration + quota["non_alert_burst"])
+            # How long this phase's lines could have been admitted (``read_s``,
+            # profile rule "read"). Outside the backlog phase the core keeps
+            # up, so its reading of the phase ends within read_lag_cap_ms of
+            # the window, whenever its summaries are emitted: a fixed bound
+            # that a late summary (honest or forged) cannot stretch. In the
+            # backlog phase the core may read long after the window: read_s
+            # runs to the last summary, at most backlog_read_lag_cap_ms past
+            # the window, and summaries beyond that are not counted as shed.
+            if decl.get("backlog_phase"):
+                cap_s = duration + backlog_cap_s
+                acct = [r for r in mine if float(r["emitted_epoch"]) <= wws + cap_s]
+                read_s = min(cap_s, max(duration, max((float(r["emitted_epoch"]) for r in acct), default=wws) - wws))
+            else:
+                acct = mine
+                read_s = duration + lag_cap_s
+            # The core must have read the phase: its summaries account for the
+            # non-alert lines written in it (alerts are never shed, so the
+            # alerts it examined are the alerts it admitted; leaving them out
+            # keeps another phase's alerts read late from counting here).
+            examined = sum(int(r["examined"]) - int(r["alerts_admitted"]) for r in mine)
+            total = non_alert + counts["oversized"]
+            if examined < (1.0 - shed_tol) * total:
+                problems.append(f"{where}: the core's summaries account for {examined} non-alert lines examined of {total} written")
+            # The excess no bucket could admit in read_s, and the floor the
+            # core's shedding must reach (profile rule "shed").
+            excess = non_alert - (quota["value"] * read_s + quota["non_alert_burst"])
             floor = max(1, math.ceil((1.0 - shed_tol) * excess))
-            got = sum(int(r["shed_total"]) for r in mine)
-            by_rate = sum(int((r.get("shed_by_reason") or {}).get("non_alert_rate") or 0) for r in mine)
-            admitted = sum(int(r.get("admitted") or 0) - int(r.get("alerts_admitted") or 0) for r in mine)
-            ceiling = quota["value"] * (duration + slack_s) + quota["non_alert_burst"]
-            if excess <= 0 or got < floor or by_rate < 1:
+            got = sum(int(r["shed_total"]) for r in acct)
+            by_rate = sum(int((r.get("shed_by_reason") or {}).get("non_alert_rate") or 0) for r in acct)
+            admitted = sum(int(r.get("admitted") or 0) - int(r.get("alerts_admitted") or 0) for r in acct)
+            ceiling = quota["value"] * read_s + quota["non_alert_burst"]
+            if got < floor or by_rate < 1:
                 problems.append(
                     f"{where}: the core's summaries show {got} non-alert lines shed ({by_rate} for the rate) of {non_alert} "
-                    f"written; the excess over the {quota['value']}/s quota is {excess:.0f}, so at least {floor} expected"
+                    f"written; the excess over the {quota['value']}/s quota in the {read_s:.1f} s it had to read them is "
+                    f"{excess:.0f}, so at least {floor} expected"
                 )
             if admitted > ceiling:
                 problems.append(f"{where}: the core admitted {admitted} non-alert lines, above the quota's {ceiling:.0f}")
@@ -379,13 +424,18 @@ class HostileLoad(threading.Thread):
         self.eve = eve
         self.profile = profile
         self.phases = {p["name"]: (i, p) for i, p in enumerate(profile.get("phases") or [])}
-        self.windows = list(windows)
+        # Windows are given on the wall clock (as the lease deadlines are
+        # planned) but waited for on the monotonic clock, read together once,
+        # so a wall-clock step during the run cannot shift a window against
+        # the leases' monotonic deadlines.
+        now_wall, now_mono = time.time(), time.monotonic()
+        self.windows = [(n, now_mono + (start - now_wall), now_mono + (end - now_wall)) for n, start, end in windows]
         self.boottime = boottime
         self.stop = threading.Event()
         self.observed: List[Dict[str, Any]] = []
         self.finished = threading.Event()
 
-    def _run_window(self, fh, name: str, end_wall: float) -> None:
+    def _run_window(self, fh, name: str, end_mono: float) -> None:
         index, phase = self.phases[name]
         rates = phase["rates_per_s"]
         # A burst phase writes every class once per interval, all at once.
@@ -401,7 +451,9 @@ class HostileLoad(threading.Thread):
             if burst_s:
                 elapsed = math.floor(elapsed / burst_s) * burst_s
             chunk: List[bytes] = []
-            for cls in HOSTILE_LINE_CLASSES:
+            # Alerts last in every chunk: once the core has decided every
+            # alert written, it has read every line before it (drain()).
+            for cls in WRITE_ORDER:
                 target = int(elapsed * float(rates[cls]))
                 while written[cls] < target:
                     chunk.append(lines.make(cls, written[cls]))
@@ -414,7 +466,7 @@ class HostileLoad(threading.Thread):
                 # The window ends at the last write, so the rate is counted
                 # over the time the lines were actually written in.
                 last_boot, last_wall = self.boottime(), time.time()
-            if time.time() >= end_wall:
+            if time.monotonic() >= end_mono:
                 break
             time.sleep(0.01)
         self.observed.append({
@@ -433,7 +485,7 @@ class HostileLoad(threading.Thread):
         try:
             with self.eve.open("ab") as fh:
                 for name, start, end in self.windows:
-                    while not self.stop.is_set() and time.time() < start:
+                    while not self.stop.is_set() and time.monotonic() < start:
                         time.sleep(0.005)
                     if self.stop.is_set():
                         return
