@@ -258,6 +258,13 @@ Before the first rollback command of every release attempt, the core appends one
 The SO-04 harness (`py/azazel_edge/service_objectives/so04_lease_rollback.py`) uses
 this record as the end event of "rollback starts within 5 seconds of expiry".
 
+The completion half of SO-04 (`so04_rollback_completion.py`) ends at the first
+`released` / `rollback_applied_and_absence_verified` outcome for the lease and is
+judged against the per-action bound Edge declares in
+`config/service_objectives/rollback_completion_bounds.json` (OF-05). Those bounds
+are provisional and container-derived, and `throttle` declares none; see
+`docs/architecture/service-objective-declarations.md`.
+
 ## Lifecycle
 
 ```text

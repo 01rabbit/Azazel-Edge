@@ -60,7 +60,10 @@ EXIT_INVALID = 3
 
 RULE_EVERY_SAMPLE_MAX = "every_sample_max_elapsed"
 RULE_ZERO_VIOLATIONS = "zero_violations"
-RULE_KINDS = (RULE_EVERY_SAMPLE_MAX, RULE_ZERO_VIOLATIONS)
+# Each sample against the bound its action type declares in Edge's declaration
+# file (``declarations``), never against a bound the record carries.
+RULE_EVERY_SAMPLE_MAX_PER_ACTION = "every_sample_max_elapsed_per_action"
+RULE_KINDS = (RULE_EVERY_SAMPLE_MAX, RULE_ZERO_VIOLATIONS, RULE_EVERY_SAMPLE_MAX_PER_ACTION)
 
 # The fixed definition of every objective this repository measures. The
 # validator compares each record against this table and never against the
@@ -127,12 +130,30 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
             # monotonic deadline and every start is measured from it.
             "gaps_closed_by_samples": ("SO04-LEASE-EXPIRY-ON-WALL-CLOCK",),
         },
+        # OF-05: the bound is per action type and comes from
+        # config/service_objectives/rollback_completion_bounds.json, which the
+        # validator reads itself. The first three prerequisites are recomputed
+        # from that file and the samples. The bounds there are provisional, so
+        # SO04-COMPLETION-BOUND-PROVISIONAL stays until a hardware-derived
+        # declaration replaces them.
         "rollback_completion": {
-            "kind": "every_sample_max_elapsed",
-            "bound_ms": 0.0,
+            "kind": "every_sample_max_elapsed_per_action",
+            "bound_ms": None,
             "required_samples": 150,
-            "prerequisites": ("per_action_completion_bound_declared",),
-            "gaps": ("OF-05",),
+            "prerequisites": (
+                "per_action_completion_bound_declared",
+                "owned_state_installed_before_expiry",
+                "completion_confirmed_by_readback",
+                "core_binary_present",
+                "core_daemon_started",
+                "load_phase_applied",
+                "wall_clock_stable_during_run",
+            ),
+            "gaps": (
+                "SO04-COMPLETION-BOUND-PROVISIONAL",
+                "SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
+                "SO04-HOSTILE-LOAD-UNDECLARED",
+            ),
         },
     },
     "SO-07": {
@@ -189,6 +210,9 @@ SAMPLE_FIELDS: Dict[str, frozenset] = {
             "edge_recorded_start_monotonic_ns", "start_record_before_outcome",
             "sample_clock", "expiry_clock", "lease_due_boottime_ns", "lease_boot_id",
             "start_record_boot_id", "edge_recorded_start_boottime_ns", "edge_recorded_start_wall_epoch_ns",
+            # rollback_completion samples
+            "completion_bound_ms", "completion_attempts", "completion_result",
+            "owned_state_installed", "owned_state_absent_after_run",
         )
     ),
     "SO-07": frozenset(
@@ -326,6 +350,49 @@ def evaluate_every_sample_max(samples: Sequence[Mapping[str, Any]], bound_ms: fl
     }
 
 
+def evaluate_every_sample_max_per_action(
+    samples: Sequence[Mapping[str, Any]], bounds_ms: Mapping[str, float]
+) -> Dict[str, Any]:
+    """Evaluate "every sample <= the bound its action type declares".
+
+    A sample with no end, or whose action type declares no bound, is a
+    violation: a missing declaration can never hold.
+    """
+
+    violations = 0
+    unfinished = 0
+    undeclared = 0
+    per_action: Dict[str, Dict[str, Any]] = {}
+    for s in samples:
+        action = str(s.get("action_type"))
+        bound = bounds_ms.get(action)
+        elapsed = s.get("elapsed_ms")
+        row = per_action.setdefault(action, {"bound_ms": bound, "sample_count": 0, "violations": 0, "max_elapsed_ms": None})
+        row["sample_count"] += 1
+        bad = False
+        if not isinstance(elapsed, (int, float)):
+            unfinished += 1
+            bad = True
+        else:
+            row["max_elapsed_ms"] = float(elapsed) if row["max_elapsed_ms"] is None else max(row["max_elapsed_ms"], float(elapsed))
+        if bound is None:
+            undeclared += 1
+            bad = True
+        elif isinstance(elapsed, (int, float)) and float(elapsed) > float(bound):
+            bad = True
+        if bad:
+            violations += 1
+            row["violations"] += 1
+    return {
+        "sample_count": len(samples),
+        "unfinished_samples": unfinished,
+        "undeclared_action_samples": undeclared,
+        "violations": violations,
+        "per_action": per_action,
+        "holds": bool(samples) and violations == 0,
+    }
+
+
 def evaluate_zero_violations(samples: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     counts = [s.get("violations") for s in samples]
     bad = sum(1 for v in counts if not isinstance(v, int) or v < 0)
@@ -344,6 +411,9 @@ def evaluate_rule(pass_rule: Mapping[str, Any], samples: Sequence[Mapping[str, A
         return evaluate_every_sample_max(samples, float(pass_rule["bound_ms"]))
     if kind == RULE_ZERO_VIOLATIONS:
         return evaluate_zero_violations(samples)
+    if kind == RULE_EVERY_SAMPLE_MAX_PER_ACTION:
+        bounds = pass_rule.get("bounds_ms")
+        return evaluate_every_sample_max_per_action(samples, bounds if isinstance(bounds, dict) else {})
     raise ValueError(f"unknown pass rule kind: {kind!r}")
 
 
@@ -519,7 +589,7 @@ def _recomputed_latency_samples(samples: Sequence[Mapping[str, Any]]) -> List[Di
     for s in samples:
         start, end = s.get("start_monotonic_ns"), s.get("end_monotonic_ns")
         ok = isinstance(start, int) and isinstance(end, int) and end >= start
-        out.append({"elapsed_ms": (end - start) / 1e6 if ok else None})
+        out.append({"elapsed_ms": (end - start) / 1e6 if ok else None, "action_type": s.get("action_type")})
     return out
 
 
@@ -643,6 +713,30 @@ GAP_CLOSERS = {
 }
 
 
+def _so04_completion_observed_prerequisites(
+    samples: Sequence[Mapping[str, Any]], declaration: Mapping[str, Any]
+) -> Dict[str, bool]:
+    """SO-04 completion prerequisites, recomputed from the declaration file and the samples.
+
+    Every declared action type must have a valid bound in the file, and every
+    sample's action type too; every lease's owned state must have been read back
+    before the core started; and every completion the core reported must be
+    confirmed absent by the harness's own readback.
+    """
+
+    from .declarations import ROLLBACK_ACTION_TYPES
+
+    bounds = declaration.get("bounds_ms") or {}
+    items = list(samples)
+    return {
+        "per_action_completion_bound_declared": all(a in bounds for a in ROLLBACK_ACTION_TYPES)
+        and all(s.get("action_type") in bounds for s in items),
+        "owned_state_installed_before_expiry": bool(items) and all(s.get("owned_state_installed") is True for s in items),
+        "completion_confirmed_by_readback": bool(items)
+        and all(s.get("owned_state_absent_after_run") is True for s in items if s.get("end_monotonic_ns") is not None),
+    }
+
+
 def _validate_sample_ids(samples: Sequence[Any], where: str, errors: List[str]) -> None:
     seen: Dict[str, int] = {}
     for sidx, sample in enumerate(samples):
@@ -749,6 +843,18 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
             continue
         if spec["bound_ms"] is not None and rule.get("bound_ms") != spec["bound_ms"]:
             errors.append(f"{where}.pass_rule.bound_ms: {objective} requires {spec['bound_ms']}, record declares {rule.get('bound_ms')!r}")
+        declaration: Dict[str, Any] = {}
+        if spec["kind"] == RULE_EVERY_SAMPLE_MAX_PER_ACTION:
+            # The bounds are the declaration file's as it stands in this tree,
+            # never the record's. A record taken against another version of the
+            # file is rejected rather than re-judged.
+            from .declarations import load_rollback_completion_bounds
+
+            declaration = load_rollback_completion_bounds()
+            if rule.get("bounds_ms") != declaration["bounds_ms"]:
+                errors.append(f"{where}.pass_rule.bounds_ms: the declaration gives {declaration['bounds_ms']}, record declares {rule.get('bounds_ms')!r}")
+            if rule.get("declaration") != declaration["path"] or rule.get("declaration_sha256") != declaration["sha256"]:
+                errors.append(f"{where}.pass_rule.declaration: record does not cite {declaration['path']} at sha256 {declaration['sha256']}")
         required = part["sample_rule"].get("required_samples")
         if required != spec["required_samples"]:
             errors.append(f"{where}.sample_rule.required_samples: {objective} requires {spec['required_samples']}, record declares {required!r}")
@@ -823,15 +929,23 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                         p["met"] = bool(p["met"]) and observed[p["id"]]
         else:
             eval_samples = _recomputed_latency_samples([s if isinstance(s, dict) else {} for s in part["samples"]])
-            if objective == "SO-04" and part["name"] == "rollback_start_after_expiry":
-                observed = _so04_observed_prerequisites([s for s in part["samples"] if isinstance(s, dict)])
+            if objective == "SO-04" and part["name"] in ("rollback_start_after_expiry", "rollback_completion"):
+                dict_samples = [s for s in part["samples"] if isinstance(s, dict)]
+                if part["name"] == "rollback_start_after_expiry":
+                    observed = _so04_observed_prerequisites(dict_samples)
+                else:
+                    observed = _so04_completion_observed_prerequisites(dict_samples, declaration)
                 for p in effective_prereqs:
                     if p["id"] in observed:
                         if p["met"] and not observed[p["id"]]:
                             errors.append(f"{where}: prerequisite {p['id']!r} declared met but the samples do not show it")
                         p["met"] = bool(p["met"]) and observed[p["id"]]
 
-        evaluated = evaluate_rule(dict(rule, bound_ms=spec["bound_ms"]), eval_samples) if eval_samples else {"holds": False}
+        if spec["kind"] == RULE_EVERY_SAMPLE_MAX_PER_ACTION:
+            authoritative = dict(rule, bounds_ms=declaration.get("bounds_ms") or {})
+        else:
+            authoritative = dict(rule, bound_ms=spec["bound_ms"])
+        evaluated = evaluate_rule(authoritative, eval_samples) if eval_samples else {"holds": False}
         claimed = rule.get("evaluated")
         if not isinstance(claimed, dict) or bool(claimed.get("holds")) != bool(evaluated.get("holds")):
             errors.append(f"{where}.pass_rule.evaluated: disagrees with the samples")

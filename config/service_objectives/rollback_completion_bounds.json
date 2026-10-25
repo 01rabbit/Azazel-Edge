@@ -1,0 +1,43 @@
+{
+  "schema": "azazel-edge/rollback-completion-bounds/v1",
+  "cites": "01rabbit/Azazel:docs/roadmaps/service-objective-assignments.md section 3 SO-04 (Completion) and OF-05",
+  "note": "PROVISIONAL. Derived from container runs of the SO-04 completion harness plus a margin. Not hardware evidence, and not a program-plan section 8 target: those are unchanged. Read only by the service-objective harness and validator; the core never reads this file and nothing here changes when or how a lease is released.",
+  "bounds": [
+    {
+      "action_type": "isolate",
+      "bound_ms": 5000,
+      "status": "provisional",
+      "hardware_class": "container-aarch64, not hardware",
+      "basis": {
+        "method": "py/azazel_edge/service_objectives/so04_rollback_completion.py: real azazel-edge-core daemon (Edge defaults, enforcement off), owned nft rule installed per lease, half the leases expiring under the harness's eve_flood load (2000 EVE alerts/s); docker --cap-add NET_ADMIN on colima, aarch64",
+        "measured_on": "2026-10-25",
+        "runs": 3,
+        "sample_count": 150,
+        "max_observed_ms": 2446.265,
+        "max_observed_ms_nominal": 836.798,
+        "margin_rule": "twice the max observed, rounded up to the next 1000 ms"
+      }
+    },
+    {
+      "action_type": "redirect",
+      "bound_ms": 6000,
+      "status": "provisional",
+      "hardware_class": "container-aarch64, not hardware",
+      "basis": {
+        "method": "py/azazel_edge/service_objectives/so04_rollback_completion.py: real azazel-edge-core daemon (Edge defaults, enforcement off), owned nft rule installed per lease, half the leases expiring under the harness's eve_flood load (2000 EVE alerts/s); docker --cap-add NET_ADMIN on colima, aarch64",
+        "measured_on": "2026-10-25",
+        "runs": 3,
+        "sample_count": 150,
+        "max_observed_ms": 2618.326,
+        "max_observed_ms_nominal": 766.538,
+        "margin_rule": "twice the max observed, rounded up to the next 1000 ms"
+      }
+    }
+  ],
+  "undeclared": [
+    {
+      "action_type": "throttle",
+      "reason": "No completion was observed, so there is nothing to derive a bound from. In 150 container samples with the lease's TBF qdisc installed, every rollback attempt ended release_attempt_failed with 'tc ownership handle exists with unexpected TBF parameters': iproute2 6.15 'tc -j qdisc show' reports rate/burst/lat under 'options', and the core's readback (release.rs tbf_parameters_match) looks for them at the top level. Until that is fixed and measured, throttle declares no bound and the SO-04 completion half stays not_measurable."
+    }
+  ]
+}
