@@ -278,6 +278,52 @@ def test_reader_skips_and_counts_a_partial_trailing_line(tmp_path):
     assert queue.read_partial_tail_total == 1 and queue.read_unparseable_total == 1
 
 
+def test_reader_counts_a_torn_tail_and_a_bad_line_once_across_re_reads(tmp_path):
+    qpath = tmp_path / "q.jsonl"
+    queue = P0AlertQueue(qpath)
+    queue.enqueue(_alerts("d-1"))
+    with open(qpath, "ab") as fh:
+        fh.write(b"garbage\n")
+        fh.write(b'{"partial":')
+    for _ in range(3):
+        assert len(queue.read_entries()) == 2
+    assert queue.read_partial_tail_total == 1 and queue.read_unparseable_total == 1
+    with open(qpath, "ab") as fh:
+        fh.write(b' 1}\n{"again')  # the old tail completes; a new torn tail appears further on
+    queue.read_entries()
+    queue.read_entries()
+    assert queue.read_partial_tail_total == 2 and queue.read_unparseable_total == 1
+
+
+def test_read_counters_are_in_relay_metrics_and_status(tmp_path):
+    qpath = tmp_path / "q.jsonl"
+    qpath.write_bytes(b"garbage\n" + b'{"partial":')
+    os.chmod(qpath, 0o600)
+    audit = P0AuditLogger(tmp_path / "a.jsonl")
+    relay = attach_p0_alert_relay(audit, qpath)
+    assert relay.ready.wait(5)
+    relay.stop()
+    metrics = relay.metrics()
+    assert metrics["queue_read_partial_tail_total"] == 1 and metrics["queue_read_unparseable_total"] == 1
+    # The garbage line stays in the file; read it through the product reader.
+    started = [r for r in P0AlertQueue(qpath).read_entries() if r.get("event") == "started"][-1]
+    assert started["queue_read_partial_tail_total"] == 1 and started["queue_read_unparseable_total"] == 1
+
+
+def test_registration_cut_missing_from_the_chain_is_recorded(tmp_path):
+    apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
+    plain = P0AuditLogger(apath)
+    plain.log_action_decision("p-1", "s", action="isolate")
+    plain.log_action_decision("p-2", "s", action="observe")
+    relay = P0AlertRelay(P0AlertQueue(qpath), audit_path=apath)
+    relay.reconcile_until = "f" * 64  # the chain was replaced after registration
+    status = relay.reconcile()
+    assert status["reconcile"] == "registration_cut_not_found"
+    assert status["unreconcilable"] == 1 and status["reconciled"] == 0
+    assert _rows(qpath) == []
+    assert _started(qpath)[-1]["reconcile"] == "registration_cut_not_found"
+
+
 def test_readers_never_crash_while_the_relay_appends(tmp_path):
     """A reader racing the writer sees only complete entries, in order."""
 

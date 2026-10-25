@@ -155,6 +155,7 @@ class P0AlertQueue:
         # line that is not a JSON object; both are skipped, never raised.
         self.read_partial_tail_total = 0
         self.read_unparseable_total = 0
+        self._counted: Dict[tuple, None] = {}
 
     @property
     def max_lines(self) -> int:
@@ -457,19 +458,47 @@ class P0AlertQueue:
         except FileNotFoundError:
             return []
         try:
+            st = os.fstat(fd)
             data = self._read_all(fd)
         finally:
             os.close(fd)
-        return self.parse_complete_lines(data)
+        return self.parse_complete_lines(data, (st.st_dev, st.st_ino))
 
-    def parse_complete_lines(self, data: bytes) -> List[Dict[str, Any]]:
+    def parse_complete_lines(self, data: bytes, file_id: Any = None) -> List[Dict[str, Any]]:
+        """Complete lines as entries. Each partial tail and each unparseable
+        line is counted once per (file, byte offset), not on every re-read."""
+
+        rows: List[Dict[str, Any]] = []
+        offset = 0
         parts = data.split(b'\n')
-        if parts[-1]:
-            self.read_partial_tail_total += 1
-        lines = [ln for ln in parts[:-1] if ln]
-        rows = self._parse(lines)
-        self.read_unparseable_total += len(lines) - len(rows)
+        for idx, line in enumerate(parts):
+            if idx == len(parts) - 1:
+                if line:
+                    self._count_once('partial', file_id, offset)
+                break
+            if line:
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    row = None
+                if isinstance(row, dict):
+                    rows.append(row)
+                else:
+                    self._count_once('unparseable', file_id, offset)
+            offset += len(line) + 1
         return rows
+
+    def _count_once(self, kind: str, file_id: Any, offset: int) -> None:
+        key = (kind, file_id, offset)
+        if key in self._counted:
+            return
+        self._counted[key] = None
+        if len(self._counted) > 4096:
+            self._counted.pop(next(iter(self._counted)))
+        if kind == 'partial':
+            self.read_partial_tail_total += 1
+        else:
+            self.read_unparseable_total += 1
 
 
 def build_p0_alerts(record: Mapping[str, Any], basis: str, durability: str, durable_ns: Optional[int]) -> List[Dict[str, Any]]:
@@ -580,6 +609,8 @@ class P0AlertRelay:
                 'reconcile_skipped_total': self.reconcile_skipped_total,
             }
         out['audit_listener_handoff_dropped_total'] = int(getattr(self.audit_logger, 'durable_handoff_dropped_total', 0) or 0)
+        out['queue_read_partial_tail_total'] = int(getattr(self.queue, 'read_partial_tail_total', 0) or 0)
+        out['queue_read_unparseable_total'] = int(getattr(self.queue, 'read_unparseable_total', 0) or 0)
         return out
 
     def _remember(self, chain_hash: str) -> bool:
@@ -660,6 +691,10 @@ class P0AlertRelay:
           was rotated or replaced): which records were missed cannot be told,
           so nothing is replayed; the P0 records in the chain the queue does
           not alert on are counted as ``unreconcilable``.
+        * ``registration_cut_not_found`` -- the chain no longer has the record
+          the listener was registered after (it was replaced between attach
+          and this read): nothing is replayed, and the P0 records in the
+          chain as read are counted as ``unreconcilable``.
 
         Candidates are replayed newest first up to ``max_reconcile``, the rest
         counted as ``reconcile_skipped``. Decisions the queue already alerts
@@ -693,15 +728,24 @@ class P0AlertRelay:
                     os.close(fd)
                 lines = data.split(b'\n')[:-1]
             rows = P0AlertQueue._parse(lines)
+            cut_missing_p0 = None
             if self.reconcile_until is not None:
                 # Records after the listener's registration point reach the
                 # relay through the listener (with their durable stamp); the
                 # reconcile covers only what was written before it.
                 cut = 0
                 if self.reconcile_until:
+                    cut = None
                     for idx, row in enumerate(rows):
                         if row.get('chain_hash') == self.reconcile_until:
                             cut = idx + 1
+                    if cut is None:
+                        # The chain was replaced between registration and this
+                        # read: what was before the registration cannot be
+                        # told from what the listener delivers. Read nothing
+                        # and say so.
+                        cut_missing_p0 = sum(1 for r in rows if classify_p0(r))
+                        cut = 0
                 rows = rows[:cut]
             if rows:
                 tail = str(rows[-1].get('chain_hash') or '')
@@ -711,7 +755,11 @@ class P0AlertRelay:
                     if row.get('chain_hash') == cursor:
                         start = idx + 1
             fresh = [r for r in rows if classify_p0(r) and str(r.get('chain_hash') or '') not in self._seen]
-            if start is not None:
+            if cut_missing_p0 is not None:
+                status['reconcile'] = 'registration_cut_not_found'
+                status['unreconcilable'] = cut_missing_p0
+                missed = []
+            elif start is not None:
                 status.update(reconcile='cursor_found', cursor_found=True)
                 missed = [r for r in rows[start:] if classify_p0(r) and str(r.get('chain_hash') or '') not in self._seen]
             elif not cursor:
