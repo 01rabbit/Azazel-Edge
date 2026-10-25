@@ -411,6 +411,31 @@ pub fn build_release_task(
     })
 }
 
+/// An owner token is `azazel-edge:release-` followed by ASCII alphanumerics,
+/// `:` and `-` only (what `build_release_task` generates: a hex task id). It
+/// can never hold `"`, whitespace, `;`, `#` or a newline, so it fits inside
+/// one nft quoted string unescaped.
+pub fn valid_owner_token(token: &str) -> bool {
+    token.starts_with("azazel-edge:release-")
+        && token.len() <= 96
+        && token
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '-'))
+}
+
+/// The single argv element passed after `comment` to `nft`. nft joins its
+/// argv with spaces and parses the result, so a bare `azazel-edge:release-...`
+/// is a syntax error at the `:`; the token must reach the parser as an nft
+/// quoted string. `nft -j` reports the comment without the quotes, so the
+/// readback in `nft_owned_handles` still compares against the bare token.
+/// A token outside `valid_owner_token` is refused rather than escaped.
+pub fn nft_comment_arg(owner_token: &str) -> Result<String, String> {
+    if !valid_owner_token(owner_token) {
+        return Err("owner token is not a valid nft comment".to_string());
+    }
+    Ok(format!("\"{owner_token}\""))
+}
+
 pub fn prepare_release_task(path: &str, task: &ReleaseTask) -> Result<(), String> {
     validate_task(task)?;
     let mut ledger = load_ledger(path)?;
@@ -1427,13 +1452,7 @@ fn validate_task(task: &ReleaseTask) -> Result<(), String> {
     if task.source_ip.parse::<IpAddr>().is_err() {
         return Err("release task has invalid source IP".to_string());
     }
-    if !task.owner_token.starts_with("azazel-edge:release-")
-        || task.owner_token.len() > 96
-        || !task
-            .owner_token
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '-'))
-    {
+    if !valid_owner_token(&task.owner_token) {
         return Err("release task has invalid owner token".to_string());
     }
     if task.action == "throttle" {
@@ -1625,6 +1644,22 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir.join(name).to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn generated_owner_tokens_are_valid_nft_comment_strings() {
+        for (trace, action) in [("t1", "isolate"), ("t2", "redirect"), ("t3", "throttle")] {
+            let task = build_release_task(
+                trace, action, "br0", "10.0.0.8", 443, 2222, 0, 300, &LeaseNow::wall_only(100.0),
+            )
+            .unwrap();
+            assert!(valid_owner_token(&task.owner_token));
+            assert_eq!(nft_comment_arg(&task.owner_token).unwrap(), format!("\"{}\"", task.owner_token));
+        }
+        for bad in ["", "azazel-edge:release-\"x", "azazel-edge:release- x", "azazel-edge:release-x;y", "release-x"] {
+            assert!(nft_comment_arg(bad).is_err(), "{bad:?}");
+        }
+        assert!(nft_comment_arg(&format!("azazel-edge:release-{}", "a".repeat(80))).is_err());
     }
 
     #[test]

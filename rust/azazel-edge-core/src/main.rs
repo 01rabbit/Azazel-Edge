@@ -5,7 +5,7 @@ mod release;
 use ingress::{append_audit_record, IngressLimits, IngressReader, PollReport};
 use release::{
     activate_release_task, build_release_task, cancel_release_task, mark_release_task_uncertain,
-    prepare_release_task, process_due_releases, LeaseNow, ReleaseTask,
+    nft_comment_arg, prepare_release_task, process_due_releases, LeaseNow, ReleaseTask,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -83,6 +83,12 @@ struct EnforcementPlan {
     target: String,
     apply_commands: Vec<String>,
     rollback_commands: Vec<String>,
+    /// The argv actually executed for each entry of `apply_commands`, in the
+    /// same order. `apply_commands` is the rendering kept in records (with the
+    /// bare owner token after `comment`); it is never split back into argv,
+    /// because the executed nft comment is an nft quoted string.
+    #[serde(skip)]
+    apply_argv: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -433,10 +439,6 @@ fn command_to_string(argv: &[String]) -> String {
     argv.iter().map(|part| shell_quote(part)).collect::<Vec<String>>().join(" ")
 }
 
-fn parse_shell_words(line: &str) -> Vec<String> {
-    line.split_whitespace().map(|s| s.to_string()).collect::<Vec<String>>()
-}
-
 fn build_enforcement_plan(ev: &NormalizedEvent, decision: &DefensiveDecision, iface: &str, honeypot_port: u16) -> EnforcementPlan {
     build_enforcement_plan_owned(ev, decision, iface, honeypot_port, None)
 }
@@ -450,15 +452,20 @@ fn build_enforcement_plan_owned(
 ) -> EnforcementPlan {
     let mut apply: Vec<Vec<String>> = Vec::new();
     let mut rollback: Vec<Vec<String>> = Vec::new();
+    // An owned nft rule carries its owner token as an nft quoted string. A
+    // token that cannot be one gives no owned plan (prepare_release_task
+    // rejects that task before anything is executed).
+    let owned_nft = release_task
+        .and_then(|task| nft_comment_arg(&task.owner_token).ok().map(|comment| (task, comment)));
 
     if decision.action == "isolate" {
         let mut command = vec![
             "nft".to_string(), "insert".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
             "input".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "drop".to_string(),
         ];
-        if let Some(task) = release_task {
+        if let Some((task, comment)) = &owned_nft {
             command.push("comment".to_string());
-            command.push(task.owner_token.clone());
+            command.push(comment.clone());
             rollback.push(vec![
                 "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
                 "input".to_string(), "handle".to_string(), format!("<owned:{}>", task.owner_token),
@@ -502,9 +509,9 @@ fn build_enforcement_plan_owned(
             "prerouting".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "tcp".to_string(),
             "dport".to_string(), ev.target_port.to_string(), "redirect".to_string(), "to".to_string(), honeypot_port.to_string(),
         ];
-        if let Some(task) = release_task {
+        if let Some((task, comment)) = &owned_nft {
             command.push("comment".to_string());
-            command.push(task.owner_token.clone());
+            command.push(comment.clone());
             rollback.push(vec![
                 "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
                 "prerouting".to_string(), "handle".to_string(), format!("<owned:{}>", task.owner_token),
@@ -522,8 +529,24 @@ fn build_enforcement_plan_owned(
     EnforcementPlan {
         action: decision.action.clone(),
         target: decision.target.clone(),
-        apply_commands: apply.iter().map(|argv| command_to_string(argv)).collect::<Vec<String>>(),
+        // The recorded plan keeps the bare owner token after `comment` (the
+        // record format parsed by outcome/ownership.py); only the executed
+        // argv carries the nft quoted string.
+        apply_commands: apply
+            .iter()
+            .map(|argv| {
+                let shown = argv
+                    .iter()
+                    .map(|part| match &owned_nft {
+                        Some((task, comment)) if part == comment => task.owner_token.clone(),
+                        _ => part.clone(),
+                    })
+                    .collect::<Vec<String>>();
+                command_to_string(&shown)
+            })
+            .collect::<Vec<String>>(),
         rollback_commands: rollback.iter().map(|argv| command_to_string(argv)).collect::<Vec<String>>(),
+        apply_argv: apply,
     }
 }
 
@@ -726,9 +749,8 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
     let mut executed_count = 0_u32;
     let mut failed_count = 0_u32;
     let mut errors: Vec<String> = Vec::new();
-    for cmd in &plan.apply_commands {
-        let argv = parse_shell_words(cmd);
-        match run_command(&argv) {
+    for argv in &plan.apply_argv {
+        match run_command(argv) {
             Ok(_) => executed_count += 1,
             Err(e) => {
                 failed_count += 1;
@@ -1764,8 +1786,75 @@ mod tests {
         )
         .unwrap();
         let plan = build_enforcement_plan_owned(&ev, &decision, "br0", 2222, Some(&task));
-        assert!(plan.apply_commands.join("\n").contains(&task.owner_token));
-        assert!(plan.rollback_commands.join("\n").contains("handle"));
+        // nft joins its argv and parses it: the comment must be one argv
+        // element holding an nft quoted string, not the bare token (`:` is a
+        // syntax error there, Edge#464).
+        let quoted = format!("\"{}\"", task.owner_token);
+        assert_eq!(plan.apply_argv.len(), 1);
+        let argv = &plan.apply_argv[0];
+        assert_eq!(&argv[argv.len() - 2..], &["comment".to_string(), quoted.clone()]);
+        assert!(!argv.contains(&task.owner_token));
+        // The recorded plan keeps the bare token after `comment`, which is
+        // what outcome/ownership.py parses.
+        assert_eq!(plan.apply_commands.len(), 1);
+        assert!(plan.apply_commands[0].ends_with(&format!(" drop comment {}", task.owner_token)));
+        assert!(!plan.apply_commands[0].contains('"'));
+        assert_eq!(
+            plan.rollback_commands,
+            vec![format!("nft delete rule inet azazel_edge input handle '<owned:{}>'", task.owner_token)]
+        );
+    }
+
+    #[test]
+    fn owned_redirect_plan_quotes_the_nft_comment() {
+        let mut ev = sample_event();
+        ev.severity = 2;
+        let decision = decide_defense(&ev);
+        assert_eq!(decision.action, "redirect");
+        let task = build_release_task(
+            "trace-test", "redirect", "br0", &ev.src_ip, ev.target_port, 2222, decision.delay_ms, 300, &LeaseNow::wall_only(100.0),
+        )
+        .unwrap();
+        let plan = build_enforcement_plan_owned(&ev, &decision, "br0", 2222, Some(&task));
+        assert_eq!(plan.apply_argv.len(), 1);
+        let argv = &plan.apply_argv[0];
+        assert_eq!(argv[5], "prerouting");
+        assert_eq!(&argv[argv.len() - 2..], &["comment".to_string(), format!("\"{}\"", task.owner_token)]);
+        assert!(plan.apply_commands[0].ends_with(&format!(" redirect to 2222 comment {}", task.owner_token)));
+        assert!(plan.rollback_commands[0].contains(&format!("handle '<owned:{}>'", task.owner_token)));
+    }
+
+    #[test]
+    fn apply_argv_is_what_the_recorded_plan_shows_except_the_quoted_comment() {
+        let ev = sample_event();
+        let decision = decide_defense(&ev);
+        let unowned = build_enforcement_plan(&ev, &decision, "br0", 2222);
+        assert_eq!(unowned.apply_commands, unowned.apply_argv.iter().map(|a| command_to_string(a)).collect::<Vec<_>>());
+        assert!(unowned.apply_argv.iter().flatten().all(|part| part != "comment"));
+    }
+
+    #[test]
+    fn owned_nft_plan_refuses_an_owner_token_that_cannot_be_an_nft_string() {
+        let ev = sample_event();
+        let decision = decide_defense(&ev);
+        let mut task = build_release_task(
+            "trace-test", "isolate", "br0", &ev.src_ip, ev.target_port, 2222, 0, 300, &LeaseNow::wall_only(100.0),
+        )
+        .unwrap();
+        for bad in [
+            "azazel-edge:release-ab\"; flush ruleset; \"",
+            "azazel-edge:release-a b",
+            "azazel-edge:release-a#b",
+            "azazel-edge:release-a\nb",
+            "other:release-ab",
+        ] {
+            task.owner_token = bad.to_string();
+            let plan = build_enforcement_plan_owned(&ev, &decision, "br0", 2222, Some(&task));
+            // No owned (commented) rule is planned for such a token, and
+            // prepare_release_task refuses the task before any apply.
+            assert!(plan.apply_argv.iter().flatten().all(|part| part != "comment"), "{bad:?}");
+            assert!(prepare_release_task("/nonexistent/azazel-edge-test-ledger.json", &task).is_err());
+        }
     }
 
     #[test]
