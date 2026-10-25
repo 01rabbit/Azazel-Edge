@@ -99,7 +99,41 @@ def _dependency_status(value: Any, *, has_refs: bool) -> str:
     if value is None:
         return "available" if has_refs else "not_provided"
     text = str(value).strip().lower()
-    return text if text in OPTIONAL_DEPENDENCY_STATUSES else "malformed"
+    if text not in OPTIONAL_DEPENDENCY_STATUSES:
+        return "malformed"
+    if text == "available" and not has_refs:
+        # "available" with nothing to show is indistinguishable from absence;
+        # downgrade rather than render empty confidence.
+        return "not_provided"
+    return text
+
+
+_FRAME_TEXT_KEYS = ("schema_version", "frame_id", "trace_id", "created_at", "mission", "current_defensive_state", "threat_level", "noc_summary", "soc_summary", "knowledge_status", "deception_status")
+_FRAME_LIST_KEYS = ("known_facts", "unknowns", "contradictions", "evidence_refs", "knowledge_refs")
+_FRAME_KEYS = frozenset(_FRAME_TEXT_KEYS + _FRAME_LIST_KEYS + ("provenance", "freshness_seconds", "truncated"))
+
+
+def _validate_frame_payload(payload: Any) -> None:
+    if not isinstance(payload, Mapping) or set(payload) != _FRAME_KEYS:
+        raise ValueError("invalid_situation_frame_payload")
+    if payload["schema_version"] != SITUATION_FRAME_SCHEMA_VERSION:
+        raise ValueError("unsupported_situation_frame_schema_version")
+    if any(not isinstance(payload[key], str) for key in _FRAME_TEXT_KEYS):
+        raise ValueError("invalid_situation_frame_payload")
+    if any(not isinstance(payload[key], list) or any(not isinstance(item, str) for item in payload[key]) for key in _FRAME_LIST_KEYS):
+        raise ValueError("invalid_situation_frame_payload")
+    if type(payload["freshness_seconds"]) is not int or type(payload["truncated"]) is not bool:
+        raise ValueError("invalid_situation_frame_payload")
+    prov = payload["provenance"]
+    if not isinstance(prov, Mapping) or any(not isinstance(v, list) for v in prov.values()):
+        raise ValueError("invalid_situation_frame_payload")
+    if payload["deception_status"] not in OPTIONAL_DEPENDENCY_STATUSES or payload["knowledge_status"] not in OPTIONAL_DEPENDENCY_STATUSES:
+        raise ValueError("invalid_situation_frame_payload")
+    has_refs = bool(payload["knowledge_refs"])
+    if (payload["knowledge_status"] == "available") != has_refs:
+        raise ValueError("inconsistent_knowledge_status")
+    if has_refs and "knowledge" not in prov.get("knowledge_refs", []):
+        raise ValueError("inconsistent_knowledge_provenance")
 
 
 def _normalize_provenance(value: Any) -> tuple[tuple[str, tuple[str, ...]], ...]:
@@ -172,7 +206,9 @@ class MioSituationFrame:
             changes: dict[str, Any] = {"truncated": True}
             for name in _TRIM_ORDER:
                 items = getattr(frame, name)
-                if items:
+                # Keep one knowledge ref so "available" stays consistent with
+                # its refs (from_dict rejects available-without-refs).
+                if len(items) > (1 if name == "knowledge_refs" else 0):
                     changes[name] = items[:-1]
                     break
             else:
@@ -186,12 +222,10 @@ class MioSituationFrame:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "MioSituationFrame":
-        """Rebuild a frame from to_dict() output, re-applying every contract cap."""
-        if not isinstance(payload, Mapping):
-            raise ValueError("invalid_situation_frame_payload")
-        if payload.get("schema_version") != SITUATION_FRAME_SCHEMA_VERSION:
-            raise ValueError("unsupported_situation_frame_schema_version")
-        frame = cls.build(frame_id=payload.get("frame_id", ""), trace_id=payload.get("trace_id", ""), created_at=payload.get("created_at", ""), mission=payload.get("mission", ""), current_defensive_state=payload.get("current_defensive_state", ""), threat_level=payload.get("threat_level", ""), noc_summary=payload.get("noc_summary", ""), soc_summary=payload.get("soc_summary", ""), known_facts=payload.get("known_facts"), unknowns=payload.get("unknowns"), contradictions=payload.get("contradictions"), evidence_refs=payload.get("evidence_refs"), knowledge_refs=payload.get("knowledge_refs"), freshness_seconds=payload.get("freshness_seconds", 0), knowledge_status=payload.get("knowledge_status", "malformed"), deception_status=payload.get("deception_status", "malformed"), provenance=payload.get("provenance") or {}, input_truncated=bool(payload.get("truncated")))
+        """Rebuild a frame from to_dict() output. The key set and types are closed;
+        Knowledge "available" must carry refs with "knowledge" provenance."""
+        _validate_frame_payload(payload)
+        frame = cls.build(frame_id=payload.get("frame_id", ""), trace_id=payload.get("trace_id", ""), created_at=payload.get("created_at", ""), mission=payload.get("mission", ""), current_defensive_state=payload.get("current_defensive_state", ""), threat_level=payload.get("threat_level", ""), noc_summary=payload.get("noc_summary", ""), soc_summary=payload.get("soc_summary", ""), known_facts=payload.get("known_facts"), unknowns=payload.get("unknowns"), contradictions=payload.get("contradictions"), evidence_refs=payload.get("evidence_refs"), knowledge_refs=payload.get("knowledge_refs"), freshness_seconds=payload.get("freshness_seconds", 0), knowledge_status=payload["knowledge_status"], deception_status=payload["deception_status"], provenance=payload["provenance"], input_truncated=bool(payload.get("truncated")))
         return frame
 
     def to_dict(self) -> dict[str, Any]:

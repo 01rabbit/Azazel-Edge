@@ -152,10 +152,8 @@ def test_from_dict_rejects_unknown_schema_version():
 def test_event_order_permutation_with_same_snapshot_is_stable():
     inputs = _golden_inputs()
     reordered = dict(inputs, events=list(reversed(inputs["events"])))
-    a, b = _build(inputs), _build(reordered)
-    # Evidence refs keep input order (replay fidelity); every derived state is identical.
-    assert set(a.evidence_refs) == set(b.evidence_refs)
-    assert (a.known_facts, a.unknowns, a.freshness_seconds, a.provenance) == (b.known_facts, b.unknowns, b.freshness_seconds, b.provenance)
+    # Event refs are selected by (severity, recency, id), so the whole frame is identical.
+    assert _build(inputs).to_canonical_json() == _build(reordered).to_canonical_json()
 
 
 # --- serialized-size / build-latency budgets --------------------------------
@@ -263,3 +261,160 @@ def test_frame_is_immune_to_later_input_mutation():
     inputs["knowledge_refs"].append("kn:999")
     inputs["explicit_unknowns"].append("U_999")
     assert frame.to_canonical_json() == before
+
+
+# --- review follow-ups: order independence, marker priority, closed from_dict ---
+
+def _old_and_new_events(n_old: int) -> list[dict]:
+    old = [{"event_id": f"ev:old:{i:05d}", "ts": "2026-01-01T00:00:00Z", "severity": 10} for i in range(n_old)]
+    return old + [{"event_id": "ev:new:0", "ts": "2026-01-01T00:59:00Z", "severity": 10}]
+
+
+@pytest.mark.parametrize("n_old", [1024, 1025, 4096, 5000])
+def test_freshness_uses_newest_event_regardless_of_volume_and_order(n_old):
+    base = dict(_golden_inputs(), created_at="2026-01-01T01:00:00Z", explicit_unknowns=[])
+    forward = _build(dict(base, events=_old_and_new_events(n_old)))
+    backward = _build(dict(base, events=list(reversed(_old_and_new_events(n_old)))))
+    assert forward.freshness_seconds == 60
+    assert "EVIDENCE_STALE" not in forward.unknowns
+    assert "ev:new:0" in forward.evidence_refs
+    assert forward.to_canonical_json() == backward.to_canonical_json()
+
+
+def test_event_refs_prioritise_severity_then_recency():
+    events = [{"event_id": f"ev:low:{i:05d}", "ts": "2026-01-01T00:59:00Z", "severity": 5} for i in range(3000)]
+    events.insert(1500, {"event_id": "ev:crit:old", "ts": "2026-01-01T00:00:00Z", "severity": 95})
+    events.append({"event_id": "ev:low:newest", "ts": "2026-01-01T00:59:59Z", "severity": 5})
+    frame = MioSituationFrameBuilder(max_event_refs=2).build(**dict(_golden_inputs(), created_at="2026-01-01T01:00:00Z", events=events))
+    event_refs = [r for r in frame.evidence_refs if r.startswith("ev:low") or r.startswith("ev:crit")]
+    assert event_refs == ["ev:crit:old", "ev:low:newest"]
+
+
+def test_duplicate_event_ids_do_not_consume_ref_slots():
+    events = [{"event_id": "ev:dup", "ts": "2026-01-01T00:00:00Z", "severity": 90}] * 10 + [{"event_id": "ev:other", "ts": "2026-01-01T00:00:00Z"}]
+    frame = MioSituationFrameBuilder(max_event_refs=2).build(**dict(_golden_inputs(), events=events))
+    assert "ev:dup" in frame.evidence_refs and "ev:other" in frame.evidence_refs
+
+
+@pytest.mark.parametrize("events,marker", [
+    ([], "NO_TIMESTAMPED_EVIDENCE"),
+    ([{"event_id": "ev:1", "ts": "2026-01-01T00:00:00Z"}], "EVIDENCE_STALE"),
+    ([{"event_id": "ev:1", "ts": "2027-01-01T00:00:00Z"}], "EVIDENCE_TIMESTAMP_FUTURE"),
+])
+def test_builder_safety_markers_survive_full_explicit_unknowns(events, marker):
+    inputs = dict(_golden_inputs(), events=events, created_at="2026-01-01T02:00:00Z", knowledge_status="unavailable", deception_status="timeout", explicit_unknowns=[f"CALLER_{i}" for i in range(12)])
+    frame = _build(inputs)
+    assert len(frame.unknowns) == SITUATION_FRAME_CAPS["unknowns"]
+    assert frame.unknowns[:3] == ("KNOWLEDGE_UNAVAILABLE", "DECEPTION_TIMEOUT", marker)
+    assert frame.truncated is True
+
+
+def test_builder_contradiction_survives_full_explicit_contradictions():
+    frame = _build(dict(_golden_inputs(), explicit_contradictions=[f"C_{i}" for i in range(8)]))
+    assert frame.contradictions[0] == "HIGH_SOC_RISK_WITH_FRAGILE_NOC"
+
+
+def test_known_facts_are_ordered_by_importance_and_both_planes_survive_caps():
+    inputs = _golden_inputs()
+    inputs["noc_evaluation"] = dict(inputs["noc_evaluation"], summary={"status": "poor", "reasons": [f"noc_r{i}" for i in range(8)]})
+    inputs["soc_evaluation"] = dict(inputs["soc_evaluation"], summary={"status": "high", "reasons": [f"soc_r{i}" for i in range(8)]})
+    facts = _build(inputs).known_facts
+    assert facts[:5] == ("NOC_STATUS=POOR", "SOC_STATUS=HIGH", "SOC_SUSPICION=HIGH", "SOC_CONFIDENCE=MEDIUM", "SOC_BLAST=LOW")
+    assert facts[5:9] == ("NOC_REASON=noc_r0", "SOC_REASON=soc_r0", "NOC_REASON=noc_r1", "SOC_REASON=soc_r1")
+
+
+def _frame_kwargs(**overrides) -> dict:
+    kwargs = dict(frame_id="f", trace_id="t", created_at="2026-01-01T00:00:00Z", mission="m", current_defensive_state="OBSERVE", threat_level="LOW")
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_trim_order_drops_evidence_refs_before_uncertainty_markers():
+    frame = MioSituationFrame.build(**_frame_kwargs(
+        known_facts=[f"F{i}" for i in range(16)],
+        unknowns=[f"U{i}" for i in range(12)],
+        contradictions=[f"C{i}" for i in range(8)],
+        evidence_refs=[f"{i:03d}" + "\U0001F600" * 125 for i in range(32)],
+        knowledge_refs=["kn:1", "kn:2"], knowledge_status="available",
+        provenance={"knowledge_refs": ["knowledge"]},
+    ))
+    assert len(frame.to_canonical_json()) <= SITUATION_FRAME_MAX_SERIALIZED_BYTES
+    assert frame.truncated is True
+    assert 0 < len(frame.evidence_refs) < 32
+    assert frame.known_facts == tuple(f"F{i}" for i in range(16))
+    assert frame.unknowns == tuple(f"U{i}" for i in range(12))
+    assert frame.contradictions == tuple(f"C{i}" for i in range(8))
+    assert frame.knowledge_refs == ("kn:1", "kn:2")
+
+
+def test_trim_drops_known_facts_from_the_tail_and_keeps_one_knowledge_ref():
+    facts = [f"{i:02d}" + "\U0001F600" * 150 for i in range(16)]
+    frame = MioSituationFrame.build(**_frame_kwargs(
+        known_facts=facts, unknowns=["U0"],
+        evidence_refs=["e" + "\U0001F600" * 120 for _ in range(1)],
+        knowledge_refs=[f"k{i}" + "\U0001F600" * 120 for i in range(16)], knowledge_status="available",
+        provenance={"knowledge_refs": ["knowledge"]},
+    ))
+    assert len(frame.to_canonical_json()) <= SITUATION_FRAME_MAX_SERIALIZED_BYTES
+    assert frame.evidence_refs == ()
+    assert len(frame.knowledge_refs) == 1 and frame.knowledge_status == "available"
+    assert 0 < len(frame.known_facts) < 16
+    assert frame.known_facts == tuple(facts[: len(frame.known_facts)])
+    assert frame.unknowns == ("U0",)
+    assert MioSituationFrame.from_dict(frame.to_dict()) == frame
+
+
+def test_knowledge_available_without_refs_is_downgraded():
+    frame = MioSituationFrame.build(**_frame_kwargs(knowledge_status="available"))
+    assert frame.knowledge_status == "not_provided"
+
+
+def _valid_payload() -> dict:
+    return json.loads(_build(_golden_inputs()).to_canonical_json())
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda p: p.pop("knowledge_status"),
+    lambda p: p.pop("deception_status"),
+    lambda p: p.pop("truncated"),
+    lambda p: p.update(extra="x"),
+    lambda p: p.update(mission={"a": 1}),
+    lambda p: p.update(known_facts="NOC_STATUS=POOR"),
+    lambda p: p.update(evidence_refs=[1, 2]),
+    lambda p: p.update(freshness_seconds=True),
+    lambda p: p.update(freshness_seconds="20"),
+    lambda p: p.update(truncated="false"),
+    lambda p: p.update(provenance=["caller"]),
+    lambda p: p.update(knowledge_status="garbage"),
+    lambda p: p.update(knowledge_refs=[]),
+    lambda p: p.update(knowledge_status="not_provided"),
+    lambda p: p["provenance"].pop("knowledge_refs"),
+    lambda p: p.update(knowledge_refs=["kn:x"], provenance=dict(p["provenance"], knowledge_refs=["caller"])),
+], ids=["no-kstatus", "no-dstatus", "no-truncated", "extra-key", "mission-dict", "facts-str", "refs-int", "fresh-bool", "fresh-str", "trunc-str", "prov-list", "kstatus-garbage", "available-no-refs", "refs-not-available", "refs-no-prov", "refs-wrong-prov"])
+def test_from_dict_is_closed_and_consistent(mutate):
+    payload = _valid_payload()
+    mutate(payload)
+    with pytest.raises(ValueError):
+        MioSituationFrame.from_dict(payload)
+
+
+def test_minimal_prompt_view_keeps_uncertainty_and_status():
+    from azazel_edge.mio.playbook import DEFAULT_PLAYBOOKS, PromptCompiler
+
+    frame = _build(dict(_golden_inputs(), knowledge_status="timeout", deception_status="unavailable"))
+    prompt = PromptCompiler(max_untrusted_chars=64).compile(frame=frame, playbook=DEFAULT_PLAYBOOKS["auth-ambiguity-v1"], broker_results=[{"blob": "x" * 5000}], task="recommend")
+    raw = prompt.split("UNTRUSTED_DATA\n", 1)[1].split("\nEND_UNTRUSTED_DATA", 1)[0]
+    view = json.loads(raw)["situation_frame"]
+    assert json.loads(raw)["truncation"]["context_reduced"] is True
+    assert view["unknowns"] == list(frame.unknowns) and "KNOWLEDGE_TIMEOUT" in view["unknowns"]
+    assert view["contradictions"] == list(frame.contradictions)
+    assert view["knowledge_status"] == "timeout" and view["deception_status"] == "unavailable"
+    assert view["truncated"] is frame.truncated
+    assert view["schema_version"] == SITUATION_FRAME_SCHEMA_VERSION
+
+
+def test_builder_configuration_is_clamped():
+    builder = MioSituationFrameBuilder(max_event_refs=10_000, future_clock_skew_seconds=10_000)
+    assert builder.max_event_refs == 64
+    assert builder.future_clock_skew_seconds == 60
+    assert MioSituationFrameBuilder(max_event_refs=0).max_event_refs == 1

@@ -249,6 +249,12 @@ class PromptCompiler:
                 "trace_id": frame.trace_id,
                 "current_defensive_state": frame.current_defensive_state,
                 "threat_level": frame.threat_level,
+                "schema_version": frame.schema_version,
+                "unknowns": list(frame.unknowns),
+                "contradictions": list(frame.contradictions),
+                "knowledge_status": frame.knowledge_status,
+                "deception_status": frame.deception_status,
+                "truncated": frame.truncated,
                 "evidence_refs": list(frame.evidence_refs),
             },
             "hypotheses": [

@@ -81,12 +81,12 @@
     "known_facts": [
       "NOC_STATUS=POOR",
       "SOC_STATUS=HIGH",
-      "NOC_REASON=uplink_loss",
-      "NOC_REASON=dns_slow",
-      "SOC_REASON=ssh_bruteforce",
       "SOC_SUSPICION=HIGH",
       "SOC_CONFIDENCE=MEDIUM",
-      "SOC_BLAST=LOW"
+      "SOC_BLAST=LOW",
+      "NOC_REASON=uplink_loss",
+      "SOC_REASON=ssh_bruteforce",
+      "NOC_REASON=dns_slow"
     ],
     "unknowns": [
       "ADMIN_AUTOMATION_STATUS"
@@ -133,6 +133,6 @@
     "freshness_seconds": 20,
     "truncated": false
   },
-  "expected_canonical_json": "{\"contradictions\":[\"HIGH_SOC_RISK_WITH_FRAGILE_NOC\"],\"created_at\":\"2026-01-01T00:01:00Z\",\"current_defensive_state\":\"OBSERVE\",\"deception_status\":\"not_provided\",\"evidence_refs\":[\"ev:noc:0001\",\"ev:soc:0001\",\"ev:auth:0001\",\"ev:auth:0002\"],\"frame_id\":\"frame-golden-v1\",\"freshness_seconds\":20,\"knowledge_refs\":[\"kn:attack:T1110\"],\"knowledge_status\":\"available\",\"known_facts\":[\"NOC_STATUS=POOR\",\"SOC_STATUS=HIGH\",\"NOC_REASON=uplink_loss\",\"NOC_REASON=dns_slow\",\"SOC_REASON=ssh_bruteforce\",\"SOC_SUSPICION=HIGH\",\"SOC_CONFIDENCE=MEDIUM\",\"SOC_BLAST=LOW\"],\"mission\":\"Keep clinic Wi-Fi available while triaging authentication anomalies\",\"noc_summary\":\"status=poor; reasons=uplink_loss,dns_slow\",\"provenance\":{\"contradictions\":[\"frame_builder\"],\"evidence_refs\":[\"evidence_plane\",\"noc_evaluation\",\"soc_evaluation\"],\"freshness_seconds\":[\"evidence_plane\",\"frame_builder\"],\"knowledge_refs\":[\"knowledge\"],\"known_facts\":[\"noc_evaluation\",\"soc_evaluation\"],\"unknowns\":[\"caller\",\"frame_builder\"]},\"schema_version\":\"mio.situation_frame.v1\",\"soc_summary\":\"status=high; reasons=ssh_bruteforce\",\"threat_level\":\"HIGH\",\"trace_id\":\"trace-golden-v1\",\"truncated\":false,\"unknowns\":[\"ADMIN_AUTOMATION_STATUS\"]}",
-  "expected_sha256": "72bbccc394f47233b5f38b5a25206373ce7999ce1f3562d0be0b97e90ef30d4d"
+  "expected_canonical_json": "{\"contradictions\":[\"HIGH_SOC_RISK_WITH_FRAGILE_NOC\"],\"created_at\":\"2026-01-01T00:01:00Z\",\"current_defensive_state\":\"OBSERVE\",\"deception_status\":\"not_provided\",\"evidence_refs\":[\"ev:noc:0001\",\"ev:soc:0001\",\"ev:auth:0001\",\"ev:auth:0002\"],\"frame_id\":\"frame-golden-v1\",\"freshness_seconds\":20,\"knowledge_refs\":[\"kn:attack:T1110\"],\"knowledge_status\":\"available\",\"known_facts\":[\"NOC_STATUS=POOR\",\"SOC_STATUS=HIGH\",\"SOC_SUSPICION=HIGH\",\"SOC_CONFIDENCE=MEDIUM\",\"SOC_BLAST=LOW\",\"NOC_REASON=uplink_loss\",\"SOC_REASON=ssh_bruteforce\",\"NOC_REASON=dns_slow\"],\"mission\":\"Keep clinic Wi-Fi available while triaging authentication anomalies\",\"noc_summary\":\"status=poor; reasons=uplink_loss,dns_slow\",\"provenance\":{\"contradictions\":[\"frame_builder\"],\"evidence_refs\":[\"evidence_plane\",\"noc_evaluation\",\"soc_evaluation\"],\"freshness_seconds\":[\"evidence_plane\",\"frame_builder\"],\"knowledge_refs\":[\"knowledge\"],\"known_facts\":[\"noc_evaluation\",\"soc_evaluation\"],\"unknowns\":[\"caller\",\"frame_builder\"]},\"schema_version\":\"mio.situation_frame.v1\",\"soc_summary\":\"status=high; reasons=ssh_bruteforce\",\"threat_level\":\"HIGH\",\"trace_id\":\"trace-golden-v1\",\"truncated\":false,\"unknowns\":[\"ADMIN_AUTOMATION_STATUS\"]}",
+  "expected_sha256": "d3fcc6194a401d5abeb55487fdce9ed0fd8dd7f14f18d7d2a8440952c14eac9f"
 }

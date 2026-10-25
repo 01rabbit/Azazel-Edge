@@ -40,8 +40,14 @@ A model is never a provenance source. Individual claims stay addressable through
 `to_canonical_json()` = `json.dumps(to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)`
 encoded as ASCII. `canonical_digest()` is its SHA-256. Same normalized snapshot -> identical bytes.
 `from_dict(to_dict())` round-trips to an equal frame (caps are re-applied, truncation is preserved).
-List order follows input order; derived state (facts, unknowns, freshness, provenance)
-does not depend on event order.
+`from_dict()` is closed: the key set must match exactly, every field must have its declared
+type (no stringifying dicts, no silently emptying a non-list), statuses must come from the
+vocabulary, and `knowledge_status="available"` must come with non-empty `knowledge_refs`
+whose provenance includes `knowledge` (and refs are only allowed when available).
+
+Event order never changes the frame: freshness uses the newest timestamp of all events, and the
+event IDs referenced are chosen by severity (desc), then recency (desc), then `event_id`, with
+duplicates collapsed. NOC/SOC `evidence_ids` keep the evaluator's order, which is deterministic.
 
 ## Optional dependencies (Knowledge / AZ-06)
 
@@ -52,6 +58,13 @@ does not depend on event order.
 - `unavailable` / `timeout` / `malformed`: the frame still builds, `KNOWLEDGE_<STATUS>` or
   `DECEPTION_<STATUS>` is placed at the front of `unknowns`, and for Knowledge all
   `knowledge_refs` are dropped. Unavailable is never rendered as empty confidence or fabricated context.
+- `available` with no refs is downgraded to `not_provided` by `build()` and rejected by `from_dict()`.
+  For AZ-06 the v1 frame carries no deception content, so `deception_status` is a status only.
+
+Order of `unknowns`: dependency markers, then builder markers (`NO_TIMESTAMPED_EVIDENCE`,
+`EVIDENCE_STALE`, `EVIDENCE_TIMESTAMP_FUTURE`, `SOC_VISIBILITY=*`, `NOC_DEGRADED_MODE`), then caller
+`explicit_unknowns`; builder contradictions likewise come before caller contradictions. Caller
+input therefore cannot crowd safety markers out of the caps.
 
 The frame carries no deception context fields in v1; AZ-06 state is never Edge authority.
 
@@ -62,18 +75,27 @@ The frame carries no deception context fields in v1; AZ-06 state is never Edge a
 | Serialized frame ceiling | **16384 bytes** of canonical JSON | `_enforce_byte_budget()` trims deterministically, sets `truncated=true` |
 | `known_facts` / `unknowns` / `contradictions` | 16 / 12 / 8 items, 160 chars each | `SITUATION_FRAME_CAPS` |
 | `evidence_refs` / `knowledge_refs` | 32 / 16 items, 128 chars each | `SITUATION_FRAME_CAPS` |
-| Event refs taken from Evidence Plane | 32 (configurable 1-64) | `max_event_refs` |
-| Events scanned per build | 1024 (configurable 1-4096) | `max_events_scanned`; overflow adds `EVENT_SCAN_TRUNCATED` |
+| Event refs taken from Evidence Plane | 32 (configurable 1-64) | `max_event_refs`, chosen by severity/recency/id |
+| Event pass | one O(n) pass, O(`max_event_refs`) memory | input volume affects build time linearly, never frame size |
 | Text fields | mission 240, NOC/SOC summary 480, ids 96 chars | `MioSituationFrame.build` |
 | Build latency target (Pi-class) | <= 250 ms for the worst-case fixture | target only, see below |
 
-Trim order when over the byte ceiling: `evidence_refs`, `knowledge_refs`, `known_facts`,
-`contradictions`, `unknowns` (from the tail), then halve the longest of the NOC/SOC summaries
-and mission. Identity fields and status fields are never trimmed. ASCII content within the
+Trim order when over the byte ceiling: `evidence_refs`, `knowledge_refs` (down to one ref, so
+`available` stays consistent), `known_facts`, `contradictions`, `unknowns` (each from the tail),
+then halve the longest of the NOC/SOC summaries and mission. `known_facts` are emitted most-important
+first (NOC/SOC status, SOC suspicion/confidence/blast, then NOC/SOC reason codes interleaved), so
+the tail trim drops reason codes first. Never trimmed: `schema_version`, `frame_id`, `trace_id`,
+`created_at`, `current_defensive_state`, `threat_level`, both statuses, `provenance`,
+`freshness_seconds`, `truncated`. ASCII content within the
 item caps fits without trimming; astral/control characters (escaped up to 12 bytes each) trigger it.
 
-Because the event scan and every list are capped, raising input traffic does not grow the
-frame or the build cost without bound (`test_input_traffic_volume_does_not_grow_frame`).
+Every list is capped and the event pass keeps only `max_event_refs` candidates, so raising input
+traffic never grows the frame (`test_input_traffic_volume_does_not_grow_frame`). Build time is
+linear in the number of events handed over; the Evidence Plane query window bounds that input.
+A pass cap was rejected because it made freshness depend on event order (a newest event past the cap was missed).
+
+When the untrusted prompt budget forces the minimal view (`PromptCompiler`), it still includes
+`unknowns`, `contradictions`, `truncated`, `knowledge_status`, `deception_status`, and `schema_version`.
 
 ### Worst-case fixtures and how latency is tested
 
@@ -85,7 +107,9 @@ Latency is **measure-and-record**: the best of 3 worst-case builds is written as
 property `situation_frame_worst_case_build_ms`, and the only assertion is a generous 2 s
 regression guard so CI is not flaky. Container or laptop timings are **not Raspberry Pi evidence**.
 The 250 ms Pi-class target remains to be confirmed on real hardware (HIL), e.g. with
-`azazel_edge.mio.resource_profile.ResourceTimer`.
+`azazel_edge.mio.resource_profile.ResourceTimer`. For scale only: one macOS laptop run took about
+70 ms for the 50,000-event worst case. Build time is linear in events, so a Pi may exceed the target
+at that volume; if HIL confirms this, the fix belongs in the Evidence Plane query window, not in an order-dependent pass cap.
 
 ## Trace isolation
 
