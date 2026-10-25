@@ -421,12 +421,19 @@ def test_builder_configuration_is_clamped():
 
 
 @pytest.mark.parametrize("k_status", ["timeout", "malformed", "unavailable", "not_provided"])
-@pytest.mark.parametrize("d_status", ["timeout", "malformed", "unavailable", "not_provided", "available"])
+@pytest.mark.parametrize("d_status", ["timeout", "malformed", "unavailable", "not_provided"])
 def test_round_trip_preserves_dependency_statuses(k_status, d_status):
     frame = _build(dict(_golden_inputs(), knowledge_refs=["kn:x"], knowledge_status=k_status, deception_status=d_status))
     again = MioSituationFrame.from_dict(frame.to_dict())
     assert (again.knowledge_status, again.deception_status) == (k_status, d_status)
     assert again == frame
+
+
+def test_deception_available_is_status_only_and_downgraded_in_v1():
+    # v1 carries no deception content, so "available" has nothing to show.
+    frame = _build(dict(_golden_inputs(), deception_status="available"))
+    assert frame.deception_status == "not_provided"
+    assert MioSituationFrame.from_dict(frame.to_dict()).deception_status == "not_provided"
 
 
 def test_round_trip_rejects_available_without_refs():

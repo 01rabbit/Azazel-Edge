@@ -68,7 +68,8 @@ The builder makes no network or model calls and never reads events itself.
   `DECEPTION_<STATUS>` is placed at the front of `unknowns`, and for Knowledge all
   `knowledge_refs` are dropped. Unavailable is never rendered as empty confidence or fabricated context.
 - `available` with no refs is downgraded to `not_provided` by `build()` and rejected by `from_dict()`.
-  For AZ-06 the v1 frame carries no deception content, so `deception_status` is a status only.
+  For AZ-06 the v1 frame carries no deception content, so `deception_status` is a status only
+  and `available` is always downgraded to `not_provided` until a deception context field exists.
 
 Order of `unknowns`: dependency markers, then builder markers (`NO_TIMESTAMPED_EVIDENCE`,
 `EVIDENCE_STALE`, `EVIDENCE_TIMESTAMP_FUTURE`, `SOC_VISIBILITY=*`, `NOC_DEGRADED_MODE`), then caller
