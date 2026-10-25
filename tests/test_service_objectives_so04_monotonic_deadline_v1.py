@@ -203,6 +203,13 @@ def test_the_gap_may_be_left_out_only_when_every_sample_expired_on_the_monotonic
             id="core started before the monotonic deadline",
         ),
         pytest.param(lambda s: s.update(edge_recorded_start_wall_epoch_ns=s["edge_recorded_start_wall_epoch_ns"] + 10**9), id="the wall deadline fired a second earlier"),
+        # The core's stamp after the harness saw the record: only the upper
+        # bound can catch it (a later stamp only widens the monotonic
+        # overshoot, so the wall check still holds).
+        pytest.param(
+            lambda s: s.update(edge_recorded_start_boottime_ns=s["end_monotonic_ns"] + 1),
+            id="core stamp later than the observed end",
+        ),
         pytest.param(lambda s: s.update(start_record_boot_id=OTHER_BOOT), id="record written in another boot"),
         pytest.param(lambda s: s.update(sample_clock="CLOCK_MONOTONIC"), id="measured on another clock"),
         pytest.param(lambda s: s.update(start_monotonic_ns=s["start_monotonic_ns"] + 1, elapsed_ms=round((s["end_monotonic_ns"] - s["start_monotonic_ns"] - 1) / 1e6, 3)), id="start is not the monotonic deadline"),

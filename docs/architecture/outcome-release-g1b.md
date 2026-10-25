@@ -190,8 +190,21 @@ holds it past its monotonic deadline.
 - A task built when `CLOCK_BOOTTIME` or the boot id cannot be read, and every task
   written before these fields existed, has no monotonic deadline. It keeps wall-clock-only
   expiry; none is invented for it.
-- The first attempt waits only for expiry. Retries after a failed attempt keep their
-  wall-clock backoff (`next_attempt_epoch`), never set before the task's creation.
+- A malformed `due_boot_id` or `due_boottime_ns` (not as the core writes them) does not
+  reject the ledger, which would hold every lease back: that lease's monotonic deadline
+  counts as passed (`boot_invalid`) and only it is rolled back at once.
+- The first attempt waits only for expiry. A retry after a failed attempt waits for its
+  backoff (at least 2 s) on the wall clock (`next_attempt_epoch`) and, for a lease with a
+  monotonic deadline, on `CLOCK_BOOTTIME` (`next_attempt_boottime_ns` /
+  `next_attempt_boot_id`); either can make it due, so a wall clock stepped back cannot
+  hold a retry past its backoff. A retry scheduled in another boot is due at once, and
+  the attempt schedules the next one in this boot. When the boot id or `CLOCK_BOOTTIME`
+  cannot be read, only the wall backoff counts, so a retry is never due on every sweep.
+  The wall retry time may lie before the task's creation once an attempt has been made.
+- Downgrading to a binary older than these fields is safe but lossy: it ignores them, and
+  the first time it rewrites the ledger it drops them, so every lease then silently
+  becomes wall-clock-only (as before this change). The ledger schema version is not
+  bumped because an older binary would then reject the whole ledger and release nothing.
 
 Which deadline expired the lease is recorded as `expiry_clock` in the `rollback_started`
 record and the attempt's outcome:
@@ -202,6 +215,7 @@ record and the attempt's outcome:
 | `wall` | the wall deadline passed first (more than 50 ms before the monotonic one, or the monotonic one had not passed): the wall clock was stepped forward |
 | `boot_changed` | the deadline belongs to another boot |
 | `boot_unknown` | the boot id or `CLOCK_BOOTTIME` cannot be read now, or the task names no boot |
+| `boot_invalid` | the task's own boot id or monotonic deadline is malformed |
 | `legacy` | the task has no monotonic deadline; its wall deadline passed |
 
 ## Rollback-start audit chain
