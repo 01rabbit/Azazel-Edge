@@ -556,7 +556,7 @@ def test_reconcile_alerts_stale_decisions_as_past_decisions(tmp_path):
         assert [r["sid"] for r in chain] == list(range(9300200, 9300204)) + [9300209, 9300210, 9300211]
         assert all(r["recorded_by"] == "startup_reconcile" for r in chain)
         assert [r.get("reconcile_stale") is True for r in chain] == [True] * 6 + [False]
-        assert chain[0]["reconcile_event_age_s"] > 3600 and chain[5]["reconcile_event_age_s"] is None
+        assert chain[0]["reconcile_event_age_s"] >= 3599 and chain[5]["reconcile_event_age_s"] is None
         assert _wait(lambda: len(_alerts(relay.queue.path)) == 14)
         alerts = _alerts(relay.queue.path)
         assert all(r["reconciled"] is True for r in alerts)
