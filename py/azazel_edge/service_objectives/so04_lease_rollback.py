@@ -16,10 +16,13 @@ Definition (assignment section 3, SO-04):
 What is measured here
 --------------------
 Edge's enforcement lease is the Rust core's release task
-(``rust/azazel-edge-core/src/release.rs``): ``ReleaseTask.due_epoch`` is the
-lease's declared expiry, and the core's sweep
-(``process_due_releases_with_runner``) attempts rollback once ``due_epoch`` has
-passed. Immediately before the first rollback command of each attempt, the core
+(``rust/azazel-edge-core/src/release.rs``). It declares two deadlines:
+``due_epoch`` on the wall clock and ``due_boottime_ns`` on ``CLOCK_BOOTTIME``,
+tied to the boot (``due_boot_id``) it was read in. The core's sweep
+(``process_due_releases_with_runner``) attempts rollback once either has passed
+-- the earlier wins (section 4.3) -- and counts the monotonic deadline as
+passed in another boot or when the boot cannot be checked. A lease without the
+monotonic fields (written before they existed) keeps wall-clock-only expiry. Immediately before the first rollback command of each attempt, the core
 appends a ``rollback_started`` record naming the lease (``release_task_id``) and
 the decision (``trace_id``) to its rollback audit chain,
 ``<ledger dir>/<ledger stem>.rollback-audit.jsonl``, and fsyncs it. That chain
@@ -30,10 +33,13 @@ outcome, a ``rust_release_engine_v1`` record, to the normalized-event JSONL.
 The harness runs the **real, unmodified core binary** as a daemon. It writes
 active leases for each declared action type (``throttle``, ``isolate``,
 ``redirect`` -- the only ones ``build_release_task`` accepts) into the release
-ledger before the daemon starts, exactly in the ledger's own schema, then tails
-both files from outside. A sample's end is the instant, on this host's
-``CLOCK_MONOTONIC``, at which the harness first sees the ``rollback_started``
-record naming that lease in the chain; when the harness then sees the lease's
+ledger before the daemon starts, exactly in the ledger's own schema, with both
+deadlines when this host exposes ``CLOCK_BOOTTIME`` and a boot id, then tails
+both files from outside. A sample's start is the lease's monotonic deadline
+and its end the instant, on this host's ``CLOCK_BOOTTIME``, at which the
+harness first sees the ``rollback_started`` record naming that lease in the
+chain (without ``CLOCK_BOOTTIME``: the wall deadline mapped onto
+``CLOCK_MONOTONIC``); when the harness then sees the lease's
 outcome in the JSONL, it checks that the start record was already there. It
 never enables enforcement; the daemon runs with Edge's defaults (enforcement
 off, dry-run on), and its rollback commands run against no owned state.
@@ -45,14 +51,16 @@ the core's own tests (``release.rs``), which stand a command runner in for
 
 Why the start half is still ``not_measurable``
 ----------------------------------------------
-The observed numbers are reported, but two things the definition needs are
-absent, so the part cannot be gate evidence:
+The observed numbers are reported, but the part cannot be gate evidence while
+a gap remains:
 
-* the lease's expiry is declared on the **wall clock** (``SystemTime``), not
-  the issuer's monotonic clock that section 4.3 requires. The start record
-  carries the core's monotonic and wall instants read together, but the
-  expiry itself exists only as a wall-clock instant, and when the core
-  releases is decided against the wall clock;
+* ``SO04-LEASE-EXPIRY-ON-WALL-CLOCK`` is reported unless **every** sample shows
+  that its lease expired on its monotonic deadline: the start record says
+  ``expiry_clock: monotonic``, its own ``CLOCK_BOOTTIME`` stamp is at or after
+  the lease's monotonic deadline, the boot matches, and the wall deadline did
+  not fire first. The validator recomputes this from the samples
+  (``record.so04_monotonic_expiry_observed``); a record cannot drop the gap by
+  saying so;
 * **hostile load is undeclared** (OF-06). The harness floods the core's EVE
   input during half the samples, but that is the harness's own choice of load,
   not a declared one.
@@ -78,6 +86,7 @@ from .record import (
     build_record,
     gap,
     prerequisite,
+    so04_monotonic_expiry_observed,
     spec_for,
     utc_now,
 )
@@ -96,6 +105,28 @@ IFACE = "br0"
 ROLLBACK_STARTED_KIND = "rollback_started"
 ROLLBACK_STARTED_SCHEMA = "azazel-edge/rollback-started/v1"
 _START_RECORD_INT_FIELDS = ("attempt", "lease_due_epoch_ns", "started_monotonic_ns", "started_wall_epoch_ns")
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
+
+
+def boottime_ns() -> Optional[int]:
+    """``CLOCK_BOOTTIME``, the clock the core declares a lease's monotonic deadline on; ``None`` where absent."""
+
+    clock = getattr(time, "CLOCK_BOOTTIME", None)
+    if clock is None:
+        return None
+    try:
+        return time.clock_gettime_ns(clock)
+    except OSError:
+        return None
+
+
+def boot_id() -> str:
+    """This boot's id, as the core reads it; empty where the kernel does not expose one."""
+
+    try:
+        return BOOT_ID_PATH.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
 
 
 def rollback_audit_path(ledger: Path) -> Path:
@@ -112,8 +143,20 @@ def _fnv1a64(data: bytes) -> int:
     return h
 
 
-def make_lease(action: str, index: int, created_epoch: float, due_epoch: float) -> Dict[str, Any]:
-    """A release task as ``build_release_task`` + ``activate_release_task`` leave it."""
+def make_lease(
+    action: str,
+    index: int,
+    created_epoch: float,
+    due_epoch: float,
+    *,
+    due_boottime_ns: Optional[int] = None,
+    due_boot_id: str = "",
+) -> Dict[str, Any]:
+    """A release task as ``build_release_task`` + ``activate_release_task`` leave it.
+
+    Without ``due_boottime_ns`` and ``due_boot_id`` it is a legacy lease, as the
+    core writes one when it cannot read ``CLOCK_BOOTTIME`` or the boot id.
+    """
 
     trace_id = f"so04-{action}-{index:03d}"
     source_ip = f"198.51.100.{(index % 250) + 1}"
@@ -149,6 +192,7 @@ def make_lease(action: str, index: int, created_epoch: float, due_epoch: float) 
         "status": "active",
         "attempts": 0,
         "last_error": "",
+        **({"due_boottime_ns": due_boottime_ns, "due_boot_id": due_boot_id} if due_boottime_ns is not None and due_boot_id else {}),
     }
 
 
@@ -173,7 +217,7 @@ class _Tail(threading.Thread):
         self._pending = {"chain": b"", "events": b""}
         self._chain_lines = 0
 
-    def _read(self, name: str, path: Path) -> tuple[List[bytes], int]:
+    def _read(self, name: str, path: Path) -> tuple[List[bytes], int, Optional[int]]:
         try:
             with path.open("rb") as fh:
                 fh.seek(self._offsets[name])
@@ -183,15 +227,16 @@ class _Tail(threading.Thread):
         # Taken after the read returns, so an observation is never earlier
         # than the write it observed.
         now = time.monotonic_ns()
+        now_boot = boottime_ns()
         if not chunk:
-            return [], now
+            return [], now, now_boot
         self._offsets[name] += len(chunk)
         lines = (self._pending[name] + chunk).split(b"\n")
         self._pending[name] = lines.pop()
-        return lines, now
+        return lines, now, now_boot
 
     def poll_chain(self) -> None:
-        lines, now = self._read("chain", self.chain)
+        lines, now, now_boot = self._read("chain", self.chain)
         for raw in lines:
             line_no = self._chain_lines
             self._chain_lines += 1
@@ -203,10 +248,10 @@ class _Tail(threading.Thread):
                 continue
             tid = str(row.get("release_task_id") or "")
             if tid in self.wanted and tid not in self.starts:
-                self.starts[tid] = {"observed_monotonic_ns": now, "chain_line": line_no, "row": row}
+                self.starts[tid] = {"observed_monotonic_ns": now, "observed_boottime_ns": now_boot, "chain_line": line_no, "row": row}
 
     def poll_events(self) -> None:
-        lines, now = self._read("events", self.events)
+        lines, now, _ = self._read("events", self.events)
         for raw in lines:
             if b"rust_release_engine_v1" not in raw:
                 continue
@@ -255,6 +300,16 @@ def start_record_problems(row: Mapping[str, Any], lease: Mapping[str, Any]) -> L
     due = row.get("lease_due_epoch_ns")
     if isinstance(due, int) and abs(due - round(lease["due_epoch"] * 1e9)) > 1000:
         problems.append("lease_due_epoch_ns disagrees with the ledger")
+    if "due_boottime_ns" in lease:
+        if row.get("lease_due_boottime_ns") != lease["due_boottime_ns"]:
+            problems.append("lease_due_boottime_ns disagrees with the ledger")
+        if row.get("lease_boot_id") != lease.get("due_boot_id"):
+            problems.append("lease_boot_id disagrees with the ledger")
+        stamp = row.get("started_boottime_ns")
+        if not isinstance(stamp, int) or isinstance(stamp, bool):
+            problems.append("started_boottime_ns")
+    elif row.get("lease_due_boottime_ns") is not None:
+        problems.append("lease_due_boottime_ns given for a lease without one")
     return problems
 
 
@@ -268,28 +323,45 @@ def build_samples(
 
     samples: List[Dict[str, Any]] = []
     for lease in leases:
-        start_ns = round(lease["due_epoch"] * 1e9) - offset0
+        monotonic = isinstance(lease.get("due_boottime_ns"), int)
+        if monotonic:
+            start_ns = int(lease["due_boottime_ns"])
+            start_event = "lease due_boottime_ns (its monotonic deadline, CLOCK_BOOTTIME) from the release-ledger record"
+        else:
+            start_ns = round(lease["due_epoch"] * 1e9) - offset0
+            start_event = "lease due_epoch from the release-ledger record, mapped onto the harness monotonic clock"
         row: Dict[str, Any] = {
             "sample_id": lease["task_id"],
             "action_type": lease["action"],
             "condition": {"load": lease.get("_phase", "nominal"), "operator_plane": "unavailable (no operator service running)"},
             "due_epoch": lease["due_epoch"],
+            "sample_clock": "CLOCK_BOOTTIME" if monotonic else "CLOCK_MONOTONIC",
+            "lease_due_boottime_ns": lease["due_boottime_ns"] if monotonic else None,
+            "lease_boot_id": lease.get("due_boot_id", "") if monotonic else "",
             "start_monotonic_ns": start_ns,
-            "start_event": "lease due_epoch from the release-ledger record, mapped onto the harness monotonic clock",
+            "start_event": start_event,
             "end_event": "first rollback_started audit-chain record naming release_task_id, observed in the core's rollback audit chain",
         }
         seen = starts.get(lease["task_id"])
-        if seen:
-            observed = int(seen["observed_monotonic_ns"])
+        observed = seen.get("observed_boottime_ns" if monotonic else "observed_monotonic_ns") if seen else None
+        if seen and isinstance(observed, int):
             end = max(observed, start_ns)
             record = seen["row"]
-            stamp = record.get("started_monotonic_ns")
+
+            def _stamp(key: str) -> Optional[int]:
+                value = record.get(key)
+                return value if isinstance(value, int) and not isinstance(value, bool) else None
+
             row.update({
                 "end_monotonic_ns": end,
                 "elapsed_ms": round((end - start_ns) / 1e6, 3),
                 "start_record_chain_line": seen["chain_line"],
                 "start_record_attempt": record.get("attempt"),
-                "edge_recorded_start_monotonic_ns": stamp if isinstance(stamp, int) and not isinstance(stamp, bool) else None,
+                "edge_recorded_start_monotonic_ns": _stamp("started_monotonic_ns"),
+                "edge_recorded_start_boottime_ns": _stamp("started_boottime_ns"),
+                "edge_recorded_start_wall_epoch_ns": _stamp("started_wall_epoch_ns"),
+                "expiry_clock": str(record.get("expiry_clock") or ""),
+                "start_record_boot_id": str(record.get("boot_id") or ""),
                 "observed_before_expiry": observed < start_ns,
             })
         else:
@@ -331,6 +403,9 @@ def start_record_prerequisites(
         stamp = record.get("started_monotonic_ns")
         if isinstance(stamp, int) and stamp > int(seen["observed_monotonic_ns"]):
             problems.append("started_monotonic_ns later than the harness saw the record")
+        boot_stamp, boot_seen = record.get("started_boottime_ns"), seen.get("observed_boottime_ns")
+        if isinstance(boot_stamp, int) and isinstance(boot_seen, int) and boot_stamp > boot_seen:
+            problems.append("started_boottime_ns later than the harness saw the record")
         wall = record.get("started_wall_epoch_ns")
         if isinstance(stamp, int) and isinstance(wall, int) and abs((wall - stamp) - offset0) > CLOCK_STEP_TOLERANCE_NS:
             offsets.append(lease["task_id"])
@@ -391,6 +466,14 @@ class _EveFlood(threading.Thread):
             time.sleep(0.01)
 
 
+def _expiry_clock_counts(samples: List[Dict[str, Any]]) -> str:
+    counts: Dict[str, int] = {}
+    for s in samples:
+        key = str(s.get("expiry_clock") or "unobserved")
+        counts[key] = counts.get(key, 0) + 1
+    return ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "no samples"
+
+
 def _version(core_bin: Path) -> Optional[str]:
     try:
         out = subprocess.run([str(core_bin), "--version"], capture_output=True, text=True, timeout=10, env={"PATH": os.environ.get("PATH", "")})
@@ -423,6 +506,7 @@ def run(
     daemon_info: Dict[str, Any] = {}
     flood_written = 0
     drift_ns: Optional[int] = None
+    monotonic_leases = False
     per_phase = max(1, leases_per_type // 2)
     if version is not None:
         with tempfile.TemporaryDirectory(prefix="so04-") as tmp:
@@ -433,6 +517,9 @@ def run(
             eve.write_text("", encoding="utf-8")
             offset0 = time.time_ns() - time.monotonic_ns()
             created = time.time()
+            created_boot = boottime_ns()
+            this_boot = boot_id()
+            monotonic_leases = created_boot is not None and bool(this_boot)
             leases: List[Dict[str, Any]] = []
             plan: List[tuple[str, int, str]] = []
             for phase_idx, phase in enumerate(("nominal", "eve_flood")):
@@ -448,7 +535,16 @@ def run(
             for j, (action, index, phase) in enumerate(plan):
                 slot = j if phase == "nominal" else j + 20
                 due = base + slot * 0.1 + rng.uniform(0.0, 0.05)
-                lease = make_lease(action, index, created, due)
+                if monotonic_leases:
+                    # As build_release_task does: both deadlines are the same
+                    # TTL added to clocks read together at creation.
+                    lease = make_lease(
+                        action, index, created, due,
+                        due_boottime_ns=created_boot + round((due - created) * 1e9),
+                        due_boot_id=this_boot,
+                    )
+                else:
+                    lease = make_lease(action, index, created, due)
                 lease["_phase"] = phase
                 leases.append(lease)
             ledger.write_text(json.dumps({
@@ -518,7 +614,7 @@ def run(
                     abs(drift_ns) <= CLOCK_STEP_TOLERANCE_NS and not offset_steps,
                     f"wall-minus-monotonic drift {drift_ns / 1e6:.3f} ms (tolerance {CLOCK_STEP_TOLERANCE_NS / 1e6:.0f} ms); "
                     f"start records whose own wall/monotonic pair is off by more: {len(offset_steps)}; "
-                    "the lease expiry is wall-clock, so a step would move it",
+                    "a step would move the lease's wall deadline, which can still fire first",
                 )
             )
             early = [s["sample_id"] for s in samples if s.get("observed_before_expiry")]
@@ -544,16 +640,17 @@ def run(
         ):
             prerequisites.append(prerequisite(pid, False, "not evaluated: the core binary is not runnable"))
     required = SPEC_START["required_samples"]
-    start_gaps = [
-        gap(
+    start_gaps = []
+    if not so04_monotonic_expiry_observed(samples):
+        start_gaps.append(gap(
             "SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
-            "ReleaseTask.due_epoch is SystemTime (wall clock), and the sweep decides expiry against the wall clock; "
-            "the definition and section 4.3 require the issuer's monotonic clock. The harness maps due_epoch onto "
-            "its monotonic clock and checks for steps, and the rollback_started record carries the core's monotonic "
-            "and wall instants, but the lease declares no monotonic expiry. Declaring one changes when a lease is "
-            "released under a clock step, which is the owner's decision.",
-            refs=["rust/azazel-edge-core/src/main.rs (now_epoch)"],
-        ),
+            "Not every sample shows its lease expiring on its monotonic deadline (CLOCK_BOOTTIME, same boot, "
+            "expiry_clock monotonic, the core's start stamp at or after the deadline, the wall deadline not first). "
+            "Without that, a sample's start is not the issuer's monotonic expiry that the definition and section 4.3 "
+            "require. Samples by expiry_clock: " + _expiry_clock_counts(samples) + ".",
+            refs=["rust/azazel-edge-core/src/release.rs (lease_expiry)"],
+        ))
+    start_gaps += [
         gap(
             "SO04-HOSTILE-LOAD-UNDECLARED",
             "The sample rule requires leases expiring under hostile load; no hostile-load profile or ingress quota is "
@@ -594,10 +691,18 @@ def run(
             "daemon": daemon_info,
         },
         clock={
-            "name": "CLOCK_MONOTONIC",
-            "source": "harness time.monotonic_ns() on the node running the core",
-            "lease_clock": "wall clock (SystemTime) -- see SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
-            "end_clock": "harness CLOCK_MONOTONIC when the rollback_started record first appears in the chain; the record's own started_monotonic_ns is the core's CLOCK_MONOTONIC on the same host",
+            "name": "CLOCK_BOOTTIME" if monotonic_leases else "CLOCK_MONOTONIC",
+            "source": (
+                "harness time.clock_gettime_ns(CLOCK_BOOTTIME) on the node running the core"
+                if monotonic_leases
+                else "harness time.monotonic_ns() on the node running the core"
+            ),
+            "lease_clock": (
+                "earlier of the wall deadline (due_epoch) and the monotonic deadline (due_boottime_ns, CLOCK_BOOTTIME, this boot)"
+                if monotonic_leases
+                else "wall clock only: this host exposes no CLOCK_BOOTTIME or boot id, so the leases are legacy -- see SO04-LEASE-EXPIRY-ON-WALL-CLOCK"
+            ),
+            "end_clock": "harness clock (above) when the rollback_started record first appears in the chain; the record's own started_boottime_ns / started_monotonic_ns are the core's CLOCK_BOOTTIME / CLOCK_MONOTONIC on the same host",
             "wall_minus_monotonic_drift_ns": drift_ns,
         },
         sample_rule={

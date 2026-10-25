@@ -167,6 +167,43 @@ permission/symlink hardening is part of deployment/Pi-HIL validation, not claime
 this slice. Long-term tombstone compaction/migration is also intentionally not automated
 in G1b because an unsafe forget operation can re-enable an old disruptive decision.
 
+## Lease expiry: the earlier of two deadlines
+
+A release task (the lease) declares its expiry twice, from one TTL added to clocks
+read together when the task is built:
+
+- `due_epoch` on the wall clock;
+- `due_boottime_ns` on `CLOCK_BOOTTIME`, with `due_boot_id`
+  (`/proc/sys/kernel/random/boot_id`) naming the boot it belongs to.
+
+The sweep expires the lease at whichever deadline passes first (program plan §4.3,
+"earlier wins"). A monotonic deadline can only shorten a lease, never extend it: a wall
+clock stepped forward still expires a lease early, and one stepped backward no longer
+holds it past its monotonic deadline.
+
+- `CLOCK_BOOTTIME`, not `CLOCK_MONOTONIC`: neither is stepped by `settimeofday` or NTP,
+  but `CLOCK_MONOTONIC` stops while the system is suspended, which would extend every
+  lease by the time spent suspended. `CLOCK_BOOTTIME` keeps counting.
+- Both clocks restart at boot. In any other boot than `due_boot_id`, or when the boot id
+  or `CLOCK_BOOTTIME` cannot be read at the sweep, the monotonic deadline counts as
+  already passed and the lease is rolled back (fail closed), never as "no deadline".
+- A task built when `CLOCK_BOOTTIME` or the boot id cannot be read, and every task
+  written before these fields existed, has no monotonic deadline. It keeps wall-clock-only
+  expiry; none is invented for it.
+- The first attempt waits only for expiry. Retries after a failed attempt keep their
+  wall-clock backoff (`next_attempt_epoch`), never set before the task's creation.
+
+Which deadline expired the lease is recorded as `expiry_clock` in the `rollback_started`
+record and the attempt's outcome:
+
+| `expiry_clock` | meaning |
+| --- | --- |
+| `monotonic` | the `CLOCK_BOOTTIME` deadline passed on this boot |
+| `wall` | the wall deadline passed first (more than 50 ms before the monotonic one, or the monotonic one had not passed): the wall clock was stepped forward |
+| `boot_changed` | the deadline belongs to another boot |
+| `boot_unknown` | the boot id or `CLOCK_BOOTTIME` cannot be read now, or the task names no boot |
+| `legacy` | the task has no monotonic deadline; its wall deadline passed |
+
 ## Rollback-start audit chain
 
 Before the first rollback command of every release attempt, the core appends one
@@ -182,9 +219,11 @@ Before the first rollback command of every release attempt, the core appends one
   The core is its only writer.
 - The record names the lease (`release_task_id`) and the decision (`trace_id`), and
   carries `action`, `resource_key`, `owner_token`, `attempt`, the lease's declared
-  expiry as `lease_due_epoch_ns` (wall clock, as the ledger declares it), and
-  `started_monotonic_ns` / `started_wall_epoch_ns` read together on
-  `CLOCK_MONOTONIC` and the wall clock, plus `boot_id`. Instants are integers so the
+  deadlines as `lease_due_epoch_ns` (wall clock) and `lease_due_boottime_ns` /
+  `lease_boot_id` (`CLOCK_BOOTTIME`; null / empty for a lease without one),
+  `expiry_clock` (above), and `started_monotonic_ns` / `started_boottime_ns` /
+  `started_wall_epoch_ns` read together on `CLOCK_MONOTONIC`, `CLOCK_BOOTTIME` and the
+  wall clock, plus `boot_id`. Instants are integers so the
   Python verifier re-serialises them byte for byte. `record_schema` is
   `azazel-edge/rollback-started/v1`.
 - A failure to write the record does not hold the rollback back: releasing the lease
