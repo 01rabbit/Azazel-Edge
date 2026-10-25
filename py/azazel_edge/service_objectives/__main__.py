@@ -13,13 +13,16 @@ not SHA, so a record carried over from another commit cannot stand in.
 ``--ci`` (CI mode) changes only the exit status, never a verdict. It exits 0
 only if every requested objective has a record, every record is structurally
 valid, every harness actually executed (took its required samples; see
-``record.not_executed_reasons``) and every verdict is ``pass`` or
-``not_measurable``. A ``not_measurable`` that executed is blocked by declared
-gaps; CI shows it in a verdict table written to ``$GITHUB_STEP_SUMMARY`` by
-``validate --ci``. Non-zero: 1 a ``fail``, 3 an invalid or missing record, 4 a
-harness that did not execute (skipped, crashed, or a prerequisite such as root
-missing so no samples were taken). ``validate --ci`` needs ``--objective`` so a
-missing record is detected.
+``record.not_executed_reasons``), every part's pass rule holds (no violation,
+no unfinished sample), every unmet prerequisite is in
+``record.CI_DECLARED_PREREQUISITES`` (empty today), and every verdict is
+``pass`` or ``not_measurable``. So a green ``not_measurable`` is a clean
+measurement blocked only by declared gaps; CI shows it in a verdict table
+written to ``$GITHUB_STEP_SUMMARY`` by ``validate --ci``. Non-zero: 1 a
+``fail``, 2 a ``not_measurable`` over the bound or with unfinished samples,
+3 an invalid or missing record, 4 a harness that did not execute (skipped,
+crashed, root missing so no samples) or a run-health prerequisite unmet.
+``validate --ci`` needs ``--objective`` so a missing record is detected.
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ from .record import (
     ci_exit_code_for,
     exit_code_for,
     load_and_validate,
+    ci_measurement_problems,
     not_executed_reasons,
     prerequisite,
     utc_now,
@@ -147,7 +151,13 @@ def summary_table(rows: Sequence[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-_CI_RESULT = {0: "ok", 1: "FAIL (verdict fail)", 3: "FAIL (invalid or missing record)", 4: "FAIL (harness did not execute, or its result names no commit)"}
+_CI_RESULT = {
+    0: "ok",
+    1: "FAIL (verdict fail)",
+    2: "FAIL (over the bound or unfinished samples, though gap-blocked)",
+    3: "FAIL (invalid or missing record)",
+    4: "FAIL (harness did not execute, or a run-health prerequisite is unmet)",
+}
 
 
 def write_step_summary(title: str, rows: Sequence[Dict[str, Any]], code: int) -> Optional[Path]:
@@ -185,6 +195,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             code = ci_exit_code_for(record, errors)
             for reason in not_executed_reasons(record):
                 print(f"  NOT EXECUTED: {reason}")
+            for reason in ci_measurement_problems(record) if not errors else []:
+                print(f"  CI PROBLEM: {reason}")
             print(f"  ci: {_CI_RESULT.get(code, code)}")
             codes.append(code)
         else:
@@ -241,6 +253,8 @@ def _validate_ci(args: argparse.Namespace, files: List[Path]) -> int:
             print(f"{f}: valid, " + _summary(record))
         for reason in not_executed_reasons(record or {}) if not errors else []:
             print(f"  NOT EXECUTED: {reason}")
+        for reason in ci_measurement_problems(record or {}) if not errors else []:
+            print(f"  CI PROBLEM: {reason}")
         print(f"  ci: {status}")
         codes.append(code)
         if not errors:

@@ -357,20 +357,39 @@ relaxed. Without `--ci` the exit status is as before (0 pass, 1 fail,
 | Record | `--ci` exit | CI |
 |---|---|---|
 | harness did not execute: fewer samples than the `OBJECTIVE_SPECS` row requires (or a per-action shortfall), a crash part, or a pass downgraded for an unidentified commit | 4 | red |
+| executed, but a prerequisite is unmet that is not in `CI_DECLARED_PREREQUISITES` (run health: lab built, daemon started, load applied, wall clock stable, chain verifies, coverage, ...) | 4 | red |
 | invalid record, or a requested objective with no record | 3 | red |
 | verdict `fail` | 1 | red |
-| verdict `not_measurable`, executed and valid | 0 | green, verdict table in the step summary |
+| verdict `not_measurable`, but a part's pass rule does not hold (a violation or an unfinished sample) | 2 | red |
+| verdict `not_measurable`, executed, valid, every part holds, every unmet prerequisite allowlisted: blocked only by declared gaps | 0 | green, verdict table in the step summary |
 | verdict `pass`, executed and valid | 0 | green |
 
 "Executed" is recomputed from the samples against the fixed `OBJECTIVE_SPECS`
 row (`record.not_executed_reasons`), never read from a field the record sets.
 A harness whose environment is missing (no root, no lab, no core binary) takes
-no samples and is red; a harness that took its samples but is blocked by a
-declared gap or a declared-absent prerequisite has executed. `validate --ci`
-writes a table of every part (verdict, executed, samples, max ms, violations,
-blocking gaps, unmet prerequisites) to `$GITHUB_STEP_SUMMARY`, so a green
-`not_measurable` is always visible. It is never a pass and never gate
-evidence (`evidence_class: diagnostic_only`).
+no samples and is red. A full sample count is not enough: a gap-blocked record
+whose samples break the bound (the verdict stays `not_measurable` because
+`derive_verdict` checks gaps first) is red, and so is one whose run-health
+prerequisites failed while its harness still emitted rows.
+
+`CI_DECLARED_PREREQUISITES` (`record.py`) lists, per objective, the
+prerequisites that may be unmet in a green record. Only a prerequisite stating
+a declared structural absence that a declared gap stands for may go there.
+It is empty for every objective today:
+
+| Objective | Allowlisted unmet prerequisites | Why |
+|---|---|---|
+| SO-02 | none | `lab_built`, `no_live_capture_touched`, `edge_stack_answering` are lab health; `every_injection_from_healthy_baseline`, `every_lab_source_type_sampled` are recomputed coverage |
+| SO-03 | none | `visual_voice_delivery_queue_declared` is now observed per sample (#453); the chain, decision-id, P0-class and fsync checks are measurement correctness |
+| SO-04 | none | core present/started, load applied, wall clock stable, chain/order, owned state and readback are run health; `per_action_completion_bound_declared` unmet would mean the declaration file lost a type |
+| SO-07 | none | both are coverage of the kill matrix |
+
+When unsure, a prerequisite stays off the list and its record is red. Adding
+one needs the review a target change needs. `validate --ci` writes a table of
+every part (verdict, executed, samples, max ms, violations, blocking gaps,
+unmet prerequisites, CI result) to `$GITHUB_STEP_SUMMARY`, so a green
+`not_measurable` is always visible. It is never a pass and never gate evidence
+(`evidence_class: diagnostic_only`).
 
 Jobs:
 
@@ -387,7 +406,7 @@ samples with 10 over the 10 s bound (max 33.8 s). Its verdict is
 `not_measurable`, not `fail`, because `derive_verdict` checks blocking gaps
 before the pass rule and SO-02 declares three (`SO02-NOT-NEXUS-INTEGRATED`,
 `SO02-SOURCE-TYPES-UNDECLARED`, `SO02-NO-COMMISSIONED-INTERFACE-IDENTITY`).
-With `--ci` that record is green with the table showing the 10 violations.
-This is intended: the gaps are declared, and the observed numbers are a
-regression signal, not evidence. Once the gaps are closed the same samples
-would make it `fail` and the job red.
+The verdict is unchanged, but with `--ci` that record is red (exit 2: the pass
+rule does not hold), so the lab job stays red until the measured latency is
+within the bound (the link-state re-evaluation in #455 measured a 3.8 s
+maximum). A gap-blocked record is green only when its numbers would pass.

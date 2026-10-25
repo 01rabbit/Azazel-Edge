@@ -648,14 +648,62 @@ def test_ci_exit_fail_is_nonzero(clean_owner):
 
 
 def test_ci_exit_not_measurable_executed_with_declared_gap_is_zero(clean_owner, gapped_so03_spec):
-    # Even with a bound violated: the gap blocks the verdict, the verdict stays
-    # not_measurable, and CI goes green with the record shown in the summary.
-    record = _gapped_record([_sample(0, 10.0), _sample(1, 2500.0), _sample(2, 1.0)])
+    # A clean measurement blocked only by a declared gap: green, verdict kept.
+    record = _gapped_record([_sample(i, 10.0) for i in range(3)])
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert rec.validate_record(record) == []
+    assert rec.ci_measurement_problems(record) == []
     assert rec.ci_exit_code_for(record, []) == rec.EXIT_PASS
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE  # never changed
     assert rec.exit_code_for(record["verdict"]) == rec.EXIT_NOT_MEASURABLE  # default mode unchanged
+
+
+def test_ci_exit_gap_blocked_but_over_the_bound_is_nonzero(clean_owner, gapped_so03_spec):
+    record = _gapped_record([_sample(0, 10.0), _sample(1, 2500.0), _sample(2, 1.0)])
+    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
+    assert rec.validate_record(record) == []
+    assert rec.ci_exit_code_for(record, []) == rec.EXIT_NOT_MEASURABLE
+
+
+def test_ci_exit_gap_blocked_with_unfinished_sample_is_nonzero(clean_owner, gapped_so03_spec):
+    unfinished = dict(_sample(2, 1.0), end_monotonic_ns=None, elapsed_ms=None)
+    record = _gapped_record([_sample(0, 10.0), _sample(1, 1.0), unfinished])
+    assert record["parts"][0]["pass_rule"]["evaluated"]["unfinished_samples"] == 1
+    assert rec.validate_record(record) == []
+    assert rec.ci_exit_code_for(record, []) != rec.EXIT_PASS
+
+
+def test_ci_exit_run_health_prerequisite_unmet_with_full_rows_is_nonzero(clean_owner, monkeypatch):
+    monkeypatch.setitem(
+        rec.OBJECTIVE_SPECS, "SO-03",
+        {"latency": {"kind": rec.RULE_EVERY_SAMPLE_MAX, "bound_ms": 2000.0, "required_samples": 3, "prerequisites": ("core_daemon_started",), "gaps": ()}},
+    )
+    record = _latency_record([_sample(i, 1.0) for i in range(3)], prerequisites=[rec.prerequisite("core_daemon_started", False, "no startup line")])
+    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
+    assert rec.validate_record(record) == []
+    assert rec.not_executed_reasons(record) == []  # rows are full
+    assert rec.ci_exit_code_for(record, []) == rec.EXIT_NOT_EXECUTED
+
+
+def test_ci_declared_prerequisite_allowlist_is_empty_and_covers_every_objective():
+    assert set(rec.CI_DECLARED_PREREQUISITES) == set(rec.OBJECTIVE_SPECS)
+    assert all(not v for v in rec.CI_DECLARED_PREREQUISITES.values())
+
+
+def test_ci_exit_real_so03_record_all_samples_over_the_bound_is_nonzero(real_table):
+    # Review of #456: every sample at 9999 ms (bound 2000) stays not_measurable
+    # because gaps block the verdict, but CI must not go green on it.
+    record = so03_alert_queue.run(seed=1)
+    part = record["parts"][0]
+    for sample in part["samples"]:
+        sample["end_monotonic_ns"] = sample["start_monotonic_ns"] + 9_999_000_000
+        sample["elapsed_ms"] = 9999.0
+    rule = {k: v for k, v in part["pass_rule"].items() if k != "evaluated"}
+    part["pass_rule"]["evaluated"] = rec.evaluate_rule(rule, part["samples"])
+    assert part["pass_rule"]["evaluated"]["violations"] == len(part["samples"])
+    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
+    assert rec.not_executed_reasons(record) == []
+    assert rec.ci_exit_code_for(record, []) != rec.EXIT_PASS
 
 
 def test_ci_exit_not_executed_no_samples_is_nonzero(clean_owner):

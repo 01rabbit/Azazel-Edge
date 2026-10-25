@@ -80,13 +80,16 @@ jobs:
     # harness must not go green"):
     #   harness did not execute (skipped, crashed, root missing) -> red
     #   invalid record, or a requested objective without one   -> red
+    #   run-health prerequisite unmet (CI_DECLARED_PREREQUISITES) -> red
     #   verdict fail                                            -> red
-    #   verdict not_measurable, executed and valid              -> green, with
+    #   not_measurable with a violation or unfinished sample    -> red
+    #   not_measurable, executed, valid, every part holds, only
+    #     declared gaps block it                                -> green, with
     #     the verdict table (samples, max, gaps) in the step summary
     #   verdict pass, executed and valid                        -> green
-    # not_measurable is green only because its gaps are declared in
-    # OBJECTIVE_SPECS; it is never a pass and never gate evidence. Nothing
-    # here enables enforcement.
+    # A green not_measurable is a clean measurement blocked only by gaps
+    # declared in OBJECTIVE_SPECS; it is never a pass and never gate evidence.
+    # Nothing here enables enforcement.
     name: Service objectives (§8 SO-03/04/07)
     runs-on: ubuntu-latest
     steps:
@@ -155,9 +158,9 @@ jobs:
     # main and on workflow_dispatch, not on every branch or pull request. On a
     # pull request this job shows as skipped (the job did not run; it is not a
     # harness result). Same --ci exit semantics as service-objectives: a lab
-    # that did not take its 20 samples is red; an executed not_measurable
-    # (blocked by its three declared SO02-* gaps) is green with the verdict
-    # table in the step summary.
+    # that did not take its 20 samples is red, and so is one whose samples
+    # break the 10 s bound even though its three declared SO02-* gaps keep the
+    # verdict not_measurable. Green only for a clean, gap-blocked measurement.
     name: Service objectives lab (§8 SO-02)
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
