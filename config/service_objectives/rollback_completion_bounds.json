@@ -1,0 +1,58 @@
+{
+  "schema": "azazel-edge/rollback-completion-bounds/v1",
+  "cites": "01rabbit/Azazel:docs/roadmaps/service-objective-assignments.md section 3 SO-04 (Completion) and OF-05",
+  "note": "PROVISIONAL. Derived from container runs of the SO-04 completion harness plus a margin. Not hardware evidence, and not a program-plan section 8 target: those are unchanged. Read only by the service-objective harness and validator; the core never reads this file and nothing here changes when or how a lease is released.",
+  "bounds": [
+    {
+      "action_type": "throttle",
+      "bound_ms": 5000,
+      "status": "provisional",
+      "hardware_class": "container-aarch64, not hardware",
+      "basis": {
+        "method": "py/azazel_edge/service_objectives/so04_rollback_completion.py on main after #439 and #441: real azazel-edge-core daemon (Edge defaults, enforcement off), owned state installed per lease (a TBF root qdisc on a dummy interface per throttle lease, an inet azazel_edge rule per isolate/redirect lease), monotonic lease deadlines (every sample expiry_clock monotonic), start and end both read on CLOCK_BOOTTIME, half the leases expiring under the harness's eve_flood load (2000 EVE alerts/s); docker --cap-add NET_ADMIN on colima, aarch64",
+        "measured_on": "2026-10-25",
+        "runs": 3,
+        "sample_count": 150,
+        "completed": 150,
+        "max_observed_ms": 2237.467,
+        "max_observed_ms_nominal": 915.71,
+        "margin_rule": "twice the max observed, rounded up to the next 1000 ms",
+        "clock_stability": "wall_clock_stable_during_run was unmet in all 3 runs (wall-minus-monotonic drift -107.0, -121.7 and -113.5 ms against a 50 ms tolerance; the colima VM's wall clock was adjusted during each run). Elapsed times are on CLOCK_BOOTTIME and every lease expired on its monotonic deadline, so the drift does not enter them, but no run is clean. Earlier run sets (before #439, and before #441 when throttle never completed) are superseded and not used."
+      }
+    },
+    {
+      "action_type": "isolate",
+      "bound_ms": 5000,
+      "status": "provisional",
+      "hardware_class": "container-aarch64, not hardware",
+      "basis": {
+        "method": "py/azazel_edge/service_objectives/so04_rollback_completion.py on main after #439 and #441: real azazel-edge-core daemon (Edge defaults, enforcement off), owned state installed per lease (a TBF root qdisc on a dummy interface per throttle lease, an inet azazel_edge rule per isolate/redirect lease), monotonic lease deadlines (every sample expiry_clock monotonic), start and end both read on CLOCK_BOOTTIME, half the leases expiring under the harness's eve_flood load (2000 EVE alerts/s); docker --cap-add NET_ADMIN on colima, aarch64",
+        "measured_on": "2026-10-25",
+        "runs": 3,
+        "sample_count": 150,
+        "completed": 150,
+        "max_observed_ms": 2302.73,
+        "max_observed_ms_nominal": 923.61,
+        "margin_rule": "twice the max observed, rounded up to the next 1000 ms",
+        "clock_stability": "wall_clock_stable_during_run was unmet in all 3 runs (wall-minus-monotonic drift -107.0, -121.7 and -113.5 ms against a 50 ms tolerance; the colima VM's wall clock was adjusted during each run). Elapsed times are on CLOCK_BOOTTIME and every lease expired on its monotonic deadline, so the drift does not enter them, but no run is clean. Earlier run sets (before #439, and before #441 when throttle never completed) are superseded and not used."
+      }
+    },
+    {
+      "action_type": "redirect",
+      "bound_ms": 5000,
+      "status": "provisional",
+      "hardware_class": "container-aarch64, not hardware",
+      "basis": {
+        "method": "py/azazel_edge/service_objectives/so04_rollback_completion.py on main after #439 and #441: real azazel-edge-core daemon (Edge defaults, enforcement off), owned state installed per lease (a TBF root qdisc on a dummy interface per throttle lease, an inet azazel_edge rule per isolate/redirect lease), monotonic lease deadlines (every sample expiry_clock monotonic), start and end both read on CLOCK_BOOTTIME, half the leases expiring under the harness's eve_flood load (2000 EVE alerts/s); docker --cap-add NET_ADMIN on colima, aarch64",
+        "measured_on": "2026-10-25",
+        "runs": 3,
+        "sample_count": 150,
+        "completed": 150,
+        "max_observed_ms": 2339.212,
+        "max_observed_ms_nominal": 980.126,
+        "margin_rule": "twice the max observed, rounded up to the next 1000 ms",
+        "clock_stability": "wall_clock_stable_during_run was unmet in all 3 runs (wall-minus-monotonic drift -107.0, -121.7 and -113.5 ms against a 50 ms tolerance; the colima VM's wall clock was adjusted during each run). Elapsed times are on CLOCK_BOOTTIME and every lease expired on its monotonic deadline, so the drift does not enter them, but no run is clean. Earlier run sets (before #439, and before #441 when throttle never completed) are superseded and not used."
+      }
+    }
+  ]
+}

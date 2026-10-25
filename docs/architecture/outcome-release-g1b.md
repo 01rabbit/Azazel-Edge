@@ -200,6 +200,9 @@ holds it past its monotonic deadline.
   hold a retry past its backoff. A retry scheduled in another boot is due at once, and
   the attempt schedules the next one in this boot. When the boot id or `CLOCK_BOOTTIME`
   cannot be read, only the wall backoff counts, so a retry is never due on every sweep.
+  This holds at scheduling time too: if the boot id (or `CLOCK_BOOTTIME`) could not be
+  read when the retry was scheduled, no `CLOCK_BOOTTIME` retry time is written, and that
+  retry waits on the wall backoff only, even if both can be read when it falls due.
   The wall retry time may lie before the task's creation once an attempt has been made.
 - Downgrading to a binary older than these fields is safe but lossy: it ignores them, and
   the first time it rewrites the ledger it drops them, so every lease then silently
@@ -257,6 +260,13 @@ Before the first rollback command of every release attempt, the core appends one
 
 The SO-04 harness (`py/azazel_edge/service_objectives/so04_lease_rollback.py`) uses
 this record as the end event of "rollback starts within 5 seconds of expiry".
+
+The completion half of SO-04 (`so04_rollback_completion.py`) ends at the first
+`released` / `rollback_applied_and_absence_verified` outcome for the lease and is
+judged against the per-action bound Edge declares in
+`config/service_objectives/rollback_completion_bounds.json` (OF-05). Those bounds
+are provisional and container-derived; see
+`docs/architecture/service-objective-declarations.md`.
 
 ## Lifecycle
 

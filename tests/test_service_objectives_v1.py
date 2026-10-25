@@ -253,7 +253,9 @@ def test_so04_missing_core_binary_is_not_measurable(tmp_path, real_table):
     assert start["samples"] == []
     assert {p["id"]: p["met"] for p in start["prerequisites"]}["core_binary_present"] is False
     assert completion["verdict"] == rec.VERDICT_NOT_MEASURABLE
-    assert [g["id"] for g in completion["gaps"]] == ["OF-05"]
+    # OF-05 is declared (provisionally); the provisional bound itself blocks.
+    assert "SO04-COMPLETION-BOUND-PROVISIONAL" in [g["id"] for g in completion["gaps"]]
+    assert {p["id"]: p["met"] for p in completion["prerequisites"]}["core_binary_present"] is False
 
 
 def test_so04_completion_half_can_never_pass(real_table):

@@ -10,8 +10,10 @@ Definition (assignment section 3, SO-04):
 * samples -- 50 leases per declared action type, including leases expiring
   under hostile load and while the operator plane is unavailable;
 * pass -- every sample starts <= 5 seconds after expiry;
-* completion -- deliberately not bounded: no action type declares a completion
-  bound (OF-05). That half is reported ``not_measurable``, never passing.
+* completion -- "action-specific" (OF-05): measured by
+  ``so04_rollback_completion`` against the per-action bounds Edge declares in
+  ``config/service_objectives/rollback_completion_bounds.json``. Those bounds
+  are provisional, so that half stays ``not_measurable``.
 
 What is measured here
 --------------------
@@ -151,6 +153,7 @@ def make_lease(
     *,
     due_boottime_ns: Optional[int] = None,
     due_boot_id: str = "",
+    iface: str = IFACE,
 ) -> Dict[str, Any]:
     """A release task as ``build_release_task`` + ``activate_release_task`` leave it.
 
@@ -163,7 +166,7 @@ def make_lease(
     destination_port = 22
     redirect_port = 2222
     resource_key = {
-        "throttle": f"tc:root:{IFACE}",
+        "throttle": f"tc:root:{iface}",
         "isolate": f"nft:inet:azazel_edge:input:{source_ip}",
         "redirect": f"nft:inet:azazel_edge:prerouting:{source_ip}:tcp:{destination_port}",
     }[action]
@@ -177,7 +180,7 @@ def make_lease(
         "action": action,
         "resource_key": resource_key,
         "owner_token": owner_token,
-        "iface": IFACE,
+        "iface": iface,
         "tc_handle": tc_handle,
         "source_ip": source_ip,
         "destination_port": destination_port,
@@ -313,6 +316,21 @@ def start_record_problems(row: Mapping[str, Any], lease: Mapping[str, Any]) -> L
     return problems
 
 
+def lease_start(lease: Mapping[str, Any], offset0: int) -> tuple[int, bool, str]:
+    """A sample's start for this lease: (instant, on CLOCK_BOOTTIME?, start_event).
+
+    Both SO-04 halves start here, so their starts are identical.
+    """
+
+    if isinstance(lease.get("due_boottime_ns"), int):
+        return int(lease["due_boottime_ns"]), True, "lease due_boottime_ns (its monotonic deadline, CLOCK_BOOTTIME) from the release-ledger record"
+    return (
+        round(lease["due_epoch"] * 1e9) - offset0,
+        False,
+        "lease due_epoch from the release-ledger record, mapped onto the harness monotonic clock",
+    )
+
+
 def build_samples(
     leases: List[Dict[str, Any]],
     starts: Mapping[str, Mapping[str, Any]],
@@ -323,13 +341,7 @@ def build_samples(
 
     samples: List[Dict[str, Any]] = []
     for lease in leases:
-        monotonic = isinstance(lease.get("due_boottime_ns"), int)
-        if monotonic:
-            start_ns = int(lease["due_boottime_ns"])
-            start_event = "lease due_boottime_ns (its monotonic deadline, CLOCK_BOOTTIME) from the release-ledger record"
-        else:
-            start_ns = round(lease["due_epoch"] * 1e9) - offset0
-            start_event = "lease due_epoch from the release-ledger record, mapped onto the harness monotonic clock"
+        start_ns, monotonic, start_event = lease_start(lease, offset0)
         row: Dict[str, Any] = {
             "sample_id": lease["task_id"],
             "action_type": lease["action"],
@@ -665,14 +677,12 @@ def run(
         samples=samples,
         prerequisites=prerequisites,
         gaps=start_gaps,
+        per_action_required=SPEC_START.get("per_action_samples", 0),
     )
-    completion_part = build_part(
-        name="rollback_completion",
-        pass_rule={"kind": RULE_EVERY_SAMPLE_MAX, "bound_ms": SPEC_COMPLETION["bound_ms"], "description": "action-specific completion bound -- none declared"},
-        required_samples=SPEC_COMPLETION["required_samples"],
-        samples=[],
-        prerequisites=[prerequisite("per_action_completion_bound_declared", False, "no action type declares a rollback completion bound (OF-05)")],
-        gaps=[gap("OF-05", "Completion is action-specific and no action type declares a bound; section 4.3 ROLLBACK_INCOMPLETE has no time bound.", refs=["OF-05"])],
+    from . import so04_rollback_completion
+
+    completion_part = so04_rollback_completion.measure(
+        core=core, version=version, leases_per_type=leases_per_type, seed=seed, flood_rate_per_s=flood_rate_per_s
     )
     return build_record(
         objective_id=OBJECTIVE_ID,
