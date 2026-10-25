@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import smtplib
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib.request import Request, urlopen
@@ -10,10 +12,31 @@ from email.message import EmailMessage
 
 from azazel_edge._util import iso_utc_now
 from azazel_edge.audit import P0AuditLogger
+from azazel_edge.audit.logger import fsync_path
 
 
 class NotificationError(RuntimeError):
     pass
+
+
+# Alert class, recorded for measurement only (Edge#414, SO-03). Nothing reads
+# it to route, rank, suppress or escalate an alert: the adapters, their order
+# and the level are what they were before the class existed. Which decisions
+# are P0 is the owner's to define; this rule names the only alert Edge treats
+# as most urgent today (an arbiter 'notify' at level 'critical').
+ALERT_CLASS_P0 = 'P0'
+ALERT_CLASS_RULE = 'edge-alert-class/v1:notify-at-critical-is-P0'
+
+
+def classify_alert(action: str, level: str) -> str:
+    return ALERT_CLASS_P0 if str(action) == 'notify' and str(level) == 'critical' else ''
+
+
+def _boot_id() -> str:
+    try:
+        return Path('/proc/sys/kernel/random/boot_id').read_text(encoding='utf-8').strip()
+    except Exception:
+        return ''
 
 
 class NtfyNotifier:
@@ -198,8 +221,26 @@ class OfflineQueueNotifier:
             'level': str(payload.get('level') or 'info'),
             'incident_id': str(payload.get('incident_id') or ''),
             'operator_wording': str(payload.get('operator_wording') or ''),
+            # The enqueue record names the decision it alerts on, and carries
+            # its class (record-only) and the instant it was enqueued on the
+            # Edge node's CLOCK_MONOTONIC (comparable only within boot_id).
+            'decision_id': str(payload.get('decision_id') or ''),
+            'alert_class': str(payload.get('alert_class') or ''),
             'queued_at': iso_utc_now(),
+            'enqueued_monotonic_ns': time.monotonic_ns(),
+            'boot_id': _boot_id(),
         }
+
+    def _write_entries(self, entries: List[Dict[str, Any]]) -> None:
+        # Durable replace: a crash leaves either the old queue or the new one,
+        # never a truncated file, and the new one is on disk before return.
+        tmp = self.queue_path.with_name(self.queue_path.name + '.tmp')
+        with tmp.open('w', encoding='utf-8') as fh:
+            for entry in entries:
+                fh.write(json.dumps(entry, ensure_ascii=True, separators=(',', ':')) + '\n')
+        fsync_path(tmp)
+        os.replace(tmp, self.queue_path)
+        fsync_path(self.queue_path.parent)
 
     def send(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         summary = self._summary_payload(payload)
@@ -214,9 +255,7 @@ class OfflineQueueNotifier:
             existing.append(summary)
             if len(existing) > self.max_queue_entries:
                 existing = existing[-self.max_queue_entries:]
-            with self.queue_path.open('w', encoding='utf-8') as fh:
-                for entry in existing:
-                    fh.write(json.dumps(entry, ensure_ascii=True, separators=(',', ':')) + '\n')
+            self._write_entries(existing)
             return {'ok': True, 'adapter': 'offline_queue', 'queued': len(existing)}
         except Exception as exc:
             return {'ok': False, 'adapter': 'offline_queue', 'error': str(exc)}
@@ -243,9 +282,7 @@ class OfflineQueueNotifier:
                 failed += 1
                 undelivered.append(entry)
         if undelivered:
-            with self.queue_path.open('w', encoding='utf-8') as fh:
-                for entry in undelivered:
-                    fh.write(json.dumps(entry, ensure_ascii=True, separators=(',', ':')) + '\n')
+            self._write_entries(undelivered)
         else:
             self.queue_path.unlink(missing_ok=True)
         return {'flushed': flushed, 'failed': failed, 'remaining': len(undelivered)}
@@ -262,11 +299,19 @@ class DecisionNotifier:
         self.audit = audit_logger
         self.summary_only = bool(summary_only)
 
-    def notify(self, arbiter: Dict[str, Any], explanation: Dict[str, Any], target: str) -> Dict[str, Any]:
+    def notify(self, arbiter: Dict[str, Any], explanation: Dict[str, Any], target: str, *, decision_id: str = '') -> Dict[str, Any]:
+        # decision_id is the trace_id of the decision's action_decision audit
+        # record. It is carried into the enqueue record and the notification
+        # audit record so each names the decision it alerts on (Edge#414,
+        # SO-03). It does not change what is sent, to whom, or whether.
+        decision_id = str(decision_id or '')
         action = str(arbiter.get('action') or '')
         if action != 'notify':
             result = {'ok': False, 'skipped': True, 'reason': 'action_not_notify'}
-            self.audit.log('notification', trace_id=target, source='decision_notifier', decision='skipped', payload=result)
+            self.audit.log(
+                'notification', trace_id=target, source='decision_notifier', decision='skipped', payload=result,
+                decision_id=decision_id, alert_class='', alert_class_rule=ALERT_CLASS_RULE,
+            )
             return result
 
         payload = {
@@ -278,6 +323,14 @@ class DecisionNotifier:
             'operator_wording': str(explanation.get('operator_wording') or ''),
             'incident_id': str((((explanation.get('why_chosen') or {}) if isinstance(explanation.get('why_chosen'), dict) else {}).get('incident_summary') or {}).get('incident_id') or ''),
             'runbook_candidate_id': str((((explanation.get('why_chosen') or {}) if isinstance(explanation.get('why_chosen'), dict) else {}).get('runbook_support') or {}).get('runbook_candidate_id') or ''),
+            'decision_id': decision_id,
+        }
+        # Record-only: computed after the level, read by nothing below.
+        payload['alert_class'] = classify_alert(action, payload['level'])
+        record_fields = {
+            'decision_id': decision_id,
+            'alert_class': payload['alert_class'],
+            'alert_class_rule': ALERT_CLASS_RULE,
         }
 
         send_payload = self._payload_for_adapter(payload)
@@ -296,14 +349,14 @@ class DecisionNotifier:
                     'attempts': attempts,
                     'payload': send_payload,
                 }
-                self.audit.log('notification', trace_id=target, source='decision_notifier', decision='sent', payload=audit_result)
+                self.audit.log('notification', trace_id=target, source='decision_notifier', decision='sent', payload=audit_result, **record_fields)
                 return audit_result
             except Exception as exc:
                 errors.append(str(exc))
                 attempts.append({'adapter': adapter, 'ok': False, 'error': str(exc)})
 
         failed = {'ok': False, 'errors': errors, 'attempts': attempts, 'payload': send_payload}
-        self.audit.log('notification', trace_id=target, source='decision_notifier', decision='failed', payload=failed)
+        self.audit.log('notification', trace_id=target, source='decision_notifier', decision='failed', payload=failed, **record_fields)
         return failed
 
     def _payload_for_adapter(self, payload: Dict[str, Any]) -> Dict[str, Any]:

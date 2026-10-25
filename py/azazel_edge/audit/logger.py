@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import json
 import hashlib
+import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +23,29 @@ VALID_KINDS = {
     'triage_handoff',
     'triage_completed',
 }
+
+# Kinds whose record must be on disk when log() returns: the arbiter's decision
+# and the alert enqueued for it (Edge#414, SO-03: "the decision record is
+# durable" and "a durable record naming the decision id"). These are written
+# once per decision, not per event, so the fsync cost stays off the event path.
+# The chain format is unchanged; only when log() returns is.
+DURABLE_KINDS = frozenset({'action_decision', 'notification'})
+
+
+# A file system that cannot sync at all answers fsync with one of these;
+# there is nothing more to do there. Any other error (EIO, ENOSPC) raises.
+_FSYNC_UNSUPPORTED = frozenset({errno.EINVAL, getattr(errno, 'ENOTSUP', errno.EINVAL), getattr(errno, 'EOPNOTSUPP', errno.EINVAL)})
+
+
+def fsync_path(path: Path) -> None:
+    fd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    except OSError as exc:
+        if exc.errno not in _FSYNC_UNSUPPORTED:
+            raise
+    finally:
+        os.close(fd)
 
 
 class P0AuditLogger:
@@ -82,9 +107,19 @@ class P0AuditLogger:
             }
             record.update(payload)
             record['chain_hash'] = self._compute_chain_hash(record)
+            created = not self.path.exists()
             with self.path.open('a', encoding='utf-8') as fh:
                 fh.write(json.dumps(record, ensure_ascii=True, separators=(',', ':')) + '\n')
             self._last_chain_hash = str(record['chain_hash'])
+            if kind in DURABLE_KINDS:
+                # After close, through a separate descriptor: fsync flushes the
+                # file, not the descriptor, and the write/close sequence above
+                # stays exactly what it was. A new file also needs its
+                # directory entry on disk. A failure raises: the caller must
+                # not be told a record is durable when it may not be.
+                fsync_path(self.path)
+                if created:
+                    fsync_path(self.path.parent)
             # Emit-alongside: project into the shared Azazel-Fabric AuditEvent on a
             # SEPARATE, non-interleaved file. The chained log above is complete and
             # untouched; verify_chain() is unaffected (plan §3.3). Best-effort.

@@ -86,15 +86,17 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
             "kind": "every_sample_max_elapsed",
             "bound_ms": 2000.0,
             "required_samples": 200,
+            # The last three are recomputed from the samples by the validator.
             "prerequisites": (
                 "visual_voice_delivery_queue_declared",
+                "alert_audit_chain_verifies",
                 "enqueue_record_names_decision_id",
-                "synthetic_decisions_are_p0_stand_ins",
+                "enqueue_record_classifies_p0",
+                "decision_and_enqueue_records_fsynced",
             ),
             "gaps": (
                 "SO03-NO-VISUAL-VOICE-QUEUE",
-                "SO03-ENQUEUE-RECORD-LACKS-DECISION-ID",
-                "SO03-NO-P0-CLASS-OR-PATH",
+                "SO03-NO-P0-ALERT-PATH",
             ),
         },
     },
@@ -167,7 +169,11 @@ _COMMON_SAMPLE_FIELDS = ("sample_id", "start_monotonic_ns", "end_monotonic_ns", 
 SAMPLE_FIELDS: Dict[str, frozenset] = {
     "SO-03": frozenset(
         _COMMON_SAMPLE_FIELDS
-        + ("action", "reason", "level", "enqueue_record_names_decision", "notification_audit_names_decision")
+        + (
+            "action", "reason", "level", "enqueue_record_decision_id", "notification_audit_decision_id",
+            "enqueue_record_alert_class", "edge_enqueued_monotonic_ns", "decision_record_fsynced",
+            "enqueue_record_fsynced",
+        )
     ),
     "SO-04": frozenset(
         _COMMON_SAMPLE_FIELDS
@@ -510,6 +516,36 @@ def _recomputed_latency_samples(samples: Sequence[Mapping[str, Any]]) -> List[Di
     return out
 
 
+def so03_enqueue_observed(sample: Mapping[str, Any]) -> bool:
+    """SO-03: the sample's enqueue record and notification audit record name
+    its decision (the sample id), and the Edge enqueue stamp lies inside the
+    sample's window, so the record is this sample's and not an earlier one."""
+
+    sid = sample.get("sample_id")
+    stamps = (sample.get("start_monotonic_ns"), sample.get("edge_enqueued_monotonic_ns"), sample.get("end_monotonic_ns"))
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in stamps):
+        return False
+    return (
+        isinstance(sid, str)
+        and bool(sid)
+        and sample.get("enqueue_record_decision_id") == sid
+        and sample.get("notification_audit_decision_id") == sid
+        and stamps[0] <= stamps[1] <= stamps[2]
+    )
+
+
+def so03_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[str, bool]:
+    """SO-03 record prerequisites, recomputed from every sample's observed fields."""
+
+    items = list(samples)
+    return {
+        "enqueue_record_names_decision_id": bool(items) and all(so03_enqueue_observed(s) for s in items),
+        "enqueue_record_classifies_p0": bool(items) and all(s.get("enqueue_record_alert_class") == "P0" for s in items),
+        "decision_and_enqueue_records_fsynced": bool(items)
+        and all(s.get("decision_record_fsynced") is True and s.get("enqueue_record_fsynced") is True for s in items),
+    }
+
+
 def _so07_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[str, bool]:
     """SO-07 coverage, recomputed from the samples against the code's record kinds."""
 
@@ -690,6 +726,15 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
             if gid not in have_gaps:
                 errors.append(f"{where}: mandatory gap {gid!r} omitted")
                 effective_gaps.append({"id": gid, "blocks_verdict": True})
+        if objective == "SO-03" and part["name"] == "decision_durable_to_alert_enqueued":
+            # The record prerequisites are what the samples show, never what
+            # the record declares.
+            so03_observed = so03_observed_prerequisites([s for s in part["samples"] if isinstance(s, dict)])
+            for p in effective_prereqs:
+                if p["id"] in so03_observed:
+                    if p["met"] and not so03_observed[p["id"]]:
+                        errors.append(f"{where}: prerequisite {p['id']!r} declared met but the samples do not show it")
+                    p["met"] = bool(p["met"]) and so03_observed[p["id"]]
 
         if spec["kind"] == RULE_ZERO_VIOLATIONS:
             for sidx, sample in enumerate(part["samples"]):
