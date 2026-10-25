@@ -49,6 +49,8 @@ Grounding Validator
 M.I.O. Recommendation (executable=false)
 ```
 
+Broker contract, budgets and audit projection: [mio-capability-broker.md](mio-capability-broker.md).
+
 No code in `py/azazel_edge/mio/` calls the Action Arbiter, enforcement handlers, nftables/iptables/tc, Docker, AZ-06 activation, or arbitrary shell execution.
 
 ## Authority boundary

@@ -283,6 +283,10 @@ class MioCapabilityRequest:
     trace_id: str
     capability: str
     arguments: Mapping[str, Any] = field(default_factory=dict)
+    # Hypothesis IDs this request is meant to discriminate (audit only).
+    purpose_hypothesis_ids: tuple[str, ...] = ()
+    # Optional tighter freshness requirement; the broker applies min(spec, request).
+    max_age_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -293,6 +297,20 @@ class MioCapabilityResult:
     data: Mapping[str, Any]
     evidence_refs: tuple[str, ...] = ()
     error: str = ""
+    # Broker-assigned execution metadata (#384). Adapters cannot set these.
+    status: str = "ok"  # ok|unavailable|timeout|stale|rejected|invalid|truncated|error
+    source_component: str = ""
+    source_timestamp: str = ""
+    retrieved_at: str = ""
+    age_seconds: int | None = None
+    max_age_seconds: int | None = None
+    latency_ms: int = 0
+    result_chars: int = 0
+    truncated: bool = False
+    limitations: tuple[str, ...] = ()
+    # Free-form strings from adapters may originate from attacker-facing
+    # sources: they are data, never instructions.
+    trust: str = "untrusted_data"
 
 
 @dataclass(frozen=True)
