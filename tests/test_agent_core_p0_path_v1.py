@@ -304,6 +304,8 @@ def test_decisions_taken_while_the_agent_is_down_are_reconciled_once(tmp_path, r
         assert _wait(lambda: len(_alerts(agent.queue)) == 4)
         # Marked as not live, with the event's own time.
         assert all(r["reconciled"] is True and r["recorded_by"] == "startup_reconcile" and r["event_ts"] for r in _alerts(agent.queue))
+        # Within the lease: current alerts, not past decisions.
+        assert all(r["stale"] is False and r["presentation"] == "current" for r in _alerts(agent.queue))
         first = _statuses(agent.queue, "core_reconcile")
         assert len(first) == 1 and first[0]["core_reconciled"] == 2 and first[0]["core_reconcile"] == "done"
         # Live again.
@@ -521,13 +523,7 @@ def test_the_start_path_is_idempotent_and_survives_an_unusable_directory(monkeyp
         relay.stop()
 
 
-def test_reconcile_does_not_alert_stale_decisions(tmp_path):
-    """First start (empty chain) on an old log: decisions older than the
-    bound are counted as stale, not alerted; recent ones are, marked as
-    reconciled."""
-
-    audit = P0AuditLogger(tmp_path / "core-decision-audit.jsonl")
-    relay = attach_p0_alert_relay(audit, tmp_path / "p0-alert-queue.jsonl")
+def _stale_log(tmp_path: Path) -> tuple:
     log = tmp_path / "normalized-events.jsonl"
     old = [fresh(core_event("isolate", f"o{n}", 9300200 + n), -3600 - n) for n in range(4)]
     just_over = fresh(core_event("throttle", "o9", 9300209), -core_decisions.DEFAULT_RECONCILE_MAX_AGE_S - 5)
@@ -536,20 +532,124 @@ def test_reconcile_does_not_alert_stale_decisions(tmp_path):
     undated["normalized"].pop("ingest_epoch")
     recent = fresh(core_event("throttle", "r", 9300211), -30)
     log.write_text("".join(json.dumps(e) + "\n" for e in old + [just_over, undated, recent]), encoding="utf-8")
+    return log, recent
+
+
+def test_reconcile_alerts_stale_decisions_as_past_decisions(tmp_path):
+    """First start (empty chain) on an old log (Edge#462 item 5, option b):
+    decisions older than the bound, or of unknown time, are recorded and
+    alerted, marked stale and presented as past decisions; the recent one is
+    a current (reconciled) alert."""
+
+    audit = P0AuditLogger(tmp_path / "core-decision-audit.jsonl")
+    relay = attach_p0_alert_relay(audit, tmp_path / "p0-alert-queue.jsonl")
+    log, recent = _stale_log(tmp_path)
     recorder = CoreDecisionRecorder(audit, relay, log).start()
     try:
         assert recorder.ready.wait(10)
         status = recorder.last_reconcile
-        assert status["core_reconcile_stale"] == 6 and status["core_reconciled"] == 1
+        assert status["core_reconcile_stale"] == 6 and status["core_reconciled_stale"] == 6
+        assert status["core_reconciled"] == 7
         assert status["core_reconcile_max_age_s"] == core_decisions.DEFAULT_RECONCILE_MAX_AGE_S
-        assert [r["sid"] for r in _rows(audit.path)] == [9300211]
-        assert _wait(lambda: len(_alerts(relay.queue.path)) == 2)
+        assert recorder.metrics()["core_reconciled_stale_total"] == 6
+        chain = _rows(audit.path)
+        assert [r["sid"] for r in chain] == list(range(9300200, 9300204)) + [9300209, 9300210, 9300211]
+        assert all(r["recorded_by"] == "startup_reconcile" for r in chain)
+        assert [r.get("reconcile_stale") is True for r in chain] == [True] * 6 + [False]
+        assert chain[0]["reconcile_event_age_s"] > 3600 and chain[5]["reconcile_event_age_s"] is None
+        assert _wait(lambda: len(_alerts(relay.queue.path)) == 14)
         alerts = _alerts(relay.queue.path)
-        assert all(r["reconciled"] is True and r["event_ts"] == recent["normalized"]["ts"] for r in alerts)
-        assert _statuses(relay.queue.path, "core_reconcile")[0]["core_reconcile_stale"] == 6
+        assert all(r["reconciled"] is True for r in alerts)
+        current = [r for r in alerts if r["event_ts"] == recent["normalized"]["ts"]]
+        assert len(current) == 2
+        assert all(r["stale"] is False and r["presentation"] == "current" for r in current)
+        assert all(not r["display_text"].startswith("【過去の判定") for r in current)
+        assert [r["voice_urgent"] for r in current if r["channel"] == "voice"] == [True]
+        past = [r for r in alerts if r not in current]
+        assert len(past) == 12
+        assert all(r["stale"] is True and r["presentation"] == "historical" and r["event_ts"] for r in past)
+        assert all(r["voice_urgent"] is False for r in past if r["channel"] == "voice")
+        assert all(r["display_text"].startswith("【過去の判定（") for r in past if r["channel"] == "visual")
+        assert all(r["display_text"].startswith("過去の判定（") and "現在の警報ではありません" in r["display_text"]
+                   for r in past if r["channel"] == "voice")
+        assert sum("時刻不明" in r["display_text"] for r in past) == 2  # the undated one, both channels
+        assert _statuses(relay.queue.path, "core_reconcile")[0]["core_reconciled_stale"] == 6
     finally:
         recorder.stop()
         relay.stop()
+
+
+def test_stale_decisions_are_alerted_once_across_restarts(tmp_path):
+    """A stale decision is in the chain under its core event key after the
+    first start: the next start neither records nor alerts it again, and the
+    relay's chain cursor resumes where it was."""
+
+    chain_path = tmp_path / "core-decision-audit.jsonl"
+    queue_path = tmp_path / "p0-alert-queue.jsonl"
+    log, _ = _stale_log(tmp_path)
+    for start in range(3):
+        audit = P0AuditLogger(chain_path)
+        relay = attach_p0_alert_relay(audit, queue_path)
+        recorder = CoreDecisionRecorder(audit, relay, log).start()
+        try:
+            assert recorder.ready.wait(10) and relay.ready.wait(10)
+            assert recorder.wait_idle(10) and relay.wait_idle(10)
+            status = recorder.last_reconcile
+            if start == 0:
+                assert status["core_reconciled"] == 7 and status["core_reconciled_stale"] == 6
+            else:
+                assert status["core_reconciled"] == 0 and status["core_reconciled_stale"] == 0
+                assert status["core_reconcile_stale"] == 0
+            assert _wait(lambda: len(_alerts(queue_path)) == 14)
+        finally:
+            recorder.stop()
+            relay.stop()
+    assert len(_rows(chain_path)) == 7
+    started = _statuses(queue_path, "started")
+    assert [s["reconcile"] for s in started] == ["fresh_queue", "cursor_found", "cursor_found"]
+    assert all(s["reconciled"] == 0 and s["unreconcilable"] == 0 for s in started)
+    time.sleep(0.3)
+    assert len(_alerts(queue_path)) == 14
+    assert len({r["decision_id"] for r in _alerts(queue_path)}) == 7
+
+
+def test_a_long_outage_does_not_flood_the_queue(tmp_path):
+    """Stale and fresh decisions share the one reconcile bound: the newest
+    ``max_reconcile`` are recorded, the rest counted as skipped."""
+
+    audit = P0AuditLogger(tmp_path / "core-decision-audit.jsonl")
+    relay = attach_p0_alert_relay(audit, tmp_path / "p0-alert-queue.jsonl")
+    log = tmp_path / "normalized-events.jsonl"
+    events = [fresh(core_event("isolate", f"x{n}", 9300600 + n), -7200 + n) for n in range(10)]
+    events.append(fresh(core_event("throttle", "y", 9300699), -10))
+    log.write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+    recorder = CoreDecisionRecorder(audit, relay, log, max_reconcile=4).start()
+    try:
+        assert recorder.ready.wait(10)
+        status = recorder.last_reconcile
+        assert status["core_reconcile_stale"] == 10 and status["core_reconcile_skipped"] == 7
+        assert status["core_reconciled"] == 4 and status["core_reconciled_stale"] == 3
+        assert [r["sid"] for r in _rows(audit.path)] == [9300607, 9300608, 9300609, 9300699]
+    finally:
+        recorder.stop()
+        relay.stop()
+    assert core_decisions.DEFAULT_MAX_RECONCILE == 256
+
+
+def test_render_marks_past_decisions_and_never_makes_them_urgent():
+    from azazel_edge.notify.p0_alert import render_p0_alert
+
+    base = {"action": "isolate", "target": "t", "reason": "r", "event_ts": "2026-10-26T01:02:03.000000+0000"}
+    live = render_p0_alert(dict(base, channel="voice", stale=False, presentation="current"))
+    assert live == {"text": "P0 isolate target=t reason=r", "urgent": True, "presentation": "current"}
+    visual = render_p0_alert(dict(base, channel="visual", stale=True, presentation="historical"))
+    assert visual["text"] == "【過去の判定（2026-10-26 01:02:03 UTC）】P0 isolate target=t reason=r"
+    assert visual["urgent"] is False and visual["presentation"] == "historical"
+    voice = render_p0_alert(dict(base, channel="voice", stale=True))
+    assert voice["text"].startswith("過去の判定（2026-10-26 01:02:03 UTC）です。現在の警報ではありません。")
+    assert voice["urgent"] is False
+    odd = render_p0_alert(dict(base, channel="visual", stale=True, event_ts="<b>now</b>"))
+    assert "時刻不明" in odd["text"] and "<b>" not in odd["text"]
 
 
 def test_live_alerts_are_not_marked_reconciled(tmp_path):
@@ -560,6 +660,8 @@ def test_live_alerts_are_not_marked_reconciled(tmp_path):
         recorder.submit(core_event("isolate", "l", 9300300))
         assert _wait(lambda: len(_alerts(relay.queue.path)) == 2)
         assert all(r["reconciled"] is False and r["recorded_by"] == "live" for r in _alerts(relay.queue.path))
+        assert all(r["stale"] is False and r["presentation"] == "current" for r in _alerts(relay.queue.path))
+        assert [r["voice_urgent"] for r in _alerts(relay.queue.path) if r["channel"] == "voice"] == [True]
     finally:
         recorder.stop()
         relay.stop()

@@ -9,6 +9,15 @@ Owner decisions on Edge#414 (2026-10-25):
 * **Queue** (option A): one durable JSONL file in the Python notify layer.
   Visual and voice are the ``channel`` field of the alert entries. Rendering
   and speaking are downstream of the queue and are not done here.
+* **Past decisions** (Edge#462 item 5, option (b)): a decision the startup
+  reconcile found older than the core's lease (300 s) is still alerted, so an
+  isolate applied while the agent was down reaches the operator, but never as
+  a current alert. Its entries carry ``stale: true`` and ``presentation:
+  historical``; :func:`render_p0_alert` (the one place the queue's wording is
+  built) prefixes them with 「過去の判定」 and the event's time, and the voice
+  entry is an announcement of a past decision, not an urgent alert
+  (``voice_urgent: false``). A downstream renderer or speaker must use
+  ``render_p0_alert`` or honour those fields.
 
 Observation and notification only. Nothing here decides, enforces, approves or
 changes a decision, and nothing reads the queue back into the decision path.
@@ -44,6 +53,7 @@ import queue as _queue_mod
 import stat
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
@@ -87,6 +97,66 @@ DEFAULT_MAX_RECONCILE = 256
 
 DURABILITY_FSYNCED = 'fsynced'
 DURABILITY_UNSUPPORTED = 'fsync_unsupported'
+
+# How an alert entry is to be presented (Edge#462 item 5). ``current``: a
+# live alert, or a reconciled one still within the core's lease. ``historical``:
+# a reconciled decision older than that (``stale``): shown as a past decision
+# with its event time and never spoken as an urgent alert.
+PRESENTATION_CURRENT = 'current'
+PRESENTATION_HISTORICAL = 'historical'
+HISTORICAL_LABEL = '過去の判定'
+EVENT_TIME_UNKNOWN = '時刻不明'
+
+
+def event_ts_epoch(ts: Any) -> Optional[float]:
+    """The epoch of a Suricata EVE timestamp (``...T..:..:..[.ffffff]+0000``
+    or ``Z``), or None when it cannot be read."""
+
+    if not isinstance(ts, str) or not ts:
+        return None
+    text = ts.strip()
+    if text.endswith('Z'):
+        text = text[:-1] + '+0000'
+    for fmt in ('%Y-%m-%dT%H:%M:%S.%f%z', '%Y-%m-%dT%H:%M:%S%z'):
+        try:
+            return datetime.strptime(text, fmt).timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def event_time_text(ts: Any) -> str:
+    """The event time for display, in UTC (``2026-10-26 01:02:03 UTC``), or
+    「時刻不明」 when the timestamp cannot be read. Never the raw log text."""
+
+    epoch = event_ts_epoch(ts)
+    if epoch is None:
+        return EVENT_TIME_UNKNOWN
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
+
+def render_p0_alert(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    """The wording of one queued alert entry, for the visual or voice channel.
+
+    ``{'text': ..., 'urgent': bool, 'presentation': ...}``. A historical
+    (stale reconciled) entry starts with 「過去の判定（<event time>）」 on both
+    channels and is never urgent, so an old decision is not presented as a
+    current alert. Presentation only: it reads the entry and changes nothing.
+    """
+
+    historical = entry.get('presentation') == PRESENTATION_HISTORICAL or entry.get('stale') is True
+    action = str(entry.get('action') or '-')
+    target = str(entry.get('target') or '-')
+    reason = str(entry.get('reason') or '')
+    body = f'P0 {action} target={target}' + (f' reason={reason}' if reason else '')
+    if historical:
+        prefix = f"{HISTORICAL_LABEL}（{event_time_text(entry.get('event_ts'))}）"
+        if entry.get('channel') == CHANNEL_VOICE:
+            text = f'{prefix}です。現在の警報ではありません。{body}'
+        else:
+            text = f'【{prefix}】{body}'
+        return {'text': text, 'urgent': False, 'presentation': PRESENTATION_HISTORICAL}
+    return {'text': body, 'urgent': True, 'presentation': PRESENTATION_CURRENT}
 
 
 def classify_p0(record: Any) -> str:
@@ -551,7 +621,20 @@ def build_p0_alerts(record: Mapping[str, Any], basis: str, durability: str, dura
         'recorded_by': str(record.get('recorded_by') or ''),
         'event_ts': str(record.get('event_ts') or ''),
     }
-    return [dict(base, channel=channel) for channel in CHANNELS]
+    # A reconciled decision older than the core's lease (Edge#462 item 5): a
+    # past decision, presented as one -- never as a current alert.
+    stale = base['reconciled'] is True and record.get('reconcile_stale') is True
+    base['stale'] = stale
+    base['presentation'] = PRESENTATION_HISTORICAL if stale else PRESENTATION_CURRENT
+    out = []
+    for channel in CHANNELS:
+        entry = dict(base, channel=channel)
+        rendered = render_p0_alert(entry)
+        entry['display_text'] = rendered['text']
+        if channel == CHANNEL_VOICE:
+            entry['voice_urgent'] = rendered['urgent']
+        out.append(entry)
+    return out
 
 
 DURABILITY_RECONCILED_FSYNCED = 'reconciled_from_chain_fsynced'

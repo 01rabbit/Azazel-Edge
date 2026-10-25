@@ -87,6 +87,14 @@ Governance scope:
 
 ### 3.8 Notification
 - [`delivery.py`](/home/azazel/Azazel-Edge/py/azazel_edge/notify/delivery.py)
+- [`p0_alert.py`](/home/azazel/Azazel-Edge/py/azazel_edge/notify/p0_alert.py): the P0 visual/voice queue (`p0-alert-queue.jsonl`, SO-03). Notification only; nothing reads it back into the decision or enforcement path.
+- [`core_decisions.py`](/home/azazel/Azazel-Edge/py/azazel_edge/notify/core_decisions.py): records the Rust core's P0 decisions in `core-decision-audit.jsonl` for that queue.
+
+Startup reconcile of P0 decisions the agent missed (Edge#460, Edge#462 item 5):
+- At start the agent reads the tail of the core's `normalized-events.jsonl` (at most 8 MiB) and records the P0 decisions its chain does not have, the newest 256 at most (`core_reconcile_skipped` counts the rest). Their alerts carry `reconciled: true` and the event's own `event_ts`.
+- A decision older than 300 s (the core's default enforcement lease), or whose time cannot be read, is no longer a current alert, but it is still recorded and alerted so that an isolate applied while the agent was down reaches the operator. It is marked `reconcile_stale` in the chain and `stale: true`, `presentation: historical` in the queue; the visual text starts with 「過去の判定（<event time, UTC>）」, the voice text announces it as a past decision, and the voice entry has `voice_urgent: false`. Renderers use `render_p0_alert` or honour these fields.
+- Counted in the `core_reconcile` status record as `core_reconcile_stale` (found) and `core_reconciled_stale` (recorded); stale and fresh decisions share the one 256 bound, so a long outage cannot flood the queue.
+- A stale decision is in the chain under its core event key once recorded, so a later start neither records nor alerts it again.
 
 ### 3.9 Audit Logging
 - [`logger.py`](/home/azazel/Azazel-Edge/py/azazel_edge/audit/logger.py)
