@@ -19,6 +19,7 @@ from typing import Any, Sequence
 
 from .contracts import MioHypothesis, MioSituationFrame
 from .playbook import ReasoningPlaybook
+from .redaction import redact_text
 
 NO_MODEL_HANDOFF_SCHEMA_VERSION = "mio.no_model_handoff.v1"
 NO_MODEL_HANDOFF_MAX_BYTES = 8192
@@ -53,6 +54,8 @@ def build_no_model_handoff(
     hypotheses: Sequence[MioHypothesis] = (),
 ) -> NoModelHandoff:
     c = _LIST_CAPS
+    # Free text below is masked (#389): frame facts and model hypotheses may
+    # carry credentials or PII-like strings that must not be echoed verbatim.
     summary = (
         f"Trace {frame.trace_id}: defensive state {frame.current_defensive_state}, "
         f"threat level {frame.threat_level}; {len(frame.known_facts)} known facts, "
@@ -70,14 +73,14 @@ def build_no_model_handoff(
         "current_defensive_state": frame.current_defensive_state,
         "threat_level": frame.threat_level,
         "summary": summary,
-        "known_facts": list(frame.known_facts[: c["known_facts"]]),
-        "unknowns": list(frame.unknowns[: c["unknowns"]]),
-        "contradictions": list(frame.contradictions[: c["contradictions"]]),
+        "known_facts": [redact_text(x) for x in frame.known_facts[: c["known_facts"]]],
+        "unknowns": [redact_text(x) for x in frame.unknowns[: c["unknowns"]]],
+        "contradictions": [redact_text(x) for x in frame.contradictions[: c["contradictions"]]],
         "evidence_refs": list(frame.evidence_refs[: c["evidence_refs"]]),
         "dependency_status": {"knowledge": frame.knowledge_status, "deception": frame.deception_status},
         "playbook": None,
         "model_proposed_hypotheses": [
-            {"hypothesis_id": h.hypothesis_id[:96], "model_status": h.status.value, "verification": "model_proposed_unverified", "statement": h.statement[:160], "falsification_conditions": [x[:160] for x in h.falsification_conditions[:2]]}
+            {"hypothesis_id": h.hypothesis_id[:96], "model_status": h.status.value, "verification": "model_proposed_unverified", "statement": redact_text(h.statement)[:160], "falsification_conditions": [redact_text(x)[:160] for x in h.falsification_conditions[:2]]}
             for h in list(hypotheses)[: c["hypotheses"]]
         ],
         "operator_guidance": list(_OPERATOR_GUIDANCE),
