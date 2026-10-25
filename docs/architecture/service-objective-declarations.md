@@ -309,7 +309,7 @@ backlog phase about 2.4 s after its window (55 MB unread at the peak), so the
 summary accounting for the last 55000 lines fell outside, and the excess,
 computed from every line written, counted lines the core had not yet read
 (run 40221768896: 182509 shed against a floor of 196562; with the summary,
-233433). The accounting below replaces it.
+233433). The accounting below replaces it (and, after review, fixes `read_s` outside the backlog phase).
 
 **Defaults awaiting owner confirmation.** The factors under `owner_defaults`
 were chosen when the profile was written: `non_alert_factor` 1.2 (SO-11's
@@ -353,18 +353,28 @@ profile and the quota from the tree and checks that:
   (cumulative totals equal the summed intervals), the audit not rotated; for
   every summary adds up (`examined = shed_total + admitted +
   oversized_lines_skipped`); for each over-quota phase, the summaries attributed
-  to it account for at least `(1 − shed_tolerance)` of the lines written in it,
-  the lines shed there are at least `(1 − shed_tolerance)` × the excess
-  (non-alert lines written minus `value × read_s + non_alert_burst`, where
-  `read_s` runs from the window start to the last summary attributed to the
-  phase, at least the window: what no bucket could admit in the time the core
-  had to read the phase), at least one of them for the rate, and the non-alert
-  lines the core admitted there are at most `value × (read_s + slack) +
-  non_alert_burst`. Container and GitHub runs shed 1.05–10 × that excess (the
-  class reserves shed flow, dns and stats before the bucket is empty; the
-  backlog phase sheds close to it). Forging a smaller shed count either breaks a
-  summary's sum, raises `admitted` above the quota, or lowers `examined` below
-  what was written. In the backlog phase the summaries must also show
+  to it account for at least `(1 − shed_tolerance)` of the non-alert lines
+  written in it (examined minus `alerts_admitted`: alerts are never shed, and
+  another phase's alerts read late must not count here). With `read_s` the time
+  the phase's lines could have been admitted, the lines shed are at least
+  `max(1, (1 − shed_tolerance) × (non-alert written − value × read_s −
+  non_alert_burst))`, at least one of them for the rate, and the non-alert lines
+  admitted are at most `value × read_s + non_alert_burst`.
+
+  `read_s` (profile rule "read"): outside the backlog phase the core keeps up
+  (peak unread backlog under 4 MB in every run), so `read_s` is fixed at window +
+  `read_lag_cap_ms` (1000 ms: the audit interval, five polls, and more than the
+  time to read the largest unread backlog seen), whenever the summaries are
+  emitted. A summary is due up to one audit interval after the shedding it
+  reports, so its emission time says when it was written, not how long the core
+  read; tying `read_s` to it made the check flaky (a late honest summary
+  stretched it, lowering the excess) and let a forged late summary lower the
+  floor. In the backlog phase the core may read long after the window (2.4 s on
+  a GitHub runner), so `read_s` runs to the last summary, at least the window
+  and at most window + `backlog_read_lag_cap_ms` (15000 ms); summaries emitted
+  after that are not counted as shed. With every summary adding up, claiming
+  fewer lines shed either raises `admitted` above the quota over `read_s` or
+  lowers `examined` below what was written. In the backlog phase the summaries must also show
   lines shed for the backlog and a shed level of at least 1. For each phase, the
   oversized lines the core skipped equal those written;
 - every hostile sample's lease expired inside its phase's window after the

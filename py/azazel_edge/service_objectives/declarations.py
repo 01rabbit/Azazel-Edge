@@ -260,7 +260,10 @@ HOSTILE_NON_ALERT_KINDS = ("flow", "dns", "stats", "http", "invalid_utf8")
 # (record.PART_GAP_CLOSERS). There is no other way to confirm it.
 CONFIRMED = "confirmed"
 HOSTILE_PROFILE_STATUSES = (PROVISIONAL, CONFIRMED)
-_HOSTILE_MS_KEYS = ("core_default_poll_ms", "line_bytes", "warmup_ms", "hold_after_ms", "quiet_gap_ms", "audit_attribution_slack_ms")
+_HOSTILE_MS_KEYS = (
+    "core_default_poll_ms", "line_bytes", "warmup_ms", "hold_after_ms", "quiet_gap_ms", "audit_attribution_slack_ms",
+    "read_lag_cap_ms", "backlog_read_lag_cap_ms",
+)
 
 
 def _number(value: Any) -> bool:
@@ -459,6 +462,10 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
             )
     if doc["audit_attribution_slack_ms"] < quota["audit_interval_ms"]:
         problems.append("audit_attribution_slack_ms is shorter than the quota's audit_interval_ms")
+    if not doc["core_default_poll_ms"] <= doc["read_lag_cap_ms"] <= quota["audit_interval_ms"]:
+        problems.append("read_lag_cap_ms must lie between one poll interval and the audit interval")
+    if doc["backlog_read_lag_cap_ms"] < doc["read_lag_cap_ms"]:
+        problems.append("backlog_read_lag_cap_ms must be at least read_lag_cap_ms")
     if doc["quiet_gap_ms"] <= doc["audit_attribution_slack_ms"]:
         problems.append("quiet_gap_ms must exceed audit_attribution_slack_ms, or a summary could belong to two phases")
     rates = [d["rates_per_s"] for _, d in derived_all]

@@ -156,7 +156,8 @@ def hostile_load_problems(
     tol = float(profile["rate_tolerance"])
     shed_tol = float(profile["shed_tolerance"])
     warmup_ns = int(profile["warmup_ms"]) * 1_000_000
-    slack_s = int(profile["audit_attribution_slack_ms"]) / 1000.0
+    lag_cap_s = int(profile["read_lag_cap_ms"]) / 1000.0
+    backlog_cap_s = int(profile["backlog_read_lag_cap_ms"]) / 1000.0
     windows: Dict[str, Tuple[int, int]] = {}
     # Attribution (profile rule "attribution"): a summary belongs to the phase
     # whose window started last before it was emitted, up to the next phase's
@@ -201,31 +202,42 @@ def hostile_load_problems(
         mine = [r for r in shed if wws < float(r["emitted_epoch"]) <= until.get(name, math.inf)]
         if decl["non_alert_lines_per_s"] > quota["value"]:
             non_alert = sum(counts[c] for c in _NON_ALERT_COUNTED)
-            # The core must have read the phase: its summaries account for
-            # every line written in it (a summary is due within one audit
-            # interval while anything is shed, so over a phase above the quota
-            # little can stay unreported).
-            examined = sum(int(r["examined"]) for r in mine)
-            total = sum(counts.values())
+            # How long this phase's lines could have been admitted (``read_s``,
+            # profile rule "read"). Outside the backlog phase the core keeps
+            # up, so its reading of the phase ends within read_lag_cap_ms of
+            # the window, whenever its summaries are emitted: a fixed bound
+            # that a late summary (honest or forged) cannot stretch. In the
+            # backlog phase the core may read long after the window: read_s
+            # runs to the last summary, at most backlog_read_lag_cap_ms past
+            # the window, and summaries beyond that are not counted as shed.
+            if decl.get("backlog_phase"):
+                cap_s = duration + backlog_cap_s
+                acct = [r for r in mine if float(r["emitted_epoch"]) <= wws + cap_s]
+                read_s = min(cap_s, max(duration, max((float(r["emitted_epoch"]) for r in acct), default=wws) - wws))
+            else:
+                acct = mine
+                read_s = duration + lag_cap_s
+            # The core must have read the phase: its summaries account for the
+            # non-alert lines written in it (alerts are never shed, so the
+            # alerts it examined are the alerts it admitted; leaving them out
+            # keeps another phase's alerts read late from counting here).
+            examined = sum(int(r["examined"]) - int(r["alerts_admitted"]) for r in mine)
+            total = non_alert + counts["oversized"]
             if examined < (1.0 - shed_tol) * total:
-                problems.append(f"{where}: the core's summaries account for {examined} lines examined of {total} written")
-            # The excess no bucket could admit: this phase's lines could be
-            # admitted only between its window start and the last summary
-            # accounting for them (``read_s``), at the quota plus one burst.
-            # The floor the core's shedding must reach is (1 - shed_tolerance)
-            # of that excess (profile rule "shed").
-            read_s = max(duration, max((float(r["emitted_epoch"]) for r in mine), default=wws) - wws)
+                problems.append(f"{where}: the core's summaries account for {examined} non-alert lines examined of {total} written")
+            # The excess no bucket could admit in read_s, and the floor the
+            # core's shedding must reach (profile rule "shed").
             excess = non_alert - (quota["value"] * read_s + quota["non_alert_burst"])
             floor = max(1, math.ceil((1.0 - shed_tol) * excess))
-            got = sum(int(r["shed_total"]) for r in mine)
-            by_rate = sum(int((r.get("shed_by_reason") or {}).get("non_alert_rate") or 0) for r in mine)
-            admitted = sum(int(r.get("admitted") or 0) - int(r.get("alerts_admitted") or 0) for r in mine)
-            ceiling = quota["value"] * (read_s + slack_s) + quota["non_alert_burst"]
-            if excess <= 0 or got < floor or by_rate < 1:
+            got = sum(int(r["shed_total"]) for r in acct)
+            by_rate = sum(int((r.get("shed_by_reason") or {}).get("non_alert_rate") or 0) for r in acct)
+            admitted = sum(int(r.get("admitted") or 0) - int(r.get("alerts_admitted") or 0) for r in acct)
+            ceiling = quota["value"] * read_s + quota["non_alert_burst"]
+            if got < floor or by_rate < 1:
                 problems.append(
                     f"{where}: the core's summaries show {got} non-alert lines shed ({by_rate} for the rate) of {non_alert} "
-                    f"written; the excess over the {quota['value']}/s quota in the {read_s:.1f} s they cover is {excess:.0f}, "
-                    f"so at least {floor} expected"
+                    f"written; the excess over the {quota['value']}/s quota in the {read_s:.1f} s it had to read them is "
+                    f"{excess:.0f}, so at least {floor} expected"
                 )
             if admitted > ceiling:
                 problems.append(f"{where}: the core admitted {admitted} non-alert lines, above the quota's {ceiling:.0f}")

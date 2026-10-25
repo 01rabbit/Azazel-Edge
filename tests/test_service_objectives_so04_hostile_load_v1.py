@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import random
 import re
@@ -114,6 +115,9 @@ def test_the_default_poll_interval_is_the_cores():
         pytest.param(lambda d: d.update(shed_tolerance=0.5), "shed_tolerance", id="shed tolerance above 0.2"),
         pytest.param(lambda d: d.update(leases_per_phase_per_action=0), "leases_per_phase_per_action", id="no phase sample floor"),
         pytest.param(lambda d: d.update(min_hostile_share=0), "min_hostile_share", id="no hostile share"),
+        pytest.param(lambda d: d.update(read_lag_cap_ms=3000), "read_lag_cap_ms", id="read lag cap above the audit interval"),
+        pytest.param(lambda d: d.update(read_lag_cap_ms=100), "read_lag_cap_ms", id="read lag cap below a poll"),
+        pytest.param(lambda d: d.update(backlog_read_lag_cap_ms=500), "backlog_read_lag_cap_ms", id="backlog cap below the read cap"),
         pytest.param(lambda d: d.update(status="confirmed"), "not exactly 'confirmed'", id="confirmed while the owner status is pending"),
         pytest.param(
             lambda d: d.update(status="confirmed") or d["owner_defaults"].update(status="confirmed by the owner"),
@@ -762,22 +766,24 @@ def test_the_ci_check_fails_without_a_record(tmp_path):
     assert hl.check_records([tmp_path]) == ["no SO-04 record found"]
 
 
-@pytest.mark.parametrize("ratio, closes", [(0.85, False), (0.95, True), (1.0, True)])
-def test_the_shed_floor_is_the_excess_less_the_declared_tolerance(ratio, closes):
-    """Review M1: one phase's shed just below / above (1 - shed_tolerance) x excess."""
+@pytest.mark.parametrize("ratio, closes", [(0.85, False), (0.99, False), (1.0, True), (1.2, True)])
+def test_the_shed_floor_is_the_excess_over_the_read_time(ratio, closes):
+    """One phase's shed just below / at / above the excess no bucket could admit
+    in read_s (window + read_lag_cap_ms). With every summary adding up, a shed
+    below it means more admitted than the quota allows (and below
+    (1 - shed_tolerance) of it, below the floor as well)."""
 
-    assert PROFILE["shed_tolerance"] == pytest.approx(0.1)
     obs = _observation()
     phase = _phase(obs, "non_alert_flood")
     record = next(r["ingress_shed"] for r in obs["ingress_audit"] if phase["window_start_wall_epoch"] <= r["ingress_shed"]["emitted_epoch"] <= phase["window_end_wall_epoch"])
-    shed = int(_excess(phase["written"]) * ratio)
-    # Keep the summary adding up: what is no longer shed was admitted.
+    na = sum(phase["written"][c] for c in NON_ALERT)
+    read_s = DURATION_S + PROFILE["read_lag_cap_ms"] / 1000
+    shed = math.ceil((na - QUOTA["value"] * read_s - QUOTA["non_alert_burst"]) * ratio)
     record["admitted"] += record["shed_total"] - shed
     record.update(shed_total=shed, shed_by_reason={"non_alert_rate": shed, "backlog": 0})
     _resum(obs)
     problems = hl.hostile_load_problems(_samples(obs), obs)
     assert (problems == []) is closes, problems
-
 
 
 def test_a_core_still_reading_the_backlog_after_the_window_is_accounted_to_it():
@@ -836,15 +842,15 @@ def test_alerts_are_written_last_in_every_chunk(tmp_path):
 def test_a_core_reading_the_last_phase_long_after_its_window_is_held_to_its_read_time():
     """The excess is what no bucket could admit in the time the core had to read
     the phase (read_s), not in the window alone. A core that read the backlog
-    phase for 8 s after its window and shed the least an honest core could
+    phase for 12 s after its window and shed the least an honest core could
     (everything above the quota over read_s plus the slack) must not be red."""
 
     obs = _observation()
     phase = _phase(obs, "backlog_flood")
     na = sum(phase["written"][c] for c in NON_ALERT)
-    read_s = DURATION_S + 8.0
-    slack = PROFILE["audit_attribution_slack_ms"] / 1000
-    least = int(na - QUOTA["value"] * (read_s + slack) - QUOTA["non_alert_burst"]) + 10
+    read_s = DURATION_S + 12.0
+    assert read_s <= DURATION_S + PROFILE["backlog_read_lag_cap_ms"] / 1000
+    least = int(na - QUOTA["value"] * read_s - QUOTA["non_alert_burst"]) + 10
     for r in obs["ingress_audit"]:
         x = r["ingress_shed"]
         if phase["window_start_wall_epoch"] < x["emitted_epoch"]:
@@ -878,3 +884,77 @@ def test_windows_are_waited_for_on_the_monotonic_clock(tmp_path, monkeypatch):
     # It started at its planned instant, not at once and not an hour late.
     started = load.observed[0]["window_start_boottime_ns"] / 1e9 - t0
     assert 0.2 <= started < 0.6, started
+
+
+
+def _move_phase_summaries(obs, name, emitted):
+    phase = _phase(obs, name)
+    for r in obs["ingress_audit"]:
+        x = r["ingress_shed"]
+        if phase["window_start_wall_epoch"] < x["emitted_epoch"] <= phase["window_end_wall_epoch"]:
+            x["emitted_epoch"] = emitted(phase)
+    return phase
+
+
+@pytest.mark.parametrize("name", ["non_alert_flood", "malformed_mix"])
+def test_an_honest_summary_late_after_the_window_still_closes(name):
+    """Review of #463 M1: a summary emitted 1.5 s after the window (it is due
+    up to one audit interval after the shedding it reports) must not turn an
+    honest record red: read_s outside the backlog phase does not depend on it."""
+
+    obs = _observation()
+    _move_phase_summaries(obs, name, lambda ph: ph["window_end_wall_epoch"] + 1.5)
+    assert hl.hostile_load_problems(_samples(obs), obs) == []
+
+
+@pytest.mark.parametrize("name", ["non_alert_flood", "malformed_mix"])
+def test_a_forged_late_summary_cannot_stretch_the_read_time(name):
+    """Review of #463 M2: a forger moves the phase's summary to just before the
+    next window and claims one line shed (admitted raised so it adds up). With
+    read_s stretched that far the floor would fall to 1; it is fixed instead."""
+
+    obs = _observation()
+    phase = _move_phase_summaries(obs, name, lambda ph: None)  # find it first
+    nxt = obs["phases"][obs["phases"].index(phase) + 1]
+    for r in obs["ingress_audit"]:
+        x = r["ingress_shed"]
+        if x["emitted_epoch"] is None:
+            x["emitted_epoch"] = nxt["window_start_wall_epoch"] - 0.01
+            x["admitted"] += x["shed_total"] - 1
+            x.update(shed_total=1, shed_by_reason={"non_alert_rate": 1, "backlog": 0})
+    _resum(obs)
+    problems = hl.hostile_load_problems(_samples(obs), obs)
+    assert any(p.startswith(f"phase {name}:") and ("above the quota" in p or "at least" in p) for p in problems), problems
+
+
+def test_a_backlog_summary_past_the_cap_is_not_counted_as_shed():
+    """A backlog phase summary emitted after window + backlog_read_lag_cap_ms
+    neither stretches read_s further nor counts as shed."""
+
+    obs = _observation()
+    phase = _move_phase_summaries(obs, "backlog_flood", lambda ph: ph["window_end_wall_epoch"] + PROFILE["backlog_read_lag_cap_ms"] / 1000 + 5)
+    problems = hl.hostile_load_problems(_samples(obs), obs)
+    assert any(p.startswith("phase backlog_flood:") and "at least" in p for p in problems), problems
+
+
+def test_another_phases_alerts_read_late_do_not_cover_a_phase():
+    """Review of #463 L1: alerts of the alert flood read during the backlog
+    phase are examined there, but they are not the backlog phase's lines. A
+    record whose backlog summaries examined 15% fewer of its non-alert lines,
+    with as many alerts in their place (every summary still adding up), keeps
+    the gap."""
+
+    obs = _observation()
+    phase = _phase(obs, "backlog_flood")
+    total = sum(phase["written"][c] for c in NON_ALERT)
+    k = int(0.15 * total)
+    for r in obs["ingress_audit"]:
+        x = r["ingress_shed"]
+        if phase["window_start_wall_epoch"] < x["emitted_epoch"]:
+            x["shed_total"] -= k
+            x["shed_by_reason"]["backlog"] -= k
+            x["admitted"] += k
+            x["alerts_admitted"] += k
+    _resum(obs)
+    problems = hl.hostile_load_problems(_samples(obs), obs)
+    assert any(p.startswith("phase backlog_flood:") and "account for" in p for p in problems), problems
