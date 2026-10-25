@@ -543,4 +543,7 @@ def test_fixed_row_bound_and_samples_are_unchanged():
     row = rec.OBJECTIVE_SPECS["SO-03"][PART]
     assert row["bound_ms"] == 2000.0 and row["required_samples"] == 200 and row["kind"] == rec.RULE_EVERY_SAMPLE_MAX
     assert set(row["gaps"]) == set(GAPS) == set(row["gaps_closed_by_samples"])
+    assert {g for g in rec.GAP_CLOSERS if g.startswith("SO03-")} == set(GAPS)
+    assert rec.GAP_CLOSERS["SO03-NO-VISUAL-VOICE-QUEUE"] is rec.so03_visual_voice_queue_observed
+    assert rec.GAP_CLOSERS["SO03-NO-P0-ALERT-PATH"] is rec.so03_p0_alert_path_observed
     assert set(rec.so03_observed_prerequisites([{}])) <= set(row["prerequisites"])
