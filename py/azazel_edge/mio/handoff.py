@@ -19,7 +19,14 @@ from typing import Any, Sequence
 
 from .contracts import MioHypothesis, MioSituationFrame
 from .playbook import ReasoningPlaybook
-from .redaction import redact_text
+from .redaction import contains_token_like, redact_text
+from .trace_audit import is_valid_id
+
+
+def _safe_id(kind: str, value: str, placeholder: str) -> str:
+    """IDs pass only if they match their grammar and are not token-shaped;
+    otherwise a fixed placeholder (no digest: the value may be low-entropy)."""
+    return value if is_valid_id(kind, value) and not contains_token_like(value) else placeholder
 
 NO_MODEL_HANDOFF_SCHEMA_VERSION = "mio.no_model_handoff.v1"
 NO_MODEL_HANDOFF_MAX_BYTES = 8192
@@ -56,43 +63,48 @@ def build_no_model_handoff(
     c = _LIST_CAPS
     # Free text below is masked (#389): frame facts and model hypotheses may
     # carry credentials or PII-like strings that must not be echoed verbatim.
+    trace_id = _safe_id("trace_id", frame.trace_id, "invalid-trace-id")
+    frame_id = _safe_id("frame_id", frame.frame_id, "invalid-frame-id")
+    reason = redact_text(str(reason))
+    defensive_state = redact_text(frame.current_defensive_state)
+    threat_level = redact_text(frame.threat_level)
     summary = (
-        f"Trace {frame.trace_id}: defensive state {frame.current_defensive_state}, "
-        f"threat level {frame.threat_level}; {len(frame.known_facts)} known facts, "
+        f"Trace {trace_id}: defensive state {defensive_state}, "
+        f"threat level {threat_level}; {len(frame.known_facts)} known facts, "
         f"{len(frame.unknowns)} unknowns, {len(frame.contradictions)} contradictions, "
         f"{len(frame.evidence_refs)} evidence refs. M.I.O. reasoning ended without a "
         f"model recommendation ({reason[:64]})."
     )
     payload: dict[str, Any] = {
         "schema_version": NO_MODEL_HANDOFF_SCHEMA_VERSION,
-        "frame_id": frame.frame_id,
-        "trace_id": frame.trace_id,
+        "frame_id": frame_id,
+        "trace_id": trace_id,
         "frame_digest": frame.canonical_digest(),
         "reason": reason[:64],
         "model_contribution": "unverified_hypotheses_only" if hypotheses else "none",
-        "current_defensive_state": frame.current_defensive_state,
-        "threat_level": frame.threat_level,
+        "current_defensive_state": defensive_state,
+        "threat_level": threat_level,
         "summary": summary,
         "known_facts": [redact_text(x) for x in frame.known_facts[: c["known_facts"]]],
         "unknowns": [redact_text(x) for x in frame.unknowns[: c["unknowns"]]],
         "contradictions": [redact_text(x) for x in frame.contradictions[: c["contradictions"]]],
-        "evidence_refs": list(frame.evidence_refs[: c["evidence_refs"]]),
+        "evidence_refs": [_safe_id("evidence_ref", r, "[redacted:evidence_ref]") for r in frame.evidence_refs[: c["evidence_refs"]]],
         "dependency_status": {"knowledge": frame.knowledge_status, "deception": frame.deception_status},
         "playbook": None,
         "model_proposed_hypotheses": [
-            {"hypothesis_id": h.hypothesis_id[:96], "model_status": h.status.value, "verification": "model_proposed_unverified", "statement": redact_text(h.statement)[:160], "falsification_conditions": [redact_text(x)[:160] for x in h.falsification_conditions[:2]]}
-            for h in list(hypotheses)[: c["hypotheses"]]
+            {"hypothesis_id": _safe_id("hypothesis_id", h.hypothesis_id, f"invalid-hypothesis-id-{i + 1}"), "model_status": h.status.value, "verification": "model_proposed_unverified", "statement": redact_text(h.statement)[:160], "falsification_conditions": [redact_text(x)[:160] for x in h.falsification_conditions[:2]]}
+            for i, h in enumerate(list(hypotheses)[: c["hypotheses"]])
         ],
         "operator_guidance": list(_OPERATOR_GUIDANCE),
         "limitations": (["includes_unverified_model_hypotheses", "summary_frame_derived"] if hypotheses else ["no_model_contribution", "frame_derived_only"]) + (["frame_truncated"] if frame.truncated else []),
     }
     if playbook is not None:
         payload["playbook"] = {
-            "playbook_id": playbook.playbook_id[:96],
-            "version": playbook.version[:32],
-            "check_next": [x[:160] for x in playbook.discriminating_questions[: c["check_next"]]],
-            "stop_conditions": [x[:160] for x in playbook.stop_conditions[: c["stop_conditions"]]],
-            "claim_boundaries": [x[:160] for x in playbook.claim_boundaries[: c["claim_boundaries"]]],
+            "playbook_id": _safe_id("frame_id", playbook.playbook_id[:96], "invalid-playbook-id"),
+            "version": _safe_id("frame_id", playbook.version[:32], "invalid-version"),
+            "check_next": [redact_text(x)[:160] for x in playbook.discriminating_questions[: c["check_next"]]],
+            "stop_conditions": [redact_text(x)[:160] for x in playbook.stop_conditions[: c["stop_conditions"]]],
+            "claim_boundaries": [redact_text(x)[:160] for x in playbook.claim_boundaries[: c["claim_boundaries"]]],
         }
     # Deterministic shrink: drop list tails in a fixed order, then halve the
     # summary, then drop the playbook block, until within budget.

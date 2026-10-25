@@ -32,6 +32,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import threading
 from typing import Any, Callable, Mapping, Protocol
 
@@ -350,24 +351,62 @@ class AuditFS(Protocol):
     def rename(self, src: str, dst: str) -> None: ...
     def remove(self, path: str) -> None: ...
     def exists(self, path: str) -> bool: ...
+    def sync_dir(self, path: str) -> None: ...
 
 
 class OsAuditFS:
+    """Real filesystem. Single-process writer: rotation is not safe against a
+    second process writing the same path (an in-process lock serializes
+    appends; ``flock`` on the data file guards a concurrent append only)."""
+
+    _FLAGS = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+
     def size(self, path: str) -> int:
         try:
-            return os.path.getsize(path)
+            st = os.lstat(path)
         except FileNotFoundError:
             return 0
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError(errno.EINVAL, "trace audit path is not a regular file")
+        return st.st_size
 
     def append_fsync(self, path: str, data: bytes) -> None:
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        created = not os.path.lexists(path)
+        fd = os.open(path, self._FLAGS, 0o600)
         try:
-            view = memoryview(data)
-            while view:
-                view = view[os.write(fd, view):]
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise OSError(errno.EINVAL, "trace audit path is not a regular file")
+            if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+                raise OSError(errno.EPERM, "trace audit file not owned by this user")
+            if stat.S_IMODE(st.st_mode) != 0o600:
+                os.fchmod(fd, 0o600)
+            try:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                pass
+            start = os.fstat(fd).st_size
+            # A torn tail from an earlier crash gets its own line terminated
+            # first, so the next record always starts on a fresh line.
+            if start > 0 and os.pread(fd, 1, start - 1) != b"\n":
+                data = b"\n" + data
+            try:
+                view = memoryview(data)
+                while view:
+                    n = os.write(fd, view)
+                    if n <= 0:
+                        raise OSError(errno.EIO, "short write")
+                    view = view[n:]
+            except BaseException:
+                # No torn fragment remains: cut back to the pre-write offset.
+                os.ftruncate(fd, start)
+                raise
             os.fsync(fd)
         finally:
             os.close(fd)
+        if created:
+            self.sync_dir(path)
 
     def rename(self, src: str, dst: str) -> None:
         os.replace(src, dst)
@@ -376,7 +415,14 @@ class OsAuditFS:
         os.remove(path)
 
     def exists(self, path: str) -> bool:
-        return os.path.exists(path)
+        return os.path.lexists(path)
+
+    def sync_dir(self, path: str) -> None:
+        fd = os.open(os.path.dirname(os.path.abspath(path)) or ".", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 @dataclass
@@ -390,16 +436,18 @@ class TraceAuditSink:
     """Append-only JSONL with fsync, size rotation and a total quota.
 
     Retention: the active file rotates at ``max_file_bytes`` into ``.1`` ...
-    ``.{max_files-1}``; the oldest rotated file is deleted. Total on-disk use is
-    therefore bounded by ``max_file_bytes * max_files``.
+    ``.{max_files-1}``; the oldest rotated file is deleted and the directory is
+    fsynced. Total on-disk use is bounded by ``max_file_bytes * max_files``.
+    Rotation assumes one writer process per path.
 
-    Failure (rotation/delete/write/fsync error, ENOSPC/EDQUOT, oversize record):
-    the record is not written, ``dropped`` and ``drop_reasons`` count it, and the
-    sink becomes *degraded*. While degraded, ``advisory_allowed()`` is False:
-    the caller must not publish a M.I.O. advisory whose audit was not durable
-    (fail-closed for the advisory path). The sink never raises to its caller and
-    never blocks: the deterministic Edge path does not call it at all.
-    ``reset_degraded()`` is an explicit operator action after the cause is fixed.
+    Failure (rotation/delete/write/fsync error, ENOSPC/EDQUOT, oversize,
+    non-mapping or unencodable record, any other exception): the record is not
+    written, ``dropped`` and ``drop_reasons`` count it, and the sink becomes
+    *degraded*. While degraded, ``advisory_allowed()`` is False: the caller must
+    not publish a M.I.O. advisory whose audit was not durable (fail-closed for
+    the advisory path). The sink never raises to its caller and never blocks:
+    the deterministic Edge path does not call it at all. ``reset_degraded()``
+    is an explicit operator action after the cause is fixed.
     """
 
     path: str
@@ -440,24 +488,31 @@ class TraceAuditSink:
                 self.fs.rename(src, f"{self.path}.{i + 1}")
         if self.max_files > 1 and self.fs.exists(self.path):
             self.fs.rename(self.path, f"{self.path}.1")
+        self.fs.sync_dir(self.path)
 
     def append(self, record: Mapping[str, Any]) -> AppendResult:
         with self._lock:
+            if not isinstance(record, Mapping):
+                return self._drop("non_mapping_record")
             try:
                 data = encode_record(record)
-            except (TypeError, ValueError):
+            except Exception:  # TypeError, ValueError, RecursionError, ...
                 return self._drop("unencodable_record")
-            if len(data) > MAX_RECORD_BYTES:
+            if len(data) + 1 > MAX_RECORD_BYTES:  # +1: possible torn-tail newline
                 return self._drop("record_too_large")
             try:
-                if self.fs.size(self.path) + len(data) > self.max_file_bytes:
+                if self.fs.size(self.path) + len(data) + 1 > self.max_file_bytes:
                     self._rotate()
             except OSError as exc:
                 return self._drop(_os_reason("rotation_failed", exc))
+            except Exception:
+                return self._drop("rotation_failed:exception")
             try:
                 self.fs.append_fsync(self.path, data)
             except OSError as exc:
                 return self._drop(_os_reason("append_failed", exc))
+            except Exception:
+                return self._drop("append_failed:exception")
             self.written += 1
             return AppendResult(True, "written")
 
@@ -467,14 +522,15 @@ class TraceAuditSink:
 
 
 def _os_reason(prefix: str, exc: OSError) -> str:
-    name = {errno.ENOSPC: "enospc", getattr(errno, "EDQUOT", -1): "edquot", errno.EROFS: "erofs", errno.EACCES: "eacces"}.get(exc.errno or 0, "oserror")
+    name = {errno.ENOSPC: "enospc", getattr(errno, "EDQUOT", -1): "edquot", errno.EROFS: "erofs", errno.EACCES: "eacces", errno.ELOOP: "eloop", errno.EINVAL: "not_regular", errno.EPERM: "eperm", errno.ENXIO: "enxio"}.get(exc.errno or 0, "oserror")
     return f"{prefix}:{name}"
 
 
 def record_cycle(sink: TraceAuditSink, projection: Callable[[], Mapping[str, Any]]) -> bool:
     """Project and append; return whether the advisory may be published.
 
-    Any projection or sink failure returns False (advisory withheld). Never raises.
+    Any projection or sink failure returns False (advisory withheld), and so
+    does a degraded sink even when this record was written. Never raises.
     """
     try:
         record = projection()

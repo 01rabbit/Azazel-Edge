@@ -91,10 +91,17 @@ prompts and raw model output. Where replay correlation needs text identity, the
 record keeps `{"digest", "chars"}` only. Error codes of the form
 `prefix:free-text` keep the prefix and digest the suffix.
 
-Digests are HMAC-SHA256 (truncated to 96 bits) with a caller-held key. The key
-is what stops offline guessing of low-entropy values; the digest is not an
-anonymisation claim. Rotate or discard the key to make old digests
-un-correlatable.
+Digests are HMAC-SHA256 (truncated to 96 bits). Key ownership:
+
+- The caller supplies the key (`key=`); `new_audit_key()` makes a random one.
+  This module never persists, logs or derives the key.
+- With a per-process key (the default pattern, as in the broker), digests are
+  not correlatable across restarts. Correlating across restarts needs the
+  service to persist the key with owner-only permissions; that is a follow-up
+  for whoever wires the sink into a service.
+- The key is what stops offline guessing of low-entropy values; the digest is
+  not an anonymisation claim. Discarding the key makes old digests
+  un-correlatable.
 
 Records are capped at `MAX_RECORD_BYTES` (4096). Over the cap, list fields are
 trimmed in a fixed order with `truncated_<field>` counts; if still too large the
@@ -102,15 +109,28 @@ projection raises, and `record_cycle` treats that as a drop.
 
 ## Retention, quota and failure
 
-`TraceAuditSink(path, max_file_bytes, max_files, fs)` writes append-only JSONL,
-opening with `O_APPEND`, mode `0600`, and `fsync` on every record.
+`TraceAuditSink(path, max_file_bytes, max_files, fs)` writes append-only JSONL.
+The real filesystem backend (`OsAuditFS`):
+
+- opens with `O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC`, mode `0600`;
+  refuses symlinks, FIFOs and other non-regular files (`fstat` + `S_ISREG`) and
+  files not owned by the current user; repairs a wider mode with `fchmod`;
+- takes `flock` on the data file for the append, `fsync`s every record, and
+  `fsync`s the directory after creating a file and after rotation;
+- on a partial write, `ftruncate`s back to the pre-write offset so no torn
+  fragment remains; if an earlier crash left a file not ending in `\n`, a
+  newline is written first so the next record starts on its own line.
+
+Rotation assumes a single writer process per path. Appends inside one process
+are serialized by a lock.
 
 - Rotation: when the next record would exceed `max_file_bytes`, files shift to
   `.1` ... `.{max_files-1}` and the oldest is deleted. Disk use is bounded by
   `max_file_bytes * max_files`. This is separate from the Edge audit chain,
   whose retention is owned elsewhere and is not touched.
-- Failure (ENOSPC, EDQUOT, EROFS, other I/O, rotation failure, oversize or
-  unencodable record, projection exception): the record is dropped, counted in
+- Failure (ENOSPC, EDQUOT, EROFS, other I/O, rotation failure, refused path,
+  non-mapping, oversize or unencodable record, any other exception including
+  `RecursionError`, projection exception): the record is dropped, counted in
   `dropped` / `drop_reasons`, and the sink becomes degraded. `append` never
   raises and never blocks.
 - Fail-closed for the advisory path only: `record_cycle` returns False and
@@ -130,8 +150,23 @@ opening with `O_APPEND`, mode `0600`, and `fsync` on every record.
 | Attacker-supplied strings, raw model output, prompts | omitted; digest + length only | model hypotheses labelled unverified and masked |
 | Broker result data | omitted; status and refs only | not included |
 
-Masking in `redaction.py` is pattern-based defence in depth. It runs before
-truncation so a cut cannot expose part of a token.
+Masking in `redaction.py` is a best-effort pattern list, not a guarantee:
+label/value pairs (English and Japanese labels such as パスワード, 暗証番号,
+秘密鍵, トークン; `:`, `=`, fullwidth `：`, prose "password is X"; quoted values
+to the closing quote, unquoted to the field end), `Bearer`/`Basic`, JWTs,
+common key prefixes (`sk-`, `xoxb-`, `ghp_`, `AKIA`, ...), URL userinfo, private
+key blocks (also unterminated), emails and long opaque tokens. Matching runs on
+an NFKC-normalised copy with zero-width chars removed and common
+Cyrillic/Greek confusables mapped, and the original span is replaced. Pure hex
+digests (32/40/64), digit runs, paths and structured refs (`ev:flow:<id>`) are
+kept. Masking runs before truncation so a cut cannot expose part of a token.
+
+In the handoff, IDs (`trace_id`, `frame_id`, hypothesis IDs, evidence refs,
+playbook id/version) are kept only if they match `ID_GRAMMAR` and are not
+token-shaped; otherwise a fixed placeholder (`invalid-hypothesis-id-<n>`,
+`[redacted:evidence_ref]`, ...) is used. No digest is used there because the
+handoff has no key and the value may be low-entropy. All other text, including
+playbook text and the reason, is masked.
 
 ## Not in scope
 

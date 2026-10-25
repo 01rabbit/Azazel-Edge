@@ -166,8 +166,17 @@ def test_unknown_evidence_ref_from_model_is_digested():
         return out
     f = frame()
     _, ticket, outcome = run_cycle(f, m)
-    rec = project_outcome(ticket=ticket, outcome=outcome, key=KEY, frame=f)
-    assert "ev:invented:7" not in encode_record(rec).decode()
+    # Place the invented ref directly into the outcome's recommendation and a
+    # hypothesis, so the filter (not upstream grounding) is what is tested.
+    import dataclasses
+    f2 = frame()
+    _, ticket, ok = run_cycle(f2, model())
+    rec = dataclasses.replace(ok.recommendation, evidence_refs=("ev:ssh:1", "ev:invented:7"))
+    hyp = dataclasses.replace(ok.hypotheses[0], supporting_evidence_refs=("ev:invented:7",))
+    outcome = dataclasses.replace(ok, recommendation=rec, hypotheses=(hyp,) + ok.hypotheses[1:])
+    blob = encode_record(project_outcome(ticket=ticket, outcome=outcome, key=KEY, frame=f2)).decode()
+    assert "ev:invented:7" not in blob
+    assert '"ev:ssh:1"' in blob  # an Edge-issued ref is kept verbatim
 
 
 def test_restart_mints_new_epoch_ids_never_reusing_old_cycle_ids():
@@ -334,6 +343,7 @@ class FakeFS:
         self.fail_rename = fail_rename
         self.fail_errno = fail_errno
         self.fsyncs = 0
+        self.dir_syncs = 0
 
     def size(self, path):
         return len(self.files.get(path, b""))
@@ -356,6 +366,9 @@ class FakeFS:
 
     def exists(self, path):
         return path in self.files
+
+    def sync_dir(self, path):
+        self.dir_syncs += 1
 
 
 def _record(i=0):
@@ -425,13 +438,241 @@ def test_real_filesystem_append_is_private_jsonl(tmp_path):
     assert rows[0]["cycle_id"] == ticket.cycle_id
 
 
-def test_trace_audit_is_not_on_the_deterministic_path():
+DETERMINISTIC_PATHS = (
+    "py/azazel_edge/arbiter",
+    "py/azazel_edge/tactics_engine",
+    "py/azazel_edge/evaluators",
+    "py/azazel_edge/correlation",
+    "py/azazel_edge/sensors",
+    "py/azazel_edge/control_plane.py",
+    "py/azazel_edge/policy.py",
+    "py/azazel_edge/decision_layers.py",
+    "py/azazel_edge/soc_policy_dry_run.py",
+    "bin/azazel-edge-control-daemon",
+)
+
+
+def _imports(src: str) -> set[str]:
+    import ast
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Import):
+            found.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = ("." * node.level) + (node.module or "")
+            found.add(base)
+            found.update(f"{base}.{a.name}" for a in node.names)
+    return found
+
+
+def test_deterministic_modules_do_not_import_trace_audit_or_redaction():
+    files = []
+    for rel in DETERMINISTIC_PATHS:
+        p = ROOT / rel
+        assert p.exists(), rel
+        files.extend(sorted(p.rglob("*.py")) if p.is_dir() else [p])
+    assert len(files) >= 10
+    for p in files:
+        src = p.read_text(encoding="utf-8", errors="replace")
+        try:
+            names = _imports(src)
+        except SyntaxError:  # shell wrapper scripts
+            names = set()
+        bad = {n for n in names if "trace_audit" in n or "redaction" in n or n.endswith("mio") or ".mio." in n + "."}
+        assert not bad, (p, bad)
+        assert "trace_audit" not in src and "TraceAuditSink" not in src, p
+
+
+def test_trace_audit_imports_no_authority_or_env():
     src = (ROOT / "py" / "azazel_edge" / "mio" / "trace_audit.py").read_text(encoding="utf-8")
-    imports = [line for line in src.splitlines() if line.startswith(("import ", "from "))]
-    assert all("arbiter" not in l and "enforce" not in l and "deception" not in l for l in imports), imports
+    names = _imports(src)
+    assert not {n for n in names if any(w in n for w in ("arbiter", "enforce", "deception", "control_plane"))}
     assert "os.environ" not in src and "getenv" not in src
-    for p in (ROOT / "py" / "azazel_edge").rglob("*.py"):
-        if "mio" in p.parts:
-            continue
-        text = p.read_text(encoding="utf-8", errors="replace")
-        assert "trace_audit" not in text and "mio.redaction" not in text, p
+
+
+# --- review follow-ups: redaction coverage and false positives ---------------------
+
+@pytest.mark.parametrize("text, secret", [
+    ("パスワード：hunter2", "hunter2"),
+    ("暗証番号は 4321", "4321"),
+    ("秘密鍵=abcd1234", "abcd1234"),
+    ("トークン: tok-xyz", "tok-xyz"),
+    ("ｐａｓｓｗｏｒｄ＝hunter2", "hunter2"),
+    ("pаsswоrd=hunter2", "hunter2"),  # Cyrillic а/о
+    ("pass​word=hunter2", "hunter2"),
+    ('password="correct horse battery staple"', "horse battery"),
+    ("password is hunter2", "hunter2"),
+    ("pw: hunter2", "hunter2"),
+    ("pass=hunter2", "hunter2"),
+    ("passwd=hunter2", "hunter2"),
+    ("passw0rd=hunter2", "hunter2"),
+    ("Bearer abc", "abc"),
+    ("bearer: x9", "x9"),
+    ("eyJhbGc.eyJzdWI.sg", "eyJzdWI"),
+    ("key sk-abcdef123456", "sk-abcdef123456"),
+    ("xoxb-1234-abcdefgh", "xoxb-1234-abcdefgh"),
+    ("ghp_abcdefghij12", "ghp_abcdefghij12"),
+    ("AKIAABCDEFGHIJKLMNOP", "AKIAABCDEFGHIJKLMNOP"),
+    ("ftp://user:p@ss@files.example/x", "p@ss"),
+    ("https://bob:hunter2@example.com/", "hunter2"),
+    ("x-api-key: v4lue", "v4lue"),
+    ("-----BEGIN RSA PRIVATE KEY-----\nMIIEsecret\n-----END RSA PRIVATE KEY-----", "MIIEsecret"),
+    ("-----BEGIN PRIVATE KEY-----\nMIIEtruncated", "MIIEtruncated"),  # cut before END
+])
+def test_redaction_covers_variants(text, secret):
+    out = redact_text(text)
+    assert secret not in out and "[redacted:" in out, out
+
+
+def test_private_key_rule_masks_block_without_trailing_text():
+    out = redact_text("before -----BEGIN EC PRIVATE KEY-----\nAAAA\nBBBB\n-----END EC PRIVATE KEY----- after")
+    assert out == "before [redacted:private_key] after"
+    assert "AAAA" not in redact_text("-----BEGIN EC PRIVATE KEY-----\nAAAA\nBBBB")
+
+
+def test_x_api_key_label_is_redacted_whole():
+    assert redact_text("x-api-key: v") == "[redacted:secret_kv]"
+
+
+@pytest.mark.parametrize("text", [
+    "sha256 " + "ab" * 32,
+    "sha1 " + "0f" * 20,
+    "md5 " + "c" * 32,
+    "ev:flow:" + "1" * 32,
+    "ev:flow:abcdefabcdefabcdefabcdefabcdefabcdefab",
+    "/var/lib/azazel-edge/mio/trace-audit/2026-10-25/mio-trace.jsonl",
+    "ev:auth:1",
+    "20 SSH failures from 192.0.2.10 to edge-gw-1 within 60s",
+])
+def test_redaction_false_positives_kept(text):
+    assert redact_text(text) == text
+
+
+def test_handoff_validates_ids_and_redacts_everything_else():
+    f = frame(trace_id="trace-1", evidence_refs=["ev:ssh:1", "ghp_ABCDEFGHIJKLMNOPQRST", "password=hunter2"])
+    hyp = MioHypothesis.from_mapping({"hypothesis_id": "password=hunter2", "statement": "s", "falsification_conditions": ["c"]}, ordinal=1)
+    payload = build_no_model_handoff(f, reason="model_absent password=hunter2", playbook=PLAYBOOK, hypotheses=[hyp]).to_dict()
+    blob = json.dumps(payload)
+    assert "hunter2" not in blob and "ghp_ABCDEFGHIJKLMNOPQRST" not in blob
+    assert payload["model_proposed_hypotheses"][0]["hypothesis_id"] == "invalid-hypothesis-id-1"
+    assert payload["evidence_refs"][0] == "ev:ssh:1"
+    assert payload["trace_id"] == "trace-1"
+
+
+def test_handoff_replaces_invalid_trace_id():
+    f = frame(trace_id="token=s3cr3t-value")
+    payload = build_no_model_handoff(f, reason="model_absent").to_dict()
+    assert "s3cr3t" not in json.dumps(payload)
+    assert payload["trace_id"] == "invalid-trace-id"
+
+
+# --- review follow-ups: sink hardening and mutants ----------------------------------
+
+def test_real_append_uses_o_append_nofollow_and_fsyncs_each_record(tmp_path, monkeypatch):
+    seen_flags, fsyncs = [], []
+    real_open, real_fsync = os.open, os.fsync
+
+    def spy_open(path, flags, *a, **kw):
+        if str(path).endswith(".jsonl"):
+            seen_flags.append(flags)
+        return real_open(path, flags, *a, **kw)
+
+    def spy_fsync(fd):
+        fsyncs.append(fd)
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "open", spy_open)
+    monkeypatch.setattr(os, "fsync", spy_fsync)
+    sink = TraceAuditSink(str(tmp_path / "a.jsonl"))
+    for i in range(3):
+        assert sink.append(_record(i)).written
+    assert seen_flags and all(fl & os.O_APPEND and fl & os.O_NOFOLLOW for fl in seen_flags)
+    assert len(fsyncs) >= 3 + 1  # one per record, plus the directory after create
+
+
+def test_real_append_refuses_symlink_and_fifo(tmp_path):
+    target = tmp_path / "target"
+    target.write_bytes(b"")
+    link = tmp_path / "link.jsonl"
+    link.symlink_to(target)
+    sink = TraceAuditSink(str(link))
+    assert not sink.append(_record()).written and not sink.advisory_allowed()
+    assert target.read_bytes() == b""
+    fifo = tmp_path / "fifo.jsonl"
+    os.mkfifo(fifo)
+    sink2 = TraceAuditSink(str(fifo))
+    assert not sink2.append(_record()).written and not sink2.advisory_allowed()
+
+
+def test_real_append_repairs_mode_and_torn_tail(tmp_path):
+    path = tmp_path / "a.jsonl"
+    path.write_bytes(b'{"torn":')
+    os.chmod(path, 0o644)
+    assert TraceAuditSink(str(path)).append(_record(1)).written
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    lines = path.read_bytes().split(b"\n")
+    assert lines[0] == b'{"torn":' and json.loads(lines[1])["seq"] == 1
+
+
+def test_partial_write_is_truncated_back(tmp_path, monkeypatch):
+    path = tmp_path / "a.jsonl"
+    sink = TraceAuditSink(str(path))
+    assert sink.append(_record(0)).written
+    before = path.read_bytes()
+    real_write = os.write
+    calls = {"n": 0}
+
+    def flaky(fd, data):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_write(fd, bytes(data[:10]))
+        raise OSError(errno.ENOSPC, "full")
+
+    monkeypatch.setattr(os, "write", flaky)
+    res = sink.append(_record(1))
+    monkeypatch.setattr(os, "write", real_write)
+    assert res.reason == "append_failed:enospc"
+    assert path.read_bytes() == before
+
+
+def test_sink_catches_any_exception_and_rejects_non_mapping():
+    class Boom(FakeFS):
+        def append_fsync(self, path, data):
+            raise RecursionError("deep")
+    sink = TraceAuditSink("/a.jsonl", fs=Boom())
+    assert sink.append(_record()).reason == "append_failed:exception"
+    sink.reset_degraded()
+    assert sink.append(["not", "a", "mapping"]).reason == "non_mapping_record"
+    deep: dict = {}
+    cur = deep
+    for _ in range(5000):
+        cur["x"] = {}
+        cur = cur["x"]
+    sink.reset_degraded()
+    assert sink.append(deep).reason == "unencodable_record"
+
+
+def test_rotation_deletes_only_the_oldest_and_shifts_in_order():
+    fs = FakeFS()
+    sink = TraceAuditSink("/a.jsonl", max_file_bytes=MAX_RECORD_BYTES, max_files=3, fs=fs)
+    for i in range(30):
+        assert sink.append(_record(i)).written
+    seqs = {p: [json.loads(l)["seq"] for l in fs.files[p].splitlines()] for p in fs.files}
+    assert max(seqs["/a.jsonl.2"]) < min(seqs["/a.jsonl.1"])
+    assert max(seqs["/a.jsonl.1"]) < min(seqs["/a.jsonl"])
+    assert seqs["/a.jsonl"][-1] == 29
+    # contiguous: nothing but the oldest file's records was ever lost
+    all_seqs = sorted(s for v in seqs.values() for s in v)
+    assert all_seqs == list(range(all_seqs[0], 30))
+    assert fs.dir_syncs >= 1
+
+
+def test_record_cycle_respects_degraded_even_if_write_succeeds():
+    fs = FakeFS(fail_errno=errno.ENOSPC)
+    sink = TraceAuditSink("/a.jsonl", fs=fs)
+    assert record_cycle(sink, lambda: _record()) is False
+    fs.fail_errno = None  # disk recovered, but no operator reset yet
+    assert sink.append(_record()).written is True
+    assert record_cycle(sink, lambda: _record()) is False
+    sink.reset_degraded()
+    assert record_cycle(sink, lambda: _record()) is True
