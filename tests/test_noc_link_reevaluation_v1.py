@@ -648,6 +648,56 @@ class PeriodicAfterLinkEventTests(unittest.TestCase):
         self.assertGreater(control_daemon._NOC_CACHE['ts'], 1.0)
 
 
+    def test_link_events_on_two_interfaces_are_both_merged(self) -> None:
+        monitor = nm.LightweightNocMonitor(up_interface='br0', down_interface='usb0', extra_interfaces=['eth1'])
+        monitor._last_snapshot = _base_snapshot()
+        monitor._last_snapshot['collection_timing'] = {'started_monotonic_ns': 1}
+        events = []
+
+        def reachable(gw, interface=''):
+            return [{'interface': interface, 'target': t, 'scope': 'external', 'reachable': True} for t in ('1.1.1.1', '8.8.8.8')]
+
+        def dns_then_two_link_events(name):
+            if not events:
+                with patch.object(nm, 'collect_icmp', side_effect=lambda t, interface='': {'interface': interface, 'target': t, 'reachable': False}):
+                    events.append(monitor.refresh_interfaces(['eth1']))
+                    events.append(monitor.refresh_interfaces(['usb0']))
+            return {'name': name, 'resolved': True}
+
+        patches = _quiet_collectors(collect_path_probes=reachable, collect_dns_resolution=dns_then_two_link_events)
+        for p in patches:
+            p.start()
+        try:
+            full = monitor.collect_snapshot()
+        finally:
+            for p in patches:
+                p.stop()
+        by_iface = {}
+        for row in full['path_probes']:
+            by_iface.setdefault(row['interface'], []).append(row['reachable'])
+        self.assertTrue(by_iface['eth1'] and not any(by_iface['eth1']))  # first event kept
+        self.assertTrue(by_iface['usb0'] and not any(by_iface['usb0']))  # second event kept
+        self.assertTrue(all(by_iface['br0']))  # the full collection's own
+        second = events[1]['collection_timing']['started_monotonic_ns']
+        self.assertGreater(second, events[0]['collection_timing']['started_monotonic_ns'])
+        self.assertEqual(full['collection_timing']['link_event_started_monotonic_ns'], second)
+        # the second event's own published view also kept the first event's rows
+        eth1 = [r for r in events[1]['path_probes'] if r['interface'] == 'eth1']
+        self.assertTrue(eth1 and not any(r['reachable'] for r in eth1))
+
+    def test_tracked_refreshes_are_bounded_to_monitored_interfaces(self) -> None:
+        monitor = nm.LightweightNocMonitor(up_interface='br0', down_interface='usb0')
+        monitor._last_snapshot = _base_snapshot()
+        monitor._refreshes['gone0'] = {'started_ns': 1, 'path_probes': []}
+        with patch.object(nm, 'collect_icmp', side_effect=lambda t, interface='': {'interface': interface, 'target': t, 'reachable': False}), \
+             patch.object(nm, '_default_icmp_target', return_value='172.16.0.254'), \
+             patch.object(nm, 'collect_iface_stats', return_value=[]):
+            monitor.refresh_interfaces(['br0'])
+            monitor.refresh_interfaces(['usb0'])
+        self.assertEqual(sorted(monitor._refreshes), ['br0', 'usb0'])
+        self.assertLessEqual(len(monitor._refreshes), nm.MAX_TRACKED_REFRESHES)
+
+
 class WatcherRobustnessTests(unittest.TestCase):
     @staticmethod
     def _sysfs(root: Path, oper: str, carrier: str) -> None:
@@ -735,6 +785,8 @@ class WatcherRobustnessTests(unittest.TestCase):
         class Flood:
             def recv(self, n):
                 reads.append(1)
+                if len(reads) > 10 * lw.MAX_MESSAGES_PER_DRAIN:
+                    raise BlockingIOError  # an uncapped drain ends here and fails below, not by hanging
                 return _link_msg('eth9')
 
         w = lw.LinkStateWatcher(lambda: ['br0'], lambda i: None)

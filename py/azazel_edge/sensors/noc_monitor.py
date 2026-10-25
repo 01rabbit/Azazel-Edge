@@ -69,16 +69,26 @@ DEFAULT_COLLECTOR_TIMEOUT_S = 10.0
 INTERFACE_REFRESH_TIMEOUT_S = 5.0
 
 
-def _merge_refresh_rows(snapshot: Dict[str, Any], refresh: Dict[str, Any]) -> Dict[str, Any]:
-    interfaces = set(refresh.get('interfaces') or [])
-    merged: Dict[str, Any] = {}
-    if interfaces:
-        rows = [r for r in (snapshot.get('path_probes') or []) if not (isinstance(r, dict) and r.get('interface') in interfaces)]
-        rows.extend(refresh.get('path_probes') or [])
-        merged['path_probes'] = rows
-    if isinstance(refresh.get('iface_stats'), list):
-        merged['iface_stats'] = refresh['iface_stats']
-    return merged
+MAX_TRACKED_REFRESHES = 32
+
+
+def _apply_refreshes(snapshot: Dict[str, Any], refreshes: Dict[str, Dict[str, Any]], iface_stats: Optional[Dict[str, Any]], since_ns: int) -> Optional[int]:
+    """Replace, in ``snapshot``, the path-probe rows of every interface whose
+    link-event refresh started after ``since_ns`` (each by its own stamp), and
+    the interface stats if their refresh did. Returns the newest stamp
+    applied, or None if nothing was newer."""
+
+    newer = {iface: r for iface, r in refreshes.items() if int(r.get('started_ns') or 0) > since_ns}
+    applied = [int(r['started_ns']) for r in newer.values()]
+    if newer:
+        rows = [r for r in (snapshot.get('path_probes') or []) if not (isinstance(r, dict) and r.get('interface') in newer)]
+        for iface in sorted(newer):
+            rows.extend(newer[iface].get('path_probes') or [])
+        snapshot['path_probes'] = rows
+    if isinstance(iface_stats, dict) and int(iface_stats.get('started_ns') or 0) > since_ns and isinstance(iface_stats.get('rows'), list):
+        snapshot['iface_stats'] = iface_stats['rows']
+        applied.append(int(iface_stats['started_ns']))
+    return max(applied) if applied else None
 
 
 class CollectorTimeout(Exception):
@@ -585,9 +595,12 @@ class LightweightNocMonitor:
         self.collector_timeouts_s = dict(COLLECTOR_TIMEOUTS_S)
         self._runner = _BoundedRunner()
         self._last_snapshot: Optional[Dict[str, Any]] = None
-        # The rows of the latest link-event refresh, so a full collection
-        # that started before it does not bring older rows for its interfaces back.
-        self._last_refresh: Optional[Dict[str, Any]] = None
+        # The rows of the latest link-event refresh of each interface (each
+        # with its own start stamp), so a full collection that started before
+        # them does not bring older rows for those interfaces back.
+        self._refreshes: Dict[str, Dict[str, Any]] = {}
+        self._refresh_iface_stats: Optional[Dict[str, Any]] = None
+        self._refresh_lock = threading.Lock()
 
     def monitored_interfaces(self) -> List[str]:
         seen: List[str] = []
@@ -854,12 +867,12 @@ class LightweightNocMonitor:
             'duration_ms': round((time.monotonic_ns() - collection_started_ns) / 1e6, 1),
             'collectors': timings,
         }
-        refresh = self._last_refresh
-        if isinstance(refresh, dict) and int(refresh.get('started_ns') or 0) > collection_started_ns:
-            # A link-event refresh started while this collection ran: its
-            # interface rows are newer than ours; everything else is ours.
-            snapshot.update(_merge_refresh_rows(snapshot, refresh))
-            snapshot['collection_timing']['link_event_started_monotonic_ns'] = int(refresh['started_ns'])
+        # Link-event refreshes that started while this collection ran: their
+        # interface rows are newer than ours; everything else is ours.
+        with self._refresh_lock:
+            merged = _apply_refreshes(snapshot, dict(self._refreshes), self._refresh_iface_stats, collection_started_ns)
+        if merged is not None:
+            snapshot['collection_timing']['link_event_started_monotonic_ns'] = merged
         self._last_snapshot = snapshot
         return snapshot
 
@@ -953,12 +966,25 @@ class LightweightNocMonitor:
         snapshot = dict(base)
         snapshot['path_probes'] = rows
         snapshot['iface_stats'] = iface_stats
-        self._last_refresh = {
-            'started_ns': started_ns,
-            'interfaces': list(refreshed),
-            'path_probes': [done[n] for n, p in enumerate(probes) if p[0] in refreshed],
-            'iface_stats': iface_stats if not any(f['collector'] == 'iface_stats' for f in failures) else None,
-        }
+        with self._refresh_lock:
+            for iface in refreshed:
+                self._refreshes[iface] = {
+                    'started_ns': started_ns,
+                    'path_probes': [done[n] for n, p in enumerate(probes) if p[0] == iface],
+                }
+            if not any(f['collector'] == 'iface_stats' for f in failures):
+                self._refresh_iface_stats = {'started_ns': started_ns, 'rows': iface_stats}
+            # Bounded: only monitored interfaces, at most MAX_TRACKED_REFRESHES.
+            for iface in [i for i in self._refreshes if i not in monitored]:
+                del self._refreshes[iface]
+            while len(self._refreshes) > MAX_TRACKED_REFRESHES:
+                del self._refreshes[min(self._refreshes, key=lambda i: self._refreshes[i]['started_ns'])]
+            # Earlier refreshes of other interfaces since the base collection
+            # stay in this result too.
+            base_started = (base.get('collection_timing') or {}).get('started_monotonic_ns') if isinstance(base.get('collection_timing'), dict) else None
+            others = {i: r for i, r in self._refreshes.items() if i not in refreshed}
+            if isinstance(base_started, int) and others:
+                _apply_refreshes(snapshot, others, None, base_started)
         rerun = {'iface_stats'} if not any(f['collector'] == 'iface_stats' for f in failures) else set()
         snapshot['collector_failures'] = [
             f for f in (base.get('collector_failures') or []) if not (isinstance(f, dict) and f.get('collector') in rerun)
