@@ -49,6 +49,15 @@ Event order never changes the frame: freshness uses the newest timestamp of all 
 event IDs referenced are chosen by severity (desc), then recency (desc), then `event_id`, with
 duplicates collapsed. NOC/SOC `evidence_ids` keep the evaluator's order, which is deterministic.
 
+## Input contract
+
+`MioSituationFrameBuilder.build()` expects a **bounded, already-materialised event window**,
+not an open-ended stream. Building is O(n) in the number of events (one pass, O(`max_event_refs`)
+memory), so the caller owns the bound: when live wiring lands, the bound is the Evidence Plane
+read limit/time window used to fetch the events. Current callers pass fixture lists only:
+`azazel_edge.mio.evaluation` (offline evaluation corpus) and `bin/azazel-mio-shadow-replay`.
+The builder makes no network or model calls and never reads events itself.
+
 ## Optional dependencies (Knowledge / AZ-06)
 
 `knowledge_status` and `deception_status` are one of

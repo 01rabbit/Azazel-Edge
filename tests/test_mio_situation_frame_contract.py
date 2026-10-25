@@ -418,3 +418,21 @@ def test_builder_configuration_is_clamped():
     assert builder.max_event_refs == 64
     assert builder.future_clock_skew_seconds == 60
     assert MioSituationFrameBuilder(max_event_refs=0).max_event_refs == 1
+
+
+@pytest.mark.parametrize("k_status", ["timeout", "malformed", "unavailable", "not_provided"])
+@pytest.mark.parametrize("d_status", ["timeout", "malformed", "unavailable", "not_provided", "available"])
+def test_round_trip_preserves_dependency_statuses(k_status, d_status):
+    frame = _build(dict(_golden_inputs(), knowledge_refs=["kn:x"], knowledge_status=k_status, deception_status=d_status))
+    again = MioSituationFrame.from_dict(frame.to_dict())
+    assert (again.knowledge_status, again.deception_status) == (k_status, d_status)
+    assert again == frame
+
+
+def test_round_trip_rejects_available_without_refs():
+    payload = _valid_payload()
+    assert payload["knowledge_status"] == "available"
+    payload["knowledge_refs"] = []
+    payload["provenance"].pop("knowledge_refs")
+    with pytest.raises(ValueError, match="inconsistent_knowledge_status"):
+        MioSituationFrame.from_dict(payload)
