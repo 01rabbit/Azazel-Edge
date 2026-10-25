@@ -346,12 +346,61 @@ def _requested_tbf_semantics(execution: ActionExecutionReceipt, interface: str) 
     raise ValueError("requested plan does not contain expected root TBF command")
 
 
+_TBF_READBACK_KEYS = ("rate", "burst", "lat")
+_MISSING = object()
+
+
+def _tbf_readback_fields(item: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Locate TBF ``rate``/``burst``/``lat`` in one ``tc -j qdisc show`` item.
+
+    iproute2 with TBF JSON support (observed: 5.5, 6.1, 6.15) nests them under
+    ``options``; a flat top-level shape is accepted for compatibility. Ambiguity fails
+    closed: a non-object ``options``, fields split across both locations, a field
+    missing from the location carrying the others, or the same field present in both
+    with different values all yield ``None``, as does a value that is not a
+    non-negative integer or a string. Mirrors the Rust release readback.
+    """
+
+    if "options" in item:
+        options = item["options"]
+        if not isinstance(options, Mapping):
+            return None
+    else:
+        options = {}
+    nested_any = any(key in options for key in _TBF_READBACK_KEYS)
+    fields: dict[str, Any] = {}
+    for key in _TBF_READBACK_KEYS:
+        top = item.get(key, _MISSING)
+        if nested_any:
+            nested = options.get(key, _MISSING)
+            if nested is _MISSING:
+                return None
+            if top is not _MISSING and (type(top) is not type(nested) or top != nested):
+                return None
+            fields[key] = nested
+        else:
+            if top is _MISSING:
+                return None
+            fields[key] = top
+    for value in fields.values():
+        # Same value types the Rust release readback accepts: a non-negative integer
+        # or a unit string. Floats, bools, null and containers are unverifiable.
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            return None
+        if isinstance(value, int) and value < 0:
+            return None
+    return fields
+
+
 def _readback_tbf_semantics(item: Mapping[str, Any]) -> dict[str, int] | None:
+    fields = _tbf_readback_fields(item)
+    if fields is None:
+        return None
     try:
         return {
-            "rate_bps": _parse_readback_rate_bps(item.get("rate")),
-            "burst_bytes": _parse_readback_size_bytes(item.get("burst")),
-            "latency_us": _parse_readback_time_us(item.get("lat")),
+            "rate_bps": _parse_readback_rate_bps(fields["rate"]),
+            "burst_bytes": _parse_readback_size_bytes(fields["burst"]),
+            "latency_us": _parse_readback_time_us(fields["lat"]),
         }
     except (ValueError, TypeError, OverflowError):
         return None
