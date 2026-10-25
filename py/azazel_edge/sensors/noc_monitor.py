@@ -567,15 +567,36 @@ class LightweightNocMonitor:
 
     def collect_snapshot(self) -> Dict[str, Any]:
         failures: List[Dict[str, str]] = []
+        timings: List[Dict[str, Any]] = []
+        collection_started_ns = time.monotonic_ns()
+
+        def timed(name: str, func: Callable[[], Any]) -> Any:
+            # Diagnostic only: when each collector started (offset from the
+            # start of this collection) and how long it ran, on CLOCK_MONOTONIC.
+            # Never read by any evaluator; exceptions propagate unchanged.
+            started = time.monotonic_ns()
+            outcome = 'error'
+            try:
+                value = func()
+                outcome = 'ok'
+                return value
+            finally:
+                ended = time.monotonic_ns()
+                timings.append({
+                    'collector': name,
+                    'started_offset_ms': round((started - collection_started_ns) / 1e6, 1),
+                    'duration_ms': round((ended - started) / 1e6, 1),
+                    'outcome': outcome,
+                })
 
         def capture(name: str, func: Callable[[], Any], default: Any) -> Any:
             try:
-                return func()
+                return timed(name, func)
             except Exception as exc:
                 failures.append({'collector': name, 'error': str(exc)})
                 return default
 
-        icmp_target = _default_icmp_target(self.gateway_ip)
+        icmp_target = timed('icmp_target', lambda: _default_icmp_target(self.gateway_ip))
         iface_stats = capture(
             'iface_stats',
             lambda: collect_iface_stats([self.up_interface, self.down_interface]),
@@ -616,5 +637,10 @@ class LightweightNocMonitor:
             'arp_table': capture('arp_table', collect_arp_table, []),
             'service_health': capture('service_health', collect_service_health, {}),
             'collector_failures': failures,
+        }
+        snapshot['collection_timing'] = {
+            'started_monotonic_ns': collection_started_ns,
+            'duration_ms': round((time.monotonic_ns() - collection_started_ns) / 1e6, 1),
+            'collectors': timings,
         }
         return snapshot

@@ -61,6 +61,7 @@ class LightweightNocMonitorV1Tests(unittest.TestCase):
                 'icmp', 'path_probes', 'path_probe_window', 'iface_stats', 'capacity_samples', 'capacity_pressure',
                 'resolution_probes', 'resolution_probe_window', 'service_probes', 'service_probe_window',
                 'cpu_mem_temp', 'dhcp_leases', 'arp_table', 'service_health', 'collector_failures',
+                'collection_timing',
             },
         )
         self.assertEqual(snapshot['collector_failures'], [])

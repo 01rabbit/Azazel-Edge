@@ -1022,6 +1022,45 @@ def _traffic_top_sources(event_payloads: list[dict[str, Any]]) -> list[dict[str,
     return []
 
 
+NOC_COLLECTION_VIEW_MAX_COLLECTORS = 16
+NOC_COLLECTION_VIEW_NAME_MAX = 48
+
+
+def _noc_collection_view(timing: Any, trigger: str = "periodic") -> dict[str, Any]:
+    """Bounded, read-only view of how long one NOC collection took.
+
+    Diagnostic only: per-collector start offset and duration on
+    CLOCK_MONOTONIC, copied from the collector's own stamps. Nothing reads it
+    for a decision; it lets an operator (and the SO-02 harness) see which
+    collector a slow collection spent its time in.
+    """
+
+    timing = timing if isinstance(timing, dict) else {}
+
+    def _num(value: Any) -> float | None:
+        return round(float(value), 1) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    started = timing.get("started_monotonic_ns")
+    collectors: list[dict[str, Any]] = []
+    for row in timing.get("collectors") or []:
+        if len(collectors) >= NOC_COLLECTION_VIEW_MAX_COLLECTORS:
+            break
+        if not isinstance(row, dict):
+            continue
+        collectors.append({
+            "collector": str(row.get("collector") or "")[:NOC_COLLECTION_VIEW_NAME_MAX],
+            "started_offset_ms": _num(row.get("started_offset_ms")),
+            "duration_ms": _num(row.get("duration_ms")),
+            "outcome": str(row.get("outcome") or "")[:16],
+        })
+    return {
+        "trigger": str(trigger or "periodic")[:32],
+        "started_monotonic_ns": int(started) if isinstance(started, int) and not isinstance(started, bool) else None,
+        "duration_ms": _num(timing.get("duration_ms")),
+        "collectors": collectors,
+    }
+
+
 def _build_noc_runtime_projection(
     *,
     evaluation: dict[str, Any],
@@ -1029,6 +1068,7 @@ def _build_noc_runtime_projection(
     inventory_summary: dict[str, Any],
     inventory_sessions: list[dict[str, Any]] | None = None,
     preferred_uplink: str = "",
+    collection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     capacity = evaluation.get("capacity_health") if isinstance(evaluation.get("capacity_health"), dict) else {}
     service = evaluation.get("service_health") if isinstance(evaluation.get("service_health"), dict) else {}
@@ -1164,6 +1204,7 @@ def _build_noc_runtime_projection(
             "status": str(summary.get("status") or "unknown"),
             "evidence_count": int(len(evaluation.get("evidence_ids") or [])),
             "updated_epoch": time.time(),
+            "collection": collection if isinstance(collection, dict) else _noc_collection_view({}),
         },
     }
 
@@ -1189,7 +1230,8 @@ def _compute_live_noc_projection(up_if: str, down_if: str, gateway_ip: str) -> d
             )
             _NOC_ADAPTER_KEY = key
 
-        events = _NOC_ADAPTER.collect()
+        noc_snapshot = _NOC_ADAPTER.collect_snapshot()
+        events = _NOC_ADAPTER.collect(noc_snapshot)
         payloads = _event_payloads(events)
         sot_payload, _sot_path = _load_sot_payload()
         inventory = build_client_inventory(events, sot=sot_payload)
@@ -1202,6 +1244,7 @@ def _compute_live_noc_projection(up_if: str, down_if: str, gateway_ip: str) -> d
             inventory_summary=inventory_summary,
             inventory_sessions=inventory_sessions,
             preferred_uplink=up_if,
+            collection=_noc_collection_view(noc_snapshot.get("collection_timing"), "periodic"),
         )
         _NOC_CACHE["key"] = key
         _NOC_CACHE["ts"] = now
