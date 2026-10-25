@@ -1726,7 +1726,11 @@ def read_ui_snapshot() -> dict[str, Any]:
                     continue
                 data = _parse_json_dict_lenient(path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    return _snapshot_payload_from_file(path, data, mode_payload)
+                    payload = _snapshot_payload_from_file(path, data, mode_payload)
+                    # The persisted snapshot predates any link-event
+                    # re-evaluation published while the refresh loop builds.
+                    _overlay_latest_noc(payload)
+                    return payload
             except Exception:
                 continue
 

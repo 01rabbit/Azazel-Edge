@@ -441,6 +441,23 @@ class DaemonPublishTests(unittest.TestCase):
         self.assertEqual(snap['user_state'], 'SAFE')
         self.assertEqual(control_daemon._noc_monitored_interfaces(), ['br0', 'usb0'])
 
+    def test_file_fallback_while_the_loop_builds_shows_the_newest_noc_view(self) -> None:
+        import json as _json
+        control_daemon._NOC_CACHE.update({'key': 'k', 'ts': time.time(), 'payload': self._projection(200, ['br0'], 'link_event')})
+        control_daemon._SNAPSHOT_CACHE.update({'ts': 0.0, 'payload': None})  # expired
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'ui_snapshot.json'
+            path.write_text(_json.dumps({'user_state': 'SAFE', **self._projection(100, [])}))
+            assert control_daemon.SNAPSHOT_CACHE_LOCK.acquire(timeout=5)  # the refresh loop is building
+            try:
+                with patch.object(control_daemon, '_snapshot_candidates', return_value=[path]), \
+                     patch.object(control_daemon.MODE_MANAGER, 'status', return_value={}):
+                    payload = control_daemon.read_ui_snapshot()
+            finally:
+                control_daemon.SNAPSHOT_CACHE_LOCK.release()
+        self.assertEqual(payload['snapshot']['noc_blast_radius']['affected_uplinks'], ['br0'])
+        self.assertEqual(payload['snapshot']['user_state'], 'SAFE')
+
     def test_link_event_without_adapter_is_a_no_op(self) -> None:
         control_daemon._NOC_ADAPTER = None
         control_daemon._noc_link_event_reevaluate(['br0'])
