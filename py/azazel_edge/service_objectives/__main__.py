@@ -36,9 +36,10 @@ from .record import (
 
 
 def _harnesses(args: argparse.Namespace) -> Dict[str, Callable[[], Dict[str, Any]]]:
-    from . import so03_alert_queue, so04_lease_rollback, so07_audit_ordering
+    from . import so02_source_failure, so03_alert_queue, so04_lease_rollback, so07_audit_ordering
 
     return {
+        "SO-02": lambda: so02_source_failure.run(seed=args.seed),
         "SO-03": lambda: so03_alert_queue.run(seed=args.seed),
         "SO-04": lambda: so04_lease_rollback.run(core_bin=Path(args.core_bin) if args.core_bin else None, seed=args.seed),
         "SO-07": lambda: so07_audit_ordering.run(seed=args.seed),
@@ -129,7 +130,7 @@ def main(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m azazel_edge.service_objectives", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
     run_p = sub.add_parser("run")
-    run_p.add_argument("--objective", choices=["all", "SO-03", "SO-04", "SO-07"], default="all")
+    run_p.add_argument("--objective", choices=["all", "SO-02", "SO-03", "SO-04", "SO-07"], default="all")
     run_p.add_argument("--out-dir", required=True)
     run_p.add_argument("--core-bin", default="")
     run_p.add_argument("--seed", type=int, default=None)

@@ -1,7 +1,7 @@
-# Service-objective declarations (OF-05, OF-06)
+# Service-objective declarations (OF-05, OF-06, SO-02, SO-05)
 
 Tracking: #414  
-Assignment: `01rabbit/Azazel:docs/roadmaps/service-objective-assignments.md` (SO-04, SO-11, OF-05, OF-06)  
+Assignment: `01rabbit/Azazel:docs/roadmaps/service-objective-assignments.md` (SO-02, SO-04, SO-05, SO-11, OF-05, OF-06)  
 Harnesses: `py/azazel_edge/service_objectives/`
 
 Two rows the assignment gives Edge presume a value that Edge has to declare:
@@ -164,3 +164,60 @@ already keeps the SO-04 parts `not_measurable` for the same reason.
   appliance), and who runs the R7 hardware confirmation?
 - **Where the shed counter is reported**, so that a harness can read it without
   privileged access to the Core.
+
+## SO-02 — source/interface failure visible (virtual-lab harness, not measurable)
+
+Harness: `py/azazel_edge/service_objectives/so02_source_failure.py`
+(`python -m azazel_edge.service_objectives run --objective SO-02`, as root).
+
+What Edge already does, and what the harness measures without changing it:
+
+- **Capture process death.** `GET /api/state` computes `monitoring.suricata`
+  on every request (`azazel_edge_web/app.py` `get_monitoring_state`): `OFF`
+  once the Suricata unit is inactive or the pid in `/run/suricata.pid` is gone.
+- **Capture interface link down.** The control daemon's NOC projection lists in
+  `noc_blast_radius.affected_uplinks` every interface whose path probes fail
+  (`py/azazel_edge/evaluators/noc.py` `_evaluate_affected_scope`). `br0` is
+  Edge's default capture interface (`SURICATA_IFACE`) and internal monitor
+  bridge. The projection refreshes at most every `AZAZEL_NOC_REFRESH_SEC`
+  (default 20 s) and the snapshot every `AZAZEL_SNAPSHOT_REFRESH_SEC`
+  (default 12 s); the harness measures those defaults and does not shorten them.
+
+The harness builds two network namespaces, runs the control daemon, the web UI
+under gunicorn and Suricata on `br0` inside them, injects each failure ten
+times, and polls the surface with a viewer-role token. It refuses to start when
+a Suricata is already running, so it never touches a live capture.
+
+The row stays `not_measurable` because of three gaps the owner has to close:
+the configuration is not Edge integrated into a Nexus Core install
+(`SO02-NOT-NEXUS-INTEGRATED`); Edge declares no list of source types, and no
+feed source type is declared (`SO02-SOURCE-TYPES-UNDECLARED`); and the
+interface has no commissioned identity (`SO02-NO-COMMISSIONED-INTERFACE-IDENTITY`).
+The physical-NIC variant is hardware-only (R7). A virtual-lab record declares
+`hardware_evidence: false`, and the validator rejects one that does not.
+
+## SO-05 — local M.I.O. failure reflected as `CORE ONLY` (no harness: the state does not exist)
+
+No harness is built, because the behaviour SO-05 measures does not exist in Edge:
+
+- **No `CORE ONLY` capability state.** No code, configuration or surface in this
+  repository has such a state.
+- **Nothing reflects a local-model failure as a capability state.** The AI
+  agent's only runtime policy is `normal` / `degraded`
+  (`py/azazel_edge_ai/agent.py` `_set_policy_mode`, `_recompute_policy`). It
+  switches only on answer-quality ratios after at least 10 requests, chooses a
+  smaller model, and is written to the policy and metrics files. It is not a
+  capability state.
+- **No audit record names the cause.** The switch is only a log line, so even a
+  change there would not satisfy "an audit record names the degradation cause".
+- **The dashboard's `ai_agent` ON/OFF** (`azazel_edge_web/app.py`
+  `service_summary`) shows whether the `azazel-edge-ai-agent` unit is active.
+  It does not show the model runtime (Ollama), and it is not a capability
+  state.
+- **No health probe of the model runtime.** Nothing probes it, so a hung health
+  probe (one of the definition's failure modes) has nothing to act on.
+
+The assignment already defers SO-05 to R6 because the local M.I.O. runtime
+profile is not implemented (Azazel-Nexus#5). Building the state, its audit
+record and a probe would add product function, and that is the owner's decision.
+
