@@ -282,8 +282,8 @@ alert rule uses.
 | --- | --- | --- | --- | --- |
 | `non_alert_flood` | 3000 (flow, dns, stats, http: 750 each) | 1000 | — | 2500 × 1.2; over the quota, so the core must shed |
 | `malformed_mix` | 3000 (flow, dns, stats, http, invalid UTF-8: 600 each) | 1000 | 1 oversized line/s of 2 MiB | 2500 × 1.2; oversized = 2 × `max_line_bytes`, at 0.25 × `backlog_bound_bytes` per second |
-| `backlog_flood` | 30000 (flow, dns, stats, http: 7500 each), one burst per second | 1000 | — | 2500 × 12 (over 10 × the quota); each burst is about 18 MB, more than twice the 8 MiB `backlog_bound_bytes`, so the core's backlog shedding must act |
 | `alert_flood` | 0 | 5000 | — | `alerts_per_poll` 1000 per 200 ms poll: the poll cap |
+| `backlog_flood` | 30000 (flow, dns, stats, http: 7500 each), one burst per second | 1000 | — | 2500 × 12 (over 10 × the quota); each burst is about 18 MB, more than twice the 8 MiB `backlog_bound_bytes`, so the core's backlog shedding must act | (the last phase, see attribution below)
 
 Alert rate rule: `alert_poll_fill × alerts_per_poll × 1000 / poll_ms`. Other
 lines are padded to about 600 bytes (as the SO-11 probe does). Timing:
@@ -291,7 +291,25 @@ lines are padded to about 600 bytes (as the SO-11 probe does). Timing:
 net in 3 s, and the loader checks this for every over-quota phase),
 `hold_after_ms` 2000, `quiet_gap_ms` 3000 between phases, and
 `audit_attribution_slack_ms` 2000 (at least the 1 s audit interval and below the
-quiet gap, so no `ingress_shed` summary can belong to two phases).
+quiet gap).
+
+**Attribution.** An `ingress_shed` summary belongs to the phase whose window
+started last before it was emitted, up to the next phase's window start; the
+last phase keeps every later summary. Nothing is written in the quiet gap, so a
+core still reading a phase's lines after its window stays accounted to that
+phase. The backlog phase must be the last one (the loader checks it): a slow
+host can still be reading its backlog well after the window, and as the last
+phase that tail is covered by the harness's final drain. The driver writes
+alerts last in every chunk, so once the core has decided every alert written
+(what the drain waits for) it has read every line.
+
+Until main 3dc2801 a summary belonged to a phase only up to `window +
+audit_attribution_slack_ms`. On a GitHub runner the core was still reading the
+backlog phase about 2.4 s after its window (55 MB unread at the peak), so the
+summary accounting for the last 55000 lines fell outside, and the excess,
+computed from every line written, counted lines the core had not yet read
+(run 40221768896: 182509 shed against a floor of 196562; with the summary,
+233433). The accounting below replaces it.
 
 **Defaults awaiting owner confirmation.** The factors under `owner_defaults`
 were chosen when the profile was written: `non_alert_factor` 1.2 (SO-11's
@@ -333,13 +351,20 @@ profile and the quota from the tree and checks that:
 - the core's summaries: `alerts_shed` 0 and `oversized_possible_alerts` 0 in
   every one, the quota block equal to the declared quota, no summary missing
   (cumulative totals equal the summed intervals), the audit not rotated; for
-  each over-quota phase, the lines shed in the summaries attributed to it are
-  at least `(1 − shed_tolerance)` × the excess (non-alert lines written minus
-  `value × window + non_alert_burst`, which no bucket could admit), at least
-  one of them for the rate, and the non-alert lines the core admitted there are
-  at most `value × (window + slack) + non_alert_burst`; container runs shed
-  1.28–1.96 × the excess, because the class reserves shed flow, dns and stats
-  before the bucket is empty. In the backlog phase the summaries must also show
+  every summary adds up (`examined = shed_total + admitted +
+  oversized_lines_skipped`); for each over-quota phase, the summaries attributed
+  to it account for at least `(1 − shed_tolerance)` of the lines written in it,
+  the lines shed there are at least `(1 − shed_tolerance)` × the excess
+  (non-alert lines written minus `value × read_s + non_alert_burst`, where
+  `read_s` runs from the window start to the last summary attributed to the
+  phase, at least the window: what no bucket could admit in the time the core
+  had to read the phase), at least one of them for the rate, and the non-alert
+  lines the core admitted there are at most `value × (read_s + slack) +
+  non_alert_burst`. Container and GitHub runs shed 1.05–10 × that excess (the
+  class reserves shed flow, dns and stats before the bucket is empty; the
+  backlog phase sheds close to it). Forging a smaller shed count either breaks a
+  summary's sum, raises `admitted` above the quota, or lowers `examined` below
+  what was written. In the backlog phase the summaries must also show
   lines shed for the backlog and a shed level of at least 1. For each phase, the
   oversized lines the core skipped equal those written;
 - every hostile sample's lease expired inside its phase's window after the

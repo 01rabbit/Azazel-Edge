@@ -470,6 +470,11 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
         for ph, d in derived_all
     ):
         problems.append("no backlog phase: non-alert lines over 10 times the quota, in bursts of at least twice backlog_bound_bytes")
+    elif not derived_all[-1][1]["burst_interval_ms"] or burst_backlog_bytes(derived_all[-1][1], doc["line_bytes"]) < 2 * quota["backlog_bound_bytes"]:
+        # The core may still be reading a backlog phase after its window; as
+        # the last phase, its tail is covered by the harness's final drain and
+        # by the attribution of every later summary to it.
+        problems.append("the backlog phase must be the last phase")
     if fill_max < 1.0:
         problems.append("no phase offers alerts at the poll cap (alert_poll_fill >= 1)")
     if not any(r["invalid_utf8"] > 0 and r["oversized"] > 0 for r in rates):

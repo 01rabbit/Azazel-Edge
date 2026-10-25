@@ -45,6 +45,7 @@ from .declarations import (
 )
 
 NOMINAL = "nominal"
+WRITE_ORDER = tuple(c for c in HOSTILE_LINE_CLASSES if c != "alert") + ("alert",)
 CLOCK = "CLOCK_BOOTTIME"
 LEASE_SPACING_S = 0.1
 LEASE_JITTER_S = 0.05
@@ -97,10 +98,18 @@ def _audit_problems(audit: Sequence[Any], quota: Mapping[str, Any]) -> Tuple[Lis
         if not isinstance(block, dict) or any(block.get(k) != quota.get(q) for k, q in _QUOTA_BLOCK_KEYS.items()):
             problems.append(f"ingress_audit[{idx}]: the core's quota block differs from the declared quota")
         if isinstance(rec.get("ingress_shed"), dict):
-            fields = ("emitted_epoch", "shed_total", "oversized_lines_skipped", "oversized_possible_alerts", "cumulative_shed_total", "cumulative_oversized_lines_skipped")
-            if not all(_num(inner.get(k)) for k in fields) or not _int(inner.get("shed_total")):
+            fields = ("emitted_epoch", "shed_total", "admitted", "alerts_admitted", "examined", "oversized_lines_skipped", "oversized_possible_alerts", "cumulative_shed_total", "cumulative_oversized_lines_skipped")
+            if not all(_num(inner.get(k)) for k in fields) or not all(_int(inner.get(k)) for k in ("shed_total", "admitted", "alerts_admitted", "examined", "oversized_lines_skipped")):
                 problems.append(f"ingress_audit[{idx}]: ingress_shed summary lacks its counts")
                 continue
+            # Every line the core looked at was admitted, shed, or skipped as
+            # oversized (the profile writes no empty line), so the counts of
+            # one summary must add up (ingress.rs IngressReader::poll).
+            if inner["examined"] != inner["shed_total"] + inner["admitted"] + inner["oversized_lines_skipped"]:
+                problems.append(
+                    f"ingress_audit[{idx}]: examined {inner['examined']} is not shed {inner['shed_total']} + admitted "
+                    f"{inner['admitted']} + oversized {inner['oversized_lines_skipped']}"
+                )
             if inner.get("oversized_possible_alerts") != 0:
                 problems.append(f"ingress_audit[{idx}]: oversized_possible_alerts is {inner.get('oversized_possible_alerts')!r}; the profile writes no oversized alert")
             shed.append(inner)
@@ -149,6 +158,17 @@ def hostile_load_problems(
     warmup_ns = int(profile["warmup_ms"]) * 1_000_000
     slack_s = int(profile["audit_attribution_slack_ms"]) / 1000.0
     windows: Dict[str, Tuple[int, int]] = {}
+    # Attribution (profile rule "attribution"): a summary belongs to the phase
+    # whose window started last before it was emitted, up to the next phase's
+    # window start; the last phase keeps every later summary. A core still
+    # reading a phase's backlog after its window therefore stays accounted to
+    # that phase, and nothing is written in the quiet gap before the next one.
+    starts = sorted(
+        (float(o["window_start_wall_epoch"]), n)
+        for n, o in observed.items()
+        if isinstance(o, dict) and _num(o.get("window_start_wall_epoch"))
+    )
+    until = {n: (starts[i + 1][0] if i + 1 < len(starts) else math.inf) for i, (_, n) in enumerate(starts)}
     for decl in profile["phases"]:
         name = decl["name"]
         obs = observed.get(name)
@@ -178,21 +198,34 @@ def hostile_load_problems(
                 problems.append(f"{where}: {n} {cls} lines in {duration:.3f} s, declared {decl['rates_per_s'][cls]}/s (+/-{tol:.0%})")
         if obs.get("alerts_decided") != counts["alert"]:
             problems.append(f"{where}: {counts['alert']} alerts written, {obs.get('alerts_decided')!r} decided by the core")
-        mine = [r for r in shed if wws <= float(r["emitted_epoch"]) <= wwe + slack_s]
+        mine = [r for r in shed if wws < float(r["emitted_epoch"]) <= until.get(name, math.inf)]
         if decl["non_alert_lines_per_s"] > quota["value"]:
             non_alert = sum(counts[c] for c in _NON_ALERT_COUNTED)
-            # The excess no bucket could admit over the window, and the floor
-            # the core's shedding must reach (profile rule "shed").
-            excess = non_alert - (quota["value"] * duration + quota["non_alert_burst"])
+            # The core must have read the phase: its summaries account for
+            # every line written in it (a summary is due within one audit
+            # interval while anything is shed, so over a phase above the quota
+            # little can stay unreported).
+            examined = sum(int(r["examined"]) for r in mine)
+            total = sum(counts.values())
+            if examined < (1.0 - shed_tol) * total:
+                problems.append(f"{where}: the core's summaries account for {examined} lines examined of {total} written")
+            # The excess no bucket could admit: this phase's lines could be
+            # admitted only between its window start and the last summary
+            # accounting for them (``read_s``), at the quota plus one burst.
+            # The floor the core's shedding must reach is (1 - shed_tolerance)
+            # of that excess (profile rule "shed").
+            read_s = max(duration, max((float(r["emitted_epoch"]) for r in mine), default=wws) - wws)
+            excess = non_alert - (quota["value"] * read_s + quota["non_alert_burst"])
             floor = max(1, math.ceil((1.0 - shed_tol) * excess))
             got = sum(int(r["shed_total"]) for r in mine)
             by_rate = sum(int((r.get("shed_by_reason") or {}).get("non_alert_rate") or 0) for r in mine)
             admitted = sum(int(r.get("admitted") or 0) - int(r.get("alerts_admitted") or 0) for r in mine)
-            ceiling = quota["value"] * (duration + slack_s) + quota["non_alert_burst"]
+            ceiling = quota["value"] * (read_s + slack_s) + quota["non_alert_burst"]
             if excess <= 0 or got < floor or by_rate < 1:
                 problems.append(
                     f"{where}: the core's summaries show {got} non-alert lines shed ({by_rate} for the rate) of {non_alert} "
-                    f"written; the excess over the {quota['value']}/s quota is {excess:.0f}, so at least {floor} expected"
+                    f"written; the excess over the {quota['value']}/s quota in the {read_s:.1f} s they cover is {excess:.0f}, "
+                    f"so at least {floor} expected"
                 )
             if admitted > ceiling:
                 problems.append(f"{where}: the core admitted {admitted} non-alert lines, above the quota's {ceiling:.0f}")
@@ -401,7 +434,9 @@ class HostileLoad(threading.Thread):
             if burst_s:
                 elapsed = math.floor(elapsed / burst_s) * burst_s
             chunk: List[bytes] = []
-            for cls in HOSTILE_LINE_CLASSES:
+            # Alerts last in every chunk: once the core has decided every
+            # alert written, it has read every line before it (drain()).
+            for cls in WRITE_ORDER:
                 target = int(elapsed * float(rates[cls]))
                 while written[cls] < target:
                     chunk.append(lines.make(cls, written[cls]))

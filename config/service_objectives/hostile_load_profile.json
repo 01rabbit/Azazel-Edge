@@ -30,10 +30,10 @@
     "alert": "rates_per_s.alert = round(alert_poll_fill * quota.alerts_per_poll * 1000 / core_default_poll_ms): alert_poll_fill 1.0 fills one poll's alert budget every default poll interval (rust/azazel-edge-core/src/main.rs AZAZEL_EVE_POLL_MS default).",
     "oversized": "oversized_line_bytes = round(oversized_line_factor * quota.max_line_bytes) and must exceed max_line_bytes; rates_per_s.oversized = oversized_backlog_share * quota.backlog_bound_bytes / oversized_line_bytes. Oversized lines are non-alert lines (no alert marker), so oversized_possible_alerts must stay 0.",
     "warmup": "warmup_ms >= 1000 * quota.non_alert_burst / (non-alert rate - quota.value) for every phase over the quota: the bucket is empty, and shedding steady, before the phase's first lease expires.",
-    "attribution": "an ingress_shed summary belongs to the phase whose window (wall clock) contains its emitted_epoch, or ended at most audit_attribution_slack_ms before it; audit_attribution_slack_ms >= quota.audit_interval_ms and quiet_gap_ms > audit_attribution_slack_ms, so no summary can belong to two phases.",
+    "attribution": "an ingress_shed summary belongs to the phase whose window started last before its emitted_epoch, up to the next phase's window start; the last phase keeps every later summary, including those the core emits while the harness waits for it to decide every alert written (alerts are written last in every chunk, so that wait covers every line). The backlog phase must be the last phase, because the core may still be reading its backlog after the window. audit_attribution_slack_ms >= quota.audit_interval_ms and quiet_gap_ms > audit_attribution_slack_ms.",
     "line_bytes": "every non-oversized line is padded to about line_bytes, as the SO-11 probe does (so11_ingress_probe.LINE_BYTES).",
     "burst": "burst_interval_ms 0 writes continuously (every 10 ms). Otherwise every class of the phase is written in one burst per burst_interval_ms; a phase whose burst of non-alert bytes (rate * burst_interval_ms / 1000 * line_bytes) is at least twice backlog_bound_bytes is a backlog phase, and the core must record backlog shedding (shed_by_reason.backlog >= 1 and max_shed_level >= 1) in it. The profile must have one backlog phase with non_alert_factor over 10.",
-    "shed": "for every phase over the quota, the lines the core shed in the summaries attributed to it are at least (1 - shed_tolerance) * (non-alert written - quota.value * window - quota.non_alert_burst), the excess no bucket could admit; and the non-alert lines it admitted there are at most quota.value * (window + audit_attribution_slack_ms) + quota.non_alert_burst. Observed in container runs: 1.28-1.96 times the excess (the class reserves shed flow, dns and stats before the bucket is empty).",
+    "shed": "for every phase over the quota: the summaries attributed to it account for at least (1 - shed_tolerance) of the lines written in it (examined); every summary adds up (examined = shed_total + admitted + oversized_lines_skipped); the lines shed are at least (1 - shed_tolerance) * (non-alert written - quota.value * read_s - quota.non_alert_burst), where read_s runs from the window start to the last summary attributed to the phase (at least the window): the excess no bucket could admit in the time the core had to read the phase; and the non-alert lines admitted are at most quota.value * (read_s + audit_attribution_slack_ms) + quota.non_alert_burst. Observed in container and GitHub runs: 1.05-10 times that excess (the class reserves shed flow, dns and stats before the bucket is empty; the backlog phase sheds close to it).",
     "samples": "each declared phase gets leases_per_phase_per_action leases of every action type and nominal takes the rest of SO-04's 50 per type (4 phases * 10 = 40 of 50); the validator requires at least leases_per_phase_per_action per phase and action type, and at least min_hostile_share of all samples under a declared phase.",
     "confirmation": "status confirmed is accepted only with owner_defaults.status exactly 'confirmed' and owner_defaults.confirmed_phase_factors equal to every phase's factors (non_alert_factor, alert_poll_fill, oversized_line_factor, oversized_backlog_share, burst_interval_ms) as they stand, so a confirmation names the values it confirmed."
   },
@@ -90,6 +90,26 @@
       "burst_interval_ms": 0
     },
     {
+      "name": "alert_flood",
+      "non_alert_factor": 0,
+      "non_alert_kinds": [],
+      "alert_poll_fill": 1.0,
+      "oversized_line_factor": 0,
+      "oversized_backlog_share": 0,
+      "oversized_line_bytes": 0,
+      "rates_per_s": {
+        "alert": 5000,
+        "flow": 0,
+        "dns": 0,
+        "stats": 0,
+        "http": 0,
+        "invalid_utf8": 0,
+        "oversized": 0
+      },
+      "derivation": "alerts 1.0 * 1000 * 1000 / 200 = 5000/s: one full alerts_per_poll budget per default poll interval, the poll cap; alerts are outside the quota and must all be decided.",
+      "burst_interval_ms": 0
+    },
+    {
       "name": "backlog_flood",
       "non_alert_factor": 12.0,
       "non_alert_kinds": [
@@ -113,26 +133,6 @@
         "oversized": 0
       },
       "derivation": "non-alert 2500 * 12 = 30000 lines/s over 4 kinds (7500 each), written in one burst per second: about 30000 * 600 = 18 MB, more than twice the 8 MiB backlog bound, so the core sheds by backlog as well as by rate; alerts 1000/s as above, none of which may be shed."
-    },
-    {
-      "name": "alert_flood",
-      "non_alert_factor": 0,
-      "non_alert_kinds": [],
-      "alert_poll_fill": 1.0,
-      "oversized_line_factor": 0,
-      "oversized_backlog_share": 0,
-      "oversized_line_bytes": 0,
-      "rates_per_s": {
-        "alert": 5000,
-        "flow": 0,
-        "dns": 0,
-        "stats": 0,
-        "http": 0,
-        "invalid_utf8": 0,
-        "oversized": 0
-      },
-      "derivation": "alerts 1.0 * 1000 * 1000 / 200 = 5000/s: one full alerts_per_poll budget per default poll interval, the poll cap; alerts are outside the quota and must all be decided.",
-      "burst_interval_ms": 0
     }
   ],
   "shed_tolerance": 0.1,
