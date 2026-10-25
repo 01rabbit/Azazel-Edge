@@ -229,9 +229,11 @@ def test_no_samples_never_close_the_gap():
 def test_targets_and_sample_counts_are_unchanged():
     assert SPEC["bound_ms"] == 5000.0
     assert SPEC["required_samples"] == 150
-    assert GAP in SPEC["gaps"] and SPEC["gaps_closed_by_samples"] == (GAP,)
-    # SO-04's closer is exactly this one; SO-03's two (Edge#414) are pinned in
-    # tests/test_service_objectives_so03_p0_queue_v1.py.
+    # The hostile-load gap's closer is pinned in
+    # tests/test_service_objectives_so04_hostile_load_v1.py.
+    assert GAP in SPEC["gaps"] and SPEC["gaps_closed_by_samples"] == (GAP, "SO04-HOSTILE-LOAD-UNDECLARED", "SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL")
+    # SO-04's sample-only closer is exactly this one; SO-03's two (Edge#414)
+    # are pinned in tests/test_service_objectives_so03_p0_queue_v1.py.
     assert rec.GAP_CLOSERS[GAP] is rec.so04_monotonic_expiry_observed
     assert {g for g in rec.GAP_CLOSERS if g.startswith("SO04-")} == {GAP}
 

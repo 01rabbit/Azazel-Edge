@@ -111,11 +111,21 @@ jobs:
           pip install -U pip wheel setuptools
           pip install -r requirements/runtime.txt
           pip install -r requirements/fabric.txt
+          pip install pytest
 
       - name: Build the Rust core measured by SO-03 and SO-04
         run: |
           cd rust/azazel-edge-core
           cargo build --release
+
+      - name: Real-core test of the SO-04 hostile-load driver
+        # The test-python job has no core build, so the test is skipped there;
+        # here it must run and pass, never skip.
+        run: |
+          . .venv/bin/activate
+          PYTHONPATH=.:py python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_service_objectives_so04_hostile_load_v1.py -k real_core | tee real-core.log
+          grep -Eq "^1 passed" real-core.log
 
       - name: Run SO-03 and SO-07 harnesses
         run: |
@@ -140,6 +150,15 @@ jobs:
           PYTHONPATH=.:py python -m azazel_edge.service_objectives validate --ci --objective SO-03,SO-04,SO-07 \
             --expect-commit "$GITHUB_SHA" \
             service-objective-records
+
+      - name: Check SO-04 ran under the declared hostile load
+        # In addition to validate --ci (unchanged): both SO-04 parts must show
+        # the declared hostile-load profile applied, by the validator's own
+        # recomputation, and keep no gap but the declared provisional ones.
+        if: always()
+        run: |
+          . .venv/bin/activate
+          PYTHONPATH=.:py python -m azazel_edge.service_objectives.so04_hostile_load service-objective-records
 
       - name: Upload records
         if: always()
