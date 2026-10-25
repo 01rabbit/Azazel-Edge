@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import errno
 import json
 import hashlib
@@ -34,6 +35,9 @@ VALID_KINDS = {
 # once per decision, not per event, so the fsync cost stays off the event path.
 # The chain format is unchanged; only when log() returns is.
 DURABLE_KINDS = frozenset({'action_decision', 'notification'})
+
+# Bound of the hand-off from log() to the durable-record listeners.
+DURABLE_HANDOFF_MAX = 4096
 
 
 # A file system that cannot sync at all answers fsync with one of these;
@@ -77,28 +81,86 @@ class P0AuditLogger:
         # Durable-kind records written where the file system could not sync.
         self.fsync_unsupported_count = 0
         # Observers of durable-kind records (Edge#414, SO-03: the P0 alert
-        # path). Called after the record's fsync, in chain order; a listener
-        # must not block, and whatever it does or raises never changes what
-        # log() writes, returns or raises.
+        # path). See add_durable_listener.
         self._durable_listeners: list = []
+        self._durable_handoff: collections.deque = collections.deque()
+        self._durable_handoff_max = DURABLE_HANDOFF_MAX
+        self._durable_seq = 0
+        self._durable_wakeup = threading.Condition(threading.Lock())
+        self._durable_dispatcher: threading.Thread | None = None
+        self._durable_delivered_seq = 0
+        self._durable_handed = 0
+        self._durable_delivered = 0
+        # Durable-kind records not handed to listeners because the hand-off
+        # was full (listeners slower than the writers).
+        self.durable_handoff_dropped_total = 0
 
     def add_durable_listener(self, listener: Any) -> None:
-        """Call ``listener(record_copy, durability, monotonic_ns)`` after each
-        durable-kind record. ``monotonic_ns`` is CLOCK_MONOTONIC read after the
-        fsync returned; ``durability`` is fsynced, fsync_unsupported or
-        fsync_failed. Observation only: the listener cannot alter the record."""
+        """Call ``listener(record_copy, durability, monotonic_ns)`` for each
+        durable-kind record written after this call.
+
+        * ``monotonic_ns`` is CLOCK_MONOTONIC read right after the fsync
+          returned; ``durability`` is fsynced, fsync_unsupported or
+          fsync_failed (the record is in the chain but not durable).
+        * Writers never wait for a listener. Under the audit lock log() only
+          appends (sequence number, the line as written, durability, stamp)
+          to a bounded hand-off: O(1), no copy, no call. A dispatcher thread
+          parses each line into a fresh dict outside the lock and calls the
+          listeners in chain order (sequence order). If the hand-off is full
+          the record is not handed on and durable_handoff_dropped_total
+          counts it.
+        * A listener's Exception is logged and contained. KeyboardInterrupt
+          and SystemExit are not swallowed: they end the dispatcher thread
+          (never a writer), so shutdown is not hidden; later records are then
+          not handed to listeners.
+        * Observation only: what log() writes, returns or raises is the same
+          with or without listeners.
+        """
 
         self._durable_listeners.append(listener)
+        with self._durable_wakeup:
+            if self._durable_dispatcher is None or not self._durable_dispatcher.is_alive():
+                self._durable_dispatcher = threading.Thread(
+                    target=self._dispatch_durable, name='audit-durable-dispatch', daemon=True
+                )
+                self._durable_dispatcher.start()
 
-    def _notify_durable(self, record: Dict[str, Any], durability: str) -> None:
+    def _handoff_durable(self, line: str, durability: str) -> None:
+        # Called under self._lock: O(1) only.
         if not self._durable_listeners:
             return
         stamp = time.monotonic_ns()
-        for listener in list(self._durable_listeners):
-            try:
-                listener(json.loads(json.dumps(record)), durability, stamp)
-            except Exception:
-                _LOG.exception('durable-record listener failed; the record is unaffected')
+        self._durable_seq += 1
+        if len(self._durable_handoff) >= self._durable_handoff_max:
+            self.durable_handoff_dropped_total += 1
+            return
+        self._durable_handoff.append((self._durable_seq, line, durability, stamp))
+        self._durable_handed += 1
+        with self._durable_wakeup:
+            self._durable_wakeup.notify()
+
+    def _dispatch_durable(self) -> None:
+        while True:
+            with self._durable_wakeup:
+                while not self._durable_handoff:
+                    self._durable_wakeup.wait(timeout=1.0)
+            seq, line, durability, stamp = self._durable_handoff.popleft()
+            for listener in list(self._durable_listeners):
+                try:
+                    listener(json.loads(line), durability, stamp)
+                except Exception:
+                    _LOG.exception('durable-record listener failed; the record is unaffected')
+            self._durable_delivered_seq = seq
+            self._durable_delivered += 1
+
+    def wait_durable_listeners(self, timeout: float = 5.0) -> bool:
+        """Wait until every record handed off so far has been delivered."""
+
+        target = self._durable_handed
+        deadline = time.monotonic() + timeout
+        while self._durable_delivered < target and time.monotonic() < deadline:
+            time.sleep(0.005)
+        return self._durable_delivered >= target
 
     def _read_last_chain_hash(self) -> str:
         if not self.path.exists():
@@ -161,8 +223,9 @@ class P0AuditLogger:
             record.update(payload)
             record['chain_hash'] = self._compute_chain_hash(record)
             created = not self.path.exists()
+            line = json.dumps(record, ensure_ascii=True, separators=(',', ':'))
             with self.path.open('a', encoding='utf-8') as fh:
-                fh.write(json.dumps(record, ensure_ascii=True, separators=(',', ':')) + '\n')
+                fh.write(line + '\n')
             self._last_chain_hash = str(record['chain_hash'])
             durability = DURABILITY_NOT_REQUIRED
             if kind in DURABLE_KINDS:
@@ -176,14 +239,14 @@ class P0AuditLogger:
                     if created:
                         synced = fsync_path(self.path.parent) and synced
                 except OSError as exc:
-                    self._notify_durable(record, 'fsync_failed')
+                    self._handoff_durable(line, 'fsync_failed')
                     raise AuditDurabilityError(exc.errno, f'audit_record_not_durable:{exc}') from exc
                 if synced:
                     durability = DURABILITY_FSYNCED
                 else:
                     durability = DURABILITY_UNSUPPORTED
                     self.fsync_unsupported_count += 1
-                self._notify_durable(record, durability)
+                self._handoff_durable(line, durability)
             # Emit-alongside: project into the shared Azazel-Fabric AuditEvent on a
             # SEPARATE, non-interleaved file. The chained log above is complete and
             # untouched; verify_chain() is unaffected (plan §3.3). Best-effort.

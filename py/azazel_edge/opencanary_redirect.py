@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -16,13 +18,44 @@ class OpenCanaryRedirectController:
         state_path: str | Path = '/run/azazel-edge/opencanary_redirect_state.json',
         redirect_log_path: str | Path = '/var/log/azazel-edge/opencanary-redirect.jsonl',
         ttl_sec: int = 300,
+        p0_alert_queue_path: str | Path | None = None,
     ):
         self.audit = audit_logger
+        # P0 alert path (Edge#414, SO-03): every redirect decision this
+        # controller records is enforcement-bearing, hence P0. The relay only
+        # observes durable decision records; if it cannot be attached the
+        # controller works exactly as before and the failure is logged.
+        self.p0_alert_relay = None
+        try:
+            from azazel_edge.notify.p0_alert import attach_p0_alert_relay
+
+            queue_path = Path(p0_alert_queue_path) if p0_alert_queue_path else Path(audit_logger.path).parent / 'p0-alert-queue.jsonl'
+            self.p0_alert_relay = attach_p0_alert_relay(audit_logger, queue_path)
+        except Exception as exc:
+            logging.getLogger(__name__).error('p0 alert relay not attached: %s', exc)
         self.state_path = Path(state_path)
         self.redirect_log_path = Path(redirect_log_path)
         self.ttl_sec = int(ttl_sec)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.redirect_log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def close(self, timeout: float = 5.0) -> None:
+        """Stop the P0 alert relay after it has taken every decision handed
+        to it so far. Optional; the relay thread is a daemon."""
+
+        relay = self.p0_alert_relay
+        if relay is None:
+            return
+        try:
+            waiter = getattr(self.audit, 'wait_durable_listeners', None)
+            if waiter is not None:
+                waiter(timeout)
+            deadline = time.monotonic() + timeout
+            while not relay._pending.empty() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            relay.stop(timeout)
+        except Exception as exc:
+            logging.getLogger(__name__).error('p0 alert relay stop: %s', exc)
 
     def evaluate(
         self,

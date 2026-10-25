@@ -225,7 +225,8 @@ def test_so03_measures_real_path_and_reports_gaps(real_table):
     prereq = {p["id"]: p for p in part["prerequisites"]}
     for pid in rec.OBJECTIVE_SPECS["SO-03"]["decision_durable_to_alert_enqueued"]["prerequisites"]:
         assert prereq[pid]["met"] is True, pid
-    assert part["gaps"] == []
+    # Only the gap no sample can close remains (Edge#412: core decisions).
+    assert [g["id"] for g in part["gaps"]] == ["SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS"]
     for s in part["samples"]:
         assert s["action"] in ("throttle", "redirect", "isolate") or s["decision_suspicion_label"] == "critical"
         assert sorted(r["channel"] for r in s["queue_records"]) == ["visual", "voice"]
@@ -234,11 +235,13 @@ def test_so03_measures_real_path_and_reports_gaps(real_table):
             assert r["decision_id"] == s["sample_id"]
 
 
-def test_so03_full_sample_count_passes_on_a_clean_tree(real_table, clean_owner):
+def test_so03_full_sample_count_is_not_a_pass_while_core_decisions_are_not_wired(real_table, clean_owner):
     record = so03_alert_queue.run(seed=1)
     assert len(record["parts"][0]["samples"]) == 200
     assert rec.validate_record(record) == []
-    assert record["verdict"] == rec.VERDICT_PASS
+    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
+    assert [g["id"] for g in record["parts"][0]["gaps"]] == ["SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS"]
+    assert all(p["met"] for p in record["parts"][0]["prerequisites"])
     assert {s["action"] for s in record["parts"][0]["samples"]} == {"throttle", "redirect", "isolate", "notify"}
 
 

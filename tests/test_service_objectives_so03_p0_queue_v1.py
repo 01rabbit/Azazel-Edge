@@ -42,6 +42,8 @@ from azazel_edge.service_objectives import so03_alert_queue  # noqa: E402
 
 PART = "decision_durable_to_alert_enqueued"
 GAPS = ("SO03-NO-VISUAL-VOICE-QUEUE", "SO03-NO-P0-ALERT-PATH")
+CORE_GAP = "SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS"
+ALL_GAPS = GAPS + (CORE_GAP,)
 
 
 def _decision(action="throttle", label="high", **extra):
@@ -51,8 +53,27 @@ def _decision(action="throttle", label="high", **extra):
     return row
 
 
-def _rows(path):
+def _all_rows(path):
     return [json.loads(x) for x in Path(path).read_text(encoding="utf-8").splitlines()]
+
+
+def _rows(path):
+    """The alert entries only (relay_status and overflow_alarm records left out)."""
+
+    return [r for r in _all_rows(path) if r.get("record_type") == "alert"]
+
+
+def _status(path):
+    return [r for r in _all_rows(path) if r.get("record_type") == "relay_status"]
+
+
+def _wait(pred, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(0.01)
+    return False
 
 
 # ------------------------------------------------------------- classifier
@@ -165,22 +186,68 @@ def test_torn_tail_is_repaired_and_recorded(tmp_path):
     assert rows[0]["torn_tail_repaired_bytes"] == 0
 
 
-def test_overflow_evicts_oldest_and_records_it(tmp_path):
+def test_overflow_evicts_whole_decisions_and_compacts_only_at_2x(tmp_path, monkeypatch):
     qpath = tmp_path / "q.jsonl"
     queue = P0AlertQueue(qpath, max_entries=4)
-    for i in range(3):
-        result = queue.enqueue(_alerts(f"d-{i}"))
-    rows = _rows(qpath)
-    assert len(rows) == 4
-    # The newest alert is never the one dropped.
-    assert [r["decision_id"] for r in rows] == ["d-1", "d-1", "d-2", "d-2"]
-    assert result["evicted"] == 2
-    assert rows[-1]["overflow_evicted"] == 2 and rows[-1]["overflow_evicted_total"] == 2
-    assert rows[-1]["overflow_policy"] == p0_alert.OVERFLOW_POLICY
-    queue.enqueue(_alerts("d-3"))
-    assert _rows(qpath)[-1]["overflow_evicted_total"] == 4
+    replaces = []
+    real_replace = os.replace
+    monkeypatch.setattr(os, "replace", lambda a, b: (replaces.append(b), real_replace(a, b))[1])
+    for i in range(4):  # 8 lines: 2 x the bound, appended, never rewritten
+        queue.enqueue(_alerts(f"d-{i}"))
+    assert replaces == [] and len(_all_rows(qpath)) == 8
+    result = queue.enqueue(_alerts("d-4"))
+    assert len(replaces) == 1  # one compaction
+    rows = _all_rows(qpath)
+    # Whole decisions evicted, oldest first, never the new alert; both
+    # channels of every kept decision are kept together.
+    assert [(r["record_type"], r.get("decision_id")) for r in rows] == [
+        ("alert", "d-3"), ("alert", "d-3"), ("overflow_alarm", None), ("alert", "d-4"), ("alert", "d-4"),
+    ]
+    alarm = rows[2]
+    assert alarm["evicted_decisions"] == 3 and alarm["evicted_alerts"] == 6
+    assert alarm["evicted_decision_ids"] == ["d-0", "d-1", "d-2"]
+    assert alarm["overflow_evicted_total"] == 6 and alarm["overflow_policy"] == p0_alert.OVERFLOW_POLICY
+    assert result["evicted"] == 6
+    assert rows[-1]["overflow_evicted"] == 6 and rows[-1]["overflow_evicted_total"] == 6
+    assert [r["seq"] for r in rows] == sorted(r["seq"] for r in rows)
+    # Appends resume without a rewrite until 2x again; the total accumulates.
+    queue.enqueue(_alerts("d-5"))
+    assert len(replaces) == 1
+    for i in range(6, 8):
+        queue.enqueue(_alerts(f"d-{i}"))
+    assert len(replaces) == 2
+    assert _rows(qpath)[-1]["overflow_evicted_total"] == 6 + 4  # d-3 and d-4 at the second compaction
+    assert len([r for r in _all_rows(qpath) if r["record_type"] == "overflow_alarm"]) == 1  # the newest alarm
     assert stat.S_IMODE(os.stat(qpath).st_mode) == 0o600
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_full_queue_enqueue_latency_is_bounded(tmp_path):
+    queue = P0AlertQueue(tmp_path / "q.jsonl")  # default bound
+    i = 0
+    while (i + 1) * 2 <= queue.max_lines:
+        queue.enqueue(_alerts(f"d-{i}"))
+        i += 1
+    t0 = time.monotonic()
+    queue.enqueue(_alerts("compacting"))
+    compact_s = time.monotonic() - t0
+    assert queue.compactions == 1
+    t0 = time.monotonic()
+    queue.enqueue(_alerts("after"))
+    append_s = time.monotonic() - t0
+    # Far below the SO-03 bound even on a slow disk; the harness reports the
+    # measured values in its record notes.
+    assert compact_s < 1.0 and append_s < 1.0
+    assert len(_rows(tmp_path / "q.jsonl")) <= queue.max_entries + 2
+
+
+def test_another_writer_is_noticed(tmp_path):
+    qpath = tmp_path / "q.jsonl"
+    a, b = P0AlertQueue(qpath), P0AlertQueue(qpath)
+    a.enqueue(_alerts("d-1"))
+    b.enqueue(_alerts("d-2"))
+    a.enqueue(_alerts("d-3"))  # a's cache is stale: it rereads, seq continues
+    assert [r["seq"] for r in _rows(qpath)] == [1, 2, 3, 4, 5, 6]
 
 
 def test_queue_too_small_for_one_alert_is_refused(tmp_path):
@@ -239,12 +306,13 @@ def test_listener_gets_a_copy_after_the_fsync(tmp_path, monkeypatch):
     out = audit.log_action_decision("d-1", "s", action="throttle")
     after = time.monotonic_ns()
     audit.log_evaluation("e-1", "s")  # not a durable kind: no call
+    assert audit.wait_durable_listeners()
     assert len(seen) == 1
     record, durability, stamp = seen[0]
     assert durability == "fsynced" and before <= stamp <= after
     assert record["chain_hash"] == out["chain_hash"]
     assert events.index("listener") > events.index("fsync")
-    assert out["action"] == "throttle" and _rows(path)[0]["action"] == "throttle"
+    assert out["action"] == "throttle" and _all_rows(path)[0]["action"] == "throttle"
     assert P0AuditLogger.verify_chain(path)["ok"] is True
 
 
@@ -274,19 +342,71 @@ def test_fsync_failure_still_raises_and_tells_the_listener(tmp_path, monkeypatch
     monkeypatch.setattr(os, "fsync", eio)
     with pytest.raises(AuditDurabilityError):
         audit.log_action_decision("d-1", "s", action="throttle")
+    monkeypatch.undo()
+    assert audit.wait_durable_listeners()
     assert seen == ["fsync_failed"]
 
 
+def test_slow_listener_never_stalls_writers_and_keeps_chain_order(tmp_path):
+    audit = P0AuditLogger(tmp_path / "a.jsonl")
+    release = threading.Event()
+    seen = []
+
+    def slow(record, durability, stamp):
+        release.wait(10)
+        seen.append(record["trace_id"])
+
+    audit.add_durable_listener(slow)
+    durations = []
+    errors = []
+
+    def writer(w):
+        for j in range(10):
+            t0 = time.monotonic()
+            try:
+                audit.log_action_decision(f"w{w}-{j}", "s", action="observe")
+            except Exception as exc:  # pragma: no cover
+                errors.append(exc)
+            durations.append(time.monotonic() - t0)
+
+    threads = [threading.Thread(target=writer, args=(w,)) for w in range(3)]
+    [t.start() for t in threads]
+    [t.join(10) for t in threads]
+    # Every writer finished while the listener was still blocked.
+    assert not errors and len(durations) == 30 and max(durations) < 1.0
+    assert seen == []
+    release.set()
+    assert audit.wait_durable_listeners(10)
+    assert seen == [r["trace_id"] for r in _all_rows(tmp_path / "a.jsonl")]  # chain order
+
+
+def test_full_listener_handoff_is_counted_not_blocking(tmp_path, monkeypatch):
+    audit = P0AuditLogger(tmp_path / "a.jsonl")
+    release = threading.Event()
+    audit.add_durable_listener(lambda *a: release.wait(10))
+    audit._durable_handoff_max = 2
+    for j in range(6):
+        audit.log_action_decision(f"d-{j}", "s", action="observe")
+    assert audit.durable_handoff_dropped_total >= 3
+    release.set()
+    assert audit.wait_durable_listeners(10)
+    assert len(_all_rows(tmp_path / "a.jsonl")) == 6  # the chain is complete regardless
+
+
+def test_listener_shutdown_signal_is_not_swallowed_and_writers_go_on(tmp_path):
+    audit = P0AuditLogger(tmp_path / "a.jsonl")
+
+    def stop(*a):
+        raise SystemExit(0)
+
+    audit.add_durable_listener(stop)
+    audit.log_action_decision("d-1", "s", action="observe")
+    assert _wait(lambda: not audit._durable_dispatcher.is_alive())
+    out = audit.log_action_decision("d-2", "s", action="observe")
+    assert out["trace_id"] == "d-2" and P0AuditLogger.verify_chain(tmp_path / "a.jsonl")["ok"]
+
+
 # ------------------------------------------------------------------ relay
-
-
-def _wait(pred, timeout=5.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if pred():
-            return True
-        time.sleep(0.01)
-    return False
 
 
 def test_attached_path_enqueues_p0_decisions_only(tmp_path):
@@ -302,7 +422,7 @@ def test_attached_path_enqueues_p0_decisions_only(tmp_path):
     finally:
         relay.stop()
     rows = _rows(qpath)
-    chain = {r["trace_id"]: r["chain_hash"] for r in _rows(tmp_path / "a.jsonl")}
+    chain = {r["trace_id"]: r["chain_hash"] for r in _all_rows(tmp_path / "a.jsonl")}
     assert [(r["decision_id"], r["channel"], r["p0_basis"]) for r in rows] == [
         ("d-thr", "visual", "enforcement:throttle"), ("d-thr", "voice", "enforcement:throttle"),
         ("d-crit", "visual", "soc_critical"), ("d-crit", "voice", "soc_critical"),
@@ -328,17 +448,168 @@ def test_broken_queue_is_counted_and_never_reaches_log(tmp_path):
     assert _rows(qpath)[-1]["relay_enqueue_failed_total"] == 1
 
 
+def test_losses_are_written_as_standalone_status_records(tmp_path):
+    audit = P0AuditLogger(tmp_path / "a.jsonl")
+    qpath = tmp_path / "q.jsonl"
+    relay = attach_p0_alert_relay(audit, qpath)
+    try:
+        assert relay.ready.wait(5)
+        with relay._counters_lock:
+            relay.handoff_dropped_total += 3  # as on_durable_record counts a full hand-off
+        assert _wait(lambda: any(r.get("event") == "loss" for r in _status(qpath)))
+    finally:
+        relay.stop()
+    loss = [r for r in _status(qpath) if r.get("event") == "loss"][-1]
+    assert loss["handoff_dropped_total"] == 3
+    assert _rows(qpath) == []  # no P0 was needed to surface it
+
+
+def test_non_durable_decision_is_alerted_and_marked_non_durable(tmp_path, monkeypatch):
+    audit = P0AuditLogger(tmp_path / "a.jsonl")
+    qpath = tmp_path / "q.jsonl"
+    relay = attach_p0_alert_relay(audit, qpath)
+    assert relay.ready.wait(5)
+    real = os.fsync
+    audit_ino = None
+
+    def eio_on_audit(fd):
+        if os.fstat(fd).st_ino == audit_ino:
+            raise OSError(errno.EIO, "io")
+        return real(fd)
+
+    audit.log_action_decision("d-0", "s", action="observe")
+    audit_ino = os.stat(tmp_path / "a.jsonl").st_ino
+    monkeypatch.setattr(os, "fsync", eio_on_audit)
+    try:
+        with pytest.raises(AuditDurabilityError):
+            audit.log_action_decision("d-1", "s", action="isolate")
+        assert _wait(lambda: len(_rows(qpath)) == 2)
+    finally:
+        relay.stop()
+    rows = _rows(qpath)
+    assert all(r["decision_record_durable"] is False and r["decision_record_durability"] == "fsync_failed" for r in rows)
+
+
+def _crash_and_restart(tmp_path, before, missed, **kw):
+    """A relay sees ``before``; decisions ``missed`` are written with no relay
+    attached (a crash); a new logger + relay on the same files starts."""
+
+    apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
+    audit = P0AuditLogger(apath)
+    relay = attach_p0_alert_relay(audit, qpath)
+    for did, action in before:
+        audit.log_action_decision(did, "s", action=action)
+    assert _wait(lambda: relay.enqueued_total == sum(1 for _, a in before if a != "observe"))
+    relay.stop()
+    plain = P0AuditLogger(apath)
+    for did, action in missed:
+        plain.log_action_decision(did, "s", action=action)
+    audit2 = P0AuditLogger(apath)
+    relay2 = attach_p0_alert_relay(audit2, qpath, **kw)
+    assert relay2.ready.wait(5)
+    return audit2, relay2, qpath
+
+
+def test_restart_reconciles_p0_decisions_missed_while_down(tmp_path):
+    audit, relay, qpath = _crash_and_restart(
+        tmp_path, [("d-1", "throttle")], [("d-2", "observe"), ("d-3", "isolate"), ("d-4", "redirect")]
+    )
+    try:
+        audit.log_action_decision("d-5", "s", action="throttle")
+        assert _wait(lambda: len(_rows(qpath)) == 8)
+    finally:
+        relay.stop()
+    rows = _rows(qpath)
+    assert [r["decision_id"] for r in rows[::2]] == ["d-1", "d-3", "d-4", "d-5"]
+    assert {r["decision_record_durability"] for r in rows if r["decision_id"] in ("d-3", "d-4")} == {"reconciled_from_chain_fsynced"}
+    started = [r for r in _status(qpath) if r.get("event") == "started"]
+    assert started[-1]["cursor_found"] is True and started[-1]["reconciled"] == 2
+
+
+def test_reconcile_is_bounded_and_counts_the_rest(tmp_path):
+    audit, relay, qpath = _crash_and_restart(
+        tmp_path, [("d-0", "throttle")], [(f"m-{i}", "isolate") for i in range(5)], max_reconcile=2
+    )
+    relay.stop()
+    assert [r["decision_id"] for r in _rows(qpath)[::2]] == ["d-0", "m-3", "m-4"]  # the newest
+    started = [r for r in _status(qpath) if r.get("event") == "started"][-1]
+    assert started["reconciled"] == 2 and started["reconcile_skipped"] == 3
+
+
+def test_reconcile_never_duplicates_and_needs_a_cursor(tmp_path):
+    apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
+    plain = P0AuditLogger(apath)
+    plain.log_action_decision("old", "s", action="isolate")  # before any relay: no cursor, no replay
+    audit = P0AuditLogger(apath)
+    relay = attach_p0_alert_relay(audit, qpath)
+    assert relay.ready.wait(5)
+    audit.log_action_decision("new", "s", action="isolate")
+    assert _wait(lambda: len(_rows(qpath)) == 2)
+    relay.stop()
+    relay2 = attach_p0_alert_relay(P0AuditLogger(apath), qpath)  # nothing missed
+    assert relay2.ready.wait(5)
+    relay2.stop()
+    assert [r["decision_id"] for r in _rows(qpath)] == ["new", "new"]
+
+
+def test_attach_is_idempotent_per_logger(tmp_path):
+    audit = P0AuditLogger(tmp_path / "a.jsonl")
+    first = attach_p0_alert_relay(audit, tmp_path / "q.jsonl")
+    try:
+        assert attach_p0_alert_relay(audit, tmp_path / "q.jsonl") is first
+        assert audit._durable_listeners == [first.on_durable_record]
+    finally:
+        first.stop()
+
+
+def test_production_opencanary_controller_attaches_the_relay(tmp_path):
+    from azazel_edge.opencanary_redirect import OpenCanaryRedirectController
+
+    audit = P0AuditLogger(tmp_path / "audit.jsonl")
+    controller = OpenCanaryRedirectController(
+        audit, state_path=tmp_path / "state.json", redirect_log_path=tmp_path / "redirect.jsonl"
+    )
+    try:
+        assert isinstance(controller.p0_alert_relay, P0AlertRelay)
+        assert controller.p0_alert_relay.on_durable_record in audit._durable_listeners
+        assert controller.p0_alert_relay.queue.path == tmp_path / "p0-alert-queue.jsonl"
+        out = controller.apply({"redirect": True, "trace_id": "oc-1", "target_ip": "192.0.2.7", "reason": "r"})
+        assert out["applied"] is True
+        qpath = tmp_path / "p0-alert-queue.jsonl"
+        assert _wait(lambda: len(_rows(qpath)) == 2)
+        rows = _rows(qpath)
+        assert {r["channel"] for r in rows} == {"visual", "voice"}
+        assert all(r["decision_id"] == "oc-1" and r["p0_basis"] == "enforcement:redirect" for r in rows)
+    finally:
+        controller.p0_alert_relay.stop()
+
+
+def test_opencanary_controller_works_when_the_relay_cannot_attach(tmp_path):
+    from azazel_edge.opencanary_redirect import OpenCanaryRedirectController
+
+    audit = P0AuditLogger(tmp_path / "audit.jsonl")
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")
+    controller = OpenCanaryRedirectController(
+        audit, state_path=tmp_path / "state.json", redirect_log_path=tmp_path / "redirect.jsonl",
+        p0_alert_queue_path=blocker / "q.jsonl",  # parent is a file: cannot be created
+    )
+    assert controller.p0_alert_relay is None
+    out = controller.apply({"redirect": True, "trace_id": "oc-1", "target_ip": "192.0.2.7", "reason": "r"})
+    assert out["applied"] is True
+
+
 def test_full_handoff_is_counted_and_recorded(tmp_path):
     queue = P0AlertQueue(tmp_path / "q.jsonl")
     relay = P0AlertRelay(queue, max_pending=1)  # not started: the hand-off fills
-    relay.on_durable_record(_decision("throttle", trace_id="a"), "fsynced", 1)
-    relay.on_durable_record(_decision("throttle", trace_id="b"), "fsynced", 2)
+    relay.on_durable_record(_decision("throttle", trace_id="a", chain_hash="a" * 64), "fsynced", 1)
+    relay.on_durable_record(_decision("throttle", trace_id="b", chain_hash="b" * 64), "fsynced", 2)
     assert relay.handoff_dropped_total == 1
     relay.start()
     relay.stop()
     rows = _rows(tmp_path / "q.jsonl")
     assert [r["decision_id"] for r in rows] == ["a", "a"]
-    assert rows[-1]["relay_handoff_dropped_total"] == 1
+    assert _status(tmp_path / "q.jsonl")[0]["handoff_dropped_total"] == 1
 
 
 def test_on_relayed_failure_is_contained(tmp_path):
@@ -371,16 +642,53 @@ def _gaps(record):
     return [g["id"] for g in _part(record)["gaps"]]
 
 
-def test_full_run_passes_and_closes_both_gaps(clean_owner):
+@pytest.fixture
+def core_wired_table(monkeypatch):
+    """The SO-03 row as it would be once Edge#412 wires the core's decisions:
+    only the gap no sample can close is removed, to exercise the mechanics."""
+
+    row = dict(rec.OBJECTIVE_SPECS["SO-03"][PART])
+    row["gaps"] = GAPS
+    monkeypatch.setitem(rec.OBJECTIVE_SPECS, "SO-03", {PART: row})
+    return row
+
+
+def _no_core_gap(record):
+    record["parts"][0]["gaps"] = [g for g in record["parts"][0]["gaps"] if g["id"] != CORE_GAP]
+    return record
+
+
+def test_full_run_closes_both_gaps_but_is_never_a_pass_while_core_is_not_wired(clean_owner):
     record = so03_alert_queue.run(seed=3)
     assert rec.validate_record(record) == []
-    assert record["verdict"] == rec.VERDICT_PASS, _prereqs(record)
+    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert len(_part(record)["samples"]) == 200
-    assert _gaps(record) == []
+    assert _gaps(record) == [CORE_GAP]
     assert all(_prereqs(record).values())
+    # Leaving the core gap out is refused: no sample closes it.
+    errors = rec.validate_record(_no_core_gap(copy.deepcopy(record)))
+    assert any(f"mandatory gap {CORE_GAP!r} omitted" in e for e in errors), errors
 
 
-def test_slow_enqueue_fails(clean_owner, monkeypatch):
+def test_core_gap_is_not_closable_by_samples():
+    row = rec.OBJECTIVE_SPECS["SO-03"][PART]
+    assert CORE_GAP in row["gaps"]
+    assert CORE_GAP not in row["gaps_closed_by_samples"] and CORE_GAP not in rec.GAP_CLOSERS
+
+
+def test_mechanics_pass_once_core_is_wired(clean_owner, core_wired_table):
+    record = _no_core_gap(so03_alert_queue.run(seed=3))
+    part = _part(record)
+    part["verdict"] = rec.derive_verdict(
+        prerequisites=part["prerequisites"], gaps=part["gaps"], required_samples=200,
+        samples=part["samples"], evaluated=part["pass_rule"]["evaluated"], per_action_required=0,
+    )
+    record["verdict"], record["evidence_class"] = part["verdict"], "gate"
+    assert part["verdict"] == rec.VERDICT_PASS
+    assert rec.validate_record(record) == []
+
+
+def test_slow_enqueue_fails(clean_owner, core_wired_table, monkeypatch):
     real = P0AlertQueue.enqueue
     calls = {"n": 0}
 
@@ -391,7 +699,12 @@ def test_slow_enqueue_fails(clean_owner, monkeypatch):
         return real(self, alerts, extra)
 
     monkeypatch.setattr(P0AlertQueue, "enqueue", slow)
-    record = so03_alert_queue.run(seed=3)
+    record = _no_core_gap(so03_alert_queue.run(seed=3))
+    part = _part(record)
+    part["verdict"] = record["verdict"] = rec.derive_verdict(
+        prerequisites=part["prerequisites"], gaps=part["gaps"], required_samples=200,
+        samples=part["samples"], evaluated=part["pass_rule"]["evaluated"], per_action_required=0,
+    )
     assert rec.validate_record(record) == []
     assert record["verdict"] == rec.VERDICT_FAIL
     assert _part(record)["pass_rule"]["evaluated"]["violations"] == 1
@@ -403,7 +716,7 @@ def test_enqueue_without_a_record_is_not_measurable(clean_owner, monkeypatch):
     assert rec.validate_record(record) == []
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert all(s["end_monotonic_ns"] is None for s in _part(record)["samples"])
-    assert _gaps(record) == list(GAPS)
+    assert _gaps(record) == list(ALL_GAPS)
 
 
 def test_not_p0_decisions_are_not_alerted_and_not_measurable(clean_owner, monkeypatch):
@@ -412,7 +725,7 @@ def test_not_p0_decisions_are_not_alerted_and_not_measurable(clean_owner, monkey
     assert rec.validate_record(record) == []
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert all(s["queue_records"] == [] for s in _part(record)["samples"])
-    assert _gaps(record) == list(GAPS)
+    assert _gaps(record) == list(ALL_GAPS)
 
 
 def test_wrong_p0_basis_keeps_the_path_gap(clean_owner, monkeypatch):
@@ -424,7 +737,7 @@ def test_wrong_p0_basis_keeps_the_path_gap(clean_owner, monkeypatch):
     record = so03_alert_queue.run(seed=3, samples=8)
     assert rec.validate_record(record) == []
     assert _prereqs(record)["enqueue_record_classifies_p0"] is False
-    assert _gaps(record) == ["SO03-NO-P0-ALERT-PATH"]
+    assert _gaps(record) == ["SO03-NO-P0-ALERT-PATH", CORE_GAP]
 
 
 def test_one_channel_only_keeps_both_gaps(clean_owner, monkeypatch):
@@ -433,7 +746,7 @@ def test_one_channel_only_keeps_both_gaps(clean_owner, monkeypatch):
     record = so03_alert_queue.run(seed=3, samples=8)
     assert rec.validate_record(record) == []
     assert _prereqs(record)["visual_voice_delivery_queue_declared"] is False
-    assert _gaps(record) == list(GAPS)
+    assert _gaps(record) == list(ALL_GAPS)
 
 
 def test_entries_naming_another_decision_are_not_this_samples(clean_owner, monkeypatch):
@@ -464,7 +777,7 @@ def test_queue_not_fsynced_is_not_measurable(clean_owner, monkeypatch):
     assert rec.validate_record(record) == []
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert _prereqs(record)["decision_and_enqueue_records_fsynced"] is False
-    assert _gaps(record) == list(GAPS)
+    assert _gaps(record) == list(ALL_GAPS)
 
 
 def test_broken_chain_is_not_measurable(clean_owner, monkeypatch):
@@ -483,7 +796,10 @@ def genuine_pass():
     try:
         mp.setattr(rec, "owner_block", lambda: {"repository": rec.OWNING_REPOSITORY, "commit": "a" * 40, "worktree_clean": True})
         record = so03_alert_queue.run(seed=5)
-        assert record["verdict"] == rec.VERDICT_PASS
+        # Every record prerequisite met and both closable gaps closed; only
+        # the core gap keeps it not_measurable.
+        assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
+        assert _gaps(record) == [CORE_GAP] and all(_prereqs(record).values())
         yield record
     finally:
         mp.undo()
@@ -508,6 +824,8 @@ def genuine_pass():
         (lambda s: s.__setitem__("decision_record_fsynced", False), "decision_and_enqueue_records_fsynced"),
         (lambda s: s.__setitem__("enqueue_record_fsynced", False), "decision_and_enqueue_records_fsynced"),
         (lambda s: s.__setitem__("enqueue_result_durability", "fsync_unsupported"), "decision_and_enqueue_records_fsynced"),
+        (lambda s: s["queue_records"][0].__setitem__("decision_record_durable", False), "enqueue_record_names_decision_id"),
+        (lambda s: s["queue_records"][0].__setitem__("record_type", "relay_status"), "visual_voice_delivery_queue_declared"),
     ],
 )
 def test_validator_recomputes_from_samples(genuine_pass, mutate, prereq):
@@ -517,7 +835,6 @@ def test_validator_recomputes_from_samples(genuine_pass, mutate, prereq):
     assert any(f"prerequisite {prereq!r} declared met but the samples do not show it" in e for e in errors), errors
     # The closed gaps re-open: leaving them out is now refused.
     assert any("mandatory gap 'SO03-NO-P0-ALERT-PATH' omitted" in e for e in errors), errors
-    assert any("record supports 'not_measurable'" in e or "record supports 'fail'" in e for e in errors), errors
 
 
 def test_validator_refuses_an_end_without_a_durable_enqueue_record(genuine_pass):
@@ -542,7 +859,7 @@ def test_validator_p0_rule_is_independent_of_the_product():
 def test_fixed_row_bound_and_samples_are_unchanged():
     row = rec.OBJECTIVE_SPECS["SO-03"][PART]
     assert row["bound_ms"] == 2000.0 and row["required_samples"] == 200 and row["kind"] == rec.RULE_EVERY_SAMPLE_MAX
-    assert set(row["gaps"]) == set(GAPS) == set(row["gaps_closed_by_samples"])
+    assert set(row["gaps"]) == set(ALL_GAPS) and set(row["gaps_closed_by_samples"]) == set(GAPS)
     assert {g for g in rec.GAP_CLOSERS if g.startswith("SO03-")} == set(GAPS)
     assert rec.GAP_CLOSERS["SO03-NO-VISUAL-VOICE-QUEUE"] is rec.so03_visual_voice_queue_observed
     assert rec.GAP_CLOSERS["SO03-NO-P0-ALERT-PATH"] is rec.so03_p0_alert_path_observed

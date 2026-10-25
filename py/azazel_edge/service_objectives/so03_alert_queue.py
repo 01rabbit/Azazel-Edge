@@ -38,6 +38,14 @@ written independently) and the closure of the two former gaps
 (``SO03-NO-VISUAL-VOICE-QUEUE``, ``SO03-NO-P0-ALERT-PATH``) from the samples.
 If any sample does not show its durable enqueue record, the gaps stay.
 
+Why this row is still ``not_measurable``: in production the relay is attached
+only by ``OpenCanaryRedirectController`` (its decision logger). The Rust core's
+throttle/redirect/isolate decisions are not written as ``action_decision``
+records through ``P0AuditLogger`` (``release.rs`` writes rollback audit only),
+so they never reach the P0 queue, and which decision path is authoritative is
+Edge#412. The blocking gap ``SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS`` is
+not closable by samples; SO-03 is never a pass until that path is wired.
+
 Out of scope: rendering and speaking the queued alerts (no output device is
 added), and which Edge service attaches the path in production.
 """
@@ -79,8 +87,8 @@ REQUIRED_SAMPLES = SPEC["required_samples"]
 END_WAIT_S = 10.0
 
 QUEUE_RECORD_KEYS = (
-    "channel", "schema", "seq", "decision_id", "decision_chain_hash", "p0_class", "p0_basis", "p0_rule",
-    "enqueued_monotonic_ns", "decision_durable_monotonic_ns",
+    "channel", "schema", "record_type", "seq", "decision_id", "decision_chain_hash", "p0_class", "p0_basis",
+    "p0_rule", "enqueued_monotonic_ns", "decision_durable_monotonic_ns", "decision_record_durable",
 )
 
 # The P0 kinds the 200 decisions cycle through: the three enforcement-bearing
@@ -182,9 +190,41 @@ def _queue_records_for(queue_path: Path, decision_id: str) -> List[Dict[str, Any
             row = json.loads(line)
         except Exception:
             continue
-        if isinstance(row, dict) and row.get("decision_id") == decision_id:
+        if isinstance(row, dict) and row.get("record_type") == "alert" and row.get("decision_id") == decision_id:
             out.append({k: row.get(k) for k in QUEUE_RECORD_KEYS})
     return out
+
+
+def _full_queue_enqueue_latency() -> Dict[str, Any]:
+    """Diagnostic: one enqueue into a queue already at its bound (plain
+    append), and one that triggers the 2x-bound compaction."""
+
+    from azazel_edge.notify.p0_alert import DEFAULT_MAX_ENTRIES, P0AlertQueue, build_p0_alerts
+
+    def alerts(i: int) -> List[Dict[str, Any]]:
+        rec_ = {"kind": "action_decision", "trace_id": f"fill-{i}", "chain_hash": f"{i:064x}", "action": "throttle"}
+        return build_p0_alerts(rec_, "enforcement:throttle", "fsynced", 1)
+
+    with tempfile.TemporaryDirectory(prefix="so03-full-") as tmp:
+        q = P0AlertQueue(Path(tmp) / "q.jsonl", max_entries=DEFAULT_MAX_ENTRIES)
+        i = 0
+        while i * 2 < DEFAULT_MAX_ENTRIES:
+            q.enqueue(alerts(i))
+            i += 1
+        t0 = time.monotonic_ns()
+        q.enqueue(alerts(i))
+        append_ms = (time.monotonic_ns() - t0) / 1e6
+        i += 1
+        while (i + 1) * 2 <= q.max_lines:
+            q.enqueue(alerts(i))
+            i += 1
+        before = q.compactions
+        t0 = time.monotonic_ns()
+        q.enqueue(alerts(i))
+        compact_ms = (time.monotonic_ns() - t0) / 1e6
+        if q.compactions != before + 1:
+            raise RuntimeError("the full-queue enqueue did not compact")
+    return {"max_entries": DEFAULT_MAX_ENTRIES, "append_ms": append_ms, "compact_ms": compact_ms}
 
 
 def run(*, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None) -> Dict[str, Any]:
@@ -217,6 +257,7 @@ def run(*, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None) -> Dict[
                 enqueued_cv.notify_all()
 
         relay = attach_p0_alert_relay(audit, queue_path, on_relayed=on_relayed)
+        relay.ready.wait(END_WAIT_S)  # startup reconcile done (nothing to replay here)
         try:
             for i in range(int(samples)):
                 noc, soc, kind = _synthetic_p0_inputs(rng, i, mapping)
@@ -276,11 +317,11 @@ def run(*, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None) -> Dict[
         finally:
             relay.stop()
         chain = P0AuditLogger.verify_chain(audit_path)
-        counters = {
-            "enqueued_total": relay.enqueued_total,
-            "enqueue_failed_total": relay.enqueue_failed_total,
-            "handoff_dropped_total": relay.handoff_dropped_total,
-        }
+        counters = relay.metrics()
+    try:
+        full_queue = _full_queue_enqueue_latency()
+    except Exception as exc:  # diagnostic only; never part of the verdict
+        full_queue = {"max_entries": 0, "append_ms": float("nan"), "compact_ms": float("nan"), "error": str(exc)}
 
     observed = so03_observed_prerequisites(rows)
     ended = sum(1 for r in rows if so03_end_observed(r))
@@ -326,6 +367,14 @@ def run(*, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None) -> Dict[
             "Not every sample's alert was built from its audit-chain decision record and classified P0 by "
             + P0_RULE + ".",
             refs=["py/azazel_edge/notify/p0_alert.py", "py/azazel_edge/audit/logger.py"],
+        ),
+        gap(
+            "SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS",
+            "The P0 relay is attached to the OpenCanary redirect controller's decision logger only. The Rust core's "
+            "throttle/redirect/isolate decisions are not written as action_decision records through P0AuditLogger "
+            "(release.rs writes rollback audit only), so they never reach the P0 queue. Which decision path is "
+            "authoritative is Edge#412. No sample closes this gap: SO-03 stays not_measurable until it is wired.",
+            refs=["Edge#412", "py/azazel_edge/opencanary_redirect.py", "rust/azazel-edge-core/src/release.rs"],
         ),
     ]
     # A gap is left out only when the validator's own recomputation closes it.
@@ -374,6 +423,10 @@ def run(*, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None) -> Dict[
         method="real ActionArbiter + P0AuditLogger + P0AlertRelay/P0AlertQueue, start stamped by the logger, end after the queue fsync",
         notes=[
             "action_decision records are fsynced (DURABLE_KINDS); the P0 queue append is fsynced before the relay reports it.",
+            "the relay is attached in production only by OpenCanaryRedirectController; Rust core decisions do not reach it "
+            "(gap SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS, Edge#412), so this row is never a pass today.",
+            "diagnostic, not a sample: enqueue latency on a full queue (max_entries=%d): append at the bound %.3f ms, "
+            "append that compacts at 2x the bound %.3f ms" % (full_queue["max_entries"], full_queue["append_ms"], full_queue["compact_ms"]),
             "the P0 path is observation and notification only: it never changes the decision, and its failure never reaches log().",
         ],
     )

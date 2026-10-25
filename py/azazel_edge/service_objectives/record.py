@@ -144,6 +144,13 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
             "gaps": (
                 "SO03-NO-VISUAL-VOICE-QUEUE",
                 "SO03-NO-P0-ALERT-PATH",
+                # The Rust core's throttle/redirect/isolate decisions are not
+                # written as action_decision records through P0AuditLogger, so
+                # the P0 relay never sees them; which decision path is
+                # authoritative is Edge#412. No sample can close this one: it
+                # is deliberately absent from gaps_closed_by_samples, so SO-03
+                # stays not_measurable until that path is wired.
+                "SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS",
             ),
             # Closed only by recomputation from every sample (GAP_CLOSERS):
             # each sample's end is the P0 queue's fsynced enqueue record, on
@@ -695,8 +702,8 @@ SO03_P0_RULE = "edge-p0/v1:enforcement-bearing-or-soc-critical"
 SO03_ENFORCEMENT_ACTIONS = ("throttle", "redirect", "isolate")
 SO03_QUEUE_RECORD_FIELDS = frozenset(
     {
-        "channel", "schema", "seq", "decision_id", "decision_chain_hash", "p0_class", "p0_basis", "p0_rule",
-        "enqueued_monotonic_ns", "decision_durable_monotonic_ns",
+        "channel", "schema", "record_type", "seq", "decision_id", "decision_chain_hash", "p0_class", "p0_basis",
+        "p0_rule", "enqueued_monotonic_ns", "decision_durable_monotonic_ns", "decision_record_durable",
     }
 )
 
@@ -721,7 +728,7 @@ def _so03_queue_records(sample: Mapping[str, Any]) -> Optional[List[Mapping[str,
         return None
     if sorted(r.get("channel") for r in recs if isinstance(r.get("channel"), str)) != sorted(SO03_CHANNELS):
         return None
-    if not all(r.get("schema") == SO03_QUEUE_SCHEMA and _int(r.get("seq")) for r in recs):
+    if not all(r.get("schema") == SO03_QUEUE_SCHEMA and r.get("record_type") == "alert" and _int(r.get("seq")) for r in recs):
         return None
     return recs
 
@@ -753,6 +760,7 @@ def so03_enqueue_observed(sample: Mapping[str, Any]) -> bool:
         r.get("decision_id") == sid
         and r.get("decision_chain_hash") == chain
         and r.get("decision_durable_monotonic_ns") == start
+        and r.get("decision_record_durable") is True
         and _int(r.get("enqueued_monotonic_ns"))
         and start <= r["enqueued_monotonic_ns"] <= end
         for r in recs
