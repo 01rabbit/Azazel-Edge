@@ -20,6 +20,9 @@ try:  # POSIX: serialise queue writers across processes too.
 except ImportError:  # pragma: no cover - non-POSIX
     _fcntl = None
 
+_O_NOFOLLOW = getattr(os, 'O_NOFOLLOW', 0)
+_O_CLOEXEC = getattr(os, 'O_CLOEXEC', 0)
+
 # One lock per queue file in this process, shared by every notifier on it.
 _QUEUE_LOCKS: Dict[str, threading.Lock] = {}
 _QUEUE_LOCKS_GUARD = threading.Lock()
@@ -255,26 +258,33 @@ class OfflineQueueNotifier:
         def __init__(self, queue_path: Path):
             self.queue_path = queue_path
             self.lock = _queue_lock(queue_path)
-            self.fh = None
+            self.fd = None
 
         def __enter__(self):
             self.lock.acquire()
             try:
                 if _fcntl is not None:
-                    self.fh = self.queue_path.with_name(self.queue_path.name + '.lock').open('a')
-                    _fcntl.flock(self.fh.fileno(), _fcntl.LOCK_EX)
+                    # O_NOFOLLOW: a symlink planted at the lock path is refused.
+                    self.fd = os.open(
+                        str(self.queue_path.with_name(self.queue_path.name + '.lock')),
+                        os.O_RDWR | os.O_CREAT | _O_NOFOLLOW | _O_CLOEXEC,
+                        0o600,
+                    )
+                    _fcntl.flock(self.fd, _fcntl.LOCK_EX)
             except Exception:
-                if self.fh is not None:
-                    self.fh.close()
+                if self.fd is not None:
+                    os.close(self.fd)
+                    self.fd = None
                 self.lock.release()
                 raise
             return self
 
         def __exit__(self, *exc):
             try:
-                if self.fh is not None:
-                    _fcntl.flock(self.fh.fileno(), _fcntl.LOCK_UN)
-                    self.fh.close()
+                if self.fd is not None:
+                    _fcntl.flock(self.fd, _fcntl.LOCK_UN)
+                    os.close(self.fd)
+                    self.fd = None
             finally:
                 self.lock.release()
             return False
@@ -296,7 +306,10 @@ class OfflineQueueNotifier:
         # removes it. Callers hold _Locked.
         tmp = self.queue_path.with_name(f'{self.queue_path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
         try:
-            with tmp.open('w', encoding='utf-8') as fh:
+            # O_EXCL | O_NOFOLLOW: never write through a file or symlink that
+            # is already there; 0600 because the queue holds alert content.
+            fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
                 for entry in entries:
                     fh.write(json.dumps(entry, ensure_ascii=True, separators=(',', ':')) + '\n')
             fsync_path(tmp)

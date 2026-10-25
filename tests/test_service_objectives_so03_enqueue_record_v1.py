@@ -574,3 +574,64 @@ def test_fixed_row_bound_and_samples_are_unchanged():
     row = rec.OBJECTIVE_SPECS["SO-03"][PART]
     assert row["bound_ms"] == 2000.0 and row["required_samples"] == 200 and row["kind"] == rec.RULE_EVERY_SAMPLE_MAX
     assert set(rec.so03_observed_prerequisites([{}])) <= set(row["prerequisites"])
+
+
+def test_flush_keeps_entries_whose_delivery_failed(tmp_path):
+    qpath = tmp_path / "q.jsonl"
+
+    class Delegate:
+        def send(self, entry):
+            if entry.get("decision_id") == "refused":
+                return {"ok": False, "error": "refused"}
+            if entry.get("decision_id") == "raises":
+                raise RuntimeError("down")
+            return {"ok": True}
+
+    queue = OfflineQueueNotifier(qpath, delegate=Delegate())
+    for did in ("a", "refused", "b", "raises"):
+        queue.send({"action": "notify", "decision_id": did})
+    result = queue.flush()
+    assert result == {"flushed": 2, "failed": 2, "remaining": 2}
+    assert [e["decision_id"] for e in _rows(qpath)] == ["refused", "raises"]
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW") or os.name != "posix", reason="POSIX O_NOFOLLOW")
+def test_symlinked_lock_file_is_refused(tmp_path):
+    victim = tmp_path / "victim"
+    victim.write_text("keep", encoding="utf-8")
+    qpath = tmp_path / "q.jsonl"
+    (tmp_path / "q.jsonl.lock").symlink_to(victim)
+    result = OfflineQueueNotifier(qpath, delegate=None).send({"action": "notify", "decision_id": "d"})
+    assert result["ok"] is False
+    assert victim.read_text(encoding="utf-8") == "keep"
+    assert not qpath.exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW") or os.name != "posix", reason="POSIX O_NOFOLLOW")
+def test_symlinked_temp_file_is_refused(tmp_path, monkeypatch):
+    import threading
+
+    victim = tmp_path / "victim"
+    victim.write_text("keep", encoding="utf-8")
+    qpath = tmp_path / "q.jsonl"
+    tmp = tmp_path / f"q.jsonl.{os.getpid()}.{threading.get_ident()}.tmp"
+    tmp.symlink_to(victim)
+    result = OfflineQueueNotifier(qpath, delegate=None).send({"action": "notify", "decision_id": "d"})
+    assert result["ok"] is False
+    assert victim.read_text(encoding="utf-8") == "keep"
+    assert not qpath.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX modes")
+def test_queue_and_lock_files_are_private(tmp_path):
+    import stat
+
+    qpath = tmp_path / "q.jsonl"
+    OfflineQueueNotifier(qpath, delegate=None).send({"action": "notify", "decision_id": "d"})
+    assert stat.S_IMODE(os.stat(qpath).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(tmp_path / "q.jsonl.lock").st_mode) == 0o600
+
+
+def test_log_action_decision_documents_the_duplicate_on_retry():
+    doc = P0AuditLogger.log_action_decision.__doc__ or ""
+    assert "AuditDurabilityError" in doc and "after" in doc and "second time" in doc

@@ -176,6 +176,14 @@ class P0AuditLogger:
         return self.log('evaluation', trace_id=trace_id, source=source, **payload)
 
     def log_action_decision(self, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
+        """Append the decision record and fsync it before returning.
+
+        ``AuditDurabilityError`` is raised *after* the record has been appended
+        to the chain (only its fsync failed). Retrying the call therefore
+        writes the same decision a second time, as a new chained record; a
+        caller that retries must expect, or check for, the duplicate.
+        """
+
         return self.log('action_decision', trace_id=trace_id, source=source, **payload)
 
     def log_notification(self, trace_id: str, source: str, **payload: Any) -> Dict[str, Any]:
