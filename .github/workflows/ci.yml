@@ -69,7 +69,8 @@ jobs:
 
   service-objectives:
     # Program plan §8 rows owned by Edge (Edge#414): SO-03, SO-04, SO-07
-    # (process-kill). One JSON record per objective is uploaded as an artifact
+    # (process-kill). SO-02 needs root and runs in service-objectives-lab;
+    # here, unprivileged, its record is not_measurable (lab_built unmet). One JSON record per objective is uploaded as an artifact
     # whatever the outcome. The run exits non-zero unless every record is a
     # valid pass, so a row that cannot be measured yet keeps this job red
     # rather than skipping into green. Nothing here enables enforcement.
@@ -118,6 +119,56 @@ jobs:
         with:
           name: service-objective-records
           path: service-objective-records/*.json
+          if-no-files-found: error
+
+  service-objectives-lab:
+    # SO-02 (virtual-lab, Edge#414): Edge's control daemon, web UI and Suricata
+    # in network namespaces the harness creates, as root. The harness refuses
+    # while another Suricata runs, so the packaged unit is stopped first. A
+    # virtual-lab record is never hardware evidence and never gates the
+    # physical-NIC variant (R7). Red until the row's gaps are closed.
+    name: Service objectives lab (§8 SO-02)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends suricata iputils-ping
+          sudo systemctl stop suricata.service || true
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -U pip wheel setuptools
+          pip install -r requirements/runtime.txt
+          pip install -r requirements/fabric.txt
+
+      - name: Run SO-02 lab harness
+        run: |
+          sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m azazel_edge.service_objectives run \
+            --objective SO-02 \
+            --out-dir service-objective-lab-records
+
+      - name: Re-validate lab records
+        if: always()
+        run: |
+          . .venv/bin/activate
+          sudo chown -R "$(id -u)" service-objective-lab-records || true
+          PYTHONPATH=.:py python -m azazel_edge.service_objectives validate \
+            --expect-commit "$GITHUB_SHA" \
+            service-objective-lab-records
+
+      - name: Upload lab records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-objective-lab-records
+          path: service-objective-lab-records/*.json
           if-no-files-found: error
 
   dependency-review:

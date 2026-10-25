@@ -83,7 +83,51 @@ SO07_INJECTION_POINTS = (
 # it, which the buffered writer passes straight to the kernel.
 SO07_RECORD_PADS = (0, 16 * 1024)
 
+# SO-02 lab source types, and where the read-only operator surface
+# (GET /api/state) names each one's failure. Edge declares no source-type list
+# (gap SO02-SOURCE-TYPES-UNDECLARED); these are the logical types whose failure
+# the surface names by source today. Each entry: the source id, the surface
+# field, and the value that field shows while the source is healthy / failed.
+SO02_CAPTURE_PROCESS = "capture_process_death"
+SO02_CAPTURE_INTERFACE = "capture_interface_link_down"
+SO02_LAB_SOURCE_TYPES = (SO02_CAPTURE_PROCESS, SO02_CAPTURE_INTERFACE)
+SO02_SURFACE = {
+    # azazel_edge_web/app.py get_monitoring_state(): ON/OFF per daemon.
+    SO02_CAPTURE_PROCESS: {"source_id": "suricata", "field": "monitoring.suricata"},
+    # The control daemon's NOC projection: interfaces whose path probes fail.
+    # br0 is Edge's default capture interface (SURICATA_IFACE) and internal
+    # monitor bridge (AZAZEL_INTERNAL_BRIDGE_IF).
+    SO02_CAPTURE_INTERFACE: {"source_id": "br0", "field": "noc_blast_radius.affected_uplinks"},
+}
+SO02_PER_SOURCE_TYPE_SAMPLES = 10
+
 OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "SO-02": {
+        "source_failure_visible": {
+            "kind": "every_sample_max_elapsed",
+            "bound_ms": 10000.0,
+            # 20 injections covering every declared source type; the lab
+            # types split them evenly (recomputed: every_lab_source_type_sampled).
+            "required_samples": 20,
+            # The release form of the logical source types is virtual-lab. The
+            # physical-NIC variant is hardware-only (R7): no record of this
+            # objective is evidence for it.
+            "row_class": "virtual-lab",
+            "prerequisites": (
+                "lab_built",
+                "no_live_capture_touched",
+                "edge_stack_answering",
+                # Recomputed from the samples by the validator.
+                "every_injection_from_healthy_baseline",
+                "every_lab_source_type_sampled",
+            ),
+            "gaps": (
+                "SO02-NOT-NEXUS-INTEGRATED",
+                "SO02-SOURCE-TYPES-UNDECLARED",
+                "SO02-NO-COMMISSIONED-INTERFACE-IDENTITY",
+            ),
+        },
+    },
     "SO-03": {
         "decision_durable_to_alert_enqueued": {
             "kind": "every_sample_max_elapsed",
@@ -198,6 +242,17 @@ RECORD_FIELDS = frozenset(
 PART_FIELDS = frozenset({"name", "sample_rule", "samples", "pass_rule", "prerequisites", "gaps", "verdict"})
 _COMMON_SAMPLE_FIELDS = ("sample_id", "start_monotonic_ns", "end_monotonic_ns", "elapsed_ms", "start_event", "end_event")
 SAMPLE_FIELDS: Dict[str, frozenset] = {
+    "SO-02": frozenset(
+        _COMMON_SAMPLE_FIELDS
+        + (
+            "source_type", "source_id", "injection", "surface", "surface_field",
+            "baseline_healthy", "baseline_poll_started_monotonic_ns", "baseline_surface_value",
+            "end_poll_started_monotonic_ns", "end_surface_value",
+            "polls_after_injection", "poll_errors_after_injection", "recovered",
+            # Diagnostic stage stamps (wall clock); never read for the verdict.
+            "injection_wall_epoch", "end_noc_updated_epoch", "end_snapshot_epoch",
+        )
+    ),
     "SO-03": frozenset(
         _COMMON_SAMPLE_FIELDS
         + (
@@ -652,6 +707,106 @@ def so03_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[st
     }
 
 
+def _so02_surface_healthy(source_type: Any, value: Any) -> bool:
+    entry = SO02_SURFACE.get(source_type) if isinstance(source_type, str) else None
+    if entry is None:
+        return False
+    if source_type == SO02_CAPTURE_PROCESS:
+        return value == "ON"
+    return isinstance(value, list) and all(isinstance(v, str) for v in value) and entry["source_id"] not in value
+
+
+def _so02_surface_failed(source_type: Any, value: Any) -> bool:
+    entry = SO02_SURFACE.get(source_type) if isinstance(source_type, str) else None
+    if entry is None:
+        return False
+    if source_type == SO02_CAPTURE_PROCESS:
+        return value == "OFF"
+    return isinstance(value, list) and entry["source_id"] in value
+
+
+def so02_baseline_observed(sample: Mapping[str, Any]) -> bool:
+    """SO-02: the surface showed this source healthy on a poll begun before the injection."""
+
+    base, start = sample.get("baseline_poll_started_monotonic_ns"), sample.get("start_monotonic_ns")
+    return (
+        sample.get("baseline_healthy") is True
+        and _int(base)
+        and _int(start)
+        and base <= start
+        and _so02_surface_healthy(sample.get("source_type"), sample.get("baseline_surface_value"))
+    )
+
+
+def so02_failure_observed(sample: Mapping[str, Any]) -> bool:
+    """SO-02: the sample's end is a poll of the operator surface, begun after the
+    injection, on which the field for this source type names the source failed;
+    and the same field showed it healthy before the injection.
+
+    Recomputed from the observed fields, never from the sample's elapsed time.
+    """
+
+    source_type = sample.get("source_type")
+    entry = SO02_SURFACE.get(source_type) if isinstance(source_type, str) else None
+    if entry is None:
+        return False
+    if sample.get("source_id") != entry["source_id"] or sample.get("surface_field") != entry["field"]:
+        return False
+    if not so02_baseline_observed(sample):
+        return False
+    start, polled, end = sample.get("start_monotonic_ns"), sample.get("end_poll_started_monotonic_ns"), sample.get("end_monotonic_ns")
+    if not (_int(start) and _int(polled) and _int(end) and start <= polled <= end):
+        return False
+    return _so02_surface_failed(source_type, sample.get("end_surface_value"))
+
+
+def so02_sequence_problems(samples: Sequence[Any]) -> List[str]:
+    """SO-02 samples are one run's injections in order: each injected after the
+    previous one ended (or, if it never ended, after it began), from a baseline
+    polled after that, with a strictly later end and at least one poll seen. A
+    copied sample under a new id overlaps its original and is refused."""
+
+    problems: List[str] = []
+    prev_start: Optional[int] = None
+    prev_end: Optional[int] = None
+    for idx, s in enumerate(samples):
+        if not isinstance(s, dict):
+            continue
+        start, end, base = s.get("start_monotonic_ns"), s.get("end_monotonic_ns"), s.get("baseline_poll_started_monotonic_ns")
+        if not _int(start):
+            continue
+        if end is not None:
+            if not (_int(end) and end > start):
+                problems.append(f"samples[{idx}]: end must be strictly after the injection")
+            polls = s.get("polls_after_injection")
+            if not (_int(polls) and polls > 0):
+                problems.append(f"samples[{idx}]: an ended sample must have seen at least one poll after the injection")
+        if prev_start is not None:
+            floor = prev_end if prev_end is not None else prev_start
+            if start <= floor:
+                problems.append(f"samples[{idx}]: injected before the previous sample ended (overlapping or out of order)")
+            if _int(base) and base <= floor:
+                problems.append(f"samples[{idx}]: baseline polled before the previous sample ended")
+        prev_start, prev_end = start, (end if _int(end) else None)
+    return problems
+
+
+def so02_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[str, bool]:
+    """SO-02 record prerequisites, recomputed from every sample's observed fields."""
+
+    items = list(samples)
+    counts = {t: 0 for t in SO02_LAB_SOURCE_TYPES}
+    for s in items:
+        if s.get("source_type") in counts:
+            counts[s["source_type"]] += 1
+    return {
+        "every_injection_from_healthy_baseline": bool(items) and all(so02_baseline_observed(s) for s in items),
+        "every_lab_source_type_sampled": bool(items)
+        and all(s.get("source_type") in counts for s in items)
+        and all(n >= SO02_PER_SOURCE_TYPE_SAMPLES for n in counts.values()),
+    }
+
+
 def _so07_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[str, bool]:
     """SO-07 coverage, recomputed from the samples against the code's record kinds."""
 
@@ -884,6 +1039,12 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                 errors.append(f"{where}.pass_rule.bounds_ms: the declaration gives {declaration['bounds_ms']}, record declares {rule.get('bounds_ms')!r}")
             if rule.get("declaration") != declaration["path"] or rule.get("declaration_sha256") != declaration["sha256"]:
                 errors.append(f"{where}.pass_rule.declaration: record does not cite {declaration['path']} at sha256 {declaration['sha256']}")
+        if spec.get("row_class") is not None:
+            config = record["product_configuration"]
+            if config.get("row_class") != spec["row_class"]:
+                errors.append(f"product_configuration.row_class: {objective} is measured as {spec['row_class']!r}, record declares {config.get('row_class')!r}")
+            if config.get("hardware_evidence") is not False:
+                errors.append(f"product_configuration.hardware_evidence: a {spec['row_class']} record must declare false; it never gates a hardware-only variant")
         if part["sample_rule"].get("per_action_required", 0) != spec.get("per_action_samples", 0):
             errors.append(
                 f"{where}.sample_rule.per_action_required: {objective} requires {spec.get('per_action_samples', 0)}, "
@@ -963,6 +1124,23 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                         p["met"] = bool(p["met"]) and observed[p["id"]]
         else:
             eval_samples = _recomputed_latency_samples([s if isinstance(s, dict) else {} for s in part["samples"]])
+            if objective == "SO-02" and part["name"] == "source_failure_visible":
+                errors.extend(f"{where}.{p}" for p in so02_sequence_problems(part["samples"]))
+                # An end counts only where the sample's own fields show the
+                # surface naming the source failed after a healthy baseline;
+                # otherwise the sample never ended, whatever its timestamps say.
+                for sidx, sample in enumerate(part["samples"]):
+                    observed_end = isinstance(sample, dict) and so02_failure_observed(sample)
+                    if not observed_end:
+                        if isinstance(sample, dict) and sample.get("end_monotonic_ns") is not None:
+                            errors.append(f"{where}.samples[{sidx}]: end given but the observed fields do not show the surface naming the source failed")
+                        eval_samples[sidx]["elapsed_ms"] = None
+                observed = so02_observed_prerequisites([s for s in part["samples"] if isinstance(s, dict)])
+                for p in effective_prereqs:
+                    if p["id"] in observed:
+                        if p["met"] and not observed[p["id"]]:
+                            errors.append(f"{where}: prerequisite {p['id']!r} declared met but the samples do not show it")
+                        p["met"] = bool(p["met"]) and observed[p["id"]]
             if objective == "SO-04" and part["name"] in ("rollback_start_after_expiry", "rollback_completion"):
                 dict_samples = [s for s in part["samples"] if isinstance(s, dict)]
                 if part["name"] == "rollback_start_after_expiry":
