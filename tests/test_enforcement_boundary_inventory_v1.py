@@ -747,6 +747,9 @@ class WazuhActiveResponseTest(unittest.TestCase):
             "<ca_store>etc/wpk_root.pem</ca_store></active-response></ossec_config>",
             "<ossec_config><client/></ossec_config>",
             "<ossec_config><active-response/><active-response><disabled>no</disabled></active-response></ossec_config>",
+            # Nested only: a direct-children search (findall) misses this block.
+            "<ossec_config><client/><agent_config><active-response><disabled>no</disabled>"
+            "</active-response></agent_config></ossec_config>",
         ]
         for xml in cases:
             with self.subTest(xml=xml):

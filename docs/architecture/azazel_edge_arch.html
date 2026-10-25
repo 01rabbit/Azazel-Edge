@@ -308,10 +308,10 @@ const D={
       "row": 0
     },
     {
-      "id": "iptables",
+      "id": "nft_isolate",
       "col": "enforce",
-      "label": "iptables isolate",
-      "sub": "FORWARD/INPUT DROP",
+      "label": "nft isolate",
+      "sub": "input chain saddr drop · owner-token lease",
       "color": "#3b82f6",
       "row": 1
     },
@@ -319,7 +319,7 @@ const D={
       "id": "tc",
       "col": "enforce",
       "label": "tc throttle",
-      "sub": "Rate-limit netem/tbf",
+      "sub": "root tbf qdisc · owner-token lease",
       "color": "#3b82f6",
       "row": 2
     },
@@ -327,7 +327,7 @@ const D={
       "id": "redirect_hp",
       "col": "enforce",
       "label": "Redirect → Honeypot",
-      "sub": "Scapegoat DNAT",
+      "sub": "nft prerouting redirect → decoy port",
       "color": "#3b82f6",
       "row": 3
     },
@@ -452,7 +452,7 @@ const D={
             {
               "from": "explain",
               "to": "redirect_hp",
-              "label": "iptables DNAT to OpenCanary"
+              "label": "nft redirect to OpenCanary port"
             },
             {
               "from": "explain",
@@ -479,7 +479,7 @@ const D={
             "arbiter",
             "explain",
             "rustcore",
-            "iptables",
+            "nft_isolate",
             "notify",
             "audit"
           ],
@@ -521,8 +521,8 @@ const D={
             },
             {
               "from": "rustcore",
-              "to": "iptables",
-              "label": "iptables DROP applied"
+              "to": "nft_isolate",
+              "label": "nft input drop applied"
             },
             {
               "from": "explain",
@@ -651,7 +651,7 @@ const D={
             "ti_feed",
             "arbiter",
             "explain",
-            "iptables",
+            "nft_isolate",
             "notify",
             "audit"
           ],
@@ -683,7 +683,7 @@ const D={
             },
             {
               "from": "explain",
-              "to": "iptables",
+              "to": "nft_isolate",
               "label": "Source IP blocked"
             },
             {
@@ -1095,7 +1095,7 @@ const D={
             "runbook",
             "arbiter",
             "explain",
-            "iptables",
+            "nft_isolate",
             "notify",
             "audit"
           ],
@@ -1122,7 +1122,7 @@ const D={
             },
             {
               "from": "explain",
-              "to": "iptables",
+              "to": "nft_isolate",
               "label": "Containment applied on approval"
             },
             {
@@ -1418,7 +1418,7 @@ const D={
             {
               "from": "explain",
               "to": "redirect_hp",
-              "label": "DNAT to OpenCanary"
+              "label": "nft redirect to OpenCanary port"
             },
             {
               "from": "explain",
@@ -1444,7 +1444,7 @@ const D={
             "soc",
             "arbiter",
             "explain",
-            "iptables",
+            "nft_isolate",
             "notify",
             "audit"
           ],
@@ -1476,7 +1476,7 @@ const D={
             },
             {
               "from": "explain",
-              "to": "iptables",
+              "to": "nft_isolate",
               "label": "Source blocked"
             },
             {
@@ -1634,7 +1634,7 @@ const D={
             {
               "from": "explain",
               "to": "redirect_hp",
-              "label": "DNAT rule applied"
+              "label": "nft redirect rule applied"
             },
             {
               "from": "redirect_hp",
@@ -1739,7 +1739,7 @@ const D={
             "soc",
             "arbiter",
             "explain",
-            "iptables"
+            "nft_isolate"
           ],
           "steps": [
             {
@@ -1764,7 +1764,7 @@ const D={
             },
             {
               "from": "explain",
-              "to": "iptables",
+              "to": "nft_isolate",
               "label": "Breach prevented"
             }
           ]
@@ -1850,7 +1850,7 @@ const D={
             "ti_feed",
             "arbiter",
             "explain",
-            "iptables"
+            "nft_isolate"
           ],
           "steps": [
             {
@@ -1875,7 +1875,7 @@ const D={
             },
             {
               "from": "explain",
-              "to": "iptables",
+              "to": "nft_isolate",
               "label": "Breach prevented"
             }
           ]
@@ -1975,7 +1975,7 @@ const D={
             "soc",
             "arbiter",
             "notify",
-            "iptables",
+            "nft_isolate",
             "audit"
           ],
           "steps": [
@@ -1996,7 +1996,7 @@ const D={
             },
             {
               "from": "arbiter",
-              "to": "iptables",
+              "to": "nft_isolate",
               "label": "isolate on high confidence"
             },
             {
@@ -2016,7 +2016,7 @@ const D={
             "arbiter",
             "explain",
             "redirect_hp",
-            "iptables",
+            "nft_isolate",
             "tc",
             "notify",
             "audit"
