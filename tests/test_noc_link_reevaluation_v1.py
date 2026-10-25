@@ -666,7 +666,7 @@ class WatcherRobustnessTests(unittest.TestCase):
         calls = []
 
         def broken_select(*a, **k):
-            calls.append(1)
+            calls.append(time.monotonic())
             raise OSError('EBADF')
 
         a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -682,7 +682,9 @@ class WatcherRobustnessTests(unittest.TestCase):
                 try:
                     self.assertTrue(self._wait(lambda: w.mode == 'sysfs_poll'))
                     time.sleep(0.3)
-                    self.assertEqual(len(calls), lw.MAX_SOCKET_ERRORS)  # no spinning, then no more select
+                    self.assertEqual(len(calls), lw.MAX_SOCKET_ERRORS)  # then no more select
+                    gaps = [later - earlier for earlier, later in zip(calls, calls[1:])]
+                    self.assertTrue(all(gap >= 0.08 for gap in gaps), gaps)  # it waited between tries
                     self._sysfs(root, 'down', '0')
                     self.assertTrue(self._wait(lambda: fired == [['br0']]))
                 finally:
