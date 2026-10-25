@@ -254,6 +254,12 @@ HOSTILE_LOAD_PROFILE_SCHEMA = "azazel-edge/hostile-load-profile/v1"
 # non-alert lines the core cannot parse or will not read whole.
 HOSTILE_LINE_CLASSES = ("alert", "flow", "dns", "stats", "http", "invalid_utf8", "oversized")
 HOSTILE_NON_ALERT_KINDS = ("flow", "dns", "stats", "http", "invalid_utf8")
+# A profile is provisional until the owner confirms its factors by changing
+# the declaration in the tree: status "confirmed", and owner_defaults no longer
+# pending. Only then may SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL be left out
+# (record.PART_GAP_CLOSERS). There is no other way to confirm it.
+CONFIRMED = "confirmed"
+HOSTILE_PROFILE_STATUSES = (PROVISIONAL, CONFIRMED)
 _HOSTILE_MS_KEYS = ("core_default_poll_ms", "line_bytes", "warmup_ms", "hold_after_ms", "quiet_gap_ms", "audit_attribution_slack_ms")
 
 
@@ -365,8 +371,12 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
         out["problems"].append(f"schema is not {HOSTILE_LOAD_PROFILE_SCHEMA}")
         return out
     problems: List[str] = []
-    if doc.get("status") not in KNOWN_STATUSES:
-        problems.append(f"status {doc.get('status')!r} is not one of {list(KNOWN_STATUSES)}")
+    if doc.get("status") not in HOSTILE_PROFILE_STATUSES:
+        problems.append(f"status {doc.get('status')!r} is not one of {list(HOSTILE_PROFILE_STATUSES)}")
+    owner = doc.get("owner_defaults")
+    pending = not isinstance(owner, dict) or "pending" in str(owner.get("status", "pending"))
+    if doc.get("status") == CONFIRMED and pending:
+        problems.append("status is confirmed but owner_defaults.status is still pending")
     if not isinstance(doc.get("hardware_class"), str) or not doc.get("hardware_class"):
         problems.append("hardware_class missing")
     quota = quota_decl["quotas"].get(doc.get("ingress")) if isinstance(doc.get("ingress"), str) else None
@@ -426,6 +436,7 @@ def load_hostile_load_profile(path: Optional[Path] = None, *, quota_path: Option
     for key in _HOSTILE_MS_KEYS:
         out[key] = doc[key]
     out["rate_tolerance"] = float(tol)
+    out["status"] = doc["status"]
     out["phases"] = [
         {
             "name": ph["name"],

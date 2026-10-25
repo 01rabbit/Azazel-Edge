@@ -193,6 +193,10 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
             "gaps": (
                 "SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
                 "SO04-HOSTILE-LOAD-UNDECLARED",
+                # The profile's factors await the owner's confirmation. Like
+                # SO04-COMPLETION-BOUND-PROVISIONAL, it stays until the
+                # declaration in the tree changes: status "confirmed".
+                "SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL",
             ),
             # A record may leave these out only when its samples show, by
             # recomputation (GAP_CLOSERS, PART_GAP_CLOSERS), that the missing
@@ -202,7 +206,11 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
             # (config/service_objectives/hostile_load_profile.json, derived
             # from the OF-06 quota) was applied to the core as declared and
             # every hostile sample's lease expired under it.
-            "gaps_closed_by_samples": ("SO04-LEASE-EXPIRY-ON-WALL-CLOCK", "SO04-HOSTILE-LOAD-UNDECLARED"),
+            "gaps_closed_by_samples": (
+                "SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
+                "SO04-HOSTILE-LOAD-UNDECLARED",
+                "SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL",
+            ),
         },
         # OF-05: the bound is per action type and comes from
         # config/service_objectives/rollback_completion_bounds.json, which the
@@ -228,11 +236,16 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "SO04-COMPLETION-BOUND-PROVISIONAL",
                 "SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
                 "SO04-HOSTILE-LOAD-UNDECLARED",
+                "SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL",
             ),
             # Same start and load as the start half, so the same
             # recomputations close them. SO04-COMPLETION-BOUND-PROVISIONAL
             # has no closer: it stays until a hardware-derived bound exists.
-            "gaps_closed_by_samples": ("SO04-LEASE-EXPIRY-ON-WALL-CLOCK", "SO04-HOSTILE-LOAD-UNDECLARED"),
+            "gaps_closed_by_samples": (
+                "SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
+                "SO04-HOSTILE-LOAD-UNDECLARED",
+                "SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL",
+            ),
         },
     },
     "SO-07": {
@@ -1256,8 +1269,18 @@ def so04_hostile_load_applied(samples: Sequence[Mapping[str, Any]], part: Mappin
 
 # Like GAP_CLOSERS, but the recomputation needs the part as well as its
 # samples (the load observation is one per part, not one per sample).
+def so04_hostile_load_profile_confirmed(samples: Sequence[Mapping[str, Any]], part: Mapping[str, Any]) -> bool:
+    """SO-04: the hostile-load profile in this tree is confirmed by the owner
+    (status ``confirmed``) and is the one the part's load was taken against."""
+
+    from .so04_hostile_load import profile_confirmed
+
+    return profile_confirmed(samples, part.get("hostile_load"))
+
+
 PART_GAP_CLOSERS = {
     "SO04-HOSTILE-LOAD-UNDECLARED": so04_hostile_load_applied,
+    "SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL": so04_hostile_load_profile_confirmed,
 }
 
 

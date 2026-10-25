@@ -82,9 +82,11 @@ a gap remains:
   never shedding an alert and deciding every alert written, under the declared
   quota, with every phase sampled for every action type inside its window.
 
-The profile is provisional: its factors are defaults awaiting the owner's
-confirmation, and what is measured under it is container evidence, not
-hardware evidence.
+* ``SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL`` is reported until the profile in
+  the tree declares status ``confirmed`` and is the file the load was taken
+  against (``record.so04_hostile_load_profile_confirmed``). Its factors are
+  defaults awaiting the owner's confirmation, and what is measured under it is
+  container evidence, not hardware evidence.
 """
 
 from __future__ import annotations
@@ -486,10 +488,20 @@ def hostile_load_gap(samples: List[Dict[str, Any]], hostile_load: Optional[Mappi
     (``so04_hostile_load.hostile_load_problems``) shows the declared profile
     applied for every sample. Shared by both halves."""
 
+    out: List[Dict[str, Any]] = []
+    pending = so04_hostile_load.profile_confirmed_problems(hostile_load, profile) if samples else ["no samples"]
+    if pending:
+        out.append(gap(
+            "SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL",
+            "The hostile-load profile is provisional: its factors (owner_defaults) are defaults awaiting the owner's "
+            "confirmation, and what was measured under it is container evidence, not hardware evidence. It stays "
+            "until the owner changes the declaration in the tree: " + "; ".join(pending[:3]),
+            refs=["config/service_objectives/hostile_load_profile.json", "OF-06"],
+        ))
     problems = so04_hostile_load.hostile_load_problems(samples, hostile_load, profile) if samples else ["no samples"]
     if not problems:
-        return []
-    return [gap(
+        return out
+    return out + [gap(
         "SO04-HOSTILE-LOAD-UNDECLARED",
         "The sample rule requires leases expiring under hostile load. The declared profile "
         "(config/service_objectives/hostile_load_profile.json, derived from the OF-06 ingress quota) is not shown "

@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .declarations import (
+    CONFIRMED,
     HOSTILE_LINE_CLASSES,
     ROLLBACK_ACTION_TYPES,
     load_hostile_load_profile,
@@ -218,6 +219,32 @@ def hostile_load_applied(samples: Sequence[Mapping[str, Any]], hostile_load: Any
 
     items = list(samples)
     return bool(items) and all(isinstance(s, dict) for s in items) and not hostile_load_problems(items, hostile_load)
+
+
+def profile_confirmed_problems(hostile_load: Any, profile: Optional[Mapping[str, Any]] = None) -> List[str]:
+    """Why ``SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL`` stays. Empty: it may be left out.
+
+    As for the completion bounds, the declaration is read from the tree, never
+    from the record: the profile must be valid, declare status ``confirmed``
+    (with its owner defaults no longer pending), and be the very file the
+    record's load was taken against (same path and SHA-256).
+    """
+
+    profile = profile if profile is not None else load_hostile_load_profile()
+    if profile.get("problems") or not profile.get("phases"):
+        return [f"the hostile-load profile is not valid: {profile.get('problems')}"]
+    problems = []
+    if profile.get("status") != CONFIRMED:
+        problems.append(f"{profile['path']} has status {profile.get('status')!r}; its factors await the owner's confirmation")
+    if not isinstance(hostile_load, dict) or hostile_load.get("profile_path") != profile["path"] or hostile_load.get("profile_sha256") != profile["sha256"]:
+        problems.append(f"the part's load was not taken against {profile['path']} at sha256 {profile['sha256']}")
+    return problems
+
+
+def profile_confirmed(samples: Sequence[Mapping[str, Any]], hostile_load: Any) -> bool:
+    """Closes ``SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL`` (see ``profile_confirmed_problems``)."""
+
+    return bool(list(samples)) and not profile_confirmed_problems(hostile_load)
 
 
 # -------------------------------------------------------------------- driver
@@ -505,6 +532,8 @@ __all__ = [
     "AlertCounter",
     "drain",
     "hostile_load_applied",
+    "profile_confirmed",
+    "profile_confirmed_problems",
     "hostile_load_problems",
     "observation",
     "phase_summary",

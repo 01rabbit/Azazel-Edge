@@ -36,6 +36,7 @@ from azazel_edge.service_objectives import so04_lease_rollback as so04  # noqa: 
 from azazel_edge.service_objectives import so04_rollback_completion as comp  # noqa: E402
 
 GAP = "SO04-HOSTILE-LOAD-UNDECLARED"
+PROVISIONAL_GAP = "SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL"
 CORE = ROOT / "rust" / "azazel-edge-core" / "target" / "release" / "azazel-edge-core"
 CORE_MAIN = ROOT / "rust" / "azazel-edge-core" / "src" / "main.rs"
 START_SPEC = rec.OBJECTIVE_SPECS["SO-04"]["rollback_start_after_expiry"]
@@ -339,7 +340,7 @@ def _validate(start, completion):
         objective_id="SO-04", title="t", started_monotonic_ns=0, started_at=rec.utc_now(),
         product_configuration={}, clock={"name": "CLOCK_BOOTTIME"}, sample_rule={}, parts=[start, completion], method="test",
     )
-    return [e for e in rec.validate_record(record) if GAP in e or "hostile_load" in e]
+    return [e for e in rec.validate_record(record) if "SO04-HOSTILE-LOAD" in e or "hostile_load" in e]
 
 
 def test_the_validator_lets_the_gap_out_only_when_its_recomputation_holds():
@@ -366,7 +367,9 @@ def test_the_completion_part_keeps_its_provisional_bound_gap():
     assert "SO04-COMPLETION-BOUND-PROVISIONAL" not in COMP_SPEC["gaps_closed_by_samples"]
     assert "SO04-COMPLETION-BOUND-PROVISIONAL" not in rec.GAP_CLOSERS
     assert "SO04-COMPLETION-BOUND-PROVISIONAL" not in rec.PART_GAP_CLOSERS
-    assert rec.PART_GAP_CLOSERS == {GAP: rec.so04_hostile_load_applied}
+    assert rec.PART_GAP_CLOSERS == {GAP: rec.so04_hostile_load_applied, PROVISIONAL_GAP: rec.so04_hostile_load_profile_confirmed}
+    for spec in (START_SPEC, COMP_SPEC):
+        assert PROVISIONAL_GAP in spec["gaps"] and PROVISIONAL_GAP in spec["gaps_closed_by_samples"]
     assert rec.CI_DECLARED_PREREQUISITES["SO-04"] == frozenset()
 
 
@@ -389,11 +392,83 @@ def test_hostile_load_is_an_object_and_only_on_so04_parts():
 
 def test_the_harness_reports_the_gap_with_its_reasons():
     gaps = so04.hostile_load_gap([], None, PROFILE)
-    assert [g["id"] for g in gaps] == [GAP]
+    assert [g["id"] for g in gaps] == [PROVISIONAL_GAP, GAP]
     obs = _observation()
-    assert so04.hostile_load_gap(_samples(obs), obs, PROFILE) == []
+    # Applied as declared, but the profile in the tree is still provisional.
+    assert [g["id"] for g in so04.hostile_load_gap(_samples(obs), obs, PROFILE)] == [PROVISIONAL_GAP]
     part = comp.unmeasured_part("test")
-    assert GAP in {g["id"] for g in part["gaps"]}
+    assert {GAP, PROVISIONAL_GAP} <= {g["id"] for g in part["gaps"]}
+
+
+# ------------------------------------------------- provisional profile gap
+
+
+def _confirmed_tree(tmp_path, monkeypatch, *, owner_status="confirmed by the owner on Edge#414"):
+    """A temporary declaration with status confirmed, made the tree's profile."""
+
+    doc = _doc()
+    doc["status"] = "confirmed"
+    doc["owner_defaults"]["status"] = owner_status
+    path = tmp_path / "hostile_load_profile.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setattr(decl, "HOSTILE_LOAD_PROFILE_PATH", path)
+    return decl.load_hostile_load_profile()
+
+
+def _cite(obs, profile):
+    obs["profile_path"], obs["profile_sha256"] = profile["path"], profile["sha256"]
+    return obs
+
+
+def test_a_provisional_profile_never_closes_its_gap():
+    assert PROFILE["status"] == "provisional"
+    obs = _observation()
+    assert hl.profile_confirmed_problems(obs) and hl.profile_confirmed(_samples(obs), obs) is False
+    assert rec.so04_hostile_load_profile_confirmed(_samples(obs), {"hostile_load": obs}) is False
+
+
+def test_a_confirmed_profile_in_the_tree_closes_its_gap(tmp_path, monkeypatch):
+    confirmed = _confirmed_tree(tmp_path, monkeypatch)
+    assert confirmed["problems"] == [] and confirmed["status"] == "confirmed"
+    obs = _cite(_observation(), confirmed)
+    assert hl.profile_confirmed_problems(obs) == []
+    assert rec.so04_hostile_load_profile_confirmed(_samples(obs), {"hostile_load": obs}) is True
+    # Through the validator: both hostile-load gaps may now be left out.
+    others = [g for g in START_SPEC["gaps"] if g not in (GAP, PROVISIONAL_GAP)]
+    start, completion = _record(obs, start_gaps=others)
+    _with_samples(start, _samples(obs))
+    assert _validate(start, completion) == []
+
+
+def test_a_record_taken_against_the_provisional_profile_keeps_the_gap(tmp_path, monkeypatch):
+    obs = _observation()  # cites the provisional file's digest
+    confirmed = _confirmed_tree(tmp_path, monkeypatch)
+    assert any("was not taken against" in p for p in hl.profile_confirmed_problems(obs))
+    # Same path, another version of the file: the digest alone must keep it.
+    stale = _cite(_observation(), confirmed)
+    stale["profile_sha256"] = PROFILE["sha256"]
+    assert any("was not taken against" in p for p in hl.profile_confirmed_problems(stale))
+    others = [g for g in START_SPEC["gaps"] if g not in (GAP, PROVISIONAL_GAP)]
+    start, completion = _record(obs, start_gaps=others)
+    _with_samples(start, _samples(obs))
+    assert any(f"mandatory gap {PROVISIONAL_GAP!r} omitted" in e for e in rec.validate_record(rec.build_record(
+        objective_id="SO-04", title="t", started_monotonic_ns=0, started_at=rec.utc_now(),
+        product_configuration={}, clock={"name": "CLOCK_BOOTTIME"}, sample_rule={}, parts=[start, completion], method="test",
+    )))
+
+
+def test_confirmed_with_pending_owner_defaults_declares_nothing(tmp_path, monkeypatch):
+    confirmed = _confirmed_tree(tmp_path, monkeypatch, owner_status="pending owner confirmation")
+    assert confirmed["phases"] == [] and any("still pending" in p for p in confirmed["problems"])
+    obs = _cite(_observation(), confirmed)
+    assert hl.profile_confirmed(_samples(obs), obs) is False
+
+
+def test_a_part_without_samples_or_load_never_closes_the_provisional_gap(tmp_path, monkeypatch):
+    confirmed = _confirmed_tree(tmp_path, monkeypatch)
+    obs = _cite(_observation(), confirmed)
+    assert hl.profile_confirmed([], obs) is False
+    assert hl.profile_confirmed(_samples(obs), None) is False
 
 
 # ------------------------------------------------------------------- driver

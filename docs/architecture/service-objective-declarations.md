@@ -339,22 +339,41 @@ profile and the quota from the tree and checks that:
 A part without the observation, with a load short of its rate, or with an
 invalid profile in the tree keeps the gap. `SO04-COMPLETION-BOUND-PROVISIONAL`
 has no closer and stays on the completion part, so the SO-04 record stays
-`not_measurable` (`diagnostic_only`). `load_phase_applied` stays a run-health
+`not_measurable` (`diagnostic_only`).
+
+### The profile is provisional: `SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL`
+
+Both SO-04 parts carry a second, mandatory gap while the profile's factors
+await the owner's confirmation. Like `SO04-COMPLETION-BOUND-PROVISIONAL`, it
+is about the declaration, not the run, and the validator decides it from the
+tree, never from the record (`record.PART_GAP_CLOSERS` →
+`so04_hostile_load.profile_confirmed_problems`). It may be left out only when
+
+- `hostile_load_profile.json` in the tree is valid and declares status
+  `confirmed` (the only statuses are `provisional` and `confirmed`; `confirmed`
+  with `owner_defaults.status` still pending makes the whole profile invalid),
+  and
+- the part's load was taken against that very file (same path and SHA-256).
+
+There is no other way to close it: no approval flag, no environment variable.
+The owner confirms by changing the declaration in the tree, which also changes
+its digest, so records taken against the provisional file keep the gap. `load_phase_applied` stays a run-health
 prerequisite (every declared phase was driven); `CI_DECLARED_PREREQUISITES`
 is unchanged (empty).
 
-**With both start-half gaps closed, the start part on its own derives `pass`**
-when its run-health prerequisites hold. The record's verdict is still the
-worst part's, `not_measurable`, and it is never gate evidence. The pass rests
-on a provisional profile whose factors await the owner's confirmation and on
-container numbers.
+With `SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL` in place, neither part can
+derive `pass` from a provisional profile: the start part is `not_measurable`
+on that gap alone, and the completion part also on
+`SO04-COMPLETION-BOUND-PROVISIONAL`. Under `--ci` both are declared gaps, so a
+clean run is green.
 
 ### Container runs (not hardware evidence)
 
 Three runs of `run --objective SO-04` on this change (docker `--cap-add
-NET_ADMIN`, colima, aarch64, 2026-10-26). Every part 150/150 samples, 0
-violations, and `SO04-HOSTILE-LOAD-UNDECLARED` closed by the recomputation in
-all six parts.
+NET_ADMIN`, colima, aarch64, 2026-10-26), taken before
+`SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL` was added (the load and timing are
+unchanged by it). Every part 150/150 samples, 0 violations, and
+`SO04-HOSTILE-LOAD-UNDECLARED` closed by the recomputation in all six parts.
 
 | Run | Start max | Completion max | Lines shed by the core (start / completion) | Oversized skipped | Alerts written = decided | Alerts shed |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -365,8 +384,7 @@ all six parts.
 In runs 2 and 3 `wall_clock_stable_during_run` was unmet on the start part
 (drift −101.6 and −208.6 ms against 50 ms: the colima VM's wall clock was
 adjusted during the run), so those records are red under `--ci`; run 1 was
-clean (green, start part `pass`, record `not_measurable` on
-`SO04-COMPLETION-BOUND-PROVISIONAL`).
+clean (green).
 
 ## SO-02 — source/interface failure visible (virtual-lab harness, not measurable)
 
