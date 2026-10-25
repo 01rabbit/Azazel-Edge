@@ -651,7 +651,11 @@ def test_sink_catches_any_exception_and_rejects_non_mapping():
         cur["x"] = {}
         cur = cur["x"]
     sink.reset_degraded()
-    assert sink.append(deep).reason == "unencodable_record"
+    # CPython 3.11 raises RecursionError while encoding this; 3.13 encodes it
+    # and the size bound refuses it. Either way it is refused, never written.
+    assert sink.append(deep).reason in {"unencodable_record", "record_too_large"}
+    sink.reset_degraded()
+    assert sink.append({"x": object()}).reason == "unencodable_record"
 
 
 def test_rotation_deletes_only_the_oldest_and_shifts_in_order():
