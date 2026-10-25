@@ -88,7 +88,7 @@ DEFAULT_MAX_RECONCILE = 256
 # systemd/azazel-edge-core.service): by then the action the decision bore has
 # been released. Stale decisions count against DEFAULT_MAX_RECONCILE like
 # fresh ones.
-DEFAULT_RECONCILE_MAX_AGE_S = 300.0
+DEFAULT_RECONCILE_MAX_AGE_S = _p0.STALE_AFTER_S
 # How long stopping the recorder waits for the writer to drain.
 DEFAULT_STOP_DRAIN_S = 5.0
 _SEEN_MAX = 65536

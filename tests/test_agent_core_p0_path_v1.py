@@ -636,6 +636,90 @@ def test_a_long_outage_does_not_flood_the_queue(tmp_path):
     assert core_decisions.DEFAULT_MAX_RECONCILE == 256
 
 
+def _replayed_by_the_relay(tmp_path: Path, offset_s: float, mutate=None) -> list:
+    """A decision recorded live (in the chain) whose enqueue was lost; the
+    relay's own reconcile replays it into a fresh queue."""
+
+    ev = fresh(core_event("isolate", "z", 9300900), offset_s)
+    tid, payload = core_decisions.core_decision_payload(ev)
+    payload["recorded_by"] = "live"
+    if mutate is not None:
+        mutate(payload)
+    audit = P0AuditLogger(tmp_path / "core-decision-audit.jsonl")
+    audit.log_action_decision(trace_id=tid, source=core_decisions.CORE_DECISION_SOURCE, **payload)
+    queue = tmp_path / "q.jsonl"
+    relay = attach_p0_alert_relay(P0AuditLogger(audit.path), queue)
+    try:
+        assert relay.ready.wait(10)
+        assert _wait(lambda: len(_alerts(queue)) == 2)
+        alerts = _alerts(queue)
+    finally:
+        relay.stop()
+    assert all(r["reconciled"] is True and r["recorded_by"] == "live" for r in alerts)
+    return alerts
+
+
+def test_an_old_live_decision_replayed_by_the_relay_is_a_past_decision(tmp_path):
+    """Review of #468 (F1): a live-recorded decision an hour old, replayed by
+    the relay's reconcile, is presented as a past decision, not as current."""
+
+    alerts = _replayed_by_the_relay(tmp_path, -3600)
+    assert all(r["stale"] is True and r["presentation"] == "historical" for r in alerts)
+    assert [r["voice_urgent"] for r in alerts if r["channel"] == "voice"] == [False]
+    assert all("過去の判定（" in r["display_text"] for r in alerts)
+
+
+def test_a_recent_live_decision_replayed_by_the_relay_stays_current(tmp_path):
+    alerts = _replayed_by_the_relay(tmp_path, -30)
+    assert all(r["stale"] is False and r["presentation"] == "current" for r in alerts)
+    assert [r["voice_urgent"] for r in alerts if r["channel"] == "voice"] == [True]
+
+
+@pytest.mark.parametrize("ingest_offset,expect_stale", [(-30, False), (-3600, True), (None, None)])
+def test_relay_replay_age_falls_back_when_the_event_time_is_unreadable(tmp_path, ingest_offset, expect_stale):
+    """No readable event_ts: the core's ingest stamp, else the record's own
+    ts (written now, so current)."""
+
+    def mutate(payload):
+        payload["event_ts"] = "not a time"
+        payload["core_ingest_epoch"] = None if ingest_offset is None else time.time() + ingest_offset
+
+    alerts = _replayed_by_the_relay(tmp_path, -3600, mutate)
+    want = False if expect_stale is None else expect_stale
+    assert all(r["stale"] is want for r in alerts)
+
+
+def test_build_treats_an_unreadable_replayed_record_as_past_and_never_touches_live():
+    from azazel_edge.notify.p0_alert import (
+        DURABILITY_FSYNCED, DURABILITY_RECONCILED, DURABILITY_RECONCILED_FSYNCED, STALE_AFTER_S, build_p0_alerts,
+    )
+
+    assert core_decisions.DEFAULT_RECONCILE_MAX_AGE_S == STALE_AFTER_S == 300.0
+    timeless = {"trace_id": "d", "action": "isolate", "event_ts": "", "ts": "?"}
+    for durability in (DURABILITY_RECONCILED, DURABILITY_RECONCILED_FSYNCED):
+        assert all(e["stale"] is True for e in build_p0_alerts(timeless, "enforcement:isolate", durability, None))
+    old = dict(timeless, event_ts="2000-01-01T00:00:00.000000+0000")
+    live = build_p0_alerts(old, "enforcement:isolate", DURABILITY_FSYNCED, 1)
+    assert all(e["stale"] is False and e["presentation"] == "current" for e in live)
+    assert [e["voice_urgent"] for e in live if e["channel"] == "voice"] == [True]
+    edge = {"trace_id": "d", "action": "isolate", "event_ts": "2026-10-26T00:00:00.000000+0000"}
+    t0 = 1792972800.0  # 2026-10-26T00:00:00Z
+    assert build_p0_alerts(edge, "b", DURABILITY_RECONCILED, None, now=t0 + STALE_AFTER_S)[0]["stale"] is False
+    assert build_p0_alerts(edge, "b", DURABILITY_RECONCILED, None, now=t0 + STALE_AFTER_S + 1)[0]["stale"] is True
+
+
+def test_render_collapses_and_bounds_untrusted_text():
+    from azazel_edge.notify.p0_alert import DISPLAY_FIELD_MAX, render_p0_alert
+
+    out = render_p0_alert({"action": "isolate", "target": "a\nb\x00\tc", "reason": "r\r\n\x1b[31m  x" + "y" * 500,
+                           "channel": "visual"})
+    text = out["text"]
+    assert "\n" not in text and "\x00" not in text and "\x1b" not in text and "\r" not in text
+    assert "target=a b c " in text
+    reason = text.split(" reason=", 1)[1]
+    assert reason.startswith("r [31m x") and len(reason) == DISPLAY_FIELD_MAX
+
+
 def test_render_marks_past_decisions_and_never_makes_them_urgent():
     from azazel_edge.notify.p0_alert import render_p0_alert
 

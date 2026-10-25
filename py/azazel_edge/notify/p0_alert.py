@@ -17,7 +17,11 @@ Owner decisions on Edge#414 (2026-10-25):
   built) prefixes them with 「過去の判定」 and the event's time, and the voice
   entry is an announcement of a past decision, not an urgent alert
   (``voice_urgent: false``). A downstream renderer or speaker must use
-  ``render_p0_alert`` or honour those fields.
+  ``render_p0_alert`` or honour those fields. A decision this relay replays
+  from the chain itself (in the chain, not in the queue) is judged the same
+  way from the record's own time (``event_ts``, else the core's ingest stamp,
+  else the record's ``ts``; past when none can be read). Live alerts are
+  never marked past.
 
 Observation and notification only. Nothing here decides, enforces, approves or
 changes a decision, and nothing reads the queue back into the decision path.
@@ -102,6 +106,14 @@ DURABILITY_UNSUPPORTED = 'fsync_unsupported'
 # live alert, or a reconciled one still within the core's lease. ``historical``:
 # a reconciled decision older than that (``stale``): shown as a past decision
 # with its event time and never spoken as an urgent alert.
+# A decision older than this is no longer a current alert (Edge#462 item 5).
+# 300 s is the core's default enforcement lease (AZAZEL_DEFENSE_ACTION_TTL_SEC
+# in systemd/azazel-edge-core.service). Shared with the core decision
+# recorder's startup reconcile (core_decisions imports it).
+STALE_AFTER_S = 300.0
+# Display bound for the free-text fields of an alert (they come from core
+# events, which are not authenticated).
+DISPLAY_FIELD_MAX = 200
 PRESENTATION_CURRENT = 'current'
 PRESENTATION_HISTORICAL = 'historical'
 HISTORICAL_LABEL = '過去の判定'
@@ -135,6 +147,31 @@ def event_time_text(ts: Any) -> str:
     return datetime.fromtimestamp(epoch, timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
 
+def _display_field(value: Any) -> str:
+    """One line of at most DISPLAY_FIELD_MAX characters: whitespace and
+    control characters collapsed to single spaces."""
+
+    text = ''.join(' ' if (ch.isspace() or not ch.isprintable()) else ch for ch in str(value or ''))
+    text = ' '.join(text.split())
+    if len(text) > DISPLAY_FIELD_MAX:
+        text = text[:DISPLAY_FIELD_MAX - 1] + '…'
+    return text
+
+
+def _record_epoch(record: Mapping[str, Any]) -> Optional[float]:
+    """When the decision's event happened, as far as the record says: its
+    ``event_ts``, else the core's ingest stamp, else the record's own ``ts``."""
+
+    epoch = event_ts_epoch(record.get('event_ts'))
+    if epoch is None:
+        ingest = record.get('core_ingest_epoch')
+        if isinstance(ingest, (int, float)) and not isinstance(ingest, bool):
+            epoch = float(ingest)
+    if epoch is None:
+        epoch = event_ts_epoch(record.get('ts'))
+    return epoch
+
+
 def render_p0_alert(entry: Mapping[str, Any]) -> Dict[str, Any]:
     """The wording of one queued alert entry, for the visual or voice channel.
 
@@ -145,9 +182,9 @@ def render_p0_alert(entry: Mapping[str, Any]) -> Dict[str, Any]:
     """
 
     historical = entry.get('presentation') == PRESENTATION_HISTORICAL or entry.get('stale') is True
-    action = str(entry.get('action') or '-')
-    target = str(entry.get('target') or '-')
-    reason = str(entry.get('reason') or '')
+    action = _display_field(entry.get('action')) or '-'
+    target = _display_field(entry.get('target')) or '-'
+    reason = _display_field(entry.get('reason'))
     body = f'P0 {action} target={target}' + (f' reason={reason}' if reason else '')
     if historical:
         prefix = f"{HISTORICAL_LABEL}（{event_time_text(entry.get('event_ts'))}）"
@@ -575,7 +612,8 @@ class P0AlertQueue:
             self.read_unparseable_total += 1
 
 
-def build_p0_alerts(record: Mapping[str, Any], basis: str, durability: str, durable_ns: Optional[int]) -> List[Dict[str, Any]]:
+def build_p0_alerts(record: Mapping[str, Any], basis: str, durability: str, durable_ns: Optional[int],
+                    now: Optional[float] = None) -> List[Dict[str, Any]]:
     """One alert per channel, built only from the audit-chain decision record.
 
     A decision record that is in the chain but not durable (its fsync failed,
@@ -624,6 +662,14 @@ def build_p0_alerts(record: Mapping[str, Any], basis: str, durability: str, dura
     # A reconciled decision older than the core's lease (Edge#462 item 5): a
     # past decision, presented as one -- never as a current alert.
     stale = base['reconciled'] is True and record.get('reconcile_stale') is True
+    if not stale and durability in (DURABILITY_RECONCILED, DURABILITY_RECONCILED_FSYNCED):
+        # Replayed by this relay's own reconcile from the chain (in the chain,
+        # not in the queue): the record may be far older than the lease. Its
+        # age is read from the record; a record whose time cannot be read is
+        # treated as past. Never applied to the live path.
+        happened = _record_epoch(record)
+        current = time.time() if now is None else now
+        stale = happened is None or current - happened > STALE_AFTER_S
     base['stale'] = stale
     base['presentation'] = PRESENTATION_HISTORICAL if stale else PRESENTATION_CURRENT
     out = []
