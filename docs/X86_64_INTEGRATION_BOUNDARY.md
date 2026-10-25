@@ -39,7 +39,7 @@ runs a firewall tool.
 
 | Question | Answer |
 | --- | --- |
-| Authoritative decision and enforcement path, x86_64 profile | Rust `azazel-edge-core`: `decide_defense()` selects the action, `maybe_enforce()` applies it. Among the services Edge starts from its units, it is the only one that runs `nft` or `tc` to apply a defensive action (`throttle`, `redirect`, `isolate`). The repository has one other defensive path outside the core, the optional Wazuh active response below; it is an exception pending an owner decision. |
+| Authoritative decision and enforcement path, x86_64 profile | Rust `azazel-edge-core`: `decide_defense()` selects the action, `maybe_enforce()` applies it. Among the services Edge starts from its units, it is the only one that runs `nft` or `tc` to apply a defensive action (`throttle`, `redirect`, `isolate`). The repository has no other defensive path: no installer, unit or Python module applies a defensive action outside the core (see "No defensive path outside the core" below). |
 | The other path | Python `py/azazel_edge/arbiter/action.py::ActionArbiter` is not an enforcement path. It is a deterministic copy of the decision used for scenario replay, benchmarks and dry runs. The SO-03 service-objective harness measures the Rust core's decisions, not this copy. It is neither removed nor subordinated, and nothing applies its output to the network. |
 | How a consumer verifies it | The systemd unit inventory and its `Exec*` lines, plus the firewall-tool inventory below. Exactly one unit (`azazel-edge-core.service`) starts the `azazel-edge-core` binary, no unit runs a firewall tool directly, and every Python module and installer line that runs one is in the reviewed lists below. `tests/test_enforcement_boundary_inventory_v1.py` checks this against the repository tree, and also pins the modules that import `ActionArbiter`. |
 | Constrained-device profile | The same answer for authority: the Rust core has no profile branch (architecture-specific code is limited to constants). The installed sets differ. The appliance installers copy units from `systemd/` and generate `azazel-internal-apply.service`; the x86_64 package built by `packaging/nexus-core/` (Edge#424) contains the `azazel-edge-core` binary and `config/redirect_policy.yaml`, no unit file and no Python. Neither set contains a second enforcer. |
@@ -65,19 +65,26 @@ enforcement authority, approval flag or bypass.
 manifest declares the same observe-only environment. With these defaults the
 core decides and records but does not run enforcement commands.
 
-### Exception pending an owner decision: Wazuh active response
+### No defensive path outside the core
 
-`installer/internal/install_wazuh_agent.sh` is an optional installer. It
-generates `/var/ossec/active-response/bin/azazel-block.sh`, which runs
-`iptables -I FORWARD -s <ip> -j DROP` and `iptables -I INPUT -s <ip> -j DROP`
-on `add` and the matching `iptables -D` on `delete`. The Wazuh manager starts
-it (`docs/WAZUH_INTEGRATION_GUIDE.md`, "Active Response"). This is a
-defensive action outside the Rust core, decided by the Wazuh manager rather
-than by `decide_defense()`. Edge#412 does not settle whether it is removed,
-kept as a separately selected integration, or routed through the core; that
-is left to the owner. Until then it is listed here and pinned by the test, and
-a host that installs the Wazuh agent with active response has a second
-enforcer.
+No component other than the Rust core applies a defensive action. Every other
+firewall-tool use in the repository is listed below as baseline connectivity
+setup or read-only observation, and none takes decision input.
+
+The optional Wazuh integration is observation-only. Edge#412 recorded the
+Wazuh active response script that `installer/internal/install_wazuh_agent.sh`
+used to generate (`/var/ossec/active-response/bin/azazel-block.sh`, an
+`iptables` DROP started by the Wazuh manager) as an exception pending an owner
+decision. The owner decided to remove it. The installer no longer writes the
+script, removes it from a host where an earlier version left it, and sets
+`<disabled>yes</disabled>` in the agent's `<active-response>` block so that no
+manager-side command runs on the host. The Wazuh agent (FIM and SCA) and
+Vector forwarding remain optional integrations that send telemetry out and
+receive no action back (`docs/WAZUH_INTEGRATION_GUIDE.md`).
+
+`tests/test_enforcement_boundary_inventory_v1.py` fails if an installer line
+runs a firewall tool and is not in the reviewed baseline list, so a
+reintroduced active response script fails the test.
 
 ### Baseline firewall written by installers
 

@@ -72,6 +72,7 @@ When Wazuh Agent is installed via `installer/internal/install_wazuh_agent.sh`:
 
 ```bash
 systemctl is-active wazuh-agent
-test -x /var/ossec/active-response/bin/azazel-block.sh
+test ! -e /var/ossec/active-response/bin/azazel-block.sh
+grep -A3 '<active-response>' /var/ossec/etc/ossec.conf | grep -q '<disabled>yes</disabled>'
 grep -q "/etc/azazel-edge/vector" /var/ossec/etc/ossec.conf
 ```

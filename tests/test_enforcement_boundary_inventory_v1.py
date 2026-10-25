@@ -66,6 +66,9 @@ REVIEWED_FIREWALL_CALLERS: Dict[str, str] = {
 
 # Every shell line in the tree that runs a firewall tool, by file. Lines inside
 # heredocs count: they are the scripts and units the installer generates.
+# Only baseline connectivity setup and read-only checks belong here. No entry
+# may be a defensive action: the Rust core is the only defensive path
+# (Edge#412; the Wazuh active response exception was removed by owner decision).
 REVIEWED_SHELL_INVOCATIONS: Dict[str, Dict[str, str]] = {
     "installer/internal/install_captive_portal.sh": {
         'nft -f "${NFT_FILE}" || true': "baseline firewall: captive portal HTTP redirect",
@@ -79,16 +82,6 @@ REVIEWED_SHELL_INVOCATIONS: Dict[str, Dict[str, str]] = {
         ),
         "nft -f /etc/nftables.d/azazel-internal.nft || true": "baseline firewall: generated azazel-internal-apply runner",
         "nft list table ip azazel_internal": "installer verify step, read-only",
-    },
-    "installer/internal/install_wazuh_agent.sh": {
-        'iptables -I FORWARD -s "${IP}" -j DROP': "defensive: generated Wazuh active response, owner decision pending",
-        'iptables -I INPUT -s "${IP}" -j DROP': "defensive: generated Wazuh active response, owner decision pending",
-        'iptables -D FORWARD -s "${IP}" -j DROP 2>/dev/null || true': (
-            "defensive: generated Wazuh active response, owner decision pending"
-        ),
-        'iptables -D INPUT -s "${IP}" -j DROP 2>/dev/null || true': (
-            "defensive: generated Wazuh active response, owner decision pending"
-        ),
     },
 }
 
@@ -308,6 +301,49 @@ def shell_firewall_invocations(root: Path) -> Dict[str, Set[str]]:
             if _SHELL_INVOKE.search(line):
                 found.setdefault(path.relative_to(root).as_posix(), set()).add(line)
     return found
+
+
+# --- Wazuh active response -------------------------------------------------
+
+ACTIVE_RESPONSE_DIR = "/active-response/"
+_WRITE_VERBS = frozenset({"tee", "install", "cp", "mv", "ln", "dd", "rsync"})
+_VAR_REF = re.compile(r"\$\{?(\w+)(?::\?)?\}?")
+
+
+def active_response_writers(installer_dir: Path) -> List[Tuple[str, str]]:
+    """(installer, path) for every line that writes into a Wazuh active-response directory.
+
+    Conservative: a non-comment line counts when it redirects (``>``) or uses a
+    copy/install verb and any word on it, after substituting shell variables
+    assigned earlier in the same script, contains ``/active-response/``.
+    """
+
+    hits: List[Tuple[str, str]] = []
+    for script in sorted(p for p in installer_dir.rglob("*") if p.is_file()):
+        try:
+            lines = script.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue
+        variables: Dict[str, str] = {}
+        for raw in lines:
+            assign = _ASSIGN.match(raw)
+            if assign:
+                variables[assign.group(1)] = assign.group(2)
+                continue
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            words = [
+                _VAR_REF.sub(lambda m: variables.get(m.group(1), m.group(0)), w)
+                for w in re.split(r"[\s'\";&|()`<>]+", line)
+                if w
+            ]
+            writes = ">" in line or bool(_WRITE_VERBS & {w.rsplit("/", 1)[-1] for w in words})
+            if writes:
+                hits.extend(
+                    (script.relative_to(installer_dir.parent).as_posix(), w) for w in words if ACTIVE_RESPONSE_DIR in w
+                )
+    return hits
 
 
 # --- Python scan ------------------------------------------------------------
@@ -605,6 +641,57 @@ class ShellFirewallInvocationTest(unittest.TestCase):
                         "if iptables -C INPUT -j DROP; then :; fi",
                     }
                 },
+            )
+
+
+class WazuhActiveResponseTest(unittest.TestCase):
+    """Edge#412 owner decision: Wazuh is observation-only, never an enforcer."""
+
+    WAZUH_INSTALLER = INSTALLER_DIR / "internal" / "install_wazuh_agent.sh"
+
+    def test_no_installer_writes_an_active_response_script(self) -> None:
+        self.assertEqual(active_response_writers(INSTALLER_DIR), [])
+
+    def test_wazuh_installer_runs_no_firewall_tool(self) -> None:
+        self.assertNotIn(_rel(self.WAZUH_INSTALLER), shell_firewall_invocations(ROOT))
+
+    def test_reviewed_shell_lines_include_no_defensive_action(self) -> None:
+        for script, lines in REVIEWED_SHELL_INVOCATIONS.items():
+            for line, reason in lines.items():
+                self.assertNotIn("defensive", reason.lower(), (script, line))
+                self.assertNotIn("active response", reason.lower(), (script, line))
+
+    def test_wazuh_installer_disables_agent_active_response(self) -> None:
+        text = self.WAZUH_INSTALLER.read_text(encoding="utf-8")
+        self.assertIn("root.findall('active-response')", text)
+        self.assertIn("disabled.text = 'yes'", text)
+        self.assertNotIn("<command>", text)
+
+    def test_checker_catches_a_reintroduced_active_response_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            installer = Path(tmp) / "installer"
+            _write(
+                installer / "internal" / "w.sh",
+                "#!/usr/bin/env bash\n"
+                "# /var/ossec/active-response/bin/old.sh in a comment is ignored\n"
+                'AR="/var/ossec/active-response/bin/x-block.sh"\n'
+                "cat > /var/ossec/active-response/bin/azazel-block.sh <<'AREOF'\n"
+                'nft add rule inet filter input ip saddr "${IP}" drop\n'
+                "AREOF\n"
+                'install -m 0750 /tmp/x "${AR}"\n'
+                "tee /var/ossec/active-response/bin/tc-block.sh </dev/null\n",
+            )
+            self.assertEqual(
+                active_response_writers(installer),
+                [
+                    ("installer/internal/w.sh", "/var/ossec/active-response/bin/azazel-block.sh"),
+                    ("installer/internal/w.sh", "/var/ossec/active-response/bin/x-block.sh"),
+                    ("installer/internal/w.sh", "/var/ossec/active-response/bin/tc-block.sh"),
+                ],
+            )
+            self.assertEqual(
+                shell_firewall_invocations(Path(tmp)),
+                {"installer/internal/w.sh": {'nft add rule inet filter input ip saddr "${IP}" drop'}},
             )
 
 
