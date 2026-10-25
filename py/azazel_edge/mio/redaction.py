@@ -114,9 +114,14 @@ def _value_end(norm: str, m: "re.Match[str]") -> int:
         elif depth and ch == depth[-1]:
             depth.pop()
     if depth and norm[vs:vs + 1] not in "\"'「":
+        # Stop only at a closer followed by whitespace, end of text or field
+        # punctuation; "(pw: p)ss)" masks "p)ss", not just "p".
         idx = norm.find(depth[-1], vs, ve)
-        if idx >= 0:
-            return idx
+        while idx >= 0:
+            nxt = norm[idx + 1:idx + 2]
+            if not nxt or nxt.isspace() or nxt in ",;.!?":
+                return idx
+            idx = norm.find(depth[-1], idx + 1, ve)
     return ve
 
 

@@ -169,7 +169,9 @@ whole value (`token: expired abc123`, `pin: 4821 ok`); if unsure, mask.
 `bearer token <x>` skips only the word "token" and then examines `<x>`.
 Strong labels (`password`, `api_key`, ...) are always masked. Unquoted values
 run to the field end; a closing bracket ends a value only when its opening
-bracket precedes the label (`(pw: x)`). Scheme-less `user:pass@host` and passwords with spaces in URL
+bracket precedes the label (`(pw: x)`) and the closer is followed by
+whitespace, end of text or `, ; . ! ?`; otherwise the value continues
+(`(pw: p)ss)` masks `p)ss`). Scheme-less `user:pass@host` and passwords with spaces in URL
 userinfo are masked; a plain email has no `:` and is handled by the email rule.
 Masking runs before truncation so a cut cannot expose part of a token.
 
