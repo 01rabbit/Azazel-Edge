@@ -404,7 +404,7 @@ It is empty for every objective today:
 | Objective | Allowlisted unmet prerequisites | Why |
 |---|---|---|
 | SO-02 | none | `lab_built`, `no_live_capture_touched`, `edge_stack_answering` are lab health; `every_injection_from_healthy_baseline`, `every_lab_source_type_sampled` are recomputed coverage |
-| SO-03 | none | `visual_voice_delivery_queue_declared` is now observed per sample (#453); the chain, decision-id, P0-class and fsync checks are measurement correctness |
+| SO-03 | none | `core_binary_present`, `core_daemon_started`, `agent_service_relay_attached` are run health (the Rust core and the AI agent service of its unit's ExecStart ran, Edge#412); `core_enforcement_not_applied` and the queue, chain, decision-id, P0-class and fsync checks are recomputed measurement correctness |
 | SO-04 | none | core present/started, load applied, wall clock stable, chain/order, owned state and readback are run health; `per_action_completion_bound_declared` unmet would mean the declaration file lost a type |
 | SO-07 | none | both are coverage of the kill matrix |
 

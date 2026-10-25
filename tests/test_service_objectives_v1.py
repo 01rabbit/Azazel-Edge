@@ -212,10 +212,11 @@ def test_exit_codes_reserve_zero_for_pass():
 # ------------------------------------------------------------------- SO-03
 
 
-def test_so03_measures_real_path_and_reports_gaps(real_table):
-    # 20 samples: too few for a verdict; every record prerequisite and the
-    # closure of both gaps are still recomputed from what was observed.
-    record = so03_alert_queue.run(samples=20, seed=7)
+def test_so03_measures_real_path_and_reports_gaps(real_table, rust_core_bin):
+    # 20 samples through the Rust core and the agent service: too few for a
+    # verdict; every record prerequisite and the closure of all three gaps
+    # are still recomputed from what was observed.
+    record = so03_alert_queue.run(core_bin=rust_core_bin, samples=20, seed=7)
     assert rec.validate_record(record) == []
     assert record["objective_id"] == "SO-03"
     assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
@@ -225,24 +226,14 @@ def test_so03_measures_real_path_and_reports_gaps(real_table):
     prereq = {p["id"]: p for p in part["prerequisites"]}
     for pid in rec.OBJECTIVE_SPECS["SO-03"]["decision_durable_to_alert_enqueued"]["prerequisites"]:
         assert prereq[pid]["met"] is True, pid
-    # Only the gap no sample can close remains (Edge#412: core decisions).
-    assert [g["id"] for g in part["gaps"]] == ["SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS"]
+    assert part["gaps"] == []
     for s in part["samples"]:
-        assert s["action"] in ("throttle", "redirect", "isolate") or s["decision_suspicion_label"] == "critical"
+        assert s["action"] in ("throttle", "redirect", "isolate")
+        assert s["decision_source"] == "azazel-edge-core" and s["core_enforcement_mode"] == "dry_run"
         assert sorted(r["channel"] for r in s["queue_records"]) == ["visual", "voice"]
         for r in s["queue_records"]:
             assert s["end_monotonic_ns"] >= r["enqueued_monotonic_ns"] >= s["start_monotonic_ns"]
             assert r["decision_id"] == s["sample_id"]
-
-
-def test_so03_full_sample_count_is_not_a_pass_while_core_decisions_are_not_wired(real_table, clean_owner):
-    record = so03_alert_queue.run(seed=1)
-    assert len(record["parts"][0]["samples"]) == 200
-    assert rec.validate_record(record) == []
-    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
-    assert [g["id"] for g in record["parts"][0]["gaps"]] == ["SO03-P0-RELAY-NOT-WIRED-FOR-CORE-DECISIONS"]
-    assert all(p["met"] for p in record["parts"][0]["prerequisites"])
-    assert {s["action"] for s in record["parts"][0]["samples"]} == {"throttle", "redirect", "isolate", "notify"}
 
 
 # ------------------------------------------------------------------- SO-04
@@ -561,9 +552,9 @@ def test_genuine_so07_record_has_no_field_outside_the_schema(so07_full_record, r
             assert set(sample) <= rec.SAMPLE_FIELDS["SO-07"]
 
 
-def test_genuine_so03_and_so04_records_have_no_field_outside_the_schema(tmp_path, real_table):
+def test_genuine_so03_and_so04_records_have_no_field_outside_the_schema(tmp_path, real_table, rust_core_bin):
     for oid, record in (
-        ("SO-03", so03_alert_queue.run(seed=1)),
+        ("SO-03", so03_alert_queue.run(core_bin=rust_core_bin, samples=12, seed=1)),
         ("SO-04", so04_lease_rollback.run(core_bin=tmp_path / "missing", seed=1)),
     ):
         assert set(record) <= rec.RECORD_FIELDS, oid
@@ -690,10 +681,14 @@ def test_ci_declared_prerequisite_allowlist_is_empty_and_covers_every_objective(
     assert all(not v for v in rec.CI_DECLARED_PREREQUISITES.values())
 
 
-def test_ci_exit_real_so03_record_all_samples_over_the_bound_is_nonzero(real_table):
-    # Review of #456: every sample at 9999 ms (bound 2000) stays not_measurable
-    # because gaps block the verdict, but CI must not go green on it.
-    record = so03_alert_queue.run(seed=1)
+def test_ci_exit_real_so03_record_all_samples_over_the_bound_is_nonzero(real_table, rust_core_bin, monkeypatch):
+    # Review of #456: a record whose every sample is at 9999 ms (bound 2000)
+    # must not go green in CI, whatever verdict it carries. Twelve samples
+    # through the core, on the row with its sample count lowered to twelve
+    # (so the run counts as executed); everything else is the real row.
+    row = dict(rec.OBJECTIVE_SPECS["SO-03"]["decision_durable_to_alert_enqueued"], required_samples=12)
+    monkeypatch.setitem(rec.OBJECTIVE_SPECS, "SO-03", {"decision_durable_to_alert_enqueued": row})
+    record = so03_alert_queue.run(core_bin=rust_core_bin, samples=12, seed=1)
     part = record["parts"][0]
     for sample in part["samples"]:
         sample["end_monotonic_ns"] = sample["start_monotonic_ns"] + 9_999_000_000
@@ -701,8 +696,9 @@ def test_ci_exit_real_so03_record_all_samples_over_the_bound_is_nonzero(real_tab
     rule = {k: v for k, v in part["pass_rule"].items() if k != "evaluated"}
     part["pass_rule"]["evaluated"] = rec.evaluate_rule(rule, part["samples"])
     assert part["pass_rule"]["evaluated"]["violations"] == len(part["samples"])
-    assert record["verdict"] == rec.VERDICT_NOT_MEASURABLE
     assert rec.not_executed_reasons(record) == []
+    assert rec.ci_exit_code_for(record, []) != rec.EXIT_PASS
+    record["verdict"] = part["verdict"] = rec.VERDICT_NOT_MEASURABLE
     assert rec.ci_exit_code_for(record, []) != rec.EXIT_PASS
 
 

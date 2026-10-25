@@ -58,7 +58,7 @@ def _harnesses(args: argparse.Namespace) -> Dict[str, Callable[[], Dict[str, Any
 
     return {
         "SO-02": lambda: so02_source_failure.run(seed=args.seed),
-        "SO-03": lambda: so03_alert_queue.run(seed=args.seed),
+        "SO-03": lambda: so03_alert_queue.run(core_bin=Path(args.core_bin) if args.core_bin else None, seed=args.seed),
         "SO-04": lambda: so04_lease_rollback.run(core_bin=Path(args.core_bin) if args.core_bin else None, seed=args.seed),
         "SO-07": lambda: so07_audit_ordering.run(seed=args.seed),
     }

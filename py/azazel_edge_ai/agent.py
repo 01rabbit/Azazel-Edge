@@ -9,6 +9,7 @@ import os
 import grp
 import queue
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -48,6 +49,12 @@ try:
     from azazel_edge.audit import P0AuditLogger
 except Exception:  # pragma: no cover
     P0AuditLogger = None  # type: ignore
+try:
+    from azazel_edge.notify.core_decisions import CoreDecisionRecorder
+    from azazel_edge.notify.p0_alert import attach_p0_alert_relay
+except Exception:  # pragma: no cover
+    CoreDecisionRecorder = None  # type: ignore
+    attach_p0_alert_relay = None  # type: ignore
 from azazel_edge._util import ensure_parent as _ensure_parent
 
 SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
@@ -62,6 +69,16 @@ LLM_RESULT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-
 METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_metrics.json"))
 POLICY_PATH = Path(os.environ.get("AZAZEL_AI_POLICY", "/run/azazel-edge/ai_runtime_policy.json"))
 AI_AUDIT_PATH = Path(os.environ.get("AZAZEL_AI_AUDIT_LOG", "/var/log/azazel-edge/ai-audit.jsonl"))
+# P0 alert path for the Rust core's decisions (Edge#412 owner decision: the
+# Rust azazel-edge-core is the authoritative decision and enforcement path;
+# Edge#414 SO-03). This agent is where the core's decisions arrive (the core
+# forwards every decision event to AI_SOCKET). A P0 decision is recorded as an
+# action_decision in its own audit chain (azazel_edge.notify.core_decisions),
+# and the P0 relay (#453/#458) turns that durable record into the visual/voice
+# entries of the one P0 queue. Both files sit beside the AI audit log; no
+# setting of their own.
+CORE_DECISION_AUDIT_PATH = AI_AUDIT_PATH.parent / "core-decision-audit.jsonl"
+P0_ALERT_QUEUE_PATH = AI_AUDIT_PATH.parent / "p0-alert-queue.jsonl"
 METRICS_HEARTBEAT_SEC = max(5.0, float(os.environ.get("AZAZEL_AI_METRICS_HEARTBEAT_SEC", "15")))
 # Rolling suricata severity tallies in the UI snapshot decay linearly to zero over
 # this window of no new same-severity events, so a long-running / idle booth does
@@ -241,6 +258,94 @@ def _build_ai_audit_logger() -> Any | None:
 
 
 AI_AUDIT = _build_ai_audit_logger()
+
+# The core decision event this agent receives (rust_event_engine_v1 in
+# rust/azazel-edge-core/src/main.rs core_event()).
+CORE_EVENT_SOURCE = "suricata_eve"
+CORE_EVENT_PIPELINE = "rust_event_engine_v1"
+# The core's own log of every decision event (same setting and default as the
+# core unit); read, bounded, at start to reconcile decisions this agent missed.
+CORE_NORMALIZED_EVENT_LOG = Path(os.environ.get("AZAZEL_NORMALIZED_EVENT_LOG", "/var/log/azazel-edge/normalized-events.jsonl"))
+# Set by _start_core_p0_path() when the service starts (_serve). None until
+# then: importing this module or calling the handlers directly records nothing.
+CORE_DECISION_AUDIT: Any | None = None
+CORE_P0_RELAY: Any | None = None
+CORE_RECORDER: Any | None = None
+# On stop: how long queued connections and running handlers get to finish
+# before the P0 path is drained (each part of that drain has its own bound).
+SHUTDOWN_DRAIN_S = 5.0
+
+
+def _start_core_p0_path() -> Any | None:
+    """Open the core decision chain, attach the P0 relay, start the recorder.
+
+    Observation and notification only: nothing here decides, enforces or
+    feeds back into the core. If the chain cannot be opened the agent runs as
+    before without the path. If only the relay cannot be attached, P0
+    decisions are still recorded in the chain and the relay's startup
+    reconcile (#458) enqueues them on the next start.
+    """
+
+    global CORE_DECISION_AUDIT, CORE_P0_RELAY, CORE_RECORDER
+    if CORE_RECORDER is not None:
+        return CORE_P0_RELAY
+    if P0AuditLogger is None or attach_p0_alert_relay is None or CoreDecisionRecorder is None:
+        logger.error("core decision P0 alert path unavailable: notify/audit modules not importable")
+        return None
+    if CORE_DECISION_AUDIT is None:
+        try:
+            CORE_DECISION_AUDIT = P0AuditLogger(CORE_DECISION_AUDIT_PATH)
+        except Exception as exc:
+            logger.error("core decision audit chain not opened (%s): %s", CORE_DECISION_AUDIT_PATH, exc)
+            return None
+    try:
+        CORE_P0_RELAY = attach_p0_alert_relay(CORE_DECISION_AUDIT, P0_ALERT_QUEUE_PATH)
+    except Exception as exc:
+        logger.error("p0 alert relay not attached to the core decision chain: %s", exc)
+    CORE_RECORDER = CoreDecisionRecorder(CORE_DECISION_AUDIT, CORE_P0_RELAY, CORE_NORMALIZED_EVENT_LOG).start()
+    return CORE_P0_RELAY
+
+
+def _stop_core_p0_path() -> None:
+    """Drain the recorder (bounded), then let the relay enqueue what it was
+    handed (bounded). What is left is counted in the P0 queue and recorded
+    from the core's log at the next start. Never raises."""
+
+    recorder, relay, audit = CORE_RECORDER, CORE_P0_RELAY, CORE_DECISION_AUDIT
+    try:
+        if recorder is not None:
+            recorder.stop()
+        if relay is not None and audit is not None:
+            audit.wait_durable_listeners(5.0)
+            relay.wait_idle(5.0)
+            relay.stop(5.0)
+    except Exception as exc:
+        logger.error("core decision P0 alert path did not stop cleanly: %s", exc)
+
+
+def _record_core_decision(event: Dict[str, Any]) -> None:
+    """Hand a core decision event to the recorder. Never blocks, never raises:
+    the recorder's bounded queue and single writer do the fsynced writes."""
+
+    recorder = CORE_RECORDER
+    if recorder is None:
+        return
+    try:
+        recorder.submit(event)
+    except Exception as exc:
+        logger.error("core decision not handed to the P0 alert path: %s", exc)
+
+
+def _note_core_forward_loss(dropped: int, failed: int, since: int) -> None:
+    """The core's count of events it could not hand to this agent, to the P0 queue."""
+
+    recorder = CORE_RECORDER
+    if recorder is None:
+        return
+    try:
+        recorder.note_forward_stats(dropped, failed, since)
+    except Exception as exc:
+        logger.error("core forward loss not reported: %s", exc)
 
 
 def _audit_ai_scope(trace_id: str, source: str, intent: str, in_scope: bool, reason: str) -> None:
@@ -1741,6 +1846,7 @@ def _default_route_info() -> Dict[str, str]:
 
 
 def _handle_event(event: Dict[str, Any]) -> None:
+    _record_core_decision(event)
     advisory = _build_advisory(event)
     _metrics_inc("processed_events", 1)
     _route_llm(event, advisory)
@@ -1818,6 +1924,7 @@ def _record_forward_stats(payload: Dict[str, Any]) -> None:
     _metrics_update(**{f"core_forward_{key}": value for key, value in zip(_FORWARD_STATS_KEYS, values)})
     with IO_LOCK:
         _persist_metrics()
+    _note_core_forward_loss(payload["dropped"], payload["failed"], payload["since"])
 
 
 def _handle_request_line(raw: str) -> Dict[str, Any] | None:
@@ -1861,10 +1968,20 @@ def _handle_client(conn: socket.socket) -> None:
                         return
 
 
-def _serve() -> None:
+def _serve(stop: threading.Event | None = None) -> None:
+    """Run the agent (the unit's ExecStart). ``stop`` ends the accept loop;
+    in the main thread SIGTERM (systemd's stop) sets it, so the P0 path is
+    drained before the process exits."""
+    if stop is None:
+        stop = threading.Event()
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGTERM, lambda signum, frame: stop.set())
     _prepare_runtime_socket_dir(SOCKET_PATH)
     _ensure_parent(METRICS_PATH)
     _ensure_parent(POLICY_PATH)
+    # Before the socket exists, so every P0 decision the core sends to this
+    # service is recorded and relayed.
+    _start_core_p0_path()
     if SOCKET_PATH.exists():
         SOCKET_PATH.unlink()
 
@@ -1886,17 +2003,44 @@ def _serve() -> None:
     logger.info("AI advisory agent listening on %s", SOCKET_PATH)
     last_heartbeat = time.time()
 
-    while True:
-        now = time.time()
-        if now - last_heartbeat >= METRICS_HEARTBEAT_SEC:
-            _metrics_heartbeat()
-            _persist_metrics()
-            last_heartbeat = now
-        try:
-            conn, _ = srv.accept()
-        except socket.timeout:
-            continue
-        threading.Thread(target=_handle_client, args=(conn,), daemon=True).start()
+    handlers: list[threading.Thread] = []
+
+    def _spawn(conn: socket.socket) -> None:
+        handlers[:] = [t for t in handlers if t.is_alive()]
+        t = threading.Thread(target=_handle_client, args=(conn,), daemon=True)
+        handlers.append(t)
+        t.start()
+
+    try:
+        while not stop.is_set():
+            now = time.time()
+            if now - last_heartbeat >= METRICS_HEARTBEAT_SEC:
+                _metrics_heartbeat()
+                _persist_metrics()
+                last_heartbeat = now
+            try:
+                conn, _ = srv.accept()
+            except socket.timeout:
+                continue
+            _spawn(conn)
+    finally:
+        # Stopping: take the connections already queued (the core counted
+        # them as sent), let the handlers finish (bounded), then drain the
+        # P0 path. Anything still missed is in the core's log and is
+        # reconciled at the next start.
+        deadline = time.monotonic() + SHUTDOWN_DRAIN_S
+        srv.setblocking(False)
+        while time.monotonic() < deadline:
+            try:
+                conn, _ = srv.accept()
+            except (BlockingIOError, socket.timeout, OSError):
+                break
+            conn.setblocking(True)
+            _spawn(conn)
+        srv.close()
+        for t in list(handlers):
+            t.join(max(0.0, deadline - time.monotonic()))
+        _stop_core_p0_path()
 
 
 if __name__ == "__main__":

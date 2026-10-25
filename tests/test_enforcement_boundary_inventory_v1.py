@@ -97,15 +97,15 @@ REVIEWED_GENERATED_UNITS: Dict[str, str] = {
     "azazel-internal-apply.service": "installer/internal/install_internal_network.sh",
 }
 
-# Direct importers of the Python ActionArbiter: replay, benchmarks, dry run,
-# the SO-03 harness and the package itself. None is an enforcement path.
+# Direct importers of the Python ActionArbiter: replay, benchmarks, dry run
+# and the package itself. None is an enforcement path. (The SO-03 harness
+# measures the Rust core's decisions and does not import it.)
 REVIEWED_ARBITER_IMPORTERS: Set[str] = {
     "py/azazel_edge/arbiter/__init__.py",
     "py/azazel_edge/scenario_replay.py",
     "py/azazel_edge/soc_policy_dry_run.py",
     "py/azazel_edge/benchmark/detection_accuracy.py",
     "py/azazel_edge/benchmark/pipeline_latency.py",
-    "py/azazel_edge/service_objectives/so03_alert_queue.py",
 }
 
 EXCLUDED_TOP = frozenset({".git", "tests", "docs", "rust", ".venv", "venv", "node_modules"})

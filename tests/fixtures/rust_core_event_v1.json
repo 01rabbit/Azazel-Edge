@@ -1,0 +1,72 @@
+{
+  "defense": {
+    "action": "redirect",
+    "delay_ms": 800,
+    "policy_reason": "severity_high_redirect_to_decoy",
+    "reason": "high severity sid=9300001",
+    "target": "203.0.113.9:22"
+  },
+  "enforcement": {
+    "command_plan": [
+      "nft insert rule inet azazel_edge prerouting ip saddr 203.0.113.9 tcp dport 22 redirect to 12222 comment azazel-edge:release-5a84e55c43ef929e"
+    ],
+    "errors": [],
+    "executed_count": 0,
+    "failed_count": 0,
+    "metadata": {
+      "fallback_reason": "prepared_mapping",
+      "original_dst_port": 22,
+      "redirect_mapping_matched": true,
+      "redirect_policy_source": "file:config/redirect_policy.yaml",
+      "release_due_epoch": 1792942010.8264484,
+      "release_ledger_state": "planned_only",
+      "release_owner_token": "azazel-edge:release-5a84e55c43ef929e",
+      "release_resource_key": "nft:inet:azazel_edge:prerouting:203.0.113.9:tcp:22",
+      "release_task_id": "release-5a84e55c43ef929e",
+      "release_tc_handle": "",
+      "selected_decoy_port": 12222,
+      "unsupported_port_fallback": ""
+    },
+    "mode": "dry_run",
+    "policy_reason": "severity_high_redirect_to_decoy:enforce_disabled",
+    "result": "planned_not_applied",
+    "rollback_hint": "set AZAZEL_DEFENSE_ENFORCE_LEVEL=full-auto or explicit high-impact approval policy",
+    "rollback_plan": [
+      "nft delete rule inet azazel_edge prerouting handle '<owned:azazel-edge:release-5a84e55c43ef929e>'"
+    ],
+    "selected_action": "redirect",
+    "target": "203.0.113.9:22",
+    "trace_id": "trace-0x2d46936d1d47a084"
+  },
+  "enforcement_status": {
+    "allowed_actions": [
+      "observe",
+      "notify"
+    ],
+    "dry_run": true,
+    "enforce_enabled": false,
+    "enforce_level": "advisory",
+    "high_impact_auto": false
+  },
+  "normalized": {
+    "action": "allowed",
+    "attack_type": "fixture",
+    "category": "test",
+    "confidence": 90,
+    "dst_ip": "192.0.2.10",
+    "event_type": "alert",
+    "ingest_epoch": 1792941710.826427,
+    "protocol": "TCP",
+    "risk_score": 81,
+    "severity": 2,
+    "sid": 9300001,
+    "src_ip": "203.0.113.9",
+    "target_port": 22,
+    "technique_ids": [
+      "T1046"
+    ],
+    "ts": "2026-01-01T00:00:00.000001+0000"
+  },
+  "pipeline": "rust_event_engine_v1",
+  "source": "suricata_eve"
+}
