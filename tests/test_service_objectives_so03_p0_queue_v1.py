@@ -54,7 +54,23 @@ def _decision(action="throttle", label="high", **extra):
 
 
 def _all_rows(path):
-    return [json.loads(x) for x in Path(path).read_text(encoding="utf-8").splitlines()]
+    """Every complete line of a JSONL file, parsed strictly.
+
+    The relay thread may be appending while a test reads, so a trailing line
+    without its newline is not yet a record and is left out (as the product
+    reader does). A complete line that does not parse still fails the test.
+    """
+
+    data = Path(path).read_bytes()
+    return [json.loads(x) for x in data.split(b"\n")[:-1] if x]
+
+
+def _settle(audit, relay):
+    """Deterministic wait: every durable record handed to the listeners, and
+    every record handed to the relay, has been relayed (enqueue returned)."""
+
+    assert audit.wait_durable_listeners(10)
+    assert relay.wait_idle(10)
 
 
 def _rows(path):
@@ -250,6 +266,52 @@ def test_another_writer_is_noticed(tmp_path):
     assert [r["seq"] for r in _rows(qpath)] == [1, 2, 3, 4, 5, 6]
 
 
+def test_reader_skips_and_counts_a_partial_trailing_line(tmp_path):
+    qpath = tmp_path / "q.jsonl"
+    queue = P0AlertQueue(qpath)
+    queue.enqueue(_alerts("d-1"))
+    with open(qpath, "ab") as fh:
+        fh.write(b"not json\n")  # complete but unparseable
+        fh.write(b'{"schema":"azazel-edge/p0-alert-queue/v1","seq":9}')  # parses, but no newline yet
+    rows = queue.read_entries()
+    assert [r["decision_id"] for r in rows] == ["d-1", "d-1"]
+    assert queue.read_partial_tail_total == 1 and queue.read_unparseable_total == 1
+
+
+def test_readers_never_crash_while_the_relay_appends(tmp_path):
+    """A reader racing the writer sees only complete entries, in order."""
+
+    qpath = tmp_path / "q.jsonl"
+    writer = P0AlertQueue(qpath)
+    reader = P0AlertQueue(qpath)
+    writer.enqueue(_alerts("seed"))
+    big = [dict(a, evidence_ids=[f"ev-{k}" for k in range(400)]) for a in _alerts("big")]  # > PIPE_BUF per write
+    stop = threading.Event()
+    seen_errors = []
+
+    def write():
+        for i in range(150):
+            writer.enqueue([dict(a, decision_id=f"w-{i}") for a in big])
+        stop.set()
+
+    def read():
+        while not stop.is_set():
+            try:
+                rows = reader.read_entries()
+                assert [r["seq"] for r in rows] == list(range(1, len(rows) + 1))
+                _all_rows(qpath)
+            except Exception as exc:  # pragma: no cover - the assertion reports it
+                seen_errors.append(exc)
+                return
+
+    threads = [threading.Thread(target=write)] + [threading.Thread(target=read) for _ in range(3)]
+    [t.start() for t in threads]
+    [t.join(60) for t in threads]
+    assert not seen_errors, seen_errors[:1]
+    assert reader.read_unparseable_total == 0
+    assert len(reader.read_entries()) == 2 + 300
+
+
 def test_queue_too_small_for_one_alert_is_refused(tmp_path):
     with pytest.raises(ValueError):
         P0AlertQueue(tmp_path / "q.jsonl", max_entries=1)
@@ -419,7 +481,8 @@ def test_attached_path_enqueues_p0_decisions_only(tmp_path):
         audit.log_action_decision("d-thr", "s", action="throttle", target_ip="192.0.2.9")
         audit.log_action_decision("d-crit", "s", action="notify", decision_trace={"suspicion_label": "critical"})
         audit.log_notification("t", "s", decision="sent")
-        assert _wait(lambda: relay.enqueued_total == 2)
+        _settle(audit, relay)
+        assert relay.enqueued_total == 2
     finally:
         relay.stop()
     rows = _rows(qpath)
@@ -441,7 +504,8 @@ def test_broken_queue_is_counted_and_never_reaches_log(tmp_path):
     try:
         out = audit.log_action_decision("d-1", "s", action="isolate")
         assert out["action"] == "isolate"
-        assert _wait(lambda: relay.enqueue_failed_total == 1)
+        _settle(audit, relay)
+        assert relay.enqueue_failed_total == 1
     finally:
         relay.stop()
     os.rmdir(qpath)
@@ -484,10 +548,11 @@ def test_non_durable_decision_is_alerted_and_marked_non_durable(tmp_path, monkey
     try:
         with pytest.raises(AuditDurabilityError):
             audit.log_action_decision("d-1", "s", action="isolate")
-        assert _wait(lambda: len(_rows(qpath)) == 2)
+        _settle(audit, relay)
     finally:
         relay.stop()
     rows = _rows(qpath)
+    assert len(rows) == 2
     assert all(r["decision_record_durable"] is False and r["decision_record_durability"] == "fsync_failed" for r in rows)
 
 
@@ -500,7 +565,8 @@ def _crash_and_restart(tmp_path, before, missed, **kw):
     relay = attach_p0_alert_relay(audit, qpath)
     for did, action in before:
         audit.log_action_decision(did, "s", action=action)
-    assert _wait(lambda: relay.enqueued_total == sum(1 for _, a in before if a != "observe"))
+    _settle(audit, relay)
+    assert relay.enqueued_total == sum(1 for _, a in before if a != "observe")
     relay.stop()
     plain = P0AuditLogger(apath)
     for did, action in missed:
@@ -517,10 +583,11 @@ def test_restart_reconciles_p0_decisions_missed_while_down(tmp_path):
     )
     try:
         audit.log_action_decision("d-5", "s", action="throttle")
-        assert _wait(lambda: len(_rows(qpath)) == 8)
+        _settle(audit, relay)
     finally:
         relay.stop()
     rows = _rows(qpath)
+    assert len(rows) == 8
     assert [r["decision_id"] for r in rows[::2]] == ["d-1", "d-3", "d-4", "d-5"]
     assert {r["decision_record_durability"] for r in rows if r["decision_id"] in ("d-3", "d-4")} == {"reconciled_from_chain_fsynced"}
     started = [r for r in _status(qpath) if r.get("event") == "started"]
@@ -562,7 +629,7 @@ def test_rotated_chain_counts_unreconcilable_and_next_start_replays_only_new(tmp
     first = attach_p0_alert_relay(old, qpath)
     assert first.ready.wait(5)
     old.log_action_decision("before-rotation", "s", action="isolate")
-    assert first.wait_idle(5)
+    _settle(old, first)
     first.stop()
     # The chain is replaced (rotated): the queue's cursor is not in it.
     apath = tmp_path / "a.jsonl"
@@ -666,8 +733,9 @@ def test_production_opencanary_controller_attaches_the_relay(tmp_path):
         out = controller.apply({"redirect": True, "trace_id": "oc-1", "target_ip": "192.0.2.7", "reason": "r"})
         assert out["applied"] is True
         qpath = tmp_path / "p0-alert-queue.jsonl"
-        assert _wait(lambda: len(_rows(qpath)) == 2)
+        _settle(audit, controller.p0_alert_relay)
         rows = _rows(qpath)
+        assert len(rows) == 2
         assert {r["channel"] for r in rows} == {"visual", "voice"}
         assert all(r["decision_id"] == "oc-1" and r["p0_basis"] == "enforcement:redirect" for r in rows)
     finally:

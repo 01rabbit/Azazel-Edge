@@ -151,6 +151,10 @@ class P0AlertQueue:
         # file unchanged does not read it again.
         self._cache: Optional[tuple] = None
         self.compactions = 0
+        # Reads (read_entries) that met a partial trailing line / a complete
+        # line that is not a JSON object; both are skipped, never raised.
+        self.read_partial_tail_total = 0
+        self.read_unparseable_total = 0
 
     @property
     def max_lines(self) -> int:
@@ -438,6 +442,16 @@ class P0AlertQueue:
         return self._write(build, 0)
 
     def read_entries(self) -> List[Dict[str, Any]]:
+        """The queue's complete entries, read without the writer lock.
+
+        A reader can run while a writer is appending (or after a crash left a
+        torn tail), so the file may end in a partial line. Only
+        newline-terminated lines are entries: a trailing partial line is
+        skipped and counted in ``read_partial_tail_total``, and a complete
+        line that does not parse as a JSON object is skipped and counted in
+        ``read_unparseable_total``. Nothing here raises on queue content.
+        """
+
         try:
             fd = os.open(str(self.path), os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC)
         except FileNotFoundError:
@@ -446,7 +460,16 @@ class P0AlertQueue:
             data = self._read_all(fd)
         finally:
             os.close(fd)
-        return self._parse([ln for ln in data.split(b'\n') if ln])
+        return self.parse_complete_lines(data)
+
+    def parse_complete_lines(self, data: bytes) -> List[Dict[str, Any]]:
+        parts = data.split(b'\n')
+        if parts[-1]:
+            self.read_partial_tail_total += 1
+        lines = [ln for ln in parts[:-1] if ln]
+        rows = self._parse(lines)
+        self.read_unparseable_total += len(lines) - len(rows)
+        return rows
 
 
 def build_p0_alerts(record: Mapping[str, Any], basis: str, durability: str, durable_ns: Optional[int]) -> List[Dict[str, Any]]:
