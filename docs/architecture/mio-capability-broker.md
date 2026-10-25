@@ -22,14 +22,18 @@ AZ-06 Deception control.
 
 ## Registry rules (structural, enforced at construction)
 
-- Names containing write / execute / network / path / enforcement / AZ-06 tokens
-  (e.g. `exec`, `shell`, `write`, `delete`, `http`, `url`, `fetch`, `file`, `isolate`,
-  `redirect`, `throttle`, `arbiter`, `approve`, `transition`, `activate`, `decoy`, `az06`)
-  are refused (`FORBIDDEN_NAME_TOKENS`).
-- Parameter names that would let the model aim a handler at an arbitrary target
-  (`path`, `file`, `url`, `host`, `port`, `command`, `cmd`, `endpoint`, ...) are refused
-  (`FORBIDDEN_PARAM_NAMES`).
-- The registry is a `MappingProxyType`; it cannot be extended after construction.
+- Capability names are refused when a `_`-separated token is in `FORBIDDEN_NAME_TOKENS`
+  (short words such as `run`, `set`, `file`, `send`, `block`) **or** when the name contains
+  any `FORBIDDEN_NAME_STEMS` substring (`exec`, `shell`, `write`, `delete`, `http`, `url`,
+  `fetch`, `filesystem`, `path`, `isolat`, `redirect`, `throttl`, `arbiter`, `approv`,
+  `transition`, `activat`, `decoy`, `az06`, ...). Run-together names such as `writefile`,
+  `readexec`, `fetchurl`, `get_filesystem` are therefore refused.
+- Parameter names are refused by token (`uri`, `port`, `dir`, `dest`, ...) or by stem
+  (`path`, `file`, `url`, `host`, `cmd`, `command`, `script`, `endpoint`, `target`, ...),
+  e.g. `dest_path`, `file_name`, `target_host`.
+- Specs are deep-frozen: each `CapabilitySpec` and its `params` are copied into a
+  `MappingProxyType` and the copy is validated. Mutating the caller's dict after
+  construction has no effect. The registry itself is a `MappingProxyType`.
 - An empty registry (feature disabled baseline) refuses every request.
 
 ## Request contract
@@ -39,7 +43,8 @@ AZ-06 Deception control.
 capability's freshness requirement).
 
 Parameter kinds (`ParamSpec.kind`): `text` (opaque bounded data, never interpreted as a
-path/URL/command), `identifier` (`[A-Za-z0-9][A-Za-z0-9:._@#+=-]*`, no `..`, no `/`),
+path/URL/command; C0 controls other than tab/newline, DEL, C1 controls, bidi controls and
+lone surrogates are refused), `identifier` (`[A-Za-z0-9][A-Za-z0-9:._@#+=-]*`, no `..`, no `/`),
 `integer` (exact `int`, `bool` refused, range-checked), `boolean` (exact `bool`).
 Default schema (what the reasoning loop sends): `question: text(300)`, `frame_id: identifier(96)`.
 
@@ -54,7 +59,12 @@ Broker-assigned fields: `source_component`, `source_timestamp`, `retrieved_at`,
 
 - `stale`: source timestamp older than the required freshness, or missing when freshness
   is required. Stale results carry **no data and no evidence refs**.
-- Future timestamps (> 60 s skew) are `invalid`.
+- `source_timestamp` is **self-claimed by the adapter**: the broker bounds and checks it
+  but cannot verify it independently. Non-finite, negative or unparseable timestamps are
+  `invalid` (`source_timestamp_invalid`); future timestamps (> 60 s skew) are `invalid`.
+- Reserved keys (`status`, `provenance`, `authority`, `trust`, `approved`, ...) are stripped
+  case-insensitively at every depth of the result; the walk is bounded (depth 4, 2048 nodes)
+  and the size cap is applied during the walk, before full serialization.
 - Handler exceptions become `error` with only the exception class name
   (`handler_error:<Class>`); raw exception text is never returned or audited.
   `CapabilityUnavailable` becomes `unavailable`.
@@ -69,13 +79,25 @@ Broker-assigned fields: `source_component`, `source_timestamp`, `retrieved_at`,
 | `timeout_seconds` | `CapabilitySpec` | 2.0 (range 0–30) |
 | `max_concurrency` | `CapabilitySpec` | 1 (range 1–8) |
 | `max_in_flight` | `CapabilityBroker(...)` | 4 (global, ≤ 16) |
+| `max_quarantined` | `CapabilityBroker(...)` | 4 (timed-out workers still running, ≤ 16) |
 | `max_age_seconds` | `CapabilitySpec` / request | none |
 
 Slots are acquired with `blocking=False`. When a slot is unavailable the broker returns
-`rejected` with `broker_overloaded` or `capability_overloaded` immediately. A handler that
-exceeds its timeout yields `timeout`; its slot remains held until it returns, so a stuck
-adapter produces typed refusals rather than an unbounded queue. The deterministic Edge path
-never calls the broker and is not affected by any of these states.
+`rejected` with `broker_overloaded` or `capability_overloaded` immediately. Budget check,
+increment and slot acquisition happen in one critical section, so concurrent callers cannot
+exceed `max_total_calls`.
+
+A handler that exceeds its timeout yields `timeout`. Its concurrency slot is released at
+once (exactly-once release shared with the worker), and the still-running worker is counted
+in a bounded quarantine. While a capability has as many quarantined workers as its
+`max_concurrency` it is refused with `capability_quarantined`; when the global quarantine is
+full every request is refused with `broker_quarantine_full`. A worker that fails to start
+releases its slots and returns `error` / `worker_start_failed`.
+
+Callers: only `BoundedReasoningLoop` (`py/azazel_edge/mio/reasoning.py`), used by the offline
+`bin/azazel-mio-shadow-replay` and `bin/azazel-mio-evaluate`, calls the broker. No
+deterministic Edge path (Action Arbiter, control daemon, enforcement, AZ-06 client) imports
+`azazel_edge.mio`, so none of these states can block it.
 
 `submit()` never raises. `execute()` (used by the reasoning loop) raises
 `CapabilityBrokerError(<reason>)` for `rejected`/`invalid` to keep the loop's existing
@@ -90,9 +112,14 @@ Every request, allowed or refused, appends one record (bounded ring, default 256
 capability_digest (sha256 prefix if not), decision (allowed|refused), status, reason,
 params, evidence_refs, source_component, age_seconds, latency_ms, result_chars, truncated`.
 
-`params` holds only kind, Python type, length and (for identifiers) a digest; raw text values
-and unknown key names are never recorded (`unknown_param_count` only). Records larger than
-2048 characters are reduced and flagged `audit_truncated`.
+`params` holds only kind, Python type, length and (for identifiers) a digest; free-text values
+and unknown key names are never recorded (`unknown_param_count` only). `request_id`,
+`trace_id` and `purpose_hypothesis_ids` are kept only when they match the identifier grammar;
+otherwise they are replaced by `h:<digest>`. Digests are HMAC-SHA256 with a per-process
+random key (truncated to 16 hex), so low-entropy values such as IP addresses cannot be
+recovered offline; they are comparable only within one process. Records larger than
+2048 characters are reduced and flagged `audit_truncated`. `audit_records()` and the sink receive
+deep copies.
 
 ## Adding a capability safely
 

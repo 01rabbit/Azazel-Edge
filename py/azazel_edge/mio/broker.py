@@ -2,30 +2,40 @@
 
 Security boundary rules enforced here:
 
-* The registry is static and frozen at construction. Capability names cannot
-  be created by the model, and names/parameter names that look like write,
-  execution, network, path or enforcement primitives are refused at
-  registration time.
+* The registry is static and deep-frozen at construction (specs and their
+  parameter schemas are copied, validated and frozen; later mutation of the
+  caller's objects has no effect). Capability names cannot be created by the
+  model, and names/parameter names that look like write, execution, network,
+  path or enforcement primitives are refused at registration time.
 * Requests are validated against closed, typed parameter schemas. Unknown
   keys, type confusion (``bool`` for ``int``, nested containers, ...),
-  oversized values and control characters are refused before any handler runs.
+  oversized values and control/bidi characters are refused before any handler
+  runs.
 * Every handler call has a per-capability timeout, a per-capability
   concurrency cap and a global in-flight cap. Slots are acquired without
-  blocking, so overload returns a typed refusal instead of waiting.
+  blocking, so overload returns a typed refusal instead of waiting. A handler
+  that times out releases its slot and is accounted in a bounded quarantine.
 * Results carry broker-assigned status, provenance and freshness. Adapters
-  cannot claim their own provenance; reserved keys returned by adapters are
-  ignored.
+  cannot claim provenance/status/authority: reserved keys are stripped
+  case-insensitively at every depth.
 * Every request (allowed or refused) produces a sanitized, size-bounded audit
-  record that never contains raw parameter text or raw handler errors.
+  record. Free-text parameter values and handler error text are never
+  recorded; identifiers that are not well-formed are recorded only as a keyed
+  (per-process HMAC) digest.
 
 There is no shell, subprocess, socket, HTTP, filesystem-path, packet-control,
-Action Arbiter or AZ-06 control primitive in this module.
+Action Arbiter or AZ-06 control primitive in this module. Only the offline
+shadow/replay reasoning loop calls the broker; no deterministic Edge path does.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
+import hmac
 import json
+import math
 import re
+import secrets
 import threading
 import time
 from collections import deque
@@ -64,39 +74,54 @@ REFUSAL_STATUSES = frozenset({CapabilityStatus.REJECTED.value, CapabilityStatus.
 _NAME_RE = re.compile(r"[a-z][a-z0-9_]{2,63}\Z")
 _PARAM_NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")
 _IDENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._@#+=-]{0,127}\Z")
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
-_ANY_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+# Refused inside free text: C0 (except \t \n), DEL, C1, bidi controls, lone surrogates.
+_TEXT_FORBIDDEN_RE = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f؜‎‏‪-‮⁦-⁩\ud800-\udfff]"
+)
+_ID_FORBIDDEN_RE = re.compile(
+    "[\x00-\x1f\x7f-\x9f؜‎‏‪-‮⁦-⁩\ud800-\udfff]"
+)
 
-# Tokens (split on "_") that may not appear in a capability name: v1 is
-# read-only, so anything that sounds like a write / execute / network /
-# enforcement / AZ-06 transition primitive is structurally refused.
+# v1 is read-only. A capability name is refused when any "_"-separated token is
+# in FORBIDDEN_NAME_TOKENS (short words that would false-positive as
+# substrings) or when it contains any FORBIDDEN_NAME_STEMS substring
+# (catches run-together names such as ``writefile`` / ``fetchurl``).
 FORBIDDEN_NAME_TOKENS = frozenset(
     {
-        "exec", "execute", "run", "shell", "sh", "bash", "cmd", "command", "spawn", "eval",
-        "write", "put", "post", "patch", "delete", "remove", "rm", "set", "update", "create",
-        "apply", "commit", "save", "store", "upload", "modify", "mutate",
-        "http", "https", "url", "fetch", "request", "socket", "connect", "download", "curl", "wget",
-        "file", "path", "open", "docker", "container",
-        "enforce", "enforcement", "block", "isolate", "redirect", "throttle", "quarantine", "kill",
-        "nft", "nftables", "iptables", "tc", "firewall", "arbiter", "action", "approve", "approval",
-        "transition", "activate", "deactivate", "deploy", "trigger", "control", "az06", "decoy",
+        "run", "sh", "cmd", "eval", "put", "post", "patch", "rm", "set", "update", "create",
+        "apply", "save", "store", "open", "file", "files", "kill", "block", "tc", "nft",
+        "action", "act", "send", "exe",
     }
 )
-# Parameter names that would let a model aim a handler at an arbitrary target.
-FORBIDDEN_PARAM_NAMES = frozenset(
-    {"path", "file", "filename", "url", "uri", "host", "hostname", "port", "command", "cmd",
-     "shell", "script", "code", "exec", "args", "argv", "endpoint", "socket", "target_url"}
+FORBIDDEN_NAME_STEMS = (
+    "exec", "shell", "bash", "spawn", "command", "write", "delete", "remove", "upload", "download",
+    "modif", "mutat", "commit", "http", "url", "fetch", "socket", "connect", "curl", "wget",
+    "filesystem", "filename", "filepath", "path", "docker", "container", "enforce", "isolat",
+    "redirect", "throttl", "quarantin", "firewall", "iptables", "nftables", "arbiter", "approv",
+    "transition", "activat", "deploy", "trigger", "control", "az06", "decoy",
 )
-# Keys an adapter may not use to claim provenance/status/authority for itself.
+# Parameter names that would let a model aim a handler at an arbitrary target.
+FORBIDDEN_PARAM_TOKENS = frozenset({"uri", "port", "code", "args", "argv", "dir", "dest", "to"})
+FORBIDDEN_PARAM_STEMS = (
+    "path", "file", "url", "host", "cmd", "command", "script", "shell", "exec", "endpoint", "socket",
+    "folder", "target",
+)
+# Keys an adapter may not use to claim provenance/status/authority for itself
+# (matched case-insensitively at every depth).
 RESERVED_RESULT_KEYS = frozenset(
     {"source_component", "provenance", "status", "retrieved_at", "freshness", "trust",
-     "age_seconds", "ok", "executable", "authority", "approved"}
+     "age_seconds", "ok", "executable", "authority", "approved", "approval", "trusted"}
 )
 
 MAX_RESULT_DEPTH = 4
+MAX_RESULT_NODES = 2048
 MAX_EVIDENCE_REFS = 32
 MAX_AUDIT_RECORD_CHARS = 2048
 FUTURE_SKEW_SECONDS = 60
+
+# Per-process key: audit digests cannot be brute-forced offline from low-entropy
+# inputs (IPs, hostnames) and are only comparable within one process lifetime.
+_AUDIT_KEY = secrets.token_bytes(32)
 
 
 @dataclass(frozen=True)
@@ -132,74 +157,171 @@ class CapabilitySpec:
     source_component: str = "edge-local"
 
 
+class _ResultReject(Exception):
+    def __init__(self, status: CapabilityStatus, reason: str):
+        super().__init__(reason)
+        self.status = status
+        self.reason = reason
+
+
+def _attr(obj: Any, name: str, default: Any = None) -> Any:
+    try:
+        return getattr(obj, name, default)
+    except Exception:
+        return default
+
+
 def _iso(epoch: float | None) -> str:
     if epoch is None:
         return ""
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    try:
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    except (OverflowError, OSError, ValueError):
+        return ""
 
 
 def _parse_timestamp(value: Any) -> float | None:
+    """Parse an adapter-claimed timestamp. Returns None if unusable."""
+    parsed: float | None = None
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str) and 0 < len(value) <= 64:
+        parsed = float(value)
+    elif isinstance(value, str) and 0 < len(value) <= 64:
         try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            parsed = dt.timestamp()
+        except (ValueError, OverflowError, OSError):
             return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.timestamp()
-    return None
-
-
-def _depth(value: Any, level: int = 0) -> int:
-    if level > MAX_RESULT_DEPTH + 1:
-        return level
-    if isinstance(value, Mapping):
-        return max([level + 1] + [_depth(v, level + 1) for v in value.values()])
-    if isinstance(value, (list, tuple)):
-        return max([level + 1] + [_depth(v, level + 1) for v in value])
-    return level
+    if parsed is None or not math.isfinite(parsed) or parsed < 0:
+        return None
+    return parsed
 
 
 def _digest(value: Any) -> str:
-    return hashlib.sha256(repr(value).encode("utf-8", "replace")).hexdigest()[:16]
+    if type(value) is not str:
+        try:
+            label = type(value).__name__
+        except Exception:
+            label = "object"
+        return f"<{label}>"
+    return hmac.new(_AUDIT_KEY, value.encode("utf-8", "replace"), hashlib.sha256).hexdigest()[:16]
 
 
 def _safe_label(value: Any, limit: int = 128) -> str:
-    """Bounded, printable label for audit IDs (never raw free text)."""
-    if not isinstance(value, str):
-        return f"<{type(value).__name__}>"
-    return _ANY_CONTROL_RE.sub("?", value[:limit])
+    """Bounded, control-free label used for result request_id correlation."""
+    if type(value) is not str:
+        return _digest(value)
+    return _ID_FORBIDDEN_RE.sub("?", value[:limit])
 
 
-def _validate_registry_name(name: Any) -> None:
-    if not isinstance(name, str) or not _NAME_RE.match(name):
+def _audit_id(value: Any) -> str:
+    """Well-formed identifiers are kept; anything else becomes a keyed digest."""
+    if type(value) is str and _IDENT_RE.match(value):
+        return value
+    return "h:" + _digest(value)
+
+
+def _name_forbidden(name: str, tokens: frozenset[str], stems: tuple[str, ...]) -> bool:
+    return bool(set(name.split("_")) & tokens) or any(stem in name for stem in stems)
+
+
+def _frozen_spec(name: Any, spec: Any) -> CapabilitySpec:
+    if type(name) is not str or not _NAME_RE.match(name):
         raise CapabilityBrokerError("capability_name_malformed")
-    if set(name.split("_")) & FORBIDDEN_NAME_TOKENS:
+    if _name_forbidden(name, FORBIDDEN_NAME_TOKENS, FORBIDDEN_NAME_STEMS):
         raise CapabilityBrokerError(f"capability_name_forbidden:{name}")
-
-
-def _validate_spec(name: str, spec: Any) -> None:
     if not isinstance(spec, CapabilitySpec) or not callable(spec.handler):
         raise CapabilityBrokerError(f"capability_spec_invalid:{name}")
     if not isinstance(spec.params, Mapping):
         raise CapabilityBrokerError(f"capability_params_invalid:{name}")
-    for pname, pspec in spec.params.items():
-        if not isinstance(pname, str) or not _PARAM_NAME_RE.match(pname):
+    # Deep copy then validate the copy: later mutation of the caller's dict
+    # cannot widen the schema.
+    params_copy = {pname: pspec for pname, pspec in list(spec.params.items())}
+    for pname, pspec in params_copy.items():
+        if type(pname) is not str or not _PARAM_NAME_RE.match(pname):
             raise CapabilityBrokerError(f"capability_param_name_malformed:{name}")
-        if pname in FORBIDDEN_PARAM_NAMES:
+        if _name_forbidden(pname, FORBIDDEN_PARAM_TOKENS, FORBIDDEN_PARAM_STEMS):
             raise CapabilityBrokerError(f"capability_param_name_forbidden:{name}:{pname}")
-        if not isinstance(pspec, ParamSpec):
+        if type(pspec) is not ParamSpec:
             raise CapabilityBrokerError(f"capability_param_spec_invalid:{name}:{pname}")
     if not (0 < float(spec.timeout_seconds) <= 30):
         raise CapabilityBrokerError(f"capability_timeout_out_of_range:{name}")
     if not (1 <= int(spec.max_concurrency) <= 8):
         raise CapabilityBrokerError(f"capability_concurrency_out_of_range:{name}")
-    if not _IDENT_RE.match(str(spec.source_component)):
+    if type(spec.source_component) is not str or not _IDENT_RE.match(spec.source_component):
         raise CapabilityBrokerError(f"capability_source_component_invalid:{name}")
+    max_age = spec.max_age_seconds
+    if max_age is not None and (type(max_age) is not int or max_age < 0):
+        raise CapabilityBrokerError(f"capability_max_age_invalid:{name}")
+    return replace(
+        spec,
+        params=MappingProxyType(params_copy),
+        max_calls_per_cycle=int(spec.max_calls_per_cycle),
+        max_result_chars=int(spec.max_result_chars),
+        timeout_seconds=float(spec.timeout_seconds),
+        max_concurrency=int(spec.max_concurrency),
+    )
+
+
+def _sanitize_result(value: Any, level: int, state: dict[str, int], limit: int) -> Any:
+    """Bounded walk: reject non-JSON / too deep, strip reserved keys, cap size early."""
+    state["nodes"] += 1
+    if state["nodes"] > MAX_RESULT_NODES:
+        raise _ResultReject(CapabilityStatus.TRUNCATED, "capability_result_too_large")
+    if isinstance(value, Mapping) or isinstance(value, (list, tuple)):
+        if level > MAX_RESULT_DEPTH:
+            raise _ResultReject(CapabilityStatus.INVALID, "capability_result_too_deep")
+    if isinstance(value, Mapping):
+        out: dict[str, Any] = {}
+        for key, item in list(value.items()):
+            if type(key) is not str:
+                raise _ResultReject(CapabilityStatus.INVALID, "capability_result_non_string_key")
+            state["chars"] += len(key) + 4
+            if key.lower() in RESERVED_RESULT_KEYS:
+                state["stripped"] += 1
+                continue
+            out[key] = _sanitize_result(item, level + 1, state, limit)
+        return out
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_result(item, level + 1, state, limit) for item in value]
+    if type(value) is str:
+        state["chars"] += len(value) + 2
+    elif value is None or type(value) in (bool, int):
+        state["chars"] += 8
+        if type(value) is int and abs(value) > 10**18:
+            raise _ResultReject(CapabilityStatus.INVALID, "capability_result_not_json")
+    elif type(value) is float:
+        if not math.isfinite(value):
+            raise _ResultReject(CapabilityStatus.INVALID, "capability_result_not_json")
+        state["chars"] += 24
+    else:
+        raise _ResultReject(CapabilityStatus.INVALID, "capability_result_not_json")
+    if state["chars"] > limit:
+        raise _ResultReject(CapabilityStatus.TRUNCATED, "capability_result_too_large")
+    return value
+
+
+class _Slot:
+    """Concurrency slot that can be released exactly once."""
+
+    def __init__(self, cap_sem: threading.BoundedSemaphore, global_sem: threading.BoundedSemaphore):
+        self.lock = threading.Lock()
+        self._cap_sem = cap_sem
+        self._global_sem = global_sem
+        self._released = False
+        self.done = False
+        self.hung = False
+
+    def release(self) -> None:
+        with self.lock:
+            if self._released:
+                return
+            self._released = True
+        self._cap_sem.release()
+        self._global_sem.release()
 
 
 class CapabilityBroker:
@@ -215,15 +337,14 @@ class CapabilityBroker:
         *,
         max_total_calls: int = 4,
         max_in_flight: int = 4,
+        max_quarantined: int = 4,
         clock: Callable[[], float] = time.time,
         audit_capacity: int = 256,
         audit_sink: Callable[[Mapping[str, Any]], None] | None = None,
     ):
         registry: dict[str, CapabilitySpec] = {}
-        for name, spec in dict(capabilities or {}).items():
-            _validate_registry_name(name)
-            _validate_spec(name, spec)
-            registry[name] = spec
+        for name, spec in list(dict(capabilities or {}).items()):
+            registry[name] = _frozen_spec(name, spec)
         self._capabilities: Mapping[str, CapabilitySpec] = MappingProxyType(registry)
         self._max_total_calls = max(0, int(max_total_calls))
         self._total_calls = 0
@@ -232,8 +353,12 @@ class CapabilityBroker:
         self._lock = threading.Lock()
         self._global_slots = threading.BoundedSemaphore(max(1, min(int(max_in_flight), 16)))
         self._capability_slots = MappingProxyType(
-            {name: threading.BoundedSemaphore(int(spec.max_concurrency)) for name, spec in registry.items()}
+            {name: threading.BoundedSemaphore(spec.max_concurrency) for name, spec in registry.items()}
         )
+        # Timed-out handlers that are still running (bounded).
+        self._max_quarantined = max(1, min(int(max_quarantined), 16))
+        self._quarantined = 0
+        self._quarantined_per_capability: dict[str, int] = {}
         self._audit: deque[dict[str, Any]] = deque(maxlen=max(1, min(int(audit_capacity), 4096)))
         self._audit_sink = audit_sink
 
@@ -242,7 +367,11 @@ class CapabilityBroker:
 
     def audit_records(self) -> tuple[dict[str, Any], ...]:
         with self._lock:
-            return tuple(dict(item) for item in self._audit)
+            return tuple(copy.deepcopy(item) for item in self._audit)
+
+    def quarantined(self) -> int:
+        with self._lock:
+            return self._quarantined
 
     # -- public entrypoints -------------------------------------------------
 
@@ -262,56 +391,74 @@ class CapabilityBroker:
         except Exception as exc:  # defensive: the broker must not break Edge
             result = self._result(request, CapabilityStatus.ERROR, f"broker_internal_error:{type(exc).__name__}")
         result = replace(result, latency_ms=int((time.monotonic() - started) * 1000))
-        self._record_audit(request, result, params_audit)
+        try:
+            self._record_audit(request, result, params_audit)
+        except Exception:
+            try:
+                self._append_audit({
+                    "schema": "mio_capability_audit/v1", "audit_error": True,
+                    "status": result.status, "reason": result.error,
+                })
+            except Exception:
+                pass
         return result
 
     # -- internals ------------------------------------------------------------
 
     def _result(self, request: Any, status: CapabilityStatus, error: str = "", **extra: Any) -> MioCapabilityResult:
-        capability = getattr(request, "capability", "")
+        capability = _attr(request, "capability", "")
+        try:
+            retrieved_at = _iso(float(self._clock()))
+        except Exception:
+            retrieved_at = ""
         return MioCapabilityResult(
-            request_id=_safe_label(getattr(request, "request_id", "")),
-            capability=capability if isinstance(capability, str) and capability in self._capabilities else "",
+            request_id=_safe_label(_attr(request, "request_id", "")),
+            capability=capability if type(capability) is str and capability in self._capabilities else "",
             ok=status is CapabilityStatus.OK,
             data=extra.pop("data", {}),
             evidence_refs=extra.pop("evidence_refs", ()),
             error=error,
             status=status.value,
-            retrieved_at=_iso(self._clock()),
+            retrieved_at=retrieved_at,
             **extra,
         )
 
     def _submit(self, request: Any) -> tuple[MioCapabilityResult, dict[str, Any]]:
         for attr in ("request_id", "trace_id"):
-            value = getattr(request, attr, None)
-            if not isinstance(value, str) or not value or len(value) > 128 or _ANY_CONTROL_RE.search(value):
+            value = _attr(request, attr)
+            if type(value) is not str or not value or len(value) > 128 or _ID_FORBIDDEN_RE.search(value):
                 return self._result(request, CapabilityStatus.INVALID, f"invalid_{attr}"), {}
-        capability = getattr(request, "capability", None)
-        with self._lock:
-            if self._total_calls >= self._max_total_calls:
-                return self._result(request, CapabilityStatus.REJECTED, "broker_total_budget_exhausted"), {}
-        if not isinstance(capability, str) or not _NAME_RE.match(capability):
+        capability = _attr(request, "capability")
+        if type(capability) is not str or not _NAME_RE.match(capability):
             return self._result(request, CapabilityStatus.REJECTED, "capability_name_malformed"), {}
         spec = self._capabilities.get(capability)
         if spec is None:
             return self._result(request, CapabilityStatus.REJECTED, "capability_not_allowlisted"), {}
 
-        args, params_audit, arg_error = self._validate_arguments(getattr(request, "arguments", None), spec)
+        args, params_audit, arg_error = self._validate_arguments(_attr(request, "arguments"), spec)
         if arg_error:
             return self._result(request, CapabilityStatus.INVALID, arg_error), params_audit
 
         max_age = spec.max_age_seconds
-        req_age = getattr(request, "max_age_seconds", None)
+        req_age = _attr(request, "max_age_seconds")
         if req_age is not None:
             if type(req_age) is not int or req_age < 0:
                 return self._result(request, CapabilityStatus.INVALID, "invalid_max_age_seconds"), params_audit
             max_age = req_age if max_age is None else min(max_age, req_age)
 
         cap_slots = self._capability_slots[capability]
+        # Admission is one atomic critical section: budget check + increment +
+        # quarantine check + non-blocking slot acquisition.
         with self._lock:
+            if self._total_calls >= self._max_total_calls:
+                return self._result(request, CapabilityStatus.REJECTED, "broker_total_budget_exhausted"), params_audit
             used = self._per_capability_calls.get(capability, 0)
             if used >= spec.max_calls_per_cycle:
                 return self._result(request, CapabilityStatus.REJECTED, "capability_budget_exhausted"), params_audit
+            if self._quarantined >= self._max_quarantined:
+                return self._result(request, CapabilityStatus.REJECTED, "broker_quarantine_full"), params_audit
+            if self._quarantined_per_capability.get(capability, 0) >= spec.max_concurrency:
+                return self._result(request, CapabilityStatus.REJECTED, "capability_quarantined"), params_audit
             if not self._global_slots.acquire(blocking=False):
                 return self._result(request, CapabilityStatus.REJECTED, "broker_overloaded"), params_audit
             if not cap_slots.acquire(blocking=False):
@@ -320,6 +467,7 @@ class CapabilityBroker:
             self._total_calls += 1
             self._per_capability_calls[capability] = used + 1
 
+        slot = _Slot(cap_slots, self._global_slots)
         outcome: dict[str, Any] = {}
         frozen_args = MappingProxyType(dict(args))
 
@@ -329,21 +477,40 @@ class CapabilityBroker:
             except CapabilityUnavailable:
                 outcome["status"] = CapabilityStatus.UNAVAILABLE
                 outcome["error"] = "capability_unavailable"
-            except Exception as exc:
+            except BaseException as exc:
                 outcome["status"] = CapabilityStatus.ERROR
                 outcome["error"] = f"handler_error:{type(exc).__name__}"[:96]
             finally:
-                cap_slots.release()
-                self._global_slots.release()
+                slot.release()
+                with slot.lock:
+                    slot.done = True
+                    was_hung = slot.hung
+                    if was_hung:
+                        with self._lock:
+                            self._quarantined -= 1
+                            self._quarantined_per_capability[capability] -= 1
 
-        worker = threading.Thread(target=_run, name=f"mio-cap-{capability}", daemon=True)
-        worker.start()
-        worker.join(float(spec.timeout_seconds))
         base = {"source_component": spec.source_component, "max_age_seconds": max_age}
-        if worker.is_alive():
-            # The slot stays held until the handler returns: later requests get
-            # a typed overload refusal instead of piling up behind it.
+        worker = threading.Thread(target=_run, name=f"mio-cap-{capability}", daemon=True)
+        try:
+            worker.start()
+        except Exception:
+            slot.release()
+            return self._result(request, CapabilityStatus.ERROR, "worker_start_failed", **base), params_audit
+        worker.join(spec.timeout_seconds)
+        with slot.lock:
+            timed_out = not slot.done
+            if timed_out:
+                slot.hung = True
+                with self._lock:
+                    self._quarantined += 1
+                    self._quarantined_per_capability[capability] = self._quarantined_per_capability.get(capability, 0) + 1
+        if timed_out:
+            # Free the concurrency slot; the still-running worker is accounted
+            # in the bounded quarantine until it returns.
+            slot.release()
             return self._result(request, CapabilityStatus.TIMEOUT, "capability_timeout", **base), params_audit
+        worker.join(0.5)
         if "status" in outcome:
             return self._result(request, outcome["status"], outcome["error"], **base), params_audit
         return self._finalize(request, spec, outcome.get("raw"), max_age, base), params_audit
@@ -352,17 +519,27 @@ class CapabilityBroker:
         audit: dict[str, Any] = {}
         if not isinstance(arguments, Mapping):
             return {}, audit, "arguments_not_mapping"
-        unknown = [k for k in arguments.keys() if not isinstance(k, str) or k not in spec.params]
+        items = list(arguments.items())
+        if len(items) > len(spec.params):
+            audit["unknown_param_count"] = max(1, len(items) - len(spec.params))
+            return {}, audit, "unknown_argument"
+        supplied: dict[str, Any] = {}
+        unknown = 0
+        for key, value in items:
+            if type(key) is not str or key not in spec.params:
+                unknown += 1
+            else:
+                supplied[key] = value
         if unknown:
-            audit["unknown_param_count"] = len(unknown)
+            audit["unknown_param_count"] = unknown
             return {}, audit, "unknown_argument"
         out: dict[str, Any] = {}
         for name, pspec in spec.params.items():
-            if name not in arguments:
+            if name not in supplied:
                 if pspec.required:
                     return {}, audit, f"missing_argument:{name}"
                 continue
-            value = arguments[name]
+            value = supplied[name]
             entry: dict[str, Any] = {"kind": pspec.kind, "type": type(value).__name__}
             audit[name] = entry
             if pspec.kind in {"text", "identifier"}:
@@ -372,7 +549,7 @@ class CapabilityBroker:
                 if len(value) > pspec.max_length:
                     return {}, audit, f"argument_too_long:{name}"
                 if pspec.kind == "text":
-                    if _CONTROL_RE.search(value):
+                    if _TEXT_FORBIDDEN_RE.search(value):
                         return {}, audit, f"argument_control_chars:{name}"
                 else:
                     entry["digest"] = _digest(value)
@@ -394,16 +571,17 @@ class CapabilityBroker:
         data = dict(raw)
         limitations: list[str] = []
         refs = data.pop("evidence_refs", ())
+        # NOTE: source_timestamp is adapter self-claimed; the broker bounds and
+        # checks it but cannot independently verify it.
         source_ts_raw = data.pop("source_timestamp", None)
-        reserved = sorted(k for k in data if isinstance(k, str) and k in RESERVED_RESULT_KEYS)
-        for key in reserved:
-            data.pop(key, None)
-        if reserved:
+        state = {"nodes": 0, "chars": 0, "stripped": 0}
+        try:
+            data = _sanitize_result(data, 1, state, spec.max_result_chars)
+        except _ResultReject as rej:
+            truncated = rej.status is CapabilityStatus.TRUNCATED
+            return self._result(request, rej.status, rej.reason, truncated=truncated, **base)
+        if state["stripped"]:
             limitations.append("adapter_reserved_keys_ignored")
-        if any(not isinstance(k, str) for k in data):
-            return self._result(request, CapabilityStatus.INVALID, "capability_result_non_string_key", **base)
-        if _depth(data) > MAX_RESULT_DEPTH:
-            return self._result(request, CapabilityStatus.INVALID, "capability_result_too_deep", **base)
         try:
             rendered = json.dumps(data, sort_keys=True, ensure_ascii=False, allow_nan=False)
         except (TypeError, ValueError):
@@ -415,26 +593,29 @@ class CapabilityBroker:
             )
         clean_refs: list[str] = []
         if isinstance(refs, (list, tuple)):
-            for ref in refs:
-                if isinstance(ref, str) and _IDENT_RE.match(ref) and ref not in clean_refs:
+            candidates = list(refs[: MAX_EVIDENCE_REFS * 4])
+            for ref in candidates:
+                if type(ref) is str and _IDENT_RE.match(ref) and ref not in clean_refs:
                     clean_refs.append(ref)
-            if len(clean_refs) > MAX_EVIDENCE_REFS:
+            if len(clean_refs) > MAX_EVIDENCE_REFS or len(refs) > len(candidates):
                 clean_refs = clean_refs[:MAX_EVIDENCE_REFS]
                 limitations.append("evidence_refs_capped")
-            elif len(clean_refs) < len(refs):
+            elif len(clean_refs) < len(candidates):
                 limitations.append("evidence_refs_dropped")
         elif refs:
             limitations.append("evidence_refs_dropped")
 
-        now = self._clock()
-        source_ts = _parse_timestamp(source_ts_raw)
+        now = float(self._clock())
         age: int | None = None
-        if source_ts_raw is not None and source_ts is None:
-            limitations.append("source_timestamp_unparseable")
-        if source_ts is not None:
+        if source_ts_raw is not None:
+            source_ts = _parse_timestamp(source_ts_raw)
+            if source_ts is None:
+                return self._result(request, CapabilityStatus.INVALID, "source_timestamp_invalid", **base)
             if source_ts - now > FUTURE_SKEW_SECONDS:
                 return self._result(request, CapabilityStatus.INVALID, "source_timestamp_in_future", **base)
             age = max(0, int(now - source_ts))
+        else:
+            source_ts = None
         common = dict(
             source_timestamp=_iso(source_ts),
             age_seconds=age,
@@ -448,21 +629,30 @@ class CapabilityBroker:
             return self._result(request, CapabilityStatus.STALE, reason, **common)
         return self._result(request, CapabilityStatus.OK, "", data=data, evidence_refs=tuple(clean_refs), **common)
 
+    def _append_audit(self, record: dict[str, Any]) -> None:
+        with self._lock:
+            self._audit.append(record)
+        if self._audit_sink is not None:
+            try:
+                self._audit_sink(copy.deepcopy(record))
+            except Exception:
+                pass  # audit sink failure must not affect Edge or the loop
+
     def _record_audit(self, request: Any, result: MioCapabilityResult, params_audit: Mapping[str, Any]) -> None:
-        capability = getattr(request, "capability", None)
-        allowlisted = isinstance(capability, str) and capability in self._capabilities
-        purpose = getattr(request, "purpose_hypothesis_ids", ())
+        capability = _attr(request, "capability")
+        allowlisted = type(capability) is str and capability in self._capabilities
+        purpose = _attr(request, "purpose_hypothesis_ids", ())
         record: dict[str, Any] = {
             "schema": "mio_capability_audit/v1",
-            "request_id": _safe_label(getattr(request, "request_id", None)),
-            "trace_id": _safe_label(getattr(request, "trace_id", None)),
-            "purpose_hypothesis_ids": [_safe_label(x, 96) for x in purpose[:8]] if isinstance(purpose, (list, tuple)) else [],
+            "request_id": _audit_id(_attr(request, "request_id")),
+            "trace_id": _audit_id(_attr(request, "trace_id")),
+            "purpose_hypothesis_ids": [_audit_id(x) for x in purpose[:8]] if isinstance(purpose, (list, tuple)) else [],
             "capability": capability if allowlisted else None,
             "capability_digest": None if allowlisted else _digest(capability),
             "decision": "refused" if result.status in REFUSAL_STATUSES else "allowed",
             "status": result.status,
             "reason": result.error,
-            "params": dict(params_audit),
+            "params": copy.deepcopy(dict(params_audit)),
             "evidence_refs": list(result.evidence_refs),
             "source_component": result.source_component,
             "age_seconds": result.age_seconds,
@@ -475,10 +665,4 @@ class CapabilityBroker:
             record["purpose_hypothesis_ids"] = record["purpose_hypothesis_ids"][:2]
             record["params"] = {"omitted": True}
             record["audit_truncated"] = True
-        with self._lock:
-            self._audit.append(record)
-        if self._audit_sink is not None:
-            try:
-                self._audit_sink(dict(record))
-            except Exception:
-                pass  # audit sink failure must not affect Edge or the loop
+        self._append_audit(record)
