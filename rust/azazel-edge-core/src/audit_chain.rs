@@ -83,36 +83,57 @@ struct ChainHead {
 /// The node's monotonic clock (`CLOCK_MONOTONIC`) in nanoseconds: the clock
 /// Python's `time.monotonic_ns()` reads on the same host.
 pub fn monotonic_ns() -> Option<u64> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     {
-        use std::os::raw::{c_int, c_long};
-        #[repr(C)]
-        struct Timespec {
-            tv_sec: c_long,
-            tv_nsec: c_long,
-        }
-        extern "C" {
-            fn clock_gettime(clock_id: c_int, tp: *mut Timespec) -> c_int;
-        }
-        #[cfg(target_os = "linux")]
-        const CLOCK_MONOTONIC: c_int = 1;
-        #[cfg(target_os = "macos")]
-        const CLOCK_MONOTONIC: c_int = 6;
-        let mut ts = Timespec { tv_sec: 0, tv_nsec: 0 };
-        // SAFETY: clock_gettime only writes the timespec it is given, which
-        // lives on this stack frame for the whole call.
-        let rc = unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts) };
-        if rc != 0 || ts.tv_sec < 0 || ts.tv_nsec < 0 {
-            return None;
-        }
-        (ts.tv_sec as u64)
-            .checked_mul(1_000_000_000)
-            .and_then(|s| s.checked_add(ts.tv_nsec as u64))
+        clock_ns(1)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        clock_ns(6)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         None
     }
+}
+
+/// `CLOCK_BOOTTIME` in nanoseconds (Linux only; `None` elsewhere): like
+/// `CLOCK_MONOTONIC` it is never stepped by `settimeofday` or NTP, and unlike
+/// it it keeps counting while the system is suspended. It restarts at every
+/// boot, so an instant on it means something only together with `boot_id()`.
+/// Python reads the same clock as `time.clock_gettime_ns(time.CLOCK_BOOTTIME)`.
+pub fn boottime_ns() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        clock_ns(7)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn clock_ns(clock_id: std::os::raw::c_int) -> Option<u64> {
+    use std::os::raw::{c_int, c_long};
+    #[repr(C)]
+    struct Timespec {
+        tv_sec: c_long,
+        tv_nsec: c_long,
+    }
+    extern "C" {
+        fn clock_gettime(clock_id: c_int, tp: *mut Timespec) -> c_int;
+    }
+    let mut ts = Timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: clock_gettime only writes the timespec it is given, which
+    // lives on this stack frame for the whole call.
+    let rc = unsafe { clock_gettime(clock_id, &mut ts) };
+    if rc != 0 || ts.tv_sec < 0 || ts.tv_nsec < 0 {
+        return None;
+    }
+    (ts.tv_sec as u64)
+        .checked_mul(1_000_000_000)
+        .and_then(|s| s.checked_add(ts.tv_nsec as u64))
 }
 
 /// The wall clock in nanoseconds since the Unix epoch.

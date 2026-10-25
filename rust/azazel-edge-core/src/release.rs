@@ -23,6 +23,13 @@ pub const ROLLBACK_STARTED_KIND: &str = "rollback_started";
 /// is `P0AuditLogger`'s and is unchanged.
 pub const ROLLBACK_STARTED_SCHEMA: &str = "azazel-edge/rollback-started/v1";
 const ROLLBACK_AUDIT_SOURCE: &str = "azazel-edge-core/release_engine";
+/// When both deadlines have passed, the wall deadline is named as the one
+/// that fired only if it passed this much earlier than the monotonic one.
+/// Below it the two are the same instant read twice (read skew); above it the
+/// wall clock was stepped forward. It only names the clock in the records;
+/// whether the lease expires never depends on it.
+pub const WALL_ATTRIBUTION_TOLERANCE_NS: i128 = 50_000_000;
+const MAX_BOOT_ID_LEN: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReleaseTask {
@@ -46,6 +53,133 @@ pub struct ReleaseTask {
     pub status: String,
     pub attempts: u32,
     pub last_error: String,
+    /// The lease's expiry on `CLOCK_BOOTTIME`, beside the wall-clock
+    /// `due_epoch`; the lease expires at whichever passes first. Absent on a
+    /// lease written before this field existed, or created when the clock or
+    /// the boot identity could not be read: such a lease keeps wall-clock-only
+    /// expiry and none is invented for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_boottime_ns: Option<u64>,
+    /// The boot (`/proc/sys/kernel/random/boot_id`) `due_boottime_ns` belongs
+    /// to. In any other boot, or when it cannot be compared, the monotonic
+    /// deadline counts as already passed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub due_boot_id: String,
+    /// When the next retry is due on `CLOCK_BOOTTIME`, beside the wall-clock
+    /// `next_attempt_epoch`; a retry is due when either says so. Set only for
+    /// a lease with a monotonic deadline, and only when the clock and the
+    /// boot id could be read when the retry was scheduled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_attempt_boottime_ns: Option<u64>,
+    /// The boot `next_attempt_boottime_ns` belongs to.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub next_attempt_boot_id: String,
+}
+
+/// The clocks a lease is created and expired against, read together.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LeaseNow {
+    pub wall_epoch: f64,
+    /// `CLOCK_BOOTTIME`; `None` when it cannot be read.
+    pub boottime_ns: Option<u64>,
+    /// This boot's id; `None` when it cannot be read.
+    pub boot_id: Option<String>,
+}
+
+impl LeaseNow {
+    /// The node's clocks now, with `wall_epoch` as the wall reading.
+    pub fn read(wall_epoch: f64) -> Self {
+        let boot_id = audit_chain::boot_id();
+        Self {
+            wall_epoch,
+            boottime_ns: audit_chain::boottime_ns(),
+            boot_id: if boot_id.is_empty() { None } else { Some(boot_id) },
+        }
+    }
+
+    /// Only a wall reading: a lease created from it has no monotonic
+    /// deadline, and a lease that has one counts as `boot_unknown`. Tests
+    /// only; the daemon always reads the node's clocks.
+    #[cfg(test)]
+    pub fn wall_only(wall_epoch: f64) -> Self {
+        Self {
+            wall_epoch,
+            boottime_ns: None,
+            boot_id: None,
+        }
+    }
+}
+
+/// Which deadline expired a lease (program plan section 4.3: the earlier of
+/// the wall and monotonic deadlines wins).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpiryClock {
+    /// The wall deadline passed and the monotonic one had not (or passed
+    /// materially later): the wall clock was stepped forward.
+    Wall,
+    /// The monotonic deadline passed on this boot.
+    Monotonic,
+    /// The monotonic deadline belongs to another boot: counted as passed.
+    BootChanged,
+    /// The boot id or `CLOCK_BOOTTIME` cannot be read now, or the lease names
+    /// no boot: the monotonic deadline cannot be checked, counted as passed.
+    BootUnknown,
+    /// The lease's own boot id or monotonic deadline is malformed (not as
+    /// the core writes them): it cannot be checked, counted as passed. Only
+    /// this lease is affected; the ledger is still read.
+    BootInvalid,
+    /// The lease has no monotonic deadline; its wall deadline passed.
+    Legacy,
+}
+
+impl ExpiryClock {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExpiryClock::Wall => "wall",
+            ExpiryClock::Monotonic => "monotonic",
+            ExpiryClock::BootChanged => "boot_changed",
+            ExpiryClock::BootUnknown => "boot_unknown",
+            ExpiryClock::BootInvalid => "boot_invalid",
+            ExpiryClock::Legacy => "legacy",
+        }
+    }
+}
+
+/// Whether the lease has expired at `now`, and on which clock; `None` while
+/// it has not. A monotonic deadline can only make a lease expire earlier than
+/// its wall deadline would, never later: a wall clock stepped backward no
+/// longer extends a lease, and one stepped forward still expires it early.
+pub fn lease_expiry(task: &ReleaseTask, now: &LeaseNow) -> Option<ExpiryClock> {
+    let wall_passed = task.due_epoch <= now.wall_epoch;
+    let Some(due_boottime_ns) = task.due_boottime_ns else {
+        return wall_passed.then_some(ExpiryClock::Legacy);
+    };
+    if due_boottime_ns > i64::MAX as u64 || (!task.due_boot_id.is_empty() && !valid_boot_id(&task.due_boot_id)) {
+        return Some(ExpiryClock::BootInvalid);
+    }
+    let (Some(boot_id), Some(boottime_ns)) = (now.boot_id.as_deref(), now.boottime_ns) else {
+        return Some(ExpiryClock::BootUnknown);
+    };
+    if task.due_boot_id.is_empty() {
+        return Some(ExpiryClock::BootUnknown);
+    }
+    if task.due_boot_id != boot_id {
+        return Some(ExpiryClock::BootChanged);
+    }
+    let monotonic_overshoot = i128::from(boottime_ns) - i128::from(due_boottime_ns);
+    match (wall_passed, monotonic_overshoot >= 0) {
+        (false, false) => None,
+        (true, false) => Some(ExpiryClock::Wall),
+        (false, true) => Some(ExpiryClock::Monotonic),
+        (true, true) => {
+            let wall_overshoot = ((now.wall_epoch - task.due_epoch) * 1e9) as i128;
+            if wall_overshoot > monotonic_overshoot + WALL_ATTRIBUTION_TOLERANCE_NS {
+                Some(ExpiryClock::Wall)
+            } else {
+                Some(ExpiryClock::Monotonic)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +219,9 @@ pub struct ReleaseOutcome {
     /// the rollback back; this field is how it is seen besides stderr.
     #[serde(default)]
     pub rollback_start_audit: String,
+    /// Which deadline expired the lease (`ExpiryClock::as_str`).
+    #[serde(default)]
+    pub expiry_clock: String,
 }
 
 #[derive(Debug, Clone)]
@@ -203,8 +340,9 @@ pub fn build_release_task(
     redirect_port: u16,
     delay_ms: u32,
     ttl_sec: u64,
-    now_epoch: f64,
+    now: &LeaseNow,
 ) -> Option<ReleaseTask> {
+    let now_epoch = now.wall_epoch;
     if !now_epoch.is_finite() || now_epoch < 0.0 {
         return None;
     }
@@ -229,6 +367,18 @@ pub fn build_release_task(
     if !due_epoch.is_finite() {
         return None;
     }
+    // Both deadlines, or only the wall one: a monotonic deadline is kept only
+    // with the boot it belongs to.
+    let (due_boottime_ns, due_boot_id) = match (now.boottime_ns, now.boot_id.as_deref()) {
+        (Some(boottime), Some(boot_id)) if valid_boot_id(boot_id) => {
+            let due = ttl_sec
+                .checked_mul(1_000_000_000)
+                .and_then(|ttl| boottime.checked_add(ttl))
+                .filter(|due| *due <= i64::MAX as u64)?;
+            (Some(due), boot_id.to_string())
+        }
+        _ => (None, String::new()),
+    };
     Some(ReleaseTask {
         task_id,
         trace_id: trace_id.to_string(),
@@ -254,6 +404,10 @@ pub fn build_release_task(
         status: "prepared".to_string(),
         attempts: 0,
         last_error: String::new(),
+        due_boottime_ns,
+        due_boot_id,
+        next_attempt_boottime_ns: None,
+        next_attempt_boot_id: String::new(),
     })
 }
 
@@ -383,34 +537,43 @@ fn transition_task(
     save_ledger(path, &mut ledger)
 }
 
-pub fn process_due_releases(path: &str, now_epoch: f64) -> Result<Vec<ReleaseOutcome>, String> {
+pub fn process_due_releases(path: &str, now: &LeaseNow) -> Result<Vec<ReleaseOutcome>, String> {
     let runner = SystemReleaseCommandRunner;
-    process_due_releases_with_runner(path, now_epoch, &runner)
+    process_due_releases_with_runner(path, now, &runner)
 }
 
 pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
     path: &str,
-    now_epoch: f64,
+    now: &LeaseNow,
     runner: &R,
 ) -> Result<Vec<ReleaseOutcome>, String> {
+    let now_epoch = now.wall_epoch;
     validate_now(now_epoch)?;
     let mut ledger = load_ledger(path)?;
-    let candidates: Vec<String> = ledger
+    // The first attempt waits only for expiry. A lease with a monotonic
+    // deadline can expire before its wall deadline, and its
+    // next_attempt_epoch (equal to due_epoch until an attempt) would then
+    // hold the first attempt back on the wall clock. A retry is due when its
+    // wall or its monotonic retry time says so (retry_due_on_boottime); a
+    // legacy lease keeps exactly its old rule.
+    let candidates: Vec<(String, ExpiryClock)> = ledger
         .tasks
         .iter()
-        .filter(|task| {
-            eligible_status(&task.status)
-                && task.due_epoch <= now_epoch
-                && task.next_attempt_epoch <= now_epoch
+        .filter(|task| eligible_status(&task.status))
+        .filter_map(|task| {
+            let clock = lease_expiry(task, now)?;
+            let attempt_due = task.next_attempt_epoch <= now_epoch
+                || (task.attempts == 0 && clock != ExpiryClock::Legacy)
+                || retry_due_on_boottime(task, now);
+            attempt_due.then(|| (task.task_id.clone(), clock))
         })
-        .map(|task| task.task_id.clone())
         .collect();
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
 
     let mut outcomes = Vec::new();
-    for task_id in candidates {
+    for (task_id, expiry_clock) in candidates {
         let current = match ledger.tasks.iter().find(|task| task.task_id == task_id) {
             Some(task) if eligible_status(&task.status) => task.clone(),
             _ => continue,
@@ -438,7 +601,7 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
                         task.updated_epoch = now_epoch;
                         task.last_error = format!("superseded_by:{newer_id}");
                     }
-                    outcomes.push(outcome_for(
+                    let mut outcome = outcome_for(
                         &current,
                         now_epoch,
                         "superseded",
@@ -447,7 +610,9 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
                         0,
                         Vec::new(),
                         json!({"verified": false, "reason": "newer_throttle_owner_exists"}),
-                    ));
+                    );
+                    outcome.expiry_clock = expiry_clock.as_str().to_string();
+                    outcomes.push(outcome);
                     continue;
                 }
                 if same_handle && matches!(newer_status.as_str(), "prepared" | "uncertain") {
@@ -459,9 +624,9 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
                         task.updated_epoch = now_epoch;
                         task.attempts = task.attempts.saturating_add(1);
                         task.last_error = format!("ambiguous_newer_owner:{newer_id}:{newer_status}");
-                        task.next_attempt_epoch = now_epoch + retry_delay_seconds(task.attempts);
+                        schedule_retry(task, now);
                     }
-                    outcomes.push(outcome_for(
+                    let mut outcome = outcome_for(
                         &current,
                         now_epoch,
                         "retry_pending",
@@ -475,7 +640,9 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
                             "newer_task_id": newer_id,
                             "newer_status": newer_status,
                         }),
-                    ));
+                    );
+                    outcome.expiry_clock = expiry_clock.as_str().to_string();
+                    outcomes.push(outcome);
                     continue;
                 }
             }
@@ -485,7 +652,7 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
         // first rollback command runs. A failure to write it is reported but
         // never holds the rollback back: releasing the lease is the safe
         // direction, and a missing record is what the SO-04 harness detects.
-        let start_audit = match record_rollback_start(path, &current) {
+        let start_audit = match record_rollback_start(path, &current, expiry_clock) {
             Ok(()) => "recorded".to_string(),
             Err(error) => {
                 eprintln!(
@@ -508,14 +675,16 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
                     task.status = "released".to_string();
                     task.last_error.clear();
                     task.next_attempt_epoch = now_epoch;
+                    task.next_attempt_boottime_ns = None;
+                    task.next_attempt_boot_id.clear();
                 }
                 Ok(outcome) => {
                     task.last_error = bounded_error(&outcome.errors.join("; "));
-                    task.next_attempt_epoch = now_epoch + retry_delay_seconds(task.attempts);
+                    schedule_retry(task, now);
                 }
                 Err(error) => {
                     task.last_error = bounded_error(error);
-                    task.next_attempt_epoch = now_epoch + retry_delay_seconds(task.attempts);
+                    schedule_retry(task, now);
                 }
             }
         }
@@ -533,6 +702,7 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
             ),
         };
         outcome.rollback_start_audit = start_audit;
+        outcome.expiry_clock = expiry_clock.as_str().to_string();
         outcomes.push(outcome);
     }
     save_ledger(path, &mut ledger)?;
@@ -554,12 +724,15 @@ pub fn rollback_audit_path(ledger_path: &str) -> PathBuf {
 /// Append and fsync the `rollback_started` record naming this lease
 /// (`release_task_id`) and the decision it came from (`trace_id`).
 ///
-/// Instants are integer nanoseconds: `lease_due_epoch_ns` is the lease's own
-/// declared expiry (wall clock, as the ledger declares it), and
-/// `started_monotonic_ns` / `started_wall_epoch_ns` are read together just
-/// before the record is written, on `CLOCK_MONOTONIC` and the wall clock.
-fn record_rollback_start(ledger_path: &str, task: &ReleaseTask) -> Result<(), String> {
+/// Instants are integer nanoseconds: `lease_due_epoch_ns` and
+/// `lease_due_boottime_ns` are the lease's own declared deadlines on the wall
+/// clock and `CLOCK_BOOTTIME` (null when the lease has none), and
+/// `started_monotonic_ns` / `started_boottime_ns` / `started_wall_epoch_ns`
+/// are read together just before the record is written. `expiry_clock` names
+/// the deadline that expired the lease.
+fn record_rollback_start(ledger_path: &str, task: &ReleaseTask, expiry_clock: ExpiryClock) -> Result<(), String> {
     let monotonic = audit_chain::monotonic_ns();
+    let boottime = audit_chain::boottime_ns();
     let wall = audit_chain::wall_epoch_ns();
     let due_ns = task.due_epoch * 1e9;
     let lease_due_epoch_ns = if due_ns.is_finite() && due_ns >= 0.0 && due_ns < i64::MAX as f64 {
@@ -580,8 +753,23 @@ fn record_rollback_start(ledger_path: &str, task: &ReleaseTask) -> Result<(), St
     fields.insert("trigger".into(), json!("lease_expired"));
     fields.insert("attempt".into(), json!(u64::from(task.attempts) + 1));
     fields.insert("lease_due_epoch_ns".into(), lease_due_epoch_ns);
-    fields.insert("lease_clock".into(), json!("wall_clock"));
+    fields.insert(
+        "lease_clock".into(),
+        json!(if task.due_boottime_ns.is_some() { "earlier_of_wall_clock_and_boottime" } else { "wall_clock" }),
+    );
+    fields.insert("lease_due_boottime_ns".into(), task.due_boottime_ns.map(Value::from).unwrap_or(Value::Null));
+    // A malformed boot id is not copied into the chain (it is bounded only by
+    // the ledger size); the record says it was malformed instead.
+    let lease_boot_id = if task.due_boot_id.is_empty() || valid_boot_id(&task.due_boot_id) {
+        task.due_boot_id.as_str()
+    } else {
+        "invalid"
+    };
+    fields.insert("lease_boot_id".into(), json!(lease_boot_id));
+    fields.insert("expiry_clock".into(), json!(expiry_clock.as_str()));
     fields.insert("started_monotonic_ns".into(), monotonic.map(Value::from).unwrap_or(Value::Null));
+    fields.insert("started_boottime_ns".into(), boottime.map(Value::from).unwrap_or(Value::Null));
+    fields.insert("boottime_clock".into(), json!("CLOCK_BOOTTIME"));
     fields.insert("started_wall_epoch_ns".into(), wall.map(Value::from).unwrap_or(Value::Null));
     fields.insert("monotonic_clock".into(), json!("CLOCK_MONOTONIC"));
     fields.insert("boot_id".into(), json!(audit_chain::boot_id()));
@@ -1024,7 +1212,55 @@ fn outcome_for(
         errors,
         postcondition,
         rollback_start_audit: "not_applicable".to_string(),
+        expiry_clock: String::new(),
     }
+}
+
+/// Schedule the next retry after the backoff for `task.attempts` (at least
+/// 2 s), on the wall clock and, for a lease with a monotonic deadline, on
+/// `CLOCK_BOOTTIME` with the boot it belongs to. Either clock can make the
+/// retry due, so a wall clock stepped back cannot hold it past its backoff.
+/// The wall retry time may then lie before the task's creation, which
+/// `validate_task` allows once an attempt has been made.
+fn schedule_retry(task: &mut ReleaseTask, now: &LeaseNow) {
+    let delay = retry_delay_seconds(task.attempts);
+    task.next_attempt_epoch = now.wall_epoch + delay;
+    let monotonic = match (task.due_boottime_ns, now.boottime_ns, now.boot_id.as_deref()) {
+        (Some(_), Some(boottime), Some(boot_id)) if valid_boot_id(boot_id) => boottime
+            .checked_add(delay as u64 * 1_000_000_000)
+            .filter(|at| *at <= i64::MAX as u64)
+            .map(|at| (at, boot_id.to_string())),
+        _ => None,
+    };
+    match monotonic {
+        Some((at, boot_id)) => {
+            task.next_attempt_boottime_ns = Some(at);
+            task.next_attempt_boot_id = boot_id;
+        }
+        None => {
+            task.next_attempt_boottime_ns = None;
+            task.next_attempt_boot_id.clear();
+        }
+    }
+}
+
+/// Whether a retry is due on `CLOCK_BOOTTIME`. In the boot it was scheduled
+/// in, it is due once its time has passed; in another boot it is due at once
+/// (the attempt then schedules the next retry in this boot, so this fires
+/// once per boot, never every sweep). With no monotonic retry time, or when
+/// the boot id or the clock cannot be read now, only the wall retry time
+/// counts: making it due at once would retry on every sweep.
+fn retry_due_on_boottime(task: &ReleaseTask, now: &LeaseNow) -> bool {
+    let Some(at) = task.next_attempt_boottime_ns else {
+        return false;
+    };
+    let (Some(boot_id), Some(boottime)) = (now.boot_id.as_deref(), now.boottime_ns) else {
+        return false;
+    };
+    if task.next_attempt_boot_id != boot_id {
+        return true;
+    }
+    boottime >= at
 }
 
 fn retry_delay_seconds(attempts: u32) -> f64 {
@@ -1143,9 +1379,17 @@ fn validate_task(task: &ReleaseTask) -> Result<(), String> {
     ] {
         validate_now(value)?;
     }
-    if task.due_epoch < task.created_epoch || task.next_attempt_epoch < task.created_epoch {
+    // Before any attempt the next attempt is the expiry itself. After one, it
+    // is the wall clock at that attempt plus the backoff, and the wall clock
+    // may have been stepped back past the task's creation by then.
+    if task.due_epoch < task.created_epoch
+        || (task.attempts == 0 && task.next_attempt_epoch < task.created_epoch)
+    {
         return Err("release task has impossible time ordering".to_string());
     }
+    // A malformed boot id or monotonic deadline does not reject the ledger
+    // (that would hold every lease back); lease_expiry counts that lease's
+    // monotonic deadline as passed (`boot_invalid`).
     if task.source_ip.parse::<IpAddr>().is_err() {
         return Err("release task has invalid source IP".to_string());
     }
@@ -1173,6 +1417,12 @@ fn validate_task(task: &ReleaseTask) -> Result<(), String> {
         return Err("release task has invalid redirect ports".to_string());
     }
     Ok(())
+}
+
+fn valid_boot_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_BOOT_ID_LEN
+        && value.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-')
 }
 
 fn temp_path(destination: &Path) -> PathBuf {
@@ -1346,11 +1596,11 @@ mod tests {
     #[test]
     fn task_identity_is_stable_and_burst_uses_iproute2_size_semantics() {
         let one = build_release_task(
-            "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 300, 100.0,
+            "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 300, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         let two = build_release_task(
-            "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 300, 100.0,
+            "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 300, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         assert_eq!(one.task_id, two.task_id);
@@ -1363,11 +1613,11 @@ mod tests {
     fn duplicate_prepare_blocks_replayed_apply_and_does_not_extend_ttl() {
         let path = test_path("ledger.json");
         let first = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         let replay = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, 200.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &LeaseNow::wall_only(200.0),
         )
         .unwrap();
         prepare_release_task(&path, &first).unwrap();
@@ -1382,13 +1632,13 @@ mod tests {
     fn terminal_identity_is_retained_for_replay_guard() {
         let path = test_path("ledger.json");
         let task = build_release_task(
-            "trace-retained", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+            "trace-retained", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
         cancel_release_task(&path, &task.task_id, "test", 100.5).unwrap();
         let replay = build_release_task(
-            "trace-retained", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 200.0,
+            "trace-retained", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, &LeaseNow::wall_only(200.0),
         )
         .unwrap();
         assert!(prepare_release_task(&path, &replay).is_err());
@@ -1401,7 +1651,7 @@ mod tests {
     fn terminal_task_cannot_be_reactivated() {
         let path = test_path("ledger.json");
         let task = build_release_task(
-            "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 1, 100.0,
+            "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 1, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
@@ -1413,11 +1663,11 @@ mod tests {
     fn throttle_activation_supersedes_only_older_throttle_owner() {
         let path = test_path("ledger.json");
         let first = build_release_task(
-            "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 300, 100.0,
+            "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 300, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         let second = build_release_task(
-            "trace-b", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 300, 110.0,
+            "trace-b", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 300, &LeaseNow::wall_only(110.0),
         )
         .unwrap();
         prepare_release_task(&path, &first).unwrap();
@@ -1449,11 +1699,11 @@ mod tests {
     fn ambiguous_same_handle_newer_prepared_task_defers_old_throttle_release() {
         let path = test_path("ledger.json");
         let old = build_release_task(
-            "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, 100.0,
+            "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         let mut newer = build_release_task(
-            "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, 105.0,
+            "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, &LeaseNow::wall_only(105.0),
         )
         .unwrap();
         newer.tc_handle = old.tc_handle.clone();
@@ -1461,7 +1711,7 @@ mod tests {
         activate_release_task(&path, &old.task_id, 101.0).unwrap();
         prepare_release_task(&path, &newer).unwrap();
         let runner = FakeRunner::new(Vec::new());
-        let outcomes = process_due_releases_with_runner(&path, 111.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(111.0), &runner).unwrap();
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].status, "retry_pending");
         assert_eq!(outcomes[0].result, "ambiguous_newer_throttle_owner");
@@ -1472,11 +1722,11 @@ mod tests {
     fn nft_tasks_with_same_scope_remain_independently_releasable() {
         let path = test_path("ledger.json");
         let first = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         let second = build_release_task(
-            "trace-b", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, 110.0,
+            "trace-b", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &LeaseNow::wall_only(110.0),
         )
         .unwrap();
         prepare_release_task(&path, &first).unwrap();
@@ -1498,12 +1748,12 @@ mod tests {
     fn prepared_task_survives_restart_and_absent_owned_state_closes_release() {
         let path = test_path("ledger.json");
         let task = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
         let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
-        let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].status, "released");
         assert_eq!(outcomes[0].result, "owned_state_already_absent");
@@ -1514,12 +1764,12 @@ mod tests {
     fn no_due_task_performs_no_runner_call_and_no_lifecycle_change() {
         let path = test_path("ledger.json");
         let task = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
         let runner = FakeRunner::new(Vec::new());
-        let outcomes = process_due_releases_with_runner(&path, 101.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(101.0), &runner).unwrap();
         assert!(outcomes.is_empty());
         assert!(runner.calls.lock().unwrap().is_empty());
         assert_eq!(load_ledger(&path).unwrap().tasks[0].status, "prepared");
@@ -1529,7 +1779,7 @@ mod tests {
     fn nft_release_deletes_only_owned_handle_and_verifies_absence_with_noise_expr() {
         let path = test_path("ledger.json");
         let task = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
@@ -1553,7 +1803,7 @@ mod tests {
             }),
             ok_json(json!({"nftables": []})),
         ]);
-        let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
         assert_eq!(outcomes[0].status, "released");
         let calls = runner.calls.lock().unwrap();
         assert!(calls.iter().any(|call| {
@@ -1567,7 +1817,7 @@ mod tests {
     fn ownership_tag_semantic_mismatch_never_deletes_rule() {
         let path = test_path("ledger.json");
         let task = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
@@ -1582,7 +1832,7 @@ mod tests {
             ]
         }}]});
         let runner = FakeRunner::new(vec![ok_json(poisoned)]);
-        let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
         assert_eq!(outcomes[0].status, "retry_pending");
         assert_eq!(runner.calls.lock().unwrap().len(), 1);
     }
@@ -1591,7 +1841,7 @@ mod tests {
     fn tc_release_never_deletes_different_owner_handle() {
         let path = test_path("ledger.json");
         let task = build_release_task(
-            "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 1, 100.0,
+            "trace-a", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 1, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
@@ -1600,7 +1850,7 @@ mod tests {
             "kind": "tbf", "root": true, "handle": "ffff:", "rate": 32000,
             "burst": 4096, "lat": 1_000_000
         }]))]);
-        let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
         assert_eq!(outcomes[0].status, "released");
         assert_eq!(outcomes[0].result, "owned_state_already_absent");
         assert_eq!(runner.calls.lock().unwrap().len(), 1);
@@ -1622,7 +1872,7 @@ mod tests {
     #[test]
     fn malformed_nonfinite_or_unknown_status_ledger_is_rejected() {
         let task = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         let mut bad = task.clone();
@@ -1671,7 +1921,7 @@ mod tests {
     fn rollback_start_record_is_durable_before_the_first_rollback_command() {
         let path = test_path("ledger.json");
         let task = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
@@ -1682,7 +1932,7 @@ mod tests {
             calls: Mutex::new(0),
         };
         audit_chain::SYNC_CALLS.with(|c| c.set(0));
-        let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
         assert_eq!(outcomes.len(), 1);
         assert!(*runner.calls.lock().unwrap() >= 1);
         let (present, syncs) = runner.seen_at_first_call.lock().unwrap().unwrap();
@@ -1697,13 +1947,13 @@ mod tests {
             .to_string_lossy()
             .ends_with("/release-ledger.rollback-audit.jsonl"));
         let task = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
         let before = audit_chain::monotonic_ns().unwrap();
         let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
-        let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
         assert_eq!(outcomes[0].rollback_start_audit, "recorded");
         let after = audit_chain::monotonic_ns().unwrap();
         let rows = rollback_rows(&path);
@@ -1733,15 +1983,15 @@ mod tests {
     fn each_retry_records_its_own_start_on_the_same_chain() {
         let path = test_path("ledger.json");
         let task = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
         let runner = FakeRunner::new(vec![Err("nft unavailable".to_string())]);
-        let first = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        let first = process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
         assert_eq!(first[0].status, "retry_pending");
         let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
-        process_due_releases_with_runner(&path, 200.0, &runner).unwrap();
+        process_due_releases_with_runner(&path, &LeaseNow::wall_only(200.0), &runner).unwrap();
         let rows = rollback_rows(&path);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["attempt"], json!(1));
@@ -1753,11 +2003,11 @@ mod tests {
     fn a_superseded_throttle_writes_no_rollback_start_record() {
         let path = test_path("ledger.json");
         let mut old = build_release_task(
-            "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, 100.0,
+            "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         let mut newer = build_release_task(
-            "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, 105.0,
+            "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, &LeaseNow::wall_only(105.0),
         )
         .unwrap();
         // Both active, as a ledger written before activation superseded the
@@ -1768,7 +2018,7 @@ mod tests {
         ledger.tasks = vec![old.clone(), newer];
         save_ledger(&path, &mut ledger).unwrap();
         let runner = FakeRunner::new(Vec::new());
-        let outcomes = process_due_releases_with_runner(&path, 111.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(111.0), &runner).unwrap();
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].status, "superseded");
         assert_eq!(outcomes[0].rollback_start_audit, "not_applicable");
@@ -1780,11 +2030,11 @@ mod tests {
     fn an_ambiguous_deferred_throttle_writes_no_rollback_start_record() {
         let path = test_path("ledger.json");
         let old = build_release_task(
-            "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, 100.0,
+            "trace-old", "throttle", "br0", "10.0.0.8", 22, 12222, 1000, 10, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         let mut newer = build_release_task(
-            "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, 105.0,
+            "trace-new", "throttle", "br0", "10.0.0.9", 22, 12222, 1000, 100, &LeaseNow::wall_only(105.0),
         )
         .unwrap();
         newer.tc_handle = old.tc_handle.clone();
@@ -1792,7 +2042,7 @@ mod tests {
         activate_release_task(&path, &old.task_id, 101.0).unwrap();
         prepare_release_task(&path, &newer).unwrap();
         let runner = FakeRunner::new(Vec::new());
-        let outcomes = process_due_releases_with_runner(&path, 111.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(111.0), &runner).unwrap();
         assert_eq!(outcomes[0].result, "ambiguous_newer_throttle_owner");
         assert_eq!(outcomes[0].rollback_start_audit, "not_applicable");
         assert!(rollback_rows(&path).is_empty(), "a deferred lease issued no rollback and must not claim one");
@@ -1802,12 +2052,12 @@ mod tests {
     fn nothing_due_writes_no_rollback_start_record() {
         let path = test_path("ledger.json");
         let task = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
         let runner = FakeRunner::new(Vec::new());
-        process_due_releases_with_runner(&path, 101.0, &runner).unwrap();
+        process_due_releases_with_runner(&path, &LeaseNow::wall_only(101.0), &runner).unwrap();
         assert!(!rollback_audit_path(&path).exists());
     }
 
@@ -1815,17 +2065,370 @@ mod tests {
     fn an_unwritable_rollback_audit_chain_never_holds_the_rollback_back() {
         let path = test_path("ledger.json");
         let task = build_release_task(
-            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, 100.0,
+            "trace-a", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         prepare_release_task(&path, &task).unwrap();
         // A directory where the chain file should be: the append fails.
         fs::create_dir_all(rollback_audit_path(&path)).unwrap();
         let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
-        let outcomes = process_due_releases_with_runner(&path, 102.0, &runner).unwrap();
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
         assert_eq!(runner.calls.lock().unwrap().len(), 1);
         assert_eq!(outcomes[0].status, "released");
         // The failure is visible in the outcome, not only on stderr.
         assert!(outcomes[0].rollback_start_audit.starts_with("failed:"), "{}", outcomes[0].rollback_start_audit);
+    }
+
+    // ------------------------------------------------ monotonic lease deadline
+
+    const BOOT_A: &str = "0f0e0d0c-0b0a-4908-8706-050403020100";
+    const BOOT_B: &str = "1f1e1d1c-1b1a-4918-9716-151413121110";
+    const SEC: u64 = 1_000_000_000;
+
+    fn clocks(wall_epoch: f64, boottime_s: u64, boot_id: &str) -> LeaseNow {
+        LeaseNow {
+            wall_epoch,
+            boottime_ns: Some(boottime_s * SEC),
+            boot_id: Some(boot_id.to_string()),
+        }
+    }
+
+    /// An isolate lease created at wall 100 s / boottime 1000 s on BOOT_A
+    /// with a 300 s TTL: due at wall 400 s or boottime 1300 s.
+    fn monotonic_lease(path: &str) -> ReleaseTask {
+        let task = build_release_task(
+            "trace-mono", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &clocks(100.0, 1000, BOOT_A),
+        )
+        .unwrap();
+        prepare_release_task(path, &task).unwrap();
+        task
+    }
+
+    fn released_runner() -> FakeRunner {
+        FakeRunner::new(vec![ok_json(json!({"nftables": []}))])
+    }
+
+    #[test]
+    fn a_lease_records_both_deadlines_and_the_boot_they_belong_to() {
+        let task = build_release_task(
+            "trace-mono", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &clocks(100.0, 1000, BOOT_A),
+        )
+        .unwrap();
+        assert_eq!(task.due_epoch, 400.0);
+        assert_eq!(task.due_boottime_ns, Some(1300 * SEC));
+        assert_eq!(task.due_boot_id, BOOT_A);
+        // Without a readable boot identity no monotonic deadline is made up.
+        let no_boot = LeaseNow { boot_id: None, ..clocks(100.0, 1000, BOOT_A) };
+        let task = build_release_task("trace-mono", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &no_boot).unwrap();
+        assert_eq!((task.due_boottime_ns, task.due_boot_id.as_str()), (None, ""));
+        let no_clock = LeaseNow { boottime_ns: None, ..clocks(100.0, 1000, BOOT_A) };
+        let task = build_release_task("trace-mono", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &no_clock).unwrap();
+        assert_eq!((task.due_boottime_ns, task.due_boot_id.as_str()), (None, ""));
+    }
+
+    #[test]
+    fn the_monotonic_deadline_wins_when_it_passes_before_the_wall_one() {
+        let path = test_path("ledger.json");
+        let task = monotonic_lease(&path);
+        // Boottime 1300 s has passed; the wall clock (stepped back 60 s) says 340 s.
+        assert_eq!(lease_expiry(&task, &clocks(340.0, 1299, BOOT_A)), None);
+        assert_eq!(lease_expiry(&task, &clocks(340.0, 1300, BOOT_A)), Some(ExpiryClock::Monotonic));
+        let runner = released_runner();
+        let outcomes = process_due_releases_with_runner(&path, &clocks(340.0, 1300, BOOT_A), &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "released");
+        assert_eq!(outcomes[0].expiry_clock, "monotonic");
+        let row = &rollback_rows(&path)[0];
+        assert_eq!(row["expiry_clock"], json!("monotonic"));
+        assert_eq!(row["lease_clock"], json!("earlier_of_wall_clock_and_boottime"));
+        assert_eq!(row["lease_due_boottime_ns"], json!(1300 * SEC));
+        assert_eq!(row["lease_due_epoch_ns"], json!(400 * SEC));
+        assert_eq!(row["lease_boot_id"], json!(BOOT_A));
+        assert_eq!(row["boottime_clock"], json!("CLOCK_BOOTTIME"));
+    }
+
+    #[test]
+    fn the_wall_deadline_wins_when_it_passes_before_the_monotonic_one() {
+        let path = test_path("ledger.json");
+        let task = monotonic_lease(&path);
+        // The wall clock was stepped forward: wall 401 s, boottime only 1200 s.
+        assert_eq!(lease_expiry(&task, &clocks(399.0, 1200, BOOT_A)), None);
+        assert_eq!(lease_expiry(&task, &clocks(401.0, 1200, BOOT_A)), Some(ExpiryClock::Wall));
+        let runner = released_runner();
+        let outcomes = process_due_releases_with_runner(&path, &clocks(401.0, 1200, BOOT_A), &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].expiry_clock, "wall");
+        assert_eq!(rollback_rows(&path)[0]["expiry_clock"], json!("wall"));
+    }
+
+    #[test]
+    fn both_passed_names_the_wall_clock_only_when_it_fired_materially_earlier() {
+        let path = test_path("ledger.json");
+        let task = monotonic_lease(&path);
+        // Both passed by about the same amount: the same instant read twice.
+        assert_eq!(lease_expiry(&task, &clocks(400.04, 1300, BOOT_A)), Some(ExpiryClock::Monotonic));
+        // The wall deadline passed 10 s before the monotonic one.
+        assert_eq!(lease_expiry(&task, &clocks(410.0, 1300, BOOT_A)), Some(ExpiryClock::Wall));
+        // The monotonic deadline passed first.
+        assert_eq!(lease_expiry(&task, &clocks(401.0, 1310, BOOT_A)), Some(ExpiryClock::Monotonic));
+    }
+
+    #[test]
+    fn a_wall_clock_stepped_backward_no_longer_extends_the_lease() {
+        let path = test_path("ledger.json");
+        let task = monotonic_lease(&path);
+        // The wall clock was stepped back an hour, to before the lease was
+        // created. Wall-only, the lease would now last another hour.
+        let before = clocks(40.0, 1299, BOOT_A);
+        let runner = FakeRunner::new(Vec::new());
+        assert!(process_due_releases_with_runner(&path, &before, &runner).unwrap().is_empty());
+        assert!(runner.calls.lock().unwrap().is_empty());
+        let mut wall_only = task.clone();
+        wall_only.due_boottime_ns = None;
+        assert_eq!(lease_expiry(&wall_only, &clocks(40.0, 1300, BOOT_A)), None);
+        // On the monotonic deadline it expires all the same.
+        let runner = FakeRunner::new(vec![Err("nft unavailable".to_string())]);
+        let outcomes = process_due_releases_with_runner(&path, &clocks(40.0, 1300, BOOT_A), &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].expiry_clock, "monotonic");
+        assert_eq!(outcomes[0].status, "retry_pending");
+        // The ledger stays loadable although the wall retry time (42 s) lies
+        // before the task's creation (100 s).
+        let ledger = load_ledger(&path).unwrap();
+        assert_eq!(ledger.tasks[0].next_attempt_epoch, 42.0);
+        let runner = released_runner();
+        let outcomes = process_due_releases_with_runner(&path, &clocks(42.0, 1302, BOOT_A), &runner).unwrap();
+        assert_eq!(outcomes[0].status, "released");
+        let ledger = load_ledger(&path).unwrap();
+        assert_eq!(ledger.tasks[0].status, "released");
+    }
+
+    #[test]
+    fn a_changed_boot_id_expires_the_lease_at_once() {
+        let path = test_path("ledger.json");
+        let task = monotonic_lease(&path);
+        // After a reboot boottime restarts near zero; the wall deadline is far off.
+        let rebooted = clocks(101.0, 5, BOOT_B);
+        assert_eq!(lease_expiry(&task, &rebooted), Some(ExpiryClock::BootChanged));
+        let runner = released_runner();
+        let outcomes = process_due_releases_with_runner(&path, &rebooted, &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].expiry_clock, "boot_changed");
+        assert_eq!(rollback_rows(&path)[0]["expiry_clock"], json!("boot_changed"));
+    }
+
+    #[test]
+    fn an_unreadable_boot_id_or_clock_expires_the_lease_at_once() {
+        let path = test_path("ledger.json");
+        let task = monotonic_lease(&path);
+        let no_boot = LeaseNow { boot_id: None, ..clocks(101.0, 1001, BOOT_A) };
+        assert_eq!(lease_expiry(&task, &no_boot), Some(ExpiryClock::BootUnknown));
+        let no_clock = LeaseNow { boottime_ns: None, ..clocks(101.0, 1001, BOOT_A) };
+        assert_eq!(lease_expiry(&task, &no_clock), Some(ExpiryClock::BootUnknown));
+        assert_eq!(lease_expiry(&task, &LeaseNow::wall_only(101.0)), Some(ExpiryClock::BootUnknown));
+        // A deadline that names no boot cannot be checked either.
+        let mut unbound = task.clone();
+        unbound.due_boot_id.clear();
+        assert_eq!(lease_expiry(&unbound, &clocks(101.0, 1001, BOOT_A)), Some(ExpiryClock::BootUnknown));
+        let runner = released_runner();
+        let outcomes = process_due_releases_with_runner(&path, &no_boot, &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].expiry_clock, "boot_unknown");
+    }
+
+    #[test]
+    fn a_legacy_lease_keeps_wall_clock_only_expiry_and_says_so() {
+        let path = test_path("ledger.json");
+        let task = build_release_task(
+            "trace-legacy", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &LeaseNow::wall_only(100.0),
+        )
+        .unwrap();
+        // A ledger entry written before the monotonic fields existed.
+        let mut raw = serde_json::to_value(&task).unwrap();
+        assert!(raw.get("due_boottime_ns").is_none() && raw.get("due_boot_id").is_none());
+        raw["status"] = json!("active");
+        fs::write(&path, json!({"schema_version": LEDGER_SCHEMA_VERSION, "tasks": [raw]}).to_string()).unwrap();
+        let legacy = load_ledger(&path).unwrap().tasks[0].clone();
+        assert_eq!((legacy.due_boottime_ns, legacy.due_boot_id.as_str()), (None, ""));
+        // No deadline is invented: neither a reboot nor any boottime expires it.
+        assert_eq!(lease_expiry(&legacy, &clocks(399.0, 99_999, BOOT_B)), None);
+        assert_eq!(lease_expiry(&legacy, &LeaseNow::wall_only(399.0)), None);
+        let runner = FakeRunner::new(Vec::new());
+        assert!(process_due_releases_with_runner(&path, &clocks(399.0, 99_999, BOOT_B), &runner).unwrap().is_empty());
+        let runner = released_runner();
+        let outcomes = process_due_releases_with_runner(&path, &clocks(400.0, 99_999, BOOT_B), &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].expiry_clock, "legacy");
+        let row = &rollback_rows(&path)[0];
+        assert_eq!(row["expiry_clock"], json!("legacy"));
+        assert_eq!(row["lease_clock"], json!("wall_clock"));
+        assert_eq!(row["lease_due_boottime_ns"], Value::Null);
+        // Saved again, it is still a legacy entry.
+        let saved: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(saved["tasks"][0].get("due_boottime_ns").is_none());
+    }
+
+    #[test]
+    fn a_malformed_boot_id_or_monotonic_deadline_expires_only_that_lease_at_once() {
+        let path = test_path("ledger.json");
+        let good = build_release_task(
+            "trace-good", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &clocks(100.0, 1000, BOOT_A),
+        )
+        .unwrap();
+        let mut bad_id = build_release_task(
+            "trace-bad-id", "isolate", "br0", "10.0.0.9", 22, 12222, 0, 300, &clocks(100.0, 1000, BOOT_A),
+        )
+        .unwrap();
+        bad_id.due_boot_id = "not a boot id".repeat(1000);
+        let mut bad_deadline = build_release_task(
+            "trace-bad-due", "isolate", "br0", "10.0.0.10", 22, 12222, 0, 300, &clocks(100.0, 1000, BOOT_A),
+        )
+        .unwrap();
+        bad_deadline.due_boottime_ns = Some(u64::MAX);
+        let now = clocks(101.0, 1001, BOOT_A);
+        assert_eq!(lease_expiry(&good, &now), None);
+        assert_eq!(lease_expiry(&bad_id, &now), Some(ExpiryClock::BootInvalid));
+        assert_eq!(lease_expiry(&bad_deadline, &now), Some(ExpiryClock::BootInvalid));
+        // The ledger is still read: the malformed leases are rolled back, the
+        // well-formed one is left alone.
+        let mut ledger = ReleaseLedger::default();
+        ledger.tasks = vec![good.clone(), bad_id.clone(), bad_deadline.clone()];
+        save_ledger(&path, &mut ledger).unwrap();
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []})), ok_json(json!({"nftables": []}))]);
+        let outcomes = process_due_releases_with_runner(&path, &now, &runner).unwrap();
+        let ids: Vec<&str> = outcomes.iter().map(|o| o.release_task_id.as_str()).collect();
+        assert_eq!(ids, vec![bad_id.task_id.as_str(), bad_deadline.task_id.as_str()]);
+        assert!(outcomes.iter().all(|o| o.expiry_clock == "boot_invalid"));
+        let rows = rollback_rows(&path);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r["expiry_clock"] == json!("boot_invalid")));
+        // The malformed id is not copied into the chain.
+        assert_eq!(rows[0]["lease_boot_id"], json!("invalid"));
+        assert_eq!(rows[1]["lease_boot_id"], json!(BOOT_A));
+    }
+
+    /// A failed first attempt of a lease expired on its monotonic deadline,
+    /// with the wall clock stepped back an hour (to 40 s, before creation).
+    fn failed_after_backward_step(path: &str) -> ReleaseTask {
+        monotonic_lease(path);
+        let runner = FakeRunner::new(vec![Err("nft unavailable".to_string())]);
+        let outcomes = process_due_releases_with_runner(path, &clocks(40.0, 1300, BOOT_A), &runner).unwrap();
+        assert_eq!(outcomes[0].status, "retry_pending");
+        let task = load_ledger(path).unwrap().tasks[0].clone();
+        // Backoff after the first attempt: 2 s, on both clocks.
+        assert_eq!(task.next_attempt_epoch, 42.0);
+        assert_eq!(task.next_attempt_boottime_ns, Some(1302 * SEC));
+        assert_eq!(task.next_attempt_boot_id, BOOT_A);
+        task
+    }
+
+    #[test]
+    fn a_wall_clock_stepped_backward_never_delays_a_retry_beyond_its_backoff() {
+        let path = test_path("ledger.json");
+        failed_after_backward_step(&path);
+        // Before the backoff on either clock: no retry (no hot loop).
+        let runner = FakeRunner::new(Vec::new());
+        assert!(process_due_releases_with_runner(&path, &clocks(41.0, 1301, BOOT_A), &runner).unwrap().is_empty());
+        // The wall clock is stepped back again, by another hour: the retry is
+        // still due once the backoff has passed on CLOCK_BOOTTIME.
+        let runner = FakeRunner::new(Vec::new());
+        assert!(process_due_releases_with_runner(&path, &clocks(1.0, 1301, BOOT_A), &runner).unwrap().is_empty());
+        let runner = released_runner();
+        let outcomes = process_due_releases_with_runner(&path, &clocks(1.0, 1302, BOOT_A), &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "released");
+        assert_eq!(rollback_rows(&path).len(), 2);
+        let task = load_ledger(&path).unwrap().tasks[0].clone();
+        assert_eq!(task.status, "released");
+        assert_eq!(task.next_attempt_boottime_ns, None);
+    }
+
+    #[test]
+    fn a_retry_is_still_due_on_the_wall_clock() {
+        let path = test_path("ledger.json");
+        failed_after_backward_step(&path);
+        // CLOCK_BOOTTIME has not reached the retry time, the wall clock has.
+        let runner = released_runner();
+        let outcomes = process_due_releases_with_runner(&path, &clocks(42.0, 1301, BOOT_A), &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+    }
+
+    #[test]
+    fn a_retry_scheduled_in_another_boot_is_due_once_then_backs_off_again() {
+        let path = test_path("ledger.json");
+        failed_after_backward_step(&path);
+        let runner = FakeRunner::new(vec![Err("nft unavailable".to_string())]);
+        let outcomes = process_due_releases_with_runner(&path, &clocks(1.0, 5, BOOT_B), &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].expiry_clock, "boot_changed");
+        let task = load_ledger(&path).unwrap().tasks[0].clone();
+        assert_eq!(task.next_attempt_boot_id, BOOT_B);
+        assert_eq!(task.next_attempt_boottime_ns, Some((5 + 4) * SEC));
+        // The next retry waits for its backoff in the new boot.
+        let runner = FakeRunner::new(Vec::new());
+        assert!(process_due_releases_with_runner(&path, &clocks(1.0, 8, BOOT_B), &runner).unwrap().is_empty());
+        let runner = released_runner();
+        assert_eq!(process_due_releases_with_runner(&path, &clocks(1.0, 9, BOOT_B), &runner).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn with_no_readable_boot_a_retry_waits_for_its_wall_backoff_not_every_sweep() {
+        let path = test_path("ledger.json");
+        failed_after_backward_step(&path);
+        let unreadable = LeaseNow { boot_id: None, ..clocks(41.0, 1400, BOOT_A) };
+        let runner = FakeRunner::new(Vec::new());
+        assert!(process_due_releases_with_runner(&path, &unreadable, &runner).unwrap().is_empty());
+        // A retry scheduled while the boot cannot be read has no monotonic
+        // retry time, and is never due on every sweep.
+        let runner = FakeRunner::new(vec![Err("nft unavailable".to_string())]);
+        let unreadable = LeaseNow { boot_id: None, ..clocks(42.0, 1400, BOOT_A) };
+        assert_eq!(process_due_releases_with_runner(&path, &unreadable, &runner).unwrap().len(), 1);
+        let ledger = load_ledger(&path).unwrap();
+        assert_eq!(ledger.tasks[0].next_attempt_boottime_ns, None);
+        assert_eq!(ledger.tasks[0].next_attempt_epoch, 46.0);
+        let runner = FakeRunner::new(Vec::new());
+        assert!(process_due_releases_with_runner(&path, &clocks(43.0, 1500, BOOT_A), &runner).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_legacy_lease_gets_no_monotonic_retry_time() {
+        let path = test_path("ledger.json");
+        let task = build_release_task(
+            "trace-legacy", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 1, &LeaseNow::wall_only(100.0),
+        )
+        .unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        let runner = FakeRunner::new(vec![Err("nft unavailable".to_string())]);
+        process_due_releases_with_runner(&path, &clocks(102.0, 1000, BOOT_A), &runner).unwrap();
+        let task = load_ledger(&path).unwrap().tasks[0].clone();
+        assert_eq!((task.next_attempt_boottime_ns, task.next_attempt_boot_id.as_str()), (None, ""));
+        assert_eq!(task.next_attempt_epoch, 104.0);
+        let saved: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(saved["tasks"][0].get("next_attempt_boottime_ns").is_none());
+    }
+
+    #[test]
+    fn a_retry_time_before_creation_is_impossible_only_before_any_attempt() {
+        let mut task = build_release_task(
+            "trace-mono", "isolate", "br0", "10.0.0.8", 22, 12222, 0, 300, &clocks(100.0, 1000, BOOT_A),
+        )
+        .unwrap();
+        task.next_attempt_epoch = 42.0;
+        assert!(validate_task(&task).is_err());
+        task.attempts = 1;
+        assert!(validate_task(&task).is_ok());
+    }
+
+    #[test]
+    fn the_node_clocks_are_read_together() {
+        let now = LeaseNow::read(1.0);
+        if cfg!(target_os = "linux") {
+            assert!(now.boottime_ns.is_some());
+            if let Some(id) = &now.boot_id {
+                assert!(valid_boot_id(id), "{id}");
+            }
+        } else {
+            assert_eq!(now.boottime_ns, None);
+        }
     }
 }

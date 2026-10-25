@@ -121,6 +121,11 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "SO04-LEASE-EXPIRY-ON-WALL-CLOCK",
                 "SO04-HOSTILE-LOAD-UNDECLARED",
             ),
+            # A record may leave these out only when its samples show, by
+            # recomputation (GAP_CLOSERS), that the missing thing exists.
+            # SO04-LEASE-EXPIRY-ON-WALL-CLOCK: every lease expired on its
+            # monotonic deadline and every start is measured from it.
+            "gaps_closed_by_samples": ("SO04-LEASE-EXPIRY-ON-WALL-CLOCK",),
         },
         "rollback_completion": {
             "kind": "every_sample_max_elapsed",
@@ -182,6 +187,8 @@ SAMPLE_FIELDS: Dict[str, frozenset] = {
             "edge_reported_start_after_expiry_ms", "release_status", "release_result",
             "observed_before_expiry", "start_record_chain_line", "start_record_attempt",
             "edge_recorded_start_monotonic_ns", "start_record_before_outcome",
+            "sample_clock", "expiry_clock", "lease_due_boottime_ns", "lease_boot_id",
+            "start_record_boot_id", "edge_recorded_start_boottime_ns", "edge_recorded_start_wall_epoch_ns",
         )
     ),
     "SO-07": frozenset(
@@ -581,6 +588,61 @@ def _so04_observed_prerequisites(samples: Sequence[Mapping[str, Any]]) -> Dict[s
     }
 
 
+# release.rs WALL_ATTRIBUTION_TOLERANCE_NS: both deadlines passed, and the wall
+# one passed more than this much earlier, means the wall deadline fired.
+SO04_WALL_ATTRIBUTION_TOLERANCE_NS = 50_000_000
+
+
+def _int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def so04_expired_on_monotonic_deadline(sample: Mapping[str, Any]) -> bool:
+    """SO-04: this lease expired on its monotonic deadline, and the sample's
+    start is that deadline, on the clock the end was read on.
+
+    Recomputed from the observed fields, never from ``expiry_clock`` alone:
+    the core's own start stamp on ``CLOCK_BOOTTIME`` lies at or after the
+    lease's monotonic deadline and no later than the harness saw the record,
+    the boot the deadline belongs to is the boot the record was written in,
+    and the wall deadline did not pass materially earlier (a wall clock
+    stepped forward would have expired the lease first).
+    """
+
+    start, end = sample.get("start_monotonic_ns"), sample.get("end_monotonic_ns")
+    due_boot = sample.get("lease_due_boottime_ns")
+    edge_boot = sample.get("edge_recorded_start_boottime_ns")
+    edge_wall = sample.get("edge_recorded_start_wall_epoch_ns")
+    due_epoch = sample.get("due_epoch")
+    if not all(_int(v) for v in (start, end, due_boot, edge_boot, edge_wall)):
+        return False
+    if not isinstance(due_epoch, (int, float)) or isinstance(due_epoch, bool) or not (0 <= due_epoch < 1e12):
+        return False
+    boot = sample.get("lease_boot_id")
+    if not (isinstance(boot, str) and boot and sample.get("start_record_boot_id") == boot):
+        return False
+    if sample.get("sample_clock") != "CLOCK_BOOTTIME" or sample.get("expiry_clock") != "monotonic":
+        return False
+    if start != due_boot or not (due_boot <= edge_boot <= end):
+        return False
+    wall_overshoot = edge_wall - round(due_epoch * 1e9)
+    return wall_overshoot <= (edge_boot - due_boot) + SO04_WALL_ATTRIBUTION_TOLERANCE_NS
+
+
+def so04_monotonic_expiry_observed(samples: Sequence[Mapping[str, Any]]) -> bool:
+    """Every SO-04 sample expired on its monotonic deadline (see above)."""
+
+    items = list(samples)
+    return bool(items) and all(isinstance(s, dict) and so04_expired_on_monotonic_deadline(s) for s in items)
+
+
+# The recomputation that lets a record leave out a gap listed under
+# ``gaps_closed_by_samples``. A gap with no entry here can never be left out.
+GAP_CLOSERS = {
+    "SO04-LEASE-EXPIRY-ON-WALL-CLOCK": so04_monotonic_expiry_observed,
+}
+
+
 def _validate_sample_ids(samples: Sequence[Any], where: str, errors: List[str]) -> None:
     seen: Dict[str, int] = {}
     for sidx, sample in enumerate(samples):
@@ -616,7 +678,9 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
     invalidates the record, and for the verdict it counts as unmet / present,
     so leaving something out can only make the verdict worse. For SO-07 the violations
     and coverage, and for SO-04 the start-record ordering, are recomputed from
-    each sample's observed fields.
+    each sample's observed fields. A gap under ``gaps_closed_by_samples`` may
+    be left out only when its ``GAP_CLOSERS`` recomputation holds for every
+    sample.
     """
 
     errors: List[str] = []
@@ -722,8 +786,14 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                 effective_prereqs.append({"id": pid, "met": False})
         effective_gaps = [{"id": g["id"], "blocks_verdict": True} for g in declared_gaps]
         have_gaps = {g["id"] for g in declared_gaps}
+        dict_samples = [s for s in part["samples"] if isinstance(s, dict)]
+        closed_gaps = {
+            gid
+            for gid in spec.get("gaps_closed_by_samples", ())
+            if gid in GAP_CLOSERS and len(dict_samples) == len(part["samples"]) and GAP_CLOSERS[gid](dict_samples)
+        }
         for gid in spec["gaps"]:
-            if gid not in have_gaps:
+            if gid not in have_gaps and gid not in closed_gaps:
                 errors.append(f"{where}: mandatory gap {gid!r} omitted")
                 effective_gaps.append({"id": gid, "blocks_verdict": True})
         if objective == "SO-03" and part["name"] == "decision_durable_to_alert_enqueued":

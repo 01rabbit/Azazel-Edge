@@ -3,7 +3,7 @@ mod release;
 
 use release::{
     activate_release_task, build_release_task, cancel_release_task, mark_release_task_uncertain,
-    prepare_release_task, process_due_releases, ReleaseTask,
+    prepare_release_task, process_due_releases, LeaseNow, ReleaseTask,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -631,7 +631,7 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
         selected_decoy_port,
         effective_decision.delay_ms,
         cfg.defense_action_ttl_sec,
-        now_epoch(),
+        &LeaseNow::read(now_epoch()),
     );
     let plan = build_enforcement_plan_owned(
         ev,
@@ -1101,7 +1101,7 @@ fn process_line(cfg: &Config, line: &str) {
 }
 
 fn process_release_events(cfg: &Config) {
-    match process_due_releases(&cfg.defense_release_ledger_path, now_epoch()) {
+    match process_due_releases(&cfg.defense_release_ledger_path, &LeaseNow::read(now_epoch())) {
         Ok(outcomes) => {
             for outcome in outcomes {
                 let event = json!({
@@ -1619,7 +1619,7 @@ mod tests {
         let ev = sample_event();
         let decision = decide_defense(&ev);
         let task = build_release_task(
-            "trace-test", "isolate", "br0", &ev.src_ip, ev.target_port, 2222, 0, 300, 100.0,
+            "trace-test", "isolate", "br0", &ev.src_ip, ev.target_port, 2222, 0, 300, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         let plan = build_enforcement_plan_owned(&ev, &decision, "br0", 2222, Some(&task));
@@ -1633,7 +1633,7 @@ mod tests {
         ev.severity = 3;
         let decision = decide_defense(&ev);
         let task = build_release_task(
-            "trace-test", "throttle", "br0", &ev.src_ip, ev.target_port, 2222, decision.delay_ms, 300, 100.0,
+            "trace-test", "throttle", "br0", &ev.src_ip, ev.target_port, 2222, decision.delay_ms, 300, &LeaseNow::wall_only(100.0),
         )
         .unwrap();
         let plan = build_enforcement_plan_owned(&ev, &decision, "br0", 2222, Some(&task));
