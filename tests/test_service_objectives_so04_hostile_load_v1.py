@@ -855,3 +855,26 @@ def test_a_core_reading_the_last_phase_long_after_its_window_is_held_to_its_read
     # Below the window-only floor, above the floor over the read time.
     assert least < (1 - PROFILE["shed_tolerance"]) * _excess(phase["written"])
     assert hl.hostile_load_problems(_samples(obs), obs) == []
+
+
+def test_windows_are_waited_for_on_the_monotonic_clock(tmp_path, monkeypatch):
+    """A wall-clock step after the plan must not move a window against the
+    leases' monotonic deadlines (local run: a -686 ms step started the backlog
+    window late and a lease expired inside its warm-up)."""
+
+    phase = {"name": "p", "oversized_line_bytes": 0, "burst_interval_ms": 0,
+             "rates_per_s": {c: 0 for c in decl.HOSTILE_LINE_CLASSES} | {"flow": 50}}
+    eve = tmp_path / "eve.json"
+    eve.write_bytes(b"")
+    now = time.time()
+    load = hl.HostileLoad(eve, {"phases": [phase], "line_bytes": 100}, [("p", now + 0.3, now + 0.6)], lambda: time.monotonic_ns())
+    real = time.time
+    monkeypatch.setattr(hl.time, "time", lambda: real() - 3600.0)  # the wall clock steps back an hour
+    t0 = time.monotonic()
+    load.start()
+    load.join(timeout=5)
+    assert not load.is_alive() and 0.5 <= time.monotonic() - t0 < 2.0
+    assert load.observed and load.observed[0]["written"]["flow"] > 0
+    # It started at its planned instant, not at once and not an hour late.
+    started = load.observed[0]["window_start_boottime_ns"] / 1e9 - t0
+    assert 0.2 <= started < 0.6, started

@@ -412,13 +412,18 @@ class HostileLoad(threading.Thread):
         self.eve = eve
         self.profile = profile
         self.phases = {p["name"]: (i, p) for i, p in enumerate(profile.get("phases") or [])}
-        self.windows = list(windows)
+        # Windows are given on the wall clock (as the lease deadlines are
+        # planned) but waited for on the monotonic clock, read together once,
+        # so a wall-clock step during the run cannot shift a window against
+        # the leases' monotonic deadlines.
+        now_wall, now_mono = time.time(), time.monotonic()
+        self.windows = [(n, now_mono + (start - now_wall), now_mono + (end - now_wall)) for n, start, end in windows]
         self.boottime = boottime
         self.stop = threading.Event()
         self.observed: List[Dict[str, Any]] = []
         self.finished = threading.Event()
 
-    def _run_window(self, fh, name: str, end_wall: float) -> None:
+    def _run_window(self, fh, name: str, end_mono: float) -> None:
         index, phase = self.phases[name]
         rates = phase["rates_per_s"]
         # A burst phase writes every class once per interval, all at once.
@@ -449,7 +454,7 @@ class HostileLoad(threading.Thread):
                 # The window ends at the last write, so the rate is counted
                 # over the time the lines were actually written in.
                 last_boot, last_wall = self.boottime(), time.time()
-            if time.time() >= end_wall:
+            if time.monotonic() >= end_mono:
                 break
             time.sleep(0.01)
         self.observed.append({
@@ -468,7 +473,7 @@ class HostileLoad(threading.Thread):
         try:
             with self.eve.open("ab") as fh:
                 for name, start, end in self.windows:
-                    while not self.stop.is_set() and time.time() < start:
+                    while not self.stop.is_set() and time.monotonic() < start:
                         time.sleep(0.005)
                     if self.stop.is_set():
                         return
