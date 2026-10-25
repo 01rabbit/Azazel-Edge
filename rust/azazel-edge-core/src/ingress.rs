@@ -366,6 +366,9 @@ impl IngressReader {
 
         let max_line = self.limits.max_line_bytes;
         let mut buf: Vec<u8> = Vec::new();
+        // Bytes of an oversized line discarded this poll: progress that the
+        // work-time limit must count, or a long skip would ignore it.
+        let mut skipped_bytes: u64 = 0;
         let stop = loop {
             if report.examined >= self.limits.examine_per_poll {
                 break PollStop::ExamineBudget;
@@ -373,7 +376,7 @@ impl IngressReader {
             if report.alerts_admitted >= self.limits.alerts_per_poll {
                 break PollStop::AlertBudget;
             }
-            if report.examined > 0 && started.elapsed() >= self.limits.poll_work_limit {
+            if (report.examined > 0 || skipped_bytes > 0) && started.elapsed() >= self.limits.poll_work_limit {
                 break PollStop::WorkTime;
             }
             if self.skipping {
@@ -389,6 +392,7 @@ impl IngressReader {
                 };
                 reader.consume(used);
                 self.offset += used as u64;
+                skipped_bytes += used as u64;
                 if done {
                     self.skipping = false;
                 }
@@ -576,10 +580,38 @@ impl IngressReader {
 
 // -- the audit file ----------------------------------------------------------
 
+// O_NOFOLLOW is architecture-specific on Linux, and a wrong value is not an
+// error: it silently sets another flag (0o400000 is O_LARGEFILE on arm64) and
+// the symlink guard is gone. So every Linux architecture is listed with the
+// value from its kernel uapi header, and any other one does not compile.
+//
+// - arch/arm64/include/uapi/asm/fcntl.h, arch/arm/include/uapi/asm/fcntl.h:
+//   O_NOFOLLOW 0100000.
+// - x86, riscv and loongarch have no uapi asm/fcntl.h of their own; they use
+//   include/uapi/asm-generic/fcntl.h (mandatory-y in asm-generic/Kbuild):
+//   O_NOFOLLOW 00400000.
+// - Checked against Linux v6.11. mips, powerpc, sparc, alpha and parisc carry
+//   their own values and are deliberately not listed.
 #[cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "arm")))]
 const O_NOFOLLOW: i32 = 0o100000;
-#[cfg(all(target_os = "linux", not(any(target_arch = "aarch64", target_arch = "arm"))))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "x86", target_arch = "riscv64", target_arch = "loongarch64")
+))]
 const O_NOFOLLOW: i32 = 0o400000;
+#[cfg(all(
+    target_os = "linux",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "x86_64",
+        target_arch = "x86",
+        target_arch = "riscv64",
+        target_arch = "loongarch64"
+    ))
+))]
+compile_error!("O_NOFOLLOW is not known for this Linux architecture; add it from the kernel's uapi asm/fcntl.h");
+// macOS (xnu bsd/sys/fcntl.h) and FreeBSD (sys/sys/fcntl.h): 0x0100.
 #[cfg(not(target_os = "linux"))]
 const O_NOFOLLOW: i32 = 0x0100;
 
@@ -884,6 +916,38 @@ mod tests {
         let rep = r.poll(&path, Instant::now(), |_| {});
         assert_eq!(rep.examined, 1);
         assert_eq!(rep.stop, Some(PollStop::WorkTime));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_work_time_limit_also_bounds_a_continuing_oversized_skip() {
+        let path = temp_path("skiptime");
+        let mut body = b"{\"event_type\":\"flow\",\"x\":\"".to_vec();
+        body.extend(std::iter::repeat(b'a').take(200_000));
+        body.extend_from_slice(b"\"}\n");
+        body.extend_from_slice(line("alert", 5).as_bytes());
+        write_bytes(&path, &body);
+        let mut r = IngressReader::new(0, IngressLimits { max_line_bytes: 1000, poll_work_limit: Duration::ZERO, ..open_limits() });
+        let t0 = Instant::now();
+        let first = r.poll(&path, t0, |_| {});
+        assert_eq!(first.oversized, 1);
+        assert_eq!(r.offset, 1001);
+        // A poll that starts inside the skip makes some progress, then stops on time.
+        let before = r.offset;
+        let second = r.poll(&path, t0 + Duration::from_secs(1), |_| {});
+        assert_eq!(second.stop, Some(PollStop::WorkTime));
+        assert!(second.budget_exhausted());
+        assert!(r.offset > before, "a poll inside a skip still makes progress");
+        assert!(r.offset - before <= 64 * 1024, "skipped {} bytes in one poll", r.offset - before);
+        // The skip still ends and the alert after it is decided.
+        let mut seen = Vec::new();
+        for i in 2..200 {
+            r.poll(&path, t0 + Duration::from_secs(i), |v| seen.push(sig(v)));
+            if !seen.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(seen, vec![5]);
         let _ = fs::remove_file(&path);
     }
 
