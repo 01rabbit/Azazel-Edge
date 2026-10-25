@@ -1,8 +1,8 @@
 {
   "schema": "azazel-edge/hostile-load-profile/v1",
   "cites": "01rabbit/Azazel:docs/roadmaps/service-objective-assignments.md SO-04 sample rule (leases expiring under hostile load), OF-06 and SO-11 (shed at 120% of the declared quota); 01rabbit/Azazel-Edge#414; Edge#412 (the Rust azazel-edge-core is the enforcement authority, so the load is offered to it)",
-  "note": "PROVISIONAL. The hostile load SO-04 samples are taken under. Every rate below is derived from config/service_objectives/ingress_quota.json (OF-06) by the rules in this file; declarations.load_hostile_load_profile() recomputes each one and refuses the profile if any differs, so a change to the quota makes this file invalid until it is re-derived. The factors under owner_defaults are defaults chosen when the profile was written and await the owner's confirmation. Container numbers are not hardware evidence. Read only by the SO-04 harness and the validator; the core never reads it, and nothing here changes how the core reads, sheds or decides.",
-  "status": "provisional",
+  "note": "CONFIRMED by the owner on 2026-10-26 (the phase factors as they stood, unchanged; see owner_defaults.confirmed_phase_factors). The hostile load SO-04 samples are taken under. Every rate below is derived from config/service_objectives/ingress_quota.json (OF-06) by the rules in this file; declarations.load_hostile_load_profile() recomputes each one and refuses the profile if any differs, so a change to the quota makes this file invalid until it is re-derived. The factors under owner_defaults were chosen when the profile was written and are confirmed by the owner as they stand; a later change to any phase factor undoes the confirmation until the owner confirms again. Container numbers are not hardware evidence. Read only by the SO-04 harness and the validator; the core never reads it, and nothing here changes how the core reads, sheds or decides.",
+  "status": "confirmed",
   "hardware_class": "container, not hardware",
   "ingress": "core_eve_reader",
   "derived_from": "config/service_objectives/ingress_quota.json",
@@ -14,7 +14,7 @@
   "quiet_gap_ms": 3000,
   "audit_attribution_slack_ms": 2000,
   "owner_defaults": {
-    "status": "pending owner confirmation",
+    "status": "confirmed",
     "non_alert_factor": 1.2,
     "background_alert_poll_fill": 0.2,
     "flood_alert_poll_fill": 1.0,
@@ -23,7 +23,36 @@
     "why": "non_alert_factor 1.2 is SO-11's overload point (120% of the quota) applied to OF-06's only quota. flood_alert_poll_fill 1.0 offers exactly one full alerts_per_poll budget per default poll interval, the poll cap. background_alert_poll_fill 0.2 keeps alerts flowing beside the non-alert and malformed loads so that any alert loss would show there too. oversized_line_factor 2.0 makes each oversized line twice max_line_bytes; oversized_backlog_share 0.25 holds the oversized bytes to a quarter of backlog_bound_bytes per second, so the oversized lines alone never cross the backlog bound. backlog_non_alert_factor 12 (over 10 times the quota) written once per backlog_burst_interval_ms puts more than twice backlog_bound_bytes of unread non-alert lines in front of the core at once, so its backlog shedding (shed_by_reason.backlog, max_shed_level) must act, not only the bucket.",
     "backlog_non_alert_factor": 12.0,
     "backlog_burst_interval_ms": 1000,
-    "confirmed_phase_factors": null
+    "confirmed_phase_factors": {
+      "non_alert_flood": {
+        "non_alert_factor": 1.2,
+        "alert_poll_fill": 0.2,
+        "oversized_line_factor": 0,
+        "oversized_backlog_share": 0,
+        "burst_interval_ms": 0
+      },
+      "malformed_mix": {
+        "non_alert_factor": 1.2,
+        "alert_poll_fill": 0.2,
+        "oversized_line_factor": 2.0,
+        "oversized_backlog_share": 0.25,
+        "burst_interval_ms": 0
+      },
+      "alert_flood": {
+        "non_alert_factor": 0,
+        "alert_poll_fill": 1.0,
+        "oversized_line_factor": 0,
+        "oversized_backlog_share": 0,
+        "burst_interval_ms": 0
+      },
+      "backlog_flood": {
+        "non_alert_factor": 12.0,
+        "alert_poll_fill": 0.2,
+        "oversized_line_factor": 0,
+        "oversized_backlog_share": 0,
+        "burst_interval_ms": 1000
+      }
+    }
   },
   "rules": {
     "non_alert": "rates_per_s summed over non_alert_kinds = round(quota.value * non_alert_factor), split equally over non_alert_kinds (each share must be a whole number). invalid_utf8 is a non-alert kind: the core classes it unparseable and draws it from the same bucket.",

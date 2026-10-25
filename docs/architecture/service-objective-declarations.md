@@ -253,7 +253,7 @@ by the declared profile below.
   second) are not flushed when the process is killed; the next process starts
   its cumulative totals at zero.
 
-## SO-04 hostile-load profile (declared, provisional, derived from OF-06)
+## SO-04 hostile-load profile (declared, derived from OF-06, factors confirmed by the owner)
 
 SO-04's sample rule asks for leases expiring under hostile load. Until OF-06
 nothing declared that load, so the harness flooded the core with a load it
@@ -267,8 +267,9 @@ core enforces.
 `config/service_objectives/hostile_load_profile.json`
 (schema `azazel-edge/hostile-load-profile/v1`), read by
 `declarations.load_hostile_load_profile()`. The core never reads it; nothing in
-it changes how the core reads, sheds or decides. Status `provisional`, hardware
-class `container, not hardware`.
+it changes how the core reads, sheds or decides. Status `confirmed` (the owner
+confirmed the phase factors as they stood on 2026-10-26; see "Owner
+confirmation" below), hardware class `container, not hardware`.
 
 **Every rate is derived from `ingress_quota.json`.** The loader re-derives each
 phase's rates from the quota file as it stands and refuses the whole profile
@@ -311,8 +312,9 @@ computed from every line written, counted lines the core had not yet read
 (run 40221768896: 182509 shed against a floor of 196562; with the summary,
 233433). The accounting below replaces it (and, after review, fixes `read_s` outside the backlog phase).
 
-**Defaults awaiting owner confirmation.** The factors under `owner_defaults`
-were chosen when the profile was written: `non_alert_factor` 1.2 (SO-11's
+**Factors confirmed by the owner.** The factors under `owner_defaults`
+were chosen when the profile was written, and the owner confirmed them
+unchanged on 2026-10-26: `non_alert_factor` 1.2 (SO-11's
 overload point), `flood_alert_poll_fill` 1.0, `background_alert_poll_fill` 0.2,
 `oversized_line_factor` 2.0, `oversized_backlog_share` 0.25,
 `backlog_non_alert_factor` 12 and `backlog_burst_interval_ms` 1000. The rates
@@ -399,10 +401,15 @@ invalid profile in the tree keeps the gap. `SO04-COMPLETION-BOUND-PROVISIONAL`
 has no closer and stays on the completion part, so the SO-04 record stays
 `not_measurable` (`diagnostic_only`).
 
-### The profile is provisional: `SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL`
+### Owner confirmation: `SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL`
 
 Both SO-04 parts carry a second, mandatory gap while the profile's factors
-await the owner's confirmation. Like `SO04-COMPLETION-BOUND-PROVISIONAL`, it
+await the owner's confirmation. The owner confirmed them on 2026-10-26, as
+they stood (no factor or rate changed): the profile now has status
+`confirmed`, `owner_defaults.status` `confirmed` and
+`owner_defaults.confirmed_phase_factors` naming the four phases' factors. A
+record taken against this file therefore closes the gap; one taken against the
+provisional file (an earlier digest) keeps it. Like `SO04-COMPLETION-BOUND-PROVISIONAL`, it
 is about the declaration, not the run, and the validator decides it from the
 tree, never from the record (`record.PART_GAP_CLOSERS` →
 `so04_hostile_load.profile_confirmed_problems`). It may be left out only when
@@ -423,10 +430,13 @@ its digest, so records taken against the provisional file keep the gap. `load_ph
 prerequisite (every declared phase was driven); `CI_DECLARED_PREREQUISITES`
 is unchanged (empty).
 
-With `SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL` in place, neither part can
-derive `pass` from a provisional profile: the start part is `not_measurable`
-on that gap alone, and the completion part also on
-`SO04-COMPLETION-BOUND-PROVISIONAL`. Under `--ci` both are declared gaps, so a
+While the profile was provisional, neither part could derive `pass` from it:
+the start part was `not_measurable` on that gap alone, and the completion part
+also on `SO04-COMPLETION-BOUND-PROVISIONAL`. With the profile confirmed, a
+clean start part (every prerequisite met, `wall_clock_stable_during_run`
+included) may now be `pass`; the completion part stays `not_measurable` on
+`SO04-COMPLETION-BOUND-PROVISIONAL`, so the SO-04 record as a whole stays
+`not_measurable` (`diagnostic_only`). Under `--ci` both are declared gaps, so a
 clean run is green.
 
 ### Container runs (not hardware evidence)

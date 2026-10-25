@@ -53,6 +53,16 @@ def _doc():
     return json.loads(decl.HOSTILE_LOAD_PROFILE_PATH.read_text(encoding="utf-8"))
 
 
+def _provisional_doc():
+    """The tree's profile as it stood before the owner's confirmation."""
+
+    doc = _doc()
+    doc["status"] = "provisional"
+    doc["owner_defaults"]["status"] = "pending owner confirmation"
+    doc["owner_defaults"]["confirmed_phase_factors"] = None
+    return doc
+
+
 def _named(doc, name):
     return next(p for p in doc["phases"] if p["name"] == name)
 
@@ -70,12 +80,14 @@ def _load(tmp_path: Path, doc, quota_doc=None):
 # ------------------------------------------------------------------ profile
 
 
-def test_the_profile_is_valid_provisional_and_derived_from_the_quota():
+def test_the_profile_is_valid_confirmed_and_derived_from_the_quota():
     assert PROFILE["problems"] == []
     doc = _doc()
-    assert doc["status"] == "provisional" and "not hardware" in doc["hardware_class"]
+    assert doc["status"] == "confirmed" and "not hardware" in doc["hardware_class"]
     assert doc["derived_from"] == "config/service_objectives/ingress_quota.json"
-    assert "pending owner confirmation" in doc["owner_defaults"]["status"]
+    # The owner confirmed the phase factors as they stood (2026-10-26), naming them.
+    assert doc["owner_defaults"]["status"] == "confirmed"
+    assert doc["owner_defaults"]["confirmed_phase_factors"] == decl.phase_factors(doc["phases"])
     assert PROFILE["quota_sha256"] == decl.load_ingress_quotas()["sha256"]
     by_name = {p["name"]: p for p in PROFILE["phases"]}
     # 120% of the non-alert quota, over the quota.
@@ -119,7 +131,14 @@ def test_the_default_poll_interval_is_the_cores():
         pytest.param(lambda d: d.update(read_lag_cap_ms=100), "read_lag_cap_ms", id="read lag cap below a poll"),
         pytest.param(lambda d: d.update(backlog_read_lag_cap_ms=500), "backlog_read_lag_cap_ms", id="backlog cap below the read cap"),
         pytest.param(lambda d: d.update(backlog_read_lag_cap_ms=decl.HARNESS_DRAIN_TIMEOUT_MS + 1), "backlog_read_lag_cap_ms", id="backlog cap beyond the drain"),
-        pytest.param(lambda d: d.update(status="confirmed"), "not exactly 'confirmed'", id="confirmed while the owner status is pending"),
+        pytest.param(
+            lambda d: d.update(status="confirmed") or d["owner_defaults"].update(status="pending owner confirmation"),
+            "not exactly 'confirmed'", id="confirmed while the owner status is pending",
+        ),
+        pytest.param(
+            lambda d: d.update(status="confirmed") or d["owner_defaults"].update(status="confirmed"),
+            "confirmed_phase_factors", id="confirmed without naming the factors",
+        ),
         pytest.param(
             lambda d: d.update(status="confirmed") or d["owner_defaults"].update(status="confirmed by the owner"),
             "not exactly 'confirmed'", id="owner status not exactly confirmed",
@@ -145,7 +164,9 @@ def test_the_default_poll_interval_is_the_cores():
     ],
 )
 def test_a_profile_not_derived_from_the_quota_declares_nothing(tmp_path, mutate, expect):
-    doc = _doc()
+    # From the unconfirmed profile, so that a changed factor is caught by the
+    # derivation itself, not first by the owner's confirmation naming it.
+    doc = _provisional_doc()
     mutate(doc)
     loaded = _load(tmp_path, doc)
     assert loaded["phases"] == []
@@ -512,8 +533,8 @@ def test_the_harness_reports_the_gap_with_its_reasons():
     gaps = so04.hostile_load_gap([], None, PROFILE)
     assert [g["id"] for g in gaps] == [PROVISIONAL_GAP, GAP]
     obs = _observation()
-    # Applied as declared, but the profile in the tree is still provisional.
-    assert [g["id"] for g in so04.hostile_load_gap(_samples(obs), obs, PROFILE)] == [PROVISIONAL_GAP]
+    # Applied as declared against the confirmed profile in the tree: no gap.
+    assert so04.hostile_load_gap(_samples(obs), obs, PROFILE) == []
     part = comp.unmeasured_part("test")
     assert {GAP, PROVISIONAL_GAP} <= {g["id"] for g in part["gaps"]}
 
@@ -534,14 +555,25 @@ def _confirmed_tree(tmp_path, monkeypatch, *, owner_status="confirmed"):
     return decl.load_hostile_load_profile()
 
 
+def _provisional_tree(tmp_path, monkeypatch):
+    """The tree's profile as it stood before the owner's confirmation, made the tree's profile."""
+
+    doc = _provisional_doc()
+    path = tmp_path / "hostile_load_profile.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setattr(decl, "HOSTILE_LOAD_PROFILE_PATH", path)
+    return decl.load_hostile_load_profile()
+
+
 def _cite(obs, profile):
     obs["profile_path"], obs["profile_sha256"] = profile["path"], profile["sha256"]
     return obs
 
 
-def test_a_provisional_profile_never_closes_its_gap():
-    assert PROFILE["status"] == "provisional"
-    obs = _observation()
+def test_a_provisional_profile_never_closes_its_gap(tmp_path, monkeypatch):
+    provisional = _provisional_tree(tmp_path, monkeypatch)
+    assert provisional["problems"] == [] and provisional["status"] == "provisional"
+    obs = _cite(_observation(), provisional)
     assert hl.profile_confirmed_problems(obs) and hl.profile_confirmed(_samples(obs), obs) is False
     assert rec.so04_hostile_load_profile_confirmed(_samples(obs), {"hostile_load": obs}) is False
 
@@ -560,12 +592,15 @@ def test_a_confirmed_profile_in_the_tree_closes_its_gap(tmp_path, monkeypatch):
 
 
 def test_a_record_taken_against_the_provisional_profile_keeps_the_gap(tmp_path, monkeypatch):
-    obs = _observation()  # cites the provisional file's digest
+    before = tmp_path / "before"
+    before.mkdir()
+    provisional = _provisional_tree(before, monkeypatch)
+    obs = _cite(_observation(), provisional)  # cites the provisional file's digest
     confirmed = _confirmed_tree(tmp_path, monkeypatch)
     assert any("was not taken against" in p for p in hl.profile_confirmed_problems(obs))
     # Same path, another version of the file: the digest alone must keep it.
     stale = _cite(_observation(), confirmed)
-    stale["profile_sha256"] = PROFILE["sha256"]
+    stale["profile_sha256"] = provisional["sha256"]
     assert any("was not taken against" in p for p in hl.profile_confirmed_problems(stale))
     others = [g for g in START_SPEC["gaps"] if g not in (GAP, PROVISIONAL_GAP)]
     start, completion = _record(obs, start_gaps=others)
