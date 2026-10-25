@@ -72,6 +72,7 @@ When Wazuh Agent is installed via `installer/internal/install_wazuh_agent.sh`:
 
 ```bash
 systemctl is-active wazuh-agent
-test -x /var/ossec/active-response/bin/azazel-block.sh
+test ! -e /var/ossec/active-response/bin/azazel-block.sh
+python3 -c "import sys, xml.etree.ElementTree as ET; b = list(ET.parse('/var/ossec/etc/ossec.conf').getroot().iter('active-response')); sys.exit(0 if b and all((e.findtext('disabled') or '').strip() == 'yes' for e in b) else 1)"
 grep -q "/etc/azazel-edge/vector" /var/ossec/etc/ossec.conf
 ```

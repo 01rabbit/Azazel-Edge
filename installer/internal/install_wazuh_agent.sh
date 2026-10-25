@@ -58,38 +58,55 @@ tree.write('/var/ossec/etc/ossec.conf', encoding='utf-8', xml_declaration=True)
 print('[wazuh-agent] FIM directories configured.')
 PYEOF
 
-echo "[wazuh-agent 4/5] Enable active response hook (iptables block)"
-cat > /var/ossec/active-response/bin/azazel-block.sh <<'AREOF'
-#!/usr/bin/env bash
-set -euo pipefail
-ACTION="${1:-add}"
-IP="${3:-}"
-[[ -z "${IP}" ]] && exit 0
-if [[ "${ACTION}" == "add" ]]; then
-  iptables -I FORWARD -s "${IP}" -j DROP
-  iptables -I INPUT -s "${IP}" -j DROP
-  logger -t azazel-wazuh "BLOCKED: ${IP}"
-elif [[ "${ACTION}" == "delete" ]]; then
-  iptables -D FORWARD -s "${IP}" -j DROP 2>/dev/null || true
-  iptables -D INPUT -s "${IP}" -j DROP 2>/dev/null || true
-  logger -t azazel-wazuh "UNBLOCKED: ${IP}"
+echo "[wazuh-agent 4/5] Keep Wazuh observation-only (no active response on this host)"
+# Edge#412: defensive actions come only from the Rust azazel-edge-core
+# (decide_defense -> maybe_enforce). The Wazuh agent here provides FIM and SCA
+# and is never an enforcer. Earlier versions of this installer generated
+# /var/ossec/active-response/bin/azazel-block.sh; remove it on upgrade, and
+# turn the agent's active response off so no manager-side command (including
+# Wazuh's stock scripts) can run on this host. Both steps are idempotent.
+LEGACY_AR_SCRIPT="/var/ossec/active-response/bin/azazel-block.sh"
+if [[ -e "${LEGACY_AR_SCRIPT}" || -L "${LEGACY_AR_SCRIPT}" ]]; then
+  rm -f -- "${LEGACY_AR_SCRIPT:?}"
+  echo "[wazuh-agent] Removed legacy active response script ${LEGACY_AR_SCRIPT}"
 fi
-AREOF
-chmod 0750 /var/ossec/active-response/bin/azazel-block.sh
-chown root:wazuh /var/ossec/active-response/bin/azazel-block.sh
+python3 - <<'PYEOF'
+import xml.etree.ElementTree as ET
+
+tree = ET.parse('/var/ossec/etc/ossec.conf')
+root = tree.getroot()
+blocks = list(root.iter('active-response'))
+if not blocks:
+    blocks = [ET.SubElement(root, 'active-response')]
+for block in blocks:
+    disabled = block.find('disabled')
+    if disabled is None:
+        disabled = ET.SubElement(block, 'disabled')
+    disabled.text = 'yes'
+
+tree.write('/var/ossec/etc/ossec.conf', encoding='utf-8', xml_declaration=True)
+print('[wazuh-agent] Active response disabled on this agent.')
+PYEOF
 
 echo "[wazuh-agent 5/5] Enable and start wazuh-agent"
 systemctl daemon-reload
 if [[ "${ENABLE_SERVICES}" == "1" ]]; then
   systemctl enable --now wazuh-agent
+  # enable --now leaves an already-running agent (an upgrade) on the old
+  # ossec.conf, and wazuh-execd keeps active response on until a restart.
+  # try-restart restarts it only if it is running.
+  systemctl try-restart wazuh-agent
   systemctl is-active wazuh-agent && echo "[wazuh-agent] Service started OK"
+elif systemctl is-active --quiet wazuh-agent; then
+  echo "[wazuh-agent] WARNING: wazuh-agent is running on the previous ossec.conf;"
+  echo "  active response stays enabled until: sudo systemctl restart wazuh-agent"
 fi
 
 echo "[wazuh-agent] Install complete."
 echo "  Manager:    ${WAZUH_MANAGER_HOST}:${WAZUH_MANAGER_PORT}"
 echo "  Agent name: ${WAZUH_AGENT_NAME}"
 echo "  FIM paths:  /etc/azazel-edge, /opt/azazel-edge, /etc/suricata/rules"
-echo "  Active response: /var/ossec/active-response/bin/azazel-block.sh"
+echo "  Active response: disabled (Wazuh is observation-only; defensive actions come only from azazel-edge-core)"
 echo ""
 echo "NEXT: Register agent on Wazuh Manager:"
 echo "  manager$ /var/ossec/bin/manage_agents -a  (or use Wazuh Dashboard)"

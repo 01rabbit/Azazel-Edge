@@ -99,7 +99,7 @@ Historical planning and issue-body artifacts retained for traceability. These do
 | [POWER_PLAYBOOK.md](POWER_PLAYBOOK.md) | Deployer | Power configuration and runtime estimates | 2026-05-13 |
 | [FIELD_DEPLOYMENT_GUIDE.md](FIELD_DEPLOYMENT_GUIDE.md) | First responder | Rapid deploy checklist | 2026-05-13 |
 | [VEHICLE_DEPLOYMENT_GUIDE.md](VEHICLE_DEPLOYMENT_GUIDE.md) | Military / Civil defense | Vehicle deployment guide for constrained environments | 2026-05-13 |
-| [WAZUH_INTEGRATION_GUIDE.md](WAZUH_INTEGRATION_GUIDE.md) | Developer / Integrator | Wazuh Agent and Vector integration guide | 2026-05-13 |
+| [WAZUH_INTEGRATION_GUIDE.md](WAZUH_INTEGRATION_GUIDE.md) | Developer / Integrator | Wazuh Agent and Vector integration guide (observation-only) | 2026-10-26 |
 | [DEPLOYMENT_PROFILES.md](DEPLOYMENT_PROFILES.md) | Operator / Deployer | Core/Demo/SOC/NOC/Heavy-lab deployment matrix | 2026-05-14 |
 | [HUMANITARIAN_PARTNER_GUIDE.md](HUMANITARIAN_PARTNER_GUIDE.md) | NGO / International org | Partner onboarding guide | 2026-05-13 |
 | [PRIVACY_AND_LEGAL.md](PRIVACY_AND_LEGAL.md) | Municipal officer / Legal | Data handling and legal basis memo | 2026-05-13 |

@@ -60,6 +60,19 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- Wazuh active response (Edge#412, owner decision):
+  `installer/internal/install_wazuh_agent.sh` no longer generates
+  `/var/ossec/active-response/bin/azazel-block.sh`, the `iptables` DROP script
+  the Wazuh manager could start. It was a second enforcer outside the Rust
+  `azazel-edge-core`. On upgrade the installer removes the script if present
+  and sets `<disabled>yes</disabled>` in the agent's `<active-response>` block,
+  then restarts an already-running agent (`systemctl try-restart`) so the
+  setting takes effect.
+  The Wazuh agent (FIM and SCA) and Vector forwarding remain optional,
+  observation-only integrations; defensive actions come only from the core.
+  `tests/test_enforcement_boundary_inventory_v1.py` drops the exception entry,
+  and `docs/X86_64_INTEGRATION_BOUNDARY.md` now states that no defensive path
+  exists outside the core.
 - Dashboard audience split (Beginner/Professional toggle): the Simple view
   now serves the "show me less" need, so the audience axis, the
   `pro-only`/`temp-only` gating, the Temporary Mission panel, the temporary
