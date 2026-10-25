@@ -57,6 +57,9 @@ EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_NOT_MEASURABLE = 2
 EXIT_INVALID = 3
+# CI mode only (``--ci``): the harness did not take its measurement (too few
+# samples, a crash, or a downgraded pass), whatever the verdict says.
+EXIT_NOT_EXECUTED = 4
 
 RULE_EVERY_SAMPLE_MAX = "every_sample_max_elapsed"
 RULE_ZERO_VIOLATIONS = "zero_violations"
@@ -346,6 +349,127 @@ def exit_code_for(verdict: str) -> int:
         VERDICT_FAIL: EXIT_FAIL,
         VERDICT_NOT_MEASURABLE: EXIT_NOT_MEASURABLE,
     }.get(verdict, EXIT_INVALID)
+
+
+def not_executed_reasons(record: Mapping[str, Any]) -> List[str]:
+    """Why a record shows that its harness did not actually measure. Empty: it did.
+
+    "Executed" is recomputed from the record's samples against the fixed
+    OBJECTIVE_SPECS row, never from a field the record sets: every part took at
+    least its required samples (and its per-action count where the row has
+    one), no part is a crash part, and no pass was downgraded for an
+    unidentified commit. A part that ran but is blocked by a declared gap or an
+    unmet declared prerequisite has still executed; one whose harness could not
+    start (no root, no lab, no core binary) has no samples and has not.
+    """
+
+    reasons: List[str] = []
+    parts = record.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return ["record has no parts"]
+    objective = record.get("objective_id")
+    for part in parts:
+        if not isinstance(part, Mapping):
+            reasons.append("part is not an object")
+            continue
+        name = part.get("name")
+        if name == CRASH_PART:
+            reasons.append(f"{name}: the harness crashed")
+            continue
+        unmet = {p.get("id") for p in part.get("prerequisites") or [] if isinstance(p, Mapping) and not p.get("met")}
+        for pid in (CRASH_PREREQUISITE, DOWNGRADE_PREREQUISITE):
+            if pid in unmet:
+                reasons.append(f"{name}: prerequisite {pid} unmet")
+        spec = OBJECTIVE_SPECS.get(str(objective), {}).get(str(name))
+        if spec is None:
+            reasons.append(f"{name}: not a part of {objective} in OBJECTIVE_SPECS")
+            continue
+        samples = part.get("samples")
+        taken = len(samples) if isinstance(samples, list) else 0
+        required = int(spec["required_samples"])
+        if taken == 0 or taken < required:
+            reasons.append(f"{name}: {taken}/{required} samples taken")
+            continue
+        shortfall = per_action_shortfall(samples, int(spec.get("per_action_samples", 0) or 0))
+        if shortfall:
+            reasons.append(f"{name}: per-action samples short {shortfall}")
+    return reasons
+
+
+# CI mode: prerequisites that may be unmet in a record CI still accepts as a
+# green not_measurable, per objective. Only a prerequisite that states a
+# declared structural absence (one a declared gap stands for) may go here; a
+# prerequisite that says whether the run itself was sound (lab built, daemon
+# started, load applied, wall clock stable, chain verifies, coverage, owner
+# commit identified, ...) never does. Every row is empty today: each
+# prerequisite in OBJECTIVE_SPECS is either recomputed from the samples or a
+# run-health check, and when in doubt an unmet one is red. Adding an entry
+# needs the review a target change needs.
+CI_DECLARED_PREREQUISITES: Dict[str, frozenset] = {
+    "SO-02": frozenset(),
+    "SO-03": frozenset(),
+    "SO-04": frozenset(),
+    "SO-07": frozenset(),
+}
+
+
+def ci_measurement_problems(record: Mapping[str, Any]) -> List[str]:
+    """Why an executed record still cannot be green in CI. Empty: it can.
+
+    Every part's pass rule must hold as evaluated (no violation, no unfinished
+    sample), and every unmet prerequisite must be in
+    CI_DECLARED_PREREQUISITES for the objective. So a not_measurable is green
+    only when its measurement was clean and only declared gaps block it.
+    """
+
+    problems: List[str] = []
+    allowed = CI_DECLARED_PREREQUISITES.get(str(record.get("objective_id")), frozenset())
+    for part in record.get("parts") or []:
+        if not isinstance(part, Mapping):
+            problems.append("part is not an object")
+            continue
+        name = part.get("name")
+        evaluated = (part.get("pass_rule") or {}).get("evaluated") or {}
+        if evaluated.get("holds") is not True:
+            problems.append(f"{name}: pass rule does not hold (violations={evaluated.get('violations')})")
+        for key in ("violations", "unfinished_samples"):
+            if key in evaluated and evaluated[key] != 0:
+                problems.append(f"{name}: {key}={evaluated[key]}")
+        for p in part.get("prerequisites") or []:
+            if isinstance(p, Mapping) and not p.get("met") and p.get("id") not in allowed:
+                problems.append(f"{name}: prerequisite {p.get('id')} unmet")
+    return problems
+
+
+def ci_exit_code_for(record: Mapping[str, Any], errors: Sequence[str]) -> int:
+    """Exit status of one record in CI mode (``--ci``). The verdict is never changed.
+
+    0 only for a structurally valid record whose harness executed, whose
+    pass rule holds in every part (no violation, no unfinished sample), whose
+    unmet prerequisites are all in CI_DECLARED_PREREQUISITES, and whose
+    verdict is ``pass`` or ``not_measurable`` (then blocked only by declared
+    gaps, shown in the step summary). Non-zero: 3 invalid, 1 ``fail``, 4 not
+    executed or a run-health prerequisite unmet, 2 a not_measurable over the
+    bound or with unfinished samples.
+    """
+
+    if errors:
+        return EXIT_INVALID
+    verdict = record.get("verdict")
+    if verdict not in VERDICTS:
+        return EXIT_INVALID
+    if verdict == VERDICT_FAIL:
+        return EXIT_FAIL
+    if not_executed_reasons(record):
+        return EXIT_NOT_EXECUTED
+    problems = ci_measurement_problems(record)
+    if any("unmet" in p for p in problems):
+        # A run-health prerequisite failed: the measurement is not sound.
+        return EXIT_NOT_EXECUTED
+    if problems:
+        # Over the bound or unfinished: not green just because a gap blocks it.
+        return EXIT_NOT_MEASURABLE
+    return EXIT_PASS
 
 
 def utc_now() -> str:

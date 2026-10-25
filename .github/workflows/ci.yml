@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -69,11 +70,26 @@ jobs:
 
   service-objectives:
     # Program plan §8 rows owned by Edge (Edge#414): SO-03, SO-04, SO-07
-    # (process-kill). SO-02 needs root and runs in service-objectives-lab;
-    # here, unprivileged, its record is not_measurable (lab_built unmet). One JSON record per objective is uploaded as an artifact
-    # whatever the outcome. The run exits non-zero unless every record is a
-    # valid pass, so a row that cannot be measured yet keeps this job red
-    # rather than skipping into green. Nothing here enables enforcement.
+    # (process-kill). SO-02 needs a lab and runs in service-objectives-lab,
+    # not here. One JSON record per objective is uploaded as an artifact
+    # whatever the outcome. SO-03 and SO-07 run unprivileged; SO-04 runs as
+    # root because its completion half installs owned tc/nft state on dummy
+    # interfaces (unprivileged it takes no samples and would be red).
+    #
+    # Exit semantics (--ci; verdicts are never changed, Edge#414 "a skipped
+    # harness must not go green"):
+    #   harness did not execute (skipped, crashed, root missing) -> red
+    #   invalid record, or a requested objective without one   -> red
+    #   run-health prerequisite unmet (CI_DECLARED_PREREQUISITES) -> red
+    #   verdict fail                                            -> red
+    #   not_measurable with a violation or unfinished sample    -> red
+    #   not_measurable, executed, valid, every part holds, only
+    #     declared gaps block it                                -> green, with
+    #     the verdict table (samples, max, gaps) in the step summary
+    #   verdict pass, executed and valid                        -> green
+    # A green not_measurable is a clean measurement blocked only by gaps
+    # declared in OBJECTIVE_SPECS; it is never a pass and never gate evidence.
+    # Nothing here enables enforcement.
     name: Service objectives (§8 SO-03/04/07)
     runs-on: ubuntu-latest
     steps:
@@ -86,6 +102,8 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nftables iproute2
           python3 -m venv .venv
           . .venv/bin/activate
           pip install -U pip wheel setuptools
@@ -97,11 +115,18 @@ jobs:
           cd rust/azazel-edge-core
           cargo build --release
 
-      - name: Run harnesses
+      - name: Run SO-03 and SO-07 harnesses
         run: |
           . .venv/bin/activate
-          PYTHONPATH=.:py python -m azazel_edge.service_objectives run \
-            --objective all \
+          PYTHONPATH=.:py python -m azazel_edge.service_objectives run --ci \
+            --objective SO-03,SO-07 \
+            --out-dir service-objective-records
+
+      - name: Run SO-04 harness (root)
+        if: success() || failure()
+        run: |
+          sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m azazel_edge.service_objectives run --ci \
+            --objective SO-04 \
             --core-bin rust/azazel-edge-core/target/release/azazel-edge-core \
             --out-dir service-objective-records
 
@@ -109,7 +134,8 @@ jobs:
         if: always()
         run: |
           . .venv/bin/activate
-          PYTHONPATH=.:py python -m azazel_edge.service_objectives validate \
+          sudo chown -R "$(id -u)" service-objective-records || true
+          PYTHONPATH=.:py python -m azazel_edge.service_objectives validate --ci --objective SO-03,SO-04,SO-07 \
             --expect-commit "$GITHUB_SHA" \
             service-objective-records
 
@@ -126,8 +152,17 @@ jobs:
     # in network namespaces the harness creates, as root. The harness refuses
     # while another Suricata runs, so the packaged unit is stopped first. A
     # virtual-lab record is never hardware evidence and never gates the
-    # physical-NIC variant (R7). Red until the row's gaps are closed.
+    # physical-NIC variant (R7).
+    #
+    # Cost: about 25-30 runner minutes per run, so it runs only on pushes to
+    # main and on workflow_dispatch, not on every branch or pull request. On a
+    # pull request this job shows as skipped (the job did not run; it is not a
+    # harness result). Same --ci exit semantics as service-objectives: a lab
+    # that did not take its 20 samples is red, and so is one whose samples
+    # break the 10 s bound even though its three declared SO02-* gaps keep the
+    # verdict not_measurable. Green only for a clean, gap-blocked measurement.
     name: Service objectives lab (§8 SO-02)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -150,7 +185,7 @@ jobs:
 
       - name: Run SO-02 lab harness
         run: |
-          sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m azazel_edge.service_objectives run \
+          sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m azazel_edge.service_objectives run --ci \
             --objective SO-02 \
             --out-dir service-objective-lab-records
 
@@ -159,7 +194,7 @@ jobs:
         run: |
           . .venv/bin/activate
           sudo chown -R "$(id -u)" service-objective-lab-records || true
-          PYTHONPATH=.:py python -m azazel_edge.service_objectives validate \
+          PYTHONPATH=.:py python -m azazel_edge.service_objectives validate --ci --objective SO-02 \
             --expect-commit "$GITHUB_SHA" \
             service-objective-lab-records
 

@@ -340,3 +340,73 @@ The assignment already defers SO-05 to R6 because the local M.I.O. runtime
 profile is not implemented (Azazel-Nexus#5). Building the state, its audit
 record and a probe would add product function, and that is the owner's decision.
 
+
+## CI exit semantics (`--ci`)
+
+Edge#414 asks that a job holding a harness refuse to go green by skipping: a
+job existing is not a run. Before this, `run` and `validate` exited 0 only for
+an all-`pass` set, so the `service-objectives` jobs were red on every push for
+as long as any declared gap stood, which hides a real regression in a job that
+is always red.
+
+`run --ci` and `validate --ci --objective ...` (`.github/workflows/ci.yml`)
+change only the exit status; no verdict is changed and no validator check is
+relaxed. Without `--ci` the exit status is as before (0 pass, 1 fail,
+2 not_measurable, 3 invalid).
+
+| Record | `--ci` exit | CI |
+|---|---|---|
+| harness did not execute: fewer samples than the `OBJECTIVE_SPECS` row requires (or a per-action shortfall), a crash part, or a pass downgraded for an unidentified commit | 4 | red |
+| executed, but a prerequisite is unmet that is not in `CI_DECLARED_PREREQUISITES` (run health: lab built, daemon started, load applied, wall clock stable, chain verifies, coverage, ...) | 4 | red |
+| invalid record, or a requested objective with no record | 3 | red |
+| verdict `fail` | 1 | red |
+| verdict `not_measurable`, but a part's pass rule does not hold (a violation or an unfinished sample) | 2 | red |
+| verdict `not_measurable`, executed, valid, every part holds, every unmet prerequisite allowlisted: blocked only by declared gaps | 0 | green, verdict table in the step summary |
+| verdict `pass`, executed and valid | 0 | green |
+
+"Executed" is recomputed from the samples against the fixed `OBJECTIVE_SPECS`
+row (`record.not_executed_reasons`), never read from a field the record sets.
+A harness whose environment is missing (no root, no lab, no core binary) takes
+no samples and is red. A full sample count is not enough: a gap-blocked record
+whose samples break the bound (the verdict stays `not_measurable` because
+`derive_verdict` checks gaps first) is red, and so is one whose run-health
+prerequisites failed while its harness still emitted rows.
+
+`CI_DECLARED_PREREQUISITES` (`record.py`) lists, per objective, the
+prerequisites that may be unmet in a green record. Only a prerequisite stating
+a declared structural absence that a declared gap stands for may go there.
+It is empty for every objective today:
+
+| Objective | Allowlisted unmet prerequisites | Why |
+|---|---|---|
+| SO-02 | none | `lab_built`, `no_live_capture_touched`, `edge_stack_answering` are lab health; `every_injection_from_healthy_baseline`, `every_lab_source_type_sampled` are recomputed coverage |
+| SO-03 | none | `visual_voice_delivery_queue_declared` is now observed per sample (#453); the chain, decision-id, P0-class and fsync checks are measurement correctness |
+| SO-04 | none | core present/started, load applied, wall clock stable, chain/order, owned state and readback are run health; `per_action_completion_bound_declared` unmet would mean the declaration file lost a type |
+| SO-07 | none | both are coverage of the kill matrix |
+
+When unsure, a prerequisite stays off the list and its record is red. Adding
+one needs the review a target change needs. `validate --ci` writes a table of
+every part (verdict, executed, samples, max ms, violations, blocking gaps,
+unmet prerequisites, CI result) to `$GITHUB_STEP_SUMMARY`, so a green
+`not_measurable` is always visible. It is never a pass and never gate evidence
+(`evidence_class: diagnostic_only`).
+
+Jobs:
+
+- `service-objectives`: SO-03 and SO-07 unprivileged, SO-04 as root (its
+  completion half installs owned tc/nft state on dummy interfaces;
+  unprivileged it takes no samples and would be red). SO-02 is not run here.
+- `service-objectives-lab`: SO-02 as root. It takes about 25-30 runner minutes,
+  so it runs on pushes to `main` and on `workflow_dispatch` only; on a pull
+  request the job is shown as skipped, which is the job not running, not a
+  harness result.
+
+SO-02 under these semantics: the lab run on `main` at 9f02dfb took 20/20
+samples with 10 over the 10 s bound (max 33.8 s). Its verdict is
+`not_measurable`, not `fail`, because `derive_verdict` checks blocking gaps
+before the pass rule and SO-02 declares three (`SO02-NOT-NEXUS-INTEGRATED`,
+`SO02-SOURCE-TYPES-UNDECLARED`, `SO02-NO-COMMISSIONED-INTERFACE-IDENTITY`).
+The verdict is unchanged, but with `--ci` that record is red (exit 2: the pass
+rule does not hold), so the lab job stays red until the measured latency is
+within the bound (the link-state re-evaluation in #455 measured a 3.8 s
+maximum). A gap-blocked record is green only when its numbers would pass.
