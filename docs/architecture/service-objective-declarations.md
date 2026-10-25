@@ -269,11 +269,22 @@ What Edge already does, and what the harness measures without changing it:
   Edge's default capture interface (`SURICATA_IFACE`) and internal monitor
   bridge. The daemon's defaults are `AZAZEL_NOC_REFRESH_SEC` 20 s and
   `AZAZEL_SNAPSHOT_REFRESH_SEC` 12 s; the harness runs on those defaults and
-  does not shorten them. It measures only the total from injection to the
-  surface. Each sample also carries wall-clock stage stamps (the injection,
-  the `noc_runtime.updated_epoch` and `snapshot_epoch` the surface showed at
-  the end) for diagnosis; they do not attribute the probe-collection time and
-  are never read for the verdict.
+  does not shorten them. Besides that periodic loop, the daemon watches the
+  monitored interfaces' carrier/operstate (`py/azazel_edge/sensors/link_watch.py`:
+  netlink `RTMGRP_LINK` multicast, which needs no capability; a sysfs poll at
+  most every 1 s where netlink cannot be opened) and, on a change, re-runs the
+  path probes of that interface at once (debounced, at most one re-evaluation
+  per 2 s, bounded to 5 s). It is observation only: the same probes and
+  evaluator, published sooner; the periodic loop stays the backstop. Each
+  collector of the periodic collection also has an explicit upper bound
+  (`COLLECTOR_TIMEOUTS_S` in `py/azazel_edge/sensors/noc_monitor.py`).
+  The harness measures only the total from injection to the surface. Each
+  sample also carries diagnostic stages, never read for the verdict: wall-clock
+  stamps (the injection, the `noc_runtime.updated_epoch` and `snapshot_epoch`
+  the surface showed at the end) and `end_noc_collection`, the NOC collection
+  behind the end response as `noc_runtime.collection` reports it -- its trigger
+  (`periodic` or `link_event`), its start on the same CLOCK_MONOTONIC as the
+  injection stamp, and each collector's start offset and duration.
 
 The harness builds two network namespaces, runs the control daemon, the web UI
 under gunicorn and Suricata on `br0` inside them, injects each failure ten
