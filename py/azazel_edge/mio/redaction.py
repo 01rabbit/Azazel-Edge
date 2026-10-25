@@ -42,9 +42,9 @@ def _normalise(text: str) -> tuple[str, list[int]]:
 
 
 _PW = r"pass(?:word|wd|w0rd|phrase)?|pwd|pw|パスワード|暗証番号|パスフレーズ"
-_LABEL_PW = r"(?:" + _PW + r")"
+_LABEL_PW = r"(?P<label>" + _PW + r")"
 _LABEL_ANY = (
-    r"(?:" + _PW + r"|secret|client[_-]?secret|(?:access|refresh|auth|api|session|bearer)?[_-]?token|"
+    r"(?P<label>" + _PW + r"|secret|client[_-]?secret|(?:access|refresh|auth|api|session|bearer)?[_-]?token|"
     r"api[_-]?key|apikey|access[_-]?key|private[_-]?key|session(?:[_-]?id)?|set-cookie|cookie|credentials?|auth|pin|"
     r"秘密鍵|トークン|認証情報|アクセスキー)"
 )
@@ -53,7 +53,35 @@ _LABEL_ANY = (
 _LEFT = r"(?<![A-Za-z0-9:/._-])(?:[A-Za-z0-9]+[-_])*"
 _RIGHT = r"(?![A-Za-z0-9])"
 # Quoted value to its closing quote; otherwise to the end of the field.
-_VALUE = r"""(?:"[^"\r\n]*"?|'[^'\r\n]*'?|「[^」\r\n]*」?|[^\r\n,;&]+)"""
+# Closing brackets end an unquoted value so "(pw: x)" keeps its ")".
+_VALUE = r"""(?P<value>"[^"\r\n]*"?|'[^'\r\n]*'?|「[^」\r\n]*」?|[^\r\n,;&)\]}>]+)"""
+
+# Short labels that also occur in ordinary SOC prose ("auth: failed for admin",
+# "pin: 3 hosts", "token: expired"). For these, a status word or a count
+# followed by words is not treated as a secret value. Strong labels
+# (password, api_key, ...) are always masked.
+_WEAK_LABELS = frozenset({"auth", "pin", "pass", "pw", "secret", "token"})
+_STATUS_WORDS = frozenset({
+    "failed", "fail", "failure", "failures", "none", "null", "nil", "n/a", "na", "empty", "unset", "missing",
+    "expired", "expiring", "rejected", "denied", "refused", "blocked", "revoked", "invalid", "valid", "ok",
+    "success", "succeeded", "successful", "passed", "granted", "required", "optional", "disabled", "enabled",
+    "true", "false", "yes", "no", "unknown", "leaked", "exposed", "compromised", "rotated", "reused", "reuse",
+    "error", "errors", "timeout", "pending", "locked", "unlocked", "changed", "reset", "redacted", "detected",
+})
+
+
+def _keep_ordinary_value(norm: str, m: "re.Match[str]") -> bool:
+    label = m.group("label").lower().lstrip("_-")
+    if label not in _WEAK_LABELS:
+        return False
+    value = m.group("value").strip().strip("\"'「」").strip()
+    parts = value.split(None, 1)
+    if not parts:
+        return False
+    first = parts[0].lower().rstrip(".!:")
+    if first in _STATUS_WORDS:
+        return True
+    return first.isdigit() and len(parts) > 1 and parts[1][:1].isalpha()
 
 _HEX_DIGEST = re.compile(r"[0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64}", re.I)
 _REF_WORD = re.compile(r"[A-Za-z][A-Za-z0-9._-]*:[A-Za-z0-9._:/#-]+")
@@ -80,14 +108,20 @@ _Keep = Optional[Callable[[str, "re.Match[str]"], bool]]
 _RULES: tuple[tuple[str, "re.Pattern[str]", _Keep], ...] = (
     ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.S), None),
     ("url_userinfo", re.compile(r"(?<=://)[^\s/?#]+(?=@[^\s@/?#]+)"), None),
+    # Password with spaces: "ftp://user:pa ss@host/".
+    ("url_userinfo", re.compile(r"(?<=://)[^\s/?#:@]+:[^\r\n/?#]*(?=@[A-Za-z0-9.-]+(?:[:/?#\s]|$))"), None),
+    # Scheme-less "user:pass@host". A plain email has no ":" before "@".
+    ("url_userinfo", re.compile(r"(?<![A-Za-z0-9._:/@-])(?!mailto:)[A-Za-z0-9._-]+:(?!//)[^\s@/:]+(?=@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)", re.I), None),
     ("auth_header", re.compile(r"(?<![A-Za-z0-9])(?:proxy-)?authorization\s*[:=][^\r\n,;]*", re.I), None),
-    ("bearer", re.compile(r"(?<![A-Za-z0-9])bearer(?:\s*[:=]\s*|\s+)[^\s,;]+", re.I), None),
+    ("bearer", re.compile(r"(?<![A-Za-z0-9])bearer(?:\s*[:=]\s*|\s+)(?!tokens?\b)[^\s,;)\]}>]+", re.I), None),
     ("bearer", re.compile(r"(?<![A-Za-z0-9])basic\s+[A-Za-z0-9+/]{8,}={0,2}", re.I), None),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"), None),
     ("api_key", re.compile(r"(?<![A-Za-z0-9])" + _PREFIXED + r"[A-Za-z0-9_-]{6,}"), None),
-    ("secret_kv", re.compile(_LEFT + _LABEL_ANY + _RIGHT + r"\s*[:=]\s*" + _VALUE, re.I), None),
-    ("secret_kv", re.compile(_LEFT + _LABEL_PW + r"(?:\s+(?:is|was)\s+|\s*は\s*)" + _VALUE, re.I), None),
-    ("email", re.compile(r"(?<![:/A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), None),
+    ("secret_kv", re.compile(_LEFT + _LABEL_ANY + _RIGHT + r"\s*[:=]\s*" + _VALUE, re.I), _keep_ordinary_value),
+    ("secret_kv", re.compile(_LEFT + _LABEL_PW + r"(?:\s+(?:is|was)\s+|\s*は\s*)" + _VALUE, re.I), _keep_ordinary_value),
+    # Japanese label then a space: "暗証番号 1234".
+    ("secret_kv", re.compile(r"(?:パスワード|暗証番号|パスフレーズ|秘密鍵)\s+[A-Za-z0-9][^\s,;)\]}>]*"), None),
+    ("email", re.compile(r"(?:(?<=[Mm][Aa][Ii][Ll][Tt][Oo]:)|(?<![:/A-Za-z0-9._%+-]))[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), None),
     ("long_token", re.compile(r"(?<![A-Za-z0-9_+=-])[A-Za-z0-9_+=-]{32,}"), _keep_long_token),
 )
 _TOKEN_RULES = frozenset({"private_key", "url_userinfo", "bearer", "jwt", "api_key", "email", "long_token"})
