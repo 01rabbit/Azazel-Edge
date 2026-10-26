@@ -100,6 +100,8 @@ Historical planning and issue-body artifacts retained for traceability. These do
 | [PHYSICAL_SETUP_GUIDE.md](PHYSICAL_SETUP_GUIDE.md) | Deployer | Hardware labeling and cable guide | 2026-05-13 |
 | [POWER_PLAYBOOK.md](POWER_PLAYBOOK.md) | Deployer | Power configuration and runtime estimates | 2026-05-13 |
 | [FIELD_DEPLOYMENT_GUIDE.md](FIELD_DEPLOYMENT_GUIDE.md) | First responder | Rapid deploy checklist | 2026-05-13 |
+| [HARDWARE_FIRST_RUN_CHECKLIST.md](HARDWARE_FIRST_RUN_CHECKLIST.md) | Deployer / Developer | First install on a real Raspberry Pi 5 and the checks to run on it: services and accounts, sockets, internal AP, uplink Wi-Fi, EPD, SSH, WAN exposure, Mattermost, touch display, selftest, HIL bridge, R0 measurements, the #489 trial, and the open owner decisions (EN) | 2026-10-27 |
+| [HARDWARE_FIRST_RUN_CHECKLIST_JA.md](HARDWARE_FIRST_RUN_CHECKLIST_JA.md) | Deployer / Developer | 実機初回検証チェックリスト（日本語版） | 2026-10-27 |
 | [VEHICLE_DEPLOYMENT_GUIDE.md](VEHICLE_DEPLOYMENT_GUIDE.md) | Military / Civil defense | Vehicle deployment guide for constrained environments | 2026-05-13 |
 | [WAZUH_INTEGRATION_GUIDE.md](WAZUH_INTEGRATION_GUIDE.md) | Developer / Integrator | Wazuh Agent and Vector integration guide (observation-only) | 2026-10-26 |
 | [DEPLOYMENT_PROFILES.md](DEPLOYMENT_PROFILES.md) | Operator / Deployer | Core/Demo/SOC/NOC/Heavy-lab deployment matrix | 2026-05-14 |
