@@ -671,15 +671,18 @@ def test_fresh_queue_replays_the_newest_p0_decisions_bounded(tmp_path):
     assert started["reconciled"] == 3 and started["reconcile_skipped"] == 1 and started["unreconcilable"] == 0
 
 
-def test_rotated_chain_counts_unreconcilable_and_next_start_replays_only_new(tmp_path):
+def test_a_replaced_chain_is_a_new_chain_and_next_start_replays_only_new(tmp_path):
+    """The chain is replaced by a new one (another genesis): the queue's
+    cursor is the old chain's, so the new chain is reconciled as a fresh
+    chain (Edge#462 item 3), not counted as unreconcilable."""
+
     qpath = tmp_path / "q.jsonl"
     old = P0AuditLogger(tmp_path / "old.jsonl")
     first = attach_p0_alert_relay(old, qpath)
     assert first.ready.wait(5)
-    old.log_action_decision("before-rotation", "s", action="isolate")
+    old.log_action_decision("before-replacement", "s", action="isolate")
     _settle(old, first)
     first.stop()
-    # The chain is replaced (rotated): the queue's cursor is not in it.
     apath = tmp_path / "a.jsonl"
     plain = P0AuditLogger(apath)
     plain.log_action_decision("q1", "s", action="throttle")
@@ -688,9 +691,9 @@ def test_rotated_chain_counts_unreconcilable_and_next_start_replays_only_new(tmp
     assert second.ready.wait(5)
     second.stop()
     started = _started(qpath)[-1]
-    assert started["reconcile"] == "cursor_not_in_chain"
-    assert started["unreconcilable"] == 1 and started["reconciled"] == 0
-    assert [r["decision_id"] for r in _rows(qpath)[::2]] == ["before-rotation"]
+    assert started["reconcile"] == "fresh_chain" and started["cursor_scope"] == "none"
+    assert started["unreconcilable"] == 0 and started["reconciled"] == 1
+    assert [r["decision_id"] for r in _rows(qpath)[::2]] == ["before-replacement", "q1"]
     # Unrelated advance while down, then one new P0: the next start resumes at
     # the chain tail recorded by the previous start and replays only q2.
     plain.log_action_decision("q-obs-2", "s", action="observe")
@@ -700,7 +703,44 @@ def test_rotated_chain_counts_unreconcilable_and_next_start_replays_only_new(tmp
     third.stop()
     started = _started(qpath)[-1]
     assert started["reconcile"] == "cursor_found" and started["reconciled"] == 1
-    assert [r["decision_id"] for r in _rows(qpath)[::2]] == ["before-rotation", "q2"]
+    assert started["cursor_scope"] == "chain"
+    assert [r["decision_id"] for r in _rows(qpath)[::2]] == ["before-replacement", "q1", "q2"]
+
+
+def test_a_legacy_cursor_not_in_the_chain_is_still_unreconcilable(tmp_path):
+    """A cursor written before cursors were per chain (no audit_chain_id)
+    that the chain does not have: which records were missed cannot be told,
+    so nothing is replayed (the #458 behaviour)."""
+
+    apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
+    plain = P0AuditLogger(apath)
+    plain.log_action_decision("q1", "s", action="throttle")
+    P0AlertQueue(qpath).append_status({"event": "started", "audit_cursor_chain_hash": "f" * 64})
+    relay = attach_p0_alert_relay(P0AuditLogger(apath), qpath)
+    assert relay.ready.wait(5)
+    relay.stop()
+    started = _started(qpath)[-1]
+    assert started["reconcile"] == "cursor_not_in_chain" and started["cursor_scope"] == "legacy"
+    assert started["unreconcilable"] == 1 and started["reconciled"] == 0
+    assert _rows(qpath) == []
+
+
+def test_a_legacy_cursor_in_the_chain_is_resumed_and_then_tagged(tmp_path):
+    apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
+    plain = P0AuditLogger(apath)
+    a = plain.log_action_decision("a", "s", action="isolate")
+    P0AlertQueue(qpath).append_status({"event": "started", "audit_cursor_chain_hash": a["chain_hash"]})
+    plain.log_action_decision("b", "s", action="isolate")
+    relay = attach_p0_alert_relay(P0AuditLogger(apath), qpath)
+    assert relay.ready.wait(5)
+    relay.stop()
+    started = _started(qpath)[-1]
+    assert started["reconcile"] == "cursor_found" and started["cursor_scope"] == "legacy"
+    assert [r["decision_id"] for r in _rows(qpath)] == ["b", "b"]
+    chain_id = relay.chain_id
+    assert chain_id == a["chain_hash"]  # the genesis record names the chain
+    assert started["audit_chain_id"] == chain_id
+    assert all(r["audit_chain_id"] == chain_id for r in _rows(qpath))
 
 
 @pytest.mark.parametrize("fsync_ok,label,durable", [(True, "reconciled_from_chain_fsynced", True), (False, "reconciled_from_chain", False)])

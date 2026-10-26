@@ -50,6 +50,26 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- P0 alert path (Edge#462 items 1, 3, 4; notification and audit only, no
+  change to decisions or enforcement):
+  - `core-decision-audit.jsonl` rotates on a chain boundary at 16 MiB with
+    one rotated file kept (`P0AuditLogger(max_bytes=, keep=)`). The chain
+    continues across files (`chain_prev`, plus `chain_id` on each new
+    file's first record); the relay's reconcile and the recorder's key
+    window read the retained files as one consistent snapshot
+    (`azazel_edge.audit.segments.read_chain`). A cursor rotated out is
+    reported as `cursor_rotated_out` and the retained chain is replayed
+    (bounded) instead of `cursor_not_in_chain`. New
+    `P0AuditLogger.verify_rotated_chain`.
+  - The reconcile cursor is per chain: queue entries carry
+    `audit_chain_id`, and a relay resumes from its own chain's cursor. A
+    new chain on a shared queue is reconciled as `fresh_chain`.
+  - P0 decisions dropped by the recorder's hand-off, the relay's hand-off
+    or the audit listener hand-off are recovered while the agent runs
+    (`core_loss_reconcile` / `loss_recovery` status records), with the
+    same past-decision presentation, event-key/chain-hash deduplication
+    and 256 bound as the startup reconcile.
+
 - WebUI baseline language is now English: with no explicit `?lang=` /
   `X-AZAZEL-LANG` header / `azazel_lang` cookie / saved browser choice, pages
   render in English (`Content-Language: en`). Japanese remains fully available
