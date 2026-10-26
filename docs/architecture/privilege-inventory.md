@@ -309,7 +309,7 @@ Stays root in #471. Listed because stages 1 and 2 move work to it.
 | `sot_trust_client` | MAC or private IP required; writes the SoT (0644) | root (`/etc`) |
 | `migrate_path_schema` | `mkdir`, `copytree`, `symlink` across `/etc/azazel-*`, `/etc/default/azazel-*`, `/run/azazel-*` and `/root` | root. **A filesystem migration exposed on the socket.** |
 | `wifi_scan` | `iw dev`, `nmcli … show`, `nmcli dev wifi rescan`, `iw scan` (rate-limited) | cap:NET_ADMIN / NetworkManager polkit |
-| `wifi_connect` | `nmcli dev wifi connect … password <psk>` or `nmcli con mod … wifi-sec.psk <psk>`, `con up/delete`, `ip link/addr/route`, `ping`, `curl`; NAT: `sysctl -w net.ipv4.ip_forward=1`, `nft add table ip azazel_nat` + masquerade (iptables fallback) | root. **The passphrase is on nmcli's argv**, readable from `/proc/<pid>/cmdline` while nmcli runs. |
+| `wifi_connect` | `nmcli con add` (new profile, no secret) or, for a saved profile given a new PSK, `nmcli con clone` (the copy's stored PSK dropped with `wifi-sec.psk-flags 2`/`0`; the original replaced only after the copy is up), then `nmcli con up … passwd-file <file>`; `con delete`, `ip link/addr/route`, `ping`, `curl`; NAT: `sysctl -w net.ipv4.ip_forward=1`, `nft add table ip azazel_nat` + masquerade (iptables fallback) | root. Since #477 the passphrase is not on nmcli's argv: it is in a 0600 passwd-file in a fresh 0700 directory under `/run`, removed when nmcli returns (before #477 it was on argv, readable from `/proc/<pid>/cmdline`). |
 | `shutdown`, `reboot` | `scripts/*.sh` → `systemctl --no-block poweroff|reboot` | root |
 | `refresh`, `reprobe`, `contain`, `stage_open`, `disconnect` | append `{ts, action}` to `/run/azazel-edge/action_requests.log` only (no reader found; not exhaustive) | owner |
 | `portal_viewer_open` | absolute http(s) URL required; writes `/run/azazel-edge/portal-viewer-start-url`, `systemctl start|restart azazel-edge-portal-viewer.service` (fixed; that unit is not shipped in this repo), probes TCP 6080 | root |
@@ -356,7 +356,7 @@ Stays root until stage 3.
 | Unit | Account | Needs | Notes |
 | --- | --- | --- | --- |
 | `azazel-edge-epd-refresh` (+ timer, 30 s) | root | EPD over SPI/GPIO (`/dev/spidev*`, GPIO) via the Waveshare driver: group:spi + group:gpio, or root | reads `/run/azazel-edge/epd_state.json`, runs `iwgetid` and `azazel_edge_epd.py`, writes `epd_last_render.json` |
-| `azazel-edge-selftest` (+ quarterly timer) | root | `systemctl is-active`, `sha256sum --check /etc/azazel-edge/.config_checksums`, `du` | writes `/var/log/azazel-edge/selftest_latest.json`; **`dd of=/tmp/azazel_sdtest` as root** (fixed name in `/tmp`); runs pytest from `/opt/azazel-edge/tests`, which the installer does not install |
+| `azazel-edge-selftest` (+ quarterly timer) | root | `systemctl is-active`, `sha256sum --check /etc/azazel-edge/.config_checksums`, `du` | writes `/var/log/azazel-edge/selftest_latest.json`; `dd` as root to a new `mktemp` name in `/tmp` (`conv=nocreat`), removed on exit (a fixed `/tmp/azazel_sdtest` before #477); runs pytest from `/opt/azazel-edge/tests`, which the installer does not install |
 | `azazel-edge-netflow-receiver` | `User=azazel` | UDP 2055 (none) | **no installer creates the `azazel` account**; `ExecStart` uses `${VAR:-default}`, which systemd does not expand (uncertain how it behaves on a device) |
 | `azazel-edge-snmp-poller` | `User=azazel` | none | same two points; `/etc/default/azazel-edge-sensors` (0644) holds SNMP community strings |
 | `azazel-edge-opencanary` | root | docker compose (root-equivalent), host network; HTTP 18080, SSH 12222 | logs to `/var/log/azazel-edge/opencanary`. The core's redirect default is port 2222, not 12222 (not a privilege issue). |
@@ -383,7 +383,8 @@ Stays root until stage 3.
   and the #472 rewrite of the old `AZAZEL_AI_SOCKET` default.
 - Secrets under `/etc/azazel-edge`: `web_token.txt` (0640 root),
   `mattermost-command-token` (0600), `ntfy.token` (0600, also
-  `/etc/azazel/ntfy.token`), `mattermost-credentials.env`, `secrets/`,
+  `/etc/azazel/ntfy.token`), `mattermost-credentials.env` (0600 from
+  creation since #477: mktemp beside it, renamed over it), `secrets/`,
   `tls/webui.key` (for the HTTPS proxy, not the Web UI).
   `/opt/azazel-edge/security/.env` is installed 0644 (contents not inspected).
 - `/opt/azazel-edge` is root-owned, including `logs/tactics_engine` (0755).
@@ -1004,7 +1005,12 @@ after `setup_web_account.sh`):
    moves nothing, prints a NOTICE with the manual steps and leaves both
    places untouched when a name exists in both places, when a file of the set
    is not a regular file, or when `AZAZEL_AI_AUDIT_LOG` is set to a custom
-   path (the agent keeps its chain beside that file). Each AI log moves only
+   path (the agent keeps its chain beside that file). When the two
+   directories are on different filesystems (`link` fails with EXDEV) it
+   stops before that file (state `cross_filesystem`, exit 2; nothing copied,
+   unlinked or carried) and the NOTICE gives the manual steps: copy with
+   `cp -p -n`, compare, only then delete the originals, run the script again
+   (#477; before, an unhandled traceback). Each AI log moves only
    when its variable is unset or holds a default;
 5. the decision log and the current `/run/azazel-edge/ai_*.json` are copied
    (originals kept; never through or over an existing name or symlink);
@@ -1066,12 +1072,12 @@ out-of-scope findings tracked separately. Still open:
 7. **Out-of-scope findings, tracked separately** (not fixed by #471 stages
    0–2):
    - `control.sock` has no peer check today (stage 1 adds one);
-   - the Wi-Fi passphrase is passed on nmcli's argv;
+   - the Wi-Fi passphrase is passed on nmcli's argv (fixed by #477);
    - `contain`/`disconnect` on `control.sock` only write a log line;
    - the netflow and snmp units use `User=azazel`, which no installer creates,
      and `${VAR:-default}` in `ExecStart`;
-   - selftest's fixed `/tmp` file written by `dd` as root, and its pytest
-     step against a directory that is not installed;
+   - selftest's fixed `/tmp` file written by `dd` as root (fixed by #477),
+     and its pytest step against a directory that is not installed;
    - the core's apply path inherits `PATH`/environment while the release path
      does not; no installer step creates `table inet azazel_edge`;
    - the core's redirect policy default is relative with no

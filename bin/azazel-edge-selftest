@@ -4,9 +4,22 @@ set -euo pipefail
 
 LOG_DIR="/var/log/azazel-edge"
 OUT_JSON="${LOG_DIR}/selftest_latest.json"
-TMP_FILE="/tmp/azazel_sdtest"
+# The write-speed test file: a new mktemp name in this directory (0600,
+# created with O_EXCL), never a fixed name another user could pre-create or
+# point a symlink at; removed on every exit.
+SD_TEST_DIR="/tmp"
+TIME_BIN="/usr/bin/time"
+SD_TEST_FILE=""
 FAILURES=()
 WARNINGS=()
+
+cleanup_sd_test_file() {
+  if [[ -n "${SD_TEST_FILE}" ]]; then
+    rm -f -- "${SD_TEST_FILE}"
+    SD_TEST_FILE=""
+  fi
+}
+trap cleanup_sd_test_file EXIT
 
 mkdir -p "${LOG_DIR}"
 
@@ -20,14 +33,20 @@ fail() {
 
 check_sd_write_speed() {
   local speed
-  if speed="$({ /usr/bin/time -f '%e' dd if=/dev/zero of="${TMP_FILE}" bs=1M count=10 oflag=direct status=none; } 2>&1)"; then
+  if ! SD_TEST_FILE="$(mktemp "${SD_TEST_DIR}/azazel_sdtest.XXXXXXXXXX")"; then
+    SD_TEST_FILE=""
+    fail "sd_write_test_failed"
+    return
+  fi
+  # conv=nocreat: dd writes only the file mktemp created.
+  if speed="$({ "${TIME_BIN}" -f '%e' dd if=/dev/zero of="${SD_TEST_FILE}" bs=1M count=10 oflag=direct conv=nocreat status=none; } 2>&1)"; then
     :
   else
     fail "sd_write_test_failed"
-    rm -f "${TMP_FILE}"
+    cleanup_sd_test_file
     return
   fi
-  rm -f "${TMP_FILE}"
+  cleanup_sd_test_file
   local sec mbps
   sec="${speed}"
   if [[ "${sec}" == "0" || "${sec}" == "0.0" ]]; then

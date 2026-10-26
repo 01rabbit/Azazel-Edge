@@ -24,6 +24,7 @@ service API.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import sys
@@ -126,6 +127,10 @@ def migrate_chain(old_dir: str | Path, new_dir: str | Path, audit_log_setting: s
       (``clash``; resolve by hand);
     * any file in ``old_dir`` that is not a regular file: nothing is moved
       (``not_regular``);
+    * ``old_dir`` and ``new_dir`` on different filesystems (``link`` fails
+      with EXDEV): the move stops before that file, which stays in
+      ``old_dir``; nothing is copied, unlinked or carried
+      (``cross_filesystem``; move by hand, see the installer's notice);
     * otherwise every file still in ``old_dir`` is moved into ``new_dir`` by
       link + unlink (one filesystem; link never replaces an existing name);
       files already in ``new_dir`` from an interrupted earlier run stay, and
@@ -160,7 +165,16 @@ def migrate_chain(old_dir: str | Path, new_dir: str | Path, audit_log_setting: s
     out["kept_in_new"] = in_new
     for name in in_old:
         # link() never replaces an existing name (EEXIST), unlike rename().
-        os.link(old_dir / name, new_dir / name)
+        try:
+            os.link(old_dir / name, new_dir / name)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            # The two directories are on different filesystems: link() cannot
+            # move, and a copy + unlink would not be one step. Stop here; the
+            # file stays in old_dir (its only copy) and nothing is unlinked.
+            out.update(state="cross_filesystem", not_moved=[n for n in in_old if n not in out["moved"]])
+            return out
         os.unlink(old_dir / name)
         out["moved"].append(name)
     if out["moved"]:
@@ -185,7 +199,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     result = migrate_chain(args.old_dir, args.new_dir, args.audit_log_setting)
     print(json.dumps(result, ensure_ascii=False))
-    if result["state"] in ("clash", "not_regular", "custom_audit_log"):
+    if result["state"] in ("clash", "not_regular", "custom_audit_log", "cross_filesystem"):
         return 2
     carry = result.get("carry")
     if carry is None or carry["carried"] or carry.get("reason") in ("no_cursor_for_old_path",
