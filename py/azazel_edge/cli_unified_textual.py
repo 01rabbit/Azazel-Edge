@@ -21,7 +21,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Footer, Header, Static
 
-from azazel_edge.control_plane import describe_action_failure
+from azazel_edge.control_plane import CONTROL_GROUP, control_socket_access_error, describe_action_failure
 
 
 SnapshotLoader = Callable[[], Any]
@@ -542,6 +542,12 @@ class AzazelTextualApp(App):
         else:
             self._snapshot = snap
             self._status_message = "Refresh complete"
+            if await asyncio.to_thread(control_socket_access_error):
+                # Edge#477: not in azazel-control, so actions and the live
+                # snapshot are unavailable; say so on the status line.
+                self._status_message = (
+                    f"Control socket: permission denied (user must be in the {CONTROL_GROUP} group)"
+                )
             if self._enable_epd:
                 try:
                     fp = self._epd_fingerprint_fn(snap)

@@ -169,6 +169,13 @@ def command(rec: Recorder, test_id: str, argv: list[str], timeout: int = 30) -> 
         err_text = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else exc.stderr
         result = {"argv": argv, "stdout": tail(out_text, 12000), "stderr": tail(err_text, 12000), "exit_code": 124,
                   "elapsed_ms": round((time.monotonic() - started) * 1000, 3), "timed_out": True}
+    except OSError as exc:
+        # The program is missing (for example no sudo on the host) or cannot be run.
+        # Record it like a shell would (127/126) instead of failing the whole test.
+        missing = isinstance(exc, FileNotFoundError)
+        result = {"argv": argv, "stdout": "", "stderr": f"{'command not found' if missing else 'cannot run command'}: {argv[0]} ({type(exc).__name__})",
+                  "exit_code": 127 if missing else 126, "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+                  "not_runnable": True}
     rec.emit("command", test_id=test_id, **result)
     return int(result["exit_code"]), result
 
@@ -368,12 +375,15 @@ def prepare(rec: Recorder, repo: Path, update_repo: bool, python: dict[str, str]
         code_branch, branch = command(rec, "prepare.repository", ["git", "-C", str(repo), "branch", "--show-current"])
         if code_branch:
             return "failed", 2, {"reason": git_failure("branch --show-current", branch), "repo": str(repo)}
+        # With --no-update-repo nothing is updated, so say what is wrong with the checkout, not "refusing update".
+        refusal = "refusing repository update: " if update_repo else "checkout not ready (repository update not requested): "
         if status["stdout"].strip():
             changed = status["stdout"].strip().splitlines()
-            return "failed", 2, {"reason": f"refusing repository update: checkout has {len(changed)} uncommitted/untracked path(s)",
-                                 "branch": branch["stdout"].strip(), "changed_paths": changed[:20]}
+            return "failed", 2, {"reason": f"{refusal}checkout has {len(changed)} uncommitted/untracked path(s)",
+                                 "branch": branch["stdout"].strip(), "changed_paths": changed[:20], "update_requested": update_repo}
         if branch["stdout"].strip() != "main":
-            return "failed", 2, {"reason": "refusing repository update: checkout must be on main", "branch": branch["stdout"].strip()}
+            return "failed", 2, {"reason": f"{refusal}checkout must be on main", "branch": branch["stdout"].strip(),
+                                 "update_requested": update_repo}
         steps: dict[str, Any] = {"branch": "main", "update_requested": update_repo}
         if update_repo:
             fetch_code, fetch = command(rec, "prepare.repository", ["git", "-C", str(repo), "fetch", "origin", "main"], timeout=90)

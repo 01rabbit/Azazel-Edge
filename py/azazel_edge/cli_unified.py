@@ -26,7 +26,13 @@ PY_ROOT = Path(__file__).resolve().parents[1]
 if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 
-from azazel_edge.control_plane import describe_action_failure, read_snapshot_payload, send_action, send_action_with_fallback
+from azazel_edge.control_plane import (
+    control_socket_access_error,
+    describe_action_failure,
+    read_snapshot_payload,
+    send_action,
+    send_action_with_fallback,
+)
 from azazel_edge.path_schema import log_dir_candidates, snapshot_path_candidates
 from azazel_edge.snapshot_model import Snapshot, build_snapshot
 
@@ -526,6 +532,13 @@ def load_snapshot() -> Snapshot:
             except Exception:
                 pass
             snap = build_snapshot(sample, source="SAMPLE")
+
+    # A user outside the azazel-control group cannot use control.sock: say so
+    # instead of showing the fallback view as if nothing were wrong (Edge#477).
+    access_error = control_socket_access_error()
+    if access_error:
+        snap.source = f"{snap.source} (control.sock: permission denied)"
+        snap.evidence.append(f"• control socket not usable: {access_error}")
 
     # WiFiチャンネルスキャンを実行（上りインターフェースを使用）
     try:
