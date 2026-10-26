@@ -11,9 +11,23 @@
 # touches theirs. A drop in any table is final, so the accepts here only end
 # this table's evaluation; they open nothing another table drops.
 #
-# The internal LAN is br0. Every other interface (the uplink, a VPN, ...) is
+# The internal LAN is br0. Containers on Docker's bridges are let through by
+# from_containers below. Every other interface (the uplink, a VPN, ...) is
 # treated as WAN.
 table inet azazel_host {
+  # Containers on Docker's bridges (docker0 and the user-defined br-<id>, e.g.
+  # the Mattermost network whose slash commands call the host on the br0
+  # address): accepted only when the source is in Docker's default IPv4
+  # pools (172.17.0.0/16 .. 172.31.0.0/16) and is routed back out of the
+  # interface it came in on. The name alone is not enough: "br-*" is a
+  # prefix match and would also match a bridge the operator builds on the
+  # WAN side. 192.168.0.0/16 (Docker's last default pool) is left out: home
+  # uplinks often use it. The installer refuses to enable the firewall when
+  # the uplink itself is docker0 or br-*. Containers' IPv6 is not covered.
+  chain from_containers {
+    ip saddr 172.17.0.0-172.31.255.255 fib saddr . iif oif exists accept
+  }
+
   # Filled from remote-access.nft (WAN SSH and mDNS) when ALLOW_EXTERNAL_SSH=true
   # or set_dev_remote_access.sh MODE=open turned remote access on.
   chain wan_allow {
@@ -22,9 +36,13 @@ table inet azazel_host {
   chain input {
     type filter hook input priority filter; policy drop;
     iif "lo" accept
+    # Before the LAN accept on purpose: a packet conntrack calls invalid is
+    # not part of any connection, from the LAN either.
     ct state invalid drop
     ct state { established, related } accept
     iifname "br0" accept
+    iifname "docker0" jump from_containers
+    iifname "br-*" jump from_containers
     # WAN: ICMP for path MTU and diagnostics, rate-limited echo.
     meta l4proto icmp icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
     meta l4proto icmp icmp type echo-request limit rate 10/second accept
@@ -44,16 +62,18 @@ table inet azazel_host {
   chain forward {
     type filter hook forward priority filter; policy accept;
     ct state { established, related } accept
-    # LAN -> anywhere, and the containers' own bridges (docker0, br-*):
-    # unchanged.
-    iifname { "br0", "docker0" } accept
-    iifname "br-*" accept
+    # LAN -> anywhere, and containers (see from_containers): unchanged.
+    iifname "br0" accept
+    iifname "docker0" jump from_containers
+    iifname "br-*" jump from_containers
     # No new connection from the WAN into the LAN.
     oifname "br0" ct state new counter drop comment "azazel-host: wan to lan new"
     # No new WAN connection to a published container port: Docker DNATs it in
     # prerouting and it arrives here (not in input) towards docker0/br-*.
     # A drop here is final whatever Docker's own FORWARD/DOCKER-USER chains
-    # (iptables-nft, table ip filter) accept.
+    # (iptables-nft, table ip filter) accept. This drops every DNAT'd new
+    # connection that did not come from the LAN or a container, including
+    # a port forward someone adds later for the uplink or a VPN interface.
     ct status dnat ct state new counter drop comment "azazel-host: wan dnat new"
   }
 }

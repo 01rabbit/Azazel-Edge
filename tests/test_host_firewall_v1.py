@@ -91,11 +91,38 @@ def test_the_host_input_is_default_deny_from_the_wan():
 def test_new_wan_to_lan_and_wan_to_published_container_connections_are_dropped():
     fwd = [line.strip() for line in _chain(_code(RULES.read_text(encoding="utf-8")), "forward").splitlines()]
     assert fwd[0] == "type filter hook forward priority filter; policy accept;"
-    lan = fwd.index('iifname { "br0", "docker0" } accept')
+    lan = fwd.index('iifname "br0" accept')
+    assert fwd[lan + 1:lan + 3] == ['iifname "docker0" jump from_containers', 'iifname "br-*" jump from_containers']
     drop_lan = next(i for i, line in enumerate(fwd) if line.startswith('oifname "br0" ct state new') and "drop" in line)
     drop_dnat = next(i for i, line in enumerate(fwd) if line.startswith("ct status dnat ct state new") and "drop" in line)
     # LAN -> anywhere and replies are accepted (not dropped) before the drops.
     assert fwd.index("ct state { established, related } accept") < lan < drop_lan < drop_dnat
+
+
+def test_containers_reach_the_host_only_from_docker_bridges_and_docker_addresses():
+    """Edge#477 review B1: Mattermost's slash commands call the host from a
+    container (a docker bridge, e.g. 172.31.250.0/24 in #488)."""
+    text = _code(RULES.read_text(encoding="utf-8"))
+    chain = [line.strip() for line in _chain(text, "from_containers").splitlines() if line.strip()]
+    assert chain == ["ip saddr 172.17.0.0-172.31.255.255 fib saddr . iif oif exists accept"]
+    inp = [line.strip() for line in _chain(text, "input").splitlines()]
+    br0 = inp.index('iifname "br0" accept')
+    assert inp[br0 + 1:br0 + 3] == ['iifname "docker0" jump from_containers', 'iifname "br-*" jump from_containers']
+    # Never a bare name match: "br-*" is a prefix and a WAN bridge could match it.
+    assert not re.search(r'iifname[^\n]*"(?:br-\*|docker0)"[^\n]*\baccept', text)
+    # The LAN subnet and 192.168.0.0/16 are not in the range.
+    import ipaddress
+    lo, hi = (ipaddress.ip_address(a) for a in ("172.17.0.0", "172.31.255.255"))
+    for addr, inside in (("172.31.250.10", True), ("172.17.0.2", True), ("172.16.0.254", False),
+                         ("192.168.1.10", False), ("10.0.0.1", False)):
+        assert (lo <= ipaddress.ip_address(addr) <= hi) is inside, addr
+
+
+def test_the_installer_refuses_an_uplink_named_like_a_container_bridge(tmp_path):
+    for wan, ok in (("eth1", True), ("br-wan", False), ("docker0", False), ("enx001122", True)):
+        res, calls = _configure(tmp_path / wan, "enable", "", wan_if=wan)
+        assert (res.returncode == 0) is ok, (wan, res.stderr)
+        assert ("fw trial" in calls) is ok
 
 
 def test_remote_access_adds_only_wan_ssh_and_mdns():
@@ -114,6 +141,10 @@ def test_the_emergency_rules_deny_the_wan_and_keep_the_lan():
     assert "wan_allow" not in em and "dport 22" not in em and "5353" not in em
     assert 'oifname "br0" ct state new drop' in em and "ct status dnat ct state new drop" in em
     assert "nd-neighbor-solicit" in em and "udp sport 67 udp dport 68 accept" in em
+    # Review S3: MLD queries as in the main rules; containers as in the main rules.
+    assert "ip6 saddr fe80::/10 meta l4proto ipv6-icmp icmpv6 type mld-listener-query accept" in em
+    main = _chain(_code(RULES.read_text(encoding="utf-8")), "from_containers").strip()
+    assert main in em and 'iifname "br-*" jump from_containers' in em
 
 
 def _real_nft() -> str | None:
@@ -143,7 +174,8 @@ def test_the_rules_parse_with_nft():
 
 class Helper:
     def __init__(self, tmp: Path, nft_fail_rules: bool = False, nft_fail_all: bool = False,
-                 systemd_run_rc: int = 0, timer_active: bool = False):
+                 systemd_run_rc: int = 0, timer_active: bool = False, ss_out: str = "",
+                 br0_addrs: str = "172.16.0.254"):
         self.tmp = tmp
         self.conf = tmp / "etc" / "host-firewall"
         self.run = tmp / "run"
@@ -175,12 +207,15 @@ case "$1" in
       case "$body" in *emergency*) ;; *) [ {fail_rules} = 1 ] && exit 1 ;; esac
       touch {self.present}; exit 0 ;;
   list) [ -e {self.present} ] ;;
-  delete) rm -f {self.present} ;;
+  delete) [ -e {self.tmp}/fail-delete ] && exit 1; rm -f {self.present} ;;
 esac""",
             "systemctl": f'echo "systemctl $*" >>{self.log}\n'
                          f'[ "$1" = is-active ] && exit {0 if timer_active else 3}\nexit 0',
             "systemd-run": f'echo "systemd-run $*" >>{self.log}\nexit {systemd_run_rc}',
             "flock": "exit 0",
+            "sleep": "exit 0",
+            "ss": f"printf '%s' '{ss_out}'",
+            "ip": "".join(f"echo '9: br0    inet {a}/24 scope global br0'\n" for a in br0_addrs.split()),
         }
         for name, body in stubs.items():
             (bindir / name).write_text("#!/bin/bash\n" + body + "\n")
@@ -216,9 +251,13 @@ def test_a_trial_loads_atomically_and_starts_the_rollback_timer(tmp_path):
     (ruleset,) = h.rulesets
     assert ruleset.startswith("table inet azazel_host\ndelete table inet azazel_host\n")
     assert "jump wan_allow" in ruleset and "dport 22" not in ruleset
-    run = next(line for line in h.calls.splitlines() if line.startswith("systemd-run"))
-    assert "--unit=azazel-host-firewall-rollback" in run and "--on-active=120s" in run
-    assert run.endswith("/usr/local/sbin/azazel-host-firewall rollback-unconfirmed")
+    calls = h.calls.splitlines()
+    run = next(line for line in calls if line.startswith("systemd-run"))
+    assert "--unit=azazel-host-firewall-rollback " in run and "--on-active=120s" in run
+    assert "--collect" in run and "RemainAfterElapse=no" in run
+    assert run.endswith("/usr/local/sbin/azazel-host-firewall rollback-unconfirmed first")
+    # Review S2: the safety net is armed before anything is loaded.
+    assert calls.index(run) < next(i for i, line in enumerate(calls) if line.startswith("nft -f"))
     assert "confirm" in res.stdout and "NEW connection" in res.stdout
 
 
@@ -276,8 +315,8 @@ def test_confirm_without_a_trial_is_refused(tmp_path):
 def test_no_timer_means_no_trial(tmp_path):
     h = Helper(tmp_path, systemd_run_rc=1)
     res = h("trial")
-    assert res.returncode == 1 and not h.present.exists() and h.state == "off"
-    assert "taken off again" in res.stderr
+    assert res.returncode == 1 and not h.present.exists() and h.state == ""
+    assert "nothing was changed" in res.stderr and h.rulesets == []
 
 
 @LINUX_ONLY
@@ -342,7 +381,78 @@ def test_a_failed_first_load_changes_nothing(tmp_path):
     h = Helper(tmp_path, nft_fail_rules=True)
     res = h("trial")
     assert res.returncode == 1 and h.state == "off" and not h.present.exists()
-    assert "systemd-run" not in h.calls and all("emergency" not in r for r in h.rulesets)
+    assert all("emergency" not in r for r in h.rulesets)
+    # The timer armed first is stopped again.
+    assert h.calls.rindex("systemctl stop azazel-host-firewall-rollback.timer") > h.calls.index("nft -f")
+
+
+@LINUX_ONLY
+def test_a_rollback_whose_delete_fails_is_recorded_and_tried_again(tmp_path):
+    """Review S1: never left loaded and unconfirmed while the state says pending."""
+    h = Helper(tmp_path)
+    assert h("trial").returncode == 0
+    (tmp_path / "fail-delete").write_text("")
+    res = h("rollback-unconfirmed", "first")
+    assert res.returncode == 1 and h.state == "rollback-failed" and h.present.exists()
+    assert h.calls.count("nft delete table inet azazel_host") == 3  # retried
+    assert "trying again" in res.stderr and "disable" in res.stderr
+    retry = [line for line in h.calls.splitlines() if line.startswith("systemd-run")][-1]
+    assert "--unit=azazel-host-firewall-rollback-retry " in retry and retry.endswith("rollback-unconfirmed retry")
+    # The retry fails too: the other timer name is armed (this one is running).
+    assert h("rollback-unconfirmed", "retry").returncode == 1
+    again = [line for line in h.calls.splitlines() if line.startswith("systemd-run")][-1]
+    assert "--unit=azazel-host-firewall-rollback " in again
+    # refresh does not load it again; the next retry that works takes it off.
+    assert h("refresh").returncode == 0 and len(h.rulesets) == 1
+    (tmp_path / "fail-delete").unlink()
+    assert h("rollback-unconfirmed", "retry").returncode == 0
+    assert h.state == "rolled-back" and not h.present.exists()
+
+
+@LINUX_ONLY
+def test_a_failed_rollback_is_finished_at_boot_or_by_disable(tmp_path):
+    h = Helper(tmp_path)
+    assert h("trial").returncode == 0
+    (tmp_path / "fail-delete").write_text("")
+    assert h("rollback-unconfirmed").returncode == 1
+    assert h("trial").returncode == 1  # not on top of a failed rollback
+    (tmp_path / "fail-delete").unlink()
+    assert h("boot").returncode == 0 and h.state == "rolled-back" and not h.present.exists()
+    h2 = Helper(tmp_path / "b")
+    assert h2("trial").returncode == 0
+    (tmp_path / "b" / "fail-delete").write_text("")
+    assert h2("rollback-unconfirmed").returncode == 1
+    (tmp_path / "b" / "fail-delete").unlink()
+    assert h2("disable").returncode == 0 and h2.state == "" and not h2.present.exists()
+    assert "systemctl stop azazel-host-firewall-rollback-retry.timer" in h2.calls
+
+
+@LINUX_ONLY
+@pytest.mark.parametrize("ss_out,count", [
+    ("", 0),
+    ("0 0 172.16.0.254:22 172.16.0.101:50000\n", 0),
+    ("0 0 [::ffff:172.16.0.254]:22 [::ffff:172.16.0.101]:50000\n", 0),
+    ("0 0 127.0.0.1:22 127.0.0.1:50000\n", 0),
+    ("0 0 10.96.0.203:22 10.96.0.3:50000\n", 1),
+    ("0 0 [fe80::1%eth1]:22 [fe80::2%eth1]:50000\n", 1),
+    ("0 0 [fd96::1b6]:22 [fd96::3]:50000\n0 0 172.16.0.254:22 172.16.0.5:1\n", 1),
+])
+def test_uplink_ssh_sessions_are_told_apart_from_lan_ones(tmp_path, ss_out, count):
+    h = Helper(tmp_path, ss_out=ss_out)
+    res = h("uplink-ssh-sessions")
+    assert res.returncode == 0 and res.stdout.strip() == str(count), res.stderr
+
+
+@LINUX_ONLY
+def test_confirm_warns_when_ssh_sessions_came_in_through_the_uplink(tmp_path):
+    """Review S4: an established uplink session survives; confirming from it proves nothing."""
+    h = Helper(tmp_path, ss_out="0 0 10.96.0.203:22 10.96.0.3:50000\n")
+    assert h("trial").returncode == 0
+    res = h("confirm")
+    assert res.returncode == 0 and "WARNING" in res.stderr and "came in through the uplink" in res.stderr
+    h2 = Helper(tmp_path / "b", ss_out="0 0 172.16.0.254:22 172.16.0.101:50000\n")
+    assert h2("trial").returncode == 0
+    assert "WARNING" not in h2("confirm").stderr
 
 
 @LINUX_ONLY
@@ -481,7 +591,7 @@ def test_the_installer_enables_it_only_by_an_option():
 
 
 def _configure(tmp_path: Path, action: str, state: str, external: str = "false",
-               sessions: str = "0") -> tuple[subprocess.CompletedProcess, str]:
+               sessions: str = "0", wan_if: str = "eth1") -> tuple[subprocess.CompletedProcess, str]:
     log = tmp_path / "calls.log"
     conf = tmp_path / "hf"
     conf.mkdir(parents=True)
@@ -493,9 +603,9 @@ HOST_FW_HELPER=fwstub
 HOST_FW_DIR={conf}
 HOST_FW_ACTION={action}
 ALLOW_EXTERNAL_SSH={external}
-fwstub() {{ echo "fw $*" >>{log}; }}
+WAN_IF_DETECTED={wan_if}
+fwstub() {{ if [ "$1" = uplink-ssh-sessions ]; then echo {sessions}; else echo "fw $*" >>{log}; fi; }}
 install_host_firewall_files() {{ echo install >>{log}; }}
-uplink_ssh_sessions() {{ echo {sessions}; }}
 {fns}
 configure_host_firewall </dev/null
 """
@@ -511,13 +621,20 @@ configure_host_firewall </dev/null
     ("enable", "rolled-back", ["fw remote-access off", "fw trial"]),
     ("enable", "enabled", ["fw remote-access off", "fw refresh"]),
     ("disable", "enabled", ["fw remote-access off", "fw disable"]),
+    # Re-run during a trial or after a failed rollback: a NOTICE, no exit.
+    ("enable", "pending", ["fw remote-access off"]),
+    ("keep", "pending", ["fw remote-access off"]),
+    ("enable", "rollback-failed", ["fw remote-access off"]),
+    ("keep", "rollback-failed", ["fw remote-access off"]),
 ])
 def test_what_the_installer_does_with_the_host_firewall(tmp_path, action, state, want):
     res, calls = _configure(tmp_path, action, state)
     assert res.returncode == 0, res.stderr
     assert calls.splitlines() == ["install"] + want
-    if action == "keep" and state != "enabled":
+    if action == "keep" and state in ("", "rolled-back"):
         assert "--enable-host-firewall" in res.stdout
+    if state in ("pending", "rollback-failed"):
+        assert "NOTICE" in res.stdout
 
 
 def test_allow_external_ssh_turns_remote_access_on(tmp_path):
@@ -530,21 +647,6 @@ def test_no_confirmation_without_a_terminal_and_none_from_an_uplink_session(tmp_
     assert "fw confirm" not in calls and "no terminal" in res.stdout
     res, calls = _configure(tmp_path / "b", "enable", "", sessions="2")
     assert "fw confirm" not in calls and "came in through the uplink" in res.stdout
-
-
-@pytest.mark.parametrize("ss_out,count", [
-    ("", 0),
-    ("0 0 172.16.0.254:22 172.16.0.101:50000\n", 0),
-    ("0 0 [::ffff:172.16.0.254]:22 [::ffff:172.16.0.101]:50000\n", 0),
-    ("0 0 127.0.0.1:22 127.0.0.1:50000\n", 0),
-    ("0 0 10.96.0.203:22 10.96.0.3:50000\n", 1),
-    ("0 0 [fd96::1b6]:22 [fd96::3]:50000\n0 0 172.16.0.254:22 172.16.0.5:1\n", 1),
-])
-def test_uplink_ssh_sessions_are_told_apart_from_lan_ones(ss_out, count):
-    fn = _function(NETWORK, "uplink_ssh_sessions")
-    script = f"SSH_LISTEN_IP=172.16.0.254\nss() {{ printf '%s' '{ss_out}'; }}\n{fn}uplink_ssh_sessions\n"
-    res = subprocess.run(["bash", "-c", "set -euo pipefail\n" + script], capture_output=True, text=True, timeout=10)
-    assert res.stdout.strip() == str(count), res.stderr
 
 
 def test_dev_remote_access_opens_and_closes_the_firewall_with_sshd_and_avahi():

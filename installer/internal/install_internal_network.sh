@@ -703,6 +703,9 @@ EOS
 
   # nftables.service runs `flush ruleset` on start, reload and stop, which
   # removes table inet azazel_host too; it is loaded again right after.
+  # No "-" prefix on purpose: when the rules do not load, the emergency
+  # ruleset is loaded and nftables.service shows as failed instead of
+  # passing silently (ExecStop, the flush, is not run for a failed start).
   install -d -m 0755 "$(dirname "$HOST_FW_NFT_DROPIN")"
   cat > "$HOST_FW_NFT_DROPIN" <<'EOD'
 # Installed by Azazel-Edge install_internal_network.sh (Edge#477): put the
@@ -717,26 +720,6 @@ EOD
   systemctl enable azazel-host-firewall.service
 }
 
-# Established SSH sessions that came in through an address other than the
-# LAN (br0) one or loopback: they stay open under the host firewall
-# (established), so confirming from them proves nothing about new ones.
-uplink_ssh_sessions() {
-  local out local_addr n=0
-  out="$(ss -Htn state established '( sport = :22 )' 2>/dev/null)" || out=""
-  while read -r _ _ local_addr _; do
-    [[ -n "$local_addr" ]] || continue
-    local_addr="${local_addr%:*}"
-    local_addr="${local_addr#[}"
-    local_addr="${local_addr%]}"
-    local_addr="${local_addr#::ffff:}"
-    case "$local_addr" in
-      "$SSH_LISTEN_IP" | 127.* | ::1) ;;
-      *) n=$((n + 1)) ;;
-    esac
-  done <<<"$out"
-  echo "$n"
-}
-
 # First enable: a trial that is taken off automatically unless confirmed
 # (azazel-host-firewall trial). Asked here only on a terminal and only when
 # no SSH session came in through the uplink; otherwise the operator confirms
@@ -745,7 +728,7 @@ start_host_firewall_trial() {
   local answer="" wan_sessions=0
   "$HOST_FW_HELPER" trial
   if [[ "${ALLOW_EXTERNAL_SSH,,}" != "true" ]]; then
-    wan_sessions="$(uplink_ssh_sessions)"
+    wan_sessions="$("$HOST_FW_HELPER" uplink-ssh-sessions)"
   fi
   if [[ "$wan_sessions" -gt 0 ]]; then
     echo "NOTICE: $wan_sessions SSH session(s) came in through the uplink. They stay open, but new SSH connections from the uplink are now refused. To keep the host firewall, confirm from the LAN (br0) or the console: sudo $HOST_FW_HELPER confirm"
@@ -777,21 +760,31 @@ configure_host_firewall() {
   state="$(head -n 1 -- "$HOST_FW_DIR/state" 2>/dev/null || true)"
   case "$HOST_FW_ACTION" in
     enable)
-      if [[ "$state" == "enabled" ]]; then
-        "$HOST_FW_HELPER" refresh
-      else
-        start_host_firewall_trial
-      fi
+      # The firewall tells the LAN and containers from the WAN by interface
+      # name; an uplink named like them would be treated as LAN/containers.
+      case "$WAN_IF_DETECTED" in
+        docker0 | br-*)
+          echo "ERROR: the uplink is $WAN_IF_DETECTED; the host firewall treats docker0 and br-* as container bridges. Rename the uplink bridge (or use another uplink) before --enable-host-firewall." >&2
+          exit 1
+          ;;
+      esac
+      case "$state" in
+        enabled) "$HOST_FW_HELPER" refresh ;;
+        pending) echo "NOTICE: a host firewall trial is already running; confirm it from a new connection (sudo $HOST_FW_HELPER confirm) or let it roll back, then re-run if needed." ;;
+        rollback-failed) echo "NOTICE: an unconfirmed host firewall could not be taken off; see: sudo $HOST_FW_HELPER status; remove it with: sudo $HOST_FW_HELPER disable" ;;
+        *) start_host_firewall_trial ;;
+      esac
       ;;
     disable)
       "$HOST_FW_HELPER" disable
       ;;
     *)
-      if [[ "$state" == "enabled" ]]; then
-        "$HOST_FW_HELPER" refresh
-      else
-        echo "NOTICE: the host firewall (WAN default deny) is off. To turn it on: $0 --enable-host-firewall"
-      fi
+      case "$state" in
+        enabled) "$HOST_FW_HELPER" refresh ;;
+        pending) echo "NOTICE: a host firewall trial is running; confirm it from a new connection: sudo $HOST_FW_HELPER confirm" ;;
+        rollback-failed) echo "NOTICE: an unconfirmed host firewall could not be taken off; remove it with: sudo $HOST_FW_HELPER disable" ;;
+        *) echo "NOTICE: the host firewall (WAN default deny) is off. To turn it on: $0 --enable-host-firewall" ;;
+      esac
       ;;
   esac
 }

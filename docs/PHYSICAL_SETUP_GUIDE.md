@@ -129,11 +129,26 @@ default `ChangeMe1234` is refused.
 
 - input: everything from the WAN is refused except replies, ICMP (echo
   rate-limited), ICMPv6 neighbour discovery / router advertisements /
-  packet-too-big, and DHCP / DHCPv6 replies. The LAN (`br0`) and loopback are
-  not filtered. Every interface other than `br0` counts as WAN.
-- forward: no new connection from the WAN into the LAN, and none to a
-  published container port (Docker DNAT). LAN -> WAN and replies are not
-  changed.
+  packet-too-big / MLD queries, and DHCP / DHCPv6 replies. The LAN (`br0`)
+  and loopback are not filtered.
+- Containers on Docker's bridges (`docker0`, `br-<id>`; e.g. Mattermost's
+  slash commands calling the host) reach the host when their source is in
+  Docker's default pools 172.17.0.0/16 .. 172.31.0.0/16 and routes back out
+  of the same bridge. A Docker network from 192.168.0.0/16 (Docker's last
+  default pool) or IPv6 is not let through. Do not give the uplink a name
+  starting with `br-` (or `docker0`); the installer refuses to enable the
+  firewall on such an uplink.
+- Every other interface (the uplink, a VPN such as WireGuard added later)
+  counts as WAN.
+- forward: no new connection from the WAN into the LAN, and no new
+  connection that was DNAT'd (`ct status dnat`) unless it came from the LAN
+  or a container. That covers published container ports, and also any port
+  forward added later for the uplink or a VPN: it is dropped too. LAN -> WAN
+  and replies are not changed.
+- DHCPv6 replies are accepted only from a link-local server address
+  (fe80::/10), which is what a server on the uplink link uses. Behind a
+  DHCPv6 relay that answers from a global address, the replies are dropped
+  (the uplink keeps only SLAAC addresses); check on the device.
 - With `ALLOW_EXTERNAL_SSH=true`, or after `set_dev_remote_access.sh`
   `MODE=open`, WAN SSH (22/tcp) and mDNS (5353/udp) are let through as well;
   `MODE=close` (or a re-run without `ALLOW_EXTERNAL_SSH=true`) takes them out.
@@ -142,7 +157,12 @@ The first enable is a trial: it is taken off automatically after 120 s unless
 confirmed. Confirm from a **new** connection (a new SSH session over the LAN,
 or the console), because an already open session survives as an established
 connection: `sudo azazel-host-firewall confirm`. On a terminal with no SSH
-session from the uplink the installer asks instead. A reboot during the trial
+session from the uplink the installer asks instead. `confirm` itself cannot
+tell which session it runs in: it warns when an SSH session came in through
+the uplink (they survive, new ones are refused) but still confirms, so do
+not confirm from such a session; if you did, `sudo azazel-host-firewall
+disable` takes it off again. A re-run of the installer during the trial
+only prints a NOTICE. A reboot during the trial
 also takes it off. Once confirmed, it is loaded at every boot before the
 network comes up (`azazel-host-firewall.service`), again by
 `azazel-internal-apply`, and after `nftables.service` flushes the ruleset.
@@ -261,5 +281,6 @@ For vehicle or heavy vibration, use additional anti-vibration mounts.
 - Raspberry Pi 5 では内蔵 Ethernet（eth0）と内蔵 Wi-Fi（wlan0、内部 AP）が内部 LAN（br0）になるため、上流（WAN）には USB Ethernet か USB Wi-Fi のアダプタが別に必要です。既定経路が eth0/wlan0 のままだとインストーラは何も変えずに停止します。
 - Raspberry Pi OS では Wi-Fi の国設定（`WIFI_COUNTRY=JP` など）が必須です。未設定だと Wi-Fi が rfkill で止まったままで内部 AP が上がらないため、インストーラは変更前に停止します。
 - 内部 AP のパスフレーズは既定でランダム生成され、`/etc/azazel-edge/internal-ap.psk`（root のみ読める 0600）に保存されます。表示・ログには出ません。
-- ホストのファイアウォール（WAN 側は既定拒否、WAN→LAN の新規接続も拒否）は既定で無効です。`--enable-host-firewall` で有効にすると最初は試行になり、120 秒以内に**新しい**接続（LAN 側の新しい SSH かコンソール）から `sudo azazel-host-firewall confirm` しないと自動で外れます（第 1.5 節）。
+- ホストのファイアウォール（WAN 側は既定拒否、WAN→LAN の新規接続も拒否）は既定で無効です。`--enable-host-firewall` で有効にすると最初は試行になり、120 秒以内に**新しい**接続（LAN 側の新しい SSH かコンソール）から `sudo azazel-host-firewall confirm` しないと自動で外れます。上流から入った既存の SSH セッションで confirm すると警告は出ますが通ってしまうので、そこからは確認しないでください（第 1.5 節）。
+- 有効時は DNAT された新規接続を LAN とコンテナ発以外すべて落とします（後から足した上流や VPN のポート転送も）。DHCPv6 の応答はリンクローカルからだけ受けるので、グローバルアドレスで答える DHCPv6 リレーの配下では SLAAC だけになります。上流の名前を `br-` で始めないでください。
 - ハードウェアウォッチドッグは既定で無効です。使う場合は実機で `bcm2835-wdt` と `/dev/watchdog` を確かめてから、第 4 節の手順で設定してください。

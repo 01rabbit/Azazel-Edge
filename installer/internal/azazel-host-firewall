@@ -12,11 +12,14 @@
 #                         changes); off: nothing
 #   trial                 first enable: load now, roll back automatically
 #                         unless confirmed within TRIAL_SECONDS
-#   confirm               keep the trial (run it from a NEW connection)
+#   confirm               keep the trial (run it from a NEW connection; it
+#                         warns when SSH sessions came in through the uplink)
 #   rollback-unconfirmed  run by the trial timer
 #   disable               remove the table; the state becomes off
 #   remote-access on|off  WAN SSH (22/tcp) and mDNS (5353/udp)
 #   status                print the state (read-only)
+#   uplink-ssh-sessions   count SSH sessions that came in through the
+#                         uplink (read-only; used by the installer)
 #
 # The state is root-only in /etc/azazel-edge/host-firewall; there is no
 # environment variable that changes what is loaded.
@@ -34,20 +37,29 @@ STATE_FILE="$CONF_DIR/state"
 RUN_DIR="/run/azazel-edge"
 CONFIRM_FILE="$RUN_DIR/host-firewall.confirmed"
 TRIAL_UNIT="azazel-host-firewall-rollback"
+RETRY_UNIT="azazel-host-firewall-rollback-retry"
+RETRY_SECONDS=30
 TRIAL_SECONDS=120
 SELF="/usr/local/sbin/azazel-host-firewall"
 
 # Loaded when the rules above do not load and the host firewall is enabled.
-# Nothing from the WAN but replies, IPv6 ND/PTB and DHCP replies.
+# Nothing from the WAN but replies, IPv6 ND/PTB/MLD queries and DHCP
+# replies. The LAN and the containers (as in azazel-host.nft) are kept.
 EMERGENCY_RULES='table inet azazel_host
 delete table inet azazel_host
 table inet azazel_host {
+  chain from_containers {
+    ip saddr 172.17.0.0-172.31.255.255 fib saddr . iif oif exists accept
+  }
   chain input {
     type filter hook input priority filter; policy drop;
     iif "lo" accept
     ct state { established, related } accept
     iifname "br0" accept
+    iifname "docker0" jump from_containers
+    iifname "br-*" jump from_containers
     meta l4proto ipv6-icmp icmpv6 type { packet-too-big, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+    ip6 saddr fe80::/10 meta l4proto ipv6-icmp icmpv6 type mld-listener-query accept
     udp sport 67 udp dport 68 accept
     ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
     counter comment "azazel-host: emergency wan default deny"
@@ -55,8 +67,9 @@ table inet azazel_host {
   chain forward {
     type filter hook forward priority filter; policy accept;
     ct state { established, related } accept
-    iifname { "br0", "docker0" } accept
-    iifname "br-*" accept
+    iifname "br0" accept
+    iifname "docker0" jump from_containers
+    iifname "br-*" jump from_containers
     oifname "br0" ct state new drop
     ct status dnat ct state new drop
   }
@@ -102,6 +115,18 @@ remove_table() {
   fi
 }
 
+# For the rollback: a few attempts before giving up.
+remove_table_retrying() {
+  local i
+  for i in 1 2 3; do
+    if remove_table; then
+      return 0
+    fi
+    [[ "$i" -lt 3 ]] && sleep 1
+  done
+  return 1
+}
+
 # The whole ruleset, built in memory first: a missing or unreadable file
 # stops here, before anything is loaded (a partial ruleset is never loaded).
 compose_rules() {
@@ -132,13 +157,52 @@ enforce() {
 }
 
 stop_trial_timer() {
-  systemctl stop "$TRIAL_UNIT.timer" >/dev/null 2>&1 || true
-  systemctl reset-failed "$TRIAL_UNIT.timer" "$TRIAL_UNIT.service" >/dev/null 2>&1 || true
+  local u
+  for u in "$TRIAL_UNIT" "$RETRY_UNIT"; do
+    systemctl stop "$u.timer" >/dev/null 2>&1 || true
+    systemctl reset-failed "$u.timer" "$u.service" >/dev/null 2>&1 || true
+  done
+}
+
+# A transient timer that runs `rollback-unconfirmed` once. Unloaded after it
+# fires (RemainAfterElapse=no, --collect), so the name can be used again.
+arm_timer() {
+  local unit="$1" seconds="$2" arg="$3"
+  systemd-run --quiet --collect --unit="$unit" --on-active="${seconds}s" \
+    --timer-property=AccuracySec=1s --timer-property=RemainAfterElapse=no \
+    "$SELF" rollback-unconfirmed "$arg"
+}
+
+# Established SSH sessions whose local address is neither loopback nor a
+# br0 address: they came in through the uplink (or a VPN). They survive the
+# host firewall (established), so a confirmation typed in them proves
+# nothing about new connections.
+cmd_uplink_ssh_sessions() {
+  local lan="" out local_addr n=0
+  lan="$(ip -o addr show dev br0 2>/dev/null | awk '{print $4}' | sed 's|/.*||')" || lan=""
+  out="$(ss -Htn state established '( sport = :22 )' 2>/dev/null)" || out=""
+  while read -r _ _ local_addr _; do
+    [[ -n "$local_addr" ]] || continue
+    local_addr="${local_addr%:*}"
+    local_addr="${local_addr#[}"
+    local_addr="${local_addr%]}"
+    local_addr="${local_addr#::ffff:}"
+    local_addr="${local_addr%%%*}"
+    case "$local_addr" in
+      127.* | ::1) continue ;;
+    esac
+    if grep -qxF -- "$local_addr" <<<"$lan"; then
+      continue
+    fi
+    n=$((n + 1))
+  done <<<"$out"
+  echo "$n"
 }
 
 cmd_boot() {
   # Started again by hand while a trial runs: not a reboot.
-  if systemctl is-active --quiet "$TRIAL_UNIT.timer" 2>/dev/null; then
+  if systemctl is-active --quiet "$TRIAL_UNIT.timer" 2>/dev/null \
+      || systemctl is-active --quiet "$RETRY_UNIT.timer" 2>/dev/null; then
     cmd_refresh
     return
   fi
@@ -146,9 +210,12 @@ cmd_boot() {
     enabled)
       enforce
       ;;
-    pending)
+    pending | rollback-failed)
       # Rebooted during a trial: the timer is gone and nobody confirmed.
-      remove_table
+      if ! remove_table_retrying; then
+        echo "ERROR: the unconfirmed host firewall could not be taken off at boot; run: $SELF disable" >&2
+        return 1
+      fi
       write_state rolled-back
       echo "NOTICE: the host firewall trial was not confirmed before the reboot; it is off (rolled back). Enable it again with install_internal_network.sh --enable-host-firewall." >&2
       ;;
@@ -172,27 +239,39 @@ cmd_trial() {
     enabled) die "the host firewall is already enabled (use: $SELF refresh)" ;;
     pending) die "a trial is already running; confirm it ($SELF confirm) or wait for the rollback" ;;
   esac
+  case "$state" in
+    rollback-failed) die "an earlier rollback could not remove the table (see: journalctl -u $RETRY_UNIT); run: $SELF disable" ;;
+  esac
   stop_trial_timer
   install -d -m 0755 "$RUN_DIR"
   rm -f -- "$CONFIRM_FILE"
+  # The safety net first: no timer, no trial (nothing is loaded).
+  if ! arm_timer "$TRIAL_UNIT" "$TRIAL_SECONDS" first; then
+    stop_trial_timer
+    die "could not start the rollback timer; nothing was changed"
+  fi
   write_state pending
   if ! load_rules; then
+    stop_trial_timer
     remove_table || true
     write_state "${state:-off}"
     die "the host firewall rules did not load; nothing was changed"
-  fi
-  # No safety net, no trial: without the timer the rules come off again.
-  if ! systemd-run --quiet --unit="$TRIAL_UNIT" --on-active="${TRIAL_SECONDS}s" \
-      --timer-property=AccuracySec=1s "$SELF" rollback-unconfirmed; then
-    remove_table || true
-    write_state "${state:-off}"
-    die "could not start the rollback timer; the host firewall was taken off again"
   fi
   echo "Host firewall loaded on trial. It is taken off automatically in ${TRIAL_SECONDS} s unless confirmed: from a NEW connection (new SSH session or console), run: sudo $SELF confirm"
 }
 
 cmd_confirm() {
-  [[ "$(read_state)" == "pending" ]] || die "no host firewall trial is running"
+  local wan_sessions=0
+  case "$(read_state)" in
+    pending | rollback-failed) ;;
+    *) die "no host firewall trial is running" ;;
+  esac
+  if [[ ! -e "$REMOTE_MARKER" ]]; then
+    wan_sessions="$(cmd_uplink_ssh_sessions)"
+  fi
+  if [[ "$wan_sessions" -gt 0 ]]; then
+    echo "WARNING: $wan_sessions SSH session(s) came in through the uplink. They stay open, but NEW SSH connections from the uplink are refused. If you are confirming from one of them, cancel with: $SELF disable (then reconnect from the LAN or the console)." >&2
+  fi
   install -d -m 0755 "$RUN_DIR"
   : >"$CONFIRM_FILE"
   write_state enabled
@@ -200,15 +279,33 @@ cmd_confirm() {
   echo "Host firewall confirmed; it is enabled and loaded at every boot."
 }
 
+# Run by the trial timer ($1: first) or the retry timer ($1: retry).
 cmd_rollback_unconfirmed() {
-  [[ "$(read_state)" == "pending" ]] || return 0
+  local next="$RETRY_UNIT"
+  case "$(read_state)" in
+    pending | rollback-failed) ;;
+    *) return 0 ;;
+  esac
   if [[ -e "$CONFIRM_FILE" ]]; then
     write_state enabled
     return 0
   fi
-  remove_table
-  write_state rolled-back
-  echo "ERROR: the host firewall trial was not confirmed within ${TRIAL_SECONDS} s and was taken off (rolled back)." >&2
+  if remove_table_retrying; then
+    write_state rolled-back
+    echo "ERROR: the host firewall trial was not confirmed within ${TRIAL_SECONDS} s and was taken off (rolled back)." >&2
+    return 0
+  fi
+  # Not confirmed and still loaded: never left like that silently. The
+  # state says so (boot takes it off; refresh does not load it) and the
+  # rollback is tried again. The retry timer is armed from the other name
+  # (this one is still running).
+  write_state rollback-failed
+  [[ "${1:-first}" == "retry" ]] && next="$TRIAL_UNIT"
+  echo "ERROR: the unconfirmed host firewall could not be taken off (nft delete table inet azazel_host failed); trying again in ${RETRY_SECONDS} s. To remove it by hand: $SELF disable" >&2
+  if ! arm_timer "$next" "$RETRY_SECONDS" retry; then
+    echo "ERROR: could not start the retry timer either; the host firewall stays loaded until: $SELF disable (or a reboot, which takes it off)." >&2
+  fi
+  return 1
 }
 
 cmd_disable() {
@@ -249,7 +346,7 @@ main() {
   # One state change at a time (confirm against the rollback timer). The
   # lock is in /run: refresh also runs inside nftables.service, where /etc
   # is read-only (ProtectSystem=full).
-  if [[ "$cmd" != "status" ]]; then
+  if [[ "$cmd" != "status" && "$cmd" != "uplink-ssh-sessions" ]]; then
     install -d -m 0755 "$RUN_DIR"
     exec 9>"$RUN_DIR/host-firewall.lock"
     flock 9
@@ -259,7 +356,8 @@ main() {
     refresh) cmd_refresh ;;
     trial) cmd_trial ;;
     confirm) cmd_confirm ;;
-    rollback-unconfirmed) cmd_rollback_unconfirmed ;;
+    rollback-unconfirmed) cmd_rollback_unconfirmed "$@" ;;
+    uplink-ssh-sessions) cmd_uplink_ssh_sessions ;;
     disable) cmd_disable ;;
     remote-access) cmd_remote_access "$@" ;;
     status) cmd_status ;;
