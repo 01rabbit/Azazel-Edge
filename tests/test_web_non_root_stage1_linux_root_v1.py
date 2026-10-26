@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import stat
 import subprocess
@@ -31,7 +32,7 @@ for _p in (ROOT / "py", ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from _control_daemon_inproc import InProcessControlDaemon  # noqa: E402
+from _control_daemon_inproc import InProcessControlDaemon, short_tmpdir  # noqa: E402
 from azazel_edge_ai import agent as agent_mod  # noqa: E402
 from azazel_edge_control import daemon as control_daemon  # noqa: E402
 
@@ -117,8 +118,19 @@ def test_control_sock_unknown_web_account_leaves_only_root(daemon, monkeypatch):
 
 
 @pytest.fixture
-def query_socket(tmp_path, monkeypatch, web_is):
-    os.chmod(tmp_path, 0o711)
+def query_base():
+    # Directly under /tmp: pytest's own tmp_path parents are 0700 root.
+    base = short_tmpdir("azq")
+    os.chmod(base, 0o711)
+    try:
+        yield base
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+@pytest.fixture
+def query_socket(query_base, monkeypatch, web_is):
+    tmp_path = query_base
     monkeypatch.setattr(agent_mod, "_query_account_ids", lambda: (WEB_UID, WEB_UID))
     answered = []
     monkeypatch.setattr(agent_mod, "_handle_manual_query_request",

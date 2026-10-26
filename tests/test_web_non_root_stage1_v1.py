@@ -610,7 +610,7 @@ def test_ai_bridge_refuses_manual_query_once_the_query_socket_listens(monkeypatc
 @pytest.mark.parametrize("mode,gid_delta", [(0o770, 0), (0o755, 0), (0o700, 0), (0o750, 1)])
 def test_an_existing_query_directory_is_refused_not_fixed(monkeypatch, tmpdir_short, mode, gid_delta):
     own_gid = os.getegid()
-    groups = [g for g in os.getgroups() if g != own_gid]
+    groups = [g for g in os.getgroups() if g != own_gid] or ([own_gid + 4242] if IS_ROOT else [])
     if gid_delta and not groups:
         pytest.skip("no second group to own the directory")
     want_gid = own_gid
