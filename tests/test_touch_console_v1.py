@@ -139,6 +139,55 @@ class TouchConsoleSourceTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r"""['"]/api/""", _JS)), len(_USED_API))
         self.assertNotIn("/api/", _HTML)
 
+    def test_no_dangerous_dom_or_navigation_sinks(self) -> None:
+        forbidden = r"""innerHTML|outerHTML|insertAdjacent|document\.write|eval\(|new Function|\.src\s*=|\.href\s*=|setAttribute\(['"]on|XMLHttpRequest|sendBeacon|WebSocket|EventSource|window\.open|location\.(assign|replace)\(|location\s*=(?!=)"""
+        for name, source in (("touch.js", _JS), ("touch.html", _HTML)):
+            self.assertIsNone(re.search(forbidden, source), name)
+
+    def test_every_call_site_uses_the_api_table(self) -> None:
+        # The table itself: names -> paths, all in the allow-list.
+        table = dict(re.findall(r"^\s+(\w+): '(/api/[^']*)',?$", _JS, re.M))
+        allowed = {path.replace("<runbook_id>", "") for _method, path in _USED_API}
+        self.assertEqual(set(table.values()), allowed)
+        # fetch(): only the request() helper (fed by the checks below) and the stream.
+        fetches = re.findall(r"\bfetch\(([^,]+),", _JS)
+        self.assertEqual(sorted(a.strip() for a in fetches), ["API.stateStream", "path"])
+        self.assertEqual(len(re.findall(r"function request\(method, path, body, timeoutMs\)", _JS)), 1)
+        # request(): every call passes a literal method and an API.<name> value
+        # (optionally + a query/encoded id); the one pass-through is opRequest.
+        calls = re.findall(r"(?<![\w.])request\(([^)]*)", _JS)
+        passthrough = 0
+        for args in calls:
+            if args.startswith("method, path, body"):
+                passthrough += 1
+                continue
+            m = re.match(r"'(GET|POST)', (API\.(\w+))( \+ .*)?(, .*)?$", args)
+            self.assertIsNotNone(m, args)
+            self.assertIn(m.group(3), table, args)
+        self.assertEqual(passthrough, 2)  # the definition and opRequest's body
+        op_calls = re.findall(r"(?<![\w.])opRequest\(([^)]*)", _JS)
+        for args in op_calls:
+            if args.startswith("method, path, body"):
+                continue  # definition
+            m = re.match(r"'POST', API\.(\w+)", args)
+            self.assertIsNotNone(m, args)
+            self.assertIn(m.group(1), table, args)
+        self.assertEqual({re.match(r"'POST', API\.(\w+)", a).group(1) for a in op_calls if not a.startswith("method")},
+                         {"runbookAct", "wifiConnect"})
+
+    def test_ci_runs_the_js_logic_suite(self) -> None:
+        ci = (_REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn("actions/setup-node", ci)
+        self.assertIn("node tests/touch_console_logic.test.js", ci)
+
+    def test_hold_is_reset_when_the_page_loses_focus(self) -> None:
+        self.assertIn("hold = advanceHold(hold, performance.now());", _JS)
+        self.assertIn("window.addEventListener('blur', resetAllHolds);", _JS)
+        self.assertIn("window.addEventListener('pagehide', function () { resetAllHolds();", _JS)
+        self.assertRegex(_JS, r"if \(document\.hidden\) \{\s*resetAllHolds\(\);")
+        # A sheet makes the page behind it inert.
+        self.assertIn("app.setAttribute('inert', '')", _JS)
+
     def test_js_methods_match_the_existing_contracts(self) -> None:
         self.assertIn("opRequest('POST', API.wifiConnect", _JS)
         self.assertIn("opRequest('POST', API.runbookAct", _JS)

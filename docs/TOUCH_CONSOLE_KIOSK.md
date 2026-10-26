@@ -87,7 +87,11 @@ Use the main dashboard or Ops Comm for the others.
 - The access token is typed on the Settings tab and kept in page memory only.
   It is not written to localStorage, sessionStorage or a cookie, and it is not
   put in a URL. Reloading the page forgets it. A `?token=` in the address is
-  removed from the address bar and not used.
+  removed from the address bar and not used — but by then the request carrying
+  it has already reached the server, so it can be in the nginx / gunicorn
+  access log, in the browser history and in the kiosk command line. Never open
+  `/touch` (or any dashboard page) with `?token=`; if it happened, rotate that
+  token.
 - If the same browser profile already holds the token the existing dashboard
   pages store (`localStorage` key `azazel_token`, written when a dashboard page
   is opened with `?token=`), `/touch` reads it. It never writes it. Use a
@@ -165,6 +169,7 @@ To leave kiosk mode, close Chromium from a keyboard (Alt+F4) or over SSH.
 - SSE（`/api/state/stream`）は触っている間だけつなぎ、5 分触らないと切ります。
   ページが非表示のときはポーリングも止めます。結果は API の応答どおりに表示し、未実装・
   未配送・応答なし（実行された可能性あり）を成功に見せません。
+- `?token=` 付きで開くと、画面側で消してもサーバのアクセスログ・履歴に残ります。付けないでください（付けたらトークンを替える）。
 - トークンとパスフレーズはページのメモリにだけ置き、保存・URL・ログに残しません。
   再読み込みでトークンは消えます。キオスクでは `--incognito` を推奨します。
 - キオスクはユーザーセッションの autostart で Chromium を `--kiosk` 起動します

@@ -37,7 +37,13 @@ eq(C(500, { ok: false, error: '[Errno 104] Connection reset by peer' }), 'delive
 eq(C(500, { ok: false, error: 'busy' }), 'busy', 'daemon busy -> refused, not run');
 eq(C(500, { ok: false, error: 'forbidden', reason: 'web_ui' }), 'busy', 'peer table refusal -> refused');
 eq(C(500, { ok: false, error: 'Rate limit exceeded (1 req/3sec)' }), 'busy', 'rate limit -> refused');
-eq(C(500, { ok: false, error: 'Wi-Fi connect busy: another connect is in progress; try again' }), 'failed', 'wifi busy text is a failure');
+eq(C(500, { ok: false, error: 'Wi-Fi connect busy: another connect is in progress; try again' }), 'busy', 'wifi connect busy -> refused, not run');
+// POST answered 5xx without the API's JSON -> may have run
+eq(T.classifyResult(502, null, '', 'POST').kind, 'delivery_unknown', 'POST 502 without body -> may have run');
+eq(T.classifyResult(500, { html: 'x' }, '', 'POST').kind, 'delivery_unknown', 'POST 500 unstructured -> may have run');
+eq(T.classifyResult(500, { ok: false, error: 'boom' }, '', 'POST').kind, 'failed', 'POST 500 structured error -> failed');
+eq(T.classifyResult(502, null, '', 'GET').kind, 'failed', 'GET 502 -> failed (nothing to run)');
+eq(T.classifyResult(503, null, '', 'POST').kind === 'ok', false, 'never ok');
 eq(C(0, null, 'timeout'), 'delivery_unknown', 'transport timeout -> delivery_unknown');
 eq(C(0, null, 'network'), 'delivery_unknown', 'network error -> delivery_unknown');
 eq(C(401, { ok: false, error: 'Unauthorized' }), 'unauthorized', '401 -> unauthorized');
@@ -92,6 +98,7 @@ eq(v.mode, undefined, 'legacy concept mode is not part of the view (#340)');
 eq(v.trace.id, 'trace-1', 'decision trace');
 eq(v.trace.policy, 'balanced', 'policy profile');
 eq(v.daemonDown, false, 'daemon up');
+eq(v.defensive.dryRun, true, 'dry run reported');
 eq(v.mioText, 'advice', 'mio text');
 
 v = T.deriveView({ bundle: bundle(), nowSec: now + 120, skewSec: 0 });
@@ -121,6 +128,10 @@ eq(v.staleReason, 'unverified', 'daemon down -> unverified, not stale');
 const fileSrc = bundle();
 fileSrc.state.source = 'FILE:/x';
 eq(T.deriveView({ bundle: fileSrc, nowSec: now }).daemonDown, true, 'file fallback snapshot -> daemon down');
+
+const noSafety = bundle();
+delete noSafety.decision_focus.safety;
+eq(T.deriveView({ bundle: noSafety, nowSec: now }).defensive.dryRun, null, 'missing dry_run -> unknown, not enforced');
 
 const noDecision = bundle({ decision_focus: { ok: true, available: false, status: 'decision_unavailable' } });
 v = T.deriveView({ bundle: noDecision, nowSec: now });
@@ -162,6 +173,44 @@ eq(T.nextStreamDelay({ ended: 'stream_error', retryHintMs: 15000, backoffMs: 320
 eq(T.nextStreamDelay({ ended: 'closed', backoffMs: 2000 }), 2000, 'first transport retry');
 eq(T.nextStreamDelay({ ended: 'closed', backoffMs: 999999 }), 60000, 'backoff capped');
 eq(T.nextStreamDelay({ ended: 'auth', backoffMs: 2000 }), 60000, 'auth failure waits a minute');
+
+// --- press-and-hold --------------------------------------------------------
+let h = T.advanceHold(null, 1000);
+eq(h.elapsedMs, 0, 'hold starts at zero');
+h = T.advanceHold(h, 60000);
+eq(h.elapsedMs, 100, 'a stalled frame adds at most 100 ms');
+eq(h.done, false, 'one long frame never completes a hold');
+let t = 60000;
+for (let i = 0; i < 10; i++) { t += 16; h = T.advanceHold(h, t); }
+eq(h.done, false, 'short hold not done');
+for (let i = 0; i < 80; i++) { t += 16; h = T.advanceHold(h, t); }
+eq(h.done, true, '1.2 s of frames completes the hold');
+eq(h.progress, 1, 'progress capped at 1');
+eq(T.advanceHold(h, t - 500).elapsedMs, h.elapsedMs, 'clock going back adds nothing');
+
+// --- on-screen keyboard ----------------------------------------------------
+const kbuf = T.createSecretBuffer(64);
+let ks = { shift: false, sym: false };
+ks = T.applyKey(ks, '{shift}', kbuf); eq(ks.shift, true, 'shift on');
+ks = T.applyKey(ks, 'p', kbuf); eq(ks.shift, false, 'shift is one-shot'); eq(ks.redraw, true, 'redraw after shift use');
+ks = T.applyKey(ks, 'a', kbuf);
+ks = T.applyKey(ks, '{sym}', kbuf); eq(ks.sym, true, 'symbols on');
+ks = T.applyKey(ks, '{shift}', kbuf); eq(ks.shift, false, 'no shift on the symbol layer');
+ks = T.applyKey(ks, '!', kbuf);
+ks = T.applyKey(ks, '{space}', kbuf);
+ks = T.applyKey(ks, 'x', kbuf);
+ks = T.applyKey(ks, '{bksp}', kbuf);
+eq(kbuf.reveal(), 'Pa! ', 'typed value');
+ks = T.applyKey(ks, '{bogus}', kbuf);
+eq(kbuf.reveal(), 'Pa! ', 'unknown key ignored');
+ks = T.applyKey(ks, '{clear}', kbuf);
+eq(kbuf.length(), 0, 'clear wipes');
+
+// --- SSID display ----------------------------------------------------------
+eq(T.displaySsid('caf\u202Eexe'), 'cafexe', 'bidi override removed');
+eq(T.displaySsid('a\u0000b\u200Fc'), 'abc', 'control and marks removed');
+eq(T.displaySsid('x'.repeat(40)).length, 32, 'display length capped');
+eq(T.displaySsid(null), '', 'null -> empty');
 
 // --- SSE parser -------------------------------------------------------------
 const evs = [];

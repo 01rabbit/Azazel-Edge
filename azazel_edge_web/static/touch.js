@@ -105,8 +105,9 @@
        says ok: true (or the legacy status: "ok"). transportError is set when
        no HTTP answer was read (network error, abort/timeout): the request may
        or may not have reached the daemon, so it is delivery_unknown. */
-    function classifyResult(httpStatus, payload, transportError) {
+    function classifyResult(httpStatus, payload, transportError, method) {
         var p = obj(payload);
+        var structured = !!payload && typeof payload === 'object' && (p.ok !== undefined || p.error !== undefined || p.status !== undefined);
         var msg = str(p.error || p.message).slice(0, 240);
         if (transportError) return { kind: 'delivery_unknown', message: str(transportError).slice(0, 120) };
         if (httpStatus === 401 || httpStatus === 403) return { kind: 'unauthorized', message: msg };
@@ -123,7 +124,10 @@
         // Never reached the daemon: socket file missing or connect refused.
         if (/daemon not running|no such file|connection refused/i.test(msg)) return { kind: 'undelivered', message: msg };
         // The daemon refused before running anything (busy, rate limit, peer table).
-        if (/^busy$|rate limit|^forbidden$/i.test(msg)) return { kind: 'busy', message: msg };
+        if (/^busy$|connect busy|rate limit|^forbidden$/i.test(msg)) return { kind: 'busy', message: msg };
+        // A POST answered 5xx without the API's JSON (proxy error page, worker
+        // killed mid-request): it may have run.
+        if (method === 'POST' && httpStatus >= 500 && !structured) return { kind: 'delivery_unknown', message: 'HTTP ' + httpStatus };
         if (ok2xx && p.ok === undefined && !msg) return { kind: 'failed', message: 'invalid response' };
         return { kind: 'failed', message: msg || ('HTTP ' + httpStatus) };
     }
@@ -176,6 +180,41 @@
             reveal: function () { return chars.join(''); },
             take: function () { var s = chars.join(''); this.clear(); return s; }
         };
+    }
+
+    /* Press-and-hold progress. Each frame adds at most HOLD_FRAME_CAP_MS, so a
+       stalled tab (throttled timers, a long frame, a suspended display) can
+       never jump to "done" in one step: it needs HOLD_MS of observed frames. */
+    var HOLD_FRAME_CAP_MS = 100;
+    function advanceHold(state, nowMs) {
+        var st = state || {};
+        var last = num(st.lastMs);
+        var elapsed = num(st.elapsedMs) || 0;
+        var step = last === null ? 0 : Math.max(0, Math.min(HOLD_FRAME_CAP_MS, nowMs - last));
+        elapsed += step;
+        return { lastMs: nowMs, elapsedMs: elapsed, progress: Math.min(1, elapsed / HOLD_MS), done: elapsed >= HOLD_MS };
+    }
+
+    /* On-screen keyboard: one key press against { shift, sym } and a secret
+       buffer. Returns the new modifier state and whether keys must be redrawn. */
+    function applyKey(kbState, key, buffer) {
+        var st = { shift: !!(kbState && kbState.shift), sym: !!(kbState && kbState.sym) };
+        if (key === '{shift}') { if (!st.sym) st.shift = !st.shift; return { shift: st.shift, sym: st.sym, redraw: true }; }
+        if (key === '{sym}') return { shift: false, sym: !st.sym, redraw: true };
+        if (key === '{bksp}') { buffer.pop(); return { shift: st.shift, sym: st.sym, redraw: false }; }
+        if (key === '{clear}') { buffer.clear(); return { shift: st.shift, sym: st.sym, redraw: false }; }
+        if (key === '{space}') { buffer.push(' '); return { shift: st.shift, sym: st.sym, redraw: false }; }
+        var ch = String(key || '');
+        if (ch.length !== 1) return { shift: st.shift, sym: st.sym, redraw: false };
+        buffer.push(st.shift && !st.sym ? ch.toUpperCase() : ch);
+        return { shift: false, sym: st.sym, redraw: st.shift };
+    }
+
+    /* SSID for display only (the value sent is the original): no control or
+       bidi-override characters, at most 32 characters. */
+    function displaySsid(value) {
+        var cleaned = String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '');
+        return cleaned.length > 32 ? cleaned.slice(0, 31) + '…' : cleaned;
     }
 
     /* Whether the state stream should be open now. */
@@ -256,7 +295,8 @@
             release: str(decision.release_condition),
             available: !!defAction,
             replay: obj(focus.mode).kind === 'deterministic_replay',
-            dryRun: obj(focus.safety).dry_run === true
+            // true / false / null (not reported): never guess "enforced".
+            dryRun: obj(focus.safety).dry_run === true ? true : (obj(focus.safety).dry_run === false ? false : null)
         };
 
         var soc = obj(summary.soc_focus);
@@ -449,6 +489,12 @@
             var use = el.querySelector('.t-ico use');
             if (use) use.setAttribute('href', '#' + (ICON[tone] || 'i-unknown'));
         }
+        // While a sheet is open, the page behind it takes no touch or focus.
+        function setInert(on) {
+            var app = $('tApp');
+            if (!app) return;
+            if (on) app.setAttribute('inert', ''); else app.removeAttribute('inert');
+        }
         function setText(id, value) {
             var e = $(id);
             if (!e) return;
@@ -541,8 +587,8 @@
             var dry = $('tDryChip');
             if (dry) {
                 dry.hidden = !v.defensive.available;
-                text('tDryText', v.defensive.dryRun ? 'DRY RUN' : tr('touch.enforced', 'ENFORCED'));
-                dry.classList.toggle('is-enforced', !v.defensive.dryRun);
+                text('tDryText', v.defensive.dryRun === true ? 'DRY RUN' : (v.defensive.dryRun === false ? tr('touch.enforced', 'ENFORCED') : tr('touch.dry_unknown', 'Enforcement unknown')));
+                dry.classList.toggle('is-enforced', v.defensive.dryRun === false);
             }
 
             // Banners derived from the view.
@@ -622,7 +668,8 @@
                 box.querySelector('strong').textContent = known ? String(c[1]) : '—';
             });
             var badge = $('tAlertBadge');
-            var urgent = (v.p0.value || 0) + (v.queues.now || 0);
+            // P0 and the NOW queue overlap (both come from the same alerts): show the larger.
+            var urgent = Math.max(v.p0.value || 0, v.queues.now || 0);
             if (badge) { badge.hidden = !(urgent > 0); badge.textContent = String(urgent); }
 
             var list = $('alertList');
@@ -717,7 +764,7 @@
             btn.type = 'button';
             btn.disabled = !str(ap.ssid);
             btn.setAttribute('data-ap', String(index));
-            var name = el('strong', '', str(ap.ssid) || tr('touch.wifi_hidden', '(hidden network)'));
+            var name = el('strong', '', displaySsid(ap.ssid) || tr('touch.wifi_hidden', '(hidden network)'));
             var sec = str(ap.security).toUpperCase() || 'UNKNOWN';
             var meta = el('span', 't-ap-meta', [sec === 'OPEN' ? tr('touch.wifi_open', 'OPEN (no encryption)') : sec, signalBars(ap.signal_dbm), ap.saved ? tr('touch.wifi_saved', 'Saved') : ''].filter(Boolean).join(' · '));
             btn.appendChild(name);
@@ -781,6 +828,8 @@
                     runbookDetail.requiredArgs = arr(obj(rb.args_schema).required).map(String);
                 } else {
                     runbookDetail.requiredArgs = ['?'];
+                    // Retry later (e.g. after a token is entered) instead of sticking.
+                    setTimeout(function () { if (runbookDetail.id === id && runbookDetail.requiredArgs && runbookDetail.requiredArgs[0] === '?') runbookDetail.id = ''; }, 30000);
                 }
                 paintRunbook(currentView());
             });
@@ -840,12 +889,14 @@
             $('confirmHold').disabled = false;
             text('confirmCancel', tr('touch.cancel', 'Cancel'));
             $('confirmSheet').hidden = false;
+            setInert(true);
             $('confirmCancel').focus();
         }
         function closeConfirm() {
             if (opBusy) return;
             confirmCtx = null;
             $('confirmSheet').hidden = true;
+            setInert(!$('kbSheet').hidden);
         }
         function showConfirmResult(res) {
             var box = $('confirmResult');
@@ -878,43 +929,50 @@
         }
 
         /* Press-and-hold button: fires after HOLD_MS of continuous press. */
+        var holdResets = [];
+        function resetAllHolds() { holdResets.forEach(function (fn) { fn(true); }); }
+
         function bindHold(button, onDone) {
             var start = 0;
+            var hold = null;
             var raf = 0;
             var fill = button.querySelector('.t-hold-fill');
             var label = button.querySelector('.t-hold-label');
             var hintTimer = 0;
-            function reset() {
+            function reset(silent) {
                 // Released before the bar filled: say how to confirm (a tap never runs it).
-                if (start && label) {
+                if (start && label && silent !== true) {
                     var key = label.getAttribute('data-i18n');
                     label.textContent = tr('touch.hold_hint', 'Keep pressing until the bar fills');
                     clearTimeout(hintTimer);
                     hintTimer = setTimeout(function () { label.textContent = tr(key, label.textContent); }, 1800);
                 }
                 start = 0;
+                hold = null;
                 cancelAnimationFrame(raf);
                 if (fill) fill.style.transform = 'scaleX(0)';
                 button.classList.remove('is-holding');
             }
+            holdResets.push(reset);
             function tick() {
                 if (!start) return;
-                var p = Math.min(1, (performance.now() - start) / HOLD_MS);
-                if (fill) fill.style.transform = 'scaleX(' + p + ')';
-                if (p >= 1) { start = 0; reset(); onDone(); return; }
+                hold = advanceHold(hold, performance.now());
+                if (fill) fill.style.transform = 'scaleX(' + hold.progress + ')';
+                if (hold.done) { start = 0; reset(); onDone(); return; }
                 raf = requestAnimationFrame(tick);
             }
             button.addEventListener('pointerdown', function (e) {
                 if (button.disabled || e.button > 0) return;
                 try { button.setPointerCapture(e.pointerId); } catch (_e) { /* ignore */ }
                 start = performance.now();
+                hold = advanceHold(null, start);
                 button.classList.add('is-holding');
                 raf = requestAnimationFrame(tick);
             });
             ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function (ev) { button.addEventListener(ev, reset); });
             // Keyboard users: Enter/Space held is not a hold; require the same hold time.
             button.addEventListener('keydown', function (e) {
-                if ((e.key === 'Enter' || e.key === ' ') && !start && !e.repeat) { e.preventDefault(); start = performance.now(); raf = requestAnimationFrame(tick); }
+                if ((e.key === 'Enter' || e.key === ' ') && !start && !e.repeat) { e.preventDefault(); start = performance.now(); hold = advanceHold(null, start); raf = requestAnimationFrame(tick); }
             });
             button.addEventListener('keyup', function (e) { if (e.key === 'Enter' || e.key === ' ') reset(); });
         }
@@ -922,7 +980,7 @@
         /* ---------------- operations (existing APIs only) ---------------- */
         function opRequest(method, path, body) {
             return request(method, path, body, POST_TIMEOUT_MS).then(function (r) {
-                return classifyResult(r.status, r.payload, r.transportError);
+                return classifyResult(r.status, r.payload, r.transportError, method);
             });
         }
 
@@ -1010,15 +1068,10 @@
         }
 
         function onKey(k) {
-            if (k === '{shift}') { kb.shift = !kb.shift; buildKeys(); return; }
-            if (k === '{sym}') { kb.sym = !kb.sym; kb.shift = false; buildKeys(); return; }
-            if (k === '{bksp}') secret.pop();
-            else if (k === '{clear}') secret.clear();
-            else if (k === '{space}') secret.push(' ');
-            else {
-                secret.push(kb.shift && !kb.sym ? k.toUpperCase() : k);
-                if (kb.shift) { kb.shift = false; buildKeys(); }
-            }
+            var next = applyKey(kb, k, secret);
+            kb.shift = next.shift;
+            kb.sym = next.sym;
+            if (next.redraw) buildKeys();
             paintKbValue();
         }
 
@@ -1026,7 +1079,7 @@
             secret.clear();
             kb = { purpose: purpose, ap: ap || null, shift: false, sym: false, reveal: false, persist: false };
             var isWifi = purpose === 'wifi';
-            text('kbTitle', isWifi ? tr('touch.wifi_pass_title', 'Passphrase for {ssid}', { ssid: str(ap.ssid) || '—' }) : tr('touch.token_enter', 'Enter token'));
+            text('kbTitle', isWifi ? tr('touch.wifi_pass_title', 'Passphrase for {ssid}', { ssid: displaySsid(ap.ssid) || '—' }) : tr('touch.token_enter', 'Enter token'));
             text('kbSub', isWifi ? [str(ap.security), tr('touch.wifi_pass_note', 'Cleared from memory right after sending.')].join(' · ') : tr('touch.token_note', 'Kept in this page’s memory only. Not stored, not put in the URL. Reloading the page forgets it.'));
             $('kbSubmit').hidden = isWifi;
             text('kbSubmit', tr('touch.token_set', 'Use this token'));
@@ -1037,6 +1090,7 @@
             buildKeys();
             paintKbValue();
             $('kbSheet').hidden = false;
+            setInert(true);
         }
 
         function closeKeyboard() {
@@ -1045,10 +1099,12 @@
             kb.reveal = false;
             $('kbValue').textContent = '';
             $('kbSheet').hidden = true;
+            setInert(!$('confirmSheet').hidden);
         }
 
         function submitToken() {
             token = secret.take();
+            runbookDetail = { id: '', requiredArgs: null };
             closeKeyboard();
             authProblem = false;
             paintTokenState();
@@ -1072,7 +1128,7 @@
                 opBusy = false;
                 $('kbCancel').disabled = false;
                 closeKeyboard();
-                var label = 'Wi-Fi → ' + (str(ap.ssid) || '—');
+                var label = 'Wi-Fi → ' + (displaySsid(ap.ssid) || '—');
                 recordResult(label, res);
                 openConfirm({ label: label, title: label, facts: [], run: function () { return Promise.resolve(res); } });
                 showConfirmResult(res);
@@ -1084,12 +1140,12 @@
             if (!str(ap.ssid)) return;   // a hidden network needs its name typed: not offered here
             var sec = str(ap.security).toUpperCase();
             if (sec === 'OPEN' || ap.saved) {
-                var label = 'Wi-Fi → ' + (str(ap.ssid) || '—');
+                var label = 'Wi-Fi → ' + (displaySsid(ap.ssid) || '—');
                 openConfirm({
                     label: label,
                     title: tr('touch.wifi_confirm_title', 'Connect the uplink to this network?'),
                     facts: [
-                        ['SSID', str(ap.ssid)],
+                        ['SSID', displaySsid(ap.ssid)],
                         [tr('touch.wifi_security', 'Security'), sec === 'OPEN' ? tr('touch.wifi_open', 'OPEN (no encryption)') : sec],
                         [tr('touch.note', 'Note'), sec === 'OPEN' ? tr('touch.wifi_open_note', 'Traffic on an open network is not encrypted.') : tr('touch.wifi_saved_note', 'Uses the saved profile; no passphrase is sent.')],
                         [tr('touch.api', 'API'), 'POST ' + API.wifiConnect + ' (operator)']
@@ -1319,7 +1375,7 @@
         $('kbCancel').addEventListener('click', closeKeyboard);
         $('kbSubmit').addEventListener('click', function () { if (kb.purpose === 'token' && secret.length()) submitToken(); });
         $('tokenEnterBtn').addEventListener('click', function () { openKeyboard('token'); });
-        $('tokenForgetBtn').addEventListener('click', function () { token = ''; paintTokenState(); restartStream(); pollSoon(); });
+        $('tokenForgetBtn').addEventListener('click', function () { token = ''; runbookDetail = { id: '', requiredArgs: null }; paintTokenState(); restartStream(); pollSoon(); });
         document.querySelectorAll('[data-lang]').forEach(function (b) {
             b.addEventListener('click', function () { applyLang(b.getAttribute('data-lang')); });
         });
@@ -1329,6 +1385,7 @@
         // Drop the passphrase/token being typed if the page is hidden or left.
         document.addEventListener('visibilitychange', function () {
             if (document.hidden) {
+                resetAllHolds();
                 if (!opBusy) closeKeyboard();
                 clearTimeout(pollTimer);
                 closeStream('paused');
@@ -1343,7 +1400,8 @@
             lastInteractionMs = Date.now();
             syncStream();
         }, true);
-        window.addEventListener('pagehide', function () { secret.clear(); });
+        window.addEventListener('pagehide', function () { resetAllHolds(); secret.clear(); });
+        window.addEventListener('blur', resetAllHolds);
 
         setInterval(function () {
             var d = new Date();
@@ -1374,6 +1432,9 @@
         createSecretBuffer: createSecretBuffer,
         fmtAge: fmtAge,
         pickState: pickState,
+        advanceHold: advanceHold,
+        applyKey: applyKey,
+        displaySsid: displaySsid,
         streamWanted: streamWanted,
         nextStreamDelay: nextStreamDelay,
         deriveView: deriveView,
