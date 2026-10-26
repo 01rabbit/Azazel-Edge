@@ -11,7 +11,9 @@ Type=simple
 # defaults are set here and /etc/default/azazel-edge-sensors (read below,
 # which overrides Environment=) changes them. PYTHONPATH: `-m` needs the
 # installed tree; the venv does not hold the azazel_edge package.
-Environment="NETFLOW_LISTEN_HOST=0.0.0.0"
+# The internal LAN address, not every address (Edge#477); install_sensors.sh
+# writes the address br0 actually has to the file below.
+Environment="NETFLOW_LISTEN_HOST=172.16.0.254"
 Environment="NETFLOW_PORT=2055"
 Environment="PYTHONPATH=/opt/azazel-edge/py"
 EnvironmentFile=-/etc/default/azazel-edge-sensors

@@ -54,6 +54,9 @@ echo "DEV_REMOTE_MODE=${DEV_REMOTE_MODE}"
 if [[ "${ENABLE_INTERNAL_NETWORK}" == "1" ]]; then
   echo "[all/2] Apply internal network baseline"
   "${REPO_ROOT}/installer/internal/install_internal_network.sh"
+  # mDNS on the LAN bridge only, not on the uplink (Edge#477). Step 5 below
+  # (dev remote access, MODE=open) widens it again on purpose.
+  "${REPO_ROOT}/installer/internal/configure_avahi_lan_only.sh"
 else
   echo "[all/2] Skip internal network baseline"
 fi
@@ -91,6 +94,7 @@ if [[ "${ENABLE_SNMP}" == "1" || "${ENABLE_NETFLOW}" == "1" ]]; then
   ENABLE_SNMP="${ENABLE_SNMP}" \
   ENABLE_NETFLOW="${ENABLE_NETFLOW}" \
   NETFLOW_PORT="${NETFLOW_PORT:-2055}" \
+  NETFLOW_LISTEN_HOST="${NETFLOW_LISTEN_HOST:-}" \
   SNMP_TARGETS="${SNMP_TARGETS:-}" \
   "${REPO_ROOT}/installer/internal/install_sensors.sh"
 else
