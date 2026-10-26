@@ -16,7 +16,12 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     `nmcli con up … passwd-file <file>`. The file is 0600 (`O_EXCL`,
     `O_NOFOLLOW`) in a fresh 0700 directory under `/run`, holds the secret
     octal-escaped, and is removed on success, failure and exception.
-    NetworkManager stores the secret in the profile as before.
+    NetworkManager stores the secret in the profile as before. key-mgmt
+    for a new profile is chosen across every AP of the SSID (any PSK AP →
+    `wpa-psk`, all SAE-only → `sae`); an SSID with an 802.1X AP, or an
+    existing 802.1X profile given a passphrase, is refused instead of being
+    turned into a PSK profile; a new profile whose activation fails is
+    deleted by its UUID (as `nmcli dev wifi connect` left nothing behind).
   - `provision_mattermost_workspace.sh`: `mattermost-credentials.env` is
     written 0600 from creation (mktemp beside it, `mv -T` over it), not with
     the default umask followed by `chmod`; a symlink there is replaced, not

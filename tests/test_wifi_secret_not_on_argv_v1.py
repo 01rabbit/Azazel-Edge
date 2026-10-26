@@ -77,10 +77,12 @@ def nm_unescape(value: str) -> str:
 class FakeNmcli:
     """Records every argv and answers like nmcli for the calls connect_nm makes."""
 
-    def __init__(self, *, saved: bool, ap_security: str = "WPA2", up_rc: int = 0, up_raises: bool = False,
+    def __init__(self, *, saved: bool, ap_security="WPA2", up_rc: int = 0, up_raises: bool = False,
+                 existing_key_mgmt: str = "wpa-psk",
                  add_stdout: str = f"Connection '{FAKE_SSID}' ({FAKE_UUID}) successfully added.\n"):
         self.saved = saved
-        self.ap_security = ap_security
+        self.ap_security = [ap_security] if isinstance(ap_security, str) else list(ap_security)
+        self.existing_key_mgmt = existing_key_mgmt
         self.up_rc = up_rc
         self.up_raises = up_raises
         self.add_stdout = add_stdout
@@ -98,12 +100,14 @@ class FakeNmcli:
         elif cmd[:4] == ["nmcli", "-t", "-f", "802-11-wireless.ssid"]:
             out = f"802-11-wireless.ssid:{FAKE_SSID}\n"
         elif cmd[:3] == ["nmcli", "-g", "802-11-wireless-security.key-mgmt"]:
-            out = "wpa-psk\n"
+            out = self.existing_key_mgmt + "\n"
         elif cmd[:4] == ["nmcli", "-t", "-f", "SSID,SECURITY"]:
-            out = f"other-ssid:WEP\n{FAKE_SSID}:{self.ap_security}\n"
+            out = "other-ssid:WPA2 802.1X\n" + "".join(f"{FAKE_SSID}:{sec}\n" for sec in self.ap_security)
         elif cmd[:3] == ["nmcli", "con", "add"]:
             self.added = True
             out = self.add_stdout
+        elif cmd[:4] == ["nmcli", "con", "delete", "uuid"]:
+            self.added = False
         elif cmd[:3] == ["nmcli", "con", "up"] and "passwd-file" in cmd:
             path = Path(cmd[cmd.index("passwd-file") + 1])
             st, dst = os.lstat(path), os.lstat(path.parent)
@@ -266,3 +270,67 @@ def test_the_passwd_file_lives_under_run_and_no_nmcli_call_carries_a_secret_in_t
     src = (ROOT / "py" / "azazel_edge_control" / "wifi_connect.py").read_text(encoding="utf-8")
     assert '"password", passphrase' not in src
     assert '"wifi-sec.psk", passphrase' not in src
+
+
+@pytest.mark.parametrize("ap_security", ["WPA2 802.1X", "WPA3 802.1X", "WPA1 WPA2 802.1X", "802.1X",
+                                         ["WPA2", "WPA2 802.1X"]])
+def test_an_enterprise_ap_is_refused_before_any_profile_is_made(monkeypatch, secret_base, ap_security):
+    fake = FakeNmcli(saved=False, ap_security=ap_security)
+    out = _connect(monkeypatch, fake, PLAIN)
+    assert out == {"ok": False, "error": wifi_connect.ENTERPRISE_ERROR}
+    assert not fake.argv_with("nmcli", "con", "add") and not fake.argv_with("nmcli", "con", "up")
+    assert list(secret_base.iterdir()) == []
+
+
+@pytest.mark.parametrize("key_mgmt", ["wpa-eap", "wpa-eap-suite-b-192", "ieee8021x"])
+def test_an_existing_enterprise_profile_is_not_rewritten_to_psk(monkeypatch, secret_base, key_mgmt):
+    fake = FakeNmcli(saved=True, existing_key_mgmt=key_mgmt)
+    out = _connect(monkeypatch, fake, PLAIN)
+    assert out == {"ok": False, "error": wifi_connect.ENTERPRISE_ERROR}
+    assert not [c for c in fake.calls if c[:3] == ["nmcli", "con", "mod"]]
+    assert not fake.argv_with("nmcli", "con", "up")
+    # Without a passphrase it is brought up as it is, as before.
+    fake = FakeNmcli(saved=True, existing_key_mgmt=key_mgmt)
+    assert _connect(monkeypatch, fake, None)["ok"] is True
+    assert not [c for c in fake.calls if c[:3] == ["nmcli", "con", "mod"] and "connection.autoconnect" not in c]
+
+
+@pytest.mark.parametrize("aps,key_mgmt", [
+    (["WPA3", "WPA2"], "wpa-psk"),
+    (["WPA3", "WPA2 WPA3"], "wpa-psk"),
+    (["WPA3", "WPA3"], "sae"),
+    (["WPA3", "WEP"], "wpa-psk"),
+    (["WEP", "WEP"], "none"),
+])
+def test_duplicate_ssids_pick_key_mgmt_across_every_ap(monkeypatch, secret_base, aps, key_mgmt):
+    fake = FakeNmcli(saved=False, ap_security=aps)
+    assert _connect(monkeypatch, fake, PLAIN, persist=True)["ok"] is True
+    (add,) = fake.argv_with("nmcli", "con", "add")
+    assert add[add.index("wifi-sec.key-mgmt") + 1] == key_mgmt
+
+
+@pytest.mark.parametrize("failure", ["rc", "timeout"])
+def test_a_new_profile_is_deleted_by_uuid_when_activation_fails(monkeypatch, secret_base, failure):
+    fake = FakeNmcli(saved=False, up_rc=4 if failure == "rc" else 0, up_raises=failure == "timeout")
+    out = _connect(monkeypatch, fake, PLAIN, persist=True)
+    assert out["ok"] is False
+    assert fake.argv_with("nmcli", "con", "delete", "uuid") == [["nmcli", "con", "delete", "uuid", FAKE_UUID]]
+    up_index = fake.calls.index(fake.argv_with("nmcli", "con", "up")[0])
+    assert fake.calls.index(fake.argv_with("nmcli", "con", "delete", "uuid")[0]) > up_index
+    _assert_passwd_file_gone(fake, secret_base)
+
+
+def test_a_new_profile_is_deleted_when_the_passwd_file_cannot_be_made(monkeypatch, tmp_path):
+    monkeypatch.setattr(wifi_connect, "NM_PASSWD_FILE_BASE", str(tmp_path / "missing"))
+    fake = FakeNmcli(saved=False)
+    out = _connect(monkeypatch, fake, PLAIN, persist=True)
+    assert out["ok"] is False and PLAIN not in out["error"]
+    assert fake.argv_with("nmcli", "con", "add")
+    assert not fake.argv_with("nmcli", "con", "up")
+    assert fake.argv_with("nmcli", "con", "delete", "uuid") == [["nmcli", "con", "delete", "uuid", FAKE_UUID]]
+
+
+def test_a_successful_new_profile_is_not_deleted_by_uuid(monkeypatch, secret_base):
+    fake = FakeNmcli(saved=False)
+    assert _connect(monkeypatch, fake, PLAIN, persist=True)["ok"] is True
+    assert not fake.argv_with("nmcli", "con", "delete")

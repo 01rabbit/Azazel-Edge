@@ -177,28 +177,44 @@ def is_nm_managed(iface: str) -> bool:
         return False
 
 
-def _key_mgmt_from_nm_security(raw: str) -> Optional[Tuple[str, str]]:
-    """Map nmcli's SECURITY column of the AP (``WEP``, ``WPA1``, ``WPA2``,
-    ``WPA3`` …) to (key-mgmt, secret property) the way NetworkManager
-    completes a profile in ``nmcli dev wifi connect``
-    (``nm_wifi_utils_complete_connection``): an AP offering both SAE and PSK
-    gets ``wpa-psk``, SAE only ``sae``. None when the column says nothing
-    usable."""
-    tokens = set((raw or "").split())
-    if "WEP" in tokens:
-        return "none", NM_WEP_KEY0_PROPERTY
-    psk = bool(tokens & {"WPA1", "WPA2"})
-    if "WPA3" in tokens:
-        return ("wpa-psk" if psk else "sae"), NM_PSK_PROPERTY
-    if psk:
+# key-mgmt values of 802.1X (Enterprise / dynamic WEP) profiles. The
+# daemon only carries a pre-shared key; it never creates such a profile or
+# rewrites one to a PSK profile.
+NM_EAP_KEY_MGMT = {"wpa-eap", "wpa-eap-suite-b-192", "ieee8021x"}
+ENTERPRISE_ERROR = "802.1X (WPA-Enterprise) networks are not supported here; set the profile up with NetworkManager directly"
+
+
+def _key_mgmt_from_nm_security(raws: List[str]) -> Optional[Tuple[str, str]]:
+    """Map nmcli's SECURITY column of every AP of the SSID (``WEP``,
+    ``WPA1``, ``WPA2``, ``WPA3``, ``802.1X`` …) to (key-mgmt, secret
+    property), the way NetworkManager completes a profile in
+    ``nmcli dev wifi connect`` (``nm_wifi_utils_complete_connection``):
+
+    * any AP advertising 802.1X: ``None`` (refused; not a PSK network);
+    * any AP offering a PSK (WPA1/WPA2, a WPA2/WPA3 transition AP
+      included): ``wpa-psk``;
+    * every AP SAE only (WPA3): ``sae``;
+    * every AP WEP: ``none`` with ``wep-key0``;
+    * otherwise (nothing usable): ``wpa-psk``.
+    """
+    token_sets = [set((raw or "").split()) for raw in raws]
+    if any("802.1X" in tokens for tokens in token_sets):
+        return None
+    if any(tokens & {"WPA1", "WPA2"} for tokens in token_sets):
         return "wpa-psk", NM_PSK_PROPERTY
-    return None
+    if token_sets and all("WPA3" in tokens for tokens in token_sets):
+        return "sae", NM_PSK_PROPERTY
+    if token_sets and all("WEP" in tokens for tokens in token_sets):
+        return "none", NM_WEP_KEY0_PROPERTY
+    return "wpa-psk", NM_PSK_PROPERTY
 
 
-def new_profile_security(iface: str, ssid: str) -> Tuple[str, str]:
-    """key-mgmt and secret property for a new profile of ``ssid``: from the
-    AP in NetworkManager's scan list (no rescan); the first AP of that SSID
-    wins. Falls back to ``wpa-psk``."""
+def new_profile_security(iface: str, ssid: str) -> Optional[Tuple[str, str]]:
+    """key-mgmt and secret property for a new profile of ``ssid``, from all
+    APs of that SSID in NetworkManager's scan list (no rescan). ``None``
+    when one of them advertises 802.1X. Falls back to ``wpa-psk`` when the
+    list cannot be read."""
+    raws: List[str] = []
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-f", "SSID,SECURITY", "dev", "wifi", "list", "ifname", iface, "--rescan", "no"],
@@ -210,13 +226,10 @@ def new_profile_security(iface: str, ssid: str) -> Tuple[str, str]:
             for line in (result.stdout or "").splitlines():
                 ap_ssid, raw = _split_nmcli_terse_line(line, 2)
                 if ap_ssid == ssid:
-                    mapped = _key_mgmt_from_nm_security(raw)
-                    if mapped:
-                        return mapped
-                    break
+                    raws.append(raw)
     except Exception as exc:
         logger.debug(f"Wi-Fi security lookup failed: {type(exc).__name__}")
-    return "wpa-psk", NM_PSK_PROPERTY
+    return _key_mgmt_from_nm_security(raws)
 
 
 def connect_nm(iface: str, ssid: str, security: str, passphrase: Optional[str], persist: bool) -> Dict[str, Any]:
@@ -374,6 +387,9 @@ def connect_nm(iface: str, ssid: str, security: str, passphrase: Optional[str], 
                 )
             else:
                 existing_key_mgmt = get_nm_key_mgmt(con_name)
+                if passphrase and existing_key_mgmt in NM_EAP_KEY_MGMT:
+                    # Never rewrite an 802.1X profile into a PSK one.
+                    return {"ok": False, "error": ENTERPRISE_ERROR}
                 desired = desired_nm_key_mgmt()
                 key_mgmt = None
 
@@ -431,7 +447,10 @@ def connect_nm(iface: str, ssid: str, security: str, passphrase: Optional[str], 
             # `nmcli dev wifi connect <ssid> … password <psk>`, which put the
             # passphrase on nmcli's argv). Autoconnect stays off, as it is
             # set below for a kept profile.
-            key_mgmt, secret_property = new_profile_security(iface, ssid)
+            security_choice = new_profile_security(iface, ssid)
+            if security_choice is None:
+                return {"ok": False, "error": ENTERPRISE_ERROR}
+            key_mgmt, secret_property = security_choice
             add_cmd = [
                 "nmcli", "con", "add", "type", "wifi", "ifname", iface, "con-name", ssid, "ssid", ssid,
                 "connection.autoconnect", "no", "wifi-sec.key-mgmt", key_mgmt,
@@ -447,15 +466,34 @@ def connect_nm(iface: str, ssid: str, security: str, passphrase: Optional[str], 
             if added.returncode != 0:
                 return {"ok": False, "error": added.stderr.strip() or "Connection failed"}
             uuid_match = re.search(r"\(([0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})\)", added.stdout or "")
-            up_target = ["uuid", uuid_match.group(1)] if uuid_match else ["id", ssid]
+            created_uuid = uuid_match.group(1) if uuid_match else None
+            up_target = ["uuid", created_uuid] if created_uuid else ["id", ssid]
 
-            with _nm_passwd_file({secret_property: passphrase}) as passwd_file:
-                result = subprocess.run(
-                    ["nmcli", "con", "up", *up_target, "passwd-file", passwd_file],
-                    capture_output=True,
-                    text=True,
-                    timeout=20
-                )
+            def delete_created_profile() -> None:
+                # `nmcli dev wifi connect` left nothing behind on failure;
+                # neither does this path. Only the profile added above is
+                # removed (by its UUID).
+                if not created_uuid:
+                    logger.warning("Wi-Fi connect failed; the new profile's UUID is unknown, so it was not removed")
+                    return
+                try:
+                    subprocess.run(["nmcli", "con", "delete", "uuid", created_uuid], capture_output=True, timeout=5)
+                except Exception as exc:
+                    logger.warning(f"could not remove the new Wi-Fi profile: {type(exc).__name__}")
+
+            try:
+                with _nm_passwd_file({secret_property: passphrase}) as passwd_file:
+                    result = subprocess.run(
+                        ["nmcli", "con", "up", *up_target, "passwd-file", passwd_file],
+                        capture_output=True,
+                        text=True,
+                        timeout=20
+                    )
+            except Exception:
+                delete_created_profile()
+                raise
+            if result.returncode != 0:
+                delete_created_profile()
 
             # If not persisting, delete the connection after use (best-effort)
             if not persist and result.returncode == 0:
