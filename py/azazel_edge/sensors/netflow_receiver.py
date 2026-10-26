@@ -33,6 +33,8 @@ def _ipv4(raw: bytes) -> str:
 
 # The internal LAN address (br0), not every address (Edge#477): flow records
 # from the uplink (WAN) side must not reach the evidence plane by default.
+# install_sensors.sh writes the address br0 actually has; this fallback is
+# install_internal_network.sh's LAN address (a test keeps them equal).
 DEFAULT_LISTEN_HOST = "172.16.0.254"
 # Linux IP_FREEBIND: bind to the LAN address even before it is on br0 (boot
 # order); packets arrive once it is.

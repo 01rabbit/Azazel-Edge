@@ -9,6 +9,8 @@ services:
       POSTGRES_PASSWORD: mm-password-change
     volumes:
       - mattermost_db:/var/lib/postgresql/data
+    networks:
+      - mattermost
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mmuser -d mattermost"]
       interval: 10s
@@ -44,6 +46,8 @@ services:
       timeout: 10s
       retries: 10
       start_period: 30s
+    networks:
+      - mattermost
 
 volumes:
   mattermost_db:
@@ -52,3 +56,20 @@ volumes:
   mattermost_logs:
   mattermost_plugins:
   mattermost_client_plugins:
+
+# Mattermost's own bridge network with a fixed subnet (Edge#477). Its slash
+# commands call back to http://172.16.0.254/api/mattermost/command from this
+# network, and nginx (installer/internal/install_https_proxy.sh,
+# MATTERMOST_BRIDGE_SUBNET) admits that callback from this subnet only.
+# 172.31.250.0/24: outside the internal LAN (172.16.0.0/24), at the far end
+# of Docker's default pools (172.17-172.31, handed out from the low end), and
+# rarely used by venue or office networks (mostly 192.168/16 and 10/8).
+# A separate network rather than the project's default one: the Ollama
+# compose file in the same directory shares that default network.
+# Existing devices: `docker compose -f docker-compose.mattermost.yml up -d`
+# recreates both containers on this network (data volumes are kept).
+networks:
+  mattermost:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24

@@ -16,11 +16,11 @@ NGINX_SITE="/etc/nginx/sites-available/azazel-edge-web.conf"
 NGINX_LINK="/etc/nginx/sites-enabled/azazel-edge-web.conf"
 CA_EXPORT_PATH="${AZAZEL_CA_EXPORT_PATH:-/var/lib/azazel-edge/public/azazel-edge-local-ca.crt}"
 LAN_IF="br0"
+# install_internal_network.sh's LAN_CIDR, used only while br0 has no address.
 LAN_CIDR_DEFAULT="172.16.0.0/24"
-# Docker's default address pools for bridge networks (172.17.0.0/16 ..
-# 172.31.0.0/16, all inside 172.16.0.0/12). The Mattermost container is on
-# such a network and calls the slash-command endpoint from there.
-DOCKER_BRIDGE_POOL="172.16.0.0/12"
+# Mattermost's bridge network (security/docker-compose.mattermost.yml,
+# networks.mattermost). Its slash commands call back from there.
+MATTERMOST_BRIDGE_SUBNET="172.31.250.0/24"
 
 # Who may reach nginx (Edge#477, #471). nginx listens on every address, so
 # without these rules the uplink (WAN) side reached the Web UI, the local CA
@@ -32,15 +32,30 @@ DOCKER_BRIDGE_POOL="172.16.0.0/12"
 # would cut the LAN off as well; allow/deny does not depend on it.
 #
 # The LAN subnet is the one on br0 (the route the kernel adds for its
-# address, set up by install_internal_network.sh); 172.16.0.0/24 (that
-# script's LAN_CIDR) when br0 has none yet. There is no setting that widens
-# it. Re-run this script after changing the LAN subnet.
+# address, set up by install_internal_network.sh); LAN_CIDR_DEFAULT when br0
+# has none yet. There is no setting that widens it. Re-run this script after
+# changing the LAN subnet.
+
+# An IPv4 CIDR: four octets 0..255 (the first 1..223), prefix /8../32.
+valid_ipv4_cidr() {
+  local o
+  [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
+  local -a m=("${BASH_REMATCH[@]:1}")
+  for o in "${m[@]:0:4}"; do
+    (( 10#$o <= 255 )) || return 1
+  done
+  (( 10#${m[0]} >= 1 && 10#${m[0]} <= 223 )) || return 1
+  (( 10#${m[4]} >= 8 && 10#${m[4]} <= 32 ))
+}
+
 detect_lan_cidr() {
   local cidr
   cidr="$(ip -4 -o route show dev "$LAN_IF" proto kernel scope link 2>/dev/null | awk '{print $1; exit}' || true)"
-  [[ -n "$cidr" ]] || cidr="$LAN_CIDR_DEFAULT"
-  if [[ ! "$cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]{1,2})$ ]] \
-      || (( 10#${BASH_REMATCH[2]} < 8 || 10#${BASH_REMATCH[2]} > 32 )); then
+  if [[ -z "$cidr" ]]; then
+    echo "NOTICE: ${LAN_IF} has no IPv4 subnet yet; admitting the default LAN ${LAN_CIDR_DEFAULT}" >&2
+    cidr="$LAN_CIDR_DEFAULT"
+  fi
+  if ! valid_ipv4_cidr "$cidr"; then
     echo "ERROR: the LAN subnet must be an IPv4 CIDR with a prefix of /8../32 (got: ${cidr})" >&2
     exit 1
   fi
@@ -85,13 +100,14 @@ server {
   }
   # Mattermost's slash commands call back here (provision_mattermost_command.sh:
   # http://172.16.0.254/api/mattermost/command). Mattermost runs in Docker on
-  # this device, so the callback comes from its bridge network, not from the
-  # LAN; that pool is allowed here only. The endpoint checks the command token.
+  # this device, so the callback comes from its own bridge network (fixed
+  # subnet in docker-compose.mattermost.yml), not from the LAN; that subnet is
+  # admitted here only. The endpoint still checks the command token.
   location = /api/mattermost/command {
     allow 127.0.0.1;
     allow ::1;
     allow ${LAN_CIDR};
-    allow ${DOCKER_BRIDGE_POOL};
+    allow ${MATTERMOST_BRIDGE_SUBNET};
     deny all;
     proxy_pass http://${AZAZEL_WEB_UPSTREAM_HOST}:${AZAZEL_WEB_UPSTREAM_PORT};
     proxy_http_version 1.1;
@@ -103,8 +119,9 @@ server {
     proxy_redirect off;
     proxy_read_timeout 120s;
   }
-  # Through a named location, not `return` here: `return` runs before the
-  # allow/deny above are checked, so the uplink would still get the redirect.
+  # Through a named location, not a plain return here: return runs before
+  # the allow/deny above are checked, so the uplink would still get the
+  # redirect.
   location / {
     try_files /.azazel-edge-no-such-file @to_https;
   }

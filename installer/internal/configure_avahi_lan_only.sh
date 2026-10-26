@@ -23,12 +23,12 @@ if [[ ! -f "$AVAHI_CONF" ]]; then
   exit 1
 fi
 
-# Set allow-interfaces in the [server] section (avahi reads it only there):
-# every existing allow-interfaces line, commented out or not, is dropped and
-# one line goes right after [server]; [server] is added if missing.
-set_allow_interfaces() {
-  local file="$1" value="$2" tmp
-  tmp="$(mktemp "${file}.XXXXXX")"
+# Write the config with allow-interfaces in the [server] section (avahi
+# reads it only there) to stdout: every existing allow-interfaces line,
+# commented out or not, is dropped and one line goes right after [server];
+# [server] is added if missing.
+render_allow_interfaces() {
+  local file="$1" value="$2"
   awk -v value="$value" '
     BEGIN { done = 0; section = "" }
     /^[[:space:]]*\[[^]]*\][[:space:]]*$/ {
@@ -42,16 +42,36 @@ set_allow_interfaces() {
     /^[#;[:space:]]*allow-interfaces[[:space:]]*=/ { next }
     { print }
     END { if (!done) { print ""; print "[server]"; print "allow-interfaces=" value } }
-  ' "$file" > "$tmp"
+  ' "$file"
+}
+
+# Replace the file only when it changes. The first change keeps the
+# original once as ${file}.azazel-edge.bak (never overwritten, so it stays
+# the pre-Azazel config); re-runs add no backups. Prints "changed" or
+# "unchanged".
+set_allow_interfaces() {
+  local file="$1" value="$2" tmp
+  tmp="$(mktemp "${file}.XXXXXX")"
+  if ! render_allow_interfaces "$file" "$value" > "$tmp"; then
+    rm -f -- "$tmp"
+    echo "ERROR: could not rewrite $file" >&2
+    return 1
+  fi
+  if cmp -s -- "$tmp" "$file"; then
+    rm -f -- "$tmp"
+    echo unchanged
+    return 0
+  fi
+  [[ -e "${file}.azazel-edge.bak" ]] || cp -a -- "$file" "${file}.azazel-edge.bak"
   chmod --reference="$file" "$tmp"
   chown --reference="$file" "$tmp"
   mv -f -- "$tmp" "$file"
+  echo changed
 }
 
-cp -a "$AVAHI_CONF" "${AVAHI_CONF}.bak.$(date +%Y%m%d%H%M%S)"
-set_allow_interfaces "$AVAHI_CONF" "$LAN_IF"
-echo "[avahi] allow-interfaces=${LAN_IF} in ${AVAHI_CONF}"
+result="$(set_allow_interfaces "$AVAHI_CONF" "$LAN_IF")"
+echo "[avahi] allow-interfaces=${LAN_IF} in ${AVAHI_CONF} (${result})"
 
-if systemctl is-enabled avahi-daemon >/dev/null 2>&1; then
+if [[ "$result" == "changed" ]] && systemctl is-enabled avahi-daemon >/dev/null 2>&1; then
   systemctl restart avahi-daemon
 fi
