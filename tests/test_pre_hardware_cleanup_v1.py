@@ -93,15 +93,14 @@ def test_verify_runtime_sync_in_the_checkout_keeps_its_default():
 
 def _selftest_env(tmp_path: Path, *, active: set[str], enabled: set[str]) -> tuple[Path, dict]:
     """A copy of the selftest with its fixed paths moved into tmp_path, and
-    stubs for systemctl, dmesg, dd and time."""
+    stubs for systemctl, dmesg, dd and stat (reporting an ext4 directory)."""
     log_dir, sd_dir, stubs = tmp_path / "log", tmp_path / "sd", tmp_path / "bin"
     for d in (log_dir, sd_dir, stubs):
         d.mkdir()
     src = SELFTEST.read_text(encoding="utf-8")
     for old, new in (
         ('LOG_DIR="/var/log/azazel-edge"', f'LOG_DIR="{log_dir}"'),
-        ('SD_TEST_DIR="/tmp"', f'SD_TEST_DIR="{sd_dir}"'),
-        ('TIME_BIN="/usr/bin/time"', f'TIME_BIN="{stubs / "fake-time"}"'),
+        ('SD_TEST_DIR="/var/lib/azazel-edge/selftest"', f'SD_TEST_DIR="{sd_dir}"'),
     ):
         assert src.count(old) == 1, old
         src = src.replace(old, new)
@@ -116,11 +115,10 @@ def _selftest_env(tmp_path: Path, *, active: set[str], enabled: set[str]) -> tup
         "for u in $list; do [ \"$u\" = \"$1\" ] && exit 0; done\n"
         "exit 3\n", encoding="utf-8")
     (stubs / "dmesg").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    # An instant dd: a fast, healthy card (the case that used to end the
+    # selftest early under set -e).
     (stubs / "dd").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    # 0.50 s for 10 MiB: 20 MB/s, a healthy card (the case that used to end
-    # the selftest early under set -e).
-    (stubs / "fake-time").write_text("#!/bin/sh\nshift 2\n\"$@\"\nrc=$?\necho 0.50 >&2\nexit $rc\n",
-                                     encoding="utf-8")
+    (stubs / "stat").write_text("#!/bin/sh\necho ext2/ext3\n", encoding="utf-8")
     for p in stubs.iterdir():
         p.chmod(0o755)
     env = dict(os.environ, PATH=f"{stubs}:/usr/bin:/bin")
@@ -159,9 +157,74 @@ def test_selftest_exit_status_follows_critical_failures(tmp_path, active, enable
     assert sorted(p.name for p in (tmp_path / "sd").iterdir()) == []
 
 
-def test_selftest_sd_check_returns_zero_for_a_fast_card():
+def _function(name: str) -> str:
+    src = SELFTEST.read_text(encoding="utf-8")
+    m = re.search(r"^" + name + r"\(\) \{\n.*?^\}\n", src, re.S | re.M)
+    assert m, name
+    return m.group(0)
+
+
+def _run_sd_check(tmp_path: Path, prelude: str) -> tuple[subprocess.CompletedProcess, Path]:
+    """check_sd_write_speed alone, under set -e, in tmp_path; `prelude`
+    replaces any helper it needs to fake."""
+    sd_dir = tmp_path / "sd"
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    (stubs / "dd").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (stubs / "dd").chmod(0o755)
+    script = (
+        f'set -euo pipefail\nSD_TEST_DIR="{sd_dir}"\nSD_TEST_FILE=""\nFAILURES=()\nWARNINGS=()\n'
+        + _function("warn") + _function("fail") + _function("cleanup_sd_test_file")
+        + _function("now_usec") + _function("sd_test_dir_fstype")
+        + prelude + _function("check_sd_write_speed")
+        + 'check_sd_write_speed\necho "failures=${FAILURES[*]:-}"\necho "warnings=${WARNINGS[*]:-}"\n'
+    )
+    env = dict(os.environ, PATH=f"{stubs}:{os.environ['PATH']}")
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env), sd_dir
+
+
+def test_selftest_sd_check_needs_no_time_binary():
     src = SELFTEST.read_text(encoding="utf-8")
     assert "' && warn \"sd_write_speed_low" not in src
+    assert "/usr/bin/time" not in src and "TIME_BIN" not in src
+
+
+def test_now_usec_counts_microseconds_in_bash():
+    script = _function("now_usec") + 'a="$(now_usec)"; b="$(now_usec)"; echo "$a $b"\n'
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    a, b = (int(x) for x in res.stdout.split())
+    assert a > 1_000_000_000_000_000 and b >= a  # microseconds since 1970
+
+
+def test_sd_check_on_a_tmpfs_warns_that_it_cannot_measure_the_card(tmp_path):
+    res, sd_dir = _run_sd_check(tmp_path, "sd_test_dir_fstype() { echo tmpfs; }\n")
+    assert res.returncode == 0, res.stderr
+    assert "failures=\n" in res.stdout
+    assert "sd_write_test_skipped:not_on_sd:tmpfs" in res.stdout
+    assert list(sd_dir.iterdir()) == []
+
+
+def test_sd_check_without_dd_is_a_warning_not_a_failure(tmp_path):
+    prelude = 'command() { [[ "${2:-}" == dd ]] && return 1; builtin command "$@"; }\n'
+    res, _ = _run_sd_check(tmp_path, prelude)
+    assert res.returncode == 0, res.stderr
+    assert "failures=\n" in res.stdout
+    assert "sd_write_test_skipped:dd_missing" in res.stdout
+
+
+@pytest.mark.parametrize("elapsed_usec, warning", [(4_000_000, "sd_write_speed_low:2.50MBps"), (500_000, None)])
+def test_sd_check_speed_from_bash_time(tmp_path, elapsed_usec, warning):
+    flag = tmp_path / "started"
+    prelude = (
+        "sd_test_dir_fstype() { echo ext2/ext3; }\n"
+        f'now_usec() {{ if [[ -e "{flag}" ]]; then echo {1_000_000 + elapsed_usec}; '
+        f'else : > "{flag}"; echo 1000000; fi; }}\n'
+    )
+    res, sd_dir = _run_sd_check(tmp_path, prelude)
+    assert res.returncode == 0, res.stderr
+    assert "failures=\n" in res.stdout
+    assert (warning in res.stdout) if warning else ("sd_write_speed_low" not in res.stdout)
+    assert list(sd_dir.iterdir()) == []  # the test file is removed
 
 
 # ---------------------------------------------------- install_all runs it

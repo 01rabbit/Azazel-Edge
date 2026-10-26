@@ -30,7 +30,7 @@ This document is the configuration entry point for Azazel-Edge.
 
 Environment variables read by the installer scripts under
 `installer/internal/`. Pass them on the command line, e.g.
-`sudo AP_SSID=Shelter-Net WIFI_COUNTRY=JP SKIP_LUKS=1 bash installer/internal/install_all.sh`;
+`sudo AP_SSID=Shelter-Net SKIP_LUKS=1 bash installer/internal/install_all.sh`;
 `install_all.sh` hands them on to the step scripts. The defaults below are the
 ones in the scripts.
 
@@ -39,19 +39,11 @@ ones in the scripts.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AP_SSID` | `Azazel-Edge-Internal` | SSID of the internal Wi-Fi AP on `wlan0` (part of `br0`, `172.16.0.254/24`). 1..32 characters. |
-| `AP_PSK` | `ChangeMe1234` | WPA2 passphrase of the internal AP, 8..63 characters. **Change it**: the default is public. After #486: see the note below. |
-| `WAN_IF` | the interface of the default route (`ip route show default`) | Uplink interface. The NAT (masquerade) and forward rules for `172.16.0.0/24` go out through it. The installer stops if none is found. `set_dev_remote_access.sh` uses it too. |
+| `AP_PSK` | `ChangeMe1234` | WPA2 passphrase of the internal AP, 8..63 characters. **Set your own**: the default is public. |
+| `WAN_IF` | the interface of the default route (field 5 of `ip route show default`) | Uplink interface. The NAT (masquerade) and forward rules for `172.16.0.0/24` go out through it. The installer stops if none is found. `set_dev_remote_access.sh` uses it too. |
 | `ALLOW_EXTERNAL_SSH` | `false` | `false`: `sshd` listens only on `172.16.0.254` (the internal LAN). `true` (any case): the installer's `ListenAddress` is left out, so `sshd` listens on all interfaces, the uplink included. Temporary use only. |
-| `WIFI_COUNTRY` | (unset) | Effective after #486 is merged. Wi-Fi regulatory country, a two-letter ISO 3166-1 code (e.g. `JP`), set with `raspi-config nonint do_wifi_country`. On Raspberry Pi OS the installer stops before changing anything when it is unset and no country is configured yet (the radio would stay blocked by rfkill and the AP could not start); elsewhere it is ignored. |
 
-After #486 is merged, `AP_PSK` has no default: unset, the passphrase saved by
-an earlier run is kept (else the one in the existing AP profile, else a new
-random 20-character one is generated). It is saved `0600 root:root` in
-`/etc/azazel-edge/internal-ap.psk` and never printed (read it with
-`sudo cat /etc/azazel-edge/internal-ap.psk`). `ChangeMe1234` is refused. The
-uplink (`WAN_IF`) must then be an interface other than `eth0`, `wlan0` and
-`br0` (a USB Ethernet or USB Wi-Fi adapter on a Pi 5), since those become the
-internal LAN.
+Note: #486 (not merged yet) changes `AP_PSK` (no default; a generated passphrase saved root-only) and adds `WIFI_COUNTRY`; this table describes the current code.
 
 ### App stack (`install_migrated_tools.sh`, run when `ENABLE_APP_STACK=1`)
 

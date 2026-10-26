@@ -109,6 +109,7 @@ sudo install -m 0644 -o root -g root config/soc_policy_profiles/conservative.yam
 ```bash
 # Switch to transit mode (UC-A)
 sudo azazel-edge-epd --state warning --mode-label "TRANSIT" --risk-status SUPPRESSED
+sudo touch /etc/default/azazel-edge-security
 sudo sed -i '/^AZAZEL_SOC_POLICY_PATH=/d' /etc/default/azazel-edge-security
 echo 'AZAZEL_SOC_POLICY_PATH=/opt/azazel-edge/config/soc_policy_profiles/conservative.yaml' | sudo tee -a /etc/default/azazel-edge-security >/dev/null
 sudo systemctl restart azazel-edge-ai-agent
@@ -119,6 +120,7 @@ sudo systemctl restart azazel-edge-ai-agent
 ```bash
 # Switch back to static mode (UC-B)
 sudo azazel-edge-epd --state normal --mode-label "GATEWAY"
+sudo touch /etc/default/azazel-edge-security
 sudo sed -i '/^AZAZEL_SOC_POLICY_PATH=/d' /etc/default/azazel-edge-security
 echo 'AZAZEL_SOC_POLICY_PATH=/opt/azazel-edge/config/soc_policy_profiles/balanced.yaml' | sudo tee -a /etc/default/azazel-edge-security >/dev/null
 sudo systemctl restart azazel-edge-ai-agent

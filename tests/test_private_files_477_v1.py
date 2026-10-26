@@ -174,9 +174,10 @@ def test_upsert_env_never_writes_under_the_default_umask():
 # ------------------------------------------------------------------ selftest
 
 def _run_sd_check(tmp_path: Path, dd_rc: int) -> tuple[Path, Path, Path, str]:
-    """Run check_sd_write_speed with SD_TEST_DIR in tmp_path, the old fixed
-    name planted there as a symlink, a stub time and a stub dd that opens
-    of= like dd does (following symlinks) and records the file's mode first."""
+    """Run check_sd_write_speed with SD_TEST_DIR in tmp_path (reported as an
+    ext4 directory), the old fixed name planted there as a symlink and a stub
+    dd that opens of= like dd does (following symlinks) and records the
+    file's mode first."""
     sd_dir, stubs, victim = tmp_path / "tmp", tmp_path / "bin", tmp_path / "victim"
     sd_dir.mkdir()
     stubs.mkdir()
@@ -194,13 +195,12 @@ def _run_sd_check(tmp_path: Path, dd_rc: int) -> tuple[Path, Path, Path, str]:
         "os.close(fd)\n"
         f"sys.exit({dd_rc})\n",
         encoding="utf-8")
-    (stubs / "fake-time").write_text("#!/bin/sh\nshift 2\n\"$@\"\nrc=$?\necho 0.50 >&2\nexit $rc\n",
-                                     encoding="utf-8")
     for p in stubs.iterdir():
         p.chmod(0o755)
     script = (
-        f'SD_TEST_DIR="{sd_dir}"\nTIME_BIN="{stubs / "fake-time"}"\nSD_TEST_FILE=""\nFAILURES=()\nWARNINGS=()\n'
-        + _function(SELFTEST, "warn") + _function(SELFTEST, "fail")
+        f'SD_TEST_DIR="{sd_dir}"\nSD_TEST_FILE=""\nFAILURES=()\nWARNINGS=()\n'
+        + 'sd_test_dir_fstype() { echo ext2/ext3; }\n'
+        + _function(SELFTEST, "warn") + _function(SELFTEST, "fail") + _function(SELFTEST, "now_usec")
         + _function(SELFTEST, "cleanup_sd_test_file") + _function(SELFTEST, "check_sd_write_speed")
         + 'check_sd_write_speed\necho "failures=${FAILURES[*]:-} left=${SD_TEST_FILE}"\n'
     )
@@ -226,7 +226,8 @@ def test_selftest_never_writes_through_a_planted_name_and_cleans_up(tmp_path, dd
 def test_selftest_has_no_fixed_tmp_name_and_cleans_up_on_exit():
     src = SELFTEST.read_text(encoding="utf-8")
     assert "/tmp/azazel_sdtest" not in src
-    assert 'SD_TEST_DIR="/tmp"' in src and 'TIME_BIN="/usr/bin/time"' in src
+    # On the SD card in a root-only directory, not the (tmpfs) /tmp.
+    assert 'SD_TEST_DIR="/var/lib/azazel-edge/selftest"' in src
     assert "trap cleanup_sd_test_file EXIT" in src
     # Plain assignments: nothing here is taken from the environment.
-    assert "${SD_TEST_DIR:-" not in src and "${TIME_BIN:-" not in src
+    assert "${SD_TEST_DIR:-" not in src
