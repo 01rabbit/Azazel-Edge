@@ -236,29 +236,58 @@ def _install_all_tail() -> str:
 
 
 @pytest.mark.parametrize(
-    "app, services, selftest_rc, rc, ran",
+    "app, services, selftest_rc, arch, rc, ran, timer",
     [
-        ("1", "1", 0, 0, True),
-        ("1", "1", 1, 1, True),
-        ("0", "1", 1, 0, False),
-        ("1", "0", 1, 0, False),
+        ("1", "1", 0, "aarch64", 0, True, True),
+        # The timer is installed after a failed selftest too.
+        ("1", "1", 1, "aarch64", 1, True, True),
+        # install_selftest_timer.sh refuses other architectures: a notice.
+        ("1", "1", 0, "x86_64", 0, True, False),
+        ("0", "1", 1, "aarch64", 0, False, False),
+        ("1", "0", 1, "aarch64", 0, False, False),
     ],
 )
-def test_install_all_runs_the_selftest_last_and_fails_with_it(tmp_path, app, services, selftest_rc, rc, ran):
+def test_install_all_runs_the_selftest_and_its_timer_last(tmp_path, app, services, selftest_rc, arch, rc, ran, timer):
     (tmp_path / "bin").mkdir()
-    marker = tmp_path / "ran"
+    (tmp_path / "installer" / "internal").mkdir(parents=True)
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    log = tmp_path / "log"
     stub = tmp_path / "bin" / "azazel-edge-selftest"
-    stub.write_text(f"#!/bin/sh\necho selftest-output\ntouch '{marker}'\nexit {selftest_rc}\n", encoding="utf-8")
-    stub.chmod(0o755)
+    stub.write_text(f"#!/bin/sh\necho selftest-output\necho selftest >> '{log}'\nexit {selftest_rc}\n", encoding="utf-8")
+    timer_stub = tmp_path / "installer" / "internal" / "install_selftest_timer.sh"
+    timer_stub.write_text(f"#!/bin/sh\necho \"timer ENABLE_SERVICES=$ENABLE_SERVICES\" >> '{log}'\n", encoding="utf-8")
+    (stubs / "uname").write_text(f"#!/bin/sh\necho {arch}\n", encoding="utf-8")
+    for p in (stub, timer_stub, stubs / "uname"):
+        p.chmod(0o755)
     script = f'set -euo pipefail\nREPO_ROOT="{tmp_path}"\nENABLE_APP_STACK="{app}"\n' + _install_all_tail()
-    env = dict(os.environ, ENABLE_SERVICES=services)
+    env = dict(os.environ, ENABLE_SERVICES=services, PATH=f"{stubs}:{os.environ['PATH']}")
     res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
     assert res.returncode == rc, res.stdout + res.stderr
-    assert marker.exists() == ran
+    steps = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    expected = (["selftest"] if ran else []) + (["timer ENABLE_SERVICES=1"] if timer else [])
+    assert steps == expected  # the selftest first, then the timer
     assert ("selftest-output" in res.stdout) == ran
+    assert ("supports aarch64" in res.stdout) == (ran and arch != "aarch64")
     assert ("Unified installation completed." in res.stdout) == (rc == 0)
     if rc:
         assert "critical failure" in res.stderr
+
+
+def test_selftest_timer_installer_runs_from_the_checkout_and_matches_the_selftest():
+    timer_installer = (INTERNAL / "install_selftest_timer.sh").read_text(encoding="utf-8")
+    # Run from the checkout by install_all.sh, never placed under /opt.
+    assert "install_selftest_timer.sh" not in _opt_placed_scripts()
+    assert '"${REPO_ROOT}/installer/internal/install_selftest_timer.sh"' in INSTALL_ALL.read_text(encoding="utf-8")
+    assert 'install -m 0755 "${REPO_ROOT}/bin/azazel-edge-selftest" /usr/local/bin/azazel-edge-selftest' in timer_installer
+    unit = (ROOT / "systemd" / "azazel-edge-selftest.service").read_text(encoding="utf-8")
+    assert "Type=oneshot" in unit and "ExecStart=/usr/local/bin/azazel-edge-selftest" in unit
+    # Nothing in the unit keeps the selftest from writing its directories
+    # or masks its exit status (a critical failure shows as a failed unit).
+    for gone in ("ProtectSystem", "ReadOnlyPaths", "PrivateTmp", "SuccessExitStatus", "ExecStart=-"):
+        assert gone not in unit, gone
+    timer_unit = (ROOT / "systemd" / "azazel-edge-selftest.timer").read_text(encoding="utf-8")
+    assert "OnBootSec=5min" in timer_unit and "OnCalendar=quarterly" in timer_unit
 
 
 def test_install_all_selftest_is_the_last_step():

@@ -81,6 +81,15 @@ OpenCanary, a failed config checksum or SD write test) makes `install_all.sh`
 exit non-zero. The result is also in
 `/var/log/azazel-edge/selftest_latest.json`.
 
+Then it installs the periodic selftest (`install_selftest_timer.sh`:
+`/usr/local/bin/azazel-edge-selftest`, `azazel-edge-selftest.service` and
+`.timer`), also after a failed selftest. The timer runs it 5 minutes after
+every boot and quarterly (and right away when it is first enabled); a critical
+failure leaves the service failed (`systemctl --failed`). Each run writes
+10 MiB once to `/var/lib/azazel-edge/selftest` for the SD write test and
+removes it. `install_selftest_timer.sh` supports aarch64 only; on another
+architecture `install_all.sh` prints a notice and installs no timer.
+
 ## EPD Web Preview
 
 The "EPD on Web" routes (`/api/epd`, `/api/epd/preview.png`, `/dev/epd`; see

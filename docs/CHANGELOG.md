@@ -435,7 +435,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   are checked only when enabled. Its SD write test times itself in bash (no
   `/usr/bin/time`) and writes under `/var/lib/azazel-edge/selftest`, not the
   tmpfs `/tmp` (on a tmpfs it is skipped with a warning). `install_all.sh`
-  runs it last and fails with it. `install_ai_runtime.sh` is no longer copied to `/opt/azazel-edge`,
+  runs it last and fails with it, and now installs its timer
+  (`install_selftest_timer.sh`, aarch64), which it never did. `install_ai_runtime.sh` is no longer copied to `/opt/azazel-edge`,
   where it could not run; `install_security_stack.sh` gets the checkout as
   `REPO_ROOT`; the installed `verify_runtime_sync.sh` asks for the checkout
   argument. Operator, AI and vehicle docs now give the HTTPS URL, the token
