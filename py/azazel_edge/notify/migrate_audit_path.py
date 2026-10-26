@@ -34,6 +34,18 @@ from azazel_edge.audit.segments import read_chain
 from azazel_edge.notify.p0_alert import P0AlertQueue
 
 EVENT = "audit_path_migrated"
+# The files that move together: the chain, its rotated file, its Fabric
+# sidecar and the P0 queue (whose cursors point into the chain).
+CHAIN_FILES = (
+    "core-decision-audit.jsonl",
+    "core-decision-audit.jsonl.1",
+    "core-decision-audit.fabric.jsonl",
+    "p0-alert-queue.jsonl",
+)
+# AZAZEL_AI_AUDIT_LOG values for which the chain lives in the old or the new
+# default directory (the chain and the queue sit beside the AI audit log).
+OLD_DEFAULT_AUDIT_LOG = "/var/log/azazel-edge/ai-audit.jsonl"
+NEW_DEFAULT_AUDIT_LOG = "/var/log/azazel-edge/ai/ai-audit.jsonl"
 
 
 def _last_scoped_cursor(entries: List[Dict[str, Any]], path_id: str) -> Optional[Dict[str, str]]:
@@ -89,15 +101,95 @@ def carry_cursor(queue_path: str | Path, old_audit_path: str | Path, new_audit_p
     return out
 
 
+def _regular(path: Path) -> bool:
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    import stat as _stat
+    return _stat.S_ISREG(st.st_mode)
+
+
+def _present(path: Path) -> bool:
+    return os.path.lexists(path)
+
+
+def migrate_chain(old_dir: str | Path, new_dir: str | Path, audit_log_setting: str = "") -> Dict[str, Any]:
+    """Move the chain files and the queue from ``old_dir`` to ``new_dir`` as
+    one set and carry the relay's cursor. Safe to run again after a crash at
+    any point:
+
+    * ``audit_log_setting`` (the configured AZAZEL_AI_AUDIT_LOG) other than
+      empty or one of the two defaults: the agent keeps its chain beside that
+      file, so nothing is moved (``custom_audit_log``);
+    * a name present in both directories: nothing is moved or overwritten
+      (``clash``; resolve by hand);
+    * any file in ``old_dir`` that is not a regular file: nothing is moved
+      (``not_regular``);
+    * otherwise every file still in ``old_dir`` is moved into ``new_dir`` by
+      link + unlink (one filesystem; link never replaces an existing name);
+      files already in ``new_dir`` from an interrupted earlier run stay, and
+      a file left under both names by a crash between link and unlink is
+      finished. Then the cursor is carried (a no-op when it already was, or
+      when there is nothing to carry).
+    """
+
+    old_dir, new_dir = Path(old_dir), Path(new_dir)
+    out: Dict[str, Any] = {"moved": [], "kept_in_new": [], "state": "", "carry": None}
+    setting = str(audit_log_setting or "").strip().strip("\"'")
+    if setting and setting not in (OLD_DEFAULT_AUDIT_LOG, NEW_DEFAULT_AUDIT_LOG):
+        out["state"] = "custom_audit_log"
+        out["audit_log_setting"] = setting
+        return out
+    # A crash between link and unlink below leaves one file under both names:
+    # finish that move first.
+    for name in CHAIN_FILES:
+        a, b = old_dir / name, new_dir / name
+        if _regular(a) and _regular(b) and os.path.samefile(a, b):
+            os.unlink(a)
+    in_old = [n for n in CHAIN_FILES if _present(old_dir / n)]
+    in_new = [n for n in CHAIN_FILES if _present(new_dir / n)]
+    clash = sorted(set(in_old) & set(in_new))
+    if clash:
+        out.update(state="clash", clash=clash)
+        return out
+    bad = [n for n in in_old if not _regular(old_dir / n)] + [n for n in in_new if not _regular(new_dir / n)]
+    if bad:
+        out.update(state="not_regular", not_regular=sorted(bad))
+        return out
+    out["kept_in_new"] = in_new
+    for name in in_old:
+        # link() never replaces an existing name (EEXIST), unlike rename().
+        os.link(old_dir / name, new_dir / name)
+        os.unlink(old_dir / name)
+        out["moved"].append(name)
+    if out["moved"]:
+        out["state"] = "resumed" if in_new else "moved"
+    else:
+        out["state"] = "already_moved" if in_new else "nothing_to_move"
+    try:
+        os.unlink(old_dir / "p0-alert-queue.jsonl.lock")
+    except FileNotFoundError:
+        pass
+    if _regular(new_dir / "p0-alert-queue.jsonl") and _regular(new_dir / "core-decision-audit.jsonl"):
+        out["carry"] = carry_cursor(new_dir / "p0-alert-queue.jsonl", old_dir / "core-decision-audit.jsonl",
+                                    new_dir / "core-decision-audit.jsonl")
+    return out
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--queue", required=True, help="the moved P0 queue")
-    parser.add_argument("--old-audit", required=True, help="the core-decision audit file's old path")
-    parser.add_argument("--new-audit", required=True, help="the core-decision audit file's new path")
+    parser.add_argument("--old-dir", required=True, help="where the chain and the queue are now")
+    parser.add_argument("--new-dir", required=True, help="where they move to (same filesystem)")
+    parser.add_argument("--audit-log-setting", default="", help="the configured AZAZEL_AI_AUDIT_LOG, if any")
     args = parser.parse_args(argv)
-    result = carry_cursor(args.queue, args.old_audit, args.new_audit)
+    result = migrate_chain(args.old_dir, args.new_dir, args.audit_log_setting)
     print(json.dumps(result, ensure_ascii=False))
-    if result["carried"] or result.get("reason") in ("no_cursor_for_old_path", "new_path_already_has_a_cursor"):
+    if result["state"] in ("clash", "not_regular", "custom_audit_log"):
+        return 2
+    carry = result.get("carry")
+    if carry is None or carry["carried"] or carry.get("reason") in ("no_cursor_for_old_path",
+                                                                  "new_path_already_has_a_cursor"):
         return 0
     return 1
 

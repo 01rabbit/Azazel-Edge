@@ -966,8 +966,10 @@ P0 queue. The agent still reads `normalized-events.jsonl` (root, 0644 in the
   one stops the service with the reason. The AI audit log has no `/tmp`
   fallback: if it cannot be opened, the service stops.
 - One snapshot writer: the agent writes its fields to its own
-  `ai_snapshot.json`; the control daemon reads it (no symlink, at most 1 MiB)
-  and merges a fixed key list (`AGENT_SNAPSHOT_KEYS`: advisory epoch, user
+  `ai_snapshot.json`; the control daemon reads it (no symlink, without
+  blocking, a regular file of at most 1 MiB) and merges a fixed key list,
+  each key only with its expected type and size (others are dropped, logged
+  and counted) (`AGENT_SNAPSHOT_KEYS`: advisory epoch, user
   state, recommendation, reasons, evidence, Suricata and deferred counts,
   LLM / ops coach / decision pipeline / second pass / LLM metrics, internal,
   attack, and `monitoring.suricata`) before it enriches and persists the
@@ -994,12 +996,18 @@ after `setup_web_account.sh`):
    other group); an existing non-system account with the name stops the
    installer; the `azazel-web` group must exist (stage 1);
 3. the directories above are created;
-4. `core-decision-audit.jsonl` (+ `.1`) and `p0-alert-queue.jsonl` move
-   **together** to `/var/log/azazel-edge/ai` (nothing is overwritten: if any
-   of them already exists there, none is moved and a notice is printed), and
-   the relay's cursor is carried to the new path. The AI logs move too;
+4. `core-decision-audit.jsonl` (+ `.1`, `.fabric.jsonl`) and
+   `p0-alert-queue.jsonl` move **as one set** to `/var/log/azazel-edge/ai`
+   (`migrate_audit_path.migrate_chain`: link + unlink, so nothing at the new
+   place is ever replaced), and the relay's cursor is carried. Running it
+   again after a crash finishes a partial move and carries the cursor. It
+   moves nothing, prints a NOTICE with the manual steps and leaves both
+   places untouched when a name exists in both places, when a file of the set
+   is not a regular file, or when `AZAZEL_AI_AUDIT_LOG` is set to a custom
+   path (the agent keeps its chain beside that file). Each AI log moves only
+   when its variable is unset or holds a default;
 5. the decision log and the current `/run/azazel-edge/ai_*.json` are copied
-   (originals kept);
+   (originals kept; never through or over an existing name or symlink);
 6. old default values of `AZAZEL_AI_ADVISORY`, `AZAZEL_AI_METRICS`,
    `AZAZEL_AI_POLICY`, `AZAZEL_AI_*_LOG` and `AZAZEL_DECISION_LOG_DIR` in
    `/etc/default/azazel-edge-security` and `/etc/default/azazel-edge-web` move

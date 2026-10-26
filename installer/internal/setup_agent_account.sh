@@ -97,64 +97,70 @@ echo "[agent-account] 3/5 logs, the core-decision audit chain and the P0 queue"
 move_once() {
   local src="$1" dst="$2"
   [[ -f "$src" && ! -L "$src" ]] || return 0
-  if [[ -e "$dst" ]]; then
+  if [[ -e "$dst" || -L "$dst" ]]; then
     say "NOTICE: keep $dst (already present); $src is left where it is"
     return 0
   fi
-  mv -- "$src" "$dst"
+  mv -n -- "$src" "$dst"
   say "moved $src -> $dst"
 }
-# The chain (+ its rotated file and its Azazel-Fabric sidecar) and the queue.
-chain_files=(core-decision-audit.jsonl core-decision-audit.jsonl.1 core-decision-audit.fabric.jsonl p0-alert-queue.jsonl)
-chain_clash=0
-for name in "${chain_files[@]}"; do
-  [[ -e "$NEW_LOG_DIR/$name" ]] && chain_clash=1
-done
-if (( chain_clash )); then
-  if [[ -e "$OLD_LOG_DIR/core-decision-audit.jsonl" || -e "$OLD_LOG_DIR/p0-alert-queue.jsonl" ]]; then
-    say "NOTICE: $NEW_LOG_DIR already has the audit chain or the P0 queue; the old ones in $OLD_LOG_DIR are left in place, not merged"
+# The chain (+ its rotated file and its Azazel-Fabric sidecar) and the P0
+# queue move as one set and the relay's cursor is carried
+# (azazel_edge.notify.migrate_audit_path.migrate_chain). Safe to run again
+# after a crash at any point: it finishes a partial move. It never overwrites
+# a file at the new place, and moves nothing when AZAZEL_AI_AUDIT_LOG is set
+# to a custom path (the agent keeps its chain beside that file).
+env_value() {
+  local file="$1" var="$2" line
+  line="$(grep -E "^${var}=" "$file" 2>/dev/null | tail -n 1 || true)"
+  line="${line#*=}"; line="${line%\"}"; line="${line#\"}"; line="${line%\'}"; line="${line#\'}"
+  printf '%s' "$line"
+}
+AUDIT_SETTING="$(env_value "$SECURITY_ENV" AZAZEL_AI_AUDIT_LOG)"
+# Isolated interpreter (no environment, no user site, no cwd on the path);
+# only the installed code is imported.
+set +e
+(cd / && "$PYTHON" -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from azazel_edge.notify.migrate_audit_path import main; sys.exit(main(sys.argv[2:]))' \
+    "$PY_ROOT" --old-dir "$OLD_LOG_DIR" --new-dir "$NEW_LOG_DIR" --audit-log-setting "$AUDIT_SETTING")
+chain_rc=$?
+set -e
+case "$chain_rc" in
+  0) say "audit chain and P0 queue: in $NEW_LOG_DIR, relay cursor carried (or nothing to carry)" ;;
+  2) say "NOTICE: the audit chain and the P0 queue were NOT moved (see the line above: a name in both places, a non-regular file, or a custom AZAZEL_AI_AUDIT_LOG). Nothing was overwritten. To finish by hand: stop the agent, move core-decision-audit.jsonl(.1, .fabric.jsonl) and p0-alert-queue.jsonl together beside the AI audit log the agent uses, then run: $PYTHON -I -c 'import sys; sys.path.insert(0, \"$PY_ROOT\"); from azazel_edge.notify.migrate_audit_path import carry_cursor; print(carry_cursor(*sys.argv[1:]))' <new queue> <old chain path> <new chain path>" ;;
+  *) say "WARNING: the P0 relay cursor was not carried; the next start reconciles the chain as fresh_chain (past decisions it does not find in the queue are alerted as past decisions)" ;;
+esac
+# Each AI log moves only when its variable is unset or holds a default (a
+# custom value means the agent writes elsewhere).
+move_log_if_default() {
+  local var="$1" base="$2" name="$3" value
+  value="$(env_value "$SECURITY_ENV" "$var")"
+  if [[ -n "$value" && "$value" != "$OLD_LOG_DIR/$base" && "$value" != "$NEW_LOG_DIR/$base" ]]; then
+    say "NOTICE: $var is set to $value; $OLD_LOG_DIR/$name is not moved"
+    return 0
   fi
-else
-  moved_chain=0
-  for name in "${chain_files[@]}"; do
-    if [[ -f "$OLD_LOG_DIR/$name" && ! -L "$OLD_LOG_DIR/$name" ]]; then
-      mv -- "$OLD_LOG_DIR/$name" "$NEW_LOG_DIR/$name"
-      say "moved $OLD_LOG_DIR/$name -> $NEW_LOG_DIR/$name"
-      moved_chain=1
-    fi
-  done
-  rm -f -- "$OLD_LOG_DIR/p0-alert-queue.jsonl.lock"
-  if (( moved_chain )) && [[ -f "$NEW_LOG_DIR/p0-alert-queue.jsonl" && -f "$NEW_LOG_DIR/core-decision-audit.jsonl" ]]; then
-    # Isolated interpreter (no environment, no user site, no cwd on the path);
-    # only the installed code is imported.
-    if (cd / && "$PYTHON" -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from azazel_edge.notify.migrate_audit_path import main; sys.exit(main(sys.argv[2:]))' \
-        "$PY_ROOT" \
-        --queue "$NEW_LOG_DIR/p0-alert-queue.jsonl" \
-        --old-audit "$OLD_LOG_DIR/core-decision-audit.jsonl" \
-        --new-audit "$NEW_LOG_DIR/core-decision-audit.jsonl"); then
-      say "P0 relay cursor carried to the new path"
-    else
-      say "WARNING: the P0 relay cursor was not carried; the next start reconciles the chain as fresh_chain (past decisions it does not find in the queue are alerted as past decisions)"
-    fi
-  fi
-fi
-for name in ai-events.jsonl ai-llm.jsonl ai-deferred.jsonl ai-audit.jsonl ai-audit.jsonl.1 ai-audit.fabric.jsonl; do
   move_once "$OLD_LOG_DIR/$name" "$NEW_LOG_DIR/$name"
+}
+move_log_if_default AZAZEL_AI_EVENT_LOG ai-events.jsonl ai-events.jsonl
+move_log_if_default AZAZEL_AI_LLM_LOG ai-llm.jsonl ai-llm.jsonl
+move_log_if_default AZAZEL_AI_DEFERRED_LOG ai-deferred.jsonl ai-deferred.jsonl
+for name in ai-audit.jsonl ai-audit.jsonl.1 ai-audit.fabric.jsonl; do
+  move_log_if_default AZAZEL_AI_AUDIT_LOG ai-audit.jsonl "$name"
 done
 # The moved files belong to the agent; the Web UI reads through the group.
-find "$NEW_LOG_DIR" -xdev -type f ! -name 'p0-alert-queue.jsonl*' -exec chown "$AGENT_USER:$WEB_GROUP" {} + -exec chmod 0640 {} +
-find "$NEW_LOG_DIR" -xdev -type f -name 'p0-alert-queue.jsonl*' -exec chown "$AGENT_USER:$WEB_GROUP" {} + -exec chmod 0600 {} +
+find "$NEW_LOG_DIR" -xdev -type f ! -name 'p0-alert-queue.jsonl*' -exec chown -h "$AGENT_USER:$WEB_GROUP" {} + -exec chmod 0640 {} +
+find "$NEW_LOG_DIR" -xdev -type f -name 'p0-alert-queue.jsonl*' -exec chown -h "$AGENT_USER:$WEB_GROUP" {} + -exec chmod 0600 {} +
 
 echo "[agent-account] 4/5 decision log and runtime files (copied, originals kept)"
 copy_once() {
   local src="$1" dst="$2" owner="$3" mode="$4"
   [[ -f "$src" && ! -L "$src" ]] || return 0
-  if [[ -e "$dst" ]]; then
-    say "keep $dst (already present)"
+  # Never through a symlink (a dangling one included) or over anything.
+  if [[ -e "$dst" || -L "$dst" ]]; then
+    say "keep $dst (already present or a symlink; not written)"
     return 0
   fi
-  cp -p -- "$src" "$dst"
-  chown "$owner" -- "$dst"
+  cp -P -p -- "$src" "$dst"
+  chown -h "$owner" -- "$dst"
   chmod "$mode" -- "$dst"
   say "copied $src -> $dst"
 }

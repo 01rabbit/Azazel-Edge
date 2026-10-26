@@ -2041,40 +2041,132 @@ def _snapshot_payload_from_file(path: Path, data: dict[str, Any], mode_payload: 
     return payload
 
 
+def _valid_str(limit: int):
+    return lambda v: isinstance(v, str) and len(v) <= limit
+
+
+def _valid_count(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 10**9
+
+
+def _valid_epoch(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v < 10**11
+
+
+def _valid_str_list(v: Any) -> bool:
+    return isinstance(v, list) and len(v) <= 32 and all(isinstance(x, str) and len(x) <= 512 for x in v)
+
+
+def _valid_object(v: Any) -> bool:
+    if not isinstance(v, dict):
+        return False
+    try:
+        return len(json.dumps(v, ensure_ascii=False)) <= 64 * 1024
+    except (TypeError, ValueError):
+        return False
+
+
+# The type each merged field must have; anything else is dropped (and counted).
+AGENT_SNAPSHOT_VALIDATORS = {
+    "advisory_epoch": _valid_epoch,
+    "user_state": _valid_str(64),
+    "recommendation": _valid_str(1024),
+    "reasons": _valid_str_list,
+    "evidence": _valid_str_list,
+    "suricata_critical": _valid_count,
+    "suricata_warning": _valid_count,
+    "suricata_info": _valid_count,
+    "deferred_recent": _valid_count,
+    "deferred_lifetime_at_snapshot": _valid_count,
+    "llm": _valid_object,
+    "ops_coach": _valid_object,
+    "decision_pipeline": _valid_object,
+    "second_pass": _valid_object,
+    "llm_metrics": _valid_object,
+    "internal": _valid_object,
+    "attack": _valid_object,
+}
+_AGENT_SNAPSHOT_DROPPED = {"total": 0, "last": ""}
+
+
+def _note_dropped_agent_fields(names: list[str], why: str) -> None:
+    _AGENT_SNAPSHOT_DROPPED["total"] += len(names) or 1
+    message = f"{why}: {','.join(names)}" if names else why
+    if _AGENT_SNAPSHOT_DROPPED["last"] != message:
+        logger.warning(f"Agent snapshot {AGENT_SNAPSHOT_PATH}: ignored {message} "
+                       f"(ignored so far: {_AGENT_SNAPSHOT_DROPPED['total']})")
+        _AGENT_SNAPSHOT_DROPPED["last"] = message
+
+
+def _read_agent_snapshot() -> dict[str, Any]:
+    """The agent's ai_snapshot.json, or {}: opened without following a
+    symlink and without blocking (a FIFO or device at the path cannot stall
+    the snapshot thread), accepted only as a regular file of at most
+    AGENT_SNAPSHOT_MAX_BYTES."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(str(AGENT_SNAPSHOT_PATH), flags)
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        _note_dropped_agent_fields([], f"file not readable ({exc.strerror or type(exc).__name__})")
+        return {}
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            _note_dropped_agent_fields([], "not a regular file")
+            return {}
+        if st.st_size > AGENT_SNAPSHOT_MAX_BYTES:
+            _note_dropped_agent_fields([], f"file larger than {AGENT_SNAPSHOT_MAX_BYTES} bytes")
+            return {}
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > AGENT_SNAPSHOT_MAX_BYTES:
+                _note_dropped_agent_fields([], f"file larger than {AGENT_SNAPSHOT_MAX_BYTES} bytes")
+                return {}
+            chunks.append(chunk)
+    except OSError as exc:
+        _note_dropped_agent_fields([], f"file not readable ({exc.strerror or type(exc).__name__})")
+        return {}
+    finally:
+        os.close(fd)
+    return _parse_json_dict_lenient(b"".join(chunks).decode("utf-8", errors="replace"))
+
+
 def _overlay_agent_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     """Merge the AI agent's fields (AGENT_SNAPSHOT_KEYS, and monitoring.suricata)
     from its own ai_snapshot.json into the shared snapshot. Only those keys
-    are taken; the file is read without following a symlink and bounded in
-    size. A missing or unreadable file leaves the snapshot as it is."""
-    try:
-        fd = os.open(str(AGENT_SNAPSHOT_PATH), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except FileNotFoundError:
-        return data
-    except OSError as exc:
-        logger.warning(f"Agent snapshot {AGENT_SNAPSHOT_PATH} not readable: {exc}")
-        return data
-    try:
-        with os.fdopen(fd, "rb") as fh:
-            raw = fh.read(AGENT_SNAPSHOT_MAX_BYTES + 1)
-    except OSError as exc:
-        logger.warning(f"Agent snapshot {AGENT_SNAPSHOT_PATH} not readable: {exc}")
-        return data
-    if len(raw) > AGENT_SNAPSHOT_MAX_BYTES:
-        logger.warning(f"Agent snapshot {AGENT_SNAPSHOT_PATH} is larger than {AGENT_SNAPSHOT_MAX_BYTES} bytes; ignored")
-        return data
-    agent = _parse_json_dict_lenient(raw.decode("utf-8", errors="replace"))
+    are taken, each only with the type it must have (AGENT_SNAPSHOT_VALIDATORS);
+    a field of another type is dropped and counted. A missing, non-regular,
+    oversized or unreadable file leaves the snapshot as it is."""
+    agent = _read_agent_snapshot()
     if not agent:
         return data
     merged = dict(data)
+    dropped: list[str] = []
     for key in AGENT_SNAPSHOT_KEYS:
-        if key in agent:
+        if key not in agent:
+            continue
+        if AGENT_SNAPSHOT_VALIDATORS[key](agent[key]):
             merged[key] = agent[key]
+        else:
+            dropped.append(key)
     agent_monitoring = agent.get("monitoring")
     if isinstance(agent_monitoring, dict) and "suricata" in agent_monitoring:
-        monitoring = merged.get("monitoring")
-        monitoring = dict(monitoring) if isinstance(monitoring, dict) else {}
-        monitoring["suricata"] = agent_monitoring["suricata"]
-        merged["monitoring"] = monitoring
+        if _valid_str(32)(agent_monitoring["suricata"]):
+            monitoring = merged.get("monitoring")
+            monitoring = dict(monitoring) if isinstance(monitoring, dict) else {}
+            monitoring["suricata"] = agent_monitoring["suricata"]
+            merged["monitoring"] = monitoring
+        else:
+            dropped.append("monitoring.suricata")
+    if dropped:
+        _note_dropped_agent_fields(dropped, "fields of the wrong type")
     return merged
 
 

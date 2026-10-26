@@ -414,7 +414,8 @@ def test_the_installer_wires_stage_2():
     script = (ROOT / "installer" / "internal" / "setup_agent_account.sh").read_text(encoding="utf-8")
     assert "azazel_edge.notify.migrate_audit_path" in script
     assert "AZAZEL_VENV_PYTHON" not in script and "PYTHONPATH" not in script
-    assert '"$PYTHON" -I -c' in script and "core-decision-audit.fabric.jsonl" in script
+    assert '"$PYTHON" -I -c' in script and "--audit-log-setting" in script
+    assert "core-decision-audit.fabric.jsonl" in migrate_audit_path.CHAIN_FILES
 
 
 def test_the_runbook_loader_reports_an_unreadable_directory(monkeypatch, caplog):
@@ -430,3 +431,188 @@ def test_the_runbook_loader_reports_an_unreadable_directory(monkeypatch, caplog)
         files = list(runbooks._iter_runbook_files())
     assert files  # the shipped runbooks still load
     assert any("not readable" in r.getMessage() for r in caplog.records)
+
+
+# ------------------------------------------------ review follow-ups
+
+import threading  # noqa: E402
+
+
+def test_a_fifo_at_the_agent_snapshot_path_does_not_block_the_daemon(agent_snapshot):
+    os.mkfifo(agent_snapshot)
+    result = {}
+    t = threading.Thread(target=lambda: result.update(out=control_daemon._overlay_agent_snapshot({"user_state": "SAFE"})),
+                         daemon=True)
+    t.start()
+    t.join(3)
+    assert not t.is_alive(), "the snapshot thread blocked on a FIFO"
+    assert result["out"] == {"user_state": "SAFE"}
+
+
+def test_a_directory_at_the_agent_snapshot_path_is_ignored(agent_snapshot, caplog):
+    agent_snapshot.mkdir()
+    control_daemon._AGENT_SNAPSHOT_DROPPED["last"] = ""
+    with caplog.at_level("WARNING"):
+        assert control_daemon._overlay_agent_snapshot({"user_state": "SAFE"}) == {"user_state": "SAFE"}
+    assert any("not a regular file" in r.getMessage() for r in caplog.records)
+
+
+def test_a_fifo_is_reported_as_not_a_regular_file(agent_snapshot, caplog):
+    os.mkfifo(agent_snapshot)
+    control_daemon._AGENT_SNAPSHOT_DROPPED["last"] = ""
+    with caplog.at_level("WARNING"):
+        control_daemon._overlay_agent_snapshot({})
+    assert any("not a regular file" in r.getMessage() for r in caplog.records)
+
+
+def test_a_name_that_appears_during_the_move_is_not_replaced(tmp_path, monkeypatch):
+    """The move uses link + unlink, which never replaces a name, so even a
+    file created after the check (a race) survives."""
+    old, new, _ = _old_state(tmp_path)
+    (new / "p0-alert-queue.jsonl").write_text("theirs\n", encoding="utf-8")
+    real = migrate_audit_path._present
+    monkeypatch.setattr(migrate_audit_path, "_present",
+                        lambda path: False if Path(path).parent == new else real(path))
+    with pytest.raises(FileExistsError):
+        migrate_audit_path.migrate_chain(old, new)
+    assert (new / "p0-alert-queue.jsonl").read_text(encoding="utf-8") == "theirs\n"
+    assert (old / "p0-alert-queue.jsonl").exists()
+
+
+def test_fields_of_the_wrong_type_are_dropped_and_counted(agent_snapshot):
+    agent_snapshot.write_text(json.dumps({
+        "user_state": {"nested": "x"}, "recommendation": "ok", "suricata_critical": "9", "suricata_warning": True,
+        "suricata_info": 2, "reasons": ["a", 3], "evidence": ["e"] * 40, "llm": ["not", "a", "dict"],
+        "advisory_epoch": "now", "attack": {"suricata_alert": True}, "monitoring": {"suricata": {"x": 1}},
+        "internal": {"pad": "x" * 70000},
+    }), encoding="utf-8")
+    before = control_daemon._AGENT_SNAPSHOT_DROPPED["total"]
+    merged = control_daemon._overlay_agent_snapshot({"user_state": "SAFE", "monitoring": {"suricata": "UNKNOWN"}})
+    assert merged["user_state"] == "SAFE" and merged["recommendation"] == "ok"
+    assert merged["suricata_info"] == 2 and merged["attack"] == {"suricata_alert": True}
+    for key in ("suricata_critical", "suricata_warning", "reasons", "evidence", "llm", "advisory_epoch", "internal"):
+        assert key not in merged, key
+    assert merged["monitoring"] == {"suricata": "UNKNOWN"}
+    assert control_daemon._AGENT_SNAPSHOT_DROPPED["total"] - before == 9  # 8 fields + monitoring.suricata
+
+
+def test_every_merged_key_has_a_validator():
+    assert set(control_daemon.AGENT_SNAPSHOT_KEYS) == set(control_daemon.AGENT_SNAPSHOT_VALIDATORS)
+
+
+def _old_state(tmp_path):
+    old, new = tmp_path / "old", tmp_path / "new"
+    old.mkdir()
+    new.mkdir()
+    audit_path, queue = _alerted_then_down(old)
+    return old, new, audit_path
+
+
+def _relay_start(new: Path) -> dict:
+    again = attach_p0_alert_relay(P0AuditLogger(new / "core-decision-audit.jsonl"), new / "p0-alert-queue.jsonl")
+    assert again.ready.wait(5)
+    again.stop()
+    return _statuses(new / "p0-alert-queue.jsonl", "started")[-1]
+
+
+def test_migrate_chain_moves_the_set_and_carries_the_cursor(tmp_path):
+    old, new, _ = _old_state(tmp_path)
+    out = migrate_audit_path.migrate_chain(old, new)
+    assert out["state"] == "moved" and out["carry"]["carried"] is True
+    assert not (old / "core-decision-audit.jsonl").exists() and not (old / "p0-alert-queue.jsonl").exists()
+    assert _relay_start(new)["reconcile"] == "cursor_found"
+    again = migrate_audit_path.migrate_chain(old, new)  # idempotent
+    assert again["state"] == "already_moved" and again["carry"]["reason"] == "new_path_already_has_a_cursor"
+
+
+def test_migrate_chain_finishes_a_move_interrupted_after_the_chain(tmp_path):
+    old, new, _ = _old_state(tmp_path)
+    os.rename(old / "core-decision-audit.jsonl", new / "core-decision-audit.jsonl")  # crash: queue not moved
+    out = migrate_audit_path.migrate_chain(old, new)
+    assert out["state"] == "resumed" and "p0-alert-queue.jsonl" in out["moved"]
+    assert "core-decision-audit.jsonl" in out["kept_in_new"] and "core-decision-audit.jsonl" not in out["moved"]
+    assert out["carry"]["carried"] is True
+    assert _relay_start(new)["reconcile"] == "cursor_found"
+
+
+def test_migrate_chain_finishes_a_move_interrupted_between_link_and_unlink(tmp_path):
+    old, new, _ = _old_state(tmp_path)
+    os.link(old / "p0-alert-queue.jsonl", new / "p0-alert-queue.jsonl")  # crash before the unlink
+    out = migrate_audit_path.migrate_chain(old, new)
+    assert out["state"] == "resumed" and out["carry"]["carried"] is True
+    assert not (old / "p0-alert-queue.jsonl").exists()
+
+
+def test_migrate_chain_never_overwrites_the_new_place(tmp_path):
+    old, new, _ = _old_state(tmp_path)
+    (new / "p0-alert-queue.jsonl").write_text("{}\n", encoding="utf-8")  # another queue already there
+    before_old = {n: (old / n).read_bytes() for n in ("core-decision-audit.jsonl", "p0-alert-queue.jsonl")}
+    out = migrate_audit_path.migrate_chain(old, new)
+    assert out["state"] == "clash" and out["clash"] == ["p0-alert-queue.jsonl"] and out["moved"] == []
+    assert (new / "p0-alert-queue.jsonl").read_text(encoding="utf-8") == "{}\n"
+    assert not (new / "core-decision-audit.jsonl").exists()
+    assert {n: (old / n).read_bytes() for n in before_old} == before_old
+    assert migrate_audit_path.main(["--old-dir", str(old), "--new-dir", str(new)]) == 2
+
+
+def test_migrate_chain_refuses_a_symlink_in_the_set(tmp_path):
+    old, new, _ = _old_state(tmp_path)
+    target = tmp_path / "elsewhere.jsonl"
+    target.write_text("", encoding="utf-8")
+    (old / "core-decision-audit.jsonl.1").symlink_to(target)
+    out = migrate_audit_path.migrate_chain(old, new)
+    assert out["state"] == "not_regular" and out["moved"] == []
+    assert (old / "core-decision-audit.jsonl").exists()
+
+
+@pytest.mark.parametrize("setting", ["/srv/custom/ai-audit.jsonl", '"/srv/custom/ai-audit.jsonl"'])
+def test_migrate_chain_moves_nothing_for_a_custom_audit_log(tmp_path, setting):
+    old, new, _ = _old_state(tmp_path)
+    out = migrate_audit_path.migrate_chain(old, new, setting)
+    assert out["state"] == "custom_audit_log" and out["moved"] == []
+    assert (old / "core-decision-audit.jsonl").exists() and list(new.iterdir()) == []
+
+
+@pytest.mark.parametrize("setting", ["", "/var/log/azazel-edge/ai-audit.jsonl", "/var/log/azazel-edge/ai/ai-audit.jsonl"])
+def test_migrate_chain_moves_for_a_default_audit_log(tmp_path, setting):
+    old, new, _ = _old_state(tmp_path)
+    assert migrate_audit_path.migrate_chain(old, new, setting)["state"] == "moved"
+
+
+def _installer_function(name: str) -> str:
+    import re
+    src = (ROOT / "installer" / "internal" / "setup_agent_account.sh").read_text(encoding="utf-8")
+    m = re.search(r"^" + name + r"\(\) \{\n.*?^\}\n", src, re.S | re.M)
+    assert m, name
+    return m.group(0)
+
+
+def test_copy_once_never_writes_through_a_symlink(tmp_path):
+    src = tmp_path / "src.json"
+    src.write_text('{"a": 1}', encoding="utf-8")
+    victim = tmp_path / "victim.json"  # a dangling link's target
+    dst = tmp_path / "dst.json"
+    dst.symlink_to(victim)
+    owner = f"{os.getuid()}:{os.getgid()}"
+    script = ("say() { echo \"$*\"; }\n" + _installer_function("copy_once")
+              + f'copy_once "{src}" "{dst}" "{owner}" 0640\n')
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert "not written" in res.stdout
+    assert not victim.exists() and dst.is_symlink()
+    # A normal destination is written, owned and moded.
+    dst.unlink()
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert res.returncode == 0 and not dst.is_symlink() and dst.read_text(encoding="utf-8") == '{"a": 1}'
+    assert stat.S_IMODE(dst.stat().st_mode) == 0o640
+
+
+def test_move_once_never_replaces_a_symlink(tmp_path):
+    src = tmp_path / "src.jsonl"
+    src.write_text("x\n", encoding="utf-8")
+    dst = tmp_path / "dst.jsonl"
+    dst.symlink_to(tmp_path / "victim")
+    script = "say() { echo \"$*\"; }\n" + _installer_function("move_once") + f'move_once "{src}" "{dst}"\n'
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert res.returncode == 0 and "keep" in res.stdout
+    assert src.exists() and dst.is_symlink() and not (tmp_path / "victim").exists()
