@@ -4,6 +4,33 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+
+- Four hardening fixes from Edge#477 (found by the #471 privilege inventory):
+  - Wi-Fi connect (control daemon, `wifi_connect.py`): the passphrase is no
+    longer on nmcli's argv (readable from `/proc/<pid>/cmdline`). A new
+    profile is added without its secret (`nmcli con add …
+    connection.autoconnect no wifi-sec.key-mgmt <as NetworkManager would
+    complete it from the AP>`); an existing one has its stored PSK dropped
+    (`wifi-sec.psk-flags 2`, then `0`); both are brought up with
+    `nmcli con up … passwd-file <file>`. The file is 0600 (`O_EXCL`,
+    `O_NOFOLLOW`) in a fresh 0700 directory under `/run`, holds the secret
+    octal-escaped, and is removed on success, failure and exception.
+    NetworkManager stores the secret in the profile as before.
+  - `provision_mattermost_workspace.sh`: `mattermost-credentials.env` is
+    written 0600 from creation (mktemp beside it, `mv -T` over it), not with
+    the default umask followed by `chmod`; a symlink there is replaced, not
+    followed.
+  - `azazel-edge-selftest` (root): the SD write-speed test writes to a new
+    `mktemp` name in `/tmp` (`dd conv=nocreat`) instead of the fixed
+    `/tmp/azazel_sdtest`, and removes it on every exit.
+  - `migrate_audit_path.migrate_chain`: an `os.link` that fails with EXDEV
+    (old and new log directories on different filesystems) no longer ends
+    in a traceback: it stops before that file (state `cross_filesystem`,
+    exit 2; nothing copied, unlinked or carried), and
+    `setup_agent_account.sh` prints a NOTICE with the manual steps. Other
+    link errors still stop with the error.
+
 ### Changed
 
 - AI agent runs as the non-root account `azazel-agent` (Edge#471 stage 2;

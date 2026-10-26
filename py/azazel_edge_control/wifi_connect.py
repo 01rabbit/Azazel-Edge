@@ -15,7 +15,8 @@ import time
 import socket
 import tempfile
 import os
-from typing import Dict, Any, Optional, List
+from contextlib import contextmanager
+from typing import Dict, Any, Iterator, Optional, List, Tuple
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -29,11 +30,67 @@ PY_ROOT = Path(__file__).resolve().parents[1]
 if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 from wifi_scan import (
+    _split_nmcli_terse_line,
     get_wireless_interface,
     check_networkmanager,
     get_saved_networks_nm,
 )
 from azazel_edge.path_schema import snapshot_path_candidates, warn_if_legacy_path
+
+
+# The Wi-Fi secret never goes on nmcli's argv (readable by any local user from
+# /proc/<pid>/cmdline while nmcli runs). nmcli takes it from a passwd-file
+# instead: `nmcli connection up <ID> passwd-file <file>`, one
+# "<setting>.<property>:<secret>" per line (nmcli(1), "connection up";
+# NetworkManager 1.42 in Debian 12 and 1.52 in Debian 13). nmcli answers
+# NetworkManager's secret request from that file, and NetworkManager stores
+# the answer in the profile as it stored `password <psk>` or
+# `wifi-sec.psk <psk>` before. The file lives in a fresh 0700 directory
+# under /run (tmpfs, root-owned) and is removed when nmcli returns.
+NM_PASSWD_FILE_BASE = "/run"
+NM_PSK_PROPERTY = "802-11-wireless-security.psk"
+NM_WEP_KEY0_PROPERTY = "802-11-wireless-security.wep-key0"
+
+
+def _nm_passwd_escape(secret: str) -> str:
+    """Escape a secret for a passwd-file line.
+
+    nmcli strips unescaped leading and trailing whitespace and unescapes
+    backslash sequences (``nm_utils_buf_utf8safe_unescape``), so every byte
+    is written as a three-digit octal escape: the value nmcli reads back is
+    exactly ``secret``. The error never carries the secret.
+    """
+    try:
+        data = secret.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("Wi-Fi secret is not valid text") from None
+    if b"\x00" in data:
+        raise ValueError("Wi-Fi secret contains a NUL character")
+    return "".join("\\%03o" % byte for byte in data)
+
+
+@contextmanager
+def _nm_passwd_file(secrets: Dict[str, str]) -> Iterator[str]:
+    """Yield the path of a 0600 passwd-file holding ``secrets``; it and its
+    private directory are removed on return, on error and on exception."""
+    content = "".join(f"{prop}:{_nm_passwd_escape(value)}\n" for prop, value in secrets.items())
+    directory = tempfile.mkdtemp(prefix="azazel-nm-secret-", dir=NM_PASSWD_FILE_BASE)  # 0700, new name
+    path = os.path.join(directory, "passwd")
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        fd = os.open(path, flags, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(content)
+        yield path
+    finally:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        try:
+            os.rmdir(directory)
+        except OSError as exc:
+            logger.warning("could not remove the nmcli passwd-file directory: %s", exc.strerror)
 
 
 def get_usb_interface() -> Optional[str]:
@@ -120,9 +177,54 @@ def is_nm_managed(iface: str) -> bool:
         return False
 
 
+def _key_mgmt_from_nm_security(raw: str) -> Optional[Tuple[str, str]]:
+    """Map nmcli's SECURITY column of the AP (``WEP``, ``WPA1``, ``WPA2``,
+    ``WPA3`` …) to (key-mgmt, secret property) the way NetworkManager
+    completes a profile in ``nmcli dev wifi connect``
+    (``nm_wifi_utils_complete_connection``): an AP offering both SAE and PSK
+    gets ``wpa-psk``, SAE only ``sae``. None when the column says nothing
+    usable."""
+    tokens = set((raw or "").split())
+    if "WEP" in tokens:
+        return "none", NM_WEP_KEY0_PROPERTY
+    psk = bool(tokens & {"WPA1", "WPA2"})
+    if "WPA3" in tokens:
+        return ("wpa-psk" if psk else "sae"), NM_PSK_PROPERTY
+    if psk:
+        return "wpa-psk", NM_PSK_PROPERTY
+    return None
+
+
+def new_profile_security(iface: str, ssid: str) -> Tuple[str, str]:
+    """key-mgmt and secret property for a new profile of ``ssid``: from the
+    AP in NetworkManager's scan list (no rescan); the first AP of that SSID
+    wins. Falls back to ``wpa-psk``."""
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "SSID,SECURITY", "dev", "wifi", "list", "ifname", iface, "--rescan", "no"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            for line in (result.stdout or "").splitlines():
+                ap_ssid, raw = _split_nmcli_terse_line(line, 2)
+                if ap_ssid == ssid:
+                    mapped = _key_mgmt_from_nm_security(raw)
+                    if mapped:
+                        return mapped
+                    break
+    except Exception as exc:
+        logger.debug(f"Wi-Fi security lookup failed: {type(exc).__name__}")
+    return "wpa-psk", NM_PSK_PROPERTY
+
+
 def connect_nm(iface: str, ssid: str, security: str, passphrase: Optional[str], persist: bool) -> Dict[str, Any]:
     """Connect using NetworkManager/nmcli"""
     try:
+        if passphrase:
+            # Refuse a secret nmcli cannot carry before any profile changes.
+            _nm_passwd_escape(passphrase)
         sec_flags = parse_security(security)
         # OPEN AP profiles are always treated as ephemeral to avoid stale reconnection failures.
         persist = bool(persist and not sec_flags["open"])
@@ -289,36 +391,72 @@ def connect_nm(iface: str, ssid: str, security: str, passphrase: Optional[str], 
                         timeout=5
                     )
                 if passphrase:
-                    subprocess.run(
-                        ["nmcli", "con", "mod", con_name, "wifi-sec.psk", passphrase],
-                        capture_output=True,
-                        timeout=5
-                    )
+                    # Drop the stored PSK so that NetworkManager asks nmcli
+                    # for it on `con up`; nmcli answers from the passwd-file
+                    # and NetworkManager stores the new PSK in the profile
+                    # (formerly `con mod … wifi-sec.psk <psk>`). Setting the
+                    # PSK to "" does not drop it (nmcli sends no secrets and
+                    # NetworkManager keeps the stored one); psk-flags 2
+                    # (not saved) drops it, and 0 makes it system-owned
+                    # again, so the answer is saved.
+                    for psk_flags in ("2", "0"):
+                        subprocess.run(
+                            ["nmcli", "con", "mod", con_name, "wifi-sec.psk-flags", psk_flags],
+                            capture_output=True,
+                            timeout=5
+                        )
 
             # Connect to existing connection
-            result = subprocess.run(
-                ["nmcli", "con", "up", con_name],
-                capture_output=True,
-                text=True,
-                timeout=20
-            )
+            if passphrase and not sec_flags["open"]:
+                with _nm_passwd_file({NM_PSK_PROPERTY: passphrase}) as passwd_file:
+                    result = subprocess.run(
+                        ["nmcli", "con", "up", con_name, "passwd-file", passwd_file],
+                        capture_output=True,
+                        text=True,
+                        timeout=20
+                    )
+            else:
+                result = subprocess.run(
+                    ["nmcli", "con", "up", con_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=20
+                )
         else:
             if not sec_flags["open"] and not passphrase:
                 return {"ok": False, "error": "Saved connection not found; passphrase required"}
 
-            # Create new connection
-            cmd = ["nmcli", "dev", "wifi", "connect", ssid, "ifname", iface]
-            
-            if not sec_flags["open"] and passphrase:
-                cmd.extend(["password", passphrase])
-            
-            result = subprocess.run(
-                cmd,
+            # Create new connection: add the profile without its secret, then
+            # bring it up with the secret in a passwd-file (formerly
+            # `nmcli dev wifi connect <ssid> … password <psk>`, which put the
+            # passphrase on nmcli's argv). Autoconnect stays off, as it is
+            # set below for a kept profile.
+            key_mgmt, secret_property = new_profile_security(iface, ssid)
+            add_cmd = [
+                "nmcli", "con", "add", "type", "wifi", "ifname", iface, "con-name", ssid, "ssid", ssid,
+                "connection.autoconnect", "no", "wifi-sec.key-mgmt", key_mgmt,
+            ]
+            if secret_property == NM_WEP_KEY0_PROPERTY:
+                add_cmd.extend(["wifi-sec.wep-key-type", "key"])
+            added = subprocess.run(
+                add_cmd,
                 capture_output=True,
                 text=True,
-                timeout=20
+                timeout=10
             )
-            
+            if added.returncode != 0:
+                return {"ok": False, "error": added.stderr.strip() or "Connection failed"}
+            uuid_match = re.search(r"\(([0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})\)", added.stdout or "")
+            up_target = ["uuid", uuid_match.group(1)] if uuid_match else ["id", ssid]
+
+            with _nm_passwd_file({secret_property: passphrase}) as passwd_file:
+                result = subprocess.run(
+                    ["nmcli", "con", "up", *up_target, "passwd-file", passwd_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=20
+                )
+
             # If not persisting, delete the connection after use (best-effort)
             if not persist and result.returncode == 0:
                 delete_nm_connections_for_ssid(ssid)

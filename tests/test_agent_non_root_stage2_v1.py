@@ -616,3 +616,103 @@ def test_move_once_never_replaces_a_symlink(tmp_path):
     res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
     assert res.returncode == 0 and "keep" in res.stdout
     assert src.exists() and dst.is_symlink() and not (tmp_path / "victim").exists()
+
+
+# ------------------------------------------- Edge#477: cross-filesystem move
+
+def _exdev_on(monkeypatch, fail_from: int = 0):
+    """os.link fails with EXDEV from its (fail_from+1)-th call on."""
+    import errno
+    real, calls = os.link, []
+
+    def link(src, dst, *a, **kw):
+        calls.append(Path(dst).name)
+        if len(calls) > fail_from:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real(src, dst, *a, **kw)
+
+    monkeypatch.setattr(os, "link", link)
+    return calls
+
+
+def test_migrate_chain_stops_on_a_cross_filesystem_link_and_keeps_every_file(tmp_path, monkeypatch, capsys):
+    old, new, _ = _old_state(tmp_path)
+    present = [n for n in migrate_audit_path.CHAIN_FILES if (old / n).exists()]
+    before = {n: (old / n).read_bytes() for n in present}
+    _exdev_on(monkeypatch)
+    out = migrate_audit_path.migrate_chain(old, new)
+    assert out["state"] == "cross_filesystem" and out["moved"] == [] and out["carry"] is None
+    assert out["not_moved"] == present
+    assert {n: (old / n).read_bytes() for n in present} == before  # the only copies stay
+    assert list(new.iterdir()) == []
+    assert migrate_audit_path.main(["--old-dir", str(old), "--new-dir", str(new)]) == 2
+    printed = capsys.readouterr().out
+    assert '"state": "cross_filesystem"' in printed
+
+
+def test_a_cross_filesystem_stop_mid_set_resumes(tmp_path, monkeypatch):
+    old, new, _ = _old_state(tmp_path)
+    _exdev_on(monkeypatch, fail_from=1)
+    out = migrate_audit_path.migrate_chain(old, new)
+    first = out["moved"]
+    assert out["state"] == "cross_filesystem" and len(first) == 1 and first[0] not in out["not_moved"]
+    assert (new / first[0]).exists() and not (old / first[0]).exists()
+    for name in out["not_moved"]:
+        assert (old / name).exists() and not (new / name).exists()
+    monkeypatch.undo()
+    again = migrate_audit_path.migrate_chain(old, new)
+    assert again["state"] == "resumed" and again["kept_in_new"] == first
+    assert again["carry"]["carried"] is True
+
+
+def test_the_manual_steps_after_a_cross_filesystem_stop_finish_the_move(tmp_path, monkeypatch):
+    old, new, _ = _old_state(tmp_path)
+    _exdev_on(monkeypatch)
+    out = migrate_audit_path.migrate_chain(old, new)
+    monkeypatch.undo()
+    for name in out["not_moved"]:  # cp -p -n, cmp, then delete the original
+        shutil.copy2(old / name, new / name)
+        assert (old / name).read_bytes() == (new / name).read_bytes()
+        os.unlink(old / name)
+    again = migrate_audit_path.migrate_chain(old, new)
+    assert again["state"] == "already_moved" and again["carry"]["carried"] is True
+    assert _relay_start(new)["reconcile"] == "cursor_found"
+
+
+def test_any_other_link_error_still_stops_with_the_error(tmp_path, monkeypatch):
+    import errno
+    old, new, _ = _old_state(tmp_path)
+
+    def link(src, dst, *a, **kw):
+        raise OSError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(os, "link", link)
+    with pytest.raises(PermissionError):
+        migrate_audit_path.migrate_chain(old, new)
+    assert (old / "core-decision-audit.jsonl").exists() and list(new.iterdir()) == []
+
+
+def _report_chain_result(rc: int, out: str) -> str:
+    script = ("say() { echo \"$*\"; }\nPYTHON=/opt/fake/python\nPY_ROOT=/opt/fake/py\n"
+              "OLD_LOG_DIR=/var/log/fake\nNEW_LOG_DIR=/var/log/fake/ai\n"
+              + _installer_function("report_chain_result") + 'report_chain_result "$1" "$2"\n')
+    res = subprocess.run(["bash", "-c", script, "bash", str(rc), out], capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    return res.stdout
+
+
+def test_the_installer_prints_the_cross_filesystem_notice(tmp_path, monkeypatch, capsys):
+    old, new, _ = _old_state(tmp_path)
+    _exdev_on(monkeypatch)
+    rc = migrate_audit_path.main(["--old-dir", str(old), "--new-dir", str(new)])
+    said = _report_chain_result(rc, capsys.readouterr().out)
+    assert said.startswith("NOTICE: the audit chain and the P0 queue were NOT moved:")
+    assert "different filesystems" in said and "EXDEV" in said and "Nothing was copied, overwritten or deleted" in said
+    assert "cmp" in said and "only then delete the originals" in said and "run this script again" in said
+    # Other exit-2 states keep their notice; other codes their warning.
+    clash = _report_chain_result(2, '{"state": "clash"}')
+    assert "a name in both places" in clash and "different filesystems" not in clash
+    assert "WARNING" in _report_chain_result(1, "{}")
+    src = (ROOT / "installer" / "internal" / "setup_agent_account.sh").read_text(encoding="utf-8")
+    assert 'chain_out="$(cd / && "$PYTHON" -I -c' in src
+    assert 'report_chain_result "$chain_rc" "$chain_out"' in src

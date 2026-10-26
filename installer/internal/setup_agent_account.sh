@@ -15,7 +15,9 @@
 #     the relay's reconcile cursor is carried to the new path
 #     (azazel_edge.notify.migrate_audit_path), so the moved chain is not
 #     replayed. Nothing is overwritten: if any of the three already exists at
-#     the new place, none is moved and a notice is printed.
+#     the new place, none is moved and a notice is printed. If the two
+#     directories are on different filesystems, nothing is moved either and
+#     the notice gives the manual steps.
 #  4. The decision log and the current runtime files are copied once (the
 #     originals are kept).
 #  5. /etc/default/azazel-edge-security and /etc/default/azazel-edge-web: a
@@ -117,18 +119,31 @@ env_value() {
   printf '%s' "$line"
 }
 AUDIT_SETTING="$(env_value "$SECURITY_ENV" AZAZEL_AI_AUDIT_LOG)"
+# What the installer says for migrate_chain's exit code and JSON line.
+report_chain_result() {
+  local rc="$1" out="$2"
+  local carry_cmd="$PYTHON -I -c 'import sys; sys.path.insert(0, \"$PY_ROOT\"); from azazel_edge.notify.migrate_audit_path import carry_cursor; print(carry_cursor(*sys.argv[1:]))' <new queue> <old chain path> <new chain path>"
+  case "$rc" in
+    0) say "audit chain and P0 queue: in $NEW_LOG_DIR, relay cursor carried (or nothing to carry)" ;;
+    2)
+      if [[ "$out" == *'"state": "cross_filesystem"'* ]]; then
+        say "NOTICE: the audit chain and the P0 queue were NOT moved: $OLD_LOG_DIR and $NEW_LOG_DIR are on different filesystems (link() failed with EXDEV). Nothing was copied, overwritten or deleted; every file is still in $OLD_LOG_DIR. To finish by hand: stop the agent; copy core-decision-audit.jsonl, core-decision-audit.jsonl.1, core-decision-audit.fabric.jsonl and p0-alert-queue.jsonl (those present) with 'cp -p -n' from $OLD_LOG_DIR to $NEW_LOG_DIR; compare each copy with its original ('cmp'); only then delete the originals; then run this script again (it finds the set in $NEW_LOG_DIR, carries the relay cursor and sets owners and modes). Or put both directories on one filesystem and run this script again."
+      else
+        say "NOTICE: the audit chain and the P0 queue were NOT moved (see the line above: a name in both places, a non-regular file, or a custom AZAZEL_AI_AUDIT_LOG). Nothing was overwritten. To finish by hand: stop the agent, move core-decision-audit.jsonl(.1, .fabric.jsonl) and p0-alert-queue.jsonl together beside the AI audit log the agent uses, then run: $carry_cmd"
+      fi
+      ;;
+    *) say "WARNING: the P0 relay cursor was not carried; the next start reconciles the chain as fresh_chain (past decisions it does not find in the queue are alerted as past decisions)" ;;
+  esac
+}
 # Isolated interpreter (no environment, no user site, no cwd on the path);
 # only the installed code is imported.
 set +e
-(cd / && "$PYTHON" -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from azazel_edge.notify.migrate_audit_path import main; sys.exit(main(sys.argv[2:]))' \
-    "$PY_ROOT" --old-dir "$OLD_LOG_DIR" --new-dir "$NEW_LOG_DIR" --audit-log-setting "$AUDIT_SETTING")
+chain_out="$(cd / && "$PYTHON" -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from azazel_edge.notify.migrate_audit_path import main; sys.exit(main(sys.argv[2:]))' \
+    "$PY_ROOT" --old-dir "$OLD_LOG_DIR" --new-dir "$NEW_LOG_DIR" --audit-log-setting "$AUDIT_SETTING")"
 chain_rc=$?
 set -e
-case "$chain_rc" in
-  0) say "audit chain and P0 queue: in $NEW_LOG_DIR, relay cursor carried (or nothing to carry)" ;;
-  2) say "NOTICE: the audit chain and the P0 queue were NOT moved (see the line above: a name in both places, a non-regular file, or a custom AZAZEL_AI_AUDIT_LOG). Nothing was overwritten. To finish by hand: stop the agent, move core-decision-audit.jsonl(.1, .fabric.jsonl) and p0-alert-queue.jsonl together beside the AI audit log the agent uses, then run: $PYTHON -I -c 'import sys; sys.path.insert(0, \"$PY_ROOT\"); from azazel_edge.notify.migrate_audit_path import carry_cursor; print(carry_cursor(*sys.argv[1:]))' <new queue> <old chain path> <new chain path>" ;;
-  *) say "WARNING: the P0 relay cursor was not carried; the next start reconciles the chain as fresh_chain (past decisions it does not find in the queue are alerted as past decisions)" ;;
-esac
+[[ -z "$chain_out" ]] || printf '%s\n' "$chain_out"
+report_chain_result "$chain_rc" "$chain_out"
 # Each AI log moves only when its variable is unset or holds a default (a
 # custom value means the agent writes elsewhere).
 move_log_if_default() {
