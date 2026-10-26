@@ -10,6 +10,39 @@ from typing import Any, Dict, Generator, Optional, Tuple
 from .path_schema import command_path_candidates, runtime_snapshot_path_candidates, warn_if_legacy_path
 
 CONTROL_SOCKET = Path(os.environ.get("AZAZEL_CONTROL_SOCKET", "/run/azazel-edge/control.sock"))
+CONTROL_GROUP = "azazel-control"
+
+
+def _permission_denied_reply(socket_path: Path, exc: BaseException) -> Dict[str, Any]:
+    """The caller may not use control.sock (Edge#477 rehearsal).
+
+    /run/azazel-edge is 0750 root:azazel-control, so a user outside that
+    group cannot even look the socket up. This is not "daemon not reached":
+    the request was not sent, and it is never handed to the command file.
+    """
+    detail = getattr(exc, "strerror", None) or type(exc).__name__
+    return {
+        "ok": False,
+        "permission_denied": True,
+        "error": (f"permission denied: {socket_path} ({detail}); the user must be in the "
+                  f"{CONTROL_GROUP} group"),
+    }
+
+
+def control_socket_access_error(socket_path: Path = CONTROL_SOCKET) -> Optional[str]:
+    """A message when this user may not reach ``socket_path``, else None.
+
+    Only a permission problem is reported; a missing socket is not (that is
+    an ordinary "daemon not running" case shown elsewhere)."""
+    try:
+        socket_path.exists()
+    except PermissionError as exc:
+        return str(_permission_denied_reply(socket_path, exc)["error"])
+    except OSError:
+        return None
+    if socket_path.exists() and not os.access(socket_path, os.R_OK | os.W_OK):
+        return str(_permission_denied_reply(socket_path, PermissionError(13, "Permission denied"))["error"])
+    return None
 
 
 def _socket_request(
@@ -28,6 +61,9 @@ def _socket_request(
       but no reply came (send failed part way, timeout, or the connection
       closed before a reply). The daemon may have carried it out, so this is
       never retried or handed elsewhere.
+    * ``"permission_denied": True``: this user may not use the socket (not
+      in the azazel-control group). Nothing was sent; this is not a
+      ``transport_error`` and is never handed to another path.
     """
     try:
         # Serialized before anything is sent: a request that cannot be
@@ -35,7 +71,11 @@ def _socket_request(
         request_bytes = json.dumps(payload).encode("utf-8") + b"\n"
     except (TypeError, ValueError) as exc:
         return {"ok": False, "error": f"request not serializable: {exc}"}
-    if not socket_path.exists():
+    try:
+        present = socket_path.exists()
+    except PermissionError as exc:
+        return _permission_denied_reply(socket_path, exc)
+    if not present:
         return {"ok": False, "error": f"control socket not found: {socket_path}", "transport_error": True}
     sock: Optional[socket.socket] = None
     try:
@@ -43,6 +83,8 @@ def _socket_request(
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.settimeout(timeout_sec)
             sock.connect(str(socket_path))
+        except PermissionError as exc:
+            return _permission_denied_reply(socket_path, exc)
         except Exception as exc:
             return {"ok": False, "error": str(exc), "transport_error": True}
         chunks: list[bytes] = []
@@ -116,22 +158,32 @@ def watch_snapshots(
     The stream ends when the daemon closes it (also right after refusing it,
     for example ``busy`` when too many streams are open) or the socket fails.
     When ``errors`` is a list, the reason the stream ended is appended to it
-    (the daemon's last error string, ``socket_missing``, ``stream_closed`` or
-    ``stream_error:<exception>``), so a caller can report the end instead of
+    (the daemon's last error string, ``socket_missing``,
+    ``permission_denied`` (the user is not in the azazel-control group),
+    ``stream_closed`` or ``stream_error:<exception>``), so a caller can report the end instead of
     stopping silently (Edge#477).
     """
     def _note(reason: str) -> None:
         if errors is not None:
             errors.append(str(reason))
 
-    if not socket_path.exists():
+    try:
+        present = socket_path.exists()
+    except PermissionError:
+        _note("permission_denied")
+        return
+    if not present:
         _note("socket_missing")
         return
     sock: Optional[socket.socket] = None
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(timeout_sec)
-        sock.connect(str(socket_path))
+        try:
+            sock.connect(str(socket_path))
+        except PermissionError:
+            _note("permission_denied")
+            return
         req = {"action": "watch_snapshot", "params": {"interval_sec": float(interval_sec)}}
         sock.sendall(json.dumps(req).encode("utf-8") + b"\n")
         buffer = b""
@@ -238,7 +290,9 @@ def send_action_with_fallback(
 
     Only when the request never reached the daemon (``transport_error``: no
     socket, connect failed) is the legacy command file ``ui_command.json``
-    written. When it was sent but no reply came (``delivery_unknown``), the
+    written. A user who may not use the socket (``permission_denied``) gets
+    that failure as it is: writing the command file would not help them and
+    would hide the real reason. When it was sent but no reply came (``delivery_unknown``), the
     daemon may have carried it out, so nothing is written and that result is
     returned. Nothing in Azazel-Edge reads that
     file, so the result stays ``ok: False`` with ``undelivered: True`` and the
@@ -271,6 +325,9 @@ def describe_action_failure(result: Any, label: str) -> str:
         return f"• action failed: {label} (unexpected response)"
     if result.get("not_implemented") or result.get("error") == "not_implemented":
         return f"• action not implemented: {label} (nothing was done)"
+    if result.get("permission_denied"):
+        return (f"• action not sent: {label} (no permission for the control socket; "
+                f"the user must be in the {CONTROL_GROUP} group)")
     if result.get("undelivered"):
         return f"• action not delivered: {label} (control daemon not reached)"
     if result.get("delivery_unknown"):
