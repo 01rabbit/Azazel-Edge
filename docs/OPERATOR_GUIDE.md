@@ -9,7 +9,16 @@ Primary field operation guide for non-expert shelter staff and volunteers.
 3. Verify:
    - `systemctl is-active azazel-edge-web`
    - `systemctl is-active azazel-edge-control-daemon`
-4. Open dashboard from a local-network browser at `http://<pi-ip>:8080`.
+4. Open the dashboard from a local-network browser at `https://<pi-ip>/`
+   (nginx serves it on HTTPS and redirects plain HTTP there; the Web UI itself
+   listens only on `127.0.0.1:8084`).
+   - The certificate is signed by the device's local CA. Download it once
+     from `http://<pi-ip>/.well-known/azazel-edge-local-ca.crt` and trust it
+     on the operator device, or the browser shows a certificate warning.
+   - The first time, open `https://<pi-ip>/?token=<token>`; the browser keeps
+     the token. The token is in `/etc/azazel-edge/web_token.txt`
+     (`0640 root:azazel-web`): read it on the device with
+     `sudo cat /etc/azazel-edge/web_token.txt`.
 5. Confirm posture color and recommended first action.
 
 ## 2. e-Paper State and Immediate Action

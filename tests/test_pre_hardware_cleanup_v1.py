@@ -1,0 +1,204 @@
+"""Small fixes found before the first hardware run (Edge#477, Edge#471).
+
+- install_ai_runtime.sh is no longer placed under /opt/azazel-edge, where it
+  resolved REPO_ROOT to "/" and could not run; an old copy is removed.
+- install_security_stack.sh, run from its /opt/azazel-edge copy, gets the
+  checkout as REPO_ROOT instead of depending on the current directory.
+- verify_runtime_sync.sh outside a checkout (its installed copies) refuses to
+  run without the checkout argument instead of comparing "/" or "/usr".
+- azazel-edge-selftest exits non-zero on a critical failure, no longer ends
+  early under set -e when the SD card is fast, checks the optional security
+  units only when they are enabled, and install_all.sh runs it last.
+
+Everything runs against stubs in a temporary directory: no systemctl, dd or
+/var/log of the host is touched.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+INTERNAL = ROOT / "installer" / "internal"
+TOOLS = INTERNAL / "install_migrated_tools.sh"
+INSTALL_ALL = INTERNAL / "install_all.sh"
+SYNC = INTERNAL / "verify_runtime_sync.sh"
+SELFTEST = ROOT / "bin" / "azazel-edge-selftest"
+
+
+# ------------------------------------------------- scripts placed under /opt
+
+def _opt_placed_scripts() -> list[str]:
+    src = TOOLS.read_text(encoding="utf-8")
+    return re.findall(
+        r'^install -m 0755 "\$REPO_ROOT/installer/internal/([a-z_]+\.sh)" /opt/azazel-edge/\1$', src, re.M)
+
+
+def test_install_ai_runtime_is_not_placed_under_opt_and_an_old_copy_is_removed():
+    src = TOOLS.read_text(encoding="utf-8")
+    assert "install_ai_runtime.sh" not in _opt_placed_scripts()
+    assert "/opt/azazel-edge/install_ai_runtime.sh\n" not in src.replace("rm -f -- /opt/azazel-edge/install_ai_runtime.sh\n", "")
+    assert "rm -f -- /opt/azazel-edge/install_ai_runtime.sh\n" in src
+    # install_all.sh runs it from the checkout.
+    assert '"${REPO_ROOT}/installer/internal/install_ai_runtime.sh"' in INSTALL_ALL.read_text(encoding="utf-8")
+
+
+def test_every_script_placed_under_opt_works_there():
+    """A script copied to /opt/azazel-edge/<name>.sh that finds the checkout
+    from its own location gets "/" there. Each one either does not need the
+    checkout, or is run with it given explicitly."""
+    placed = _opt_placed_scripts()
+    assert placed, "no /opt/azazel-edge scripts found; the pattern is stale"
+    src = TOOLS.read_text(encoding="utf-8")
+    self_located = []
+    for name in placed:
+        body = (INTERNAL / name).read_text(encoding="utf-8")
+        if "BASH_SOURCE[0]" in body and "/../.." in body:
+            self_located.append(name)
+    assert sorted(self_located) == ["install_security_stack.sh", "verify_runtime_sync.sh"]
+    # install_security_stack.sh: REPO_ROOT from the environment overrides.
+    assert 'REPO_ROOT="${REPO_ROOT:-$REPO_ROOT_DEFAULT}"' in (INTERNAL / "install_security_stack.sh").read_text(encoding="utf-8")
+    calls = [c for c in re.findall(r"^.*/opt/azazel-edge/install_security_stack\.sh$", src, re.M)
+             if not c.startswith("install ")]
+    assert calls and all('REPO_ROOT="$REPO_ROOT"' in c for c in calls), calls
+    # verify_runtime_sync.sh: the checkout is its first argument.
+    calls = re.findall(r"^\s*/opt/azazel-edge/verify_runtime_sync\.sh .*$", src, re.M)
+    assert calls and all(c.split()[1] == '"$REPO_ROOT"' for c in calls), calls
+
+
+def test_verify_runtime_sync_outside_a_checkout_needs_the_checkout_argument(tmp_path):
+    copy = tmp_path / "opt" / "azazel-edge" / "verify_runtime_sync.sh"
+    copy.parent.mkdir(parents=True)
+    copy.write_text(SYNC.read_text(encoding="utf-8"), encoding="utf-8")
+    res = subprocess.run(["bash", str(copy)], capture_output=True, text=True)
+    assert res.returncode == 2
+    assert "not run from a repository checkout" in res.stderr
+    assert "first argument" in res.stderr
+
+
+def test_verify_runtime_sync_in_the_checkout_keeps_its_default():
+    # Only the early check: a runtime root that does not exist ends it there.
+    res = subprocess.run(["bash", str(SYNC)], capture_output=True, text=True,
+                         env=dict(os.environ))
+    assert "not run from a repository checkout" not in res.stderr
+
+
+# -------------------------------------------------------------- selftest
+
+def _selftest_env(tmp_path: Path, *, active: set[str], enabled: set[str]) -> tuple[Path, dict]:
+    """A copy of the selftest with its fixed paths moved into tmp_path, and
+    stubs for systemctl, dmesg, dd and time."""
+    log_dir, sd_dir, stubs = tmp_path / "log", tmp_path / "sd", tmp_path / "bin"
+    for d in (log_dir, sd_dir, stubs):
+        d.mkdir()
+    src = SELFTEST.read_text(encoding="utf-8")
+    for old, new in (
+        ('LOG_DIR="/var/log/azazel-edge"', f'LOG_DIR="{log_dir}"'),
+        ('SD_TEST_DIR="/tmp"', f'SD_TEST_DIR="{sd_dir}"'),
+        ('TIME_BIN="/usr/bin/time"', f'TIME_BIN="{stubs / "fake-time"}"'),
+    ):
+        assert src.count(old) == 1, old
+        src = src.replace(old, new)
+    script = tmp_path / "selftest"
+    script.write_text(src, encoding="utf-8")
+    (stubs / "systemctl").write_text(
+        "#!/bin/sh\n"
+        "verb=\"$1\"; shift\n"
+        "[ \"$1\" = --quiet ] && shift\n"
+        f"case \"$verb\" in is-active) list='{' '.join(sorted(active))}' ;; "
+        f"is-enabled) list='{' '.join(sorted(enabled))}' ;; *) exit 1 ;; esac\n"
+        "for u in $list; do [ \"$u\" = \"$1\" ] && exit 0; done\n"
+        "exit 3\n", encoding="utf-8")
+    (stubs / "dmesg").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (stubs / "dd").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    # 0.50 s for 10 MiB: 20 MB/s, a healthy card (the case that used to end
+    # the selftest early under set -e).
+    (stubs / "fake-time").write_text("#!/bin/sh\nshift 2\n\"$@\"\nrc=$?\necho 0.50 >&2\nexit $rc\n",
+                                     encoding="utf-8")
+    for p in stubs.iterdir():
+        p.chmod(0o755)
+    env = dict(os.environ, PATH=f"{stubs}:/usr/bin:/bin")
+    return script, env
+
+
+CORE = {"azazel-edge-web", "azazel-edge-control-daemon"}
+SECURITY = {"azazel-edge-suricata", "azazel-edge-opencanary"}
+
+
+@pytest.mark.parametrize(
+    "active, enabled, rc, status, failures",
+    [
+        (CORE | SECURITY, SECURITY, 0, "warning", []),
+        # Security stack not installed (ENABLE_SECURITY_STACK=0): a warning only.
+        (CORE, set(), 0, "warning", []),
+        # Enabled but not running: critical.
+        (CORE, SECURITY, 1, "failed", ["service_inactive:azazel-edge-opencanary", "service_inactive:azazel-edge-suricata"]),
+        ({"azazel-edge-control-daemon"}, set(), 1, "failed", ["service_inactive:azazel-edge-web"]),
+    ],
+)
+def test_selftest_exit_status_follows_critical_failures(tmp_path, active, enabled, rc, status, failures):
+    script, env = _selftest_env(tmp_path, active=active, enabled=enabled)
+    res = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env)
+    assert res.returncode == rc, res.stdout + res.stderr
+    result = json.loads((tmp_path / "log" / "selftest_latest.json").read_text(encoding="utf-8"))
+    assert result["status"] == status
+    assert sorted(result["failures"]) == failures
+    # Fast card: no speed warning, and the run got past the SD check.
+    assert not any(w.startswith("sd_write_speed_low") for w in result["warnings"])
+    # The installer copies neither pytest nor /opt/azazel-edge/tests.
+    assert "python_smoke_tests_missing" in result["warnings"]
+    for f in failures:
+        assert f"FAIL {f}" in res.stdout
+    assert f"selftest status: {status}" in res.stdout + res.stderr
+    assert sorted(p.name for p in (tmp_path / "sd").iterdir()) == []
+
+
+def test_selftest_sd_check_returns_zero_for_a_fast_card():
+    src = SELFTEST.read_text(encoding="utf-8")
+    assert "' && warn \"sd_write_speed_low" not in src
+
+
+# ---------------------------------------------------- install_all runs it
+
+def _install_all_tail() -> str:
+    src = INSTALL_ALL.read_text(encoding="utf-8")
+    start = src.index("# Last: the selftest")
+    return src[start:]
+
+
+@pytest.mark.parametrize(
+    "app, services, selftest_rc, rc, ran",
+    [
+        ("1", "1", 0, 0, True),
+        ("1", "1", 1, 1, True),
+        ("0", "1", 1, 0, False),
+        ("1", "0", 1, 0, False),
+    ],
+)
+def test_install_all_runs_the_selftest_last_and_fails_with_it(tmp_path, app, services, selftest_rc, rc, ran):
+    (tmp_path / "bin").mkdir()
+    marker = tmp_path / "ran"
+    stub = tmp_path / "bin" / "azazel-edge-selftest"
+    stub.write_text(f"#!/bin/sh\necho selftest-output\ntouch '{marker}'\nexit {selftest_rc}\n", encoding="utf-8")
+    stub.chmod(0o755)
+    script = f'set -euo pipefail\nREPO_ROOT="{tmp_path}"\nENABLE_APP_STACK="{app}"\n' + _install_all_tail()
+    env = dict(os.environ, ENABLE_SERVICES=services)
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+    assert res.returncode == rc, res.stdout + res.stderr
+    assert marker.exists() == ran
+    assert ("selftest-output" in res.stdout) == ran
+    assert ("Unified installation completed." in res.stdout) == (rc == 0)
+    if rc:
+        assert "critical failure" in res.stderr
+
+
+def test_install_all_selftest_is_the_last_step():
+    src = INSTALL_ALL.read_text(encoding="utf-8")
+    assert src.rstrip().endswith('echo "Unified installation completed."')
+    assert src.index('"${REPO_ROOT}/bin/azazel-edge-selftest"') > src.index("install_sensors.sh")

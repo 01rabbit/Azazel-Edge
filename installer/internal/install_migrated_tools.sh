@@ -201,7 +201,12 @@ install -m 0755 "$REPO_ROOT/bin/azazel-edge-dummy-eve" /usr/local/bin/azazel-edg
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-injector" /usr/local/bin/azazel-edge-injector
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-audit-review" /usr/local/bin/azazel-edge-audit-review
 install -m 0755 "$REPO_ROOT/installer/internal/set_dev_remote_access.sh" /opt/azazel-edge/set_dev_remote_access.sh
-install -m 0755 "$REPO_ROOT/installer/internal/install_ai_runtime.sh" /opt/azazel-edge/install_ai_runtime.sh
+# install_ai_runtime.sh is not placed under /opt/azazel-edge: it finds the
+# compose files and provisioning scripts it installs relative to its own
+# location (REPO_ROOT two levels up), so a copy there resolves REPO_ROOT to
+# "/" and cannot run. Run it from the repository checkout (install_all.sh
+# does). A copy an earlier install left there is removed.
+rm -f -- /opt/azazel-edge/install_ai_runtime.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_web_token.sh" /opt/azazel-edge/provision_web_token.sh
 install -m 0755 "$REPO_ROOT/installer/internal/setup_web_account.sh" /opt/azazel-edge/setup_web_account.sh
 install -m 0755 "$REPO_ROOT/installer/internal/setup_agent_account.sh" /opt/azazel-edge/setup_agent_account.sh
@@ -401,7 +406,11 @@ install -m 0644 "$REPO_ROOT/security/opencanary/Dockerfile" /opt/azazel-edge/sec
 install -m 0644 "$REPO_ROOT/security/opencanary/opencanary.conf" /opt/azazel-edge/security/opencanary/opencanary.conf
 install -m 0644 "$REPO_ROOT/security/suricata/azazel-lite.rules" /opt/azazel-edge/security/suricata/azazel-lite.rules
 if [[ "$ENABLE_SECURITY_STACK" == "1" ]]; then
-  ENABLE_SERVICES="$ENABLE_SERVICES" SKIP_LUKS="$SKIP_LUKS" /opt/azazel-edge/install_security_stack.sh
+  # REPO_ROOT explicitly: run from /opt/azazel-edge, the script's own default
+  # (two levels up) is "/", and /opt/azazel-edge lacks the assets it installs
+  # (bin/, systemd/, installer/), so without it the run depended on the
+  # current directory being the checkout.
+  REPO_ROOT="$REPO_ROOT" ENABLE_SERVICES="$ENABLE_SERVICES" SKIP_LUKS="$SKIP_LUKS" /opt/azazel-edge/install_security_stack.sh
 fi
 
 echo "[17/17] Verify runtime sync"

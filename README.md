@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-index-blue)](docs/INDEX.md)
 ![Platform: Raspberry Pi](https://img.shields.io/badge/Platform-Raspberry%20Pi-C51A4A?logo=raspberry-pi)
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-Core-000000?logo=rust)
 ![Flask](https://img.shields.io/badge/Flask-Web%20API-000000?logo=flask)
 [![Black Hat Arsenal](https://img.shields.io/badge/Black%20Hat-Arsenal%202025--2026-111111)](https://www.blackhat.com/)
@@ -32,7 +32,7 @@ Azazel-Edge is not a production SIEM replacement, not an autonomous AI defender,
 |---|---|
 | Hardware | Raspberry Pi-oriented; tested/developed for constrained edge deployment |
 | OS | Raspberry Pi OS / Linux |
-| Runtime | Python 3.10+, Rust core components |
+| Runtime | Python 3.11 or later (CI tests 3.11; Raspberry Pi OS trixie, the device target, ships 3.13), Rust core components |
 | Network | Local edge segment with optional Suricata/OpenCanary integration |
 | Optional | Ollama, Mattermost, Wazuh, Vector, Aggregator |
 

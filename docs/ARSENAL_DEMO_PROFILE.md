@@ -82,7 +82,10 @@ bin/azazel-edge-scenario-replay run mixed_correlation_demo
 Recommended API sanity checks:
 
 ```bash
-TOKEN="$(cat ~/.azazel-edge/web_token.txt)"
+# The installed token: /etc/azazel-edge/web_token.txt, 0640 root:azazel-web
+# (read with sudo). ~/.azazel-edge/web_token.txt is only the code default
+# when AZAZEL_WEB_TOKEN_FILE is unset; the installer always sets it.
+TOKEN="$(sudo cat /etc/azazel-edge/web_token.txt | tr -d '[:space:]')"
 curl -fsS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/state >/dev/null
 curl -fsS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/aggregator/nodes >/dev/null || true
 ```

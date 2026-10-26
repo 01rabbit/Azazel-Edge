@@ -97,4 +97,18 @@ else
   echo "[all/7] Skip optional sensors (set ENABLE_SNMP=1 and/or ENABLE_NETFLOW=1)"
 fi
 
+# Last: the selftest (bin/azazel-edge-selftest) checks the services, config
+# checksums and storage, prints its findings and exits non-zero on a critical
+# failure, which fails the install too. It needs the app stack and its
+# services running, so it is skipped without them.
+if [[ "${ENABLE_APP_STACK}" == "1" && "${ENABLE_SERVICES:-1}" == "1" ]]; then
+  echo "[all/8] Run selftest"
+  if ! "${REPO_ROOT}/bin/azazel-edge-selftest"; then
+    echo "ERROR: the selftest found a critical failure (listed above; details in /var/log/azazel-edge/selftest_latest.json). The installation finished, but the device is not ready." >&2
+    exit 1
+  fi
+else
+  echo "[all/8] Skip selftest (needs ENABLE_APP_STACK=1 and ENABLE_SERVICES=1)"
+fi
+
 echo "Unified installation completed."

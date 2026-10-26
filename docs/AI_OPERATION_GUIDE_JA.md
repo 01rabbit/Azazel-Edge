@@ -91,13 +91,16 @@ sudo docker exec azazel-edge-ollama ollama list
 
 ## 5. 監視対象ファイル
 
-- ソケット: `/run/azazel-edge-ai/ai-bridge.sock`
-- 最新助言: `/run/azazel-edge/ai_advisory.json`
-- UIスナップショット: `/run/azazel-edge/ui_snapshot.json`
-- メトリクス: `/run/azazel-edge/ai_metrics.json`
-- イベントログ: `/var/log/azazel-edge/ai-events.jsonl`
-- LLM結果ログ: `/var/log/azazel-edge/ai-llm.jsonl`
-- Deferredログ: `/var/log/azazel-edge/ai-deferred.jsonl`
+エージェントは `azazel-agent` で動き（Edge#471）、自分のディレクトリにだけ書く。読むには `sudo` が要る（`docs/architecture/privilege-inventory.md`）。
+
+- ソケット: `/run/azazel-edge-ai/ai-bridge.sock`（0700 `azazel-agent` のディレクトリ内。接続するのは root のコアだけ）
+- 手動質問ソケット: `/run/azazel-edge-agent-query/agent-query.sock`（Web UI が使う）
+- 最新助言: `/run/azazel-edge-agent/ai_advisory.json`
+- エージェントのスナップショット項目: `/run/azazel-edge-agent/ai_snapshot.json`（制御デーモンが `/run/azazel-edge/ui_snapshot.json` へ統合する）
+- メトリクス: `/run/azazel-edge-agent/ai_metrics.json`
+- イベントログ: `/var/log/azazel-edge/ai/ai-events.jsonl`
+- LLM結果ログ: `/var/log/azazel-edge/ai/ai-llm.jsonl`
+- Deferredログ: `/var/log/azazel-edge/ai/ai-deferred.jsonl`
 - Ops連携UI: `/ops-comm`（Mattermost連携専用サイト）
 - M.I.O. は Dashboard、`ops-comm`、Mattermost の各面で役割を分けて運用する
 
@@ -105,15 +108,15 @@ sudo docker exec azazel-edge-ollama ollama list
 
 ```bash
 systemctl is-active azazel-edge-ai-agent
-jq '{processed_events,llm_requests,llm_completed,llm_failed,llm_schema_invalid_count,ops_requests,ops_completed,ops_schema_invalid_count,last_error}' /run/azazel-edge/ai_metrics.json
-tail -n 5 /var/log/azazel-edge/ai-llm.jsonl
+sudo jq '{processed_events,llm_requests,llm_completed,llm_failed,llm_schema_invalid_count,ops_requests,ops_completed,ops_schema_invalid_count,last_error}' /run/azazel-edge-agent/ai_metrics.json
+sudo tail -n 5 /var/log/azazel-edge/ai/ai-llm.jsonl
 ```
 
 手動質問の確認:
 
 ```bash
-jq '{manual_requests,manual_routed_count,manual_completed,manual_failed,last_error}' /run/azazel-edge/ai_metrics.json
-tail -n 5 /var/log/azazel-edge/ai-llm.jsonl
+sudo jq '{manual_requests,manual_routed_count,manual_completed,manual_failed,last_error}' /run/azazel-edge-agent/ai_metrics.json
+sudo tail -n 5 /var/log/azazel-edge/ai/ai-llm.jsonl
 ```
 
 Mattermost slash command:
@@ -132,14 +135,16 @@ Mattermost slash command:
 
 ```bash
 sudo systemctl stop azazel-edge-ai-agent
-sudo bash -lc ': > /var/log/azazel-edge/ai-events.jsonl; : > /var/log/azazel-edge/ai-llm.jsonl; : > /var/log/azazel-edge/ai-deferred.jsonl; rm -f /run/azazel-edge/ui_snapshot.json /run/azazel-edge/ai_metrics.json /run/azazel-edge/ai_advisory.json /run/azazel-edge/ai_runtime_policy.json'
+sudo bash -c ': > /var/log/azazel-edge/ai/ai-events.jsonl; : > /var/log/azazel-edge/ai/ai-llm.jsonl; : > /var/log/azazel-edge/ai/ai-deferred.jsonl; rm -f /run/azazel-edge-agent/ai_snapshot.json /run/azazel-edge-agent/ai_metrics.json /run/azazel-edge-agent/ai_advisory.json /run/azazel-edge-agent/ai_runtime_policy.json'
 sudo systemctl start azazel-edge-ai-agent
 ```
+
+（以前の手順は `/var/log/azazel-edge/ai-*.jsonl` と `/run/azazel-edge/` を消していたが、Edge#471 以降エージェントはそこへ書かないため、何も消えなかった。監査チェーンや P0 キューも `/var/log/azazel-edge/ai/` にあるので、上の 3 ファイル以外は消さない。）
 
 ### B. LLM失敗/遅延が増加
 
 ```bash
-jq '{llm_requests,llm_completed,llm_failed,llm_fallback_count,llm_schema_invalid_count,ops_schema_invalid_count,llm_latency_ms_last,last_error,policy_mode}' /run/azazel-edge/ai_metrics.json
+sudo jq '{llm_requests,llm_completed,llm_failed,llm_fallback_count,llm_schema_invalid_count,ops_schema_invalid_count,llm_latency_ms_last,last_error,policy_mode}' /run/azazel-edge-agent/ai_metrics.json
 sudo journalctl -u azazel-edge-ai-agent -n 100 --no-pager
 sudo docker logs --tail 100 azazel-edge-ollama
 ```
@@ -188,10 +193,12 @@ Aggregator freshness 判定の調整（`/etc/default/azazel-edge-web`）:
 現在実装済みの M.I.O. 機能確認:
 
 ```bash
-curl -sS http://127.0.0.1:8084/api/ai/capabilities | jq
+# Web UI の API はトークンが要る（無いと HTTP 401）。
+TOKEN="$(sudo cat /etc/azazel-edge/web_token.txt | tr -d '[:space:]')"
+curl -sS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/ai/capabilities | jq
 ```
 - slash command callback URL: `http://172.16.0.254/api/mattermost/command`
-- command token は `/etc/azazel-edge/mattermost-command-token`（`0600`）で管理
+- command token は `/etc/azazel-edge/mattermost-command-token`（`0640 root:azazel-web`。Web UI は `azazel-web` で動くので、`0600` では読めず slash command がすべて拒否される）で管理
 - token 未設定時は `POST /api/mattermost/command` を拒否
 - `/api/mattermost/message` で `ask_ai=true` を指定すると、AI回答に加えて Runbook 候補も返す
 - command の作成/更新:

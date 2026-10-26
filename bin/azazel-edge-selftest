@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # azazel-edge-selftest - Periodic hardware and config health check
+#
+# Exit status: 1 when a critical check failed (the "failures" list of
+# selftest_latest.json; the systemd unit then shows as failed), 0 otherwise
+# (warnings alone do not fail it). install_all.sh runs it last and fails with
+# it.
 set -euo pipefail
 
 LOG_DIR="/var/log/azazel-edge"
@@ -53,7 +58,12 @@ check_sd_write_speed() {
     return
   fi
   mbps=$(awk -v s="${sec}" 'BEGIN { printf "%.2f", 10.0 / s }')
-  awk -v v="${mbps}" 'BEGIN { exit (v < 5.0 ? 0 : 1) }' && warn "sd_write_speed_low:${mbps}MBps"
+  # An if, not `awk ... && warn`: under set -e a fast card made that the
+  # function's non-zero status and ended the selftest before it wrote its
+  # result.
+  if awk -v v="${mbps}" 'BEGIN { exit (v < 5.0 ? 0 : 1) }'; then
+    warn "sd_write_speed_low:${mbps}MBps"
+  fi
 }
 
 check_mmc_errors() {
@@ -88,15 +98,27 @@ check_config_integrity() {
 
 check_service_health() {
   local svc
-  for svc in azazel-edge-web azazel-edge-control-daemon azazel-edge-suricata azazel-edge-opencanary; do
+  for svc in azazel-edge-web azazel-edge-control-daemon; do
     if ! systemctl is-active --quiet "${svc}"; then
+      fail "service_inactive:${svc}"
+    fi
+  done
+  # The security stack is optional (ENABLE_SECURITY_STACK=0 leaves these
+  # units disabled): checked only when enabled.
+  for svc in azazel-edge-suricata azazel-edge-opencanary; do
+    if ! systemctl is-enabled --quiet "${svc}" 2>/dev/null; then
+      warn "service_not_enabled:${svc}"
+    elif ! systemctl is-active --quiet "${svc}"; then
       fail "service_inactive:${svc}"
     fi
   done
 }
 
 check_python_smoke() {
-  if [[ -x /opt/azazel-edge/venv/bin/pytest ]]; then
+  # The installer installs neither pytest nor /opt/azazel-edge/tests.
+  if [[ ! -f /opt/azazel-edge/tests/test_epd_cli_help_v1.py ]]; then
+    warn "python_smoke_tests_missing"
+  elif [[ -x /opt/azazel-edge/venv/bin/pytest ]]; then
     if ! PYTHONPATH=/opt/azazel-edge /opt/azazel-edge/venv/bin/pytest /opt/azazel-edge/tests/test_epd_cli_help_v1.py -q --tb=no >/dev/null 2>&1; then
       fail "python_smoke_failed"
     fi
@@ -158,3 +180,18 @@ emit_epd_warning_if_failed
 write_json
 
 echo "selftest completed: ${OUT_JSON}"
+for item in ${FAILURES[@]+"${FAILURES[@]}"}; do
+  echo "  FAIL ${item}"
+done
+for item in ${WARNINGS[@]+"${WARNINGS[@]}"}; do
+  echo "  WARN ${item}"
+done
+if [[ ${#FAILURES[@]} -gt 0 ]]; then
+  echo "selftest status: failed (${#FAILURES[@]} critical)" >&2
+  exit 1
+fi
+if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+  echo "selftest status: warning"
+else
+  echo "selftest status: ok"
+fi

@@ -429,6 +429,17 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Before the first hardware run (Edge#477): `azazel-edge-selftest` exits 1
+  on a critical failure (it always exited 0, and a fast SD card ended it
+  early under `set -e` before it wrote its result); Suricata and OpenCanary
+  are checked only when enabled. `install_all.sh` runs it last and fails with
+  it. `install_ai_runtime.sh` is no longer copied to `/opt/azazel-edge`,
+  where it could not run; `install_security_stack.sh` gets the checkout as
+  `REPO_ROOT`; the installed `verify_runtime_sync.sh` asks for the checkout
+  argument. Operator, AI and vehicle docs now give the HTTPS URL, the token
+  file and the post-#471 paths; `docs/CONFIGURATION.md` lists the installer
+  settings.
+
 ## [0.1.2] - 2026-05-17
 
 ### Changed

@@ -47,24 +47,29 @@ Operational rule:
 - Swap guard: `AZAZEL_OPS_MAX_SWAP_USED_MB`
 
 ## 5. Operational Files to Monitor
-- `/run/azazel-edge-ai/ai-bridge.sock`
-- `/run/azazel-edge/ai_advisory.json`
-- `/run/azazel-edge/ai_metrics.json`
-- `/var/log/azazel-edge/ai-events.jsonl`
-- `/var/log/azazel-edge/ai-llm.jsonl`
-- `/var/log/azazel-edge/ai-deferred.jsonl`
+The agent runs as `azazel-agent` (Edge#471) and writes only its own
+directories; reading them needs `sudo` (see
+`docs/architecture/privilege-inventory.md`).
+- `/run/azazel-edge-ai/ai-bridge.sock` (in a 0700 `azazel-agent` directory; only root, i.e. the core, connects)
+- `/run/azazel-edge-agent-query/agent-query.sock` (the Web UI's manual query socket)
+- `/run/azazel-edge-agent/ai_advisory.json`
+- `/run/azazel-edge-agent/ai_metrics.json`
+- `/run/azazel-edge-agent/ai_snapshot.json` (the agent's fields the control daemon merges into `/run/azazel-edge/ui_snapshot.json`)
+- `/var/log/azazel-edge/ai/ai-events.jsonl`
+- `/var/log/azazel-edge/ai/ai-llm.jsonl`
+- `/var/log/azazel-edge/ai/ai-deferred.jsonl`
 
 ## 6. Daily Checks
 ```bash
 systemctl is-active azazel-edge-ai-agent
-jq '{processed_events,llm_requests,llm_completed,llm_failed,last_error}' /run/azazel-edge/ai_metrics.json
-tail -n 5 /var/log/azazel-edge/ai-llm.jsonl
+sudo jq '{processed_events,llm_requests,llm_completed,llm_failed,last_error}' /run/azazel-edge-agent/ai_metrics.json
+sudo tail -n 5 /var/log/azazel-edge/ai/ai-llm.jsonl
 ```
 
 ## 7. First Response for AI Degradation
 When latency/failure increases:
 ```bash
-jq '{llm_requests,llm_completed,llm_failed,llm_fallback_count,last_error}' /run/azazel-edge/ai_metrics.json
+sudo jq '{llm_requests,llm_completed,llm_failed,llm_fallback_count,last_error}' /run/azazel-edge-agent/ai_metrics.json
 sudo journalctl -u azazel-edge-ai-agent -n 100 --no-pager
 sudo docker logs --tail 100 azazel-edge-ollama
 ```

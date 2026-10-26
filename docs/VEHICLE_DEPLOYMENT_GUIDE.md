@@ -53,13 +53,13 @@ Apply transit-mode suppression for `network-scan` category while moving.
 
 ### 3.1 UC-A (moving)
 Use conservative posture while the vehicle is moving:
-- Set `soc_policy.yaml` profile to `conservative`
+- Switch the SOC policy to the `conservative` profile (section 5.1)
 - Add Suricata suppression for `classtype:network-scan`
 - Reduce logging verbosity where operationally acceptable
 
 ### 3.2 UC-B (static)
 When vehicle is stationary and serving as local gateway:
-- Restore profile to `balanced`
+- Switch the SOC policy back to the `balanced` profile (section 5.2)
 - Re-enable full Suricata rule set
 - Resume normal logging fidelity
 
@@ -84,14 +84,34 @@ Use fan trigger around 75C based on:
 
 ## 5. Configuration Switching Procedure
 
+The SOC policy is read by the AI agent (`azazel-edge-ai-agent`, through
+`py/azazel_edge/policy.py`) when it starts. Its file is
+`/opt/azazel-edge/config/soc_policy.yaml` (installed from
+`config/soc_policy.yaml`), unless `AZAZEL_SOC_POLICY_PATH` names another file
+in `/etc/default/azazel-edge-security` (the agent's environment file). The
+policy has no `profile:` key: a profile is a whole file, from
+`config/soc_policy_profiles/` (`conservative.yaml`, `balanced.yaml`). Nothing
+reads `/etc/azazel-edge/soc_policy.yaml`. Leave the installed
+`soc_policy.yaml` unchanged (the runtime sync check compares it with the
+checkout) and switch with `AZAZEL_SOC_POLICY_PATH`. The agent runs as
+`azazel-agent`, so the file must be readable by it (`/opt/azazel-edge/config`,
+0644 root).
+
+One-time setup, from the repository checkout:
+
+```bash
+sudo install -d -m 0755 /opt/azazel-edge/config/soc_policy_profiles
+sudo install -m 0644 -o root -g root config/soc_policy_profiles/conservative.yaml config/soc_policy_profiles/balanced.yaml /opt/azazel-edge/config/soc_policy_profiles/
+```
+
 ### 5.1 Switch to transit mode (UC-A)
 
 ```bash
 # Switch to transit mode (UC-A)
 sudo azazel-edge-epd --state warning --mode-label "TRANSIT" --risk-status SUPPRESSED
-sudo systemctl stop azazel-edge-control-daemon
-# Edit /etc/azazel-edge/soc_policy.yaml: set profile: conservative
-sudo systemctl start azazel-edge-control-daemon
+sudo sed -i '/^AZAZEL_SOC_POLICY_PATH=/d' /etc/default/azazel-edge-security
+echo 'AZAZEL_SOC_POLICY_PATH=/opt/azazel-edge/config/soc_policy_profiles/conservative.yaml' | sudo tee -a /etc/default/azazel-edge-security >/dev/null
+sudo systemctl restart azazel-edge-ai-agent
 ```
 
 ### 5.2 Switch back to static mode (UC-B)
@@ -99,9 +119,15 @@ sudo systemctl start azazel-edge-control-daemon
 ```bash
 # Switch back to static mode (UC-B)
 sudo azazel-edge-epd --state normal --mode-label "GATEWAY"
-# Edit /etc/azazel-edge/soc_policy.yaml: set profile: balanced
-sudo systemctl restart azazel-edge-control-daemon
+sudo sed -i '/^AZAZEL_SOC_POLICY_PATH=/d' /etc/default/azazel-edge-security
+echo 'AZAZEL_SOC_POLICY_PATH=/opt/azazel-edge/config/soc_policy_profiles/balanced.yaml' | sudo tee -a /etc/default/azazel-edge-security >/dev/null
+sudo systemctl restart azazel-edge-ai-agent
 ```
+
+To return to the installed default, delete the `AZAZEL_SOC_POLICY_PATH=` line
+and restart `azazel-edge-ai-agent`. An invalid policy file stops the agent
+with exit status 78 (it is not restarted); check
+`sudo journalctl -u azazel-edge-ai-agent`.
 
 ---
 
