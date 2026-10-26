@@ -789,7 +789,9 @@ nmcli() {{
     "-g connection.uuid con show lan-wlan0-ap") echo 11111111-2222-4333-8444-555555555555 ;;
     "--escape no -t -f UUID,FILENAME con show") echo "11111111-2222-4333-8444-555555555555:{kf}" ;;
     "-t -f NAME,DEVICE,TYPE,ACTIVE con show") : ;;
-    "con load "*) [[ -z {fail!r} ]] || return 1 ;;
+    "con load "*) : ;;  # nmcli 1.52.1 exits 0 even when the file is not loaded
+    "-s --escape no -g 802-11-wireless-security.psk con show 11111111-2222-4333-8444-555555555555")
+      if [[ -z {fail!r} ]]; then printf '%s\n' "$AP_PSK"; else echo something-else; fi ;;
   esac
 }}
 chown() {{ printf 'chown %s\\n' "$*" >>"$LOG"; }}
@@ -834,8 +836,11 @@ def test_a_keyfile_without_the_security_section_gets_one(tmp_path):
 
 @LINUX_ONLY
 def test_a_failed_reload_stops_the_install(tmp_path):
-    res, _, _ = _bridge(tmp_path, "another-passphrase", fail="1")
-    assert res.returncode == 1 and "did not reload" in res.stderr
+    # `con load` "succeeds" but NetworkManager does not hold the written
+    # secret: the read-back comparison stops the install.
+    res, _, log = _bridge(tmp_path, "another-passphrase", fail="1")
+    assert res.returncode == 1 and "read back differs" in res.stderr
+    assert "another-passphrase" not in log.read_text() + res.stderr
 
 
 def test_no_nmcli_output_is_piped_into_grep_q():
@@ -882,3 +887,84 @@ def test_an_operator_listenaddress_in_sshd_config_d_is_reported_not_changed(tmp_
                   + "notice_dropin_listen_addresses\n")
     assert empty.returncode == 0 and empty.stdout == ""
     assert "notice_dropin_listen_addresses" in _function(NETWORK, "configure_sshd")
+
+
+
+@pytest.mark.parametrize("value,ok", [
+    ("é" * 4, True),            # 4 characters, 8 bytes
+    ("a" * 62 + "é", False),    # 63 characters, 64 bytes
+    ("a" * 61 + "é", True),     # 63 bytes
+    ("é" * 3 + "a", False),     # 7 bytes
+    (b"\xff\xfe" * 5, False),   # not UTF-8
+])
+def test_the_passphrase_is_checked_in_bytes_and_as_utf8(value, ok):
+    raw = value if isinstance(value, bytes) else value.encode("utf-8")
+    fn = _function(NETWORK, "check_ap_psk")
+    env = {**os.environ, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    env_b = {k.encode(): v.encode() for k, v in env.items()}
+    env_b[b"PSK"] = raw
+    res = subprocess.run(["bash", "-c", "AP_PSK_OLD_DEFAULT=ChangeMe1234\n" + fn + 'check_ap_psk "$PSK"\necho passed\n'],
+                         env=env_b, capture_output=True, timeout=30)
+    assert (res.returncode == 0) is ok, res.stderr
+    if not ok:
+        assert b"bytes" in res.stderr or b"UTF-8" in res.stderr
+
+
+def _only(module, monkeypatch, fails: str):
+    """Make exactly one source fail; the others answer normally."""
+    real = module.subprocess.run
+
+    def run(cmd, **kw):
+        if fails == "iw" and cmd[:2] == ["iw", "dev"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="nl80211 not found.\n")
+        if fails == "iw-raise" and cmd[:2] == ["iw", "dev"]:
+            raise FileNotFoundError("iw")
+        if fails == "list-raise" and cmd[:4] == ["nmcli", "-t", "-f", "NAME,TYPE"]:
+            raise subprocess.TimeoutExpired(cmd, 3)
+        if fails == "detail-rc" and cmd[:3] == ["nmcli", "--escape", "no"]:
+            return subprocess.CompletedProcess(cmd, 10, stdout="", stderr="Error: unknown connection\n")
+        if fails == "detail-raise" and cmd[:3] == ["nmcli", "--escape", "no"]:
+            raise subprocess.TimeoutExpired(cmd, 3)
+        return real(cmd, **kw)
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+
+
+@pytest.mark.parametrize("fails,cause", [
+    ("iw", "nl80211 not found"),
+    ("iw-raise", "iw"),
+    ("list-raise", "nmcli con show failed"),
+    ("detail-rc", "unknown connection"),
+    ("detail-raise", "nmcli con show 'lan-wlan0-ap' failed"),
+    ("sysfs", "reading"),
+])
+def test_each_source_failing_alone_fails_closed(ws, daemon_mod, monkeypatch, fails, cause):
+    module, state, sysnet = ws
+    state["iw"] = IW_AP_AND_USB  # a free USB Wi-Fi exists: only the failure keeps it from being used
+    state["profiles"] = {"lan-wlan0-ap": ("ap", "wlan0")}
+    if fails == "sysfs":
+        monkeypatch.setattr(module, "SYS_CLASS_NET", sysnet / "missing")
+    else:
+        _only(module, monkeypatch, fails)
+    with pytest.raises(module.InternalLanUnknown if fails != "iw" and fails != "iw-raise" else Exception) as info:
+        module.internal_lan_interfaces()
+    assert cause in str(info.value)
+    iface, error = module.select_uplink_wireless_interface()
+    assert iface is None and cause in error
+    monkeypatch.setattr(daemon_mod, "SYS_CLASS_NET", sysnet if fails != "sysfs" else sysnet / "missing")
+    (sysnet / "wlan1").mkdir(exist_ok=True)
+    monkeypatch.setenv("AZAZEL_UP_IF", "wlan1")
+    monkeypatch.setattr(daemon_mod, "rate_limit_error", lambda *a: None)
+    monkeypatch.setattr(daemon_mod, "IP_COMMAND_CANDIDATES", ("/nonexistent/ip",))
+    res = daemon_mod.execute_action("uplink_disconnect", None, request={"action": "uplink_disconnect"})
+    assert res["ok"] is False
+    if fails != "sysfs":  # with sysfs unreadable the interface is not found first
+        assert res["error"].startswith("uplink_interface_check_failed:") and cause in res["error"]
+
+
+def test_the_passphrase_is_read_back_in_a_utf8_locale():
+    # In the C/POSIX locale nmcli prints non-ASCII as "?" (seen with
+    # NetworkManager 1.52.1), so a valid UTF-8 passphrase would never match.
+    src = NETWORK.read_text(encoding="utf-8")
+    reads = re.findall(r"^.*nmcli -s --escape no -g 802-11-wireless-security\.psk.*$", src, re.M)
+    assert len(reads) == 2 and all("LC_ALL=C.UTF-8 nmcli" in line for line in reads)

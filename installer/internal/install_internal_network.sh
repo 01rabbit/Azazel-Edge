@@ -69,13 +69,21 @@ is_raspberry_pi_os() {
   command -v raspi-config >/dev/null 2>&1 && [[ -f /boot/firmware/config.txt ]]
 }
 
+# WPA2 passphrase: 8..63 bytes (counted as bytes, LC_ALL=C), valid UTF-8,
+# not the old default. iconv reads it on stdin (a here-string), never argv.
 check_ap_psk() {
+  local LC_ALL=C bytes
+  bytes=${#1}
   if [[ "$1" == "$AP_PSK_OLD_DEFAULT" ]]; then
-    echo "ERROR: the AP passphrase is the old built-in default; set AP_PSK to your own (8..63 characters), or leave it unset to generate a random one." >&2
+    echo "ERROR: the AP passphrase is the old built-in default; set AP_PSK to your own (8..63 bytes), or leave it unset to generate a random one." >&2
     exit 1
   fi
-  if [[ ${#1} -lt 8 || ${#1} -gt 63 ]]; then
-    echo "ERROR: the AP passphrase must be 8..63 characters." >&2
+  if [[ $bytes -lt 8 || $bytes -gt 63 ]]; then
+    echo "ERROR: the AP passphrase must be 8..63 bytes (it is $bytes)." >&2
+    exit 1
+  fi
+  if ! iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 <<<"$1"; then
+    echo "ERROR: the AP passphrase is not valid UTF-8." >&2
     exit 1
   fi
 }
@@ -167,7 +175,7 @@ resolve_ap_psk() {
     AP_PSK_SOURCE="kept"
   fi
   if [[ -z "$AP_PSK" ]] && nm_profile_exists "$WLAN_AP_CONN"; then
-    existing="$(nmcli -s --escape no -g 802-11-wireless-security.psk con show "$WLAN_AP_CONN" 2>/dev/null || true)"
+    existing="$(LC_ALL=C.UTF-8 nmcli -s --escape no -g 802-11-wireless-security.psk con show "$WLAN_AP_CONN" 2>/dev/null || true)"
     if [[ -n "$existing" && "$existing" != "$AP_PSK_OLD_DEFAULT" && ${#existing} -ge 8 && ${#existing} -le 63 ]]; then
       AP_PSK="$existing"
       AP_PSK_SOURCE="kept"
@@ -280,6 +288,17 @@ store_ap_psk_in_profile() {
   fi
   if ! nmcli con load "$file"; then
     echo "ERROR: NetworkManager did not reload $file" >&2
+    exit 1
+  fi
+  # nmcli exits 0 even when it cannot load the file (1.52.1): read the
+  # secret back from NetworkManager (into a variable, compared in bash) and
+  # stop when it is not the one written. This also catches a value
+  # NetworkManager rejects (invalid UTF-8, longer than 63 bytes).
+  local readback
+  # C.UTF-8: in the C/POSIX locale nmcli prints non-ASCII as "?".
+  readback="$(LC_ALL=C.UTF-8 nmcli -s --escape no -g 802-11-wireless-security.psk con show "$uuid")" || readback=""
+  if [[ "$readback" != "$AP_PSK" ]]; then
+    echo "ERROR: NetworkManager did not take the AP passphrase from $file (read back differs); the AP profile is not usable." >&2
     exit 1
   fi
 }

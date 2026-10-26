@@ -44,6 +44,10 @@ third interface**: a USB Ethernet adapter or a USB Wi-Fi adapter.
   internal LAN (AP mode, `br0` or a port of it). Without a USB Wi-Fi adapter
   they answer "No wireless interface for the uplink" instead of taking the
   internal AP down. A USB Ethernet uplink needs no Web UI step.
+- Choosing an uplink wireless interface fails closed: if NetworkManager,
+  `iw` or `/sys/class/net` cannot be read, no interface is used (scan,
+  connect, sensor and uplink disconnect answer with the cause). On a host
+  without NetworkManager this is always the case.
 - Without a USB Wi-Fi adapter the Wi-Fi sensor is off entirely: the on-board
   `wlan0` serves only the internal AP and is never scanned on, so there is no
   channel survey, nearby-AP evidence or rogue-AP check (`AZAZEL_SHELTER_SSID`)
@@ -221,6 +225,7 @@ For vehicle or heavy vibration, use additional anti-vibration mounts.
 - 配線は電源系と通信系を分離し、各端子に必ずストレインリリーフを設けます。
 - ラベルは筐体とケーブル両端に貼付し、現地で迷わない状態にします。
 - 出動前に selftest で媒体健全性を確認してください。
+- uplink 用の無線 IF の選択は fail-closed です。NetworkManager・iw・/sys/class/net のどれかが読めなければ IF を使わず原因を返します。NetworkManager の無いホストでは常にそうなります。
 - USB Wi-Fi が無い Pi 5 では内蔵 wlan0 は内部 AP 専用になり、Wi-Fi センサー（チャネル調査・周辺 AP・不正 AP 検知）は完全に無効になります（意図どおり）。
 - `/etc/ssh/sshd_config.d/*.conf` に運用者が書いた `ListenAddress` はインストーラが消しません（NOTICE のみ）。`ALLOW_EXTERNAL_SSH=true` でもそちらの指定で待ち受けが制限されたままになるので、`sudo sshd -T | grep -i listenaddress` で確認してください。
 - インストーラはコンソールか tmux の中で実行してください。eth0 経由・wlan0 の Wi-Fi 経由の SSH は br0 の構築で切れ、sshd の待ち受けが br0 のアドレスだけになると上流側から新しい SSH はつながりません（第 1.2 節）。

@@ -114,6 +114,10 @@ NO_UPLINK_WIRELESS_ERROR = (
 def _iw_dev_interfaces() -> List[Dict[str, str]]:
     """Wireless interfaces from ``iw dev``: ``[{"name", "type"}]`` in order."""
     result = subprocess.run(["iw", "dev"], capture_output=True, text=True, timeout=2)
+    if result.returncode != 0:
+        # An unanswered query is not "no wireless interface" (fail closed).
+        detail = (result.stderr or result.stdout or "").strip()[:200] or f"exit {result.returncode}"
+        raise RuntimeError(detail)
     interfaces: List[Dict[str, str]] = []
     for raw in (result.stdout or "").splitlines():
         line = raw.strip()
