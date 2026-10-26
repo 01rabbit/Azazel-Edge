@@ -235,7 +235,9 @@ is_former_default_password() {
 # sourced).
 stored_admin_password() {
   [[ -f "${CRED_ENV}" ]] || return 0
-  sed -n 's/^MATTERMOST_PASSWORD=//p' "${CRED_ENV}" | head -n 1
+  # awk reads the whole file (no `| head`: with pipefail an early reader
+  # makes the writer fail on SIGPIPE).
+  awk 'index($0, "MATTERMOST_PASSWORD=") == 1 && !done { print substr($0, 21); done = 1 }' "${CRED_ENV}"
 }
 
 resolve_admin_password() {
@@ -408,8 +410,18 @@ EOF
 # Something other than nginx listening on the public port (the container of
 # an earlier install published it on every interface).
 public_port_taken() {
+  local listeners line
   command -v ss >/dev/null 2>&1 || return 1
-  ss -Hltnp "sport = :${MATTERMOST_PORT_PUBLIC}" 2>/dev/null | grep -v '"nginx"' | grep -q .
+  # Read whole, then matched: with pipefail, `ss | grep -v | grep -q` fails
+  # when grep -q stops reading first (SIGPIPE upstream) and would read as
+  # "free".
+  listeners="$(ss -Hltnp "sport = :${MATTERMOST_PORT_PUBLIC}" 2>/dev/null || true)"
+  while IFS= read -r line; do
+    if [[ -n "${line}" && "${line}" != *'"nginx"'* ]]; then
+      return 0
+    fi
+  done <<<"${listeners}"
+  return 1
 }
 
 ensure_lan_proxy() {

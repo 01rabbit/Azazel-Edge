@@ -40,7 +40,7 @@ COMMAND_TRIGGER="${AZAZEL_MATTERMOST_COMMAND_TRIGGER:-mio}"
 COMMAND_ALIASES="${AZAZEL_MATTERMOST_COMMAND_ALIASES:-azops}"
 
 if [[ -z "${MM_PASSWORD}" && -f "${CRED_ENV}" ]]; then
-  MM_PASSWORD="$(sed -n 's/^MATTERMOST_PASSWORD=//p' "${CRED_ENV}" | head -n 1)"
+  MM_PASSWORD="$(awk 'index($0, "MATTERMOST_PASSWORD=") == 1 && !done { print substr($0, 21); done = 1 }' "${CRED_ENV}")"
 fi
 if [[ -z "${MM_PASSWORD}" ]]; then
   MM_PASSWORD="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')-Az"

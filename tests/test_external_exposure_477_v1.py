@@ -485,10 +485,12 @@ def test_lan_proxy_site_admits_lan_and_loopback_only():
     assert "map $http_upgrade $azazel_mm_connection_upgrade" in site
 
 
-def _run_lan_proxy(tmp_path: Path, ss_out: str, nginx_rc: int = 0) -> subprocess.CompletedProcess:
+def _run_lan_proxy(tmp_path: Path, ss_out: str, nginx_rc: int = 0, filler_lines: int = 0) -> subprocess.CompletedProcess:
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    (bindir / "ss").write_text(f"#!/bin/bash\nprintf '%s' '{ss_out}'\n", encoding="utf-8")
+    filler = (f"\nfor ((i=0;i<{filler_lines};i++)); do echo 'LISTEN 0 4096 0.0.0.0:8065 0.0.0.0:* "
+              f"users:((\"docker-proxy\",pid=7,fd=4))'; done\n") if filler_lines else ""
+    (bindir / "ss").write_text(f"#!/bin/bash\nprintf '%s\\n' '{ss_out}'{filler}\n", encoding="utf-8")
     (bindir / "nginx").write_text(f"#!/bin/bash\nexit {nginx_rc}\n", encoding="utf-8")
     (bindir / "systemctl").write_text(f"#!/bin/bash\necho \"$*\" >> {tmp_path}/systemctl.log\n", encoding="utf-8")
     for f in bindir.iterdir():
@@ -533,6 +535,14 @@ def test_lan_proxy_fails_while_an_old_container_holds_the_port(tmp_path):
     own = 'LISTEN 0 511 0.0.0.0:8065 0.0.0.0:* users:(("nginx",pid=9,fd=6))'
     assert _run_lan_proxy(tmp2, own).returncode == 0
     assert (tmp2 / "sites-enabled" / "azazel-edge-mattermost.conf").is_symlink()
+
+
+def test_lan_proxy_sees_a_held_port_in_a_long_listing_under_pipefail(tmp_path):
+    held = 'LISTEN 0 4096 0.0.0.0:8065 0.0.0.0:* users:(("docker-proxy",pid=7,fd=4))'
+    res = _run_lan_proxy(tmp_path, held, filler_lines=20000)
+    assert res.returncode != 0
+    assert "[ERROR] Port 8065 is held" in res.stderr
+    assert not (tmp_path / "sites-enabled" / "azazel-edge-mattermost.conf").exists()
 
 
 def test_lan_proxy_rejected_by_nginx_is_left_disabled(tmp_path):
@@ -584,7 +594,11 @@ mode='{mode}'
 args="$*"
 if [[ $args == *"/v1/health"* ]]; then
   [[ $mode == unhealthy ]] && exit 7
-  echo '{{"healthy":true}}'; exit 0
+  echo '{{"healthy":true}}'
+  # A long reply: a reader that stops early must not turn this into a failure.
+  # (exec: a reader that closes early kills it with SIGPIPE, like curl)
+  [[ $mode == big_health ]] && exec awk 'BEGIN {{ for (i = 0; i < 200000; i++) print "xxxxxxxxxxxxxxxx" }}'
+  exit 0
 fi
 if [[ $args == *"-H @-"* ]]; then
   hdr="$(cat)"
@@ -630,6 +644,34 @@ def test_ntfy_install_succeeds_with_a_private_token(tmp_path):
     chown = lines.index(f"chown -R _ntfy:_ntfy {root}/var/lib/ntfy")
     assert chown > max(i for i, l in enumerate(lines) if l.startswith("ntfy "))
     assert "systemctl restart ntfy.service" in lines[chown + 1:]
+
+
+def test_ntfy_health_check_reads_a_long_reply_under_pipefail(tmp_path):
+    res, _root, _calls = _run_install_ntfy(tmp_path, mode="big_health")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "Service healthy" in res.stdout
+
+
+def test_no_pipe_into_an_early_reader_in_the_exposure_scripts():
+    # Under pipefail, `cmd | grep -q`, `cmd | head` or an awk that exits early
+    # fail when the reader stops first (the writer gets SIGPIPE).
+    # (tools/macdev/provision-mattermost.sh: its grep -q is fixed by #486.)
+    for path in (NTFY, PROVISION, COMMAND, DB_SECRET):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            code = line.split("#", 1)[0]
+            assert not re.search(r"\|\s*grep\b[^|]*\s-\w*q", code), (path.name, line)
+            assert not re.search(r"\|\s*head\b", code), (path.name, line)
+            assert not re.search(r"\|\s*awk\b.*\bexit\b", code), (path.name, line)
+
+
+def test_stored_admin_password_takes_the_first_line_of_a_long_file(tmp_path):
+    cred = tmp_path / "cred.env"
+    cred.write_text("MATTERMOST_PASSWORD=first-fake\n" + "MATTERMOST_PASSWORD=later\n" * 50000, encoding="utf-8")
+    script = "set -euo pipefail\n" + _function(PROVISION, "stored_admin_password") + \
+        f"CRED_ENV='{cred}'\nv=\"$(stored_admin_password)\"\nprintf '%s' \"$v\"\n"
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert res.stdout == "first-fake"
 
 
 def test_ntfy_token_is_0600_root_without_the_web_group(tmp_path):

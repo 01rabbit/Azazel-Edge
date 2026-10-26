@@ -85,7 +85,7 @@ fi
 # The token of an earlier run, removed once the new one is written.
 old_token=""
 if [[ -f "$TOKEN_PATH_PRIMARY" ]]; then
-  old_token="$(grep -Eo '^tk_[a-z0-9]+$' "$TOKEN_PATH_PRIMARY" 2>/dev/null | head -n 1 || true)"
+  old_token="$(grep -m 1 -Eo '^tk_[a-z0-9]+$' "$TOKEN_PATH_PRIMARY" 2>/dev/null || true)"
 fi
 
 token_output="$(ntfy token add "$NTFY_USER" 2>&1 || true)"
@@ -128,7 +128,10 @@ systemctl restart ntfy.service
 NTFY_URL="http://${NTFY_LISTEN_ADDR}:${NTFY_PORT}"
 healthy=0
 for _ in {1..20}; do
-  if curl -fsS --max-time 3 "${NTFY_URL}/v1/health" | grep -q '"healthy":true'; then
+  # Read whole, then matched: with pipefail, `curl | grep -q` fails when grep
+  # stops reading first (curl gets SIGPIPE).
+  health_body="$(curl -fsS --max-time 3 "${NTFY_URL}/v1/health" 2>/dev/null || true)"
+  if [[ "$health_body" == *'"healthy":true'* ]]; then
     healthy=1
     break
   fi
