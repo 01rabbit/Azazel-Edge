@@ -120,7 +120,7 @@ def test_rotation_is_bounded_and_the_chain_continues_across_files(tmp_path):
 
 def test_a_tampered_rotated_chain_does_not_verify(tmp_path):
     path = tmp_path / "c.jsonl"
-    audit = P0AuditLogger(path, max_bytes=800, keep=2)
+    audit = P0AuditLogger(path, max_bytes=800, keep=1)
     for n in range(12):
         audit.log_action_decision(f"d{n}", "s", action="isolate")
     rotated = segment_path(path, 1)
@@ -178,6 +178,31 @@ def test_a_non_rotating_logger_writes_what_it_always_wrote(tmp_path):
         P0AuditLogger(tmp_path / "x.jsonl", max_bytes=0)
     with pytest.raises(ValueError):
         P0AuditLogger(tmp_path / "x.jsonl", max_bytes=10, keep=0)
+    with pytest.raises(ValueError):
+        P0AuditLogger(tmp_path / "x.jsonl", max_bytes=10, keep=2)  # only one rotated file
+
+
+def test_a_crash_inside_a_rotation_never_restarts_the_chain(tmp_path):
+    """Both crash points of a rotation: after the old ``.1`` was removed
+    (only the active file is left) and after the active file was renamed
+    (only ``.1`` is left). A new logger continues the same chain either way."""
+
+    path = tmp_path / "c.jsonl"
+    audit = P0AuditLogger(path, max_bytes=600, keep=1)
+    for n in range(8):
+        audit.log_action_decision(f"d{n}", "s", action="isolate")
+    last = audit._last_chain_hash
+    segment_path(path, 1).unlink()  # crash after the first step
+    first = P0AuditLogger(path, max_bytes=600, keep=1)
+    assert first._last_chain_hash == last and first.chain_id == audit.chain_id
+    a = first.log_action_decision("after-1", "s", action="isolate")
+    assert a["chain_prev"] == last
+    os.replace(path, segment_path(path, 1))  # crash after the second step
+    second = P0AuditLogger(path, max_bytes=600, keep=1)
+    assert second._last_chain_hash == a["chain_hash"] and second.chain_id == audit.chain_id
+    b = second.log_action_decision("after-2", "s", action="isolate")
+    assert b["chain_prev"] == a["chain_hash"] and b["chain_id"] == audit.chain_id
+    assert P0AuditLogger.verify_rotated_chain(path)["ok"] is True
 
 
 def test_a_foreign_rotated_file_is_not_read_as_part_of_the_chain(tmp_path):
@@ -200,7 +225,7 @@ def test_snapshots_taken_while_the_chain_rotates_are_contiguous(tmp_path):
     time, never a predecessor missing in the middle or a file twice."""
 
     path = tmp_path / "c.jsonl"
-    audit = P0AuditLogger(path, max_bytes=700, keep=3)
+    audit = P0AuditLogger(path, max_bytes=700, keep=1)
     stop = threading.Event()
 
     def write():
@@ -233,7 +258,7 @@ def test_a_rotation_between_opening_two_files_is_never_read_as_one_chain(tmp_pat
     read the same file twice; the reader notices and takes a new snapshot."""
 
     path = tmp_path / "c.jsonl"
-    audit = P0AuditLogger(path, max_bytes=500, keep=2)
+    audit = P0AuditLogger(path, max_bytes=500, keep=1)
     for n in range(8):
         audit.log_action_decision(f"d{n}", "s", action="isolate")
     real = segments._open
@@ -258,7 +283,7 @@ def test_a_rotation_between_opening_two_files_is_never_read_as_one_chain(tmp_pat
 
 def test_the_snapshot_retries_when_a_rotation_moves_files_under_it(tmp_path, monkeypatch):
     path = tmp_path / "c.jsonl"
-    audit = P0AuditLogger(path, max_bytes=500, keep=2)
+    audit = P0AuditLogger(path, max_bytes=500, keep=1)
     for n in range(10):
         audit.log_action_decision(f"d{n}", "s", action="isolate")
     real = segments._open_snapshot
@@ -332,6 +357,12 @@ def test_a_cursor_rotated_out_replays_the_retained_chain_bounded(tmp_path):
     assert started["unreconcilable"] == 0
     assert started["reconciled"] == 3 and started["reconcile_skipped"] == len(retained) - 3
     assert [r["decision_id"] for r in _alerts(qpath)[::2]] == ["live"] + retained[-3:]
+    # Replayed without this chain's cursor in the chain: past decisions,
+    # however recent their own time is.
+    replayed = [r for r in _alerts(qpath) if r["decision_id"] != "live"]
+    assert all(r["stale"] is True and r["presentation"] == "historical" for r in replayed)
+    assert all(r["voice_urgent"] is False for r in replayed if r["channel"] == "voice")
+    assert all(r["display_text"].startswith("【過去の判定") for r in replayed if r["channel"] == "visual")
 
 
 def test_a_replaced_unanchored_chain_with_the_old_cursor_is_unreconcilable(tmp_path):
@@ -431,6 +462,116 @@ def test_a_second_chain_on_a_shared_queue_starts_as_a_fresh_chain(tmp_path):
     relay_b.stop()
     started = _statuses(qpath, "started")[-1]
     assert started["reconcile"] == "fresh_chain" and started["reconciled"] == 1 and started["unreconcilable"] == 0
+    replayed = [r for r in _alerts(qpath) if r["decision_id"] == "b-before"]
+    assert len(replayed) == 2
+    assert all(r["stale"] is True and r["presentation"] == "historical" for r in replayed)
+    assert [r["voice_urgent"] for r in replayed if r["channel"] == "voice"] == [False]
+
+
+def _alerted_chain(tmp_path, ids):
+    path, qpath = tmp_path / "c.jsonl", tmp_path / "q.jsonl"
+    audit = P0AuditLogger(path)
+    relay = attach_p0_alert_relay(audit, qpath)
+    assert relay.ready.wait(5)
+    for did in ids:
+        audit.log_action_decision(did, "s", action="isolate")
+    _settle(audit, relay)
+    relay.stop()
+    return path, qpath, relay.chain_id
+
+
+def test_a_chain_replaced_by_a_new_genesis_is_not_replayed(tmp_path):
+    """The audit file is replaced by a new chain (another genesis), whose
+    records the queue never saw: they are counted, not replayed (the #458
+    behaviour), and the next start resumes from the new chain."""
+
+    path, qpath, old_id = _alerted_chain(tmp_path, ["a", "b"])
+    path.unlink()
+    fake = P0AuditLogger(path)
+    fake.log_action_decision("x1", "s", action="isolate")
+    fake.log_action_decision("x2", "s", action="isolate")
+    assert fake.chain_id != old_id
+    again = attach_p0_alert_relay(P0AuditLogger(path), qpath)
+    assert again.ready.wait(5)
+    again.stop()
+    started = _statuses(qpath, "started")[-1]
+    assert started["reconcile"] == "chain_replaced" and started["cursor_scope"] == "replaced"
+    assert started["unreconcilable"] == 2 and started["reconciled"] == 0
+    assert [r["decision_id"] for r in _alerts(qpath)[::2]] == ["a", "b"]
+    fake.log_action_decision("x3", "s", action="isolate")
+    third = attach_p0_alert_relay(P0AuditLogger(path), qpath)
+    assert third.ready.wait(5)
+    third.stop()
+    started = _statuses(qpath, "started")[-1]
+    assert started["reconcile"] == "cursor_found" and started["reconciled"] == 1
+    assert [r["decision_id"] for r in _alerts(qpath)[::2]] == ["a", "b", "x3"]
+
+
+def test_a_chain_whose_start_was_cut_off_is_not_replayed(tmp_path):
+    path, qpath, _ = _alerted_chain(tmp_path, ["a", "b", "c", "d"])
+    plain = P0AuditLogger(path)
+    plain.log_action_decision("e", "s", action="isolate")
+    plain.log_action_decision("f", "s", action="isolate")
+    path.write_text("".join(x + "\n" for x in path.read_text().splitlines()[2:]))  # drop a, b
+    again = attach_p0_alert_relay(P0AuditLogger(path), qpath)
+    assert again.ready.wait(5)
+    again.stop()
+    started = _statuses(qpath, "started")[-1]
+    assert started["reconcile"] == "chain_replaced" and started["unreconcilable"] == 2
+    assert started["reconciled"] == 0
+    assert [r["decision_id"] for r in _alerts(qpath)[::2]] == ["a", "b", "c", "d"]
+
+
+@pytest.mark.parametrize("with_rotated", [False, True])
+def test_a_head_copying_the_chain_id_does_not_pass_as_rotated(tmp_path, with_rotated):
+    """Forgery of the unauthenticated chain id: a new file whose head copies
+    the real chain's id, without a ``.1`` that it continues (no ``.1``, or a
+    ``.1`` that does not link), is not taken as a rotation: nothing is
+    replayed."""
+
+    path, qpath, chain_id = _alerted_chain(tmp_path, ["a", "b"])
+    path.unlink()
+    if with_rotated:
+        other = P0AuditLogger(tmp_path / "unrelated.jsonl")
+        other.log_action_decision("u", "s", action="isolate")
+        os.replace(other.path, segment_path(path, 1))
+    forged = {"ts": "2026-01-01T00:00:00.000+00:00", "kind": "action_decision", "trace_id": "forged",
+              "source": "s", "chain_prev": "e" * 64, "action": "isolate", "chain_id": chain_id}
+    forged["chain_hash"] = P0AuditLogger._compute_chain_hash(forged)
+    path.write_text(json.dumps(forged, separators=(",", ":")) + "\n")
+    again = attach_p0_alert_relay(P0AuditLogger(path), qpath)
+    assert again.ready.wait(5)
+    again.stop()
+    started = _statuses(qpath, "started")[-1]
+    assert started["reconcile"] == "cursor_not_in_chain" and started["unreconcilable"] == 1
+    assert started["reconciled"] == 0 and started["chain_segments"] == 1
+    assert [r["decision_id"] for r in _alerts(qpath)[::2]] == ["a", "b"]
+
+
+def test_a_legacy_cursor_then_another_chains_cursor_still_resumes(tmp_path):
+    """Migration: the queue holds this relay's cursor from before cursors
+    were scoped, then a cursor of another audit file's chain. This relay
+    resumes from its legacy cursor, not as a fresh chain."""
+
+    path, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
+    plain = P0AuditLogger(path)
+    a = plain.log_action_decision("a", "s", action="isolate")
+    queue = P0AlertQueue(qpath)
+    queue.append_status({"event": "started", "audit_cursor_chain_hash": a["chain_hash"]})
+    other = P0AuditLogger(tmp_path / "b.jsonl")
+    relay_b = attach_p0_alert_relay(other, qpath)
+    assert relay_b.ready.wait(5)
+    other.log_action_decision("b1", "s", action="isolate")
+    _settle(other, relay_b)
+    relay_b.stop()
+    plain.log_action_decision("a2", "s", action="isolate")
+    relay_a = attach_p0_alert_relay(P0AuditLogger(path), qpath)
+    assert relay_a.ready.wait(5)
+    relay_a.stop()
+    started = _statuses(qpath, "started")[-1]
+    assert started["reconcile"] == "cursor_found" and started["cursor_scope"] == "legacy"
+    assert started["reconciled"] == 1
+    assert [r["decision_id"] for r in _alerts(qpath)[::2]] == ["b1", "a2"]
 
 
 # ------------------------------------- item 4: loss recovery, recorder
@@ -612,6 +753,25 @@ def test_records_the_relay_hand_off_dropped_are_alerted_without_a_restart(tmp_pa
     assert len(_alerts(qpath)) == 10
 
 
+def test_no_relay_loss_pass_runs_while_its_hand_off_is_still_overloaded(tmp_path):
+    from azazel_edge.notify.p0_alert import P0AlertRelay
+
+    apath = tmp_path / "a.jsonl"
+    P0AuditLogger(apath).log_action_decision("d", "s", action="isolate")
+    relay = P0AlertRelay(P0AlertQueue(tmp_path / "q.jsonl"), audit_path=apath, max_pending=2,
+                         loss_recover_interval_s=0.0)
+    for n in range(3):
+        relay.on_durable_record({"kind": "action_decision", "trace_id": f"t{n}", "chain_hash": f"{n}" * 64}, "fsynced", 1)
+    assert relay.metrics()["handoff_dropped_total"] == 1
+    relay._maybe_recover_losses()
+    assert len(relay._lost) == 1 and _statuses(relay.queue.path, "loss_recovery") == []
+    while not relay._pending.empty():
+        relay._pending.get_nowait()
+    relay._maybe_recover_losses()
+    assert len(relay._lost) == 0
+    assert _statuses(relay.queue.path, "loss_recovery")[-1]["loss_recover_not_found"] == 1
+
+
 def test_records_the_audit_listener_hand_off_dropped_are_alerted(tmp_path):
     apath, qpath = tmp_path / "a.jsonl", tmp_path / "q.jsonl"
     audit = P0AuditLogger(apath)
@@ -662,3 +822,16 @@ def test_the_agent_opens_the_core_decision_chain_rotating(monkeypatch, tmp_path)
     finally:
         agent_mod.CORE_RECORDER.stop()
         relay.stop()
+
+
+def test_a_relay_loss_pass_reads_only_a_bounded_tail_of_the_chain(tmp_path):
+    from azazel_edge.notify.p0_alert import P0AlertRelay
+
+    apath = tmp_path / "a.jsonl"
+    plain = P0AuditLogger(apath)
+    rows = [plain.log_action_decision(f"d{n}", "s", action="isolate") for n in range(30)]
+    relay = P0AlertRelay(P0AlertQueue(tmp_path / "q.jsonl"), audit_path=apath)
+    relay.loss_recover_max_bytes = 2000
+    assert relay.recover_losses([rows[0]["chain_hash"]])["loss_recover_not_found"] == 1  # outside the tail
+    status = relay.recover_losses([rows[-1]["chain_hash"]])
+    assert status["loss_recovered"] == 1 and status["loss_recover_not_found"] == 0

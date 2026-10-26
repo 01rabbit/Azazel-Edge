@@ -80,17 +80,21 @@ def fsync_path(path: Path) -> bool:
 class P0AuditLogger:
     def __init__(self, path: str | Path, *, max_bytes: Optional[int] = None, keep: int = 1):
         """``max_bytes`` (None: never) rotates the file on a chain boundary
-        once it reaches that size, keeping ``keep`` rotated files (Edge#462
-        item 1; see ``azazel_edge.audit.segments``). The chain continues
-        across files: the first record of a new file has ``chain_prev`` = the
-        last record of the previous one and carries ``chain_id``."""
+        once it reaches that size, keeping one rotated file ``<name>.1``
+        (Edge#462 item 1; see ``azazel_edge.audit.segments``). The chain
+        continues across files: the first record of a new file has
+        ``chain_prev`` = the last record of the previous one and carries
+        ``chain_id``. Only ``keep=1`` is supported: with one rotated file a
+        crash at any point of the rotation leaves either the active file or
+        ``.1`` holding the chain's last record, so the chain is never
+        restarted by a crash."""
 
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if max_bytes is not None and int(max_bytes) <= 0:
             raise ValueError('max_bytes must be positive')
-        if int(keep) < 1 or int(keep) > 16:
-            raise ValueError('keep must be between 1 and 16')
+        if int(keep) != 1:
+            raise ValueError('only keep=1 is supported')
         self.max_bytes = None if max_bytes is None else int(max_bytes)
         self.keep = int(keep)
         self.rotated_total = 0
@@ -262,20 +266,17 @@ class P0AuditLogger:
 
     def _rotate(self) -> None:
         """Under self._lock, between two records: the active file becomes
-        ``.1`` (``.1`` becomes ``.2``, ...; the oldest beyond ``keep`` is
-        removed). A failure is counted and logged; the record is appended to
-        the active file as if no rotation had been asked for."""
+        ``.1`` and the previous ``.1`` is removed. A crash between the two
+        steps leaves the active file (no ``.1``); a crash after them leaves
+        ``.1`` and no active file, which a new logger continues from. A
+        failure is counted and logged; the record is appended to the active
+        file as if no rotation had been asked for."""
 
         try:
-            oldest = segment_path(self.path, self.keep)
             try:
-                oldest.unlink()
+                segment_path(self.path, 1).unlink()
             except FileNotFoundError:
                 pass
-            for n in range(self.keep - 1, 0, -1):
-                src = segment_path(self.path, n)
-                if src.exists():
-                    os.replace(src, segment_path(self.path, n + 1))
             os.replace(self.path, segment_path(self.path, 1))
             self.rotated_total += 1
         except OSError as exc:

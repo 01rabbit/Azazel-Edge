@@ -111,6 +111,10 @@ DEFAULT_MAX_RECONCILE = 256
 # it (the newest); what is over is counted.
 DEFAULT_LOSS_RECOVER_INTERVAL_S = 1.0
 DEFAULT_MAX_LOST = 4096
+# A loss recovery pass looks for the dropped records in at most this many of
+# the chain's newest bytes (they were written moments before the pass), not
+# in the whole retained chain.
+DEFAULT_LOSS_RECOVER_MAX_BYTES = 4 * 1024 * 1024
 # ``recorded_by`` of a decision a reconcile recorded, not the live path: the
 # core decision recorder's startup reconcile and its loss recovery pass.
 RECORDED_BY_RECONCILE = ('startup_reconcile', 'loss_reconcile')
@@ -735,6 +739,18 @@ DURABILITY_RECONCILED_FSYNCED = 'reconciled_from_chain_fsynced'
 DURABILITY_RECONCILED = 'reconciled_from_chain'
 
 
+def _as_past(entry: Dict[str, Any]) -> None:
+    """Present one alert entry as a past decision whatever its own time says
+    (a replay the relay cannot place after a cursor of its chain)."""
+
+    entry['stale'] = True
+    entry['presentation'] = PRESENTATION_HISTORICAL
+    rendered = render_p0_alert(entry)
+    entry['display_text'] = rendered['text']
+    if entry.get('channel') == CHANNEL_VOICE:
+        entry['voice_urgent'] = rendered['urgent']
+
+
 class P0AlertRelay:
     """Turns durable audit-chain decision records into P0 queue entries.
 
@@ -759,6 +775,9 @@ class P0AlertRelay:
     ):
         self.queue = alert_queue
         self.audit_path = Path(audit_path) if audit_path is not None else None
+        # Which audit file this relay reads (Edge#462 item 3): cursors are
+        # scoped by it as well as by the chain's id.
+        self.audit_path_id = os.path.abspath(str(audit_path)) if audit_path is not None else ''
         self.audit_logger = audit_logger
         self.max_reconcile = int(max_reconcile)
         self._pending: _queue_mod.Queue = _queue_mod.Queue(maxsize=max(1, int(max_pending)))
@@ -772,6 +791,7 @@ class P0AlertRelay:
         self.loss_recovered_total = 0
         self.loss_unrecovered_total = 0
         self.loss_recover_interval_s = float(loss_recover_interval_s)
+        self.loss_recover_max_bytes = DEFAULT_LOSS_RECOVER_MAX_BYTES
         self.max_lost = max(1, int(max_lost))
         # Chain hashes of decision records dropped before they were relayed
         # (Edge#462 item 4), oldest first.
@@ -854,7 +874,7 @@ class P0AlertRelay:
         return self.chain_id
 
     def relay(self, record: Mapping[str, Any], durability: str = '', durable_ns: Optional[int] = None,
-              *, move_cursor: bool = True) -> Dict[str, Any]:
+              *, move_cursor: bool = True, force_past: bool = False) -> Dict[str, Any]:
         """Classify one decision record and, if P0, enqueue it on every channel."""
 
         basis = classify_p0(record)
@@ -873,8 +893,13 @@ class P0AlertRelay:
             chain_id = self._chain_id_for(record)
             for entry in alerts:
                 if chain_id:
-                    # The reconcile cursor is per chain (Edge#462 item 3).
+                    # The reconcile cursor is per audit file and chain
+                    # (Edge#462 item 3).
                     entry['audit_chain_id'] = chain_id
+                    if self.audit_path_id:
+                        entry['audit_path'] = self.audit_path_id
+                if force_past:
+                    _as_past(entry)
                 if not move_cursor:
                     # A loss recovery pass alerts records older than the
                     # cursor; the cursor must not move back.
@@ -902,48 +927,42 @@ class P0AlertRelay:
         return result
 
     # ------------------------------------------------------------ reconcile
-    def _queue_cursor_and_hashes(self, chain_id: str) -> tuple:
-        """(cursor, cursor scope, chain hashes the queue alerts on, whether
-        the queue has a cursor of another chain).
+    def _queue_cursor_and_hashes(self, chain_id: str) -> Dict[str, Any]:
+        """Where this relay resumes, from the queue (Edge#462 item 3).
 
-        The cursor is per chain (Edge#462 item 3): the last
-        ``audit_cursor_chain_hash`` whose ``audit_chain_id`` is ``chain_id``
-        (scope ``chain``). A cursor written before cursors were per chain
-        (no ``audit_chain_id``, scope ``legacy``) is used only when the queue
-        has no per-chain cursor at all; then it is the one relay's cursor.
+        Cursors are scoped by audit file (``audit_path``) and chain
+        (``audit_chain_id``). Returned: ``cursor`` (this file's and this
+        chain's last cursor), ``path_cursor`` (this file's last cursor of any
+        chain: the file held another chain before), ``legacy`` (the last
+        cursor written before cursors were scoped), ``other`` (the queue has
+        cursors of other audit files) and ``hashes`` (chain hashes the queue
+        alerts on).
         """
 
-        mine = ''
-        legacy = ''
-        tagged = False
-        other = False
-        hashes: List[str] = []
+        out: Dict[str, Any] = {'cursor': '', 'path_cursor': '', 'legacy': '', 'other': False, 'hashes': []}
         for row in self.queue.read_entries():
             c = row.get('audit_cursor_chain_hash')
             if isinstance(c, str) and c:
                 cid = row.get('audit_chain_id')
-                if isinstance(cid, str) and cid:
-                    tagged = True
+                path = row.get('audit_path')
+                if not (isinstance(cid, str) and cid):
+                    out['legacy'] = c
+                elif self.audit_path_id and path == self.audit_path_id:
+                    out['path_cursor'] = c
                     if chain_id and cid == chain_id:
-                        mine = c
-                    else:
-                        other = True
+                        out['cursor'] = c
                 else:
-                    legacy = c
+                    out['other'] = True
             h = row.get('decision_chain_hash')
             if row.get('record_type') == RECORD_ALERT and isinstance(h, str) and h:
-                hashes.append(h)
-        if mine:
-            return mine, 'chain', hashes, other
-        if legacy and not tagged:
-            return legacy, 'legacy', hashes, other
-        return '', 'none', hashes, other
+                out['hashes'].append(h)
+        return out
 
-    def _read_chain(self) -> Dict[str, Any]:
+    def _read_chain(self, max_bytes: Optional[int] = None) -> Dict[str, Any]:
         """The retained files of the chain as one snapshot, each fsynced
         before it is read (the entries say whether that fsync happened)."""
 
-        snapshot = read_chain(self.audit_path, sync=P0AlertQueue._fsync_fd)
+        snapshot = read_chain(self.audit_path, max_bytes=max_bytes, sync=P0AlertQueue._fsync_fd)
         snapshot['rows'] = P0AlertQueue._parse(snapshot['lines'])
         return snapshot
 
@@ -951,27 +970,40 @@ class P0AlertRelay:
         """Enqueue P0 decisions in the audit chain that the queue does not have.
 
         The chain is read as one snapshot of its retained files (the active
-        file and, when it rotates, ``<name>.1`` ..; Edge#462 item 1). The
-        cursor is this chain's last ``audit_cursor_chain_hash`` in the queue
-        (every alert and every relay_status record carries one, with the
-        chain's ``audit_chain_id``; see :meth:`_queue_cursor_and_hashes`):
+        file and, when it rotates, ``<name>.1``; Edge#462 item 1). The
+        cursor is this audit file's and this chain's last
+        ``audit_cursor_chain_hash`` in the queue (every alert and every
+        relay_status record carries one, with ``audit_path`` and
+        ``audit_chain_id``; see :meth:`_queue_cursor_and_hashes`):
 
         * ``cursor_found`` -- the P0 records after the cursor were written
           while no relay was attached (a crash, a restart);
         * ``fresh_queue`` -- the queue has no cursor: every P0 record in the
           chain is a candidate;
-        * ``fresh_chain`` -- the queue has cursors, but only of other chains
-          (another relay shares the queue, or the chain was started anew):
-          every P0 record in this chain is a candidate;
+        * ``fresh_chain`` -- the queue has cursors, but none of this audit
+          file (another relay shares the queue): every P0 record in this
+          chain is a candidate, alerted as a past decision;
         * ``cursor_rotated_out`` -- this chain's cursor is older than every
-          retained file (rotation removed it; the oldest retained record is
-          not the chain's genesis): every retained record is after it, so
-          every P0 record in the chain is a candidate;
+          retained file: the active file continues a rotated ``.1`` (its
+          first record's ``chain_prev`` is ``.1``'s last record) and the
+          oldest retained record is not the genesis. Every retained record is
+          after the cursor, so every P0 record in the chain is a candidate,
+          alerted as a past decision;
+        * ``chain_replaced`` -- the queue has a cursor of this audit file,
+          but of another chain (the file was replaced by a new chain, or its
+          start was cut off): nothing is replayed, the P0 records in the
+          chain the queue does not alert on are counted as
+          ``unreconcilable``, and the next start resumes from this chain;
         * ``cursor_not_in_chain`` -- the chain no longer has the cursor and
-          was not rotated past it (it was replaced, or the cursor is a legacy
-          one of another chain): which records were missed cannot be told,
-          so nothing is replayed; the P0 records in the chain the queue does
-          not alert on are counted as ``unreconcilable``.
+          was not rotated past it (it was cut back, or the cursor is a legacy
+          one the chain does not have): which records were missed cannot be
+          told, so nothing is replayed; the P0 records in the chain the queue
+          does not alert on are counted as ``unreconcilable``.
+
+        Chain ids and hashes are not authenticated: a process that can write
+        the audit file can forge records, including a head that copies the
+        chain's id (Edge#462 item 2). These rules keep a replaced or cut file
+        from being replayed by accident, not against a forger.
         * ``registration_cut_not_found`` -- the chain no longer has the record
           the listener was registered after (it was replaced between attach
           and this read): nothing is replayed, and the P0 records in the
@@ -993,9 +1025,19 @@ class P0AlertRelay:
             snapshot = self._read_chain()
             if snapshot['chain_id'] and not self.chain_id:
                 self.chain_id = snapshot['chain_id']
-            cursor, scope, queued, other_chains = self._queue_cursor_and_hashes(self.chain_id)
-            for h in queued:
+            found_cursors = self._queue_cursor_and_hashes(self.chain_id)
+            for h in found_cursors['hashes']:
                 self._remember(h)
+            if found_cursors['cursor']:
+                cursor, scope = found_cursors['cursor'], 'chain'
+            elif found_cursors['path_cursor']:
+                cursor, scope = '', 'replaced'
+            elif found_cursors['legacy']:
+                # Before cursors were scoped only the one agent relay wrote
+                # the queue: its last cursor is this relay's.
+                cursor, scope = found_cursors['legacy'], 'legacy'
+            else:
+                cursor, scope = '', 'none'
             synced = snapshot['synced']
             rows = snapshot['rows']
             status.update(cursor_scope=scope, chain_segments=snapshot['segments'],
@@ -1029,6 +1071,9 @@ class P0AlertRelay:
                     if row.get('chain_hash') == cursor:
                         start = idx + 1
             fresh = [r for r in rows if classify_p0(r) and str(r.get('chain_hash') or '') not in self._seen]
+            # Replayed without a cursor of this chain: how old each record is
+            # cannot be trusted from its own time, so it is a past decision.
+            force_past = False
             if cut_missing_p0 is not None:
                 status['reconcile'] = 'registration_cut_not_found'
                 status['unreconcilable'] = cut_missing_p0
@@ -1036,14 +1081,21 @@ class P0AlertRelay:
             elif start is not None:
                 status.update(reconcile='cursor_found', cursor_found=True)
                 missed = [r for r in rows[start:] if classify_p0(r) and str(r.get('chain_hash') or '') not in self._seen]
+            elif scope == 'replaced':
+                status['reconcile'] = 'chain_replaced'
+                status['unreconcilable'] = len(fresh)
+                missed = []
             elif not cursor:
-                status['reconcile'] = 'fresh_chain' if other_chains else 'fresh_queue'
+                status['reconcile'] = 'fresh_chain' if found_cursors['other'] else 'fresh_queue'
                 missed = fresh
-            elif scope == 'chain' and snapshot['anchored']:
-                # This chain's cursor, in a file rotation removed: every
-                # retained record was written after it.
+                force_past = status['reconcile'] == 'fresh_chain'
+            elif scope == 'chain' and snapshot['anchored'] and snapshot['segments'] >= 2:
+                # This chain's cursor, in a file rotation removed: the
+                # retained files continue one another (read_chain checks the
+                # link) and every retained record was written after it.
                 status['reconcile'] = 'cursor_rotated_out'
                 missed = fresh
+                force_past = True
             else:
                 status['reconcile'] = 'cursor_not_in_chain'
                 status['unreconcilable'] = len(fresh)
@@ -1052,7 +1104,7 @@ class P0AlertRelay:
             durability = DURABILITY_RECONCILED_FSYNCED if synced else DURABILITY_RECONCILED
             done = 0
             for r in missed[skipped:]:
-                if self.relay(r, durability, None).get('ok'):
+                if self.relay(r, durability, None, force_past=force_past).get('ok'):
                     done += 1
             with self._counters_lock:
                 self.reconciled_total += done
@@ -1114,7 +1166,7 @@ class P0AlertRelay:
             status['loss_recover_not_found'] = len(wanted)
         else:
             try:
-                snapshot = self._read_chain()
+                snapshot = self._read_chain(self.loss_recover_max_bytes)
             except OSError as exc:
                 status['loss_recovery'] = f'chain_unreadable:{exc.errno}'
                 snapshot = {'rows': [], 'synced': False}
@@ -1168,6 +1220,8 @@ class P0AlertRelay:
             record.pop('audit_cursor_chain_hash', None)
         elif self.chain_id:
             record['audit_chain_id'] = self.chain_id
+            if self.audit_path_id:
+                record['audit_path'] = self.audit_path_id
         try:
             self.queue.append_status(record)
             self._reported = (metrics['handoff_dropped_total'], metrics['enqueue_failed_total'], metrics['audit_listener_handoff_dropped_total'])

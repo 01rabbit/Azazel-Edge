@@ -2,8 +2,9 @@
 
 A :class:`~azazel_edge.audit.logger.P0AuditLogger` built with ``max_bytes``
 rotates its file on a chain boundary: before a record is appended, a file of
-``max_bytes`` or more is renamed to ``<name>.1`` (``.1`` to ``.2`` and so on,
-up to ``keep``; the oldest is removed) and the record starts a new file. The
+``max_bytes`` or more is renamed to ``<name>.1`` (the previous ``.1`` is
+removed) and the record starts a new file. Readers also accept older
+``.2``.. files if they continue the chain. The
 chain is not restarted: the new file's first record has ``chain_prev`` = the
 last record of the previous file, and carries ``chain_id`` (the chain's
 identity, see :func:`chain_id_of`), so a reader that only has the retained

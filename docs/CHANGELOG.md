@@ -53,7 +53,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - P0 alert path (Edge#462 items 1, 3, 4; notification and audit only, no
   change to decisions or enforcement):
   - `core-decision-audit.jsonl` rotates on a chain boundary at 16 MiB with
-    one rotated file kept (`P0AuditLogger(max_bytes=, keep=)`). The chain
+    one rotated file kept (`P0AuditLogger(max_bytes=, keep=1)`; other
+    `keep` values are rejected). The chain
     continues across files (`chain_prev`, plus `chain_id` on each new
     file's first record); the relay's reconcile and the recorder's key
     window read the retained files as one consistent snapshot
@@ -61,9 +62,13 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     reported as `cursor_rotated_out` and the retained chain is replayed
     (bounded) instead of `cursor_not_in_chain`. New
     `P0AuditLogger.verify_rotated_chain`.
-  - The reconcile cursor is per chain: queue entries carry
-    `audit_chain_id`, and a relay resumes from its own chain's cursor. A
-    new chain on a shared queue is reconciled as `fresh_chain`.
+  - The reconcile cursor is per audit file and chain: queue entries carry
+    `audit_path` and `audit_chain_id`, and a relay resumes from its own
+    cursor. Another audit file's chain on a shared queue is reconciled as
+    `fresh_chain`; a replaced or head-cut chain in the same file is
+    `chain_replaced` (counted as `unreconcilable`, nothing replayed).
+    Replays by `fresh_chain` or `cursor_rotated_out` are always presented
+    as past decisions. Chain ids are not authenticated (documented).
   - P0 decisions dropped by the recorder's hand-off, the relay's hand-off
     or the audit listener hand-off are recovered while the agent runs
     (`core_loss_reconcile` / `loss_recovery` status records), with the
