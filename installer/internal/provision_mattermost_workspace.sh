@@ -199,7 +199,7 @@ ensure_webhook() {
 }
 
 write_outputs() {
-  install -d -m 0755 /etc/azazel-edge
+  [[ -d /etc/azazel-edge ]] || install -d -m 0750 /etc/azazel-edge
   cat > "${CRED_ENV}" <<EOF
 MATTERMOST_USERNAME=${MATTERMOST_USERNAME}
 MATTERMOST_EMAIL=${MATTERMOST_EMAIL}

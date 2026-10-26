@@ -97,6 +97,13 @@ def watch_snapshots(
                     yield payload["snapshot"]
     except Exception:
         return
+    finally:
+        # Close at once (also when the consumer stops iterating), so the
+        # daemon sees the end of stream and frees the watch slot.
+        try:
+            sock.close()
+        except Exception:
+            pass
 
 
 def read_snapshot_from_files(logger: Any = None) -> Tuple[Optional[Dict[str, Any]], Optional[Path]]:

@@ -17,7 +17,6 @@ class TriageApiV1Tests(unittest.TestCase):
             "_TRIAGE_STORE": webapp._TRIAGE_STORE,
             "_TRIAGE_ENGINE": webapp._TRIAGE_ENGINE,
             "TRIAGE_AUDIT_LOG": webapp.TRIAGE_AUDIT_LOG,
-            "TRIAGE_AUDIT_FALLBACK_LOG": webapp.TRIAGE_AUDIT_FALLBACK_LOG,
         }
         webapp.load_token = lambda: None
         webapp.AUTH_FAIL_OPEN = True
@@ -26,7 +25,6 @@ class TriageApiV1Tests(unittest.TestCase):
         webapp._TRIAGE_STORE = store
         webapp._TRIAGE_ENGINE = TriageFlowEngine(store=store, audit_logger=P0AuditLogger(audit_path))
         webapp.TRIAGE_AUDIT_LOG = audit_path
-        webapp.TRIAGE_AUDIT_FALLBACK_LOG = audit_path
         self.client = webapp.app.test_client()
 
     def tearDown(self) -> None:
@@ -35,7 +33,6 @@ class TriageApiV1Tests(unittest.TestCase):
         webapp._TRIAGE_STORE = self._orig["_TRIAGE_STORE"]
         webapp._TRIAGE_ENGINE = self._orig["_TRIAGE_ENGINE"]
         webapp.TRIAGE_AUDIT_LOG = self._orig["TRIAGE_AUDIT_LOG"]
-        webapp.TRIAGE_AUDIT_FALLBACK_LOG = self._orig["TRIAGE_AUDIT_FALLBACK_LOG"]
         self.tmp.cleanup()
 
     def test_triage_intents_endpoint(self) -> None:

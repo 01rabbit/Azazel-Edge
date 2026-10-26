@@ -10,8 +10,15 @@ from typing import Dict, Optional
 from .types import TriageSession
 
 
-TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge/triage-sessions"))
-TRIAGE_SESSION_FALLBACK_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_FALLBACK_DIR", "/tmp/azazel-edge/triage-sessions"))
+# The Web UI's runtime directory (Edge#471 stage 1; the unit's
+# RuntimeDirectory=azazel-edge-web). There is no fallback: a session store
+# that cannot be created is an error the caller reports, never a silent move
+# to a shared directory such as /tmp.
+TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge-web/triage-sessions"))
+
+
+class TriageStorageError(OSError):
+    """The triage session directory cannot be created or used."""
 
 
 class TriageSessionStore:
@@ -19,10 +26,9 @@ class TriageSessionStore:
         preferred_dir = Path(base_dir) if base_dir else TRIAGE_SESSION_DIR
         try:
             preferred_dir.mkdir(parents=True, exist_ok=True)
-            self.base_dir = preferred_dir
-        except OSError:
-            TRIAGE_SESSION_FALLBACK_DIR.mkdir(parents=True, exist_ok=True)
-            self.base_dir = TRIAGE_SESSION_FALLBACK_DIR
+        except OSError as exc:
+            raise TriageStorageError(f"triage session directory {preferred_dir} is not usable: {exc}") from exc
+        self.base_dir = preferred_dir
 
     def _path_for(self, session_id: str) -> Path:
         return self.base_dir / f"{session_id}.json"

@@ -17,7 +17,9 @@ if ! command -v cryptsetup >/dev/null 2>&1; then
   DEBIAN_FRONTEND=noninteractive apt-get install -y cryptsetup
 fi
 
-install -d /var/lib/azazel-edge /etc/azazel-edge "${MOUNT_POINT}"
+# An existing /etc/azazel-edge keeps its mode (Edge#471: never widened).
+[[ -d /etc/azazel-edge ]] || install -d -m 0750 /etc/azazel-edge
+install -d /var/lib/azazel-edge "${MOUNT_POINT}"
 
 if [[ ! -f "${IMG_PATH}" ]]; then
   dd if=/dev/zero of="${IMG_PATH}" bs=1M count="${SIZE_MB}" status=none

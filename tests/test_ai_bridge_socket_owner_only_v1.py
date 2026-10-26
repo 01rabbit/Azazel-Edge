@@ -175,7 +175,9 @@ def test_every_caller_defaults_to_the_private_directory():
     web_src = (ROOT / "azazel_edge_web" / "app.py").read_text(encoding="utf-8")
     core_src = (ROOT / "rust" / "azazel-edge-core" / "src" / "main.rs").read_text(encoding="utf-8")
     assert f'os.environ.get("AZAZEL_AI_SOCKET", "{DEFAULT_SOCKET}")' in agent_src
-    assert f'os.environ.get("AZAZEL_AI_SOCKET", "{DEFAULT_SOCKET}")' in web_src
+    # The Web UI does not use ai-bridge.sock any more (Edge#471 stage 1): the
+    # same variable defaults to the agent's manual_query socket there.
+    assert 'os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge-agent-query/agent-query.sock")' in web_src
     assert f'env::var("AZAZEL_AI_SOCKET").unwrap_or_else(|_| "{DEFAULT_SOCKET}".to_string())' in core_src
     assert so03_alert_queue.unit_environment(CORE_UNIT)["AZAZEL_AI_SOCKET"] == DEFAULT_SOCKET
     assert "AZAZEL_AI_SOCKET" not in so03_alert_queue.unit_environment(UNIT)
@@ -472,7 +474,8 @@ def test_a_group_member_reaches_control_sock_but_cannot_reach_or_replace_ai_brid
 
 
 def test_the_web_ui_manual_query_still_reaches_the_agent(monkeypatch, base, shared_group):
-    # The Web UI runs as the same account as the agent (root in the units).
+    # A root caller (the agent's own account) may still send manual_query on
+    # ai-bridge.sock; the Web UI itself uses the query socket (Edge#471).
     name, _ = shared_group
     from azazel_edge_web import app as web_app
 
@@ -497,7 +500,7 @@ def test_core_style_forwarding_still_reaches_the_agent(base, shared_group):
 
 
 @pytest.mark.skipif(not IS_ROOT or not sys.platform.startswith("linux"), reason="needs root on Linux (uses /run)")
-def test_core_and_web_reach_the_agent_at_the_default_path(base, rust_core_bin):
+def test_core_and_web_reach_the_agent_at_the_default_path(monkeypatch, base, rust_core_bin):
     default_dir = Path(DEFAULT_SOCKET).parent
     if os.path.lexists(default_dir):
         pytest.skip("the default socket directory already exists on this host")
@@ -507,8 +510,9 @@ def test_core_and_web_reach_the_agent_at_the_default_path(base, rust_core_bin):
         with _AgentProc(base, "", socket_path=Path(DEFAULT_SOCKET)) as agent:
             assert "AZAZEL_AI_SOCKET" not in agent.env
             assert _mode(default_dir) == 0o700
-            # The Web UI with its own default path.
-            assert str(web_app.AI_SOCKET) == DEFAULT_SOCKET
+            # A root manual_query on the default ai-bridge.sock path (the Web
+            # UI's own default is the query socket since Edge#471).
+            monkeypatch.setattr(web_app, "AI_SOCKET", Path(DEFAULT_SOCKET))
             result = web_app._send_ai_manual_query("What is the current state?")
             assert "ai_query_error" not in str(result.get("error", "")), result
             assert result.get("error") != "empty_ai_response", result

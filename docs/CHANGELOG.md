@@ -4,6 +4,48 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Web UI runs as the non-root account `azazel-web` (Edge#471 stage 1; details,
+  upgrade and rollback in `docs/architecture/privilege-inventory.md` §10.9):
+  - `azazel-edge-web.service`: `User=`/`Group=azazel-web`,
+    `SupplementaryGroups=azazel-control`, no capabilities, `NoNewPrivileges`,
+    `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`,
+    `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` and the
+    other §10.6 settings; `RuntimeDirectory=`/`StateDirectory=`/
+    `LogsDirectory=azazel-edge-web`, where the Web UI's state and logs now
+    live by default.
+  - control daemon: `control.sock` checks the peer uid (`SO_PEERCRED`)
+    against a fixed table (root: all; `azazel-web`: the actions the Web UI
+    uses; anyone else: refused and counted; `migrate_path_schema` root
+    only). Connection limits keep headroom for root (non-root ≤ 24 of
+    32, ≤ 16 `watch_snapshot` streams); a dead idle watch stream frees its
+    slot. New fixed actions, relocated from the Web UI by owner decision:
+    `uplink_disconnect` (no parameters; the daemon's own `AZAZEL_UP_IF`),
+    `sot_devices_replace` / `sot_devices_patch` (validated with `SoTConfig`,
+    atomic write; the daemon is the only SoT writer). Requests up to 1 MiB.
+  - AI agent (still root): a `manual_query`-only socket for the Web UI,
+    `/run/azazel-edge-agent-query/agent-query.sock` (0750 directory and 0660
+    socket, group `azazel-web`, peers root and `azazel-web`); once it
+    listens, `ai-bridge.sock` refuses `manual_query`. The Web UI's
+    `AZAZEL_AI_SOCKET` default is that socket.
+  - Web UI: no `ip link` and no `docker ps` any more; triage sessions and
+    the triage audit chain never fall back to `/tmp` (503 with the reason);
+    a trend store write failure no longer makes `/api/dashboard/*` answer
+    500; unreadable/missing token files are logged and reported; authz audit
+    failures are counted in `/health`; a controlled-exec runbook that fails
+    as non-root says so.
+  - installer: creates `azazel-web` / `azazel-control` idempotently, moves
+    only old-default lines in `/etc/default/azazel-edge-security` and
+    `/etc/default/azazel-edge-web`, copies the Web UI's existing state into
+    its new directories (keeping the originals), makes the Web UI's token
+    files, `sot.yaml` and `first_minute.yaml` `0640 root:azazel-web`, never
+    widens `/etc/azazel-edge` (no script resets its mode any more; a 0750
+    root:root one gets group `azazel-web`), makes the local CA and server
+    keys 0600 explicitly, adds the Web UI's directories to the Wazuh FIM
+    paths, and restarts the control daemon, the agent and the Web UI in that
+    order.
+
 ### Added
 
 - `docs/architecture/privilege-inventory.md` (Edge#471 stage 0, documentation

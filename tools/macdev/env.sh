@@ -37,6 +37,10 @@ export AZAZEL_DEFENSE_DRY_RUN=true
 
 # --- AI agent ---
 export AZAZEL_AI_SOCKET="$RUN_DIR/ai/ai-bridge.sock"
+# The agent's manual_query socket for the Web UI (Edge#471 stage 1). The Web
+# UI itself reads AZAZEL_AI_SOCKET; bin/azazel-edge-devstack gives the Web UI
+# its own value (this socket, or ai-bridge.sock when the agent has none).
+export AZAZEL_AI_QUERY_SOCKET="$RUN_DIR/ai-query/agent-query.sock"
 export AZAZEL_AI_ADVISORY="$RUN_DIR/ai_advisory.json"
 export AZAZEL_AI_METRICS="$RUN_DIR/ai_metrics.json"
 export AZAZEL_AI_POLICY="$RUN_DIR/ai_runtime_policy.json"

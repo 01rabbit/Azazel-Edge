@@ -55,6 +55,18 @@ api() {
 TEAM_JSON="$(api GET "/api/v4/teams/name/${TEAM_NAME}")"
 TEAM_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"${TEAM_JSON}")"
 
+# Token files the Web UI reads are 0640 root:azazel-web (Edge#471 stage 1:
+# the Web UI runs as azazel-web). Without that account they stay 0600 root.
+web_readable_secret() {
+  if getent group azazel-web >/dev/null 2>&1; then
+    chown root:azazel-web "$1"
+    chmod 0640 "$1"
+  else
+    chown root:root "$1"
+    chmod 0600 "$1"
+  fi
+}
+
 provision_command() {
   local trigger="$1"
   local token_path="$2"
@@ -112,9 +124,9 @@ EOF
     exit 1
   fi
 
-  install -d -m 0755 "$(dirname "${token_path}")"
-  printf '%s\n' "${command_token}" > "${token_path}"
-  chmod 0600 "${token_path}"
+  [[ -d "$(dirname "${token_path}")" ]] || install -d -m 0750 "$(dirname "${token_path}")"
+  (umask 077; printf '%s\n' "${command_token}" > "${token_path}")
+  web_readable_secret "${token_path}"
   echo "[OK] Mattermost slash command provisioned"
   echo "trigger=${trigger}"
   echo "command_id=${command_id}"

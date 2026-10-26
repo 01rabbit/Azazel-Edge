@@ -5,6 +5,49 @@ Wants=network-online.target azazel-edge-control-daemon.service
 
 [Service]
 Type=simple
+# Edge#471 stage 1: the Web UI runs as its own non-root account. It reaches
+# control.sock through the azazel-control group (the control daemon checks
+# the peer uid against a fixed per-account action table) and asks the AI
+# agent through the agent's manual_query socket. It writes only to the three
+# directories below, which systemd creates owned by azazel-web.
+User=azazel-web
+Group=azazel-web
+SupplementaryGroups=azazel-control
+RuntimeDirectory=azazel-edge-web
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+StateDirectory=azazel-edge-web
+StateDirectoryMode=0750
+LogsDirectory=azazel-edge-web
+LogsDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Read-only everywhere except the directories above: systemd makes
+# RuntimeDirectory=, StateDirectory= and LogsDirectory= writable, so no
+# ReadWritePaths= is needed. Connecting to control.sock and to the agent's
+# query socket works on a read-only mount.
+ProtectSystem=strict
+# /home is hidden: the OpenCanary pid file under /home is not read any more;
+# OpenCanary is detected through systemctl and its process list.
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# AF_NETLINK: the read-only runbook `ip -4 route show default`.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# The port must stay above 1023: the unit grants no capability.
 Environment="AZAZEL_WEB_HOST=127.0.0.1"
 Environment="AZAZEL_WEB_PORT=8084"
 Environment="AZAZEL_WEB_WORKERS=2"

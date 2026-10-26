@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pwd
 import queue
 import secrets
 import signal
@@ -60,15 +61,16 @@ except Exception:  # pragma: no cover
     CoreDecisionRecorder = None  # type: ignore
     attach_p0_alert_relay = None  # type: ignore
 from azazel_edge._util import ensure_parent as _ensure_parent
+from azazel_edge.peercred import account_uid, peer_credentials
 
 SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge-ai/ai-bridge.sock"))
 # The socket's location before Edge#462: inside the shared runtime directory,
 # where members of AZAZEL_RUNTIME_SOCKET_GROUP could replace it.
 LEGACY_SOCKET_PATH = Path("/run/azazel-edge/ai-bridge.sock")
 RUNTIME_DIR_MODE = int(str(os.environ.get("AZAZEL_RUNTIME_DIR_MODE", "0770")), 8)
-# ai-bridge.sock is owner only (Edge#462). Its callers, the Rust core (event
-# forwarding) and the Web UI (``action=manual_query``), run as root like this
-# agent. The optional shared group (AZAZEL_RUNTIME_SOCKET_GROUP) is for the
+# ai-bridge.sock is owner only (Edge#462). Its caller, the Rust core (event
+# forwarding), runs as root like this agent; the Web UI asks on the separate
+# query socket below (Edge#471 stage 1). The optional shared group (AZAZEL_RUNTIME_SOCKET_GROUP) is for the
 # control daemon's control.sock only and is never applied here. The socket
 # lives in its own directory, owned by the agent's account with mode 0700, so
 # no other account can connect to it, replace it or bind its own socket at its
@@ -76,6 +78,33 @@ RUNTIME_DIR_MODE = int(str(os.environ.get("AZAZEL_RUNTIME_DIR_MODE", "0770")), 8
 # AZAZEL_AI_SOCKET_MODE is no longer applied.
 SOCKET_MODE = 0o600
 SOCKET_DIR_MODE = 0o700
+# manual_query socket for the Web UI (Edge#471 stage 1). The Web UI runs as
+# QUERY_SOCKET_ACCOUNT, which cannot reach the private ai-bridge.sock. This
+# second socket accepts exactly one request type, ``manual_query``, from a
+# peer whose kernel-reported uid (SO_PEERCRED) is root or that account; it
+# never passes anything to _handle_event, forward stats or the P0 path. Its
+# directory is owned by the agent's account with group = the Web UI
+# account's primary group and mode 0750; the socket is 0660. When the
+# account does not exist the socket is not created (fail closed) and the
+# agent serves ai-bridge.sock as before.
+QUERY_SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_QUERY_SOCKET", "/run/azazel-edge-agent-query/agent-query.sock"))
+QUERY_SOCKET_ACCOUNT = "azazel-web"
+QUERY_SOCKET_MODE = 0o660
+QUERY_SOCKET_DIR_MODE = 0o750
+QUERY_MAX_REQUEST_BYTES = 256 * 1024
+QUERY_READ_TIMEOUT_SEC = 10.0  # total, for the whole request line
+# Concurrent query handlers (a manual_query can wait on the LLM); more
+# connections are answered "busy" and closed.
+QUERY_MAX_CONCURRENT = 4
+_QUERY_SLOTS = threading.BoundedSemaphore(QUERY_MAX_CONCURRENT)
+_QUERY_REFUSALS_LOCK = threading.Lock()
+_QUERY_REFUSALS = {"total": 0}
+# Set once the query socket listens. From then on ai-bridge.sock refuses
+# manual_query (its only legitimate sender, the Web UI, uses the query
+# socket). While the query socket does not exist (no azazel-web account, as
+# on a development host), ai-bridge.sock keeps answering manual_query from
+# the peers that can reach it (owner only: root / the agent's account).
+QUERY_SOCKET_ACTIVE = threading.Event()
 ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge/ai_advisory.json"))
 EVENT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", "/var/log/azazel-edge/ai-events.jsonl"))
 SNAPSHOT_PATH = Path(os.environ.get("AZAZEL_UI_SNAPSHOT", "/run/azazel-edge/ui_snapshot.json"))
@@ -472,6 +501,208 @@ def _bind_ai_socket(path: Path) -> socket.socket:
     if os.environ.get("AZAZEL_AI_SOCKET_MODE") not in (None, "", "0600", "600"):
         logger.warning("AZAZEL_AI_SOCKET_MODE is ignored: ai-bridge.sock is owner only (0600)")
     return srv
+
+
+def _query_account_ids() -> tuple[int, int] | None:
+    """(uid, primary gid) of QUERY_SOCKET_ACCOUNT, or None if it cannot be resolved."""
+    try:
+        entry = pwd.getpwnam(QUERY_SOCKET_ACCOUNT)
+    except (KeyError, OSError):
+        return None
+    return int(entry.pw_uid), int(entry.pw_gid)
+
+
+def _prepare_query_socket_dir(path: Path, gid: int) -> None:
+    """The query socket's directory: a real directory owned by this process's
+    user, group ``gid``, mode 0750. A missing one is created with exactly
+    that (group and mode set through a descriptor opened without following
+    symlinks). An existing one is accepted only as it is: a symlink, a
+    non-directory, another owner, another group or another mode is refused,
+    never fixed (privilege-inventory §10.4)."""
+    target = path.parent
+    target.parent.mkdir(parents=True, exist_ok=True)
+    old_umask = os.umask(0o077)
+    created = False
+    try:
+        os.mkdir(str(target), 0o700)
+        created = True
+    except FileExistsError:
+        pass
+    finally:
+        os.umask(old_umask)
+    try:
+        fd = os.open(str(target), os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise AISocketSetupError(f"query socket directory {target}: {exc}; refusing") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode):
+            raise AISocketSetupError(f"query socket directory {target} is not a directory; refusing")
+        if st.st_uid != os.geteuid():
+            raise AISocketSetupError(
+                f"query socket directory {target} is owned by uid {st.st_uid}, not this process "
+                f"(uid {os.geteuid()}); refusing")
+        if created:
+            # Only a directory this call created is given its group and mode.
+            os.fchown(fd, -1, gid)
+            os.fchmod(fd, QUERY_SOCKET_DIR_MODE)
+        elif st.st_gid != gid or stat.S_IMODE(st.st_mode) != QUERY_SOCKET_DIR_MODE:
+            raise AISocketSetupError(
+                f"query socket directory {target} has group {st.st_gid} and mode {stat.S_IMODE(st.st_mode):04o}; "
+                f"it must be group {gid} and mode {QUERY_SOCKET_DIR_MODE:04o}; refusing")
+    finally:
+        os.close(fd)
+
+
+def _bind_query_socket(path: Path, gid: int) -> socket.socket:
+    """Bind the query socket 0660 with group ``gid`` (the Web UI account's
+    group) inside its 0750 directory. Bound under umask 0117 so it never has
+    other bits; a stale socket is replaced, any other entry is refused."""
+    try:
+        st = os.lstat(str(path))
+    except FileNotFoundError:
+        st = None
+    if st is not None:
+        if not stat.S_ISSOCK(st.st_mode):
+            raise AISocketSetupError(f"query socket path {path} exists and is not a socket; refusing")
+        os.unlink(str(path))
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    old_umask = os.umask(0o117)
+    try:
+        srv.bind(str(path))
+    except Exception:
+        srv.close()
+        raise
+    finally:
+        os.umask(old_umask)
+    os.chown(str(path), -1, gid)
+    os.chmod(str(path), QUERY_SOCKET_MODE)
+    return srv
+
+
+def _setup_query_socket(path: Path | None = None) -> socket.socket | None:
+    """Create the manual_query socket, or return None (logged as an error)
+    when it cannot be created safely. ai-bridge.sock is not affected."""
+    path = path or QUERY_SOCKET_PATH
+    ids = _query_account_ids()
+    if ids is None:
+        logger.error("manual_query socket disabled: account %s does not exist (Web UI questions will fail)",
+                     QUERY_SOCKET_ACCOUNT)
+        return None
+    _uid, gid = ids
+    try:
+        _prepare_query_socket_dir(path, gid)
+        return _bind_query_socket(path, gid)
+    except (AISocketSetupError, OSError) as exc:
+        logger.error("manual_query socket disabled: %s (Web UI questions will fail)", exc)
+        return None
+
+
+def query_peer_allowed(uid: int | None) -> bool:
+    """Only root or QUERY_SOCKET_ACCOUNT; an unknown peer or account gets nothing."""
+    if uid is None:
+        return False
+    if uid == 0:
+        return True
+    web_uid = account_uid(QUERY_SOCKET_ACCOUNT)
+    return web_uid is not None and uid == web_uid
+
+
+def _count_query_refusal() -> int:
+    with _QUERY_REFUSALS_LOCK:
+        _QUERY_REFUSALS["total"] += 1
+        return _QUERY_REFUSALS["total"]
+
+
+def _query_refuse(conn: socket.socket, uid: int | None, pid: int | None, reason: str) -> None:
+    total = _count_query_refusal()
+    logger.warning("agent-query.sock: refused (%s) uid=%s pid=%s (refused so far=%d)", reason, uid, pid, total)
+    try:
+        conn.sendall((json.dumps({"ok": False, "error": "forbidden", "reason": reason}) + "\n").encode("utf-8"))
+    except OSError:
+        pass
+
+
+def _handle_query_client(conn: socket.socket) -> None:
+    """One manual_query per connection on the query socket. Nothing received
+    here reaches _handle_event, the forward-stats path or the P0 path."""
+    with conn:
+        uid, pid = peer_credentials(conn)
+        if not query_peer_allowed(uid):
+            _query_refuse(conn, uid, pid, "peer_not_allowed")
+            return
+        deadline = time.monotonic() + QUERY_READ_TIMEOUT_SEC
+        buf = b""
+        try:
+            while b"\n" not in buf:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _query_refuse(conn, uid, pid, "request_timeout")
+                    return
+                conn.settimeout(remaining)
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                if len(buf) > QUERY_MAX_REQUEST_BYTES:
+                    _query_refuse(conn, uid, pid, "request_too_large")
+                    return
+        except socket.timeout:
+            _query_refuse(conn, uid, pid, "request_timeout")
+            return
+        except OSError:
+            return
+        line = buf.split(b"\n", 1)[0].decode("utf-8", errors="replace").strip()
+        try:
+            payload = json.loads(line) if line else None
+        except json.JSONDecodeError:
+            payload = None
+        if not isinstance(payload, dict):
+            _query_refuse(conn, uid, pid, "invalid_request")
+            return
+        if str(payload.get("action") or "") != "manual_query" or "schema" in payload:
+            _query_refuse(conn, uid, pid, "only_manual_query")
+            return
+        conn.settimeout(None)
+        try:
+            resp = _handle_manual_query_request(payload)
+        except Exception as exc:  # the caller must see a failure, not silence
+            logger.exception("manual_query failed")
+            resp = {"ok": False, "action": "manual_query", "error": f"manual_query_failed:{type(exc).__name__}"}
+        try:
+            conn.sendall((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+        except OSError:
+            return
+
+
+def _query_accept_loop(srv: socket.socket, stop: threading.Event) -> None:
+    srv.settimeout(1.0)
+    while not stop.is_set():
+        try:
+            conn, _ = srv.accept()
+        except socket.timeout:
+            continue
+        except OSError:
+            if stop.is_set():
+                return
+            time.sleep(0.2)
+            continue
+        if not _QUERY_SLOTS.acquire(blocking=False):
+            logger.warning("agent-query.sock: too many concurrent queries; answered busy")
+            try:
+                conn.sendall(b'{"ok": false, "error": "busy"}\n')
+            except OSError:
+                pass
+            conn.close()
+            continue
+        threading.Thread(target=_handle_query_slot, args=(conn,), daemon=True).start()
+
+
+def _handle_query_slot(conn: socket.socket) -> None:
+    try:
+        _handle_query_client(conn)
+    finally:
+        _QUERY_SLOTS.release()
 
 
 def _metrics_snapshot() -> Dict[str, Any]:
@@ -2034,6 +2265,10 @@ def _handle_request_line(raw: str) -> Dict[str, Any] | None:
 
     action = str(payload.get("action") or "").strip().lower()
     if action == "manual_query":
+        if QUERY_SOCKET_ACTIVE.is_set():
+            logger.warning("ai-bridge.sock: refused manual_query (use the query socket %s)", QUERY_SOCKET_PATH)
+            return {"ok": False, "action": "manual_query", "error": "forbidden",
+                    "reason": "manual_query_moved_to_query_socket"}
         return _handle_manual_query_request(payload)
 
     _handle_event(payload)
@@ -2077,6 +2312,9 @@ def _serve(stop: threading.Event | None = None) -> None:
     except AISocketSetupError as exc:
         logger.error("%s", exc)
         raise SystemExit(f"azazel-edge-ai-agent: {exc}") from None
+    # Also bound before any thread starts (umask). Failure disables only
+    # the Web UI's manual_query path, never ai-bridge.sock.
+    query_srv = _setup_query_socket()
     # Before the socket accepts, so every P0 decision the core sends to this
     # service is recorded and relayed.
     _start_core_p0_path()
@@ -2087,6 +2325,11 @@ def _serve(stop: threading.Event | None = None) -> None:
     _persist_policy()
     _persist_metrics()
     logger.info("AI advisory agent listening on %s", SOCKET_PATH)
+    if query_srv is not None:
+        query_srv.listen(16)
+        threading.Thread(target=_query_accept_loop, args=(query_srv, stop), daemon=True).start()
+        QUERY_SOCKET_ACTIVE.set()
+        logger.info("manual_query socket listening on %s (peers: root, %s)", QUERY_SOCKET_PATH, QUERY_SOCKET_ACCOUNT)
     last_heartbeat = time.time()
 
     handlers: list[threading.Thread] = []
@@ -2124,6 +2367,9 @@ def _serve(stop: threading.Event | None = None) -> None:
             conn.setblocking(True)
             _spawn(conn)
         srv.close()
+        if query_srv is not None:
+            QUERY_SOCKET_ACTIVE.clear()
+            query_srv.close()
         for t in list(handlers):
             t.join(max(0.0, deadline - time.monotonic()))
         _stop_core_p0_path()
