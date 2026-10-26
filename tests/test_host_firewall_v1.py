@@ -123,6 +123,14 @@ def test_the_installer_refuses_an_uplink_named_like_a_container_bridge(tmp_path)
         res, calls = _configure(tmp_path / wan, "enable", "", wan_if=wan)
         assert (res.returncode == 0) is ok, (wan, res.stderr)
         assert ("fw trial" in calls) is ok
+        # Review N2: also when it is already enabled (enable and keep).
+        for action in ("enable", "keep"):
+            res, calls = _configure(tmp_path / f"{wan}-{action}-on", action, "enabled", wan_if=wan)
+            assert (res.returncode == 0) is ok, (wan, action, res.stderr)
+            assert ("fw refresh" in calls) is ok
+    # Off: nothing is loaded, so nothing to refuse.
+    res, _ = _configure(tmp_path / "off", "keep", "", wan_if="br-wan")
+    assert res.returncode == 0
 
 
 def test_remote_access_adds_only_wan_ssh_and_mdns():
@@ -211,7 +219,13 @@ case "$1" in
 esac""",
             "systemctl": f'echo "systemctl $*" >>{self.log}\n'
                          f'[ "$1" = is-active ] && exit {0 if timer_active else 3}\nexit 0',
-            "systemd-run": f'echo "systemd-run $*" >>{self.log}\nexit {systemd_run_rc}',
+            # Like systemd: a unit name that is loaded (running) cannot be used again.
+            "systemd-run": f"""for a in "$@"; do case "$a" in --unit=*) u="${{a#--unit=}}" ;; esac; done
+if [ -e {self.tmp}/running ] && [ "$(cat {self.tmp}/running)" = "$u" ]; then
+  echo "REFUSED $u (already loaded)" >>{self.log}; exit 1
+fi
+echo "systemd-run $*" >>{self.log}
+exit {systemd_run_rc}""",
             "flock": "exit 0",
             "sleep": "exit 0",
             "ss": f"printf '%s' '{ss_out}'",
@@ -410,6 +424,50 @@ def test_a_rollback_whose_delete_fails_is_recorded_and_tried_again(tmp_path):
 
 
 @LINUX_ONLY
+def test_the_rollback_keeps_retrying_under_alternating_unit_names(tmp_path):
+    """Review SF1: the retry armed from a running unit never reuses its name."""
+    h = Helper(tmp_path)
+    assert h("trial").returncode == 0
+    (tmp_path / "fail-delete").write_text("")
+    units = []
+    for _ in range(7):
+        last = [line for line in h.calls.splitlines() if line.startswith("systemd-run")][-1]
+        unit = re.search(r"--unit=(\S+)", last).group(1)
+        arg = last.rsplit(" ", 1)[1]
+        # The timer fires: its service runs under that unit name and argument.
+        assert arg == ("retry" if unit.endswith("-retry") else "first")
+        (tmp_path / "running").write_text(unit)
+        res = h("rollback-unconfirmed", arg)
+        assert res.returncode == 1 and "trying again" in res.stderr, res.stderr
+        assert "could not start the retry timer" not in res.stderr
+        units.append(unit)
+    assert "REFUSED" not in h.calls
+    assert units == ["azazel-host-firewall-rollback", "azazel-host-firewall-rollback-retry"] * 3 + [
+        "azazel-host-firewall-rollback"]
+    assert h.state == "rollback-failed" and h.present.exists()
+    (tmp_path / "fail-delete").unlink()
+    last = [line for line in h.calls.splitlines() if line.startswith("systemd-run")][-1]
+    (tmp_path / "running").write_text(re.search(r"--unit=(\S+)", last).group(1))
+    assert h("rollback-unconfirmed", last.rsplit(" ", 1)[1]).returncode == 0
+    assert h.state == "rolled-back" and not h.present.exists()
+
+
+@LINUX_ONLY
+def test_disable_stops_the_rollback_only_after_the_table_is_gone(tmp_path):
+    """Review N1."""
+    h = Helper(tmp_path)
+    assert h("trial").returncode == 0
+    (tmp_path / "fail-delete").write_text("")
+    res = h("disable")
+    assert res.returncode == 1 and h.state == "pending" and h.present.exists()
+    assert "systemctl stop azazel-host-firewall-rollback.timer" not in h.calls.split("nft delete")[-1]
+    (tmp_path / "fail-delete").unlink()
+    assert h("disable").returncode == 0 and h.state == ""
+    calls = h.calls
+    assert calls.rindex("nft delete table") < calls.rindex("systemctl stop azazel-host-firewall-rollback.timer")
+
+
+@LINUX_ONLY
 def test_a_failed_rollback_is_finished_at_boot_or_by_disable(tmp_path):
     h = Helper(tmp_path)
     assert h("trial").returncode == 0
@@ -597,7 +655,8 @@ def _configure(tmp_path: Path, action: str, state: str, external: str = "false",
     conf.mkdir(parents=True)
     if state:
         (conf / "state").write_text(state + "\n")
-    fns = "".join(_function(NETWORK, n) for n in ("configure_host_firewall", "start_host_firewall_trial"))
+    fns = "".join(_function(NETWORK, n) for n in ("check_uplink_name_for_host_firewall", "configure_host_firewall",
+                                                "start_host_firewall_trial"))
     script = f"""
 HOST_FW_HELPER=fwstub
 HOST_FW_DIR={conf}

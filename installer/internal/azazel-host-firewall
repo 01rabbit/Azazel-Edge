@@ -164,13 +164,16 @@ stop_trial_timer() {
   done
 }
 
-# A transient timer that runs `rollback-unconfirmed` once. Unloaded after it
-# fires (RemainAfterElapse=no, --collect), so the name can be used again.
+# A transient timer that runs `rollback-unconfirmed <name>` once, where
+# <name> says which of the two units it runs in (first: TRIAL_UNIT, retry:
+# RETRY_UNIT), so a retry always arms the other one. Unloaded after it fires
+# (RemainAfterElapse=no, --collect), so the name can be used again.
 arm_timer() {
-  local unit="$1" seconds="$2" arg="$3"
+  local unit="$1" seconds="$2" name="first"
+  [[ "$unit" == "$RETRY_UNIT" ]] && name="retry"
   systemd-run --quiet --collect --unit="$unit" --on-active="${seconds}s" \
     --timer-property=AccuracySec=1s --timer-property=RemainAfterElapse=no \
-    "$SELF" rollback-unconfirmed "$arg"
+    "$SELF" rollback-unconfirmed "$name"
 }
 
 # Established SSH sessions whose local address is neither loopback nor a
@@ -246,7 +249,7 @@ cmd_trial() {
   install -d -m 0755 "$RUN_DIR"
   rm -f -- "$CONFIRM_FILE"
   # The safety net first: no timer, no trial (nothing is loaded).
-  if ! arm_timer "$TRIAL_UNIT" "$TRIAL_SECONDS" first; then
+  if ! arm_timer "$TRIAL_UNIT" "$TRIAL_SECONDS"; then
     stop_trial_timer
     die "could not start the rollback timer; nothing was changed"
   fi
@@ -279,7 +282,8 @@ cmd_confirm() {
   echo "Host firewall confirmed; it is enabled and loaded at every boot."
 }
 
-# Run by the trial timer ($1: first) or the retry timer ($1: retry).
+# Run by the trial timer (TRIAL_UNIT, $1: first) or the retry timer
+# (RETRY_UNIT, $1: retry); $1 is set by arm_timer from the unit name.
 cmd_rollback_unconfirmed() {
   local next="$RETRY_UNIT"
   case "$(read_state)" in
@@ -297,20 +301,22 @@ cmd_rollback_unconfirmed() {
   fi
   # Not confirmed and still loaded: never left like that silently. The
   # state says so (boot takes it off; refresh does not load it) and the
-  # rollback is tried again. The retry timer is armed from the other name
-  # (this one is still running).
+  # rollback is tried again, as often as it takes, under the name of the
+  # unit that is not running now (this one is).
   write_state rollback-failed
   [[ "${1:-first}" == "retry" ]] && next="$TRIAL_UNIT"
   echo "ERROR: the unconfirmed host firewall could not be taken off (nft delete table inet azazel_host failed); trying again in ${RETRY_SECONDS} s. To remove it by hand: $SELF disable" >&2
-  if ! arm_timer "$next" "$RETRY_SECONDS" retry; then
+  if ! arm_timer "$next" "$RETRY_SECONDS"; then
     echo "ERROR: could not start the retry timer either; the host firewall stays loaded until: $SELF disable (or a reboot, which takes it off)." >&2
   fi
   return 1
 }
 
 cmd_disable() {
+  # The table first: if it cannot be removed, a pending rollback (timer)
+  # and the state stay as they are.
+  remove_table_retrying || die "could not remove table inet azazel_host; nothing else was changed"
   stop_trial_timer
-  remove_table
   rm -f -- "$STATE_FILE" "$CONFIRM_FILE"
   echo "Host firewall disabled (table inet azazel_host removed)."
 }

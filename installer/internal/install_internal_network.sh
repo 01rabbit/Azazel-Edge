@@ -747,6 +747,18 @@ start_host_firewall_trial() {
   echo "NOTICE: no terminal to confirm on. Confirm within 120 s from a new connection (sudo $HOST_FW_HELPER confirm), or the host firewall is taken off automatically."
 }
 
+# The host firewall tells containers from the WAN by interface name (with a
+# source check); an uplink named docker0 or br-* would be taken for a
+# container bridge. Checked whenever it is enabled or kept enabled.
+check_uplink_name_for_host_firewall() {
+  case "$WAN_IF_DETECTED" in
+    docker0 | br-*)
+      echo "ERROR: the uplink is $WAN_IF_DETECTED; the host firewall treats docker0 and br-* as container bridges. Rename the uplink (or use another one), or turn the host firewall off with --disable-host-firewall." >&2
+      exit 1
+      ;;
+  esac
+}
+
 configure_host_firewall() {
   local state=""
   install_host_firewall_files
@@ -760,14 +772,7 @@ configure_host_firewall() {
   state="$(head -n 1 -- "$HOST_FW_DIR/state" 2>/dev/null || true)"
   case "$HOST_FW_ACTION" in
     enable)
-      # The firewall tells the LAN and containers from the WAN by interface
-      # name; an uplink named like them would be treated as LAN/containers.
-      case "$WAN_IF_DETECTED" in
-        docker0 | br-*)
-          echo "ERROR: the uplink is $WAN_IF_DETECTED; the host firewall treats docker0 and br-* as container bridges. Rename the uplink bridge (or use another uplink) before --enable-host-firewall." >&2
-          exit 1
-          ;;
-      esac
+      check_uplink_name_for_host_firewall
       case "$state" in
         enabled) "$HOST_FW_HELPER" refresh ;;
         pending) echo "NOTICE: a host firewall trial is already running; confirm it from a new connection (sudo $HOST_FW_HELPER confirm) or let it roll back, then re-run if needed." ;;
@@ -780,7 +785,7 @@ configure_host_firewall() {
       ;;
     *)
       case "$state" in
-        enabled) "$HOST_FW_HELPER" refresh ;;
+        enabled) check_uplink_name_for_host_firewall; "$HOST_FW_HELPER" refresh ;;
         pending) echo "NOTICE: a host firewall trial is running; confirm it from a new connection: sudo $HOST_FW_HELPER confirm" ;;
         rollback-failed) echo "NOTICE: an unconfirmed host firewall could not be taken off; remove it with: sudo $HOST_FW_HELPER disable" ;;
         *) echo "NOTICE: the host firewall (WAN default deny) is off. To turn it on: $0 --enable-host-firewall" ;;

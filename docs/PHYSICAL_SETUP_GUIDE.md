@@ -134,8 +134,13 @@ default `ChangeMe1234` is refused.
 - Containers on Docker's bridges (`docker0`, `br-<id>`; e.g. Mattermost's
   slash commands calling the host) reach the host when their source is in
   Docker's default pools 172.17.0.0/16 .. 172.31.0.0/16 and routes back out
-  of the same bridge. A Docker network from 192.168.0.0/16 (Docker's last
-  default pool) or IPv6 is not let through. Do not give the uplink a name
+  of the same bridge. Not let through (neither to the host nor as a new
+  connection into the LAN through `br0`): a Docker network with its own
+  subnet outside 172.17.0.0 .. 172.31.255.255 (`--subnet`, `ipam` in a
+  compose file, `bip` or `default-address-pools` in `daemon.json`), one from
+  10.0.0.0/8 or 192.168.0.0/16 (Docker's last default pool), and container
+  IPv6. Outbound from such containers to the WAN is not changed. Check with
+  `docker network inspect`. Do not give the uplink a name
   starting with `br-` (or `docker0`); the installer refuses to enable the
   firewall on such an uplink.
 - Every other interface (the uplink, a VPN such as WireGuard added later)
@@ -283,4 +288,5 @@ For vehicle or heavy vibration, use additional anti-vibration mounts.
 - 内部 AP のパスフレーズは既定でランダム生成され、`/etc/azazel-edge/internal-ap.psk`（root のみ読める 0600）に保存されます。表示・ログには出ません。
 - ホストのファイアウォール（WAN 側は既定拒否、WAN→LAN の新規接続も拒否）は既定で無効です。`--enable-host-firewall` で有効にすると最初は試行になり、120 秒以内に**新しい**接続（LAN 側の新しい SSH かコンソール）から `sudo azazel-host-firewall confirm` しないと自動で外れます。上流から入った既存の SSH セッションで confirm すると警告は出ますが通ってしまうので、そこからは確認しないでください（第 1.5 節）。
 - 有効時は DNAT された新規接続を LAN とコンテナ発以外すべて落とします（後から足した上流や VPN のポート転送も）。DHCPv6 の応答はリンクローカルからだけ受けるので、グローバルアドレスで答える DHCPv6 リレーの配下では SLAAC だけになります。上流の名前を `br-` で始めないでください。
+- コンテナからホスト・LAN（br0 宛て）へ通すのは、docker の既定プール 172.17.0.0〜172.31.255.255 のネットワークだけです。独自の subnet（compose の `ipam`、`daemon.json` の `bip`・`default-address-pools`）、10.x や 192.168.x の docker ネットワーク、コンテナの IPv6 は通りません（WAN への外向きは変わりません）。
 - ハードウェアウォッチドッグは既定で無効です。使う場合は実機で `bcm2835-wdt` と `/dev/watchdog` を確かめてから、第 4 節の手順で設定してください。
