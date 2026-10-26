@@ -266,6 +266,23 @@ def test_the_pr_state_the_checklist_assumes_is_stated():
     assert "実機の" in _read(JA) and "証拠ではありません" in _read(JA)
 
 
+def test_the_489_precondition_is_checked_against_the_current_main():
+    # #489 is rebased onto main; the precondition is that its branch still
+    # contains main when the FW rows run (main moves on), checked with
+    # merge-base, not the earlier "written on an earlier #486" state.
+    check = "git merge-base --is-ancestor origin/main try-489"
+    for doc, rebased, stale in (
+        (EN, "has been\nrebased onto `main`", ("written on an", "conflicts with")),
+        (JA, "rebase 済み", ("以前の\n#486 の上で書かれて", "が衝突します")),
+    ):
+        section = _read(doc).split("### 3.13", 1)[1].split("\n## ", 1)[0]
+        assert check in section, doc.name
+        assert rebased in section, doc.name
+        for phrase in stale:
+            assert phrase not in section, (doc.name, phrase)
+    assert "`N/A (#489 not rebased)`" in _read(EN) and "`N/A（#489 未 rebase）`" in _read(JA)
+
+
 # --- comparison with the code ----------------------------------------------
 
 _REPO_PATH = re.compile(r"^(?:installer|tools|bin|docs|systemd|security|py|config)/[\w./-]+$")

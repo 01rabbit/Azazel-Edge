@@ -622,10 +622,11 @@ sudo du -sh /var/log/azazel-edge /var/lib/docker
 
 ### 3.13 Host firewall trial (#489, draft, optional)
 
-**Precondition: #489 rebased onto the current `main`.** #489 was written on an
-earlier #486 and conflicts with `main` plus #485–#488 (`install_all.sh`). Until
-its branch contains the current `main`, every FW row is
-`N/A (#489 not rebased)`. Check on the device:
+**Precondition: the #489 branch contains the current `main`.** #489 has been
+rebased onto `main` (after #490). When `main` moves on after that (this
+checklist itself came later, as #491), the branch may no longer contain it:
+check on the device before the FW rows. If it does not, ask for #489 to be
+rebased again; until then every FW row is `N/A (#489 not rebased)`.
 
 ```bash
 cd ~/Azazel-Edge
