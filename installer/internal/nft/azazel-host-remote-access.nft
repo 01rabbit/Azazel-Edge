@@ -1,0 +1,8 @@
+# Azazel-Edge host firewall, remote access from the WAN (Edge#477). Installed
+# as /etc/azazel-edge/host-firewall/remote-access.nft and added after
+# azazel-host.nft only while remote access is on
+# (azazel-host-firewall remote-access on: install_internal_network.sh with
+# ALLOW_EXTERNAL_SSH=true, or set_dev_remote_access.sh MODE=open). It is the
+# firewall half of what those already do to sshd and avahi.
+add rule inet azazel_host wan_allow tcp dport 22 accept comment "azazel-host: remote access ssh"
+add rule inet azazel_host wan_allow udp dport 5353 accept comment "azazel-host: remote access mdns"

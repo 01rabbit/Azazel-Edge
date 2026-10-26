@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# Azazel-Edge host firewall (Edge#477): `table inet azazel_host`, a default
+# deny for the host from the WAN (hook input) and no new WAN->LAN connection
+# (hook forward). The LAN is br0. Installed as
+# /usr/local/sbin/azazel-host-firewall by install_internal_network.sh.
+#
+#   boot                  at boot (azazel-host-firewall.service, before the
+#                         network): load when enabled; a trial cut short by
+#                         a reboot is rolled back
+#   refresh               reload when enabled or on trial (azazel-internal-apply,
+#                         the nftables.service hooks, remote access
+#                         changes); off: nothing
+#   trial                 first enable: load now, roll back automatically
+#                         unless confirmed within TRIAL_SECONDS
+#   confirm               keep the trial (run it from a NEW connection)
+#   rollback-unconfirmed  run by the trial timer
+#   disable               remove the table; the state becomes off
+#   remote-access on|off  WAN SSH (22/tcp) and mDNS (5353/udp)
+#   status                print the state (read-only)
+#
+# The state is root-only in /etc/azazel-edge/host-firewall; there is no
+# environment variable that changes what is loaded.
+#
+# Fail-closed: when the host firewall is enabled and its rules do not load,
+# a built-in minimal ruleset (LAN, loopback, replies, IPv6 ND and DHCP
+# replies only; no remote access) is loaded instead and the command fails.
+set -euo pipefail
+
+CONF_DIR="/etc/azazel-edge/host-firewall"
+RULES_FILE="$CONF_DIR/azazel-host.nft"
+REMOTE_FILE="$CONF_DIR/remote-access.nft"
+REMOTE_MARKER="$CONF_DIR/remote-access.on"
+STATE_FILE="$CONF_DIR/state"
+RUN_DIR="/run/azazel-edge"
+CONFIRM_FILE="$RUN_DIR/host-firewall.confirmed"
+TRIAL_UNIT="azazel-host-firewall-rollback"
+TRIAL_SECONDS=120
+SELF="/usr/local/sbin/azazel-host-firewall"
+
+# Loaded when the rules above do not load and the host firewall is enabled.
+# Nothing from the WAN but replies, IPv6 ND/PTB and DHCP replies.
+EMERGENCY_RULES='table inet azazel_host
+delete table inet azazel_host
+table inet azazel_host {
+  chain input {
+    type filter hook input priority filter; policy drop;
+    iif "lo" accept
+    ct state { established, related } accept
+    iifname "br0" accept
+    meta l4proto ipv6-icmp icmpv6 type { packet-too-big, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+    udp sport 67 udp dport 68 accept
+    ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+    counter comment "azazel-host: emergency wan default deny"
+  }
+  chain forward {
+    type filter hook forward priority filter; policy accept;
+    ct state { established, related } accept
+    iifname { "br0", "docker0" } accept
+    iifname "br-*" accept
+    oifname "br0" ct state new drop
+    ct status dnat ct state new drop
+  }
+}'
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+require_root() {
+  [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+read_state() {
+  local s=""
+  if [[ -f "$STATE_FILE" ]]; then
+    s="$(head -n 1 -- "$STATE_FILE")"
+  fi
+  printf '%s' "$s"
+}
+
+write_state() {
+  local tmp
+  install -d -m 0750 "$CONF_DIR"
+  tmp="$(umask 077 && mktemp "$CONF_DIR/.state.XXXXXX")"
+  printf '%s\n' "$1" >"$tmp"
+  chmod 0640 "$tmp"
+  mv -fT -- "$tmp" "$STATE_FILE"
+}
+
+nft_apply() {
+  nft -f - <<<"$1"
+}
+
+table_present() {
+  nft list table inet azazel_host >/dev/null 2>&1
+}
+
+remove_table() {
+  if table_present; then
+    nft delete table inet azazel_host
+  fi
+}
+
+# The whole ruleset, built in memory first: a missing or unreadable file
+# stops here, before anything is loaded (a partial ruleset is never loaded).
+compose_rules() {
+  local rules remote=""
+  rules="$(cat -- "$RULES_FILE")" || return 1
+  if [[ -e "$REMOTE_MARKER" ]]; then
+    remote="$(cat -- "$REMOTE_FILE")" || return 1
+  fi
+  printf 'table inet azazel_host\ndelete table inet azazel_host\n%s\n%s\n' "$rules" "$remote"
+}
+
+load_rules() {
+  local ruleset
+  ruleset="$(compose_rules)" || return 1
+  nft_apply "$ruleset"
+}
+
+# Enabled (or on trial): the rules, else the emergency ruleset, and fail.
+enforce() {
+  if load_rules; then
+    return 0
+  fi
+  echo "ERROR: the host firewall rules ($RULES_FILE) did not load; loading the built-in emergency ruleset (WAN default deny, no remote access). LAN (br0) access is kept. Fix the rules and run: $SELF refresh" >&2
+  if ! nft_apply "$EMERGENCY_RULES"; then
+    echo "ERROR: the emergency ruleset did not load either; the host has no WAN filter." >&2
+  fi
+  return 1
+}
+
+stop_trial_timer() {
+  systemctl stop "$TRIAL_UNIT.timer" >/dev/null 2>&1 || true
+  systemctl reset-failed "$TRIAL_UNIT.timer" "$TRIAL_UNIT.service" >/dev/null 2>&1 || true
+}
+
+cmd_boot() {
+  # Started again by hand while a trial runs: not a reboot.
+  if systemctl is-active --quiet "$TRIAL_UNIT.timer" 2>/dev/null; then
+    cmd_refresh
+    return
+  fi
+  case "$(read_state)" in
+    enabled)
+      enforce
+      ;;
+    pending)
+      # Rebooted during a trial: the timer is gone and nobody confirmed.
+      remove_table
+      write_state rolled-back
+      echo "NOTICE: the host firewall trial was not confirmed before the reboot; it is off (rolled back). Enable it again with install_internal_network.sh --enable-host-firewall." >&2
+      ;;
+    *)
+      remove_table
+      ;;
+  esac
+}
+
+cmd_refresh() {
+  case "$(read_state)" in
+    enabled | pending) enforce ;;
+    *) return 0 ;;
+  esac
+}
+
+cmd_trial() {
+  local state
+  state="$(read_state)"
+  case "$state" in
+    enabled) die "the host firewall is already enabled (use: $SELF refresh)" ;;
+    pending) die "a trial is already running; confirm it ($SELF confirm) or wait for the rollback" ;;
+  esac
+  stop_trial_timer
+  install -d -m 0755 "$RUN_DIR"
+  rm -f -- "$CONFIRM_FILE"
+  write_state pending
+  if ! load_rules; then
+    remove_table || true
+    write_state "${state:-off}"
+    die "the host firewall rules did not load; nothing was changed"
+  fi
+  # No safety net, no trial: without the timer the rules come off again.
+  if ! systemd-run --quiet --unit="$TRIAL_UNIT" --on-active="${TRIAL_SECONDS}s" \
+      --timer-property=AccuracySec=1s "$SELF" rollback-unconfirmed; then
+    remove_table || true
+    write_state "${state:-off}"
+    die "could not start the rollback timer; the host firewall was taken off again"
+  fi
+  echo "Host firewall loaded on trial. It is taken off automatically in ${TRIAL_SECONDS} s unless confirmed: from a NEW connection (new SSH session or console), run: sudo $SELF confirm"
+}
+
+cmd_confirm() {
+  [[ "$(read_state)" == "pending" ]] || die "no host firewall trial is running"
+  install -d -m 0755 "$RUN_DIR"
+  : >"$CONFIRM_FILE"
+  write_state enabled
+  stop_trial_timer
+  echo "Host firewall confirmed; it is enabled and loaded at every boot."
+}
+
+cmd_rollback_unconfirmed() {
+  [[ "$(read_state)" == "pending" ]] || return 0
+  if [[ -e "$CONFIRM_FILE" ]]; then
+    write_state enabled
+    return 0
+  fi
+  remove_table
+  write_state rolled-back
+  echo "ERROR: the host firewall trial was not confirmed within ${TRIAL_SECONDS} s and was taken off (rolled back)." >&2
+}
+
+cmd_disable() {
+  stop_trial_timer
+  remove_table
+  rm -f -- "$STATE_FILE" "$CONFIRM_FILE"
+  echo "Host firewall disabled (table inet azazel_host removed)."
+}
+
+cmd_remote_access() {
+  case "${1:-}" in
+    on)
+      install -d -m 0750 "$CONF_DIR"
+      : >"$REMOTE_MARKER"
+      ;;
+    off)
+      rm -f -- "$REMOTE_MARKER"
+      ;;
+    *) die "usage: $SELF remote-access on|off" ;;
+  esac
+  cmd_refresh
+}
+
+cmd_status() {
+  local state remote="off" loaded="no"
+  state="$(read_state)"
+  [[ -e "$REMOTE_MARKER" ]] && remote="on"
+  table_present && loaded="yes"
+  echo "state=${state:-off}"
+  echo "loaded=${loaded}"
+  echo "remote_access=${remote}"
+}
+
+main() {
+  local cmd="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  require_root
+  # One state change at a time (confirm against the rollback timer). The
+  # lock is in /run: refresh also runs inside nftables.service, where /etc
+  # is read-only (ProtectSystem=full).
+  if [[ "$cmd" != "status" ]]; then
+    install -d -m 0755 "$RUN_DIR"
+    exec 9>"$RUN_DIR/host-firewall.lock"
+    flock 9
+  fi
+  case "$cmd" in
+    boot) cmd_boot ;;
+    refresh) cmd_refresh ;;
+    trial) cmd_trial ;;
+    confirm) cmd_confirm ;;
+    rollback-unconfirmed) cmd_rollback_unconfirmed ;;
+    disable) cmd_disable ;;
+    remote-access) cmd_remote_access "$@" ;;
+    status) cmd_status ;;
+    *) die "usage: $SELF boot|refresh|trial|confirm|disable|remote-access on|off|status" ;;
+  esac
+}
+
+main "$@"

@@ -9,6 +9,7 @@ WAN_IF="${WAN_IF:-}"
 
 SSHD_CONF="/etc/ssh/sshd_config"
 AVAHI_CONF="/etc/avahi/avahi-daemon.conf"
+HOST_FIREWALL="/usr/local/sbin/azazel-host-firewall"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root: sudo $0"
@@ -99,6 +100,16 @@ configure_ufw_close() {
   fi
 }
 
+# The host firewall (Edge#477, install_internal_network.sh) refuses WAN
+# connections when it is enabled: open lets WAN SSH (22/tcp) and mDNS
+# (5353/udp) through with the sshd and avahi changes above, close takes them
+# out again. Without the host firewall installed: nothing to do.
+configure_host_firewall_remote() {
+  if [[ -x "$HOST_FIREWALL" ]]; then
+    "$HOST_FIREWALL" remote-access "$1"
+  fi
+}
+
 show_hints() {
   local wan_if="$1"
   local wan_ip
@@ -138,11 +149,13 @@ main() {
       configure_ssh_open
       configure_avahi_open "$wan_if"
       configure_ufw_open
+      configure_host_firewall_remote on
       ;;
     close)
       configure_ssh_close
       configure_avahi_close
       configure_ufw_close
+      configure_host_firewall_remote off
       ;;
     *)
       echo "ERROR: MODE must be open or close"

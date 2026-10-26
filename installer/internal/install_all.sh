@@ -39,6 +39,20 @@ if [[ "${ENABLE_APP_STACK}" == "1" && "${ENABLE_SECURITY_STACK:-1}" == "1" && "$
   exit 1
 fi
 
+# Passed to install_internal_network.sh (Edge#477 host firewall); options,
+# not environment variables.
+INTERNAL_NETWORK_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --enable-host-firewall|--disable-host-firewall) INTERNAL_NETWORK_ARGS+=("$arg") ;;
+    *) echo "ERROR: unknown option: $arg (known: --enable-host-firewall, --disable-host-firewall)" >&2; exit 1 ;;
+  esac
+done
+if [[ ${#INTERNAL_NETWORK_ARGS[@]} -gt 0 && "${ENABLE_INTERNAL_NETWORK}" != "1" ]]; then
+  echo "ERROR: ${INTERNAL_NETWORK_ARGS[*]} needs the internal network step (ENABLE_INTERNAL_NETWORK=1)." >&2
+  exit 1
+fi
+
 echo "[all/1] Azazel-Edge unified installer"
 echo "repo=${REPO_ROOT}"
 echo "ENABLE_INTERNAL_NETWORK=${ENABLE_INTERNAL_NETWORK}"
@@ -53,7 +67,7 @@ echo "DEV_REMOTE_MODE=${DEV_REMOTE_MODE}"
 
 if [[ "${ENABLE_INTERNAL_NETWORK}" == "1" ]]; then
   echo "[all/2] Apply internal network baseline"
-  "${REPO_ROOT}/installer/internal/install_internal_network.sh"
+  "${REPO_ROOT}/installer/internal/install_internal_network.sh" "${INTERNAL_NETWORK_ARGS[@]}"
   # mDNS on the LAN bridge only, not on the uplink (Edge#477). Step 5 below
   # (dev remote access, MODE=open) widens it again on purpose.
   "${REPO_ROOT}/installer/internal/configure_avahi_lan_only.sh"

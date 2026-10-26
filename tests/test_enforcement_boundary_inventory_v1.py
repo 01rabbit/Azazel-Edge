@@ -85,6 +85,14 @@ REVIEWED_SHELL_INVOCATIONS: Dict[str, Dict[str, str]] = {
         "nft -f /etc/nftables.d/azazel-internal.nft || true": "baseline firewall: generated azazel-internal-apply runner",
         "nft list table ip azazel_internal": "installer verify step, read-only",
     },
+    # Edge#477 host firewall: its own table inet azazel_host (WAN default
+    # deny for the host, no new WAN->LAN connection). Baseline, takes no
+    # decision input, never touches the core's table inet azazel_edge.
+    "installer/internal/azazel-host-firewall": {
+        'nft -f - <<<"$1"': "baseline firewall: host firewall table inet azazel_host (load, emergency load)",
+        "nft list table inet azazel_host >/dev/null 2>&1": "baseline firewall: host firewall, read-only presence check",
+        "nft delete table inet azazel_host": "baseline firewall: host firewall off / rollback",
+    },
 }
 
 # Units the installer writes with a heredoc instead of copying from systemd/.
@@ -92,6 +100,11 @@ REVIEWED_GENERATED_UNITS: Dict[str, str] = {
     "azazel-internal-apply.service": "installer/internal/install_internal_network.sh",
     # ssh.service drop-in: ordering and restart policy only (no command).
     "azazel-edge-listen.conf": "installer/internal/install_internal_network.sh",
+    # Edge#477 host firewall: runs /usr/local/sbin/azazel-host-firewall boot
+    # (baseline table inet azazel_host), and the nftables.service drop-in
+    # that reloads it after nftables flushes the ruleset.
+    "azazel-host-firewall.service": "installer/internal/install_internal_network.sh",
+    "azazel-host-firewall.conf": "installer/internal/install_internal_network.sh",
 }
 
 # Direct importers of the Python ActionArbiter: replay, benchmarks, dry run
