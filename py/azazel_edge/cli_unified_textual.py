@@ -21,6 +21,8 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Footer, Header, Static
 
+from azazel_edge.control_plane import describe_action_failure
+
 
 SnapshotLoader = Callable[[], Any]
 ActionSender = Callable[[str], Dict[str, Any]]
@@ -214,9 +216,9 @@ class AzazelTextualApp(App):
 
     BINDINGS = [
         Binding("u", "refresh", "Refresh"),
-        Binding("a", "stage_open", "Stage-Open"),
+        Binding("a", "stage_open", "Stage-Open (未実装)"),
         Binding("r", "reprobe", "Re-Probe"),
-        Binding("c", "contain", "Contain"),
+        Binding("c", "contain", "Contain (未実装)"),
         Binding("l", "details", "Details"),
         Binding("m", "toggle_menu", "Menu"),
         Binding("up", "menu_up", "Menu Up", show=False),
@@ -283,9 +285,9 @@ class AzazelTextualApp(App):
             {"label": "Mode: Portal", "kind": "send_action", "action": "mode_portal"},
             {"label": "Mode: Shield", "kind": "send_action", "action": "mode_shield"},
             {"label": "Mode: Scapegoat", "kind": "send_action", "action": "mode_scapegoat"},
-            {"label": "Stage-Open", "kind": "send_action", "action": "stage_open"},
+            {"label": "Stage-Open (未実装)", "kind": "send_action", "action": "stage_open"},
             {"label": "Re-Probe", "kind": "send_action", "action": "reprobe"},
-            {"label": "Contain", "kind": "send_action", "action": "contain"},
+            {"label": "Contain (未実装)", "kind": "send_action", "action": "contain"},
             {"label": "Shutdown System", "kind": "send_action", "action": "shutdown"},
             {"label": "Reboot System", "kind": "send_action", "action": "reboot"},
             {"label": "Wi-Fi Selector (Textual)", "kind": "interactive_cmd", "cmd": ssid_cmd},
@@ -567,9 +569,10 @@ class AzazelTextualApp(App):
                 self._status_message = f"Action accepted: {action}"
                 self._append_local_evidence(log_line)
             else:
-                err = str((result or {}).get("error", "unknown error")) if isinstance(result, dict) else "unexpected response"
-                self._status_message = f"Action failed: {action} ({err})"
-                self._append_local_evidence(f"• action failed: {action} ({err})")
+                line = describe_action_failure(result, action)
+                text = line.lstrip("• ")
+                self._status_message = text[:1].upper() + text[1:]
+                self._append_local_evidence(line)
         except Exception as exc:
             self._status_message = f"Action failed: {exc}"
             self._append_local_evidence(f"• action failed: {action} ({exc})")

@@ -10,13 +10,21 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `control.sock` `contain`, `disconnect` and `stage_open` answer
     `{"ok": false, "error": "not_implemented"}` instead of appending a line
     to `/run/azazel-edge/action_requests.log` (read by nothing) and answering
-    success; their scripts are removed. The CLI's command-file fallback no
-    longer turns that answer into success. Nothing new is enforced.
-  - The Web UI's `/api/state/stream` sends an `error` event with the reason
+    success; their scripts are removed. Nothing new is enforced. The CLI
+    returns any answer of the daemon as it is (a refusal stays a failure);
+    only when the daemon is not reached does it write the legacy
+    `ui_command.json`, which nothing here reads, so the result is
+    `ok: false, undelivered: true` instead of `ok: true`. The CLI labels
+    Stage-Open and Contain as not implemented.
+  - The Web UI's `/api/state/stream` sends a `stream_error` event (with
+    `retry: 15000`) with the reason
     (`busy`, `stream_closed`, `socket_missing`, …) when the daemon's watch
     stream ends, instead of ending silently.
-  - The port 8082 status API call uses `curl --fail`: an HTTP error reply is
-    a failure, not "Containment activated". No server for 8082 ships here.
+  - The port 8082 status API call uses `curl --fail`: an HTTP error reply,
+    an empty reply where one is required or a non-JSON reply is the status
+    API's refusal and a failure, not "Containment activated"; `disconnect`
+    falls back to `uplink_disconnect` only when nothing answers (refused,
+    timeout). No server for 8082 ships here.
   - The Web UI reads the portal viewer's status under the unit the control
     daemon starts (`azazel-edge-portal-viewer.service`, was
     `azazel-portal-viewer.service`); a missing unit is reported as not

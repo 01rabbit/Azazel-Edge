@@ -238,6 +238,9 @@ EPD_LAST_RENDER_PATH = Path(
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
+# curl's exit status for an HTTP status >= 400 under --fail: the server on
+# port 8082 answered and refused (not "nothing there").
+STATUS_API_CURL_HTTP_ERROR = 22
 PORTAL_VIEWER_ENV_PATH = portal_env_candidates()[0]
 # The unit the control daemon starts for portal_viewer_open
 # (azazel_edge_control.daemon.PORTAL_VIEWER_SERVICE). Its status is read under
@@ -4429,10 +4432,25 @@ def _status_api_json(
 ) -> Optional[Dict[str, Any]]:
     """Call first-minute Status API and return normalized JSON payload if available.
 
-    No server for port 8082 ships in this repository (Edge#477); on a device
-    without one every call fails and the caller reports the failure. An HTTP
-    error status (``--fail``) is a failure too, never an empty "success".
+    No server for port 8082 ships in this repository (Edge#477). Returns:
+
+    * ``None`` when nothing answered: connection refused, timeout, or any
+      other curl transport failure (only then may a caller fall back, e.g.
+      ``disconnect`` to the daemon's ``uplink_disconnect``);
+    * a failure ``{"ok": False, "status_api_error": True, ...}`` when port
+      8082 answered but not with a usable reply: an HTTP error status
+      (``curl --fail``, exit 22), an empty reply where one is required, or
+      a body that is not a JSON object. That is the status API's answer and
+      is reported as a failure, never as success and never as "not there";
+    * the normalized JSON payload otherwise.
     """
+    def _answered_failure(reason: str) -> Dict[str, Any]:
+        failure: Dict[str, Any] = {"ok": False, "status_api_error": True,
+                                   "error": f"Status API on {host}:8082 {reason}"}
+        if action:
+            failure["action"] = action
+        return failure
+
     try:
         cmd: List[str] = ["curl", "-s", "--fail", "--max-time", str(max(1, int(timeout_sec)))]
         if method.upper() == "POST":
@@ -4440,13 +4458,15 @@ def _status_api_json(
         cmd.append(f"http://{host}:8082{path}")
 
         result = subprocess.run(cmd, capture_output=True, timeout=timeout_sec)
+        if result.returncode == STATUS_API_CURL_HTTP_ERROR:
+            return _answered_failure("answered with an HTTP error status")
         if result.returncode != 0:
             return None
 
-        response_text = result.stdout.decode("utf-8").strip()
+        response_text = result.stdout.decode("utf-8", errors="replace").strip()
         if not response_text:
             if not empty_ok:
-                return None
+                return _answered_failure("answered with an empty reply")
             payload: Dict[str, Any] = {"ok": True}
             if action:
                 payload["action"] = action
@@ -4454,9 +4474,12 @@ def _status_api_json(
                 payload["message"] = empty_message
             return payload
 
-        payload = json.loads(response_text)
+        try:
+            payload = json.loads(response_text)
+        except ValueError:
+            return _answered_failure("answered with a reply that is not JSON")
         if not isinstance(payload, dict):
-            return None
+            return _answered_failure("answered with a reply that is not a JSON object")
         return _normalize_status_payload(payload, action=action)
     except Exception:
         return None
@@ -4513,7 +4536,9 @@ def execute_disconnect_action() -> Dict[str, Any]:
         if payload is not None:
             return payload
 
-        # Fallback when the status API does not answer: the control daemon's
+        # A refusal from port 8082 (HTTP error, unusable reply) was returned
+        # above as a failure. Only when nothing answers there (connection
+        # refused, timeout) does it fall back (Edge#477) to the control daemon's
         # fixed uplink_disconnect operation (Edge#471 stage 1). It takes no
         # arguments; the daemon uses its own configured uplink. The Web UI
         # runs as a non-root account and no longer runs `ip` itself.
@@ -4568,7 +4593,7 @@ def execute_release_action() -> Dict[str, Any]:
 
             while time.time() < deadline:
                 state_payload = _read_status_state(host)
-                if not state_payload:
+                if not state_payload or state_payload.get("status_api_error"):
                     time.sleep(0.25)
                     continue
 
@@ -5394,6 +5419,10 @@ def api_taxii_push():
     ), (200 if result.ok else 502)
 
 
+# Reconnect delay sent with the state stream's stream_error event (Edge#477).
+STATE_STREAM_RETRY_MS = 15000
+
+
 @app.route("/api/state/stream")
 @require_token(ok_payload=None)
 def api_state_stream():
@@ -5421,8 +5450,10 @@ def api_state_stream():
             # The daemon's stream ended (refused as "busy", closed, or the
             # socket failed): say so instead of ending silently (Edge#477),
             # so the client can tell the end apart from "no change".
+            # ``retry`` slows an EventSource's automatic reconnect, so a
+            # "busy" daemon is not hit again every few seconds by each client.
             reason = stream_errors[-1] if stream_errors else "stream_closed"
-            yield "event: error\ndata: " + json.dumps(
+            yield f"retry: {STATE_STREAM_RETRY_MS}\nevent: stream_error\ndata: " + json.dumps(
                 {"ok": False, "source": "state_stream", "error": reason}
             ) + "\n\n"
             return

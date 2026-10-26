@@ -1057,7 +1057,7 @@ def ensure_portal_viewer_ready(timeout_sec: float = 15.0, start_url: str | None 
         )
         if start.returncode != 0:
             err = (start.stderr or start.stdout or "").strip() or "systemctl start failed"
-            if "not found" in err.lower() or "not-found" in err.lower():
+            if PORTAL_VIEWER_SERVICE in err and ("not found" in err.lower() or "not-found" in err.lower()):
                 # Azazel-Edge does not ship this unit (Edge#477); say so
                 # rather than only relaying systemctl's message.
                 err = f"{PORTAL_VIEWER_SERVICE} is not installed on this device (not shipped by Azazel-Edge): {err}"

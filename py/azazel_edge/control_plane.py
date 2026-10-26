@@ -17,8 +17,15 @@ def _socket_request(
     timeout_sec: float = 1.0,
     socket_path: Path = CONTROL_SOCKET,
 ) -> Dict[str, Any]:
+    """One request on control.sock.
+
+    A reply from the daemon is returned as it is. When no reply arrived (no
+    socket, connect failed, the connection broke or timed out, or it closed
+    before a reply) the result carries ``"transport_error": True`` so callers
+    can tell "the daemon said no" from "the daemon was not reached" (Edge#477).
+    """
     if not socket_path.exists():
-        return {"ok": False, "error": f"control socket not found: {socket_path}"}
+        return {"ok": False, "error": f"control socket not found: {socket_path}", "transport_error": True}
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(timeout_sec)
@@ -33,14 +40,18 @@ def _socket_request(
             if b"\n" in chunk:
                 break
         sock.close()
-        if not chunks:
-            return {"ok": False, "error": "empty response"}
-        text = b"".join(chunks).decode("utf-8").strip()
-        if not text:
-            return {"ok": False, "error": "empty response"}
-        return json.loads(text)
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": str(exc), "transport_error": True}
+    text = b"".join(chunks).decode("utf-8", errors="replace").strip()
+    if not text:
+        return {"ok": False, "error": "empty response", "transport_error": True}
+    try:
+        reply = json.loads(text)
+    except ValueError as exc:
+        return {"ok": False, "error": f"invalid response: {exc}"}
+    if not isinstance(reply, dict):
+        return {"ok": False, "error": "invalid response: not an object"}
+    return reply
 
 
 def send_action(
@@ -191,21 +202,44 @@ def send_action_with_fallback(
     logger: Any = None,
     fallback_cmd_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    """Send ``action`` to the control daemon.
+
+    Whatever the daemon answers is returned as it is, also a refusal
+    (``forbidden``, ``busy``, a rate limit, an unknown action, a failed
+    script, ``not_implemented``): a refusal is never turned into success.
+
+    Only when the daemon was not reached (``transport_error``) is the legacy
+    command file ``ui_command.json`` written. Nothing in Azazel-Edge reads that
+    file, so the result stays ``ok: False`` with ``undelivered: True`` and the
+    path; it is not reported as done (Edge#477; before, it was ``ok: True``).
+    """
     resp = send_action(action, params=params)
-    if resp.get("ok"):
-        return resp
-    if resp.get("not_implemented") or resp.get("error") == "not_implemented":
-        # The daemon answered that it does not carry this action out: a
-        # command file would only hide that (Edge#477). Return the refusal.
+    if resp.get("ok") or not resp.get("transport_error"):
         return resp
     fallback = write_command_file_fallback(action, logger=logger, explicit_path=fallback_cmd_path)
     if fallback is None:
         return resp
     return {
-        "ok": True,
+        "ok": False,
         "action": action,
+        "undelivered": True,
         "fallback": "command_file",
         "path": str(fallback),
-        "error": resp.get("error"),
+        "error": (f"control daemon not reached ({resp.get('error')}); the request was written to "
+                  f"{fallback}, which nothing in Azazel-Edge reads: not delivered"),
         "ts": time.time(),
     }
+
+
+def describe_action_failure(result: Any, label: str) -> str:
+    """One line for a CLI saying why ``label`` was not done (Edge#477).
+
+    ``not_implemented`` and an undelivered command file are named as such, so
+    neither reads like an ordinary success or a vague failure."""
+    if not isinstance(result, dict):
+        return f"• action failed: {label} (unexpected response)"
+    if result.get("not_implemented") or result.get("error") == "not_implemented":
+        return f"• action not implemented: {label} (nothing was done)"
+    if result.get("undelivered"):
+        return f"• action not delivered: {label} (control daemon not reached)"
+    return f"• action failed: {label} ({result.get('error', 'unknown error')})"
