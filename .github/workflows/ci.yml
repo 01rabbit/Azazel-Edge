@@ -68,6 +68,39 @@ jobs:
           cd rust/azazel-edge-core
           cargo test
 
+  suricata-rules:
+    # The packaged Suricata (Debian trixie, 7.0.x) must load every active rule
+    # in security/suricata/azazel-lite.rules. A rule it rejects is dropped
+    # silently at normal start-up, so `suricata -T` (rc=0) is the gate, and a
+    # scapy-built pcap must make each active rule fire. A container run is
+    # not evidence from the real device.
+    name: Suricata rules (debian:trixie)
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Suricata and test tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends suricata python3-pytest python3-scapy
+          suricata -V
+
+      - name: suricata -T with a minimal yaml
+        run: |
+          home_net="$(sed -n 's/.*vars\.address-groups\.HOME_NET="\(\[[^]]*\]\)".*/\1/p' systemd/azazel-edge-suricata.service)"
+          test -n "$home_net"
+          printf '%%YAML 1.1\n---\nvars:\n  address-groups:\n    HOME_NET: "%s"\n    EXTERNAL_NET: "!$HOME_NET"\nclassification-file: /etc/suricata/classification.config\n' "$home_net" > /tmp/minimal.yaml
+          mkdir -p /tmp/suricata-t
+          suricata -T -c /tmp/minimal.yaml -S security/suricata/azazel-lite.rules -l /tmp/suricata-t
+
+      - name: Rule contract and pcap replay
+        # Here the Suricata half must run, never skip.
+        run: |
+          python3 -m pytest -q -rs -p no:cacheprovider tests/test_suricata_rules_v1.py | tee suricata-rules.log
+          grep -Eq "^[0-9]+ passed" suricata-rules.log
+          ! grep -Eq "skipped|failed|error" suricata-rules.log
+
   service-objectives:
     # Program plan §8 rows owned by Edge (Edge#414): SO-03, SO-04, SO-07
     # (process-kill). SO-02 needs a lab and runs in service-objectives-lab,
