@@ -27,7 +27,7 @@ Refs #408（R0）、#372（Pi クラスの HIL）、#471（権限の分離）、
   書いてあり、今回の実機で確かめる対象です。
 
 置き換える値: `<pi-user>` は SD カードを書くときに作ったログインアカウント、
-`<WAN_IF>` は上流の IF（USB Ethernet か USB Wi-Fi）、`<WAN-ADDR>` は上流で
+`<CC>` は 1.3 で決めた Wi-Fi の国コード、`<WAN_IF>` は上流の IF（USB Ethernet か USB Wi-Fi）、`<WAN-ADDR>` は上流で
 得たアドレス（`ip -4 -br addr show <WAN_IF>`）、`<hostname>` は機器のホスト名。
 LAN のアドレス `172.16.0.254` と LAN `172.16.0.0/24` は
 `installer/internal/install_internal_network.sh` で固定です。
@@ -70,10 +70,10 @@ LAN のアドレス `172.16.0.254` と LAN `172.16.0.0/24` は
 | 値 | どこで使う | 決めること |
 | --- | --- | --- |
 | `WIFI_COUNTRY` | `install_internal_network.sh` | ISO 3166-1 の 2 文字（例 `JP`）。既に設定済み（`sudo raspi-config nonint get_wifi_country` が `00` 以外の国コードを出す）でなければ、Raspberry Pi OS では必須。どちらも無いと installer は何も変えずに止まる。 |
-| `AP_SSID` | `install_internal_network.sh` | 内部 AP の SSID（1〜32 文字、既定 `Azazel-Edge-Internal`）。**再実行のたびに同じ値を渡す**（渡さないと既定値に戻る）。 |
+| `AP_SSID` | `install_internal_network.sh` | 内部 AP の SSID（1〜32 文字、既定 `Azazel-Edge-Internal`）。**再実行のたびに同じ値を渡す**（渡さないと既定値に戻る）。下のコマンドは二重引用符の `script -c` の中で単一引用符で囲むので、`'`・`"`・`$`・バックスラッシュを含む SSID は別の引用が要る（または簡単な SSID にする）。 |
 | `AP_PSK` | `install_internal_network.sh` | 指定しない。ランダムなパスフレーズが作られ、root だけが読める（0600）`/etc/azazel-edge/internal-ap.psk` に保存される。`ChangeMe1234` は拒否される。 |
 | `WAN_IF` | `install_internal_network.sh` | USB の上流 IF。既定経路が既にそこを通っていれば省略できる。既定経路が `eth0`・`wlan0`・`br0` なら installer は止まる。 |
-| `SKIP_LUKS` | `install_all.sh` と security stack | `0`（既定）: 暗号化した秘密の保管領域（`/var/lib/azazel-secrets.img`、mapper `azazel-secrets`）を作り、パスフレーズを端末で入力する。`1`: 暗号化領域を作らない。実行前に決める。パスフレーズは installer が保存しない。 |
+| `SKIP_LUKS` | `install_all.sh` と security stack | `0`（既定）: 暗号化した秘密の保管領域（`/var/lib/azazel-secrets.img`、mapper `azazel-secrets`）を作り、パスフレーズを端末で入力する。`1`: 暗号化領域を作らない。実行前に決める。パスフレーズは installer が保存しない。**パスフレーズを失うと領域は二度と開けず、中身は失われる**（回復用の鍵は無い）。現地の運用手順どおり、機器とは別に保管する。 |
 | `ENABLE_MATTERMOST` | `install_ai_runtime.sh` | 初回の `install_all.sh` では `0` を推奨し、Mattermost は後で単独で入れる（2.8）。amd64 だけのイメージが Pi 5 で動くかは分かっておらず、そこで失敗すると `install_all.sh` が selftest の前に止まるため。 |
 | `AZAZEL_UP_IF` | `/etc/default/azazel-edge-security` | 切断操作で使う上流 IF。既定は `wlan0` で、これは内部 AP なので拒否される。3.4（WIFI-09）で設定する。 |
 | `ALLOW_EXTERNAL_SSH` | `install_internal_network.sh` | `false` のまま。sshd は `172.16.0.254` だけで待ち受ける。 |
@@ -163,7 +163,7 @@ ls -l /dev/spidev0.0
 ```bash
 tmux new -s install
 cd ~/Azazel-Edge
-script -c "sudo WIFI_COUNTRY=JP AP_SSID='<your SSID>' WAN_IF=<WAN_IF> ENABLE_MATTERMOST=0 installer/internal/install_all.sh" ~/install-first-run.log
+script -c "sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> ENABLE_MATTERMOST=0 installer/internal/install_all.sh" ~/install-first-run.log
 ```
 
 `SKIP_LUKS=1` は 1.3 でそう決めたときだけ付けます。開始と終了の時刻を記録
@@ -174,8 +174,8 @@ script -c "sudo WIFI_COUNTRY=JP AP_SSID='<your SSID>' WAN_IF=<WAN_IF> ENABLE_MAT
 | 段階 | 期待する行 | 止まったとき |
 | --- | --- | --- |
 | 開始 | `[all/1] Azazel-Edge unified installer` と `ENABLE_*` の値 | `ENABLE_RUST_CORE must be 0 or 1`: 打ち間違い。`ERROR: the encrypted secrets volume … needs a passphrase typed on a terminal`: 標準入力が端末でない。上の `script -c` の形で実行する。 |
-| 内部ネットワーク | `[all/2] Apply internal network baseline`、`Wi-Fi country: …`、`Uplink (WAN) interface: <WAN_IF>`、`===== verify =====`、`Internal AP + DHCP baseline applied.`、`AP SSID: …`、`AP passphrase: a new random one, saved root-only in /etc/azazel-edge/internal-ap.psk …`、`SSH listen scope: 172.16.0.254 only.`、続いて `[avahi] allow-interfaces=br0 in /etc/avahi/avahi-daemon.conf (…)` | `ERROR: no Wi-Fi country is configured, …` → `WIFI_COUNTRY` を渡す。`ERROR: the uplink is <IF>, which becomes part of the internal LAN …` か `WAN interface not found` → 2.2。`ERROR: the internal AP (lan-wlan0-ap on wlan0) did not come up` → `rfkill list`、`nmcli radio`、`journalctl -u NetworkManager`。`ERROR: sshd rejects the new configuration` → `sudo sshd -t`（元の設定のまま）。 |
-| アプリ | `[all/3] Install Azazel-Edge app stack`、`[1/16] Install OS dependencies` … `[1/16] Enable SPI for the EPD (Raspberry Pi OS)`（`NOTICE: SPI is enabled … reboot before the EPD can draw.` が出ることがある）、`[8/16] Build Python runtime (venv + pip)`、`[11.8/16] Build and install the Rust defense core …`（最も長い）、`[12/16] Enable services` と、制御デーモン・AI エージェント・Web UI・core の `… is active`、`[13/16]` … `[16/16]`（`SKIP_LUKS=1` でなければここで LUKS のパスフレーズを入力）、`[ntfy] Service healthy on http://127.0.0.1:8081 (loopback only, anonymous access denied)`、`[https] nginx TLS reverse proxy enabled on :443 (this device and … only)`、`[17/17] Verify runtime sync`、`Installed Azazel-Edge stack …` | `ERROR: <unit> did not stay active …` → `journalctl -u <unit> -b`。終了コード 78 → `/opt/azazel-edge/config` の SOC policy／ATT&CK の YAML が不正。`cargo build` の失敗はここで止まる（fail-closed）。ntfy の `ERROR:` 行は失敗した確認（健全性、匿名アクセス、トークン）を示す。 |
+| 内部ネットワーク | `[all/2] Apply internal network baseline`、続いて（この順に）`WIFI_COUNTRY` を渡さないときは `Wi-Fi country: … (already configured)`、`Uplink (WAN) interface: <WAN_IF>`、パッケージの導入、`WIFI_COUNTRY` を渡したときは `Wi-Fi country: <CC>`、`===== verify =====` とその一覧、`Internal AP + DHCP baseline applied.`、`AP SSID: …`、`AP passphrase: a new random one, saved root-only in /etc/azazel-edge/internal-ap.psk …`、`SSH listen scope: 172.16.0.254 only.`、`From internal host, verify: …`。その後 `[avahi] allow-interfaces=br0 in /etc/avahi/avahi-daemon.conf (…)`（新規導入では `changed`） | `ERROR: no Wi-Fi country is configured, …` → `WIFI_COUNTRY` を渡す。`ERROR: the uplink is <IF>, which becomes part of the internal LAN …` か `ERROR: WAN interface not found …` → 2.2。`ERROR: the internal AP (lan-wlan0-ap on wlan0) did not come up` → `rfkill list`、`nmcli radio`、`journalctl -u NetworkManager`。`ERROR: sshd rejects the new configuration` → `sudo sshd -t`（元の設定のまま）。 |
+| アプリ | `[all/3] Install Azazel-Edge app stack`、`[1/16] Install OS dependencies`、`[1/16] Enable SPI for the EPD (Raspberry Pi OS)`（`NOTICE: SPI is enabled … reboot before the EPD can draw.` が出ることがある）、`[2/16] Create base directories` … `[8/16] Build Python runtime (venv + pip)` … `[11.8/16] Build and install the Rust defense core …`（最も長い）、`[12/16] Enable services` と、制御デーモン・AI エージェント・Web UI・core の順の `… is active`、`[13/16] Install local CA and TLS cert (optional)`、`[14/16] Install HTTPS reverse proxy (optional)`（最後に `[https] nginx TLS reverse proxy enabled on :443 (this device and … only)`）、`[15/16] Install ntfy (optional)`（最後に `[ntfy] Service healthy on http://127.0.0.1:8081 (loopback only, anonymous access denied)`）、`[16/16] Install security stack (OpenCanary + Suricata, optional)`（`SKIP_LUKS=1` でなければここで LUKS のパスフレーズを入力）、`[17/17] Verify runtime sync`、`Installed Azazel-Edge stack …` | `ERROR: <unit> did not stay active …` → `journalctl -u <unit> -b`。終了コード 78 → `/opt/azazel-edge/config` の SOC policy／ATT&CK の YAML が不正。`cargo build` の失敗はここで止まる（fail-closed）。ntfy の `ERROR:` 行は失敗した確認（健全性、匿名アクセス、トークン）を示す。 |
 | AI runtime | `[all/4] Install AI runtime stack`、`[ai/4] Start Ollama and provision models`（モデルのダウンロード）、`[DONE] AI runtime stack installed.` | `docker exec … ollama pull` の失敗 → 上流／DNS。同じ値で `install_all.sh` を再実行する。 |
 | 任意の部分 | 既定では `[all/5]` … `[all/7]` が `Skip …` | – |
 | selftest | `[all/8] Run selftest`、続いて `Unified installation completed.` | `ERROR: the selftest found a critical failure …` → `/var/log/azazel-edge/selftest_latest.json` と 3.10。 |
@@ -201,7 +201,11 @@ LAN 側のクライアントで、`http://172.16.0.254/.well-known/azazel-edge-l
 からローカル CA を取得して信頼済みの CA として入れ、`https://172.16.0.254/`
 を開きます。初回は `?token=` を付け、トークンは機器で
 `sudo cat /etc/azazel-edge/web_token.txt` で読みます（メモや issue に写さない）。
-手順は [OPERATOR_GUIDE_JA.md](OPERATOR_GUIDE_JA.md) のとおりです。
+手順は [OPERATOR_GUIDE_JA.md](OPERATOR_GUIDE_JA.md) のとおりです。アドレスに入れたトークンは
+nginx と gunicorn のアクセスログ、ブラウザの履歴に残ります。信頼できる LAN 側の
+クライアントで 1 回だけ行い、`/touch` では決して使わず
+（[TOUCH_CONSOLE_KIOSK.md](TOUCH_CONSOLE_KIOSK.md)）、アドレスを人に渡した場合は
+トークンを替えてください。
 
 ### 2.8 Mattermost（任意。初回の確認が通った後）
 
@@ -234,6 +238,21 @@ for u in azazel-edge-control-daemon azazel-edge-core azazel-edge-web azazel-edge
 done
 # SVC-05
 systemctl show -p NRestarts azazel-edge-control-daemon azazel-edge-core azazel-edge-web azazel-edge-ai-agent
+# SVC-09: enforcement stays off (the unit's defaults; the environment file must not change them)
+systemctl show -p Environment azazel-edge-core
+sudo grep -E '^AZAZEL_DEFENSE_' /etc/default/azazel-edge-security
+sudo wc -l /var/log/azazel-edge/ai/core-decision-audit.jsonl /var/log/azazel-edge/ai/p0-alert-queue.jsonl
+sudo azazel-edge-dummy-eve emit --scenario ssh_bruteforce --count 20
+# a few seconds later, the same wc -l again
+# SVC-10: terminal 1, the Web UI's ntfy bridge (the token goes on stdin)
+sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -skN -H @- --max-time 30 https://127.0.0.1/api/events/stream
+# SVC-10: terminal 2, publish a test message with the Edge ntfy token
+sudo sed 's/^/Authorization: Bearer /' /etc/azazel-edge/ntfy.token | curl -s -o /dev/null -w '%{http_code}\n' -H @- -d 'first-run test' http://127.0.0.1:8081/azg-info-status
+# SVC-11: monitoring state as the Web UI reports it
+sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- https://127.0.0.1/api/state | python3 -c 'import json, sys; print(json.load(sys.stdin)["monitoring"])'
+# SVC-12 (optional): the NetFlow sensor unit
+cd ~/Azazel-Edge && sudo ENABLE_NETFLOW=1 ENABLE_SERVICES=1 installer/internal/install_sensors.sh
+systemctl show -p ActiveState -p Result -p User azazel-edge-netflow-receiver
 ```
 
 | ID | 項目 | コマンド | 期待する結果 | Result | PR / issue |
@@ -246,6 +265,10 @@ systemctl show -p NRestarts azazel-edge-control-daemon azazel-edge-core azazel-e
 | SVC-06 | アカウント | `getent passwd azazel-web azazel-agent azazel-sensor` と `id azazel-web` | `azazel-web` と `azazel-agent` が nologin のシェルで存在、`azazel-web` は `azazel-control` に所属、`azazel-sensor` は SNMP/NetFlow を有効にしたときだけ | | #475, #476, #480 |
 | SVC-07 | 権限の無いユーザーの TUI | `<pi-user>`（`azazel-control` に入っていない）で `azazel-edge-tui --curses` | トレースバックが出ない。View に `(control.sock: permission denied)`、evidence に `azazel-control` グループの案内が出て、終了すると終了コード 0。`sudo azazel-edge-tui --curses` では実際の状態が出る | | #490, #479 |
 | SVC-08 | `azazel-web` で動く Web UI | ダッシュボード（2.7）: 状態、Wi-Fi のスキャン、SoT の編集、M.I.O. への質問（`/api/ai/ask`） | それぞれ応答する。失敗は失敗として表示され、成功に見えない | | #475, #476, #479 |
+| SVC-09 | 実際の core からの P0 リレー | 上のコマンド（`/var/log/suricata/eve.json` に試験用の alert を入れる。結果に時刻を書く） | unit に `AZAZEL_DEFENSE_ENFORCE=false` と `AZAZEL_DEFENSE_DRY_RUN=true`、環境ファイルからは何も出ない。`core-decision-audit.jsonl` が増え、`p0-alert-queue.jsonl` に P0 の行が足される。機器でどのシナリオが P0（enforcement を伴う、または SOC critical）の判定になるかは **（要確認）**。`port_scan` も試す | | #476 |
+| SVC-10 | トークンファイルを使った ntfy の SSE | 上のコマンド | 端末 2 が `200`。端末 1 に `first-run test` を含むイベントが出る | | #475, #485 |
+| SVC-11 | OpenCanary/Suricata の表示 | 上のコマンド | `opencanary`・`suricata`・`ntfy` が `ON`、`container_check` が `not_checked`（Web UI は Docker に問い合わせない） | | #475 |
+| SVC-12 | SNMP/NetFlow（任意） | 上のコマンド（既定では入らない: `ENABLE_SNMP`/`ENABLE_NETFLOW` は `0`、`install_sensors.sh` は `ENABLE_SERVICES=1` のときだけ unit を有効にする） | `User=azazel-sensor`。`ActiveState=inactive`、`Result=success`: モジュールにエントリポイントが無くすぐに終了コード 0 で終わるので、**センサーは動いていない**（5 章） | | #480, #483 |
 
 ### 3.2 ソケット・ディレクトリ・秘密の権限（#471 段階 1・2）
 
@@ -294,7 +317,7 @@ EOF
 | AP-05 | keyfile | 上のコマンド | `lan-wlan0-ap` の行のファイルが `600 root:root`（`sudo stat`）、`psk-flags` が `0` で始まる（system-owned） | | #486 |
 | AP-06 | PSK が表示されていない | 上のスクリプト | `in install log: False` と `in journal: False` | | #486 |
 | AP-07 | クライアントが参加できる | LAN 側のノート PC で `AP_SSID` に参加する。パスフレーズはコンソールで `sudo cat /etc/azazel-edge/internal-ap.psk` で読む | WPA2 で接続、DHCP で `172.16.0.101`〜`172.16.0.200` のアドレス、`https://172.16.0.254/` に届く | | #486 |
-| AP-08 | 以前の既定値を拒否 | `sudo AP_PSK=ChangeMe1234 WIFI_COUNTRY=JP AP_SSID='<your SSID>' installer/internal/install_internal_network.sh` | 何も変える前に `ERROR: the AP passphrase is the old built-in default; …` で止まる（AP は上がったまま） | | #486 |
+| AP-08 | 以前の既定値を拒否 | `sudo AP_PSK=ChangeMe1234 WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' installer/internal/install_internal_network.sh` | 何も変える前に `ERROR: the AP passphrase is the old built-in default; …` で止まる（AP は上がったまま） | | #486 |
 
 ### 3.4 上流の Wi-Fi（USB Wi-Fi アダプタ）
 
@@ -339,7 +362,7 @@ nmcli -t -f NAME,UUID con show
 | WIFI-06 | 保存済み、誤ったパスフレーズ | 誤った値で接続 | 失敗する。その後、保存済みのプロファイルで正しい値のまま接続できる。pending のプロファイルが残らない | | #478 |
 | WIFI-07 | 802.1X を拒否 | 802.1X の SSID に接続 | `802.1X (WPA-Enterprise) networks are not supported here; set the profile up with NetworkManager directly` で拒否。プロファイルは増えない | | #478 |
 | WIFI-08 | USB Wi-Fi が無い | USB Wi-Fi を外してスキャン | `No wireless interface for the uplink: …`。AP は落ちない。制御デーモンが `wifi sensor: not scanning: …` を 1 回ログに出す | | #486 |
-| WIFI-09 | 切断で AP を落とさない | `AZAZEL_UP_IF` 未設定で、`sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt` の出力を `curl -sk -H @- -X POST https://127.0.0.1/api/action/disconnect` に渡す | HTTP 500 で `uplink_interface_serves_internal_lan:wlan0`。AP は落ちない。続けて（任意。上流が切れるので LAN 側かコンソールから）`/etc/default/azazel-edge-security` に `AZAZEL_UP_IF=<WAN_IF>` を書き、`sudo systemctl restart azazel-edge-control-daemon` の後に繰り返す: `<WAN_IF>` が落ちる。`sudo ip link set <WAN_IF> up` で戻す | | #475, #486 |
+| WIFI-09 | 切断で AP を落とさない | `AZAZEL_UP_IF` 未設定で、`sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt` の出力を `curl -sk -H @- -w '\n%{http_code}\n' -X POST https://127.0.0.1/api/action/disconnect` に渡す | 本文に `uplink_interface_serves_internal_lan:wlan0`、続いて `500`。AP は落ちない。続けて（任意。上流が切れるので LAN 側かコンソールから）`/etc/default/azazel-edge-security` に `AZAZEL_UP_IF=<WAN_IF>` を書き、`sudo systemctl restart azazel-edge-control-daemon` の後に繰り返す: `<WAN_IF>` が落ちる。`sudo ip link set <WAN_IF> up` で戻す | | #475, #486 |
 | WIFI-10 | 日本語のロケール（任意） | システムのロケールを `ja_JP.UTF-8` にして WIFI-01 を繰り返す | WIFI-01 と同じ | | #480 |
 
 トークンは curl の標準入力（`-H @-`）で渡し、コマンド行には載せません。
@@ -364,9 +387,9 @@ systemctl list-timers azazel-edge-epd-refresh.timer
 | --- | --- | --- | --- | --- | --- |
 | EPD-01 | SPI のデバイス | `ls -l /dev/spidev0.0` | ある（2.6 の再起動の後） | | #486 |
 | EPD-02 | venv から GPIO のモジュールが見える | 上のコマンド | `ok` | | #486 |
-| EPD-03 | ピンファクトリ | 上のコマンド | `LGPIOFactory` **（要確認）** | | #486 |
+| EPD-03 | ピンファクトリ | 上のコマンド | クラス名を記録する。期待は `LGPIOFactory`（Pi 5 の RP1 は lgpio で動かす）。ほかのファクトリやエラーは発見事項。gpiozero の内部関数を使うので、確かめ方として正しいかは **（要確認）** | | #486 |
 | EPD-04 | 描画 | 上のコマンド | パネルが描き直される。`Result=success`。タイマーに次回の実行がある | | #486 |
-| EPD-05 | 失敗が見え、タイマーは続く | 電源を切って EPD を外し、起動して EPD-04 を繰り返す | `Result=exit-code`（または描画のタイムアウト）で、journal に `azazel-edge-epd-refresh: ERROR: …`。`systemctl list-timers` に次回の実行が残る。パネルが無いときの失敗の仕方は **（要確認）**。終わったら電源を切って付け直す | | #486 |
+| EPD-05 | 失敗が見え、タイマーは続く | 電源を切って EPD を外し、起動して EPD-04 を繰り返す | `Result=exit-code`。描画が失敗したときも、45 秒で打ち切ったときも refresh は 1 で終わり、journal にどちらかが出る（`azazel-edge-epd-refresh: ERROR: EPD renderer exited with status …` か `… timed out after 45 s …`）。`Result=timeout` なら unit 自体の 60 秒の上限に達した（発見事項）。`systemctl list-timers` に次回の実行が残る。パネルが無いときにどちらになるかは **（要確認）**。終わったら電源を切って付け直す | | #486 |
 | EPD-06 | Waveshare の機種判定 | `grep -c Raspberry /proc/cpuinfo` | `1` 以上（Waveshare の `epdconfig` は `/proc/cpuinfo` で Pi を判定する） | | #486 |
 
 ### 3.6 SSH
@@ -401,7 +424,7 @@ sudo ss -Hltunp
 （nginx。2.8 の後だけ）、`127.0.0.1:8081`（ntfy）、`127.0.0.1:8084`（Web UI）、
 `127.0.0.1:18065`（Mattermost。2.8 の後）、`127.0.0.1:11434`（Ollama）、
 `127.0.0.1:18080` と `127.0.0.1:12222`（OpenCanary）、`172.16.0.254:22`
-（sshd）、`br0` の dnsmasq（53、67）、5353/udp の avahi。ほかに `0.0.0.0`・
+（sshd）、`br0` の dnsmasq（53、67）、5353/udp とランダムな高い番号の UDP（ユニキャストの問い合わせ用）の avahi。ほかに `0.0.0.0`・
 `*`・`[::]` で待ち受けているものがあれば発見事項です。ポートとプロセスを
 記録します（アドレスは書かない）。
 
@@ -475,14 +498,19 @@ sudo ss -Htn state established '( sport = :8084 )'
 | TCH-04 | 消灯からの復帰 | 画面を消灯させ（`swayidle`/`wlopm`）、タッチ | 画面が点く。そのタッチでは操作が始まらない | | #484 |
 | TCH-05 | SSE の負荷 | 上のコマンド | 5 分触らないとストリームの接続が無くなる。CPU % = 差分 ns / 3e11 × 100 を、触らないときと使っているときで記録する | | #484 |
 | TCH-06 | 古い状態の表示 | 制御デーモンを少し止める（`sudo systemctl stop azazel-edge-control-daemon`、その後 start） | 「古い」「未確認」の印で、緑にならない。start の後に戻る | | #484, #479 |
+| TCH-07 | nginx（HTTPS）経由の `/touch` | ローカル CA を信頼した LAN 側のブラウザで `https://172.16.0.254/touch` を開き、2 分を超えて触り続ける | nginx の 120 秒の読み取りタイムアウトを過ぎても毎秒更新が続く（ストリームは毎秒データを送り、アプリは `X-Accel-Buffering: no` を付ける）。使っている間、上部の表示が定期更新に落ちない | | #484 |
 
-### 3.10 selftest と Suricata
+### 3.10 selftest、Suricata、ウォッチドッグ
 
 ```bash
 cd ~/Azazel-Edge
 sudo bin/azazel-edge-selftest; echo "exit=$?"
 sudo cat /var/log/azazel-edge/selftest_latest.json
 sudo suricata -T -c /etc/suricata/suricata.yaml -S /etc/suricata/rules/azazel-lite.rules -l "$(mktemp -d)"; echo "exit=$?"
+# ST-05
+ls -l /dev/watchdog*
+sudo dmesg | grep -i -E 'bcm2835-wdt|watchdog'
+systemctl show -p RuntimeWatchdogUSec
 ```
 
 | ID | 項目 | コマンド | 期待する結果 | Result | PR / issue |
@@ -491,6 +519,7 @@ sudo suricata -T -c /etc/suricata/suricata.yaml -S /etc/suricata/rules/azazel-li
 | ST-02 | 既知の警告 | JSON | `"failures": []`。現状で出る警告は `config_checksums_missing`（`/etc/azazel-edge/.config_checksums` を作るものが無い。5 章）と `python_smoke_tests_missing` | | #487 |
 | ST-03 | SD の書き込み試験 | JSON | ext4 のルートで `sd_write_test_skipped:not_on_sd:…` が出ない。`sd_write_speed_low:…` は媒体が遅いときだけ（値を記録する） | | #478, #487 |
 | ST-04 | Suricata のルールが読める | 最後のコマンド | `exit=0`。有効なルールは 13 本（sid 9901211 は無効。Suricata 7 は ARP を照合できない） | | #481 |
+| ST-05 | ハードウェアウォッチドッグ（任意の設定） | 上のコマンド | `/dev/watchdog` があり、カーネルのログに `bcm2835-wdt` が出る（文言は **（要確認）**）。`RuntimeWatchdogUSec=0`（Azazel-Edge は有効にしない）。有効にするのは任意で、[PHYSICAL_SETUP_GUIDE.md](PHYSICAL_SETUP_GUIDE.md) §4 のとおり | | #486 |
 
 ### 3.11 HIL bridge（LAN 側の Mac から）
 
@@ -517,7 +546,7 @@ tools/hil/azazel-hil --target 172.16.0.254 --user <pi-user> full; echo "exit=$?"
 | HIL-03 | インタプリタ | 報告 | `/opt/azazel-edge/venv/bin/python` が理由付きで選ばれている | | #482 |
 | HIL-04 | Ollama | 報告 | `127.0.0.1:11434` 経由で版と 2 つのモデル（`qwen3.5:0.8b`、`qwen3.5:2b`）を計測 | | #482 |
 | HIL-05 | 読み取りだけの観測 | 報告 | `tc` と `nft` が観測できている（`unobserved` でない）。コマンドが無い場合は `failed` ではなく `unobserved` | | #482, #490 |
-| HIL-06 | 再起動（任意。保守時間に） | `--session <id> run --allow-service-restart --service azazel-edge-core` | 再起動が記録され、15 秒以内に `active` | | #482 |
+| HIL-06 | 再起動（任意。保守時間に） | `tools/hil/azazel-hil --target 172.16.0.254 --user <pi-user> --session <id> run --allow-service-restart --service azazel-edge-core`（`<id>` は `full` が表示した session。`<pi-user>` は `systemctl restart` を対話なしの sudo で実行できること） | 再起動が記録され、15 秒以内に `active` | | #482 |
 
 ### 3.12 R0 の計測（#408、#372）
 
@@ -545,27 +574,64 @@ sudo du -sh /var/log/azazel-edge /var/lib/docker
 
 ### 3.13 ホストファイアウォールの試行（#489、draft、任意）
 
-3.1〜3.12 の後に、コンソールか**新しい** LAN 側の SSH からだけ行います。
-#489 はマージされていません。そのブランチを使い、最後に必ず元に戻します。
+**前提: #489 が現在の `main` の上に載せ直されていること。** #489 は以前の
+#486 の上で書かれており、`main` と #485〜#488 を合わせると `install_all.sh`
+が衝突します。そのブランチに現在の `main` が含まれるまで、FW の行はすべて
+`N/A（#489 未 rebase）` です。機器で確かめます:
 
 ```bash
 cd ~/Azazel-Edge
-git fetch origin pull/489/head:try-489
+git fetch origin main pull/489/head:try-489
+git merge-base --is-ancestor origin/main try-489 && echo rebased || echo "not rebased: FW rows are N/A"
+```
+
+そのうえで、3.1〜3.12 の後に、**コンソール**（端末があり、上流側からの SSH
+セッションが無い状態）で実行します:
+
+```bash
 git switch try-489
-sudo WIFI_COUNTRY=JP AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall
-# from a NEW LAN SSH session or the console, within 120 s:
-sudo azazel-host-firewall confirm
+sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall
+# the installer loads the rules on trial and asks:
+#   Host firewall on trial. Type 'yes' within 100 s to keep it (anything else, or nothing, takes it off):
+# before answering, check from the upstream test host (3.7) and from the LAN; then type: yes
 sudo azazel-host-firewall status
+```
+
+installer が尋ねるのは、標準入力が端末で、上流側から入った SSH セッションが
+無いときだけです。`yes` 以外の入力か、100 秒以内に答えが無いと `disable`
+を実行します（状態を消し、`Host firewall not kept.` と出す）。端末が無いときは
+NOTICE を出し、**新しい**接続（コンソールか新しい LAN 側の SSH。開いている
+セッションは確立済みの接続として残る）から `sudo azazel-host-firewall confirm`
+を実行しない限り、helper のタイマーが 120 秒後に規則を外します。
+
+```bash
+# FW-04: on the device, after half the DHCP lease time
+journalctl -u NetworkManager -b --no-pager | grep -i -E 'dhcp4|dhcp6'
+ip -6 addr show dev <WAN_IF>
+# FW-06: automatic rollback, stdin not a terminal so the installer does not ask
+sudo azazel-host-firewall disable
+sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall </dev/null
+# wait 120 s, then
+sudo azazel-host-firewall status
+# FW-09: docker networks and the FORWARD policy docker set
+sudo docker network inspect -f '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' $(sudo docker network ls -q)
+sudo iptables -S FORWARD | head -n 1
 ```
 
 | ID | 項目 | コマンド | 期待する結果 | Result | PR / issue |
 | --- | --- | --- | --- | --- | --- |
-| FW-01 | 試行と確認 | 上のコマンド | `status` が `state=enabled`、`loaded=yes` | | #489 |
+| FW-01 | installer の問いで試行を確定 | 上で `yes` と答える | `status` が `state=enabled`、`loaded=yes`、`remote_access=off` | | #489 |
 | FW-02 | WAN が閉じる | 上流の試験機から 3.7 を繰り返す | 80/443/8065/8081/22 に届かない（タイムアウト）。5353 は応答なし。WAN-09 も届かない | | #489 |
-| FW-03 | LAN は変わらない | WAN-08、AP-07、MM-05 を繰り返す | 前と同じ | | #489 |
-| FW-04 | 上流は使える | `sudo apt-get update`。DHCP の更新（リース時間の半分の後に `journalctl -u NetworkManager`）。上流に IPv6 があれば IPv6 も | 使える。リースが更新される。RA/SLAAC のアドレスが残る | | #489 |
+| FW-03 | LAN は変わらない | WAN-08、AP-07、MM-05 を繰り返す（有線 LAN と内部 AP から、Web UI・SSH・DHCP/DNS・mDNS） | 前と同じ | | #489 |
+| FW-04 | 上流の DHCP と IPv6 | 上のコマンド。IPv6 は上流にある場合だけ | DHCPv4 のリースが更新される。RA/SLAAC（上流が使っていれば DHCPv6 も）のアドレスが残る | | #489 |
 | FW-05 | 起動の順番 | 再起動して `systemctl show -p ActiveEnterTimestampMonotonic azazel-host-firewall NetworkManager`、`systemctl --failed` | `azazel-host-firewall` の時刻の方が小さい（NetworkManager より先に active）。失敗した unit が無い | | #489 |
-| FW-06 | 自動の巻き戻し | `sudo azazel-host-firewall disable` の後、上の installer のコマンド（`--enable-host-firewall`）をもう一度実行して確認しない。120 秒待つ | `status` が `state=rolled-back`。WAN の結果が 3.7 のとおりに戻る | | #489 |
+| FW-06 | 自動の巻き戻し | 上のコマンド（`</dev/null`、または pty の無い SSH で実行） | installer は尋ねずに NOTICE を出す。120 秒後に `status` が `state=rolled-back`、`loaded=no`。WAN の結果が 3.7 のとおりに戻る | | #489 |
+| FW-07 | PMTU | LAN 側のクライアントから（NAT 経由で）と機器自身で、100 MB 以上のファイルを HTTPS でダウンロード | 止まらずに完了する | | #489 |
+| FW-08 | コンテナ | `sudo docker exec azazel-edge-ollama ollama pull qwen3.5:0.8b`（外向き）、MM-05（コンテナからホスト） | ファイアウォールが有効でもどちらも動く | | #489 |
+| FW-09 | Docker のネットワークと FORWARD | 上のコマンド | Docker のネットワークがすべて 172.17.0.0/16〜172.31.0.0/16 にある。FORWARD の方針の行を記録する（Docker は通常 `-P FORWARD DROP` にする） | | #489 |
+| FW-10 | リモートアクセスの対の規則 | installer を `ALLOW_EXTERNAL_SSH=true`（とほかの値）で再実行し、次に付けずに再実行。`sudo DEVICE_HOSTNAME=<hostname> MODE=open installer/internal/set_dev_remote_access.sh`、次に `MODE=close` | `ALLOW_EXTERNAL_SSH=true` か `MODE=open` のとき、上流の試験機から 22/tcp と 5353/udp に届き、8081 は届かないまま。付けない／`MODE=close` で再び閉じる。`set_dev_remote_access.sh` はホスト名を `DEVICE_HOSTNAME`（既定 `Azazel-Edge`）にし、上流のアドレスを表示する。出力は貼らない | | #489 |
+| FW-11 | `nftables.service` の reload | `systemctl is-enabled nftables` が `enabled` のときだけ `sudo systemctl reload nftables`、その後 `sudo nft list tables` | `inet azazel_host` が残る。それ以外は `N/A`: `nftables.service` を起動するとルールセット全体が flush され、NAT の表 `ip azazel_internal` も消えて戻らない（既知、#489） | | #489 |
+| FW-12 | enforcement の表 | `sudo nft list tables` | オーナーが `table inet azazel_edge` を作って enforcement を有効にしていない限り `N/A`（5 章）。有効なら core の isolate/redirect の規則と `inet azazel_host` の両方が残る | | #489, #480 |
 
 元に戻す（最後に必ず）:
 
@@ -573,14 +639,12 @@ sudo azazel-host-firewall status
 sudo azazel-host-firewall disable
 sudo azazel-host-firewall status   # state=off, loaded=no
 git switch main
-sudo WIFI_COUNTRY=JP AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh
+sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh
 sudo nft list tables               # no "inet azazel_host"
 ```
 
 元に戻した後も helper と unit は残りますが、状態が off なので起動時に何も
-読み込みません。#489 のほかの確認項目（docker の FORWARD の方針、リモート
-アクセスの開閉、`nftables.service` の reload、enforcement の表）は PR に
-あり、ここでは任意です。
+読み込みません。
 
 ## 4. 結果の記録と、失敗時に集めるもの
 
@@ -608,7 +672,7 @@ nmcli dev; nmcli -t -f NAME,DEVICE con show --active; rfkill list
 ip -br addr; ip route
 sudo ss -Hltunp
 vcgencmd get_throttled
-dmesg | tail -n 100
+sudo dmesg | tail -n 100
 ```
 
 加えて、導入のログ（`~/install-first-run.log`）と、HIL bridge の場合は Mac の
@@ -627,7 +691,7 @@ dmesg | tail -n 100
 | NetFlow/SNMP のエントリポイント | `azazel_edge.sensors.netflow_receiver` と `snmp_poller` に `__main__` が無く、unit はすぐに終了コード 0 で終わる。 | #483, #488 |
 | ARP 偽装の検知方式 | Suricata 7 は ARP を照合できない。sid 9901211 は無効で、代わりの検知器も無い。 | #481 |
 | Mattermost を既定で有効にするか | `ENABLE_MATTERMOST=1` が既定。イメージは amd64 だけで、16K ページのカーネル上のエミュレーションは未確認（3.8）。 | #485 |
-| ホスト INPUT フィルタの既定 | #489 は既定で無効（選択肢 B）。既定で有効にするかは FW-01〜FW-06 の後に別に判断する。 | #489 |
+| ホスト INPUT フィルタの既定 | #489 は既定で無効（選択肢 B）。既定で有効にするかは FW-01〜FW-12 の後に別に判断する。 | #489 |
 | TLS 証明書の SAN の WAN アドレス | `install_local_ca.sh` は 1.1.1.1 への経路の送信元（`MGMT_IP`、上流側）をサーバ証明書に入れる。Web UI にはもう WAN から届かない。 | #488 |
 | selftest の `.config_checksums` | `/etc/azazel-edge/.config_checksums` を作るものが無く、selftest は常に `config_checksums_missing` を警告する。 | #487 |
 | portal-viewer | `azazel-edge-portal-viewer.service` は制御デーモンが起動するが同梱されていない。viewer のコードはこのリポジトリに無い。 | #479 |

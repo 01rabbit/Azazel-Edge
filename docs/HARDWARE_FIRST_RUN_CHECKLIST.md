@@ -28,7 +28,7 @@ Refs #408 (R0), #372 (Pi-class HIL), #471 (privilege separation), #477
   marked **(to confirm)** and is part of what this run finds out.
 
 Placeholders: `<pi-user>` is the login account created when the SD card was
-written; `<WAN_IF>` the uplink interface (USB Ethernet or USB Wi-Fi);
+written; `<CC>` the Wi-Fi country code decided in 1.3; `<WAN_IF>` the uplink interface (USB Ethernet or USB Wi-Fi);
 `<WAN-ADDR>` the address the uplink got (`ip -4 -br addr show <WAN_IF>`);
 `<hostname>` the device's host name. The LAN address `172.16.0.254` and the
 LAN `172.16.0.0/24` are fixed by `installer/internal/install_internal_network.sh`.
@@ -72,10 +72,10 @@ LAN `172.16.0.0/24` are fixed by `installer/internal/install_internal_network.sh
 | Value | Where | Decision |
 | --- | --- | --- |
 | `WIFI_COUNTRY` | `install_internal_network.sh` | Two-letter ISO 3166-1 code (e.g. `JP`). Required on Raspberry Pi OS unless one is already set (`sudo raspi-config nonint get_wifi_country` prints a code other than `00`); without either the installer stops before changing anything. |
-| `AP_SSID` | `install_internal_network.sh` | SSID of the internal AP (1–32 characters, default `Azazel-Edge-Internal`). **Pass the same value on every re-run**, or the SSID returns to the default. |
+| `AP_SSID` | `install_internal_network.sh` | SSID of the internal AP (1–32 characters, default `Azazel-Edge-Internal`). **Pass the same value on every re-run**, or the SSID returns to the default. The commands below quote it in single quotes inside a double-quoted `script -c` string: an SSID containing `'`, `"`, `$` or a backslash needs other quoting (or choose a plain one). |
 | `AP_PSK` | `install_internal_network.sh` | Leave unset: a random passphrase is generated and saved root-only (0600) in `/etc/azazel-edge/internal-ap.psk`. `ChangeMe1234` is refused. |
 | `WAN_IF` | `install_internal_network.sh` | The USB uplink interface. Optional when the default route already goes through it; the installer stops if the default route is on `eth0`, `wlan0` or `br0`. |
-| `SKIP_LUKS` | `install_all.sh` and the security stack | `0` (default): an encrypted secrets volume (`/var/lib/azazel-secrets.img`, mapper `azazel-secrets`) is created and its passphrase typed on the terminal. `1`: no encrypted volume. Decide before the run; the passphrase is not stored by the installer. |
+| `SKIP_LUKS` | `install_all.sh` and the security stack | `0` (default): an encrypted secrets volume (`/var/lib/azazel-secrets.img`, mapper `azazel-secrets`) is created and its passphrase typed on the terminal. `1`: no encrypted volume. Decide before the run; the passphrase is not stored by the installer. **If the passphrase is lost the volume cannot be opened again and its content is gone** (no recovery key): keep it off the device, as the field team's procedure requires. |
 | `ENABLE_MATTERMOST` | `install_ai_runtime.sh` | Recommended `0` for the first `install_all.sh` run, then Mattermost on its own (2.8): whether the amd64-only image runs on the Pi 5 is unknown, and a failure there would stop `install_all.sh` before its selftest. |
 | `AZAZEL_UP_IF` | `/etc/default/azazel-edge-security` | The uplink interface for the disconnect action; default `wlan0`, which is the internal AP and is refused. Set in 3.4 (WIFI-09). |
 | `ALLOW_EXTERNAL_SSH` | `install_internal_network.sh` | Leave `false`: sshd then listens on `172.16.0.254` only. |
@@ -166,7 +166,7 @@ terminal for the LUKS passphrase (do not pipe stdin):
 ```bash
 tmux new -s install
 cd ~/Azazel-Edge
-script -c "sudo WIFI_COUNTRY=JP AP_SSID='<your SSID>' WAN_IF=<WAN_IF> ENABLE_MATTERMOST=0 installer/internal/install_all.sh" ~/install-first-run.log
+script -c "sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> ENABLE_MATTERMOST=0 installer/internal/install_all.sh" ~/install-first-run.log
 ```
 
 Add `SKIP_LUKS=1` only if 1.3 decided so. Record the start and end time
@@ -177,8 +177,8 @@ Expected output, in order (the step lines are printed by the scripts):
 | Stage | Expected lines | If it stops |
 | --- | --- | --- |
 | Start | `[all/1] Azazel-Edge unified installer` and the `ENABLE_*` values | `ENABLE_RUST_CORE must be 0 or 1`: a typo. `ERROR: the encrypted secrets volume … needs a passphrase typed on a terminal`: stdin is not a terminal; use the `script -c` form above. |
-| Internal network | `[all/2] Apply internal network baseline`, `Wi-Fi country: …`, `Uplink (WAN) interface: <WAN_IF>`, `===== verify =====`, `Internal AP + DHCP baseline applied.`, `AP SSID: …`, `AP passphrase: a new random one, saved root-only in /etc/azazel-edge/internal-ap.psk …`, `SSH listen scope: 172.16.0.254 only.`, then `[avahi] allow-interfaces=br0 in /etc/avahi/avahi-daemon.conf (…)` | `ERROR: no Wi-Fi country is configured, …` → pass `WIFI_COUNTRY`. `ERROR: the uplink is <IF>, which becomes part of the internal LAN …` or `WAN interface not found` → 2.2. `ERROR: the internal AP (lan-wlan0-ap on wlan0) did not come up` → `rfkill list`, `nmcli radio`, `journalctl -u NetworkManager`. `ERROR: sshd rejects the new configuration` → `sudo sshd -t`; the old config stays. |
-| App stack | `[all/3] Install Azazel-Edge app stack`, `[1/16] Install OS dependencies` … `[1/16] Enable SPI for the EPD (Raspberry Pi OS)` (possibly `NOTICE: SPI is enabled … reboot before the EPD can draw.`), `[8/16] Build Python runtime (venv + pip)`, `[11.8/16] Build and install the Rust defense core …` (the longest step), `[12/16] Enable services` with `… is active` for the control daemon, the AI agent, the Web UI and the core, `[13/16]` … `[16/16]` (LUKS passphrase prompt here unless `SKIP_LUKS=1`), `[ntfy] Service healthy on http://127.0.0.1:8081 (loopback only, anonymous access denied)`, `[https] nginx TLS reverse proxy enabled on :443 (this device and … only)`, `[17/17] Verify runtime sync`, `Installed Azazel-Edge stack …` | `ERROR: <unit> did not stay active …` → `journalctl -u <unit> -b`. Exit status 78 → the SOC policy / ATT&CK YAML under `/opt/azazel-edge/config` is invalid. A `cargo build` failure stops here (fail-closed). An ntfy `ERROR:` line names the failed check (health, anonymous access, token). |
+| Internal network | `[all/2] Apply internal network baseline`, then (in this order) `Wi-Fi country: … (already configured)` when `WIFI_COUNTRY` is not given, `Uplink (WAN) interface: <WAN_IF>`, the package installation, `Wi-Fi country: <CC>` when `WIFI_COUNTRY` is given, `===== verify =====` with its listing, `Internal AP + DHCP baseline applied.`, `AP SSID: …`, `AP passphrase: a new random one, saved root-only in /etc/azazel-edge/internal-ap.psk …`, `SSH listen scope: 172.16.0.254 only.`, `From internal host, verify: …`; then `[avahi] allow-interfaces=br0 in /etc/avahi/avahi-daemon.conf (…)` (`changed` on a fresh install) | `ERROR: no Wi-Fi country is configured, …` → pass `WIFI_COUNTRY`. `ERROR: the uplink is <IF>, which becomes part of the internal LAN …` or `ERROR: WAN interface not found …` → 2.2. `ERROR: the internal AP (lan-wlan0-ap on wlan0) did not come up` → `rfkill list`, `nmcli radio`, `journalctl -u NetworkManager`. `ERROR: sshd rejects the new configuration` → `sudo sshd -t`; the old config stays. |
+| App stack | `[all/3] Install Azazel-Edge app stack`, `[1/16] Install OS dependencies`, `[1/16] Enable SPI for the EPD (Raspberry Pi OS)` (possibly `NOTICE: SPI is enabled … reboot before the EPD can draw.`), `[2/16] Create base directories` … `[8/16] Build Python runtime (venv + pip)` … `[11.8/16] Build and install the Rust defense core …` (the longest step), `[12/16] Enable services` and `… is active` for the control daemon, the AI agent, the Web UI and the core (in that order), `[13/16] Install local CA and TLS cert (optional)`, `[14/16] Install HTTPS reverse proxy (optional)` ending with `[https] nginx TLS reverse proxy enabled on :443 (this device and … only)`, `[15/16] Install ntfy (optional)` ending with `[ntfy] Service healthy on http://127.0.0.1:8081 (loopback only, anonymous access denied)`, `[16/16] Install security stack (OpenCanary + Suricata, optional)` (the LUKS passphrase prompt comes here unless `SKIP_LUKS=1`), `[17/17] Verify runtime sync`, `Installed Azazel-Edge stack …` | `ERROR: <unit> did not stay active …` → `journalctl -u <unit> -b`. Exit status 78 → the SOC policy / ATT&CK YAML under `/opt/azazel-edge/config` is invalid. A `cargo build` failure stops here (fail-closed). An ntfy `ERROR:` line names the failed check (health, anonymous access, token). |
 | AI runtime | `[all/4] Install AI runtime stack`, `[ai/4] Start Ollama and provision models` (model download), `[DONE] AI runtime stack installed.` | `docker exec … ollama pull` failing → uplink/DNS; re-run `install_all.sh` with the same values. |
 | Optional parts | `[all/5]` … `[all/7]` `Skip …` with the defaults | – |
 | Selftest | `[all/8] Run selftest`, then `Unified installation completed.` | `ERROR: the selftest found a critical failure …` → `/var/log/azazel-edge/selftest_latest.json` and section 3.10. |
@@ -205,7 +205,10 @@ From a LAN client: install the local CA from
 then open `https://172.16.0.254/`. The first time, open it with `?token=` and
 the token from `sudo cat /etc/azazel-edge/web_token.txt` (on the device; do
 not copy it into notes or issues), as [OPERATOR_GUIDE.md](OPERATOR_GUIDE.md)
-describes.
+describes. A token in the address reaches the nginx and gunicorn access logs
+and the browser history: do it once, on a trusted LAN client, never on
+`/touch` ([TOUCH_CONSOLE_KIOSK.md](TOUCH_CONSOLE_KIOSK.md)), and rotate the
+token if the address was shared.
 
 ### 2.8 Mattermost (optional, after the first run passes)
 
@@ -238,6 +241,21 @@ for u in azazel-edge-control-daemon azazel-edge-core azazel-edge-web azazel-edge
 done
 # SVC-05
 systemctl show -p NRestarts azazel-edge-control-daemon azazel-edge-core azazel-edge-web azazel-edge-ai-agent
+# SVC-09: enforcement stays off (the unit's defaults; the environment file must not change them)
+systemctl show -p Environment azazel-edge-core
+sudo grep -E '^AZAZEL_DEFENSE_' /etc/default/azazel-edge-security
+sudo wc -l /var/log/azazel-edge/ai/core-decision-audit.jsonl /var/log/azazel-edge/ai/p0-alert-queue.jsonl
+sudo azazel-edge-dummy-eve emit --scenario ssh_bruteforce --count 20
+# a few seconds later, the same wc -l again
+# SVC-10: terminal 1, the Web UI's ntfy bridge (the token goes on stdin)
+sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -skN -H @- --max-time 30 https://127.0.0.1/api/events/stream
+# SVC-10: terminal 2, publish a test message with the Edge ntfy token
+sudo sed 's/^/Authorization: Bearer /' /etc/azazel-edge/ntfy.token | curl -s -o /dev/null -w '%{http_code}\n' -H @- -d 'first-run test' http://127.0.0.1:8081/azg-info-status
+# SVC-11: monitoring state as the Web UI reports it
+sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- https://127.0.0.1/api/state | python3 -c 'import json, sys; print(json.load(sys.stdin)["monitoring"])'
+# SVC-12 (optional): the NetFlow sensor unit
+cd ~/Azazel-Edge && sudo ENABLE_NETFLOW=1 ENABLE_SERVICES=1 installer/internal/install_sensors.sh
+systemctl show -p ActiveState -p Result -p User azazel-edge-netflow-receiver
 ```
 
 | ID | Check | Command | Expected | Result | PR / issue |
@@ -250,6 +268,10 @@ systemctl show -p NRestarts azazel-edge-control-daemon azazel-edge-core azazel-e
 | SVC-06 | Accounts | `getent passwd azazel-web azazel-agent azazel-sensor` and `id azazel-web` | `azazel-web` and `azazel-agent` exist with a nologin shell; `azazel-web` is in `azazel-control`; `azazel-sensor` only if SNMP/NetFlow was enabled | | #475, #476, #480 |
 | SVC-07 | TUI without permission | as `<pi-user>` (not in `azazel-control`): `azazel-edge-tui --curses` | No traceback; the View shows `(control.sock: permission denied)` and the evidence names the `azazel-control` group; quitting exits 0. `sudo azazel-edge-tui --curses` shows the live state | | #490, #479 |
 | SVC-08 | Web UI as `azazel-web` | dashboard (2.7): status, Wi-Fi scan, SoT edit, M.I.O. question (`/api/ai/ask`) | Each answers; a failure is shown as a failure, never as success | | #475, #476, #479 |
+| SVC-09 | P0 relay from the real core | commands above (test alerts into `/var/log/suricata/eve.json`; note the time in the result) | `AZAZEL_DEFENSE_ENFORCE=false` and `AZAZEL_DEFENSE_DRY_RUN=true` in the unit, nothing from the environment file; `core-decision-audit.jsonl` grows and a P0 entry is added to `p0-alert-queue.jsonl`. Which scenario gives a P0 (enforcement-bearing or SOC-critical) decision on the device is **(to confirm)**; try `port_scan` too | | #476 |
+| SVC-10 | ntfy SSE through the token file | commands above | Terminal 2 prints `200`; terminal 1 shows an event carrying `first-run test` | | #475, #485 |
+| SVC-11 | OpenCanary/Suricata display | command above | `opencanary`, `suricata` and `ntfy` are `ON`; `container_check` is `not_checked` (the Web UI no longer asks Docker) | | #475 |
+| SVC-12 | SNMP/NetFlow (optional) | commands above (not installed by default: `ENABLE_SNMP`/`ENABLE_NETFLOW` are `0`, and `install_sensors.sh` enables units only with `ENABLE_SERVICES=1`) | `User=azazel-sensor`; `ActiveState=inactive`, `Result=success`: the module has no entry point and exits 0 at once, so **no sensor runs** (section 5) | | #480, #483 |
 
 ### 3.2 Sockets, directories and secrets (#471 stages 1–2)
 
@@ -298,7 +320,7 @@ EOF
 | AP-05 | Keyfile | commands above | The file named for `lan-wlan0-ap` is `600 root:root` (`sudo stat`); `psk-flags` starts with `0` (system-owned) | | #486 |
 | AP-06 | PSK never printed | script above | `in install log: False` and `in journal: False` | | #486 |
 | AP-07 | A client joins | On a LAN laptop, join `AP_SSID` with the passphrase from `sudo cat /etc/azazel-edge/internal-ap.psk` (read it on the console) | WPA2 association, a DHCP address in `172.16.0.101`–`172.16.0.200`, `https://172.16.0.254/` reachable | | #486 |
-| AP-08 | Old default refused | `sudo AP_PSK=ChangeMe1234 WIFI_COUNTRY=JP AP_SSID='<your SSID>' installer/internal/install_internal_network.sh` | Stops with `ERROR: the AP passphrase is the old built-in default; …` before changing anything (the AP stays up) | | #486 |
+| AP-08 | Old default refused | `sudo AP_PSK=ChangeMe1234 WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' installer/internal/install_internal_network.sh` | Stops with `ERROR: the AP passphrase is the old built-in default; …` before changing anything (the AP stays up) | | #486 |
 
 ### 3.4 Uplink Wi-Fi (USB Wi-Fi adapter)
 
@@ -343,7 +365,7 @@ nmcli -t -f NAME,UUID con show
 | WIFI-06 | Saved profile, wrong passphrase | connect with a wrong passphrase | Fails; the saved profile still connects with the right one afterwards; no pending profile left | | #478 |
 | WIFI-07 | 802.1X refused | connect to the 802.1X SSID | Refused with `802.1X (WPA-Enterprise) networks are not supported here; set the profile up with NetworkManager directly`; no new profile | | #478 |
 | WIFI-08 | No USB Wi-Fi | unplug the USB Wi-Fi adapter, scan | `No wireless interface for the uplink: …`; the AP stays up; the control daemon logs `wifi sensor: not scanning: …` once | | #486 |
-| WIFI-09 | Disconnect never takes the AP | with `AZAZEL_UP_IF` unset: `sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt` piped into `curl -sk -H @- -X POST https://127.0.0.1/api/action/disconnect` | HTTP 500 with `uplink_interface_serves_internal_lan:wlan0`; the AP stays up. Then (optional, cuts the uplink; from the LAN or console) set `AZAZEL_UP_IF=<WAN_IF>` in `/etc/default/azazel-edge-security`, `sudo systemctl restart azazel-edge-control-daemon`, repeat: `<WAN_IF>` goes down; restore with `sudo ip link set <WAN_IF> up` | | #475, #486 |
+| WIFI-09 | Disconnect never takes the AP | with `AZAZEL_UP_IF` unset: `sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt` piped into `curl -sk -H @- -w '\n%{http_code}\n' -X POST https://127.0.0.1/api/action/disconnect` | Body with `uplink_interface_serves_internal_lan:wlan0`, then `500`; the AP stays up. Then (optional, cuts the uplink; from the LAN or console) set `AZAZEL_UP_IF=<WAN_IF>` in `/etc/default/azazel-edge-security`, `sudo systemctl restart azazel-edge-control-daemon`, repeat: `<WAN_IF>` goes down; restore with `sudo ip link set <WAN_IF> up` | | #475, #486 |
 | WIFI-10 | Japanese locale (optional) | with the system locale `ja_JP.UTF-8`, repeat WIFI-01 | as WIFI-01 | | #480 |
 
 The token goes to curl on stdin (`-H @-`), not on its command line; the
@@ -368,9 +390,9 @@ systemctl list-timers azazel-edge-epd-refresh.timer
 | --- | --- | --- | --- | --- | --- |
 | EPD-01 | SPI device | `ls -l /dev/spidev0.0` | Present (after the reboot in 2.6) | | #486 |
 | EPD-02 | GPIO modules in the venv | command above | `ok` | | #486 |
-| EPD-03 | Pin factory | command above | `LGPIOFactory` **(to confirm)** | | #486 |
+| EPD-03 | Pin factory | command above | Record the class name. `LGPIOFactory` is expected (lgpio drives the Pi 5's RP1); another factory or an error is a finding. The check uses a gpiozero internal function **(to confirm that it is the right probe)** | | #486 |
 | EPD-04 | Draw | commands above | The panel redraws; `Result=success`; timer listed with a next run | | #486 |
-| EPD-05 | Failure is visible, timer continues | power off, disconnect the EPD, boot, run EPD-04 again | `Result=exit-code` (or the renderer timeout) and `azazel-edge-epd-refresh: ERROR: …` in the journal; `systemctl list-timers` still shows the next run. How the panel's absence fails exactly is **(to confirm)**. Power off and reconnect afterwards | | #486 |
+| EPD-05 | Failure is visible, timer continues | power off, disconnect the EPD, boot, run EPD-04 again | `Result=exit-code`: the refresh exits 1 both when the renderer fails and when it gives up after 45 s, and the journal says which (`azazel-edge-epd-refresh: ERROR: EPD renderer exited with status …` or `… timed out after 45 s …`); `Result=timeout` would mean the unit's own 60 s limit was hit (a finding). `systemctl list-timers` still shows the next run. Which of the two the missing panel gives is **(to confirm)**. Power off and reconnect afterwards | | #486 |
 | EPD-06 | Waveshare board detection | `grep -c Raspberry /proc/cpuinfo` | `1` or more (the Waveshare `epdconfig` detects the Pi from `/proc/cpuinfo`) | | #486 |
 
 ### 3.6 SSH
@@ -405,7 +427,7 @@ Expected listeners: `0.0.0.0:80` and `0.0.0.0:443` (nginx), `0.0.0.0:8065`
 (nginx, only after 2.8), `127.0.0.1:8081` (ntfy), `127.0.0.1:8084` (Web UI),
 `127.0.0.1:18065` (Mattermost, after 2.8), `127.0.0.1:11434` (Ollama),
 `127.0.0.1:18080` and `127.0.0.1:12222` (OpenCanary), `172.16.0.254:22`
-(sshd), dnsmasq on `br0` (53, 67), avahi on 5353/udp. Anything else on
+(sshd), dnsmasq on `br0` (53, 67), avahi on 5353/udp and on one random high UDP port (its unicast query socket). Anything else on
 `0.0.0.0`, `*` or `[::]` is a finding: note the port and process (not the
 addresses) in the result.
 
@@ -479,14 +501,19 @@ If `CPUUsageNSec` shows `[not set]` (CPU accounting off), sample
 | TCH-04 | Wake from blanking | let the screen blank (`swayidle`/`wlopm`), touch | The screen wakes; that touch starts no operation | | #484 |
 | TCH-05 | SSE load | commands above | After 5 min untouched no stream connection is open; record CPU % = delta ns / 3e11 × 100, untouched and in use | | #484 |
 | TCH-06 | Stale state | stop the control daemon briefly (`sudo systemctl stop azazel-edge-control-daemon`, then start) | Marked STALE/UNVERIFIED, never green; recovers after start | | #484, #479 |
+| TCH-07 | `/touch` through nginx (HTTPS) | LAN browser with the local CA trusted: `https://172.16.0.254/touch`, keep touching for more than 2 minutes | The state keeps updating every second past nginx's 120 s read timeout (the stream sends data every second and the app sets `X-Accel-Buffering: no`); the header does not drop to periodic updates while in use | | #484 |
 
-### 3.10 Selftest and Suricata
+### 3.10 Selftest, Suricata and watchdog
 
 ```bash
 cd ~/Azazel-Edge
 sudo bin/azazel-edge-selftest; echo "exit=$?"
 sudo cat /var/log/azazel-edge/selftest_latest.json
 sudo suricata -T -c /etc/suricata/suricata.yaml -S /etc/suricata/rules/azazel-lite.rules -l "$(mktemp -d)"; echo "exit=$?"
+# ST-05
+ls -l /dev/watchdog*
+sudo dmesg | grep -i -E 'bcm2835-wdt|watchdog'
+systemctl show -p RuntimeWatchdogUSec
 ```
 
 | ID | Check | Command | Expected | Result | PR / issue |
@@ -495,6 +522,7 @@ sudo suricata -T -c /etc/suricata/suricata.yaml -S /etc/suricata/rules/azazel-li
 | ST-02 | Known warnings | JSON | `"failures": []`; warnings expected today: `config_checksums_missing` (nothing creates `/etc/azazel-edge/.config_checksums`; section 5) and `python_smoke_tests_missing` | | #487 |
 | ST-03 | SD write test | JSON | No `sd_write_test_skipped:not_on_sd:…` on an ext4 root; `sd_write_speed_low:…` only if the medium is slow (record the value) | | #478, #487 |
 | ST-04 | Suricata rules load | last command | `exit=0`; 13 active rules (sid 9901211 is disabled: Suricata 7 cannot match ARP) | | #481 |
+| ST-05 | Hardware watchdog (optional setting) | commands above | `/dev/watchdog` exists and the kernel log names `bcm2835-wdt` (driver message **(to confirm)**); `RuntimeWatchdogUSec=0` (Azazel-Edge does not enable it). Turning it on is optional, per [PHYSICAL_SETUP_GUIDE.md](PHYSICAL_SETUP_GUIDE.md) §4 | | #486 |
 
 ### 3.11 HIL bridge (from the Mac on the LAN)
 
@@ -522,7 +550,7 @@ gives 3** — or no events); `255` SSH/SCP failure.
 | HIL-03 | Interpreter | report | `/opt/azazel-edge/venv/bin/python` chosen, with the reason | | #482 |
 | HIL-04 | Ollama | report | Version and both models (`qwen3.5:0.8b`, `qwen3.5:2b`) measured through `127.0.0.1:11434` | | #482 |
 | HIL-05 | Read-only observations | report | `tc` and `nft` observed (not `unobserved`); a missing command is `unobserved`, not `failed` | | #482, #490 |
-| HIL-06 | Restart (optional, maintenance window) | `--session <id> run --allow-service-restart --service azazel-edge-core` | The restart is recorded and the unit is `active` within 15 s | | #482 |
+| HIL-06 | Restart (optional, maintenance window) | `tools/hil/azazel-hil --target 172.16.0.254 --user <pi-user> --session <id> run --allow-service-restart --service azazel-edge-core` (`<id>`: the session `full` printed; `<pi-user>` needs non-interactive sudo for `systemctl restart`) | The restart is recorded and the unit is `active` within 15 s | | #482 |
 
 ### 3.12 R0 measurements (#408, #372)
 
@@ -550,27 +578,65 @@ sudo du -sh /var/log/azazel-edge /var/lib/docker
 
 ### 3.13 Host firewall trial (#489, draft, optional)
 
-Only after 3.1–3.12, and only from the console or a **new** LAN SSH session.
-#489 is not merged; this uses its branch and must be rolled back afterwards.
+**Precondition: #489 rebased onto the current `main`.** #489 was written on an
+earlier #486 and conflicts with `main` plus #485–#488 (`install_all.sh`). Until
+its branch contains the current `main`, every FW row is
+`N/A (#489 not rebased)`. Check on the device:
 
 ```bash
 cd ~/Azazel-Edge
-git fetch origin pull/489/head:try-489
+git fetch origin main pull/489/head:try-489
+git merge-base --is-ancestor origin/main try-489 && echo rebased || echo "not rebased: FW rows are N/A"
+```
+
+Then, only after 3.1–3.12, on the **console** (a terminal, no SSH session from
+the uplink):
+
+```bash
 git switch try-489
-sudo WIFI_COUNTRY=JP AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall
-# from a NEW LAN SSH session or the console, within 120 s:
-sudo azazel-host-firewall confirm
+sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall
+# the installer loads the rules on trial and asks:
+#   Host firewall on trial. Type 'yes' within 100 s to keep it (anything else, or nothing, takes it off):
+# before answering, check from the upstream test host (3.7) and from the LAN; then type: yes
 sudo azazel-host-firewall status
+```
+
+The installer asks only when stdin is a terminal and no SSH session came in
+through the uplink; anything other than `yes`, or no answer within 100 s,
+runs `disable` (state removed, `Host firewall not kept.`). Without a terminal
+it prints a NOTICE and the helper's timer takes the rules off after 120 s
+unless `sudo azazel-host-firewall confirm` is run from a **new** connection
+(console or a new LAN SSH session; an open session survives as an
+established connection).
+
+```bash
+# FW-04: on the device, after half the DHCP lease time
+journalctl -u NetworkManager -b --no-pager | grep -i -E 'dhcp4|dhcp6'
+ip -6 addr show dev <WAN_IF>
+# FW-06: automatic rollback, stdin not a terminal so the installer does not ask
+sudo azazel-host-firewall disable
+sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall </dev/null
+# wait 120 s, then
+sudo azazel-host-firewall status
+# FW-09: docker networks and the FORWARD policy docker set
+sudo docker network inspect -f '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' $(sudo docker network ls -q)
+sudo iptables -S FORWARD | head -n 1
 ```
 
 | ID | Check | Command | Expected | Result | PR / issue |
 | --- | --- | --- | --- | --- | --- |
-| FW-01 | Trial and confirm | above | `status` prints `state=enabled`, `loaded=yes` | | #489 |
+| FW-01 | Trial kept by the installer prompt | answer `yes` above | `status` prints `state=enabled`, `loaded=yes`, `remote_access=off` | | #489 |
 | FW-02 | WAN closed | repeat 3.7 from the upstream host | 80/443/8065/8081/22 not reachable (time out), 5353 no answer; WAN-09 no longer reachable | | #489 |
-| FW-03 | LAN unchanged | repeat WAN-08, AP-07, MM-05 | As before | | #489 |
-| FW-04 | Uplink keeps working | `sudo apt-get update`; a DHCP renewal (`journalctl -u NetworkManager` after half the lease time); IPv6 if the uplink has it | Works; the lease is renewed; RA/SLAAC addresses kept | | #489 |
+| FW-03 | LAN unchanged | repeat WAN-08, AP-07, MM-05 (wired LAN and internal AP: Web UI, SSH, DHCP/DNS, mDNS) | As before | | #489 |
+| FW-04 | Uplink DHCP and IPv6 | commands above; IPv6 only if the uplink has it | The DHCPv4 lease is renewed; RA/SLAAC (and DHCPv6, if the uplink uses it) addresses kept | | #489 |
 | FW-05 | Boot order | reboot; `systemctl show -p ActiveEnterTimestampMonotonic azazel-host-firewall NetworkManager`; `systemctl --failed` | `azazel-host-firewall` has the smaller timestamp (active before NetworkManager); nothing failed | | #489 |
-| FW-06 | Automatic rollback | `sudo azazel-host-firewall disable`, run the installer command above again (`--enable-host-firewall`) and do not confirm; wait 120 s | `status` prints `state=rolled-back`; the WAN results are as in 3.7 again | | #489 |
+| FW-06 | Automatic rollback | commands above (`</dev/null`, or an SSH session without a pty) | The installer prints the NOTICE (no question); after 120 s `status` prints `state=rolled-back`, `loaded=no`; the WAN results are as in 3.7 again | | #489 |
+| FW-07 | PMTU | download a file of 100 MB or more over HTTPS from a LAN client (through the NAT) and on the device | Completes without stalling | | #489 |
+| FW-08 | Containers | `sudo docker exec azazel-edge-ollama ollama pull qwen3.5:0.8b` (outbound); MM-05 (container to host) | Both work while the firewall is on | | #489 |
+| FW-09 | Docker networks and FORWARD | commands above | Every docker network in 172.17.0.0/16–172.31.0.0/16; record the FORWARD policy line (docker usually sets `-P FORWARD DROP`) | | #489 |
+| FW-10 | Remote access pair | re-run the installer with `ALLOW_EXTERNAL_SSH=true` (and the other values), then without it; `sudo DEVICE_HOSTNAME=<hostname> MODE=open installer/internal/set_dev_remote_access.sh`, then `MODE=close` | `ALLOW_EXTERNAL_SSH=true` or `MODE=open`: 22/tcp and 5353/udp reachable from the upstream host, 8081 still not; without it / `MODE=close`: closed again. `set_dev_remote_access.sh` sets the host name to `DEVICE_HOSTNAME` (default `Azazel-Edge`) and prints the uplink address: do not paste its output | | #489 |
+| FW-11 | `nftables.service` reload | only if `systemctl is-enabled nftables` is `enabled`: `sudo systemctl reload nftables`, then `sudo nft list tables` | `inet azazel_host` is still listed. Otherwise `N/A`: starting `nftables.service` flushes the whole ruleset, including the NAT table `ip azazel_internal`, which nothing restores (known, #489) | | #489 |
+| FW-12 | Enforcement tables | `sudo nft list tables` | `N/A` unless the owner has created `table inet azazel_edge` and enabled enforcement (section 5); then the core's isolate/redirect rules and `inet azazel_host` must both stay | | #489, #480 |
 
 Rollback (always, at the end):
 
@@ -578,14 +644,12 @@ Rollback (always, at the end):
 sudo azazel-host-firewall disable
 sudo azazel-host-firewall status   # state=off, loaded=no
 git switch main
-sudo WIFI_COUNTRY=JP AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh
+sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh
 sudo nft list tables               # no "inet azazel_host"
 ```
 
 The helper and its units stay installed after the rollback; with the state
-off they load nothing at boot. The other checks of #489 (docker FORWARD
-policy, remote-access open/close, `nftables.service` reload, enforcement
-tables) are listed in the PR and are optional here.
+off they load nothing at boot.
 
 ## 4. Recording results and collecting failures
 
@@ -613,7 +677,7 @@ nmcli dev; nmcli -t -f NAME,DEVICE con show --active; rfkill list
 ip -br addr; ip route
 sudo ss -Hltunp
 vcgencmd get_throttled
-dmesg | tail -n 100
+sudo dmesg | tail -n 100
 ```
 
 plus the install log (`~/install-first-run.log`) and, for the HIL bridge,
@@ -632,7 +696,7 @@ evidence for some of them.
 | NetFlow/SNMP entry points | `azazel_edge.sensors.netflow_receiver` and `snmp_poller` have no `__main__`; the units exit 0 at once. | #483, #488 |
 | ARP spoofing detection | Suricata 7 cannot match ARP; sid 9901211 is disabled and no other detector exists. | #481 |
 | Mattermost on by default | `ENABLE_MATTERMOST=1` by default; the image is amd64-only and untested under emulation on a 16K-page kernel (3.8). | #485 |
-| Host INPUT filter default | #489 is off by default (option B); turning it on by default is a separate decision after FW-01–FW-06. | #489 |
+| Host INPUT filter default | #489 is off by default (option B); turning it on by default is a separate decision after FW-01–FW-12. | #489 |
 | WAN address in the TLS certificate SAN | `install_local_ca.sh` adds the address of the route to 1.1.1.1 (`MGMT_IP`, the uplink side) to the server certificate; the Web UI is no longer reachable from the WAN. | #488 |
 | Selftest `.config_checksums` | Nothing creates `/etc/azazel-edge/.config_checksums`, so the selftest always warns `config_checksums_missing`. | #487 |
 | portal-viewer | `azazel-edge-portal-viewer.service` is started by the daemon but not shipped; there is no viewer code in this repository. | #479 |

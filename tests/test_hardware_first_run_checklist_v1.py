@@ -1,17 +1,22 @@
 """The hardware first-run checklist must match the code it tells the operator to run.
 
 docs/HARDWARE_FIRST_RUN_CHECKLIST.md (EN) and _JA.md list commands, paths,
-accounts, ports and installer output for the first Raspberry Pi 5 run
-(Edge#408, #372, #471, #477). These tests compare them with the repository:
-links resolve, both language versions carry the same check IDs, every repo
-path, device path, unit, account, port and quoted installer line exists in
-the code, and the document holds no address other than the fixed LAN ones.
+accounts, ports, expected values and installer output for the first
+Raspberry Pi 5 run (Edge#408, #372, #471, #477). These tests compare them
+with the repository: links resolve, both language versions carry the same
+check IDs, every repo path, device path, unit, account, port, quoted
+installer line (and the order the installer prints its steps), and the
+expected values in the check tables (modes, exit codes, HTTP status, time
+limits) are the code's, in both languages; and the document holds no address
+other than the fixed LAN ones.
 
 The checklist is written for main after #485-#488 and #490 are merged; #489
 is a draft tried on its own branch. Items those PRs add are listed in
-PENDING with their PR: while the item is not in this tree it is skipped
-(never passed silently: the PR must be named in the checklist's
-assumptions). Once the PR is merged the item is checked like any other.
+PENDING with their PR. While the PR is not in this tree (its own test file,
+MERGE_MARKERS, is absent) such an item is skipped, and the PR must be named
+in the checklist's assumptions. Once the PR is in the tree, every PENDING
+entry of that PR FAILS until it is removed, so a forgotten entry cannot keep
+an item unchecked; after removal the item is checked like any other.
 """
 from __future__ import annotations
 
@@ -53,6 +58,9 @@ PENDING = {
     "ERROR: sshd rejects the new configuration": 486,
     "AP passphrase: a new random one, saved root-only in /etc/azazel-edge/internal-ap.psk ": 486,
     "Uplink (WAN) interface: ": 486,
+    " (already configured)": 486,
+    "ERROR: WAN interface not found ": 486,
+    "WIFI_COUNTRY": 486,
     "[1/16] Enable SPI for the EPD (Raspberry Pi OS)": 486,
     "NOTICE: SPI is enabled ": 486,
     " reboot before the EPD can draw.": 486,
@@ -81,6 +89,20 @@ PENDING = {
     "--enable-host-firewall": 489,
     "/usr/local/sbin/azazel-host-firewall": 489,
 }
+
+# A PR counts as merged into this tree when its own test file is here.
+MERGE_MARKERS = {
+    485: "tests/test_external_exposure_477_v1.py",
+    486: "tests/test_pi5_platform_layer_v1.py",
+    487: "tests/test_pre_hardware_cleanup_v1.py",
+    488: "tests/test_wan_exposure_lan_scope_477_v1.py",
+    489: "tests/test_host_firewall_v1.py",
+    490: "tests/test_rehearsal_small_fixes_v1.py",
+}
+
+
+def _merged(pr: int) -> bool:
+    return (ROOT / MERGE_MARKERS[pr]).exists()
 
 
 def _read(path: Path) -> str:
@@ -155,9 +177,12 @@ class _Tally:
         self.pending: list[str] = []
 
     def check(self, item: str, corpus: str, where: str) -> None:
+        pr = PENDING.get(item)
+        if pr is not None and _merged(pr):
+            self.missing.append(f"#{pr} is merged: remove {item!r} from PENDING")
+            return
         if item in corpus:
             return
-        pr = PENDING.get(item)
         if pr is None:
             self.missing.append(f"{where}: {item!r}")
             return
@@ -168,9 +193,15 @@ class _Tally:
 
     def finish(self) -> None:
         if self.missing:
-            pytest.fail("not in the code and not pending:\n" + "\n".join(sorted(set(self.missing))))
+            pytest.fail("not in the code, or a stale PENDING entry:\n" + "\n".join(sorted(set(self.missing))))
         if self.pending:
             pytest.skip("pending PRs not merged in this tree: " + "; ".join(sorted(set(self.pending))))
+
+
+def test_pending_entries_belong_to_unmerged_prs():
+    assert set(PENDING.values()) <= set(MERGE_MARKERS)
+    stale = sorted(f"#{pr}: {item!r}" for item, pr in PENDING.items() if _merged(pr))
+    assert not stale, "these PRs are merged; remove their PENDING entries:\n" + "\n".join(stale)
 
 
 def _code_spans(text: str) -> list[str]:
@@ -312,7 +343,12 @@ def test_device_paths_are_ones_the_code_uses(doc, corpus):
     # Device facts the code does not spell (OS files).
     os_paths = {"/etc/ssh/ssh_host_ed25519_key.pub"}
     for path in sorted(found - os_paths):
-        tally.check(path.rstrip("."), corpus, f"{doc.name} device path")
+        path = path.rstrip(".")
+        # A file the code names by its directory and its name separately.
+        head, _, name = path.rpartition("/")
+        if path not in corpus and f'"{head}"' in corpus and f'"{name}"' in corpus:
+            continue
+        tally.check(path, corpus, f"{doc.name} device path")
     tally.finish()
 
 
@@ -364,10 +400,12 @@ def test_socket_and_directory_modes_match_the_code():
     setup = _read(ROOT / "installer" / "internal" / "setup_web_account.sh")
     assert "AZAZEL_RUNTIME_DIR_MODE=0750" in setup and "AZAZEL_RUNTIME_SOCKET_GROUP=$CONTROL_GROUP" in setup
     assert "chmod 0640" in setup
-    text = _read(EN)
-    for expect in ("`750 root:azazel-control`", "`660 root:azazel-control`", "`600 azazel-agent:azazel-agent`",
-                   "`660 azazel-agent:azazel-web`", "`640 root:azazel-web`"):
-        assert expect in text, expect
+    for doc in CHECKLISTS:
+        for expect in ("`750 root:azazel-control`", "`660 root:azazel-control`", "`600 azazel-agent:azazel-agent`",
+                       "`660 azazel-agent:azazel-web`", "`640 root:azazel-web`", "`700 azazel-agent:azazel-agent`",
+                       "`2750 azazel-agent:azazel-web`", "`750 azazel-agent:azazel-agent`", "`750 azazel-web:azazel-web`",
+                       "`750 root:azazel-web`"):
+            assert expect in _read(doc), (doc.name, expect)
 
 
 def test_ports_match_the_code():
@@ -385,10 +423,11 @@ def test_ports_match_the_code():
     assert "8081" in ntfy and "azg-alert-critical" in ntfy
     https = _read(ROOT / "installer" / "internal" / "install_https_proxy.sh")
     assert "listen 80;" in https and "listen 443 ssl;" in https
-    text = _read(EN)
-    for port in ("127.0.0.1:8084", "127.0.0.1:8081", "127.0.0.1:11434", "127.0.0.1:18080", "127.0.0.1:12222",
-                 "172.16.0.254:22"):
-        assert port in text, port
+    for doc in CHECKLISTS:
+        for port in ("127.0.0.1:8084", "127.0.0.1:8081", "127.0.0.1:11434", "127.0.0.1:18080", "127.0.0.1:12222",
+                     "172.16.0.254:22", "0.0.0.0:80", "0.0.0.0:443", "0.0.0.0:8065", "127.0.0.1:18065",
+                     "172.16.0.101", "172.16.0.200"):
+            assert port in _read(doc), (doc.name, port)
 
 
 def test_installer_output_quoted_in_section_2_exists(corpus):
@@ -534,7 +573,10 @@ ALLOWED_NETWORKS = [ipaddress.ip_network(n) for n in (
 def test_no_address_other_than_the_fixed_ones(doc):
     for raw in re.findall(r"(?<![\w.])(\d{1,3}(?:\.\d{1,3}){3})(?:/\d+)?(?![\w.])", _read(doc)):
         addr = ipaddress.ip_address(raw)
-        assert any(addr in net for net in ALLOWED_NETWORKS) or str(addr) == "1.1.1.1", f"{doc.name}: {raw}"
+        # 1.1.1.1: named in section 5 (MGMT_IP); 172.17.0.0 and 172.31.0.0: the
+        # bounds of Docker's default pools (FW-09).
+        assert any(addr in net for net in ALLOWED_NETWORKS) or str(addr) in {"1.1.1.1", "172.17.0.0", "172.31.0.0"}, \
+            f"{doc.name}: {raw}"
     assert not re.search(r"\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b", _read(doc), flags=re.I), "MAC address"
 
 
@@ -567,3 +609,168 @@ def test_host_firewall_trial_matches_the_489_helper_when_present():
     assert 'echo "state=${state:-off}"' in code and 'echo "loaded=${loaded}"' in code
     net = _read(ROOT / "installer" / "internal" / "install_internal_network.sh")
     assert "--enable-host-firewall)" in net and "--disable-host-firewall)" in net
+
+
+
+# --- expected values in the check tables --------------------------------------
+
+def _file(rel: str) -> str | None:
+    path = ROOT / rel
+    return _read(path) if path.exists() else None
+
+
+# (text in both checklists, PR that adds the code or None, file, code that backs it)
+EXPECTED_VALUES = (
+    # SVC-05 / installer: the restart counter the installer itself watches
+    ("`NRestarts=0`", None, "installer/internal/install_migrated_tools.sh", "NRestarts"),
+    # SSH-02: the ssh.service drop-in
+    ("`Restart=on-failure`", 486, "installer/internal/install_internal_network.sh", "Restart=on-failure"),
+    ("`RestartUSec=5s`", 486, "installer/internal/install_internal_network.sh", "RestartSec=5s"),
+    ("`listenaddress 172.16.0.254:22`", None, "installer/internal/install_internal_network.sh", 'SSH_LISTEN_IP="172.16.0.254"'),
+    # WAN-01/02/08: nginx refuses with 403 and redirects port 80 with 301
+    ("`301`", None, "installer/internal/install_https_proxy.sh", "return 301 https://"),
+    ("`403`", 488, "installer/internal/install_https_proxy.sh", "deny all;"),
+    # SOCK-07: ntfy's anonymous read
+    ("`401`", 485, "installer/internal/install_ntfy.sh", '"$anon_status" != "401" && "$anon_status" != "403"'),
+    # WIFI-09: the disconnect route answers 500 on failure
+    ("`500`", None, "azazel_edge_web/app.py", "        return jsonify(result), 500"),
+    # ST-01: the selftest exits 1 only on a critical failure
+    ("`exit=0`", 487, "bin/azazel-edge-selftest", "Exit status: 1 when a critical check failed"),
+    # 2.5: exit status 78 from a bad policy YAML
+    ("78", None, "systemd/azazel-edge-ai-agent.service", "RestartPreventExitStatus=78"),
+    # HIL-06: 15 s for a restarted unit
+    (("15 s", "15 秒"), None, "tools/hil/azazel_hil_remote.py", "RESTART_SETTLE_SECONDS = 15"),
+    # EPD-05: the renderer limit and the unit limit
+    (("45 s", "45 秒"), None, "py/azazel_edge_epd_mode_refresh.py", "timeout=45,"),
+    (("60 s", "60 秒"), None, "systemd/azazel-edge-epd-refresh.service", "TimeoutStartSec=60"),
+    ("`Result=exit-code`", 486, "py/azazel_edge_epd_mode_refresh.py", "EPD renderer timed out after 45 s"),
+    # 2.6: LUKS at boot
+    (("90 s", "90 秒"), None, "installer/internal/install_encrypted_storage.sh", "timeout=90s"),
+    # AP-04: a generated passphrase has 20 characters
+    (("20 characters", "20 文字"), 486, "installer/internal/install_internal_network.sh", '"${raw:0:20}"'),
+    # TCH-03 / TCH-05 / TCH-07: the touch console and nginx
+    (("1.2 s", "1.2 秒"), None, "azazel_edge_web/static/touch.js", "var HOLD_MS = 1200;"),
+    (("5 min", "5 分"), None, "azazel_edge_web/static/touch.js", "STREAM_USER_IDLE_MS = 5 * 60 * 1000"),
+    (("120 s", "120 秒"), None, "installer/internal/install_https_proxy.sh", "proxy_read_timeout 120s;"),
+    ("`X-Accel-Buffering: no`", None, "azazel_edge_web/app.py", '"X-Accel-Buffering": "no"'),
+    # SVC-09: enforcement off in the core unit
+    ("`AZAZEL_DEFENSE_ENFORCE=false`", None, "systemd/azazel-edge-core.service", 'Environment="AZAZEL_DEFENSE_ENFORCE=false"'),
+    ("`AZAZEL_DEFENSE_DRY_RUN=true`", None, "systemd/azazel-edge-core.service", 'Environment="AZAZEL_DEFENSE_DRY_RUN=true"'),
+    ("ssh_bruteforce", None, "py/azazel_edge/dummy_eve.py", '"ssh_bruteforce"'),
+    ("`port_scan`", None, "py/azazel_edge/dummy_eve.py", '"port_scan"'),
+    # SVC-10 / SVC-11
+    ("azg-info-status", None, "installer/internal/install_ntfy.sh", "azg-info-status"),
+    ("/api/events/stream", None, "azazel_edge_web/app.py", '@app.route("/api/events/stream")'),
+    ("/api/state", None, "azazel_edge_web/app.py", '@app.route("/api/state")'),
+    ("`not_checked`", None, "azazel_edge_web/app.py", '"container_check": "not_checked"'),
+    # SVC-12: the sensor units run as azazel-sensor and are enabled only with ENABLE_SERVICES=1
+    ("`User=azazel-sensor`", None, "systemd/azazel-edge-netflow-receiver.service", "User=azazel-sensor"),
+    ("ENABLE_SERVICES=1", None, "installer/internal/install_sensors.sh", 'ENABLE_SERVICES="${ENABLE_SERVICES:-0}"'),
+    # 2.5: the order of the units the installer waits for
+    ("`[12/16] Enable services`", None, "installer/internal/install_migrated_tools.sh", "wait_active azazel-edge-control-daemon.service\n  wait_active azazel-edge-ai-agent.service\n  wait_active azazel-edge-web.service"),
+    # FW rows (#489): trial prompt, timer and states
+    ("100 s", 489, "installer/internal/install_internal_network.sh", "read -r -t 100"),
+    ("`Host firewall not kept.`", 489, "installer/internal/install_internal_network.sh", 'echo "Host firewall not kept."'),
+    ("`remote_access=off`", 489, "installer/internal/azazel-host-firewall", 'echo "remote_access=${remote}"'),
+    ("`loaded=no`", 489, "installer/internal/azazel-host-firewall", 'echo "loaded=${loaded}"'),
+    ("`DEVICE_HOSTNAME`", 489, "installer/internal/set_dev_remote_access.sh", 'hostnamectl set-hostname "${DEVICE_HOSTNAME}"'),
+)
+
+
+@pytest.mark.parametrize("doc", CHECKLISTS, ids=lambda p: p.name)
+def test_expected_values_in_the_tables_are_the_codes(doc):
+    text = _read(doc)
+    missing, pending = [], []
+    for needle, pr, rel, code in EXPECTED_VALUES:
+        if isinstance(needle, tuple):
+            needle = needle[0] if doc is EN else needle[1]
+        assert needle in text, f"{doc.name}: {needle!r} not in the checklist"
+        body = _file(rel)
+        if body is not None and code in body:
+            continue
+        if pr is not None and not _merged(pr):
+            pending.append(f"{needle} (#{pr})")
+            continue
+        missing.append(f"{needle!r}: {rel} lacks {code!r}")
+    assert not missing, "\n".join(missing)
+    if pending:
+        pytest.skip("pending PRs not merged in this tree: " + "; ".join(pending))
+
+
+def test_trial_timer_is_the_helpers_when_present():
+    helper = _file("installer/internal/azazel-host-firewall")
+    for doc in CHECKLISTS:
+        assert "120" in _section(_read(doc), "### 3.13", "## 4.")
+    if helper is None:
+        pytest.skip("#489 not merged in this tree")
+    assert "TRIAL_SECONDS=120" in helper
+
+
+# --- the order the installer prints its steps ------------------------------------
+
+_SCRIPT_CALL = re.compile(r'(?:\$\{?REPO_ROOT\}?/installer/internal/|/opt/azazel-edge/)([a-z_]+\.sh)')
+
+
+def _inlined(rel: str, depth: int = 0) -> str:
+    """The script with the installer scripts it runs put in place of the call."""
+    out = []
+    for line in _expand_shell(_read(ROOT / rel)).splitlines():
+        out.append(line)
+        stripped = line.strip()
+        if depth >= 2 or stripped.startswith(("#", "install ", "echo", "rm ")) or "echo " in stripped:
+            continue
+        for name in _SCRIPT_CALL.findall(stripped):
+            target = ROOT / "installer" / "internal" / name
+            if target.exists() and name != Path(rel).name:
+                out.append(_inlined(f"installer/internal/{name}", depth + 1))
+    return "\n".join(out)
+
+
+_STEP = re.compile(r"^(?:\[(?:all/\d|\d+(?:\.\d+)?/1[67]|ai/\d|ntfy|https|avahi|DONE)\][^…<]*|Installed Azazel-Edge stack |Unified installation completed\.)")
+
+
+@pytest.mark.parametrize("doc", CHECKLISTS, ids=lambda p: p.name)
+def test_install_steps_are_listed_in_the_order_the_installer_prints_them(doc):
+    table = _section(_read(doc), "### 2.5", "### 2.6")
+    steps = []
+    for row in table.splitlines():
+        if row.startswith("| ") and not row.startswith("| ---"):
+            cells = row.strip().strip("|").split("|")
+            steps += [m.group(0).rstrip(" (") for s in _code_spans(cells[1]) if (m := _STEP.match(s))]
+    assert len(steps) >= 20, steps
+    flow = _inlined("installer/internal/install_all.sh")
+    pos, out_of_order, pending = 0, [], []
+    for step in steps:
+        found = flow.find(step, pos)
+        if found >= 0:
+            pos = found + len(step)
+            continue
+        if step in flow:
+            out_of_order.append(step)
+        else:
+            pending.append(step)
+    assert not out_of_order, f"{doc.name}: listed out of the printed order: {out_of_order}"
+    unmerged = [pr for pr in (485, 486, 487, 488) if not _merged(pr)]
+    if pending:
+        assert unmerged, f"{doc.name}: not printed by the installer: {pending}"
+        pytest.skip(f"printed by #{unmerged} only: {pending}")
+
+
+@pytest.mark.parametrize("doc", CHECKLISTS, ids=lambda p: p.name)
+def test_internal_network_lines_are_in_the_order_main_prints_them(doc):
+    row = next(ln for ln in _section(_read(doc), "### 2.5", "### 2.6").splitlines() if "`[all/2]" in ln)
+    order = ("Uplink (WAN) interface", "Wi-Fi country: <CC>", "===== verify =====",
+             "Internal AP + DHCP baseline applied.", "AP SSID", "AP passphrase", "SSH listen scope",
+             "From internal host", "[avahi]")
+    idx = [row.find(x) for x in order]
+    assert all(i >= 0 for i in idx) and idx == sorted(idx), (doc.name, list(zip(order, idx)))
+    if not _merged(486):
+        pytest.skip("#486 not merged in this tree")
+    net = _read(ROOT / "installer" / "internal" / "install_internal_network.sh")
+    main = net[net.index("\nmain() {"):]
+    calls = ("check_wifi_country", 'echo "Uplink (WAN) interface', "install_packages", "prepare_wifi_radio",
+             "verify_state", 'echo "Internal AP + DHCP baseline applied."', 'echo "AP SSID', "AP passphrase",
+             "SSH listen scope", 'echo "From internal host')
+    where = [main.find(c) for c in calls]
+    assert all(i >= 0 for i in where) and where == sorted(where), list(zip(calls, where))
+    assert 'echo "Wi-Fi country: $WIFI_COUNTRY"' in net[net.index("prepare_wifi_radio() {"):]
