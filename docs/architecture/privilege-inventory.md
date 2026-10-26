@@ -1102,10 +1102,11 @@ out-of-scope findings tracked separately. Still open:
    - `contain`/`disconnect` on `control.sock` only write a log line (#477:
      `contain`, `disconnect` and `stage_open` now answer `not_implemented`,
      the three scripts are removed; nothing new is enforced. The CLI's
-     command-file fallback is used only when the daemon is not reached, and
-     since nothing in this repository reads `ui_command.json` it reports
-     `ok: false, undelivered: true`, never success; a daemon refusal is
-     returned as it is);
+     command-file fallback is used only when the daemon was never reached
+     (no socket, connect failed), and since nothing in this repository reads
+     `ui_command.json` it reports `ok: false, undelivered: true`, never
+     success; a request sent without a reply is `delivery_unknown` (it may
+     have run) and is not handed on; a daemon refusal is returned as it is);
    - the netflow and snmp units used `User=azazel`, which no installer
      created (since #477 they run as the dedicated `azazel-sensor`, created
      by `install_sensors.sh`), and `${VAR:-default}` in `ExecStart`;

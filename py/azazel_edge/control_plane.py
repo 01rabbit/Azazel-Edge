@@ -17,38 +17,57 @@ def _socket_request(
     timeout_sec: float = 1.0,
     socket_path: Path = CONTROL_SOCKET,
 ) -> Dict[str, Any]:
-    """One request on control.sock.
+    """One request on control.sock (Edge#477).
 
-    A reply from the daemon is returned as it is. When no reply arrived (no
-    socket, connect failed, the connection broke or timed out, or it closed
-    before a reply) the result carries ``"transport_error": True`` so callers
-    can tell "the daemon said no" from "the daemon was not reached" (Edge#477).
+    * A reply from the daemon is returned as it is (a reply that is not a
+      JSON object is a failure, ``invalid response``).
+    * ``"transport_error": True``: the request never reached the daemon (no
+      socket, the socket could not be created, connect failed). Only this
+      may be handed to another path.
+    * ``"delivery_unknown": True``: the request was (or may have been) sent
+      but no reply came (send failed part way, timeout, or the connection
+      closed before a reply). The daemon may have carried it out, so this is
+      never retried or handed elsewhere.
     """
     if not socket_path.exists():
         return {"ok": False, "error": f"control socket not found: {socket_path}", "transport_error": True}
+    sock: Optional[socket.socket] = None
     try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(timeout_sec)
-        sock.connect(str(socket_path))
-        sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(timeout_sec)
+            sock.connect(str(socket_path))
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "transport_error": True}
         chunks: list[bytes] = []
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            if b"\n" in chunk:
-                break
-        sock.close()
-    except Exception as exc:
-        return {"ok": False, "error": str(exc), "transport_error": True}
+        try:
+            sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                if b"\n" in chunk:
+                    break
+        except Exception as exc:
+            if not chunks:
+                return {"ok": False, "error": f"no reply from the control daemon: {exc}", "delivery_unknown": True}
+            # part of a reply arrived: the daemon answered, but not usably
+            return {"ok": False, "error": f"invalid response: incomplete reply ({exc})"}
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
     text = b"".join(chunks).decode("utf-8", errors="replace").strip()
     if not text:
-        return {"ok": False, "error": "empty response", "transport_error": True}
+        return {"ok": False, "error": "no reply from the control daemon: closed before a reply",
+                "delivery_unknown": True}
     try:
-        reply = json.loads(text)
-    except ValueError as exc:
-        return {"ok": False, "error": f"invalid response: {exc}"}
+        reply = json.loads(text.splitlines()[0])
+    except (ValueError, RecursionError) as exc:
+        return {"ok": False, "error": f"invalid response: {type(exc).__name__}"}
     if not isinstance(reply, dict):
         return {"ok": False, "error": "invalid response: not an object"}
     return reply
@@ -208,8 +227,11 @@ def send_action_with_fallback(
     (``forbidden``, ``busy``, a rate limit, an unknown action, a failed
     script, ``not_implemented``): a refusal is never turned into success.
 
-    Only when the daemon was not reached (``transport_error``) is the legacy
-    command file ``ui_command.json`` written. Nothing in Azazel-Edge reads that
+    Only when the request never reached the daemon (``transport_error``: no
+    socket, connect failed) is the legacy command file ``ui_command.json``
+    written. When it was sent but no reply came (``delivery_unknown``), the
+    daemon may have carried it out, so nothing is written and that result is
+    returned. Nothing in Azazel-Edge reads that
     file, so the result stays ``ok: False`` with ``undelivered: True`` and the
     path; it is not reported as done (Edge#477; before, it was ``ok: True``).
     """
@@ -242,4 +264,7 @@ def describe_action_failure(result: Any, label: str) -> str:
         return f"• action not implemented: {label} (nothing was done)"
     if result.get("undelivered"):
         return f"• action not delivered: {label} (control daemon not reached)"
+    if result.get("delivery_unknown"):
+        return (f"• no reply from the control daemon: {label} (it may have been carried out; "
+                "check the state before running it again)")
     return f"• action failed: {label} ({result.get('error', 'unknown error')})"

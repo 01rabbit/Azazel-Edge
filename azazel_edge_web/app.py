@@ -4461,6 +4461,13 @@ def _status_api_json(
         if result.returncode == STATUS_API_CURL_HTTP_ERROR:
             return _answered_failure("answered with an HTTP error status")
         if result.returncode != 0:
+            # Every other curl failure is "nothing usable answered at the
+            # transport level": 7 refused, 28 timeout, 6 no such host, and
+            # also 52 (empty reply), 56 (receive failure) and 18 (transfer
+            # cut short): the connection dropped without an HTTP status, as
+            # when no status API listens behind the port or it went away.
+            # These are treated as "nothing answers", which keeps the old
+            # behaviour for them (only then may a caller fall back).
             return None
 
         response_text = result.stdout.decode("utf-8", errors="replace").strip()
@@ -4476,7 +4483,7 @@ def _status_api_json(
 
         try:
             payload = json.loads(response_text)
-        except ValueError:
+        except (ValueError, RecursionError):
             return _answered_failure("answered with a reply that is not JSON")
         if not isinstance(payload, dict):
             return _answered_failure("answered with a reply that is not a JSON object")
@@ -4589,10 +4596,13 @@ def execute_release_action() -> Dict[str, Any]:
 
             second_sent = False
             last_reason = ""
+            last_status_error = ""
             deadline = time.time() + 12.0
 
             while time.time() < deadline:
                 state_payload = _read_status_state(host)
+                if state_payload and state_payload.get("status_api_error"):
+                    last_status_error = str(state_payload.get("error") or "")
                 if not state_payload or state_payload.get("status_api_error"):
                     time.sleep(0.25)
                     continue
@@ -4628,7 +4638,12 @@ def execute_release_action() -> Dict[str, Any]:
                 time.sleep(0.25)
 
             if last_reason:
-                return {"ok": False, "action": "release", "error": f"Release timeout: {last_reason}"}
+                suffix = f"; last state read failed: {last_status_error}" if last_status_error else ""
+                return {"ok": False, "action": "release", "error": f"Release timeout: {last_reason}{suffix}"}
+            if last_status_error:
+                # the state could not be read; say why (Edge#477)
+                return {"ok": False, "action": "release",
+                        "error": f"Release timeout: state not readable ({last_status_error})"}
             return {"ok": False, "action": "release", "error": "Release timeout: stage stayed CONTAIN"}
 
         return {"ok": False, "action": "release", "error": "Failed to reach Status API on any host"}

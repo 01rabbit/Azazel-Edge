@@ -11,10 +11,14 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     `{"ok": false, "error": "not_implemented"}` instead of appending a line
     to `/run/azazel-edge/action_requests.log` (read by nothing) and answering
     success; their scripts are removed. Nothing new is enforced. The CLI
-    returns any answer of the daemon as it is (a refusal stays a failure);
-    only when the daemon is not reached does it write the legacy
-    `ui_command.json`, which nothing here reads, so the result is
-    `ok: false, undelivered: true` instead of `ok: true`. The CLI labels
+    returns any answer of the daemon as it is (a refusal or an unusable
+    reply stays a failure). A request sent without a reply (timeout, closed
+    before a reply) is `delivery_unknown: true`: it may have run, so it is
+    not handed on and the CLI says to check the state before running it
+    again. Only when the daemon was never reached (no socket, connect
+    failed) does it write the legacy `ui_command.json`, which nothing here
+    reads, so the result is `ok: false, undelivered: true` instead of
+    `ok: true`. The CLI labels
     Stage-Open and Contain as not implemented.
   - The Web UI's `/api/state/stream` sends a `stream_error` event (with
     `retry: 15000`) with the reason

@@ -3,9 +3,11 @@
 Pinned here:
 - control.sock ``contain`` / ``disconnect`` / ``stage_open`` answer an explicit
   ``not_implemented`` (they used to append a log line and answer success);
-- the CLI returns any daemon answer as it is (a refusal stays a failure) and
-  writes the legacy command file only when the daemon is not reached; since
-  nothing reads that file, the result is ``undelivered``, not success;
+- the CLI returns any daemon answer as it is (a refusal or an unusable
+  reply stays a failure); a request sent without a reply is
+  ``delivery_unknown`` (it may have run) and is not handed on; only when the
+  daemon was never reached (no socket, connect failed) is the legacy command
+  file written, and since nothing reads it the result is ``undelivered``;
 - the Web UI's state SSE ends with a ``stream_error`` event (with ``retry``)
   when the daemon's watch stream ends (``busy``, closed, no socket);
 - port 8082: an HTTP error or unusable reply is the status API's refusal and
@@ -49,8 +51,9 @@ def tmpdir_short():
         shutil.rmtree(path, ignore_errors=True)
 
 
-def _one_shot_server(path: Path, lines: list[bytes]):
-    """A Unix socket that reads one request, sends ``lines`` and closes."""
+def _one_shot_server(path: Path, lines: list[bytes], delay_sec: float = 0.0):
+    """A Unix socket that reads one request, waits ``delay_sec``, sends
+    ``lines`` and closes."""
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(str(path))
     srv.listen(1)
@@ -59,8 +62,13 @@ def _one_shot_server(path: Path, lines: list[bytes]):
         conn, _ = srv.accept()
         with conn:
             conn.recv(4096)
+            if delay_sec:
+                threading.Event().wait(delay_sec)
             for line in lines:
-                conn.sendall(line)
+                try:
+                    conn.sendall(line)
+                except OSError:
+                    break  # the client has gone (it timed out)
         srv.close()
 
     t = threading.Thread(target=serve, daemon=True)
@@ -123,7 +131,7 @@ def test_a_daemon_refusal_over_the_socket_is_not_a_transport_error(answer, tmpdi
     assert not cmd.exists()
 
 
-def test_an_unreachable_daemon_is_not_delivered_not_ok(monkeypatch, tmpdir_short):
+def test_a_missing_socket_is_not_delivered_not_ok(monkeypatch, tmpdir_short):
     # no socket at all: the legacy command file is written, but nothing in
     # this repository reads it, so the result is not success
     monkeypatch.setattr(control_plane, "send_action",
@@ -136,12 +144,64 @@ def test_an_unreachable_daemon_is_not_delivered_not_ok(monkeypatch, tmpdir_short
     assert json.loads(cmd.read_text())["action"] == "refresh"
 
 
-def test_a_daemon_that_closes_before_answering_is_a_transport_error(tmpdir_short, monkeypatch):
+def _via(monkeypatch, path):
+    monkeypatch.setattr(control_plane, "send_action",
+                        functools.partial(control_plane.send_action, socket_path=path))
+
+
+def test_a_daemon_that_closes_before_answering_is_delivery_unknown(tmpdir_short, monkeypatch):
     path = tmpdir_short / "c.sock"
     t = _one_shot_server(path, [])
-    res = control_plane.send_action("refresh", socket_path=path)
+    _via(monkeypatch, path)
+    cmd = tmpdir_short / "ui_command.json"
+    res = control_plane.send_action_with_fallback("refresh", fallback_cmd_path=cmd)
     t.join(5)
-    assert res["ok"] is False and res["transport_error"] is True
+    assert res["ok"] is False and res["delivery_unknown"] is True
+    assert "transport_error" not in res and "undelivered" not in res
+    assert not cmd.exists()
+
+
+def test_a_reply_after_the_timeout_is_delivery_unknown_and_not_handed_on(tmpdir_short, monkeypatch):
+    """The daemon answers after 5 s, past the client's 1.5 s: it may have
+    carried the action out, so no command file is written."""
+    path = tmpdir_short / "c.sock"
+    t = _one_shot_server(path, [b'{"ok": true}\n'], delay_sec=5.0)
+    _via(monkeypatch, path)
+    cmd = tmpdir_short / "ui_command.json"
+    res = control_plane.send_action_with_fallback("reboot", fallback_cmd_path=cmd)
+    assert res["ok"] is False and res["delivery_unknown"] is True
+    assert not cmd.exists()
+    t.join(10)
+    assert not cmd.exists()
+    assert "may have been carried out" in control_plane.describe_action_failure(res, "reboot")
+
+
+def test_a_connect_failure_is_not_delivered(tmpdir_short, monkeypatch):
+    path = tmpdir_short / "c.sock"
+    path.write_text("not a socket")  # exists, but connect fails
+    _via(monkeypatch, path)
+    cmd = tmpdir_short / "ui_command.json"
+    res = control_plane.send_action_with_fallback("refresh", fallback_cmd_path=cmd)
+    assert res["ok"] is False and res["undelivered"] is True
+    assert cmd.exists()
+
+
+@pytest.mark.parametrize("lines", [
+    [b"this is not json\n"],
+    [b'{"ok": true, "stdo'],              # a partial line, then closed
+    [b"[" * 100000 + b"]" * 100000 + b"\n"],  # too deep to parse
+    [b'["ok"]\n'],
+])
+def test_an_unusable_reply_is_returned_and_not_handed_on(lines, tmpdir_short, monkeypatch):
+    path = tmpdir_short / "c.sock"
+    t = _one_shot_server(path, lines)
+    _via(monkeypatch, path)
+    cmd = tmpdir_short / "ui_command.json"
+    res = control_plane.send_action_with_fallback("refresh", fallback_cmd_path=cmd)
+    t.join(5)
+    assert res["ok"] is False and res["error"].startswith("invalid response")
+    assert not any(k in res for k in ("transport_error", "delivery_unknown", "undelivered"))
+    assert not cmd.exists()
 
 
 def test_nothing_in_the_repository_reads_ui_command_json():
@@ -160,6 +220,9 @@ def test_nothing_in_the_repository_reads_ui_command_json():
      "• action not implemented: contain (nothing was done)"),
     ({"ok": False, "undelivered": True, "error": "x"},
      "• action not delivered: contain (control daemon not reached)"),
+    ({"ok": False, "delivery_unknown": True, "error": "x"},
+     "• no reply from the control daemon: contain (it may have been carried out; "
+     "check the state before running it again)"),
     ({"ok": False, "error": "forbidden"}, "• action failed: contain (forbidden)"),
     (None, "• action failed: contain (unexpected response)"),
 ])
@@ -329,6 +392,27 @@ def test_disconnect_falls_back_only_when_nothing_answers(rc, monkeypatch):
     res, sent = _disconnect_with(monkeypatch, rc)
     assert sent == ["uplink_disconnect"]
     assert res["ok"] is True and res["via"] == "control_daemon"
+
+
+def test_a_too_deep_reply_from_8082_is_a_refusal(monkeypatch):
+    deep = b"[" * 100000 + b"]" * 100000
+    monkeypatch.setattr(webapp.subprocess, "run", lambda cmd, **kw: _Done(0, deep))
+    res = webapp._status_api_json(host="127.0.0.1", path="/", empty_ok=False)
+    assert res["ok"] is False and res["status_api_error"] is True
+
+
+def test_release_refused_by_8082_is_a_failure(monkeypatch):
+    calls = []
+
+    def fake_status(**kw):
+        calls.append(kw["path"])
+        return {"ok": False, "status_api_error": True, "action": kw.get("action") or "",
+                "error": "Status API on 10.55.0.10:8082 answered with an HTTP error status"}
+
+    monkeypatch.setattr(webapp, "_status_api_json", fake_status)
+    res = webapp.execute_release_action()
+    assert res["ok"] is False and res["action"] == "release" and "HTTP error" in res["error"]
+    assert calls == ["/action/release"]
 
 
 def test_contain_without_a_status_api_is_a_failure(monkeypatch):
