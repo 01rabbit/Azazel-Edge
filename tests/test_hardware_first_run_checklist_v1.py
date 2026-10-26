@@ -774,3 +774,73 @@ def test_internal_network_lines_are_in_the_order_main_prints_them(doc):
     where = [main.find(c) for c in calls]
     assert all(i >= 0 for i in where) and where == sorted(where), list(zip(calls, where))
     assert 'echo "Wi-Fi country: $WIFI_COUNTRY"' in net[net.index("prepare_wifi_radio() {"):]
+
+
+def _row(doc: Path, check_id: str) -> str:
+    rows = [ln for ln in _read(doc).splitlines() if ln.startswith(f"| {check_id} |")]
+    assert len(rows) == 1, (doc.name, check_id)
+    return rows[0]
+
+
+# (check ID, text in that row (EN, JA), PR that adds the code or None, file, code that backs it,
+#  True when the code must be ABSENT)
+ROW_VALUES = (
+    ("TCH-07", ("120 s", "120 秒"), None, "installer/internal/install_https_proxy.sh", "proxy_read_timeout 120s;", False),
+    ("TCH-07", ("`X-Accel-Buffering: no`",) * 2, None, "azazel_edge_web/app.py", '"X-Accel-Buffering": "no"', False),
+    ("SVC-12", ("`User=azazel-sensor`",) * 2, None, "systemd/azazel-edge-netflow-receiver.service", "User=azazel-sensor", False),
+    # Result=success / no sensor: the receiver module has no entry point; the row is stale once it gets one.
+    ("SVC-12", ("`Result=success`",) * 2, None, "py/azazel_edge/sensors/netflow_receiver.py", "__main__", True),
+    ("SVC-12", ("`ENABLE_SERVICES=1`",) * 2, None, "installer/internal/install_sensors.sh", 'ENABLE_SERVICES="${ENABLE_SERVICES:-0}"', False),
+    ("SVC-10", ("`200`",) * 2, 485, "installer/internal/install_ntfy.sh", '"$auth_status" != "200"', False),
+    ("SVC-09", ("`AZAZEL_DEFENSE_ENFORCE=false`",) * 2, None, "systemd/azazel-edge-core.service", 'Environment="AZAZEL_DEFENSE_ENFORCE=false"', False),
+    ("SVC-09", ("`AZAZEL_DEFENSE_DRY_RUN=true`",) * 2, None, "systemd/azazel-edge-core.service", 'Environment="AZAZEL_DEFENSE_DRY_RUN=true"', False),
+    ("SVC-05", ("`NRestarts=0`",) * 2, None, "installer/internal/install_migrated_tools.sh", "NRestarts", False),
+    # Azazel-Edge does not turn the watchdog on.
+    ("ST-05", ("`RuntimeWatchdogUSec=0`",) * 2, None, "installer/internal/install_migrated_tools.sh", "RuntimeWatchdogSec", True),
+    ("ST-05", ("`RuntimeWatchdogUSec=0`",) * 2, None, "installer/internal/install_all.sh", "RuntimeWatchdogSec", True),
+    ("WIFI-09", ("`500`",) * 2, None, "azazel_edge_web/app.py", "        return jsonify(result), 500", False),
+    ("WIFI-09", ("`uplink_interface_serves_internal_lan:wlan0`",) * 2, 486, "py/azazel_edge_control/daemon.py", "uplink_interface_serves_internal_lan:", False),
+    ("SOCK-07", ("`401`",) * 2, 485, "installer/internal/install_ntfy.sh", '"$anon_status" != "401" && "$anon_status" != "403"', False),
+    ("HIL-06", ("15 s", "15 秒"), None, "tools/hil/azazel_hil_remote.py", "RESTART_SETTLE_SECONDS = 15", False),
+    ("EPD-05", ("45 s", "45 秒"), None, "py/azazel_edge_epd_mode_refresh.py", "timeout=45,", False),
+    ("EPD-05", ("60 s", "60 秒"), None, "systemd/azazel-edge-epd-refresh.service", "TimeoutStartSec=60", False),
+    ("SSH-02", ("`RestartUSec=5s`",) * 2, 486, "installer/internal/install_internal_network.sh", "RestartSec=5s", False),
+    ("AP-07", ("`172.16.0.101`",) * 2, None, "installer/internal/install_internal_network.sh", 'DHCP_RANGE_START="172.16.0.101"', False),
+    # FW-11: the reload flushes the ruleset; azazel-internal-apply puts the NAT table back.
+    ("FW-11", ("`ip azazel_internal`",) * 2, None, "installer/internal/install_internal_network.sh", "nft -f /etc/nftables.d/azazel-internal.nft", False),
+    ("FW-11", ("`inet azazel_host`",) * 2, 489, "installer/internal/install_internal_network.sh", "ExecReload=/usr/local/sbin/azazel-host-firewall refresh", False),
+    ("FW-06", ("120 s", "120 秒"), 489, "installer/internal/azazel-host-firewall", "TRIAL_SECONDS=120", False),
+    ("FW-06", ("`state=rolled-back`",) * 2, 489, "installer/internal/azazel-host-firewall", "write_state rolled-back", False),
+    ("FW-01", ("`remote_access=off`",) * 2, 489, "installer/internal/azazel-host-firewall", 'echo "remote_access=${remote}"', False),
+)
+
+
+@pytest.mark.parametrize("doc", CHECKLISTS, ids=lambda p: p.name)
+def test_expected_values_are_in_their_rows_and_backed_by_the_code(doc):
+    missing, pending = [], []
+    for check_id, needles, pr, rel, code, absent in ROW_VALUES:
+        needle = needles[0] if doc is EN else needles[1]
+        assert needle in _row(doc, check_id), f"{doc.name} {check_id}: {needle!r} not in the row"
+        body = _file(rel)
+        if absent:
+            if body is not None and code in body:
+                missing.append(f"{check_id}: {rel} now has {code!r}; the row is stale")
+            continue
+        if body is not None and code in body:
+            continue
+        if pr is not None and not _merged(pr):
+            pending.append(f"{check_id} {needle} (#{pr})")
+            continue
+        missing.append(f"{check_id} {needle!r}: {rel} lacks {code!r}")
+    assert not missing, "\n".join(missing)
+    if pending:
+        pytest.skip("pending PRs not merged in this tree: " + "; ".join(pending))
+
+
+def test_host_firewall_stages_run_in_the_documented_order():
+    for doc in CHECKLISTS:
+        ids = [i for i in _check_ids(_section(_read(doc), "### 3.13", "## 4.")) if i.startswith("FW-")]
+        assert ids[0] == "FW-01" and ids[-1] == "FW-06", (doc.name, ids)
+        section = _section(_read(doc), "### 3.13", "## 4.")
+        assert section.count("sudo azazel-host-firewall status") >= 4, doc.name
+        assert "</dev/null" in section and "azazel-internal-apply" in section

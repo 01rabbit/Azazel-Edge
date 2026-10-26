@@ -241,18 +241,55 @@ for u in azazel-edge-control-daemon azazel-edge-core azazel-edge-web azazel-edge
 done
 # SVC-05
 systemctl show -p NRestarts azazel-edge-control-daemon azazel-edge-core azazel-edge-web azazel-edge-ai-agent
-# SVC-09: enforcement stays off (the unit's defaults; the environment file must not change them)
+```
+
+SVC-09 has two steps. Step 1 only reads:
+
+```bash
+# SVC-09 step 1: enforcement stays off (the unit's defaults; the environment file must not change them)
 systemctl show -p Environment azazel-edge-core
 sudo grep -E '^AZAZEL_DEFENSE_' /etc/default/azazel-edge-security
 sudo wc -l /var/log/azazel-edge/ai/core-decision-audit.jsonl /var/log/azazel-edge/ai/p0-alert-queue.jsonl
+date -Is
+```
+
+Run step 2 **only when** step 1 shows `AZAZEL_DEFENSE_ENFORCE=false` and
+`AZAZEL_DEFENSE_DRY_RUN=true` in the unit and the `grep` prints nothing;
+otherwise do not inject and mark SVC-09 `N/A` with the reason. The test
+alerts stay for good: in the append-only core decision audit chain, in the P0
+queue and in `normalized-events.jsonl` (they cannot be removed without
+breaking the chain), and a P0 may set off the visual or voice notification
+downstream of the queue. Record the time before and after, so the entries can
+be told apart later.
+
+```bash
+# SVC-09 step 2: test alerts into the eve.json the core reads
 sudo azazel-edge-dummy-eve emit --scenario ssh_bruteforce --count 20
-# a few seconds later, the same wc -l again
+# a few seconds later
+sudo wc -l /var/log/azazel-edge/ai/core-decision-audit.jsonl /var/log/azazel-edge/ai/p0-alert-queue.jsonl
+date -Is
+```
+
+If no P0 entry appears after `ssh_bruteforce` and then `port_scan`, mark
+SVC-09 `N/A (no P0 decision from the test alerts)` and record the scenarios
+and the line counts.
+
+```bash
 # SVC-10: terminal 1, the Web UI's ntfy bridge (the token goes on stdin)
 sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -skN -H @- --max-time 30 https://127.0.0.1/api/events/stream
 # SVC-10: terminal 2, publish a test message with the Edge ntfy token
 sudo sed 's/^/Authorization: Bearer /' /etc/azazel-edge/ntfy.token | curl -s -o /dev/null -w '%{http_code}\n' -H @- -d 'first-run test' http://127.0.0.1:8081/azg-info-status
 # SVC-11: monitoring state as the Web UI reports it
 sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- https://127.0.0.1/api/state | python3 -c 'import json, sys; print(json.load(sys.stdin)["monitoring"])'
+```
+
+SVC-12 is optional and changes the device: `install_sensors.sh` overwrites
+`/etc/default/azazel-edge-sensors` (without `SNMP_TARGETS` it writes a
+placeholder SNMP target with the community `public`; SNMP itself stays off
+with `ENABLE_SNMP=0`) and leaves the NetFlow unit enabled. Undo it afterwards
+with `sudo systemctl disable --now azazel-edge-netflow-receiver`.
+
+```bash
 # SVC-12 (optional): the NetFlow sensor unit
 cd ~/Azazel-Edge && sudo ENABLE_NETFLOW=1 ENABLE_SERVICES=1 installer/internal/install_sensors.sh
 systemctl show -p ActiveState -p Result -p User azazel-edge-netflow-receiver
@@ -268,7 +305,7 @@ systemctl show -p ActiveState -p Result -p User azazel-edge-netflow-receiver
 | SVC-06 | Accounts | `getent passwd azazel-web azazel-agent azazel-sensor` and `id azazel-web` | `azazel-web` and `azazel-agent` exist with a nologin shell; `azazel-web` is in `azazel-control`; `azazel-sensor` only if SNMP/NetFlow was enabled | | #475, #476, #480 |
 | SVC-07 | TUI without permission | as `<pi-user>` (not in `azazel-control`): `azazel-edge-tui --curses` | No traceback; the View shows `(control.sock: permission denied)` and the evidence names the `azazel-control` group; quitting exits 0. `sudo azazel-edge-tui --curses` shows the live state | | #490, #479 |
 | SVC-08 | Web UI as `azazel-web` | dashboard (2.7): status, Wi-Fi scan, SoT edit, M.I.O. question (`/api/ai/ask`) | Each answers; a failure is shown as a failure, never as success | | #475, #476, #479 |
-| SVC-09 | P0 relay from the real core | commands above (test alerts into `/var/log/suricata/eve.json`; note the time in the result) | `AZAZEL_DEFENSE_ENFORCE=false` and `AZAZEL_DEFENSE_DRY_RUN=true` in the unit, nothing from the environment file; `core-decision-audit.jsonl` grows and a P0 entry is added to `p0-alert-queue.jsonl`. Which scenario gives a P0 (enforcement-bearing or SOC-critical) decision on the device is **(to confirm)**; try `port_scan` too | | #476 |
+| SVC-09 | P0 relay from the real core | steps 1 and 2 above (step 2 only after step 1 passed) | Step 1: `AZAZEL_DEFENSE_ENFORCE=false` and `AZAZEL_DEFENSE_DRY_RUN=true` in the unit, nothing from the environment file. Step 2: `core-decision-audit.jsonl` grows and a P0 entry is added to `p0-alert-queue.jsonl`. Which scenario gives a P0 (enforcement-bearing or SOC-critical) decision on the device is **(to confirm)**; none: `N/A` as above | | #476 |
 | SVC-10 | ntfy SSE through the token file | commands above | Terminal 2 prints `200`; terminal 1 shows an event carrying `first-run test` | | #475, #485 |
 | SVC-11 | OpenCanary/Suricata display | command above | `opencanary`, `suricata` and `ntfy` are `ON`; `container_check` is `not_checked` (the Web UI no longer asks Docker) | | #475 |
 | SVC-12 | SNMP/NetFlow (optional) | commands above (not installed by default: `ENABLE_SNMP`/`ENABLE_NETFLOW` are `0`, and `install_sensors.sh` enables units only with `ENABLE_SERVICES=1`) | `User=azazel-sensor`; `ActiveState=inactive`, `Result=success`: the module has no entry point and exits 0 at once, so **no sensor runs** (section 5) | | #480, #483 |
@@ -589,15 +626,21 @@ git fetch origin main pull/489/head:try-489
 git merge-base --is-ancestor origin/main try-489 && echo rebased || echo "not rebased: FW rows are N/A"
 ```
 
-Then, only after 3.1–3.12, on the **console** (a terminal, no SSH session from
-the uplink):
+The rows run in this order: FW-01 (enable and keep), then FW-02–FW-05 and
+FW-07–FW-12 with the rules **enabled**, then FW-06 (automatic rollback) last,
+then the rollback below. Before each stage, `sudo azazel-host-firewall status`
+must print `state=enabled` and `loaded=yes`; if it does not, the rows of that
+stage are `N/A` with the status line as the reason.
+
+**Stage 1 (FW-01): enable and keep.** Only after 3.1–3.12, on the
+**console** (a terminal, no SSH session from the uplink):
 
 ```bash
 git switch try-489
 sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall
 # the installer loads the rules on trial and asks:
 #   Host firewall on trial. Type 'yes' within 100 s to keep it (anything else, or nothing, takes it off):
-# before answering, check from the upstream test host (3.7) and from the LAN; then type: yes
+# type: yes   (the WAN checks of FW-02 come after this, without a time limit)
 sudo azazel-host-firewall status
 ```
 
@@ -609,34 +652,48 @@ unless `sudo azazel-host-firewall confirm` is run from a **new** connection
 (console or a new LAN SSH session; an open session survives as an
 established connection).
 
+**Stage 2 (FW-02–FW-05, FW-07–FW-12): with the rules enabled.**
+
 ```bash
+sudo azazel-host-firewall status   # state=enabled, loaded=yes (again after the FW-05 reboot)
 # FW-04: on the device, after half the DHCP lease time
 journalctl -u NetworkManager -b --no-pager | grep -i -E 'dhcp4|dhcp6'
 ip -6 addr show dev <WAN_IF>
-# FW-06: automatic rollback, stdin not a terminal so the installer does not ask
-sudo azazel-host-firewall disable
-sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall </dev/null
-# wait 120 s, then
-sudo azazel-host-firewall status
 # FW-09: docker networks and the FORWARD policy docker set
 sudo docker network inspect -f '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' $(sudo docker network ls -q)
 sudo iptables -S FORWARD | head -n 1
+# FW-11 (only if nftables.service is enabled; from the console, see the row)
+systemctl is-enabled nftables
+sudo systemctl reload nftables
+sudo nft list tables
+sudo systemctl start azazel-internal-apply   # only if "ip azazel_internal" is missing
+```
+
+**Stage 3 (FW-06): automatic rollback, last.** stdin must not be a terminal,
+so the installer does not ask:
+
+```bash
+sudo azazel-host-firewall disable
+sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall </dev/null
+sudo azazel-host-firewall status   # state=pending while the timer runs
+# wait 120 s, then
+sudo azazel-host-firewall status
 ```
 
 | ID | Check | Command | Expected | Result | PR / issue |
 | --- | --- | --- | --- | --- | --- |
-| FW-01 | Trial kept by the installer prompt | answer `yes` above | `status` prints `state=enabled`, `loaded=yes`, `remote_access=off` | | #489 |
-| FW-02 | WAN closed | repeat 3.7 from the upstream host | 80/443/8065/8081/22 not reachable (time out), 5353 no answer; WAN-09 no longer reachable | | #489 |
-| FW-03 | LAN unchanged | repeat WAN-08, AP-07, MM-05 (wired LAN and internal AP: Web UI, SSH, DHCP/DNS, mDNS) | As before | | #489 |
-| FW-04 | Uplink DHCP and IPv6 | commands above; IPv6 only if the uplink has it | The DHCPv4 lease is renewed; RA/SLAAC (and DHCPv6, if the uplink uses it) addresses kept | | #489 |
-| FW-05 | Boot order | reboot; `systemctl show -p ActiveEnterTimestampMonotonic azazel-host-firewall NetworkManager`; `systemctl --failed` | `azazel-host-firewall` has the smaller timestamp (active before NetworkManager); nothing failed | | #489 |
-| FW-06 | Automatic rollback | commands above (`</dev/null`, or an SSH session without a pty) | The installer prints the NOTICE (no question); after 120 s `status` prints `state=rolled-back`, `loaded=no`; the WAN results are as in 3.7 again | | #489 |
-| FW-07 | PMTU | download a file of 100 MB or more over HTTPS from a LAN client (through the NAT) and on the device | Completes without stalling | | #489 |
-| FW-08 | Containers | `sudo docker exec azazel-edge-ollama ollama pull qwen3.5:0.8b` (outbound); MM-05 (container to host) | Both work while the firewall is on | | #489 |
-| FW-09 | Docker networks and FORWARD | commands above | Every docker network in 172.17.0.0/16–172.31.0.0/16; record the FORWARD policy line (docker usually sets `-P FORWARD DROP`) | | #489 |
-| FW-10 | Remote access pair | re-run the installer with `ALLOW_EXTERNAL_SSH=true` (and the other values), then without it; `sudo DEVICE_HOSTNAME=<hostname> MODE=open installer/internal/set_dev_remote_access.sh`, then `MODE=close` | `ALLOW_EXTERNAL_SSH=true` or `MODE=open`: 22/tcp and 5353/udp reachable from the upstream host, 8081 still not; without it / `MODE=close`: closed again. `set_dev_remote_access.sh` sets the host name to `DEVICE_HOSTNAME` (default `Azazel-Edge`) and prints the uplink address: do not paste its output | | #489 |
-| FW-11 | `nftables.service` reload | only if `systemctl is-enabled nftables` is `enabled`: `sudo systemctl reload nftables`, then `sudo nft list tables` | `inet azazel_host` is still listed. Otherwise `N/A`: starting `nftables.service` flushes the whole ruleset, including the NAT table `ip azazel_internal`, which nothing restores (known, #489) | | #489 |
-| FW-12 | Enforcement tables | `sudo nft list tables` | `N/A` unless the owner has created `table inet azazel_edge` and enabled enforcement (section 5); then the core's isolate/redirect rules and `inet azazel_host` must both stay | | #489, #480 |
+| FW-01 | Kept by the installer prompt | stage 1 (`yes`) | `status` prints `state=enabled`, `loaded=yes`, `remote_access=off` | | #489 |
+| FW-02 | WAN closed | stage 2: repeat 3.7 from the upstream host | 80/443/8065/8081/22 not reachable (time out), 5353 no answer; WAN-09 no longer reachable | | #489 |
+| FW-03 | LAN unchanged | stage 2: repeat WAN-08, AP-07, MM-05 (wired LAN and internal AP: Web UI, SSH, DHCP/DNS, mDNS) | As before | | #489 |
+| FW-04 | Uplink DHCP and IPv6 | stage 2 commands; IPv6 only if the uplink has it | The DHCPv4 lease is renewed; RA/SLAAC (and DHCPv6, if the uplink uses it) addresses kept | | #489 |
+| FW-05 | Boot order | stage 2: reboot; `systemctl show -p ActiveEnterTimestampMonotonic azazel-host-firewall NetworkManager`; `systemctl --failed`; `status` again | `azazel-host-firewall` has the smaller timestamp (active before NetworkManager); nothing failed; still `state=enabled` | | #489 |
+| FW-07 | PMTU | stage 2: download a file of 100 MB or more over HTTPS from a LAN client (through the NAT) and on the device | Completes without stalling | | #489 |
+| FW-08 | Containers | stage 2: `sudo docker exec azazel-edge-ollama ollama pull qwen3.5:0.8b` (outbound); MM-05 (container to host) | Both work | | #489 |
+| FW-09 | Docker networks and FORWARD | stage 2 commands | Every docker network in 172.17.0.0/16–172.31.0.0/16; record the FORWARD policy line (docker usually sets `-P FORWARD DROP`) | | #489 |
+| FW-10 | Remote access pair | stage 2: re-run the installer with `ALLOW_EXTERNAL_SSH=true` (and the other values), then without it; `sudo DEVICE_HOSTNAME=<hostname> MODE=open installer/internal/set_dev_remote_access.sh`, then `MODE=close` | `ALLOW_EXTERNAL_SSH=true` or `MODE=open`: 22/tcp and 5353/udp reachable from the upstream host, 8081 still not; without it / `MODE=close`: closed again. Side effects of `set_dev_remote_access.sh`: it sets the host name to `DEVICE_HOSTNAME` (default `Azazel-Edge`), rewrites `/etc/ssh/sshd_config` (a `sshd_config.bak.<time>` copy is kept; `open` removes every `ListenAddress`, `close` puts `ListenAddress 172.16.0.254` back) and restarts ssh, and it prints the uplink address (do not paste its output). Run it from the console. | | #489 |
+| FW-11 | `nftables.service` reload | stage 2 commands, only if `systemctl is-enabled nftables` is `enabled`, from the **console** | `inet azazel_host` is listed again. A reload also runs `flush ruleset`, which removes `ip azazel_internal` (the LAN NAT): LAN clients lose the uplink until it is back. If `nft list tables` lacks it, run `sudo systemctl start azazel-internal-apply`, check again, and record it as a finding. If nftables is not enabled: `N/A` (do not start it: the same flush, known in #489) | | #489 |
+| FW-12 | Enforcement tables | stage 2: `sudo nft list tables` | `N/A` unless the owner has created `table inet azazel_edge` and enabled enforcement (section 5); then the core's isolate/redirect rules and `inet azazel_host` must both stay | | #489, #480 |
+| FW-06 | Automatic rollback (last) | stage 3 (`</dev/null`, or an SSH session without a pty) | The installer prints the NOTICE (no question); after 120 s `status` prints `state=rolled-back`, `loaded=no`; the WAN results are as in 3.7 again | | #489 |
 
 Rollback (always, at the end):
 
@@ -645,11 +702,12 @@ sudo azazel-host-firewall disable
 sudo azazel-host-firewall status   # state=off, loaded=no
 git switch main
 sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh
-sudo nft list tables               # no "inet azazel_host"
+sudo nft list tables               # no "inet azazel_host"; "ip azazel_internal" present
 ```
 
 The helper and its units stay installed after the rollback; with the state
-off they load nothing at boot.
+off they load nothing at boot. Undo FW-10 if it was left open
+(`MODE=close`).
 
 ## 4. Recording results and collecting failures
 

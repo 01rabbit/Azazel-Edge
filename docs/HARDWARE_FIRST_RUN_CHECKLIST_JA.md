@@ -238,18 +238,53 @@ for u in azazel-edge-control-daemon azazel-edge-core azazel-edge-web azazel-edge
 done
 # SVC-05
 systemctl show -p NRestarts azazel-edge-control-daemon azazel-edge-core azazel-edge-web azazel-edge-ai-agent
-# SVC-09: enforcement stays off (the unit's defaults; the environment file must not change them)
+```
+
+SVC-09 は 2 段階です。段階 1 は読むだけです:
+
+```bash
+# SVC-09 step 1: enforcement stays off (the unit's defaults; the environment file must not change them)
 systemctl show -p Environment azazel-edge-core
 sudo grep -E '^AZAZEL_DEFENSE_' /etc/default/azazel-edge-security
 sudo wc -l /var/log/azazel-edge/ai/core-decision-audit.jsonl /var/log/azazel-edge/ai/p0-alert-queue.jsonl
+date -Is
+```
+
+段階 2 は、段階 1 で unit に `AZAZEL_DEFENSE_ENFORCE=false` と
+`AZAZEL_DEFENSE_DRY_RUN=true` があり、`grep` が何も出さない**ときだけ**実行
+します。そうでなければ注入せず、SVC-09 を理由付きで `N/A` にします。試験用の
+alert は消せない形で残ります: 追記専用の core の判定の監査チェーン、P0 キュー、
+`normalized-events.jsonl`（チェーンを壊さずに消すことはできない）。P0 になると、
+キューの先の表示や音声の通知が出ることがあります。後で区別できるよう、前後の
+時刻を記録します。
+
+```bash
+# SVC-09 step 2: test alerts into the eve.json the core reads
 sudo azazel-edge-dummy-eve emit --scenario ssh_bruteforce --count 20
-# a few seconds later, the same wc -l again
+# a few seconds later
+sudo wc -l /var/log/azazel-edge/ai/core-decision-audit.jsonl /var/log/azazel-edge/ai/p0-alert-queue.jsonl
+date -Is
+```
+
+`ssh_bruteforce` と `port_scan` の後でも P0 の行が増えなければ、SVC-09 を
+`N/A（試験用の alert で P0 の判定にならない）` とし、シナリオと行数を記録します。
+
+```bash
 # SVC-10: terminal 1, the Web UI's ntfy bridge (the token goes on stdin)
 sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -skN -H @- --max-time 30 https://127.0.0.1/api/events/stream
 # SVC-10: terminal 2, publish a test message with the Edge ntfy token
 sudo sed 's/^/Authorization: Bearer /' /etc/azazel-edge/ntfy.token | curl -s -o /dev/null -w '%{http_code}\n' -H @- -d 'first-run test' http://127.0.0.1:8081/azg-info-status
 # SVC-11: monitoring state as the Web UI reports it
 sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- https://127.0.0.1/api/state | python3 -c 'import json, sys; print(json.load(sys.stdin)["monitoring"])'
+```
+
+SVC-12 は任意で、機器を変えます: `install_sensors.sh` は
+`/etc/default/azazel-edge-sensors` を上書きし（`SNMP_TARGETS` が無いと
+community `public` の仮の SNMP の対象を書く。`ENABLE_SNMP=0` なので SNMP
+自体は動かない）、NetFlow の unit を有効のまま残します。終わったら
+`sudo systemctl disable --now azazel-edge-netflow-receiver` で戻します。
+
+```bash
 # SVC-12 (optional): the NetFlow sensor unit
 cd ~/Azazel-Edge && sudo ENABLE_NETFLOW=1 ENABLE_SERVICES=1 installer/internal/install_sensors.sh
 systemctl show -p ActiveState -p Result -p User azazel-edge-netflow-receiver
@@ -265,7 +300,7 @@ systemctl show -p ActiveState -p Result -p User azazel-edge-netflow-receiver
 | SVC-06 | アカウント | `getent passwd azazel-web azazel-agent azazel-sensor` と `id azazel-web` | `azazel-web` と `azazel-agent` が nologin のシェルで存在、`azazel-web` は `azazel-control` に所属、`azazel-sensor` は SNMP/NetFlow を有効にしたときだけ | | #475, #476, #480 |
 | SVC-07 | 権限の無いユーザーの TUI | `<pi-user>`（`azazel-control` に入っていない）で `azazel-edge-tui --curses` | トレースバックが出ない。View に `(control.sock: permission denied)`、evidence に `azazel-control` グループの案内が出て、終了すると終了コード 0。`sudo azazel-edge-tui --curses` では実際の状態が出る | | #490, #479 |
 | SVC-08 | `azazel-web` で動く Web UI | ダッシュボード（2.7）: 状態、Wi-Fi のスキャン、SoT の編集、M.I.O. への質問（`/api/ai/ask`） | それぞれ応答する。失敗は失敗として表示され、成功に見えない | | #475, #476, #479 |
-| SVC-09 | 実際の core からの P0 リレー | 上のコマンド（`/var/log/suricata/eve.json` に試験用の alert を入れる。結果に時刻を書く） | unit に `AZAZEL_DEFENSE_ENFORCE=false` と `AZAZEL_DEFENSE_DRY_RUN=true`、環境ファイルからは何も出ない。`core-decision-audit.jsonl` が増え、`p0-alert-queue.jsonl` に P0 の行が足される。機器でどのシナリオが P0（enforcement を伴う、または SOC critical）の判定になるかは **（要確認）**。`port_scan` も試す | | #476 |
+| SVC-09 | 実際の core からの P0 リレー | 上の段階 1 と 2（段階 2 は段階 1 が通ったときだけ） | 段階 1: unit に `AZAZEL_DEFENSE_ENFORCE=false` と `AZAZEL_DEFENSE_DRY_RUN=true`、環境ファイルからは何も出ない。段階 2: `core-decision-audit.jsonl` が増え、`p0-alert-queue.jsonl` に P0 の行が足される。機器でどのシナリオが P0（enforcement を伴う、または SOC critical）の判定になるかは **（要確認）**。ならなければ上のとおり `N/A` | | #476 |
 | SVC-10 | トークンファイルを使った ntfy の SSE | 上のコマンド | 端末 2 が `200`。端末 1 に `first-run test` を含むイベントが出る | | #475, #485 |
 | SVC-11 | OpenCanary/Suricata の表示 | 上のコマンド | `opencanary`・`suricata`・`ntfy` が `ON`、`container_check` が `not_checked`（Web UI は Docker に問い合わせない） | | #475 |
 | SVC-12 | SNMP/NetFlow（任意） | 上のコマンド（既定では入らない: `ENABLE_SNMP`/`ENABLE_NETFLOW` は `0`、`install_sensors.sh` は `ENABLE_SERVICES=1` のときだけ unit を有効にする） | `User=azazel-sensor`。`ActiveState=inactive`、`Result=success`: モジュールにエントリポイントが無くすぐに終了コード 0 で終わるので、**センサーは動いていない**（5 章） | | #480, #483 |
@@ -585,15 +620,21 @@ git fetch origin main pull/489/head:try-489
 git merge-base --is-ancestor origin/main try-489 && echo rebased || echo "not rebased: FW rows are N/A"
 ```
 
-そのうえで、3.1〜3.12 の後に、**コンソール**（端末があり、上流側からの SSH
-セッションが無い状態）で実行します:
+行はこの順に行います: FW-01（有効にして確定）→ 規則が**有効**な状態で
+FW-02〜FW-05 と FW-07〜FW-12 → 最後に FW-06（自動の巻き戻し）→ 下の
+「元に戻す」。各段階の前に `sudo azazel-host-firewall status` が
+`state=enabled` と `loaded=yes` を出すことを確かめます。出なければ、その段階の
+行は `N/A` とし、status の行を理由に書きます。
+
+**段階 1（FW-01）: 有効にして確定。** 3.1〜3.12 の後に、**コンソール**
+（端末があり、上流側からの SSH セッションが無い状態）で実行します:
 
 ```bash
 git switch try-489
 sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall
 # the installer loads the rules on trial and asks:
 #   Host firewall on trial. Type 'yes' within 100 s to keep it (anything else, or nothing, takes it off):
-# before answering, check from the upstream test host (3.7) and from the LAN; then type: yes
+# type: yes   (the WAN checks of FW-02 come after this, without a time limit)
 sudo azazel-host-firewall status
 ```
 
@@ -604,34 +645,48 @@ NOTICE を出し、**新しい**接続（コンソールか新しい LAN 側の 
 セッションは確立済みの接続として残る）から `sudo azazel-host-firewall confirm`
 を実行しない限り、helper のタイマーが 120 秒後に規則を外します。
 
+**段階 2（FW-02〜FW-05、FW-07〜FW-12）: 規則が有効な状態で。**
+
 ```bash
+sudo azazel-host-firewall status   # state=enabled, loaded=yes (again after the FW-05 reboot)
 # FW-04: on the device, after half the DHCP lease time
 journalctl -u NetworkManager -b --no-pager | grep -i -E 'dhcp4|dhcp6'
 ip -6 addr show dev <WAN_IF>
-# FW-06: automatic rollback, stdin not a terminal so the installer does not ask
-sudo azazel-host-firewall disable
-sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall </dev/null
-# wait 120 s, then
-sudo azazel-host-firewall status
 # FW-09: docker networks and the FORWARD policy docker set
 sudo docker network inspect -f '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' $(sudo docker network ls -q)
 sudo iptables -S FORWARD | head -n 1
+# FW-11 (only if nftables.service is enabled; from the console, see the row)
+systemctl is-enabled nftables
+sudo systemctl reload nftables
+sudo nft list tables
+sudo systemctl start azazel-internal-apply   # only if "ip azazel_internal" is missing
+```
+
+**段階 3（FW-06）: 自動の巻き戻し（最後）。** installer が尋ねないよう、標準
+入力を端末以外にします:
+
+```bash
+sudo azazel-host-firewall disable
+sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh --enable-host-firewall </dev/null
+sudo azazel-host-firewall status   # state=pending while the timer runs
+# wait 120 s, then
+sudo azazel-host-firewall status
 ```
 
 | ID | 項目 | コマンド | 期待する結果 | Result | PR / issue |
 | --- | --- | --- | --- | --- | --- |
-| FW-01 | installer の問いで試行を確定 | 上で `yes` と答える | `status` が `state=enabled`、`loaded=yes`、`remote_access=off` | | #489 |
-| FW-02 | WAN が閉じる | 上流の試験機から 3.7 を繰り返す | 80/443/8065/8081/22 に届かない（タイムアウト）。5353 は応答なし。WAN-09 も届かない | | #489 |
-| FW-03 | LAN は変わらない | WAN-08、AP-07、MM-05 を繰り返す（有線 LAN と内部 AP から、Web UI・SSH・DHCP/DNS・mDNS） | 前と同じ | | #489 |
-| FW-04 | 上流の DHCP と IPv6 | 上のコマンド。IPv6 は上流にある場合だけ | DHCPv4 のリースが更新される。RA/SLAAC（上流が使っていれば DHCPv6 も）のアドレスが残る | | #489 |
-| FW-05 | 起動の順番 | 再起動して `systemctl show -p ActiveEnterTimestampMonotonic azazel-host-firewall NetworkManager`、`systemctl --failed` | `azazel-host-firewall` の時刻の方が小さい（NetworkManager より先に active）。失敗した unit が無い | | #489 |
-| FW-06 | 自動の巻き戻し | 上のコマンド（`</dev/null`、または pty の無い SSH で実行） | installer は尋ねずに NOTICE を出す。120 秒後に `status` が `state=rolled-back`、`loaded=no`。WAN の結果が 3.7 のとおりに戻る | | #489 |
-| FW-07 | PMTU | LAN 側のクライアントから（NAT 経由で）と機器自身で、100 MB 以上のファイルを HTTPS でダウンロード | 止まらずに完了する | | #489 |
-| FW-08 | コンテナ | `sudo docker exec azazel-edge-ollama ollama pull qwen3.5:0.8b`（外向き）、MM-05（コンテナからホスト） | ファイアウォールが有効でもどちらも動く | | #489 |
-| FW-09 | Docker のネットワークと FORWARD | 上のコマンド | Docker のネットワークがすべて 172.17.0.0/16〜172.31.0.0/16 にある。FORWARD の方針の行を記録する（Docker は通常 `-P FORWARD DROP` にする） | | #489 |
-| FW-10 | リモートアクセスの対の規則 | installer を `ALLOW_EXTERNAL_SSH=true`（とほかの値）で再実行し、次に付けずに再実行。`sudo DEVICE_HOSTNAME=<hostname> MODE=open installer/internal/set_dev_remote_access.sh`、次に `MODE=close` | `ALLOW_EXTERNAL_SSH=true` か `MODE=open` のとき、上流の試験機から 22/tcp と 5353/udp に届き、8081 は届かないまま。付けない／`MODE=close` で再び閉じる。`set_dev_remote_access.sh` はホスト名を `DEVICE_HOSTNAME`（既定 `Azazel-Edge`）にし、上流のアドレスを表示する。出力は貼らない | | #489 |
-| FW-11 | `nftables.service` の reload | `systemctl is-enabled nftables` が `enabled` のときだけ `sudo systemctl reload nftables`、その後 `sudo nft list tables` | `inet azazel_host` が残る。それ以外は `N/A`: `nftables.service` を起動するとルールセット全体が flush され、NAT の表 `ip azazel_internal` も消えて戻らない（既知、#489） | | #489 |
-| FW-12 | enforcement の表 | `sudo nft list tables` | オーナーが `table inet azazel_edge` を作って enforcement を有効にしていない限り `N/A`（5 章）。有効なら core の isolate/redirect の規則と `inet azazel_host` の両方が残る | | #489, #480 |
+| FW-01 | installer の問いで確定 | 段階 1（`yes`） | `status` が `state=enabled`、`loaded=yes`、`remote_access=off` | | #489 |
+| FW-02 | WAN が閉じる | 段階 2: 上流の試験機から 3.7 を繰り返す | 80/443/8065/8081/22 に届かない（タイムアウト）。5353 は応答なし。WAN-09 も届かない | | #489 |
+| FW-03 | LAN は変わらない | 段階 2: WAN-08、AP-07、MM-05 を繰り返す（有線 LAN と内部 AP から、Web UI・SSH・DHCP/DNS・mDNS） | 前と同じ | | #489 |
+| FW-04 | 上流の DHCP と IPv6 | 段階 2 のコマンド。IPv6 は上流にある場合だけ | DHCPv4 のリースが更新される。RA/SLAAC（上流が使っていれば DHCPv6 も）のアドレスが残る | | #489 |
+| FW-05 | 起動の順番 | 段階 2: 再起動して `systemctl show -p ActiveEnterTimestampMonotonic azazel-host-firewall NetworkManager`、`systemctl --failed`、もう一度 `status` | `azazel-host-firewall` の時刻の方が小さい（NetworkManager より先に active）。失敗した unit が無い。`state=enabled` のまま | | #489 |
+| FW-07 | PMTU | 段階 2: LAN 側のクライアントから（NAT 経由で）と機器自身で、100 MB 以上のファイルを HTTPS でダウンロード | 止まらずに完了する | | #489 |
+| FW-08 | コンテナ | 段階 2: `sudo docker exec azazel-edge-ollama ollama pull qwen3.5:0.8b`（外向き）、MM-05（コンテナからホスト） | どちらも動く | | #489 |
+| FW-09 | Docker のネットワークと FORWARD | 段階 2 のコマンド | Docker のネットワークがすべて 172.17.0.0/16〜172.31.0.0/16 にある。FORWARD の方針の行を記録する（Docker は通常 `-P FORWARD DROP` にする） | | #489 |
+| FW-10 | リモートアクセスの対の規則 | 段階 2: installer を `ALLOW_EXTERNAL_SSH=true`（とほかの値）で再実行し、次に付けずに再実行。`sudo DEVICE_HOSTNAME=<hostname> MODE=open installer/internal/set_dev_remote_access.sh`、次に `MODE=close` | `ALLOW_EXTERNAL_SSH=true` か `MODE=open` のとき、上流の試験機から 22/tcp と 5353/udp に届き、8081 は届かないまま。付けない／`MODE=close` で再び閉じる。`set_dev_remote_access.sh` の副作用: ホスト名を `DEVICE_HOSTNAME`（既定 `Azazel-Edge`）にする。`/etc/ssh/sshd_config` を書き換え（`sshd_config.bak.<時刻>` を残す。`open` は `ListenAddress` をすべて消し、`close` は `ListenAddress 172.16.0.254` を戻す）、ssh を再起動する。上流のアドレスを表示する（出力は貼らない）。コンソールから実行する | | #489 |
+| FW-11 | `nftables.service` の reload | 段階 2 のコマンド。`systemctl is-enabled nftables` が `enabled` のときだけ、**コンソール**から | `inet azazel_host` が再び出る。reload でも `flush ruleset` が走り、`ip azazel_internal`（LAN の NAT）が消えるので、戻るまで LAN のクライアントは上流に出られない。`nft list tables` に無ければ `sudo systemctl start azazel-internal-apply` で戻し、もう一度確かめて発見事項として記録する。nftables が無効なら `N/A`（起動しない。同じ flush が起きる。#489 の既知事項） | | #489 |
+| FW-12 | enforcement の表 | 段階 2: `sudo nft list tables` | オーナーが `table inet azazel_edge` を作って enforcement を有効にしていない限り `N/A`（5 章）。有効なら core の isolate/redirect の規則と `inet azazel_host` の両方が残る | | #489, #480 |
+| FW-06 | 自動の巻き戻し（最後） | 段階 3（`</dev/null`、または pty の無い SSH で実行） | installer は尋ねずに NOTICE を出す。120 秒後に `status` が `state=rolled-back`、`loaded=no`。WAN の結果が 3.7 のとおりに戻る | | #489 |
 
 元に戻す（最後に必ず）:
 
@@ -640,11 +695,11 @@ sudo azazel-host-firewall disable
 sudo azazel-host-firewall status   # state=off, loaded=no
 git switch main
 sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_internal_network.sh
-sudo nft list tables               # no "inet azazel_host"
+sudo nft list tables               # no "inet azazel_host"; "ip azazel_internal" present
 ```
 
 元に戻した後も helper と unit は残りますが、状態が off なので起動時に何も
-読み込みません。
+読み込みません。FW-10 を開いたままにしていたら `MODE=close` で閉じます。
 
 ## 4. 結果の記録と、失敗時に集めるもの
 
