@@ -67,15 +67,52 @@ def test_the_installer_does_not_install_rpi_gpio_and_takes_lgpio_from_the_pi_rep
     assert "NOTICE" in gpio  # the else branch says the EPD has no hardware output
 
 
-@pytest.mark.parametrize("policy,found", [
-    ("python3-lgpio:\n  Installed: (none)\n  Candidate: 0.2.2-1~rpt1+trixie\n", True),
-    ("python3-lgpio:\n  Installed: (none)\n  Candidate: (none)\n", False),
-    ("", False),
-])
-def test_apt_has_package_reads_the_candidate(policy, found):
-    stub = f"apt-cache() {{\ncat <<'EOF'\n{policy}EOF\n}}\n"
-    res = _bash(stub + _function(TOOLS, "apt_has_package") + "apt_has_package python3-lgpio && echo yes || echo no\n")
-    assert res.stdout.strip() == ("yes" if found else "no")
+# apt-cache policy output as apt prints it: the Candidate line comes early and
+# the version table after it is long enough (> the 64 KiB pipe buffer) that a
+# `grep -q` reading from a pipe exits while apt-cache is still writing.
+_POLICY_HEAD = "python3-lgpio:\n  Installed: (none)\n  Candidate: {cand}\n  Version table:\n"
+_POLICY_TAIL_LINES = 6000
+
+
+@pytest.mark.parametrize("cand,found", [("0.2.2-1~rpt1+trixie", True), ("(none)", False)])
+def test_apt_has_package_reads_the_candidate_under_pipefail(cand, found):
+    head = _POLICY_HEAD.format(cand=cand)
+    stub = (f"apt-cache() {{\ncat <<'EOF'\n{head}EOF\n"
+            f"local i; for ((i = 0; i < {_POLICY_TAIL_LINES}; i++)); do "
+            "printf '     500 http://archive.example/debian trixie/main arm64 Packages\\n'; done\n}\n")
+    fn = _function(TOOLS, "apt_has_package")
+    for _ in range(5):  # the SIGPIPE race made the old pipe fail every time; check it stays fixed
+        res = _bash(stub + fn + "apt_has_package python3-lgpio && echo yes || echo no\n")
+        assert res.returncode == 0 and res.stdout.strip() == ("yes" if found else "no"), res.stderr
+    # The old form (apt-cache piped into grep -q) fails here under pipefail.
+    old = ("apt_has_package() {\n  apt-cache policy \"$1\" 2>/dev/null | grep -Eq '^[[:space:]]+Candidate: [^(]'\n}\n")
+    if found:
+        res = _bash(stub + old + "apt_has_package python3-lgpio && echo yes || echo no\n")
+        assert res.stdout.strip() == "no"
+    assert _bash(stub.replace("cat <<'EOF'", "return 100\ncat <<'EOF'") + fn
+                 + "apt_has_package x && echo yes || echo no\n").stdout.strip() == "no"
+
+
+def test_no_pipefail_script_pipes_a_command_into_grep_q():
+    """Under pipefail, `cmd | grep -q` fails when grep exits at the match and
+    cmd dies of SIGPIPE. Every installer script (and the dev provisioning
+    script) reads the output into a variable first."""
+    skip = {
+        # Owned by the ntfy hardening PR (not changed here): curl's small
+        # health reply is written in one go.
+        "installer/internal/install_ntfy.sh",
+    }
+    pattern = re.compile(r"\|\s*e?grep\b[^|\n]*\s-[A-Za-z]*q")
+    offenders = []
+    for path in sorted(list((ROOT / "installer").rglob("*.sh")) + list((ROOT / "tools").rglob("*.sh"))):
+        rel = str(path.relative_to(ROOT))
+        text = path.read_text(encoding="utf-8")
+        if "pipefail" not in text or rel in skip:
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            if not line.lstrip().startswith("#") and pattern.search(line):
+                offenders.append(f"{rel}:{n}: {line.strip()}")
+    assert offenders == []
 
 
 def test_spi_is_enabled_on_raspberry_pi_os_only():

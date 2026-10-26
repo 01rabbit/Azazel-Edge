@@ -75,7 +75,10 @@ wait_for_ping() {
 # system admin implicitly. In dev the Calls plugin bot may already exist, so
 # promote explicitly and enable personal access tokens via local mode.
 ensure_admin_user() {
-  if ! mmctl_local user list 2>/dev/null | grep -q "(${MM_EMAIL})"; then
+  local users
+  # Into a variable first, not a pipe into grep -q (SIGPIPE under pipefail).
+  users="$(mmctl_local user list 2>/dev/null || true)"
+  if ! grep -qF "(${MM_EMAIL})" <<<"$users"; then
     mmctl_local user create --email "${MM_EMAIL}" --username "${MM_USERNAME}" \
       --password "${MM_PASSWORD}" --email-verified --system-admin \
       || fail "mmctl user create failed"

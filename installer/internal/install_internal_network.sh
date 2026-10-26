@@ -208,7 +208,10 @@ install_packages() {
 detect_wan_if() {
   local wan_if="${WAN_IF:-}"
   if [[ -z "$wan_if" ]]; then
-    wan_if="$(ip route show default | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')"
+    local routes
+    # Into a variable first: awk exits at the first match (SIGPIPE to ip).
+    routes="$(ip route show default)"
+    wan_if="$(awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}' <<<"$routes")"
   fi
 
   if [[ -z "$wan_if" ]]; then

@@ -40,9 +40,14 @@ is_raspberry_pi_os() {
 }
 
 # True when the apt sources offer the package (the Raspberry Pi repository
-# offers python3-lgpio; plain Debian, e.g. a VM, does not).
+# offers python3-lgpio; plain Debian, e.g. a VM, does not). The output is
+# taken into a variable first: piped into `grep -q`, apt-cache is killed by
+# SIGPIPE when grep exits at the first match, and pipefail turns every match
+# into a failure.
 apt_has_package() {
-  apt-cache policy "$1" 2>/dev/null | grep -Eq '^[[:space:]]+Candidate: [^(]'
+  local policy
+  policy="$(apt-cache policy "$1" 2>/dev/null)" || return 1
+  grep -Eq '^[[:space:]]+Candidate: [^(]' <<<"$policy"
 }
 
 echo "[1/16] Install OS dependencies"

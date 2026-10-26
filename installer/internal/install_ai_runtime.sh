@@ -57,7 +57,8 @@ seed_web_env_defaults() {
     # Present in any form systemd reads: leading blanks, blanks around `=`.
     # Not `export KEY=`: systemd 257 ignores such a line ("Ignoring invalid
     # environment assignment"), so the key is still unset for the unit.
-    if ! printf '%s' "${current}" | grep -Eq "^[[:space:]]*${key}[[:space:]]*="; then
+    # A here-string, not a pipe into grep -q (no SIGPIPE under pipefail).
+    if ! grep -Eq "^[[:space:]]*${key}[[:space:]]*=" <<<"${current}"; then
       missing+="${line}"$'\n'
     fi
   done <<'EOF'

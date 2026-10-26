@@ -84,7 +84,10 @@ ensure_web_user() {
     useradd --system --gid "$WEB_GROUP" --no-create-home --home-dir /nonexistent --shell "$shell" "$WEB_USER"
     say "created user $WEB_USER"
   fi
-  if ! id -nG "$WEB_USER" | tr ' ' '\n' | grep -qx "$CONTROL_GROUP"; then
+  # Into a variable first, not a pipe into grep -q (SIGPIPE under pipefail).
+  local web_groups
+  web_groups="$(id -nG "$WEB_USER")"
+  if [[ " $web_groups " != *" $CONTROL_GROUP "* ]]; then
     usermod -a -G "$CONTROL_GROUP" "$WEB_USER"
     say "added $WEB_USER to $CONTROL_GROUP"
   fi

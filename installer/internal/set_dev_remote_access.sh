@@ -78,14 +78,23 @@ configure_avahi_close() {
   systemctl restart avahi-daemon
 }
 
+# ufw's status is read into a variable first (a pipe into grep -q can make
+# ufw die of SIGPIPE, which pipefail turns into "not active").
+ufw_active() {
+  local status
+  command -v ufw >/dev/null 2>&1 || return 1
+  status="$(ufw status 2>/dev/null)" || return 1
+  grep -q "Status: active" <<<"$status"
+}
+
 configure_ufw_open() {
-  if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+  if ufw_active; then
     ufw allow 22/tcp >/dev/null || true
   fi
 }
 
 configure_ufw_close() {
-  if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+  if ufw_active; then
     ufw delete allow 22/tcp >/dev/null || true
   fi
 }
