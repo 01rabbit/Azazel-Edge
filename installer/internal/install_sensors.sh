@@ -33,9 +33,10 @@ EOF
 chmod 0644 "${SENSOR_ENV_FILE}"
 
 if [[ "${ENABLE_SNMP}" == "1" || "${ENABLE_NETFLOW}" == "1" ]]; then
-  # Both units run as User=azazel / Group=azazel (Edge#477): a system
-  # account with no login and no home, created here (setup_sensor_account.sh
-  # stops if an azazel that is not that account already exists).
+  # Both units run as User=azazel-sensor / Group=azazel-sensor (Edge#477):
+  # a system account with no login and no home, created here
+  # (setup_sensor_account.sh stops if an azazel-sensor that is not that
+  # account already exists; the login account azazel is not touched).
   "${REPO_ROOT}/installer/internal/setup_sensor_account.sh"
 fi
 

@@ -1,8 +1,10 @@
-"""Edge#477: the netflow and snmp units run as User=azazel / Group=azazel,
-and install_sensors.sh now creates that account (setup_sensor_account.sh):
-a system user and group, no login shell, no home. An existing azazel that is
-not such an account (a person's login account, for example) stops the
-script before anything is changed.
+"""Edge#477: the netflow and snmp units run as the dedicated account
+User=azazel-sensor / Group=azazel-sensor (before: azazel, which no installer
+created and which is the login account on many devices), and
+install_sensors.sh creates it (setup_sensor_account.sh): a system user and
+group, no login shell, no home. An existing azazel-sensor that is not such an
+account stops the script before anything is changed. The account azazel is
+never created, changed or looked at.
 
 The script runs here with stub getent/groupadd/useradd/id over a fake
 account database in tmp_path; nothing on the host is touched. All names and
@@ -87,41 +89,42 @@ def _log(db: Path) -> list[str]:
 
 def test_the_units_and_the_script_name_the_same_account():
     src = SCRIPT.read_text(encoding="utf-8")
-    assert 'SENSOR_USER="azazel"' in src and 'SENSOR_GROUP="azazel"' in src
+    assert 'SENSOR_USER="azazel-sensor"' in src and 'SENSOR_GROUP="azazel-sensor"' in src
     for unit in UNITS:
         text = unit.read_text(encoding="utf-8")
-        assert "\nUser=azazel\n" in text and "\nGroup=azazel\n" in text, unit
+        assert "\nUser=azazel-sensor\n" in text and "\nGroup=azazel-sensor\n" in text, unit
+        assert "\nUser=azazel\n" not in text and "\nGroup=azazel\n" not in text, unit
 
 
 def test_a_missing_account_is_created_as_a_system_account_without_login_or_home(tmp_path):
     res, db = _run(tmp_path)
     assert res.returncode == 0, res.stderr
     log = _log(db)
-    assert log[0] == "groupadd --system azazel"
-    assert log[1].startswith("useradd --system --gid azazel --no-create-home --home-dir /nonexistent --shell ")
-    assert log[1].split()[-2] in ("/usr/sbin/nologin", "/bin/false") and log[1].endswith(" azazel")
+    assert log[0] == "groupadd --system azazel-sensor"
+    assert log[1].startswith("useradd --system --gid azazel-sensor --no-create-home --home-dir /nonexistent --shell ")
+    assert log[1].split()[-2] in ("/usr/sbin/nologin", "/bin/false") and log[1].endswith(" azazel-sensor")
     assert len(log) == 2
 
 
 def test_an_existing_matching_system_account_is_left_as_it_is(tmp_path):
-    res, db = _run(tmp_path, passwd="azazel:x:991:990::/nonexistent:/usr/sbin/nologin\n", group="azazel:x:990:\n")
+    res, db = _run(tmp_path, passwd="azazel-sensor:x:991:990::/nonexistent:/usr/sbin/nologin\n",
+                    group="azazel-sensor:x:990:\n")
     assert res.returncode == 0, res.stderr
     assert _log(db) == []
-    assert "user azazel exists" in res.stdout
+    assert "user azazel-sensor exists" in res.stdout
 
 
 @pytest.mark.parametrize(
     "passwd, group, reason",
     [
-        # A person's login account named azazel (the usual first user on a device).
-        ("azazel:x:1000:1000:,,,:/home/azazel:/bin/bash\n", "azazel:x:1000:\n", "not a system group"),
-        ("azazel:x:1000:990:,,,:/home/azazel:/bin/bash\n", "azazel:x:990:\n", "not a system account"),
-        ("azazel:x:991:4::/nonexistent:/usr/sbin/nologin\n", "azazel:x:990:\nadm:x:4:\n", "primary group"),
-        ("azazel:x:991:990::/nonexistent:/bin/bash\n", "azazel:x:990:\n", "login shell"),
-        ("azazel:x:0:990::/nonexistent:/usr/sbin/nologin\n", "azazel:x:990:\n", "not a system account"),
+        ("azazel-sensor:x:1001:1001::/nonexistent:/usr/sbin/nologin\n", "azazel-sensor:x:1001:\n", "not a system group"),
+        ("azazel-sensor:x:1001:990::/nonexistent:/usr/sbin/nologin\n", "azazel-sensor:x:990:\n", "not a system account"),
+        ("azazel-sensor:x:991:4::/nonexistent:/usr/sbin/nologin\n", "azazel-sensor:x:990:\nadm:x:4:\n", "primary group"),
+        ("azazel-sensor:x:991:990::/nonexistent:/bin/bash\n", "azazel-sensor:x:990:\n", "login shell"),
+        ("azazel-sensor:x:0:990::/nonexistent:/usr/sbin/nologin\n", "azazel-sensor:x:990:\n", "not a system account"),
     ],
 )
-def test_an_existing_azazel_that_is_not_the_system_account_stops_the_script(tmp_path, passwd, group, reason):
+def test_an_existing_azazel_sensor_that_is_not_the_system_account_stops_the_script(tmp_path, passwd, group, reason):
     res, db = _run(tmp_path, passwd=passwd, group=group)
     assert res.returncode != 0
     assert reason in res.stderr
@@ -131,9 +134,21 @@ def test_an_existing_azazel_that_is_not_the_system_account_stops_the_script(tmp_
 def test_an_existing_home_directory_stops_the_script(tmp_path):
     home = tmp_path / "home-azazel"
     home.mkdir()
-    res, db = _run(tmp_path, passwd=f"azazel:x:991:990::{home}:/usr/sbin/nologin\n", group="azazel:x:990:\n")
+    res, db = _run(tmp_path, passwd=f"azazel-sensor:x:991:990::{home}:/usr/sbin/nologin\n",
+                   group="azazel-sensor:x:990:\n")
     assert res.returncode != 0 and "home directory" in res.stderr
     assert _log(db) == []
+
+
+def test_the_login_account_azazel_is_left_alone(tmp_path):
+    login = "azazel:x:1000:1000:,,,:/home/azazel:/bin/bash\n"
+    res, db = _run(tmp_path, passwd=login, group="azazel:x:1000:\nsudo:x:27:azazel\n")
+    assert res.returncode == 0, res.stderr
+    log = _log(db)
+    assert log[0] == "groupadd --system azazel-sensor" and log[1].endswith(" azazel-sensor") and len(log) == 2
+    assert (db / "passwd").read_text(encoding="utf-8").startswith(login)
+    src = SCRIPT.read_text(encoding="utf-8")
+    assert not re.search(r"(getent (passwd|group)|usermod|userdel|groupmod|id -nG) \"?azazel\"?\s", src)
 
 
 def test_install_sensors_creates_the_account_before_installing_either_unit():

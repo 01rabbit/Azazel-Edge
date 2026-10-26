@@ -1,23 +1,29 @@
 #!/usr/bin/env bash
 # Edge#477: the account of the optional sensor units
-# (azazel-edge-netflow-receiver, azazel-edge-snmp-poller: User=azazel,
-# Group=azazel). No other installer creates it. Idempotent; run as root
-# (install_sensors.sh runs it before it installs either unit).
+# (azazel-edge-netflow-receiver, azazel-edge-snmp-poller: User=azazel-sensor,
+# Group=azazel-sensor). Idempotent; run as root (install_sensors.sh runs it
+# before it installs either unit).
 #
-#  - Creates the system group azazel and the system user azazel (no login, no
-#    home, primary group azazel, no other group) when they are missing, the
-#    way setup_web_account.sh and setup_agent_account.sh create theirs.
-#  - An existing azazel that is not that system account stops the script:
-#    a uid or gid that is not a system id (a person's login account named
-#    azazel, for example), another primary group, a login shell or a home
-#    directory that exists. Nothing is changed then; the sensor units would
-#    otherwise run as that account.
+#  - Creates the system group azazel-sensor and the system user azazel-sensor
+#    (no login, no home, primary group azazel-sensor, no other group) when
+#    they are missing, the way setup_web_account.sh and
+#    setup_agent_account.sh create theirs.
+#  - An existing azazel-sensor that is not that system account stops the
+#    script: a uid or gid that is not a system id, another primary group, a
+#    login shell or a home directory that exists. Nothing is changed then.
+#  - The account azazel (the device's login account on many devices; the
+#    units used it before) is never created, changed or looked at.
+#
+# The sensors keep their evidence in memory and write no file; they read
+# /etc/default/azazel-edge-sensors through systemd (EnvironmentFile=, as
+# root) and the code under /opt/azazel-edge (world-readable), so no path
+# changes owner.
 #
 # Nothing here grants a capability, a sudo or polkit rule, or a group.
 set -euo pipefail
 
-SENSOR_USER="azazel"
-SENSOR_GROUP="azazel"
+SENSOR_USER="azazel-sensor"
+SENSOR_GROUP="azazel-sensor"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root: sudo $0" >&2
@@ -59,7 +65,7 @@ if entry="$(getent passwd "$SENSOR_USER")" && [[ -n "$entry" ]]; then
   uid="$(cut -d: -f3 <<<"$entry")"; pgid="$(cut -d: -f4 <<<"$entry")"
   home="$(cut -d: -f6 <<<"$entry")"; shell="$(cut -d: -f7 <<<"$entry")"
   if (( uid == 0 || uid > SYS_UID_MAX )); then
-    die "user $SENSOR_USER already exists with uid $uid, which is not a system account (a login account?); the sensor units would run as it. Resolve this by hand"
+    die "user $SENSOR_USER already exists with uid $uid, which is not a system account; resolve this by hand"
   fi
   [[ "$pgid" == "$want_gid" ]] || die "user $SENSOR_USER exists with primary group $pgid, not $SENSOR_GROUP; resolve this by hand"
   no_login_shell "$shell" || die "user $SENSOR_USER exists with login shell $shell; resolve this by hand"

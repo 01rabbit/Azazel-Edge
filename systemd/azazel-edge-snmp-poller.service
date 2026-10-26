@@ -16,8 +16,10 @@ StandardError=journal
 SyslogIdentifier=azazel-snmp
 MemoryMax=32M
 CPUQuota=5%
-User=azazel
-Group=azazel
+# Dedicated system account (Edge#477), created by setup_sensor_account.sh;
+# not the device's login account azazel.
+User=azazel-sensor
+Group=azazel-sensor
 
 [Install]
 WantedBy=multi-user.target

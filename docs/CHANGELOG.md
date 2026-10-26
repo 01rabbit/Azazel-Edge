@@ -47,10 +47,12 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     `setup_agent_account.sh` prints a NOTICE with the manual steps. Other
     link errors still stop with the error.
 - More hardening from Edge#477:
-  - Sensors: `install_sensors.sh` creates the `azazel` account the netflow
-    and snmp units run as (`setup_sensor_account.sh`: system user and group,
-    `nologin`, no home; an existing `azazel` that is not such an account,
-    such as a login account, stops the script).
+  - Sensors: the netflow and snmp units run as the dedicated system account
+    `azazel-sensor` instead of `azazel` (which no installer created and which
+    is the login account on many devices). `install_sensors.sh` creates it
+    (`setup_sensor_account.sh`: system user and group, `nologin`, no home; an
+    existing `azazel-sensor` that is not such an account stops the script).
+    The account `azazel` is not created, changed or checked.
   - Rust core: the apply path starts `nft`/`tc` by absolute path from
     `/usr/sbin`, `/usr/bin`, `/sbin`, `/bin` with the environment cleared
     (`LC_ALL=C`, `LANG=C`, a fixed `PATH`), as the release path does. The
