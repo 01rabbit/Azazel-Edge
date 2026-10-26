@@ -32,9 +32,11 @@ PEM_MARK = "[REDACTED PRIVATE KEY]"
 URL_CREDENTIAL_RE = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}://)[^/?#\s]+@")
 _KEY_WORD = r"(?:password|passwd|passphrase|token|secret|authorization|api[_-]?key|private[_-]?key|credential)"
 SECRET_KEY = r"(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]{0,256}?" + _KEY_WORD + r"[A-Za-z0-9_.-]{0,256}"
-_DQ = r"\"[^\"\\\n]*(?:\\.[^\"\\\n]*)*\""  # double-quoted string with escapes, up to its closing quote
-_SQ = r"'[^'\\\n]*(?:\\.[^'\\\n]*)*'"
-_QUOTED_VALUE = _DQ + "|" + _SQ + r"|\[[^\]\n]*\]|[^\s,}\]]+"
+# Strings and arrays never fail: an unclosed one is redacted to the end of the line, so the engine
+# never rescans the rest of the input from each later start (keeps hostile unclosed input linear).
+_DQ = r"\"[^\"\\\n]*(?:\\.[^\"\\\n]*)*\"?"  # double-quoted string with escapes, up to its closing quote
+_SQ = r"'[^'\\\n]*(?:\\.[^'\\\n]*)*'?"
+_QUOTED_VALUE = _DQ + "|" + _SQ + r"|\[[^\]\n]*\]?|[^\s,}\]]+"
 # JSON / Python repr members: "password": "x", 'password': 'x', "tokens": ["a", "b"], "token": 123.
 QUOTED_SECRET_RE = re.compile(r"(?i)([\"'])(" + SECRET_KEY + r")\1([ \t]{0,16}:[ \t]{0,16})(?:" + _QUOTED_VALUE + r")")
 # Command-line flags: --password x, --token "a b" (the next word or quoted string).

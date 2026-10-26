@@ -616,7 +616,8 @@ def test_report_counts_only_event_logs_not_state_files(tmp_path):
 _HOSTILE = ["a-", "a", " ", "\n", "a@", "a:", "x://", "x://a@", "-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----",
             "password", "password:", "password=", "--password ", "\"password\":", "'token': '", "bearer ", "authorization: ",
             "a.b-c_", "[", "\"", "\\", "a=", "a:b ", "[REDACTED]@", "\"password\": \"", "\"password\": \"\\", "password:\n",
-            "-u a:", "--token \"", "a" * 300 + ":", "a" * 300 + " ", "x://" + "a" * 50, "'token': '"]
+            "-u a:", "--token \"", "a" * 300 + ":", "a" * 300 + " ", "x://" + "a" * 50, "'token': '",
+            "\"token\": [\"", "\"token\": [", "'token': ['", "{", "{\"token\": {", "\"token\": {\"", "\"", "\"token\": \"\\\""]
 
 
 @pytest.mark.parametrize("module", [hil, remote])
@@ -689,3 +690,9 @@ def test_newline_value_curl_user_and_quoted_flag(module):
     assert "pw1" not in cleaned and "pw2" not in cleaned and "bob:" in cleaned
     cleaned = module.redact('tool --token "a b" --verbose')
     assert "a b" not in cleaned and "--verbose" in cleaned
+
+
+@pytest.mark.parametrize("module", [hil, remote])
+def test_unclosed_values_are_redacted_to_line_end(module):
+    assert module.redact('{"tokens": ["a", "b"\nnext') == '{"tokens": "[REDACTED]"\nnext'
+    assert module.redact('{"password": "abc\nnext') == '{"password": "[REDACTED]"\nnext'
