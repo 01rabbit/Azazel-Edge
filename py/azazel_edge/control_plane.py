@@ -29,6 +29,12 @@ def _socket_request(
       closed before a reply). The daemon may have carried it out, so this is
       never retried or handed elsewhere.
     """
+    try:
+        # Serialized before anything is sent: a request that cannot be
+        # encoded fails here, was never sent and is not handed on.
+        request_bytes = json.dumps(payload).encode("utf-8") + b"\n"
+    except (TypeError, ValueError) as exc:
+        return {"ok": False, "error": f"request not serializable: {exc}"}
     if not socket_path.exists():
         return {"ok": False, "error": f"control socket not found: {socket_path}", "transport_error": True}
     sock: Optional[socket.socket] = None
@@ -41,7 +47,7 @@ def _socket_request(
             return {"ok": False, "error": str(exc), "transport_error": True}
         chunks: list[bytes] = []
         try:
-            sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+            sock.sendall(request_bytes)
             while True:
                 chunk = sock.recv(4096)
                 if not chunk:
@@ -53,7 +59,8 @@ def _socket_request(
             if not chunks:
                 return {"ok": False, "error": f"no reply from the control daemon: {exc}", "delivery_unknown": True}
             # part of a reply arrived: the daemon answered, but not usably
-            return {"ok": False, "error": f"invalid response: incomplete reply ({exc})"}
+            return {"ok": False, "error": (f"invalid response: incomplete reply ({exc}); the daemon "
+                                           "received the request and may have carried it out")}
     finally:
         if sock is not None:
             try:
@@ -120,6 +127,7 @@ def watch_snapshots(
     if not socket_path.exists():
         _note("socket_missing")
         return
+    sock: Optional[socket.socket] = None
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(timeout_sec)
@@ -156,10 +164,11 @@ def watch_snapshots(
     finally:
         # Close at once (also when the consumer stops iterating), so the
         # daemon sees the end of stream and frees the watch slot.
-        try:
-            sock.close()
-        except Exception:
-            pass
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
 
 
 def read_snapshot_from_files(logger: Any = None) -> Tuple[Optional[Dict[str, Any]], Optional[Path]]:

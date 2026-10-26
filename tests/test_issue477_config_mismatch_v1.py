@@ -204,6 +204,86 @@ def test_an_unusable_reply_is_returned_and_not_handed_on(lines, tmpdir_short, mo
     assert not cmd.exists()
 
 
+def test_a_send_failure_after_connect_is_delivery_unknown(tmpdir_short, monkeypatch):
+    """connect succeeds, sendall breaks (BrokenPipeError): the daemon may have
+    read part or all of it, so this is not "not delivered"."""
+    path = tmpdir_short / "c.sock"
+    t = _one_shot_server(path, [])
+
+    class _BrokenSendSocket(socket.socket):
+        def sendall(self, *a, **k):
+            raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(control_plane.socket, "socket", _BrokenSendSocket)
+    _via(monkeypatch, path)
+    cmd = tmpdir_short / "ui_command.json"
+    res = control_plane.send_action_with_fallback("refresh", fallback_cmd_path=cmd)
+    t.join(5)
+    assert res["ok"] is False and res["delivery_unknown"] is True
+    assert "transport_error" not in res and "undelivered" not in res
+    assert not cmd.exists()
+
+
+def test_a_partial_line_then_silence_is_an_invalid_response(tmpdir_short, monkeypatch):
+    """The server sends part of a line and then says nothing (no newline, no
+    close) until the client times out."""
+    path = tmpdir_short / "c.sock"
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(str(path))
+    srv.listen(1)
+    done = threading.Event()
+
+    def serve():
+        conn, _ = srv.accept()
+        with conn:
+            conn.recv(4096)
+            conn.sendall(b'{"ok": true, "std')
+            done.wait(10)  # silent until the test is over
+        srv.close()
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    _via(monkeypatch, path)
+    cmd = tmpdir_short / "ui_command.json"
+    try:
+        res = control_plane.send_action_with_fallback("refresh", fallback_cmd_path=cmd)
+    finally:
+        done.set()
+        t.join(5)
+    assert res["ok"] is False and res["error"].startswith("invalid response: incomplete reply")
+    assert "received the request and may have carried it out" in res["error"]
+    assert "may have carried it out" in control_plane.describe_action_failure(res, "refresh")
+    assert not any(k in res for k in ("transport_error", "delivery_unknown", "undelivered"))
+    assert not cmd.exists()
+
+
+def test_an_unserializable_request_fails_before_sending(tmpdir_short, monkeypatch):
+    path = tmpdir_short / "c.sock"
+    t = _one_shot_server(path, [b'{"ok": true}\n'])
+    cmd = tmpdir_short / "ui_command.json"
+    res = control_plane.send_action_with_fallback("refresh", params={"x": object()}, fallback_cmd_path=cmd)
+    assert res["ok"] is False and res["error"].startswith("request not serializable")
+    assert not any(k in res for k in ("transport_error", "delivery_unknown", "undelivered"))
+    assert not cmd.exists()
+    # nothing was sent: the server is still waiting for a client
+    direct = control_plane.send_action("refresh", socket_path=path)
+    t.join(5)
+    assert direct == {"ok": True}
+
+
+def test_watch_snapshots_with_a_socket_that_cannot_be_created(tmpdir_short, monkeypatch):
+    path = tmpdir_short / "c.sock"
+    path.write_text("x")
+
+    def no_socket(*a, **k):
+        raise OSError("no sockets")
+
+    monkeypatch.setattr(control_plane.socket, "socket", no_socket)
+    errors: list[str] = []
+    assert list(control_plane.watch_snapshots(socket_path=path, errors=errors)) == []
+    assert errors == ["stream_error:OSError"]
+
+
 def test_nothing_in_the_repository_reads_ui_command_json():
     """The undelivered result above rests on this: if a reader is added, the
     fallback may be reported as delivered again."""
@@ -413,6 +493,19 @@ def test_release_refused_by_8082_is_a_failure(monkeypatch):
     res = webapp.execute_release_action()
     assert res["ok"] is False and res["action"] == "release" and "HTTP error" in res["error"]
     assert calls == ["/action/release"]
+
+
+def test_release_with_curl_exit_22_is_a_failure(monkeypatch):
+    cmds = []
+
+    def fake_run(cmd, **kw):
+        cmds.append(cmd[-1])
+        return _Done(22)
+
+    monkeypatch.setattr(webapp.subprocess, "run", fake_run)
+    res = webapp.execute_release_action()
+    assert res["ok"] is False and res["action"] == "release" and "HTTP error" in res["error"]
+    assert cmds == [f"http://{webapp.STATUS_API_HOSTS[0]}:8082/action/release"]
 
 
 def test_contain_without_a_status_api_is_a_failure(monkeypatch):
