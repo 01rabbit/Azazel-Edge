@@ -429,7 +429,14 @@ echo "[12/16] Enable services"
 if [[ "$ENABLE_SERVICES" == "1" ]]; then
   systemctl enable --now azazel-edge-control-daemon.service
   systemctl enable --now azazel-edge-web.service
-  systemctl enable --now azazel-edge-epd-refresh.timer
+  # Without the GPIO stack (no Raspberry Pi repository) the EPD cannot draw
+  # and every refresh would fail: its timer stays off.
+  if [[ "$EPD_GPIO_STACK" == "1" ]]; then
+    systemctl enable --now azazel-edge-epd-refresh.timer
+  else
+    systemctl disable --now azazel-edge-epd-refresh.timer >/dev/null 2>&1 || true
+    echo "NOTICE: azazel-edge-epd-refresh.timer is not enabled (no EPD GPIO stack on this host)."
+  fi
   systemctl enable --now azazel-edge-ai-agent.service
   # Order (Edge#471 stages 1-2): the control daemon (azazel-control group,
   # peer table, the agent's new advisory/snapshot path), then the agent as

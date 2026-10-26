@@ -35,7 +35,7 @@ from wifi_scan import (
     get_wireless_interface,
     check_networkmanager,
     get_saved_networks_nm,
-    no_wireless_interface_error,
+    select_uplink_wireless_interface,
 )
 from azazel_edge.path_schema import snapshot_path_candidates, warn_if_legacy_path
 
@@ -1202,13 +1202,14 @@ def connect_wifi(ssid: str, security: str = "UNKNOWN", passphrase: Optional[str]
     update_state_json("CONNECTING", wifi_error=None, ssid=ssid)
     
     # Step 3: Detect interfaces
-    wlan_iface = get_wireless_interface()
+    wlan_iface, iface_error = select_uplink_wireless_interface()
     usb_iface = get_usb_interface()
     
     if not wlan_iface:
-        # Never the internal AP's interface (get_wireless_interface leaves it
-        # out): connecting it to another network would take the AP down.
-        error = no_wireless_interface_error()
+        # Never the internal AP's interface (it is left out, and nothing is
+        # picked when that cannot be determined): connecting it to another
+        # network would take the AP down.
+        error = iface_error or "No wireless interface found"
         update_state_json("FAILED", wifi_error=error)
         return {"ok": False, "error": error, "ts": time.time()}
     

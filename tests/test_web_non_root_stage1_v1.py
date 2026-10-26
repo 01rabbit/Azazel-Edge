@@ -371,6 +371,9 @@ def fake_net(monkeypatch, tmp_path):
     monkeypatch.setattr(control_daemon, "SYS_CLASS_NET", sysnet)
     monkeypatch.setattr(control_daemon, "IP_COMMAND_CANDIDATES", (str(ip),))
     monkeypatch.setenv("AZAZEL_UP_IF", "upl0")
+    # No internal LAN here (the daemon fails closed when it cannot tell; that
+    # is tested in test_pi5_platform_layer_v1.py).
+    monkeypatch.setattr(control_daemon, "internal_lan_interfaces", lambda *a, **kw: set())
     return calls
 
 

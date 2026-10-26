@@ -51,7 +51,28 @@ third interface**: a USB Ethernet adapter or a USB Wi-Fi adapter.
   `enx…`) is only known on the device: check it with `ip -br link` and
   `iw dev` before setting `WAN_IF` / `AZAZEL_UP_IF`.
 
-### 1.2 Raspberry Pi OS settings the installers make
+### 1.2 Run the installer from a console or tmux
+
+Run `install_all.sh` / `install_internal_network.sh` on the local console
+(keyboard and display, or a serial console) or inside `tmux` / `screen`, not
+in a plain SSH session. The management SSH path is cut when:
+
+- the SSH session reaches the Pi through `eth0`: `eth0` becomes a port of
+  `br0` and loses its own address;
+- the SSH session reaches the Pi over Wi-Fi on `wlan0`: the Wi-Fi client
+  profiles on `wlan0` are taken down and `wlan0` becomes the internal AP;
+- sshd is restarted with `ListenAddress` set to the `br0` address only
+  (unless `ALLOW_EXTERNAL_SSH=true`): from then on SSH is reachable only from
+  the internal segment (`eth0` / the internal AP), not from the uplink side.
+  An established session survives the restart (`KillMode=process`), a new
+  one from the uplink side does not;
+- `br0` does not get its address: sshd cannot bind until it does
+  (`ssh.service` retries every 5 s).
+
+Inside `tmux` the installer keeps running when the session drops; reconnect
+from the internal segment and `tmux attach`.
+
+### 1.3 Raspberry Pi OS settings the installers make
 
 Only on Raspberry Pi OS (`raspi-config` and `/boot/firmware/config.txt` present):
 
@@ -59,21 +80,27 @@ Only on Raspberry Pi OS (`raspi-config` and `/boot/firmware/config.txt` present)
   `/dev/spidev0.0` is not there yet, reboot before the EPD can draw.
 - The Wi-Fi country is required: Raspberry Pi OS keeps Wi-Fi blocked (rfkill)
   until one is set. Give it with `WIFI_COUNTRY=JP` (ISO 3166-1 alpha-2) or set
-  it beforehand (`sudo raspi-config`); without either, the internal network
+  it beforehand (`sudo raspi-config`; only a two-letter code other than `00`,
+  the world domain, counts as set); without either, the internal network
   installer stops before changing anything. It then unblocks Wi-Fi
   (`rfkill unblock wifi`). The internal AP not coming up is an error (the
   installer and `azazel-internal-apply.service` fail) instead of being ignored.
+- Without the GPIO stack (plain Debian) `azazel-edge-epd-refresh.timer` is
+  not enabled.
 - The EPD GPIO libraries come from the Raspberry Pi repository
   (`python3-lgpio`, `python3-rpi-lgpio`, `python3-gpiozero`); `python3-rpi.gpio`
   does not drive the Pi 5 GPIO (RP1) and is no longer installed. On plain
   Debian (no Raspberry Pi repository) no GPIO library is installed and the EPD
   has no hardware output.
 
-### 1.3 Internal AP passphrase
+### 1.4 Internal AP passphrase
 
 Leave `AP_PSK` unset: the installer generates a random passphrase and saves it
 root-only (0600) in `/etc/azazel-edge/internal-ap.psk`, and a re-run keeps it.
-It is never printed or logged. Read it with `sudo cat
+It is never printed or logged, and never passed on a command line: it is
+written into the AP profile's root-only NetworkManager keyfile and the profile
+is reloaded (`psk-flags=0`, system-owned, so the AP starts at boot without a
+secret agent). Read it with `sudo cat
 /etc/azazel-edge/internal-ap.psk` and copy it to the STATUS_CARD kept with the
 unit. A passphrase set with `AP_PSK` is saved there too; the old built-in
 default `ChangeMe1234` is refused.
@@ -181,6 +208,7 @@ For vehicle or heavy vibration, use additional anti-vibration mounts.
 - 配線は電源系と通信系を分離し、各端子に必ずストレインリリーフを設けます。
 - ラベルは筐体とケーブル両端に貼付し、現地で迷わない状態にします。
 - 出動前に selftest で媒体健全性を確認してください。
+- インストーラはコンソールか tmux の中で実行してください。eth0 経由・wlan0 の Wi-Fi 経由の SSH は br0 の構築で切れ、sshd の待ち受けが br0 のアドレスだけになると上流側から新しい SSH はつながりません（第 1.2 節）。
 - Raspberry Pi 5 では内蔵 Ethernet（eth0）と内蔵 Wi-Fi（wlan0、内部 AP）が内部 LAN（br0）になるため、上流（WAN）には USB Ethernet か USB Wi-Fi のアダプタが別に必要です。既定経路が eth0/wlan0 のままだとインストーラは何も変えずに停止します。
 - Raspberry Pi OS では Wi-Fi の国設定（`WIFI_COUNTRY=JP` など）が必須です。未設定だと Wi-Fi が rfkill で止まったままで内部 AP が上がらないため、インストーラは変更前に停止します。
 - 内部 AP のパスフレーズは既定でランダム生成され、`/etc/azazel-edge/internal-ap.psk`（root のみ読める 0600）に保存されます。表示・ログには出ません。

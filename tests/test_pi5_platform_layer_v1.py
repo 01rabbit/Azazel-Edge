@@ -245,6 +245,10 @@ def test_the_wifi_country_is_required_on_raspberry_pi_os_before_any_change():
     none = _net(["check_wifi_country"], "WIFI_COUNTRY=''\ncheck_wifi_country\necho passed\n")
     assert none.returncode == 1 and "WIFI_COUNTRY=" in none.stderr and "rfkill" in none.stderr
     configured = _net(["check_wifi_country"], "WIFI_COUNTRY=''\ncheck_wifi_country\necho passed\n", raspi_get="JP")
+    # Only a two-letter code other than the world domain counts as set.
+    for value in ("00", "jp", "JPN", "J", "1A"):
+        res = _net(["check_wifi_country"], "WIFI_COUNTRY=''\ncheck_wifi_country\necho passed\n", raspi_get=value)
+        assert res.returncode == 1 and "WIFI_COUNTRY=" in res.stderr, value
     assert configured.returncode == 0 and "JP (already configured)" in configured.stdout
     given = _net(["check_wifi_country"], "WIFI_COUNTRY=DE\ncheck_wifi_country\necho passed\n")
     assert given.returncode == 0 and "passed" in given.stdout
@@ -282,7 +286,7 @@ def test_the_internal_ap_failing_is_an_error():
     assert pi.returncode == 1 and "does not exist" in pi.stderr
 
 
-def _runner(tmp_path: Path, ap_up_rc: int, with_wlan: bool) -> subprocess.CompletedProcess:
+def _runner(tmp_path: Path, ap_up_rc: int, with_wlan: bool, ssh_rc: int = 0) -> subprocess.CompletedProcess:
     src = NETWORK.read_text(encoding="utf-8")
     runner = re.search(r"cat > \"\$RUNNER_FILE\" <<'EOR'\n(.*?)^EOR$", src, re.S | re.M).group(1)
     sysnet = tmp_path / "net"
@@ -293,7 +297,7 @@ def _runner(tmp_path: Path, ap_up_rc: int, with_wlan: bool) -> subprocess.Comple
     log = tmp_path / "calls.log"
     for name, body in {
         "nmcli": f'echo "nmcli $*" >>{log}\n[ "$3" = lan-wlan0-ap ] && exit {ap_up_rc}\nexit 0',
-        "systemctl": f'echo "systemctl $*" >>{log}',
+        "systemctl": f'echo "systemctl $*" >>{log}\n[ "$2" = ssh ] && exit {ssh_rc}\nexit 0',
         "rfkill": f'echo "rfkill $*" >>{log}',
         "sysctl": "exit 0",
         "nft": "exit 1",
@@ -348,7 +352,8 @@ def _resolve(tmp_path: Path, env: dict, profile_psk: str | None) -> subprocess.C
         f'*802-11-wireless-security.psk*) printf "%s\\n" {profile_psk!r} ;; esac; }}\n')
     if profile_psk is None:
         profile = 'nmcli() { :; }\n'
-    fns = "".join(_function(NETWORK, n) for n in ("check_ap_psk", "generate_ap_psk", "save_ap_psk", "resolve_ap_psk"))
+    fns = "".join(_function(NETWORK, n) for n in ("nm_profile_exists", "check_ap_psk", "generate_ap_psk", "save_ap_psk",
+                                                  "resolve_ap_psk"))
     head = "".join(f"{k}={v!r}\n" for k, v in env.items())
     script = (head + f'AP_PSK_FILE={str(psk_file)!r}\nAP_PSK_OLD_DEFAULT=ChangeMe1234\nWLAN_AP_CONN=lan-wlan0-ap\n'
               + "chown() { :; }\n" + profile + fns + 'resolve_ap_psk\necho "source=$AP_PSK_SOURCE"\n')
@@ -507,9 +512,12 @@ def ws(monkeypatch, tmp_path):
     sysnet = tmp_path / "net"
     sysnet.mkdir()
     monkeypatch.setattr(module, "SYS_CLASS_NET", sysnet)
-    state = {"iw": IW_AP_ONLY, "profiles": {}}
+    state = {"iw": IW_AP_ONLY, "profiles": {}, "nmcli_rc": 0}
 
     def fake_run(cmd, **kw):
+        if cmd[0] == "nmcli" and state["nmcli_rc"]:
+            return subprocess.CompletedProcess(cmd, state["nmcli_rc"], stdout="",
+                                               stderr="Error: NetworkManager is not running.\n")
         if cmd[:2] == ["iw", "dev"] and len(cmd) == 2:
             return subprocess.CompletedProcess(cmd, 0, stdout=state["iw"], stderr="")
         if cmd[:6] == ["nmcli", "-t", "-f", "NAME,TYPE", "con", "show"]:
@@ -527,7 +535,8 @@ def ws(monkeypatch, tmp_path):
 def test_the_internal_ap_is_never_the_uplink_wireless_interface(ws):
     module, state, sysnet = ws
     assert module.get_wireless_interface() is None
-    assert module.no_wireless_interface_error() == module.NO_UPLINK_WIRELESS_ERROR
+    error = module.no_wireless_interface_error()
+    assert error.startswith(module.NO_UPLINK_WIRELESS_ERROR) and "wlan0" in error  # names the cause
     assert "USB Wi-Fi" in module.NO_UPLINK_WIRELESS_ERROR
     state["iw"] = IW_AP_AND_USB
     assert module.get_wireless_interface() == "wlan1"
@@ -556,7 +565,7 @@ def test_no_wireless_interface_at_all_keeps_the_old_message(ws):
 def test_scan_and_connect_refuse_instead_of_using_the_ap(ws, monkeypatch):
     module, state, _ = ws
     res = module.scan_wifi()
-    assert res["ok"] is False and res["error"] == module.NO_UPLINK_WIRELESS_ERROR
+    assert res["ok"] is False and res["error"].startswith(module.NO_UPLINK_WIRELESS_ERROR)
     from azazel_edge_control import wifi_connect
 
     states = []
@@ -564,8 +573,8 @@ def test_scan_and_connect_refuse_instead_of_using_the_ap(ws, monkeypatch):
     monkeypatch.setattr(wifi_connect, "get_usb_interface", lambda: None)
     monkeypatch.setattr(wifi_connect, "connect_nm", lambda *a, **kw: pytest.fail("connect_nm called"))
     out = wifi_connect.connect_wifi("example-ssid", "WPA2", "fake-passphrase-123")
-    assert out["ok"] is False and out["error"] == module.NO_UPLINK_WIRELESS_ERROR
-    assert states[-1][0] == ("FAILED",) and states[-1][1]["wifi_error"] == module.NO_UPLINK_WIRELESS_ERROR
+    assert out["ok"] is False and out["error"].startswith(module.NO_UPLINK_WIRELESS_ERROR)
+    assert states[-1][0] == ("FAILED",) and states[-1][1]["wifi_error"] == out["error"]
 
 
 @pytest.fixture
@@ -578,12 +587,14 @@ def daemon_mod(ws):
 def test_the_wifi_sensor_never_scans_on_the_internal_ap(ws, daemon_mod, monkeypatch):
     module, state, _ = ws
     monkeypatch.delenv("AZAZEL_WIFI_SCAN_IFACE", raising=False)
-    assert daemon_mod._wifi_sensor_interface() == ""
+    iface, reason = daemon_mod._wifi_sensor_interface()
+    assert iface == "" and reason.startswith(module.NO_UPLINK_WIRELESS_ERROR)
     monkeypatch.setenv("AZAZEL_WIFI_SCAN_IFACE", "wlan0")
-    assert daemon_mod._wifi_sensor_interface() == ""
+    iface, reason = daemon_mod._wifi_sensor_interface()
+    assert iface == "" and "AZAZEL_WIFI_SCAN_IFACE=wlan0 serves the internal LAN" in reason
     state["iw"] = IW_AP_AND_USB
     monkeypatch.delenv("AZAZEL_WIFI_SCAN_IFACE", raising=False)
-    assert daemon_mod._wifi_sensor_interface() == "wlan1"
+    assert daemon_mod._wifi_sensor_interface() == ("wlan1", "")
 
 
 def test_the_uplink_disconnect_refuses_an_internal_lan_interface(ws, daemon_mod, monkeypatch, tmp_path):
@@ -618,3 +629,238 @@ def test_suppress_auto_wifi_keeps_the_ap_profile_autoconnecting(ws, daemon_mod, 
     assert ["nmcli", "con", "mod", "home", "connection.autoconnect", "no"] in calls
     assert not any("lan-wlan0-ap" in c for c in calls)
     assert ["nmcli", "dev", "disconnect", "wlan1"] in calls
+
+
+
+# ------------------------------------------------------- review follow-ups
+
+
+def test_nmcli_failure_fails_closed(ws, daemon_mod, monkeypatch):
+    module, state, sysnet = ws
+    state["iw"] = IW_MANAGED  # the AP is down: only NetworkManager knows wlan0 is the AP
+    state["nmcli_rc"] = 8
+    iface, error = module.select_uplink_wireless_interface()
+    assert iface is None and "Cannot tell which wireless interface serves the internal AP" in error
+    assert "NetworkManager is not running" in error  # the cause is named
+    assert module.scan_wifi()["error"] == error
+    (sysnet / "wlan9").mkdir()
+    monkeypatch.setattr(daemon_mod, "SYS_CLASS_NET", sysnet)
+    monkeypatch.setenv("AZAZEL_UP_IF", "wlan9")
+    monkeypatch.setattr(daemon_mod, "rate_limit_error", lambda *a: None)
+    monkeypatch.setattr(daemon_mod, "IP_COMMAND_CANDIDATES", ("/nonexistent/ip",))
+    res = daemon_mod.execute_action("uplink_disconnect", None, request={"action": "uplink_disconnect"})
+    assert res["ok"] is False and res["error"].startswith("uplink_interface_check_failed:")
+    monkeypatch.setenv("AZAZEL_WIFI_SCAN_IFACE", "wlan9")
+    iface, reason = daemon_mod._wifi_sensor_interface()
+    assert iface == "" and "cannot tell whether wlan9" in reason
+
+
+def test_iw_failure_fails_closed(ws, monkeypatch):
+    module, state, _ = ws
+
+    def no_iw(cmd, **kw):
+        raise FileNotFoundError("iw")
+
+    monkeypatch.setattr(module.subprocess, "run", no_iw)
+    iface, error = module.select_uplink_wireless_interface()
+    assert iface is None and "iw dev failed" in error
+    with pytest.raises(module.InternalLanUnknown):
+        module.internal_lan_interfaces()
+
+
+def test_suppress_auto_wifi_changes_nothing_when_nmcli_fails(ws, daemon_mod, monkeypatch):
+    module, state, _ = ws
+    state["iw"] = IW_AP_AND_USB
+    state["profiles"] = {"lan-wlan0-ap": ("ap", "wlan0")}
+    calls = []
+    real = module.subprocess.run
+
+    def run(cmd, **kw):
+        if cmd[:4] == ["nmcli", "-t", "-f", "NAME,TYPE"] and calls_seen["n"] >= 1:
+            # The AP profile query fails on its second listing.
+            return subprocess.CompletedProcess(cmd, 8, stdout="", stderr="Error: timeout\n")
+        if cmd[:4] == ["nmcli", "-t", "-f", "NAME,TYPE"]:
+            calls_seen["n"] += 1
+        if cmd[:3] in (["nmcli", "con", "mod"], ["nmcli", "dev", "disconnect"]):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd[:4] == ["nmcli", "-t", "-f", "DEVICE"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="wlan0\nwlan1\n", stderr="")
+        return real(cmd, **kw)
+
+    calls_seen = {"n": 0}
+    monkeypatch.setattr(module.subprocess, "run", run)
+    monkeypatch.setattr(daemon_mod, "update_state_json", lambda *a, **kw: None)
+    daemon_mod.suppress_auto_wifi(True)
+    assert calls == []
+
+
+def test_the_wifi_sensor_skips_without_scanning_and_logs_the_reason_once(daemon_mod, monkeypatch, caplog):
+    rounds = iter([False, False, False, True])
+    monkeypatch.setattr(daemon_mod._WIFI_SENSOR_STOP, "wait", lambda timeout=None: next(rounds))
+    monkeypatch.setattr(daemon_mod, "_should_poll", lambda name, now=None: True)
+    monkeypatch.setattr(daemon_mod, "_wifi_sensor_interface", lambda: ("", "the reason"))
+    monkeypatch.setattr(daemon_mod, "scan_wifi_channels", lambda iface: pytest.fail("scanned"))
+    with caplog.at_level("WARNING"):
+        daemon_mod._wifi_sensor_loop()
+    assert [r.getMessage() for r in caplog.records].count("wifi sensor: not scanning: the reason") == 1
+
+
+def test_the_final_import_check_stops_the_install(plain_venv, tmp_path):
+    dist = _fake_dist_packages(tmp_path)
+    (dist / "gpiozero" / "pins" / "lgpio.py").write_text("raise ImportError('liblgpio.so.1: cannot open')\n")
+    res = _link(plain_venv, dist, "1")
+    assert res.returncode != 0 and "liblgpio.so.1" in res.stderr
+
+
+@pytest.mark.parametrize("length,ok", [(7, False), (8, True), (63, True), (64, False)])
+def test_the_passphrase_length_bounds(length, ok):
+    res = _net(["check_ap_psk"], f'check_ap_psk "{"a" * length}"\necho passed\n')
+    assert (res.returncode == 0) is ok and (("passed" in res.stdout) is ok)
+
+
+def test_is_raspberry_pi_os_needs_both_raspi_config_and_the_firmware_config(tmp_path):
+    fn = _function(NETWORK, "is_raspberry_pi_os")
+    assert fn == _function(TOOLS, "is_raspberry_pi_os")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    config = tmp_path / "config.txt"
+    fn = fn.replace("/boot/firmware/config.txt", str(config))
+    base = f"{os.path.dirname(shutil.which('bash'))}:/usr/bin:/bin"
+
+    def run(path: str) -> int:
+        return subprocess.run(["bash", "-c", fn + "is_raspberry_pi_os"], env={"PATH": path}).returncode
+
+    assert run(base) == 1  # a VM: neither
+    (bindir / "raspi-config").write_text("#!/bin/sh\n")
+    (bindir / "raspi-config").chmod(0o755)
+    assert run(f"{bindir}:{base}") == 1  # raspi-config only
+    config.write_text("")
+    assert run(f"{bindir}:{base}") == 0
+    assert run(base) == 1  # config.txt only
+
+
+@LINUX_ONLY
+def test_the_psk_file_is_replaced_atomically(tmp_path):
+    psk_file = tmp_path / "etc" / "internal-ap.psk"
+    psk_file.parent.mkdir()
+    psk_file.write_text("old-passphrase\n")
+    fns = _function(NETWORK, "save_ap_psk")
+    script = f"AP_PSK_FILE={str(psk_file)!r}\nchown() {{ :; }}\nchmod() {{ return 1; }}\n" + fns + "save_ap_psk new-passphrase\n"
+    res = _bash(script)
+    assert res.returncode == 1 and psk_file.read_text() == "old-passphrase\n"
+    assert sorted(p.name for p in psk_file.parent.iterdir()) == ["internal-ap.psk"]  # no temporary left
+    src = fns
+    assert 'mktemp "$dir/' in src and "mv -fT" in src  # same directory: rename(2) is atomic
+
+
+KEYFILE = """[connection]
+id=lan-wlan0-ap
+uuid=11111111-2222-4333-8444-555555555555
+type=wifi
+
+[wifi]
+mode=ap
+ssid=Azazel-Edge-Internal
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=ChangeMe1234
+
+[bridge-port]
+"""
+
+
+def _bridge(tmp_path: Path, psk: str, keyfile: str = KEYFILE, fail: str = "") -> tuple:
+    """configure_nm_internal_bridge with an nmcli stub that records every
+    argv (one line per call, NUL-free) and serves the keyfile's path."""
+    conn_dir = tmp_path / "system-connections"
+    conn_dir.mkdir(exist_ok=True)
+    kf = conn_dir / "lan-wlan0-ap.nmconnection"
+    kf.write_text(keyfile)
+    kf.chmod(0o600)
+    log = tmp_path / "argv.log"
+    stub = f"""
+LOG={str(log)!r}
+nmcli() {{
+  printf '%s\\n' "$*" >>"$LOG"
+  case "$*" in
+    "-t -f NAME con show") printf 'lan-br0\\nlan-eth0-slave\\nlan-wlan0-ap\\n' ;;
+    "-g connection.uuid con show lan-wlan0-ap") echo 11111111-2222-4333-8444-555555555555 ;;
+    "--escape no -t -f UUID,FILENAME con show") echo "11111111-2222-4333-8444-555555555555:{kf}" ;;
+    "-t -f NAME,DEVICE,TYPE,ACTIVE con show") : ;;
+    "con load "*) [[ -z {fail!r} ]] || return 1 ;;
+  esac
+}}
+chown() {{ printf 'chown %s\\n' "$*" >>"$LOG"; }}
+activate_internal_ap() {{ :; }}
+"""
+    fns = "".join(_function(NETWORK, n) for n in
+                  ("nm_profile_exists", "keyfile_escape", "store_ap_psk_in_profile", "configure_nm_internal_bridge"))
+    # AP_PSK comes from the environment, so the test value reaches bash as is.
+    head = (f"AP_SSID=Azazel-Edge-Internal\nAP_IF=wlan0\nLAN_IF=br0\nLAN_ADDR=172.16.0.254/24\n"
+            "BR_CONN=lan-br0\nETH_SLAVE_CONN=lan-eth0-slave\nWLAN_AP_CONN=lan-wlan0-ap\n")
+    res = _bash(head + stub + fns + "configure_nm_internal_bridge\n", env={**os.environ, "AP_PSK": psk})
+    return res, kf, log
+
+
+@LINUX_ONLY
+@pytest.mark.parametrize("psk", ["Plain-Generated-1234", " lead space\\back#semi;colon\ttab "])
+def test_the_ap_passphrase_never_goes_on_any_nmcli_argv(tmp_path, psk):
+    res, kf, log = _bridge(tmp_path, psk)
+    assert res.returncode == 0, res.stderr
+    argv = log.read_text()
+    assert psk not in argv and psk.strip() not in argv and "wifi-sec.psk " not in argv
+    assert "wifi-sec.psk-flags 0" in argv and f"con load {kf}" in argv
+    text = kf.read_text()
+    escaped = psk.replace("\\", "\\\\").replace(" ", "\\s").replace("\t", "\\t")
+    lines = text.splitlines()
+    assert lines.count(f"psk={escaped}") == 1 and "psk=ChangeMe1234" not in text
+    section = lines[lines.index("[wifi-security]"):lines.index("[bridge-port]")]
+    assert f"psk={escaped}" in section and "key-mgmt=wpa-psk" in section
+    assert lines[:lines.index("[wifi-security]")] == KEYFILE.splitlines()[:lines.index("[wifi-security]")]
+    assert stat.S_IMODE(kf.stat().st_mode) == 0o600
+    assert sorted(p.name for p in kf.parent.iterdir()) == ["lan-wlan0-ap.nmconnection"]
+    assert psk not in res.stdout + res.stderr
+
+
+@LINUX_ONLY
+def test_a_keyfile_without_the_security_section_gets_one(tmp_path):
+    keyfile = KEYFILE.replace("[wifi-security]\nkey-mgmt=wpa-psk\npsk=ChangeMe1234\n\n", "")
+    res, kf, _ = _bridge(tmp_path, "another-passphrase", keyfile)
+    assert res.returncode == 0, res.stderr
+    assert kf.read_text().endswith("[wifi-security]\npsk=another-passphrase\n")
+
+
+@LINUX_ONLY
+def test_a_failed_reload_stops_the_install(tmp_path):
+    res, _, _ = _bridge(tmp_path, "another-passphrase", fail="1")
+    assert res.returncode == 1 and "did not reload" in res.stderr
+
+
+def test_no_nmcli_output_is_piped_into_grep_q():
+    src = NETWORK.read_text(encoding="utf-8")
+    assert not re.search(r"nmcli[^\n|]*\|\s*grep -q", src)
+    ok = _bash("nmcli() { printf 'a\\nlan-wlan0-ap\\n'; }\n" + _function(NETWORK, "nm_profile_exists")
+               + "nm_profile_exists lan-wlan0-ap && ! nm_profile_exists lan-wlan0 && ! nm_profile_exists 'lan.wlan0-ap'\n")
+    assert ok.returncode == 0, ok.stderr
+    failing = _bash("nmcli() { return 8; }\n" + _function(NETWORK, "nm_profile_exists")
+                    + "if nm_profile_exists x; then echo yes; else echo no; fi\n")
+    assert failing.returncode == 1 and "could not list" in failing.stderr and failing.stdout == ""
+
+
+def test_the_runner_restarts_ssh_last_and_goes_on_when_it_fails(tmp_path):
+    src = NETWORK.read_text(encoding="utf-8")
+    runner = re.search(r"cat > \"\$RUNNER_FILE\" <<'EOR'\n(.*?)^EOR$", src, re.S | re.M).group(1)
+    assert runner.index("systemctl restart ssh") > runner.index("nft -f /etc/nftables.d/azazel-internal.nft")
+    assert "azazel-edge-listen.conf" in runner
+    res = _runner(tmp_path, 0, True, ssh_rc=1)
+    assert res.returncode == 0 and "ssh did not start yet" in res.stderr
+
+
+def test_the_epd_timer_is_enabled_only_with_the_gpio_stack():
+    src = TOOLS.read_text(encoding="utf-8")
+    block = re.search(r'^  if \[\[ "\$EPD_GPIO_STACK" == "1" \]\]; then\n(.*?)^  fi\n', src, re.S | re.M).group(1)
+    assert "systemctl enable --now azazel-edge-epd-refresh.timer" in block
+    assert "systemctl disable --now azazel-edge-epd-refresh.timer" in block
+    assert src.count("systemctl enable --now azazel-edge-epd-refresh.timer") == 1

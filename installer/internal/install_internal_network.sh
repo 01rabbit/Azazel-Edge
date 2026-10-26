@@ -49,6 +49,20 @@ require_root() {
   fi
 }
 
+# A NetworkManager profile with this exact name exists. nmcli's output is
+# taken into a variable first: piped into `grep -q`, nmcli can be killed by
+# SIGPIPE when grep exits early, and pipefail would turn a match into false.
+# nmcli failing stops the install: "could not ask" must not read as "absent"
+# (a new AP passphrase would replace the one in use).
+nm_profile_exists() {
+  local names
+  if ! names="$(nmcli -t -f NAME con show)"; then
+    echo "ERROR: nmcli could not list the NetworkManager profiles." >&2
+    exit 1
+  fi
+  grep -qxF -- "$1" <<<"$names"
+}
+
 # Raspberry Pi OS: raspi-config and the firmware config.txt are present.
 is_raspberry_pi_os() {
   command -v raspi-config >/dev/null 2>&1 && [[ -f /boot/firmware/config.txt ]]
@@ -89,7 +103,10 @@ check_wifi_country() {
   local current=""
   is_raspberry_pi_os || return 0
   [[ -z "$WIFI_COUNTRY" ]] || return 0
-  if current="$(raspi-config nonint get_wifi_country 2>/dev/null)" && [[ -n "$current" ]]; then
+  # Only a two-letter code counts; "00" is the world regulatory domain,
+  # which is what an unset country looks like, not a country.
+  if current="$(raspi-config nonint get_wifi_country 2>/dev/null)" \
+      && [[ "$current" =~ ^[A-Z]{2}$ && "$current" != "00" ]]; then
     echo "Wi-Fi country: $current (already configured)"
     return 0
   fi
@@ -148,7 +165,7 @@ resolve_ap_psk() {
     AP_PSK="$(head -n 1 -- "$AP_PSK_FILE")"
     AP_PSK_SOURCE="kept"
   fi
-  if [[ -z "$AP_PSK" ]] && nmcli -t -f NAME con show | grep -qx "$WLAN_AP_CONN"; then
+  if [[ -z "$AP_PSK" ]] && nm_profile_exists "$WLAN_AP_CONN"; then
     existing="$(nmcli -s --escape no -g 802-11-wireless-security.psk con show "$WLAN_AP_CONN" 2>/dev/null || true)"
     if [[ -n "$existing" && "$existing" != "$AP_PSK_OLD_DEFAULT" && ${#existing} -ge 8 && ${#existing} -le 63 ]]; then
       AP_PSK="$existing"
@@ -198,10 +215,78 @@ detect_wan_if() {
   echo "$wan_if"
 }
 
+# Escape a value for a NetworkManager keyfile (GLib key file string):
+# backslash, space, tab, CR and LF as \\, \s, \t, \r, \n. Pure bash: the
+# value is not handed to another program's argv.
+keyfile_escape() {
+  local v="$1"
+  v="${v//\\/\\\\}"
+  v="${v// /\\s}"
+  v="${v//$'\t'/\\t}"
+  v="${v//$'\r'/\\r}"
+  v="${v//$'\n'/\\n}"
+  printf '%s' "$v"
+}
+
+# Write AP_PSK into the AP profile's keyfile and reload it. psk-flags is 0
+# (system-owned): NetworkManager keeps the secret in the root-only (0600)
+# keyfile and starts the AP at boot without a secret agent; an agent-owned
+# (1) or not-saved (2) secret would leave the AP down after a reboot. The
+# keyfile is rewritten through a 0600 temporary file in the same directory
+# and renamed over it, so it is never partly written or readable by others.
+store_ap_psk_in_profile() {
+  local uuid listing line file dir tmp section="" written=0 psk_line
+  uuid="$(nmcli -g connection.uuid con show "$WLAN_AP_CONN")"
+  listing="$(nmcli --escape no -t -f UUID,FILENAME con show)"
+  file=""
+  while IFS= read -r line; do
+    if [[ "${line%%:*}" == "$uuid" ]]; then
+      file="${line#*:}"
+    fi
+  done <<<"$listing"
+  if [[ -z "$uuid" || -z "$file" || ! -f "$file" ]]; then
+    echo "ERROR: the keyfile of $WLAN_AP_CONN was not found (NetworkManager keyfile plugin expected)." >&2
+    exit 1
+  fi
+  psk_line="psk=$(keyfile_escape "$AP_PSK")"
+  dir="$(dirname -- "$file")"
+  tmp="$(umask 077 && mktemp "$dir/.azazel-ap-psk.XXXXXX")"
+  {
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" =~ ^\[(.*)\]$ ]]; then
+        if [[ "$section" == "wifi-security" && "$written" == "0" ]]; then
+          printf '%s\n' "$psk_line"
+          written=1
+        fi
+        section="${BASH_REMATCH[1]}"
+        printf '%s\n' "$line"
+        continue
+      fi
+      if [[ "$section" == "wifi-security" && "$line" =~ ^psk[[:space:]]*= ]]; then
+        continue
+      fi
+      printf '%s\n' "$line"
+    done <"$file"
+    if [[ "$written" == "0" ]]; then
+      [[ "$section" == "wifi-security" ]] || printf '\n[wifi-security]\n'
+      printf '%s\n' "$psk_line"
+    fi
+  } >"$tmp" || { rm -f -- "$tmp"; echo "ERROR: could not write $tmp" >&2; exit 1; }
+  if ! chown root:root "$tmp" || ! chmod 0600 "$tmp" || ! mv -fT -- "$tmp" "$file"; then
+    rm -f -- "$tmp"
+    echo "ERROR: could not replace $file" >&2
+    exit 1
+  fi
+  if ! nmcli con load "$file"; then
+    echo "ERROR: NetworkManager did not reload $file" >&2
+    exit 1
+  fi
+}
+
 configure_nm_internal_bridge() {
   nmcli dev set "$AP_IF" managed yes || true
 
-  if nmcli -t -f NAME con show | grep -qx "$BR_CONN"; then
+  if nm_profile_exists "$BR_CONN"; then
     nmcli con modify "$BR_CONN" \
       connection.interface-name "$LAN_IF" \
       ipv4.method manual \
@@ -228,7 +313,7 @@ configure_nm_internal_bridge() {
     fi
   done
 
-  if nmcli -t -f NAME con show | grep -qx "$ETH_SLAVE_CONN"; then
+  if nm_profile_exists "$ETH_SLAVE_CONN"; then
     nmcli con modify "$ETH_SLAVE_CONN" \
       connection.interface-name eth0 connection.master "$LAN_IF" connection.slave-type bridge \
       connection.autoconnect yes connection.autoconnect-priority 40
@@ -245,14 +330,17 @@ configure_nm_internal_bridge() {
     fi
   done
 
-  if nmcli -t -f NAME con show | grep -qx "$WLAN_AP_CONN"; then
+  # The passphrase never goes on nmcli's argv (readable by any local user
+  # from /proc/<pid>/cmdline): the profile is set up without it and
+  # store_ap_psk_in_profile writes it into the profile's root-only keyfile.
+  if nm_profile_exists "$WLAN_AP_CONN"; then
     nmcli con modify "$WLAN_AP_CONN" \
       connection.interface-name wlan0 \
       wifi.mode ap \
       wifi.ssid "$AP_SSID" \
       wifi.band bg \
       wifi-sec.key-mgmt wpa-psk \
-      wifi-sec.psk "$AP_PSK" \
+      wifi-sec.psk-flags 0 \
       connection.master "$LAN_IF" connection.slave-type bridge \
       connection.autoconnect yes connection.autoconnect-priority 100
   else
@@ -261,10 +349,11 @@ configure_nm_internal_bridge() {
       wifi.mode ap \
       wifi.band bg \
       wifi-sec.key-mgmt wpa-psk \
-      wifi-sec.psk "$AP_PSK" \
+      wifi-sec.psk-flags 0 \
       connection.master "$LAN_IF" connection.slave-type bridge \
       connection.autoconnect yes connection.autoconnect-priority 100
   fi
+  store_ap_psk_in_profile
 
   nmcli con up "$BR_CONN"
   nmcli con up "$ETH_SLAVE_CONN" || true
@@ -442,7 +531,6 @@ if [[ -e /sys/class/net/wlan0 ]]; then
 fi
 
 systemctl restart dnsmasq
-systemctl restart ssh
 systemctl restart avahi-daemon
 if [[ -f /run/NetworkManager/resolv.conf ]]; then
   rm -f /etc/resolv.conf
@@ -453,6 +541,10 @@ if [[ -f /etc/nftables.d/azazel-internal.nft ]]; then
   nft list table ip azazel_internal >/dev/null 2>&1 && nft delete table ip azazel_internal || true
   nft -f /etc/nftables.d/azazel-internal.nft || true
 fi
+# Last, and a failure does not stop the steps above: sshd listens on the br0
+# address only, which may not be there yet; the ssh.service drop-in
+# (azazel-edge-listen.conf) keeps retrying every 5 s until it is.
+systemctl restart ssh || echo "NOTICE: ssh did not start yet (br0 address missing?); ssh.service retries every 5 s." >&2
 if [[ "$ap_rc" -ne 0 ]]; then
   echo "ERROR: the internal AP (lan-wlan0-ap) did not come up (nmcli exit $ap_rc). Check: rfkill list; nmcli radio; the Wi-Fi country." >&2
   exit 1
