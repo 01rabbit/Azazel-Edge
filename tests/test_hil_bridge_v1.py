@@ -23,7 +23,7 @@ def test_report_is_concise_and_redacts_secret(tmp_path: Path) -> None:
     report = tmp_path / "CHATGPT_PASTE.md"
     summary = hil.write_report(raw, report)
     body = report.read_text(encoding="utf-8")
-    assert summary == {"passed": 1, "skipped": 1, "failed": 0, "events": 3}
+    assert {k: summary[k] for k in ("passed", "skipped", "unobserved", "failed", "events")} == {"passed": 1, "skipped": 1, "unobserved": 0, "failed": 0, "events": 3}
     assert "nope" not in body
     assert "[REDACTED]" in body
     assert "profile.qwen3.5:2b" in body
