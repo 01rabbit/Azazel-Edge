@@ -85,9 +85,10 @@ Recommended API sanity checks:
 # The installed token: /etc/azazel-edge/web_token.txt, 0640 root:azazel-web
 # (read with sudo). ~/.azazel-edge/web_token.txt is only the code default
 # when AZAZEL_WEB_TOKEN_FILE is unset; the installer always sets it.
-TOKEN="$(sudo cat /etc/azazel-edge/web_token.txt | tr -d '[:space:]')"
-curl -fsS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/state >/dev/null
-curl -fsS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/aggregator/nodes >/dev/null || true
+# The token goes to curl on stdin (-H @-), not on its command line.
+auth() { sudo sed -n '1s/^/X-AZAZEL-TOKEN: /p' /etc/azazel-edge/web_token.txt; }
+auth | curl -fsS -H @- http://127.0.0.1:8084/api/state >/dev/null
+auth | curl -fsS -H @- http://127.0.0.1:8084/api/aggregator/nodes >/dev/null || true
 ```
 
 ## 6. Failure fallback

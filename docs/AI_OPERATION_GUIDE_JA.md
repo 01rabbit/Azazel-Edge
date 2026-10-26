@@ -193,9 +193,11 @@ Aggregator freshness 判定の調整（`/etc/default/azazel-edge-web`）:
 現在実装済みの M.I.O. 機能確認:
 
 ```bash
-# Web UI の API はトークンが要る（無いと HTTP 401）。
-TOKEN="$(sudo cat /etc/azazel-edge/web_token.txt | tr -d '[:space:]')"
-curl -sS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/ai/capabilities | jq
+# Web UI の API はトークンが要る（無いと HTTP 403。一部の API は 401）。
+# トークン（/etc/azazel-edge/web_token.txt、0640 root:azazel-web）は
+# コマンドラインに出さず、curl の標準入力からヘッダとして渡す（-H @-）。
+sudo sed -n '1s/^/X-AZAZEL-TOKEN: /p' /etc/azazel-edge/web_token.txt \
+  | curl -sS -H @- http://127.0.0.1:8084/api/ai/capabilities | jq
 ```
 - slash command callback URL: `http://172.16.0.254/api/mattermost/command`
 - command token は `/etc/azazel-edge/mattermost-command-token`（`0640 root:azazel-web`。Web UI は `azazel-web` で動くので、`0600` では読めず slash command がすべて拒否される）で管理

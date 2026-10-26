@@ -173,7 +173,9 @@ save_ap_psk() {
 
 # AP_PSK when given; else the saved one; else the one an earlier install put
 # in the AP profile (unless it is the old default); else a new random one.
-# Saved 0600 root:root in AP_PSK_FILE. Never printed.
+# Saved 0600 root:root in AP_PSK_FILE. Never printed. When the profile exists
+# but nmcli cannot read its passphrase, the install stops: a new random one
+# would replace the passphrase the clients use.
 resolve_ap_psk() {
   local existing="" existing_bytes=0
   AP_PSK_SOURCE="given"
@@ -182,7 +184,10 @@ resolve_ap_psk() {
     AP_PSK_SOURCE="kept"
   fi
   if [[ -z "$AP_PSK" ]] && nm_profile_exists "$WLAN_AP_CONN"; then
-    existing="$(LC_ALL=C.UTF-8 nmcli -s --escape no -g 802-11-wireless-security.psk con show "$WLAN_AP_CONN" 2>/dev/null || true)"
+    if ! existing="$(LC_ALL=C.UTF-8 nmcli -s --escape no -g 802-11-wireless-security.psk con show "$WLAN_AP_CONN")"; then
+      echo "ERROR: nmcli could not read the passphrase of the existing AP profile $WLAN_AP_CONN (its message is above); stopping so the passphrase in use is not replaced by a new one. Check: systemctl status NetworkManager. Or re-run with AP_PSK set." >&2
+      exit 1
+    fi
     # Bytes (LC_ALL=C), as check_ap_psk counts them, not characters.
     existing_bytes="$(LC_ALL=C; printf '%s' "${#existing}")"
     if [[ -n "$existing" && "$existing" != "$AP_PSK_OLD_DEFAULT" && $existing_bytes -ge 8 && $existing_bytes -le 63 ]]; then

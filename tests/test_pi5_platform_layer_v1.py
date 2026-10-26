@@ -426,6 +426,27 @@ def test_an_earlier_profile_passphrase_is_kept_unless_it_is_the_old_default(tmp_
     assert "my-own-passphrase" not in given.stdout + given.stderr
 
 
+@LINUX_ONLY
+def test_an_unreadable_profile_passphrase_stops_instead_of_replacing_it(tmp_path):
+    # The AP profile exists but nmcli cannot read its passphrase: fail closed
+    # (like nm_profile_exists), nothing generated or saved, the cause shown.
+    psk_file = tmp_path / "etc" / "internal-ap.psk"
+    fns = "".join(_function(NETWORK, n) for n in ("nm_profile_exists", "check_ap_psk", "generate_ap_psk", "save_ap_psk",
+                                                  "resolve_ap_psk"))
+    stub = ('nmcli() { case "$*" in "-t -f NAME con show") echo lan-wlan0-ap ;; '
+            '*802-11-wireless-security.psk*) echo "Error: secrets were required, but not provided." >&2; return 4 ;; esac; }\n')
+    script = (f"AP_PSK=''\nAP_PSK_FILE={str(psk_file)!r}\nAP_PSK_OLD_DEFAULT=ChangeMe1234\nWLAN_AP_CONN=lan-wlan0-ap\n"
+              "chown() { :; }\n" + stub + fns + 'resolve_ap_psk\necho "source=$AP_PSK_SOURCE"\n')
+    res = _bash(script)
+    assert res.returncode == 1 and "source=" not in res.stdout
+    assert "could not read the passphrase of the existing AP profile lan-wlan0-ap" in res.stderr
+    assert "secrets were required" in res.stderr  # nmcli's own message
+    assert not psk_file.exists()
+    # Without a profile a new one is still generated.
+    gen = _resolve(tmp_path, {"AP_PSK": ""}, None)
+    assert gen.returncode == 0 and "source=generated" in gen.stdout
+
+
 def test_the_passphrase_is_never_echoed_by_the_installer():
     src = NETWORK.read_text(encoding="utf-8")
     for line in src.splitlines():
