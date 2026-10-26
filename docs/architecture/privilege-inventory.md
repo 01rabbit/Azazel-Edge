@@ -736,7 +736,9 @@ non-root peers together hold at most 24 of them and at most 16
 `busy`). A watch stream whose client has gone is noticed while nothing
 changes (end of stream on the socket, checked every interval) and frees its
 slot; `control_plane.watch_snapshots` closes its socket as soon as its
-consumer stops. A rewritten SoT file keeps the mode and group of
+consumer stops. When the daemon's stream ends (`busy`, closed, no socket),
+the Web UI's `/api/state/stream` sends an `error` event with the reason
+before it ends (#477; before, it ended without one). A rewritten SoT file keeps the mode and group of
 the file it replaces (the installer makes it 0640 root:azazel-web); a new
 one is 0640 root:azazel-web when the daemon is root.
 
@@ -1062,6 +1064,12 @@ out-of-scope findings tracked separately. Still open:
 
 1. **Port 8082.** Who serves the status API on a device? It decides how
    often the Web UI reaches `uplink_disconnect` instead of the status API.
+   Still open (#477): the calls are kept, because a device that runs a
+   status API would otherwise lose `contain`/`release`/`stage_open` and its
+   own `disconnect` (documented there as disconnecting downstream clients,
+   not the uplink). An HTTP error reply now counts as a failure
+   (`curl --fail`); before, an empty error reply read as "Containment
+   activated".
 2. **`migrate_path_schema` on the socket.** It becomes root-only; should it
    leave the socket entirely (a root CLI only)?
 3. **`/etc/azazel-edge` mode.** 0755 with per-file modes (default) or keep
@@ -1072,11 +1080,25 @@ out-of-scope findings tracked separately. Still open:
    another split?
 6. **`decision-explanations.jsonl`.** The Web UI reads it from
    `/var/log/azazel-edge`, the agent writes elsewhere. Which is intended?
+   Checked for #477: these are two different records, not one file at two
+   paths. The Web UI (Booth Focus) and `audit_review` read the v2 decision
+   explanations of `DecisionExplainer` (`trace_id`, `selected_action`,
+   `policy_profile`, `config_hash`, …); the agent's `DecisionLogger` writes
+   the tactics-engine scoring trace `decision_explanations.jsonl` (no such
+   fields) under `/var/lib/azazel-edge-agent/decisions`. Pointing the reader
+   at the agent's file would show nothing, and copying it would mix schemas.
+   In this repository only the scenario replay writes v2 explanations (to its
+   demo path); no live service writes `/var/log/azazel-edge/decision-explanations.jsonl`.
+   Whether a live service should (which one, as which account) is the owner's
+   decision; paths unchanged.
 7. **Out-of-scope findings, tracked separately** (not fixed by #471 stages
    0–2):
    - `control.sock` has no peer check today (stage 1 adds one);
    - the Wi-Fi passphrase is passed on nmcli's argv (fixed by #477);
-   - `contain`/`disconnect` on `control.sock` only write a log line;
+   - `contain`/`disconnect` on `control.sock` only write a log line (#477:
+     `contain`, `disconnect` and `stage_open` now answer `not_implemented`,
+     the three scripts are removed, and the CLI's command-file fallback does
+     not turn that answer into success; nothing new is enforced);
    - the netflow and snmp units used `User=azazel`, which no installer
      created (since #477 they run as the dedicated `azazel-sensor`, created
      by `install_sensors.sh`), and `${VAR:-default}` in `ExecStart`;
@@ -1091,9 +1113,19 @@ out-of-scope findings tracked separately. Still open:
    - the agent's SOC policy and ATT&CK mapping paths are relative to `/`
      (§3.5);
    - `azazel-edge-portal-viewer.service` is started by the daemon but not
-     shipped;
+     shipped (#477: still not shipped, since nothing in this repository runs
+     the viewer, a browser behind noVNC on 6080. The Web UI read its status as
+     `azazel-portal-viewer.service` and now reads the unit the daemon starts;
+     a missing unit is reported as not installed. Shipping one or removing
+     the action is the owner's decision);
    - OpenCanary SSH listens on 12222 while the core's honeypot redirect
-     default is 2222;
+     default is 2222 (#477, unchanged: neither the unit nor an installer sets
+     `AZAZEL_DEFENSE_HONEYPOT_PORT` or `AZAZEL_REDIRECT_POLICY_PATH`, so on a
+     device the relative policy path does not resolve and the core redirects
+     every port to 2222. 12222 comes only from `config/redirect_policy.yaml`
+     (`22: 12222`), which the core does not load there. Changing the default
+     would send redirected traffic of every port to the SSH decoy; this
+     follows the relative-path item above and is the owner's decision);
    - the Ollama compose file published 11434 on all interfaces (loopback
      only since #477).
 8. **Hardware.** None of §9 is device evidence. Stage 1 and 2 still need a

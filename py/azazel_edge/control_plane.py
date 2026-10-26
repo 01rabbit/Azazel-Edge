@@ -72,8 +72,23 @@ def watch_snapshots(
     interval_sec: float = 1.0,
     socket_path: Path = CONTROL_SOCKET,
     timeout_sec: float = 5.0,
+    errors: Optional[list] = None,
 ) -> Generator[Dict[str, Any], None, None]:
+    """Yield snapshots from the daemon's watch_snapshot stream.
+
+    The stream ends when the daemon closes it (also right after refusing it,
+    for example ``busy`` when too many streams are open) or the socket fails.
+    When ``errors`` is a list, the reason the stream ended is appended to it
+    (the daemon's last error string, ``socket_missing``, ``stream_closed`` or
+    ``stream_error:<exception>``), so a caller can report the end instead of
+    stopping silently (Edge#477).
+    """
+    def _note(reason: str) -> None:
+        if errors is not None:
+            errors.append(str(reason))
+
     if not socket_path.exists():
+        _note("socket_missing")
         return
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -82,9 +97,13 @@ def watch_snapshots(
         req = {"action": "watch_snapshot", "params": {"interval_sec": float(interval_sec)}}
         sock.sendall(json.dumps(req).encode("utf-8") + b"\n")
         buffer = b""
+        last_error = ""
         while True:
             chunk = sock.recv(4096)
             if not chunk:
+                # A refusal ("busy", "forbidden") is the last line before the
+                # daemon closes; report it rather than a bare close.
+                _note(last_error or "stream_closed")
                 break
             buffer += chunk
             while b"\n" in buffer:
@@ -94,8 +113,15 @@ def watch_snapshots(
                     continue
                 payload = json.loads(line_text)
                 if isinstance(payload, dict) and payload.get("ok") and isinstance(payload.get("snapshot"), dict):
+                    last_error = ""
                     yield payload["snapshot"]
-    except Exception:
+                elif isinstance(payload, dict) and payload.get("ok") is False:
+                    # Not a snapshot (no snapshot yet, or a refusal such as
+                    # "busy" right before the daemon closes). Keep reading;
+                    # the stream itself decides whether it ends.
+                    last_error = str(payload.get("error") or "daemon_error")[:64]
+    except Exception as exc:
+        _note(f"stream_error:{type(exc).__name__}")
         return
     finally:
         # Close at once (also when the consumer stops iterating), so the
@@ -167,6 +193,10 @@ def send_action_with_fallback(
 ) -> Dict[str, Any]:
     resp = send_action(action, params=params)
     if resp.get("ok"):
+        return resp
+    if resp.get("not_implemented") or resp.get("error") == "not_implemented":
+        # The daemon answered that it does not carry this action out: a
+        # command file would only hide that (Edge#477). Return the refusal.
         return resp
     fallback = write_command_file_fallback(action, logger=logger, explicit_path=fallback_cmd_path)
     if fallback is None:

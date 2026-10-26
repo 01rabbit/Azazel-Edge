@@ -239,6 +239,12 @@ BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
 PORTAL_VIEWER_ENV_PATH = portal_env_candidates()[0]
+# The unit the control daemon starts for portal_viewer_open
+# (azazel_edge_control.daemon.PORTAL_VIEWER_SERVICE). Its status is read under
+# the same name; it used to be read as azazel-portal-viewer.service, so a
+# viewer the daemon had started never showed as active (Edge#477). The unit is
+# not shipped by this repository; where it is not installed, opening fails.
+PORTAL_VIEWER_SERVICE = "azazel-edge-portal-viewer.service"
 CAPTIVE_REGISTRY_PATH = Path(str(os.environ.get("AZAZEL_CAPTIVE_REGISTRY_PATH", "")).strip() or str(WEB_STATE_DIR / "captive-allowlist.json"))
 NTFY_CONFIG_PATHS = [
     Path(os.environ.get("AZAZEL_CONFIG_PATH", str(first_minute_config_candidates()[0]))),
@@ -4175,7 +4181,7 @@ def _portal_viewer_state_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
     bind_host = str(config.get("bind", "")).strip() or os.environ.get("MGMT_IP", "10.55.0.10")
     port = int(config.get("port", 6080))
     probe_hosts = _probe_hosts_for_bind(bind_host)
-    active = _service_active("azazel-portal-viewer.service")
+    active = _service_active(PORTAL_VIEWER_SERVICE)
     ready = active and _tcp_open(port, probe_hosts)
     scheme = _request_scheme_or_default()
     host = _url_host(_portal_viewer_url_host(bind_host))
@@ -4421,9 +4427,14 @@ def _status_api_json(
     empty_ok: bool = False,
     empty_message: str = "",
 ) -> Optional[Dict[str, Any]]:
-    """Call first-minute Status API and return normalized JSON payload if available."""
+    """Call first-minute Status API and return normalized JSON payload if available.
+
+    No server for port 8082 ships in this repository (Edge#477); on a device
+    without one every call fails and the caller reports the failure. An HTTP
+    error status (``--fail``) is a failure too, never an empty "success".
+    """
     try:
-        cmd: List[str] = ["curl", "-s"]
+        cmd: List[str] = ["curl", "-s", "--fail", "--max-time", str(max(1, int(timeout_sec)))]
         if method.upper() == "POST":
             cmd.extend(["-X", "POST"])
         cmd.append(f"http://{host}:8082{path}")
@@ -5397,7 +5408,8 @@ def api_state_stream():
     def generate() -> Iterator[str]:
         yield "event: ready\ndata: " + json.dumps({"ok": True, "source": "state_stream"}) + "\n\n"
         if cp_watch_snapshots is not None:
-            for snap in cp_watch_snapshots(interval_sec=1.0):
+            stream_errors: List[str] = []
+            for snap in cp_watch_snapshots(interval_sec=1.0, errors=stream_errors):
                 payload = dict(snap)
                 payload["ok"] = True
                 payload["monitoring"] = get_monitoring_state()
@@ -5406,6 +5418,13 @@ def api_state_stream():
                 payload["mode"] = mode_state.get("mode", {})
                 payload["mode_runtime"] = mode_state
                 yield "event: state\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+            # The daemon's stream ended (refused as "busy", closed, or the
+            # socket failed): say so instead of ending silently (Edge#477),
+            # so the client can tell the end apart from "no change".
+            reason = stream_errors[-1] if stream_errors else "stream_closed"
+            yield "event: error\ndata: " + json.dumps(
+                {"ok": False, "source": "state_stream", "error": reason}
+            ) + "\n\n"
             return
         while True:
             payload = read_state()

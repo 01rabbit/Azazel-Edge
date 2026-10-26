@@ -4,6 +4,24 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Settings and behaviour that disagreed (Edge#477):
+  - `control.sock` `contain`, `disconnect` and `stage_open` answer
+    `{"ok": false, "error": "not_implemented"}` instead of appending a line
+    to `/run/azazel-edge/action_requests.log` (read by nothing) and answering
+    success; their scripts are removed. The CLI's command-file fallback no
+    longer turns that answer into success. Nothing new is enforced.
+  - The Web UI's `/api/state/stream` sends an `error` event with the reason
+    (`busy`, `stream_closed`, `socket_missing`, …) when the daemon's watch
+    stream ends, instead of ending silently.
+  - The port 8082 status API call uses `curl --fail`: an HTTP error reply is
+    a failure, not "Containment activated". No server for 8082 ships here.
+  - The Web UI reads the portal viewer's status under the unit the control
+    daemon starts (`azazel-edge-portal-viewer.service`, was
+    `azazel-portal-viewer.service`); a missing unit is reported as not
+    installed. The unit itself is still not shipped.
+
 ### Security
 
 - Four hardening fixes from Edge#477 (found by the #471 privilege inventory):
