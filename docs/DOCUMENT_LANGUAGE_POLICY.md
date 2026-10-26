@@ -35,6 +35,8 @@ Last updated: 2026-05-13
 - `docs/OPERATOR_GUIDE_JA.md` (JA)
 - `docs/DEV_LOCAL_STACK.md` (EN)
 - `docs/DEV_LOCAL_STACK_JA.md` (JA)
+- `docs/HARDWARE_FIRST_RUN_CHECKLIST.md` (EN)
+- `docs/HARDWARE_FIRST_RUN_CHECKLIST_JA.md` (JA)
 
 ### C. Governance charter
 - `AGENTS.md`: authoritative governance charter (English)
