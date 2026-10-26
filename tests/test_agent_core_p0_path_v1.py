@@ -306,6 +306,8 @@ def test_decisions_taken_while_the_agent_is_down_are_reconciled_once(tmp_path, r
         assert all(r["reconciled"] is True and r["recorded_by"] == "startup_reconcile" and r["event_ts"] for r in _alerts(agent.queue))
         # Within the lease: current alerts, not past decisions.
         assert all(r["stale"] is False and r["presentation"] == "current" for r in _alerts(agent.queue))
+        # The status row is written after the records, so it can land after the alerts.
+        assert _wait(lambda: len(_statuses(agent.queue, "core_reconcile")) == 1)
         first = _statuses(agent.queue, "core_reconcile")
         assert len(first) == 1 and first[0]["core_reconciled"] == 2 and first[0]["core_reconcile"] == "done"
         # Live again.
