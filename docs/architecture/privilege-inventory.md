@@ -77,7 +77,7 @@ Every child is an argv list.
 | Where | Command | Reached from | Mark |
 | --- | --- | --- | --- |
 | `app.py` `execute_disconnect_action` | `ip link set ${AZAZEL_UP_IF:-wlan0} down` | `action=disconnect` on `POST /api/action` and `/api/action/<action>`, **only when nothing answers on port 8082** | **cap:NET_ADMIN**. The interface comes from the environment, not the request. |
-| `app.py` `_status_api_json` | `curl -s [-X POST] http://<host>:8082/…` for `/`, `/action/contain`, `release`, `disconnect`, `stage_open`, `details`; hosts are a fixed list (code default includes `127.0.0.1`) | `/api/action` | none |
+| `app.py` `_status_api_json` | `curl -s --fail --max-time <s> [-X POST] http://<host>:8082/…` for `/`, `/action/contain`, `release`, `disconnect`, `stage_open`, `details`; hosts are a fixed list (code default includes `127.0.0.1`). Since #477 an HTTP error (curl exit 22), an empty reply where one is required, or a reply that is not a JSON object is the status API's refusal and returned as a failure; only connection refused / timeout counts as "nothing answers" (the only case that falls back, e.g. `disconnect` to `uplink_disconnect`) | `/api/action` | none |
 | `app.py` `_container_running` | `docker ps --format {{.Names}}` | `get_monitoring_state()` → `GET /api/state`, `/api/state/stream`, `/api/dashboard/bundle`; runs for **both** OpenCanary (`azazel-edge-opencanary`) and Suricata (`azazel-edge-suricata`) when their `systemctl is-active` checks fail | **root** (docker group = root-equivalent). Without it the function returns `False` silently. |
 | `app.py` `_process_running` | `pgrep -f [o]pencanary.tac` | monitoring state | none; would break under `ProtectProc=invisible` |
 | `app.py` `_service_active` | `/bin/systemctl is-active <unit>` for OpenCanary (3 names), Suricata (2), ntfy, `azazel-edge-ai-agent`, `azazel-edge-web`, `azazel-portal-viewer` | monitoring state, portal viewer status | none (D-Bus read) |
@@ -311,7 +311,8 @@ Stays root in #471. Listed because stages 1 and 2 move work to it.
 | `wifi_scan` | `iw dev`, `nmcli … show`, `nmcli dev wifi rescan`, `iw scan` (rate-limited) | cap:NET_ADMIN / NetworkManager polkit |
 | `wifi_connect` | `nmcli con add` (new profile, no secret) or, for a saved profile given a new PSK, `nmcli con clone` (the copy's stored PSK dropped with `wifi-sec.psk-flags 2`/`0`; the original replaced only after the copy is up), then `nmcli con up … passwd-file <file>`; `con delete`, `ip link/addr/route`, `ping`, `curl`; NAT: `sysctl -w net.ipv4.ip_forward=1`, `nft add table ip azazel_nat` + masquerade (iptables fallback) | root. Since #477 the passphrase is not on nmcli's argv: it is in a 0600 passwd-file in a fresh 0700 directory under `/run`, removed when nmcli returns (before #477 it was on argv, readable from `/proc/<pid>/cmdline`). |
 | `shutdown`, `reboot` | `scripts/*.sh` → `systemctl --no-block poweroff|reboot` | root |
-| `refresh`, `reprobe`, `contain`, `stage_open`, `disconnect` | append `{ts, action}` to `/run/azazel-edge/action_requests.log` only (no reader found; not exhaustive) | owner |
+| `refresh`, `reprobe` | append `{ts, action}` to `/run/azazel-edge/action_requests.log` only (no reader found; not exhaustive) | owner |
+| `contain`, `stage_open`, `disconnect` | before #477 the same log line and success; since #477 nothing is run and the answer is `{"ok": false, "error": "not_implemented"}` | none |
 | `portal_viewer_open` | absolute http(s) URL required; writes `/run/azazel-edge/portal-viewer-start-url`, `systemctl start|restart azazel-edge-portal-viewer.service` (fixed; that unit is not shipped in this repo), probes TCP 6080 | root |
 
 Background: `suppress_auto_wifi` (on by default) runs `nmcli con mod …
@@ -736,7 +737,10 @@ non-root peers together hold at most 24 of them and at most 16
 `busy`). A watch stream whose client has gone is noticed while nothing
 changes (end of stream on the socket, checked every interval) and frees its
 slot; `control_plane.watch_snapshots` closes its socket as soon as its
-consumer stops. A rewritten SoT file keeps the mode and group of
+consumer stops. When the daemon's stream ends (`busy`, closed, no socket),
+the Web UI's `/api/state/stream` sends a `stream_error` event with the
+reason (and `retry: 15000`, so clients do not reconnect into `busy` at once)
+before it ends (#477; before, it ended without one). A rewritten SoT file keeps the mode and group of
 the file it replaces (the installer makes it 0640 root:azazel-web); a new
 one is 0640 root:azazel-web when the daemon is root.
 
@@ -1062,6 +1066,14 @@ out-of-scope findings tracked separately. Still open:
 
 1. **Port 8082.** Who serves the status API on a device? It decides how
    often the Web UI reaches `uplink_disconnect` instead of the status API.
+   Still open (#477): the calls are kept, because a device that runs a
+   status API would otherwise lose `contain`/`release`/`stage_open` and its
+   own `disconnect` (documented there as disconnecting downstream clients,
+   not the uplink). An HTTP error reply now counts as a failure
+   (`curl --fail`); before, an empty error reply read as "Containment
+   activated". Any answer from 8082 that is not usable is returned as a
+   failure; only "nothing answers" (refused, timeout) falls back to
+   `uplink_disconnect`.
 2. **`migrate_path_schema` on the socket.** It becomes root-only; should it
    leave the socket entirely (a root CLI only)?
 3. **`/etc/azazel-edge` mode.** 0755 with per-file modes (default) or keep
@@ -1072,11 +1084,29 @@ out-of-scope findings tracked separately. Still open:
    another split?
 6. **`decision-explanations.jsonl`.** The Web UI reads it from
    `/var/log/azazel-edge`, the agent writes elsewhere. Which is intended?
+   Checked for #477: these are two different records, not one file at two
+   paths. The Web UI (Booth Focus) and `audit_review` read the v2 decision
+   explanations of `DecisionExplainer` (`trace_id`, `selected_action`,
+   `policy_profile`, `config_hash`, …); the agent's `DecisionLogger` writes
+   the tactics-engine scoring trace `decision_explanations.jsonl` (no such
+   fields) under `/var/lib/azazel-edge-agent/decisions`. Pointing the reader
+   at the agent's file would show nothing, and copying it would mix schemas.
+   In this repository only the scenario replay writes v2 explanations (to its
+   demo path); no live service writes `/var/log/azazel-edge/decision-explanations.jsonl`.
+   Whether a live service should (which one, as which account) is the owner's
+   decision; paths unchanged.
 7. **Out-of-scope findings, tracked separately** (not fixed by #471 stages
    0–2):
    - `control.sock` has no peer check today (stage 1 adds one);
    - the Wi-Fi passphrase is passed on nmcli's argv (fixed by #477);
-   - `contain`/`disconnect` on `control.sock` only write a log line;
+   - `contain`/`disconnect` on `control.sock` only write a log line (#477:
+     `contain`, `disconnect` and `stage_open` now answer `not_implemented`,
+     the three scripts are removed; nothing new is enforced. The CLI's
+     command-file fallback is used only when the daemon was never reached
+     (no socket, connect failed), and since nothing in this repository reads
+     `ui_command.json` it reports `ok: false, undelivered: true`, never
+     success; a request sent without a reply is `delivery_unknown` (it may
+     have run) and is not handed on; a daemon refusal is returned as it is);
    - the netflow and snmp units used `User=azazel`, which no installer
      created (since #477 they run as the dedicated `azazel-sensor`, created
      by `install_sensors.sh`), and `${VAR:-default}` in `ExecStart`;
@@ -1091,9 +1121,19 @@ out-of-scope findings tracked separately. Still open:
    - the agent's SOC policy and ATT&CK mapping paths are relative to `/`
      (§3.5);
    - `azazel-edge-portal-viewer.service` is started by the daemon but not
-     shipped;
+     shipped (#477: still not shipped, since nothing in this repository runs
+     the viewer, a browser behind noVNC on 6080. The Web UI read its status as
+     `azazel-portal-viewer.service` and now reads the unit the daemon starts;
+     a missing unit is reported as not installed. Shipping one or removing
+     the action is the owner's decision);
    - OpenCanary SSH listens on 12222 while the core's honeypot redirect
-     default is 2222;
+     default is 2222 (#477, unchanged: neither the unit nor an installer sets
+     `AZAZEL_DEFENSE_HONEYPOT_PORT` or `AZAZEL_REDIRECT_POLICY_PATH`, so on a
+     device the relative policy path does not resolve and the core redirects
+     every port to 2222. 12222 comes only from `config/redirect_policy.yaml`
+     (`22: 12222`), which the core does not load there. Changing the default
+     would send redirected traffic of every port to the SSH decoy; this
+     follows the relative-path item above and is the owner's decision);
    - the Ollama compose file published 11434 on all interfaces (loopback
      only since #477).
 8. **Hardware.** None of §9 is device evidence. Stage 1 and 2 still need a

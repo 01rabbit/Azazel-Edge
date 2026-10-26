@@ -87,13 +87,18 @@ SCRIPT_ROOT = PROJECT_ROOT / "py" / "azazel_edge_control" / "scripts"
 ACTION_SCRIPTS = {
     'refresh': str(SCRIPT_ROOT / 'refresh.sh'),
     'reprobe': str(SCRIPT_ROOT / 'reprobe.sh'),
-    'contain': str(SCRIPT_ROOT / 'contain.sh'),
-    'stage_open': str(SCRIPT_ROOT / 'stage_open.sh'),
-    'disconnect': str(SCRIPT_ROOT / 'disconnect.sh'),
     'details': str(SCRIPT_ROOT / 'details.sh'),
     'shutdown': str(SCRIPT_ROOT / 'shutdown.sh'),
     'reboot': str(SCRIPT_ROOT / 'reboot.sh'),
 }
+
+# Actions this socket accepts by name but does not carry out (Edge#477). Their
+# scripts only appended a line to /run/azazel-edge/action_requests.log, which
+# nothing reads, and answered success. They now answer an explicit
+# "not_implemented" so no caller shows them as done. Adding enforcement here
+# is out of scope; the Web UI sends these to the port 8082 status API, never
+# to this socket.
+NOT_IMPLEMENTED_ACTIONS = frozenset({"contain", "disconnect", "stage_open"})
 
 # Rate limiting
 last_action_time = {}
@@ -1052,6 +1057,10 @@ def ensure_portal_viewer_ready(timeout_sec: float = 15.0, start_url: str | None 
         )
         if start.returncode != 0:
             err = (start.stderr or start.stdout or "").strip() or "systemctl start failed"
+            if PORTAL_VIEWER_SERVICE in err and ("not found" in err.lower() or "not-found" in err.lower()):
+                # Azazel-Edge does not ship this unit (Edge#477); say so
+                # rather than only relaying systemctl's message.
+                err = f"{PORTAL_VIEWER_SERVICE} is not installed on this device (not shipped by Azazel-Edge): {err}"
             return {
                 "ok": False,
                 "error": err,
@@ -2521,6 +2530,17 @@ def execute_action(action_name, params=None, *, request: Optional[dict[str, Any]
         start_url = str(start_url_raw).strip() if isinstance(start_url_raw, str) else ""
         return ensure_portal_viewer_ready(timeout_sec=timeout_sec, start_url=start_url or None)
     
+    if action_name in NOT_IMPLEMENTED_ACTIONS:
+        logger.warning(f"control.sock: {action_name} is not implemented by the control daemon; answered not_implemented")
+        return {
+            'ok': False,
+            'action': action_name,
+            'error': 'not_implemented',
+            'not_implemented': True,
+            'message': f'{action_name} is not implemented by the control daemon; nothing was done',
+            'ts': time.time(),
+        }
+
     # Handle shell script actions
     script_path = ACTION_SCRIPTS.get(action_name)
     

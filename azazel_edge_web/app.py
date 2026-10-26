@@ -238,7 +238,16 @@ EPD_LAST_RENDER_PATH = Path(
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
+# curl's exit status for an HTTP status >= 400 under --fail: the server on
+# port 8082 answered and refused (not "nothing there").
+STATUS_API_CURL_HTTP_ERROR = 22
 PORTAL_VIEWER_ENV_PATH = portal_env_candidates()[0]
+# The unit the control daemon starts for portal_viewer_open
+# (azazel_edge_control.daemon.PORTAL_VIEWER_SERVICE). Its status is read under
+# the same name; it used to be read as azazel-portal-viewer.service, so a
+# viewer the daemon had started never showed as active (Edge#477). The unit is
+# not shipped by this repository; where it is not installed, opening fails.
+PORTAL_VIEWER_SERVICE = "azazel-edge-portal-viewer.service"
 CAPTIVE_REGISTRY_PATH = Path(str(os.environ.get("AZAZEL_CAPTIVE_REGISTRY_PATH", "")).strip() or str(WEB_STATE_DIR / "captive-allowlist.json"))
 NTFY_CONFIG_PATHS = [
     Path(os.environ.get("AZAZEL_CONFIG_PATH", str(first_minute_config_candidates()[0]))),
@@ -4175,7 +4184,7 @@ def _portal_viewer_state_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
     bind_host = str(config.get("bind", "")).strip() or os.environ.get("MGMT_IP", "10.55.0.10")
     port = int(config.get("port", 6080))
     probe_hosts = _probe_hosts_for_bind(bind_host)
-    active = _service_active("azazel-portal-viewer.service")
+    active = _service_active(PORTAL_VIEWER_SERVICE)
     ready = active and _tcp_open(port, probe_hosts)
     scheme = _request_scheme_or_default()
     host = _url_host(_portal_viewer_url_host(bind_host))
@@ -4421,21 +4430,50 @@ def _status_api_json(
     empty_ok: bool = False,
     empty_message: str = "",
 ) -> Optional[Dict[str, Any]]:
-    """Call first-minute Status API and return normalized JSON payload if available."""
+    """Call first-minute Status API and return normalized JSON payload if available.
+
+    No server for port 8082 ships in this repository (Edge#477). Returns:
+
+    * ``None`` when nothing answered: connection refused, timeout, or any
+      other curl transport failure (only then may a caller fall back, e.g.
+      ``disconnect`` to the daemon's ``uplink_disconnect``);
+    * a failure ``{"ok": False, "status_api_error": True, ...}`` when port
+      8082 answered but not with a usable reply: an HTTP error status
+      (``curl --fail``, exit 22), an empty reply where one is required, or
+      a body that is not a JSON object. That is the status API's answer and
+      is reported as a failure, never as success and never as "not there";
+    * the normalized JSON payload otherwise.
+    """
+    def _answered_failure(reason: str) -> Dict[str, Any]:
+        failure: Dict[str, Any] = {"ok": False, "status_api_error": True,
+                                   "error": f"Status API on {host}:8082 {reason}"}
+        if action:
+            failure["action"] = action
+        return failure
+
     try:
-        cmd: List[str] = ["curl", "-s"]
+        cmd: List[str] = ["curl", "-s", "--fail", "--max-time", str(max(1, int(timeout_sec)))]
         if method.upper() == "POST":
             cmd.extend(["-X", "POST"])
         cmd.append(f"http://{host}:8082{path}")
 
         result = subprocess.run(cmd, capture_output=True, timeout=timeout_sec)
+        if result.returncode == STATUS_API_CURL_HTTP_ERROR:
+            return _answered_failure("answered with an HTTP error status")
         if result.returncode != 0:
+            # Every other curl failure is "nothing usable answered at the
+            # transport level": 7 refused, 28 timeout, 6 no such host, and
+            # also 52 (empty reply), 56 (receive failure) and 18 (transfer
+            # cut short): the connection dropped without an HTTP status, as
+            # when no status API listens behind the port or it went away.
+            # These are treated as "nothing answers", which keeps the old
+            # behaviour for them (only then may a caller fall back).
             return None
 
-        response_text = result.stdout.decode("utf-8").strip()
+        response_text = result.stdout.decode("utf-8", errors="replace").strip()
         if not response_text:
             if not empty_ok:
-                return None
+                return _answered_failure("answered with an empty reply")
             payload: Dict[str, Any] = {"ok": True}
             if action:
                 payload["action"] = action
@@ -4443,9 +4481,12 @@ def _status_api_json(
                 payload["message"] = empty_message
             return payload
 
-        payload = json.loads(response_text)
+        try:
+            payload = json.loads(response_text)
+        except (ValueError, RecursionError):
+            return _answered_failure("answered with a reply that is not JSON")
         if not isinstance(payload, dict):
-            return None
+            return _answered_failure("answered with a reply that is not a JSON object")
         return _normalize_status_payload(payload, action=action)
     except Exception:
         return None
@@ -4502,7 +4543,9 @@ def execute_disconnect_action() -> Dict[str, Any]:
         if payload is not None:
             return payload
 
-        # Fallback when the status API does not answer: the control daemon's
+        # A refusal from port 8082 (HTTP error, unusable reply) was returned
+        # above as a failure. Only when nothing answers there (connection
+        # refused, timeout) does it fall back (Edge#477) to the control daemon's
         # fixed uplink_disconnect operation (Edge#471 stage 1). It takes no
         # arguments; the daemon uses its own configured uplink. The Web UI
         # runs as a non-root account and no longer runs `ip` itself.
@@ -4553,11 +4596,14 @@ def execute_release_action() -> Dict[str, Any]:
 
             second_sent = False
             last_reason = ""
+            last_status_error = ""
             deadline = time.time() + 12.0
 
             while time.time() < deadline:
                 state_payload = _read_status_state(host)
-                if not state_payload:
+                if state_payload and state_payload.get("status_api_error"):
+                    last_status_error = str(state_payload.get("error") or "")
+                if not state_payload or state_payload.get("status_api_error"):
                     time.sleep(0.25)
                     continue
 
@@ -4592,7 +4638,12 @@ def execute_release_action() -> Dict[str, Any]:
                 time.sleep(0.25)
 
             if last_reason:
-                return {"ok": False, "action": "release", "error": f"Release timeout: {last_reason}"}
+                suffix = f"; last state read failed: {last_status_error}" if last_status_error else ""
+                return {"ok": False, "action": "release", "error": f"Release timeout: {last_reason}{suffix}"}
+            if last_status_error:
+                # the state could not be read; say why (Edge#477)
+                return {"ok": False, "action": "release",
+                        "error": f"Release timeout: state not readable ({last_status_error})"}
             return {"ok": False, "action": "release", "error": "Release timeout: stage stayed CONTAIN"}
 
         return {"ok": False, "action": "release", "error": "Failed to reach Status API on any host"}
@@ -5383,6 +5434,10 @@ def api_taxii_push():
     ), (200 if result.ok else 502)
 
 
+# Reconnect delay sent with the state stream's stream_error event (Edge#477).
+STATE_STREAM_RETRY_MS = 15000
+
+
 @app.route("/api/state/stream")
 @require_token(ok_payload=None)
 def api_state_stream():
@@ -5397,7 +5452,8 @@ def api_state_stream():
     def generate() -> Iterator[str]:
         yield "event: ready\ndata: " + json.dumps({"ok": True, "source": "state_stream"}) + "\n\n"
         if cp_watch_snapshots is not None:
-            for snap in cp_watch_snapshots(interval_sec=1.0):
+            stream_errors: List[str] = []
+            for snap in cp_watch_snapshots(interval_sec=1.0, errors=stream_errors):
                 payload = dict(snap)
                 payload["ok"] = True
                 payload["monitoring"] = get_monitoring_state()
@@ -5406,6 +5462,15 @@ def api_state_stream():
                 payload["mode"] = mode_state.get("mode", {})
                 payload["mode_runtime"] = mode_state
                 yield "event: state\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+            # The daemon's stream ended (refused as "busy", closed, or the
+            # socket failed): say so instead of ending silently (Edge#477),
+            # so the client can tell the end apart from "no change".
+            # ``retry`` slows an EventSource's automatic reconnect, so a
+            # "busy" daemon is not hit again every few seconds by each client.
+            reason = stream_errors[-1] if stream_errors else "stream_closed"
+            yield f"retry: {STATE_STREAM_RETRY_MS}\nevent: stream_error\ndata: " + json.dumps(
+                {"ok": False, "source": "state_stream", "error": reason}
+            ) + "\n\n"
             return
         while True:
             payload = read_state()

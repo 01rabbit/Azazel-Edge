@@ -60,8 +60,12 @@ Status: **Implemented**
 **separate, low-level internal engine/scoring trace** to:
 
 ```
-/opt/azazel-edge/logs/tactics_engine/decision_explanations.jsonl
+/var/lib/azazel-edge-agent/decisions/decision_explanations.jsonl
 ```
+
+(`$AZAZEL_DECISION_LOG_DIR` overrides the directory; before Edge#471 stage 2
+it was `/opt/azazel-edge/logs/tactics_engine`.) It is not the file the Web UI's
+Booth Focus reads: that one holds the v2 records above.
 
 Its records carry the following fields:
 

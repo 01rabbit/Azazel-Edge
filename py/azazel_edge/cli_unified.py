@@ -26,7 +26,7 @@ PY_ROOT = Path(__file__).resolve().parents[1]
 if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 
-from azazel_edge.control_plane import read_snapshot_payload, send_action, send_action_with_fallback
+from azazel_edge.control_plane import describe_action_failure, read_snapshot_payload, send_action, send_action_with_fallback
 from azazel_edge.path_schema import log_dir_candidates, snapshot_path_candidates
 from azazel_edge.snapshot_model import Snapshot, build_snapshot
 
@@ -1379,7 +1379,7 @@ def render(stdscr, snap: Snapshot, unicode_mode: bool):
             stdscr.addnstr(extra_y + 3, 2, no_blocks[: w - 4], cp(1))
 
     # Actions + Hint (絵文字なし、シンプル表示)
-    actions = "[U] Refresh  [A] Stage-Open  [R] Re-Probe  [C] Contain  [S] Shutdown  [B] Reboot  [L] Details  [M] Menu  [Q] Quit"
+    actions = "[U] Refresh  [A] Stage-Open (未実装)  [R] Re-Probe  [C] Contain (未実装)  [S] Shutdown  [B] Reboot  [L] Details  [M] Menu  [Q] Quit"
     
     # 状態遷移フロー表示
     state_flow = "Flow: PROBE → DEGRADED → NORMAL → ✅ SAFE" if unicode_mode else "Flow: PROBE->DEGRADED->NORMAL->SAFE"
@@ -1526,8 +1526,7 @@ def main():
             if isinstance(result, dict) and result.get("ok"):
                 snap.evidence.append(f"• action: {label} command sent")
                 return
-            err = str((result or {}).get("error", "unknown error")) if isinstance(result, dict) else "unexpected response"
-            snap.evidence.append(f"• action failed: {label} ({err})")
+            snap.evidence.append(describe_action_failure(result, label))
 
         while True:
             render(stdscr, snap, unicode_mode)
