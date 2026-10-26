@@ -452,7 +452,7 @@ def test_a_config_sshd_rejects_is_not_installed(tmp_path):
     conf.write_text("Port 22\n")
     fn = _function(NETWORK, "configure_sshd")
     script = (f"SSHD_CONF={str(conf)!r}\nSSH_LISTEN_IP=172.16.0.254\nALLOW_EXTERNAL_SSH=false\n"
-              "backup_file() { :; }\ninstall_ssh_dropin() { :; }\nsystemctl() { echo \"systemctl $*\"; }\n"
+              "backup_file() { :; }\nnotice_dropin_listen_addresses() { :; }\ninstall_ssh_dropin() { :; }\nsystemctl() { echo \"systemctl $*\"; }\n"
               "install() { echo \"install $*\"; }\n"
               "sshd() { return 255; }\n" + fn + "configure_sshd\n")
     res = _bash(script)
@@ -864,3 +864,21 @@ def test_the_epd_timer_is_enabled_only_with_the_gpio_stack():
     assert "systemctl enable --now azazel-edge-epd-refresh.timer" in block
     assert "systemctl disable --now azazel-edge-epd-refresh.timer" in block
     assert src.count("systemctl enable --now azazel-edge-epd-refresh.timer") == 1
+
+
+
+def test_an_operator_listenaddress_in_sshd_config_d_is_reported_not_changed(tmp_path):
+    conf_d = tmp_path / "sshd_config.d"
+    conf_d.mkdir()
+    own = conf_d / "10-site.conf"
+    own.write_text("  ListenAddress 192.0.2.5\n")
+    (conf_d / "20-other.conf").write_text("PasswordAuthentication no\n")
+    fn = _function(NETWORK, "notice_dropin_listen_addresses")
+    res = _bash(f"SSHD_CONF_D={str(conf_d)!r}\nALLOW_EXTERNAL_SSH=true\n" + fn + "notice_dropin_listen_addresses\n")
+    assert res.returncode == 0
+    assert res.stdout.count("NOTICE") == 1 and "10-site.conf sets ListenAddress" in res.stdout
+    assert own.read_text() == "  ListenAddress 192.0.2.5\n"
+    empty = _bash(f"SSHD_CONF_D={str(tmp_path / 'none')!r}\nALLOW_EXTERNAL_SSH=false\n" + fn
+                  + "notice_dropin_listen_addresses\n")
+    assert empty.returncode == 0 and empty.stdout == ""
+    assert "notice_dropin_listen_addresses" in _function(NETWORK, "configure_sshd")

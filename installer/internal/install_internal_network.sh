@@ -34,6 +34,7 @@ ETH_SLAVE_CONN="lan-eth0-slave"
 WLAN_AP_CONN="lan-wlan0-ap"
 
 SSHD_CONF="/etc/ssh/sshd_config"
+SSHD_CONF_D="/etc/ssh/sshd_config.d"
 SSH_DROPIN="/etc/systemd/system/ssh.service.d/azazel-edge-listen.conf"
 DNSMASQ_CONF="/etc/dnsmasq.d/azazel-internal.conf"
 SERVICE_FILE="/etc/systemd/system/azazel-internal-apply.service"
@@ -437,8 +438,23 @@ EOD
   chmod 0644 "$SSH_DROPIN"
 }
 
+# ListenAddress lines in sshd_config.d (included by sshd_config) are the
+# operator's and are left as they are, but they add to the scope set here:
+# with ALLOW_EXTERNAL_SSH=true sshd still listens only where they say, and
+# without it they widen the br0-only scope. Reported, not changed.
+notice_dropin_listen_addresses() {
+  local f
+  for f in "$SSHD_CONF_D"/*.conf; do
+    [[ -f "$f" ]] || continue
+    if grep -Eqi '^[[:space:]]*ListenAddress[[:space:]]' "$f"; then
+      echo "NOTICE: $f sets ListenAddress; it is not changed and applies together with this installer's setting (ALLOW_EXTERNAL_SSH=${ALLOW_EXTERNAL_SSH}). Check: sshd -T | grep -i listenaddress"
+    fi
+  done
+}
+
 configure_sshd() {
   backup_file "$SSHD_CONF"
+  notice_dropin_listen_addresses
 
   awk '
     /^[[:space:]]*ListenAddress[[:space:]]+/ { next }

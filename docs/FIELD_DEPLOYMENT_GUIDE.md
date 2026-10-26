@@ -87,7 +87,10 @@ controls. Each item includes expected outcome and fallback note.
   If something goes wrong: verify gateway and cable path. A Wi-Fi uplink
   chosen in the dashboard needs the USB Wi-Fi adapter; without it the
   dashboard reports "No wireless interface for the uplink" and the internal
-  AP stays up.
+  AP stays up. Without a USB Wi-Fi adapter the Wi-Fi sensor (channel survey,
+  nearby and rogue AP checks) is off: the on-board `wlan0` is never scanned
+  on because it serves the internal AP. Bring the adapter if that evidence is
+  needed on site.
 
 - [ ] Connect LAN switch or AP for local segment.
   Expected: local clients can join segment.
@@ -161,7 +164,7 @@ controls. Each item includes expected outcome and fallback note.
 ## Supplementary (日本語)
 
 - 事前準備: サービス・暗号化シークレット・自己診断を確認してから搬送します。内部 AP が上がっていること、パスフレーズ（`/etc/azazel-edge/internal-ap.psk`、root のみ）を STATUS_CARD に控えたこと、USB の上流アダプタを同梱したことも確認します。
-- 上流（WAN）は USB Ethernet か USB Wi-Fi で接続します。内蔵 eth0・wlan0 は内部 LAN です。
+- 上流（WAN）は USB Ethernet か USB Wi-Fi で接続します。内蔵 eth0・wlan0 は内部 LAN です。USB Wi-Fi が無いと Wi-Fi センサー（周辺 AP・不正 AP 検知）は無効です。
 - 現地設置: 15分以内の立上げを目標に、GREEN/YELLOWの表示確認を優先します。
 - 運用中: RED時は承認済み手順のみ実行し、引継ぎ時は要約を必ず確認します。
 - 終了時: 監査ログを退避してから安全停止し、搬送状態に戻します。

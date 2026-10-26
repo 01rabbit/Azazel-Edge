@@ -44,6 +44,12 @@ third interface**: a USB Ethernet adapter or a USB Wi-Fi adapter.
   internal LAN (AP mode, `br0` or a port of it). Without a USB Wi-Fi adapter
   they answer "No wireless interface for the uplink" instead of taking the
   internal AP down. A USB Ethernet uplink needs no Web UI step.
+- Without a USB Wi-Fi adapter the Wi-Fi sensor is off entirely: the on-board
+  `wlan0` serves only the internal AP and is never scanned on, so there is no
+  channel survey, nearby-AP evidence or rogue-AP check (`AZAZEL_SHELTER_SSID`)
+  and the control daemon logs "wifi sensor: not scanning: …" once. This is
+  intended (a scan on the AP's radio disturbs its clients); add a USB Wi-Fi
+  adapter to get the sensor back.
 - The uplink disconnect action (`AZAZEL_UP_IF`, default `wlan0`) refuses an
   interface that serves the internal LAN. With a USB uplink, set
   `AZAZEL_UP_IF=<its name>` in `/etc/default/azazel-edge-security`.
@@ -71,6 +77,13 @@ in a plain SSH session. The management SSH path is cut when:
 
 Inside `tmux` the installer keeps running when the session drops; reconnect
 from the internal segment and `tmux attach`.
+
+`ListenAddress` lines in `/etc/ssh/sshd_config.d/*.conf` are the operator's:
+the installer does not remove them (it only prints a NOTICE naming the file).
+They apply together with its own setting, so with `ALLOW_EXTERNAL_SSH=true`
+sshd still listens only on the addresses they name, and without it they add
+to the `br0` address. Check the effective scope with
+`sudo sshd -T | grep -i listenaddress`.
 
 ### 1.3 Raspberry Pi OS settings the installers make
 
@@ -208,6 +221,8 @@ For vehicle or heavy vibration, use additional anti-vibration mounts.
 - 配線は電源系と通信系を分離し、各端子に必ずストレインリリーフを設けます。
 - ラベルは筐体とケーブル両端に貼付し、現地で迷わない状態にします。
 - 出動前に selftest で媒体健全性を確認してください。
+- USB Wi-Fi が無い Pi 5 では内蔵 wlan0 は内部 AP 専用になり、Wi-Fi センサー（チャネル調査・周辺 AP・不正 AP 検知）は完全に無効になります（意図どおり）。
+- `/etc/ssh/sshd_config.d/*.conf` に運用者が書いた `ListenAddress` はインストーラが消しません（NOTICE のみ）。`ALLOW_EXTERNAL_SSH=true` でもそちらの指定で待ち受けが制限されたままになるので、`sudo sshd -T | grep -i listenaddress` で確認してください。
 - インストーラはコンソールか tmux の中で実行してください。eth0 経由・wlan0 の Wi-Fi 経由の SSH は br0 の構築で切れ、sshd の待ち受けが br0 のアドレスだけになると上流側から新しい SSH はつながりません（第 1.2 節）。
 - Raspberry Pi 5 では内蔵 Ethernet（eth0）と内蔵 Wi-Fi（wlan0、内部 AP）が内部 LAN（br0）になるため、上流（WAN）には USB Ethernet か USB Wi-Fi のアダプタが別に必要です。既定経路が eth0/wlan0 のままだとインストーラは何も変えずに停止します。
 - Raspberry Pi OS では Wi-Fi の国設定（`WIFI_COUNTRY=JP` など）が必須です。未設定だと Wi-Fi が rfkill で止まったままで内部 AP が上がらないため、インストーラは変更前に停止します。
