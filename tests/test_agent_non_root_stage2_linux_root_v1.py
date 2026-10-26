@@ -110,6 +110,14 @@ def _env(base: Path, d: dict) -> dict:
 
 def _start(base: Path, env: dict) -> subprocess.Popen:
     script = so03_alert_queue.agent_service_script(UNIT)
+    try:
+        probe = subprocess.run([sys.executable, "-c", "pass"], capture_output=True, text=True,
+                               preexec_fn=lambda: (os.setgroups([]), os.setgid(AGENT_UID), os.setuid(AGENT_UID)))
+        problem = probe.stderr[-300:] if probe.returncode != 0 else ""
+    except OSError as exc:
+        problem = str(exc)
+    if problem:
+        pytest.fail(f"uid {AGENT_UID} cannot run {sys.executable} (search permission on its path?): {problem}")
 
     def drop():
         os.setgroups([])
