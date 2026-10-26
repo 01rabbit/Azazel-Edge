@@ -11,10 +11,10 @@ Refs #408（R0）、#372（Pi クラスの HIL）、#471（権限の分離）、
 
 ## 0. この手順書の前提
 
-- `main` に **#479〜#484**（マージ済み）**と #485、#486、#487、#488、#490**
-  （#490: control.sock の権限不足で TUI が `PermissionError`、HIL の
-  `FileNotFoundError`）が入っていること。この 5 本は執筆時点でオーナーの
-  マージ待ちでした。マージされていない PR が付いた行は対象外です。合否欄には
+- `main` に **#479〜#488 と #490** が入っていること（すべてマージ済み。
+  #490: control.sock の権限不足で TUI が `PermissionError`、HIL の
+  `FileNotFoundError`）。それらを含む `main` から導入します（2.3）。
+  チェックアウトに入っていない PR が付いた行は対象外です。合否欄には
   `N/A（PR 未マージ）` と書き、`pass` にはしません。
 - **#489**（ホストの入力フィルタ、WAN 既定拒否）は draft で、**既定で無効**
   です。[3.13](#313-ホストファイアウォールの試行489draft任意) で、#489 の
@@ -178,7 +178,7 @@ script -c "sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> ENABLE_M
 | アプリ | `[all/3] Install Azazel-Edge app stack`、`[1/16] Install OS dependencies`、`[1/16] Enable SPI for the EPD (Raspberry Pi OS)`（`NOTICE: SPI is enabled … reboot before the EPD can draw.` が出ることがある）、`[2/16] Create base directories` … `[8/16] Build Python runtime (venv + pip)` … `[11.8/16] Build and install the Rust defense core …`（最も長い）、`[12/16] Enable services` と、制御デーモン・AI エージェント・Web UI・core の順の `… is active`、`[13/16] Install local CA and TLS cert (optional)`、`[14/16] Install HTTPS reverse proxy (optional)`（最後に `[https] nginx TLS reverse proxy enabled on :443 (this device and … only)`）、`[15/16] Install ntfy (optional)`（最後に `[ntfy] Service healthy on http://127.0.0.1:8081 (loopback only, anonymous access denied)`）、`[16/16] Install security stack (OpenCanary + Suricata, optional)`（`SKIP_LUKS=1` でなければここで LUKS のパスフレーズを入力）、`[17/17] Verify runtime sync`、`Installed Azazel-Edge stack …` | `ERROR: <unit> did not stay active …` → `journalctl -u <unit> -b`。終了コード 78 → `/opt/azazel-edge/config` の SOC policy／ATT&CK の YAML が不正。`cargo build` の失敗はここで止まる（fail-closed）。ntfy の `ERROR:` 行は失敗した確認（健全性、匿名アクセス、トークン）を示す。 |
 | AI runtime | `[all/4] Install AI runtime stack`、`[ai/4] Start Ollama and provision models`（モデルのダウンロード）、`[DONE] AI runtime stack installed.` | `docker exec … ollama pull` の失敗 → 上流／DNS。同じ値で `install_all.sh` を再実行する。 |
 | 任意の部分 | 既定では `[all/5]` … `[all/7]` が `Skip …` | – |
-| selftest | `[all/8] Run selftest`、続いて `Unified installation completed.` | `ERROR: the selftest found a critical failure …` → `/var/log/azazel-edge/selftest_latest.json` と 3.10。 |
+| selftest | `[all/8] Run selftest`、続いて `[all/9] Install the periodic selftest timer` と `[selftest 1/4] Install selftest binary` … `[selftest] timer started`（aarch64 だけ。selftest が失敗しても入れる）、最後に `Unified installation completed.` | `ERROR: the selftest found a critical failure …` → `/var/log/azazel-edge/selftest_latest.json` と 3.10。 |
 
 同じ値での再実行は安全です（スクリプトは冪等）。`AP_SSID` は毎回同じ値を
 渡します。
@@ -537,10 +537,17 @@ sudo ss -Htn state established '( sport = :8084 )'
 
 ### 3.10 selftest、Suricata、ウォッチドッグ
 
+installer は selftest を 1 回実行し（`[all/8]`）、
+`/usr/local/bin/azazel-edge-selftest` として timer 付きで入れます（`[all/9]`、
+aarch64 だけ）。起動のたびに 5 分後と、四半期ごとに実行されます。
+
 ```bash
-cd ~/Azazel-Edge
-sudo bin/azazel-edge-selftest; echo "exit=$?"
+sudo azazel-edge-selftest; echo "exit=$?"
 sudo cat /var/log/azazel-edge/selftest_latest.json
+# ST-06: the timer and its service
+systemctl list-timers azazel-edge-selftest.timer
+systemctl show -p Result azazel-edge-selftest.service
+journalctl -u azazel-edge-selftest -b --no-pager -n 20
 sudo suricata -T -c /etc/suricata/suricata.yaml -S /etc/suricata/rules/azazel-lite.rules -l "$(mktemp -d)"; echo "exit=$?"
 # ST-05
 ls -l /dev/watchdog*
@@ -555,6 +562,7 @@ systemctl show -p RuntimeWatchdogUSec
 | ST-03 | SD の書き込み試験 | JSON | ext4 のルートで `sd_write_test_skipped:not_on_sd:…` が出ない。`sd_write_speed_low:…` は媒体が遅いときだけ（値を記録する） | | #478, #487 |
 | ST-04 | Suricata のルールが読める | 最後のコマンド | `exit=0`。有効なルールは 13 本（sid 9901211 は無効。Suricata 7 は ARP を照合できない） | | #481 |
 | ST-05 | ハードウェアウォッチドッグ（任意の設定） | 上のコマンド | `/dev/watchdog` があり、カーネルのログに `bcm2835-wdt` が出る（文言は **（要確認）**）。`RuntimeWatchdogUSec=0`（Azazel-Edge は有効にしない）。有効にするのは任意で、[PHYSICAL_SETUP_GUIDE.md](PHYSICAL_SETUP_GUIDE.md) §4 のとおり | | #486 |
+| ST-06 | selftest の timer | ST-06 のコマンド。再起動の後（timer が起動 5 分後に実行する） | timer に次回の実行がある。実行後は `Result=success`（critical があると oneshot の unit が `failed` になり、`systemctl --failed` に出る） | | #487 |
 
 ### 3.11 HIL bridge（LAN 側の Mac から）
 

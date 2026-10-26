@@ -40,50 +40,6 @@ CODE_SUFFIXES = {".sh", ".py", ".service", ".timer", ".conf", ".yml", ".yaml", "
 # Items added by PRs that were open when the checklist was written. Each is
 # checked once its PR is merged; until then it is skipped with the PR named.
 PENDING = {
-    # #485 ntfy and Mattermost exposure
-    "installer/internal/mattermost_db_secret.sh": 485,
-    "/etc/azazel-edge/mattermost-db.env": 485,
-    "/etc/azazel-edge/mattermost-credentials.env": 485,
-    "[ntfy] Service healthy on http://127.0.0.1:8081 (loopback only, anonymous access denied)": 485,
-    "127.0.0.1:18065": 485,
-    "/api/v4/system/ping": 485,
-    "[ACTION REQUIRED]": 485,
-    # #486 Raspberry Pi 5 layer
-    "/etc/azazel-edge/internal-ap.psk": 486,
-    "Wi-Fi country: ": 486,
-    "ERROR: no Wi-Fi country is configured, ": 486,
-    "ERROR: the uplink is ": 486,
-    ", which becomes part of the internal LAN ": 486,
-    "ERROR: the internal AP (lan-wlan0-ap on wlan0) did not come up": 486,
-    "ERROR: sshd rejects the new configuration": 486,
-    "AP passphrase: a new random one, saved root-only in /etc/azazel-edge/internal-ap.psk ": 486,
-    "Uplink (WAN) interface: ": 486,
-    " (already configured)": 486,
-    "ERROR: WAN interface not found ": 486,
-    "WIFI_COUNTRY": 486,
-    "[1/16] Enable SPI for the EPD (Raspberry Pi OS)": 486,
-    "NOTICE: SPI is enabled ": 486,
-    " reboot before the EPD can draw.": 486,
-    "ERROR: the AP passphrase is the old built-in default; ": 486,
-    "/dev/spidev0.0": 486,
-    "No wireless interface for the uplink: ": 486,
-    "wifi sensor: not scanning: ": 486,
-    "uplink_interface_serves_internal_lan:": 486,
-    "azazel-edge-listen.conf": 486,
-    "Cannot bind any address": 486,
-    "azazel-edge-epd-refresh: ERROR: ": 486,
-    # #487 installer and selftest cleanup
-    "[all/8] Run selftest": 487,
-    "ERROR: the selftest found a critical failure ": 487,
-    "sd_write_test_skipped:not_on_sd:": 487,
-    "python_smoke_tests_missing": 487,
-    # #488 WAN exposure
-    "installer/internal/configure_avahi_lan_only.sh": 488,
-    "[avahi] allow-interfaces=br0 in /etc/avahi/avahi-daemon.conf (": 488,
-    "[https] nginx TLS reverse proxy enabled on :443 (this device and ": 488,
-    "172.31.250.0/24": 488,
-    # #490 TUI permission and HIL fixes
-    "(control.sock: permission denied)": 490,
     # #489 host firewall (draft, tried on its own branch)
     "azazel-host-firewall": 489,
     "--enable-host-firewall": 489,
@@ -304,7 +260,7 @@ def test_check_tables_have_an_empty_result_column_and_a_reference(doc):
 def test_the_pr_state_the_checklist_assumes_is_stated():
     for doc in CHECKLISTS:
         head = _read(doc)[:3000]
-        for pr in ("#479", "#484", "#485", "#486", "#487", "#488", "#489", "#490"):
+        for pr in ("#479", "#488", "#489", "#490"):
             assert pr in head, f"{doc.name}: {pr} missing from the assumptions"
     assert "None of it is" in _read(EN) and "device evidence" in _read(EN)
     assert "実機の" in _read(JA) and "証拠ではありません" in _read(JA)
@@ -526,8 +482,20 @@ def test_selftest_facts_match_the_script():
     # Nothing in the installers creates the checksum file (open question).
     installers = "\n".join(_read(p) for p in (ROOT / "installer").rglob("*.sh"))
     assert ".config_checksums" not in installers
+    # install_all.sh runs it, then installs it with its timer (aarch64 only).
+    install_all = _read(ROOT / "installer" / "internal" / "install_all.sh")
+    assert '"${REPO_ROOT}/bin/azazel-edge-selftest"' in install_all
+    assert '"${REPO_ROOT}/installer/internal/install_selftest_timer.sh"' in install_all
+    assert '"$(uname -m)" == "aarch64"' in install_all
+    timer_installer = _read(ROOT / "installer" / "internal" / "install_selftest_timer.sh")
+    assert "/usr/local/bin/azazel-edge-selftest" in timer_installer
+    assert "systemctl enable --now azazel-edge-selftest.timer" in timer_installer
+    assert "OnBootSec=5min" in _read(ROOT / "systemd" / "azazel-edge-selftest.timer")
+    assert "OnCalendar=quarterly" in _read(ROOT / "systemd" / "azazel-edge-selftest.timer")
     for doc in CHECKLISTS:
-        assert "sudo bin/azazel-edge-selftest" in _read(doc)
+        assert "sudo azazel-edge-selftest;" in _read(doc)
+        assert "sudo bin/azazel-edge-selftest" not in _read(doc)
+        assert "`[all/9] Install the periodic selftest timer`" in _read(doc)
 
 
 def test_hil_exit_codes_match_the_bridge_doc():
@@ -804,6 +772,8 @@ ROW_VALUES = (
     ("HIL-06", ("15 s", "15 秒"), None, "tools/hil/azazel_hil_remote.py", "RESTART_SETTLE_SECONDS = 15", False),
     ("EPD-05", ("45 s", "45 秒"), None, "py/azazel_edge_epd_mode_refresh.py", "timeout=45,", False),
     ("EPD-05", ("60 s", "60 秒"), None, "systemd/azazel-edge-epd-refresh.service", "TimeoutStartSec=60", False),
+    ("ST-06", ("`Result=success`",) * 2, None, "systemd/azazel-edge-selftest.service", "Type=oneshot", False),
+    ("ST-06", ("`failed`",) * 2, None, "bin/azazel-edge-selftest", "Exit status: 1 when a critical check failed", False),
     ("SSH-02", ("`RestartUSec=5s`",) * 2, 486, "installer/internal/install_internal_network.sh", "RestartSec=5s", False),
     ("AP-07", ("`172.16.0.101`",) * 2, None, "installer/internal/install_internal_network.sh", 'DHCP_RANGE_START="172.16.0.101"', False),
     # FW-11: the reload flushes the ruleset; azazel-internal-apply puts the NAT table back.

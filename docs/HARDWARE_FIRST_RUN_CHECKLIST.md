@@ -12,11 +12,10 @@ Refs #408 (R0), #372 (Pi-class HIL), #471 (privilege separation), #477
 
 ## 0. What this checklist assumes
 
-- `main` contains **#479–#484** (merged) **and #485, #486, #487, #488 and
-  #490** (#490: TUI `PermissionError` on the control socket, HIL
-  `FileNotFoundError`). Those five were waiting for the owner's merge when
-  this was written. A row tagged with a PR that is not merged does not apply:
-  mark it `N/A (PR not merged)`, never `pass`.
+- `main` contains **#479–#488 and #490** (all merged; #490: TUI
+  `PermissionError` on the control socket, HIL `FileNotFoundError`). Install
+  from a `main` that has them (2.3). A row tagged with a PR that is not in the
+  checkout does not apply: mark it `N/A (PR not merged)`, never `pass`.
 - **#489** (host input filter, WAN default deny) is a draft and **off by
   default**. Section [3.13](#313-host-firewall-trial-489-draft-optional) tries it
   separately, on its own branch, and rolls it back.
@@ -181,7 +180,7 @@ Expected output, in order (the step lines are printed by the scripts):
 | App stack | `[all/3] Install Azazel-Edge app stack`, `[1/16] Install OS dependencies`, `[1/16] Enable SPI for the EPD (Raspberry Pi OS)` (possibly `NOTICE: SPI is enabled … reboot before the EPD can draw.`), `[2/16] Create base directories` … `[8/16] Build Python runtime (venv + pip)` … `[11.8/16] Build and install the Rust defense core …` (the longest step), `[12/16] Enable services` and `… is active` for the control daemon, the AI agent, the Web UI and the core (in that order), `[13/16] Install local CA and TLS cert (optional)`, `[14/16] Install HTTPS reverse proxy (optional)` ending with `[https] nginx TLS reverse proxy enabled on :443 (this device and … only)`, `[15/16] Install ntfy (optional)` ending with `[ntfy] Service healthy on http://127.0.0.1:8081 (loopback only, anonymous access denied)`, `[16/16] Install security stack (OpenCanary + Suricata, optional)` (the LUKS passphrase prompt comes here unless `SKIP_LUKS=1`), `[17/17] Verify runtime sync`, `Installed Azazel-Edge stack …` | `ERROR: <unit> did not stay active …` → `journalctl -u <unit> -b`. Exit status 78 → the SOC policy / ATT&CK YAML under `/opt/azazel-edge/config` is invalid. A `cargo build` failure stops here (fail-closed). An ntfy `ERROR:` line names the failed check (health, anonymous access, token). |
 | AI runtime | `[all/4] Install AI runtime stack`, `[ai/4] Start Ollama and provision models` (model download), `[DONE] AI runtime stack installed.` | `docker exec … ollama pull` failing → uplink/DNS; re-run `install_all.sh` with the same values. |
 | Optional parts | `[all/5]` … `[all/7]` `Skip …` with the defaults | – |
-| Selftest | `[all/8] Run selftest`, then `Unified installation completed.` | `ERROR: the selftest found a critical failure …` → `/var/log/azazel-edge/selftest_latest.json` and section 3.10. |
+| Selftest | `[all/8] Run selftest`, then `[all/9] Install the periodic selftest timer` with `[selftest 1/4] Install selftest binary` … `[selftest] timer started` (aarch64 only; installed also when the selftest failed), then `Unified installation completed.` | `ERROR: the selftest found a critical failure …` → `/var/log/azazel-edge/selftest_latest.json` and section 3.10. |
 
 A re-run with the same values is safe (the scripts are idempotent); always
 pass the same `AP_SSID`.
@@ -542,10 +541,17 @@ If `CPUUsageNSec` shows `[not set]` (CPU accounting off), sample
 
 ### 3.10 Selftest, Suricata and watchdog
 
+The installer runs the selftest once (`[all/8]`) and installs it as
+`/usr/local/bin/azazel-edge-selftest` with a timer (`[all/9]`, aarch64 only):
+5 minutes after every boot and quarterly.
+
 ```bash
-cd ~/Azazel-Edge
-sudo bin/azazel-edge-selftest; echo "exit=$?"
+sudo azazel-edge-selftest; echo "exit=$?"
 sudo cat /var/log/azazel-edge/selftest_latest.json
+# ST-06: the timer and its service
+systemctl list-timers azazel-edge-selftest.timer
+systemctl show -p Result azazel-edge-selftest.service
+journalctl -u azazel-edge-selftest -b --no-pager -n 20
 sudo suricata -T -c /etc/suricata/suricata.yaml -S /etc/suricata/rules/azazel-lite.rules -l "$(mktemp -d)"; echo "exit=$?"
 # ST-05
 ls -l /dev/watchdog*
@@ -560,6 +566,7 @@ systemctl show -p RuntimeWatchdogUSec
 | ST-03 | SD write test | JSON | No `sd_write_test_skipped:not_on_sd:…` on an ext4 root; `sd_write_speed_low:…` only if the medium is slow (record the value) | | #478, #487 |
 | ST-04 | Suricata rules load | last command | `exit=0`; 13 active rules (sid 9901211 is disabled: Suricata 7 cannot match ARP) | | #481 |
 | ST-05 | Hardware watchdog (optional setting) | commands above | `/dev/watchdog` exists and the kernel log names `bcm2835-wdt` (driver message **(to confirm)**); `RuntimeWatchdogUSec=0` (Azazel-Edge does not enable it). Turning it on is optional, per [PHYSICAL_SETUP_GUIDE.md](PHYSICAL_SETUP_GUIDE.md) §4 | | #486 |
+| ST-06 | Selftest timer | ST-06 commands, after a reboot (the timer runs it 5 min after boot) | The timer is listed with a next run; after it ran, `Result=success` (a critical finding makes the oneshot unit `failed`, visible in `systemctl --failed`) | | #487 |
 
 ### 3.11 HIL bridge (from the Mac on the LAN)
 
