@@ -72,7 +72,12 @@ ntfy access "$NTFY_USER" "$TOPIC_INFO" read-write >/dev/null
 # entries; deny-all then applies to anonymous clients.
 ntfy access --reset everyone "$TOPIC_ALERT" >/dev/null 2>&1 || true
 ntfy access --reset everyone "$TOPIC_INFO" >/dev/null 2>&1 || true
-if ntfy access everyone 2>/dev/null | grep -Eq "(read|write)"; then
+# A listing that fails is not read as "no grants".
+if ! anon_acl="$(ntfy access everyone 2>&1)"; then
+  echo "ERROR: could not list ntfy's anonymous access ('ntfy access everyone' failed)"
+  exit 1
+fi
+if grep -Eq "(read|write)" <<<"$anon_acl"; then
   echo "ERROR: ntfy still grants anonymous access; see 'ntfy access everyone'"
   exit 1
 fi

@@ -45,12 +45,14 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     Security > Password), put the new one in `MATTERMOST_PASSWORD=` in
     `/etc/azazel-edge/mattermost-credentials.env` (0600 root; edit it with
     `sudoedit`, not on a command line), and run
-    `provision_mattermost_workspace.sh` and `provision_mattermost_command.sh`
-    again.
+    `sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh` again from
+    the Azazel-Edge checkout used for the install (it also registers the
+    slash command and restarts the Web UI and the AI agent; the copy in
+    `/opt/azazel-edge` cannot find the repository and is not the entry).
   - `provision_mattermost_workspace.sh` also fails (exit 1, with what to do)
     when Mattermost would not be reachable from the LAN: nginx is not
     installed, or an earlier container still publishes 8065 on every
-    interface.
+    interface; the fix is the same re-run of `install_ai_runtime.sh`.
   - ntfy listens on `127.0.0.1:8081` only (was every interface, so the WAN
     too) with `auth-default-access: deny-all` (was `read-write`); the
     anonymous read-write grants on the alert and info topics are removed,

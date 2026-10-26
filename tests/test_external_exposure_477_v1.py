@@ -523,7 +523,8 @@ def test_lan_proxy_fails_while_an_old_container_holds_the_port(tmp_path):
     held = 'LISTEN 0 4096 0.0.0.0:8065 0.0.0.0:* users:(("docker-proxy",pid=7,fd=4))'
     res = _run_lan_proxy(tmp_path, held)
     assert res.returncode != 0
-    assert "[ERROR] Port 8065 is held" in res.stderr and "up -d" in res.stderr
+    assert "[ERROR] Port 8065 is held" in res.stderr
+    assert "installer/internal/install_ai_runtime.sh" in res.stderr
     assert not (tmp_path / "sites-enabled" / "azazel-edge-mattermost.conf").exists()
 
     # nginx itself on the port is not "held" (a re-run).
@@ -571,6 +572,7 @@ def _run_install_ntfy(tmp_path: Path, *, mode: str = "", web_group: bool = True,
 mode='{mode}'
 case "$1 $2" in
   "access everyone")
+    [[ $mode == acl_list_fails ]] && exit 1
     if [[ $mode == anon_left ]]; then echo "- read-write access to topic azg-alert-critical"
     else echo "- no access to any (other) topics (server config)"; fi ;;
   "access azazel-notify") [[ $mode == grant_fails ]] && exit 1 ;;
@@ -580,7 +582,10 @@ exit 0""",
         "curl": f"""echo "curl $*" >> {log}
 mode='{mode}'
 args="$*"
-if [[ $args == *"/v1/health"* ]]; then echo '{{"healthy":true}}'; exit 0; fi
+if [[ $args == *"/v1/health"* ]]; then
+  [[ $mode == unhealthy ]] && exit 7
+  echo '{{"healthy":true}}'; exit 0
+fi
 if [[ $args == *"-H @-"* ]]; then
   hdr="$(cat)"
   echo "stdin $hdr" >> {log}.stdin
@@ -619,6 +624,12 @@ def test_ntfy_install_succeeds_with_a_private_token(tmp_path):
     assert "ntfy access --reset everyone azg-alert-critical" in calls
     assert "ntfy access --reset everyone azg-info-status" in calls
     assert re.search(r"^ntfy access everyone \S+ (rw|read|write|read-write)", calls, re.M) is None
+    # The root-run ntfy CLI left the auth database to root; it is handed back
+    # to _ntfy after the last CLI call and before the restart.
+    lines = calls.splitlines()
+    chown = lines.index(f"chown -R _ntfy:_ntfy {root}/var/lib/ntfy")
+    assert chown > max(i for i, l in enumerate(lines) if l.startswith("ntfy "))
+    assert "systemctl restart ntfy.service" in lines[chown + 1:]
 
 
 def test_ntfy_token_is_0600_root_without_the_web_group(tmp_path):
@@ -644,6 +655,8 @@ def test_ntfy_install_revokes_the_previous_token(tmp_path):
         ("anon_200", "anonymous read answered 200"),
         ("auth_401", "the Edge token refused"),
         ("grant_fails", "the Edge account grant failed"),
+        ("acl_list_fails", "the anonymous ACL could not be listed"),
+        ("unhealthy", "the health check never passed"),
     ],
 )
 def test_ntfy_install_fails_closed(tmp_path, mode, why):
@@ -755,8 +768,130 @@ def test_provision_ends_non_zero_while_the_former_admin_password_is_in_use():
     assert res.returncode == 3
     assert "OK" not in res.stdout
     assert "[ACTION REQUIRED]" in res.stderr and "/x/cred.env" in res.stderr
+    # The way back is the AI runtime installer (slash command, restarts),
+    # not this script alone.
+    assert "sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh" in res.stderr
     assert "fake-old-default" not in res.stderr  # the password itself is not shown
 
     res = subprocess.run(["bash", "-c", base + 'MATTERMOST_PASSWORD="new-random"\nrequire_changed_admin_password\necho OK\n'],
                          capture_output=True, text=True)
     assert res.returncode == 0 and res.stdout == "OK\n"
+
+
+def test_api_call_keeps_the_token_off_the_command_line(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "curl.log"
+    (bindir / "curl").write_text(f"""#!/bin/bash
+printf 'argv %s\\n' "$*" >> {log}
+prev=""
+for a in "$@"; do
+  if [[ $prev == -H && $a == @* ]]; then printf 'hdrfile %s\\n' "$(cat "${{a#@}}")" >> {log}; fi
+  if [[ $prev == -D ]]; then printf 'Token: x\\r\\n' > "$a"; fi
+  prev="$a"
+done
+printf 'stdin %s\\n' "$(cat)" >> {log}
+printf 200
+""", encoding="utf-8")
+    (bindir / "curl").chmod(0o755)
+    token = "faketoken0123456789"
+    script = (
+        "set -euo pipefail\nMATTERMOST_API_URL=http://127.0.0.1:18065\nAUTH_TOKEN=''\n"
+        + _function(PROVISION, "api_call")
+        + f'api_call GET /api/v4/users/me "" {token}\napi_call POST /x \'{{"a":1}}\' {token}\necho "$LAST_STATUS"\n'
+    )
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", TMPDIR=str(tmp_path))
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+    assert res.returncode == 0, res.stderr
+    text = log.read_text(encoding="utf-8")
+    argv = "\n".join(l for l in text.splitlines() if l.startswith("argv "))
+    assert token not in argv
+    assert text.count(f"hdrfile Authorization: Bearer {token}") == 2
+    assert 'stdin {"a":1}' in text
+    # No temporary file (headers, body, token) is left behind.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["bin", "curl.log"]
+    assert "Authorization: Bearer" not in PROVISION.read_text(encoding="utf-8").replace(
+        "printf 'Authorization: Bearer %s\\n'", "")
+
+
+# ---------------- exit codes reach the caller (install_ai_runtime, install_all)
+
+
+def _stub(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/bash\n" + body + "\n", encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _run_ai_runtime(tmp_path: Path, *, secret_rc: int = 0, provision_rc: int = 0):
+    repo = tmp_path / "repo"
+    sysroot = tmp_path / "sys"
+    log = tmp_path / "calls.log"
+    internal = repo / "installer" / "internal"
+    src = AI_RUNTIME.read_text(encoding="utf-8")
+    src = src.replace('if [[ "${EUID}" -ne 0 ]]; then', "if false; then", 1)
+    for prefix in ("/opt/", "/etc/", "/usr/local/bin/"):
+        src = src.replace(prefix, f"{sysroot}{prefix}")
+    internal.mkdir(parents=True)
+    (internal / "install_ai_runtime.sh").write_text(src, encoding="utf-8")
+    _stub(internal / "mattermost_db_secret.sh", f'echo "db_secret $*" >> {log}; exit {secret_rc}')
+    _stub(internal / "provision_mattermost_workspace.sh", f'echo "provision_workspace" >> {log}; exit {provision_rc}')
+    _stub(internal / "provision_mattermost_command.sh", f'echo "provision_command" >> {log}')
+    _stub(repo / "bin" / "azazel-edge-compose", f'echo "compose $*" >> {log}')
+    for name in ("docker-compose.ollama.yml", "docker-compose.mattermost.yml", ".env"):
+        (repo / "security").mkdir(exist_ok=True)
+        (repo / "security" / name).write_text("", encoding="utf-8")
+    (sysroot / "opt" / "azazel-edge").mkdir(parents=True)
+    (sysroot / "usr" / "local" / "bin").mkdir(parents=True)
+    bindir = tmp_path / "bin"
+    for name in ("apt-get", "systemctl", "chown", "docker"):
+        _stub(bindir / name, f'echo "{name} $*" >> {log}')
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", ENABLE_OLLAMA="0", ENABLE_SERVICES="0")
+    res = subprocess.run(["bash", str(internal / "install_ai_runtime.sh")], capture_output=True, text=True, env=env)
+    calls = log.read_text(encoding="utf-8") if log.exists() else ""
+    return res, calls
+
+
+@needs_gnu_mv
+def test_ai_runtime_runs_the_mattermost_steps_in_order(tmp_path):
+    res, calls = _run_ai_runtime(tmp_path)
+    assert res.returncode == 0, res.stdout + res.stderr
+    order = [l.split()[0] for l in calls.splitlines() if l.split()[0] in
+             ("db_secret", "compose", "provision_workspace", "provision_command")]
+    assert order == ["db_secret", "compose", "provision_workspace", "provision_command"]
+    assert re.search(r"^db_secret \S*/sys/etc/azazel-edge/mattermost-db\.env$", calls, re.M)
+
+
+@needs_gnu_mv
+@pytest.mark.parametrize("rc", [1, 3])
+def test_ai_runtime_stops_with_the_provision_exit_code(tmp_path, rc):
+    res, calls = _run_ai_runtime(tmp_path, provision_rc=rc)
+    assert res.returncode == rc
+    assert "provision_command" not in calls
+    assert "[DONE]" not in res.stdout
+
+
+@needs_gnu_mv
+def test_ai_runtime_stops_when_the_db_secret_fails(tmp_path):
+    res, calls = _run_ai_runtime(tmp_path, secret_rc=1)
+    assert res.returncode == 1
+    assert not re.search(r"^(compose|provision_workspace)", calls, re.M)
+
+
+@pytest.mark.parametrize("rc", [1, 3])
+def test_install_all_passes_the_ai_runtime_exit_code_on(tmp_path, rc):
+    internal = tmp_path / "repo" / "installer" / "internal"
+    internal.mkdir(parents=True)
+    src = (INTERNAL / "install_all.sh").read_text(encoding="utf-8")
+    src = src.replace('if [[ "${EUID}" -ne 0 ]]; then', "if false; then", 1)
+    (internal / "install_all.sh").write_text(src, encoding="utf-8")
+    log = tmp_path / "after.log"
+    _stub(internal / "install_ai_runtime.sh", f"exit {rc}")
+    for name in ("set_dev_remote_access.sh", "install_vector.sh", "install_sensors.sh"):
+        _stub(internal / name, f'echo "{name}" >> {log}')
+    env = dict(os.environ, ENABLE_INTERNAL_NETWORK="0", ENABLE_APP_STACK="0", ENABLE_AI_RUNTIME="1",
+               ENABLE_DEV_REMOTE_ACCESS="1", ENABLE_VECTOR="1")
+    res = subprocess.run(["bash", str(internal / "install_all.sh")], capture_output=True, text=True,
+                         env=env, stdin=subprocess.DEVNULL)
+    assert res.returncode == rc, res.stdout + res.stderr
+    assert not log.exists()  # nothing after the AI runtime ran

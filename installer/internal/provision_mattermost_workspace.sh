@@ -74,22 +74,29 @@ api_call() {
   local path="$2"
   local body="${3:-}"
   local token="${4:-${AUTH_TOKEN}}"
-  local headers_file body_file
+  local headers_file body_file auth_file rc=0
+  # mktemp files are 0600. The session or bot token goes to curl in a file
+  # (-H @file) and the body (it may hold the admin password) on stdin, so
+  # neither is on curl's command line.
   headers_file="$(mktemp)"
   body_file="$(mktemp)"
+  auth_file="$(mktemp)"
   local curl_args=(-sS -D "${headers_file}" -o "${body_file}" -X "${method}" "${MATTERMOST_API_URL}${path}")
   if [[ -n "${token}" ]]; then
-    curl_args+=(-H "Authorization: Bearer ${token}")
+    printf 'Authorization: Bearer %s\n' "${token}" >"${auth_file}"
+    curl_args+=(-H "@${auth_file}")
   fi
-  # The body (it may hold the admin password) goes to curl on stdin, not on
-  # its command line.
   if [[ -n "${body}" ]]; then
     curl_args+=(-H "Content-Type: application/json" --data-binary @-)
   fi
-  LAST_STATUS="$(printf '%s' "${body}" | curl "${curl_args[@]}" -w "%{http_code}")"
+  LAST_STATUS="$(printf '%s' "${body}" | curl "${curl_args[@]}" -w "%{http_code}")" || rc=$?
   LAST_HEADERS="$(cat "${headers_file}")"
   LAST_BODY="$(cat "${body_file}")"
-  rm -f "${headers_file}" "${body_file}"
+  rm -f "${headers_file}" "${body_file}" "${auth_file}"
+  if (( rc != 0 )); then
+    echo "[ERROR] request to ${MATTERMOST_API_URL}${path} failed (curl exit ${rc})" >&2
+    exit 1
+  fi
 }
 
 # Set KEY=VALUE in the env file $1 (the bot token and the webhook URL among
@@ -191,7 +198,9 @@ require_changed_admin_password() {
     echo "[ACTION REQUIRED] The Mattermost admin account (${MATTERMOST_USERNAME}) still uses the fixed default" \
       "password of earlier versions, which is public. 1) Log in to Mattermost as ${MATTERMOST_USERNAME} and change" \
       "it (Profile > Security > Password). 2) Put the new password in MATTERMOST_PASSWORD= in ${CRED_ENV}" \
-      "(0600 root). 3) Run this script again." >&2
+      "(0600 root). 3) Run the AI runtime installer again from the Azazel-Edge checkout used for the install" \
+      "(sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh), which also registers the slash" \
+      "command and restarts the Web UI and the AI agent." >&2
     exit 3
   fi
 }
@@ -269,9 +278,8 @@ ensure_channel() {
 
 ensure_bot_token() {
   if [[ -n "${AZAZEL_MATTERMOST_BOT_TOKEN:-}" ]]; then
-    local status
-    status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${AZAZEL_MATTERMOST_BOT_TOKEN}" "${MATTERMOST_API_URL}/api/v4/users/me" || true)"
-    if [[ "${status}" == "200" ]]; then
+    api_call GET /api/v4/users/me "" "${AZAZEL_MATTERMOST_BOT_TOKEN}"
+    if [[ "${LAST_STATUS}" == "200" ]]; then
       BOT_TOKEN="${AZAZEL_MATTERMOST_BOT_TOKEN}"
       return 0
     fi
@@ -392,14 +400,17 @@ ensure_lan_proxy() {
   # instead of reporting success.
   if ! command -v nginx >/dev/null 2>&1; then
     echo "[ERROR] nginx is not installed: Mattermost is reachable only on this host (${MATTERMOST_API_URL}), not" \
-      "from the LAN. Install the HTTPS proxy (sudo /opt/azazel-edge/install_https_proxy.sh) and run this script again." >&2
+      "from the LAN. Install the HTTPS proxy (sudo /opt/azazel-edge/install_https_proxy.sh), then run the AI runtime installer again from the Azazel-Edge checkout used for the install" \
+      "(sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh), which also registers the slash" \
+      "command and restarts the Web UI and the AI agent." >&2
     exit 1
   fi
   if public_port_taken; then
     echo "[ERROR] Port ${MATTERMOST_PORT_PUBLIC} is held by another process, most likely the Mattermost container of" \
-      "an earlier install published on every interface (reachable from the WAN). Recreate it with the current" \
-      "compose file (cd /opt/azazel-edge/security && sudo azazel-edge-compose -f docker-compose.mattermost.yml up -d)" \
-      "and run this script again." >&2
+      "an earlier install published on every interface (reachable from the WAN). Run the AI runtime installer again from the Azazel-Edge checkout used for the install" \
+      "(sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh), which also registers the slash" \
+      "command and restarts the Web UI and the AI agent. It recreates" \
+      "the container with the current compose file first." >&2
     exit 1
   fi
   tmp="$(mktemp "$(dirname -- "${NGINX_MM_SITE}")/.azazel-edge-mattermost.XXXXXX")"
