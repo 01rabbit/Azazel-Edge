@@ -50,7 +50,11 @@ try:
 except Exception:  # pragma: no cover
     P0AuditLogger = None  # type: ignore
 try:
-    from azazel_edge.notify.core_decisions import CoreDecisionRecorder
+    from azazel_edge.notify.core_decisions import (
+        DEFAULT_CHAIN_SEGMENT_MAX_BYTES,
+        DEFAULT_CHAIN_SEGMENTS_KEPT,
+        CoreDecisionRecorder,
+    )
     from azazel_edge.notify.p0_alert import attach_p0_alert_relay
 except Exception:  # pragma: no cover
     CoreDecisionRecorder = None  # type: ignore
@@ -294,7 +298,13 @@ def _start_core_p0_path() -> Any | None:
         return None
     if CORE_DECISION_AUDIT is None:
         try:
-            CORE_DECISION_AUDIT = P0AuditLogger(CORE_DECISION_AUDIT_PATH)
+            # Rotated on a chain boundary (Edge#462 item 1); the relay and
+            # the recorder read the retained files as one chain.
+            CORE_DECISION_AUDIT = P0AuditLogger(
+                CORE_DECISION_AUDIT_PATH,
+                max_bytes=DEFAULT_CHAIN_SEGMENT_MAX_BYTES,
+                keep=DEFAULT_CHAIN_SEGMENTS_KEPT,
+            )
         except Exception as exc:
             logger.error("core decision audit chain not opened (%s): %s", CORE_DECISION_AUDIT_PATH, exc)
             return None
