@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -268,7 +269,7 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
 
         calls = []
         orig_run = epd_refresh.subprocess.run
-        epd_refresh.subprocess.run = lambda cmd, **kwargs: calls.append(cmd)  # type: ignore[assignment]
+        epd_refresh.subprocess.run = lambda cmd, **kwargs: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")  # type: ignore[assignment]
         old_root = os.environ.get("AZAZEL_ROOT")
         os.environ["AZAZEL_ROOT"] = str(root)
         try:
@@ -316,7 +317,7 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
 
         calls = []
         orig_run = epd_refresh.subprocess.run
-        epd_refresh.subprocess.run = lambda cmd, **kwargs: calls.append(cmd)  # type: ignore[assignment]
+        epd_refresh.subprocess.run = lambda cmd, **kwargs: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")  # type: ignore[assignment]
         old_root = os.environ.get("AZAZEL_ROOT")
         os.environ["AZAZEL_ROOT"] = str(root)
         try:

@@ -33,13 +33,49 @@ if [[ "$ENABLE_SECURITY_STACK" == "1" && "$SKIP_LUKS" != "1" && ! -e /dev/mapper
   exit 1
 fi
 
+# Raspberry Pi OS (raspi-config and the firmware config.txt present): the
+# EPD needs SPI and the Pi 5 GPIO stack from the Raspberry Pi repository.
+is_raspberry_pi_os() {
+  command -v raspi-config >/dev/null 2>&1 && [[ -f /boot/firmware/config.txt ]]
+}
+
+# True when the apt sources offer the package (the Raspberry Pi repository
+# offers python3-lgpio; plain Debian, e.g. a VM, does not).
+apt_has_package() {
+  apt-cache policy "$1" 2>/dev/null | grep -Eq '^[[:space:]]+Candidate: [^(]'
+}
+
 echo "[1/16] Install OS dependencies"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3 python3-venv python3-pip \
   network-manager iw curl dnsmasq nginx openssl \
   python3-dev python3-numpy python3-pil python3-spidev \
-  python3-rpi.gpio python3-gpiozero fonts-noto-cjk git
+  fonts-noto-cjk git
+
+# EPD GPIO (Waveshare epdconfig imports spidev and gpiozero). The Pi 5 GPIO
+# sits behind the RP1, which only lgpio drives: python3-rpi.gpio does not
+# work there, and installing it removes python3-rpi-lgpio (its Pi 5
+# replacement, which Provides and Conflicts with it). Only the Raspberry Pi
+# repository has python3-lgpio and the gpiozero that uses it; without it
+# (plain Debian, e.g. a VM) no GPIO stack is installed and the EPD has no
+# hardware output.
+EPD_GPIO_STACK=0
+if apt_has_package python3-lgpio; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    python3-lgpio python3-rpi-lgpio python3-gpiozero
+  EPD_GPIO_STACK=1
+else
+  echo "NOTICE: python3-lgpio is not in the apt sources (no Raspberry Pi repository); the EPD GPIO libraries are not installed and the e-Paper display has no hardware output on this host."
+fi
+
+if is_raspberry_pi_os; then
+  echo "[1/16] Enable SPI for the EPD (Raspberry Pi OS)"
+  raspi-config nonint do_spi 0
+  if [[ ! -e /dev/spidev0.0 ]]; then
+    echo "NOTICE: SPI is enabled in /boot/firmware/config.txt but /dev/spidev0.0 is not there yet; reboot before the EPD can draw."
+  fi
+fi
 
 if [[ "$ENABLE_RUST_CORE" == "1" ]]; then
   DEBIAN_FRONTEND=noninteractive apt-get install -y rustc cargo
@@ -186,6 +222,47 @@ fi
 "$VENV_DIR/bin/python" -m pip install --upgrade pip wheel setuptools
 "$VENV_DIR/bin/pip" install -r "$REPO_ROOT/requirements/runtime.txt"
 
+# The EPD hardware modules come from apt (built for this Python and, on
+# Raspberry Pi OS, for the Pi 5), but the venv does not see
+# /usr/lib/python3/dist-packages. Only these modules (and their metadata,
+# which gpiozero reads to find a pin factory named by GPIOZERO_PIN_FACTORY)
+# are linked into a directory of the venv that a .pth file appends to
+# sys.path. The rest of the system packages stay out of the venv (no
+# --system-site-packages), so pip never takes a requirement in
+# requirements/runtime.txt as satisfied by an apt package: those always come
+# from the venv. Rebuilt on every run.
+link_system_hw_modules() {
+  local venv="$1" gpio="$2" sys_dir=/usr/lib/python3/dist-packages
+  local hw_dir="$venv/azazel-system-hw" purelib name path found
+  local -a names=(spidev)
+  [[ "$gpio" == "1" ]] && names+=(gpiozero colorzero lgpio _lgpio)
+  purelib="$("$venv/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+  rm -rf -- "${hw_dir:?}"
+  install -d -m 0755 "$hw_dir"
+  for name in "${names[@]}"; do
+    found=0
+    for path in "$sys_dir/$name" "$sys_dir/$name.py" "$sys_dir/$name".cpython-*.so "$sys_dir/$name".abi3.so; do
+      [[ -e "$path" ]] || continue
+      ln -s "$path" "$hw_dir/$(basename -- "$path")"
+      found=1
+    done
+    for path in "$sys_dir/$name"-[0-9]*.egg-info "$sys_dir/$name"-[0-9]*.dist-info; do
+      [[ -e "$path" ]] && ln -s "$path" "$hw_dir/$(basename -- "$path")"
+    done
+    if [[ "$found" != "1" ]]; then
+      echo "ERROR: $name is not in $sys_dir (its apt package is missing)." >&2
+      return 1
+    fi
+  done
+  printf '%s\n' "$hw_dir" > "$purelib/azazel-system-hw.pth"
+  if [[ "$gpio" == "1" ]]; then
+    "$venv/bin/python" -c 'import spidev, gpiozero, lgpio, gpiozero.pins.lgpio'
+  else
+    "$venv/bin/python" -c 'import spidev'
+  fi
+}
+link_system_hw_modules "$VENV_DIR" "$EPD_GPIO_STACK"
+
 echo "[9/16] Install launchers"
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-path-schema" /usr/local/bin/azazel-edge-path-schema
 install -m 0755 "$REPO_ROOT/bin/azazel-edge-tui" /usr/local/bin/azazel-edge-tui
@@ -323,7 +400,8 @@ fi
 
 # Fail-closed: a unit that does not stay active stops the install with an
 # error instead of being reported as installed. Waits up to 30 s for it to
-# become active, then checks it is still active and has not restarted.
+# become active, then checks it is still active and has not restarted 10 s
+# later.
 wait_active() {
   local unit="$1" i restarts status
   for ((i = 0; i < 30; i++)); do
@@ -331,7 +409,9 @@ wait_active() {
     sleep 1
   done
   restarts="$(systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo 0)"
-  sleep 3
+  # A unit that fails soon after start is restarted after RestartSec (2-3 s
+  # in the Azazel units); 10 s also covers a failure a few seconds in.
+  sleep 10
   if systemctl is-active --quiet "$unit" \
       && [[ "$(systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo 0)" == "$restarts" ]]; then
     echo "$unit is active"

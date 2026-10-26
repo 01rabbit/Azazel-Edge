@@ -723,7 +723,9 @@ three relocated operations. A unit test derives it from the Web UI's code.
 **Relocated operations.** `uplink_disconnect` takes no parameters and no
 extra request field; it sets the daemon's `AZAZEL_UP_IF` (default `wlan0`,
 the Web UI's former source) down with `ip link set dev <if> down` after
-checking the name and that the interface exists, and returns any failure
+checking the name, that the interface exists and that it does not serve the
+internal LAN (AP mode, a bridge or a bridge port: on a Pi 5 the default
+`wlan0` is the internal AP), and returns any failure
 (the Web UI answers HTTP 500 with the reason). `sot_devices_replace` /
 `sot_devices_patch` take only `devices` (and an informational
 `requested_by`), validate the whole document with `SoTConfig`, write a new

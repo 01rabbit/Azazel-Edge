@@ -90,6 +90,8 @@ REVIEWED_SHELL_INVOCATIONS: Dict[str, Dict[str, str]] = {
 # Units the installer writes with a heredoc instead of copying from systemd/.
 REVIEWED_GENERATED_UNITS: Dict[str, str] = {
     "azazel-internal-apply.service": "installer/internal/install_internal_network.sh",
+    # ssh.service drop-in: ordering and restart policy only (no command).
+    "azazel-edge-listen.conf": "installer/internal/install_internal_network.sh",
 }
 
 # Direct importers of the Python ActionArbiter: replay, benchmarks, dry run

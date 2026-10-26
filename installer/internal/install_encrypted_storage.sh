@@ -85,6 +85,8 @@ fi
 
 if ! grep -q "${IMG_PATH}" /etc/crypttab 2>/dev/null; then
   echo "${MAPPER_NAME} ${IMG_PATH} none ${CRYPTTAB_OPTIONS}" >> /etc/crypttab
+elif grep -qxF "${MAPPER_NAME} ${IMG_PATH} none ${CRYPTTAB_OPTIONS}" /etc/crypttab; then
+  :  # The current line (a re-run): nothing to do.
 elif grep -qxE "${MAPPER_NAME}[[:space:]]+${IMG_PATH}[[:space:]]+none[[:space:]]+luks" /etc/crypttab; then
   # The line an earlier install wrote (no nofail, no timeout): bound it too.
   sed -i -E "s#^${MAPPER_NAME}[[:space:]]+${IMG_PATH}[[:space:]]+none[[:space:]]+luks\$#${MAPPER_NAME} ${IMG_PATH} none ${CRYPTTAB_OPTIONS}#" /etc/crypttab
@@ -96,6 +98,8 @@ UUID="$(blkid -s UUID -o value "/dev/mapper/${MAPPER_NAME}" || true)"
 FSTAB_OPTIONS="defaults,nofail,x-systemd.device-timeout=30s"
 if [[ -n "${UUID}" ]] && ! grep -q "${UUID}" /etc/fstab 2>/dev/null; then
   echo "UUID=${UUID} ${MOUNT_POINT} ext4 ${FSTAB_OPTIONS} 0 2" >> /etc/fstab
+elif [[ -n "${UUID}" ]] && grep -qxF "UUID=${UUID} ${MOUNT_POINT} ext4 ${FSTAB_OPTIONS} 0 2" /etc/fstab; then
+  :  # The current line (a re-run): nothing to do.
 elif [[ -n "${UUID}" ]] && grep -qxE "UUID=${UUID}[[:space:]]+${MOUNT_POINT}[[:space:]]+ext4[[:space:]]+defaults,nofail[[:space:]]+0[[:space:]]+2" /etc/fstab; then
   # The line an earlier install wrote (no device timeout): bound it too.
   sed -i -E "s#^UUID=${UUID}[[:space:]]+${MOUNT_POINT}[[:space:]]+ext4[[:space:]]+defaults,nofail[[:space:]]+0[[:space:]]+2\$#UUID=${UUID} ${MOUNT_POINT} ext4 ${FSTAB_OPTIONS} 0 2#" /etc/fstab

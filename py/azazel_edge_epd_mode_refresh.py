@@ -16,6 +16,9 @@ from azazel_edge.path_schema import runtime_snapshot_path_candidates
 EPD_STATE = Path("/run/azazel-edge/epd_state.json")
 EPD_LAST_RENDER = Path("/run/azazel-edge/epd_last_render.json")
 RUNTIME_SNAPSHOT_CANDIDATES = tuple(runtime_snapshot_path_candidates())
+# Lines of the renderer's own output (stdout and stderr each) repeated in the
+# journal when it fails.
+MAX_REPORTED_LINES = 20
 
 
 def _safe_load(path: Path) -> Dict[str, Any]:
@@ -234,7 +237,8 @@ def main() -> int:
     root = Path(os.environ.get("AZAZEL_ROOT", str(Path(__file__).resolve().parents[1])))
     epd_script = _resolve_epd_script(root)
     if epd_script is None:
-        return 0
+        _report_failure(f"EPD renderer not found under {root / 'py'}")
+        return 1
 
     desired = _desired_render_spec(payload)
     last = _safe_load(EPD_LAST_RENDER)
@@ -260,16 +264,38 @@ def main() -> int:
             cmd.extend(["--suspicion", str(desired.get("suspicion", 0))])
 
     try:
-        subprocess.run(
+        proc = subprocess.run(
             cmd,
             timeout=45,
             check=False,
             capture_output=True,
             text=True,
         )
-    except Exception:
-        return 0
+    except subprocess.TimeoutExpired:
+        _report_failure(f"EPD renderer timed out after 45 s (state={desired.get('state')})")
+        return 1
+    except OSError as exc:
+        _report_failure(f"EPD renderer could not be started: {exc}")
+        return 1
+    if proc.returncode != 0:
+        # The renderer prints its errors on stdout and stderr; both go to the
+        # journal (this unit's stderr) so a failed draw is visible and the
+        # oneshot unit ends failed instead of reporting success.
+        _report_failure(
+            f"EPD renderer exited with status {proc.returncode} (state={desired.get('state')})",
+            proc.stdout,
+            proc.stderr,
+        )
+        return 1
     return 0
+
+
+def _report_failure(message: str, *outputs: str | None) -> None:
+    lines = [f"azazel-edge-epd-refresh: ERROR: {message}"]
+    for output in outputs:
+        tail = (output or "").strip().splitlines()[-MAX_REPORTED_LINES:]
+        lines.extend(f"  {line}" for line in tail)
+    print("\n".join(lines), file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":
