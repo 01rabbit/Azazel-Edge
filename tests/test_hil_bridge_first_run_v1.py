@@ -609,3 +609,35 @@ def test_report_counts_only_event_logs_not_state_files(tmp_path):
     (raw / "observer" / "outcome.jsonl").write_text('{"kind": "test_end", "test_id": "fake", "status": "failed"}\n')
     result = hil.write_report(raw, tmp_path / "n.md")
     assert result["events"] == 2 and result["failed"] == 0 and "fake" not in (tmp_path / "n.md").read_text()
+
+
+# Final review: linear-time redaction and remaining forms
+
+_HOSTILE = ["a-", "a", " ", "\n", "a@", "a:", "x://", "x://a@", "-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----",
+            "password", "password:", "password=", "--password ", "\"password\":", "'token': '", "bearer ", "authorization: ",
+            "a.b-c_", "[", "\"", "\\", "a=", "a:b ", "[REDACTED]@"]
+
+
+@pytest.mark.parametrize("module", [hil, remote])
+@pytest.mark.parametrize("size", [100_000, 1_000_000])
+def test_redaction_is_linear_on_hostile_input(module, size):
+    import time as _time
+    for unit in _HOSTILE:
+        text = (unit * (size // len(unit) + 1))[:size]
+        started = _time.perf_counter()
+        module.redact(text)
+        elapsed = _time.perf_counter() - started
+        assert elapsed < 1.0, (unit, size, elapsed)
+
+
+@pytest.mark.parametrize("module", [hil, remote])
+def test_redaction_nits_query_arrays_repr_and_flags(module):
+    assert module.redact("https://example.com?x=a@b") == "https://example.com?x=a@b"
+    assert module.redact("https://example.com/p#frag@x") == "https://example.com/p#frag@x"
+    assert module.redact("https://u:p@h/") == "https://[REDACTED]@h/"
+    assert module.redact('{"tokens": ["a", "b"], "n": 1}') == '{"tokens": "[REDACTED]", "n": 1}'
+    assert module.redact("{'password': 'x', 'user': 'ok'}") == "{'password': '[REDACTED]', 'user': 'ok'}"
+    assert "hunter2" not in module.redact("password = hunter2")
+    flagged = module.redact("tool --password hunter2 --verbose --api-key=abc")
+    assert "hunter2" not in flagged and "abc" not in flagged and "--verbose" in flagged
+    assert "s3" not in module.redact("DB_PASSWORD=s3")

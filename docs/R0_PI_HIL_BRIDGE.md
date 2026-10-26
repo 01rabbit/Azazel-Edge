@@ -86,7 +86,7 @@ tools/hil/azazel-hil --target pi5.local --user azazel --session r0-20260829T0100
 - Restart/reconciliation: without `--allow-service-restart` only an out-of-order checkpoint file is written and the test is **skipped**; with it, restart and post-restart `active` state evidence.
 - Read-only `tc` and `nft` host observations. A successful mechanism command is not treated as postcondition proof; those observations are retained separately.
 
-Every command writes timestamp, argv, stdout/stderr tail, exit status, test ID, and elapsed time to JSONL. Output is redacted (private-key blocks including truncated ones, bearer/authorization values, password/token/secret-like `key=value`, `key: value`, and JSON `"key": value` members, and URL userinfo such as `scheme://user@` or `scheme://user:password@`) before it is truncated. `collect` copies raw session artifacts to the Mac and generates `CHATGPT_PASTE.md`.
+Every command writes timestamp, argv, stdout/stderr tail, exit status, test ID, and elapsed time to JSONL. Output is redacted (private-key blocks including truncated ones, bearer/authorization values, password/token/secret-like `key=value`, `key: value`, `--key value`, and JSON or Python-repr `"key": value` members including list values, and URL userinfo such as `scheme://user@` or `scheme://user:password@`; an `@` after `/`, `?` or `#` is left alone) before it is truncated. Every redaction pattern is bounded and runs in linear time, so hostile output cannot stall the bridge. `collect` copies raw session artifacts to the Mac and generates `CHATGPT_PASTE.md`.
 
 ## Optional disruptive reconciliation test
 

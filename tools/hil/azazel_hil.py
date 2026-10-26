@@ -16,33 +16,63 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 REMOTE_RUNNER = Path(__file__).with_name("azazel_hil_remote.py")
-PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
-# A PEM block cut by a tail/head limit: an orphan END hides everything before it, an orphan BEGIN everything after it.
-PRIVATE_KEY_TAIL_RE = re.compile(r"\A.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
-PRIVATE_KEY_HEAD_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*\Z", re.S)
-# userinfo up to the last '@' before the host: covers user-only and passwords that contain '@'.
-URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s]+@")
-SECRET_KEY = r"[A-Za-z0-9_.-]*(?:password|passwd|passphrase|token|secret|authorization|api[_-]?key|private[_-]?key|credential)[A-Za-z0-9_.-]*"
-# JSON members: "password": "x" (string values, escapes included) and "token": 123 / true.
-JSON_SECRET_RE = re.compile(r'(?i)("' + SECRET_KEY + r'"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|[^\s,}\]]+)')
-# YAML/plain lines: password: x  (rest of the line is the value).
-COLON_SECRET_RE = re.compile(r"(?im)(\b" + SECRET_KEY + r"\s*:[ \t]*)(?!\[REDACTED)[^\s\n][^\n]*")
-AUTH_RE = re.compile(r"(?im)^(\s*(?:authorization|proxy-authorization)\s*[:=]\s*).*$")
-BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s'\"]+")
-TOKEN_ASSIGN_RE = re.compile(r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*=)\S+")
+# Redaction patterns.  Every repetition is bounded and every start position is anchored by a
+# lookbehind, so each pattern runs in linear time on hostile command output (no ReDoS).
+PEM_BEGIN_RE = re.compile(r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----")
+PEM_END_RE = re.compile(r"-----END [A-Z ]{0,40}PRIVATE KEY-----")
+PEM_MARK = "[REDACTED PRIVATE KEY]"
+# userinfo of an authority: up to the last '@' before the first '/', '?', '#' or whitespace.
+# Each scan stops at the next '/', and every later scheme start contains one, so the total work stays linear.
+URL_CREDENTIAL_RE = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}://)[^/?#\s]{1,512}@")
+_KEY_WORD = r"(?:password|passwd|passphrase|token|secret|authorization|api[_-]?key|private[_-]?key|credential)"
+SECRET_KEY = r"(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]{0,64}?" + _KEY_WORD + r"[A-Za-z0-9_.-]{0,64}"
+_QUOTED_VALUE = r"\"(?:[^\"\\\n]|\\.){0,4096}\"|'(?:[^'\\\n]|\\.){0,4096}'|\[[^\]\n]{0,4096}\]|[^\s,}\]]{1,4096}"
+# JSON / Python repr members: "password": "x", 'password': 'x', "tokens": ["a", "b"], "token": 123.
+QUOTED_SECRET_RE = re.compile(r"(?i)([\"'])(" + SECRET_KEY + r")\1([ \t]{0,16}:[ \t]{0,16})(?:" + _QUOTED_VALUE + r")")
+# Command-line flags: --password x (the next word).
+FLAG_SECRET_RE = re.compile(r"(?i)(?<![A-Za-z0-9_.-])(--[A-Za-z0-9_.-]{0,64}?" + _KEY_WORD + r"[A-Za-z0-9_.-]{0,64}[ \t]{1,16})(?![-\[])\S{1,4096}")
+# YAML/env/plain: password: x, password = x, PASSWORD=x (rest of the line is the value).
+# The possessive lookahead gate rejects ordinary words in one pass before the keyword search runs.
+PLAIN_SECRET_RE = re.compile(r"(?i)(?<![A-Za-z0-9_.-])(?=[A-Za-z0-9_.-]{1,129}[ \t]{0,16}[:=])(" + SECRET_KEY
+                             + r"[ \t]{0,16}[:=][ \t]{0,16})(?!\[REDACTED)(?=\S)[^\n]{1,4096}")
+AUTH_RE = re.compile(r"(?im)^([ \t]{0,64}(?:authorization|proxy-authorization)[ \t]{0,16}[:=][ \t]{0,16})[^\n]{0,4096}")
+BEARER_RE = re.compile(r"(?i)(?<![A-Za-z0-9])(bearer[ \t]{1,16})[^\s'\"]{1,4096}")
+
+
+def redact_pem(text: str) -> str:
+    """Remove private-key blocks, including ones cut by a head/tail limit, with linear forward scans."""
+    begin, end = PEM_BEGIN_RE.search(text), PEM_END_RE.search(text)
+    parts: list[str] = []
+    position = 0
+    if end and (not begin or end.start() < begin.start()):  # orphan END: the BEGIN was cut off
+        parts.append(PEM_MARK)
+        position = end.end()
+    while True:
+        begin = PEM_BEGIN_RE.search(text, position)
+        if not begin:
+            parts.append(text[position:])
+            return "".join(parts)
+        parts.append(text[position:begin.start()])
+        parts.append(PEM_MARK)
+        end = PEM_END_RE.search(text, begin.end())
+        if not end:  # orphan BEGIN: the END was cut off
+            return "".join(parts)
+        position = end.end()
+
+
+def redact_text(value: str) -> str:
+    value = redact_pem(value)
+    value = URL_CREDENTIAL_RE.sub(r"\1[REDACTED]@", value)
+    value = AUTH_RE.sub(r"\1[REDACTED]", value)
+    value = BEARER_RE.sub(r"\1[REDACTED]", value)
+    value = QUOTED_SECRET_RE.sub(r"\1\2\1\3\1[REDACTED]\1", value)
+    value = FLAG_SECRET_RE.sub(r"\1[REDACTED]", value)
+    return PLAIN_SECRET_RE.sub(r"\1[REDACTED]", value)
 
 
 def redact(value: Any) -> Any:
     if isinstance(value, str):
-        value = PRIVATE_KEY_RE.sub("[REDACTED PRIVATE KEY]", value)
-        value = PRIVATE_KEY_TAIL_RE.sub("[REDACTED PRIVATE KEY]", value)
-        value = PRIVATE_KEY_HEAD_RE.sub("[REDACTED PRIVATE KEY]", value)
-        value = URL_CREDENTIAL_RE.sub(r"\1[REDACTED]@", value)
-        value = JSON_SECRET_RE.sub(r'\1"[REDACTED]"', value)
-        value = COLON_SECRET_RE.sub(r"\1[REDACTED]", value)
-        value = AUTH_RE.sub(r"\1[REDACTED]", value)
-        value = BEARER_RE.sub(r"\1[REDACTED]", value)
-        return TOKEN_ASSIGN_RE.sub(r"\1[REDACTED]", value)
+        return redact_text(value)
     if isinstance(value, dict):
         return {str(k): "[REDACTED]" if re.search(r"(?i)(token|secret|password|private.?key)", str(k)) else redact(v) for k, v in value.items()}
     if isinstance(value, list):
