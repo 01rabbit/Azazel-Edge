@@ -16,27 +16,34 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 REMOTE_RUNNER = Path(__file__).with_name("azazel_hil_remote.py")
-# Redaction patterns.  Every repetition is bounded and every start position is anchored by a
-# lookbehind, so each pattern runs in linear time on hostile command output (no ReDoS).
+# Redaction patterns.  Key names are bounded and every start position is anchored by a lookbehind;
+# values are unbounded but every value scan stops at a delimiter that cannot occur inside it and
+# matches never overlap, so each pattern stays linear on hostile output (no ReDoS) and never leaves
+# the tail of a long secret behind.
 PEM_BEGIN_RE = re.compile(r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----")
 PEM_END_RE = re.compile(r"-----END [A-Z ]{0,40}PRIVATE KEY-----")
 PEM_MARK = "[REDACTED PRIVATE KEY]"
 # userinfo of an authority: up to the last '@' before the first '/', '?', '#' or whitespace.
-# Each scan stops at the next '/', and every later scheme start contains one, so the total work stays linear.
-URL_CREDENTIAL_RE = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}://)[^/?#\s]{1,512}@")
+# A scan stops at the next '/', and every later scheme start contains one, so the total work stays linear.
+URL_CREDENTIAL_RE = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}://)[^/?#\s]+@")
 _KEY_WORD = r"(?:password|passwd|passphrase|token|secret|authorization|api[_-]?key|private[_-]?key|credential)"
-SECRET_KEY = r"(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]{0,64}?" + _KEY_WORD + r"[A-Za-z0-9_.-]{0,64}"
-_QUOTED_VALUE = r"\"(?:[^\"\\\n]|\\.){0,4096}\"|'(?:[^'\\\n]|\\.){0,4096}'|\[[^\]\n]{0,4096}\]|[^\s,}\]]{1,4096}"
+SECRET_KEY = r"(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]{0,256}?" + _KEY_WORD + r"[A-Za-z0-9_.-]{0,256}"
+_DQ = r"\"[^\"\\\n]*(?:\\.[^\"\\\n]*)*\""  # double-quoted string with escapes, up to its closing quote
+_SQ = r"'[^'\\\n]*(?:\\.[^'\\\n]*)*'"
+_QUOTED_VALUE = _DQ + "|" + _SQ + r"|\[[^\]\n]*\]|[^\s,}\]]+"
 # JSON / Python repr members: "password": "x", 'password': 'x', "tokens": ["a", "b"], "token": 123.
 QUOTED_SECRET_RE = re.compile(r"(?i)([\"'])(" + SECRET_KEY + r")\1([ \t]{0,16}:[ \t]{0,16})(?:" + _QUOTED_VALUE + r")")
-# Command-line flags: --password x (the next word).
-FLAG_SECRET_RE = re.compile(r"(?i)(?<![A-Za-z0-9_.-])(--[A-Za-z0-9_.-]{0,64}?" + _KEY_WORD + r"[A-Za-z0-9_.-]{0,64}[ \t]{1,16})(?![-\[])\S{1,4096}")
-# YAML/env/plain: password: x, password = x, PASSWORD=x (rest of the line is the value).
-# The possessive lookahead gate rejects ordinary words in one pass before the keyword search runs.
-PLAIN_SECRET_RE = re.compile(r"(?i)(?<![A-Za-z0-9_.-])(?=[A-Za-z0-9_.-]{1,129}[ \t]{0,16}[:=])(" + SECRET_KEY
-                             + r"[ \t]{0,16}[:=][ \t]{0,16})(?!\[REDACTED)(?=\S)[^\n]{1,4096}")
-AUTH_RE = re.compile(r"(?im)^([ \t]{0,64}(?:authorization|proxy-authorization)[ \t]{0,16}[:=][ \t]{0,16})[^\n]{0,4096}")
-BEARER_RE = re.compile(r"(?i)(?<![A-Za-z0-9])(bearer[ \t]{1,16})[^\s'\"]{1,4096}")
+# Command-line flags: --password x, --token "a b" (the next word or quoted string).
+FLAG_SECRET_RE = re.compile(r"(?i)(?<![A-Za-z0-9_.-])(--[A-Za-z0-9_.-]{0,256}?" + _KEY_WORD + r"[A-Za-z0-9_.-]{0,256}[ \t]{1,16})(?![-\[])(?:"
+                            + _DQ + "|" + _SQ + r"|\S+)")
+# curl/wget style user:password credentials: -u user:pass, --user=user:pass.
+USER_PASS_RE = re.compile(r"(?<!\S)((?:-u|--user|--proxy-user)(?:[ \t]{1,16}|=)[\"']?[^\s:\"']+:)(?!\[REDACTED)[^\s\"']+")
+# YAML/env/plain: password: x, password = x, PASSWORD=x (rest of the line), or the next line after a bare "password:".
+# The lookahead gate rejects ordinary words in one pass before the keyword search runs.
+PLAIN_SECRET_RE = re.compile(r"(?i)(?<![A-Za-z0-9_.-])(?=[A-Za-z0-9_.-]{1,600}[ \t]{0,16}[:=])(" + SECRET_KEY
+                             + r"[ \t]{0,16}[:=](?:[ \t]{0,16}|[ \t]{0,16}\n[ \t]{0,64}))(?!\[REDACTED)(?=\S)[^\n]+")
+AUTH_RE = re.compile(r"(?im)^([ \t]{0,64}(?:authorization|proxy-authorization)[ \t]{0,16}[:=][ \t]{0,16})[^\n]*")
+BEARER_RE = re.compile(r"(?i)(?<![A-Za-z0-9])(bearer[ \t]{1,16})[^\s'\"]+")
 
 
 def redact_pem(text: str) -> str:
@@ -67,6 +74,7 @@ def redact_text(value: str) -> str:
     value = BEARER_RE.sub(r"\1[REDACTED]", value)
     value = QUOTED_SECRET_RE.sub(r"\1\2\1\3\1[REDACTED]\1", value)
     value = FLAG_SECRET_RE.sub(r"\1[REDACTED]", value)
+    value = USER_PASS_RE.sub(r"\1[REDACTED]", value)
     return PLAIN_SECRET_RE.sub(r"\1[REDACTED]", value)
 
 
