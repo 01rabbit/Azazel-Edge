@@ -10,8 +10,12 @@ services:
     environment:
       OLLAMA_NUM_PARALLEL: "1"
       OLLAMA_MAX_LOADED_MODELS: "1"
+    # Loopback only (Edge#477): every client is on this host and uses
+    # http://127.0.0.1:11434 (the AI agent's AZAZEL_OLLAMA_ENDPOINT default,
+    # PicoClaw's api_base, MIO's model adapter). Ollama has no authentication,
+    # so it is not published on the LAN or uplink interfaces.
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     ulimits:

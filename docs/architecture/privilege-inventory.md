@@ -340,8 +340,11 @@ Stays root until stage 3.
 - Client of `ai-bridge.sock` only; it does not check who is on the other end.
   It listens on nothing.
 - Children: apply path (`run_command`) runs `nft insert rule inet azazel_edge …`
-  (isolate, redirect) and `tc qdisc replace dev <iface> root …` (throttle)
-  via `Command::new(argv[0])` with the **inherited `PATH` and environment**.
+  (isolate, redirect) and `tc qdisc replace dev <iface> root …` (throttle).
+  Since #477 it starts them like the release path: the absolute path of
+  `nft`/`tc` from `/usr/sbin`, `/usr/bin`, `/sbin`, `/bin`, the environment
+  cleared (`LC_ALL=C`, `LANG=C`, that fixed `PATH`); before, it used
+  `Command::new(argv[0])` with the inherited `PATH` and environment.
   The release path (`release.rs`) runs `tc -j qdisc show`, `tc qdisc del`,
   `nft -a -j list chain`, `nft delete rule … handle <n>` from an allowlist of
   `/usr/sbin`, `/usr/bin`, `/sbin`, `/bin` with the environment cleared.
@@ -357,8 +360,8 @@ Stays root until stage 3.
 | --- | --- | --- | --- |
 | `azazel-edge-epd-refresh` (+ timer, 30 s) | root | EPD over SPI/GPIO (`/dev/spidev*`, GPIO) via the Waveshare driver: group:spi + group:gpio, or root | reads `/run/azazel-edge/epd_state.json`, runs `iwgetid` and `azazel_edge_epd.py`, writes `epd_last_render.json` |
 | `azazel-edge-selftest` (+ quarterly timer) | root | `systemctl is-active`, `sha256sum --check /etc/azazel-edge/.config_checksums`, `du` | writes `/var/log/azazel-edge/selftest_latest.json`; `dd` as root to a new `mktemp` name in `/tmp` (`conv=nocreat`), removed on exit (a fixed `/tmp/azazel_sdtest` before #477); runs pytest from `/opt/azazel-edge/tests`, which the installer does not install |
-| `azazel-edge-netflow-receiver` | `User=azazel` | UDP 2055 (none) | **no installer creates the `azazel` account**; `ExecStart` uses `${VAR:-default}`, which systemd does not expand (uncertain how it behaves on a device) |
-| `azazel-edge-snmp-poller` | `User=azazel` | none | same two points; `/etc/default/azazel-edge-sensors` (0644) holds SNMP community strings |
+| `azazel-edge-netflow-receiver` | `User=azazel-sensor` (since #477; `User=azazel` before, which no installer created and which is the login account on many devices) | UDP 2055 (none) | `install_sensors.sh` creates the `azazel-sensor` system account (`setup_sensor_account.sh`: no login, no home; the account `azazel` is not touched). In-memory evidence only: no file is written, so no path changes owner; `ExecStart` uses `${VAR:-default}`, which systemd does not expand (uncertain how it behaves on a device) |
+| `azazel-edge-snmp-poller` | `User=azazel-sensor` (since #477) | none | same two points; `/etc/default/azazel-edge-sensors` (0644) holds SNMP community strings |
 | `azazel-edge-opencanary` | root | docker compose (root-equivalent), host network; HTTP 18080, SSH 12222 | logs to `/var/log/azazel-edge/opencanary`. The core's redirect default is port 2222, not 12222 (not a privilege issue). |
 | `azazel-edge-suricata` | root | raw capture on `${SURICATA_IFACE:-br0}` (cap:NET_RAW + NET_ADMIN), `Nice=-5`, realtime IO class | writes `/var/log/suricata/eve.json` |
 | `azazel-edge-vector` | root | none intrinsic | reads eve.json and OpenCanary logs, writes `/var/log/azazel-edge/vector/*.jsonl` |
@@ -400,7 +403,7 @@ Stays root until stage 3.
 | NetworkManager / `iw` / nft NAT | control daemon only | nmcli, iw, nft, sysctl |
 | Mattermost | Web UI | HTTP client; bot/command tokens |
 | ntfy | Web UI | HTTP client (SSE, health); token file |
-| Ollama | agent | HTTP client to loopback 11434 (the bundled compose file publishes 11434 on all interfaces; noted, not changed) |
+| Ollama | agent | HTTP client to loopback 11434 (the bundled compose file publishes 11434 on `127.0.0.1` only since #477; it published on all interfaces before) |
 | systemd | Web UI (`is-active`, runbook `status`/`restart`), control daemon (`start` of fixed units, reboot/poweroff), selftest | D-Bus |
 | port 8082 status API | Web UI | curl; server not in this repository |
 | NetFlow / SNMP sensors | their own units | in-memory evidence bus only |
@@ -1074,12 +1077,15 @@ out-of-scope findings tracked separately. Still open:
    - `control.sock` has no peer check today (stage 1 adds one);
    - the Wi-Fi passphrase is passed on nmcli's argv (fixed by #477);
    - `contain`/`disconnect` on `control.sock` only write a log line;
-   - the netflow and snmp units use `User=azazel`, which no installer creates,
-     and `${VAR:-default}` in `ExecStart`;
+   - the netflow and snmp units used `User=azazel`, which no installer
+     created (since #477 they run as the dedicated `azazel-sensor`, created
+     by `install_sensors.sh`), and `${VAR:-default}` in `ExecStart`;
    - selftest's fixed `/tmp` file written by `dd` as root (fixed by #477),
      and its pytest step against a directory that is not installed;
-   - the core's apply path inherits `PATH`/environment while the release path
-     does not; no installer step creates `table inet azazel_edge`;
+   - the core's apply path inherited `PATH`/environment while the release
+     path did not (fixed by #477); no installer step creates
+     `table inet azazel_edge` (left to the owner: creating it changes what
+     enforcement does once enabled);
    - the core's redirect policy default is relative with no
      `WorkingDirectory=`;
    - the agent's SOC policy and ATT&CK mapping paths are relative to `/`
@@ -1088,7 +1094,8 @@ out-of-scope findings tracked separately. Still open:
      shipped;
    - OpenCanary SSH listens on 12222 while the core's honeypot redirect
      default is 2222;
-   - the Ollama compose file publishes 11434 on all interfaces.
+   - the Ollama compose file published 11434 on all interfaces (loopback
+     only since #477).
 8. **Hardware.** None of §9 is device evidence. Stage 1 and 2 still need a
    device run by the owner before they are called done; stage 3 needs the
    `CAP_NET_ADMIN`-only core run that #471 describes.

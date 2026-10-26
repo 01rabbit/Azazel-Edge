@@ -17,7 +17,6 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
@@ -554,10 +553,14 @@ fn run_command(argv: &[String]) -> Result<(), String> {
     if argv.is_empty() {
         return Err("empty command".to_string());
     }
-    let mut cmd = Command::new(&argv[0]);
-    if argv.len() > 1 {
-        cmd.args(&argv[1..]);
-    }
+    // nft/tc are started by absolute path from the trusted directories, with
+    // the environment cleared and a fixed PATH (as the release path does);
+    // the core's own PATH and environment are not passed on (Edge#477). The
+    // argv itself, and so what is applied, is unchanged.
+    let binary = release::resolve_trusted_binary(&argv[0])
+        .map_err(|e| format!("command exec error: {} ({})", e, command_to_string(argv)))?;
+    let mut cmd = release::trusted_command(&binary);
+    cmd.args(&argv[1..]);
     match cmd.status() {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(format!(
@@ -1354,6 +1357,43 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Edge#477: the apply path no longer looks argv[0] up on the inherited
+    // PATH; only nft and tc from the trusted directories are started.
+    #[test]
+    fn run_command_refuses_a_binary_outside_the_trusted_set_without_running_it() {
+        let marker = std::env::temp_dir().join(format!("azazel-apply-ran-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        for argv in [
+            vec!["touch".to_string(), marker.display().to_string()],
+            vec!["/usr/bin/touch".to_string(), marker.display().to_string()],
+            vec!["./nft".to_string(), "list".to_string(), "ruleset".to_string()],
+        ] {
+            let err = run_command(&argv).expect_err("must be refused");
+            assert!(err.starts_with("command exec error: "), "{err}");
+        }
+        assert!(!marker.exists());
+        assert_eq!(run_command(&[]), Err("empty command".to_string()));
+    }
+
+    #[test]
+    fn every_planned_apply_command_names_a_trusted_binary() {
+        let ev = sample_event();
+        for action in ["isolate", "throttle", "redirect"] {
+            let decision = DefensiveDecision {
+                action: action.to_string(),
+                reason: "test".to_string(),
+                policy_reason: "test".to_string(),
+                delay_ms: 100,
+                target: ev.src_ip.clone(),
+            };
+            let plan = build_enforcement_plan(&ev, &decision, "eth0", 2222);
+            assert!(!plan.apply_argv.is_empty(), "{action}");
+            for argv in &plan.apply_argv {
+                assert!(matches!(argv[0].as_str(), "nft" | "tc"), "{argv:?}");
+            }
+        }
+    }
 
     fn sample_event() -> NormalizedEvent {
         NormalizedEvent {

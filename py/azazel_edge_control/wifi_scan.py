@@ -6,6 +6,7 @@ Performs Wi-Fi AP scan using NetworkManager/nmcli:
 - Returns deduplicated AP list (strongest per SSID)
 """
 
+import os
 import subprocess
 import re
 import json
@@ -19,6 +20,25 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from azazel_edge.sensors.wifi_scanner import scan_and_parse, get_security_label
 
 logger = logging.getLogger("wifi_scan")
+
+
+def _nmcli_env() -> Dict[str, str]:
+    """The environment every nmcli call of the control daemon runs with
+    (wifi_scan, wifi_connect, daemon): the daemon's own,
+    with the locale pinned to C.UTF-8 (Edge#477). nmcli translates its
+    messages, and the UUID of a new or cloned profile is read from one
+    ("Connection '<name>' (<uuid>) successfully added."); under C.UTF-8 they
+    are the untranslated ones that pattern expects, whatever the device's
+    locale. C.UTF-8 rather than C keeps non-ASCII SSIDs in nmcli's output as
+    they are (UTF-8) instead of escaped for an ASCII charset."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("LANG", "LANGUAGE") and not key.startswith("LC_")
+    }
+    env["LC_ALL"] = "C.UTF-8"
+    env["LANG"] = "C.UTF-8"
+    return env
 
 
 def _split_nmcli_terse_line(line: str, expected_fields: int) -> List[str]:
@@ -116,6 +136,7 @@ def check_networkmanager(iface: str) -> bool:
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-f", "DEVICE", "dev"],
+            env=_nmcli_env(),
             capture_output=True,
             text=True,
             timeout=2
@@ -140,6 +161,7 @@ def get_saved_networks_nm(include_open: bool = False) -> set:
                 "con",
                 "show",
             ],
+            env=_nmcli_env(),
             capture_output=True,
             text=True,
             timeout=2
@@ -155,6 +177,7 @@ def get_saved_networks_nm(include_open: bool = False) -> set:
                 continue
             ssid_result = subprocess.run(
                 ["nmcli", "-g", "802-11-wireless.ssid", "con", "show", name],
+                env=_nmcli_env(),
                 capture_output=True,
                 text=True,
                 timeout=2,
@@ -172,6 +195,7 @@ def get_saved_networks_nm(include_open: bool = False) -> set:
 
             key_mgmt_result = subprocess.run(
                 ["nmcli", "-g", "802-11-wireless-security.key-mgmt", "con", "show", name],
+                env=_nmcli_env(),
                 capture_output=True,
                 text=True,
                 timeout=2,
@@ -219,6 +243,7 @@ def scan_with_nmcli(iface: str, saved_ssids: set) -> List[Dict[str, Any]]:
         # Trigger rescan
         subprocess.run(
             ["nmcli", "dev", "wifi", "rescan", "ifname", iface],
+            env=_nmcli_env(),
             capture_output=True,
             timeout=10
         )
@@ -238,6 +263,7 @@ def scan_with_nmcli(iface: str, saved_ssids: set) -> List[Dict[str, Any]]:
                 "ifname",
                 iface,
             ],
+            env=_nmcli_env(),
             capture_output=True,
             text=True,
             timeout=5

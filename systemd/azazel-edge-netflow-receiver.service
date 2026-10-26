@@ -16,8 +16,10 @@ StandardError=journal
 SyslogIdentifier=azazel-netflow
 MemoryMax=48M
 CPUQuota=8%
-User=azazel
-Group=azazel
+# Dedicated system account (Edge#477), created by setup_sensor_account.sh;
+# not the device's login account azazel.
+User=azazel-sensor
+Group=azazel-sensor
 
 [Install]
 WantedBy=multi-user.target

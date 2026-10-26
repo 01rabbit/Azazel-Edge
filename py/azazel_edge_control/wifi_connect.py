@@ -30,6 +30,7 @@ PY_ROOT = Path(__file__).resolve().parents[1]
 if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 from wifi_scan import (
+    _nmcli_env,
     _split_nmcli_terse_line,
     get_wireless_interface,
     check_networkmanager,
@@ -158,6 +159,7 @@ def is_nm_managed(iface: str) -> bool:
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-f", "DEVICE,STATE", "dev"],
+            env=_nmcli_env(),
             capture_output=True,
             text=True,
             timeout=2
@@ -218,6 +220,7 @@ def new_profile_security(iface: str, ssid: str) -> Optional[Tuple[str, str]]:
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-f", "SSID,SECURITY", "dev", "wifi", "list", "ifname", iface, "--rescan", "no"],
+            env=_nmcli_env(),
             capture_output=True,
             text=True,
             timeout=5,
@@ -245,7 +248,7 @@ _UUID_RE = r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}"
 
 
 def _nm_run(cmd: List[str], timeout: float = 5) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=_nmcli_env())
 
 
 def _nm_name_uuid_list() -> List[Tuple[str, str]]:
@@ -408,6 +411,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
             try:
                 result = subprocess.run(
                     ["nmcli", "-t", "-f", "NAME,UUID,TYPE", "con", "show"],
+                    env=_nmcli_env(),
                     capture_output=True,
                     text=True,
                     timeout=5,
@@ -421,6 +425,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
                     # Query SSID for each Wi-Fi connection (older nmcli doesn't expose it in list mode).
                     ssid_result = subprocess.run(
                         ["nmcli", "-t", "-f", "802-11-wireless.ssid", "con", "show", "uuid", uuid],
+                        env=_nmcli_env(),
                         capture_output=True,
                         text=True,
                         timeout=5,
@@ -446,6 +451,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
             for _, con_uuid in list_nm_connections_for_ssid(target_ssid):
                 subprocess.run(
                     ["nmcli", "con", "delete", "uuid", con_uuid],
+                    env=_nmcli_env(),
                     capture_output=True,
                     timeout=5,
                 )
@@ -455,6 +461,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
             try:
                 result = subprocess.run(
                     ["nmcli", "-g", "802-11-wireless-security.key-mgmt", "con", "show", "uuid", connection_uuid],
+                    env=_nmcli_env(),
                     capture_output=True,
                     text=True,
                     timeout=5
@@ -467,6 +474,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
             try:
                 result = subprocess.run(
                     ["nmcli", "-t", "-f", "802-11-wireless-security.key-mgmt", "con", "show", "uuid", connection_uuid],
+                    env=_nmcli_env(),
                     capture_output=True,
                     text=True,
                     timeout=5
@@ -497,6 +505,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
             cmd = ["nmcli", "dev", "wifi", "connect", ssid, "ifname", iface]
             result = subprocess.run(
                 cmd,
+                env=_nmcli_env(),
                 capture_output=True,
                 text=True,
                 timeout=20,
@@ -506,6 +515,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
                 delete_nm_connections_for_ssid(ssid)
                 result = subprocess.run(
                     cmd,
+                    env=_nmcli_env(),
                     capture_output=True,
                     text=True,
                     timeout=20,
@@ -528,11 +538,13 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
             if sec_flags["open"]:
                 subprocess.run(
                     ["nmcli", "con", "mod", "uuid", con_uuid, "wifi-sec.key-mgmt", "none"],
+                    env=_nmcli_env(),
                     capture_output=True,
                     timeout=5
                 )
                 subprocess.run(
                     ["nmcli", "con", "mod", "uuid", con_uuid, "-u", "wifi-sec.psk"],
+                    env=_nmcli_env(),
                     capture_output=True,
                     timeout=5
                 )
@@ -554,6 +566,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
                 if key_mgmt and not passphrase:
                     subprocess.run(
                         ["nmcli", "con", "mod", "uuid", con_uuid, "wifi-sec.key-mgmt", key_mgmt],
+                        env=_nmcli_env(),
                         capture_output=True,
                         timeout=5
                     )
@@ -570,6 +583,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
             else:
                 result = subprocess.run(
                     ["nmcli", "con", "up", "uuid", con_uuid],
+                    env=_nmcli_env(),
                     capture_output=True,
                     text=True,
                     timeout=20
@@ -595,6 +609,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
                 add_cmd.extend(["wifi-sec.wep-key-type", "key"])
             added = subprocess.run(
                 add_cmd,
+                env=_nmcli_env(),
                 capture_output=True,
                 text=True,
                 timeout=10
@@ -616,7 +631,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
                 # neither does this path. Only the profile added above is
                 # removed (by its UUID).
                 try:
-                    subprocess.run(["nmcli", "con", "delete", "uuid", created_uuid], capture_output=True, timeout=5)
+                    subprocess.run(["nmcli", "con", "delete", "uuid", created_uuid], env=_nmcli_env(), capture_output=True, timeout=5)
                 except Exception as exc:
                     logger.warning(f"could not remove the new Wi-Fi profile: {type(exc).__name__}")
 
@@ -624,6 +639,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
                 with _nm_passwd_file({secret_property: passphrase}) as passwd_file:
                     result = subprocess.run(
                         ["nmcli", "con", "up", *up_target, "passwd-file", passwd_file],
+                        env=_nmcli_env(),
                         capture_output=True,
                         text=True,
                         timeout=20
@@ -650,6 +666,7 @@ def _connect_nm_locked(iface: str, ssid: str, security: str, passphrase: Optiona
                     raise RuntimeError("profile UUID unknown")
                 subprocess.run(
                     ["nmcli", "con", "mod", "uuid", con_uuid, "connection.autoconnect", "no"],
+                    env=_nmcli_env(),
                     capture_output=True,
                     timeout=5
                 )
@@ -1283,18 +1300,57 @@ def connect_wifi(ssid: str, security: str = "UNKNOWN", passphrase: Optional[str]
     }
 
 
-if __name__ == "__main__":
-    # Test mode
+PASSPHRASE_ARGV_ERROR = (
+    "--passphrase is no longer accepted: a secret on the command line is readable "
+    "by any local user. Use --passphrase-stdin and give the passphrase on stdin."
+)
+
+
+def _read_passphrase(stream) -> Optional[str]:
+    """One passphrase line from ``stream`` (a terminal is read without echo).
+    Only the line ending is removed; an empty line means no passphrase."""
+    if stream.isatty():
+        import getpass
+
+        value = getpass.getpass("Passphrase: ")
+    else:
+        value = stream.readline()
+    value = value[:-1] if value.endswith("\n") else value
+    value = value[:-1] if value.endswith("\r") else value
+    return value or None
+
+
+def main(argv: Optional[List[str]] = None, stdin=None) -> int:
+    """Manual test entry point. The passphrase is read from stdin
+    (--passphrase-stdin), never taken from argv (Edge#477): argv is readable
+    by any local user from /proc/<pid>/cmdline."""
     import argparse
-    logging.basicConfig(level=logging.INFO)
-    
-    parser = argparse.ArgumentParser(description="Wi-Fi Connect Test")
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Refused before argparse, whose usage error would echo the value: the
+    # old option and anything else starting with --pass but the stdin flag
+    # (a misspelling, `--password=...`).
+    if any(arg.startswith("--pass") and arg != "--passphrase-stdin" for arg in argv):
+        print(PASSPHRASE_ARGV_ERROR, file=sys.stderr)
+        return 2
+
+    parser = argparse.ArgumentParser(description="Wi-Fi Connect Test", allow_abbrev=False)
     parser.add_argument("ssid", help="Target SSID")
     parser.add_argument("--security", default="UNKNOWN", help="Security type (OPEN|WPA2|WPA3)")
-    parser.add_argument("--passphrase", help="Passphrase (if required)")
+    parser.add_argument(
+        "--passphrase-stdin",
+        action="store_true",
+        help="Read the passphrase from stdin (one line; prompted without echo on a terminal)",
+    )
     parser.add_argument("--persist", action="store_true", help="Save network")
-    
-    args = parser.parse_args()
-    
-    result = connect_wifi(args.ssid, args.security, args.passphrase, args.persist)
+    args = parser.parse_args(argv)
+
+    passphrase = _read_passphrase(stdin or sys.stdin) if args.passphrase_stdin else None
+    result = connect_wifi(args.ssid, args.security, passphrase, args.persist)
     print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    sys.exit(main())

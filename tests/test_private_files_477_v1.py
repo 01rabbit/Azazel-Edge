@@ -106,6 +106,71 @@ def test_write_outputs_uses_the_private_writer():
     assert 'cat > "${CRED_ENV}"' not in src and 'chmod 0600 "${CRED_ENV}"' not in src
 
 
+FAKE_TOKEN = "fake-token#with&odd\\chars"
+
+
+def _upsert(dst: Path, key: str, value: str, *, stub_chmod: bool = True) -> subprocess.CompletedProcess:
+    script = "set -euo pipefail\numask 022\n" + ("chmod() { :; }\n" if stub_chmod else "") + \
+        _function(PROVISION, "write_private_file") + _function(PROVISION, "upsert_env") + \
+        'upsert_env "$1" "$2" "$3"\n'
+    return subprocess.run(["bash", "-c", script, "bash", str(dst), key, value], capture_output=True, text=True)
+
+
+@needs_gnu_mv
+def test_upsert_env_creates_the_env_file_0600(tmp_path):
+    dst = tmp_path / "azazel-edge-web"
+    res = _upsert(dst, "AZAZEL_MATTERMOST_BOT_TOKEN", FAKE_TOKEN)
+    assert res.returncode == 0, res.stderr
+    assert dst.read_text(encoding="utf-8") == f"AZAZEL_MATTERMOST_BOT_TOKEN={FAKE_TOKEN}\n"
+    assert stat.S_IMODE(dst.stat().st_mode) == 0o600
+    assert sorted(p.name for p in tmp_path.iterdir()) == [dst.name]
+
+
+@needs_gnu_mv
+def test_upsert_env_replaces_in_place_and_narrows_an_existing_file(tmp_path):
+    dst = tmp_path / "azazel-edge-web"
+    dst.write_text("A=1\nAZAZEL_MATTERMOST_BOT_TOKEN=old\nAZAZEL_MATTERMOST_BOT_TOKEN_X=keep\n"
+                   "B=2\nAZAZEL_MATTERMOST_BOT_TOKEN=dup\nC=3", encoding="utf-8")
+    dst.chmod(0o644)
+    res = _upsert(dst, "AZAZEL_MATTERMOST_BOT_TOKEN", FAKE_TOKEN)
+    assert res.returncode == 0, res.stderr
+    assert dst.read_text(encoding="utf-8") == (
+        f"A=1\nAZAZEL_MATTERMOST_BOT_TOKEN={FAKE_TOKEN}\nAZAZEL_MATTERMOST_BOT_TOKEN_X=keep\nB=2\nC=3\n")
+    assert stat.S_IMODE(dst.stat().st_mode) == 0o600
+    res = _upsert(dst, "NEW_KEY", "v")
+    assert res.returncode == 0, res.stderr
+    assert dst.read_text(encoding="utf-8").endswith("C=3\nNEW_KEY=v\n")
+
+
+def test_upsert_env_leaves_an_unreadable_path_alone(tmp_path):
+    dst = tmp_path / "azazel-edge-web"
+    dst.mkdir()  # cat fails on a directory
+    (dst / "inside").write_text("x", encoding="utf-8")
+    res = _upsert(dst, "AZAZEL_MATTERMOST_BOT_TOKEN", FAKE_TOKEN)
+    assert res.returncode != 0
+    assert dst.is_dir() and (dst / "inside").read_text(encoding="utf-8") == "x"
+    assert FAKE_TOKEN not in res.stderr + res.stdout
+
+
+@pytest.mark.parametrize("value", ["fake-token\nINJECTED=1", "fake-token\r", "\nfake"])
+def test_upsert_env_refuses_a_line_break_in_the_value(tmp_path, value):
+    dst = tmp_path / "azazel-edge-web"
+    dst.write_text("A=1\n", encoding="utf-8")
+    dst.chmod(0o644)
+    res = _upsert(dst, "AZAZEL_MATTERMOST_BOT_TOKEN", value)
+    assert res.returncode != 0 and "line break" in res.stderr
+    assert "fake" not in res.stderr + res.stdout
+    assert dst.read_text(encoding="utf-8") == "A=1\n" and stat.S_IMODE(dst.stat().st_mode) == 0o644
+    assert sorted(p.name for p in tmp_path.iterdir()) == [dst.name]
+
+
+def test_upsert_env_never_writes_under_the_default_umask():
+    body = _function(PROVISION, "upsert_env")
+    assert 'write_private_file "${file}"' in body
+    for gone in ("touch ", "sed -i", ">>", "awk -v"):
+        assert gone not in body, gone
+
+
 # ------------------------------------------------------------------ selftest
 
 def _run_sd_check(tmp_path: Path, dd_rc: int) -> tuple[Path, Path, Path, str]:

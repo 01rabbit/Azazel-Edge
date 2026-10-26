@@ -16,12 +16,8 @@ fi
 
 mapfile -t FILES <<'EOF'
 azazel_edge_web/app.py
-azazel_edge_web/static/app.js
-azazel_edge_web/static/ops_comm.js
-azazel_edge_web/static/ops_comm.css
-azazel_edge_web/static/style.css
-azazel_edge_web/templates/index.html
-azazel_edge_web/templates/ops_comm.html
+azazel_edge_web/auth.py
+azazel_edge_web/io_helpers.py
 py/azazel_edge/__init__.py
 py/azazel_edge/control_plane.py
 py/azazel_edge/peercred.py
@@ -33,6 +29,16 @@ py/azazel_edge/dummy_eve.py
 py/azazel_edge/opencanary_redirect.py
 py/azazel_edge/runbooks.py
 py/azazel_edge/runbook_review.py
+py/azazel_edge/_util.py
+py/azazel_edge/aggregator.py
+py/azazel_edge/audit_review.py
+py/azazel_edge/deception_effectiveness_client.py
+py/azazel_edge/deception_shadow.py
+py/azazel_edge/decision_layers.py
+py/azazel_edge/fabric_view.py
+py/azazel_edge/i18n.py
+py/azazel_edge/policy.py
+py/azazel_edge/snapshot_model.py
 py/azazel_edge/cli_unified.py
 py/azazel_edge/cli_unified_textual.py
 py/azazel_edge_menu.py
@@ -68,6 +74,8 @@ bin/azazel-edge-runbook-broker
 EOF
 
 mapfile -t DIRS <<'EOF'
+azazel_edge_web/static
+azazel_edge_web/templates
 py/azazel_edge/arbiter
 py/azazel_edge/audit
 py/azazel_edge/correlation
