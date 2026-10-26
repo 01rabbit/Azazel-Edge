@@ -58,6 +58,11 @@ Behavior:
   with a warning in the agent log. No setting makes the socket or its directory
   group- or world-accessible. `AZAZEL_AI_SOCKET` still chooses the path, but
   only a private directory is accepted.
+- The agent checks the socket's own directory, not its parents. A non-default
+  `AZAZEL_AI_SOCKET` must sit under parents that only root can write (as `/run`
+  is for the default `/run/azazel-edge-ai`): under a group-writable parent such
+  as `/run/azazel-edge`, a member can rename the private directory away and put
+  their own in its place after the agent has started.
 - Who can connect to, rename, remove or replace `ai-bridge.sock` after this
   change: root, and processes running as the agent's account (root under the
   shipped units). Members of `AZAZEL_RUNTIME_SOCKET_GROUP` cannot.
