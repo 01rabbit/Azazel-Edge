@@ -38,7 +38,7 @@ hash-chained audit trail. Local AI (Ollama) is **advisory only** and is gated by
 
 ```
 Suricata EVE ──► rust/azazel-edge-core (tail, normalize, decide, dry-run plan)
-                    │ Unix socket /run/azazel-edge/ai-bridge.sock
+                    │ Unix socket /run/azazel-edge-ai/ai-bridge.sock
                     ▼
 py/azazel_edge_ai/agent.py (socket server, scoring, LLM worker thread)
                     │ uses py/azazel_edge/* (evaluators, arbiter, explanations, audit)
@@ -134,7 +134,8 @@ behavioral change, not a refactor.
    → 403. mTLS fingerprint check applies to operator-and-above only.
 
 ### Operational surface
-10. Service names, socket paths (`/run/azazel-edge/ai-bridge.sock`,
+10. Service names, socket paths (`/run/azazel-edge-ai/ai-bridge.sock`, moved
+    out of `/run/azazel-edge/` by Edge#462,
     `/run/azazel-edge/control.sock`), JSONL/JSON paths under
     `/var/log/azazel-edge/` and `/run/azazel-edge/`, CLI names installed to
     `/usr/local/bin`, gunicorn target `azazel_edge_web.app:app`, and the

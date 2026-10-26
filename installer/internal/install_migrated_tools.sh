@@ -204,9 +204,16 @@ fi
 if ! grep -q '^AZAZEL_CONTROL_SOCKET_MODE=' "$SECURITY_ENV"; then
   echo 'AZAZEL_CONTROL_SOCKET_MODE=0660' >> "$SECURITY_ENV"
 fi
-if ! grep -q '^AZAZEL_AI_SOCKET_MODE=' "$SECURITY_ENV"; then
-  echo 'AZAZEL_AI_SOCKET_MODE=0660' >> "$SECURITY_ENV"
-fi
+# ai-bridge.sock is always owner only (0600) in its own 0700 directory
+# (/run/azazel-edge-ai, created by the AI agent) and never takes the shared
+# group below, so AZAZEL_AI_SOCKET_MODE is no longer seeded; an existing line
+# is ignored by the agent (Edge#462). The shared group applies to the runtime
+# directory and control.sock only. A line that still points the socket into
+# the shared runtime directory (the old default) is moved to the new default:
+# the agent refuses a socket directory that is not private.
+for env_file in "$SECURITY_ENV" "$WEB_ENV"; do
+  sed -i -E 's#^AZAZEL_AI_SOCKET=(["'"'"']?)/run/azazel-edge/ai-bridge\.sock(["'"'"']?)$#AZAZEL_AI_SOCKET=\1/run/azazel-edge-ai/ai-bridge.sock\2#' "$env_file"
+done
 if ! grep -q '^AZAZEL_RUNTIME_SOCKET_GROUP=' "$SECURITY_ENV"; then
   echo 'AZAZEL_RUNTIME_SOCKET_GROUP=' >> "$SECURITY_ENV"
 fi

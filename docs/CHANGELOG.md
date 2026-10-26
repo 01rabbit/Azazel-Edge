@@ -50,6 +50,27 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `ai-bridge.sock` moves to its own directory and is owner only (Edge#462
+  item 2, short-term). Default path `/run/azazel-edge-ai/ai-bridge.sock`
+  (was `/run/azazel-edge/ai-bridge.sock`) in the agent, the Web UI, the core's
+  default and the core unit. The agent creates the directory with mode `0700`
+  and its own account, binds the socket under umask `0177` with mode `0600`
+  and its own user and group, and applies `AZAZEL_RUNTIME_SOCKET_GROUP` to
+  neither. It refuses to start (no fallback) when the directory is a symlink,
+  not a directory, owned by another account or has group/other bits, or when
+  the socket path holds something other than a socket. Members of the shared
+  group, which still use `control.sock` in `/run/azazel-edge` (unchanged),
+  can no longer connect to, rename, remove or replace `ai-bridge.sock`.
+  `AZAZEL_AI_SOCKET_MODE` is no longer applied (an existing value is ignored
+  with a warning) and no longer seeded. The installer rewrites an
+  `AZAZEL_AI_SOCKET` line that still holds the old default path. Root can still
+  connect and forge; the core and the Web UI do not verify the socket's peer
+  (Edge#471); privilege separation is tracked separately. Not validated on a
+  VM or on hardware. Compatibility: a non-root tool that used the socket
+  through the shared group loses that access, tools that hard-code the old
+  path must use the new one, and an `AZAZEL_AI_SOCKET` value pointing into
+  `/run/azazel-edge` that the installer does not rewrite makes the agent
+  refuse to start.
 - P0 alert path (Edge#462 items 1, 3, 4; notification and audit only, no
   change to decisions or enforcement):
   - `core-decision-audit.jsonl` rotates on a chain boundary at 16 MiB with

@@ -36,7 +36,7 @@ export AZAZEL_CONTROL_SOCKET="$RUN_DIR/control.sock"
 export AZAZEL_DEFENSE_DRY_RUN=true
 
 # --- AI agent ---
-export AZAZEL_AI_SOCKET="$RUN_DIR/ai-bridge.sock"
+export AZAZEL_AI_SOCKET="$RUN_DIR/ai/ai-bridge.sock"
 export AZAZEL_AI_ADVISORY="$RUN_DIR/ai_advisory.json"
 export AZAZEL_AI_METRICS="$RUN_DIR/ai_metrics.json"
 export AZAZEL_AI_POLICY="$RUN_DIR/ai_runtime_policy.json"
