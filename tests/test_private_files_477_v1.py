@@ -101,7 +101,10 @@ def test_a_failed_write_leaves_no_partial_file(tmp_path):
 
 def test_write_outputs_uses_the_private_writer():
     src = PROVISION.read_text(encoding="utf-8")
-    body = _function(PROVISION, "write_outputs")
+    # write_outputs writes the credentials through write_credentials (also
+    # used before the admin account exists, Edge#477).
+    assert "  write_credentials\n" in _function(PROVISION, "write_outputs")
+    body = _function(PROVISION, "write_credentials")
     assert 'write_private_file "${CRED_ENV}" <<EOF' in body
     assert 'cat > "${CRED_ENV}"' not in src and 'chmod 0600 "${CRED_ENV}"' not in src
 

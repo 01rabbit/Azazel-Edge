@@ -4208,7 +4208,9 @@ def _ntfy_health_ok() -> bool:
     """Check ntfy HTTP health endpoint."""
     mgmt_ip = os.environ.get("MGMT_IP", "10.55.0.10")
     ntfy_port = os.environ.get("NTFY_PORT", "8081")
-    hosts = [mgmt_ip, "127.0.0.1", "localhost"]
+    # ntfy listens on loopback only (install_ntfy.sh, Edge#477); MGMT_IP is
+    # kept last for a host configured by hand.
+    hosts = ["127.0.0.1", "localhost", mgmt_ip]
     seen = set()
     for host in hosts:
         if host in seen:

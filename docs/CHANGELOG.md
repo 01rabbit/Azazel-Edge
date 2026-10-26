@@ -36,6 +36,50 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- External exposure found by the audit before the device run (Edge#477):
+  - **Action required on a device installed by an earlier version:** if the
+    Mattermost admin account still has the former fixed password,
+    `provision_mattermost_workspace.sh` ends with `[ACTION REQUIRED]` and
+    exit code 3 instead of success (the password is not changed for you).
+    Log in at `http://172.16.0.254:8065` as `azazelops`, change it (Profile >
+    Security > Password), put the new one in `MATTERMOST_PASSWORD=` in
+    `/etc/azazel-edge/mattermost-credentials.env` (0600 root; edit it with
+    `sudoedit`, not on a command line), and run
+    `sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh` again from
+    the Azazel-Edge checkout used for the install (it also registers the
+    slash command and restarts the Web UI and the AI agent; the copy in
+    `/opt/azazel-edge` cannot find the repository and is not the entry). If
+    the device was installed with `install_all.sh`, its later stages (dev
+    remote access, Vector, sensors) did not run either: run the enabled
+    ones as `install_all.sh` would.
+  - `provision_mattermost_workspace.sh` also fails (exit 1, with what to do)
+    when Mattermost would not be reachable from the LAN: nginx is not
+    installed, or an earlier container still publishes 8065 on every
+    interface; the fix is the same re-run of `install_ai_runtime.sh`.
+  - ntfy listens on `127.0.0.1:8081` only (was every interface, so the WAN
+    too) with `auth-default-access: deny-all` (was `read-write`); the
+    anonymous read-write grants on the alert and info topics are removed,
+    also from an existing auth database. The Edge account reads and writes
+    them with its token (0640 root:azazel-web, as before), which the Web UI
+    bridge already sends. The installer stops when an anonymous read is not
+    refused or the token is. The ntfy web app is off. The Web UI and CLI
+    health probes try loopback first.
+  - Mattermost publishes on `127.0.0.1:18065` only (was `8065` on every
+    interface, which Docker opens past the host firewall). LAN clients keep
+    `http://172.16.0.254:8065` through an nginx site that
+    `provision_mattermost_workspace.sh` writes, admitting `172.16.0.0/24` and
+    loopback only.
+  - The Mattermost database password is no longer a fixed value in the
+    compose file: `mattermost_db_secret.sh` makes a random one in
+    `/etc/azazel-edge/mattermost-db.env` (0600 root) before the stack starts
+    and changes an existing database's password to it first. The admin
+    password is no longer a fixed default: it is random on first run, kept
+    in `mattermost-credentials.env` (0600 root) and never printed (see the
+    action required above for a device still using the former default).
+  - The Mattermost image is pinned to `12.0.1` (was `latest`). It exists for
+    `linux/amd64` only; on a Pi it runs under qemu-user emulation, which may
+    not work on a 16K-page kernel (not shown on the device).
+
 - Four hardening fixes from Edge#477 (found by the #471 privilege inventory):
   - Wi-Fi connect (control daemon, `wifi_connect.py`): the passphrase is no
     longer on nmcli's argv (readable from `/proc/<pid>/cmdline`). A new

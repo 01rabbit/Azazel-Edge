@@ -6,7 +6,11 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-MGMT_IP="${MGMT_IP:-127.0.0.1}"
+# ntfy listens on loopback only (Edge#477). Its only clients are on this
+# host: the Web UI's SSE bridge and health probe (azazel_edge_web/app.py) and
+# the CLI health probe. Nothing on the LAN or the WAN uses it, so it is not
+# reachable from there, and there is no setting that widens the address.
+NTFY_LISTEN_ADDR="127.0.0.1"
 NTFY_PORT="${NTFY_PORT:-8081}"
 NTFY_USER="${NTFY_USER:-azazel-notify}"
 TOPIC_ALERT="${NTFY_TOPIC_ALERT:-azg-alert-critical}"
@@ -32,13 +36,15 @@ fi
 
 cat > "$SERVER_CFG" <<EOF
 # Managed by Azazel-Edge installer
-base-url: "http://${MGMT_IP}:${NTFY_PORT}"
-listen-http: ":${NTFY_PORT}"
+# Anonymous clients get nothing (deny-all); the Edge account below reads and
+# writes the two topics with a token. The web app is off: nobody uses it.
+base-url: "http://${NTFY_LISTEN_ADDR}:${NTFY_PORT}"
+listen-http: "${NTFY_LISTEN_ADDR}:${NTFY_PORT}"
 cache-file: "/var/cache/ntfy/cache.db"
 auth-file: "/var/lib/ntfy/user.db"
-auth-default-access: "read-write"
+auth-default-access: "deny-all"
 behind-proxy: false
-web-root: "/"
+web-root: "disable"
 EOF
 
 systemctl daemon-reload
@@ -57,10 +63,30 @@ if ! NTFY_PASSWORD="$ntfy_password" ntfy user add "$NTFY_USER" >/dev/null 2>&1; 
   NTFY_PASSWORD="$ntfy_password" ntfy user change-pass "$NTFY_USER" >/dev/null 2>&1 || true
 fi
 
-ntfy access "$NTFY_USER" "$TOPIC_ALERT" read-write >/dev/null 2>&1 || true
-ntfy access "$NTFY_USER" "$TOPIC_INFO" read-write >/dev/null 2>&1 || true
-ntfy access everyone "$TOPIC_ALERT" read-write >/dev/null 2>&1 || true
-ntfy access everyone "$TOPIC_INFO" read-write >/dev/null 2>&1 || true
+# Under deny-all a missing grant would cut the Web UI off, so a failure stops
+# the install here instead of being ignored.
+ntfy access "$NTFY_USER" "$TOPIC_ALERT" read-write >/dev/null
+ntfy access "$NTFY_USER" "$TOPIC_INFO" read-write >/dev/null
+# Earlier installs granted anonymous read-write on both topics (anyone who
+# reached the port could read the alerts and post fake ones). Remove those
+# entries; deny-all then applies to anonymous clients.
+ntfy access --reset everyone "$TOPIC_ALERT" >/dev/null 2>&1 || true
+ntfy access --reset everyone "$TOPIC_INFO" >/dev/null 2>&1 || true
+# A listing that fails is not read as "no grants".
+if ! anon_acl="$(ntfy access everyone 2>&1)"; then
+  echo "ERROR: could not list ntfy's anonymous access ('ntfy access everyone' failed)"
+  exit 1
+fi
+if grep -Eq "(read|write)" <<<"$anon_acl"; then
+  echo "ERROR: ntfy still grants anonymous access; see 'ntfy access everyone'"
+  exit 1
+fi
+
+# The token of an earlier run, removed once the new one is written.
+old_token=""
+if [[ -f "$TOKEN_PATH_PRIMARY" ]]; then
+  old_token="$(grep -m 1 -Eo '^tk_[a-z0-9]+$' "$TOKEN_PATH_PRIMARY" 2>/dev/null || true)"
+fi
 
 token_output="$(ntfy token add "$NTFY_USER" 2>&1 || true)"
 token=""
@@ -88,18 +114,49 @@ web_readable_secret() {
 }
 web_readable_secret "$TOKEN_PATH_PRIMARY"
 web_readable_secret "$TOKEN_PATH_COMPAT"
+if [[ -n "$old_token" && "$old_token" != "$token" ]]; then
+  ntfy token remove "$NTFY_USER" "$old_token" >/dev/null 2>&1 || true
+fi
+unset token_output old_token
+
+# The ntfy CLI above ran as root on the auth database.
+chown -R _ntfy:_ntfy /var/lib/ntfy
 
 systemctl enable ntfy.service >/dev/null
 systemctl restart ntfy.service
 
+NTFY_URL="http://${NTFY_LISTEN_ADDR}:${NTFY_PORT}"
+healthy=0
 for _ in {1..20}; do
-  if curl -fsS --max-time 3 "http://127.0.0.1:${NTFY_PORT}/v1/health" | grep -q '"healthy":true'; then
-    echo "[ntfy] Service healthy on 127.0.0.1:${NTFY_PORT}"
-    echo "[ntfy] token file: ${TOKEN_PATH_PRIMARY}"
-    exit 0
+  # Read whole, then matched: with pipefail, `curl | grep -q` fails when grep
+  # stops reading first (curl gets SIGPIPE).
+  health_body="$(curl -fsS --max-time 3 "${NTFY_URL}/v1/health" 2>/dev/null || true)"
+  if [[ "$health_body" == *'"healthy":true'* ]]; then
+    healthy=1
+    break
   fi
   sleep 0.25
 done
+if [[ "$healthy" != "1" ]]; then
+  echo "ERROR: ntfy did not pass health checks on ${NTFY_URL}"
+  exit 1
+fi
 
-echo "ERROR: ntfy did not pass health checks on 127.0.0.1:${NTFY_PORT}"
-exit 1
+# An anonymous read must be refused; the token must be accepted. The token
+# goes to curl on stdin (-H @-), not on its command line.
+anon_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 "${NTFY_URL}/${TOPIC_ALERT}/json?poll=1" || true)"
+if [[ "$anon_status" != "401" && "$anon_status" != "403" ]]; then
+  echo "ERROR: ntfy answered an anonymous read of ${TOPIC_ALERT} with HTTP ${anon_status} (want 401/403)"
+  exit 1
+fi
+auth_status="$(printf 'Authorization: Bearer %s\n' "$token" \
+  | curl -sS -o /dev/null -w '%{http_code}' --max-time 3 -H @- "${NTFY_URL}/${TOPIC_ALERT}/json?poll=1" || true)"
+unset token
+if [[ "$auth_status" != "200" ]]; then
+  echo "ERROR: ntfy refused the Edge token for ${TOPIC_ALERT} (HTTP ${auth_status})"
+  exit 1
+fi
+
+echo "[ntfy] Service healthy on ${NTFY_URL} (loopback only, anonymous access denied)"
+echo "[ntfy] token file: ${TOKEN_PATH_PRIMARY}"
+exit 0

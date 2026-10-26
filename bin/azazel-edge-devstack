@@ -29,8 +29,10 @@ source "${ROOT_DIR}/tools/macdev/env.sh"
 
 # Dev override: env.sh does NOT set AZAZEL_MATTERMOST_HOST, so the web app / AI
 # agent would default to the appliance IP 172.16.0.254. In dev Mattermost runs
-# on OrbStack at localhost:8065 -- point at it unless the user already chose.
+# on OrbStack at localhost:18065 (the compose file publishes on loopback only,
+# Edge#477) -- point at it unless the user already chose.
 export AZAZEL_MATTERMOST_HOST="${AZAZEL_MATTERMOST_HOST:-127.0.0.1}"
+export AZAZEL_MATTERMOST_PORT="${AZAZEL_MATTERMOST_PORT:-18065}"
 
 # Mattermost workspace credentials (bot token / webhook / channel id) written
 # by tools/macdev/provision-mattermost.sh. Without them the web app runs with
@@ -54,7 +56,10 @@ VENV_PY="${ROOT_DIR}/.venv/bin/python"
 RUST_CORE_DIR="${ROOT_DIR}/rust/azazel-edge-core"
 RUST_CORE_BIN="${RUST_CORE_DIR}/target/release/azazel-edge-core"
 MM_COMPOSE="${ROOT_DIR}/security/docker-compose.mattermost.yml"
-MM_URL="http://localhost:8065"
+MM_URL="http://localhost:18065"
+# The compose file reads the database password from this file (Edge#477); the
+# dev stack keeps its own under $AZAZEL_DEV_STATE.
+export AZAZEL_MATTERMOST_DB_ENV_FILE="${AZAZEL_MATTERMOST_DB_ENV_FILE:-${AZAZEL_DEV_STATE}/mattermost-db.env}"
 MM_PING="${MM_URL}/api/v4/system/ping"
 
 # Long-running components, in startup order. dummy-eve is opt-in (--inject).
@@ -181,6 +186,11 @@ docker_ready() {
 
 mattermost_up() { http_ok "${MM_PING}"; }
 
+# Random database password (made once; an older dev database gets it too).
+ensure_mm_db_secret() {
+  "${ROOT_DIR}/installer/internal/mattermost_db_secret.sh" "${AZAZEL_MATTERMOST_DB_ENV_FILE}" >/dev/null
+}
+
 ensure_mattermost() {
   if mattermost_up; then
     printf '  %s %-14s already up (%s)\n' "${OK}" "mattermost" "${MM_URL}"
@@ -191,6 +201,10 @@ ensure_mattermost() {
     return 0
   fi
   printf '  %s %-14s starting via docker compose…\n' "${WAIT}" "mattermost"
+  ensure_mm_db_secret || {
+    warn "could not prepare the Mattermost database password -- continuing without Mattermost."
+    return 0
+  }
   MATTERMOST_SITE_URL="${MM_URL}" \
   MATTERMOST_ALLOWED_UNTRUSTED_INTERNAL_CONNECTIONS="host.docker.internal" \
     "${ROOT_DIR}/bin/azazel-edge-compose" -f "${MM_COMPOSE}" up -d >/dev/null 2>&1 || {
@@ -362,6 +376,7 @@ cmd_up() {
   # --all means also (re)start external deps -- restart Mattermost if requested.
   if (( all )) && docker_ready; then
     info "--all: (re)starting Mattermost"
+    ensure_mm_db_secret || warn "could not prepare the Mattermost database password"
     MATTERMOST_SITE_URL="${MM_URL}" \
     MATTERMOST_ALLOWED_UNTRUSTED_INTERNAL_CONNECTIONS="host.docker.internal" \
       "${ROOT_DIR}/bin/azazel-edge-compose" -f "${MM_COMPOSE}" up -d >/dev/null 2>&1 || true

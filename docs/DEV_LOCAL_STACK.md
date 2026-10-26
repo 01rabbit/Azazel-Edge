@@ -5,7 +5,7 @@
 
 It wires the stack to:
 - **ollama** — the local LLM runtime, run as the macOS GUI app, serving `qwen3.5:2b` at `http://127.0.0.1:11434`.
-- **Mattermost** — run via `docker compose` on OrbStack, reachable at `http://localhost:8065`.
+- **Mattermost** — run via `docker compose` on OrbStack, reachable at `http://localhost:18065`.
 
 The launcher itself does not replace `bin/azazel-edge-dev`. Use `azazel-edge-dev` to build/test; use `azazel-edge-devstack` to run.
 
@@ -29,7 +29,7 @@ This preflight-checks dependencies (creating the Python venv and building the Ru
 - the Mattermost URL
 - ollama status (reachable / model present)
 
-Open the dashboard URL from the summary in a browser to see the running system. Open `http://localhost:8065` for Mattermost.
+Open the dashboard URL from the summary in a browser to see the running system. Open `http://localhost:18065` for Mattermost.
 
 To also see live pipeline data flowing through the dashboard, start the `dummy-eve` test-event injector at the same time:
 ```bash
@@ -79,7 +79,7 @@ The interactive menu shows live status (eve.json event count, background-stream 
 **Demo flow:** run `bin/azazel-edge-devstack up` first, then drive attacks from the injector menu and watch the real dashboard react — this is the intended way to demo (live pipeline injection rather than a mocked screen). Available scenarios: `recon_probe`, `port_scan`, `arp_spoof`, `dns_exfil`, `cred_harvest`, `c2_beacon`, `phishing`, `benign`. (`up --inject` starts the continuous stream automatically; the injector menu is for hands-on, scenario-by-scenario control.) The `arp_spoof` scenario injects SID 9901211, which a real Suricata 7 does not emit (Suricata has no ARP detection; the detection method is not decided yet).
 
 ## Environment
-The launcher sources `tools/macdev/env.sh`, which sets macOS-appropriate runtime paths under `~/.azazel-edge-dev` (instead of the appliance's Linux paths), `PYTHONPATH`, and the ollama endpoint. On top of that, `azazel-edge-devstack` points the stack's Mattermost integration at `127.0.0.1:8065` for local dev (the appliance default is `172.16.0.254`).
+The launcher sources `tools/macdev/env.sh`, which sets macOS-appropriate runtime paths under `~/.azazel-edge-dev` (instead of the appliance's Linux paths), `PYTHONPATH`, and the ollama endpoint. On top of that, `azazel-edge-devstack` points the stack's Mattermost integration at `127.0.0.1:18065` for local dev (the appliance default is `172.16.0.254`).
 
 State is kept under `~/.azazel-edge-dev/`:
 - PID files: `~/.azazel-edge-dev/run/devstack/`
@@ -95,7 +95,7 @@ bin/azazel-edge-devstack restart
 
 This is the dev twin of the appliance's `installer/internal/provision_mattermost_workspace.sh` / `provision_mattermost_command.sh`: it creates the `azazelops` admin (system admin, via `mmctl --local` inside the container), the `azazelops` team, the `soc-noc` channel, a bot token, an incoming webhook, and the `/mio` + `/azops` slash commands (callback: `http://host.docker.internal:8084/api/mattermost/command`). Credentials land under `~/.azazel-edge-dev/` (`mattermost-web.env`, `mattermost-credentials.env`, `mattermost-command-token*`); `azazel-edge-devstack` sources `mattermost-web.env` automatically, which switches the web app to full `bot_api` mode. The script is idempotent — re-run it any time (e.g. after wiping the Mattermost volumes).
 
-Log in at `http://localhost:8065` with the credentials from `~/.azazel-edge-dev/mattermost-credentials.env` (default: `azazel.ops@example.local` / `AzazelOps!2026`).
+Log in at `http://localhost:18065` with the credentials from `~/.azazel-edge-dev/mattermost-credentials.env` (user `azazel.ops@example.local`; the password is random, made on the first run and kept in that file).
 
 ## Troubleshooting
 
@@ -119,7 +119,7 @@ Use `bin/azazel-edge-devstack up --all` to (re)start Mattermost along with the r
 The workspace has not been provisioned (or `~/.azazel-edge-dev/mattermost-web.env` is missing). Run `tools/macdev/provision-mattermost.sh`, then `bin/azazel-edge-devstack restart`.
 
 **Port already in use**
-Another process may be bound to a port the stack needs (dashboard, control socket, or Mattermost's `8065`). Check `bin/azazel-edge-devstack status` for what the launcher thinks is running, and use `lsof -i :<port>` to find the conflicting process.
+Another process may be bound to a port the stack needs (dashboard, control socket, or Mattermost's `18065`). Check `bin/azazel-edge-devstack status` for what the launcher thinks is running, and use `lsof -i :<port>` to find the conflicting process.
 
 **Rust build is slow on first run**
 The first `up` builds `rust/azazel-edge-core` in release mode (`cargo build --release`) if no build is present, which can take several minutes. Subsequent runs reuse the existing build and start immediately.

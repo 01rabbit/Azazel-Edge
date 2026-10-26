@@ -98,6 +98,8 @@ fi
 
 if [[ "${ENABLE_MATTERMOST}" == "1" ]]; then
   echo "[ai/5] Start Mattermost stack"
+  # Random database password in a 0600 root file the compose file reads (Edge#477).
+  "${REPO_ROOT}/installer/internal/mattermost_db_secret.sh" /etc/azazel-edge/mattermost-db.env
   (
     cd "${SECURITY_ROOT}"
     "${COMPOSE}" -f docker-compose.mattermost.yml up -d
