@@ -181,10 +181,18 @@ ensure_admin_session() {
     echo "[ERROR] Mattermost admin session incomplete"
     exit 1
   fi
+}
+
+# A device installed by an earlier version may still have the fixed admin
+# password, which is public. The run then ends non-zero with what to do; the
+# password is not changed automatically (Edge#477).
+require_changed_admin_password() {
   if is_former_default_password "${MATTERMOST_PASSWORD}"; then
-    echo "[WARN] The Mattermost admin account (${MATTERMOST_USERNAME}) still uses the fixed default password of" \
-      "earlier versions, which is public. Change it in Mattermost (Profile > Security > Password) and put the" \
-      "new one in MATTERMOST_PASSWORD= in ${CRED_ENV}." >&2
+    echo "[ACTION REQUIRED] The Mattermost admin account (${MATTERMOST_USERNAME}) still uses the fixed default" \
+      "password of earlier versions, which is public. 1) Log in to Mattermost as ${MATTERMOST_USERNAME} and change" \
+      "it (Profile > Security > Password). 2) Put the new password in MATTERMOST_PASSWORD= in ${CRED_ENV}" \
+      "(0600 root). 3) Run this script again." >&2
+    exit 3
   fi
 }
 
@@ -380,15 +388,19 @@ ensure_lan_proxy() {
   local upstream tmp
   upstream="${MATTERMOST_API_URL#*://}"
   upstream="${upstream%%/*}"
+  # Both cases leave Mattermost unreachable from the LAN, so the run fails
+  # instead of reporting success.
   if ! command -v nginx >/dev/null 2>&1; then
-    echo "[WARN] nginx is not installed: Mattermost is reachable only on this host (${MATTERMOST_API_URL})." \
-      "Install the HTTPS proxy (install_https_proxy.sh) and run this script again for LAN access on :${MATTERMOST_PORT_PUBLIC}." >&2
-    return 0
+    echo "[ERROR] nginx is not installed: Mattermost is reachable only on this host (${MATTERMOST_API_URL}), not" \
+      "from the LAN. Install the HTTPS proxy (sudo /opt/azazel-edge/install_https_proxy.sh) and run this script again." >&2
+    exit 1
   fi
   if public_port_taken; then
-    echo "[WARN] Port ${MATTERMOST_PORT_PUBLIC} is held by another process (an earlier Mattermost container?)." \
-      "Recreate the stack with the current docker-compose.mattermost.yml and run this script again." >&2
-    return 0
+    echo "[ERROR] Port ${MATTERMOST_PORT_PUBLIC} is held by another process, most likely the Mattermost container of" \
+      "an earlier install published on every interface (reachable from the WAN). Recreate it with the current" \
+      "compose file (cd /opt/azazel-edge/security && sudo azazel-edge-compose -f docker-compose.mattermost.yml up -d)" \
+      "and run this script again." >&2
+    exit 1
   fi
   tmp="$(mktemp "$(dirname -- "${NGINX_MM_SITE}")/.azazel-edge-mattermost.XXXXXX")"
   if ! render_lan_proxy_site "${upstream}" >"${tmp}" || ! chmod 0644 "${tmp}" || ! mv -f -- "${tmp}" "${NGINX_MM_SITE}"; then
@@ -416,6 +428,7 @@ ensure_bot_token
 ensure_webhook
 write_outputs
 ensure_lan_proxy
+require_changed_admin_password
 
 echo "[OK] Mattermost workspace provisioned"
 echo "admin_credentials=${CRED_ENV}"

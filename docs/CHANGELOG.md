@@ -37,6 +37,20 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Security
 
 - External exposure found by the audit before the device run (Edge#477):
+  - **Action required on a device installed by an earlier version:** if the
+    Mattermost admin account still has the former fixed password,
+    `provision_mattermost_workspace.sh` ends with `[ACTION REQUIRED]` and
+    exit code 3 instead of success (the password is not changed for you).
+    Log in at `http://172.16.0.254:8065` as `azazelops`, change it (Profile >
+    Security > Password), put the new one in `MATTERMOST_PASSWORD=` in
+    `/etc/azazel-edge/mattermost-credentials.env` (0600 root; edit it with
+    `sudoedit`, not on a command line), and run
+    `provision_mattermost_workspace.sh` and `provision_mattermost_command.sh`
+    again.
+  - `provision_mattermost_workspace.sh` also fails (exit 1, with what to do)
+    when Mattermost would not be reachable from the LAN: nginx is not
+    installed, or an earlier container still publishes 8065 on every
+    interface.
   - ntfy listens on `127.0.0.1:8081` only (was every interface, so the WAN
     too) with `auth-default-access: deny-all` (was `read-write`); the
     anonymous read-write grants on the alert and info topics are removed,
@@ -55,8 +69,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     `/etc/azazel-edge/mattermost-db.env` (0600 root) before the stack starts
     and changes an existing database's password to it first. The admin
     password is no longer a fixed default: it is random on first run, kept
-    in `mattermost-credentials.env` (0600 root) and never printed; a device
-    still using the former default gets a warning.
+    in `mattermost-credentials.env` (0600 root) and never printed (see the
+    action required above for a device still using the former default).
   - The Mattermost image is pinned to `12.0.1` (was `latest`). It exists for
     `linux/amd64` only; on a Pi it runs under qemu-user emulation, which may
     not work on a 16K-page kernel (not shown on the device).

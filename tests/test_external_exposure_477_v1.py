@@ -441,8 +441,8 @@ def test_former_default_admin_password_is_detected_by_hash_only():
 
     assert check("fake-old-default")
     assert not check("something-else")
-    # The warning names the file, never the password.
-    warn = re.search(r'echo "\[WARN\] The Mattermost admin account.*?>&2', src, re.S)
+    # The message names the file, never the password.
+    warn = re.search(r'echo "\[ACTION REQUIRED\] The Mattermost admin account.*?>&2', src, re.S)
     assert warn and "MATTERMOST_PASSWORD}" not in warn.group(0)
 
 
@@ -519,11 +519,11 @@ def test_lan_proxy_is_enabled_and_nginx_reloaded(tmp_path):
     assert "reload nginx.service" in (tmp_path / "systemctl.log").read_text(encoding="utf-8")
 
 
-def test_lan_proxy_waits_while_an_old_container_holds_the_port(tmp_path):
+def test_lan_proxy_fails_while_an_old_container_holds_the_port(tmp_path):
     held = 'LISTEN 0 4096 0.0.0.0:8065 0.0.0.0:* users:(("docker-proxy",pid=7,fd=4))'
     res = _run_lan_proxy(tmp_path, held)
-    assert res.returncode == 0, res.stderr
-    assert "[WARN] Port 8065 is held" in res.stderr
+    assert res.returncode != 0
+    assert "[ERROR] Port 8065 is held" in res.stderr and "up -d" in res.stderr
     assert not (tmp_path / "sites-enabled" / "azazel-edge-mattermost.conf").exists()
 
     # nginx itself on the port is not "held" (a re-run).
@@ -539,3 +539,224 @@ def test_lan_proxy_rejected_by_nginx_is_left_disabled(tmp_path):
     assert res.returncode != 0
     assert not (tmp_path / "sites-enabled" / "azazel-edge-mattermost.conf").exists()
     assert not (tmp_path / "systemctl.log").exists()
+
+
+# ------------------------------------------- install_ntfy.sh, run with stubs
+#
+# The script runs as written except that its absolute /etc and /var paths
+# are moved under tmp_path and the root check is skipped; apt-get,
+# systemctl, ntfy, curl, chown and getent are stubs that log what they get.
+
+NEW_TOKEN = "tk_fakenewtoken0123456789abcd"
+OLD_TOKEN = "tk_fakeoldtoken0123456789abcd"
+
+
+def _run_install_ntfy(tmp_path: Path, *, mode: str = "", web_group: bool = True, old_token: bool = False):
+    root = tmp_path / "root"
+    for d in ("etc/ntfy", "var/lib/ntfy"):
+        (root / d).mkdir(parents=True)
+    (root / "var/lib/ntfy/user.db").write_text("", encoding="utf-8")
+    if old_token:
+        (root / "etc/azazel-edge").mkdir(mode=0o750)
+        (root / "etc/azazel-edge/ntfy.token").write_text(OLD_TOKEN + "\n", encoding="utf-8")
+    log = tmp_path / "calls.log"
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    stubs = {
+        "apt-get": "exit 0",
+        "systemctl": f'echo "systemctl $*" >> {log}',
+        "chown": f'echo "chown $*" >> {log}',
+        "getent": "exit 0" if web_group else "exit 2",
+        "ntfy": f"""echo "ntfy $*" >> {log}
+mode='{mode}'
+case "$1 $2" in
+  "access everyone")
+    if [[ $mode == anon_left ]]; then echo "- read-write access to topic azg-alert-critical"
+    else echo "- no access to any (other) topics (server config)"; fi ;;
+  "access azazel-notify") [[ $mode == grant_fails ]] && exit 1 ;;
+  "token add") echo "token {NEW_TOKEN} created for user azazel-notify, never expires" ;;
+esac
+exit 0""",
+        "curl": f"""echo "curl $*" >> {log}
+mode='{mode}'
+args="$*"
+if [[ $args == *"/v1/health"* ]]; then echo '{{"healthy":true}}'; exit 0; fi
+if [[ $args == *"-H @-"* ]]; then
+  hdr="$(cat)"
+  echo "stdin $hdr" >> {log}.stdin
+  if [[ $hdr == "Authorization: Bearer {NEW_TOKEN}" && $mode != auth_401 ]]; then printf 200; else printf 401; fi
+  exit 0
+fi
+if [[ $mode == anon_200 ]]; then printf 200; else printf 403; fi""",
+    }
+    for name, body in stubs.items():
+        f = bindir / name
+        f.write_text("#!/bin/bash\n" + body + "\n", encoding="utf-8")
+        f.chmod(0o755)
+    src = NTFY.read_text(encoding="utf-8")
+    src = src.replace('if [[ "${EUID}" -ne 0 ]]; then', "if false; then", 1)
+    src = src.replace("/etc/", f"{root}/etc/").replace("/var/", f"{root}/var/")
+    script = tmp_path / "install_ntfy.sh"
+    script.write_text(src, encoding="utf-8")
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}")
+    res = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env)
+    calls = log.read_text(encoding="utf-8") if log.exists() else ""
+    return res, root, calls
+
+
+def test_ntfy_install_succeeds_with_a_private_token(tmp_path):
+    res, root, calls = _run_install_ntfy(tmp_path)
+    assert res.returncode == 0, res.stdout + res.stderr
+    for rel in ("etc/azazel-edge/ntfy.token", "etc/azazel/ntfy.token"):
+        tok = root / rel
+        assert tok.read_text(encoding="utf-8") == NEW_TOKEN + "\n"
+        assert stat.S_IMODE(tok.stat().st_mode) == 0o640
+        assert f"chown root:azazel-web {tok}" in calls
+    # The token is never in the output and never on a command line.
+    assert NEW_TOKEN not in res.stdout + res.stderr
+    assert NEW_TOKEN not in calls
+    assert f"Authorization: Bearer {NEW_TOKEN}" in (tmp_path / "calls.log.stdin").read_text(encoding="utf-8")
+    assert "ntfy access --reset everyone azg-alert-critical" in calls
+    assert "ntfy access --reset everyone azg-info-status" in calls
+    assert re.search(r"^ntfy access everyone \S+ (rw|read|write|read-write)", calls, re.M) is None
+
+
+def test_ntfy_token_is_0600_root_without_the_web_group(tmp_path):
+    res, root, calls = _run_install_ntfy(tmp_path, web_group=False)
+    assert res.returncode == 0, res.stdout + res.stderr
+    for rel in ("etc/azazel-edge/ntfy.token", "etc/azazel/ntfy.token"):
+        tok = root / rel
+        assert stat.S_IMODE(tok.stat().st_mode) == 0o600
+        assert f"chown root:root {tok}" in calls
+
+
+def test_ntfy_install_revokes_the_previous_token(tmp_path):
+    res, _root, calls = _run_install_ntfy(tmp_path, old_token=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert f"ntfy token remove azazel-notify {OLD_TOKEN}" in calls
+    assert OLD_TOKEN not in res.stdout + res.stderr
+
+
+@pytest.mark.parametrize(
+    "mode, why",
+    [
+        ("anon_left", "anonymous grant left in the auth database"),
+        ("anon_200", "anonymous read answered 200"),
+        ("auth_401", "the Edge token refused"),
+        ("grant_fails", "the Edge account grant failed"),
+    ],
+)
+def test_ntfy_install_fails_closed(tmp_path, mode, why):
+    res, _root, _calls = _run_install_ntfy(tmp_path, mode=mode)
+    assert res.returncode != 0, why
+    assert "Service healthy" not in res.stdout, why
+    assert NEW_TOKEN not in res.stdout + res.stderr
+
+
+# ------------------------------- mattermost_db_secret.sh, failure paths
+
+
+def _fake_docker_volume(tmp_path: Path, *, psql_fails: bool) -> Path:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "docker.argv"
+    script = f"""#!/bin/bash
+printf '%s\\n' "$*" >> {log}
+case "$1" in
+  info) exit 0 ;;
+  container) exit 1 ;;
+  volume) echo security_mattermost_db ;;
+  exec)
+    if [[ "$2" == -i ]]; then cat >/dev/null; {"exit 2" if psql_fails else "exit 0"}; fi
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+"""
+    (bindir / "docker").write_text(script, encoding="utf-8")
+    (bindir / "docker").chmod(0o755)
+    return bindir
+
+
+@pytest.mark.parametrize("psql_fails", [False, True])
+def test_db_secret_volume_only_uses_and_removes_a_temporary_container(tmp_path, psql_fails):
+    bindir = _fake_docker_volume(tmp_path, psql_fails=psql_fails)
+    env_file = tmp_path / "mattermost-db.env"
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}")
+    res = subprocess.run(["bash", str(DB_SECRET), str(env_file)], capture_output=True, text=True, env=env)
+    argv = (tmp_path / "docker.argv").read_text(encoding="utf-8")
+    assert "run -d --name azazel-edge-mm-db-password-change --network none -v security_mattermost_db:" in argv
+    assert argv.rstrip().splitlines()[-1] == "rm -f azazel-edge-mm-db-password-change"
+    if psql_fails:
+        assert res.returncode != 0
+        assert not env_file.exists()
+    else:
+        assert res.returncode == 0, res.stderr
+        assert HEX48.match(_password(env_file))
+        assert _password(env_file) not in argv
+
+
+def test_db_secret_waits_with_a_real_query():
+    src = DB_SECRET.read_text(encoding="utf-8")
+    wait = _function(DB_SECRET, "wait_ready")
+    code = "\n".join(l for l in wait.splitlines() if not l.strip().startswith("#"))
+    assert 'psql -q -tA -U "${DB_USER}" -d "${DB_NAME}" -c \'select 1\'' in code
+    assert "pg_isready" not in code
+    # Every password change is checked; none is allowed to fail silently.
+    for line in re.findall(r"^.*set_db_password .*$", src, re.M):
+        if line.startswith("set_db_password()"):
+            continue
+        assert "die" in line or "ok=0" in line, line
+
+
+# ------------------------------- provision: no success without LAN access
+
+
+def test_lan_proxy_site_trusts_no_client_supplied_address():
+    script = 'MATTERMOST_PORT_PUBLIC=8065\nMATTERMOST_LAN_CIDR="172.16.0.0/24"\n' + _lan_proxy_block() + \
+        "\nrender_lan_proxy_site 127.0.0.1:18065\n"
+    site = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout
+    # allow/deny must see the real peer, never an address from a header.
+    for word in ("real_ip", "set_real_ip_from", "real_ip_header", "realip"):
+        assert word not in site
+
+
+def test_lan_proxy_fails_without_nginx(tmp_path):
+    import shutil
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for tool in ("bash", "dirname", "mktemp", "rm", "cat"):
+        path = shutil.which(tool)
+        if path:
+            (bindir / tool).symlink_to(path)
+    if shutil.which("nginx", path=str(bindir)):
+        pytest.skip("nginx on PATH")
+    script = (
+        "MATTERMOST_API_URL=http://127.0.0.1:18065\nMATTERMOST_PORT_PUBLIC=8065\n"
+        + _lan_proxy_block() + "\nensure_lan_proxy\necho REACHED\n"
+    )
+    res = subprocess.run([str(bindir / "bash"), "-c", script], capture_output=True, text=True,
+                         env={"PATH": str(bindir)})
+    assert res.returncode != 0
+    assert "REACHED" not in res.stdout
+    assert "install_https_proxy.sh" in res.stderr
+
+
+def test_provision_ends_non_zero_while_the_former_admin_password_is_in_use():
+    src = PROVISION.read_text(encoding="utf-8")
+    tail = src[src.index("\nresolve_admin_password\n"):]
+    assert tail.index("require_changed_admin_password") < tail.index('echo "[OK] Mattermost workspace provisioned"')
+    func = _function(PROVISION, "require_changed_admin_password") + _function(PROVISION, "is_former_default_password")
+    fake_hash = hashlib.sha256(b"fake-old-default").hexdigest()
+    base = f'FORMER_DEFAULT_PASSWORD_SHA256="{fake_hash}"\nMATTERMOST_USERNAME=u\nCRED_ENV=/x/cred.env\n' + func
+
+    res = subprocess.run(["bash", "-c", base + 'MATTERMOST_PASSWORD="fake-old-default"\nrequire_changed_admin_password\necho OK\n'],
+                         capture_output=True, text=True)
+    assert res.returncode == 3
+    assert "OK" not in res.stdout
+    assert "[ACTION REQUIRED]" in res.stderr and "/x/cred.env" in res.stderr
+    assert "fake-old-default" not in res.stderr  # the password itself is not shown
+
+    res = subprocess.run(["bash", "-c", base + 'MATTERMOST_PASSWORD="new-random"\nrequire_changed_admin_password\necho OK\n'],
+                         capture_output=True, text=True)
+    assert res.returncode == 0 and res.stdout == "OK\n"

@@ -317,12 +317,20 @@ sudo installer/internal/provision_mattermost_workspace.sh
 公開範囲（Edge#477）:
 - コンテナは `127.0.0.1:18065` にだけ公開する（Docker が全インターフェースに公開したポートはホストのファイアウォールを通らず、WAN からも届いていた）。
 - LAN からは nginx（`provision_mattermost_workspace.sh` が `/etc/nginx/sites-available/azazel-edge-mattermost.conf` を書く）経由で `http://172.16.0.254:8065` に届く。nginx は `172.16.0.0/24` と loopback だけを通し、それ以外には 403 を返す。nginx が無い場合は loopback からだけ使える。
-- 以前の版で全インターフェースに公開したコンテナが 8065 を握っている間は nginx の設定を入れずに警告する。新しい compose ファイルでコンテナを作り直してから `provision_mattermost_workspace.sh` をもう一度実行する。
+- 以前の版で全インターフェースに公開したコンテナが 8065 を握っている間は nginx の設定を入れず、エラーで終わる。新しい compose ファイルでコンテナを作り直してから `provision_mattermost_workspace.sh` をもう一度実行する。
+- このリポジトリはホストの nftables に input の規則を書かない（`azazel_internal` は nat と forward だけ）。OS の nftables で input を絞っている機器では、LAN から 8065/tcp（nginx）を許可する必要がある。実機で確認する。
 
 資格情報（Edge#477）:
 - DB パスワード: `/etc/azazel-edge/mattermost-db.env`（0600 root）。以前の固定値で作られた DB は、`mattermost_db_secret.sh` が新しいランダム値に置き換えてからファイルを書く。
 - 管理者パスワード: 初回にランダム生成して `/etc/azazel-edge/mattermost-credentials.env`（0600 root）の `MATTERMOST_PASSWORD=` に保存する。画面やログには出さない。確認はこのファイルを root で読む。
-- 以前の版の固定の管理者パスワードのままの機器では、`provision_mattermost_workspace.sh` が警告を出す。Mattermost の画面（Profile > Security > Password）で変更し、同じ値を上のファイルの `MATTERMOST_PASSWORD=` に書く。
+
+> **要対応（以前の版で導入した機器）**: 管理者パスワードが以前の版の固定値のままだと、`provision_mattermost_workspace.sh` は `[ACTION REQUIRED]` を出して終了コード 3 で終わる（成功表示はしない。パスワードは自動では変えない）。次の手順で変える。
+>
+> 1. LAN の端末から `http://172.16.0.254:8065` に管理者（`azazelops`）でログインし、Profile > Security > Password で新しいパスワードに変える。
+> 2. 新しいパスワードを `/etc/azazel-edge/mattermost-credentials.env`（0600 root）の `MATTERMOST_PASSWORD=` に書く（`sudoedit` などで。コマンドラインの引数やシェル履歴に残さない）。
+> 3. `sudo /opt/azazel-edge/provision_mattermost_workspace.sh` を実行し、`[OK]` で終わることを確かめる。続けて `sudo /opt/azazel-edge/provision_mattermost_command.sh` を実行する。
+
+- `provision_mattermost_workspace.sh` は、LAN から Mattermost に届かない状態では成功表示をせず終了コード 1 で終わる: nginx が入っていない場合（`install_https_proxy.sh` を実行してから再実行）、以前のコンテナが 8065 を全インターフェースに公開したままの場合（新しい compose で `up -d` してから再実行）。
 
 ### 11.2 Mattermost slash command を導入
 

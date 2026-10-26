@@ -57,7 +57,9 @@ have_docker() { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
 wait_ready() {
   local i
   for i in $(seq 1 60); do
-    if docker exec "$1" pg_isready -q -U "${DB_USER}" -d "${DB_NAME}" >/dev/null 2>&1; then
+    # A query as the Mattermost role on its database: it shows that the
+    # role and the database answer, which a bare readiness probe does not.
+    if docker exec "$1" psql -q -tA -U "${DB_USER}" -d "${DB_NAME}" -c 'select 1' >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
