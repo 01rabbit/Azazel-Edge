@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="{{ ui_lang if ui_lang in ('ja', 'en') else 'en' }}" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="referrer" content="no-referrer">
+    <title>Azazel-Edge Touch</title>
+    <link rel="stylesheet" href="/static/touch.css?v={{ asset_version }}">
+</head>
+<body class="t-boot">
+<svg class="t-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M7 12.5l3.2 3.2L17 9" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-watch" viewBox="0 0 24 24"><path d="M12 3L22 20H2z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><path d="M12 9.5v5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><circle cx="12" cy="17.3" r="1.4" fill="currentColor"/></symbol>
+    <symbol id="i-crit" viewBox="0 0 24 24"><path d="M8 2.5h8L21.5 8v8L16 21.5H8L2.5 16V8z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><path d="M9 9l6 6M15 9l-6 6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-unknown" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-dasharray="3.2 2.6"/><path d="M9.3 9.4a2.8 2.8 0 1 1 3.8 2.6c-.8.3-1.1.9-1.1 1.7v.6" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.3" fill="currentColor"/></symbol>
+    <symbol id="i-stale" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 6.5V12l3.8 2.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-neutral" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M7.5 12h9" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-status" viewBox="0 0 24 24"><path d="M12 2.5l8 3v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10v-6z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M8.5 12l2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-alerts" viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.8 2H4.2z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M10 21.2h4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-network" viewBox="0 0 24 24"><path d="M2.5 9.5a14 14 0 0 1 19 0M5.8 13a9.2 9.2 0 0 1 12.4 0M9.1 16.4a4.4 4.4 0 0 1 5.8 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="19.6" r="1.6" fill="currentColor"/></symbol>
+    <symbol id="i-ops" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="16" cy="6" r="2.2" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="10" cy="12" r="2.2" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="18" cy="18" r="2.2" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M5.5 18.5l2.1-2.1M16.4 7.6l2.1-2.1" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.5" y="10.5" width="15" height="10.5" rx="2" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M1.8 12S5.6 5 12 5s10.2 7 10.2 7-3.8 7-10.2 7S1.8 12 1.8 12z" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10.2 7 10.2 7a17 17 0 0 1-3.1 3.9M6.4 6.6C3.4 8.4 1.8 12 1.8 12S5.6 19 12 19a9.8 9.8 0 0 0 4.2-.9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M5 15l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M5 9l7 7 7-7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-ai" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 2.5V6M9 12h.01M15 12h.01M9 15.5h6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+</svg>
+
+<div class="t-app" id="tApp">
+    <header class="t-bar" role="banner">
+        <div class="t-brand"><span class="t-brand-name">AZAZEL-EDGE</span><span class="t-brand-sub" data-i18n="touch.brand_sub">{{ tr('touch.brand_sub', 'Touch console') }}</span></div>
+        <div class="t-chip" id="tLinkChip" role="status" aria-live="polite"><svg class="t-ico"><use href="#i-unknown"/></svg><span id="tLinkText">{{ tr('touch.link_connecting', 'Connecting') }}</span></div>
+        <div class="t-chip" id="tFreshChip" role="status"><svg class="t-ico"><use href="#i-stale"/></svg><span id="tFreshText">—</span></div>
+        <div class="t-chip t-chip-dry" id="tDryChip" hidden><span id="tDryText">DRY RUN</span></div>
+        <div class="t-clock" id="tClock">--:--</div>
+    </header>
+
+    <nav class="t-tabs" role="tablist" aria-label="Azazel-Edge">
+        <button type="button" class="t-tab" role="tab" id="tab-status" data-tab="status" aria-controls="pane-status" aria-selected="true"><svg class="t-ico"><use href="#i-status"/></svg><span data-i18n="touch.tab_status">{{ tr('touch.tab_status', 'Status') }}</span></button>
+        <button type="button" class="t-tab" role="tab" id="tab-alerts" data-tab="alerts" aria-controls="pane-alerts" aria-selected="false"><svg class="t-ico"><use href="#i-alerts"/></svg><span data-i18n="touch.tab_alerts">{{ tr('touch.tab_alerts', 'Alerts') }}</span><b class="t-tab-badge" id="tAlertBadge" hidden>0</b></button>
+        <button type="button" class="t-tab" role="tab" id="tab-network" data-tab="network" aria-controls="pane-network" aria-selected="false"><svg class="t-ico"><use href="#i-network"/></svg><span data-i18n="touch.tab_network">{{ tr('touch.tab_network', 'Network') }}</span></button>
+        <button type="button" class="t-tab" role="tab" id="tab-ops" data-tab="ops" aria-controls="pane-ops" aria-selected="false"><svg class="t-ico"><use href="#i-ops"/></svg><span data-i18n="touch.tab_ops">{{ tr('touch.tab_ops', 'Operate') }}</span></button>
+        <button type="button" class="t-tab" role="tab" id="tab-settings" data-tab="settings" aria-controls="pane-settings" aria-selected="false"><svg class="t-ico"><use href="#i-settings"/></svg><span data-i18n="touch.tab_settings">{{ tr('touch.tab_settings', 'Settings') }}</span></button>
+    </nav>
+
+    <main class="t-main">
+        <div class="t-banners" id="tBanners" aria-live="assertive"></div>
+
+        <!-- STATUS -->
+        <section class="t-pane t-pane-status" id="pane-status" role="tabpanel" aria-labelledby="tab-status">
+            <article class="t-card t-card-def tone-unknown" id="cardDef">
+                <span class="t-kicker" data-i18n="touch.defensive_state">{{ tr('touch.defensive_state', 'Defensive State') }}</span>
+                <div class="t-big"><svg class="t-ico t-ico-big"><use href="#i-unknown"/></svg><strong id="defValue">—</strong></div>
+                <p class="t-sub" id="defSub">{{ tr('touch.waiting', 'Waiting for data') }}</p>
+                <p class="t-reason" id="defRelease"></p>
+                <p class="t-foot" data-i18n="touch.def_authority">{{ tr('touch.def_authority', 'Selected by the deterministic arbiter. AI does not set it.') }}</p>
+            </article>
+            <article class="t-card t-card-soc tone-unknown" id="cardSoc">
+                <span class="t-kicker">SOC</span>
+                <div class="t-mid"><svg class="t-ico"><use href="#i-unknown"/></svg><strong id="socValue">—</strong></div>
+                <p class="t-sub" id="socSub" data-i18n="touch.soc_question">{{ tr('touch.soc_question', 'Threat evidence') }}</p>
+                <p class="t-reason" id="socReason"></p>
+            </article>
+            <article class="t-card t-card-noc tone-unknown" id="cardNoc">
+                <span class="t-kicker">NOC</span>
+                <div class="t-mid"><svg class="t-ico"><use href="#i-unknown"/></svg><strong id="nocValue">—</strong></div>
+                <p class="t-sub" id="nocSub" data-i18n="touch.noc_question">{{ tr('touch.noc_question', 'Service and path') }}</p>
+                <p class="t-reason" id="nocReason"></p>
+            </article>
+            <article class="t-card t-card-p0 tone-unknown" id="cardP0">
+                <span class="t-kicker" data-i18n="touch.p0_label">{{ tr('touch.p0_label', 'P0 · SOC critical') }}</span>
+                <div class="t-mid"><svg class="t-ico"><use href="#i-unknown"/></svg><strong id="p0Value">—</strong></div>
+                <p class="t-sub" id="p0Sub">—</p>
+            </article>
+            <article class="t-card t-card-ai tone-unknown" id="cardAi">
+                <span class="t-kicker">M.I.O. (AI)</span>
+                <div class="t-mid"><svg class="t-ico"><use href="#i-ai"/></svg><strong id="aiValue">—</strong></div>
+                <p class="t-sub" data-i18n="touch.ai_advisory_only">{{ tr('touch.ai_advisory_only', 'Advisory only · not decision authority') }}</p>
+            </article>
+            <article class="t-tile tone-neutral" id="tileTrace">
+                <span class="t-kicker" data-i18n="touch.trace_label">{{ tr('touch.trace_label', 'Decision record (audit)') }}</span>
+                <strong id="traceValue">—</strong>
+                <span class="t-tile-sub" id="traceSub">—</span>
+            </article>
+            <article class="t-tile tone-unknown" id="tileUplink">
+                <span class="t-kicker" data-i18n="touch.uplink_label">{{ tr('touch.uplink_label', 'Uplink') }}</span>
+                <strong id="uplinkValue">—</strong>
+                <span class="t-tile-sub" id="uplinkSub">—</span>
+            </article>
+            <article class="t-tile tone-unknown" id="tileFresh">
+                <span class="t-kicker" data-i18n="touch.freshness_label">{{ tr('touch.freshness_label', 'Snapshot age') }}</span>
+                <strong id="freshValue">—</strong>
+                <span class="t-tile-sub" id="freshSub">—</span>
+            </article>
+            <article class="t-mio" id="mioStrip">
+                <span class="t-mio-label" data-i18n="touch.mio_label">{{ tr('touch.mio_label', 'M.I.O. advisory — AI IS NOT DECISION AUTHORITY') }}</span>
+                <p id="mioText">—</p>
+            </article>
+        </section>
+
+        <!-- ALERTS -->
+        <section class="t-pane t-pane-alerts" id="pane-alerts" role="tabpanel" aria-labelledby="tab-alerts" hidden>
+            <div class="t-counts">
+                <article class="t-count tone-unknown" id="cntP0"><span class="t-kicker" data-i18n="touch.p0_short">{{ tr('touch.p0_short', 'P0 critical') }}</span><strong>—</strong></article>
+                <article class="t-count tone-unknown" id="cntNow"><span class="t-kicker" data-i18n="touch.queue_now">{{ tr('touch.queue_now', 'Now') }}</span><strong>—</strong></article>
+                <article class="t-count tone-unknown" id="cntWatch"><span class="t-kicker" data-i18n="touch.queue_watch">{{ tr('touch.queue_watch', 'Watch') }}</span><strong>—</strong></article>
+                <article class="t-count tone-unknown" id="cntBacklog"><span class="t-kicker" data-i18n="touch.queue_backlog">{{ tr('touch.queue_backlog', 'Backlog') }}</span><strong>—</strong></article>
+            </div>
+            <div class="t-listbox">
+                <ol class="t-list" id="alertList"></ol>
+                <div class="t-pager">
+                    <button type="button" class="t-btn t-btn-icon" id="alertPrev" aria-label="{{ tr('touch.page_prev', 'Previous page') }}"><svg class="t-ico"><use href="#i-up"/></svg></button>
+                    <span id="alertPage">—</span>
+                    <button type="button" class="t-btn t-btn-icon" id="alertNext" aria-label="{{ tr('touch.page_next', 'Next page') }}"><svg class="t-ico"><use href="#i-down"/></svg></button>
+                </div>
+            </div>
+        </section>
+
+        <!-- NETWORK -->
+        <section class="t-pane t-pane-network" id="pane-network" role="tabpanel" aria-labelledby="tab-network" hidden>
+            <article class="t-panel">
+                <h2 data-i18n="touch.uplink_label">{{ tr('touch.uplink_label', 'Uplink') }}</h2>
+                <dl class="t-facts" id="netFacts"></dl>
+            </article>
+            <article class="t-panel t-wifi">
+                <div class="t-panel-head">
+                    <h2>Wi-Fi</h2>
+                    <button type="button" class="t-btn t-btn-primary" id="wifiScanBtn" data-i18n="touch.wifi_scan">{{ tr('touch.wifi_scan', 'Scan') }}</button>
+                </div>
+                <p class="t-note" id="wifiNote" data-i18n="touch.wifi_hint">{{ tr('touch.wifi_hint', 'Scan, then tap a network to connect.') }}</p>
+                <div class="t-listbox">
+                    <ol class="t-list t-aplist" id="apList"></ol>
+                    <div class="t-pager">
+                        <button type="button" class="t-btn t-btn-icon" id="apPrev" aria-label="{{ tr('touch.page_prev', 'Previous page') }}"><svg class="t-ico"><use href="#i-up"/></svg></button>
+                        <span id="apPage">—</span>
+                        <button type="button" class="t-btn t-btn-icon" id="apNext" aria-label="{{ tr('touch.page_next', 'Next page') }}"><svg class="t-ico"><use href="#i-down"/></svg></button>
+                    </div>
+                </div>
+            </article>
+        </section>
+
+        <!-- OPERATE -->
+        <section class="t-pane t-pane-ops" id="pane-ops" role="tabpanel" aria-labelledby="tab-ops" hidden>
+            <article class="t-panel t-runbook">
+                <h2 data-i18n="touch.runbook_title">{{ tr('touch.runbook_title', 'Suggested runbook') }}</h2>
+                <p class="t-rb-name" id="rbName">—</p>
+                <p class="t-rb-meta" id="rbMeta">—</p>
+                <ol class="t-rb-steps" id="rbSteps"></ol>
+                <div class="t-row">
+                    <button type="button" class="t-btn" id="rbPreviewBtn" data-i18n="touch.runbook_preview">{{ tr('touch.runbook_preview', 'Preview (dry run)') }}</button>
+                    <button type="button" class="t-btn t-btn-caution" id="rbExecBtn" data-i18n="touch.runbook_execute">{{ tr('touch.runbook_execute', 'Execute…') }}</button>
+                </div>
+                <p class="t-note" id="rbNote">—</p>
+            </article>
+            <article class="t-panel t-results">
+                <h2 data-i18n="touch.recent_results">{{ tr('touch.recent_results', 'Recent results (this screen only)') }}</h2>
+                <ol class="t-list t-reslist" id="resList"></ol>
+            </article>
+        </section>
+
+        <!-- SETTINGS -->
+        <section class="t-pane t-pane-settings" id="pane-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
+            <article class="t-panel">
+                <h2 data-i18n="touch.language">{{ tr('touch.language', 'Language') }}</h2>
+                <div class="t-row">
+                    <button type="button" class="t-btn t-seg" data-lang="ja" lang="ja">日本語</button>
+                    <button type="button" class="t-btn t-seg" data-lang="en" lang="en">English</button>
+                </div>
+                <h2 data-i18n="touch.theme">{{ tr('touch.theme', 'Display') }}</h2>
+                <div class="t-row">
+                    <button type="button" class="t-btn t-seg" data-theme-choice="dark" data-i18n="touch.theme_dark">{{ tr('touch.theme_dark', 'Dark (indoor)') }}</button>
+                    <button type="button" class="t-btn t-seg" data-theme-choice="light" data-i18n="touch.theme_light">{{ tr('touch.theme_light', 'Light (outdoor)') }}</button>
+                </div>
+            </article>
+            <article class="t-panel">
+                <h2><svg class="t-ico"><use href="#i-lock"/></svg> <span data-i18n="touch.token_title">{{ tr('touch.token_title', 'Access token') }}</span></h2>
+                <p class="t-big-line" id="tokenState">—</p>
+                <p class="t-note" data-i18n="touch.token_note">{{ tr('touch.token_note', 'Kept in this page’s memory only. Not stored, not put in the URL. Reloading the page forgets it.') }}</p>
+                <div class="t-row">
+                    <button type="button" class="t-btn t-btn-primary" id="tokenEnterBtn" data-i18n="touch.token_enter">{{ tr('touch.token_enter', 'Enter token') }}</button>
+                    <button type="button" class="t-btn" id="tokenForgetBtn" data-i18n="touch.token_forget">{{ tr('touch.token_forget', 'Forget token') }}</button>
+                </div>
+            </article>
+            <article class="t-panel t-about">
+                <h2 data-i18n="touch.about_title">{{ tr('touch.about_title', 'About this screen') }}</h2>
+                <p data-i18n="touch.about_authority">{{ tr('touch.about_authority', 'AI IS NOT DECISION AUTHORITY. The Defensive State comes from the deterministic arbiter; M.I.O. output is advice only.') }}</p>
+                <p data-i18n="touch.about_scope">{{ tr('touch.about_scope', 'This screen uses the existing Web UI API and roles only. It cannot do anything the API does not already allow for your token.') }}</p>
+            </article>
+        </section>
+    </main>
+</div>
+
+<!-- Confirmation / result sheet -->
+<div class="t-sheet" id="confirmSheet" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" hidden>
+    <div class="t-sheet-panel">
+        <h2 id="confirmTitle">—</h2>
+        <dl class="t-facts" id="confirmFacts"></dl>
+        <div class="t-result" id="confirmResult" hidden><svg class="t-ico t-ico-big"><use href="#i-unknown"/></svg><div><strong id="confirmResultTitle">—</strong><p id="confirmResultDetail"></p></div></div>
+        <div class="t-row t-sheet-actions">
+            <button type="button" class="t-btn t-btn-lg" id="confirmCancel">{{ tr('touch.cancel', 'Cancel') }}</button>
+            <button type="button" class="t-btn t-btn-lg t-hold" id="confirmHold"><span class="t-hold-fill"></span><span class="t-hold-label" data-i18n="touch.hold_to_run">{{ tr('touch.hold_to_run', 'Hold to run') }}</span></button>
+        </div>
+    </div>
+</div>
+
+<!-- On-screen keyboard sheet (token / Wi-Fi passphrase) -->
+<div class="t-sheet t-sheet-kb" id="kbSheet" role="dialog" aria-modal="true" aria-labelledby="kbTitle" hidden>
+    <div class="t-sheet-panel">
+        <div class="t-kb-head">
+            <h2 id="kbTitle">—</h2>
+            <p class="t-note" id="kbSub"></p>
+        </div>
+        <div class="t-kb-field">
+            <output class="t-kb-value" id="kbValue" aria-live="off"></output>
+            <button type="button" class="t-btn t-btn-icon" id="kbReveal" aria-pressed="false" aria-label="{{ tr('touch.kb_show', 'Show') }}"><svg class="t-ico"><use href="#i-eye"/></svg></button>
+        </div>
+        <div class="t-kb" id="kbKeys" role="group" aria-label="{{ tr('touch.kb_label', 'On-screen keyboard') }}"></div>
+        <div class="t-row t-sheet-actions">
+            <button type="button" class="t-btn t-btn-lg" id="kbCancel" data-i18n="touch.cancel">{{ tr('touch.cancel', 'Cancel') }}</button>
+            <button type="button" class="t-btn t-seg t-kb-opt" id="kbPersist" aria-pressed="false" hidden data-i18n="touch.wifi_persist">{{ tr('touch.wifi_persist', 'Remember network') }}</button>
+            <button type="button" class="t-btn t-btn-lg t-btn-primary" id="kbSubmit">—</button>
+            <button type="button" class="t-btn t-btn-lg t-hold" id="kbHold" hidden><span class="t-hold-fill"></span><span class="t-hold-label" data-i18n="touch.hold_to_connect">{{ tr('touch.hold_to_connect', 'Hold to connect') }}</span></button>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.AZAZEL_TOUCH = {
+        lang: {{ (ui_lang if ui_lang in ('ja', 'en') else 'en')|tojson }},
+        catalogs: {{ touch_catalogs|tojson }},
+        pollMs: {{ ui_poll_ms|tojson }}
+    };
+</script>
+<script src="/static/touch.js?v={{ asset_version }}"></script>
+</body>
+</html>

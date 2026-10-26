@@ -52,6 +52,18 @@ jobs:
         run: |
           find bin -maxdepth 1 -type f -exec chmod +x {} +
 
+      # The touch console's and SENTINEL console's JS logic tests need node;
+      # without it the Python wrappers skip them, so run them here explicitly.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: JS logic tests (touch console, SENTINEL console)
+        run: |
+          node tests/touch_console_logic.test.js
+          node tests/sentinel_console_logic.test.js
+
       - name: Run tests
         run: |
           . .venv/bin/activate

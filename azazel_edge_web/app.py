@@ -5192,6 +5192,23 @@ def ops_comm():
     return render_template("ops_comm.html", mattermost_open_url=open_url)
 
 
+@app.route("/touch")
+def touch_console():
+    """Touch-panel console for a kiosk display (Raspberry Pi Touch Display 2).
+
+    A static shell like ``/`` and ``/booth-focus``: every reading and every
+    operation goes through the existing token-gated API endpoints with the
+    existing roles. The ja/en ``touch.*`` strings are both embedded so the
+    language can change without a reload (the token is held in page memory
+    only and a reload would drop it).
+    """
+    catalogs = {
+        lang: {key: value for key, value in i18n_ui_catalog(lang).items() if key.startswith("touch.")}
+        for lang in ("ja", "en")
+    }
+    return render_template("touch.html", touch_catalogs=catalogs)
+
+
 @app.route("/api/state")
 @require_token(ok_payload=None)
 def api_state():

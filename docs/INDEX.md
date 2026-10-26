@@ -96,6 +96,7 @@ Historical planning and issue-body artifacts retained for traceability. These do
 | [OPERATOR_GUIDE.md](OPERATOR_GUIDE.md) | Shelter staff / volunteers | Operator guide for non-expert field teams (EN) | 2026-05-13 |
 | [OPERATOR_GUIDE_JA.md](OPERATOR_GUIDE_JA.md) | Shelter staff / volunteers | 日本語運用マニュアル（非専門者向け） | 2026-05-13 |
 | [STATUS_CARD.md](STATUS_CARD.md) | Shelter wall / laminated | e-Paper status quick-reference card | 2026-05-13 |
+| [TOUCH_CONSOLE_KIOSK.md](TOUCH_CONSOLE_KIOSK.md) | Deployer / operators | Touch-panel console (`/touch`): screens, operations and confirmations, secrets, Chromium kiosk in the user session (EN, JA summary) | 2026-10-27 |
 | [PHYSICAL_SETUP_GUIDE.md](PHYSICAL_SETUP_GUIDE.md) | Deployer | Hardware labeling and cable guide | 2026-05-13 |
 | [POWER_PLAYBOOK.md](POWER_PLAYBOOK.md) | Deployer | Power configuration and runtime estimates | 2026-05-13 |
 | [FIELD_DEPLOYMENT_GUIDE.md](FIELD_DEPLOYMENT_GUIDE.md) | First responder | Rapid deploy checklist | 2026-05-13 |
