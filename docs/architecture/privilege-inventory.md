@@ -726,8 +726,13 @@ temporary file, `fsync`, rename, and append `sot-events.jsonl` with the peer
 uid; a SoT file that exists but cannot be parsed is never replaced. The
 daemon reads one request of up to 1 MiB (it used to read 4 KiB once), all
 of it within 10 s in total; a peer the table allows nothing is refused
-before anything is read, and at most 32 connections are handled at once
-(more are answered `busy`). A rewritten SoT file keeps the mode and group of
+before anything is read, and at most 32 connections are handled at once;
+non-root peers together hold at most 24 of them and at most 16
+`watch_snapshot` streams, so root tools always have headroom (beyond that:
+`busy`). A watch stream whose client has gone is noticed while nothing
+changes (end of stream on the socket, checked every interval) and frees its
+slot; `control_plane.watch_snapshots` closes its socket as soon as its
+consumer stops. A rewritten SoT file keeps the mode and group of
 the file it replaces (the installer makes it 0640 root:azazel-web); a new
 one is 0640 root:azazel-web when the daemon is root.
 

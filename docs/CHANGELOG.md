@@ -18,7 +18,9 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - control daemon: `control.sock` checks the peer uid (`SO_PEERCRED`)
     against a fixed table (root: all; `azazel-web`: the actions the Web UI
     uses; anyone else: refused and counted; `migrate_path_schema` root
-    only). New fixed actions, relocated from the Web UI by owner decision:
+    only). Connection limits keep headroom for root (non-root ≤ 24 of
+    32, ≤ 16 `watch_snapshot` streams); a dead idle watch stream frees its
+    slot. New fixed actions, relocated from the Web UI by owner decision:
     `uplink_disconnect` (no parameters; the daemon's own `AZAZEL_UP_IF`),
     `sot_devices_replace` / `sot_devices_patch` (validated with `SoTConfig`,
     atomic write; the daemon is the only SoT writer). Requests up to 1 MiB.

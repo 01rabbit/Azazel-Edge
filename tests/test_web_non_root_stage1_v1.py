@@ -875,7 +875,8 @@ def _dribble(conn) -> threading.Event:
 
 
 def test_concurrent_control_clients_are_capped(monkeypatch):
-    monkeypatch.setattr(control_daemon, "_CLIENT_SLOTS", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(control_daemon, "_CLIENT_SLOTS", control_daemon._ClientSlots(1, 1, 1))
+    monkeypatch.setattr(control_daemon, "peer_credentials", lambda conn: (0, 1))
     release = threading.Event()
     monkeypatch.setattr(control_daemon, "handle_client", lambda conn, addr: (release.wait(5), conn.close()))
     a1, b1 = socket.socketpair()
@@ -1004,3 +1005,111 @@ def test_the_installer_never_widens_etc_azazel_edge():
                     and not stripped.startswith("install -d /etc/azazel-edge/"):
                 pytest.fail(f"{script.name}: unconditional install -d resets the mode: {line}")
     assert 'chmod 0600 "$CA_KEY"' in (internal / "install_local_ca.sh").read_text(encoding="utf-8")
+
+
+def test_root_keeps_headroom_when_non_root_peers_hold_their_maximum(monkeypatch):
+    slots = control_daemon._ClientSlots(4, 2, 1)
+    monkeypatch.setattr(control_daemon, "_CLIENT_SLOTS", slots)
+    release = threading.Event()
+    monkeypatch.setattr(control_daemon, "handle_client", lambda conn, addr: (release.wait(5), conn.close()))
+    who = {"uid": WEB_UID}
+    monkeypatch.setattr(control_daemon, "peer_credentials", lambda conn: (who["uid"], 1))
+    pairs = [socket.socketpair() for _ in range(5)]
+    try:
+        assert control_daemon._dispatch_client(pairs[0][1], None) is True
+        assert control_daemon._dispatch_client(pairs[1][1], None) is True
+        assert control_daemon._dispatch_client(pairs[2][1], None) is False  # the web's maximum
+        pairs[2][0].settimeout(5)
+        assert b'"busy"' in pairs[2][0].recv(1024)
+        who["uid"] = 0
+        assert control_daemon._dispatch_client(pairs[3][1], None) is True  # root still gets a slot
+        assert control_daemon._dispatch_client(pairs[4][1], None) is True
+        assert (slots.total, slots.nonroot) == (4, 2)
+    finally:
+        release.set()
+        for a, b in pairs:
+            a.close()
+    deadline = time.monotonic() + 5
+    while slots.total and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert (slots.total, slots.nonroot) == (0, 0)
+
+
+def test_the_default_limits_leave_root_headroom():
+    total, nonroot, watchers = control_daemon._CLIENT_SLOTS.limits
+    assert nonroot < total and watchers < nonroot
+
+
+def _watch(monkeypatch, uid):
+    monkeypatch.setattr(control_daemon, "read_ui_snapshot", lambda: {"ok": True, "snapshot": {"x": 1}})
+    _as_peer(monkeypatch, uid)
+    client, server = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    t = threading.Thread(target=control_daemon.handle_client, args=(server, None), daemon=True)
+    t.start()
+    client.sendall((json.dumps({"action": "watch_snapshot", "params": {"interval_sec": 0.2}}) + "\n").encode())
+    client.settimeout(5)
+    return client, t
+
+
+def test_a_dead_idle_watcher_frees_its_slot(monkeypatch, web_account):
+    slots = control_daemon._ClientSlots(32, 24, 16)
+    monkeypatch.setattr(control_daemon, "_CLIENT_SLOTS", slots)
+    client, t = _watch(monkeypatch, WEB_UID)
+    first = json.loads(client.recv(65536).decode().splitlines()[0])
+    assert first["snapshot"] == {"x": 1}
+    assert slots.watchers == 1
+    client.close()  # the snapshot never changes again: only the idle check can notice
+    t.join(2.0)
+    assert not t.is_alive()
+    assert slots.watchers == 0
+
+
+def test_non_root_watchers_are_capped_root_is_not(monkeypatch, web_account):
+    slots = control_daemon._ClientSlots(32, 24, 1)
+    monkeypatch.setattr(control_daemon, "_CLIENT_SLOTS", slots)
+    c1, t1 = _watch(monkeypatch, WEB_UID)
+    c1.recv(65536)
+    c2, t2 = _watch(monkeypatch, WEB_UID)
+    assert json.loads(c2.recv(65536).decode().splitlines()[0])["error"] == "busy"
+    c3, t3 = _watch(monkeypatch, 0)
+    assert "snapshot" in json.loads(c3.recv(65536).decode().splitlines()[0])
+    for c in (c1, c2, c3):
+        c.close()
+    for t in (t1, t2, t3):
+        t.join(2.0)
+        assert not t.is_alive()
+    assert slots.watchers == 0
+
+
+def test_an_expired_deadline_is_a_timeout_not_a_negative_timeout():
+    a, b = socket.socketpair()
+    with a, b:
+        with pytest.raises(socket.timeout):
+            control_daemon._read_request(b, time.monotonic() - 1.0)
+
+
+def test_watch_snapshots_closes_its_socket_when_the_consumer_stops(tmpdir_short):
+    from azazel_edge import control_plane
+
+    path = tmpdir_short / "c.sock"
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(str(path))
+    srv.listen(1)
+    got = {}
+
+    def serve():
+        conn, _ = srv.accept()
+        conn.recv(4096)
+        conn.sendall(b'{"ok": true, "snapshot": {"a": 1}}\n')
+        conn.settimeout(5)
+        got["eof"] = conn.recv(10) == b""
+        conn.close()
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    gen = control_plane.watch_snapshots(socket_path=path)
+    assert next(gen) == {"a": 1}
+    gen.close()
+    t.join(5)
+    srv.close()
+    assert got.get("eof") is True

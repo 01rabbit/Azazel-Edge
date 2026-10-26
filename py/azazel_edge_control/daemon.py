@@ -12,6 +12,7 @@ import grp
 import logging
 import ipaddress
 import re
+import select
 import socket
 import stat
 import subprocess
@@ -122,13 +123,64 @@ _PEER_REFUSALS_LOCK = threading.Lock()
 _PEER_REFUSALS: dict[str, Any] = {"total": 0, "by_uid": {}}
 # One request per connection; SoT edits can exceed a single 4 KiB read. The
 # whole request must arrive within REQUEST_READ_TIMEOUT_SEC (a total
-# deadline, not per read), and at most MAX_CONCURRENT_CLIENTS connections are
-# handled at once (watch_snapshot streams hold one each); more are answered
-# "busy" and closed.
+# deadline, not per read). Connections are handled concurrently up to
+# MAX_CONCURRENT_CLIENTS; non-root peers together may hold at most
+# MAX_NONROOT_CLIENTS of them (so root tools always have headroom), and at
+# most MAX_NONROOT_WATCHERS long-lived watch_snapshot streams. Beyond that a
+# client is answered "busy" and closed. A watch stream whose client has gone
+# is noticed while idle (end of stream on the socket) and frees its slot.
 MAX_REQUEST_BYTES = 1024 * 1024
 REQUEST_READ_TIMEOUT_SEC = 10.0
 MAX_CONCURRENT_CLIENTS = 32
-_CLIENT_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_CLIENTS)
+MAX_NONROOT_CLIENTS = 24
+MAX_NONROOT_WATCHERS = 16
+
+
+class _ClientSlots:
+    """Concurrent connection accounting for control.sock (see above)."""
+
+    def __init__(self, total: int, nonroot: int, nonroot_watchers: int):
+        self._lock = threading.Lock()
+        self.limits = (total, nonroot, nonroot_watchers)
+        self.total = 0
+        self.nonroot = 0
+        self.watchers = 0
+
+    def acquire(self, uid: Optional[int]) -> bool:
+        total_max, nonroot_max, _ = self.limits
+        with self._lock:
+            if self.total >= total_max:
+                return False
+            if uid != 0:
+                if self.nonroot >= nonroot_max:
+                    return False
+                self.nonroot += 1
+            self.total += 1
+            return True
+
+    def release(self, uid: Optional[int]) -> None:
+        with self._lock:
+            self.total = max(0, self.total - 1)
+            if uid != 0:
+                self.nonroot = max(0, self.nonroot - 1)
+
+    def acquire_watch(self, uid: Optional[int]) -> bool:
+        if uid == 0:
+            return True
+        with self._lock:
+            if self.watchers >= self.limits[2]:
+                return False
+            self.watchers += 1
+            return True
+
+    def release_watch(self, uid: Optional[int]) -> None:
+        if uid == 0:
+            return
+        with self._lock:
+            self.watchers = max(0, self.watchers - 1)
+
+
+_CLIENT_SLOTS = _ClientSlots(MAX_CONCURRENT_CLIENTS, MAX_NONROOT_CLIENTS, MAX_NONROOT_WATCHERS)
 PORTAL_DEFAULT_START_URL = "http://neverssl.com"
 _LAST_CPU_TOTAL: float | None = None
 _LAST_CPU_IDLE: float | None = None
@@ -2045,11 +2097,37 @@ def read_ui_snapshot() -> dict[str, Any]:
             SNAPSHOT_CACHE_LOCK.release()
 
 
+def _watch_client_gone(conn: socket.socket) -> bool:
+    """True when a watch client has closed its end (or the socket failed).
+    Watch clients send nothing after their request, so a readable socket
+    means end of stream; stray bytes are discarded."""
+    try:
+        readable, _, errored = select.select([conn], [], [conn], 0)
+    except (OSError, ValueError):
+        return True
+    if errored:
+        return True
+    if not readable:
+        return False
+    try:
+        data = conn.recv(4096, socket.MSG_DONTWAIT)
+    except (BlockingIOError, InterruptedError):
+        return False
+    except OSError:
+        return True
+    return data == b""
+
+
 def stream_ui_snapshots(conn: socket.socket, interval_sec: float = 1.0) -> None:
-    """Stream newline-delimited snapshots whenever content changes."""
+    """Stream newline-delimited snapshots whenever content changes. Returns
+    when the client goes away, also while nothing changes (so an idle, dead
+    watcher frees its connection slot within one interval)."""
     interval = max(0.2, min(float(interval_sec), 5.0))
     last_fp = ""
     while True:
+        if _watch_client_gone(conn):
+            logger.info("watch_snapshot client went away")
+            return
         payload = read_ui_snapshot()
         fp = json.dumps(payload.get("snapshot", {}), sort_keys=True, ensure_ascii=False) if payload.get("ok") else ""
         if fp != last_fp:
@@ -2453,8 +2531,15 @@ def handle_client(conn, addr):
 
         if action == "watch_snapshot":
             interval = float((params or {}).get("interval_sec", 1.0))
+            if not _CLIENT_SLOTS.acquire_watch(peer_uid):
+                logger.warning(f"control.sock: too many watch_snapshot streams; uid={peer_uid} answered busy")
+                conn.sendall(b'{"ok": false, "error": "busy"}\n')
+                return
             logger.info(f"Received action: watch_snapshot interval={interval}")
-            stream_ui_snapshots(conn, interval_sec=interval)
+            try:
+                stream_ui_snapshots(conn, interval_sec=interval)
+            finally:
+                _CLIENT_SLOTS.release_watch(peer_uid)
             return
         
         # Special handling: NEVER log wifi_connect params (contains passphrase)
@@ -2481,27 +2566,28 @@ def handle_client(conn, addr):
         conn.close()
 
 def _dispatch_client(conn, addr) -> bool:
-    """Handle a connection in its own thread, at most MAX_CONCURRENT_CLIENTS
-    at once; beyond that the client is answered "busy" and closed."""
-    if not _CLIENT_SLOTS.acquire(blocking=False):
-        logger.warning("control.sock: too many concurrent clients; answered busy")
+    """Handle a connection in its own thread within the slot limits (root
+    keeps headroom); beyond them the client is answered "busy" and closed."""
+    uid, _pid = peer_credentials(conn)
+    if not _CLIENT_SLOTS.acquire(uid):
+        logger.warning(f"control.sock: too many concurrent clients; uid={uid} answered busy")
         try:
             conn.sendall(b'{"ok": false, "error": "busy"}\n')
         except OSError:
             pass
         conn.close()
         return False
-    thread = threading.Thread(target=_handle_client_slot, args=(conn, addr))
+    thread = threading.Thread(target=_handle_client_slot, args=(conn, addr, uid))
     thread.daemon = True
     thread.start()
     return True
 
 
-def _handle_client_slot(conn, addr) -> None:
+def _handle_client_slot(conn, addr, uid: Optional[int] = None) -> None:
     try:
         handle_client(conn, addr)
     finally:
-        _CLIENT_SLOTS.release()
+        _CLIENT_SLOTS.release(uid)
 
 
 def start_noc_link_watch() -> None:
