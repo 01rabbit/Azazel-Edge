@@ -54,7 +54,9 @@ seed_web_env_defaults() {
   fi
   while IFS= read -r line; do
     key="${line%%=*}"
-    if ! printf '%s' "${current}" | grep -q "^${key}="; then
+    # Present in any form systemd reads: leading blanks, `export `, blanks
+    # around `=`.
+    if ! printf '%s' "${current}" | grep -Eq "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*="; then
       missing+="${line}"$'\n'
     fi
   done <<'EOF'

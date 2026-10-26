@@ -25,9 +25,11 @@ fi
 # and its passphrase is typed on a terminal. Checked before anything is
 # installed, so an unattended run stops here with an error instead of
 # failing (or waiting) at step 16. Only SKIP_LUKS=1 skips the volume.
+# stdin only: see require_tty in install_encrypted_storage.sh (cryptsetup
+# prompts only when stdin is a terminal).
 if [[ "$ENABLE_SECURITY_STACK" == "1" && "$SKIP_LUKS" != "1" && ! -e /dev/mapper/azazel-secrets ]] \
-    && [[ ! -t 0 || ! -t 2 ]]; then
-  echo "ERROR: the encrypted secrets volume (Edge#206, on by default) needs a passphrase typed on a terminal, and this is not one. Run the installer from an interactive terminal, or, to install without encrypted storage, re-run it with SKIP_LUKS=1 set explicitly." >&2
+    && [[ ! -t 0 ]]; then
+  echo "ERROR: the encrypted secrets volume (Edge#206, on by default) needs a passphrase typed on a terminal, and stdin is not one. Run the installer from an interactive terminal (to keep a log, use: script -c 'sudo ...' install.log, or pipe only the output: 2>&1 | tee install.log), or, to install without encrypted storage, re-run it with SKIP_LUKS=1 set explicitly." >&2
   exit 1
 fi
 
@@ -319,6 +321,30 @@ else
   fi
 fi
 
+# Fail-closed: a unit that does not stay active stops the install with an
+# error instead of being reported as installed. Waits up to 30 s for it to
+# become active, then checks it is still active and has not restarted.
+wait_active() {
+  local unit="$1" i restarts status
+  for ((i = 0; i < 30; i++)); do
+    systemctl is-active --quiet "$unit" && break
+    sleep 1
+  done
+  restarts="$(systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo 0)"
+  sleep 3
+  if systemctl is-active --quiet "$unit" \
+      && [[ "$(systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo 0)" == "$restarts" ]]; then
+    echo "$unit is active"
+    return 0
+  fi
+  status="$(systemctl show -p ExecMainStatus --value "$unit" 2>/dev/null || true)"
+  echo "ERROR: $unit did not stay active (state: $(systemctl is-active "$unit" 2>/dev/null || true), exit status: ${status:-?}). See: journalctl -u $unit" >&2
+  if [[ "$status" == "78" ]]; then
+    echo "ERROR: exit status 78 (EX_CONFIG): the SOC policy or ATT&CK mapping YAML under /opt/azazel-edge/config (or the path set by AZAZEL_SOC_POLICY_PATH / AZAZEL_ATTACK_MAPPING_PATH) is invalid; fix it and restart $unit." >&2
+  fi
+  exit 1
+}
+
 echo "[12/16] Enable services"
 if [[ "$ENABLE_SERVICES" == "1" ]]; then
   systemctl enable --now azazel-edge-control-daemon.service
@@ -339,6 +365,12 @@ if [[ "$ENABLE_SERVICES" == "1" ]]; then
     systemctl reset-failed azazel-edge-core.service >/dev/null 2>&1 || true
     systemctl enable azazel-edge-core.service
     systemctl restart azazel-edge-core.service
+  fi
+  wait_active azazel-edge-control-daemon.service
+  wait_active azazel-edge-ai-agent.service
+  wait_active azazel-edge-web.service
+  if [[ "$ENABLE_RUST_CORE" == "1" ]]; then
+    wait_active azazel-edge-core.service
   fi
 fi
 

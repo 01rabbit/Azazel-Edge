@@ -2,7 +2,10 @@
 set -euo pipefail
 # Code root: the checkout this launcher sits in (bin/ next to py/), or the
 # installed tree /opt/azazel-edge when the launcher was copied elsewhere (the
-# installer copies it to /usr/local/bin, whose parent holds no code).
+# installer copies it to /usr/local/bin, whose parent holds no code). A
+# symlink is not followed (BASH_SOURCE is the link's own path): a link in
+# /usr/local/bin runs the installed, sync-checked tree, never whatever stale
+# checkout the link may point at.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SELF_DIR}/.." && pwd)"
 if [[ ! -f "${ROOT_DIR}/py/azazel_edge/__init__.py" ]]; then

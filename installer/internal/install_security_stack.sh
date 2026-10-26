@@ -33,8 +33,10 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-if [[ "${SKIP_LUKS}" != "1" && ! -e /dev/mapper/azazel-secrets ]] && [[ ! -t 0 || ! -t 2 ]]; then
-  echo "ERROR: the encrypted secrets volume (Edge#206, on by default) needs a passphrase typed on a terminal, and this is not one. Run the installer from an interactive terminal, or, to install without encrypted storage, re-run it with SKIP_LUKS=1 set explicitly." >&2
+# stdin only: see require_tty in install_encrypted_storage.sh (cryptsetup
+# prompts only when stdin is a terminal).
+if [[ "${SKIP_LUKS}" != "1" && ! -e /dev/mapper/azazel-secrets ]] && [[ ! -t 0 ]]; then
+  echo "ERROR: the encrypted secrets volume (Edge#206, on by default) needs a passphrase typed on a terminal, and stdin is not one. Run the installer from an interactive terminal (to keep a log, use: script -c 'sudo ...' install.log, or pipe only the output: 2>&1 | tee install.log), or, to install without encrypted storage, re-run it with SKIP_LUKS=1 set explicitly." >&2
   exit 1
 fi
 

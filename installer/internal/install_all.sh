@@ -20,13 +20,22 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+# Checked here too, before anything is changed (install_migrated_tools.sh
+# checks it again): a typo must not stop the install halfway.
+case "${ENABLE_RUST_CORE}" in
+  0|1) ;;
+  *) echo "ENABLE_RUST_CORE must be 0 or 1 (got: ${ENABLE_RUST_CORE})" >&2; exit 1 ;;
+esac
+
 # Edge#206: the app stack's security stack sets up the encrypted secrets
 # volume by default, and its passphrase is typed on a terminal. Checked before
 # anything is changed (the network baseline below included), so an unattended
 # run stops here with an error. Only SKIP_LUKS=1 skips the volume.
+# stdin only: see require_tty in install_encrypted_storage.sh (cryptsetup
+# prompts only when stdin is a terminal).
 if [[ "${ENABLE_APP_STACK}" == "1" && "${ENABLE_SECURITY_STACK:-1}" == "1" && "${SKIP_LUKS:-0}" != "1" \
-      && ! -e /dev/mapper/azazel-secrets ]] && [[ ! -t 0 || ! -t 2 ]]; then
-  echo "ERROR: the encrypted secrets volume (Edge#206, on by default) needs a passphrase typed on a terminal, and this is not one. Run the installer from an interactive terminal, or, to install without encrypted storage, re-run it with SKIP_LUKS=1 set explicitly." >&2
+      && ! -e /dev/mapper/azazel-secrets ]] && [[ ! -t 0 ]]; then
+  echo "ERROR: the encrypted secrets volume (Edge#206, on by default) needs a passphrase typed on a terminal, and stdin is not one. Run the installer from an interactive terminal (to keep a log, use: script -c 'sudo ...' install.log, or pipe only the output: 2>&1 | tee install.log), or, to install without encrypted storage, re-run it with SKIP_LUKS=1 set explicitly." >&2
   exit 1
 fi
 

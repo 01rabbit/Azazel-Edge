@@ -477,3 +477,155 @@ def test_the_mattermost_defaults_create_a_missing_file_0600(tmp_path):
     assert res.returncode == 0, res.stderr
     assert web_env.read_text().splitlines()[0] == "AZAZEL_MATTERMOST_HOST=172.16.0.254"
     assert (web_env.stat().st_mode & 0o777) == 0o600
+
+
+# ------------------------------------------------------- review follow-ups
+
+
+def test_install_all_checks_enable_rust_core_before_changing_anything():
+    src = (INTERNAL / "install_all.sh").read_text(encoding="utf-8")
+    m = re.search(r'^case "\$\{ENABLE_RUST_CORE\}" in\n.*?^esac\n', src, re.S | re.M)
+    assert m
+    assert m.start() < src.index("install_internal_network.sh\"\n")
+    assert m.start() < src.index('if [[ "${ENABLE_APP_STACK}" == "1" && "${ENABLE_SECURITY_STACK:-1}"')
+    for value, rc in (("1", 0), ("0", 0), ("yes", 1), ("", 1)):
+        res = subprocess.run(["bash", "-c", f"ENABLE_RUST_CORE={value!r}\n" + m.group(0) + "echo ok\n"],
+                             capture_output=True, text=True)
+        assert res.returncode == rc, value
+        if rc:
+            assert "ENABLE_RUST_CORE must be 0 or 1" in res.stderr
+
+
+def _with_pty_stdin(args: list[str]) -> subprocess.CompletedProcess:
+    import pty
+
+    master, slave = pty.openpty()
+    try:
+        # stdin is a terminal; stdout/stderr are pipes (like `2>&1 | tee`).
+        return subprocess.run(args, stdin=slave, capture_output=True, text=True, timeout=30)
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+@pytest.mark.parametrize("script,env", [
+    (INTERNAL / "install_all.sh", {"ENABLE_APP_STACK": "1"}),
+    (TOOLS, {"ENABLE_SECURITY_STACK": "1"}),
+    (SECURITY, {}),
+])
+def test_the_terminal_check_reads_stdin_only_so_output_can_be_logged(script, env):
+    src = script.read_text(encoding="utf-8")
+    m = re.search(_PREFLIGHT_RE, src, re.M)
+    assert "[[ ! -t 0 ]]" in m.group(0) and "-t 1" not in m.group(0) and "-t 2" not in m.group(0)
+    body = "".join(f"{k}={v}\n" for k, v in env.items()) + m.group(0) + "echo reached\n"
+    res = _with_pty_stdin(["bash", "-c", body])
+    assert res.returncode == 0 and "reached" in res.stdout, (script.name, res.stderr)
+
+
+def test_require_tty_guards_luksformat_and_open_and_accepts_a_terminal_stdin():
+    src = LUKS.read_text(encoding="utf-8")
+    fn = _function(LUKS, "require_tty")
+    assert "[[ ! -t 0 ]]" in fn and "-t 2" not in fn and "/dev/tty" in src  # the reason is in the comment
+    for call, command in (('require_tty "luksFormat of ${IMG_PATH}"', "cryptsetup luksFormat"),
+                          ('require_tty "opening ${IMG_PATH}"', "cryptsetup open")):
+        pos = src.index(call)
+        assert pos < src.index(command)
+        block_start = src.rindex("\nif ", 0, pos)
+        assert block_start < src.index(command) and not re.search(r"\nfi\n", src[block_start:pos])
+    res = _with_pty_stdin(["bash", "-c", fn + 'require_tty "x"\necho reached\n'])
+    assert res.returncode == 0 and "reached" in res.stdout
+    res = subprocess.run(["bash", "-c", fn + 'require_tty "x"\necho reached\n'], stdin=subprocess.DEVNULL,
+                         capture_output=True, text=True)
+    assert res.returncode == 1 and "script -c" in res.stderr and "SKIP_LUKS=1" in res.stderr
+
+
+def test_a_core_left_failed_is_reset_before_it_is_enabled_and_restarted():
+    src = TOOLS.read_text(encoding="utf-8")
+    reset = src.index("systemctl reset-failed azazel-edge-core.service")
+    assert src.index("cargo build --release --locked") < reset
+    assert reset < src.index("systemctl enable azazel-edge-core.service") < src.index("systemctl restart azazel-edge-core.service")
+
+
+def _wait_active(tmp_path: Path, states: str, restarts: str, status: str) -> subprocess.CompletedProcess:
+    """Run wait_active with a systemctl that answers from the given lists
+    (one value per call, the last one repeated; counters in files, since
+    wait_active calls it in command substitutions)."""
+    d = tmp_path / f"wa{len(list(tmp_path.iterdir()))}"
+    d.mkdir()
+    stub = f'''
+D={d}
+STATES=({states}); RESTARTS=({restarts})
+echo 0 >"$D/s"; echo 0 >"$D/r"
+sleep() {{ :; }}
+_next() {{ local -n arr=$1; local n; n=$(<"$D/$2"); echo $((n + 1)) >"$D/$2"
+  (( n < ${{#arr[@]}} )) || n=$(( ${{#arr[@]}} - 1 )); echo "${{arr[$n]}}"; }}
+systemctl() {{
+  case "$1 $2" in
+    "is-active --quiet") [[ "$(_next STATES s)" == active ]] ;;
+    "is-active "*) echo "${{STATES[-1]}}"; [[ "${{STATES[-1]}}" == active ]] ;;
+    "show -p") if [[ "$3" == NRestarts ]]; then _next RESTARTS r; else echo "{status}"; fi ;;
+  esac
+}}
+'''
+    script = stub + _function(TOOLS, "wait_active") + "wait_active demo.service\necho returned\n"
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+
+
+def test_the_installer_waits_for_each_service_to_stay_active(tmp_path):
+    ok = _wait_active(tmp_path, "activating active active", "0 0", "0")
+    assert ok.returncode == 0 and "returned" in ok.stdout
+    loop = _wait_active(tmp_path, "active active", "0 1", "1")
+    assert loop.returncode == 1 and "did not stay active" in loop.stderr and "returned" not in loop.stdout
+    never = _wait_active(tmp_path, "failed", "0", "1")
+    assert never.returncode == 1 and "did not stay active" in never.stderr
+    config = _wait_active(tmp_path, "failed", "0", "78")
+    assert config.returncode == 1 and "SOC policy or ATT&CK mapping YAML" in config.stderr
+    src = TOOLS.read_text(encoding="utf-8")
+    last_restart = src.index("systemctl restart azazel-edge-core.service")
+    for unit in ("control-daemon", "ai-agent", "web", "core"):
+        assert last_restart < src.index(f"wait_active azazel-edge-{unit}.service"), unit
+    guard = src.rindex('if [[ "$ENABLE_RUST_CORE" == "1" ]]; then', 0, src.index("wait_active azazel-edge-core.service"))
+    assert guard > last_restart
+
+
+def test_the_fstab_line_of_an_earlier_install_gets_the_device_timeout(tmp_path):
+    src = LUKS.read_text(encoding="utf-8")
+    block = re.search(r'^FSTAB_OPTIONS=.*?^fi\n', src, re.S | re.M).group(0)
+    fstab = tmp_path / "fstab"
+    script = "UUID=abcd-1\nMOUNT_POINT=/etc/azazel-edge/secrets\n" + block.replace("/etc/fstab", str(fstab))
+    want = "UUID=abcd-1 /etc/azazel-edge/secrets ext4 defaults,nofail,x-systemd.device-timeout=30s 0 2\n"
+    fstab.write_text("")
+    subprocess.run(["bash", "-c", script], check=True)
+    assert fstab.read_text() == want
+    fstab.write_text("/dev/root / ext4 defaults 0 1\nUUID=abcd-1 /etc/azazel-edge/secrets ext4 defaults,nofail 0 2\n")
+    subprocess.run(["bash", "-c", script], check=True)
+    assert fstab.read_text() == "/dev/root / ext4 defaults 0 1\n" + want
+    own = "UUID=abcd-1 /srv/secrets ext4 noatime,nofail 0 2\n"
+    fstab.write_text(own)
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+    assert fstab.read_text() == own and "not changed" in res.stderr
+
+
+def test_the_mattermost_defaults_see_keys_in_every_form_systemd_reads(tmp_path):
+    web_env = tmp_path / "azazel-edge-web"
+    web_env.write_text("  AZAZEL_MATTERMOST_HOST=10.1.1.1\nexport AZAZEL_MATTERMOST_PORT = 9000\n"
+                       "AZAZEL_MATTERMOST_TEAM =x\n")
+    assert _seed(tmp_path, web_env).returncode == 0
+    text = web_env.read_text()
+    for key in ("AZAZEL_MATTERMOST_HOST", "AZAZEL_MATTERMOST_PORT", "AZAZEL_MATTERMOST_TEAM"):
+        assert len(re.findall(rf"^\s*(?:export\s+)?{key}\s*=", text, re.M)) == 1, key
+    assert "AZAZEL_MATTERMOST_CHANNEL=soc-noc" in text
+
+
+@pytest.mark.skipif(Path(INSTALL_ROOT).exists(), reason="a real /opt/azazel-edge exists here")
+def test_a_symlinked_launcher_does_not_run_the_checkout_it_points_at(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for name in ("azazel-edge-dummy-eve", "azazel-edge-scenario-replay"):
+        (bindir / name).symlink_to(ROOT / "bin" / name)
+        res = subprocess.run([str(bindir / name), "list"], capture_output=True, text=True, timeout=60,
+                             env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
+        # The link's own directory has no code next to it, and the checkout
+        # it points at is not used: the installed tree is (absent here).
+        assert res.returncode != 0, name
+        assert f"or in {INSTALL_ROOT}" in res.stderr, (name, res.stderr)
