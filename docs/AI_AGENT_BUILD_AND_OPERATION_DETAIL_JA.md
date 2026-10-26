@@ -414,12 +414,19 @@ sudo installer/internal/provision_mattermost_command.sh
 設定例（通常は `provision_mattermost_command.sh` が作る。手で置く場合）:
 
 ```bash
-# 空のファイルを 0640 root:azazel-web で作ってから、sudoedit で token を書く
-# （コマンドラインの引数やシェル履歴に残さない）。/etc/azazel-edge の権限は変えない。
-sudo install -m 0640 -o root -g azazel-web /dev/null /etc/azazel-edge/mattermost-command-token
+# ファイルが無い場合だけ、空のファイルを 0640 root:azazel-web で作る
+# （install は既存のファイルを空にするので、[ -e ] で守る）。それから sudoedit で
+# token を書く（コマンドラインの引数やシェル履歴に残さない）。/etc/azazel-edge の
+# 権限は変えない。
+sudo test -e /etc/azazel-edge/mattermost-command-token \
+  || sudo install -m 0640 -o root -g azazel-web /dev/null /etc/azazel-edge/mattermost-command-token
 sudoedit /etc/azazel-edge/mattermost-command-token
 sudo systemctl restart azazel-edge-web
 ```
+
+注意: sudoedit は一時ファイルをユーザーの権限で編集するので、エディタのスワップ・
+バックアップ・アンドゥのファイル（vim の `.swp` や `~` ファイルなど）に token が残る
+ことがある。それらを作らない設定のエディタを使うか、編集後に残っていないことを確かめる。
 
 slash command 例:
 - Command Trigger: `/mio`

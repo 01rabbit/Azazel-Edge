@@ -38,7 +38,11 @@ controls. Each item includes expected outcome and fallback note.
   skip this check only if it was installed with `SKIP_LUKS=1`):
   `ls /dev/mapper/azazel-secrets` and
   `sudo ls /etc/azazel-edge/secrets/tokens/`
-  Expected: mapper device exists and holds the copy of the token files.
+  Expected: the mapper device exists. `tokens/` holds a copy of
+  `web_token.txt` and `mattermost-command-token` if they existed when
+  `install_encrypted_storage.sh` last ran (it copies only those two). If the
+  encrypted storage was set up before the tokens were made, `tokens/` is
+  empty; that is not a fault.
   If something goes wrong: unlock and mount encrypted volume before transport.
 
 - [ ] Run SD/media selftest:
