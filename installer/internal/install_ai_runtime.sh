@@ -28,7 +28,9 @@ install -m 0755 "${REPO_ROOT}/installer/internal/provision_mattermost_workspace.
 install -m 0755 "${REPO_ROOT}/installer/internal/provision_mattermost_command.sh" /opt/azazel-edge/provision_mattermost_command.sh
 
 echo "[ai/3] Seed WebUI Mattermost defaults"
-install -d /etc/default /etc/azazel-edge
+install -d /etc/default
+# An existing /etc/azazel-edge keeps its mode (Edge#471: never widened).
+[[ -d /etc/azazel-edge ]] || install -d -m 0750 /etc/azazel-edge
 if [[ ! -f "${WEB_ENV}" ]]; then
   cat > "${WEB_ENV}" <<'EOF'
 AZAZEL_MATTERMOST_HOST=172.16.0.254

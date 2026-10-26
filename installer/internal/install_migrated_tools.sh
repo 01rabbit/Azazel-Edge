@@ -188,7 +188,11 @@ install -m 0644 "$REPO_ROOT/systemd/azazel-edge-core.service" /etc/systemd/syste
 systemctl daemon-reload
 
 echo "[11/16] Prepare runtime/config paths"
-install -d /etc/azazel-edge /var/log/azazel-edge /run/azazel-edge
+# /etc/azazel-edge holds secrets and the device inventory (sot.yaml): it is
+# created 0750 and an existing one keeps its mode (`install -d` would reset it
+# to 0755). setup_web_account.sh below gives the Web UI access to it.
+[[ -d /etc/azazel-edge ]] || install -d -m 0750 /etc/azazel-edge
+install -d /var/log/azazel-edge /run/azazel-edge
 WEB_ENV="/etc/default/azazel-edge-web"
 touch "$WEB_ENV"
 if ! grep -q '^AZAZEL_WEB_TOKEN_FILE=' "$WEB_ENV"; then

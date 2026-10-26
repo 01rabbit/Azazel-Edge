@@ -13,6 +13,7 @@ import logging
 import ipaddress
 import re
 import socket
+import stat
 import subprocess
 import tempfile
 import threading
@@ -119,9 +120,15 @@ WEB_UI_ACTIONS = frozenset({
 ROOT_ONLY_ACTIONS = frozenset({"migrate_path_schema"})
 _PEER_REFUSALS_LOCK = threading.Lock()
 _PEER_REFUSALS: dict[str, Any] = {"total": 0, "by_uid": {}}
-# One request per connection; SoT edits can exceed a single 4 KiB read.
+# One request per connection; SoT edits can exceed a single 4 KiB read. The
+# whole request must arrive within REQUEST_READ_TIMEOUT_SEC (a total
+# deadline, not per read), and at most MAX_CONCURRENT_CLIENTS connections are
+# handled at once (watch_snapshot streams hold one each); more are answered
+# "busy" and closed.
 MAX_REQUEST_BYTES = 1024 * 1024
 REQUEST_READ_TIMEOUT_SEC = 10.0
+MAX_CONCURRENT_CLIENTS = 32
+_CLIENT_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_CLIENTS)
 PORTAL_DEFAULT_START_URL = "http://neverssl.com"
 _LAST_CPU_TOTAL: float | None = None
 _LAST_CPU_IDLE: float | None = None
@@ -353,6 +360,24 @@ def _load_sot_payload(force: bool = False) -> tuple[dict[str, Any], Path]:
     return payload, target
 
 
+def _sot_file_mode_and_group(target: Path) -> tuple[int, Optional[int]]:
+    """Mode and group for a rewritten SoT file: those of the file it replaces
+    (the installer makes it 0640 root:azazel-web, Edge#471), so a write never
+    widens it. A new file is 0640 with the Web UI's group when this process
+    is root and that group exists, otherwise 0644 as before."""
+    try:
+        st = os.stat(target)
+        return stat.S_IMODE(st.st_mode) & 0o7777, st.st_gid
+    except OSError:
+        pass
+    if os.geteuid() == 0:
+        try:
+            return 0o640, grp.getgrnam(WEB_UI_ACCOUNT).gr_gid
+        except KeyError:
+            pass
+    return 0o644, None
+
+
 def _persist_sot_payload(payload: dict[str, Any], target: Path) -> None:
     """Write the SoT atomically: a new temporary file in the same directory,
     flushed to disk, then renamed over the target (readers see either the
@@ -369,7 +394,13 @@ def _persist_sot_payload(payload: dict[str, Any], target: Path) -> None:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.chmod(tmp_name, 0o644)
+        mode, gid = _sot_file_mode_and_group(target)
+        if gid is not None:
+            try:
+                os.chown(tmp_name, -1, gid)
+            except OSError:
+                pass
+        os.chmod(tmp_name, mode)
         os.replace(tmp_name, target)
     except BaseException:
         try:
@@ -2302,7 +2333,13 @@ def _web_ui_uid() -> Optional[int]:
 
 
 def peer_action_allowed(uid: Optional[int], action: Any) -> tuple[bool, str]:
-    """The control.sock peer table (Edge#471 stage 1). Returns (allowed, rule)."""
+    """The control.sock peer table (Edge#471 stage 1). Returns (allowed, rule).
+
+    ``uid == os.geteuid()`` (the daemon's own account) is treated like root.
+    Under the unit the daemon IS root, so this adds nothing there; it lets a
+    development stack run the daemon and the Web UI as one non-root account.
+    It must be revisited if the daemon itself stops running as root (stage 3
+    or later): its own account would then get every action."""
     if uid is None:
         return False, "peer_uid_unknown"
     action_name = action if isinstance(action, str) else ""
@@ -2314,6 +2351,17 @@ def peer_action_allowed(uid: Optional[int], action: Any) -> tuple[bool, str]:
     if web_uid is not None and uid == web_uid:
         return (action_name in WEB_UI_ACTIONS), "web_ui"
     return False, "peer_not_allowed"
+
+
+def peer_may_connect(uid: Optional[int]) -> bool:
+    """Whether the table allows this peer any action at all; checked before
+    anything is read, so a peer with no action cannot hold a thread."""
+    if uid is None:
+        return False
+    if uid == 0 or uid == os.geteuid():
+        return True
+    web_uid = _web_ui_uid()
+    return web_uid is not None and uid == web_uid
 
 
 def _count_refusal(uid: Optional[int]) -> int:
@@ -2334,12 +2382,17 @@ class _RequestTooLarge(ValueError):
     pass
 
 
-def _read_request(conn) -> bytes:
+def _read_request(conn, deadline: float) -> bytes:
     """One request: up to the first newline, the end of the stream, or a
     complete JSON document (older clients send no newline), whichever is
-    first; at most MAX_REQUEST_BYTES."""
+    first; at most MAX_REQUEST_BYTES, all of it before ``deadline``
+    (time.monotonic())."""
     buf = b""
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise socket.timeout()
+        conn.settimeout(remaining)
         chunk = conn.recv(65536)
         if not chunk:
             return buf
@@ -2359,9 +2412,16 @@ def handle_client(conn, addr):
     """Handle incoming client connection"""
     try:
         peer_uid, peer_pid = peer_credentials(conn)
-        conn.settimeout(REQUEST_READ_TIMEOUT_SEC)
+        if not peer_may_connect(peer_uid):
+            allowed, rule = peer_action_allowed(peer_uid, None)
+            total = _count_refusal(peer_uid)
+            logger.warning(f"control.sock: refused uid={peer_uid} pid={peer_pid} before reading "
+                           f"(rule={rule}, refused so far={total})")
+            conn.sendall((json.dumps({"ok": False, "error": "forbidden", "reason": rule,
+                                      "ts": time.time()}) + "\n").encode("utf-8"))
+            return
         try:
-            raw_bytes = _read_request(conn)
+            raw_bytes = _read_request(conn, time.monotonic() + REQUEST_READ_TIMEOUT_SEC)
         except _RequestTooLarge:
             conn.sendall(b'{"ok": false, "error": "Request too large"}\n')
             return
@@ -2420,6 +2480,30 @@ def handle_client(conn, addr):
     finally:
         conn.close()
 
+def _dispatch_client(conn, addr) -> bool:
+    """Handle a connection in its own thread, at most MAX_CONCURRENT_CLIENTS
+    at once; beyond that the client is answered "busy" and closed."""
+    if not _CLIENT_SLOTS.acquire(blocking=False):
+        logger.warning("control.sock: too many concurrent clients; answered busy")
+        try:
+            conn.sendall(b'{"ok": false, "error": "busy"}\n')
+        except OSError:
+            pass
+        conn.close()
+        return False
+    thread = threading.Thread(target=_handle_client_slot, args=(conn, addr))
+    thread.daemon = True
+    thread.start()
+    return True
+
+
+def _handle_client_slot(conn, addr) -> None:
+    try:
+        handle_client(conn, addr)
+    finally:
+        _CLIENT_SLOTS.release()
+
+
 def start_noc_link_watch() -> None:
     """Start the link-state watch that re-evaluates a monitored interface on
     a carrier/operstate change (netlink multicast; sysfs poll fallback).
@@ -2456,10 +2540,7 @@ def main():
                 conn, _ = sock.accept()
             except socket.timeout:
                 continue
-            # Handle in thread to allow concurrent connections
-            thread = threading.Thread(target=handle_client, args=(conn, _))
-            thread.daemon = True
-            thread.start()
+            _dispatch_client(conn, _)
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:

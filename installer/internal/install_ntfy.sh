@@ -20,7 +20,9 @@ echo "[ntfy] Installing package..."
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y ntfy
 
-install -d /etc/azazel-edge /etc/azazel /var/lib/ntfy /var/cache/ntfy
+# An existing /etc/azazel-edge keeps its mode (Edge#471: never widened).
+[[ -d /etc/azazel-edge ]] || install -d -m 0750 /etc/azazel-edge
+install -d /etc/azazel /var/lib/ntfy /var/cache/ntfy
 chown _ntfy:_ntfy /var/lib/ntfy /var/cache/ntfy
 chmod 0750 /var/lib/ntfy /var/cache/ntfy
 

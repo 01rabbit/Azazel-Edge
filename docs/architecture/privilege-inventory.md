@@ -575,7 +575,7 @@ still root:
 | logs (authz, runbook, SoT\*, aggregator, triage audit) | `/var/log/azazel-edge/web/` | `azazel-web` 0750, group `azazel-web` | `LogsDirectory=azazel-edge/web`; defaults of `AZAZEL_AUTHZ_AUDIT_LOG`, `AZAZEL_RUNBOOK_EVENT_LOG`, `AZAZEL_AGGREGATOR_AUDIT_LOG`, `AZAZEL_TRIAGE_AUDIT_PATH` (\*SoT events move with the daemon writer) |
 | captive allowlist | `/var/lib/azazel-edge-web/captive-allowlist.json` | `azazel-web` 0750 | `StateDirectory=azazel-edge-web`; installer moves the old file once |
 | secrets the Web UI reads | in place | `0640 root:azazel-web` | installer `chgrp`/`chmod` |
-| `/etc/azazel-edge` | in place | `0755 root:root` (secret files keep their own 0600/0640) | resolves the 0750/0755 install-order ambiguity |
+| `/etc/azazel-edge` | in place | planned `0755 root:root`; **implemented: never widened** (§10.9) | resolves the 0750/0755 install-order ambiguity |
 
 Code changes that go with this, so failure is visible rather than silent:
 
@@ -706,7 +706,7 @@ request):
 | Peer uid (from `SO_PEERCRED`) | Allowed actions |
 | --- | --- |
 | 0 | every action |
-| the daemon's own uid | every action except `migrate_path_schema` (unless it is 0) |
+| the daemon's own uid | every action except `migrate_path_schema` (unless it is 0). Under the unit this is root; it must be revisited if the daemon stops running as root (stage 3+) |
 | `azazel-web` | `get_snapshot`, `watch_snapshot`, `refresh`, `reprobe`, `details`, `wifi_scan`, `wifi_connect`, `portal_viewer_open`, `shutdown`, `reboot`, `mode_set`, `mode_status`, `mode_get`, `mode_portal`, `mode_shield`, `mode_scapegoat`, `sot_trust_client`, `uplink_disconnect`, `sot_devices_replace`, `sot_devices_patch` |
 | anyone else, an `azazel-web` that does not resolve, a peer the kernel does not identify | nothing; `{"ok": false, "error": "forbidden"}`, a warning with uid/pid and a refusal counter |
 
@@ -724,7 +724,12 @@ checking the name and that the interface exists, and returns any failure
 `requested_by`), validate the whole document with `SoTConfig`, write a new
 temporary file, `fsync`, rename, and append `sot-events.jsonl` with the peer
 uid; a SoT file that exists but cannot be parsed is never replaced. The
-daemon reads one request of up to 1 MiB (it used to read 4 KiB once).
+daemon reads one request of up to 1 MiB (it used to read 4 KiB once), all
+of it within 10 s in total; a peer the table allows nothing is refused
+before anything is read, and at most 32 connections are handled at once
+(more are answered `busy`). A rewritten SoT file keeps the mode and group of
+the file it replaces (the installer makes it 0640 root:azazel-web); a new
+one is 0640 root:azazel-web when the daemon is root.
 
 **Query socket.** `/run/azazel-edge-agent-query/agent-query.sock`, directory
 0750 `root:azazel-web`, socket 0660 `root:azazel-web`. Peers: uid 0 and
@@ -754,7 +759,14 @@ failures are counted in `/health` (`audit_write_failures`). Token files that
 are missing or unreadable are logged (warning / error) and reported
 (`command_token_status`; the Mattermost command answers 503 when its token
 file is unreadable). `sot-events.jsonl` stays in `/var/log/azazel-edge`,
-written by the daemon. `audit_review` defaults to the new triage audit path.
+written by the daemon. `audit_review` defaults to the new triage audit path,
+which only root and `azazel-web` can read; another account gets a visible
+"error reading audit log" and can pass `--audit-path`. No CLI or offline tool
+creates triage sessions or the triage audit (only the Web UI does), so
+removing the `/tmp` fallback changes no other caller.
+
+The query socket reads the request within 10 s in total and handles at most
+4 queries at once (more are answered `busy`).
 
 **Not changed.** The core, the agent and the control daemon stay root; the
 agent's `WorkingDirectory=` is unchanged; the restart runbook is not moved
@@ -775,7 +787,8 @@ queried any more (`container_check: not_checked` in the monitoring state).
    → `azazel-control` and `AZAZEL_RUNTIME_DIR_MODE=0770` → `0750` only when
    they hold those old defaults; any other value is kept and reported.
    `AZAZEL_UP_IF` set only for the Web UI is copied there (the daemon now
-   brings the uplink down);
+   brings the uplink down), only if it is a plausible interface name (the
+   daemon's own check). A value already in this file wins;
 4. `/etc/default/azazel-edge-web`: Web UI path variables and
    `AZAZEL_AI_SOCKET` that still hold an old default move to the new one;
    other values are kept and reported;
@@ -783,11 +796,18 @@ queried any more (`container_check: not_checked` in the monitoring state).
    (`captive-allowlist.json`, `authz-events`, `runbook-events`,
    `aggregator-events`, `triage-audit` (+ `.1`), and the `/run` files);
    **the originals are kept** (audit history, rollback);
-6. token files the Web UI reads become `0640 root:azazel-web`;
-   `/etc/azazel-edge` is 0755;
+6. `/etc/azazel-edge` is **never widened**: if others can search it, its mode
+   stays; if it is closed to others with group root (0750 root:root), its
+   group becomes `azazel-web` (others unchanged); any other group is left and
+   reported. The installer scripts no longer reset its mode with `install -d`
+   (a missing one is created 0750). Token files the Web UI reads,
+   `sot.yaml`/`sot.json` and `first_minute.yaml` (it may hold the ntfy token;
+   every other reader is root) become `0640 root:azazel-web`. The local CA and
+   server private keys are made 0600 explicitly;
 7. restart order: control daemon, agent (query socket), Web UI.
 
-Wazuh FIM reports the ownership and mode changes once.
+Wazuh FIM reports the ownership and mode changes once; `install_wazuh_agent.sh`
+now also watches `/var/log/azazel-edge-web` and `/var/lib/azazel-edge-web`.
 
 **Rollback** (to the previous release):
 
@@ -799,7 +819,13 @@ Wazuh FIM reports the ownership and mode changes once.
 3. in `/etc/default/azazel-edge-web` remove `AZAZEL_AI_SOCKET` (the old Web UI
    would otherwise ask the query socket, which the old agent does not have)
    and any path moved in step 4 above;
-4. restart the control daemon, the agent and the Web UI.
+4. file and directory modes, if wanted: the old code reads them as root, so
+   they can stay. To restore the previous state exactly: `chgrp root
+   /etc/azazel-edge` (if the installer changed it from root to azazel-web;
+   its mode was not changed), `chown root:root` + `chmod 0600` the token
+   files (`web_token.txt` was 0640 root:root), and `chown root:root` +
+   `chmod 0644` `sot.yaml`/`sot.json`/`first_minute.yaml`;
+5. restart the control daemon, the agent and the Web UI.
 
 The old Web UI writes its files in the old places again; entries written in
 the new directories meanwhile stay there and are not merged back (copy them

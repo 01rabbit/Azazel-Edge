@@ -219,7 +219,8 @@ EOD
 }
 
 configure_control_flags() {
-  install -d /etc/azazel-edge
+  # An existing /etc/azazel-edge keeps its mode (Edge#471: never widened).
+  [[ -d /etc/azazel-edge ]] || install -d -m 0750 /etc/azazel-edge
   cat > "$FIRST_MINUTE_CFG" <<'EOD'
 suppress_auto_wifi: false
 EOD

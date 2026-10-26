@@ -92,7 +92,11 @@ QUERY_SOCKET_ACCOUNT = "azazel-web"
 QUERY_SOCKET_MODE = 0o660
 QUERY_SOCKET_DIR_MODE = 0o750
 QUERY_MAX_REQUEST_BYTES = 256 * 1024
-QUERY_READ_TIMEOUT_SEC = 10.0
+QUERY_READ_TIMEOUT_SEC = 10.0  # total, for the whole request line
+# Concurrent query handlers (a manual_query can wait on the LLM); more
+# connections are answered "busy" and closed.
+QUERY_MAX_CONCURRENT = 4
+_QUERY_SLOTS = threading.BoundedSemaphore(QUERY_MAX_CONCURRENT)
 _QUERY_REFUSALS_LOCK = threading.Lock()
 _QUERY_REFUSALS = {"total": 0}
 # Set once the query socket listens. From then on ai-bridge.sock refuses
@@ -627,10 +631,15 @@ def _handle_query_client(conn: socket.socket) -> None:
         if not query_peer_allowed(uid):
             _query_refuse(conn, uid, pid, "peer_not_allowed")
             return
-        conn.settimeout(QUERY_READ_TIMEOUT_SEC)
+        deadline = time.monotonic() + QUERY_READ_TIMEOUT_SEC
         buf = b""
         try:
             while b"\n" not in buf:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _query_refuse(conn, uid, pid, "request_timeout")
+                    return
+                conn.settimeout(remaining)
                 chunk = conn.recv(65536)
                 if not chunk:
                     break
@@ -638,7 +647,10 @@ def _handle_query_client(conn: socket.socket) -> None:
                 if len(buf) > QUERY_MAX_REQUEST_BYTES:
                     _query_refuse(conn, uid, pid, "request_too_large")
                     return
-        except (socket.timeout, OSError):
+        except socket.timeout:
+            _query_refuse(conn, uid, pid, "request_timeout")
+            return
+        except OSError:
             return
         line = buf.split(b"\n", 1)[0].decode("utf-8", errors="replace").strip()
         try:
@@ -675,7 +687,22 @@ def _query_accept_loop(srv: socket.socket, stop: threading.Event) -> None:
                 return
             time.sleep(0.2)
             continue
-        threading.Thread(target=_handle_query_client, args=(conn,), daemon=True).start()
+        if not _QUERY_SLOTS.acquire(blocking=False):
+            logger.warning("agent-query.sock: too many concurrent queries; answered busy")
+            try:
+                conn.sendall(b'{"ok": false, "error": "busy"}\n')
+            except OSError:
+                pass
+            conn.close()
+            continue
+        threading.Thread(target=_handle_query_slot, args=(conn,), daemon=True).start()
+
+
+def _handle_query_slot(conn: socket.socket) -> None:
+    try:
+        _handle_query_client(conn)
+    finally:
+        _QUERY_SLOTS.release()
 
 
 def _metrics_snapshot() -> Dict[str, Any]:

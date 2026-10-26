@@ -37,8 +37,12 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     only old-default lines in `/etc/default/azazel-edge-security` and
     `/etc/default/azazel-edge-web`, copies the Web UI's existing state into
     its new directories (keeping the originals), makes the Web UI's token
-    files `0640 root:azazel-web` and `/etc/azazel-edge` 0755, and restarts
-    the control daemon, the agent and the Web UI in that order.
+    files, `sot.yaml` and `first_minute.yaml` `0640 root:azazel-web`, never
+    widens `/etc/azazel-edge` (no script resets its mode any more; a 0750
+    root:root one gets group `azazel-web`), makes the local CA and server
+    keys 0600 explicitly, adds the Web UI's directories to the Wazuh FIM
+    paths, and restarts the control daemon, the agent and the Web UI in that
+    order.
 
 ### Added
 

@@ -161,7 +161,10 @@ def _request(conn_factory, payload: dict | bytes) -> dict:
         t = threading.Thread(target=control_daemon.handle_client, args=(server, None), daemon=True)
         t.start()
         data = payload if isinstance(payload, bytes) else (json.dumps(payload) + "\n").encode("utf-8")
-        client.sendall(data)
+        try:
+            client.sendall(data)
+        except BrokenPipeError:
+            pass  # a peer with no action is answered before its request is read
         client.settimeout(10)
         buf = b""
         while b"\n" not in buf:
@@ -807,3 +810,197 @@ def test_authz_audit_failures_are_counted_in_health(monkeypatch, tmp_path):
     client.get("/api/dashboard/trends")
     after = client.get("/health").get_json()["audit_write_failures"]["authz"]
     assert after >= before + 1
+
+
+# ------------------------------------------------ review follow-ups
+
+def test_the_daemons_own_uid_is_treated_as_root_and_documented(web_account):
+    # Under the unit the daemon is root, so this equals the root rule; it is
+    # pinned so de-rooting the daemon (stage 3+) has to revisit it.
+    assert control_daemon.peer_action_allowed(OWN_UID, "get_snapshot") == (True, "root")
+    assert control_daemon.peer_action_allowed(OWN_UID, "path_schema_status") == (True, "root")
+    src = (ROOT / "py" / "azazel_edge_control" / "daemon.py").read_text(encoding="utf-8")
+    block = src[src.index("def peer_action_allowed"):src.index("def peer_may_connect")]
+    assert "uid == os.geteuid()" in block and "stops running as root" in block
+
+
+def _connect_pair_without_sending(monkeypatch, uid):
+    _as_peer(monkeypatch, uid)
+    client, server = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    t = threading.Thread(target=control_daemon.handle_client, args=(server, None), daemon=True)
+    t.start()
+    return client, t
+
+
+def test_a_peer_with_no_action_is_refused_before_anything_is_read(monkeypatch, web_account):
+    monkeypatch.setattr(control_daemon, "_read_request", lambda *a, **k: pytest.fail("read before the peer check"))
+    client, t = _connect_pair_without_sending(monkeypatch, OTHER_UID)
+    with client:
+        client.settimeout(5)
+        reply = json.loads(client.recv(65536).decode().splitlines()[0])
+    t.join(5)
+    assert reply["error"] == "forbidden" and reply["reason"] == "peer_not_allowed"
+    assert not t.is_alive()
+
+
+def test_a_slow_request_hits_a_total_deadline(monkeypatch, web_account):
+    monkeypatch.setattr(control_daemon, "REQUEST_READ_TIMEOUT_SEC", 0.6)
+    monkeypatch.setattr(control_daemon, "execute_action", lambda *a, **k: pytest.fail("ran"))
+    client, t = _connect_pair_without_sending(monkeypatch, WEB_UID)
+    started = time.monotonic()
+    with client:
+        stop = _dribble(client)  # one byte every 0.2 s: each read is fast, the request never ends
+        client.settimeout(5)
+        reply = client.recv(65536).decode()
+        elapsed = time.monotonic() - started
+        stop.set()
+    t.join(5)
+    assert "Request timeout" in reply
+    assert elapsed < 1.5, elapsed  # the total deadline (0.6 s), not a per-read timeout
+
+
+def _dribble(conn) -> threading.Event:
+    stop = threading.Event()
+
+    def run():
+        while not stop.is_set():
+            try:
+                conn.sendall(b" ")
+            except OSError:
+                return
+            stop.wait(0.2)
+
+    threading.Thread(target=run, daemon=True).start()
+    return stop
+
+
+def test_concurrent_control_clients_are_capped(monkeypatch):
+    monkeypatch.setattr(control_daemon, "_CLIENT_SLOTS", threading.BoundedSemaphore(1))
+    release = threading.Event()
+    monkeypatch.setattr(control_daemon, "handle_client", lambda conn, addr: (release.wait(5), conn.close()))
+    a1, b1 = socket.socketpair()
+    a2, b2 = socket.socketpair()
+    with a1, a2:
+        assert control_daemon._dispatch_client(b1, None) is True
+        assert control_daemon._dispatch_client(b2, None) is False
+        a2.settimeout(5)
+        assert b'"busy"' in a2.recv(1024)
+        release.set()
+
+
+def test_concurrent_query_clients_are_capped(monkeypatch, web_account, tmpdir_short):
+    monkeypatch.setattr(agent_mod, "_QUERY_SLOTS", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(agent_mod, "peer_credentials", lambda conn: (WEB_UID, 1))
+    release = threading.Event()
+    monkeypatch.setattr(agent_mod, "_handle_manual_query_request",
+                        lambda req: release.wait(5) and {"ok": True, "action": "manual_query"})
+    path = tmpdir_short / "q.sock"
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(str(path))
+    srv.listen(4)
+    stop = threading.Event()
+    t = threading.Thread(target=agent_mod._query_accept_loop, args=(srv, stop), daemon=True)
+    t.start()
+    try:
+        first = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        first.connect(str(path))
+        first.sendall((json.dumps(MANUAL) + "\n").encode())
+        time.sleep(0.3)
+        second = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        second.connect(str(path))
+        second.settimeout(5)
+        assert b'"busy"' in second.recv(1024)
+        release.set()
+        first.settimeout(5)
+        assert json.loads(first.recv(65536).decode().splitlines()[0])["ok"] is True
+        first.close()
+        second.close()
+    finally:
+        release.set()
+        stop.set()
+        t.join(5)
+        srv.close()
+
+
+def test_a_slow_query_hits_a_total_deadline(monkeypatch, web_account, agent_paths):
+    monkeypatch.setattr(agent_mod, "QUERY_READ_TIMEOUT_SEC", 0.6)
+    monkeypatch.setattr(agent_mod, "peer_credentials", lambda conn: (WEB_UID, 1))
+    a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    t = threading.Thread(target=agent_mod._handle_query_client, args=(b,), daemon=True)
+    t.start()
+    started = time.monotonic()
+    with a:
+        stop = _dribble(a)
+        a.settimeout(5)
+        reply = a.recv(65536).decode()
+        elapsed = time.monotonic() - started
+        stop.set()
+    t.join(5)
+    assert "request_timeout" in reply and elapsed < 1.5, (reply, elapsed)
+    assert agent_paths == []
+
+
+def test_the_query_socket_is_bound_under_umask_0117(monkeypatch, tmpdir_short):
+    import types
+
+    seen = []
+
+    class Recorder(socket.socket):
+        def bind(self, address):
+            mask = os.umask(0)
+            os.umask(mask)
+            seen.append(mask)
+            return super().bind(address)
+
+    monkeypatch.setattr(agent_mod, "socket", types.SimpleNamespace(
+        socket=Recorder, AF_UNIX=socket.AF_UNIX, SOCK_STREAM=socket.SOCK_STREAM, timeout=socket.timeout))
+    monkeypatch.setattr(agent_mod, "_query_account_ids", lambda: (WEB_UID, os.getegid()))
+    srv = agent_mod._setup_query_socket(tmpdir_short / "q" / "agent-query.sock")
+    assert srv is not None
+    srv.close()
+    assert seen == [0o117]
+
+
+def test_an_sot_rewrite_keeps_the_files_mode_and_group(sot):
+    path, _audit = sot
+    path.chmod(0o640)
+    gid = path.stat().st_gid
+    assert control_daemon.execute_action("sot_devices_patch", {"devices": [NEW_DEVICE]})["ok"] is True
+    st = path.stat()
+    assert stat.S_IMODE(st.st_mode) == 0o640 and st.st_gid == gid
+
+
+def test_a_new_sot_file_is_not_world_readable_when_root_and_the_group_exists(monkeypatch, tmp_path):
+    path = tmp_path / "new-sot.json"
+    monkeypatch.setattr(control_daemon.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(control_daemon.grp, "getgrnam", lambda name: types_ns(gr_gid=os.getegid()))
+    assert control_daemon._sot_file_mode_and_group(path) == (0o640, os.getegid())
+    monkeypatch.setattr(control_daemon.grp, "getgrnam", lambda name: (_ for _ in ()).throw(KeyError(name)))
+    assert control_daemon._sot_file_mode_and_group(path) == (0o644, None)
+
+
+def types_ns(**kw):
+    import types
+    return types.SimpleNamespace(**kw)
+
+
+def test_wazuh_fim_watches_the_web_ui_directories():
+    src = (ROOT / "installer" / "internal" / "install_wazuh_agent.sh").read_text(encoding="utf-8")
+    block = src[src.index("azazel_dirs = ["):src.index("]", src.index("azazel_dirs = ["))]
+    for d in ("'/var/log/azazel-edge-web'", "'/var/lib/azazel-edge-web'", "'/etc/azazel-edge'"):
+        assert d in block, d
+
+
+def test_the_installer_never_widens_etc_azazel_edge():
+    internal = ROOT / "installer" / "internal"
+    for script in internal.glob("*.sh"):
+        text = script.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#") or "/etc/azazel-edge" not in stripped:
+                continue
+            assert "chmod 0755 /etc/azazel-edge" not in stripped, (script.name, line)
+            if stripped.startswith("install -d") and "/etc/azazel-edge " in stripped + " " \
+                    and not stripped.startswith("install -d /etc/azazel-edge/"):
+                pytest.fail(f"{script.name}: unconditional install -d resets the mode: {line}")
+    assert 'chmod 0600 "$CA_KEY"' in (internal / "install_local_ca.sh").read_text(encoding="utf-8")

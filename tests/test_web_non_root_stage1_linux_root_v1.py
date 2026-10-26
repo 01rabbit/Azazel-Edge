@@ -193,3 +193,17 @@ def test_query_socket_answers_root(query_socket):
     path, answered = query_socket
     r = _probe(0, 0, path, MANUAL)
     assert r["reply"]["ok"] is True
+
+
+def test_query_directory_owned_by_another_account_is_refused(query_base, monkeypatch, web_is):
+    """The owner check: a directory with the right group and mode but another
+    owner is refused and left untouched."""
+    monkeypatch.setattr(agent_mod, "_query_account_ids", lambda: (WEB_UID, WEB_UID))
+    d = query_base / "agent-query"
+    d.mkdir()
+    os.chown(d, WEB_UID, WEB_UID)
+    os.chmod(d, 0o750)
+    assert agent_mod._setup_query_socket(d / "agent-query.sock") is None
+    st = os.lstat(d)
+    assert (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)) == (WEB_UID, WEB_UID, 0o750)
+    assert list(d.iterdir()) == []

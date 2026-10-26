@@ -9,10 +9,11 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-# The directory is searchable by everyone (0755); each secret in it carries
-# its own mode. The Web UI runs as azazel-web (Edge#471 stage 1) and must
-# reach its token, which is 0640 root:azazel-web.
-install -d -m 0755 "$TOKEN_DIR"
+# A missing directory is created 0750; an existing one keeps its mode
+# (Edge#471: never widened). The Web UI runs as azazel-web (stage 1) and
+# reads its token, which is 0640 root:azazel-web; setup_web_account.sh gives
+# it access to the directory.
+[[ -d "$TOKEN_DIR" ]] || install -d -m 0750 "$TOKEN_DIR"
 web_token_mode() {
   if getent group azazel-web >/dev/null 2>&1; then
     chown root:azazel-web "$TOKEN_FILE"

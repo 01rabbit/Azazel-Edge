@@ -124,7 +124,7 @@ EOF
     exit 1
   fi
 
-  install -d -m 0755 "$(dirname "${token_path}")"
+  [[ -d "$(dirname "${token_path}")" ]] || install -d -m 0750 "$(dirname "${token_path}")"
   (umask 077; printf '%s\n' "${command_token}" > "${token_path}")
   web_readable_secret "${token_path}"
   echo "[OK] Mattermost slash command provisioned"

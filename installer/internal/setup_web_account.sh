@@ -17,7 +17,9 @@
 #     other value is left and reported.
 #  4. The Web UI's own directories and a one-time copy of its existing state
 #     and logs into them (the originals are kept, for history and rollback).
-#  5. Token files the Web UI reads: 0640 root:azazel-web.
+#  5. /etc/azazel-edge: never widened; if it is closed to others with group
+#     root, its group becomes azazel-web. Token files, sot.yaml/sot.json and
+#     first_minute.yaml: 0640 root:azazel-web.
 #
 # Nothing here grants a capability, a sudo rule, a polkit rule or the docker
 # group.
@@ -120,9 +122,19 @@ grep -q '^AZAZEL_RUNTIME_DIR_MODE=' "$SECURITY_ENV" || echo "AZAZEL_RUNTIME_DIR_
 report_other_value "$SECURITY_ENV" AZAZEL_RUNTIME_SOCKET_GROUP "$CONTROL_GROUP"
 report_other_value "$SECURITY_ENV" AZAZEL_RUNTIME_DIR_MODE "0750"
 touch "$WEB_ENV"
+# AZAZEL_UP_IF set only for the Web UI moves to the control daemon, which now
+# brings the uplink down. A value already in $SECURITY_ENV wins. The value is
+# copied only when it is a plausible interface name (the daemon's own check).
 if grep -q '^AZAZEL_UP_IF=' "$WEB_ENV" && ! grep -q '^AZAZEL_UP_IF=' "$SECURITY_ENV"; then
-  grep '^AZAZEL_UP_IF=' "$WEB_ENV" | tail -n 1 >> "$SECURITY_ENV"
-  say "copied AZAZEL_UP_IF from $WEB_ENV to $SECURITY_ENV (the control daemon now disconnects the uplink)"
+  up_if="$(grep '^AZAZEL_UP_IF=' "$WEB_ENV" | tail -n 1 | cut -d= -f2- | tr -d "\"'")"
+  if [[ "$up_if" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]]; then
+    echo "AZAZEL_UP_IF=$up_if" >> "$SECURITY_ENV"
+    say "copied AZAZEL_UP_IF from $WEB_ENV to $SECURITY_ENV (the control daemon now disconnects the uplink)"
+  else
+    say "NOTICE: AZAZEL_UP_IF in $WEB_ENV is not a valid interface name; not copied (the daemon uses its default)"
+  fi
+elif grep -q '^AZAZEL_UP_IF=' "$WEB_ENV"; then
+  say "NOTICE: AZAZEL_UP_IF is set in both files; the control daemon uses the value in $SECURITY_ENV"
 fi
 
 echo "[web-account] 3/5 $WEB_ENV"
@@ -180,11 +192,34 @@ for name in operator-progress.json topolite_seed_mode.json dashboard-trends.json
   copy_once "/run/azazel-edge/$name" "$WEB_RUN_DIR/$name"
 done
 
-echo "[web-account] 5/5 token files"
-# /etc/azazel-edge stays searchable (0755); each secret carries its own mode.
-if [[ -d /etc/azazel-edge ]]; then
-  chmod 0755 /etc/azazel-edge
+echo "[web-account] 5/5 /etc/azazel-edge and the files the Web UI reads"
+# The directory is never widened. If others can already search it, it is left
+# as it is. If it is closed to others and owned by group root (0750
+# root:root, as provision_web_token.sh made it), its group becomes azazel-web
+# so the Web UI (and root) can reach it; nothing else is opened. Any other
+# group is left alone and reported.
+ETC=/etc/azazel-edge
+if [[ -d "$ETC" && ! -L "$ETC" ]]; then
+  etc_mode="$(stat -c '%a' "$ETC")"; etc_group="$(stat -c '%G' "$ETC")"
+  if (( 8#$etc_mode & 8#001 )); then
+    say "$ETC keeps mode $etc_mode (others can already search it)"
+  elif [[ "$etc_group" == "root" || "$etc_group" == "$WEB_GROUP" ]]; then
+    chgrp "$WEB_GROUP" "$ETC"
+    chmod g+rx,g-w "$ETC"
+    say "$ETC -> group $WEB_GROUP, mode $(stat -c '%a' "$ETC") (others unchanged)"
+  else
+    say "NOTICE: $ETC is mode $etc_mode group $etc_group; left as it is. The Web UI (azazel-web) may not reach its files"
+  fi
 fi
+# Files only root services and the Web UI read: the device inventory and the
+# first-minute configuration (it may hold the ntfy token).
+for f in "$ETC/sot.yaml" "$ETC/sot.json" "$ETC/first_minute.yaml"; do
+  if [[ -f "$f" && ! -L "$f" ]]; then
+    chown root:"$WEB_GROUP" -- "$f"
+    chmod 0640 -- "$f"
+    say "$f -> 0640 root:$WEB_GROUP"
+  fi
+done
 token_files=(
   /etc/azazel-edge/web_token.txt
   /etc/azazel-edge/auth_tokens.json

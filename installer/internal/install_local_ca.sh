@@ -45,7 +45,8 @@ fi
 if (( recreate_ca == 1 )); then
   echo "[ca] Creating local root CA"
   rm -f "$CA_CERT" "$CA_KEY" "$CA_SERIAL"
-  openssl genrsa -out "$CA_KEY" 4096
+  (umask 077; openssl genrsa -out "$CA_KEY" 4096)
+  chmod 0600 "$CA_KEY"
   openssl req -x509 -new -nodes -sha256 \
     -key "$CA_KEY" \
     -days "$CA_DAYS" \
@@ -57,7 +58,8 @@ if (( recreate_ca == 1 )); then
 fi
 
 echo "[ca] Creating server certificate signed by local CA"
-openssl genrsa -out "$SERVER_KEY" 2048
+(umask 077; openssl genrsa -out "$SERVER_KEY" 2048)
+chmod 0600 "$SERVER_KEY"
 openssl req -new -key "$SERVER_KEY" -subj "/CN=${CN}" -out "$SERVER_CSR"
 
 {
