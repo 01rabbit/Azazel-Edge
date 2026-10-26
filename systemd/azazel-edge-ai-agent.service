@@ -4,6 +4,48 @@ After=network.target
 
 [Service]
 Type=simple
+# Edge#471 stage 2: the agent runs as its own non-root account. It writes
+# only in its own directories:
+#   /run/azazel-edge-ai           ai-bridge.sock (0700, RuntimeDirectory=)
+#   /run/azazel-edge-agent        advisory, metrics, policy, its snapshot
+#                                 fields (2750 azazel-agent:azazel-web)
+#   /run/azazel-edge-agent-query  the Web UI's manual_query socket
+#                                 (2750 azazel-agent:azazel-web)
+#   /var/log/azazel-edge/ai       AI logs, the core-decision audit chain and
+#                                 the P0 queue (2750 azazel-agent:azazel-web)
+#   /var/lib/azazel-edge-agent    the decision log (StateDirectory=)
+# The group-shared ones are created by tmpfiles.d (azazel-edge-agent.conf);
+# ExecStartPre re-applies it as root so they exist after /run is cleared.
+# The core (root) still connects to ai-bridge.sock.
+User=azazel-agent
+Group=azazel-agent
+RuntimeDirectory=azazel-edge-ai
+RuntimeDirectoryMode=0700
+StateDirectory=azazel-edge-agent
+StateDirectoryMode=0750
+UMask=0027
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /etc/tmpfiles.d/azazel-edge-agent.conf
+ReadWritePaths=/run/azazel-edge-agent /run/azazel-edge-agent-query /var/log/azazel-edge/ai
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# AF_INET/AF_INET6: Ollama on loopback. AF_NETLINK: `ip -4 route show default`.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
 EnvironmentFile=-/etc/default/azazel-edge-security
 Environment="AZAZEL_LLM_MODEL_PRIMARY=qwen3.5:2b"
 Environment="AZAZEL_LLM_MODEL_DEGRADED=qwen3.5:0.8b"

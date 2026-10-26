@@ -233,8 +233,11 @@ class ApiStateStatusViewTests(unittest.TestCase):
             "FALLBACK_STATE_PATH": webapp.FALLBACK_STATE_PATH,
             "AUTH_FAIL_OPEN": webapp.AUTH_FAIL_OPEN,
             "load_token": webapp.load_token,
+            "AI_ADVISORY_PATH": webapp.AI_ADVISORY_PATH,
         }
         self.snap_path = root / "ui_snapshot.json"
+        # The agent writes the StatusView beside its own files (Edge#471 stage 2).
+        webapp.AI_ADVISORY_PATH = root / "ai_advisory.json"
         self.snap_path.write_text("{}", encoding="utf-8")
         webapp.STATE_PATH = self.snap_path
         webapp.FALLBACK_STATE_PATH = self.snap_path

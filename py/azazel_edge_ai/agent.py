@@ -67,7 +67,6 @@ SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge-ai/ai-br
 # The socket's location before Edge#462: inside the shared runtime directory,
 # where members of AZAZEL_RUNTIME_SOCKET_GROUP could replace it.
 LEGACY_SOCKET_PATH = Path("/run/azazel-edge/ai-bridge.sock")
-RUNTIME_DIR_MODE = int(str(os.environ.get("AZAZEL_RUNTIME_DIR_MODE", "0770")), 8)
 # ai-bridge.sock is owner only (Edge#462). Its caller, the Rust core (event
 # forwarding), runs as root like this agent; the Web UI asks on the separate
 # query socket below (Edge#471 stage 1). The optional shared group (AZAZEL_RUNTIME_SOCKET_GROUP) is for the
@@ -91,6 +90,10 @@ QUERY_SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_QUERY_SOCKET", "/run/azazel-e
 QUERY_SOCKET_ACCOUNT = "azazel-web"
 QUERY_SOCKET_MODE = 0o660
 QUERY_SOCKET_DIR_MODE = 0o750
+# An existing directory may also be setgid (2750): as azazel-agent (stage 2)
+# the agent cannot chgrp to azazel-web itself, so tmpfiles.d creates the
+# directory setgid and the socket inherits the group.
+QUERY_SOCKET_DIR_MODES_ACCEPTED = (0o750, 0o2750)
 QUERY_MAX_REQUEST_BYTES = 256 * 1024
 QUERY_READ_TIMEOUT_SEC = 10.0  # total, for the whole request line
 # Concurrent query handlers (a manual_query can wait on the LLM); more
@@ -105,14 +108,26 @@ _QUERY_REFUSALS = {"total": 0}
 # on a development host), ai-bridge.sock keeps answering manual_query from
 # the peers that can reach it (owner only: root / the agent's account).
 QUERY_SOCKET_ACTIVE = threading.Event()
-ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge/ai_advisory.json"))
-EVENT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", "/var/log/azazel-edge/ai-events.jsonl"))
-SNAPSHOT_PATH = Path(os.environ.get("AZAZEL_UI_SNAPSHOT", "/run/azazel-edge/ui_snapshot.json"))
-LLM_DEFERRED_LOG_PATH = Path(os.environ.get("AZAZEL_AI_DEFERRED_LOG", "/var/log/azazel-edge/ai-deferred.jsonl"))
-LLM_RESULT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-llm.jsonl"))
-METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_metrics.json"))
-POLICY_PATH = Path(os.environ.get("AZAZEL_AI_POLICY", "/run/azazel-edge/ai_runtime_policy.json"))
-AI_AUDIT_PATH = Path(os.environ.get("AZAZEL_AI_AUDIT_LOG", "/var/log/azazel-edge/ai-audit.jsonl"))
+# The agent's own directories (Edge#471 stage 2: it runs as azazel-agent).
+# /run/azazel-edge-agent and /var/log/azazel-edge/ai are owned by the agent's
+# account with group azazel-web, setgid, so the Web UI (and root) can read
+# what the agent writes and nobody else can write there. The agent no longer
+# writes in the shared /run/azazel-edge (the control daemon's directory).
+AGENT_RUNTIME_DIR = Path("/run/azazel-edge-agent")
+AGENT_LOG_DIR = Path("/var/log/azazel-edge/ai")
+AGENT_STATE_DIR = Path("/var/lib/azazel-edge-agent")
+ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", str(AGENT_RUNTIME_DIR / "ai_advisory.json")))
+EVENT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", str(AGENT_LOG_DIR / "ai-events.jsonl")))
+# The agent's own snapshot fields, next to its advisory. The control daemon is
+# the only writer of the shared ui_snapshot.json and merges these fields
+# (azazel_edge_control.daemon AGENT_SNAPSHOT_KEYS). AZAZEL_UI_SNAPSHOT names
+# the shared file and is no longer the agent's.
+SNAPSHOT_PATH = ADVISORY_PATH.parent / "ai_snapshot.json"
+LLM_DEFERRED_LOG_PATH = Path(os.environ.get("AZAZEL_AI_DEFERRED_LOG", str(AGENT_LOG_DIR / "ai-deferred.jsonl")))
+LLM_RESULT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_LLM_LOG", str(AGENT_LOG_DIR / "ai-llm.jsonl")))
+METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", str(AGENT_RUNTIME_DIR / "ai_metrics.json")))
+POLICY_PATH = Path(os.environ.get("AZAZEL_AI_POLICY", str(AGENT_RUNTIME_DIR / "ai_runtime_policy.json")))
+AI_AUDIT_PATH = Path(os.environ.get("AZAZEL_AI_AUDIT_LOG", str(AGENT_LOG_DIR / "ai-audit.jsonl")))
 # P0 alert path for the Rust core's decisions (Edge#412 owner decision: the
 # Rust azazel-edge-core is the authoritative decision and enforcement path;
 # Edge#414 SO-03). This agent is where the core's decisions arrive (the core
@@ -239,7 +254,9 @@ MANUAL_MODEL_CHAIN = [
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("azazel-edge-ai-agent")
 SCORER = TacticalScorer()
-DECISION_LOGGER = DecisionLogger()
+DECISION_LOGGER = DecisionLogger(
+    Path(str(os.environ.get("AZAZEL_DECISION_LOG_DIR", "")).strip() or str(AGENT_STATE_DIR / "decisions"))
+)
 CONFIG_HASH = ConfigHash.compute(config_dict={"engine": "tactical_scorer_v1"})
 DECISION_LAYERS = DecisionLayers()
 _LAST_RISK_SCORE = 0
@@ -287,18 +304,20 @@ CORR_LOCK = threading.Lock()
 CORR_STATE: Dict[str, list[Dict[str, Any]]] = {}
 
 
+AI_AUDIT_ERROR = ""
+
+
 def _build_ai_audit_logger() -> Any | None:
+    """The AI audit chain. No fallback (Edge#471 stage 2): an audit log that
+    cannot be opened stops the service in _serve, never moves to /tmp."""
+    global AI_AUDIT_ERROR
     if P0AuditLogger is None:
         return None
     try:
         return P0AuditLogger(AI_AUDIT_PATH)
-    except Exception:
-        try:
-            fallback = Path("/tmp/azazel-edge-ai-audit.jsonl")
-            fallback.parent.mkdir(parents=True, exist_ok=True)
-            return P0AuditLogger(fallback)
-        except Exception:
-            return None
+    except Exception as exc:
+        AI_AUDIT_ERROR = f"ai audit log {AI_AUDIT_PATH} cannot be opened: {exc}"
+        return None
 
 
 AI_AUDIT = _build_ai_audit_logger()
@@ -418,12 +437,41 @@ def _audit_ai_scope(trace_id: str, source: str, intent: str, in_scope: bool, rea
         return
 
 
+class AgentDirError(RuntimeError):
+    """One of the agent's own directories is not safe to use; the agent stops."""
+
+
 def _prepare_runtime_dir(target: Path) -> None:
-    """Create the shared runtime directory (the agent's state files). Its
-    group is left as it is: the control daemon sets the shared group on it
-    for control.sock, and this agent neither grants nor removes that."""
-    target.mkdir(parents=True, exist_ok=True)
-    os.chmod(str(target), RUNTIME_DIR_MODE)
+    """The agent's own runtime directory (Edge#471 stage 2). A missing one is
+    created (0750); an existing one is used as it is, never chmod'ed or
+    chown'ed: it must be a real directory owned by this process's user that
+    nobody else can write (no group/other write bit). Anything else stops
+    the agent. The shared /run/azazel-edge belongs to the control daemon and
+    is not touched."""
+    old_umask = os.umask(0o027)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.mkdir(str(target), 0o750)
+        except FileExistsError:
+            pass
+    except OSError as exc:
+        raise AgentDirError(f"agent runtime directory {target}: {exc}") from exc
+    finally:
+        os.umask(old_umask)
+    try:
+        st = os.lstat(str(target))
+    except OSError as exc:
+        raise AgentDirError(f"agent runtime directory {target}: {exc}") from exc
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise AgentDirError(f"agent runtime directory {target} is not a real directory; refusing")
+    if st.st_uid != os.geteuid():
+        raise AgentDirError(
+            f"agent runtime directory {target} is owned by uid {st.st_uid}, not this process (uid {os.geteuid()}); "
+            "refusing (the shared /run/azazel-edge is the control daemon's)")
+    if stat.S_IMODE(st.st_mode) & 0o022:
+        raise AgentDirError(
+            f"agent runtime directory {target} has mode {stat.S_IMODE(st.st_mode):04o} (group/other writable); refusing")
 
 
 class AISocketSetupError(RuntimeError):
@@ -546,7 +594,7 @@ def _prepare_query_socket_dir(path: Path, gid: int) -> None:
             # Only a directory this call created is given its group and mode.
             os.fchown(fd, -1, gid)
             os.fchmod(fd, QUERY_SOCKET_DIR_MODE)
-        elif st.st_gid != gid or stat.S_IMODE(st.st_mode) != QUERY_SOCKET_DIR_MODE:
+        elif st.st_gid != gid or stat.S_IMODE(st.st_mode) not in QUERY_SOCKET_DIR_MODES_ACCEPTED:
             raise AISocketSetupError(
                 f"query socket directory {target} has group {st.st_gid} and mode {stat.S_IMODE(st.st_mode):04o}; "
                 f"it must be group {gid} and mode {QUERY_SOCKET_DIR_MODE:04o}; refusing")
@@ -2301,9 +2349,15 @@ def _serve(stop: threading.Event | None = None) -> None:
         stop = threading.Event()
         if threading.current_thread() is threading.main_thread():
             signal.signal(signal.SIGTERM, lambda signum, frame: stop.set())
-    _prepare_runtime_dir(ADVISORY_PATH.parent)
-    _ensure_parent(METRICS_PATH)
-    _ensure_parent(POLICY_PATH)
+    try:
+        for runtime_dir in sorted({ADVISORY_PATH.parent, METRICS_PATH.parent, POLICY_PATH.parent}):
+            _prepare_runtime_dir(runtime_dir)
+    except AgentDirError as exc:
+        logger.error("%s", exc)
+        raise SystemExit(f"azazel-edge-ai-agent: {exc}") from None
+    if P0AuditLogger is not None and AI_AUDIT is None:
+        logger.error("%s", AI_AUDIT_ERROR)
+        raise SystemExit(f"azazel-edge-ai-agent: {AI_AUDIT_ERROR}")
     # Bound before any thread starts (bind sets a process-wide umask), but
     # not listening: a connect is refused until the P0 path below runs.
     try:

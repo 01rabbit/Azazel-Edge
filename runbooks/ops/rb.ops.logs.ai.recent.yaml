@@ -22,5 +22,5 @@ command:
   argv:
     - -n
     - ${lines}
-    - /var/log/azazel-edge/ai-llm.jsonl
+    - /var/log/azazel-edge/ai/ai-llm.jsonl
 
