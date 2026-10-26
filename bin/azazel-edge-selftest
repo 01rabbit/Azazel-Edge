@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # azazel-edge-selftest - Periodic hardware and config health check
+#
+# Exit status: 1 when a critical check failed (the "failures" list of
+# selftest_latest.json; the systemd unit then shows as failed), 0 otherwise
+# (warnings alone do not fail it). install_all.sh runs it last and fails with
+# it.
 set -euo pipefail
 
 LOG_DIR="/var/log/azazel-edge"
 OUT_JSON="${LOG_DIR}/selftest_latest.json"
 # The write-speed test file: a new mktemp name in this directory (0600,
 # created with O_EXCL), never a fixed name another user could pre-create or
-# point a symlink at; removed on every exit.
-SD_TEST_DIR="/tmp"
-TIME_BIN="/usr/bin/time"
+# point a symlink at; removed on every exit. A root-only directory on the
+# root filesystem (the SD card), not /tmp: on trixie /tmp is a tmpfs, which
+# would measure RAM.
+SD_TEST_DIR="/var/lib/azazel-edge/selftest"
 SD_TEST_FILE=""
 FAILURES=()
 WARNINGS=()
@@ -31,29 +37,66 @@ fail() {
   FAILURES+=("$1")
 }
 
+# Microseconds from bash alone (EPOCHREALTIME, bash 5; its decimal mark
+# follows the locale), so the test needs no external time command.
+now_usec() {
+  local t="${EPOCHREALTIME:-}"
+  if [[ -n "${t}" ]]; then
+    t="${t//[.,]/}"
+  else
+    t="$(date +%s%6N)"
+  fi
+  printf '%s' "$((10#${t}))"
+}
+
+# The filesystem type of SD_TEST_DIR (coreutils stat, as findmnt is
+# util-linux and may be absent).
+sd_test_dir_fstype() {
+  stat -f -c %T -- "${SD_TEST_DIR}" 2>/dev/null || true
+}
+
 check_sd_write_speed() {
-  local speed
+  local fstype start end usec mbps_x100
+  if ! command -v dd >/dev/null 2>&1; then
+    warn "sd_write_test_skipped:dd_missing"
+    return 0
+  fi
+  if ! install -d -m 0700 -- "${SD_TEST_DIR}"; then
+    fail "sd_write_test_failed"
+    return 0
+  fi
+  fstype="$(sd_test_dir_fstype)"
+  case "${fstype}" in
+    tmpfs|ramfs|overlayfs|"")
+      # Not the SD card (or unknown): a speed from here would mean nothing.
+      warn "sd_write_test_skipped:not_on_sd:${fstype:-unknown}"
+      return 0
+      ;;
+  esac
   if ! SD_TEST_FILE="$(mktemp "${SD_TEST_DIR}/azazel_sdtest.XXXXXXXXXX")"; then
     SD_TEST_FILE=""
     fail "sd_write_test_failed"
-    return
+    return 0
   fi
+  start="$(now_usec)"
   # conv=nocreat: dd writes only the file mktemp created.
-  if speed="$({ "${TIME_BIN}" -f '%e' dd if=/dev/zero of="${SD_TEST_FILE}" bs=1M count=10 oflag=direct conv=nocreat status=none; } 2>&1)"; then
-    :
-  else
+  if ! dd if=/dev/zero of="${SD_TEST_FILE}" bs=1M count=10 oflag=direct conv=nocreat status=none 2>/dev/null; then
     fail "sd_write_test_failed"
     cleanup_sd_test_file
-    return
+    return 0
   fi
+  end="$(now_usec)"
   cleanup_sd_test_file
-  local sec mbps
-  sec="${speed}"
-  if [[ "${sec}" == "0" || "${sec}" == "0.0" ]]; then
-    return
+  usec=$((end - start))
+  if [[ "${usec}" -le 0 ]]; then
+    return 0
   fi
-  mbps=$(awk -v s="${sec}" 'BEGIN { printf "%.2f", 10.0 / s }')
-  awk -v v="${mbps}" 'BEGIN { exit (v < 5.0 ? 0 : 1) }' && warn "sd_write_speed_low:${mbps}MBps"
+  # 10 MiB in usec microseconds, in MB/s times 100 (integer arithmetic).
+  mbps_x100=$((10 * 1000000 * 100 / usec))
+  if [[ "${mbps_x100}" -lt 500 ]]; then
+    warn "sd_write_speed_low:$((mbps_x100 / 100)).$(printf '%02d' $((mbps_x100 % 100)))MBps"
+  fi
+  return 0
 }
 
 check_mmc_errors() {
@@ -88,15 +131,27 @@ check_config_integrity() {
 
 check_service_health() {
   local svc
-  for svc in azazel-edge-web azazel-edge-control-daemon azazel-edge-suricata azazel-edge-opencanary; do
+  for svc in azazel-edge-web azazel-edge-control-daemon; do
     if ! systemctl is-active --quiet "${svc}"; then
+      fail "service_inactive:${svc}"
+    fi
+  done
+  # The security stack is optional (ENABLE_SECURITY_STACK=0 leaves these
+  # units disabled): checked only when enabled.
+  for svc in azazel-edge-suricata azazel-edge-opencanary; do
+    if ! systemctl is-enabled --quiet "${svc}" 2>/dev/null; then
+      warn "service_not_enabled:${svc}"
+    elif ! systemctl is-active --quiet "${svc}"; then
       fail "service_inactive:${svc}"
     fi
   done
 }
 
 check_python_smoke() {
-  if [[ -x /opt/azazel-edge/venv/bin/pytest ]]; then
+  # The installer installs neither pytest nor /opt/azazel-edge/tests.
+  if [[ ! -f /opt/azazel-edge/tests/test_epd_cli_help_v1.py ]]; then
+    warn "python_smoke_tests_missing"
+  elif [[ -x /opt/azazel-edge/venv/bin/pytest ]]; then
     if ! PYTHONPATH=/opt/azazel-edge /opt/azazel-edge/venv/bin/pytest /opt/azazel-edge/tests/test_epd_cli_help_v1.py -q --tb=no >/dev/null 2>&1; then
       fail "python_smoke_failed"
     fi
@@ -158,3 +213,18 @@ emit_epd_warning_if_failed
 write_json
 
 echo "selftest completed: ${OUT_JSON}"
+for item in ${FAILURES[@]+"${FAILURES[@]}"}; do
+  echo "  FAIL ${item}"
+done
+for item in ${WARNINGS[@]+"${WARNINGS[@]}"}; do
+  echo "  WARN ${item}"
+done
+if [[ ${#FAILURES[@]} -gt 0 ]]; then
+  echo "selftest status: failed (${#FAILURES[@]} critical)" >&2
+  exit 1
+fi
+if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+  echo "selftest status: warning"
+else
+  echo "selftest status: ok"
+fi

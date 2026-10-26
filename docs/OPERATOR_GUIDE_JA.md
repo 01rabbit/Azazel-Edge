@@ -8,7 +8,14 @@
 1. 電源、LAN、表示ケーブルを接続する。
 2. 起動し、サービスが立ち上がるまで待つ。
 3. `systemctl is-active azazel-edge-web azazel-edge-control-daemon` を確認する。
-4. ダッシュボード `http://<pi-ip>:8080` を開く。
+4. 同じネットワークのブラウザでダッシュボード `https://<pi-ip>/` を開く
+   （nginx が HTTPS で提供し、HTTP はそこへ転送する。Web UI 本体は
+   `127.0.0.1:8084` だけで待ち受ける）。
+   - 証明書は本機のローカル CA の署名。`http://<pi-ip>/.well-known/azazel-edge-local-ca.crt`
+     を一度取得して操作端末で信頼させないと、ブラウザが証明書の警告を出す。
+   - 初回は `https://<pi-ip>/?token=<トークン>` で開く（ブラウザが保持する）。
+     トークンは `/etc/azazel-edge/web_token.txt`（`0640 root:azazel-web`）にあり、
+     本機で `sudo cat /etc/azazel-edge/web_token.txt` で読む。
 5. 現在の色状態と推奨アクションを確認する。
 
 ## 2. e-Paper 状態と初動

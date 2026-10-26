@@ -1,5 +1,16 @@
 # Post-Demo Socket Permission Model (#105)
 
+> **Superseded (historical).** This page describes the model before the
+> services stopped running as root. Since #475 (Web UI as `azazel-web`, #471
+> stage 1) and #476 (AI agent as `azazel-agent`, #471 stage 2), the current
+> accounts, sockets, directories and modes are in
+> [docs/architecture/privilege-inventory.md](architecture/privilege-inventory.md)
+> (sections 10.9 and 11.7, "as implemented"). In particular the Web UI no
+> longer connects to `ai-bridge.sock`: manual queries go to
+> `/run/azazel-edge-agent-query/agent-query.sock`, and the agent's state is in
+> `/run/azazel-edge-agent`, not `/run/azazel-edge`. The text below is kept as
+> history and is not maintained.
+
 Last updated: 2026-10-26
 
 ## Scope

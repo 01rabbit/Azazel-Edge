@@ -2,6 +2,15 @@
 set -euo pipefail
 
 REPO_ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# Without an argument the default is the checkout this script sits in. The
+# installed copies (/opt/azazel-edge/verify_runtime_sync.sh and
+# /usr/local/bin/azazel-edge-runtime-sync-check) are not in one, so there the
+# checkout must be given: otherwise "/" or "/usr" would be compared and every
+# file reported missing.
+if [[ $# -lt 1 && ! -f "$REPO_ROOT/installer/internal/verify_runtime_sync.sh" ]]; then
+  echo "[ERROR] not run from a repository checkout: give it as the first argument, e.g. $0 /home/azazel/Azazel-Edge" >&2
+  exit 2
+fi
 RUNTIME_ROOT="${2:-/opt/azazel-edge}"
 # with-rust-core (the default) or without-rust-core: whether the installer
 # built the Rust core (ENABLE_RUST_CORE), so whether its sources are compared.

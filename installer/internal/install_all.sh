@@ -97,4 +97,30 @@ else
   echo "[all/7] Skip optional sensors (set ENABLE_SNMP=1 and/or ENABLE_NETFLOW=1)"
 fi
 
+# Last: the selftest (bin/azazel-edge-selftest) checks the services, config
+# checksums and storage, prints its findings and exits non-zero on a critical
+# failure, which fails the install too. It needs the app stack and its
+# services running, so it is skipped without them. Then the periodic
+# selftest timer (at boot + 5 min and quarterly) is installed, also after a
+# failed selftest: the check matters most then. It goes after this run, not
+# before: enabling the timer starts a run at once (its OnBootSec= is past),
+# and two runs at the same time would write the same result file.
+if [[ "${ENABLE_APP_STACK}" == "1" && "${ENABLE_SERVICES:-1}" == "1" ]]; then
+  echo "[all/8] Run selftest"
+  selftest_rc=0
+  "${REPO_ROOT}/bin/azazel-edge-selftest" || selftest_rc=$?
+  echo "[all/9] Install the periodic selftest timer"
+  if [[ "$(uname -m)" == "aarch64" ]]; then
+    ENABLE_SERVICES=1 "${REPO_ROOT}/installer/internal/install_selftest_timer.sh"
+  else
+    echo "NOTICE: the selftest timer is not installed: install_selftest_timer.sh supports aarch64 (Raspberry Pi) only, and this is $(uname -m)."
+  fi
+  if [[ "${selftest_rc}" -ne 0 ]]; then
+    echo "ERROR: the selftest found a critical failure (listed above; details in /var/log/azazel-edge/selftest_latest.json). The installation finished, but the device is not ready." >&2
+    exit 1
+  fi
+else
+  echo "[all/8] Skip selftest and its timer (need ENABLE_APP_STACK=1 and ENABLE_SERVICES=1)"
+fi
+
 echo "Unified installation completed."

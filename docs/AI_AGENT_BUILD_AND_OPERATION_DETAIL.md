@@ -32,8 +32,9 @@ Planned or iterative areas:
 Primary AI-related runtime surfaces:
 - `py/azazel_edge_ai/agent.py`
 - `systemd/azazel-edge-ai-agent.service`
-- `/run/azazel-edge-ai/ai-bridge.sock`
-- `/var/log/azazel-edge/ai-*.jsonl`
+- `/run/azazel-edge-ai/ai-bridge.sock` (in a 0700 `azazel-agent` directory; the core connects as root)
+- `/run/azazel-edge-agent/` (advisory, metrics, runtime policy, snapshot fields)
+- `/var/log/azazel-edge/ai/ai-*.jsonl`
 
 ## 5. Configuration Areas
 Common variables:
@@ -45,8 +46,10 @@ Common variables:
 ## 6. Verification Commands
 ```bash
 systemctl is-active azazel-edge-ai-agent
-jq '{processed_events,llm_requests,llm_completed,llm_failed,last_error}' /run/azazel-edge/ai_metrics.json
-curl -sS http://127.0.0.1:8084/api/ai/capabilities | jq
+sudo jq '{processed_events,llm_requests,llm_completed,llm_failed,last_error}' /run/azazel-edge-agent/ai_metrics.json
+# The Web UI API needs the token (without it: HTTP 401).
+TOKEN="$(sudo cat /etc/azazel-edge/web_token.txt | tr -d '[:space:]')"
+curl -sS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/ai/capabilities | jq
 ```
 
 ## 7. Operational Rules
