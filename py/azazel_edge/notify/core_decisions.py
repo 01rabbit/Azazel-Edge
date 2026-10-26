@@ -31,6 +31,20 @@ that chain enqueues the alert (Edge#414 SO-03).
   reconciled (the log missing or unreadable, lines that do not parse, records
   older than the chain window, more than the bound, a log that no longer
   holds the chain's newest decision) is counted in a ``relay_status`` record.
+* **Stale decisions are alerted as past decisions** (Edge#462 item 5, option
+  (b)) -- a reconciled decision older than ``reconcile_max_age_s`` (300 s, the
+  core's default lease), or whose time cannot be read, is no longer a current
+  alert, but an isolate the core applied while the agent was down must still
+  reach the operator. It is recorded with ``reconcile_stale: true`` (and its
+  age); its alert entries carry ``stale: true`` and
+  ``presentation: historical``, are shown with the 「過去の判定」 prefix and the
+  event's time, and are not spoken as an urgent alert (see
+  ``p0_alert.build_p0_alerts``). Counted as ``core_reconcile_stale`` (found)
+  and ``core_reconciled_stale`` (recorded). Stale and fresh decisions share
+  the one ``max_reconcile`` bound (256, the newest kept), so a long outage
+  cannot flood the queue; what is over it is ``core_reconcile_skipped``. A
+  stale decision is recorded in the chain under its core event key like any
+  other, so the next start does not record or alert it again.
 
 Observation and notification only: nothing here decides, enforces, or feeds
 anything back to the core.
@@ -46,7 +60,6 @@ import queue as _queue_mod
 import threading
 import time
 from collections import OrderedDict
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -68,11 +81,14 @@ DEFAULT_RECONCILE_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_CHAIN_KEY_MAX_BYTES = 32 * 1024 * 1024
 DEFAULT_MAX_RECONCILE = 256
 # A decision older than this (EVE timestamp, else the core's ingest stamp,
-# against the current time) is not alerted by the reconcile: it is no longer
-# a current alert. 300 s is the core's default enforcement lease
-# (AZAZEL_DEFENSE_ACTION_TTL_SEC in systemd/azazel-edge-core.service): by
-# then the action the decision bore has been released.
-DEFAULT_RECONCILE_MAX_AGE_S = 300.0
+# against the current time) is no longer a current alert: the reconcile
+# records it marked ``reconcile_stale`` and its alert is presented as a past
+# decision, never as a current one (Edge#462 item 5). 300 s is the core's
+# default enforcement lease (AZAZEL_DEFENSE_ACTION_TTL_SEC in
+# systemd/azazel-edge-core.service): by then the action the decision bore has
+# been released. Stale decisions count against DEFAULT_MAX_RECONCILE like
+# fresh ones.
+DEFAULT_RECONCILE_MAX_AGE_S = _p0.STALE_AFTER_S
 # How long stopping the recorder waits for the writer to drain.
 DEFAULT_STOP_DRAIN_S = 5.0
 _SEEN_MAX = 65536
@@ -83,7 +99,9 @@ def _int(value: Any) -> Optional[int]:
 
 
 def _num(value: Any) -> Optional[float]:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    """A finite number as a float, else None (NaN and +/-inf are not read)."""
+
+    return _p0.finite_epoch(value)
 
 
 def core_event_key(event: Mapping[str, Any]) -> str:
@@ -149,17 +167,8 @@ def _event_epoch(payload: Mapping[str, Any]) -> Optional[float]:
     """When the core's event happened: the EVE timestamp, else the core's
     ingest stamp. None if neither can be read."""
 
-    ts = payload.get("event_ts")
-    if isinstance(ts, str) and ts:
-        text = ts.strip()
-        if text.endswith("Z"):
-            text = text[:-1] + "+0000"
-        for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
-            try:
-                return datetime.strptime(text, fmt).timestamp()
-            except ValueError:
-                continue
-    return _num(payload.get("core_ingest_epoch"))
+    epoch = _p0.event_ts_epoch(payload.get("event_ts"))
+    return epoch if epoch is not None else _num(payload.get("core_ingest_epoch"))
 
 
 def is_p0(payload: Mapping[str, Any]) -> bool:
@@ -213,6 +222,7 @@ class CoreDecisionRecorder:
         self.duplicate_total = 0
         self.recorded_total = 0
         self.reconciled_total = 0
+        self.reconciled_stale_total = 0
         self._outstanding = 0
         self._reported: Tuple[int, int] = (0, 0)
         self._forward_seen: Tuple[int, int] = (0, 0)
@@ -324,6 +334,7 @@ class CoreDecisionRecorder:
                 "core_record_duplicate_total": self.duplicate_total,
                 "core_recorded_total": self.recorded_total,
                 "core_reconciled_total": self.reconciled_total,
+                "core_reconciled_stale_total": self.reconciled_stale_total,
             }
 
     # ---------------------------------------------------------- reconcile
@@ -356,7 +367,7 @@ class CoreDecisionRecorder:
         status: Dict[str, Any] = {
             "event": "core_reconcile", "core_reconcile": "done", "core_reconciled": 0,
             "core_reconcile_skipped": 0, "core_reconcile_out_of_window": 0, "core_reconcile_unparseable": 0,
-            "core_reconcile_stale": 0, "core_reconcile_max_age_s": self.reconcile_max_age_s,
+            "core_reconcile_stale": 0, "core_reconciled_stale": 0, "core_reconcile_max_age_s": self.reconcile_max_age_s,
             "core_reconcile_log_truncated": False, "core_reconcile_newest_chain_decision_in_log": None,
         }
         chain_complete, oldest, newest = self._chain_keys()
@@ -395,25 +406,35 @@ class CoreDecisionRecorder:
                     # already recorded cannot be told.
                     status["core_reconcile_out_of_window"] += 1
                     continue
-                happened = _event_epoch(payload)
-                if happened is None or now - happened > self.reconcile_max_age_s:
-                    # Not a current alert any more (or its time is unknown):
-                    # counted, not alerted.
-                    status["core_reconcile_stale"] += 1
-                    continue
                 payload["recorded_by"] = RECORDED_RECONCILE
+                happened = _event_epoch(payload)
+                if (happened is None or happened - now > _p0.CLOCK_SKEW_TOLERANCE_S
+                        or now - happened > self.reconcile_max_age_s):
+                    # Not a current alert any more, or its time is unknown or
+                    # more than the clock-skew tolerance in the future (an
+                    # unauthenticated time cannot make it current): recorded
+                    # and alerted as a past decision, never as a current one
+                    # (Edge#462 item 5).
+                    status["core_reconcile_stale"] += 1
+                    payload["reconcile_stale"] = True
+                    payload["reconcile_event_age_s"] = None if happened is None else round(now - happened, 3)
                 candidates.append((trace_id, payload))
             if newest:
                 status["core_reconcile_newest_chain_decision_in_log"] = newest in keys_in_log
             skipped = max(0, len(candidates) - self.max_reconcile)
             done = 0
+            done_stale = 0
             for trace_id, payload in candidates[skipped:]:
                 if self._record(trace_id, payload):
                     done += 1
+                    if payload.get("reconcile_stale") is True:
+                        done_stale += 1
             status["core_reconcile_skipped"] = skipped
             status["core_reconciled"] = done
+            status["core_reconciled_stale"] = done_stale
             with self._lock:
                 self.reconciled_total += done
+                self.reconciled_stale_total += done_stale
         self.last_reconcile = status
         self._status(status)
         return status
