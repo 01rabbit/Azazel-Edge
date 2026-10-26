@@ -41,7 +41,17 @@ eq(C(500, { ok: false, error: 'Wi-Fi connect busy: another connect is in progres
 // POST answered 5xx without the API's JSON -> may have run
 eq(T.classifyResult(502, null, '', 'POST').kind, 'delivery_unknown', 'POST 502 without body -> may have run');
 eq(T.classifyResult(500, { html: 'x' }, '', 'POST').kind, 'delivery_unknown', 'POST 500 unstructured -> may have run');
-eq(T.classifyResult(500, { ok: false, error: 'boom' }, '', 'POST').kind, 'failed', 'POST 500 structured error -> failed');
+// Flask errorhandler(500) body, and a daemon error passed through as 500:
+// neither says nothing ran -> may have run.
+eq(T.classifyResult(500, { ok: false, error: 'Server error' }, '', 'POST').kind, 'delivery_unknown', 'POST 500 Server error -> may have run');
+eq(T.classifyResult(500, { ok: false, error: 'Connection failed' }, '', 'POST').kind, 'delivery_unknown', 'POST 500 generic error -> may have run');
+// ...but explicit "nothing was run" answers stay what they are.
+eq(T.classifyResult(500, { ok: false, error: 'not_implemented', not_implemented: true }, '', 'POST').kind, 'not_implemented', 'POST 500 not_implemented');
+eq(T.classifyResult(500, { ok: false, error: 'Control daemon not running' }, '', 'POST').kind, 'undelivered', 'POST 500 undelivered');
+eq(T.classifyResult(500, { ok: false, error: 'busy' }, '', 'POST').kind, 'busy', 'POST 500 busy');
+eq(T.classifyResult(500, { ok: false, status_api_error: true, error: 'HTTP 403' }, '', 'POST').kind, 'failed', 'POST 500 status API refusal');
+eq(T.classifyResult(400, { ok: false, error: 'Missing SSID' }, '', 'POST').kind, 'failed', 'POST 400 -> failed (validation, nothing ran)');
+eq(T.classifyResult(500, { ok: false, error: 'boom' }, '', 'GET').kind, 'failed', 'GET 500 -> failed');
 eq(T.classifyResult(502, null, '', 'GET').kind, 'failed', 'GET 502 -> failed (nothing to run)');
 eq(T.classifyResult(503, null, '', 'POST').kind === 'ok', false, 'never ok');
 eq(C(0, null, 'timeout'), 'delivery_unknown', 'transport timeout -> delivery_unknown');
@@ -129,6 +139,10 @@ const fileSrc = bundle();
 fileSrc.state.source = 'FILE:/x';
 eq(T.deriveView({ bundle: fileSrc, nowSec: now }).daemonDown, true, 'file fallback snapshot -> daemon down');
 
+const enforced = bundle();
+enforced.decision_focus.safety = { dry_run: false };
+eq(T.deriveView({ bundle: enforced, nowSec: now }).defensive.dryRun, false, 'dry_run false -> enforced');
+
 const noSafety = bundle();
 delete noSafety.decision_focus.safety;
 eq(T.deriveView({ bundle: noSafety, nowSec: now }).defensive.dryRun, null, 'missing dry_run -> unknown, not enforced');
@@ -188,6 +202,25 @@ eq(h.done, true, '1.2 s of frames completes the hold');
 eq(h.progress, 1, 'progress capped at 1');
 eq(T.advanceHold(h, t - 500).elapsedMs, h.elapsedMs, 'clock going back adds nothing');
 
+// hold controller: cancel (release, visibilitychange, blur, pagehide) resets
+const hc = T.createHold();
+eq(hc.frame(0), null, 'no frame before start');
+hc.start(0);
+let tt = 0;
+for (let i = 0; i < 40; i++) { tt += 16; hc.frame(tt); }
+eq(hc.cancel(), true, 'cancel reports an active hold');
+eq(hc.active(), false, 'inactive after cancel');
+eq(hc.frame(tt + 16), null, 'frames after cancel are ignored');
+hc.start(tt);
+let r = null;
+for (let i = 0; i < 40; i++) { tt += 16; r = hc.frame(tt); }
+eq(r.done, false, 'restarted hold starts from zero (no carry-over)');
+for (let i = 0; i < 40; i++) { tt += 16; r = hc.frame(tt) || r; }
+eq(r.done, true, 'full hold completes');
+eq(hc.active(), false, 'completed hold is finished');
+eq(hc.frame(tt + 16), null, 'no second completion');
+eq(hc.cancel(), false, 'cancel after completion is a no-op');
+
 // --- on-screen keyboard ----------------------------------------------------
 const kbuf = T.createSecretBuffer(64);
 let ks = { shift: false, sym: false };
@@ -211,6 +244,12 @@ eq(T.displaySsid('caf\u202Eexe'), 'cafexe', 'bidi override removed');
 eq(T.displaySsid('a\u0000b\u200Fc'), 'abc', 'control and marks removed');
 eq(T.displaySsid('x'.repeat(40)).length, 32, 'display length capped');
 eq(T.displaySsid(null), '', 'null -> empty');
+eq(T.displaySsid('a\u00ADb\u2028c\u2029d'), 'abcd', 'soft hyphen and line/paragraph separators removed');
+eq(T.displaySsid('\u202E\u0007\u200F'), '', 'control-only SSID -> empty (button disabled)');
+const emoji = '\u{1F600}'.repeat(40);
+const cut = T.displaySsid(emoji);
+eq(Array.from(cut).length, 32, 'cut by code point');
+ok(!/[\uD800-\uDBFF]$/.test(cut.slice(0, -1)), 'no lone surrogate before the ellipsis');
 
 // --- SSE parser -------------------------------------------------------------
 const evs = [];

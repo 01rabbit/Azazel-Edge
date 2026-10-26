@@ -73,7 +73,9 @@ answered `ok: true`; otherwise "Failed", "Refused by review or approval rule",
 "No answer — it may have run" (`delivery_unknown`, a daemon timeout, an empty reply or
 a reset after sending, or no HTTP answer). "Refused by the control daemon" is
 shown for `busy`, `forbidden` and a rate limit (nothing was run).
-`status_api_error` is a failure.
+`status_api_error` is a failure. Any other 5xx answer to an operation
+(including the generic "Server error") is shown as "No answer — it may have
+run", because it does not say that nothing ran.
 
 Not offered on this screen: contain / release / disconnect / stage-open,
 shutdown / reboot, portal viewer, client trust, M.I.O. questions, and the

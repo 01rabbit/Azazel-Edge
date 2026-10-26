@@ -107,7 +107,6 @@
        or may not have reached the daemon, so it is delivery_unknown. */
     function classifyResult(httpStatus, payload, transportError, method) {
         var p = obj(payload);
-        var structured = !!payload && typeof payload === 'object' && (p.ok !== undefined || p.error !== undefined || p.status !== undefined);
         var msg = str(p.error || p.message).slice(0, 240);
         if (transportError) return { kind: 'delivery_unknown', message: str(transportError).slice(0, 120) };
         if (httpStatus === 401 || httpStatus === 403) return { kind: 'unauthorized', message: msg };
@@ -125,9 +124,11 @@
         if (/daemon not running|no such file|connection refused/i.test(msg)) return { kind: 'undelivered', message: msg };
         // The daemon refused before running anything (busy, rate limit, peer table).
         if (/^busy$|connect busy|rate limit|^forbidden$/i.test(msg)) return { kind: 'busy', message: msg };
-        // A POST answered 5xx without the API's JSON (proxy error page, worker
-        // killed mid-request): it may have run.
-        if (method === 'POST' && httpStatus >= 500 && !structured) return { kind: 'delivery_unknown', message: 'HTTP ' + httpStatus };
+        // Any other 5xx answer to a POST (including Flask's errorhandler(500)
+        // {"ok": false, "error": "Server error"} and an HTML proxy page) does
+        // not say that nothing ran: it may have run. Only the explicit
+        // "nothing was run" answers above are failures/refusals.
+        if (method === 'POST' && httpStatus >= 500) return { kind: 'delivery_unknown', message: msg || ('HTTP ' + httpStatus) };
         if (ok2xx && p.ok === undefined && !msg) return { kind: 'failed', message: 'invalid response' };
         return { kind: 'failed', message: msg || ('HTTP ' + httpStatus) };
     }
@@ -195,6 +196,24 @@
         return { lastMs: nowMs, elapsedMs: elapsed, progress: Math.min(1, elapsed / HOLD_MS), done: elapsed >= HOLD_MS };
     }
 
+    /* One press-and-hold: start, feed frames, cancel. A cancelled or finished
+       hold ignores further frames, so a late frame can never complete it. */
+    function createHold() {
+        var st = null;
+        return {
+            start: function (t) { st = advanceHold(null, t); return st; },
+            frame: function (t) {
+                if (!st) return null;
+                st = advanceHold(st, t);
+                var r = st;
+                if (st.done) st = null;
+                return r;
+            },
+            cancel: function () { var was = !!st; st = null; return was; },
+            active: function () { return !!st; }
+        };
+    }
+
     /* On-screen keyboard: one key press against { shift, sym } and a secret
        buffer. Returns the new modifier state and whether keys must be redrawn. */
     function applyKey(kbState, key, buffer) {
@@ -213,8 +232,9 @@
     /* SSID for display only (the value sent is the original): no control or
        bidi-override characters, at most 32 characters. */
     function displaySsid(value) {
-        var cleaned = String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '');
-        return cleaned.length > 32 ? cleaned.slice(0, 31) + '…' : cleaned;
+        var cleaned = String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g, '');
+        var points = Array.from(cleaned);   // cut by code point, never inside a surrogate pair
+        return points.length > 32 ? points.slice(0, 31).join('') + '…' : cleaned;
     }
 
     /* Whether the state stream should be open now. */
@@ -449,10 +469,11 @@
         }
 
         function headers(json) {
-            var h = { 'X-AZAZEL-LANG': lang };
-            if (json) h['Content-Type'] = 'application/json';
-            if (token) h['X-Auth-Token'] = token;
-            return h;
+            return Object.assign(
+                { 'X-AZAZEL-LANG': lang },
+                json ? { 'Content-Type': 'application/json' } : {},
+                token ? { 'X-Auth-Token': token } : {}
+            );
         }
 
         function timeoutSignal(ms) {
@@ -762,7 +783,7 @@
             var li = el('li', 't-ap');
             var btn = el('button', 't-btn t-ap-btn');
             btn.type = 'button';
-            btn.disabled = !str(ap.ssid);
+            btn.disabled = !displaySsid(ap.ssid);   // hidden, or only control characters
             btn.setAttribute('data-ap', String(index));
             var name = el('strong', '', displaySsid(ap.ssid) || tr('touch.wifi_hidden', '(hidden network)'));
             var sec = str(ap.security).toUpperCase() || 'UNKNOWN';
@@ -872,8 +893,22 @@
 
         /* ---------------- confirmation sheet ---------------- */
         var confirmCtx = null;
+        var returnFocus = null;   // the control that opened a sheet
+        function rememberFocus() {
+            if (!returnFocus && document.activeElement && document.activeElement !== document.body) returnFocus = document.activeElement;
+        }
+        function restoreFocus() {
+            var el0 = returnFocus;
+            returnFocus = null;
+            if (el0 && document.contains(el0) && !el0.disabled && typeof el0.focus === 'function') el0.focus();
+        }
+        var confirmShowsResult = false;
+        function paintConfirmCancel() {
+            text('confirmCancel', confirmShowsResult ? tr('touch.close', 'Close') : tr('touch.cancel', 'Cancel'));
+        }
         function openConfirm(ctx) {
             // ctx: { title, facts: [[k, v]], run: () => Promise<{kind,message}>, label }
+            rememberFocus();
             confirmCtx = ctx;
             text('confirmTitle', ctx.title);
             var dl = $('confirmFacts');
@@ -887,7 +922,8 @@
             $('confirmResult').hidden = true;
             $('confirmHold').hidden = false;
             $('confirmHold').disabled = false;
-            text('confirmCancel', tr('touch.cancel', 'Cancel'));
+            confirmShowsResult = false;
+            paintConfirmCancel();
             $('confirmSheet').hidden = false;
             setInert(true);
             $('confirmCancel').focus();
@@ -897,6 +933,7 @@
             confirmCtx = null;
             $('confirmSheet').hidden = true;
             setInert(!$('kbSheet').hidden);
+            if ($('kbSheet').hidden) restoreFocus();
         }
         function showConfirmResult(res) {
             var box = $('confirmResult');
@@ -905,7 +942,8 @@
             setText('confirmResultDetail', res.kind === 'ok' ? '' : res.message);
             box.hidden = false;
             $('confirmHold').hidden = true;
-            text('confirmCancel', tr('touch.close', 'Close'));
+            confirmShowsResult = true;
+            paintConfirmCancel();
         }
         function runConfirmed() {
             if (!confirmCtx || opBusy) return;
@@ -933,46 +971,43 @@
         function resetAllHolds() { holdResets.forEach(function (fn) { fn(true); }); }
 
         function bindHold(button, onDone) {
-            var start = 0;
-            var hold = null;
+            var hold = createHold();
             var raf = 0;
             var fill = button.querySelector('.t-hold-fill');
             var label = button.querySelector('.t-hold-label');
             var hintTimer = 0;
             function reset(silent) {
+                var wasActive = hold.cancel();
                 // Released before the bar filled: say how to confirm (a tap never runs it).
-                if (start && label && silent !== true) {
+                if (wasActive && label && silent !== true) {
                     var key = label.getAttribute('data-i18n');
                     label.textContent = tr('touch.hold_hint', 'Keep pressing until the bar fills');
                     clearTimeout(hintTimer);
                     hintTimer = setTimeout(function () { label.textContent = tr(key, label.textContent); }, 1800);
                 }
-                start = 0;
-                hold = null;
                 cancelAnimationFrame(raf);
                 if (fill) fill.style.transform = 'scaleX(0)';
                 button.classList.remove('is-holding');
             }
             holdResets.push(reset);
             function tick() {
-                if (!start) return;
-                hold = advanceHold(hold, performance.now());
-                if (fill) fill.style.transform = 'scaleX(' + hold.progress + ')';
-                if (hold.done) { start = 0; reset(); onDone(); return; }
+                var r = hold.frame(performance.now());
+                if (!r) return;
+                if (fill) fill.style.transform = 'scaleX(' + r.progress + ')';
+                if (r.done) { reset(true); onDone(); return; }
                 raf = requestAnimationFrame(tick);
             }
             button.addEventListener('pointerdown', function (e) {
                 if (button.disabled || e.button > 0) return;
                 try { button.setPointerCapture(e.pointerId); } catch (_e) { /* ignore */ }
-                start = performance.now();
-                hold = advanceHold(null, start);
+                hold.start(performance.now());
                 button.classList.add('is-holding');
                 raf = requestAnimationFrame(tick);
             });
             ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function (ev) { button.addEventListener(ev, reset); });
             // Keyboard users: Enter/Space held is not a hold; require the same hold time.
             button.addEventListener('keydown', function (e) {
-                if ((e.key === 'Enter' || e.key === ' ') && !start && !e.repeat) { e.preventDefault(); start = performance.now(); hold = advanceHold(null, start); raf = requestAnimationFrame(tick); }
+                if ((e.key === 'Enter' || e.key === ' ') && !hold.active() && !e.repeat) { e.preventDefault(); hold.start(performance.now()); raf = requestAnimationFrame(tick); }
             });
             button.addEventListener('keyup', function (e) { if (e.key === 'Enter' || e.key === ' ') reset(); });
         }
@@ -1076,6 +1111,7 @@
         }
 
         function openKeyboard(purpose, ap) {
+            rememberFocus();
             secret.clear();
             kb = { purpose: purpose, ap: ap || null, shift: false, sym: false, reveal: false, persist: false };
             var isWifi = purpose === 'wifi';
@@ -1100,6 +1136,7 @@
             $('kbValue').textContent = '';
             $('kbSheet').hidden = true;
             setInert(!$('confirmSheet').hidden);
+            if ($('confirmSheet').hidden) restoreFocus();
         }
 
         function submitToken() {
@@ -1137,7 +1174,7 @@
         }
 
         function chooseAp(ap) {
-            if (!str(ap.ssid)) return;   // a hidden network needs its name typed: not offered here
+            if (!displaySsid(ap.ssid)) return;   // hidden / unprintable name: not offered here
             var sec = str(ap.security).toUpperCase();
             if (sec === 'OPEN' || ap.saved) {
                 var label = 'Wi-Fi → ' + (displaySsid(ap.ssid) || '—');
@@ -1180,6 +1217,7 @@
             });
             paintTokenState();
             paintResults();
+            paintConfirmCancel();
             paint();
             pollSoon();
         }
@@ -1433,6 +1471,7 @@
         fmtAge: fmtAge,
         pickState: pickState,
         advanceHold: advanceHold,
+        createHold: createHold,
         applyKey: applyKey,
         displaySsid: displaySsid,
         streamWanted: streamWanted,

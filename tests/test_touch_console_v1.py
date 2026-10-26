@@ -140,40 +140,53 @@ class TouchConsoleSourceTests(unittest.TestCase):
         self.assertNotIn("/api/", _HTML)
 
     def test_no_dangerous_dom_or_navigation_sinks(self) -> None:
-        forbidden = r"""innerHTML|outerHTML|insertAdjacent|document\.write|eval\(|new Function|\.src\s*=|\.href\s*=|setAttribute\(['"]on|XMLHttpRequest|sendBeacon|WebSocket|EventSource|window\.open|location\.(assign|replace)\(|location\s*=(?!=)"""
+        forbidden = [
+            r"innerHTML", r"outerHTML", r"insertAdjacent", r"document\.write", r"\beval\s*\(",
+            r"new\s+Function", r"\bFunction\s*\(", r"Reflect\.", r"createContextualFragment", r"DOMParser",
+            r"\bimport\s*\(", r"setTimeout\s*\(\s*['\"]", r"setInterval\s*\(\s*['\"]",
+            r"\.src\s*=", r"\.href\s*=", r"setAttribute\(\s*['\"](on|src|srcdoc)",
+            r"\[\s*['\"][^'\"]*['\"]\s*\]\s*=(?!=)",  # bracket-notation assignment
+            r"XMLHttpRequest", r"sendBeacon", r"WebSocket", r"EventSource", r"window\.open",
+            r"location\.(assign|replace)\(", r"location\s*=(?!=)",
+        ]
         for name, source in (("touch.js", _JS), ("touch.html", _HTML)):
-            self.assertIsNone(re.search(forbidden, source), name)
+            for pattern in forbidden:
+                self.assertIsNone(re.search(pattern, source), f"{name}: {pattern}")
+        # The only setAttribute('href', ...) is the SVG <use> sprite reference.
+        for args in re.findall(r"setAttribute\(\s*['\"]href['\"],\s*([^)]*)\)", _JS):
+            self.assertTrue(args.startswith("'#'") or args.startswith("kb.reveal ? '#i-"), args)
 
     def test_every_call_site_uses_the_api_table(self) -> None:
-        # The table itself: names -> paths, all in the allow-list.
         table = dict(re.findall(r"^\s+(\w+): '(/api/[^']*)',?$", _JS, re.M))
         allowed = {path.replace("<runbook_id>", "") for _method, path in _USED_API}
         self.assertEqual(set(table.values()), allowed)
-        # fetch(): only the request() helper (fed by the checks below) and the stream.
-        fetches = re.findall(r"\bfetch\(([^,]+),", _JS)
+        # (method, table name) pairs the console may use: the existing contracts.
+        allowed_pairs = {("GET", "bundle"), ("GET", "wifiScan"), ("GET", "runbookGet"),
+                         ("POST", "runbookAct"), ("POST", "wifiConnect")}
+        for method, path in _USED_API:
+            name = {v: k for k, v in table.items()}[path.replace("<runbook_id>", "")]
+            if name != "stateStream":
+                self.assertIn((method, name), allowed_pairs)
+        fetches = re.findall(r"\bfetch\s*\(([^,]+),", _JS)
         self.assertEqual(sorted(a.strip() for a in fetches), ["API.stateStream", "path"])
         self.assertEqual(len(re.findall(r"function request\(method, path, body, timeoutMs\)", _JS)), 1)
-        # request(): every call passes a literal method and an API.<name> value
-        # (optionally + a query/encoded id); the one pass-through is opRequest.
-        calls = re.findall(r"(?<![\w.])request\(([^)]*)", _JS)
+        suffix = r"(?: \+ (?:'\?[^']*'|encodeURIComponent\(\w+\)))?"
+        used_pairs = set()
         passthrough = 0
-        for args in calls:
+        for fn, args in re.findall(r"(?<![\w.])(opRequest|request)\s*\(([^;]*?)\)(?:\.then|;|\s*\{)", _JS):
             if args.startswith("method, path, body"):
                 passthrough += 1
                 continue
-            m = re.match(r"'(GET|POST)', (API\.(\w+))( \+ .*)?(, .*)?$", args)
-            self.assertIsNotNone(m, args)
-            self.assertIn(m.group(3), table, args)
-        self.assertEqual(passthrough, 2)  # the definition and opRequest's body
-        op_calls = re.findall(r"(?<![\w.])opRequest\(([^)]*)", _JS)
-        for args in op_calls:
-            if args.startswith("method, path, body"):
-                continue  # definition
-            m = re.match(r"'POST', API\.(\w+)", args)
-            self.assertIsNotNone(m, args)
-            self.assertIn(m.group(1), table, args)
-        self.assertEqual({re.match(r"'POST', API\.(\w+)", a).group(1) for a in op_calls if not a.startswith("method")},
-                         {"runbookAct", "wifiConnect"})
+            m = re.match(r"'(GET|POST)',\s*API\.(\w+)" + suffix + r"(?:,\s*.*)?$", args, re.S)
+            self.assertIsNotNone(m, f"{fn}({args})")
+            self.assertIn(m.group(2), table)
+            if fn == "opRequest":
+                self.assertEqual(m.group(1), "POST")
+            used_pairs.add((m.group(1), m.group(2)))
+        self.assertEqual(used_pairs, allowed_pairs)
+        self.assertEqual(passthrough, 3)  # request() and opRequest() definitions, opRequest's body
+        # No other way to name an endpoint: every '/api/' literal is in the table.
+        self.assertEqual(len(re.findall(r"""['"]/api/""", _JS)), len(table))
 
     def test_ci_runs_the_js_logic_suite(self) -> None:
         ci = (_REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
@@ -181,7 +194,8 @@ class TouchConsoleSourceTests(unittest.TestCase):
         self.assertIn("node tests/touch_console_logic.test.js", ci)
 
     def test_hold_is_reset_when_the_page_loses_focus(self) -> None:
-        self.assertIn("hold = advanceHold(hold, performance.now());", _JS)
+        self.assertIn("var r = hold.frame(performance.now());", _JS)
+        self.assertIn("var wasActive = hold.cancel();", _JS)
         self.assertIn("window.addEventListener('blur', resetAllHolds);", _JS)
         self.assertIn("window.addEventListener('pagehide', function () { resetAllHolds();", _JS)
         self.assertRegex(_JS, r"if \(document\.hidden\) \{\s*resetAllHolds\(\);")
@@ -208,7 +222,7 @@ class TouchConsoleSourceTests(unittest.TestCase):
         # The token travels only in the X-Auth-Token header; ?token= is removed, not used.
         self.assertNotRegex(_JS, r"[?&]token=")
         self.assertIn("url.searchParams.delete('token')", _JS)
-        self.assertIn("h['X-Auth-Token'] = token", _JS)
+        self.assertIn("token ? { 'X-Auth-Token': token } : {}", _JS)
         # The passphrase is taken out of the buffer for the request and dropped.
         self.assertIn("passphrase: secret.take()", _JS)
         self.assertIn("body.passphrase = ''", _JS)
