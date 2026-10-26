@@ -146,11 +146,15 @@ def event_ts_epoch(ts: Any) -> Optional[float]:
 
 def finite_epoch(value: Any) -> Optional[float]:
     """``value`` as a float when it is a finite number, else None (bool,
-    NaN and +/-inf are not readable times)."""
+    NaN, +/-inf and integers too large for a float are not readable
+    times)."""
 
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    out = float(value)
+    try:
+        out = float(value)
+    except OverflowError:
+        return None
     return out if math.isfinite(out) else None
 
 

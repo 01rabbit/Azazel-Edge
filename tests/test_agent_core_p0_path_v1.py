@@ -804,6 +804,16 @@ def test_non_finite_numbers_are_not_read():
     assert core_decisions._num(float("nan")) is None
     assert core_decisions._num(float("inf")) is None and core_decisions._num(float("-inf")) is None
     assert core_decisions._num(True) is None and core_decisions._num(1.5) == 1.5
+    assert core_decisions._num(10 ** 400) is None
+
+
+def test_relay_replay_of_an_overflowing_ingest_time_is_past_not_dropped():
+    from azazel_edge.notify.p0_alert import DURABILITY_RECONCILED, build_p0_alerts, finite_epoch, is_past_decision
+
+    assert finite_epoch(10 ** 400) is None and is_past_decision(10 ** 400, 0.0) is True
+    alerts = build_p0_alerts({"trace_id": "o", "action": "isolate", "core_ingest_epoch": 10 ** 400},
+                             "b", DURABILITY_RECONCILED, None)
+    assert alerts and all(a["stale"] is True for a in alerts)
 
 
 def test_render_collapses_and_bounds_untrusted_text():
