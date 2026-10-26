@@ -18,8 +18,13 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     is not changed until the copy is up: then it is deleted by UUID and the
     copy takes its name; on any failure the copy is deleted and the saved
     profile keeps its old PSK. A copy left by a crash is deleted by UUID on
-    the next connect when its original still exists (otherwise kept and
-    reported). The file is 0600 (`O_EXCL`,
+    the next connect when its original still exists and it is not active
+    (otherwise kept and reported). Profiles are addressed by the UUID of
+    the SSID match throughout, never by name (a name may be shared by a
+    profile of another SSID). One connect runs at a time: an exclusive
+    `flock` on `/run/azazel-edge-wifi-connect.lock` (0600, `O_NOFOLLOW`,
+    must be a private regular file) covers the sweep and the connect; a
+    second connect waits up to 30 s, then gets a "busy" error. The file is 0600 (`O_EXCL`,
     `O_NOFOLLOW`) in a fresh 0700 directory under `/run`, holds the secret
     octal-escaped, and is removed on success, failure and exception.
     NetworkManager stores the secret in the profile as before. key-mgmt

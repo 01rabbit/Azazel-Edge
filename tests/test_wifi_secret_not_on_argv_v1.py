@@ -96,6 +96,8 @@ class FakeNmcli:
         self.profiles: dict = {OTHER_UUID: {"name": "example-other", "ssid": "other-ssid", "psk": "kept"}}
         if saved:
             self.profiles[ORIG_UUID] = {"name": "example-saved", "ssid": FAKE_SSID, "psk": "old"}
+        self.active: set = set()
+        self.by_name: list = []
         self.calls: list[list[str]] = []
         self.passwd_files: list[dict] = []
 
@@ -109,16 +111,24 @@ class FakeNmcli:
         cmd = [str(c) for c in cmd]
         self.calls.append(cmd)
         out, rc = "", 0
-        if cmd[:6] == ["nmcli", "-t", "-f", "NAME,TYPE", "con", "show"]:
-            out = "".join(f"{p['name']}:802-11-wireless\n" for p in self.profiles.values())
+        if cmd[:6] == ["nmcli", "-t", "-f", "NAME,UUID,TYPE", "con", "show"]:
+            out = "".join(f"{p['name']}:{u}:802-11-wireless\n" for u, p in self.profiles.items())
+        elif cmd == ["nmcli", "-t", "-f", "UUID", "con", "show", "--active"]:
+            out = "".join(u + "\n" for u in self.active)
         elif cmd[:6] == ["nmcli", "-t", "-f", "NAME,UUID", "con", "show"]:
             out = "".join(f"{p['name']}:{u}\n" for u, p in self.profiles.items())
         elif cmd[:4] == ["nmcli", "-t", "-f", "802-11-wireless.ssid"]:
-            uuids = self._by_name(cmd[-1])
-            out = f"802-11-wireless.ssid:{self.profiles[uuids[0]]['ssid']}\n" if uuids else ""
+            if cmd[-2] != "uuid":
+                self.by_name.append(cmd)
+            prof = self.profiles.get(cmd[-1])
+            out = f"802-11-wireless.ssid:{prof['ssid']}\n" if prof else ""
+            rc = 0 if prof else 10
         elif cmd[:3] == ["nmcli", "-g", "802-11-wireless-security.key-mgmt"]:
+            if cmd[-2] != "uuid":
+                self.by_name.append(cmd)
             out = self.existing_key_mgmt + "\n"
         elif cmd[:3] == ["nmcli", "-g", "connection.uuid"]:
+            self.by_name.append(cmd)
             out = "".join(u + "\n" for u in self._by_name(cmd[-1]))
         elif cmd[:4] == ["nmcli", "-t", "-f", "SSID,SECURITY"]:
             out = "other-ssid:WPA2 802.1X\n" + "".join(f"{FAKE_SSID}:{sec}\n" for sec in self.ap_security)
@@ -131,6 +141,9 @@ class FakeNmcli:
                 src = self.profiles[cmd[4]]
                 self.profiles[CLONE_UUID] = dict(src, name=cmd[5])
                 out = f"{src['name']} ({cmd[4]}) cloned as {cmd[5]} ({CLONE_UUID}).\n"
+        elif cmd[:3] == ["nmcli", "con", "up"] and cmd[3] != "uuid":
+            self.by_name.append(cmd)
+            rc = 2
         elif cmd[:4] == ["nmcli", "con", "mod", "uuid"]:
             if self.mod_fail and self.mod_fail in cmd:
                 rc = 1
@@ -140,9 +153,9 @@ class FakeNmcli:
                 self.profiles[cmd[4]]["psk"] = None
         elif cmd[:4] == ["nmcli", "con", "delete", "uuid"]:
             rc = 0 if self.profiles.pop(cmd[4], None) else 10
-        elif cmd[:3] == ["nmcli", "con", "delete"]:
-            for u in self._by_name(cmd[3]):
-                self.profiles.pop(u)
+        elif cmd[:3] == ["nmcli", "con", "delete"] or cmd[:3] == ["nmcli", "con", "mod"] and cmd[3] != "uuid":
+            self.by_name.append(cmd)
+            rc = 2
         elif cmd[:3] == ["nmcli", "con", "up"] and "passwd-file" in cmd:
             path = Path(cmd[cmd.index("passwd-file") + 1])
             st, dst = os.lstat(path), os.lstat(path.parent)
@@ -172,9 +185,18 @@ def secret_base(tmp_path, monkeypatch):
     return base
 
 
+@pytest.fixture(autouse=True)
+def private_lock(tmp_path, monkeypatch):
+    lock = tmp_path / "wifi-connect.lock"
+    monkeypatch.setattr(wifi_connect, "NM_CONNECT_LOCK_PATH", str(lock))
+    return lock
+
+
 def _connect(monkeypatch, fake, passphrase, security="WPA2", persist=False):
     monkeypatch.setattr(wifi_connect.subprocess, "run", fake)
-    return wifi_connect.connect_nm("wlan-fake0", FAKE_SSID, security, passphrase, persist)
+    out = wifi_connect.connect_nm("wlan-fake0", FAKE_SSID, security, passphrase, persist)
+    assert fake.by_name == [], "a profile was addressed by name"
+    return out
 
 
 def _assert_never_on_argv(fake, passphrase):
@@ -226,11 +248,11 @@ def test_new_profile_takes_the_passphrase_from_a_private_passwd_file(monkeypatch
     assert fake.argv_with("nmcli", "con", "delete")
 
 
-def test_new_profile_falls_back_to_the_name_when_nmcli_prints_no_uuid(monkeypatch, secret_base):
+def test_new_profile_is_found_by_its_ssid_when_nmcli_prints_no_uuid(monkeypatch, secret_base):
     fake = FakeNmcli(saved=False, add_stdout="")
     assert _connect(monkeypatch, fake, PLAIN)["ok"] is True
     (up,) = fake.argv_with("nmcli", "con", "up")
-    assert up[3:5] == ["id", FAKE_SSID]
+    assert up[3:5] == ["uuid", FAKE_UUID]
 
 
 @pytest.mark.parametrize("ap_security,key_mgmt,prop", [
@@ -262,9 +284,8 @@ def test_a_saved_profile_takes_the_new_psk_through_a_clone_and_keeps_its_name(mo
     assert mods[:3] == [["connection.autoconnect", "no"], ["wifi-sec.psk-flags", "2"], ["wifi-sec.psk-flags", "0"]]
     # The original is never modified; it is deleted only after the clone came up.
     assert not [c for c in fake.calls if c[:3] == ["nmcli", "con", "mod"] and ORIG_UUID in c]
-    by_name = [c for c in fake.calls if c[:4] == ["nmcli", "con", "mod", "example-saved"]]
-    assert by_name == [["nmcli", "con", "mod", "example-saved", "connection.autoconnect", "no"]]  # after the rename
-    assert fake.calls.index(by_name[0]) > fake.calls.index(fake.argv_with("nmcli", "con", "delete", "uuid")[0])
+    final = ["nmcli", "con", "mod", "uuid", CLONE_UUID, "connection.autoconnect", "no"]
+    assert fake.calls.count(final) == 2 and fake.calls[-1] == final  # the renamed clone, at the end
     (up,) = fake.argv_with("nmcli", "con", "up")
     assert up[3:6] == ["uuid", CLONE_UUID, "passwd-file"]
     order = [fake.calls.index(c) for c in (up, ["nmcli", "con", "delete", "uuid", ORIG_UUID],
@@ -313,7 +334,7 @@ def test_stale_clones_are_swept_by_uuid_and_nothing_else(monkeypatch, secret_bas
 def test_existing_profile_without_a_passphrase_is_brought_up_as_before(monkeypatch, secret_base):
     fake = FakeNmcli(saved=True)
     assert _connect(monkeypatch, fake, None)["ok"] is True
-    assert fake.argv_with("nmcli", "con", "up") == [["nmcli", "con", "up", "example-saved"]]
+    assert fake.argv_with("nmcli", "con", "up") == [["nmcli", "con", "up", "uuid", ORIG_UUID]]
     assert not [c for c in fake.calls if "wifi-sec.psk-flags" in c]
     assert fake.passwd_files == [] and list(secret_base.iterdir()) == []
 
@@ -423,3 +444,89 @@ def test_a_key_mgmt_fix_goes_to_the_clone_not_the_original(monkeypatch, secret_b
     mods = [c[5:] for c in fake.argv_with("nmcli", "con", "mod", "uuid") if c[4] == CLONE_UUID]
     assert ["wifi-sec.key-mgmt", "wpa-psk"] in mods
     assert not [c for c in fake.argv_with("nmcli", "con", "mod") if "wifi-sec.key-mgmt" in c and CLONE_UUID not in c]
+
+
+def test_a_same_named_profile_of_another_ssid_is_never_cloned_or_deleted(monkeypatch, secret_base):
+    fake = FakeNmcli(saved=False)
+    twin = "0b0b0b0b-1111-4222-8333-121212121212"
+    # Listed first: a name lookup would pick it.
+    fake.profiles = {twin: {"name": "example-saved", "ssid": "other-ssid", "psk": "twin"},
+                     ORIG_UUID: {"name": "example-saved", "ssid": FAKE_SSID, "psk": "old"}}
+    assert _connect(monkeypatch, fake, PLAIN)["ok"] is True
+    assert fake.argv_with("nmcli", "con", "clone") == [
+        ["nmcli", "con", "clone", "uuid", ORIG_UUID, wifi_connect.NM_PENDING_CLONE_PREFIX + ORIG_UUID]]
+    assert fake.profiles[twin] == {"name": "example-saved", "ssid": "other-ssid", "psk": "twin"}
+    assert not [c for c in fake.calls if twin in c and c[1] == "con"
+                and c[2] in ("mod", "delete", "clone", "up")]
+    assert ORIG_UUID not in fake.profiles and fake.profiles[CLONE_UUID]["name"] == "example-saved"
+
+
+def test_an_active_stale_clone_is_kept(monkeypatch, secret_base):
+    fake = FakeNmcli(saved=True)
+    stale = "0e0e0e0e-2222-4222-8333-888888888888"
+    fake.profiles[stale] = {"name": wifi_connect.NM_PENDING_CLONE_PREFIX + ORIG_UUID, "ssid": FAKE_SSID, "psk": "x"}
+    fake.active = {stale}
+    assert _connect(monkeypatch, fake, None)["ok"] is True
+    assert stale in fake.profiles and not fake.argv_with("nmcli", "con", "delete")
+
+
+def test_a_second_connect_waits_and_reports_busy(monkeypatch, secret_base, private_lock):
+    import fcntl
+    monkeypatch.setattr(wifi_connect, "NM_CONNECT_LOCK_WAIT_SEC", 0.3)
+    fake = FakeNmcli(saved=True)
+    holder = os.open(private_lock, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        out = _connect(monkeypatch, fake, PLAIN)
+        assert out == {"ok": False, "error": wifi_connect.BUSY_ERROR}
+        assert fake.calls == []  # neither the sweep nor the connect ran
+    finally:
+        os.close(holder)
+    assert _connect(monkeypatch, fake, PLAIN)["ok"] is True  # free again
+    assert stat.S_IMODE(os.stat(private_lock).st_mode) == 0o600
+
+
+def test_the_lock_is_held_for_the_sweep_and_the_connect_and_released_on_error(monkeypatch, secret_base, private_lock):
+    import fcntl
+    seen = []
+
+    def probe(cmd, *a, **kw):
+        fd = os.open(private_lock, os.O_RDWR)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                seen.append("free")
+            except BlockingIOError:
+                seen.append("held")
+        finally:
+            os.close(fd)
+        return fake(cmd, *a, **kw)
+
+    fake = FakeNmcli(saved=True, up_raises=True)
+    monkeypatch.setattr(wifi_connect.subprocess, "run", probe)
+    assert wifi_connect.connect_nm("wlan-fake0", FAKE_SSID, "WPA2", PLAIN, False)["ok"] is False
+    assert seen and set(seen) == {"held"}
+    fd = os.open(private_lock, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # released after the exception
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.parametrize("kind", ["symlink", "wide"])
+def test_an_unsafe_lock_file_refuses_the_connect(monkeypatch, secret_base, private_lock, tmp_path, kind):
+    if kind == "symlink":
+        private_lock.symlink_to(tmp_path / "elsewhere")
+    else:
+        private_lock.write_text("", encoding="utf-8")
+        private_lock.chmod(0o666)
+    fake = FakeNmcli(saved=True)
+    out = _connect(monkeypatch, fake, PLAIN)
+    assert out == {"ok": False, "error": "Wi-Fi connect lock unavailable"}
+    assert fake.calls == []
+    assert not (tmp_path / "elsewhere").exists()
+
+
+def test_the_lock_lives_under_run():
+    src = (ROOT / "py" / "azazel_edge_control" / "wifi_connect.py").read_text(encoding="utf-8")
+    assert 'NM_CONNECT_LOCK_PATH = "/run/azazel-edge-wifi-connect.lock"' in src
