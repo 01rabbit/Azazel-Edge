@@ -15,10 +15,10 @@ does not already allow for the token entered on it.
 
 | Tab | Content | Source (existing API) |
 | --- | --- | --- |
-| Status | Defensive State (the arbiter's selected action), SOC and NOC state, P0 / SOC critical count, M.I.O. (AI) availability, legacy concept mode, uplink, snapshot age and source, M.I.O. advisory text | `GET /api/dashboard/bundle`, `GET /api/state/stream` |
+| Status | Defensive State (the arbiter's selected action), SOC and NOC state, P0 / SOC critical count, M.I.O. (AI) availability, decision record (trace id, policy profile), uplink, snapshot age and source, M.I.O. advisory text | `GET /api/dashboard/bundle`, `GET /api/state/stream` |
 | Alerts | P0 / NOW / WATCH / BACKLOG counts and the NOW + WATCH alert rows, paged | `GET /api/dashboard/bundle` (`evidence.alert_queues`) |
 | Network | Uplink facts; Wi-Fi scan and connect | bundle state, `GET /api/wifi/scan`, `POST /api/wifi/connect` |
-| Operate | Suggested runbook (preview / execute), legacy concept mode | `GET /api/runbooks/<id>`, `POST /api/runbooks/act`, `POST /api/mode` |
+| Operate | Suggested runbook (preview / execute), results of this screen's operations | `GET /api/runbooks/<id>`, `POST /api/runbooks/act` |
 | Settings | Language (ja/en), dark/light display, access token | none |
 
 Every state is shown as a word and an icon as well as a colour. Missing data is
@@ -30,11 +30,27 @@ DECISION AUTHORITY"; the Defensive State shown is the deterministic arbiter's
 selected action, never an AI output.
 
 The page polls `GET /api/dashboard/bundle` (the dashboard's own poll, at the
-dashboard's cadence, at least every 4 s) and keeps one `GET /api/state/stream`
-connection open. The stream is read with `fetch()` so that the token goes in
-the `X-Auth-Token` header and never in the URL. When the stream ends (including
-a `stream_error` event) it reconnects after the server's `retry` hint or with
-back-off, and the header shows "Polling (stream down)" or "Disconnected".
+dashboard's cadence, at least every 4 s) and, while someone is using the
+panel, keeps one `GET /api/state/stream` connection open. The stream is read
+with `fetch()` so that the token goes in the `X-Auth-Token` header and never in
+the URL.
+
+Load on the Edge: each open state stream makes the Web UI run its monitoring
+checks (several `systemctl is-active` calls) and a `mode_status` query once a
+second. So that a panel that is always on does not add that load all day:
+
+- the stream is closed after 5 minutes without a touch, and reopened by the
+  next touch (the header then shows "Periodic update": the bundle poll keeps
+  the screen current);
+- when the page is hidden (`visibilitychange`), both the stream and the bundle
+  poll stop, and resume when it is shown again;
+- after a `stream_error` event it waits at least the server's `retry` (15 s),
+  and after three in a row it stays on the bundle poll for 5 minutes; other
+  failures back off from 2 s to 1 minute.
+
+Blanking the screen with `wlopm` does not necessarily hide the page, so the
+idle rule above is what keeps a blanked panel off the stream. The server side
+is unchanged.
 
 ## Operations and how each is confirmed
 
@@ -45,7 +61,6 @@ back-off, and the header shows "Polling (stream down)" or "Disconnected".
 | Wi-Fi connect, saved or open network | `POST /api/wifi/connect` (operator) | confirmation sheet (SSID, security, note), then press and hold |
 | Runbook preview | `POST /api/runbooks/act` `action: preview` (operator) | none (dry run) |
 | Runbook execute | `POST /api/runbooks/act` `action: execute` (operator, runbook review and approval rules as today) | confirmation sheet, then press and hold. Offered only for `read_only` / `controlled_exec` runbooks without required arguments; others say to use Ops Comm |
-| Legacy concept mode | `POST /api/mode` (admin) | confirmation sheet (from, to, API, note), then press and hold |
 
 "Press and hold" is 1.2 s of continuous press; lifting early cancels. A single
 tap — including the touch that wakes a blanked screen — cannot start an
@@ -55,16 +70,17 @@ The result is shown as reported, never upgraded: success only when the API
 answered `ok: true`; otherwise "Failed", "Refused by review or approval rule",
 "Not allowed (token or role)", "Not implemented on this device"
 (`not_implemented`), "Not delivered" (`undelivered`, daemon not reachable), or
-"No answer — it may have run" (`delivery_unknown`, a daemon timeout, or no HTTP
-answer). `status_api_error` is a failure.
+"No answer — it may have run" (`delivery_unknown`, a daemon timeout, an empty reply or
+a reset after sending, or no HTTP answer). "Refused by the control daemon" is
+shown for `busy`, `forbidden` and a rate limit (nothing was run).
+`status_api_error` is a failure.
 
 Not offered on this screen: contain / release / disconnect / stage-open,
-shutdown / reboot, portal viewer, client trust, and M.I.O. questions. Use the
-main dashboard or Ops Comm for those.
-
-The legacy concept mode (Portal / Shield / Scapegoat) is kept as a secondary,
-labelled compatibility control; it is not the Defensive State (see
-[decision-loop.md](architecture/decision-loop.md) and #339 / #340).
+shutdown / reboot, portal viewer, client trust, M.I.O. questions, and the
+legacy concept mode (Portal / Shield / Scapegoat): it is neither shown nor
+offered, following #340 ("do not resurrect legacy mode UI"); the Defensive
+State is the outward state (see [decision-loop.md](architecture/decision-loop.md)).
+Use the main dashboard or Ops Comm for the others.
 
 ## Secrets
 
@@ -81,8 +97,8 @@ labelled compatibility control; it is not the Defensive State (see
   pressed, sent once, and cleared from the page right after it is sent. The
   Web UI does not log it (existing behaviour).
 - Use the least role that covers what the panel needs: a `viewer` token for a
-  display-only panel, `operator` for Wi-Fi and runbooks, `admin` only if the
-  legacy concept mode must be changed from the panel. Tokens and roles are the
+  display-only panel, `operator` for Wi-Fi and runbooks. No operation on this
+  screen needs `admin`. Tokens and roles are the
   existing `auth_tokens.json` entries; nothing new is configured.
 
 ## Kiosk on Raspberry Pi OS (user session)
@@ -143,8 +159,11 @@ To leave kiosk mode, close Chromium from a keyboard (Alt+F4) or over SSH.
 
 - `/touch` はタッチパネル用の画面です。既存の API・トークン・権限だけを使い、
   新しい操作や権限は増やしません。
-- 影響のある操作（Wi-Fi 接続、Runbook 実行、旧コンセプトモード変更）は、確認画面の
-  あと「長押し（1.2 秒）」で実行します。結果は API の応答どおりに表示し、未実装・
+- 影響のある操作（Wi-Fi 接続、Runbook 実行）は、確認画面のあと「長押し（1.2 秒）」で
+  実行します。旧コンセプトモード（Portal/Shield/Scapegoat）は #340 に従い表示も操作も
+  しません。
+- SSE（`/api/state/stream`）は触っている間だけつなぎ、5 分触らないと切ります。
+  ページが非表示のときはポーリングも止めます。結果は API の応答どおりに表示し、未実装・
   未配送・応答なし（実行された可能性あり）を成功に見せません。
 - トークンとパスフレーズはページのメモリにだけ置き、保存・URL・ログに残しません。
   再読み込みでトークンは消えます。キオスクでは `--incognito` を推奨します。

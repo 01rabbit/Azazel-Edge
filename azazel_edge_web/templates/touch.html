@@ -79,10 +79,10 @@
                 <div class="t-mid"><svg class="t-ico"><use href="#i-ai"/></svg><strong id="aiValue">—</strong></div>
                 <p class="t-sub" data-i18n="touch.ai_advisory_only">{{ tr('touch.ai_advisory_only', 'Advisory only · not decision authority') }}</p>
             </article>
-            <article class="t-tile tone-neutral" id="tileMode">
-                <span class="t-kicker" data-i18n="touch.mode_label">{{ tr('touch.mode_label', 'Concept mode (legacy)') }}</span>
-                <strong id="modeValue">—</strong>
-                <span class="t-tile-sub" data-i18n="touch.mode_not_state">{{ tr('touch.mode_not_state', 'Not the Defensive State') }}</span>
+            <article class="t-tile tone-neutral" id="tileTrace">
+                <span class="t-kicker" data-i18n="touch.trace_label">{{ tr('touch.trace_label', 'Decision record (audit)') }}</span>
+                <strong id="traceValue">—</strong>
+                <span class="t-tile-sub" id="traceSub">—</span>
             </article>
             <article class="t-tile tone-unknown" id="tileUplink">
                 <span class="t-kicker" data-i18n="touch.uplink_label">{{ tr('touch.uplink_label', 'Uplink') }}</span>
@@ -153,15 +153,6 @@
                     <button type="button" class="t-btn t-btn-caution" id="rbExecBtn" data-i18n="touch.runbook_execute">{{ tr('touch.runbook_execute', 'Execute…') }}</button>
                 </div>
                 <p class="t-note" id="rbNote">—</p>
-            </article>
-            <article class="t-panel t-legacy">
-                <h2 data-i18n="touch.mode_label">{{ tr('touch.mode_label', 'Concept mode (legacy)') }}</h2>
-                <p class="t-note" data-i18n="touch.mode_note">{{ tr('touch.mode_note', 'Legacy compatibility control. It is not the Defensive State. Admin role required.') }}</p>
-                <div class="t-row t-modes">
-                    <button type="button" class="t-btn t-mode" data-mode="portal">PORTAL</button>
-                    <button type="button" class="t-btn t-mode" data-mode="shield">SHIELD</button>
-                    <button type="button" class="t-btn t-mode" data-mode="scapegoat">SCAPEGOAT</button>
-                </div>
             </article>
             <article class="t-panel t-results">
                 <h2 data-i18n="touch.recent_results">{{ tr('touch.recent_results', 'Recent results (this screen only)') }}</h2>

@@ -31,6 +31,13 @@ eq(C(500, { ok: false, status_api_error: true, error: 'HTTP 403' }), 'failed', '
 eq(C(200, { ok: true, status_api_error: true }), 'failed', 'status_api_error beats ok');
 eq(C(500, { ok: false, error: 'Daemon timeout' }), 'delivery_unknown', 'daemon timeout -> may have run');
 eq(C(500, { ok: false, error: 'Control daemon not running' }), 'undelivered', 'daemon not running -> undelivered');
+eq(C(500, { ok: false, error: '[Errno 111] Connection refused' }), 'undelivered', 'connect refused -> undelivered');
+eq(C(500, { ok: false, error: 'Empty response from daemon' }), 'delivery_unknown', 'sent, no reply -> may have run');
+eq(C(500, { ok: false, error: '[Errno 104] Connection reset by peer' }), 'delivery_unknown', 'reset after send -> may have run');
+eq(C(500, { ok: false, error: 'busy' }), 'busy', 'daemon busy -> refused, not run');
+eq(C(500, { ok: false, error: 'forbidden', reason: 'web_ui' }), 'busy', 'peer table refusal -> refused');
+eq(C(500, { ok: false, error: 'Rate limit exceeded (1 req/3sec)' }), 'busy', 'rate limit -> refused');
+eq(C(500, { ok: false, error: 'Wi-Fi connect busy: another connect is in progress; try again' }), 'failed', 'wifi busy text is a failure');
 eq(C(0, null, 'timeout'), 'delivery_unknown', 'transport timeout -> delivery_unknown');
 eq(C(0, null, 'network'), 'delivery_unknown', 'network error -> delivery_unknown');
 eq(C(401, { ok: false, error: 'Unauthorized' }), 'unauthorized', '401 -> unauthorized');
@@ -67,7 +74,7 @@ function bundle(over) {
             topolite: { data_source: 'live' }
         },
         health: { stale_flags: { snapshot: false, ai_metrics: false } },
-        decision_focus: { available: true, decision: { action: 'OBSERVE', reason: 'r' }, mode: { kind: 'live_test_input' }, safety: { dry_run: true } },
+        decision_focus: { available: true, decision: { action: 'OBSERVE', reason: 'r' }, mode: { kind: 'live_test_input' }, safety: { dry_run: true }, audit: { trace_id: 'trace-1', policy_profile: 'balanced', format_version: 'v2' } },
         evidence: { alert_queues: { now: { count: 0, items: [] }, watch: { count: 0, items: [] }, backlog: { count: 0 } } },
         actions: { mio: { surface_message: 'advice' }, suggested_runbook: {} },
         state: { snapshot_epoch: now - 5, mode_runtime: { ok: true, mode: { current_mode: 'shield' } }, connection: { internet_check: 'OK' }, up_if: 'eth0', source: 'CONTROL_PLANE' }
@@ -81,7 +88,9 @@ eq(v.defensive.tone, 'ok', 'observe ok when fresh');
 eq(v.soc.tone, 'ok', 'soc ok');
 eq(v.p0.value, 0, 'p0 zero');
 eq(v.ai.state, 'on', 'ai on');
-eq(v.mode.value, 'SHIELD', 'legacy mode shown');
+eq(v.mode, undefined, 'legacy concept mode is not part of the view (#340)');
+eq(v.trace.id, 'trace-1', 'decision trace');
+eq(v.trace.policy, 'balanced', 'policy profile');
 eq(v.daemonDown, false, 'daemon up');
 eq(v.mioText, 'advice', 'mio text');
 
@@ -105,8 +114,7 @@ const down = bundle();
 down.state.mode_runtime = { ok: false, mode: { current_mode: 'shield' }, error: 'Control daemon not running' };
 v = T.deriveView({ bundle: down, nowSec: now });
 eq(v.daemonDown, true, 'daemon down detected');
-eq(v.mode.value, '—', 'fallback shield is not shown as the mode');
-eq(v.mode.known, false, 'mode unknown');
+eq(v.mode, undefined, 'no legacy mode even when the daemon is down');
 eq(v.soc.tone, 'stale', 'daemon down -> fresh-looking data is not green');
 eq(v.staleReason, 'unverified', 'daemon down -> unverified, not stale');
 
@@ -138,8 +146,22 @@ eq(v.ai.state, 'unknown', 'empty ai unknown');
 // live (SSE) state newer than the bundle wins
 const liveState = { snapshot_epoch: now - 1, suricata_critical: 2, mode_runtime: { ok: true, mode: { current_mode: 'portal' } }, connection: {} };
 v = T.deriveView({ bundle: bundle(), live: liveState, nowSec: now });
-eq(v.mode.value, 'PORTAL', 'newer live state used');
+eq(v.snapshotAgeSec, 1, 'newer live state used');
 eq(v.p0.value, 2, 'live critical count used');
+
+// --- stream policy (load on the Edge) -------------------------------------
+const W = (o) => T.streamWanted(Object.assign({ nowMs: 1000000, lastInteractionMs: 999000 }, o));
+eq(W({}), true, 'recent touch -> stream wanted');
+eq(W({ hidden: true }), false, 'hidden -> no stream');
+eq(W({ authProblem: true }), false, 'auth problem -> no stream');
+eq(W({ lastInteractionMs: 1000000 - 5 * 60 * 1000 - 1 }), false, 'idle 5 min -> no stream');
+eq(W({ holdOffUntilMs: 1000001 }), false, 'hold-off after repeated stream_error');
+eq(T.nextStreamDelay({ ended: 'stream_error', retryHintMs: 15000, backoffMs: 2000 }), 15000, 'stream_error honours retry');
+eq(T.nextStreamDelay({ ended: 'stream_error', backoffMs: 2000 }), 15000, 'stream_error without hint -> 15 s floor');
+eq(T.nextStreamDelay({ ended: 'stream_error', retryHintMs: 15000, backoffMs: 32000 }), 32000, 'backoff above retry');
+eq(T.nextStreamDelay({ ended: 'closed', backoffMs: 2000 }), 2000, 'first transport retry');
+eq(T.nextStreamDelay({ ended: 'closed', backoffMs: 999999 }), 60000, 'backoff capped');
+eq(T.nextStreamDelay({ ended: 'auth', backoffMs: 2000 }), 60000, 'auth failure waits a minute');
 
 // --- SSE parser -------------------------------------------------------------
 const evs = [];
@@ -147,12 +169,13 @@ const parser = T.createSseParser((e) => evs.push(e));
 parser.feed('event: ready\ndata: {"ok": true}\n\n');
 parser.feed('event: state\ndata: {"a"');
 parser.feed(': 1}\n\n: comment\n\n');
-parser.feed('retry: 15000\nevent: stream_error\ndata: {"reason": "busy"}\n\n');
+parser.feed('retry: 15000\nevent: stream_error\ndata: {"ok": false, "source": "state_stream", "error": "busy"}\n\n');
 eq(evs.length, 3, 'three events');
 eq(evs[0].event, 'ready', 'ready');
 eq(JSON.parse(evs[1].data).a, 1, 'split chunk joined');
 eq(evs[2].event, 'stream_error', 'stream_error');
 eq(evs[2].retry, 15000, 'retry captured');
+eq(JSON.parse(evs[2].data).error, 'busy', 'stream_error carries error (app.py on main)');
 eq(parser.retryMs(), 15000, 'retryMs');
 
 // --- secret buffer ---------------------------------------------------------

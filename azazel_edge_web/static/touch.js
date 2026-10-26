@@ -31,7 +31,6 @@
     var API = {
         bundle: '/api/dashboard/bundle',
         stateStream: '/api/state/stream',
-        mode: '/api/mode',
         wifiScan: '/api/wifi/scan',
         wifiConnect: '/api/wifi/connect',
         runbookGet: '/api/runbooks/',
@@ -40,6 +39,14 @@
 
     var SNAPSHOT_STALE_SEC = 30;   // app.py DASHBOARD_SNAPSHOT_STALE_SEC default
     var STREAM_IDLE_MS = 10000;    // no SSE event for this long -> reconnect
+    /* Load on the Edge: every open /api/state/stream runs the monitoring
+       checks (systemctl) and a mode_status query once a second on the
+       server. The kiosk therefore keeps the stream open only while someone
+       is using the panel; otherwise the dashboard's own bundle poll (>= 4 s)
+       carries the data, and nothing runs while the page is hidden. */
+    var STREAM_USER_IDLE_MS = 5 * 60 * 1000;   // no touch for 5 min -> close the stream
+    var STREAM_BACKOFF_MAX_MS = 60000;
+    var STREAM_ERROR_HOLDOFF_MS = 5 * 60 * 1000; // after 3 stream_error in a row
     var POST_TIMEOUT_MS = 40000;   // daemon socket timeout is 30 s
     var GET_TIMEOUT_MS = 12000;
     var HOLD_MS = 1200;            // press-and-hold to confirm
@@ -110,8 +117,13 @@
         if (httpStatus === 409) return { kind: 'rejected', message: msg };
         var ok2xx = httpStatus >= 200 && httpStatus < 300;
         if (ok2xx && (p.ok === true || (p.ok === undefined && p.status === 'ok'))) return { kind: 'ok', message: msg };
-        if (/daemon timeout|timed? ?out/i.test(msg)) return { kind: 'delivery_unknown', message: msg };
-        if (/daemon not running|empty response from daemon|no such file|connection refused/i.test(msg)) return { kind: 'undelivered', message: msg };
+        // app.py _send_control_command_socket: the request was sent but no
+        // (complete) reply came back -> it may have run.
+        if (/daemon timeout|timed? ?out|empty response from daemon|connection reset|broken pipe/i.test(msg)) return { kind: 'delivery_unknown', message: msg };
+        // Never reached the daemon: socket file missing or connect refused.
+        if (/daemon not running|no such file|connection refused/i.test(msg)) return { kind: 'undelivered', message: msg };
+        // The daemon refused before running anything (busy, rate limit, peer table).
+        if (/^busy$|rate limit|^forbidden$/i.test(msg)) return { kind: 'busy', message: msg };
         if (ok2xx && p.ok === undefined && !msg) return { kind: 'failed', message: 'invalid response' };
         return { kind: 'failed', message: msg || ('HTTP ' + httpStatus) };
     }
@@ -164,6 +176,27 @@
             reveal: function () { return chars.join(''); },
             take: function () { var s = chars.join(''); this.clear(); return s; }
         };
+    }
+
+    /* Whether the state stream should be open now. */
+    function streamWanted(o) {
+        o = o || {};
+        if (o.hidden || o.authProblem || o.unsupported) return false;
+        if (num(o.nowMs) === null) return false;
+        if (o.holdOffUntilMs && o.nowMs < o.holdOffUntilMs) return false;
+        return (o.nowMs - (num(o.lastInteractionMs) || 0)) < STREAM_USER_IDLE_MS;
+    }
+
+    /* Delay before reconnecting after the stream ended. The server's retry
+       hint (sent with stream_error, 15 s on main) is a floor; transport
+       failures back off exponentially up to a minute. */
+    function nextStreamDelay(o) {
+        o = o || {};
+        var backoff = Math.min(STREAM_BACKOFF_MAX_MS, Math.max(2000, num(o.backoffMs) || 2000));
+        var hint = num(o.retryHintMs);
+        if (o.ended === 'stream_error') return Math.max(hint || 15000, backoff);
+        if (o.ended === 'auth') return STREAM_BACKOFF_MAX_MS;
+        return hint ? Math.max(hint, backoff) : backoff;
     }
 
     function fmtAge(sec, trf) {
@@ -245,9 +278,15 @@
         var qWatch = obj(queues.watch);
         var qBacklog = obj(queues.backlog);
 
-        var modeObj = obj(modeRuntime.mode);
-        var modeKnown = modeRuntime.ok !== false && !!str(modeObj.current_mode);
-        var mode = { value: modeKnown ? str(modeObj.current_mode).toUpperCase() : '—', known: modeKnown };
+        // The legacy concept mode (portal/shield/scapegoat) is deliberately not
+        // shown or offered here (#340). mode_runtime is read only to tell
+        // whether the control daemon answered.
+        var audit = obj(focus.audit);
+        var trace = {
+            id: focus.available === true ? str(audit.trace_id) : '',
+            policy: focus.available === true ? str(audit.policy_profile) : '',
+            format: focus.available === true ? str(audit.format_version) : ''
+        };
 
         var inet = str(connection.internet_check).toUpperCase();
         var upIf = str(state.up_if);
@@ -296,7 +335,7 @@
                 items: arr(qNow.items).map(function (x) { return Object.assign({ queue: 'now' }, obj(x)); })
                     .concat(arr(qWatch.items).map(function (x) { return Object.assign({ queue: 'watch' }, obj(x)); }))
             },
-            mode: mode,
+            trace: trace,
             uplink: uplink,
             ai: ai,
             mioText: str(mio.surface_message || actions.current_user_guidance),
@@ -331,7 +370,8 @@
         var authProblem = false;
         var pollFailures = 0;
         var pollBusy = false;
-        var stream = { status: 'connecting', reason: '', ctrl: null, lastEventMs: 0, retryTimer: null, backoff: 2000 };
+        var stream = { status: 'connecting', reason: '', ctrl: null, lastEventMs: 0, retryTimer: null, backoff: 2000, errors: 0, holdOffUntilMs: 0 };
+        var lastInteractionMs = Date.now();
         var alertPage = 0;
         var apPage = 0;
         var aps = [];
@@ -476,7 +516,6 @@
             paintAlerts(v);
             paintNetworkFacts(v);
             paintRunbook(v);
-            paintModes(v);
         }
 
         function paintTopBar(v) {
@@ -486,6 +525,7 @@
             var pollOk = lastDataMs > 0 && (nowMs - lastDataMs) <= Math.max(3 * pollMs, 15000);
             if (authProblem) { tone = 'crit'; label = tr('touch.link_auth', 'Token required'); }
             else if (stream.status === 'live' && (nowMs - stream.lastEventMs) < STREAM_IDLE_MS) { tone = 'ok'; label = tr('touch.link_live', 'Live'); }
+            else if (pollOk && stream.status === 'paused') { tone = 'ok'; label = tr('touch.link_paused', 'Periodic update'); }
             else if (pollOk) { tone = 'watch'; label = tr('touch.link_polling', 'Polling (stream down)'); }
             else if (lastDataMs === 0 && pollFailures === 0) { tone = 'unknown'; label = tr('touch.link_connecting', 'Connecting'); }
             else { tone = 'crit'; label = tr('touch.link_lost', 'Disconnected — retrying'); }
@@ -510,7 +550,7 @@
             else clearBanner('auth');
             if (tone === 'crit' && !authProblem) showBanner('link', 'crit', tr('touch.banner_link', 'Connection to the Web UI lost. Showing the last data received; retrying.'));
             else clearBanner('link');
-            if (v.hasData && v.daemonDown) showBanner('daemon', 'watch', tr('touch.banner_daemon', 'Control daemon not answering: mode is unknown and state may come from a file fallback.'));
+            if (v.hasData && v.daemonDown) showBanner('daemon', 'watch', tr('touch.banner_daemon', 'Control daemon not answering: state may come from a file fallback and operations may not be delivered.'));
             else clearBanner('daemon');
             if (v.hasData && v.snapshotStale) showBanner('stale', 'stale', tr('touch.banner_stale', 'Snapshot is stale ({age}). Do not treat this screen as current.', { age: fmtAge(v.snapshotAgeSec, tr) }));
             else if (tone !== 'crit' && lastBundleMs > 0 && (Date.now() - lastBundleMs) > Math.max(3 * pollMs, 15000)) showBanner('stale', 'stale', tr('touch.banner_bundle_old', 'SOC/NOC summary is not being refreshed (last {age}). Do not treat it as current.', { age: fmtAge((Date.now() - lastBundleMs) / 1000, tr) }));
@@ -543,8 +583,9 @@
             var aiWords = { on: tr('touch.ai_on', 'ON'), off: tr('touch.ai_off', 'OFF'), stale: tr('touch.ai_stale', 'STALE') };
             text('aiValue', aiWords[v.ai.state] || '—');
 
-            setTone($('tileMode'), v.mode.known ? staleTone('neutral', v.stale) : 'unknown', true);
-            text('modeValue', v.mode.value);
+            setTone($('tileTrace'), v.trace.id ? staleTone('neutral', v.stale) : 'unknown', true);
+            text('traceValue', v.trace.id);
+            text('traceSub', v.trace.id ? ['policy ' + (v.trace.policy || '—'), v.trace.format].filter(Boolean).join(' · ') : tr('touch.no_decision', 'No decision record yet'));
             setTone($('tileUplink'), v.uplink.tone, true);
             text('uplinkValue', v.uplink.value);
             text('uplinkSub', tr('touch.internet', 'Internet') + ': ' + v.uplink.internet);
@@ -745,23 +786,14 @@
             });
         }
 
-        function paintModes(v) {
-            document.querySelectorAll('.t-mode').forEach(function (b) {
-                var m = String(b.getAttribute('data-mode')).toUpperCase();
-                var cur = v.mode.known && v.mode.value === m;
-                b.classList.toggle('is-current', cur);
-                b.setAttribute('aria-pressed', cur ? 'true' : 'false');
-                b.disabled = opBusy || cur;
-            });
-        }
-
-        var RESULT_TONE = { ok: 'ok', failed: 'crit', rejected: 'crit', unauthorized: 'crit', not_implemented: 'watch', undelivered: 'crit', delivery_unknown: 'watch' };
+        var RESULT_TONE = { ok: 'ok', failed: 'crit', rejected: 'crit', unauthorized: 'crit', not_implemented: 'watch', undelivered: 'crit', delivery_unknown: 'watch', busy: 'watch' };
         function resultTitle(kind) {
             var map = {
                 ok: tr('touch.res_ok', 'Done (API answered ok)'),
                 failed: tr('touch.res_failed', 'Failed'),
                 rejected: tr('touch.res_rejected', 'Refused by review or approval rule'),
                 unauthorized: tr('touch.res_unauthorized', 'Not allowed (token or role)'),
+                busy: tr('touch.res_busy', 'Refused by the control daemon (busy, rate limit or not allowed); nothing was run'),
                 not_implemented: tr('touch.res_not_implemented', 'Not implemented on this device'),
                 undelivered: tr('touch.res_undelivered', 'Not delivered (daemon not reachable)'),
                 delivery_unknown: tr('touch.res_delivery_unknown', 'No answer — it may have run. Check the state before retrying.')
@@ -891,21 +923,6 @@
         function opRequest(method, path, body) {
             return request(method, path, body, POST_TIMEOUT_MS).then(function (r) {
                 return classifyResult(r.status, r.payload, r.transportError);
-            });
-        }
-
-        function confirmMode(mode) {
-            var v = currentView();
-            openConfirm({
-                label: tr('touch.op_mode', 'Concept mode') + ' → ' + mode.toUpperCase(),
-                title: tr('touch.confirm_mode_title', 'Change concept mode (legacy)?'),
-                facts: [
-                    [tr('touch.from', 'From'), v.mode.value],
-                    [tr('touch.to', 'To'), mode.toUpperCase()],
-                    [tr('touch.api', 'API'), 'POST ' + API.mode + ' (admin)'],
-                    [tr('touch.note', 'Note'), tr('touch.mode_note', 'Legacy compatibility control. It is not the Defensive State. Admin role required.')]
-                ],
-                run: function () { return opRequest('POST', API.mode, { mode: mode, requested_by: 'touch' }); }
             });
         }
 
@@ -1143,6 +1160,7 @@
         }
         function poll() {
             clearTimeout(pollTimer);
+            if (document.hidden) return;   // resumed by visibilitychange
             if (pollBusy) { pollTimer = setTimeout(poll, pollMs); return; }
             pollBusy = true;
             request('GET', API.bundle + '?surface=dashboard&audience=temporary&trends_limit=1').then(function (r) {
@@ -1162,20 +1180,49 @@
                     if (r.status === 401 || r.status === 403) authProblem = true;
                 }
                 paint();
-                pollTimer = setTimeout(poll, document.hidden ? pollMs * 3 : pollMs);
+                if (!document.hidden) pollTimer = setTimeout(poll, pollMs);
             });
         }
 
-        function restartStream() {
-            if (stream.ctrl) { try { stream.ctrl.abort(); } catch (_e) { /* ignore */ } }
+        function wantStream() {
+            return streamWanted({
+                hidden: document.hidden, authProblem: authProblem, unsupported: stream.status === 'unsupported',
+                nowMs: Date.now(), lastInteractionMs: lastInteractionMs, holdOffUntilMs: stream.holdOffUntilMs
+            });
+        }
+
+        function closeStream(status) {
+            var ctrl = stream.ctrl;
+            stream.ctrl = null;
             clearTimeout(stream.retryTimer);
+            stream.retryTimer = null;
+            stream.status = status || 'paused';
+            if (ctrl) { try { ctrl.abort(); } catch (_e) { /* ignore */ } }
+        }
+
+        function restartStream() {
+            closeStream('connecting');
             stream.backoff = 2000;
-            openStream();
+            stream.errors = 0;
+            stream.holdOffUntilMs = 0;
+            if (wantStream()) openStream(); else stream.status = 'paused';
         }
 
         function scheduleStream(ms) {
             clearTimeout(stream.retryTimer);
-            stream.retryTimer = setTimeout(openStream, ms);
+            stream.retryTimer = setTimeout(function () {
+                stream.retryTimer = null;
+                if (wantStream()) openStream(); else stream.status = 'paused';
+            }, ms);
+        }
+
+        // Called every second and on interaction/visibility: open or close
+        // the stream to match wantStream(); never opens while a retry waits.
+        function syncStream() {
+            var want = wantStream();
+            if (!want && stream.ctrl) closeStream('paused');
+            else if (!want && stream.status !== 'unsupported') { clearTimeout(stream.retryTimer); stream.retryTimer = null; stream.status = 'paused'; }
+            else if (want && !stream.ctrl && !stream.retryTimer) openStream();
         }
 
         function openStream() {
@@ -1188,23 +1235,24 @@
             var parser = createSseParser(function (ev) {
                 stream.lastEventMs = Date.now();
                 if (ev.retry) retryHint = ev.retry;
-                if (ev.event === 'ready') { stream.status = 'live'; stream.backoff = 2000; }
+                if (ev.event === 'ready') { stream.status = 'live'; }
                 else if (ev.event === 'state') {
                     var data = null;
                     try { data = JSON.parse(ev.data); } catch (_e) { data = null; }
-                    if (data && typeof data === 'object') { live = data; lastDataMs = Date.now(); stream.status = 'live'; }
+                    if (data && typeof data === 'object') { live = data; lastDataMs = Date.now(); stream.status = 'live'; stream.backoff = 2000; stream.errors = 0; }
                 } else if (ev.event === 'stream_error') {
                     var info = null;
                     try { info = JSON.parse(ev.data); } catch (_e) { info = null; }
                     stream.status = 'error';
-                    stream.reason = str(obj(info).reason || obj(info).error || 'stream_error');
+                    stream.reason = str(obj(info).error || obj(info).reason || 'stream_error');
                 }
             });
             var watchdog = setInterval(function () {
                 if (Date.now() - stream.lastEventMs > STREAM_IDLE_MS) { try { ctrl.abort(); } catch (_e) { /* ignore */ } }
             }, 2000);
+            var authFailed = false;
             fetch(API.stateStream, { headers: headers(false), cache: 'no-store', credentials: 'same-origin', signal: ctrl.signal }).then(function (res) {
-                if (res.status === 401 || res.status === 403) { authProblem = true; throw new Error('auth'); }
+                if (res.status === 401 || res.status === 403) { authProblem = true; authFailed = true; throw new Error('auth'); }
                 if (!res.ok || !res.body) throw new Error('http ' + res.status);
                 var reader = res.body.getReader();
                 var decoder = new TextDecoder();
@@ -1218,12 +1266,19 @@
                 return pump();
             }).catch(function () { /* handled below */ }).then(function () {
                 clearInterval(watchdog);
-                if (stream.ctrl !== ctrl) return;   // superseded by restartStream()
-                if (stream.status !== 'error') stream.status = 'down';
-                var wait = retryHint || stream.backoff;
-                stream.backoff = Math.min(30000, stream.backoff * 2);
+                if (stream.ctrl !== ctrl) return;   // closed on purpose (idle/hidden) or superseded
+                stream.ctrl = null;
+                var ended = authFailed ? 'auth' : (stream.status === 'error' ? 'stream_error' : 'closed');
+                if (ended === 'stream_error') {
+                    stream.errors += 1;
+                    if (stream.errors >= 3) stream.holdOffUntilMs = Date.now() + STREAM_ERROR_HOLDOFF_MS;
+                } else {
+                    stream.status = 'down';
+                }
+                var wait = nextStreamDelay({ ended: ended, retryHintMs: retryHint, backoffMs: stream.backoff });
+                stream.backoff = Math.min(STREAM_BACKOFF_MAX_MS, stream.backoff * 2);
                 paint();
-                scheduleStream(authProblem ? 30000 : wait);
+                scheduleStream(wait);
             });
         }
 
@@ -1245,9 +1300,6 @@
             if (!b) return;
             var ap = aps[Number(b.getAttribute('data-ap'))];
             if (ap) chooseAp(ap);
-        });
-        document.querySelectorAll('.t-mode').forEach(function (b) {
-            b.addEventListener('click', function () { confirmMode(String(b.getAttribute('data-mode'))); });
         });
         $('rbPreviewBtn').addEventListener('click', function () { confirmRunbook('preview'); });
         $('rbExecBtn').addEventListener('click', function () { confirmRunbook('execute'); });
@@ -1275,12 +1327,28 @@
             b.addEventListener('click', function () { applyTheme(b.getAttribute('data-theme-choice')); });
         });
         // Drop the passphrase/token being typed if the page is hidden or left.
-        document.addEventListener('visibilitychange', function () { if (document.hidden && !opBusy) closeKeyboard(); else if (!document.hidden) pollSoon(); });
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) {
+                if (!opBusy) closeKeyboard();
+                clearTimeout(pollTimer);
+                closeStream('paused');
+            } else {
+                lastInteractionMs = Date.now();
+                pollSoon();
+                syncStream();
+            }
+        });
+        // Any touch counts as use: reopen the live stream if it was idle-closed.
+        document.addEventListener('pointerdown', function () {
+            lastInteractionMs = Date.now();
+            syncStream();
+        }, true);
         window.addEventListener('pagehide', function () { secret.clear(); });
 
         setInterval(function () {
             var d = new Date();
             text('tClock', ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2));
+            syncStream();
             paintTopBar(currentView());
         }, 1000);
         var resizeTimer = null;
@@ -1292,7 +1360,7 @@
         selectTab('status');
         document.body.classList.remove('t-boot');
         poll();
-        openStream();
+        syncStream();
     }
 
     return {
@@ -1306,6 +1374,8 @@
         createSecretBuffer: createSecretBuffer,
         fmtAge: fmtAge,
         pickState: pickState,
+        streamWanted: streamWanted,
+        nextStreamDelay: nextStreamDelay,
         deriveView: deriveView,
         boot: boot
     };

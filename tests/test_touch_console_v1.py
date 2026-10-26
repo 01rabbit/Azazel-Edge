@@ -31,7 +31,6 @@ _HTML = (_WEB / "templates" / "touch.html").read_text(encoding="utf-8")
 _USED_API = {
     ("GET", "/api/dashboard/bundle"): 403,
     ("GET", "/api/state/stream"): 403,
-    ("POST", "/api/mode"): 403,
     ("GET", "/api/wifi/scan"): None,  # existing: no token required (read-only scan)
     ("POST", "/api/wifi/connect"): 401,
     ("GET", "/api/runbooks/<runbook_id>"): 403,
@@ -120,13 +119,12 @@ class TouchConsoleRouteTests(unittest.TestCase):
             self.assertEqual(response.get_json().get("error"), "Unauthorized", f"{method} {path}")
         self.assertEqual(self.sent, [], "nothing may reach the control daemon without a token")
 
-    def test_wifi_connect_and_mode_still_need_their_roles_with_a_viewer_token(self) -> None:
+    def test_wifi_connect_and_runbook_act_still_need_their_roles_with_a_viewer_token(self) -> None:
         tokens = Path(self.tmp.name) / "auth_tokens.json"
         tokens.write_text(json.dumps({"tokens": [{"token": "viewer-token", "principal": "kiosk", "role": "viewer"}]}), encoding="utf-8")
         webapp.AUTH_TOKENS_FILE = tokens
         headers = {"X-Auth-Token": "viewer-token"}
         self.assertEqual(self.client.post("/api/wifi/connect", json={"ssid": "x", "security": "OPEN"}, headers=headers).status_code, 401)
-        self.assertEqual(self.client.post("/api/mode", json={"mode": "portal"}, headers=headers).status_code, 403)
         self.assertEqual(self.client.post("/api/runbooks/act", json={"runbook_id": "x"}, headers=headers).status_code, 403)
         self.assertEqual(self.sent, [])
 
@@ -142,7 +140,6 @@ class TouchConsoleSourceTests(unittest.TestCase):
         self.assertNotIn("/api/", _HTML)
 
     def test_js_methods_match_the_existing_contracts(self) -> None:
-        self.assertIn("opRequest('POST', API.mode", _JS)
         self.assertIn("opRequest('POST', API.wifiConnect", _JS)
         self.assertIn("opRequest('POST', API.runbookAct", _JS)
         self.assertIn("request('GET', API.wifiScan", _JS)
@@ -169,6 +166,24 @@ class TouchConsoleSourceTests(unittest.TestCase):
         # No <input>: the browser cannot autofill or offer to save the secret.
         self.assertNotIn("<input", _HTML)
         self.assertNotIn("<form", _HTML)
+
+    def test_legacy_mode_ui_is_not_resurrected(self) -> None:
+        # #340: no Portal/Shield/Scapegoat control or display, no POST /api/mode.
+        self.assertNotIn("/api/mode", _JS)
+        self.assertNotIn("/api/mode", _HTML)
+        self.assertNotIn("mode_set", _JS)
+        for word in (r"(?<!captive[ _])portal", "scapegoat", "shield", "data-mode", "current_mode"):
+            self.assertIsNone(re.search(word, _JS.lower()), word)
+            self.assertIsNone(re.search(word, _HTML.lower()), word)
+        self.assertEqual([k for k in UI_STRINGS["en"] if k.startswith("touch.mode")], [])
+
+    def test_stream_is_closed_when_hidden_or_idle(self) -> None:
+        # Each open /api/state/stream runs systemctl checks every second on the
+        # Edge: the kiosk must not hold it while hidden or unused.
+        self.assertIn("STREAM_USER_IDLE_MS", _JS)
+        self.assertIn("if (o.hidden || o.authProblem || o.unsupported) return false;", _JS)
+        self.assertIn("closeStream('paused')", _JS)
+        self.assertIn("if (document.hidden) return;", _JS)
 
     def test_wifi_connect_sends_only_existing_fields(self) -> None:
         bodies = re.findall(r"\{\s*ssid: [^}]*\}", _JS)
