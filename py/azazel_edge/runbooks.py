@@ -230,4 +230,15 @@ def execute_runbook(
     result["stdout"] = proc.stdout[-8000:]
     result["stderr"] = proc.stderr[-4000:]
     result["ok"] = proc.returncode == 0
+    if not result["ok"]:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        result["error"] = f"runbook_command_failed: exit {proc.returncode}" + (f": {detail[0][:200]}" if detail else "")
+        if effect == "controlled_exec" and hasattr(os, "geteuid") and os.geteuid() != 0:
+            # The Web UI runs as a non-root account (Edge#471 stage 1); a
+            # controlled_exec runbook that needs root (e.g. systemctl restart)
+            # fails here. Say so; never report it as done.
+            result["error"] = (
+                "controlled_exec_failed_without_root: this process runs as a non-root account "
+                f"(uid {os.geteuid()}) and the command needs root; " + result["error"]
+            )
     return result

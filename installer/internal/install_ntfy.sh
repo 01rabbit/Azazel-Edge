@@ -73,8 +73,19 @@ fi
 umask 077
 printf '%s\n' "$token" > "$TOKEN_PATH_PRIMARY"
 printf '%s\n' "$token" > "$TOKEN_PATH_COMPAT"
-chown root:root "$TOKEN_PATH_PRIMARY" "$TOKEN_PATH_COMPAT"
-chmod 0600 "$TOKEN_PATH_PRIMARY" "$TOKEN_PATH_COMPAT"
+# Token files the Web UI reads are 0640 root:azazel-web (Edge#471 stage 1:
+# the Web UI runs as azazel-web). Without that account they stay 0600 root.
+web_readable_secret() {
+  if getent group azazel-web >/dev/null 2>&1; then
+    chown root:azazel-web "$1"
+    chmod 0640 "$1"
+  else
+    chown root:root "$1"
+    chmod 0600 "$1"
+  fi
+}
+web_readable_secret "$TOKEN_PATH_PRIMARY"
+web_readable_secret "$TOKEN_PATH_COMPAT"
 
 systemctl enable ntfy.service >/dev/null
 systemctl restart ntfy.service

@@ -26,7 +26,7 @@ class TriageSlice4Tests(unittest.TestCase):
 
     def test_engine_persists_proposed_runbooks_when_diagnostic_is_reached(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp))
+            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp), audit_logger=P0AuditLogger(Path(tmp) / 'triage-audit.jsonl'))
             progress = engine.start('portal_access', audience='temporary', lang='ja')
             progress = engine.answer(progress.session.session_id, 'yes')
             self.assertTrue(progress.completed)

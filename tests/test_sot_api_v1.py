@@ -7,6 +7,8 @@ from pathlib import Path
 
 import azazel_edge_web.app as webapp
 
+from _control_daemon_inproc import InProcessControlDaemon
+
 
 class SotApiV1Tests(unittest.TestCase):
     def setUp(self) -> None:
@@ -62,13 +64,17 @@ class SotApiV1Tests(unittest.TestCase):
         self._orig = {
             "load_token": webapp.load_token,
             "AUTH_FAIL_OPEN": webapp.AUTH_FAIL_OPEN,
-            "SOT_AUDIT_LOG": webapp.SOT_AUDIT_LOG,
+            "CONTROL_SOCKET": webapp.CONTROL_SOCKET,
             "send_control_command": webapp.send_control_command,
             "AZAZEL_SOT_PATH": webapp.os.environ.get("AZAZEL_SOT_PATH"),
         }
         webapp.load_token = lambda: None
         webapp.AUTH_FAIL_OPEN = True
-        webapp.SOT_AUDIT_LOG = self.audit_path
+        # The Web UI no longer writes the SoT: the control daemon does
+        # (Edge#471 stage 1). Run the daemon's real handler on a temporary
+        # control.sock and point the Web UI at it.
+        self.daemon = InProcessControlDaemon(self.sot_path, self.audit_path).__enter__()
+        webapp.CONTROL_SOCKET = self.daemon.socket_path
         self._captured_actions: list[str] = []
 
         def _fake_send(action: str) -> dict:
@@ -82,7 +88,8 @@ class SotApiV1Tests(unittest.TestCase):
     def tearDown(self) -> None:
         webapp.load_token = self._orig["load_token"]
         webapp.AUTH_FAIL_OPEN = self._orig["AUTH_FAIL_OPEN"]
-        webapp.SOT_AUDIT_LOG = self._orig["SOT_AUDIT_LOG"]
+        webapp.CONTROL_SOCKET = self._orig["CONTROL_SOCKET"]
+        self.daemon.__exit__(None, None, None)
         webapp.send_control_command = self._orig["send_control_command"]
         if self._orig["AZAZEL_SOT_PATH"] is None:
             webapp.os.environ.pop("AZAZEL_SOT_PATH", None)
@@ -121,6 +128,8 @@ class SotApiV1Tests(unittest.TestCase):
         self.assertEqual(rows[-1]["kind"], "sot_devices_replaced")
         self.assertEqual(rows[-1]["actor"], "operator:alice")
         self.assertIn("remote_addr", rows[-1])
+        self.assertEqual(rows[-1]["source"], "control_daemon")
+        self.assertEqual(rows[-1]["peer_uid"], webapp.os.geteuid())
 
     def test_patch_merges_existing_device(self) -> None:
         response = self.client.patch(
@@ -154,6 +163,23 @@ class SotApiV1Tests(unittest.TestCase):
         payload = response.get_json()
         self.assertFalse(payload["ok"])
         self.assertIn("invalid_sot", payload["error"])
+        # Nothing was written.
+        saved = json.loads(self.sot_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["devices"][0]["id"], "dev-1")
+        self.assertFalse(self.audit_path.exists())
+
+    def test_daemon_unavailable_is_reported_not_written(self) -> None:
+        webapp.CONTROL_SOCKET = self.daemon.dir / "absent.sock"
+        response = self.client.put("/api/sot/devices", json={"devices": []})
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("control_daemon_unavailable", response.get_json()["error"])
+        saved = json.loads(self.sot_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["devices"][0]["id"], "dev-1")
+
+    def test_web_ui_has_no_sot_writer(self) -> None:
+        src = (Path(webapp.__file__)).read_text(encoding="utf-8")
+        self.assertNotIn("_write_sot_payload", src)
+        self.assertNotIn("SOT_AUDIT_LOG", src)
 
 
 if __name__ == "__main__":

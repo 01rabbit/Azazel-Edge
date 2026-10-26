@@ -19,7 +19,6 @@ class HandoffApiV1Tests(unittest.TestCase):
             "STATE_PATH": webapp.STATE_PATH,
             "AI_LLM_LOG": webapp.AI_LLM_LOG,
             "TRIAGE_AUDIT_LOG": webapp.TRIAGE_AUDIT_LOG,
-            "TRIAGE_AUDIT_FALLBACK_LOG": webapp.TRIAGE_AUDIT_FALLBACK_LOG,
             "AUTH_FAIL_OPEN": webapp.AUTH_FAIL_OPEN,
             "load_token": webapp.load_token,
             "_sot_candidates": webapp._sot_candidates,
@@ -28,7 +27,6 @@ class HandoffApiV1Tests(unittest.TestCase):
         webapp.STATE_PATH = root / "ui_snapshot.json"
         webapp.AI_LLM_LOG = root / "ai-llm.jsonl"
         webapp.TRIAGE_AUDIT_LOG = root / "triage-audit.jsonl"
-        webapp.TRIAGE_AUDIT_FALLBACK_LOG = root / "triage-audit-fallback.jsonl"
         webapp.AUTH_FAIL_OPEN = True
         webapp.load_token = lambda: None
 
@@ -74,7 +72,6 @@ class HandoffApiV1Tests(unittest.TestCase):
         webapp.STATE_PATH = self._orig["STATE_PATH"]
         webapp.AI_LLM_LOG = self._orig["AI_LLM_LOG"]
         webapp.TRIAGE_AUDIT_LOG = self._orig["TRIAGE_AUDIT_LOG"]
-        webapp.TRIAGE_AUDIT_FALLBACK_LOG = self._orig["TRIAGE_AUDIT_FALLBACK_LOG"]
         webapp.AUTH_FAIL_OPEN = self._orig["AUTH_FAIL_OPEN"]
         webapp.load_token = self._orig["load_token"]
         webapp._sot_candidates = self._orig["_sot_candidates"]

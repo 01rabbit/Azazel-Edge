@@ -137,6 +137,16 @@ jobs:
             tests/test_core_nft_owned_lease_v1.py | tee real-nft.log
           grep -Eq "^1 passed" real-nft.log
 
+      - name: Web UI non-root peer checks with real uids (root, Edge#471)
+        # control.sock's per-uid table and the agent's manual_query socket,
+        # with probes that switch to other uids. Skipped as non-root in the
+        # test-python job; here it must run and pass, never skip.
+        run: |
+          sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_web_non_root_stage1_linux_root_v1.py | tee web-non-root.log
+          grep -Eq "^[0-9]+ passed" web-non-root.log
+          ! grep -Eq "skipped|failed|error" web-non-root.log
+
       - name: Run SO-03 and SO-07 harnesses
         run: |
           . .venv/bin/activate

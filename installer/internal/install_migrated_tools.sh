@@ -71,6 +71,7 @@ echo "[3/16] Install azazel_edge core modules"
 install -m 0644 "$REPO_ROOT/py/azazel_edge/__init__.py" /opt/azazel-edge/py/azazel_edge/__init__.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/path_schema.py" /opt/azazel-edge/py/azazel_edge/path_schema.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/control_plane.py" /opt/azazel-edge/py/azazel_edge/control_plane.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/peercred.py" /opt/azazel-edge/py/azazel_edge/peercred.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/cli_unified.py" /opt/azazel-edge/py/azazel_edge/cli_unified.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/cli_unified_textual.py" /opt/azazel-edge/py/azazel_edge/cli_unified_textual.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/ai_governance.py" /opt/azazel-edge/py/azazel_edge/ai_governance.py
@@ -169,6 +170,7 @@ install -m 0755 "$REPO_ROOT/bin/azazel-edge-audit-review" /usr/local/bin/azazel-
 install -m 0755 "$REPO_ROOT/installer/internal/set_dev_remote_access.sh" /opt/azazel-edge/set_dev_remote_access.sh
 install -m 0755 "$REPO_ROOT/installer/internal/install_ai_runtime.sh" /opt/azazel-edge/install_ai_runtime.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_web_token.sh" /opt/azazel-edge/provision_web_token.sh
+install -m 0755 "$REPO_ROOT/installer/internal/setup_web_account.sh" /opt/azazel-edge/setup_web_account.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_workspace.sh" /opt/azazel-edge/provision_mattermost_workspace.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_command.sh" /opt/azazel-edge/provision_mattermost_command.sh
 install -m 0755 "$REPO_ROOT/installer/internal/verify_runtime_sync.sh" /opt/azazel-edge/verify_runtime_sync.sh
@@ -198,8 +200,12 @@ fi
 /opt/azazel-edge/provision_web_token.sh
 SECURITY_ENV="/etc/default/azazel-edge-security"
 touch "$SECURITY_ENV"
+# Edge#471 stage 1: the shared runtime directory is 0750 with group
+# azazel-control, so the Web UI (azazel-web, a member) can reach control.sock
+# and read the runtime files but cannot create, rename or remove anything in
+# it. setup_web_account.sh below moves the old defaults (0770, empty group).
 if ! grep -q '^AZAZEL_RUNTIME_DIR_MODE=' "$SECURITY_ENV"; then
-  echo 'AZAZEL_RUNTIME_DIR_MODE=0770' >> "$SECURITY_ENV"
+  echo 'AZAZEL_RUNTIME_DIR_MODE=0750' >> "$SECURITY_ENV"
 fi
 if ! grep -q '^AZAZEL_CONTROL_SOCKET_MODE=' "$SECURITY_ENV"; then
   echo 'AZAZEL_CONTROL_SOCKET_MODE=0660' >> "$SECURITY_ENV"
@@ -215,8 +221,15 @@ for env_file in "$SECURITY_ENV" "$WEB_ENV"; do
   sed -i -E 's#^AZAZEL_AI_SOCKET=(["'"'"']?)/run/azazel-edge/ai-bridge\.sock(["'"'"']?)$#AZAZEL_AI_SOCKET=\1/run/azazel-edge-ai/ai-bridge.sock\2#' "$env_file"
 done
 if ! grep -q '^AZAZEL_RUNTIME_SOCKET_GROUP=' "$SECURITY_ENV"; then
-  echo 'AZAZEL_RUNTIME_SOCKET_GROUP=' >> "$SECURITY_ENV"
+  echo 'AZAZEL_RUNTIME_SOCKET_GROUP=azazel-control' >> "$SECURITY_ENV"
 fi
+# Edge#471 stage 1: the Web UI runs as azazel-web. Stop it (it may still run
+# as root from the previous unit) before its state is copied, then create the
+# accounts, move old defaults, copy its state and set the token modes.
+if systemctl is-active --quiet azazel-edge-web.service 2>/dev/null; then
+  systemctl stop azazel-edge-web.service
+fi
+/opt/azazel-edge/setup_web_account.sh
 if [[ ! -f /run/azazel-edge/ui_snapshot.json ]]; then
   cat > /run/azazel-edge/ui_snapshot.json <<'EOD'
 {"now_time":"","ssid":"-","user_state":"CHECKING","recommendation":"Initializing","evidence":[],"snapshot_epoch":0}
@@ -249,7 +262,11 @@ if [[ "$ENABLE_SERVICES" == "1" ]]; then
   systemctl enable --now azazel-edge-epd-refresh.timer
   systemctl enable --now azazel-edge-ai-agent.service
   systemctl enable --now azazel-edge-core.service
+  # Order (Edge#471 stage 1): the control daemon takes the azazel-control
+  # group and the peer table, the agent opens its manual_query socket, then
+  # the Web UI starts as azazel-web.
   systemctl restart azazel-edge-control-daemon.service
+  systemctl restart azazel-edge-ai-agent.service
   systemctl restart azazel-edge-web.service
 fi
 

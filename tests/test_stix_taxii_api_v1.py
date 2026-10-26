@@ -43,19 +43,16 @@ class STIXTaxiiApiV1Tests(unittest.TestCase):
             "AUTH_FAIL_OPEN": webapp.AUTH_FAIL_OPEN,
             "AUTH_TOKENS_FILE": webapp.AUTH_TOKENS_FILE,
             "TRIAGE_AUDIT_LOG": webapp.TRIAGE_AUDIT_LOG,
-            "TRIAGE_AUDIT_FALLBACK_LOG": webapp.TRIAGE_AUDIT_FALLBACK_LOG,
         }
         webapp.AUTH_FAIL_OPEN = False
         webapp.AUTH_TOKENS_FILE = self.tokens
         webapp.TRIAGE_AUDIT_LOG = self.audit_path
-        webapp.TRIAGE_AUDIT_FALLBACK_LOG = self.audit_path
         self.client = webapp.app.test_client()
 
     def tearDown(self) -> None:
         webapp.AUTH_FAIL_OPEN = self._orig["AUTH_FAIL_OPEN"]
         webapp.AUTH_TOKENS_FILE = self._orig["AUTH_TOKENS_FILE"]
         webapp.TRIAGE_AUDIT_LOG = self._orig["TRIAGE_AUDIT_LOG"]
-        webapp.TRIAGE_AUDIT_FALLBACK_LOG = self._orig["TRIAGE_AUDIT_FALLBACK_LOG"]
         self.tmp.cleanup()
 
     def _headers(self) -> dict:

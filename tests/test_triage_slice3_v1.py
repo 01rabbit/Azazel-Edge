@@ -5,13 +5,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from azazel_edge.audit import P0AuditLogger
 from azazel_edge.triage import TriageFlowEngine, TriageSessionStore
 
 
 class TriageSlice3Tests(unittest.TestCase):
     def test_start_returns_entry_step(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp))
+            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp), audit_logger=P0AuditLogger(Path(tmp) / 'triage-audit.jsonl'))
             progress = engine.start('wifi_connectivity', audience='temporary', lang='ja')
             self.assertFalse(progress.completed)
             self.assertEqual(progress.session.selected_intent, 'wifi_connectivity')
@@ -19,7 +20,7 @@ class TriageSlice3Tests(unittest.TestCase):
 
     def test_answer_walks_to_next_step(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp))
+            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp), audit_logger=P0AuditLogger(Path(tmp) / 'triage-audit.jsonl'))
             progress = engine.start('dns_resolution', audience='temporary', lang='ja')
             step = progress.next_step
             self.assertEqual(step.step_id, 'internet_vs_name')
@@ -29,7 +30,7 @@ class TriageSlice3Tests(unittest.TestCase):
 
     def test_answer_reaches_diagnostic_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp))
+            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp), audit_logger=P0AuditLogger(Path(tmp) / 'triage-audit.jsonl'))
             progress = engine.start('portal_access', audience='temporary', lang='en')
             progress = engine.answer(progress.session.session_id, 'yes')
             self.assertTrue(progress.completed)
@@ -38,14 +39,14 @@ class TriageSlice3Tests(unittest.TestCase):
 
     def test_resume_returns_saved_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp))
+            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp), audit_logger=P0AuditLogger(Path(tmp) / 'triage-audit.jsonl'))
             progress = engine.start('service_status', audience='professional', lang='ja')
             resumed = engine.resume(progress.session.session_id)
             self.assertEqual(resumed.next_step.step_id, 'symptom_scope')
 
     def test_boolean_localization_normalizes_japanese_answer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp))
+            engine = TriageFlowEngine(store=TriageSessionStore(base_dir=tmp), audit_logger=P0AuditLogger(Path(tmp) / 'triage-audit.jsonl'))
             progress = engine.start('portal_access', audience='temporary', lang='ja')
             progress = engine.answer(progress.session.session_id, 'はい')
             self.assertTrue(progress.completed)

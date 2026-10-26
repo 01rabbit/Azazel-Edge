@@ -172,15 +172,26 @@ _RUNTIME_STATE_PATHS = runtime_snapshot_path_candidates()
 STATE_PATH = _RUNTIME_STATE_PATHS[0]  # Share TUI snapshot
 FALLBACK_STATE_PATH = _RUNTIME_STATE_PATHS[-1]  # Legacy runtime fallback
 CONTROL_SOCKET = Path("/run/azazel-edge/control.sock")
-AI_SOCKET = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge-ai/ai-bridge.sock"))
+# The Web UI's own state (Edge#471 stage 1): it runs as the non-root account
+# azazel-web, and these are the unit's RuntimeDirectory=, LogsDirectory= and
+# StateDirectory= (azazel-edge-web), owned by that account. Nothing the Web UI
+# writes lives in the shared /run/azazel-edge, /var/log/azazel-edge or /tmp.
+WEB_RUNTIME_DIR = Path("/run/azazel-edge-web")
+WEB_LOG_DIR = Path("/var/log/azazel-edge-web")
+WEB_STATE_DIR = Path("/var/lib/azazel-edge-web")
+# manual_query goes to the agent's dedicated query socket (Edge#471 stage 1),
+# not to ai-bridge.sock (owner only, the core's socket). Caution: the agent
+# and the core read the same variable name for ai-bridge.sock; set it for the
+# Web UI only in /etc/default/azazel-edge-web, never in a file the agent or
+# the core also reads (/etc/default/azazel-edge-security).
+AI_SOCKET = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge-agent-query/agent-query.sock"))
 AI_MANUAL_TIMEOUT_SEC = float(os.environ.get("AZAZEL_AI_MANUAL_TIMEOUT_SEC", "95"))
 AI_ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge/ai_advisory.json"))
 AI_METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_metrics.json"))
 AI_EVENT_LOG = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", "/var/log/azazel-edge/ai-events.jsonl"))
 AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-llm.jsonl"))
-RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", "/var/log/azazel-edge/runbook-events.jsonl"))
-TRIAGE_AUDIT_LOG = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", "/var/log/azazel-edge/triage-audit.jsonl"))
-TRIAGE_AUDIT_FALLBACK_LOG = Path("/tmp/azazel-edge-triage-audit.jsonl")
+RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", str(WEB_LOG_DIR / "runbook-events.jsonl")))
+TRIAGE_AUDIT_LOG = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", str(WEB_LOG_DIR / "triage-audit.jsonl")))
 DECISION_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DECISION_EXPLANATIONS_PATH", "/var/log/azazel-edge/decision-explanations.jsonl"))
 BOOTH_DEMO_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DEMO_EXPLANATIONS_PATH", "/tmp/azazel-edge-demo-explanations.jsonl"))
 BOOTH_INPUT_PROVENANCE_PATH = Path(os.environ.get("AZAZEL_BOOTH_INPUT_PROVENANCE_PATH", "/run/azazel-edge/booth-input.json"))
@@ -189,15 +200,14 @@ BOOTH_INPUT_PROVENANCE_PATH = Path(os.environ.get("AZAZEL_BOOTH_INPUT_PROVENANCE
 # sync with OK_NOC / OK_SOC in static/booth_focus.js.
 BOOTH_OK_NOC = {"HEALTHY", "NORMAL", "SAFE", "OK", "GOOD"}
 BOOTH_OK_SOC = {"QUIET", "SAFE", "NORMAL", "OK", "LOW"}
-TOPOLITE_SEED_MODE_PATH = Path(os.environ.get("AZAZEL_TOPOLITE_SEED_MODE_PATH", "/run/azazel-edge/topolite_seed_mode.json"))
-SOT_AUDIT_LOG = Path(os.environ.get("AZAZEL_SOT_AUDIT_LOG", "/var/log/azazel-edge/sot-events.jsonl"))
-TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", "/run/azazel-edge/triage-sessions"))
-OPERATOR_PROGRESS_PATH = Path(os.environ.get("AZAZEL_OPERATOR_PROGRESS_PATH", "/run/azazel-edge/operator-progress.json"))
+TOPOLITE_SEED_MODE_PATH = Path(os.environ.get("AZAZEL_TOPOLITE_SEED_MODE_PATH", str(WEB_RUNTIME_DIR / "topolite_seed_mode.json")))
+TRIAGE_SESSION_DIR = Path(os.environ.get("AZAZEL_TRIAGE_SESSION_DIR", str(WEB_RUNTIME_DIR / "triage-sessions")))
+OPERATOR_PROGRESS_PATH = Path(os.environ.get("AZAZEL_OPERATOR_PROGRESS_PATH", str(WEB_RUNTIME_DIR / "operator-progress.json")))
 _TOKEN_FILE_OVERRIDE = str(os.environ.get("AZAZEL_WEB_TOKEN_FILE", "")).strip()
 TOKEN_FILE = Path(_TOKEN_FILE_OVERRIDE) if _TOKEN_FILE_OVERRIDE else web_token_candidates()[0]
 AUTH_FAIL_OPEN = os.environ.get("AZAZEL_AUTH_FAIL_OPEN", "0") == "1"
 AUTH_TOKENS_FILE = Path(str(os.environ.get("AZAZEL_AUTH_TOKENS_FILE", "/etc/azazel-edge/auth_tokens.json")).strip() or "/etc/azazel-edge/auth_tokens.json")
-AUTHZ_AUDIT_LOG = Path(str(os.environ.get("AZAZEL_AUTHZ_AUDIT_LOG", "/var/log/azazel-edge/authz-events.jsonl")).strip() or "/var/log/azazel-edge/authz-events.jsonl")
+AUTHZ_AUDIT_LOG = Path(str(os.environ.get("AZAZEL_AUTHZ_AUDIT_LOG", "")).strip() or str(WEB_LOG_DIR / "authz-events.jsonl"))
 AUTH_MTLS_REQUIRED = str(os.environ.get("AZAZEL_AUTH_MTLS_REQUIRED", "0")).strip().lower() in {"1", "true", "yes", "on"}
 AUTH_MTLS_HEADER = str(os.environ.get("AZAZEL_AUTH_MTLS_HEADER", "X-Client-Cert-Fingerprint")).strip() or "X-Client-Cert-Fingerprint"
 AUTH_MTLS_FINGERPRINTS = {
@@ -225,7 +235,7 @@ BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
 STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
 PORTAL_VIEWER_ENV_PATH = portal_env_candidates()[0]
-CAPTIVE_REGISTRY_PATH = Path(str(os.environ.get("AZAZEL_CAPTIVE_REGISTRY_PATH", "/var/lib/azazel-edge/captive-allowlist.json")).strip() or "/var/lib/azazel-edge/captive-allowlist.json")
+CAPTIVE_REGISTRY_PATH = Path(str(os.environ.get("AZAZEL_CAPTIVE_REGISTRY_PATH", "")).strip() or str(WEB_STATE_DIR / "captive-allowlist.json"))
 NTFY_CONFIG_PATHS = [
     Path(os.environ.get("AZAZEL_CONFIG_PATH", str(first_minute_config_candidates()[0]))),
     Path("configs/first_minute.yaml"),
@@ -263,8 +273,8 @@ AGGREGATOR_INGEST_HMAC_SECRET: bytes | None = _agg_hmac_key_raw.encode("utf-8") 
 AGGREGATOR_SIG_REQUIRED = os.environ.get("AZAZEL_AGGREGATOR_SIG_REQUIRED", "false").lower() in ("1", "true", "yes")
 AGGREGATOR_REPLAY_WINDOW_SEC = max(30, int(os.environ.get("AZAZEL_AGGREGATOR_REPLAY_WINDOW_SEC", "300")))
 AGGREGATOR_AUDIT_LOG = Path(
-    str(os.environ.get("AZAZEL_AGGREGATOR_AUDIT_LOG", "/var/log/azazel-edge/aggregator-events.jsonl")).strip()
-    or "/var/log/azazel-edge/aggregator-events.jsonl"
+    str(os.environ.get("AZAZEL_AGGREGATOR_AUDIT_LOG", "")).strip()
+    or str(WEB_LOG_DIR / "aggregator-events.jsonl")
 )
 TAXII_COLLECTION_ID = "azazel-edge-decisions"
 
@@ -352,18 +362,51 @@ def _apply_language_headers(response: Response) -> Response:
     return response
 
 
-def _read_secret_file(path: Path) -> str:
+# Status of each token file the Web UI reads ("ok", "missing", "empty",
+# "unreadable", "error"). The Web UI runs as azazel-web (Edge#471 stage 1);
+# the installer makes these files 0640 root:azazel-web. A missing or
+# unreadable file is logged (warning / error) and reported by the endpoints
+# that depend on it, never only at debug level.
+SECRET_FILE_STATUS: Dict[str, str] = {}
+AUDIT_WRITE_FAILURES: Dict[str, int] = {"authz": 0}
+_SECRET_FILE_LOGGED: Dict[str, str] = {}
+
+
+def _secret_status_log(label: str, path: Path, status: str, detail: str = "") -> None:
+    SECRET_FILE_STATUS[label] = status
+    if _SECRET_FILE_LOGGED.get(label) == status or status == "ok":
+        _SECRET_FILE_LOGGED[label] = status
+        return
+    _SECRET_FILE_LOGGED[label] = status
+    if status == "missing":
+        app.logger.warning("%s file %s does not exist", label, path)
+    elif status == "empty":
+        app.logger.warning("%s file %s is empty", label, path)
+    else:
+        app.logger.error("%s file %s is %s for uid %s%s (expected 0640 root:azazel-web)", label, path, status,
+                         os.geteuid(), f": {detail}" if detail else "")
+
+
+def _read_secret_file(path: Path, label: str = "") -> str:
+    name = label or str(path)
     try:
-        if path.exists():
-            return path.read_text(encoding="utf-8").strip()
-    except Exception:
+        if not path.exists():
+            _secret_status_log(name, path, "missing")
+            return ""
+        value = path.read_text(encoding="utf-8").strip()
+    except PermissionError as exc:
+        _secret_status_log(name, path, "unreadable", exc.strerror or "")
         return ""
-    return ""
+    except Exception as exc:
+        _secret_status_log(name, path, "error", type(exc).__name__)
+        return ""
+    _secret_status_log(name, path, "ok" if value else "empty")
+    return value
 
 
 def _read_mattermost_command_tokens() -> List[str]:
     tokens: List[str] = []
-    primary = _read_secret_file(MATTERMOST_COMMAND_TOKEN_FILE)
+    primary = _read_secret_file(MATTERMOST_COMMAND_TOKEN_FILE, label="mattermost_command_token")
     if primary:
         tokens.append(primary)
     for extra in sorted(MATTERMOST_COMMAND_TOKEN_FILE.parent.glob(f"{MATTERMOST_COMMAND_TOKEN_FILE.name}.*")):
@@ -388,7 +431,7 @@ DASHBOARD_SNAPSHOT_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_SNAPSHOT_S
 DASHBOARD_AI_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_AI_STALE_SEC", "120"))
 DASHBOARD_EVENT_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_EVENT_STALE_SEC", "300"))
 DASHBOARD_ASSIST_STALE_SEC = float(os.environ.get("AZAZEL_DASHBOARD_ASSIST_STALE_SEC", "90"))
-DASHBOARD_TRENDS_PATH = Path(os.environ.get("AZAZEL_DASHBOARD_TRENDS_PATH", "/run/azazel-edge/dashboard-trends.jsonl"))
+DASHBOARD_TRENDS_PATH = Path(os.environ.get("AZAZEL_DASHBOARD_TRENDS_PATH", str(WEB_RUNTIME_DIR / "dashboard-trends.jsonl")))
 DASHBOARD_TRENDS_WRITE_INTERVAL_SEC = float(os.environ.get("AZAZEL_DASHBOARD_TRENDS_WRITE_INTERVAL_SEC", "15"))
 DASHBOARD_TRENDS_RETENTION_SEC = float(os.environ.get("AZAZEL_DASHBOARD_TRENDS_RETENTION_SEC", "3600"))
 DASHBOARD_TRENDS_LIMIT = int(os.environ.get("AZAZEL_DASHBOARD_TRENDS_LIMIT", "240"))
@@ -400,8 +443,23 @@ ALERT_AGGREGATION_WINDOW_SEC = int(os.environ.get("AZAZEL_ALERT_AGGREGATION_WIND
 ALERT_ESCALATION_COUNT_THRESHOLD = int(os.environ.get("AZAZEL_ALERT_ESCALATION_COUNT_THRESHOLD", "5"))
 _dashboard_trends_lock = threading.Lock()
 _dashboard_trends_last_write_ts = 0.0
-_TRIAGE_STORE = TriageSessionStore(base_dir=TRIAGE_SESSION_DIR) if TriageSessionStore is not None else None
-_TRIAGE_ENGINE = TriageFlowEngine(store=_TRIAGE_STORE) if TriageFlowEngine is not None and _TRIAGE_STORE is not None else None
+_dashboard_trends_state: Dict[str, str] = {"write_error": ""}
+# Triage keeps its sessions in the Web UI's runtime directory and its
+# hash-chained audit in the Web UI's log directory. When either cannot be
+# used, triage is unavailable and says why (503 with the reason, and an
+# error in the log at start); it never falls back to a shared directory.
+_TRIAGE_UNAVAILABLE_REASON = ""
+_TRIAGE_STORE = None
+_TRIAGE_ENGINE = None
+if TriageSessionStore is not None and TriageFlowEngine is not None:
+    try:
+        _TRIAGE_STORE = TriageSessionStore(base_dir=TRIAGE_SESSION_DIR)
+        _TRIAGE_ENGINE = TriageFlowEngine(store=_TRIAGE_STORE)
+    except OSError as _triage_exc:
+        _TRIAGE_STORE = None
+        _TRIAGE_ENGINE = None
+        _TRIAGE_UNAVAILABLE_REASON = str(_triage_exc)
+        app.logger.error("triage disabled: %s", _triage_exc)
 _CA_CERT_FILENAME = "azazel-webui-local-ca.crt"
 _WEBUI_CA_CERT_CANDIDATES: List[Path] = []
 _env_ca_cert = str(os.environ.get("AZAZEL_WEBUI_CA_PATH", "")).strip()
@@ -436,6 +494,9 @@ ALLOWED_ACTIONS = {
     "mode_set", "mode_status", "mode_get", "mode_portal", "mode_shield", "mode_scapegoat",
     "sot_trust_client",
 }
+# Sent by the Web UI itself (never chosen by an HTTP caller): the fixed
+# control-daemon operations moved here in Edge#471 stage 1.
+INTERNAL_CONTROL_ACTIONS = {"sot_devices_replace", "sot_devices_patch"}
 
 
 def _load_first_minute_config() -> Dict[str, Any]:
@@ -482,18 +543,9 @@ def _load_ntfy_bridge_settings() -> Dict[str, Any]:
         or default_token_file
     )
 
-    token = ""
-    try:
-        if token_file.exists() and os.access(token_file, os.R_OK):
-            token = token_file.read_text(encoding="utf-8").strip()
-        elif token_file.exists():
-            # Subscription can work without token when topics are read-allowed.
-            # Avoid noisy warnings for expected permission boundaries.
-            app.logger.debug(f"ntfy token file exists but is not readable by webui user: {token_file}")
-    except PermissionError:
-        app.logger.debug(f"ntfy token file is not readable by webui user: {token_file}")
-    except Exception as e:
-        app.logger.warning(f"Failed to read ntfy token file {token_file}: {e}")
+    # Subscription can work without a token when the topics are read-allowed,
+    # but a token file that is missing or unreadable is reported (Edge#471).
+    token = _read_secret_file(token_file, label="ntfy_token")
 
     topics = [str(topic_alert).strip(), str(topic_info).strip()]
     topics = [t for t in topics if t]
@@ -766,46 +818,6 @@ def _read_sot_payload() -> Tuple[Dict[str, Any], Path]:
     except Exception:
         payload = {}
     return payload if isinstance(payload, dict) else _default_sot_payload(), target
-
-
-def _validate_sot_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    if SoTConfig is None:
-        raise ValueError("sot_validation_unavailable")
-    return SoTConfig.from_dict(payload).to_dict()
-
-
-def _write_sot_payload(payload: Dict[str, Any], target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    if target.suffix.lower() in (".yaml", ".yml"):
-        try:
-            import yaml  # type: ignore
-        except Exception as exc:
-            raise RuntimeError("yaml_writer_unavailable") from exc
-        tmp.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    else:
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(target)
-
-
-def _sot_device_diff(before_devices: List[Dict[str, Any]], after_devices: List[Dict[str, Any]]) -> Dict[str, int]:
-    before_ids = {str(item.get("id") or "").strip() for item in before_devices if isinstance(item, dict)}
-    after_ids = {str(item.get("id") or "").strip() for item in after_devices if isinstance(item, dict)}
-    before_ids.discard("")
-    after_ids.discard("")
-    added = len(after_ids - before_ids)
-    removed = len(before_ids - after_ids)
-    updated = 0
-    before_map = {str(item.get("id")): item for item in before_devices if isinstance(item, dict) and str(item.get("id") or "").strip()}
-    for row in after_devices:
-        if not isinstance(row, dict):
-            continue
-        row_id = str(row.get("id") or "").strip()
-        if not row_id or row_id not in before_map:
-            continue
-        if before_map[row_id] != row:
-            updated += 1
-    return {"added": added, "removed": removed, "updated": updated}
 
 
 def _request_actor() -> Dict[str, str]:
@@ -3489,7 +3501,18 @@ def _record_dashboard_trend_point(state: Dict[str, Any], metrics: Dict[str, Any]
             return
         _dashboard_trends_last_write_ts = now
         point = _dashboard_trend_point_payload(state, metrics, health, now_epoch=now)
-        _append_jsonl(DASHBOARD_TRENDS_PATH, point)
+        try:
+            _append_jsonl(DASHBOARD_TRENDS_PATH, point)
+        except OSError as exc:
+            # A trend store that cannot be written must not fail the dashboard
+            # (Edge#471 stage 0 found /api/dashboard/* answering 500). It is
+            # reported instead: in the trends payload and once in the log.
+            message = f"{DASHBOARD_TRENDS_PATH}: {exc.strerror or type(exc).__name__}"
+            if _dashboard_trends_state.get("write_error") != message:
+                app.logger.warning("dashboard trends not recorded: %s", message)
+            _dashboard_trends_state["write_error"] = message
+            return
+        _dashboard_trends_state["write_error"] = ""
         try:
             rows = _tail_jsonl(DASHBOARD_TRENDS_PATH, limit=max(DASHBOARD_TRENDS_LIMIT * 2, 120))
             min_ts = now - max(60.0, DASHBOARD_TRENDS_RETENTION_SEC)
@@ -3523,14 +3546,18 @@ def _dashboard_trends_payload(limit: int = 120, window_sec: int = 0) -> Dict[str
             continue
         filtered.append(row)
     points = filtered[-safe_limit:]
+    write_error = str(_dashboard_trends_state.get("write_error") or "")
     if not points:
-        return {
+        payload_empty: Dict[str, Any] = {
             "ok": True,
             "status": "missing" if not DASHBOARD_TRENDS_PATH.exists() else "empty",
-            "storage_warning": "trend_storage_missing_or_empty",
+            "storage_warning": "trend_storage_write_failed" if write_error else "trend_storage_missing_or_empty",
             "points": [],
             "summary": {"samples": 0},
         }
+        if write_error:
+            payload_empty["write_error"] = write_error
+        return payload_empty
 
     queue_depth_values = [_as_int(item.get("queue_depth"), 0) for item in points]
     fallback_values = [_as_float(item.get("llm_fallback_rate"), 0.0) for item in points]
@@ -3544,7 +3571,8 @@ def _dashboard_trends_payload(limit: int = 120, window_sec: int = 0) -> Dict[str
     return {
         "ok": True,
         "status": "ok",
-        "storage_warning": "",
+        "storage_warning": "trend_storage_write_failed" if write_error else "",
+        **({"write_error": write_error} if write_error else {}),
         "points": points,
         "summary": {
             "samples": len(points),
@@ -3944,7 +3972,7 @@ def _run_runbook_action(body: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
     result["actor"] = actor
     result["note"] = note
     result["user_message"] = user_message
-    _log_runbook_decision(bool(result.get("ok")), review_status=review_status, effect=effect)
+    _log_runbook_decision(bool(result.get("ok")), str(result.get("error") or ""), review_status=review_status, effect=effect)
     return result, code
 
 
@@ -4200,25 +4228,14 @@ def _process_running(pattern: str) -> bool:
         return False
 
 
-def _container_running(name: str) -> bool:
-    """Check Docker container running state by exact name."""
-    try:
-        result = subprocess.run(
-            ["docker", "ps", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        if result.returncode != 0:
-            return False
-        names = {line.strip() for line in result.stdout.splitlines() if line.strip()}
-        return name in names
-    except Exception:
-        return False
-
-
 def get_monitoring_state() -> Dict[str, str]:
-    """Return ON/OFF status for local monitoring daemons."""
+    """Return ON/OFF status for local monitoring daemons.
+
+    Container state is not queried (Edge#471 stage 1): the container
+    runtime's socket is root-equivalent and the Web UI runs as a non-root
+    account outside that group. The units that run the containers are still
+    checked with systemctl, plus the pid/process checks; ``container_check``
+    says that the container runtime itself was not checked."""
     if _dev_healthy_baseline():
         # Dev profile: the monitor daemons are represented by the devstack event
         # pipeline (dummy-eve feeds the eve.json the core tails). Report them ON so
@@ -4229,12 +4246,10 @@ def get_monitoring_state() -> Dict[str, str]:
         _service_active("opencanary@az_canary.service")
         or _service_active("opencanary.service")
         or _service_active("azazel-edge-opencanary.service")
-        or _container_running("azazel-edge-opencanary")
     )
     suricata_ok = (
         _service_active("suricata.service")
         or _service_active("azazel-edge-suricata.service")
-        or _container_running("azazel-edge-suricata")
     )
     ntfy_ok = _service_active("ntfy.service") and _ntfy_health_ok()
     opencanary_pid = Path("/home/azazel/canary-venv/bin/opencanaryd.pid")
@@ -4243,6 +4258,7 @@ def get_monitoring_state() -> Dict[str, str]:
         "opencanary": "ON" if (opencanary_ok or _pid_running(opencanary_pid, "opencanary") or _process_running("[o]pencanary.tac")) else "OFF",
         "suricata": "ON" if (suricata_ok or _pid_running(suricata_pid, "suricata")) else "OFF",
         "ntfy": "ON" if ntfy_ok else "OFF",
+        "container_check": "not_checked",
     }
 
 
@@ -4480,23 +4496,25 @@ def execute_disconnect_action() -> Dict[str, Any]:
         )
         if payload is not None:
             return payload
-        
-        # Fallback: attempt to bring down upstream Wi-Fi interface
-        iface = os.environ.get("AZAZEL_UP_IF", "wlan0")
-        down_result = subprocess.run(
-            ["ip", "link", "set", iface, "down"],
-            capture_output=True,
-            timeout=5
-        )
-        if down_result.returncode != 0:
-            stderr = down_result.stderr.decode("utf-8").strip() if down_result.stderr else "unknown error"
+
+        # Fallback when the status API does not answer: the control daemon's
+        # fixed uplink_disconnect operation (Edge#471 stage 1). It takes no
+        # arguments; the daemon uses its own configured uplink. The Web UI
+        # runs as a non-root account and no longer runs `ip` itself.
+        result = _send_control_command_socket(action="uplink_disconnect", params=None, timeout_sec=10.0)
+        if result.get("ok"):
             return {
-                "ok": False,
+                "ok": True,
                 "action": "disconnect",
-                "error": f"Fallback disconnect failed: {iface} down failed: {stderr}"
+                "message": str(result.get("message") or "Uplink disconnected"),
+                "via": "control_daemon",
             }
-        
-        return {"ok": True, "action": "disconnect", "message": f"Wi-Fi disconnected ({iface} down)"}
+        return {
+            "ok": False,
+            "action": "disconnect",
+            "error": "Disconnect failed: the status API did not answer and the control daemon's "
+                     f"uplink_disconnect failed: {result.get('error') or 'unknown error'}",
+        }
     except Exception as e:
         return {"ok": False, "action": "disconnect", "error": str(e)}
 
@@ -4697,7 +4715,7 @@ def send_control_command(action: str) -> Dict[str, Any]:
 
 def send_control_command_with_params(action: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Send command with parameters to Control Daemon via Unix socket"""
-    if action not in ALLOWED_ACTIONS:
+    if action not in ALLOWED_ACTIONS and action not in INTERNAL_CONTROL_ACTIONS:
         return {
             "ok": False,
             "action": action,
@@ -4887,7 +4905,10 @@ def _mattermost_fetch_messages(limit: int = MATTERMOST_FETCH_LIMIT) -> Dict[str,
 
 
 def _triage_unavailable_payload() -> tuple[Dict[str, Any], int]:
-    return {"ok": False, "error": "triage_unavailable"}, 503
+    payload: Dict[str, Any] = {"ok": False, "error": "triage_unavailable"}
+    if _TRIAGE_UNAVAILABLE_REASON:
+        payload["reason"] = _TRIAGE_UNAVAILABLE_REASON
+    return payload, 503
 
 
 def _triage_step_payload(step: Any, lang: str) -> Dict[str, Any]:
@@ -5288,7 +5309,7 @@ def taxii_collection_objects():
     exporter = STIXExporter() if STIXExporter is not None else None
     if exporter is None:
         return _taxii_response({"more": False, "next": None, "objects": []})
-    source = TRIAGE_AUDIT_LOG if TRIAGE_AUDIT_LOG.exists() else TRIAGE_AUDIT_FALLBACK_LOG
+    source = TRIAGE_AUDIT_LOG
     bundle = exporter.export_audit_window(source, max_entries=limit, since_epoch=added_after)
     payload = {
         "more": False,
@@ -5337,7 +5358,7 @@ def api_taxii_push():
     max_entries = max(1, min(5000, int(body.get("max_entries") or 100)))
     timeout_sec = int(body.get("timeout_sec") or 10)
     exporter = STIXExporter()
-    source = TRIAGE_AUDIT_LOG if TRIAGE_AUDIT_LOG.exists() else TRIAGE_AUDIT_FALLBACK_LOG
+    source = TRIAGE_AUDIT_LOG
     bundle = exporter.export_audit_window(source, max_entries=max_entries)
     client = TAXIIPushClient(
         collection_url=collection_url,
@@ -5941,6 +5962,7 @@ def api_mattermost_status():
             "mode": _mattermost_mode(),
             "channel_id": MATTERMOST_CHANNEL_ID,
             "command_enabled": bool(MATTERMOST_COMMAND_TOKENS),
+            "command_token_status": SECRET_FILE_STATUS.get("mattermost_command_token", "unknown"),
             "command_endpoint": "/api/mattermost/command",
             "command_triggers": [MATTERMOST_COMMAND_PRIMARY_TRIGGER, *MATTERMOST_COMMAND_ALIASES],
             "ping": ping_payload,
@@ -6106,7 +6128,7 @@ def api_triage_session(session_id: str):
 @require_token()
 def api_triage_audit():
     limit = min(max(_as_int(request.args.get("limit"), 20), 1), 100)
-    rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG, TRIAGE_AUDIT_FALLBACK_LOG], limit=limit)
+    rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG], limit=limit)
     items = [_normalize_triage_audit_event(item) for item in rows[-limit:]]
     return jsonify({"ok": True, "items": items, "count": len(items)}), 200
 
@@ -6228,7 +6250,7 @@ def api_handoff_summary():
     lang = _request_lang()
     output_format = str(request.args.get("format") or "").strip().lower()
     sot_payload, _target = _read_sot_payload()
-    rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG, TRIAGE_AUDIT_FALLBACK_LOG], limit=20)
+    rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG], limit=20)
 
     user_state = str((sot_payload.get("risk") or {}).get("user_state") or sot_payload.get("user_state") or "").strip().upper()
     if user_state in {"CRITICAL", "ALERT", "LIMITED", "DANGER"}:
@@ -6306,7 +6328,7 @@ def api_dashboard_evidence():
     alert_rows = _tail_jsonl(AI_EVENT_LOG, limit=20)
     llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
     runbook_rows = _tail_jsonl(RUNBOOK_EVENT_LOG, limit=20)
-    triage_rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG, TRIAGE_AUDIT_FALLBACK_LOG], limit=20)
+    triage_rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG], limit=20)
     return jsonify(_dashboard_evidence_payload(state, advisory, alert_rows, llm_rows, runbook_rows, triage_rows)), 200
 
 
@@ -6437,7 +6459,7 @@ def api_dashboard_bundle():
     alert_rows = alert_rows_full[-20:]
     llm_rows = _tail_jsonl(AI_LLM_LOG, limit=20)
     runbook_rows = _tail_jsonl(RUNBOOK_EVENT_LOG, limit=20)
-    triage_rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG, TRIAGE_AUDIT_FALLBACK_LOG], limit=20)
+    triage_rows = _tail_first_existing_jsonl([TRIAGE_AUDIT_LOG], limit=20)
 
     summary = _dashboard_summary_payload(state, metrics, advisory)
     actions = _dashboard_actions_payload(state, advisory, metrics, llm_rows, audience=audience, surface=surface)
@@ -6482,6 +6504,7 @@ def api_dashboard_bundle():
         "mode": _mattermost_mode(),
         "channel_id": MATTERMOST_CHANNEL_ID,
         "command_enabled": bool(MATTERMOST_COMMAND_TOKENS),
+        "command_token_status": SECRET_FILE_STATUS.get("mattermost_command_token", "unknown"),
         "command_endpoint": "/api/mattermost/command",
         "command_triggers": [MATTERMOST_COMMAND_PRIMARY_TRIGGER, *MATTERMOST_COMMAND_ALIASES],
         "ping": ping_payload,
@@ -6560,6 +6583,29 @@ def api_clients_trust():
     return jsonify(result), (200 if result.get("ok") else 400)
 
 
+# SoT device edits go to the control daemon, the single writer of the SoT
+# (Edge#471 stage 1): it validates with SoTConfig, writes atomically and
+# appends the sot-events audit line. The Web UI only checks the shape early.
+_SOT_EDIT_CLIENT_ERRORS = ("invalid_sot:", "devices_must_be_list", "device_item_must_be_object",
+                           "device_id_required", "unexpected_params:", "params_must_be_object")
+
+
+def _sot_edit_via_daemon(kind: str, devices: List[Any]) -> tuple[Dict[str, Any], int]:
+    result = send_control_command_with_params(kind, {"devices": devices, "requested_by": _request_actor()})
+    if not result.get("ok"):
+        error = str(result.get("error") or "sot_edit_failed")
+        if error.startswith(_SOT_EDIT_CLIENT_ERRORS):
+            return {"ok": False, "error": error}, 400
+        if error == "forbidden":
+            return {"ok": False, "error": "sot_edit_forbidden_by_control_daemon"}, 503
+        if error in ("Control daemon not running", "Daemon timeout"):
+            return {"ok": False, "error": f"control_daemon_unavailable:{error}"}, 503
+        return {"ok": False, "error": error}, 500
+    refresh_result = send_control_command("refresh")
+    return {"ok": True, "path": str(result.get("path") or ""), "diff": result.get("diff") or {},
+            "refresh": refresh_result}, 200
+
+
 @app.route("/api/sot/devices", methods=["PUT"])
 @require_token(min_role="admin")
 def api_sot_devices_put():
@@ -6567,32 +6613,8 @@ def api_sot_devices_put():
     devices = body.get("devices")
     if not isinstance(devices, list):
         return jsonify({"ok": False, "error": "devices_must_be_list"}), 400
-    current, target = _read_sot_payload()
-    candidate = dict(current)
-    candidate["devices"] = devices
-    try:
-        validated = _validate_sot_payload(candidate)
-    except (SoTValidationError, ValueError) as e:
-        return jsonify({"ok": False, "error": f"invalid_sot:{e}"}), 400
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    _write_sot_payload(validated, target)
-    diff = _sot_device_diff(list(current.get("devices") or []), list(validated.get("devices") or []))
-    actor = _request_actor()
-    _append_jsonl(
-        SOT_AUDIT_LOG,
-        {
-            "kind": "sot_devices_replaced",
-            "ts": time.time(),
-            "source": "web_api",
-            **actor,
-            "path": str(target),
-            "device_count": len(validated.get("devices") or []),
-            "diff": diff,
-        },
-    )
-    refresh_result = send_control_command("refresh")
-    return jsonify({"ok": True, "path": str(target), "diff": diff, "refresh": refresh_result}), 200
+    payload, code = _sot_edit_via_daemon("sot_devices_replace", devices)
+    return jsonify(payload), code
 
 
 @app.route("/api/sot/devices", methods=["PATCH"])
@@ -6602,52 +6624,13 @@ def api_sot_devices_patch():
     updates = body.get("devices")
     if not isinstance(updates, list):
         return jsonify({"ok": False, "error": "devices_must_be_list"}), 400
-    current, target = _read_sot_payload()
-    current_devices = [item for item in list(current.get("devices") or []) if isinstance(item, dict)]
-    merged: Dict[str, Dict[str, Any]] = {}
-    order: List[str] = []
-    for row in current_devices:
-        row_id = str(row.get("id") or "").strip()
-        if not row_id:
-            continue
-        merged[row_id] = dict(row)
-        order.append(row_id)
     for row in updates:
         if not isinstance(row, dict):
             return jsonify({"ok": False, "error": "device_item_must_be_object"}), 400
-        row_id = str(row.get("id") or "").strip()
-        if not row_id:
+        if not str(row.get("id") or "").strip():
             return jsonify({"ok": False, "error": "device_id_required"}), 400
-        if row_id not in merged:
-            merged[row_id] = {}
-            order.append(row_id)
-        merged[row_id].update(row)
-    candidate = dict(current)
-    candidate["devices"] = [merged[row_id] for row_id in order if row_id in merged]
-    try:
-        validated = _validate_sot_payload(candidate)
-    except (SoTValidationError, ValueError) as e:
-        return jsonify({"ok": False, "error": f"invalid_sot:{e}"}), 400
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    _write_sot_payload(validated, target)
-    diff = _sot_device_diff(current_devices, list(validated.get("devices") or []))
-    actor = _request_actor()
-    _append_jsonl(
-        SOT_AUDIT_LOG,
-        {
-            "kind": "sot_devices_patched",
-            "ts": time.time(),
-            "source": "web_api",
-            **actor,
-            "path": str(target),
-            "patched_count": len(updates),
-            "device_count": len(validated.get("devices") or []),
-            "diff": diff,
-        },
-    )
-    refresh_result = send_control_command("refresh")
-    return jsonify({"ok": True, "path": str(target), "diff": diff, "refresh": refresh_result}), 200
+    payload, code = _sot_edit_via_daemon("sot_devices_patch", updates)
+    return jsonify(payload), code
 
 
 @app.route("/api/runbooks", methods=["GET"])
@@ -6788,6 +6771,9 @@ def api_mattermost_command():
     sender = str(form.get("user_name") or body.get("user_name") or body.get("sender") or "mattermost-user").strip() or "mattermost-user"
     command_token = str(form.get("token") or body.get("token") or "").strip()
     channel_id = str(form.get("channel_id") or body.get("channel_id") or MATTERMOST_CHANNEL_ID).strip()
+    if not MATTERMOST_COMMAND_TOKENS and SECRET_FILE_STATUS.get("mattermost_command_token") in ("unreadable", "error"):
+        return jsonify({"response_type": "ephemeral",
+                        "text": "Mattermost command token file is not readable by the Web UI account."}), 503
     if not _mattermost_command_allowed(command_token):
         return jsonify({"response_type": "ephemeral", "text": "Mattermost command token mismatch."}), 403
     audience, lang, text = _extract_mattermost_context_and_text(raw_text)
@@ -6957,7 +6943,10 @@ def health():
     return jsonify({
         "status": "ok",
         "service": "azazel-edge-web",
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        # Audit lines that could not be written since start (Edge#471: the
+        # request still proceeds, so the failure is counted here and logged).
+        "audit_write_failures": dict(AUDIT_WRITE_FAILURES),
     })
 
 

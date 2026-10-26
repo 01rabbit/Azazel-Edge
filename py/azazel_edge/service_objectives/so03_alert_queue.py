@@ -202,6 +202,8 @@ def agent_environment(work: Path, unit: Path = AGENT_UNIT) -> Dict[str, str]:
     env = unit_environment(unit)
     env.update({
         "AZAZEL_AI_SOCKET": str(work / "ai" / "ai-bridge.sock"),
+        # The Web UI's manual_query socket (Edge#471), kept out of /run too.
+        "AZAZEL_AI_QUERY_SOCKET": str(work / "query" / "agent-query.sock"),
         "AZAZEL_AI_ADVISORY": str(work / "ai_advisory.json"),
         "AZAZEL_AI_EVENT_LOG": str(work / "ai-events.jsonl"),
         "AZAZEL_UI_SNAPSHOT": str(work / "ui_snapshot.json"),

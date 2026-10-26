@@ -24,6 +24,7 @@ azazel_edge_web/templates/index.html
 azazel_edge_web/templates/ops_comm.html
 py/azazel_edge/__init__.py
 py/azazel_edge/control_plane.py
+py/azazel_edge/peercred.py
 py/azazel_edge/path_schema.py
 py/azazel_edge/ai_governance.py
 py/azazel_edge/config_drift.py

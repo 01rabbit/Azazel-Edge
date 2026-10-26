@@ -9,7 +9,7 @@ from azazel_edge.audit import P0AuditLogger
 
 from .loader import load_flow
 from .selector import select_runbooks_for_diagnostic_state
-from .session import TriageSessionStore
+from .session import TriageSessionStore, TriageStorageError
 from .types import DiagnosticState, TriageFlow, TriageSession, TriageStep
 
 
@@ -28,16 +28,18 @@ class TriageFlowEngine:
         self.audit = audit_logger or self._build_default_audit_logger()
 
     def _build_default_audit_logger(self) -> P0AuditLogger:
-        primary = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", "/var/log/azazel-edge/triage-audit.jsonl"))
+        """The hash-chained triage audit in the Web UI's log directory
+        (Edge#471 stage 1; the unit's LogsDirectory=azazel-edge-web). No
+        fallback: an audit chain that cannot be written is an error, never a
+        silent move to /tmp (where it would be shared and lost)."""
+        primary = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", "/var/log/azazel-edge-web/triage-audit.jsonl"))
         try:
             primary.parent.mkdir(parents=True, exist_ok=True)
             with primary.open("a", encoding="utf-8"):
                 pass
-            return P0AuditLogger(primary)
-        except OSError:
-            fallback = Path("/tmp/azazel-edge-triage-audit.jsonl")
-            fallback.parent.mkdir(parents=True, exist_ok=True)
-            return P0AuditLogger(fallback)
+        except OSError as exc:
+            raise TriageStorageError(f"triage audit {primary} is not writable: {exc}") from exc
+        return P0AuditLogger(primary)
 
     def start(self, intent_id: str, audience: str = "temporary", lang: str = "ja") -> TriageProgress:
         flow = load_flow(intent_id)

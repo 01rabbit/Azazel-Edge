@@ -132,6 +132,9 @@ def _audit_authz_event(
         )
     except Exception as e:
         state.app.logger.warning(f"authz audit logging failed: {e}")
+        counters = getattr(state, "AUDIT_WRITE_FAILURES", None)
+        if isinstance(counters, dict):
+            counters["authz"] = int(counters.get("authz", 0)) + 1
 
 
 def _unauthorized_response(*, ok_payload: Optional[bool] = False, status_code: int = 403):

@@ -25,7 +25,6 @@ class DashboardDataContractTests(unittest.TestCase):
             "AI_LLM_LOG": webapp.AI_LLM_LOG,
             "RUNBOOK_EVENT_LOG": webapp.RUNBOOK_EVENT_LOG,
             "TRIAGE_AUDIT_LOG": webapp.TRIAGE_AUDIT_LOG,
-            "TRIAGE_AUDIT_FALLBACK_LOG": webapp.TRIAGE_AUDIT_FALLBACK_LOG,
             "DASHBOARD_TRENDS_PATH": webapp.DASHBOARD_TRENDS_PATH,
             "DASHBOARD_TRENDS_WRITE_INTERVAL_SEC": webapp.DASHBOARD_TRENDS_WRITE_INTERVAL_SEC,
             "_dashboard_trends_last_write_ts": webapp._dashboard_trends_last_write_ts,
@@ -54,7 +53,6 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.AI_LLM_LOG = root / "ai-llm.jsonl"
         webapp.RUNBOOK_EVENT_LOG = root / "runbook-events.jsonl"
         webapp.TRIAGE_AUDIT_LOG = root / "triage-audit.jsonl"
-        webapp.TRIAGE_AUDIT_FALLBACK_LOG = root / "triage-audit-fallback.jsonl"
         webapp.DASHBOARD_TRENDS_PATH = root / "dashboard-trends.jsonl"
         webapp.DASHBOARD_TRENDS_WRITE_INTERVAL_SEC = 0.0
         webapp._dashboard_trends_last_write_ts = 0.0
@@ -327,7 +325,6 @@ class DashboardDataContractTests(unittest.TestCase):
         webapp.AI_LLM_LOG = self._orig["AI_LLM_LOG"]
         webapp.RUNBOOK_EVENT_LOG = self._orig["RUNBOOK_EVENT_LOG"]
         webapp.TRIAGE_AUDIT_LOG = self._orig["TRIAGE_AUDIT_LOG"]
-        webapp.TRIAGE_AUDIT_FALLBACK_LOG = self._orig["TRIAGE_AUDIT_FALLBACK_LOG"]
         webapp.DASHBOARD_TRENDS_PATH = self._orig["DASHBOARD_TRENDS_PATH"]
         webapp.DASHBOARD_TRENDS_WRITE_INTERVAL_SEC = self._orig["DASHBOARD_TRENDS_WRITE_INTERVAL_SEC"]
         webapp._dashboard_trends_last_write_ts = self._orig["_dashboard_trends_last_write_ts"]
@@ -1264,6 +1261,28 @@ class DashboardDataContractTests(unittest.TestCase):
             )
         self.assertIn("Rationale:", text)
         self.assertIn("Continue:", text)
+
+
+    def test_trend_store_write_failure_is_reported_not_a_500(self) -> None:
+        # Edge#471 stage 0 found /api/dashboard/* answering 500 when the trend
+        # store could not be written (the Web UI as a non-root account). The
+        # dashboard must answer and say that the trends were not recorded.
+        blocker = Path(self.tmp.name) / "not-a-directory"
+        blocker.write_text("", encoding="utf-8")
+        webapp.DASHBOARD_TRENDS_PATH = blocker / "dashboard-trends.jsonl"
+        try:
+            for path in ("/api/dashboard/health", "/api/dashboard/handoff?session_id=ops-test",
+                         "/api/dashboard/bundle?session_id=ops-test&trends_limit=10"):
+                webapp._dashboard_trends_last_write_ts = 0.0
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200, path)
+            trends = self.client.get("/api/dashboard/trends?limit=10").get_json()
+            self.assertEqual(trends["storage_warning"], "trend_storage_write_failed")
+            self.assertIn("dashboard-trends.jsonl", trends["write_error"])
+            bundle = self.client.get("/api/dashboard/bundle?session_id=ops-test&trends_limit=10").get_json()
+            self.assertEqual(bundle["trends"]["storage_warning"], "trend_storage_write_failed")
+        finally:
+            webapp._dashboard_trends_state["write_error"] = ""
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ import ipaddress
 import re
 import socket
 import subprocess
+import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -48,7 +49,8 @@ from azazel_edge.path_schema import (
     status as path_schema_status,
     warn_if_legacy_path,
 )
-from azazel_edge.sot import SoTValidationError, load_sot_file
+from azazel_edge.sot import SoTConfig, SoTValidationError, load_sot_file
+from azazel_edge.peercred import account_uid, peer_credentials
 
 # Logging setup
 logging.basicConfig(
@@ -86,7 +88,40 @@ RATE_LIMITS = {
     'mode_set': 2.0,       # 2 seconds
     'shutdown': 10.0,      # Prevent accidental repeated shutdown requests
     'reboot': 10.0,        # Prevent accidental repeated reboot requests
+    'uplink_disconnect': 3.0,
 }
+
+# --- control.sock peer table (Edge#471 stage 1) ---------------------------
+# The daemon reads the peer's uid from the kernel (SO_PEERCRED) on every
+# connection and allows an action only if this fixed table allows it:
+#   * uid 0 (and the daemon's own account, which is root under the unit):
+#     every action;
+#   * the Web UI account (WEB_UI_ACCOUNT): exactly WEB_UI_ACTIONS;
+#   * anyone else, an account that cannot be resolved, or a peer whose uid
+#     the kernel does not report: nothing (refused and counted).
+# ROOT_ONLY_ACTIONS need uid 0 whatever else applies. Nothing here is read
+# from the environment or from the request.
+WEB_UI_ACCOUNT = "azazel-web"
+# What azazel_edge_web sends on this socket today (app.py ALLOWED_ACTIONS that
+# are not answered by the status API, plus control_plane's snapshot reads),
+# and the fixed operations moved here from the Web UI in Edge#471 stage 1
+# (uplink_disconnect, sot_devices_replace, sot_devices_patch).
+WEB_UI_ACTIONS = frozenset({
+    "get_snapshot", "watch_snapshot",
+    "refresh", "reprobe", "details",
+    "wifi_scan", "wifi_connect",
+    "portal_viewer_open",
+    "shutdown", "reboot",
+    "mode_set", "mode_status", "mode_get", "mode_portal", "mode_shield", "mode_scapegoat",
+    "sot_trust_client",
+    "uplink_disconnect", "sot_devices_replace", "sot_devices_patch",
+})
+ROOT_ONLY_ACTIONS = frozenset({"migrate_path_schema"})
+_PEER_REFUSALS_LOCK = threading.Lock()
+_PEER_REFUSALS: dict[str, Any] = {"total": 0, "by_uid": {}}
+# One request per connection; SoT edits can exceed a single 4 KiB read.
+MAX_REQUEST_BYTES = 1024 * 1024
+REQUEST_READ_TIMEOUT_SEC = 10.0
 PORTAL_DEFAULT_START_URL = "http://neverssl.com"
 _LAST_CPU_TOTAL: float | None = None
 _LAST_CPU_IDLE: float | None = None
@@ -168,6 +203,9 @@ POLL_INTERVALS = {
 }
 _LAST_POLL_TS: dict[str, float] = {key: 0.0 for key in POLL_INTERVALS.keys()}
 SOT_CACHE_LOCK = threading.Lock()
+# Serializes every SoT read-modify-write in this process (the single writer).
+SOT_WRITE_LOCK = threading.Lock()
+SOT_AUDIT_LOG = Path(os.environ.get("AZAZEL_SOT_AUDIT_LOG", "/var/log/azazel-edge/sot-events.jsonl"))
 _SOT_CACHE: dict[str, Any] = {
     "path": "",
     "mtime": 0.0,
@@ -316,14 +354,37 @@ def _load_sot_payload(force: bool = False) -> tuple[dict[str, Any], Path]:
 
 
 def _persist_sot_payload(payload: dict[str, Any], target: Path) -> None:
+    """Write the SoT atomically: a new temporary file in the same directory,
+    flushed to disk, then renamed over the target (readers see either the
+    old or the new file, never a partial one). The daemon is the only writer
+    (Edge#471 stage 1); callers hold SOT_WRITE_LOCK."""
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
     if target.suffix.lower() == ".json" or yaml is None:
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     else:
-        tmp.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, target)
+        text = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    try:
+        dir_fd = os.open(str(target.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError:
+        pass
     try:
         mtime = target.stat().st_mtime
     except Exception:
@@ -461,6 +522,16 @@ def _set_client_trust(params: dict[str, Any]) -> dict[str, Any]:
             "ts": time.time(),
         }
 
+    with SOT_WRITE_LOCK:
+        return _set_client_trust_locked(params, trusted=trusted, ignored=ignored, ip=ip, mac=mac, hostname=hostname,
+                                        interface_or_segment=interface_or_segment,
+                                        expected_interface_or_segment=expected_interface_or_segment,
+                                        session_key=session_key, note=note, allowed_networks=allowed_networks)
+
+
+def _set_client_trust_locked(params: dict[str, Any], *, trusted: bool, ignored: bool, ip: str, mac: str,
+                             hostname: str, interface_or_segment: str, expected_interface_or_segment: str,
+                             session_key: str, note: str, allowed_networks: list[str]) -> dict[str, Any]:
     sot, path = _load_sot_payload(force=True)
     _ensure_managed_network_entries(sot)
     devices = sot.get("devices")
@@ -546,6 +617,195 @@ def _set_client_trust(params: dict[str, Any]) -> dict[str, Any]:
         "sot_path": str(path),
         "ts": time.time(),
     }
+
+
+class SoTEditError(ValueError):
+    """A SoT edit request is refused before anything is written."""
+
+
+SOT_EDIT_PARAMS = frozenset({"devices", "requested_by"})
+
+
+def _read_sot_for_edit() -> tuple[dict[str, Any], Path]:
+    """The current SoT as stored (not the cached, validated view). A file that
+    exists but cannot be read or parsed is an error: an edit must never
+    replace it with a default document."""
+    target = _sot_target_path()
+    if not target.exists():
+        return _default_sot_payload(), target
+    try:
+        text = target.read_text(encoding="utf-8")
+        if target.suffix.lower() in (".yaml", ".yml"):
+            if yaml is None:
+                raise SoTEditError("sot_yaml_reader_unavailable")
+            payload = yaml.safe_load(text) or {}
+        else:
+            payload = json.loads(text) if text.strip() else {}
+    except SoTEditError:
+        raise
+    except Exception as exc:
+        raise SoTEditError(f"sot_unreadable:{type(exc).__name__}") from exc
+    if not isinstance(payload, dict):
+        raise SoTEditError("sot_unreadable:not_a_mapping")
+    return payload, target
+
+
+def _sot_device_diff(before_devices: list[Any], after_devices: list[Any]) -> dict[str, int]:
+    before_ids = {str(item.get("id") or "").strip() for item in before_devices if isinstance(item, dict)}
+    after_ids = {str(item.get("id") or "").strip() for item in after_devices if isinstance(item, dict)}
+    before_ids.discard("")
+    after_ids.discard("")
+    updated = 0
+    before_map = {str(item.get("id")): item for item in before_devices
+                  if isinstance(item, dict) and str(item.get("id") or "").strip()}
+    for row in after_devices:
+        if not isinstance(row, dict):
+            continue
+        row_id = str(row.get("id") or "").strip()
+        if row_id and row_id in before_map and before_map[row_id] != row:
+            updated += 1
+    return {"added": len(after_ids - before_ids), "removed": len(before_ids - after_ids), "updated": updated}
+
+
+def _sot_requested_by(params: dict[str, Any]) -> dict[str, str]:
+    """Who the Web UI says asked (informational, for the audit line only)."""
+    raw = params.get("requested_by")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, limit in (("actor", 96), ("remote_addr", 64), ("user_agent", 180)):
+        value = raw.get(key)
+        if value is not None:
+            out[key] = str(value)[:limit]
+    return out
+
+
+def _sot_devices_edit(kind: str, params: Any, peer_uid: Optional[int] = None) -> dict[str, Any]:
+    """``sot_devices_replace`` / ``sot_devices_patch`` (Edge#471 stage 1).
+
+    Moved from the Web UI so the daemon is the single writer of the SoT. The
+    request carries only the device list; the target file is the daemon's
+    own SoT path. The candidate document is validated with ``SoTConfig``
+    before anything is written, and written atomically."""
+    if not isinstance(params, dict):
+        return {"ok": False, "error": "params_must_be_object", "ts": time.time()}
+    unknown = sorted(set(params) - SOT_EDIT_PARAMS)
+    if unknown:
+        return {"ok": False, "error": "unexpected_params:" + ",".join(unknown), "ts": time.time()}
+    updates = params.get("devices")
+    if not isinstance(updates, list):
+        return {"ok": False, "error": "devices_must_be_list", "ts": time.time()}
+    with SOT_WRITE_LOCK:
+        try:
+            current, target = _read_sot_for_edit()
+        except SoTEditError as exc:
+            return {"ok": False, "error": str(exc), "ts": time.time()}
+        current_devices = [item for item in list(current.get("devices") or []) if isinstance(item, dict)]
+        candidate = dict(current)
+        if kind == "sot_devices_replace":
+            candidate["devices"] = updates
+        else:
+            merged: dict[str, dict[str, Any]] = {}
+            order: list[str] = []
+            for row in current_devices:
+                row_id = str(row.get("id") or "").strip()
+                if not row_id:
+                    continue
+                merged[row_id] = dict(row)
+                order.append(row_id)
+            for row in updates:
+                if not isinstance(row, dict):
+                    return {"ok": False, "error": "device_item_must_be_object", "ts": time.time()}
+                row_id = str(row.get("id") or "").strip()
+                if not row_id:
+                    return {"ok": False, "error": "device_id_required", "ts": time.time()}
+                if row_id not in merged:
+                    merged[row_id] = {}
+                    order.append(row_id)
+                merged[row_id].update(row)
+            candidate["devices"] = [merged[row_id] for row_id in order if row_id in merged]
+        try:
+            validated = SoTConfig.from_dict(candidate).to_dict()
+        except (SoTValidationError, ValueError, TypeError, AttributeError, KeyError) as exc:
+            return {"ok": False, "error": f"invalid_sot:{exc}", "ts": time.time()}
+        try:
+            _persist_sot_payload(validated, target)
+        except OSError as exc:
+            logger.error(f"SoT write failed ({kind}): {exc}")
+            return {"ok": False, "error": f"sot_write_failed:{exc.strerror or type(exc).__name__}", "ts": time.time()}
+        diff = _sot_device_diff(current_devices, list(validated.get("devices") or []))
+        record: dict[str, Any] = {
+            "kind": "sot_devices_replaced" if kind == "sot_devices_replace" else "sot_devices_patched",
+            "ts": time.time(),
+            "source": "control_daemon",
+            "peer_uid": peer_uid,
+            **_sot_requested_by(params),
+            "path": str(target),
+            "device_count": len(validated.get("devices") or []),
+            "diff": diff,
+        }
+        if kind == "sot_devices_patch":
+            record["patched_count"] = len(updates)
+        try:
+            SOT_AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with SOT_AUDIT_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            audit_ok = True
+        except OSError as exc:
+            logger.warning(f"SoT audit append failed: {exc}")
+            audit_ok = False
+    _invalidate_runtime_caches(refresh_snapshot=False)
+    return {"ok": True, "path": str(target), "diff": diff, "audit_logged": audit_ok, "ts": time.time()}
+
+
+# Same source and default the Web UI used for its fallback (AZAZEL_UP_IF).
+UPLINK_IFACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$")
+IP_COMMAND_CANDIDATES = ("/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip")
+SYS_CLASS_NET = Path("/sys/class/net")
+
+
+def _uplink_disconnect(request: dict[str, Any]) -> dict[str, Any]:
+    """``uplink_disconnect`` (Edge#471 stage 1): the Web UI's local disconnect
+    fallback (``ip link set <uplink> down``), relocated into the daemon.
+
+    It takes no arguments: any parameter or extra request field is refused.
+    The interface is the daemon's own configured uplink (``AZAZEL_UP_IF``,
+    default ``wlan0``, the Web UI's old source), checked to be a plausible
+    interface name that exists before ``ip`` runs. Failure is returned."""
+    extra = sorted(set(request) - {"action", "ts", "params"})
+    params = request.get("params")
+    if extra or params not in (None, {}):
+        return {"ok": False, "action": "uplink_disconnect", "error": "uplink_disconnect_takes_no_parameters",
+                "ts": time.time()}
+    limited = rate_limit_error("uplink_disconnect", "Rate limit exceeded (1 req/3sec)")
+    if limited:
+        return limited
+    iface = str(os.environ.get("AZAZEL_UP_IF", "wlan0")).strip()
+    if not UPLINK_IFACE_RE.match(iface) or iface in (".", ".."):
+        return {"ok": False, "action": "uplink_disconnect", "error": "uplink_interface_config_invalid",
+                "ts": time.time()}
+    if not (SYS_CLASS_NET / iface).exists():
+        return {"ok": False, "action": "uplink_disconnect", "error": f"uplink_interface_not_found:{iface}",
+                "ts": time.time()}
+    ip_bin = next((c for c in IP_COMMAND_CANDIDATES if os.path.isfile(c) and os.access(c, os.X_OK)), "")
+    if not ip_bin:
+        return {"ok": False, "action": "uplink_disconnect", "error": "ip_command_not_found", "ts": time.time()}
+    try:
+        proc = subprocess.run([ip_bin, "link", "set", "dev", iface, "down"], capture_output=True, text=True,
+                              timeout=5)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "action": "uplink_disconnect", "error": "uplink_disconnect_timeout", "ts": time.time()}
+    except OSError as exc:
+        return {"ok": False, "action": "uplink_disconnect", "error": f"uplink_disconnect_failed:{exc}",
+                "ts": time.time()}
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()[:300] or f"exit {proc.returncode}"
+        logger.error(f"uplink_disconnect failed on {iface}: {detail}")
+        return {"ok": False, "action": "uplink_disconnect", "interface": iface,
+                "error": f"uplink_disconnect_failed:{detail}", "ts": time.time()}
+    logger.info(f"uplink_disconnect: {iface} set down")
+    return {"ok": True, "action": "uplink_disconnect", "interface": iface,
+            "message": f"Uplink disconnected ({iface} down)", "ts": time.time()}
 
 
 def _read_portal_viewer_env() -> dict[str, str]:
@@ -1938,8 +2198,14 @@ def execute_wifi_action(action_name: str, params: dict) -> dict:
     
     return {"ok": False, "error": f"Unknown Wi-Fi action: {action_name}"}
 
-def execute_action(action_name, params=None):
+def execute_action(action_name, params=None, *, request: Optional[dict[str, Any]] = None,
+                   peer_uid: Optional[int] = None):
     """Execute action script and return result"""
+    if action_name == "uplink_disconnect":
+        return _uplink_disconnect(request if isinstance(request, dict)
+                                  else {"action": action_name, **({"params": params} if params else {})})
+    if action_name in ("sot_devices_replace", "sot_devices_patch"):
+        return _sot_devices_edit(action_name, params if params is not None else {}, peer_uid=peer_uid)
     params = params or {}
 
     if action_name == "get_snapshot":
@@ -2030,17 +2296,100 @@ def execute_action(action_name, params=None):
     except Exception as e:
         return {'ok': False, 'error': str(e), 'ts': time.time()}
 
+def _web_ui_uid() -> Optional[int]:
+    """uid of WEB_UI_ACCOUNT, resolved per check; None when it does not exist."""
+    return account_uid(WEB_UI_ACCOUNT)
+
+
+def peer_action_allowed(uid: Optional[int], action: Any) -> tuple[bool, str]:
+    """The control.sock peer table (Edge#471 stage 1). Returns (allowed, rule)."""
+    if uid is None:
+        return False, "peer_uid_unknown"
+    action_name = action if isinstance(action, str) else ""
+    if action_name in ROOT_ONLY_ACTIONS:
+        return (uid == 0), "root_only"
+    if uid == 0 or uid == os.geteuid():
+        return True, "root"
+    web_uid = _web_ui_uid()
+    if web_uid is not None and uid == web_uid:
+        return (action_name in WEB_UI_ACTIONS), "web_ui"
+    return False, "peer_not_allowed"
+
+
+def _count_refusal(uid: Optional[int]) -> int:
+    with _PEER_REFUSALS_LOCK:
+        _PEER_REFUSALS["total"] = int(_PEER_REFUSALS["total"]) + 1
+        key = "unknown" if uid is None else str(uid)
+        by_uid = _PEER_REFUSALS["by_uid"]
+        by_uid[key] = int(by_uid.get(key, 0)) + 1
+        return int(_PEER_REFUSALS["total"])
+
+
+def peer_refusal_counts() -> dict[str, Any]:
+    with _PEER_REFUSALS_LOCK:
+        return {"total": int(_PEER_REFUSALS["total"]), "by_uid": dict(_PEER_REFUSALS["by_uid"])}
+
+
+class _RequestTooLarge(ValueError):
+    pass
+
+
+def _read_request(conn) -> bytes:
+    """One request: up to the first newline, the end of the stream, or a
+    complete JSON document (older clients send no newline), whichever is
+    first; at most MAX_REQUEST_BYTES."""
+    buf = b""
+    while True:
+        chunk = conn.recv(65536)
+        if not chunk:
+            return buf
+        buf += chunk
+        if b"\n" in buf:
+            return buf.split(b"\n", 1)[0]
+        if len(buf) > MAX_REQUEST_BYTES:
+            raise _RequestTooLarge()
+        try:
+            json.loads(buf.decode("utf-8", errors="ignore"))
+            return buf
+        except ValueError:
+            continue
+
+
 def handle_client(conn, addr):
     """Handle incoming client connection"""
     try:
-        raw = conn.recv(4096).decode("utf-8", errors="ignore")
-        data = raw.strip()
+        peer_uid, peer_pid = peer_credentials(conn)
+        conn.settimeout(REQUEST_READ_TIMEOUT_SEC)
+        try:
+            raw_bytes = _read_request(conn)
+        except _RequestTooLarge:
+            conn.sendall(b'{"ok": false, "error": "Request too large"}\n')
+            return
+        except socket.timeout:
+            conn.sendall(b'{"ok": false, "error": "Request timeout"}\n')
+            return
+        conn.settimeout(None)
+        data = raw_bytes.decode("utf-8", errors="ignore").strip()
         if not data:
             conn.sendall(b'{"ok": false, "error": "Empty request"}\n')
             return
         request = json.loads(data)
+        if not isinstance(request, dict):
+            conn.sendall(b'{"ok": false, "error": "Invalid request"}\n')
+            return
         action = request.get('action')
         params = request.get('params', {})
+
+        allowed, rule = peer_action_allowed(peer_uid, action)
+        if not allowed:
+            total = _count_refusal(peer_uid)
+            logger.warning(
+                f"control.sock: refused action {str(action)[:64]!r} from uid={peer_uid} pid={peer_pid} "
+                f"(rule={rule}, refused so far={total})"
+            )
+            conn.sendall((json.dumps({"ok": False, "error": "forbidden", "reason": rule,
+                                      "action": str(action)[:64], "ts": time.time()}) + "\n").encode("utf-8"))
+            return
 
         if action == "watch_snapshot":
             interval = float((params or {}).get("interval_sec", 1.0))
@@ -2054,7 +2403,7 @@ def handle_client(conn, addr):
         else:
             logger.info(f"Received action: {action}")
         
-        result = execute_action(action, params)
+        result = execute_action(action, params, request=request, peer_uid=peer_uid)
         
         response = json.dumps(result, ensure_ascii=False) + "\n"
         conn.sendall(response.encode("utf-8"))

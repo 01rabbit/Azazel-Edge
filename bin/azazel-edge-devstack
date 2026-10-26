@@ -283,7 +283,19 @@ launch_rust_core() {
 }
 
 launch_web() {
-  start_component web "$(log_file web)" "${ROOT_DIR}/bin/azazel-edge-web"
+  # Edge#471 stage 1: AZAZEL_AI_SOCKET is ai-bridge.sock for the agent and the
+  # core, but the Web UI's manual_query socket for the Web UI, so the Web UI
+  # gets its own value here. On a device that is the agent's query socket
+  # (peers: root and azazel-web). A dev stack runs everything as one account:
+  # the query socket accepts this account only when it is root; otherwise the
+  # agent has no query socket (no azazel-web account) and still answers
+  # manual_query on ai-bridge.sock for its own account.
+  local web_ai_socket="${AZAZEL_AI_SOCKET}"
+  if [[ "$(id -u)" == "0" && -S "${AZAZEL_AI_QUERY_SOCKET}" ]]; then
+    web_ai_socket="${AZAZEL_AI_QUERY_SOCKET}"
+  fi
+  AZAZEL_AI_SOCKET="${web_ai_socket}" \
+    start_component web "$(log_file web)" "${ROOT_DIR}/bin/azazel-edge-web"
   if wait_for_tcp "${AZAZEL_WEB_HOST}" "${AZAZEL_WEB_PORT}" 20; then
     printf '  %s %-14s listening on %s:%s\n' "${OK}" "web" "${AZAZEL_WEB_HOST}" "${AZAZEL_WEB_PORT}"
   else
