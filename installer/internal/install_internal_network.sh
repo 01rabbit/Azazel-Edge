@@ -70,12 +70,19 @@ is_raspberry_pi_os() {
 }
 
 # WPA2 passphrase: 8..63 bytes (counted as bytes, LC_ALL=C), valid UTF-8,
-# not the old default. iconv reads it on stdin (a here-string), never argv.
+# no line break, not the old default. iconv reads it on stdin (a
+# here-string), never argv.
 check_ap_psk() {
   local LC_ALL=C bytes
   bytes=${#1}
   if [[ "$1" == "$AP_PSK_OLD_DEFAULT" ]]; then
     echo "ERROR: the AP passphrase is the old built-in default; set AP_PSK to your own (8..63 bytes), or leave it unset to generate a random one." >&2
+    exit 1
+  fi
+  # The file keeps one line and is read back with head -n 1, and the
+  # keyfile has one psk= line: a newline or CR would change the passphrase.
+  if [[ "$1" == *$'\n'* || "$1" == *$'\r'* ]]; then
+    echo "ERROR: the AP passphrase must not contain a line break (newline or carriage return)." >&2
     exit 1
   fi
   if [[ $bytes -lt 8 || $bytes -gt 63 ]]; then
@@ -168,7 +175,7 @@ save_ap_psk() {
 # in the AP profile (unless it is the old default); else a new random one.
 # Saved 0600 root:root in AP_PSK_FILE. Never printed.
 resolve_ap_psk() {
-  local existing=""
+  local existing="" existing_bytes=0
   AP_PSK_SOURCE="given"
   if [[ -z "$AP_PSK" && -s "$AP_PSK_FILE" ]]; then
     AP_PSK="$(head -n 1 -- "$AP_PSK_FILE")"
@@ -176,7 +183,9 @@ resolve_ap_psk() {
   fi
   if [[ -z "$AP_PSK" ]] && nm_profile_exists "$WLAN_AP_CONN"; then
     existing="$(LC_ALL=C.UTF-8 nmcli -s --escape no -g 802-11-wireless-security.psk con show "$WLAN_AP_CONN" 2>/dev/null || true)"
-    if [[ -n "$existing" && "$existing" != "$AP_PSK_OLD_DEFAULT" && ${#existing} -ge 8 && ${#existing} -le 63 ]]; then
+    # Bytes (LC_ALL=C), as check_ap_psk counts them, not characters.
+    existing_bytes="$(LC_ALL=C; printf '%s' "${#existing}")"
+    if [[ -n "$existing" && "$existing" != "$AP_PSK_OLD_DEFAULT" && $existing_bytes -ge 8 && $existing_bytes -le 63 ]]; then
       AP_PSK="$existing"
       AP_PSK_SOURCE="kept"
     fi

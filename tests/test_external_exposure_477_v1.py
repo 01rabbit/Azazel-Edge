@@ -54,6 +54,16 @@ def _gnu_mv() -> bool:
 needs_gnu_mv = pytest.mark.skipif(not _gnu_mv(), reason="mv -T is GNU coreutils (Debian); run in Linux")
 
 
+def _gnu_mktemp() -> bool:
+    return subprocess.run(["mktemp", "--version"], capture_output=True).returncode == 0
+
+
+# macOS mktemp -d ignores TMPDIR, so the scratch directory cannot be checked
+# for being removed from it; the scripts run on Debian (GNU coreutils).
+needs_gnu_mktemp = pytest.mark.skipif(
+    not _gnu_mktemp(), reason="mktemp -d honouring TMPDIR is GNU coreutils (Debian); run in Linux")
+
+
 def _tracked_text_files():
     skip = {".git", ".venv", "target", "node_modules", "__pycache__", ".pytest_cache"}
     for dirpath, dirnames, filenames in os.walk(ROOT):
@@ -823,13 +833,16 @@ def test_provision_ends_non_zero_while_the_former_admin_password_is_in_use():
 
 
 CURL_RECORDER = """#!/bin/bash
+# The permission bits of a file: GNU stat (Debian) or BSD stat (macOS).
+mode_of() {{ stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }}
 printf 'argv %s\\n' "$*" >> {log}
 mode='{mode}'
 prev=""
 for a in "$@"; do
   if [[ $prev == -H && $a == @* ]]; then
-    printf 'hdrfile %s %s\\n' "$(stat -c %a "${{a#@}}" 2>/dev/null)" "$(cat "${{a#@}}")" >> {log}
+    printf 'hdrfile %s %s\\n' "$(mode_of "${{a#@}}")" "$(cat "${{a#@}}")" >> {log}
     printf 'workdir %s\\n' "$(dirname "${{a#@}}")" >> {log}
+    printf 'workdirmode %s\\n' "$(mode_of "$(dirname "${{a#@}}")")" >> {log}
   fi
   if [[ $prev == -D ]]; then printf 'Token: x\\r\\n' > "$a"; fi
   prev="$a"
@@ -875,6 +888,9 @@ def _check_off_argv(tmp_path: Path, expected_headers: int) -> str:
     argv = "\n".join(l for l in text.splitlines() if l.startswith("argv "))
     assert TOKEN not in argv
     assert text.count(f"hdrfile 600 Authorization: Bearer {TOKEN}") == expected_headers
+    # The private scratch directory the header file lives in is 0700.
+    modes = {l.split()[1] for l in text.splitlines() if l.startswith("workdirmode ")}
+    assert modes == {"700"}, modes
     workdirs = {l.split()[1] for l in text.splitlines() if l.startswith("workdir ")}
     assert len(workdirs) == 1
     workdir = Path(workdirs.pop())
@@ -884,6 +900,7 @@ def _check_off_argv(tmp_path: Path, expected_headers: int) -> str:
     return text
 
 
+@needs_gnu_mktemp
 def test_api_call_keeps_the_token_off_the_command_line(tmp_path):
     bindir = _curl_recorder(tmp_path)
     script = _workspace_api_script(
@@ -897,6 +914,7 @@ def test_api_call_keeps_the_token_off_the_command_line(tmp_path):
         "printf 'Authorization: Bearer %s\\n'", "")
 
 
+@needs_gnu_mktemp
 def test_api_call_curl_failure_exits_1_and_removes_the_files(tmp_path):
     bindir = _curl_recorder(tmp_path, "fail")
     script = _workspace_api_script(f'api_call GET /api/v4/users/me "" {TOKEN}\necho REACHED\n')
@@ -924,6 +942,7 @@ def _signal_while_curl_runs(tmp_path: Path, script: str, sig: int) -> int:
     return proc.wait(timeout=10)
 
 
+@needs_gnu_mktemp
 @pytest.mark.parametrize("signame, code", [("SIGTERM", 143), ("SIGINT", 130)])
 def test_workspace_scratch_dir_is_removed_on_a_signal(tmp_path, signame, code):
     import signal
@@ -933,6 +952,7 @@ def test_workspace_scratch_dir_is_removed_on_a_signal(tmp_path, signame, code):
     _check_off_argv(tmp_path, 1)
 
 
+@needs_gnu_mktemp
 def test_command_api_keeps_the_bot_token_off_the_command_line(tmp_path):
     bindir = _curl_recorder(tmp_path)
     script = _command_api_script('api GET /api/v4/teams/name/t >/dev/null\napi POST /api/v4/commands \'{"b":2}\' >/dev/null\n')
@@ -948,12 +968,47 @@ def test_command_api_keeps_the_bot_token_off_the_command_line(tmp_path):
     assert src.index('BOT_TOKEN="${AZAZEL_MATTERMOST_BOT_TOKEN:-}"') < src.index("\nsetup_work_dir\n")
 
 
-def test_command_scratch_dir_is_removed_on_a_signal(tmp_path):
+@needs_gnu_mktemp
+@pytest.mark.parametrize("signame, code", [("SIGTERM", 143), ("SIGINT", 130)])
+def test_command_scratch_dir_is_removed_on_a_signal(tmp_path, signame, code):
     import signal
 
     script = _command_api_script("api GET /api/v4/teams/name/t\n")
-    assert _signal_while_curl_runs(tmp_path, script, signal.SIGTERM) == 143
+    assert _signal_while_curl_runs(tmp_path, script, getattr(signal, signame)) == code
     _check_off_argv(tmp_path, 1)
+
+
+@needs_gnu_mktemp
+def test_command_api_curl_failure_stops_the_script(tmp_path):
+    # A failed request (curl exit 7, as for a refused connection) is not
+    # taken as an empty reply: the script stops at once with curl's code,
+    # also inside a command substitution as the script uses it, and the
+    # scratch directory is removed.
+    bindir = _curl_recorder(tmp_path, "fail")
+    script = _command_api_script('TEAM_JSON="$(api GET /api/v4/teams/name/t)"\necho REACHED\n')
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", TMPDIR=str(tmp_path))
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+    assert res.returncode == 7, (res.returncode, res.stderr)
+    assert "REACHED" not in res.stdout
+    _check_off_argv(tmp_path, 1)
+    # -f: an HTTP error status (4xx/5xx) is a curl failure too.
+    assert re.search(r"^argv -fsS ", (tmp_path / "curl.log").read_text(encoding="utf-8"), re.M)
+
+
+@needs_gnu_mktemp
+def test_command_api_body_goes_on_stdin_not_argv(tmp_path):
+    bindir = _curl_recorder(tmp_path)
+    body = '{"trigger":"mio","marker":"body-marker-4711"}'
+    script = _command_api_script(f"api POST /api/v4/commands '{body}' >/dev/null\n")
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", TMPDIR=str(tmp_path))
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+    assert res.returncode == 0, res.stderr
+    text = _check_off_argv(tmp_path, 1)
+    argv = [l for l in text.splitlines() if l.startswith("argv ")]
+    assert len(argv) == 1
+    assert "--data-binary @-" in argv[0]
+    assert "body-marker-4711" not in argv[0]
+    assert f"stdin {body}" in text
 
 
 # ---------------- exit codes reach the caller (install_ai_runtime, install_all)

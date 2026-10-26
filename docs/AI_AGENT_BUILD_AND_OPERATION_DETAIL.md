@@ -1,6 +1,6 @@
 # AI Agent Build and Operation Detail
 
-Last updated: 2026-05-13
+Last updated: 2026-10-27
 Target: Azazel-Edge on Raspberry Pi (arm64)
 Related persona profile: `docs/MIO_PERSONA_PROFILE.md`
 
@@ -32,9 +32,16 @@ Planned or iterative areas:
 Primary AI-related runtime surfaces:
 - `py/azazel_edge_ai/agent.py`
 - `systemd/azazel-edge-ai-agent.service`
-- `/run/azazel-edge-ai/ai-bridge.sock` (in a 0700 `azazel-agent` directory; the core connects as root)
-- `/run/azazel-edge-agent/` (advisory, metrics, runtime policy, snapshot fields)
-- `/var/log/azazel-edge/ai/ai-*.jsonl`
+- `/run/azazel-edge-ai/ai-bridge.sock` (in a 0700 `azazel-agent` directory; the core connects as root).
+  Other accounts get EACCES, so a test event is sent with `sudo`.
+- `/run/azazel-edge-agent-query/agent-query.sock` (the Web UI's `manual_query`
+  socket; peers root and `azazel-web` only). `ai-bridge.sock` refuses
+  `manual_query` while this socket is up.
+- `/run/azazel-edge-agent/` (advisory, metrics, runtime policy, snapshot fields;
+  2750 `azazel-agent:azazel-web`, read with `sudo`)
+- `/var/log/azazel-edge/ai/ai-*.jsonl` (2750 `azazel-agent:azazel-web`, read with `sudo`)
+- `/etc/azazel-edge/mattermost-command-token` (`0640 root:azazel-web`, written by
+  `provision_mattermost_command.sh`)
 
 ## 5. Configuration Areas
 Common variables:
@@ -47,9 +54,11 @@ Common variables:
 ```bash
 systemctl is-active azazel-edge-ai-agent
 sudo jq '{processed_events,llm_requests,llm_completed,llm_failed,last_error}' /run/azazel-edge-agent/ai_metrics.json
-# The Web UI API needs the token (without it: HTTP 401).
-TOKEN="$(sudo cat /etc/azazel-edge/web_token.txt | tr -d '[:space:]')"
-curl -sS -H "X-AZAZEL-TOKEN: ${TOKEN}" http://127.0.0.1:8084/api/ai/capabilities | jq
+# The Web UI API needs the token (without it: HTTP 403; some endpoints 401).
+# The token (/etc/azazel-edge/web_token.txt, 0640 root:azazel-web) goes to
+# curl on stdin (-H @-), not on its command line.
+sudo sed -n '1s/^/X-AZAZEL-TOKEN: /p' /etc/azazel-edge/web_token.txt \
+  | curl -sS -H @- http://127.0.0.1:8084/api/ai/capabilities | jq
 ```
 
 ## 7. Operational Rules

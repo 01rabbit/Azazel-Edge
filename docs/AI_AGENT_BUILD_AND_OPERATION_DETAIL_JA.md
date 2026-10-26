@@ -1,6 +1,6 @@
 # エージェントAI構築手順書（詳細）
 
-最終更新: 2026-03-08  
+最終更新: 2026-10-27  
 対象: Azazel-Edge（Raspberry Pi 5 / arm64）
 
 関連人格設計: `docs/MIO_PERSONA_PROFILE.md`
@@ -160,16 +160,28 @@ systemctl is-active azazel-edge-ai-agent
 
 ### 8.1 監視
 
+AI エージェントは `azazel-agent` アカウントで動き（Edge#471 段階 2）、自分のディレクトリにだけ書く。
+
+- `/run/azazel-edge-agent/`: `ai_metrics.json`・`ai_advisory.json`・`ai_runtime_policy.json`・`ai_snapshot.json`（2750 `azazel-agent:azazel-web`）
+- `/var/log/azazel-edge/ai/`: `ai-events.jsonl`・`ai-llm.jsonl`・`ai-deferred.jsonl`・`ai-audit.jsonl` など（2750 `azazel-agent:azazel-web`）
+- `/run/azazel-edge-ai/ai-bridge.sock`: core（root）からのイベント受け口（ディレクトリ 0700・ソケット 0600 `azazel-agent`）
+- `/run/azazel-edge-agent-query/agent-query.sock`: Web UI からの `manual_query` 専用（root と `azazel-web` だけ）
+
+どれも一般ユーザーからは読めないので、確認は `sudo` で行う。
+
 ```bash
 systemctl is-active azazel-edge-ai-agent
-jq '{processed_events,llm_requests,llm_completed,llm_failed,llm_schema_invalid_count,ops_requests,ops_completed,ops_schema_invalid_count,last_error}' /run/azazel-edge/ai_metrics.json
-tail -n 5 /var/log/azazel-edge/ai-llm.jsonl
+sudo jq '{processed_events,llm_requests,llm_completed,llm_failed,llm_schema_invalid_count,ops_requests,ops_completed,ops_schema_invalid_count,last_error}' /run/azazel-edge-agent/ai_metrics.json
+sudo tail -n 5 /var/log/azazel-edge/ai/ai-llm.jsonl
 ```
 
 ### 8.2 疑似イベント投入（曖昧帯）
 
+`ai-bridge.sock` には root（と `azazel-agent`）しか接続できない。一般ユーザーで実行すると
+`PermissionError: [Errno 13]`（EACCES）になるので、`sudo` で実行する。
+
 ```bash
-python3 - <<'PY'
+sudo python3 - <<'PY'
 import json, socket
 sock='/run/azazel-edge-ai/ai-bridge.sock'
 ev={"normalized":{"sid":996001,"severity":3,"attack_type":"port scan","category":"attempted-recon","action":"allowed","target_port":80,"protocol":"tcp","src_ip":"10.66.0.1","dst_ip":"10.0.0.1"}}
@@ -183,8 +195,8 @@ PY
 結果確認:
 
 ```bash
-tail -n 1 /var/log/azazel-edge/ai-llm.jsonl
-jq '{llm_requests,llm_completed,llm_failed,last_error}' /run/azazel-edge/ai_metrics.json
+sudo tail -n 1 /var/log/azazel-edge/ai/ai-llm.jsonl
+sudo jq '{llm_requests,llm_completed,llm_failed,last_error}' /run/azazel-edge-agent/ai_metrics.json
 ```
 
 ### 8.3 テスト実行
@@ -199,14 +211,16 @@ python3 -m unittest -v tests/test_phase5_operational_hardening.py
 
 ```bash
 sudo systemctl stop azazel-edge-ai-agent
-sudo bash -lc ': > /var/log/azazel-edge/ai-events.jsonl; : > /var/log/azazel-edge/ai-llm.jsonl; : > /var/log/azazel-edge/ai-deferred.jsonl; rm -f /run/azazel-edge/ui_snapshot.json /run/azazel-edge/ai_metrics.json /run/azazel-edge/ai_advisory.json /run/azazel-edge/ai_runtime_policy.json'
+sudo bash -lc ': > /var/log/azazel-edge/ai/ai-events.jsonl; : > /var/log/azazel-edge/ai/ai-llm.jsonl; : > /var/log/azazel-edge/ai/ai-deferred.jsonl; rm -f /run/azazel-edge-agent/ai_metrics.json /run/azazel-edge-agent/ai_advisory.json /run/azazel-edge-agent/ai_runtime_policy.json /run/azazel-edge-agent/ai_snapshot.json /run/azazel-edge/ui_snapshot.json'
 sudo systemctl start azazel-edge-ai-agent
 ```
+
+`ai-audit.jsonl`・`core-decision-audit.jsonl`（監査の連鎖）は消さない。`/run/azazel-edge/ui_snapshot.json` は control daemon が作り直す（AI の欄はエージェントの `ai_snapshot.json` から取り込む）。
 
 - LLM失敗/遅延調査:
 
 ```bash
-jq '{llm_requests,llm_completed,llm_failed,llm_fallback_count,llm_schema_invalid_count,ops_schema_invalid_count,llm_latency_ms_last,last_error,policy_mode}' /run/azazel-edge/ai_metrics.json
+sudo jq '{llm_requests,llm_completed,llm_failed,llm_fallback_count,llm_schema_invalid_count,ops_schema_invalid_count,llm_latency_ms_last,last_error,policy_mode}' /run/azazel-edge-agent/ai_metrics.json
 sudo journalctl -u azazel-edge-ai-agent -n 100 --no-pager
 sudo docker logs --tail 100 azazel-edge-ollama
 ```
@@ -255,17 +269,23 @@ CLI例:
 
 Web API例:
 
+Web UI の API はトークンが要る（無い・違うと HTTP 403。一部の API は 401）。トークンは
+`/etc/azazel-edge/web_token.txt`（`0640 root:azazel-web`、読むには `sudo`）にある。
+コマンドラインの引数やシェル履歴に出さないよう、`X-AZAZEL-TOKEN` ヘッダを curl の
+標準入力から渡す（`-H @-`）。
+
 ```bash
-curl http://127.0.0.1:8084/api/runbooks
-curl http://127.0.0.1:8084/api/runbooks/rb.noc.default-route.check
-curl http://127.0.0.1:8084/api/runbooks/rb.user.first-contact.network-issue/review
-curl -X POST http://127.0.0.1:8084/api/runbooks/propose \
+auth() { sudo sed -n '1s/^/X-AZAZEL-TOKEN: /p' /etc/azazel-edge/web_token.txt; }
+auth | curl -sS -H @- http://127.0.0.1:8084/api/runbooks
+auth | curl -sS -H @- http://127.0.0.1:8084/api/runbooks/rb.noc.default-route.check
+auth | curl -sS -H @- http://127.0.0.1:8084/api/runbooks/rb.user.first-contact.network-issue/review
+auth | curl -sS -H @- -X POST http://127.0.0.1:8084/api/runbooks/propose \
   -H 'Content-Type: application/json' \
   -d '{"question":"DNS が引けない","audience":"beginner"}'
-curl -X POST http://127.0.0.1:8084/api/runbooks/act \
+auth | curl -sS -H @- -X POST http://127.0.0.1:8084/api/runbooks/act \
   -H 'Content-Type: application/json' \
   -d '{"runbook_id":"rb.ops.logs.ai.recent","action":"preview","args":{"lines":5},"question":"AIログを確認したい"}'
-curl -X POST http://127.0.0.1:8084/api/runbooks/execute \
+auth | curl -sS -H @- -X POST http://127.0.0.1:8084/api/runbooks/execute \
   -H 'Content-Type: application/json' \
   -d '{"runbook_id":"rb.ops.logs.ai.recent","args":{"lines":5},"dry_run":true}'
 ```
@@ -380,23 +400,24 @@ sudo installer/internal/provision_mattermost_command.sh
   - Mattermost slash command または outgoing webhook から AI 質問を受ける
   - 返答には AI 要約と Runbook 候補/Review を含める
 - 推奨:
-  - token は `/etc/azazel-edge/mattermost-command-token`（`0600`）へ保存する
+  - token は `/etc/azazel-edge/mattermost-command-token`（`0640 root:azazel-web`。Web UI が `azazel-web` で読む）へ保存する
   - `AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE` は必要時のみ変更する
   - `sender` (optional)
   - `source` (optional)
   - `context` (optional object)
 - 動作:
-  - WebUIが `/run/azazel-edge-ai/ai-bridge.sock` に `action=manual_query` を送信
+  - WebUIが `/run/azazel-edge-agent-query/agent-query.sock` に `action=manual_query` を送信（`ai-bridge.sock` は core 専用で、query socket が動いている間は `manual_query` を拒否する）
   - `azazel-edge-ai-agent` が Ops 系モデルで応答生成
   - 応答JSONを同期返却
 - `/api/mattermost/message` では `ask_ai=true` 指定で投稿内容を同時にAI問い合わせし、応答を Mattermost に追記可能
 
-設定例:
+設定例（通常は `provision_mattermost_command.sh` が作る。手で置く場合）:
 
 ```bash
-sudo install -d -m 0700 /etc/azazel-edge
-printf '%s\n' 'replace-with-mattermost-token' | sudo tee /etc/azazel-edge/mattermost-command-token >/dev/null
-sudo chmod 600 /etc/azazel-edge/mattermost-command-token
+# 空のファイルを 0640 root:azazel-web で作ってから、sudoedit で token を書く
+# （コマンドラインの引数やシェル履歴に残さない）。/etc/azazel-edge の権限は変えない。
+sudo install -m 0640 -o root -g azazel-web /dev/null /etc/azazel-edge/mattermost-command-token
+sudoedit /etc/azazel-edge/mattermost-command-token
 sudo systemctl restart azazel-edge-web
 ```
 

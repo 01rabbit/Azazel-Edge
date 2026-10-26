@@ -248,6 +248,32 @@ def _install_all_tail() -> str:
     ],
 )
 def test_install_all_runs_the_selftest_and_its_timer_last(tmp_path, app, services, selftest_rc, arch, rc, ran, timer):
+    res, steps = _run_install_all_tail(tmp_path, app, services, selftest_rc, arch)
+    assert res.returncode == rc, res.stdout + res.stderr
+    expected = (["selftest"] if ran else []) + (["timer ENABLE_SERVICES=1"] if timer else [])
+    assert steps == expected  # the selftest first, then the timer
+    assert ("selftest-output" in res.stdout) == ran
+    assert ("supports aarch64" in res.stdout) == (ran and arch != "aarch64")
+    assert ("Unified installation completed." in res.stdout) == (rc == 0)
+    if rc:
+        assert "critical failure" in res.stderr
+    assert "selftest timer was not installed" not in res.stderr
+
+
+@pytest.mark.parametrize("selftest_rc, rc", [(0, 5), (1, 1)])
+def test_install_all_reports_both_when_the_timer_install_fails(tmp_path, selftest_rc, rc):
+    # A failing install_selftest_timer.sh (set -e) no longer ends the script
+    # before the selftest's own failure is reported: both are shown, then a
+    # non-zero exit (1 for the selftest, else the timer installer's code).
+    res, steps = _run_install_all_tail(tmp_path, "1", "1", selftest_rc, "aarch64", timer_rc=5)
+    assert res.returncode == rc, res.stdout + res.stderr
+    assert steps == ["selftest", "timer ENABLE_SERVICES=1"]
+    assert "selftest timer was not installed" in res.stderr and "exit 5" in res.stderr
+    assert ("critical failure" in res.stderr) == (selftest_rc != 0)
+    assert "Unified installation completed." not in res.stdout
+
+
+def _run_install_all_tail(tmp_path, app, services, selftest_rc, arch, timer_rc=0):
     (tmp_path / "bin").mkdir()
     (tmp_path / "installer" / "internal").mkdir(parents=True)
     stubs = tmp_path / "stubs"
@@ -256,22 +282,16 @@ def test_install_all_runs_the_selftest_and_its_timer_last(tmp_path, app, service
     stub = tmp_path / "bin" / "azazel-edge-selftest"
     stub.write_text(f"#!/bin/sh\necho selftest-output\necho selftest >> '{log}'\nexit {selftest_rc}\n", encoding="utf-8")
     timer_stub = tmp_path / "installer" / "internal" / "install_selftest_timer.sh"
-    timer_stub.write_text(f"#!/bin/sh\necho \"timer ENABLE_SERVICES=$ENABLE_SERVICES\" >> '{log}'\n", encoding="utf-8")
+    timer_stub.write_text(f"#!/bin/sh\necho \"timer ENABLE_SERVICES=$ENABLE_SERVICES\" >> '{log}'\nexit {timer_rc}\n",
+                          encoding="utf-8")
     (stubs / "uname").write_text(f"#!/bin/sh\necho {arch}\n", encoding="utf-8")
     for p in (stub, timer_stub, stubs / "uname"):
         p.chmod(0o755)
     script = f'set -euo pipefail\nREPO_ROOT="{tmp_path}"\nENABLE_APP_STACK="{app}"\n' + _install_all_tail()
     env = dict(os.environ, ENABLE_SERVICES=services, PATH=f"{stubs}:{os.environ['PATH']}")
     res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
-    assert res.returncode == rc, res.stdout + res.stderr
     steps = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
-    expected = (["selftest"] if ran else []) + (["timer ENABLE_SERVICES=1"] if timer else [])
-    assert steps == expected  # the selftest first, then the timer
-    assert ("selftest-output" in res.stdout) == ran
-    assert ("supports aarch64" in res.stdout) == (ran and arch != "aarch64")
-    assert ("Unified installation completed." in res.stdout) == (rc == 0)
-    if rc:
-        assert "critical failure" in res.stderr
+    return res, steps
 
 
 def test_selftest_timer_installer_runs_from_the_checkout_and_matches_the_selftest():

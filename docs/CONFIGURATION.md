@@ -39,11 +39,10 @@ ones in the scripts.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AP_SSID` | `Azazel-Edge-Internal` | SSID of the internal Wi-Fi AP on `wlan0` (part of `br0`, `172.16.0.254/24`). 1..32 characters. |
-| `AP_PSK` | `ChangeMe1234` | WPA2 passphrase of the internal AP, 8..63 characters. **Set your own**: the default is public. |
+| `AP_PSK` | none (unset) | WPA2 passphrase of the internal AP: 8..63 bytes, valid UTF-8, no newline or carriage return. Unset: the one saved by an earlier run in `/etc/azazel-edge/internal-ap.psk` is kept, else the one already in the AP profile, else a random 20-character one is generated. Whichever is used is saved in `/etc/azazel-edge/internal-ap.psk` (`0600 root:root`; read it with `sudo cat`) and never printed. The former built-in default `ChangeMe1234` is refused (given in `AP_PSK`) or replaced by a random one (found in the AP profile). |
+| `WIFI_COUNTRY` | none (unset) | Wi-Fi regulatory country, a two-letter ISO 3166-1 code (e.g. `JP`; case does not matter). Raspberry Pi OS only (with `raspi-config` and `/boot/firmware/config.txt`): set with `raspi-config nonint do_wifi_country`, then Wi-Fi is unblocked (`rfkill`). Unset: the country already configured is used; when none is (or it is `00`), the installer stops before changing anything, because Raspberry Pi OS keeps Wi-Fi blocked and the AP cannot start. Ignored on other systems. |
 | `WAN_IF` | the interface of the default route (field 5 of `ip route show default`) | Uplink interface. The NAT (masquerade) and forward rules for `172.16.0.0/24` go out through it. The installer stops if none is found. `set_dev_remote_access.sh` uses it too. |
 | `ALLOW_EXTERNAL_SSH` | `false` | `false`: `sshd` listens only on `172.16.0.254` (the internal LAN). `true` (any case): the installer's `ListenAddress` is left out, so `sshd` listens on all interfaces, the uplink included. Temporary use only. |
-
-Note: #486 (not merged yet) changes `AP_PSK` (no default; a generated passphrase saved root-only) and adds `WIFI_COUNTRY`; this table describes the current code.
 
 ### App stack (`install_migrated_tools.sh`, run when `ENABLE_APP_STACK=1`)
 
