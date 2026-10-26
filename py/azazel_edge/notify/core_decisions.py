@@ -99,7 +99,9 @@ def _int(value: Any) -> Optional[int]:
 
 
 def _num(value: Any) -> Optional[float]:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    """A finite number as a float, else None (NaN and +/-inf are not read)."""
+
+    return _p0.finite_epoch(value)
 
 
 def core_event_key(event: Mapping[str, Any]) -> str:
@@ -406,10 +408,13 @@ class CoreDecisionRecorder:
                     continue
                 payload["recorded_by"] = RECORDED_RECONCILE
                 happened = _event_epoch(payload)
-                if happened is None or now - happened > self.reconcile_max_age_s:
-                    # Not a current alert any more (or its time is unknown):
-                    # recorded and alerted as a past decision, never as a
-                    # current one (Edge#462 item 5).
+                if (happened is None or happened - now > _p0.CLOCK_SKEW_TOLERANCE_S
+                        or now - happened > self.reconcile_max_age_s):
+                    # Not a current alert any more, or its time is unknown or
+                    # more than the clock-skew tolerance in the future (an
+                    # unauthenticated time cannot make it current): recorded
+                    # and alerted as a past decision, never as a current one
+                    # (Edge#462 item 5).
                     status["core_reconcile_stale"] += 1
                     payload["reconcile_stale"] = True
                     payload["reconcile_event_age_s"] = None if happened is None else round(now - happened, 3)

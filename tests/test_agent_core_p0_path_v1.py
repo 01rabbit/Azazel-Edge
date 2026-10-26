@@ -708,6 +708,104 @@ def test_build_treats_an_unreadable_replayed_record_as_past_and_never_touches_li
     assert build_p0_alerts(edge, "b", DURABILITY_RECONCILED, None, now=t0 + STALE_AFTER_S + 1)[0]["stale"] is True
 
 
+_FUTURE_TS = ["2036-01-01T00:00:00.000000+0000", "9999-12-31T23:59:59.000000+0000"]
+
+
+def test_reconcile_treats_future_and_non_finite_times_as_past(tmp_path):
+    """Review of #468 (L1, L2): core event times are not authenticated. A time
+    more than the clock-skew tolerance in the future, or a NaN/inf ingest
+    stamp with no readable event time, cannot make a decision current; one
+    just within the tolerance stays current."""
+
+    from azazel_edge.notify.p0_alert import CLOCK_SKEW_TOLERANCE_S
+
+    events = []
+    for n, ts in enumerate(_FUTURE_TS):
+        ev = core_event("isolate", f"f{n}", 9301000 + n)
+        ev["normalized"]["ts"] = ts
+        events.append(ev)
+    events.append(fresh(core_event("isolate", "f2", 9301002), CLOCK_SKEW_TOLERANCE_S + 30))
+    for n, bad in enumerate([float("nan"), float("inf"), float("-inf")]):
+        ev = core_event("isolate", f"n{n}", 9301010 + n)
+        ev["normalized"]["ts"] = "not a time"
+        ev["normalized"]["ingest_epoch"] = bad
+        events.append(ev)
+    events.append(fresh(core_event("throttle", "s", 9301020), CLOCK_SKEW_TOLERANCE_S - 20))
+    log = tmp_path / "normalized-events.jsonl"
+    log.write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+    audit = P0AuditLogger(tmp_path / "core-decision-audit.jsonl")
+    relay = attach_p0_alert_relay(audit, tmp_path / "p0-alert-queue.jsonl")
+    recorder = CoreDecisionRecorder(audit, relay, log).start()
+    try:
+        assert recorder.ready.wait(10)
+        status = recorder.last_reconcile
+        assert status["core_reconciled"] == 7 and status["core_reconciled_stale"] == 6
+        chain = {r["sid"]: r for r in _rows(audit.path)}
+        assert chain[9301020].get("reconcile_stale") is None
+        assert all(chain[sid]["reconcile_stale"] is True for sid in (9301000, 9301001, 9301002, 9301010, 9301011, 9301012))
+        assert all(chain[sid]["core_ingest_epoch"] is None for sid in (9301010, 9301011, 9301012))
+        assert _wait(lambda: len(_alerts(relay.queue.path)) == 14)
+        for r in _alerts(relay.queue.path):
+            want = r["decision_id"] != chain[9301020]["trace_id"]
+            assert r["stale"] is want and r["presentation"] == ("historical" if want else "current")
+            if r["channel"] == "voice":
+                assert r["voice_urgent"] is (not want)
+    finally:
+        recorder.stop()
+        relay.stop()
+
+
+def test_relay_replay_treats_future_and_non_finite_times_as_past_and_live_is_unaffected():
+    from azazel_edge.notify.p0_alert import (
+        CLOCK_SKEW_TOLERANCE_S, DURABILITY_FSYNCED, DURABILITY_RECONCILED, build_p0_alerts,
+    )
+
+    t0 = 1792972800.0  # 2026-10-26T00:00:00Z
+
+    def ts(epoch: float) -> str:
+        return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f+0000")
+
+    def stale(record, durability=DURABILITY_RECONCILED):
+        entries = build_p0_alerts(dict({"trace_id": "d", "action": "isolate", "ts": "?"}, **record), "b", durability, None, now=t0)
+        voice = [e["voice_urgent"] for e in entries if e["channel"] == "voice"]
+        assert voice == [not entries[0]["stale"]]
+        return entries[0]["stale"]
+
+    for future in _FUTURE_TS:
+        assert stale({"event_ts": future}) is True
+    assert stale({"event_ts": ts(t0 + CLOCK_SKEW_TOLERANCE_S + 1)}) is True
+    assert stale({"event_ts": ts(t0 + CLOCK_SKEW_TOLERANCE_S)}) is False
+    assert stale({"event_ts": ts(t0 + CLOCK_SKEW_TOLERANCE_S - 20)}) is False
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        assert stale({"event_ts": "", "core_ingest_epoch": bad}) is True
+    assert stale({"event_ts": "", "core_ingest_epoch": t0 - 30}) is False
+    # A non-finite ingest stamp is unreadable: the record's own ts is next.
+    iso = lambda e: datetime.fromtimestamp(e, timezone.utc).isoformat(timespec="milliseconds")
+    assert stale({"event_ts": "", "core_ingest_epoch": float("nan"), "ts": iso(t0 - 30)}) is False
+    assert stale({"event_ts": "", "core_ingest_epoch": float("inf"), "ts": iso(t0 - 3600)}) is True
+    # The live path is never judged by time, whatever the record says.
+    for record in ({"event_ts": _FUTURE_TS[1]}, {"event_ts": "", "core_ingest_epoch": float("nan")}):
+        assert stale(record, DURABILITY_FSYNCED) is False
+
+
+def test_is_past_decision_rejects_non_finite_and_future_times():
+    from azazel_edge.notify.p0_alert import CLOCK_SKEW_TOLERANCE_S, STALE_AFTER_S, is_past_decision
+
+    now = 1792972800.0
+    for bad in (None, float("nan"), float("inf"), float("-inf"), True):
+        assert is_past_decision(bad, now) is True
+    assert is_past_decision(now + CLOCK_SKEW_TOLERANCE_S + 0.001, now) is True
+    assert is_past_decision(now + CLOCK_SKEW_TOLERANCE_S, now) is False
+    assert is_past_decision(now - STALE_AFTER_S, now) is False
+    assert is_past_decision(now - STALE_AFTER_S - 0.001, now) is True
+
+
+def test_non_finite_numbers_are_not_read():
+    assert core_decisions._num(float("nan")) is None
+    assert core_decisions._num(float("inf")) is None and core_decisions._num(float("-inf")) is None
+    assert core_decisions._num(True) is None and core_decisions._num(1.5) == 1.5
+
+
 def test_render_collapses_and_bounds_untrusted_text():
     from azazel_edge.notify.p0_alert import DISPLAY_FIELD_MAX, render_p0_alert
 

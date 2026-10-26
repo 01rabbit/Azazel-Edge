@@ -20,7 +20,9 @@ Owner decisions on Edge#414 (2026-10-25):
   ``render_p0_alert`` or honour those fields. A decision this relay replays
   from the chain itself (in the chain, not in the queue) is judged the same
   way from the record's own time (``event_ts``, else the core's ingest stamp,
-  else the record's ``ts``; past when none can be read). Live alerts are
+  else the record's ``ts``; past when none can be read). A time more than
+  ``CLOCK_SKEW_TOLERANCE_S`` (60 s) in the future, or a non-finite number,
+  is unreadable (core event times are not authenticated). Live alerts are
   never marked past.
 
 Observation and notification only. Nothing here decides, enforces, approves or
@@ -52,6 +54,7 @@ from __future__ import annotations
 import errno
 import json
 import logging
+import math
 import os
 import queue as _queue_mod
 import stat
@@ -111,6 +114,10 @@ DURABILITY_UNSUPPORTED = 'fsync_unsupported'
 # in systemd/azazel-edge-core.service). Shared with the core decision
 # recorder's startup reconcile (core_decisions imports it).
 STALE_AFTER_S = 300.0
+# Core event times are not authenticated. A time more than this far in the
+# future cannot be trusted to say the decision is current: it is treated as
+# unreadable, i.e. past (Edge#462 item 5).
+CLOCK_SKEW_TOLERANCE_S = 60.0
 # Display bound for the free-text fields of an alert (they come from core
 # events, which are not authenticated).
 DISPLAY_FIELD_MAX = 200
@@ -131,10 +138,35 @@ def event_ts_epoch(ts: Any) -> Optional[float]:
         text = text[:-1] + '+0000'
     for fmt in ('%Y-%m-%dT%H:%M:%S.%f%z', '%Y-%m-%dT%H:%M:%S%z'):
         try:
-            return datetime.strptime(text, fmt).timestamp()
-        except ValueError:
+            return finite_epoch(datetime.strptime(text, fmt).timestamp())
+        except (ValueError, OverflowError, OSError):
             continue
     return None
+
+
+def finite_epoch(value: Any) -> Optional[float]:
+    """``value`` as a float when it is a finite number, else None (bool,
+    NaN and +/-inf are not readable times)."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    out = float(value)
+    return out if math.isfinite(out) else None
+
+
+def is_past_decision(happened: Optional[float], now: float) -> bool:
+    """Whether a decision whose event happened at ``happened`` is no longer a
+    current alert at ``now``: its time is unreadable (None or not finite),
+    more than CLOCK_SKEW_TOLERANCE_S in the future, or more than
+    STALE_AFTER_S in the past. Used by the startup reconcile of the core
+    decision recorder and by this relay's own reconcile; never by the live
+    path."""
+
+    if finite_epoch(happened) is None:
+        return True
+    if happened - now > CLOCK_SKEW_TOLERANCE_S:
+        return True
+    return now - happened > STALE_AFTER_S
 
 
 def event_time_text(ts: Any) -> str:
@@ -144,7 +176,10 @@ def event_time_text(ts: Any) -> str:
     epoch = event_ts_epoch(ts)
     if epoch is None:
         return EVENT_TIME_UNKNOWN
-    return datetime.fromtimestamp(epoch, timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    try:
+        return datetime.fromtimestamp(epoch, timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    except (ValueError, OverflowError, OSError):
+        return EVENT_TIME_UNKNOWN
 
 
 def _display_field(value: Any) -> str:
@@ -164,9 +199,7 @@ def _record_epoch(record: Mapping[str, Any]) -> Optional[float]:
 
     epoch = event_ts_epoch(record.get('event_ts'))
     if epoch is None:
-        ingest = record.get('core_ingest_epoch')
-        if isinstance(ingest, (int, float)) and not isinstance(ingest, bool):
-            epoch = float(ingest)
+        epoch = finite_epoch(record.get('core_ingest_epoch'))
     if epoch is None:
         epoch = event_ts_epoch(record.get('ts'))
     return epoch
@@ -667,9 +700,7 @@ def build_p0_alerts(record: Mapping[str, Any], basis: str, durability: str, dura
         # not in the queue): the record may be far older than the lease. Its
         # age is read from the record; a record whose time cannot be read is
         # treated as past. Never applied to the live path.
-        happened = _record_epoch(record)
-        current = time.time() if now is None else now
-        stale = happened is None or current - happened > STALE_AFTER_S
+        stale = is_past_decision(_record_epoch(record), time.time() if now is None else now)
     base['stale'] = stale
     base['presentation'] = PRESENTATION_HISTORICAL if stale else PRESENTATION_CURRENT
     out = []
