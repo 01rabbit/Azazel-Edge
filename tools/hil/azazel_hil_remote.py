@@ -21,6 +21,10 @@ from pathlib import Path
 from typing import Any
 
 PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
+# A PEM block cut by a tail/head limit: an orphan END hides everything before it, an orphan BEGIN everything after it.
+PRIVATE_KEY_TAIL_RE = re.compile(r"\A.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
+PRIVATE_KEY_HEAD_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*\Z", re.S)
+URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]*@")
 AUTH_RE = re.compile(r"(?im)^(\s*(?:authorization|proxy-authorization)\s*[:=]\s*).*$")
 BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s'\"]+")
 TOKEN_ASSIGN_RE = re.compile(r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*=)\S+")
@@ -32,7 +36,13 @@ OLLAMA_API = "http://127.0.0.1:11434"
 RUNTIME_ROOT = Path("/opt/azazel-edge")
 RUNTIME_VENV_PYTHON = RUNTIME_ROOT / "venv" / "bin" / "python"
 # Only Edge units may be restarted, and only with the explicit two-flag opt-in.
-SERVICE_RE = re.compile(r"^azazel-edge-[a-z0-9][a-z0-9-]*(?:\.service)?$")
+SERVICE_RE = re.compile(r"azazel-edge-[a-z0-9]+(?:-[a-z0-9]+)*(?:\.service)?")  # used with fullmatch only
+SESSION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+NFT_PATHS = ("/usr/sbin/nft", "/sbin/nft")  # fixed paths; nft is never resolved through PATH
+OLLAMA_NUM_PREDICT = 16  # bounded generation length per measurement
+OLLAMA_GENERATE_TIMEOUT = 180  # seconds; upper bound per measurement
+RESTART_SETTLE_SECONDS = 15  # upper bound for a restarted unit to report active
+
 # Files deployed verbatim from the checkout into /opt/azazel-edge (subset of
 # installer/internal/verify_runtime_sync.sh), used only to say whether the running
 # runtime matches the checkout under test.
@@ -43,9 +53,23 @@ RUNTIME_SYNC_FILES = (
 )
 
 
+def tail(text: Any, limit: int) -> str:
+    """Redact the whole text first, then truncate, so a limit can never split a secret past the redactor."""
+    return redact(str(text or ""))[-limit:]
+
+
+def valid_session(value: str) -> str:
+    if not SESSION_RE.fullmatch(value) or ".." in value:
+        raise argparse.ArgumentTypeError("session must match [A-Za-z0-9][A-Za-z0-9._-]* and must not contain '..'")
+    return value
+
+
 def redact(value: Any) -> Any:
     if isinstance(value, str):
         value = PRIVATE_KEY_RE.sub("[REDACTED PRIVATE KEY]", value)
+        value = PRIVATE_KEY_TAIL_RE.sub("[REDACTED PRIVATE KEY]", value)
+        value = PRIVATE_KEY_HEAD_RE.sub("[REDACTED PRIVATE KEY]", value)
+        value = URL_CREDENTIAL_RE.sub(r"\1[REDACTED]@", value)
         value = AUTH_RE.sub(r"\1[REDACTED]", value)
         value = BEARER_RE.sub(r"\1[REDACTED]", value)
         return TOKEN_ASSIGN_RE.sub(r"\1[REDACTED]", value)
@@ -90,10 +114,12 @@ def command(rec: Recorder, test_id: str, argv: list[str], timeout: int = 30) -> 
     started = time.monotonic()
     try:
         done = subprocess.run(argv, text=True, capture_output=True, timeout=timeout, check=False)
-        result = {"argv": argv, "stdout": done.stdout[-12000:], "stderr": done.stderr[-12000:], "exit_code": done.returncode,
+        result = {"argv": argv, "stdout": tail(done.stdout, 12000), "stderr": tail(done.stderr, 12000), "exit_code": done.returncode,
                   "elapsed_ms": round((time.monotonic() - started) * 1000, 3)}
     except subprocess.TimeoutExpired as exc:
-        result = {"argv": argv, "stdout": (exc.stdout or "")[-12000:], "stderr": (exc.stderr or "")[-12000:], "exit_code": 124,
+        out_text = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else exc.stdout
+        err_text = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else exc.stderr
+        result = {"argv": argv, "stdout": tail(out_text, 12000), "stderr": tail(err_text, 12000), "exit_code": 124,
                   "elapsed_ms": round((time.monotonic() - started) * 1000, 3), "timed_out": True}
     rec.emit("command", test_id=test_id, **result)
     return int(result["exit_code"]), result
@@ -163,7 +189,7 @@ def runtime_identity(repo: Path, root: Path = RUNTIME_ROOT) -> dict[str, Any]:
         return data
     if (root / ".git").exists():
         code, out, err = git(root, "rev-parse", "HEAD")
-        data["git_sha"] = out if code == 0 else f"unavailable: {err[-200:]}"
+        data["git_sha"] = out if code == 0 else f"unavailable: {tail(err, 200)}"
     else:
         data["git_sha"] = "unsupported: runtime is an installer copy without Git metadata"
     identical, different, missing = [], [], []
@@ -196,18 +222,23 @@ def provenance(repo: Path, python: dict[str, str] | None = None) -> dict[str, An
     if repo.is_dir():
         for key, argv in (("git_sha", ("rev-parse", "HEAD")), ("git_status", ("status", "--porcelain"))):
             code, out, err = git(repo, *argv)
-            data[key] = out if code == 0 else f"unavailable: {err[-300:]}"
+            data[key] = out if code == 0 else f"unavailable: {tail(err, 300)}"
     data["runtime"] = runtime_identity(repo)
     return data
+
+
+def _loopback_opener() -> urllib.request.OpenerDirector:
+    """Opener with an explicit empty proxy map: environment proxies never redirect loopback traffic."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def ollama_get(path: str, timeout: float = 5.0) -> tuple[Any, str]:
     """Read-only GET against the fixed loopback Ollama API; returns (json, error)."""
     try:
-        with urllib.request.urlopen(OLLAMA_API + path, timeout=timeout) as response:  # noqa: S310 - fixed loopback URL
+        with _loopback_opener().open(OLLAMA_API + path, timeout=timeout) as response:  # noqa: S310 - fixed loopback URL
             return json.loads(response.read().decode("utf-8", "replace") or "null"), ""
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        return None, f"{type(exc).__name__}: {exc}"
+        return None, tail(f"{type(exc).__name__}: {exc}", 300)
 
 
 def ollama_inventory() -> dict[str, Any]:
@@ -222,20 +253,26 @@ def ollama_inventory() -> dict[str, Any]:
     return result
 
 
-def ollama_generate(model: str, timeout: int = 180) -> tuple[int, dict[str, Any]]:
-    """One bounded local inference; equivalent of `ollama run MODEL PROMPT` without the CLI."""
-    body = json.dumps({"model": model, "prompt": "Reply with exactly OK.", "stream": False, "options": {"num_predict": 16}}).encode()
+def ollama_generate(model: str, timeout: int = OLLAMA_GENERATE_TIMEOUT) -> tuple[int, dict[str, Any]]:
+    """One bounded local inference; equivalent of `ollama run MODEL PROMPT` without the CLI.
+
+    keep_alive=0 asks Ollama to unload the model right after the measurement so the probe does
+    not leave a model resident in the Pi's memory.
+    """
+    timeout = min(timeout, OLLAMA_GENERATE_TIMEOUT)
+    body = json.dumps({"model": model, "prompt": "Reply with exactly OK.", "stream": False, "keep_alive": 0,
+                       "options": {"num_predict": OLLAMA_NUM_PREDICT}}).encode()
     request = urllib.request.Request(OLLAMA_API + "/api/generate", data=body, headers={"Content-Type": "application/json"}, method="POST")
     started = time.monotonic()
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed loopback URL
+        with _loopback_opener().open(request, timeout=timeout) as response:  # noqa: S310 - fixed loopback URL
             payload = json.loads(response.read().decode("utf-8", "replace"))
-        code, out = 0, {"response_tail": str(payload.get("response", ""))[-400:],
+        code, out = 0, {"response_tail": tail(payload.get("response", ""), 400),
                         **{k: payload.get(k) for k in ("total_duration", "load_duration", "eval_count", "eval_duration") if k in payload}}
     except urllib.error.HTTPError as exc:
-        code, out = 1, {"error": f"HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[-300:]}"}
+        code, out = 1, {"error": f"HTTP {exc.code}: {tail(exc.read().decode('utf-8', 'replace'), 300)}"}
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        code, out = 1, {"error": f"{type(exc).__name__}: {exc}"}
+        code, out = 1, {"error": tail(f"{type(exc).__name__}: {exc}", 300)}
     out["elapsed_ms"] = round((time.monotonic() - started) * 1000, 3)
     return code, out
 
@@ -296,7 +333,7 @@ def prepare(rec: Recorder, repo: Path, update_repo: bool, python: dict[str, str]
             if fetch_code:
                 return "failed", 2, {"reason": git_failure("fetch origin main", fetch), **steps}
             pull_code, pull = command(rec, "prepare.repository", ["git", "-C", str(repo), "pull", "--ff-only", "origin", "main"], timeout=90)
-            steps.update({"pull_exit": pull_code, "pull_output": pull["stdout"][-500:]})
+            steps.update({"pull_exit": pull_code, "pull_output": tail(pull["stdout"], 500)})
             if pull_code:
                 return "failed", 2, {"reason": git_failure("pull --ff-only origin main", pull), **steps}
         sha_code, sha = command(rec, "prepare.repository", ["git", "-C", str(repo), "rev-parse", "HEAD"])
@@ -318,12 +355,12 @@ def prepare(rec: Recorder, repo: Path, update_repo: bool, python: dict[str, str]
                 rust[name] = {"reason": "not installed"}
         ok = check_code == 0 and import_code == 0
         detail: dict[str, Any] = {"summary": f"Python dependency integrity and runtime imports checked with {interpreter}", "python": python,
-                                  "pip_check_exit": check_code, "pip_check": pip_check["stdout"][-500:], "imports_exit": import_code, "rust": rust}
+                                  "pip_check_exit": check_code, "pip_check": tail(pip_check["stdout"], 500), "imports_exit": import_code, "rust": rust}
         if not ok:
             failed = pip_check if check_code else imports
-            tail = (failed["stderr"] or failed["stdout"]).strip().splitlines()
+            last = (failed["stderr"] or failed["stdout"]).strip().splitlines()
             detail["reason"] = (f"{'pip check' if check_code else 'runtime import'} failed with {interpreter}"
-                                f" ({python['source']}): {tail[-1] if tail else 'no output'}")
+                                f" ({python['source']}): {last[-1] if last else 'no output'}")
         return ("passed" if ok else "failed", 0 if ok else 2, detail)
     rec.test("prepare.dependencies", dependencies)
 
@@ -331,7 +368,7 @@ def prepare(rec: Recorder, repo: Path, update_repo: bool, python: dict[str, str]
         if not rec.complete("prepare.repository") or not rec.complete("prepare.dependencies"):
             return "skipped", 0, {"reason": "repository or dependency readiness gate did not pass"}
         code, out = command(rec, "prepare.offline_replay", [python["path"], str(repo / "bin" / "azazel-mio-evaluate")], timeout=60)
-        return ("passed" if code == 0 else "failed", code, {"summary": "offline M.I.O. invariant replay before HIL; no network, model, or enforcement", "stdout_tail": out["stdout"][-500:]})
+        return ("passed" if code == 0 else "failed", code, {"summary": "offline M.I.O. invariant replay before HIL; no network, model, or enforcement", "stdout_tail": tail(out["stdout"], 500)})
     rec.test("prepare.offline_replay", replay)
 
     def gate() -> tuple[str, int, dict[str, Any]]:
@@ -380,36 +417,56 @@ def observer_checks(rec: Recorder, repo: Path, python: dict[str, str]) -> None:
         code, out = command(rec, "observer.retention", [python["path"], "-c", snippet, str(repo / "py"), str(work / "outcome.jsonl")])
         detail = {"summary": "observer append latency, rotation, and oversized-record drop exercised in isolated session storage", "result": out["stdout"]}
         if code:
-            tail = out["stderr"].strip().splitlines()
-            detail["reason"] = f"observer exercise failed with {python['path']}: {tail[-1] if tail else 'no output'}"
+            last = out["stderr"].strip().splitlines()
+            detail["reason"] = f"observer exercise failed with {python['path']}: {last[-1] if last else 'no output'}"
         return ("passed" if code == 0 else "failed", code, detail)
     rec.test("observer.retention_rotation_drop_backpressure", run)
+
+
+def wait_active(rec: Recorder, service: str, limit: float = RESTART_SETTLE_SECONDS) -> str:
+    """Poll `systemctl is-active` (read-only) until active or the bounded deadline passes."""
+    deadline = time.monotonic() + min(limit, RESTART_SETTLE_SECONDS)
+    while True:
+        code, out = command(rec, "reconciliation.restart", ["systemctl", "is-active", service])
+        state = out["stdout"].strip() or f"exit {code}"
+        if code == 0 and state == "active" or time.monotonic() >= deadline:
+            return state
+        time.sleep(1)
 
 
 def reconciliation(rec: Recorder, services: list[str], allow_restart: bool) -> None:
     def run() -> tuple[str, int, dict[str, Any]]:
         state = rec.directory / "reconciliation.jsonl"
         state.write_text('{"sequence":2}\n{"sequence":1}\n', encoding="utf-8")
-        result: dict[str, Any] = {"summary": "out-of-order/restart checkpoint evidence recorded; no service restart requested", "state_file": str(state)}
+        result: dict[str, Any] = {"reason": "service restart not requested (--allow-service-restart not given); only the out-of-order checkpoint file was written",
+                                  "state_file": str(state)}
         if allow_restart:
             if not services: return "failed", 2, {"reason": "--allow-service-restart requires at least one --service"}
-            rejected = [service for service in services if not SERVICE_RE.match(service)]
+            rejected = [service for service in services if not SERVICE_RE.fullmatch(service)]
             if rejected:
                 return "failed", 2, {"reason": "refusing restart of non-Edge unit(s): " + ", ".join(rejected) + "; only azazel-edge-* units are allowed"}
+            result.pop("reason")
             result["summary"] = "explicitly requested service restart evidence"
             result["services"] = {}
             for service in services:
                 # sudo -n never prompts: missing sudo rights fail visibly instead of hanging or being misreported.
                 code, out = command(rec, "reconciliation.restart", ["sudo", "-n", "systemctl", "restart", service], timeout=60)
-                state_code, state = command(rec, "reconciliation.restart", ["systemctl", "is-active", service])
-                result["services"][service] = {"exit_code": code, "stderr": out["stderr"][-300:], "active_after": state["stdout"].strip() or f"exit {state_code}"}
-            failed = {name: x for name, x in result["services"].items() if x["exit_code"] != 0}
-            if failed:
-                first = next(iter(failed.items()))
-                result["reason"] = f"restart failed for {', '.join(failed)}: {(first[1]['stderr'].strip().splitlines() or ['exit ' + str(first[1]['exit_code'])])[-1]}"
+                entry = {"exit_code": code, "stderr": tail(out["stderr"], 300)}
+                if code == 0:
+                    # exit 0 only means systemd accepted the job; require the unit to come back active.
+                    entry["active_after"] = wait_active(rec, service)
+                result["services"][service] = entry
+            problems = []
+            for name, entry in result["services"].items():
+                if entry["exit_code"] != 0:
+                    problems.append(f"{name}: restart failed: {(entry['stderr'].strip().splitlines() or ['exit ' + str(entry['exit_code'])])[-1]}")
+                elif entry["active_after"] != "active":
+                    problems.append(f"{name}: not active within {RESTART_SETTLE_SECONDS}s after restart (state: {entry['active_after']})")
+            if problems:
+                result["reason"] = "; ".join(problems)
                 return "failed", 2, result
             return "passed", 0, result
-        return "passed", 0, result
+        return "skipped", 0, result
     rec.test("restart_reconciliation", run)
 
 
@@ -418,14 +475,15 @@ def postconditions(rec: Recorder) -> None:
         result: dict[str, Any] = {"summary": "read-only independent tc/nft observation; no apply, release, or rollback command issued"}
         unobserved: list[str] = []
         # nft list needs CAP_NET_ADMIN; read it through non-interactive sudo and never count a refusal as an observation.
-        for name, argv in (("tc", ["qdisc", "show"]), ("nft", ["list", "ruleset"])):
-            tool = find_tool(name)
-            if tool:
-                code, out = command(rec, "postconditions.read_only", ([tool] if name == "tc" else ["sudo", "-n", tool]) + argv)
-                result[name] = {"exit_code": code, "observed": code == 0, "stdout_tail": out["stdout"][-400:], "stderr_tail": out["stderr"][-300:]}
+        nft = next((path for path in NFT_PATHS if os.access(path, os.X_OK)), None)
+        tc = find_tool("tc")
+        for name, argv in (("tc", [tc, "qdisc", "show"] if tc else None), ("nft", ["sudo", "-n", nft, "list", "ruleset"] if nft else None)):
+            if argv:
+                code, out = command(rec, "postconditions.read_only", argv)
+                result[name] = {"exit_code": code, "observed": code == 0, "stdout_tail": tail(out["stdout"], 400), "stderr_tail": tail(out["stderr"], 300)}
                 if code:
-                    tail = out["stderr"].strip().splitlines()
-                    unobserved.append(f"{name}: {tail[-1] if tail else 'exit ' + str(code)}")
+                    last = out["stderr"].strip().splitlines()
+                    unobserved.append(f"{name}: {last[-1] if last else 'exit ' + str(code)}")
             else:
                 result[name] = {"observed": False, "reason": "not installed"}
                 unobserved.append(f"{name}: not installed")
@@ -445,7 +503,7 @@ def doctor(rec: Recorder, repo: Path, python: dict[str, str]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=("preflight", "prepare", "bootstrap", "run", "doctor"))
-    parser.add_argument("--session", required=True)
+    parser.add_argument("--session", required=True, type=valid_session)
     parser.add_argument("--repo", default="~/Azazel-Edge")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--install-required", action="store_true")
@@ -474,7 +532,11 @@ def main(argv: list[str] | None = None) -> int:
             observer_checks(rec, repo, python)
             reconciliation(rec, args.service, args.allow_service_restart)
             postconditions(rec)
-    print(json.dumps(summary(rec, args.session, args.action, python, start), sort_keys=True))
+    result = summary(rec, args.session, args.action, python, start)
+    print(json.dumps(result, sort_keys=True))
+    # 2 = the stage could not proceed (gate/precondition); 1 = it ran but a test failed.
+    if code == 0 and any(row.get("status") == "failed" for row in result["tests"].values()):
+        code = 1
     return code
 
 

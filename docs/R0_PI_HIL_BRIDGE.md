@@ -6,11 +6,11 @@ It does not alter the Edge authority model. M.I.O. remains a shadow/replay-only,
 
 ## Safety boundary
 
-Default HIL tests are observation-only. They never install packages, pull models, clone a checkout, restart a service, or change routing, firewall, nftables, or `tc` qdiscs. `full` and `prepare` do synchronize a **clean `main` checkout** with `git fetch origin main` and `git pull --ff-only origin main` before HIL starts. A dirty checkout or a non-`main` branch blocks the run; the bridge never resets, stashes, checks out another branch, or overwrites local work. `tc qdisc show` and `nft list ruleset` are independent, read-only postcondition observations—not applications of a mechanism. `nft list ruleset` needs privileges, so it is read through `sudo -n` (never prompts); if it cannot be read, the result is recorded as **unobserved**, never as passed.
+Default HIL tests are observation-only. They never install packages, pull models, clone a checkout, restart a service, or change routing, firewall, nftables, or `tc` qdiscs. `full` and `prepare` do synchronize a **clean `main` checkout** with `git fetch origin main` and `git pull --ff-only origin main` before HIL starts. A dirty checkout or a non-`main` branch blocks the run; the bridge never resets, stashes, checks out another branch, or overwrites local work. `tc qdisc show` and `nft list ruleset` are independent, read-only postcondition observations—not applications of a mechanism. `nft list ruleset` needs privileges, so it is read through `sudo -n` (never prompts); if it cannot be read, the result is recorded as **unobserved**, never as passed. `nft` is run only from the fixed paths `/usr/sbin/nft` or `/sbin/nft`, never resolved through `PATH`.
 
 SSH uses batch mode and `StrictHostKeyChecking=yes`; establish and verify the Pi's host key yourself before use. The SSH identity is passed to OpenSSH but its contents are never read, copied, or written into the result bundle. Bearer tokens, authorization values, password-like fields, and private-key blocks are redacted.
 
-The only mutation supported is a service restart for a deliberate reconciliation test. It requires both `--allow-service-restart` and one or more explicit `--service NAME` values, accepts only `azazel-edge-*` units, and runs `sudo -n systemctl restart`; a refused or failed restart is recorded as failed. No flag in this tool can apply an nftables rule, qdisc, routing change, release, or enforcement action.
+The only mutation supported is a service restart for a deliberate reconciliation test. It requires both `--allow-service-restart` and one or more explicit `--service NAME` values, accepts only unit names that fully match `azazel-edge-<name>[.service]` (no `@`, `/`, `;`, other unit types, or repeated suffixes), and runs `sudo -n systemctl restart`. A refused or failed restart is recorded as failed, and so is a restart that returned 0 but whose unit is not `active` within 15 seconds (polled read-only with `systemctl is-active`). Without the opt-in, `restart_reconciliation` is recorded as **skipped**, not passed. No flag in this tool can apply an nftables rule, qdisc, routing change, release, or enforcement action.
 
 ## Mac prerequisites
 
@@ -24,9 +24,11 @@ No Python package is installed on either host. The stdlib-only remote runner is 
 
 - The Edge Python dependencies live in the runtime venv, not in the system interpreter. Dependency checks (`pip check`, imports), the offline replay, and the observer exercise use `--remote-python` if given, otherwise `/opt/azazel-edge/venv/bin/python` when it exists, otherwise `python3`. The report states which interpreter was used and why.
 - HIL validates the **checkout** (`--remote-repo`), not the deployed `/opt/azazel-edge` copy that the systemd services run. The report lists both: the checkout Git SHA, and for `/opt/azazel-edge` its Git SHA when it has one (installer copies do not, shown as unsupported) plus whether a fixed set of deployed files is identical to the checkout.
-- Ollama runs in Docker on the Pi, so it is detected and measured through the loopback HTTP API at `127.0.0.1:11434` (`/api/version`, `/api/tags`, `/api/ps`, and one bounded `/api/generate` per installed model). The host `ollama` CLI is not required. Models are never pulled.
+- Ollama runs in Docker on the Pi, so it is detected and measured through the loopback HTTP API at `127.0.0.1:11434` (`/api/version`, `/api/tags`, `/api/ps`, and one bounded `/api/generate` per installed model, limited to 16 generated tokens and a 180-second timeout). The host `ollama` CLI is not required, environment proxy settings are ignored for this loopback traffic, and models are never pulled. The generate request sets `keep_alive: 0`, so Ollama unloads the measured model right after the measurement; a model that the Edge AI agent had loaded may therefore need to be reloaded on its next request.
 
 ## Exact workflow
+
+Session IDs must match `[A-Za-z0-9][A-Za-z0-9._-]*` and must not contain `..`. `--target` and `--user` must not start with `-`.
 
 Run from the repository root. Replace the target and user with the Pi's values. `run` requires the preparation gate from the same session, so `full` is the normal entrypoint.
 
@@ -34,7 +36,19 @@ Run from the repository root. Replace the target and user with the Pi's values. 
 tools/hil/azazel-hil --target pi5.local --user azazel full
 ```
 
-`full` performs preflight, repository/dependency preparation, bootstrap checks, and R0 tests, then writes a single paste-ready report. It prints the session ID first. If a stage fails (for example the preparation gate is blocked or SSH drops), it prints the session ID, the stage, and the reason, still collects what was recorded, and marks the report `INCOMPLETE` before exiting non-zero:
+`full` performs preflight, repository/dependency preparation, bootstrap checks, and R0 tests, then writes a single paste-ready report. It prints the session ID first. If a stage fails (for example the preparation gate is blocked or SSH drops), it prints the session ID, the stage, and the reason, still collects what was recorded, and marks the report `INCOMPLETE` before exiting non-zero. Rerunning `collect` for a session replaces that session's previous report and raw copy.
+
+`full` exit status:
+
+| Exit | Meaning |
+|---:|---|
+| 0 | completed: every required test reported, nothing failed or unobserved |
+| 1 | failed: at least one test failed (report outcome `FAILED`) |
+| 2 | stopped: a stage could not proceed (for example the preparation gate is blocked) |
+| 3 | incomplete: nothing failed, but evidence is missing (an `unobserved` observation, a missing required test, or no events) |
+| 255 | SSH/SCP transport failure (from OpenSSH) |
+
+
 
 ```bash
 tools/hil/azazel-hil --target pi5.local --user azazel full
@@ -69,10 +83,10 @@ tools/hil/azazel-hil --target pi5.local --user azazel --session r0-20260829T0100
 - Pi OS/kernel/CPU/RAM/swap/disk/thermal, Python/Rust availability, Ollama API version and model inventory, checkout SHA/status, `/opt/azazel-edge` identity, and current named Edge service state.
 - Bounded local inference profiles for `qwen3.5:0.8b` and `qwen3.5:2b`: command exit status, latency, before/after memory and temperature. Missing models are **skipped**—the bridge never downloads one.
 - Isolated observer append timing, rotation at a small bound, oversized-record drop, and write/backpressure-bound behavior. It does not attach a daemon to the live control path.
-- Restart/reconciliation checkpoint evidence and out-of-order-record handling.
+- Restart/reconciliation: without `--allow-service-restart` only an out-of-order checkpoint file is written and the test is **skipped**; with it, restart and post-restart `active` state evidence.
 - Read-only `tc` and `nft` host observations. A successful mechanism command is not treated as postcondition proof; those observations are retained separately.
 
-Every command writes timestamp, argv, stdout/stderr tail, exit status, test ID, and elapsed time to JSONL. `collect` copies raw session artifacts to the Mac and generates `CHATGPT_PASTE.md`.
+Every command writes timestamp, argv, stdout/stderr tail, exit status, test ID, and elapsed time to JSONL. Output is redacted (private-key blocks including truncated ones, bearer/authorization values, password-like assignments, and `scheme://user:password@` credentials) before it is truncated. `collect` copies raw session artifacts to the Mac and generates `CHATGPT_PASTE.md`.
 
 ## Optional disruptive reconciliation test
 
