@@ -114,15 +114,21 @@ if [[ "${ENABLE_APP_STACK}" == "1" && "${ENABLE_SERVICES:-1}" == "1" ]]; then
   selftest_rc=0
   "${REPO_ROOT}/bin/azazel-edge-selftest" || selftest_rc=$?
   echo "[all/9] Install the periodic selftest timer"
+  timer_rc=0
   if [[ "$(uname -m)" == "aarch64" ]]; then
-    ENABLE_SERVICES=1 "${REPO_ROOT}/installer/internal/install_selftest_timer.sh"
+    ENABLE_SERVICES=1 "${REPO_ROOT}/installer/internal/install_selftest_timer.sh" || timer_rc=$?
   else
     echo "NOTICE: the selftest timer is not installed: install_selftest_timer.sh supports aarch64 (Raspberry Pi) only, and this is $(uname -m)."
   fi
+  # Both results are reported before the exit, whichever failed.
   if [[ "${selftest_rc}" -ne 0 ]]; then
     echo "ERROR: the selftest found a critical failure (listed above; details in /var/log/azazel-edge/selftest_latest.json). The installation finished, but the device is not ready." >&2
-    exit 1
   fi
+  if [[ "${timer_rc}" -ne 0 ]]; then
+    echo "ERROR: the periodic selftest timer was not installed (install_selftest_timer.sh exit ${timer_rc}, output above). Re-run: sudo ENABLE_SERVICES=1 installer/internal/install_selftest_timer.sh" >&2
+  fi
+  [[ "${selftest_rc}" -eq 0 ]] || exit 1
+  [[ "${timer_rc}" -eq 0 ]] || exit "${timer_rc}"
 else
   echo "[all/8] Skip selftest and its timer (need ENABLE_APP_STACK=1 and ENABLE_SERVICES=1)"
 fi

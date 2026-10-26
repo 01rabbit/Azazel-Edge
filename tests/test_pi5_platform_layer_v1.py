@@ -426,6 +426,27 @@ def test_an_earlier_profile_passphrase_is_kept_unless_it_is_the_old_default(tmp_
     assert "my-own-passphrase" not in given.stdout + given.stderr
 
 
+@LINUX_ONLY
+def test_an_unreadable_profile_passphrase_stops_instead_of_replacing_it(tmp_path):
+    # The AP profile exists but nmcli cannot read its passphrase: fail closed
+    # (like nm_profile_exists), nothing generated or saved, the cause shown.
+    psk_file = tmp_path / "etc" / "internal-ap.psk"
+    fns = "".join(_function(NETWORK, n) for n in ("nm_profile_exists", "check_ap_psk", "generate_ap_psk", "save_ap_psk",
+                                                  "resolve_ap_psk"))
+    stub = ('nmcli() { case "$*" in "-t -f NAME con show") echo lan-wlan0-ap ;; '
+            '*802-11-wireless-security.psk*) echo "Error: secrets were required, but not provided." >&2; return 4 ;; esac; }\n')
+    script = (f"AP_PSK=''\nAP_PSK_FILE={str(psk_file)!r}\nAP_PSK_OLD_DEFAULT=ChangeMe1234\nWLAN_AP_CONN=lan-wlan0-ap\n"
+              "chown() { :; }\n" + stub + fns + 'resolve_ap_psk\necho "source=$AP_PSK_SOURCE"\n')
+    res = _bash(script)
+    assert res.returncode == 1 and "source=" not in res.stdout
+    assert "could not read the passphrase of the existing AP profile lan-wlan0-ap" in res.stderr
+    assert "secrets were required" in res.stderr  # nmcli's own message
+    assert not psk_file.exists()
+    # Without a profile a new one is still generated.
+    gen = _resolve(tmp_path, {"AP_PSK": ""}, None)
+    assert gen.returncode == 0 and "source=generated" in gen.stdout
+
+
 def test_the_passphrase_is_never_echoed_by_the_installer():
     src = NETWORK.read_text(encoding="utf-8")
     for line in src.splitlines():
@@ -828,7 +849,11 @@ nmcli() {{
     "-t -f NAME,DEVICE,TYPE,ACTIVE con show") : ;;
     "con load "*) : ;;  # nmcli 1.52.1 exits 0 even when the file is not loaded
     "-s --escape no -g 802-11-wireless-security.psk con show 11111111-2222-4333-8444-555555555555")
-      if [[ -z {fail!r} ]]; then printf '%s\n' "$AP_PSK"; else echo something-else; fi ;;
+      case {fail!r} in
+        "") printf '%s\n' "$AP_PSK" ;;
+        nmcli-error) echo "Error: NetworkManager is not running." >&2; return 8 ;;
+        *) echo something-else ;;
+      esac ;;
   esac
 }}
 chown() {{ printf 'chown %s\\n' "$*" >>"$LOG"; }}
@@ -878,6 +903,51 @@ def test_a_failed_reload_stops_the_install(tmp_path):
     res, _, log = _bridge(tmp_path, "another-passphrase", fail="1")
     assert res.returncode == 1 and "read back differs" in res.stderr
     assert "another-passphrase" not in log.read_text() + res.stderr
+
+
+@LINUX_ONLY
+def test_a_failing_read_back_stops_the_install(tmp_path):
+    # The read-back nmcli itself fails (NetworkManager gone, nmcli error):
+    # that is not taken as a match; the install stops with the same error.
+    res, _, log = _bridge(tmp_path, "another-passphrase", fail="nmcli-error")
+    assert res.returncode == 1 and "read back differs" in res.stderr
+    assert "-s --escape no -g 802-11-wireless-security.psk con show" in log.read_text()
+    assert "another-passphrase" not in log.read_text() + res.stdout + res.stderr
+
+
+def _check_psk_bytes(raw: bytes) -> subprocess.CompletedProcess:
+    fn = _function(NETWORK, "check_ap_psk")
+    env = {**os.environ, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    env_b = {k.encode(): v.encode() for k, v in env.items()}
+    env_b[b"PSK"] = raw
+    return subprocess.run(["bash", "-c", "AP_PSK_OLD_DEFAULT=ChangeMe1234\n" + fn + 'check_ap_psk "$PSK"\necho passed\n'],
+                          env=env_b, capture_output=True, timeout=30)
+
+
+@pytest.mark.parametrize("raw", [b"abcd\nefgh", b"abcdefgh\n", b"abcdefgh\r", b"abcd\r\nefgh", b"\nabcdefgh"])
+def test_a_passphrase_with_a_line_break_is_refused_early(raw):
+    res = _check_psk_bytes(raw)
+    assert res.returncode == 1 and b"passed" not in res.stdout
+    assert b"line break" in res.stderr
+    assert raw.strip() not in res.stdout + res.stderr
+
+
+@LINUX_ONLY
+@pytest.mark.parametrize("profile_psk,kept", [
+    ("\u00e9" * 4, True),           # 4 characters, 8 bytes: kept
+    ("\u00e9" * 32, False),         # 32 characters, 64 bytes: not kept
+    ("a" * 61 + "\u00e9", True),    # 63 bytes: kept
+])
+def test_an_earlier_profile_passphrase_is_measured_in_bytes(tmp_path, profile_psk, kept):
+    psk_file = tmp_path / "etc" / "internal-ap.psk"
+    res = _resolve(tmp_path, {"AP_PSK": "", "LC_ALL": "C.UTF-8"}, profile_psk)
+    assert res.returncode == 0, res.stderr
+    saved = psk_file.read_text(encoding="utf-8").strip()
+    if kept:
+        assert saved == profile_psk and "source=kept" in res.stdout
+    else:
+        assert saved != profile_psk and "source=generated" in res.stdout
+    assert profile_psk not in res.stdout + res.stderr
 
 
 def test_no_nmcli_output_is_piped_into_grep_q():

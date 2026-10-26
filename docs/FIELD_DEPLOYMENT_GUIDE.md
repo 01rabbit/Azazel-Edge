@@ -25,16 +25,24 @@ controls. Each item includes expected outcome and fallback note.
   error in `journalctl -u azazel-edge-epd-refresh`; check that
   `/dev/spidev0.0` exists (SPI enabled, rebooted).
 
-- [ ] Confirm token material exists (encrypted storage is set up by default
-  and the installer must run on an interactive terminal for its passphrase;
-  skip this and the next check only if it was installed with `SKIP_LUKS=1`):
-  `ls /etc/azazel-edge/secrets/tokens/`
-  Expected: token files are present.
-  If something goes wrong: restore from secure backup.
+- [ ] Confirm the Web UI token exists (`0640 root:azazel-web`; reading it
+  needs sudo):
+  `sudo ls -l /etc/azazel-edge/web_token.txt`
+  Expected: the file is present, non-empty, mode `-rw-r-----`, owner `root`,
+  group `azazel-web`.
+  If something goes wrong: re-run `sudo /opt/azazel-edge/provision_web_token.sh`
+  (it keeps an existing token) or restore from secure backup.
 
-- [ ] Confirm encrypted secrets mount:
-  `ls /dev/mapper/azazel-secrets`
-  Expected: mapper device exists.
+- [ ] Confirm encrypted secrets mount (encrypted storage is set up by default
+  and the installer must run on an interactive terminal for its passphrase;
+  skip this check only if it was installed with `SKIP_LUKS=1`):
+  `ls /dev/mapper/azazel-secrets` and
+  `sudo ls /etc/azazel-edge/secrets/tokens/`
+  Expected: the mapper device exists. `tokens/` holds a copy of
+  `web_token.txt` and `mattermost-command-token` if they existed when
+  `install_encrypted_storage.sh` last ran (it copies only those two). If the
+  encrypted storage was set up before the tokens were made, `tokens/` is
+  empty; that is not a fault.
   If something goes wrong: unlock and mount encrypted volume before transport.
 
 - [ ] Run SD/media selftest:
@@ -104,9 +112,12 @@ controls. Each item includes expected outcome and fallback note.
   Expected: YELLOW is acceptable for degraded uplink.
   If something goes wrong: proceed to controlled diagnostics.
 
-- [ ] Open dashboard `http://<pi-ip>:8080`.
+- [ ] Open dashboard `https://<pi-ip>/` from the internal LAN (the first
+  time with `https://<pi-ip>/?token=<token>`; see OPERATOR_GUIDE.md).
   Expected: posture and action guidance visible.
-  If something goes wrong: test local bind and token policy.
+  If something goes wrong: check `systemctl status nginx azazel-edge-web`,
+  that the browser is on the internal LAN (the uplink side is refused), and
+  the token.
 
 - [ ] Post STATUS_CARD in visible operator location.
   Expected: disclosure and quick action guidance available.
