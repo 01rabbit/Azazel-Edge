@@ -38,4 +38,5 @@ Total pipeline p95: 0.226 ms
 
 - This suite validates deterministic pipeline behavior under software-only EVE replay.
 - It does not claim inline forwarding throughput, live Suricata capture capacity, nftables/tc enforcement latency, OpenCanary redirect realism, or co-located Ollama/Mattermost performance.
+- The `arp_spoof` session replays SID 9901211 from the corpus. A real Suricata 7 never emits it: the rule is disabled because Suricata has no ARP detection, and the ARP spoof detection method is not decided yet.
 - Power and startup hardware benchmarks must be run on Raspberry Pi hardware-in-the-loop plans.

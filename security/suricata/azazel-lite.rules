@@ -6,24 +6,30 @@ alert tcp any any -> $HOME_NET [12222,18080] (msg:"AZAZEL OPENCANARY repeated ac
 # AZAZEL-EDGE DISASTER SHELTER THREAT RULES
 # SID range: 9901201-9901299
 # Context: Emergency shelter Wi-Fi, 100-person scale
-# Covers: disaster phishing, fake AP, ARP spoofing, port scan
+# Covers: disaster phishing, fake AP, port scan, DNS exfil/tunnel, C2 beacon
+# (ARP spoofing: see the disabled rule below)
 # ============================================================
 
 # --- Fake captive portal / phishing ---
-alert http any any -> $HOME_NET any (msg:"AZAZEL DISASTER phishing - fake government domain"; content:"gov."; http_host; nocase; content:"login"; http_uri; nocase; flow:to_client; classtype:social-engineering; sid:9901201; rev:1;)
-alert http any any -> $HOME_NET any (msg:"AZAZEL DISASTER phishing - fake MyNumber portal"; content:"mynumber"; http_host; nocase; flow:to_client; classtype:social-engineering; sid:9901202; rev:1;)
-alert http any any -> $HOME_NET any (msg:"AZAZEL DISASTER phishing - fake disaster relief site"; content:"saigai"; http_host; nocase; flow:to_client; classtype:social-engineering; sid:9901203; rev:1;)
+alert http $HOME_NET any -> any any (msg:"AZAZEL DISASTER phishing - fake government domain"; flow:established,to_server; http.host; content:"gov."; http.uri; content:"login"; nocase; classtype:social-engineering; sid:9901201; rev:2;)
+alert http $HOME_NET any -> any any (msg:"AZAZEL DISASTER phishing - fake MyNumber portal"; flow:established,to_server; http.host; content:"mynumber"; classtype:social-engineering; sid:9901202; rev:2;)
+alert http $HOME_NET any -> any any (msg:"AZAZEL DISASTER phishing - fake disaster relief site"; flow:established,to_server; http.host; content:"saigai"; classtype:social-engineering; sid:9901203; rev:2;)
 
 # --- ARP spoofing / gateway impersonation ---
-alert arp any any -> any any (msg:"AZAZEL ARP spoof - gateway impersonation detected"; arp.opcode:2; arp.spa:!$HOME_NET; classtype:bad-unknown; sid:9901211; rev:1;)
+# DISABLED: Suricata cannot express this rule. Suricata 7 has no ARP
+# detection ("protocol arp cannot be used in a signature"), so the line made
+# `suricata -T` fail. It is kept commented out so SID 9901211 stays reserved
+# for scorer / attack_mapping / corpus; there is currently no other detector
+# that emits it. ARP spoof detection needs a non-Suricata sensor.
+# alert arp any any -> any any (msg:"AZAZEL ARP spoof - gateway impersonation detected"; arp.opcode:2; arp.spa:!$HOME_NET; classtype:bad-unknown; sid:9901211; rev:1;)
 
 # --- Rapid port scanning from internal ---
 alert tcp $HOME_NET any -> any any (msg:"AZAZEL SCAN internal host rapid port scan"; flags:S; threshold:type both, track by_src, count 30, seconds 10; classtype:network-scan; sid:9901221; rev:1;)
 alert tcp any any -> $HOME_NET any (msg:"AZAZEL SCAN external rapid port scan on shelter network"; flags:S; threshold:type both, track by_src, count 30, seconds 10; classtype:network-scan; sid:9901222; rev:1;)
 
 # --- DNS exfiltration / suspicious DNS tunnel ---
-alert dns any any -> any any (msg:"AZAZEL DNS exfil - unusually long DNS query"; dns.query; content:"."; dsize:>100; classtype:policy-violation; sid:9901231; rev:1;)
-alert dns any any -> any any (msg:"AZAZEL DNS tunnel - high-frequency DNS queries"; dns.query; threshold:type both, track by_src, count 50, seconds 10; classtype:policy-violation; sid:9901232; rev:1;)
+alert dns any any -> any any (msg:"AZAZEL DNS exfil - unusually long DNS query"; dns.query; content:"."; bsize:>100; classtype:policy-violation; sid:9901231; rev:2;)
+alert dns any any -> any any (msg:"AZAZEL DNS tunnel - high-frequency DNS queries"; dns.query; bsize:>0; threshold:type both, track by_src, count 50, seconds 10; classtype:policy-violation; sid:9901232; rev:2;)
 
 # --- Credential harvesting patterns ---
 alert http any any -> $HOME_NET any (msg:"AZAZEL CREDENTIAL harvest - password field in GET request"; content:"password="; http_uri; nocase; flow:to_server; classtype:policy-violation; sid:9901241; rev:1;)
@@ -32,4 +38,4 @@ alert http any any -> $HOME_NET any (msg:"AZAZEL CREDENTIAL harvest - password f
 alert tcp any any -> $HOME_NET 22 (msg:"AZAZEL SSH brute-force - repeated auth failures"; flags:S; flow:to_server; threshold:type both, track by_src, count 10, seconds 60; classtype:attempted-admin; sid:9901261; rev:1;)
 
 # --- C2 beacon patterns (disaster APT) ---
-alert http $HOME_NET any -> any any (msg:"AZAZEL C2 beacon - periodic small HTTP POST"; content:"POST"; http_method; dsize:<200; threshold:type both, track by_src, count 10, seconds 60; classtype:trojan-activity; sid:9901251; rev:1;)
+alert http $HOME_NET any -> any any (msg:"AZAZEL C2 beacon - periodic small HTTP POST"; flow:established,to_server; http.method; content:"POST"; http.content_len; pcre:"/^1?[0-9]{1,2}$/"; threshold:type both, track by_src, count 10, seconds 60; classtype:trojan-activity; sid:9901251; rev:2;)
