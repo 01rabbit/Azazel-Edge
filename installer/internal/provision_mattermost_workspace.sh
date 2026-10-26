@@ -78,17 +78,37 @@ api_call() {
   rm -f "${headers_file}" "${body_file}"
 }
 
+# Set KEY=VALUE in the env file $1 (the bot token and the webhook URL among
+# them): the first KEY= line is replaced in place, later ones are dropped, and
+# a missing key is appended. The new content goes through write_private_file,
+# so the file is 0600 from its first byte (Edge#477; formerly `touch` and
+# `sed -i`/`>>` under the default umask). The value reaches awk through the
+# environment, not -v, so a backslash or '#' in it is written as is.
 upsert_env() {
   local file="$1"
   local key="$2"
   local value="$3"
-  install -d -m 0755 "$(dirname "${file}")"
-  touch "${file}"
-  if grep -q "^${key}=" "${file}" 2>/dev/null; then
-    sed -i "s#^${key}=.*#${key}=${value}#" "${file}"
-  else
-    printf '%s=%s\n' "${key}" "${value}" >>"${file}"
+  local current="" updated=""
+  install -d -m 0755 "$(dirname -- "${file}")"
+  # Read first: a file that cannot be read stops here instead of being
+  # replaced by one holding only this key.
+  if [[ -e "${file}" || -L "${file}" ]]; then
+    if ! current="$(cat -- "${file}" && printf x)"; then
+      echo "[ERROR] could not read ${file}" >&2
+      return 1
+    fi
+    current="${current%x}"
   fi
+  if ! updated="$(printf '%s' "${current}" | UPSERT_KEY="${key}" UPSERT_LINE="${key}=${value}" awk '
+    BEGIN { prefix = ENVIRON["UPSERT_KEY"] "="; line = ENVIRON["UPSERT_LINE"] }
+    index($0, prefix) == 1 { if (!done) { print line; done = 1 } next }
+    { print }
+    END { if (!done) print line }
+  ' && printf x)"; then
+    echo "[ERROR] could not update ${file}" >&2
+    return 1
+  fi
+  printf '%s' "${updated%x}" | write_private_file "${file}"
 }
 
 login_admin() {

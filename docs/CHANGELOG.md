@@ -46,6 +46,31 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     exit 2; nothing copied, unlinked or carried), and
     `setup_agent_account.sh` prints a NOTICE with the manual steps. Other
     link errors still stop with the error.
+- More hardening from Edge#477:
+  - Sensors: `install_sensors.sh` creates the `azazel` account the netflow
+    and snmp units run as (`setup_sensor_account.sh`: system user and group,
+    `nologin`, no home; an existing `azazel` that is not such an account,
+    such as a login account, stops the script).
+  - Rust core: the apply path starts `nft`/`tc` by absolute path from
+    `/usr/sbin`, `/usr/bin`, `/sbin`, `/bin` with the environment cleared
+    (`LC_ALL=C`, `LANG=C`, a fixed `PATH`), as the release path does. The
+    commands applied are unchanged; any other `argv[0]` is refused.
+  - Ollama: `docker-compose.ollama.yml` publishes 11434 on `127.0.0.1` only
+    (every client is on the host).
+  - Installer: `azazel_edge_web/auth.py`, `io_helpers.py`,
+    `py/azazel_edge/_util.py` and the other modules the installed code
+    imports (`aggregator`, `audit_review`, `deception_*`, `decision_layers`,
+    `fabric_view`, `i18n`, `policy`, `snapshot_model`, all of `sensors/`),
+    and every Web UI template and static file, are installed and compared by
+    `verify_runtime_sync.sh`. A test checks the installer against the
+    package's modules.
+  - `wifi_connect.py` run by hand: `--passphrase` is refused; the
+    passphrase is read from stdin with `--passphrase-stdin`. Every nmcli
+    call runs under `LC_ALL=C.UTF-8`, so the UUID read from nmcli's message
+    does not depend on the device's locale.
+  - `provision_mattermost_workspace.sh`: `upsert_env` (the bot token, the
+    webhook URL) writes `/etc/default/azazel-edge-web` 0600 from creation
+    through `write_private_file`, instead of `touch` and `sed -i`/`>>`.
 
 ### Changed
 

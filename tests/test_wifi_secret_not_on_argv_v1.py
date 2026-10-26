@@ -530,3 +530,116 @@ def test_an_unsafe_lock_file_refuses_the_connect(monkeypatch, secret_base, priva
 def test_the_lock_lives_under_run():
     src = (ROOT / "py" / "azazel_edge_control" / "wifi_connect.py").read_text(encoding="utf-8")
     assert 'NM_CONNECT_LOCK_PATH = "/run/azazel-edge-wifi-connect.lock"' in src
+
+
+# ------------------------------------------- locale and the manual CLI (#477)
+
+class _EnvRecorder:
+    """Wraps FakeNmcli and keeps the env= each nmcli call was given."""
+
+    def __init__(self, fake):
+        self.fake = fake
+        self.envs: list = []
+
+    def __call__(self, cmd, *args, **kwargs):
+        if list(cmd)[:1] == ["nmcli"]:
+            self.envs.append((list(cmd), kwargs.get("env")))
+        return self.fake(cmd, *args, **kwargs)
+
+
+@pytest.mark.parametrize("saved", [False, True])
+def test_every_nmcli_call_runs_with_the_c_locale(monkeypatch, secret_base, saved):
+    monkeypatch.setenv("LANG", "ja_JP.UTF-8")
+    monkeypatch.setenv("LC_MESSAGES", "ja_JP.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "ja")
+    rec = _EnvRecorder(FakeNmcli(saved=saved))
+    monkeypatch.setattr(wifi_connect.subprocess, "run", rec)
+    assert wifi_connect.connect_nm("wlan-fake0", FAKE_SSID, "WPA2", PLAIN, True) == {"ok": True}
+    assert rec.envs
+    for cmd, env in rec.envs:
+        assert env is not None, cmd
+        assert env["LC_ALL"] == "C.UTF-8" and env["LANG"] == "C.UTF-8", cmd
+        assert "LANGUAGE" not in env and "LC_MESSAGES" not in env, cmd
+        assert env.get("PATH") == os.environ.get("PATH"), cmd
+
+
+def test_every_nmcli_subprocess_call_in_the_source_passes_the_locale_env():
+    import ast
+
+    src = (ROOT / "py" / "azazel_edge_control" / "wifi_connect.py").read_text(encoding="utf-8")
+    checked = 0
+    for node in ast.walk(ast.parse(src)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "run"):
+            continue
+        if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess"):
+            continue
+        first = node.args[0] if node.args else None
+        runs_nmcli = (
+            isinstance(first, ast.List) and first.elts and isinstance(first.elts[0], ast.Constant)
+            and first.elts[0].value == "nmcli"
+        ) or (isinstance(first, ast.Name) and first.id in ("cmd", "add_cmd") and "nmcli" in ast.get_source_segment(
+            src, node) + _assignment_of(src, node, first.id))
+        if not runs_nmcli:
+            continue
+        checked += 1
+        env = [k.value for k in node.keywords if k.arg == "env"]
+        assert env and ast.unparse(env[0]) == "_nmcli_env()", f"line {node.lineno}"
+    assert checked >= 15
+
+
+def _assignment_of(src: str, call, name: str) -> str:
+    """The text of the last `name = [...]` before `call` (to tell an nmcli
+    argv held in a variable from another command's)."""
+    import ast
+
+    best = ""
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Assign) and node.lineno < call.lineno and any(
+                isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            if call.lineno - node.lineno < 40:
+                best = ast.get_source_segment(src, node) or ""
+    return best
+
+
+def test_the_uuid_of_a_new_profile_is_read_from_the_c_locale_message(monkeypatch, secret_base):
+    rec = _EnvRecorder(FakeNmcli(saved=False))
+    monkeypatch.setattr(wifi_connect.subprocess, "run", rec)
+    assert wifi_connect.connect_nm("wlan-fake0", FAKE_SSID, "WPA2", PLAIN, True) == {"ok": True}
+    (up,) = rec.fake.argv_with("nmcli", "con", "up")
+    assert up[3:5] == ["uuid", FAKE_UUID]
+
+
+def test_the_cli_refuses_a_passphrase_on_argv_without_echoing_it(monkeypatch, capsys):
+    called = []
+    monkeypatch.setattr(wifi_connect, "connect_wifi", lambda *a, **k: called.append(a) or {"ok": True})
+    for argv in (["example-ssid", "--passphrase", PLAIN], [f"--passphrase={PLAIN}", "example-ssid"]):
+        assert wifi_connect.main(argv) == 2
+        err = capsys.readouterr().err
+        assert "--passphrase-stdin" in err and PLAIN not in err
+    assert called == []
+
+
+@pytest.mark.parametrize("line, expected", [(PLAIN + "\n", PLAIN), (PLAIN + "\r\n", PLAIN), (PLAIN, PLAIN),
+                                            (" " + PLAIN + " \n", " " + PLAIN + " "), ("\n", None)])
+def test_the_cli_reads_the_passphrase_from_stdin(monkeypatch, capsys, line, expected):
+    import io
+
+    called = []
+    monkeypatch.setattr(wifi_connect, "connect_wifi", lambda *a: called.append(a) or {"ok": True})
+    assert wifi_connect.main(["example-ssid", "--security", "WPA2", "--passphrase-stdin"], stdin=io.StringIO(line)) == 0
+    assert called == [("example-ssid", "WPA2", expected, False)]
+    assert PLAIN not in capsys.readouterr().out
+
+
+def test_the_cli_without_the_stdin_flag_passes_no_passphrase(monkeypatch, capsys):
+    import io
+
+    called = []
+    monkeypatch.setattr(wifi_connect, "connect_wifi", lambda *a: called.append(a) or {"ok": True})
+    assert wifi_connect.main(["example-ssid", "--persist"], stdin=io.StringIO(PLAIN + "\n")) == 0
+    assert called == [("example-ssid", "UNKNOWN", None, True)]
+
+
+def test_the_cli_has_no_passphrase_argument():
+    src = (ROOT / "py" / "azazel_edge_control" / "wifi_connect.py").read_text(encoding="utf-8")
+    assert 'add_argument("--passphrase"' not in src and "args.passphrase," not in src

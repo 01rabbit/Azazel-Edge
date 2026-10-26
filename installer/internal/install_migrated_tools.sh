@@ -81,13 +81,19 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge/dummy_eve.py" /opt/azazel-edge/py/aza
 install -m 0644 "$REPO_ROOT/py/azazel_edge/opencanary_redirect.py" /opt/azazel-edge/py/azazel_edge/opencanary_redirect.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/runbooks.py" /opt/azazel-edge/py/azazel_edge/runbooks.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge/runbook_review.py" /opt/azazel-edge/py/azazel_edge/runbook_review.py
-install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/__init__.py" /opt/azazel-edge/py/azazel_edge/sensors/__init__.py
-install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/wifi_scanner.py" /opt/azazel-edge/py/azazel_edge/sensors/wifi_scanner.py
-install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/wifi_channel_scanner.py" /opt/azazel-edge/py/azazel_edge/sensors/wifi_channel_scanner.py
-install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/system_metrics.py" /opt/azazel-edge/py/azazel_edge/sensors/system_metrics.py
-install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/network_analytics.py" /opt/azazel-edge/py/azazel_edge/sensors/network_analytics.py
-install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/network_health.py" /opt/azazel-edge/py/azazel_edge/sensors/network_health.py
-install -m 0644 "$REPO_ROOT/py/azazel_edge/sensors/noc_monitor.py" /opt/azazel-edge/py/azazel_edge/sensors/noc_monitor.py
+# Imported by the installed modules above or started by an installed launcher
+# (Edge#477; tests/test_installer_module_coverage_477_v1.py keeps this list
+# complete).
+install -m 0644 "$REPO_ROOT/py/azazel_edge/_util.py" /opt/azazel-edge/py/azazel_edge/_util.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/aggregator.py" /opt/azazel-edge/py/azazel_edge/aggregator.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/audit_review.py" /opt/azazel-edge/py/azazel_edge/audit_review.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/deception_effectiveness_client.py" /opt/azazel-edge/py/azazel_edge/deception_effectiveness_client.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/deception_shadow.py" /opt/azazel-edge/py/azazel_edge/deception_shadow.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/decision_layers.py" /opt/azazel-edge/py/azazel_edge/decision_layers.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/fabric_view.py" /opt/azazel-edge/py/azazel_edge/fabric_view.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/i18n.py" /opt/azazel-edge/py/azazel_edge/i18n.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/policy.py" /opt/azazel-edge/py/azazel_edge/policy.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge/snapshot_model.py" /opt/azazel-edge/py/azazel_edge/snapshot_model.py
 
 for package in \
   arbiter \
@@ -100,6 +106,7 @@ for package in \
   integrations \
   knowledge \
   notify \
+  sensors \
   sigma \
   sot \
   triage \
@@ -129,12 +136,10 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge_runbook_broker.py" /opt/azazel-edge/p
 
 echo "[6/16] Install WebUI and EPD modules"
 install -m 0644 "$REPO_ROOT/azazel_edge_web/app.py" /opt/azazel-edge/azazel_edge_web/app.py
-install -m 0644 "$REPO_ROOT/azazel_edge_web/static/app.js" /opt/azazel-edge/azazel_edge_web/static/app.js
-install -m 0644 "$REPO_ROOT/azazel_edge_web/static/ops_comm.js" /opt/azazel-edge/azazel_edge_web/static/ops_comm.js
-install -m 0644 "$REPO_ROOT/azazel_edge_web/static/ops_comm.css" /opt/azazel-edge/azazel_edge_web/static/ops_comm.css
-install -m 0644 "$REPO_ROOT/azazel_edge_web/static/style.css" /opt/azazel-edge/azazel_edge_web/static/style.css
-install -m 0644 "$REPO_ROOT/azazel_edge_web/templates/index.html" /opt/azazel-edge/azazel_edge_web/templates/index.html
-install -m 0644 "$REPO_ROOT/azazel_edge_web/templates/ops_comm.html" /opt/azazel-edge/azazel_edge_web/templates/ops_comm.html
+install -m 0644 "$REPO_ROOT/azazel_edge_web/auth.py" /opt/azazel-edge/azazel_edge_web/auth.py
+install -m 0644 "$REPO_ROOT/azazel_edge_web/io_helpers.py" /opt/azazel-edge/azazel_edge_web/io_helpers.py
+install -m 0644 "$REPO_ROOT/azazel_edge_web/static/"*.css "$REPO_ROOT/azazel_edge_web/static/"*.js /opt/azazel-edge/azazel_edge_web/static/
+install -m 0644 "$REPO_ROOT/azazel_edge_web/templates/"*.html /opt/azazel-edge/azazel_edge_web/templates/
 install -m 0644 "$REPO_ROOT/py/azazel_edge_menu.py" /opt/azazel-edge/py/azazel_edge_menu.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge_status.py" /opt/azazel-edge/py/azazel_edge_status.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge_epd.py" /opt/azazel-edge/py/azazel_edge_epd.py

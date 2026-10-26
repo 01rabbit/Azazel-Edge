@@ -244,13 +244,9 @@ impl ReleaseCommandRunner for SystemReleaseCommandRunner {
             return Err(format!("release command rejected by allowlist: {argv:?}"));
         }
         let binary = resolve_trusted_binary(&argv[0])?;
-        let mut command = Command::new(binary);
+        let mut command = trusted_command(&binary);
         command
             .args(&argv[1..])
-            .env_clear()
-            .env("LC_ALL", "C")
-            .env("LANG", "C")
-            .env("PATH", TRUSTED_DIRS.join(":"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -1494,7 +1490,24 @@ fn temp_path(destination: &Path) -> PathBuf {
     ))
 }
 
-fn resolve_trusted_binary(name: &str) -> Result<PathBuf, String> {
+/// A `Command` for a binary found by `resolve_trusted_binary`, with nothing
+/// inherited from the core's environment: only `LC_ALL`/`LANG` (C, so the
+/// output and messages do not depend on the locale) and a fixed `PATH` of the
+/// trusted directories. The apply path (main.rs `run_command`) and the release
+/// path both start nft and tc through it (Edge#477).
+pub(crate) fn trusted_command(binary: &Path) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .env_clear()
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("PATH", TRUSTED_DIRS.join(":"));
+    command
+}
+
+/// The absolute path of `nft` or `tc` in the first trusted directory that
+/// has it; any other name is refused. `PATH` is never consulted.
+pub(crate) fn resolve_trusted_binary(name: &str) -> Result<PathBuf, String> {
     if !matches!(name, "tc" | "nft") {
         return Err("unsupported release binary".to_string());
     }
@@ -1595,6 +1608,75 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
     use std::sync::Mutex;
+
+    // Edge#477: nft/tc (apply and release) start with nothing inherited.
+    #[test]
+    fn trusted_command_sets_only_a_c_locale_and_a_fixed_path() {
+        let command = trusted_command(Path::new("/usr/bin/env"));
+        let mut envs: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        envs.sort();
+        assert_eq!(
+            envs,
+            vec![
+                ("LANG".to_string(), Some("C".to_string())),
+                ("LC_ALL".to_string(), Some("C".to_string())),
+                (
+                    "PATH".to_string(),
+                    Some("/usr/sbin:/usr/bin:/sbin:/bin".to_string())
+                ),
+            ]
+        );
+        assert_eq!(command.get_program(), Path::new("/usr/bin/env").as_os_str());
+    }
+
+    #[test]
+    fn trusted_command_clears_the_inherited_environment() {
+        // The test process always has more than these three variables (HOME,
+        // CARGO_*, ...); the child sees exactly the three it is given.
+        let env_bin = ["/usr/bin/env", "/bin/env"]
+            .iter()
+            .map(Path::new)
+            .find(|p| p.is_file())
+            .expect("env(1) in /usr/bin or /bin");
+        assert!(std::env::vars_os().any(|(k, _)| k != "LC_ALL" && k != "LANG" && k != "PATH"));
+        let out = trusted_command(env_bin).output().expect("run env");
+        assert!(out.status.success());
+        let mut lines: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        lines.sort();
+        assert_eq!(
+            lines,
+            vec![
+                "LANG=C".to_string(),
+                "LC_ALL=C".to_string(),
+                "PATH=/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_trusted_binary_refuses_other_names_and_paths() {
+        for name in ["sh", "true", "/tmp/nft", "./nft", "../sbin/nft", "nft ", ""] {
+            assert!(resolve_trusted_binary(name).is_err(), "{name:?}");
+        }
+        for name in ["nft", "tc"] {
+            if let Ok(path) = resolve_trusted_binary(name) {
+                assert!(path.is_absolute());
+                assert!(TRUSTED_DIRS.contains(&path.parent().unwrap().to_str().unwrap()));
+                assert_eq!(path.file_name().unwrap(), name);
+            }
+        }
+    }
 
     struct FakeRunner {
         results: Mutex<VecDeque<Result<CommandResult, String>>>,
