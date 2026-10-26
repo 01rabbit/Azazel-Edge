@@ -33,7 +33,7 @@ PY_ROOT = PROJECT_ROOT / "py"
 sys.path.insert(0, str(Path(__file__).parent))
 if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
-from wifi_scan import scan_wifi, get_wireless_interface, check_networkmanager
+from wifi_scan import scan_wifi, get_wireless_interface, check_networkmanager, _nmcli_env
 from mode_manager import ModeManager
 from wifi_connect import connect_wifi, update_state_json
 from azazel_edge.evaluators import NocEvaluator
@@ -2358,6 +2358,7 @@ def suppress_auto_wifi(enabled: bool = True):
             try:
                 result = subprocess.run(
                     ["nmcli", "-t", "-f", "NAME,TYPE", "con", "show"],
+                    env=_nmcli_env(),
                     capture_output=True,
                     text=True,
                     timeout=5
@@ -2367,11 +2368,13 @@ def suppress_auto_wifi(enabled: bool = True):
                     if len(parts) == 2 and parts[1] == "802-11-wireless":
                         subprocess.run(
                             ["nmcli", "con", "mod", parts[0], "connection.autoconnect", "no"],
+                            env=_nmcli_env(),
                             capture_output=True,
                             timeout=5
                         )
                 subprocess.run(
                     ["nmcli", "dev", "disconnect", iface],
+                    env=_nmcli_env(),
                     capture_output=True,
                     timeout=5
                 )

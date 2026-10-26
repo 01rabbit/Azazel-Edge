@@ -10,7 +10,8 @@
 #    setup_agent_account.sh create theirs.
 #  - An existing azazel-sensor that is not that system account stops the
 #    script: a uid or gid that is not a system id, another primary group, a
-#    login shell or a home directory that exists. Nothing is changed then.
+#    login shell, a home directory that exists, or membership of any other
+#    group. Nothing is changed then.
 #  - The account azazel (the device's login account on many devices; the
 #    units used it before) is never created, changed or looked at.
 #
@@ -78,6 +79,9 @@ else
   useradd --system --gid "$SENSOR_GROUP" --no-create-home --home-dir /nonexistent --shell "$shell" "$SENSOR_USER"
   say "created user $SENSOR_USER"
 fi
+# systemd gives a unit's User= every group the account is in (initgroups);
+# a unit setting cannot drop them (`SupplementaryGroups=` only adds), so an
+# account in another group stops here like the other mismatches.
 extra_groups="$(id -nG "$SENSOR_USER" | tr ' ' '\n' | grep -vx "$SENSOR_GROUP" || true)"
-[[ -z "$extra_groups" ]] || say "NOTICE: $SENSOR_USER is also in: $(echo $extra_groups) (not added by this script)"
+[[ -z "$extra_groups" ]] || die "user $SENSOR_USER is also in: $(echo $extra_groups); the sensor units would run with those groups. Resolve this by hand"
 say "done"

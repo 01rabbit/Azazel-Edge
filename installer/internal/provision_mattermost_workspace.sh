@@ -89,6 +89,12 @@ upsert_env() {
   local key="$2"
   local value="$3"
   local current="" updated=""
+  # A line break would end the line early and inject further lines into an
+  # env file systemd reads as root; the value is not shown (it may be a token).
+  if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* || "${key}" == *$'\n'* ]]; then
+    echo "[ERROR] refusing a line break in the value of ${key%%$'\n'*} for ${file}" >&2
+    return 1
+  fi
   install -d -m 0755 "$(dirname -- "${file}")"
   # Read first: a file that cannot be read stops here instead of being
   # replaced by one holding only this key.

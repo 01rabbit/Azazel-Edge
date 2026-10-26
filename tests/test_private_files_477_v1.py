@@ -152,6 +152,18 @@ def test_upsert_env_leaves_an_unreadable_path_alone(tmp_path):
     assert FAKE_TOKEN not in res.stderr + res.stdout
 
 
+@pytest.mark.parametrize("value", ["fake-token\nINJECTED=1", "fake-token\r", "\nfake"])
+def test_upsert_env_refuses_a_line_break_in_the_value(tmp_path, value):
+    dst = tmp_path / "azazel-edge-web"
+    dst.write_text("A=1\n", encoding="utf-8")
+    dst.chmod(0o644)
+    res = _upsert(dst, "AZAZEL_MATTERMOST_BOT_TOKEN", value)
+    assert res.returncode != 0 and "line break" in res.stderr
+    assert "fake" not in res.stderr + res.stdout
+    assert dst.read_text(encoding="utf-8") == "A=1\n" and stat.S_IMODE(dst.stat().st_mode) == 0o644
+    assert sorted(p.name for p in tmp_path.iterdir()) == [dst.name]
+
+
 def test_upsert_env_never_writes_under_the_default_umask():
     body = _function(PROVISION, "upsert_env")
     assert 'write_private_file "${file}"' in body

@@ -30,6 +30,7 @@ PY_ROOT = Path(__file__).resolve().parents[1]
 if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
 from wifi_scan import (
+    _nmcli_env,
     _split_nmcli_terse_line,
     get_wireless_interface,
     check_networkmanager,
@@ -50,24 +51,6 @@ from azazel_edge.path_schema import snapshot_path_candidates, warn_if_legacy_pat
 NM_PASSWD_FILE_BASE = "/run"
 NM_PSK_PROPERTY = "802-11-wireless-security.psk"
 NM_WEP_KEY0_PROPERTY = "802-11-wireless-security.wep-key0"
-
-
-def _nmcli_env() -> Dict[str, str]:
-    """The environment every nmcli call here runs with: the daemon's own,
-    with the locale pinned to C.UTF-8 (Edge#477). nmcli translates its
-    messages, and the UUID of a new or cloned profile is read from one
-    ("Connection '<name>' (<uuid>) successfully added."); under C.UTF-8 they
-    are the untranslated ones that pattern expects, whatever the device's
-    locale. C.UTF-8 rather than C keeps non-ASCII SSIDs in nmcli's output as
-    they are (UTF-8) instead of escaped for an ASCII charset."""
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in ("LANG", "LANGUAGE") and not key.startswith("LC_")
-    }
-    env["LC_ALL"] = "C.UTF-8"
-    env["LANG"] = "C.UTF-8"
-    return env
 
 
 def _nm_passwd_escape(secret: str) -> str:
@@ -1344,8 +1327,10 @@ def main(argv: Optional[List[str]] = None, stdin=None) -> int:
     import argparse
 
     argv = list(sys.argv[1:] if argv is None else argv)
-    # Refused before argparse, whose usage error would echo the value.
-    if any(arg == "--passphrase" or arg.startswith("--passphrase=") for arg in argv):
+    # Refused before argparse, whose usage error would echo the value: the
+    # old option and anything else starting with --pass but the stdin flag
+    # (a misspelling, `--password=...`).
+    if any(arg.startswith("--pass") and arg != "--passphrase-stdin" for arg in argv):
         print(PASSPHRASE_ARGV_ERROR, file=sys.stderr)
         return 2
 

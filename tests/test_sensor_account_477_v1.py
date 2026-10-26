@@ -94,6 +94,10 @@ def test_the_units_and_the_script_name_the_same_account():
         text = unit.read_text(encoding="utf-8")
         assert "\nUser=azazel-sensor\n" in text and "\nGroup=azazel-sensor\n" in text, unit
         assert "\nUser=azazel\n" not in text and "\nGroup=azazel\n" not in text, unit
+        # An empty SupplementaryGroups= does not drop the account's groups
+        # (checked with systemd 257: it only adds); the script refuses an
+        # account in another group instead.
+        assert "SupplementaryGroups=" not in text, unit
 
 
 def test_a_missing_account_is_created_as_a_system_account_without_login_or_home(tmp_path):
@@ -122,6 +126,9 @@ def test_an_existing_matching_system_account_is_left_as_it_is(tmp_path):
         ("azazel-sensor:x:991:4::/nonexistent:/usr/sbin/nologin\n", "azazel-sensor:x:990:\nadm:x:4:\n", "primary group"),
         ("azazel-sensor:x:991:990::/nonexistent:/bin/bash\n", "azazel-sensor:x:990:\n", "login shell"),
         ("azazel-sensor:x:0:990::/nonexistent:/usr/sbin/nologin\n", "azazel-sensor:x:990:\n", "not a system account"),
+        # Any other group: systemd would give it to the units (initgroups).
+        ("azazel-sensor:x:991:990::/nonexistent:/usr/sbin/nologin\n",
+         "azazel-sensor:x:990:\nadm:x:4:azazel-sensor\n", "is also in: adm"),
     ],
 )
 def test_an_existing_azazel_sensor_that_is_not_the_system_account_stops_the_script(tmp_path, passwd, group, reason):

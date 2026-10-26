@@ -563,42 +563,76 @@ def test_every_nmcli_call_runs_with_the_c_locale(monkeypatch, secret_base, saved
         assert env.get("PATH") == os.environ.get("PATH"), cmd
 
 
-def test_every_nmcli_subprocess_call_in_the_source_passes_the_locale_env():
+def _nmcli_calls(src: str):
+    """(call node, env keyword or None) of every subprocess call in ``src``
+    whose argv is an nmcli command: a literal list starting with "nmcli", or
+    a variable last assigned such a list shortly before the call."""
     import ast
 
-    src = (ROOT / "py" / "azazel_edge_control" / "wifi_connect.py").read_text(encoding="utf-8")
-    checked = 0
-    for node in ast.walk(ast.parse(src)):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "run"):
-            continue
-        if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess"):
+    tree = ast.parse(src)
+    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)]
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess"):
             continue
         first = node.args[0] if node.args else None
-        runs_nmcli = (
-            isinstance(first, ast.List) and first.elts and isinstance(first.elts[0], ast.Constant)
-            and first.elts[0].value == "nmcli"
-        ) or (isinstance(first, ast.Name) and first.id in ("cmd", "add_cmd") and "nmcli" in ast.get_source_segment(
-            src, node) + _assignment_of(src, node, first.id))
-        if not runs_nmcli:
-            continue
-        checked += 1
-        env = [k.value for k in node.keywords if k.arg == "env"]
-        assert env and ast.unparse(env[0]) == "_nmcli_env()", f"line {node.lineno}"
-    assert checked >= 15
+        if isinstance(first, ast.List):
+            runs_nmcli = bool(first.elts) and isinstance(first.elts[0], ast.Constant) and first.elts[0].value == "nmcli"
+        elif isinstance(first, ast.Name):
+            prior = [a for a in assigns if a.lineno < node.lineno and node.lineno - a.lineno < 40
+                     and any(isinstance(t, ast.Name) and t.id == first.id for t in a.targets)]
+            value = prior[-1].value if prior else None
+            runs_nmcli = (isinstance(value, ast.List) and bool(value.elts) and isinstance(value.elts[0], ast.Constant)
+                          and value.elts[0].value == "nmcli")
+        else:
+            runs_nmcli = False
+        if runs_nmcli:
+            yield node, next((k.value for k in node.keywords if k.arg == "env"), None)
 
 
-def _assignment_of(src: str, call, name: str) -> str:
-    """The text of the last `name = [...]` before `call` (to tell an nmcli
-    argv held in a variable from another command's)."""
+def test_every_nmcli_call_in_the_repository_passes_the_locale_env():
+    """Every Python file that starts nmcli (found by scanning the repository,
+    not a fixed list) passes env=_nmcli_env() on each call."""
     import ast
 
-    best = ""
-    for node in ast.walk(ast.parse(src)):
-        if isinstance(node, ast.Assign) and node.lineno < call.lineno and any(
-                isinstance(t, ast.Name) and t.id == name for t in node.targets):
-            if call.lineno - node.lineno < 40:
-                best = ast.get_source_segment(src, node) or ""
-    return best
+    files = [p for top in ("py", "azazel_edge_web") for p in (ROOT / top).rglob("*.py")]
+    checked: dict = {}
+    for path in files:
+        src = path.read_text(encoding="utf-8")
+        if "nmcli" not in src:
+            continue
+        for node, env in _nmcli_calls(src):
+            rel = str(path.relative_to(ROOT))
+            checked[rel] = checked.get(rel, 0) + 1
+            assert env is not None and ast.unparse(env) == "_nmcli_env()", f"{rel}:{node.lineno}"
+    assert checked.get("py/azazel_edge_control/wifi_connect.py", 0) >= 17
+    assert checked.get("py/azazel_edge_control/wifi_scan.py", 0) >= 6
+    assert checked.get("py/azazel_edge_control/daemon.py", 0) >= 3
+    # One definition, shared.
+    scan_src = (ROOT / "py" / "azazel_edge_control" / "wifi_scan.py").read_text(encoding="utf-8")
+    assert "def _nmcli_env(" in scan_src
+    for name in ("wifi_connect.py", "daemon.py"):
+        other = (ROOT / "py" / "azazel_edge_control" / name).read_text(encoding="utf-8")
+        assert "def _nmcli_env(" not in other and "_nmcli_env" in other
+
+
+def test_the_saved_network_scan_runs_nmcli_with_the_c_locale(monkeypatch):
+    from azazel_edge_control import wifi_scan
+
+    monkeypatch.setenv("LANG", "ja_JP.UTF-8")
+    seen = []
+
+    def fake(cmd, *args, **kwargs):
+        seen.append((list(cmd), kwargs.get("env")))
+        out = "example-saved:802-11-wireless\n" if "NAME,TYPE" in cmd else "example-ssid\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(wifi_scan.subprocess, "run", fake)
+    wifi_scan.get_saved_networks_nm()
+    nm = [(c, e) for c, e in seen if c[:1] == ["nmcli"]]
+    assert nm
+    for cmd, env in nm:
+        assert env is not None and env["LC_ALL"] == "C.UTF-8" and env["LANG"] == "C.UTF-8", cmd
 
 
 def test_the_uuid_of_a_new_profile_is_read_from_the_c_locale_message(monkeypatch, secret_base):
@@ -612,7 +646,9 @@ def test_the_uuid_of_a_new_profile_is_read_from_the_c_locale_message(monkeypatch
 def test_the_cli_refuses_a_passphrase_on_argv_without_echoing_it(monkeypatch, capsys):
     called = []
     monkeypatch.setattr(wifi_connect, "connect_wifi", lambda *a, **k: called.append(a) or {"ok": True})
-    for argv in (["example-ssid", "--passphrase", PLAIN], [f"--passphrase={PLAIN}", "example-ssid"]):
+    for argv in (["example-ssid", "--passphrase", PLAIN], [f"--passphrase={PLAIN}", "example-ssid"],
+                 [f"--password={PLAIN}", "example-ssid"], ["example-ssid", f"--passphrase-stdi={PLAIN}"],
+                 ["example-ssid", f"--pass={PLAIN}"]):
         assert wifi_connect.main(argv) == 2
         err = capsys.readouterr().err
         assert "--passphrase-stdin" in err and PLAIN not in err
@@ -642,4 +678,5 @@ def test_the_cli_without_the_stdin_flag_passes_no_passphrase(monkeypatch, capsys
 
 def test_the_cli_has_no_passphrase_argument():
     src = (ROOT / "py" / "azazel_edge_control" / "wifi_connect.py").read_text(encoding="utf-8")
+    assert 'argparse.ArgumentParser(description="Wi-Fi Connect Test", allow_abbrev=False)' in src
     assert 'add_argument("--passphrase"' not in src and "args.passphrase," not in src
