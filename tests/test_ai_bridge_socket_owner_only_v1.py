@@ -127,8 +127,9 @@ class _AgentProc:
             self.env.pop("AZAZEL_AI_SOCKET", None)  # the agent's own default
         else:
             self.env["AZAZEL_AI_SOCKET"] = str(self.socket)
-        # The agent's state files in the shared runtime directory, as in the unit.
-        self.env["AZAZEL_AI_ADVISORY"] = str(base / "run" / "ai_advisory.json")
+        # The agent's state files in its own runtime directory (Edge#471 stage
+        # 2: the agent no longer writes in the shared directory).
+        self.env["AZAZEL_AI_ADVISORY"] = str(base / "agent" / "ai_advisory.json")
         self.env["AZAZEL_RUNTIME_SOCKET_GROUP"] = group
         self.env.update(extra)
         self.work = work
@@ -358,9 +359,10 @@ def test_the_service_ignores_the_shared_group_and_the_old_mode(base, shared_grou
         assert st.st_gid == os.getegid() != gid
         assert _mode(agent.socket.parent) == 0o700
         assert os.lstat(agent.socket.parent).st_uid == os.geteuid()
-        # The shared runtime directory the agent made for its state files
-        # does not take the group either (only the control daemon sets it).
-        assert os.lstat(base / "run").st_gid != gid
+        # The agent's own runtime directory does not take the group either,
+        # and the agent creates nothing in the shared one (Edge#471 stage 2).
+        assert os.lstat(base / "agent").st_gid != gid
+        assert not os.path.lexists(base / "run")
 
 
 # ------------------------------------------- next to the control daemon

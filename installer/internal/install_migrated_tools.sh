@@ -171,6 +171,7 @@ install -m 0755 "$REPO_ROOT/installer/internal/set_dev_remote_access.sh" /opt/az
 install -m 0755 "$REPO_ROOT/installer/internal/install_ai_runtime.sh" /opt/azazel-edge/install_ai_runtime.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_web_token.sh" /opt/azazel-edge/provision_web_token.sh
 install -m 0755 "$REPO_ROOT/installer/internal/setup_web_account.sh" /opt/azazel-edge/setup_web_account.sh
+install -m 0755 "$REPO_ROOT/installer/internal/setup_agent_account.sh" /opt/azazel-edge/setup_agent_account.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_workspace.sh" /opt/azazel-edge/provision_mattermost_workspace.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_command.sh" /opt/azazel-edge/provision_mattermost_command.sh
 install -m 0755 "$REPO_ROOT/installer/internal/verify_runtime_sync.sh" /opt/azazel-edge/verify_runtime_sync.sh
@@ -184,6 +185,8 @@ install -m 0644 "$REPO_ROOT/systemd/azazel-edge-epd-refresh.timer" /etc/systemd/
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-opencanary.service" /etc/systemd/system/azazel-edge-opencanary.service
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-suricata.service" /etc/systemd/system/azazel-edge-suricata.service
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-ai-agent.service" /etc/systemd/system/azazel-edge-ai-agent.service
+# The AI agent's group-shared directories (Edge#471 stage 2).
+install -m 0644 "$REPO_ROOT/systemd/azazel-edge-agent.tmpfiles.conf" /etc/tmpfiles.d/azazel-edge-agent.conf
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-core.service" /etc/systemd/system/azazel-edge-core.service
 systemctl daemon-reload
 
@@ -234,6 +237,13 @@ if systemctl is-active --quiet azazel-edge-web.service 2>/dev/null; then
   systemctl stop azazel-edge-web.service
 fi
 /opt/azazel-edge/setup_web_account.sh
+# Edge#471 stage 2: the AI agent runs as azazel-agent. Stop it (it may still
+# run as root from the previous unit) before its logs, audit chain and P0
+# queue move together into its own directory.
+if systemctl is-active --quiet azazel-edge-ai-agent.service 2>/dev/null; then
+  systemctl stop azazel-edge-ai-agent.service
+fi
+/opt/azazel-edge/setup_agent_account.sh
 if [[ ! -f /run/azazel-edge/ui_snapshot.json ]]; then
   cat > /run/azazel-edge/ui_snapshot.json <<'EOD'
 {"now_time":"","ssid":"-","user_state":"CHECKING","recommendation":"Initializing","evidence":[],"snapshot_epoch":0}
@@ -266,9 +276,11 @@ if [[ "$ENABLE_SERVICES" == "1" ]]; then
   systemctl enable --now azazel-edge-epd-refresh.timer
   systemctl enable --now azazel-edge-ai-agent.service
   systemctl enable --now azazel-edge-core.service
-  # Order (Edge#471 stage 1): the control daemon takes the azazel-control
-  # group and the peer table, the agent opens its manual_query socket, then
-  # the Web UI starts as azazel-web.
+  # Order (Edge#471 stages 1-2): the control daemon (azazel-control group,
+  # peer table, the agent's new advisory/snapshot path), then the agent as
+  # azazel-agent (its sockets and directories), then the Web UI as
+  # azazel-web. The core (root) is not restarted: it connects to
+  # ai-bridge.sock per event.
   systemctl restart azazel-edge-control-daemon.service
   systemctl restart azazel-edge-ai-agent.service
   systemctl restart azazel-edge-web.service

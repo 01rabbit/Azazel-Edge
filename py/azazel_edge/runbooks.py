@@ -23,10 +23,29 @@ PLACEHOLDER_RE = re.compile(r"\$\{([a-zA-Z0-9_]+)\}")
 ALLOWED_EXEC_PREFIXES = ("/bin/", "/usr/bin/", "/usr/sbin/", "/usr/local/bin/", "/opt/azazel-edge/")
 
 
+_UNREADABLE_RUNBOOK_DIRS: set[str] = set()
+
+
+def _warn_unreadable_runbook_dir(root: Path, exc: OSError) -> None:
+    if str(root) in _UNREADABLE_RUNBOOK_DIRS:
+        return
+    _UNREADABLE_RUNBOOK_DIRS.add(str(root))
+    import logging
+    logging.getLogger("azazel_edge.runbooks").warning(
+        "runbook directory %s is not readable by uid %s (%s); its runbooks are not loaded", root, os.geteuid(), exc)
+
+
 def _iter_runbook_files() -> Iterable[Path]:
     seen: set[str] = set()
     for root in RUNBOOK_DIRS:
-        if not root.exists():
+        try:
+            if not root.exists():
+                continue
+        except PermissionError as exc:
+            # e.g. the AI agent (azazel-agent, Edge#471 stage 2) cannot search
+            # /etc/azazel-edge when it is 0750 root:azazel-web. Said, not
+            # silently skipped; the shipped runbooks still load.
+            _warn_unreadable_runbook_dir(root, exc)
             continue
         for path in sorted(root.rglob("*.yaml")):
             key = str(path.resolve())

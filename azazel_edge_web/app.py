@@ -186,10 +186,14 @@ WEB_STATE_DIR = Path("/var/lib/azazel-edge-web")
 # the core also reads (/etc/default/azazel-edge-security).
 AI_SOCKET = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge-agent-query/agent-query.sock"))
 AI_MANUAL_TIMEOUT_SEC = float(os.environ.get("AZAZEL_AI_MANUAL_TIMEOUT_SEC", "95"))
-AI_ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge/ai_advisory.json"))
-AI_METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", "/run/azazel-edge/ai_metrics.json"))
-AI_EVENT_LOG = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", "/var/log/azazel-edge/ai-events.jsonl"))
-AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", "/var/log/azazel-edge/ai-llm.jsonl"))
+# The AI agent's files (Edge#471 stage 2: the agent runs as azazel-agent and
+# writes only in its own directories, group azazel-web, readable here).
+AGENT_RUNTIME_DIR = Path("/run/azazel-edge-agent")
+AGENT_LOG_DIR = Path("/var/log/azazel-edge/ai")
+AI_ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", str(AGENT_RUNTIME_DIR / "ai_advisory.json")))
+AI_METRICS_PATH = Path(os.environ.get("AZAZEL_AI_METRICS", str(AGENT_RUNTIME_DIR / "ai_metrics.json")))
+AI_EVENT_LOG = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", str(AGENT_LOG_DIR / "ai-events.jsonl")))
+AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", str(AGENT_LOG_DIR / "ai-llm.jsonl")))
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", str(WEB_LOG_DIR / "runbook-events.jsonl")))
 TRIAGE_AUDIT_LOG = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", str(WEB_LOG_DIR / "triage-audit.jsonl")))
 DECISION_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DECISION_EXPLANATIONS_PATH", "/var/log/azazel-edge/decision-explanations.jsonl"))
@@ -4380,13 +4384,14 @@ def read_state() -> Dict[str, Any]:
 def read_status_view() -> Optional[Dict[str, Any]]:
     """Read the shared Azazel-Fabric StatusView written beside the snapshot.
 
-    The agent writes ``ui_status_view.json`` next to ``ui_snapshot.json`` when
-    the ``azazel_fabric`` package is installed (see
+    The agent writes ``ui_status_view.json`` next to its own snapshot file,
+    in its runtime directory beside ``ai_advisory.json`` (Edge#471 stage 2),
+    when the ``azazel_fabric`` package is installed (see
     ``azazel_edge.fabric_view``). Returns the view as a dict, or ``None`` when
     it is unavailable (package absent, not yet written, or unreadable). Never
     raises into the caller.
     """
-    for base in (STATE_PATH, FALLBACK_STATE_PATH):
+    for base in (AI_ADVISORY_PATH,):
         try:
             view_path = Path(base).with_name("ui_status_view.json")
             if view_path.exists():

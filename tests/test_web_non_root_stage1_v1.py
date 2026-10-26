@@ -794,7 +794,8 @@ def test_the_web_unit_is_non_root_and_hardened():
 
 
 def test_other_units_stay_root():
-    for name in ("azazel-edge-control-daemon.service", "azazel-edge-ai-agent.service", "azazel-edge-core.service"):
+    # The AI agent runs as azazel-agent since Edge#471 stage 2.
+    for name in ("azazel-edge-control-daemon.service", "azazel-edge-core.service"):
         text = (ROOT / "systemd" / name).read_text(encoding="utf-8")
         assert "\nUser=" not in text, name
 

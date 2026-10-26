@@ -66,7 +66,20 @@ SOCKET_PATH = Path(os.environ.get("AZAZEL_CONTROL_SOCKET", "/run/azazel-edge/con
 RUNTIME_DIR_MODE = int(str(os.environ.get("AZAZEL_RUNTIME_DIR_MODE", "0770")), 8)
 SOCKET_MODE = int(str(os.environ.get("AZAZEL_CONTROL_SOCKET_MODE", "0660")), 8)
 RUNTIME_SOCKET_GROUP = str(os.environ.get("AZAZEL_RUNTIME_SOCKET_GROUP", ""))
-AI_ADVISORY_PATH = Path("/run/azazel-edge/ai_advisory.json")
+# The AI agent's advisory and its snapshot fields (Edge#471 stage 2: the agent
+# runs as azazel-agent and writes only in its own /run/azazel-edge-agent). The
+# same variable and default as the agent's, read from the same environment
+# file. This daemon is the only writer of the shared ui_snapshot.json: it
+# merges AGENT_SNAPSHOT_KEYS from the agent's ai_snapshot.json.
+AI_ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge-agent/ai_advisory.json"))
+AGENT_SNAPSHOT_PATH = AI_ADVISORY_PATH.parent / "ai_snapshot.json"
+AGENT_SNAPSHOT_KEYS = (
+    "advisory_epoch", "user_state", "recommendation", "reasons", "evidence",
+    "suricata_critical", "suricata_warning", "suricata_info",
+    "deferred_recent", "deferred_lifetime_at_snapshot",
+    "llm", "ops_coach", "decision_pipeline", "second_pass", "llm_metrics", "internal", "attack",
+)
+AGENT_SNAPSHOT_MAX_BYTES = 1024 * 1024
 PORTAL_VIEWER_SERVICE = "azazel-edge-portal-viewer.service"
 PORTAL_VIEWER_ENV_CANDIDATES = portal_env_candidates()
 PORTAL_START_URL_RUNTIME_PATH = Path("/run/azazel-edge/portal-viewer-start-url")
@@ -2028,6 +2041,43 @@ def _snapshot_payload_from_file(path: Path, data: dict[str, Any], mode_payload: 
     return payload
 
 
+def _overlay_agent_snapshot(data: dict[str, Any]) -> dict[str, Any]:
+    """Merge the AI agent's fields (AGENT_SNAPSHOT_KEYS, and monitoring.suricata)
+    from its own ai_snapshot.json into the shared snapshot. Only those keys
+    are taken; the file is read without following a symlink and bounded in
+    size. A missing or unreadable file leaves the snapshot as it is."""
+    try:
+        fd = os.open(str(AGENT_SNAPSHOT_PATH), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return data
+    except OSError as exc:
+        logger.warning(f"Agent snapshot {AGENT_SNAPSHOT_PATH} not readable: {exc}")
+        return data
+    try:
+        with os.fdopen(fd, "rb") as fh:
+            raw = fh.read(AGENT_SNAPSHOT_MAX_BYTES + 1)
+    except OSError as exc:
+        logger.warning(f"Agent snapshot {AGENT_SNAPSHOT_PATH} not readable: {exc}")
+        return data
+    if len(raw) > AGENT_SNAPSHOT_MAX_BYTES:
+        logger.warning(f"Agent snapshot {AGENT_SNAPSHOT_PATH} is larger than {AGENT_SNAPSHOT_MAX_BYTES} bytes; ignored")
+        return data
+    agent = _parse_json_dict_lenient(raw.decode("utf-8", errors="replace"))
+    if not agent:
+        return data
+    merged = dict(data)
+    for key in AGENT_SNAPSHOT_KEYS:
+        if key in agent:
+            merged[key] = agent[key]
+    agent_monitoring = agent.get("monitoring")
+    if isinstance(agent_monitoring, dict) and "suricata" in agent_monitoring:
+        monitoring = merged.get("monitoring")
+        monitoring = dict(monitoring) if isinstance(monitoring, dict) else {}
+        monitoring["suricata"] = agent_monitoring["suricata"]
+        merged["monitoring"] = monitoring
+    return merged
+
+
 def _build_fresh_snapshot_payload(mode_payload: dict[str, Any]) -> dict[str, Any]:
     for path in _snapshot_candidates():
         try:
@@ -2036,7 +2086,7 @@ def _build_fresh_snapshot_payload(mode_payload: dict[str, Any]) -> dict[str, Any
             warn_if_legacy_path(path, logger=logger)
             data = _parse_json_dict_lenient(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                data = _enrich_snapshot(data)
+                data = _enrich_snapshot(_overlay_agent_snapshot(data))
                 _persist_snapshot(path, data)
                 payload = _snapshot_payload_from_file(path, data, mode_payload)
                 _snapshot_cache_set(payload)
@@ -2046,7 +2096,7 @@ def _build_fresh_snapshot_payload(mode_payload: dict[str, Any]) -> dict[str, Any
 
     seeded, seeded_path = _seed_snapshot_if_missing()
     if isinstance(seeded, dict) and seeded_path is not None:
-        data = _enrich_snapshot(seeded)
+        data = _enrich_snapshot(_overlay_agent_snapshot(seeded))
         _persist_snapshot(seeded_path, data)
         payload = _snapshot_payload_from_file(seeded_path, data, mode_payload)
         _snapshot_cache_set(payload)

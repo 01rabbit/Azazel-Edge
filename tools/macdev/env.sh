@@ -41,9 +41,11 @@ export AZAZEL_AI_SOCKET="$RUN_DIR/ai/ai-bridge.sock"
 # UI itself reads AZAZEL_AI_SOCKET; bin/azazel-edge-devstack gives the Web UI
 # its own value (this socket, or ai-bridge.sock when the agent has none).
 export AZAZEL_AI_QUERY_SOCKET="$RUN_DIR/ai-query/agent-query.sock"
-export AZAZEL_AI_ADVISORY="$RUN_DIR/ai_advisory.json"
-export AZAZEL_AI_METRICS="$RUN_DIR/ai_metrics.json"
-export AZAZEL_AI_POLICY="$RUN_DIR/ai_runtime_policy.json"
+# The agent's own runtime directory (Edge#471 stage 2): it refuses a directory
+# others can write, such as the control daemon's RUN_DIR (0770).
+export AZAZEL_AI_ADVISORY="$RUN_DIR/agent/ai_advisory.json"
+export AZAZEL_AI_METRICS="$RUN_DIR/agent/ai_metrics.json"
+export AZAZEL_AI_POLICY="$RUN_DIR/agent/ai_runtime_policy.json"
 export AZAZEL_AI_EVENT_LOG="$LOG_DIR/ai-events.jsonl"
 export AZAZEL_AI_LLM_LOG="$LOG_DIR/ai-llm.jsonl"
 export AZAZEL_AI_DEFERRED_LOG="$LOG_DIR/ai-deferred.jsonl"

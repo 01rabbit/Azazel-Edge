@@ -96,11 +96,11 @@ class DecisionLogger:
         """
         Args:
             output_dir: JSONL出力先ディレクトリ
-                       デフォルト: $AZAZEL_DECISION_LOG_DIR または /opt/azazel-edge/logs/tactics_engine
+                       デフォルト: $AZAZEL_DECISION_LOG_DIR または /var/lib/azazel-edge-agent/decisions（Edge#471 段階 2）
         """
         if output_dir is None:
             env_dir = str(os.environ.get("AZAZEL_DECISION_LOG_DIR", "")).strip()
-            self.output_dir = Path(env_dir) if env_dir else Path("/opt/azazel-edge/logs/tactics_engine")
+            self.output_dir = Path(env_dir) if env_dir else Path("/var/lib/azazel-edge-agent/decisions")
         else:
             self.output_dir = Path(output_dir)
 

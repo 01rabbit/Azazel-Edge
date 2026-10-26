@@ -1,7 +1,7 @@
 # Privilege inventory (#471 stage 0)
 
 Tracking: #471 (privilege separation), context #462 (item 2) and #472  
-Status: inventory and plan (stages 0–2); **stage 1 implemented**, see §10.9.  
+Status: inventory and plan (stages 0–2); **stages 1 and 2 implemented**, see §10.9 and §11.7.  
 Last updated: 2026-10-26
 
 #471 splits the Edge services into separate non-root accounts. The owner
@@ -11,7 +11,7 @@ approved three stages:
 | --- | --- | --- |
 | 0 | This inventory. No code, unit or installer change. | this page |
 | 1 | Run the Web UI (`azazel-edge-web`) as `azazel-web`, and add the agent query socket for `manual_query`. | implemented (§10.9); device check by the owner pending |
-| 2 | Run the AI agent (`azazel-edge-ai-agent`) as `azazel-agent`. | planned (§11) |
+| 2 | Run the AI agent (`azazel-edge-ai-agent`) as `azazel-agent`. | implemented (§11.7); device check by the owner pending |
 | 3 | Run the core with only the capabilities it needs. | later; needs hardware |
 
 The core stays root in stages 0 to 2.
@@ -928,6 +928,111 @@ The core unit gets `After=`/`Wants=` unchanged.
   `azazel-web` asking through the query socket. Labelled as container.
 - Device (owner): P0 relay still arrives, `manual_query` from the Web UI and
   Mattermost works, `systemd-analyze security azazel-edge-ai-agent`.
+
+### 11.7 Stage 2 as implemented
+
+What the stage 2 change does, where it differs from §11.1–11.6, and how to
+upgrade and roll back. Container results are container results; nothing
+here is device evidence.
+
+**Differences from the plan above**
+
+| Plan | Implemented | Why |
+| --- | --- | --- |
+| `RuntimeDirectory=azazel-edge-ai azazel-edge-agent azazel-edge-agent-query`, `LogsDirectory=azazel-edge/ai` | `RuntimeDirectory=azazel-edge-ai` (0700) and `StateDirectory=azazel-edge-agent` only. `/run/azazel-edge-agent`, `/run/azazel-edge-agent-query` and `/var/log/azazel-edge/ai` come from tmpfiles.d (`/etc/tmpfiles.d/azazel-edge-agent.conf`, **2750 azazel-agent:azazel-web**), re-applied by `ExecStartPre=+systemd-tmpfiles --create …` and made writable with `ReadWritePaths=` | systemd gives `RuntimeDirectory=`/`LogsDirectory=` the unit's `Group=` (and resets a different group on start), so group `azazel-web` cannot come from them; the agent itself cannot chgrp to a group it is not in. Setgid makes what the agent writes (umask 0027) group-readable by the Web UI only |
+| the agent's snapshot file `/run/azazel-edge-agent/ai_snapshot.json` | the same, derived from the advisory's directory (`AZAZEL_AI_ADVISORY`), no new variable. The daemon's advisory path reads the same variable with the new default | `AZAZEL_UI_SNAPSHOT` already names the shared snapshot for the daemon, the Web UI and dev hosts; the agent no longer uses it |
+| query directory 0750 | 0750 (created by the agent as root, stage 1) **or 2750** (tmpfiles.d, stage 2); anything else is refused, never fixed | as above |
+| move the chain and the P0 queue together | moved together, **and the relay's reconcile cursor is carried** (`azazel_edge.notify.migrate_audit_path`) | the relay scopes its cursor by the audit file's path; a moved file would otherwise be a `fresh_chain` and P0 records no longer in the queue (evicted) would be alerted again as past decisions |
+
+**Directories and files** (all owned by `azazel-agent`)
+
+| Path | Mode | Holds |
+| --- | --- | --- |
+| `/run/azazel-edge-ai` | 0700 (RuntimeDirectory=) | `ai-bridge.sock` 0600. The core (root) still connects |
+| `/run/azazel-edge-agent-query` | 2750, group azazel-web | `agent-query.sock` 0660 (stage 1 peer checks unchanged) |
+| `/run/azazel-edge-agent` | 2750, group azazel-web | `ai_advisory.json`, `ai_metrics.json`, `ai_runtime_policy.json`, `ai_snapshot.json` (the agent's snapshot fields), `ui_status_view.json` |
+| `/var/log/azazel-edge/ai` | 2750, group azazel-web | `ai-events`, `ai-llm`, `ai-deferred`, `ai-audit` (`.jsonl`), `core-decision-audit.jsonl` (+ `.1`), `p0-alert-queue.jsonl` (0600) |
+| `/var/lib/azazel-edge-agent` | 0750 (StateDirectory=) | `decisions/decision_explanations.jsonl` |
+
+Only `azazel-agent` (and root) can write the core-decision audit chain and the
+P0 queue. The agent still reads `normalized-events.jsonl` (root, 0644 in the
+0755 `/var/log/azazel-edge`), unchanged.
+
+**Code changes**
+
+- The agent creates a missing runtime directory 0750 and uses an existing one
+  only if it is a real directory owned by its uid that nobody else can write;
+  it never chmods or chowns it and does not touch `/run/azazel-edge`. A wrong
+  one stops the service with the reason. The AI audit log has no `/tmp`
+  fallback: if it cannot be opened, the service stops.
+- One snapshot writer: the agent writes its fields to its own
+  `ai_snapshot.json`; the control daemon reads it (no symlink, at most 1 MiB)
+  and merges a fixed key list (`AGENT_SNAPSHOT_KEYS`: advisory epoch, user
+  state, recommendation, reasons, evidence, Suricata and deferred counts,
+  LLM / ops coach / decision pipeline / second pass / LLM metrics, internal,
+  attack, and `monitoring.suricata`) before it enriches and persists the
+  shared `ui_snapshot.json`. Route, connection, health, mode and the rest stay
+  the daemon's. After an upgrade the agent's counts start from its own (new)
+  file; `/run` is cleared at boot anyway.
+- Readers: the daemon's advisory path (`AZAZEL_AI_ADVISORY`, new default); the
+  Web UI's `AZAZEL_AI_ADVISORY`, `AZAZEL_AI_METRICS`, `AZAZEL_AI_EVENT_LOG`,
+  `AZAZEL_AI_LLM_LOG` defaults and `read_status_view` (beside the advisory);
+  runbook `rb.ops.logs.ai.recent`; `DecisionLogger`'s default.
+- The runbook loader logs and skips a runbook directory it cannot search
+  (the agent cannot search `/etc/azazel-edge` when it is 0750
+  root:azazel-web; the shipped runbooks in `/opt/azazel-edge/runbooks` load).
+- The agent sends no notification itself (no ntfy, Mattermost, audio or EPD
+  access); the P0 relay only writes the queue. No token or device access was
+  needed.
+
+**Upgrade** (`install_migrated_tools.sh` → `setup_agent_account.sh`, idempotent,
+after `setup_web_account.sh`):
+
+1. the new unit and `/etc/tmpfiles.d/azazel-edge-agent.conf` are installed;
+   the running agent is stopped;
+2. system group and user `azazel-agent` (no login, home `/nonexistent`, no
+   other group); an existing non-system account with the name stops the
+   installer; the `azazel-web` group must exist (stage 1);
+3. the directories above are created;
+4. `core-decision-audit.jsonl` (+ `.1`) and `p0-alert-queue.jsonl` move
+   **together** to `/var/log/azazel-edge/ai` (nothing is overwritten: if any
+   of them already exists there, none is moved and a notice is printed), and
+   the relay's cursor is carried to the new path. The AI logs move too;
+5. the decision log and the current `/run/azazel-edge/ai_*.json` are copied
+   (originals kept);
+6. old default values of `AZAZEL_AI_ADVISORY`, `AZAZEL_AI_METRICS`,
+   `AZAZEL_AI_POLICY`, `AZAZEL_AI_*_LOG` and `AZAZEL_DECISION_LOG_DIR` in
+   `/etc/default/azazel-edge-security` and `/etc/default/azazel-edge-web` move
+   to the new defaults; other values are kept and reported (an agent pointed
+   at a directory it cannot own stops with the reason);
+7. restart order: control daemon → agent → Web UI (the core is not restarted;
+   it connects per event).
+
+Wazuh FIM: `/var/log/azazel-edge` (which contains `ai/`) was already watched;
+`/var/lib/azazel-edge-agent` is added.
+
+**Rollback** (to the stage 1 release):
+
+1. stop the agent; install the stage 1 `azazel-edge-ai-agent.service` (no
+   `User=`) and code; `systemctl daemon-reload`;
+2. move `core-decision-audit.jsonl` (+ `.1`), `p0-alert-queue.jsonl` and the
+   `ai-*.jsonl` logs from `/var/log/azazel-edge/ai` back to
+   `/var/log/azazel-edge` together (the queue keeps the stage 2 cursor rows;
+   the old relay finds its old path's cursor, written before the upgrade, and
+   resumes with `cursor_found` or, if the queue evicted it, reconciles as
+   before);
+3. in `/etc/default/azazel-edge-security` and `/etc/default/azazel-edge-web`
+   put back or remove the moved path variables (the old defaults are the old
+   code's defaults);
+4. restart the control daemon, the agent, the Web UI. The account, the
+   tmpfiles.d file and the empty new directories can stay.
+
+**Needs the owner's device run**: the unit under real systemd
+(`systemd-analyze security azazel-edge-ai-agent`, `ps -o user= -C python3`),
+tmpfiles at boot, the P0 relay from the real core, `manual_query` from the
+Web UI and Mattermost, Ollama on loopback, the upgrade of a device with an
+existing chain and queue (cursor carried, no replay) and the rollback. SO-03
+is re-measured in CI (container, not hardware).
 
 ## 12. Open questions
 

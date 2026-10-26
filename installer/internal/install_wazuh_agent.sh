@@ -46,6 +46,9 @@ azazel_dirs = [
     # aggregator events, the triage audit chain, the captive allowlist).
     '/var/log/azazel-edge-web',
     '/var/lib/azazel-edge-web',
+    # The AI agent's state (Edge#471 stage 2: decision log). Its logs, the
+    # core-decision audit chain and the P0 queue are under /var/log/azazel-edge/ai.
+    '/var/lib/azazel-edge-agent',
     '/etc/suricata/rules',
     '/etc/azazel-edge/vector',
 ]
@@ -109,7 +112,7 @@ fi
 echo "[wazuh-agent] Install complete."
 echo "  Manager:    ${WAZUH_MANAGER_HOST}:${WAZUH_MANAGER_PORT}"
 echo "  Agent name: ${WAZUH_AGENT_NAME}"
-echo "  FIM paths:  /etc/azazel-edge, /opt/azazel-edge, /var/log/azazel-edge, /var/log/azazel-edge-web, /var/lib/azazel-edge-web, /etc/suricata/rules"
+echo "  FIM paths:  /etc/azazel-edge, /opt/azazel-edge, /var/log/azazel-edge, /var/log/azazel-edge-web, /var/lib/azazel-edge-web, /var/lib/azazel-edge-agent, /etc/suricata/rules"
 echo "  Active response: disabled (Wazuh is observation-only; defensive actions come only from azazel-edge-core)"
 echo ""
 echo "NEXT: Register agent on Wazuh Manager:"

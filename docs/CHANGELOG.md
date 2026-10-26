@@ -6,6 +6,36 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- AI agent runs as the non-root account `azazel-agent` (Edge#471 stage 2;
+  details, upgrade and rollback in `docs/architecture/privilege-inventory.md`
+  §11.7):
+  - `azazel-edge-ai-agent.service`: `User=`/`Group=azazel-agent`, no
+    capabilities, `NoNewPrivileges`, `ProtectSystem=strict`,
+    `ProtectHome=yes`, `PrivateTmp=yes`,
+    `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`,
+    `RuntimeDirectory=azazel-edge-ai` (0700), `StateDirectory=azazel-edge-agent`,
+    `UMask=0027`; `WorkingDirectory=` unchanged. New tmpfiles.d
+    `azazel-edge-agent.conf`: `/run/azazel-edge-agent`,
+    `/run/azazel-edge-agent-query`, `/var/log/azazel-edge/ai`, 2750
+    azazel-agent:azazel-web.
+  - the agent writes only in its own directories (advisory, metrics, policy
+    and its snapshot fields in `/run/azazel-edge-agent`; logs, the
+    core-decision audit chain and the P0 queue in `/var/log/azazel-edge/ai`;
+    the decision log in `/var/lib/azazel-edge-agent/decisions`), never
+    chmods the shared `/run/azazel-edge`, refuses an unsafe directory, and
+    stops instead of falling back to `/tmp` for its audit log.
+  - the control daemon is the single writer of `ui_snapshot.json` and merges
+    a fixed list of the agent's fields from the agent's own file; the daemon,
+    the Web UI (advisory, metrics, AI logs, status view) and the AI log
+    runbook read the new paths.
+  - installer: `setup_agent_account.sh` creates the account, moves the chain
+    and the P0 queue together and carries the relay's reconcile cursor
+    (`azazel_edge.notify.migrate_audit_path`, no replay), copies the decision
+    log and runtime files, rewrites only old-default variables, adds
+    `/var/lib/azazel-edge-agent` to the Wazuh FIM paths, restarts control
+    daemon → agent → Web UI.
+  - the runbook loader logs and skips a runbook directory it cannot search.
+
 - Web UI runs as the non-root account `azazel-web` (Edge#471 stage 1; details,
   upgrade and rollback in `docs/architecture/privilege-inventory.md` §10.9):
   - `azazel-edge-web.service`: `User=`/`Group=azazel-web`,
