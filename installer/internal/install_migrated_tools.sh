@@ -10,6 +10,11 @@ ENABLE_SECURITY_STACK="${ENABLE_SECURITY_STACK:-1}"
 ENABLE_RUST_CORE="${ENABLE_RUST_CORE:-1}"
 VENV_DIR="/opt/azazel-edge/venv"
 
+case "$ENABLE_RUST_CORE" in
+  0|1) ;;
+  *) echo "ENABLE_RUST_CORE must be 0 or 1 (got: $ENABLE_RUST_CORE)" >&2; exit 1 ;;
+esac
+
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root: sudo $0"
   exit 1
@@ -23,7 +28,9 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3-dev python3-numpy python3-pil python3-spidev \
   python3-rpi.gpio python3-gpiozero fonts-noto-cjk git
 
-DEBIAN_FRONTEND=noninteractive apt-get install -y rustc cargo
+if [[ "$ENABLE_RUST_CORE" == "1" ]]; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y rustc cargo
+fi
 
 if [[ ! -d /opt/waveshare-epd ]]; then
   echo "[1/16] Clone Waveshare e-Paper repository"
@@ -61,7 +68,6 @@ install -d \
   /opt/azazel-edge/runbooks/user \
   /opt/azazel-edge/security/opencanary \
   /opt/azazel-edge/security/suricata \
-  /opt/azazel-edge/rust/azazel-edge-core/src \
   /opt/azazel-edge/fonts \
   /opt/azazel-edge/images \
   /opt/azazel-edge/icons/epd \
@@ -151,6 +157,15 @@ install -m 0644 "$REPO_ROOT/fonts/icbmss20.ttf" /opt/azazel-edge/fonts/icbmss20.
 install -m 0644 "$REPO_ROOT/icons/epd/"*.png /opt/azazel-edge/icons/epd/
 install -m 0644 "$REPO_ROOT/images/"* /opt/azazel-edge/images/
 
+echo "[7.5/16] Install SOC policy and ATT&CK mapping"
+# policy.py and knowledge/attack_mapping.py read <install root>/config/ (not
+# the working directory, which is / under systemd). Root-owned and read-only
+# for the services; the TI feeds and Sigma rules under config/ are not
+# installed here (they change the SOC scores).
+install -d -o root -g root -m 0755 /opt/azazel-edge/config
+install -m 0644 -o root -g root "$REPO_ROOT/config/soc_policy.yaml" /opt/azazel-edge/config/soc_policy.yaml
+install -m 0644 -o root -g root "$REPO_ROOT/config/attack_mapping.yaml" /opt/azazel-edge/config/attack_mapping.yaml
+
 echo "[8/16] Build Python runtime (venv + pip)"
 if [[ ! -d "$VENV_DIR" ]]; then
   python3 -m venv "$VENV_DIR"
@@ -192,7 +207,9 @@ install -m 0644 "$REPO_ROOT/systemd/azazel-edge-suricata.service" /etc/systemd/s
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-ai-agent.service" /etc/systemd/system/azazel-edge-ai-agent.service
 # The AI agent's group-shared directories (Edge#471 stage 2).
 install -m 0644 "$REPO_ROOT/systemd/azazel-edge-agent.tmpfiles.conf" /etc/tmpfiles.d/azazel-edge-agent.conf
-install -m 0644 "$REPO_ROOT/systemd/azazel-edge-core.service" /etc/systemd/system/azazel-edge-core.service
+if [[ "$ENABLE_RUST_CORE" == "1" ]]; then
+  install -m 0644 "$REPO_ROOT/systemd/azazel-edge-core.service" /etc/systemd/system/azazel-edge-core.service
+fi
 systemctl daemon-reload
 
 echo "[11/16] Prepare runtime/config paths"
@@ -274,21 +291,44 @@ if [[ ! -e /run/azazel-gadget ]]; then
   ln -s /run/azazel-edge /run/azazel-gadget
 fi
 
+echo "[11.8/16] Build and install the Rust defense core (ENABLE_RUST_CORE=$ENABLE_RUST_CORE)"
+# Built and installed before any service is enabled: a unit enabled before
+# its binary exists fails, hits its start limit and stays failed.
+if [[ "$ENABLE_RUST_CORE" == "1" ]]; then
+  install -d /opt/azazel-edge/rust/azazel-edge-core/src
+  install -m 0644 "$REPO_ROOT/rust/azazel-edge-core/Cargo.toml" /opt/azazel-edge/rust/azazel-edge-core/Cargo.toml
+  install -m 0644 "$REPO_ROOT/rust/azazel-edge-core/Cargo.lock" /opt/azazel-edge/rust/azazel-edge-core/Cargo.lock
+  install -m 0644 "$REPO_ROOT/rust/azazel-edge-core/src/"*.rs /opt/azazel-edge/rust/azazel-edge-core/src/
+  cargo build --release --locked --manifest-path /opt/azazel-edge/rust/azazel-edge-core/Cargo.toml
+  install -m 0755 /opt/azazel-edge/rust/azazel-edge-core/target/release/azazel-edge-core /usr/local/bin/azazel-edge-core
+else
+  echo "Skip the Rust core (ENABLE_RUST_CORE=0): not built, its unit not installed or enabled."
+  if [[ -e /etc/systemd/system/azazel-edge-core.service ]]; then
+    echo "NOTICE: an azazel-edge-core.service from an earlier install is left as it is."
+  fi
+fi
+
 echo "[12/16] Enable services"
 if [[ "$ENABLE_SERVICES" == "1" ]]; then
   systemctl enable --now azazel-edge-control-daemon.service
   systemctl enable --now azazel-edge-web.service
   systemctl enable --now azazel-edge-epd-refresh.timer
   systemctl enable --now azazel-edge-ai-agent.service
-  systemctl enable --now azazel-edge-core.service
   # Order (Edge#471 stages 1-2): the control daemon (azazel-control group,
   # peer table, the agent's new advisory/snapshot path), then the agent as
   # azazel-agent (its sockets and directories), then the Web UI as
-  # azazel-web. The core (root) is not restarted: it connects to
-  # ai-bridge.sock per event.
+  # azazel-web.
   systemctl restart azazel-edge-control-daemon.service
   systemctl restart azazel-edge-ai-agent.service
   systemctl restart azazel-edge-web.service
+  if [[ "$ENABLE_RUST_CORE" == "1" ]]; then
+    # The core (root) connects to ai-bridge.sock per event. Restarted so a
+    # rebuilt binary runs, and so a unit left failed by an earlier install
+    # (enabled before its binary existed) starts.
+    systemctl reset-failed azazel-edge-core.service >/dev/null 2>&1 || true
+    systemctl enable azazel-edge-core.service
+    systemctl restart azazel-edge-core.service
+  fi
 fi
 
 echo "[13/16] Install local CA and TLS cert (optional)"
@@ -321,13 +361,11 @@ if [[ "$ENABLE_SECURITY_STACK" == "1" ]]; then
   ENABLE_SERVICES="$ENABLE_SERVICES" /opt/azazel-edge/install_security_stack.sh
 fi
 
-echo "[17/17] Install Rust defense core source (optional)"
-install -m 0644 "$REPO_ROOT/rust/azazel-edge-core/Cargo.toml" /opt/azazel-edge/rust/azazel-edge-core/Cargo.toml
-install -m 0644 "$REPO_ROOT/rust/azazel-edge-core/src/main.rs" /opt/azazel-edge/rust/azazel-edge-core/src/main.rs
-cargo build --release --manifest-path /opt/azazel-edge/rust/azazel-edge-core/Cargo.toml
-install -m 0755 /opt/azazel-edge/rust/azazel-edge-core/target/release/azazel-edge-core /usr/local/bin/azazel-edge-core
-
-echo "[18/18] Verify runtime sync"
-/opt/azazel-edge/verify_runtime_sync.sh "$REPO_ROOT" /opt/azazel-edge
+echo "[17/17] Verify runtime sync"
+if [[ "$ENABLE_RUST_CORE" == "1" ]]; then
+  /opt/azazel-edge/verify_runtime_sync.sh "$REPO_ROOT" /opt/azazel-edge with-rust-core
+else
+  /opt/azazel-edge/verify_runtime_sync.sh "$REPO_ROOT" /opt/azazel-edge without-rust-core
+fi
 
 echo "Installed Azazel-Edge stack (WebUI/TUI/EPD/control/HTTPS/security) under /opt/azazel-edge and /usr/local/bin."

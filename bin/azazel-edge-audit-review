@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Code root: the checkout this launcher sits in (bin/ next to py/), or the
+# installed tree /opt/azazel-edge when the launcher was copied elsewhere (the
+# installer copies it to /usr/local/bin, whose parent holds no code).
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SELF_DIR}/.." && pwd)"
+if [[ ! -f "${ROOT_DIR}/py/azazel_edge/__init__.py" ]]; then
+  ROOT_DIR="/opt/azazel-edge"
+fi
+if [[ ! -f "${ROOT_DIR}/py/azazel_edge/__init__.py" ]]; then
+  echo "Azazel-Edge code not found next to ${SELF_DIR} or in ${ROOT_DIR}." >&2
+  exit 1
+fi
 PYTHONPATH="${ROOT_DIR}/py:${PYTHONPATH:-}" exec python3 "${ROOT_DIR}/py/azazel_edge/audit_review.py" "$@"

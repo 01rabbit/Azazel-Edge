@@ -14,8 +14,17 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+# Code root: the checkout this launcher sits in (bin/ next to py/), or the
+# installed tree /opt/azazel-edge when the launcher was copied elsewhere (the
+# installer copies it to /usr/local/bin, whose parent holds no code).
 ROOT_DIR = Path(__file__).resolve().parents[1]
+if not (ROOT_DIR / "py" / "azazel_edge" / "__init__.py").is_file():
+    ROOT_DIR = Path("/opt/azazel-edge")
+if not (ROOT_DIR / "py" / "azazel_edge" / "__init__.py").is_file():
+    sys.exit(f"Azazel-Edge code not found next to {Path(__file__).resolve().parent} or in {ROOT_DIR}.")
 VENV_PYTHON = ROOT_DIR / ".venv" / "bin" / "python3"
+if not VENV_PYTHON.exists():
+    VENV_PYTHON = ROOT_DIR / "venv" / "bin" / "python3"
 
 if os.environ.get("AZAZEL_EDGE_SCENARIO_BOOTSTRAPPED") != "1" and VENV_PYTHON.exists():
     current = Path(sys.executable).resolve()

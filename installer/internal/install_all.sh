@@ -41,7 +41,7 @@ fi
 
 if [[ "${ENABLE_APP_STACK}" == "1" ]]; then
   echo "[all/3] Install Azazel-Edge app stack"
-  "${REPO_ROOT}/installer/internal/install_migrated_tools.sh"
+  ENABLE_RUST_CORE="${ENABLE_RUST_CORE}" "${REPO_ROOT}/installer/internal/install_migrated_tools.sh"
 else
   echo "[all/3] Skip app stack installation"
 fi

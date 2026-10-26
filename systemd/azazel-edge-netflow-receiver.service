@@ -7,8 +7,15 @@ DefaultDependencies=no
 
 [Service]
 Type=simple
+# systemd does not expand ${VAR:-default} (only $VAR and ${VAR}), so the
+# defaults are set here and /etc/default/azazel-edge-sensors (read below,
+# which overrides Environment=) changes them. PYTHONPATH: `-m` needs the
+# installed tree; the venv does not hold the azazel_edge package.
+Environment="NETFLOW_LISTEN_HOST=0.0.0.0"
+Environment="NETFLOW_PORT=2055"
+Environment="PYTHONPATH=/opt/azazel-edge/py"
 EnvironmentFile=-/etc/default/azazel-edge-sensors
-ExecStart=/opt/azazel-edge/venv/bin/python3 -m azazel_edge.sensors.netflow_receiver --host "${NETFLOW_LISTEN_HOST:-0.0.0.0}" --port "${NETFLOW_PORT:-2055}"
+ExecStart=/opt/azazel-edge/venv/bin/python3 -m azazel_edge.sensors.netflow_receiver --host "${NETFLOW_LISTEN_HOST}" --port "${NETFLOW_PORT}"
 Restart=on-failure
 RestartSec=30s
 StandardOutput=journal

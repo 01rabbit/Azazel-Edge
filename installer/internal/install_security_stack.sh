@@ -5,6 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT_DEFAULT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 REPO_ROOT="${REPO_ROOT:-$REPO_ROOT_DEFAULT}"
 ENABLE_SERVICES="${ENABLE_SERVICES:-1}"
+# The LUKS secrets volume is set up only when asked for: luksFormat and open
+# ask for a passphrase on a terminal, which an unattended install does not
+# have (it used to run by default and fail silently without a terminal).
+# SKIP_LUKS=1 still skips it.
+ENABLE_ENCRYPTED_STORAGE="${ENABLE_ENCRYPTED_STORAGE:-0}"
 SKIP_LUKS="${SKIP_LUKS:-0}"
 SECURITY_ROOT="/opt/azazel-edge/security"
 SECURITY_ENV="/etc/default/azazel-edge-security"
@@ -44,13 +49,13 @@ fi
 DEBIAN_FRONTEND=noninteractive apt-get install -y suricata
 systemctl enable --now docker.service
 
-if [[ "${SKIP_LUKS}" != "1" ]]; then
-  echo "[security] Install encrypted storage baseline"
-  if [[ -x "${ASSET_ROOT}/installer/internal/install_encrypted_storage.sh" ]]; then
-    "${ASSET_ROOT}/installer/internal/install_encrypted_storage.sh" || true
-  fi
+if [[ "${ENABLE_ENCRYPTED_STORAGE}" == "1" && "${SKIP_LUKS}" != "1" ]]; then
+  echo "[security] Install encrypted storage baseline (ENABLE_ENCRYPTED_STORAGE=1; needs a terminal)"
+  # Asked for explicitly, so a failure stops the install instead of being
+  # ignored.
+  "${ASSET_ROOT}/installer/internal/install_encrypted_storage.sh"
 else
-  echo "[security] Skip encrypted storage baseline (SKIP_LUKS=1)"
+  echo "[security] Skip encrypted storage baseline (set ENABLE_ENCRYPTED_STORAGE=1 on a terminal to set it up)"
 fi
 
 echo "[security] Install compose project files"
