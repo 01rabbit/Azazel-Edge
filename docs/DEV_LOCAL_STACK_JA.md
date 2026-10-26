@@ -76,7 +76,7 @@ bin/azazel-edge-injector list                         # パススルー CLI
 
 対話メニューは、ライブ状態（eve.json のイベント数、バックグラウンドストリームの稼働状態、パイプライン／ダッシュボードの起動有無）を表示し、次の操作ができます: シナリオ一覧、単発シナリオの発火、段階的な攻撃フローの実行、連続ストリームの開始／停止、直近イベントの表示、`eve.json` のリセット。
 
-**デモの流れ:** まず `bin/azazel-edge-devstack up` を実行し、その後インジェクターのメニューから攻撃を発火して、実ダッシュボードが反応する様子を見せます。これがモック画面ではなく**ライブパイプライン注入でデモを駆動する**という意図された方法です。利用可能なシナリオ: `recon_probe`、`port_scan`、`arp_spoof`、`dns_exfil`、`cred_harvest`、`c2_beacon`、`phishing`、`benign`。（`up --inject` は連続ストリームを自動起動します。インジェクターのメニューは、シナリオ単位で手動操作したい場合に使います。）
+**デモの流れ:** まず `bin/azazel-edge-devstack up` を実行し、その後インジェクターのメニューから攻撃を発火して、実ダッシュボードが反応する様子を見せます。これがモック画面ではなく**ライブパイプライン注入でデモを駆動する**という意図された方法です。利用可能なシナリオ: `recon_probe`、`port_scan`、`arp_spoof`、`dns_exfil`、`cred_harvest`、`c2_beacon`、`phishing`、`benign`。（`up --inject` は連続ストリームを自動起動します。インジェクターのメニューは、シナリオ単位で手動操作したい場合に使います。）なお `arp_spoof` シナリオが注入する SID 9901211 は、実機の Suricata 7 では出ません（Suricata は ARP を検知できず、検知方式は未決です）。
 
 ## 環境設定
 このランチャーは `tools/macdev/env.sh` を読み込み、（アプライアンスの Linux パスの代わりに）`~/.azazel-edge-dev` 配下に macOS 向けのランタイムパス、`PYTHONPATH`、ollama のエンドポイントを設定します。さらに `azazel-edge-devstack` は、ローカル開発向けにスタックの Mattermost 接続先を `127.0.0.1:8065` に向けます（アプライアンスのデフォルトは `172.16.0.254`）。

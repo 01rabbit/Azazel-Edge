@@ -50,6 +50,12 @@ PRODUCTION_FEATURE_KEYS = (
 
 
 def _rule_classtypes() -> dict[int, str]:
+    """SID -> classtype for every rule, including the ones kept commented out.
+
+    Commented-out rules are read on purpose: 9901211 (ARP spoof) is disabled
+    because Suricata 7 has no ARP detection, but its SID and classtype stay
+    reserved and the corpus still carries it, so its category is checked too.
+    """
     mapping: dict[int, str] = {}
     for line in RULES.read_text(encoding="utf-8").splitlines():
         sid_m = re.search(r"sid:(\d+)", line)

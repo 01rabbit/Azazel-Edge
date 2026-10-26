@@ -23,6 +23,11 @@ from azazel_edge.tactics_engine.scorer import (
 
 CORPUS = Path(__file__).resolve().parent / "corpus"
 RULES = ROOT / "security" / "suricata" / "azazel-lite.rules"
+# Rules kept commented out in azazel-lite.rules because Suricata cannot express
+# them (9901211 ARP spoof: Suricata 7 has no ARP detection, detector undecided).
+# Their SIDs stay reserved in DECEPTION_SIDS / the corpus, so they are counted
+# here explicitly rather than by matching the commented-out line by accident.
+DISABLED_RULE_SIDS = {9901211}
 CRITICAL_MIN = 85
 SEPARATION_MARGIN = 20
 
@@ -34,8 +39,15 @@ class ScorerCalibrationTests(unittest.TestCase):
         self.benign = [s for s in self.result.sessions if not s.expected_detection]
 
     def test_deception_sids_match_rules(self) -> None:
-        sids = {int(m.group(1)) for m in re.finditer(r"sid:(\d+)", RULES.read_text(encoding="utf-8"))}
-        self.assertEqual(set(DECEPTION_SIDS), sids)
+        active: set[int] = set()
+        commented: set[int] = set()
+        for line in RULES.read_text(encoding="utf-8").splitlines():
+            m = re.search(r"sid:(\d+)", line)
+            if m:
+                (commented if line.lstrip().startswith("#") else active).add(int(m.group(1)))
+        self.assertEqual(commented, DISABLED_RULE_SIDS)
+        self.assertFalse(active & DISABLED_RULE_SIDS)
+        self.assertEqual(set(DECEPTION_SIDS), active | DISABLED_RULE_SIDS)
 
     def test_every_positive_clears_the_gate(self) -> None:
         for s in self.pos:

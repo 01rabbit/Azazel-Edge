@@ -216,6 +216,9 @@ def _build_pcap(path: Path) -> None:
     post = (b"POST /b HTTP/1.1\r\nHost: c2.example.test\r\nContent-Length: %d\r\n\r\n" % len(body)) + body
     for _ in range(12):
         http("172.16.0.70", SERVER_EXT, post)
+    # threshold lower bound: 9 small POSTs (count is 10) must not fire 9901251
+    for _ in range(9):
+        http("172.16.0.72", SERVER_EXT, post)
     # large POSTs (500-byte body) from another host: 9901251 must not fire
     big = b"x" * 500
     big_post = (b"POST /u HTTP/1.1\r\nHost: upload.example.test\r\nContent-Length: %d\r\n\r\n" % len(big)) + big
@@ -228,6 +231,9 @@ def _build_pcap(path: Path) -> None:
     # DNS tunnel (9901232): 60 queries from one host within 10 s
     for i in range(60):
         dns("172.16.0.90", f"q{i}.t.example.test", 100 + i)
+    # threshold lower bound: 49 queries (count is 50) must not fire 9901232
+    for i in range(49):
+        dns("172.16.0.91", f"q{i}.u.example.test", 200 + i)
 
     scapy.wrpcap(str(path), pkts)
 
@@ -257,8 +263,9 @@ def test_rules_fire_on_crafted_pcap(tmp_path):
     # the shelter client is the source of the phishing alerts
     for sid in (9901201, 9901202, 9901203):
         assert {a["src_ip"] for a in fired[sid]} == {CLIENT}, sid
-    # benign HTTP, large POSTs and the short DNS query did not trigger anything
-    assert not [a for a in alerts if a["src_ip"] in {"172.16.0.60", "172.16.0.71", "172.16.0.81"}]
+    # benign HTTP, large POSTs, the short DNS query and the below-threshold
+    # hosts (9 POSTs, 49 queries) did not trigger anything
+    assert not [a for a in alerts if a["src_ip"] in {"172.16.0.60", "172.16.0.71", "172.16.0.72", "172.16.0.81", "172.16.0.91"}]
     # threshold "type both": one alert per window per source
     assert len(fired[9901232]) == 1 and fired[9901232][0]["src_ip"] == "172.16.0.90"
     assert len(fired[9901251]) == 1 and fired[9901251][0]["src_ip"] == "172.16.0.70"
