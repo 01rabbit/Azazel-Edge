@@ -214,9 +214,23 @@ def test_nginx_still_listens_on_every_address_so_a_late_lan_cannot_stop_it():
     assert re.findall(r"^\s*listen ([^;]+);", _render_nginx(), re.M) == ["80", "443 ssl"]
 
 
-@pytest.mark.skipif(shutil.which("nginx") is None or shutil.which("openssl") is None,
-                    reason="needs nginx and openssl")
+def _nginx_version() -> tuple[int, ...] | None:
+    if shutil.which("nginx") is None:
+        return None
+    res = subprocess.run(["nginx", "-v"], capture_output=True, text=True)
+    m = re.search(r"nginx/(\d+)\.(\d+)\.(\d+)", res.stderr + res.stdout)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="needs openssl")
 def test_the_generated_site_passes_nginx_t(tmp_path):
+    version = _nginx_version()
+    if version is None:
+        pytest.skip("needs nginx")
+    if version < (1, 25, 1):
+        # The site uses `http2 on;` (nginx 1.25.1+; Debian trixie ships
+        # 1.26), which an older nginx (e.g. a CI runner's) does not know.
+        pytest.skip(f"nginx {'.'.join(map(str, version))} is older than 1.25.1 (no `http2 on;`)")
     site = _render_nginx().replace(" /c;", f" {tmp_path}/c;").replace(" /k;", f" {tmp_path}/k;")
     subprocess.run(["openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048", "-days", "1",
                     "-subj", "/CN=t", "-keyout", str(tmp_path / "k"), "-out", str(tmp_path / "c")],
@@ -258,6 +272,7 @@ def test_without_a_br0_route_the_default_is_used_with_a_notice(tmp_path):
     ("192.0.2.1/32", True), ("192.0.2.1/33", False),
     ("223.255.255.0/24", True), ("224.0.0.0/8", False), ("256.1.1.0/24", False), ("10.0.0.256/24", False),
     ("0.0.0.0/0", False), ("0.0.0.0/8", False),
+    ("172.016.0.0/24", False), ("10.0.0.00/24", False), ("10.0.0.0/08", False), ("10.0.0.0/0", False),
     ("any", False), ("10.0.0.0", False), ("10.0.0.0/24;allow", False),
 ])
 def test_the_lan_subnet_check_boundaries(tmp_path, cidr, ok):
@@ -265,6 +280,12 @@ def test_the_lan_subnet_check_boundaries(tmp_path, cidr, ok):
     assert (res.returncode == 0) is ok, res.stderr
     if not ok:
         assert "IPv4 CIDR" in res.stderr
+
+
+def test_the_installer_tells_how_to_move_an_existing_mattermost():
+    src = _read(HTTPS)
+    assert re.search(r'^echo "NOTICE: Mattermost slash commands are admitted only from \$\{MATTERMOST_BRIDGE_SUBNET\}.*'
+                     r'403 until Mattermost is recreated .*docker-compose\.mattermost\.yml up -d\)"$', src, re.M)
 
 
 def test_the_lan_subnet_is_resolved_before_the_site_is_written():
@@ -369,7 +390,9 @@ def test_install_all_scopes_avahi_right_after_the_network_baseline():
 
 @pytest.mark.parametrize("script", [SENSORS, VECTOR])
 @pytest.mark.parametrize("addr,ok", [
-    ("172.16.0.254", True), ("10.0.0.5", True), ("127.0.0.1", True), ("223.1.1.1", True),
+    ("172.16.0.254", True), ("10.0.0.5", True), ("223.1.1.1", True), ("10.0.0.0", True),
+    ("127.0.0.1", False), ("127.1.2.3", False), ("255.255.255.255", False),
+    ("172.016.0.254", False), ("10.0.0.05", False), ("010.0.0.5", False),
     ("0.0.0.0", False), ("0.1.2.3", False), ("224.0.0.1", False), ("256.0.0.1", False),
     ("10.0.0.256", False), ("", False), ("eth1", False), ("0.0.0.0; x", False), ("::", False),
 ])

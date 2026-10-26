@@ -32,15 +32,17 @@ lan_ipv4() {
   printf '%s' "$addr"
 }
 
-# A unicast IPv4 address to listen on: four octets 0..255, the first 1..223
-# (so not 0.0.0.0, "every address", and not multicast).
+# A unicast IPv4 address to listen on for other hosts: four octets 0..255
+# written without leading zeros, the first 1..223 except 127 (so not
+# 0.0.0.0 "every address", not loopback, not multicast or the 255.255.255.255
+# broadcast).
 valid_listen_ipv4() {
   local o
-  [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  [[ "$1" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]] || return 1
   for o in "${BASH_REMATCH[@]:1:4}"; do
-    (( 10#$o <= 255 )) || return 1
+    (( o <= 255 )) || return 1
   done
-  (( 10#${BASH_REMATCH[1]} >= 1 && 10#${BASH_REMATCH[1]} <= 223 ))
+  (( BASH_REMATCH[1] >= 1 && BASH_REMATCH[1] <= 223 && BASH_REMATCH[1] != 127 ))
 }
 
 if [[ "${EUID}" -ne 0 ]]; then

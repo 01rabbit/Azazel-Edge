@@ -36,16 +36,17 @@ MATTERMOST_BRIDGE_SUBNET="172.31.250.0/24"
 # has none yet. There is no setting that widens it. Re-run this script after
 # changing the LAN subnet.
 
-# An IPv4 CIDR: four octets 0..255 (the first 1..223), prefix /8../32.
+# An IPv4 CIDR: four octets 0..255 written without leading zeros (the
+# first 1..223), prefix /8../32.
 valid_ipv4_cidr() {
   local o
-  [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
+  [[ "$1" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})/([1-9][0-9]?)$ ]] || return 1
   local -a m=("${BASH_REMATCH[@]:1}")
   for o in "${m[@]:0:4}"; do
-    (( 10#$o <= 255 )) || return 1
+    (( o <= 255 )) || return 1
   done
-  (( 10#${m[0]} >= 1 && 10#${m[0]} <= 223 )) || return 1
-  (( 10#${m[4]} >= 8 && 10#${m[4]} <= 32 ))
+  (( m[0] >= 1 && m[0] <= 223 )) || return 1
+  (( m[4] >= 8 && m[4] <= 32 ))
 }
 
 detect_lan_cidr() {
@@ -196,3 +197,4 @@ systemctl enable --now nginx.service
 systemctl restart nginx.service
 
 echo "[https] nginx TLS reverse proxy enabled on :443 (this device and ${LAN_CIDR} only)"
+echo "NOTICE: Mattermost slash commands are admitted only from ${MATTERMOST_BRIDGE_SUBNET}; on a device whose Mattermost ran before that network existed they get 403 until Mattermost is recreated (cd /opt/azazel-edge/security && azazel-edge-compose -f docker-compose.mattermost.yml up -d)"
