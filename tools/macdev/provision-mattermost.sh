@@ -59,6 +59,9 @@ json_get() {
   python3 -c 'import json,sys; obj=json.load(sys.stdin); value=eval(sys.argv[1], {"obj": obj}); print("" if value is None else value)' "$1"
 }
 
+# Dev only (macOS/OrbStack, a throwaway local Mattermost): tokens and the
+# login body are passed on curl's command line here. The appliance scripts
+# (installer/internal/provision_mattermost_*.sh) keep them off argv.
 api_call() {
   local method="$1" path="$2" body="${3:-}" token="${4:-${AUTH_TOKEN}}"
   local headers_file body_file

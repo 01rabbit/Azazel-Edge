@@ -462,8 +462,8 @@ def test_api_bodies_go_on_stdin_and_are_json_escaped():
 def _lan_proxy_block() -> str:
     src = PROVISION.read_text(encoding="utf-8")
     start = src.index("# Print the nginx site that puts")
-    end = src.index("\nresolve_admin_password\n")
-    return src[start:end]
+    end = src.index("\n# Files below are private")
+    return src[start:end] + "\n" + _function(PROVISION, "print_rerun_hint")
 
 
 def test_lan_proxy_site_admits_lan_and_loopback_only():
@@ -759,7 +759,8 @@ def test_provision_ends_non_zero_while_the_former_admin_password_is_in_use():
     src = PROVISION.read_text(encoding="utf-8")
     tail = src[src.index("\nresolve_admin_password\n"):]
     assert tail.index("require_changed_admin_password") < tail.index('echo "[OK] Mattermost workspace provisioned"')
-    func = _function(PROVISION, "require_changed_admin_password") + _function(PROVISION, "is_former_default_password")
+    func = (_function(PROVISION, "require_changed_admin_password") + _function(PROVISION, "is_former_default_password")
+            + _function(PROVISION, "print_rerun_hint"))
     fake_hash = hashlib.sha256(b"fake-old-default").hexdigest()
     base = f'FORMER_DEFAULT_PASSWORD_SHA256="{fake_hash}"\nMATTERMOST_USERNAME=u\nCRED_ENV=/x/cred.env\n' + func
 
@@ -771,6 +772,7 @@ def test_provision_ends_non_zero_while_the_former_admin_password_is_in_use():
     # The way back is the AI runtime installer (slash command, restarts),
     # not this script alone.
     assert "sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh" in res.stderr
+    assert "install_all.sh" in res.stderr and "install_sensors.sh" in res.stderr
     assert "fake-old-default" not in res.stderr  # the password itself is not shown
 
     res = subprocess.run(["bash", "-c", base + 'MATTERMOST_PASSWORD="new-random"\nrequire_changed_admin_password\necho OK\n'],
@@ -778,40 +780,138 @@ def test_provision_ends_non_zero_while_the_former_admin_password_is_in_use():
     assert res.returncode == 0 and res.stdout == "OK\n"
 
 
-def test_api_call_keeps_the_token_off_the_command_line(tmp_path):
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    log = tmp_path / "curl.log"
-    (bindir / "curl").write_text(f"""#!/bin/bash
+CURL_RECORDER = """#!/bin/bash
 printf 'argv %s\\n' "$*" >> {log}
+mode='{mode}'
 prev=""
 for a in "$@"; do
-  if [[ $prev == -H && $a == @* ]]; then printf 'hdrfile %s\\n' "$(cat "${{a#@}}")" >> {log}; fi
+  if [[ $prev == -H && $a == @* ]]; then
+    printf 'hdrfile %s %s\\n' "$(stat -c %a "${{a#@}}" 2>/dev/null)" "$(cat "${{a#@}}")" >> {log}
+    printf 'workdir %s\\n' "$(dirname "${{a#@}}")" >> {log}
+  fi
   if [[ $prev == -D ]]; then printf 'Token: x\\r\\n' > "$a"; fi
   prev="$a"
 done
 printf 'stdin %s\\n' "$(cat)" >> {log}
+case $mode in
+  fail) exit 7 ;;
+  hang) echo started >> {log}.started; sleep 30 ;;
+esac
 printf 200
-""", encoding="utf-8")
+"""
+
+
+def _curl_recorder(tmp_path: Path, mode: str = "ok") -> Path:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "curl").write_text(CURL_RECORDER.format(log=tmp_path / "curl.log", mode=mode), encoding="utf-8")
     (bindir / "curl").chmod(0o755)
-    token = "faketoken0123456789"
-    script = (
-        "set -euo pipefail\nMATTERMOST_API_URL=http://127.0.0.1:18065\nAUTH_TOKEN=''\n"
-        + _function(PROVISION, "api_call")
-        + f'api_call GET /api/v4/users/me "" {token}\napi_call POST /x \'{{"a":1}}\' {token}\necho "$LAST_STATUS"\n'
+    return bindir
+
+
+TOKEN = "faketoken0123456789"
+
+
+def _workspace_api_script(calls: str) -> str:
+    return (
+        "set -euo pipefail\nMATTERMOST_API_URL=http://127.0.0.1:18065\nAUTH_TOKEN=''\numask 077\n"
+        + _function(PROVISION, "setup_work_dir") + _function(PROVISION, "api_call")
+        + "setup_work_dir\n" + calls
     )
+
+
+def _command_api_script(calls: str) -> str:
+    return (
+        f"set -euo pipefail\nMATTERMOST_URL=http://127.0.0.1:18065\nBOT_TOKEN={TOKEN}\n"
+        + _function(COMMAND, "setup_work_dir") + _function(COMMAND, "api")
+        + "setup_work_dir\n" + calls
+    )
+
+
+def _check_off_argv(tmp_path: Path, expected_headers: int) -> str:
+    text = (tmp_path / "curl.log").read_text(encoding="utf-8")
+    argv = "\n".join(l for l in text.splitlines() if l.startswith("argv "))
+    assert TOKEN not in argv
+    assert text.count(f"hdrfile 600 Authorization: Bearer {TOKEN}") == expected_headers
+    workdirs = {l.split()[1] for l in text.splitlines() if l.startswith("workdir ")}
+    assert len(workdirs) == 1
+    workdir = Path(workdirs.pop())
+    assert workdir.parent == tmp_path and not workdir.exists()  # removed on exit
+    # Nothing is left behind in TMPDIR.
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name not in ("bin", "curl.log", "curl.log.started")) == []
+    return text
+
+
+def test_api_call_keeps_the_token_off_the_command_line(tmp_path):
+    bindir = _curl_recorder(tmp_path)
+    script = _workspace_api_script(
+        f'api_call GET /api/v4/users/me "" {TOKEN}\napi_call POST /x \'{{"a":1}}\' {TOKEN}\necho "$LAST_STATUS"\n')
     env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", TMPDIR=str(tmp_path))
     res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
     assert res.returncode == 0, res.stderr
-    text = log.read_text(encoding="utf-8")
-    argv = "\n".join(l for l in text.splitlines() if l.startswith("argv "))
-    assert token not in argv
-    assert text.count(f"hdrfile Authorization: Bearer {token}") == 2
+    text = _check_off_argv(tmp_path, 2)
     assert 'stdin {"a":1}' in text
-    # No temporary file (headers, body, token) is left behind.
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["bin", "curl.log"]
     assert "Authorization: Bearer" not in PROVISION.read_text(encoding="utf-8").replace(
         "printf 'Authorization: Bearer %s\\n'", "")
+
+
+def test_api_call_curl_failure_exits_1_and_removes_the_files(tmp_path):
+    bindir = _curl_recorder(tmp_path, "fail")
+    script = _workspace_api_script(f'api_call GET /api/v4/users/me "" {TOKEN}\necho REACHED\n')
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", TMPDIR=str(tmp_path))
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+    assert res.returncode == 1
+    assert "REACHED" not in res.stdout and "curl exit 7" in res.stderr
+    _check_off_argv(tmp_path, 1)
+
+
+def _signal_while_curl_runs(tmp_path: Path, script: str, sig: int) -> int:
+    import signal
+    import time
+
+    bindir = _curl_recorder(tmp_path, "hang")
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", TMPDIR=str(tmp_path))
+    proc = subprocess.Popen(["bash", "-c", script], env=env, start_new_session=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    started = tmp_path / "curl.log.started"
+    deadline = time.monotonic() + 10
+    while not started.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert started.exists(), "curl stub did not start"
+    os.killpg(proc.pid, sig)
+    return proc.wait(timeout=10)
+
+
+@pytest.mark.parametrize("signame, code", [("SIGTERM", 143), ("SIGINT", 130)])
+def test_workspace_scratch_dir_is_removed_on_a_signal(tmp_path, signame, code):
+    import signal
+
+    script = _workspace_api_script(f'api_call POST /x \'{{"a":1}}\' {TOKEN}\n')
+    assert _signal_while_curl_runs(tmp_path, script, getattr(signal, signame)) == code
+    _check_off_argv(tmp_path, 1)
+
+
+def test_command_api_keeps_the_bot_token_off_the_command_line(tmp_path):
+    bindir = _curl_recorder(tmp_path)
+    script = _command_api_script('api GET /api/v4/teams/name/t >/dev/null\napi POST /api/v4/commands \'{"b":2}\' >/dev/null\n')
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", TMPDIR=str(tmp_path))
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+    assert res.returncode == 0, res.stderr
+    text = _check_off_argv(tmp_path, 2)
+    assert 'stdin {"b":2}' in text
+    src = COMMAND.read_text(encoding="utf-8")
+    assert "Authorization: Bearer ${BOT_TOKEN}\"" not in src and '-H "Authorization' not in src
+    # setup_work_dir runs once the token is known, before the first request.
+    assert src.index("\nsetup_work_dir\n") < src.index('TEAM_JSON="$(api GET')
+    assert src.index('BOT_TOKEN="${AZAZEL_MATTERMOST_BOT_TOKEN:-}"') < src.index("\nsetup_work_dir\n")
+
+
+def test_command_scratch_dir_is_removed_on_a_signal(tmp_path):
+    import signal
+
+    script = _command_api_script("api GET /api/v4/teams/name/t\n")
+    assert _signal_while_curl_runs(tmp_path, script, signal.SIGTERM) == 143
+    _check_off_argv(tmp_path, 1)
 
 
 # ---------------- exit codes reach the caller (install_ai_runtime, install_all)
@@ -823,7 +923,7 @@ def _stub(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _run_ai_runtime(tmp_path: Path, *, secret_rc: int = 0, provision_rc: int = 0):
+def _run_ai_runtime(tmp_path: Path, *, secret_rc: int = 0, provision_rc: int = 0, command_rc: int = 0):
     repo = tmp_path / "repo"
     sysroot = tmp_path / "sys"
     log = tmp_path / "calls.log"
@@ -836,7 +936,7 @@ def _run_ai_runtime(tmp_path: Path, *, secret_rc: int = 0, provision_rc: int = 0
     (internal / "install_ai_runtime.sh").write_text(src, encoding="utf-8")
     _stub(internal / "mattermost_db_secret.sh", f'echo "db_secret $*" >> {log}; exit {secret_rc}')
     _stub(internal / "provision_mattermost_workspace.sh", f'echo "provision_workspace" >> {log}; exit {provision_rc}')
-    _stub(internal / "provision_mattermost_command.sh", f'echo "provision_command" >> {log}')
+    _stub(internal / "provision_mattermost_command.sh", f'echo "provision_command" >> {log}; exit {command_rc}')
     _stub(repo / "bin" / "azazel-edge-compose", f'echo "compose $*" >> {log}')
     for name in ("docker-compose.ollama.yml", "docker-compose.mattermost.yml", ".env"):
         (repo / "security").mkdir(exist_ok=True)
@@ -895,3 +995,10 @@ def test_install_all_passes_the_ai_runtime_exit_code_on(tmp_path, rc):
                          env=env, stdin=subprocess.DEVNULL)
     assert res.returncode == rc, res.stdout + res.stderr
     assert not log.exists()  # nothing after the AI runtime ran
+
+
+@needs_gnu_mv
+def test_ai_runtime_stops_when_the_slash_command_step_fails(tmp_path):
+    res, calls = _run_ai_runtime(tmp_path, command_rc=4)
+    assert res.returncode == 4
+    assert "[DONE]" not in res.stdout

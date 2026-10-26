@@ -328,7 +328,7 @@ sudo installer/internal/provision_mattermost_workspace.sh
 >
 > 1. LAN の端末から `http://172.16.0.254:8065` に管理者（`azazelops`）でログインし、Profile > Security > Password で新しいパスワードに変える。
 > 2. 新しいパスワードを `/etc/azazel-edge/mattermost-credentials.env`（0600 root）の `MATTERMOST_PASSWORD=` に書く（`sudoedit` などで。コマンドラインの引数やシェル履歴に残さない）。
-> 3. 導入に使った Azazel-Edge のチェックアウトで `sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh` を再実行し、エラーなく `[DONE]` で終わることを確かめる（ワークスペースの設定、slash command の登録、Web UI と AI エージェントの再起動まで通る。`ENABLE_OLLAMA=0` はモデルの再取得を省くだけ）。`/opt/azazel-edge/install_ai_runtime.sh` の複製は、置き場所からリポジトリを見つけられないので使わない。
+> 3. 導入に使った Azazel-Edge のチェックアウトで `sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh` を再実行し、エラーなく `[DONE]` で終わることを確かめる（ワークスペースの設定、slash command の登録、Web UI と AI エージェントの再起動まで通る。`ENABLE_OLLAMA=0` はモデルの再取得を省くだけ）。`/opt/azazel-edge/install_ai_runtime.sh` の複製は、置き場所からリポジトリを見つけられないので使わない。`install_all.sh` 経由で導入した場合は、そこで止まったために `install_all.sh` の後の段階も走っていないので、有効にしていたもの（`set_dev_remote_access.sh`・`install_vector.sh`・`install_sensors.sh`）も `install_all.sh` と同じ環境変数で実行する。
 
 - `provision_mattermost_workspace.sh` は、LAN から Mattermost に届かない状態では成功表示をせず終了コード 1 で終わる: nginx が入っていない場合（`install_https_proxy.sh` を実行してから）、以前のコンテナが 8065 を全インターフェースに公開したままの場合。どちらも上と同じく `install_ai_runtime.sh` を再実行する（コンテナの作り直しも含む）。
 

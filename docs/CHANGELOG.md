@@ -48,7 +48,10 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     `sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh` again from
     the Azazel-Edge checkout used for the install (it also registers the
     slash command and restarts the Web UI and the AI agent; the copy in
-    `/opt/azazel-edge` cannot find the repository and is not the entry).
+    `/opt/azazel-edge` cannot find the repository and is not the entry). If
+    the device was installed with `install_all.sh`, its later stages (dev
+    remote access, Vector, sensors) did not run either: run the enabled
+    ones as `install_all.sh` would.
   - `provision_mattermost_workspace.sh` also fails (exit 1, with what to do)
     when Mattermost would not be reachable from the LAN: nginx is not
     installed, or an earlier container still publishes 8065 on every

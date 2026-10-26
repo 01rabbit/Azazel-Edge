@@ -35,22 +35,30 @@ if [[ -z "${BOT_TOKEN}" ]]; then
   exit 1
 fi
 
+# The bot token goes to curl in a 0600 file (-H @file) in a private 0700
+# directory removed on every exit (also on INT/TERM), and a body on stdin, so
+# neither is on curl's command line (Edge#477).
+setup_work_dir() {
+  WORK_DIR="$(umask 077 && mktemp -d)"
+  trap 'rm -rf -- "${WORK_DIR}"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  AUTH_FILE="${WORK_DIR}/auth"
+  (umask 077 && printf 'Authorization: Bearer %s\n' "${BOT_TOKEN}" >"${AUTH_FILE}")
+}
+
 api() {
   local method="$1"
   local path="$2"
   local body="${3:-}"
+  local args=(-fsS -X "${method}" -H "@${AUTH_FILE}")
   if [[ -n "${body}" ]]; then
-    curl -fsS -X "${method}" \
-      -H "Authorization: Bearer ${BOT_TOKEN}" \
-      -H "Content-Type: application/json" \
-      --data "${body}" \
-      "${MATTERMOST_URL}${path}"
-  else
-    curl -fsS -X "${method}" \
-      -H "Authorization: Bearer ${BOT_TOKEN}" \
-      "${MATTERMOST_URL}${path}"
+    args+=(-H "Content-Type: application/json" --data-binary @-)
   fi
+  printf '%s' "${body}" | curl "${args[@]}" "${MATTERMOST_URL}${path}"
 }
+
+setup_work_dir
 
 TEAM_JSON="$(api GET "/api/v4/teams/name/${TEAM_NAME}")"
 TEAM_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"${TEAM_JSON}")"
