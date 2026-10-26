@@ -232,12 +232,112 @@ def new_profile_security(iface: str, ssid: str) -> Optional[Tuple[str, str]]:
     return _key_mgmt_from_nm_security(raws)
 
 
+# A saved profile given a new PSK is not changed until the new PSK works:
+# `nmcli connection clone` copies it (all settings, secrets included) under
+# NM_PENDING_CLONE_PREFIX + <original UUID>, with autoconnect off; only the
+# clone's PSK is dropped (psk-flags 2, then 0: setting it to "" keeps the
+# stored one) and the clone is brought up with the new PSK in a passwd-file.
+# On success the original is deleted by UUID and the clone takes its name;
+# on any failure the clone is deleted by UUID and the original keeps its old
+# PSK. A clone left by a crash is swept on the next connect.
+NM_PENDING_CLONE_PREFIX = "azazel-wifi-pending-"
+_UUID_RE = r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}"
+
+
+def _nm_run(cmd: List[str], timeout: float = 5) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def _nm_name_uuid_list() -> List[Tuple[str, str]]:
+    result = _nm_run(["nmcli", "-t", "-f", "NAME,UUID", "con", "show"])
+    if result.returncode != 0:
+        return []
+    pairs = []
+    for line in (result.stdout or "").splitlines():
+        name, uuid = _split_nmcli_terse_line(line, 2)
+        if re.fullmatch(_UUID_RE, uuid):
+            pairs.append((name, uuid))
+    return pairs
+
+
+def sweep_stale_psk_clones() -> None:
+    """Delete, by UUID, clones a crash left behind whose original still
+    exists. A clone whose original is gone (a crash between deleting the
+    original and renaming the clone) is the only copy: it is kept and
+    reported. No other profile is touched."""
+    pairs = _nm_name_uuid_list()
+    uuids = {uuid for _, uuid in pairs}
+    for name, uuid in pairs:
+        if not name.startswith(NM_PENDING_CLONE_PREFIX):
+            continue
+        original = name[len(NM_PENDING_CLONE_PREFIX):]
+        if original in uuids and original != uuid:
+            _nm_run(["nmcli", "con", "delete", "uuid", uuid])
+            logger.info("removed a stale Wi-Fi profile clone left by an interrupted connect")
+        else:
+            logger.warning("a Wi-Fi profile clone has no original left; kept (rename it by hand)")
+
+
+def _up_saved_profile_with_new_psk(con_name: str, key_mgmt: Optional[str], passphrase: str):
+    """Bring the saved profile ``con_name`` up with a new PSK through a clone
+    (see NM_PENDING_CLONE_PREFIX). Returns the `con up` result, or a
+    failure dict when the clone could not be prepared."""
+    found = _nm_run(["nmcli", "-g", "connection.uuid", "con", "show", "id", con_name])
+    original = (found.stdout or "").strip().splitlines()[0:1] if found.returncode == 0 else []
+    if not original or not re.fullmatch(_UUID_RE, original[0]):
+        return {"ok": False, "error": "Saved connection not found"}
+    original_uuid = original[0]
+    clone_name = NM_PENDING_CLONE_PREFIX + original_uuid
+    cloned = _nm_run(["nmcli", "con", "clone", "uuid", original_uuid, clone_name])
+    if cloned.returncode != 0:
+        return {"ok": False, "error": cloned.stderr.strip() or "Connection failed"}
+    clone_uuids = [u for u in re.findall(r"\((" + _UUID_RE + r")\)", cloned.stdout or "") if u != original_uuid]
+    if not clone_uuids:
+        clone_uuids = [u for n, u in _nm_name_uuid_list() if n == clone_name]
+    if not clone_uuids:
+        return {"ok": False, "error": "Connection failed (profile copy not found)"}
+    clone_uuid = clone_uuids[-1]
+
+    def delete_clone() -> None:
+        try:
+            _nm_run(["nmcli", "con", "delete", "uuid", clone_uuid])
+        except Exception as exc:
+            logger.warning(f"could not remove the Wi-Fi profile clone: {type(exc).__name__}")
+
+    try:
+        steps = [["connection.autoconnect", "no"]]
+        if key_mgmt:
+            steps.append(["wifi-sec.key-mgmt", key_mgmt])
+        steps += [["wifi-sec.psk-flags", "2"], ["wifi-sec.psk-flags", "0"]]
+        for step in steps:
+            if _nm_run(["nmcli", "con", "mod", "uuid", clone_uuid, *step]).returncode != 0:
+                delete_clone()
+                return {"ok": False, "error": "Connection failed (could not prepare the profile)"}
+        with _nm_passwd_file({NM_PSK_PROPERTY: passphrase}) as passwd_file:
+            result = _nm_run(["nmcli", "con", "up", "uuid", clone_uuid, "passwd-file", passwd_file], timeout=20)
+    except Exception:
+        delete_clone()
+        raise
+    if result.returncode != 0:
+        delete_clone()
+        return result
+    if _nm_run(["nmcli", "con", "delete", "uuid", original_uuid]).returncode != 0:
+        logger.warning("connected with the new PSK, but the old Wi-Fi profile could not be removed")
+    _nm_run(["nmcli", "con", "mod", "uuid", clone_uuid, "connection.id", con_name])
+    return result
+
+
 def connect_nm(iface: str, ssid: str, security: str, passphrase: Optional[str], persist: bool) -> Dict[str, Any]:
     """Connect using NetworkManager/nmcli"""
     try:
         if passphrase:
             # Refuse a secret nmcli cannot carry before any profile changes.
             _nm_passwd_escape(passphrase)
+        try:
+            sweep_stale_psk_clones()
+        except Exception as exc:
+            logger.warning(f"could not check for stale Wi-Fi profile clones: {type(exc).__name__}")
+        key_mgmt: Optional[str] = None
         sec_flags = parse_security(security)
         # OPEN AP profiles are always treated as ephemeral to avoid stale reconnection failures.
         persist = bool(persist and not sec_flags["open"])
@@ -400,37 +500,21 @@ def connect_nm(iface: str, ssid: str, security: str, passphrase: Optional[str], 
                     # User provided credentials explicitly; align key-mgmt with the requested security.
                     key_mgmt = desired
 
-                if key_mgmt:
+                if key_mgmt and not passphrase:
                     subprocess.run(
                         ["nmcli", "con", "mod", con_name, "wifi-sec.key-mgmt", key_mgmt],
                         capture_output=True,
                         timeout=5
                     )
-                if passphrase:
-                    # Drop the stored PSK so that NetworkManager asks nmcli
-                    # for it on `con up`; nmcli answers from the passwd-file
-                    # and NetworkManager stores the new PSK in the profile
-                    # (formerly `con mod … wifi-sec.psk <psk>`). Setting the
-                    # PSK to "" does not drop it (nmcli sends no secrets and
-                    # NetworkManager keeps the stored one); psk-flags 2
-                    # (not saved) drops it, and 0 makes it system-owned
-                    # again, so the answer is saved.
-                    for psk_flags in ("2", "0"):
-                        subprocess.run(
-                            ["nmcli", "con", "mod", con_name, "wifi-sec.psk-flags", psk_flags],
-                            capture_output=True,
-                            timeout=5
-                        )
 
-            # Connect to existing connection
             if passphrase and not sec_flags["open"]:
-                with _nm_passwd_file({NM_PSK_PROPERTY: passphrase}) as passwd_file:
-                    result = subprocess.run(
-                        ["nmcli", "con", "up", con_name, "passwd-file", passwd_file],
-                        capture_output=True,
-                        text=True,
-                        timeout=20
-                    )
+                # New PSK for a saved profile: a clone takes it and is
+                # brought up; the original (with its old PSK) is replaced
+                # only when that worked (formerly `con mod … wifi-sec.psk
+                # <psk>` on the original, then `con up`).
+                result = _up_saved_profile_with_new_psk(con_name, key_mgmt, passphrase)
+                if isinstance(result, dict):
+                    return result
             else:
                 result = subprocess.run(
                     ["nmcli", "con", "up", con_name],

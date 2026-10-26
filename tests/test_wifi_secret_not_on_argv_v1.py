@@ -74,40 +74,75 @@ def nm_unescape(value: str) -> str:
     return out.decode("utf-8")
 
 
+ORIG_UUID = "0a0a0a0a-1111-4222-8333-555555555555"
+CLONE_UUID = "0c0c0c0c-1111-4222-8333-666666666666"
+OTHER_UUID = "0d0d0d0d-1111-4222-8333-777777777777"
+
+
 class FakeNmcli:
-    """Records every argv and answers like nmcli for the calls connect_nm makes."""
+    """Records every argv and answers like nmcli for the calls connect_nm
+    makes, over a small store of profiles {uuid: {name, ssid}}."""
 
     def __init__(self, *, saved: bool, ap_security="WPA2", up_rc: int = 0, up_raises: bool = False,
-                 existing_key_mgmt: str = "wpa-psk",
+                 existing_key_mgmt: str = "wpa-psk", clone_rc: int = 0, mod_fail: str = "",
                  add_stdout: str = f"Connection '{FAKE_SSID}' ({FAKE_UUID}) successfully added.\n"):
-        self.saved = saved
         self.ap_security = [ap_security] if isinstance(ap_security, str) else list(ap_security)
         self.existing_key_mgmt = existing_key_mgmt
         self.up_rc = up_rc
         self.up_raises = up_raises
+        self.clone_rc = clone_rc
+        self.mod_fail = mod_fail
         self.add_stdout = add_stdout
-        self.added = False
+        self.profiles: dict = {OTHER_UUID: {"name": "example-other", "ssid": "other-ssid", "psk": "kept"}}
+        if saved:
+            self.profiles[ORIG_UUID] = {"name": "example-saved", "ssid": FAKE_SSID, "psk": "old"}
         self.calls: list[list[str]] = []
         self.passwd_files: list[dict] = []
+
+    def names(self):
+        return sorted(p["name"] for p in self.profiles.values())
+
+    def _by_name(self, name):
+        return [u for u, p in self.profiles.items() if p["name"] == name]
 
     def __call__(self, cmd, *args, **kwargs):
         cmd = [str(c) for c in cmd]
         self.calls.append(cmd)
         out, rc = "", 0
         if cmd[:6] == ["nmcli", "-t", "-f", "NAME,TYPE", "con", "show"]:
-            out = ("example-saved:802-11-wireless\n" if self.saved else "") + \
-                (f"{FAKE_SSID}:802-11-wireless\n" if self.added else "")
+            out = "".join(f"{p['name']}:802-11-wireless\n" for p in self.profiles.values())
+        elif cmd[:6] == ["nmcli", "-t", "-f", "NAME,UUID", "con", "show"]:
+            out = "".join(f"{p['name']}:{u}\n" for u, p in self.profiles.items())
         elif cmd[:4] == ["nmcli", "-t", "-f", "802-11-wireless.ssid"]:
-            out = f"802-11-wireless.ssid:{FAKE_SSID}\n"
+            uuids = self._by_name(cmd[-1])
+            out = f"802-11-wireless.ssid:{self.profiles[uuids[0]]['ssid']}\n" if uuids else ""
         elif cmd[:3] == ["nmcli", "-g", "802-11-wireless-security.key-mgmt"]:
             out = self.existing_key_mgmt + "\n"
+        elif cmd[:3] == ["nmcli", "-g", "connection.uuid"]:
+            out = "".join(u + "\n" for u in self._by_name(cmd[-1]))
         elif cmd[:4] == ["nmcli", "-t", "-f", "SSID,SECURITY"]:
             out = "other-ssid:WPA2 802.1X\n" + "".join(f"{FAKE_SSID}:{sec}\n" for sec in self.ap_security)
         elif cmd[:3] == ["nmcli", "con", "add"]:
-            self.added = True
+            self.profiles[FAKE_UUID] = {"name": FAKE_SSID, "ssid": FAKE_SSID, "psk": None}
             out = self.add_stdout
+        elif cmd[:4] == ["nmcli", "con", "clone", "uuid"]:
+            rc = self.clone_rc
+            if not rc:
+                src = self.profiles[cmd[4]]
+                self.profiles[CLONE_UUID] = dict(src, name=cmd[5])
+                out = f"{src['name']} ({cmd[4]}) cloned as {cmd[5]} ({CLONE_UUID}).\n"
+        elif cmd[:4] == ["nmcli", "con", "mod", "uuid"]:
+            if self.mod_fail and self.mod_fail in cmd:
+                rc = 1
+            elif cmd[5:7] == ["connection.id", cmd[-1]]:
+                self.profiles[cmd[4]]["name"] = cmd[6]
+            elif cmd[5:7] == ["wifi-sec.psk-flags", "2"]:
+                self.profiles[cmd[4]]["psk"] = None
         elif cmd[:4] == ["nmcli", "con", "delete", "uuid"]:
-            self.added = False
+            rc = 0 if self.profiles.pop(cmd[4], None) else 10
+        elif cmd[:3] == ["nmcli", "con", "delete"]:
+            for u in self._by_name(cmd[3]):
+                self.profiles.pop(u)
         elif cmd[:3] == ["nmcli", "con", "up"] and "passwd-file" in cmd:
             path = Path(cmd[cmd.index("passwd-file") + 1])
             st, dst = os.lstat(path), os.lstat(path.parent)
@@ -121,6 +156,8 @@ class FakeNmcli:
             if self.up_raises:
                 raise subprocess.TimeoutExpired(cmd, 20)
             rc = self.up_rc
+            if not rc and cmd[3] == "uuid" and cmd[4] in self.profiles:
+                self.profiles[cmd[4]]["psk"] = "new"
         return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr="Error: fake failure\n" if rc else "")
 
     def argv_with(self, *head):
@@ -215,18 +252,62 @@ def test_new_profile_security_follows_the_ap(monkeypatch, secret_base, ap_securi
     _assert_never_on_argv(fake, PLAIN)
 
 
-def test_existing_profile_drops_the_stored_psk_and_takes_the_new_one_from_the_file(monkeypatch, secret_base):
+def test_a_saved_profile_takes_the_new_psk_through_a_clone_and_keeps_its_name(monkeypatch, secret_base):
     fake = FakeNmcli(saved=True)
     assert _connect(monkeypatch, fake, TRICKY)["ok"] is True
     _assert_never_on_argv(fake, TRICKY)
-    flags = [c[c.index("wifi-sec.psk-flags") + 1] for c in fake.calls if "wifi-sec.psk-flags" in c]
-    assert flags == ["2", "0"]
-    assert not [c for c in fake.calls if "wifi-sec.psk" in c]
+    clone_name = wifi_connect.NM_PENDING_CLONE_PREFIX + ORIG_UUID
+    assert fake.argv_with("nmcli", "con", "clone") == [["nmcli", "con", "clone", "uuid", ORIG_UUID, clone_name]]
+    mods = [c[5:] for c in fake.argv_with("nmcli", "con", "mod", "uuid") if c[4] == CLONE_UUID]
+    assert mods[:3] == [["connection.autoconnect", "no"], ["wifi-sec.psk-flags", "2"], ["wifi-sec.psk-flags", "0"]]
+    # The original is never modified; it is deleted only after the clone came up.
+    assert not [c for c in fake.calls if c[:3] == ["nmcli", "con", "mod"] and ORIG_UUID in c]
+    by_name = [c for c in fake.calls if c[:4] == ["nmcli", "con", "mod", "example-saved"]]
+    assert by_name == [["nmcli", "con", "mod", "example-saved", "connection.autoconnect", "no"]]  # after the rename
+    assert fake.calls.index(by_name[0]) > fake.calls.index(fake.argv_with("nmcli", "con", "delete", "uuid")[0])
     (up,) = fake.argv_with("nmcli", "con", "up")
-    assert up[3] == "example-saved" and up[4] == "passwd-file"
-    assert fake.calls.index(up) > max(i for i, c in enumerate(fake.calls) if "wifi-sec.psk-flags" in c)
+    assert up[3:6] == ["uuid", CLONE_UUID, "passwd-file"]
+    order = [fake.calls.index(c) for c in (up, ["nmcli", "con", "delete", "uuid", ORIG_UUID],
+                                           ["nmcli", "con", "mod", "uuid", CLONE_UUID, "connection.id", "example-saved"])]
+    assert order == sorted(order)
+    assert fake.profiles[CLONE_UUID]["name"] == "example-saved" and ORIG_UUID not in fake.profiles
+    assert fake.profiles[CLONE_UUID]["psk"] == "new"
+    assert fake.names() == ["example-other", "example-saved"]
     assert nm_unescape(fake.passwd_files[0]["lines"][0].split(":", 1)[1]) == TRICKY
     _assert_passwd_file_gone(fake, secret_base)
+
+
+@pytest.mark.parametrize("failure", ["up_rc", "timeout", "clone", "prepare"])
+def test_a_failed_new_psk_leaves_the_saved_profile_untouched(monkeypatch, secret_base, failure):
+    fake = FakeNmcli(saved=True, up_rc=4 if failure == "up_rc" else 0, up_raises=failure == "timeout",
+                     clone_rc=1 if failure == "clone" else 0,
+                     mod_fail="wifi-sec.psk-flags" if failure == "prepare" else "")
+    out = _connect(monkeypatch, fake, PLAIN)
+    assert out["ok"] is False and PLAIN not in out.get("error", "")
+    assert fake.profiles[ORIG_UUID] == {"name": "example-saved", "ssid": FAKE_SSID, "psk": "old"}
+    assert CLONE_UUID not in fake.profiles
+    assert fake.names() == ["example-other", "example-saved"]
+    assert not [c for c in fake.calls if ORIG_UUID in c and c[:3] in (["nmcli", "con", "mod"], ["nmcli", "con", "delete"])]
+    if failure != "clone":
+        assert ["nmcli", "con", "delete", "uuid", CLONE_UUID] in fake.calls
+    _assert_never_on_argv(fake, PLAIN)
+    assert list(secret_base.iterdir()) == []
+
+
+def test_stale_clones_are_swept_by_uuid_and_nothing_else(monkeypatch, secret_base):
+    fake = FakeNmcli(saved=True)
+    stale = "0e0e0e0e-2222-4222-8333-888888888888"
+    orphan = "0f0f0f0f-2222-4222-8333-999999999999"
+    prefix = wifi_connect.NM_PENDING_CLONE_PREFIX
+    fake.profiles[stale] = {"name": prefix + ORIG_UUID, "ssid": FAKE_SSID, "psk": "new"}
+    fake.profiles[orphan] = {"name": prefix + "01010101-2222-4222-8333-000000000000", "ssid": FAKE_SSID, "psk": "x"}
+    fake.profiles["02020202-2222-4222-8333-000000000000"] = {"name": "my-" + prefix + ORIG_UUID, "ssid": "s", "psk": "y"}
+    assert _connect(monkeypatch, fake, None)["ok"] is True
+    deletes = fake.argv_with("nmcli", "con", "delete")
+    assert deletes == [["nmcli", "con", "delete", "uuid", stale]]
+    assert fake.calls.index(deletes[0]) < fake.calls.index(fake.argv_with("nmcli", "con", "up")[0])
+    assert orphan in fake.profiles  # its original is gone: the only copy is kept
+    assert "02020202-2222-4222-8333-000000000000" in fake.profiles and OTHER_UUID in fake.profiles
 
 
 def test_existing_profile_without_a_passphrase_is_brought_up_as_before(monkeypatch, secret_base):
@@ -334,3 +415,11 @@ def test_a_successful_new_profile_is_not_deleted_by_uuid(monkeypatch, secret_bas
     fake = FakeNmcli(saved=False)
     assert _connect(monkeypatch, fake, PLAIN, persist=True)["ok"] is True
     assert not fake.argv_with("nmcli", "con", "delete")
+
+
+def test_a_key_mgmt_fix_goes_to_the_clone_not_the_original(monkeypatch, secret_base):
+    fake = FakeNmcli(saved=True, existing_key_mgmt="none")
+    assert _connect(monkeypatch, fake, PLAIN)["ok"] is True
+    mods = [c[5:] for c in fake.argv_with("nmcli", "con", "mod", "uuid") if c[4] == CLONE_UUID]
+    assert ["wifi-sec.key-mgmt", "wpa-psk"] in mods
+    assert not [c for c in fake.argv_with("nmcli", "con", "mod") if "wifi-sec.key-mgmt" in c and CLONE_UUID not in c]

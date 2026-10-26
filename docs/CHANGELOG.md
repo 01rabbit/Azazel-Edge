@@ -11,9 +11,15 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     longer on nmcli's argv (readable from `/proc/<pid>/cmdline`). A new
     profile is added without its secret (`nmcli con add …
     connection.autoconnect no wifi-sec.key-mgmt <as NetworkManager would
-    complete it from the AP>`); an existing one has its stored PSK dropped
-    (`wifi-sec.psk-flags 2`, then `0`); both are brought up with
-    `nmcli con up … passwd-file <file>`. The file is 0600 (`O_EXCL`,
+    complete it from the AP>`); a saved one given a new PSK is copied
+    (`nmcli con clone` as `azazel-wifi-pending-<UUID>`, autoconnect off,
+    its stored PSK dropped with `wifi-sec.psk-flags 2`, then `0`); both are
+    brought up with `nmcli con up … passwd-file <file>`. The saved profile
+    is not changed until the copy is up: then it is deleted by UUID and the
+    copy takes its name; on any failure the copy is deleted and the saved
+    profile keeps its old PSK. A copy left by a crash is deleted by UUID on
+    the next connect when its original still exists (otherwise kept and
+    reported). The file is 0600 (`O_EXCL`,
     `O_NOFOLLOW`) in a fresh 0700 directory under `/run`, holds the secret
     octal-escaped, and is removed on success, failure and exception.
     NetworkManager stores the secret in the profile as before. key-mgmt
