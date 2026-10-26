@@ -32,7 +32,7 @@ Planned or iterative areas:
 Primary AI-related runtime surfaces:
 - `py/azazel_edge_ai/agent.py`
 - `systemd/azazel-edge-ai-agent.service`
-- `/run/azazel-edge/ai-bridge.sock`
+- `/run/azazel-edge-ai/ai-bridge.sock`
 - `/var/log/azazel-edge/ai-*.jsonl`
 
 ## 5. Configuration Areas

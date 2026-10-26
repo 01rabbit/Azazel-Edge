@@ -10,6 +10,7 @@ import queue
 import secrets
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -60,15 +61,21 @@ except Exception:  # pragma: no cover
     attach_p0_alert_relay = None  # type: ignore
 from azazel_edge._util import ensure_parent as _ensure_parent
 
-SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
+SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge-ai/ai-bridge.sock"))
+# The socket's location before Edge#462: inside the shared runtime directory,
+# where members of AZAZEL_RUNTIME_SOCKET_GROUP could replace it.
+LEGACY_SOCKET_PATH = Path("/run/azazel-edge/ai-bridge.sock")
 RUNTIME_DIR_MODE = int(str(os.environ.get("AZAZEL_RUNTIME_DIR_MODE", "0770")), 8)
 # ai-bridge.sock is owner only (Edge#462). Its callers, the Rust core (event
 # forwarding) and the Web UI (``action=manual_query``), run as root like this
 # agent. The optional shared group (AZAZEL_RUNTIME_SOCKET_GROUP) is for the
-# control daemon's control.sock only and is never applied here, so a member
-# of that group cannot connect and forge core events. The socket and its
-# mode are not configurable: AZAZEL_AI_SOCKET_MODE is no longer applied.
+# control daemon's control.sock only and is never applied here. The socket
+# lives in its own directory, owned by the agent's account with mode 0700, so
+# no other account can connect to it, replace it or bind its own socket at its
+# path. The socket and directory modes are not configurable:
+# AZAZEL_AI_SOCKET_MODE is no longer applied.
 SOCKET_MODE = 0o600
+SOCKET_DIR_MODE = 0o700
 ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge/ai_advisory.json"))
 EVENT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", "/var/log/azazel-edge/ai-events.jsonl"))
 SNAPSHOT_PATH = Path(os.environ.get("AZAZEL_UI_SNAPSHOT", "/run/azazel-edge/ui_snapshot.json"))
@@ -382,28 +389,84 @@ def _audit_ai_scope(trace_id: str, source: str, intent: str, in_scope: bool, rea
         return
 
 
-def _prepare_runtime_socket_dir(path: Path) -> None:
-    """Create the runtime directory. Its group is left as it is: the control
-    daemon sets the shared group on it for control.sock, and this agent
-    neither grants nor removes that (Edge#462)."""
-    target = path.parent
+def _prepare_runtime_dir(target: Path) -> None:
+    """Create the shared runtime directory (the agent's state files). Its
+    group is left as it is: the control daemon sets the shared group on it
+    for control.sock, and this agent neither grants nor removes that."""
     target.mkdir(parents=True, exist_ok=True)
     os.chmod(str(target), RUNTIME_DIR_MODE)
 
 
+class AISocketSetupError(RuntimeError):
+    """The socket's directory or path is not safe to use; the agent stops."""
+
+
+def _prepare_ai_socket_dir(path: Path) -> None:
+    """Make the socket's directory private: a real directory (not a symlink)
+    owned by this process's user with mode 0700 (Edge#462).
+
+    A missing directory is created with mode 0700. An existing one is
+    accepted only when it already is private: a symlink, a non-directory,
+    a directory owned by another user, or one with any group/other bit is
+    refused (the shared runtime directory is 0770 for control.sock, and
+    narrowing it would break control.sock). Nothing is changed through a
+    path that could be a symlink."""
+    target = path.parent
+    target.parent.mkdir(parents=True, exist_ok=True)
+    old_umask = os.umask(0o077)
+    try:
+        os.mkdir(str(target), SOCKET_DIR_MODE)
+    except FileExistsError:
+        pass
+    finally:
+        os.umask(old_umask)
+    try:
+        st = os.lstat(str(target))
+    except OSError as exc:
+        raise AISocketSetupError(f"ai socket directory {target}: {exc}") from exc
+    if stat.S_ISLNK(st.st_mode):
+        raise AISocketSetupError(f"ai socket directory {target} is a symlink; refusing")
+    if not stat.S_ISDIR(st.st_mode):
+        raise AISocketSetupError(f"ai socket directory {target} is not a directory; refusing")
+    if st.st_uid != os.geteuid():
+        raise AISocketSetupError(
+            f"ai socket directory {target} is owned by uid {st.st_uid}, not this process (uid {os.geteuid()}); refusing")
+    if stat.S_IMODE(st.st_mode) & 0o077:
+        hint = ""
+        if target == LEGACY_SOCKET_PATH.parent:
+            hint = f" (the shared runtime directory; use the default {Path('/run/azazel-edge-ai/ai-bridge.sock')})"
+        raise AISocketSetupError(
+            f"ai socket directory {target} has mode {stat.S_IMODE(st.st_mode):04o}; it must be 0700{hint}; refusing")
+
+
 def _bind_ai_socket(path: Path) -> socket.socket:
-    """Bind ai-bridge.sock owner only (0600, the agent's own user and group;
-    Edge#462)."""
-    if path.exists() or path.is_symlink():
-        path.unlink()
+    """Bind ai-bridge.sock owner only (0600, the agent's own user and group)
+    in its private directory (``_prepare_ai_socket_dir``; Edge#462).
+
+    A stale socket is removed; any other entry at the path is refused. The
+    umask is 0177 around bind, so the socket never has group/other bits, not
+    even before the chmod. The umask is process wide: ``_serve`` binds before
+    it starts any thread, so no other file is created while it is set."""
+    try:
+        st = os.lstat(str(path))
+    except FileNotFoundError:
+        st = None
+    if st is not None:
+        if not stat.S_ISSOCK(st.st_mode):
+            raise AISocketSetupError(f"ai socket path {path} exists and is not a socket; refusing")
+        os.unlink(str(path))
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    old_umask = os.umask(0o177)
     try:
         srv.bind(str(path))
     except Exception:
         srv.close()
         raise
+    finally:
+        os.umask(old_umask)
     # The agent's own group, also where the directory would pass its group
-    # on (BSD semantics, or a setgid directory).
+    # on (BSD semantics, or a setgid directory). The directory is private,
+    # so the path cannot have been replaced since bind.
     os.chown(str(path), -1, os.getegid())
     os.chmod(str(path), SOCKET_MODE)
     if os.environ.get("AZAZEL_AI_SOCKET_MODE") not in (None, "", "0600", "600"):
@@ -2003,13 +2066,20 @@ def _serve(stop: threading.Event | None = None) -> None:
         stop = threading.Event()
         if threading.current_thread() is threading.main_thread():
             signal.signal(signal.SIGTERM, lambda signum, frame: stop.set())
-    _prepare_runtime_socket_dir(SOCKET_PATH)
+    _prepare_runtime_dir(ADVISORY_PATH.parent)
     _ensure_parent(METRICS_PATH)
     _ensure_parent(POLICY_PATH)
-    # Before the socket exists, so every P0 decision the core sends to this
+    # Bound before any thread starts (bind sets a process-wide umask), but
+    # not listening: a connect is refused until the P0 path below runs.
+    try:
+        _prepare_ai_socket_dir(SOCKET_PATH)
+        srv = _bind_ai_socket(SOCKET_PATH)
+    except AISocketSetupError as exc:
+        logger.error("%s", exc)
+        raise SystemExit(f"azazel-edge-ai-agent: {exc}") from None
+    # Before the socket accepts, so every P0 decision the core sends to this
     # service is recorded and relayed.
     _start_core_p0_path()
-    srv = _bind_ai_socket(SOCKET_PATH)
     srv.listen(16)
     srv.settimeout(1.0)
     worker = threading.Thread(target=_llm_worker, daemon=True)

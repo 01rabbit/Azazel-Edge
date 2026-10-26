@@ -171,7 +171,7 @@ tail -n 5 /var/log/azazel-edge/ai-llm.jsonl
 ```bash
 python3 - <<'PY'
 import json, socket
-sock='/run/azazel-edge/ai-bridge.sock'
+sock='/run/azazel-edge-ai/ai-bridge.sock'
 ev={"normalized":{"sid":996001,"severity":3,"attack_type":"port scan","category":"attempted-recon","action":"allowed","target_port":80,"protocol":"tcp","src_ip":"10.66.0.1","dst_ip":"10.0.0.1"}}
 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
     s.connect(sock)
@@ -366,7 +366,7 @@ sudo installer/internal/provision_mattermost_command.sh
   - `source` (optional)
   - `context` (optional object)
 - 動作:
-  - WebUIが `/run/azazel-edge/ai-bridge.sock` に `action=manual_query` を送信
+  - WebUIが `/run/azazel-edge-ai/ai-bridge.sock` に `action=manual_query` を送信
   - `azazel-edge-ai-agent` が Ops 系モデルで応答生成
   - 応答JSONを同期返却
 - `/api/mattermost/message` では `ask_ai=true` 指定で投稿内容を同時にAI問い合わせし、応答を Mattermost に追記可能

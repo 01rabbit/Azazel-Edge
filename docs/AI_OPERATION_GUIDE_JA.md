@@ -91,7 +91,7 @@ sudo docker exec azazel-edge-ollama ollama list
 
 ## 5. 監視対象ファイル
 
-- ソケット: `/run/azazel-edge/ai-bridge.sock`
+- ソケット: `/run/azazel-edge-ai/ai-bridge.sock`
 - 最新助言: `/run/azazel-edge/ai_advisory.json`
 - UIスナップショット: `/run/azazel-edge/ui_snapshot.json`
 - メトリクス: `/run/azazel-edge/ai_metrics.json`

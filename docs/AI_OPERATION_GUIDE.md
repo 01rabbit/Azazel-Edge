@@ -47,7 +47,7 @@ Operational rule:
 - Swap guard: `AZAZEL_OPS_MAX_SWAP_USED_MB`
 
 ## 5. Operational Files to Monitor
-- `/run/azazel-edge/ai-bridge.sock`
+- `/run/azazel-edge-ai/ai-bridge.sock`
 - `/run/azazel-edge/ai_advisory.json`
 - `/run/azazel-edge/ai_metrics.json`
 - `/var/log/azazel-edge/ai-events.jsonl`

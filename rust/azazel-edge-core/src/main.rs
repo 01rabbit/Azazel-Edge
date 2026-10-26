@@ -265,7 +265,7 @@ fn load_config() -> Config {
 
     Config {
         eve_path: env::var("AZAZEL_EVE_PATH").unwrap_or_else(|_| "/var/log/suricata/eve.json".to_string()),
-        ai_socket_path: env::var("AZAZEL_AI_SOCKET").unwrap_or_else(|_| "/run/azazel-edge/ai-bridge.sock".to_string()),
+        ai_socket_path: env::var("AZAZEL_AI_SOCKET").unwrap_or_else(|_| "/run/azazel-edge-ai/ai-bridge.sock".to_string()),
         normalized_log_path: env::var("AZAZEL_NORMALIZED_EVENT_LOG")
             .unwrap_or_else(|_| "/var/log/azazel-edge/normalized-events.jsonl".to_string()),
         from_start,
