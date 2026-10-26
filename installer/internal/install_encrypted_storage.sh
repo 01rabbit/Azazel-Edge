@@ -23,7 +23,7 @@ CRYPTTAB_OPTIONS="luks,nofail,timeout=90s,x-systemd.device-timeout=30s"
 # or logs it.
 require_tty() {
   if [[ ! -t 0 || ! -t 2 ]]; then
-    echo "ERROR: $1 needs a passphrase typed on a terminal; run this script from an interactive terminal (stdin and stderr a TTY)." >&2
+    echo "ERROR: $1: the encrypted secrets volume (Edge#206, on by default) needs a passphrase typed on a terminal, and this is not one. Run the installer from an interactive terminal, or, to install without encrypted storage, re-run it with SKIP_LUKS=1 set explicitly." >&2
     exit 1
   fi
 }

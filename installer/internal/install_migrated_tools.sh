@@ -8,6 +8,7 @@ ENABLE_HTTPS="${ENABLE_HTTPS:-1}"
 ENABLE_LOCAL_CA="${ENABLE_LOCAL_CA:-1}"
 ENABLE_SECURITY_STACK="${ENABLE_SECURITY_STACK:-1}"
 ENABLE_RUST_CORE="${ENABLE_RUST_CORE:-1}"
+SKIP_LUKS="${SKIP_LUKS:-0}"
 VENV_DIR="/opt/azazel-edge/venv"
 
 case "$ENABLE_RUST_CORE" in
@@ -17,6 +18,16 @@ esac
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root: sudo $0"
+  exit 1
+fi
+
+# Edge#206: the security stack sets up the encrypted secrets volume by default
+# and its passphrase is typed on a terminal. Checked before anything is
+# installed, so an unattended run stops here with an error instead of
+# failing (or waiting) at step 16. Only SKIP_LUKS=1 skips the volume.
+if [[ "$ENABLE_SECURITY_STACK" == "1" && "$SKIP_LUKS" != "1" && ! -e /dev/mapper/azazel-secrets ]] \
+    && [[ ! -t 0 || ! -t 2 ]]; then
+  echo "ERROR: the encrypted secrets volume (Edge#206, on by default) needs a passphrase typed on a terminal, and this is not one. Run the installer from an interactive terminal, or, to install without encrypted storage, re-run it with SKIP_LUKS=1 set explicitly." >&2
   exit 1
 fi
 
@@ -358,7 +369,7 @@ install -m 0644 "$REPO_ROOT/security/opencanary/Dockerfile" /opt/azazel-edge/sec
 install -m 0644 "$REPO_ROOT/security/opencanary/opencanary.conf" /opt/azazel-edge/security/opencanary/opencanary.conf
 install -m 0644 "$REPO_ROOT/security/suricata/azazel-lite.rules" /opt/azazel-edge/security/suricata/azazel-lite.rules
 if [[ "$ENABLE_SECURITY_STACK" == "1" ]]; then
-  ENABLE_SERVICES="$ENABLE_SERVICES" /opt/azazel-edge/install_security_stack.sh
+  ENABLE_SERVICES="$ENABLE_SERVICES" SKIP_LUKS="$SKIP_LUKS" /opt/azazel-edge/install_security_stack.sh
 fi
 
 echo "[17/17] Verify runtime sync"

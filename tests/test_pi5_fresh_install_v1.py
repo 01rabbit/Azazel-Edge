@@ -220,21 +220,51 @@ def test_the_runtime_sync_check_follows_enable_rust_core(tmp_path):
 # ------------------------------------------------------ encrypted storage
 
 
-def test_the_encrypted_storage_runs_only_when_asked_for_and_a_failure_stops():
+def test_the_encrypted_storage_stays_on_by_default_and_a_failure_stops():
+    # Edge#206: on unless SKIP_LUKS=1; fail-closed.
     src = SECURITY.read_text(encoding="utf-8")
-    assert 'ENABLE_ENCRYPTED_STORAGE="${ENABLE_ENCRYPTED_STORAGE:-0}"' in src
+    assert "ENABLE_ENCRYPTED_STORAGE" not in src
+    assert 'SKIP_LUKS="${SKIP_LUKS:-0}"' in src
     call = src.index('"${ASSET_ROOT}/installer/internal/install_encrypted_storage.sh"')
-    guard = src.rindex('if [[ "${ENABLE_ENCRYPTED_STORAGE}" == "1" && "${SKIP_LUKS}" != "1" ]]; then', 0, call)
-    assert guard < call
+    guard = src.rindex('if [[ "${SKIP_LUKS}" != "1" ]]; then', 0, call)
+    assert guard < call and not re.search(r"\n\s*fi\n", src[guard:call])
     line = src[call:src.index("\n", call)]
     assert "|| true" not in line
+    tools = TOOLS.read_text(encoding="utf-8")
+    assert 'SKIP_LUKS="$SKIP_LUKS" /opt/azazel-edge/install_security_stack.sh' in tools
+
+
+_PREFLIGHT_RE = r"^if \[\[ [^\n]*SKIP_LUKS[^\n]*(?:\n[^\n]*)*?\n  exit 1\nfi\n"
+
+
+@pytest.mark.parametrize("script,env", [
+    (INTERNAL / "install_all.sh", {"ENABLE_APP_STACK": "1"}),
+    (TOOLS, {"ENABLE_SECURITY_STACK": "1"}),
+    (SECURITY, {}),
+])
+def test_an_install_without_a_terminal_stops_before_changing_anything(script, env):
+    src = script.read_text(encoding="utf-8")
+    m = re.search(_PREFLIGHT_RE, src, re.M)
+    assert m, script.name
+    # Before any package install, network change or file copy.
+    for first in ("apt-get", "install_internal_network.sh", "install -d", "install -m"):
+        if first in src:
+            assert m.start() < src.index(first), (script.name, first)
+    body = "".join(f"{k}={v}\n" for k, v in env.items()) + m.group(0) + "echo reached\n"
+    res = subprocess.run(["bash", "-c", body], stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    assert res.returncode == 1 and "reached" not in res.stdout, script.name
+    assert "interactive terminal" in res.stderr and "SKIP_LUKS=1" in res.stderr, script.name
+    # An explicit SKIP_LUKS=1 is the only way past it.
+    res = subprocess.run(["bash", "-c", "SKIP_LUKS=1\n" + body], stdin=subprocess.DEVNULL,
+                         capture_output=True, text=True)
+    assert res.returncode == 0 and "reached" in res.stdout, script.name
 
 
 def test_the_encrypted_storage_stops_without_a_terminal():
     script = _function(LUKS, "require_tty") + 'require_tty "test step"\necho reached\n'
     res = subprocess.run(["bash", "-c", script], stdin=subprocess.DEVNULL, capture_output=True, text=True)
     assert res.returncode == 1 and "reached" not in res.stdout
-    assert "needs a passphrase typed on a terminal" in res.stderr
+    assert "interactive terminal" in res.stderr and "SKIP_LUKS=1" in res.stderr
     src = LUKS.read_text(encoding="utf-8")
     first_tty = src.index('require_tty "setting up the encrypted volume"')
     assert first_tty < src.index("dd if=/dev/zero") < src.index("cryptsetup luksFormat")
