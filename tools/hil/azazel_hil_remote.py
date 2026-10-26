@@ -24,7 +24,13 @@ PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z
 # A PEM block cut by a tail/head limit: an orphan END hides everything before it, an orphan BEGIN everything after it.
 PRIVATE_KEY_TAIL_RE = re.compile(r"\A.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
 PRIVATE_KEY_HEAD_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*\Z", re.S)
-URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]*@")
+# userinfo up to the last '@' before the host: covers user-only and passwords that contain '@'.
+URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s]+@")
+SECRET_KEY = r"[A-Za-z0-9_.-]*(?:password|passwd|passphrase|token|secret|authorization|api[_-]?key|private[_-]?key|credential)[A-Za-z0-9_.-]*"
+# JSON members: "password": "x" (string values, escapes included) and "token": 123 / true.
+JSON_SECRET_RE = re.compile(r'(?i)("' + SECRET_KEY + r'"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|[^\s,}\]]+)')
+# YAML/plain lines: password: x  (rest of the line is the value).
+COLON_SECRET_RE = re.compile(r"(?im)(\b" + SECRET_KEY + r"\s*:[ \t]*)(?!\[REDACTED)[^\s\n][^\n]*")
 AUTH_RE = re.compile(r"(?im)^(\s*(?:authorization|proxy-authorization)\s*[:=]\s*).*$")
 BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s'\"]+")
 TOKEN_ASSIGN_RE = re.compile(r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*=)\S+")
@@ -70,6 +76,8 @@ def redact(value: Any) -> Any:
         value = PRIVATE_KEY_TAIL_RE.sub("[REDACTED PRIVATE KEY]", value)
         value = PRIVATE_KEY_HEAD_RE.sub("[REDACTED PRIVATE KEY]", value)
         value = URL_CREDENTIAL_RE.sub(r"\1[REDACTED]@", value)
+        value = JSON_SECRET_RE.sub(r'\1"[REDACTED]"', value)
+        value = COLON_SECRET_RE.sub(r"\1[REDACTED]", value)
         value = AUTH_RE.sub(r"\1[REDACTED]", value)
         value = BEARER_RE.sub(r"\1[REDACTED]", value)
         return TOKEN_ASSIGN_RE.sub(r"\1[REDACTED]", value)
@@ -440,6 +448,8 @@ def reconciliation(rec: Recorder, services: list[str], allow_restart: bool) -> N
         state.write_text('{"sequence":2}\n{"sequence":1}\n', encoding="utf-8")
         result: dict[str, Any] = {"reason": "service restart not requested (--allow-service-restart not given); only the out-of-order checkpoint file was written",
                                   "state_file": str(state)}
+        if services and not allow_restart:
+            result["reason"] += f"; --service {', '.join(services)} ignored without --allow-service-restart"
         if allow_restart:
             if not services: return "failed", 2, {"reason": "--allow-service-restart requires at least one --service"}
             rejected = [service for service in services if not SERVICE_RE.fullmatch(service)]
@@ -512,6 +522,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--service", action="append", default=[])
     parser.add_argument("--python", help="Interpreter with the Edge dependencies; default /opt/azazel-edge/venv/bin/python if present, else python3.")
     args = parser.parse_args(argv)
+    if args.service and not args.allow_service_restart:
+        print("azazel-hil-remote: warning: --service ignored without --allow-service-restart; no service will be restarted", file=sys.stderr)
     rec, repo = Recorder(args.session), Path(args.repo).expanduser()
     python = resolve_python(args.python)
     start = len(rec.events.read_text(encoding="utf-8").splitlines()) if rec.events.exists() else 0
@@ -526,6 +538,9 @@ def main(argv: list[str] | None = None) -> int:
         rec.emit("provenance", data=provenance(repo, python))
         if not rec.complete("prepare.gate"):
             rec.test("run.precondition", lambda: ("failed", 2, {"reason": "run requires a passed prepare.gate in this session; use full or prepare first"}))
+            code = 2
+        elif args.allow_service_restart and not args.service:
+            rec.test("run.precondition", lambda: ("failed", 2, {"reason": "--allow-service-restart requires at least one --service; nothing was run"}))
             code = 2
         else:
             for model in MODELS: profile_model(rec, model)

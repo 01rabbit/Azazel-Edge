@@ -20,7 +20,13 @@ PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z
 # A PEM block cut by a tail/head limit: an orphan END hides everything before it, an orphan BEGIN everything after it.
 PRIVATE_KEY_TAIL_RE = re.compile(r"\A.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
 PRIVATE_KEY_HEAD_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*\Z", re.S)
-URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]*@")
+# userinfo up to the last '@' before the host: covers user-only and passwords that contain '@'.
+URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s]+@")
+SECRET_KEY = r"[A-Za-z0-9_.-]*(?:password|passwd|passphrase|token|secret|authorization|api[_-]?key|private[_-]?key|credential)[A-Za-z0-9_.-]*"
+# JSON members: "password": "x" (string values, escapes included) and "token": 123 / true.
+JSON_SECRET_RE = re.compile(r'(?i)("' + SECRET_KEY + r'"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|[^\s,}\]]+)')
+# YAML/plain lines: password: x  (rest of the line is the value).
+COLON_SECRET_RE = re.compile(r"(?im)(\b" + SECRET_KEY + r"\s*:[ \t]*)(?!\[REDACTED)[^\s\n][^\n]*")
 AUTH_RE = re.compile(r"(?im)^(\s*(?:authorization|proxy-authorization)\s*[:=]\s*).*$")
 BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s'\"]+")
 TOKEN_ASSIGN_RE = re.compile(r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*=)\S+")
@@ -32,6 +38,8 @@ def redact(value: Any) -> Any:
         value = PRIVATE_KEY_TAIL_RE.sub("[REDACTED PRIVATE KEY]", value)
         value = PRIVATE_KEY_HEAD_RE.sub("[REDACTED PRIVATE KEY]", value)
         value = URL_CREDENTIAL_RE.sub(r"\1[REDACTED]@", value)
+        value = JSON_SECRET_RE.sub(r'\1"[REDACTED]"', value)
+        value = COLON_SECRET_RE.sub(r"\1[REDACTED]", value)
         value = AUTH_RE.sub(r"\1[REDACTED]", value)
         value = BEARER_RE.sub(r"\1[REDACTED]", value)
         return TOKEN_ASSIGN_RE.sub(r"\1[REDACTED]", value)
@@ -44,6 +52,8 @@ def redact(value: Any) -> Any:
 
 SESSION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # Required evidence for a complete R0 bundle; a missing row makes the outcome INCOMPLETE.
+# restart_reconciliation is opt-in, so its `skipped` still allows `completed`; any other required skip is INCOMPLETE.
+OPT_IN_TESTS = ("restart_reconciliation",)
 REQUIRED_TESTS = ("preflight.inventory", "prepare.repository", "prepare.dependencies", "prepare.offline_replay", "prepare.gate",
                   "bootstrap.dependencies", "profile.qwen3.5:0.8b", "profile.qwen3.5:2b",
                   "observer.retention_rotation_drop_backpressure", "restart_reconciliation", "postconditions.tc_nft_read_only")
@@ -145,7 +155,8 @@ def failure_reason(result: subprocess.CompletedProcess[str]) -> str:
 
 def write_report(raw_dir: Path, report_path: Path, stopped: dict[str, str] | None = None) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
-    for path in sorted(raw_dir.rglob("*.jsonl")):
+    # Only the runner's event logs count; session state files (reconciliation/observer JSONL) are not events.
+    for path in sorted(raw_dir.rglob("events.jsonl")):
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 item = json.loads(line)
@@ -166,14 +177,17 @@ def write_report(raw_dir: Path, report_path: Path, stopped: dict[str, str] | Non
     unobserved = sum(row.get("status") == "unobserved" for row in rows)
     failed = len(rows) - passed - skipped - unobserved
     missing = [test_id for test_id in REQUIRED_TESTS if test_id not in completed]
+    required_skips = [test_id for test_id in REQUIRED_TESTS
+                      if completed.get(test_id, {}).get("status") == "skipped" and test_id not in OPT_IN_TESTS]
     if stopped:
         outcome, state = f"INCOMPLETE: stopped at stage `{stopped.get('stage')}`: {stopped.get('reason')}", "stopped"
     elif failed:
         outcome, state = "FAILED: see failed rows below", "failed"
     elif not events:
         outcome, state = "INCOMPLETE: no events were collected", "incomplete"
-    elif missing or unobserved:
-        why = ([f"missing required tests: {', '.join(missing)}"] if missing else []) + ([f"{unobserved} unobserved"] if unobserved else [])
+    elif missing or unobserved or required_skips:
+        why = (([f"missing required tests: {', '.join(missing)}"] if missing else []) + ([f"{unobserved} unobserved"] if unobserved else [])
+               + ([f"required tests skipped: {', '.join(required_skips)}"] if required_skips else []))
         outcome, state = "INCOMPLETE: " + "; ".join(why), "incomplete"
     else:
         outcome, state = "completed", "completed"
@@ -202,7 +216,7 @@ def write_report(raw_dir: Path, report_path: Path, stopped: dict[str, str] | Non
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return {"passed": passed, "skipped": skipped, "unobserved": unobserved, "failed": failed, "events": len(events),
-            "outcome": state, "missing": missing}
+            "outcome": state, "missing": missing, "required_skipped": required_skips}
 
 
 def collect(args: argparse.Namespace, stopped: dict[str, str] | None = None) -> int:
@@ -223,12 +237,21 @@ def collect_summary(args: argparse.Namespace, stopped: dict[str, str] | None = N
     if result.returncode:
         error = RemoteError("scp (collect session artifacts)", result)
         print(f"azazel-hil: session {args.session}: {error}", file=sys.stderr)
-        return result.returncode, {}
+        # 255 is an OpenSSH transport failure; any other scp failure means the bundle could not be produced.
+        return (255 if result.returncode == 255 else EXIT_STOPPED), {}
     copied_session = raw / args.session
     summary = write_report(copied_session if copied_session.is_dir() else raw, report, stopped)
     print(json.dumps({"session": args.session, "report": str(report), "raw": str(raw), **summary,
                       **({"stopped": stopped} if stopped else {})}, sort_keys=True))
     return 0, summary
+
+
+def restart_arguments_error(args: argparse.Namespace) -> str | None:
+    if args.allow_service_restart and not args.service:
+        return "--allow-service-restart requires at least one --service"
+    if args.service and not args.allow_service_restart:
+        print("azazel-hil: warning: --service ignored without --allow-service-restart; no service will be restarted", file=sys.stderr)
+    return None
 
 
 def full(args: argparse.Namespace) -> int:
@@ -259,7 +282,8 @@ def full(args: argparse.Namespace) -> int:
         return EXIT_FAILED
     if summary.get("outcome") != "completed":
         print(f"azazel-hil: session {args.session}: evidence incomplete ({summary['unobserved']} unobserved,"
-              f" missing: {', '.join(summary.get('missing') or []) or 'none'}); see the report", file=sys.stderr)
+              f" missing: {', '.join(summary.get('missing') or []) or 'none'},"
+              f" skipped: {', '.join(summary.get('required_skipped') or []) or 'none'}); see the report", file=sys.stderr)
         return EXIT_INCOMPLETE
     return EXIT_COMPLETED
 
@@ -293,6 +317,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if args.command == "collect":
         return collect(args)
+    if args.command in ("run", "full"):
+        error = restart_arguments_error(args)
+        if error:
+            print(f"azazel-hil: {error}; nothing was run", file=sys.stderr)
+            return EXIT_STOPPED
     if args.command == "full":
         return full(args)
     extra: list[str] = []

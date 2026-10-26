@@ -10,7 +10,7 @@ Default HIL tests are observation-only. They never install packages, pull models
 
 SSH uses batch mode and `StrictHostKeyChecking=yes`; establish and verify the Pi's host key yourself before use. The SSH identity is passed to OpenSSH but its contents are never read, copied, or written into the result bundle. Bearer tokens, authorization values, password-like fields, and private-key blocks are redacted.
 
-The only mutation supported is a service restart for a deliberate reconciliation test. It requires both `--allow-service-restart` and one or more explicit `--service NAME` values, accepts only unit names that fully match `azazel-edge-<name>[.service]` (no `@`, `/`, `;`, other unit types, or repeated suffixes), and runs `sudo -n systemctl restart`. A refused or failed restart is recorded as failed, and so is a restart that returned 0 but whose unit is not `active` within 15 seconds (polled read-only with `systemctl is-active`). Without the opt-in, `restart_reconciliation` is recorded as **skipped**, not passed. No flag in this tool can apply an nftables rule, qdisc, routing change, release, or enforcement action.
+The only mutation supported is a service restart for a deliberate reconciliation test. It requires both `--allow-service-restart` and one or more explicit `--service NAME` values, accepts only unit names that fully match `azazel-edge-<name>[.service]` (no `@`, `/`, `;`, other unit types, or repeated suffixes), and runs `sudo -n systemctl restart`. A refused or failed restart is recorded as failed, and so is a restart that returned 0 but whose unit is not `active` within 15 seconds (polled read-only with `systemctl is-active`). Without the opt-in, `restart_reconciliation` is recorded as **skipped**, not passed; because it is opt-in, that skip alone does not make the outcome incomplete. `--service` without `--allow-service-restart` prints a warning and restarts nothing; `--allow-service-restart` without `--service` stops with exit 2 before anything runs. No flag in this tool can apply an nftables rule, qdisc, routing change, release, or enforcement action.
 
 ## Mac prerequisites
 
@@ -42,10 +42,10 @@ tools/hil/azazel-hil --target pi5.local --user azazel full
 
 | Exit | Meaning |
 |---:|---|
-| 0 | completed: every required test reported, nothing failed or unobserved |
+| 0 | completed: every required test reported, nothing failed, unobserved, or skipped (except `restart_reconciliation`, which is opt-in and may be skipped) |
 | 1 | failed: at least one test failed (report outcome `FAILED`) |
-| 2 | stopped: a stage could not proceed (for example the preparation gate is blocked) |
-| 3 | incomplete: nothing failed, but evidence is missing (an `unobserved` observation, a missing required test, or no events) |
+| 2 | stopped: a stage could not proceed (for example the preparation gate is blocked, `--allow-service-restart` without `--service`, or the artifacts could not be collected) |
+| 3 | incomplete: nothing failed, but evidence is missing (an `unobserved` observation, a missing or skipped required test such as an uninstalled model, or no events) |
 | 255 | SSH/SCP transport failure (from OpenSSH) |
 
 
@@ -86,7 +86,7 @@ tools/hil/azazel-hil --target pi5.local --user azazel --session r0-20260829T0100
 - Restart/reconciliation: without `--allow-service-restart` only an out-of-order checkpoint file is written and the test is **skipped**; with it, restart and post-restart `active` state evidence.
 - Read-only `tc` and `nft` host observations. A successful mechanism command is not treated as postcondition proof; those observations are retained separately.
 
-Every command writes timestamp, argv, stdout/stderr tail, exit status, test ID, and elapsed time to JSONL. Output is redacted (private-key blocks including truncated ones, bearer/authorization values, password-like assignments, and `scheme://user:password@` credentials) before it is truncated. `collect` copies raw session artifacts to the Mac and generates `CHATGPT_PASTE.md`.
+Every command writes timestamp, argv, stdout/stderr tail, exit status, test ID, and elapsed time to JSONL. Output is redacted (private-key blocks including truncated ones, bearer/authorization values, password/token/secret-like `key=value`, `key: value`, and JSON `"key": value` members, and URL userinfo such as `scheme://user@` or `scheme://user:password@`) before it is truncated. `collect` copies raw session artifacts to the Mac and generates `CHATGPT_PASTE.md`.
 
 ## Optional disruptive reconciliation test
 

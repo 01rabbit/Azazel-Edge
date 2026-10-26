@@ -487,3 +487,125 @@ def test_collect_removes_stale_report_for_the_session(tmp_path, monkeypatch):
     args = hil.parser().parse_args(["--target", "pi", "--session", "r0-s", "--output", str(output), "collect"])
     assert hil.collect(args) == 255
     assert not stale.exists() and not (output / "r0-s" / "raw" / "r0-s").exists()
+
+
+# Second review follow-ups
+
+def test_required_skips_are_incomplete_but_opt_in_restart_skip_completes(tmp_path):
+    every = [(test_id, "passed") for test_id in hil.REQUIRED_TESTS]
+    restart_skipped = [(t, "skipped" if t == "restart_reconciliation" else s) for t, s in every]
+    _full_events(tmp_path / "optin", restart_skipped)
+    assert hil.write_report(tmp_path / "optin", tmp_path / "optin.md")["outcome"] == "completed"
+    model_skipped = [(t, "skipped" if t in ("profile.qwen3.5:2b", "restart_reconciliation") else s) for t, s in every]
+    _full_events(tmp_path / "model", model_skipped)
+    result = hil.write_report(tmp_path / "model", tmp_path / "model.md")
+    assert result["outcome"] == "incomplete" and result["required_skipped"] == ["profile.qwen3.5:2b"]
+    assert "required tests skipped: profile.qwen3.5:2b" in (tmp_path / "model.md").read_text()
+
+
+def test_full_returns_incomplete_for_required_skip(monkeypatch, capsys):
+    monkeypatch.setattr(hil, "remote_call", lambda args, action, extra: subprocess.CompletedProcess([], 0, "{}\n", ""))
+    monkeypatch.setattr(hil, "collect_summary", lambda args, stopped=None: (0, {"failed": 0, "unobserved": 0, "outcome": "incomplete",
+                                                                                 "missing": [], "required_skipped": ["profile.qwen3.5:2b"]}))
+    assert hil.main(["--target", "pi", "--session", "r0-s", "full"]) == hil.EXIT_INCOMPLETE
+    assert "profile.qwen3.5:2b" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("scp_code, expected", [(1, hil.EXIT_STOPPED), (2, hil.EXIT_STOPPED), (255, 255)])
+def test_collect_failure_exit_codes(tmp_path, monkeypatch, scp_code, expected):
+    monkeypatch.setattr(hil.subprocess, "run", lambda a, **k: subprocess.CompletedProcess(a, scp_code, "", "scp: no such file"))
+    args = hil.parser().parse_args(["--target", "pi", "--session", "r0-c", "--output", str(tmp_path), "collect"])
+    assert hil.main(["--target", "pi", "--session", "r0-c", "--output", str(tmp_path), "collect"]) == expected
+    assert hil.collect(args) == expected
+
+
+def test_full_collect_failure_after_successful_stages_is_stopped(tmp_path, monkeypatch):
+    monkeypatch.setattr(hil, "remote_call", lambda args, action, extra: subprocess.CompletedProcess([], 0, "{}\n", ""))
+    monkeypatch.setattr(hil.subprocess, "run", lambda a, **k: subprocess.CompletedProcess(a, 1, "", "scp: remote path missing"))
+    assert hil.main(["--target", "pi", "--session", "r0-c", "--output", str(tmp_path), "full"]) == hil.EXIT_STOPPED
+
+
+@pytest.mark.parametrize("module", [hil, remote])
+def test_redaction_user_only_at_in_password_and_key_value_forms(module):
+    cleaned = module.redact("https://deploy@github.com/x.git ssh://u:p@ss@w0rd@host/y and http://h/a@b")
+    assert "deploy@" not in cleaned and "p@ss" not in cleaned and "w0rd" not in cleaned
+    assert "github.com/x.git" in cleaned and "host/y" in cleaned and "http://h/a@b" in cleaned
+    yaml_like = "password: hunter2 two\napi_key: abc123\nsecret_token:   zzz\nname: edge"
+    cleaned = module.redact(yaml_like)
+    assert "hunter2" not in cleaned and "abc123" not in cleaned and "zzz" not in cleaned and "name: edge" in cleaned
+    as_json = json.dumps({"outer": "{\"password\": \"pa\\\"ss\", \"token\": 12345, \"authorization\": \"Basic QQ==\", \"user\": \"ok\"}"})
+    cleaned = module.redact(json.loads(as_json)["outer"])
+    assert "pa" not in cleaned.replace("password", "") and "12345" not in cleaned and "QQ==" not in cleaned and '"user": "ok"' in cleaned
+    assert module.redact('{"client_secret":"s3"}') == '{"client_secret":"[REDACTED]"}'
+
+
+def test_reconciliation_rejects_newline_suffixed_unit_without_running(rec, monkeypatch):
+    seen = []
+    monkeypatch.setattr(remote, "command", lambda *a, **k: seen.append(a) or (0, _done([])))
+    remote.reconciliation(rec, ["azazel-edge-core\n"], True)
+    end = _ends(rec)["restart_reconciliation"]
+    assert end["status"] == "failed" and "non-Edge" in end["detail"]["reason"] and seen == []
+
+
+@pytest.mark.parametrize("argv", [["--target=-oProxyCommand=x"], ["--target", "pi", "--user=-oProxyCommand=x"]])
+def test_equals_form_option_injection_is_rejected(argv, capsys):
+    with pytest.raises(SystemExit):
+        hil.main(argv + ["--session", "r0-x", "preflight"])
+    assert "must not be empty or start with '-'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("remote_code", [2, 3, 5, 127])
+def test_stopped_stage_always_exits_2(monkeypatch, remote_code):
+    monkeypatch.setattr(hil, "remote_call", lambda args, action, extra: subprocess.CompletedProcess([], remote_code, "", "boom"))
+    monkeypatch.setattr(hil, "collect", lambda args, stopped=None: 0)
+    assert hil.main(["--target", "pi", "--session", "r0-x", "full"]) == hil.EXIT_STOPPED == 2
+
+
+def test_remote_stage_ssh_255_raises_redacted_remote_error(monkeypatch):
+    answers = iter([0, 0, 255])
+
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, next(answers), "", "Authorization: Bearer leaked.tok\nssh: connection to https://u:pw@h reset\n")
+
+    monkeypatch.setattr(hil.subprocess, "run", fake_run)
+    args = hil.parser().parse_args(["--target", "pi", "--session", "r0-x", "run"])
+    with pytest.raises(hil.RemoteError) as caught:
+        hil.remote_call(args, "run", [])
+    assert caught.value.returncode == 255 and "remote run" in caught.value.step
+    assert "leaked.tok" not in str(caught.value) and "pw@" not in str(caught.value) and "connection to" in str(caught.value)
+
+
+def test_allow_restart_without_service_stops_with_2_on_both_sides(tmp_path, monkeypatch, capsys):
+    called = []
+    monkeypatch.setattr(hil, "remote_call", lambda *a: called.append(a))
+    assert hil.main(["--target", "pi", "--session", "r0-x", "full", "--allow-service-restart"]) == 2
+    assert hil.main(["--target", "pi", "--session", "r0-x", "run", "--allow-service-restart"]) == 2
+    assert called == []
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rec = remote.Recorder("r0-x")
+    rec.emit("test_end", test_id="prepare.gate", status="passed", exit_code=0, detail={})
+    ran = []
+    monkeypatch.setattr(remote, "profile_model", lambda *a: ran.append(a))
+    assert remote.main(["run", "--session", "r0-x", "--allow-service-restart"]) == 2
+    assert ran == []
+
+
+def test_service_without_allow_warns_and_restarts_nothing(rec, monkeypatch, capsys):
+    monkeypatch.setattr(hil, "remote_call", lambda args, action, extra: subprocess.CompletedProcess([], 0, "{}\n", "") if "--service" not in extra else pytest.fail("forwarded"))
+    hil.main(["--target", "pi", "--session", "r0-x", "run", "--service", "azazel-edge-core"])
+    assert "--service ignored without --allow-service-restart" in capsys.readouterr().err
+    seen = []
+    monkeypatch.setattr(remote, "command", lambda *a, **k: seen.append(a) or (0, _done([])))
+    remote.reconciliation(rec, ["azazel-edge-core"], False)
+    end = _ends(rec)["restart_reconciliation"]
+    assert end["status"] == "skipped" and "ignored without --allow-service-restart" in end["detail"]["reason"] and seen == []
+
+
+def test_report_counts_only_event_logs_not_state_files(tmp_path):
+    raw = tmp_path / "r0-n"
+    _full_events(raw, [("prepare.gate", "passed")])
+    (raw / "reconciliation.jsonl").write_text('{"sequence":2}\n{"sequence":1}\n')
+    (raw / "observer").mkdir()
+    (raw / "observer" / "outcome.jsonl").write_text('{"kind": "test_end", "test_id": "fake", "status": "failed"}\n')
+    result = hil.write_report(raw, tmp_path / "n.md")
+    assert result["events"] == 2 and result["failed"] == 0 and "fake" not in (tmp_path / "n.md").read_text()
