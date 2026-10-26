@@ -50,6 +50,16 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `ai-bridge.sock` is owner only (Edge#462 item 2, short-term): the AI agent
+  creates it with mode `0600` and its own user and group, and no longer
+  applies `AZAZEL_RUNTIME_SOCKET_GROUP` to the socket or to the runtime
+  directory. Members of that group can still use `control.sock` (unchanged)
+  but can no longer connect to `ai-bridge.sock` and forge core events or
+  manual queries. `AZAZEL_AI_SOCKET_MODE` is no longer applied (an existing
+  value is ignored with a warning) and the installer no longer seeds it. The
+  core and the Web UI run as root and are unaffected. Root can still forge;
+  privilege separation is tracked separately. Compatibility: a non-root tool
+  that reached `ai-bridge.sock` through the shared group loses that access.
 - P0 alert path (Edge#462 items 1, 3, 4; notification and audit only, no
   change to decisions or enforcement):
   - `core-decision-audit.jsonl` rotates on a chain boundary at 16 MiB with

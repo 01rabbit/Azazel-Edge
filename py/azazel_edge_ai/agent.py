@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import grp
 import queue
 import secrets
 import signal
@@ -63,8 +62,13 @@ from azazel_edge._util import ensure_parent as _ensure_parent
 
 SOCKET_PATH = Path(os.environ.get("AZAZEL_AI_SOCKET", "/run/azazel-edge/ai-bridge.sock"))
 RUNTIME_DIR_MODE = int(str(os.environ.get("AZAZEL_RUNTIME_DIR_MODE", "0770")), 8)
-SOCKET_MODE = int(str(os.environ.get("AZAZEL_AI_SOCKET_MODE", "0660")), 8)
-RUNTIME_SOCKET_GROUP = str(os.environ.get("AZAZEL_RUNTIME_SOCKET_GROUP", ""))
+# ai-bridge.sock is owner only (Edge#462). Its callers, the Rust core (event
+# forwarding) and the Web UI (``action=manual_query``), run as root like this
+# agent. The optional shared group (AZAZEL_RUNTIME_SOCKET_GROUP) is for the
+# control daemon's control.sock only and is never applied here, so a member
+# of that group cannot connect and forge core events. The socket and its
+# mode are not configurable: AZAZEL_AI_SOCKET_MODE is no longer applied.
+SOCKET_MODE = 0o600
 ADVISORY_PATH = Path(os.environ.get("AZAZEL_AI_ADVISORY", "/run/azazel-edge/ai_advisory.json"))
 EVENT_LOG_PATH = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", "/var/log/azazel-edge/ai-events.jsonl"))
 SNAPSHOT_PATH = Path(os.environ.get("AZAZEL_UI_SNAPSHOT", "/run/azazel-edge/ui_snapshot.json"))
@@ -379,19 +383,32 @@ def _audit_ai_scope(trace_id: str, source: str, intent: str, in_scope: bool, rea
 
 
 def _prepare_runtime_socket_dir(path: Path) -> None:
+    """Create the runtime directory. Its group is left as it is: the control
+    daemon sets the shared group on it for control.sock, and this agent
+    neither grants nor removes that (Edge#462)."""
     target = path.parent
     target.mkdir(parents=True, exist_ok=True)
-    if RUNTIME_SOCKET_GROUP:
-        try:
-            gid = grp.getgrnam(RUNTIME_SOCKET_GROUP).gr_gid
-            os.chown(str(target), -1, gid)
-        except KeyError:
-            logger.warning("Runtime socket group not found: %s", RUNTIME_SOCKET_GROUP)
-        except PermissionError:
-            logger.warning("Insufficient permissions to set runtime socket directory group")
-        except Exception as exc:
-            logger.warning("Failed to set runtime socket directory group: %s", exc)
     os.chmod(str(target), RUNTIME_DIR_MODE)
+
+
+def _bind_ai_socket(path: Path) -> socket.socket:
+    """Bind ai-bridge.sock owner only (0600, the agent's own user and group;
+    Edge#462)."""
+    if path.exists() or path.is_symlink():
+        path.unlink()
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        srv.bind(str(path))
+    except Exception:
+        srv.close()
+        raise
+    # The agent's own group, also where the directory would pass its group
+    # on (BSD semantics, or a setgid directory).
+    os.chown(str(path), -1, os.getegid())
+    os.chmod(str(path), SOCKET_MODE)
+    if os.environ.get("AZAZEL_AI_SOCKET_MODE") not in (None, "", "0600", "600"):
+        logger.warning("AZAZEL_AI_SOCKET_MODE is ignored: ai-bridge.sock is owner only (0600)")
+    return srv
 
 
 def _metrics_snapshot() -> Dict[str, Any]:
@@ -1992,18 +2009,7 @@ def _serve(stop: threading.Event | None = None) -> None:
     # Before the socket exists, so every P0 decision the core sends to this
     # service is recorded and relayed.
     _start_core_p0_path()
-    if SOCKET_PATH.exists():
-        SOCKET_PATH.unlink()
-
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(str(SOCKET_PATH))
-    if RUNTIME_SOCKET_GROUP:
-        try:
-            gid = grp.getgrnam(RUNTIME_SOCKET_GROUP).gr_gid
-            os.chown(str(SOCKET_PATH), -1, gid)
-        except Exception:
-            pass
-    os.chmod(SOCKET_PATH, SOCKET_MODE)
+    srv = _bind_ai_socket(SOCKET_PATH)
     srv.listen(16)
     srv.settimeout(1.0)
     worker = threading.Thread(target=_llm_worker, daemon=True)

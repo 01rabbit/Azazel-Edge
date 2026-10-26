@@ -204,9 +204,10 @@ fi
 if ! grep -q '^AZAZEL_CONTROL_SOCKET_MODE=' "$SECURITY_ENV"; then
   echo 'AZAZEL_CONTROL_SOCKET_MODE=0660' >> "$SECURITY_ENV"
 fi
-if ! grep -q '^AZAZEL_AI_SOCKET_MODE=' "$SECURITY_ENV"; then
-  echo 'AZAZEL_AI_SOCKET_MODE=0660' >> "$SECURITY_ENV"
-fi
+# ai-bridge.sock is always owner only (0600) and never takes the shared group
+# below, so AZAZEL_AI_SOCKET_MODE is no longer seeded; an existing line is
+# ignored by the agent (Edge#462). The shared group applies to the runtime
+# directory and control.sock only.
 if ! grep -q '^AZAZEL_RUNTIME_SOCKET_GROUP=' "$SECURITY_ENV"; then
   echo 'AZAZEL_RUNTIME_SOCKET_GROUP=' >> "$SECURITY_ENV"
 fi
