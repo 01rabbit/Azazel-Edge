@@ -271,6 +271,19 @@ def test_the_encrypted_storage_stops_without_a_terminal():
     assert "set -x" not in src
 
 
+def _gnu_sed_shim() -> str:
+    """A bash prefix that makes `sed -i` (GNU form, as the installer runs it
+    on Debian) work with the BSD sed of macOS, which needs a suffix argument
+    after -i. Empty where sed is GNU sed."""
+    try:
+        gnu = subprocess.run(["sed", "--version"], capture_output=True).returncode == 0
+    except OSError:
+        gnu = False
+    if gnu:
+        return ""
+    return 'sed() { if [[ "$1" == -i ]]; then shift; command sed -i \'\' "$@"; else command sed "$@"; fi; }\n'
+
+
 def test_the_crypttab_line_does_not_hold_a_headless_boot(tmp_path):
     src = LUKS.read_text(encoding="utf-8")
     opts = re.search(r'^CRYPTTAB_OPTIONS="([^"]+)"$', src, re.M).group(1).split(",")
@@ -281,11 +294,14 @@ def test_the_crypttab_line_does_not_hold_a_headless_boot(tmp_path):
     crypttab = tmp_path / "crypttab"
     head = (f'IMG_PATH=/var/lib/azazel-secrets.img\nMAPPER_NAME=azazel-secrets\n'
             f'CRYPTTAB_OPTIONS="{",".join(opts)}"\n')
-    script = head + block.replace("/etc/crypttab", str(crypttab))
+    script = _gnu_sed_shim() + head + block.replace("/etc/crypttab", str(crypttab))
     want = f"azazel-secrets /var/lib/azazel-secrets.img none {','.join(opts)}\n"
     # New line.
     subprocess.run(["bash", "-c", script], check=True)
     assert crypttab.read_text() == want
+    # A re-run finds the current line: no change, no notice.
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+    assert crypttab.read_text() == want and res.stderr == ""
     # The line an earlier install wrote is bounded too.
     crypttab.write_text("other /dev/x none luks\nazazel-secrets /var/lib/azazel-secrets.img none luks\n")
     subprocess.run(["bash", "-c", script], check=True)
@@ -556,7 +572,7 @@ def _wait_active(tmp_path: Path, states: str, restarts: str, status: str) -> sub
 D={d}
 STATES=({states}); RESTARTS=({restarts})
 echo 0 >"$D/s"; echo 0 >"$D/r"
-sleep() {{ :; }}
+sleep() {{ echo "slept $1" >>"$D/sleeps"; }}
 _next() {{ local -n arr=$1; local n; n=$(<"$D/$2"); echo $((n + 1)) >"$D/$2"
   (( n < ${{#arr[@]}} )) || n=$(( ${{#arr[@]}} - 1 )); echo "${{arr[$n]}}"; }}
 systemctl() {{
@@ -574,6 +590,9 @@ systemctl() {{
 def test_the_installer_waits_for_each_service_to_stay_active(tmp_path):
     ok = _wait_active(tmp_path, "activating active active", "0 0", "0")
     assert ok.returncode == 0 and "returned" in ok.stdout
+    # The stability window after the unit is active is 10 s.
+    sleeps = sorted(tmp_path.glob("wa*/sleeps"))[-1].read_text().splitlines()
+    assert sleeps[-1] == "slept 10"
     loop = _wait_active(tmp_path, "active active", "0 1", "1")
     assert loop.returncode == 1 and "did not stay active" in loop.stderr and "returned" not in loop.stdout
     never = _wait_active(tmp_path, "failed", "0", "1")
@@ -592,11 +611,14 @@ def test_the_fstab_line_of_an_earlier_install_gets_the_device_timeout(tmp_path):
     src = LUKS.read_text(encoding="utf-8")
     block = re.search(r'^FSTAB_OPTIONS=.*?^fi\n', src, re.S | re.M).group(0)
     fstab = tmp_path / "fstab"
-    script = "UUID=abcd-1\nMOUNT_POINT=/etc/azazel-edge/secrets\n" + block.replace("/etc/fstab", str(fstab))
+    script = _gnu_sed_shim() + "UUID=abcd-1\nMOUNT_POINT=/etc/azazel-edge/secrets\n" + block.replace("/etc/fstab", str(fstab))
     want = "UUID=abcd-1 /etc/azazel-edge/secrets ext4 defaults,nofail,x-systemd.device-timeout=30s 0 2\n"
     fstab.write_text("")
     subprocess.run(["bash", "-c", script], check=True)
     assert fstab.read_text() == want
+    # A re-run finds the current line: no change, no notice.
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+    assert fstab.read_text() == want and res.stderr == ""
     fstab.write_text("/dev/root / ext4 defaults 0 1\nUUID=abcd-1 /etc/azazel-edge/secrets ext4 defaults,nofail 0 2\n")
     subprocess.run(["bash", "-c", script], check=True)
     assert fstab.read_text() == "/dev/root / ext4 defaults 0 1\n" + want
@@ -608,13 +630,25 @@ def test_the_fstab_line_of_an_earlier_install_gets_the_device_timeout(tmp_path):
 
 def test_the_mattermost_defaults_see_keys_in_every_form_systemd_reads(tmp_path):
     web_env = tmp_path / "azazel-edge-web"
-    web_env.write_text("  AZAZEL_MATTERMOST_HOST=10.1.1.1\nexport AZAZEL_MATTERMOST_PORT = 9000\n"
+    web_env.write_text("  AZAZEL_MATTERMOST_HOST=10.1.1.1\nAZAZEL_MATTERMOST_PORT = 9000\n"
                        "AZAZEL_MATTERMOST_TEAM =x\n")
     assert _seed(tmp_path, web_env).returncode == 0
     text = web_env.read_text()
     for key in ("AZAZEL_MATTERMOST_HOST", "AZAZEL_MATTERMOST_PORT", "AZAZEL_MATTERMOST_TEAM"):
-        assert len(re.findall(rf"^\s*(?:export\s+)?{key}\s*=", text, re.M)) == 1, key
+        assert len(re.findall(rf"^\s*{key}\s*=", text, re.M)) == 1, key
     assert "AZAZEL_MATTERMOST_CHANNEL=soc-noc" in text
+
+
+def test_an_export_line_does_not_count_as_set(tmp_path):
+    # systemd 257 ignores `export KEY=value` in an EnvironmentFile ("Ignoring
+    # invalid environment assignment"; checked in a Debian 13 systemd
+    # container), so the key is still unset for the unit: the default is
+    # added and the operator's line is left as it is.
+    web_env = tmp_path / "azazel-edge-web"
+    web_env.write_text("export AZAZEL_MATTERMOST_PORT=9000\n")
+    assert _seed(tmp_path, web_env).returncode == 0
+    lines = web_env.read_text().splitlines()
+    assert lines[0] == "export AZAZEL_MATTERMOST_PORT=9000" and "AZAZEL_MATTERMOST_PORT=8065" in lines
 
 
 @pytest.mark.skipif(Path(INSTALL_ROOT).exists(), reason="a real /opt/azazel-edge exists here")
@@ -629,3 +663,22 @@ def test_a_symlinked_launcher_does_not_run_the_checkout_it_points_at(tmp_path):
         # it points at is not used: the installed tree is (absent here).
         assert res.returncode != 0, name
         assert f"or in {INSTALL_ROOT}" in res.stderr, (name, res.stderr)
+
+
+def test_the_path_schema_launcher_resolves_its_root_like_the_others(tmp_path):
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    # From a checkout, from another directory: the checkout's code.
+    res = subprocess.run([sys.executable, str(ROOT / "bin" / "azazel-edge-path-schema"), "status"],
+                         capture_output=True, text=True, cwd=tmp_path, env=env, timeout=60)
+    assert res.returncode == 0 and '"active_schema"' in res.stdout, res.stderr
+    src = (ROOT / "bin" / "azazel-edge-path-schema").read_text(encoding="utf-8")
+    assert ".resolve()" not in src and src.count("sys.path.insert") == 1
+
+
+@pytest.mark.skipif(Path(INSTALL_ROOT).exists(), reason="a real /opt/azazel-edge exists here")
+def test_a_symlinked_path_schema_launcher_does_not_run_the_checkout(tmp_path):
+    link = tmp_path / "azazel-edge-path-schema"
+    link.symlink_to(ROOT / "bin" / "azazel-edge-path-schema")
+    res = subprocess.run([sys.executable, str(link), "status"], capture_output=True, text=True, timeout=60,
+                         env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
+    assert res.returncode != 0 and f"or in {INSTALL_ROOT}" in res.stderr, res.stderr

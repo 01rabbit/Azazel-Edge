@@ -13,7 +13,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 # Import common scanner module
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -99,36 +99,149 @@ def _signal_percent_to_dbm(signal_raw: str) -> int:
     return -100
 
 
-def get_wireless_interface() -> Optional[str]:
-    """Detect wireless interface (prefer wlan0, else auto-detect)"""
-    try:
-        # Try wlan0 first
-        result = subprocess.run(
-            ["iw", "dev", "wlan0", "info"],
-            capture_output=True,
-            text=True,
-            timeout=2
-        )
-        if result.returncode == 0:
-            return "wlan0"
-        
-        # Auto-detect via iw dev
-        result = subprocess.run(
-            ["iw", "dev"],
-            capture_output=True,
-            text=True,
-            timeout=2
-        )
-        
-        # Parse: Interface <name>
-        match = re.search(r"Interface\s+(\S+)", result.stdout)
+# /sys/class/net (replaced in tests).
+SYS_CLASS_NET = Path("/sys/class/net")
+
+# Shown when every wireless interface serves the internal LAN (Pi 5: the
+# on-board wlan0 is the internal AP and there is no second radio).
+NO_UPLINK_WIRELESS_ERROR = (
+    "No wireless interface for the uplink: every wireless interface serves the internal LAN "
+    "(AP mode or a port of the internal bridge). Add a USB Wi-Fi adapter (or use a USB Ethernet "
+    "adapter) for the uplink."
+)
+
+
+def _iw_dev_interfaces() -> List[Dict[str, str]]:
+    """Wireless interfaces from ``iw dev``: ``[{"name", "type"}]`` in order."""
+    result = subprocess.run(["iw", "dev"], capture_output=True, text=True, timeout=2)
+    if result.returncode != 0:
+        # An unanswered query is not "no wireless interface" (fail closed).
+        detail = (result.stderr or result.stdout or "").strip()[:200] or f"exit {result.returncode}"
+        raise RuntimeError(detail)
+    interfaces: List[Dict[str, str]] = []
+    for raw in (result.stdout or "").splitlines():
+        line = raw.strip()
+        match = re.match(r"Interface\s+(\S+)$", line)
         if match:
-            return match.group(1)
-        
-        return None
-    except Exception as e:
-        logger.warning(f"Failed to detect wireless interface: {e}")
-        return None
+            interfaces.append({"name": match.group(1), "type": ""})
+            continue
+        match = re.match(r"type\s+(.+)$", line)
+        if match and interfaces and not interfaces[-1]["type"]:
+            interfaces[-1]["type"] = match.group(1).strip()
+    return interfaces
+
+
+class InternalLanUnknown(RuntimeError):
+    """Which interfaces serve the internal LAN could not be determined (a
+    query failed). Callers fail closed: no interface is picked or touched."""
+
+
+def nm_ap_profiles() -> Dict[str, str]:
+    """NetworkManager Wi-Fi profiles in AP mode (the internal AP,
+    ``lan-wlan0-ap``): ``{profile name: interface name ("" if unbound)}``.
+
+    Raises ``InternalLanUnknown`` when nmcli fails: an unanswered query must
+    not make the AP's interface look free."""
+    profiles: Dict[str, str] = {}
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "NAME,TYPE", "con", "show"],
+            env=_nmcli_env(), capture_output=True, text=True, timeout=3,
+        )
+    except Exception as exc:
+        raise InternalLanUnknown(f"nmcli con show failed: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip()[:200] or f"exit {result.returncode}"
+        raise InternalLanUnknown(f"nmcli con show failed: {detail}")
+    for line in (result.stdout or "").splitlines():
+        name, con_type = _split_nmcli_terse_line(line, 2)
+        if con_type != "802-11-wireless" or not name:
+            continue
+        try:
+            detail_proc = subprocess.run(
+                ["nmcli", "--escape", "no", "-g", "802-11-wireless.mode,connection.interface-name",
+                 "con", "show", name],
+                env=_nmcli_env(), capture_output=True, text=True, timeout=3,
+            )
+        except Exception as exc:
+            raise InternalLanUnknown(f"nmcli con show {name!r} failed: {exc}") from exc
+        if detail_proc.returncode != 0:
+            detail = (detail_proc.stderr or "").strip()[:200] or f"exit {detail_proc.returncode}"
+            raise InternalLanUnknown(f"nmcli con show {name!r} failed: {detail}")
+        values = (detail_proc.stdout or "").splitlines() + ["", ""]
+        if values[0].strip().lower() == "ap":
+            profiles[name] = values[1].strip()
+    return profiles
+
+
+def internal_lan_interfaces(sys_class_net: Optional[Path] = None) -> set:
+    """Interfaces that serve the internal LAN and must never be used (or
+    scanned on, or taken down) as the uplink: a wireless interface in AP
+    mode, the interface an AP-mode NetworkManager profile is bound to, a
+    bridge, and a port of a bridge (``br0`` and its members).
+
+    Raises ``InternalLanUnknown`` when any of the sources cannot be read."""
+    net = sys_class_net or SYS_CLASS_NET
+    internal: set = set()
+    try:
+        for entry in net.iterdir():
+            if (entry / "bridge").exists() or (entry / "brport").exists():
+                internal.add(entry.name)
+    except OSError as exc:
+        raise InternalLanUnknown(f"reading {net} failed: {exc}") from exc
+    try:
+        for iface in _iw_dev_interfaces():
+            if iface["type"].lower() == "ap":
+                internal.add(iface["name"])
+    except Exception as exc:
+        raise InternalLanUnknown(f"iw dev failed: {exc}") from exc
+    # The AP's interface even while the AP is down.
+    internal |= {iface for iface in nm_ap_profiles().values() if iface}
+    return internal
+
+
+def select_uplink_wireless_interface() -> Tuple[Optional[str], str]:
+    """``(interface, "")`` for the uplink (scan and connect), or
+    ``(None, error)`` with the cause.
+
+    Interfaces that serve the internal LAN (``internal_lan_interfaces``) are
+    never returned: on a Pi 5 the on-board wlan0 is the internal AP, and
+    connecting it to another network would take the AP down. If that set
+    cannot be determined, none is returned (fail closed). Among the rest,
+    wlan0 is preferred, then the first one ``iw dev`` lists."""
+    try:
+        interfaces = [iface["name"] for iface in _iw_dev_interfaces()]
+    except Exception as exc:
+        error = f"No wireless interface found (iw dev failed: {exc})"
+        logger.warning(error)
+        return None, error
+    if not interfaces:
+        return None, "No wireless interface found"
+    try:
+        internal = internal_lan_interfaces()
+    except InternalLanUnknown as exc:
+        error = (f"Cannot tell which wireless interface serves the internal AP ({exc}); "
+                 "no interface is used for the uplink")
+        logger.warning(error)
+        return None, error
+    candidates = [name for name in interfaces if name not in internal]
+    if not candidates:
+        error = (f"{NO_UPLINK_WIRELESS_ERROR} Wireless interfaces serving the internal LAN: "
+                 f"{', '.join(interfaces)}.")
+        logger.warning(error)
+        return None, error
+    return ("wlan0" if "wlan0" in candidates else candidates[0]), ""
+
+
+def get_wireless_interface() -> Optional[str]:
+    """The uplink wireless interface, or None (see
+    ``select_uplink_wireless_interface`` for the rules and the cause)."""
+    return select_uplink_wireless_interface()[0]
+
+
+def no_wireless_interface_error() -> str:
+    """The error to show when ``get_wireless_interface`` found none."""
+    return select_uplink_wireless_interface()[1] or "No wireless interface found"
 
 
 def check_networkmanager(iface: str) -> bool:
@@ -336,11 +449,11 @@ def scan_wifi() -> Dict[str, Any]:
     import time
     
     # Detect wireless interface
-    iface = get_wireless_interface()
+    iface, error = select_uplink_wireless_interface()
     if not iface:
         return {
             "ok": False,
-            "error": "No wireless interface found",
+            "error": error,
             "ts": time.time()
         }
     

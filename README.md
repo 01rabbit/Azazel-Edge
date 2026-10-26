@@ -44,8 +44,17 @@ sudo ENABLE_INTERNAL_NETWORK=1 \
      ENABLE_APP_STACK=1 \
      ENABLE_AI_RUNTIME=1 \
      ENABLE_DEV_REMOTE_ACCESS=0 \
+     WIFI_COUNTRY=JP \
      bash installer/internal/install_all.sh
 ```
+
+On a Raspberry Pi 5 the on-board Ethernet and Wi-Fi become the internal LAN
+(`br0` and its AP), so the uplink needs a USB Ethernet or USB Wi-Fi adapter.
+`WIFI_COUNTRY` is required on Raspberry Pi OS unless a Wi-Fi country is
+already set. The internal AP passphrase is generated and saved root-only in
+`/etc/azazel-edge/internal-ap.psk`. Run the installer on the console or in
+`tmux`: building `br0` cuts an SSH session over `eth0` or `wlan0`. See the
+[Physical Setup Guide](docs/PHYSICAL_SETUP_GUIDE.md).
 
 Minimal verification:
 

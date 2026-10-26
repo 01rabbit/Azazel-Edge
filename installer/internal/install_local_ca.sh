@@ -34,10 +34,14 @@ recreate_ca=0
 if [[ ! -s "$CA_KEY" || ! -s "$CA_CERT" ]]; then
   recreate_ca=1
 else
-  if ! openssl x509 -in "$CA_CERT" -noout -text | grep -q "CA:TRUE"; then
+  # Read into a variable first: piped into `grep -q`, openssl is killed by
+  # SIGPIPE when grep exits at the match, and pipefail would read a good CA
+  # as a bad one and recreate it on every run.
+  ca_text="$(openssl x509 -in "$CA_CERT" -noout -text 2>/dev/null)" || ca_text=""
+  if ! grep -q "CA:TRUE" <<<"$ca_text"; then
     recreate_ca=1
   fi
-  if ! openssl x509 -in "$CA_CERT" -noout -text | grep -q "Certificate Sign"; then
+  if ! grep -q "Certificate Sign" <<<"$ca_text"; then
     recreate_ca=1
   fi
 fi

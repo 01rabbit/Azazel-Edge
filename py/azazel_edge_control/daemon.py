@@ -33,7 +33,16 @@ PY_ROOT = PROJECT_ROOT / "py"
 sys.path.insert(0, str(Path(__file__).parent))
 if str(PY_ROOT) not in sys.path:
     sys.path.insert(0, str(PY_ROOT))
-from wifi_scan import scan_wifi, get_wireless_interface, check_networkmanager, _nmcli_env
+from wifi_scan import (
+    scan_wifi,
+    get_wireless_interface,
+    check_networkmanager,
+    _nmcli_env,
+    internal_lan_interfaces,
+    nm_ap_profiles,
+    InternalLanUnknown,
+    select_uplink_wireless_interface,
+)
 from mode_manager import ModeManager
 from wifi_connect import connect_wifi, update_state_json
 from azazel_edge.evaluators import NocEvaluator
@@ -311,13 +320,40 @@ def _should_poll(name: str, now: float | None = None) -> bool:
     return True
 
 
+def _wifi_sensor_interface() -> tuple[str, str]:
+    """``(interface, "")`` the Wi-Fi sensor scans on, or ``("", reason)``.
+
+    ``AZAZEL_WIFI_SCAN_IFACE`` when set, else the uplink wireless interface.
+    An interface that serves the internal LAN (the internal AP, a bridge or
+    a bridge port) is never scanned on: a scan on the AP's radio disturbs the
+    AP's clients. When that cannot be determined, nothing is scanned."""
+    configured = str(os.environ.get("AZAZEL_WIFI_SCAN_IFACE", "")).strip()
+    if not configured:
+        interface, error = select_uplink_wireless_interface()
+        return (interface, "") if interface else ("", error)
+    try:
+        internal = internal_lan_interfaces()
+    except InternalLanUnknown as exc:
+        return "", f"cannot tell whether {configured} serves the internal LAN ({exc})"
+    if configured in internal:
+        return "", f"AZAZEL_WIFI_SCAN_IFACE={configured} serves the internal LAN (internal AP or bridge)"
+    return configured, ""
+
+
 def _wifi_sensor_loop() -> None:
-    interface = str(os.environ.get("AZAZEL_WIFI_SCAN_IFACE", "wlan0")).strip() or "wlan0"
     shelter_ssid = str(os.environ.get("AZAZEL_SHELTER_SSID", "")).strip()
+    skipped_reason = ""
     while not _WIFI_SENSOR_STOP.wait(1.0):
         try:
             if not _should_poll("wifi_channel_scan"):
                 continue
+            interface, reason = _wifi_sensor_interface()
+            if not interface:
+                if reason != skipped_reason:
+                    logger.warning(f"wifi sensor: not scanning: {reason}")
+                    skipped_reason = reason
+                continue
+            skipped_reason = ""
             scan_result = scan_wifi_channels(interface)
             _WIFI_EVIDENCE_SERVICE.dispatch_wifi_scan(scan_result if isinstance(scan_result, dict) else {})
             if shelter_ssid:
@@ -888,6 +924,17 @@ def _uplink_disconnect(request: dict[str, Any]) -> dict[str, Any]:
     if not (SYS_CLASS_NET / iface).exists():
         return {"ok": False, "action": "uplink_disconnect", "error": f"uplink_interface_not_found:{iface}",
                 "ts": time.time()}
+    # Never the internal LAN (the default wlan0 is the internal AP on a Pi 5):
+    # setting it down would cut every client, not the uplink.
+    try:
+        internal = internal_lan_interfaces(SYS_CLASS_NET)
+    except InternalLanUnknown as exc:
+        # Fail closed: unknown is not "not internal".
+        return {"ok": False, "action": "uplink_disconnect", "interface": iface,
+                "error": f"uplink_interface_check_failed:{exc}", "ts": time.time()}
+    if iface in internal:
+        return {"ok": False, "action": "uplink_disconnect", "interface": iface,
+                "error": f"uplink_interface_serves_internal_lan:{iface}", "ts": time.time()}
     ip_bin = next((c for c in IP_COMMAND_CANDIDATES if os.path.isfile(c) and os.access(c, os.X_OK)), "")
     if not ip_bin:
         return {"ok": False, "action": "uplink_disconnect", "error": "ip_command_not_found", "ts": time.time()}
@@ -2358,13 +2405,19 @@ def suppress_auto_wifi(enabled: bool = True):
         logger.info("suppress_auto_wifi disabled by config; keeping existing Wi-Fi session")
         return
     try:
-        iface = get_wireless_interface()
+        iface, reason = select_uplink_wireless_interface()
         if not iface:
+            logger.info(f"suppress_auto_wifi: no uplink wireless interface to disconnect ({reason})")
             return
 
-        # NetworkManager: disable autoconnect for all Wi-Fi connections and disconnect
+        # NetworkManager: disable autoconnect for all Wi-Fi client connections
+        # and disconnect. The internal AP's profile (AP mode) keeps its
+        # autoconnect: without it the AP would not return after a reboot.
         if check_networkmanager(iface):
             try:
+                # Raises when nmcli fails: then no profile is changed (the
+                # AP's profile could not be told apart).
+                ap_profiles = nm_ap_profiles()
                 result = subprocess.run(
                     ["nmcli", "-t", "-f", "NAME,TYPE", "con", "show"],
                     env=_nmcli_env(),
@@ -2374,7 +2427,7 @@ def suppress_auto_wifi(enabled: bool = True):
                 )
                 for line in result.stdout.splitlines():
                     parts = line.split(":", 1)
-                    if len(parts) == 2 and parts[1] == "802-11-wireless":
+                    if len(parts) == 2 and parts[1] == "802-11-wireless" and parts[0] not in ap_profiles:
                         subprocess.run(
                             ["nmcli", "con", "mod", parts[0], "connection.autoconnect", "no"],
                             env=_nmcli_env(),
@@ -2389,7 +2442,7 @@ def suppress_auto_wifi(enabled: bool = True):
                 )
                 logger.info("suppress_auto_wifi enabled: disconnected Wi-Fi and disabled autoconnect profiles")
             except Exception as e:
-                logger.debug(f"Failed to disable NetworkManager auto-connect: {e}")
+                logger.warning(f"Failed to disable NetworkManager auto-connect: {e}")
         else:
             logger.warning("NetworkManager not found or not managing interface")
 

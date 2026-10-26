@@ -1,6 +1,6 @@
 # Field Deployment Guide
 
-Last updated: 2026-05-13
+Last updated: 2026-10-27
 
 Stage-based checklist for emergency deployment with deterministic safety
 controls. Each item includes expected outcome and fallback note.
@@ -20,7 +20,10 @@ controls. Each item includes expected outcome and fallback note.
 
 - [ ] Confirm e-Paper displays GREEN.
   Expected: posture is readable and stable.
-  If something goes wrong: verify EPD service and cable seating.
+  If something goes wrong: verify EPD service and cable seating; a failed
+  draw marks `azazel-edge-epd-refresh.service` failed with the renderer's
+  error in `journalctl -u azazel-edge-epd-refresh`; check that
+  `/dev/spidev0.0` exists (SPI enabled, rebooted).
 
 - [ ] Confirm token material exists (encrypted storage is set up by default
   and the installer must run on an interactive terminal for its passphrase;
@@ -39,7 +42,17 @@ controls. Each item includes expected outcome and fallback note.
   Expected: no media integrity critical alert.
   If something goes wrong: replace media and re-image.
 
-- [ ] Pack hardware set (Pi, enclosure, power, UPS, LAN, EPD cable, STATUS_CARD).
+- [ ] Confirm the internal AP is up and its passphrase is on the STATUS_CARD:
+  `nmcli -t -f NAME,DEVICE con show --active | grep lan-wlan0-ap` and
+  `sudo cat /etc/azazel-edge/internal-ap.psk` (root-only; generated at install
+  unless `AP_PSK` was given).
+  Expected: `lan-wlan0-ap` is active on `wlan0`.
+  If something goes wrong: check `rfkill list`, the Wi-Fi country
+  (`sudo raspi-config nonint get_wifi_country`) and
+  `systemctl status azazel-internal-apply`.
+
+- [ ] Pack hardware set (Pi, enclosure, power, UPS, LAN, EPD cable, USB uplink
+  adapter, STATUS_CARD).
   Expected: complete deployment kit is ready.
   If something goes wrong: do not deploy incomplete set.
 
@@ -67,9 +80,17 @@ controls. Each item includes expected outcome and fallback note.
   Expected: boot starts immediately.
   If something goes wrong: inspect converter/output rail.
 
-- [ ] Connect WAN uplink (LAN or router path).
+- [ ] Connect WAN uplink through the USB Ethernet or USB Wi-Fi adapter (the
+  on-board `eth0` and `wlan0` are the internal LAN; see
+  PHYSICAL_SETUP_GUIDE.md §1.1).
   Expected: uplink path is detected.
-  If something goes wrong: verify gateway and cable path.
+  If something goes wrong: verify gateway and cable path. A Wi-Fi uplink
+  chosen in the dashboard needs the USB Wi-Fi adapter; without it the
+  dashboard reports "No wireless interface for the uplink" and the internal
+  AP stays up. Without a USB Wi-Fi adapter the Wi-Fi sensor (channel survey,
+  nearby and rogue AP checks) is off: the on-board `wlan0` is never scanned
+  on because it serves the internal AP. Bring the adapter if that evidence is
+  needed on site.
 
 - [ ] Connect LAN switch or AP for local segment.
   Expected: local clients can join segment.
@@ -142,7 +163,8 @@ controls. Each item includes expected outcome and fallback note.
 
 ## Supplementary (日本語)
 
-- 事前準備: サービス・暗号化シークレット・自己診断を確認してから搬送します。
+- 事前準備: サービス・暗号化シークレット・自己診断を確認してから搬送します。内部 AP が上がっていること、パスフレーズ（`/etc/azazel-edge/internal-ap.psk`、root のみ）を STATUS_CARD に控えたこと、USB の上流アダプタを同梱したことも確認します。
+- 上流（WAN）は USB Ethernet か USB Wi-Fi で接続します。内蔵 eth0・wlan0 は内部 LAN です。USB Wi-Fi が無いと Wi-Fi センサー（周辺 AP・不正 AP 検知）は無効です。
 - 現地設置: 15分以内の立上げを目標に、GREEN/YELLOWの表示確認を優先します。
 - 運用中: RED時は承認済み手順のみ実行し、引継ぎ時は要約を必ず確認します。
 - 終了時: 監査ログを退避してから安全停止し、搬送状態に戻します。
