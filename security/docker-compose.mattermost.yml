@@ -3,10 +3,15 @@ services:
     image: postgres:16-alpine
     container_name: azazel-edge-mm-db
     restart: unless-stopped
+    # The database password is random per device and lives only in this
+    # 0600 root file, made by installer/internal/mattermost_db_secret.sh
+    # before the stack starts (Edge#477). Without the file the stack does not
+    # start.
+    env_file:
+      - ${AZAZEL_MATTERMOST_DB_ENV_FILE:-/etc/azazel-edge/mattermost-db.env}
     environment:
       POSTGRES_DB: mattermost
       POSTGRES_USER: mmuser
-      POSTGRES_PASSWORD: mm-password-change
     volumes:
       - mattermost_db:/var/lib/postgresql/data
     healthcheck:
@@ -16,19 +21,31 @@ services:
       retries: 10
 
   mattermost:
-    image: mattermost/mattermost-team-edition:latest
+    # A fixed release, not `latest` (Edge#477). Mattermost publishes this
+    # image for linux/amd64 only (no arm64 build on Docker Hub), so on a
+    # Raspberry Pi it runs under qemu-user emulation (qemu-user-static and
+    # binfmt-support). That is slow, and on a kernel with 16K pages (the Pi 5
+    # default) emulated amd64 programs may not run at all; it has not been
+    # shown to work on the device.
+    image: mattermost/mattermost-team-edition:12.0.1
     container_name: azazel-edge-mattermost
     platform: linux/amd64
     restart: unless-stopped
     depends_on:
       mattermost-db:
         condition: service_healthy
+    # Loopback only (Edge#477): a port Docker publishes on every interface
+    # bypasses the host firewall and was reachable from the WAN. LAN clients
+    # reach Mattermost through nginx on :8065, which admits only the LAN and
+    # loopback (provision_mattermost_workspace.sh writes that site).
     ports:
-      - "8065:8065"
+      - "127.0.0.1:18065:8065"
+    # MM_SQLSETTINGS_DATASOURCE (with the database password) comes from here.
+    env_file:
+      - ${AZAZEL_MATTERMOST_DB_ENV_FILE:-/etc/azazel-edge/mattermost-db.env}
     environment:
       TZ: Asia/Tokyo
       MM_SQLSETTINGS_DRIVERNAME: postgres
-      MM_SQLSETTINGS_DATASOURCE: postgres://mmuser:mm-password-change@mattermost-db:5432/mattermost?sslmode=disable&connect_timeout=10
       MM_SERVICESETTINGS_SITEURL: ${MATTERMOST_SITE_URL:-http://172.16.0.254:8065}
       MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS: ${MATTERMOST_ALLOWED_UNTRUSTED_INTERNAL_CONNECTIONS:-172.16.0.254}
       MM_SERVICESETTINGS_ENABLELOCALMODE: "true"

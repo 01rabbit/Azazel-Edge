@@ -1,0 +1,541 @@
+"""Edge#477: external exposure found by the audit before the device run.
+
+- ntfy listens on loopback only, anonymous clients get nothing (deny-all),
+  and the anonymous read-write grants of earlier installs are removed.
+- Mattermost publishes on loopback only; LAN clients go through an nginx
+  site that admits the LAN and loopback only.
+- No fixed Mattermost database or admin password in the code: both are
+  random per device and kept in 0600 files.
+- The Mattermost image is a fixed release, not `latest`.
+
+All secrets here are fakes made by the tests. A container run of these
+checks is not evidence from the device.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import stat
+import subprocess
+from pathlib import Path
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+INTERNAL = ROOT / "installer" / "internal"
+NTFY = INTERNAL / "install_ntfy.sh"
+COMPOSE = ROOT / "security" / "docker-compose.mattermost.yml"
+DB_SECRET = INTERNAL / "mattermost_db_secret.sh"
+PROVISION = INTERNAL / "provision_mattermost_workspace.sh"
+COMMAND = INTERNAL / "provision_mattermost_command.sh"
+AI_RUNTIME = INTERNAL / "install_ai_runtime.sh"
+NETWORK = INTERNAL / "install_internal_network.sh"
+DEVSTACK = ROOT / "bin" / "azazel-edge-devstack"
+MACDEV = ROOT / "tools" / "macdev" / "provision-mattermost.sh"
+
+HEX48 = re.compile(r"^[0-9a-f]{48}$")
+
+
+def _function(path: Path, name: str) -> str:
+    src = path.read_text(encoding="utf-8")
+    m = re.search(r"^" + name + r"\(\) \{\n.*?^\}\n", src, re.S | re.M)
+    assert m, name
+    return m.group(0)
+
+
+def _gnu_mv() -> bool:
+    return subprocess.run(["mv", "--version"], capture_output=True).returncode == 0
+
+
+needs_gnu_mv = pytest.mark.skipif(not _gnu_mv(), reason="mv -T is GNU coreutils (Debian); run in Linux")
+
+
+def _tracked_text_files():
+    skip = {".git", ".venv", "target", "node_modules", "__pycache__", ".pytest_cache"}
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if d not in skip]
+        for name in filenames:
+            path = Path(dirpath) / name
+            try:
+                yield str(path.relative_to(ROOT)), path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+
+
+# --------------------------------------------------------------------- ntfy
+
+
+def _ntfy_server_yml(port: str = "8081") -> dict:
+    """Render the server.yml heredoc of install_ntfy.sh as bash would."""
+    src = NTFY.read_text(encoding="utf-8")
+    m = re.search(r'^cat > "\$SERVER_CFG" <<EOF\n(.*?)^EOF\n', src, re.S | re.M)
+    assert m, "server.yml heredoc"
+    listen = re.search(r'^NTFY_LISTEN_ADDR="([^"]*)"$', src, re.M)
+    assert listen, "NTFY_LISTEN_ADDR"
+    script = f'NTFY_LISTEN_ADDR="{listen.group(1)}"\nNTFY_PORT="$1"\ncat <<EOF\n{m.group(1)}EOF\n'
+    out = subprocess.run(["bash", "-c", script, "bash", port], capture_output=True, text=True, check=True)
+    return yaml.safe_load(out.stdout)
+
+
+def test_ntfy_listens_on_loopback_only():
+    cfg = _ntfy_server_yml()
+    assert cfg["listen-http"] == "127.0.0.1:8081"
+    assert cfg["base-url"] == "http://127.0.0.1:8081"
+    # The address is fixed in the script, not taken from the environment.
+    src = NTFY.read_text(encoding="utf-8")
+    assert re.search(r'^NTFY_LISTEN_ADDR="127\.0\.0\.1"$', src, re.M)
+    assert "MGMT_IP" not in src
+
+
+def test_ntfy_denies_anonymous_access_by_default():
+    cfg = _ntfy_server_yml()
+    assert cfg["auth-default-access"] == "deny-all"
+    assert cfg["auth-file"] == "/var/lib/ntfy/user.db"
+    assert cfg["web-root"] == "disable"
+
+
+def test_ntfy_grants_nothing_to_everyone_and_removes_old_grants():
+    src = NTFY.read_text(encoding="utf-8")
+    grants = re.findall(r"^\s*ntfy access (\S+) .*$", src, re.M)
+    assert grants, "no ntfy access lines"
+    for line in re.findall(r"^\s*ntfy access .*$", src, re.M):
+        if re.search(r"\b(everyone|\*)\b", line):
+            # Only resets or reads of the anonymous entries, never a grant.
+            assert "--reset" in line or re.search(r"ntfy access everyone 2>", line), line
+    assert 'ntfy access --reset everyone "$TOPIC_ALERT"' in src
+    assert 'ntfy access --reset everyone "$TOPIC_INFO"' in src
+    # The Edge account's grants must not be ignored when they fail.
+    assert re.search(r'^ntfy access "\$NTFY_USER" "\$TOPIC_ALERT" read-write >/dev/null$', src, re.M)
+    assert re.search(r'^ntfy access "\$NTFY_USER" "\$TOPIC_INFO" read-write >/dev/null$', src, re.M)
+
+
+def test_ntfy_install_checks_anonymous_refusal_and_token_without_argv():
+    src = NTFY.read_text(encoding="utf-8")
+    assert 'anon_status' in src and '"401"' in src and '"403"' in src
+    # The token reaches curl on stdin (-H @-), never as an argument.
+    assert "-H @-" in src
+    assert not re.search(r'-H "Authorization: Bearer \$\{?token', src)
+    # The token is never echoed.
+    for line in re.findall(r"^\s*echo .*$", src, re.M):
+        assert "$token" not in line and "${token}" not in line, line
+
+
+def test_web_ui_ntfy_health_tries_loopback_first(monkeypatch):
+    import azazel_edge_web.app as webapp
+
+    tried = []
+
+    def fake_urlopen(url, timeout=0):
+        tried.append(url)
+        raise OSError("refused")
+
+    monkeypatch.setattr(webapp, "urlopen", fake_urlopen)
+    monkeypatch.setenv("MGMT_IP", "10.0.0.9")
+    assert webapp._ntfy_health_ok() is False
+    assert tried[0] == "http://127.0.0.1:8081/v1/health"
+    assert tried[-1] == "http://10.0.0.9:8081/v1/health"
+
+
+def test_cli_ntfy_health_tries_loopback_first(monkeypatch):
+    from azazel_edge import cli_unified
+
+    tried = []
+
+    class Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n):
+            return b'{"healthy":true}'
+
+    def fake_urlopen(url, timeout=0):
+        tried.append(url)
+        if "127.0.0.1" in url:
+            return Resp()
+        raise OSError("refused")
+
+    monkeypatch.setattr(cli_unified, "urlopen", fake_urlopen)
+    monkeypatch.setenv("MGMT_IP", "10.0.0.9")
+    assert cli_unified._ntfy_health_ok() is True
+    assert tried == ["http://127.0.0.1:8081/v1/health"]
+
+
+def test_web_ui_ntfy_bridge_sends_the_token(monkeypatch):
+    import threading
+
+    import azazel_edge_web.app as webapp
+
+    seen = {}
+
+    def fake_urlopen(req, timeout=0):
+        seen["auth"] = req.get_header("Authorization")
+        raise OSError("stop here")
+
+    monkeypatch.setattr(webapp, "urlopen", fake_urlopen)
+    with pytest.raises(OSError):
+        next(webapp._iter_ntfy_sse_events("http://127.0.0.1:8081/t/sse", "tk_fake", threading.Event()))
+    assert seen["auth"] == "Bearer tk_fake"
+
+
+# --------------------------------------------------------------- Mattermost
+
+
+def _compose() -> dict:
+    return yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+
+
+def test_mattermost_publishes_on_loopback_only():
+    services = _compose()["services"]
+    assert services["mattermost"]["ports"] == ["127.0.0.1:18065:8065"]
+    assert "ports" not in services["mattermost-db"]
+    for name, svc in services.items():
+        for port in svc.get("ports", []):
+            assert str(port).startswith("127.0.0.1:"), (name, port)
+
+
+def test_mattermost_compose_holds_no_password():
+    services = _compose()["services"]
+    env_file = "${AZAZEL_MATTERMOST_DB_ENV_FILE:-/etc/azazel-edge/mattermost-db.env}"
+    for name in ("mattermost-db", "mattermost"):
+        env = services[name].get("environment", {})
+        assert "POSTGRES_PASSWORD" not in env, name
+        assert "MM_SQLSETTINGS_DATASOURCE" not in env, name
+        assert services[name]["env_file"] == [env_file], name
+    text = COMPOSE.read_text(encoding="utf-8")
+    assert not re.search(r"postgres://[^@\s]*:[^@\s]*@", text)
+
+
+def test_mattermost_image_is_pinned():
+    image = _compose()["services"]["mattermost"]["image"]
+    assert image == "mattermost/mattermost-team-edition:12.0.1"
+    assert not image.endswith(":latest")
+    # amd64 only upstream; the compose file says so and keeps the platform.
+    assert _compose()["services"]["mattermost"]["platform"] == "linux/amd64"
+    assert "16K" in COMPOSE.read_text(encoding="utf-8")
+
+
+def test_no_fixed_mattermost_password_left_in_the_repository():
+    former_admin = "7030024adfd5d729d1d9540d3a49fd1bc699f5de35dbe8f6841b5cbaba5fcd2e"
+    former_db = "mm-password-" + "change"  # split so this file does not match itself
+    bad = []
+    for rel, text in _tracked_text_files():
+        if former_db in text:
+            bad.append(rel)
+        for word in set(re.findall(r"[A-Za-z][A-Za-z0-9]{5,}!\d{4}", text)):
+            if hashlib.sha256(word.encode()).hexdigest() == former_admin:
+                bad.append(rel)
+    assert bad == []
+
+
+def test_ai_runtime_makes_the_db_secret_before_starting_the_stack():
+    src = AI_RUNTIME.read_text(encoding="utf-8")
+    secret = src.index("mattermost_db_secret.sh")
+    up = src.index("docker-compose.mattermost.yml up -d")
+    assert secret < up
+    assert '"${REPO_ROOT}/installer/internal/mattermost_db_secret.sh" /etc/azazel-edge/mattermost-db.env' in src
+
+
+def test_installer_clients_use_the_loopback_port():
+    assert 'MATTERMOST_API_URL="${AZAZEL_MATTERMOST_API_URL:-http://127.0.0.1:18065}"' in PROVISION.read_text(encoding="utf-8")
+    assert 'MATTERMOST_URL_DEFAULT="${AZAZEL_MATTERMOST_URL:-http://127.0.0.1:18065}"' in COMMAND.read_text(encoding="utf-8")
+    dev = DEVSTACK.read_text(encoding="utf-8")
+    assert 'MM_URL="http://localhost:18065"' in dev
+    assert "mattermost_db_secret.sh" in dev
+    assert 'API_URL="${AZAZEL_MATTERMOST_API_URL:-http://127.0.0.1:18065}"' in MACDEV.read_text(encoding="utf-8")
+
+
+# ----------------------------------------------------- mattermost_db_secret.sh
+
+
+def _fake_docker(tmp_path: Path, mode: str) -> Path:
+    """A `docker` stub. mode: 'absent' (daemon down), 'running' (a container
+    of an earlier install), 'psql_fails'. It logs argv and psql's stdin."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "docker.argv"
+    stdin_log = tmp_path / "psql.stdin"
+    script = f"""#!/bin/bash
+printf '%s\\n' "$*" >> {log}
+mode={mode}
+case "$1" in
+  info) [[ $mode == absent ]] && exit 1; exit 0 ;;
+  container)
+    [[ "$2" == inspect ]] || exit 1
+    if [[ "$3" == -f ]]; then echo true; fi
+    exit 0 ;;
+  exec)
+    if [[ "$2" == -i ]]; then
+      cat > {stdin_log}
+      [[ $mode == psql_fails ]] && exit 2
+      exit 0
+    fi
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+"""
+    stub = bindir / "docker"
+    stub.write_text(script, encoding="utf-8")
+    stub.chmod(0o755)
+    return bindir
+
+
+def _run_secret(tmp_path: Path, env_file: Path, mode: str) -> subprocess.CompletedProcess:
+    bindir = _fake_docker(tmp_path, mode)
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}")
+    return subprocess.run(["bash", str(DB_SECRET), str(env_file)], capture_output=True, text=True, env=env)
+
+
+def _password(env_file: Path) -> str:
+    m = re.search(r"^POSTGRES_PASSWORD=(.*)$", env_file.read_text(encoding="utf-8"), re.M)
+    assert m
+    return m.group(1)
+
+
+def test_db_secret_new_file_is_random_0600_and_not_printed(tmp_path):
+    env_file = tmp_path / "etc" / "mattermost-db.env"
+    res = _run_secret(tmp_path, env_file, "absent")
+    assert res.returncode == 0, res.stderr
+    pw = _password(env_file)
+    assert HEX48.match(pw)
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(env_file.parent.stat().st_mode) == 0o750
+    assert (
+        f"MM_SQLSETTINGS_DATASOURCE=postgres://mmuser:{pw}@mattermost-db:5432/mattermost"
+        "?sslmode=disable&connect_timeout=10"
+    ) in env_file.read_text(encoding="utf-8")
+    assert pw not in res.stdout + res.stderr
+    assert [p.name for p in env_file.parent.iterdir()] == [env_file.name]
+    if os.geteuid() == 0:
+        assert env_file.stat().st_uid == 0 and env_file.stat().st_gid == 0
+
+    other = tmp_path / "other"
+    other.mkdir()
+    env2 = other / "mattermost-db.env"
+    assert _run_secret(other, env2, "absent").returncode == 0
+    assert _password(env2) != pw
+
+
+def test_db_secret_keeps_an_existing_file_and_narrows_its_mode(tmp_path):
+    env_file = tmp_path / "mattermost-db.env"
+    content = "POSTGRES_PASSWORD=keepme\nMM_SQLSETTINGS_DATASOURCE=postgres://mmuser:keepme@x/y\n"
+    env_file.write_text(content, encoding="utf-8")
+    env_file.chmod(0o644)
+    res = _run_secret(tmp_path, env_file, "running")
+    assert res.returncode == 0, res.stderr
+    assert env_file.read_text(encoding="utf-8") == content
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+    # The database is left alone.
+    assert not (tmp_path / "psql.stdin").exists()
+
+
+def test_db_secret_refuses_an_incomplete_file_and_a_symlink(tmp_path):
+    env_file = tmp_path / "mattermost-db.env"
+    env_file.write_text("POSTGRES_PASSWORD=x\n", encoding="utf-8")
+    res = _run_secret(tmp_path, env_file, "absent")
+    assert res.returncode != 0
+    assert env_file.read_text(encoding="utf-8") == "POSTGRES_PASSWORD=x\n"
+
+    link_dir = tmp_path / "l"
+    link_dir.mkdir()
+    target = link_dir / "victim"
+    target.write_text("victim\n", encoding="utf-8")
+    link = link_dir / "mattermost-db.env"
+    link.symlink_to(target)
+    res = _run_secret(link_dir, link, "absent")
+    assert res.returncode != 0
+    assert target.read_text(encoding="utf-8") == "victim\n"
+
+
+def test_db_secret_changes_an_existing_database_password_via_stdin(tmp_path):
+    env_file = tmp_path / "mattermost-db.env"
+    res = _run_secret(tmp_path, env_file, "running")
+    assert res.returncode == 0, res.stderr
+    pw = _password(env_file)
+    sql = (tmp_path / "psql.stdin").read_text(encoding="utf-8")
+    assert sql == f"ALTER USER mmuser WITH PASSWORD '{pw}';\n"
+    argv = (tmp_path / "docker.argv").read_text(encoding="utf-8")
+    assert pw not in argv
+    assert "exec -i azazel-edge-mm-db psql -v ON_ERROR_STOP=1 -q -U mmuser -d mattermost" in argv
+
+
+def test_db_secret_writes_nothing_when_the_password_change_fails(tmp_path):
+    env_file = tmp_path / "mattermost-db.env"
+    res = _run_secret(tmp_path, env_file, "psql_fails")
+    assert res.returncode != 0
+    assert not env_file.exists()
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".")] == []
+
+
+# ------------------------------------------- provision_mattermost_workspace.sh
+
+
+def _admin_password_script(cred_env: Path, *, env_password: str = "") -> str:
+    funcs = "".join(
+        _function(PROVISION, name)
+        for name in ("write_private_file", "write_credentials", "stored_admin_password", "resolve_admin_password")
+    )
+    return (
+        "set -euo pipefail\numask 022\n"
+        f"CRED_ENV='{cred_env}'\n"
+        "MATTERMOST_USERNAME=u MATTERMOST_EMAIL=e@example.local PUBLIC_BASE_URL=http://x:8065\n"
+        "MATTERMOST_TEAM=t MATTERMOST_CHANNEL=c\n"
+        f"AZAZEL_MATTERMOST_PASSWORD='{env_password}'\n"
+        + funcs
+        + 'resolve_admin_password\nprintf "%s" "$MATTERMOST_PASSWORD" > "$CRED_ENV.out"\n'
+    )
+
+
+def _cred_password(path: Path) -> str:
+    m = re.search(r"^MATTERMOST_PASSWORD=(.*)$", path.read_text(encoding="utf-8"), re.M)
+    assert m
+    return m.group(1)
+
+
+@needs_gnu_mv
+def test_admin_password_is_random_kept_0600_and_not_printed(tmp_path):
+    cred = tmp_path / "mattermost-credentials.env"
+    res = subprocess.run(["bash", "-c", _admin_password_script(cred)], capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    used = (tmp_path / "mattermost-credentials.env.out").read_text(encoding="utf-8")
+    assert re.fullmatch(r"[0-9a-f]{48}-Az", used)
+    assert _cred_password(cred) == used
+    assert stat.S_IMODE(cred.stat().st_mode) == 0o600
+    assert used not in res.stdout + res.stderr
+    assert str(cred) in res.stdout  # the location is shown instead
+
+    # A second run reuses the kept password instead of making a new one.
+    res2 = subprocess.run(["bash", "-c", _admin_password_script(cred)], capture_output=True, text=True)
+    assert res2.returncode == 0, res2.stderr
+    assert (tmp_path / "mattermost-credentials.env.out").read_text(encoding="utf-8") == used
+
+
+@needs_gnu_mv
+def test_admin_password_from_the_environment_wins(tmp_path):
+    cred = tmp_path / "mattermost-credentials.env"
+    cred.write_text("MATTERMOST_PASSWORD=stored-fake\n", encoding="utf-8")
+    script = _admin_password_script(cred, env_password="env-fake-1")
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert (tmp_path / "mattermost-credentials.env.out").read_text(encoding="utf-8") == "env-fake-1"
+
+
+def test_former_default_admin_password_is_detected_by_hash_only():
+    src = PROVISION.read_text(encoding="utf-8")
+    m = re.search(r'^FORMER_DEFAULT_PASSWORD_SHA256="([0-9a-f]{64})"$', src, re.M)
+    assert m
+    func = _function(PROVISION, "is_former_default_password")
+    fake_hash = hashlib.sha256(b"fake-old-default").hexdigest()
+
+    def check(candidate: str) -> bool:
+        script = f'FORMER_DEFAULT_PASSWORD_SHA256="{fake_hash}"\n{func}is_former_default_password "$1"\n'
+        return subprocess.run(["bash", "-c", script, "bash", candidate]).returncode == 0
+
+    assert check("fake-old-default")
+    assert not check("something-else")
+    # The warning names the file, never the password.
+    warn = re.search(r'echo "\[WARN\] The Mattermost admin account.*?>&2', src, re.S)
+    assert warn and "MATTERMOST_PASSWORD}" not in warn.group(0)
+
+
+def test_api_bodies_go_on_stdin_and_are_json_escaped():
+    src = PROVISION.read_text(encoding="utf-8")
+    api = _function(PROVISION, "api_call")
+    assert "--data-binary @-" in api
+    assert '--data "${body}"' not in api
+    assert '\\"password\\"' not in src  # no hand-built JSON with the password
+    func = _function(PROVISION, "json_object")
+    script = func + 'JSON_login_id=a@b JSON_password="$1" json_object login_id password\n'
+    tricky = 'p"w\\x{}'
+    out = subprocess.run(["bash", "-c", script, "bash", tricky], capture_output=True, text=True, check=True)
+    assert json.loads(out.stdout) == {"login_id": "a@b", "password": tricky}
+
+
+def _lan_proxy_block() -> str:
+    src = PROVISION.read_text(encoding="utf-8")
+    start = src.index("# Print the nginx site that puts")
+    end = src.index("\nresolve_admin_password\n")
+    return src[start:end]
+
+
+def test_lan_proxy_site_admits_lan_and_loopback_only():
+    src = PROVISION.read_text(encoding="utf-8")
+    cidr = re.search(r'^MATTERMOST_LAN_CIDR="([^"]+)"$', src, re.M).group(1)
+    net_cidr = re.search(r'^LAN_CIDR="([^"]+)"$', NETWORK.read_text(encoding="utf-8"), re.M).group(1)
+    assert cidr == net_cidr
+    script = (
+        f'MATTERMOST_PORT_PUBLIC=8065\nMATTERMOST_LAN_CIDR="{cidr}"\n'
+        + _lan_proxy_block()
+        + "\nrender_lan_proxy_site 127.0.0.1:18065\n"
+    )
+    site = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout
+    assert "listen 8065;" in site
+    rules = re.findall(r"^\s*(allow|deny) ([^;]+);", site, re.M)
+    assert rules == [("allow", "127.0.0.1"), ("allow", "172.16.0.0/24"), ("deny", "all")]
+    assert "proxy_pass http://127.0.0.1:18065;" in site
+    assert "proxy_set_header Upgrade $http_upgrade;" in site
+    assert "map $http_upgrade $azazel_mm_connection_upgrade" in site
+
+
+def _run_lan_proxy(tmp_path: Path, ss_out: str, nginx_rc: int = 0) -> subprocess.CompletedProcess:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "ss").write_text(f"#!/bin/bash\nprintf '%s' '{ss_out}'\n", encoding="utf-8")
+    (bindir / "nginx").write_text(f"#!/bin/bash\nexit {nginx_rc}\n", encoding="utf-8")
+    (bindir / "systemctl").write_text(f"#!/bin/bash\necho \"$*\" >> {tmp_path}/systemctl.log\n", encoding="utf-8")
+    for f in bindir.iterdir():
+        f.chmod(0o755)
+    avail = tmp_path / "sites-available"
+    enabled = tmp_path / "sites-enabled"
+    avail.mkdir()
+    enabled.mkdir()
+    script = (
+        "set -euo pipefail\n"
+        "MATTERMOST_API_URL=http://127.0.0.1:18065\nMATTERMOST_PORT_PUBLIC=8065\n"
+        'MATTERMOST_LAN_CIDR="172.16.0.0/24"\n'
+        f"NGINX_MM_SITE={avail}/azazel-edge-mattermost.conf\nNGINX_MM_LINK={enabled}/azazel-edge-mattermost.conf\n"
+        + _lan_proxy_block()
+        + "\nensure_lan_proxy\n"
+    )
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}")
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+
+
+def test_lan_proxy_is_enabled_and_nginx_reloaded(tmp_path):
+    res = _run_lan_proxy(tmp_path, "")
+    assert res.returncode == 0, res.stderr
+    link = tmp_path / "sites-enabled" / "azazel-edge-mattermost.conf"
+    assert link.is_symlink()
+    site = tmp_path / "sites-available" / "azazel-edge-mattermost.conf"
+    assert stat.S_IMODE(site.stat().st_mode) == 0o644
+    assert "reload nginx.service" in (tmp_path / "systemctl.log").read_text(encoding="utf-8")
+
+
+def test_lan_proxy_waits_while_an_old_container_holds_the_port(tmp_path):
+    held = 'LISTEN 0 4096 0.0.0.0:8065 0.0.0.0:* users:(("docker-proxy",pid=7,fd=4))'
+    res = _run_lan_proxy(tmp_path, held)
+    assert res.returncode == 0, res.stderr
+    assert "[WARN] Port 8065 is held" in res.stderr
+    assert not (tmp_path / "sites-enabled" / "azazel-edge-mattermost.conf").exists()
+
+    # nginx itself on the port is not "held" (a re-run).
+    tmp2 = tmp_path / "again"
+    tmp2.mkdir()
+    own = 'LISTEN 0 511 0.0.0.0:8065 0.0.0.0:* users:(("nginx",pid=9,fd=6))'
+    assert _run_lan_proxy(tmp2, own).returncode == 0
+    assert (tmp2 / "sites-enabled" / "azazel-edge-mattermost.conf").is_symlink()
+
+
+def test_lan_proxy_rejected_by_nginx_is_left_disabled(tmp_path):
+    res = _run_lan_proxy(tmp_path, "", nginx_rc=1)
+    assert res.returncode != 0
+    assert not (tmp_path / "sites-enabled" / "azazel-edge-mattermost.conf").exists()
+    assert not (tmp_path / "systemctl.log").exists()

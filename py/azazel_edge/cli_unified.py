@@ -180,17 +180,22 @@ def _container_running(name: str) -> bool:
 
 
 def _ntfy_health_ok() -> bool:
+    # ntfy listens on loopback only (install_ntfy.sh, Edge#477); MGMT_IP is
+    # tried after it for a host configured by hand.
     mgmt_ip = os.environ.get("MGMT_IP", "10.55.0.10")
     ntfy_port = os.environ.get("NTFY_PORT", "8081")
-    url = f"http://{mgmt_ip}:{ntfy_port}/v1/health"
-    try:
-        with urlopen(url, timeout=1.0) as resp:
-            if resp.status != 200:
-                return False
-            body = resp.read(256).decode("utf-8", errors="ignore")
-            return '"healthy":true' in body
-    except Exception:
-        return False
+    for host in dict.fromkeys(["127.0.0.1", mgmt_ip]):
+        url = f"http://{host}:{ntfy_port}/v1/health"
+        try:
+            with urlopen(url, timeout=1.0) as resp:
+                if resp.status != 200:
+                    continue
+                body = resp.read(256).decode("utf-8", errors="ignore")
+                if '"healthy":true' in body:
+                    return True
+        except Exception:
+            continue
+    return False
 
 
 def _collect_monitoring_state() -> Dict[str, str]:

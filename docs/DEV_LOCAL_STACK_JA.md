@@ -5,7 +5,7 @@
 
 このスタックは以下に接続します。
 - **ollama** — ローカル LLM ランタイム。macOS の GUI アプリとして動作し、`qwen3.5:2b` を `http://127.0.0.1:11434` で提供します。
-- **Mattermost** — OrbStack 上で `docker compose` により動作し、`http://localhost:8065` で到達可能です。
+- **Mattermost** — OrbStack 上で `docker compose` により動作し、`http://localhost:18065` で到達可能です。
 
 このランチャーは `bin/azazel-edge-dev` を置き換えるものではありません。ビルド／テストには `azazel-edge-dev` を、実行には `azazel-edge-devstack` を使用してください。
 
@@ -29,7 +29,7 @@ bin/azazel-edge-devstack up
 - Mattermost の URL
 - ollama の状態（到達可否・モデル有無）
 
-サマリーに表示されたダッシュボード URL をブラウザで開くと、稼働中のシステムを確認できます。Mattermost は `http://localhost:8065` で開けます。
+サマリーに表示されたダッシュボード URL をブラウザで開くと、稼働中のシステムを確認できます。Mattermost は `http://localhost:18065` で開けます。
 
 パイプラインにライブデータを流してダッシュボードで確認したい場合は、`dummy-eve` テストイベント注入ツールを同時に起動します。
 ```bash
@@ -79,7 +79,7 @@ bin/azazel-edge-injector list                         # パススルー CLI
 **デモの流れ:** まず `bin/azazel-edge-devstack up` を実行し、その後インジェクターのメニューから攻撃を発火して、実ダッシュボードが反応する様子を見せます。これがモック画面ではなく**ライブパイプライン注入でデモを駆動する**という意図された方法です。利用可能なシナリオ: `recon_probe`、`port_scan`、`arp_spoof`、`dns_exfil`、`cred_harvest`、`c2_beacon`、`phishing`、`benign`。（`up --inject` は連続ストリームを自動起動します。インジェクターのメニューは、シナリオ単位で手動操作したい場合に使います。）なお `arp_spoof` シナリオが注入する SID 9901211 は、実機の Suricata 7 では出ません（Suricata は ARP を検知できず、検知方式は未決です）。
 
 ## 環境設定
-このランチャーは `tools/macdev/env.sh` を読み込み、（アプライアンスの Linux パスの代わりに）`~/.azazel-edge-dev` 配下に macOS 向けのランタイムパス、`PYTHONPATH`、ollama のエンドポイントを設定します。さらに `azazel-edge-devstack` は、ローカル開発向けにスタックの Mattermost 接続先を `127.0.0.1:8065` に向けます（アプライアンスのデフォルトは `172.16.0.254`）。
+このランチャーは `tools/macdev/env.sh` を読み込み、（アプライアンスの Linux パスの代わりに）`~/.azazel-edge-dev` 配下に macOS 向けのランタイムパス、`PYTHONPATH`、ollama のエンドポイントを設定します。さらに `azazel-edge-devstack` は、ローカル開発向けにスタックの Mattermost 接続先を `127.0.0.1:18065` に向けます（アプライアンスのデフォルトは `172.16.0.254`）。
 
 状態は `~/.azazel-edge-dev/` 配下に保持されます。
 - PID ファイル: `~/.azazel-edge-dev/run/devstack/`
@@ -95,7 +95,7 @@ bin/azazel-edge-devstack restart
 
 これはアプライアンス版 `installer/internal/provision_mattermost_workspace.sh` / `provision_mattermost_command.sh` の開発環境版です。管理者 `azazelops`（コンテナ内の `mmctl --local` で system admin として作成）、チーム `azazelops`、チャンネル `soc-noc`、Bot トークン、Incoming Webhook、スラッシュコマンド `/mio`・`/azops`（コールバック先: `http://host.docker.internal:8084/api/mattermost/command`）を作成します。認証情報は `~/.azazel-edge-dev/` 配下（`mattermost-web.env`、`mattermost-credentials.env`、`mattermost-command-token*`）に保存され、`azazel-edge-devstack` が `mattermost-web.env` を自動で読み込むことで、Web アプリはフル機能の `bot_api` モードに切り替わります。スクリプトは冪等なので、（Mattermost のボリュームを削除した後など）いつでも再実行できます。
 
-`http://localhost:8065` には `~/.azazel-edge-dev/mattermost-credentials.env` に記載の認証情報（デフォルト: `azazel.ops@example.local` / `AzazelOps!2026`）でログインできます。
+`http://localhost:18065` には `~/.azazel-edge-dev/mattermost-credentials.env` に記載の認証情報（ユーザー `azazel.ops@example.local`。パスワードは初回にランダム生成され、このファイルに保存されます）でログインできます。
 
 ## トラブルシューティング
 
@@ -119,7 +119,7 @@ docker compose -f security/docker-compose.mattermost.yml ps
 ワークスペースが未プロビジョニングです（または `~/.azazel-edge-dev/mattermost-web.env` がありません）。`tools/macdev/provision-mattermost.sh` を実行してから `bin/azazel-edge-devstack restart` してください。
 
 **ポートが既に使用されている**
-ダッシュボード、制御ソケット、Mattermost の `8065` など、スタックが必要とするポートを別プロセスが使用している可能性があります。`bin/azazel-edge-devstack status` でランチャーが認識している起動状況を確認し、`lsof -i :<port>` で競合しているプロセスを特定してください。
+ダッシュボード、制御ソケット、Mattermost の `18065` など、スタックが必要とするポートを別プロセスが使用している可能性があります。`bin/azazel-edge-devstack status` でランチャーが認識している起動状況を確認し、`lsof -i :<port>` で競合しているプロセスを特定してください。
 
 **初回実行時に Rust のビルドが遅い**
 既存のビルドが存在しない場合、初回の `up` は `rust/azazel-edge-core` をリリースモードでビルドします（`cargo build --release`）。これには数分かかることがあります。2 回目以降は既存のビルドを再利用し、即座に起動します。

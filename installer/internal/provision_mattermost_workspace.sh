@@ -3,18 +3,30 @@ set -euo pipefail
 
 WEB_ENV="${AZAZEL_WEB_ENV_FILE:-/etc/default/azazel-edge-web}"
 CRED_ENV="${AZAZEL_MATTERMOST_CREDENTIALS_FILE:-/etc/azazel-edge/mattermost-credentials.env}"
-MATTERMOST_API_URL="${AZAZEL_MATTERMOST_API_URL:-http://127.0.0.1:8065}"
+# Mattermost publishes on loopback only (security/docker-compose.mattermost.yml,
+# Edge#477); LAN clients use nginx on the public port (ensure_lan_proxy).
+MATTERMOST_API_URL="${AZAZEL_MATTERMOST_API_URL:-http://127.0.0.1:18065}"
 MATTERMOST_HOST_PUBLIC="${AZAZEL_MATTERMOST_PUBLIC_HOST:-172.16.0.254}"
 MATTERMOST_PORT_PUBLIC="${AZAZEL_MATTERMOST_PUBLIC_PORT:-8065}"
 MATTERMOST_USERNAME="${AZAZEL_MATTERMOST_USERNAME:-azazelops}"
 MATTERMOST_EMAIL="${AZAZEL_MATTERMOST_EMAIL:-azazel.ops@example.local}"
-MATTERMOST_PASSWORD="${AZAZEL_MATTERMOST_PASSWORD:-AzazelOps!2026}"
+# No default password (Edge#477): AZAZEL_MATTERMOST_PASSWORD, else the one
+# kept in ${CRED_ENV}, else a new random one (resolve_admin_password).
+MATTERMOST_PASSWORD=""
 MATTERMOST_TEAM="${AZAZEL_MATTERMOST_TEAM:-azazelops}"
 MATTERMOST_TEAM_DISPLAY_NAME="${AZAZEL_MATTERMOST_TEAM_DISPLAY_NAME:-Azazel Ops}"
 MATTERMOST_CHANNEL="${AZAZEL_MATTERMOST_CHANNEL:-soc-noc}"
 MATTERMOST_CHANNEL_DISPLAY_NAME="${AZAZEL_MATTERMOST_CHANNEL_DISPLAY_NAME:-SOC-NOC}"
 MATTERMOST_WEBHOOK_DESCRIPTION="${AZAZEL_MATTERMOST_WEBHOOK_DESCRIPTION:-Azazel Edge WebUI bridge}"
 MATTERMOST_BOT_TOKEN_DESCRIPTION="${AZAZEL_MATTERMOST_BOT_TOKEN_DESCRIPTION:-Azazel-Edge WebUI bot token}"
+# nginx site that admits the LAN (install_internal_network.sh LAN_CIDR) and
+# loopback to Mattermost on the public port, and nobody else.
+NGINX_MM_SITE="/etc/nginx/sites-available/azazel-edge-mattermost.conf"
+NGINX_MM_LINK="/etc/nginx/sites-enabled/azazel-edge-mattermost.conf"
+MATTERMOST_LAN_CIDR="172.16.0.0/24"
+# sha256 of the fixed admin password earlier versions set (the password
+# itself is no longer in the code); only used to warn about it.
+FORMER_DEFAULT_PASSWORD_SHA256="7030024adfd5d729d1d9540d3a49fd1bc699f5de35dbe8f6841b5cbaba5fcd2e"
 
 LAST_STATUS=""
 LAST_BODY=""
@@ -69,10 +81,12 @@ api_call() {
   if [[ -n "${token}" ]]; then
     curl_args+=(-H "Authorization: Bearer ${token}")
   fi
+  # The body (it may hold the admin password) goes to curl on stdin, not on
+  # its command line.
   if [[ -n "${body}" ]]; then
-    curl_args+=(-H "Content-Type: application/json" --data "${body}")
+    curl_args+=(-H "Content-Type: application/json" --data-binary @-)
   fi
-  LAST_STATUS="$(curl "${curl_args[@]}" -w "%{http_code}")"
+  LAST_STATUS="$(printf '%s' "${body}" | curl "${curl_args[@]}" -w "%{http_code}")"
   LAST_HEADERS="$(cat "${headers_file}")"
   LAST_BODY="$(cat "${body_file}")"
   rm -f "${headers_file}" "${body_file}"
@@ -117,8 +131,16 @@ upsert_env() {
   printf '%s' "${updated%x}" | write_private_file "${file}"
 }
 
+# JSON object from the named JSON_<name> environment values (escaped by
+# json.dumps), so a quote in a password cannot break the body.
+json_object() {
+  python3 -c 'import json,os,sys; print(json.dumps({k: os.environ["JSON_" + k] for k in sys.argv[1:]}))' "$@"
+}
+
 login_admin() {
-  api_call POST /api/v4/users/login "{\"login_id\":\"${MATTERMOST_EMAIL}\",\"password\":\"${MATTERMOST_PASSWORD}\"}" ""
+  local body
+  body="$(JSON_login_id="${MATTERMOST_EMAIL}" JSON_password="${MATTERMOST_PASSWORD}" json_object login_id password)"
+  api_call POST /api/v4/users/login "${body}" ""
   if [[ "${LAST_STATUS}" == "200" ]]; then
     AUTH_TOKEN="$(printf '%s\n' "${LAST_HEADERS}" | awk 'BEGIN{IGNORECASE=1} /^Token:/{print $2}' | tr -d '\r')"
     USER_ID="$(printf '%s' "${LAST_BODY}" | json_get 'obj["id"]')"
@@ -128,7 +150,10 @@ login_admin() {
 }
 
 bootstrap_admin() {
-  api_call POST /api/v4/users "{\"email\":\"${MATTERMOST_EMAIL}\",\"username\":\"${MATTERMOST_USERNAME}\",\"password\":\"${MATTERMOST_PASSWORD}\"}" ""
+  local body
+  body="$(JSON_email="${MATTERMOST_EMAIL}" JSON_username="${MATTERMOST_USERNAME}" JSON_password="${MATTERMOST_PASSWORD}" \
+    json_object email username password)"
+  api_call POST /api/v4/users "${body}" ""
   case "${LAST_STATUS}" in
     200|201|400) ;;
     *)
@@ -138,6 +163,8 @@ bootstrap_admin() {
   esac
   if ! login_admin; then
     echo "[ERROR] unable to login after bootstrap: ${LAST_STATUS} ${LAST_BODY}"
+    echo "[ERROR] If the admin account already exists with another password, put that password in" \
+      "MATTERMOST_PASSWORD= in ${CRED_ENV} (or reset it in Mattermost) and run this script again."
     exit 1
   fi
 }
@@ -153,6 +180,44 @@ ensure_admin_session() {
   if [[ -z "${AUTH_TOKEN}" || -z "${USER_ID}" ]]; then
     echo "[ERROR] Mattermost admin session incomplete"
     exit 1
+  fi
+  if is_former_default_password "${MATTERMOST_PASSWORD}"; then
+    echo "[WARN] The Mattermost admin account (${MATTERMOST_USERNAME}) still uses the fixed default password of" \
+      "earlier versions, which is public. Change it in Mattermost (Profile > Security > Password) and put the" \
+      "new one in MATTERMOST_PASSWORD= in ${CRED_ENV}." >&2
+  fi
+}
+
+is_former_default_password() {
+  local digest
+  digest="$(printf '%s' "$1" | sha256sum | cut -d' ' -f1)"
+  [[ "${digest}" == "${FORMER_DEFAULT_PASSWORD_SHA256}" ]]
+}
+
+# The password kept in ${CRED_ENV} by an earlier run (the file is parsed, not
+# sourced).
+stored_admin_password() {
+  [[ -f "${CRED_ENV}" ]] || return 0
+  sed -n 's/^MATTERMOST_PASSWORD=//p' "${CRED_ENV}" | head -n 1
+}
+
+resolve_admin_password() {
+  MATTERMOST_PASSWORD="${AZAZEL_MATTERMOST_PASSWORD:-}"
+  if [[ -z "${MATTERMOST_PASSWORD}" ]]; then
+    MATTERMOST_PASSWORD="$(stored_admin_password)"
+  fi
+  if [[ -z "${MATTERMOST_PASSWORD}" ]]; then
+    # 192 random bits; the suffix meets a password policy that asks for an
+    # upper-case letter and a symbol.
+    MATTERMOST_PASSWORD="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')-Az"
+    if [[ ! "${MATTERMOST_PASSWORD}" =~ ^[0-9a-f]{48}-Az$ ]]; then
+      echo "[ERROR] could not read random bytes" >&2
+      exit 1
+    fi
+    # Kept before the account is created, so a run that stops half way
+    # does not lose it.
+    write_credentials
+    echo "[INFO] New random Mattermost admin password stored in ${CRED_ENV} (0600 root)"
   fi
 }
 
@@ -239,8 +304,8 @@ write_private_file() {
   fi
 }
 
-write_outputs() {
-  [[ -d /etc/azazel-edge ]] || install -d -m 0750 /etc/azazel-edge
+write_credentials() {
+  [[ -d "$(dirname -- "${CRED_ENV}")" ]] || install -d -m 0750 "$(dirname -- "${CRED_ENV}")"
   write_private_file "${CRED_ENV}" <<EOF
 MATTERMOST_USERNAME=${MATTERMOST_USERNAME}
 MATTERMOST_EMAIL=${MATTERMOST_EMAIL}
@@ -249,6 +314,10 @@ MATTERMOST_URL=${PUBLIC_BASE_URL}
 MATTERMOST_TEAM=${MATTERMOST_TEAM}
 MATTERMOST_CHANNEL=${MATTERMOST_CHANNEL}
 EOF
+}
+
+write_outputs() {
+  write_credentials
 
   upsert_env "${WEB_ENV}" "AZAZEL_MATTERMOST_HOST" "${MATTERMOST_HOST_PUBLIC}"
   upsert_env "${WEB_ENV}" "AZAZEL_MATTERMOST_PORT" "${MATTERMOST_PORT_PUBLIC}"
@@ -264,6 +333,80 @@ EOF
   upsert_env "${WEB_ENV}" "AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC" "${AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC:-0}"
 }
 
+# Print the nginx site that puts Mattermost (loopback only) on the public
+# port for the LAN. $1 = upstream host:port.
+render_lan_proxy_site() {
+  cat <<EOF
+# Managed by Azazel-Edge (provision_mattermost_workspace.sh, Edge#477).
+# Mattermost publishes on loopback only; this admits the LAN and loopback.
+map \$http_upgrade \$azazel_mm_connection_upgrade {
+  default upgrade;
+  ''      close;
+}
+
+server {
+  listen ${MATTERMOST_PORT_PUBLIC};
+  server_name _;
+
+  allow 127.0.0.1;
+  allow ${MATTERMOST_LAN_CIDR};
+  deny all;
+
+  client_max_body_size 50m;
+
+  location / {
+    proxy_pass http://$1;
+    proxy_http_version 1.1;
+    proxy_set_header Host \$http_host;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection \$azazel_mm_connection_upgrade;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_read_timeout 600s;
+  }
+}
+EOF
+}
+
+# Something other than nginx listening on the public port (the container of
+# an earlier install published it on every interface).
+public_port_taken() {
+  command -v ss >/dev/null 2>&1 || return 1
+  ss -Hltnp "sport = :${MATTERMOST_PORT_PUBLIC}" 2>/dev/null | grep -v '"nginx"' | grep -q .
+}
+
+ensure_lan_proxy() {
+  local upstream tmp
+  upstream="${MATTERMOST_API_URL#*://}"
+  upstream="${upstream%%/*}"
+  if ! command -v nginx >/dev/null 2>&1; then
+    echo "[WARN] nginx is not installed: Mattermost is reachable only on this host (${MATTERMOST_API_URL})." \
+      "Install the HTTPS proxy (install_https_proxy.sh) and run this script again for LAN access on :${MATTERMOST_PORT_PUBLIC}." >&2
+    return 0
+  fi
+  if public_port_taken; then
+    echo "[WARN] Port ${MATTERMOST_PORT_PUBLIC} is held by another process (an earlier Mattermost container?)." \
+      "Recreate the stack with the current docker-compose.mattermost.yml and run this script again." >&2
+    return 0
+  fi
+  tmp="$(mktemp "$(dirname -- "${NGINX_MM_SITE}")/.azazel-edge-mattermost.XXXXXX")"
+  if ! render_lan_proxy_site "${upstream}" >"${tmp}" || ! chmod 0644 "${tmp}" || ! mv -f -- "${tmp}" "${NGINX_MM_SITE}"; then
+    rm -f -- "${tmp}"
+    echo "[ERROR] could not write ${NGINX_MM_SITE}" >&2
+    exit 1
+  fi
+  ln -sfn "${NGINX_MM_SITE}" "${NGINX_MM_LINK}"
+  if ! nginx -t >/dev/null 2>&1; then
+    rm -f -- "${NGINX_MM_LINK}"
+    echo "[ERROR] nginx rejected ${NGINX_MM_SITE}; the site is left disabled (see: nginx -t)" >&2
+    exit 1
+  fi
+  systemctl reload nginx.service 2>/dev/null || systemctl restart nginx.service
+  echo "[OK] nginx serves Mattermost on :${MATTERMOST_PORT_PUBLIC} to ${MATTERMOST_LAN_CIDR} and loopback only"
+}
+
+resolve_admin_password
 wait_for_ping
 ensure_admin_session
 ensure_team
@@ -272,8 +415,10 @@ ensure_channel
 ensure_bot_token
 ensure_webhook
 write_outputs
+ensure_lan_proxy
 
 echo "[OK] Mattermost workspace provisioned"
+echo "admin_credentials=${CRED_ENV}"
 echo "base_url=${PUBLIC_BASE_URL}"
 echo "team=${MATTERMOST_TEAM}"
 echo "channel=${MATTERMOST_CHANNEL}"

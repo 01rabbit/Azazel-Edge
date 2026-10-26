@@ -36,6 +36,31 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- External exposure found by the audit before the device run (Edge#477):
+  - ntfy listens on `127.0.0.1:8081` only (was every interface, so the WAN
+    too) with `auth-default-access: deny-all` (was `read-write`); the
+    anonymous read-write grants on the alert and info topics are removed,
+    also from an existing auth database. The Edge account reads and writes
+    them with its token (0640 root:azazel-web, as before), which the Web UI
+    bridge already sends. The installer stops when an anonymous read is not
+    refused or the token is. The ntfy web app is off. The Web UI and CLI
+    health probes try loopback first.
+  - Mattermost publishes on `127.0.0.1:18065` only (was `8065` on every
+    interface, which Docker opens past the host firewall). LAN clients keep
+    `http://172.16.0.254:8065` through an nginx site that
+    `provision_mattermost_workspace.sh` writes, admitting `172.16.0.0/24` and
+    loopback only.
+  - The Mattermost database password is no longer a fixed value in the
+    compose file: `mattermost_db_secret.sh` makes a random one in
+    `/etc/azazel-edge/mattermost-db.env` (0600 root) before the stack starts
+    and changes an existing database's password to it first. The admin
+    password is no longer a fixed default: it is random on first run, kept
+    in `mattermost-credentials.env` (0600 root) and never printed; a device
+    still using the former default gets a warning.
+  - The Mattermost image is pinned to `12.0.1` (was `latest`). It exists for
+    `linux/amd64` only; on a Pi it runs under qemu-user emulation, which may
+    not work on a 16K-page kernel (not shown on the device).
+
 - Four hardening fixes from Edge#477 (found by the #471 privilege inventory):
   - Wi-Fi connect (control daemon, `wifi_connect.py`): the passphrase is no
     longer on nmcli's argv (readable from `/proc/<pid>/cmdline`). A new

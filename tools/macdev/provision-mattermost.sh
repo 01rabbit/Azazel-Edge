@@ -5,7 +5,7 @@
 # The installer scripts assume the appliance (root, /etc/azazel-edge,
 # systemctl); this script provisions the SAME workspace shape -- admin user,
 # team, channel, bot token, incoming webhook, /mio + /azops slash commands --
-# against the dev Mattermost on localhost:8065 and writes credentials under
+# against the dev Mattermost on localhost:18065 and writes credentials under
 # $AZAZEL_DEV_STATE so bin/azazel-edge-devstack can hand them to the web app.
 #
 # Idempotent: safe to re-run; existing resources are reused.
@@ -16,12 +16,14 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SELF}/env.sh"
 
 MM_CONTAINER="${AZAZEL_MATTERMOST_CONTAINER:-azazel-edge-mattermost}"
-API_URL="${AZAZEL_MATTERMOST_API_URL:-http://127.0.0.1:8065}"
-BASE_URL="${AZAZEL_MATTERMOST_BASE_URL:-http://127.0.0.1:8065}"
+API_URL="${AZAZEL_MATTERMOST_API_URL:-http://127.0.0.1:18065}"
+BASE_URL="${AZAZEL_MATTERMOST_BASE_URL:-http://127.0.0.1:18065}"
 
 MM_USERNAME="${AZAZEL_MATTERMOST_USERNAME:-azazelops}"
 MM_EMAIL="${AZAZEL_MATTERMOST_EMAIL:-azazel.ops@example.local}"
-MM_PASSWORD="${AZAZEL_MATTERMOST_PASSWORD:-AzazelOps!2026}"
+# No fixed default (Edge#477): the env value, else the one kept in $CRED_ENV,
+# else a random one (resolved below, once CRED_ENV is known).
+MM_PASSWORD="${AZAZEL_MATTERMOST_PASSWORD:-}"
 MM_TEAM="${AZAZEL_MATTERMOST_TEAM:-azazelops}"
 MM_TEAM_DISPLAY="${AZAZEL_MATTERMOST_TEAM_DISPLAY_NAME:-Azazel Ops}"
 MM_CHANNEL="${AZAZEL_MATTERMOST_CHANNEL:-soc-noc}"
@@ -36,6 +38,16 @@ COMMAND_TOKEN_FILE="${AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE:-${AZAZEL_DEV_STATE}/
 COMMAND_URL="${AZAZEL_MATTERMOST_COMMAND_URL:-http://host.docker.internal:${AZAZEL_WEB_PORT}/api/mattermost/command}"
 COMMAND_TRIGGER="${AZAZEL_MATTERMOST_COMMAND_TRIGGER:-mio}"
 COMMAND_ALIASES="${AZAZEL_MATTERMOST_COMMAND_ALIASES:-azops}"
+
+if [[ -z "${MM_PASSWORD}" && -f "${CRED_ENV}" ]]; then
+  MM_PASSWORD="$(sed -n 's/^MATTERMOST_PASSWORD=//p' "${CRED_ENV}" | head -n 1)"
+fi
+if [[ -z "${MM_PASSWORD}" ]]; then
+  MM_PASSWORD="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')-Az"
+  # Kept before the account is created, so a run that stops half way does
+  # not lose it; write_outputs rewrites the whole file at the end.
+  (umask 077 && printf 'MATTERMOST_EMAIL=%s\nMATTERMOST_PASSWORD=%s\n' "${MM_EMAIL}" "${MM_PASSWORD}" > "${CRED_ENV}")
+fi
 
 AUTH_TOKEN=""; USER_ID=""; TEAM_ID=""; CHANNEL_ID=""; BOT_TOKEN=""; WEBHOOK_URL=""
 LAST_STATUS=""; LAST_BODY=""; LAST_HEADERS=""
@@ -190,7 +202,7 @@ EOF
 
   cat > "${WEB_ENV}" <<EOF
 AZAZEL_MATTERMOST_HOST=127.0.0.1
-AZAZEL_MATTERMOST_PORT=8065
+AZAZEL_MATTERMOST_PORT=18065
 AZAZEL_MATTERMOST_TEAM=${MM_TEAM}
 AZAZEL_MATTERMOST_CHANNEL=${MM_CHANNEL}
 AZAZEL_MATTERMOST_BASE_URL=${BASE_URL}

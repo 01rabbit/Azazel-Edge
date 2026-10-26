@@ -305,13 +305,24 @@ sudo systemctl restart azazel-edge-web
 
 ```bash
 sudo docker run --privileged --rm tonistiigi/binfmt --install amd64
-docker compose -f security/docker-compose.mattermost.yml up -d
-docker compose -f security/docker-compose.mattermost.yml ps
+# DB パスワードを機器ごとにランダム生成（/etc/azazel-edge/mattermost-db.env、0600 root）。
+# compose ファイルはこのファイルからだけパスワードを読む。無いと起動しない。
+sudo installer/internal/mattermost_db_secret.sh
+sudo docker compose -f security/docker-compose.mattermost.yml up -d
+sudo docker compose -f security/docker-compose.mattermost.yml ps
+# 管理者・チーム・チャンネル・Bot トークン・Webhook と LAN 向け nginx を用意
+sudo installer/internal/provision_mattermost_workspace.sh
 ```
 
-初回アクセス:
-- `http://<host>:8065` で管理者アカウントを作成
-- チーム/チャンネルを作成
+公開範囲（Edge#477）:
+- コンテナは `127.0.0.1:18065` にだけ公開する（Docker が全インターフェースに公開したポートはホストのファイアウォールを通らず、WAN からも届いていた）。
+- LAN からは nginx（`provision_mattermost_workspace.sh` が `/etc/nginx/sites-available/azazel-edge-mattermost.conf` を書く）経由で `http://172.16.0.254:8065` に届く。nginx は `172.16.0.0/24` と loopback だけを通し、それ以外には 403 を返す。nginx が無い場合は loopback からだけ使える。
+- 以前の版で全インターフェースに公開したコンテナが 8065 を握っている間は nginx の設定を入れずに警告する。新しい compose ファイルでコンテナを作り直してから `provision_mattermost_workspace.sh` をもう一度実行する。
+
+資格情報（Edge#477）:
+- DB パスワード: `/etc/azazel-edge/mattermost-db.env`（0600 root）。以前の固定値で作られた DB は、`mattermost_db_secret.sh` が新しいランダム値に置き換えてからファイルを書く。
+- 管理者パスワード: 初回にランダム生成して `/etc/azazel-edge/mattermost-credentials.env`（0600 root）の `MATTERMOST_PASSWORD=` に保存する。画面やログには出さない。確認はこのファイルを root で読む。
+- 以前の版の固定の管理者パスワードのままの機器では、`provision_mattermost_workspace.sh` が警告を出す。Mattermost の画面（Profile > Security > Password）で変更し、同じ値を上のファイルの `MATTERMOST_PASSWORD=` に書く。
 
 ### 11.2 Mattermost slash command を導入
 
@@ -334,7 +345,8 @@ sudo installer/internal/provision_mattermost_command.sh
 - Mattermost 側は `AllowedUntrustedInternalConnections=172.16.0.254` を設定して callback を許可する
 
 注記:
-- 現行の Mattermost 公式イメージは Pi5(arm64) で `linux/amd64` エミュレーション起動。
+- イメージは `mattermost/mattermost-team-edition:12.0.1` に固定（`latest` は使わない）。
+- Mattermost の公式イメージ（team / enterprise とも）は Docker Hub に `linux/amd64` しかなく、arm64 版は無い（2026-10 時点で確認）。Pi5(arm64) では qemu-user による `linux/amd64` エミュレーションで動かす。遅く、Pi 5 の既定の 16K ページのカーネルではエミュレーションした amd64 プログラムが動かない可能性がある。実機での動作は確認していない。
 - 初回起動はイメージが大きく時間がかかる。
 
 ### 11.2 WebUI専用サイト
