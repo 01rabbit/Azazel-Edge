@@ -39,11 +39,9 @@ CODE_SUFFIXES = {".sh", ".py", ".service", ".timer", ".conf", ".yml", ".yaml", "
 
 # Items added by PRs that were open when the checklist was written. Each is
 # checked once its PR is merged; until then it is skipped with the PR named.
-PENDING = {
-    # #489 host firewall (draft, tried on its own branch)
-    "azazel-host-firewall": 489,
-    "--enable-host-firewall": 489,
-    "/usr/local/sbin/azazel-host-firewall": 489,
+PENDING: dict = {
+    # #489 host firewall: in this tree (tests/test_host_firewall_v1.py), so
+    # its items are checked against the code like any other.
 }
 
 # A PR counts as merged into this tree when its own test file is here.
@@ -281,6 +279,15 @@ def test_the_489_precondition_is_checked_against_the_current_main():
         for phrase in stale:
             assert phrase not in section, (doc.name, phrase)
     assert "`N/A (#489 not rebased)`" in _read(EN) and "`N/A（#489 未 rebase）`" in _read(JA)
+
+
+def test_3_13_says_what_to_do_once_489_is_merged():
+    # #489 merged: 3.13 runs on the main checkout; the branch steps do not apply.
+    assert _merged(489)
+    for doc, phrase in ((EN, "**If #489 is merged**"), (JA, "**#489 がマージ済みの場合**")):
+        section = _read(doc).split("### 3.13", 1)[1].split("\n## ", 1)[0]
+        assert phrase in section and "installer/internal/azazel-host-firewall" in section, doc.name
+        assert (ROOT / "installer/internal/azazel-host-firewall").is_file()
 
 
 # --- comparison with the code ----------------------------------------------

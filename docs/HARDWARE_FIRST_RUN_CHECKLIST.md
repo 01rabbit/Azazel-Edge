@@ -18,7 +18,9 @@ Refs #408 (R0), #372 (Pi-class HIL), #471 (privilege separation), #477
   checkout does not apply: mark it `N/A (PR not merged)`, never `pass`.
 - **#489** (host input filter, WAN default deny) is a draft and **off by
   default**. Section [3.13](#313-host-firewall-trial-489-draft-optional) tries it
-  separately, on its own branch, and rolls it back.
+  separately, on its own branch, and rolls it back. Once #489 is merged, the
+  `main` checkout has it (`installer/internal/azazel-host-firewall` exists)
+  and 3.13 runs on `main` instead (see its first paragraph).
 - Every result in those PRs comes from containers or VMs. **None of it is
   device evidence**; this run is the first. A container result is never copied
   into this sheet as a pass.
@@ -627,6 +629,11 @@ rebased onto `main` (after #490). When `main` moves on after that (this
 checklist itself came later, as #491), the branch may no longer contain it:
 check on the device before the FW rows. If it does not, ask for #489 to be
 rebased again; until then every FW row is `N/A (#489 not rebased)`.
+
+**If #489 is merged** (the `main` checkout of 2.3 has
+`installer/internal/azazel-host-firewall`): this precondition, the fetch below
+and `git switch try-489` do not apply; run the stages from that `main`
+checkout (the host firewall is still off until `--enable-host-firewall`).
 
 ```bash
 cd ~/Azazel-Edge
