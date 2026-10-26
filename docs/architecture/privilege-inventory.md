@@ -1,7 +1,7 @@
 # Privilege inventory (#471 stage 0)
 
 Tracking: #471 (privilege separation), context #462 (item 2) and #472  
-Status: **inventory only. Nothing in this page changes behaviour.**  
+Status: **inventory and plan only. Nothing in this page changes behaviour.**  
 Last updated: 2026-10-26
 
 #471 splits the Edge services into separate non-root accounts. The owner
@@ -10,7 +10,7 @@ approved three stages:
 | Stage | Scope | Status |
 | --- | --- | --- |
 | 0 | This inventory. No code, unit or installer change. | this page |
-| 1 | Run the Web UI (`azazel-edge-web`) as `azazel-web`. | planned (§10) |
+| 1 | Run the Web UI (`azazel-edge-web`) as `azazel-web`, and add the agent query socket for `manual_query`. | planned (§10) |
 | 2 | Run the AI agent (`azazel-edge-ai-agent`) as `azazel-agent`. | planned (§11) |
 | 3 | Run the core with only the capabilities it needs. | later; needs hardware |
 
@@ -78,7 +78,7 @@ Every child is an argv list.
 | --- | --- | --- | --- |
 | `app.py` `execute_disconnect_action` | `ip link set ${AZAZEL_UP_IF:-wlan0} down` | `action=disconnect` on `POST /api/action` and `/api/action/<action>`, **only when nothing answers on port 8082** | **cap:NET_ADMIN**. The interface comes from the environment, not the request. |
 | `app.py` `_status_api_json` | `curl -s [-X POST] http://<host>:8082/…` for `/`, `/action/contain`, `release`, `disconnect`, `stage_open`, `details`; hosts are a fixed list (code default includes `127.0.0.1`) | `/api/action` | none |
-| `app.py` `_container_running` | `docker ps --format {{.Names}}` | `get_monitoring_state()` → `GET /api/state`, `/api/state/stream`, `/api/dashboard/bundle`; runs when the `systemctl is-active` checks for OpenCanary fail | **root** (docker group = root-equivalent). Without it the function returns `False` silently. |
+| `app.py` `_container_running` | `docker ps --format {{.Names}}` | `get_monitoring_state()` → `GET /api/state`, `/api/state/stream`, `/api/dashboard/bundle`; runs for **both** OpenCanary (`azazel-edge-opencanary`) and Suricata (`azazel-edge-suricata`) when their `systemctl is-active` checks fail | **root** (docker group = root-equivalent). Without it the function returns `False` silently. |
 | `app.py` `_process_running` | `pgrep -f [o]pencanary.tac` | monitoring state | none; would break under `ProtectProc=invisible` |
 | `app.py` `_service_active` | `/bin/systemctl is-active <unit>` for OpenCanary (3 names), Suricata (2), ntfy, `azazel-edge-ai-agent`, `azazel-edge-web`, `azazel-portal-viewer` | monitoring state, portal viewer status | none (D-Bus read) |
 | `runbooks.py` `execute_runbook` (called from `/api/runbooks/execute`, `/api/runbooks/act`) | `[exec, *argv]` from runbook YAML in `${AZAZEL_RUNBOOK_DIR:-/etc/azazel-edge/runbooks}` and `<repo>/runbooks`; `exec` must sit under `/bin`, `/usr/bin`, `/usr/sbin`, `/usr/local/bin` or `/opt/azazel-edge` | see the next rows | depends on the runbook |
@@ -98,7 +98,17 @@ disconnect path, not a rare one.
 | Socket | Default / override | Sent | Mark |
 | --- | --- | --- | --- |
 | `control.sock` | `/run/azazel-edge/control.sock`; hard-coded in `app.py` (no override); `control_plane.py` honours `AZAZEL_CONTROL_SOCKET` for snapshot reads | `refresh`, `reprobe`, `details`, `wifi_scan`, `wifi_connect` (carries the Wi-Fi passphrase), `portal_viewer_open`, `shutdown`, `reboot`, `mode_*`, `sot_trust_client`, `get_snapshot`, `watch_snapshot` | **group**: directory 0770 and socket 0660, root:`AZAZEL_RUNTIME_SOCKET_GROUP` (empty by default = root only) |
-| `ai-bridge.sock` | `${AZAZEL_AI_SOCKET:-/run/azazel-edge-ai/ai-bridge.sock}` | only `{"action":"manual_query","params":{question,sender,source,context},"ts":…}` + newline, reads one reply line; from `POST /api/ai/ask`, `/api/mattermost/message`, `/api/mattermost/command` | since #472 the directory is 0700 and the socket 0600, owned by the agent's account. **A web account different from the agent's account cannot connect** (§11.3). |
+| `ai-bridge.sock` | `${AZAZEL_AI_SOCKET:-/run/azazel-edge-ai/ai-bridge.sock}` | only `{"action":"manual_query","params":{question,sender,source,context},"ts":…}` + newline, reads one reply line; from `POST /api/ai/ask`, `/api/mattermost/message`, `/api/mattermost/command` | since #472 the directory is 0700 and the socket 0600, owned by the agent's account. **A web account different from the agent's account cannot connect** (§10.4 adds a dedicated query socket for it). |
+
+`AZAZEL_AI_SOCKET` is read by the Web UI (where it **connects**), by the
+agent (where it **binds**) and by the core (where it connects). Today the
+three defaults agree. Once stage 1 points the Web UI at the agent query socket
+(§10.4), the same variable name means different sockets in different units;
+setting it in a shared environment file (for example
+`/etc/default/azazel-edge-security`, which both the agent and the core load)
+must not leak into the Web UI's file, and vice versa. The installer's #472
+rewrite already touches both files; the stage 1 rewrite must treat them
+separately.
 
 ### 2.4 Network (outbound only)
 
@@ -125,12 +135,28 @@ All **none**. A hardened unit must keep `AF_INET`, `AF_INET6` and `AF_UNIX`.
 | CA certificate (`.crt` only, never a key) | `AZAZEL_WEBUI_CA_PATH` and fixed candidates under `/etc/azazel-edge/certs`, `/etc/azazel-edge/tls/ca`, `/var/lib/azazel-edge/public` | public | none |
 | `/run/azazel-edge/`: `ui_snapshot.json`, `ai_advisory.json`, `ai_metrics.json`, `ui_status_view.json`, `epd_state.json`, `epd_last_render.json`, `booth-input.json` | `AZAZEL_AI_ADVISORY`, `AZAZEL_AI_METRICS`, `AZAZEL_EPD_*`, `AZAZEL_BOOTH_INPUT_PROVENANCE_PATH`; the snapshot path is fixed | directory 0770 | **group** |
 | `/var/log/azazel-edge/`: `ai-events.jsonl`, `ai-llm.jsonl`, `runbook-events.jsonl`, `triage-audit.jsonl`, `decision-explanations.jsonl` | `AZAZEL_AI_EVENT_LOG`, `AZAZEL_AI_LLM_LOG`, `AZAZEL_RUNBOOK_EVENT_LOG`, `AZAZEL_TRIAGE_AUDIT_PATH`, `AZAZEL_DECISION_EXPLANATIONS_PATH` | root 0644 in a 0755 directory | none |
-| `/run/suricata.pid`, `/home/azazel/canary-venv/bin/opencanaryd.pid`, `/proc/<pid>/cmdline`, `os.kill(pid, 0)` | — | — | none (`PermissionError` from `kill` is read as "running") |
+| `/run/suricata.pid`, `/home/azazel/canary-venv/bin/opencanaryd.pid`, `/proc/<pid>/cmdline`, `os.kill(pid, 0)` | — | — | none today (`PermissionError` from `kill` is read as "running"). **Under `ProtectHome=yes` (§10.6) the OpenCanary pid file under `/home` is hidden**; see §10.6 for how that is handled. |
 
 Uncertain: the Web UI reads `decision-explanations.jsonl` from
 `/var/log/azazel-edge`, but the agent's `DecisionLogger` writes
 `decision_explanations.jsonl` under `/opt/azazel-edge/logs/tactics_engine`
 (§3.4). Whether anything writes the path the Web UI reads was not settled.
+
+Also read, for completeness:
+
+- **Legacy read paths** (fallback candidates when `path_schema` is not
+  importable, plus fixed CA candidates): `/etc/azazel-zero/{first_minute.yaml,
+  mode.json,portal-viewer.env,certs/…}`, `/run/azazel-zero/ui_snapshot.json`,
+  `~/.azazel-zero/web_token.txt`, `/etc/azazel-gadget/tls/ca/…` and
+  `/var/lib/azazel-gadget/public/…`. Read only; same marks as their
+  `azazel-edge` counterparts (none, or group for the runtime snapshot).
+- **`AZAZEL_DEV_HEALTHY_BASELINE`**: a dev-only override (macOS dev profile)
+  that makes the monitoring state report OpenCanary, Suricata and ntfy as ON
+  without probing. It is not set on devices and grants nothing; it is listed
+  so that a unit or installer change never sets it.
+- `azazel_edge_epd.save_preview` (writes a preview under `/tmp`) is **not
+  reachable** from the Web UI: the Web UI renders previews in memory, and
+  `save_preview` is only called from the EPD script's own `main`.
 
 ### 2.6 Files written
 
@@ -144,7 +170,7 @@ writers create a temporary file and rename it, and the JSONL appender
 | `/var/lib/azazel-edge/captive-allowlist.json` | `AZAZEL_CAPTIVE_REGISTRY_PATH` | `POST /api/captive/register` | owner. Only the Web UI was found to read or write it (static; uncertain whether a captive-portal script reads it on devices). |
 | `/run/azazel-edge/operator-progress.json` | `AZAZEL_OPERATOR_PROGRESS_PATH` | `POST /api/operator-progress` | owner (shared runtime directory) |
 | `/run/azazel-edge/topolite_seed_mode.json` | `AZAZEL_TOPOLITE_SEED_MODE_PATH` | `POST /api/topolite/seed-mode` | owner |
-| `/run/azazel-edge/dashboard-trends.jsonl` | `AZAZEL_DASHBOARD_TRENDS_PATH` | every dashboard poll | owner. **As non-root the exception is not caught and `GET /api/dashboard/bundle` returns 500** (§9). |
+| `/run/azazel-edge/dashboard-trends.jsonl` | `AZAZEL_DASHBOARD_TRENDS_PATH` | `_record_dashboard_trend_point`, via `_dashboard_health_payload`, which three routes call: `GET /api/dashboard/bundle`, `/api/dashboard/handoff` and `/api/dashboard/health` | owner. **As non-root the `PermissionError` is not caught.** The last-write timestamp is set before the write, so the first of those requests in each trends interval returns 500 and the others in the same interval skip the write and return 200 (§9 saw the bundle fail and the later health/handoff calls succeed). |
 | `/run/azazel-edge/triage-sessions/` (created at import) | `AZAZEL_TRIAGE_SESSION_DIR`, fallback `AZAZEL_TRIAGE_SESSION_FALLBACK_DIR` | `/api/triage/*` | owner. **Falls back silently** to `/tmp/azazel-edge/triage-sessions`. |
 | `/var/log/azazel-edge/triage-audit.jsonl` (hash-chained) | `AZAZEL_TRIAGE_AUDIT_PATH` | `/api/triage/*` | owner. **Falls back silently** to `/tmp/azazel-edge-triage-audit.jsonl`; with `PrivateTmp=` that audit would be lost on restart. |
 | `/var/log/azazel-edge/authz-events.jsonl` | `AZAZEL_AUTHZ_AUDIT_LOG` | every authorization decision (`auth.py`) | owner. Fails with a warning per request; the request itself still proceeds. |
@@ -170,7 +196,7 @@ device node.
 operator, responder, admin) or the legacy single `TOKEN_FILE` (admin), from
 a header or `?token=`. `AZAZEL_AUTH_FAIL_OPEN` exists; the installer sets it
 to `0`. The optional mTLS check reads a fingerprint header set by the proxy.
-Nothing here changes in #471 except the file modes in §10.4.
+Nothing here changes in #471 except the file modes in §10.5.
 
 ## 3. AI agent (`azazel-edge-ai-agent`)
 
@@ -249,7 +275,7 @@ All **none** while modes stay as they are.
 - `AZAZEL_SOC_POLICY_PATH` (default `config/soc_policy.yaml`) and
   `AZAZEL_ATTACK_MAPPING_PATH` are **relative to the working directory**,
   which is `/` under the unit. On a device that means the built-in default
-  policy is used (uncertain whether intended; §12).
+  policy is used (uncertain whether intended; tracked separately, §12).
 - `path_schema` checks whether `/etc/default/azazel-edge` and `/etc/azazel-edge` exist.
 
 ### 3.6 Devices, environment files, secrets
@@ -396,7 +422,9 @@ route except streams, plus a few `POST`s):
   `RTNETLINK answers: Operation not permitted`; the API answered 500 with that
   error (visible, not silent).
 - `GET /api/dashboard/bundle`: **500**, uncaught `PermissionError` on
-  `mkdir /run/azazel-edge` from the trends writer.
+  `mkdir /run/azazel-edge` from the trends writer. The later
+  `/api/dashboard/health` and `/api/dashboard/handoff` calls in the same run
+  returned 200 because the trends interval had not passed (§2.6).
 - `docker ps` was executed from the monitoring-state path (no docker in the
   container, so it failed and was read as "not running").
 - `systemctl is-active` ran for the OpenCanary, Suricata, ntfy, agent, web
@@ -441,6 +469,22 @@ command/unit API is added. Existing path variables are set in the unit only
 where the code already reads them; preferably the code defaults change to
 the new paths so the unit and the code agree.
 
+**Owner decisions taken after the first review of this page** (recorded
+here; the plan below follows them):
+
+- disconnect: the Web UI's existing disconnect becomes a fixed,
+  parameterless control-daemon action (`uplink_disconnect`);
+- SoT edits: fixed, validated control-daemon actions, one writer;
+- `docker ps`: removed from the Web UI;
+- the controlled-exec restart runbook stays as it is and fails visibly when
+  run as non-root;
+- `control.sock`: per-uid action table in the daemon; `migrate_path_schema`
+  root-only;
+- `manual_query`: **stage 1** adds the dedicated agent query socket (§10.4),
+  not stage 2, so the Web UI keeps working while the agent is still root;
+- the agent's `WorkingDirectory=` stays unchanged in #471 (separate issue);
+- the out-of-scope findings in §12 are tracked separately.
+
 ### 10.1 Accounts and groups
 
 - `azazel-web`: system user, no login shell, no home (`/nonexistent`),
@@ -457,12 +501,13 @@ the new paths so the unit and the code agree.
 
 | Today in the Web UI | Stage 1 |
 | --- | --- |
-| `ip link set <uplink> down` fallback | Default: **remove the fallback**; when the 8082 status API does not answer, `disconnect` returns an explicit error (as it already does when `ip` fails). Alternative, only if the owner wants a working local disconnect: a fixed control-daemon action `uplink_disconnect` with **no parameters** (the daemon uses its own configured uplink; the request cannot name an interface). See §12. |
-| `docker ps` in `_container_running` | Remove. OpenCanary state comes from `systemctl is-active azazel-edge-opencanary.service` (already queried) and the existing pid/pgrep checks. No docker group. |
-| `PUT`/`PATCH /api/sot/devices` writing `/etc/azazel-edge/sot.yaml` | Move to the control daemon as fixed actions `sot_devices_replace` and `sot_devices_patch`: the daemon validates with the same `SoTConfig` model, writes the file with the same temp+replace, appends the same `sot-events` record (with the caller's uid), then refreshes. Merged with the `sot_trust_client` writer so there is one writer. The Web UI keeps its own validation for early errors. |
-| Runbook `rb.noc.service.restart.controlled` (`systemctl restart`) | **Not moved.** It stays behind `AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC` (installer default 0) and approval; under `azazel-web` an enabled run fails with systemd's permission error, returned to the caller (non-zero `exit_code`, `ok:false`). No polkit rule and no daemon "restart unit" action (that would be a unit-operation API). See §12. |
+| `ip link set <uplink> down` fallback | **Owner decision: relocate** the Web UI's existing disconnect into the control daemon as a fixed action `uplink_disconnect` with **no parameters**: the daemon uses its own configured uplink and the request cannot name an interface, a command or a unit. The Web UI calls it (after the 8082 status API, as today) instead of running `ip`. This moves an existing operator action to the root process; it is an owner-approved relocation, not something the peer checks make free. A failure is returned to the caller as an error, never as success. |
+| `docker ps` in `_container_running` (OpenCanary and Suricata) | **Owner decision: remove.** OpenCanary and Suricata state come from `systemctl is-active` (already queried for both) and the existing pid/pgrep checks. No docker group. A Suricata or OpenCanary that runs only as a docker container named `azazel-edge-*`, with no matching unit, would then show OFF; the shipped units are host units, so this is expected not to matter (uncertain for devices set up by hand). |
+| `PUT`/`PATCH /api/sot/devices` writing `/etc/azazel-edge/sot.yaml` | **Owner decision:** move to the control daemon as fixed actions `sot_devices_replace` and `sot_devices_patch`: the daemon validates with the same `SoTConfig` model, writes the file with the same temp+replace, appends the same `sot-events` record (with the caller's uid), then refreshes. Merged with the `sot_trust_client` writer so there is one writer. The Web UI keeps its own validation for early errors. |
+| Runbook `rb.noc.service.restart.controlled` (`systemctl restart`) | **Owner decision: not moved.** It stays behind `AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC` (installer default 0) and approval; under `azazel-web` an enabled run fails with systemd's permission error, returned to the caller (non-zero `exit_code`, `ok:false`). No polkit rule and no daemon "restart unit" action (that would be a unit-operation API). |
 | Reading `mattermost-command-token`, `ntfy.token` (0600 root) | Change those files to `0640 root:azazel-web`. Make the unreadable case a visible warning at start instead of a debug line. |
 | `web_token.txt`, `auth_tokens.json`, `client-cert-fingerprints.txt` | `0640 root:azazel-web`. |
+| `manual_query` over `ai-bridge.sock` (0700 directory owned by the agent's account) | **Owner decision:** the dedicated agent query socket, in stage 1 (§10.4). |
 
 ### 10.3 `control.sock` and peer checks
 
@@ -476,16 +521,53 @@ the new paths so the unit and the code agree.
   - uid 0: every action (unchanged behaviour for root tools).
   - the uid of `azazel-web` (resolved with `getpwnam` at start; refuse to
     start if group/user setup is inconsistent): the actions the Web UI sends
-    today (§2.3) plus `sot_devices_replace`/`sot_devices_patch` (and
-    `uplink_disconnect` only if the owner chooses it).
+    today (§2.3) plus `sot_devices_replace`, `sot_devices_patch` and
+    `uplink_disconnect`.
   - anyone else: rejected, logged.
   - `migrate_path_schema` stays root-only.
   - Rejection is an error reply and a log line; nothing is retried or turned
     into success.
-- This narrows who may call what. It adds no new action authority beyond the
-  SoT write moved from the Web UI.
+- The peer table narrows who may call what. Separately, three actions are
+  **added** to the daemon: `sot_devices_replace`, `sot_devices_patch` and
+  `uplink_disconnect`. They relocate operations the Web UI performs today
+  (writing the SoT file, bringing the uplink down) into the root process as
+  fixed, argument-validated actions. They are owner-approved decisions, not
+  a consequence of the peer check, and the daemon gains no generic command
+  or unit operation with them.
 
-### 10.4 Files and directories
+### 10.4 Agent query socket (`manual_query`)
+
+`manual_query` is the only thing the Web UI sends to the agent (`POST
+/api/ai/ask`, `/api/mattermost/message`, `/api/mattermost/command`; no other
+sender exists in the repository). Since #472, `ai-bridge.sock` sits in a 0700
+directory owned by the agent's account, so a Web UI running as `azazel-web`
+cannot reach it. Stage 1 therefore adds the query socket while the agent is
+still root:
+
+- **Path:** `/run/azazel-edge-agent-query/agent-query.sock`.
+- **Directory:** created by the agent, mode 0750, owner the agent's account
+  (root in stage 1, `azazel-agent` in stage 2), group `azazel-web`. The same
+  refusal rules as #472: symlink, not a directory, wrong owner, or bits
+  beyond 0750 → the agent refuses to start the query listener and logs why;
+  nothing is relaxed or fixed silently.
+- **Socket:** 0660, owner the agent's account, group `azazel-web`, bound
+  under a restrictive umask before listening.
+- **Peer check:** on every accept the agent reads `SO_PEERCRED` and accepts
+  only `uid == getpwnam("azazel-web").pw_uid` or uid 0 (resolved at start; no
+  variable can widen it).
+- **Messages:** exactly one type, `action == "manual_query"`, with the same
+  parameter limits as today. Anything else gets
+  `{"ok": false, "error": "forbidden"}` and is **never** passed to
+  `_handle_event`, forward-stats or the P0 path. Rejections are logged with
+  uid and pid.
+- **`ai-bridge.sock`** stays where #472 put it, for the core. Once the query
+  socket exists, `manual_query` on `ai-bridge.sock` is rejected.
+- **Web UI:** its default for `AZAZEL_AI_SOCKET` becomes the query socket
+  path (no new variable; see the warning in §2.3 about the shared name).
+- **Authority:** none added. `manual_query` already exists and only produces
+  an advisory answer.
+
+### 10.5 Files and directories
 
 | Purpose | New location | Owner / mode | How |
 | --- | --- | --- | --- |
@@ -504,7 +586,7 @@ Code changes that go with this, so failure is visible rather than silent:
 - the authz-audit failure stays a warning, but is also counted in
   `/health`.
 
-### 10.5 Unit
+### 10.6 Unit
 
 ```ini
 [Service]
@@ -529,7 +611,7 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
@@ -537,12 +619,25 @@ LockPersonality=yes
 SystemCallArchitectures=native
 ```
 
+- `AF_NETLINK` is needed: the read-only runbook `rb.noc.default-route.check`
+  runs `ip -4 route show default` as the Web UI's account, and `iwgetid`
+  (§2.2) may use netlink on some drivers (uncertain; it falls back to an
+  ioctl on an `AF_INET` socket).
+- `ProtectHome=yes` hides `/home`, so the OpenCanary pid file
+  `/home/azazel/canary-venv/bin/opencanaryd.pid` (§2.5) becomes invisible.
+  The code already treats a missing pid file as "not this check", so
+  OpenCanary state then comes from `systemctl is-active` (three unit names)
+  and `pgrep`. A device that runs OpenCanary only from that legacy venv,
+  with neither a unit nor a visible `opencanary.tac` process, would show OFF.
+  If the owner still has such devices, use `ProtectHome=read-only` instead;
+  the plan's default is `yes`.
+
 Not `MemoryDenyWriteExecute=` (Pillow/NumPy wheels may need it; to be
 tested). Not `ProtectProc=invisible` (it would break `pgrep` and the pid
 checks for OpenCanary and Suricata). `ExecStart` can drop `bash -lc` once
 the variables are expanded by systemd directly (optional).
 
-### 10.6 Installer migration
+### 10.7 Installer migration
 
 1. Create `azazel-web` and `azazel-control` (idempotent, §10.1).
 2. Create `/var/log/azazel-edge/web` and `/var/lib/azazel-edge-web` (systemd
@@ -552,27 +647,40 @@ the variables are expanded by systemd directly (optional).
    place for one release, or leave a note in the log; do not delete audit
    history.
 4. `chgrp azazel-web` + `chmod 0640` the token files.
-5. Set `AZAZEL_RUNTIME_SOCKET_GROUP=azazel-control` and
+5. Point the Web UI at the query socket: rewrite `AZAZEL_AI_SOCKET` in
+   `/etc/default/azazel-edge-web` only if it holds the old (#472) default;
+   never touch the same variable in `/etc/default/azazel-edge-security`
+   (agent and core, §2.3).
+6. Set `AZAZEL_RUNTIME_SOCKET_GROUP=azazel-control` and
    `AZAZEL_RUNTIME_DIR_MODE=0750` in `/etc/default/azazel-edge-security`
    **only if** they still hold the old installer defaults (the #472 pattern);
    otherwise leave them and print a notice.
-6. Install the new unit, `daemon-reload`, restart control daemon, then web.
-7. Wazuh FIM will report the ownership change once; note it in the release
+7. Install the new units, `daemon-reload`, restart the control daemon, then
+   the agent (query socket), then the Web UI.
+8. Wazuh FIM will report the ownership change once; note it in the release
    notes.
 
-### 10.7 Verification (stage 1)
+### 10.8 Verification (stage 1)
 
 - Unit tests: control-daemon peer table (root allowed, web uid allowed only
   its actions, other uid rejected, `migrate_path_schema` root-only);
-  `sot_devices_*` validation and single writer; the Web UI no longer calls
-  `docker` or `ip`; trends write failure does not 500; token files unreadable
-  → visible warning.
+  `sot_devices_*` validation and single writer; `uplink_disconnect` takes no
+  parameters and reports failure as failure; the Web UI no longer calls
+  `docker` or `ip link`; trends write failure does not 500; token files
+  unreadable → visible warning.
+- Unit tests for the query socket (§10.4): accepts the `azazel-web` uid and
+  root, rejects any other uid; accepts only `manual_query` and never reaches
+  `_handle_event`, forward-stats or the P0 path; directory/socket refusal
+  rules; `manual_query` on `ai-bridge.sock` is rejected; the Web UI's
+  `/api/ai/ask` and Mattermost message/command paths answer through the
+  query socket.
 - Container (`--rm`, systemd-in-container where possible): Web UI as
   `azazel-web` with the unit's hardening; audit-hook/strace run like §9
   shows no `EACCES`/`EPERM` except the deliberately unprivileged ones.
   Container results stay labelled as container results.
 - Device (owner): dashboard, Wi-Fi scan/connect, mode change, SoT edit,
-  `manual_query`, Mattermost command, ntfy SSE; `systemd-analyze security
+  disconnect, `manual_query` from `/api/ai/ask` and from a Mattermost
+  message and command, ntfy SSE; `systemd-analyze security
   azazel-edge-web`; `ps -o user= -C gunicorn` shows `azazel-web`.
 
 ## 11. Stage 2 plan: AI agent as `azazel-agent`
@@ -595,46 +703,32 @@ is ownership:
 | --- | --- |
 | `mkdir /run/azazel-edge-ai` | `RuntimeDirectory=azazel-edge-ai`, `RuntimeDirectoryMode=0700`. The existing owner/mode checks pass unchanged. |
 | `mkdir` + **unconditional `chmod`** of `/run/azazel-edge` | The agent stops writing in the shared directory. Its runtime files move to `/run/azazel-edge-agent/` (`RuntimeDirectory=`, 0750 `azazel-agent:azazel-web`). `_prepare_runtime_dir` no longer chmods a directory it does not own; a wrong mode is an error, not a silent fix. |
-| `ai_advisory.json` read by the daemon at a fixed path | The daemon reads the new path (constant changed in code; no new variable). |
+| `ai_advisory.json`, `ai_metrics.json` (and `ai_runtime_policy.json`) in `/run/azazel-edge` | Move to `/run/azazel-edge-agent/`. Readers follow: the control daemon's fixed `AI_ADVISORY_PATH` constant changes in code; the Web UI's defaults for `AZAZEL_AI_ADVISORY` and `AZAZEL_AI_METRICS` change in code and, where `/etc/default/azazel-edge-web` holds the old default, the installer rewrites it (#472 pattern). No new variable. |
 | `ui_snapshot.json` written by both the daemon and the agent | One writer. Default: the agent writes its fields to `/run/azazel-edge-agent/ai_snapshot.json`; the daemon (the snapshot's owner) merges them when it builds the snapshot. Readers (Web UI, EPD) keep reading the daemon's file. |
+| `ui_status_view.json` (written by `fabric_view.write_status_view_alongside` next to the snapshot, read by the Web UI) | Written next to the agent's own snapshot file instead, i.e. `/run/azazel-edge-agent/ui_status_view.json` (`fabric_view` writes beside whatever path it is given). The Web UI's `read_status_view` derives the path from its own snapshot path today (`STATE_PATH` and the fallback, both in `/run/azazel-edge`), so it must change in code to read the agent's directory (a fixed default, no new variable). Only written when `azazel_fabric` is installed. |
 | logs in `/var/log/azazel-edge/` (`ai-*.jsonl`, `core-decision-audit.jsonl`, `p0-alert-queue.jsonl`) | `LogsDirectory=azazel-edge/ai` → `/var/log/azazel-edge/ai/`, 0750 `azazel-agent:azazel-web`; defaults of `AZAZEL_AI_AUDIT_LOG`, `AZAZEL_AI_EVENT_LOG`, `AZAZEL_AI_LLM_LOG`, `AZAZEL_AI_DEFERRED_LOG` change (the core-decision audit and P0 queue follow the audit directory). The Web UI and runbook `rb.ops.logs.ai.recent` follow. Only `azazel-agent` can write `core-decision-audit.jsonl` (the #471 goal). |
 | decision log in `/opt/azazel-edge/logs/tactics_engine` | `StateDirectory=azazel-edge-agent` → `/var/lib/azazel-edge-agent/decisions`, via the default of `AZAZEL_DECISION_LOG_DIR`. |
 | `/tmp/azazel-edge-ai-audit.jsonl` fallback | Removed: if the audit log cannot be opened the agent refuses to start (with `PrivateTmp=` the fallback would vanish anyway). |
 | `normalized-events.jsonl` (core, root 0644) | Unchanged in stage 2: readable by all. When stage 3 tightens it, give the agent a read group. |
 
-### 11.3 Splitting `ai-bridge.sock`: keeping `manual_query` for the Web UI
+### 11.3 Query socket after stage 2
 
-Today the core and the Web UI share `ai-bridge.sock`, and any line that is
-not `manual_query` or stats is treated as a core decision (§3.3). Once the
-Web UI and the agent are different accounts, the Web UI cannot reach the
-0700 directory at all. Plan:
+The query socket itself is built in stage 1 (§10.4). Stage 2 only changes
+ownership:
 
-- **`ai-bridge.sock`** stays where #472 put it (0600 in the 0700
-  `/run/azazel-edge-ai`), for the core only. Core is root in stage 2, so
-  root can still connect; that is unchanged and documented (root spoofing is
-  out of scope for #471). `manual_query` on this socket is rejected after
-  stage 2.
-- **New query socket** `/run/azazel-edge-agent-query/agent-query.sock`:
-  - directory `RuntimeDirectory=azazel-edge-agent-query`, mode 0750,
-    `azazel-agent:azazel-web`; socket 0660 `azazel-agent:azazel-web`
-    (bound under a restrictive umask before listening, same checks as #472:
-    refuse symlink, wrong owner, wrong mode);
-  - on every accept the agent reads `SO_PEERCRED` and requires
-    `uid == getpwnam("azazel-web").pw_uid` (resolved at start; no variable
-    can widen it);
-  - it accepts exactly one message type, `action == "manual_query"`, with the
-    same parameter limits as today; anything else gets
-    `{"ok": false, "error": "forbidden"}` and is **never** passed to
-    `_handle_event`, forward-stats or the P0 path;
-  - a rejected peer or message is logged with uid/pid.
-- The Web UI's `AZAZEL_AI_SOCKET` default changes to the query socket path
-  (no new variable).
-- This adds no new authority: `manual_query` already exists and only
-  produces an advisory answer.
+- the agent now runs as `azazel-agent`, so the query directory and socket are
+  owned by `azazel-agent` (group `azazel-web`, modes unchanged), through
+  `RuntimeDirectory=` or the agent's own creation with the same refusal
+  rules;
+- `ai-bridge.sock` and its 0700 directory are owned by `azazel-agent`; the
+  core (still root) connects as before. Root can still connect to both;
+  that is documented, not solved (#471 does not cover root spoofing);
+- after this, only `azazel-agent` can write `core-decision-audit.jsonl` and
+  the P0 queue (§11.2).
 
 ### 11.4 Unit
 
-As §10.5 with `User=azazel-agent`, `Group=azazel-agent`,
+As §10.6 with `User=azazel-agent`, `Group=azazel-agent`,
 `RuntimeDirectory=azazel-edge-ai azazel-edge-agent azazel-edge-agent-query`
 (modes per directory need care: one `RuntimeDirectoryMode=` applies to all,
 so either set 0700 and let the agent widen the two shared ones it owns, or
@@ -642,7 +736,8 @@ use `tmpfiles.d`; decided at implementation), `LogsDirectory=azazel-edge/ai`,
 `StateDirectory=azazel-edge-agent`, `UMask=0027`,
 `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` (Ollama on loopback) and
 `AF_NETLINK` (`ip route`), no `SupplementaryGroups=`, empty
-`CapabilityBoundingSet=`, an explicit `WorkingDirectory=` decision (§12).
+`CapabilityBoundingSet=`. `WorkingDirectory=` stays as it is today (owner
+decision; the relative policy paths in §3.5 are a separate issue).
 The core unit gets `After=`/`Wants=` unchanged.
 
 ### 11.5 Installer migration
@@ -660,9 +755,8 @@ The core unit gets `After=`/`Wants=` unchanged.
 
 ### 11.6 Verification (stage 2)
 
-- Unit tests: query socket rejects a non-web uid, rejects anything other
-  than `manual_query`, never reaches `_handle_event`; `ai-bridge.sock`
-  rejects `manual_query`; runtime directory chmod no longer happens; single
+- Unit tests: the stage-1 query socket tests (§10.8) still pass with the
+  agent as `azazel-agent`; runtime directory chmod no longer happens; single
   snapshot writer; migration keeps the audit chain verifiable and the P0
   cursors.
 - SO-03 re-measured (the core → agent path changes ownership); SO-04 is
@@ -674,31 +768,26 @@ The core unit gets `After=`/`Wants=` unchanged.
 
 ## 12. Open questions
 
-1. **Port 8082.** Who serves the status API on a device? If nothing does,
-   `disconnect` today ends in the `ip link set … down` fallback. Remove the
-   fallback (default) or add a parameterless daemon `uplink_disconnect`?
-2. **Controlled-exec restart runbook.** Accept that it fails under
-   `azazel-web` (default), or remove it from the runbook set? A daemon
-   "restart unit" action is not proposed (it would be a unit-operation API).
-3. **SoT writes.** Is moving `PUT`/`PATCH /api/sot/devices` into two fixed
-   daemon actions acceptable, or should SoT editing from the Web UI be
-   dropped?
-4. **`control.sock` peer table.** Is the per-uid action table (root: all;
-   web: its current set; others: none; `migrate_path_schema` root-only) the
-   intended shape, and should `migrate_path_schema` stay on the socket at
-   all?
-5. **`/etc/azazel-edge` mode.** 0755 with per-file modes (default) or keep
+Decided by the owner (see the list at the start of §10): disconnect as a
+fixed parameterless daemon action, SoT edits as fixed validated daemon
+actions, `docker ps` removed, the restart runbook kept and failing visibly,
+the `control.sock` per-uid table with `migrate_path_schema` root-only, the
+query socket in stage 1, the agent's `WorkingDirectory=` unchanged, and the
+out-of-scope findings tracked separately. Still open:
+
+1. **Port 8082.** Who serves the status API on a device? It decides how
+   often the Web UI reaches `uplink_disconnect` instead of the status API.
+2. **`migrate_path_schema` on the socket.** It becomes root-only; should it
+   leave the socket entirely (a root CLI only)?
+3. **`/etc/azazel-edge` mode.** 0755 with per-file modes (default) or keep
    0750 with a group?
-6. **Agent working directory.** `AZAZEL_SOC_POLICY_PATH` and
-   `AZAZEL_ATTACK_MAPPING_PATH` resolve against `/` today, so devices run the
-   built-in policy. Should the stage-2 unit set
-   `WorkingDirectory=/opt/azazel-edge` (which would change the policy in
-   effect) or keep `/`?
-7. **Snapshot ownership.** Agent-side file merged by the daemon (default) or
+4. **`ProtectHome=`.** `yes` (default) hides the legacy OpenCanary venv pid
+   file; are there devices that need `read-only`?
+5. **Snapshot ownership.** Agent-side file merged by the daemon (default) or
    another split?
-8. **`decision-explanations.jsonl`.** The Web UI reads it from
+6. **`decision-explanations.jsonl`.** The Web UI reads it from
    `/var/log/azazel-edge`, the agent writes elsewhere. Which is intended?
-9. **Out of scope findings to file separately** (not fixed by #471 stages
+7. **Out-of-scope findings, tracked separately** (not fixed by #471 stages
    0–2):
    - `control.sock` has no peer check today (stage 1 adds one);
    - the Wi-Fi passphrase is passed on nmcli's argv;
@@ -711,11 +800,13 @@ The core unit gets `After=`/`Wants=` unchanged.
      does not; no installer step creates `table inet azazel_edge`;
    - the core's redirect policy default is relative with no
      `WorkingDirectory=`;
+   - the agent's SOC policy and ATT&CK mapping paths are relative to `/`
+     (§3.5);
    - `azazel-edge-portal-viewer.service` is started by the daemon but not
      shipped;
    - OpenCanary SSH listens on 12222 while the core's honeypot redirect
      default is 2222;
    - the Ollama compose file publishes 11434 on all interfaces.
-10. **Hardware.** None of §9 is device evidence. Stage 1 and 2 still need a
-    device run by the owner before they are called done; stage 3 needs the
-    `CAP_NET_ADMIN`-only core run that #471 describes.
+8. **Hardware.** None of §9 is device evidence. Stage 1 and 2 still need a
+   device run by the owner before they are called done; stage 3 needs the
+   `CAP_NET_ADMIN`-only core run that #471 describes.

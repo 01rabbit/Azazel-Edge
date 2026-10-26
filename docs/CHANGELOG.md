@@ -12,7 +12,9 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   write, connect to and execute, and which of those need root, a capability
   or a group; a non-root container observation of the Web UI and the agent
   (labelled as a container, not hardware evidence); the stage 1 (Web UI as
-  `azazel-web`) and stage 2 (agent as `azazel-agent`) plans; open questions.
+  `azazel-web`, plus a dedicated agent query socket for `manual_query`) and
+  stage 2 (agent as `azazel-agent`) plans; the owner decisions taken so far;
+  open questions.
 - Focus screens informed by commercial SIEM/SOC/NOC dashboard patterns
   (design notes in `docs/architecture/socnoc-workspace-design.md`):
   - **Simple+**: the Simple landing view gains a Splunk-style KPI strip
