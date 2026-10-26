@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import socket
 import struct
+import sys
 import threading
 from typing import Any, Callable, Dict, List
 
@@ -30,15 +31,23 @@ def _ipv4(raw: bytes) -> str:
     return ".".join(str(b) for b in raw)
 
 
+# The internal LAN address (br0), not every address (Edge#477): flow records
+# from the uplink (WAN) side must not reach the evidence plane by default.
+DEFAULT_LISTEN_HOST = "172.16.0.254"
+# Linux IP_FREEBIND: bind to the LAN address even before it is on br0 (boot
+# order); packets arrive once it is.
+_IP_FREEBIND = getattr(socket, "IP_FREEBIND", 15)
+
+
 class NetFlowV5Receiver:
     def __init__(
         self,
-        listen_host: str = "0.0.0.0",
+        listen_host: str = DEFAULT_LISTEN_HOST,
         listen_port: int = 2055,
         dispatch_fn: Callable[[str], None] | None = None,
         top_talker_threshold: int = 1000,
     ):
-        self.listen_host = str(listen_host or "0.0.0.0")
+        self.listen_host = str(listen_host or DEFAULT_LISTEN_HOST)
         self.listen_port = int(listen_port)
         self.dispatch_fn = dispatch_fn or _default_dispatch_syslog_line
         self.top_talker_threshold = max(1, int(top_talker_threshold))
@@ -97,6 +106,8 @@ class NetFlowV5Receiver:
     def run_forever(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if sys.platform.startswith("linux"):
+                sock.setsockopt(socket.IPPROTO_IP, _IP_FREEBIND, 1)
             sock.bind((self.listen_host, self.listen_port))
             sock.settimeout(1.0)
             while not self._stop_event.is_set():

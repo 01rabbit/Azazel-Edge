@@ -8,6 +8,11 @@ ENABLE_SNMP="${ENABLE_SNMP:-0}"
 ENABLE_NETFLOW="${ENABLE_NETFLOW:-0}"
 ENABLE_SERVICES="${ENABLE_SERVICES:-0}"
 NETFLOW_PORT="${NETFLOW_PORT:-2055}"
+# The NetFlow receiver listens on the internal LAN address by default
+# (Edge#477), not on every address: the uplink (WAN) side must not feed flow
+# records into the evidence plane. An exporter elsewhere needs this set to an
+# address of this device explicitly.
+NETFLOW_LISTEN_HOST="${NETFLOW_LISTEN_HOST:-172.16.0.254}"
 SNMP_TARGETS="${SNMP_TARGETS:-}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SENSOR_ENV_FILE="/etc/default/azazel-edge-sensors"
@@ -21,13 +26,19 @@ echo "[sensors] ENABLE_SNMP=${ENABLE_SNMP}"
 echo "[sensors] ENABLE_NETFLOW=${ENABLE_NETFLOW}"
 echo "[sensors] ENABLE_SERVICES=${ENABLE_SERVICES}"
 echo "[sensors] NETFLOW_PORT=${NETFLOW_PORT}"
+echo "[sensors] NETFLOW_LISTEN_HOST=${NETFLOW_LISTEN_HOST}"
+
+if [[ ! "${NETFLOW_LISTEN_HOST}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+  echo "ERROR: NETFLOW_LISTEN_HOST must be an IPv4 address (got: ${NETFLOW_LISTEN_HOST})"
+  exit 1
+fi
 
 cat > "${SENSOR_ENV_FILE}" <<EOF
 # Azazel-Edge sensor configuration
 # Edit this file to configure SNMP targets and NetFlow port
 SNMP_TARGETS='${SNMP_TARGETS:-[{"host":"192.168.1.1","community":"public","port":161}]}'
 SNMP_POLL_INTERVAL_SEC=60
-NETFLOW_LISTEN_HOST=0.0.0.0
+NETFLOW_LISTEN_HOST=${NETFLOW_LISTEN_HOST}
 NETFLOW_PORT=${NETFLOW_PORT}
 EOF
 chmod 0644 "${SENSOR_ENV_FILE}"

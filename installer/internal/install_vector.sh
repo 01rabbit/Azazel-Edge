@@ -14,7 +14,18 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VECTOR_MODE="${VECTOR_MODE:-local}"   # local | wazuh | aggregator
 WAZUH_MANAGER_HOST="${WAZUH_MANAGER_HOST:-}"
+# aggregator mode: where the UDP receiver listens (Edge#477). The default is
+# the internal LAN address, so other nodes on the LAN can send and the uplink
+# (WAN) side cannot; any other address has to be given here explicitly.
+VECTOR_AGGREGATOR_ADDRESS="${VECTOR_AGGREGATOR_ADDRESS:-172.16.0.254:5514}"
 ENABLE_SERVICES="${ENABLE_SERVICES:-1}"
+
+# Checked before anything is installed.
+if [[ "${VECTOR_MODE}" == "aggregator" ]]; then
+  if [[ ! "${VECTOR_AGGREGATOR_ADDRESS}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}$ ]]; then
+    echo "ERROR: VECTOR_AGGREGATOR_ADDRESS must be <IPv4 address>:<port> (got: ${VECTOR_AGGREGATOR_ADDRESS})"; exit 1
+  fi
+fi
 
 echo "[vector 1/5] Install Vector via official script"
 curl --proto '=https' --tlsv1.2 -sSfL https://sh.vector.dev | bash -s -- --prefix /usr
@@ -33,7 +44,7 @@ if [[ "${VECTOR_MODE}" == "wazuh" ]]; then
   printf "WAZUH_MANAGER_HOST=%s\n" "${WAZUH_MANAGER_HOST}" > /etc/default/azazel-edge-vector
 elif [[ "${VECTOR_MODE}" == "aggregator" ]]; then
   install -m 0644 "${REPO_ROOT}/security/vector/vector-aggregator.toml" /etc/azazel-edge/vector/vector.toml
-  : > /etc/default/azazel-edge-vector
+  printf "VECTOR_AGGREGATOR_ADDRESS=%s\n" "${VECTOR_AGGREGATOR_ADDRESS}" > /etc/default/azazel-edge-vector
 else
   install -m 0644 "${REPO_ROOT}/security/vector/vector-local.toml" /etc/azazel-edge/vector/vector.toml
   : > /etc/default/azazel-edge-vector

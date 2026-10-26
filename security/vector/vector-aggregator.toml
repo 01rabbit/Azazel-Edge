@@ -1,10 +1,14 @@
 # Azazel-Edge Vector configuration - aggregator mode
 # Receives log lines from multiple nodes and archives locally.
+# Listens on the address install_vector.sh writes to
+# /etc/default/azazel-edge-vector (VECTOR_AGGREGATOR_ADDRESS; default the
+# internal LAN address 172.16.0.254:5514), never on every address by default
+# (Edge#477): the uplink (WAN) side does not get to write into the archive.
 
 [sources.edge_udp]
 type = "socket"
 mode = "udp"
-address = "0.0.0.0:5514"
+address = "${VECTOR_AGGREGATOR_ADDRESS}"
 
 [transforms.tag_node]
 type = "remap"
