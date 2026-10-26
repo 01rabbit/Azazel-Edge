@@ -258,7 +258,15 @@ DECISION_LOGGER = DecisionLogger(
     Path(str(os.environ.get("AZAZEL_DECISION_LOG_DIR", "")).strip() or str(AGENT_STATE_DIR / "decisions"))
 )
 CONFIG_HASH = ConfigHash.compute(config_dict={"engine": "tactical_scorer_v1"})
-DECISION_LAYERS = DecisionLayers()
+try:
+    DECISION_LAYERS = DecisionLayers()
+except ValueError as _config_error:
+    # The SOC policy or the ATT&CK mapping is there but invalid. Never run on
+    # the built-in defaults instead (the operator's policy would be silently
+    # replaced): stop with EX_CONFIG, which the unit does not restart
+    # (RestartPreventExitStatus=78), instead of a restart loop.
+    logger.critical("configuration error, not starting: %s", _config_error)
+    raise SystemExit(78)
 _LAST_RISK_SCORE = 0
 _LAST_STATE_NAME = "NORMAL"
 LLM_QUEUE: "queue.Queue[Dict[str, Any]]" = queue.Queue(maxsize=LLM_QUEUE_MAX)

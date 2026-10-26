@@ -14,8 +14,21 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
+# Code root: the checkout this launcher sits in (bin/ next to py/), or the
+# installed tree /opt/azazel-edge when the launcher was copied elsewhere (the
+# installer copies it to /usr/local/bin, whose parent holds no code). A
+# symlink is not followed (abspath, not resolve), like the bash launchers: a
+# link in /usr/local/bin runs the installed, sync-checked tree, never whatever
+# stale checkout the link may point at.
+SELF = Path(os.path.abspath(__file__))
+ROOT_DIR = SELF.parents[1]
+if not (ROOT_DIR / "py" / "azazel_edge" / "__init__.py").is_file():
+    ROOT_DIR = Path("/opt/azazel-edge")
+if not (ROOT_DIR / "py" / "azazel_edge" / "__init__.py").is_file():
+    sys.exit(f"Azazel-Edge code not found next to {SELF.parent} or in {ROOT_DIR}.")
 VENV_PYTHON = ROOT_DIR / ".venv" / "bin" / "python3"
+if not VENV_PYTHON.exists():
+    VENV_PYTHON = ROOT_DIR / "venv" / "bin" / "python3"
 
 if os.environ.get("AZAZEL_EDGE_SCENARIO_BOOTSTRAPPED") != "1" and VENV_PYTHON.exists():
     current = Path(sys.executable).resolve()
@@ -23,7 +36,7 @@ if os.environ.get("AZAZEL_EDGE_SCENARIO_BOOTSTRAPPED") != "1" and VENV_PYTHON.ex
     if current != target:
         env = os.environ.copy()
         env["AZAZEL_EDGE_SCENARIO_BOOTSTRAPPED"] = "1"
-        os.execvpe(str(target), [str(target), str(Path(__file__).resolve()), *sys.argv[1:]], env)
+        os.execvpe(str(target), [str(target), str(SELF), *sys.argv[1:]], env)
 
 PY_ROOT = ROOT_DIR / "py"
 if str(PY_ROOT) not in sys.path:

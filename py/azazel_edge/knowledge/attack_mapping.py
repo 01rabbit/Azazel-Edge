@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List
 
+logger = logging.getLogger(__name__)
 
+# <root>/config/attack_mapping.yaml, where <root> is the tree this module is in
+# (the checkout, or /opt/azazel-edge when installed):
+# py/azazel_edge/knowledge/attack_mapping.py is three levels below it. Not the
+# working directory, which is / under systemd. AZAZEL_ATTACK_MAPPING_PATH still
+# overrides it.
+INSTALL_ROOT = Path(__file__).resolve().parents[3]
+_BUILTIN_ATTACK_MAPPING_PATH = INSTALL_ROOT / "config" / "attack_mapping.yaml"
 DEFAULT_ATTACK_MAPPING_PATH = Path(
-    str(os.environ.get("AZAZEL_ATTACK_MAPPING_PATH", "config/attack_mapping.yaml")).strip()
-    or "config/attack_mapping.yaml"
+    str(os.environ.get("AZAZEL_ATTACK_MAPPING_PATH", "")).strip() or str(_BUILTIN_ATTACK_MAPPING_PATH)
 )
+_WARNED_MISSING: set[str] = set()
 
 
 def _validate_rule(rule: Dict[str, Any]) -> None:
@@ -24,12 +33,20 @@ def _validate_rule(rule: Dict[str, Any]) -> None:
 def load_attack_mapping(path: Path | None = None) -> Dict[str, Any]:
     target = path or DEFAULT_ATTACK_MAPPING_PATH
     if not target.exists():
+        if str(target) not in _WARNED_MISSING:
+            _WARNED_MISSING.add(str(target))
+            logger.warning("ATT&CK mapping %s not found; every technique is reported as unmapped", target)
         return {"version": "attack-mapping-default-v1", "rules": [], "path": str(target)}
     try:
         import yaml  # type: ignore
     except Exception as e:
         raise ValueError(f"attack_mapping_invalid:yaml_unavailable:{e}")
-    payload = yaml.safe_load(target.read_text(encoding="utf-8"))
+    # A file that is there but cannot be read or parsed is an error, like a
+    # rule with a missing key, never an empty mapping.
+    try:
+        payload = yaml.safe_load(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as e:
+        raise ValueError(f"attack_mapping_invalid:unreadable:{target}:{type(e).__name__}: {e}") from e
     if not isinstance(payload, dict):
         raise ValueError("attack_mapping_invalid:root_must_be_object")
     rules = payload.get("rules")

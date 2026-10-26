@@ -3,6 +3,13 @@ set -euo pipefail
 
 REPO_ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 RUNTIME_ROOT="${2:-/opt/azazel-edge}"
+# with-rust-core (the default) or without-rust-core: whether the installer
+# built the Rust core (ENABLE_RUST_CORE), so whether its sources are compared.
+RUST_CORE="${3:-with-rust-core}"
+case "$RUST_CORE" in
+  with-rust-core|without-rust-core) ;;
+  *) echo "[ERROR] third argument must be with-rust-core or without-rust-core: $RUST_CORE" >&2; exit 2 ;;
+esac
 
 if [[ ! -d "$REPO_ROOT" ]]; then
   echo "[ERROR] repo root not found: $REPO_ROOT" >&2
@@ -60,8 +67,8 @@ security/docker-compose.yml
 security/opencanary/Dockerfile
 security/opencanary/opencanary.conf
 security/suricata/azazel-lite.rules
-rust/azazel-edge-core/Cargo.toml
-rust/azazel-edge-core/src/main.rs
+config/soc_policy.yaml
+config/attack_mapping.yaml
 bin/azazel-edge-scenario-replay
 bin/azazel-edge-dummy-eve
 bin/azazel-edge-audit-review
@@ -102,6 +109,18 @@ images
 fonts
 icons/epd
 EOF
+
+mapfile -t RUST_FILES <<'EOF'
+rust/azazel-edge-core/Cargo.toml
+rust/azazel-edge-core/Cargo.lock
+EOF
+mapfile -t RUST_DIRS <<'EOF'
+rust/azazel-edge-core/src
+EOF
+if [[ "$RUST_CORE" == "with-rust-core" ]]; then
+  FILES+=("${RUST_FILES[@]}")
+  DIRS+=("${RUST_DIRS[@]}")
+fi
 
 declare -a mismatches=()
 
@@ -161,7 +180,7 @@ compare_dir() {
   while IFS= read -r -d '' f; do
     local child="${f#$REPO_ROOT/}"
     compare_file "$child"
-  done < <(find "$src" -type f \( -name '*.py' -o -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.yaml' -o -name '*.yml' -o -name '*.png' -o -name '*.ttf' -o -name 'Dockerfile' -o -name '.env' \) -print0 | sort -z)
+  done < <(find "$src" -type f \( -name '*.py' -o -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.yaml' -o -name '*.yml' -o -name '*.png' -o -name '*.ttf' -o -name 'Dockerfile' -o -name '.env' -o -name '*.rs' \) -print0 | sort -z)
 }
 
 for rel in "${FILES[@]}"; do

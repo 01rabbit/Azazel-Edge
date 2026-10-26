@@ -5,6 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT_DEFAULT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 REPO_ROOT="${REPO_ROOT:-$REPO_ROOT_DEFAULT}"
 ENABLE_SERVICES="${ENABLE_SERVICES:-1}"
+# Edge#206: the LUKS secrets volume is set up by default (fail-closed);
+# only an explicit SKIP_LUKS=1 skips it. luksFormat and open ask for a
+# passphrase on a terminal, so without one the install stops with an error
+# (it used to fail silently behind `|| true`).
 SKIP_LUKS="${SKIP_LUKS:-0}"
 SECURITY_ROOT="/opt/azazel-edge/security"
 SECURITY_ENV="/etc/default/azazel-edge-security"
@@ -29,6 +33,13 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+# stdin only: see require_tty in install_encrypted_storage.sh (cryptsetup
+# prompts only when stdin is a terminal).
+if [[ "${SKIP_LUKS}" != "1" && ! -e /dev/mapper/azazel-secrets ]] && [[ ! -t 0 ]]; then
+  echo "ERROR: the encrypted secrets volume (Edge#206, on by default) needs a passphrase typed on a terminal, and stdin is not one. Run the installer from an interactive terminal (to keep a log, use: script -c 'sudo ...' install.log, or pipe only the output: 2>&1 | tee install.log), or, to install without encrypted storage, re-run it with SKIP_LUKS=1 set explicitly." >&2
+  exit 1
+fi
+
 if ! ASSET_ROOT="$(resolve_asset_root)"; then
   echo "ERROR: asset root not found. Expected security/docker-compose.yml and bin/azazel-edge-compose."
   echo "Hint: set REPO_ROOT explicitly, e.g. REPO_ROOT=/home/azazel/Azazel-Edge"
@@ -45,10 +56,9 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y suricata
 systemctl enable --now docker.service
 
 if [[ "${SKIP_LUKS}" != "1" ]]; then
-  echo "[security] Install encrypted storage baseline"
-  if [[ -x "${ASSET_ROOT}/installer/internal/install_encrypted_storage.sh" ]]; then
-    "${ASSET_ROOT}/installer/internal/install_encrypted_storage.sh" || true
-  fi
+  echo "[security] Install encrypted storage baseline (Edge#206; needs a terminal)"
+  # Fail-closed: a failure stops the install instead of being ignored.
+  "${ASSET_ROOT}/installer/internal/install_encrypted_storage.sh"
 else
   echo "[security] Skip encrypted storage baseline (SKIP_LUKS=1)"
 fi

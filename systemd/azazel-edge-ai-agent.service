@@ -80,6 +80,9 @@ Environment="AZAZEL_CORR_MAX_HISTORY_PER_SRC=32"
 ExecStart=/opt/azazel-edge/venv/bin/python /opt/azazel-edge/py/azazel_edge_ai/agent.py
 Restart=always
 RestartSec=2
+# 78 (EX_CONFIG): the SOC policy or ATT&CK mapping under
+# /opt/azazel-edge/config is invalid; restarting cannot fix that.
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=multi-user.target

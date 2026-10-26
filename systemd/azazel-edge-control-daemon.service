@@ -6,7 +6,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=-/etc/default/azazel-edge-security
-ExecStart=/usr/local/bin/azazel-edge-control-daemon
+# The installed tree and its venv, named directly (not the /usr/local/bin
+# launcher), so the unit does not depend on where a launcher looks for code.
+Environment="PYTHONPATH=/opt/azazel-edge:/opt/azazel-edge/py"
+ExecStart=/opt/azazel-edge/venv/bin/python /opt/azazel-edge/py/azazel_edge_control/daemon.py
 Restart=always
 RestartSec=3
 

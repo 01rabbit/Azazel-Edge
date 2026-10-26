@@ -22,7 +22,9 @@ controls. Each item includes expected outcome and fallback note.
   Expected: posture is readable and stable.
   If something goes wrong: verify EPD service and cable seating.
 
-- [ ] Confirm token material exists:
+- [ ] Confirm token material exists (encrypted storage is set up by default
+  and the installer must run on an interactive terminal for its passphrase;
+  skip this and the next check only if it was installed with `SKIP_LUKS=1`):
   `ls /etc/azazel-edge/secrets/tokens/`
   Expected: token files are present.
   If something goes wrong: restore from secure backup.

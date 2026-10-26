@@ -16,7 +16,21 @@
 # azazel-edge-* systemd services), then drive attacks from this menu.
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Code root: the checkout this launcher sits in (bin/ next to py/), or the
+# installed tree /opt/azazel-edge when the launcher was copied elsewhere (the
+# installer copies it to /usr/local/bin, whose parent holds no code). A
+# symlink is not followed (BASH_SOURCE is the link's own path): a link in
+# /usr/local/bin runs the installed, sync-checked tree, never whatever stale
+# checkout the link may point at.
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SELF_DIR}/.." && pwd)"
+if [[ ! -f "${ROOT_DIR}/py/azazel_edge/__init__.py" ]]; then
+  ROOT_DIR="/opt/azazel-edge"
+fi
+if [[ ! -f "${ROOT_DIR}/py/azazel_edge/__init__.py" ]]; then
+  echo "Azazel-Edge code not found next to ${SELF_DIR} or in ${ROOT_DIR}." >&2
+  exit 1
+fi
 
 # --- environment detection ---------------------------------------------------
 # macdev profile: tools/macdev/env.sh present on a Mac -> dev eve.json and
@@ -48,7 +62,7 @@ fi
 EVE_PATH="${AZAZEL_EVE_PATH:-/var/log/suricata/eve.json}"
 STREAM_PID="${RUN_DIR}/injector-stream.pid"
 STREAM_LOG="${LOG_DIR}/injector-stream.log"
-DUMMY_EVE="${ROOT_DIR}/bin/azazel-edge-dummy-eve"
+DUMMY_EVE="${SELF_DIR}/azazel-edge-dummy-eve"
 WEB_URL="http://${AZAZEL_WEB_HOST:-127.0.0.1}:${AZAZEL_WEB_PORT:-8084}"
 mkdir -p "${RUN_DIR}" "${LOG_DIR}" 2>/dev/null || true
 mkdir -p "$(dirname "${EVE_PATH}")" 2>/dev/null || true
