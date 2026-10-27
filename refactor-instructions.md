@@ -207,6 +207,10 @@ STOP, do not implement, and ask the human when any of these occur:
   to a publicly known default HMAC key when `AZAZEL_TRUST_CAPSULE_HMAC_KEY` is
   unset. Should the fix hard-fail (raise), or warn-and-continue? Hard-fail
   could break explanation writing on deployed devices that never set the var.
+  **Decided by the owner (#477): neither.** Without a key the capsule is
+  written unsigned (`signature_state: "unsigned"`, empty `hmac_sig`), so
+  explanation writing continues and nothing is signed with the public key;
+  the installer creates a random key (`provision_trust_capsule_key.sh`).
 - **Q3 (blocks any deletion):** Which of these are still operationally used:
   `bin/update-readme-stats`, `bin/azazel-edge-inject-test-events`, the
   `GET /demo` page, the root `images/` directory? Default assumption: all are

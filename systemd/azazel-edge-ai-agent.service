@@ -47,6 +47,11 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
 EnvironmentFile=-/etc/default/azazel-edge-security
+# The key that signs the decision trust capsules (Edge#477): 0600 root:root,
+# created by provision_trust_capsule_key.sh and read here by systemd. Listed
+# after the security file so it wins. Without it the capsules are written
+# unsigned; the agent never signs with a built-in key.
+EnvironmentFile=-/etc/azazel-edge/trust-capsule.env
 Environment="AZAZEL_LLM_MODEL_PRIMARY=qwen3.5:2b"
 Environment="AZAZEL_LLM_MODEL_DEGRADED=qwen3.5:0.8b"
 Environment="AZAZEL_OPS_MODEL=qwen3.5:2b"

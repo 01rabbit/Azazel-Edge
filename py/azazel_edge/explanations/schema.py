@@ -72,7 +72,19 @@ def validate_v2_explanation(record: Dict[str, Any]) -> List[str]:
 
     # trust_capsule must carry hmac_sig (structural spot-check)
     if "trust_capsule" in record and isinstance(record["trust_capsule"], dict):
-        if "hmac_sig" not in record["trust_capsule"]:
+        capsule = record["trust_capsule"]
+        if "hmac_sig" not in capsule:
             problems.append("trust_capsule is missing required key: hmac_sig")
+        # An unsigned capsule (no key, Edge#477) must not look signed, and a
+        # signed one must carry a signature. Records written before
+        # signature_state existed have none and are not checked here.
+        state = capsule.get("signature_state")
+        sig = capsule.get("hmac_sig")
+        if state == "unsigned" and sig:
+            problems.append("trust_capsule is unsigned but carries hmac_sig")
+        elif state == "signed" and not (isinstance(sig, str) and sig):
+            problems.append("trust_capsule is signed but hmac_sig is empty")
+        elif "signature_state" in capsule and state not in ("signed", "unsigned"):
+            problems.append("trust_capsule has an unknown signature_state")
 
     return problems

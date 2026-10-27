@@ -56,7 +56,7 @@ Status: **Implemented**
 | `next_checks` | list | Recommended follow-up checks for the operator, derived deterministically from action and state. |
 | `operator_wording` | str | Human-readable summary sentence for operator review. |
 | `machine` | dict | Raw machine context snapshot: `noc_summary`, `soc_summary`, and the full `arbiter` dict. |
-| `trust_capsule` | dict | Integrity capsule signed with HMAC-SHA256; carries `trace_id`, `action`, `confidence`, `evidence_ids`, `hmac_sig`, `ai_contributed`, and `ai_advice_hash`. |
+| `trust_capsule` | dict | Integrity capsule signed with HMAC-SHA256 under `AZAZEL_TRUST_CAPSULE_HMAC_KEY`; carries `trace_id`, `action`, `confidence`, `evidence_ids`, `signature_state`, `hmac_sig`, `ai_contributed`, and `ai_advice_hash`. Without a key it is `signature_state: "unsigned"` with an empty `hmac_sig` (never signed with a built-in key, Edge#477); records from before this have no `signature_state`. |
 
 ### Tactics-engine DecisionLogger (distinct engine-trace stream)
 

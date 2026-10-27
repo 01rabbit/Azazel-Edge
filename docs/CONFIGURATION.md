@@ -56,6 +56,19 @@ ones in the scripts.
 | `SKIP_LUKS` | `0` | `0`: set up the LUKS-encrypted secrets volume (Edge#206). Its passphrase is typed on a terminal, so without one (stdin not a terminal) the installer stops before changing anything. `1`: install without the encrypted volume. Also read by `install_all.sh` and `install_security_stack.sh`. |
 | `ENABLE_SERVICES` | `1` | `1`: enable and start the services. `0`: install files only; `install_all.sh` then skips the final selftest. |
 
+The app stack also creates the key that signs the decision trust capsules
+(Edge#477): `provision_trust_capsule_key.sh` writes a random key to
+`/etc/azazel-edge/trust-capsule.env` (`AZAZEL_TRUST_CAPSULE_HMAC_KEY`,
+`0600 root:root`, never printed), read by the AI agent's unit
+(`EnvironmentFile=`). An existing key is kept when the installer runs again;
+without the file, a key set by hand in `/etc/default/azazel-edge-security` is
+carried over. Without a key the agent writes the capsules unsigned
+(`signature_state: "unsigned"`, empty `hmac_sig`); it never signs with a
+built-in key, and the public former default key is refused like an unset one.
+Capsules written before this change carry no `signature_state`; unless a key
+was set, they were signed with that public key and are not evidence of
+anything.
+
 ### AI runtime (`install_ai_runtime.sh`, run when `ENABLE_AI_RUNTIME=1`)
 
 | Variable | Default | Meaning |

@@ -11,6 +11,7 @@ caller on failure, and (d) become a clean no-op when azazel_fabric is absent
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -72,7 +73,9 @@ class DecisionProjectionTests(unittest.TestCase):
 
     @needs_fabric
     def test_trust_capsule_projection_field_mapping(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # A key set explicitly for this test only (not a device key).
+        key = {"AZAZEL_TRUST_CAPSULE_HMAC_KEY": "test-only-capsule-key-not-for-devices"}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, key):
             out = Path(tmp) / "decision-explanations.jsonl"
             _sample_explain(DecisionExplainer(output_path=out))
             proj = out.with_name(expl_fabric.TRUST_PROJECTION_NAME)
@@ -85,6 +88,17 @@ class DecisionProjectionTests(unittest.TestCase):
             self.assertEqual(row["config_hash"], "cfg123")
             self.assertTrue(row["hmac"])
             self.assertTrue(row["issued_at"])
+
+    @needs_fabric
+    def test_unsigned_capsule_projects_an_empty_hmac(self) -> None:
+        # Edge#477: without a key the capsule is unsigned; the Fabric
+        # projection then carries no signature instead of a public-key one.
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"AZAZEL_TRUST_CAPSULE_HMAC_KEY": ""}):
+            out = Path(tmp) / "decision-explanations.jsonl"
+            _sample_explain(DecisionExplainer(output_path=out))
+            row = json.loads(out.with_name(expl_fabric.TRUST_PROJECTION_NAME).read_text(encoding="utf-8").strip())
+            self.assertEqual(row["hmac"], "")
 
     def test_native_stream_byte_identical_with_and_without_adapter(self) -> None:
         # The native stream stamps wall-clock values from TWO sources: the `ts`

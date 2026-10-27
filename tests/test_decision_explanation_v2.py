@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from azazel_edge.explanations import DecisionExplainer
+
+# A key set explicitly for this test only (Edge#477: without a key the capsule
+# is unsigned). It is not a device key.
+_TEST_KEY = {'AZAZEL_TRUST_CAPSULE_HMAC_KEY': 'test-only-capsule-key-not-for-devices'}
 
 
 class DecisionExplanationV2Tests(unittest.TestCase):
     def test_explanation_contains_structured_v2_fields(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, _TEST_KEY):
             explainer = DecisionExplainer(output_path=Path(tmp) / 'unused-decision-explanations.jsonl')
             result = explainer.explain(
                 noc={
@@ -79,6 +85,7 @@ class DecisionExplanationV2Tests(unittest.TestCase):
         self.assertEqual(capsule['action'], 'redirect')
         self.assertTrue(capsule['evidence_ids'])
         self.assertTrue(capsule['hmac_sig'])
+        self.assertEqual(capsule['signature_state'], 'signed')
         self.assertTrue(capsule['ai_contributed'])
         self.assertTrue(capsule['ai_advice_hash'])
 

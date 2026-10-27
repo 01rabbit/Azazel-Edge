@@ -316,6 +316,7 @@ SVC-13 は読むだけです。agent は core の判定 1 件ごとに v2 の判
 sudo stat -c '%a %U:%G' /var/log/azazel-edge/ai/decision-explanations.jsonl
 sudo azazel-edge-audit-review --compact --audit-path /var/log/azazel-edge/ai/core-decision-audit.jsonl
 sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- https://127.0.0.1/api/booth-focus | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["available"], d["mode"]["kind"], d["decision"]["action"], d["audit"]["policy_profile"])'
+sudo tail -n 1 /var/log/azazel-edge/ai/decision-explanations.jsonl | python3 -c 'import json, sys; print(json.load(sys.stdin)["trust_capsule"]["signature_state"])'
 ```
 
 | ID | 項目 | コマンド | 期待する結果 | Result | PR / issue |
@@ -332,7 +333,7 @@ sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- h
 | SVC-10 | トークンファイルを使った ntfy の SSE | 上のコマンド | 端末 2 が `200`。端末 1 に `first-run test` を含むイベントが出る | | #475, #485 |
 | SVC-11 | OpenCanary/Suricata の表示 | 上のコマンド | `opencanary`・`suricata`・`ntfy` が `ON`、`container_check` が `not_checked`（Web UI は Docker に問い合わせない） | | #475 |
 | SVC-12 | SNMP/NetFlow（任意） | 上のコマンド（既定では入らない: `ENABLE_SNMP`/`ENABLE_NETFLOW` は `0`、`install_sensors.sh` は `ENABLE_SERVICES=1` のときだけ unit を有効にする） | `User=azazel-sensor`。`ActiveState=inactive`、`Result=success`: モジュールにエントリポイントが無くすぐに終了コード 0 で終わるので、**センサーは動いていない**（5 章） | | #480, #483 |
-| SVC-13 | agent が書く判定の説明 | 上のコマンド（SVC-09 の段階 2 の後） | ファイルが `640 azazel-agent:azazel-web`。監査レビューが `schema:OK` と `chain:OK(…)` を最新の判定の action と一緒に出し、isolate・redirect・throttle なら `release=NOT APPLIED - planned only (dry_run)`（SVC-09 の段階 1 のとおり enforcement は無効。lease の時刻は出ない）と `hash_basis=enforcement_settings` も出す。Booth Focus の行が `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1` | | #477 |
+| SVC-13 | agent が書く判定の説明 | 上のコマンド（SVC-09 の段階 2 の後） | ファイルが `640 azazel-agent:azazel-web`。監査レビューが `schema:OK` と `chain:OK(…)` を最新の判定の action と一緒に出し、isolate・redirect・throttle なら `release=NOT APPLIED - planned only (dry_run)`（SVC-09 の段階 1 のとおり enforcement は無効。lease の時刻は出ない）と `hash_basis=enforcement_settings` も出す。Booth Focus の行が `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1`。最後の行が `signed`（trust capsule が機器の鍵で署名されている。`unsigned` なら `/etc/azazel-edge/trust-capsule.env` が無い。SOCK-06 を見る） | | #477 |
 
 ### 3.2 ソケット・ディレクトリ・秘密の権限（#471 段階 1・2）
 
@@ -343,7 +344,7 @@ sudo stat -c '%a %U:%G %n' /run/azazel-edge /run/azazel-edge/control.sock \
   /var/log/azazel-edge/ai /var/lib/azazel-edge-agent \
   /run/azazel-edge-web /var/lib/azazel-edge-web /var/log/azazel-edge-web /etc/azazel-edge
 sudo stat -c '%a %U:%G %n' /etc/azazel-edge/web_token.txt /etc/azazel-edge/ntfy.token
-sudo stat -c '%a %U:%G %n' /etc/azazel-edge/internal-ap.psk
+sudo stat -c '%a %U:%G %n' /etc/azazel-edge/internal-ap.psk /etc/azazel-edge/trust-capsule.env
 ```
 
 | ID | 項目 | コマンド | 期待する結果 | Result | PR / issue |
@@ -353,7 +354,7 @@ sudo stat -c '%a %U:%G %n' /etc/azazel-edge/internal-ap.psk
 | SOCK-03 | エージェントと Web UI のディレクトリ | 上の 1 つめの `stat` | `/run/azazel-edge-agent` と `/var/log/azazel-edge/ai` が `2750 azazel-agent:azazel-web`、`/var/lib/azazel-edge-agent` が `750 azazel-agent:azazel-agent`、`azazel-edge-web` の 3 つが `750 azazel-web:azazel-web`、新規導入では `/etc/azazel-edge` が `750 root:azazel-web` | | #475, #476 |
 | SOCK-04 | 他のユーザーは制御ソケットに届かない | `<pi-user>` で `ls /run/azazel-edge/` | `Permission denied` | | #475 |
 | SOCK-05 | トークン | 上の 2 つめの `stat` | `640 root:azazel-web`（Mattermost を入れた後は `/etc/azazel-edge/mattermost-command-token` も同じ） | | #475, #485 |
-| SOCK-06 | root だけの秘密 | 上の 3 つめの `stat`。2.8 の後は `/etc/azazel-edge/mattermost-db.env` と `/etc/azazel-edge/mattermost-credentials.env` も | `600 root:root` | | #485, #486 |
+| SOCK-06 | root だけの秘密 | 上の 3 つめの `stat`（内部 AP のパスフレーズと trust capsule の鍵）。2.8 の後は `/etc/azazel-edge/mattermost-db.env` と `/etc/azazel-edge/mattermost-credentials.env` も | `600 root:root` | | #485, #486, #477 |
 | SOCK-07 | ntfy が匿名の読み取りを断る | `curl -s -o /dev/null -w '%{http_code}\n' 'http://127.0.0.1:8081/azg-alert-critical/json?poll=1'` | `401` か `403` | | #485 |
 
 ### 3.3 内部 AP
