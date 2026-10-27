@@ -45,6 +45,48 @@ valid_listen_ipv4() {
   (( BASH_REMATCH[1] >= 1 && BASH_REMATCH[1] <= 223 && BASH_REMATCH[1] != 127 ))
 }
 
+# SNMP targets (Edge#477, #480). There is no default target: a guessed
+# address with the community "public" would query whatever device has that
+# address on the site's network as soon as the poller runs. With
+# ENABLE_SNMP=1, SNMP_TARGETS must be a non-empty JSON list of objects, each
+# with a non-empty "host" and "community" (and, if given, a "port" 1..65535);
+# the old placeholder (host 192.168.1.1 with the community public) is refused.
+# The value is read from stdin, not argv, and the community is never printed.
+check_snmp_targets() {
+  python3 -I -c '
+import json, sys
+PLACEHOLDER = ("192.168.1.1", "public")
+raw = sys.stdin.read()
+def fail(msg):
+    print("ERROR: SNMP_TARGETS " + msg, file=sys.stderr)
+    sys.exit(1)
+if not raw.strip():
+    fail("is not set")
+if chr(39) in raw or "\n" in raw:
+    fail("must be one line without single quotes")
+try:
+    targets = json.loads(raw)
+except ValueError:
+    fail("is not valid JSON")
+if not isinstance(targets, list) or not targets:
+    fail("must be a non-empty JSON list of targets")
+for i, t in enumerate(targets):
+    if not isinstance(t, dict):
+        fail("entry %d is not an object" % i)
+    host = t.get("host")
+    community = t.get("community")
+    if not isinstance(host, str) or not host.strip():
+        fail("entry %d has no host" % i)
+    if not isinstance(community, str) or not community:
+        fail("entry %d (host %s) has no community" % (i, host))
+    if (host.strip(), community) == PLACEHOLDER:
+        fail("entry %d (host %s) is the old placeholder target, not a device of this site" % (i, host))
+    port = t.get("port", 161)
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        fail("entry %d (host %s) has an invalid port" % (i, host))
+'
+}
+
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root: sudo $0"
   exit 1
@@ -62,14 +104,35 @@ if ! valid_listen_ipv4 "${NETFLOW_LISTEN_HOST}"; then
 fi
 echo "[sensors] NETFLOW_LISTEN_HOST=${NETFLOW_LISTEN_HOST}"
 
-cat > "${SENSOR_ENV_FILE}" <<EOF
-# Azazel-Edge sensor configuration
-# Edit this file to configure SNMP targets and NetFlow port
-SNMP_TARGETS='${SNMP_TARGETS:-[{"host":"192.168.1.1","community":"public","port":161}]}'
-SNMP_POLL_INTERVAL_SEC=60
-NETFLOW_LISTEN_HOST=${NETFLOW_LISTEN_HOST}
-NETFLOW_PORT=${NETFLOW_PORT}
-EOF
+# Checked before anything is written or installed: a refused SNMP_TARGETS
+# leaves the device as it was.
+if [[ "${ENABLE_SNMP}" == "1" ]]; then
+  if ! printf '%s' "${SNMP_TARGETS}" | check_snmp_targets; then
+    echo "ERROR: ENABLE_SNMP=1 needs SNMP_TARGETS naming the devices to poll and their community, e.g." >&2
+    echo "  SNMP_TARGETS='[{\"host\":\"<device address>\",\"community\":\"<community>\",\"port\":161}]'" >&2
+    echo "There is no default target. Nothing was changed." >&2
+    if [[ -f "${SENSOR_ENV_FILE}" ]] && grep -q '"192\.168\.1\.1"' "${SENSOR_ENV_FILE}" && grep -q '"public"' "${SENSOR_ENV_FILE}"; then
+      echo "NOTICE: ${SENSOR_ENV_FILE} still holds the placeholder target 192.168.1.1 written by an earlier version;" >&2
+      echo "  run again with SNMP_TARGETS set to replace it (keep ENABLE_SNMP=0 until then)." >&2
+    fi
+    exit 1
+  fi
+fi
+
+# SNMP_TARGETS is written only when given; otherwise the unit's default
+# (Environment="SNMP_TARGETS=[]", no target) applies.
+{
+  echo "# Azazel-Edge sensor configuration"
+  echo "# Edit this file to configure SNMP targets and NetFlow port"
+  if [[ -n "${SNMP_TARGETS}" ]]; then
+    echo "SNMP_TARGETS='${SNMP_TARGETS}'"
+  else
+    echo "# SNMP_TARGETS='[{\"host\":\"<device address>\",\"community\":\"<community>\",\"port\":161}]'"
+  fi
+  echo "SNMP_POLL_INTERVAL_SEC=60"
+  echo "NETFLOW_LISTEN_HOST=${NETFLOW_LISTEN_HOST}"
+  echo "NETFLOW_PORT=${NETFLOW_PORT}"
+} > "${SENSOR_ENV_FILE}"
 chmod 0644 "${SENSOR_ENV_FILE}"
 
 if [[ "${ENABLE_SNMP}" == "1" || "${ENABLE_NETFLOW}" == "1" ]]; then
@@ -84,11 +147,7 @@ if [[ "${ENABLE_SNMP}" == "1" ]]; then
   apt-get update -y
   apt-get install -y --no-install-recommends snmp
   echo "[sensors] SNMP tools installed"
-  if [[ -n "${SNMP_TARGETS}" ]]; then
-    echo "[sensors] SNMP targets provided via SNMP_TARGETS"
-  else
-    echo "[sensors] SNMP targets not set (set SNMP_TARGETS JSON when enabling poller runtime)"
-  fi
+  echo "[sensors] SNMP targets provided via SNMP_TARGETS"
   install -m 0644 "${REPO_ROOT}/systemd/azazel-edge-snmp-poller.service" /etc/systemd/system/azazel-edge-snmp-poller.service
   systemctl daemon-reload
   if [[ "${ENABLE_SERVICES}" == "1" ]]; then

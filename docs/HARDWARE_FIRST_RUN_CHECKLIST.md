@@ -285,10 +285,11 @@ sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- h
 ```
 
 SVC-12 is optional and changes the device: `install_sensors.sh` overwrites
-`/etc/default/azazel-edge-sensors` (without `SNMP_TARGETS` it writes a
-placeholder SNMP target with the community `public`; SNMP itself stays off
-with `ENABLE_SNMP=0`) and leaves the NetFlow unit enabled. Undo it afterwards
-with `sudo systemctl disable --now azazel-edge-netflow-receiver`.
+`/etc/default/azazel-edge-sensors` (without `SNMP_TARGETS` it writes no SNMP
+target, and SNMP stays off with `ENABLE_SNMP=0`; `ENABLE_SNMP=1` without
+`SNMP_TARGETS` naming real targets stops without changing anything) and
+leaves the NetFlow unit enabled. Undo it afterwards with
+`sudo systemctl disable --now azazel-edge-netflow-receiver`.
 
 ```bash
 # SVC-12 (optional): the NetFlow sensor unit

@@ -361,8 +361,8 @@ Stays root until stage 3.
 | --- | --- | --- | --- |
 | `azazel-edge-epd-refresh` (+ timer, 30 s) | root | EPD over SPI/GPIO (`/dev/spidev*`, GPIO) via the Waveshare driver: group:spi + group:gpio, or root | reads `/run/azazel-edge/epd_state.json`, runs `iwgetid` and `azazel_edge_epd.py`, writes `epd_last_render.json` |
 | `azazel-edge-selftest` (+ quarterly timer) | root | `systemctl is-active`, `sha256sum --check /etc/azazel-edge/.config_checksums`, `du` | writes `/var/log/azazel-edge/selftest_latest.json`; `dd` as root (`oflag=direct conv=nocreat`) to a new `mktemp` name in `/var/lib/azazel-edge/selftest` (0700, on the root file system, i.e. the SD card), removed on exit; when that directory is on tmpfs, ramfs, overlayfs or a file system `stat -f` cannot name, the write test is skipped with the warning `sd_write_test_skipped:not_on_sd:<type>` (warnings do not fail the selftest). Before: a fixed `/tmp/azazel_sdtest` (before #477), then a `mktemp` name in `/tmp`, a tmpfs on trixie; runs pytest from `/opt/azazel-edge/tests`, which the installer does not install |
-| `azazel-edge-netflow-receiver` | `User=azazel-sensor` (since #477; `User=azazel` before, which no installer created and which is the login account on many devices) | UDP 2055 (none) | `install_sensors.sh` creates the `azazel-sensor` system account (`setup_sensor_account.sh`: no login, no home; the account `azazel` is not touched). In-memory evidence only: no file is written, so no path changes owner; `ExecStart` uses `${VAR:-default}`, which systemd does not expand (uncertain how it behaves on a device) |
-| `azazel-edge-snmp-poller` | `User=azazel-sensor` (since #477) | none | same two points; `/etc/default/azazel-edge-sensors` (0644) holds SNMP community strings |
+| `azazel-edge-netflow-receiver` | `User=azazel-sensor` (since #477; `User=azazel` before, which no installer created and which is the login account on many devices) | UDP 2055 (none) | `install_sensors.sh` creates the `azazel-sensor` system account (`setup_sensor_account.sh`: no login, no home; the account `azazel` is not touched). In-memory evidence only: no file is written, so no path changes owner. `ExecStart` uses `${VAR}`, with the defaults in `Environment=` and `/etc/default/azazel-edge-sensors` (`EnvironmentFile=-`, read after them) changing them; it used `${VAR:-default}` before, which systemd does not expand |
+| `azazel-edge-snmp-poller` | `User=azazel-sensor` (since #477) | none | same two points; `/etc/default/azazel-edge-sensors` (0644) holds SNMP community strings. No default target: `install_sensors.sh` with `ENABLE_SNMP=1` stops without changing anything unless `SNMP_TARGETS` names targets with a community (the old placeholder 192.168.1.1 / `public` is refused), and the poller refuses a target with an empty community instead of using `public` |
 | `azazel-edge-opencanary` | root | docker compose (root-equivalent), host network; HTTP 18080, SSH 12222 | logs to `/var/log/azazel-edge/opencanary`. The core's redirect default is port 2222, not 12222 (not a privilege issue). |
 | `azazel-edge-suricata` | root | raw capture on `${SURICATA_IFACE:-br0}` (cap:NET_RAW + NET_ADMIN), `Nice=-5`, realtime IO class | writes `/var/log/suricata/eve.json` |
 | `azazel-edge-vector` | root | none intrinsic | reads eve.json and OpenCanary logs, writes `/var/log/azazel-edge/vector/*.jsonl` |
@@ -1112,7 +1112,8 @@ out-of-scope findings tracked separately. Still open:
      have run) and is not handed on; a daemon refusal is returned as it is);
    - the netflow and snmp units used `User=azazel`, which no installer
      created (since #477 they run as the dedicated `azazel-sensor`, created
-     by `install_sensors.sh`), and `${VAR:-default}` in `ExecStart`;
+     by `install_sensors.sh`), and `${VAR:-default}` in `ExecStart` (now
+     `${VAR}` with `Environment=` defaults);
    - selftest's fixed `/tmp` file written by `dd` as root (fixed by #477),
      and its pytest step against a directory that is not installed;
    - the core's apply path inherited `PATH`/environment while the release

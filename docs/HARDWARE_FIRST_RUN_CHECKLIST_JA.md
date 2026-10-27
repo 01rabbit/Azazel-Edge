@@ -282,8 +282,9 @@ sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- h
 
 SVC-12 は任意で、機器を変えます: `install_sensors.sh` は
 `/etc/default/azazel-edge-sensors` を上書きし（`SNMP_TARGETS` が無いと
-community `public` の仮の SNMP の対象を書く。`ENABLE_SNMP=0` なので SNMP
-自体は動かない）、NetFlow の unit を有効のまま残します。終わったら
+SNMP の対象は書かない。`ENABLE_SNMP=0` なので SNMP 自体は動かない。
+`ENABLE_SNMP=1` で `SNMP_TARGETS` に実際の対象が無いと、何も変えずに
+止まる）、NetFlow の unit を有効のまま残します。終わったら
 `sudo systemctl disable --now azazel-edge-netflow-receiver` で戻します。
 
 ```bash

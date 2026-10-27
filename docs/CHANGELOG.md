@@ -36,6 +36,15 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- No default SNMP target (Edge#477, #480): `install_sensors.sh` no longer
+  writes the placeholder target 192.168.1.1 with the community `public` to
+  `/etc/default/azazel-edge-sensors`. With `ENABLE_SNMP=1` it stops without
+  changing anything unless `SNMP_TARGETS` is a non-empty JSON list of
+  targets, each with a host and a community (the old placeholder is refused;
+  the community is not printed); without `ENABLE_SNMP=1` it writes no SNMP
+  target unless `SNMP_TARGETS` is given. The SNMP poller refuses a target
+  with an empty community instead of sending `public`. A device that still
+  has the placeholder in that file is pointed at it when SNMP is enabled.
 - External exposure found by the audit before the device run (Edge#477):
   - **Action required on a device installed by an earlier version:** if the
     Mattermost admin account still has the former fixed password,
