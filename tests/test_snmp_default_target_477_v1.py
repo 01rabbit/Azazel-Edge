@@ -25,6 +25,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SENSORS = ROOT / "installer" / "internal" / "install_sensors.sh"
 SNMP_UNIT = ROOT / "systemd" / "azazel-edge-snmp-poller.service"
+NETFLOW_UNIT = ROOT / "systemd" / "azazel-edge-netflow-receiver.service"
+PROVISION = ROOT / "installer" / "internal" / "provision_mattermost_workspace.sh"
 
 sys.path.insert(0, str(ROOT / "py"))
 
@@ -68,6 +70,28 @@ def _run(tmp_path: Path, script: Path, **env: str) -> subprocess.CompletedProces
     full = {"PATH": f"{tmp_path / 'bin'}:{python_dir}:/usr/bin:/bin", "NETFLOW_LISTEN_HOST": "172.16.0.254"}
     full.update(env)
     return subprocess.run(["bash", str(script)], capture_output=True, text=True, env=full)
+
+
+def _gnu_mv() -> bool:
+    return subprocess.run(["mv", "--version"], capture_output=True).returncode == 0
+
+
+# write_private_file uses mv -T (GNU coreutils, as on the device).
+needs_gnu_mv = pytest.mark.skipif(not _gnu_mv(), reason="mv -T is GNU coreutils (Debian); run in Linux")
+
+
+def _func(path: Path, name: str) -> str:
+    m = re.search(r"^" + name + r"\(\) \{\n.*?^\}\n", path.read_text(encoding="utf-8"), re.S | re.M)
+    assert m, name
+    return m.group(0)
+
+
+def _private(path: Path) -> None:
+    st = path.stat()
+    assert stat.S_IMODE(st.st_mode) == 0o600
+    assert (st.st_uid, st.st_gid) == (os.getuid(), os.getgid())  # root:root when run as root
+    assert not path.is_symlink()
+    assert [p.name for p in path.parent.iterdir() if p.name.startswith("." + path.name)] == []
 
 
 def _calls(log: Path) -> str:
@@ -122,32 +146,37 @@ def test_an_existing_placeholder_file_is_left_as_it_is_and_pointed_at(tmp_path):
     assert res.returncode != 0 and "placeholder" not in res.stderr
 
 
+@needs_gnu_mv
 def test_real_targets_are_written_and_snmp_is_installed(tmp_path):
     script, env_file, log = _installer(tmp_path)
     env_file.write_text(OLD_FILE, encoding="utf-8")
+    env_file.chmod(0o644)  # as an earlier version left it
     res = _run(tmp_path, script, ENABLE_SNMP="1", SNMP_TARGETS=VALID)
     assert res.returncode == 0, res.stdout + res.stderr
     text = env_file.read_text(encoding="utf-8")
     assert re.findall(r"^SNMP_TARGETS=.*$", text, re.M) == [f"SNMP_TARGETS='{VALID}'"]
     assert "192.168.1.1" not in text and "public" not in text
-    assert stat.S_IMODE(env_file.stat().st_mode) == 0o644
+    _private(env_file)
     calls = _calls(log)
     assert "setup_sensor_account" in calls and "apt-get install" in calls
     assert "azazel-edge-snmp-poller.service" in calls
     assert SECRET not in res.stdout + res.stderr
 
 
+@needs_gnu_mv
 @pytest.mark.parametrize("existing", [None, OLD_FILE])
 def test_without_snmp_no_target_is_written(tmp_path, existing):
     script, env_file, log = _installer(tmp_path)
     if existing is not None:
         env_file.write_text(existing, encoding="utf-8")
+        env_file.chmod(0o644)
     res = _run(tmp_path, script, ENABLE_NETFLOW="1")
     assert res.returncode == 0, res.stdout + res.stderr
     text = env_file.read_text(encoding="utf-8")
     assert not re.search(r"^SNMP_TARGETS=", text, re.M)
     assert "192.168.1.1" not in text and "public" not in text
     assert "NETFLOW_LISTEN_HOST=172.16.0.254\n" in text
+    _private(env_file)
     calls = _calls(log)
     assert "apt-get" not in calls and "snmp-poller" not in calls
     # Nothing enabled at all: the file is written as before, without a target.
@@ -155,16 +184,63 @@ def test_without_snmp_no_target_is_written(tmp_path, existing):
     res = _run(tmp_path / "off", script2)
     assert res.returncode == 0
     assert not re.search(r"^SNMP_TARGETS=", env_file2.read_text(encoding="utf-8"), re.M)
+    _private(env_file2)
     assert _calls(log2) == ""
 
 
 def test_the_unit_default_is_no_target_and_no_placeholder_is_written():
     assert 'Environment="SNMP_TARGETS=[]"' in SNMP_UNIT.read_text(encoding="utf-8")
     src = SENSORS.read_text(encoding="utf-8")
-    write = src[src.index("# SNMP_TARGETS is written only when given"):src.index('} > "${SENSOR_ENV_FILE}"')]
+    write = src[src.index("# SNMP_TARGETS is written only when given"):src.index('} | write_private_file "${SENSOR_ENV_FILE}"')]
     assert "192.168.1.1" not in write and "public" not in write
-    assert src.index("check_snmp_targets; then") < src.index('} > "${SENSOR_ENV_FILE}"')
+    assert src.index("check_snmp_targets; then") < src.index('} | write_private_file "${SENSOR_ENV_FILE}"')
     assert src.index("check_snmp_targets; then") < src.index("setup_sensor_account.sh\"")
+
+
+@needs_gnu_mv
+def test_the_env_file_is_0600_from_its_creation_under_umask_022(tmp_path):
+    # With chmod stubbed out only a file that is 0600 from creation ends 0600.
+    script, env_file, _log = _installer(tmp_path)
+    src = script.read_text(encoding="utf-8")
+    script.write_text(src.replace("set -euo pipefail\n", "set -euo pipefail\numask 022\nchmod() { :; }\n", 1),
+                      encoding="utf-8")
+    res = _run(tmp_path, script, ENABLE_SNMP="1", SNMP_TARGETS=VALID)
+    assert res.returncode == 0, res.stdout + res.stderr
+    _private(env_file)
+
+
+@needs_gnu_mv
+def test_a_symlink_at_the_env_path_is_replaced_not_followed(tmp_path):
+    script, env_file, _log = _installer(tmp_path)
+    victim = tmp_path / "victim"
+    victim.write_text("victim\n", encoding="utf-8")
+    env_file.symlink_to(victim)
+    res = _run(tmp_path, script, ENABLE_SNMP="1", SNMP_TARGETS=VALID)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert victim.read_text(encoding="utf-8") == "victim\n"
+    _private(env_file)
+    assert SECRET in env_file.read_text(encoding="utf-8")
+
+
+def test_the_env_file_is_written_by_the_shared_private_writer():
+    src = SENSORS.read_text(encoding="utf-8")
+    assert _func(SENSORS, "write_private_file") == _func(PROVISION, "write_private_file")
+    assert '} | write_private_file "${SENSOR_ENV_FILE}"\n' in src
+    # The only write to the file is the private writer; nothing widens it.
+    assert not re.search(r'(>|chmod [0-7]+|chown \S+) "\$\{SENSOR_ENV_FILE\}"', src)
+
+
+def test_only_systemd_reads_the_env_file():
+    # The units read it through EnvironmentFile= (systemd, as root); no unit
+    # step and no sensor code opens it as User=azazel-sensor.
+    for unit in (SNMP_UNIT, NETFLOW_UNIT):
+        text = unit.read_text(encoding="utf-8")
+        assert "User=azazel-sensor" in text
+        lines = [ln for ln in text.splitlines() if "azazel-edge-sensors" in ln and not ln.startswith("#")]
+        assert lines == ["EnvironmentFile=-/etc/default/azazel-edge-sensors"]
+        assert not re.search(r"^ExecStart(Pre|Post)?=.*/etc/default", text, re.M)
+    for py in (ROOT / "py" / "azazel_edge" / "sensors").glob("*.py"):
+        assert "/etc/default" not in py.read_text(encoding="utf-8"), py
 
 
 # ----------------------------------------------------------------- the poller

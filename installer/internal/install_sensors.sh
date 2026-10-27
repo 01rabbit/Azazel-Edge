@@ -87,6 +87,22 @@ for i, t in enumerate(targets):
 '
 }
 
+# Same as provision_mattermost_workspace.sh's write_private_file (Edge#477).
+# Write stdin to $1 as a 0600 file from its first byte: the content goes to
+# a new mktemp file (0600, O_EXCL) beside $1, which is then renamed over $1
+# (mv -T: never into a directory a symlink at $1 points to).
+# No window with the default umask, an existing file's wider mode is not
+# kept, and a symlink at $1 is replaced, not followed.
+write_private_file() {
+  local dst="$1" tmp
+  tmp="$(umask 077 && mktemp "$(dirname -- "${dst}")/.$(basename -- "${dst}").XXXXXX")"
+  if ! cat >"${tmp}" || ! chmod 0600 "${tmp}" || ! mv -fT -- "${tmp}" "${dst}"; then
+    rm -f -- "${tmp}"
+    echo "[ERROR] could not write ${dst}" >&2
+    return 1
+  fi
+}
+
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root: sudo $0"
   exit 1
@@ -120,7 +136,11 @@ if [[ "${ENABLE_SNMP}" == "1" ]]; then
 fi
 
 # SNMP_TARGETS is written only when given; otherwise the unit's default
-# (Environment="SNMP_TARGETS=[]", no target) applies.
+# (Environment="SNMP_TARGETS=[]", no target) applies. The file holds SNMP
+# communities, which are secrets: it is written 0600 (root:root, as this
+# script runs as root), and a file left 0644 by an earlier version is
+# replaced by a 0600 one. systemd reads it as root (EnvironmentFile=); the
+# sensors (User=azazel-sensor) do not open it.
 {
   echo "# Azazel-Edge sensor configuration"
   echo "# Edit this file to configure SNMP targets and NetFlow port"
@@ -132,8 +152,7 @@ fi
   echo "SNMP_POLL_INTERVAL_SEC=60"
   echo "NETFLOW_LISTEN_HOST=${NETFLOW_LISTEN_HOST}"
   echo "NETFLOW_PORT=${NETFLOW_PORT}"
-} > "${SENSOR_ENV_FILE}"
-chmod 0644 "${SENSOR_ENV_FILE}"
+} | write_private_file "${SENSOR_ENV_FILE}"
 
 if [[ "${ENABLE_SNMP}" == "1" || "${ENABLE_NETFLOW}" == "1" ]]; then
   # Both units run as User=azazel-sensor / Group=azazel-sensor (Edge#477):

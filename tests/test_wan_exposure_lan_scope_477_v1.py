@@ -422,7 +422,7 @@ def test_install_sensors_resolves_and_checks_the_listen_host(tmp_path, value, rc
     src = _read(SENSORS)
     m = re.search(r'^\[\[ -n "\$\{NETFLOW_LISTEN_HOST\}" \]\] \|\| .*?^fi\n', src, re.S | re.M)
     assert m
-    assert src.index(m.group(0)) < src.index('} > "${SENSOR_ENV_FILE}"')
+    assert src.index(m.group(0)) < src.index('} | write_private_file "${SENSOR_ENV_FILE}"')
     script = ('LAN_IF="br0"\n' + re.search(r'^LAN_ADDR_DEFAULT=.*\n', src, re.M).group(0)
               + _func(src, "lan_ipv4") + _func(src, "valid_listen_ipv4")
               + f"NETFLOW_LISTEN_HOST={value!r}\n" + m.group(0) + 'echo "=$NETFLOW_LISTEN_HOST"\n')

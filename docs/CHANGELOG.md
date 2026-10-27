@@ -45,6 +45,9 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   target unless `SNMP_TARGETS` is given. The SNMP poller refuses a target
   with an empty community instead of sending `public`. A device that still
   has the placeholder in that file is pointed at it when SNMP is enabled.
+  That file holds the communities and is now written 0600 root:root
+  (a new file renamed over it, so a 0644 file of an earlier version is
+  replaced; was 0644); systemd reads it as root through `EnvironmentFile=`.
 - External exposure found by the audit before the device run (Edge#477):
   - **Action required on a device installed by an earlier version:** if the
     Mattermost admin account still has the former fixed password,
