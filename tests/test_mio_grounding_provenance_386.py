@@ -116,7 +116,8 @@ def test_every_score_component_names_its_basis_and_sums_to_score():
 @pytest.mark.parametrize(
     "gap,remaining,code,basis",
     [
-        (_gap("g7", "isolate_client", ["h1"]), 3, "capability_not_allowed_by_playbook", ["capability:isolate_client"]),
+        # isolate_client is not in SCORE_KW's registry, so it is not named (#386 NIT)
+        (_gap("g7", "isolate_client", ["h1"]), 3, "capability_not_allowed_by_playbook", ["capability:unregistered-capability"]),
         (_gap("g7", "query_flow_summary", ["h3", "h9"]), 3, "cannot_change_hypothesis_state", ["gap:g7", "hypothesis:h3", "hypothesis:h9"]),
         (_gap("g7", "query_flow_summary", ["h1"]), 0, "cycle_broker_budget_exhausted", ["budget:remaining_broker_calls=0"]),
         (_gap("g7", "request_trace", ["h2"]), 3, "insufficient_expected_value", ["gap:g7", "structural_score:35", "min_eligible_score:40"]),
@@ -307,7 +308,9 @@ def test_generic_fallback_cannot_reach_capabilities_outside_its_allowlist(cap):
     (prov,) = _events(outcome, "reasoning_provenance")
     assert prov.payload["generic_fallback"] is True
     assert outcome.state is ReasoningState.VALIDATION_REJECTED
-    assert f"capability_not_allowed_by_playbook:{cap}" in outcome.errors
+    # Echoed only when the broker registry knows the name (#386 NIT).
+    shown = cap if cap == "lookup_behavior_pattern" else "unregistered-capability"
+    assert f"capability_not_allowed_by_playbook:{shown}" in outcome.errors
     assert calls == []  # the whole gap set is refused before the broker
 
 

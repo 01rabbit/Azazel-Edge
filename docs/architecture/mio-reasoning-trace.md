@@ -343,7 +343,7 @@ The no-model handoff (`mio.no_model_handoff.v2`, #385) no longer masks free
 text: it copies none. See [mio-reasoning-lifecycle.md](mio-reasoning-lifecycle.md)
 for its allowlisted fields. Its IDs (`trace_id`, `frame_id`, hypothesis IDs,
 evidence refs) are kept only if they fully match a closed shape the repo
-produces (`CLOSED_ID_SHAPES` in `handoff.py`), which is stricter than
+produces (`HANDOFF_ID_KINDS` in `handoff.py`, over the shared `id_grammar.ID_KINDS`), which is stricter than
 `ID_GRAMMAR`: no dots, no free words, no hex/decimal address forms. Otherwise a
 fixed placeholder (`hypothesis-<n>`, `invalid-trace-id`,
 `[redacted:evidence_ref]`, ...) is used. The playbook ID is kept only when it

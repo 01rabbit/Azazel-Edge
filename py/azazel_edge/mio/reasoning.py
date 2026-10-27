@@ -15,7 +15,7 @@ from .contracts import (
     ReasoningState,
 )
 from .evidence_gap_scoring import SCORING_POLICY_VERSION, score_evidence_gaps, scoring_policy_digest
-from .grounding import GroundingValidator
+from .grounding import GroundingValidator, capability_label
 from .handoff import NoModelHandoff, build_no_model_handoff
 from .lifecycle import (
     REASON_CYCLE_CANCELLED,
@@ -213,6 +213,7 @@ class BoundedReasoningLoop:
             gaps,
             hypotheses=hypotheses,
             allowed_capabilities=playbook.allowed_capabilities,
+            registered_capabilities=self.broker.names(),
         )
         if not gap_check.ok:
             errors.extend(gap_check.errors)
@@ -239,7 +240,7 @@ class BoundedReasoningLoop:
                 errors.append("broker_budget_exhausted")
                 break
             if gap.capability not in playbook.allowed_capabilities:
-                errors.append(f"capability_not_allowed_by_playbook:{gap.capability}")
+                errors.append(f"capability_not_allowed_by_playbook:{capability_label(gap.capability, self.broker.names())}")
                 continue
             request = MioCapabilityRequest(
                 request_id=f"{cycle_id}:req:{index + 1}",

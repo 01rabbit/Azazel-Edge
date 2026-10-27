@@ -463,8 +463,11 @@ def test_frame_types_carry_no_approval_or_authority_field(cls):
 def test_frame_modules_read_no_environment_and_import_no_authority():
     import ast
 
-    allowed = {"__future__", "collections", "dataclasses", "datetime", "enum", "hashlib", "ipaddress", "json", "re", "typing", "contracts"}
-    for name in ("contracts.py", "frame_builder.py"):
+    # contracts imports the shared id grammar, which imports the redaction
+    # token rules; both are held to the same rule.
+    allowed = {"__future__", "collections", "dataclasses", "datetime", "enum", "hashlib", "ipaddress", "json", "re", "typing", "unicodedata",
+               "contracts", "id_grammar", "redaction"}
+    for name in ("contracts.py", "frame_builder.py", "id_grammar.py", "redaction.py"):
         source = (ROOT / "py" / "azazel_edge" / "mio" / name).read_text(encoding="utf-8")
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Import):

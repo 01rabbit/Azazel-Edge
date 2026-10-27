@@ -13,12 +13,15 @@ from .contracts import (
     MioSituationFrame,
     safe_model_id,
 )
+from .id_grammar import UNREGISTERED_CAPABILITY, capability_label  # noqa: F401
 
 
 # Model-written keys echoed into error paths must look like schema keys.
 _KEY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}\Z")
 FORBIDDEN_DIRECTIVE_KEYS = {"execute", "must_action", "override", "command", "shell", "activate", "enforce", "executable"}
 ALLOWED_RECOMMENDED_ACTIONS = {"OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
+# Errors name a capability only when the broker registry knows it
+# (id_grammar.capability_label); otherwise UNREGISTERED_CAPABILITY.
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,7 @@ class GroundingValidator:
         *,
         hypotheses: Sequence[MioHypothesis],
         allowed_capabilities: Sequence[str],
+        registered_capabilities: Sequence[str] = (),
     ) -> GroundingResult:
         errors: list[str] = []
         hypothesis_ids = {item.hypothesis_id for item in hypotheses}
@@ -119,7 +123,7 @@ class GroundingValidator:
             if not gap.capability:
                 errors.append(f"empty_gap_capability:{gap.gap_id}")
             elif gap.capability not in allowed:
-                errors.append(f"capability_not_allowed_by_playbook:{gap.capability}")
+                errors.append(f"capability_not_allowed_by_playbook:{capability_label(gap.capability, registered_capabilities)}")
             for hypothesis_id in gap.discriminates_hypothesis_ids:
                 if hypothesis_id not in hypothesis_ids:
                     errors.append(f"unknown_gap_hypothesis:{gap.gap_id}:{hypothesis_id}")

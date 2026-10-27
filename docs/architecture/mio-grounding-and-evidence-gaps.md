@@ -87,9 +87,10 @@ operator can read exactly why a gap ranked where it did.
 Each component is also traceable to the named missing evidence it rests on. The gap
 itself is the named missing evidence (`gap:<gap_id>`); every rule and every
 ineligibility code carries a sorted `basis` of identifiers, never model prose (the gap
-`question` is not copied into the trace). Every id in `gap_id`, `capability`, `targets`
-and `basis` has passed the model-id grammar below; anything else is shown as
-`invalid-model-id`. The basis does not change the score, the
+`question` is not copied into the trace). Every id in `gap_id`, `targets` and `basis` has
+passed the model-id grammar below; anything else is shown as `invalid-model-id`. A
+capability (`capability`, `capability:<name>`) is shown only when it is registered in the
+broker, otherwise as `unregistered-capability`. The basis does not change the score, the
 policy version or `scoring_policy_digest()`.
 
 | Rule / code | `basis` |
@@ -202,11 +203,14 @@ evidence ref the model cites (supporting, contradicting, recommendation) are wri
 the model, so they are attacker-reachable. Each field has an exact-match **allowlist**
 (`contracts.MODEL_ID_GRAMMAR`, checked by `model_id_ok(value, kind)`), built from the
 shapes the repo actually produces. It is not a denylist: a shape not listed is refused.
+`MODEL_ID_GRAMMAR` only selects kinds; every kind is defined once in
+`py/azazel_edge/mio/id_grammar.py` (`ID_KINDS`), shared with the no-model handoff and
+the broker audit (see "One id grammar" below).
 
 | Field (`kind`) | Accepted shapes | Producer |
 |---|---|---|
 | `evidence_ref` | `sha256:<64 lowercase hex>` | Evidence Plane event ids (`make_event_id`), carried into frames |
-| | `ev:<kind>:<1-6 digits>`, kind one of `EVIDENCE_REF_KINDS` | structured refs |
+| | `ev:<kind>:<1-6 digits>`, kind one of `EVIDENCE_REF_KINDS` (`alert`, `auth`, `dns`, `flow`, `http`, `ssh`, `tls`) | structured refs |
 | | `suricata_sid:<1-8 digits>` | Suricata adapter |
 | | `kn:attack:T<4 digits>[.<3 digits>]` | ATT&CK knowledge refs |
 | | `sha256:fixture-<word>[-<word>]-<1-3 digits>` | offline replay fixtures |
@@ -214,9 +218,11 @@ shapes the repo actually produces. It is not a denylist: a shape not listed is r
 | `gap_id` | `g<1-3 digits>` | the prompt schema (`g1`) and `TRUSTED_RULES` |
 | `capability` | broker name grammar `[a-z][a-z0-9_]{2,63}` | broker registry; registration is checked at scoring time |
 
-As a second layer, a value must also pass the SituationFrame `_opaque_id` address
-checks and contain no secret word (`password`, `token`, `api_key`, `secret`, `bearer`
-…). Integers and other non-string values are refused, never stringified. The prompt
+As a second layer (`id_grammar.second_layer_ok`), a value must also pass the
+SituationFrame opaque-ID address checks (`id_grammar.opaque_id`), contain no secret word
+(`password`, `token`, `api_key`, `secret`, `bearer` …) and no M.I.O. redaction token
+shape (API key prefixes, bearer, JWT, e-mail, long token). This applies to capability
+names too. Integers and other non-string values are refused, never stringified. The prompt
 template (version 1.1.0) tells the model the `h<n>` / `g<n>` format explicitly.
 
 When the model output is parsed (`MioHypothesis.from_mapping`,
@@ -239,12 +245,55 @@ defence in depth, the gap-score explanation and the claim audit run every id thr
 put raw text into them. A ref that fails the grammar is recorded as `invalid-model-id`
 with origin `not_in_frame`, even if the frame happens to carry it. The grammar is
 deliberately closed and fails closed: a harmless id in a shape not listed is rejected
-rather than guessed at; add the shape to `MODEL_ID_GRAMMAR` when a new producer appears.
+rather than guessed at; add the shape to `id_grammar.ID_KINDS` (and select it in
+`MODEL_ID_GRAMMAR`) when a new producer appears.
 The frame's own refs come from deterministic evaluators and are not re-checked here.
 
-Consolidation note: `handoff.py` (`CLOSED_ID_SHAPES`, #508) and `broker.py`
-(`AUDIT_ID_VOCABULARY`, #507) currently keep their own id grammars. The three are to be
-consolidated into `contracts.MODEL_ID_GRAMMAR` in a follow-up after the three PRs merge.
+A gap whose capability passes the name grammar but is not in the playbook's
+`allowed_capabilities` is rejected with `capability_not_allowed_by_playbook:<name>` only
+when `<name>` is in the broker registry; any other name is reported as
+`capability_not_allowed_by_playbook:unregistered-capability`, so a model-chosen word (a
+person's name, say) is not echoed into the errors. The gap score follows the same rule:
+its `capability` and every `capability:<name>` in `basis` / `ineligible_basis` (and so the
+trace's `evidence_gap_scores` event) show the name only when it is registered, otherwise
+`unregistered-capability`.
+
+### One id grammar
+
+The model output parser (#386), the no-model handoff (#385) and the broker audit
+projection (#384) share one grammar, `py/azazel_edge/mio/id_grammar.py`. Each kind is
+defined there once (`ID_KINDS`: `event_id`, `structured_ref`, `suricata_ref`,
+`knowledge_ref`, `fixture_ref`, `hypothesis_id`, `gap_id`, `trace_id`, `frame_id`,
+`cycle_request_id`, `capability`), and so is the second layer. Each surface only selects
+which kinds a field accepts and keeps its own policy for a value that does not match:
+
+| Surface | Field kinds | Non-matching value |
+|---|---|---|
+| model output (`contracts.MODEL_ID_GRAMMAR`) | evidence ref: `event_id`, `structured_ref`, `suricata_ref`, `knowledge_ref`, `fixture_ref`; `hypothesis_id`; `gap_id`; `capability` | `invalid-model-id`, cycle rejected |
+| no-model handoff (`handoff.HANDOFF_ID_KINDS`) | `trace_id`; `frame_id`; evidence ref: `event_id`, `structured_ref`, `suricata_ref`; `hypothesis_id` | fixed placeholder |
+| broker audit (`id_grammar.AUDIT_ID_KINDS`) | `event_id`, `cycle_request_id` | keyed digest `h:<digest>` |
+
+The surfaces still accept different sets: the handoff and the audit never accepted the
+model-only `kn:attack:` / `sha256:fixture-` refs, and the audit's cycle / request id
+grammar (vocabulary words and short ordinals) also covers refs such as `ev:noc:0001`.
+Making them one set would widen the handoff or the audit, or drop refs the model parser
+is tested to accept, so that is left to a later decision.
+
+Merging the grammars narrowed what is accepted, never widened it
+(`tests/test_mio_id_grammar_consolidation.py` compares the old and new functions over
+the fixture ids and the review corpus):
+
+- model output: `ev:` refs of kind `deception`, `host`, `noc`, `soc`, `sys` (the handoff
+  never accepted them), so canonical fixtures that contain `ev:noc|soc|sys|host|deception:`
+  refs are rejected when a model cites them (production refs are `sha256:` event ids and
+  `suricata_sid:`); values with a redaction token shape; capability names with an
+  address shape (`aa_bb_cc_dd_ee_ff`) or of 32 or more characters (long-token rule; the
+  registered names are much shorter).
+- no-model handoff: `ev:` refs of kind `anomaly`, `dhcp`, `drop`, `ftp`, `netflow`, `smb`,
+  `smtp` (the model parser never accepted them) and `ev:<kind>` without an ordinal; and
+  the second layer now applies, so for example a trace id of 32 or more characters
+  without a `:` (long-token rule) becomes the placeholder.
+- broker audit: ids containing a secret word.
 
 ## Structural grounding (`GroundingValidator`)
 
