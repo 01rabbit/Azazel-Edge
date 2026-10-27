@@ -150,7 +150,10 @@ Availability of Knowledge and AZ-06 is fail-open for Edge: a timeout, an
 outage or a rejected response is "no advisory" and never blocks or changes a
 decision (`engagement_advisory_client.py`, `deception_effectiveness_client.py`).
 In the SituationFrame, `knowledge_status` and `deception_status` record their
-state; v1 carries no deception content
+state. Since `mio.situation_frame.v2` the frame can carry AZ-06 facts
+(`deception_context`: IDs, lifecycle state, observation refs) and the actions
+Edge already selected (`actions`, from Edge's decision audit) as data for
+reasoning; neither is an input to any decision
 ([mio-situation-frame.md](mio-situation-frame.md)).
 
 ## 5. Degradation ladder
@@ -194,7 +197,7 @@ moved to Azazel-Nexus#5 (#408). Edge implements only the rungs above.
 
 | Contract | Owner | Location |
 | --- | --- | --- |
-| SituationFrame `mio.situation_frame.v1` | Edge-local (#361, #383) | `py/azazel_edge/mio/contracts.py` |
+| SituationFrame `mio.situation_frame.v2` (reads v1) | Edge-local (#361, #383) | `py/azazel_edge/mio/contracts.py` |
 | Hypothesis, evidence gap, capability request and result, recommendation, reasoning states | Edge-local | `py/azazel_edge/mio/contracts.py`, `broker.py` |
 | No-model handoff `mio.no_model_handoff.v1`, trace audit `mio.trace_audit.v1` | Edge-local | `py/azazel_edge/mio/handoff.py`, `trace_audit.py` |
 | Agent advisory and snapshot fields | Edge-local | `py/azazel_edge_ai/agent.py` |
@@ -231,7 +234,7 @@ A change to an Edge-local M.I.O. schema bumps its version in the same change
 | Live wiring of `ReasoningCoordinator`, `TraceAuditSink` and its key management | #385, #389 |
 | Real read-only broker adapters, per-capability data minimization, cancelling handlers of stale cycles, RBAC tests | #384 |
 | Claim classes from #366 Part B (per-ref freshness, arbiter contradiction, Knowledge-as-decision, AZ-06 belief, attribution wording); structured playbook selection; `select_playbook` in a runtime | #386 |
-| SituationFrame actor/entity, actions, deception context | #383 (via #362) |
+| Live callers that pass Edge's decision-audit records (`action_history`) and an AZ-06 facts projection (`deception_context`) to the frame builder; the v2 fields exist, but no running service fills them | #385 |
 | Outcome-as-Evidence proof gates | #400 |
 | Outcome reasoning and evidence-backed feedback to Knowledge | #369, #305 |
 | Bounded Engagement Advisory; AZ-06 live-activation gates | #368, #358, #325 |

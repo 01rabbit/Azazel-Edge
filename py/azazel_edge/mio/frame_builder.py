@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-from .contracts import DEFENSIVE_STATES, MioSituationFrame, _safe_int
+from .contracts import (
+    _TOKEN_RE,
+    DEFENSIVE_STATES,
+    SITUATION_FRAME_ACTOR_CAPS,
+    SITUATION_FRAME_CAPS,
+    MioSituationFrame,
+    _opaque_id,
+    _safe_int,
+    actor_key_for,
+)
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -77,6 +87,75 @@ def _best_unique(candidates: list[tuple[int, float, str]], keep: int) -> list[tu
     return out
 
 
+def _actor_source(subject: Any) -> str:
+    """Source endpoint of a ``<src>-><dst>...`` subject (Suricata EVE and flow
+    adapters). Other subjects (syslog host:tag, NOC probes, inventory) do not
+    name an actor and yield ''. The value is only hashed, never copied."""
+    text = str(subject or '')
+    if '->' not in text:
+        return ''
+    src = text.split('->', 1)[0].strip()
+    return '' if not src or src == '-' else src[:256]
+
+
+def _iso(ts: datetime | None) -> str:
+    return '' if ts is None else ts.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def _top(counter: Counter, keep: int) -> list[Any]:
+    return [value for value, _n in sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:keep]]
+
+
+class _ActorAccumulator:
+    __slots__ = ('count', 'severity', 'first', 'last', 'ports', 'protocols', 'kinds', 'refs')
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.severity = 0
+        self.first: datetime | None = None
+        self.last: datetime | None = None
+        self.ports: Counter = Counter()
+        self.protocols: Counter = Counter()
+        self.kinds: Counter = Counter()
+        self.refs: list[tuple[int, float, str]] = []
+
+    def add(self, payload: Mapping[str, Any], *, ts: datetime | None, severity: int, event_id: str) -> None:
+        self.count += 1
+        self.severity = max(self.severity, severity)
+        if ts is not None:
+            self.first = ts if self.first is None or ts < self.first else self.first
+            self.last = ts if self.last is None or ts > self.last else self.last
+        attrs = _as_mapping(payload.get('attrs'))
+        port = attrs.get('target_port', attrs.get('dst_port'))
+        if type(port) is int and 0 < port <= 65535:
+            self.ports[port] += 1
+        proto = str(attrs.get('protocol') or attrs.get('proto') or '').strip().lower()
+        if _TOKEN_RE.match(proto):
+            self.protocols[proto] += 1
+        kind = str(payload.get('kind') or '').strip().lower()
+        if _TOKEN_RE.match(kind):
+            self.kinds[kind] += 1
+        if _opaque_id(event_id):
+            self.refs.append((-severity, -ts.timestamp() if ts is not None else float('inf'), event_id))
+            if len(self.refs) >= 4 * SITUATION_FRAME_ACTOR_CAPS['evidence_refs']:
+                self.refs = _best_unique(self.refs, SITUATION_FRAME_ACTOR_CAPS['evidence_refs'])
+
+    def summary(self, actor_key: str) -> dict[str, Any]:
+        caps = SITUATION_FRAME_ACTOR_CAPS
+        return {
+            'actor_key': actor_key,
+            'first_seen': _iso(self.first),
+            'last_seen': _iso(self.last),
+            'event_count': self.count,
+            'max_severity': self.severity,
+            'protocols': _top(self.protocols, caps['protocols']),
+            'target_ports': _top(self.ports, caps['target_ports']),
+            'distinct_target_ports': len(self.ports),
+            'event_kinds': _top(self.kinds, caps['event_kinds']),
+            'evidence_refs': [ref for _s, _t, ref in _best_unique(self.refs, caps['evidence_refs'])],
+        }
+
+
 class MioSituationFrameBuilder:
     """Build a bounded M.I.O. world-state from deterministic Edge outputs.
 
@@ -109,7 +188,13 @@ class MioSituationFrameBuilder:
         deception_status: str | None = None,
         explicit_unknowns: Sequence[str] = (),
         explicit_contradictions: Sequence[str] = (),
+        action_history: Sequence[Mapping[str, Any]] = (),
+        deception_context: Mapping[str, Any] | None = None,
     ) -> MioSituationFrame:
+        """``action_history`` holds the current/previous actions Edge already
+        selected, as normalized records from its decision audit (see
+        ``MioActionRecord``). ``deception_context`` is the optional AZ-06 facts
+        projection (``MioDeceptionContext``). Both are recorded, never decided."""
         state = str(current_defensive_state or '').upper()
         if state not in DEFENSIVE_STATES:
             raise ValueError('invalid_current_defensive_state')
@@ -180,15 +265,27 @@ class MioSituationFrameBuilder:
         # Sort key: higher severity, then newer, then smaller event_id.
         candidates: list[tuple[int, float, str]] = []
         keep = self.max_event_refs
+        # Actors are aggregated per source endpoint. Memory is O(distinct
+        # actors and their ports/kinds), bounded by the caller's event window
+        # like the pass itself; the frame keeps the top 8, so input volume never
+        # grows the frame. Future-dated timestamps do not set first/last_seen.
+        future_limit = created + timedelta(seconds=self.future_clock_skew_seconds)
+        actor_acc: dict[str, _ActorAccumulator] = {}
         for event in events:
             payload = _event_payload(event)
             ts = _parse_ts(payload.get('ts'))
             if ts is not None and (newest_ts is None or ts > newest_ts):
                 newest_ts = ts
             event_id = str(payload.get('event_id') or '')
+            severity = max(0, min(_safe_int(payload.get('severity')), 100))
+            source = _actor_source(payload.get('subject'))
+            if source:
+                acc = actor_acc.get(source)
+                if acc is None:
+                    acc = actor_acc[source] = _ActorAccumulator()
+                acc.add(payload, ts=ts if ts is not None and ts <= future_limit else None, severity=severity, event_id=event_id)
             if not event_id:
                 continue
-            severity = max(0, min(_safe_int(payload.get('severity')), 100))
             candidates.append((-severity, -ts.timestamp() if ts is not None else float('inf'), event_id))
             if len(candidates) >= 4 * keep:
                 candidates = _best_unique(candidates, keep)
@@ -208,6 +305,12 @@ class MioSituationFrameBuilder:
             if freshness_seconds > self.stale_after_seconds:
                 unknowns.append('EVIDENCE_STALE')
 
+        # Rank by severity, volume, recency, then the raw source (order-free);
+        # only the kept actors are hashed into trace-scoped keys. One more than
+        # the cap is passed so the frame marks the overflow as truncated.
+        ranked = sorted(actor_acc.items(), key=lambda kv: (-kv[1].severity, -kv[1].count, -(kv[1].last.timestamp() if kv[1].last else float('-inf')), kv[0]))
+        actors = [acc.summary(actor_key_for(trace_id, source)) for source, acc in ranked[: SITUATION_FRAME_CAPS['actors'] + 1]]
+
         unknowns.extend(str(x) for x in explicit_unknowns)
         contradictions.extend(str(x) for x in explicit_contradictions)
 
@@ -224,6 +327,12 @@ class MioSituationFrameBuilder:
             provenance['contradictions'] = ['frame_builder'] + (['caller'] if explicit_contradictions else [])
         if knowledge_refs:
             provenance['knowledge_refs'] = ['knowledge']
+        if actors:
+            provenance['actors'] = ['evidence_plane', 'frame_builder']
+        if action_history:
+            provenance['actions'] = ['decision_audit']
+        if deception_context is not None:
+            provenance['deception_context'] = ['deception']
 
         return MioSituationFrame.build(
             frame_id=frame_id,
@@ -243,4 +352,7 @@ class MioSituationFrameBuilder:
             knowledge_status=knowledge_status,
             deception_status=deception_status,
             provenance=provenance,
+            actors=actors,
+            actions=list(action_history) if isinstance(action_history, (list, tuple)) else [],
+            deception_context=deception_context,
         )
