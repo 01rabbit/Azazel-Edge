@@ -807,6 +807,7 @@ ROW_VALUES = (
     ("FW-01", ("`remote_access=off`",) * 2, 489, "installer/internal/azazel-host-firewall", 'echo "remote_access=${remote}"', False),
     # WAN-10: the certificate names br0, not the uplink (Edge#477).
     ("WAN-10", ("`172.16.0.254`",) * 2, None, "installer/internal/install_local_ca.sh", "ip -4 -o addr show br0", False),
+    ("WAN-10", ("`Azazel-Edge.local`",) * 2, None, "installer/internal/install_local_ca.sh", '"${SHORT_NAME}.local"', False),
     ("WAN-10", ("not the WAN address", "WAN のアドレスを含まない"), None, "installer/internal/install_local_ca.sh", "ip -4 route get", True),
     ("WAN-10", ("(the CA is kept)", "（CA はそのまま）"), None, "installer/internal/install_local_ca.sh", 'if (( recreate_ca == 1 )); then', False),
 )

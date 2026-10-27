@@ -71,18 +71,20 @@ def _san_part() -> str:
     return "\n".join(lines) + "\n" + m.group(0)
 
 
-def _stub_bin(tmp_path: Path, fake_ip: str = FAKE_IP) -> Path:
+def _stub_bin(tmp_path: Path, fake_ip: str = FAKE_IP, fake_hostname: str = FAKE_HOSTNAME,
+              extra: tuple[tuple[str, str], ...] = ()) -> Path:
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    for name, body in (("ip", fake_ip), ("hostname", FAKE_HOSTNAME)):
+    for name, body in (("ip", fake_ip), ("hostname", fake_hostname), *extra):
         p = bindir / name
         p.write_text(body, encoding="utf-8")
         p.chmod(0o755)
     return bindir
 
 
-def _ext(tmp_path: Path, env_extra: dict[str, str] | None = None, fake_ip: str = FAKE_IP) -> str:
-    bindir = _stub_bin(tmp_path, fake_ip)
+def _ext(tmp_path: Path, env_extra: dict[str, str] | None = None, fake_ip: str = FAKE_IP,
+         fake_hostname: str = FAKE_HOSTNAME) -> str:
+    bindir = _stub_bin(tmp_path, fake_ip, fake_hostname)
     out = tmp_path / "webui.ext"
     script = tmp_path / "san.sh"
     script.write_text(
@@ -108,11 +110,24 @@ def test_san_has_lan_hostname_and_loopback_but_not_the_wan(tmp_path):
     ext = _ext(tmp_path)
     names = _alt_names(ext)
     assert WAN_IP not in ext
-    for want in (LAN_IP, FQDN, SHORT, "localhost", "127.0.0.1"):
+    for want in (LAN_IP, FQDN, SHORT, f"{SHORT}.local", "localhost", "127.0.0.1"):
         assert want in names, (want, names)
     assert "subjectAltName=@alt_names" in ext
     assert "extendedKeyUsage=serverAuth" in ext
     assert f"IP.1={LAN_IP}" in ext and "IP.2=127.0.0.1" in ext
+
+
+def test_the_mdns_name_is_in_and_a_repeated_name_is_written_once(tmp_path):
+    # On site the device is reached as Azazel-Edge.local (avahi on br0;
+    # set_dev_remote_access.sh and install_internal_network.sh print it).
+    # hostname -f and -s both give Azazel-Edge when no domain is set.
+    same = "#!/bin/sh\necho Azazel-Edge\n"
+    ext = _ext(tmp_path, fake_hostname=same)
+    dns = [line for line in ext.splitlines() if line.startswith("DNS.")]
+    assert dns == ["DNS.1=Azazel-Edge", "DNS.2=Azazel-Edge.local", "DNS.3=localhost"]
+    assert "captive.local" not in ext
+    assert "Azazel-Edge.local" in _read(INTERNAL / "install_internal_network.sh")
+    assert "${DEVICE_HOSTNAME}.local" in _read(DEV_REMOTE)
 
 
 def test_a_mgmt_ip_in_the_environment_is_not_put_in(tmp_path):
@@ -128,7 +143,7 @@ def test_without_a_br0_address_only_names_and_loopback_remain(tmp_path):
     ext = _ext(tmp_path, fake_ip=FAKE_IP_NO_BR0)
     names = _alt_names(ext)
     assert WAN_IP not in ext and LAN_IP not in ext
-    assert names == [FQDN, SHORT, "localhost", "127.0.0.1"]
+    assert names == [FQDN, SHORT, f"{SHORT}.local", "localhost", "127.0.0.1"]
     assert "br0 has no IPv4 address" in _read(LOCAL_CA)
 
 
@@ -167,6 +182,67 @@ def test_every_run_issues_a_new_server_cert_and_keeps_a_valid_ca():
     tools = _read(INTERNAL / "install_migrated_tools.sh")
     assert tools.index("/opt/azazel-edge/install_local_ca.sh\nfi") < tools.index("/opt/azazel-edge/install_https_proxy.sh\nfi")
     assert "systemctl restart nginx.service" in _read(HTTPS)
+
+
+def _runnable_copy(tmp_path: Path) -> Path:
+    """The whole script, run as is except for its fixed system paths and the root check."""
+    src = _read(LOCAL_CA)
+    root_check = re.search(r'^if \[\[ "\$\{EUID\}" -ne 0 \]\]; then\n.*?^fi\n', src, flags=re.M | re.S)
+    assert root_check
+    src = src.replace(root_check.group(0), "")
+    sysroot = tmp_path / "sysroot"
+    for fixed in ("/usr/local/share/ca-certificates", "/var/lib/azazel-edge/public", "/etc/azazel-edge/ca-distribution.txt"):
+        assert fixed in src, fixed
+        src = src.replace(fixed, f"{sysroot}{fixed}")
+    (sysroot / "usr/local/share/ca-certificates").mkdir(parents=True)
+    (sysroot / "etc/azazel-edge").mkdir(parents=True)
+    # Nothing else outside the TLS directory is written.
+    for line in src.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        for fixed in ("/etc/", "/usr/", "/var/"):
+            if fixed in line:
+                assert str(sysroot) in line or "AZAZEL_TLS_DIR" in line, line
+    copy = tmp_path / "install_local_ca.sh"
+    copy.write_text(src, encoding="utf-8")
+    return copy
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl not installed")
+def test_a_second_run_keeps_the_ca_and_issues_a_new_server_cert(tmp_path):
+    script = _runnable_copy(tmp_path)
+    noop = "#!/bin/sh\nexit 0\n"
+    bindir = _stub_bin(tmp_path, extra=(("apt-get", noop), ("update-ca-certificates", noop)))
+    tls = tmp_path / "tls"
+    env = {
+        "PATH": f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        "HOME": str(tmp_path),
+        "AZAZEL_TLS_DIR": str(tls),
+    }
+
+    def run() -> dict[str, bytes]:
+        subprocess.run(["bash", str(script)], check=True, env=env, cwd=tmp_path, timeout=300,
+                       stdout=subprocess.DEVNULL)
+        return {name: (tls / name).read_bytes() for name in (
+            "ca/azazel-edge-local-ca.key", "ca/azazel-edge-local-ca.crt", "webui.key", "webui.crt")}
+
+    first = run()
+    second = run()
+    assert second["ca/azazel-edge-local-ca.key"] == first["ca/azazel-edge-local-ca.key"]
+    assert second["ca/azazel-edge-local-ca.crt"] == first["ca/azazel-edge-local-ca.crt"]
+    assert second["webui.key"] != first["webui.key"]
+    assert second["webui.crt"] != first["webui.crt"]
+    san = subprocess.run(["openssl", "x509", "-in", str(tls / "webui.crt"), "-noout", "-ext", "subjectAltName"],
+                         check=True, capture_output=True, text=True).stdout
+    assert WAN_IP not in san and f"IP Address:{LAN_IP}" in san and f"DNS:{SHORT}.local" in san
+    subprocess.run(["openssl", "verify", "-CAfile", str(tls / "ca/azazel-edge-local-ca.crt"), str(tls / "webui.crt")],
+                   check=True, capture_output=True)
+    assert (tls / "ca/azazel-edge-local-ca.key").stat().st_mode & 0o777 == 0o600
+    assert (tls / "webui.key").stat().st_mode & 0o777 == 0o600
+    exported = tmp_path / "sysroot/var/lib/azazel-edge/public/azazel-edge-local-ca.crt"
+    assert exported.read_bytes() == first["ca/azazel-edge-local-ca.crt"]
+    note = (tmp_path / "sysroot/etc/azazel-edge/ca-distribution.txt").read_text(encoding="utf-8")
+    assert WAN_IP not in note
 
 
 # --- dev remote access (set_dev_remote_access.sh MODE=open) ----------------
@@ -216,6 +292,7 @@ def test_a_certificate_issued_from_the_ext_file_has_that_san(tmp_path):
         "-extfile", str(ext))
     san = run("x509", "-in", "webui.crt", "-noout", "-ext", "subjectAltName")
     assert WAN_IP not in san and WAN_IP not in ext_text
-    for want in (f"IP Address:{LAN_IP}", "IP Address:127.0.0.1", f"DNS:{FQDN}", f"DNS:{SHORT}", "DNS:localhost"):
+    for want in (f"IP Address:{LAN_IP}", "IP Address:127.0.0.1", f"DNS:{FQDN}", f"DNS:{SHORT}",
+                 f"DNS:{SHORT}.local", "DNS:localhost"):
         assert want in san, (want, san)
     run("verify", "-CAfile", "ca.crt", "webui.crt")

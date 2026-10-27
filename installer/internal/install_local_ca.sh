@@ -20,11 +20,12 @@ SERVER_DAYS="${AZAZEL_SERVER_DAYS:-825}"
 CN="${AZAZEL_TLS_CN:-$(hostname -f 2>/dev/null || hostname)}"
 SHORT_NAME="$(hostname -s 2>/dev/null || hostname)"
 # The server certificate names the device only as the LAN reaches it
-# (Edge#477): the br0 address, the host name and localhost/127.0.0.1. The
-# uplink (WAN) address is not put in: nginx answers 80/443 to loopback and the
-# LAN only (install_https_proxy.sh), the host firewall refuses the WAN, and
-# set_dev_remote_access.sh MODE=open opens only SSH and mDNS, so the address
-# would only tell the WAN side the device's address through the certificate.
+# (Edge#477): the br0 address, the host name, its mDNS name (.local) and
+# localhost/127.0.0.1. The uplink (WAN) address is not put in: nginx answers
+# 80/443 to loopback and the LAN only (install_https_proxy.sh), the host
+# firewall refuses the WAN, and set_dev_remote_access.sh MODE=open opens only
+# SSH and mDNS, so the address would only tell the WAN side the device's
+# address through the certificate.
 INTERNAL_IP="${AZAZEL_INTERNAL_IP:-$(ip -4 -o addr show br0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)}"
 EXTRA_SANS="${AZAZEL_TLS_EXTRA_SANS:-}"
 TRUST_CA="/usr/local/share/ca-certificates/azazel-edge-local-ca.crt"
@@ -73,7 +74,7 @@ chmod 0600 "$SERVER_KEY"
 openssl req -new -key "$SERVER_KEY" -subj "/CN=${CN}" -out "$SERVER_CSR"
 
 write_server_ext() {
-  local out="$1" idx_ip=1 idx_dns=10 san san_trimmed
+  local out="$1" idx_ip=1 idx_dns=10 idx_name=1 seen_dns="" name san san_trimmed
   local -a sans
   {
     echo "authorityKeyIdentifier=keyid,issuer"
@@ -82,9 +83,15 @@ write_server_ext() {
     echo "extendedKeyUsage=serverAuth"
     echo "subjectAltName=@alt_names"
     echo "[alt_names]"
-    echo "DNS.1=${CN}"
-    echo "DNS.2=${SHORT_NAME}"
-    echo "DNS.3=localhost"
+    # The mDNS name (<short host name>.local, as avahi announces it on the
+    # LAN) is how the device is reached on site. A name already listed (e.g.
+    # hostname -f equal to hostname -s) is written once.
+    for name in "$CN" "$SHORT_NAME" "${SHORT_NAME}.local" localhost; do
+      [[ -z "$name" || " ${seen_dns} " == *" ${name} "* ]] && continue
+      seen_dns="${seen_dns} ${name}"
+      echo "DNS.${idx_name}=${name}"
+      idx_name=$((idx_name + 1))
+    done
     if [[ -n "$INTERNAL_IP" ]]; then
       echo "IP.${idx_ip}=${INTERNAL_IP}"
       idx_ip=$((idx_ip + 1))

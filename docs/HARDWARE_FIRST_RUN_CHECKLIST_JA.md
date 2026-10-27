@@ -496,7 +496,7 @@ dig +time=2 +tries=1 -p 5353 @172.16.0.254 <hostname>.local
 | WAN-07 | 2055/udp（NetFlow） | 機器: `sudo ss -Hlunp 'sport = :2055'` | 待ち受けなし（受信側にエントリポイントが無い。5 章）。NetFlow を有効にした場合だけ `172.16.0.254:2055` | | #488 |
 | WAN-08 | LAN では使える | LAN 側のクライアント | `/health` が http で `301`、https で `200`。2.8 の後は 8065 が `200`。22 に接続できる。5353 が応答する | | #485, #488 |
 | WAN-09 | 弱いホストモデル（参考） | `172.16.0.0/24 via <WAN-ADDR>` の経路を足した上流の試験機 | #489 が無効の間は `172.16.0.254` の 22/tcp に届く（既知。nginx は 403 のまま）。記録する。これを塞ぐのは #489 の層 | | #488, #489 |
-| WAN-10 | 証明書の SAN | 機器: `sudo openssl x509 -in /etc/azazel-edge/tls/webui.crt -noout -ext subjectAltName` | `172.16.0.254`、ホスト名、`localhost`、`127.0.0.1` を含み、WAN のアドレスを含まない（出力は貼らない）。この変更より前に導入した機器は、証明書を発行し直すまで古い証明書のまま。installer を再実行するか、`sudo /opt/azazel-edge/install_local_ca.sh` の後に `sudo systemctl reload nginx`（CA はそのまま） | | #488, #477 |
+| WAN-10 | 証明書の SAN | 機器: `sudo openssl x509 -in /etc/azazel-edge/tls/webui.crt -noout -ext subjectAltName` | `172.16.0.254`、ホスト名、`Azazel-Edge.local`（ホスト名に `.local` を付けたもの）、`localhost`、`127.0.0.1` を含み、WAN のアドレスを含まない（出力は貼らない）。この変更より前に導入した機器は、証明書を発行し直すまで古い証明書のまま。installer を再実行するか、`sudo /opt/azazel-edge/install_local_ca.sh` の後に `sudo systemctl reload nginx`（CA はそのまま） | | #488, #477 |
 
 ### 3.8 Mattermost（使う場合だけ。2.8 の後）
 

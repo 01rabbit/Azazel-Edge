@@ -500,7 +500,7 @@ dig +time=2 +tries=1 -p 5353 @172.16.0.254 <hostname>.local
 | WAN-07 | 2055/udp (NetFlow) | device: `sudo ss -Hlunp 'sport = :2055'` | Nothing listening (the receiver has no entry point; see section 5), or `172.16.0.254:2055` only if NetFlow was enabled | | #488 |
 | WAN-08 | LAN still served | LAN client | `/health` over http `301`, over https `200`; 8065 `200` after 2.8; 22 open; 5353 answers | | #485, #488 |
 | WAN-09 | Weak host model (informative) | upstream host with a route `172.16.0.0/24 via <WAN-ADDR>` | 22/tcp on `172.16.0.254` is reachable while #489 is off (known; nginx still answers 403). Record; #489 is the layer that closes it | | #488, #489 |
-| WAN-10 | Certificate SAN | device: `sudo openssl x509 -in /etc/azazel-edge/tls/webui.crt -noout -ext subjectAltName` | `172.16.0.254`, the host name, `localhost` and `127.0.0.1`; not the WAN address (do not paste the output). A device installed before this change keeps its old certificate until it is issued again: re-run the installer, or `sudo /opt/azazel-edge/install_local_ca.sh` and then `sudo systemctl reload nginx` (the CA is kept) | | #488, #477 |
+| WAN-10 | Certificate SAN | device: `sudo openssl x509 -in /etc/azazel-edge/tls/webui.crt -noout -ext subjectAltName` | `172.16.0.254`, the host name, `Azazel-Edge.local` (the host name with `.local`), `localhost` and `127.0.0.1`; not the WAN address (do not paste the output). A device installed before this change keeps its old certificate until it is issued again: re-run the installer, or `sudo /opt/azazel-edge/install_local_ca.sh` and then `sudo systemctl reload nginx` (the CA is kept) | | #488, #477 |
 
 ### 3.8 Mattermost (only if used; after 2.8)
 

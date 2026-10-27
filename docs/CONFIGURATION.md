@@ -73,7 +73,8 @@ stays in `/etc/azazel-edge/tls/ca/` and is never served.
 
 The Web UI server certificate (`/etc/azazel-edge/tls/webui.crt`) names the
 device as the LAN reaches it: the `br0` address (`172.16.0.254`), the host
-name (`hostname -f` and `hostname -s`), `localhost` and `127.0.0.1`. The
+name (`hostname -f` and `hostname -s`), its mDNS name (`hostname -s` with
+`.local`, e.g. `Azazel-Edge.local`), `localhost` and `127.0.0.1`. The
 uplink (WAN) address is not in it, since nginx answers ports 80 and 443 only
 to this device and `172.16.0.0/24`, also with `set_dev_remote_access.sh`
 `MODE=open` (which opens SSH and mDNS only). Every run of
