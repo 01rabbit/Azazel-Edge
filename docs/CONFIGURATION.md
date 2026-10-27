@@ -81,6 +81,14 @@ anything.
 | `ENABLE_OLLAMA` | `1` | `1`: start the Ollama container (`security/docker-compose.ollama.yml`, `127.0.0.1:11434`) and pull its models. `0`: skipped (no model download). |
 | `ENABLE_MATTERMOST` | `0` on aarch64 (`uname -m`), `1` elsewhere | `1`: start Mattermost (`security/docker-compose.mattermost.yml`) and provision its workspace and the `/mio` slash command. `0`: skipped (`[ai/5] Skip Mattermost …`). Mattermost's official image is amd64 only: on aarch64 (Raspberry Pi 5) it runs under qemu-user emulation, which is not verified on the Pi 5's 16K-page kernel, so it is off by default there. `ENABLE_MATTERMOST=1` still installs it on aarch64, with a `NOTICE:` line saying so ([HARDWARE_FIRST_RUN_CHECKLIST.md](HARDWARE_FIRST_RUN_CHECKLIST.md) 2.8 and 3.8). Without Mattermost the Web UI's `/ops-comm` page shows it as unreachable with mode `disabled`, posting to Mattermost fails with `mattermost_not_configured`, and the dashboard's Mattermost handoff is disabled; the rest of the Web UI and M.I.O. (`POST /api/ai/ask`) work as before. |
 
+The AI agent reads the model endpoint from `AZAZEL_OLLAMA_ENDPOINT` (default
+`http://127.0.0.1:11434`, for example in `/etc/default/azazel-edge-security`).
+It accepts loopback only (`127.0.0.0/8`, `::1`, or a name that resolves only to
+those, such as `localhost`), without `user:password@` or a query, and does not
+follow redirects or use proxy variables. Any other value leaves the agent in
+its no-model fallback with reason `llm_endpoint_not_loopback` (or a related
+`llm_endpoint_*` reason); see [AI_OPERATION_GUIDE.md](AI_OPERATION_GUIDE.md) §4.
+
 ### Local CA distribution
 
 With `ENABLE_LOCAL_CA=1` and `ENABLE_HTTPS=1`, nginx serves the local CA

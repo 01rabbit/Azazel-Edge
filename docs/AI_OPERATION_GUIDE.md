@@ -45,6 +45,24 @@ Operational rule:
 - Queue limit: `AZAZEL_LLM_QUEUE_MAX`
 - Ops memory guard: `AZAZEL_OPS_MIN_MEM_AVAILABLE_MB`
 - Swap guard: `AZAZEL_OPS_MAX_SWAP_USED_MB`
+- Model endpoint: `AZAZEL_OLLAMA_ENDPOINT` (default `http://127.0.0.1:11434`)
+  must be loopback (Edge#388). The analyst, ops-coach and manual-query
+  payloads carry attacker-influenced EVE fields, so the agent checks the
+  endpoint before every model call: `http` or `https`, no `user:password@`,
+  no query, and every address of the host (an IP literal, or each address a
+  name such as `localhost` resolves to) in `127.0.0.0/8` or `::1`. The
+  request goes to the checked addresses in resolver order (so `localhost`
+  answering `::1` first still reaches Ollama on `127.0.0.1`), with the
+  configured name in `Host` and, for `https`, in SNI and the certificate
+  check; redirects are not followed, proxy variables are not used and a
+  response over 1 MiB is refused. There is no private-LAN or remote option. Any other
+  endpoint is refused without a connection: the analyst result is `fallback`
+  (`tactical_only_keep_recommendation`) with reason
+  `llm_endpoint_not_loopback` (or `llm_endpoint_has_userinfo`,
+  `llm_endpoint_unresolvable`, `llm_endpoint_redirect_refused`, ...), the
+  ops coach and manual query stop at the first model with that reason,
+  `last_error` in `ai_metrics.json` shows it, and the journal has one
+  `LLM endpoint refused` line per reason (credentials and query hidden).
 
 ## 5. Operational Files to Monitor
 The agent runs as `azazel-agent` (Edge#471) and writes only its own

@@ -163,10 +163,10 @@ display degrade.
 | Normal | Core decision and enforcement; agent advisory; model in the ambiguous band | - | dashboard, `ai_metrics.json` |
 | Model quality low (`_recompute_policy`: completed, empty or fallback rates out of bounds after 10 requests) | everything | agent switches to `degraded`: model `AZAZEL_LLM_MODEL_DEGRADED` (default `qwen3.5:0.8b`) and a narrower ambiguous band (`AZAZEL_LLM_AMBIG_MIN_DEGRADED`, 70 in the unit) | `ai_runtime_policy.json` |
 | Low memory or high swap | everything except the ops coach | ops coach and model-backed manual query are skipped (`_ops_coach_allowed`) | advisory `ops_coach.status`, manual-query reason |
-| Model runtime unreachable, timed out or `AZAZEL_LLM_ENABLED=0` | core; tactical score; SOC second pass; explanations | analyst result is `fallback` with policy `tactical_only_keep_recommendation`, or `disabled`; manual query answers from the static router or the fixed fallback text | advisory `llm.status` |
+| Model runtime unreachable, timed out, endpoint not loopback (`llm_endpoint_*`) or `AZAZEL_LLM_ENABLED=0` | core; tactical score; SOC second pass; explanations | analyst result is `fallback` with policy `tactical_only_keep_recommendation`, or `disabled`; manual query answers from the static router or the fixed fallback text | advisory `llm.status` |
 | Agent stopped | core decision and enforcement | no advisory, snapshot or v2 explanation for those events; the core drops and counts forwards (queue of 1024, write timeout 1 s); at the next start the agent records missed P0 decisions from the core's log (tail of at most 8 MiB, newest 256, older ones marked as past decisions) | forward stats, P0 queue (`reconciled`, `stale`) |
 | Core stopped | nothing on the decision path | no decisions, no enforcement, and no release of applied actions until it runs again (`process_release_events` runs at start and in its loop); no other component takes over | unit status |
-| Offline (no WAN or Internet) | everything above | nothing on the decision or advice path needs the Internet. The cognitive core's adapter accepts loopback by default, a private-LAN endpoint only with opt-in, HTTPS and a bearer token, and has no public or cloud fallback. The agent's endpoint is an environment setting that the code does not restrict (section 9.2). Knowledge and AZ-06 degrade to "no advisory". | - |
+| Offline (no WAN or Internet) | everything above | nothing on the decision or advice path needs the Internet. The cognitive core's adapter accepts loopback by default, a private-LAN endpoint only with opt-in, HTTPS and a bearer token, and has no public or cloud fallback. The agent's endpoint (`AZAZEL_OLLAMA_ENDPOINT`) is accepted only when it is loopback; otherwise the agent stays in the no-model fallback (#388, section 9.2). Knowledge and AZ-06 degrade to "no advisory". | - |
 | Cognitive core, model absent or blocked | the cycle ends with a typed state | `DEPENDENCY_UNAVAILABLE` (`model=None` gives `model_absent`) or a governance block; the deterministic `mio.no_model_handoff.v1` carries frame and playbook guidance | `ReasoningOutcome.handoff` |
 | Cognitive core, stale frame, cancellation, budget, invalid output | the cycle ends with a typed state | `STALE_SUPERSEDED`, `OPERATOR_CANCELLED`, `BUDGET_EXHAUSTED`, `VALIDATION_REJECTED`, `INSUFFICIENT_EVIDENCE`, `ERROR_FALLBACK` | trace events |
 | Cognitive core, trace sink cannot write (ENOSPC, EDQUOT, EROFS, rotation failure) | the cycle | the advisory is withheld (`advisory_allowed()` is false) until `reset_degraded()` | sink `dropped`, `drop_reasons` |
@@ -241,7 +241,8 @@ A change to an Edge-local M.I.O. schema bumps its version in the same change
 
 ### 9.2 Recorded here without an issue
 
-These are facts about the current code. They are not changed by #388.
+These are facts about the current code. They were not changed by the #388
+design document; items marked "Done" were changed later.
 
 - The agent's model calls (analyst, ops coach, manual query) do not pass
   `AIGovernance.should_invoke`. They are out of scope of that contract by the
@@ -249,8 +250,14 @@ These are facts about the current code. They are not changed by #388.
   §3.1 and record `in_scope=false` scope entries in the AI audit. In the
   running services only the cognitive core's adapter calls `authorize()`;
   `triage/selector.py` accepts a governance object but no service passes one.
-- The agent's model endpoint (`AZAZEL_OLLAMA_ENDPOINT`) is not checked for
-  loopback or private addresses, unlike `OllamaStructuredTransport`.
+- Done: the agent's model endpoint (`AZAZEL_OLLAMA_ENDPOINT`) is checked
+  before every model call (#388). Only loopback is accepted; a host name must
+  resolve only to loopback and the request goes to the checked address, with
+  no redirects and no proxy. The agent has no private-LAN opt-in, unlike
+  `OllamaStructuredTransport`, which also rejects DNS names other than
+  `localhost` and does not resolve them. A refused endpoint gives the
+  `fallback` analyst result with an `llm_endpoint_*` reason and one log line
+  ([AI_OPERATION_GUIDE.md](../AI_OPERATION_GUIDE.md) §4).
 - The agent's advisory `recommendation` can hold the analyst model's
   `suggested_action` (free text, at most 80 characters). The advisory keeps
   `llm.status` and `llm.model`, but no field marks the recommendation itself
