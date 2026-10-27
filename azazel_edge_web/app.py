@@ -4953,7 +4953,8 @@ def _bundle_decision_traces(recent_alerts: List[Dict[str, Any]]) -> Dict[str, An
     try:
         return _decision_trace_report(ids)
     except Exception as exc:
-        return {"ok": False, "error": str(exc) or type(exc).__name__, "traces": []}
+        # The type only: a message could name a path.
+        return {"ok": False, "error": type(exc).__name__, "traces": []}
 
 
 @app.route("/api/aggregator/nodes/register", methods=["POST"])

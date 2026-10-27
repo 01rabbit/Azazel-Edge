@@ -64,6 +64,8 @@ def chain_record(logger: P0AuditLogger, event: dict) -> None:
 @pytest.fixture
 def web(tmp_path, monkeypatch):
     decision_trace.reset_caches()
+    # Re-verify a changed chain at once (the interval has its own test).
+    monkeypatch.setattr(decision_trace, "CHAIN_RECHECK_MIN_S", 0.0)
     logs = tmp_path / "ai"
     logs.mkdir()
     tokens = tmp_path / "auth_tokens.json"
@@ -120,8 +122,16 @@ def test_bad_requests_are_refused(web):
     client, _ = web
     assert client.get("/api/decision-trace", headers=VIEWER).status_code == 400
     assert get_trace(client, "../etc/passwd").status_code == 400
-    many = [f"core-{i}" for i in range(decision_trace.MAX_TRACE_IDS + 1)]
-    assert get_trace(client, *many).get_json()["error"] == "too_many_trace_ids"
+    assert decision_trace.MAX_TRACE_IDS == 16
+    response = get_trace(client, *[f"core-{i}" for i in range(17)])
+    assert response.status_code == 400 and response.get_json()["error"] == "too_many_trace_ids"
+    assert get_trace(client, *[f"core-{i}" for i in range(16)]).status_code == 200
+    # fullmatch: a trailing newline (or anything after the id) is refused.
+    for bad in ("core-abc%0A", "core-abc%0D", "core-abc%20x", "core-abc/x", "-core"):
+        assert get_trace(client, bad).status_code == 400, bad
+    assert decision_trace.valid_trace_id("core-abc") is True
+    assert decision_trace.valid_trace_id("core-abc\n") is False
+    assert decision_trace.valid_trace_id("x" * 129) is False
 
 
 # ------------------------------------------------------------- read only
@@ -172,7 +182,13 @@ def test_a_p0_decision_shows_its_explanation_and_verified_chain_record(web):
                                 "--trace-id", rec["trace_id"], "--json"])
     assert rc == 0
     cli = json.loads(out.getvalue())
+    # operator_wording names the target address and TI indicators: not shown
+    # to viewers (the free-text fields that remain are masked).
+    excluded = {"operator_wording"}
+    assert "operator_wording" not in exp
     for key, value in cli.items():
+        if key in excluded:
+            continue
         if key == "chain":
             for ck, cv in value.items():
                 assert body["sources"]["chain"][ck] == cv, ck
@@ -401,3 +417,145 @@ def test_console_markup_has_the_decision_trace_places():
     for needle in ('id="evdDecisionTrace"', 'id="evDecisions"', 'id="evDecisionExport"', 'data-ev-view="decisions"',
                    'data-ev-panel="decisions"', 'id="evdTrace"'):
         assert needle in text, needle
+
+
+# ----------------------------------------- no addresses or indicators
+
+ADDRESSES = ("203.0.113.9", "192.0.2.10", "2001:db8::7", "evil.example.net", "d41d8cd98f00b204e9800998ecf8427e")
+
+
+def _isolate_with_indicators() -> tuple:
+    event = core_event("isolate", sid=9341099)
+    event["normalized"]["src_ip"], event["normalized"]["dst_ip"] = "203.0.113.9", "192.0.2.10"
+    event["defense"]["reason"] = "isolate 203.0.113.9:22 -> 192.0.2.10 via [2001:db8::7]:443 (ti evil.example.net)"
+    advisory = {"second_pass": {"status": "completed", "soc": {
+        "status": "critical",
+        "reasons": ["TI match evil.example.net from 203.0.113.9", "hash d41d8cd98f00b204e9800998ecf8427e"],
+        "ti_matches": [{"indicator": "evil.example.net", "ip": "203.0.113.9"}],
+        "evidence_ids": ["ev-341-1"],
+    }}}
+    return event, advisory
+
+
+def test_no_target_address_or_indicator_reaches_a_viewer(web, tmp_path, monkeypatch):
+    client, logs = web
+    event, advisory = _isolate_with_indicators()
+    rec = live.LiveDecisionExplanationWriter(logs / "decision-explanations.jsonl").record(event, advisory)
+    assert rec is not None
+    raw = (logs / "decision-explanations.jsonl").read_text(encoding="utf-8")
+    assert "203.0.113.9" in raw and "evil.example.net" in raw  # the record itself carries them
+    chain_record(P0AuditLogger(logs / "core-decision-audit.jsonl", max_bytes=1 << 20), event)
+    tid = trace_of(event)
+
+    body = get_trace(client, tid).get_json()
+    (trace,) = body["traces"]
+    assert trace["explanation"]["status"] == "found" and trace["chain_record"]["status"] == "found"
+    assert "operator_wording" not in trace["explanation"]
+    assert "[redacted]" in trace["explanation"]["reason"]
+    exported = get_trace(client, tid, path="/api/decision-trace/export").get_data(as_text=True)
+
+    events = tmp_path / "ai-events.jsonl"
+    events.write_text(json.dumps({"event": event, "advisory": {"ts": 1.0}}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(webapp, "AI_EVENT_LOG", events)
+    monkeypatch.setattr(webapp, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(webapp, "FALLBACK_STATE_PATH", tmp_path / "fallback.json")
+    monkeypatch.setattr(webapp, "cp_read_snapshot_payload", None)
+    monkeypatch.setattr(webapp, "_mattermost_ping", lambda: (False, {}))
+    bundle = client.get("/api/dashboard/bundle", headers=VIEWER).get_json()["decision_traces"]
+    assert [t["trace_id"] for t in bundle["traces"]] == [tid]
+
+    for name, text in (("endpoint", json.dumps(body)), ("export", exported), ("bundle", json.dumps(bundle))):
+        for needle in ADDRESSES + ("203.0.113", "192.0.2.10:", "operator_wording"):
+            assert needle not in text, (name, needle)
+
+
+@pytest.mark.parametrize("text,kept", [
+    ("isolate for 203.0.113.9:22 because high severity sid=9300001", "sid=9300001"),
+    ("to 2001:db8::1 and [2001:db8::2]:443 and fe80::1%eth0", "and"),
+    ("v4-mapped ::ffff:192.0.2.1 and 10.0.0.0/8", "v4-mapped"),
+    ("ti evil.example.com:8080 http://x.example/z", "ti"),
+    ("NOT APPLIED - planned only (dry_run)", "NOT APPLIED - planned only (dry_run)"),
+    ("core lease expires at 2026-10-27T07:32:23+00:00", "2026-10-27T07:32:23+00:00"),
+    ("core fallback: severity_high_redirect_to_decoy", "severity_high_redirect_to_decoy"),
+])
+def test_mask_text_hides_addresses_and_indicators_only(text, kept):
+    masked = decision_trace.mask_text(text)
+    assert kept in masked
+    assert not re.search(r"\d{1,3}(\.\d{1,3}){3}|::|example", masked), masked
+
+
+# ----------------------------------------------------------------- load
+
+def test_no_id_reads_nothing(web, monkeypatch):
+    client, logs = web
+    explain(logs / "decision-explanations.jsonl", core_event())
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("nothing may be read without an id")
+
+    monkeypatch.setattr(decision_trace, "_open", refuse)
+    monkeypatch.setattr(audit_review, "verify_audit_chain", refuse)
+    report = webapp._bundle_decision_traces([{"decision_trace_id": ""}, {}])
+    assert report["ok"] is True and report["traces"] == []
+    assert report["sources"] == {"explanations": {"state": "not_read"}, "chain": {"state": "not_read"}}
+
+
+def test_the_chain_is_reverified_at_most_once_per_interval(web, monkeypatch):
+    client, logs = web
+    clock = [1000.0]
+    monkeypatch.setattr(decision_trace, "_monotonic", lambda: clock[0])
+    monkeypatch.setattr(decision_trace, "CHAIN_RECHECK_MIN_S", 5.0)
+    calls = []
+    real = audit_review.verify_audit_chain
+    monkeypatch.setattr(audit_review, "verify_audit_chain", lambda p: calls.append(p) or real(p))
+    a, b = core_event("isolate", sid=51), core_event("isolate", sid=52)
+    chain = P0AuditLogger(logs / "core-decision-audit.jsonl", max_bytes=1 << 20)
+    chain_record(chain, a)
+    first = get_trace(client, trace_of(a)).get_json()
+    assert first["sources"]["chain"]["recheck_pending"] is False and len(calls) == 1
+    get_trace(client, trace_of(a))
+    assert len(calls) == 1  # unchanged: not verified again
+    chain_record(chain, b)
+    clock[0] += 1.0
+    early = get_trace(client, trace_of(b)).get_json()
+    assert len(calls) == 1 and early["sources"]["chain"]["recheck_pending"] is True
+    assert early["traces"][0]["chain_record"]["status"] == "not_found"
+    clock[0] += 5.0
+    late = get_trace(client, trace_of(b)).get_json()
+    assert len(calls) == 2 and late["sources"]["chain"]["recheck_pending"] is False
+    assert late["traces"][0]["chain_record"]["status"] == "found"
+
+
+def test_a_rebuild_in_progress_does_not_block_other_requests(web, monkeypatch):
+    client, logs = web
+    a = core_event("isolate", sid=61)
+    chain = P0AuditLogger(logs / "core-decision-audit.jsonl", max_bytes=1 << 20)
+    chain_record(chain, a)
+    assert get_trace(client, trace_of(a)).status_code == 200
+    index = decision_trace._CHAINS[str(logs / "core-decision-audit.jsonl")]
+    chain_record(chain, core_event("isolate", sid=62))
+    assert index._build.acquire(blocking=False)  # another request is rebuilding
+    try:
+        body = get_trace(client, trace_of(a)).get_json()  # answers at once from the last snapshot
+    finally:
+        index._build.release()
+    assert body["sources"]["chain"]["recheck_pending"] is True
+    assert body["traces"][0]["chain_record"]["integrity"] == "verified"
+    src = (ROOT / "py" / "azazel_edge" / "explanations" / "trace.py").read_text(encoding="utf-8")
+    assert "self._build.acquire(blocking=blocking)" in src
+
+
+def test_an_empty_chain_never_makes_a_record_verified():
+    empty = {"ok": True, "verified": False, "scope": "empty", "error": ""}
+    assert decision_trace._integrity(empty, 1) == "not_verified"
+    assert decision_trace._integrity({"ok": True, "verified": True}, 1) == "verified"
+    assert decision_trace._integrity({"ok": False, "verified": False, "error": "chain_hash_mismatch_at:3"}, 3) == "failed_here"
+
+
+def test_a_failed_bundle_trace_returns_the_type_only(web, monkeypatch):
+    def boom(ids):
+        raise OSError(13, "denied: /var/log/azazel-edge/ai/secret-path")
+
+    monkeypatch.setattr(webapp, "_decision_trace_report", boom)
+    report = webapp._bundle_decision_traces([{"decision_trace_id": "core-abc"}])
+    assert report == {"ok": False, "error": "PermissionError", "traces": []}

@@ -184,7 +184,7 @@ and the chain verdict are those of `azazel-edge-audit-review --json`
 
 Auth: token required, `viewer` or higher (no new role). `GET` only; at most
 16 ids (`400 too_many_trace_ids`), each `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`
-(`400 invalid_trace_id`); none: `400 trace_id_required`. `Cache-Control:
+(the whole value; `400 invalid_trace_id`); none: `400 trace_id_required`. `Cache-Control:
 no-store`.
 
 Response: `format` (`azazel-edge/decision-trace/v1`), `read_only: true`,
@@ -195,12 +195,19 @@ Response: `format` (`azazel-edge/decision-trace/v1`), `read_only: true`,
 - `sources.chain`: the `chain` object of `audit_review --json` (`ok`,
   `verified`, `entries`, `error`, `scope`, `genesis_retained`, `files`,
   `chain_id`, `meaning`, `limits`) plus `state` (`present` / `missing` /
-  `unreadable`). A missing or empty chain is `scope: empty`, `verified:
-  false`, never a verified chain.
+  `unreadable`) and `recheck_pending` (the chain changed and is answered
+  from the last verification: it is re-verified at most once per 5 s, and a
+  request never waits for another's verification). A missing or empty chain
+  is `scope: empty`, `verified: false`, never a verified chain. With no id
+  (the bundle when no alert has a decision) nothing is read and both
+  sources are `not_read`.
 - `traces[]`, one per requested decision:
   - `explanation`: `status` `found` with the `audit_review --json` fields
-    (`selected_action`, `release_condition`, `why_not_others`,
-    `evidence_ids`, `schema_valid`, `capsule_signature_state`, …) and
+    except `operator_wording` (it names the target address and TI
+    indicators) (`selected_action`, `release_condition`, `why_not_others`,
+    `evidence_ids`, `schema_valid`, `capsule_signature_state`, …; in the
+    free text, addresses (IPv4, IPv6, host:port), host names, URLs and hex
+    digests are replaced by `[redacted]`) and
     `segment` (`active`, or `rotated` for the `.1` file), `records` (how many
     records carry the id), `reason`, `applied_state`, `not_applied` (the
     `NOT APPLIED` label of an action the core did not apply);

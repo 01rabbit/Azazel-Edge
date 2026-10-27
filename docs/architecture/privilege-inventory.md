@@ -158,10 +158,16 @@ makes both files 0640 azazel-agent:azazel-web, readable by the Web UI's
 group (as `decision-explanations.jsonl`, §11.7, §12 item 6);
 `p0-alert-queue.jsonl` stays 0600 and is not read. Files are opened
 `O_RDONLY|O_NOFOLLOW`; the chain is verified with `audit_review.verify_audit_chain`
-when one of its files changes. No new role, approval flag, environment
+when one of its files changes, at most once per 5 s, and a request never
+waits for another's verification; a request without a decision id reads
+nothing. What a viewer gets: the explanation's fields without
+`operator_wording` (it names the target address and TI indicators), its
+free text (`reason`, `release_condition`, `why_not_others`) with addresses
+(IPv4, IPv6, host:port), host names, URLs and hex digests replaced by
+`[redacted]`, and the chain record without the target address, the core
+event key or the core's trace id. No new role, approval flag, environment
 variable or operation is added. Not checked on a device (container only).
 
-Also read, for completeness:
 Also read, for completeness:
 
 - **Legacy read paths** (fallback candidates when `path_schema` is not

@@ -37,8 +37,13 @@ one trace. What is not there is said, never filled in:
 Read only: files are opened ``O_RDONLY`` (no symlink is followed), nothing is
 written, decided, enforced or notified. Indexes are kept in memory (byte
 offsets only) and refreshed when a file changes: the explanation files
-incrementally while they grow, the chain (re)verified whenever any of its
-files changes.
+incrementally while they grow, the chain re-verified when one of its files
+changes, at most once per ``CHAIN_RECHECK_MIN_S`` and never while a request
+waits on it (``recheck_pending``). A request without an id reads nothing.
+
+What a viewer gets: no ``operator_wording`` (it names the target address and
+TI indicators), free text with addresses, host names, URLs and digests masked
+(:func:`mask_text`), and no target address from the chain record.
 """
 
 from __future__ import annotations
@@ -47,6 +52,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -59,7 +65,7 @@ FORMAT = "azazel-edge/decision-trace/v1"
 # At most this many decisions per request (the dashboard asks for the
 # decisions of the alerts it shows).
 MAX_TRACE_IDS = 16
-TRACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+TRACE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")  # used with fullmatch
 CHAIN_KIND = "action_decision"
 NOT_APPLIED_PREFIX = "NOT APPLIED"
 SEGMENT_ACTIVE = "active"
@@ -79,6 +85,52 @@ _CHAIN_FIELDS = (
     "enforcement_result", "enforce_dry_run", "recorded_by", "reconcile_stale", "event_ts", "sid", "severity",
 )
 
+# The chain is re-verified at most once per this many seconds; between, a
+# changed chain is answered from the last verification with
+# ``recheck_pending`` true. A request never waits for another's verification.
+CHAIN_RECHECK_MIN_S = 5.0
+_monotonic = time.monotonic
+
+# Explanation fields shown (audit_review.record_review without
+# ``operator_wording``, which names the target address and TI indicators).
+# Free text that can still carry them is masked (:func:`mask_text`).
+_EXPLANATION_FIELDS = (
+    "trace_id", "ts", "selected_action", "rejected_actions", "why_not_others", "release_condition",
+    "policy_profile", "config_hash", "config_hash_basis", "evidence_ids", "schema_valid", "schema_problems",
+    "capsule_signature_state",
+)
+MASK = "[redacted]"
+_URL = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+")
+# Colon-separated hex groups (IPv6, optionally [..]:port or %zone); kept only
+# when it is an address (has "::" or at least three colons), so a time such as
+# 07:32:23 is not masked.
+_V6_CANDIDATE = re.compile(r"\[?(?<![0-9A-Za-z:.])(?:[0-9A-Fa-f]{0,4}:){2,7}(?:(?:\d{1,3}\.){3}\d{1,3}|[0-9A-Fa-f]{1,4})?(?:%\w+)?\]?(?::\d{1,5})?(?![0-9A-Za-z])")
+_V4 = re.compile(r"(?<![0-9.])\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?(?::\d{1,5})?(?![0-9])")
+_HOST = re.compile(r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\b(?::\d{1,5})?")
+_DIGEST = re.compile(r"\b[0-9A-Fa-f]{32,}\b")
+
+
+def _v6(match: "re.Match[str]") -> str:
+    text = match.group(0)
+    core = text.split("%", 1)[0].strip("[]")
+    return MASK if ("::" in core or core.count(":") >= 3) else text
+
+
+def mask_text(value: Any, *, digests: bool = True) -> str:
+    """``value`` as text with addresses (IPv4, IPv6, host:port), host names,
+    URLs and (``digests``) hex digests -- target addresses and TI indicators --
+    replaced by ``[redacted]``."""
+
+    text = str(value if value is not None else "")
+    text = _URL.sub(MASK, text)
+    text = _V6_CANDIDATE.sub(_v6, text)
+    text = _V4.sub(MASK, text)
+    text = _HOST.sub(MASK, text)
+    if digests:
+        text = _DIGEST.sub(MASK, text)
+    return text
+
+
 LIMITS = (
     "read only; a trace is shown only for a core decision, never per alert. The explanation file is not"
     " hash-chained and its trust capsule is not verified here; the core decision chain holds P0 decisions"
@@ -87,7 +139,7 @@ LIMITS = (
 
 
 def valid_trace_id(value: Any) -> bool:
-    return isinstance(value, str) and bool(TRACE_ID_RE.match(value))
+    return isinstance(value, str) and TRACE_ID_RE.fullmatch(value) is not None
 
 
 def alert_decision_trace_id(row: Any) -> str:
@@ -233,17 +285,29 @@ class _ExplanationFile:
         return count, row
 
 
+class _ChainSnapshot:
+    """One verification of the chain: immutable once built."""
+
+    def __init__(self, signature: Any, state: str, verdict: Dict[str, Any],
+                 entries: Dict[str, List[Tuple[int, str, Tuple[int, int], int, int]]], checked_at: float):
+        self.signature = signature
+        self.state = state
+        self.verdict = verdict
+        self.entries = entries
+        self.checked_at = checked_at
+
+
 class _ChainIndex:
     """The core decision chain's verdict (``audit_review.verify_audit_chain``)
     and trace_id -> [(position, file, offset, length)] of its
-    ``action_decision`` records, rebuilt whenever a file of the chain changes."""
+    ``action_decision`` records, rebuilt when a file of the chain changes, at
+    most once per :data:`CHAIN_RECHECK_MIN_S`. Readers take the current
+    snapshot and never wait for a rebuild (only one runs at a time)."""
 
     def __init__(self, path: Path):
         self.path = path
-        self.signature: Any = None
-        self.state = "missing"
-        self.verdict: Dict[str, Any] = {}
-        self.entries: Dict[str, List[Tuple[int, str, Tuple[int, int], int, int]]] = {}
+        self.snapshot: Optional[_ChainSnapshot] = None
+        self._build = threading.Lock()
 
     def _signature(self) -> Tuple[Any, ...]:
         sig = []
@@ -258,14 +322,36 @@ class _ChainIndex:
             sig.append((st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns))
         return tuple(sig)
 
-    def refresh(self) -> None:
+    def current(self) -> Tuple[_ChainSnapshot, bool]:
+        """(snapshot, recheck_pending)."""
+
+        snap = self.snapshot
         try:
             sig = self._signature()
         except OSError as exc:
-            self._unreadable(exc)
-            return
-        if sig == self.signature:
-            return
+            sig, err = None, exc
+        else:
+            err = None
+        if snap is not None and err is None and sig == snap.signature:
+            return snap, False
+        if snap is not None and _monotonic() - snap.checked_at < CHAIN_RECHECK_MIN_S:
+            return snap, True
+        # Only one rebuild at a time; the others answer from the last one.
+        blocking = snap is None
+        if not self._build.acquire(blocking=blocking):
+            return snap, True  # type: ignore[return-value]
+        try:
+            if self.snapshot is not snap and self.snapshot is not None:
+                return self.snapshot, False  # built while this request waited
+            self.snapshot = self._rebuild() if err is None else self._unreadable(err)
+            return self.snapshot, False
+        finally:
+            self._build.release()
+
+    def _rebuild(self) -> _ChainSnapshot:
+        verdict: Dict[str, Any] = {}
+        entries: Dict[str, List[Tuple[int, str, Tuple[int, int], int, int]]] = {}
+        after: Any = None
         for _ in range(3):
             try:
                 before = self._signature()
@@ -273,26 +359,21 @@ class _ChainIndex:
                 entries = self._index([str(name) for name in verdict.get("files") or []])
                 after = self._signature()
             except Exception as exc:  # OSError (permission) and anything unexpected: never a success
-                self._unreadable(exc)
-                return
+                return self._unreadable(exc)
             if before == after:
                 break
         else:
             verdict = dict(verdict, ok=False, verified=False, scope=audit_review.SCOPE_NOT_VERIFIED,
                            error="snapshot_inconsistent:rotation_kept_moving_files")
-        self.signature = after
-        self.verdict = verdict
-        self.entries = entries
-        self.state = "missing" if verdict.get("scope") == audit_review.SCOPE_EMPTY and not verdict.get("files") else "present"
+        state = "missing" if verdict.get("scope") == audit_review.SCOPE_EMPTY and not verdict.get("files") else "present"
+        return _ChainSnapshot(after, state, verdict, entries, _monotonic())
 
-    def _unreadable(self, exc: BaseException) -> None:
-        self.signature = None
-        self.state = "unreadable"
-        self.verdict = {
+    def _unreadable(self, exc: BaseException) -> _ChainSnapshot:
+        verdict = {
             "ok": False, "verified": False, "entries": 0, "scope": audit_review.SCOPE_NOT_VERIFIED,
             "error": f"unreadable:{type(exc).__name__}", "files": [], "chain_id": "",
         }
-        self.entries = {}
+        return _ChainSnapshot(None, "unreadable", verdict, {}, _monotonic())
 
     def _index(self, names: Iterable[str]) -> Dict[str, List[Tuple[int, str, Tuple[int, int], int, int]]]:
         entries: Dict[str, List[Tuple[int, str, Tuple[int, int], int, int]]] = {}
@@ -321,8 +402,8 @@ class _ChainIndex:
                 offset += len(raw) + 1
         return entries
 
-    def lookup(self, trace_id: str) -> Tuple[int, Optional[Dict[str, Any]], Optional[Tuple[int, str]]]:
-        found = self.entries.get(trace_id) or []
+    def lookup(self, snap: _ChainSnapshot, trace_id: str) -> Tuple[int, Optional[Dict[str, Any]], Optional[Tuple[int, str]]]:
+        found = snap.entries.get(trace_id) or []
         if not found:
             return 0, None, None
         position, name, key, offset, length = found[-1]
@@ -332,8 +413,8 @@ class _ChainIndex:
         return len(found), row, (position, name)
 
 
-_LOCK = threading.Lock()
-_EXPLANATIONS: Dict[str, Tuple[_ExplanationFile, _ExplanationFile]] = {}
+_LOCK = threading.Lock()  # guards the registries only
+_EXPLANATIONS: Dict[str, Tuple[threading.Lock, _ExplanationFile, _ExplanationFile]] = {}
 _CHAINS: Dict[str, _ChainIndex] = {}
 
 
@@ -359,7 +440,16 @@ def _segment(name: str, active_name: str) -> str:
 
 
 def _explanation_view(record: Dict[str, Any], *, count: int, segment: str) -> Dict[str, Any]:
-    view = dict(audit_review.record_review(record))
+    review = audit_review.record_review(record)
+    view: Dict[str, Any] = {key: review[key] for key in _EXPLANATION_FIELDS}
+    view["release_condition"] = mask_text(view["release_condition"])
+    view["rejected_actions"] = [mask_text(a) for a in view["rejected_actions"] or [] if isinstance(a, (str, int))]
+    view["why_not_others"] = [
+        {"action": mask_text(item.get("action")), "reason": mask_text(item.get("reason"))}
+        for item in view["why_not_others"] or [] if isinstance(item, dict)
+    ]
+    view["evidence_ids"] = [mask_text(e, digests=False) for e in view["evidence_ids"] or [] if isinstance(e, (str, int))]
+    view["schema_problems"] = [mask_text(p) for p in view["schema_problems"] or []]
     machine = record.get("machine") if isinstance(record.get("machine"), dict) else {}
     arbiter = machine.get("arbiter") if isinstance(machine.get("arbiter"), dict) else {}
     release = str(record.get("release_condition") or "")
@@ -367,7 +457,7 @@ def _explanation_view(record: Dict[str, Any], *, count: int, segment: str) -> Di
         status="found",
         segment=segment,
         records=count,
-        reason=str(record.get("reason") or ""),
+        reason=mask_text(record.get("reason")),
         applied_state=str(arbiter.get("applied_state") or ""),
         not_applied=release.startswith(NOT_APPLIED_PREFIX),
     )
@@ -388,6 +478,23 @@ def _chain_view(record: Dict[str, Any], *, count: int, position: int, name: str,
     return view
 
 
+def _explanation_files(exp_path: Path) -> Tuple[threading.Lock, _ExplanationFile, _ExplanationFile]:
+    with _LOCK:
+        files = _EXPLANATIONS.get(str(exp_path))
+        if files is None:
+            files = (threading.Lock(), _ExplanationFile(exp_path), _ExplanationFile(segment_path(exp_path, 1)))
+            _EXPLANATIONS[str(exp_path)] = files
+        return files
+
+
+def _chain_index(chain_path: Path) -> _ChainIndex:
+    with _LOCK:
+        chain = _CHAINS.get(str(chain_path))
+        if chain is None:
+            chain = _CHAINS[str(chain_path)] = _ChainIndex(chain_path)
+        return chain
+
+
 def trace_report(
     trace_ids: Iterable[str],
     *,
@@ -395,7 +502,8 @@ def trace_report(
     audit_path: str | Path,
 ) -> Dict[str, Any]:
     """The decision traces of ``trace_ids`` (deduplicated, in order, at most
-    :data:`MAX_TRACE_IDS`; invalid ids raise ValueError). Read only."""
+    :data:`MAX_TRACE_IDS`; invalid ids raise ValueError). Read only. No id:
+    nothing is read (``sources`` are ``not_read``)."""
 
     ids: List[str] = []
     for tid in trace_ids:
@@ -405,90 +513,90 @@ def trace_report(
             ids.append(tid)
     if len(ids) > MAX_TRACE_IDS:
         raise ValueError("too_many_trace_ids")
+    report: Dict[str, Any] = {
+        "ok": True,
+        "format": FORMAT,
+        "read_only": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "sources": {"explanations": {"state": "not_read"}, "chain": {"state": "not_read"}},
+        "traces": [],
+        "limits": LIMITS,
+    }
+    if not ids:
+        return report
     exp_path = Path(explanations_path)
     chain_path = Path(audit_path)
 
-    with _LOCK:
-        files = _EXPLANATIONS.get(str(exp_path))
-        if files is None:
-            files = (_ExplanationFile(exp_path), _ExplanationFile(segment_path(exp_path, 1)))
-            _EXPLANATIONS[str(exp_path)] = files
-        active, rotated = files
-        exp_state = "missing"
+    lock, active, rotated = _explanation_files(exp_path)
+    explanations: Dict[str, Dict[str, Any]] = {}
+    with lock:  # incremental: only what was appended since the last request
         exp_error = ""
         try:
             states = [active.refresh(), rotated.refresh()]
             exp_state = "present" if "present" in states else "missing"
         except OSError as exc:
             exp_state, exp_error = "unreadable", type(exc).__name__
-        chain = _CHAINS.get(str(chain_path))
-        if chain is None:
-            chain = _CHAINS[str(chain_path)] = _ChainIndex(chain_path)
-        chain.refresh()
-        verdict = dict(chain.verdict)
-
-        traces = []
         for tid in ids:
-            explanation: Dict[str, Any]
             if exp_state == "unreadable":
-                explanation = {"status": "source_unreadable"}
+                explanations[tid] = {"status": "source_unreadable"}
+                continue
+            n_active, rec = active.lookup(tid)
+            n_rotated, rec_rotated = rotated.lookup(tid)
+            count = n_active + n_rotated
+            if rec is not None:
+                explanations[tid] = _explanation_view(rec, count=count, segment=SEGMENT_ACTIVE)
+            elif rec_rotated is not None:
+                explanations[tid] = _explanation_view(rec_rotated, count=count, segment=SEGMENT_ROTATED)
             else:
-                n_active, rec = active.lookup(tid)
-                n_rotated, rec_rotated = rotated.lookup(tid)
-                count = n_active + n_rotated
-                if rec is not None:
-                    explanation = _explanation_view(rec, count=count, segment=SEGMENT_ACTIVE)
-                elif rec_rotated is not None:
-                    explanation = _explanation_view(rec_rotated, count=count, segment=SEGMENT_ROTATED)
-                else:
-                    explanation = {
-                        "status": "not_found",
-                        "rotated_file_present": rotated.key is not None,
-                        "note": "no explanation with this trace_id in the retained files"
-                        + ("; older ones may have been rotated out" if rotated.key is not None else ""),
-                    }
-            chain_record: Dict[str, Any]
-            if chain.state == "unreadable":
-                chain_record = {"status": "source_unreadable"}
-            else:
-                count, row, where = chain.lookup(tid)
-                if row is not None and where is not None:
-                    chain_record = _chain_view(row, count=count, position=where[0], name=where[1],
-                                               active_name=chain_path.name, verdict=verdict)
-                elif where is not None:
-                    chain_record = {"status": "changed", "note": "the record changed after it was indexed; ask again"}
-                else:
-                    chain_record = {
-                        "status": "not_found",
-                        "note": "the core decision chain holds P0 decisions only; records rotated out are not retained",
-                    }
-            consistency: Dict[str, Any] = {}
-            if explanation.get("status") == "found" and chain_record.get("status") == "found":
-                consistency["action_matches"] = (
-                    str(explanation.get("selected_action") or "") == str(chain_record.get("action") or "")
-                )
-            traces.append({
-                "trace_id": tid,
-                "explanation": explanation,
-                "chain_record": chain_record,
-                "consistency": consistency,
-            })
-
-        return {
-            "ok": True,
-            "format": FORMAT,
-            "read_only": True,
-            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "sources": {
-                "explanations": {
-                    "state": exp_state,
-                    "error": exp_error,
-                    "files": [p.path.name for p in (rotated, active) if p.key is not None],
-                    "unparsed_lines": active.unparsed + rotated.unparsed,
-                    "truncated": bool(active.truncated or rotated.truncated),
-                },
-                "chain": dict(audit_review.chain_review(verdict), state=chain.state),
-            },
-            "traces": traces,
-            "limits": LIMITS,
+                explanations[tid] = {
+                    "status": "not_found",
+                    "rotated_file_present": rotated.key is not None,
+                    "note": "no explanation with this trace_id in the retained files"
+                    + ("; older ones may have been rotated out" if rotated.key is not None else ""),
+                }
+        exp_source = {
+            "state": exp_state,
+            "error": exp_error,
+            "files": [p.path.name for p in (rotated, active) if p.key is not None],
+            "unparsed_lines": active.unparsed + rotated.unparsed,
+            "truncated": bool(active.truncated or rotated.truncated),
         }
+
+    chain = _chain_index(chain_path)
+    snap, recheck_pending = chain.current()
+    verdict = dict(snap.verdict)
+    traces = []
+    for tid in ids:
+        explanation = explanations[tid]
+        chain_record: Dict[str, Any]
+        if snap.state == "unreadable":
+            chain_record = {"status": "source_unreadable"}
+        else:
+            count, row, where = chain.lookup(snap, tid)
+            if row is not None and where is not None:
+                chain_record = _chain_view(row, count=count, position=where[0], name=where[1],
+                                           active_name=chain_path.name, verdict=verdict)
+            elif where is not None:
+                chain_record = {"status": "changed", "note": "the record changed after it was indexed; ask again"}
+            else:
+                chain_record = {
+                    "status": "not_found",
+                    "note": "the core decision chain holds P0 decisions only; records rotated out are not retained",
+                }
+        consistency: Dict[str, Any] = {}
+        if explanation.get("status") == "found" and chain_record.get("status") == "found":
+            consistency["action_matches"] = (
+                str(explanation.get("selected_action") or "") == str(chain_record.get("action") or "")
+            )
+        traces.append({
+            "trace_id": tid,
+            "explanation": explanation,
+            "chain_record": chain_record,
+            "consistency": consistency,
+        })
+    report["sources"] = {
+        "explanations": exp_source,
+        "chain": dict(audit_review.chain_review(verdict), state=snap.state, recheck_pending=recheck_pending),
+    }
+    report["traces"] = traces
+    return report
