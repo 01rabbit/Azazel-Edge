@@ -985,11 +985,13 @@
     var INTEGRITY_WORD = {
         verified: 'VERIFIED',
         failed_here: 'TAMPERED (verification failed at this record)',
-        not_verified: 'NOT VERIFIED'
+        not_verified: 'NOT VERIFIED',
+        pending: 'RE-VERIFYING (chain changed; not verified yet)'
     };
     function chainVerdictText(chain) {
         chain = chain || {};
         if (chain.state === 'unreadable') return 'UNREADABLE';
+        if (chain.recheck_pending) return 'RE-VERIFYING (chain changed; not verified yet)';
         if (chain.verified) return 'VERIFIED (' + String(chain.scope || '') + ')';
         if (chain.ok && chain.scope === 'empty') return 'EMPTY (nothing verified)';
         return 'NOT OK' + (chain.error ? (': ' + String(chain.error)) : '');
@@ -1009,7 +1011,7 @@
         if (e.status === 'found') {
             rows.push(['Explanation', 'recorded' + (e.segment === 'rotated' ? ' (rotated file .1)' : '')]);
             rows.push(['Action', upper(e.selected_action, '—') + (e.not_applied ? ' · NOT APPLIED' : '')]);
-            rows.push(['Release', e.release_condition || '—']);
+            rows.push(['Applied', e.applied_label || (e.applied_state ? String(e.applied_state).toUpperCase() : '—')]);
             rows.push(['Schema', e.schema_valid ? 'OK' : 'INVALID']);
         } else if (e.status === 'not_found') {
             rows.push(['Explanation', 'No record' + (e.rotated_file_present ? ' (older records may be rotated out)' : '')]);

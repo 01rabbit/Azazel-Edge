@@ -108,7 +108,7 @@ const report = {
     traces: [{
         trace_id: TID,
         explanation: { status: 'found', segment: 'active', selected_action: 'isolate', not_applied: true,
-            release_condition: 'NOT APPLIED - planned only (dry_run)', schema_valid: true },
+            applied_state: 'not_applied', applied_label: 'NOT APPLIED - planned only (dry_run)', schema_valid: true },
         chain_record: { status: 'found', segment: 'active', integrity: 'verified', action: 'isolate' },
         consistency: { action_matches: true },
     }],
@@ -144,6 +144,7 @@ eq(found.state, 'recorded', 'explanation found -> recorded');
 eq(found.traceId, TID, 'the decision id is shown');
 ok(rowText(found).indexOf('Action=ISOLATE · NOT APPLIED') !== -1, 'a dry-run action is labelled NOT APPLIED: ' + rowText(found));
 ok(rowText(found).indexOf('Chain record=VERIFIED') !== -1, 'verified chain record: ' + rowText(found));
+ok(rowText(found).indexOf('Applied=NOT APPLIED - planned only (dry_run)') !== -1, 'applied label shown: ' + rowText(found));
 ok(rowText(found).indexOf('2 alerts in view share this decision') !== -1, 'shared count shown once per decision');
 
 // The report did not carry this decision: not loaded, not made up.
@@ -189,6 +190,15 @@ const unreadable = decisionTraceView(TID, { ok: true, sources: { chain: { state:
     trace_id: TID, explanation: { status: 'source_unreadable' }, chain_record: { status: 'source_unreadable' }, consistency: {} }] }, 1);
 ok(rowText(unreadable).indexOf('Explanation=source unreadable') !== -1 && rowText(unreadable).indexOf('Chain=UNREADABLE') !== -1,
     'unreadable sources say so: ' + rowText(unreadable));
+
+
+// Re-verifying: an answer from before the chain changed is never verified.
+const pendingView = decisionTraceView(TID, { ok: true, sources: { chain: { ok: true, verified: false, recheck_pending: true, scope: 'from_genesis' } }, traces: [{
+    trace_id: TID, explanation: { status: 'found', selected_action: 'isolate', schema_valid: true },
+    chain_record: { status: 'found', integrity: 'pending' }, consistency: {} }] }, 1);
+ok(rowText(pendingView).indexOf('Chain record=RE-VERIFYING') !== -1, 'pending record shown as re-verifying: ' + rowText(pendingView));
+ok(rowText(pendingView).indexOf('Chain=RE-VERIFYING') !== -1, 'pending chain shown as re-verifying');
+ok(rowText(pendingView).indexOf('VERIFIED (') === -1 && rowText(pendingView).indexOf('=VERIFIED') === -1, 'pending never reads as verified');
 
 if (failures) { console.error(failures + ' assertion(s) failed'); process.exit(1); }
 console.log('sentinel logic: all assertions passed');

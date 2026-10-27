@@ -16,6 +16,7 @@ import io
 import json
 import re
 import sys
+import threading
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -170,11 +171,14 @@ def test_a_p0_decision_shows_its_explanation_and_verified_chain_record(web):
     assert exp["status"] == "found" and exp["segment"] == "active" and exp["records"] == 1
     assert exp["selected_action"] == "isolate" and exp["schema_valid"] is True
     # A dry run: never shown as applied.
-    assert exp["not_applied"] is True and exp["release_condition"] == "NOT APPLIED - planned only (dry_run)"
+    assert exp["not_applied"] is True and exp["applied_state"] == "not_applied"
+    assert exp["applied_label"] == rec["release_condition"] == "NOT APPLIED - planned only (dry_run)"
+    assert set(exp) <= decision_trace.EXPLANATION_KEYS and set(chain) <= decision_trace.CHAIN_KEYS
     assert chain["status"] == "found" and chain["integrity"] == "verified" and chain["segment"] == "active"
     assert chain["action"] == "isolate" and trace["consistency"] == {"action_matches": True}
     assert body["sources"]["chain"]["verified"] is True and body["sources"]["chain"]["scope"] == "from_genesis"
-    # The same fields and verdict as audit_review --json.
+    # The same verdict as audit_review --json, and the same values for the
+    # allowlisted fields it shares.
     out = io.StringIO()
     with redirect_stdout(out):
         rc = audit_review.main(["--explanations-path", str(logs / "decision-explanations.jsonl"),
@@ -182,18 +186,17 @@ def test_a_p0_decision_shows_its_explanation_and_verified_chain_record(web):
                                 "--trace-id", rec["trace_id"], "--json"])
     assert rc == 0
     cli = json.loads(out.getvalue())
-    # operator_wording names the target address and TI indicators: not shown
-    # to viewers (the free-text fields that remain are masked).
-    excluded = {"operator_wording"}
-    assert "operator_wording" not in exp
-    for key, value in cli.items():
-        if key in excluded:
-            continue
-        if key == "chain":
-            for ck, cv in value.items():
-                assert body["sources"]["chain"][ck] == cv, ck
-        else:
-            assert exp[key] == value, key
+    # Free text is never shown to viewers (allowlist): these CLI keys are left out.
+    free_text = {"operator_wording", "release_condition", "why_not_others", "rejected_actions", "evidence_ids",
+                 "schema_problems"}
+    shared = (set(cli) - {"chain"}) & decision_trace.EXPLANATION_KEYS
+    assert shared == {"trace_id", "ts", "selected_action", "policy_profile", "config_hash", "config_hash_basis",
+                      "schema_valid", "capsule_signature_state"}
+    assert not (free_text & set(exp))
+    for key in shared:
+        assert exp[key] == cli[key], key
+    for ck, cv in cli["chain"].items():
+        assert body["sources"]["chain"][ck] == cv, ck
     # Nothing new and personal: no event key, core trace id, target address or plan.
     text = json.dumps(chain)
     for absent in ("core_event_key", "core_trace_id", "target", "agent_received"):
@@ -451,7 +454,8 @@ def test_no_target_address_or_indicator_reaches_a_viewer(web, tmp_path, monkeypa
     (trace,) = body["traces"]
     assert trace["explanation"]["status"] == "found" and trace["chain_record"]["status"] == "found"
     assert "operator_wording" not in trace["explanation"]
-    assert "[redacted]" in trace["explanation"]["reason"]
+    assert "reason" not in trace["explanation"]
+    _check_types(trace["explanation"], decision_trace.EXPLANATION_KEYS)
     exported = get_trace(client, tid, path="/api/decision-trace/export").get_data(as_text=True)
 
     events = tmp_path / "ai-events.jsonl"
@@ -469,19 +473,76 @@ def test_no_target_address_or_indicator_reaches_a_viewer(web, tmp_path, monkeypa
             assert needle not in text, (name, needle)
 
 
-@pytest.mark.parametrize("text,kept", [
-    ("isolate for 203.0.113.9:22 because high severity sid=9300001", "sid=9300001"),
-    ("to 2001:db8::1 and [2001:db8::2]:443 and fe80::1%eth0", "and"),
-    ("v4-mapped ::ffff:192.0.2.1 and 10.0.0.0/8", "v4-mapped"),
-    ("ti evil.example.com:8080 http://x.example/z", "ti"),
-    ("NOT APPLIED - planned only (dry_run)", "NOT APPLIED - planned only (dry_run)"),
-    ("core lease expires at 2026-10-27T07:32:23+00:00", "2026-10-27T07:32:23+00:00"),
-    ("core fallback: severity_high_redirect_to_decoy", "severity_high_redirect_to_decoy"),
-])
-def test_mask_text_hides_addresses_and_indicators_only(text, kept):
-    masked = decision_trace.mask_text(text)
-    assert kept in masked
-    assert not re.search(r"\d{1,3}(\.\d{1,3}){3}|::|example", masked), masked
+FREE_TEXT = "FREE-TEXT 203.0.113.77 evil.example.org ip:2001:db8::7 10_0_0_1 hxxp[:]//x[.]y ２０３．０．１１３．７７ 3405803853"
+
+
+def _poisoned_record(trace_id: str) -> dict:
+    """An explanation whose every text field carries free text."""
+    return {
+        "ts": FREE_TEXT, "trace_id": trace_id, "format_version": "v2", "selected_action": FREE_TEXT,
+        "reason": FREE_TEXT, "rejected_actions": [FREE_TEXT], "release_condition": FREE_TEXT,
+        "policy_profile": FREE_TEXT, "config_hash": FREE_TEXT, "why_chosen": {"x": FREE_TEXT},
+        "why_not_others": [{"action": FREE_TEXT, "reason": FREE_TEXT}], "evidence_ids": [FREE_TEXT],
+        "next_checks": [FREE_TEXT], "operator_wording": FREE_TEXT,
+        "machine": {"arbiter": {"applied_state": FREE_TEXT, "control_mode": FREE_TEXT,
+                                "policy": {"hash_basis": FREE_TEXT}}},
+        "trust_capsule": {"signature_state": FREE_TEXT},
+    }
+
+
+def _check_types(view: dict, keys: frozenset) -> None:
+    assert set(view) <= keys, set(view) - keys
+    for key, value in view.items():
+        if key in ("records", "position", "sid", "severity", "schema_problem_count", "rejected_action_count",
+                   "evidence_count"):
+            assert isinstance(value, int) and not isinstance(value, bool), key
+        elif key in ("not_applied", "schema_valid", "enforce_dry_run", "reconcile_stale"):
+            assert isinstance(value, bool), key
+        elif key == "applied_label":
+            modes = "|".join(sorted(decision_trace.ENFORCEMENT_MODES | {"unknown"}))
+            assert re.fullmatch(rf"(NOT APPLIED - planned only \(({modes})\)|NOT APPLIED - apply failed|)", value), value
+        else:
+            assert isinstance(value, str), key
+            assert "FREE-TEXT" not in value and " " not in value, (key, value)
+
+
+def test_free_text_of_any_field_never_reaches_a_viewer(web):
+    client, logs = web
+    tid = "core-0123456789abcdef0123456789abcdef"
+    (logs / "decision-explanations.jsonl").write_text(json.dumps(_poisoned_record(tid)) + "\n", encoding="utf-8")
+    row = {"kind": "action_decision", "trace_id": tid, "source": FREE_TEXT, "chain_prev": "", "action": FREE_TEXT,
+           "decided_action": FREE_TEXT, "effective_action": "isolate", "enforcement_mode": FREE_TEXT,
+           "enforcement_result": FREE_TEXT, "enforce_dry_run": "yes", "recorded_by": FREE_TEXT,
+           "reconcile_stale": FREE_TEXT, "event_ts": FREE_TEXT, "sid": "9300001", "severity": True,
+           "target": FREE_TEXT, "reason": FREE_TEXT, "policy_reason": FREE_TEXT, "ts": FREE_TEXT}
+    row["chain_hash"] = P0AuditLogger._compute_chain_hash(row)
+    (logs / "core-decision-audit.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+    for path in ("/api/decision-trace", "/api/decision-trace/export"):
+        text = get_trace(client, tid, path=path).get_data(as_text=True)
+        for needle in ("FREE-TEXT", "203.0.113", "example", "2001:db8", "10_0_0_1", "hxxp", "２０３", "3405803853"):
+            assert needle not in text, (path, needle)
+    (trace,) = get_trace(client, tid).get_json()["traces"]
+    exp, chain = trace["explanation"], trace["chain_record"]
+    _check_types(exp, decision_trace.EXPLANATION_KEYS)
+    _check_types(chain, decision_trace.CHAIN_KEYS)
+    # Wrong type or form: left out, never coerced.
+    for key in ("ts", "selected_action", "applied_state", "applied_label", "policy_profile", "config_hash",
+                "config_hash_basis", "enforcement_mode"):
+        assert key not in exp, key
+    for key in ("sid", "severity", "action", "enforce_dry_run", "reconcile_stale", "recorded_by", "event_ts", "ts"):
+        assert key not in chain, key
+    assert chain["effective_action"] == "isolate" and chain["integrity"] == "verified"
+    assert exp["rejected_action_count"] == 1 and exp["evidence_count"] == 1 and exp["schema_valid"] is False
+
+
+def test_the_applied_label_is_built_from_enumerated_values_only():
+    assert decision_trace.applied_label("not_applied", "dry_run") == "NOT APPLIED - planned only (dry_run)"
+    assert decision_trace.applied_label("not_applied", None) == "NOT APPLIED - planned only (unknown)"
+    assert decision_trace.applied_label("apply_failed", "enforced") == "NOT APPLIED - apply failed"
+    assert decision_trace.applied_label("applied", "enforced") == ""
+    assert decision_trace.applied_label("none", None) == ""
+    src = (ROOT / "py" / "azazel_edge" / "explanations" / "trace.py").read_text(encoding="utf-8")
+    assert "mask_text" not in src and "release_condition\")" not in src
 
 
 # ----------------------------------------------------------------- load
@@ -540,7 +601,9 @@ def test_a_rebuild_in_progress_does_not_block_other_requests(web, monkeypatch):
     finally:
         index._build.release()
     assert body["sources"]["chain"]["recheck_pending"] is True
-    assert body["traces"][0]["chain_record"]["integrity"] == "verified"
+    # An answer from before the change is not verified now.
+    assert body["traces"][0]["chain_record"]["integrity"] == "pending"
+    assert body["sources"]["chain"]["verified"] is False
     src = (ROOT / "py" / "azazel_edge" / "explanations" / "trace.py").read_text(encoding="utf-8")
     assert "self._build.acquire(blocking=blocking)" in src
 
@@ -559,3 +622,91 @@ def test_a_failed_bundle_trace_returns_the_type_only(web, monkeypatch):
     monkeypatch.setattr(webapp, "_decision_trace_report", boom)
     report = webapp._bundle_decision_traces([{"decision_trace_id": "core-abc"}])
     assert report == {"ok": False, "error": "PermissionError", "traces": []}
+
+
+def _in_thread(fn, timeout: float = 20.0):
+    """Run fn in a thread; fail (never hang) when it does not finish."""
+    box: dict = {}
+
+    def run():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # pragma: no cover - reported below
+            box["error"] = exc
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout)
+    assert not t.is_alive(), "timed out"
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def test_a_query_right_after_tampering_is_never_verified(web, monkeypatch):
+    client, logs = web
+    clock = [5000.0]
+    monkeypatch.setattr(decision_trace, "_monotonic", lambda: clock[0])
+    monkeypatch.setattr(decision_trace, "CHAIN_RECHECK_MIN_S", 5.0)
+    events = [core_event("isolate", sid=70 + i) for i in range(2)]
+    chain_path = logs / "core-decision-audit.jsonl"
+    chain = P0AuditLogger(chain_path, max_bytes=1 << 20)
+    for event in events:
+        chain_record(chain, event)
+    assert get_trace(client, trace_of(events[1])).get_json()["traces"][0]["chain_record"]["integrity"] == "verified"
+    _tamper(chain_path, 1)
+    body = _in_thread(lambda: get_trace(client, trace_of(events[1])).get_json())
+    assert body["traces"][0]["chain_record"]["integrity"] == "pending"
+    assert body["sources"]["chain"]["verified"] is False and body["sources"]["chain"]["recheck_pending"] is True
+    clock[0] += 6.0
+    body = _in_thread(lambda: get_trace(client, trace_of(events[1])).get_json())
+    assert body["traces"][0]["chain_record"]["integrity"] == "failed_here"
+
+
+def test_two_concurrent_rebuilds_run_once_and_never_hang(web, monkeypatch):
+    _, logs = web
+    chain_path = logs / "core-decision-audit.jsonl"
+    chain = P0AuditLogger(chain_path, max_bytes=1 << 20)
+    chain_record(chain, core_event("isolate", sid=81))
+    real = audit_review.verify_audit_chain
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def slow(path):
+        calls.append(path)
+        entered.set()
+        assert release.wait(20), "never released"
+        return real(path)
+
+    monkeypatch.setattr(audit_review, "verify_audit_chain", slow)
+    index = decision_trace._ChainIndex(chain_path)
+
+    # First build: the second caller waits for it (nothing to answer from) and
+    # gets the snapshot the first one built; verification runs once.
+    results: list = []
+    t1 = threading.Thread(target=lambda: results.append(index.current()), daemon=True)
+    t1.start()
+    assert entered.wait(20)
+    t2 = threading.Thread(target=lambda: results.append(index.current()), daemon=True)
+    t2.start()
+    release.set()
+    t1.join(20)
+    t2.join(20)
+    assert not t1.is_alive() and not t2.is_alive(), "timed out"
+    assert len(calls) == 1
+    assert results[0][0] is results[1][0] and all(pending is False for _, pending in results)
+
+    # A rebuild after a change: the other caller answers at once (pending).
+    monkeypatch.setattr(decision_trace, "CHAIN_RECHECK_MIN_S", 0.0)
+    chain_record(chain, core_event("isolate", sid=82))
+    entered.clear()
+    release.clear()
+    t3 = threading.Thread(target=lambda: results.append(index.current()), daemon=True)
+    t3.start()
+    assert entered.wait(20)
+    snap, pending = _in_thread(index.current, timeout=5)
+    assert pending is True and snap is results[0][0]
+    release.set()
+    t3.join(20)
+    assert not t3.is_alive(), "timed out"
+    assert len(calls) == 2 and results[-1][1] is False and results[-1][0] is not snap

@@ -9,10 +9,10 @@ Joins, per core decision, the two records that already exist for it:
   (``core-decision-audit.jsonl`` and ``.1``; P0 decisions only), whose
   ``trace_id`` is the same (``core_decisions.core_decision_payload``).
 
-The explanation fields and the chain verdict are the ones
-``azazel-edge-audit-review --json`` prints (:func:`audit_review.record_review`,
-:func:`audit_review.verify_audit_chain`, :func:`audit_review.chain_review`),
-so the Web UI and the CLI never disagree about a record.
+The chain verdict is the one ``azazel-edge-audit-review --json`` prints
+(:func:`audit_review.verify_audit_chain`, :func:`audit_review.chain_review`);
+the explanation values shown are an allowlisted subset of the same record
+(below), so the Web UI and the CLI never disagree about a record.
 
 Never fabricated: a trace exists only for a decision. An alert row of the AI
 event log has a decision trace id only when its event is a core decision
@@ -30,7 +30,8 @@ one trace. What is not there is said, never filled in:
   verifies as ``audit_review`` verifies it; ``failed_here`` for the record
   where verification failed (rewritten, removed or reordered before it);
   ``not_verified`` otherwise (the chain failed elsewhere, or it could not be
-  read);
+  read); ``pending`` while a changed chain has not been re-verified yet
+  (``sources.chain.recheck_pending``; ``verified`` is then false);
 * a source that is missing or unreadable is ``missing`` / ``unreadable``,
   never an empty success.
 
@@ -41,9 +42,14 @@ incrementally while they grow, the chain re-verified when one of its files
 changes, at most once per ``CHAIN_RECHECK_MIN_S`` and never while a request
 waits on it (``recheck_pending``). A request without an id reads nothing.
 
-What a viewer gets: no ``operator_wording`` (it names the target address and
-TI indicators), free text with addresses, host names, URLs and digests masked
-(:func:`mask_text`), and no target address from the chain record.
+What a viewer gets is an allowlist (:data:`EXPLANATION_KEYS`,
+:data:`CHAIN_KEYS`): enumerated or structured values whose type and form are
+checked, and counts. No free text at all (``reason``, ``release_condition``,
+``why_not_others``, ``operator_wording``, evidence ids, schema problem texts):
+they can carry the target address and TI indicators. The applied-state
+label is built from the enumerated ``applied_state`` and enforcement mode,
+never taken from text. A value of the wrong type or form is left out.
+Operators who need the full record use ``sudo azazel-edge-audit-review``.
 """
 
 from __future__ import annotations
@@ -78,57 +84,68 @@ _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _FAIL_AT = re.compile(r"^(?:chain_hash_mismatch|chain_prev_mismatch|chain_id_mismatch|parse_error)_at:(\d+)$")
 
-# Fields of a chain record that are shown. Not copied: the core event key,
-# the core's own trace id, the target address and the agent's receive stamps.
-_CHAIN_FIELDS = (
-    "ts", "kind", "trace_id", "action", "decided_action", "effective_action", "enforcement_mode",
-    "enforcement_result", "enforce_dry_run", "recorded_by", "reconcile_stale", "event_ts", "sid", "severity",
-)
-
 # The chain is re-verified at most once per this many seconds; between, a
 # changed chain is answered from the last verification with
 # ``recheck_pending`` true. A request never waits for another's verification.
 CHAIN_RECHECK_MIN_S = 5.0
 _monotonic = time.monotonic
 
-# Explanation fields shown (audit_review.record_review without
-# ``operator_wording``, which names the target address and TI indicators).
-# Free text that can still carry them is masked (:func:`mask_text`).
-_EXPLANATION_FIELDS = (
-    "trace_id", "ts", "selected_action", "rejected_actions", "why_not_others", "release_condition",
-    "policy_profile", "config_hash", "config_hash_basis", "evidence_ids", "schema_valid", "schema_problems",
-    "capsule_signature_state",
-)
-MASK = "[redacted]"
-_URL = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+")
-# Colon-separated hex groups (IPv6, optionally [..]:port or %zone); kept only
-# when it is an address (has "::" or at least three colons), so a time such as
-# 07:32:23 is not masked.
-_V6_CANDIDATE = re.compile(r"\[?(?<![0-9A-Za-z:.])(?:[0-9A-Fa-f]{0,4}:){2,7}(?:(?:\d{1,3}\.){3}\d{1,3}|[0-9A-Fa-f]{1,4})?(?:%\w+)?\]?(?::\d{1,5})?(?![0-9A-Za-z])")
-_V4 = re.compile(r"(?<![0-9.])\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?(?::\d{1,5})?(?![0-9])")
-_HOST = re.compile(r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\b(?::\d{1,5})?")
-_DIGEST = re.compile(r"\b[0-9A-Fa-f]{32,}\b")
+# ---- allowlist: what a viewer gets (no free text) -------------------------
+ACTIONS = frozenset({"observe", "notify", "throttle", "redirect", "isolate"})
+APPLIED_STATES = frozenset({"applied", "not_applied", "apply_failed", "none"})
+ENFORCEMENT_MODES = frozenset({"dry_run", "policy_gated", "release_guard_failed", "enforced", "disabled", "none"})
+ENFORCEMENT_RESULTS = frozenset({"applied", "partial_failure", "planned_not_applied", "no_disruptive_action", "failed"})
+RECORDED_BY = frozenset({"live", "startup_reconcile", "loss_reconcile"})
+HASH_BASES = frozenset({"enforcement_settings", "policy_file"})
+CAPSULE_STATES = frozenset({"signed", "unsigned", "not_recorded", "invalid"})
+POLICY_PROFILES = frozenset({"azazel-edge-core/rust_event_engine_v1"})
+APPLY_FAILED_LABEL = "NOT APPLIED - apply failed"
+_TS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?")
+_HASH = re.compile(r"[0-9a-f]{64}")
+
+EXPLANATION_KEYS = frozenset({
+    "status", "segment", "records", "trace_id", "ts", "selected_action", "applied_state", "applied_label",
+    "not_applied", "enforcement_mode", "policy_profile", "config_hash", "config_hash_basis",
+    "capsule_signature_state", "schema_valid", "schema_problem_count", "rejected_action_count",
+    "evidence_count",
+})
+CHAIN_KEYS = frozenset({
+    "status", "segment", "file", "position", "records", "integrity", "ts", "kind", "trace_id", "action",
+    "decided_action", "effective_action", "enforcement_mode", "enforcement_result", "enforce_dry_run",
+    "recorded_by", "reconcile_stale", "event_ts", "sid", "severity",
+})
 
 
-def _v6(match: "re.Match[str]") -> str:
-    text = match.group(0)
-    core = text.split("%", 1)[0].strip("[]")
-    return MASK if ("::" in core or core.count(":") >= 3) else text
+def _int(value: Any) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def mask_text(value: Any, *, digests: bool = True) -> str:
-    """``value`` as text with addresses (IPv4, IPv6, host:port), host names,
-    URLs and (``digests``) hex digests -- target addresses and TI indicators --
-    replaced by ``[redacted]``."""
+def _enum(value: Any, allowed: frozenset) -> Optional[str]:
+    return value if isinstance(value, str) and value in allowed else None
 
-    text = str(value if value is not None else "")
-    text = _URL.sub(MASK, text)
-    text = _V6_CANDIDATE.sub(_v6, text)
-    text = _V4.sub(MASK, text)
-    text = _HOST.sub(MASK, text)
-    if digests:
-        text = _DIGEST.sub(MASK, text)
-    return text
+
+def _ts(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and _TS.fullmatch(value) else None
+
+
+def _count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _put(view: Dict[str, Any], key: str, value: Any) -> None:
+    if value is not None:
+        view[key] = value
+
+
+def applied_label(state: Optional[str], mode: Optional[str]) -> str:
+    """The NOT APPLIED label, built from the enumerated applied state and
+    enforcement mode only ('' for an applied action or nothing to apply)."""
+
+    if state == "not_applied":
+        return f"NOT APPLIED - planned only ({mode or 'unknown'})"
+    if state == "apply_failed":
+        return APPLY_FAILED_LABEL
+    return ""
 
 
 LIMITS = (
@@ -440,41 +457,66 @@ def _segment(name: str, active_name: str) -> str:
 
 
 def _explanation_view(record: Dict[str, Any], *, count: int, segment: str) -> Dict[str, Any]:
-    review = audit_review.record_review(record)
-    view: Dict[str, Any] = {key: review[key] for key in _EXPLANATION_FIELDS}
-    view["release_condition"] = mask_text(view["release_condition"])
-    view["rejected_actions"] = [mask_text(a) for a in view["rejected_actions"] or [] if isinstance(a, (str, int))]
-    view["why_not_others"] = [
-        {"action": mask_text(item.get("action")), "reason": mask_text(item.get("reason"))}
-        for item in view["why_not_others"] or [] if isinstance(item, dict)
-    ]
-    view["evidence_ids"] = [mask_text(e, digests=False) for e in view["evidence_ids"] or [] if isinstance(e, (str, int))]
-    view["schema_problems"] = [mask_text(p) for p in view["schema_problems"] or []]
+    """Allowlisted, typed values only (:data:`EXPLANATION_KEYS`)."""
+
+    from azazel_edge.explanations.schema import validate_v2_explanation
+
     machine = record.get("machine") if isinstance(record.get("machine"), dict) else {}
     arbiter = machine.get("arbiter") if isinstance(machine.get("arbiter"), dict) else {}
-    release = str(record.get("release_condition") or "")
-    view.update(
-        status="found",
-        segment=segment,
-        records=count,
-        reason=mask_text(record.get("reason")),
-        applied_state=str(arbiter.get("applied_state") or ""),
-        not_applied=release.startswith(NOT_APPLIED_PREFIX),
-    )
+    policy = arbiter.get("policy") if isinstance(arbiter.get("policy"), dict) else {}
+    state = _enum(arbiter.get("applied_state"), APPLIED_STATES)
+    mode = _enum(arbiter.get("control_mode"), ENFORCEMENT_MODES)
+    try:
+        problems = validate_v2_explanation(record)
+    except Exception:
+        problems = ["unvalidated"]
+    view: Dict[str, Any] = {"status": "found", "segment": segment, "records": count}
+    _put(view, "trace_id", record.get("trace_id") if valid_trace_id(record.get("trace_id")) else None)
+    _put(view, "ts", _ts(record.get("ts")))
+    _put(view, "selected_action", _enum(record.get("selected_action"), ACTIONS))
+    _put(view, "applied_state", state)
+    _put(view, "enforcement_mode", mode)
+    if state is not None:
+        view["applied_label"] = applied_label(state, mode)
+        view["not_applied"] = state in ("not_applied", "apply_failed")
+    _put(view, "policy_profile", _enum(record.get("policy_profile"), POLICY_PROFILES))
+    config_hash = record.get("config_hash")
+    _put(view, "config_hash", config_hash if isinstance(config_hash, str) and _HASH.fullmatch(config_hash) else None)
+    _put(view, "config_hash_basis", _enum(policy.get("hash_basis"), HASH_BASES))
+    _put(view, "capsule_signature_state", _enum(audit_review._capsule_signature_state(record), CAPSULE_STATES))
+    view["schema_valid"] = not problems
+    view["schema_problem_count"] = len(problems)
+    view["rejected_action_count"] = _count(record.get("rejected_actions"))
+    view["evidence_count"] = _count(record.get("evidence_ids"))
     return view
 
 
 def _chain_view(record: Dict[str, Any], *, count: int, position: int, name: str, active_name: str,
-                verdict: Mapping[str, Any]) -> Dict[str, Any]:
-    view: Dict[str, Any] = {key: record[key] for key in _CHAIN_FIELDS if key in record}
-    view.update(
-        status="found",
-        segment=_segment(name, active_name),
-        file=name,
-        position=position,
-        records=count,
-        integrity=_integrity(verdict, position),
-    )
+                verdict: Mapping[str, Any], pending: bool) -> Dict[str, Any]:
+    """Allowlisted, typed values only (:data:`CHAIN_KEYS`)."""
+
+    view: Dict[str, Any] = {
+        "status": "found",
+        "segment": _segment(name, active_name),
+        "file": name,
+        "position": position,
+        "records": count,
+        # A snapshot answered while the chain changed is not verified now.
+        "integrity": "pending" if pending else _integrity(verdict, position),
+    }
+    _put(view, "ts", _ts(record.get("ts")))
+    _put(view, "kind", _enum(record.get("kind"), frozenset({CHAIN_KIND})))
+    _put(view, "trace_id", record.get("trace_id") if valid_trace_id(record.get("trace_id")) else None)
+    for key in ("action", "decided_action", "effective_action"):
+        _put(view, key, _enum(record.get(key), ACTIONS))
+    _put(view, "enforcement_mode", _enum(record.get("enforcement_mode"), ENFORCEMENT_MODES))
+    _put(view, "enforcement_result", _enum(record.get("enforcement_result"), ENFORCEMENT_RESULTS))
+    _put(view, "recorded_by", _enum(record.get("recorded_by"), RECORDED_BY))
+    for key in ("enforce_dry_run", "reconcile_stale"):
+        _put(view, key, record.get(key) if isinstance(record.get(key), bool) else None)
+    _put(view, "event_ts", _ts(record.get("event_ts")))
+    _put(view, "sid", _int(record.get("sid")))
+    _put(view, "severity", _int(record.get("severity")))
     return view
 
 
@@ -565,6 +607,9 @@ def trace_report(
     chain = _chain_index(chain_path)
     snap, recheck_pending = chain.current()
     verdict = dict(snap.verdict)
+    if recheck_pending:
+        # The chain changed since this verification: nothing is verified now.
+        verdict.update(verified=False)
     traces = []
     for tid in ids:
         explanation = explanations[tid]
@@ -575,7 +620,8 @@ def trace_report(
             count, row, where = chain.lookup(snap, tid)
             if row is not None and where is not None:
                 chain_record = _chain_view(row, count=count, position=where[0], name=where[1],
-                                           active_name=chain_path.name, verdict=verdict)
+                                           active_name=chain_path.name, verdict=verdict,
+                                           pending=recheck_pending)
             elif where is not None:
                 chain_record = {"status": "changed", "note": "the record changed after it was indexed; ask again"}
             else:

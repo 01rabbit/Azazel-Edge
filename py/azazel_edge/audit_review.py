@@ -392,8 +392,7 @@ def _format_compact(record: Dict[str, Any], chain_result: Dict[str, Any]) -> str
 
 def record_review(record: Dict[str, Any]) -> Dict[str, Any]:
     """The explanation fields of the ``--json`` output (everything but
-    ``chain``). Read only; also used by the Web UI's decision trace
-    (``azazel_edge.explanations.trace``), so both show a record the same way."""
+    ``chain``). Read only."""
     from azazel_edge.explanations import validate_v2_explanation
     problems = validate_v2_explanation(record)
     return {
