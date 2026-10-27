@@ -35,7 +35,7 @@ not read by any running service. Wiring it into a service is open work
 | M.I.O. cognitive core | Offline tools only | `py/azazel_edge/mio/` | Advisory reasoning over a SituationFrame. `MioRecommendation.executable` is always `False`. |
 | Local model runtime | Ollama, outside this repository | `agent.py` (`AZAZEL_OLLAMA_ENDPOINT`, default `http://127.0.0.1:11434`), `py/azazel_edge/mio/model_adapter.py` | Produces untrusted text that the callers validate. |
 | Web UI | `azazel-edge-web.service`, `azazel-web` (#471 stage 1) | `azazel_edge_web/app.py` | Dashboards, Booth Focus, touch console, Mattermost relay, runbook preview and execution, fixed control actions through the control daemon. |
-| Control daemon | `azazel-edge-control-daemon.service`, root | `py/azazel_edge_control/daemon.py` | Wi-Fi, legacy mode files, SoT edits, uplink disconnect, shutdown and reboot for the peers its fixed table allows. Reads the agent's advisory only to age out the snapshot. Takes no decision input. |
+| Control daemon | `azazel-edge-control-daemon.service`, root | `py/azazel_edge_control/daemon.py` | The only writer of the shared `ui_snapshot.json`: it merges the agent's `ai_snapshot.json` fields listed in `AGENT_SNAPSHOT_KEYS` (`user_state`, `recommendation`, `reasons`, `evidence`, `llm`, `ops_coach`, `decision_pipeline`, `second_pass`, `attack` and others, each type-checked) and ages out a stale advisory. The Web UI and the e-paper refresh read that snapshot. It also runs Wi-Fi, legacy mode files, SoT edits, uplink disconnect, shutdown and reboot for the peers its fixed table allows. None of this is decision input: the core never reads the snapshot. |
 | Optional peers | Other products | `py/azazel_edge/engagement_advisory_client.py`, `deception_effectiveness_client.py`, `deception_shadow*.py`, `deception_transition.py`, `engagement/candidate.py` | Knowledge (AZ-04) and Deception (AZ-06) through Fabric contracts. Advisory-only on the way in, optional for Edge operation (section 4.2). |
 
 "The arbiter" in integration contracts means the Rust core, and
@@ -66,7 +66,14 @@ AI agent  (after the decision; the event already carries "defense" and "enforcem
    +--> local model (ambiguous band only) -> advisory "llm" / "ops_coach" fields
    +--> decision-explanations.jsonl (v2 explanation + trust capsule)
    v
-Web UI and control daemon read these files (group azazel-web) -> operator
+Web UI reads these files (group azazel-web) ------------------------> operator
+   |
+   v
+control daemon (root): merges AGENT_SNAPSHOT_KEYS of ai_snapshot.json into
+   the shared ui_snapshot.json (sole writer; ages out a stale advisory)
+   |
+   +--> Web UI dashboards, touch console -----------------------------> operator
+   +--> e-paper refresh (azazel_edge_epd_mode_refresh.py) ------------> e-paper
 ```
 
 Nothing in this chain feeds back into the core. The core reads EVE, its
@@ -105,10 +112,10 @@ narrower role, stated in the cell.
 
 | | Rust core | Python `ActionArbiter` | M.I.O. cognitive core | AI agent (incl. M.I.O. persona) | Web UI | Operator |
 | --- | --- | --- | --- | --- | --- | --- |
-| **Decide** (select the defensive action) | **Yes.** Sole live decider: `decide_defense()`, a fixed severity ladder over the five Defensive State actions. | No. Produces a decision record for replay, benchmarks and dry runs; no live caller. | **No.** May recommend one of `OBSERVE/NOTIFY/THROTTLE/REDIRECT/ISOLATE` as advice; `executable` is always `False`; nothing consumes it. | **No.** Its risk score, SOC second pass and model verdict are computed after the core decided and change no decision. | No. | Indirect only: chooses the core's enforcement settings (`AZAZEL_DEFENSE_*` in the unit and `/etc/default/azazel-edge-security`, root on the device). There is no per-decision override and no runtime approval channel. |
-| **Enforce** (apply or release `nft`/`tc` defensive rules) | **Yes**, gated by the settings above; the release path (`release.rs`) removes what it applied when the lease expires. An action outside the level's allowlist is recorded as `policy_gated` and not applied. | No. | **No.** No import of arbiter, control, deception transition or outcome modules; no `subprocess`, `socket` or `os.system` (tested). | **No.** Its only child process is a read of `ip -4 route show default` (tested). | **No** defensive action. Its control-daemon actions are a fixed table (Wi-Fi, legacy mode, SoT, uplink disconnect, shutdown, reboot) that contains none of the five actions (tested). | Runs the fixed control actions (role `responder`, mode change `admin`) and reviewed runbooks (role `operator`; `controlled_exec` needs review and `approved`). None of these writes the core's `inet azazel_edge` rules. |
+| **Decide** (select the defensive action) | **Yes.** Sole live decider: `decide_defense()`, a fixed severity ladder over the five Defensive State actions; `resolve_redirect_decision()` may then replace `redirect` by the redirect policy's fallback (section 6). | No. Produces a decision record for replay, benchmarks and dry runs; no live caller. | **No.** May recommend one of `OBSERVE/NOTIFY/THROTTLE/REDIRECT/ISOLATE` as advice; `executable` is always `False`; nothing consumes it. | **No.** Its risk score, SOC second pass and model verdict are computed after the core decided and change no decision. | No. | Indirect only: chooses the core's enforcement settings (`AZAZEL_DEFENSE_*` in the unit and `/etc/default/azazel-edge-security`, root on the device). There is no per-decision override and no runtime approval channel. |
+| **Enforce** (apply or release `nft`/`tc` defensive rules) | **Yes**, gated by the settings above; the release path (`release.rs`) removes what it applied when the lease expires. An action outside the level's allowlist is recorded as `policy_gated` and not applied. | No. | **No.** No import of arbiter, control, deception transition or outcome modules; no `subprocess`, `socket` or `os.system` (tested). | **No.** Its only child process is a read of `ip -4 route show default` (tested). | **No** defensive action. Its control-daemon actions are a fixed table (Wi-Fi, legacy mode, SoT, uplink disconnect, shutdown, reboot) that contains none of the five actions (tested). Two of them are not defensive actions but do change the network path: `wifi_connect` enables forwarding and adds NAT rules for a USB uplink, and `uplink_disconnect` brings the uplink down (`ip link set ... down`). | Runs the fixed control actions (role `responder`, mode change `admin`) and reviewed runbooks (role `operator`; `controlled_exec` needs review and `approved`). None of these writes the core's `inet azazel_edge` rules. |
 | **Advise** | No (reports `policy_reason`). | No. | **Yes**, offline: hypotheses, evidence gaps, recommendation, no-model handoff. | **Yes**: `ai_advisory.json` (tactical recommendation; replaced by the analyst model's `suggested_action` when its confidence is at least 0.60), ops-coach runbook suggestion, manual-query answers. | Relays: Mattermost replies, runbook proposals (`/api/runbooks/propose`). | Decides whether to act on any advice. |
-| **Display** | No UI; a summary line on stdout. | No. | **None today.** Operator surfaces are #374; trace display is #341. | Writes display data (advisory, snapshot, explanation); renders nothing. | **Yes**: dashboards, Booth Focus, touch console, Mattermost. The control daemon's snapshot also feeds the e-paper display. | Reads. |
+| **Display** | No UI; a summary line on stdout. | No. | **None today.** Operator surfaces are #374; the decision-level trace display (#341) is being implemented in #501 (open). | Writes display data (advisory, snapshot, explanation); renders nothing. | **Yes**: dashboards, Booth Focus, touch console, Mattermost. The control daemon's snapshot also feeds the e-paper display. | Reads. |
 | **Audit** | `normalized-events.jsonl`, `ingress-audit.jsonl`, release ledger and its rollback audit. | Decision fields reused by replay explanations. | `ai_assist` records through `AIGovernance.authorize`; broker audit ring; `mio.trace_audit.v1` projection and `TraceAuditSink` (library; no service writes it yet, #389). | Core-decision audit chain (P0), AI audit `ai-audit.jsonl` (scope records with `in_scope=false` for its model calls), v2 explanations with trust capsule, model result logs. | Runbook event log; reads the files above. | Reviews with `azazel-edge-audit-review`. |
 
 Invariants behind the matrix, with the check that pins each one:
@@ -171,7 +178,7 @@ moved to Azazel-Nexus#5 (#408). Edge implements only the rungs above.
 
 | Boundary | What crosses | Treated as | Enforced by |
 | --- | --- | --- | --- |
-| Network to core | Suricata EVE lines | untrusted | ingress quota and shedding (`ingress.rs`); the decision reads only severity, sid, source address and target port |
+| Network to core | Suricata EVE lines | untrusted | ingress quota and shedding (`ingress.rs`). `decide_defense()` reads severity, sid, source address and target port. For a `redirect`, `resolve_redirect_decision()` then reads the redirect policy, the target port, `risk_score` and severity: a port without a prepared decoy mapping becomes the policy's unsupported-port action (default `notify`), or its high-risk action (default `isolate`) when `risk_score >= 80` or `severity >= 4`; a disabled or invalid policy becomes `notify`. Policy actions outside the five fall back to those defaults (`normalize_safe_action`). `risk_score` is computed by the core from the EVE severity. |
 | Core to agent | decision events on `ai-bridge.sock` | trusted producer, one-way | socket 0600 in a 0700 directory owned by `azazel-agent`; the core (root) connects; the agent never writes back |
 | Web UI to agent | `manual_query` on `agent-query.sock` | authenticated peer, untrusted question | `SO_PEERCRED` allows root or `azazel-web` only; one request type; 4 concurrent |
 | Web UI to control daemon | named actions on `control.sock` | authenticated peer | `SO_PEERCRED` and the fixed `WEB_UI_ACTIONS` table; `migrate_path_schema` is root only |
@@ -218,7 +225,7 @@ A change to an Edge-local M.I.O. schema bumps its version in the same change
 | --- | --- |
 | Hostile review before any non-shadow M.I.O. influence | #373 |
 | Operator surfaces with authority labels (fact, decision, advisory, hypothesis, recommendation, unknown) | #374 |
-| Decision-level trace and evidence provenance in the console | #341 |
+| Decision-level trace and evidence provenance in the console | #341 (being implemented in #501, open) |
 | Final documentation package (operations, offline deployment, field validation) | #375 |
 | Pi-class resource and latency evidence for the frame builder and models | #372 (frame budget follow-up from #383) |
 | Live wiring of `ReasoningCoordinator`, `TraceAuditSink` and its key management | #385, #389 |

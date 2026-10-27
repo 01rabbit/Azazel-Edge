@@ -329,9 +329,15 @@ Stays root in #471. Listed because stages 1 and 2 move work to it.
   directory mode `AZAZEL_RUNTIME_DIR_MODE` (0770), socket mode
   `AZAZEL_CONTROL_SOCKET_MODE` (0660). If `AZAZEL_RUNTIME_SOCKET_GROUP` is
   set, both get that group; the default is empty (root:root).
-- **No peer check.** Nothing in `py/`, `azazel_edge_web/` or the core calls
-  `SO_PEERCRED`. Every action is open to anyone who can connect. One
-  `recv(4096)` JSON request per connection.
+- **Peer check (since #471 stage 1).** At stage 0 there was none: every
+  action was open to anyone who could connect, one `recv(4096)` JSON request
+  per connection. Now the daemon reads the peer's uid with `SO_PEERCRED`
+  (`azazel_edge.peercred.peer_credentials`) on every connection and checks
+  the action against a fixed in-code table: uid 0 may call every action, the
+  `azazel-web` account exactly `WEB_UI_ACTIONS`, anyone else nothing;
+  `ROOT_ONLY_ACTIONS` (`migrate_path_schema`) need uid 0. One JSON request
+  per connection, at most `MAX_REQUEST_BYTES` within a total read deadline
+  (§10.3, §10.9).
 
 | Action | Effect | Mark |
 | --- | --- | --- |

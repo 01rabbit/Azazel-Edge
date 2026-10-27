@@ -102,15 +102,45 @@ def _parse(path: Path) -> Optional[ast.Module]:
         return None
 
 
-def _absolute_imports(tree: ast.AST) -> Set[str]:
-    """Absolute module names imported; ``from pkg import name`` also yields ``pkg.name``."""
+def _package_of(path: Optional[Path]) -> Optional[List[str]]:
+    """The dotted package a file belongs to, for resolving relative imports."""
+    if path is None:
+        return None
+    for base in (ROOT / "py", ROOT):
+        try:
+            rel = path.relative_to(base)
+        except ValueError:
+            continue
+        if base == ROOT and rel.parts and rel.parts[0] == "py":
+            continue
+        parts = list(rel.with_suffix("").parts)
+        if parts and parts[-1] == "__init__":
+            parts = parts[:-1]
+        else:
+            parts = parts[:-1]
+        return parts
+    return None
+
+
+def _absolute_imports(tree: ast.AST, path: Optional[Path] = None) -> Set[str]:
+    """Module names imported, relative imports resolved against ``path``;
+    ``from pkg import name`` also yields ``pkg.name``."""
+    package = _package_of(path)
     names: Set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.add(node.module)
-            names.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0:
+                base = node.module or ""
+            else:
+                if package is None or node.level - 1 > len(package):
+                    raise AssertionError(f"cannot resolve a relative import in {path}")
+                parts = package[: len(package) - (node.level - 1)]
+                base = ".".join(parts + ([node.module] if node.module else []))
+            if base:
+                names.add(base)
+            names.update(f"{base}.{alias.name}" if base else alias.name for alias in node.names)
     return names
 
 
@@ -158,6 +188,9 @@ def _literal_assignment(tree: ast.Module, name: str):
         if any(isinstance(t, ast.Name) and t.id == name for t in targets):
             if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id in {"frozenset", "set"}:
                 value = value.args[0]
+            if isinstance(value, ast.Dict):
+                # Only the keys: the values may be expressions (paths built at import).
+                return {ast.literal_eval(k) for k in value.keys}
             return ast.literal_eval(value)
     raise AssertionError(f"{name} not assigned as a literal")
 
@@ -197,7 +230,7 @@ class MioCognitiveCoreIsALibrary(unittest.TestCase):
         for path in self._mio_files():
             tree = _parse(path)
             self.assertIsNotNone(tree, _rel(path))
-            for name in sorted(_absolute_imports(tree)):
+            for name in sorted(_absolute_imports(tree, path)):
                 top = name.split(".")[0]
                 if top.startswith("azazel"):
                     allowed = name.startswith("azazel_edge.mio") or name in MIO_ALLOWED_INTERNAL
@@ -226,9 +259,28 @@ class MioCognitiveCoreIsALibrary(unittest.TestCase):
             tree = _parse(path)
             if tree is None:
                 continue
-            if _imports_module(_absolute_imports(tree), "azazel_edge.mio"):
+            if _imports_module(_absolute_imports(tree, path), "azazel_edge.mio"):
                 importers.add(_rel(path))
         self.assertEqual(importers, set(MIO_IMPORTERS))
+
+    def test_relative_imports_are_resolved(self) -> None:
+        # The check above must also see ``from .mio import x`` and ``from ..mio import x``.
+        pkg = ROOT / "py" / "azazel_edge"
+        self.assertTrue(_imports_module(_absolute_imports(ast.parse("from .mio import contracts"), pkg / "x.py"), "azazel_edge.mio"))
+        self.assertTrue(_imports_module(_absolute_imports(ast.parse("from ..mio import contracts"), pkg / "sub" / "x.py"), "azazel_edge.mio"))
+        self.assertTrue(_imports_module(_absolute_imports(ast.parse("from . import mio"), pkg / "x.py"), "azazel_edge.mio"))
+        self.assertIn("azazel_edge.mio.contracts", _absolute_imports(ast.parse("from .contracts import X"), MIO_DIR / "broker.py"))
+
+    def test_no_shell_launcher_runs_the_tools(self) -> None:
+        for path in sorted((ROOT / "bin").iterdir()):
+            if not path.is_file() or _rel(path) in MIO_IMPORTERS:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for needle in ("azazel-mio-", "azazel_edge.mio", "azazel_edge/mio"):
+                self.assertFalse(needle in text, f"{_rel(path)} names {needle}")
 
     def test_no_unit_or_installer_starts_it(self) -> None:
         for base in ("systemd", "installer", "packaging"):
@@ -257,7 +309,7 @@ class AgentAndWebHoldNoDefensiveAction(unittest.TestCase):
     """Matrix columns "AI agent" and "Web UI": no decide, no enforce."""
 
     def test_agent_imports_no_authority_module(self) -> None:
-        names = _absolute_imports(_parse(AGENT))
+        names = _absolute_imports(_parse(AGENT), AGENT)
         for module in AUTHORITY_MODULES + ("azazel_edge.mio",):
             self.assertFalse(_imports_module(names, module), f"agent imports {module}")
 
@@ -278,14 +330,17 @@ class AgentAndWebHoldNoDefensiveAction(unittest.TestCase):
             words = [e.value for e in argv.elts if isinstance(e, ast.Constant)]
             self.assertEqual(words, ["-4", "route", "show", "default"])
 
-    def test_web_ui_action_table_has_no_defensive_action(self) -> None:
-        allowed = set(_literal_assignment(_parse(WEB_APP), "ALLOWED_ACTIONS"))
-        self.assertIn("wifi_scan", allowed)
-        self.assertEqual(allowed & DEFENSIVE_ACTIONS, set())
+    def test_web_ui_action_tables_have_no_defensive_action(self) -> None:
+        tree = _parse(WEB_APP)
+        for name in ("ALLOWED_ACTIONS", "INTERNAL_CONTROL_ACTIONS"):
+            table = set(_literal_assignment(tree, name))
+            self.assertTrue(table, name)
+            self.assertEqual(table & DEFENSIVE_ACTIONS, set(), name)
+        self.assertIn("wifi_scan", set(_literal_assignment(tree, "ALLOWED_ACTIONS")))
 
     def test_control_daemon_tables_have_no_defensive_action(self) -> None:
         tree = _parse(CONTROL_DAEMON)
-        for name in ("WEB_UI_ACTIONS", "ROOT_ONLY_ACTIONS", "NOT_IMPLEMENTED_ACTIONS"):
+        for name in ("WEB_UI_ACTIONS", "ROOT_ONLY_ACTIONS", "NOT_IMPLEMENTED_ACTIONS", "ACTION_SCRIPTS"):
             table = set(_literal_assignment(tree, name))
             self.assertTrue(table, name)
             self.assertEqual(table & DEFENSIVE_ACTIONS, set(), name)
