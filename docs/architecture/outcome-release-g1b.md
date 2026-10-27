@@ -393,7 +393,7 @@ Those claims remain in Outcome / Tactical Effect gates.
 - new tactical-effect rules;
 - external notification delivery receipts;
 - authoritative cross-event actor/session identity;
-- end-to-end golden replay fixture (G5);
+- end-to-end golden replay fixture (G5; since implemented in `outcome-golden-replay-g5.md`);
 - long-term tombstone compaction/migration and trace-id upgrade migration;
 - installer/systemd enablement;
 - actual Raspberry Pi tc/nft HIL syntax, restart, release polling cadence, performance,

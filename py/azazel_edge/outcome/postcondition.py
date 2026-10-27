@@ -7,7 +7,9 @@ import math
 import re
 import shutil
 import subprocess
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any, Mapping, Protocol, Sequence
 
 from .contracts import (
@@ -27,6 +29,9 @@ _TRUSTED_BINARY_SEARCH_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 _MAX_PROBE_TIMEOUT_SECONDS = 5.0
 _MAX_STDOUT_BYTES = 1024 * 1024
 _MAX_STDERR_BYTES = 64 * 1024
+# Replay-only clock injection: a recorded probe observation time. It never changes
+# which state is accepted as observed; it only makes recorded replay deterministic.
+_PROBE_OBSERVED_AT: ContextVar[str | None] = ContextVar("_PROBE_OBSERVED_AT", default=None)
 
 
 class ReadOnlyCommandRejected(ValueError):
@@ -103,8 +108,13 @@ def verify_mechanism_postcondition(
     mechanism: AppliedMechanism,
     runner: ReadOnlyRunner,
     timeout_seconds: float = 2.0,
+    observed_at: str | None = None,
 ) -> AppliedMechanism:
     """Verify an initial mechanism postcondition using read-only host state.
+
+    ``observed_at`` is only for recorded replay (G5): it pins the probe observation
+    timestamp to the recorded value so replay output is deterministic. When omitted,
+    the current UTC time is used exactly as before.
 
     G1a never executes, retries, repairs, releases, or authorizes an action. It is
     deliberately limited to the first verification transition from an active applied
@@ -113,6 +123,32 @@ def verify_mechanism_postcondition(
     reconciliation belongs to later gates.
     """
 
+    token = _PROBE_OBSERVED_AT.set(_validated_observed_at(observed_at))
+    try:
+        return _verify_initial_postcondition(execution, mechanism, runner, timeout_seconds)
+    finally:
+        _PROBE_OBSERVED_AT.reset(token)
+
+
+def _validated_observed_at(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("observed_at must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("observed_at must carry a timezone")
+    return raw
+
+
+def _verify_initial_postcondition(
+    execution: ActionExecutionReceipt,
+    mechanism: AppliedMechanism,
+    runner: ReadOnlyRunner,
+    timeout_seconds: float,
+) -> AppliedMechanism:
     _validate_correlation(execution, mechanism)
 
     if execution.status is not ExecutionStatus.APPLIED:
@@ -643,7 +679,7 @@ def _with_probe_result(
     verification_strength: str,
     probe: Mapping[str, Any],
 ) -> AppliedMechanism:
-    observed_at = utc_now()
+    observed_at = _PROBE_OBSERVED_AT.get() or utc_now()
     sanitized_probe = {
         "basis": basis,
         "verification_strength": verification_strength,

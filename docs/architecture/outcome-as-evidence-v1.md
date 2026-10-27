@@ -214,6 +214,8 @@ SHADOW_ASSESS
 
 `ReplayExecutionProvider` is read-only. Its `execute()` method raises `ReplayExecutionForbidden` by design. Live execution remains outside the v1 package.
 
+The G5 end-to-end golden replay (`golden_replay.py`, design in `outcome-golden-replay-g5.md`) replays recorded Rust event/release records, recorded read-only tc/nft readback and recorded procfs samples through Decision -> Execution -> Mechanism -> Release -> Outcome -> Effect. Tests replace every live executor, enforcement, control-daemon, Action Arbiter, subprocess, socket, procfs, wall-clock and file-write entry point with a failing stub during the replay.
+
 ## Implemented modules
 
 ```text
@@ -223,11 +225,16 @@ py/azazel_edge/outcome/
   adapter.py
   assessment.py
   replay.py
+  golden_replay.py
+  outcome_identity.py
   observer.py
 
 tests/test_outcome_as_evidence_v1.py
 tests/test_outcome_guardrails_v1.py
 tests/test_outcome_adapter_truthfulness_v1.py
+tests/test_outcome_golden_replay_g5.py
+tests/fixtures/outcome/g5_golden_replay_input_v1.json
+tests/fixtures/outcome/g5_golden_replay_expected_v1.json
 ```
 
 The focused test suite contains 24 semantic/authority/retention/guardrail/truthfulness cases covering execution-state normalization, requested-vs-applied separation, effect-proof prerequisites, correlation rejection, replay authority, bounded shadow output, guardrail failure, and uncalibrated-confidence behavior.
@@ -266,7 +273,7 @@ Contract implemented, including causal support, telemetry coverage and confounde
 
 ### G5 — replay
 
-Read-only receipt replay boundary implemented. End-to-end golden replay fixture remains required.
+Implemented (`outcome-golden-replay-g5.md`). A recorded golden fixture is replayed deterministically through Decision -> Execution -> Mechanism -> Release -> Outcome -> Effect and every stage is compared with the golden transcript. Outcomes have a restart-independent identity (`execution_id` + `objective_id`) and a bounded first-wins ledger, so the same Outcome re-observed after a restart is counted once; a pending window lost at a restart is reported, never reconstructed. Tests fail if replay reaches any live path. The fixture is synthetic/recorded, not Pi/HIL evidence; persisting the identity ledger in the live collector is left to G6.
 
 ### G6 — Pi/HIL
 

@@ -62,8 +62,12 @@ def verify_mechanism_postcondition(
     mechanism: AppliedMechanism,
     runner: ReadOnlyRunner,
     timeout_seconds: float = 2.0,
+    observed_at: str | None = None,
 ) -> AppliedMechanism:
-    """Run G1a verification, restricted to the G1b-owned mechanism when present."""
+    """Run G1a verification, restricted to the G1b-owned mechanism when present.
+
+    ``observed_at`` pins the probe timestamp for recorded replay only (G5).
+    """
 
     ownership = expected_ownership(execution)
     if ownership is None:
@@ -72,6 +76,7 @@ def verify_mechanism_postcondition(
             mechanism=mechanism,
             runner=runner,
             timeout_seconds=timeout_seconds,
+            observed_at=observed_at,
         )
 
     normalized_execution = replace(
@@ -87,6 +92,7 @@ def verify_mechanism_postcondition(
         mechanism=mechanism,
         runner=filtered_runner,
         timeout_seconds=timeout_seconds,
+        observed_at=observed_at,
     )
 
     probe = verified.observed_parameters.get("postcondition_probe")
