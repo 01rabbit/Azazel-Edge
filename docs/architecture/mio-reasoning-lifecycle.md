@@ -1,5 +1,7 @@
 # M.I.O. reasoning lifecycle, supersession, restart and no-model handoff
 
+Canonical architecture, authority matrix and degradation ladder: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
+
 Status: implemented, advisory-only. Tracking: #385 (parents #363, #365).
 
 This covers what happens to hypotheses and reasoning cycles over time. None of

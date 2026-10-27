@@ -1,5 +1,7 @@
 # M.I.O. Cognitive Shadow Core
 
+Canonical architecture, authority matrix and degradation ladder: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
+
 Status: test-stage implementation for issues #361-#366, #370, #372, #376, and #377.
 
 ## Scope
@@ -181,6 +183,7 @@ The default model-call ceiling is four calls for a cycle that actually retrieves
 
 Terminal/fallback paths currently include:
 
+- `INSUFFICIENT_EVIDENCE`
 - `STALE_SUPERSEDED`
 - `OPERATOR_CANCELLED`
 - `BUDGET_EXHAUSTED`
@@ -255,9 +258,9 @@ Operational influence remains gated by #373 adversarial review and the later cro
 ## Remaining before the #373 gate
 
 1. Add broader adversarial replay corpus (cross-trace refs, Unicode/delimiter injection, malformed Ollama envelopes, capability spoofing, concurrent cycles).
-2. Add measured Pi-class resource/latency profiling for 0.8B/2B.
-3. Add deterministic capability implementations backed by real read-only Evidence/health/trace stores (current replay broker can use static fixture results).
-4. Add reasoning-cycle concurrency/backpressure ownership and explicit supersession across live shadow cycles.
+2. Add measured Pi-class resource/latency profiling for 0.8B/2B (#372).
+3. Add deterministic capability implementations backed by real read-only Evidence/health/trace stores (current replay broker can use static fixture results; #384).
+4. Wire reasoning-cycle concurrency/backpressure ownership and supersession into a live shadow service. `ReasoningCoordinator` implements them as a library ([mio-reasoning-lifecycle.md](mio-reasoning-lifecycle.md), #385); no service runs it yet.
 5. Run the dedicated #373 hostile review and remediate all critical/high findings.
 
 No Engagement/Deception operational influence should be enabled before that gate passes.

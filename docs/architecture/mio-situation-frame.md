@@ -1,5 +1,7 @@
 # M.I.O. SituationFrame contract (`mio.situation_frame.v1`)
 
+Canonical architecture, authority matrix and degradation ladder: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
+
 Status: implemented, advisory-only. Tracking: #383 (parents #362, #361).
 
 `MioSituationFrame` is the compact, deterministic world-state that M.I.O. reasons over.

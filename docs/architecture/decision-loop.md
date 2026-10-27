@@ -4,14 +4,38 @@
 This document describes the stable deterministic path used by Azazel-Edge to convert edge telemetry into explicit operator-facing actions.
 
 ## Pipeline
-1. Event input (for example Suricata EVE and local probes) is received.
-2. Inputs are normalized into Evidence Plane records.
-3. NOC and SOC evaluators score state deterministically.
-4. Policy thresholds are applied.
-5. Action Arbiter selects one bounded action.
-6. Decision Explanation is generated with rationale and alternatives.
-7. Notification and optional AI assist are executed post-decision.
-8. Audit logging records the full trace.
+
+There are two paths. Only the first one changes the network.
+
+### Live path (authoritative)
+
+1. The Rust `azazel-edge-core` reads Suricata EVE lines through its ingress
+   quota.
+2. `decide_defense()` selects one bounded action from the alert severity.
+3. `maybe_enforce()` applies it with `nft`/`tc` only when the enforcement
+   settings allow it (the shipped unit is observe-only: enforcement off,
+   dry run, level `advisory`).
+4. After the decision, the core forwards the decision event to the AI agent
+   (one-way, bounded, dropped and counted when the agent does not read).
+5. The agent records P0 decisions in the core-decision audit chain and the P0
+   alert queue, computes the tactical score and the second-pass SOC
+   evaluation over Evidence Plane records, and asks the local model only in
+   the ambiguous band. None of this changes the decision.
+6. The agent writes the v2 Decision Explanation of what the core decided,
+   with the second pass's evidence and a trust capsule.
+7. Notification and the Web UI read these records; audit logs keep the trace.
+
+### Replay and dry-run path
+
+Evidence Plane records, then NOC and SOC evaluators, policy thresholds,
+the Python `ActionArbiter`, and Decision Explanation with rationale and
+alternatives. Scenario replay, benchmarks and the SOC policy dry run use this
+path. Nothing applies its output to the network
+([X86_64 Integration Boundary](../X86_64_INTEGRATION_BOUNDARY.md)).
+
+Who may decide, enforce, advise, display and audit, and how AI and M.I.O. fit
+around these paths, is in the
+[M.I.O. Cognitive Plane](mio-cognitive-plane.md) authority matrix.
 
 ## Stable Components
 | Component | Status | Notes |
@@ -56,7 +80,8 @@ test asserts the two sets never overlap.
 
 **M.I.O. never sets the Defensive State.** It supplies bounded hypotheses; the
 Arbiter remains the sole authority, and `azazel_edge.mio` carries the five
-values as a closed set it validates against, not one it may extend.
+values as a closed set it validates against, not one it may extend (see the
+[authority matrix](mio-cognitive-plane.md#4-authority-matrix)).
 
 **Absence is not a state.** The cross-product projection
 (`azazel_edge.fabric_view`) reports `unknown` when a snapshot names no mode. It
@@ -79,3 +104,4 @@ that is deliberate — see
 - [P0 Runtime Architecture](../P0_RUNTIME_ARCHITECTURE.md)
 - [Evidence Model](evidence-model.md)
 - [Local AI Triage](local-ai-triage.md)
+- [M.I.O. Cognitive Plane](mio-cognitive-plane.md)

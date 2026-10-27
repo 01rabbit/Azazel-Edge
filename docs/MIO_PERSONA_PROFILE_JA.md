@@ -1,6 +1,6 @@
 # M.I.O. Persona Profile
 
-最終更新: 2026-03-12
+最終更新: 2026-10-27
 
 ## 1. 定義
 
@@ -41,6 +41,8 @@ Azazel-Edge の一次判断は
 
 で決まる。
 M.I.O. はその後段で、説明・補助・handoff を行う。
+
+上の順序は再生（replay）と dry run の経路のものである。実際に動く経路では、Rust の `azazel-edge-core` が措置を選び、enforcement が有効なときは適用まで行い、その後で AI agent が事象を受け取る。人格は言い回しであり、権限ではない。各要素が何を判定・強制・助言・表示・監査してよいかは英語版の [M.I.O. Cognitive Plane](architecture/mio-cognitive-plane.md) の authority matrix を正とする。
 
 ### 3.2 Mission oriented
 

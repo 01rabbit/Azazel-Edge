@@ -1,5 +1,7 @@
 # M.I.O. Grounding and Evidence-Gap Scoring
 
+Canonical architecture, authority matrix and degradation ladder: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
+
 Implementation: `py/azazel_edge/mio/evidence_gap_scoring.py`,
 `py/azazel_edge/mio/claim_audit.py`, `py/azazel_edge/mio/grounding.py`, wired in
 `py/azazel_edge/mio/reasoning.py`. Tests:
