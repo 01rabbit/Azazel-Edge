@@ -29,6 +29,20 @@ NOW = 1_800_000_000.0
 SECRET = "sk-live-SUPERSECRET-0123456789"
 
 
+@pytest.fixture(autouse=True)
+def _no_broker_thread_outlives_the_test():
+    """Every handler a test blocks must be released by the test (try/finally);
+    this fails the test if a broker worker thread is still alive afterwards,
+    so no thread can leak into later tests."""
+    before = set(threading.enumerate())
+    yield
+    leftover = [t for t in threading.enumerate() if t not in before and t.name.startswith("mio-cap-")]
+    for t in leftover:
+        t.join(5)
+    alive = [t.name for t in leftover if t.is_alive()]
+    assert not alive, f"broker worker threads outlived the test: {alive}"
+
+
 def _ok_handler(_args):
     return {"summary": "2 alerts", "evidence_refs": ["ev:alert:1"], "source_timestamp": NOW - 5}
 
