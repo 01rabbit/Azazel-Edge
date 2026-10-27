@@ -591,7 +591,8 @@ def test_submit_never_raises_on_hostile_request_objects():
 
     broker = _broker()
     result = broker.submit(Hostile())
-    assert result.status == "rejected"
+    # Only the frozen request dataclass is accepted (closed contract, #384).
+    assert result.status == "invalid" and result.error == "request_type_invalid"
     assert broker.audit_records()[-1]["decision"] == "refused"
 
     class Exploding:

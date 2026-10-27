@@ -3,7 +3,8 @@
 Canonical architecture, authority matrix and degradation ladder: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
 
 Implementation: `py/azazel_edge/mio/broker.py`. Tests:
-`tests/test_mio_capability_broker_acceptance.py`. Parent design: #364, acceptance: #384.
+`tests/test_mio_capability_broker_acceptance.py`, `tests/test_mio_capability_broker_384_v1.py`.
+Parent design: #364, acceptance: #384.
 
 > M.I.O. selects from capabilities. It does not invent commands.
 
@@ -40,9 +41,15 @@ AZ-06 Deception control.
 
 ## Request contract
 
-`MioCapabilityRequest`: `request_id`, `trace_id`, `capability`, `arguments`,
+`MioCapabilityRequest` (frozen dataclass): `request_id`, `trace_id`, `capability`, `arguments`,
 `purpose_hypothesis_ids` (audit only), optional `max_age_seconds` (can only tighten the
 capability's freshness requirement).
+
+The contract is closed. Only an instance of exactly `MioCapabilityRequest` is accepted;
+a duck-typed object, a subclass, a dict or `None` is `invalid` / `request_type_invalid`
+before any other check, so extra attributes (`approved`, `execute`, ...) cannot ride along.
+`purpose_hypothesis_ids` must be a tuple or list of at most 8 non-empty strings of at most
+96 characters without control characters; otherwise `invalid_purpose_hypothesis_ids`.
 
 Parameter kinds (`ParamSpec.kind`): `text` (opaque bounded data, never interpreted as a
 path/URL/command; C0 controls other than tab/newline, DEL, C1 controls, bidi controls and
@@ -96,6 +103,19 @@ in a bounded quarantine. While a capability has as many quarantined workers as i
 full every request is refused with `broker_quarantine_full`. A worker that fails to start
 releases its slots and returns `error` / `worker_start_failed`.
 
+### Cycle close (stale cycles)
+
+A broker serves one reasoning cycle. `close()` ends it (for example when the cycle is
+superseded by a newer frame). It is idempotent and has no other effect:
+
+- later requests are refused with `rejected` / `broker_closed`, without calling the handler;
+- a request waiting on a handler is woken at once and returns `stale` / `cycle_closed` with
+  no data and no evidence refs, even if the handler finishes in the same instant;
+- Python threads cannot be killed, so a handler still running is moved to the bounded
+  quarantine (as for a timeout) and its result is discarded when it returns.
+
+Nothing calls `close()` yet; wiring it to the lifecycle supersede path belongs to #385.
+
 Callers: only `BoundedReasoningLoop` (`py/azazel_edge/mio/reasoning.py`), used by the offline
 `bin/azazel-mio-shadow-replay` and `bin/azazel-mio-evaluate`, calls the broker. No
 deterministic Edge path (Action Arbiter, control daemon, enforcement, AZ-06 client) imports
@@ -114,10 +134,19 @@ Every request, allowed or refused, appends one record (bounded ring, default 256
 capability_digest (sha256 prefix if not), decision (allowed|refused), status, reason,
 params, evidence_refs, source_component, age_seconds, latency_ms, result_chars, truncated`.
 
+The record has exactly these keys (`AUDIT_RECORD_FIELDS`), plus `audit_truncated` when
+reduced. `reason` must match the broker's reason grammar
+(`code[:Identifier[:Identifier]]`); anything else, such as an odd handler exception class
+name, is recorded as `reason_redacted`.
+
 `params` holds only kind, Python type, length and (for identifiers) a digest; free-text values
 and unknown key names are never recorded (`unknown_param_count` only). `request_id`,
-`trace_id` and `purpose_hypothesis_ids` are kept only when they match the identifier grammar;
-otherwise they are replaced by `h:<digest>`. Digests are HMAC-SHA256 with a per-process
+`trace_id`, `purpose_hypothesis_ids` and `evidence_refs` are kept only when they match the
+identifier grammar **and** carry no address or credential shape: the SituationFrame opaque-ID
+rule (IPv4 quads, also dashed or with a port, MAC-like runs, IPv6) and the M.I.O. redaction
+token rules (API keys, bearer tokens, long tokens, e-mail). Otherwise they are replaced by
+`h:<digest>`. The result returned to the reasoning loop is unchanged; only the audit
+projection is reduced. Digests are HMAC-SHA256 with a per-process
 random key (truncated to 16 hex), so low-entropy values such as IP addresses cannot be
 recovered offline; they are comparable only within one process. Records larger than
 2048 characters are reduced and flagged `audit_truncated`. `audit_records()` and the sink receive
