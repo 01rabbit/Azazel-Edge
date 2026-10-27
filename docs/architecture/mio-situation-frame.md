@@ -94,8 +94,15 @@ supply them, without the address check below.
 **Opaque IDs** (`decision_ref`, nested `evidence_refs`, deception IDs and refs) must match
 `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` and must not contain an address-shaped run anywhere: a
 dotted, dashed or underscored quad (`10.0.0.5`, `10.0.0.5:22`, `ev-10-0-0-5`), a MAC-like run
-(`aa:bb:cc:dd:ee:ff`, `aa-bb-…`, `aabb.ccdd.eeff`) or an IPv6-like run (`fe80::1`,
-`2001:db8::1`). Such a value is not an ID and is treated as absent or malformed.
+(`aa:bb:cc:dd:ee:ff`, `aa-bb-…`, `aabb.ccdd.eeff`), or an IPv6-like run: a hex-and-colon run with
+five or more groups, or one that parses as an IPv6 address (`fe80::1`, `2001:db8::1`, `::1`).
+Shorter colon runs such as `ev:12:34:56` are ordinary ID segments and pass. A value with an
+address-shaped run is not an ID and is treated as absent or malformed.
+
+Known limit: an address written as a bare number or bare hex (`167772165`, `0a000005`) cannot be
+told apart from a legitimate numeric or hex ID (`2026`, `deadbeef`) and is accepted. The check
+stops the address notations producers actually emit; it is not a guarantee that no address can
+be encoded. The producers of these IDs are Edge and AZ-06 code, not attackers.
 
 ### `actors` (actor/entity summary, max 8)
 
@@ -123,9 +130,10 @@ hashed or otherwise used to make the key, so the key cannot be inverted to an ad
 windows with the same event pattern and different addresses give byte-identical frames
 (`test_actor_keys_do_not_depend_on_the_source_value`). The destination, user names, messages
 and other `attrs` never enter the frame. The cost is that a key means nothing outside its
-frame: `actor:0001` in two frames need not be the same source. Following one actor across
-frames is done through its `evidence_refs`, resolved by the read-only broker under its own
-access rules. `MioSituationFrame.build()` renumbers supplied actors by position, and `from_dict()`
+frame: `actor:0001` in two frames need not be the same source, even for the same trace, so the
+key **cannot be used to track an actor across frames or cycles** (including by the live wiring
+in #385). Following one actor across frames is done through its `evidence_refs`, resolved by
+the read-only broker under its own access rules. `MioSituationFrame.build()` renumbers supplied actors by position, and `from_dict()`
 rejects keys that are not their position. A caller-supplied summary that does not validate is
 dropped and `ACTOR_SUMMARY_MALFORMED` is added to `unknowns`.
 
@@ -192,8 +200,13 @@ actor's position, `max_severity`, `protocols`, `target_ports` and `event_kinds` 
 so a new actor, a higher severity or a new kind of behaviour is a new situation. `actions` and
 `deception_context` are material in full (they change only when Edge or AZ-06 changes state).
 `frame_id`, `created_at`, `freshness_seconds` and `provenance` stay non-material as before.
-The top-level `evidence_refs` are material as in v1 and are not changed here; a new event
-that enters the top `max_event_refs` (severity first) still makes a new situation.
+**Limited effect.** The top-level `evidence_refs` are material since v1 and this change leaves
+them so (making them non-material would change the v1 meaning of the digest). They are chosen by
+severity, then recency, so under sustained traffic a new event of the top severity usually
+enters them, and the frame becomes material again. Leaving the actor counters out therefore
+removes one source of churn, not all of it: persistent traffic can still supersede the in-flight
+cycle on every new frame. How to treat the top-level refs (for example, severity-only or a
+coarser material view) is follow-up work, not part of #383.
 
 ## Input contract
 

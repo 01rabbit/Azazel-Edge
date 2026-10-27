@@ -65,7 +65,10 @@ It has no clock: ordering is by call order, which keeps replays deterministic.
   fields sorted (their order is a capping priority, not meaning). In the v2
   `actors`, the per-actor counters `event_count`, `first_seen`, `last_seen`,
   `distinct_target_ports` and `evidence_refs` are also left out
-  (`NON_MATERIAL_ACTOR_FIELDS`, see [mio-situation-frame.md](mio-situation-frame.md)). `mission`,
+  (`NON_MATERIAL_ACTOR_FIELDS`, see [mio-situation-frame.md](mio-situation-frame.md)).
+  The effect is limited: the top-level `evidence_refs` stay material (as in v1)
+  and usually change with each new top-severity event, so sustained traffic can
+  still supersede the in-flight cycle on every new frame. That is follow-up work. `mission`,
   the NOC/SOC summaries (status and reason codes, no timestamps or counters)
   and `truncated` (it marks lost data) are material. Two builder runs over the
   same events at different times or input order share a digest; a new event

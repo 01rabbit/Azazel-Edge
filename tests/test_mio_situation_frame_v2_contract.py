@@ -294,7 +294,8 @@ def test_applied_action_with_lease_and_extra_keys():
 @pytest.mark.parametrize("value", [
     "10.0.0.5", "10.0.0.5:22", "ev:10.0.0.5", "ev-10-0-0-5", "src_10_0_0_5_x", "obs:192.168.001.010:443",
     "aa:bb:cc:dd:ee:ff", "aa-bb-cc-dd-ee-ff", "node:AABB.CCDD.EEFF", "aabb.ccdd.eeff",
-    "fe80::1", "2001:db8::1", "ev:2001:db8:0:0:0:0:0:1", "::1", "::ffff:10.0.0.5",
+    "fe80::1", "2001:db8::1", "ev:2001:db8:0:0:0:0:0:1", "::1", "::ffff:10.0.0.5", "obs:fe80::1", "a:b:c:d:e",
+    "x:2001:0db8:85a3:0000:0000:8a2e:0370:7334",
     "alice@example.com", "a b", "",
 ])
 def test_opaque_ids_refuse_address_shapes(value):
@@ -303,7 +304,7 @@ def test_opaque_ids_refuse_address_shapes(value):
     assert frame.deception_context is None
 
 
-@pytest.mark.parametrize("value", ["sha256:" + "ab" * 32, "ev:auth:0001", "dec:golden:0002", "kn:attack:T1110", "env-golden-01", "obs:golden:0001", "suricata_sid:2001219"])
+@pytest.mark.parametrize("value", ["sha256:" + "ab" * 32, "ev:auth:0001", "dec:golden:0002", "kn:attack:T1110", "env-golden-01", "obs:golden:0001", "suricata_sid:2001219", "ev:12:34:56", "ev:1:2:3:4", "dec:ab:cd:ef", "2026", "deadbeef"])  # bare numbers/hex: known limit, see doc
 def test_opaque_ids_keep_real_identifier_shapes(value):
     assert _opaque_id(value) == value
 
@@ -502,3 +503,50 @@ def test_prompt_untrusted_data_carries_keys_not_addresses():
     untrusted = prompt.split("UNTRUSTED_DATA\n", 1)[1]
     assert frame.actors[0].actor_key in untrusted
     assert "10.0.0.5" not in prompt and "192.168." not in prompt
+
+
+# --- review follow-ups: materiality and ranking --------------------------------------
+
+def _actor_events(specs: list[tuple[str, int, str]]) -> list[dict]:
+    """(event_id, severity, source) -> events with one shared timestamp/kind/port."""
+    return [{"event_id": eid, "ts": "2026-01-01T00:00:30Z", "kind": "alert", "subject": f"{src}->dst:22/tcp", "severity": sev, "attrs": {"protocol": "tcp", "target_port": 22}} for eid, sev, src in specs]
+
+
+def test_rising_max_severity_is_material():
+    builder = MioSituationFrameBuilder(max_event_refs=1)
+    before = builder.build(**_inputs(events=_actor_events([("ev:a", 90, "s1"), ("ev:b", 10, "s2")])))
+    after = builder.build(**_inputs(events=_actor_events([("ev:a", 90, "s1"), ("ev:b", 50, "s2")])))
+    assert [a.max_severity for a in before.actors] == [90, 10] and [a.max_severity for a in after.actors] == [90, 50]
+    assert before.evidence_refs == after.evidence_refs  # only the actor changed
+    assert material_frame_digest(before) != material_frame_digest(after)
+
+
+def test_actor_ranking_priority_is_fixed():
+    events = [
+        # s_count: 3 events at severity 50; s_sev: 1 event at 60; s_new: 1 at 50, newer;
+        # s_old: 1 at 50, older; s_first: same last_seen as s_old but earlier first_seen.
+        *[{"event_id": f"ev:c{i}", "ts": "2026-01-01T00:00:10Z", "subject": "s_count->d:1/tcp", "severity": 50} for i in range(3)],
+        {"event_id": "ev:s", "ts": "2026-01-01T00:00:05Z", "subject": "s_sev->d:1/tcp", "severity": 60},
+        {"event_id": "ev:n", "ts": "2026-01-01T00:00:40Z", "subject": "s_new->d:1/tcp", "severity": 50},
+        {"event_id": "ev:o", "ts": "2026-01-01T00:00:20Z", "subject": "s_old->d:1/tcp", "severity": 50},
+        {"event_id": "ev:f1", "ts": "2026-01-01T00:00:01Z", "subject": "s_first->d:1/tcp", "severity": 25},
+        {"event_id": "ev:f2", "ts": "2026-01-01T00:00:20Z", "subject": "s_first->d:1/tcp", "severity": 50},
+    ]
+    actors = _build(events=events).actors
+    # severity, then count, then recency, then earlier first_seen.
+    assert [(a.max_severity, a.event_count, a.last_seen, a.first_seen) for a in actors] == [
+        (60, 1, "2026-01-01T00:00:05Z", "2026-01-01T00:00:05Z"),
+        (50, 3, "2026-01-01T00:00:10Z", "2026-01-01T00:00:10Z"),
+        (50, 2, "2026-01-01T00:00:20Z", "2026-01-01T00:00:01Z"),
+        (50, 1, "2026-01-01T00:00:40Z", "2026-01-01T00:00:40Z"),
+        (50, 1, "2026-01-01T00:00:20Z", "2026-01-01T00:00:20Z"),
+    ]
+    assert [a.actor_key for a in actors] == [f"actor:{i:04d}" for i in range(1, 6)]
+
+
+def test_tied_actors_are_ordered_by_smallest_event_id_regardless_of_input_order():
+    events = _actor_events([("ev:b", 50, "s1"), ("ev:a", 50, "s2"), ("ev:c", 50, "s3")])
+    expected = _build(events=events)
+    assert [a.evidence_refs for a in expected.actors] == [("ev:a",), ("ev:b",), ("ev:c",)]
+    for perm in ([2, 1, 0], [1, 0, 2], [0, 2, 1]):
+        assert _build(events=[events[i] for i in perm]).to_canonical_json() == expected.to_canonical_json()

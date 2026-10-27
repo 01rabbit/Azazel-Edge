@@ -139,13 +139,32 @@ DECEPTION_LIFECYCLE_UNKNOWN = "DECEPTION_LIFECYCLE_UNKNOWN"
 _ACTOR_KEY_RE = re.compile(r"actor:\d{4}\Z")
 _OPAQUE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 # Address-shaped substrings refused anywhere inside an opaque ID: dotted or
-# dashed quads (with or without :port), MAC-like runs, and IPv6-like runs.
+# dashed quads (with or without :port) and MAC-like runs. IPv6-like runs are
+# checked separately (_has_ipv6_like_run) so ordinary IDs such as ev:12:34:56
+# still pass.
 _ADDRESS_LIKE_RES = (
     re.compile(r"(?<![0-9])\d{1,3}(?:[.\-_]\d{1,3}){3}(?![0-9])"),
     re.compile(r"(?i)(?<![0-9a-f])[0-9a-f]{2}(?:[:.\-_][0-9a-f]{2}){5}(?![0-9a-f])"),
-    re.compile(r"(?i)(?<![0-9a-z])[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,}(?![0-9a-z])"),
     re.compile(r"(?i)[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}"),
 )
+_HEX_COLON_RUN_RE = re.compile(r"(?i)[0-9a-f:]*:[0-9a-f:]*")
+
+
+def _has_ipv6_like_run(value: str) -> bool:
+    """A run of hex digits and colons with five or more groups, or one that
+    parses as an IPv6 address (e.g. fe80::1, ::1). Shorter runs such as
+    12:34:56 are ordinary ID segments."""
+    for run in _HEX_COLON_RUN_RE.findall(value):
+        if run.strip(":").count(":") >= 4:
+            return True
+        for candidate in (run, run.strip(":")):
+            if "::" in candidate or candidate.count(":") == 7:
+                try:
+                    ipaddress.IPv6Address(candidate)
+                except ValueError:
+                    continue
+                return True
+    return False
 _TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 _MAX_COUNT = 1_000_000
 
@@ -159,7 +178,7 @@ def _opaque_id(value: Any) -> str:
     addresses are personal data, not identifiers, and are refused."""
     if not isinstance(value, str) or not _OPAQUE_ID_RE.match(value):
         return ""
-    if any(pattern.search(value) for pattern in _ADDRESS_LIKE_RES):
+    if any(pattern.search(value) for pattern in _ADDRESS_LIKE_RES) or _has_ipv6_like_run(value):
         return ""
     try:
         ipaddress.ip_address(value)
