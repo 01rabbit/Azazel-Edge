@@ -13,10 +13,10 @@ coordinator only decides which advisory result is *current* for a trace.
 |---|---|
 | Hypothesis transition policy, audit entries | `py/azazel_edge/mio/lifecycle.py` (`ALLOWED_HYPOTHESIS_TRANSITIONS`, `apply_hypothesis_update`) |
 | Cycle coordinator (trace isolation, supersession, restart) | `py/azazel_edge/mio/lifecycle.py` (`ReasoningCoordinator`) |
-| Deterministic no-model handoff | `py/azazel_edge/mio/handoff.py` (`mio.no_model_handoff.v1`) |
+| Deterministic no-model handoff | `py/azazel_edge/mio/handoff.py` (`mio.no_model_handoff.v2`) |
 | Loop integration | `py/azazel_edge/mio/reasoning.py` (`ReasoningOutcome.hypothesis_audit`, `.handoff`, `stale_check`) |
-| Golden fixture | `tests/fixtures/mio/no_model_handoff_v1.json` |
-| Acceptance tests | `tests/test_mio_reasoning_lifecycle.py` |
+| Golden fixtures | `tests/fixtures/mio/no_model_handoff_v2.json`, `no_model_handoff_v2_rich.json` |
+| Acceptance tests | `tests/test_mio_reasoning_lifecycle.py`, `tests/test_mio_reasoning_lifecycle_385_v2.py` |
 
 ## Hypothesis lifecycle
 
@@ -80,10 +80,33 @@ It has no clock: ordering is by call order, which keeps replays deterministic.
   `BoundedReasoningLoop.run`; at the next checkpoint the loop ends with
   `STALE_SUPERSEDED` (`superseded_by_newer_frame`) or `OPERATOR_CANCELLED`.
 - `complete(ticket, outcome)` accepts only the current in-flight cycle of the
-  current epoch. Anything else — a result that finished after supersession,
-  after cancel, or from before a restart — is discarded and audited as
-  `stale_result_discarded` with its state, advisory ID and hypotheses (marked
-  `superseded`). It is never returned by `current()`.
+  current epoch, and only when the whole ticket (cycle ID, trace ID, epoch,
+  frame ID, material digest) matches the recorded cycle. The accepted outcome is
+  stored under the recorded cycle's trace, never under a trace named by the
+  caller. Anything else is discarded and audited as `stale_result_discarded`
+  with its state, advisory ID and hypotheses (marked `superseded`), and is never
+  returned by `current()`. The reason is a fixed code chosen from the ticket and
+  the cycle record only (`STALE_RESULT_REASONS`), never from the outcome:
+
+  | Reason code | When |
+  |---|---|
+  | `stale_cycle_superseded` | a newer material frame superseded the cycle |
+  | `stale_cycle_cancelled` | the operator cancelled the cycle |
+  | `stale_cycle_already_completed` | a second result for a cycle that already has one |
+  | `stale_pre_restart_cycle` | the ticket's epoch is older than the coordinator's (any number of restarts) |
+  | `stale_unknown_or_evicted_cycle` | no recorded cycle has this ID (unknown, evicted, or a future-epoch ticket) |
+  | `stale_ticket_mismatch` | the ticket names a recorded cycle but not its trace/frame/epoch/digest, or a field has the wrong type (for example an unhashable ID); `stale_check` is also true for it, and no exception is raised |
+
+  A discard row is written only under a recorded cycle that this exact ticket
+  names, and only for the first discard of that cycle. `discards_for(cycle_id)`
+  returns the cumulative count for a retained cycle; it is part of the snapshot
+  (`discards`, absent in older snapshots and read as 0), so a restored
+  coordinator does not write a second row for the same cycle. Discards that cannot be
+  tied to a recorded cycle (unknown, evicted, forged or malformed tickets) are
+  only counted by reason in `unattributed_discards()`, outside every trace's
+  audit and in memory only. A forged ticket therefore cannot write rows into
+  another trace's audit or push its rows out of the cap. The cost is that a
+  late result for an evicted cycle leaves only that count.
 - Memory is bounded: in-flight cycles by `max_traces` (excess `begin` raises
   `reasoning_coordinator_backpressure`); finished cycles by
   `max_retained_cycles` (oldest evicted with that trace's current advisory,
@@ -104,7 +127,7 @@ known statuses, unique cycle IDs, `latest` consistency) and raises
 - in-flight cycles become `abandoned_on_restart`;
 - accepted cycles become `restored_stale`; `current()` returns nothing until a
   new cycle completes, so a pre-restart advisory is never replayed as current;
-- late results for pre-restart tickets are discarded (`unknown_evicted_or_pre_restart_cycle`);
+- late results for pre-restart tickets are discarded (`stale_pre_restart_cycle`);
 - the audit log is kept.
 
 ## Deterministic no-model handoff
@@ -112,19 +135,40 @@ known statuses, unique cycle IDs, `latest` consistency) and raises
 When a cycle ends in `DEPENDENCY_UNAVAILABLE` (including `model=None`, error
 `model_absent`), `ERROR_FALLBACK`, `VALIDATION_REJECTED`, `BUDGET_EXHAUSTED` or
 `INSUFFICIENT_EVIDENCE`, `ReasoningOutcome.handoff` carries a
-`mio.no_model_handoff.v1` summary. Its summary, lists and guidance come only
-from the frame and the playbook (next checks, stop conditions, claim
-boundaries). If the model already proposed hypotheses this cycle that passed
-grounding and lifecycle checks, they appear separately under
-`model_proposed_hypotheses`, each marked `verification:
-model_proposed_unverified` with its `model_status`, and `model_contribution`
-becomes `unverified_hypotheses_only` (otherwise `none`); the
-`frame_derived_only` limitation is used only when no model content is present.
-Wording is fixed templates, not attacker text; there is no action field.
+`mio.no_model_handoff.v2` summary.
+
+v2 is built from allowlisted structured fields only; no free text from any
+input is copied. Frame facts, unknowns, contradictions, mission, NOC/SOC text,
+model statements, assumptions and conditions, and the `reason` argument never
+reach the payload (v1 copied redacted frame and model text). The payload holds:
+
+| Field | Source |
+|---|---|
+| `trace_id`, `frame_id`, `evidence_refs`, hypothesis IDs and their refs | only IDs that fully match a closed shape the repo produces (`CLOSED_ID_SHAPES`: allowlisted words and bounded digits, for example `trace-1`, `mio-shadow`, `<trace>:frame`, `sha256:<hex>`, `suricata_sid:<n>`, `ev:<kind>:<n>`, `h<n>`; trace counters up to six digits); anything else (addresses, hostnames, hex/decimal address forms, free words) becomes a fixed placeholder (`invalid-trace-id`, `invalid-frame-id`, `[redacted:evidence_ref]`, `hypothesis-<n>`) |
+| `reason` | a `ReasoningState` value, otherwise `unspecified` |
+| `current_defensive_state`, `threat_level`, `dependency_status`, `current_action` | closed vocabularies (`DEFENSIVE_STATES`, `LOW`..`CRITICAL`/`UNKNOWN`, `OPTIONAL_DEPENDENCY_STATUSES`, the v2 action-record vocabularies) |
+| `counts` | integer sizes of the frame lists, actors and actions |
+| `unknown_markers`, `contradiction_markers` | only the fixed marker codes emitted by the contract and `MioSituationFrameBuilder` (for example `KNOWLEDGE_UNAVAILABLE`, `NOC_DEGRADED_MODE`, `HIGH_SOC_RISK_WITH_FRAGILE_NOC`); caller text is counted, not copied |
+| `playbook` | the ID only when it is a `DEFAULT_PLAYBOOKS` key and the version only when it equals that entry's version (else `invalid-playbook-id` / `invalid-version`); the next checks, stop conditions and claim boundaries only when the playbook equals its built-in `DEFAULT_PLAYBOOKS` entry (code constants), otherwise `guidance_source: omitted_not_builtin` and empty lists |
+| `summary`, `operator_guidance` | fixed templates filled with the values above |
+
+If the model already proposed hypotheses this cycle that passed grounding and
+lifecycle checks, they appear under `model_proposed_hypotheses` as ID,
+`model_status`, evidence refs and a falsification-condition count, each marked
+`verification: model_proposed_unverified`; `model_contribution` becomes
+`unverified_hypotheses_only` (otherwise `none`), and the `frame_derived_only`
+limitation is used only when no model content is present. Every handoff carries
+the `structured_fields_only` limitation. There is no action field.
+`flow:<flow_id>` refs are always redacted in the handoff: frame evidence refs
+are caller-supplied, so untrusted text can reach them, and a 64-bit flow ID
+cannot be told apart from a decimal-encoded MAC or IPv4-mapped IPv6 address.
+The handoff has no key for a digest; `counts.evidence_refs` still counts them.
 Canonical bytes (sorted keys, no spaces, ASCII) are hard-capped at 8192 bytes:
 deterministic trimming marks `handoff_truncated`, and if the cap is still
 unreachable the builder raises instead of exceeding it. Identical inputs give
-identical bytes; an absent model and an unavailable model give the same handoff.
+identical bytes, two frames that differ only in free text give the same payload
+apart from `frame_digest`, and an absent model and an unavailable model give
+the same handoff. Both golden fixtures are compared byte for byte.
 
 Behaviour change: `BoundedReasoningLoop(model=None)` previously failed on the
 first model call and ended in `ERROR_FALLBACK`. It now ends in
@@ -134,6 +178,8 @@ Cancelled/superseded cycles get no handoff, since their frame is no longer curre
 
 ## Not in scope
 
-Live wiring of the coordinator into a running service and any #373 work.
+Live wiring of the coordinator into a running service (how M.I.O. runs
+resident is an open owner decision; nothing here adds a unit, service or
+installer step) and any #373 work.
 Trace identity, working memory, the durable audit projection and retention are
 in `mio-reasoning-trace.md` (#389).

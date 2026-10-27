@@ -228,6 +228,17 @@ class CycleStatus(str, Enum):
     RESTORED_STALE = "restored_stale"
 
 
+# Fixed reason codes for a result that may not become current. The reason is
+# chosen from the ticket and the cycle record only, never from the outcome.
+STALE_PRE_RESTART = "stale_pre_restart_cycle"
+STALE_UNKNOWN_OR_EVICTED = "stale_unknown_or_evicted_cycle"
+STALE_TICKET_MISMATCH = "stale_ticket_mismatch"
+STALE_SUPERSEDED = "stale_cycle_superseded"
+STALE_CANCELLED = "stale_cycle_cancelled"
+STALE_ALREADY_COMPLETED = "stale_cycle_already_completed"
+STALE_RESULT_REASONS = frozenset({STALE_PRE_RESTART, STALE_UNKNOWN_OR_EVICTED, STALE_TICKET_MISMATCH, STALE_SUPERSEDED, STALE_CANCELLED, STALE_ALREADY_COMPLETED})
+
+
 @dataclass(frozen=True)
 class CycleTicket:
     trace_id: str
@@ -252,11 +263,16 @@ class _Cycle:
     status: CycleStatus
     outcome_state: str = ""
     advisory_id: str = ""
+    # Discarded results offered for this cycle. Only the first one writes an
+    # audit row, so replaying a real ticket cannot flood the trace's audit.
+    discards: int = 0
 
 
 COORDINATOR_SNAPSHOT_SCHEMA = "mio.reasoning_coordinator.v1"
 _SNAPSHOT_KEYS = frozenset({"schema", "epoch", "next_cycle", "latest", "cycles", "audit", "audit_dropped"})
-_CYCLE_KEYS = frozenset({"cycle_id", "trace_id", "epoch", "frame_id", "material_digest", "status", "outcome_state", "advisory_id"})
+_CYCLE_KEYS = frozenset({"cycle_id", "trace_id", "epoch", "frame_id", "material_digest", "status", "outcome_state", "advisory_id", "discards"})
+# Snapshots written before ``discards`` existed are still accepted (count 0).
+_CYCLE_KEYS_LEGACY = _CYCLE_KEYS - {"discards"}
 # Per-row bounds so one audit row cannot grow with model output.
 _AUDIT_TEXT_LIMIT = 160
 _AUDIT_LIST_LIMIT = 8
@@ -278,6 +294,21 @@ def _bound(value: Any, depth: int = 0) -> Any:
 
 def _is_int(value: Any) -> bool:
     return type(value) is int
+
+
+def _well_typed(ticket: Any) -> bool:
+    """A ticket whose fields have the types begin() mints. Anything else
+    (including unhashable IDs) is a mismatch, never an exception."""
+    return (
+        isinstance(ticket, CycleTicket)
+        and all(type(getattr(ticket, k)) is str for k in ("trace_id", "cycle_id", "frame_id", "material_digest"))
+        and _is_int(ticket.epoch)
+    )
+
+
+def _same_cycle(ticket: CycleTicket, own: CycleTicket) -> bool:
+    """Ticket identity ignoring the ``deduplicated`` flag."""
+    return (ticket.cycle_id, ticket.trace_id, ticket.epoch, ticket.frame_id, ticket.material_digest) == (own.cycle_id, own.trace_id, own.epoch, own.frame_id, own.material_digest)
 
 
 class ReasoningCoordinator:
@@ -310,6 +341,11 @@ class ReasoningCoordinator:
         self._audit: list[dict[str, Any]] = []
         self._audit_seq = 0
         self._audit_dropped = 0
+        # Discards that cannot be tied to a recorded cycle (unknown, evicted,
+        # forged or malformed tickets). Counted by reason only, outside every
+        # trace's audit, so a forged ticket can neither write rows into another
+        # trace's audit nor push its rows out of the cap. In memory only.
+        self._unattributed: dict[str, int] = {}
 
     # -- audit ------------------------------------------------------------
     def _log(self, event: str, cycle: _Cycle | None = None, **fields: Any) -> None:
@@ -331,6 +367,17 @@ class ReasoningCoordinator:
     @property
     def audit_dropped(self) -> int:
         return self._audit_dropped
+
+    def discards_for(self, cycle_id: str) -> int | None:
+        """Cumulative discarded results for a retained cycle (only the first
+        wrote an audit row), or None if the cycle is unknown or evicted."""
+        with self._lock:
+            cycle = self._cycles.get(cycle_id) if type(cycle_id) is str else None
+            return None if cycle is None else cycle.discards
+
+    def unattributed_discards(self) -> dict[str, int]:
+        with self._lock:
+            return dict(sorted(self._unattributed.items()))
 
     def _prune(self) -> None:
         finished = [cid for cid, c in self._cycles.items() if c.status is not CycleStatus.IN_FLIGHT]
@@ -379,8 +426,10 @@ class ReasoningCoordinator:
 
     def _status(self, ticket: CycleTicket) -> CycleStatus | None:
         with self._lock:
+            if not _well_typed(ticket):
+                return None
             cycle = self._cycles.get(ticket.cycle_id)
-            if cycle is None or ticket.epoch != self.epoch:
+            if cycle is None or ticket.epoch != self.epoch or not _same_cycle(ticket, cycle.ticket):
                 return None
             return cycle.status
 
@@ -398,7 +447,7 @@ class ReasoningCoordinator:
 
     def cancel(self, trace_id: str, *, reason: str = "operator_cancelled") -> bool:
         with self._lock:
-            cycle = self._cycles.get(self._latest.get(trace_id, ""))
+            cycle = self._cycles.get(self._latest.get(trace_id, "")) if type(trace_id) is str else None
             if cycle is None or cycle.status is not CycleStatus.IN_FLIGHT:
                 return False
             cycle.status = CycleStatus.CANCELLED
@@ -414,23 +463,49 @@ class ReasoningCoordinator:
         rec = getattr(outcome, "recommendation", None)
         advisory_id = getattr(rec, "advisory_id", "") if rec is not None else ""
         with self._lock:
-            cycle = self._cycles.get(ticket.cycle_id)
-            if cycle is None or ticket.epoch != self.epoch:
-                reason = "unknown_evicted_or_pre_restart_cycle"
-                self._log("stale_result_discarded", None, trace_id=ticket.trace_id, cycle_id=ticket.cycle_id, frame_id=ticket.frame_id, ticket_epoch=ticket.epoch, reason=reason, outcome_state=state, advisory_id=advisory_id, hypotheses=[e.to_dict() for e in supersede_all(hypotheses, REASON_CYCLE_SUPERSEDED)])
-                return CompletionResult(False, CycleStatus.ABANDONED_ON_RESTART.value, reason)
-            if cycle.status is not CycleStatus.IN_FLIGHT:
-                reason = f"cycle_{cycle.status.value}"
-                h_reason = REASON_CYCLE_CANCELLED if cycle.status is CycleStatus.CANCELLED else REASON_CYCLE_SUPERSEDED
-                self._log("stale_result_discarded", cycle, reason=reason, outcome_state=state, advisory_id=advisory_id, hypotheses=[e.to_dict() for e in supersede_all(hypotheses, h_reason)])
-                return CompletionResult(False, cycle.status.value, reason)
+            cycle = self._cycles.get(ticket.cycle_id) if _well_typed(ticket) else None
+            reason, status = self._stale_reason(ticket, cycle)
+            if reason:
+                # Attribute the row only to a recorded cycle that this exact
+                # ticket names. Anything else is counted outside the per-trace
+                # audit; the ticket's self-declared IDs are never written.
+                if cycle is None or not _same_cycle(ticket, cycle.ticket):
+                    self._unattributed[reason] = self._unattributed.get(reason, 0) + 1
+                else:
+                    cycle.discards += 1
+                    if cycle.discards == 1:
+                        h_reason = REASON_CYCLE_CANCELLED if reason == STALE_CANCELLED else REASON_CYCLE_SUPERSEDED
+                        self._log("stale_result_discarded", cycle, reason=reason, ticket_epoch=ticket.epoch, outcome_state=state, advisory_id=advisory_id, hypotheses=[e.to_dict() for e in supersede_all(hypotheses, h_reason)])
+                return CompletionResult(False, status, reason)
             cycle.status = CycleStatus.ACCEPTED
             cycle.outcome_state = state[:64]
             cycle.advisory_id = str(advisory_id)[:_ID_LIMIT]
-            self._current[ticket.trace_id] = outcome
+            self._current[cycle.ticket.trace_id] = outcome
             self._log("result_accepted", cycle, outcome_state=state, advisory_id=advisory_id)
             self._prune()
             return CompletionResult(True, CycleStatus.ACCEPTED.value, "current", outcome)
+
+    def _stale_reason(self, ticket: CycleTicket, cycle: _Cycle | None) -> tuple[str, str]:
+        """('', '') when ``ticket`` is the current in-flight cycle, else a fixed
+        reason code from STALE_RESULT_REASONS and the cycle status to report."""
+        if not _well_typed(ticket):
+            return STALE_TICKET_MISMATCH, "unknown"
+        if cycle is not None and not _same_cycle(ticket, cycle.ticket):
+            # A ticket naming another trace's cycle must not land in that trace.
+            return STALE_TICKET_MISMATCH, "unknown"
+        if ticket.epoch < self.epoch:
+            return STALE_PRE_RESTART, CycleStatus.ABANDONED_ON_RESTART.value
+        if cycle is None or ticket.epoch != self.epoch:
+            return STALE_UNKNOWN_OR_EVICTED, "unknown"
+        if cycle.status is CycleStatus.IN_FLIGHT:
+            return "", ""
+        if cycle.status is CycleStatus.CANCELLED:
+            return STALE_CANCELLED, cycle.status.value
+        if cycle.status is CycleStatus.ACCEPTED:
+            return STALE_ALREADY_COMPLETED, cycle.status.value
+        if cycle.status in (CycleStatus.ABANDONED_ON_RESTART, CycleStatus.RESTORED_STALE):
+            return STALE_PRE_RESTART, cycle.status.value
+        return STALE_SUPERSEDED, cycle.status.value
 
     def run_cycle(self, loop: Any, frame: MioSituationFrame, playbook: Any) -> CompletionResult:
         """begin -> loop.run(cancel_check, stale_check) -> complete, for one frame."""
@@ -460,6 +535,7 @@ class ReasoningCoordinator:
                         "cycle_id": c.ticket.cycle_id, "trace_id": c.ticket.trace_id, "epoch": c.ticket.epoch,
                         "frame_id": c.ticket.frame_id, "material_digest": c.ticket.material_digest,
                         "status": c.status.value, "outcome_state": c.outcome_state, "advisory_id": c.advisory_id,
+                        "discards": c.discards,
                     }
                     for c in self._cycles.values()
                 ],
@@ -488,9 +564,11 @@ class ReasoningCoordinator:
             raise ValueError("malformed_coordinator_snapshot")
         seen: dict[str, str] = {}
         for row in cycles:
-            if not isinstance(row, dict) or set(row) != _CYCLE_KEYS:
+            if not isinstance(row, dict) or set(row) not in (_CYCLE_KEYS, _CYCLE_KEYS_LEGACY):
                 raise ValueError("malformed_coordinator_snapshot")
-            if any(not isinstance(row[k], str) or len(row[k]) > _ID_LIMIT for k in _CYCLE_KEYS - {"epoch"}):
+            if "discards" in row and (not _is_int(row["discards"]) or row["discards"] < 0):
+                raise ValueError("malformed_coordinator_snapshot")
+            if any(not isinstance(row[k], str) or len(row[k]) > _ID_LIMIT for k in _CYCLE_KEYS_LEGACY - {"epoch"}):
                 raise ValueError("malformed_coordinator_snapshot")
             if not _is_int(row["epoch"]) or not 0 <= row["epoch"] <= epoch:
                 raise ValueError("invalid_cycle_epoch_in_snapshot")
@@ -523,7 +601,7 @@ class ReasoningCoordinator:
         for row in payload["cycles"]:
             ticket = CycleTicket(row["trace_id"], row["cycle_id"], row["epoch"], row["frame_id"], row["material_digest"])
             status = CycleStatus(row["status"])
-            cycle = _Cycle(ticket, status, row["outcome_state"], row["advisory_id"])
+            cycle = _Cycle(ticket, status, row["outcome_state"], row["advisory_id"], row.get("discards", 0))
             coord._cycles[ticket.cycle_id] = cycle
             if status is CycleStatus.IN_FLIGHT:
                 cycle.status = CycleStatus.ABANDONED_ON_RESTART

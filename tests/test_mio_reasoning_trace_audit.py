@@ -312,7 +312,8 @@ def test_secrets_never_echo_into_no_model_handoff():
     hyp = MioHypothesis.from_mapping({"hypothesis_id": "h1", "statement": SECRET_TEXT, "falsification_conditions": [SECRET_TEXT]}, ordinal=1)
     blob = build_no_model_handoff(f, reason="model_absent", playbook=PLAYBOOK, hypotheses=[hyp]).to_canonical_json().decode()
     _assert_no_secret(blob)
-    assert "[redacted:" in blob
+    # v2 copies no free text at all; the secret-bearing fields are only counted.
+    assert "structured_fields_only" in blob and '"known_facts":1' in blob
 
 
 def test_secrets_never_echo_into_loop_handoff_when_model_echoes_input():
@@ -556,7 +557,7 @@ def test_handoff_validates_ids_and_redacts_everything_else():
     payload = build_no_model_handoff(f, reason="model_absent password=hunter2", playbook=PLAYBOOK, hypotheses=[hyp]).to_dict()
     blob = json.dumps(payload)
     assert "hunter2" not in blob and "ghp_ABCDEFGHIJKLMNOPQRST" not in blob
-    assert payload["model_proposed_hypotheses"][0]["hypothesis_id"] == "invalid-hypothesis-id-1"
+    assert payload["model_proposed_hypotheses"][0]["hypothesis_id"] == "hypothesis-1"
     assert payload["evidence_refs"][0] == "ev:ssh:1"
     assert payload["trace_id"] == "trace-1"
 
