@@ -24,7 +24,7 @@ No bounty program. Reporters are credited in the advisory unless anonymity is re
 **In scope** — anything that crosses the boundary described above:
 
 - Authentication/authorization bypass on the web UI or API (token, mTLS, RBAC role checks)
-- Escape from a scapegoat/deception surface — or from the captive portal / portal-viewer — into the protected segment or control plane
+- Escape from a scapegoat/deception surface — or from the captive portal — into the protected segment or control plane
 - Bypass of nftables/tc policy enforcement
 - Audit hash-chain integrity break
 - Privilege escalation via the installer or systemd unit files

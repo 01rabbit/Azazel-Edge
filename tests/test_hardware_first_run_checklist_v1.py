@@ -338,13 +338,12 @@ def test_units_named_in_the_checklist_exist(corpus):
     units.update(re.findall(r"\b(azazel-edge-(?:control-daemon|core|web|ai-agent|suricata|opencanary))\b", text))
     assert {"azazel-edge-web", "azazel-edge-ai-agent", "azazel-edge-epd-refresh"} <= units
     shipped = {p.stem for p in (ROOT / "systemd").glob("*.service")} | {p.stem for p in (ROOT / "systemd").glob("*.timer")}
-    # Named in section 5 because it is not shipped (an open question).
-    not_shipped = {"azazel-edge-portal-viewer"}
-    for unit in sorted(units - not_shipped):
+    for unit in sorted(units):
         assert unit in shipped, f"unit {unit} is not shipped in systemd/"
-    for unit in not_shipped:
-        assert unit not in shipped, f"{unit} is shipped now; update section 5 of the checklist"
-        assert re.search(rf"{unit}\.service` is started by the daemon but not shipped", text)
+    # The portal viewer and the port 8082 status API had no provider and were
+    # removed (Edge#477); the checklist no longer names them.
+    for doc in (EN, JA):
+        assert "portal-viewer" not in _read(doc) and "8082" not in _read(doc)
     # Units the installers write (not under systemd/).
     for generated in ("azazel-internal-apply",):
         assert generated in text

@@ -79,6 +79,7 @@ sudo docker logs --tail 100 azazel-edge-ollama
 - Manual ask API: `POST /api/ai/ask`
 - Command endpoint: `POST /api/mattermost/command`
 - Message bridge: `POST /api/mattermost/message`
+- Without a bot token and channel id or a webhook URL (Mattermost not installed), sending, reading back and the handoff answer HTTP 503 with `not_configured: true`, the status says `configured: false`, and no "Open Mattermost" link is shown (Edge#477).
 - Language prefixes: `ja:` and `en:` are supported for operator requests.
 
 ## 9. Runbook Safety Integration

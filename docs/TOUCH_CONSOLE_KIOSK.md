@@ -77,12 +77,14 @@ shown for `busy`, `forbidden` and a rate limit (nothing was run).
 (including the generic "Server error") is shown as "No answer — it may have
 run", because it does not say that nothing ran.
 
-Not offered on this screen: contain / release / disconnect / stage-open,
-shutdown / reboot, portal viewer, client trust, M.I.O. questions, and the
+Not offered on this screen: disconnect, shutdown / reboot, client trust,
+M.I.O. questions, and the
 legacy concept mode (Portal / Shield / Scapegoat): it is neither shown nor
 offered, following #340 ("do not resurrect legacy mode UI"); the Defensive
 State is the outward state (see [decision-loop.md](architecture/decision-loop.md)).
-Use the main dashboard or Ops Comm for the others.
+Use the main dashboard or Ops Comm for the others. contain / release /
+stage-open and the portal viewer are not offered anywhere (removed in
+Edge#477: nothing on an Edge provided them).
 
 ## Secrets
 

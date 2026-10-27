@@ -81,11 +81,13 @@ def _reset_rate_limits():
 # ------------------------------------------------------------ the peer table
 
 # What the Web UI sends on control.sock today, from its own code: the HTTP
-# action list minus the actions answered by the status API on port 8082, plus
-# control_plane's snapshot reads, plus the fixed operations of stage 1.
-STATUS_API_ONLY = {"contain", "release", "disconnect", "stage_open"}
+# action list (disconnect goes as uplink_disconnect), plus control_plane's
+# snapshot reads, plus the fixed operations of stage 1. contain, release and
+# stage_open are not Web UI actions (Edge#477: the port 8082 status API they
+# went to has no provider for this device).
+NOT_WEB_ACTIONS = {"contain", "release", "stage_open", "portal_viewer_open"}
 EXPECTED_WEB_ACTIONS = (
-    (set(webapp.ALLOWED_ACTIONS) - STATUS_API_ONLY)
+    (set(webapp.ALLOWED_ACTIONS) - {"disconnect"})
     | {"get_snapshot", "watch_snapshot"}
     | {"uplink_disconnect", "sot_devices_replace", "sot_devices_patch"}
 )
@@ -98,14 +100,14 @@ def test_the_web_ui_action_set_is_exactly_what_the_web_ui_sends():
     assert control_daemon.ROOT_ONLY_ACTIONS == frozenset({"migrate_path_schema"})
 
 
-def test_status_api_only_actions_never_reach_the_socket(monkeypatch):
+def test_removed_actions_never_reach_the_socket(monkeypatch):
     sent = []
     monkeypatch.setattr(webapp, "_send_control_command_socket",
-                        lambda action, params=None, timeout_sec=5.0: sent.append(action) or {"ok": False})
-    monkeypatch.setattr(webapp, "_first_status_api_response", lambda **kw: {"ok": True})
-    monkeypatch.setattr(webapp, "_post_status_action", lambda host, action: None)
-    for action in sorted(STATUS_API_ONLY):
-        webapp.send_control_command(action)
+                        lambda action, params=None, timeout_sec=5.0: sent.append(action) or {"ok": True})
+    assert not (NOT_WEB_ACTIONS & set(webapp.ALLOWED_ACTIONS))
+    for action in sorted(NOT_WEB_ACTIONS):
+        res = webapp.send_control_command(action)
+        assert res["ok"] is False and res["error"] == "Unknown action"
     assert sent == []
 
 
@@ -115,7 +117,8 @@ def test_web_uid_gets_its_actions(web_account, action):
 
 
 @pytest.mark.parametrize("action", ["migrate_path_schema", "path_schema_status", "mode_apply_default",
-                                    "contain", "disconnect", "stage_open", "release", "anything_else", None, 7])
+                                    "contain", "disconnect", "stage_open", "release", "portal_viewer_open",
+                                    "anything_else", None, 7])
 def test_web_uid_is_refused_everything_else(web_account, action):
     allowed, _rule = control_daemon.peer_action_allowed(WEB_UID, action)
     assert allowed is False
@@ -418,7 +421,6 @@ def test_uplink_disconnect_reports_the_command_failure(fake_net, monkeypatch):
 
 
 def test_the_web_ui_disconnect_uses_the_daemon_and_shows_its_failure(monkeypatch, tmp_path):
-    monkeypatch.setattr(webapp, "_first_status_api_response", lambda **kw: None)
     sent = []
 
     def fake(action, params=None, timeout_sec=5.0):
@@ -436,7 +438,6 @@ def test_the_web_ui_disconnect_uses_the_daemon_and_shows_its_failure(monkeypatch
 
 def test_the_web_ui_disconnect_end_to_end_failure_is_a_500(monkeypatch, tmp_path):
     """Web UI -> real control.sock -> daemon: no such uplink -> HTTP 500 with the reason."""
-    monkeypatch.setattr(webapp, "_first_status_api_response", lambda **kw: None)
     monkeypatch.setattr(webapp, "load_token", lambda: None)
     monkeypatch.setattr(webapp, "AUTH_FAIL_OPEN", True)
     monkeypatch.setenv("AZAZEL_UP_IF", "nosuch0")

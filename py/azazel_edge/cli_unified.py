@@ -186,11 +186,12 @@ def _container_running(name: str) -> bool:
 
 
 def _ntfy_health_ok() -> bool:
-    # ntfy listens on loopback only (install_ntfy.sh, Edge#477); MGMT_IP is
-    # tried after it for a host configured by hand.
-    mgmt_ip = os.environ.get("MGMT_IP", "10.55.0.10")
+    # ntfy listens on loopback only (install_ntfy.sh, Edge#477). MGMT_IP is
+    # tried after it only when set, for a host configured by hand; with no
+    # default address an unset MGMT_IP never sends the check off the device.
+    mgmt_ip = os.environ.get("MGMT_IP", "").strip()
     ntfy_port = os.environ.get("NTFY_PORT", "8081")
-    for host in dict.fromkeys(["127.0.0.1", mgmt_ip]):
+    for host in dict.fromkeys(["127.0.0.1"] + ([mgmt_ip] if mgmt_ip else [])):
         url = f"http://{host}:{ntfy_port}/v1/health"
         try:
             with urlopen(url, timeout=1.0) as resp:

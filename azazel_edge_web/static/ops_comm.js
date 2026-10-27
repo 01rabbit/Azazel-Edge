@@ -232,7 +232,20 @@ async function loadStatus() {
             setText('mmMode', data.error || tr('ops.failed', 'Failed: {error}', { error: tr('ops.unknown_error', 'unknown error') }));
             return;
         }
-        setBadge('mmReachability', data.reachable ? tr('ops.reachable', 'REACHABLE') : tr('ops.unreachable', 'UNREACHABLE'), !!data.reachable);
+        const link = document.getElementById('mattermostLink');
+        if (data.configured === false) {
+            // Not installed / not set up: say so, and offer no link to a
+            // Mattermost URL nothing serves.
+            setBadge('mmReachability', tr('ops.not_configured', 'NOT CONFIGURED'), false);
+            if (link) { link.hidden = true; link.removeAttribute('href'); }
+        } else {
+            setBadge('mmReachability', data.reachable ? tr('ops.reachable', 'REACHABLE') : tr('ops.unreachable', 'UNREACHABLE'), !!data.reachable);
+            if (link) {
+                const url = data.open_url || data.base_url || '';
+                link.hidden = !url;
+                if (url) link.href = url; else link.removeAttribute('href');
+            }
+        }
         setText('mmMode', data.mode || '-');
         setText('mmBaseUrl', data.base_url || '-');
         setText('mmChannelId', data.channel_id || '-');
@@ -245,8 +258,6 @@ async function loadStatus() {
                 ? tr('ops.command_enabled', 'enabled ({endpoint}){triggers}', { endpoint: data.command_endpoint || '/api/mattermost/command', triggers })
                 : tr('ops.command_disabled', 'disabled')
         );
-        const link = document.getElementById('mattermostLink');
-        if (link) link.href = data.open_url || data.base_url || '#';
     } catch (e) {
         setBadge('mmReachability', tr('ops.error', 'ERROR'), false);
         setText('mmMode', String(e));

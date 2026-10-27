@@ -1158,7 +1158,7 @@
         var n2 = document.createElement('div'); n2.className = 'svc-name'; n2.textContent = 'MATTERMOST';
         var r2 = document.createElement('div'); r2.className = 'svc-role'; r2.textContent = 'Operator chat bridge';
         var u2 = document.createElement('div'); u2.className = 'svc-unit'; u2.textContent = 'ops-comm / /mio';
-        var s2 = document.createElement('div'); s2.className = 'svc-state'; s2.textContent = mm.reachable ? 'REACHABLE' : (mm.ping && mm.ping.error ? 'UNREACHABLE' : '—');
+        var s2 = document.createElement('div'); s2.className = 'svc-state'; s2.textContent = mm.configured === false ? 'NOT CONFIGURED' : (mm.reachable ? 'REACHABLE' : (mm.ping && mm.ping.error ? 'UNREACHABLE' : '—'));
         mmCard.appendChild(n2); mmCard.appendChild(r2); mmCard.appendChild(u2); mmCard.appendChild(s2);
         grid.appendChild(mmCard);
     }

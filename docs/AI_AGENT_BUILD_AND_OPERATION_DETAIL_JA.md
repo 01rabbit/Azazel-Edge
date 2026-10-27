@@ -462,6 +462,7 @@ AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC=0
 - Webhookモードは WebUI -> Mattermost 投稿が可能（読み戻しは不可）。
 - Bot APIモードは投稿 + 直近メッセージ読み戻しが可能。
 - `Open Mattermost` は `AZAZEL_MATTERMOST_OPEN_URL` を優先し、未設定時は `http://<AZAZEL_MATTERMOST_HOST>:<AZAZEL_MATTERMOST_PORT>/<team>/channels/<channel>` を自動生成する。
+- Bot API（トークンとチャンネル ID）も Webhook も設定されていない（Mattermost 未導入）ときは、送信・読み戻し・handoff は HTTP 503（`not_configured: true`）を返し、状態は `configured: false`、`Open Mattermost` のリンクは表示しない（Edge#477）。
 - ログイン情報は `/etc/azazel-edge/mattermost-credentials.env`（権限 `0600`）に保管する。
 
 反映:
