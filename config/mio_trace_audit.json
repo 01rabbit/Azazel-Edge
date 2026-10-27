@@ -1,0 +1,8 @@
+{
+  "schema": "mio.trace_audit_config.v1",
+  "enabled": false,
+  "path": "/var/lib/azazel-edge/mio/trace-audit.jsonl",
+  "key_file": "/etc/azazel-edge/mio-trace-audit.key",
+  "max_file_bytes": 1048576,
+  "max_files": 4
+}

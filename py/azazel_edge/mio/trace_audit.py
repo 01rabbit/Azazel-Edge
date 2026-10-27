@@ -40,7 +40,11 @@ from .redaction import contains_token_like
 from .lifecycle import CycleTicket, ReasoningCoordinator, material_frame_digest
 from .contracts import MioSituationFrame
 
-TRACE_AUDIT_SCHEMA = "mio.trace_audit.v1"
+# v2 adds ``digest_key`` (#389): whether the keyed digests in the record were
+# made with the device's persisted key or a per-process random one.
+TRACE_AUDIT_SCHEMA = "mio.trace_audit.v2"
+TRACE_AUDIT_SCHEMAS = frozenset({"mio.trace_audit.v1", TRACE_AUDIT_SCHEMA})
+DIGEST_KEY_STATES = frozenset({"persistent", "ephemeral"})
 MAX_RECORD_BYTES = 4096
 _LIST_CAP = 16
 
@@ -240,13 +244,19 @@ def project_outcome(
     frame: MioSituationFrame | None = None,
     edge_decision_ref: str | None = None,
     cycle_status: str = "",
+    digest_key: str = "ephemeral",
 ) -> dict[str, Any]:
     """Pure, deterministic minimized audit record for one finished cycle.
 
     Same inputs and key give the same record. No free text survives; see the
     module docstring. ``edge_decision_ref`` must be a valid Edge decision ref
     (``edge-dec:...``) supplied by Edge; a M.I.O. advisory ID is rejected.
+    ``digest_key`` says whether ``key`` is the device's persisted key
+    (``persistent``, digests correlate across restarts) or not (``ephemeral``,
+    the default: a caller-made or per-process key claims nothing more).
     """
+    if digest_key not in DIGEST_KEY_STATES:
+        raise ValueError("invalid_digest_key_state")
     if edge_decision_ref is not None:
         require_id(EDGE_DECISION_REF, edge_decision_ref)
     k = key
@@ -321,6 +331,7 @@ def project_outcome(
         "handoff_digest": None if outcome.handoff is None else outcome.handoff.canonical_digest(),
         "edge_decision_ref": edge_decision_ref,
         "authority": "advisory_only",
+        "digest_key": digest_key,
     }
     return _fit(record)
 
