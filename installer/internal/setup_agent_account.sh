@@ -211,8 +211,15 @@ AZAZEL_AI_LLM_LOG|/var/log/azazel-edge/ai-llm\.jsonl|/var/log/azazel-edge/ai/ai-
 AZAZEL_AI_DEFERRED_LOG|/var/log/azazel-edge/ai-deferred\.jsonl|/var/log/azazel-edge/ai/ai-deferred.jsonl
 AZAZEL_AI_AUDIT_LOG|/var/log/azazel-edge/ai-audit\.jsonl|/var/log/azazel-edge/ai/ai-audit.jsonl
 AZAZEL_DECISION_LOG_DIR|/opt/azazel-edge/logs/tactics_engine|/var/lib/azazel-edge-agent/decisions
+AZAZEL_DECISION_EXPLANATIONS_PATH|/var/log/azazel-edge/decision-explanations\.jsonl|/var/log/azazel-edge/ai/decision-explanations.jsonl
 EOF
 done
+# v2 decision explanations (Edge#477): the agent writes them in $NEW_LOG_DIR;
+# the Web UI and audit_review read them there. No service wrote the old file,
+# so one there came from a manual run: kept as it is, not moved and not read.
+if [[ -e "$OLD_LOG_DIR/decision-explanations.jsonl" || -L "$OLD_LOG_DIR/decision-explanations.jsonl" ]]; then
+  say "NOTICE: $OLD_LOG_DIR/decision-explanations.jsonl is kept and no longer read (the agent writes $NEW_LOG_DIR/decision-explanations.jsonl); review it with: azazel-edge-audit-review --explanations-path $OLD_LOG_DIR/decision-explanations.jsonl"
+fi
 if grep -q '^AZAZEL_UI_SNAPSHOT=' "$SECURITY_ENV"; then
   say "NOTICE: $SECURITY_ENV sets AZAZEL_UI_SNAPSHOT; it is the control daemon's shared snapshot, the agent no longer writes it"
 fi

@@ -18,7 +18,9 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-_DEFAULT_EXPLANATIONS_PATH = "/var/log/azazel-edge/decision-explanations.jsonl"
+# Written by the AI agent from the core's decisions (Edge#477); the same file
+# as the Web UI's Booth Focus (explanations.LIVE_DECISION_EXPLANATIONS_PATH).
+_DEFAULT_EXPLANATIONS_PATH = "/var/log/azazel-edge/ai/decision-explanations.jsonl"
 _DEFAULT_AUDIT_ENV_VAR = "AZAZEL_TRIAGE_AUDIT_PATH"
 _DEFAULT_AUDIT_PATH = "/var/log/azazel-edge-web/triage-audit.jsonl"  # the Web UI log directory (Edge#471)
 
