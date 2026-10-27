@@ -259,6 +259,12 @@ def _verify_audit_review(
         errors.append(f"audit review schema_valid must be true, got {payload.get('schema_valid')!r}")
     if not isinstance(chain, dict) or chain.get("ok") is not True:
         errors.append("audit review chain verification did not report ok=true")
+    elif chain.get("verified") is not True:
+        # ok=true with nothing verified (a missing or empty audit file) is no
+        # evidence of the decision.
+        errors.append(
+            f"audit review verified no audit chain (scope={chain.get('scope')!r}): no evidence"
+        )
     return payload, errors, " ".join(audit_cmd)
 
 
@@ -316,6 +322,8 @@ def _build_report(args: argparse.Namespace) -> Dict[str, Any]:
             "selected_action": audit_payload.get("selected_action"),
             "schema_valid": audit_payload.get("schema_valid"),
             "chain_ok": chain.get("ok"),
+            "chain_verified": chain.get("verified"),
+            "chain_scope": chain.get("scope"),
             "chain_entries": chain.get("entries"),
             "rejected_actions": audit_payload.get("rejected_actions", []),
         },

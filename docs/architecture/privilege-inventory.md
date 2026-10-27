@@ -1208,12 +1208,32 @@ out-of-scope findings tracked separately. Still open:
      move it, and prints a NOTICE; it rewrites an old default
      `AZAZEL_DECISION_EXPLANATIONS_PATH` in the environment files to the new
      path (other values are kept and reported).
-   - **Not changed (owner's decision if wanted).** `audit_review` verifies
-     the audit file with `verify_chain`, which reads one file from its
-     genesis: after the core decision chain rotates (16 MiB), checking it
-     reports a mismatch at the first line. `P0AuditLogger.verify_rotated_chain`
-     exists; switching `audit_review` to it changes what "chain OK" means
-     (an anchored chain) and is left to the owner.
+   - **Rotated chain (owner's decision, #462/#477).** `audit_review`
+     verifies the audit file as a rotated chain
+     (`audit_review.verify_audit_chain`): the active file and `.1` are read
+     as one snapshot with `segments.read_chain`, the reader of the P0
+     relay's reconcile, and verified oldest first. The output says what
+     "chain OK" means (`scope`): `from_genesis` (the chain's first record is
+     retained) or `from_rotation_boundary` (the oldest retained record is
+     the first record of a rotated file; what rotation removed is not
+     retained and not verified, the reconcile's `anchored`); a missing or
+     empty file is `EMPTY`, never `OK`. A rewritten, removed or reordered
+     record, a `.1` the active file does not continue (cut tail, or the
+     active file or `.1` replaced by another chain; the reconcile's
+     `chain_unlinked_segments` / `chain_replaced`), a cut start (a first
+     record that continues a chain without being a rotation boundary), a
+     foreign `chain_id`, a line that is not JSON and a torn last line fail
+     (exit 3; a `snapshot_inconsistent` failure while rotations keep
+     moving files passes on a rerun). `ok` means no tampering was found
+     (also true, exit 0, for a missing or empty file); `verified` means
+     there is verified evidence (an OK `from_genesis` or
+     `from_rotation_boundary` chain), and `bhusa_verify` requires it. Not
+     detected: records removed from the end, a removed `.1` (reads as
+     `from_rotation_boundary`), a removed active file (`.1` alone is read),
+     and a whole chain replaced by another that is consistent in itself
+     (compare the printed `chain_id` with the relay's `audit_chain_id`);
+     chain hashes are not keyed. The single-file `verify_chain` used before reported a rotated
+     chain as a mismatch at its first line.
 7. **Out-of-scope findings, tracked separately** (not fixed by #471 stages
    0–2):
    - `control.sock` has no peer check today (stage 1 adds one);

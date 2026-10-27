@@ -6,9 +6,15 @@ Walks a decision through its v2 explanation record and the hash-chained
 audit log.  Makes NO writes, NO policy changes, and NO enforcement.
 
 Exit codes:
-  0  explanation found AND chain verification passed
+  0  explanation found AND chain verification passed (or the audit file is
+     missing/empty: reported as EMPTY, nothing verified)
   2  explanation file missing/empty, or trace-id not found
-  3  chain verification failed (mismatch or parse error)
+  3  chain verification failed (mismatch, parse error, a rotated file the
+     next one does not continue, or a cut start)
+
+The audit file may be a rotated chain (the core decision chain,
+``core-decision-audit.jsonl`` + ``.1``; Edge#462 item 1).
+:func:`verify_audit_chain` says what was verified: see its docstring.
 """
 
 import argparse
@@ -64,6 +70,186 @@ def _select_record(
         if str(rec.get("trace_id") or "") == trace_id:
             return rec
     return None
+
+
+# ---------------------------------------------------------------------------
+# Audit chain verification (READ-ONLY)
+# ---------------------------------------------------------------------------
+
+# What "chain OK" means, as printed and as returned in the JSON output.
+SCOPE_FROM_GENESIS = "from_genesis"
+SCOPE_FROM_ROTATION_BOUNDARY = "from_rotation_boundary"
+SCOPE_EMPTY = "empty"
+SCOPE_NOT_VERIFIED = "not_verified"
+
+_MEANING = {
+    SCOPE_FROM_GENESIS: (
+        "every record from the chain's first record to the last complete one links to the one"
+        " before it and its hash matches"
+    ),
+    SCOPE_FROM_ROTATION_BOUNDARY: (
+        "every retained record links to the one before it and its hash matches, starting at a"
+        " rotation boundary; the records before it were rotated out, are not retained and were"
+        " not verified"
+    ),
+    SCOPE_EMPTY: "the audit file is missing or has no records; nothing was verified",
+    SCOPE_NOT_VERIFIED: "verification failed; the chain is not OK",
+}
+
+# What OK never covers (chain hashes are not keyed; Edge#462 item 2).
+_LIMITS = (
+    "records are not signed: a writer of the file can forge a chain that verifies,"
+    " and records removed from the end cannot be detected"
+)
+
+
+def _present(path: Path) -> bool:
+    """Whether ``path`` exists. Unlike ``Path.exists`` an error other than
+    "not found" (a directory this account cannot search) raises, so it is
+    reported as a read error, never as an empty chain."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
+
+
+def _retained_files(path: Path, segments: int) -> List[Path]:
+    """The files read_chain read, oldest first (its snapshot starts at the
+    active file when it exists, then ``.1``, ``.2``, ...)."""
+    from azazel_edge.audit.segments import segment_path
+
+    newest_first = ([path] if _present(path) else []) + [segment_path(path, n) for n in range(1, segments + 1)]
+    return list(reversed(newest_first[:segments]))
+
+
+def verify_audit_chain(path: str | Path) -> Dict[str, Any]:
+    """Verify an audit chain, rotated or not, as the P0 relay reads it.
+
+    The retained files (the active file and, after a rotation, ``<name>.1``)
+    are read as one snapshot with ``segments.read_chain``, the reader the P0
+    relay's reconcile uses, and verified oldest first as one chain:
+
+    * ``scope`` ``from_genesis``: the oldest retained record is the chain's
+      first record (``chain_prev`` empty); everything up to the last complete
+      record was verified.
+    * ``scope`` ``from_rotation_boundary``: the oldest retained record
+      continues older records that rotation removed (the reconcile's
+      ``anchored``). It must be the first record of a rotated file (it carries
+      ``chain_id``); its ``chain_prev`` is taken as the start and what was
+      before it is not verified (``genesis_retained`` false).
+    * ``scope`` ``empty``: no file or no record; ``ok`` stays true (as
+      before) but nothing was verified, and the outputs say EMPTY, not OK.
+
+    ``ok`` says no tampering was found (and keeps exit code 0 for an empty
+    file); ``verified`` says there is verified evidence: true only for an OK
+    ``from_genesis`` or ``from_rotation_boundary`` chain. A reader that needs
+    evidence (``bhusa_verify``) checks ``verified``.
+
+    A read that races a rotation is retaken (``read_chain``); if rotations
+    keep moving files it fails with ``snapshot_inconsistent`` and a rerun
+    normally passes.
+
+    Failures (``ok`` false, ``scope`` ``not_verified``): a record whose hash
+    does not match (rewritten), whose ``chain_prev`` is not the record before
+    it (removed, reordered or inserted), a rotated file the next newer file
+    does not continue (its tail was cut or rewritten, or the newer file was
+    replaced by another chain: the reconcile's ``chain_replaced`` /
+    ``chain_unlinked_segments``), an oldest record that continues a chain but
+    is not a rotation boundary (the start was cut off), a ``chain_id`` other
+    than the chain's, a line that is not JSON, and a last line without its
+    newline. Positions (``..._at:N``) count records of the retained chain,
+    oldest first (``.1`` before the active file), from 1.
+
+    An ``OSError`` (a file this account cannot read) is raised: ``main``
+    prints it and fails (exit 3). Read only. Chain hashes are not keyed: see
+    ``_LIMITS``.
+    """
+    from azazel_edge.audit import P0AuditLogger
+    from azazel_edge.audit.segments import chain_id_of, read_chain, segment_path
+
+    log_path = Path(path)
+    result: Dict[str, Any] = {
+        "ok": False, "verified": False, "entries": 0, "error": "", "scope": SCOPE_NOT_VERIFIED,
+        "genesis_retained": False, "files": [], "chain_id": "",
+    }
+
+    def fail(error: str) -> Dict[str, Any]:
+        result.update(ok=False, verified=False, error=error, scope=SCOPE_NOT_VERIFIED)
+        return result
+
+    if not _present(log_path) and not _present(segment_path(log_path, 1)):
+        result.update(ok=True, scope=SCOPE_EMPTY)
+        return result
+    # read_chain leaves a last line without its newline out of its lines;
+    # its ``sync`` hook is called with the descriptor of every file it reads,
+    # oldest first, so the check sees the same snapshot.
+    torn: List[int] = []
+    order: List[int] = []
+
+    def _tail_check(fd: int) -> bool:
+        order.append(fd)
+        size = os.fstat(fd).st_size
+        if size and os.pread(fd, 1, size - 1) != b"\n":
+            torn.append(len(order) - 1)
+        return False
+
+    snapshot = read_chain(log_path, sync=_tail_check)  # OSError (permission) is the caller's: printed, exit 3
+    files = _retained_files(log_path, int(snapshot["segments"]))
+    result.update(files=[f.name for f in files], chain_id=str(snapshot["chain_id"] or ""))
+    if not snapshot["consistent"]:
+        return fail("snapshot_inconsistent:rotation_kept_moving_files")
+    if snapshot["unlinked_segments"]:
+        return fail(f"rotated_file_not_continued:{snapshot['unlinked_segments']}")
+    if torn:
+        idx = torn[0]
+        name = files[idx].name if idx < len(files) else str(idx + 1)
+        return fail(f"incomplete_last_line:{name}")
+    rows: List[Dict[str, Any]] = []
+    for idx, raw in enumerate(snapshot["lines"], start=1):
+        try:
+            row = json.loads(raw)
+        except Exception:
+            return fail(f"parse_error_at:{idx}")
+        if not isinstance(row, dict):
+            return fail(f"parse_error_at:{idx}")
+        rows.append(row)
+    if not rows:
+        result.update(ok=True, scope=SCOPE_EMPTY)
+        return result
+    head = rows[0]
+    prev = str(head.get("chain_prev") or "")
+    if prev:
+        cid = head.get("chain_id")
+        if not (isinstance(cid, str) and cid):
+            # Continues a chain but is not the first record of a rotated
+            # file: the records before it were cut, not rotated.
+            return fail("start_cut:oldest_record_is_not_a_rotation_boundary")
+    chain_id = chain_id_of(head)
+    for idx, row in enumerate(rows, start=1):
+        if str(row.get("chain_prev") or "") != prev:
+            result["entries"] = idx - 1
+            return fail(f"chain_prev_mismatch_at:{idx}")
+        if "chain_id" in row and row.get("chain_id") != chain_id:
+            result["entries"] = idx - 1
+            return fail(f"chain_id_mismatch_at:{idx}")
+        body = dict(row)
+        actual = str(body.pop("chain_hash", "") or "")
+        if actual != P0AuditLogger._compute_chain_hash(body):
+            result["entries"] = idx - 1
+            return fail(f"chain_hash_mismatch_at:{idx}")
+        prev = actual
+    result.update(
+        ok=True, verified=True, entries=len(rows), error="",
+        scope=SCOPE_FROM_ROTATION_BOUNDARY if str(head.get("chain_prev") or "") else SCOPE_FROM_GENESIS,
+        genesis_retained=not str(head.get("chain_prev") or ""),
+    )
+    return result
+
+
+def _chain_meaning(chain_result: Dict[str, Any]) -> str:
+    scope = chain_result.get("scope") or (SCOPE_NOT_VERIFIED if not chain_result.get("ok") else SCOPE_FROM_GENESIS)
+    return _MEANING.get(scope, _MEANING[SCOPE_NOT_VERIFIED])
 
 
 # ---------------------------------------------------------------------------
@@ -156,10 +342,20 @@ def _format_full(record: Dict[str, Any], chain_result: Dict[str, Any]) -> str:
     lines.append("-" * 60)
     lines.append("Audit chain:")
 
-    if chain_result["ok"]:
-        lines.append(f"  OK ({chain_result['entries']} entries)")
-    else:
+    scope = chain_result.get("scope")
+    files = ", ".join(chain_result.get("files") or []) or "(none)"
+    if not chain_result["ok"]:
         lines.append(f"  MISMATCH: {chain_result.get('error', 'unknown error')}")
+        lines.append(f"  verified ok   : {chain_result.get('entries', 0)} entries before the failure; the chain is NOT OK")
+    elif scope == SCOPE_EMPTY:
+        lines.append("  EMPTY (0 entries): nothing was verified")
+    else:
+        lines.append(f"  OK ({chain_result['entries']} entries, {scope})")
+    lines.append(f"  files         : {files}")
+    if chain_result.get("chain_id"):
+        lines.append(f"  chain_id      : {chain_result['chain_id']}")
+    lines.append(f"  meaning       : {_chain_meaning(chain_result)}")
+    lines.append(f"  limits        : {_LIMITS}")
 
     lines.append("=" * 60)
     return "\n".join(lines)
@@ -171,11 +367,16 @@ def _format_compact(record: Dict[str, Any], chain_result: Dict[str, Any]) -> str
     problems = validate_v2_explanation(record)
     schema_status = "schema:OK" if not problems else f"schema:INVALID({len(problems)})"
 
-    chain_status = (
-        f"chain:OK({chain_result['entries']})"
-        if chain_result["ok"]
-        else f"chain:MISMATCH:{chain_result.get('error', '?')}"
-    )
+    scope = chain_result.get("scope")
+    if not chain_result["ok"]:
+        chain_status = f"chain:MISMATCH:{chain_result.get('error', '?')}"
+    elif scope == SCOPE_EMPTY:
+        chain_status = "chain:EMPTY(0)"
+    else:
+        chain_status = (
+            f"chain:OK({chain_result['entries']}) chain_scope={scope}"
+            f" chain_files={len(chain_result.get('files') or [])}"
+        )
 
     basis = _config_hash_basis(record)
     return (
@@ -214,8 +415,15 @@ def _format_json(
         "capsule_signature_state": _capsule_signature_state(record),
         "chain": {
             "ok": chain_result["ok"],
+            "verified": bool(chain_result.get("verified")),
             "entries": chain_result["entries"],
             "error": chain_result.get("error", ""),
+            "scope": chain_result.get("scope", SCOPE_NOT_VERIFIED),
+            "genesis_retained": bool(chain_result.get("genesis_retained")),
+            "files": list(chain_result.get("files") or []),
+            "chain_id": chain_result.get("chain_id", ""),
+            "meaning": _chain_meaning(chain_result),
+            "limits": _LIMITS,
         },
     }
     return json.dumps(output, ensure_ascii=False, indent=2)
@@ -301,13 +509,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ------------------------------------------------------------------
     # Verify audit chain (READ-ONLY classmethod)
     # ------------------------------------------------------------------
-    from azazel_edge.audit import P0AuditLogger
-
     try:
-        chain_result = P0AuditLogger.verify_chain(audit_path)
+        chain_result = verify_audit_chain(audit_path)
     except Exception as exc:
         print(f"[audit-review] error reading audit log: {exc}", file=sys.stderr)
-        chain_result = {"ok": False, "entries": 0, "error": str(exc)}
+        chain_result = {"ok": False, "entries": 0, "error": str(exc), "scope": SCOPE_NOT_VERIFIED}
 
     # ------------------------------------------------------------------
     # Render output

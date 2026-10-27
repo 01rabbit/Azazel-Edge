@@ -187,7 +187,7 @@ systemctl status azazel-edge-opencanary --no-pager
 ## Expected compact review shape
 
 ```text
-trace=demo:mixed_correlation_demo action=throttle policy=soc-policy-default-v1 hash=<config-hash> release=no_repeated_failures_for_300_seconds schema:OK chain:OK(<n>)
+trace=demo:mixed_correlation_demo action=throttle policy=soc-policy-default-v1 hash=<config-hash> release=no_repeated_failures_for_300_seconds schema:OK chain:OK(<n>) chain_scope=from_genesis chain_files=1
 ```
 
 ## Do not do at the booth
