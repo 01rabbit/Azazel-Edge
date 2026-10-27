@@ -1827,8 +1827,11 @@ def _resolve_llm_host(host: str, port: int) -> list[str]:
     return [str(info[4][0]) for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
 
 
-def _check_llm_endpoint(endpoint: str) -> tuple[str, str, str, int, str]:
-    """(scheme, server name, checked address, port, base path), or LlmEndpointRejected."""
+def _check_llm_endpoint(endpoint: str) -> tuple[str, str, tuple[str, ...], int, str]:
+    """(scheme, server name, checked addresses, port, base path), or LlmEndpointRejected.
+
+    Every address is loopback; they are tried in resolver order (localhost may
+    answer ::1 first while Ollama listens on 127.0.0.1 only)."""
     try:
         parts = urllib.parse.urlsplit(str(endpoint or "").strip())
         port = parts.port
@@ -1857,48 +1860,88 @@ def _check_llm_endpoint(endpoint: str) -> tuple[str, str, str, int, str]:
         raise LlmEndpointRejected("llm_endpoint_unresolvable")
     if not all(a.is_loopback for a in addresses):
         raise LlmEndpointRejected("llm_endpoint_not_loopback")
-    return scheme, host, str(addresses[0]), port, parts.path.rstrip("/")
+    checked = tuple(dict.fromkeys(str(a) for a in addresses))
+    return scheme, host, checked, port, parts.path.rstrip("/")
 
 
-def _llm_endpoint_target() -> tuple[str, str, str, int, str]:
+def _log_llm_endpoint_refusal(reason: str) -> None:
+    with _LLM_ENDPOINT_LOG_LOCK:
+        first = reason not in _LLM_ENDPOINT_LOGGED
+        _LLM_ENDPOINT_LOGGED.add(reason)
+    if first:
+        logger.warning(
+            "LLM endpoint refused (%s): %s; no model result is used, advisories stay tactical (fallback)",
+            reason,
+            _redact_endpoint(LLM_ENDPOINT),
+        )
+
+
+def _llm_endpoint_target() -> tuple[str, str, tuple[str, ...], int, str]:
     try:
         return _check_llm_endpoint(LLM_ENDPOINT)
     except LlmEndpointRejected as exc:
-        reason = str(exc)
-        with _LLM_ENDPOINT_LOG_LOCK:
-            first = reason not in _LLM_ENDPOINT_LOGGED
-            _LLM_ENDPOINT_LOGGED.add(reason)
-        if first:
-            logger.warning(
-                "LLM endpoint refused (%s): %s; no model is called, advisories stay tactical (fallback)",
-                reason,
-                _redact_endpoint(LLM_ENDPOINT),
-            )
+        _log_llm_endpoint_refusal(str(exc))
         raise
 
 
-class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    """HTTPS to the checked address, with the configured name for SNI and the certificate."""
+def _llm_tls_context() -> ssl.SSLContext:
+    return ssl.create_default_context()
 
-    def __init__(self, address: str, port: int, server_name: str, timeout: float):
-        super().__init__(address, port, timeout=timeout, context=ssl.create_default_context())
+
+def _connect_checked(addresses: tuple[str, ...], port: int, timeout: Any) -> socket.socket:
+    """A socket to the first checked address that accepts; nothing else is tried."""
+    last_error: OSError | None = None
+    for address in addresses:
+        try:
+            return socket.create_connection((address, port), timeout)
+        except OSError as exc:
+            last_error = exc
+    raise last_error or OSError("llm_endpoint_no_address")
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, addresses: tuple[str, ...], port: int, timeout: float):
+        super().__init__(addresses[0], port, timeout=timeout)
+        self._addresses = addresses
+
+    def connect(self) -> None:
+        self.sock = _connect_checked(self._addresses, self.port, self.timeout)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS to the checked addresses, with the configured name for SNI and the certificate."""
+
+    def __init__(self, addresses: tuple[str, ...], port: int, server_name: str, timeout: float):
+        super().__init__(addresses[0], port, timeout=timeout, context=_llm_tls_context())
+        self._addresses = addresses
         self._server_name = server_name
 
     def connect(self) -> None:
-        sock = socket.create_connection((self.host, self.port), self.timeout)
-        self.sock = self._context.wrap_socket(sock, server_hostname=self._server_name)
+        sock = _connect_checked(self._addresses, self.port, self.timeout)
+        try:
+            self.sock = self._context.wrap_socket(sock, server_hostname=self._server_name)
+        except BaseException:
+            sock.close()
+            raise
 
 
-def _post_to_llm_endpoint(target: tuple[str, str, str, int, str], path: str, body: bytes, timeout_sec: float) -> bytes:
-    scheme, server_name, address, port, base = target
+def _post_to_llm_endpoint(
+    target: tuple[str, str, tuple[str, ...], int, str], path: str, body: bytes, timeout_sec: float
+) -> bytes:
+    scheme, server_name, addresses, port, base = target
     if scheme == "https":
-        conn: http.client.HTTPConnection = _PinnedHTTPSConnection(address, port, server_name, timeout_sec)
+        conn: http.client.HTTPConnection = _PinnedHTTPSConnection(addresses, port, server_name, timeout_sec)
     else:
-        conn = http.client.HTTPConnection(address, port, timeout=timeout_sec)
+        conn = _PinnedHTTPConnection(addresses, port, timeout_sec)
+    # The Host header carries the configured name; the connection stays on the checked address.
+    host_header = f"[{server_name}]" if ":" in server_name else server_name
+    if port != (443 if scheme == "https" else 80):
+        host_header = f"{host_header}:{port}"
     try:
-        conn.request("POST", base + path, body=body, headers={"Content-Type": "application/json"})
+        conn.request("POST", base + path, body=body, headers={"Content-Type": "application/json", "Host": host_header})
         resp = conn.getresponse()
         if 300 <= resp.status < 400:
+            _log_llm_endpoint_refusal("llm_endpoint_redirect_refused")
             raise LlmEndpointRejected("llm_endpoint_redirect_refused")
         if resp.status != 200:
             raise RuntimeError(f"llm_http_status_{resp.status}")

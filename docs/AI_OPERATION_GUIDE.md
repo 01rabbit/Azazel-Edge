@@ -51,8 +51,11 @@ Operational rule:
   endpoint before every model call: `http` or `https`, no `user:password@`,
   no query, and every address of the host (an IP literal, or each address a
   name such as `localhost` resolves to) in `127.0.0.0/8` or `::1`. The
-  request goes to the checked address, redirects are not followed and proxy
-  variables are not used. There is no private-LAN or remote option. Any other
+  request goes to the checked addresses in resolver order (so `localhost`
+  answering `::1` first still reaches Ollama on `127.0.0.1`), with the
+  configured name in `Host` and, for `https`, in SNI and the certificate
+  check; redirects are not followed, proxy variables are not used and a
+  response over 1 MiB is refused. There is no private-LAN or remote option. Any other
   endpoint is refused without a connection: the analyst result is `fallback`
   (`tactical_only_keep_recommendation`) with reason
   `llm_endpoint_not_loopback` (or `llm_endpoint_has_userinfo`,

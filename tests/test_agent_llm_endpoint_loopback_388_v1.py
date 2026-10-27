@@ -16,7 +16,10 @@ import http.server
 import json
 import logging
 import queue
+import shutil
 import socket
+import ssl
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -85,7 +88,7 @@ def test_loopback_forms_are_allowed(monkeypatch, endpoint, address, port):
     )
     scheme, _name, checked, checked_port, _base = agent._check_llm_endpoint(endpoint)
     assert scheme == endpoint.split(":", 1)[0]
-    assert checked == address
+    assert checked[0] == address
     assert checked_port == port
 
 
@@ -145,7 +148,7 @@ def test_the_name_is_resolved_on_every_call(monkeypatch, no_network):
     resolve = _resolver(answers)
     monkeypatch.setattr(agent, "_resolve_llm_host", resolve)
     monkeypatch.setattr(agent, "LLM_ENDPOINT", "http://model.internal.test:11434")
-    assert agent._llm_endpoint_target()[2] == "127.0.0.1"
+    assert agent._llm_endpoint_target()[2] == ("127.0.0.1",)
     answers["model.internal.test"] = ["198.51.100.4"]
     with pytest.raises(agent.LlmEndpointRejected, match="llm_endpoint_not_loopback"):
         agent._llm_endpoint_target()
@@ -156,11 +159,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     requests: list[tuple[str, str]] = []
     status = 200
     location = ""
+    oversize = False
 
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
         self.rfile.read(length)
         type(self).requests.append((self.path, self.headers.get("Host", "")))
+        if type(self).oversize:
+            body = b" " * (agent.LLM_MAX_RESPONSE_BYTES + 10)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if type(self).status != 200:
             self.send_response(type(self).status)
             self.send_header("Location", type(self).location)
@@ -198,6 +209,7 @@ def local_server():
         requests: list[tuple[str, str]] = []
         status = 200
         location = ""
+        oversize = False
 
     server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -232,7 +244,8 @@ def test_a_loopback_endpoint_is_called(monkeypatch, local_server, loopback_only_
     monkeypatch.setattr(agent, "LLM_ENDPOINT", f"http://model.internal.test:{port}/base/")
     result = agent._ollama_chat({"sid": 1}, model="qwen3.5:2b")
     assert result["verdict"] == "monitor"
-    assert handler.requests == [("/base/api/chat", f"127.0.0.1:{port}")]
+    # Host carries the configured name; the connection went to the checked address.
+    assert handler.requests == [("/base/api/chat", f"model.internal.test:{port}")]
     assert loopback_only_connections == ["127.0.0.1"]
 
 
@@ -245,6 +258,99 @@ def test_a_redirect_is_not_followed(monkeypatch, local_server, loopback_only_con
     with pytest.raises(agent.LlmEndpointRejected, match="llm_endpoint_redirect_refused"):
         agent._ollama_chat({"sid": 1}, model="qwen3.5:2b")
     assert len(handler.requests) == 1
+    assert loopback_only_connections == ["127.0.0.1"]
+
+
+def test_a_redirect_refusal_is_logged_once(monkeypatch, local_server, loopback_only_connections, caplog):
+    server, handler = local_server
+    handler.status = 302
+    handler.location = "http://203.0.113.5:11434/api/chat"
+    monkeypatch.setattr(agent, "LLM_ENDPOINT", f"http://127.0.0.1:{server.server_address[1]}")
+    with caplog.at_level(logging.WARNING, logger="azazel-edge-ai-agent"):
+        for _ in range(2):
+            with pytest.raises(agent.LlmEndpointRejected):
+                agent._ollama_chat({"sid": 1}, model="qwen3.5:2b")
+    lines = [r.getMessage() for r in caplog.records if "LLM endpoint refused" in r.getMessage()]
+    assert len(lines) == 1 and "llm_endpoint_redirect_refused" in lines[0]
+
+
+def test_localhost_tries_every_checked_address(monkeypatch, local_server, loopback_only_connections):
+    """localhost may resolve to ::1 first while Ollama listens on 127.0.0.1 only."""
+    server, handler = local_server
+    port = server.server_address[1]
+    monkeypatch.setattr(agent, "_resolve_llm_host", _resolver({"localhost": ["::1", "127.0.0.1", "::1"]}))
+    monkeypatch.setattr(agent, "LLM_ENDPOINT", f"http://localhost:{port}")
+    assert agent._llm_endpoint_target()[2] == ("::1", "127.0.0.1")
+    result = agent._ollama_chat({"sid": 1}, model="qwen3.5:2b")
+    assert result["verdict"] == "monitor"
+    assert loopback_only_connections == ["::1", "127.0.0.1"]
+    assert handler.requests == [("/api/chat", f"localhost:{port}")]
+
+
+def test_an_oversized_response_is_refused(monkeypatch, local_server, loopback_only_connections):
+    server, handler = local_server
+    handler.oversize = True
+    monkeypatch.setattr(agent, "LLM_ENDPOINT", f"http://127.0.0.1:{server.server_address[1]}")
+    with pytest.raises(RuntimeError, match="llm_response_too_large"):
+        agent._ollama_chat({"sid": 1}, model="qwen3.5:2b")
+
+
+@pytest.fixture
+def tls_server(tmp_path):
+    if shutil.which("openssl") is None:
+        pytest.skip("openssl not available")
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert),
+            "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    sni: list[object] = []
+
+    class Handler(_Handler):
+        requests: list[tuple[str, str]] = []
+        status = 200
+        location = ""
+        oversize = False
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(str(cert), str(key))
+    context.sni_callback = lambda _sock, name, _ctx: sni.append(name)
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+
+    server.handle_error = lambda *_a: None  # type: ignore[method-assign]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server, Handler, cert, sni
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_https_refuses_an_untrusted_certificate(monkeypatch, tls_server, loopback_only_connections):
+    server, handler, _cert, _sni = tls_server
+    monkeypatch.setattr(agent, "_resolve_llm_host", _resolver({"localhost": ["127.0.0.1"]}))
+    monkeypatch.setattr(agent, "LLM_ENDPOINT", f"https://localhost:{server.server_address[1]}")
+    with pytest.raises(ssl.SSLCertVerificationError):
+        agent._ollama_chat({"sid": 1}, model="qwen3.5:2b")
+    assert handler.requests == []
+
+
+def test_https_uses_the_configured_name_for_sni_and_the_certificate(monkeypatch, tls_server, loopback_only_connections):
+    server, handler, cert, sni = tls_server
+    port = server.server_address[1]
+    monkeypatch.setattr(agent, "_llm_tls_context", lambda: ssl.create_default_context(cafile=str(cert)))
+    monkeypatch.setattr(agent, "_resolve_llm_host", _resolver({"localhost": ["127.0.0.1"]}))
+    monkeypatch.setattr(agent, "LLM_ENDPOINT", f"https://localhost:{port}")
+    result = agent._ollama_chat({"sid": 1}, model="qwen3.5:2b")
+    assert result["verdict"] == "monitor"
+    assert sni == ["localhost"]
+    assert handler.requests == [("/api/chat", f"localhost:{port}")]
     assert loopback_only_connections == ["127.0.0.1"]
 
 
@@ -338,6 +444,6 @@ def test_the_ops_coach_and_manual_query_stop_at_the_refusal(monkeypatch, tmp_pat
 def test_the_default_endpoint_is_loopback():
     source = (ROOT / "py" / "azazel_edge_ai" / "agent.py").read_text(encoding="utf-8")
     assert 'os.environ.get("AZAZEL_OLLAMA_ENDPOINT", "http://127.0.0.1:11434")' in source
-    assert agent._check_llm_endpoint("http://127.0.0.1:11434")[2] == "127.0.0.1"
+    assert agent._check_llm_endpoint("http://127.0.0.1:11434")[2] == ("127.0.0.1",)
     # The old unchecked call path is gone.
     assert "urllib.request" not in source
