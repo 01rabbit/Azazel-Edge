@@ -71,6 +71,20 @@ from `/var/lib/azazel-edge/public/azazel-edge-local-ca.crt`
 CA on operator devices so the browser accepts `https://<device>/`. The CA key
 stays in `/etc/azazel-edge/tls/ca/` and is never served.
 
+The Web UI server certificate (`/etc/azazel-edge/tls/webui.crt`) names the
+device as the LAN reaches it: the `br0` address (`172.16.0.254`), the host
+name (`hostname -f` and `hostname -s`), `localhost` and `127.0.0.1`. The
+uplink (WAN) address is not in it, since nginx answers ports 80 and 443 only
+to this device and `172.16.0.0/24`, also with `set_dev_remote_access.sh`
+`MODE=open` (which opens SSH and mDNS only). Every run of
+`install_local_ca.sh` issues a new server key and certificate and keeps the
+existing CA, so clients that trust the CA need nothing new. On a device
+installed earlier, re-run the installer, or run
+`sudo /opt/azazel-edge/install_local_ca.sh` and then
+`sudo systemctl reload nginx`. The host name is read when the certificate is
+issued: after changing it (for example with `set_dev_remote_access.sh`
+`DEVICE_HOSTNAME=…`), issue the certificate again the same way.
+
 ### Final selftest (`install_all.sh`)
 
 With `ENABLE_APP_STACK=1` and `ENABLE_SERVICES=1`, `install_all.sh` runs

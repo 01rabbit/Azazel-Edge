@@ -500,7 +500,7 @@ dig +time=2 +tries=1 -p 5353 @172.16.0.254 <hostname>.local
 | WAN-07 | 2055/udp (NetFlow) | device: `sudo ss -Hlunp 'sport = :2055'` | Nothing listening (the receiver has no entry point; see section 5), or `172.16.0.254:2055` only if NetFlow was enabled | | #488 |
 | WAN-08 | LAN still served | LAN client | `/health` over http `301`, over https `200`; 8065 `200` after 2.8; 22 open; 5353 answers | | #485, #488 |
 | WAN-09 | Weak host model (informative) | upstream host with a route `172.16.0.0/24 via <WAN-ADDR>` | 22/tcp on `172.16.0.254` is reachable while #489 is off (known; nginx still answers 403). Record; #489 is the layer that closes it | | #488, #489 |
-| WAN-10 | Certificate SAN | device: `sudo openssl x509 -in /etc/azazel-edge/tls/webui.crt -noout -ext subjectAltName` | Contains `172.16.0.254`. Note whether it also contains the WAN address (do not paste the address; section 5) | | #488 |
+| WAN-10 | Certificate SAN | device: `sudo openssl x509 -in /etc/azazel-edge/tls/webui.crt -noout -ext subjectAltName` | `172.16.0.254`, the host name, `localhost` and `127.0.0.1`; not the WAN address (do not paste the output). A device installed before this change keeps its old certificate until it is issued again: re-run the installer, or `sudo /opt/azazel-edge/install_local_ca.sh` and then `sudo systemctl reload nginx` (the CA is kept) | | #488, #477 |
 
 ### 3.8 Mattermost (only if used; after 2.8)
 
@@ -770,7 +770,6 @@ evidence for some of them.
 | ARP spoofing detection | Suricata 7 cannot match ARP; sid 9901211 is disabled and no other detector exists. | #481 |
 | Mattermost on by default | `ENABLE_MATTERMOST=1` by default; the image is amd64-only and untested under emulation on a 16K-page kernel (3.8). | #485 |
 | Host INPUT filter default | #489 is off by default (option B); turning it on by default is a separate decision after FW-01–FW-12. | #489 |
-| WAN address in the TLS certificate SAN | `install_local_ca.sh` adds the address of the route to 1.1.1.1 (`MGMT_IP`, the uplink side) to the server certificate; the Web UI is no longer reachable from the WAN. | #488 |
 | Selftest `.config_checksums` | Nothing creates `/etc/azazel-edge/.config_checksums`, so the selftest always warns `config_checksums_missing`. | #487 |
 | portal-viewer | `azazel-edge-portal-viewer.service` is started by the daemon but not shipped; there is no viewer code in this repository. | #479 |
 | Status API on 8082 | No server in this repository answers on 8082; contain/release/stage_open go only there. | #479, privilege-inventory §12 |

@@ -18,7 +18,13 @@ SERVER_EXT="${TLS_DIR}/webui.ext"
 CA_DAYS="${AZAZEL_CA_DAYS:-3650}"
 SERVER_DAYS="${AZAZEL_SERVER_DAYS:-825}"
 CN="${AZAZEL_TLS_CN:-$(hostname -f 2>/dev/null || hostname)}"
-MGMT_IP="${MGMT_IP:-$(ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}')}"
+SHORT_NAME="$(hostname -s 2>/dev/null || hostname)"
+# The server certificate names the device only as the LAN reaches it
+# (Edge#477): the br0 address, the host name and localhost/127.0.0.1. The
+# uplink (WAN) address is not put in: nginx answers 80/443 to loopback and the
+# LAN only (install_https_proxy.sh), the host firewall refuses the WAN, and
+# set_dev_remote_access.sh MODE=open opens only SSH and mDNS, so the address
+# would only tell the WAN side the device's address through the certificate.
 INTERNAL_IP="${AZAZEL_INTERNAL_IP:-$(ip -4 -o addr show br0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)}"
 EXTRA_SANS="${AZAZEL_TLS_EXTRA_SANS:-}"
 TRUST_CA="/usr/local/share/ca-certificates/azazel-edge-local-ca.crt"
@@ -66,48 +72,49 @@ echo "[ca] Creating server certificate signed by local CA"
 chmod 0600 "$SERVER_KEY"
 openssl req -new -key "$SERVER_KEY" -subj "/CN=${CN}" -out "$SERVER_CSR"
 
-{
-  echo "authorityKeyIdentifier=keyid,issuer"
-  echo "basicConstraints=CA:FALSE"
-  echo "keyUsage=digitalSignature,keyEncipherment"
-  echo "extendedKeyUsage=serverAuth"
-  echo "subjectAltName=@alt_names"
-  echo "[alt_names]"
-  echo "DNS.1=${CN}"
-  echo "DNS.2=$(hostname -s 2>/dev/null || hostname)"
-  echo "DNS.3=localhost"
-} > "$SERVER_EXT"
-
-idx_ip=1
-if [[ -n "$MGMT_IP" ]]; then
-  echo "IP.${idx_ip}=${MGMT_IP}" >> "$SERVER_EXT"
-  idx_ip=$((idx_ip + 1))
-fi
-if [[ -n "$INTERNAL_IP" && "$INTERNAL_IP" != "$MGMT_IP" ]]; then
-  echo "IP.${idx_ip}=${INTERNAL_IP}" >> "$SERVER_EXT"
-  idx_ip=$((idx_ip + 1))
-fi
-echo "IP.${idx_ip}=127.0.0.1" >> "$SERVER_EXT"
-idx_ip=$((idx_ip + 1))
-
-if [[ -n "$EXTRA_SANS" ]]; then
-  idx_dns=10
-  if (( idx_ip < 10 )); then
-    idx_ip=10
-  fi
-  IFS=',' read -r -a sans <<< "$EXTRA_SANS"
-  for san in "${sans[@]}"; do
-    san_trimmed="$(echo "$san" | xargs)"
-    [[ -z "$san_trimmed" ]] && continue
-    if [[ "$san_trimmed" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      echo "IP.${idx_ip}=${san_trimmed}" >> "$SERVER_EXT"
+write_server_ext() {
+  local out="$1" idx_ip=1 idx_dns=10 san san_trimmed
+  local -a sans
+  {
+    echo "authorityKeyIdentifier=keyid,issuer"
+    echo "basicConstraints=CA:FALSE"
+    echo "keyUsage=digitalSignature,keyEncipherment"
+    echo "extendedKeyUsage=serverAuth"
+    echo "subjectAltName=@alt_names"
+    echo "[alt_names]"
+    echo "DNS.1=${CN}"
+    echo "DNS.2=${SHORT_NAME}"
+    echo "DNS.3=localhost"
+    if [[ -n "$INTERNAL_IP" ]]; then
+      echo "IP.${idx_ip}=${INTERNAL_IP}"
       idx_ip=$((idx_ip + 1))
-    else
-      echo "DNS.${idx_dns}=${san_trimmed}" >> "$SERVER_EXT"
-      idx_dns=$((idx_dns + 1))
     fi
-  done
+    echo "IP.${idx_ip}=127.0.0.1"
+    idx_ip=$((idx_ip + 1))
+    if [[ -n "$EXTRA_SANS" ]]; then
+      if (( idx_ip < 10 )); then
+        idx_ip=10
+      fi
+      IFS=',' read -r -a sans <<< "$EXTRA_SANS"
+      for san in "${sans[@]}"; do
+        san_trimmed="$(echo "$san" | xargs)"
+        [[ -z "$san_trimmed" ]] && continue
+        if [[ "$san_trimmed" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "IP.${idx_ip}=${san_trimmed}"
+          idx_ip=$((idx_ip + 1))
+        else
+          echo "DNS.${idx_dns}=${san_trimmed}"
+          idx_dns=$((idx_dns + 1))
+        fi
+      done
+    fi
+  } > "$out"
+}
+
+if [[ -z "$INTERNAL_IP" ]]; then
+  echo "[ca] WARNING: br0 has no IPv4 address; the certificate names only the host name and localhost/127.0.0.1" >&2
 fi
+write_server_ext "$SERVER_EXT"
 
 openssl x509 -req -sha256 \
   -in "$SERVER_CSR" \
@@ -133,7 +140,6 @@ Azazel-Edge Local CA distribution:
 2) Import as trusted Root CA on each client.
 3) Access WebUI with a hostname/IP contained in SAN:
    CN=${CN}
-   MGMT_IP=${MGMT_IP}
    INTERNAL_IP=${INTERNAL_IP}
 EOF
 

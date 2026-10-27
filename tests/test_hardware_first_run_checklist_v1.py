@@ -565,9 +565,8 @@ ALLOWED_NETWORKS = [ipaddress.ip_network(n) for n in (
 def test_no_address_other_than_the_fixed_ones(doc):
     for raw in re.findall(r"(?<![\w.])(\d{1,3}(?:\.\d{1,3}){3})(?:/\d+)?(?![\w.])", _read(doc)):
         addr = ipaddress.ip_address(raw)
-        # 1.1.1.1: named in section 5 (MGMT_IP); 172.17.0.0 and 172.31.0.0: the
-        # bounds of Docker's default pools (FW-09).
-        assert any(addr in net for net in ALLOWED_NETWORKS) or str(addr) in {"1.1.1.1", "172.17.0.0", "172.31.0.0"}, \
+        # 172.17.0.0 and 172.31.0.0: the bounds of Docker's default pools (FW-09).
+        assert any(addr in net for net in ALLOWED_NETWORKS) or str(addr) in {"172.17.0.0", "172.31.0.0"}, \
             f"{doc.name}: {raw}"
     assert not re.search(r"\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b", _read(doc), flags=re.I), "MAC address"
 
@@ -806,6 +805,10 @@ ROW_VALUES = (
     ("FW-06", ("120 s", "120 秒"), 489, "installer/internal/azazel-host-firewall", "TRIAL_SECONDS=120", False),
     ("FW-06", ("`state=rolled-back`",) * 2, 489, "installer/internal/azazel-host-firewall", "write_state rolled-back", False),
     ("FW-01", ("`remote_access=off`",) * 2, 489, "installer/internal/azazel-host-firewall", 'echo "remote_access=${remote}"', False),
+    # WAN-10: the certificate names br0, not the uplink (Edge#477).
+    ("WAN-10", ("`172.16.0.254`",) * 2, None, "installer/internal/install_local_ca.sh", "ip -4 -o addr show br0", False),
+    ("WAN-10", ("not the WAN address", "WAN のアドレスを含まない"), None, "installer/internal/install_local_ca.sh", "ip -4 route get", True),
+    ("WAN-10", ("(the CA is kept)", "（CA はそのまま）"), None, "installer/internal/install_local_ca.sh", 'if (( recreate_ca == 1 )); then', False),
 )
 
 

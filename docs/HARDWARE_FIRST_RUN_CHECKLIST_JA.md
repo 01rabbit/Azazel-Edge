@@ -496,7 +496,7 @@ dig +time=2 +tries=1 -p 5353 @172.16.0.254 <hostname>.local
 | WAN-07 | 2055/udp（NetFlow） | 機器: `sudo ss -Hlunp 'sport = :2055'` | 待ち受けなし（受信側にエントリポイントが無い。5 章）。NetFlow を有効にした場合だけ `172.16.0.254:2055` | | #488 |
 | WAN-08 | LAN では使える | LAN 側のクライアント | `/health` が http で `301`、https で `200`。2.8 の後は 8065 が `200`。22 に接続できる。5353 が応答する | | #485, #488 |
 | WAN-09 | 弱いホストモデル（参考） | `172.16.0.0/24 via <WAN-ADDR>` の経路を足した上流の試験機 | #489 が無効の間は `172.16.0.254` の 22/tcp に届く（既知。nginx は 403 のまま）。記録する。これを塞ぐのは #489 の層 | | #488, #489 |
-| WAN-10 | 証明書の SAN | 機器: `sudo openssl x509 -in /etc/azazel-edge/tls/webui.crt -noout -ext subjectAltName` | `172.16.0.254` を含む。WAN のアドレスも含むかを記録する（アドレス自体は書かない。5 章） | | #488 |
+| WAN-10 | 証明書の SAN | 機器: `sudo openssl x509 -in /etc/azazel-edge/tls/webui.crt -noout -ext subjectAltName` | `172.16.0.254`、ホスト名、`localhost`、`127.0.0.1` を含み、WAN のアドレスを含まない（出力は貼らない）。この変更より前に導入した機器は、証明書を発行し直すまで古い証明書のまま。installer を再実行するか、`sudo /opt/azazel-edge/install_local_ca.sh` の後に `sudo systemctl reload nginx`（CA はそのまま） | | #488, #477 |
 
 ### 3.8 Mattermost（使う場合だけ。2.8 の後）
 
@@ -763,7 +763,6 @@ sudo dmesg | tail -n 100
 | ARP 偽装の検知方式 | Suricata 7 は ARP を照合できない。sid 9901211 は無効で、代わりの検知器も無い。 | #481 |
 | Mattermost を既定で有効にするか | `ENABLE_MATTERMOST=1` が既定。イメージは amd64 だけで、16K ページのカーネル上のエミュレーションは未確認（3.8）。 | #485 |
 | ホスト INPUT フィルタの既定 | #489 は既定で無効（選択肢 B）。既定で有効にするかは FW-01〜FW-12 の後に別に判断する。 | #489 |
-| TLS 証明書の SAN の WAN アドレス | `install_local_ca.sh` は 1.1.1.1 への経路の送信元（`MGMT_IP`、上流側）をサーバ証明書に入れる。Web UI にはもう WAN から届かない。 | #488 |
 | selftest の `.config_checksums` | `/etc/azazel-edge/.config_checksums` を作るものが無く、selftest は常に `config_checksums_missing` を警告する。 | #487 |
 | portal-viewer | `azazel-edge-portal-viewer.service` は制御デーモンが起動するが同梱されていない。viewer のコードはこのリポジトリに無い。 | #479 |
 | 8082 の status API | 8082 で応答するサーバーがこのリポジトリに無い。contain・release・stage_open はそこにしか行かない。 | #479, privilege-inventory §12 |
