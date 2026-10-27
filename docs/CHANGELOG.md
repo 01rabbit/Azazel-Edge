@@ -42,12 +42,20 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   changing anything unless `SNMP_TARGETS` is a non-empty JSON list of
   targets, each with a host and a community (the old placeholder is refused;
   the community is not printed); without `ENABLE_SNMP=1` it writes no SNMP
-  target unless `SNMP_TARGETS` is given. The SNMP poller refuses a target
+  target unless `SNMP_TARGETS` is given, and a given one must still be a
+  JSON list of targets without a single quote or line break (it is written
+  between single quotes; otherwise nothing is changed). The SNMP poller
+  refuses a target
   with an empty community instead of sending `public`. A device that still
   has the placeholder in that file is pointed at it when SNMP is enabled.
   That file holds the communities and is now written 0600 root:root
   (a new file renamed over it, so a 0644 file of an earlier version is
   replaced; was 0644); systemd reads it as root through `EnvironmentFile=`.
+  The file protects the communities at rest only: at run time they are
+  still on command lines any local user can read (`/proc/<pid>/cmdline`),
+  because the unit passes `--targets "${SNMP_TARGETS}"` and the poller's
+  fallback runs `snmpget -c <community>`. This is not new and not changed
+  here; the sensors have no entry point today and do not run.
 - External exposure found by the audit before the device run (Edge#477):
   - **Action required on a device installed by an earlier version:** if the
     Mattermost admin account still has the former fixed password,

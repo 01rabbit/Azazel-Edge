@@ -50,12 +50,17 @@ valid_listen_ipv4() {
 # address on the site's network as soon as the poller runs. With
 # ENABLE_SNMP=1, SNMP_TARGETS must be a non-empty JSON list of objects, each
 # with a non-empty "host" and "community" (and, if given, a "port" 1..65535);
-# the old placeholder (host 192.168.1.1 with the community public) is refused.
+# the old placeholder (host 192.168.1.1 with the community public) is refused
+# (mode "enable"). A SNMP_TARGETS given without ENABLE_SNMP=1 is checked for
+# its form only (mode "format"; an empty list is allowed): it is written into
+# the env file between single quotes, so a quote or line break would break
+# the file or add other variables to it.
 # The value is read from stdin, not argv, and the community is never printed.
 check_snmp_targets() {
   python3 -I -c '
 import json, sys
 PLACEHOLDER = ("192.168.1.1", "public")
+enable = sys.argv[1] == "enable"
 raw = sys.stdin.read()
 def fail(msg):
     print("ERROR: SNMP_TARGETS " + msg, file=sys.stderr)
@@ -68,8 +73,8 @@ try:
     targets = json.loads(raw)
 except ValueError:
     fail("is not valid JSON")
-if not isinstance(targets, list) or not targets:
-    fail("must be a non-empty JSON list of targets")
+if not isinstance(targets, list) or (enable and not targets):
+    fail("must be a non-empty JSON list of targets" if enable else "must be a JSON list of targets")
 for i, t in enumerate(targets):
     if not isinstance(t, dict):
         fail("entry %d is not an object" % i)
@@ -79,12 +84,12 @@ for i, t in enumerate(targets):
         fail("entry %d has no host" % i)
     if not isinstance(community, str) or not community:
         fail("entry %d (host %s) has no community" % (i, host))
-    if (host.strip(), community) == PLACEHOLDER:
+    if enable and (host.strip(), community) == PLACEHOLDER:
         fail("entry %d (host %s) is the old placeholder target, not a device of this site" % (i, host))
     port = t.get("port", 161)
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         fail("entry %d (host %s) has an invalid port" % (i, host))
-'
+' "$1"
 }
 
 # Same as provision_mattermost_workspace.sh's write_private_file (Edge#477).
@@ -123,14 +128,20 @@ echo "[sensors] NETFLOW_LISTEN_HOST=${NETFLOW_LISTEN_HOST}"
 # Checked before anything is written or installed: a refused SNMP_TARGETS
 # leaves the device as it was.
 if [[ "${ENABLE_SNMP}" == "1" ]]; then
-  if ! printf '%s' "${SNMP_TARGETS}" | check_snmp_targets; then
+  if ! printf '%s' "${SNMP_TARGETS}" | check_snmp_targets enable; then
     echo "ERROR: ENABLE_SNMP=1 needs SNMP_TARGETS naming the devices to poll and their community, e.g." >&2
     echo "  SNMP_TARGETS='[{\"host\":\"<device address>\",\"community\":\"<community>\",\"port\":161}]'" >&2
-    echo "There is no default target. Nothing was changed." >&2
+    echo "There is no default target. Nothing in the sensors configuration was changed." >&2
     if [[ -f "${SENSOR_ENV_FILE}" ]] && grep -q '"192\.168\.1\.1"' "${SENSOR_ENV_FILE}" && grep -q '"public"' "${SENSOR_ENV_FILE}"; then
       echo "NOTICE: ${SENSOR_ENV_FILE} still holds the placeholder target 192.168.1.1 written by an earlier version;" >&2
       echo "  run again with SNMP_TARGETS set to replace it (keep ENABLE_SNMP=0 until then)." >&2
     fi
+    exit 1
+  fi
+elif [[ -n "${SNMP_TARGETS}" ]]; then
+  if ! printf '%s' "${SNMP_TARGETS}" | check_snmp_targets format; then
+    echo "ERROR: SNMP_TARGETS is given but is not a JSON list of targets that can be written to ${SENSOR_ENV_FILE}." >&2
+    echo "Nothing in the sensors configuration was changed." >&2
     exit 1
   fi
 fi

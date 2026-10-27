@@ -287,6 +287,17 @@ SNMP の対象は書かない。`ENABLE_SNMP=0` なので SNMP 自体は動か�
 止まる）、NetFlow の unit を有効のまま残します。終わったら
 `sudo systemctl disable --now azazel-edge-netflow-receiver` で戻します。
 
+SNMP の対象を設定するときの注意が 2 つあります。
+
+- `sudo SNMP_TARGETS=… installer/internal/install_sensors.sh` のように
+  渡すと、community が導入者のコマンドライン（実行中はほかのローカル
+  ユーザーから見える）とシェル履歴に残ります。先に非エコーで読み
+  （`read -rs SNMP_TARGETS && export SNMP_TARGETS`）、
+  `sudo --preserve-env=SNMP_TARGETS`（または `sudo -E`）で渡してください。
+- `SNMP_TARGETS` を与えずに `install_sensors.sh` を再実行すると、
+  `/etc/default/azazel-edge-sensors` は対象なしで書き直され、手で書いた
+  対象は消えます。同じ `SNMP_TARGETS` をもう一度与えてください。
+
 ```bash
 # SVC-12 (optional): the NetFlow sensor unit
 cd ~/Azazel-Edge && sudo ENABLE_NETFLOW=1 ENABLE_SERVICES=1 installer/internal/install_sensors.sh

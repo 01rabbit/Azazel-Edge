@@ -117,7 +117,7 @@ def test_enabling_snmp_without_real_targets_stops_and_changes_nothing(tmp_path, 
     assert not env_file.exists()
     assert _calls(log) == ""
     assert "ENABLE_SNMP=1 needs SNMP_TARGETS" in res.stderr
-    assert "Nothing was changed" in res.stderr
+    assert "Nothing in the sensors configuration was changed" in res.stderr
     # The community is never printed (the guidance shows only "<community>").
     out = res.stdout + res.stderr
     assert '"public"' not in out and "community\":\"public" not in out
@@ -188,13 +188,49 @@ def test_without_snmp_no_target_is_written(tmp_path, existing):
     assert _calls(log2) == ""
 
 
+@pytest.mark.parametrize("targets", [
+    "not json", "  ", '{"host":"10.0.0.2","community":"x"}', '["10.0.0.2"]',
+    '[{"host":"10.0.0.2","community":"it\'s"}]',
+    '[{"host":"10.0.0.2","community":"x"}]\nSNMP_POLL_INTERVAL_SEC=1',
+    "[]'\nEXTRA=1\n'",
+    '[{"host":"10.0.0.2"}]', '[{"host":"10.0.0.2","community":"x","port":"161"}]',
+])
+def test_without_snmp_a_given_snmp_targets_must_still_be_well_formed(tmp_path, targets):
+    script, env_file, log = _installer(tmp_path)
+    env_file.write_text("NETFLOW_PORT=2055\n", encoding="utf-8")
+    res = _run(tmp_path, script, ENABLE_NETFLOW="1", SNMP_TARGETS=targets)
+    assert res.returncode != 0
+    assert env_file.read_text(encoding="utf-8") == "NETFLOW_PORT=2055\n"
+    assert _calls(log) == ""
+    assert "SNMP_TARGETS is given but" in res.stderr
+    assert "Nothing in the sensors configuration was changed" in res.stderr
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["azazel-edge-sensors", "bin", "repo"]
+
+
+@needs_gnu_mv
+@pytest.mark.parametrize("targets", ["[]", VALID, PLACEHOLDER])
+def test_without_snmp_a_well_formed_snmp_targets_is_written_as_given(tmp_path, targets):
+    # The placeholder is refused only when SNMP is enabled.
+    script, env_file, log = _installer(tmp_path)
+    res = _run(tmp_path, script, ENABLE_NETFLOW="1", SNMP_TARGETS=targets)
+    assert res.returncode == 0, res.stdout + res.stderr
+    text = env_file.read_text(encoding="utf-8")
+    assert re.findall(r"^SNMP_TARGETS=.*$", text, re.M) == [f"SNMP_TARGETS='{targets}'"]
+    _private(env_file)
+    assert "apt-get" not in _calls(log)
+    assert SECRET not in res.stdout + res.stderr
+
+
 def test_the_unit_default_is_no_target_and_no_placeholder_is_written():
     assert 'Environment="SNMP_TARGETS=[]"' in SNMP_UNIT.read_text(encoding="utf-8")
     src = SENSORS.read_text(encoding="utf-8")
     write = src[src.index("# SNMP_TARGETS is written only when given"):src.index('} | write_private_file "${SENSOR_ENV_FILE}"')]
     assert "192.168.1.1" not in write and "public" not in write
-    assert src.index("check_snmp_targets; then") < src.index('} | write_private_file "${SENSOR_ENV_FILE}"')
-    assert src.index("check_snmp_targets; then") < src.index("setup_sensor_account.sh\"")
+    for mode in ("enable", "format"):
+        check = f"check_snmp_targets {mode}; then"
+        assert src.count(check) == 1
+        assert src.index(check) < src.index('} | write_private_file "${SENSOR_ENV_FILE}"')
+        assert src.index(check) < src.index("setup_sensor_account.sh\"")
 
 
 @needs_gnu_mv
