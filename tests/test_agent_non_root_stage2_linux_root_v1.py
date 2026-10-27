@@ -171,6 +171,33 @@ def test_the_agent_runs_as_its_own_uid_and_root_still_reaches_it(layout):
         assert os.lstat(d["log"] / "ai-events.jsonl").st_gid == WEB_GID
         # The agent's snapshot fields are in its own file only.
         assert _wait(lambda: (d["run"] / "ai_snapshot.json").exists())
+        # Edge#477: the v2 explanation of the core's decision, written by the
+        # agent's uid, readable by the Web UI's group only (as azazel-web reads it).
+        explanations = d["log"] / "decision-explanations.jsonl"
+        assert _wait(lambda: bool(_rows(explanations)))
+        st = os.lstat(explanations)
+        assert (st.st_uid, st.st_gid) == (AGENT_UID, WEB_GID)
+        assert stat.S_IMODE(st.st_mode) == 0o640
+        row = _rows(explanations)[0]
+        assert row["format_version"] == "v2" and row["selected_action"] == "isolate"
+        web = subprocess.run(
+            [sys.executable, "-I", "-c",
+             "import json, sys; sys.path.insert(0, sys.argv[2]);"
+             "from azazel_edge.explanations import validate_v2_explanation;"
+             "rows = [json.loads(x) for x in open(sys.argv[1], encoding='utf-8') if x.strip()];"
+             "print(rows[-1]['trace_id'], validate_v2_explanation(rows[-1]))",
+             str(explanations), str(ROOT / "py")],
+            capture_output=True, text=True, cwd="/",
+            preexec_fn=lambda: (os.setgroups([]), os.setgid(WEB_GID), os.setuid(WEB_GID + 1)),
+        )
+        assert web.returncode == 0, web.stderr[-500:]
+        assert web.stdout.split()[0] == row["trace_id"] and web.stdout.strip().endswith("[]")
+        other = subprocess.run(
+            [sys.executable, "-I", "-c", "open(__import__('sys').argv[1]).read()", str(explanations)],
+            capture_output=True, text=True, cwd="/",
+            preexec_fn=lambda: (os.setgroups([]), os.setgid(WEB_GID + 2), os.setuid(WEB_GID + 2)),
+        )
+        assert other.returncode != 0 and "Permission denied" in other.stderr
     finally:
         _stop(proc)
 

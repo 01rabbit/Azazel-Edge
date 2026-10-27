@@ -307,6 +307,17 @@ cd ~/Azazel-Edge && sudo ENABLE_NETFLOW=1 ENABLE_SERVICES=1 installer/internal/i
 systemctl show -p ActiveState -p Result -p User azazel-edge-netflow-receiver
 ```
 
+SVC-13 は読むだけです。agent は core の判定 1 件ごとに v2 の判定の説明を
+1 件書きます（#477）。SVC-09 の段階 2 のテストアラートで書かれます。段階 2 を
+していなければ SVC-13 は `N/A (no test alerts)` にします。
+
+```bash
+# SVC-13 (after SVC-09 step 2): the agent's v2 explanation of the core's decision
+sudo stat -c '%a %U:%G' /var/log/azazel-edge/ai/decision-explanations.jsonl
+sudo azazel-edge-audit-review --compact --audit-path /var/log/azazel-edge/ai/core-decision-audit.jsonl
+sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- https://127.0.0.1/api/booth-focus | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["available"], d["mode"]["kind"], d["decision"]["action"], d["audit"]["policy_profile"])'
+```
+
 | ID | 項目 | コマンド | 期待する結果 | Result | PR / issue |
 | --- | --- | --- | --- | --- | --- |
 | SVC-01 | unit が動いている | `systemctl is-active azazel-edge-control-daemon azazel-edge-core azazel-edge-web azazel-edge-ai-agent azazel-edge-suricata azazel-edge-opencanary nginx ntfy` | どれも `active` | | #483 |
@@ -321,6 +332,7 @@ systemctl show -p ActiveState -p Result -p User azazel-edge-netflow-receiver
 | SVC-10 | トークンファイルを使った ntfy の SSE | 上のコマンド | 端末 2 が `200`。端末 1 に `first-run test` を含むイベントが出る | | #475, #485 |
 | SVC-11 | OpenCanary/Suricata の表示 | 上のコマンド | `opencanary`・`suricata`・`ntfy` が `ON`、`container_check` が `not_checked`（Web UI は Docker に問い合わせない） | | #475 |
 | SVC-12 | SNMP/NetFlow（任意） | 上のコマンド（既定では入らない: `ENABLE_SNMP`/`ENABLE_NETFLOW` は `0`、`install_sensors.sh` は `ENABLE_SERVICES=1` のときだけ unit を有効にする） | `User=azazel-sensor`。`ActiveState=inactive`、`Result=success`: モジュールにエントリポイントが無くすぐに終了コード 0 で終わるので、**センサーは動いていない**（5 章） | | #480, #483 |
+| SVC-13 | agent が書く判定の説明 | 上のコマンド（SVC-09 の段階 2 の後） | ファイルが `640 azazel-agent:azazel-web`。監査レビューが `schema:OK` と `chain:OK(…)` を最新の判定の action と一緒に出し、isolate・redirect・throttle なら `release=NOT APPLIED - planned only (dry_run)`（SVC-09 の段階 1 のとおり enforcement は無効。lease の時刻は出ない）と `hash_basis=enforcement_settings` も出す。Booth Focus の行が `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1` | | #477 |
 
 ### 3.2 ソケット・ディレクトリ・秘密の権限（#471 段階 1・2）
 
@@ -773,7 +785,6 @@ sudo dmesg | tail -n 100
 | --- | --- | --- |
 | `table inet azazel_edge` の作成 | 作る installer が無い。enforcement を有効にしても `nft insert` が失敗し、何も適用されない。作る（hook と priority を選ぶ）と enforcement の挙動が変わる。 | #480, #477 |
 | `redirect_policy` と OpenCanary のポート | OpenCanary の SSH は 12222 で待ち受けるが、core のおとりの既定は 2222。相対パスの `config/redirect_policy.yaml` は機器では読まれない。 | #479, privilege-inventory §12 |
-| `decision-explanations.jsonl` の書き手 | Web UI は `/var/log/azazel-edge` から v2 の説明を読むが、それを書く常駐サービスが無い。 | #479, privilege-inventory §12 |
 | NetFlow/SNMP のエントリポイント | `azazel_edge.sensors.netflow_receiver` と `snmp_poller` に `__main__` が無く、unit はすぐに終了コード 0 で終わる。 | #483, #488 |
 | ARP 偽装の検知方式 | Suricata 7 は ARP を照合できない。sid 9901211 は無効で、代わりの検知器も無い。 | #481 |
 | aarch64 での Mattermost の既定 | aarch64 では既定で入れない（`ENABLE_MATTERMOST=0`。x86_64 は `1` のまま）。イメージは amd64 だけで、16K ページのカーネル上のエミュレーションは未確認。既定を有効に戻すかは実機の 3.8 の結果で決める。 | #485, #477 |

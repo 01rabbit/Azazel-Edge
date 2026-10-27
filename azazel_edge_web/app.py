@@ -194,7 +194,7 @@ AI_EVENT_LOG = Path(os.environ.get("AZAZEL_AI_EVENT_LOG", str(AGENT_LOG_DIR / "a
 AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", str(AGENT_LOG_DIR / "ai-llm.jsonl")))
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", str(WEB_LOG_DIR / "runbook-events.jsonl")))
 TRIAGE_AUDIT_LOG = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", str(WEB_LOG_DIR / "triage-audit.jsonl")))
-DECISION_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DECISION_EXPLANATIONS_PATH", "/var/log/azazel-edge/decision-explanations.jsonl"))
+DECISION_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DECISION_EXPLANATIONS_PATH", "/var/log/azazel-edge/ai/decision-explanations.jsonl"))
 BOOTH_DEMO_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DEMO_EXPLANATIONS_PATH", "/tmp/azazel-edge-demo-explanations.jsonl"))
 BOOTH_INPUT_PROVENANCE_PATH = Path(os.environ.get("AZAZEL_BOOTH_INPUT_PROVENANCE_PATH", "/run/azazel-edge/booth-input.json"))
 # Booth Focus reads both the live snapshot vocabulary (SAFE/HEALTHY) and the
@@ -4784,6 +4784,7 @@ def _booth_focus_payload() -> Dict[str, Any]:
             "trace_id": str(record.get("trace_id") or ""),
             "policy_profile": str(record.get("policy_profile") or ""),
             "config_hash": str(record.get("config_hash") or ""),
+            "config_hash_basis": str(machine["arbiter"]["policy"].get("hash_basis") or "") if isinstance(machine.get("arbiter"), dict) and isinstance(machine["arbiter"].get("policy"), dict) else "",
             "format_version": str(record.get("format_version") or "v2"),
         },
         "safety": {

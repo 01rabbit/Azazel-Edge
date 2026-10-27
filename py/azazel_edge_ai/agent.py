@@ -60,6 +60,10 @@ try:
 except Exception:  # pragma: no cover
     CoreDecisionRecorder = None  # type: ignore
     attach_p0_alert_relay = None  # type: ignore
+try:
+    from azazel_edge.explanations.live import LiveDecisionExplanationWriter
+except Exception:  # pragma: no cover
+    LiveDecisionExplanationWriter = None  # type: ignore
 from azazel_edge._util import ensure_parent as _ensure_parent
 from azazel_edge.peercred import account_uid, peer_credentials
 
@@ -138,6 +142,11 @@ AI_AUDIT_PATH = Path(os.environ.get("AZAZEL_AI_AUDIT_LOG", str(AGENT_LOG_DIR / "
 # setting of their own.
 CORE_DECISION_AUDIT_PATH = AI_AUDIT_PATH.parent / "core-decision-audit.jsonl"
 P0_ALERT_QUEUE_PATH = AI_AUDIT_PATH.parent / "p0-alert-queue.jsonl"
+# v2 decision explanations of the core's decisions (Edge#477), the file the
+# Web UI's Booth Focus and audit_review read
+# (azazel_edge.explanations.LIVE_DECISION_EXPLANATIONS_PATH). Display and
+# audit only; beside the AI audit log, no setting of its own.
+DECISION_EXPLANATIONS_PATH = AI_AUDIT_PATH.parent / "decision-explanations.jsonl"
 METRICS_HEARTBEAT_SEC = max(5.0, float(os.environ.get("AZAZEL_AI_METRICS_HEARTBEAT_SEC", "15")))
 # Rolling suricata severity tallies in the UI snapshot decay linearly to zero over
 # this window of no new same-severity events, so a long-running / idle booth does
@@ -411,6 +420,42 @@ def _record_core_decision(event: Dict[str, Any]) -> None:
         recorder.submit(event)
     except Exception as exc:
         logger.error("core decision not handed to the P0 alert path: %s", exc)
+
+
+# Set by _start_decision_explanations() when the service starts (_serve), like
+# the P0 path: importing this module or calling the handlers writes nothing.
+DECISION_EXPLANATIONS: Any | None = None
+
+
+def _start_decision_explanations() -> Any | None:
+    """Open the v2 explanation writer. If it cannot be opened the agent runs
+    without it (logged): explanations are display and audit only."""
+
+    global DECISION_EXPLANATIONS
+    if DECISION_EXPLANATIONS is not None:
+        return DECISION_EXPLANATIONS
+    if LiveDecisionExplanationWriter is None:
+        logger.error("decision explanations unavailable: azazel_edge.explanations not importable")
+        return None
+    try:
+        DECISION_EXPLANATIONS = LiveDecisionExplanationWriter(DECISION_EXPLANATIONS_PATH)
+    except Exception as exc:
+        logger.error("decision explanations not written (%s): %s", DECISION_EXPLANATIONS_PATH, exc)
+        return None
+    return DECISION_EXPLANATIONS
+
+
+def _record_decision_explanation(event: Dict[str, Any], advisory: Dict[str, Any]) -> None:
+    """Write the v2 explanation of a core decision. After the advisory and
+    the snapshot are written; never raises (the writer logs its failures)."""
+
+    writer = DECISION_EXPLANATIONS
+    if writer is None:
+        return
+    try:
+        writer.record(event, advisory)
+    except Exception as exc:
+        logger.error("decision explanation not written: %s", exc)
 
 
 def _note_core_forward_loss(dropped: int, failed: int, since: int) -> None:
@@ -2232,6 +2277,7 @@ def _handle_event(event: Dict[str, Any]) -> None:
         _write_json(ADVISORY_PATH, advisory)
         _update_ui_snapshot(advisory)
         _persist_metrics()
+    _record_decision_explanation(event, advisory)
 
 
 def _handle_line(raw: str) -> Dict[str, Any] | None:
@@ -2380,6 +2426,7 @@ def _serve(stop: threading.Event | None = None) -> None:
     # Before the socket accepts, so every P0 decision the core sends to this
     # service is recorded and relayed.
     _start_core_p0_path()
+    _start_decision_explanations()
     srv.listen(16)
     srv.settimeout(1.0)
     worker = threading.Thread(target=_llm_worker, daemon=True)

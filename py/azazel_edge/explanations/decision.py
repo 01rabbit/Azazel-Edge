@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -13,12 +14,59 @@ from .trust_capsule import build_trust_capsule
 logger = logging.getLogger(__name__)
 
 
+# Where the live v2 explanations are (Edge#477): written by the AI agent
+# (azazel-agent) beside its audit logs, in the directory tmpfiles.d makes
+# 2750 azazel-agent:azazel-web, so the Web UI (Booth Focus) and audit_review
+# read them through the group. Nothing else writes this file.
+LIVE_DECISION_EXPLANATIONS_PATH = '/var/log/azazel-edge/ai/decision-explanations.jsonl'
+
+
+def rotate_file(path: Path, keep: int) -> None:
+    """Rename ``path`` to ``<name>.1`` (``.1`` to ``.2`` .. up to ``keep``;
+    the oldest is replaced), the rotation of audit/segments.py. A missing
+    file is left alone."""
+
+    keep = max(1, int(keep))
+    for n in range(keep - 1, 0, -1):
+        older = path.with_name(f'{path.name}.{n}')
+        if older.exists():
+            os.replace(older, path.with_name(f'{path.name}.{n + 1}'))
+    if path.exists():
+        os.replace(path, path.with_name(f'{path.name}.1'))
+
+
 class DecisionExplainer:
-    def __init__(self, output_path: str | Path = '/var/log/azazel-edge/decision-explanations.jsonl'):
+    def __init__(
+        self,
+        output_path: str | Path = LIVE_DECISION_EXPLANATIONS_PATH,
+        *,
+        max_bytes: int | None = None,
+        keep: int = 1,
+        fallback_to_tmp: bool = True,
+    ):
+        """``output_path`` defaults to the live file the readers use
+        (``LIVE_DECISION_EXPLANATIONS_PATH``), whose only writer is the AI
+        agent (as ``azazel-agent``, through ``live.LiveDecisionExplanationWriter``).
+        Every other caller passes its own path: the scenario replay its demo
+        path, tests a temporary one. A caller that only explains
+        (``persist=False``) writes nothing there, but the constructor still
+        creates the parent directory when it can (as before #477), so code that
+        runs as root should pass its own path rather than rely on the default.
+
+        ``max_bytes``: before a record is appended, a file of that size or
+        more (and each projection beside it) is rotated to ``<name>.1``,
+        keeping ``keep`` rotated files; None (the default) never rotates.
+        ``fallback_to_tmp=False``: a directory that cannot be created raises
+        instead of moving the output to /tmp."""
+
         self.output_path = Path(output_path)
+        self.max_bytes = int(max_bytes) if max_bytes else None
+        self.keep = max(1, int(keep))
         try:
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError:
+            if not fallback_to_tmp:
+                raise
             self.output_path = Path("/tmp/azazel-edge/decision-explanations.jsonl")
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.knowledge = AttackDefendKnowledge()
@@ -186,6 +234,8 @@ class DecisionExplainer:
         problems = validate_v2_explanation(explanation)
         if problems:
             logger.warning("invalid_v2_decision_explanation: %s", "; ".join(problems))
+        if self.max_bytes:
+            self._rotate_full_files()
         with self.output_path.open('a', encoding='utf-8') as fh:
             fh.write(json.dumps(explanation, ensure_ascii=True, separators=(',', ':')) + '\n')
         # Emit-alongside: additionally project into the shared Azazel-Fabric
@@ -197,6 +247,21 @@ class DecisionExplainer:
             project_decision_explanation(explanation, self.output_path)
         except Exception:  # pragma: no cover - defensive; projection is advisory-only
             pass
+
+    def _rotate_full_files(self) -> None:
+        from .fabric_adapter import DECISION_PROJECTION_NAME, TRUST_PROJECTION_NAME
+
+        for path in (
+            self.output_path,
+            self.output_path.with_name(DECISION_PROJECTION_NAME),
+            self.output_path.with_name(TRUST_PROJECTION_NAME),
+        ):
+            try:
+                size = path.stat().st_size
+            except FileNotFoundError:
+                continue
+            if size >= int(self.max_bytes or 0):
+                rotate_file(path, self.keep)
 
     @staticmethod
     def _operator_wording(

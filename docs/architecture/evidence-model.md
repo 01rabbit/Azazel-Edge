@@ -30,8 +30,12 @@ Records are produced by `DecisionExplainer.explain()` in
 `py/azazel_edge/explanations/decision.py` and written in JSONL format to:
 
 ```
-/var/log/azazel-edge/decision-explanations.jsonl
+/var/log/azazel-edge/ai/decision-explanations.jsonl
 ```
+
+On a device the AI agent writes one record per Rust core decision
+(`py/azazel_edge/explanations/live.py`, #477); the Web UI's Booth Focus and
+`audit_review` read this file. The scenario replay writes its own demo path.
 
 Status: **Implemented**
 

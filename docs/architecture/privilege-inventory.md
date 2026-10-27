@@ -142,6 +142,9 @@ Uncertain: the Web UI reads `decision-explanations.jsonl` from
 `/var/log/azazel-edge`, but the agent's `DecisionLogger` writes
 `decision_explanations.jsonl` under `/opt/azazel-edge/logs/tactics_engine`
 (§3.4). Whether anything writes the path the Web UI reads was not settled.
+(Settled in #477, §12 item 6: the agent writes the v2 explanations to
+`/var/log/azazel-edge/ai/decision-explanations.jsonl` and the Web UI reads
+them there.)
 
 Also read, for completeness:
 
@@ -964,7 +967,7 @@ here is device evidence.
 | `/run/azazel-edge-ai` | 0700 (RuntimeDirectory=) | `ai-bridge.sock` 0600. The core (root) still connects |
 | `/run/azazel-edge-agent-query` | 2750, group azazel-web | `agent-query.sock` 0660 (stage 1 peer checks unchanged) |
 | `/run/azazel-edge-agent` | 2750, group azazel-web | `ai_advisory.json`, `ai_metrics.json`, `ai_runtime_policy.json`, `ai_snapshot.json` (the agent's snapshot fields), `ui_status_view.json` |
-| `/var/log/azazel-edge/ai` | 2750, group azazel-web | `ai-events`, `ai-llm`, `ai-deferred`, `ai-audit` (`.jsonl`), `core-decision-audit.jsonl` (+ `.1`), `p0-alert-queue.jsonl` (0600) |
+| `/var/log/azazel-edge/ai` | 2750, group azazel-web | `ai-events`, `ai-llm`, `ai-deferred`, `ai-audit` (`.jsonl`), `core-decision-audit.jsonl` (+ `.1`), `p0-alert-queue.jsonl` (0600), `decision-explanations.jsonl` (+ `.1`, and the Fabric projections beside it; #477, §12 item 6) |
 | `/var/lib/azazel-edge-agent` | 0750 (StateDirectory=) | `decisions/decision_explanations.jsonl` |
 
 Only `azazel-agent` (and root) can write the core-decision audit chain and the
@@ -1097,10 +1100,93 @@ out-of-scope findings tracked separately. Still open:
    the tactics-engine scoring trace `decision_explanations.jsonl` (no such
    fields) under `/var/lib/azazel-edge-agent/decisions`. Pointing the reader
    at the agent's file would show nothing, and copying it would mix schemas.
-   In this repository only the scenario replay writes v2 explanations (to its
-   demo path); no live service writes `/var/log/azazel-edge/decision-explanations.jsonl`.
-   Whether a live service should (which one, as which account) is the owner's
-   decision; paths unchanged.
+   Until #477 only the scenario replay wrote v2 explanations (to its demo
+   path) and no live service wrote the file the Web UI read.
+
+   **Decided by the owner and implemented (#477):** the AI agent
+   (`azazel-agent`) writes one v2 explanation per core decision event to
+   `/var/log/azazel-edge/ai/decision-explanations.jsonl`
+   (`azazel_edge.explanations.live`), and the readers' defaults moved there:
+   the Web UI (`AZAZEL_DECISION_EXPLANATIONS_PATH`), `audit_review` and
+   `DecisionExplainer` (`LIVE_DECISION_EXPLANATIONS_PATH`). The agent's path
+   has no setting of its own: it sits beside the AI audit log, like the core
+   decision chain.
+
+   - **What it explains.** There is no `ActionArbiter` in the live path: the
+     Rust core decides (Edge#412). The record is the core's decision copied
+     — `selected_action` is `enforcement.selected_action` (the action the P0
+     rule reads), `reason` the core's, `control_mode` the enforcement mode —
+     and
+     the agent's second pass (`DecisionLayers`) gives the SOC summary, states
+     and evidence ids, as `DecisionExplainer` builds them for the scenario
+     replay. Nothing is re-decided. `why_not_others` names the decided
+     action only when the core fell back to another (a redirect fallback);
+     the core reports no other alternatives. The record has no NOC evaluation
+     (`noc_status` `unknown`; Booth Focus shows the live snapshot's NOC state
+     for live records, as before).
+   - **Applied or planned.** The core computes `selected_action` in every
+     mode, dry run included. Only an action the core applied (result
+     `applied`/`partial_failure` with commands executed) whose release it
+     scheduled (ledger `active`/`uncertain`) gets `release_condition` `core
+     lease expires at <time>`. A planned action (`planned_not_applied`:
+     `dry_run`, `policy_gated`, `release_guard_failed`) gets `NOT APPLIED -
+     planned only (<mode>)` as its `release_condition` and at the end of its
+     `reason`, which the operator wording and Booth Focus show, so it never
+     reads as applied. An action the core tried but could not execute (no
+     command executed: `partial_failure` with nothing executed, `failed`, or
+     any other result) gets `NOT APPLIED - apply failed` the same way.
+     `machine.arbiter.applied_state` is `applied`, `not_applied`,
+     `apply_failed` or `none` (only `no_disruptive_action`: observe, notify).
+   - **Audit references.** `trace_id` is the core decision chain's trace id
+     for that event, so `audit_review --trace-id <id> --audit-path
+     /var/log/azazel-edge/ai/core-decision-audit.jsonl` finds a P0 decision
+     in the chain (non-P0 decisions are not in the chain); the core's own
+     trace id is kept in `machine.arbiter.core_trace_id`. `policy_profile` is
+     `azazel-edge-core/rust_event_engine_v1` (the core's fixed severity
+     ladder) and `config_hash` the sha256 of the enforcement settings the core
+     reported with the event (`enforcement_status`) and its redirect policy
+     source: the core reports no policy file hash of its own.
+     `machine.arbiter.policy.hash_basis` is `enforcement_settings`;
+     `audit_review` prints it (`config_hash_basis`) and Booth Focus shows it
+     beside the hash (`audit.config_hash_basis`).
+   - **Booth Focus shows the newest decision.** It reads the newest valid
+     record of the last 32, unchanged. On a busy link, observe and notify
+     records follow an isolate or redirect quickly and take its place on the
+     screen. Kept as the specification: Booth Focus answers "what did the
+     core decide last", and showing an older enforcement-bearing record as
+     the current decision would misstate the present. Enforcement-bearing
+     decisions stay in the file (`audit_review --trace-id`), in the core
+     decision chain and in the P0 alerts.
+   - **Contents.** Only the existing v2 fields. Of the core event, the target
+     (an address) and the reason are copied; the command plan, rollback plan
+     and release metadata (owner tokens, resource keys) are not.
+   - **Bounded.** Before an append, a file of 8 MiB or more is renamed to
+     `.1` (the previous `.1` is replaced), as `audit/segments.py` rotates the
+     core decision chain; the Fabric projections beside it
+     (`fabric-decision-explanations.jsonl`, `fabric-trust-capsules.jsonl`) rotate
+     the same way. At most about 2 × 8 MiB each.
+   - **Never in the way.** The explanation is written after the advisory and
+     the snapshot; a failure is logged (the first, then every 100th) and
+     counted, never raised; a directory that cannot be used disables the
+     writer at start (logged), with no `/tmp` fallback. It does not touch the
+     core decision chain, P0, enforcement or notification.
+   - **Permissions.** No unit or tmpfiles change: `/var/log/azazel-edge/ai`
+     is already in `ReadWritePaths=` and is 2750 azazel-agent:azazel-web, so
+     with `UMask=0027` the file is 0640 azazel-agent:azazel-web, readable by
+     the Web UI and by nobody else (checked as another uid in
+     `tests/test_agent_non_root_stage2_linux_root_v1.py`, container only).
+   - **Existing data.** No service wrote the old
+     `/var/log/azazel-edge/decision-explanations.jsonl`; a file there came
+     from a manual run. `setup_agent_account.sh` keeps it, does not read or
+     move it, and prints a NOTICE; it rewrites an old default
+     `AZAZEL_DECISION_EXPLANATIONS_PATH` in the environment files to the new
+     path (other values are kept and reported).
+   - **Not changed (owner's decision if wanted).** `audit_review` verifies
+     the audit file with `verify_chain`, which reads one file from its
+     genesis: after the core decision chain rotates (16 MiB), checking it
+     reports a mismatch at the first line. `P0AuditLogger.verify_rotated_chain`
+     exists; switching `audit_review` to it changes what "chain OK" means
+     (an anchored chain) and is left to the owner.
 7. **Out-of-scope findings, tracked separately** (not fixed by #471 stages
    0–2):
    - `control.sock` has no peer check today (stage 1 adds one);
