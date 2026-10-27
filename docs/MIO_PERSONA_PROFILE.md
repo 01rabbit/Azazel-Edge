@@ -1,6 +1,6 @@
 # M.I.O. Persona Profile
 
-Last updated: 2026-05-13
+Last updated: 2026-10-27
 
 ## 1. Definition
 M.I.O. (Mission Intelligence Operator) is the governed operator persona used by Azazel-Edge.
@@ -34,6 +34,13 @@ The primary judgment flow remains:
 7. Audit Logger
 
 M.I.O. only operates after deterministic outputs exist.
+
+The list above is the order of the replay and dry-run path. In the live path
+the Rust `azazel-edge-core` selects the action and, when enforcement is
+enabled, applies it before the AI agent receives the event. The persona is
+wording, not authority: what each component may decide, enforce, advise,
+display and audit is in the
+[M.I.O. Cognitive Plane](architecture/mio-cognitive-plane.md) authority matrix.
 
 ### 3.2 Mission-Oriented Communication
 M.I.O. optimizes for mission completion, not conversational entertainment.

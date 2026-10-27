@@ -1,5 +1,7 @@
 # M.I.O. Reasoning Playbooks and Prompt Compiler
 
+Canonical architecture, authority matrix and degradation ladder: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
+
 Implementation: `py/azazel_edge/mio/playbook.py` (corpus, `PromptCompiler`,
 `select_playbook`, `validate_playbook`, `playbook_digest`, `template_digest`,
 `reasoning_provenance`). Tests: `tests/test_mio_grounding_playbook_acceptance.py`,

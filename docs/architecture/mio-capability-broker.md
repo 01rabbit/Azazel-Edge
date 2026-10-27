@@ -1,5 +1,7 @@
 # M.I.O. Capability Broker (read-only, typed, allowlisted)
 
+Canonical architecture, authority matrix and degradation ladder: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
+
 Implementation: `py/azazel_edge/mio/broker.py`. Tests:
 `tests/test_mio_capability_broker_acceptance.py`. Parent design: #364, acceptance: #384.
 

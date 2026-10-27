@@ -1,5 +1,7 @@
 # M.I.O. reasoning trace: identity, working memory, durable audit, retention
 
+Canonical architecture, authority matrix and degradation ladder: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
+
 Status: implemented as a library, advisory-only. Tracking: #389 (parent #377).
 Builds on #383 (SituationFrame), #384 (Capability Broker), #385 (lifecycle,
 `ReasoningCoordinator`), #386 (grounding/playbooks).

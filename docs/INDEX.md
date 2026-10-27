@@ -10,7 +10,16 @@ Entry point for all documents in this directory.
 |------|----------|-------------|--------------|
 | [concepts/evolution-map.md](concepts/evolution-map.md) | Operator / Developer | Concept profile map for a single Azazel-Edge core platform | 2026-05-16 |
 | [arsenal/README.md](arsenal/README.md) | Operator / Presenter | Public Black Hat Arsenal history and policy | 2026-05-16 |
-| [architecture/decision-loop.md](architecture/decision-loop.md) | Developer / Operator | Stable deterministic decision loop overview | 2026-05-16 |
+| [architecture/decision-loop.md](architecture/decision-loop.md) | Developer / Operator | Deterministic decision loop: the live Rust core path and the replay/dry-run path | 2026-10-27 |
+| [architecture/mio-cognitive-plane.md](architecture/mio-cognitive-plane.md) | Developer / Reviewer | Canonical M.I.O. cognitive-plane architecture: components, data flow, authority matrix (decide/enforce/advise/display/audit), degradation ladder, trust boundaries, open work (#388) | 2026-10-27 |
+| [architecture/local-ai-triage.md](architecture/local-ai-triage.md) | Developer / Operator | Optional local AI assist role and its boundaries | 2026-10-27 |
+| [architecture/mio-cognitive-shadow-core.md](architecture/mio-cognitive-shadow-core.md) | Developer | M.I.O. cognitive core modules and the shadow/replay boundary | 2026-10-27 |
+| [architecture/mio-situation-frame.md](architecture/mio-situation-frame.md) | Developer | SituationFrame contract `mio.situation_frame.v1`, budgets and optional dependencies (#383) | 2026-10-27 |
+| [architecture/mio-capability-broker.md](architecture/mio-capability-broker.md) | Developer | Typed read-only Capability Broker: trust boundaries, budgets, audit (#384) | 2026-10-27 |
+| [architecture/mio-reasoning-lifecycle.md](architecture/mio-reasoning-lifecycle.md) | Developer | Hypothesis lifecycle, supersession, restart and no-model handoff (#385) | 2026-10-27 |
+| [architecture/mio-grounding-and-evidence-gaps.md](architecture/mio-grounding-and-evidence-gaps.md) | Developer | Evidence-gap scoring and claim-to-reference audit (#386) | 2026-10-27 |
+| [architecture/mio-reasoning-playbooks.md](architecture/mio-reasoning-playbooks.md) | Developer | Reasoning playbooks, selection and provenance (#386) | 2026-10-27 |
+| [architecture/mio-reasoning-trace.md](architecture/mio-reasoning-trace.md) | Developer | Reasoning trace identity, working memory, minimized audit and retention (#389) | 2026-10-27 |
 | [architecture/booth-focus-decision-view.md](architecture/booth-focus-decision-view.md) | Developer / Presenter | Read-only Booth Focus projection over the decision pipeline | 2026-07-25 |
 | [architecture/service-objective-declarations.md](architecture/service-objective-declarations.md) | Developer | Provisional per-action rollback completion bounds (OF-05), the enforced, provisional Core ingress quota and shedding (OF-06), the SO-02 lab harness, and why SO-05 has none | 2026-10-25 |
 | [../concept_profiles/README.md](../concept_profiles/README.md) | Developer / Operator | Concept-to-configuration mapping layer | 2026-05-17 |
@@ -39,8 +48,8 @@ Entry point for all documents in this directory.
 | [AI_OPERATION_GUIDE_JA.md](AI_OPERATION_GUIDE_JA.md) | Operator / Developer | AI運用要領（日本語版） | 2026-03-10 |
 | [AI_AGENT_BUILD_AND_OPERATION_DETAIL.md](AI_AGENT_BUILD_AND_OPERATION_DETAIL.md) | Developer | AI agent internals and build steps (EN) | 2026-05-13 |
 | [AI_AGENT_BUILD_AND_OPERATION_DETAIL_JA.md](AI_AGENT_BUILD_AND_OPERATION_DETAIL_JA.md) | Developer | エージェントAI構築手順書（日本語版） | 2026-03-08 |
-| [MIO_PERSONA_PROFILE.md](MIO_PERSONA_PROFILE.md) | Developer | M.I.O. operator persona design specification (EN) | 2026-05-13 |
-| [MIO_PERSONA_PROFILE_JA.md](MIO_PERSONA_PROFILE_JA.md) | Developer | M.I.O.運用人格プロファイル（日本語版） | 2026-03-12 |
+| [MIO_PERSONA_PROFILE.md](MIO_PERSONA_PROFILE.md) | Developer | M.I.O. operator persona design specification (EN) | 2026-10-27 |
+| [MIO_PERSONA_PROFILE_JA.md](MIO_PERSONA_PROFILE_JA.md) | Developer | M.I.O.運用人格プロファイル（日本語版） | 2026-10-27 |
 
 ## Demo
 
