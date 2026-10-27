@@ -6,12 +6,29 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SECURITY_ROOT="/opt/azazel-edge/security"
 WEB_ENV="/etc/default/azazel-edge-web"
 ENABLE_OLLAMA="${ENABLE_OLLAMA:-1}"
-ENABLE_MATTERMOST="${ENABLE_MATTERMOST:-1}"
+# ENABLE_MATTERMOST: its default depends on the architecture, below.
 ENABLE_SERVICES="${ENABLE_SERVICES:-1}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root: sudo $0"
   exit 1
+fi
+
+# Mattermost's official image is amd64 only. On aarch64 (Raspberry Pi 5) it
+# runs under qemu-user emulation, which is not verified on the Pi 5's 16K-page
+# kernel, and a failure there stops install_all.sh before its selftest. It is
+# therefore off by default on aarch64; ENABLE_MATTERMOST=1 still installs it.
+# Other architectures keep the default on (Edge#477, #485).
+machine_arch="$(uname -m)"
+if [[ "${machine_arch}" == "aarch64" ]]; then
+  ENABLE_MATTERMOST="${ENABLE_MATTERMOST:-0}"
+  if [[ "${ENABLE_MATTERMOST}" == "1" ]]; then
+    echo "NOTICE: Mattermost's image is amd64 only; on this aarch64 host it runs under qemu-user emulation," \
+      "which is not verified on a 16K-page kernel (page size here: $(getconf PAGESIZE 2>/dev/null || echo unknown))." \
+      "If its container does not start, record 'docker logs azazel-edge-mattermost' (HARDWARE_FIRST_RUN_CHECKLIST.md 3.8)."
+  fi
+else
+  ENABLE_MATTERMOST="${ENABLE_MATTERMOST:-1}"
 fi
 
 echo "[ai/1] Install runtime dependencies"
@@ -108,6 +125,10 @@ if [[ "${ENABLE_MATTERMOST}" == "1" ]]; then
   /opt/azazel-edge/provision_mattermost_workspace.sh
   echo "[ai/7] Provision Mattermost slash command"
   /opt/azazel-edge/provision_mattermost_command.sh
+elif [[ "${machine_arch}" == "aarch64" ]]; then
+  echo "[ai/5] Skip Mattermost (off by default on aarch64; ENABLE_MATTERMOST=1 installs it, untested on a 16K-page kernel)"
+else
+  echo "[ai/5] Skip Mattermost (ENABLE_MATTERMOST=${ENABLE_MATTERMOST})"
 fi
 
 if [[ "${ENABLE_SERVICES}" == "1" ]]; then

@@ -205,8 +205,9 @@ ensure_admin_session() {
 # copy in /opt/azazel-edge cannot find the repository).
 print_rerun_hint() {
   echo "[NEXT] Run the AI runtime installer again from the Azazel-Edge checkout used for the install:" \
-    "sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh (it also registers the slash command and" \
-    "restarts the Web UI and the AI agent; ENABLE_OLLAMA=0 only skips the model download). If the device was" \
+    "sudo ENABLE_OLLAMA=0 ENABLE_MATTERMOST=1 installer/internal/install_ai_runtime.sh (it also registers the slash" \
+    "command and restarts the Web UI and the AI agent; ENABLE_OLLAMA=0 only skips the model download, and" \
+    "ENABLE_MATTERMOST=1 is needed on aarch64, where Mattermost is off by default). If the device was" \
     "installed with install_all.sh, its later stages did not run either: run the ones that were enabled" \
     "(set_dev_remote_access.sh, install_vector.sh, install_sensors.sh) as install_all.sh would." >&2
 }

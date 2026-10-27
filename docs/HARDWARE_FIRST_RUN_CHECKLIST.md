@@ -77,7 +77,7 @@ LAN `172.16.0.0/24` are fixed by `installer/internal/install_internal_network.sh
 | `AP_PSK` | `install_internal_network.sh` | Leave unset: a random passphrase is generated and saved root-only (0600) in `/etc/azazel-edge/internal-ap.psk`. `ChangeMe1234` is refused. |
 | `WAN_IF` | `install_internal_network.sh` | The USB uplink interface. Optional when the default route already goes through it; the installer stops if the default route is on `eth0`, `wlan0` or `br0`. |
 | `SKIP_LUKS` | `install_all.sh` and the security stack | `0` (default): an encrypted secrets volume (`/var/lib/azazel-secrets.img`, mapper `azazel-secrets`) is created and its passphrase typed on the terminal. `1`: no encrypted volume. Decide before the run; the passphrase is not stored by the installer. **If the passphrase is lost the volume cannot be opened again and its content is gone** (no recovery key): keep it off the device, as the field team's procedure requires. |
-| `ENABLE_MATTERMOST` | `install_ai_runtime.sh` | Recommended `0` for the first `install_all.sh` run, then Mattermost on its own (2.8): whether the amd64-only image runs on the Pi 5 is unknown, and a failure there would stop `install_all.sh` before its selftest. |
+| `ENABLE_MATTERMOST` | `install_ai_runtime.sh` | Leave unset for the first `install_all.sh` run: on aarch64 (the Pi 5) the default is `0`, so Mattermost is not installed. Try it afterwards on its own with `ENABLE_MATTERMOST=1` (2.8): whether the amd64-only image runs on the Pi 5 is unknown, and a failure there would stop `install_all.sh` before its selftest. (On x86_64 the default stays `1`.) |
 | `AZAZEL_UP_IF` | `/etc/default/azazel-edge-security` | The uplink interface for the disconnect action; default `wlan0`, which is the internal AP and is refused. Set in 3.4 (WIFI-09). |
 | `ALLOW_EXTERNAL_SSH` | `install_internal_network.sh` | Leave `false`: sshd then listens on `172.16.0.254` only. |
 
@@ -167,7 +167,7 @@ terminal for the LUKS passphrase (do not pipe stdin):
 ```bash
 tmux new -s install
 cd ~/Azazel-Edge
-script -c "sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> ENABLE_MATTERMOST=0 installer/internal/install_all.sh" ~/install-first-run.log
+script -c "sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_all.sh" ~/install-first-run.log
 ```
 
 Add `SKIP_LUKS=1` only if 1.3 decided so. Record the start and end time
@@ -180,7 +180,7 @@ Expected output, in order (the step lines are printed by the scripts):
 | Start | `[all/1] Azazel-Edge unified installer` and the `ENABLE_*` values | `ENABLE_RUST_CORE must be 0 or 1`: a typo. `ERROR: the encrypted secrets volume … needs a passphrase typed on a terminal`: stdin is not a terminal; use the `script -c` form above. |
 | Internal network | `[all/2] Apply internal network baseline`, then (in this order) `Wi-Fi country: … (already configured)` when `WIFI_COUNTRY` is not given, `Uplink (WAN) interface: <WAN_IF>`, the package installation, `Wi-Fi country: <CC>` when `WIFI_COUNTRY` is given, `===== verify =====` with its listing, `Internal AP + DHCP baseline applied.`, `AP SSID: …`, `AP passphrase: a new random one, saved root-only in /etc/azazel-edge/internal-ap.psk …`, `SSH listen scope: 172.16.0.254 only.`, `From internal host, verify: …`; then `[avahi] allow-interfaces=br0 in /etc/avahi/avahi-daemon.conf (…)` (`changed` on a fresh install) | `ERROR: no Wi-Fi country is configured, …` → pass `WIFI_COUNTRY`. `ERROR: the uplink is <IF>, which becomes part of the internal LAN …` or `ERROR: WAN interface not found …` → 2.2. `ERROR: the internal AP (lan-wlan0-ap on wlan0) did not come up` → `rfkill list`, `nmcli radio`, `journalctl -u NetworkManager`. `ERROR: sshd rejects the new configuration` → `sudo sshd -t`; the old config stays. |
 | App stack | `[all/3] Install Azazel-Edge app stack`, `[1/16] Install OS dependencies`, `[1/16] Enable SPI for the EPD (Raspberry Pi OS)` (possibly `NOTICE: SPI is enabled … reboot before the EPD can draw.`), `[2/16] Create base directories` … `[8/16] Build Python runtime (venv + pip)` … `[11.8/16] Build and install the Rust defense core …` (the longest step), `[12/16] Enable services` and `… is active` for the control daemon, the AI agent, the Web UI and the core (in that order), `[13/16] Install local CA and TLS cert (optional)`, `[14/16] Install HTTPS reverse proxy (optional)` ending with `[https] nginx TLS reverse proxy enabled on :443 (this device and … only)`, `[15/16] Install ntfy (optional)` ending with `[ntfy] Service healthy on http://127.0.0.1:8081 (loopback only, anonymous access denied)`, `[16/16] Install security stack (OpenCanary + Suricata, optional)` (the LUKS passphrase prompt comes here unless `SKIP_LUKS=1`), `[17/17] Verify runtime sync`, `Installed Azazel-Edge stack …` | `ERROR: <unit> did not stay active …` → `journalctl -u <unit> -b`. Exit status 78 → the SOC policy / ATT&CK YAML under `/opt/azazel-edge/config` is invalid. A `cargo build` failure stops here (fail-closed). An ntfy `ERROR:` line names the failed check (health, anonymous access, token). |
-| AI runtime | `[all/4] Install AI runtime stack`, `[ai/4] Start Ollama and provision models` (model download), `[DONE] AI runtime stack installed.` | `docker exec … ollama pull` failing → uplink/DNS; re-run `install_all.sh` with the same values. |
+| AI runtime | `[all/4] Install AI runtime stack`, `[ai/4] Start Ollama and provision models` (model download), `[ai/5] Skip Mattermost (off by default on aarch64; ENABLE_MATTERMOST=1 installs it, untested on a 16K-page kernel)`, `[DONE] AI runtime stack installed.` | `docker exec … ollama pull` failing → uplink/DNS; re-run `install_all.sh` with the same values. |
 | Optional parts | `[all/5]` … `[all/7]` `Skip …` with the defaults | – |
 | Selftest | `[all/8] Run selftest`, then `[all/9] Install the periodic selftest timer` with `[selftest 1/4] Install selftest binary` … `[selftest] timer started` (aarch64 only; installed also when the selftest failed), then `Unified installation completed.` | `ERROR: the selftest found a critical failure …` → `/var/log/azazel-edge/selftest_latest.json` and section 3.10. |
 
@@ -213,12 +213,15 @@ token if the address was shared.
 
 ### 2.8 Mattermost (optional, after the first run passes)
 
+Mattermost is off by default on aarch64; `ENABLE_MATTERMOST=1` installs it.
+
 ```bash
 cd ~/Azazel-Edge
-sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh
+sudo ENABLE_OLLAMA=0 ENABLE_MATTERMOST=1 installer/internal/install_ai_runtime.sh
 ```
 
 Expected:
+`NOTICE: Mattermost's image is amd64 only; on this aarch64 host it runs under qemu-user emulation,` (with the page size; record it for MM-01),
 `[ai/5] Start Mattermost stack`,
 `[ai/6] Provision Mattermost workspace`,
 `[ai/7] Provision Mattermost slash command`,
@@ -519,7 +522,7 @@ dig +time=2 +tries=1 -p 5353 @172.16.0.254 <hostname>.local
 | ID | Check | Command | Expected | Result | PR / issue |
 | --- | --- | --- | --- | --- | --- |
 | MM-01 | amd64 emulation on 16K pages | `getconf PAGESIZE`; `ls /proc/sys/fs/binfmt_misc/` | Record the page size; a `qemu-x86_64` entry is present | | #485 |
-| MM-02 | Container runs | `sudo docker ps --filter name=azazel-edge-mattermost`; `sudo docker logs --tail 50 azazel-edge-mattermost` | `Up`, not restarting. If it exits, record the log tail (no secrets are in it, but check) and stop here: whether to keep Mattermost on by default is an owner decision | | #485 |
+| MM-02 | Container runs | `sudo docker ps --filter name=azazel-edge-mattermost`; `sudo docker logs --tail 50 azazel-edge-mattermost` | `Up`, not restarting. If it exits, record the log tail (no secrets are in it, but check) and stop here: whether to turn Mattermost on by default on aarch64 again is an owner decision | | #485 |
 | MM-03 | API on loopback | `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18065/api/v4/system/ping` | `200` | | #485 |
 | MM-04 | LAN access through nginx | LAN browser: `http://172.16.0.254:8065` | Login page; log in as `azazelops` with the password from `/etc/azazel-edge/mattermost-credentials.env` (read on the device) | | #485 |
 | MM-05 | Slash command | in the `soc-noc` channel: `/mio <question>` (alias `/azops`) | An answer from M.I.O.; not `403` (the callback comes from `172.31.250.0/24`, admitted by nginx) | | #485, #488 |
@@ -780,7 +783,7 @@ evidence for some of them.
 | Writer of `decision-explanations.jsonl` | The Web UI reads v2 explanations from `/var/log/azazel-edge`; no live service writes them. | #479, privilege-inventory §12 |
 | NetFlow/SNMP entry points | `azazel_edge.sensors.netflow_receiver` and `snmp_poller` have no `__main__`; the units exit 0 at once. | #483, #488 |
 | ARP spoofing detection | Suricata 7 cannot match ARP; sid 9901211 is disabled and no other detector exists. | #481 |
-| Mattermost on by default | `ENABLE_MATTERMOST=1` by default; the image is amd64-only and untested under emulation on a 16K-page kernel (3.8). | #485 |
+| Mattermost default on aarch64 | Off by default on aarch64 (`ENABLE_MATTERMOST=0`; on x86_64 still `1`): the image is amd64-only and untested under emulation on a 16K-page kernel. Whether to turn it on by default again depends on 3.8 on the device. | #485, #477 |
 | Host INPUT filter default | #489 is off by default (option B); turning it on by default is a separate decision after FW-01–FW-12. | #489 |
 | Selftest `.config_checksums` | Nothing creates `/etc/azazel-edge/.config_checksums`, so the selftest always warns `config_checksums_missing`. | #487 |
 | portal-viewer | `azazel-edge-portal-viewer.service` is started by the daemon but not shipped; there is no viewer code in this repository. | #479 |

@@ -76,7 +76,7 @@ LAN のアドレス `172.16.0.254` と LAN `172.16.0.0/24` は
 | `AP_PSK` | `install_internal_network.sh` | 指定しない。ランダムなパスフレーズが作られ、root だけが読める（0600）`/etc/azazel-edge/internal-ap.psk` に保存される。`ChangeMe1234` は拒否される。 |
 | `WAN_IF` | `install_internal_network.sh` | USB の上流 IF。既定経路が既にそこを通っていれば省略できる。既定経路が `eth0`・`wlan0`・`br0` なら installer は止まる。 |
 | `SKIP_LUKS` | `install_all.sh` と security stack | `0`（既定）: 暗号化した秘密の保管領域（`/var/lib/azazel-secrets.img`、mapper `azazel-secrets`）を作り、パスフレーズを端末で入力する。`1`: 暗号化領域を作らない。実行前に決める。パスフレーズは installer が保存しない。**パスフレーズを失うと領域は二度と開けず、中身は失われる**（回復用の鍵は無い）。現地の運用手順どおり、機器とは別に保管する。 |
-| `ENABLE_MATTERMOST` | `install_ai_runtime.sh` | 初回の `install_all.sh` では `0` を推奨し、Mattermost は後で単独で入れる（2.8）。amd64 だけのイメージが Pi 5 で動くかは分かっておらず、そこで失敗すると `install_all.sh` が selftest の前に止まるため。 |
+| `ENABLE_MATTERMOST` | `install_ai_runtime.sh` | 初回の `install_all.sh` では指定しない。aarch64（Pi 5）では既定が `0` なので Mattermost は入らない。試すときは後で単独に `ENABLE_MATTERMOST=1` を明示して入れる（2.8）。amd64 だけのイメージが Pi 5 で動くかは分かっておらず、そこで失敗すると `install_all.sh` が selftest の前に止まるため。（x86_64 の既定は `1` のまま。） |
 | `AZAZEL_UP_IF` | `/etc/default/azazel-edge-security` | 切断操作で使う上流 IF。既定は `wlan0` で、これは内部 AP なので拒否される。3.4（WIFI-09）で設定する。 |
 | `ALLOW_EXTERNAL_SSH` | `install_internal_network.sh` | `false` のまま。sshd は `172.16.0.254` だけで待ち受ける。 |
 
@@ -165,7 +165,7 @@ ls -l /dev/spidev0.0
 ```bash
 tmux new -s install
 cd ~/Azazel-Edge
-script -c "sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> ENABLE_MATTERMOST=0 installer/internal/install_all.sh" ~/install-first-run.log
+script -c "sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> installer/internal/install_all.sh" ~/install-first-run.log
 ```
 
 `SKIP_LUKS=1` は 1.3 でそう決めたときだけ付けます。開始と終了の時刻を記録
@@ -178,7 +178,7 @@ script -c "sudo WIFI_COUNTRY=<CC> AP_SSID='<your SSID>' WAN_IF=<WAN_IF> ENABLE_M
 | 開始 | `[all/1] Azazel-Edge unified installer` と `ENABLE_*` の値 | `ENABLE_RUST_CORE must be 0 or 1`: 打ち間違い。`ERROR: the encrypted secrets volume … needs a passphrase typed on a terminal`: 標準入力が端末でない。上の `script -c` の形で実行する。 |
 | 内部ネットワーク | `[all/2] Apply internal network baseline`、続いて（この順に）`WIFI_COUNTRY` を渡さないときは `Wi-Fi country: … (already configured)`、`Uplink (WAN) interface: <WAN_IF>`、パッケージの導入、`WIFI_COUNTRY` を渡したときは `Wi-Fi country: <CC>`、`===== verify =====` とその一覧、`Internal AP + DHCP baseline applied.`、`AP SSID: …`、`AP passphrase: a new random one, saved root-only in /etc/azazel-edge/internal-ap.psk …`、`SSH listen scope: 172.16.0.254 only.`、`From internal host, verify: …`。その後 `[avahi] allow-interfaces=br0 in /etc/avahi/avahi-daemon.conf (…)`（新規導入では `changed`） | `ERROR: no Wi-Fi country is configured, …` → `WIFI_COUNTRY` を渡す。`ERROR: the uplink is <IF>, which becomes part of the internal LAN …` か `ERROR: WAN interface not found …` → 2.2。`ERROR: the internal AP (lan-wlan0-ap on wlan0) did not come up` → `rfkill list`、`nmcli radio`、`journalctl -u NetworkManager`。`ERROR: sshd rejects the new configuration` → `sudo sshd -t`（元の設定のまま）。 |
 | アプリ | `[all/3] Install Azazel-Edge app stack`、`[1/16] Install OS dependencies`、`[1/16] Enable SPI for the EPD (Raspberry Pi OS)`（`NOTICE: SPI is enabled … reboot before the EPD can draw.` が出ることがある）、`[2/16] Create base directories` … `[8/16] Build Python runtime (venv + pip)` … `[11.8/16] Build and install the Rust defense core …`（最も長い）、`[12/16] Enable services` と、制御デーモン・AI エージェント・Web UI・core の順の `… is active`、`[13/16] Install local CA and TLS cert (optional)`、`[14/16] Install HTTPS reverse proxy (optional)`（最後に `[https] nginx TLS reverse proxy enabled on :443 (this device and … only)`）、`[15/16] Install ntfy (optional)`（最後に `[ntfy] Service healthy on http://127.0.0.1:8081 (loopback only, anonymous access denied)`）、`[16/16] Install security stack (OpenCanary + Suricata, optional)`（`SKIP_LUKS=1` でなければここで LUKS のパスフレーズを入力）、`[17/17] Verify runtime sync`、`Installed Azazel-Edge stack …` | `ERROR: <unit> did not stay active …` → `journalctl -u <unit> -b`。終了コード 78 → `/opt/azazel-edge/config` の SOC policy／ATT&CK の YAML が不正。`cargo build` の失敗はここで止まる（fail-closed）。ntfy の `ERROR:` 行は失敗した確認（健全性、匿名アクセス、トークン）を示す。 |
-| AI runtime | `[all/4] Install AI runtime stack`、`[ai/4] Start Ollama and provision models`（モデルのダウンロード）、`[DONE] AI runtime stack installed.` | `docker exec … ollama pull` の失敗 → 上流／DNS。同じ値で `install_all.sh` を再実行する。 |
+| AI runtime | `[all/4] Install AI runtime stack`、`[ai/4] Start Ollama and provision models`（モデルのダウンロード）、`[ai/5] Skip Mattermost (off by default on aarch64; ENABLE_MATTERMOST=1 installs it, untested on a 16K-page kernel)`、`[DONE] AI runtime stack installed.` | `docker exec … ollama pull` の失敗 → 上流／DNS。同じ値で `install_all.sh` を再実行する。 |
 | 任意の部分 | 既定では `[all/5]` … `[all/7]` が `Skip …` | – |
 | selftest | `[all/8] Run selftest`、続いて `[all/9] Install the periodic selftest timer` と `[selftest 1/4] Install selftest binary` … `[selftest] timer started`（aarch64 だけ。selftest が失敗しても入れる）、最後に `Unified installation completed.` | `ERROR: the selftest found a critical failure …` → `/var/log/azazel-edge/selftest_latest.json` と 3.10。 |
 
@@ -211,12 +211,15 @@ nginx と gunicorn のアクセスログ、ブラウザの履歴に残ります�
 
 ### 2.8 Mattermost（任意。初回の確認が通った後）
 
+aarch64 では Mattermost は既定で入らない。`ENABLE_MATTERMOST=1` を明示して入れる。
+
 ```bash
 cd ~/Azazel-Edge
-sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh
+sudo ENABLE_OLLAMA=0 ENABLE_MATTERMOST=1 installer/internal/install_ai_runtime.sh
 ```
 
 期待:
+`NOTICE: Mattermost's image is amd64 only; on this aarch64 host it runs under qemu-user emulation,`（ページサイズ付き。MM-01 に記録する）、
 `[ai/5] Start Mattermost stack`、
 `[ai/6] Provision Mattermost workspace`、
 `[ai/7] Provision Mattermost slash command`、
@@ -515,7 +518,7 @@ dig +time=2 +tries=1 -p 5353 @172.16.0.254 <hostname>.local
 | ID | 項目 | コマンド | 期待する結果 | Result | PR / issue |
 | --- | --- | --- | --- | --- | --- |
 | MM-01 | 16K ページでの amd64 エミュレーション | `getconf PAGESIZE`、`ls /proc/sys/fs/binfmt_misc/` | ページサイズを記録する。`qemu-x86_64` がある | | #485 |
-| MM-02 | コンテナが動く | `sudo docker ps --filter name=azazel-edge-mattermost`、`sudo docker logs --tail 50 azazel-edge-mattermost` | `Up` で、再起動を繰り返していない。終了してしまう場合はログの末尾を記録して（秘密は含まれないはずだが確かめる）ここで止める。既定で有効にしておくかはオーナー判断 | | #485 |
+| MM-02 | コンテナが動く | `sudo docker ps --filter name=azazel-edge-mattermost`、`sudo docker logs --tail 50 azazel-edge-mattermost` | `Up` で、再起動を繰り返していない。終了してしまう場合はログの末尾を記録して（秘密は含まれないはずだが確かめる）ここで止める。aarch64 で既定を有効に戻すかはオーナー判断 | | #485 |
 | MM-03 | loopback の API | `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18065/api/v4/system/ping` | `200` | | #485 |
 | MM-04 | nginx 経由で LAN から | LAN 側のブラウザで `http://172.16.0.254:8065` | ログイン画面。`azazelops` で、機器の `/etc/azazel-edge/mattermost-credentials.env` にあるパスワードでログインできる | | #485 |
 | MM-05 | slash command | `soc-noc` チャンネルで `/mio <質問>`（別名 `/azops`） | M.I.O. から応答がある。`403` にならない（戻りは `172.31.250.0/24` から来て、nginx が許可する） | | #485, #488 |
@@ -773,7 +776,7 @@ sudo dmesg | tail -n 100
 | `decision-explanations.jsonl` の書き手 | Web UI は `/var/log/azazel-edge` から v2 の説明を読むが、それを書く常駐サービスが無い。 | #479, privilege-inventory §12 |
 | NetFlow/SNMP のエントリポイント | `azazel_edge.sensors.netflow_receiver` と `snmp_poller` に `__main__` が無く、unit はすぐに終了コード 0 で終わる。 | #483, #488 |
 | ARP 偽装の検知方式 | Suricata 7 は ARP を照合できない。sid 9901211 は無効で、代わりの検知器も無い。 | #481 |
-| Mattermost を既定で有効にするか | `ENABLE_MATTERMOST=1` が既定。イメージは amd64 だけで、16K ページのカーネル上のエミュレーションは未確認（3.8）。 | #485 |
+| aarch64 での Mattermost の既定 | aarch64 では既定で入れない（`ENABLE_MATTERMOST=0`。x86_64 は `1` のまま）。イメージは amd64 だけで、16K ページのカーネル上のエミュレーションは未確認。既定を有効に戻すかは実機の 3.8 の結果で決める。 | #485, #477 |
 | ホスト INPUT フィルタの既定 | #489 は既定で無効（選択肢 B）。既定で有効にするかは FW-01〜FW-12 の後に別に判断する。 | #489 |
 | selftest の `.config_checksums` | `/etc/azazel-edge/.config_checksums` を作るものが無く、selftest は常に `config_checksums_missing` を警告する。 | #487 |
 | portal-viewer | `azazel-edge-portal-viewer.service` は制御デーモンが起動するが同梱されていない。viewer のコードはこのリポジトリに無い。 | #479 |

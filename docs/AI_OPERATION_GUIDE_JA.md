@@ -178,6 +178,7 @@ Aggregator freshness 判定の調整（`/etc/default/azazel-edge-web`）:
 
 ## 10. Mattermost運用
 
+- aarch64（Raspberry Pi 5）では Mattermost は既定で入らない（公式イメージは amd64 だけで、16K ページのカーネル上のエミュレーションは未確認）。使うときは `ENABLE_MATTERMOST=1` を明示して `install_ai_runtime.sh` を実行する（[CONFIGURATION.md](CONFIGURATION.md)）。入っていない間も手動AI質問（`POST /api/ai/ask`）は使え、`/ops-comm` では Mattermost が `UNREACHABLE`・mode `disabled` と表示される。
 - ログイン情報の保管先（ローカル機密ファイル）: `/etc/azazel-edge/mattermost-credentials.env`（`0600`）
 - WebUIのMattermost起動URL: `AZAZEL_MATTERMOST_OPEN_URL`（未設定時は `AZAZEL_MATTERMOST_HOST`/`AZAZEL_MATTERMOST_PORT`/`AZAZEL_MATTERMOST_TEAM`/`AZAZEL_MATTERMOST_CHANNEL` から自動生成）
 - 運用の主画面: Mattermostダッシュボード
