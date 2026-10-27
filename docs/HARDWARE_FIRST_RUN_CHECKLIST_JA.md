@@ -282,9 +282,21 @@ sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- h
 
 SVC-12 は任意で、機器を変えます: `install_sensors.sh` は
 `/etc/default/azazel-edge-sensors` を上書きし（`SNMP_TARGETS` が無いと
-community `public` の仮の SNMP の対象を書く。`ENABLE_SNMP=0` なので SNMP
-自体は動かない）、NetFlow の unit を有効のまま残します。終わったら
+SNMP の対象は書かない。`ENABLE_SNMP=0` なので SNMP 自体は動かない。
+`ENABLE_SNMP=1` で `SNMP_TARGETS` に実際の対象が無いと、何も変えずに
+止まる）、NetFlow の unit を有効のまま残します。終わったら
 `sudo systemctl disable --now azazel-edge-netflow-receiver` で戻します。
+
+SNMP の対象を設定するときの注意が 2 つあります。
+
+- `sudo SNMP_TARGETS=… installer/internal/install_sensors.sh` のように
+  渡すと、community が導入者のコマンドライン（実行中はほかのローカル
+  ユーザーから見える）とシェル履歴に残ります。先に非エコーで読み
+  （`read -rs SNMP_TARGETS && export SNMP_TARGETS`）、
+  `sudo --preserve-env=SNMP_TARGETS`（または `sudo -E`）で渡してください。
+- `SNMP_TARGETS` を与えずに `install_sensors.sh` を再実行すると、
+  `/etc/default/azazel-edge-sensors` は対象なしで書き直され、手で書いた
+  対象は消えます。同じ `SNMP_TARGETS` をもう一度与えてください。
 
 ```bash
 # SVC-12 (optional): the NetFlow sensor unit

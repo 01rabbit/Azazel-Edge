@@ -205,9 +205,13 @@ class SNMPPoller:
         self._stop_event.set()
 
     def poll_once(self, host: str, community: str, port: int) -> Dict[str, Any]:
+        # No default community (Edge#477, #480): an empty one is refused
+        # rather than replaced by the well-known community public.
+        if not community:
+            raise SNMPPollError("snmp_community_missing")
         self._request_id += 1
         req_id = self._request_id
-        packet = _build_snmp_get(str(community or "public"), list(self.DEFAULT_OIDS.values()), req_id)
+        packet = _build_snmp_get(str(community), list(self.DEFAULT_OIDS.values()), req_id)
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.settimeout(3.0)
@@ -236,7 +240,7 @@ class SNMPPoller:
                 cli_path,
                 "-v2c",
                 "-c",
-                str(community or "public"),
+                str(community),
                 "-t",
                 "3",
                 "-r",
@@ -269,7 +273,11 @@ class SNMPPoller:
                 host = str(target.get("host") or "").strip()
                 if not host:
                     continue
-                community = str(target.get("community") or "public")
+                community = str(target.get("community") or "")
+                if not community:
+                    # The community is a secret and is never logged.
+                    self.logger.warning("snmp target refused host=%s reason=community_missing", host)
+                    continue
                 port = int(target.get("port") or 161)
                 try:
                     result = self.poll_once(host, community, port)
