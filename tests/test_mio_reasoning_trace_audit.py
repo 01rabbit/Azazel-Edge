@@ -264,7 +264,7 @@ def test_projection_is_deterministic_bounded_and_text_free():
     b = encode_record(project_outcome(ticket=ticket, outcome=outcome, key=KEY, frame=f))
     assert a == b and len(a) <= MAX_RECORD_BYTES
     rec = json.loads(a)
-    assert rec["schema"] == "mio.trace_audit.v1"
+    assert rec["schema"] == "mio.trace_audit.v2" and rec["digest_key"] == "ephemeral"
     assert rec["trace_id"] == "trace-1" and rec["cycle_id"] == ticket.cycle_id
     assert rec["playbook"]["playbook_id"] == "auth-ambiguity-v1"
     assert rec["broker"][0]["result"] == "ok" and rec["broker"][0]["evidence_refs"] == ["ev:flow:1"]

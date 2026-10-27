@@ -55,7 +55,8 @@ _RIGHT = r"(?![A-Za-z0-9])"
 # Quoted value to its closing quote; otherwise to the end of the field.
 # Unquoted values run to the field end, closing brackets included; a closing
 # bracket only ends the value when its opening bracket precedes the label
-# ("(pw: x)"), see ``_value_end``.
+# ("(pw: x)"), see ``_bracket_end``. ``_kv_end`` may extend the value over
+# the following fields.
 _VALUE = r"""(?P<value>"[^"\r\n]*"?|'[^'\r\n]*'?|「[^」\r\n]*」?|[^\r\n,;&]+)"""
 
 # Short labels that also occur in ordinary SOC prose ("auth: failed for admin",
@@ -83,16 +84,25 @@ _ORDINARY_WORDS = frozenset({
 _UNIT_WORDS = frozenset({"host", "hosts", "attempt", "attempts", "device", "devices", "user", "users", "times", "sessions", "failures", "fail", "failed", "errors", "accounts"})
 _PIN_UNIT_WORDS = frozenset({"host", "hosts", "attempt", "attempts", "device", "devices", "users", "times", "failures"})
 _PAIRS = {"(": ")", "[": "]", "{": "}", "<": ">"}
+_OPENERS = {v: k for k, v in _PAIRS.items()}
+_WORD_STRIP = ".,!?:\"'「」()[]{}<>"
+_SEPARATORS = ",;&"
+# One further field of a value; and a field that starts its own "key:"/"key=".
+_SEGMENT = re.compile(r"[^\r\n,;&]*")
+_NEW_FIELD = re.compile(r"\s*[A-Za-z0-9_.\-]+\s*[:=]")
 
 
-def _ordinary_phrase(value: str, label: str) -> bool:
-    words = [w.lower().strip(".,!?:\"'「」") for w in value.split()]
+def _ordinary_phrase(value: str, label: str, continuation: bool = False) -> bool:
+    """Whether a weak label's value is ordinary prose. ``continuation`` is a
+    further comma/semicolon segment of the same value: it may start with an
+    ordinary word ("auth: failed, admin") and may be empty."""
+    words = [w.lower().strip(_WORD_STRIP) for w in value.split()]
     words = [w for w in words if w]
     if not words:
-        return False
+        return continuation
     units = _PIN_UNIT_WORDS if label == "pin" else _UNIT_WORDS
     for i, w in enumerate(words):
-        if w in _STATUS_WORDS or (i > 0 and w in _ORDINARY_WORDS):
+        if w in _STATUS_WORDS or ((i > 0 or continuation) and w in _ORDINARY_WORDS):
             continue
         if w.isdigit() and len(w) <= 3:
             nxt = words[i + 1] if i + 1 < len(words) else ""
@@ -103,37 +113,107 @@ def _ordinary_phrase(value: str, label: str) -> bool:
     return True
 
 
-def _value_end(norm: str, m: "re.Match[str]") -> int:
-    """End of the value: at a closing bracket only if its opener precedes the label."""
+class _Scan:
+    """Per-pattern scan state for the ``label: value`` rules.
+
+    ``finditer`` yields matches left to right, so the bracket depth before each
+    label is computed incrementally (each character is visited once), and
+    ``limit`` is the start of the next match of the same pattern: a value's
+    continuation never runs past it. Both keep masking linear in the text
+    length (a per-match rescan from the line start was quadratic).
+    """
+
+    def __init__(self, norm: str):
+        self.norm = norm
+        self.limit = len(norm)
+        self._pos = 0
+        self._depth: list[str] = []
+
+    def closer_before(self, pos: int) -> str:
+        """Closer of the innermost bracket opened before ``pos`` on its line."""
+        depth = self._depth
+        for ch in self.norm[self._pos:pos]:
+            if ch == "\n":
+                depth.clear()
+            elif ch in _PAIRS:
+                depth.append(_PAIRS[ch])
+            elif depth and ch == depth[-1]:
+                depth.pop()
+        self._pos = max(self._pos, pos)
+        return depth[-1] if depth else ""
+
+
+def _bracket_end(norm: str, start: int, end: int, closer: str) -> Optional[int]:
+    """Where a value inside ``(...)`` ends within ``norm[start:end]``, or None.
+
+    The first closer followed by whitespace, end of text or field punctuation
+    ends it ("(pw: x) next"), unless a later closer in the field has no opener
+    of its own: then the secret itself held a closer ("(pw: p) ss)") and the
+    value runs to the last such unmatched closer. If unsure, mask more.
+    """
+    opener = _OPENERS[closer]
+    first = norm.find(closer, start, end)
+    while first >= 0:
+        nxt = norm[first + 1:first + 2]
+        if not nxt or nxt.isspace() or nxt in ",;.!?&":
+            break
+        first = norm.find(closer, first + 1, end)
+    if first < 0:
+        return None
+    last, balance = first, 0
+    for i in range(first + 1, end):
+        ch = norm[i]
+        if ch == opener:
+            balance += 1
+        elif ch == closer:
+            if balance:
+                balance -= 1
+            else:
+                last = i
+    return last
+
+
+def _kv_end(norm: str, m: "re.Match[str]", scan: _Scan) -> Optional[int]:
+    """End of a ``label: value`` mask, or None to keep an ordinary weak value.
+
+    An unquoted value runs to the field end (``,``, ``;``, ``&``, line end)
+    and then on through the following fields until one starts with its own
+    ``key:``/``key=`` or the next label match begins: ``token: expired,
+    abc123`` and ``password: a,b`` are one value, not a status word followed
+    by an unrelated field. Inside brackets a closer ends it (``_bracket_end``).
+    """
     vs, ve = m.span("value")
-    line_start = norm.rfind("\n", 0, m.start()) + 1
-    depth: list[str] = []
-    for ch in norm[line_start:m.start()]:
-        if ch in _PAIRS:
-            depth.append(_PAIRS[ch])
-        elif depth and ch == depth[-1]:
-            depth.pop()
-    if depth and norm[vs:vs + 1] not in "\"'「":
-        # Stop only at a closer followed by whitespace, end of text or field
-        # punctuation; "(pw: p)ss)" masks "p)ss", not just "p".
-        idx = norm.find(depth[-1], vs, ve)
-        while idx >= 0:
-            nxt = norm[idx + 1:idx + 2]
-            if not nxt or nxt.isspace() or nxt in ",;.!?":
-                return idx
-            idx = norm.find(depth[-1], idx + 1, ve)
-    return ve
-
-
-def _kv_end(norm: str, m: "re.Match[str]") -> Optional[int]:
-    end = _value_end(norm, m)
     label = m.group("label").lower().lstrip("_-")
-    if label in _WEAK_LABELS and _ordinary_phrase(norm[m.start("value"):end], label):
+    closer = scan.closer_before(m.start())
+    parts: list[tuple[int, int]] = []
+    end = ve
+    if norm[vs:vs + 1] in "\"'「":
+        parts.append((vs, ve))
+    else:
+        cut = _bracket_end(norm, vs, ve, closer) if closer else None
+        parts.append((vs, ve if cut is None else cut))
+        end = parts[0][1]
+        pos = ve
+        while cut is None and pos < scan.limit and norm[pos] in _SEPARATORS:
+            seg = _SEGMENT.match(norm, pos + 1, scan.limit)
+            s, e = seg.span()
+            if _NEW_FIELD.match(norm, s, e):
+                break
+            cut = _bracket_end(norm, s, e, closer) if closer else None
+            if cut is not None:
+                e = cut
+            if norm[s:e].strip():
+                parts.append((s, e))
+                end = e
+            pos = e
+    if label in _WEAK_LABELS and _ordinary_phrase(norm[parts[0][0]:parts[0][1]], label) and all(
+        _ordinary_phrase(norm[s:e], label, continuation=True) for s, e in parts[1:]
+    ):
         return None
     return end
 
 
-def _bearer_end(norm: str, m: "re.Match[str]") -> Optional[int]:
+def _bearer_end(norm: str, m: "re.Match[str]", scan: _Scan) -> Optional[int]:
     """``bearer token <x>``: skip only the word "token", then examine x."""
     if m.group("skip") or m.group("bval").lower() in ("token", "tokens"):
         bval = m.group("bval").lower().strip(".,!?")
@@ -146,7 +226,7 @@ _REF_WORD = re.compile(r"[A-Za-z][A-Za-z0-9._-]*:[A-Za-z0-9._:/#-]+")
 _PREFIXED = r"(?:sk-|sk_live_|sk_test_|rk_live_|xox[abprs]-|gh[pousr]_|github_pat_|glpat-|AKIA|ASIA|AIza)"
 
 
-def _long_token_end(norm: str, m: "re.Match[str]") -> Optional[int]:
+def _long_token_end(norm: str, m: "re.Match[str]", scan: _Scan) -> Optional[int]:
     return None if _keep_long_token(norm, m) else m.end()
 
 
@@ -167,7 +247,7 @@ def _keep_long_token(norm: str, m: "re.Match[str]") -> bool:
 
 
 # A rule's optional callback returns the match end to mask, or None to skip.
-_Keep = Optional[Callable[[str, "re.Match[str]"], Optional[int]]]
+_Keep = Optional[Callable[[str, "re.Match[str]", _Scan], Optional[int]]]
 _RULES: tuple[tuple[str, "re.Pattern[str]", _Keep], ...] = (
     ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.S), None),
     ("url_userinfo", re.compile(r"(?<=://)[^\s/?#]+(?=@[^\s@/?#]+)"), None),
@@ -178,7 +258,9 @@ _RULES: tuple[tuple[str, "re.Pattern[str]", _Keep], ...] = (
     ("auth_header", re.compile(r"(?<![A-Za-z0-9])(?:proxy-)?authorization\s*[:=][^\r\n,;]*", re.I), None),
     ("bearer", re.compile(r"(?<![A-Za-z0-9])bearer(?:\s*[:=]\s*|\s+)(?P<skip>tokens?\s+)?(?P<bval>[^\s,;]+)", re.I), _bearer_end),
     ("bearer", re.compile(r"(?<![A-Za-z0-9])basic\s+[A-Za-z0-9+/]{8,}={0,2}", re.I), None),
-    ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"), None),
+    # Left boundary: without it every "eyJ" inside one long run starts a
+    # new scan of the rest of the run (quadratic).
+    ("jwt", re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"), None),
     ("api_key", re.compile(r"(?<![A-Za-z0-9])" + _PREFIXED + r"[A-Za-z0-9_-]{6,}"), None),
     ("secret_kv", re.compile(_LEFT + _LABEL_ANY + _RIGHT + r"\s*[:=]\s*" + _VALUE, re.I), _kv_end),
     ("secret_kv", re.compile(_LEFT + _LABEL_PW + r"(?:\s+(?:is|was)\s+|\s*は\s*)" + _VALUE, re.I), _kv_end),
@@ -196,11 +278,16 @@ def _spans(text: str, labels: frozenset[str] | None = None) -> list[tuple[int, i
     for label, pattern, keep in _RULES:
         if labels is not None and label not in labels:
             continue
-        for m in pattern.finditer(norm):
-            end = m.end() if keep is None else keep(norm, m)
-            if end is None or end <= m.start():
-                continue
-            spans.append((index[m.start()], index[end - 1] + 1, label))
+        scan = _Scan(norm)
+        matches = pattern.finditer(norm)
+        m = next(matches, None)
+        while m is not None:
+            following = next(matches, None)
+            scan.limit = len(norm) if following is None else following.start()
+            end = m.end() if keep is None else keep(norm, m, scan)
+            if end is not None and end > m.start():
+                spans.append((index[m.start()], index[end - 1] + 1, label))
+            m = following
     spans.sort()
     merged: list[tuple[int, int, str]] = []
     for s, e, label in spans:

@@ -19,7 +19,7 @@ the entry point that ties them together.
 | Name used here | What it is | Code | Runs in |
 | --- | --- | --- | --- |
 | **M.I.O. persona** | The operator-facing wording of the live AI agent: the analyst, ops coach and manual-query prompts, the Mattermost `[M.I.O.]` replies, the triage prefaces. Persona text is not authority ([MIO_PERSONA_PROFILE.md](../MIO_PERSONA_PROFILE.md)). | `py/azazel_edge_ai/agent.py`, `azazel_edge_web/app.py` | `azazel-edge-ai-agent.service` (account `azazel-agent`), `azazel-edge-web.service` (account `azazel-web`) |
-| **M.I.O. cognitive core** | The bounded reasoning library: SituationFrame, playbooks, hypotheses, evidence gaps, typed read-only Capability Broker, grounding, lifecycle, no-model handoff, trace audit. | `py/azazel_edge/mio/` | No service. The only callers are the offline tools `bin/azazel-mio-shadow-replay` and `bin/azazel-mio-evaluate`. No systemd unit starts them. |
+| **M.I.O. cognitive core** | The bounded reasoning library: SituationFrame, playbooks, hypotheses, evidence gaps, typed read-only Capability Broker, grounding, lifecycle, no-model handoff, trace audit. | `py/azazel_edge/mio/` | No service. The only callers are the offline tools `bin/azazel-mio-shadow-replay`, `bin/azazel-mio-evaluate` and the read-only `bin/azazel-mio-trace-export`. No systemd unit starts them. |
 
 The cognitive core is therefore a shadow/replay component today. Its output is
 not read by any running service. Wiring it into a service is open work
@@ -96,7 +96,7 @@ evidence + deterministic NOC/SOC outputs + current Defensive State
   -> evidence gaps -> score_evidence_gaps -> CapabilityBroker (typed, read-only)
   -> hypothesis revision -> recommendation (executable=false) + claim audit
   -> or: mio.no_model_handoff.v1 (deterministic)
-  -> project_outcome -> mio.trace_audit.v1  (edge_decision_ref supplied by Edge)
+  -> project_outcome -> mio.trace_audit.v2  (edge_decision_ref supplied by Edge)
 ```
 
 The cycle ends with an advisory record. There is no consumer that turns it
@@ -116,7 +116,7 @@ narrower role, stated in the cell.
 | **Enforce** (apply or release `nft`/`tc` defensive rules) | **Yes**, gated by the settings above; the release path (`release.rs`) removes what it applied when the lease expires. An action outside the level's allowlist is recorded as `policy_gated` and not applied. | No. | **No.** No import of arbiter, control, deception transition or outcome modules; no `subprocess`, `socket` or `os.system` (tested). | **No.** Its only child process is a read of `ip -4 route show default` (tested). | **No** defensive action. Its control-daemon actions are a fixed table (Wi-Fi, legacy mode, SoT, uplink disconnect, shutdown, reboot) that contains none of the five actions (tested). Two of them are not defensive actions but do change the network path: `wifi_connect` enables forwarding and adds NAT rules for a USB uplink, and `uplink_disconnect` brings the uplink down (`ip link set ... down`). | Runs the fixed control actions (role `responder`, mode change `admin`) and reviewed runbooks (role `operator`; `controlled_exec` needs review and `approved`). None of these writes the core's `inet azazel_edge` rules. |
 | **Advise** | No (reports `policy_reason`). | No. | **Yes**, offline: hypotheses, evidence gaps, recommendation, no-model handoff. | **Yes**: `ai_advisory.json` (tactical recommendation; replaced by the analyst model's `suggested_action` when its confidence is at least 0.60), ops-coach runbook suggestion, manual-query answers. | Relays: Mattermost replies, runbook proposals (`/api/runbooks/propose`). | Decides whether to act on any advice. |
 | **Display** | No UI; a summary line on stdout. | No. | **None today.** Operator surfaces are #374; the decision-level trace display (#341) is being implemented in #501 (open). | Writes display data (advisory, snapshot, explanation); renders nothing. | **Yes**: dashboards, Booth Focus, touch console, Mattermost. The control daemon's snapshot also feeds the e-paper display. | Reads. |
-| **Audit** | `normalized-events.jsonl`, `ingress-audit.jsonl`, release ledger and its rollback audit. | Decision fields reused by replay explanations. | `ai_assist` records through `AIGovernance.authorize`; broker audit ring; `mio.trace_audit.v1` projection and `TraceAuditSink` (library; no service writes it yet, #389). | Core-decision audit chain (P0), AI audit `ai-audit.jsonl` (scope records with `in_scope=false` for its model calls), v2 explanations with trust capsule, model result logs. | Runbook event log; reads the files above. | Reviews with `azazel-edge-audit-review`. |
+| **Audit** | `normalized-events.jsonl`, `ingress-audit.jsonl`, release ledger and its rollback audit. | Decision fields reused by replay explanations. | `ai_assist` records through `AIGovernance.authorize`; broker audit ring; `mio.trace_audit.v2` projection, `TraceAuditSink` and the recorder port (library, off by default; no service writes it yet, #385); read-only `azazel-mio-trace-export`. | Core-decision audit chain (P0), AI audit `ai-audit.jsonl` (scope records with `in_scope=false` for its model calls), v2 explanations with trust capsule, model result logs. | Runbook event log; reads the files above. | Reviews with `azazel-edge-audit-review`. |
 
 Invariants behind the matrix, with the check that pins each one:
 
@@ -196,7 +196,7 @@ moved to Azazel-Nexus#5 (#408). Edge implements only the rungs above.
 | --- | --- | --- |
 | SituationFrame `mio.situation_frame.v1` | Edge-local (#361, #383) | `py/azazel_edge/mio/contracts.py` |
 | Hypothesis, evidence gap, capability request and result, recommendation, reasoning states | Edge-local | `py/azazel_edge/mio/contracts.py`, `broker.py` |
-| No-model handoff `mio.no_model_handoff.v1`, trace audit `mio.trace_audit.v1` | Edge-local | `py/azazel_edge/mio/handoff.py`, `trace_audit.py` |
+| No-model handoff `mio.no_model_handoff.v1`, trace audit `mio.trace_audit.v2` | Edge-local | `py/azazel_edge/mio/handoff.py`, `trace_audit.py` |
 | Agent advisory and snapshot fields | Edge-local | `py/azazel_edge_ai/agent.py` |
 | v2 decision explanation and trust capsule | Edge-local, with Fabric projections written beside it | `py/azazel_edge/explanations/` |
 | Deception and engagement contracts | Fabric (`azazel_fabric.deception_contracts`, `engagement_contracts`) | consumed by the modules in section 4.2 |
@@ -228,7 +228,7 @@ A change to an Edge-local M.I.O. schema bumps its version in the same change
 | Decision-level trace and evidence provenance in the console | #341 (being implemented in #501, open) |
 | Final documentation package (operations, offline deployment, field validation) | #375 |
 | Pi-class resource and latency evidence for the frame builder and models | #372 (frame budget follow-up from #383) |
-| Live wiring of `ReasoningCoordinator`, `TraceAuditSink` and its key management | #385, #389 |
+| Live wiring of `ReasoningCoordinator` and of the trace audit port (`trace_recorder.py`, off by default; key provisioner not run by the installer) | #385 |
 | Real read-only broker adapters, per-capability data minimization, cancelling handlers of stale cycles, RBAC tests | #384 |
 | Claim classes from #366 Part B (per-ref freshness, arbiter contradiction, Knowledge-as-decision, AZ-06 belief, attribution wording); structured playbook selection; `select_playbook` in a runtime | #386 |
 | SituationFrame actor/entity, actions, deception context | #383 (via #362) |

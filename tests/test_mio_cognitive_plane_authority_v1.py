@@ -33,8 +33,8 @@ CORE_SRC = ROOT / "rust" / "azazel-edge-core" / "src"
 DEFENSIVE_ACTIONS = frozenset({"observe", "notify", "throttle", "redirect", "isolate"})
 
 # The only programs that import azazel_edge.mio outside the package itself.
-# Both are offline tools that no unit starts.
-MIO_IMPORTERS = frozenset({"bin/azazel-mio-shadow-replay", "bin/azazel-mio-evaluate"})
+# All are offline tools that no unit starts.
+MIO_IMPORTERS = frozenset({"bin/azazel-mio-shadow-replay", "bin/azazel-mio-evaluate", "bin/azazel-mio-trace-export"})
 
 # What the cognitive core may import from this repository.
 MIO_ALLOWED_INTERNAL = frozenset({"azazel_edge.ai_governance"})

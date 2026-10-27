@@ -2,23 +2,27 @@
 
 Canonical architecture, authority matrix and degradation ladder: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
 
-Status: implemented as a library, advisory-only. Tracking: #389 (parent #377).
+Status: implemented as a library, advisory-only, with a port for a service
+that is off by default and a read-only incident export. Tracking: #389
+(parent #377); running it in a service is #385.
 Builds on #383 (SituationFrame), #384 (Capability Broker), #385 (lifecycle,
 `ReasoningCoordinator`), #386 (grounding/playbooks).
 
 The M.I.O. trace complements the Edge audit and Decision Explanation. It is not
 a second authoritative decision record. Nothing here calls the Action Arbiter,
 enforcement handlers, AZ-06 or the Rust core; nothing on the deterministic path
-imports it (tested). No systemd unit, installer or security path is changed.
+imports it (tested). No systemd unit or installer step runs any of it.
 
 | Item | Location |
 |---|---|
 | ID grammar, validation, Edge decision ref check | `py/azazel_edge/mio/trace_audit.py` (`ID_GRAMMAR`, `is_valid_id`, `require_id`, `cycle_belongs_to`) |
 | Per-cycle working memory | `trace_audit.py` (`CycleWorkingMemory`) |
-| Minimized projection | `trace_audit.py` (`project_outcome`, `mio.trace_audit.v1`) |
+| Minimized projection | `trace_audit.py` (`project_outcome`, `mio.trace_audit.v2`) |
 | Durable sink, retention, quota failure | `trace_audit.py` (`TraceAuditSink`, `record_cycle`) |
+| Digest key, config, port for a service (off by default) | `py/azazel_edge/mio/trace_recorder.py`, `config/mio_trace_audit.json`, `installer/internal/provision_mio_trace_audit_key.sh` |
+| Read-only incident export | `py/azazel_edge/mio/trace_export.py`, `bin/azazel-mio-trace-export` |
 | Operator text masking | `py/azazel_edge/mio/redaction.py`, applied in `handoff.py` |
-| Tests | `tests/test_mio_reasoning_trace_audit.py` |
+| Tests | `tests/test_mio_reasoning_trace_audit.py`, `tests/test_mio_trace_lifecycle_389_v1.py` |
 
 ## Lifecycle the trace relates
 
@@ -80,7 +84,7 @@ pending requests, compiled context or a raw model response before validation.
 `project_outcome(ticket, outcome, key, frame=None, edge_decision_ref=None)` is a
 pure function. The same inputs and key give the same bytes.
 
-Kept: schema, IDs, epoch, frame material digest, playbook id/version/digest,
+Kept: schema, `digest_key`, IDs, epoch, frame material digest, playbook id/version/digest,
 template id, terminal state, error codes, hypothesis IDs/status/evidence refs,
 hypothesis lifecycle transitions and reason codes, evidence-gap count, broker
 request ID, capability name, result status (`ok`/`not_ok`/`missing`) and refs,
@@ -95,15 +99,89 @@ record keeps `{"digest", "chars"}` only. Error codes of the form
 
 Digests are HMAC-SHA256 (truncated to 96 bits). Key ownership:
 
-- The caller supplies the key (`key=`); `new_audit_key()` makes a random one.
-  This module never persists, logs or derives the key.
-- With a per-process key (the default pattern, as in the broker), digests are
-  not correlatable across restarts. Correlating across restarts needs the
-  service to persist the key with owner-only permissions; that is a follow-up
-  for whoever wires the sink into a service.
+- The caller supplies the key (`key=`) and says what it is (`digest_key`:
+  `persistent` or `ephemeral`, default `ephemeral`). `trace_audit.py` never
+  persists, logs or derives the key.
+- With a per-process key (`new_audit_key()`, as in the broker), digests are
+  not correlatable across restarts, and the record says `"digest_key":
+  "ephemeral"`.
 - The key is what stops offline guessing of low-entropy values; the digest is
   not an anonymisation claim. Discarding the key makes old digests
   un-correlatable.
+
+`mio.trace_audit.v2` adds `digest_key` to v1; nothing else changed. The
+export reads both versions.
+
+### Persisted digest key
+
+The persisted key follows the trust capsule key (#498):
+
+- `installer/internal/provision_mio_trace_audit_key.sh [KEY_FILE]` (default
+  `/etc/azazel-edge/mio-trace-audit.key`) writes 256 random bits as hex,
+  `0600` (root:root when run as root) from its first byte
+  (`write_private_file`, shared with the trust capsule script). Running it
+  again keeps a usable key and narrows the mode. The key is never printed or
+  put on a command line. The installer does not run it: nothing uses the key
+  until a service enables the trace audit (#385).
+- A key is usable only when it is one value of at least 32 characters of
+  `[A-Za-z0-9._~+/=-]` after surrounding whitespace is removed, with at least
+  8 different characters and none of the markers of a test or example key
+  (`test`, `example`, `dummy`, `sample`, `changeme`, `devkey`, `dev-key`,
+  `not-for-devices`). So the repository's test keys (`"k" * 32`, the trust
+  capsule tests' key) are never accepted as a device key. The script and
+  `trace_recorder.key_is_usable` apply the same rule (tested).
+- `load_audit_key` opens the file with `O_NOFOLLOW` and uses it only if it is
+  a regular file owned by root or the current user with no group or other
+  permission bits. A missing, refused or unusable key gives a random
+  per-process key and `"digest_key": "ephemeral"`: never a built-in or known
+  key. There is no environment variable for the key. Reasons are fixed codes
+  (`missing`, `symlink`, `mode_too_wide`, `owner`, `not_usable`, ...), never
+  the value.
+- A future unit should hand the root-owned file to its service account with
+  `LoadCredential=` rather than widening the file's mode; that choice belongs
+  to #385.
+
+### Port for a service (off by default)
+
+`trace_recorder.py` is the port a service will call. Nothing calls it today.
+
+- `load_trace_audit_config(path)` reads `mio.trace_audit_config.v1` JSON
+  (`enabled`, `path`, `key_file`, `max_file_bytes`, `max_files`; unknown
+  fields are rejected). `config/mio_trace_audit.json` ships with
+  `"enabled": false`; a missing file is also disabled.
+- `open_trace_audit(config)` returns `None` when disabled, so the caller does
+  nothing. Enabled, it returns a `TraceAuditRecorder` with a sink and the key
+  above. The sink does not create its directory; the unit that runs it owns
+  that (for example `StateDirectory=`).
+- `TraceAuditRecorder.record(ticket=, outcome=, frame=, edge_decision_ref=,
+  cycle_status=)` returns `record_cycle`'s answer: whether the M.I.O. advisory
+  may be published. `stats()` adds `digest_key` and the key reason code.
+
+The port adds no decision or enforcement authority and no approval flag. The
+recorder writes only the minimized advisory audit.
+
+### Read-only incident export
+
+`bin/azazel-mio-trace-export --config FILE | --path FILE [--max-files N]
+--trace-id ID [--cycle-id ID] [--limit N]` prints the records of one trace
+from the active file and its rotated files, oldest first, as
+`mio.trace_audit_export.v1` JSON. At most `--limit` (default 256, at most
+1024) of the newest records are printed; `omitted` counts the rest.
+
+- Read-only: it opens files `O_RDONLY | O_NOFOLLOW`, refuses non-regular files
+  and files over 64 MiB, and never writes, locks, rotates or truncates. It
+  needs no key. The audit files are `0600`, so it runs as the account that
+  writes them, or as root.
+- Allowlist, not masking: every record is checked field by field against the
+  shape `project_outcome` writes (IDs matching their grammar or `h:<digest>`,
+  closed codes, hex digests, counts, `{digest, chars}`, `executable: false`,
+  `authority: advisory_only`). A record with any other field or value is not
+  printed and is counted as `invalid`; broken JSON and lines over
+  `MAX_RECORD_BYTES` are counted as `malformed` and `oversize`. So text put
+  into the file by hand or by a bug is not echoed.
+- Each file is listed by its base name with `read`, `missing` or
+  `refused:<reason>`. Invalid arguments exit 2 with a fixed code and are not
+  echoed.
 
 Records are capped at `MAX_RECORD_BYTES` (4096). Over the cap, list fields are
 trimmed in a fixed order with `truncated_<field>` counts; if still too large the
@@ -155,7 +233,8 @@ are serialized by a lock.
 Masking in `redaction.py` is a best-effort pattern list, not a guarantee:
 label/value pairs (English and Japanese labels such as パスワード, 暗証番号,
 秘密鍵, トークン; `:`, `=`, fullwidth `：`, prose "password is X"; quoted values
-to the closing quote, unquoted to the field end), `Bearer`/`Basic`, JWTs,
+to the closing quote, unquoted to the field end and on over the following
+`,` `;` `&` fields until one starts with its own `key:`/`key=`), `Bearer`/`Basic`, JWTs,
 common key prefixes (`sk-`, `xoxb-`, `ghp_`, `AKIA`, ...), URL userinfo, private
 key blocks (also unterminated), emails and long opaque tokens. Matching runs on
 an NFKC-normalised copy with zero-width chars removed and common
@@ -170,10 +249,26 @@ ordinary word, or a count of at most three digits followed by a unit word
 whole value (`token: expired abc123`, `pin: 4821 ok`); if unsure, mask.
 `bearer token <x>` skips only the word "token" and then examines `<x>`.
 Strong labels (`password`, `api_key`, ...) are always masked. Unquoted values
-run to the field end; a closing bracket ends a value only when its opening
-bracket precedes the label (`(pw: x)`) and the closer is followed by
-whitespace, end of text or `, ; . ! ?`; otherwise the value continues
-(`(pw: p)ss)` masks `p)ss`). Scheme-less `user:pass@host` and passwords with spaces in URL
+run to the field end and continue over the next fields (`token: expired,
+abc123` and `password: a,b` are one value; `password: x, user: admin` stops
+before `user:`). For a weak label every field of the value must be ordinary
+(`auth: failed, admin` and `token: expired, retry later` are kept). A closing
+bracket ends a value only when its opening bracket precedes the label
+(`(pw: x)`) and the closer is followed by whitespace, end of text or `, ; .
+! ? &`; otherwise the value continues (`(pw: p)ss)` masks `p)ss`). If a later
+closer in the field has no opener of its own, the secret held the closer and
+the value runs to that closer (`(pw: p) ss)` masks `p) ss`).
+These two cases were the known partial leaks listed on #389.
+
+Masking is linear in the input: the bracket depth before a label is computed
+once per pattern pass, a value never continues past the next match of the
+same pattern, and the JWT rule needs a left boundary. Tests mask 1 MiB of
+repeated label, bracket, comma, quote, URL and JWT shapes and check that the
+time grows linearly.
+
+The handoff still uses masking rather than the allowlist of #501, because
+its point is operator-readable frame facts and model hypotheses; the trace
+audit and the export carry no free text at all. Scheme-less `user:pass@host` and passwords with spaces in URL
 userinfo are masked; a plain email has no `:` and is handled by the email rule.
 Masking runs before truncation so a cut cannot expose part of a token.
 
@@ -186,6 +281,7 @@ playbook text and the reason, is masked.
 
 ## Not in scope
 
-Live wiring of the sink into a running service and key management for it,
-an incident export CLI, and #372/#374 consumers. These need a service owner and,
+Running the cognitive core and the recorder in a service (#385), with the unit
+that would create the sink directory and hand over the key
+(`LoadCredential=`), and #372/#374 consumers. These need a service owner and,
 for any systemd/installer change, explicit approval.

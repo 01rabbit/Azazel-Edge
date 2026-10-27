@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Export the M.I.O. trace audit records of one incident (#389). Read-only.
+
+Reads the trace audit file named by --path (or by the "path" of a
+mio.trace_audit_config.v1 file given with --config) and its rotated files,
+and prints the records of one trace as JSON. It never writes, locks or
+rotates anything, needs no key, and prints only allowlisted fields: IDs,
+codes, digests and counts. Records with any other content are counted as
+"invalid" and not printed. The audit file is 0600: run it as the account
+that writes it, or as root.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "py"))
+
+from azazel_edge.mio.trace_export import MAX_LIMIT, export_incident
+from azazel_edge.mio.trace_recorder import load_trace_audit_config
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Read-only export of one trace from the M.I.O. trace audit; prints no free text or key.")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--config", help="mio.trace_audit_config.v1 JSON file (uses its path and max_files)")
+    source.add_argument("--path", help="active trace audit file")
+    parser.add_argument("--max-files", type=int, default=4, help="with --path: the sink's max_files (rotated files .1 .. .N-1)")
+    parser.add_argument("--trace-id", required=True)
+    parser.add_argument("--cycle-id")
+    parser.add_argument("--limit", type=int, default=256, help=f"newest records to print, 1..{MAX_LIMIT}")
+    args = parser.parse_args()
+    try:
+        if args.config:
+            config = load_trace_audit_config(args.config)
+            if not config.path:
+                raise ValueError("config_has_no_path")
+            path, max_files = config.path, config.max_files
+        else:
+            path, max_files = args.path, args.max_files
+        result = export_incident(path, trace_id=args.trace_id, cycle_id=args.cycle_id, max_files=max_files, limit=args.limit)
+    except ValueError as exc:
+        # Fixed codes only; the arguments are not echoed.
+        print(f"azazel-mio-trace-export: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
