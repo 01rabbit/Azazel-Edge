@@ -22,12 +22,14 @@ from azazel_edge.mio.lifecycle import (
     ALLOWED_HYPOTHESIS_TRANSITIONS,
     CycleStatus,
     ReasoningCoordinator,
+    STALE_PRE_RESTART,
+    STALE_UNKNOWN_OR_EVICTED,
     apply_hypothesis_update,
     material_frame_digest,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-GOLDEN_HANDOFF = ROOT / "tests" / "fixtures" / "mio" / "no_model_handoff_v1.json"
+GOLDEN_HANDOFF = ROOT / "tests" / "fixtures" / "mio" / "no_model_handoff_v2.json"
 PLAYBOOK = DEFAULT_PLAYBOOKS["auth-ambiguity-v1"]
 
 
@@ -311,7 +313,7 @@ def test_restart_abandons_inflight_and_never_serves_old_advisory_as_current():
     assert restored.stale_check(inflight)() is True
 
     late = restored.complete(inflight, loop.run(frame=frame(trace_id="B"), playbook=PLAYBOOK, cycle_id=inflight.cycle_id))
-    assert (late.accepted, late.reason) == (False, "unknown_evicted_or_pre_restart_cycle")
+    assert (late.accepted, late.reason) == (False, STALE_PRE_RESTART)
     events = [r["event"] for r in restored.audit()]
     assert events[:3] == ["cycle_started", "result_accepted", "cycle_started"]  # pre-restart audit kept
     assert events[3:] == ["advisory_restored_as_stale", "cycle_abandoned_on_restart", "stale_result_discarded"]
@@ -443,7 +445,8 @@ def test_handoff_labels_model_hypotheses_as_unverified():
     assert "frame_derived_only" not in payload["limitations"] and "no_model_contribution" not in payload["limitations"]
     assert "includes_unverified_model_hypotheses" in payload["limitations"]
     strengthened = payload["model_proposed_hypotheses"][0]
-    assert strengthened == {"hypothesis_id": "h-attack", "model_status": "strengthened", "verification": "model_proposed_unverified", "statement": "Credential attack", "falsification_conditions": ["known admin automation confirmed"]}
+    assert strengthened == {"hypothesis_id": "h-attack", "model_status": "strengthened", "verification": "model_proposed_unverified", "supporting_evidence_refs": ["ev:ssh:1", "ev:flow:1"], "contradicting_evidence_refs": [], "falsification_condition_count": 1}
+    assert "Credential attack" not in outcome.handoff.to_canonical_json().decode()
 
 
 def test_handoff_cap_is_hard_even_for_oversized_playbook():
@@ -468,7 +471,7 @@ def test_coordinator_state_is_bounded_over_many_traces():
     t = old.begin(frame(trace_id="x"))
     old.cancel("x")
     old.run_cycle(loop, frame(trace_id="y"), PLAYBOOK)
-    assert old.complete(t, None).reason == "unknown_evicted_or_pre_restart_cycle"
+    assert old.complete(t, None).reason == STALE_UNKNOWN_OR_EVICTED
 
 
 def test_audit_rows_are_size_bounded():

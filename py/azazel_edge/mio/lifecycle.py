@@ -228,6 +228,17 @@ class CycleStatus(str, Enum):
     RESTORED_STALE = "restored_stale"
 
 
+# Fixed reason codes for a result that may not become current. The reason is
+# chosen from the ticket and the cycle record only, never from the outcome.
+STALE_PRE_RESTART = "stale_pre_restart_cycle"
+STALE_UNKNOWN_OR_EVICTED = "stale_unknown_or_evicted_cycle"
+STALE_TICKET_MISMATCH = "stale_ticket_mismatch"
+STALE_SUPERSEDED = "stale_cycle_superseded"
+STALE_CANCELLED = "stale_cycle_cancelled"
+STALE_ALREADY_COMPLETED = "stale_cycle_already_completed"
+STALE_RESULT_REASONS = frozenset({STALE_PRE_RESTART, STALE_UNKNOWN_OR_EVICTED, STALE_TICKET_MISMATCH, STALE_SUPERSEDED, STALE_CANCELLED, STALE_ALREADY_COMPLETED})
+
+
 @dataclass(frozen=True)
 class CycleTicket:
     trace_id: str
@@ -278,6 +289,11 @@ def _bound(value: Any, depth: int = 0) -> Any:
 
 def _is_int(value: Any) -> bool:
     return type(value) is int
+
+
+def _same_cycle(ticket: CycleTicket, own: CycleTicket) -> bool:
+    """Ticket identity ignoring the ``deduplicated`` flag."""
+    return (ticket.cycle_id, ticket.trace_id, ticket.epoch, ticket.frame_id, ticket.material_digest) == (own.cycle_id, own.trace_id, own.epoch, own.frame_id, own.material_digest)
 
 
 class ReasoningCoordinator:
@@ -380,7 +396,7 @@ class ReasoningCoordinator:
     def _status(self, ticket: CycleTicket) -> CycleStatus | None:
         with self._lock:
             cycle = self._cycles.get(ticket.cycle_id)
-            if cycle is None or ticket.epoch != self.epoch:
+            if cycle is None or ticket.epoch != self.epoch or not _same_cycle(ticket, cycle.ticket):
                 return None
             return cycle.status
 
@@ -415,22 +431,42 @@ class ReasoningCoordinator:
         advisory_id = getattr(rec, "advisory_id", "") if rec is not None else ""
         with self._lock:
             cycle = self._cycles.get(ticket.cycle_id)
-            if cycle is None or ticket.epoch != self.epoch:
-                reason = "unknown_evicted_or_pre_restart_cycle"
-                self._log("stale_result_discarded", None, trace_id=ticket.trace_id, cycle_id=ticket.cycle_id, frame_id=ticket.frame_id, ticket_epoch=ticket.epoch, reason=reason, outcome_state=state, advisory_id=advisory_id, hypotheses=[e.to_dict() for e in supersede_all(hypotheses, REASON_CYCLE_SUPERSEDED)])
-                return CompletionResult(False, CycleStatus.ABANDONED_ON_RESTART.value, reason)
-            if cycle.status is not CycleStatus.IN_FLIGHT:
-                reason = f"cycle_{cycle.status.value}"
-                h_reason = REASON_CYCLE_CANCELLED if cycle.status is CycleStatus.CANCELLED else REASON_CYCLE_SUPERSEDED
-                self._log("stale_result_discarded", cycle, reason=reason, outcome_state=state, advisory_id=advisory_id, hypotheses=[e.to_dict() for e in supersede_all(hypotheses, h_reason)])
-                return CompletionResult(False, cycle.status.value, reason)
+            reason, status = self._stale_reason(ticket, cycle)
+            if reason:
+                # Audit under the recorded cycle's trace when the ticket matches it;
+                # a mismatched or unknown ticket is logged without touching any cycle.
+                own = cycle if reason in (STALE_SUPERSEDED, STALE_CANCELLED, STALE_ALREADY_COMPLETED) else None
+                h_reason = REASON_CYCLE_CANCELLED if reason == STALE_CANCELLED else REASON_CYCLE_SUPERSEDED
+                ids = {} if own is not None else {"trace_id": ticket.trace_id, "cycle_id": ticket.cycle_id, "frame_id": ticket.frame_id, "ticket_epoch": ticket.epoch}
+                self._log("stale_result_discarded", own, **ids, reason=reason, outcome_state=state, advisory_id=advisory_id, hypotheses=[e.to_dict() for e in supersede_all(hypotheses, h_reason)])
+                return CompletionResult(False, status, reason)
             cycle.status = CycleStatus.ACCEPTED
             cycle.outcome_state = state[:64]
             cycle.advisory_id = str(advisory_id)[:_ID_LIMIT]
-            self._current[ticket.trace_id] = outcome
+            self._current[cycle.ticket.trace_id] = outcome
             self._log("result_accepted", cycle, outcome_state=state, advisory_id=advisory_id)
             self._prune()
             return CompletionResult(True, CycleStatus.ACCEPTED.value, "current", outcome)
+
+    def _stale_reason(self, ticket: CycleTicket, cycle: _Cycle | None) -> tuple[str, str]:
+        """('', '') when ``ticket`` is the current in-flight cycle, else a fixed
+        reason code from STALE_RESULT_REASONS and the cycle status to report."""
+        if not _is_int(ticket.epoch) or ticket.epoch < self.epoch:
+            return STALE_PRE_RESTART, CycleStatus.ABANDONED_ON_RESTART.value
+        if cycle is None or ticket.epoch != self.epoch:
+            return STALE_UNKNOWN_OR_EVICTED, "unknown"
+        if not _same_cycle(ticket, cycle.ticket):
+            # A ticket naming another trace's cycle must not land in that trace.
+            return STALE_TICKET_MISMATCH, "unknown"
+        if cycle.status is CycleStatus.IN_FLIGHT:
+            return "", ""
+        if cycle.status is CycleStatus.CANCELLED:
+            return STALE_CANCELLED, cycle.status.value
+        if cycle.status is CycleStatus.ACCEPTED:
+            return STALE_ALREADY_COMPLETED, cycle.status.value
+        if cycle.status in (CycleStatus.ABANDONED_ON_RESTART, CycleStatus.RESTORED_STALE):
+            return STALE_PRE_RESTART, cycle.status.value
+        return STALE_SUPERSEDED, cycle.status.value
 
     def run_cycle(self, loop: Any, frame: MioSituationFrame, playbook: Any) -> CompletionResult:
         """begin -> loop.run(cancel_check, stale_check) -> complete, for one frame."""

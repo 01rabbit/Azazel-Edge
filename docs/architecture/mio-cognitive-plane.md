@@ -95,7 +95,7 @@ evidence + deterministic NOC/SOC outputs + current Defensive State
   -> GroundingValidator, lifecycle rules
   -> evidence gaps -> score_evidence_gaps -> CapabilityBroker (typed, read-only)
   -> hypothesis revision -> recommendation (executable=false) + claim audit
-  -> or: mio.no_model_handoff.v1 (deterministic)
+  -> or: mio.no_model_handoff.v2 (deterministic)
   -> project_outcome -> mio.trace_audit.v2  (edge_decision_ref supplied by Edge)
 ```
 
@@ -170,7 +170,7 @@ display degrade.
 | Agent stopped | core decision and enforcement | no advisory, snapshot or v2 explanation for those events; the core drops and counts forwards (queue of 1024, write timeout 1 s); at the next start the agent records missed P0 decisions from the core's log (tail of at most 8 MiB, newest 256, older ones marked as past decisions) | forward stats, P0 queue (`reconciled`, `stale`) |
 | Core stopped | nothing on the decision path | no decisions, no enforcement, and no release of applied actions until it runs again (`process_release_events` runs at start and in its loop); no other component takes over | unit status |
 | Offline (no WAN or Internet) | everything above | nothing on the decision or advice path needs the Internet. The cognitive core's adapter accepts loopback by default, a private-LAN endpoint only with opt-in, HTTPS and a bearer token, and has no public or cloud fallback. The agent's endpoint (`AZAZEL_OLLAMA_ENDPOINT`) is accepted only when it is loopback; otherwise the agent stays in the no-model fallback (#388, section 9.2). Knowledge and AZ-06 degrade to "no advisory". | - |
-| Cognitive core, model absent or blocked | the cycle ends with a typed state | `DEPENDENCY_UNAVAILABLE` (`model=None` gives `model_absent`) or a governance block; the deterministic `mio.no_model_handoff.v1` carries frame and playbook guidance | `ReasoningOutcome.handoff` |
+| Cognitive core, model absent or blocked | the cycle ends with a typed state | `DEPENDENCY_UNAVAILABLE` (`model=None` gives `model_absent`) or a governance block; the deterministic `mio.no_model_handoff.v2` carries allowlisted frame fields and built-in playbook guidance | `ReasoningOutcome.handoff` |
 | Cognitive core, stale frame, cancellation, budget, invalid output | the cycle ends with a typed state | `STALE_SUPERSEDED`, `OPERATOR_CANCELLED`, `BUDGET_EXHAUSTED`, `VALIDATION_REJECTED`, `INSUFFICIENT_EVIDENCE`, `ERROR_FALLBACK` | trace events |
 | Cognitive core, trace sink cannot write (ENOSPC, EDQUOT, EROFS, rotation failure) | the cycle | the advisory is withheld (`advisory_allowed()` is false) until `reset_degraded()` | sink `dropped`, `drop_reasons` |
 
@@ -199,7 +199,7 @@ moved to Azazel-Nexus#5 (#408). Edge implements only the rungs above.
 | --- | --- | --- |
 | SituationFrame `mio.situation_frame.v2` (reads v1) | Edge-local (#361, #383) | `py/azazel_edge/mio/contracts.py` |
 | Hypothesis, evidence gap, capability request and result, recommendation, reasoning states | Edge-local | `py/azazel_edge/mio/contracts.py`, `broker.py` |
-| No-model handoff `mio.no_model_handoff.v1`, trace audit `mio.trace_audit.v2` | Edge-local | `py/azazel_edge/mio/handoff.py`, `trace_audit.py` |
+| No-model handoff `mio.no_model_handoff.v2`, trace audit `mio.trace_audit.v2` | Edge-local | `py/azazel_edge/mio/handoff.py`, `trace_audit.py` |
 | Agent advisory and snapshot fields | Edge-local | `py/azazel_edge_ai/agent.py` |
 | v2 decision explanation and trust capsule | Edge-local, with Fabric projections written beside it | `py/azazel_edge/explanations/` |
 | Deception and engagement contracts | Fabric (`azazel_fabric.deception_contracts`, `engagement_contracts`) | consumed by the modules in section 4.2 |
