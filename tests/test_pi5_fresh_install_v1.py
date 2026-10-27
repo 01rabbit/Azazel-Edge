@@ -502,7 +502,7 @@ def test_install_all_checks_enable_rust_core_before_changing_anything():
     src = (INTERNAL / "install_all.sh").read_text(encoding="utf-8")
     m = re.search(r'^case "\$\{ENABLE_RUST_CORE\}" in\n.*?^esac\n', src, re.S | re.M)
     assert m
-    assert m.start() < src.index("install_internal_network.sh\"\n")
+    assert m.start() < src.index('"${REPO_ROOT}/installer/internal/install_internal_network.sh"')
     assert m.start() < src.index('if [[ "${ENABLE_APP_STACK}" == "1" && "${ENABLE_SECURITY_STACK:-1}"')
     for value, rc in (("1", 0), ("0", 0), ("yes", 1), ("", 1)):
         res = subprocess.run(["bash", "-c", f"ENABLE_RUST_CORE={value!r}\n" + m.group(0) + "echo ok\n"],

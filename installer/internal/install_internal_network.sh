@@ -43,6 +43,36 @@ SYSCTL_FILE="/etc/sysctl.d/99-azazel-internal.conf"
 NFT_RULES_FILE="/etc/nftables.d/azazel-internal.nft"
 FIRST_MINUTE_CFG="/etc/azazel-edge/first_minute.yaml"
 
+# Host firewall (Edge#477): table inet azazel_host, WAN default deny for the
+# host and no new WAN->LAN connection. Off unless --enable-host-firewall is
+# given (an owner decision, see docs/PHYSICAL_SETUP_GUIDE.md); once enabled
+# and confirmed, a later run keeps it. There is no environment variable for it.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOST_FW_HELPER_SRC="${SCRIPT_DIR}/azazel-host-firewall"
+HOST_FW_RULES_SRC="${SCRIPT_DIR}/nft/azazel-host.nft"
+HOST_FW_REMOTE_SRC="${SCRIPT_DIR}/nft/azazel-host-remote-access.nft"
+HOST_FW_HELPER="/usr/local/sbin/azazel-host-firewall"
+HOST_FW_DIR="/etc/azazel-edge/host-firewall"
+HOST_FW_UNIT="/etc/systemd/system/azazel-host-firewall.service"
+HOST_FW_NFT_DROPIN="/etc/systemd/system/nftables.service.d/azazel-host-firewall.conf"
+HOST_FW_ACTION="keep"  # keep | enable | disable (command line only)
+
+usage() {
+  echo "Usage: $0 [--enable-host-firewall | --disable-host-firewall]" >&2
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --enable-host-firewall) HOST_FW_ACTION="enable" ;;
+      --disable-host-firewall) HOST_FW_ACTION="disable" ;;
+      -h | --help) usage; exit 0 ;;
+      *) echo "ERROR: unknown option: $1" >&2; usage; exit 1 ;;
+    esac
+    shift
+  done
+}
+
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
     echo "Run as root: sudo $0"
@@ -570,6 +600,15 @@ install_runner() {
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The host firewall first (Edge#477): reloaded when enabled (it is loaded
+# before the network by azazel-host-firewall.service; this puts it back if
+# something flushed it). A failure loads the emergency ruleset (fail-closed)
+# and fails this unit after the rest is applied.
+fw_rc=0
+if [[ -x /usr/local/sbin/azazel-host-firewall ]]; then
+  /usr/local/sbin/azazel-host-firewall refresh || fw_rc=$?
+fi
+
 nmcli con up lan-br0 || true
 nmcli con up lan-eth0-slave || true
 # The internal AP not coming up fails this unit (after the rest is applied),
@@ -597,8 +636,13 @@ fi
 # address only, which may not be there yet; the ssh.service drop-in
 # (azazel-edge-listen.conf) keeps retrying every 5 s until it is.
 systemctl restart ssh || echo "NOTICE: ssh did not start yet (br0 address missing?); ssh.service retries every 5 s." >&2
+if [[ "$fw_rc" -ne 0 ]]; then
+  echo "ERROR: the host firewall rules did not load (exit $fw_rc); the emergency ruleset is in place. Check: azazel-host-firewall status; journalctl -u azazel-internal-apply." >&2
+fi
 if [[ "$ap_rc" -ne 0 ]]; then
   echo "ERROR: the internal AP (lan-wlan0-ap) did not come up (nmcli exit $ap_rc). Check: rfkill list; nmcli radio; the Wi-Fi country." >&2
+fi
+if [[ "$fw_rc" -ne 0 || "$ap_rc" -ne 0 ]]; then
   exit 1
 fi
 EOR
@@ -624,6 +668,132 @@ EOS
   systemctl enable azazel-internal-apply.service
 }
 
+install_host_firewall_files() {
+  local f
+  for f in "$HOST_FW_HELPER_SRC" "$HOST_FW_RULES_SRC" "$HOST_FW_REMOTE_SRC"; do
+    if [[ ! -f "$f" ]]; then
+      echo "ERROR: $f is missing (run the installer from the repository)." >&2
+      exit 1
+    fi
+  done
+  install -m 0755 "$HOST_FW_HELPER_SRC" "$HOST_FW_HELPER"
+  install -d -m 0750 "$HOST_FW_DIR"
+  install -m 0640 "$HOST_FW_RULES_SRC" "$HOST_FW_DIR/azazel-host.nft"
+  install -m 0640 "$HOST_FW_REMOTE_SRC" "$HOST_FW_DIR/remote-access.nft"
+
+  # Loaded before the network comes up, so the WAN is not open between the
+  # uplink getting an address and azazel-internal-apply.
+  cat > "$HOST_FW_UNIT" <<'EOS'
+[Unit]
+Description=Azazel-Edge host firewall (WAN default deny)
+DefaultDependencies=no
+After=local-fs.target systemd-modules-load.service nftables.service
+Before=network-pre.target shutdown.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/azazel-host-firewall boot
+
+[Install]
+WantedBy=multi-user.target
+EOS
+
+  # nftables.service runs `flush ruleset` on start, reload and stop, which
+  # removes table inet azazel_host too; it is loaded again right after.
+  # No "-" prefix on purpose: when the rules do not load, the emergency
+  # ruleset is loaded and nftables.service shows as failed instead of
+  # passing silently (ExecStop, the flush, is not run for a failed start).
+  install -d -m 0755 "$(dirname "$HOST_FW_NFT_DROPIN")"
+  cat > "$HOST_FW_NFT_DROPIN" <<'EOD'
+# Installed by Azazel-Edge install_internal_network.sh (Edge#477): put the
+# host firewall back after nftables.service flushes the ruleset. Off: nothing.
+[Service]
+ExecStartPost=/usr/local/sbin/azazel-host-firewall refresh
+ExecReload=/usr/local/sbin/azazel-host-firewall refresh
+ExecStopPost=/usr/local/sbin/azazel-host-firewall refresh
+EOD
+  chmod 0644 "$HOST_FW_UNIT" "$HOST_FW_NFT_DROPIN"
+  systemctl daemon-reload
+  systemctl enable azazel-host-firewall.service
+}
+
+# First enable: a trial that is taken off automatically unless confirmed
+# (azazel-host-firewall trial). Asked here only on a terminal and only when
+# no SSH session came in through the uplink; otherwise the operator confirms
+# from a new connection.
+start_host_firewall_trial() {
+  local answer="" wan_sessions=0
+  "$HOST_FW_HELPER" trial
+  if [[ "${ALLOW_EXTERNAL_SSH,,}" != "true" ]]; then
+    wan_sessions="$("$HOST_FW_HELPER" uplink-ssh-sessions)"
+  fi
+  if [[ "$wan_sessions" -gt 0 ]]; then
+    echo "NOTICE: $wan_sessions SSH session(s) came in through the uplink. They stay open, but new SSH connections from the uplink are now refused. To keep the host firewall, confirm from the LAN (br0) or the console: sudo $HOST_FW_HELPER confirm"
+    return 0
+  fi
+  if [[ -t 0 ]]; then
+    read -r -t 100 -p "Host firewall on trial. Type 'yes' within 100 s to keep it (anything else, or nothing, takes it off): " answer || answer=""
+    if [[ "$answer" == "yes" ]]; then
+      "$HOST_FW_HELPER" confirm
+      return 0
+    fi
+    "$HOST_FW_HELPER" disable
+    echo "Host firewall not kept."
+    return 0
+  fi
+  echo "NOTICE: no terminal to confirm on. Confirm within 120 s from a new connection (sudo $HOST_FW_HELPER confirm), or the host firewall is taken off automatically."
+}
+
+# The host firewall tells containers from the WAN by interface name (with a
+# source check); an uplink named docker0 or br-* would be taken for a
+# container bridge. Checked whenever it is enabled or kept enabled.
+check_uplink_name_for_host_firewall() {
+  case "$WAN_IF_DETECTED" in
+    docker0 | br-*)
+      echo "ERROR: the uplink is $WAN_IF_DETECTED; the host firewall treats docker0 and br-* as container bridges. Rename the uplink (or use another one), or turn the host firewall off with --disable-host-firewall." >&2
+      exit 1
+      ;;
+  esac
+}
+
+configure_host_firewall() {
+  local state=""
+  install_host_firewall_files
+  # The firewall half of ALLOW_EXTERNAL_SSH (sshd above listens on every
+  # address only with it): WAN 22/tcp and mDNS. Without it, off again.
+  if [[ "${ALLOW_EXTERNAL_SSH,,}" == "true" ]]; then
+    "$HOST_FW_HELPER" remote-access on
+  else
+    "$HOST_FW_HELPER" remote-access off
+  fi
+  state="$(head -n 1 -- "$HOST_FW_DIR/state" 2>/dev/null || true)"
+  case "$HOST_FW_ACTION" in
+    enable)
+      check_uplink_name_for_host_firewall
+      case "$state" in
+        enabled) "$HOST_FW_HELPER" refresh ;;
+        pending) echo "NOTICE: a host firewall trial is already running; confirm it from a new connection (sudo $HOST_FW_HELPER confirm) or let it roll back, then re-run if needed." ;;
+        rollback-failed) echo "NOTICE: an unconfirmed host firewall could not be taken off; see: sudo $HOST_FW_HELPER status; remove it with: sudo $HOST_FW_HELPER disable" ;;
+        *) start_host_firewall_trial ;;
+      esac
+      ;;
+    disable)
+      "$HOST_FW_HELPER" disable
+      ;;
+    *)
+      case "$state" in
+        enabled) check_uplink_name_for_host_firewall; "$HOST_FW_HELPER" refresh ;;
+        pending) echo "NOTICE: a host firewall trial is running; confirm it from a new connection: sudo $HOST_FW_HELPER confirm" ;;
+        rollback-failed) echo "NOTICE: an unconfirmed host firewall could not be taken off; remove it with: sudo $HOST_FW_HELPER disable" ;;
+        *) echo "NOTICE: the host firewall (WAN default deny) is off. To turn it on: $0 --enable-host-firewall" ;;
+      esac
+      ;;
+  esac
+}
+
 verify_state() {
   echo "===== verify ====="
   nmcli -t -f DEVICE,STATE,CONNECTION dev
@@ -634,9 +804,11 @@ verify_state() {
   nft list table ip azazel_internal
   ss -lunp | grep ':67 ' || true
   ss -lntp | grep ':22 ' || true
+  "$HOST_FW_HELPER" status || true
 }
 
 main() {
+  parse_args "$@"
   require_root
   validate_ap_credentials
   # Checked before anything is changed.
@@ -655,6 +827,7 @@ main() {
   configure_control_flags
   install_runner
   install_service
+  configure_host_firewall
   verify_state
 
   echo "Internal AP + DHCP baseline applied."
