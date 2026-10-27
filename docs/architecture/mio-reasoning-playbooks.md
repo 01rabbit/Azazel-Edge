@@ -3,8 +3,8 @@
 Canonical architecture, authority matrix and degradation ladder: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
 
 Implementation: `py/azazel_edge/mio/playbook.py` (corpus, `PromptCompiler`,
-`select_playbook`, `validate_playbook`, `playbook_digest`, `template_digest`,
-`reasoning_provenance`). Tests: `tests/test_mio_grounding_playbook_acceptance.py`,
+`select_playbook`, `validate_playbook`, `verify_generic_fallback`, `playbook_digest`, `template_digest`,
+`reasoning_provenance`). Tests: `tests/test_mio_grounding_playbook_acceptance.py`, `tests/test_mio_grounding_provenance_386.py`,
 `tests/test_mio_adversarial_schema.py`, `tests/test_mio_situation_frame_contract.py`.
 Design: #376. Acceptance: #386. Related:
 [mio-grounding-and-evidence-gaps.md](mio-grounding-and-evidence-gaps.md),
@@ -60,6 +60,36 @@ enforced at gap-scoring time against the live broker registry
 (`capability_not_registered_in_broker`), so an allowlisted but unregistered capability
 can never be called even though the content gate does not need the registry.
 
+A caller-supplied `selection` must wrap the very playbook passed to the loop: the loop
+compiles `selection.playbook`, so a selection that names a different object is treated
+as invalid (`selection_reason: playbook_failed_validation:selection_playbook_mismatch`)
+and the generic playbook runs instead.
+
+The generic playbook is verified too (`verify_generic_fallback`): it must pass
+`validate_playbook` (and, when a registry is given, broker registration) and may not allow
+a capability whose cost class is `high` (`generic_capability_cost_high:<name>`), so the
+fallback stays cheap. If the generic playbook itself fails, there is no further fallback:
+the selection mode is `generic_fallback_unverified`
+(`selection_reason: generic_playbook_failed_verification:<code>`), the cycle ends in
+`VALIDATION_REJECTED` before any model call, nothing is compiled, and the no-model
+handoff carries no playbook block.
+
+What the generic checks cover, exactly: a playbook counts as "generic" only by
+`playbook_id == "generic-evidence-first-v1"`. The extra checks (high-cost ban,
+`generic_fallback_unverified`) apply to any playbook with that id, and to the module's
+`GENERIC_PLAYBOOK` whenever the loop falls back to it. A playbook with another id gets
+only `validate_playbook`, so it may allow a high-cost capability such as
+`request_trace`. The high-cost ban uses the static `CAPABILITY_COST_CLASS` table; a
+capability missing from that table counts as medium and is not banned. The ban is a
+static content check, not a budget: call counts stay with the broker's total and
+per-capability budgets and the loop's `ReasoningBudget`.
+
+Under the generic playbook the usual limits still hold: a gap naming a capability outside
+its allowlist rejects the gap set before the broker; the broker's total and
+per-capability budgets bound calls even when the loop budget is higher; a directive key
+or an unknown action in the recommendation rejects the cycle, and `executable` is always
+false.
+
 Every generic fallback is visible three ways: the `reasoning_provenance` event
 (`generic_fallback: true`), the outcome errors (`generic_fallback:<reason>`), and a
 `WARNING` log line. `replay.run_selected(loop, frame, cycle_id=..., requested_id=...)`
@@ -85,7 +115,9 @@ capability, a version bump — changes the digest. `template_digest()` covers
 `TRUSTED_RULES`, the limits block, every task's output schema and the
 `TRUSTED_CONTROL`/`UNTRUSTED_DATA` envelope markers, plus the template version. It does
 **not** cover compiler code (`PromptCompiler`, reduction/truncation logic): a change there
-must bump `PROMPT_TEMPLATE_VERSION`.
+must bump `PROMPT_TEMPLATE_VERSION`. Version 1.1.0 added the explicit `h<n>` / `g<n>` id rule
+and schema examples (#386); see the model-id grammar in
+[mio-grounding-and-evidence-gaps.md](mio-grounding-and-evidence-gaps.md).
 
 ## Authoring a playbook
 

@@ -23,7 +23,7 @@ def _frame() -> MioSituationFrame:
         mission='Validate bounded local-model reasoning',
         current_defensive_state='OBSERVE',
         threat_level='AMBIGUOUS',
-        evidence_refs=['ev:1', 'ev:2'],
+        evidence_refs=['ev:auth:1', 'ev:auth:2'],
     )
 
 
@@ -58,14 +58,14 @@ def test_hypothesis_rejects_same_ref_as_supporting_and_contradicting():
         {
             'hypothesis_id': 'h1',
             'statement': 'ambiguous activity',
-            'supporting_evidence_refs': ['ev:1'],
-            'contradicting_evidence_refs': ['ev:1'],
+            'supporting_evidence_refs': ['ev:auth:1'],
+            'contradicting_evidence_refs': ['ev:auth:1'],
         },
         ordinal=1,
     )
     result = GroundingValidator(_frame()).validate_hypotheses((hypothesis,))
     assert not result.ok
-    assert 'conflicting_hypothesis_evidence_ref:h1:ev:1' in result.errors
+    assert 'conflicting_hypothesis_evidence_ref:h1:ev:auth:1' in result.errors
 
 
 def _recommendation(**overrides) -> MioRecommendation:
@@ -73,7 +73,7 @@ def _recommendation(**overrides) -> MioRecommendation:
         'summary': 'Evidence does not justify escalation.',
         'recommended_action': 'OBSERVE',
         'rationale': 'Current evidence remains ambiguous and bounded observation is safest.',
-        'evidence_refs': ['ev:1'],
+        'evidence_refs': ['ev:auth:1'],
         'limitations': ['Further evidence may change the assessment.'],
     }
     payload.update(overrides)
@@ -108,7 +108,7 @@ def test_empty_model_recommendation_ends_validation_rejected_not_complete():
                     {
                         'hypothesis_id': 'h1',
                         'statement': 'bounded hypothesis',
-                        'supporting_evidence_refs': ['ev:1'],
+                        'supporting_evidence_refs': ['ev:auth:1'],
                         'contradicting_evidence_refs': [],
                     }
                 ]

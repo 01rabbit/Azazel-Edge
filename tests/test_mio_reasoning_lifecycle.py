@@ -57,8 +57,8 @@ class FakeBroker:
         return MioCapabilityResult(request.request_id, request.capability, True, {"flow": "bursty"}, ("ev:flow:1",))
 
 
-H_ATTACK = {"hypothesis_id": "h-attack", "statement": "Credential attack", "supporting_evidence_refs": ["ev:ssh:1"], "falsification_conditions": ["known admin automation confirmed"]}
-H_BENIGN = {"hypothesis_id": "h-benign", "statement": "Misconfigured admin automation", "supporting_evidence_refs": ["ev:ssh:2"], "falsification_conditions": ["source shifts protocol after friction"]}
+H_ATTACK = {"hypothesis_id": "h1", "statement": "Credential attack", "supporting_evidence_refs": ["ev:ssh:1"], "falsification_conditions": ["known admin automation confirmed"]}
+H_BENIGN = {"hypothesis_id": "h2", "statement": "Misconfigured admin automation", "supporting_evidence_refs": ["ev:ssh:2"], "falsification_conditions": ["source shifts protocol after friction"]}
 
 
 def scripted_model(update, *, on_call=None):
@@ -68,7 +68,7 @@ def scripted_model(update, *, on_call=None):
         if task == "generate_hypotheses":
             return {"hypotheses": [dict(H_ATTACK), dict(H_BENIGN)]}
         if task == "identify_evidence_gaps":
-            return {"evidence_gaps": [{"gap_id": "g1", "question": "Flow pattern?", "discriminates_hypothesis_ids": ["h-attack", "h-benign"], "capability": "query_flow_summary", "priority": 90}]}
+            return {"evidence_gaps": [{"gap_id": "g1", "question": "Flow pattern?", "discriminates_hypothesis_ids": ["h1", "h2"], "capability": "query_flow_summary", "priority": 90}]}
         if task == "update_hypotheses":
             return {"hypotheses": update}
         if task == "recommend":
@@ -87,7 +87,7 @@ def h(status, **kw):
 
 def test_terminal_hypothesis_cannot_be_resurrected():
     for terminal in ("falsified", "superseded"):
-        before = h(terminal, contradicting_evidence_refs=["ev:a"])
+        before = h(terminal, contradicting_evidence_refs=["ev:auth:11"])
         for target in ("active", "strengthened", "weakened", "unresolved", "proposed"):
             result = apply_hypothesis_update([before], [h(target)])
             assert result.ok is False
@@ -105,25 +105,25 @@ def test_transition_table_matches_issue_policy():
 
 def test_falsification_requires_contradicting_evidence_and_condition():
     assert apply_hypothesis_update([h("active")], [h("falsified")]).errors == ("falsified_without_contradicting_evidence:h1",)
-    no_cond = apply_hypothesis_update([h("active", falsification_conditions=[])], [h("falsified", falsification_conditions=[], contradicting_evidence_refs=["ev:a"])])
+    no_cond = apply_hypothesis_update([h("active", falsification_conditions=[])], [h("falsified", falsification_conditions=[], contradicting_evidence_refs=["ev:auth:11"])])
     assert no_cond.errors == ("falsified_without_falsification_condition:h1",)
-    ok = apply_hypothesis_update([h("active")], [h("falsified", contradicting_evidence_refs=["ev:a"])])
+    ok = apply_hypothesis_update([h("active")], [h("falsified", contradicting_evidence_refs=["ev:auth:11"])])
     assert ok.ok is True
     (entry,) = ok.audit
-    assert (entry.from_status, entry.to_status, entry.evidence_refs, entry.falsification_conditions) == ("active", "falsified", ("ev:a",), ("c",))
+    assert (entry.from_status, entry.to_status, entry.evidence_refs, entry.falsification_conditions) == ("active", "falsified", ("ev:auth:11",), ("c",))
 
 
 def test_omitted_hypothesis_is_carried_forward_not_dropped():
     other = MioHypothesis.from_mapping({"hypothesis_id": "h2", "statement": "y", "status": "active"}, ordinal=2)
-    result = apply_hypothesis_update([h("active"), other], [h("strengthened", supporting_evidence_refs=["ev:a"])])
+    result = apply_hypothesis_update([h("active"), other], [h("strengthened", supporting_evidence_refs=["ev:auth:11"])])
     assert result.ok is True
     assert [x.hypothesis_id for x in result.hypotheses] == ["h1", "h2"]
     assert any(e.hypothesis_id == "h2" and e.reason == "carried_forward_omitted_by_update" for e in result.audit)
 
 
 def test_new_hypothesis_in_update_must_start_proposed():
-    result = apply_hypothesis_update([h("active")], [h("active"), h("strengthened", hypothesis_id="h-new")])
-    assert result.errors == ("new_hypothesis_must_start_proposed:h-new:strengthened",)
+    result = apply_hypothesis_update([h("active")], [h("active"), h("strengthened", hypothesis_id="h3")])
+    assert result.errors == ("new_hypothesis_must_start_proposed:h3:strengthened",)
 
 
 def test_loop_preserves_falsified_hypothesis_in_audit():
@@ -136,7 +136,7 @@ def test_loop_preserves_falsified_hypothesis_in_audit():
     assert outcome.handoff is None
     falsified = [e for e in outcome.hypothesis_audit if e.to_status == "falsified"]
     assert len(falsified) == 1
-    assert falsified[0].hypothesis_id == "h-benign"
+    assert falsified[0].hypothesis_id == "h2"
     assert falsified[0].evidence_refs == ("ev:ssh:2", "ev:flow:1")
     assert falsified[0].falsification_conditions == ("source shifts protocol after friction",)
     assert [e.reason for e in outcome.hypothesis_audit[:2]] == ["proposed_by_model", "proposed_by_model"]
@@ -146,10 +146,10 @@ def test_loop_rejects_falsification_without_evidence_and_hands_off():
     update = [dict(H_ATTACK, status="strengthened"), dict(H_BENIGN, status="falsified")]
     outcome = BoundedReasoningLoop(model=scripted_model(update), broker=FakeBroker()).run(frame=frame(), playbook=PLAYBOOK, cycle_id="c1")
     assert outcome.state is ReasoningState.VALIDATION_REJECTED
-    assert "falsified_without_contradicting_evidence:h-benign" in outcome.errors
+    assert "falsified_without_contradicting_evidence:h2" in outcome.errors
     assert [x.status.value for x in outcome.hypotheses] == ["proposed", "proposed"]
     assert outcome.handoff is not None
-    assert [x["hypothesis_id"] for x in outcome.handoff.to_dict()["model_proposed_hypotheses"]] == ["hypothesis-1", "hypothesis-2"]
+    assert [x["hypothesis_id"] for x in outcome.handoff.to_dict()["model_proposed_hypotheses"]] == ["h1", "h2"]
 
 
 def test_operator_cancel_marks_inflight_hypotheses_superseded_in_audit():
@@ -164,7 +164,7 @@ def test_operator_cancel_marks_inflight_hypotheses_superseded_in_audit():
     assert outcome.state is ReasoningState.OPERATOR_CANCELLED
     assert outcome.handoff is None
     superseded = [e for e in outcome.hypothesis_audit if e.to_status == "superseded"]
-    assert [e.hypothesis_id for e in superseded] == ["h-attack", "h-benign"]
+    assert [e.hypothesis_id for e in superseded] == ["h1", "h2"]
     assert {e.reason for e in superseded} == {"cycle_cancelled_by_operator"}
 
 
@@ -225,7 +225,7 @@ def test_stale_complete_result_arriving_after_supersession_is_never_current():
     discarded = [r for r in coord.audit("trace-1") if r["event"] == "stale_result_discarded"]
     assert discarded[0]["outcome_state"] == "complete"
     assert discarded[0]["advisory_id"] == f"{t_old.cycle_id}:advisory"
-    assert {x["hypothesis_id"] for x in discarded[0]["hypotheses"]} == {"h-attack", "h-benign"}
+    assert {x["hypothesis_id"] for x in discarded[0]["hypotheses"]} == {"h1", "h2"}
     assert {x["to_status"] for x in discarded[0]["hypotheses"]} == {"superseded"}
 
 
@@ -397,7 +397,7 @@ def test_first_round_hypotheses_must_enter_proposed_or_active(status):
 
     outcome = BoundedReasoningLoop(model=model, broker=FakeBroker()).run(frame=frame(), playbook=PLAYBOOK, cycle_id="c1")
     assert outcome.state is ReasoningState.VALIDATION_REJECTED
-    assert outcome.errors == (f"initial_hypothesis_must_start_proposed:h-attack:{status}",)
+    assert outcome.errors == (f"initial_hypothesis_must_start_proposed:h1:{status}",)
     assert outcome.hypothesis_audit == ()
     assert outcome.handoff.to_dict()["model_proposed_hypotheses"] == []
 
@@ -406,25 +406,25 @@ def test_strengthened_and_weakened_need_evidence():
     assert apply_hypothesis_update([h("active")], [h("strengthened")]).errors == ("strengthened_without_supporting_evidence:h1",)
     assert apply_hypothesis_update([h("active")], [h("weakened")]).errors == ("weakened_without_refuting_evidence_or_gap:h1",)
     assert apply_hypothesis_update([h("active")], [h("weakened", missing_evidence=["no flow data"])]).ok is True
-    assert apply_hypothesis_update([h("active")], [h("weakened", contradicting_evidence_refs=["ev:a"])]).ok is True
+    assert apply_hypothesis_update([h("active")], [h("weakened", contradicting_evidence_refs=["ev:auth:11"])]).ok is True
 
 
 def test_lifecycle_refs_must_be_in_current_context():
-    result = apply_hypothesis_update([h("active")], [h("strengthened", supporting_evidence_refs=["ev:elsewhere"])], allowed_refs={"ev:a"})
-    assert result.errors == ("lifecycle_ref_outside_context:h1:ev:elsewhere",)
+    result = apply_hypothesis_update([h("active")], [h("strengthened", supporting_evidence_refs=["ev:auth:998"])], allowed_refs={"ev:auth:11"})
+    assert result.errors == ("lifecycle_ref_outside_context:h1:ev:auth:998",)
 
 
 def test_loop_rejects_strengthened_without_supporting_evidence():
     update = [dict(H_ATTACK, status="strengthened", supporting_evidence_refs=[]), dict(H_BENIGN)]
     outcome = BoundedReasoningLoop(model=scripted_model(update), broker=FakeBroker()).run(frame=frame(), playbook=PLAYBOOK, cycle_id="c1")
     assert outcome.state is ReasoningState.VALIDATION_REJECTED
-    assert "strengthened_without_supporting_evidence:h-attack" in outcome.errors
+    assert "strengthened_without_supporting_evidence:h1" in outcome.errors
 
 
 @pytest.mark.parametrize("terminal", ["falsified", "superseded"])
 def test_terminal_hypothesis_content_cannot_be_edited(terminal):
-    before = h(terminal, contradicting_evidence_refs=["ev:a"])
-    edited = h(terminal, contradicting_evidence_refs=["ev:a"], statement="rewritten")
+    before = h(terminal, contradicting_evidence_refs=["ev:auth:11"])
+    edited = h(terminal, contradicting_evidence_refs=["ev:auth:11"], statement="rewritten")
     assert apply_hypothesis_update([before], [edited]).errors == (f"terminal_hypothesis_modified:h1:{terminal}",)
     same = apply_hypothesis_update([before], [before])
     assert same.ok is True and same.audit == ()
@@ -445,7 +445,7 @@ def test_handoff_labels_model_hypotheses_as_unverified():
     assert "frame_derived_only" not in payload["limitations"] and "no_model_contribution" not in payload["limitations"]
     assert "includes_unverified_model_hypotheses" in payload["limitations"]
     strengthened = payload["model_proposed_hypotheses"][0]
-    assert strengthened == {"hypothesis_id": "hypothesis-1", "model_status": "strengthened", "verification": "model_proposed_unverified", "supporting_evidence_refs": ["ev:ssh:1", "ev:flow:1"], "contradicting_evidence_refs": [], "falsification_condition_count": 1}
+    assert strengthened == {"hypothesis_id": "h1", "model_status": "strengthened", "verification": "model_proposed_unverified", "supporting_evidence_refs": ["ev:ssh:1", "ev:flow:1"], "contradicting_evidence_refs": [], "falsification_condition_count": 1}
     assert "Credential attack" not in outcome.handoff.to_canonical_json().decode()
 
 

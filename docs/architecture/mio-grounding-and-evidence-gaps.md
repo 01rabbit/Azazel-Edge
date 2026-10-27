@@ -6,7 +6,7 @@ Implementation: `py/azazel_edge/mio/evidence_gap_scoring.py`,
 `py/azazel_edge/mio/claim_audit.py`, `py/azazel_edge/mio/grounding.py`, wired in
 `py/azazel_edge/mio/reasoning.py`. Tests:
 `tests/test_mio_grounding_playbook_acceptance.py`,
-`tests/test_mio_cognitive_shadow_core.py`, `tests/test_mio_adversarial_schema.py`.
+`tests/test_mio_grounding_provenance_386.py`, `tests/test_mio_cognitive_shadow_core.py`, `tests/test_mio_adversarial_schema.py`.
 Design: #366. Acceptance: #386. Related: [mio-reasoning-playbooks.md](mio-reasoning-playbooks.md),
 [mio-capability-broker.md](mio-capability-broker.md), [mio-situation-frame.md](mio-situation-frame.md).
 
@@ -82,7 +82,32 @@ Only facts tied to the current, validated hypotheses count:
 | `cost_high` | -15 | cost class high (e.g. `request_trace`) |
 
 Each `GapScore` carries `reasons` as `(rule, delta)` pairs whose sum is the score, so an
-operator can read exactly why a gap ranked where it did. This is what makes a cheap,
+operator can read exactly why a gap ranked where it did.
+
+Each component is also traceable to the named missing evidence it rests on. The gap
+itself is the named missing evidence (`gap:<gap_id>`); every rule and every
+ineligibility code carries a sorted `basis` of identifiers, never model prose (the gap
+`question` is not copied into the trace). Every id in `gap_id`, `capability`, `targets`
+and `basis` has passed the model-id grammar below; anything else is shown as
+`invalid-model-id`. The basis does not change the score, the
+policy version or `scoring_policy_digest()`.
+
+| Rule / code | `basis` |
+|---|---|
+| `base` | `gap:<gap_id>` |
+| `discriminates_multiple_hypotheses` | `hypothesis:<id>` for each live target |
+| `targets_falsifiable_hypothesis` | `hypothesis:<id>` for each target with a falsification condition |
+| `model_priority_hint` | `gap:<gap_id>`, `model_priority:<0..100>` |
+| `already_collected_this_cycle` | `capability:<name>` |
+| `cost_<class>` | `capability:<name>`, `cost_class:<class>` |
+| `capability_not_allowed_by_playbook`, `capability_not_registered_in_broker` | `capability:<name>` |
+| `cannot_change_hypothesis_state` | `gap:<gap_id>` and the unknown or terminal `hypothesis:<id>` it named |
+| `cycle_broker_budget_exhausted` | `budget:remaining_broker_calls=0` |
+| `insufficient_expected_value` | `gap:<gap_id>`, `structural_score:<n>`, `min_eligible_score:<n>` |
+
+In the `evidence_gap_scores` trace event each score has `targets` (the live hypotheses
+the gap could move), `reasons[].basis`, `ineligible_reasons` (codes) and
+`ineligible_basis` (`{code, basis}` in the same order). This is what makes a cheap,
 discriminating, falsifying query win over an expensive confirming one even when the
 model gave the confirming one a higher priority.
 
@@ -135,6 +160,23 @@ Verdicts: `supported`, `inference_unreferenced`, `weakened_by_named_gap`,
 `unsupported_missing_refs`, `unsupported_unknown_ref` (any cited ref is `not_in_frame`),
 `unsupported_unparseable_status`.
 
+Each verdict has exactly one fixed `reason` code (`VERDICT_REASON`, closed set
+`REASON_CODES`); `ClaimAuditRecord` refuses any other reason, so the audit never carries
+free text from the model or from evidence:
+
+| Verdict | `reason` |
+|---|---|
+| `supported` | `all_cited_refs_in_context` |
+| `inference_unreferenced` | `marked_inference` |
+| `weakened_by_named_gap` | `weakened_with_named_missing_evidence` |
+| `unsupported_missing_refs` | `material_claim_without_required_refs` |
+| `unsupported_unknown_ref` | `cited_ref_not_in_context` |
+| `unsupported_unparseable_status` | `model_status_not_in_vocabulary_coerced_to_proposed` |
+
+Which refs are missing is visible in `refs` (origin `not_in_frame`). For
+`weakened_by_named_gap` the record keeps only `named_missing_evidence_count`; the
+`missing_evidence` entries themselves are not copied into the audit.
+
 **Policy: `reject`.** If any material claim is unsupported, the cycle ends in
 `VALIDATION_REJECTED` with `unsupported_claim:<claim_id>:<verdict>` errors. Claims are
 never silently dropped while keeping the surrounding certainty, and never silently
@@ -148,6 +190,61 @@ accepted. Edge's deterministic outputs are unaffected either way.
   `gap_not_eligible:<gap_id>:<code>` in the outcome errors (a cycle can still `COMPLETE`).
 - Only refs from successful broker results extend the cycle's allowed refs.
 - A generic-playbook cycle reports `generic_fallback:<reason>` in the outcome errors.
+- If the generic playbook itself fails `verify_generic_fallback`, the cycle ends in
+  `VALIDATION_REJECTED` before any model call (`generic_fallback_unverified`).
+- Claim-audit `reason` is a fixed code per verdict; earlier builds put cited refs and
+  `missing_evidence` text into it.
+
+## Model-written identifiers (closed grammar)
+
+Hypothesis ids, gap ids, the hypothesis ids a gap names, gap capabilities and every
+evidence ref the model cites (supporting, contradicting, recommendation) are written by
+the model, so they are attacker-reachable. Each field has an exact-match **allowlist**
+(`contracts.MODEL_ID_GRAMMAR`, checked by `model_id_ok(value, kind)`), built from the
+shapes the repo actually produces. It is not a denylist: a shape not listed is refused.
+
+| Field (`kind`) | Accepted shapes | Producer |
+|---|---|---|
+| `evidence_ref` | `sha256:<64 lowercase hex>` | Evidence Plane event ids (`make_event_id`), carried into frames |
+| | `ev:<kind>:<1-6 digits>`, kind one of `EVIDENCE_REF_KINDS` | structured refs |
+| | `suricata_sid:<1-8 digits>` | Suricata adapter |
+| | `kn:attack:T<4 digits>[.<3 digits>]` | ATT&CK knowledge refs |
+| | `sha256:fixture-<word>[-<word>]-<1-3 digits>` | offline replay fixtures |
+| `hypothesis_id` | `h<1-3 digits>` | the prompt schema (`h1`) and `TRUSTED_RULES` |
+| `gap_id` | `g<1-3 digits>` | the prompt schema (`g1`) and `TRUSTED_RULES` |
+| `capability` | broker name grammar `[a-z][a-z0-9_]{2,63}` | broker registry; registration is checked at scoring time |
+
+As a second layer, a value must also pass the SituationFrame `_opaque_id` address
+checks and contain no secret word (`password`, `token`, `api_key`, `secret`, `bearer`
+…). Integers and other non-string values are refused, never stringified. The prompt
+template (version 1.1.0) tells the model the `h<n>` / `g<n>` format explicitly.
+
+When the model output is parsed (`MioHypothesis.from_mapping`,
+`MioEvidenceGap.from_mapping`, `MioRecommendation.from_mapping`) a refused value is
+replaced by the fixed `invalid-model-id` and the raw value is dropped. A missing id
+still gets its deterministic default (`h<n>`, `g<n>`). `GroundingValidator` then rejects
+the output with a fixed code and the cycle ends in `VALIDATION_REJECTED`:
+
+| Field | Code |
+|---|---|
+| hypothesis id | `invalid_model_id:hypothesis_id` |
+| supporting / contradicting / recommendation ref | `invalid_model_id:evidence_ref` |
+| gap id | `invalid_model_id:gap_id` |
+| a hypothesis id named by a gap | `invalid_model_id:discriminates_hypothesis_id` |
+| gap capability | `invalid_model_id:capability` |
+
+The general form is `invalid_model_id:<field>`; the code never carries the value. As
+defence in depth, the gap-score explanation and the claim audit run every id through
+`safe_model_id` again, so a caller that builds contract objects directly still cannot
+put raw text into them. A ref that fails the grammar is recorded as `invalid-model-id`
+with origin `not_in_frame`, even if the frame happens to carry it. The grammar is
+deliberately closed and fails closed: a harmless id in a shape not listed is rejected
+rather than guessed at; add the shape to `MODEL_ID_GRAMMAR` when a new producer appears.
+The frame's own refs come from deterministic evaluators and are not re-checked here.
+
+Consolidation note: `handoff.py` (`CLOSED_ID_SHAPES`, #508) and `broker.py`
+(`AUDIT_ID_VOCABULARY`, #507) currently keep their own id grammars. The three are to be
+consolidated into `contracts.MODEL_ID_GRAMMAR` in a follow-up after the three PRs merge.
 
 ## Structural grounding (`GroundingValidator`)
 

@@ -27,7 +27,7 @@ def _frame():
         mission='test',
         current_defensive_state='OBSERVE',
         threat_level='HIGH',
-        evidence_refs=['ev:1'],
+        evidence_refs=['ev:auth:1'],
     )
 
 
@@ -36,7 +36,7 @@ def test_string_is_not_silently_treated_as_reference_array():
         {
             'hypothesis_id': 'h1',
             'statement': 'test',
-            'supporting_evidence_refs': 'ev:1',
+            'supporting_evidence_refs': 'ev:auth:1',
             'assumptions': 'not-a-list',
         },
         ordinal=1,
@@ -63,8 +63,8 @@ def test_duplicate_hypothesis_ids_fail_closed():
     def model(task, prompt):
         if task == 'generate_hypotheses':
             return {'hypotheses': [
-                {'hypothesis_id': 'same', 'statement': 'a', 'supporting_evidence_refs': ['ev:1']},
-                {'hypothesis_id': 'same', 'statement': 'b', 'supporting_evidence_refs': ['ev:1']},
+                {'hypothesis_id': 'h1', 'statement': 'a', 'supporting_evidence_refs': ['ev:auth:1']},
+                {'hypothesis_id': 'h1', 'statement': 'b', 'supporting_evidence_refs': ['ev:auth:1']},
             ]}
         raise AssertionError(task)
 
@@ -72,7 +72,7 @@ def test_duplicate_hypothesis_ids_fail_closed():
         frame=_frame(), playbook=DEFAULT_PLAYBOOKS['auth-ambiguity-v1'], cycle_id='dup'
     )
     assert outcome.state is ReasoningState.VALIDATION_REJECTED
-    assert 'duplicate_hypothesis_id:same' in outcome.errors
+    assert 'duplicate_hypothesis_id:h1' in outcome.errors
 
 
 def test_hypothesis_cannot_use_evidence_as_both_supporting_and_contradicting():
@@ -81,22 +81,22 @@ def test_hypothesis_cannot_use_evidence_as_both_supporting_and_contradicting():
             {
                 'hypothesis_id': 'h1',
                 'statement': 'test',
-                'supporting_evidence_refs': ['ev:1'],
-                'contradicting_evidence_refs': ['ev:1'],
+                'supporting_evidence_refs': ['ev:auth:1'],
+                'contradicting_evidence_refs': ['ev:auth:1'],
             },
             ordinal=1,
         ),
     ))
     assert result.ok is False
-    assert 'conflicting_hypothesis_evidence_ref:h1:ev:1' in result.errors
+    assert 'conflicting_hypothesis_evidence_ref:h1:ev:auth:1' in result.errors
 
 
 @pytest.mark.parametrize(
     ('payload', 'expected_error'),
     [
-        ({'summary': '', 'rationale': 'reason', 'recommended_action': 'OBSERVE', 'evidence_refs': ['ev:1']}, 'empty_recommendation_summary'),
-        ({'summary': 'summary', 'rationale': '', 'recommended_action': 'OBSERVE', 'evidence_refs': ['ev:1']}, 'empty_recommendation_rationale'),
-        ({'summary': 'summary', 'rationale': 'reason', 'recommended_action': '', 'evidence_refs': ['ev:1']}, 'empty_recommended_action'),
+        ({'summary': '', 'rationale': 'reason', 'recommended_action': 'OBSERVE', 'evidence_refs': ['ev:auth:1']}, 'empty_recommendation_summary'),
+        ({'summary': 'summary', 'rationale': '', 'recommended_action': 'OBSERVE', 'evidence_refs': ['ev:auth:1']}, 'empty_recommendation_rationale'),
+        ({'summary': 'summary', 'rationale': 'reason', 'recommended_action': '', 'evidence_refs': ['ev:auth:1']}, 'empty_recommended_action'),
         ({'summary': 'summary', 'rationale': 'reason', 'recommended_action': 'OBSERVE', 'evidence_refs': []}, 'empty_recommendation_evidence_refs'),
     ],
 )
@@ -110,7 +110,7 @@ def test_recommendation_requires_grounded_nonempty_advisory_fields(payload, expe
 def test_empty_recommendation_is_rejected_before_completion():
     def model(task, prompt):
         if task == 'generate_hypotheses':
-            return {'hypotheses': [{'hypothesis_id': 'h1', 'statement': 'test', 'supporting_evidence_refs': ['ev:1']}]}
+            return {'hypotheses': [{'hypothesis_id': 'h1', 'statement': 'test', 'supporting_evidence_refs': ['ev:auth:1']}]}
         if task == 'identify_evidence_gaps':
             return {'evidence_gaps': []}
         if task == 'recommend':
@@ -135,12 +135,12 @@ def test_gap_referencing_unknown_hypothesis_fails_before_broker():
 
     def model(task, prompt):
         if task == 'generate_hypotheses':
-            return {'hypotheses': [{'hypothesis_id': 'h1', 'statement': 'a', 'supporting_evidence_refs': ['ev:1']}]}
+            return {'hypotheses': [{'hypothesis_id': 'h1', 'statement': 'a', 'supporting_evidence_refs': ['ev:auth:1']}]}
         if task == 'identify_evidence_gaps':
             return {'evidence_gaps': [{
                 'gap_id': 'g1',
                 'question': 'test?',
-                'discriminates_hypothesis_ids': ['invented'],
+                'discriminates_hypothesis_ids': ['h9'],
                 'capability': 'query_recent_alerts',
                 'priority': 90,
             }]}
@@ -155,7 +155,7 @@ def test_gap_referencing_unknown_hypothesis_fails_before_broker():
         frame=_frame(), playbook=DEFAULT_PLAYBOOKS['auth-ambiguity-v1'], cycle_id='bad-gap'
     )
     assert outcome.state is ReasoningState.VALIDATION_REJECTED
-    assert 'unknown_gap_hypothesis:g1:invented' in outcome.errors
+    assert 'unknown_gap_hypothesis:g1:h9' in outcome.errors
     assert calls == []
 
 
@@ -165,7 +165,7 @@ def test_hypothesis_evidence_role_invariant_is_in_trusted_control(task):
         frame=_frame(),
         playbook=DEFAULT_PLAYBOOKS['auth-ambiguity-v1'],
         hypotheses=(MioHypothesis.from_mapping({'hypothesis_id': 'h1', 'statement': 'a'}, ordinal=1),),
-        broker_results=({'evidence_refs': ['ev:1']},),
+        broker_results=({'evidence_refs': ['ev:auth:1']},),
         task=task,
     )
     trusted_json = prompt.split('TRUSTED_CONTROL\n', 1)[1].split('\nEND_TRUSTED_CONTROL', 1)[0]
@@ -186,7 +186,7 @@ def test_update_hypotheses_prompt_has_explicit_schema():
         frame=_frame(),
         playbook=DEFAULT_PLAYBOOKS['auth-ambiguity-v1'],
         hypotheses=(MioHypothesis.from_mapping({'hypothesis_id': 'h1', 'statement': 'a'}, ordinal=1),),
-        broker_results=({'evidence_refs': ['ev:1']},),
+        broker_results=({'evidence_refs': ['ev:auth:1']},),
         task='update_hypotheses',
     )
     assert 'revision_summary' in prompt

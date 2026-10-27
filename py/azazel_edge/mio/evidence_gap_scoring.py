@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
-from .contracts import HypothesisStatus, MioEvidenceGap, MioHypothesis
+from .contracts import HypothesisStatus, MioEvidenceGap, MioHypothesis, safe_model_id
 
 SCORING_POLICY_ID = "mio-evidence-gap-score"
 # Bump SCORING_POLICY_VERSION on ANY change to the scoring logic below, not only
@@ -101,16 +101,30 @@ class GapScore:
     reasons: tuple[tuple[str, int], ...]  # (rule, contribution) in evaluation order
     ineligible_reasons: tuple[str, ...] = ()
     rank: int = 0  # 1-based among eligible gaps; 0 when ineligible
+    # Explanation (does not change the score): for each rule in ``reasons`` and
+    # each code in ``ineligible_reasons``, the sorted identifiers it rests on.
+    # Identifiers only (``gap:``, ``hypothesis:``, ``capability:``,
+    # ``cost_class:``, ``model_priority:``, ``budget:``), never model prose, so the
+    # trace stays free of free text. ``targets`` are the live hypotheses the
+    # named missing evidence (the gap) could move.
+    basis: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    ineligible_basis: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    targets: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
+        basis = dict(self.basis)
+        ineligible_basis = dict(self.ineligible_basis)
         return {
-            "gap_id": self.gap_id,
-            "capability": self.capability,
+            # Defence in depth: only grammar-valid ids leave this module.
+            "gap_id": safe_model_id(self.gap_id, "gap_id"),
+            "capability": safe_model_id(self.capability, "capability"),
             "score": self.score,
             "eligible": self.eligible,
             "rank": self.rank,
-            "reasons": [{"rule": rule, "delta": delta} for rule, delta in self.reasons],
+            "targets": list(self.targets),
+            "reasons": [{"rule": rule, "delta": delta, "basis": list(basis.get(rule, ()))} for rule, delta in self.reasons],
             "ineligible_reasons": list(self.ineligible_reasons),
+            "ineligible_basis": [{"code": code, "basis": list(ineligible_basis.get(code, ()))} for code in self.ineligible_reasons],
         }
 
 
@@ -126,38 +140,61 @@ def _score_one(
     collected: set[str],
     budget_left: int,
 ) -> GapScore:
+    # Explanation ids pass the model-id grammar or become INVALID_MODEL_ID.
+    gap_ref = f"gap:{safe_model_id(gap.gap_id, 'gap_id')}"
+    cap_ref = f"capability:{safe_model_id(gap.capability, 'capability')}"
     reasons: list[tuple[str, int]] = [("base", WEIGHTS["base"])]
+    basis: list[tuple[str, tuple[str, ...]]] = [("base", (gap_ref,))]
     ineligible: list[str] = []
+    ineligible_basis: list[tuple[str, tuple[str, ...]]] = []
     if gap.capability not in allowed:
         ineligible.append(INELIGIBLE_NOT_IN_PLAYBOOK)
+        ineligible_basis.append((INELIGIBLE_NOT_IN_PLAYBOOK, (cap_ref,)))
     if gap.capability not in registered:
         ineligible.append(INELIGIBLE_NOT_REGISTERED)
+        ineligible_basis.append((INELIGIBLE_NOT_REGISTERED, (cap_ref,)))
+    requested = list(dict.fromkeys(gap.discriminates_hypothesis_ids))
     targets = [
-        by_id[h] for h in dict.fromkeys(gap.discriminates_hypothesis_ids)
+        by_id[h] for h in requested
         if h in by_id and by_id[h].status not in _TERMINAL_STATUSES
     ]
+    target_ids = tuple(sorted({safe_model_id(h.hypothesis_id, "hypothesis_id") for h in targets}))
     if not targets:
         ineligible.append(INELIGIBLE_NO_HYPOTHESIS)
+        # The hypotheses the gap named that are unknown or already terminal.
+        ineligible_basis.append((INELIGIBLE_NO_HYPOTHESIS, (gap_ref,) + tuple(sorted({f"hypothesis:{safe_model_id(h, 'hypothesis_id')}" for h in requested}))))
     if budget_left <= 0:
         ineligible.append(INELIGIBLE_BUDGET)
+        ineligible_basis.append((INELIGIBLE_BUDGET, ("budget:remaining_broker_calls=0",)))
 
     if len(targets) >= 2:
         reasons.append(("discriminates_multiple_hypotheses", WEIGHTS["discriminates_multiple_hypotheses"]))
-    if any(any(c.strip() for c in h.falsification_conditions) for h in targets):
+        basis.append(("discriminates_multiple_hypotheses", tuple(f"hypothesis:{h}" for h in target_ids)))
+    falsifiable = sorted({safe_model_id(h.hypothesis_id, "hypothesis_id") for h in targets if any(c.strip() for c in h.falsification_conditions)})
+    if falsifiable:
         reasons.append(("targets_falsifiable_hypothesis", WEIGHTS["targets_falsifiable_hypothesis"]))
-    hint = (max(0, min(int(gap.priority), 100)) * WEIGHTS["model_priority_hint_max"]) // 100
+        basis.append(("targets_falsifiable_hypothesis", tuple(f"hypothesis:{h}" for h in falsifiable)))
+    priority = max(0, min(int(gap.priority), 100))
+    hint = (priority * WEIGHTS["model_priority_hint_max"]) // 100
     reasons.append(("model_priority_hint", hint))
+    basis.append(("model_priority_hint", (gap_ref, f"model_priority:{priority}")))
     if gap.capability in collected:
         reasons.append(("already_collected_this_cycle", WEIGHTS["already_collected_this_cycle"]))
+        basis.append(("already_collected_this_cycle", (cap_ref,)))
     cost = CAPABILITY_COST_CLASS.get(gap.capability, "medium")
     reasons.append((f"cost_{cost}", WEIGHTS[f"cost_{cost}"]))
+    basis.append((f"cost_{cost}", (cap_ref, f"cost_class:{cost}")))
 
     score = sum(delta for _, delta in reasons)
     # The model's priority hint orders eligible gaps but can never lift a gap
     # over the threshold on its own.
     if not ineligible and score - hint < MIN_ELIGIBLE_SCORE:
         ineligible.append(INELIGIBLE_LOW_VALUE)
-    return GapScore(gap.gap_id, gap.capability, score, not ineligible, tuple(reasons), tuple(ineligible))
+        ineligible_basis.append((INELIGIBLE_LOW_VALUE, (gap_ref, f"structural_score:{score - hint}", f"min_eligible_score:{MIN_ELIGIBLE_SCORE}")))
+    return GapScore(
+        gap.gap_id, gap.capability, score, not ineligible, tuple(reasons), tuple(ineligible),
+        basis=tuple(basis), ineligible_basis=tuple(ineligible_basis), targets=target_ids,
+    )
 
 
 def score_evidence_gaps(
@@ -194,7 +231,7 @@ def score_evidence_gaps(
             rejected = sorted(current, key=lambda s: s.gap_id)
             break
         best = min(eligible, key=lambda s: (-s.score, s.gap_id))
-        chosen.append(GapScore(best.gap_id, best.capability, best.score, True, best.reasons, (), rank=len(chosen) + 1))
+        chosen.append(replace(best, rank=len(chosen) + 1))
         collected.add(best.capability)
         budget_left -= 1
         pending = [g for g in pending if g.gap_id != best.gap_id]
