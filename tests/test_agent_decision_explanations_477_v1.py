@@ -367,10 +367,36 @@ def test_an_applied_action_without_a_running_lease_shows_no_lease(ledger):
     assert live._release_condition(enf) == ""
 
 
-def test_a_failed_apply_is_not_shown_as_applied():
-    enf = _applied(core_event("redirect"))["enforcement"]
-    enf.update(result="partial_failure", executed_count=0, failed_count=1)
-    assert live.applied_state(enf) == "none" and live._release_condition(enf) == ""
+@pytest.mark.parametrize("result", ["partial_failure", "failed", "applied", "", "something_new"])
+def test_a_failed_apply_is_not_shown_as_applied(agent, result):
+    event = _applied(core_event("redirect"), "cancelled")
+    event["enforcement"].update(result=result, executed_count=0, failed_count=1)
+    enf = event["enforcement"]
+    assert live.applied_state(enf) == "apply_failed"
+    assert live._release_condition(enf) == "NOT APPLIED - apply failed"
+    agent_mod._handle_event(event)
+    rec = _rows(agent)[0]
+    assert rec["machine"]["arbiter"]["applied_state"] == "apply_failed"
+    assert rec["release_condition"] == "NOT APPLIED - apply failed"
+    assert rec["reason"].endswith("[NOT APPLIED - apply failed]")
+    assert "NOT APPLIED - apply failed" in rec["operator_wording"]
+
+
+def test_a_partial_failure_that_executed_a_command_is_applied_with_its_lease(agent):
+    event = _applied(core_event("isolate"), "uncertain")
+    event["enforcement"].update(result="partial_failure", executed_count=1, failed_count=1)
+    assert live.applied_state(event["enforcement"]) == "applied"
+    agent_mod._handle_event(event)
+    rec = _rows(agent)[0]
+    assert rec["machine"]["arbiter"]["applied_state"] == "applied"
+    assert rec["release_condition"].startswith("core lease expires at ")
+    assert "NOT APPLIED" not in rec["reason"]
+
+
+def test_only_no_disruptive_action_is_none():
+    enf = core_event("notify")["enforcement"]
+    enf.update(result="no_disruptive_action", executed_count=0, mode="disabled")
+    assert live.applied_state(enf) == "none" and live._not_applied_label(enf) == ""
 
 
 @pytest.mark.parametrize("mode", ["dry_run", "policy_gated", "release_guard_failed"])

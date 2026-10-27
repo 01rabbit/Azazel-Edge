@@ -29,11 +29,14 @@ projection of the core's decision:
   one it decided (a redirect fallback): the decided action, with the core's
   policy reason. The core reports no other alternatives.
 * ``release_condition`` -- the core's lease due time only for an action it
-  applied (result ``applied``/``partial_failure``, ledger ``active``/
-  ``uncertain``); for a planned action (``planned_not_applied``: dry_run,
-  policy_gated, release_guard_failed) ``NOT APPLIED - planned only (<mode>)``,
-  and the same label is added to ``reason`` (and so to the operator
-  wording), so a planned action never reads as applied.
+  applied (result ``applied``/``partial_failure`` with a command executed,
+  ledger ``active``/``uncertain``); for a planned action
+  (``planned_not_applied``: dry_run, policy_gated, release_guard_failed)
+  ``NOT APPLIED - planned only (<mode>)``; for an action the core tried and
+  could not execute (no command executed, any other result)
+  ``NOT APPLIED - apply failed``. The same label is added to ``reason`` (and
+  so to the operator wording), so such an action never reads as applied.
+  Only ``no_disruptive_action`` (observe, notify) has no label.
 * nothing of the core's command plan, rollback plan or release metadata
   (owner tokens, resource keys) is copied.
 
@@ -118,39 +121,63 @@ def core_config_hash(event: Mapping[str, Any]) -> str:
     return hashlib.sha256(stable_json(material).encode('utf-8')).hexdigest()
 
 
-# The core's enforcement results (rust main.rs maybe_enforce): only these
-# changed the device. Every other result planned or blocked the action.
+# The core's enforcement results (rust main.rs maybe_enforce). An action
+# changed the device only with one of these AND at least one command executed.
 APPLIED_RESULTS = ('applied', 'partial_failure')
 # Release ledger states of an applied action whose lease the core runs.
 LEASED_LEDGER_STATES = ('active', 'uncertain')
 NOT_APPLIED_RESULT = 'planned_not_applied'
+# The only result for which nothing was to be applied (observe, notify:
+# no command plan, mode ``disabled``).
+NOTHING_TO_APPLY_RESULT = 'no_disruptive_action'
+APPLY_FAILED_LABEL = 'NOT APPLIED - apply failed'
 
 
 def applied_state(enforcement: Mapping[str, Any]) -> str:
-    """``applied``, ``not_applied`` (planned only: dry_run, policy_gated,
-    release_guard_failed) or ``none`` (nothing disruptive to apply)."""
+    """What the core did with the selected action:
+
+    * ``applied`` -- result ``applied``/``partial_failure`` with at least one
+      command executed;
+    * ``not_applied`` -- planned only (``planned_not_applied``: dry_run,
+      policy_gated, release_guard_failed);
+    * ``apply_failed`` -- the core tried and executed no command
+      (``partial_failure`` with nothing executed, ``failed``, or any other
+      result, an unknown or missing one included);
+    * ``none`` -- nothing disruptive to apply (``no_disruptive_action``:
+      observe, notify).
+    """
 
     result = str(enforcement.get('result') or '')
     executed = enforcement.get('executed_count')
-    if result in APPLIED_RESULTS and isinstance(executed, int) and not isinstance(executed, bool) and executed > 0:
+    executed_any = isinstance(executed, int) and not isinstance(executed, bool) and executed > 0
+    if result in APPLIED_RESULTS and executed_any:
         return 'applied'
     if result == NOT_APPLIED_RESULT:
         return 'not_applied'
-    return 'none'
+    if result == NOTHING_TO_APPLY_RESULT:
+        return 'none'
+    return 'apply_failed'
 
 
 def _not_applied_label(enforcement: Mapping[str, Any]) -> str:
-    return f"NOT APPLIED - planned only ({str(enforcement.get('mode') or 'unknown')})"
+    """The label of an action that did not change the device, or ''."""
+
+    state = applied_state(enforcement)
+    if state == 'not_applied':
+        return f"NOT APPLIED - planned only ({str(enforcement.get('mode') or 'unknown')})"
+    if state == 'apply_failed':
+        return APPLY_FAILED_LABEL
+    return ''
 
 
 def _release_condition(enforcement: Mapping[str, Any]) -> str:
     """The core's lease time only for an action it applied and whose release
     it scheduled; a planned (not applied) action has no lease."""
 
-    state = applied_state(enforcement)
-    if state == 'not_applied':
-        return _not_applied_label(enforcement)
-    if state != 'applied':
+    label = _not_applied_label(enforcement)
+    if label:
+        return label
+    if applied_state(enforcement) != 'applied':
         return ''
     metadata = _mapping(enforcement.get('metadata'))
     if str(metadata.get('release_ledger_state') or '') not in LEASED_LEDGER_STATES:
@@ -170,8 +197,9 @@ def _reason(defense: Mapping[str, Any], enforcement: Mapping[str, Any], policy_r
     the selected action never reads as applied (Booth Focus, operator wording)."""
 
     reason = str(defense.get('reason') or policy_reason or 'unspecified')
-    if applied_state(enforcement) == 'not_applied':
-        reason = f'{reason} [{_not_applied_label(enforcement)}]'
+    label = _not_applied_label(enforcement)
+    if label:
+        reason = f'{reason} [{label}]'
     return reason
 
 

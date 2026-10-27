@@ -1129,8 +1129,11 @@ out-of-scope findings tracked separately. Still open:
      `dry_run`, `policy_gated`, `release_guard_failed`) gets `NOT APPLIED -
      planned only (<mode>)` as its `release_condition` and at the end of its
      `reason`, which the operator wording and Booth Focus show, so it never
-     reads as applied; `machine.arbiter.applied_state` is `applied`,
-     `not_applied` or `none` (nothing disruptive: observe, notify).
+     reads as applied. An action the core tried but could not execute (no
+     command executed: `partial_failure` with nothing executed, `failed`, or
+     any other result) gets `NOT APPLIED - apply failed` the same way.
+     `machine.arbiter.applied_state` is `applied`, `not_applied`,
+     `apply_failed` or `none` (only `no_disruptive_action`: observe, notify).
    - **Audit references.** `trace_id` is the core decision chain's trace id
      for that event, so `audit_review --trace-id <id> --audit-path
      /var/log/azazel-edge/ai/core-decision-audit.jsonl` finds a P0 decision
