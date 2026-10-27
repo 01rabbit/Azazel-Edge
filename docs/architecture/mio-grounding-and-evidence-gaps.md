@@ -199,20 +199,25 @@ accepted. Edge's deterministic outputs are unaffected either way.
 
 Hypothesis ids, gap ids, the hypothesis ids a gap names, gap capabilities and every
 evidence ref the model cites (supporting, contradicting, recommendation) are written by
-the model, so they are attacker-reachable. `contracts.model_id_ok` accepts only the
-shapes the repo produces (`h1`, `g1`, `ev:auth:0001`, `sha256:<hex>`,
-`kn:attack:T1110`, `existing-or-short-id`): at most 128 characters of
-`[A-Za-z0-9][A-Za-z0-9._:-]*`, and none of these shapes:
+the model, so they are attacker-reachable. Each field has an exact-match **allowlist**
+(`contracts.MODEL_ID_GRAMMAR`, checked by `model_id_ok(value, kind)`), built from the
+shapes the repo actually produces. It is not a denylist: a shape not listed is refused.
 
-- IPv4 dotted or dashed, hex (`0x0a000005`) or decimal (8–10 digit segment); MAC with
-  or without separators (a 12-hex-digit segment); IPv6 (the SituationFrame
-  `_opaque_id` checks);
-- a hostname (a dot next to a label that contains a letter), a URL scheme
-  (`http:`, `https:`, `javascript:` …);
-- a secret shape (`password:`, `token:`, `api_key:`, `bearer:` …); `=`, `/` and spaces
-  are outside the grammar already.
+| Field (`kind`) | Accepted shapes | Producer |
+|---|---|---|
+| `evidence_ref` | `sha256:<64 lowercase hex>` | Evidence Plane event ids (`make_event_id`), carried into frames |
+| | `ev:<kind>:<1-6 digits>`, kind one of `EVIDENCE_REF_KINDS` | structured refs |
+| | `suricata_sid:<1-8 digits>` | Suricata adapter |
+| | `kn:attack:T<4 digits>[.<3 digits>]` | ATT&CK knowledge refs |
+| | `sha256:fixture-<word>[-<word>]-<1-3 digits>` | offline replay fixtures |
+| `hypothesis_id` | `h<1-3 digits>` | the prompt schema (`h1`) and `TRUSTED_RULES` |
+| `gap_id` | `g<1-3 digits>` | the prompt schema (`g1`) and `TRUSTED_RULES` |
+| `capability` | broker name grammar `[a-z][a-z0-9_]{2,63}` | broker registry; registration is checked at scoring time |
 
-Capabilities use the broker grammar `[a-z][a-z0-9_]{2,63}`.
+As a second layer, a value must also pass the SituationFrame `_opaque_id` address
+checks and contain no secret word (`password`, `token`, `api_key`, `secret`, `bearer`
+…). Integers and other non-string values are refused, never stringified. The prompt
+template (version 1.1.0) tells the model the `h<n>` / `g<n>` format explicitly.
 
 When the model output is parsed (`MioHypothesis.from_mapping`,
 `MioEvidenceGap.from_mapping`, `MioRecommendation.from_mapping`) a refused value is
@@ -233,9 +238,13 @@ defence in depth, the gap-score explanation and the claim audit run every id thr
 `safe_model_id` again, so a caller that builds contract objects directly still cannot
 put raw text into them. A ref that fails the grammar is recorded as `invalid-model-id`
 with origin `not_in_frame`, even if the frame happens to carry it. The grammar is
-deliberately closed and fails closed: an unusual but harmless id (for example an
-eight-digit segment) is rejected rather than guessed at. The frame's own refs come from
-deterministic evaluators and are not re-checked here.
+deliberately closed and fails closed: a harmless id in a shape not listed is rejected
+rather than guessed at; add the shape to `MODEL_ID_GRAMMAR` when a new producer appears.
+The frame's own refs come from deterministic evaluators and are not re-checked here.
+
+Consolidation note: `handoff.py` (`CLOSED_ID_SHAPES`, #508) and `broker.py`
+(`AUDIT_ID_VOCABULARY`, #507) currently keep their own id grammars. The three are to be
+consolidated into `contracts.MODEL_ID_GRAMMAR` in a follow-up after the three PRs merge.
 
 ## Structural grounding (`GroundingValidator`)
 

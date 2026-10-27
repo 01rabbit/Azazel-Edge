@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from .contracts import HypothesisStatus, MioHypothesis, MioRecommendation, MioSituationFrame, safe_model_id
+from .contracts import INVALID_MODEL_ID, HypothesisStatus, MioHypothesis, MioRecommendation, MioSituationFrame, _opaque_id, safe_model_id
 
 CLAIM_AUDIT_SCHEMA = "mio_claim_audit/v1"
 UNSUPPORTED_CLAIM_POLICY = "reject"
@@ -141,7 +141,7 @@ def _with_origin(refs: Sequence[str], frame: MioSituationFrame, imported: set[st
     out: dict[str, str] = {}
     for ref in dict.fromkeys(refs):
         origin = _origin(ref, frame, imported)
-        shown = safe_model_id(ref)
+        shown = safe_model_id(ref, "evidence_ref")
         if shown != ref:
             origin = ORIGIN_MISSING
         out.setdefault(shown, origin)
@@ -149,7 +149,10 @@ def _with_origin(refs: Sequence[str], frame: MioSituationFrame, imported: set[st
 
 
 def _claim_id(kind: str, raw_id: str) -> str:
-    return f"{kind}:{safe_model_id(raw_id)}"
+    if kind == "hypothesis":
+        return f"hypothesis:{safe_model_id(raw_id, 'hypothesis_id')}"
+    # The advisory id is loop-made from the caller's cycle id, not model output.
+    return f"{kind}:{_opaque_id(raw_id) or INVALID_MODEL_ID}"
 
 
 def _record(claim_id: str, claim_class: str, refs: Sequence[str], required: Sequence[str] | None, frame: MioSituationFrame, imported: set[str]) -> ClaimAuditRecord:

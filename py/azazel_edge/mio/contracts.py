@@ -187,66 +187,77 @@ def _opaque_id(value: Any) -> str:
     return ""
 
 
-# --- Model-written identifiers (#386) ---------------------------------------
-# Hypothesis ids, gap ids, the hypothesis ids a gap names, capabilities and
-# evidence refs come from the model, so they are attacker-reachable. They must
-# have the shapes the repo actually produces (h1, g1, ev:auth:0001,
-# sha256:<hex>, kn:attack:T1110, existing-or-short-id) and are refused when they
-# look like an address, a hostname, a URL scheme or a secret. A refused value is
-# replaced at parse time by INVALID_MODEL_ID, never kept; the grounding
-# validator then rejects the output with the fixed code
-# ``invalid_model_id:<field>``. Nothing of the raw value survives.
+# --- MODEL ID GRAMMAR (#386) ------------------------------------------------
+# Single home of the closed grammar for identifiers the MODEL writes. They are
+# attacker-reachable, so each field has an exact-match ALLOWLIST built from the
+# shapes the repo actually produces; anything else is refused. Producers:
+#   evidence refs  - Evidence Plane event ids ``sha256:<64 hex>``
+#                    (evidence_plane.schema.make_event_id, carried into frames
+#                    by frame_builder); structured refs ``ev:<kind>:<n>``;
+#                    Suricata ``suricata_sid:<n>``; ATT&CK knowledge refs
+#                    ``kn:attack:T<4>[.<3>]``; offline fixture refs
+#                    ``sha256:fixture-<word>[-<word>]-<n>``.
+#   hypothesis id  - ``h<n>`` (the prompt schema asks for it)
+#   gap id         - ``g<n>``
+#   capability     - the broker name grammar (registration is checked at
+#                    scoring time against the live registry)
+# The SituationFrame ``_opaque_id`` address checks and a secret-shape check run
+# as a second layer. A refused value is replaced at parse time by
+# INVALID_MODEL_ID and never kept; the grounding validator rejects the output
+# with the fixed code ``invalid_model_id:<field>``. Integers and other non-str
+# values are refused, never stringified.
+# NOTE: handoff.py (CLOSED_ID_SHAPES, #508) and broker.py (AUDIT_ID_VOCABULARY,
+# #507) keep their own id grammars for now; the three are to be consolidated
+# here in a follow-up once those PRs and this one have merged.
 INVALID_MODEL_ID = "invalid-model-id"
 INVALID_MODEL_ID_CODE = "invalid_model_id"
-MODEL_ID_MAX_CHARS = 128
-_MODEL_CAPABILITY_RE = re.compile(r"[a-z][a-z0-9_]{2,63}\Z")
-_ID_SEGMENT_SPLIT_RE = re.compile(r"[:._-]")
-_HEX_IPV4_SEGMENT_RE = re.compile(r"(?i)0x[0-9a-f]{1,8}\Z")
-_MAC_SEGMENT_RE = re.compile(r"(?i)[0-9a-f]{12}\Z")
-_DECIMAL_IPV4_SEGMENT_RE = re.compile(r"\d{8,10}\Z")
-_SECRET_SHAPE_RE = re.compile(r"(?i)(?:^|[:._-])(?:password|passwd|pwd|secret|api[_-]?key|apikey|token|bearer)s?:")
-_URL_SCHEME_RE = re.compile(r"(?i)^(?:https?|ftp|file|ssh|data|javascript|mailto):")
+EVIDENCE_REF_KINDS = ("alert", "auth", "deception", "dns", "flow", "host", "http", "noc", "soc", "ssh", "sys", "tls")
+MODEL_ID_GRAMMAR: Mapping[str, re.Pattern[str]] = {
+    "evidence_ref": re.compile(
+        r"(?:sha256:[0-9a-f]{64}"
+        r"|ev:(?:" + "|".join(EVIDENCE_REF_KINDS) + r"):\d{1,6}"
+        r"|suricata_sid:\d{1,8}"
+        r"|kn:attack:T\d{4}(?:\.\d{3})?"
+        r"|sha256:fixture-[a-z]{1,16}(?:-[a-z]{1,16})?-\d{1,3})\Z"
+    ),
+    "hypothesis_id": re.compile(r"h\d{1,3}\Z"),
+    "gap_id": re.compile(r"g\d{1,3}\Z"),
+    "capability": re.compile(r"[a-z][a-z0-9_]{2,63}\Z"),
+}
+_SECRET_SHAPE_RE = re.compile(r"(?i)(password|passwd|pwd|secret|api[_-]?key|apikey|token|bearer)")
 
 
-def model_id_ok(value: Any, *, capability: bool = False) -> bool:
-    """True when a model-written identifier has an accepted, non-identifying shape."""
-    if not isinstance(value, str) or not value:
+def model_id_ok(value: Any, kind: str) -> bool:
+    """True when ``value`` exactly matches the allowlist for ``kind``."""
+    pattern = MODEL_ID_GRAMMAR.get(kind)
+    if pattern is None or type(value) is not str or not pattern.match(value):
         return False
-    if capability:
-        return bool(_MODEL_CAPABILITY_RE.match(value))
-    if len(value) > MODEL_ID_MAX_CHARS or value == INVALID_MODEL_ID or not _opaque_id(value):
-        return False
-    if _SECRET_SHAPE_RE.search(value) or _URL_SCHEME_RE.search(value):
-        return False
-    # Hostname / FQDN: a dot next to a label that contains a letter.
-    if "." in value and any(re.search(r"[A-Za-z]", label) for label in value.split(".")[1:]):
-        return False
-    for segment in _ID_SEGMENT_SPLIT_RE.split(value):
-        if _HEX_IPV4_SEGMENT_RE.match(segment) or _MAC_SEGMENT_RE.match(segment) or _DECIMAL_IPV4_SEGMENT_RE.match(segment):
-            return False
-    return True
+    if kind == "capability":
+        return not _SECRET_SHAPE_RE.search(value)
+    # Second layer: the frame's address checks and a secret-word check.
+    return bool(_opaque_id(value)) and not _SECRET_SHAPE_RE.search(value)
 
 
-def safe_model_id(value: Any, *, capability: bool = False) -> str:
-    """``value`` if it passes ``model_id_ok``, else the fixed ``INVALID_MODEL_ID``."""
-    return value if model_id_ok(value, capability=capability) else INVALID_MODEL_ID
+def safe_model_id(value: Any, kind: str) -> str:
+    """``value`` if it passes ``model_id_ok`` for ``kind``, else ``INVALID_MODEL_ID``."""
+    return value if model_id_ok(value, kind) else INVALID_MODEL_ID
 
 
-def _model_id(value: Any, default: str) -> str:
+def _model_id(value: Any, default: str, kind: str) -> str:
     # Missing or empty -> the deterministic default; anything else must pass.
     if value is None or value == "":
         return default
-    return safe_model_id(value)
+    return safe_model_id(value, kind)
 
 
-def _model_id_list(values: Any, *, limit: int) -> tuple[str, ...]:
+def _model_id_list(values: Any, *, limit: int, kind: str) -> tuple[str, ...]:
     if not isinstance(values, (list, tuple)):
         return ()
     out: list[str] = []
     for raw in values:
         if raw is None or raw == "":
             continue
-        value = safe_model_id(raw)
+        value = safe_model_id(raw, kind)
         if value not in out:
             out.append(value)
             if len(out) >= limit:
@@ -700,7 +711,7 @@ class MioHypothesis:
             status = HypothesisStatus(raw_status)
         except ValueError:
             status = HypothesisStatus.PROPOSED
-        return cls(hypothesis_id=_model_id(payload.get("hypothesis_id"), f"h{ordinal}"), statement=_bounded_text(payload.get("statement"), 360), status=status, supporting_evidence_refs=_model_id_list(payload.get("supporting_evidence_refs"), limit=16), contradicting_evidence_refs=_model_id_list(payload.get("contradicting_evidence_refs"), limit=16), assumptions=_bounded_unique(payload.get("assumptions"), limit=8), falsification_conditions=_bounded_unique(payload.get("falsification_conditions"), limit=8), expected_observations=_bounded_unique(payload.get("expected_observations"), limit=8), missing_evidence=_bounded_unique(payload.get("missing_evidence"), limit=8))
+        return cls(hypothesis_id=_model_id(payload.get("hypothesis_id"), f"h{ordinal}", "hypothesis_id"), statement=_bounded_text(payload.get("statement"), 360), status=status, supporting_evidence_refs=_model_id_list(payload.get("supporting_evidence_refs"), limit=16, kind="evidence_ref"), contradicting_evidence_refs=_model_id_list(payload.get("contradicting_evidence_refs"), limit=16, kind="evidence_ref"), assumptions=_bounded_unique(payload.get("assumptions"), limit=8), falsification_conditions=_bounded_unique(payload.get("falsification_conditions"), limit=8), expected_observations=_bounded_unique(payload.get("expected_observations"), limit=8), missing_evidence=_bounded_unique(payload.get("missing_evidence"), limit=8))
 
     def to_dict(self) -> dict[str, Any]:
         return {"hypothesis_id": self.hypothesis_id, "statement": self.statement, "status": self.status.value, "supporting_evidence_refs": list(self.supporting_evidence_refs), "contradicting_evidence_refs": list(self.contradicting_evidence_refs), "assumptions": list(self.assumptions), "falsification_conditions": list(self.falsification_conditions), "expected_observations": list(self.expected_observations), "missing_evidence": list(self.missing_evidence)}
@@ -717,8 +728,8 @@ class MioEvidenceGap:
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any], *, ordinal: int) -> "MioEvidenceGap":
         raw_capability = payload.get("capability")
-        capability = "" if raw_capability is None or raw_capability == "" else safe_model_id(raw_capability, capability=True)
-        return cls(gap_id=_model_id(payload.get("gap_id"), f"g{ordinal}"), question=_bounded_text(payload.get("question"), 300), discriminates_hypothesis_ids=_model_id_list(payload.get("discriminates_hypothesis_ids"), limit=8), capability=capability, priority=max(0, min(_safe_int(payload.get("priority", 50), 50), 100)))
+        capability = "" if raw_capability is None or raw_capability == "" else safe_model_id(raw_capability, "capability")
+        return cls(gap_id=_model_id(payload.get("gap_id"), f"g{ordinal}", "gap_id"), question=_bounded_text(payload.get("question"), 300), discriminates_hypothesis_ids=_model_id_list(payload.get("discriminates_hypothesis_ids"), limit=8, kind="hypothesis_id"), capability=capability, priority=max(0, min(_safe_int(payload.get("priority", 50), 50), 100)))
 
 
 @dataclass(frozen=True)
@@ -769,4 +780,4 @@ class MioRecommendation:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any], *, advisory_id: str) -> "MioRecommendation":
-        return cls(advisory_id=_bounded_text(advisory_id, 96), summary=_bounded_text(payload.get("summary"), 360), recommended_action=_bounded_text(payload.get("recommended_action"), 32).upper(), rationale=_bounded_text(payload.get("rationale"), 720), evidence_refs=_model_id_list(payload.get("evidence_refs"), limit=32), limitations=_bounded_unique(payload.get("limitations"), limit=8), executable=False)
+        return cls(advisory_id=_bounded_text(advisory_id, 96), summary=_bounded_text(payload.get("summary"), 360), recommended_action=_bounded_text(payload.get("recommended_action"), 32).upper(), rationale=_bounded_text(payload.get("rationale"), 720), evidence_refs=_model_id_list(payload.get("evidence_refs"), limit=32, kind="evidence_ref"), limitations=_bounded_unique(payload.get("limitations"), limit=8), executable=False)

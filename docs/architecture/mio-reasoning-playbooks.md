@@ -115,7 +115,9 @@ capability, a version bump — changes the digest. `template_digest()` covers
 `TRUSTED_RULES`, the limits block, every task's output schema and the
 `TRUSTED_CONTROL`/`UNTRUSTED_DATA` envelope markers, plus the template version. It does
 **not** cover compiler code (`PromptCompiler`, reduction/truncation logic): a change there
-must bump `PROMPT_TEMPLATE_VERSION`.
+must bump `PROMPT_TEMPLATE_VERSION`. Version 1.1.0 added the explicit `h<n>` / `g<n>` id rule
+and schema examples (#386); see the model-id grammar in
+[mio-grounding-and-evidence-gaps.md](mio-grounding-and-evidence-gaps.md).
 
 ## Authoring a playbook
 

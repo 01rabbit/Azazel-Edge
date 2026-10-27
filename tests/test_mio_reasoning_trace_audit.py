@@ -83,11 +83,11 @@ def model(*, echo=""):
     def run(task, prompt):
         if task == "generate_hypotheses":
             return {"hypotheses": [
-                {"hypothesis_id": "h-attack", "statement": "Credential attack " + echo, "supporting_evidence_refs": ["ev:ssh:1"], "falsification_conditions": ["admin automation " + echo]},
-                {"hypothesis_id": "h-benign", "statement": "Admin automation", "supporting_evidence_refs": ["ev:ssh:2"], "falsification_conditions": ["protocol shift"]},
+                {"hypothesis_id": "h1", "statement": "Credential attack " + echo, "supporting_evidence_refs": ["ev:ssh:1"], "falsification_conditions": ["admin automation " + echo]},
+                {"hypothesis_id": "h2", "statement": "Admin automation", "supporting_evidence_refs": ["ev:ssh:2"], "falsification_conditions": ["protocol shift"]},
             ]}
         if task == "identify_evidence_gaps":
-            return {"evidence_gaps": [{"gap_id": "g1", "question": "Flow? " + echo, "discriminates_hypothesis_ids": ["h-attack", "h-benign"], "capability": "query_flow_summary", "priority": 90}]}
+            return {"evidence_gaps": [{"gap_id": "g1", "question": "Flow? " + echo, "discriminates_hypothesis_ids": ["h1", "h2"], "capability": "query_flow_summary", "priority": 90}]}
         if task == "update_hypotheses":
             first = run("generate_hypotheses", prompt)["hypotheses"]
             return {"hypotheses": [
@@ -152,7 +152,14 @@ def test_model_emitted_fake_ids_are_digested_not_recorded():
         return out
     f = frame()
     _, ticket, outcome = run_cycle(f, m)
-    rec = project_outcome(ticket=ticket, outcome=outcome, key=KEY, frame=f)
+    assert "invalid_model_id:hypothesis_id" in outcome.errors  # parsing refuses it first (#386)
+    assert "edge-dec:999" not in encode_record(project_outcome(ticket=ticket, outcome=outcome, key=KEY, frame=f)).decode()
+    # The projection still digests a non-Edge id on a caller-built outcome.
+    import dataclasses
+    f2 = frame()
+    _, ticket, ok = run_cycle(f2, model())
+    hyp = dataclasses.replace(ok.hypotheses[0], hypothesis_id="edge-dec:999")
+    rec = project_outcome(ticket=ticket, outcome=dataclasses.replace(ok, hypotheses=(hyp,) + ok.hypotheses[1:]), key=KEY, frame=f2)
     blob = encode_record(rec).decode()
     assert "edge-dec:999" not in blob
     assert any(h["hypothesis_id"].startswith("h:") for h in rec["hypotheses"])

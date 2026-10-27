@@ -187,9 +187,9 @@ def test_scoring_policy_digest_changes_with_weights_version_and_logic(monkeypatc
 # --- claim-to-reference audit ----------------------------------------------
 
 def test_claim_audit_records_claim_refs_origin_and_verdict():
-    frame = _frame(knowledge_refs=["kb:1"], knowledge_status="available", provenance={"knowledge_refs": ["knowledge"]})
+    frame = _frame(knowledge_refs=["kn:attack:T1003"], knowledge_status="available", provenance={"knowledge_refs": ["knowledge"]})
     rec = MioRecommendation.from_mapping(
-        {"summary": "s", "recommended_action": "OBSERVE", "rationale": "r", "evidence_refs": ["ev:ssh:1", "ev:flow:1", "kb:1"]},
+        {"summary": "s", "recommended_action": "OBSERVE", "rationale": "r", "evidence_refs": ["ev:ssh:1", "ev:flow:1", "kn:attack:T1003"]},
         advisory_id="a1",
     )
     audit = audit_claims(frame, hypotheses=(_h("h1"),), recommendation=rec, imported_refs=["ev:flow:1"])
@@ -210,7 +210,7 @@ def test_claim_audit_records_claim_refs_origin_and_verdict():
         (_h("h1", status="falsified", sup=["ev:ssh:1"]), "unsupported_missing_refs"),
         (_h("h1", status="weakened"), "unsupported_missing_refs"),
         (_h("h1", status="weakened", sup=["ev:ssh:1"]), "unsupported_missing_refs"),
-        (_h("h1", sup=["ev:elsewhere"]), "unsupported_unknown_ref"),
+        (_h("h1", sup=["ev:auth:998"]), "unsupported_unknown_ref"),
     ],
 )
 def test_unsupported_claims_are_flagged(hyp, verdict):

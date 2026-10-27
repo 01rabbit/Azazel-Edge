@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -14,6 +15,8 @@ from .contracts import (
 )
 
 
+# Model-written keys echoed into error paths must look like schema keys.
+_KEY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}\Z")
 FORBIDDEN_DIRECTIVE_KEYS = {"execute", "must_action", "override", "command", "shell", "activate", "enforce", "executable"}
 ALLOWED_RECOMMENDED_ACTIONS = {"OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
 
@@ -36,7 +39,7 @@ class GroundingValidator:
                 for key, nested in value.items():
                     key_text = str(key)
                     # Keys are model-written: only id-shaped keys are echoed into errors.
-                    shown = key_text if key_text.lower() in FORBIDDEN_DIRECTIVE_KEYS else safe_model_id(key_text)
+                    shown = key_text if key_text.lower() in FORBIDDEN_DIRECTIVE_KEYS or _KEY_RE.match(key_text) else "invalid-key"
                     child_path = f"{path}.{shown}" if path else shown
                     if key_text.lower() in FORBIDDEN_DIRECTIVE_KEYS:
                         errors.append(f"forbidden_directive_key:{child_path}")
@@ -49,7 +52,7 @@ class GroundingValidator:
         refs = payload.get("evidence_refs", ())
         if isinstance(refs, (list, tuple)):
             for ref in refs:
-                shown = safe_model_id(ref)
+                shown = safe_model_id(ref, "evidence_ref")
                 if shown == INVALID_MODEL_ID:
                     errors.append(f"{INVALID_MODEL_ID_CODE}:evidence_ref")
                 elif str(ref) not in self._allowed_refs:

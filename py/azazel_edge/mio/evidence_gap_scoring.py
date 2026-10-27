@@ -116,8 +116,8 @@ class GapScore:
         ineligible_basis = dict(self.ineligible_basis)
         return {
             # Defence in depth: only grammar-valid ids leave this module.
-            "gap_id": safe_model_id(self.gap_id),
-            "capability": safe_model_id(self.capability, capability=True),
+            "gap_id": safe_model_id(self.gap_id, "gap_id"),
+            "capability": safe_model_id(self.capability, "capability"),
             "score": self.score,
             "eligible": self.eligible,
             "rank": self.rank,
@@ -141,8 +141,8 @@ def _score_one(
     budget_left: int,
 ) -> GapScore:
     # Explanation ids pass the model-id grammar or become INVALID_MODEL_ID.
-    gap_ref = f"gap:{safe_model_id(gap.gap_id)}"
-    cap_ref = f"capability:{safe_model_id(gap.capability, capability=True)}"
+    gap_ref = f"gap:{safe_model_id(gap.gap_id, 'gap_id')}"
+    cap_ref = f"capability:{safe_model_id(gap.capability, 'capability')}"
     reasons: list[tuple[str, int]] = [("base", WEIGHTS["base"])]
     basis: list[tuple[str, tuple[str, ...]]] = [("base", (gap_ref,))]
     ineligible: list[str] = []
@@ -158,11 +158,11 @@ def _score_one(
         by_id[h] for h in requested
         if h in by_id and by_id[h].status not in _TERMINAL_STATUSES
     ]
-    target_ids = tuple(sorted({safe_model_id(h.hypothesis_id) for h in targets}))
+    target_ids = tuple(sorted({safe_model_id(h.hypothesis_id, "hypothesis_id") for h in targets}))
     if not targets:
         ineligible.append(INELIGIBLE_NO_HYPOTHESIS)
         # The hypotheses the gap named that are unknown or already terminal.
-        ineligible_basis.append((INELIGIBLE_NO_HYPOTHESIS, (gap_ref,) + tuple(sorted({f"hypothesis:{safe_model_id(h)}" for h in requested}))))
+        ineligible_basis.append((INELIGIBLE_NO_HYPOTHESIS, (gap_ref,) + tuple(sorted({f"hypothesis:{safe_model_id(h, 'hypothesis_id')}" for h in requested}))))
     if budget_left <= 0:
         ineligible.append(INELIGIBLE_BUDGET)
         ineligible_basis.append((INELIGIBLE_BUDGET, ("budget:remaining_broker_calls=0",)))
@@ -170,7 +170,7 @@ def _score_one(
     if len(targets) >= 2:
         reasons.append(("discriminates_multiple_hypotheses", WEIGHTS["discriminates_multiple_hypotheses"]))
         basis.append(("discriminates_multiple_hypotheses", tuple(f"hypothesis:{h}" for h in target_ids)))
-    falsifiable = sorted({safe_model_id(h.hypothesis_id) for h in targets if any(c.strip() for c in h.falsification_conditions)})
+    falsifiable = sorted({safe_model_id(h.hypothesis_id, "hypothesis_id") for h in targets if any(c.strip() for c in h.falsification_conditions)})
     if falsifiable:
         reasons.append(("targets_falsifiable_hypothesis", WEIGHTS["targets_falsifiable_hypothesis"]))
         basis.append(("targets_falsifiable_hypothesis", tuple(f"hypothesis:{h}" for h in falsifiable)))

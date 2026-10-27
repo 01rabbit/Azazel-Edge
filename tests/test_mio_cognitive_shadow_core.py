@@ -88,7 +88,7 @@ def test_broker_rejects_unallowlisted_capability_and_enforces_budget():
 
 def test_grounding_rejects_fabricated_reference_and_nested_directive():
     result = GroundingValidator(frame()).validate_raw(
-        {"evidence_refs": ["ev:fake"], "nested": {"execute": "isolate"}}
+        {"evidence_refs": ["ev:auth:999"], "nested": {"execute": "isolate"}}
     )
     assert result.ok is False
     assert any(x.startswith("unknown_evidence_ref") for x in result.errors)
@@ -102,15 +102,15 @@ def test_reasoning_loop_completes_after_evidence_driven_hypothesis_update():
         calls.append(task)
         if task == "generate_hypotheses":
             return {"hypotheses": [
-                {"hypothesis_id": "h-attack", "statement": "Credential attack", "supporting_evidence_refs": ["ev:ssh:1"], "falsification_conditions": ["known admin automation confirmed"]},
-                {"hypothesis_id": "h-benign", "statement": "Misconfigured admin automation", "supporting_evidence_refs": ["ev:ssh:2"], "falsification_conditions": ["source shifts protocol after friction"]},
+                {"hypothesis_id": "h1", "statement": "Credential attack", "supporting_evidence_refs": ["ev:ssh:1"], "falsification_conditions": ["known admin automation confirmed"]},
+                {"hypothesis_id": "h2", "statement": "Misconfigured admin automation", "supporting_evidence_refs": ["ev:ssh:2"], "falsification_conditions": ["source shifts protocol after friction"]},
             ]}
         if task == "identify_evidence_gaps":
-            return {"evidence_gaps": [{"gap_id": "g1", "question": "What is the source flow pattern?", "discriminates_hypothesis_ids": ["h-attack", "h-benign"], "capability": "query_flow_summary", "priority": 90}]}
+            return {"evidence_gaps": [{"gap_id": "g1", "question": "What is the source flow pattern?", "discriminates_hypothesis_ids": ["h1", "h2"], "capability": "query_flow_summary", "priority": 90}]}
         if task == "update_hypotheses":
             return {"hypotheses": [
-                {"hypothesis_id": "h-attack", "statement": "Credential attack", "status": "strengthened", "supporting_evidence_refs": ["ev:ssh:1", "ev:flow:1"], "falsification_conditions": ["known admin automation confirmed"]},
-                {"hypothesis_id": "h-benign", "statement": "Misconfigured admin automation", "status": "weakened", "supporting_evidence_refs": ["ev:ssh:2"], "contradicting_evidence_refs": ["ev:flow:1"], "falsification_conditions": ["source shifts protocol after friction"]},
+                {"hypothesis_id": "h1", "statement": "Credential attack", "status": "strengthened", "supporting_evidence_refs": ["ev:ssh:1", "ev:flow:1"], "falsification_conditions": ["known admin automation confirmed"]},
+                {"hypothesis_id": "h2", "statement": "Misconfigured admin automation", "status": "weakened", "supporting_evidence_refs": ["ev:ssh:2"], "contradicting_evidence_refs": ["ev:flow:1"], "falsification_conditions": ["source shifts protocol after friction"]},
             ], "revision_summary": "Flow evidence strengthened attack and weakened benign automation."}
         if task == "recommend":
             return {"summary": "Continue bounded observation", "recommended_action": "NOTIFY", "rationale": "Flow evidence supports further investigation without stronger control.", "evidence_refs": ["ev:ssh:1", "ev:flow:1"], "limitations": ["actor intent unknown"]}
@@ -138,7 +138,7 @@ def test_hypothesis_update_cannot_invent_evidence_reference():
         if task == "identify_evidence_gaps":
             return {"evidence_gaps": [{"gap_id": "g1", "question": "flow?", "discriminates_hypothesis_ids": ["h1"], "capability": "query_flow_summary", "priority": 90}]}
         if task == "update_hypotheses":
-            return {"hypotheses": [{"hypothesis_id": "h1", "statement": "attack", "status": "strengthened", "supporting_evidence_refs": ["ev:invented"]}]}
+            return {"hypotheses": [{"hypothesis_id": "h1", "statement": "attack", "status": "strengthened", "supporting_evidence_refs": ["ev:auth:999"]}]}
         raise AssertionError(task)
 
     broker = CapabilityBroker({"query_flow_summary": CapabilitySpec(lambda _: {"evidence_refs": ["ev:flow:1"]})})

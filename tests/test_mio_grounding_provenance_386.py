@@ -116,10 +116,10 @@ def test_every_score_component_names_its_basis_and_sums_to_score():
 @pytest.mark.parametrize(
     "gap,remaining,code,basis",
     [
-        (_gap("g", "isolate_client", ["h1"]), 3, "capability_not_allowed_by_playbook", ["capability:isolate_client"]),
-        (_gap("g", "query_flow_summary", ["h3", "ghost"]), 3, "cannot_change_hypothesis_state", ["gap:g", "hypothesis:ghost", "hypothesis:h3"]),
-        (_gap("g", "query_flow_summary", ["h1"]), 0, "cycle_broker_budget_exhausted", ["budget:remaining_broker_calls=0"]),
-        (_gap("g", "request_trace", ["h2"]), 3, "insufficient_expected_value", ["gap:g", "structural_score:35", "min_eligible_score:40"]),
+        (_gap("g7", "isolate_client", ["h1"]), 3, "capability_not_allowed_by_playbook", ["capability:isolate_client"]),
+        (_gap("g7", "query_flow_summary", ["h3", "h9"]), 3, "cannot_change_hypothesis_state", ["gap:g7", "hypothesis:h3", "hypothesis:h9"]),
+        (_gap("g7", "query_flow_summary", ["h1"]), 0, "cycle_broker_budget_exhausted", ["budget:remaining_broker_calls=0"]),
+        (_gap("g7", "request_trace", ["h2"]), 3, "insufficient_expected_value", ["gap:g7", "structural_score:35", "min_eligible_score:40"]),
     ],
 )
 def test_every_ineligibility_names_its_basis(gap, remaining, code, basis):
@@ -151,27 +151,27 @@ def test_basis_does_not_change_scoring_policy_or_scores():
 def _all_records():
     frame = _frame()
     hyps = (
-        _h("a"),                                                   # inference_unreferenced
-        _h("b", status="strengthened", sup=["ev:ssh:1"]),           # supported
-        _h("c", status="strengthened"),                             # missing refs
-        _h("d", sup=[FREE_TEXT]),                                   # unknown ref
-        _h("e", status="weakened", missing=[FREE_TEXT, "no flow"]),  # named gap
-        _h("f"),                                                    # unparseable status
+        _h("h11"),                                                   # inference_unreferenced
+        _h("h12", status="strengthened", sup=["ev:ssh:1"]),           # supported
+        _h("h13", status="strengthened"),                             # missing refs
+        _h("h14", sup=[FREE_TEXT]),                                   # unknown ref
+        _h("h15", status="weakened", missing=[FREE_TEXT, "no flow"]),  # named gap
+        _h("h16"),                                                    # unparseable status
     )
     rec = MioRecommendation.from_mapping({"summary": FREE_TEXT, "recommended_action": "OBSERVE", "rationale": FREE_TEXT, "evidence_refs": ["ev:ssh:2"]}, advisory_id="r1")
-    return audit_claims(frame, hypotheses=hyps, recommendation=rec, unparseable_status=["f"])
+    return audit_claims(frame, hypotheses=hyps, recommendation=rec, unparseable_status=["h16"])
 
 
 def test_every_claim_audit_reason_is_a_fixed_code():
     audit = _all_records()
     verdicts = {r.claim_id: (r.verdict, r.reason) for r in audit.records}
     assert verdicts == {
-        "hypothesis:a": ("inference_unreferenced", "marked_inference"),
-        "hypothesis:b": ("supported", "all_cited_refs_in_context"),
-        "hypothesis:c": ("unsupported_missing_refs", "material_claim_without_required_refs"),
-        "hypothesis:d": ("unsupported_unknown_ref", "cited_ref_not_in_context"),
-        "hypothesis:e": ("weakened_by_named_gap", "weakened_with_named_missing_evidence"),
-        "hypothesis:f": ("unsupported_unparseable_status", "model_status_not_in_vocabulary_coerced_to_proposed"),
+        "hypothesis:h11": ("inference_unreferenced", "marked_inference"),
+        "hypothesis:h12": ("supported", "all_cited_refs_in_context"),
+        "hypothesis:h13": ("unsupported_missing_refs", "material_claim_without_required_refs"),
+        "hypothesis:h14": ("unsupported_unknown_ref", "cited_ref_not_in_context"),
+        "hypothesis:h15": ("weakened_by_named_gap", "weakened_with_named_missing_evidence"),
+        "hypothesis:h16": ("unsupported_unparseable_status", "model_status_not_in_vocabulary_coerced_to_proposed"),
         "recommendation:r1": ("supported", "all_cited_refs_in_context"),
     }
     assert {r.reason for r in audit.records} <= claim_audit.REASON_CODES
@@ -182,12 +182,12 @@ def test_claim_audit_records_structured_fields_instead_of_model_text():
     body = _all_records().to_dict()
     claims = {c["claim_id"]: c for c in body["claims"]}
     # the unknown ref is listed as a ref with origin, not echoed into the reason
-    assert claims["hypothesis:d"]["refs"] == [{"ref": "invalid-model-id", "origin": "not_in_frame"}]
-    assert "IGNORE" not in claims["hypothesis:d"]["reason"]
+    assert claims["hypothesis:h14"]["refs"] == [{"ref": "invalid-model-id", "origin": "not_in_frame"}]
+    assert "IGNORE" not in claims["hypothesis:h14"]["reason"]
     # the named missing evidence is counted, never copied
-    assert claims["hypothesis:e"]["named_missing_evidence_count"] == 2
-    assert "IGNORE" not in json.dumps(claims["hypothesis:e"]) and "no flow" not in json.dumps(claims["hypothesis:e"])
-    assert all(c["named_missing_evidence_count"] == 0 for k, c in claims.items() if k != "hypothesis:e")
+    assert claims["hypothesis:h15"]["named_missing_evidence_count"] == 2
+    assert "IGNORE" not in json.dumps(claims["hypothesis:h15"]) and "no flow" not in json.dumps(claims["hypothesis:h15"])
+    assert all(c["named_missing_evidence_count"] == 0 for k, c in claims.items() if k != "hypothesis:h15")
 
 
 @pytest.mark.parametrize("reason", ["cites:anything", "free text", "marked_inference"])
@@ -368,26 +368,64 @@ HOSTILE_IDS = [
     "http://evil.example/a", "https:evil", "javascript:alert",
     "ignore previous instructions", "ignore-previous;rm", "x password=hunter2 http://evil.example/a 10.0.0.5 ignore-previous",
     "a" * 129, "invalid-model-id",
+    # re-review corpus: shapes a denylist let through
+    "ev:0300.0250.0.1", "ev:0300-0250-0-1", "ev:192:168:1:5", "ev:1:2:3:4", "ev:192.168.1", "ev:10.0.0",
+    "ev:aabb-ccdd-eeff", "kn:john_smith", "ev:user:alice",
+    "ev:sk-abcdefghijklmnopqrstuvwxyz123456", "ev:ghp_ABCDEFGHIJKLMNOPQRST", "ev:AKIAIOSFODNN7EXAMPLE",
+    "ev:eyJhbGciOiJIUzI1NiJ9", "ev:password-hunter2", "ev:api_key_abc", "kn:token-abc",
+    "sha256:zzzz", "sha256:", "sha256:" + "a" * 63, "sha256:" + "a" * 200, "sha256:" + "A" * 64,
+    "ev:auth:1234567", "ev:other:1", "suricata_sid:123456789", "kn:attack:T11", "sha256:fixture-ssh-1234",
+    "existing-or-short-id", "h-attack", "H1", "h1000", "G1", "g1000", "h 1", "h1\n",
 ]
-VALID_IDS = ["h1", "g1", "ev:auth:0001", "ev:ssh:1", "sha256:" + "ab" * 32, "kn:attack:T1110", "existing-or-short-id",
-             "sha256:fixture-ssh-1", "evidence_plane", "credential-attack", "v1.0.0"]
+ID_KINDS = ("evidence_ref", "hypothesis_id", "gap_id")
+VALID_IDS = {
+    "evidence_ref": ["sha256:" + "ab" * 32, "ev:auth:0001", "ev:ssh:1", "ev:flow:123456", "suricata_sid:2001219",
+                     "kn:attack:T1110", "kn:attack:T1110.001", "sha256:fixture-ssh-1", "sha256:fixture-alert-summary-1"],
+    "hypothesis_id": ["h1", "h12", "h999"],
+    "gap_id": ["g1", "g42", "g999"],
+}
+NON_STRING_IDS = [1, 1.0, True, None, ["h1"], {"h": 1}, b"h1"]
 
 
+@pytest.mark.parametrize("kind", ID_KINDS)
 @pytest.mark.parametrize("value", HOSTILE_IDS)
-def test_hostile_model_ids_are_refused_by_the_grammar(value):
-    assert not model_id_ok(value)
-    assert safe_model_id(value) == INVALID_MODEL_ID
+def test_hostile_model_ids_are_refused_by_the_grammar(value, kind):
+    assert not model_id_ok(value, kind)
+    assert safe_model_id(value, kind) == INVALID_MODEL_ID
 
 
-@pytest.mark.parametrize("value", VALID_IDS)
-def test_ids_the_repo_produces_pass_the_grammar(value):
-    assert model_id_ok(value) and safe_model_id(value) == value
+@pytest.mark.parametrize("kind", ID_KINDS)
+@pytest.mark.parametrize("value", NON_STRING_IDS)
+def test_non_string_ids_are_refused_not_stringified(value, kind):
+    assert safe_model_id(value, kind) == INVALID_MODEL_ID
 
 
-@pytest.mark.parametrize("value", ["isolate client", "Query_Flow", "q", "query-flow", "x" * 65, "query_flow_summary;rm"])
+@pytest.mark.parametrize("kind,value", [(k, v) for k, vs in VALID_IDS.items() for v in vs])
+def test_ids_the_repo_produces_pass_only_their_own_field(kind, value):
+    assert model_id_ok(value, kind) and safe_model_id(value, kind) == value
+    for other in ID_KINDS:
+        if other != kind:
+            assert not model_id_ok(value, other)
+
+
+def test_unknown_kind_is_refused():
+    assert not model_id_ok("h1", "anything")
+
+
+@pytest.mark.parametrize("value", ["isolate client", "Query_Flow", "q", "query-flow", "x" * 65, "query_flow_summary;rm", "get_token_list", 7])
 def test_capability_grammar(value):
-    assert not model_id_ok(value, capability=True)
-    assert model_id_ok("query_flow_summary", capability=True)
+    assert not model_id_ok(value, "capability")
+    assert model_id_ok("query_flow_summary", "capability")
+
+
+def test_prompt_states_the_id_format_and_the_schema_uses_it():
+    prompt = PromptCompiler().compile(frame=_frame(), playbook=AUTH, task="identify_evidence_gaps")
+    trusted = json.loads(prompt.split("\n")[1])
+    assert any("hypothesis_id is h followed by 1-3 digits" in r for r in trusted["rules"])
+    assert trusted["output_schema"]["evidence_gaps"][0]["gap_id"] == "g1"
+    schema = json.loads(PromptCompiler().compile(frame=_frame(), playbook=AUTH, task="generate_hypotheses").split("\n")[1])["output_schema"]
+    assert schema["hypotheses"][0]["hypothesis_id"] == "h1"
+    assert model_id_ok(schema["hypotheses"][0]["hypothesis_id"], "hypothesis_id")
 
 
 @pytest.mark.parametrize("value", HOSTILE_IDS)
@@ -398,9 +436,9 @@ def test_every_model_id_field_is_replaced_at_parse_time(value):
     r = MioRecommendation.from_mapping({"summary": "s", "recommended_action": "OBSERVE", "rationale": "r", "evidence_refs": [value]}, advisory_id="a")
     assert h.hypothesis_id == INVALID_MODEL_ID
     assert h.supporting_evidence_refs == (INVALID_MODEL_ID, "ev:ssh:1") and h.contradicting_evidence_refs == (INVALID_MODEL_ID,)
-    assert g.gap_id == INVALID_MODEL_ID and g.discriminates_hypothesis_ids == (INVALID_MODEL_ID, "h1") and g.capability == INVALID_MODEL_ID
+    assert g.gap_id == INVALID_MODEL_ID and g.discriminates_hypothesis_ids == (INVALID_MODEL_ID, "h1") and g.capability == (value if model_id_ok(value, "capability") else INVALID_MODEL_ID)
     assert r.evidence_refs == (INVALID_MODEL_ID,)
-    if value != INVALID_MODEL_ID:
+    if value != INVALID_MODEL_ID and not model_id_ok(value, "capability"):
         assert value not in repr((h, g, r))
 
 
@@ -448,13 +486,14 @@ LOOP_FIELDS = {
     "update_ref": "invalid_model_id:evidence_ref",
     "recommendation_ref": "invalid_model_id:evidence_ref",
 }
-LOOP_HOSTILE = ["x password=hunter2 http://evil.example/a 10.0.0.5 ignore-previous", "10.0.0.5", "0x0a000005", "167772165",
-                "001122334455", "fe80::1", "evil.example.com", "password:hunter2", "http://evil.example/a", "ignore previous instructions"]
+LOOP_HOSTILE = [v for v in HOSTILE_IDS if v not in ("invalid-model-id", "h1\n")] + [1, "H1"]
 
 
 @pytest.mark.parametrize("field", sorted(LOOP_FIELDS))
 @pytest.mark.parametrize("value", LOOP_HOSTILE)
 def test_hostile_ids_reject_the_cycle_and_never_reach_trace_or_errors(field, value):
+    if field == "capability" and model_id_ok(value, "capability"):
+        pytest.skip("a well-formed capability name (h1000) is checked against the playbook/broker, not refused as malformed")
     outcome = BoundedReasoningLoop(model=_hostile_model(field, value), broker=_broker()).run(frame=_frame(), playbook=AUTH, cycle_id="hostile")
     assert outcome.state is ReasoningState.VALIDATION_REJECTED
     assert LOOP_FIELDS[field] in outcome.errors, outcome.errors
@@ -463,10 +502,12 @@ def test_hostile_ids_reject_the_cycle_and_never_reach_trace_or_errors(field, val
          "handoff": outcome.handoff.to_dict() if outcome.handoff else None},
         default=repr,
     ) + repr((outcome.hypotheses, outcome.evidence_gaps, outcome.recommendation))
-    assert value not in blob
-    for fragment in ("hunter2", "evil.example", "ignore previous"):
-        if fragment in value:
-            assert fragment not in blob
+    if isinstance(value, str):
+        # "sha256:" alone is a prefix of the provenance digests; check it as a whole value.
+        assert (f'"{value}"' if value == "sha256:" else value) not in blob
+        for fragment in ("hunter2", "evil.example", "ignore previous", "alice", "john_smith", "AKIA", "ghp_", "eyJ"):
+            if fragment in value:
+                assert fragment not in blob
 
 
 def test_explanations_emit_only_grammar_valid_ids_for_caller_built_objects():
@@ -539,5 +580,9 @@ def test_docs_name_the_new_explanation_fields_and_codes():
         assert token in playbooks, token
     from azazel_edge.mio import contracts
     assert f"`{contracts.INVALID_MODEL_ID}`" in grounding and f"`{contracts.INVALID_MODEL_ID_CODE}:<field>`" in grounding
+    for kind in contracts.MODEL_ID_GRAMMAR:
+        assert f"| `{kind}` |" in grounding, kind
+    assert "EVIDENCE_REF_KINDS" in grounding and "MODEL_ID_GRAMMAR" in grounding
+    assert f"version {playbook_mod.PROMPT_TEMPLATE_VERSION}" in grounding
     for field in ("hypothesis_id", "evidence_ref", "gap_id", "discriminates_hypothesis_id", "capability"):
         assert f"`{contracts.INVALID_MODEL_ID_CODE}:{field}`" in grounding, field
