@@ -86,22 +86,28 @@ _OPERATOR_GUIDANCE = (
 # text a human will read. These shapes cover what the repo actually produces:
 # trace/frame IDs from the frame builder callers (bin/azazel-mio-shadow-replay,
 # mio/evaluation.py, fixtures), Evidence Plane event IDs (sha256:<hex>), the
-# Suricata/flow adapters' refs, the ev:<kind>:<n> refs of capability results,
+# Suricata adapter's refs, the ev:<kind>:<n> refs of capability results,
 # and the h<n> IDs MioHypothesis.from_mapping assigns. Words come from fixed
 # lists, never from input. Anything else becomes a fixed placeholder; no digest
 # is emitted because the value may be low-entropy.
 _TRACE_HEAD = r"(?:trace|mio|evaluation|incident|replay)"
 _TRACE_WORDS = r"(?:-(?:golden|fixture|shadow|auth|scan|trace|frame))*"
-_TRACE_TAIL = r"(?:-v?[0-9]{1,12})?"
+# The repo produces single-digit counters (trace-1, trace-golden-v2,
+# mio-fixture-auth-1); six digits leave room for a run counter while staying
+# far below the ten digits an IPv4 address needs in decimal.
+_TRACE_TAIL = r"(?:-v?[0-9]{1,6})?"
 _TRACE_SHAPE = _TRACE_HEAD + _TRACE_WORDS + _TRACE_TAIL
 _EV_KINDS = "|".join(sorted({"auth", "alert", "anomaly", "drop", "flow", "netflow", "dns", "http", "tls", "ssh", "smtp", "ftp", "smb", "dhcp"}))
 CLOSED_ID_SHAPES: dict[str, re.Pattern[str]] = {
     "trace_id": re.compile(rf"{_TRACE_SHAPE}"),
     "frame_id": re.compile(rf"(?:frame{_TRACE_TAIL}|{_TRACE_SHAPE}(?::frame)?)"),
     # sha256:<64 hex> (make_event_id); suricata_sid:<n> (sids fit 8 digits);
-    # flow:<n> (Suricata flow IDs are 64-bit; at least 11 digits, so a 32-bit
-    # address in decimal cannot pass); ev:<kind>:<n>.
-    "evidence_ref": re.compile(rf"sha256:[0-9a-f]{{64}}|suricata_sid:[0-9]{{1,8}}|flow:[0-9]{{11,20}}|ev:(?:{_EV_KINDS})(?::[0-9]{{1,6}})?"),
+    # ev:<kind>:<n>. flow:<flow_id> is deliberately absent: the flow ID is a
+    # 64-bit number taken from EVE input, frame evidence_refs are caller-supplied
+    # (MioSituationFrame.build, replay fixtures), so untrusted text can reach the
+    # field, and a decimal-encoded MAC or IPv4-mapped IPv6 integer looks the same
+    # as a real flow ID. The handoff has no key for a digest, so it is redacted.
+    "evidence_ref": re.compile(rf"sha256:[0-9a-f]{{64}}|suricata_sid:[0-9]{{1,8}}|ev:(?:{_EV_KINDS})(?::[0-9]{{1,6}})?"),
     "hypothesis_id": re.compile(r"h[0-9]{1,3}"),
 }
 

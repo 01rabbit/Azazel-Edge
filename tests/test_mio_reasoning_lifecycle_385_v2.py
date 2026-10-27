@@ -352,7 +352,7 @@ def test_repo_trace_id_shapes_are_kept(value):
     assert payload["trace_id"] == value and payload["frame_id"] == f"{value}:frame"
 
 
-@pytest.mark.parametrize("ref", ["ev:ssh:1", "ev:flow:1", "ev:auth:1", "sha256:" + "a" * 64, "suricata_sid:2001219", "flow:1234567890123456"])
+@pytest.mark.parametrize("ref", ["ev:ssh:1", "ev:flow:1", "ev:auth:1", "sha256:" + "a" * 64, "suricata_sid:2001219"])
 def test_repo_evidence_ref_shapes_are_kept(ref):
     assert build_no_model_handoff(frame(evidence_refs=[ref]), reason="error_fallback").to_dict()["evidence_refs"] == [ref]
 
@@ -385,6 +385,8 @@ def test_replaying_a_real_stale_ticket_writes_one_row_only():
         assert coord.complete(old, Outcome("late")).reason == STALE_SUPERSEDED
     rows = [r for r in coord.audit("trace-1") if r["event"] == "stale_result_discarded"]
     assert len(rows) == 1 and rows[0]["cycle_id"] == old.cycle_id
+    assert coord.discards_for(old.cycle_id) == 100
+    assert coord.discards_for("trace-1:e0:c999") is None and coord.discards_for([]) is None
     assert [r["event"] for r in coord.audit("trace-1")][:2] == ["cycle_started", "cycle_superseded"]
 
 
@@ -457,3 +459,50 @@ def test_threads_racing_with_snapshot_and_restore_keep_traces_apart():
         assert fresh.cycle_id.startswith(f"{trace_id}:e1:c")
         assert restored.complete(fresh, Outcome((trace_id, "new"))).accepted
         assert restored.current(trace_id).tag == (trace_id, "new")
+
+
+def test_discard_count_survives_restore_without_a_second_row():
+    coord = ReasoningCoordinator()
+    old = coord.begin(frame())
+    coord.begin(frame(threat_level="critical"))
+    for _ in range(3):
+        coord.complete(old, Outcome("late"))
+    snap = coord.snapshot()
+    assert json.loads(snap)["cycles"][0]["discards"] == 3
+    restored = ReasoningCoordinator.restore(snap)
+    assert restored.discards_for(old.cycle_id) == 3
+    assert restored.complete(old, Outcome("later")).reason == STALE_PRE_RESTART
+    assert restored.discards_for(old.cycle_id) == 4
+    rows = [r for r in restored.audit("trace-1") if r["event"] == "stale_result_discarded"]
+    assert len(rows) == 1
+    assert ReasoningCoordinator.restore(restored.snapshot()).discards_for(old.cycle_id) == 4
+
+
+def test_restore_accepts_legacy_snapshot_without_discards_and_rejects_bad_counts():
+    coord = ReasoningCoordinator()
+    t = coord.begin(frame())
+    payload = json.loads(coord.snapshot())
+    for row in payload["cycles"]:
+        del row["discards"]
+    legacy = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("ascii")
+    assert ReasoningCoordinator.restore(legacy).discards_for(t.cycle_id) == 0
+    for bad in (-1, "3", 1.0, True, None):
+        payload["cycles"][0]["discards"] = bad
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("ascii")
+        with pytest.raises(ValueError, match="malformed_coordinator_snapshot"):
+            ReasoningCoordinator.restore(raw)
+
+
+@pytest.mark.parametrize("ref", ["flow:281470681743360", "flow:187651234567890", "flow:1234567890123456"])
+def test_flow_refs_are_always_redacted_in_the_handoff(ref):
+    h = MioHypothesis.from_mapping({"hypothesis_id": "h1", "statement": "s", "supporting_evidence_refs": [ref], "falsification_conditions": ["c"]}, ordinal=1)
+    payload = build_no_model_handoff(frame(evidence_refs=["ev:ssh:1", ref]), reason="error_fallback", hypotheses=[h]).to_dict()
+    assert payload["evidence_refs"] == ["ev:ssh:1", "[redacted:evidence_ref]"]
+    assert payload["model_proposed_hypotheses"][0]["supporting_evidence_refs"] == ["[redacted:evidence_ref]"]
+    assert payload["counts"]["evidence_refs"] == 2
+    assert ref.split(":")[1] not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("value", ["trace-1234567", "trace-3232235777", "mio-shadow-281470681743360"])
+def test_long_trace_counters_are_replaced(value):
+    assert build_no_model_handoff(frame(trace_id=value), reason="error_fallback").to_dict()["trace_id"] == "invalid-trace-id"

@@ -98,7 +98,10 @@ It has no clock: ordering is by call order, which keeps replays deterministic.
   | `stale_ticket_mismatch` | the ticket names a recorded cycle but not its trace/frame/epoch/digest, or a field has the wrong type (for example an unhashable ID); `stale_check` is also true for it, and no exception is raised |
 
   A discard row is written only under a recorded cycle that this exact ticket
-  names, and only for the first discard of that cycle. Discards that cannot be
+  names, and only for the first discard of that cycle. `discards_for(cycle_id)`
+  returns the cumulative count for a retained cycle; it is part of the snapshot
+  (`discards`, absent in older snapshots and read as 0), so a restored
+  coordinator does not write a second row for the same cycle. Discards that cannot be
   tied to a recorded cycle (unknown, evicted, forged or malformed tickets) are
   only counted by reason in `unattributed_discards()`, outside every trace's
   audit and in memory only. A forged ticket therefore cannot write rows into
@@ -141,7 +144,7 @@ reach the payload (v1 copied redacted frame and model text). The payload holds:
 
 | Field | Source |
 |---|---|
-| `trace_id`, `frame_id`, `evidence_refs`, hypothesis IDs and their refs | only IDs that fully match a closed shape the repo produces (`CLOSED_ID_SHAPES`: allowlisted words and bounded digits, for example `trace-1`, `mio-shadow`, `<trace>:frame`, `sha256:<hex>`, `suricata_sid:<n>`, `flow:<n>` with 11 to 20 digits, `ev:<kind>:<n>`, `h<n>`); anything else (addresses, hostnames, hex/decimal address forms, free words) becomes a fixed placeholder (`invalid-trace-id`, `invalid-frame-id`, `[redacted:evidence_ref]`, `hypothesis-<n>`) |
+| `trace_id`, `frame_id`, `evidence_refs`, hypothesis IDs and their refs | only IDs that fully match a closed shape the repo produces (`CLOSED_ID_SHAPES`: allowlisted words and bounded digits, for example `trace-1`, `mio-shadow`, `<trace>:frame`, `sha256:<hex>`, `suricata_sid:<n>`, `ev:<kind>:<n>`, `h<n>`; trace counters up to six digits); anything else (addresses, hostnames, hex/decimal address forms, free words) becomes a fixed placeholder (`invalid-trace-id`, `invalid-frame-id`, `[redacted:evidence_ref]`, `hypothesis-<n>`) |
 | `reason` | a `ReasoningState` value, otherwise `unspecified` |
 | `current_defensive_state`, `threat_level`, `dependency_status`, `current_action` | closed vocabularies (`DEFENSIVE_STATES`, `LOW`..`CRITICAL`/`UNKNOWN`, `OPTIONAL_DEPENDENCY_STATUSES`, the v2 action-record vocabularies) |
 | `counts` | integer sizes of the frame lists, actors and actions |
@@ -156,6 +159,10 @@ lifecycle checks, they appear under `model_proposed_hypotheses` as ID,
 `unverified_hypotheses_only` (otherwise `none`), and the `frame_derived_only`
 limitation is used only when no model content is present. Every handoff carries
 the `structured_fields_only` limitation. There is no action field.
+`flow:<flow_id>` refs are always redacted in the handoff: frame evidence refs
+are caller-supplied, so untrusted text can reach them, and a 64-bit flow ID
+cannot be told apart from a decimal-encoded MAC or IPv4-mapped IPv6 address.
+The handoff has no key for a digest; `counts.evidence_refs` still counts them.
 Canonical bytes (sorted keys, no spaces, ASCII) are hard-capped at 8192 bytes:
 deterministic trimming marks `handoff_truncated`, and if the cap is still
 unreachable the builder raises instead of exceeding it. Identical inputs give

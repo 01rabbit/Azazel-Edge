@@ -270,7 +270,9 @@ class _Cycle:
 
 COORDINATOR_SNAPSHOT_SCHEMA = "mio.reasoning_coordinator.v1"
 _SNAPSHOT_KEYS = frozenset({"schema", "epoch", "next_cycle", "latest", "cycles", "audit", "audit_dropped"})
-_CYCLE_KEYS = frozenset({"cycle_id", "trace_id", "epoch", "frame_id", "material_digest", "status", "outcome_state", "advisory_id"})
+_CYCLE_KEYS = frozenset({"cycle_id", "trace_id", "epoch", "frame_id", "material_digest", "status", "outcome_state", "advisory_id", "discards"})
+# Snapshots written before ``discards`` existed are still accepted (count 0).
+_CYCLE_KEYS_LEGACY = _CYCLE_KEYS - {"discards"}
 # Per-row bounds so one audit row cannot grow with model output.
 _AUDIT_TEXT_LIMIT = 160
 _AUDIT_LIST_LIMIT = 8
@@ -365,6 +367,13 @@ class ReasoningCoordinator:
     @property
     def audit_dropped(self) -> int:
         return self._audit_dropped
+
+    def discards_for(self, cycle_id: str) -> int | None:
+        """Cumulative discarded results for a retained cycle (only the first
+        wrote an audit row), or None if the cycle is unknown or evicted."""
+        with self._lock:
+            cycle = self._cycles.get(cycle_id) if type(cycle_id) is str else None
+            return None if cycle is None else cycle.discards
 
     def unattributed_discards(self) -> dict[str, int]:
         with self._lock:
@@ -526,6 +535,7 @@ class ReasoningCoordinator:
                         "cycle_id": c.ticket.cycle_id, "trace_id": c.ticket.trace_id, "epoch": c.ticket.epoch,
                         "frame_id": c.ticket.frame_id, "material_digest": c.ticket.material_digest,
                         "status": c.status.value, "outcome_state": c.outcome_state, "advisory_id": c.advisory_id,
+                        "discards": c.discards,
                     }
                     for c in self._cycles.values()
                 ],
@@ -554,9 +564,11 @@ class ReasoningCoordinator:
             raise ValueError("malformed_coordinator_snapshot")
         seen: dict[str, str] = {}
         for row in cycles:
-            if not isinstance(row, dict) or set(row) != _CYCLE_KEYS:
+            if not isinstance(row, dict) or set(row) not in (_CYCLE_KEYS, _CYCLE_KEYS_LEGACY):
                 raise ValueError("malformed_coordinator_snapshot")
-            if any(not isinstance(row[k], str) or len(row[k]) > _ID_LIMIT for k in _CYCLE_KEYS - {"epoch"}):
+            if "discards" in row and (not _is_int(row["discards"]) or row["discards"] < 0):
+                raise ValueError("malformed_coordinator_snapshot")
+            if any(not isinstance(row[k], str) or len(row[k]) > _ID_LIMIT for k in _CYCLE_KEYS_LEGACY - {"epoch"}):
                 raise ValueError("malformed_coordinator_snapshot")
             if not _is_int(row["epoch"]) or not 0 <= row["epoch"] <= epoch:
                 raise ValueError("invalid_cycle_epoch_in_snapshot")
@@ -589,7 +601,7 @@ class ReasoningCoordinator:
         for row in payload["cycles"]:
             ticket = CycleTicket(row["trace_id"], row["cycle_id"], row["epoch"], row["frame_id"], row["material_digest"])
             status = CycleStatus(row["status"])
-            cycle = _Cycle(ticket, status, row["outcome_state"], row["advisory_id"])
+            cycle = _Cycle(ticket, status, row["outcome_state"], row["advisory_id"], row.get("discards", 0))
             coord._cycles[ticket.cycle_id] = cycle
             if status is CycleStatus.IN_FLIGHT:
                 cycle.status = CycleStatus.ABANDONED_ON_RESTART
