@@ -6,7 +6,7 @@
    (is-ok). These are exactly the paths the adversarial review flagged. */
 'use strict';
 const path = require('path');
-const { toneOf, worstTone, computeConsoleState } = require(
+const { toneOf, worstTone, computeConsoleState, alertDecisionTraceId, groupAlertsByDecision, decisionTraceView } = require(
     path.join(__dirname, '..', 'azazel_edge_web', 'static', 'sentinel.js'));
 
 let failures = 0;
@@ -98,6 +98,97 @@ const crit = computeConsoleState({
 });
 eq(crit.stages.decide.tone, 'is-critical', 'alert -> decide critical');
 eq(crit.stages.evaluate.tone, 'is-critical', 'DOWN path -> evaluate critical');
+
+
+// --- Decision-level trace (Edge#341): never fabricated per alert ----------
+const TID = 'core-0123456789abcdef0123456789abcdef';
+const report = {
+    ok: true,
+    sources: { chain: { ok: true, verified: true, scope: 'from_genesis' } },
+    traces: [{
+        trace_id: TID,
+        explanation: { status: 'found', segment: 'active', selected_action: 'isolate', not_applied: true,
+            release_condition: 'NOT APPLIED - planned only (dry_run)', schema_valid: true },
+        chain_record: { status: 'found', segment: 'active', integrity: 'verified', action: 'isolate' },
+        consistency: { action_matches: true },
+    }],
+};
+function rowText(view) { return view.rows.map(function (r) { return r[0] + '=' + r[1]; }).join(' | '); }
+
+// An alert without a core decision has no trace, even with id-like fields
+// and a report that holds traces.
+const plain = { ts: 1, sid: 9, trace_id: TID, evidence_id: 'ev-1', recommendation: 'isolate' };
+eq(alertDecisionTraceId(plain), '', 'alert trace_id/evidence_id are never used as a decision trace');
+const none = decisionTraceView(alertDecisionTraceId(plain), report, 1);
+eq(none.state, 'none', 'no decision -> state none');
+eq(none.traceId, '—', 'no decision -> em-dash, never a made-up id');
+ok(rowText(none).indexOf('VERIFIED') === -1 && rowText(none).indexOf('isolate'.toUpperCase()) === -1,
+    'no decision -> no trace content from the report');
+eq(alertDecisionTraceId({ decision_trace_id: 42 }), '', 'non-string decision id -> none');
+
+// One decision, several alerts: one group, one trace.
+const alerts = [
+    { ts: 1, decision_trace_id: TID }, { ts: 2, decision_trace_id: TID },
+    { ts: 3 }, { ts: 4, decision_trace_id: '' },
+];
+const groups = groupAlertsByDecision(alerts);
+eq(groups.length, 1, 'two alerts of one decision + two without -> one decision');
+eq(groups[0].traceId, TID, 'the group is the decision');
+eq(groups[0].alerts.length, 2, 'the decision covers its two alerts');
+eq(groupAlertsByDecision([]).length, 0, 'no alerts -> no decision');
+eq(groupAlertsByDecision([{ ts: 1 }]).length, 0, 'alerts without decisions -> no decision (nothing invented)');
+
+// Recorded and verified.
+const found = decisionTraceView(TID, report, 2);
+eq(found.state, 'recorded', 'explanation found -> recorded');
+eq(found.traceId, TID, 'the decision id is shown');
+ok(rowText(found).indexOf('Action=ISOLATE · NOT APPLIED') !== -1, 'a dry-run action is labelled NOT APPLIED: ' + rowText(found));
+ok(rowText(found).indexOf('Chain record=VERIFIED') !== -1, 'verified chain record: ' + rowText(found));
+ok(rowText(found).indexOf('2 alerts in view share this decision') !== -1, 'shared count shown once per decision');
+
+// The report did not carry this decision: not loaded, not made up.
+const notLoaded = decisionTraceView(TID, { ok: true, traces: [] }, 1);
+eq(notLoaded.state, 'unavailable', 'decision missing from the report -> unavailable');
+eq(decisionTraceView(TID, null, 1).state, 'unavailable', 'no report -> unavailable');
+eq(decisionTraceView(TID, { ok: false, error: 'x', traces: report.traces }, 1).state, 'unavailable', 'failed report -> unavailable');
+
+// No explanation: "No record".
+const noRec = decisionTraceView(TID, { ok: true, sources: { chain: { ok: true, scope: 'empty' } }, traces: [{
+    trace_id: TID, explanation: { status: 'not_found', rotated_file_present: true }, chain_record: { status: 'not_found' }, consistency: {} }] }, 1);
+eq(noRec.state, 'no_record', 'no explanation -> no_record');
+ok(rowText(noRec).indexOf('Explanation=No record (older records may be rotated out)') !== -1, 'no explanation says so: ' + rowText(noRec));
+ok(rowText(noRec).indexOf('Chain record=No record (chain holds P0 decisions only)') !== -1, 'no chain record says so');
+ok(rowText(noRec).indexOf('Chain=EMPTY (nothing verified)') !== -1, 'empty chain is EMPTY, not verified');
+ok(rowText(noRec).indexOf('Action=') === -1, 'no explanation -> no action shown');
+
+// Rotated: in the older file.
+const rotated = decisionTraceView(TID, { ok: true, sources: { chain: { ok: true, verified: true, scope: 'from_rotation_boundary' } }, traces: [{
+    trace_id: TID, explanation: { status: 'found', segment: 'rotated', selected_action: 'isolate', schema_valid: true },
+    chain_record: { status: 'found', segment: 'rotated', integrity: 'verified' }, consistency: { action_matches: true } }] }, 1);
+ok(rowText(rotated).indexOf('Explanation=recorded (rotated file .1)') !== -1, 'rotated explanation marked: ' + rowText(rotated));
+ok(rowText(rotated).indexOf('Chain record=VERIFIED · rotated file .1') !== -1, 'rotated chain record marked');
+ok(rowText(rotated).indexOf('Chain=VERIFIED (from_rotation_boundary)') !== -1, 'scope shown');
+
+// Tampered: never green, never "verified".
+const tampered = decisionTraceView(TID, { ok: true, sources: { chain: { ok: false, verified: false, error: 'chain_hash_mismatch_at:2' } }, traces: [{
+    trace_id: TID, explanation: { status: 'found', segment: 'active', selected_action: 'isolate', schema_valid: true },
+    chain_record: { status: 'found', segment: 'active', integrity: 'failed_here', action: 'notify' }, consistency: { action_matches: false } }] }, 1);
+ok(rowText(tampered).indexOf('Chain record=TAMPERED') !== -1, 'tampered record marked: ' + rowText(tampered));
+ok(rowText(tampered).indexOf('Chain=NOT OK: chain_hash_mismatch_at:2') !== -1, 'chain failure shown');
+ok(rowText(tampered).indexOf('Consistency=ACTION MISMATCH') !== -1, 'explanation/chain mismatch shown');
+ok(rowText(tampered).indexOf('VERIFIED (') === -1, 'a tampered chain never reads as verified');
+const elsewhere = decisionTraceView(TID, { ok: true, sources: { chain: { ok: false, verified: false, error: 'chain_hash_mismatch_at:9' } }, traces: [{
+    trace_id: TID, explanation: { status: 'found', selected_action: 'isolate', schema_valid: true },
+    chain_record: { status: 'found', integrity: 'not_verified' }, consistency: {} }] }, 1);
+ok(rowText(elsewhere).indexOf('Chain record=NOT VERIFIED') !== -1, 'a record of a failed chain is not verified');
+const unknownIntegrity = decisionTraceView(TID, { ok: true, sources: { chain: {} }, traces: [{
+    trace_id: TID, explanation: { status: 'found' }, chain_record: { status: 'found', integrity: 'wibble' }, consistency: {} }] }, 1);
+ok(rowText(unknownIntegrity).indexOf('Chain record=NOT VERIFIED') !== -1, 'unknown integrity -> NOT VERIFIED, never verified');
+ok(rowText(unknownIntegrity).indexOf('Chain=NOT OK') !== -1, 'absent chain verdict -> NOT OK');
+const unreadable = decisionTraceView(TID, { ok: true, sources: { chain: { state: 'unreadable' } }, traces: [{
+    trace_id: TID, explanation: { status: 'source_unreadable' }, chain_record: { status: 'source_unreadable' }, consistency: {} }] }, 1);
+ok(rowText(unreadable).indexOf('Explanation=source unreadable') !== -1 && rowText(unreadable).indexOf('Chain=UNREADABLE') !== -1,
+    'unreadable sources say so: ' + rowText(unreadable));
 
 if (failures) { console.error(failures + ' assertion(s) failed'); process.exit(1); }
 console.log('sentinel logic: all assertions passed');

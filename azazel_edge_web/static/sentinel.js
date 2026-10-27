@@ -956,10 +956,146 @@
         if (r === 'MEDIUM' || num(a.severity) > 0 || num(a.risk_score) > 0) return { cls: '', word: 'WATCH', row: 'tone-warn' };
         return { cls: 'tag-info', word: 'INFO', row: '' };
     }
+    /* ---- decision-level trace (Edge#341) ---------------------------------
+       A trace belongs to a DECISION, never to an alert: an alert has one only
+       when the backend named the core decision its event is
+       (decision_trace_id). Alerts of one decision share its single trace; an
+       alert without one shows '—'; a decision without an explanation shows
+       "No record". Nothing here is derived from alert fields. */
+    function alertDecisionTraceId(a) {
+        var t = a && a.decision_trace_id;
+        return (typeof t === 'string' && t) ? t : '';
+    }
+    // One entry per decision (first-seen order), with the alerts it covers.
+    function groupAlertsByDecision(alerts) {
+        var order = [], by = {};
+        (alerts || []).forEach(function (a) {
+            var tid = alertDecisionTraceId(a);
+            if (!tid) return;
+            if (!by[tid]) { by[tid] = []; order.push(tid); }
+            by[tid].push(a);
+        });
+        return order.map(function (tid) { return { traceId: tid, alerts: by[tid] }; });
+    }
+    function findTrace(report, traceId) {
+        var list = (report && Array.isArray(report.traces)) ? report.traces : [];
+        for (var i = 0; i < list.length; i++) { if (list[i] && list[i].trace_id === traceId) return list[i]; }
+        return null;
+    }
+    var INTEGRITY_WORD = {
+        verified: 'VERIFIED',
+        failed_here: 'TAMPERED (verification failed at this record)',
+        not_verified: 'NOT VERIFIED'
+    };
+    function chainVerdictText(chain) {
+        chain = chain || {};
+        if (chain.state === 'unreadable') return 'UNREADABLE';
+        if (chain.verified) return 'VERIFIED (' + String(chain.scope || '') + ')';
+        if (chain.ok && chain.scope === 'empty') return 'EMPTY (nothing verified)';
+        return 'NOT OK' + (chain.error ? (': ' + String(chain.error)) : '');
+    }
+    // Pure view model of one decision's trace (unit-tested in node).
+    function decisionTraceView(traceId, report, alertCount) {
+        if (!traceId) {
+            return { state: 'none', traceId: '—', rows: [['Decision trace', '— (no core decision recorded for this alert)']] };
+        }
+        var t = findTrace(report, traceId);
+        if (!report || report.ok === false || !t) {
+            return { state: 'unavailable', traceId: traceId, rows: [['Decision trace', 'not loaded']] };
+        }
+        var e = t.explanation || {}, c = t.chain_record || {};
+        var chain = (report.sources || {}).chain || {};
+        var rows = [];
+        if (e.status === 'found') {
+            rows.push(['Explanation', 'recorded' + (e.segment === 'rotated' ? ' (rotated file .1)' : '')]);
+            rows.push(['Action', upper(e.selected_action, '—') + (e.not_applied ? ' · NOT APPLIED' : '')]);
+            rows.push(['Release', e.release_condition || '—']);
+            rows.push(['Schema', e.schema_valid ? 'OK' : 'INVALID']);
+        } else if (e.status === 'not_found') {
+            rows.push(['Explanation', 'No record' + (e.rotated_file_present ? ' (older records may be rotated out)' : '')]);
+        } else {
+            rows.push(['Explanation', 'source unreadable']);
+        }
+        if (c.status === 'found') {
+            rows.push(['Chain record', (INTEGRITY_WORD[c.integrity] || 'NOT VERIFIED') + (c.segment === 'rotated' ? ' · rotated file .1' : '')]);
+        } else if (c.status === 'not_found') {
+            rows.push(['Chain record', 'No record (chain holds P0 decisions only)']);
+        } else if (c.status === 'changed') {
+            rows.push(['Chain record', 'changed while reading']);
+        } else {
+            rows.push(['Chain record', 'source unreadable']);
+        }
+        rows.push(['Chain', chainVerdictText(chain)]);
+        if ((t.consistency || {}).action_matches === false) rows.push(['Consistency', 'ACTION MISMATCH (explanation vs chain)']);
+        var n = Number(alertCount) || 0;
+        if (n > 0) rows.push(['Alerts', n + (n === 1 ? ' alert in view' : ' alerts in view share this decision')]);
+        return { state: e.status === 'found' ? 'recorded' : 'no_record', traceId: traceId, rows: rows };
+    }
+    function fillKv(id, rows) {
+        var dl = document.getElementById(id);
+        if (!dl) return;
+        dl.textContent = '';
+        (rows || []).forEach(function (r) {
+            var d = document.createElement('div');
+            var dt = document.createElement('dt'); dt.textContent = String(r[0]);
+            var dd = document.createElement('dd'); dd.textContent = (r[1] == null || r[1] === '') ? '—' : String(r[1]);
+            d.appendChild(dt); d.appendChild(dd); dl.appendChild(d);
+        });
+    }
+    function renderDecisionTrace(a, alerts, report) {
+        var tid = alertDecisionTraceId(a);
+        var count = tid ? (alerts || []).filter(function (x) { return alertDecisionTraceId(x) === tid; }).length : 0;
+        var view = decisionTraceView(tid, report, count);
+        txt('evdTrace', view.traceId);
+        fillKv('evdDecisionTrace', view.rows);
+    }
+    function traceSig(report) {
+        var list = (report && Array.isArray(report.traces)) ? report.traces : [];
+        var chain = ((report || {}).sources || {}).chain || {};
+        return list.map(function (t) {
+            return t.trace_id + ':' + ((t.explanation || {}).status || '') + ':' + ((t.chain_record || {}).integrity || (t.chain_record || {}).status || '');
+        }).join(',') + '/' + String(chain.verified) + String(chain.error || '');
+    }
+    function renderDecisionList(alerts, report) {
+        var ul = document.getElementById('evDecisions');
+        if (!ul) return;
+        ul.textContent = '';
+        groupAlertsByDecision(alerts).forEach(function (grp) {
+            var view = decisionTraceView(grp.traceId, report, grp.alerts.length);
+            var li = document.createElement('li');
+            var id = document.createElement('span'); id.className = 'dec-id'; id.textContent = view.traceId;
+            var body = document.createElement('span'); body.className = 'dec-body';
+            body.textContent = view.rows.map(function (r) { return r[0] + ': ' + r[1]; }).join(' · ');
+            li.appendChild(id); li.appendChild(body);
+            ul.appendChild(li);
+        });
+        if (!ul.children.length) { var li = document.createElement('li'); li.textContent = 'No core decision behind the alerts in view.'; ul.appendChild(li); }
+    }
+    // Saves the decision traces the console shows (the same report as
+    // GET /api/decision-trace/export) as a JSON file. Client side only.
+    function exportDecisionTraces() {
+        var report = (lastDetail || {}).decisionTraces || {};
+        if (!report || report.ok === false || !Array.isArray(report.traces) || !report.traces.length) return false;
+        try {
+            var blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+            var url = URL.createObjectURL(blob);
+            var link = document.createElement('a');
+            link.href = url;
+            link.download = 'decision-trace.json';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+            return true;
+        } catch (e) { return false; }
+    }
+
     var EVD_FIELDS = ['evdTime', 'evdSource', 'evdDest', 'evdProto', 'evdSeverity', 'evdPolicy', 'evdRule', 'evdEid', 'evdTrace'];
-    function clearEvidenceDrawer() { EVD_FIELDS.forEach(function (id) { txt(id, '—'); }); }
+    var evSelectedAlert = null;
+    function clearEvidenceDrawer() { EVD_FIELDS.forEach(function (id) { txt(id, '—'); }); fillKv('evdDecisionTrace', []); evSelectedAlert = null; }
     function selectEvidence(a, li) {
         evSelectedKey = alertKey(a);
+        evSelectedAlert = a;
         var tl = document.getElementById('evTimeline');
         if (tl) Array.prototype.forEach.call(tl.children, function (c) { c.classList.remove('is-selected'); });
         if (li) li.classList.add('is-selected');
@@ -971,7 +1107,8 @@
         txt('evdPolicy', a.policy || '—');
         txt('evdRule', a.sid || '—');
         txt('evdEid', a.evidence_id || '—');
-        txt('evdTrace', a.trace_id || '—');
+        var ev = (lastDetail || {}).evidence || {};
+        renderDecisionTrace(a, ev.recent_alerts || [], (lastDetail || {}).decisionTraces);
     }
     function renderEvidenceConsole(detail) {
         detail = detail || {};
@@ -985,7 +1122,7 @@
         var sig = alerts.map(alertKey).join('~') + '@' + evRange + '#' +
             (evidence.recent_mode_changes || []).length + ',' +
             (evidence.recent_runbook_events || []).length + ',' +
-            (evidence.recent_triage_audit || []).length;
+            (evidence.recent_triage_audit || []).length + '|' + traceSig(detail.decisionTraces);
         if (sig === evLastSig) return;
         evLastSig = sig;
         txt('evCount', alerts.length + ' of ' + allAlerts.length + ' shown');
@@ -1012,7 +1149,9 @@
             // Selected alert scrolled out of the window: clear the drawer rather than
             // keep describing an alert that is no longer listed.
             if (evSelectedKey && !selectedLi) { clearEvidenceDrawer(); evSelectedKey = null; }
+            else if (evSelectedAlert) renderDecisionTrace(evSelectedAlert, allAlerts, detail.decisionTraces);
         }
+        renderDecisionList(alerts, detail.decisionTraces);
         var lst = document.getElementById('evList');
         if (lst) {
             lst.textContent = '';
@@ -1281,6 +1420,8 @@
         document.querySelectorAll('[data-ev-view]').forEach(function (btn) {
             btn.addEventListener('click', function () { switchSub(btn.getAttribute('data-ev-view'), 'data-ev-view', 'data-ev-panel'); });
         });
+        var exportBtn = document.getElementById('evDecisionExport');
+        if (exportBtn) exportBtn.addEventListener('click', function () { exportDecisionTraces(); });
         document.querySelectorAll('[data-sys-view]').forEach(function (btn) {
             btn.addEventListener('click', function () { switchSub(btn.getAttribute('data-sys-view'), 'data-sys-view', 'data-sys-panel'); });
         });
@@ -1369,6 +1510,10 @@
     // Expose the pure classifiers for node-based unit tests (no-op in browsers,
     // where `module` is undefined). Does not change runtime behavior.
     if (typeof module !== 'undefined' && module.exports) {
-        module.exports = { toneOf: toneOf, worstTone: worstTone, computeConsoleState: computeConsoleState };
+        module.exports = {
+            toneOf: toneOf, worstTone: worstTone, computeConsoleState: computeConsoleState,
+            alertDecisionTraceId: alertDecisionTraceId, groupAlertsByDecision: groupAlertsByDecision,
+            decisionTraceView: decisionTraceView
+        };
     }
 })();

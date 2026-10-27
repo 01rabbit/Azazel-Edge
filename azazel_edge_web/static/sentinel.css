@@ -887,3 +887,8 @@ body.sentinel-fidelity[data-workspace] .dashboard-shell > .sentinel-content {
 .gate-row.is-met .gate-label { color: var(--text-main); }
 .gate-row.is-pending .gate-mark { color: var(--text-soft); }
 .gate-row.is-pending .gate-label { color: var(--text-soft); }
+
+/* Decision-level trace (Edge#341): one row per core decision. */
+.sentinel-ev-decisions__note { margin: 0 0 8px; color: var(--text-soft); font-size: 0.78rem; }
+.sentinel-ev-decisions .dec-id { font-family: var(--font-mono); color: var(--accent-cyan); margin-right: 8px; word-break: break-all; }
+.sentinel-ev-decisions .dec-body { font-size: 0.8rem; }

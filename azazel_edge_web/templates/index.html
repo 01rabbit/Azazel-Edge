@@ -332,6 +332,7 @@
                 <button type="button" class="sentinel-subtab is-active" data-ev-view="timeline" aria-pressed="true">TIMELINE</button>
                 <button type="button" class="sentinel-subtab" data-ev-view="list" aria-pressed="false">EVIDENCE LIST</button>
                 <button type="button" class="sentinel-subtab" data-ev-view="audit" aria-pressed="false">AUDIT TRAIL</button>
+                <button type="button" class="sentinel-subtab" data-ev-view="decisions" aria-pressed="false">DECISIONS</button>
                 <button type="button" class="sentinel-subtab" data-ev-view="raw" aria-pressed="false">RAW DATA</button>
             </div>
             <div class="sentinel-ev-toolbar">
@@ -349,6 +350,11 @@
                     <ul class="sentinel-ev-timeline" id="evTimeline" data-ev-panel="timeline"></ul>
                     <div class="sentinel-ev-table" id="evList" data-ev-panel="list" hidden></div>
                     <ul class="sentinel-ev-audit" id="evAudit" data-ev-panel="audit" hidden></ul>
+                    <div class="sentinel-ev-decisions" data-ev-panel="decisions" hidden>
+                        <p class="sentinel-ev-decisions__note">One trace per core decision (explanation + core decision chain), read only. Alerts without a core decision have none.</p>
+                        <button type="button" class="sentinel-range-btn" id="evDecisionExport">EXPORT JSON</button>
+                        <ul class="sentinel-ev-audit" id="evDecisions"></ul>
+                    </div>
                     <pre class="sentinel-ev-raw" id="evRaw" data-ev-panel="raw" hidden></pre>
                 </div>
                 <aside class="sentinel-ev-detail" id="evDetail" aria-live="polite">
@@ -362,8 +368,10 @@
                         <div><dt>Policy</dt><dd id="evdPolicy">—</dd></div>
                         <div><dt>Rule ID</dt><dd id="evdRule">—</dd></div>
                         <div><dt>Evidence ID</dt><dd id="evdEid">—</dd></div>
-                        <div><dt>Trace ID</dt><dd id="evdTrace">—</dd></div>
+                        <div><dt>Decision trace ID</dt><dd id="evdTrace">—</dd></div>
                     </dl>
+                    <div class="sentinel-card__kicker">Decision trace</div>
+                    <dl class="sentinel-kv" id="evdDecisionTrace"></dl>
                 </aside>
             </div>
         </section>

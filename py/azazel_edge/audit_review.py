@@ -390,15 +390,13 @@ def _format_compact(record: Dict[str, Any], chain_result: Dict[str, Any]) -> str
     )
 
 
-def _format_json(
-    record: Dict[str, Any],
-    chain_result: Dict[str, Any],
-) -> str:
-    """Machine-readable JSON output."""
+def record_review(record: Dict[str, Any]) -> Dict[str, Any]:
+    """The explanation fields of the ``--json`` output (everything but
+    ``chain``). Read only; also used by the Web UI's decision trace
+    (``azazel_edge.explanations.trace``), so both show a record the same way."""
     from azazel_edge.explanations import validate_v2_explanation
     problems = validate_v2_explanation(record)
-
-    output = {
+    return {
         "trace_id": record.get("trace_id", ""),
         "ts": record.get("ts", ""),
         "selected_action": record.get("selected_action", ""),
@@ -413,19 +411,34 @@ def _format_json(
         "schema_valid": len(problems) == 0,
         "schema_problems": problems,
         "capsule_signature_state": _capsule_signature_state(record),
-        "chain": {
-            "ok": chain_result["ok"],
-            "verified": bool(chain_result.get("verified")),
-            "entries": chain_result["entries"],
-            "error": chain_result.get("error", ""),
-            "scope": chain_result.get("scope", SCOPE_NOT_VERIFIED),
-            "genesis_retained": bool(chain_result.get("genesis_retained")),
-            "files": list(chain_result.get("files") or []),
-            "chain_id": chain_result.get("chain_id", ""),
-            "meaning": _chain_meaning(chain_result),
-            "limits": _LIMITS,
-        },
     }
+
+
+def chain_review(chain_result: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``chain`` object of the ``--json`` output for a
+    :func:`verify_audit_chain` result (also used by the Web UI's decision
+    trace)."""
+    return {
+        "ok": bool(chain_result.get("ok")),
+        "verified": bool(chain_result.get("verified")),
+        "entries": chain_result.get("entries", 0),
+        "error": chain_result.get("error", ""),
+        "scope": chain_result.get("scope", SCOPE_NOT_VERIFIED),
+        "genesis_retained": bool(chain_result.get("genesis_retained")),
+        "files": list(chain_result.get("files") or []),
+        "chain_id": chain_result.get("chain_id", ""),
+        "meaning": _chain_meaning(chain_result),
+        "limits": _LIMITS,
+    }
+
+
+def _format_json(
+    record: Dict[str, Any],
+    chain_result: Dict[str, Any],
+) -> str:
+    """Machine-readable JSON output."""
+    output = dict(record_review(record))
+    output["chain"] = chain_review(chain_result)
     return json.dumps(output, ensure_ascii=False, indent=2)
 
 

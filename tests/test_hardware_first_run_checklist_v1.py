@@ -808,6 +808,11 @@ ROW_VALUES = (
     ("SVC-13", ("`hash_basis=enforcement_settings`",) * 2, None, "py/azazel_edge/explanations/live.py", "'hash_basis': 'enforcement_settings'", False),
     ("SVC-13", ("`release=NOT APPLIED - planned only (dry_run)`",) * 2, None, "py/azazel_edge/explanations/live.py",
      "return f\"NOT APPLIED - planned only ({str(enforcement.get('mode') or 'unknown')})\"", False),
+    # SVC-14: the Web UI's decision trace (Edge#341).
+    ("SVC-14", ("`found found verified True`",) * 2, None, "py/azazel_edge/explanations/trace.py", 'return "verified"', False),
+    ("SVC-14", ("`failed_here`",) * 2, None, "py/azazel_edge/explanations/trace.py", 'return "failed_here"', False),
+    ("SVC-14", ("`not_verified`",) * 2, None, "py/azazel_edge/explanations/trace.py", 'return "not_verified"', False),
+    ("SVC-14", ("`not_found`",) * 2, None, "py/azazel_edge/explanations/trace.py", '"status": "not_found",', False),
     # Azazel-Edge does not turn the watchdog on.
     ("ST-05", ("`RuntimeWatchdogUSec=0`",) * 2, None, "installer/internal/install_migrated_tools.sh", "RuntimeWatchdogSec", True),
     ("ST-05", ("`RuntimeWatchdogUSec=0`",) * 2, None, "installer/internal/install_all.sh", "RuntimeWatchdogSec", True),

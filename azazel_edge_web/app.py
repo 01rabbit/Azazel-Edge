@@ -151,6 +151,12 @@ except Exception:
     STIXExporter = None  # type: ignore
     TAXIIPushClient = None  # type: ignore
 
+# Read-only decision-level trace (Edge#341): explanation + core decision chain.
+try:
+    from azazel_edge.explanations import trace as _decision_trace
+except Exception:  # pragma: no cover - the endpoints then answer 503
+    _decision_trace = None  # type: ignore
+
 # EPD (e-paper) renderer + desired-render logic live in py/ (already on sys.path).
 # Import defensively: azazel_edge_epd calls sys.exit() at import time when Pillow
 # is unavailable, so we must also swallow SystemExit and keep the web app alive.
@@ -195,6 +201,10 @@ AI_LLM_LOG = Path(os.environ.get("AZAZEL_AI_LLM_LOG", str(AGENT_LOG_DIR / "ai-ll
 RUNBOOK_EVENT_LOG = Path(os.environ.get("AZAZEL_RUNBOOK_EVENT_LOG", str(WEB_LOG_DIR / "runbook-events.jsonl")))
 TRIAGE_AUDIT_LOG = Path(os.environ.get("AZAZEL_TRIAGE_AUDIT_PATH", str(WEB_LOG_DIR / "triage-audit.jsonl")))
 DECISION_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DECISION_EXPLANATIONS_PATH", "/var/log/azazel-edge/ai/decision-explanations.jsonl"))
+# The core decision chain (P0 decisions, hash-chained; Edge#462/#477), beside
+# the agent's other logs. Read only by the decision trace (Edge#341); like the
+# agent's own path it has no setting of its own.
+CORE_DECISION_AUDIT_PATH = AGENT_LOG_DIR / "core-decision-audit.jsonl"
 BOOTH_DEMO_EXPLANATIONS_PATH = Path(os.environ.get("AZAZEL_DEMO_EXPLANATIONS_PATH", "/tmp/azazel-edge-demo-explanations.jsonl"))
 BOOTH_INPUT_PROVENANCE_PATH = Path(os.environ.get("AZAZEL_BOOTH_INPUT_PROVENANCE_PATH", "/run/azazel-edge/booth-input.json"))
 # Booth Focus reads both the live snapshot vocabulary (SAFE/HEALTHY) and the
@@ -2191,6 +2201,9 @@ def _normalize_alert_event(item: Dict[str, Any]) -> Dict[str, Any]:
         "src_ip": str(advisory.get("src_ip") or normalized.get("src_ip") or ""),
         "dst_ip": str(advisory.get("dst_ip") or normalized.get("dst_ip") or ""),
         "recommendation": str(advisory.get("recommendation") or ""),
+        # The decision this alert's event is (Edge#341): set only when the
+        # event is a core decision event, never made up for any other alert.
+        "decision_trace_id": _decision_trace.alert_decision_trace_id(item) if _decision_trace is not None else "",
     }
 
 
@@ -4868,6 +4881,81 @@ def api_booth_focus():
     return jsonify(_booth_focus_payload()), 200
 
 
+def _decision_trace_report(trace_ids: List[str]) -> Dict[str, Any]:
+    """Read-only decision traces (Edge#341) of ``trace_ids``; ValueError for
+    an invalid or too long list."""
+    if _decision_trace is None:
+        raise RuntimeError("decision_trace_unavailable")
+    return _decision_trace.trace_report(
+        trace_ids,
+        explanations_path=DECISION_EXPLANATIONS_PATH,
+        audit_path=CORE_DECISION_AUDIT_PATH,
+    )
+
+
+def _decision_trace_request() -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Any, int]]]:
+    trace_ids = [str(item) for item in request.args.getlist("trace_id")]
+    if not trace_ids:
+        return None, (jsonify({"ok": False, "error": "trace_id_required"}), 400)
+    try:
+        return _decision_trace_report(trace_ids), None
+    except ValueError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 400)
+    except RuntimeError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 503)
+
+
+@app.route("/api/decision-trace", methods=["GET"])
+@require_token(min_role="viewer")
+def api_decision_trace():
+    """GET /api/decision-trace?trace_id=<id>[&trace_id=...] (Edge#341).
+
+    Read-only decision-level trace: the v2 explanation and the core decision
+    chain record of each decision, with the chain verdict audit_review
+    prints. A decision without a record says so; nothing is synthesized.
+    """
+    report, error = _decision_trace_request()
+    if error is not None:
+        return error
+    response = jsonify(report)
+    response.headers["Cache-Control"] = "no-store"
+    return response, 200
+
+
+@app.route("/api/decision-trace/export", methods=["GET"])
+@require_token(min_role="viewer")
+def api_decision_trace_export():
+    """GET /api/decision-trace/export?trace_id=<id>[&trace_id=...] (Edge#341).
+
+    The same report as /api/decision-trace as a JSON attachment: the
+    decisions of one incident, for an audit record or a report. Read only.
+    """
+    report, error = _decision_trace_request()
+    if error is not None:
+        return error
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    response = Response(json.dumps(report, ensure_ascii=False, indent=2) + "\n", mimetype="application/json")
+    response.headers["Content-Disposition"] = f'attachment; filename="decision-trace-{stamp}.json"'
+    response.headers["Cache-Control"] = "no-store"
+    return response, 200
+
+
+def _bundle_decision_traces(recent_alerts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Decision traces of the alerts the evidence payload shows, one per
+    decision (newest first). Never fails the bundle."""
+    ids: List[str] = []
+    for alert in reversed(recent_alerts):
+        tid = str(alert.get("decision_trace_id") or "")
+        if tid and tid not in ids:
+            ids.append(tid)
+    if _decision_trace is not None:
+        ids = ids[: _decision_trace.MAX_TRACE_IDS]
+    try:
+        return _decision_trace_report(ids)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc) or type(exc).__name__, "traces": []}
+
+
 @app.route("/api/aggregator/nodes/register", methods=["POST"])
 @require_token(min_role="admin")
 def api_aggregator_register_node():
@@ -6138,6 +6226,9 @@ def api_dashboard_bundle():
     # projection (why chosen / why not others / release condition / audit
     # refs / per-domain rationale) rendered on the SOC/NOC focus screens.
     decision_focus = _booth_focus_payload()
+    # Same shape as GET /api/decision-trace, for the decisions of the alerts
+    # in `evidence` (Edge#341): one trace per decision, never per alert.
+    decision_traces = _bundle_decision_traces(evidence.get("recent_alerts") or [])
 
     # Same enrichments as GET /api/state.
     state_payload = dict(state)
@@ -6194,6 +6285,7 @@ def api_dashboard_bundle():
                 "trends": trends,
                 "activity": activity,
                 "decision_focus": decision_focus,
+                "decision_traces": decision_traces,
                 "state": state_payload,
                 "topolite_seed_mode": topolite_response,
                 "mattermost": mattermost,

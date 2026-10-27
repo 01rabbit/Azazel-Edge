@@ -331,6 +331,18 @@ sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- h
 sudo tail -n 1 /var/log/azazel-edge/ai/decision-explanations.jsonl | python3 -c 'import json, sys; print(json.load(sys.stdin).get("trust_capsule", {}).get("signature_state"))'
 ```
 
+SVC-14 only reads too: the Web UI's decision trace (#341) of the newest
+record of the core decision chain, the same join of explanation and chain
+that `azazel-edge-audit-review --trace-id` makes. The chain holds P0
+decisions only; with no record in it (SVC-09 step 2 gave none), mark SVC-14
+`N/A (no P0 decision)`.
+
+```bash
+# SVC-14 (after SVC-13): the Web UI's decision trace of the newest chain record
+TID=$(sudo tail -n 1 /var/log/azazel-edge/ai/core-decision-audit.jsonl | python3 -c 'import json, sys; print(json.load(sys.stdin)["trace_id"])')
+sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- "https://127.0.0.1/api/decision-trace?trace_id=$TID" | python3 -c 'import json, sys; d = json.load(sys.stdin); t = d["traces"][0]; print(t["explanation"]["status"], t["chain_record"]["status"], t["chain_record"].get("integrity"), d["sources"]["chain"]["verified"])'
+```
+
 | ID | Check | Command | Expected | Result | PR / issue |
 | --- | --- | --- | --- | --- | --- |
 | SVC-01 | Units active | `systemctl is-active azazel-edge-control-daemon azazel-edge-core azazel-edge-web azazel-edge-ai-agent azazel-edge-suricata azazel-edge-opencanary nginx ntfy` | `active` for each | | #483 |
@@ -346,6 +358,7 @@ sudo tail -n 1 /var/log/azazel-edge/ai/decision-explanations.jsonl | python3 -c 
 | SVC-11 | OpenCanary/Suricata display | command above | `opencanary`, `suricata` and `ntfy` are `ON`; `container_check` is `not_checked` (the Web UI no longer asks Docker) | | #475 |
 | SVC-12 | SNMP/NetFlow (optional) | commands above (not installed by default: `ENABLE_SNMP`/`ENABLE_NETFLOW` are `0`, and `install_sensors.sh` enables units only with `ENABLE_SERVICES=1`) | `User=azazel-sensor`; `ActiveState=inactive`, `Result=success`: the module has no entry point and exits 0 at once, so **no sensor runs** (section 5) | | #480, #483 |
 | SVC-13 | Decision explanation from the agent | commands above (after SVC-09 step 2) | The file is `640 azazel-agent:azazel-web`; the audit review prints the action of the newest decision with `schema:OK`, `capsule:signed` and `chain:OK(<N>) chain_scope=… chain_files=…`, and for an isolate/redirect/throttle `release=NOT APPLIED - planned only (dry_run)` (enforcement is off, SVC-09 step 1; never a lease time) and `hash_basis=enforcement_settings`. `chain_scope=from_genesis` and `chain_scope=from_rotation_boundary` both pass (the second: the chain was rotated and the records from the rotation boundary on were verified; `chain_files` counts the audit files read). `chain:EMPTY(0)` fails (no audit record, nothing verified, although the exit status is 0), and so does `chain:MISMATCH:…` (exit status 3). `capsule:unsigned` means `/etc/azazel-edge/trust-capsule.env` is missing, see SOCK-06 (`capsule:not_recorded` is a record from before #477). The JSON line starts with `True` (`chain.verified` is `true`; `False` fails) and repeats the scope and the capsule state; the Booth Focus line is `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1`; the last line is `signed` (the trust capsule is signed with the device's key; `unsigned` means `/etc/azazel-edge/trust-capsule.env` is missing, see SOCK-06; `None` is a record from before #477) | | #477 |
+| SVC-14 | Decision trace in the Web UI | commands above (after SVC-13) | `found found verified True`: the explanation and the chain record of that decision are found and the whole retained chain verifies. `failed_here` or `not_verified` in place of `verified`, or `False` at the end, fails (compare with the `chain:` of SVC-13); `not_found` for the explanation fails (the agent wrote no explanation of a decision it recorded) | | #341 |
 
 ### 3.2 Sockets, directories and secrets (#471 stages 1–2)
 

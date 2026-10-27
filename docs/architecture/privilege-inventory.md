@@ -146,6 +146,22 @@ Uncertain: the Web UI reads `decision-explanations.jsonl` from
 `/var/log/azazel-edge/ai/decision-explanations.jsonl` and the Web UI reads
 them there.)
 
+Decision trace (#341): the Web UI also reads, never writes,
+`/var/log/azazel-edge/ai/core-decision-audit.jsonl` (+ `.1`), the core
+decision chain, and `decision-explanations.jsonl.1`, the explanations' rotated
+file, for `GET /api/decision-trace` and `GET /api/decision-trace/export`
+(token, `viewer` role, like the other dashboard reads) and the bundle's
+`decision_traces`. The chain path is fixed beside the agent's logs (no
+variable, as the agent's own). No unit, tmpfiles or installer change: the
+directory is 2750 azazel-agent:azazel-web and the agent's `UMask=0027`
+makes both files 0640 azazel-agent:azazel-web, readable by the Web UI's
+group (as `decision-explanations.jsonl`, §11.7, §12 item 6);
+`p0-alert-queue.jsonl` stays 0600 and is not read. Files are opened
+`O_RDONLY|O_NOFOLLOW`; the chain is verified with `audit_review.verify_audit_chain`
+when one of its files changes. No new role, approval flag, environment
+variable or operation is added. Not checked on a device (container only).
+
+Also read, for completeness:
 Also read, for completeness:
 
 - **Legacy read paths** (fallback candidates when `path_schema` is not

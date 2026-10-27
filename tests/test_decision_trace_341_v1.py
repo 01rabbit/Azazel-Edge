@@ -1,0 +1,403 @@
+"""Decision-level trace in the Web UI (Edge#341).
+
+GET /api/decision-trace (and /export) join, per core decision, the v2
+explanation the agent writes and the core decision chain's record, read only,
+with the chain verdict audit_review prints. These tests check the auth
+(existing token and viewer role, nothing new), that nothing is written, that
+nothing is made up (an alert whose event is not a core decision has no trace,
+alerts of one decision share one), and that a missing explanation, a rotated
+record and a tampered chain are said as such.
+"""
+
+from __future__ import annotations
+
+import copy
+import io
+import json
+import re
+import sys
+from contextlib import redirect_stdout
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+for _p in (ROOT / "py", ROOT):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import azazel_edge_web.app as webapp  # noqa: E402
+from azazel_edge import audit_review  # noqa: E402
+from azazel_edge.explanations import trace as decision_trace  # noqa: E402
+from azazel_edge.audit import P0AuditLogger  # noqa: E402
+from azazel_edge.explanations import live  # noqa: E402
+from azazel_edge.notify.core_decisions import CORE_DECISION_SOURCE, core_decision_payload  # noqa: E402
+
+FIXTURE = ROOT / "tests" / "fixtures" / "rust_core_event_v1.json"
+VIEWER = {"X-Auth-Token": "viewer-token"}
+
+
+def core_event(action: str = "isolate", sid: int = 9341001) -> dict:
+    event = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    event["defense"]["action"] = action
+    event["enforcement"]["selected_action"] = action
+    event["normalized"]["sid"] = sid
+    return event
+
+
+def trace_of(event: dict) -> str:
+    return core_decision_payload(event)[0]
+
+
+def explain(path: Path, event: dict, *, max_bytes: int = 8 * 1024 * 1024) -> dict:
+    writer = live.LiveDecisionExplanationWriter(path, max_bytes=max_bytes)
+    rec = writer.record(event, {})
+    assert rec is not None
+    return rec
+
+
+def chain_record(logger: P0AuditLogger, event: dict) -> None:
+    trace_id, payload = core_decision_payload(event)
+    logger.log_action_decision(trace_id=trace_id, source=CORE_DECISION_SOURCE, **payload)
+
+
+@pytest.fixture
+def web(tmp_path, monkeypatch):
+    decision_trace.reset_caches()
+    logs = tmp_path / "ai"
+    logs.mkdir()
+    tokens = tmp_path / "auth_tokens.json"
+    tokens.write_text(json.dumps({"tokens": [{"token": "viewer-token", "principal": "kiosk", "role": "viewer"}]}),
+                      encoding="utf-8")
+    monkeypatch.setattr(webapp, "AUTH_FAIL_OPEN", False)
+    monkeypatch.setattr(webapp, "TOKEN_FILE", tmp_path / "no-web-token.txt")
+    monkeypatch.setattr(webapp, "AUTH_TOKENS_FILE", tokens)
+    monkeypatch.setattr(webapp, "AUTHZ_AUDIT_LOG", tmp_path / "authz.jsonl")
+    monkeypatch.setattr(webapp, "DECISION_EXPLANATIONS_PATH", logs / "decision-explanations.jsonl")
+    monkeypatch.setattr(webapp, "CORE_DECISION_AUDIT_PATH", logs / "core-decision-audit.jsonl")
+    yield webapp.app.test_client(), logs
+    decision_trace.reset_caches()
+
+
+def get_trace(client, *trace_ids, path="/api/decision-trace", headers=VIEWER):
+    query = "&".join(f"trace_id={t}" for t in trace_ids)
+    return client.get(f"{path}?{query}", headers=headers)
+
+
+# ------------------------------------------------------------------ auth
+
+def test_trace_endpoints_need_the_existing_token(web):
+    client, _ = web
+    for path in ("/api/decision-trace", "/api/decision-trace/export"):
+        response = client.get(f"{path}?trace_id=core-x")
+        assert response.status_code == 403, path
+        assert response.get_json().get("error") == "Unauthorized"
+        assert get_trace(client, "core-x", path=path, headers={"X-Auth-Token": "wrong"}).status_code == 403
+
+
+def test_a_viewer_token_is_enough_and_no_new_role_or_route_is_added(web):
+    client, _ = web
+    assert get_trace(client, "core-x").status_code == 200
+    rules = {r.rule: r for r in webapp.app.url_map.iter_rules() if r.rule.startswith("/api/decision-trace")}
+    assert set(rules) == {"/api/decision-trace", "/api/decision-trace/export"}
+    for rule in rules.values():
+        assert set(rule.methods) - {"HEAD", "OPTIONS"} == {"GET"}
+    assert webapp._ROLE_RANK == {"viewer": 10, "operator": 20, "responder": 30, "admin": 40}
+    src = (ROOT / "azazel_edge_web" / "app.py").read_text(encoding="utf-8")
+    assert src.count('@app.route("/api/decision-trace') == 2
+    for route in ('"/api/decision-trace"', '"/api/decision-trace/export"'):
+        block = src[src.index(f"@app.route({route}"):][:200]
+        assert '@require_token(min_role="viewer")' in block
+
+
+def test_writes_are_refused(web):
+    client, _ = web
+    for method in ("post", "put", "delete", "patch"):
+        assert getattr(client, method)("/api/decision-trace?trace_id=core-x", headers=VIEWER).status_code == 405
+
+
+def test_bad_requests_are_refused(web):
+    client, _ = web
+    assert client.get("/api/decision-trace", headers=VIEWER).status_code == 400
+    assert get_trace(client, "../etc/passwd").status_code == 400
+    many = [f"core-{i}" for i in range(decision_trace.MAX_TRACE_IDS + 1)]
+    assert get_trace(client, *many).get_json()["error"] == "too_many_trace_ids"
+
+
+# ------------------------------------------------------------- read only
+
+def _snapshot(directory: Path) -> dict:
+    return {p.name: (p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_mode) for p in sorted(directory.iterdir())}
+
+
+def test_reading_a_trace_writes_nothing(web):
+    client, logs = web
+    event = core_event()
+    explain(logs / "decision-explanations.jsonl", event)
+    chain_record(P0AuditLogger(logs / "core-decision-audit.jsonl", max_bytes=1 << 20), event)
+    before = _snapshot(logs)
+    for path in ("/api/decision-trace", "/api/decision-trace/export"):
+        assert get_trace(client, trace_of(event), path=path).status_code == 200
+    assert _snapshot(logs) == before
+    src = (ROOT / "py" / "azazel_edge" / "explanations" / "trace.py").read_text(encoding="utf-8")
+    code = re.sub(r'""".*?"""', "", src, flags=re.S)
+    assert not re.search(r"O_WRONLY|O_RDWR|O_CREAT|O_APPEND|write_text|write_bytes|\.write\(|os\.replace|os\.rename"
+                         r"|unlink|chmod|chown|mkdir", code)
+    assert "os.O_RDONLY | _O_NOFOLLOW" in code
+
+
+# ------------------------------------------------------- found and joined
+
+def test_a_p0_decision_shows_its_explanation_and_verified_chain_record(web):
+    client, logs = web
+    event = core_event("isolate")
+    rec = explain(logs / "decision-explanations.jsonl", event)
+    chain_record(P0AuditLogger(logs / "core-decision-audit.jsonl", max_bytes=1 << 20), event)
+    body = get_trace(client, trace_of(event)).get_json()
+    assert body["read_only"] is True and body["format"] == decision_trace.FORMAT
+    (trace,) = body["traces"]
+    exp, chain = trace["explanation"], trace["chain_record"]
+    assert exp["status"] == "found" and exp["segment"] == "active" and exp["records"] == 1
+    assert exp["selected_action"] == "isolate" and exp["schema_valid"] is True
+    # A dry run: never shown as applied.
+    assert exp["not_applied"] is True and exp["release_condition"] == "NOT APPLIED - planned only (dry_run)"
+    assert chain["status"] == "found" and chain["integrity"] == "verified" and chain["segment"] == "active"
+    assert chain["action"] == "isolate" and trace["consistency"] == {"action_matches": True}
+    assert body["sources"]["chain"]["verified"] is True and body["sources"]["chain"]["scope"] == "from_genesis"
+    # The same fields and verdict as audit_review --json.
+    out = io.StringIO()
+    with redirect_stdout(out):
+        rc = audit_review.main(["--explanations-path", str(logs / "decision-explanations.jsonl"),
+                                "--audit-path", str(logs / "core-decision-audit.jsonl"),
+                                "--trace-id", rec["trace_id"], "--json"])
+    assert rc == 0
+    cli = json.loads(out.getvalue())
+    for key, value in cli.items():
+        if key == "chain":
+            for ck, cv in value.items():
+                assert body["sources"]["chain"][ck] == cv, ck
+        else:
+            assert exp[key] == value, key
+    # Nothing new and personal: no event key, core trace id, target address or plan.
+    text = json.dumps(chain)
+    for absent in ("core_event_key", "core_trace_id", "target", "agent_received"):
+        assert absent not in text, absent
+
+
+def test_alerts_of_one_decision_share_one_trace_and_others_have_none(web, tmp_path, monkeypatch):
+    client, logs = web
+    event = core_event("isolate")
+    explain(logs / "decision-explanations.jsonl", event)
+    rows = [
+        {"event": event, "advisory": {"ts": 1.0}},
+        {"event": copy.deepcopy(event), "advisory": {"ts": 2.0}},  # the same EVE line delivered twice
+        {"event": {"normalized": {"sid": 7, "src_ip": "10.0.0.9"}}, "advisory": {"ts": 3.0}},  # not a core decision
+        {"advisory": {"ts": 4.0, "trace_id": "core-made-up"}},
+    ]
+    alerts = [webapp._normalize_alert_event(r) for r in rows]
+    tid = trace_of(event)
+    assert [a["decision_trace_id"] for a in alerts] == [tid, tid, "", ""]
+    report = webapp._bundle_decision_traces(alerts)
+    assert [t["trace_id"] for t in report["traces"]] == [tid]
+
+
+def test_the_bundle_carries_the_traces_of_the_alerts_it_shows(web, tmp_path, monkeypatch):
+    client, logs = web
+    event = core_event("isolate")
+    explain(logs / "decision-explanations.jsonl", event)
+    events = tmp_path / "ai-events.jsonl"
+    events.write_text("\n".join(json.dumps(r) for r in (
+        {"event": event, "advisory": {"ts": 1.0}},
+        {"event": {"normalized": {"sid": 1}}, "advisory": {"ts": 2.0}},
+    )) + "\n", encoding="utf-8")
+    monkeypatch.setattr(webapp, "AI_EVENT_LOG", events)
+    monkeypatch.setattr(webapp, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(webapp, "FALLBACK_STATE_PATH", tmp_path / "fallback.json")
+    monkeypatch.setattr(webapp, "cp_read_snapshot_payload", None)
+    monkeypatch.setattr(webapp, "_mattermost_ping", lambda: (False, {}))
+    body = client.get("/api/dashboard/bundle", headers=VIEWER).get_json()
+    assert [a["decision_trace_id"] for a in body["evidence"]["recent_alerts"]] == [trace_of(event), ""]
+    assert [t["trace_id"] for t in body["decision_traces"]["traces"]] == [trace_of(event)]
+
+
+# --------------------------------------------------------- not made up
+
+def test_a_decision_without_an_explanation_is_no_record(web):
+    client, logs = web
+    explain(logs / "decision-explanations.jsonl", core_event("isolate", sid=1))
+    missing = trace_of(core_event("isolate", sid=2))
+    (trace,) = get_trace(client, missing).get_json()["traces"]
+    assert trace["explanation"]["status"] == "not_found"
+    assert trace["explanation"]["rotated_file_present"] is False
+    assert trace["chain_record"]["status"] == "not_found"
+    assert "P0 decisions only" in trace["chain_record"]["note"]
+    assert trace["consistency"] == {}
+
+
+def test_missing_sources_are_said_never_an_empty_success(web):
+    client, _ = web
+    body = get_trace(client, "core-abc").get_json()
+    assert body["sources"]["explanations"]["state"] == "missing"
+    assert body["sources"]["chain"]["state"] == "missing"
+    assert body["sources"]["chain"]["scope"] == "empty" and body["sources"]["chain"]["verified"] is False
+
+
+def test_a_non_p0_decision_has_an_explanation_but_no_chain_record(web):
+    client, logs = web
+    event = core_event("notify")
+    explain(logs / "decision-explanations.jsonl", event)
+    (trace,) = get_trace(client, trace_of(event)).get_json()["traces"]
+    assert trace["explanation"]["status"] == "found"
+    assert trace["chain_record"]["status"] == "not_found"
+
+
+# ---------------------------------------------------------------- rotated
+
+def test_rotated_records_are_marked_as_in_the_older_file(web):
+    client, logs = web
+    first, second = core_event("isolate", sid=11), core_event("isolate", sid=12)
+    exp = logs / "decision-explanations.jsonl"
+    explain(exp, first, max_bytes=1)
+    explain(exp, second, max_bytes=1)  # rotates the first record to .1
+    assert (logs / "decision-explanations.jsonl.1").exists()
+    chain = P0AuditLogger(logs / "core-decision-audit.jsonl", max_bytes=1)
+    chain_record(chain, first)
+    chain_record(chain, second)  # rotates the first record to .1
+    body = get_trace(client, trace_of(first), trace_of(second)).get_json()
+    old, new = body["traces"]
+    assert old["explanation"]["segment"] == "rotated" and new["explanation"]["segment"] == "active"
+    assert old["chain_record"]["segment"] == "rotated" and old["chain_record"]["file"] == "core-decision-audit.jsonl.1"
+    assert new["chain_record"]["segment"] == "active"
+    assert old["chain_record"]["integrity"] == new["chain_record"]["integrity"] == "verified"
+    assert body["sources"]["explanations"]["files"] == ["decision-explanations.jsonl.1", "decision-explanations.jsonl"]
+
+
+def test_a_record_rotated_out_is_no_record_with_the_reason(web):
+    client, logs = web
+    events = [core_event("isolate", sid=20 + i) for i in range(3)]
+    exp = logs / "decision-explanations.jsonl"
+    for event in events:
+        explain(exp, event, max_bytes=1)  # keeps one rotated file: the first is gone
+    chain = P0AuditLogger(logs / "core-decision-audit.jsonl", max_bytes=1)
+    for event in events:
+        chain_record(chain, event)
+    body = get_trace(client, trace_of(events[0])).get_json()
+    (trace,) = body["traces"]
+    assert trace["explanation"]["status"] == "not_found"
+    assert trace["explanation"]["rotated_file_present"] is True
+    assert "rotated out" in trace["explanation"]["note"]
+    assert trace["chain_record"]["status"] == "not_found"
+    assert body["sources"]["chain"]["scope"] == "from_rotation_boundary"
+
+
+def test_the_index_follows_a_growing_file_and_a_rotation(web):
+    client, logs = web
+    exp = logs / "decision-explanations.jsonl"
+    a, b = core_event("isolate", sid=31), core_event("isolate", sid=32)
+    explain(exp, a)
+    assert get_trace(client, trace_of(b)).get_json()["traces"][0]["explanation"]["status"] == "not_found"
+    explain(exp, b)
+    assert get_trace(client, trace_of(b)).get_json()["traces"][0]["explanation"]["status"] == "found"
+    explain(exp, core_event("isolate", sid=33), max_bytes=1)  # rotation: a and b move to .1
+    seg = get_trace(client, trace_of(a)).get_json()["traces"][0]["explanation"]["segment"]
+    assert seg == "rotated"
+
+
+# ---------------------------------------------------------------- tampered
+
+def _tamper(path: Path, index: int) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    row = json.loads(lines[index])
+    row["action"] = "notify"
+    lines[index] = json.dumps(row, separators=(",", ":"))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_a_tampered_chain_record_is_shown_as_tampered_and_the_rest_unverified(web):
+    client, logs = web
+    events = [core_event("isolate", sid=40 + i) for i in range(3)]
+    exp = logs / "decision-explanations.jsonl"
+    chain_path = logs / "core-decision-audit.jsonl"
+    chain = P0AuditLogger(chain_path, max_bytes=1 << 20)
+    for event in events:
+        explain(exp, event)
+        chain_record(chain, event)
+    # Seen verified first, so the cache must notice the change.
+    assert get_trace(client, trace_of(events[1])).get_json()["traces"][0]["chain_record"]["integrity"] == "verified"
+    _tamper(chain_path, 1)
+    body = get_trace(client, *[trace_of(e) for e in events]).get_json()
+    integrity = [t["chain_record"]["integrity"] for t in body["traces"]]
+    assert integrity == ["not_verified", "failed_here", "not_verified"]
+    assert body["sources"]["chain"]["ok"] is False and body["sources"]["chain"]["verified"] is False
+    assert body["sources"]["chain"]["error"] == "chain_hash_mismatch_at:2"
+    # The tampered record no longer matches its explanation.
+    assert body["traces"][1]["consistency"] == {"action_matches": False}
+    # audit_review reports the same failure.
+    assert audit_review.verify_audit_chain(chain_path)["error"] == "chain_hash_mismatch_at:2"
+
+
+def test_an_unreadable_chain_is_unreadable_not_empty(web, monkeypatch):
+    client, logs = web
+    event = core_event()
+    explain(logs / "decision-explanations.jsonl", event)
+
+    def denied(path):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(audit_review, "verify_audit_chain", denied)
+    (logs / "core-decision-audit.jsonl").write_text("{}\n", encoding="utf-8")
+    body = get_trace(client, trace_of(event)).get_json()
+    assert body["sources"]["chain"]["state"] == "unreadable"
+    assert body["sources"]["chain"]["verified"] is False
+    assert body["traces"][0]["chain_record"]["status"] == "source_unreadable"
+
+
+# ----------------------------------------------------------------- export
+
+def test_the_export_is_the_same_report_as_an_attachment(web):
+    client, logs = web
+    event = core_event("isolate")
+    explain(logs / "decision-explanations.jsonl", event)
+    chain_record(P0AuditLogger(logs / "core-decision-audit.jsonl", max_bytes=1 << 20), event)
+    response = get_trace(client, trace_of(event), path="/api/decision-trace/export")
+    assert response.status_code == 200
+    assert re.fullmatch(r'attachment; filename="decision-trace-\d{8}T\d{6}Z\.json"',
+                        response.headers["Content-Disposition"])
+    assert response.headers["Cache-Control"] == "no-store"
+    exported = json.loads(response.get_data(as_text=True))
+    shown = get_trace(client, trace_of(event)).get_json()
+    exported.pop("generated_at")
+    shown.pop("generated_at")
+    assert exported == shown
+
+
+def test_api_reference_and_privilege_inventory_name_the_endpoints():
+    api = (ROOT / "docs" / "API_REFERENCE.md").read_text(encoding="utf-8")
+    inventory = (ROOT / "docs" / "architecture" / "privilege-inventory.md").read_text(encoding="utf-8")
+    for doc in (api, inventory):
+        assert "/api/decision-trace" in doc
+        assert "core-decision-audit.jsonl" in doc
+
+
+# ------------------------------------------------------------- console
+
+def test_console_shows_the_decision_trace_with_text_only():
+    js = (ROOT / "azazel_edge_web" / "static" / "sentinel.js").read_text(encoding="utf-8")
+    block = js[js.index("decision-level trace (Edge#341)"):js.index("var EVD_FIELDS")]
+    assert "innerHTML" not in block and "insertAdjacentHTML" not in block and "outerHTML" not in block
+    assert "textContent" in block
+    # The drawer's trace is the decision's, never an alert field.
+    assert "txt('evdTrace', a." not in js
+    assert "txt('evdTrace', view.traceId)" in js
+    # Still event-driven: no request of its own.
+    assert "fetch(" not in js and "XMLHttpRequest" not in js
+    app_js = (ROOT / "azazel_edge_web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "decisionTraces: bundle.decision_traces || {}" in app_js
+
+
+def test_console_markup_has_the_decision_trace_places():
+    client = webapp.app.test_client()
+    text = client.get("/?lang=en").get_data(as_text=True)
+    for needle in ('id="evdDecisionTrace"', 'id="evDecisions"', 'id="evDecisionExport"', 'data-ev-view="decisions"',
+                   'data-ev-panel="decisions"', 'id="evdTrace"'):
+        assert needle in text, needle
