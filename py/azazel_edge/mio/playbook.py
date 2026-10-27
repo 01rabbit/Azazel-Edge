@@ -419,6 +419,7 @@ def select_playbook(
 
 
 GENERIC_UNVERIFIED_MODE = "generic_fallback_unverified"
+SELECTION_MISMATCH = "selection_playbook_mismatch"
 
 
 def verify_generic_fallback(
@@ -457,7 +458,12 @@ def guard_selection(playbook: ReasoningPlaybook, selection: PlaybookSelection | 
     fails, the selection mode is ``generic_fallback_unverified`` and the
     reasoning loop stops before any model call: there is no further fallback.
     """
-    violations = validate_playbook(playbook)
+    if selection is not None and selection.playbook is not playbook:
+        # The loop compiles selection.playbook, so a caller-supplied selection
+        # that names a different playbook would skip the checks below.
+        violations: tuple[str, ...] = (SELECTION_MISMATCH,)
+    else:
+        violations = validate_playbook(playbook)
     if not violations and getattr(playbook, "playbook_id", None) != GENERIC_PLAYBOOK_ID:
         return selection or PlaybookSelection(playbook, "explicit", "caller_supplied")
     if not violations:
@@ -472,8 +478,13 @@ def guard_selection(playbook: ReasoningPlaybook, selection: PlaybookSelection | 
         GENERIC_PLAYBOOK,
         "invalid_playbook_fallback",
         "playbook_failed_validation:" + violations[0][:96],
-        (str(getattr(playbook, "playbook_id", ""))[:64],),
+        (_shown_playbook_id(playbook),),
     )
+
+
+def _shown_playbook_id(playbook: Any) -> str:
+    value = getattr(playbook, "playbook_id", "")
+    return value if isinstance(value, str) and _PLAYBOOK_ID_RE.match(value) else "invalid-playbook-id"
 
 
 def _unverified_generic(requested: Any, violations: Sequence[str]) -> PlaybookSelection:
@@ -481,7 +492,7 @@ def _unverified_generic(requested: Any, violations: Sequence[str]) -> PlaybookSe
         GENERIC_PLAYBOOK,
         GENERIC_UNVERIFIED_MODE,
         "generic_playbook_failed_verification:" + violations[0][:96],
-        (str(getattr(requested, "playbook_id", ""))[:64],),
+        (_shown_playbook_id(requested),),
     )
 
 

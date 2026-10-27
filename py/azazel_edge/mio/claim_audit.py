@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from .contracts import HypothesisStatus, MioHypothesis, MioRecommendation, MioSituationFrame
+from .contracts import HypothesisStatus, MioHypothesis, MioRecommendation, MioSituationFrame, safe_model_id
 
 CLAIM_AUDIT_SCHEMA = "mio_claim_audit/v1"
 UNSUPPORTED_CLAIM_POLICY = "reject"
@@ -135,9 +135,26 @@ def _origin(ref: str, frame: MioSituationFrame, imported: set[str]) -> str:
     return ORIGIN_MISSING
 
 
+def _with_origin(refs: Sequence[str], frame: MioSituationFrame, imported: set[str]) -> tuple[tuple[str, str], ...]:
+    # Origin is computed on the real ref; only a grammar-valid ref is recorded
+    # (anything else becomes INVALID_MODEL_ID, which is always not_in_frame).
+    out: dict[str, str] = {}
+    for ref in dict.fromkeys(refs):
+        origin = _origin(ref, frame, imported)
+        shown = safe_model_id(ref)
+        if shown != ref:
+            origin = ORIGIN_MISSING
+        out.setdefault(shown, origin)
+    return tuple(out.items())
+
+
+def _claim_id(kind: str, raw_id: str) -> str:
+    return f"{kind}:{safe_model_id(raw_id)}"
+
+
 def _record(claim_id: str, claim_class: str, refs: Sequence[str], required: Sequence[str] | None, frame: MioSituationFrame, imported: set[str]) -> ClaimAuditRecord:
     material = claim_class in MATERIAL_CLASSES
-    with_origin = tuple((ref, _origin(ref, frame, imported)) for ref in dict.fromkeys(refs))
+    with_origin = _with_origin(refs, frame, imported)
     missing = [ref for ref, origin in with_origin if origin == ORIGIN_MISSING]
     if missing:
         # Which refs are missing is visible in ``refs`` (origin ``not_in_frame``).
@@ -193,20 +210,20 @@ def audit_claims(
     for h in hypotheses:
         refs = list(h.supporting_evidence_refs) + list(h.contradicting_evidence_refs)
         if h.hypothesis_id in bad_status:
-            with_origin = tuple((ref, _origin(ref, frame, imported)) for ref in dict.fromkeys(refs))
-            records.append(ClaimAuditRecord(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, True, with_origin, VERDICT_UNPARSEABLE_STATUS))
+            with_origin = _with_origin(refs, frame, imported)
+            records.append(ClaimAuditRecord(_claim_id("hypothesis", h.hypothesis_id), CLASS_EVIDENCE_ASSESSMENT, True, with_origin, VERDICT_UNPARSEABLE_STATUS))
         elif h.status is HypothesisStatus.STRENGTHENED:
-            records.append(_record(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, refs, h.supporting_evidence_refs, frame, imported))
+            records.append(_record(_claim_id("hypothesis", h.hypothesis_id), CLASS_EVIDENCE_ASSESSMENT, refs, h.supporting_evidence_refs, frame, imported))
         elif h.status is HypothesisStatus.FALSIFIED:
-            records.append(_record(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, refs, h.contradicting_evidence_refs, frame, imported))
+            records.append(_record(_claim_id("hypothesis", h.hypothesis_id), CLASS_EVIDENCE_ASSESSMENT, refs, h.contradicting_evidence_refs, frame, imported))
         elif h.status is HypothesisStatus.WEAKENED:
-            record = _record(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, refs, h.contradicting_evidence_refs, frame, imported)
+            record = _record(_claim_id("hypothesis", h.hypothesis_id), CLASS_EVIDENCE_ASSESSMENT, refs, h.contradicting_evidence_refs, frame, imported)
             named = h.missing_evidence  # same rule as lifecycle._evidence_errors
             if record.verdict == VERDICT_MISSING_REFS and named:
                 record = ClaimAuditRecord(record.claim_id, record.claim_class, True, record.refs, VERDICT_NAMED_GAP, named_missing_evidence_count=len(named))
             records.append(record)
         else:
-            records.append(_record(f"hypothesis:{h.hypothesis_id}", CLASS_INFERENCE, refs, None, frame, imported))
+            records.append(_record(_claim_id("hypothesis", h.hypothesis_id), CLASS_INFERENCE, refs, None, frame, imported))
     if recommendation is not None:
-        records.append(_record(f"recommendation:{recommendation.advisory_id}", CLASS_RECOMMENDATION, recommendation.evidence_refs, None, frame, imported))
+        records.append(_record(_claim_id("recommendation", recommendation.advisory_id), CLASS_RECOMMENDATION, recommendation.evidence_refs, None, frame, imported))
     return ClaimAudit(tuple(records))

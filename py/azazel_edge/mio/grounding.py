@@ -3,7 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from .contracts import MioEvidenceGap, MioHypothesis, MioRecommendation, MioSituationFrame
+from .contracts import (
+    INVALID_MODEL_ID,
+    INVALID_MODEL_ID_CODE,
+    MioEvidenceGap,
+    MioHypothesis,
+    MioRecommendation,
+    MioSituationFrame,
+    safe_model_id,
+)
 
 
 FORBIDDEN_DIRECTIVE_KEYS = {"execute", "must_action", "override", "command", "shell", "activate", "enforce", "executable"}
@@ -27,7 +35,9 @@ class GroundingValidator:
             if isinstance(value, Mapping):
                 for key, nested in value.items():
                     key_text = str(key)
-                    child_path = f"{path}.{key_text}" if path else key_text
+                    # Keys are model-written: only id-shaped keys are echoed into errors.
+                    shown = key_text if key_text.lower() in FORBIDDEN_DIRECTIVE_KEYS else safe_model_id(key_text)
+                    child_path = f"{path}.{shown}" if path else shown
                     if key_text.lower() in FORBIDDEN_DIRECTIVE_KEYS:
                         errors.append(f"forbidden_directive_key:{child_path}")
                     walk(nested, child_path)
@@ -39,8 +49,11 @@ class GroundingValidator:
         refs = payload.get("evidence_refs", ())
         if isinstance(refs, (list, tuple)):
             for ref in refs:
-                if str(ref) not in self._allowed_refs:
-                    errors.append(f"unknown_evidence_ref:{str(ref)[:96]}")
+                shown = safe_model_id(ref)
+                if shown == INVALID_MODEL_ID:
+                    errors.append(f"{INVALID_MODEL_ID_CODE}:evidence_ref")
+                elif str(ref) not in self._allowed_refs:
+                    errors.append(f"unknown_evidence_ref:{shown}")
         return GroundingResult(not errors, tuple(errors))
 
     def validate_hypotheses(self, hypotheses: Sequence[MioHypothesis]) -> GroundingResult:
@@ -51,6 +64,10 @@ class GroundingValidator:
             errors.append("too_many_hypotheses")
         seen_ids: set[str] = set()
         for hypothesis in hypotheses:
+            if hypothesis.hypothesis_id == INVALID_MODEL_ID:
+                errors.append(f"{INVALID_MODEL_ID_CODE}:hypothesis_id")
+            if INVALID_MODEL_ID in hypothesis.supporting_evidence_refs or INVALID_MODEL_ID in hypothesis.contradicting_evidence_refs:
+                errors.append(f"{INVALID_MODEL_ID_CODE}:evidence_ref")
             if not hypothesis.hypothesis_id:
                 errors.append("empty_hypothesis_id")
             elif hypothesis.hypothesis_id in seen_ids:
@@ -82,6 +99,12 @@ class GroundingValidator:
         allowed = {str(item) for item in allowed_capabilities}
         seen_gap_ids: set[str] = set()
         for gap in gaps:
+            if gap.gap_id == INVALID_MODEL_ID:
+                errors.append(f"{INVALID_MODEL_ID_CODE}:gap_id")
+            if INVALID_MODEL_ID in gap.discriminates_hypothesis_ids:
+                errors.append(f"{INVALID_MODEL_ID_CODE}:discriminates_hypothesis_id")
+            if gap.capability == INVALID_MODEL_ID:
+                errors.append(f"{INVALID_MODEL_ID_CODE}:capability")
             if not gap.gap_id:
                 errors.append("empty_gap_id")
             elif gap.gap_id in seen_gap_ids:
@@ -101,6 +124,8 @@ class GroundingValidator:
 
     def validate_recommendation(self, recommendation: MioRecommendation) -> GroundingResult:
         errors: list[str] = []
+        if INVALID_MODEL_ID in recommendation.evidence_refs:
+            errors.append(f"{INVALID_MODEL_ID_CODE}:evidence_ref")
         if recommendation.executable:
             errors.append("recommendation_must_not_be_executable")
         if not recommendation.summary.strip():

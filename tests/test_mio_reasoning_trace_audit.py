@@ -554,6 +554,9 @@ def test_redaction_false_positives_kept(text):
 def test_handoff_validates_ids_and_redacts_everything_else():
     f = frame(trace_id="trace-1", evidence_refs=["ev:ssh:1", "ghp_ABCDEFGHIJKLMNOPQRST", "password=hunter2"])
     hyp = MioHypothesis.from_mapping({"hypothesis_id": "password=hunter2", "statement": "s", "falsification_conditions": ["c"]}, ordinal=1)
+    assert hyp.hypothesis_id == "invalid-model-id"  # parsing already refuses it (#386) ...
+    import dataclasses
+    hyp = dataclasses.replace(hyp, hypothesis_id="password=hunter2")  # ... the handoff guards a caller-built one too
     payload = build_no_model_handoff(f, reason="model_absent password=hunter2", playbook=PLAYBOOK, hypotheses=[hyp]).to_dict()
     blob = json.dumps(payload)
     assert "hunter2" not in blob and "ghp_ABCDEFGHIJKLMNOPQRST" not in blob

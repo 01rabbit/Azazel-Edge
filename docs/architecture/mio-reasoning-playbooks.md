@@ -60,6 +60,11 @@ enforced at gap-scoring time against the live broker registry
 (`capability_not_registered_in_broker`), so an allowlisted but unregistered capability
 can never be called even though the content gate does not need the registry.
 
+A caller-supplied `selection` must wrap the very playbook passed to the loop: the loop
+compiles `selection.playbook`, so a selection that names a different object is treated
+as invalid (`selection_reason: playbook_failed_validation:selection_playbook_mismatch`)
+and the generic playbook runs instead.
+
 The generic playbook is verified too (`verify_generic_fallback`): it must pass
 `validate_playbook` (and, when a registry is given, broker registration) and may not allow
 a capability whose cost class is `high` (`generic_capability_cost_high:<name>`), so the
@@ -68,6 +73,16 @@ the selection mode is `generic_fallback_unverified`
 (`selection_reason: generic_playbook_failed_verification:<code>`), the cycle ends in
 `VALIDATION_REJECTED` before any model call, nothing is compiled, and the no-model
 handoff carries no playbook block.
+
+What the generic checks cover, exactly: a playbook counts as "generic" only by
+`playbook_id == "generic-evidence-first-v1"`. The extra checks (high-cost ban,
+`generic_fallback_unverified`) apply to any playbook with that id, and to the module's
+`GENERIC_PLAYBOOK` whenever the loop falls back to it. A playbook with another id gets
+only `validate_playbook`, so it may allow a high-cost capability such as
+`request_trace`. The high-cost ban uses the static `CAPABILITY_COST_CLASS` table; a
+capability missing from that table counts as medium and is not banned. The ban is a
+static content check, not a budget: call counts stay with the broker's total and
+per-capability budgets and the loop's `ReasoningBudget`.
 
 Under the generic playbook the usual limits still hold: a gap naming a capability outside
 its allowlist rejects the gap set before the broker; the broker's total and
