@@ -41,6 +41,7 @@ from .playbook import (
     selection_rules_digest,
     template_digest,
     validate_playbook,
+    verify_generic_fallback,
 )
 from .reasoning import BoundedReasoningLoop, ReasoningBudget, ReasoningOutcome
 from .replay import ReplayFixture, run_replay, run_selected
@@ -102,4 +103,5 @@ __all__ = [
     "selection_rules_digest",
     "template_digest",
     "validate_playbook",
+    "verify_generic_fallback",
 ]

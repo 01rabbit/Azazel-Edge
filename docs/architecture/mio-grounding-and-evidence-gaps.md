@@ -6,7 +6,7 @@ Implementation: `py/azazel_edge/mio/evidence_gap_scoring.py`,
 `py/azazel_edge/mio/claim_audit.py`, `py/azazel_edge/mio/grounding.py`, wired in
 `py/azazel_edge/mio/reasoning.py`. Tests:
 `tests/test_mio_grounding_playbook_acceptance.py`,
-`tests/test_mio_cognitive_shadow_core.py`, `tests/test_mio_adversarial_schema.py`.
+`tests/test_mio_grounding_provenance_386.py`, `tests/test_mio_cognitive_shadow_core.py`, `tests/test_mio_adversarial_schema.py`.
 Design: #366. Acceptance: #386. Related: [mio-reasoning-playbooks.md](mio-reasoning-playbooks.md),
 [mio-capability-broker.md](mio-capability-broker.md), [mio-situation-frame.md](mio-situation-frame.md).
 
@@ -82,7 +82,30 @@ Only facts tied to the current, validated hypotheses count:
 | `cost_high` | -15 | cost class high (e.g. `request_trace`) |
 
 Each `GapScore` carries `reasons` as `(rule, delta)` pairs whose sum is the score, so an
-operator can read exactly why a gap ranked where it did. This is what makes a cheap,
+operator can read exactly why a gap ranked where it did.
+
+Each component is also traceable to the named missing evidence it rests on. The gap
+itself is the named missing evidence (`gap:<gap_id>`); every rule and every
+ineligibility code carries a sorted `basis` of identifiers, never model prose (the gap
+`question` is not copied into the trace). The basis does not change the score, the
+policy version or `scoring_policy_digest()`.
+
+| Rule / code | `basis` |
+|---|---|
+| `base` | `gap:<gap_id>` |
+| `discriminates_multiple_hypotheses` | `hypothesis:<id>` for each live target |
+| `targets_falsifiable_hypothesis` | `hypothesis:<id>` for each target with a falsification condition |
+| `model_priority_hint` | `gap:<gap_id>`, `model_priority:<0..100>` |
+| `already_collected_this_cycle` | `capability:<name>` |
+| `cost_<class>` | `capability:<name>`, `cost_class:<class>` |
+| `capability_not_allowed_by_playbook`, `capability_not_registered_in_broker` | `capability:<name>` |
+| `cannot_change_hypothesis_state` | `gap:<gap_id>` and the unknown or terminal `hypothesis:<id>` it named |
+| `cycle_broker_budget_exhausted` | `budget:remaining_broker_calls=0` |
+| `insufficient_expected_value` | `gap:<gap_id>`, `structural_score:<n>`, `min_eligible_score:<n>` |
+
+In the `evidence_gap_scores` trace event each score has `targets` (the live hypotheses
+the gap could move), `reasons[].basis`, `ineligible_reasons` (codes) and
+`ineligible_basis` (`{code, basis}` in the same order). This is what makes a cheap,
 discriminating, falsifying query win over an expensive confirming one even when the
 model gave the confirming one a higher priority.
 
@@ -135,6 +158,23 @@ Verdicts: `supported`, `inference_unreferenced`, `weakened_by_named_gap`,
 `unsupported_missing_refs`, `unsupported_unknown_ref` (any cited ref is `not_in_frame`),
 `unsupported_unparseable_status`.
 
+Each verdict has exactly one fixed `reason` code (`VERDICT_REASON`, closed set
+`REASON_CODES`); `ClaimAuditRecord` refuses any other reason, so the audit never carries
+free text from the model or from evidence:
+
+| Verdict | `reason` |
+|---|---|
+| `supported` | `all_cited_refs_in_context` |
+| `inference_unreferenced` | `marked_inference` |
+| `weakened_by_named_gap` | `weakened_with_named_missing_evidence` |
+| `unsupported_missing_refs` | `material_claim_without_required_refs` |
+| `unsupported_unknown_ref` | `cited_ref_not_in_context` |
+| `unsupported_unparseable_status` | `model_status_not_in_vocabulary_coerced_to_proposed` |
+
+Which refs are missing is visible in `refs` (origin `not_in_frame`). For
+`weakened_by_named_gap` the record keeps only `named_missing_evidence_count`; the
+`missing_evidence` entries themselves are not copied into the audit.
+
 **Policy: `reject`.** If any material claim is unsupported, the cycle ends in
 `VALIDATION_REJECTED` with `unsupported_claim:<claim_id>:<verdict>` errors. Claims are
 never silently dropped while keeping the surrounding certainty, and never silently
@@ -148,6 +188,10 @@ accepted. Edge's deterministic outputs are unaffected either way.
   `gap_not_eligible:<gap_id>:<code>` in the outcome errors (a cycle can still `COMPLETE`).
 - Only refs from successful broker results extend the cycle's allowed refs.
 - A generic-playbook cycle reports `generic_fallback:<reason>` in the outcome errors.
+- If the generic playbook itself fails `verify_generic_fallback`, the cycle ends in
+  `VALIDATION_REJECTED` before any model call (`generic_fallback_unverified`).
+- Claim-audit `reason` is a fixed code per verdict; earlier builds put cited refs and
+  `missing_evidence` text into it.
 
 ## Structural grounding (`GroundingValidator`)
 

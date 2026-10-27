@@ -80,7 +80,7 @@ def test_gap_score_is_itemised_and_sums_to_total():
                      "model_priority_hint": 8, "cost_low": 0}
     assert score.score == sum(rules.values()) == 88
     assert score.eligible and score.rank == 1
-    assert score.to_dict()["reasons"][0] == {"rule": "base", "delta": 50}
+    assert score.to_dict()["reasons"][0] == {"rule": "base", "delta": 50, "basis": ["gap:g1"]}
 
 
 def test_cheap_discriminating_falsification_outranks_expensive_confirmation_even_with_lower_model_priority():

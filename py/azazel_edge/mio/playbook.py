@@ -418,6 +418,33 @@ def select_playbook(
     return guard_selection(selection.playbook, selection)
 
 
+GENERIC_UNVERIFIED_MODE = "generic_fallback_unverified"
+
+
+def verify_generic_fallback(
+    playbook: ReasoningPlaybook | None = None,
+    *,
+    registered_capabilities: Sequence[str] | None = None,
+) -> tuple[str, ...]:
+    """Deterministic checks the generic fallback must pass before it is compiled.
+
+    The fallback is what runs when nothing else can, so it is held to the full
+    static validation (non-executable, no directives, capability grammar and,
+    when given, broker registration) and kept cheap: it may not allow a
+    capability whose cost class is ``high``. Budgets themselves stay with the
+    broker and the reasoning loop; this never raises or widens one.
+    """
+    from .evidence_gap_scoring import CAPABILITY_COST_CLASS  # local: avoid an import cycle at module load
+
+    candidate = GENERIC_PLAYBOOK if playbook is None else playbook
+    errors = list(validate_playbook(candidate, registered_capabilities=registered_capabilities))
+    if isinstance(candidate, ReasoningPlaybook) and isinstance(candidate.allowed_capabilities, tuple):
+        for capability in candidate.allowed_capabilities:
+            if isinstance(capability, str) and CAPABILITY_COST_CLASS.get(capability) == "high":
+                errors.append(f"generic_capability_cost_high:{capability}")
+    return tuple(errors)
+
+
 def guard_selection(playbook: ReasoningPlaybook, selection: PlaybookSelection | None = None) -> PlaybookSelection:
     """Runtime gate: a playbook that fails ``validate_playbook`` is never compiled.
 
@@ -425,15 +452,36 @@ def guard_selection(playbook: ReasoningPlaybook, selection: PlaybookSelection | 
     registration is enforced separately at gap-scoring time against the live
     broker registry (``capability_not_registered_in_broker``), so an allowlisted
     but unregistered capability can never be called.
+
+    The generic playbook is verified too (``verify_generic_fallback``). If it
+    fails, the selection mode is ``generic_fallback_unverified`` and the
+    reasoning loop stops before any model call: there is no further fallback.
     """
     violations = validate_playbook(playbook)
-    if not violations:
+    if not violations and getattr(playbook, "playbook_id", None) != GENERIC_PLAYBOOK_ID:
         return selection or PlaybookSelection(playbook, "explicit", "caller_supplied")
+    if not violations:
+        generic_violations = verify_generic_fallback(playbook)
+        if not generic_violations:
+            return selection or PlaybookSelection(playbook, "explicit", "caller_supplied")
+        return _unverified_generic(playbook, generic_violations)
+    generic_violations = verify_generic_fallback()
+    if generic_violations:
+        return _unverified_generic(playbook, generic_violations)
     return PlaybookSelection(
         GENERIC_PLAYBOOK,
         "invalid_playbook_fallback",
         "playbook_failed_validation:" + violations[0][:96],
         (str(getattr(playbook, "playbook_id", ""))[:64],),
+    )
+
+
+def _unverified_generic(requested: Any, violations: Sequence[str]) -> PlaybookSelection:
+    return PlaybookSelection(
+        GENERIC_PLAYBOOK,
+        GENERIC_UNVERIFIED_MODE,
+        "generic_playbook_failed_verification:" + violations[0][:96],
+        (str(getattr(requested, "playbook_id", ""))[:64],),
     )
 
 

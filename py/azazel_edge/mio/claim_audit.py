@@ -37,6 +37,33 @@ VERDICT_UNPARSEABLE_STATUS = "unsupported_unparseable_status"
 VERDICT_NAMED_GAP = "weakened_by_named_gap"  # weakened with no refuting ref but an explicit missing_evidence entry
 UNSUPPORTED_VERDICTS = frozenset({VERDICT_MISSING_REFS, VERDICT_UNKNOWN_REF, VERDICT_UNPARSEABLE_STATUS})
 
+# Fixed, closed reason codes. A record's ``reason`` is always one of these and
+# never carries model or attacker text: the refs (with origin) and the count of
+# named missing-evidence entries are kept in their own structured fields.
+REASON_REFS_IN_CONTEXT = "all_cited_refs_in_context"
+REASON_MARKED_INFERENCE = "marked_inference"
+REASON_REF_NOT_IN_CONTEXT = "cited_ref_not_in_context"
+REASON_NO_REQUIRED_REFS = "material_claim_without_required_refs"
+REASON_STATUS_COERCED = "model_status_not_in_vocabulary_coerced_to_proposed"
+REASON_NAMED_MISSING_EVIDENCE = "weakened_with_named_missing_evidence"
+REASON_CODES = frozenset({
+    REASON_REFS_IN_CONTEXT,
+    REASON_MARKED_INFERENCE,
+    REASON_REF_NOT_IN_CONTEXT,
+    REASON_NO_REQUIRED_REFS,
+    REASON_STATUS_COERCED,
+    REASON_NAMED_MISSING_EVIDENCE,
+})
+# The only reason each verdict may carry.
+VERDICT_REASON = {
+    VERDICT_SUPPORTED: REASON_REFS_IN_CONTEXT,
+    VERDICT_INFERENCE_UNREFERENCED: REASON_MARKED_INFERENCE,
+    VERDICT_MISSING_REFS: REASON_NO_REQUIRED_REFS,
+    VERDICT_UNKNOWN_REF: REASON_REF_NOT_IN_CONTEXT,
+    VERDICT_UNPARSEABLE_STATUS: REASON_STATUS_COERCED,
+    VERDICT_NAMED_GAP: REASON_NAMED_MISSING_EVIDENCE,
+}
+
 ORIGIN_FRAME = "frame_evidence"
 ORIGIN_KNOWLEDGE = "frame_knowledge"
 ORIGIN_BROKER = "broker_imported"
@@ -50,7 +77,17 @@ class ClaimAuditRecord:
     material: bool
     refs: tuple[tuple[str, str], ...]  # (ref, origin)
     verdict: str
-    reason: str = ""
+    reason: str = ""  # filled from VERDICT_REASON; a fixed code, never free text
+    named_missing_evidence_count: int = 0  # weakened_by_named_gap only; the entries themselves are not copied
+
+    def __post_init__(self) -> None:
+        expected = VERDICT_REASON.get(self.verdict)
+        if expected is None:
+            raise ValueError("unknown claim audit verdict")
+        if self.reason == "":
+            object.__setattr__(self, "reason", expected)
+        elif self.reason != expected:
+            raise ValueError("claim audit reason must be the fixed code for its verdict")
 
     @property
     def unsupported(self) -> bool:
@@ -64,6 +101,7 @@ class ClaimAuditRecord:
             "refs": [{"ref": ref, "origin": origin} for ref, origin in self.refs],
             "verdict": self.verdict,
             "reason": self.reason,
+            "named_missing_evidence_count": self.named_missing_evidence_count,
         }
 
 
@@ -102,11 +140,12 @@ def _record(claim_id: str, claim_class: str, refs: Sequence[str], required: Sequ
     with_origin = tuple((ref, _origin(ref, frame, imported)) for ref in dict.fromkeys(refs))
     missing = [ref for ref, origin in with_origin if origin == ORIGIN_MISSING]
     if missing:
-        return ClaimAuditRecord(claim_id, claim_class, material, with_origin, VERDICT_UNKNOWN_REF, "cites:" + ",".join(missing[:4])[:200])
+        # Which refs are missing is visible in ``refs`` (origin ``not_in_frame``).
+        return ClaimAuditRecord(claim_id, claim_class, material, with_origin, VERDICT_UNKNOWN_REF)
     if material and not list(required if required is not None else refs):
-        return ClaimAuditRecord(claim_id, claim_class, material, with_origin, VERDICT_MISSING_REFS, "material_claim_without_required_refs")
+        return ClaimAuditRecord(claim_id, claim_class, material, with_origin, VERDICT_MISSING_REFS)
     if not with_origin:
-        return ClaimAuditRecord(claim_id, claim_class, material, with_origin, VERDICT_INFERENCE_UNREFERENCED, "marked_inference")
+        return ClaimAuditRecord(claim_id, claim_class, material, with_origin, VERDICT_INFERENCE_UNREFERENCED)
     return ClaimAuditRecord(claim_id, claim_class, material, with_origin, VERDICT_SUPPORTED)
 
 
@@ -155,15 +194,16 @@ def audit_claims(
         refs = list(h.supporting_evidence_refs) + list(h.contradicting_evidence_refs)
         if h.hypothesis_id in bad_status:
             with_origin = tuple((ref, _origin(ref, frame, imported)) for ref in dict.fromkeys(refs))
-            records.append(ClaimAuditRecord(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, True, with_origin, VERDICT_UNPARSEABLE_STATUS, "model_status_not_in_vocabulary_coerced_to_proposed"))
+            records.append(ClaimAuditRecord(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, True, with_origin, VERDICT_UNPARSEABLE_STATUS))
         elif h.status is HypothesisStatus.STRENGTHENED:
             records.append(_record(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, refs, h.supporting_evidence_refs, frame, imported))
         elif h.status is HypothesisStatus.FALSIFIED:
             records.append(_record(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, refs, h.contradicting_evidence_refs, frame, imported))
         elif h.status is HypothesisStatus.WEAKENED:
             record = _record(f"hypothesis:{h.hypothesis_id}", CLASS_EVIDENCE_ASSESSMENT, refs, h.contradicting_evidence_refs, frame, imported)
-            if record.verdict == VERDICT_MISSING_REFS and h.missing_evidence:
-                record = ClaimAuditRecord(record.claim_id, record.claim_class, True, record.refs, VERDICT_NAMED_GAP, "missing_evidence:" + "|".join(h.missing_evidence)[:160])
+            named = h.missing_evidence  # same rule as lifecycle._evidence_errors
+            if record.verdict == VERDICT_MISSING_REFS and named:
+                record = ClaimAuditRecord(record.claim_id, record.claim_class, True, record.refs, VERDICT_NAMED_GAP, named_missing_evidence_count=len(named))
             records.append(record)
         else:
             records.append(_record(f"hypothesis:{h.hypothesis_id}", CLASS_INFERENCE, refs, None, frame, imported))

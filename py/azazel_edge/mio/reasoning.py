@@ -27,7 +27,7 @@ from .lifecycle import (
     validate_initial_hypotheses,
 )
 from .model_adapter import MioModelBlocked, MioModelUnavailable
-from .playbook import PlaybookSelection, PromptCompiler, ReasoningPlaybook, guard_selection, reasoning_provenance
+from .playbook import GENERIC_UNVERIFIED_MODE, PlaybookSelection, PromptCompiler, ReasoningPlaybook, guard_selection, reasoning_provenance
 from .trace import ReasoningTrace
 
 ModelInvoker = Callable[[str, str], Mapping[str, Any]]
@@ -134,6 +134,10 @@ class BoundedReasoningLoop:
         if selection.is_generic_fallback:
             errors.append(f"generic_fallback:{selection.reason}")
             _LOG.warning("mio generic playbook fallback cycle=%s reason=%s", str(cycle_id)[:96], selection.reason)
+        if selection.mode == GENERIC_UNVERIFIED_MODE:
+            # No further fallback: never compile or hand off an unverified playbook.
+            playbook = None
+            return finish(ReasoningState.VALIDATION_REJECTED, (), (), None)
         bad_status: list[str] = []
 
         if frame.freshness_seconds > max(0, int(self.budget.max_frame_age_seconds)):
