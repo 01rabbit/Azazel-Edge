@@ -311,10 +311,19 @@ SVC-13 は読むだけです。agent は core の判定 1 件ごとに v2 の判
 1 件書きます（#477）。SVC-09 の段階 2 のテストアラートで書かれます。段階 2 を
 していなければ SVC-13 は `N/A (no test alerts)` にします。
 
+コマンドには `sudo` が要ります。`/var/log/azazel-edge/ai` は
+`2750 azazel-agent:azazel-web` で、その中の判定の説明と core の判定の監査チェーン
+（回転の後は `.1` も）は `azazel-agent` の持ち物で、その他のユーザーには権限が
+ありません。`azazel-web` に入っていない `<pi-user>` では読めず、`sudo` を付けないと
+監査レビューは `PermissionError`（終了コード 1）で終わります。これは権限の問題で、
+記録が無いのではありません。
+
 ```bash
 # SVC-13 (after SVC-09 step 2): the agent's v2 explanation of the core's decision
 sudo stat -c '%a %U:%G' /var/log/azazel-edge/ai/decision-explanations.jsonl
 sudo azazel-edge-audit-review --compact --audit-path /var/log/azazel-edge/ai/core-decision-audit.jsonl
+# optional, the same review as JSON
+sudo azazel-edge-audit-review --json --audit-path /var/log/azazel-edge/ai/core-decision-audit.jsonl | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["chain"]["verified"], d["chain"]["scope"], d["capsule_signature_state"])'
 sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- https://127.0.0.1/api/booth-focus | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["available"], d["mode"]["kind"], d["decision"]["action"], d["audit"]["policy_profile"])'
 sudo tail -n 1 /var/log/azazel-edge/ai/decision-explanations.jsonl | python3 -c 'import json, sys; print(json.load(sys.stdin).get("trust_capsule", {}).get("signature_state"))'
 ```
@@ -333,7 +342,7 @@ sudo tail -n 1 /var/log/azazel-edge/ai/decision-explanations.jsonl | python3 -c 
 | SVC-10 | トークンファイルを使った ntfy の SSE | 上のコマンド | 端末 2 が `200`。端末 1 に `first-run test` を含むイベントが出る | | #475, #485 |
 | SVC-11 | OpenCanary/Suricata の表示 | 上のコマンド | `opencanary`・`suricata`・`ntfy` が `ON`、`container_check` が `not_checked`（Web UI は Docker に問い合わせない） | | #475 |
 | SVC-12 | SNMP/NetFlow（任意） | 上のコマンド（既定では入らない: `ENABLE_SNMP`/`ENABLE_NETFLOW` は `0`、`install_sensors.sh` は `ENABLE_SERVICES=1` のときだけ unit を有効にする） | `User=azazel-sensor`。`ActiveState=inactive`、`Result=success`: モジュールにエントリポイントが無くすぐに終了コード 0 で終わるので、**センサーは動いていない**（5 章） | | #480, #483 |
-| SVC-13 | agent が書く判定の説明 | 上のコマンド（SVC-09 の段階 2 の後） | ファイルが `640 azazel-agent:azazel-web`。監査レビューが `schema:OK`、`capsule:signed`、`chain:OK(…)` を最新の判定の action と一緒に出し、isolate・redirect・throttle なら `release=NOT APPLIED - planned only (dry_run)`（SVC-09 の段階 1 のとおり enforcement は無効。lease の時刻は出ない）と `hash_basis=enforcement_settings` も出す。Booth Focus の行が `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1`。最後の行が `signed`（trust capsule が機器の鍵で署名されている。`unsigned` なら `/etc/azazel-edge/trust-capsule.env` が無い。SOCK-06 を見る。`None` は #477 より前の記録） | | #477 |
+| SVC-13 | agent が書く判定の説明 | 上のコマンド（SVC-09 の段階 2 の後） | ファイルが `640 azazel-agent:azazel-web`。監査レビューが最新の判定の action と一緒に `schema:OK`、`capsule:signed`、`chain:OK(<N>) chain_scope=… chain_files=…` を出し、isolate・redirect・throttle なら `release=NOT APPLIED - planned only (dry_run)`（SVC-09 の段階 1 のとおり enforcement は無効。lease の時刻は出ない）と `hash_basis=enforcement_settings` も出す。`chain_scope=from_genesis` と `chain_scope=from_rotation_boundary` はどちらも合格（後者はチェーンが回転していて、回転の境目から後の記録を検証した。`chain_files` は読んだ監査ファイルの数）。`chain:EMPTY(0)` は失敗（監査の記録が無く、何も検証していない。終了コードは 0 でも失敗）。`chain:MISMATCH:…`（終了コード 3）も失敗。`capsule:unsigned` なら `/etc/azazel-edge/trust-capsule.env` が無い。SOCK-06 を見る（`capsule:not_recorded` は #477 より前の記録）。JSON の行は `True` で始まり（`chain.verified` が `true`。`False` は失敗）、scope と capsule の状態が続く。Booth Focus の行が `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1`。最後の行が `signed`（trust capsule が機器の鍵で署名されている。`unsigned` なら `/etc/azazel-edge/trust-capsule.env` が無い。SOCK-06 を見る。`None` は #477 より前の記録） | | #477 |
 
 ### 3.2 ソケット・ディレクトリ・秘密の権限（#471 段階 1・2）
 
