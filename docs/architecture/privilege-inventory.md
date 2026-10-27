@@ -1112,8 +1112,8 @@ out-of-scope findings tracked separately. Still open:
    - **What it explains.** There is no `ActionArbiter` in the live path: the
      Rust core decides (Edge#412). The record is the core's decision copied
      — `selected_action` is `enforcement.selected_action` (the action the P0
-     rule reads), `reason` the core's, `control_mode` the enforcement mode,
-     `release_condition` the core's lease due time when it reports one — and
+     rule reads), `reason` the core's, `control_mode` the enforcement mode —
+     and
      the agent's second pass (`DecisionLayers`) gives the SOC summary, states
      and evidence ids, as `DecisionExplainer` builds them for the scenario
      replay. Nothing is re-decided. `why_not_others` names the decided
@@ -1121,6 +1121,16 @@ out-of-scope findings tracked separately. Still open:
      the core reports no other alternatives. The record has no NOC evaluation
      (`noc_status` `unknown`; Booth Focus shows the live snapshot's NOC state
      for live records, as before).
+   - **Applied or planned.** The core computes `selected_action` in every
+     mode, dry run included. Only an action the core applied (result
+     `applied`/`partial_failure` with commands executed) whose release it
+     scheduled (ledger `active`/`uncertain`) gets `release_condition` `core
+     lease expires at <time>`. A planned action (`planned_not_applied`:
+     `dry_run`, `policy_gated`, `release_guard_failed`) gets `NOT APPLIED -
+     planned only (<mode>)` as its `release_condition` and at the end of its
+     `reason`, which the operator wording and Booth Focus show, so it never
+     reads as applied; `machine.arbiter.applied_state` is `applied`,
+     `not_applied` or `none` (nothing disruptive: observe, notify).
    - **Audit references.** `trace_id` is the core decision chain's trace id
      for that event, so `audit_review --trace-id <id> --audit-path
      /var/log/azazel-edge/ai/core-decision-audit.jsonl` finds a P0 decision
@@ -1130,6 +1140,17 @@ out-of-scope findings tracked separately. Still open:
      ladder) and `config_hash` the sha256 of the enforcement settings the core
      reported with the event (`enforcement_status`) and its redirect policy
      source: the core reports no policy file hash of its own.
+     `machine.arbiter.policy.hash_basis` is `enforcement_settings`;
+     `audit_review` prints it (`config_hash_basis`) and Booth Focus shows it
+     beside the hash (`audit.config_hash_basis`).
+   - **Booth Focus shows the newest decision.** It reads the newest valid
+     record of the last 32, unchanged. On a busy link, observe and notify
+     records follow an isolate or redirect quickly and take its place on the
+     screen. Kept as the specification: Booth Focus answers "what did the
+     core decide last", and showing an older enforcement-bearing record as
+     the current decision would misstate the present. Enforcement-bearing
+     decisions stay in the file (`audit_review --trace-id`), in the core
+     decision chain and in the P0 alerts.
    - **Contents.** Only the existing v2 fields. Of the core event, the target
      (an address) and the reason are copied; the command plan, rollback plan
      and release metadata (owner tokens, resource keys) are not.

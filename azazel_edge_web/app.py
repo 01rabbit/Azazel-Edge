@@ -5151,6 +5151,7 @@ def _booth_focus_payload() -> Dict[str, Any]:
             "trace_id": str(record.get("trace_id") or ""),
             "policy_profile": str(record.get("policy_profile") or ""),
             "config_hash": str(record.get("config_hash") or ""),
+            "config_hash_basis": str(machine["arbiter"]["policy"].get("hash_basis") or "") if isinstance(machine.get("arbiter"), dict) and isinstance(machine["arbiter"].get("policy"), dict) else "",
             "format_version": str(record.get("format_version") or "v2"),
         },
         "safety": {

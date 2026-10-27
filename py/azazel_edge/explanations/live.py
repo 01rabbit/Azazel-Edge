@@ -21,13 +21,26 @@ projection of the core's decision:
 * ``policy_profile`` -- ``azazel-edge-core/<pipeline>``: the core's fixed
   severity ladder. ``config_hash`` -- sha256 of the enforcement settings the
   core reported with the event (``enforcement_status``) and its redirect
-  policy source; the core reports no policy file hash of its own.
+  policy source; the core reports no policy file hash of its own, so
+  ``machine.arbiter.policy.hash_basis`` is ``enforcement_settings``
+  (``audit_review`` prints it; Booth Focus returns it as
+  ``audit.config_hash_basis``).
 * ``why_not_others`` -- only when the core's effective action differs from the
   one it decided (a redirect fallback): the decided action, with the core's
   policy reason. The core reports no other alternatives.
-* ``release_condition`` -- the core's lease due time when it reports one.
+* ``release_condition`` -- the core's lease due time only for an action it
+  applied (result ``applied``/``partial_failure``, ledger ``active``/
+  ``uncertain``); for a planned action (``planned_not_applied``: dry_run,
+  policy_gated, release_guard_failed) ``NOT APPLIED - planned only (<mode>)``,
+  and the same label is added to ``reason`` (and so to the operator
+  wording), so a planned action never reads as applied.
 * nothing of the core's command plan, rollback plan or release metadata
   (owner tokens, resource keys) is copied.
+
+Booth Focus shows the newest record (unchanged): observe and notify records
+that follow an enforcement-bearing one replace it on the screen, by design
+(privilege-inventory §12 item 6); the enforcement-bearing ones stay in this
+file, in the core decision chain and in the P0 alerts.
 
 The file is bounded: rotated to ``<name>.1`` at ``DEFAULT_MAX_BYTES`` (one
 rotated file kept, as the core decision chain), together with the Fabric
@@ -105,8 +118,44 @@ def core_config_hash(event: Mapping[str, Any]) -> str:
     return hashlib.sha256(stable_json(material).encode('utf-8')).hexdigest()
 
 
+# The core's enforcement results (rust main.rs maybe_enforce): only these
+# changed the device. Every other result planned or blocked the action.
+APPLIED_RESULTS = ('applied', 'partial_failure')
+# Release ledger states of an applied action whose lease the core runs.
+LEASED_LEDGER_STATES = ('active', 'uncertain')
+NOT_APPLIED_RESULT = 'planned_not_applied'
+
+
+def applied_state(enforcement: Mapping[str, Any]) -> str:
+    """``applied``, ``not_applied`` (planned only: dry_run, policy_gated,
+    release_guard_failed) or ``none`` (nothing disruptive to apply)."""
+
+    result = str(enforcement.get('result') or '')
+    executed = enforcement.get('executed_count')
+    if result in APPLIED_RESULTS and isinstance(executed, int) and not isinstance(executed, bool) and executed > 0:
+        return 'applied'
+    if result == NOT_APPLIED_RESULT:
+        return 'not_applied'
+    return 'none'
+
+
+def _not_applied_label(enforcement: Mapping[str, Any]) -> str:
+    return f"NOT APPLIED - planned only ({str(enforcement.get('mode') or 'unknown')})"
+
+
 def _release_condition(enforcement: Mapping[str, Any]) -> str:
-    due = _mapping(enforcement.get('metadata')).get('release_due_epoch')
+    """The core's lease time only for an action it applied and whose release
+    it scheduled; a planned (not applied) action has no lease."""
+
+    state = applied_state(enforcement)
+    if state == 'not_applied':
+        return _not_applied_label(enforcement)
+    if state != 'applied':
+        return ''
+    metadata = _mapping(enforcement.get('metadata'))
+    if str(metadata.get('release_ledger_state') or '') not in LEASED_LEDGER_STATES:
+        return ''
+    due = metadata.get('release_due_epoch')
     if isinstance(due, (int, float)) and not isinstance(due, bool) and due > 0:
         try:
             when = datetime.fromtimestamp(float(due), timezone.utc).isoformat(timespec='seconds')
@@ -114,6 +163,16 @@ def _release_condition(enforcement: Mapping[str, Any]) -> str:
             return ''
         return f'core lease expires at {when}'
     return ''
+
+
+def _reason(defense: Mapping[str, Any], enforcement: Mapping[str, Any], policy_reason: str) -> str:
+    """The core's reason; for a planned (not applied) action it says so, so
+    the selected action never reads as applied (Booth Focus, operator wording)."""
+
+    reason = str(defense.get('reason') or policy_reason or 'unspecified')
+    if applied_state(enforcement) == 'not_applied':
+        reason = f'{reason} [{_not_applied_label(enforcement)}]'
+    return reason
 
 
 def core_decision_arbiter(event: Mapping[str, Any], soc: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
@@ -140,7 +199,8 @@ def core_decision_arbiter(event: Mapping[str, Any], soc: Mapping[str, Any]) -> O
         'source': 'azazel-edge-core',
         'action': effective,
         'decided_action': decided,
-        'reason': str(defense.get('reason') or payload['policy_reason'] or 'unspecified'),
+        'reason': _reason(defense, enforcement, str(payload['policy_reason'])),
+        'applied_state': applied_state(enforcement),
         'policy_reason': str(payload['policy_reason']),
         'release_condition': _release_condition(enforcement),
         'control_mode': str(enforcement.get('mode') or 'none'),
@@ -152,6 +212,8 @@ def core_decision_arbiter(event: Mapping[str, Any], soc: Mapping[str, Any]) -> O
         'policy': {
             'version': f"{CORE_POLICY_PREFIX}/{payload['core_pipeline']}",
             'hash': core_config_hash(event),
+            # Not a policy file hash: the core reports none (module doc).
+            'hash_basis': 'enforcement_settings',
         },
         'chosen_evidence_ids': list(soc.get('evidence_ids') or []),
         'rejected_alternatives': rejected,

@@ -44,7 +44,16 @@ class DecisionExplainer:
         keep: int = 1,
         fallback_to_tmp: bool = True,
     ):
-        """``max_bytes``: before a record is appended, a file of that size or
+        """``output_path`` defaults to the live file the readers use
+        (``LIVE_DECISION_EXPLANATIONS_PATH``), whose only writer is the AI
+        agent (as ``azazel-agent``, through ``live.LiveDecisionExplanationWriter``).
+        Every other caller passes its own path: the scenario replay its demo
+        path, tests a temporary one. A caller that only explains
+        (``persist=False``) writes nothing there, but the constructor still
+        creates the parent directory when it can (as before #477), so code that
+        runs as root should pass its own path rather than rely on the default.
+
+        ``max_bytes``: before a record is appended, a file of that size or
         more (and each projection beside it) is rotated to ``<name>.1``,
         keeping ``keep`` rotated files; None (the default) never rotates.
         ``fallback_to_tmp=False``: a directory that cannot be created raises

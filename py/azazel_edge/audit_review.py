@@ -70,6 +70,15 @@ def _select_record(
 # Output formatters
 # ---------------------------------------------------------------------------
 
+def _config_hash_basis(record: Dict[str, Any]) -> str:
+    """What ``config_hash`` is a hash of, when the record says (the agent's
+    live records: ``enforcement_settings``, not a policy file; Edge#477)."""
+    machine = record.get("machine") if isinstance(record.get("machine"), dict) else {}
+    arbiter = machine.get("arbiter") if isinstance(machine.get("arbiter"), dict) else {}
+    policy = arbiter.get("policy") if isinstance(arbiter.get("policy"), dict) else {}
+    return str(policy.get("hash_basis") or "")
+
+
 def _format_full(record: Dict[str, Any], chain_result: Dict[str, Any]) -> str:
     """Human-readable multi-line review output."""
     lines: List[str] = []
@@ -84,6 +93,10 @@ def _format_full(record: Dict[str, Any], chain_result: Dict[str, Any]) -> str:
     lines.append(f"release_condition : {record.get('release_condition', '')}")
     lines.append(f"policy_profile    : {record.get('policy_profile', '')}")
     lines.append(f"config_hash       : {record.get('config_hash', '')}")
+    basis = _config_hash_basis(record)
+    if basis:
+        note = " (not a policy file hash)" if basis != "policy_file" else ""
+        lines.append(f"config_hash_basis : {basis}{note}")
 
     rejected_actions = record.get("rejected_actions", [])
     if rejected_actions:
@@ -150,12 +163,14 @@ def _format_compact(record: Dict[str, Any], chain_result: Dict[str, Any]) -> str
         else f"chain:MISMATCH:{chain_result.get('error', '?')}"
     )
 
+    basis = _config_hash_basis(record)
     return (
         f"trace={record.get('trace_id', '')} "
         f"action={record.get('selected_action', '')} "
         f"policy={record.get('policy_profile', '')} "
         f"hash={record.get('config_hash', '')} "
-        f"release={record.get('release_condition', '')} "
+        + (f"hash_basis={basis} " if basis else "")
+        + f"release={record.get('release_condition', '')} "
         f"{schema_status} {chain_status}"
     )
 
@@ -177,6 +192,7 @@ def _format_json(
         "release_condition": record.get("release_condition", ""),
         "policy_profile": record.get("policy_profile", ""),
         "config_hash": record.get("config_hash", ""),
+        "config_hash_basis": _config_hash_basis(record),
         "evidence_ids": record.get("evidence_ids", []),
         "operator_wording": record.get("operator_wording", ""),
         "schema_valid": len(problems) == 0,

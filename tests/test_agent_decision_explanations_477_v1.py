@@ -84,14 +84,19 @@ def test_the_agent_writes_a_valid_v2_explanation_of_the_cores_decision(agent):
     # The core's decision, copied: the action the P0 rule reads, its trace.
     assert rec["trace_id"] == trace_id
     assert rec["selected_action"] == event["enforcement"]["selected_action"] == "redirect"
-    assert rec["reason"] == event["defense"]["reason"]
+    # The fixture is a dry run: planned, not applied, and the record says so.
+    assert rec["reason"] == event["defense"]["reason"] + " [NOT APPLIED - planned only (dry_run)]"
     assert rec["policy_profile"] == "azazel-edge-core/rust_event_engine_v1"
     assert re.fullmatch(r"[0-9a-f]{64}", rec["config_hash"])
     arbiter = rec["machine"]["arbiter"]
     assert arbiter["source"] == "azazel-edge-core"
     assert arbiter["core_trace_id"] == event["enforcement"]["trace_id"]
     assert arbiter["control_mode"] == "dry_run" and arbiter["enforce_dry_run"] is True
-    assert rec["release_condition"].startswith("core lease expires at ")
+    assert arbiter["applied_state"] == "not_applied"
+    assert rec["release_condition"] == "NOT APPLIED - planned only (dry_run)"
+    assert "core lease" not in json.dumps(rec)
+    assert "NOT APPLIED - planned only (dry_run)" in rec["operator_wording"]
+    assert arbiter["policy"]["hash_basis"] == "enforcement_settings"
     # The second pass's SOC evaluation is the evidence.
     assert rec["machine"]["soc_summary"]["status"]
     assert rec["evidence_ids"] and rec["evidence_ids"] == arbiter["chosen_evidence_ids"]
@@ -280,8 +285,13 @@ def test_booth_focus_shows_what_the_agent_wrote(agent, tmp_path, monkeypatch):
     assert payload["decision"]["evidence_ids"] == rec["evidence_ids"][:4]
     assert payload["audit"] == {
         "trace_id": rec["trace_id"], "policy_profile": rec["policy_profile"],
-        "config_hash": rec["config_hash"], "format_version": "v2",
+        "config_hash": rec["config_hash"], "config_hash_basis": "enforcement_settings",
+        "format_version": "v2",
     }
+    # A dry-run decision never reads as applied on the screen.
+    assert "NOT APPLIED - planned only (dry_run)" in payload["decision"]["reason"]
+    assert payload["decision"]["release_condition"] == "NOT APPLIED - planned only (dry_run)"
+    assert payload["safety"]["dry_run"] is True
 
 
 def test_audit_review_finds_the_decision_in_the_core_chain(agent, tmp_path, monkeypatch):
@@ -329,3 +339,159 @@ def test_writer_readers_unit_tmpfiles_and_installer_name_the_same_path():
     installer = (ROOT / "installer" / "internal" / "setup_agent_account.sh").read_text(encoding="utf-8")
     assert ("AZAZEL_DECISION_EXPLANATIONS_PATH|/var/log/azazel-edge/decision-explanations\\.jsonl|"
             f"{LIVE_DECISION_EXPLANATIONS_PATH}") in installer
+
+
+# ------------------------------------------- applied vs planned only
+
+def _applied(event: dict, ledger: str = "active") -> dict:
+    """The event as the core reports an action it applied (mode enforced)."""
+    enf = event["enforcement"]
+    enf.update(mode="enforced", result="applied", executed_count=1, failed_count=0)
+    enf["metadata"]["release_ledger_state"] = ledger
+    event["enforcement_status"].update(enforce_enabled=True, dry_run=False, enforce_level="full-auto")
+    return event
+
+
+def test_only_an_applied_action_has_a_lease_and_reads_as_applied(agent):
+    agent_mod._handle_event(_applied(core_event("redirect")))
+    rec = _rows(agent)[0]
+    assert rec["machine"]["arbiter"]["applied_state"] == "applied"
+    assert rec["release_condition"].startswith("core lease expires at ")
+    assert "NOT APPLIED" not in rec["reason"] and "NOT APPLIED" not in rec["operator_wording"]
+
+
+@pytest.mark.parametrize("ledger", ["prepared", "cancelled", "planned_only", ""])
+def test_an_applied_action_without_a_running_lease_shows_no_lease(ledger):
+    enf = _applied(core_event("redirect"), ledger)["enforcement"]
+    assert live.applied_state(enf) == "applied"
+    assert live._release_condition(enf) == ""
+
+
+def test_a_failed_apply_is_not_shown_as_applied():
+    enf = _applied(core_event("redirect"))["enforcement"]
+    enf.update(result="partial_failure", executed_count=0, failed_count=1)
+    assert live.applied_state(enf) == "none" and live._release_condition(enf) == ""
+
+
+@pytest.mark.parametrize("mode", ["dry_run", "policy_gated", "release_guard_failed"])
+def test_a_planned_action_says_not_applied_and_has_no_lease_time(agent, mode, tmp_path, monkeypatch):
+    import azazel_edge_web.app as webapp
+
+    event = core_event("isolate")
+    event["enforcement"]["mode"] = mode
+    if mode == "policy_gated":
+        event["enforcement_status"]["dry_run"] = False
+    agent_mod._handle_event(event)
+    rec = _rows(agent)[0]
+    label = f"NOT APPLIED - planned only ({mode})"
+    assert rec["release_condition"] == label
+    assert rec["reason"].endswith(f"[{label}]") and label in rec["operator_wording"]
+    assert "core lease" not in rec["release_condition"]
+    monkeypatch.setattr(webapp, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(webapp, "FALLBACK_STATE_PATH", tmp_path / "fallback.json")
+    monkeypatch.setattr(webapp, "DECISION_EXPLANATIONS_PATH", agent)
+    monkeypatch.setattr(webapp, "BOOTH_DEMO_EXPLANATIONS_PATH", tmp_path / "no-demo.jsonl")
+    monkeypatch.setattr(webapp, "AUTH_FAIL_OPEN", True)
+    monkeypatch.setattr(webapp, "cp_read_snapshot_payload", None)
+    (tmp_path / "state.json").write_text(json.dumps({"snapshot_epoch": 1}), encoding="utf-8")
+    payload = webapp.app.test_client().get("/api/booth-focus").get_json()
+    assert payload["decision"]["action"] == "ISOLATE"
+    assert label in payload["decision"]["reason"]
+    assert payload["decision"]["release_condition"] == label
+
+
+def test_nothing_disruptive_has_no_release_condition(agent):
+    event = core_event("observe")
+    event["enforcement"].update(mode="disabled", result="no_disruptive_action", command_plan=[], rollback_plan=[])
+    event["enforcement"]["metadata"] = {"release_ledger_state": "not_applicable"}
+    agent_mod._handle_event(event)
+    rec = _rows(agent)[0]
+    assert rec["release_condition"] == "" and "NOT APPLIED" not in rec["reason"]
+    assert rec["machine"]["arbiter"]["applied_state"] == "none"
+
+
+def test_audit_review_says_the_config_hash_is_not_a_policy_file_hash(agent):
+    agent_mod._handle_event(core_event("redirect"))
+    outputs = {}
+    for flag in ("full", "--compact", "--json"):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            audit_review.main(["--explanations-path", str(agent), "--audit-path", str(agent.parent / "none.jsonl")]
+                              + ([] if flag == "full" else [flag]))
+        outputs[flag] = out.getvalue()
+    assert "config_hash_basis : enforcement_settings (not a policy file hash)" in outputs["full"]
+    assert "hash_basis=enforcement_settings " in outputs["--compact"]
+    assert json.loads(outputs["--json"])["config_hash_basis"] == "enforcement_settings"
+
+
+def test_booth_focus_script_shows_the_hash_basis():
+    js = (ROOT / "azazel_edge_web" / "static" / "booth_focus.js").read_text(encoding="utf-8")
+    assert "data.audit.config_hash_basis" in js and "not a policy file hash" in js
+
+
+# ----------------------------------------------- where it is written
+
+def test_the_explanation_is_written_after_the_advisory_and_the_snapshot(agent, monkeypatch):
+    order: list = []
+    real_write, real_snapshot = agent_mod._write_json, agent_mod._update_ui_snapshot
+    monkeypatch.setattr(agent_mod, "_write_json", lambda path, payload: (order.append(("json", Path(path).name)), real_write(path, payload)))
+    monkeypatch.setattr(agent_mod, "_update_ui_snapshot", lambda advisory, **kw: (order.append(("snapshot",)), real_snapshot(advisory, **kw)))
+    writer = agent_mod.DECISION_EXPLANATIONS
+    real_record = writer.record
+    monkeypatch.setattr(writer, "record", lambda event, advisory: (order.append(("explanation",)), real_record(event, advisory))[1])
+    agent_mod._handle_event(core_event("redirect"))
+    names = [o[0] if o[0] != "json" else o[1] for o in order]
+    assert names[-1] == "explanation" and names.count("explanation") == 1
+    assert names.index(agent_mod.ADVISORY_PATH.name) < names.index("snapshot") < names.index("explanation")
+    src = (ROOT / "py" / "azazel_edge_ai" / "agent.py").read_text(encoding="utf-8")
+    body = src[src.index("def _handle_event("):src.index("def _handle_line(")]
+    assert body.rstrip().endswith("_record_decision_explanation(event, advisory)")
+    assert body.index("_update_ui_snapshot(advisory)") < body.index("_record_decision_explanation(")
+
+
+# ----------------------------------------------- installer, run as bash
+
+def _gnu_sed() -> bool:
+    import subprocess
+    try:
+        return "GNU" in subprocess.run(["sed", "--version"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not _gnu_sed(), reason="the installer runs GNU sed (Debian); not on this host")
+def test_the_installer_rewrites_the_old_default_and_keeps_the_old_file(tmp_path):
+    import subprocess
+
+    src = (ROOT / "installer" / "internal" / "setup_agent_account.sh").read_text(encoding="utf-8")
+    start = src.index("rewrite_old_default() {")
+    end = src.index('say "done.')
+    block = src[start:end]
+    sec, web = tmp_path / "azazel-edge-security", tmp_path / "azazel-edge-web"
+    old_dir, new_dir = tmp_path / "log", tmp_path / "log" / "ai"
+    new_dir.mkdir(parents=True)
+    (old_dir / "decision-explanations.jsonl").write_text("{}\n", encoding="utf-8")
+    sec.write_text("OTHER=1\n", encoding="utf-8")
+    web.write_text(
+        'AZAZEL_DECISION_EXPLANATIONS_PATH="/var/log/azazel-edge/decision-explanations.jsonl"\nKEEP=x\n',
+        encoding="utf-8",
+    )
+    script = (
+        'set -euo pipefail\nsay() { echo "[agent-account] $*"; }\n'
+        f'SECURITY_ENV="{sec}"\nWEB_ENV="{web}"\nOLD_LOG_DIR="{old_dir}"\nNEW_LOG_DIR="{new_dir}"\n'
+        + block
+    )
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert web.read_text(encoding="utf-8") == (
+        f'AZAZEL_DECISION_EXPLANATIONS_PATH="{LIVE_DECISION_EXPLANATIONS_PATH}"\nKEEP=x\n'
+    )
+    assert sec.read_text(encoding="utf-8") == "OTHER=1\n"
+    assert (old_dir / "decision-explanations.jsonl").read_text(encoding="utf-8") == "{}\n"
+    assert f"NOTICE: {old_dir}/decision-explanations.jsonl is kept and no longer read" in res.stdout
+    # A custom value is kept and reported, never rewritten.
+    web.write_text("AZAZEL_DECISION_EXPLANATIONS_PATH=/srv/x.jsonl\n", encoding="utf-8")
+    res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert web.read_text(encoding="utf-8") == "AZAZEL_DECISION_EXPLANATIONS_PATH=/srv/x.jsonl\n"
+    assert "keeps AZAZEL_DECISION_EXPLANATIONS_PATH=/srv/x.jsonl" in res.stdout
