@@ -544,7 +544,12 @@ def test_install_variables_are_the_installers():
     tools = _read(ROOT / "installer" / "internal" / "install_migrated_tools.sh")
     assert 'SKIP_LUKS="${SKIP_LUKS:-0}"' in tools
     runtime = _read(ROOT / "installer" / "internal" / "install_ai_runtime.sh")
-    assert 'ENABLE_MATTERMOST="${ENABLE_MATTERMOST:-1}"' in runtime
+    # Off by default on aarch64 (amd64-only image), on elsewhere (Edge#477).
+    arch = runtime[runtime.index('machine_arch="$(uname -m)"'):runtime.index('echo "[ai/1]')]
+    aarch64, other = arch.split("\nelse\n", 1)
+    assert '"${machine_arch}" == "aarch64"' in aarch64
+    assert 'ENABLE_MATTERMOST="${ENABLE_MATTERMOST:-0}"' in aarch64
+    assert 'ENABLE_MATTERMOST="${ENABLE_MATTERMOST:-1}"' in other
     assert 'ENABLE_OLLAMA="${ENABLE_OLLAMA:-1}"' in runtime
     storage = _read(ROOT / "installer" / "internal" / "install_encrypted_storage.sh")
     assert 'IMG_PATH="/var/lib/azazel-secrets.img"' in storage and 'MAPPER_NAME="azazel-secrets"' in storage
@@ -842,3 +847,20 @@ def test_host_firewall_stages_run_in_the_documented_order():
         section = _section(_read(doc), "### 3.13", "## 4.")
         assert section.count("sudo azazel-host-firewall status") >= 4, doc.name
         assert "</dev/null" in section and "azazel-internal-apply" in section
+
+
+def test_mattermost_default_on_aarch64_is_documented():
+    """Mattermost is off by default on aarch64 (Edge#477): the first run does
+    not need ENABLE_MATTERMOST=0, and trying Mattermost needs =1."""
+    for doc in CHECKLISTS:
+        text = _read(doc)
+        install = _section(text, "### 2.5", "### 2.6")
+        assert "install_all.sh" in install
+        assert "ENABLE_MATTERMOST" not in _fenced_blocks(install)[0], doc.name
+        assert "[ai/5] Skip Mattermost (off by default on aarch64" in install, doc.name
+        mm = _section(text, "### 2.8", "## 3.")
+        assert "sudo ENABLE_OLLAMA=0 ENABLE_MATTERMOST=1 installer/internal/install_ai_runtime.sh" in mm, doc.name
+        assert "NOTICE: Mattermost's image is amd64 only" in mm, doc.name
+    config = _read(DOCS / "CONFIGURATION.md")
+    row = next(ln for ln in config.splitlines() if ln.startswith("| `ENABLE_MATTERMOST` |"))
+    assert "`0` on aarch64" in row and "`1` elsewhere" in row

@@ -823,7 +823,7 @@ def test_provision_ends_non_zero_while_the_former_admin_password_is_in_use():
     assert "[ACTION REQUIRED]" in res.stderr and "/x/cred.env" in res.stderr
     # The way back is the AI runtime installer (slash command, restarts),
     # not this script alone.
-    assert "sudo ENABLE_OLLAMA=0 installer/internal/install_ai_runtime.sh" in res.stderr
+    assert "sudo ENABLE_OLLAMA=0 ENABLE_MATTERMOST=1 installer/internal/install_ai_runtime.sh" in res.stderr
     assert "install_all.sh" in res.stderr and "install_sensors.sh" in res.stderr
     assert "fake-old-default" not in res.stderr  # the password itself is not shown
 
@@ -1020,7 +1020,8 @@ def _stub(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _run_ai_runtime(tmp_path: Path, *, secret_rc: int = 0, provision_rc: int = 0, command_rc: int = 0):
+def _run_ai_runtime(tmp_path: Path, *, secret_rc: int = 0, provision_rc: int = 0, command_rc: int = 0,
+                    arch: str = "x86_64", mattermost: str | None = None):
     repo = tmp_path / "repo"
     sysroot = tmp_path / "sys"
     log = tmp_path / "calls.log"
@@ -1043,7 +1044,12 @@ def _run_ai_runtime(tmp_path: Path, *, secret_rc: int = 0, provision_rc: int = 0
     bindir = tmp_path / "bin"
     for name in ("apt-get", "systemctl", "chown", "docker"):
         _stub(bindir / name, f'echo "{name} $*" >> {log}')
+    _stub(bindir / "uname", f'echo "{arch}"')
+    _stub(bindir / "getconf", 'echo 16384')
     env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", ENABLE_OLLAMA="0", ENABLE_SERVICES="0")
+    env.pop("ENABLE_MATTERMOST", None)
+    if mattermost is not None:
+        env["ENABLE_MATTERMOST"] = mattermost
     res = subprocess.run(["bash", str(internal / "install_ai_runtime.sh")], capture_output=True, text=True, env=env)
     calls = log.read_text(encoding="utf-8") if log.exists() else ""
     return res, calls
@@ -1073,6 +1079,75 @@ def test_ai_runtime_stops_when_the_db_secret_fails(tmp_path):
     res, calls = _run_ai_runtime(tmp_path, secret_rc=1)
     assert res.returncode == 1
     assert not re.search(r"^(compose|provision_workspace)", calls, re.M)
+
+
+# Mattermost's image is amd64 only; on aarch64 (Raspberry Pi 5, 16K-page
+# kernel) it is off by default and installed only when asked for (Edge#477).
+
+_MM_STEPS = ("db_secret", "compose", "provision_workspace", "provision_command")
+
+
+def _mm_steps(calls: str) -> list[str]:
+    return [l.split()[0] for l in calls.splitlines() if l.split()[0] in _MM_STEPS]
+
+
+@needs_gnu_mv
+def test_ai_runtime_skips_mattermost_by_default_on_aarch64(tmp_path):
+    res, calls = _run_ai_runtime(tmp_path, arch="aarch64")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert _mm_steps(calls) == []
+    assert "[ai/5] Skip Mattermost (off by default on aarch64; ENABLE_MATTERMOST=1 installs it" in res.stdout
+    assert "[ai/5] Start Mattermost stack" not in res.stdout
+    assert "NOTICE" not in res.stdout + res.stderr
+    assert "[DONE] AI runtime stack installed." in res.stdout
+
+
+@needs_gnu_mv
+@pytest.mark.parametrize("value", ["0", ""])
+def test_ai_runtime_on_aarch64_with_mattermost_off_or_empty(tmp_path, value):
+    res, calls = _run_ai_runtime(tmp_path, arch="aarch64", mattermost=value)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert _mm_steps(calls) == []
+    assert "[ai/5] Skip Mattermost" in res.stdout
+
+
+@needs_gnu_mv
+def test_ai_runtime_installs_mattermost_on_aarch64_when_asked_with_a_notice(tmp_path):
+    res, calls = _run_ai_runtime(tmp_path, arch="aarch64", mattermost="1")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert _mm_steps(calls) == list(_MM_STEPS)
+    notice = [l for l in res.stdout.splitlines() if l.startswith("NOTICE:")]
+    assert len(notice) == 1, res.stdout
+    assert "amd64 only" in notice[0] and "qemu-user" in notice[0] and "16K-page" in notice[0]
+    assert "page size here: 16384" in notice[0]
+    # Printed before anything is installed.
+    assert res.stdout.index("NOTICE:") < res.stdout.index("[ai/1]")
+    assert "[ai/5] Start Mattermost stack" in res.stdout
+
+
+@needs_gnu_mv
+def test_ai_runtime_keeps_mattermost_on_by_default_on_x86_64(tmp_path):
+    res, calls = _run_ai_runtime(tmp_path, arch="x86_64")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert _mm_steps(calls) == list(_MM_STEPS)
+    assert "NOTICE" not in res.stdout + res.stderr
+    assert "Skip Mattermost" not in res.stdout
+
+
+@needs_gnu_mv
+def test_ai_runtime_on_x86_64_with_mattermost_off(tmp_path):
+    res, calls = _run_ai_runtime(tmp_path, arch="x86_64", mattermost="0")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert _mm_steps(calls) == []
+    assert "[ai/5] Skip Mattermost (ENABLE_MATTERMOST=0)" in res.stdout
+
+
+def test_ai_runtime_reads_no_new_variable_for_the_mattermost_default():
+    # Only ENABLE_MATTERMOST's default changes: no other variable decides it.
+    src = AI_RUNTIME.read_text(encoding="utf-8")
+    assert re.findall(r'ENABLE_MATTERMOST="\$\{ENABLE_MATTERMOST:-(\d)\}"', src) == ["0", "1"]
+    block = src[src.index('machine_arch="$(uname -m)"'):src.index('echo "[ai/1]')]
+    assert set(re.findall(r"\$\{(\w+)", block)) == {"machine_arch", "ENABLE_MATTERMOST"}
 
 
 @pytest.mark.parametrize("rc", [1, 3])

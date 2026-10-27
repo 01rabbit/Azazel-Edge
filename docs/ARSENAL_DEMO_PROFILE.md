@@ -26,7 +26,9 @@ Mandatory:
   traffic through the real pipeline) is included
 
 Optional:
-- Mattermost
+- Mattermost (not installed by default on a Raspberry Pi 5 / aarch64:
+  `ENABLE_MATTERMOST=1` installs it, untested on the 16K-page kernel; see
+  [CONFIGURATION.md](CONFIGURATION.md))
 - Ollama
 - Aggregator
 - TAXII/STIX

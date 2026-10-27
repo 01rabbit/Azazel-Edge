@@ -179,6 +179,8 @@ After running a scenario or a dummy-eve flow, continue in one of these ways:
 
 ### Mattermost
 
+Only when Mattermost is installed. On a Raspberry Pi 5 (aarch64) `install_ai_runtime.sh` does not install it by default (its image is amd64 only and untested under emulation on the Pi 5's 16K-page kernel); it needs `ENABLE_MATTERMOST=1` ([CONFIGURATION.md](CONFIGURATION.md)). Without it, use the dashboard and `ops-comm` steps above.
+
 Example:
 
 ```text

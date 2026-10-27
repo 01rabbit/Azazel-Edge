@@ -56,6 +56,13 @@ ones in the scripts.
 | `SKIP_LUKS` | `0` | `0`: set up the LUKS-encrypted secrets volume (Edge#206). Its passphrase is typed on a terminal, so without one (stdin not a terminal) the installer stops before changing anything. `1`: install without the encrypted volume. Also read by `install_all.sh` and `install_security_stack.sh`. |
 | `ENABLE_SERVICES` | `1` | `1`: enable and start the services. `0`: install files only; `install_all.sh` then skips the final selftest. |
 
+### AI runtime (`install_ai_runtime.sh`, run when `ENABLE_AI_RUNTIME=1`)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ENABLE_OLLAMA` | `1` | `1`: start the Ollama container (`security/docker-compose.ollama.yml`, `127.0.0.1:11434`) and pull its models. `0`: skipped (no model download). |
+| `ENABLE_MATTERMOST` | `0` on aarch64 (`uname -m`), `1` elsewhere | `1`: start Mattermost (`security/docker-compose.mattermost.yml`) and provision its workspace and the `/mio` slash command. `0`: skipped (`[ai/5] Skip Mattermost …`). Mattermost's official image is amd64 only: on aarch64 (Raspberry Pi 5) it runs under qemu-user emulation, which is not verified on the Pi 5's 16K-page kernel, so it is off by default there. `ENABLE_MATTERMOST=1` still installs it on aarch64, with a `NOTICE:` line saying so ([HARDWARE_FIRST_RUN_CHECKLIST.md](HARDWARE_FIRST_RUN_CHECKLIST.md) 2.8 and 3.8). Without Mattermost the Web UI's `/ops-comm` page shows it as unreachable with mode `disabled`, posting to Mattermost fails with `mattermost_not_configured`, and the dashboard's Mattermost handoff is disabled; the rest of the Web UI and M.I.O. (`POST /api/ai/ask`) work as before. |
+
 ### Local CA distribution
 
 With `ENABLE_LOCAL_CA=1` and `ENABLE_HTTPS=1`, nginx serves the local CA

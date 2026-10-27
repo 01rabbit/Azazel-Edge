@@ -75,6 +75,7 @@ sudo docker logs --tail 100 azazel-edge-ollama
 ```
 
 ## 8. Mattermost and Manual Ask
+- Mattermost is not installed by default on aarch64 (Raspberry Pi 5): its image is amd64 only and untested under emulation on a 16K-page kernel. `ENABLE_MATTERMOST=1` installs it ([CONFIGURATION.md](CONFIGURATION.md)). Without it the manual ask API still works; the Mattermost endpoints report it as not configured.
 - Manual ask API: `POST /api/ai/ask`
 - Command endpoint: `POST /api/mattermost/command`
 - Message bridge: `POST /api/mattermost/message`
