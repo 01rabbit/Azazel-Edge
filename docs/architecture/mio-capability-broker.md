@@ -88,7 +88,7 @@ Broker-assigned fields: `source_component`, `source_timestamp`, `retrieved_at`,
 | `timeout_seconds` | `CapabilitySpec` | 2.0 (range 0–30) |
 | `max_concurrency` | `CapabilitySpec` | 1 (range 1–8) |
 | `max_in_flight` | `CapabilityBroker(...)` | 4 (global, ≤ 16) |
-| `max_quarantined` | `CapabilityBroker(...)` | 4 (timed-out workers still running, ≤ 16) |
+| `max_quarantined` | `CapabilityBroker(...)` | 4 (bound on running + timed-out workers, ≤ 16) |
 | `max_age_seconds` | `CapabilitySpec` / request | none |
 
 Slots are acquired with `blocking=False`. When a slot is unavailable the broker returns
@@ -98,9 +98,15 @@ exceed `max_total_calls`.
 
 A handler that exceeds its timeout yields `timeout`. Its concurrency slot is released at
 once (exactly-once release shared with the worker), and the still-running worker is counted
-in a bounded quarantine. While a capability has as many quarantined workers as its
-`max_concurrency` it is refused with `capability_quarantined`; when the global quarantine is
-full every request is refused with `broker_quarantine_full`. A worker that fails to start
+in a bounded quarantine. The bound holds exactly: a request is admitted only while
+running + quarantined workers < `max_quarantined` (globally) and < `max_concurrency` (per
+capability). Every quarantined worker was a running one, so even if all running handlers time
+out at once or `close()` strands them, `quarantined() <= max_quarantined` (exposed as
+`quarantine_limit()`) and per capability ≤ `max_concurrency`. The effective global concurrency
+is therefore `min(max_in_flight, max_quarantined)`. A refusal caused by quarantined workers is
+`capability_quarantined` / `broker_quarantine_full`; with no quarantined worker it is
+`capability_overloaded` / `broker_overloaded`. A worker marks itself done before it wakes the
+waiting submit, so a handler that finished is never reported as a timeout. A worker that fails to start
 releases its slots and returns `error` / `worker_start_failed`.
 
 ### Cycle close (stale cycles)
@@ -145,8 +151,21 @@ and unknown key names are never recorded (`unknown_param_count` only). `request_
 identifier grammar **and** carry no address or credential shape: the SituationFrame opaque-ID
 rule (IPv4 quads, also dashed or with a port, MAC-like runs, IPv6) and the M.I.O. redaction
 token rules (API keys, bearer tokens, long tokens, e-mail). Otherwise they are replaced by
-`h:<digest>`. The result returned to the reasoning loop is unchanged; only the audit
-projection is reduced. Digests are HMAC-SHA256 with a per-process
+`h:<digest>`.
+
+Before those checks, a value must fit a closed schema of the identifier shapes this repository
+produces (`AUDIT_ID_VOCABULARY` in `broker.py`): evidence-plane event ids `sha256:<64 hex>`,
+Edge core trace ids `trace-0x<hex>` with lifecycle/loop suffixes (`:e1:c3:req:2`), and ids made
+of vocabulary words and short ordinals (`ev:auth:0001`, `replay:g5-golden-replay-v1:req:1`,
+`h1`) with at most two numeric segments in a row. Hostnames, person names, bare hex, packed or
+integer-encoded IPv4, separator-free MACs and token-like values are all digested. Adding a new
+id shape means adding its words to the vocabulary and a test.
+
+The result returned to the reasoning loop is unchanged; only the audit projection is reduced.
+In particular `MioCapabilityResult.request_id` echoes the request's id (bounded, control
+characters replaced): the only caller builds it as `<cycle_id>:req:<n>` from lifecycle or
+replay cycle ids, and the trace audit (`trace_audit.py`) applies its own redaction before
+anything is persisted. Digests are HMAC-SHA256 with a per-process
 random key (truncated to 16 hex), so low-entropy values such as IP addresses cannot be
 recovered offline; they are comparable only within one process. Records larger than
 2048 characters are reduced and flagged `audit_truncated`. `audit_records()` and the sink receive

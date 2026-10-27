@@ -138,6 +138,9 @@ FUTURE_SKEW_SECONDS = 60
 # inputs (IPs, hostnames) and are only comparable within one process lifetime.
 _AUDIT_KEY = secrets.token_bytes(32)
 
+# Event type used for submit wake-ups (module-level so tests can observe ordering).
+_Event = threading.Event
+
 
 @dataclass(frozen=True)
 class ParamSpec:
@@ -232,14 +235,78 @@ def _safe_label(value: Any, limit: int = 128) -> str:
     return _ID_FORBIDDEN_RE.sub("?", value[:limit])
 
 
+# Closed schema for identifiers kept verbatim in the audit. It covers the
+# shapes this repository produces:
+#   * evidence-plane event ids ``sha256:<64 hex>`` (make_event_id),
+#   * Edge core trace ids ``trace-0x<1..16 hex>`` (calc_trace_id), optionally
+#     followed by lifecycle / loop suffixes (``:e1:c2:req:3``),
+#   * ids built from the vocabulary below and short ordinals joined by
+#     ``:``, ``-`` or ``_`` (``ev:auth:0001``, ``replay:g5-golden-replay-v1``,
+#     ``evaluation:stale-evidence:req:1``, ``h1``).
+# Every other value (hostnames, person names, packed or integer-encoded
+# addresses, bare hex, tokens) is replaced by the keyed digest.
+AUDIT_ID_VOCABULARY = frozenset(
+    {
+        # structure
+        "ev", "evidence", "trace", "cycle", "req", "frame", "mio", "fixture", "replay", "evaluation",
+        "golden", "shadow", "scenario", "demo", "test", "sample", "hypothesis", "gap",
+        # evidence sources and kinds
+        "auth", "flow", "sys", "noc", "soc", "ssh", "alert", "alerts", "dns", "tls", "icmp", "iface",
+        "probe", "plane", "activity",
+        # defensive states
+        "observe", "notify", "throttle", "redirect", "isolate",
+        # evaluation / replay scenario words
+        "contradictory", "role", "cross", "fabricated", "ref", "empty", "recommendation", "captured",
+        "malformed", "model", "output", "timeout", "no", "llm", "unavailable", "prompt", "injection",
+        "directive", "recorded", "qwen", "accepted", "stale", "arp", "spoof", "benign", "beacon",
+        "cred", "harvest", "exfil", "phishing", "port", "scan", "recon", "bruteforce", "ambiguity",
+    }
+)
+_SHA256_ID_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_CORE_TRACE_RE = re.compile(r"trace-0x[0-9a-f]{1,16}(?=:|\Z)")
+_ORDINAL_SEGMENT_RE = re.compile(r"[a-z]{0,2}[0-9]{1,6}[a-z]{0,2}\Z")
+_DIGITS_RE = re.compile(r"[0-9]+\Z")
+_ID_SEPARATORS_RE = re.compile(r"[:_-]")
+
+
+def _audit_id_in_schema(value: str) -> bool:
+    if _SHA256_ID_RE.match(value):
+        return True
+    rest = value
+    core = _CORE_TRACE_RE.match(value)
+    if core is not None:
+        rest = value[core.end():].lstrip(":")
+        if not rest:
+            return True
+    if not re.fullmatch(r"[a-z0-9]+(?:[:_-][a-z0-9]+)*", rest):
+        return False
+    digit_run = 0
+    for segment in _ID_SEPARATORS_RE.split(rest):
+        if segment in AUDIT_ID_VOCABULARY:
+            digit_run = 0
+            continue
+        if not _ORDINAL_SEGMENT_RE.match(segment):
+            return False
+        # No more than two numeric segments in a row: dotted, dashed or
+        # colon-separated quads cannot pass.
+        digit_run = digit_run + 1 if _DIGITS_RE.match(segment) else 0
+        if digit_run > 2:
+            return False
+    return True
+
+
 def _audit_safe(value: Any) -> bool:
-    """An identifier may appear verbatim in the audit only if it is
-    well-formed and carries no address (IPv4/IPv6/MAC shapes, reusing the
-    SituationFrame opaque-ID rule) and no credential shape (mio redaction)."""
+    """An identifier may appear verbatim in the audit only if it fits the
+    closed schema above and, as a second layer, carries no address shape
+    (SituationFrame opaque-ID rule) and no credential shape (mio redaction)."""
     if type(value) is not str or not _IDENT_RE.match(value):
         return False
     try:
-        return _opaque_id(value) == value and not contains_token_like(value)
+        return (
+            _audit_id_in_schema(value)
+            and _opaque_id(value) == value
+            and not contains_token_like(value)
+        )
     except Exception:
         return False
 
@@ -340,10 +407,16 @@ def _sanitize_result(value: Any, level: int, state: dict[str, int], limit: int) 
 class _Slot:
     """Concurrency slot that can be released exactly once."""
 
-    def __init__(self, cap_sem: threading.BoundedSemaphore, global_sem: threading.BoundedSemaphore):
+    def __init__(
+        self,
+        cap_sem: threading.BoundedSemaphore,
+        global_sem: threading.BoundedSemaphore,
+        on_release: Callable[[], None] = lambda: None,
+    ):
         self.lock = threading.Lock()
         self._cap_sem = cap_sem
         self._global_sem = global_sem
+        self._on_release = on_release
         self._released = False
         self.done = False
         self.hung = False
@@ -355,6 +428,7 @@ class _Slot:
             self._released = True
         self._cap_sem.release()
         self._global_sem.release()
+        self._on_release()
 
 
 class CapabilityBroker:
@@ -392,6 +466,9 @@ class CapabilityBroker:
         self._max_quarantined = max(1, min(int(max_quarantined), 16))
         self._quarantined = 0
         self._quarantined_per_capability: dict[str, int] = {}
+        # Admitted handlers whose slot is still held.
+        self._in_flight = 0
+        self._in_flight_per_capability: dict[str, int] = {}
         self._audit: deque[dict[str, Any]] = deque(maxlen=max(1, min(int(audit_capacity), 4096)))
         self._audit_sink = audit_sink
         # Cycle end: set by close(); wakes every waiting submit at once.
@@ -424,6 +501,10 @@ class CapabilityBroker:
         with self._lock:
             return tuple(copy.deepcopy(item) for item in self._audit)
 
+    def quarantine_limit(self) -> int:
+        """Upper bound on quarantined workers (and on running + quarantined)."""
+        return self._max_quarantined
+
     def quarantined(self) -> int:
         with self._lock:
             return self._quarantined
@@ -450,10 +531,12 @@ class CapabilityBroker:
             self._record_audit(request, result, params_audit)
         except Exception:
             try:
-                self._append_audit({
-                    "schema": "mio_capability_audit/v1", "audit_error": True,
-                    "status": result.status, "reason": result.error,
-                })
+                fallback: dict[str, Any] = dict.fromkeys(AUDIT_RECORD_FIELDS)
+                fallback.update(
+                    schema="mio_capability_audit/v1", decision="refused" if result.status in REFUSAL_STATUSES else "allowed",
+                    status=result.status, reason="audit_error", params={}, purpose_hypothesis_ids=[], evidence_refs=[],
+                )
+                self._append_audit(fallback)
             except Exception:
                 pass
         return result
@@ -515,7 +598,7 @@ class CapabilityBroker:
         cap_slots = self._capability_slots[capability]
         # Admission is one atomic critical section: budget check + increment +
         # quarantine check + non-blocking slot acquisition.
-        wake = threading.Event()
+        wake = _Event()
         with self._lock:
             if self._closed:
                 return self._result(request, CapabilityStatus.REJECTED, "broker_closed"), params_audit
@@ -524,10 +607,17 @@ class CapabilityBroker:
             used = self._per_capability_calls.get(capability, 0)
             if used >= spec.max_calls_per_cycle:
                 return self._result(request, CapabilityStatus.REJECTED, "capability_budget_exhausted"), params_audit
-            if self._quarantined >= self._max_quarantined:
-                return self._result(request, CapabilityStatus.REJECTED, "broker_quarantine_full"), params_audit
-            if self._quarantined_per_capability.get(capability, 0) >= spec.max_concurrency:
-                return self._result(request, CapabilityStatus.REJECTED, "capability_quarantined"), params_audit
+            # Live workers (running + quarantined) never exceed
+            # max_quarantined, so even if every running handler times out (or
+            # close() strands them) the quarantine stays within its bound. The
+            # same holds per capability against max_concurrency.
+            if self._quarantined + self._in_flight >= self._max_quarantined:
+                reason = "broker_quarantine_full" if self._quarantined else "broker_overloaded"
+                return self._result(request, CapabilityStatus.REJECTED, reason), params_audit
+            cap_quarantined = self._quarantined_per_capability.get(capability, 0)
+            if cap_quarantined + self._in_flight_per_capability.get(capability, 0) >= spec.max_concurrency:
+                reason = "capability_quarantined" if cap_quarantined else "capability_overloaded"
+                return self._result(request, CapabilityStatus.REJECTED, reason), params_audit
             if not self._global_slots.acquire(blocking=False):
                 return self._result(request, CapabilityStatus.REJECTED, "broker_overloaded"), params_audit
             if not cap_slots.acquire(blocking=False):
@@ -535,9 +625,16 @@ class CapabilityBroker:
                 return self._result(request, CapabilityStatus.REJECTED, "capability_overloaded"), params_audit
             self._total_calls += 1
             self._per_capability_calls[capability] = used + 1
+            self._in_flight += 1
+            self._in_flight_per_capability[capability] = self._in_flight_per_capability.get(capability, 0) + 1
             self._waiters.add(wake)
 
-        slot = _Slot(cap_slots, self._global_slots)
+        def _leave_in_flight() -> None:
+            with self._lock:
+                self._in_flight -= 1
+                self._in_flight_per_capability[capability] -= 1
+
+        slot = _Slot(cap_slots, self._global_slots, _leave_in_flight)
         outcome: dict[str, Any] = {}
         frozen_args = MappingProxyType(dict(args))
 
@@ -552,7 +649,8 @@ class CapabilityBroker:
                 outcome["error"] = f"handler_error:{type(exc).__name__}"[:96]
             finally:
                 slot.release()
-                wake.set()
+                # Mark done before waking the submitter: a woken submitter
+                # must never see a finished handler as still running.
                 with slot.lock:
                     slot.done = True
                     was_hung = slot.hung
@@ -560,6 +658,7 @@ class CapabilityBroker:
                         with self._lock:
                             self._quarantined -= 1
                             self._quarantined_per_capability[capability] -= 1
+                wake.set()
 
         base = {"source_component": spec.source_component, "max_age_seconds": max_age}
         worker = threading.Thread(target=_run, name=f"mio-cap-{capability}", daemon=True)
