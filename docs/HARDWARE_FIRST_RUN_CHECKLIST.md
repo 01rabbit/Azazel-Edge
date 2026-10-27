@@ -783,5 +783,3 @@ evidence for some of them.
 | Mattermost on by default | `ENABLE_MATTERMOST=1` by default; the image is amd64-only and untested under emulation on a 16K-page kernel (3.8). | #485 |
 | Host INPUT filter default | #489 is off by default (option B); turning it on by default is a separate decision after FW-01–FW-12. | #489 |
 | Selftest `.config_checksums` | Nothing creates `/etc/azazel-edge/.config_checksums`, so the selftest always warns `config_checksums_missing`. | #487 |
-| portal-viewer | `azazel-edge-portal-viewer.service` is started by the daemon but not shipped; there is no viewer code in this repository. | #479 |
-| Status API on 8082 | No server in this repository answers on 8082; contain/release/stage_open go only there. | #479, privilege-inventory §12 |

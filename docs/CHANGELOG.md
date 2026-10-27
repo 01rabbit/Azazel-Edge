@@ -33,6 +33,41 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     daemon starts (`azazel-edge-portal-viewer.service`, was
     `azazel-portal-viewer.service`); a missing unit is reported as not
     installed. The unit itself is still not shipped.
+- Mattermost not installed reads as such in the Web UI (Edge#477, #495):
+  without a bot token and channel id or a webhook URL, sending a message,
+  the Mattermost handoff and reading back answer 503 with
+  `not_configured: true` (were 500 / 502), the status says
+  `configured: false` without pinging, and the dashboard, SENTINEL and Ops
+  Comm show "not configured" and no "Open Mattermost" link (it pointed at
+  the installer's port 8065 URL, which nothing serves then). A configured
+  Mattermost that fails is still a failure.
+
+### Removed
+
+- References to things nothing provides on an Edge (Edge#477; owner
+  decision: remove, no new permission):
+  - The port 8082 "status API". It is Azazel-Gadget's first-minute API,
+    served on the gadget itself (its `usb0` management address); nothing in this
+    repository or in another repository serves it for an Edge, and on an
+    Edge the Web UI sent it to that Gadget management address (a fixed
+    value in the old code) first, an address that is not the
+    device's and may be a host on another network. The Web UI no longer
+    calls port 8082. `contain`, `release` and `stage_open` are no longer Web
+    UI actions (the Contain and Release buttons and their `/api/action`
+    entries are gone; such a request answers 404 or 403 and runs nothing).
+    `disconnect` is the control daemon's fixed `uplink_disconnect` (what it
+    already was whenever 8082 did not answer; a failure stays a failure) and
+    `details` the daemon's. The daemon still answers `contain`, `disconnect`
+    and `stage_open` with `not_implemented`; nothing new is enforced.
+  - The portal viewer (`azazel-edge-portal-viewer.service`, a browser behind
+    noVNC on 6080), which no installer ships: the Portal Assist button,
+    `GET /api/portal-viewer`, `POST /api/portal-viewer/open`, the
+    `portal_viewer` field of `/api/state`, `/api/state/stream` and
+    `/api/dashboard/bundle`, and the daemon's `portal_viewer_open`
+    (which ran `systemctl start|restart` on that unit) are removed.
+  - ntfy's health check (Web UI and CLI) tries `MGMT_IP` only when it is
+    set; it no longer falls back to the Gadget management address (a fixed
+    value in the old code).
 
 ### Security
 

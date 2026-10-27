@@ -441,9 +441,6 @@ function bindStaticHandlers() {
     document.getElementById('modeShieldBtn')?.addEventListener('click', () => switchMode('shield'));
     document.getElementById('modeScapegoatBtn')?.addEventListener('click', () => switchMode('scapegoat'));
     document.getElementById('topoliteSyntheticToggleBtn')?.addEventListener('click', toggleTopoliteSyntheticMode);
-    document.getElementById('portalAssistBtn')?.addEventListener('click', openPortalViewer);
-    document.getElementById('containBtn')?.addEventListener('click', () => executeAction('contain'));
-    document.getElementById('releaseBtn')?.addEventListener('click', () => executeAction('release'));
     document.getElementById('clientIdentityToggle')?.addEventListener('click', (event) => {
         showNormalClients = !showNormalClients;
         event.currentTarget.setAttribute('aria-pressed', showNormalClients ? 'true' : 'false');
@@ -934,9 +931,14 @@ function updateHeader(state, mattermost) {
     updateElement('headerCpuUsage', state.cpu_percent != null ? `${state.cpu_percent}%` : '--%');
     updateElement('headerMemUsage', state.mem_percent != null ? `${state.mem_percent}%` : '--%');
     updateElement('headerCpuTemp', state.temp_c != null ? `${state.temp_c}°C` : '--°C');
+    // open_url is empty when Mattermost is not configured: fall back to the
+    // local Ops Comm page, never to a Mattermost URL nothing serves.
     const mattermostUrl = mattermost.open_url || '/ops-comm';
     const mmLink = document.getElementById('openMattermostLink');
-    if (mmLink) mmLink.href = mattermostUrl;
+    if (mmLink) {
+        mmLink.href = mattermostUrl;
+        mmLink.hidden = mattermost.configured === false;
+    }
 }
 
 function updateNormalAssurance(summary) {
@@ -2300,7 +2302,7 @@ function updateSituationBoard(summary, state, health, mattermost) {
     updateServiceChip('svcNtfy', summary.service_health_summary?.ntfy || '--');
     updateServiceChip('svcAiAgent', summary.service_health_summary?.ai_agent || '--');
     updateServiceChip('svcWeb', summary.service_health_summary?.web || '--');
-    updateServiceChip('svcMattermost', mattermost.reachable ? 'ON' : 'OFF');
+    updateServiceChip('svcMattermost', mattermost.configured === false ? 'N/A' : (mattermost.reachable ? 'ON' : 'OFF'));
 }
 
 function updateSplitBoard(summary, actions) {
@@ -2550,12 +2552,6 @@ function updateActionBoard(actions, state) {
     updateElement('modeLastChange', formatHumanDateTime(mode.last_change));
     updateElement('modeRequestedBy', mode.requested_by || '-');
 
-    const portalBtn = document.getElementById('portalAssistBtn');
-    if (portalBtn) {
-        const portalViewer = latestState.portal_viewer || {};
-        portalBtn.disabled = !portalViewer.url;
-        portalBtn.textContent = portalViewer.ready ? 'Portal Assist' : tr('dashboard.portal_assist_prep', 'Portal Assist (prep)');
-    }
     updateToggleSummary(
         'actionBoardPrimaryDetailsToggle',
         tr('dashboard.action_board_primary_details_summary', 'Why {why} | Next {next}', { why: whyNowItems.length, next: nextItems.length }),
@@ -2852,9 +2848,14 @@ function updateTopoliteSingleScreen(summary, evidence, actions) {
 
 // Comm status in the handoff rail: Mattermost reachability + link targets.
 function updateCommStatus(mattermost) {
-    updateElement('mattermostState', mattermost.reachable ? tr('dashboard.state_reachable', 'reachable') : tr('dashboard.state_unreachable', 'unreachable'));
+    updateElement('mattermostState', mattermost.configured === false
+        ? tr('dashboard.state_not_configured', 'not configured')
+        : (mattermost.reachable ? tr('dashboard.state_reachable', 'reachable') : tr('dashboard.state_unreachable', 'unreachable')));
     const mattermostLink = document.getElementById('assistantMattermostLink');
-    if (mattermostLink) mattermostLink.href = mattermost.open_url || '/ops-comm';
+    if (mattermostLink) {
+        mattermostLink.href = mattermost.open_url || '/ops-comm';
+        mattermostLink.hidden = mattermost.configured === false;
+    }
 }
 
 function updateControlButtons(summary) {
@@ -2886,32 +2887,6 @@ async function switchMode(mode) {
         refreshDashboard();
     } catch (error) {
         showToast(`Mode switch failed: ${error.message}`, 'error');
-    }
-}
-
-async function openPortalViewer() {
-    try {
-        const result = await fetchJson('/api/portal-viewer/open', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ timeout_sec: 18 }),
-        });
-        if (result.url) {
-            window.open(result.url, '_blank', 'noopener,noreferrer');
-        }
-        showToast('Portal viewer requested', 'success');
-    } catch (error) {
-        showToast(`Portal assist failed: ${error.message}`, 'error');
-    }
-}
-
-async function executeAction(action) {
-    try {
-        const result = await fetchJson(`/api/action/${action}`, { method: 'POST' });
-        showToast(result.message || `${action} executed`, 'success');
-        refreshDashboard();
-    } catch (error) {
-        showToast(`${action} failed: ${error.message}`, 'error');
     }
 }
 

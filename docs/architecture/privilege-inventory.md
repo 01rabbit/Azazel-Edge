@@ -2,7 +2,7 @@
 
 Tracking: #471 (privilege separation), context #462 (item 2) and #472  
 Status: inventory and plan (stages 0–2); **stages 1 and 2 implemented**, see §10.9 and §11.7.  
-Last updated: 2026-10-26
+Last updated: 2026-10-27
 
 #471 splits the Edge services into separate non-root accounts. The owner
 approved three stages:
@@ -76,11 +76,11 @@ Every child is an argv list.
 
 | Where | Command | Reached from | Mark |
 | --- | --- | --- | --- |
-| `app.py` `execute_disconnect_action` | `ip link set ${AZAZEL_UP_IF:-wlan0} down` | `action=disconnect` on `POST /api/action` and `/api/action/<action>`, **only when nothing answers on port 8082** | **cap:NET_ADMIN**. The interface comes from the environment, not the request. |
-| `app.py` `_status_api_json` | `curl -s --fail --max-time <s> [-X POST] http://<host>:8082/…` for `/`, `/action/contain`, `release`, `disconnect`, `stage_open`, `details`; hosts are a fixed list (code default includes `127.0.0.1`). Since #477 an HTTP error (curl exit 22), an empty reply where one is required, or a reply that is not a JSON object is the status API's refusal and returned as a failure; only connection refused / timeout counts as "nothing answers" (the only case that falls back, e.g. `disconnect` to `uplink_disconnect`) | `/api/action` | none |
+| `app.py` `execute_disconnect_action` | `ip link set ${AZAZEL_UP_IF:-wlan0} down` (stage 0). Since stage 1 the Web UI runs no `ip`: it sends the daemon's fixed `uplink_disconnect` (§10.9), and since #477 always (no port 8082 call before it) | `action=disconnect` on `POST /api/action` and `/api/action/<action>` | **cap:NET_ADMIN** at stage 0; none since stage 1. The interface comes from the daemon's configuration, not the request. |
+| `app.py` `_status_api_json` (removed, #477) | `curl … http://<host>:8082/…` to a fixed host list (the Gadget management address, then loopback) for `contain`, `release`, `disconnect`, `stage_open`, `details` | removed: no server for port 8082 ships in this repository or for this device (it is Azazel-Gadget's first-minute API, served on the gadget's own `usb0` management address); `contain`, `release` and `stage_open` are no longer Web UI actions, `disconnect` and `details` go to the control daemon | none |
 | `app.py` `_container_running` | `docker ps --format {{.Names}}` | `get_monitoring_state()` → `GET /api/state`, `/api/state/stream`, `/api/dashboard/bundle`; runs for **both** OpenCanary (`azazel-edge-opencanary`) and Suricata (`azazel-edge-suricata`) when their `systemctl is-active` checks fail | **root** (docker group = root-equivalent). Without it the function returns `False` silently. |
 | `app.py` `_process_running` | `pgrep -f [o]pencanary.tac` | monitoring state | none; would break under `ProtectProc=invisible` |
-| `app.py` `_service_active` | `/bin/systemctl is-active <unit>` for OpenCanary (3 names), Suricata (2), ntfy, `azazel-edge-ai-agent`, `azazel-edge-web`, `azazel-portal-viewer` | monitoring state, portal viewer status | none (D-Bus read) |
+| `app.py` `_service_active` | `/bin/systemctl is-active <unit>` for OpenCanary (3 names), Suricata (2), ntfy, `azazel-edge-ai-agent`, `azazel-edge-web` (and, until #477 removed it, the portal viewer unit) | monitoring state | none (D-Bus read) |
 | `runbooks.py` `execute_runbook` (called from `/api/runbooks/execute`, `/api/runbooks/act`) | `[exec, *argv]` from runbook YAML in `${AZAZEL_RUNBOOK_DIR:-/etc/azazel-edge/runbooks}` and `<repo>/runbooks`; `exec` must sit under `/bin`, `/usr/bin`, `/usr/sbin`, `/usr/local/bin` or `/opt/azazel-edge` | see the next rows | depends on the runbook |
 | runbook `rb.noc.service.restart.controlled` | `/bin/systemctl restart` of `azazel-edge-ai-agent`, `azazel-edge-control-daemon` or `azazel-edge-web` | only with `AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC=1` (installer seeds `0`) and `approved=true` | **root** (or a polkit rule) |
 | runbook `rb.noc.service.status.check` | `systemctl status <svc> --no-pager` | read-only | none (journal lines need group:systemd-journal, otherwise output is shorter) |
@@ -89,15 +89,16 @@ Every child is an argv list.
 | runbook `rb.ops.logs.ai.recent` | `tail -n N /var/log/azazel-edge/ai-llm.jsonl` | read-only | none while the file is 0644 |
 | `azazel_edge_epd_mode_refresh.py` `_read_live_ssid` | `iwgetid [iface] -r` | `GET /api/epd`, `/api/epd/preview.png`, only when no last render and no SSID are known | none (uncertain on nl80211-only drivers; failure is harmless) |
 
-Who serves port 8082 is **not in this repository** (uncertain). If nothing
-answers there on a device, the `ip link set … down` fallback is the normal
-disconnect path, not a rare one.
+Port 8082 had no provider for this device (#477): nothing in this
+repository serves it, and the server it was written for is Azazel-Gadget's
+first-minute API on the gadget itself. The calls were removed; the
+disconnect path is the daemon's `uplink_disconnect` only.
 
 ### 2.3 Unix sockets (the Web UI is a client only)
 
 | Socket | Default / override | Sent | Mark |
 | --- | --- | --- | --- |
-| `control.sock` | `/run/azazel-edge/control.sock`; hard-coded in `app.py` (no override); `control_plane.py` honours `AZAZEL_CONTROL_SOCKET` for snapshot reads | `refresh`, `reprobe`, `details`, `wifi_scan`, `wifi_connect` (carries the Wi-Fi passphrase), `portal_viewer_open`, `shutdown`, `reboot`, `mode_*`, `sot_trust_client`, `get_snapshot`, `watch_snapshot` | **group**: directory 0770 and socket 0660, root:`AZAZEL_RUNTIME_SOCKET_GROUP` (empty by default = root only) |
+| `control.sock` | `/run/azazel-edge/control.sock`; hard-coded in `app.py` (no override); `control_plane.py` honours `AZAZEL_CONTROL_SOCKET` for snapshot reads | `refresh`, `reprobe`, `details`, `wifi_scan`, `wifi_connect` (carries the Wi-Fi passphrase), `portal_viewer_open` (removed, #477), `shutdown`, `reboot`, `mode_*`, `sot_trust_client`, `get_snapshot`, `watch_snapshot` | **group**: directory 0770 and socket 0660, root:`AZAZEL_RUNTIME_SOCKET_GROUP` (empty by default = root only) |
 | `ai-bridge.sock` | `${AZAZEL_AI_SOCKET:-/run/azazel-edge-ai/ai-bridge.sock}` | only `{"action":"manual_query","params":{question,sender,source,context},"ts":…}` + newline, reads one reply line; from `POST /api/ai/ask`, `/api/mattermost/message`, `/api/mattermost/command` | since #472 the directory is 0700 and the socket 0600, owned by the agent's account. **A web account different from the agent's account cannot connect** (§10.4 adds a dedicated query socket for it). |
 
 `AZAZEL_AI_SOCKET` is read by the Web UI (where it **connects**), by the
@@ -114,10 +115,10 @@ separately.
 
 All **none**. A hardened unit must keep `AF_INET`, `AF_INET6` and `AF_UNIX`.
 
-- Port 8082 status API (curl, above).
-- ntfy: `NTFY_BASE_URL`, `first_minute.yaml`, or `http://127.0.0.1:${NTFY_PORT:-8081}` (SSE and health).
+- Port 8082 status API (curl, above): removed (#477).
+- ntfy: `NTFY_BASE_URL`, `first_minute.yaml`, or `http://127.0.0.1:${NTFY_PORT:-8081}` (SSE and health). The health check tries `MGMT_IP` last only when it is set (#477; it used to default to the Gadget management address, a fixed value in the old code).
 - Mattermost: `AZAZEL_MATTERMOST_BASE_URL` (code default is a private LAN address on port 8065): ping, post, fetch.
-- Portal viewer TCP probe on `PORTAL_NOVNC_PORT` (6080).
+- Portal viewer TCP probe on `PORTAL_NOVNC_PORT` (6080): removed with the portal viewer (#477).
 - Aggregator poller to registered nodes (`POST /api/aggregator/poller/start`), TLS verification disabled in `aggregator.py`.
 - TAXII push to an operator-supplied URL (verification can be turned off).
 - Knowledge advisory via `deception_effectiveness_client`.
@@ -131,7 +132,7 @@ All **none**. A hardened unit must keep `AF_INET`, `AF_INET6` and `AF_UNIX`.
 | `/etc/azazel-edge/client-cert-fingerprints.txt` | `AZAZEL_AUTH_MTLS_FINGERPRINTS_FILE` | not created by the installer | read |
 | `/etc/azazel-edge/mattermost-command-token` (+ siblings) | `AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE` | **0640 root:azazel-web** since stage 1 (`provision_mattermost_command.sh` and `setup_web_account.sh`; 0600 root:root only when the `azazel-web` group does not exist). Before stage 1: 0600 root | **group** read (before stage 1: unreadable → slash-command auth had no tokens, silently) |
 | ntfy token: `NTFY_TOKEN_FILE`, `first_minute.yaml`, or `/etc/azazel/ntfy.token` (installer also writes `/etc/azazel-edge/ntfy.token`) | `NTFY_TOKEN_FILE` | **0640 root:azazel-web** since stage 1 (`install_ntfy.sh` and `setup_web_account.sh`; 0600 root:root only without the `azazel-web` group). Before stage 1: 0600 root | **group** read (before stage 1: unreadable; code checks `os.access` and logs only at debug level) |
-| `/etc/azazel-edge/first_minute.yaml`, `portal-viewer.env`, `mode.json` (in `/etc/azazel` and `/etc/azazel-edge`), `sot.yaml`/`sot.json`, runbooks, triage flows | `AZAZEL_CONFIG_PATH`, `AZAZEL_SOT_PATH`, `AZAZEL_RUNBOOK_DIR`, `AZAZEL_TRIAGE_FLOW_DIR` | 0644 assumed | none (directory search) |
+| `/etc/azazel-edge/first_minute.yaml`, `mode.json` (in `/etc/azazel` and `/etc/azazel-edge`), `sot.yaml`/`sot.json`, runbooks, triage flows | `AZAZEL_CONFIG_PATH`, `AZAZEL_SOT_PATH`, `AZAZEL_RUNBOOK_DIR`, `AZAZEL_TRIAGE_FLOW_DIR` | 0644 assumed | none (directory search) |
 | CA certificate (`.crt` only, never a key) | `AZAZEL_WEBUI_CA_PATH` and fixed candidates under `/etc/azazel-edge/certs`, `/etc/azazel-edge/tls/ca`, `/var/lib/azazel-edge/public` | public | none |
 | `/run/azazel-edge/`: `ui_snapshot.json`, `ai_advisory.json`, `ai_metrics.json`, `ui_status_view.json`, `epd_state.json`, `epd_last_render.json`, `booth-input.json` | `AZAZEL_AI_ADVISORY`, `AZAZEL_AI_METRICS`, `AZAZEL_EPD_*`, `AZAZEL_BOOTH_INPUT_PROVENANCE_PATH`; the snapshot path is fixed | directory 0770 | **group** |
 | `/var/log/azazel-edge/`: `ai-events.jsonl`, `ai-llm.jsonl`, `runbook-events.jsonl`, `triage-audit.jsonl`, `decision-explanations.jsonl` | `AZAZEL_AI_EVENT_LOG`, `AZAZEL_AI_LLM_LOG`, `AZAZEL_RUNBOOK_EVENT_LOG`, `AZAZEL_TRIAGE_AUDIT_PATH`, `AZAZEL_DECISION_EXPLANATIONS_PATH` | root 0644 in a 0755 directory | none |
@@ -146,7 +147,7 @@ Also read, for completeness:
 
 - **Legacy read paths** (fallback candidates when `path_schema` is not
   importable, plus fixed CA candidates): `/etc/azazel-zero/{first_minute.yaml,
-  mode.json,portal-viewer.env,certs/…}`, `/run/azazel-zero/ui_snapshot.json`,
+  mode.json,certs/…}`, `/run/azazel-zero/ui_snapshot.json`,
   `~/.azazel-zero/web_token.txt`, `/etc/azazel-gadget/tls/ca/…` and
   `/var/lib/azazel-gadget/public/…`. Read only; same marks as their
   `azazel-edge` counterparts (none, or group for the runtime snapshot).
@@ -313,7 +314,7 @@ Stays root in #471. Listed because stages 1 and 2 move work to it.
 | `shutdown`, `reboot` | `scripts/*.sh` → `systemctl --no-block poweroff|reboot` | root |
 | `refresh`, `reprobe` | append `{ts, action}` to `/run/azazel-edge/action_requests.log` only (no reader found; not exhaustive) | owner |
 | `contain`, `stage_open`, `disconnect` | before #477 the same log line and success; since #477 nothing is run and the answer is `{"ok": false, "error": "not_implemented"}` | none |
-| `portal_viewer_open` | absolute http(s) URL required; writes `/run/azazel-edge/portal-viewer-start-url`, `systemctl start|restart azazel-edge-portal-viewer.service` (fixed; that unit is not shipped in this repo), probes TCP 6080 | root |
+| `portal_viewer_open` (removed, #477) | wrote `/run/azazel-edge/portal-viewer-start-url` and ran `systemctl start|restart azazel-edge-portal-viewer.service`, a unit no installer ships; the action is gone and the daemon answers `Unknown action` | none now |
 
 Background: `suppress_auto_wifi` (on by default) runs `nmcli con mod …
 connection.autoconnect no` and `nmcli dev disconnect` (root/polkit);
@@ -407,7 +408,7 @@ Stays root until stage 3.
 | ntfy | Web UI | HTTP client (SSE, health); token file |
 | Ollama | agent | HTTP client to loopback 11434 (the bundled compose file publishes 11434 on `127.0.0.1` only since #477; it published on all interfaces before) |
 | systemd | Web UI (`is-active`, runbook `status`/`restart`), control daemon (`start` of fixed units, reboot/poweroff), selftest | D-Bus |
-| port 8082 status API | Web UI | curl; server not in this repository |
+| port 8082 status API | none since #477 (the Web UI's calls were removed) | no server in this repository or for this device |
 | NetFlow / SNMP sensors | their own units | in-memory evidence bus only |
 
 ## 9. Container observation (not a device)
@@ -507,7 +508,7 @@ here; the plan below follows them):
 
 | Today in the Web UI | Stage 1 |
 | --- | --- |
-| `ip link set <uplink> down` fallback | **Owner decision: relocate** the Web UI's existing disconnect into the control daemon as a fixed action `uplink_disconnect` with **no parameters**: the daemon uses its own configured uplink and the request cannot name an interface, a command or a unit. The Web UI calls it (after the 8082 status API, as today) instead of running `ip`. This moves an existing operator action to the root process; it is an owner-approved relocation, not something the peer checks make free. A failure is returned to the caller as an error, never as success. |
+| `ip link set <uplink> down` fallback | **Owner decision: relocate** the Web UI's existing disconnect into the control daemon as a fixed action `uplink_disconnect` with **no parameters**: the daemon uses its own configured uplink and the request cannot name an interface, a command or a unit. The Web UI calls it (at first after the 8082 status API; since #477 directly, the 8082 calls are removed) instead of running `ip`. This moves an existing operator action to the root process; it is an owner-approved relocation, not something the peer checks make free. A failure is returned to the caller as an error, never as success. |
 | `docker ps` in `_container_running` (OpenCanary and Suricata) | **Owner decision: remove.** OpenCanary and Suricata state come from `systemctl is-active` (already queried for both) and the existing pid/pgrep checks. No docker group. A Suricata or OpenCanary that runs only as a docker container named `azazel-edge-*`, with no matching unit, would then show OFF; the shipped units are host units, so this is expected not to matter (uncertain for devices set up by hand). |
 | `PUT`/`PATCH /api/sot/devices` writing `/etc/azazel-edge/sot.yaml` | **Owner decision:** move to the control daemon as fixed actions `sot_devices_replace` and `sot_devices_patch`: the daemon validates with the same `SoTConfig` model, writes the file with the same temp+replace, appends the same `sot-events` record (with the caller's uid), then refreshes. Merged with the `sot_trust_client` writer so there is one writer. The Web UI keeps its own validation for early errors. |
 | Runbook `rb.noc.service.restart.controlled` (`systemctl restart`) | **Owner decision: not moved.** It stays behind `AZAZEL_RUNBOOK_ENABLE_CONTROLLED_EXEC` (installer default 0) and approval; under `azazel-web` an enabled run fails with systemd's permission error, returned to the caller (non-zero `exit_code`, `ok:false`). No polkit rule and no daemon "restart unit" action (that would be a unit-operation API). |
@@ -713,13 +714,14 @@ request):
 | --- | --- |
 | 0 | every action |
 | the daemon's own uid | every action except `migrate_path_schema` (unless it is 0). Under the unit this is root; it must be revisited if the daemon stops running as root (stage 3+) |
-| `azazel-web` | `get_snapshot`, `watch_snapshot`, `refresh`, `reprobe`, `details`, `wifi_scan`, `wifi_connect`, `portal_viewer_open`, `shutdown`, `reboot`, `mode_set`, `mode_status`, `mode_get`, `mode_portal`, `mode_shield`, `mode_scapegoat`, `sot_trust_client`, `uplink_disconnect`, `sot_devices_replace`, `sot_devices_patch` |
+| `azazel-web` | `get_snapshot`, `watch_snapshot`, `refresh`, `reprobe`, `details`, `wifi_scan`, `wifi_connect`, `shutdown`, `reboot`, `mode_set`, `mode_status`, `mode_get`, `mode_portal`, `mode_shield`, `mode_scapegoat`, `sot_trust_client`, `uplink_disconnect`, `sot_devices_replace`, `sot_devices_patch` |
 | anyone else, an `azazel-web` that does not resolve, a peer the kernel does not identify | nothing; `{"ok": false, "error": "forbidden"}`, a warning with uid/pid and a refusal counter |
 
 The `azazel-web` set is what the Web UI sends on the socket today
-(`ALLOWED_ACTIONS` minus `contain`/`release`/`disconnect`/`stage_open`, which
-go to the 8082 status API only, plus `control_plane`'s snapshot reads) and the
-three relocated operations. A unit test derives it from the Web UI's code.
+(`ALLOWED_ACTIONS` minus `disconnect`, which it sends as `uplink_disconnect`,
+plus `control_plane`'s snapshot reads) and the three relocated operations.
+`portal_viewer_open` was in the set until #477 removed the portal viewer;
+`contain`, `release` and `stage_open` are not Web UI actions since #477. A unit test derives it from the Web UI's code.
 
 **Relocated operations.** `uplink_disconnect` takes no parameters and no
 extra request field; it sets the daemon's `AZAZEL_UP_IF` (default `wlan0`,
@@ -851,7 +853,7 @@ by hand if needed, the triage audit chain included). Token file group
 **Needs the owner's device run** (not shown by the container): the unit's
 hardening under real systemd (`systemd-analyze security azazel-edge-web`,
 `ps -o user= -C gunicorn`); dashboard, Wi-Fi scan/connect, mode change, SoT
-edit, disconnect (status API present and absent), `manual_query` from
+edit, disconnect, `manual_query` from
 `/api/ai/ask` and a Mattermost message and command, ntfy SSE with the token
 file, `systemctl is-active` from the sandboxed unit, OpenCanary/Suricata
 state without the docker check, and the installer upgrade on a device with
@@ -1067,16 +1069,17 @@ the `control.sock` per-uid table with `migrate_path_schema` root-only, the
 query socket in stage 1, the agent's `WorkingDirectory=` unchanged, and the
 out-of-scope findings tracked separately. Still open:
 
-1. **Port 8082.** Who serves the status API on a device? It decides how
-   often the Web UI reaches `uplink_disconnect` instead of the status API.
-   Still open (#477): the calls are kept, because a device that runs a
-   status API would otherwise lose `contain`/`release`/`stage_open` and its
-   own `disconnect` (documented there as disconnecting downstream clients,
-   not the uplink). An HTTP error reply now counts as a failure
-   (`curl --fail`); before, an empty error reply read as "Containment
-   activated". Any answer from 8082 that is not usable is returned as a
-   failure; only "nothing answers" (refused, timeout) falls back to
-   `uplink_disconnect`.
+1. **Port 8082.** Decided (#477): removed. Nothing in this repository
+   serves it, and no other repository serves it for an Edge: the calls came
+   from Azazel-Gadget, whose first-minute process answers on the gadget's
+   own `usb0` management address, which is not an address of an Edge. The
+   Web UI no longer calls 8082 (on the device it asked that address, possibly a host
+   on another network, first); `contain`, `release` and `stage_open` are no
+   longer Web UI actions (dashboard buttons and `/api/action` entries
+   removed), `disconnect` is the daemon's `uplink_disconnect` (what it
+   already was whenever 8082 did not answer) and `details` the daemon's.
+   The daemon still answers `contain`, `disconnect` and `stage_open` with
+   `not_implemented`; nothing new is enforced.
 2. **`migrate_path_schema` on the socket.** It becomes root-only; should it
    leave the socket entirely (a root CLI only)?
 3. **`/etc/azazel-edge` mode.** 0755 with per-file modes (default) or keep
@@ -1124,12 +1127,12 @@ out-of-scope findings tracked separately. Still open:
      `WorkingDirectory=`;
    - the agent's SOC policy and ATT&CK mapping paths are relative to `/`
      (§3.5);
-   - `azazel-edge-portal-viewer.service` is started by the daemon but not
-     shipped (#477: still not shipped, since nothing in this repository runs
-     the viewer, a browser behind noVNC on 6080. The Web UI read its status as
-     `azazel-portal-viewer.service` and now reads the unit the daemon starts;
-     a missing unit is reported as not installed. Shipping one or removing
-     the action is the owner's decision);
+   - `azazel-edge-portal-viewer.service` was started by the daemon but not
+     shipped (#477: nothing in this repository runs the viewer, a browser
+     behind noVNC on 6080; Azazel-Gadget ships its own viewer for the
+     gadget. Owner decision: removed. The daemon's `portal_viewer_open`, the
+     Web UI's `/api/portal-viewer` routes, the `portal_viewer` state field
+     and the Portal Assist button are gone);
    - OpenCanary SSH listens on 12222 while the core's honeypot redirect
      default is 2222 (#477, unchanged: neither the unit nor an installer sets
      `AZAZEL_DEFENSE_HONEYPOT_PORT` or `AZAZEL_REDIRECT_POLICY_PATH`, so on a

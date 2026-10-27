@@ -37,7 +37,7 @@ from datetime import datetime
 from datetime import timezone
 from typing import Dict, Any, Optional, Iterator, Tuple, List
 from urllib.request import Request, urlopen
-from urllib.parse import urlparse, quote
+from urllib.parse import quote
 
 from azazel_edge_web.io_helpers import (
     _append_jsonl,
@@ -104,7 +104,6 @@ try:
         config_dir_candidates,
         first_minute_config_candidates,
         mode_state_candidates,
-        portal_env_candidates,
         runtime_snapshot_path_candidates,
         web_token_candidates,
         warn_if_legacy_path,
@@ -141,7 +140,6 @@ except Exception:
     config_dir_candidates = lambda: [Path("/etc/azazel-edge"), Path("/etc/azazel-zero")]  # type: ignore
     first_minute_config_candidates = lambda: [Path("/etc/azazel-edge/first_minute.yaml"), Path("/etc/azazel-zero/first_minute.yaml")]  # type: ignore
     mode_state_candidates = lambda: [Path("/etc/azazel/mode.json"), Path("/etc/azazel-edge/mode.json"), Path("/etc/azazel-zero/mode.json")]  # type: ignore
-    portal_env_candidates = lambda: [Path("/etc/azazel-edge/portal-viewer.env"), Path("/etc/azazel-zero/portal-viewer.env")]  # type: ignore
     runtime_snapshot_path_candidates = lambda: [Path("/run/azazel-edge/ui_snapshot.json"), Path("/run/azazel-zero/ui_snapshot.json")]  # type: ignore
     web_token_candidates = lambda: [Path.home() / ".azazel-edge" / "web_token.txt", Path.home() / ".azazel-zero" / "web_token.txt"]  # type: ignore
     warn_if_legacy_path = lambda *args, **kwargs: None  # type: ignore
@@ -237,17 +235,6 @@ EPD_LAST_RENDER_PATH = Path(
 )
 BIND_HOST = os.environ.get("AZAZEL_WEB_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("AZAZEL_WEB_PORT", "8084"))
-STATUS_API_HOSTS = ["10.55.0.10", "127.0.0.1"]
-# curl's exit status for an HTTP status >= 400 under --fail: the server on
-# port 8082 answered and refused (not "nothing there").
-STATUS_API_CURL_HTTP_ERROR = 22
-PORTAL_VIEWER_ENV_PATH = portal_env_candidates()[0]
-# The unit the control daemon starts for portal_viewer_open
-# (azazel_edge_control.daemon.PORTAL_VIEWER_SERVICE). Its status is read under
-# the same name; it used to be read as azazel-portal-viewer.service, so a
-# viewer the daemon had started never showed as active (Edge#477). The unit is
-# not shipped by this repository; where it is not installed, opening fails.
-PORTAL_VIEWER_SERVICE = "azazel-edge-portal-viewer.service"
 CAPTIVE_REGISTRY_PATH = Path(str(os.environ.get("AZAZEL_CAPTIVE_REGISTRY_PATH", "")).strip() or str(WEB_STATE_DIR / "captive-allowlist.json"))
 NTFY_CONFIG_PATHS = [
     Path(os.environ.get("AZAZEL_CONFIG_PATH", str(first_minute_config_candidates()[0]))),
@@ -502,8 +489,8 @@ for _candidate in _WEBUI_CA_CERT_CANDIDATES:
 
 # Allowed actions
 ALLOWED_ACTIONS = {
-    "refresh", "reprobe", "contain", "release", "details", "stage_open", "disconnect",
-    "wifi_scan", "wifi_connect", "portal_viewer_open", "shutdown", "reboot",
+    "refresh", "reprobe", "details", "disconnect",
+    "wifi_scan", "wifi_connect", "shutdown", "reboot",
     "mode_set", "mode_status", "mode_get", "mode_portal", "mode_shield", "mode_scapegoat",
     "sot_trust_client",
 }
@@ -2674,7 +2661,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
             "ai_fallback_rate": _as_float((ai_governance.get("rates") or {}).get("fallback"), 0.0),
             "stale_warning": stale_warning,
             "ask_mio_url": "/ops-comm",
-            "mattermost_url": MATTERMOST_OPEN_URL,
+            "mattermost_url": _mattermost_open_url(),
         },
         "situation_board": {
             "threat_posture": {
@@ -3004,7 +2991,7 @@ def _dashboard_actions_payload(
             "rationale": rationale[:4],
             "handoff": {
                 "ops_comm": "/ops-comm",
-                "mattermost": MATTERMOST_OPEN_URL,
+                "mattermost": _mattermost_open_url(),
             },
             "message_profile": mio_bundle["profile"],
             "surface_message": mio_bundle["surface_message"],
@@ -3014,7 +3001,7 @@ def _dashboard_actions_payload(
         "mio_surface_messages": mio_bundle["surface_messages"],
         "links": {
             "ask_mio": "/ops-comm",
-            "mattermost": MATTERMOST_OPEN_URL,
+            "mattermost": _mattermost_open_url(),
         },
         "decision_path": decision_path,
         "soc_priority": {
@@ -3422,6 +3409,7 @@ def _dashboard_health_payload(state: Dict[str, Any], metrics: Dict[str, Any], ll
         "last_error": str(metrics.get("last_error") or ""),
         "mattermost": {
             "reachable": reachable,
+            "configured": _mattermost_configured(),
             "ping": ping,
         },
         "ai_governance": ai_governance,
@@ -3795,7 +3783,7 @@ def _format_mattermost_ai_response(
 def _assist_handoff_payload() -> Dict[str, str]:
     return {
         "ops_comm": "/ops-comm",
-        "mattermost": MATTERMOST_OPEN_URL,
+        "mattermost": _mattermost_open_url(),
     }
 
 
@@ -4047,170 +4035,18 @@ def _service_active(service: str) -> bool:
         return False
 
 
-def _portal_viewer_config() -> Dict[str, Any]:
-    """Resolve portal viewer bind/port from env file."""
-    default_bind = os.environ.get("PORTAL_NOVNC_BIND", os.environ.get("MGMT_IP", "10.55.0.10"))
-    default_port = int(os.environ.get("PORTAL_NOVNC_PORT", "6080"))
-    config = {
-        "bind": default_bind,
-        "port": default_port,
-    }
-    try:
-        if not PORTAL_VIEWER_ENV_PATH.exists():
-            return config
-        for raw in PORTAL_VIEWER_ENV_PATH.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            if line.startswith("export "):
-                line = line[7:].strip()
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if key == "PORTAL_NOVNC_PORT":
-                config["port"] = int(value)
-            elif key == "PORTAL_NOVNC_BIND":
-                config["bind"] = value
-    except Exception:
-        return config
-    return config
-
-
-def _probe_hosts_for_bind(bind_host: str) -> list:
-    """Build probe host candidates from bind address."""
-    host = str(bind_host or "").strip()
-    if host.startswith("[") and host.endswith("]"):
-        host = host[1:-1]
-    if host in {"", "0.0.0.0", "::", "*"}:
-        return ["127.0.0.1", "::1"]
-    if host in {"localhost", "127.0.0.1", "::1"}:
-        return [host]
-    return [host, "127.0.0.1"]
-
-
-def _tcp_open(port: int, hosts: list, timeout_sec: float = 0.2) -> bool:
-    """Check TCP availability on any candidate host."""
-    seen = set()
-    for host in hosts:
-        if host in seen:
-            continue
-        seen.add(host)
-        try:
-            with socket.create_connection((host, int(port)), timeout=timeout_sec):
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def _url_host(host: str) -> str:
-    """Format host part for URL (wrap IPv6 if needed)."""
-    formatted = str(host or "").strip()
-    if ":" in formatted and not (formatted.startswith("[") and formatted.endswith("]")):
-        return f"[{formatted}]"
-    return formatted
-
-
-def _is_wildcard_bind(host: str) -> bool:
-    host = str(host or "").strip()
-    return host in {"", "0.0.0.0", "::", "*"}
-
-
-def _request_host_or_default() -> str:
-    if has_request_context():
-        return request.host.split(":")[0] if request.host else "10.55.0.10"
-    return "10.55.0.10"
-
-
-def _request_scheme_or_default() -> str:
-    if has_request_context():
-        return request.scheme
-    return "http"
-
-
-def _normalize_http_url(candidate: Any) -> str:
-    """Return normalized http(s) URL or empty string."""
-    text = str(candidate or "").strip()
-    if not text or any(ch in text for ch in ("\r", "\n")):
-        return ""
-    parsed = urlparse(text)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        return ""
-    return text
-
-
-def _portal_start_url_from_state(state: Dict[str, Any]) -> str:
-    """Infer the best portal start URL from latest captive probe state."""
-    if not isinstance(state, dict):
-        return ""
-    conn = state.get("connection")
-    if not isinstance(conn, dict):
-        return ""
-
-    status = str(conn.get("captive_portal", "") or "").upper()
-    detail = conn.get("captive_portal_detail") if isinstance(conn.get("captive_portal_detail"), dict) else {}
-    candidates = [
-        detail.get("portal_url"),
-        conn.get("captive_portal_url"),
-        detail.get("location"),
-        detail.get("effective_url"),
-        conn.get("captive_location"),
-        conn.get("captive_effective_url"),
-        detail.get("probe_url"),
-        conn.get("captive_probe_url"),
-    ]
-    for candidate in candidates:
-        normalized = _normalize_http_url(candidate)
-        if normalized:
-            return normalized
-
-    if status in {"YES", "SUSPECTED"}:
-        return "http://connectivitycheck.gstatic.com/generate_204"
-    return ""
-
-
-def _portal_viewer_url_host(config_bind: str) -> str:
-    """Choose host advertised to clients for noVNC URL."""
-    override_host = os.environ.get("PORTAL_VIEWER_HOST", "").strip()
-    if override_host:
-        return override_host
-    if not _is_wildcard_bind(config_bind):
-        return config_bind
-    return _request_host_or_default()
-
-
-def _portal_viewer_state_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Build portal viewer state from resolved config + runtime checks."""
-    bind_host = str(config.get("bind", "")).strip() or os.environ.get("MGMT_IP", "10.55.0.10")
-    port = int(config.get("port", 6080))
-    probe_hosts = _probe_hosts_for_bind(bind_host)
-    active = _service_active(PORTAL_VIEWER_SERVICE)
-    ready = active and _tcp_open(port, probe_hosts)
-    scheme = _request_scheme_or_default()
-    host = _url_host(_portal_viewer_url_host(bind_host))
-    url = f"{scheme}://{host}:{port}/vnc.html?autoconnect=true&resize=scale"
-    return {
-        "active": active,
-        "ready": ready,
-        "bind": bind_host,
-        "probe_hosts": probe_hosts,
-        "port": port,
-        "url": url,
-    }
-
-
-def get_portal_viewer_state() -> Dict[str, Any]:
-    """Return current noVNC portal viewer availability."""
-    return _portal_viewer_state_from_config(_portal_viewer_config())
-
-
 def _ntfy_health_ok() -> bool:
     """Check ntfy HTTP health endpoint."""
-    mgmt_ip = os.environ.get("MGMT_IP", "10.55.0.10")
     ntfy_port = os.environ.get("NTFY_PORT", "8081")
-    # ntfy listens on loopback only (install_ntfy.sh, Edge#477); MGMT_IP is
-    # kept last for a host configured by hand.
-    hosts = ["127.0.0.1", "localhost", mgmt_ip]
+    # ntfy listens on loopback only (install_ntfy.sh, Edge#477). MGMT_IP is
+    # tried last only when it is set, for a host configured by hand; there is
+    # no default address, so an unset MGMT_IP never sends the check to a host
+    # on another network (it used to default to the Gadget management
+    # address, a fixed value in the old code).
+    hosts = ["127.0.0.1", "localhost"]
+    mgmt_ip = os.environ.get("MGMT_IP", "").strip()
+    if mgmt_ip:
+        hosts.append(mgmt_ip)
     seen = set()
     for host in hosts:
         if host in seen:
@@ -4414,143 +4250,17 @@ def read_status_view() -> Optional[Dict[str, Any]]:
     return None
 
 
-def _normalize_status_payload(payload: Dict[str, Any], action: str = "") -> Dict[str, Any]:
-    """Normalize Status API payload shape."""
-    if payload.get("status") == "ok" and "ok" not in payload:
-        payload["ok"] = True
-    if action and "action" not in payload:
-        payload["action"] = action
-    return payload
-
-
-def _status_api_json(
-    host: str,
-    path: str,
-    method: str = "GET",
-    timeout_sec: float = 2.0,
-    action: str = "",
-    empty_ok: bool = False,
-    empty_message: str = "",
-) -> Optional[Dict[str, Any]]:
-    """Call first-minute Status API and return normalized JSON payload if available.
-
-    No server for port 8082 ships in this repository (Edge#477). Returns:
-
-    * ``None`` when nothing answered: connection refused, timeout, or any
-      other curl transport failure (only then may a caller fall back, e.g.
-      ``disconnect`` to the daemon's ``uplink_disconnect``);
-    * a failure ``{"ok": False, "status_api_error": True, ...}`` when port
-      8082 answered but not with a usable reply: an HTTP error status
-      (``curl --fail``, exit 22), an empty reply where one is required, or
-      a body that is not a JSON object. That is the status API's answer and
-      is reported as a failure, never as success and never as "not there";
-    * the normalized JSON payload otherwise.
-    """
-    def _answered_failure(reason: str) -> Dict[str, Any]:
-        failure: Dict[str, Any] = {"ok": False, "status_api_error": True,
-                                   "error": f"Status API on {host}:8082 {reason}"}
-        if action:
-            failure["action"] = action
-        return failure
-
-    try:
-        cmd: List[str] = ["curl", "-s", "--fail", "--max-time", str(max(1, int(timeout_sec)))]
-        if method.upper() == "POST":
-            cmd.extend(["-X", "POST"])
-        cmd.append(f"http://{host}:8082{path}")
-
-        result = subprocess.run(cmd, capture_output=True, timeout=timeout_sec)
-        if result.returncode == STATUS_API_CURL_HTTP_ERROR:
-            return _answered_failure("answered with an HTTP error status")
-        if result.returncode != 0:
-            # Every other curl failure is "nothing usable answered at the
-            # transport level": 7 refused, 28 timeout, 6 no such host, and
-            # also 52 (empty reply), 56 (receive failure) and 18 (transfer
-            # cut short): the connection dropped without an HTTP status, as
-            # when no status API listens behind the port or it went away.
-            # These are treated as "nothing answers", which keeps the old
-            # behaviour for them (only then may a caller fall back).
-            return None
-
-        response_text = result.stdout.decode("utf-8", errors="replace").strip()
-        if not response_text:
-            if not empty_ok:
-                return _answered_failure("answered with an empty reply")
-            payload: Dict[str, Any] = {"ok": True}
-            if action:
-                payload["action"] = action
-            if empty_message:
-                payload["message"] = empty_message
-            return payload
-
-        try:
-            payload = json.loads(response_text)
-        except (ValueError, RecursionError):
-            return _answered_failure("answered with a reply that is not JSON")
-        if not isinstance(payload, dict):
-            return _answered_failure("answered with a reply that is not a JSON object")
-        return _normalize_status_payload(payload, action=action)
-    except Exception:
-        return None
-
-
-def _first_status_api_response(
-    path: str,
-    method: str = "GET",
-    action: str = "",
-    empty_ok: bool = False,
-    empty_message: str = "",
-) -> Optional[Dict[str, Any]]:
-    """Try Status API hosts in order and return first successful JSON payload."""
-    for host in STATUS_API_HOSTS:
-        payload = _status_api_json(
-            host=host,
-            path=path,
-            method=method,
-            action=action,
-            empty_ok=empty_ok,
-            empty_message=empty_message,
-        )
-        if payload is not None:
-            return payload
-    return None
-
-
-def execute_contain_action() -> Dict[str, Any]:
-    """Execute contain action: activate CONTAIN stage via Status API"""
-    try:
-        payload = _first_status_api_response(
-            path="/action/contain",
-            method="POST",
-            action="contain",
-            empty_ok=True,
-            empty_message="Containment activated",
-        )
-        if payload is not None:
-            return payload
-        return {"ok": False, "action": "contain", "error": "Failed to reach Status API on any host"}
-    except Exception as e:
-        return {"ok": False, "action": "contain", "error": str(e)}
-
 def execute_disconnect_action() -> Dict[str, Any]:
-    """Execute disconnect action: disconnect downstream USB clients"""
-    try:
-        # Try to send to Status API first
-        payload = _first_status_api_response(
-            path="/action/disconnect",
-            method="POST",
-            action="disconnect",
-            empty_ok=False,
-        )
-        if payload is not None:
-            return payload
+    """Execute disconnect: the control daemon's fixed uplink_disconnect.
 
-        # A refusal from port 8082 (HTTP error, unusable reply) was returned
-        # above as a failure. Only when nothing answers there (connection
-        # refused, timeout) does it fall back (Edge#477) to the control daemon's
-        # fixed uplink_disconnect operation (Edge#471 stage 1). It takes no
-        # arguments; the daemon uses its own configured uplink. The Web UI
-        # runs as a non-root account and no longer runs `ip` itself.
+    It takes no arguments; the daemon sets its own configured uplink down
+    (Edge#471 stage 1) and returns its failures. The Web UI runs as a
+    non-root account and does not run `ip` itself. There is no port 8082
+    status API in front of it any more (Edge#477): no server for it ships in
+    this repository or for this device, so the daemon was already the only
+    path that did anything.
+    """
+    try:
         result = _send_control_command_socket(action="uplink_disconnect", params=None, timeout_sec=10.0)
         if result.get("ok"):
             return {
@@ -4562,128 +4272,11 @@ def execute_disconnect_action() -> Dict[str, Any]:
         return {
             "ok": False,
             "action": "disconnect",
-            "error": "Disconnect failed: the status API did not answer and the control daemon's "
-                     f"uplink_disconnect failed: {result.get('error') or 'unknown error'}",
+            "error": "Disconnect failed: the control daemon's uplink_disconnect failed: "
+                     f"{result.get('error') or 'unknown error'}",
         }
     except Exception as e:
         return {"ok": False, "action": "disconnect", "error": str(e)}
-
-def _post_status_action(host: str, action: str) -> Optional[Dict[str, Any]]:
-    """POST action to first-minute Status API and normalize response."""
-    return _status_api_json(
-        host=host,
-        path=f"/action/{action}",
-        method="POST",
-        action=action,
-        empty_ok=True,
-    )
-
-def _read_status_state(host: str) -> Optional[Dict[str, Any]]:
-    """GET current state from first-minute Status API."""
-    return _status_api_json(host=host, path="/", method="GET", empty_ok=False)
-
-def execute_release_action() -> Dict[str, Any]:
-    """Execute release action and verify that stage actually leaves CONTAIN."""
-    try:
-        for host in STATUS_API_HOSTS:
-            first = _post_status_action(host, "release")
-            if not first:
-                continue
-            if not first.get("ok", False):
-                return {
-                    "ok": False,
-                    "action": "release",
-                    "error": first.get("error", "Failed to send release command"),
-                }
-
-            second_sent = False
-            last_reason = ""
-            last_status_error = ""
-            deadline = time.time() + 12.0
-
-            while time.time() < deadline:
-                state_payload = _read_status_state(host)
-                if state_payload and state_payload.get("status_api_error"):
-                    last_status_error = str(state_payload.get("error") or "")
-                if not state_payload or state_payload.get("status_api_error"):
-                    time.sleep(0.25)
-                    continue
-
-                state_name = str(state_payload.get("stage") or state_payload.get("state") or "").upper()
-                reason = str(state_payload.get("reason") or "").strip()
-                if reason:
-                    last_reason = reason
-
-                if state_name and state_name != "CONTAIN":
-                    return {
-                        "ok": True,
-                        "action": "release",
-                        "message": "Containment released",
-                        "state": state_name,
-                        "reason": reason,
-                    }
-
-                reason_lower = reason.lower()
-                if "minimum duration not reached" in reason_lower:
-                    return {"ok": False, "action": "release", "error": reason}
-
-                if ("confirmation required" in reason_lower) and not second_sent:
-                    second = _post_status_action(host, "release")
-                    if not second or not second.get("ok", False):
-                        return {
-                            "ok": False,
-                            "action": "release",
-                            "error": (second or {}).get("error", "Failed to send release confirmation"),
-                        }
-                    second_sent = True
-
-                time.sleep(0.25)
-
-            if last_reason:
-                suffix = f"; last state read failed: {last_status_error}" if last_status_error else ""
-                return {"ok": False, "action": "release", "error": f"Release timeout: {last_reason}{suffix}"}
-            if last_status_error:
-                # the state could not be read; say why (Edge#477)
-                return {"ok": False, "action": "release",
-                        "error": f"Release timeout: state not readable ({last_status_error})"}
-            return {"ok": False, "action": "release", "error": "Release timeout: stage stayed CONTAIN"}
-
-        return {"ok": False, "action": "release", "error": "Failed to reach Status API on any host"}
-    except Exception as e:
-        return {"ok": False, "action": "release", "error": str(e)}
-
-def execute_details_action() -> Dict[str, Any]:
-    """Execute details action: get detailed threat analysis from Status API"""
-    try:
-        payload = _first_status_api_response(
-            path="/details",
-            method="GET",
-            action="details",
-            empty_ok=True,
-            empty_message="No details available",
-        )
-        if payload is not None:
-            return payload
-        # Fallback to control-daemon script (details.sh) when Status API is absent.
-        return _send_control_command_socket(action="details", params=None, timeout_sec=5.0)
-    except Exception as e:
-        return {"ok": False, "action": "details", "error": str(e)}
-
-def execute_stage_open_action() -> Dict[str, Any]:
-    """Execute stage_open action: return to NORMAL stage via Status API"""
-    try:
-        payload = _first_status_api_response(
-            path="/action/stage_open",
-            method="POST",
-            action="stage_open",
-            empty_ok=True,
-            empty_message="Stage opened",
-        )
-        if payload is not None:
-            return payload
-        return {"ok": False, "action": "stage_open", "error": "Failed to reach Status API on any host"}
-    except Exception as e:
-        return {"ok": False, "action": "stage_open", "error": str(e)}
 
 
 def _send_control_command_socket(
@@ -4755,17 +4348,11 @@ def send_control_command(action: str) -> Dict[str, Any]:
         }
     
     direct_handlers = {
-        "contain": execute_contain_action,
-        "release": execute_release_action,
         "disconnect": execute_disconnect_action,
-        "details": execute_details_action,
-        "stage_open": execute_stage_open_action,
     }
     handler = direct_handlers.get(action)
     if handler is not None:
         return handler()
-    if action == "portal_viewer_open":
-        return send_control_command_with_params("portal_viewer_open", {"timeout_sec": 15})
     if action in ("shutdown", "reboot"):
         return _send_control_command_socket(action=action, params=None, timeout_sec=45.0)
     return _send_control_command_socket(action=action, params=None, timeout_sec=5.0)
@@ -4838,7 +4425,51 @@ def _mattermost_mode() -> str:
     return "disabled"
 
 
+class MattermostNotConfigured(RuntimeError):
+    """Mattermost is not installed or not set up for the Web UI.
+
+    Neither a bot token with a channel id nor a webhook URL is configured
+    (the provisioning step writes them only when Mattermost is installed).
+    Routes answer it with 503 and ``not_configured: true`` so it reads as
+    "not installed", never as success and never as a generic server error.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(MATTERMOST_NOT_CONFIGURED_ERROR)
+
+
+MATTERMOST_NOT_CONFIGURED_ERROR = "mattermost_not_configured"
+MATTERMOST_NOT_CONFIGURED_MESSAGE = (
+    "Mattermost is not installed or not configured on this device "
+    "(no bot token and channel id, and no webhook URL)."
+)
+
+
+def _mattermost_configured() -> bool:
+    return _mattermost_mode() != "disabled"
+
+
+def _mattermost_open_url() -> str:
+    """The "Open Mattermost" link, or "" when Mattermost is not configured.
+
+    The installer writes AZAZEL_MATTERMOST_OPEN_URL even when Mattermost is
+    not installed, so without this check the link pointed at a port 8065
+    nothing listens on.
+    """
+    return MATTERMOST_OPEN_URL if _mattermost_configured() else ""
+
+
+def _mattermost_not_configured_response(**extra: Any):
+    body: Dict[str, Any] = {"ok": False, "error": MATTERMOST_NOT_CONFIGURED_ERROR,
+                            "not_configured": True, "message": MATTERMOST_NOT_CONFIGURED_MESSAGE}
+    body.update(extra)
+    return jsonify(body), 503
+
+
 def _mattermost_ping_uncached() -> tuple[bool, Dict[str, Any]]:
+    if not _mattermost_configured():
+        # Nothing to ask: do not probe a default address nothing serves.
+        return False, {"error": MATTERMOST_NOT_CONFIGURED_ERROR}
     try:
         req = Request(
             f"{MATTERMOST_BASE_URL}/api/v4/system/ping",
@@ -4929,12 +4560,14 @@ def _mattermost_send_message(text: str, sender: str = "Azazel-Edge WebUI") -> Di
         except Exception as e:
             raise RuntimeError(f"mattermost_webhook_error:{e}") from e
 
-    raise RuntimeError("mattermost_not_configured")
+    raise MattermostNotConfigured()
 
 
 def _mattermost_fetch_messages(limit: int = MATTERMOST_FETCH_LIMIT) -> Dict[str, Any]:
     per_page = min(200, max(1, int(limit)))
     mode = _mattermost_mode()
+    if mode == "disabled":
+        raise MattermostNotConfigured()
     if mode != "bot_api":
         return {"ok": True, "mode": mode, "items": [], "note": "readback_requires_bot_api"}
 
@@ -5190,7 +4823,8 @@ def booth_focus():
 @app.route("/ops-comm")
 def ops_comm():
     """Dedicated communication page for Mattermost + WebUI bridge."""
-    open_url = MATTERMOST_OPEN_URL
+    # "" when Mattermost is not configured: the page then shows no link.
+    open_url = _mattermost_open_url()
     return render_template("ops_comm.html", mattermost_open_url=open_url)
 
 
@@ -5218,7 +4852,6 @@ def api_state():
     state = read_state()
     # Add local monitoring status
     state["monitoring"] = get_monitoring_state()
-    state["portal_viewer"] = get_portal_viewer_state()
     mode_state = get_mode_state()
     state["mode"] = mode_state.get("mode", {})
     state["mode_runtime"] = mode_state
@@ -5476,7 +5109,6 @@ def api_state_stream():
                 payload = dict(snap)
                 payload["ok"] = True
                 payload["monitoring"] = get_monitoring_state()
-                payload["portal_viewer"] = get_portal_viewer_state()
                 mode_state = get_mode_state()
                 payload["mode"] = mode_state.get("mode", {})
                 payload["mode_runtime"] = mode_state
@@ -5494,7 +5126,6 @@ def api_state_stream():
         while True:
             payload = read_state()
             payload["monitoring"] = get_monitoring_state()
-            payload["portal_viewer"] = get_portal_viewer_state()
             mode_state = get_mode_state()
             payload["mode"] = mode_state.get("mode", {})
             payload["mode_runtime"] = mode_state
@@ -5502,63 +5133,6 @@ def api_state_stream():
             time.sleep(1.0)
 
     return Response(stream_with_context(generate()), headers=headers, mimetype="text/event-stream")
-
-
-@app.route("/api/portal-viewer")
-@require_token(ok_payload=None)
-def api_portal_viewer():
-    """GET /api/portal-viewer - Return portal viewer status and URL."""
-    return jsonify(get_portal_viewer_state())
-
-
-@app.route("/api/portal-viewer/open", methods=["POST"])
-@require_token()
-def api_portal_viewer_open():
-    """POST /api/portal-viewer/open - Ensure noVNC is up then return URL."""
-    request_body = request.get_json(silent=True) or {}
-    timeout_sec = request_body.get("timeout_sec", 15)
-    start_url = _normalize_http_url(request_body.get("start_url", ""))
-    if not start_url:
-        state = read_state()
-        if state.get("ok"):
-            start_url = _portal_start_url_from_state(state)
-
-    params = {"timeout_sec": timeout_sec}
-    if start_url:
-        params["start_url"] = start_url
-    daemon_result = send_control_command_with_params(
-        "portal_viewer_open",
-        params,
-    )
-
-    if not daemon_result.get("ok"):
-        return jsonify({
-            "ok": False,
-            "error": daemon_result.get("error", "Failed to start portal viewer"),
-            "portal_viewer": get_portal_viewer_state(),
-            "daemon": daemon_result,
-        }), 500
-
-    portal_state = get_portal_viewer_state()
-    if not portal_state.get("ready"):
-        return jsonify({
-            "ok": False,
-            "error": (
-                "Portal viewer service started, but noVNC is not reachable "
-                f"(bind={portal_state.get('bind')}, probe={portal_state.get('probe_hosts')})"
-            ),
-            "portal_viewer": portal_state,
-            "daemon": daemon_result,
-        }), 500
-
-    resolved_start_url = start_url or str(daemon_result.get("start_url", "") or "")
-    return jsonify({
-        "ok": True,
-        "url": portal_state.get("url"),
-        "start_url": resolved_start_url,
-        "portal_viewer": portal_state,
-        "daemon": daemon_result,
-    }), 200
 
 
 # Captive consent endpoint must be reachable before token issuance.
@@ -6046,8 +5620,9 @@ def api_mattermost_status():
         {
             "ok": True,
             "reachable": reachable,
-            "base_url": MATTERMOST_BASE_URL,
-            "open_url": MATTERMOST_OPEN_URL,
+            "configured": _mattermost_configured(),
+            "base_url": MATTERMOST_BASE_URL if _mattermost_configured() else "",
+            "open_url": _mattermost_open_url(),
             "mode": _mattermost_mode(),
             "channel_id": MATTERMOST_CHANNEL_ID,
             "command_enabled": bool(MATTERMOST_COMMAND_TOKENS),
@@ -6327,6 +5902,8 @@ def api_dashboard_handoff():
             return jsonify({"ok": False, "error": "unsupported_target", "handoff_brief_pack": pack}), 400
         try:
             result = _mattermost_send_message(f"[Handoff Brief]\n{pack['brief_text']}", sender="Azazel-Edge Handoff")
+        except MattermostNotConfigured:
+            return _mattermost_not_configured_response(handoff_brief_pack=pack)
         except Exception as e:
             return jsonify({"ok": False, "error": str(e), "handoff_brief_pack": pack}), 502
         return jsonify({"ok": True, "result": result, "handoff_brief_pack": pack}), 200
@@ -6564,7 +6141,6 @@ def api_dashboard_bundle():
     # Same enrichments as GET /api/state.
     state_payload = dict(state)
     state_payload["monitoring"] = get_monitoring_state()
-    state_payload["portal_viewer"] = get_portal_viewer_state()
     mode_state = get_mode_state()
     state_payload["mode"] = mode_state.get("mode", {})
     state_payload["mode_runtime"] = mode_state
@@ -6588,8 +6164,9 @@ def api_dashboard_bundle():
     mattermost = {
         "ok": True,
         "reachable": reachable,
-        "base_url": MATTERMOST_BASE_URL,
-        "open_url": MATTERMOST_OPEN_URL,
+        "configured": _mattermost_configured(),
+        "base_url": MATTERMOST_BASE_URL if _mattermost_configured() else "",
+        "open_url": _mattermost_open_url(),
         "mode": _mattermost_mode(),
         "channel_id": MATTERMOST_CHANNEL_ID,
         "command_enabled": bool(MATTERMOST_COMMAND_TOKENS),
@@ -6848,6 +6425,8 @@ def api_mattermost_message():
                 if reply_text:
                     ai_post = _mattermost_send_message(f"[M.I.O.]\n{reply_text}", sender="M.I.O.")
         return jsonify({"ok": True, "result": posted, "ai_result": ai_result, "runbook_proposals": runbook_proposals, "ai_post_result": ai_post}), 200
+    except MattermostNotConfigured:
+        return _mattermost_not_configured_response()
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -6899,6 +6478,8 @@ def api_mattermost_messages():
     try:
         payload = _mattermost_fetch_messages(int(limit))
         return jsonify(payload), 200
+    except MattermostNotConfigured:
+        return _mattermost_not_configured_response(items=[])
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

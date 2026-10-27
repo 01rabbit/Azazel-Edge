@@ -91,7 +91,8 @@ role; pass `?token=…`, which the page propagates to its API/image requests.
 ### GET /api/state
 
 Returns the current runtime state (the control-plane / `ui_snapshot.json`
-payload) plus `monitoring`, `portal_viewer`, `mode`, and `mode_runtime`.
+payload) plus `monitoring`, `mode`, and `mode_runtime`. (The `portal_viewer`
+field was removed with the portal viewer, Edge#477.)
 
 As of Phase 3 of the [Edge adapter plan](AZAZEL_COMMON_EDGE_ADAPTER_PLAN.md),
 the response additionally carries a **`status_view`** key: the shared
@@ -166,6 +167,47 @@ directly; `count` fields are unchanged.
 The role-gated keys are always present; a `viewer` caller receives `null` for
 both so the response shape stays stable. All per-panel endpoints remain
 available unchanged.
+
+## Control Actions API
+
+### `POST /api/action/<action>` and `POST /api/action`
+
+`responder` role or higher. `POST /api/action/<action>` answers the result
+as JSON (200 on success, 500 on failure, 404 for an action not listed
+below); `POST /api/action` takes `{"action": "<action>"}` and answers
+`{status, message}` (403 for an action not listed below).
+
+Actions: `refresh`, `reprobe`, `details`, `disconnect`, `wifi_scan`,
+`wifi_connect`, `shutdown`, `reboot`, `mode_set`, `mode_status`, `mode_get`,
+`mode_portal`, `mode_shield`, `mode_scapegoat`, `sot_trust_client`. Each is
+sent to the control daemon. `disconnect` is the daemon's fixed
+`uplink_disconnect` (no parameters; the daemon sets its own configured uplink
+down and returns its failure as a failure).
+
+Removed (Edge#477): `contain`, `release` and `stage_open`, which went only
+to a port 8082 "status API" that nothing serves on an Edge (it is
+Azazel-Gadget's, on the gadget itself), and the portal viewer
+(`GET /api/portal-viewer`, `POST /api/portal-viewer/open`, the daemon's
+`portal_viewer_open`), whose unit is not shipped. The Web UI no longer
+sends anything to port 8082.
+
+## Mattermost bridge when Mattermost is not configured
+
+Mattermost counts as configured when the Web UI has a bot token with a
+channel id (`bot_api`) or a webhook URL (`webhook`); the provisioning step
+writes them only when Mattermost is installed. Without either (Edge#477):
+
+- `POST /api/mattermost/message` (when sending), `POST /api/dashboard/handoff`
+  with `target: mattermost` and `GET /api/mattermost/messages` answer **503**
+  with `{"ok": false, "error": "mattermost_not_configured", "not_configured": true, "message": …}`
+  (they used to answer 500 / 502 like any failure);
+- `GET /api/mattermost/status` and the bundle's `mattermost` key carry
+  `configured: false`, `reachable: false` and empty `open_url` / `base_url`;
+  no reachability ping is sent;
+- the `mattermost` links in the dashboard payloads are empty, and the
+  dashboard and Ops Comm pages show no "Open Mattermost" link.
+
+A configured Mattermost that fails is still a failure (500, handoff 502).
 
 ## Compatibility Note
 

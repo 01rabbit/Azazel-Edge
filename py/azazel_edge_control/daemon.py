@@ -21,7 +21,6 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
 try:
     import yaml
 except Exception:  # pragma: no cover
@@ -55,7 +54,6 @@ from azazel_edge.path_schema import (
     config_dir_candidates,
     first_minute_config_candidates,
     migrate_schema,
-    portal_env_candidates,
     runtime_snapshot_path_candidates,
     status as path_schema_status,
     warn_if_legacy_path,
@@ -89,9 +87,6 @@ AGENT_SNAPSHOT_KEYS = (
     "llm", "ops_coach", "decision_pipeline", "second_pass", "llm_metrics", "internal", "attack",
 )
 AGENT_SNAPSHOT_MAX_BYTES = 1024 * 1024
-PORTAL_VIEWER_SERVICE = "azazel-edge-portal-viewer.service"
-PORTAL_VIEWER_ENV_CANDIDATES = portal_env_candidates()
-PORTAL_START_URL_RUNTIME_PATH = Path("/run/azazel-edge/portal-viewer-start-url")
 SCRIPT_ROOT = PROJECT_ROOT / "py" / "azazel_edge_control" / "scripts"
 ACTION_SCRIPTS = {
     'refresh': str(SCRIPT_ROOT / 'refresh.sh'),
@@ -105,8 +100,10 @@ ACTION_SCRIPTS = {
 # scripts only appended a line to /run/azazel-edge/action_requests.log, which
 # nothing reads, and answered success. They now answer an explicit
 # "not_implemented" so no caller shows them as done. Adding enforcement here
-# is out of scope; the Web UI sends these to the port 8082 status API, never
-# to this socket.
+# is out of scope. The Web UI does not offer contain or stage_open (the port
+# 8082 status API they used to go to has no server for this device) and sends
+# disconnect as the fixed uplink_disconnect; only other local tools (the TUI)
+# still send these names here.
 NOT_IMPLEMENTED_ACTIONS = frozenset({"contain", "disconnect", "stage_open"})
 
 # Rate limiting
@@ -131,15 +128,15 @@ RATE_LIMITS = {
 # ROOT_ONLY_ACTIONS need uid 0 whatever else applies. Nothing here is read
 # from the environment or from the request.
 WEB_UI_ACCOUNT = "azazel-web"
-# What azazel_edge_web sends on this socket today (app.py ALLOWED_ACTIONS that
-# are not answered by the status API, plus control_plane's snapshot reads),
+# What azazel_edge_web sends on this socket today (app.py ALLOWED_ACTIONS
+# except disconnect, which it sends as uplink_disconnect, plus control_plane's
+# snapshot reads),
 # and the fixed operations moved here from the Web UI in Edge#471 stage 1
 # (uplink_disconnect, sot_devices_replace, sot_devices_patch).
 WEB_UI_ACTIONS = frozenset({
     "get_snapshot", "watch_snapshot",
     "refresh", "reprobe", "details",
     "wifi_scan", "wifi_connect",
-    "portal_viewer_open",
     "shutdown", "reboot",
     "mode_set", "mode_status", "mode_get", "mode_portal", "mode_shield", "mode_scapegoat",
     "sot_trust_client",
@@ -208,7 +205,6 @@ class _ClientSlots:
 
 
 _CLIENT_SLOTS = _ClientSlots(MAX_CONCURRENT_CLIENTS, MAX_NONROOT_CLIENTS, MAX_NONROOT_WATCHERS)
-PORTAL_DEFAULT_START_URL = "http://neverssl.com"
 _LAST_CPU_TOTAL: float | None = None
 _LAST_CPU_IDLE: float | None = None
 
@@ -954,224 +950,6 @@ def _uplink_disconnect(request: dict[str, Any]) -> dict[str, Any]:
     logger.info(f"uplink_disconnect: {iface} set down")
     return {"ok": True, "action": "uplink_disconnect", "interface": iface,
             "message": f"Uplink disconnected ({iface} down)", "ts": time.time()}
-
-
-def _read_portal_viewer_env() -> dict[str, str]:
-    """Read portal-viewer.env (schema-aware) into a dict."""
-    parsed: dict[str, str] = {}
-    try:
-        for env_path in PORTAL_VIEWER_ENV_CANDIDATES:
-            if not env_path.exists():
-                continue
-            warn_if_legacy_path(env_path, logger=logger)
-            for raw in env_path.read_text(encoding="utf-8").splitlines():
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                if line.startswith("export "):
-                    line = line[7:].strip()
-                key, value = line.split("=", 1)
-                parsed[key.strip()] = value.strip().strip('"').strip("'")
-            if parsed:
-                break
-    except Exception as e:
-        logger.debug(f"Failed to read portal env: {e}")
-    return parsed
-
-
-def _normalize_http_url(candidate: object) -> str:
-    """Return normalized http(s) URL or empty string."""
-    text = str(candidate or "").strip()
-    if not text or any(ch in text for ch in ("\r", "\n")):
-        return ""
-    parsed = urlparse(text)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        return ""
-    return text
-
-
-def _write_runtime_start_url(url: str) -> tuple[bool, str]:
-    """Write transient portal start URL for next portal-viewer launch."""
-    try:
-        PORTAL_START_URL_RUNTIME_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = PORTAL_START_URL_RUNTIME_PATH.with_suffix(".tmp")
-        tmp.write_text(url + "\n", encoding="utf-8")
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, PORTAL_START_URL_RUNTIME_PATH)
-        return True, ""
-    except Exception as e:
-        return False, str(e)
-
-
-def _service_is_active(service: str) -> bool:
-    try:
-        active = subprocess.run(
-            ["/bin/systemctl", "is-active", service],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        return active.returncode == 0 and (active.stdout or "").strip() == "active"
-    except Exception:
-        return False
-
-
-def _load_portal_viewer_endpoint(default_port: int = 6080) -> tuple[str, int]:
-    """Read PORTAL_NOVNC_BIND/PORT from env file if present."""
-    env = _read_portal_viewer_env()
-    bind = str(env.get("PORTAL_NOVNC_BIND") or os.environ.get("PORTAL_NOVNC_BIND") or os.environ.get("MGMT_IP") or "10.55.0.10")
-    try:
-        port = int(env.get("PORTAL_NOVNC_PORT") or os.environ.get("PORTAL_NOVNC_PORT") or default_port)
-    except Exception:
-        port = default_port
-    return bind, port
-
-
-def _load_portal_start_url(default: str = PORTAL_DEFAULT_START_URL) -> str:
-    env = _read_portal_viewer_env()
-    url = _normalize_http_url(env.get("PORTAL_START_URL", ""))
-    if url:
-        return url
-    fallback = _normalize_http_url(os.environ.get("PORTAL_START_URL", ""))
-    return fallback or default
-
-
-def _probe_hosts_for_bind(bind_host: str) -> list[str]:
-    """Build probe host candidates from bind address."""
-    host = str(bind_host or "").strip()
-    if host.startswith("[") and host.endswith("]"):
-        host = host[1:-1]
-    if host in {"", "0.0.0.0", "::", "*"}:
-        return ["127.0.0.1", "::1"]
-    if host in {"localhost", "127.0.0.1", "::1"}:
-        return [host]
-    return [host, "127.0.0.1"]
-
-
-def _tcp_open(port: int, hosts: list[str], timeout_sec: float = 0.2) -> bool:
-    """Check TCP availability on any candidate host."""
-    seen = set()
-    for host in hosts:
-        if host in seen:
-            continue
-        seen.add(host)
-        try:
-            with socket.create_connection((host, port), timeout=timeout_sec):
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def ensure_portal_viewer_ready(timeout_sec: float = 15.0, start_url: str | None = None) -> dict:
-    """Start portal viewer service and wait until noVNC TCP port is reachable."""
-    bind, port = _load_portal_viewer_endpoint()
-    probe_hosts = _probe_hosts_for_bind(bind)
-    requested_start_url = _normalize_http_url(start_url or "")
-    if start_url and not requested_start_url:
-        return {
-            "ok": False,
-            "error": "Invalid start_url (must be absolute http/https URL)",
-            "service": PORTAL_VIEWER_SERVICE,
-            "bind": bind,
-            "probe_hosts": probe_hosts,
-            "port": port,
-            "ts": time.time(),
-        }
-    try:
-        service_action = "start"
-        if requested_start_url:
-            ok, err = _write_runtime_start_url(requested_start_url)
-            if not ok:
-                return {
-                    "ok": False,
-                    "error": f"Failed to stage runtime portal URL: {err}",
-                    "service": PORTAL_VIEWER_SERVICE,
-                    "bind": bind,
-                    "probe_hosts": probe_hosts,
-                    "port": port,
-                    "start_url": requested_start_url,
-                    "ts": time.time(),
-                }
-            # Restart when URL is requested so Chromium always lands on the target page.
-            service_action = "restart" if _service_is_active(PORTAL_VIEWER_SERVICE) else "start"
-
-        start = subprocess.run(
-            ["/bin/systemctl", service_action, PORTAL_VIEWER_SERVICE],
-            capture_output=True,
-            text=True,
-            timeout=6,
-        )
-        if start.returncode != 0:
-            err = (start.stderr or start.stdout or "").strip() or "systemctl start failed"
-            if PORTAL_VIEWER_SERVICE in err and ("not found" in err.lower() or "not-found" in err.lower()):
-                # Azazel-Edge does not ship this unit (Edge#477); say so
-                # rather than only relaying systemctl's message.
-                err = f"{PORTAL_VIEWER_SERVICE} is not installed on this device (not shipped by Azazel-Edge): {err}"
-            return {
-                "ok": False,
-                "error": err,
-                "service": PORTAL_VIEWER_SERVICE,
-                "bind": bind,
-                "probe_hosts": probe_hosts,
-                "port": port,
-                "service_action": service_action,
-                "start_url": requested_start_url or _load_portal_start_url(),
-                "ts": time.time(),
-            }
-
-        deadline = time.time() + max(1.0, timeout_sec)
-        last_active = ""
-        while time.time() < deadline:
-            active = subprocess.run(
-                ["/bin/systemctl", "is-active", PORTAL_VIEWER_SERVICE],
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-            last_active = (active.stdout or "").strip()
-            if active.returncode == 0 and last_active == "active" and _tcp_open(port, probe_hosts):
-                return {
-                    "ok": True,
-                    "service": PORTAL_VIEWER_SERVICE,
-                    "active": True,
-                    "ready": True,
-                    "bind": bind,
-                    "probe_hosts": probe_hosts,
-                    "port": port,
-                    "service_action": service_action,
-                    "start_url": requested_start_url or _load_portal_start_url(),
-                    "ts": time.time(),
-                }
-            time.sleep(0.25)
-
-        return {
-            "ok": False,
-            "error": (
-                f"Portal viewer not ready within {timeout_sec:.0f}s "
-                f"(is-active={last_active or 'unknown'}, bind={bind}, probe={probe_hosts})"
-            ),
-            "service": PORTAL_VIEWER_SERVICE,
-            "active": last_active == "active",
-            "ready": False,
-            "bind": bind,
-            "probe_hosts": probe_hosts,
-            "port": port,
-            "service_action": service_action,
-            "start_url": requested_start_url or _load_portal_start_url(),
-            "ts": time.time(),
-        }
-    except Exception as e:
-        return {
-            "ok": False,
-            "error": str(e),
-            "service": PORTAL_VIEWER_SERVICE,
-            "bind": bind,
-            "probe_hosts": probe_hosts,
-            "port": port,
-            "start_url": requested_start_url or _load_portal_start_url(),
-            "ts": time.time(),
-        }
 
 
 def load_control_flags() -> dict:
@@ -2572,17 +2350,6 @@ def execute_action(action_name, params=None, *, request: Optional[dict[str, Any]
         if limited:
             return limited
 
-    if action_name == "portal_viewer_open":
-        timeout_raw = params.get("timeout_sec", 15)
-        try:
-            timeout_sec = float(timeout_raw)
-        except Exception:
-            timeout_sec = 15.0
-        timeout_sec = max(1.0, min(timeout_sec, 30.0))
-        start_url_raw = params.get("start_url", "")
-        start_url = str(start_url_raw).strip() if isinstance(start_url_raw, str) else ""
-        return ensure_portal_viewer_ready(timeout_sec=timeout_sec, start_url=start_url or None)
-    
     if action_name in NOT_IMPLEMENTED_ACTIONS:
         logger.warning(f"control.sock: {action_name} is not implemented by the control daemon; answered not_implemented")
         return {

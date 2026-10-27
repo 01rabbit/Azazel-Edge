@@ -9,12 +9,11 @@ Pinned here:
   daemon was never reached (no socket, connect failed) is the legacy command
   file written, and since nothing reads it the result is ``undelivered``;
 - the Web UI's state SSE ends with a ``stream_error`` event (with ``retry``)
-  when the daemon's watch stream ends (``busy``, closed, no socket);
-- port 8082: an HTTP error or unusable reply is the status API's refusal and
-  a failure; only "nothing answers" (refused, timeout) falls back to
-  ``uplink_disconnect``;
-- the Web UI reads the portal viewer's status under the unit name the control
-  daemon starts.
+  when the daemon's watch stream ends (``busy``, closed, no socket).
+
+The port 8082 status API and the portal viewer had no provider for this
+device and were removed from the Web UI and the daemon afterwards; that is
+pinned in test_dead_refs_8082_portal_viewer_v1.py.
 """
 
 from __future__ import annotations
@@ -396,165 +395,7 @@ def test_state_sse_ends_with_an_error_event_after_snapshots(monkeypatch):
     monkeypatch.setattr(webapp, "AUTH_FAIL_OPEN", True)
     monkeypatch.setattr(webapp, "cp_watch_snapshots", fake_watch)
     monkeypatch.setattr(webapp, "get_monitoring_state", lambda: {})
-    monkeypatch.setattr(webapp, "get_portal_viewer_state", lambda: {})
     monkeypatch.setattr(webapp, "get_mode_state", lambda: {})
     body = webapp.app.test_client().get("/api/state/stream").get_data(as_text=True)
     names = [name for name, _ in _sse_events(body)]
     assert names == ["ready", "state", "stream_error"]
-
-
-# ------------------------------------------------------- port 8082 (item 3)
-
-class _Done:
-    def __init__(self, rc: int, out: bytes = b""):
-        self.returncode = rc
-        self.stdout = out
-
-
-def test_an_http_error_from_8082_is_a_refusal(monkeypatch):
-    cmds = []
-
-    def fake_run(cmd, **kw):
-        cmds.append(cmd)
-        return _Done(22)  # curl --fail: HTTP status >= 400
-
-    monkeypatch.setattr(webapp.subprocess, "run", fake_run)
-    res = webapp._status_api_json(host="127.0.0.1", path="/action/contain", method="POST",
-                                  action="contain", empty_ok=True, empty_message="Containment activated")
-    assert res["ok"] is False and res["status_api_error"] is True and res["action"] == "contain"
-    assert "HTTP error" in res["error"]
-    assert "--fail" in cmds[0] and "--max-time" in cmds[0]
-    assert cmds[0][-1] == "http://127.0.0.1:8082/action/contain"
-
-
-@pytest.mark.parametrize("rc", [7, 28, 6])  # refused, timeout, cannot resolve
-def test_nothing_answering_on_8082_is_none(rc, monkeypatch):
-    monkeypatch.setattr(webapp.subprocess, "run", lambda cmd, **kw: _Done(rc))
-    assert webapp._status_api_json(host="127.0.0.1", path="/", empty_ok=True) is None
-
-
-def test_a_subprocess_timeout_is_nothing_answering(monkeypatch):
-    def fake_run(cmd, **kw):
-        raise subprocess.TimeoutExpired(cmd, 2)
-
-    monkeypatch.setattr(webapp.subprocess, "run", fake_run)
-    assert webapp._status_api_json(host="127.0.0.1", path="/") is None
-
-
-@pytest.mark.parametrize("out", [b"", b"<html>nope</html>", b"[1, 2]"])
-def test_an_unusable_reply_from_8082_is_a_refusal(out, monkeypatch):
-    monkeypatch.setattr(webapp.subprocess, "run", lambda cmd, **kw: _Done(0, out))
-    res = webapp._status_api_json(host="127.0.0.1", path="/action/disconnect", method="POST",
-                                  action="disconnect", empty_ok=False)
-    assert res["ok"] is False and res["status_api_error"] is True
-
-
-def _disconnect_with(monkeypatch, rc, out=b""):
-    monkeypatch.setattr(webapp.subprocess, "run", lambda cmd, **kw: _Done(rc, out))
-    sent = []
-
-    def fake_socket(action, params=None, timeout_sec=5.0):
-        sent.append(action)
-        return {"ok": True, "message": "Uplink disconnected"}
-
-    monkeypatch.setattr(webapp, "_send_control_command_socket", fake_socket)
-    return webapp.execute_disconnect_action(), sent
-
-
-def test_disconnect_refused_by_8082_does_not_fall_back(monkeypatch):
-    res, sent = _disconnect_with(monkeypatch, 22)
-    assert res["ok"] is False and res["action"] == "disconnect" and "HTTP error" in res["error"]
-    assert sent == []
-
-
-@pytest.mark.parametrize("rc", [7, 28])
-def test_disconnect_falls_back_only_when_nothing_answers(rc, monkeypatch):
-    res, sent = _disconnect_with(monkeypatch, rc)
-    assert sent == ["uplink_disconnect"]
-    assert res["ok"] is True and res["via"] == "control_daemon"
-
-
-def test_a_too_deep_reply_from_8082_is_a_refusal(monkeypatch):
-    deep = b"[" * 100000 + b"]" * 100000
-    monkeypatch.setattr(webapp.subprocess, "run", lambda cmd, **kw: _Done(0, deep))
-    res = webapp._status_api_json(host="127.0.0.1", path="/", empty_ok=False)
-    assert res["ok"] is False and res["status_api_error"] is True
-
-
-def test_release_refused_by_8082_is_a_failure(monkeypatch):
-    calls = []
-
-    def fake_status(**kw):
-        calls.append(kw["path"])
-        return {"ok": False, "status_api_error": True, "action": kw.get("action") or "",
-                "error": "Status API on 10.55.0.10:8082 answered with an HTTP error status"}
-
-    monkeypatch.setattr(webapp, "_status_api_json", fake_status)
-    res = webapp.execute_release_action()
-    assert res["ok"] is False and res["action"] == "release" and "HTTP error" in res["error"]
-    assert calls == ["/action/release"]
-
-
-def test_release_with_curl_exit_22_is_a_failure(monkeypatch):
-    cmds = []
-
-    def fake_run(cmd, **kw):
-        cmds.append(cmd[-1])
-        return _Done(22)
-
-    monkeypatch.setattr(webapp.subprocess, "run", fake_run)
-    res = webapp.execute_release_action()
-    assert res["ok"] is False and res["action"] == "release" and "HTTP error" in res["error"]
-    assert cmds == [f"http://{webapp.STATUS_API_HOSTS[0]}:8082/action/release"]
-
-
-def test_contain_without_a_status_api_is_a_failure(monkeypatch):
-    monkeypatch.setattr(webapp.subprocess, "run", lambda cmd, **kw: _Done(7))  # connection refused
-    res = webapp.execute_contain_action()
-    assert res["ok"] is False and res["action"] == "contain"
-
-
-def test_contain_refused_by_8082_is_a_failure_over_http(monkeypatch):
-    monkeypatch.setattr(webapp.subprocess, "run", lambda cmd, **kw: _Done(22))
-    monkeypatch.setattr(webapp, "load_token", lambda: None)
-    monkeypatch.setattr(webapp, "AUTH_FAIL_OPEN", True)
-    resp = webapp.app.test_client().post("/api/action/contain")
-    assert resp.status_code == 500 and resp.get_json()["ok"] is False
-
-
-def test_an_empty_2xx_reply_is_still_accepted_as_before(monkeypatch):
-    monkeypatch.setattr(webapp.subprocess, "run", lambda cmd, **kw: _Done(0, b""))
-    res = webapp.execute_contain_action()
-    assert res == {"ok": True, "action": "contain", "message": "Containment activated"}
-
-
-# --------------------------------------------------- portal viewer (item 4)
-
-def test_the_web_ui_reads_the_unit_the_daemon_starts(monkeypatch):
-    assert webapp.PORTAL_VIEWER_SERVICE == control_daemon.PORTAL_VIEWER_SERVICE
-    asked = []
-    monkeypatch.setattr(webapp, "_service_active", lambda name: asked.append(name) or False)
-    webapp._portal_viewer_state_from_config({"bind": "127.0.0.1", "port": 6080})
-    assert asked == [control_daemon.PORTAL_VIEWER_SERVICE]
-    src = (ROOT / "azazel_edge_web" / "app.py").read_text(encoding="utf-8")
-    assert '_service_active("azazel-portal-viewer.service")' not in src
-
-
-def test_another_not_found_is_relayed_as_it_is(monkeypatch):
-    def fake_run(cmd, **kw):
-        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="Failed to connect to bus: No such file or directory (not found)")
-
-    monkeypatch.setattr(control_daemon.subprocess, "run", fake_run)
-    res = control_daemon.ensure_portal_viewer_ready(timeout_sec=1.0)
-    assert res["ok"] is False and "is not installed" not in res["error"]
-
-
-def test_a_missing_portal_viewer_unit_is_reported_as_not_installed(monkeypatch):
-    def fake_run(cmd, **kw):
-        return subprocess.CompletedProcess(cmd, 5, stdout="",
-                                           stderr="Failed to start azazel-edge-portal-viewer.service: Unit azazel-edge-portal-viewer.service not found.")
-
-    monkeypatch.setattr(control_daemon.subprocess, "run", fake_run)
-    res = control_daemon.ensure_portal_viewer_ready(timeout_sec=1.0)
-    assert res["ok"] is False
-    assert "is not installed on this device" in res["error"]

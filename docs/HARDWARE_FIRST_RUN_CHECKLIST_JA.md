@@ -776,5 +776,3 @@ sudo dmesg | tail -n 100
 | Mattermost を既定で有効にするか | `ENABLE_MATTERMOST=1` が既定。イメージは amd64 だけで、16K ページのカーネル上のエミュレーションは未確認（3.8）。 | #485 |
 | ホスト INPUT フィルタの既定 | #489 は既定で無効（選択肢 B）。既定で有効にするかは FW-01〜FW-12 の後に別に判断する。 | #489 |
 | selftest の `.config_checksums` | `/etc/azazel-edge/.config_checksums` を作るものが無く、selftest は常に `config_checksums_missing` を警告する。 | #487 |
-| portal-viewer | `azazel-edge-portal-viewer.service` は制御デーモンが起動するが同梱されていない。viewer のコードはこのリポジトリに無い。 | #479 |
-| 8082 の status API | 8082 で応答するサーバーがこのリポジトリに無い。contain・release・stage_open はそこにしか行かない。 | #479, privilege-inventory §12 |
