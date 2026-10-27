@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import http.client
+import ipaddress
 import json
 import logging
 import os
@@ -11,13 +13,13 @@ import queue
 import secrets
 import signal
 import socket
+import ssl
 import stat
 import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
+import urllib.parse
 from pathlib import Path
 from typing import Any, Dict
 
@@ -1469,7 +1471,7 @@ def _run_manual_query(
             if reason.startswith("manual_"):
                 _metrics_inc("manual_schema_invalid_count", 1)
             errors.append({"model": model, "reason": reason})
-            if "timed out" in reason.lower():
+            if isinstance(exc, LlmEndpointRejected) or "timed out" in reason.lower():
                 break
             continue
 
@@ -1537,6 +1539,8 @@ def _run_ops_coach(advisory: Dict[str, Any], verdict: str, confidence: float, re
             if str(exc).startswith("ops_"):
                 _metrics_inc("ops_schema_invalid_count", 1)
             errors.append({"model": model, "reason": str(exc)})
+            if isinstance(exc, LlmEndpointRejected):
+                break
             continue
     return {
         "status": "error",
@@ -1786,6 +1790,126 @@ def _route_llm(event: Dict[str, Any], advisory: Dict[str, Any]) -> None:
         )
 
 
+# --- Model endpoint policy (Edge#388) -------------------------------------
+# The analyst, ops-coach and manual-query payloads carry fields an attacker can
+# influence (Suricata EVE). They are sent only to a loopback address, the same
+# default as the cognitive core's OllamaStructuredTransport. Unlike that
+# adapter, the agent has no private-LAN opt-in: Ollama listens on
+# 127.0.0.1:11434 only (#480) and no setting widens this. A host name is
+# resolved and every address must be loopback; the connection then goes to the
+# checked address, so a later DNS answer cannot move it. Redirects are not
+# followed and proxy settings are not used. Anything else leaves the agent in
+# its existing no-model fallback without contacting the endpoint.
+LLM_MAX_RESPONSE_BYTES = 1024 * 1024
+_LLM_ENDPOINT_LOGGED: set[str] = set()
+_LLM_ENDPOINT_LOG_LOCK = threading.Lock()
+
+
+class LlmEndpointRejected(RuntimeError):
+    """The configured model endpoint is not allowed; no request was sent."""
+
+
+def _redact_endpoint(endpoint: str) -> str:
+    """The endpoint for a log line, with any user:password@ replaced."""
+    text = str(endpoint or "")
+    try:
+        parts = urllib.parse.urlsplit(text)
+    except ValueError:
+        return "<unparseable>"
+    if "@" in parts.netloc:
+        parts = parts._replace(netloc="***@" + parts.netloc.rsplit("@", 1)[1])
+    if parts.query or parts.fragment:
+        parts = parts._replace(query="***" if parts.query else "", fragment="***" if parts.fragment else "")
+    return urllib.parse.urlunsplit(parts)[:200]
+
+
+def _resolve_llm_host(host: str, port: int) -> list[str]:
+    return [str(info[4][0]) for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
+
+
+def _check_llm_endpoint(endpoint: str) -> tuple[str, str, str, int, str]:
+    """(scheme, server name, checked address, port, base path), or LlmEndpointRejected."""
+    try:
+        parts = urllib.parse.urlsplit(str(endpoint or "").strip())
+        port = parts.port
+    except ValueError:
+        raise LlmEndpointRejected("llm_endpoint_invalid") from None
+    scheme = parts.scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise LlmEndpointRejected("llm_endpoint_scheme_not_http")
+    if "@" in parts.netloc:
+        raise LlmEndpointRejected("llm_endpoint_has_userinfo")
+    if parts.query or parts.fragment:
+        raise LlmEndpointRejected("llm_endpoint_has_query")
+    host = parts.hostname or ""
+    if not host:
+        raise LlmEndpointRejected("llm_endpoint_no_host")
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        try:
+            addresses = [ipaddress.ip_address(a.split("%", 1)[0]) for a in _resolve_llm_host(host, port)]
+        except (OSError, UnicodeError, ValueError):
+            raise LlmEndpointRejected("llm_endpoint_unresolvable") from None
+    if not addresses:
+        raise LlmEndpointRejected("llm_endpoint_unresolvable")
+    if not all(a.is_loopback for a in addresses):
+        raise LlmEndpointRejected("llm_endpoint_not_loopback")
+    return scheme, host, str(addresses[0]), port, parts.path.rstrip("/")
+
+
+def _llm_endpoint_target() -> tuple[str, str, str, int, str]:
+    try:
+        return _check_llm_endpoint(LLM_ENDPOINT)
+    except LlmEndpointRejected as exc:
+        reason = str(exc)
+        with _LLM_ENDPOINT_LOG_LOCK:
+            first = reason not in _LLM_ENDPOINT_LOGGED
+            _LLM_ENDPOINT_LOGGED.add(reason)
+        if first:
+            logger.warning(
+                "LLM endpoint refused (%s): %s; no model is called, advisories stay tactical (fallback)",
+                reason,
+                _redact_endpoint(LLM_ENDPOINT),
+            )
+        raise
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS to the checked address, with the configured name for SNI and the certificate."""
+
+    def __init__(self, address: str, port: int, server_name: str, timeout: float):
+        super().__init__(address, port, timeout=timeout, context=ssl.create_default_context())
+        self._server_name = server_name
+
+    def connect(self) -> None:
+        sock = socket.create_connection((self.host, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self._server_name)
+
+
+def _post_to_llm_endpoint(target: tuple[str, str, str, int, str], path: str, body: bytes, timeout_sec: float) -> bytes:
+    scheme, server_name, address, port, base = target
+    if scheme == "https":
+        conn: http.client.HTTPConnection = _PinnedHTTPSConnection(address, port, server_name, timeout_sec)
+    else:
+        conn = http.client.HTTPConnection(address, port, timeout=timeout_sec)
+    try:
+        conn.request("POST", base + path, body=body, headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        if 300 <= resp.status < 400:
+            raise LlmEndpointRejected("llm_endpoint_redirect_refused")
+        if resp.status != 200:
+            raise RuntimeError(f"llm_http_status_{resp.status}")
+        data = resp.read(LLM_MAX_RESPONSE_BYTES + 1)
+    finally:
+        conn.close()
+    if len(data) > LLM_MAX_RESPONSE_BYTES:
+        raise RuntimeError("llm_response_too_large")
+    return data
+
+
 def _extract_json_payload(text: str) -> Dict[str, Any]:
     body = text.strip()
     if body.startswith("```"):
@@ -1856,15 +1980,11 @@ def _ollama_chat(
             "num_thread": num_thread,
         },
     }
+    # The endpoint is checked before anything is sent (Edge#388): the payload
+    # carries attacker-influenced EVE fields, so it only goes to loopback.
+    target = _llm_endpoint_target()
     raw = json.dumps(req_body, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        url=f"{LLM_ENDPOINT.rstrip('/')}/api/chat",
-        data=raw,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    data = json.loads(_post_to_llm_endpoint(target, "/api/chat", raw, timeout_sec).decode("utf-8", errors="replace"))
     message = data.get("message", {}) if isinstance(data, dict) else {}
     content = str(message.get("content") or "")
     if not content.strip():
@@ -1898,6 +2018,8 @@ def _call_llm_with_retry(payload: Dict[str, Any], model: str) -> tuple[Dict[str,
         except Exception as exc:
             latency_ms = int((time.time() - started) * 1000)
             last_error = str(exc)
+            if isinstance(exc, LlmEndpointRejected):
+                return None, latency_ms, attempt, last_error
             if attempt < attempts_total:
                 _metrics_inc("llm_retried", 1)
                 time.sleep(max(0.0, LLM_RETRY_BACKOFF_SEC * attempt))
@@ -2046,9 +2168,14 @@ def _llm_worker() -> None:
         LLM_MODEL_PRIMARY,
         LLM_MODEL_DEGRADED,
         OPS_COACH_MODEL,
-        LLM_ENDPOINT,
+        _redact_endpoint(LLM_ENDPOINT),
         LLM_QUEUE_MAX,
     )
+    if LLM_ENABLED:
+        try:
+            _llm_endpoint_target()
+        except LlmEndpointRejected as exc:
+            _metrics_update(last_error=str(exc))
     while True:
         task = LLM_QUEUE.get()
         try:

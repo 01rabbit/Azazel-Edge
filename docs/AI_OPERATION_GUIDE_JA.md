@@ -66,6 +66,11 @@ sudo docker exec azazel-edge-ollama ollama list
   - `AZAZEL_CORR_MAX_HISTORY_PER_SRC=32`
 - キュー:
   - `AZAZEL_LLM_QUEUE_MAX=8`
+- モデル接続先（Edge#388）:
+  - `AZAZEL_OLLAMA_ENDPOINT`（既定 `http://127.0.0.1:11434`）はループバックだけを受け付ける。
+  - analyst・ops coach・manual query の入力には攻撃者が影響できる EVE の内容が入るため、モデルを呼ぶたびに検査する：`http` か `https`、`user:password@` なし、クエリなし、ホストのすべてのアドレス（IP そのもの、または `localhost` などの名前を解決したすべてのアドレス）が `127.0.0.0/8` か `::1`。
+  - 接続は検査したアドレスへ行い、リダイレクトには従わず、プロキシ変数は使わない。private LAN や外部を許す設定はない。
+  - それ以外の接続先には接続せず、analyst の結果は `fallback`（`tactical_only_keep_recommendation`、理由 `llm_endpoint_not_loopback` など）、ops coach と manual query は最初のモデルでその理由を記録して止まる。`ai_metrics.json` の `last_error` に出て、journal に理由ごとに 1 回 `LLM endpoint refused` が出る（資格情報とクエリは伏せる）。
 - LLM実行:
   - `AZAZEL_LLM_TIMEOUT_SEC=45`
   - `AZAZEL_LLM_NUM_THREAD=2`
