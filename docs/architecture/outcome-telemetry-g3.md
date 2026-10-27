@@ -245,7 +245,7 @@ The library can still be driven with explicit synthetic/historical telemetry in 
 
 Within one collector process, started execution IDs are retained as replay guards. A finalized execution cannot be started again by replaying the same Rust record. If the bounded seen-ID capacity is exhausted, new Outcome collection fails closed rather than forgetting old execution identities.
 
-Cross-restart Outcome identity and deduplication are defined in G5 (`outcome-golden-replay-g5.md`): `OutcomeIdentityLedger` keys an Outcome by `execution_id` + `objective_id`, so a record re-observed after a restart is not counted twice. The live CLI does not persist that ledger yet (a G6 decision) and still avoids historical replay by starting at EOF.
+Cross-restart Outcome identity and deduplication are defined in G5 (`outcome-golden-replay-g5.md`): `OutcomeIdentityLedger` keys an Outcome by `execution_id` + `objective_id`, so an Outcome already admitted is not counted again when its record is re-observed after a restart. If the window was lost at the restart, a re-delivered record still opens a new receipt-time window and that Outcome is admitted; G5 flags this but does not change it. The live CLI does not persist that ledger yet (a G6 decision) and still avoids historical replay by starting at EOF.
 
 ## Confounders emitted by G3
 

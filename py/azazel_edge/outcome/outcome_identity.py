@@ -88,9 +88,7 @@ class OutcomeIdentityLedger:
     """
 
     def __init__(self, *, max_identities: int = DEFAULT_MAX_IDENTITIES) -> None:
-        if isinstance(max_identities, bool) or int(max_identities) <= 0:
-            raise ValueError("max_identities must be a positive integer")
-        self.max_identities = int(max_identities)
+        self.max_identities = _positive_int(max_identities)
         self._entries: dict[str, dict[str, str]] = {}
 
     def __len__(self) -> int:
@@ -141,10 +139,22 @@ class OutcomeIdentityLedger:
         }
 
     @classmethod
-    def from_mapping(cls, payload: Mapping[str, Any]) -> "OutcomeIdentityLedger":
+    def from_mapping(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        max_identities: int = DEFAULT_MAX_IDENTITIES,
+    ) -> "OutcomeIdentityLedger":
+        """Restore ledger state under the caller's configured bound.
+
+        The bound recorded in the state is validated but never replaces the
+        configured one, so stored state cannot raise its own limit.
+        """
+
         if not isinstance(payload, Mapping) or payload.get("schema_version") != LEDGER_SCHEMA_VERSION:
             raise ValueError("unsupported outcome identity ledger schema")
-        ledger = cls(max_identities=payload.get("max_identities", DEFAULT_MAX_IDENTITIES))
+        _positive_int(payload.get("max_identities"))
+        ledger = cls(max_identities=max_identities)
         identities = payload.get("identities")
         if not isinstance(identities, list):
             raise ValueError("outcome identity ledger requires identities list")
@@ -165,3 +175,9 @@ class OutcomeIdentityLedger:
                 raise ValueError("duplicate outcome identity entry")
             ledger._entries[key] = entry
         return ledger
+
+
+def _positive_int(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("max_identities must be a positive integer")
+    return value

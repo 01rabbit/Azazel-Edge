@@ -714,11 +714,14 @@
       "action": "redirect",
       "decision_id": "trace-golden-redirect-3",
       "deliveries": [
-        "boot-1"
+        "boot-1",
+        "boot-2"
       ],
       "first_boot": "boot-1",
       "notes": [
-        "boot-1:pending_observation_lost_at_restart"
+        "boot-1:pending_observation_lost_at_restart",
+        "boot-2:identical_redelivery_ignored",
+        "boot-2:outcome_window_from_post_restart_redelivery"
       ],
       "stages": {
         "correlation": {
@@ -736,7 +739,30 @@
           "policy_reason": "golden: credential spray to decoy",
           "target": "10.0.0.9:22"
         },
-        "effect": null,
+        "effect": {
+          "assessment": "inconclusive",
+          "confidence": null,
+          "effect_assessment_id": "effect-81d0e58394e8346a0f9524e7",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-redirect-3",
+            "postcondition:0e9c51f11956f53d8ce5d053",
+            "postcondition-ownership:f9b648f9692a84213a8b530c",
+            "telemetry-policy:golden-replay:3470a33f8fb442c230488c86",
+            "recorded-sample:boot-2:1777002000.000",
+            "recorded-sample:boot-2:1777002001.000",
+            "recorded-sample:boot-2:1777002002.000",
+            "recorded-sample:boot-2:1777002003.000",
+            "recorded-sample:boot-2:1777002004.000",
+            "recorded-sample:boot-2:1777002005.000"
+          ],
+          "mechanism_id": "mechanism-f2dab0081cd7709a01f2431d",
+          "objective_id": "objective-d0efc80d9d4a4c6b48cca51e",
+          "outcome_id": "outcome-3f4b718d1c6ca8a7171d8d10",
+          "producer": "azazel_edge.outcome",
+          "reason_code": "outcome_inconclusive",
+          "schema_version": "outcome-as-evidence/v1",
+          "tactical_effect": "DIVERSION"
+        },
         "execution": {
           "action_id": "action-d0abecbf885eec542f3e980c",
           "action_kind": "redirect",
@@ -1027,7 +1053,134 @@
           },
           "status": "observed"
         },
-        "outcome": null,
+        "objective": {
+          "decision_id": "trace-golden-redirect-3",
+          "direction": "decrease",
+          "guardrails": [],
+          "metric": "source_ip_event_rate_hz",
+          "objective_id": "objective-d0efc80d9d4a4c6b48cca51e",
+          "observation_window": {
+            "post_seconds": 3.0,
+            "pre_seconds": 3.0
+          },
+          "policy_version": "golden-policy-v1",
+          "schema_version": "outcome-as-evidence/v1",
+          "target_or_range": {}
+        },
+        "outcome": {
+          "adversary_response": {
+            "correlation_scope": "source_ip",
+            "first_followup_event_ms": null,
+            "post_event_count": 0,
+            "pre_event_count": 0,
+            "src_ip": "10.0.0.9"
+          },
+          "assessment": "inconclusive",
+          "asset_impact": {},
+          "baseline_metrics": {
+            "interface_rx_bytes_delta": 3000.0,
+            "interface_rx_dropped_delta": 0.0,
+            "interface_rx_errors_delta": 0.0,
+            "interface_rx_packets_delta": 24.0,
+            "interface_tx_bytes_delta": 1800.0,
+            "interface_tx_dropped_delta": 0.0,
+            "interface_tx_errors_delta": 0.0,
+            "interface_tx_packets_delta": 18.0,
+            "memory_available_kib_min": 899488.0,
+            "source_ip_event_count": 0,
+            "source_ip_event_rate_hz": 0.0,
+            "system_load1_mean": 0.41,
+            "telemetry_sample_count": 3,
+            "window_seconds": 3.0
+          },
+          "causal_support": "inconclusive",
+          "confounders": [
+            {
+              "code": "source_ip_is_not_actor_identity",
+              "detail": "activity correlation is source-IP scoped and does not assert attacker identity"
+            },
+            {
+              "code": "provider_execution_timestamp_unavailable",
+              "detail": "boundary uses collector receipt time because provider completion timestamp is not grounded"
+            },
+            {
+              "code": "mechanism_postcondition_not_observed",
+              "detail": "mechanism_status=unverified"
+            }
+          ],
+          "decision_id": "trace-golden-redirect-3",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-redirect-3",
+            "telemetry-policy:golden-replay:3470a33f8fb442c230488c86",
+            "recorded-sample:boot-2:1777002000.000",
+            "recorded-sample:boot-2:1777002001.000",
+            "recorded-sample:boot-2:1777002002.000",
+            "recorded-sample:boot-2:1777002003.000",
+            "recorded-sample:boot-2:1777002004.000",
+            "recorded-sample:boot-2:1777002005.000"
+          ],
+          "execution_id": "execution-61f7fdd2d527efa5ba6e2449",
+          "incident_id": "incident-5582760fec77236f35b03933",
+          "mechanism_id": "mechanism-f2dab0081cd7709a01f2431d",
+          "noc_impact": {},
+          "objective_id": "objective-d0efc80d9d4a4c6b48cca51e",
+          "observation_window": {
+            "action_observed_epoch": 1777002002.6,
+            "baseline_start_epoch": 1777001999.6,
+            "effective_end_epoch": 1777002005.6,
+            "planned_end_epoch": 1777002005.6
+          },
+          "observed_at": "2026-04-24T03:40:06+00:00",
+          "operator_override": {},
+          "outcome_id": "outcome-3f4b718d1c6ca8a7171d8d10",
+          "post_metrics": {
+            "interface_rx_bytes_delta": 3000.0,
+            "interface_rx_dropped_delta": 0.0,
+            "interface_rx_errors_delta": 0.0,
+            "interface_rx_packets_delta": 24.0,
+            "interface_tx_bytes_delta": 1800.0,
+            "interface_tx_dropped_delta": 0.0,
+            "interface_tx_errors_delta": 0.0,
+            "interface_tx_packets_delta": 18.0,
+            "memory_available_kib_min": 898720.0,
+            "source_ip_event_count": 0,
+            "source_ip_event_rate_hz": 0.0,
+            "system_load1_mean": 0.44,
+            "telemetry_sample_count": 3,
+            "window_seconds": 3.0
+          },
+          "producer": "azazel_edge.outcome.telemetry_g3",
+          "resource_impact": {
+            "post_load1_mean": 0.44,
+            "post_memory_available_kib_min": 898720.0,
+            "pre_load1_mean": 0.41,
+            "pre_memory_available_kib_min": 899488.0
+          },
+          "schema_version": "outcome-as-evidence/v1",
+          "telemetry_coverage": {
+            "collector": "outcome_g3_procfs_activity_v1",
+            "expected_post_samples": 3,
+            "expected_pre_samples": 3,
+            "interface": "br0",
+            "policy_ref": "telemetry-policy:golden-replay:3470a33f8fb442c230488c86",
+            "post_activity_count": 0,
+            "post_sample_count": 3,
+            "post_sample_ratio": 1.0,
+            "pre_activity_count": 0,
+            "pre_sample_count": 3,
+            "pre_sample_ratio": 1.0,
+            "sample_interval_seconds": 1.0,
+            "sources": {
+              "proc_loadavg_sample_ratio": 1.0,
+              "proc_meminfo_sample_ratio": 1.0,
+              "proc_net_dev_sample_ratio": 1.0,
+              "rust_event_jsonl": true
+            },
+            "window_truncated_by_release": false
+          },
+          "termination_reason": "observation_window_elapsed"
+        },
+        "outcome_identity_key": "outcome-identity-179df944ead1190828fe851d",
         "release": [
           {
             "boot": "boot-2",
@@ -1079,6 +1232,14 @@
       "outcome_id": "outcome-65c70906dbcdcaa24cfb6f98",
       "retained_outcome_id": "outcome-fd4ccf74e931cab550d8e689",
       "status": "duplicate_suppressed"
+    },
+    {
+      "boot": "boot-2",
+      "decision_id": "trace-golden-redirect-3",
+      "identity_key": "outcome-identity-179df944ead1190828fe851d",
+      "outcome_id": "outcome-3f4b718d1c6ca8a7171d8d10",
+      "retained_outcome_id": "outcome-3f4b718d1c6ca8a7171d8d10",
+      "status": "admitted"
     }
   ],
   "outcome_ledger": {
@@ -1090,6 +1251,14 @@
         "identity_key": "outcome-identity-1750f13d22ce353381d93070",
         "objective_id": "objective-8f2a9fdafb6c6622b0382c42",
         "outcome_id": "outcome-fd4ccf74e931cab550d8e689"
+      },
+      {
+        "content_digest": "217dcc63a903d7985cd8614f",
+        "decision_id": "trace-golden-redirect-3",
+        "execution_id": "execution-61f7fdd2d527efa5ba6e2449",
+        "identity_key": "outcome-identity-179df944ead1190828fe851d",
+        "objective_id": "objective-d0efc80d9d4a4c6b48cca51e",
+        "outcome_id": "outcome-3f4b718d1c6ca8a7171d8d10"
       }
     ],
     "max_identities": 64,
@@ -1109,8 +1278,9 @@
   "summary": {
     "activity_only_events": 4,
     "decisions": 3,
-    "outcomes_counted": 1,
-    "outcomes_produced": 2,
+    "outcomes_counted": 2,
+    "outcomes_counted_from_post_restart_redelivery": 1,
+    "outcomes_produced": 3,
     "replay_execution_records": 3
   }
 }

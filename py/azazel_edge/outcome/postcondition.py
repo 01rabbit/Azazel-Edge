@@ -7,7 +7,6 @@ import math
 import re
 import shutil
 import subprocess
-from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Mapping, Protocol, Sequence
@@ -29,9 +28,6 @@ _TRUSTED_BINARY_SEARCH_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 _MAX_PROBE_TIMEOUT_SECONDS = 5.0
 _MAX_STDOUT_BYTES = 1024 * 1024
 _MAX_STDERR_BYTES = 64 * 1024
-# Replay-only clock injection: a recorded probe observation time. It never changes
-# which state is accepted as observed; it only makes recorded replay deterministic.
-_PROBE_OBSERVED_AT: ContextVar[str | None] = ContextVar("_PROBE_OBSERVED_AT", default=None)
 
 
 class ReadOnlyCommandRejected(ValueError):
@@ -123,11 +119,9 @@ def verify_mechanism_postcondition(
     reconciliation belongs to later gates.
     """
 
-    token = _PROBE_OBSERVED_AT.set(_validated_observed_at(observed_at))
-    try:
-        return _verify_initial_postcondition(execution, mechanism, runner, timeout_seconds)
-    finally:
-        _PROBE_OBSERVED_AT.reset(token)
+    return _verify_initial_postcondition(
+        execution, mechanism, runner, timeout_seconds, _validated_observed_at(observed_at)
+    )
 
 
 def _validated_observed_at(value: str | None) -> str | None:
@@ -148,6 +142,7 @@ def _verify_initial_postcondition(
     mechanism: AppliedMechanism,
     runner: ReadOnlyRunner,
     timeout_seconds: float,
+    observed_at: str | None,
 ) -> AppliedMechanism:
     _validate_correlation(execution, mechanism)
 
@@ -160,14 +155,15 @@ def _verify_initial_postcondition(
 
     try:
         if mechanism.mechanism_kind is MechanismKind.TRAFFIC_SHAPING:
-            return _verify_traffic_shaping(execution, mechanism, runner, timeout_seconds)
+            return _verify_traffic_shaping(execution, mechanism, runner, timeout_seconds, observed_at)
         if mechanism.mechanism_kind is MechanismKind.REDIRECTION:
-            return _verify_redirection(execution, mechanism, runner, timeout_seconds)
+            return _verify_redirection(execution, mechanism, runner, timeout_seconds, observed_at)
         if mechanism.mechanism_kind is MechanismKind.ISOLATION:
-            return _verify_isolation(execution, mechanism, runner, timeout_seconds)
+            return _verify_isolation(execution, mechanism, runner, timeout_seconds, observed_at)
     except (ReadOnlyCommandRejected, ValueError, TypeError, json.JSONDecodeError, OverflowError) as exc:
         return _with_probe_result(
             mechanism,
+            observed_at=observed_at,
             status=MechanismStatus.UNVERIFIED,
             basis="probe_input_or_parse_error",
             verification_strength="none",
@@ -176,6 +172,7 @@ def _verify_initial_postcondition(
     except (OSError, subprocess.SubprocessError) as exc:
         return _with_probe_result(
             mechanism,
+            observed_at=observed_at,
             status=MechanismStatus.UNVERIFIED,
             basis="probe_runtime_error",
             verification_strength="none",
@@ -190,6 +187,7 @@ def _verify_traffic_shaping(
     mechanism: AppliedMechanism,
     runner: ReadOnlyRunner,
     timeout_seconds: float,
+    observed_at: str | None,
 ) -> AppliedMechanism:
     scope = mechanism.scope
     if scope.get("scope_kind") != "interface_root_qdisc":
@@ -201,6 +199,7 @@ def _verify_traffic_shaping(
     if result.returncode != 0:
         return _with_probe_result(
             mechanism,
+            observed_at=observed_at,
             status=MechanismStatus.UNVERIFIED,
             basis="tc_query_failed",
             verification_strength="none",
@@ -226,6 +225,7 @@ def _verify_traffic_shaping(
         if _tbf_semantics_equal(expected, candidate):
             return _with_probe_result(
                 mechanism,
+                observed_at=observed_at,
                 status=MechanismStatus.OBSERVED,
                 basis="tc_root_tbf_parameter_readback_match",
                 verification_strength="exact",
@@ -235,6 +235,7 @@ def _verify_traffic_shaping(
     if saw_root_tbf and not saw_complete_candidate:
         return _with_probe_result(
             mechanism,
+            observed_at=observed_at,
             status=MechanismStatus.UNVERIFIED,
             basis="tc_root_tbf_present_but_parameters_unverifiable",
             verification_strength="partial",
@@ -242,6 +243,7 @@ def _verify_traffic_shaping(
         )
     return _with_probe_result(
         mechanism,
+        observed_at=observed_at,
         status=MechanismStatus.NOT_OBSERVED,
         basis="tc_root_tbf_parameter_match_not_found",
         verification_strength="exact",
@@ -254,6 +256,7 @@ def _verify_redirection(
     mechanism: AppliedMechanism,
     runner: ReadOnlyRunner,
     timeout_seconds: float,
+    observed_at: str | None,
 ) -> AppliedMechanism:
     scope = mechanism.scope
     if scope.get("scope_kind") != "source_ip_and_destination_port":
@@ -271,6 +274,7 @@ def _verify_redirection(
     if result.returncode != 0:
         return _with_probe_result(
             mechanism,
+            observed_at=observed_at,
             status=MechanismStatus.UNVERIFIED,
             basis="nft_prerouting_query_failed",
             verification_strength="none",
@@ -280,6 +284,7 @@ def _verify_redirection(
     matched = _nft_has_redirect_rule(payload, source_ip, destination_port, redirect_port)
     return _with_probe_result(
         mechanism,
+        observed_at=observed_at,
         status=MechanismStatus.OBSERVED if matched else MechanismStatus.NOT_OBSERVED,
         basis="nft_redirect_rule_readback_match" if matched else "nft_redirect_rule_not_found",
         verification_strength="exact",
@@ -297,6 +302,7 @@ def _verify_isolation(
     mechanism: AppliedMechanism,
     runner: ReadOnlyRunner,
     timeout_seconds: float,
+    observed_at: str | None,
 ) -> AppliedMechanism:
     scope = mechanism.scope
     if scope.get("scope_kind") != "source_ip":
@@ -312,6 +318,7 @@ def _verify_isolation(
     if result.returncode != 0:
         return _with_probe_result(
             mechanism,
+            observed_at=observed_at,
             status=MechanismStatus.UNVERIFIED,
             basis="nft_input_query_failed",
             verification_strength="none",
@@ -321,6 +328,7 @@ def _verify_isolation(
     matched = _nft_has_source_drop_rule(payload, source_ip)
     return _with_probe_result(
         mechanism,
+        observed_at=observed_at,
         status=MechanismStatus.OBSERVED if matched else MechanismStatus.NOT_OBSERVED,
         basis="nft_isolation_rule_readback_match" if matched else "nft_isolation_rule_not_found",
         verification_strength="exact",
@@ -674,12 +682,13 @@ def _result_summary(result: ReadOnlyCommandResult) -> dict[str, Any]:
 def _with_probe_result(
     mechanism: AppliedMechanism,
     *,
+    observed_at: str | None,
     status: MechanismStatus,
     basis: str,
     verification_strength: str,
     probe: Mapping[str, Any],
 ) -> AppliedMechanism:
-    observed_at = _PROBE_OBSERVED_AT.get() or utc_now()
+    observed_at = observed_at or utc_now()
     sanitized_probe = {
         "basis": basis,
         "verification_strength": verification_strength,

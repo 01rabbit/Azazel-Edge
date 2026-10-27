@@ -687,6 +687,51 @@
           "op": "event"
         },
         {
+          "epoch": 1777002002.6,
+          "event": {
+            "defense": {
+              "action": "redirect",
+              "delay_ms": 0,
+              "policy_reason": "golden: credential spray to decoy",
+              "target": "10.0.0.9:22"
+            },
+            "enforcement": {
+              "command_plan": [
+                "nft insert rule inet azazel_edge prerouting ip saddr 10.0.0.9 tcp dport 22 redirect to 12222 comment azazel-edge:release-trace-golden-redirect-3"
+              ],
+              "errors": [],
+              "executed_count": 1,
+              "failed_count": 0,
+              "metadata": {
+                "release_due_epoch": 1777002000.5,
+                "release_ledger_state": "active",
+                "release_owner_token": "azazel-edge:release-trace-golden-redirect-3",
+                "release_resource_key": "nft:inet:azazel_edge:prerouting:10.0.0.9:tcp:22",
+                "release_task_id": "release-trace-golden-redirect-3",
+                "release_tc_handle": ""
+              },
+              "mode": "enforced",
+              "policy_reason": "golden: credential spray to decoy",
+              "result": "applied",
+              "rollback_plan": [
+                "nft delete rule inet azazel_edge prerouting handle <owned:azazel-edge:release-trace-golden-redirect-3>"
+              ],
+              "selected_action": "redirect",
+              "target": "10.0.0.9:22",
+              "trace_id": "trace-golden-redirect-3"
+            },
+            "normalized": {
+              "dst_ip": "10.0.0.1",
+              "sid": 4001,
+              "src_ip": "10.0.0.9",
+              "target_port": 22,
+              "ts": "2026-04-24T03:23:26.500000+00:00"
+            },
+            "pipeline": "rust_event_engine_v1"
+          },
+          "op": "event"
+        },
+        {
           "epoch": 1777002003.0,
           "network": {
             "rx_bytes": 104500,
@@ -765,7 +810,7 @@
       ]
     }
   ],
-  "description": "Recorded synthetic timeline: throttle observed+released+outcome; isolate provider failure; redirect observed, collector restart loses its pending outcome, release reconciled after restart; throttle record re-delivered after restart must not be counted twice.",
+  "description": "Recorded synthetic timeline: throttle observed+released+outcome; isolate provider failure; redirect observed, collector restart loses its pending outcome, release reconciled after restart; throttle record re-delivered after restart must not be counted twice; redirect record re-delivered after restart (its boot-1 window was lost) gets a new receipt-time window under current G3 semantics and is admitted, flagged in the transcript.",
   "fixture_id": "g5-golden-replay-v1",
   "interface": "br0",
   "max_outcome_identities": 64,

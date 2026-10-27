@@ -186,6 +186,7 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
     restart_gaps: list[dict[str, Any]] = []
     rejected_inputs: list[dict[str, Any]] = []
     activity_only = 0
+    redelivered_windows = 0
     boots_seen: list[str] = []
 
     for boot_index, boot in enumerate(fixture.get("boots") or ()):
@@ -195,7 +196,9 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
         boots_seen.append(boot_id)
         # A restart loses all in-memory collector state; only the durable
         # ledger state (round-tripped through JSON) survives.
-        ledger = OutcomeIdentityLedger.from_mapping(json.loads(json.dumps(ledger_state)))
+        ledger = OutcomeIdentityLedger.from_mapping(
+            json.loads(json.dumps(ledger_state)), max_identities=max_identities
+        )
         source = RecordedTelemetrySource()
         collector = OutcomeTelemetryCollector(
             source=source,
@@ -253,6 +256,14 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
                     objective = policy.objective_for(trace.action, outcome.decision_id)
                     if objective is None or objective.objective_id != outcome.objective_id:
                         raise GoldenReplayError("outcome objective is not the policy objective")
+                    if trace.first_boot != boot_id:
+                        # Current G3 semantics: a record re-delivered after a
+                        # restart opens a window at the new receipt time. The
+                        # ledger only dedups identities already admitted, so
+                        # an Outcome lost at restart is admitted here with
+                        # post-restart telemetry. Flag it; do not hide it.
+                        trace.notes.append(f"{boot_id}:outcome_window_from_post_restart_redelivery")
+                        redelivered_windows += 1
                     trace.stages["objective"] = objective.to_dict()
                     trace.stages["outcome"] = outcome.to_dict()
                     trace.stages["outcome_identity_key"] = admission.identity_key
@@ -304,6 +315,7 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
             "activity_only_events": activity_only,
             "outcomes_produced": len(admissions),
             "outcomes_counted": counted,
+            "outcomes_counted_from_post_restart_redelivery": redelivered_windows,
             "replay_execution_records": len(replay_provider.records),
         },
     }

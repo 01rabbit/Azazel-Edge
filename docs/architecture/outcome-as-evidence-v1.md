@@ -273,7 +273,7 @@ Contract implemented, including causal support, telemetry coverage and confounde
 
 ### G5 — replay
 
-Implemented (`outcome-golden-replay-g5.md`). A recorded golden fixture is replayed deterministically through Decision -> Execution -> Mechanism -> Release -> Outcome -> Effect and every stage is compared with the golden transcript. Outcomes have a restart-independent identity (`execution_id` + `objective_id`) and a bounded first-wins ledger, so the same Outcome re-observed after a restart is counted once; a pending window lost at a restart is reported, never reconstructed. Tests fail if replay reaches any live path. The fixture is synthetic/recorded, not Pi/HIL evidence; persisting the identity ledger in the live collector is left to G6.
+Implemented (`outcome-golden-replay-g5.md`). A recorded golden fixture is replayed deterministically through Decision -> Execution -> Mechanism -> Release -> Outcome -> Effect and every stage is compared with the golden transcript. Outcomes have a restart-independent identity (`execution_id` + `objective_id`) and a bounded first-wins ledger, so an Outcome already admitted and re-observed after a restart is counted once; a pending window lost at a restart is reported. Limitation: if the record is re-delivered after the restart, current G3 semantics open a new receipt-time window and that Outcome is admitted (flagged in the replay transcript). Tests fail if replay reaches any live path. The fixture is synthetic/recorded, not Pi/HIL evidence; persisting the identity ledger in the live collector is left to G6.
 
 ### G6 — Pi/HIL
 

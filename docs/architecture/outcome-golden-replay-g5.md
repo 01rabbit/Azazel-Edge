@@ -41,8 +41,9 @@ The input is a synthetic recording built from the shapes the G1a/G1b/G3 tests al
 
 1. **throttle** — applied; mechanism `unverified` -> recorded tc readback `observed` (owned handle) -> verified owned release -> Outcome window truncated by release (`owned_mechanism_released`) -> `DELAY` assessment `inconclusive` (`outcome_inconclusive`, `confidence=null`);
 2. **isolate** — provider failure; execution `failed`, mechanism `not_observed`, no Outcome, no Effect;
-3. **redirect** — applied and observed in boot 1; the process restarts before its post window ends, so the pending observation is lost and reported in `restart_gaps` (never reconstructed); its verified owned release arrives in boot 2 and is still reconciled to the boot-1 execution;
-4. **re-delivery after restart** — the throttle record is delivered again in boot 2. A fresh collector observes it and produces a second OutcomeRecord with a different `outcome_id` (the G3 id depends on collector receipt time). The identity ledger suppresses it; the Outcome is counted once.
+3. **redirect** — applied and observed in boot 1; the process restarts before its post window ends, so the pending observation is lost and reported in `restart_gaps`; its verified owned release arrives in boot 2 and is still reconciled to the boot-1 execution;
+4. **re-delivery after restart, Outcome already admitted** — the throttle record is delivered again in boot 2. A fresh collector observes it and produces a second OutcomeRecord with a different `outcome_id` (the G3 id depends on collector receipt time). The identity ledger suppresses it; the Outcome is counted once;
+5. **re-delivery after restart, window lost** — the redirect record is also delivered again in boot 2. Under current G3 semantics a fresh collector opens a new window at the boot-2 receipt time (here even after the owned mechanism was released) and, because no Outcome for that identity was admitted before, the ledger admits it. The golden pins this behaviour and the transcript flags it (`outcome_window_from_post_restart_redelivery` note, `summary.outcomes_counted_from_post_restart_redelivery`). See "Limitations".
 
 The test compares every stage of every decision (`decision`, `correlation`, `execution`, `mechanism`, `mechanism_postcondition`, `release`, `execution_final`, `mechanism_final`, `objective`, `outcome`, `outcome_identity_key`, `effect`) and the replay-level records (`outcome_admissions`, `outcome_ledger`, `restart_gaps`, `rejected_inputs`, `summary`) with the golden file, and also asserts the #400 semantics directly so a regenerated golden cannot silently accept a success or causal claim.
 
@@ -53,7 +54,7 @@ Changing replay output requires regenerating the expected file deliberately and 
 Replay time comes only from the recording:
 
 - telemetry samples, release attempts, Outcome `observed_at` and windows are recorded epochs;
-- the G1a probe timestamp is pinned with the replay-only `observed_at` argument of `verify_mechanism_postcondition()` (default behaviour, current UTC time, is unchanged);
+- the G1a probe timestamp is pinned with the `observed_at` argument of `verify_mechanism_postcondition()`, passed explicitly down to the probe record (default behaviour, current UTC time, is unchanged). A test fixes that no caller under `py/` other than the golden replay (and the ownership wrapper's pass-through) supplies it;
 - the effect assessment id is derived from `outcome_id`/`objective_id`/`tactical_effect` inside the replay transcript.
 
 The same fixture replayed twice produces the identical transcript, and replay does not mutate its input.
@@ -68,7 +69,7 @@ outcome_identity_key = H(execution_id, objective_id)
 
 Both inputs are restart-independent: `execution_id` derives from the Rust trace, `objective_id` from the policy template instantiated for that decision. Collector receipt time does not enter the key.
 
-`OutcomeIdentityLedger` is first-wins and bounded:
+`OutcomeIdentityLedger` is first-wins and bounded. It only prevents counting an identity twice; it does not know whether a window was lost, so it cannot stop the first Outcome of an identity from being built after a restart (scenario 5).
 
 | Case | Admission | Counted |
 |---|---|---|
@@ -78,7 +79,7 @@ Both inputs are restart-independent: `execution_id` derives from the Rust trace,
 | ledger full | `capacity_exhausted` | no; fail closed, no identity is forgotten |
 | same identity claimed by a different decision | rejected (`ValueError`) | no |
 
-Ledger state is a plain mapping (`to_dict` / `from_mapping`); `from_mapping` rejects a wrong schema, an entry whose key does not match its execution/objective, duplicates and oversized state.
+Ledger state is a plain mapping (`to_dict` / `from_mapping`). `from_mapping` restores under the caller's configured bound: the bound stored in the state is validated (missing, `None` or non-integer is rejected) but never replaces the configured one. It also rejects a wrong schema, an entry whose key does not match its execution/objective, duplicates and state larger than the configured bound.
 
 The ledger is not wired into the live G3 CLI. The live CLI still avoids historical replay by starting at EOF. Persisting the ledger on the device (path, fsync, growth, wear) is a G6 decision.
 
@@ -92,9 +93,9 @@ The ledger is not wired into the live G3 CLI. The live CLI still avoids historic
 - `LiveExecutionProvider.execute` and `ReplayExecutionProvider.execute`;
 - Python `ActionArbiter.decide`, `OpenCanaryRedirectController.apply`, `execute_runbook`;
 - control-daemon client paths in `control_plane` (`_socket_request`, `send_action*`, command-file fallback);
-- wall clock (`utc_now`, the collector's `time` module) and file writes through `open`.
+- wall clock (`utc_now`, the collector's `time` module, and `datetime.now`/`utcnow`/`today` in every outcome module the replay uses) and file writes through `open`, `io.open` and `os.open`.
 
-The replay must produce the golden transcript with zero recorded calls. A negative-control test proves the stubs intercept those entry points. A static test also rejects importing subprocess/socket/os/time/pathlib/io, the arbiter, control plane, redirect controller, runbooks or `azazel_edge_control` from the replay modules.
+The replay must produce the golden transcript with zero recorded calls. A negative-control test proves the stubs intercept those entry points. A static test also rejects, in the replay modules, importing subprocess/socket/os/time/pathlib/io/importlib/builtins, the arbiter, control plane, redirect controller, runbooks, the observer or `azazel_edge_control` (absolute, relative, or as a name from a package such as `from azazel_edge import control_plane`), and calling `open`/`exec`/`eval`/`__import__`/`getattr`, `os.open`, `importlib.import_module`, `datetime.now`/`utcnow`/`today` or `time.time`/`monotonic`. A negative control runs the same checker over each bypass shape.
 
 The Rust enforcement and release engines are not part of the Python process and are never started by the replay; their behaviour enters only as recorded records.
 
@@ -102,14 +103,18 @@ The Rust enforcement and release engines are not part of the Python process and 
 
 G5 adds no decision or enforcement authority, no approval flag, no environment-variable bypass and no live hook. M.I.O. is not involved. `ActionArbiter` and Rust `decide_defense()` behaviour are unchanged. Every Outcome remains `assessment=inconclusive`, `causal_support=inconclusive`; no Effect is `supported`.
 
-## Observed limitation (unchanged)
+## Limitations (G3 semantics, unchanged)
 
-The G3 collector records the mechanism status known when the Rust record arrived (`unverified` for a disruptive action), so the golden Outcome carries the `mechanism_postcondition_not_observed` confounder even though the G1a probe later observed the owned mechanism. Replay reproduces this faithfully; joining G1a results into G3 confounders would change G3 evidence semantics and is not done here.
+**Re-delivery after a lost window.** G5 does not reconstruct a lost window itself, but if the Rust record of that execution is delivered again after the restart (re-read input, `--from-start`, a replay harness), the G3 collector opens a window at the new receipt time and builds an Outcome from post-restart telemetry. The ledger admits it because the identity has no Outcome yet. Such an Outcome is not evidence about the original action window. Replay flags it, and it stays `inconclusive`; changing G3 to refuse it (for example, by comparing receipt time with the provider timestamp, or by recording lost windows durably) would change G3 evidence semantics and is left to an owner decision. The live G3 CLI starts at EOF, so it does not re-read old records on its own.
+
+**Mechanism status in the Outcome.** The G3 collector records the mechanism status known when the Rust record arrived (`unverified` for a disruptive action), so the golden Outcome carries the `mechanism_postcondition_not_observed` confounder even though the G1a probe later observed the owned mechanism. Replay reproduces this faithfully; joining G1a results into G3 confounders would change G3 evidence semantics and is not done here.
 
 ## Not solved by G5
 
 - Raspberry Pi/HIL validation, restart cadence, disk growth/wear, CPU/RSS (G6);
 - persisting the identity ledger in the live collector (G6);
+- how ledger exhaustion is surfaced and how capacity is reclaimed once it is wired in: today a full ledger refuses every new identity permanently and the only signal is the `capacity_exhausted` admission (G6);
+- refusing an Outcome whose window was opened by a post-restart re-delivery (see "Limitations");
 - long-term release tombstone compaction / trace-id migration (needs an explicitly approved storage migration design);
 - authoritative actor/session identity;
 - any new tactical-effect rule.
