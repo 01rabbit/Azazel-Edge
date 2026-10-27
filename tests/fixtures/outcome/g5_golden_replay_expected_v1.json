@@ -1,0 +1,1286 @@
+{
+  "boots": [
+    "boot-1",
+    "boot-2"
+  ],
+  "decisions": [
+    {
+      "action": "throttle",
+      "decision_id": "trace-golden-throttle-1",
+      "deliveries": [
+        "boot-1",
+        "boot-2"
+      ],
+      "first_boot": "boot-1",
+      "notes": [
+        "boot-2:identical_redelivery_ignored",
+        "boot-2:outcome_duplicate_suppressed"
+      ],
+      "stages": {
+        "correlation": {
+          "action_id": "action-c0eb72e7d2d3895fa41ff382",
+          "decision_id": "trace-golden-throttle-1",
+          "execution_id": "execution-4973970a56020b5a4830e246",
+          "incident_id": "incident-4e44addfce067790f0b9aa58",
+          "mechanism_id": "mechanism-759f6e570568849914ae8b96"
+        },
+        "decision": {
+          "action": "throttle",
+          "authority": "recorded_rust_decide_defense",
+          "decided_at": "2026-04-24T03:23:23+00:00",
+          "decision_id": "trace-golden-throttle-1",
+          "policy_reason": "golden: sustained ssh brute force",
+          "target": "10.0.0.8"
+        },
+        "effect": {
+          "assessment": "inconclusive",
+          "confidence": null,
+          "effect_assessment_id": "effect-4d26dddfd497cb67063ec05d",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-throttle-1",
+            "postcondition:58a21fa0e8e8224186ce994e",
+            "postcondition-ownership:5fada94a3b96ee8199489ff4",
+            "telemetry-policy:golden-replay:3470a33f8fb442c230488c86",
+            "recorded-sample:boot-1:1777001000.000",
+            "recorded-sample:boot-1:1777001001.000",
+            "recorded-sample:boot-1:1777001002.000",
+            "recorded-sample:boot-1:1777001004.000",
+            "recorded-sample:boot-1:1777001005.000",
+            "rust-activity:trace-golden-activity-1",
+            "rust-activity:trace-golden-activity-2",
+            "rust-activity:trace-golden-activity-3",
+            "rust-activity:trace-golden-activity-4"
+          ],
+          "mechanism_id": "mechanism-759f6e570568849914ae8b96",
+          "objective_id": "objective-8f2a9fdafb6c6622b0382c42",
+          "outcome_id": "outcome-fd4ccf74e931cab550d8e689",
+          "producer": "azazel_edge.outcome",
+          "reason_code": "outcome_inconclusive",
+          "schema_version": "outcome-as-evidence/v1",
+          "tactical_effect": "DELAY"
+        },
+        "execution": {
+          "action_id": "action-c0eb72e7d2d3895fa41ff382",
+          "action_kind": "throttle",
+          "applied_parameters": {
+            "executed_count": 1,
+            "failed_count": 0,
+            "individual_command_mapping_verified": false,
+            "metadata": {
+              "release_due_epoch": 1777001005.0,
+              "release_ledger_state": "active",
+              "release_owner_token": "azazel-edge:release-trace-golden-throttle-1",
+              "release_resource_key": "tc:root:br0",
+              "release_task_id": "release-trace-golden-throttle-1",
+              "release_tc_handle": "1a:"
+            },
+            "mode": "enforced",
+            "result": "applied"
+          },
+          "completed_at": "",
+          "decision_id": "trace-golden-throttle-1",
+          "error_code": "",
+          "execution_id": "execution-4973970a56020b5a4830e246",
+          "expires_at": "2026-04-24T03:23:25+00:00",
+          "idempotency_key": "execution-4973970a56020b5a4830e246",
+          "incident_id": "incident-4e44addfce067790f0b9aa58",
+          "lifecycle": "active",
+          "producer": "azazel_edge.outcome.rust_adapter",
+          "provider": "rust_event_engine_v1",
+          "provider_evidence_refs": [
+            "rust_event_engine_v1:trace-golden-throttle-1"
+          ],
+          "provider_sequence": "",
+          "release_ref": "release-trace-golden-throttle-1",
+          "requested_at": "2026-04-24T03:23:23+00:00",
+          "requested_parameters": {
+            "command_plan": [
+              "tc qdisc replace dev br0 root handle 1a: tbf rate 256kbit burst 32kbit latency 1000ms"
+            ],
+            "policy_reason": "golden: sustained ssh brute force",
+            "rollback_plan": [
+              "tc qdisc del dev br0 root handle 1a:"
+            ],
+            "target": "10.0.0.8"
+          },
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "decision_subject_ip": "10.0.0.8",
+            "interface": "br0",
+            "scope_kind": "interface_root_qdisc"
+          },
+          "started_at": "",
+          "status": "applied",
+          "superseded_by_decision_id": ""
+        },
+        "execution_final": {
+          "action_id": "action-c0eb72e7d2d3895fa41ff382",
+          "action_kind": "throttle",
+          "applied_parameters": {
+            "executed_count": 1,
+            "failed_count": 0,
+            "individual_command_mapping_verified": false,
+            "metadata": {
+              "release_due_epoch": 1777001005.0,
+              "release_ledger_state": "active",
+              "release_owner_token": "azazel-edge:release-trace-golden-throttle-1",
+              "release_resource_key": "tc:root:br0",
+              "release_task_id": "release-trace-golden-throttle-1",
+              "release_tc_handle": "1a:"
+            },
+            "mode": "enforced",
+            "result": "applied"
+          },
+          "completed_at": "2026-04-24T03:23:25.500000+00:00",
+          "decision_id": "trace-golden-throttle-1",
+          "error_code": "",
+          "execution_id": "execution-4973970a56020b5a4830e246",
+          "expires_at": "2026-04-24T03:23:25+00:00",
+          "idempotency_key": "execution-4973970a56020b5a4830e246",
+          "incident_id": "incident-4e44addfce067790f0b9aa58",
+          "lifecycle": "released",
+          "producer": "azazel_edge.outcome.rust_adapter",
+          "provider": "rust_event_engine_v1",
+          "provider_evidence_refs": [
+            "rust_event_engine_v1:trace-golden-throttle-1",
+            "rust_release_engine_v1:release-trace-golden-throttle-1:1777001005.500000"
+          ],
+          "provider_sequence": "",
+          "release_ref": "release-trace-golden-throttle-1",
+          "requested_at": "2026-04-24T03:23:23+00:00",
+          "requested_parameters": {
+            "command_plan": [
+              "tc qdisc replace dev br0 root handle 1a: tbf rate 256kbit burst 32kbit latency 1000ms"
+            ],
+            "policy_reason": "golden: sustained ssh brute force",
+            "rollback_plan": [
+              "tc qdisc del dev br0 root handle 1a:"
+            ],
+            "target": "10.0.0.8"
+          },
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "decision_subject_ip": "10.0.0.8",
+            "interface": "br0",
+            "scope_kind": "interface_root_qdisc"
+          },
+          "started_at": "",
+          "status": "released",
+          "superseded_by_decision_id": ""
+        },
+        "mechanism": {
+          "decision_id": "trace-golden-throttle-1",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-throttle-1"
+          ],
+          "execution_id": "execution-4973970a56020b5a4830e246",
+          "expires_at": "2026-04-24T03:23:25+00:00",
+          "mechanism_id": "mechanism-759f6e570568849914ae8b96",
+          "mechanism_kind": "TRAFFIC_SHAPING",
+          "observed_at": "2026-04-24T03:23:23+00:00",
+          "observed_parameters": {
+            "provider_report": {
+              "executed_count": 1,
+              "failed_count": 0,
+              "individual_command_mapping_verified": false,
+              "metadata": {
+                "release_due_epoch": 1777001005.0,
+                "release_ledger_state": "active",
+                "release_owner_token": "azazel-edge:release-trace-golden-throttle-1",
+                "release_resource_key": "tc:root:br0",
+                "release_task_id": "release-trace-golden-throttle-1",
+                "release_tc_handle": "1a:"
+              },
+              "mode": "enforced",
+              "result": "applied"
+            },
+            "verification_basis": "provider_command_exit_status_only"
+          },
+          "producer": "azazel_edge.outcome.rust_adapter",
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "decision_subject_ip": "10.0.0.8",
+            "interface": "br0",
+            "scope_kind": "interface_root_qdisc"
+          },
+          "status": "unverified"
+        },
+        "mechanism_final": {
+          "decision_id": "trace-golden-throttle-1",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-throttle-1",
+            "postcondition:58a21fa0e8e8224186ce994e",
+            "postcondition-ownership:5fada94a3b96ee8199489ff4",
+            "rust_release_engine_v1:release-trace-golden-throttle-1:1777001005.500000"
+          ],
+          "execution_id": "execution-4973970a56020b5a4830e246",
+          "expires_at": "2026-04-24T03:23:25+00:00",
+          "mechanism_id": "mechanism-759f6e570568849914ae8b96",
+          "mechanism_kind": "TRAFFIC_SHAPING",
+          "observed_at": "2026-04-24T03:23:25.500000+00:00",
+          "observed_parameters": {
+            "postcondition_probe": {
+              "argv": [
+                "tc",
+                "-j",
+                "qdisc",
+                "show",
+                "dev",
+                "br0"
+              ],
+              "basis": "tc_root_tbf_parameter_readback_match",
+              "expected": {
+                "burst_bytes": 4096,
+                "latency_us": 1000000,
+                "rate_bps": 256000
+              },
+              "observed": {
+                "burst_bytes": 4096,
+                "latency_us": 1000000,
+                "rate_bps": 256000
+              },
+              "observed_at": "2026-04-24T03:23:23.200000+00:00",
+              "ownership": {
+                "kind": "tc_handle",
+                "value": "1a:"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "verification_strength": "exact"
+            },
+            "provider_report": {
+              "executed_count": 1,
+              "failed_count": 0,
+              "individual_command_mapping_verified": false,
+              "metadata": {
+                "release_due_epoch": 1777001005.0,
+                "release_ledger_state": "active",
+                "release_owner_token": "azazel-edge:release-trace-golden-throttle-1",
+                "release_resource_key": "tc:root:br0",
+                "release_task_id": "release-trace-golden-throttle-1",
+                "release_tc_handle": "1a:"
+              },
+              "mode": "enforced",
+              "result": "applied"
+            },
+            "release_evidence": {
+              "observed_at": "2026-04-24T03:23:25.500000+00:00",
+              "ownership": {
+                "kind": "tc_handle",
+                "value": "1a:"
+              },
+              "postcondition": {
+                "owned_state_present": false,
+                "verified": true
+              },
+              "release_task_id": "release-trace-golden-throttle-1",
+              "result": "rollback_applied_and_absence_verified",
+              "status": "released"
+            },
+            "verification_basis": "provider_command_exit_status_only"
+          },
+          "producer": "azazel_edge.outcome.release_reconciliation",
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "decision_subject_ip": "10.0.0.8",
+            "interface": "br0",
+            "scope_kind": "interface_root_qdisc"
+          },
+          "status": "released"
+        },
+        "mechanism_postcondition": {
+          "decision_id": "trace-golden-throttle-1",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-throttle-1",
+            "postcondition:58a21fa0e8e8224186ce994e",
+            "postcondition-ownership:5fada94a3b96ee8199489ff4"
+          ],
+          "execution_id": "execution-4973970a56020b5a4830e246",
+          "expires_at": "2026-04-24T03:23:25+00:00",
+          "mechanism_id": "mechanism-759f6e570568849914ae8b96",
+          "mechanism_kind": "TRAFFIC_SHAPING",
+          "observed_at": "2026-04-24T03:23:23.200000+00:00",
+          "observed_parameters": {
+            "postcondition_probe": {
+              "argv": [
+                "tc",
+                "-j",
+                "qdisc",
+                "show",
+                "dev",
+                "br0"
+              ],
+              "basis": "tc_root_tbf_parameter_readback_match",
+              "expected": {
+                "burst_bytes": 4096,
+                "latency_us": 1000000,
+                "rate_bps": 256000
+              },
+              "observed": {
+                "burst_bytes": 4096,
+                "latency_us": 1000000,
+                "rate_bps": 256000
+              },
+              "observed_at": "2026-04-24T03:23:23.200000+00:00",
+              "ownership": {
+                "kind": "tc_handle",
+                "value": "1a:"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "verification_strength": "exact"
+            },
+            "provider_report": {
+              "executed_count": 1,
+              "failed_count": 0,
+              "individual_command_mapping_verified": false,
+              "metadata": {
+                "release_due_epoch": 1777001005.0,
+                "release_ledger_state": "active",
+                "release_owner_token": "azazel-edge:release-trace-golden-throttle-1",
+                "release_resource_key": "tc:root:br0",
+                "release_task_id": "release-trace-golden-throttle-1",
+                "release_tc_handle": "1a:"
+              },
+              "mode": "enforced",
+              "result": "applied"
+            },
+            "verification_basis": "provider_command_exit_status_only"
+          },
+          "producer": "azazel_edge.outcome.ownership_postcondition",
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "decision_subject_ip": "10.0.0.8",
+            "interface": "br0",
+            "scope_kind": "interface_root_qdisc"
+          },
+          "status": "observed"
+        },
+        "objective": {
+          "decision_id": "trace-golden-throttle-1",
+          "direction": "decrease",
+          "guardrails": [],
+          "metric": "source_ip_event_rate_hz",
+          "objective_id": "objective-8f2a9fdafb6c6622b0382c42",
+          "observation_window": {
+            "post_seconds": 3.0,
+            "pre_seconds": 3.0
+          },
+          "policy_version": "golden-policy-v1",
+          "schema_version": "outcome-as-evidence/v1",
+          "target_or_range": {}
+        },
+        "outcome": {
+          "adversary_response": {
+            "correlation_scope": "source_ip",
+            "first_followup_event_ms": 1500.0,
+            "post_event_count": 1,
+            "pre_event_count": 3,
+            "src_ip": "10.0.0.8"
+          },
+          "assessment": "inconclusive",
+          "asset_impact": {},
+          "baseline_metrics": {
+            "interface_rx_bytes_delta": 3000.0,
+            "interface_rx_dropped_delta": 0.0,
+            "interface_rx_errors_delta": 0.0,
+            "interface_rx_packets_delta": 24.0,
+            "interface_tx_bytes_delta": 1800.0,
+            "interface_tx_dropped_delta": 0.0,
+            "interface_tx_errors_delta": 0.0,
+            "interface_tx_packets_delta": 18.0,
+            "memory_available_kib_min": 899488.0,
+            "source_ip_event_count": 3,
+            "source_ip_event_rate_hz": 1.0,
+            "source_ip_interarrival_ms_median": 1000.0,
+            "system_load1_mean": 0.41,
+            "telemetry_sample_count": 3,
+            "window_seconds": 3.0
+          },
+          "causal_support": "inconclusive",
+          "confounders": [
+            {
+              "code": "source_ip_is_not_actor_identity",
+              "detail": "activity correlation is source-IP scoped and does not assert attacker identity"
+            },
+            {
+              "code": "provider_execution_timestamp_unavailable",
+              "detail": "boundary uses collector receipt time because provider completion timestamp is not grounded"
+            },
+            {
+              "code": "mechanism_postcondition_not_observed",
+              "detail": "mechanism_status=unverified"
+            }
+          ],
+          "decision_id": "trace-golden-throttle-1",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-throttle-1",
+            "telemetry-policy:golden-replay:3470a33f8fb442c230488c86",
+            "recorded-sample:boot-1:1777001000.000",
+            "recorded-sample:boot-1:1777001001.000",
+            "recorded-sample:boot-1:1777001002.000",
+            "recorded-sample:boot-1:1777001004.000",
+            "recorded-sample:boot-1:1777001005.000",
+            "rust-activity:trace-golden-activity-1",
+            "rust-activity:trace-golden-activity-2",
+            "rust-activity:trace-golden-activity-3",
+            "rust-activity:trace-golden-activity-4"
+          ],
+          "execution_id": "execution-4973970a56020b5a4830e246",
+          "incident_id": "incident-4e44addfce067790f0b9aa58",
+          "mechanism_id": "mechanism-759f6e570568849914ae8b96",
+          "noc_impact": {},
+          "objective_id": "objective-8f2a9fdafb6c6622b0382c42",
+          "observation_window": {
+            "action_observed_epoch": 1777001003.0,
+            "baseline_start_epoch": 1777001000.0,
+            "effective_end_epoch": 1777001005.5,
+            "planned_end_epoch": 1777001006.0
+          },
+          "observed_at": "2026-04-24T03:23:26+00:00",
+          "operator_override": {},
+          "outcome_id": "outcome-fd4ccf74e931cab550d8e689",
+          "post_metrics": {
+            "interface_rx_bytes_delta": 1500.0,
+            "interface_rx_dropped_delta": 0.0,
+            "interface_rx_errors_delta": 0.0,
+            "interface_rx_packets_delta": 12.0,
+            "interface_tx_bytes_delta": 900.0,
+            "interface_tx_dropped_delta": 0.0,
+            "interface_tx_errors_delta": 0.0,
+            "interface_tx_packets_delta": 9.0,
+            "memory_available_kib_min": 898976.0,
+            "source_ip_event_count": 1,
+            "source_ip_event_rate_hz": 0.4,
+            "system_load1_mean": 0.43500000000000005,
+            "telemetry_sample_count": 2,
+            "window_seconds": 2.5
+          },
+          "producer": "azazel_edge.outcome.telemetry_g3",
+          "resource_impact": {
+            "post_load1_mean": 0.43500000000000005,
+            "post_memory_available_kib_min": 898976.0,
+            "pre_load1_mean": 0.41,
+            "pre_memory_available_kib_min": 899488.0
+          },
+          "schema_version": "outcome-as-evidence/v1",
+          "telemetry_coverage": {
+            "collector": "outcome_g3_procfs_activity_v1",
+            "expected_post_samples": 2,
+            "expected_pre_samples": 3,
+            "interface": "br0",
+            "policy_ref": "telemetry-policy:golden-replay:3470a33f8fb442c230488c86",
+            "post_activity_count": 1,
+            "post_sample_count": 2,
+            "post_sample_ratio": 1.0,
+            "pre_activity_count": 3,
+            "pre_sample_count": 3,
+            "pre_sample_ratio": 1.0,
+            "sample_interval_seconds": 1.0,
+            "sources": {
+              "proc_loadavg_sample_ratio": 1.0,
+              "proc_meminfo_sample_ratio": 1.0,
+              "proc_net_dev_sample_ratio": 1.0,
+              "rust_event_jsonl": true
+            },
+            "window_truncated_by_release": true
+          },
+          "termination_reason": "owned_mechanism_released"
+        },
+        "outcome_identity_key": "outcome-identity-1750f13d22ce353381d93070",
+        "release": [
+          {
+            "boot": "boot-1",
+            "evidence": {
+              "action_kind": "throttle",
+              "attempted_at_epoch": 1777001005.5,
+              "command_count": 1,
+              "decision_id": "trace-golden-throttle-1",
+              "due_epoch": 1777001005.0,
+              "errors": [],
+              "evidence_refs": [
+                "rust_release_engine_v1:release-trace-golden-throttle-1:1777001005.500000"
+              ],
+              "failed_count": 0,
+              "observed_at": "2026-04-24T03:23:25.500000+00:00",
+              "owner_token": "azazel-edge:release-trace-golden-throttle-1",
+              "postcondition": {
+                "owned_state_present": false,
+                "verified": true
+              },
+              "producer": "azazel_edge.outcome.release_adapter",
+              "release_task_id": "release-trace-golden-throttle-1",
+              "resource_key": "tc:root:br0",
+              "result": "rollback_applied_and_absence_verified",
+              "schema_version": "outcome-as-evidence/v1",
+              "status": "released",
+              "tc_handle": "1a:"
+            },
+            "reconciliation": "released"
+          }
+        ]
+      }
+    },
+    {
+      "action": "isolate",
+      "decision_id": "trace-golden-isolate-2",
+      "deliveries": [
+        "boot-1"
+      ],
+      "first_boot": "boot-1",
+      "notes": [],
+      "stages": {
+        "correlation": {
+          "action_id": "action-42cb98dc2b9db3a4ad47be8a",
+          "decision_id": "trace-golden-isolate-2",
+          "execution_id": "execution-46339d6d8a4a15ecc9e04e27",
+          "incident_id": "incident-039993916c3a6bf2d81b010a",
+          "mechanism_id": "mechanism-964946c708cc89e9f190e33b"
+        },
+        "decision": {
+          "action": "isolate",
+          "authority": "recorded_rust_decide_defense",
+          "decided_at": "2026-04-24T03:23:23.500000+00:00",
+          "decision_id": "trace-golden-isolate-2",
+          "policy_reason": "golden: lateral movement",
+          "target": "10.0.0.7"
+        },
+        "effect": null,
+        "execution": {
+          "action_id": "action-42cb98dc2b9db3a4ad47be8a",
+          "action_kind": "isolate",
+          "applied_parameters": {},
+          "completed_at": "",
+          "decision_id": "trace-golden-isolate-2",
+          "error_code": "provider_command_failure",
+          "execution_id": "execution-46339d6d8a4a15ecc9e04e27",
+          "expires_at": "",
+          "idempotency_key": "execution-46339d6d8a4a15ecc9e04e27",
+          "incident_id": "incident-039993916c3a6bf2d81b010a",
+          "lifecycle": "failed",
+          "producer": "azazel_edge.outcome.rust_adapter",
+          "provider": "rust_event_engine_v1",
+          "provider_evidence_refs": [
+            "rust_event_engine_v1:trace-golden-isolate-2"
+          ],
+          "provider_sequence": "",
+          "release_ref": "",
+          "requested_at": "2026-04-24T03:23:23.500000+00:00",
+          "requested_parameters": {
+            "command_plan": [
+              "nft insert rule inet azazel_edge input ip saddr 10.0.0.7 drop comment azazel-edge:release-trace-golden-isolate-2"
+            ],
+            "policy_reason": "golden: lateral movement",
+            "rollback_plan": [
+              "nft delete rule inet azazel_edge input handle <owned:azazel-edge:release-trace-golden-isolate-2>"
+            ],
+            "target": "10.0.0.7"
+          },
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "scope_kind": "source_ip",
+            "source_ip": "10.0.0.7"
+          },
+          "started_at": "",
+          "status": "failed",
+          "superseded_by_decision_id": ""
+        },
+        "execution_final": {
+          "action_id": "action-42cb98dc2b9db3a4ad47be8a",
+          "action_kind": "isolate",
+          "applied_parameters": {},
+          "completed_at": "",
+          "decision_id": "trace-golden-isolate-2",
+          "error_code": "provider_command_failure",
+          "execution_id": "execution-46339d6d8a4a15ecc9e04e27",
+          "expires_at": "",
+          "idempotency_key": "execution-46339d6d8a4a15ecc9e04e27",
+          "incident_id": "incident-039993916c3a6bf2d81b010a",
+          "lifecycle": "failed",
+          "producer": "azazel_edge.outcome.rust_adapter",
+          "provider": "rust_event_engine_v1",
+          "provider_evidence_refs": [
+            "rust_event_engine_v1:trace-golden-isolate-2"
+          ],
+          "provider_sequence": "",
+          "release_ref": "",
+          "requested_at": "2026-04-24T03:23:23.500000+00:00",
+          "requested_parameters": {
+            "command_plan": [
+              "nft insert rule inet azazel_edge input ip saddr 10.0.0.7 drop comment azazel-edge:release-trace-golden-isolate-2"
+            ],
+            "policy_reason": "golden: lateral movement",
+            "rollback_plan": [
+              "nft delete rule inet azazel_edge input handle <owned:azazel-edge:release-trace-golden-isolate-2>"
+            ],
+            "target": "10.0.0.7"
+          },
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "scope_kind": "source_ip",
+            "source_ip": "10.0.0.7"
+          },
+          "started_at": "",
+          "status": "failed",
+          "superseded_by_decision_id": ""
+        },
+        "mechanism": {
+          "decision_id": "trace-golden-isolate-2",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-isolate-2"
+          ],
+          "execution_id": "execution-46339d6d8a4a15ecc9e04e27",
+          "expires_at": "",
+          "mechanism_id": "mechanism-964946c708cc89e9f190e33b",
+          "mechanism_kind": "ISOLATION",
+          "observed_at": "2026-04-24T03:23:23.500000+00:00",
+          "observed_parameters": {
+            "provider_report": {
+              "executed_count": 0,
+              "failed_count": 1,
+              "individual_command_mapping_verified": false,
+              "metadata": {
+                "release_due_epoch": 1777001303.5,
+                "release_ledger_state": "failed",
+                "release_owner_token": "azazel-edge:release-trace-golden-isolate-2",
+                "release_resource_key": "nft:inet:azazel_edge:input:10.0.0.7",
+                "release_task_id": "release-trace-golden-isolate-2",
+                "release_tc_handle": ""
+              },
+              "mode": "enforced",
+              "result": "failed"
+            },
+            "verification_basis": "provider_report_no_successful_postcondition"
+          },
+          "producer": "azazel_edge.outcome.rust_adapter",
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "scope_kind": "source_ip",
+            "source_ip": "10.0.0.7"
+          },
+          "status": "not_observed"
+        },
+        "mechanism_final": {
+          "decision_id": "trace-golden-isolate-2",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-isolate-2"
+          ],
+          "execution_id": "execution-46339d6d8a4a15ecc9e04e27",
+          "expires_at": "",
+          "mechanism_id": "mechanism-964946c708cc89e9f190e33b",
+          "mechanism_kind": "ISOLATION",
+          "observed_at": "2026-04-24T03:23:23.500000+00:00",
+          "observed_parameters": {
+            "provider_report": {
+              "executed_count": 0,
+              "failed_count": 1,
+              "individual_command_mapping_verified": false,
+              "metadata": {
+                "release_due_epoch": 1777001303.5,
+                "release_ledger_state": "failed",
+                "release_owner_token": "azazel-edge:release-trace-golden-isolate-2",
+                "release_resource_key": "nft:inet:azazel_edge:input:10.0.0.7",
+                "release_task_id": "release-trace-golden-isolate-2",
+                "release_tc_handle": ""
+              },
+              "mode": "enforced",
+              "result": "failed"
+            },
+            "verification_basis": "provider_report_no_successful_postcondition"
+          },
+          "producer": "azazel_edge.outcome.rust_adapter",
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "scope_kind": "source_ip",
+            "source_ip": "10.0.0.7"
+          },
+          "status": "not_observed"
+        },
+        "mechanism_postcondition": null,
+        "outcome": null,
+        "release": []
+      }
+    },
+    {
+      "action": "redirect",
+      "decision_id": "trace-golden-redirect-3",
+      "deliveries": [
+        "boot-1",
+        "boot-2"
+      ],
+      "first_boot": "boot-1",
+      "notes": [
+        "boot-1:pending_observation_lost_at_restart",
+        "boot-2:identical_redelivery_ignored",
+        "boot-2:outcome_window_from_post_restart_redelivery"
+      ],
+      "stages": {
+        "correlation": {
+          "action_id": "action-d0abecbf885eec542f3e980c",
+          "decision_id": "trace-golden-redirect-3",
+          "execution_id": "execution-61f7fdd2d527efa5ba6e2449",
+          "incident_id": "incident-5582760fec77236f35b03933",
+          "mechanism_id": "mechanism-f2dab0081cd7709a01f2431d"
+        },
+        "decision": {
+          "action": "redirect",
+          "authority": "recorded_rust_decide_defense",
+          "decided_at": "2026-04-24T03:23:26.500000+00:00",
+          "decision_id": "trace-golden-redirect-3",
+          "policy_reason": "golden: credential spray to decoy",
+          "target": "10.0.0.9:22"
+        },
+        "effect": {
+          "assessment": "inconclusive",
+          "confidence": null,
+          "effect_assessment_id": "effect-81d0e58394e8346a0f9524e7",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-redirect-3",
+            "postcondition:0e9c51f11956f53d8ce5d053",
+            "postcondition-ownership:f9b648f9692a84213a8b530c",
+            "telemetry-policy:golden-replay:3470a33f8fb442c230488c86",
+            "recorded-sample:boot-2:1777002000.000",
+            "recorded-sample:boot-2:1777002001.000",
+            "recorded-sample:boot-2:1777002002.000",
+            "recorded-sample:boot-2:1777002003.000",
+            "recorded-sample:boot-2:1777002004.000",
+            "recorded-sample:boot-2:1777002005.000"
+          ],
+          "mechanism_id": "mechanism-f2dab0081cd7709a01f2431d",
+          "objective_id": "objective-d0efc80d9d4a4c6b48cca51e",
+          "outcome_id": "outcome-3f4b718d1c6ca8a7171d8d10",
+          "producer": "azazel_edge.outcome",
+          "reason_code": "outcome_inconclusive",
+          "schema_version": "outcome-as-evidence/v1",
+          "tactical_effect": "DIVERSION"
+        },
+        "execution": {
+          "action_id": "action-d0abecbf885eec542f3e980c",
+          "action_kind": "redirect",
+          "applied_parameters": {
+            "executed_count": 1,
+            "failed_count": 0,
+            "individual_command_mapping_verified": false,
+            "metadata": {
+              "release_due_epoch": 1777002000.5,
+              "release_ledger_state": "active",
+              "release_owner_token": "azazel-edge:release-trace-golden-redirect-3",
+              "release_resource_key": "nft:inet:azazel_edge:prerouting:10.0.0.9:tcp:22",
+              "release_task_id": "release-trace-golden-redirect-3",
+              "release_tc_handle": ""
+            },
+            "mode": "enforced",
+            "result": "applied"
+          },
+          "completed_at": "",
+          "decision_id": "trace-golden-redirect-3",
+          "error_code": "",
+          "execution_id": "execution-61f7fdd2d527efa5ba6e2449",
+          "expires_at": "2026-04-24T03:40:00.500000+00:00",
+          "idempotency_key": "execution-61f7fdd2d527efa5ba6e2449",
+          "incident_id": "incident-5582760fec77236f35b03933",
+          "lifecycle": "active",
+          "producer": "azazel_edge.outcome.rust_adapter",
+          "provider": "rust_event_engine_v1",
+          "provider_evidence_refs": [
+            "rust_event_engine_v1:trace-golden-redirect-3"
+          ],
+          "provider_sequence": "",
+          "release_ref": "release-trace-golden-redirect-3",
+          "requested_at": "2026-04-24T03:23:26.500000+00:00",
+          "requested_parameters": {
+            "command_plan": [
+              "nft insert rule inet azazel_edge prerouting ip saddr 10.0.0.9 tcp dport 22 redirect to 12222 comment azazel-edge:release-trace-golden-redirect-3"
+            ],
+            "policy_reason": "golden: credential spray to decoy",
+            "rollback_plan": [
+              "nft delete rule inet azazel_edge prerouting handle <owned:azazel-edge:release-trace-golden-redirect-3>"
+            ],
+            "target": "10.0.0.9:22"
+          },
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "destination_port": 22,
+            "scope_kind": "source_ip_and_destination_port",
+            "source_ip": "10.0.0.9"
+          },
+          "started_at": "",
+          "status": "applied",
+          "superseded_by_decision_id": ""
+        },
+        "execution_final": {
+          "action_id": "action-d0abecbf885eec542f3e980c",
+          "action_kind": "redirect",
+          "applied_parameters": {
+            "executed_count": 1,
+            "failed_count": 0,
+            "individual_command_mapping_verified": false,
+            "metadata": {
+              "release_due_epoch": 1777002000.5,
+              "release_ledger_state": "active",
+              "release_owner_token": "azazel-edge:release-trace-golden-redirect-3",
+              "release_resource_key": "nft:inet:azazel_edge:prerouting:10.0.0.9:tcp:22",
+              "release_task_id": "release-trace-golden-redirect-3",
+              "release_tc_handle": ""
+            },
+            "mode": "enforced",
+            "result": "applied"
+          },
+          "completed_at": "2026-04-24T03:40:01.500000+00:00",
+          "decision_id": "trace-golden-redirect-3",
+          "error_code": "",
+          "execution_id": "execution-61f7fdd2d527efa5ba6e2449",
+          "expires_at": "2026-04-24T03:40:00.500000+00:00",
+          "idempotency_key": "execution-61f7fdd2d527efa5ba6e2449",
+          "incident_id": "incident-5582760fec77236f35b03933",
+          "lifecycle": "released",
+          "producer": "azazel_edge.outcome.rust_adapter",
+          "provider": "rust_event_engine_v1",
+          "provider_evidence_refs": [
+            "rust_event_engine_v1:trace-golden-redirect-3",
+            "rust_release_engine_v1:release-trace-golden-redirect-3:1777002001.500000"
+          ],
+          "provider_sequence": "",
+          "release_ref": "release-trace-golden-redirect-3",
+          "requested_at": "2026-04-24T03:23:26.500000+00:00",
+          "requested_parameters": {
+            "command_plan": [
+              "nft insert rule inet azazel_edge prerouting ip saddr 10.0.0.9 tcp dport 22 redirect to 12222 comment azazel-edge:release-trace-golden-redirect-3"
+            ],
+            "policy_reason": "golden: credential spray to decoy",
+            "rollback_plan": [
+              "nft delete rule inet azazel_edge prerouting handle <owned:azazel-edge:release-trace-golden-redirect-3>"
+            ],
+            "target": "10.0.0.9:22"
+          },
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "destination_port": 22,
+            "scope_kind": "source_ip_and_destination_port",
+            "source_ip": "10.0.0.9"
+          },
+          "started_at": "",
+          "status": "released",
+          "superseded_by_decision_id": ""
+        },
+        "mechanism": {
+          "decision_id": "trace-golden-redirect-3",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-redirect-3"
+          ],
+          "execution_id": "execution-61f7fdd2d527efa5ba6e2449",
+          "expires_at": "2026-04-24T03:40:00.500000+00:00",
+          "mechanism_id": "mechanism-f2dab0081cd7709a01f2431d",
+          "mechanism_kind": "REDIRECTION",
+          "observed_at": "2026-04-24T03:23:26.500000+00:00",
+          "observed_parameters": {
+            "provider_report": {
+              "executed_count": 1,
+              "failed_count": 0,
+              "individual_command_mapping_verified": false,
+              "metadata": {
+                "release_due_epoch": 1777002000.5,
+                "release_ledger_state": "active",
+                "release_owner_token": "azazel-edge:release-trace-golden-redirect-3",
+                "release_resource_key": "nft:inet:azazel_edge:prerouting:10.0.0.9:tcp:22",
+                "release_task_id": "release-trace-golden-redirect-3",
+                "release_tc_handle": ""
+              },
+              "mode": "enforced",
+              "result": "applied"
+            },
+            "verification_basis": "provider_command_exit_status_only"
+          },
+          "producer": "azazel_edge.outcome.rust_adapter",
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "destination_port": 22,
+            "scope_kind": "source_ip_and_destination_port",
+            "source_ip": "10.0.0.9"
+          },
+          "status": "unverified"
+        },
+        "mechanism_final": {
+          "decision_id": "trace-golden-redirect-3",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-redirect-3",
+            "postcondition:0e9c51f11956f53d8ce5d053",
+            "postcondition-ownership:f9b648f9692a84213a8b530c",
+            "rust_release_engine_v1:release-trace-golden-redirect-3:1777002001.500000"
+          ],
+          "execution_id": "execution-61f7fdd2d527efa5ba6e2449",
+          "expires_at": "2026-04-24T03:40:00.500000+00:00",
+          "mechanism_id": "mechanism-f2dab0081cd7709a01f2431d",
+          "mechanism_kind": "REDIRECTION",
+          "observed_at": "2026-04-24T03:40:01.500000+00:00",
+          "observed_parameters": {
+            "postcondition_probe": {
+              "argv": [
+                "nft",
+                "-j",
+                "list",
+                "chain",
+                "inet",
+                "azazel_edge",
+                "prerouting"
+              ],
+              "basis": "nft_redirect_rule_readback_match",
+              "destination_port": 22,
+              "observed_at": "2026-04-24T03:23:26.700000+00:00",
+              "ownership": {
+                "kind": "nft_comment",
+                "value": "azazel-edge:release-trace-golden-redirect-3"
+              },
+              "redirect_port": 12222,
+              "returncode": 0,
+              "source_ip": "10.0.0.9",
+              "stderr": "",
+              "verification_strength": "exact"
+            },
+            "provider_report": {
+              "executed_count": 1,
+              "failed_count": 0,
+              "individual_command_mapping_verified": false,
+              "metadata": {
+                "release_due_epoch": 1777002000.5,
+                "release_ledger_state": "active",
+                "release_owner_token": "azazel-edge:release-trace-golden-redirect-3",
+                "release_resource_key": "nft:inet:azazel_edge:prerouting:10.0.0.9:tcp:22",
+                "release_task_id": "release-trace-golden-redirect-3",
+                "release_tc_handle": ""
+              },
+              "mode": "enforced",
+              "result": "applied"
+            },
+            "release_evidence": {
+              "observed_at": "2026-04-24T03:40:01.500000+00:00",
+              "ownership": {
+                "kind": "nft_comment",
+                "value": "azazel-edge:release-trace-golden-redirect-3"
+              },
+              "postcondition": {
+                "owned_state_present": false,
+                "verified": true
+              },
+              "release_task_id": "release-trace-golden-redirect-3",
+              "result": "rollback_applied_and_absence_verified",
+              "status": "released"
+            },
+            "verification_basis": "provider_command_exit_status_only"
+          },
+          "producer": "azazel_edge.outcome.release_reconciliation",
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "destination_port": 22,
+            "scope_kind": "source_ip_and_destination_port",
+            "source_ip": "10.0.0.9"
+          },
+          "status": "released"
+        },
+        "mechanism_postcondition": {
+          "decision_id": "trace-golden-redirect-3",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-redirect-3",
+            "postcondition:0e9c51f11956f53d8ce5d053",
+            "postcondition-ownership:f9b648f9692a84213a8b530c"
+          ],
+          "execution_id": "execution-61f7fdd2d527efa5ba6e2449",
+          "expires_at": "2026-04-24T03:40:00.500000+00:00",
+          "mechanism_id": "mechanism-f2dab0081cd7709a01f2431d",
+          "mechanism_kind": "REDIRECTION",
+          "observed_at": "2026-04-24T03:23:26.700000+00:00",
+          "observed_parameters": {
+            "postcondition_probe": {
+              "argv": [
+                "nft",
+                "-j",
+                "list",
+                "chain",
+                "inet",
+                "azazel_edge",
+                "prerouting"
+              ],
+              "basis": "nft_redirect_rule_readback_match",
+              "destination_port": 22,
+              "observed_at": "2026-04-24T03:23:26.700000+00:00",
+              "ownership": {
+                "kind": "nft_comment",
+                "value": "azazel-edge:release-trace-golden-redirect-3"
+              },
+              "redirect_port": 12222,
+              "returncode": 0,
+              "source_ip": "10.0.0.9",
+              "stderr": "",
+              "verification_strength": "exact"
+            },
+            "provider_report": {
+              "executed_count": 1,
+              "failed_count": 0,
+              "individual_command_mapping_verified": false,
+              "metadata": {
+                "release_due_epoch": 1777002000.5,
+                "release_ledger_state": "active",
+                "release_owner_token": "azazel-edge:release-trace-golden-redirect-3",
+                "release_resource_key": "nft:inet:azazel_edge:prerouting:10.0.0.9:tcp:22",
+                "release_task_id": "release-trace-golden-redirect-3",
+                "release_tc_handle": ""
+              },
+              "mode": "enforced",
+              "result": "applied"
+            },
+            "verification_basis": "provider_command_exit_status_only"
+          },
+          "producer": "azazel_edge.outcome.ownership_postcondition",
+          "reversible": true,
+          "schema_version": "outcome-as-evidence/v1",
+          "scope": {
+            "destination_port": 22,
+            "scope_kind": "source_ip_and_destination_port",
+            "source_ip": "10.0.0.9"
+          },
+          "status": "observed"
+        },
+        "objective": {
+          "decision_id": "trace-golden-redirect-3",
+          "direction": "decrease",
+          "guardrails": [],
+          "metric": "source_ip_event_rate_hz",
+          "objective_id": "objective-d0efc80d9d4a4c6b48cca51e",
+          "observation_window": {
+            "post_seconds": 3.0,
+            "pre_seconds": 3.0
+          },
+          "policy_version": "golden-policy-v1",
+          "schema_version": "outcome-as-evidence/v1",
+          "target_or_range": {}
+        },
+        "outcome": {
+          "adversary_response": {
+            "correlation_scope": "source_ip",
+            "first_followup_event_ms": null,
+            "post_event_count": 0,
+            "pre_event_count": 0,
+            "src_ip": "10.0.0.9"
+          },
+          "assessment": "inconclusive",
+          "asset_impact": {},
+          "baseline_metrics": {
+            "interface_rx_bytes_delta": 3000.0,
+            "interface_rx_dropped_delta": 0.0,
+            "interface_rx_errors_delta": 0.0,
+            "interface_rx_packets_delta": 24.0,
+            "interface_tx_bytes_delta": 1800.0,
+            "interface_tx_dropped_delta": 0.0,
+            "interface_tx_errors_delta": 0.0,
+            "interface_tx_packets_delta": 18.0,
+            "memory_available_kib_min": 899488.0,
+            "source_ip_event_count": 0,
+            "source_ip_event_rate_hz": 0.0,
+            "system_load1_mean": 0.41,
+            "telemetry_sample_count": 3,
+            "window_seconds": 3.0
+          },
+          "causal_support": "inconclusive",
+          "confounders": [
+            {
+              "code": "source_ip_is_not_actor_identity",
+              "detail": "activity correlation is source-IP scoped and does not assert attacker identity"
+            },
+            {
+              "code": "provider_execution_timestamp_unavailable",
+              "detail": "boundary uses collector receipt time because provider completion timestamp is not grounded"
+            },
+            {
+              "code": "mechanism_postcondition_not_observed",
+              "detail": "mechanism_status=unverified"
+            }
+          ],
+          "decision_id": "trace-golden-redirect-3",
+          "evidence_refs": [
+            "rust_event_engine_v1:trace-golden-redirect-3",
+            "telemetry-policy:golden-replay:3470a33f8fb442c230488c86",
+            "recorded-sample:boot-2:1777002000.000",
+            "recorded-sample:boot-2:1777002001.000",
+            "recorded-sample:boot-2:1777002002.000",
+            "recorded-sample:boot-2:1777002003.000",
+            "recorded-sample:boot-2:1777002004.000",
+            "recorded-sample:boot-2:1777002005.000"
+          ],
+          "execution_id": "execution-61f7fdd2d527efa5ba6e2449",
+          "incident_id": "incident-5582760fec77236f35b03933",
+          "mechanism_id": "mechanism-f2dab0081cd7709a01f2431d",
+          "noc_impact": {},
+          "objective_id": "objective-d0efc80d9d4a4c6b48cca51e",
+          "observation_window": {
+            "action_observed_epoch": 1777002002.6,
+            "baseline_start_epoch": 1777001999.6,
+            "effective_end_epoch": 1777002005.6,
+            "planned_end_epoch": 1777002005.6
+          },
+          "observed_at": "2026-04-24T03:40:06+00:00",
+          "operator_override": {},
+          "outcome_id": "outcome-3f4b718d1c6ca8a7171d8d10",
+          "post_metrics": {
+            "interface_rx_bytes_delta": 3000.0,
+            "interface_rx_dropped_delta": 0.0,
+            "interface_rx_errors_delta": 0.0,
+            "interface_rx_packets_delta": 24.0,
+            "interface_tx_bytes_delta": 1800.0,
+            "interface_tx_dropped_delta": 0.0,
+            "interface_tx_errors_delta": 0.0,
+            "interface_tx_packets_delta": 18.0,
+            "memory_available_kib_min": 898720.0,
+            "source_ip_event_count": 0,
+            "source_ip_event_rate_hz": 0.0,
+            "system_load1_mean": 0.44,
+            "telemetry_sample_count": 3,
+            "window_seconds": 3.0
+          },
+          "producer": "azazel_edge.outcome.telemetry_g3",
+          "resource_impact": {
+            "post_load1_mean": 0.44,
+            "post_memory_available_kib_min": 898720.0,
+            "pre_load1_mean": 0.41,
+            "pre_memory_available_kib_min": 899488.0
+          },
+          "schema_version": "outcome-as-evidence/v1",
+          "telemetry_coverage": {
+            "collector": "outcome_g3_procfs_activity_v1",
+            "expected_post_samples": 3,
+            "expected_pre_samples": 3,
+            "interface": "br0",
+            "policy_ref": "telemetry-policy:golden-replay:3470a33f8fb442c230488c86",
+            "post_activity_count": 0,
+            "post_sample_count": 3,
+            "post_sample_ratio": 1.0,
+            "pre_activity_count": 0,
+            "pre_sample_count": 3,
+            "pre_sample_ratio": 1.0,
+            "sample_interval_seconds": 1.0,
+            "sources": {
+              "proc_loadavg_sample_ratio": 1.0,
+              "proc_meminfo_sample_ratio": 1.0,
+              "proc_net_dev_sample_ratio": 1.0,
+              "rust_event_jsonl": true
+            },
+            "window_truncated_by_release": false
+          },
+          "termination_reason": "observation_window_elapsed"
+        },
+        "outcome_identity_key": "outcome-identity-179df944ead1190828fe851d",
+        "release": [
+          {
+            "boot": "boot-2",
+            "evidence": {
+              "action_kind": "redirect",
+              "attempted_at_epoch": 1777002001.5,
+              "command_count": 1,
+              "decision_id": "trace-golden-redirect-3",
+              "due_epoch": 1777002000.5,
+              "errors": [],
+              "evidence_refs": [
+                "rust_release_engine_v1:release-trace-golden-redirect-3:1777002001.500000"
+              ],
+              "failed_count": 0,
+              "observed_at": "2026-04-24T03:40:01.500000+00:00",
+              "owner_token": "azazel-edge:release-trace-golden-redirect-3",
+              "postcondition": {
+                "owned_state_present": false,
+                "verified": true
+              },
+              "producer": "azazel_edge.outcome.release_adapter",
+              "release_task_id": "release-trace-golden-redirect-3",
+              "resource_key": "nft:inet:azazel_edge:prerouting:10.0.0.9:tcp:22",
+              "result": "rollback_applied_and_absence_verified",
+              "schema_version": "outcome-as-evidence/v1",
+              "status": "released",
+              "tc_handle": ""
+            },
+            "reconciliation": "released"
+          }
+        ]
+      }
+    }
+  ],
+  "fixture_id": "g5-golden-replay-v1",
+  "outcome_admissions": [
+    {
+      "boot": "boot-1",
+      "decision_id": "trace-golden-throttle-1",
+      "identity_key": "outcome-identity-1750f13d22ce353381d93070",
+      "outcome_id": "outcome-fd4ccf74e931cab550d8e689",
+      "retained_outcome_id": "outcome-fd4ccf74e931cab550d8e689",
+      "status": "admitted"
+    },
+    {
+      "boot": "boot-2",
+      "decision_id": "trace-golden-throttle-1",
+      "identity_key": "outcome-identity-1750f13d22ce353381d93070",
+      "outcome_id": "outcome-65c70906dbcdcaa24cfb6f98",
+      "retained_outcome_id": "outcome-fd4ccf74e931cab550d8e689",
+      "status": "duplicate_suppressed"
+    },
+    {
+      "boot": "boot-2",
+      "decision_id": "trace-golden-redirect-3",
+      "identity_key": "outcome-identity-179df944ead1190828fe851d",
+      "outcome_id": "outcome-3f4b718d1c6ca8a7171d8d10",
+      "retained_outcome_id": "outcome-3f4b718d1c6ca8a7171d8d10",
+      "status": "admitted"
+    }
+  ],
+  "outcome_ledger": {
+    "identities": [
+      {
+        "content_digest": "c69acae3c5019e9aac210645",
+        "decision_id": "trace-golden-throttle-1",
+        "execution_id": "execution-4973970a56020b5a4830e246",
+        "identity_key": "outcome-identity-1750f13d22ce353381d93070",
+        "objective_id": "objective-8f2a9fdafb6c6622b0382c42",
+        "outcome_id": "outcome-fd4ccf74e931cab550d8e689"
+      },
+      {
+        "content_digest": "217dcc63a903d7985cd8614f",
+        "decision_id": "trace-golden-redirect-3",
+        "execution_id": "execution-61f7fdd2d527efa5ba6e2449",
+        "identity_key": "outcome-identity-179df944ead1190828fe851d",
+        "objective_id": "objective-d0efc80d9d4a4c6b48cca51e",
+        "outcome_id": "outcome-3f4b718d1c6ca8a7171d8d10"
+      }
+    ],
+    "max_identities": 64,
+    "schema_version": "outcome-identity-ledger/v1"
+  },
+  "rejected_inputs": [],
+  "restart_gaps": [
+    {
+      "boot": "boot-1",
+      "decision_id": "trace-golden-redirect-3",
+      "execution_id": "execution-61f7fdd2d527efa5ba6e2449",
+      "outcome_identity_key": "outcome-identity-179df944ead1190828fe851d",
+      "reason": "pending_observation_lost_at_restart"
+    }
+  ],
+  "schema_version": "outcome-golden-replay-result/v1",
+  "summary": {
+    "activity_only_events": 4,
+    "decisions": 3,
+    "outcomes_counted": 2,
+    "outcomes_counted_from_post_restart_redelivery": 1,
+    "outcomes_produced": 3,
+    "replay_execution_records": 3
+  }
+}

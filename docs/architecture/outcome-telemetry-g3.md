@@ -241,11 +241,11 @@ The live CLI is intentionally **live-only**.
 
 It always starts reading the canonical input at the current end of file. It does not offer a `--from-start` mode because replaying an old action and measuring current procfs state would create false pre/post evidence.
 
-The library can still be driven with explicit synthetic/historical telemetry in tests or a future Golden Replay harness, but live collection never claims to reconstruct missing historical procfs state.
+The library can still be driven with explicit synthetic/historical telemetry in tests or the G5 Golden Replay harness (`golden_replay.py`), but live collection never claims to reconstruct missing historical procfs state.
 
 Within one collector process, started execution IDs are retained as replay guards. A finalized execution cannot be started again by replaying the same Rust record. If the bounded seen-ID capacity is exhausted, new Outcome collection fails closed rather than forgetting old execution identities.
 
-Cross-restart durable Outcome deduplication remains a G5/G6 concern; the live CLI avoids historical replay by starting at EOF.
+Cross-restart Outcome identity and deduplication are defined in G5 (`outcome-golden-replay-g5.md`): `OutcomeIdentityLedger` keys an Outcome by `execution_id` + `objective_id`, so an Outcome already admitted is not counted again when its record is re-observed after a restart. If the window was lost at the restart, a re-delivered record still opens a new receipt-time window and that Outcome is admitted; G5 flags this but does not change it. The live CLI does not persist that ledger yet (a G6 decision) and still avoids historical replay by starting at EOF.
 
 ## Confounders emitted by G3
 
@@ -355,7 +355,7 @@ G3 is not merge-ready unless tests cover at least:
 
 G3 produces real pre/post Outcome evidence, but the full research baseline still requires:
 
-- G5 Golden Replay and durable cross-restart correlation/deduplication;
+- G5 Golden Replay and cross-restart Outcome identity/deduplication: implemented in `outcome-golden-replay-g5.md` (live ledger persistence remains G6);
 - G6 Raspberry Pi/HIL performance, disk, restart and lifecycle testing;
 - later evidence rules for any tactical-effect claim beyond the already fail-closed baseline.
 

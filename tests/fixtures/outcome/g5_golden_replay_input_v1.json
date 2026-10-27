@@ -1,0 +1,850 @@
+{
+  "boots": [
+    {
+      "boot": "boot-1",
+      "steps": [
+        {
+          "epoch": 1777001000.0,
+          "network": {
+            "rx_bytes": 100000,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1000,
+            "tx_bytes": 200000,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2000
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.4,
+            "memory_available_kib": 900000
+          }
+        },
+        {
+          "epoch": 1777001000.5,
+          "event": {
+            "defense": {
+              "action": "observe",
+              "delay_ms": 0,
+              "policy_reason": "activity-only",
+              "target": "10.0.0.8"
+            },
+            "enforcement": {
+              "command_plan": [],
+              "errors": [],
+              "executed_count": 0,
+              "failed_count": 0,
+              "metadata": {
+                "release_ledger_state": "not_applicable"
+              },
+              "mode": "disabled",
+              "policy_reason": "activity-only",
+              "result": "no_disruptive_action",
+              "rollback_plan": [],
+              "selected_action": "observe",
+              "target": "10.0.0.8",
+              "trace_id": "trace-golden-activity-1"
+            },
+            "normalized": {
+              "dst_ip": "10.0.0.1",
+              "sid": 1001,
+              "src_ip": "10.0.0.8",
+              "target_port": 22,
+              "ts": "2026-04-24T03:23:20.500000+00:00"
+            },
+            "pipeline": "rust_event_engine_v1"
+          },
+          "op": "event"
+        },
+        {
+          "epoch": 1777001001.0,
+          "network": {
+            "rx_bytes": 101500,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1012,
+            "tx_bytes": 200900,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2009
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.41000000000000003,
+            "memory_available_kib": 899744
+          }
+        },
+        {
+          "epoch": 1777001001.5,
+          "event": {
+            "defense": {
+              "action": "observe",
+              "delay_ms": 0,
+              "policy_reason": "activity-only",
+              "target": "10.0.0.8"
+            },
+            "enforcement": {
+              "command_plan": [],
+              "errors": [],
+              "executed_count": 0,
+              "failed_count": 0,
+              "metadata": {
+                "release_ledger_state": "not_applicable"
+              },
+              "mode": "disabled",
+              "policy_reason": "activity-only",
+              "result": "no_disruptive_action",
+              "rollback_plan": [],
+              "selected_action": "observe",
+              "target": "10.0.0.8",
+              "trace_id": "trace-golden-activity-2"
+            },
+            "normalized": {
+              "dst_ip": "10.0.0.1",
+              "sid": 1001,
+              "src_ip": "10.0.0.8",
+              "target_port": 22,
+              "ts": "2026-04-24T03:23:21.500000+00:00"
+            },
+            "pipeline": "rust_event_engine_v1"
+          },
+          "op": "event"
+        },
+        {
+          "epoch": 1777001002.0,
+          "network": {
+            "rx_bytes": 103000,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1024,
+            "tx_bytes": 201800,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2018
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.42000000000000004,
+            "memory_available_kib": 899488
+          }
+        },
+        {
+          "epoch": 1777001002.5,
+          "event": {
+            "defense": {
+              "action": "observe",
+              "delay_ms": 0,
+              "policy_reason": "activity-only",
+              "target": "10.0.0.8"
+            },
+            "enforcement": {
+              "command_plan": [],
+              "errors": [],
+              "executed_count": 0,
+              "failed_count": 0,
+              "metadata": {
+                "release_ledger_state": "not_applicable"
+              },
+              "mode": "disabled",
+              "policy_reason": "activity-only",
+              "result": "no_disruptive_action",
+              "rollback_plan": [],
+              "selected_action": "observe",
+              "target": "10.0.0.8",
+              "trace_id": "trace-golden-activity-3"
+            },
+            "normalized": {
+              "dst_ip": "10.0.0.1",
+              "sid": 1001,
+              "src_ip": "10.0.0.8",
+              "target_port": 22,
+              "ts": "2026-04-24T03:23:22.500000+00:00"
+            },
+            "pipeline": "rust_event_engine_v1"
+          },
+          "op": "event"
+        },
+        {
+          "epoch": 1777001003.0,
+          "event": {
+            "defense": {
+              "action": "throttle",
+              "delay_ms": 1000,
+              "policy_reason": "golden: sustained ssh brute force",
+              "target": "10.0.0.8"
+            },
+            "enforcement": {
+              "command_plan": [
+                "tc qdisc replace dev br0 root handle 1a: tbf rate 256kbit burst 32kbit latency 1000ms"
+              ],
+              "errors": [],
+              "executed_count": 1,
+              "failed_count": 0,
+              "metadata": {
+                "release_due_epoch": 1777001005.0,
+                "release_ledger_state": "active",
+                "release_owner_token": "azazel-edge:release-trace-golden-throttle-1",
+                "release_resource_key": "tc:root:br0",
+                "release_task_id": "release-trace-golden-throttle-1",
+                "release_tc_handle": "1a:"
+              },
+              "mode": "enforced",
+              "policy_reason": "golden: sustained ssh brute force",
+              "result": "applied",
+              "rollback_plan": [
+                "tc qdisc del dev br0 root handle 1a:"
+              ],
+              "selected_action": "throttle",
+              "target": "10.0.0.8",
+              "trace_id": "trace-golden-throttle-1"
+            },
+            "normalized": {
+              "dst_ip": "10.0.0.1",
+              "sid": 2001,
+              "src_ip": "10.0.0.8",
+              "target_port": 22,
+              "ts": "2026-04-24T03:23:23+00:00"
+            },
+            "pipeline": "rust_event_engine_v1"
+          },
+          "op": "event"
+        },
+        {
+          "decision_id": "trace-golden-throttle-1",
+          "epoch": 1777001003.2,
+          "observed_at": "2026-04-24T03:23:23.200000+00:00",
+          "op": "probe",
+          "results": [
+            {
+              "argv": [
+                "tc",
+                "-j",
+                "qdisc",
+                "show",
+                "dev",
+                "br0"
+              ],
+              "returncode": 0,
+              "stderr": "",
+              "stdout_json": [
+                {
+                  "burst": 4096,
+                  "handle": "1a:",
+                  "kind": "tbf",
+                  "lat": 1000000,
+                  "rate": 32000,
+                  "root": true
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "epoch": 1777001003.5,
+          "event": {
+            "defense": {
+              "action": "isolate",
+              "delay_ms": 0,
+              "policy_reason": "golden: lateral movement",
+              "target": "10.0.0.7"
+            },
+            "enforcement": {
+              "command_plan": [
+                "nft insert rule inet azazel_edge input ip saddr 10.0.0.7 drop comment azazel-edge:release-trace-golden-isolate-2"
+              ],
+              "errors": [
+                "nft: recorded provider failure"
+              ],
+              "executed_count": 0,
+              "failed_count": 1,
+              "metadata": {
+                "release_due_epoch": 1777001303.5,
+                "release_ledger_state": "failed",
+                "release_owner_token": "azazel-edge:release-trace-golden-isolate-2",
+                "release_resource_key": "nft:inet:azazel_edge:input:10.0.0.7",
+                "release_task_id": "release-trace-golden-isolate-2",
+                "release_tc_handle": ""
+              },
+              "mode": "enforced",
+              "policy_reason": "golden: lateral movement",
+              "result": "failed",
+              "rollback_plan": [
+                "nft delete rule inet azazel_edge input handle <owned:azazel-edge:release-trace-golden-isolate-2>"
+              ],
+              "selected_action": "isolate",
+              "target": "10.0.0.7",
+              "trace_id": "trace-golden-isolate-2"
+            },
+            "normalized": {
+              "dst_ip": "10.0.0.1",
+              "sid": 3001,
+              "src_ip": "10.0.0.7",
+              "target_port": 445,
+              "ts": "2026-04-24T03:23:23.500000+00:00"
+            },
+            "pipeline": "rust_event_engine_v1"
+          },
+          "op": "event"
+        },
+        {
+          "epoch": 1777001004.0,
+          "network": {
+            "rx_bytes": 104500,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1036,
+            "tx_bytes": 202700,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2027
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.43000000000000005,
+            "memory_available_kib": 899232
+          }
+        },
+        {
+          "epoch": 1777001004.5,
+          "event": {
+            "defense": {
+              "action": "observe",
+              "delay_ms": 0,
+              "policy_reason": "activity-only",
+              "target": "10.0.0.8"
+            },
+            "enforcement": {
+              "command_plan": [],
+              "errors": [],
+              "executed_count": 0,
+              "failed_count": 0,
+              "metadata": {
+                "release_ledger_state": "not_applicable"
+              },
+              "mode": "disabled",
+              "policy_reason": "activity-only",
+              "result": "no_disruptive_action",
+              "rollback_plan": [],
+              "selected_action": "observe",
+              "target": "10.0.0.8",
+              "trace_id": "trace-golden-activity-4"
+            },
+            "normalized": {
+              "dst_ip": "10.0.0.1",
+              "sid": 1001,
+              "src_ip": "10.0.0.8",
+              "target_port": 22,
+              "ts": "2026-04-24T03:23:24.500000+00:00"
+            },
+            "pipeline": "rust_event_engine_v1"
+          },
+          "op": "event"
+        },
+        {
+          "epoch": 1777001005.0,
+          "network": {
+            "rx_bytes": 106000,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1048,
+            "tx_bytes": 203600,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2036
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.44,
+            "memory_available_kib": 898976
+          }
+        },
+        {
+          "epoch": 1777001005.5,
+          "event": {
+            "pipeline": "rust_release_engine_v1",
+            "release": {
+              "action": "throttle",
+              "attempted_at_epoch": 1777001005.5,
+              "command_count": 1,
+              "due_epoch": 1777001005.0,
+              "errors": [],
+              "failed_count": 0,
+              "owner_token": "azazel-edge:release-trace-golden-throttle-1",
+              "postcondition": {
+                "owned_state_present": false,
+                "verified": true
+              },
+              "release_task_id": "release-trace-golden-throttle-1",
+              "resource_key": "tc:root:br0",
+              "result": "rollback_applied_and_absence_verified",
+              "status": "released",
+              "tc_handle": "1a:",
+              "trace_id": "trace-golden-throttle-1"
+            },
+            "source": "release_ledger"
+          },
+          "op": "event"
+        },
+        {
+          "epoch": 1777001006.0,
+          "network": {
+            "rx_bytes": 107500,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1060,
+            "tx_bytes": 204500,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2045
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.45,
+            "memory_available_kib": 898720
+          }
+        },
+        {
+          "epoch": 1777001006.0,
+          "op": "finalize"
+        },
+        {
+          "epoch": 1777001006.5,
+          "event": {
+            "defense": {
+              "action": "redirect",
+              "delay_ms": 0,
+              "policy_reason": "golden: credential spray to decoy",
+              "target": "10.0.0.9:22"
+            },
+            "enforcement": {
+              "command_plan": [
+                "nft insert rule inet azazel_edge prerouting ip saddr 10.0.0.9 tcp dport 22 redirect to 12222 comment azazel-edge:release-trace-golden-redirect-3"
+              ],
+              "errors": [],
+              "executed_count": 1,
+              "failed_count": 0,
+              "metadata": {
+                "release_due_epoch": 1777002000.5,
+                "release_ledger_state": "active",
+                "release_owner_token": "azazel-edge:release-trace-golden-redirect-3",
+                "release_resource_key": "nft:inet:azazel_edge:prerouting:10.0.0.9:tcp:22",
+                "release_task_id": "release-trace-golden-redirect-3",
+                "release_tc_handle": ""
+              },
+              "mode": "enforced",
+              "policy_reason": "golden: credential spray to decoy",
+              "result": "applied",
+              "rollback_plan": [
+                "nft delete rule inet azazel_edge prerouting handle <owned:azazel-edge:release-trace-golden-redirect-3>"
+              ],
+              "selected_action": "redirect",
+              "target": "10.0.0.9:22",
+              "trace_id": "trace-golden-redirect-3"
+            },
+            "normalized": {
+              "dst_ip": "10.0.0.1",
+              "sid": 4001,
+              "src_ip": "10.0.0.9",
+              "target_port": 22,
+              "ts": "2026-04-24T03:23:26.500000+00:00"
+            },
+            "pipeline": "rust_event_engine_v1"
+          },
+          "op": "event"
+        },
+        {
+          "decision_id": "trace-golden-redirect-3",
+          "epoch": 1777001006.7,
+          "observed_at": "2026-04-24T03:23:26.700000+00:00",
+          "op": "probe",
+          "results": [
+            {
+              "argv": [
+                "nft",
+                "-j",
+                "list",
+                "chain",
+                "inet",
+                "azazel_edge",
+                "prerouting"
+              ],
+              "returncode": 0,
+              "stderr": "",
+              "stdout_json": {
+                "nftables": [
+                  {
+                    "rule": {
+                      "chain": "prerouting",
+                      "comment": "azazel-edge:release-trace-golden-redirect-3",
+                      "expr": [
+                        {
+                          "match": {
+                            "left": {
+                              "payload": {
+                                "field": "saddr",
+                                "protocol": "ip"
+                              }
+                            },
+                            "op": "==",
+                            "right": "10.0.0.9"
+                          }
+                        },
+                        {
+                          "match": {
+                            "left": {
+                              "payload": {
+                                "field": "dport",
+                                "protocol": "tcp"
+                              }
+                            },
+                            "op": "==",
+                            "right": 22
+                          }
+                        },
+                        {
+                          "redirect": {
+                            "port": 12222
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "epoch": 1777001007.0,
+          "network": {
+            "rx_bytes": 109000,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1072,
+            "tx_bytes": 205400,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2054
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.46,
+            "memory_available_kib": 898464
+          }
+        },
+        {
+          "epoch": 1777001008.0,
+          "network": {
+            "rx_bytes": 110500,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1084,
+            "tx_bytes": 206300,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2063
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.47000000000000003,
+            "memory_available_kib": 898208
+          }
+        },
+        {
+          "epoch": 1777001008.0,
+          "op": "finalize"
+        }
+      ]
+    },
+    {
+      "boot": "boot-2",
+      "steps": [
+        {
+          "epoch": 1777002000.0,
+          "network": {
+            "rx_bytes": 100000,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1000,
+            "tx_bytes": 200000,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2000
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.4,
+            "memory_available_kib": 900000
+          }
+        },
+        {
+          "epoch": 1777002001.0,
+          "network": {
+            "rx_bytes": 101500,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1012,
+            "tx_bytes": 200900,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2009
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.41000000000000003,
+            "memory_available_kib": 899744
+          }
+        },
+        {
+          "epoch": 1777002001.5,
+          "event": {
+            "pipeline": "rust_release_engine_v1",
+            "release": {
+              "action": "redirect",
+              "attempted_at_epoch": 1777002001.5,
+              "command_count": 1,
+              "due_epoch": 1777002000.5,
+              "errors": [],
+              "failed_count": 0,
+              "owner_token": "azazel-edge:release-trace-golden-redirect-3",
+              "postcondition": {
+                "owned_state_present": false,
+                "verified": true
+              },
+              "release_task_id": "release-trace-golden-redirect-3",
+              "resource_key": "nft:inet:azazel_edge:prerouting:10.0.0.9:tcp:22",
+              "result": "rollback_applied_and_absence_verified",
+              "status": "released",
+              "tc_handle": "",
+              "trace_id": "trace-golden-redirect-3"
+            },
+            "source": "release_ledger"
+          },
+          "op": "event"
+        },
+        {
+          "epoch": 1777002002.0,
+          "network": {
+            "rx_bytes": 103000,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1024,
+            "tx_bytes": 201800,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2018
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.42000000000000004,
+            "memory_available_kib": 899488
+          }
+        },
+        {
+          "epoch": 1777002002.5,
+          "event": {
+            "defense": {
+              "action": "throttle",
+              "delay_ms": 1000,
+              "policy_reason": "golden: sustained ssh brute force",
+              "target": "10.0.0.8"
+            },
+            "enforcement": {
+              "command_plan": [
+                "tc qdisc replace dev br0 root handle 1a: tbf rate 256kbit burst 32kbit latency 1000ms"
+              ],
+              "errors": [],
+              "executed_count": 1,
+              "failed_count": 0,
+              "metadata": {
+                "release_due_epoch": 1777001005.0,
+                "release_ledger_state": "active",
+                "release_owner_token": "azazel-edge:release-trace-golden-throttle-1",
+                "release_resource_key": "tc:root:br0",
+                "release_task_id": "release-trace-golden-throttle-1",
+                "release_tc_handle": "1a:"
+              },
+              "mode": "enforced",
+              "policy_reason": "golden: sustained ssh brute force",
+              "result": "applied",
+              "rollback_plan": [
+                "tc qdisc del dev br0 root handle 1a:"
+              ],
+              "selected_action": "throttle",
+              "target": "10.0.0.8",
+              "trace_id": "trace-golden-throttle-1"
+            },
+            "normalized": {
+              "dst_ip": "10.0.0.1",
+              "sid": 2001,
+              "src_ip": "10.0.0.8",
+              "target_port": 22,
+              "ts": "2026-04-24T03:23:23+00:00"
+            },
+            "pipeline": "rust_event_engine_v1"
+          },
+          "op": "event"
+        },
+        {
+          "epoch": 1777002002.6,
+          "event": {
+            "defense": {
+              "action": "redirect",
+              "delay_ms": 0,
+              "policy_reason": "golden: credential spray to decoy",
+              "target": "10.0.0.9:22"
+            },
+            "enforcement": {
+              "command_plan": [
+                "nft insert rule inet azazel_edge prerouting ip saddr 10.0.0.9 tcp dport 22 redirect to 12222 comment azazel-edge:release-trace-golden-redirect-3"
+              ],
+              "errors": [],
+              "executed_count": 1,
+              "failed_count": 0,
+              "metadata": {
+                "release_due_epoch": 1777002000.5,
+                "release_ledger_state": "active",
+                "release_owner_token": "azazel-edge:release-trace-golden-redirect-3",
+                "release_resource_key": "nft:inet:azazel_edge:prerouting:10.0.0.9:tcp:22",
+                "release_task_id": "release-trace-golden-redirect-3",
+                "release_tc_handle": ""
+              },
+              "mode": "enforced",
+              "policy_reason": "golden: credential spray to decoy",
+              "result": "applied",
+              "rollback_plan": [
+                "nft delete rule inet azazel_edge prerouting handle <owned:azazel-edge:release-trace-golden-redirect-3>"
+              ],
+              "selected_action": "redirect",
+              "target": "10.0.0.9:22",
+              "trace_id": "trace-golden-redirect-3"
+            },
+            "normalized": {
+              "dst_ip": "10.0.0.1",
+              "sid": 4001,
+              "src_ip": "10.0.0.9",
+              "target_port": 22,
+              "ts": "2026-04-24T03:23:26.500000+00:00"
+            },
+            "pipeline": "rust_event_engine_v1"
+          },
+          "op": "event"
+        },
+        {
+          "epoch": 1777002003.0,
+          "network": {
+            "rx_bytes": 104500,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1036,
+            "tx_bytes": 202700,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2027
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.43000000000000005,
+            "memory_available_kib": 899232
+          }
+        },
+        {
+          "epoch": 1777002004.0,
+          "network": {
+            "rx_bytes": 106000,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1048,
+            "tx_bytes": 203600,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2036
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.44,
+            "memory_available_kib": 898976
+          }
+        },
+        {
+          "epoch": 1777002005.0,
+          "network": {
+            "rx_bytes": 107500,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1060,
+            "tx_bytes": 204500,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2045
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.45,
+            "memory_available_kib": 898720
+          }
+        },
+        {
+          "epoch": 1777002006.0,
+          "network": {
+            "rx_bytes": 109000,
+            "rx_dropped": 0,
+            "rx_errors": 0,
+            "rx_packets": 1072,
+            "tx_bytes": 205400,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "tx_packets": 2054
+          },
+          "op": "sample",
+          "system": {
+            "load1": 0.46,
+            "memory_available_kib": 898464
+          }
+        },
+        {
+          "epoch": 1777002006.0,
+          "op": "finalize"
+        }
+      ]
+    }
+  ],
+  "description": "Recorded synthetic timeline: throttle observed+released+outcome; isolate provider failure; redirect observed, collector restart loses its pending outcome, release reconciled after restart; throttle record re-delivered after restart must not be counted twice; redirect record re-delivered after restart (its boot-1 window was lost) gets a new receipt-time window under current G3 semantics and is admitted, flagged in the transcript.",
+  "fixture_id": "g5-golden-replay-v1",
+  "interface": "br0",
+  "max_outcome_identities": 64,
+  "policy": {
+    "actions": {
+      "redirect": {
+        "direction": "decrease",
+        "guardrails": [],
+        "metric": "source_ip_event_rate_hz",
+        "observation_window": {
+          "post_seconds": 3.0,
+          "pre_seconds": 3.0
+        },
+        "target_or_range": {}
+      },
+      "throttle": {
+        "direction": "decrease",
+        "guardrails": [],
+        "metric": "source_ip_event_rate_hz",
+        "observation_window": {
+          "post_seconds": 3.0,
+          "pre_seconds": 3.0
+        },
+        "target_or_range": {}
+      }
+    },
+    "policy_version": "golden-policy-v1",
+    "schema_version": "outcome-telemetry-policy/v1"
+  },
+  "sample_interval_seconds": 1.0,
+  "schema_version": "outcome-golden-replay-input/v1",
+  "tactical_effects": {
+    "isolate": "CONTAINMENT",
+    "redirect": "DIVERSION",
+    "throttle": "DELAY"
+  }
+}
