@@ -21,7 +21,7 @@ imports it (tested). No systemd unit or installer step runs any of it.
 | Durable sink, retention, quota failure | `trace_audit.py` (`TraceAuditSink`, `record_cycle`) |
 | Digest key, config, port for a service (off by default) | `py/azazel_edge/mio/trace_recorder.py`, `config/mio_trace_audit.json`, `installer/internal/provision_mio_trace_audit_key.sh` |
 | Read-only incident export | `py/azazel_edge/mio/trace_export.py`, `bin/azazel-mio-trace-export` |
-| Operator text masking | `py/azazel_edge/mio/redaction.py`, applied in `handoff.py` |
+| Operator text masking | `py/azazel_edge/mio/redaction.py` (the v2 no-model handoff copies no free text, so it no longer needs it) |
 | Tests | `tests/test_mio_reasoning_trace_audit.py`, `tests/test_mio_trace_lifecycle_389_v1.py` |
 
 ## Lifecycle the trace relates
@@ -335,18 +335,21 @@ Known limits of the masking (best effort, not a guarantee):
   text is for a human, not for a JSON parser.
 - Weak-label values with a hostname are masked even when ordinary.
 
-The handoff still uses masking rather than the allowlist of #501, because
-its point is operator-readable frame facts and model hypotheses; the trace
-audit and the export carry no free text at all. Scheme-less `user:pass@host` and passwords with spaces in URL
-userinfo are masked; a plain email has no `:` and is handled by the email rule.
-Masking runs before truncation so a cut cannot expose part of a token.
+Scheme-less `user:pass@host` and passwords with spaces in URL userinfo are
+masked; a plain email has no `:` and is handled by the email rule. Masking runs
+before truncation so a cut cannot expose part of a token.
 
-In the handoff, IDs (`trace_id`, `frame_id`, hypothesis IDs, evidence refs,
-playbook id/version) are kept only if they match `ID_GRAMMAR` and are not
-token-shaped; otherwise a fixed placeholder (`invalid-hypothesis-id-<n>`,
-`[redacted:evidence_ref]`, ...) is used. No digest is used there because the
-handoff has no key and the value may be low-entropy. All other text, including
-playbook text and the reason, is masked.
+The no-model handoff (`mio.no_model_handoff.v2`, #385) no longer masks free
+text: it copies none. See [mio-reasoning-lifecycle.md](mio-reasoning-lifecycle.md)
+for its allowlisted fields. Its IDs (`trace_id`, `frame_id`, hypothesis IDs,
+evidence refs) are kept only if they fully match a closed shape the repo
+produces (`CLOSED_ID_SHAPES` in `handoff.py`), which is stricter than
+`ID_GRAMMAR`: no dots, no free words, no hex/decimal address forms. Otherwise a
+fixed placeholder (`hypothesis-<n>`, `invalid-trace-id`,
+`[redacted:evidence_ref]`, ...) is used. The playbook ID is kept only when it
+is a built-in key, and the version only when it equals the built-in version.
+No digest is used there because the handoff has no key and the value may be
+low-entropy.
 
 ## Not in scope
 

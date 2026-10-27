@@ -94,8 +94,16 @@ It has no clock: ordering is by call order, which keeps replays deterministic.
   | `stale_cycle_cancelled` | the operator cancelled the cycle |
   | `stale_cycle_already_completed` | a second result for a cycle that already has one |
   | `stale_pre_restart_cycle` | the ticket's epoch is older than the coordinator's (any number of restarts) |
-  | `stale_unknown_or_evicted_cycle` | the cycle is unknown, evicted, or the ticket claims a future epoch |
-  | `stale_ticket_mismatch` | the ticket names a recorded cycle but not its trace/frame/digest; `stale_check` is also true for it |
+  | `stale_unknown_or_evicted_cycle` | no recorded cycle has this ID (unknown, evicted, or a future-epoch ticket) |
+  | `stale_ticket_mismatch` | the ticket names a recorded cycle but not its trace/frame/epoch/digest, or a field has the wrong type (for example an unhashable ID); `stale_check` is also true for it, and no exception is raised |
+
+  A discard row is written only under a recorded cycle that this exact ticket
+  names, and only for the first discard of that cycle. Discards that cannot be
+  tied to a recorded cycle (unknown, evicted, forged or malformed tickets) are
+  only counted by reason in `unattributed_discards()`, outside every trace's
+  audit and in memory only. A forged ticket therefore cannot write rows into
+  another trace's audit or push its rows out of the cap. The cost is that a
+  late result for an evicted cycle leaves only that count.
 - Memory is bounded: in-flight cycles by `max_traces` (excess `begin` raises
   `reasoning_coordinator_backpressure`); finished cycles by
   `max_retained_cycles` (oldest evicted with that trace's current advisory,
@@ -133,12 +141,12 @@ reach the payload (v1 copied redacted frame and model text). The payload holds:
 
 | Field | Source |
 |---|---|
-| `trace_id`, `frame_id`, `evidence_refs`, hypothesis IDs and their refs | IDs that match their grammar and are not token-shaped; anything else is a fixed placeholder |
+| `trace_id`, `frame_id`, `evidence_refs`, hypothesis IDs and their refs | only IDs that fully match a closed shape the repo produces (`CLOSED_ID_SHAPES`: allowlisted words and bounded digits, for example `trace-1`, `mio-shadow`, `<trace>:frame`, `sha256:<hex>`, `suricata_sid:<n>`, `flow:<n>` with 11 to 20 digits, `ev:<kind>:<n>`, `h<n>`); anything else (addresses, hostnames, hex/decimal address forms, free words) becomes a fixed placeholder (`invalid-trace-id`, `invalid-frame-id`, `[redacted:evidence_ref]`, `hypothesis-<n>`) |
 | `reason` | a `ReasoningState` value, otherwise `unspecified` |
 | `current_defensive_state`, `threat_level`, `dependency_status`, `current_action` | closed vocabularies (`DEFENSIVE_STATES`, `LOW`..`CRITICAL`/`UNKNOWN`, `OPTIONAL_DEPENDENCY_STATUSES`, the v2 action-record vocabularies) |
 | `counts` | integer sizes of the frame lists, actors and actions |
 | `unknown_markers`, `contradiction_markers` | only the fixed marker codes emitted by the contract and `MioSituationFrameBuilder` (for example `KNOWLEDGE_UNAVAILABLE`, `NOC_DEGRADED_MODE`, `HIGH_SOC_RISK_WITH_FRAGILE_NOC`); caller text is counted, not copied |
-| `playbook` | ID and version; the next checks, stop conditions and claim boundaries only when the playbook equals its built-in `DEFAULT_PLAYBOOKS` entry (code constants), otherwise `guidance_source: omitted_not_builtin` and empty lists |
+| `playbook` | the ID only when it is a `DEFAULT_PLAYBOOKS` key and the version only when it equals that entry's version (else `invalid-playbook-id` / `invalid-version`); the next checks, stop conditions and claim boundaries only when the playbook equals its built-in `DEFAULT_PLAYBOOKS` entry (code constants), otherwise `guidance_source: omitted_not_builtin` and empty lists |
 | `summary`, `operator_guidance` | fixed templates filled with the values above |
 
 If the model already proposed hypotheses this cycle that passed grounding and

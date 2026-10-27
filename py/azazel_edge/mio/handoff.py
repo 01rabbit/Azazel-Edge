@@ -12,11 +12,14 @@ does reach it is
 * closed vocabularies (defensive state, threat level, dependency status,
   reasoning state, hypothesis status, current-action record, the fixed
   uncertainty marker codes the frame builder and contract emit),
-* identifiers that match their ID grammar (anything else becomes a fixed
-  placeholder), and integer counts,
-* the fixed wording of the built-in playbooks (code constants, not input);
-  a playbook that is not equal to its built-in entry contributes its
-  validated ID and version only.
+* identifiers that match a closed set of shapes the repo itself produces
+  (``CLOSED_ID_SHAPES``: allowlisted words and bounded digits, no dots, no
+  free words); anything else, including addresses, hostnames, hex/decimal
+  address forms and secret-like words, becomes a fixed placeholder, and
+  integer counts,
+* the built-in playbooks: the ID only when it is a ``DEFAULT_PLAYBOOKS`` key,
+  the version only when it equals that entry's version, and the fixed
+  wording only when the whole playbook equals the built-in entry.
 
 If the model proposed hypotheses that passed grounding/lifecycle checks this
 cycle, they are listed separately by ID, status and evidence refs, marked
@@ -29,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from typing import Any, Sequence
 
 from .contracts import (
@@ -48,8 +52,6 @@ from .contracts import (
     ReasoningState,
 )
 from .playbook import DEFAULT_PLAYBOOKS, ReasoningPlaybook
-from .redaction import contains_token_like
-from .trace_audit import is_valid_id
 
 NO_MODEL_HANDOFF_SCHEMA_VERSION = "mio.no_model_handoff.v2"
 NO_MODEL_HANDOFF_MAX_BYTES = 8192
@@ -79,10 +81,34 @@ _OPERATOR_GUIDANCE = (
 )
 
 
+# Closed ID shapes. The ID grammars in trace_audit admit any word, dotted
+# address, MAC, IPv6 or hex/decimal address form, so they are not enough for
+# text a human will read. These shapes cover what the repo actually produces:
+# trace/frame IDs from the frame builder callers (bin/azazel-mio-shadow-replay,
+# mio/evaluation.py, fixtures), Evidence Plane event IDs (sha256:<hex>), the
+# Suricata/flow adapters' refs, the ev:<kind>:<n> refs of capability results,
+# and the h<n> IDs MioHypothesis.from_mapping assigns. Words come from fixed
+# lists, never from input. Anything else becomes a fixed placeholder; no digest
+# is emitted because the value may be low-entropy.
+_TRACE_HEAD = r"(?:trace|mio|evaluation|incident|replay)"
+_TRACE_WORDS = r"(?:-(?:golden|fixture|shadow|auth|scan|trace|frame))*"
+_TRACE_TAIL = r"(?:-v?[0-9]{1,12})?"
+_TRACE_SHAPE = _TRACE_HEAD + _TRACE_WORDS + _TRACE_TAIL
+_EV_KINDS = "|".join(sorted({"auth", "alert", "anomaly", "drop", "flow", "netflow", "dns", "http", "tls", "ssh", "smtp", "ftp", "smb", "dhcp"}))
+CLOSED_ID_SHAPES: dict[str, re.Pattern[str]] = {
+    "trace_id": re.compile(rf"{_TRACE_SHAPE}"),
+    "frame_id": re.compile(rf"(?:frame{_TRACE_TAIL}|{_TRACE_SHAPE}(?::frame)?)"),
+    # sha256:<64 hex> (make_event_id); suricata_sid:<n> (sids fit 8 digits);
+    # flow:<n> (Suricata flow IDs are 64-bit; at least 11 digits, so a 32-bit
+    # address in decimal cannot pass); ev:<kind>:<n>.
+    "evidence_ref": re.compile(rf"sha256:[0-9a-f]{{64}}|suricata_sid:[0-9]{{1,8}}|flow:[0-9]{{11,20}}|ev:(?:{_EV_KINDS})(?::[0-9]{{1,6}})?"),
+    "hypothesis_id": re.compile(r"h[0-9]{1,3}"),
+}
+
+
 def _safe_id(kind: str, value: Any, placeholder: str) -> str:
-    """IDs pass only if they match their grammar and are not token-shaped;
-    otherwise a fixed placeholder (no digest: the value may be low-entropy)."""
-    return value if is_valid_id(kind, value) and not contains_token_like(value) else placeholder
+    """Keep ``value`` only if it fully matches its closed shape."""
+    return value if type(value) is str and CLOSED_ID_SHAPES[kind].fullmatch(value) else placeholder
 
 
 def _vocab(value: Any, allowed: Sequence[str], fallback: str) -> str:
@@ -98,7 +124,7 @@ def _markers(values: Sequence[Any], allowed: frozenset[str]) -> list[str]:
 
 
 def _builtin_playbook(playbook: ReasoningPlaybook) -> ReasoningPlaybook | None:
-    builtin = DEFAULT_PLAYBOOKS.get(playbook.playbook_id)
+    builtin = DEFAULT_PLAYBOOKS.get(playbook.playbook_id) if type(playbook.playbook_id) is str else None
     return builtin if builtin is not None and builtin == playbook else None
 
 
@@ -149,7 +175,7 @@ def build_no_model_handoff(
         }
     model_hypotheses = [
         {
-            "hypothesis_id": _safe_id("hypothesis_id", h.hypothesis_id, f"invalid-hypothesis-id-{i + 1}"),
+            "hypothesis_id": _safe_id("hypothesis_id", h.hypothesis_id, f"hypothesis-{i + 1}"),
             "model_status": _vocab(getattr(h.status, "value", None), _HYPOTHESIS_STATUSES, "unknown"),
             "verification": "model_proposed_unverified",
             "supporting_evidence_refs": _refs(h.supporting_evidence_refs, c["hypothesis_refs"]),
@@ -192,9 +218,10 @@ def build_no_model_handoff(
     }
     if playbook is not None:
         builtin = _builtin_playbook(playbook)
+        known = DEFAULT_PLAYBOOKS.get(playbook.playbook_id) if type(playbook.playbook_id) is str else None
         payload["playbook"] = {
-            "playbook_id": _safe_id("frame_id", playbook.playbook_id, "invalid-playbook-id"),
-            "version": _safe_id("frame_id", playbook.version, "invalid-version"),
+            "playbook_id": playbook.playbook_id if known is not None else "invalid-playbook-id",
+            "version": playbook.version if known is not None and playbook.version == known.version else "invalid-version",
             "guidance_source": "builtin" if builtin is not None else "omitted_not_builtin",
             "check_next": list(builtin.discriminating_questions[: c["check_next"]]) if builtin else [],
             "stop_conditions": list(builtin.stop_conditions[: c["stop_conditions"]]) if builtin else [],

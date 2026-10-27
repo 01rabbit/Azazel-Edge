@@ -557,7 +557,7 @@ def test_handoff_validates_ids_and_redacts_everything_else():
     payload = build_no_model_handoff(f, reason="model_absent password=hunter2", playbook=PLAYBOOK, hypotheses=[hyp]).to_dict()
     blob = json.dumps(payload)
     assert "hunter2" not in blob and "ghp_ABCDEFGHIJKLMNOPQRST" not in blob
-    assert payload["model_proposed_hypotheses"][0]["hypothesis_id"] == "invalid-hypothesis-id-1"
+    assert payload["model_proposed_hypotheses"][0]["hypothesis_id"] == "hypothesis-1"
     assert payload["evidence_refs"][0] == "ev:ssh:1"
     assert payload["trace_id"] == "trace-1"
 

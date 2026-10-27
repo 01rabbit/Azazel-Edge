@@ -263,6 +263,9 @@ class _Cycle:
     status: CycleStatus
     outcome_state: str = ""
     advisory_id: str = ""
+    # Discarded results offered for this cycle. Only the first one writes an
+    # audit row, so replaying a real ticket cannot flood the trace's audit.
+    discards: int = 0
 
 
 COORDINATOR_SNAPSHOT_SCHEMA = "mio.reasoning_coordinator.v1"
@@ -289,6 +292,16 @@ def _bound(value: Any, depth: int = 0) -> Any:
 
 def _is_int(value: Any) -> bool:
     return type(value) is int
+
+
+def _well_typed(ticket: Any) -> bool:
+    """A ticket whose fields have the types begin() mints. Anything else
+    (including unhashable IDs) is a mismatch, never an exception."""
+    return (
+        isinstance(ticket, CycleTicket)
+        and all(type(getattr(ticket, k)) is str for k in ("trace_id", "cycle_id", "frame_id", "material_digest"))
+        and _is_int(ticket.epoch)
+    )
 
 
 def _same_cycle(ticket: CycleTicket, own: CycleTicket) -> bool:
@@ -326,6 +339,11 @@ class ReasoningCoordinator:
         self._audit: list[dict[str, Any]] = []
         self._audit_seq = 0
         self._audit_dropped = 0
+        # Discards that cannot be tied to a recorded cycle (unknown, evicted,
+        # forged or malformed tickets). Counted by reason only, outside every
+        # trace's audit, so a forged ticket can neither write rows into another
+        # trace's audit nor push its rows out of the cap. In memory only.
+        self._unattributed: dict[str, int] = {}
 
     # -- audit ------------------------------------------------------------
     def _log(self, event: str, cycle: _Cycle | None = None, **fields: Any) -> None:
@@ -347,6 +365,10 @@ class ReasoningCoordinator:
     @property
     def audit_dropped(self) -> int:
         return self._audit_dropped
+
+    def unattributed_discards(self) -> dict[str, int]:
+        with self._lock:
+            return dict(sorted(self._unattributed.items()))
 
     def _prune(self) -> None:
         finished = [cid for cid, c in self._cycles.items() if c.status is not CycleStatus.IN_FLIGHT]
@@ -395,6 +417,8 @@ class ReasoningCoordinator:
 
     def _status(self, ticket: CycleTicket) -> CycleStatus | None:
         with self._lock:
+            if not _well_typed(ticket):
+                return None
             cycle = self._cycles.get(ticket.cycle_id)
             if cycle is None or ticket.epoch != self.epoch or not _same_cycle(ticket, cycle.ticket):
                 return None
@@ -414,7 +438,7 @@ class ReasoningCoordinator:
 
     def cancel(self, trace_id: str, *, reason: str = "operator_cancelled") -> bool:
         with self._lock:
-            cycle = self._cycles.get(self._latest.get(trace_id, ""))
+            cycle = self._cycles.get(self._latest.get(trace_id, "")) if type(trace_id) is str else None
             if cycle is None or cycle.status is not CycleStatus.IN_FLIGHT:
                 return False
             cycle.status = CycleStatus.CANCELLED
@@ -430,15 +454,19 @@ class ReasoningCoordinator:
         rec = getattr(outcome, "recommendation", None)
         advisory_id = getattr(rec, "advisory_id", "") if rec is not None else ""
         with self._lock:
-            cycle = self._cycles.get(ticket.cycle_id)
+            cycle = self._cycles.get(ticket.cycle_id) if _well_typed(ticket) else None
             reason, status = self._stale_reason(ticket, cycle)
             if reason:
-                # Audit under the recorded cycle's trace when the ticket matches it;
-                # a mismatched or unknown ticket is logged without touching any cycle.
-                own = cycle if reason in (STALE_SUPERSEDED, STALE_CANCELLED, STALE_ALREADY_COMPLETED) else None
-                h_reason = REASON_CYCLE_CANCELLED if reason == STALE_CANCELLED else REASON_CYCLE_SUPERSEDED
-                ids = {} if own is not None else {"trace_id": ticket.trace_id, "cycle_id": ticket.cycle_id, "frame_id": ticket.frame_id, "ticket_epoch": ticket.epoch}
-                self._log("stale_result_discarded", own, **ids, reason=reason, outcome_state=state, advisory_id=advisory_id, hypotheses=[e.to_dict() for e in supersede_all(hypotheses, h_reason)])
+                # Attribute the row only to a recorded cycle that this exact
+                # ticket names. Anything else is counted outside the per-trace
+                # audit; the ticket's self-declared IDs are never written.
+                if cycle is None or not _same_cycle(ticket, cycle.ticket):
+                    self._unattributed[reason] = self._unattributed.get(reason, 0) + 1
+                else:
+                    cycle.discards += 1
+                    if cycle.discards == 1:
+                        h_reason = REASON_CYCLE_CANCELLED if reason == STALE_CANCELLED else REASON_CYCLE_SUPERSEDED
+                        self._log("stale_result_discarded", cycle, reason=reason, ticket_epoch=ticket.epoch, outcome_state=state, advisory_id=advisory_id, hypotheses=[e.to_dict() for e in supersede_all(hypotheses, h_reason)])
                 return CompletionResult(False, status, reason)
             cycle.status = CycleStatus.ACCEPTED
             cycle.outcome_state = state[:64]
@@ -451,13 +479,15 @@ class ReasoningCoordinator:
     def _stale_reason(self, ticket: CycleTicket, cycle: _Cycle | None) -> tuple[str, str]:
         """('', '') when ``ticket`` is the current in-flight cycle, else a fixed
         reason code from STALE_RESULT_REASONS and the cycle status to report."""
-        if not _is_int(ticket.epoch) or ticket.epoch < self.epoch:
+        if not _well_typed(ticket):
+            return STALE_TICKET_MISMATCH, "unknown"
+        if cycle is not None and not _same_cycle(ticket, cycle.ticket):
+            # A ticket naming another trace's cycle must not land in that trace.
+            return STALE_TICKET_MISMATCH, "unknown"
+        if ticket.epoch < self.epoch:
             return STALE_PRE_RESTART, CycleStatus.ABANDONED_ON_RESTART.value
         if cycle is None or ticket.epoch != self.epoch:
             return STALE_UNKNOWN_OR_EVICTED, "unknown"
-        if not _same_cycle(ticket, cycle.ticket):
-            # A ticket naming another trace's cycle must not land in that trace.
-            return STALE_TICKET_MISMATCH, "unknown"
         if cycle.status is CycleStatus.IN_FLIGHT:
             return "", ""
         if cycle.status is CycleStatus.CANCELLED:
