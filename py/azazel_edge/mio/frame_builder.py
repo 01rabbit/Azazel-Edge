@@ -5,14 +5,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 from .contracts import (
-    _TOKEN_RE,
     DEFENSIVE_STATES,
     SITUATION_FRAME_ACTOR_CAPS,
     SITUATION_FRAME_CAPS,
     MioSituationFrame,
     _opaque_id,
     _safe_int,
-    actor_key_for,
+    actor_key_at,
+    normalize_event_kind,
+    normalize_protocol,
 )
 
 
@@ -90,7 +91,8 @@ def _best_unique(candidates: list[tuple[int, float, str]], keep: int) -> list[tu
 def _actor_source(subject: Any) -> str:
     """Source endpoint of a ``<src>-><dst>...`` subject (Suricata EVE and flow
     adapters). Other subjects (syslog host:tag, NOC probes, inventory) do not
-    name an actor and yield ''. The value is only hashed, never copied."""
+    name an actor and yield ''. The value only groups events inside one build;
+    it is never copied into the frame and no key is derived from it."""
     text = str(subject or '')
     if '->' not in text:
         return ''
@@ -107,7 +109,7 @@ def _top(counter: Counter, keep: int) -> list[Any]:
 
 
 class _ActorAccumulator:
-    __slots__ = ('count', 'severity', 'first', 'last', 'ports', 'protocols', 'kinds', 'refs')
+    __slots__ = ('count', 'severity', 'first', 'last', 'ports', 'protocols', 'kinds', 'refs', 'min_event_id')
 
     def __init__(self) -> None:
         self.count = 0
@@ -118,6 +120,7 @@ class _ActorAccumulator:
         self.protocols: Counter = Counter()
         self.kinds: Counter = Counter()
         self.refs: list[tuple[int, float, str]] = []
+        self.min_event_id: str | None = None
 
     def add(self, payload: Mapping[str, Any], *, ts: datetime | None, severity: int, event_id: str) -> None:
         self.count += 1
@@ -129,12 +132,14 @@ class _ActorAccumulator:
         port = attrs.get('target_port', attrs.get('dst_port'))
         if type(port) is int and 0 < port <= 65535:
             self.ports[port] += 1
-        proto = str(attrs.get('protocol') or attrs.get('proto') or '').strip().lower()
-        if _TOKEN_RE.match(proto):
+        proto = normalize_protocol(attrs.get('protocol') or attrs.get('proto'))
+        if proto:
             self.protocols[proto] += 1
-        kind = str(payload.get('kind') or '').strip().lower()
-        if _TOKEN_RE.match(kind):
+        kind = normalize_event_kind(payload.get('kind'))
+        if kind:
             self.kinds[kind] += 1
+        if event_id and (self.min_event_id is None or event_id < self.min_event_id):
+            self.min_event_id = event_id
         if _opaque_id(event_id):
             self.refs.append((-severity, -ts.timestamp() if ts is not None else float('inf'), event_id))
             if len(self.refs) >= 4 * SITUATION_FRAME_ACTOR_CAPS['evidence_refs']:
@@ -305,11 +310,21 @@ class MioSituationFrameBuilder:
             if freshness_seconds > self.stale_after_seconds:
                 unknowns.append('EVIDENCE_STALE')
 
-        # Rank by severity, volume, recency, then the raw source (order-free);
-        # only the kept actors are hashed into trace-scoped keys. One more than
-        # the cap is passed so the frame marks the overflow as truncated.
-        ranked = sorted(actor_acc.items(), key=lambda kv: (-kv[1].severity, -kv[1].count, -(kv[1].last.timestamp() if kv[1].last else float('-inf')), kv[0]))
-        actors = [acc.summary(actor_key_for(trace_id, source)) for source, acc in ranked[: SITUATION_FRAME_CAPS['actors'] + 1]]
+        # Rank by severity, volume, recency, first_seen, then the smallest event
+        # ID (order-free and independent of the source value). Keys are the
+        # resulting frame-local positions (actor:0001, ...). One more than the
+        # cap is passed so the frame marks the overflow as truncated.
+        ranked = sorted(actor_acc.values(), key=lambda acc: (
+            -acc.severity,
+            -acc.count,
+            -(acc.last.timestamp() if acc.last else float('-inf')),
+            acc.first.timestamp() if acc.first else float('inf'),
+            acc.min_event_id is None,
+            acc.min_event_id or '',
+            # Fully content-based last resort: equal keys mean equal summaries.
+            sorted(acc.ports.items()), sorted(acc.protocols.items()), sorted(acc.kinds.items()),
+        ))
+        actors = [acc.summary(actor_key_at(i)) for i, acc in enumerate(ranked[: SITUATION_FRAME_CAPS['actors'] + 1])]
 
         unknowns.extend(str(x) for x in explicit_unknowns)
         contradictions.extend(str(x) for x in explicit_contradictions)

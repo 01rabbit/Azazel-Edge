@@ -62,7 +62,10 @@ It has no clock: ordering is by call order, which keeps replays deterministic.
 
 - `begin(frame)` computes `material_frame_digest`: the canonical frame without
   `frame_id`, `created_at`, `freshness_seconds`, `provenance`, with the list
-  fields sorted (their order is a capping priority, not meaning). `mission`,
+  fields sorted (their order is a capping priority, not meaning). In the v2
+  `actors`, the per-actor counters `event_count`, `first_seen`, `last_seen`,
+  `distinct_target_ports` and `evidence_refs` are also left out
+  (`NON_MATERIAL_ACTOR_FIELDS`, see [mio-situation-frame.md](mio-situation-frame.md)). `mission`,
   the NOC/SOC summaries (status and reason codes, no timestamps or counters)
   and `truncated` (it marks lost data) are material. Two builder runs over the
   same events at different times or input order share a digest; a new event

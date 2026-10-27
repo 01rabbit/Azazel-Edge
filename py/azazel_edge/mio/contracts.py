@@ -100,8 +100,20 @@ _DEGRADED_DEPENDENCY_STATUSES = {"unavailable", "timeout", "malformed"}
 # Closed vocabularies of the v2 nested records. Out-of-vocabulary values are
 # rendered as "unknown" by build() and rejected by from_dict().
 ACTION_ROLES = ("current", "previous")
-ACTION_OUTCOMES = ("applied", "dry_run", "policy_gated", "advisory_only", "released", "unknown")
-ACTION_RELEASE_CONDITIONS = ("lease_expiry", "operator_release", "superseded", "none", "unknown")
+# Action vocabularies are the ones Edge's own records use, so the producer
+# (#385) maps nothing it does not have. applied_state: explanations/live.py
+# applied_state(); mode: the Rust core's enforcement.mode (maybe_enforce), with
+# "none" when the record has no mode (live.py control_mode); release_condition:
+# "lease_expiry" only for an applied action whose release ledger state is
+# active/uncertain (live.py _release_condition), otherwise "none". A record
+# with any other value is malformed and dropped, never rendered as "unknown".
+ACTION_APPLIED_STATES = ("applied", "not_applied", "apply_failed", "none")
+ACTION_MODES = ("disabled", "dry_run", "policy_gated", "release_guard_failed", "enforced", "none")
+ACTION_RELEASE_CONDITIONS = ("lease_expiry", "none")
+# Closed vocabularies for actor features; anything else counts as "other".
+ACTOR_PROTOCOLS = ("tcp", "udp", "icmp", "icmpv6", "sctp", "gre", "esp", "ah", "igmp", "other")
+_PROTOCOL_ALIASES = {"ipv6-icmp": "icmpv6", "icmp6": "icmpv6"}
+ACTOR_EVENT_KINDS = ("alert", "anomaly", "drop", "flow", "flow_summary", "netflow", "dns", "http", "tls", "ssh", "smtp", "ftp", "smb", "dhcp", "fileinfo", "other")
 DECEPTION_LIFECYCLE_STATES = ("inactive", "provisioning", "active", "terminating", "terminated", "unknown")
 # Provenance vocabulary: which deterministic input produced each fact group.
 PROVENANCE_GROUPS = ("known_facts", "unknowns", "contradictions", "evidence_refs", "knowledge_refs", "freshness_seconds", "actors", "actions", "deception_context")
@@ -122,27 +134,32 @@ DECEPTION_LIFECYCLE_UNKNOWN = "DECEPTION_LIFECYCLE_UNKNOWN"
 
 # Nested strings are never free text: keys, ids, tokens and timestamps have a
 # fixed shape, so attacker-authored text cannot enter through them.
-_ACTOR_KEY_RE = re.compile(r"actor:[0-9a-f]{16}\Z")
+# Frame-local ordinal: actor:0001 is the first actor of this frame. It is not
+# derived from the source in any way, so it cannot be inverted to an address.
+_ACTOR_KEY_RE = re.compile(r"actor:\d{4}\Z")
 _OPAQUE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
-_MAC_RE = re.compile(r"[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}\Z")
-_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,31}\Z")
+# Address-shaped substrings refused anywhere inside an opaque ID: dotted or
+# dashed quads (with or without :port), MAC-like runs, and IPv6-like runs.
+_ADDRESS_LIKE_RES = (
+    re.compile(r"(?<![0-9])\d{1,3}(?:[.\-_]\d{1,3}){3}(?![0-9])"),
+    re.compile(r"(?i)(?<![0-9a-f])[0-9a-f]{2}(?:[:.\-_][0-9a-f]{2}){5}(?![0-9a-f])"),
+    re.compile(r"(?i)(?<![0-9a-z])[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,}(?![0-9a-z])"),
+    re.compile(r"(?i)[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}"),
+)
 _TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 _MAX_COUNT = 1_000_000
 
 
-def actor_key_for(trace_id: str, actor_source: str) -> str:
-    """Trace-scoped pseudonymous actor key. The raw source (an address) never
-    enters the frame; the key is stable for one trace and differs across traces.
-    It is a pseudonym, not anonymisation: whoever knows the trace_id can test
-    guesses, so the frame stays advisory data under the same access rules."""
-    raw = f"mio.situation_frame.actor.v2\x1f{_bounded_text(trace_id, 96)}\x1f{actor_source}".encode("utf-8", "surrogatepass")
-    return "actor:" + hashlib.sha256(raw).hexdigest()[:16]
+def actor_key_at(position: int) -> str:
+    return f"actor:{position + 1:04d}"
 
 
 def _opaque_id(value: Any) -> str:
     """Return an opaque identifier or "" if the value is not one. IP and MAC
     addresses are personal data, not identifiers, and are refused."""
-    if not isinstance(value, str) or not _OPAQUE_ID_RE.match(value) or _MAC_RE.match(value):
+    if not isinstance(value, str) or not _OPAQUE_ID_RE.match(value):
+        return ""
+    if any(pattern.search(value) for pattern in _ADDRESS_LIKE_RES):
         return ""
     try:
         ipaddress.ip_address(value)
@@ -162,10 +179,25 @@ def _id_list(values: Any, limit: int) -> tuple[str, ...]:
     return tuple(out)
 
 
-def _token_list(values: Any, limit: int) -> tuple[str, ...]:
+def normalize_protocol(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text or text == "-":
+        return ""
+    text = _PROTOCOL_ALIASES.get(text, text)
+    return text if text in ACTOR_PROTOCOLS else "other"
+
+
+def normalize_event_kind(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    return text if text in ACTOR_EVENT_KINDS else "other"
+
+
+def _vocab_list(values: Any, vocabulary: Sequence[str], limit: int) -> tuple[str, ...]:
     out: list[str] = []
     for raw in values if isinstance(values, (list, tuple)) else ():
-        if isinstance(raw, str) and _TOKEN_RE.match(raw) and raw not in out:
+        if isinstance(raw, str) and raw in vocabulary and raw not in out:
             out.append(raw)
             if len(out) >= limit:
                 break
@@ -233,10 +265,10 @@ class MioActorSummary:
             last_seen=last,
             event_count=_count(value.get("event_count")),
             max_severity=_count(value.get("max_severity"), 100),
-            protocols=_token_list(value.get("protocols"), caps["protocols"]),
+            protocols=_vocab_list(value.get("protocols"), ACTOR_PROTOCOLS, caps["protocols"]),
             target_ports=tuple(ports),
             distinct_target_ports=max(len(ports), _count(value.get("distinct_target_ports"), 65535)),
-            event_kinds=_token_list(value.get("event_kinds"), caps["event_kinds"]),
+            event_kinds=_vocab_list(value.get("event_kinds"), ACTOR_EVENT_KINDS, caps["event_kinds"]),
             evidence_refs=_id_list(value.get("evidence_refs"), caps["evidence_refs"]),
         )
 
@@ -247,14 +279,16 @@ class MioActorSummary:
 @dataclass(frozen=True)
 class MioActionRecord:
     """A defensive action Edge already selected (current or previous). A fact
-    recorded from Edge's decision audit; M.I.O. never selects or changes it."""
+    recorded from Edge's decision audit; M.I.O. never selects or changes it.
+    The producer that turns Edge's records into these is #385."""
 
     role: str
     action: str
     decision_ref: str
-    outcome: str = "unknown"
+    applied_state: str
+    mode: str
+    release_condition: str = "none"
     decided_at: str = ""
-    release_condition: str = "unknown"
     expires_at: str = ""
     evidence_refs: tuple[str, ...] = ()
 
@@ -266,7 +300,23 @@ class MioActionRecord:
         role, action, ref = value.get("role"), value.get("action"), _opaque_id(value.get("decision_ref"))
         if role not in ACTION_ROLES or not isinstance(action, str) or action not in DEFENSIVE_STATES or not ref:
             return None
-        return cls(role=role, action=action, decision_ref=ref, outcome=_vocab(value.get("outcome"), ACTION_OUTCOMES), decided_at=_canonical_ts(value.get("decided_at")), release_condition=_vocab(value.get("release_condition"), ACTION_RELEASE_CONDITIONS), expires_at=_canonical_ts(value.get("expires_at")), evidence_refs=_id_list(value.get("evidence_refs"), SITUATION_FRAME_ACTION_EVIDENCE_REFS_CAP))
+        applied, mode = value.get("applied_state"), value.get("mode")
+        release = value.get("release_condition", "none")
+        if applied not in ACTION_APPLIED_STATES or mode not in ACTION_MODES or release not in ACTION_RELEASE_CONDITIONS:
+            return None
+        expires_raw = value.get("expires_at", "")
+        expires = _canonical_ts(expires_raw)
+        decided_raw = value.get("decided_at", "")
+        decided = _canonical_ts(decided_raw)
+        if (expires_raw and not expires) or (decided_raw and not decided):
+            return None
+        # A lease exists only for an applied action (live.py); its due time
+        # only with a lease.
+        if release == "lease_expiry" and applied != "applied":
+            return None
+        if expires and release != "lease_expiry":
+            return None
+        return cls(role=role, action=action, decision_ref=ref, applied_state=applied, mode=mode, release_condition=release, decided_at=decided, expires_at=expires, evidence_refs=_id_list(value.get("evidence_refs"), SITUATION_FRAME_ACTION_EVIDENCE_REFS_CAP))
 
     def sort_key(self) -> tuple:
         # current first, then newest first; undated records last; then by ref.
@@ -274,7 +324,7 @@ class MioActionRecord:
         return (self.role != "current", not self.decided_at, newest, self.decision_ref)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"role": self.role, "action": self.action, "decision_ref": self.decision_ref, "outcome": self.outcome, "decided_at": self.decided_at, "release_condition": self.release_condition, "expires_at": self.expires_at, "evidence_refs": list(self.evidence_refs)}
+        return {"role": self.role, "action": self.action, "decision_ref": self.decision_ref, "applied_state": self.applied_state, "mode": self.mode, "release_condition": self.release_condition, "decided_at": self.decided_at, "expires_at": self.expires_at, "evidence_refs": list(self.evidence_refs)}
 
 
 @dataclass(frozen=True)
@@ -327,14 +377,10 @@ def _validate_nested(payload: Mapping[str, Any]) -> None:
     actors, actions, context = payload["actors"], payload["actions"], payload["deception_context"]
     if not isinstance(actors, list) or len(actors) > SITUATION_FRAME_CAPS["actors"]:
         raise ValueError("invalid_situation_frame_actors")
-    keys = []
-    for item in actors:
+    for position, item in enumerate(actors):
         actor = MioActorSummary.coerce(item) if isinstance(item, Mapping) else None
-        if actor is None or not _same_json(actor.to_dict(), item):
+        if actor is None or not _same_json(actor.to_dict(), item) or actor.actor_key != actor_key_at(position):
             raise ValueError("invalid_situation_frame_actors")
-        keys.append(actor.actor_key)
-    if len(set(keys)) != len(keys):
-        raise ValueError("invalid_situation_frame_actors")
     if not isinstance(actions, list) or len(actions) > SITUATION_FRAME_CAPS["actions"]:
         raise ValueError("invalid_situation_frame_actions")
     for item in actions:
@@ -408,8 +454,10 @@ def _coerce_actors(values: Any) -> tuple[list[MioActorSummary], bool]:
         actor = MioActorSummary.coerce(raw)
         if actor is None:
             malformed = True
-        elif all(a.actor_key != actor.actor_key for a in out):
-            out.append(actor)
+        else:
+            # Keys are frame-local positions: renumber, so a caller cannot
+            # carry a source-derived key and trimming keeps them contiguous.
+            out.append(replace(actor, actor_key=actor_key_at(len(out))))
     return out, malformed
 
 

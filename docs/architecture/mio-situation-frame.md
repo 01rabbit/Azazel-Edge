@@ -39,7 +39,9 @@ the legacy versions listed above.
 on read: all v1 fields are kept unchanged, `actors` and `actions` come back empty, and
 `deception_context` is `null`. v1 never captured these fields, so an upgraded frame says
 nothing about actors or actions; it does not claim there were none. A v1 payload with
-`deception_status="available"` is rejected, because v1 could not carry deception content.
+`deception_status="available"` is rejected. This is acceptable because the v1 builder could
+never produce it (it always downgraded `available` to `not_provided`, having no deception
+content to show), so no genuine v1 frame is lost.
 `to_dict()` always writes the current version. The same normalized v1 builder inputs give
 the same values for every v1 field under v2 (`test_v1_builder_inputs_give_unchanged_v1_fields`).
 
@@ -79,9 +81,21 @@ duplicates collapsed. NOC/SOC `evidence_ids` keep the evaluator's order, which i
 
 All three fields are facts for M.I.O. to reason over. None of them is an input to the Rust
 core, the Action Arbiter, enforcement, approval or AZ-06 control, and none carries an
-approval flag. No nested string is free text: every one is an actor key, an opaque ID, a
-vocabulary value, a lower-case token or a canonical UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`), so
-attacker-authored text cannot enter through them.
+approval flag.
+
+**Scope of the no-address / no-free-text rule.** Inside `actors`, `actions` and
+`deception_context`, no string is free text and none can hold an address: every one is a
+frame-local actor key, an opaque ID, a closed-vocabulary value or a canonical UTC timestamp
+(`YYYY-MM-DDTHH:MM:SSZ`). The rule covers only these three fields. The v1 fields keep their v1
+rules unchanged: `mission`, the summaries, facts, unknowns and contradictions are bounded
+text, and `evidence_refs` / `knowledge_refs` are bounded IDs as the evaluators and the caller
+supply them, without the address check below.
+
+**Opaque IDs** (`decision_ref`, nested `evidence_refs`, deception IDs and refs) must match
+`[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` and must not contain an address-shaped run anywhere: a
+dotted, dashed or underscored quad (`10.0.0.5`, `10.0.0.5:22`, `ev-10-0-0-5`), a MAC-like run
+(`aa:bb:cc:dd:ee:ff`, `aa-bb-…`, `aabb.ccdd.eeff`) or an IPv6-like run (`fe80::1`,
+`2001:db8::1`). Such a value is not an ID and is treated as absent or malformed.
 
 ### `actors` (actor/entity summary, max 8)
 
@@ -91,44 +105,65 @@ whose `subject` has the form `<src>-><dst>...` (Suricata EVE and flow adapters).
 
 | Field | Meaning |
 |---|---|
-| `actor_key` | `actor:` + 16 hex of SHA-256 over a domain tag, the `trace_id` and the source. Stable for one trace, different across traces. |
+| `actor_key` | Frame-local position: `actor:0001` is the first actor of this frame, `actor:0002` the second, and so on. |
 | `first_seen` / `last_seen` | Oldest / newest event timestamp (future-dated events beyond the clock-skew tolerance do not count). `""` when unknown. |
 | `event_count`, `max_severity` | Exact count (clamped to 1,000,000) and highest severity (0-100). |
-| `protocols` (4), `target_ports` (8), `event_kinds` (4) | Most frequent values, ties by value. Protocols and kinds must match `[a-z0-9][a-z0-9_.-]{0,31}`; anything else is not counted. |
+| `protocols` (4) | Most frequent first, ties by value. Closed vocabulary `tcp`, `udp`, `icmp`, `icmpv6`, `sctp`, `gre`, `esp`, `ah`, `igmp`, `other` (`ipv6-icmp`/`icmp6` count as `icmpv6`; anything else as `other`). |
+| `target_ports` (8) | Most frequent first, ties by port. |
 | `distinct_target_ports` | Exact number of distinct target ports, so the capped `target_ports` list shows its own truncation. |
+| `event_kinds` (4) | Most frequent first. Closed vocabulary `alert`, `anomaly`, `drop`, `flow`, `flow_summary`, `netflow`, `dns`, `http`, `tls`, `ssh`, `smtp`, `ftp`, `smb`, `dhcp`, `fileinfo`, `other`. |
 | `evidence_refs` (4) | Event IDs by severity, recency, ID. Detail is fetched by ID through the read-only broker. |
 
-Actors are ranked by severity, event count, recency, then the raw source (order-free); only
-the kept actors are hashed. More than 8 actors sets `truncated`.
+Actors are ranked by severity, event count, recency, first_seen, then the smallest event ID, then
+their port/protocol/kind counts; the source value never takes part. The key is the position in
+that ranking. More than 8 actors sets `truncated`.
 
-**Data minimisation.** The source address, the destination, user names, messages and other
-`attrs` never enter the frame; the raw subject is only hashed. The key is a pseudonym, not
-anonymisation: whoever holds the `trace_id` can test guesses (an IPv4 space is small). The frame
-therefore stays advisory data under the same access rules as before. `MioActorSummary` only
-accepts keys of the `actor:<16 hex>` shape, so a caller cannot put an address in `actor_key`.
-A caller-supplied summary that does not validate is dropped and `ACTOR_SUMMARY_MALFORMED` is added to `unknowns`.
+**Data minimisation.** The source value only groups events inside one build. It is not copied,
+hashed or otherwise used to make the key, so the key cannot be inverted to an address: two
+windows with the same event pattern and different addresses give byte-identical frames
+(`test_actor_keys_do_not_depend_on_the_source_value`). The destination, user names, messages
+and other `attrs` never enter the frame. The cost is that a key means nothing outside its
+frame: `actor:0001` in two frames need not be the same source. Following one actor across
+frames is done through its `evidence_refs`, resolved by the read-only broker under its own
+access rules. `MioSituationFrame.build()` renumbers supplied actors by position, and `from_dict()`
+rejects keys that are not their position. A caller-supplied summary that does not validate is
+dropped and `ACTOR_SUMMARY_MALFORMED` is added to `unknowns`.
 
 ### `actions` (current and previous actions, max 4)
 
 Passed by the caller as `action_history`: normalized records from Edge's own decision audit
 (the actions the Rust core already selected and, if allowed, applied). M.I.O. records them; it
-does not select, approve, change or release an action.
+does not select, approve, change or release an action. **No producer exists yet:** the code that
+turns Edge's decision records into `action_history` and passes it in a running service is #385.
+Today only tests and fixtures supply it.
 
 | Field | Meaning |
 |---|---|
 | `role` | `current` or `previous`. At most one `current`. |
 | `action` | One of the Defensive States `OBSERVE`, `NOTIFY`, `THROTTLE`, `REDIRECT`, `ISOLATE`. |
-| `decision_ref` | Opaque ID of Edge's decision record (`[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`, not an IP or MAC address). |
-| `outcome` | `applied`, `dry_run`, `policy_gated`, `advisory_only`, `released`, `unknown`. |
-| `decided_at`, `expires_at` | Canonical UTC timestamps or `""`. |
-| `release_condition` | `lease_expiry`, `operator_release`, `superseded`, `none`, `unknown`. |
+| `decision_ref` | Opaque ID of Edge's decision record. |
+| `applied_state` | `applied`, `not_applied`, `apply_failed`, `none` (see the mapping below). |
+| `mode` | `disabled`, `dry_run`, `policy_gated`, `release_guard_failed`, `enforced`, `none`. |
+| `release_condition` | `lease_expiry` or `none`. |
+| `decided_at`, `expires_at` | Canonical UTC timestamps or `""`. `expires_at` only with `lease_expiry`. |
 | `evidence_refs` (4) | Opaque IDs. |
 
-Order: the current action first, then newest first (undated last), then `decision_ref`. A record
-with an unknown action, role or `decision_ref` is dropped with `ACTION_RECORD_MALFORMED` in
-`unknowns`; an out-of-vocabulary `outcome` or `release_condition` becomes `unknown`; extra keys
-are ignored. Several `current` records keep the newest and add `MULTIPLE_CURRENT_ACTIONS` to
-`contradictions` (the others are dropped, not demoted). A current action that differs from
+The vocabularies are exactly what Edge records, so the producer maps nothing Edge does not have:
+
+| Frame field | Source in Edge | Values |
+|---|---|---|
+| `applied_state` | `azazel_edge.explanations.live.applied_state(enforcement)` (`applied_state` in the v2 explanation) | `applied`: result `applied`/`partial_failure` with a command executed. `not_applied`: `planned_not_applied` (dry run, policy gated, release guard failed). `apply_failed`: the core tried and executed nothing, or the result is missing or unknown. `none`: `no_disruptive_action` (observe, notify). |
+| `mode` | The Rust core's `enforcement.mode` (`maybe_enforce` in `main.rs`); `none` when the record has none (`control_mode` in live.py) | `disabled`, `dry_run`, `policy_gated`, `release_guard_failed`, `enforced`, `none` |
+| `release_condition`, `expires_at` | live.py `_release_condition`: an applied action whose `release_ledger_state` is `active` or `uncertain` | `lease_expiry` with `release_due_epoch` as `expires_at`; otherwise `none` and `""` |
+
+`apply_failed` is a value Edge reports (an attempt that executed nothing, or an unknown result);
+it is not a stand-in for an unknown record. There is no `unknown` value: a record with an
+out-of-vocabulary `applied_state`, `mode` or `release_condition`, `lease_expiry` on an action that
+was not applied, `expires_at` without `lease_expiry`, a malformed timestamp, or an unknown action,
+role or `decision_ref` is dropped with `ACTION_RECORD_MALFORMED` in `unknowns`. Extra keys are
+ignored. Order: the current action first, then newest first (undated last), then `decision_ref`.
+Several `current` records keep the newest and add `MULTIPLE_CURRENT_ACTIONS` to `contradictions`
+(the others are dropped, not demoted). A current action that differs from
 `current_defensive_state` adds `CURRENT_ACTION_STATE_MISMATCH`; the frame keeps Edge's state and
 does not reconcile them. These contradiction markers come before builder and caller contradictions.
 
@@ -144,7 +179,21 @@ does not reconcile them. These contradiction markers come before builder and cal
 Facts only: no belief, intent, attribution or effectiveness score, and AZ-06 state is never
 Edge authority. A valid context makes `deception_status="available"`, which lets
 `select_playbook` consider `deception-observation-v1` (a shadow choice of reasoning method, not
-an action).
+an action). Like `action_history`, no running service supplies it yet (#385).
+
+### Material identity (lifecycle)
+
+`material_frame_digest` (`lifecycle.py`) decides whether a newer frame for the same trace is a
+new situation; a material change supersedes the in-flight cycle. An actor's `event_count`,
+`first_seen`, `last_seen`, `distinct_target_ports` and `evidence_refs` are **not material**
+(`NON_MATERIAL_ACTOR_FIELDS`): they move with every new event of an ongoing incident, and if
+they were material, sustained traffic could supersede every cycle before it finished. The
+actor's position, `max_severity`, `protocols`, `target_ports` and `event_kinds` stay material,
+so a new actor, a higher severity or a new kind of behaviour is a new situation. `actions` and
+`deception_context` are material in full (they change only when Edge or AZ-06 changes state).
+`frame_id`, `created_at`, `freshness_seconds` and `provenance` stay non-material as before.
+The top-level `evidence_refs` are material as in v1 and are not changed here; a new event
+that enters the top `max_event_refs` (severity first) still makes a new situation.
 
 ## Input contract
 
@@ -209,10 +258,6 @@ Every list is capped and the event pass keeps only `max_event_refs` candidates, 
 traffic never grows the frame (`test_input_traffic_volume_does_not_grow_frame`). Build time is
 linear in the number of events handed over; the Evidence Plane query window bounds that input.
 A pass cap was rejected because it made freshness depend on event order (a newest event past the cap was missed).
-
-The v2 fields are material for the lifecycle's frame identity (`material_frame_digest`): a new
-or changed action or actor is a new situation; `frame_id`, `created_at`, `freshness_seconds` and
-`provenance` still are not.
 
 When the untrusted prompt budget forces the minimal view (`PromptCompiler`), it still includes
 `unknowns`, `contradictions`, `truncated`, `knowledge_status`, `deception_status`, and `schema_version`.
