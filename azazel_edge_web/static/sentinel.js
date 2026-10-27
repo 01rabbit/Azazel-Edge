@@ -994,7 +994,9 @@
         if (chain.recheck_pending) return 'RE-VERIFYING (chain changed; not verified yet)';
         if (chain.verified) return 'VERIFIED (' + String(chain.scope || '') + ')';
         if (chain.ok && chain.scope === 'empty') return 'EMPTY (nothing verified)';
-        return 'NOT OK' + (chain.error ? (': ' + String(chain.error)) : '');
+        var kind = chain.error_kind ? String(chain.error_kind) : '';
+        var at = (typeof chain.error_position === 'number') ? (' (record ' + chain.error_position + ')') : '';
+        return 'NOT OK' + (kind ? (': ' + kind + at) : '');
     }
     // Pure view model of one decision's trace (unit-tested in node).
     function decisionTraceView(traceId, report, alertCount) {
@@ -1056,7 +1058,7 @@
         var chain = ((report || {}).sources || {}).chain || {};
         return list.map(function (t) {
             return t.trace_id + ':' + ((t.explanation || {}).status || '') + ':' + ((t.chain_record || {}).integrity || (t.chain_record || {}).status || '');
-        }).join(',') + '/' + String(chain.verified) + String(chain.error || '');
+        }).join(',') + '/' + String(chain.verified) + String(chain.error_kind || '') + String(chain.error_position || '') + String(chain.recheck_pending || '');
     }
     function renderDecisionList(alerts, report) {
         var ul = document.getElementById('evDecisions');

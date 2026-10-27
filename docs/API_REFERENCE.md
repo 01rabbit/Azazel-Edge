@@ -190,12 +190,19 @@ no-store`.
 Response: `format` (`azazel-edge/decision-trace/v1`), `read_only: true`,
 `generated_at`, `sources`, `traces`, `limits`.
 
-- `sources.explanations`: `state` (`present` / `missing` / `unreadable`),
-  `files` (names read, oldest first), `unparsed_lines`, `truncated`.
-- `sources.chain`: the `chain` object of `audit_review --json` (`ok`,
-  `verified`, `entries`, `error`, `scope`, `genesis_retained`, `files`,
-  `chain_id`, `meaning`, `limits`) plus `state` (`present` / `missing` /
-  `unreadable`) and `recheck_pending` (the chain changed and is answered
+- `sources.explanations`: `state` (`present` / `missing` / `unreadable` /
+  `not_read`), `error` (an `OSError` type name or `""`), `files` (the
+  explanation file and its rotated names only, oldest first),
+  `unparsed_lines`, `truncated`.
+- `sources.chain`: the `chain` object of `audit_review --json` reduced to
+  enumerated, checked, integer and boolean values: `ok`, `verified`,
+  `entries`, `scope`, `genesis_retained`, `files` (the chain file and its
+  rotated names only), `chain_id` (only when it is 64 hex digits),
+  `error_kind` (the kind of the failure, e.g. `chain_hash_mismatch_at`,
+  `rotated_file_not_continued`, `incomplete_last_line`; `other` for an
+  unknown one; no file name or text) with `error_position` (an integer, for
+  the positional kinds), `meaning` and `limits` (audit_review's fixed
+  texts), plus `state` (`present` / `missing` / `unreadable` / `not_read`) and `recheck_pending` (the chain changed and is answered
   from the last verification, with `verified` false and records `pending`:
   it is re-verified at most once per 5 s, and a request never waits for
   another's verification). A missing or empty chain

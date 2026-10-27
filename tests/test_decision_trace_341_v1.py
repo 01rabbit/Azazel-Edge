@@ -196,7 +196,11 @@ def test_a_p0_decision_shows_its_explanation_and_verified_chain_record(web):
     for key in shared:
         assert exp[key] == cli[key], key
     for ck, cv in cli["chain"].items():
+        if ck == "error":  # shown as its kind only (and a position as an integer)
+            assert cv == "" and body["sources"]["chain"]["error_kind"] == ""
+            continue
         assert body["sources"]["chain"][ck] == cv, ck
+    _check_sources(body["sources"])
     # Nothing new and personal: no event key, core trace id, target address or plan.
     text = json.dumps(chain)
     for absent in ("core_event_key", "core_trace_id", "target", "agent_received"):
@@ -348,7 +352,9 @@ def test_a_tampered_chain_record_is_shown_as_tampered_and_the_rest_unverified(we
     integrity = [t["chain_record"]["integrity"] for t in body["traces"]]
     assert integrity == ["not_verified", "failed_here", "not_verified"]
     assert body["sources"]["chain"]["ok"] is False and body["sources"]["chain"]["verified"] is False
-    assert body["sources"]["chain"]["error"] == "chain_hash_mismatch_at:2"
+    assert body["sources"]["chain"]["error_kind"] == "chain_hash_mismatch_at"
+    assert body["sources"]["chain"]["error_position"] == 2
+    assert "error" not in body["sources"]["chain"]
     # The tampered record no longer matches its explanation.
     assert body["traces"][1]["consistency"] == {"action_matches": False}
     # audit_review reports the same failure.
@@ -710,3 +716,75 @@ def test_two_concurrent_rebuilds_run_once_and_never_hang(web, monkeypatch):
     t3.join(20)
     assert not t3.is_alive(), "timed out"
     assert len(calls) == 2 and results[-1][1] is False and results[-1][0] is not snap
+
+
+
+def _check_sources(sources: dict) -> None:
+    chain, exp = sources["chain"], sources["explanations"]
+    assert set(chain) <= decision_trace.SOURCE_CHAIN_KEYS, set(chain) - decision_trace.SOURCE_CHAIN_KEYS
+    assert set(exp) <= decision_trace.SOURCE_EXPLANATION_KEYS, set(exp) - decision_trace.SOURCE_EXPLANATION_KEYS
+    assert chain["state"] in decision_trace.SOURCE_STATES and exp["state"] in decision_trace.SOURCE_STATES
+    for key in ("recheck_pending", "ok", "verified", "genesis_retained"):
+        assert isinstance(chain.get(key, False), bool), key
+    for key in ("entries", "error_position"):
+        if key in chain:
+            assert isinstance(chain[key], int) and not isinstance(chain[key], bool), key
+    if "scope" in chain:
+        assert chain["scope"] in decision_trace.SCOPES
+    if "chain_id" in chain:
+        assert re.fullmatch(r"[0-9a-f]{64}", chain["chain_id"])
+    if "error_kind" in chain:
+        assert chain["error_kind"] in decision_trace.ERROR_KINDS | {"", "other"}
+    if "meaning" in chain:
+        assert chain["meaning"] in audit_review._MEANING.values() and chain["limits"] == audit_review._LIMITS
+    for name in chain.get("files", []) + exp.get("files", []):
+        assert re.fullmatch(r"(core-decision-audit|decision-explanations)\.jsonl(\.[0-9]{1,2})?", name), name
+    assert exp.get("error", "") in decision_trace.OS_ERRORS | {""}
+    assert isinstance(exp.get("unparsed_lines", 0), int) and isinstance(exp.get("truncated", False), bool)
+
+
+def test_a_free_text_chain_id_and_error_never_reach_a_viewer(web, monkeypatch):
+    client, logs = web
+    tid = "core-0123456789abcdef0123456789abcdef"
+    chain_path = logs / "core-decision-audit.jsonl"
+    # A rotated-looking head whose chain_id is free text (it continues a chain).
+    head = {"kind": "action_decision", "trace_id": tid, "source": "x", "chain_prev": "ab" * 32,
+            "chain_id": "FREE-TEXT 203.0.113.77 evil.example.org", "action": "isolate"}
+    head["chain_hash"] = P0AuditLogger._compute_chain_hash(head)
+    chain_path.write_text(json.dumps(head) + "\n", encoding="utf-8")
+    body = get_trace(client, tid).get_json()
+    text = json.dumps(body["sources"])
+    for needle in ("FREE-TEXT", "203.0.113", "example"):
+        assert needle not in text, needle
+    assert "chain_id" not in body["sources"]["chain"]
+    _check_sources(body["sources"])
+
+    # An error message carrying a file name or text: its kind only.
+    def odd(path):
+        return {"ok": False, "verified": False, "entries": 0, "scope": "not_verified",
+                "error": "incomplete_last_line:FREE-TEXT 203.0.113.77", "files": ["../etc/passwd", chain_path.name],
+                "chain_id": "FREE-TEXT", "genesis_retained": False}
+
+    monkeypatch.setattr(audit_review, "verify_audit_chain", odd)
+    decision_trace.reset_caches()
+    body = get_trace(client, tid).get_json()
+    chain = body["sources"]["chain"]
+    assert chain["error_kind"] == "incomplete_last_line" and "error_position" not in chain
+    assert chain["files"] == [chain_path.name] and "chain_id" not in chain
+    assert "FREE-TEXT" not in json.dumps(body) and "203.0.113" not in json.dumps(body)
+    _check_sources(body["sources"])
+
+    def unknown(path):
+        return {"ok": False, "verified": False, "scope": "FREE-TEXT", "error": "FREE-TEXT 203.0.113.77"}
+
+    monkeypatch.setattr(audit_review, "verify_audit_chain", unknown)
+    decision_trace.reset_caches()
+    chain = get_trace(client, tid).get_json()["sources"]["chain"]
+    assert chain["error_kind"] == "other" and chain["scope"] == "not_verified"
+    _check_sources({"chain": chain, "explanations": {"state": "missing"}})
+
+
+def test_patterns_use_ascii_digits_only():
+    src = (ROOT / "py" / "azazel_edge" / "explanations" / "trace.py").read_text(encoding="utf-8")
+    assert "\\d" not in src
+    assert decision_trace._TS.fullmatch("２０２６-01-01T00:00:00") is None

@@ -171,14 +171,14 @@ ok(rowText(rotated).indexOf('Chain record=VERIFIED · rotated file .1') !== -1, 
 ok(rowText(rotated).indexOf('Chain=VERIFIED (from_rotation_boundary)') !== -1, 'scope shown');
 
 // Tampered: never green, never "verified".
-const tampered = decisionTraceView(TID, { ok: true, sources: { chain: { ok: false, verified: false, error: 'chain_hash_mismatch_at:2' } }, traces: [{
+const tampered = decisionTraceView(TID, { ok: true, sources: { chain: { ok: false, verified: false, error_kind: 'chain_hash_mismatch_at', error_position: 2 } }, traces: [{
     trace_id: TID, explanation: { status: 'found', segment: 'active', selected_action: 'isolate', schema_valid: true },
     chain_record: { status: 'found', segment: 'active', integrity: 'failed_here', action: 'notify' }, consistency: { action_matches: false } }] }, 1);
 ok(rowText(tampered).indexOf('Chain record=TAMPERED') !== -1, 'tampered record marked: ' + rowText(tampered));
-ok(rowText(tampered).indexOf('Chain=NOT OK: chain_hash_mismatch_at:2') !== -1, 'chain failure shown');
+ok(rowText(tampered).indexOf('Chain=NOT OK: chain_hash_mismatch_at (record 2)') !== -1, 'chain failure shown: ' + rowText(tampered));
 ok(rowText(tampered).indexOf('Consistency=ACTION MISMATCH') !== -1, 'explanation/chain mismatch shown');
 ok(rowText(tampered).indexOf('VERIFIED (') === -1, 'a tampered chain never reads as verified');
-const elsewhere = decisionTraceView(TID, { ok: true, sources: { chain: { ok: false, verified: false, error: 'chain_hash_mismatch_at:9' } }, traces: [{
+const elsewhere = decisionTraceView(TID, { ok: true, sources: { chain: { ok: false, verified: false, error_kind: 'chain_hash_mismatch_at', error_position: 9 } }, traces: [{
     trace_id: TID, explanation: { status: 'found', selected_action: 'isolate', schema_valid: true },
     chain_record: { status: 'found', integrity: 'not_verified' }, consistency: {} }] }, 1);
 ok(rowText(elsewhere).indexOf('Chain record=NOT VERIFIED') !== -1, 'a record of a failed chain is not verified');

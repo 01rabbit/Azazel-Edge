@@ -82,7 +82,7 @@ MAX_INDEX_BYTES = 32 * 1024 * 1024
 
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
-_FAIL_AT = re.compile(r"^(?:chain_hash_mismatch|chain_prev_mismatch|chain_id_mismatch|parse_error)_at:(\d+)$")
+_FAIL_AT = re.compile(r"(?:chain_hash_mismatch|chain_prev_mismatch|chain_id_mismatch|parse_error)_at:([0-9]{1,12})")
 
 # The chain is re-verified at most once per this many seconds; between, a
 # changed chain is answered from the last verification with
@@ -100,8 +100,28 @@ HASH_BASES = frozenset({"enforcement_settings", "policy_file"})
 CAPSULE_STATES = frozenset({"signed", "unsigned", "not_recorded", "invalid"})
 POLICY_PROFILES = frozenset({"azazel-edge-core/rust_event_engine_v1"})
 APPLY_FAILED_LABEL = "NOT APPLIED - apply failed"
-_TS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?")
+_TS = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:?[0-9]{2})?")
 _HASH = re.compile(r"[0-9a-f]{64}")
+
+SCOPES = frozenset({
+    audit_review.SCOPE_FROM_GENESIS, audit_review.SCOPE_FROM_ROTATION_BOUNDARY, audit_review.SCOPE_EMPTY,
+    audit_review.SCOPE_NOT_VERIFIED,
+})
+SOURCE_STATES = frozenset({"present", "missing", "unreadable", "not_read"})
+# Kinds of verify_audit_chain errors (the text before ':'); the rest of the
+# message (a position, a count, a file name) is not shown, except a position
+# as the integer error_position.
+ERROR_KINDS = frozenset({
+    "chain_hash_mismatch_at", "chain_prev_mismatch_at", "chain_id_mismatch_at", "parse_error_at",
+    "rotated_file_not_continued", "incomplete_last_line", "start_cut", "snapshot_inconsistent", "unreadable",
+})
+_POSITIONAL_ERRORS = frozenset({"chain_hash_mismatch_at", "chain_prev_mismatch_at", "chain_id_mismatch_at", "parse_error_at"})
+OS_ERRORS = frozenset({"PermissionError", "IsADirectoryError", "NotADirectoryError", "FileNotFoundError", "OSError"})
+SOURCE_CHAIN_KEYS = frozenset({
+    "state", "recheck_pending", "ok", "verified", "entries", "scope", "genesis_retained", "files", "chain_id",
+    "error_kind", "error_position", "meaning", "limits",
+})
+SOURCE_EXPLANATION_KEYS = frozenset({"state", "error", "files", "unparsed_lines", "truncated"})
 
 EXPLANATION_KEYS = frozenset({
     "status", "segment", "records", "trace_id", "ts", "selected_action", "applied_state", "applied_label",
@@ -135,6 +155,60 @@ def _count(value: Any) -> int:
 def _put(view: Dict[str, Any], key: str, value: Any) -> None:
     if value is not None:
         view[key] = value
+
+
+def _bool(value: Any) -> bool:
+    return value is True
+
+
+def _file_names(names: Any, base: str) -> List[str]:
+    """``base`` and its rotated names (``base.N``) only."""
+
+    allowed = re.compile(re.escape(base) + r"(?:\.[0-9]{1,2})?")
+    return [n for n in (names if isinstance(names, list) else []) if isinstance(n, str) and allowed.fullmatch(n)]
+
+
+def source_chain(verdict: Mapping[str, Any], *, state: str, pending: bool, base: str) -> Dict[str, Any]:
+    """``sources.chain``: the audit_review verdict reduced to enumerated,
+    checked, integer and boolean values (:data:`SOURCE_CHAIN_KEYS`)."""
+
+    review = audit_review.chain_review(dict(verdict))
+    scope = _enum(review.get("scope"), SCOPES) or audit_review.SCOPE_NOT_VERIFIED
+    error = str(review.get("error") or "")
+    kind, _, rest = error.partition(":")
+    view: Dict[str, Any] = {
+        "state": _enum(state, SOURCE_STATES) or "unreadable",
+        "recheck_pending": bool(pending),
+        "ok": _bool(review.get("ok")),
+        "verified": _bool(review.get("verified")) and not pending,
+        "entries": _int(review.get("entries")) or 0,
+        "scope": scope,
+        "genesis_retained": _bool(review.get("genesis_retained")),
+        "files": _file_names(review.get("files"), base),
+        "error_kind": kind if kind in ERROR_KINDS else ("other" if error else ""),
+        # Fixed texts of audit_review for the scope.
+        "meaning": audit_review._MEANING.get(scope, audit_review._MEANING[audit_review.SCOPE_NOT_VERIFIED]),
+        "limits": audit_review._LIMITS,
+    }
+    if kind in _POSITIONAL_ERRORS and rest.isascii() and rest.isdigit() and len(rest) <= 12:
+        view["error_position"] = int(rest)
+    chain_id = review.get("chain_id")
+    if isinstance(chain_id, str) and _HASH.fullmatch(chain_id):
+        view["chain_id"] = chain_id
+    return view
+
+
+def source_explanations(*, state: str, error: str, files: List[str], unparsed: int, truncated: bool,
+                        base: str) -> Dict[str, Any]:
+    """``sources.explanations`` (:data:`SOURCE_EXPLANATION_KEYS`)."""
+
+    return {
+        "state": _enum(state, SOURCE_STATES) or "unreadable",
+        "error": error if error in OS_ERRORS else ("OSError" if error else ""),
+        "files": _file_names(files, base),
+        "unparsed_lines": unparsed if isinstance(unparsed, int) and not isinstance(unparsed, bool) else 0,
+        "truncated": bool(truncated),
+    }
 
 
 def applied_label(state: Optional[str], mode: Optional[str]) -> str:
@@ -373,7 +447,8 @@ class _ChainIndex:
             try:
                 before = self._signature()
                 verdict = audit_review.verify_audit_chain(self.path)
-                entries = self._index([str(name) for name in verdict.get("files") or []])
+                # Only the chain's own names (base, base.N) are opened.
+                entries = self._index(_file_names(verdict.get("files"), self.path.name))
                 after = self._signature()
             except Exception as exc:  # OSError (permission) and anything unexpected: never a success
                 return self._unreadable(exc)
@@ -446,7 +521,7 @@ def reset_caches() -> None:
 def _integrity(verdict: Mapping[str, Any], position: int) -> str:
     if verdict.get("ok") and verdict.get("verified"):
         return "verified"
-    m = _FAIL_AT.match(str(verdict.get("error") or ""))
+    m = _FAIL_AT.fullmatch(str(verdict.get("error") or ""))
     if m and int(m.group(1)) == position:
         return "failed_here"
     return "not_verified"
@@ -596,13 +671,12 @@ def trace_report(
                     "note": "no explanation with this trace_id in the retained files"
                     + ("; older ones may have been rotated out" if rotated.key is not None else ""),
                 }
-        exp_source = {
-            "state": exp_state,
-            "error": exp_error,
-            "files": [p.path.name for p in (rotated, active) if p.key is not None],
-            "unparsed_lines": active.unparsed + rotated.unparsed,
-            "truncated": bool(active.truncated or rotated.truncated),
-        }
+        exp_source = source_explanations(
+            state=exp_state, error=exp_error,
+            files=[p.path.name for p in (rotated, active) if p.key is not None],
+            unparsed=active.unparsed + rotated.unparsed,
+            truncated=bool(active.truncated or rotated.truncated), base=exp_path.name,
+        )
 
     chain = _chain_index(chain_path)
     snap, recheck_pending = chain.current()
@@ -642,7 +716,7 @@ def trace_report(
         })
     report["sources"] = {
         "explanations": exp_source,
-        "chain": dict(audit_review.chain_review(verdict), state=snap.state, recheck_pending=recheck_pending),
+        "chain": source_chain(verdict, state=snap.state, pending=recheck_pending, base=chain_path.name),
     }
     report["traces"] = traces
     return report
