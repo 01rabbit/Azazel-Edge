@@ -320,6 +320,7 @@ mark SVC-13 `N/A (no test alerts)`.
 sudo stat -c '%a %U:%G' /var/log/azazel-edge/ai/decision-explanations.jsonl
 sudo azazel-edge-audit-review --compact --audit-path /var/log/azazel-edge/ai/core-decision-audit.jsonl
 sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- https://127.0.0.1/api/booth-focus | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["available"], d["mode"]["kind"], d["decision"]["action"], d["audit"]["policy_profile"])'
+sudo tail -n 1 /var/log/azazel-edge/ai/decision-explanations.jsonl | python3 -c 'import json, sys; print(json.load(sys.stdin).get("trust_capsule", {}).get("signature_state"))'
 ```
 
 | ID | Check | Command | Expected | Result | PR / issue |
@@ -336,7 +337,7 @@ sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- h
 | SVC-10 | ntfy SSE through the token file | commands above | Terminal 2 prints `200`; terminal 1 shows an event carrying `first-run test` | | #475, #485 |
 | SVC-11 | OpenCanary/Suricata display | command above | `opencanary`, `suricata` and `ntfy` are `ON`; `container_check` is `not_checked` (the Web UI no longer asks Docker) | | #475 |
 | SVC-12 | SNMP/NetFlow (optional) | commands above (not installed by default: `ENABLE_SNMP`/`ENABLE_NETFLOW` are `0`, and `install_sensors.sh` enables units only with `ENABLE_SERVICES=1`) | `User=azazel-sensor`; `ActiveState=inactive`, `Result=success`: the module has no entry point and exits 0 at once, so **no sensor runs** (section 5) | | #480, #483 |
-| SVC-13 | Decision explanation from the agent | commands above (after SVC-09 step 2) | The file is `640 azazel-agent:azazel-web`; the audit review prints `schema:OK` and `chain:OK(…)` with the action of the newest decision, and for an isolate/redirect/throttle `release=NOT APPLIED - planned only (dry_run)` (enforcement is off, SVC-09 step 1; never a lease time) and `hash_basis=enforcement_settings`; the Booth Focus line is `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1` | | #477 |
+| SVC-13 | Decision explanation from the agent | commands above (after SVC-09 step 2) | The file is `640 azazel-agent:azazel-web`; the audit review prints `schema:OK`, `capsule:signed` and `chain:OK(…)` with the action of the newest decision, and for an isolate/redirect/throttle `release=NOT APPLIED - planned only (dry_run)` (enforcement is off, SVC-09 step 1; never a lease time) and `hash_basis=enforcement_settings`; the Booth Focus line is `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1`; the last line is `signed` (the trust capsule is signed with the device's key; `unsigned` means `/etc/azazel-edge/trust-capsule.env` is missing, see SOCK-06; `None` is a record from before #477) | | #477 |
 
 ### 3.2 Sockets, directories and secrets (#471 stages 1–2)
 
@@ -347,7 +348,7 @@ sudo stat -c '%a %U:%G %n' /run/azazel-edge /run/azazel-edge/control.sock \
   /var/log/azazel-edge/ai /var/lib/azazel-edge-agent \
   /run/azazel-edge-web /var/lib/azazel-edge-web /var/log/azazel-edge-web /etc/azazel-edge
 sudo stat -c '%a %U:%G %n' /etc/azazel-edge/web_token.txt /etc/azazel-edge/ntfy.token
-sudo stat -c '%a %U:%G %n' /etc/azazel-edge/internal-ap.psk
+sudo stat -c '%a %U:%G %n' /etc/azazel-edge/internal-ap.psk /etc/azazel-edge/trust-capsule.env
 ```
 
 | ID | Check | Command | Expected | Result | PR / issue |
@@ -357,7 +358,7 @@ sudo stat -c '%a %U:%G %n' /etc/azazel-edge/internal-ap.psk
 | SOCK-03 | Agent and Web UI directories | first `stat` above | `/run/azazel-edge-agent` and `/var/log/azazel-edge/ai` `2750 azazel-agent:azazel-web`; `/var/lib/azazel-edge-agent` `750 azazel-agent:azazel-agent`; the three `azazel-edge-web` directories `750 azazel-web:azazel-web`; `/etc/azazel-edge` `750 root:azazel-web` on a fresh install | | #475, #476 |
 | SOCK-04 | Others cannot reach the control socket | as `<pi-user>`: `ls /run/azazel-edge/` | `Permission denied` | | #475 |
 | SOCK-05 | Tokens | second `stat` above | `640 root:azazel-web` (and `/etc/azazel-edge/mattermost-command-token` the same once Mattermost is set up) | | #475, #485 |
-| SOCK-06 | Root-only secrets | third `stat` above; after 2.8 also `/etc/azazel-edge/mattermost-db.env` and `/etc/azazel-edge/mattermost-credentials.env` | `600 root:root` | | #485, #486 |
+| SOCK-06 | Root-only secrets | third `stat` above (the internal AP passphrase and the trust capsule key); after 2.8 also `/etc/azazel-edge/mattermost-db.env` and `/etc/azazel-edge/mattermost-credentials.env` | `600 root:root` | | #485, #486, #477 |
 | SOCK-07 | ntfy refuses anonymous reads | `curl -s -o /dev/null -w '%{http_code}\n' 'http://127.0.0.1:8081/azg-alert-critical/json?poll=1'` | `401` or `403` | | #485 |
 
 ### 3.3 Internal AP

@@ -290,6 +290,7 @@ install -m 0755 "$REPO_ROOT/installer/internal/set_dev_remote_access.sh" /opt/az
 # does). A copy an earlier install left there is removed.
 rm -f -- /opt/azazel-edge/install_ai_runtime.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_web_token.sh" /opt/azazel-edge/provision_web_token.sh
+install -m 0755 "$REPO_ROOT/installer/internal/provision_trust_capsule_key.sh" /opt/azazel-edge/provision_trust_capsule_key.sh
 install -m 0755 "$REPO_ROOT/installer/internal/setup_web_account.sh" /opt/azazel-edge/setup_web_account.sh
 install -m 0755 "$REPO_ROOT/installer/internal/setup_agent_account.sh" /opt/azazel-edge/setup_agent_account.sh
 install -m 0755 "$REPO_ROOT/installer/internal/provision_mattermost_workspace.sh" /opt/azazel-edge/provision_mattermost_workspace.sh
@@ -329,6 +330,10 @@ fi
 /opt/azazel-edge/provision_web_token.sh
 SECURITY_ENV="/etc/default/azazel-edge-security"
 touch "$SECURITY_ENV"
+# Edge#477: the key that signs the decision trust capsules (0600 root:root,
+# read by the AI agent's unit). A key already there, or one set by hand in
+# $SECURITY_ENV, is kept; the key is never printed.
+/opt/azazel-edge/provision_trust_capsule_key.sh /etc/azazel-edge/trust-capsule.env "$SECURITY_ENV"
 # Edge#471 stage 1: the shared runtime directory is 0750 with group
 # azazel-control, so the Web UI (azazel-web, a member) can reach control.sock
 # and read the runtime files but cannot create, rename or remove anything in

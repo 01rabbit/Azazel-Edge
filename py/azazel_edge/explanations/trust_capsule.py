@@ -1,12 +1,40 @@
+"""Decision trust capsule: the tamper-evidence summary of one decision.
+
+The capsule is signed with HMAC-SHA256 under ``AZAZEL_TRUST_CAPSULE_HMAC_KEY``
+(Edge#477). The installer creates a random key in
+``/etc/azazel-edge/trust-capsule.env`` (0600 root:root) and the AI agent's unit
+reads it with ``EnvironmentFile=``.
+
+Fail-closed: without a key the capsule is **not** signed. It then carries
+``signature_state: "unsigned"`` and an empty ``hmac_sig``, so no reader can
+take it for a signed capsule. The former built-in fallback key is public (it
+is in this repository); it is never used to sign, also not when it is set
+explicitly. Tests that need a signature set their own key in the environment.
+
+Records written before this change have no ``signature_state``. Unless the
+device had a key set, they were signed with that public key and prove
+nothing; they are kept as they are (the decision log is append-only).
+"""
 from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from azazel_edge._util import stable_json as _stable_json
+
+logger = logging.getLogger(__name__)
+
+KEY_ENV = "AZAZEL_TRUST_CAPSULE_HMAC_KEY"
+SIGNED = "signed"
+UNSIGNED = "unsigned"
+# The fallback key of earlier versions. It is public, so a signature under it
+# proves nothing: it is refused as a key and never used to sign.
+_PUBLIC_FORMER_DEFAULT_KEY = "azazel-edge-dev-key"
+_warned_unsigned = False
 
 
 def _utc_iso_now() -> str:
@@ -20,8 +48,30 @@ def _ai_advice_hash(ai_payload: Dict[str, Any] | None) -> str | None:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _sign_payload(payload: Dict[str, Any]) -> str:
-    secret = str(os.environ.get("AZAZEL_TRUST_CAPSULE_HMAC_KEY", "azazel-edge-dev-key")).encode("utf-8")
+def _signing_key() -> bytes | None:
+    """The configured key, or None (unset, empty or the public former default)."""
+    global _warned_unsigned
+    # Surrounding whitespace (spaces, tabs, CR, LF) is not part of the key:
+    # systemd drops it around an EnvironmentFile= value too, and a key taken
+    # from a file with "$(cat …)" or written with CRLF would otherwise differ
+    # from what the operator wrote. Trimming before the comparison also stops
+    # the public key from passing with a space or newline added.
+    key = os.environ.get(KEY_ENV, "").strip(" \t\r\n")
+    reason = ""
+    if not key:
+        reason = "is not set"
+    elif key == _PUBLIC_FORMER_DEFAULT_KEY:
+        reason = "holds the public former default key"
+    if not reason:
+        return key.encode("utf-8")
+    if not _warned_unsigned:
+        # Logged once per process; the key's value is never logged.
+        logger.warning("trust capsules are written unsigned: %s %s", KEY_ENV, reason)
+        _warned_unsigned = True
+    return None
+
+
+def _sign_payload(payload: Dict[str, Any], secret: bytes) -> str:
     text = _stable_json(payload).encode("utf-8")
     return hmac.new(secret, text, hashlib.sha256).hexdigest()
 
@@ -73,5 +123,13 @@ def build_trust_capsule(explanation: Dict[str, Any]) -> Dict[str, Any]:
         "ai_contributed": ai_contributed,
         "ai_advice_hash": _ai_advice_hash(ai_payload),
     }
-    capsule_core["hmac_sig"] = _sign_payload(capsule_core)
+    secret = _signing_key()
+    if secret is None:
+        capsule_core["signature_state"] = UNSIGNED
+        capsule_core["hmac_sig"] = ""
+        return capsule_core
+    # signature_state is part of the signed payload: a verifier drops only
+    # hmac_sig and recomputes the HMAC over the rest.
+    capsule_core["signature_state"] = SIGNED
+    capsule_core["hmac_sig"] = _sign_payload(capsule_core, secret)
     return capsule_core

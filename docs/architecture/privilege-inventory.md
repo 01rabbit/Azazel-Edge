@@ -290,6 +290,33 @@ seeded into `/etc/default/azazel-edge-security` (`SURICATA_IFACE`,
 `AZAZEL_RUNTIME_DIR_MODE`, `AZAZEL_CONTROL_SOCKET_MODE`,
 `AZAZEL_RUNTIME_SOCKET_GROUP`) are not secrets.
 
+One secret (#477): `AZAZEL_TRUST_CAPSULE_HMAC_KEY`, the key that signs the
+decision trust capsules in `decision-explanations.jsonl`. The agent is the
+only service that signs them, and nothing on the device verifies them (the
+Web UI, Booth Focus and `audit_review` do not read `hmac_sig`; the Azazel-Fabric
+projection `fabric-trust-capsules.jsonl` copies it as `hmac`).
+`provision_trust_capsule_key.sh` (run by `install_migrated_tools.sh`) writes
+a random 256-bit key to `/etc/azazel-edge/trust-capsule.env`, 0600
+root:root, and the agent unit reads it with
+`EnvironmentFile=-/etc/azazel-edge/trust-capsule.env` (systemd reads it as
+root; the key reaches only the agent's environment, readable by
+`azazel-agent` and root). The Web UI's unit does not read it. Running the
+installer again keeps the key; without the file, a key set by hand in
+`/etc/default/azazel-edge-security` is carried over. The installer keeps or
+carries over only a key of at least 32 characters of `[A-Za-z0-9._~+/=-]`
+(so systemd reads it exactly as checked) that is not the public former
+default; anything else is replaced by a new random key with a NOTICE. The
+key is never printed. The agent trims surrounding spaces, tabs, CR and LF
+from the value (as systemd does), so the public former default with
+whitespace added is refused too. Without a usable key (unset, empty, or the
+public former default) the capsule is written unsigned (`signature_state: "unsigned"`, empty
+`hmac_sig`) instead of being signed with a built-in key. `audit_review`
+shows the state as written (`capsule:signed`, `capsule:unsigned`, or
+`capsule:not_recorded`); it holds no key and verifies nothing. Records written
+before this change have no `signature_state`; unless the device had a key
+set, their `hmac_sig` is under the public former default key and proves
+nothing. They are kept as they are (the log is append-only).
+
 ## 4. Control daemon (`azazel-edge-control-daemon`)
 
 Stays root in #471. Listed because stages 1 and 2 move work to it.
