@@ -315,10 +315,18 @@ SVC-13 only reads. The agent writes one v2 decision explanation per core
 decision (#477); the test alerts of SVC-09 step 2 give some. Without step 2,
 mark SVC-13 `N/A (no test alerts)`.
 
+The commands need `sudo`: `/var/log/azazel-edge/ai` is `2750 azazel-agent:azazel-web`
+and the explanations and the core-decision audit chain in it (with `.1` after a
+rotation) belong to `azazel-agent` with nothing for others, so `<pi-user>`, who
+is not in `azazel-web`, cannot read them. Without `sudo` the review ends in a
+`PermissionError` (exit status 1): a permission problem, not a missing record.
+
 ```bash
 # SVC-13 (after SVC-09 step 2): the agent's v2 explanation of the core's decision
 sudo stat -c '%a %U:%G' /var/log/azazel-edge/ai/decision-explanations.jsonl
 sudo azazel-edge-audit-review --compact --audit-path /var/log/azazel-edge/ai/core-decision-audit.jsonl
+# optional, the same review as JSON
+sudo azazel-edge-audit-review --json --audit-path /var/log/azazel-edge/ai/core-decision-audit.jsonl | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["chain"]["verified"], d["chain"]["scope"], d["capsule_signature_state"])'
 sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- https://127.0.0.1/api/booth-focus | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["available"], d["mode"]["kind"], d["decision"]["action"], d["audit"]["policy_profile"])'
 sudo tail -n 1 /var/log/azazel-edge/ai/decision-explanations.jsonl | python3 -c 'import json, sys; print(json.load(sys.stdin).get("trust_capsule", {}).get("signature_state"))'
 ```
@@ -337,7 +345,7 @@ sudo tail -n 1 /var/log/azazel-edge/ai/decision-explanations.jsonl | python3 -c 
 | SVC-10 | ntfy SSE through the token file | commands above | Terminal 2 prints `200`; terminal 1 shows an event carrying `first-run test` | | #475, #485 |
 | SVC-11 | OpenCanary/Suricata display | command above | `opencanary`, `suricata` and `ntfy` are `ON`; `container_check` is `not_checked` (the Web UI no longer asks Docker) | | #475 |
 | SVC-12 | SNMP/NetFlow (optional) | commands above (not installed by default: `ENABLE_SNMP`/`ENABLE_NETFLOW` are `0`, and `install_sensors.sh` enables units only with `ENABLE_SERVICES=1`) | `User=azazel-sensor`; `ActiveState=inactive`, `Result=success`: the module has no entry point and exits 0 at once, so **no sensor runs** (section 5) | | #480, #483 |
-| SVC-13 | Decision explanation from the agent | commands above (after SVC-09 step 2) | The file is `640 azazel-agent:azazel-web`; the audit review prints `schema:OK`, `capsule:signed` and `chain:OK(…)` with the action of the newest decision, and for an isolate/redirect/throttle `release=NOT APPLIED - planned only (dry_run)` (enforcement is off, SVC-09 step 1; never a lease time) and `hash_basis=enforcement_settings`; the Booth Focus line is `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1`; the last line is `signed` (the trust capsule is signed with the device's key; `unsigned` means `/etc/azazel-edge/trust-capsule.env` is missing, see SOCK-06; `None` is a record from before #477) | | #477 |
+| SVC-13 | Decision explanation from the agent | commands above (after SVC-09 step 2) | The file is `640 azazel-agent:azazel-web`; the audit review prints the action of the newest decision with `schema:OK`, `capsule:signed` and `chain:OK(<N>) chain_scope=… chain_files=…`, and for an isolate/redirect/throttle `release=NOT APPLIED - planned only (dry_run)` (enforcement is off, SVC-09 step 1; never a lease time) and `hash_basis=enforcement_settings`. `chain_scope=from_genesis` and `chain_scope=from_rotation_boundary` both pass (the second: the chain was rotated and the records from the rotation boundary on were verified; `chain_files` counts the audit files read). `chain:EMPTY(0)` fails (no audit record, nothing verified, although the exit status is 0), and so does `chain:MISMATCH:…` (exit status 3). `capsule:unsigned` means `/etc/azazel-edge/trust-capsule.env` is missing, see SOCK-06 (`capsule:not_recorded` is a record from before #477). The JSON line starts with `True` (`chain.verified` is `true`; `False` fails) and repeats the scope and the capsule state; the Booth Focus line is `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1`; the last line is `signed` (the trust capsule is signed with the device's key; `unsigned` means `/etc/azazel-edge/trust-capsule.env` is missing, see SOCK-06; `None` is a record from before #477) | | #477 |
 
 ### 3.2 Sockets, directories and secrets (#471 stages 1–2)
 
