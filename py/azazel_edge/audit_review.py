@@ -79,6 +79,19 @@ def _config_hash_basis(record: Dict[str, Any]) -> str:
     return str(policy.get("hash_basis") or "")
 
 
+def _capsule_signature_state(record: Dict[str, Any]) -> str:
+    """The trust capsule's signature_state as written (Edge#477): ``signed``,
+    ``unsigned``, or ``not_recorded`` for a record written before the field
+    existed (unless the device had a key, signed with the public former
+    default key). Display only: this tool holds no key and verifies nothing.
+    """
+    capsule = record.get("trust_capsule") if isinstance(record.get("trust_capsule"), dict) else {}
+    state = capsule.get("signature_state")
+    if state in ("signed", "unsigned"):
+        return str(state)
+    return "not_recorded" if "signature_state" not in capsule else "invalid"
+
+
 def _format_full(record: Dict[str, Any], chain_result: Dict[str, Any]) -> str:
     """Human-readable multi-line review output."""
     lines: List[str] = []
@@ -137,6 +150,7 @@ def _format_full(record: Dict[str, Any], chain_result: Dict[str, Any]) -> str:
             lines.append(f"    * {prob}")
     else:
         lines.append("  OK — record is schema-valid (v2)")
+    lines.append(f"Trust capsule     : {_capsule_signature_state(record)} (not verified here)")
 
     lines.append("")
     lines.append("-" * 60)
@@ -171,7 +185,7 @@ def _format_compact(record: Dict[str, Any], chain_result: Dict[str, Any]) -> str
         f"hash={record.get('config_hash', '')} "
         + (f"hash_basis={basis} " if basis else "")
         + f"release={record.get('release_condition', '')} "
-        f"{schema_status} {chain_status}"
+        f"{schema_status} capsule:{_capsule_signature_state(record)} {chain_status}"
     )
 
 
@@ -197,6 +211,7 @@ def _format_json(
         "operator_wording": record.get("operator_wording", ""),
         "schema_valid": len(problems) == 0,
         "schema_problems": problems,
+        "capsule_signature_state": _capsule_signature_state(record),
         "chain": {
             "ok": chain_result["ok"],
             "entries": chain_result["entries"],

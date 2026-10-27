@@ -21,9 +21,14 @@
 #   the device keeps signing with it. That file is read by more units; the
 #   line there is left as it is (this file wins for the agent) and a notice
 #   says it may be removed.
-# - A file without a usable key (no line, an empty value, or the public
-#   former default) is replaced with a new key: nothing was signed with it
-#   that proves anything.
+# - A key is usable only when it is at least 32 characters of
+#   [A-Za-z0-9._~+/=-] (after surrounding spaces, tabs, CR and one pair of
+#   matching quotes are removed) and is not the public former default. That
+#   set has no quote, backslash, space or "$", so systemd reads the value
+#   exactly as checked here. A file or a hand-set key that is not usable
+#   (missing, too short, the public former default, or a value systemd could
+#   read differently) is not kept or carried over: a new random key is
+#   written and a NOTICE says why (never the value).
 set -euo pipefail
 
 ENV_FILE="${1:-/etc/azazel-edge/trust-capsule.env}"
@@ -58,17 +63,22 @@ narrow_mode() {
   fi
 }
 
-# The last KEY_VAR value in file $1 (surrounding quotes removed), or nothing.
-# The value is only kept in a variable, never printed.
+# The last KEY_VAR value in file $1, normalized: surrounding whitespace
+# (CR included) and one pair of matching quotes removed. The value is only
+# kept in a variable, never printed.
 key_in() {
-  local line
-  line="$(grep -E "^${KEY_VAR}=" "$1" 2>/dev/null | tail -n 1 || true)"
-  line="${line#*=}"; line="${line%\"}"; line="${line#\"}"; line="${line%\'}"; line="${line#\'}"
-  printf '%s' "${line}"
+  local v
+  v="$(grep -E "^${KEY_VAR}=" "$1" 2>/dev/null | tail -n 1 || true)"
+  v="${v#*=}"
+  v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
+  if (( ${#v} >= 2 )) && [[ ( "${v:0:1}" == '"' && "${v: -1}" == '"' ) || ( "${v:0:1}" == "'" && "${v: -1}" == "'" ) ]]; then
+    v="${v:1:${#v}-2}"
+  fi
+  printf '%s' "${v}"
 }
 
 usable() {
-  [[ -n "${1//[[:space:]]/}" && "$1" != "${PUBLIC_FORMER_DEFAULT_KEY}" ]]
+  [[ "$1" =~ ^[A-Za-z0-9._~+/=-]{32,}$ && "$1" != "${PUBLIC_FORMER_DEFAULT_KEY}" ]]
 }
 
 if [[ -L "${ENV_FILE}" || -d "${ENV_FILE}" ]]; then
@@ -87,7 +97,7 @@ if [[ -f "${ENV_FILE}" ]]; then
     unset key
     exit 0
   fi
-  log "${ENV_FILE} holds no usable key; writing a new one"
+  log "NOTICE: ${ENV_FILE} holds no usable key (missing, shorter than 32 characters, the public former default, or characters systemd could read differently); writing a new one"
   key=""
 fi
 
@@ -97,6 +107,9 @@ if [[ -f "${SECURITY_ENV}" ]]; then
   if usable "${key}"; then
     source_note="key carried over from ${SECURITY_ENV}"
   else
+    if grep -qE "^${KEY_VAR}=" "${SECURITY_ENV}"; then
+      log "NOTICE: ${SECURITY_ENV} sets ${KEY_VAR}, but it is not usable (shorter than 32 characters, the public former default, or characters systemd could read differently); not carried over, a new random key is used"
+    fi
     key=""
   fi
 fi

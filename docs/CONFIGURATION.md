@@ -62,9 +62,14 @@ The app stack also creates the key that signs the decision trust capsules
 `0600 root:root`, never printed), read by the AI agent's unit
 (`EnvironmentFile=`). An existing key is kept when the installer runs again;
 without the file, a key set by hand in `/etc/default/azazel-edge-security` is
-carried over. Without a key the agent writes the capsules unsigned
+carried over. Only a key of at least 32 characters of `[A-Za-z0-9._~+/=-]`
+that is not the public former default is kept or carried over; anything
+else is replaced by a new random key (with a NOTICE, never the value). The
+agent trims surrounding whitespace from the value. Without a key the agent writes the capsules unsigned
 (`signature_state: "unsigned"`, empty `hmac_sig`); it never signs with a
 built-in key, and the public former default key is refused like an unset one.
+`azazel-edge-audit-review` shows the state as `capsule:signed`,
+`capsule:unsigned` or `capsule:not_recorded` (it does not verify the HMAC).
 Capsules written before this change carry no `signature_state`; unless a key
 was set, they were signed with that public key and are not evidence of
 anything.

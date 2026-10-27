@@ -67,7 +67,11 @@ def _hmac(capsule: dict, key: str) -> str:
 
 # --- capsule ---------------------------------------------------------------
 
-@pytest.mark.parametrize("value", [None, "", "   ", PUBLIC_FORMER_DEFAULT])
+@pytest.mark.parametrize("value", [
+    None, "", "   ", "\r\n", PUBLIC_FORMER_DEFAULT,
+    # The public key with whitespace added is still the public key.
+    f" {PUBLIC_FORMER_DEFAULT}", f"{PUBLIC_FORMER_DEFAULT}\n", f"\t{PUBLIC_FORMER_DEFAULT}\r\n",
+])
 def test_no_usable_key_gives_an_unsigned_capsule(value, caplog) -> None:
     env = {k: v for k, v in os.environ.items() if k != KEY_VAR}
     if value is not None:
@@ -92,6 +96,15 @@ def test_explicit_key_signs_and_the_signature_covers_the_state() -> None:
     assert hmac.compare_digest(capsule["hmac_sig"], _hmac(capsule, TEST_KEY))
     # Flipping the state breaks the signature.
     assert _hmac(dict(capsule, signature_state="unsigned"), TEST_KEY) != capsule["hmac_sig"]
+
+
+def test_surrounding_whitespace_is_not_part_of_the_key() -> None:
+    # Trimmed as systemd trims an EnvironmentFile= value: a CRLF file or a
+    # "$(cat …)" with a newline signs with the key the operator wrote.
+    with mock.patch.dict(os.environ, {KEY_VAR: f"  {TEST_KEY}\r\n"}):
+        capsule = _explain()["trust_capsule"]
+    assert capsule["signature_state"] == "signed"
+    assert hmac.compare_digest(capsule["hmac_sig"], _hmac(capsule, TEST_KEY))
 
 
 def test_key_value_is_not_logged(caplog) -> None:
@@ -252,3 +265,69 @@ def test_symlink_is_refused(tmp_path) -> None:
     result = _run(str(link), str(tmp_path / "security"))
     assert result.returncode != 0
     assert target.read_text(encoding="utf-8") == "x\n"
+
+
+@needs_gnu
+@pytest.mark.parametrize("line", [
+    f"{KEY_VAR}=short-but-hand-set\n",                    # under 32 characters
+    f"{KEY_VAR}= {PUBLIC_FORMER_DEFAULT} \r\n",             # public key, padded, CRLF
+    f'{KEY_VAR}="{TEST_KEY}\\x"\n',                        # backslash: systemd unescapes
+    f'{KEY_VAR}="{TEST_KEY}" extra\n',                     # quotes systemd reads differently
+    f"{KEY_VAR}={TEST_KEY}$HOME\n",                         # "$" and characters outside the set
+    f"{KEY_VAR}=\"{TEST_KEY}'\n",                           # unmatched quotes
+])
+def test_unusable_hand_set_key_is_not_carried_over(tmp_path, line) -> None:
+    env_file, security = tmp_path / "trust-capsule.env", tmp_path / "security"
+    security.write_text(line, encoding="utf-8")
+    result = _run(str(env_file), str(security))
+    assert result.returncode == 0, result.stderr
+    key = _key(env_file)
+    assert re.fullmatch(r"[0-9a-f]{64}", key)
+    assert "not carried over" in result.stdout
+    for secret in (TEST_KEY, "short-but-hand-set", PUBLIC_FORMER_DEFAULT, key):
+        assert secret not in result.stdout + result.stderr
+
+
+@needs_gnu
+@pytest.mark.parametrize("line", [
+    f"{KEY_VAR}='{TEST_KEY}'\n",
+    f'{KEY_VAR}="{TEST_KEY}"\r\n',
+    f"{KEY_VAR}=  {TEST_KEY}  \r\n",
+])
+def test_usable_hand_set_key_is_carried_over_normalized(tmp_path, line) -> None:
+    env_file, security = tmp_path / "trust-capsule.env", tmp_path / "security"
+    security.write_text(line, encoding="utf-8")
+    result = _run(str(env_file), str(security))
+    assert result.returncode == 0, result.stderr
+    assert _key(env_file) == TEST_KEY
+    assert TEST_KEY not in result.stdout + result.stderr
+
+
+@needs_gnu
+def test_weak_key_in_the_key_file_is_replaced_with_a_notice(tmp_path) -> None:
+    env_file, security = tmp_path / "trust-capsule.env", tmp_path / "security"
+    env_file.write_text(f"{KEY_VAR}=short-but-hand-set\n", encoding="utf-8")
+    result = _run(str(env_file), str(security))
+    assert result.returncode == 0, result.stderr
+    assert re.fullmatch(r"[0-9a-f]{64}", _key(env_file))
+    assert "NOTICE" in result.stdout and "short-but-hand-set" not in result.stdout + result.stderr
+
+
+# --- audit_review shows the state as written -------------------------------
+
+def test_audit_review_shows_the_capsule_signature_state() -> None:
+    from azazel_edge import audit_review
+
+    chain = {"ok": True, "entries": 1, "error": ""}
+    with mock.patch.dict(os.environ, {KEY_VAR: TEST_KEY}):
+        signed = _explain()
+    with mock.patch.dict(os.environ, {KEY_VAR: ""}):
+        unsigned = _explain()
+    legacy = json.loads(json.dumps(signed))
+    del legacy["trust_capsule"]["signature_state"]
+    for record, state in ((signed, "signed"), (unsigned, "unsigned"), (legacy, "not_recorded")):
+        compact = audit_review._format_compact(record, chain)
+        assert f"schema:OK capsule:{state} chain:OK(1)" in compact
+        assert f"Trust capsule     : {state} (not verified here)" in audit_review._format_full(record, chain)
+        assert json.loads(audit_review._format_json(record, chain))["capsule_signature_state"] == state
+    assert TEST_KEY not in audit_review._format_full(signed, chain)

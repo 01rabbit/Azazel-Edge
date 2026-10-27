@@ -51,14 +51,19 @@ def _ai_advice_hash(ai_payload: Dict[str, Any] | None) -> str | None:
 def _signing_key() -> bytes | None:
     """The configured key, or None (unset, empty or the public former default)."""
     global _warned_unsigned
-    raw = os.environ.get(KEY_ENV, "")
+    # Surrounding whitespace (spaces, tabs, CR, LF) is not part of the key:
+    # systemd drops it around an EnvironmentFile= value too, and a key taken
+    # from a file with "$(cat …)" or written with CRLF would otherwise differ
+    # from what the operator wrote. Trimming before the comparison also stops
+    # the public key from passing with a space or newline added.
+    key = os.environ.get(KEY_ENV, "").strip(" \t\r\n")
     reason = ""
-    if not raw.strip():
+    if not key:
         reason = "is not set"
-    elif raw == _PUBLIC_FORMER_DEFAULT_KEY:
+    elif key == _PUBLIC_FORMER_DEFAULT_KEY:
         reason = "holds the public former default key"
     if not reason:
-        return raw.encode("utf-8")
+        return key.encode("utf-8")
     if not _warned_unsigned:
         # Logged once per process; the key's value is never logged.
         logger.warning("trust capsules are written unsigned: %s %s", KEY_ENV, reason)
