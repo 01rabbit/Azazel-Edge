@@ -13,9 +13,10 @@ does reach it is
   reasoning state, hypothesis status, current-action record, the fixed
   uncertainty marker codes the frame builder and contract emit),
 * identifiers that match a closed set of shapes the repo itself produces
-  (``CLOSED_ID_SHAPES``: allowlisted words and bounded digits, no dots, no
-  free words); anything else, including addresses, hostnames, hex/decimal
-  address forms and secret-like words, becomes a fixed placeholder, and
+  (``HANDOFF_ID_KINDS`` over ``id_grammar.ID_KINDS``: allowlisted words and
+  bounded digits, no dots, no free words); anything else, including
+  addresses, hostnames, hex/decimal address forms and secret-like values,
+  becomes a fixed placeholder, and
   integer counts,
 * the built-in playbooks: the ID only when it is a ``DEFAULT_PLAYBOOKS`` key,
   the version only when it equals that entry's version, and the fixed
@@ -32,7 +33,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-import re
 from typing import Any, Sequence
 
 from .contracts import (
@@ -51,6 +51,7 @@ from .contracts import (
     MioSituationFrame,
     ReasoningState,
 )
+from .id_grammar import EVIDENCE_REF, id_ok
 from .playbook import DEFAULT_PLAYBOOKS, ReasoningPlaybook
 
 NO_MODEL_HANDOFF_SCHEMA_VERSION = "mio.no_model_handoff.v2"
@@ -81,40 +82,24 @@ _OPERATOR_GUIDANCE = (
 )
 
 
-# Closed ID shapes. The ID grammars in trace_audit admit any word, dotted
+# Closed ID kinds (id_grammar.ID_KINDS, shared with the model output parser
+# and the broker audit). The ID grammars in trace_audit admit any word, dotted
 # address, MAC, IPv6 or hex/decimal address form, so they are not enough for
-# text a human will read. These shapes cover what the repo actually produces:
-# trace/frame IDs from the frame builder callers (bin/azazel-mio-shadow-replay,
-# mio/evaluation.py, fixtures), Evidence Plane event IDs (sha256:<hex>), the
-# Suricata adapter's refs, the ev:<kind>:<n> refs of capability results,
-# and the h<n> IDs MioHypothesis.from_mapping assigns. Words come from fixed
-# lists, never from input. Anything else becomes a fixed placeholder; no digest
-# is emitted because the value may be low-entropy.
-_TRACE_HEAD = r"(?:trace|mio|evaluation|incident|replay)"
-_TRACE_WORDS = r"(?:-(?:golden|fixture|shadow|auth|scan|trace|frame))*"
-# The repo produces single-digit counters (trace-1, trace-golden-v2,
-# mio-fixture-auth-1); six digits leave room for a run counter while staying
-# far below the ten digits an IPv4 address needs in decimal.
-_TRACE_TAIL = r"(?:-v?[0-9]{1,6})?"
-_TRACE_SHAPE = _TRACE_HEAD + _TRACE_WORDS + _TRACE_TAIL
-_EV_KINDS = "|".join(sorted({"auth", "alert", "anomaly", "drop", "flow", "netflow", "dns", "http", "tls", "ssh", "smtp", "ftp", "smb", "dhcp"}))
-CLOSED_ID_SHAPES: dict[str, re.Pattern[str]] = {
-    "trace_id": re.compile(rf"{_TRACE_SHAPE}"),
-    "frame_id": re.compile(rf"(?:frame{_TRACE_TAIL}|{_TRACE_SHAPE}(?::frame)?)"),
-    # sha256:<64 hex> (make_event_id); suricata_sid:<n> (sids fit 8 digits);
-    # ev:<kind>:<n>. flow:<flow_id> is deliberately absent: the flow ID is a
-    # 64-bit number taken from EVE input, frame evidence_refs are caller-supplied
-    # (MioSituationFrame.build, replay fixtures), so untrusted text can reach the
-    # field, and a decimal-encoded MAC or IPv4-mapped IPv6 integer looks the same
-    # as a real flow ID. The handoff has no key for a digest, so it is redacted.
-    "evidence_ref": re.compile(rf"sha256:[0-9a-f]{{64}}|suricata_sid:[0-9]{{1,8}}|ev:(?:{_EV_KINDS})(?::[0-9]{{1,6}})?"),
-    "hypothesis_id": re.compile(r"h[0-9]{1,3}"),
+# text a human will read. Anything that does not match becomes a fixed
+# placeholder; no digest is emitted because the value may be low-entropy.
+# Frame evidence refs are caller-supplied (MioSituationFrame.build, replay
+# fixtures), so flow:<flow_id> refs are never shown (see id_grammar).
+HANDOFF_ID_KINDS: dict[str, tuple[str, ...]] = {
+    "trace_id": ("trace_id",),
+    "frame_id": ("frame_id",),
+    "evidence_ref": EVIDENCE_REF,
+    "hypothesis_id": ("hypothesis_id",),
 }
 
 
 def _safe_id(kind: str, value: Any, placeholder: str) -> str:
-    """Keep ``value`` only if it fully matches its closed shape."""
-    return value if type(value) is str and CLOSED_ID_SHAPES[kind].fullmatch(value) else placeholder
+    """Keep ``value`` only if it fully matches one of its closed kinds."""
+    return value if id_ok(value, HANDOFF_ID_KINDS[kind]) else placeholder
 
 
 def _vocab(value: Any, allowed: Sequence[str], fallback: str) -> str:

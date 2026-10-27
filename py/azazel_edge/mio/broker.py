@@ -48,8 +48,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
-from .contracts import MioCapabilityRequest, MioCapabilityResult, _opaque_id
-from .redaction import contains_token_like
+from .contracts import MioCapabilityRequest, MioCapabilityResult
+from .id_grammar import AUDIT_ID_KINDS, CAPABILITY_NAME_RE, ID_WORDS, id_ok
 
 
 class CapabilityBrokerError(RuntimeError):
@@ -75,7 +75,7 @@ class CapabilityStatus(str, Enum):
 # ``execute()`` raises for these to keep the legacy loop contract.
 REFUSAL_STATUSES = frozenset({CapabilityStatus.REJECTED.value, CapabilityStatus.INVALID.value})
 
-_NAME_RE = re.compile(r"[a-z][a-z0-9_]{2,63}\Z")
+_NAME_RE = CAPABILITY_NAME_RE
 _PARAM_NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")
 _IDENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._@#+=-]{0,127}\Z")
 # Refused inside free text: C0 (except \t \n), DEL, C1, bidi controls, lone surrogates.
@@ -235,80 +235,18 @@ def _safe_label(value: Any, limit: int = 128) -> str:
     return _ID_FORBIDDEN_RE.sub("?", value[:limit])
 
 
-# Closed schema for identifiers kept verbatim in the audit. It covers the
-# shapes this repository produces:
-#   * evidence-plane event ids ``sha256:<64 hex>`` (make_event_id),
-#   * Edge core trace ids ``trace-0x<1..16 hex>`` (calc_trace_id), optionally
-#     followed by lifecycle / loop suffixes (``:e1:c2:req:3``),
-#   * ids built from the vocabulary below and short ordinals joined by
-#     ``:``, ``-`` or ``_`` (``ev:auth:0001``, ``replay:g5-golden-replay-v1``,
-#     ``evaluation:stale-evidence:req:1``, ``h1``).
-# Every other value (hostnames, person names, packed or integer-encoded
-# addresses, bare hex, tokens) is replaced by the keyed digest.
-AUDIT_ID_VOCABULARY = frozenset(
-    {
-        # structure
-        "ev", "evidence", "trace", "cycle", "req", "frame", "mio", "fixture", "replay", "evaluation",
-        "golden", "shadow", "scenario", "demo", "test", "sample", "hypothesis", "gap",
-        # evidence sources and kinds
-        "auth", "flow", "sys", "noc", "soc", "ssh", "alert", "alerts", "dns", "tls", "icmp", "iface",
-        "probe", "plane", "activity",
-        # defensive states
-        "observe", "notify", "throttle", "redirect", "isolate",
-        # evaluation / replay scenario words
-        "contradictory", "role", "cross", "fabricated", "ref", "empty", "recommendation", "captured",
-        "malformed", "model", "output", "timeout", "no", "llm", "unavailable", "prompt", "injection",
-        "directive", "recorded", "qwen", "accepted", "stale", "arp", "spoof", "benign", "beacon",
-        "cred", "harvest", "exfil", "phishing", "port", "scan", "recon", "bruteforce", "ambiguity",
-    }
-)
-_SHA256_ID_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
-_CORE_TRACE_RE = re.compile(r"trace-0x[0-9a-f]{1,16}(?=:|\Z)")
-_ORDINAL_SEGMENT_RE = re.compile(r"[a-z]{0,2}[0-9]{1,6}[a-z]{0,2}\Z")
-_DIGITS_RE = re.compile(r"[0-9]+\Z")
-_ID_SEPARATORS_RE = re.compile(r"[:_-]")
-
-
-def _audit_id_in_schema(value: str) -> bool:
-    if _SHA256_ID_RE.match(value):
-        return True
-    rest = value
-    core = _CORE_TRACE_RE.match(value)
-    if core is not None:
-        rest = value[core.end():].lstrip(":")
-        if not rest:
-            return True
-    if not re.fullmatch(r"[a-z0-9]+(?:[:_-][a-z0-9]+)*", rest):
-        return False
-    digit_run = 0
-    for segment in _ID_SEPARATORS_RE.split(rest):
-        if segment in AUDIT_ID_VOCABULARY:
-            digit_run = 0
-            continue
-        if not _ORDINAL_SEGMENT_RE.match(segment):
-            return False
-        # No more than two numeric segments in a row: dotted, dashed or
-        # colon-separated quads cannot pass.
-        digit_run = digit_run + 1 if _DIGITS_RE.match(segment) else 0
-        if digit_run > 2:
-            return False
-    return True
+# Identifiers kept verbatim in the audit: an Evidence Plane event id or the
+# cycle / request id grammar, both from id_grammar (shared with the model output
+# parser and the no-model handoff), plus its second layer (address and secret
+# shapes). Every other value (hostnames, person names, packed or
+# integer-encoded addresses, bare hex, tokens) is replaced by the keyed digest.
+AUDIT_ID_VOCABULARY = ID_WORDS
 
 
 def _audit_safe(value: Any) -> bool:
     """An identifier may appear verbatim in the audit only if it fits the
-    closed schema above and, as a second layer, carries no address shape
-    (SituationFrame opaque-ID rule) and no credential shape (mio redaction)."""
-    if type(value) is not str or not _IDENT_RE.match(value):
-        return False
-    try:
-        return (
-            _audit_id_in_schema(value)
-            and _opaque_id(value) == value
-            and not contains_token_like(value)
-        )
-    except Exception:
-        return False
+    closed id grammar and carries no address or credential shape."""
+    return id_ok(value, AUDIT_ID_KINDS)
 
 
 def _audit_id(value: Any) -> str:

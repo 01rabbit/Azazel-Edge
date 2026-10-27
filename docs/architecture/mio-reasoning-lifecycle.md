@@ -144,7 +144,7 @@ reach the payload (v1 copied redacted frame and model text). The payload holds:
 
 | Field | Source |
 |---|---|
-| `trace_id`, `frame_id`, `evidence_refs`, hypothesis IDs and their refs | only IDs that fully match a closed shape the repo produces (`CLOSED_ID_SHAPES`: allowlisted words and bounded digits, for example `trace-1`, `mio-shadow`, `<trace>:frame`, `sha256:<hex>`, `suricata_sid:<n>`, `ev:<kind>:<n>`, `h<n>`; trace counters up to six digits); anything else (addresses, hostnames, hex/decimal address forms, free words) becomes a fixed placeholder (`invalid-trace-id`, `invalid-frame-id`, `[redacted:evidence_ref]`, `hypothesis-<n>`) |
+| `trace_id`, `frame_id`, `evidence_refs`, hypothesis IDs and their refs | only IDs that fully match a closed shape the repo produces (`HANDOFF_ID_KINDS` over the shared `id_grammar.ID_KINDS`: allowlisted words and bounded digits, for example `trace-1`, `mio-shadow`, `<trace>:frame`, `sha256:<hex>`, `suricata_sid:<n>`, `ev:<kind>:<n>`, `h<n>`; trace counters up to six digits; plus the shared address/secret second layer); anything else (addresses, hostnames, hex/decimal address forms, free words, token shapes) becomes a fixed placeholder (`invalid-trace-id`, `invalid-frame-id`, `[redacted:evidence_ref]`, `hypothesis-<n>`) |
 | `reason` | a `ReasoningState` value, otherwise `unspecified` |
 | `current_defensive_state`, `threat_level`, `dependency_status`, `current_action` | closed vocabularies (`DEFENSIVE_STATES`, `LOW`..`CRITICAL`/`UNKNOWN`, `OPTIONAL_DEPENDENCY_STATUSES`, the v2 action-record vocabularies) |
 | `counts` | integer sizes of the frame lists, actors and actions |

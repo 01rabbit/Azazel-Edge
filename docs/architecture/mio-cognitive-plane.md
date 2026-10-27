@@ -200,6 +200,7 @@ moved to Azazel-Nexus#5 (#408). Edge implements only the rungs above.
 | --- | --- | --- |
 | SituationFrame `mio.situation_frame.v2` (reads v1) | Edge-local (#361, #383) | `py/azazel_edge/mio/contracts.py` |
 | Hypothesis, evidence gap, capability request and result, recommendation, reasoning states | Edge-local | `py/azazel_edge/mio/contracts.py`, `broker.py` |
+| Closed id grammar (model output, no-model handoff, broker audit) | Edge-local | `py/azazel_edge/mio/id_grammar.py` |
 | No-model handoff `mio.no_model_handoff.v2`, trace audit `mio.trace_audit.v2` | Edge-local | `py/azazel_edge/mio/handoff.py`, `trace_audit.py` |
 | Agent advisory and snapshot fields | Edge-local | `py/azazel_edge_ai/agent.py` |
 | v2 decision explanation and trust capsule | Edge-local, with Fabric projections written beside it | `py/azazel_edge/explanations/` |

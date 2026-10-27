@@ -307,7 +307,9 @@ def test_generic_fallback_cannot_reach_capabilities_outside_its_allowlist(cap):
     (prov,) = _events(outcome, "reasoning_provenance")
     assert prov.payload["generic_fallback"] is True
     assert outcome.state is ReasoningState.VALIDATION_REJECTED
-    assert f"capability_not_allowed_by_playbook:{cap}" in outcome.errors
+    # Echoed only when the broker registry knows the name (#386 NIT).
+    shown = cap if cap == "lookup_behavior_pattern" else "unregistered-capability"
+    assert f"capability_not_allowed_by_playbook:{shown}" in outcome.errors
     assert calls == []  # the whole gap set is refused before the broker
 
 

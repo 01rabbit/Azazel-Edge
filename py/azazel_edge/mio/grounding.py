@@ -19,6 +19,16 @@ from .contracts import (
 _KEY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}\Z")
 FORBIDDEN_DIRECTIVE_KEYS = {"execute", "must_action", "override", "command", "shell", "activate", "enforce", "executable"}
 ALLOWED_RECOMMENDED_ACTIONS = {"OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
+# A model-chosen capability name can pass the name grammar and still be any
+# word (a person's name, say). Errors echo it only when the broker registry
+# knows it; otherwise they carry this fixed placeholder.
+UNREGISTERED_CAPABILITY = "unregistered-capability"
+
+
+def capability_label(capability: Any, registered_capabilities: Sequence[str] = ()) -> str:
+    """``capability`` if it is a registered capability name, else a fixed placeholder."""
+    registered = {item for item in registered_capabilities if type(item) is str}
+    return capability if type(capability) is str and capability in registered else UNREGISTERED_CAPABILITY
 
 
 @dataclass(frozen=True)
@@ -96,6 +106,7 @@ class GroundingValidator:
         *,
         hypotheses: Sequence[MioHypothesis],
         allowed_capabilities: Sequence[str],
+        registered_capabilities: Sequence[str] = (),
     ) -> GroundingResult:
         errors: list[str] = []
         hypothesis_ids = {item.hypothesis_id for item in hypotheses}
@@ -119,7 +130,7 @@ class GroundingValidator:
             if not gap.capability:
                 errors.append(f"empty_gap_capability:{gap.gap_id}")
             elif gap.capability not in allowed:
-                errors.append(f"capability_not_allowed_by_playbook:{gap.capability}")
+                errors.append(f"capability_not_allowed_by_playbook:{capability_label(gap.capability, registered_capabilities)}")
             for hypothesis_id in gap.discriminates_hypothesis_ids:
                 if hypothesis_id not in hypothesis_ids:
                     errors.append(f"unknown_gap_hypothesis:{gap.gap_id}:{hypothesis_id}")

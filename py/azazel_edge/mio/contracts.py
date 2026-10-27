@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import hashlib
-import ipaddress
 import json
 import re
 from enum import Enum
 from typing import Any, Mapping, Sequence
+
+from .id_grammar import EVIDENCE_REF, EVIDENCE_REF_KINDS, id_ok, opaque_id as _opaque_id  # noqa: F401
 
 
 def _bounded_text(value: Any, limit: int) -> str:
@@ -137,34 +138,6 @@ DECEPTION_LIFECYCLE_UNKNOWN = "DECEPTION_LIFECYCLE_UNKNOWN"
 # Frame-local ordinal: actor:0001 is the first actor of this frame. It is not
 # derived from the source in any way, so it cannot be inverted to an address.
 _ACTOR_KEY_RE = re.compile(r"actor:\d{4}\Z")
-_OPAQUE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
-# Address-shaped substrings refused anywhere inside an opaque ID: dotted or
-# dashed quads (with or without :port) and MAC-like runs. IPv6-like runs are
-# checked separately (_has_ipv6_like_run) so ordinary IDs such as ev:12:34:56
-# still pass.
-_ADDRESS_LIKE_RES = (
-    re.compile(r"(?<![0-9])\d{1,3}(?:[.\-_]\d{1,3}){3}(?![0-9])"),
-    re.compile(r"(?i)(?<![0-9a-f])[0-9a-f]{2}(?:[:.\-_][0-9a-f]{2}){5}(?![0-9a-f])"),
-    re.compile(r"(?i)[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}"),
-)
-_HEX_COLON_RUN_RE = re.compile(r"(?i)[0-9a-f:]*:[0-9a-f:]*")
-
-
-def _has_ipv6_like_run(value: str) -> bool:
-    """A run of hex digits and colons with five or more groups, or one that
-    parses as an IPv6 address (e.g. fe80::1, ::1). Shorter runs such as
-    12:34:56 are ordinary ID segments."""
-    for run in _HEX_COLON_RUN_RE.findall(value):
-        if run.strip(":").count(":") >= 4:
-            return True
-        for candidate in (run, run.strip(":")):
-            if "::" in candidate or candidate.count(":") == 7:
-                try:
-                    ipaddress.IPv6Address(candidate)
-                except ValueError:
-                    continue
-                return True
-    return False
 _TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 _MAX_COUNT = 1_000_000
 
@@ -173,69 +146,30 @@ def actor_key_at(position: int) -> str:
     return f"actor:{position + 1:04d}"
 
 
-def _opaque_id(value: Any) -> str:
-    """Return an opaque identifier or "" if the value is not one. IP and MAC
-    addresses are personal data, not identifiers, and are refused."""
-    if not isinstance(value, str) or not _OPAQUE_ID_RE.match(value):
-        return ""
-    if any(pattern.search(value) for pattern in _ADDRESS_LIKE_RES) or _has_ipv6_like_run(value):
-        return ""
-    try:
-        ipaddress.ip_address(value)
-    except ValueError:
-        return value
-    return ""
-
-
 # --- MODEL ID GRAMMAR (#386) ------------------------------------------------
-# Single home of the closed grammar for identifiers the MODEL writes. They are
-# attacker-reachable, so each field has an exact-match ALLOWLIST built from the
-# shapes the repo actually produces; anything else is refused. Producers:
-#   evidence refs  - Evidence Plane event ids ``sha256:<64 hex>``
-#                    (evidence_plane.schema.make_event_id, carried into frames
-#                    by frame_builder); structured refs ``ev:<kind>:<n>``;
-#                    Suricata ``suricata_sid:<n>``; ATT&CK knowledge refs
-#                    ``kn:attack:T<4>[.<3>]``; offline fixture refs
-#                    ``sha256:fixture-<word>[-<word>]-<n>``.
-#   hypothesis id  - ``h<n>`` (the prompt schema asks for it)
-#   gap id         - ``g<n>``
-#   capability     - the broker name grammar (registration is checked at
-#                    scoring time against the live registry)
-# The SituationFrame ``_opaque_id`` address checks and a secret-shape check run
-# as a second layer. A refused value is replaced at parse time by
-# INVALID_MODEL_ID and never kept; the grounding validator rejects the output
-# with the fixed code ``invalid_model_id:<field>``. Integers and other non-str
-# values are refused, never stringified.
-# NOTE: handoff.py (CLOSED_ID_SHAPES, #508) and broker.py (AUDIT_ID_VOCABULARY,
-# #507) keep their own id grammars for now; the three are to be consolidated
-# here in a follow-up once those PRs and this one have merged.
+# Identifiers the MODEL writes are attacker-reachable. Each field accepts a
+# fixed tuple of the kinds defined once in id_grammar.ID_KINDS (shared with the
+# no-model handoff and the broker audit); anything else is refused. The second
+# layer (address and secret shapes) is id_grammar.second_layer_ok. A refused
+# value is replaced at parse time by INVALID_MODEL_ID and never kept; the
+# grounding validator rejects the output with the fixed code
+# ``invalid_model_id:<field>``. Integers and other non-str values are refused,
+# never stringified.
 INVALID_MODEL_ID = "invalid-model-id"
 INVALID_MODEL_ID_CODE = "invalid_model_id"
-EVIDENCE_REF_KINDS = ("alert", "auth", "deception", "dns", "flow", "host", "http", "noc", "soc", "ssh", "sys", "tls")
-MODEL_ID_GRAMMAR: Mapping[str, re.Pattern[str]] = {
-    "evidence_ref": re.compile(
-        r"(?:sha256:[0-9a-f]{64}"
-        r"|ev:(?:" + "|".join(EVIDENCE_REF_KINDS) + r"):\d{1,6}"
-        r"|suricata_sid:\d{1,8}"
-        r"|kn:attack:T\d{4}(?:\.\d{3})?"
-        r"|sha256:fixture-[a-z]{1,16}(?:-[a-z]{1,16})?-\d{1,3})\Z"
-    ),
-    "hypothesis_id": re.compile(r"h\d{1,3}\Z"),
-    "gap_id": re.compile(r"g\d{1,3}\Z"),
-    "capability": re.compile(r"[a-z][a-z0-9_]{2,63}\Z"),
+MODEL_ID_GRAMMAR: Mapping[str, tuple[str, ...]] = {
+    # Edge refs plus the model-only ATT&CK knowledge and offline fixture refs.
+    "evidence_ref": EVIDENCE_REF + ("knowledge_ref", "fixture_ref"),
+    "hypothesis_id": ("hypothesis_id",),
+    "gap_id": ("gap_id",),
+    "capability": ("capability",),
 }
-_SECRET_SHAPE_RE = re.compile(r"(?i)(password|passwd|pwd|secret|api[_-]?key|apikey|token|bearer)")
 
 
 def model_id_ok(value: Any, kind: str) -> bool:
     """True when ``value`` exactly matches the allowlist for ``kind``."""
-    pattern = MODEL_ID_GRAMMAR.get(kind)
-    if pattern is None or type(value) is not str or not pattern.match(value):
-        return False
-    if kind == "capability":
-        return not _SECRET_SHAPE_RE.search(value)
-    # Second layer: the frame's address checks and a secret-word check.
-    return bool(_opaque_id(value)) and not _SECRET_SHAPE_RE.search(value)
+    kinds = MODEL_ID_GRAMMAR.get(kind)
+    return kinds is not None and id_ok(value, kinds)
 
 
 def safe_model_id(value: Any, kind: str) -> str:

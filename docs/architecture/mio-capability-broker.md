@@ -154,12 +154,15 @@ token rules (API keys, bearer tokens, long tokens, e-mail). Otherwise they are r
 `h:<digest>`.
 
 Before those checks, a value must fit a closed schema of the identifier shapes this repository
-produces (`AUDIT_ID_VOCABULARY` in `broker.py`): evidence-plane event ids `sha256:<64 hex>`,
+produces (`AUDIT_ID_KINDS` in `id_grammar.py`, the grammar shared with the model output parser
+and the no-model handoff; see "One id grammar" in
+[mio-grounding-and-evidence-gaps.md](mio-grounding-and-evidence-gaps.md)): evidence-plane event ids `sha256:<64 hex>`,
 Edge core trace ids `trace-0x<hex>` with lifecycle/loop suffixes (`:e1:c3:req:2`), and ids made
 of vocabulary words and short ordinals (`ev:auth:0001`, `replay:g5-golden-replay-v1:req:1`,
 `h1`) with at most two numeric segments in a row. Hostnames, person names, bare hex, packed or
-integer-encoded IPv4, separator-free MACs and token-like values are all digested. Adding a new
-id shape means adding its words to the vocabulary and a test.
+integer-encoded IPv4, separator-free MACs, token-like values and values containing a secret
+word (`password`, `token`, …) are all digested. Adding a new id shape means adding its words to
+`id_grammar.ID_WORDS` and a test.
 
 The result returned to the reasoning loop is unchanged; only the audit projection is reduced.
 In particular `MioCapabilityResult.request_id` echoes the request's id (bounded, control

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from .contracts import MioHypothesis, MioSituationFrame
+from .id_grammar import CAPABILITY_NAME_RE
 
 
 @dataclass(frozen=True)
@@ -535,7 +536,7 @@ def _select_unvalidated(
 
 _PLAYBOOK_ID_RE = re.compile(r"[a-z][a-z0-9-]{2,63}\Z")
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+\Z")
-_CAPABILITY_RE = re.compile(r"[a-z][a-z0-9_]{2,63}\Z")
+_CAPABILITY_RE = CAPABILITY_NAME_RE
 _MAX_ITEM_CHARS = 240
 _MAX_ITEMS = 8
 _TEXT_FIELDS = (
