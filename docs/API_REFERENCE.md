@@ -143,6 +143,7 @@ Response keys (each matching the corresponding per-panel endpoint's shape):
 | `handoff_brief_pack` | `GET /api/dashboard/handoff` (`operator`+ role only, else `null`) |
 | `activity` | bundle-only: deterministic time-bucketed alert activity (below) |
 | `decision_focus` | `GET /api/booth-focus` (v2 decision-explanation projection) |
+| `decision_traces` | `GET /api/decision-trace` for the decisions of the alerts in `evidence.recent_alerts` (one per decision, at most 16) |
 
 `decision_focus` additionally carries a `domains` key (also present on
 `GET /api/booth-focus`): per-jurisdiction evaluator rationale from the same
@@ -168,6 +169,104 @@ The role-gated keys are always present; a `viewer` caller receives `null` for
 both so the response shape stays stable. All per-panel endpoints remain
 available unchanged.
 
+## Decision Trace API (#341)
+
+Read-only, decision-level trace: for each core decision, the v2 decision
+explanation the AI agent writes (`decision-explanations.jsonl`, `.1` after a
+rotation) and the `action_decision` record of the core decision chain
+(`core-decision-audit.jsonl`, `.1` after a rotation; P0 decisions only), both
+under `/var/log/azazel-edge/ai`, joined by `trace_id`. The chain verdict is
+that of `azazel-edge-audit-review --json` (`audit_review.verify_audit_chain`,
+`audit_review.chain_review`) and the explanation values are an allowlisted
+subset of the same record, so the Web UI and the CLI never disagree.
+
+### GET /api/decision-trace?trace_id=<id>[&trace_id=<id>...]
+
+Auth: token required, `viewer` or higher (no new role). `GET` only; at most
+16 ids (`400 too_many_trace_ids`), each `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`
+(the whole value; `400 invalid_trace_id`); none: `400 trace_id_required`. `Cache-Control:
+no-store`.
+
+Response: `format` (`azazel-edge/decision-trace/v1`), `read_only: true`,
+`generated_at`, `sources`, `traces`, `limits`.
+
+- `sources.explanations`: `state` (`present` / `missing` / `unreadable` /
+  `not_read`), `error` (an `OSError` type name or `""`), `files` (the
+  explanation file and its rotated names only, oldest first),
+  `unparsed_lines`, `truncated`.
+- `sources.chain`: the `chain` object of `audit_review --json` reduced to
+  enumerated, checked, integer and boolean values: `ok`, `verified`,
+  `entries`, `scope`, `genesis_retained`, `files` (the chain file and its
+  rotated names only), `chain_id` (only when it is 64 hex digits),
+  `error_kind` (the kind of the failure, e.g. `chain_hash_mismatch_at`,
+  `rotated_file_not_continued`, `incomplete_last_line`; `other` for an
+  unknown one; no file name or text) with `error_position` (an integer, for
+  the positional kinds), `meaning` and `limits` (audit_review's fixed
+  texts), plus `state` (`present` / `missing` / `unreadable` / `not_read`) and `recheck_pending` (the chain changed and is answered
+  from the last verification, with `verified` false and records `pending`:
+  it is re-verified at most once per 5 s, and a request never waits for
+  another's verification). A missing or empty chain
+  is `scope: empty`, `verified: false`, never a verified chain. With no id
+  (the bundle when no alert has a decision) nothing is read and both
+  sources are `not_read`.
+- `traces[]`, one per requested decision:
+  - `explanation`: `status` `found` with an allowlist of enumerated or
+    structured values only, each left out when its type or form is wrong:
+    `trace_id`, `ts` (ISO time), `selected_action` (`observe`, `notify`,
+    `throttle`, `redirect`, `isolate`), `applied_state` (`applied`,
+    `not_applied`, `apply_failed`, `none`), `enforcement_mode`,
+    `applied_label` (`NOT APPLIED - planned only (<mode>)` /
+    `NOT APPLIED - apply failed` / `""`, built from `applied_state` and the
+    mode, never taken from text), `not_applied`, `policy_profile` (only
+    `azazel-edge-core/rust_event_engine_v1`), `config_hash` (64 hex digits),
+    `config_hash_basis`, `capsule_signature_state`, `schema_valid`,
+    `schema_problem_count`, `rejected_action_count`, `evidence_count`, plus
+    `segment` (`active`, or `rotated` for the `.1` file) and `records` (how
+    many records carry the id). **No free text**: `reason`,
+    `release_condition`, `why_not_others`, the rejected actions,
+    `evidence_ids`, the schema problem texts and `operator_wording` can carry
+    the target address and TI indicators and are not returned; read them
+    with `sudo azazel-edge-audit-review --trace-id <id>` on the device;
+    `not_found` (no explanation with this id in the retained files;
+    `rotated_file_present` says whether older ones may have been rotated
+    out); `source_unreadable`.
+  - `chain_record`: `status` `found` with `ts`, `kind`, `action`,
+    `decided_action`, `effective_action`, `enforcement_mode`,
+    `enforcement_result`, `enforce_dry_run`, `recorded_by`,
+    `reconcile_stale`, `event_ts`, `sid`, `severity`, `segment`, `file`,
+    `position` and `integrity`: `verified` (the whole retained chain
+    verifies), `failed_here` (verification failed at this record: rewritten,
+    or a record before it removed or reordered), `not_verified` (the chain
+    failed elsewhere) or `pending` (the chain changed and has not been
+    re-verified yet: `recheck_pending`, and `verified` is false); each value
+    is enumerated or typed (`sid`, `severity` integers) and left out
+    otherwise; `not_found` (the chain holds P0 decisions only, and
+    records rotated out are gone); `changed` (the file changed while it was
+    read); `source_unreadable`. Not copied: the core event key, the core's
+    own trace id, the target address, the agent's receive stamps.
+  - `consistency.action_matches`: when both are found, whether the
+    explanation's `selected_action` is the chain record's `action`.
+
+A trace exists only for a decision. `evidence.recent_alerts[].decision_trace_id`
+(dashboard evidence and bundle) is set only when the alert's event is a core
+decision event (the id the agent gives that decision, from
+`core_decisions.core_decision_payload`); every other alert has `""` and no
+trace. Alerts of one decision share its one trace. The SENTINEL console's
+Evidence drawer shows the trace of the selected alert's decision, or `—`,
+and the DECISIONS view lists one row per decision (text only).
+
+### GET /api/decision-trace/export?trace_id=<id>[&trace_id=<id>...]
+
+The same report as a JSON attachment (`Content-Disposition: attachment;
+filename="decision-trace-<UTC time>.json"`), for the audit record or report
+of one incident: pass the decisions of the incident. Same auth and limits.
+The console's EXPORT JSON button saves the report it shows (the bundle's
+`decision_traces`) without another request.
+
+Neither endpoint writes, decides, enforces or notifies. Not checked on a
+device (container only).
+
+## Control Actions API
 ## Control Actions API
 
 ### `POST /api/action/<action>` and `POST /api/action`

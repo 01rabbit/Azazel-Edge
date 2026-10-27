@@ -809,7 +809,7 @@ async function refreshDashboardOnce() {
         // tier status dots stay in lockstep with the board and never fabricate state.
         try {
             document.dispatchEvent(new CustomEvent('azazel:refresh', {
-                detail: { summary, actions, evidence, health, state, trends, boothFocus: decisionFocus || {}, aggregator: latestAggregator || {}, deceptionAz06: bundle.deception_az06 || {} },
+                detail: { summary, actions, evidence, health, state, trends, boothFocus: decisionFocus || {}, decisionTraces: bundle.decision_traces || {}, aggregator: latestAggregator || {}, deceptionAz06: bundle.deception_az06 || {} },
             }));
         } catch (hookError) {
             /* no-op: the console overlay is progressive enhancement only */

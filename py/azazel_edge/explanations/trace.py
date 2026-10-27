@@ -1,0 +1,722 @@
+"""Read-only decision-level trace for the Web UI (Edge#341).
+
+Joins, per core decision, the two records that already exist for it:
+
+* the v2 decision explanation the AI agent writes
+  (``decision-explanations.jsonl`` and, after a rotation, ``.1``; Edge#477),
+  keyed by ``trace_id``;
+* the ``action_decision`` record of the core decision chain
+  (``core-decision-audit.jsonl`` and ``.1``; P0 decisions only), whose
+  ``trace_id`` is the same (``core_decisions.core_decision_payload``).
+
+The chain verdict is the one ``azazel-edge-audit-review --json`` prints
+(:func:`audit_review.verify_audit_chain`, :func:`audit_review.chain_review`);
+the explanation values shown are an allowlisted subset of the same record
+(below), so the Web UI and the CLI never disagree about a record.
+
+Never fabricated: a trace exists only for a decision. An alert row of the AI
+event log has a decision trace id only when its event is a core decision
+event (:func:`alert_decision_trace_id`, the same function the agent uses to
+name the decision); every other alert has none and nothing is looked up for
+it. Several alerts of one decision (the same EVE line delivered twice) share
+one trace. What is not there is said, never filled in:
+
+* explanation ``not_found``: no explanation with that ``trace_id`` in the
+  retained files (``.1`` present: older ones may have been rotated out);
+* chain record ``not_found``: the chain holds P0 decisions only, and records
+  rotated out of the retained files are gone;
+* ``segment`` ``rotated``: the record is in the older file (``.1``);
+* chain ``integrity``: ``verified`` only when the whole retained chain
+  verifies as ``audit_review`` verifies it; ``failed_here`` for the record
+  where verification failed (rewritten, removed or reordered before it);
+  ``not_verified`` otherwise (the chain failed elsewhere, or it could not be
+  read); ``pending`` while a changed chain has not been re-verified yet
+  (``sources.chain.recheck_pending``; ``verified`` is then false);
+* a source that is missing or unreadable is ``missing`` / ``unreadable``,
+  never an empty success.
+
+Read only: files are opened ``O_RDONLY`` (no symlink is followed), nothing is
+written, decided, enforced or notified. Indexes are kept in memory (byte
+offsets only) and refreshed when a file changes: the explanation files
+incrementally while they grow, the chain re-verified when one of its files
+changes, at most once per ``CHAIN_RECHECK_MIN_S`` and never while a request
+waits on it (``recheck_pending``). A request without an id reads nothing.
+
+What a viewer gets is an allowlist (:data:`EXPLANATION_KEYS`,
+:data:`CHAIN_KEYS`): enumerated or structured values whose type and form are
+checked, and counts. No free text at all (``reason``, ``release_condition``,
+``why_not_others``, ``operator_wording``, evidence ids, schema problem texts):
+they can carry the target address and TI indicators. The applied-state
+label is built from the enumerated ``applied_state`` and enforcement mode,
+never taken from text. A value of the wrong type or form is left out.
+Operators who need the full record use ``sudo azazel-edge-audit-review``.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+
+from azazel_edge import audit_review
+from azazel_edge.audit.segments import MAX_SEGMENTS, segment_path
+from azazel_edge.notify.core_decisions import core_decision_payload
+
+FORMAT = "azazel-edge/decision-trace/v1"
+# At most this many decisions per request (the dashboard asks for the
+# decisions of the alerts it shows).
+MAX_TRACE_IDS = 16
+TRACE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")  # used with fullmatch
+CHAIN_KIND = "action_decision"
+NOT_APPLIED_PREFIX = "NOT APPLIED"
+SEGMENT_ACTIVE = "active"
+SEGMENT_ROTATED = "rotated"
+# An explanation file is rotated at 8 MiB (explanations.live); a larger one
+# is indexed from its newest bytes only (``truncated``).
+MAX_INDEX_BYTES = 32 * 1024 * 1024
+
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_FAIL_AT = re.compile(r"(?:chain_hash_mismatch|chain_prev_mismatch|chain_id_mismatch|parse_error)_at:([0-9]{1,12})")
+
+# The chain is re-verified at most once per this many seconds; between, a
+# changed chain is answered from the last verification with
+# ``recheck_pending`` true. A request never waits for another's verification.
+CHAIN_RECHECK_MIN_S = 5.0
+_monotonic = time.monotonic
+
+# ---- allowlist: what a viewer gets (no free text) -------------------------
+ACTIONS = frozenset({"observe", "notify", "throttle", "redirect", "isolate"})
+APPLIED_STATES = frozenset({"applied", "not_applied", "apply_failed", "none"})
+ENFORCEMENT_MODES = frozenset({"dry_run", "policy_gated", "release_guard_failed", "enforced", "disabled", "none"})
+ENFORCEMENT_RESULTS = frozenset({"applied", "partial_failure", "planned_not_applied", "no_disruptive_action", "failed"})
+RECORDED_BY = frozenset({"live", "startup_reconcile", "loss_reconcile"})
+HASH_BASES = frozenset({"enforcement_settings", "policy_file"})
+CAPSULE_STATES = frozenset({"signed", "unsigned", "not_recorded", "invalid"})
+POLICY_PROFILES = frozenset({"azazel-edge-core/rust_event_engine_v1"})
+APPLY_FAILED_LABEL = "NOT APPLIED - apply failed"
+_TS = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:?[0-9]{2})?")
+_HASH = re.compile(r"[0-9a-f]{64}")
+
+SCOPES = frozenset({
+    audit_review.SCOPE_FROM_GENESIS, audit_review.SCOPE_FROM_ROTATION_BOUNDARY, audit_review.SCOPE_EMPTY,
+    audit_review.SCOPE_NOT_VERIFIED,
+})
+SOURCE_STATES = frozenset({"present", "missing", "unreadable", "not_read"})
+# Kinds of verify_audit_chain errors (the text before ':'); the rest of the
+# message (a position, a count, a file name) is not shown, except a position
+# as the integer error_position.
+ERROR_KINDS = frozenset({
+    "chain_hash_mismatch_at", "chain_prev_mismatch_at", "chain_id_mismatch_at", "parse_error_at",
+    "rotated_file_not_continued", "incomplete_last_line", "start_cut", "snapshot_inconsistent", "unreadable",
+})
+_POSITIONAL_ERRORS = frozenset({"chain_hash_mismatch_at", "chain_prev_mismatch_at", "chain_id_mismatch_at", "parse_error_at"})
+OS_ERRORS = frozenset({"PermissionError", "IsADirectoryError", "NotADirectoryError", "FileNotFoundError", "OSError"})
+SOURCE_CHAIN_KEYS = frozenset({
+    "state", "recheck_pending", "ok", "verified", "entries", "scope", "genesis_retained", "files", "chain_id",
+    "error_kind", "error_position", "meaning", "limits",
+})
+SOURCE_EXPLANATION_KEYS = frozenset({"state", "error", "files", "unparsed_lines", "truncated"})
+
+EXPLANATION_KEYS = frozenset({
+    "status", "segment", "records", "trace_id", "ts", "selected_action", "applied_state", "applied_label",
+    "not_applied", "enforcement_mode", "policy_profile", "config_hash", "config_hash_basis",
+    "capsule_signature_state", "schema_valid", "schema_problem_count", "rejected_action_count",
+    "evidence_count",
+})
+CHAIN_KEYS = frozenset({
+    "status", "segment", "file", "position", "records", "integrity", "ts", "kind", "trace_id", "action",
+    "decided_action", "effective_action", "enforcement_mode", "enforcement_result", "enforce_dry_run",
+    "recorded_by", "reconcile_stale", "event_ts", "sid", "severity",
+})
+
+
+def _int(value: Any) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _enum(value: Any, allowed: frozenset) -> Optional[str]:
+    return value if isinstance(value, str) and value in allowed else None
+
+
+def _ts(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and _TS.fullmatch(value) else None
+
+
+def _count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _put(view: Dict[str, Any], key: str, value: Any) -> None:
+    if value is not None:
+        view[key] = value
+
+
+def _bool(value: Any) -> bool:
+    return value is True
+
+
+def _file_names(names: Any, base: str) -> List[str]:
+    """``base`` and its rotated names (``base.N``) only."""
+
+    allowed = re.compile(re.escape(base) + r"(?:\.[0-9]{1,2})?")
+    return [n for n in (names if isinstance(names, list) else []) if isinstance(n, str) and allowed.fullmatch(n)]
+
+
+def source_chain(verdict: Mapping[str, Any], *, state: str, pending: bool, base: str) -> Dict[str, Any]:
+    """``sources.chain``: the audit_review verdict reduced to enumerated,
+    checked, integer and boolean values (:data:`SOURCE_CHAIN_KEYS`)."""
+
+    review = audit_review.chain_review(dict(verdict))
+    scope = _enum(review.get("scope"), SCOPES) or audit_review.SCOPE_NOT_VERIFIED
+    error = str(review.get("error") or "")
+    kind, _, rest = error.partition(":")
+    view: Dict[str, Any] = {
+        "state": _enum(state, SOURCE_STATES) or "unreadable",
+        "recheck_pending": bool(pending),
+        "ok": _bool(review.get("ok")),
+        "verified": _bool(review.get("verified")) and not pending,
+        "entries": _int(review.get("entries")) or 0,
+        "scope": scope,
+        "genesis_retained": _bool(review.get("genesis_retained")),
+        "files": _file_names(review.get("files"), base),
+        "error_kind": kind if kind in ERROR_KINDS else ("other" if error else ""),
+        # Fixed texts of audit_review for the scope.
+        "meaning": audit_review._MEANING.get(scope, audit_review._MEANING[audit_review.SCOPE_NOT_VERIFIED]),
+        "limits": audit_review._LIMITS,
+    }
+    if kind in _POSITIONAL_ERRORS and rest.isascii() and rest.isdigit() and len(rest) <= 12:
+        view["error_position"] = int(rest)
+    chain_id = review.get("chain_id")
+    if isinstance(chain_id, str) and _HASH.fullmatch(chain_id):
+        view["chain_id"] = chain_id
+    return view
+
+
+def source_explanations(*, state: str, error: str, files: List[str], unparsed: int, truncated: bool,
+                        base: str) -> Dict[str, Any]:
+    """``sources.explanations`` (:data:`SOURCE_EXPLANATION_KEYS`)."""
+
+    return {
+        "state": _enum(state, SOURCE_STATES) or "unreadable",
+        "error": error if error in OS_ERRORS else ("OSError" if error else ""),
+        "files": _file_names(files, base),
+        "unparsed_lines": unparsed if isinstance(unparsed, int) and not isinstance(unparsed, bool) else 0,
+        "truncated": bool(truncated),
+    }
+
+
+def applied_label(state: Optional[str], mode: Optional[str]) -> str:
+    """The NOT APPLIED label, built from the enumerated applied state and
+    enforcement mode only ('' for an applied action or nothing to apply)."""
+
+    if state == "not_applied":
+        return f"NOT APPLIED - planned only ({mode or 'unknown'})"
+    if state == "apply_failed":
+        return APPLY_FAILED_LABEL
+    return ""
+
+
+LIMITS = (
+    "read only; a trace is shown only for a core decision, never per alert. The explanation file is not"
+    " hash-chained and its trust capsule is not verified here; the core decision chain holds P0 decisions"
+    " only, its hashes are not keyed (see chain.limits), and records rotated out of the retained files are gone."
+)
+
+
+def valid_trace_id(value: Any) -> bool:
+    return isinstance(value, str) and TRACE_ID_RE.fullmatch(value) is not None
+
+
+def alert_decision_trace_id(row: Any) -> str:
+    """The decision trace id of one AI event log row (``{"event", "advisory"}``),
+    or '' when its event is not a core decision event. The same id the agent
+    gives the decision's explanation and chain record."""
+
+    event = row.get("event") if isinstance(row, Mapping) else None
+    if not isinstance(event, Mapping):
+        return ""
+    try:
+        built = core_decision_payload(event)
+    except Exception:
+        return ""
+    return built[0] if built else ""
+
+
+def _open(path: Path) -> Optional[int]:
+    try:
+        return os.open(str(path), os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+
+
+def _pread_all(fd: int, start: int, length: int) -> bytes:
+    chunks = []
+    offset = start
+    remaining = length
+    while remaining > 0:
+        chunk = os.pread(fd, min(remaining, 1 << 20), offset)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        offset += len(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _read_line(path: Path, key: Tuple[int, int], offset: int, length: int) -> Optional[Dict[str, Any]]:
+    """The JSON object at ``offset`` of ``path`` if the file is still the one
+    indexed (same device and inode), else None."""
+
+    fd = _open(path)
+    if fd is None:
+        return None
+    try:
+        st = os.fstat(fd)
+        if (st.st_dev, st.st_ino) != key or st.st_size < offset + length:
+            return None
+        raw = os.pread(fd, length, offset)
+    finally:
+        os.close(fd)
+    try:
+        row = json.loads(raw)
+    except Exception:
+        return None
+    return row if isinstance(row, dict) else None
+
+
+class _ExplanationFile:
+    """trace_id -> (count, offset, length of the newest line) of one JSONL file,
+    indexed incrementally while the file grows."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.key: Optional[Tuple[int, int]] = None
+        self.offset = 0
+        self.entries: Dict[str, Tuple[int, int, int]] = {}
+        self.unparsed = 0
+        self.truncated = False
+        self._skip_partial = False
+
+    def _reset(self, key: Optional[Tuple[int, int]]) -> None:
+        self.key = key
+        self.offset = 0
+        self.entries = {}
+        self.unparsed = 0
+        self.truncated = False
+        self._skip_partial = False
+
+    def refresh(self) -> str:
+        """'present' or 'missing'; an unreadable file raises OSError."""
+
+        fd = _open(self.path)
+        if fd is None:
+            self._reset(None)
+            return "missing"
+        try:
+            st = os.fstat(fd)
+            key = (st.st_dev, st.st_ino)
+            if key != self.key or st.st_size < self.offset:
+                self._reset(key)
+                if st.st_size > MAX_INDEX_BYTES:
+                    self.offset = st.st_size - MAX_INDEX_BYTES
+                    self.truncated = True
+                    self._skip_partial = True
+            if st.st_size <= self.offset:
+                return "present"
+            data = _pread_all(fd, self.offset, st.st_size - self.offset)
+        finally:
+            os.close(fd)
+        end = data.rfind(b"\n")
+        if end < 0:
+            return "present"  # no complete line yet
+        pos = self.offset
+        lines = data[: end + 1].split(b"\n")[:-1]
+        if self._skip_partial and lines:
+            # The window started inside a line: skip it.
+            self._skip_partial = False
+            pos += len(lines[0]) + 1
+            lines = lines[1:]
+        for raw in lines:
+            self._add(raw, pos)
+            pos += len(raw) + 1
+        self.offset += end + 1
+        return "present"
+
+    def _add(self, raw: bytes, pos: int) -> None:
+        if not raw.strip():
+            return
+        try:
+            row = json.loads(raw)
+        except Exception:
+            self.unparsed += 1
+            return
+        if not isinstance(row, dict):
+            self.unparsed += 1
+            return
+        tid = row.get("trace_id")
+        if not valid_trace_id(tid):
+            return
+        count = self.entries.get(tid, (0, 0, 0))[0]
+        self.entries[tid] = (count + 1, pos, len(raw))
+
+    def lookup(self, trace_id: str) -> Tuple[int, Optional[Dict[str, Any]]]:
+        entry = self.entries.get(trace_id)
+        if entry is None or self.key is None:
+            return 0, None
+        count, offset, length = entry
+        row = _read_line(self.path, self.key, offset, length)
+        if row is None or row.get("trace_id") != trace_id:
+            return count, None
+        return count, row
+
+
+class _ChainSnapshot:
+    """One verification of the chain: immutable once built."""
+
+    def __init__(self, signature: Any, state: str, verdict: Dict[str, Any],
+                 entries: Dict[str, List[Tuple[int, str, Tuple[int, int], int, int]]], checked_at: float):
+        self.signature = signature
+        self.state = state
+        self.verdict = verdict
+        self.entries = entries
+        self.checked_at = checked_at
+
+
+class _ChainIndex:
+    """The core decision chain's verdict (``audit_review.verify_audit_chain``)
+    and trace_id -> [(position, file, offset, length)] of its
+    ``action_decision`` records, rebuilt when a file of the chain changes, at
+    most once per :data:`CHAIN_RECHECK_MIN_S`. Readers take the current
+    snapshot and never wait for a rebuild (only one runs at a time)."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.snapshot: Optional[_ChainSnapshot] = None
+        self._build = threading.Lock()
+
+    def _signature(self) -> Tuple[Any, ...]:
+        sig = []
+        for p in [self.path] + [segment_path(self.path, n) for n in range(1, MAX_SEGMENTS + 1)]:
+            try:
+                st = os.stat(str(p), follow_symlinks=False)
+            except (FileNotFoundError, NotADirectoryError):
+                if p != self.path:
+                    break
+                sig.append(None)
+                continue
+            sig.append((st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns))
+        return tuple(sig)
+
+    def current(self) -> Tuple[_ChainSnapshot, bool]:
+        """(snapshot, recheck_pending)."""
+
+        snap = self.snapshot
+        try:
+            sig = self._signature()
+        except OSError as exc:
+            sig, err = None, exc
+        else:
+            err = None
+        if snap is not None and err is None and sig == snap.signature:
+            return snap, False
+        if snap is not None and _monotonic() - snap.checked_at < CHAIN_RECHECK_MIN_S:
+            return snap, True
+        # Only one rebuild at a time; the others answer from the last one.
+        blocking = snap is None
+        if not self._build.acquire(blocking=blocking):
+            return snap, True  # type: ignore[return-value]
+        try:
+            if self.snapshot is not snap and self.snapshot is not None:
+                return self.snapshot, False  # built while this request waited
+            self.snapshot = self._rebuild() if err is None else self._unreadable(err)
+            return self.snapshot, False
+        finally:
+            self._build.release()
+
+    def _rebuild(self) -> _ChainSnapshot:
+        verdict: Dict[str, Any] = {}
+        entries: Dict[str, List[Tuple[int, str, Tuple[int, int], int, int]]] = {}
+        after: Any = None
+        for _ in range(3):
+            try:
+                before = self._signature()
+                verdict = audit_review.verify_audit_chain(self.path)
+                # Only the chain's own names (base, base.N) are opened.
+                entries = self._index(_file_names(verdict.get("files"), self.path.name))
+                after = self._signature()
+            except Exception as exc:  # OSError (permission) and anything unexpected: never a success
+                return self._unreadable(exc)
+            if before == after:
+                break
+        else:
+            verdict = dict(verdict, ok=False, verified=False, scope=audit_review.SCOPE_NOT_VERIFIED,
+                           error="snapshot_inconsistent:rotation_kept_moving_files")
+        state = "missing" if verdict.get("scope") == audit_review.SCOPE_EMPTY and not verdict.get("files") else "present"
+        return _ChainSnapshot(after, state, verdict, entries, _monotonic())
+
+    def _unreadable(self, exc: BaseException) -> _ChainSnapshot:
+        verdict = {
+            "ok": False, "verified": False, "entries": 0, "scope": audit_review.SCOPE_NOT_VERIFIED,
+            "error": f"unreadable:{type(exc).__name__}", "files": [], "chain_id": "",
+        }
+        return _ChainSnapshot(None, "unreadable", verdict, {}, _monotonic())
+
+    def _index(self, names: Iterable[str]) -> Dict[str, List[Tuple[int, str, Tuple[int, int], int, int]]]:
+        entries: Dict[str, List[Tuple[int, str, Tuple[int, int], int, int]]] = {}
+        position = 0
+        for name in names:
+            path = self.path.with_name(name)
+            fd = _open(path)
+            if fd is None:
+                continue
+            try:
+                st = os.fstat(fd)
+                key = (st.st_dev, st.st_ino)
+                data = _pread_all(fd, 0, st.st_size)
+            finally:
+                os.close(fd)
+            offset = 0
+            for raw in data.split(b"\n")[:-1]:  # complete lines, as read_chain counts them
+                position += 1
+                if b'"' + CHAIN_KIND.encode() + b'"' in raw:
+                    try:
+                        row = json.loads(raw)
+                    except Exception:
+                        row = None
+                    if isinstance(row, dict) and row.get("kind") == CHAIN_KIND and valid_trace_id(row.get("trace_id")):
+                        entries.setdefault(row["trace_id"], []).append((position, name, key, offset, len(raw)))
+                offset += len(raw) + 1
+        return entries
+
+    def lookup(self, snap: _ChainSnapshot, trace_id: str) -> Tuple[int, Optional[Dict[str, Any]], Optional[Tuple[int, str]]]:
+        found = snap.entries.get(trace_id) or []
+        if not found:
+            return 0, None, None
+        position, name, key, offset, length = found[-1]
+        row = _read_line(self.path.with_name(name), key, offset, length)
+        if row is None or row.get("trace_id") != trace_id:
+            return len(found), None, (position, name)
+        return len(found), row, (position, name)
+
+
+_LOCK = threading.Lock()  # guards the registries only
+_EXPLANATIONS: Dict[str, Tuple[threading.Lock, _ExplanationFile, _ExplanationFile]] = {}
+_CHAINS: Dict[str, _ChainIndex] = {}
+
+
+def reset_caches() -> None:
+    """Forget every index (tests)."""
+
+    with _LOCK:
+        _EXPLANATIONS.clear()
+        _CHAINS.clear()
+
+
+def _integrity(verdict: Mapping[str, Any], position: int) -> str:
+    if verdict.get("ok") and verdict.get("verified"):
+        return "verified"
+    m = _FAIL_AT.fullmatch(str(verdict.get("error") or ""))
+    if m and int(m.group(1)) == position:
+        return "failed_here"
+    return "not_verified"
+
+
+def _segment(name: str, active_name: str) -> str:
+    return SEGMENT_ACTIVE if name == active_name else SEGMENT_ROTATED
+
+
+def _explanation_view(record: Dict[str, Any], *, count: int, segment: str) -> Dict[str, Any]:
+    """Allowlisted, typed values only (:data:`EXPLANATION_KEYS`)."""
+
+    from azazel_edge.explanations.schema import validate_v2_explanation
+
+    machine = record.get("machine") if isinstance(record.get("machine"), dict) else {}
+    arbiter = machine.get("arbiter") if isinstance(machine.get("arbiter"), dict) else {}
+    policy = arbiter.get("policy") if isinstance(arbiter.get("policy"), dict) else {}
+    state = _enum(arbiter.get("applied_state"), APPLIED_STATES)
+    mode = _enum(arbiter.get("control_mode"), ENFORCEMENT_MODES)
+    try:
+        problems = validate_v2_explanation(record)
+    except Exception:
+        problems = ["unvalidated"]
+    view: Dict[str, Any] = {"status": "found", "segment": segment, "records": count}
+    _put(view, "trace_id", record.get("trace_id") if valid_trace_id(record.get("trace_id")) else None)
+    _put(view, "ts", _ts(record.get("ts")))
+    _put(view, "selected_action", _enum(record.get("selected_action"), ACTIONS))
+    _put(view, "applied_state", state)
+    _put(view, "enforcement_mode", mode)
+    if state is not None:
+        view["applied_label"] = applied_label(state, mode)
+        view["not_applied"] = state in ("not_applied", "apply_failed")
+    _put(view, "policy_profile", _enum(record.get("policy_profile"), POLICY_PROFILES))
+    config_hash = record.get("config_hash")
+    _put(view, "config_hash", config_hash if isinstance(config_hash, str) and _HASH.fullmatch(config_hash) else None)
+    _put(view, "config_hash_basis", _enum(policy.get("hash_basis"), HASH_BASES))
+    _put(view, "capsule_signature_state", _enum(audit_review._capsule_signature_state(record), CAPSULE_STATES))
+    view["schema_valid"] = not problems
+    view["schema_problem_count"] = len(problems)
+    view["rejected_action_count"] = _count(record.get("rejected_actions"))
+    view["evidence_count"] = _count(record.get("evidence_ids"))
+    return view
+
+
+def _chain_view(record: Dict[str, Any], *, count: int, position: int, name: str, active_name: str,
+                verdict: Mapping[str, Any], pending: bool) -> Dict[str, Any]:
+    """Allowlisted, typed values only (:data:`CHAIN_KEYS`)."""
+
+    view: Dict[str, Any] = {
+        "status": "found",
+        "segment": _segment(name, active_name),
+        "file": name,
+        "position": position,
+        "records": count,
+        # A snapshot answered while the chain changed is not verified now.
+        "integrity": "pending" if pending else _integrity(verdict, position),
+    }
+    _put(view, "ts", _ts(record.get("ts")))
+    _put(view, "kind", _enum(record.get("kind"), frozenset({CHAIN_KIND})))
+    _put(view, "trace_id", record.get("trace_id") if valid_trace_id(record.get("trace_id")) else None)
+    for key in ("action", "decided_action", "effective_action"):
+        _put(view, key, _enum(record.get(key), ACTIONS))
+    _put(view, "enforcement_mode", _enum(record.get("enforcement_mode"), ENFORCEMENT_MODES))
+    _put(view, "enforcement_result", _enum(record.get("enforcement_result"), ENFORCEMENT_RESULTS))
+    _put(view, "recorded_by", _enum(record.get("recorded_by"), RECORDED_BY))
+    for key in ("enforce_dry_run", "reconcile_stale"):
+        _put(view, key, record.get(key) if isinstance(record.get(key), bool) else None)
+    _put(view, "event_ts", _ts(record.get("event_ts")))
+    _put(view, "sid", _int(record.get("sid")))
+    _put(view, "severity", _int(record.get("severity")))
+    return view
+
+
+def _explanation_files(exp_path: Path) -> Tuple[threading.Lock, _ExplanationFile, _ExplanationFile]:
+    with _LOCK:
+        files = _EXPLANATIONS.get(str(exp_path))
+        if files is None:
+            files = (threading.Lock(), _ExplanationFile(exp_path), _ExplanationFile(segment_path(exp_path, 1)))
+            _EXPLANATIONS[str(exp_path)] = files
+        return files
+
+
+def _chain_index(chain_path: Path) -> _ChainIndex:
+    with _LOCK:
+        chain = _CHAINS.get(str(chain_path))
+        if chain is None:
+            chain = _CHAINS[str(chain_path)] = _ChainIndex(chain_path)
+        return chain
+
+
+def trace_report(
+    trace_ids: Iterable[str],
+    *,
+    explanations_path: str | Path,
+    audit_path: str | Path,
+) -> Dict[str, Any]:
+    """The decision traces of ``trace_ids`` (deduplicated, in order, at most
+    :data:`MAX_TRACE_IDS`; invalid ids raise ValueError). Read only. No id:
+    nothing is read (``sources`` are ``not_read``)."""
+
+    ids: List[str] = []
+    for tid in trace_ids:
+        if not valid_trace_id(tid):
+            raise ValueError("invalid_trace_id")
+        if tid not in ids:
+            ids.append(tid)
+    if len(ids) > MAX_TRACE_IDS:
+        raise ValueError("too_many_trace_ids")
+    report: Dict[str, Any] = {
+        "ok": True,
+        "format": FORMAT,
+        "read_only": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "sources": {"explanations": {"state": "not_read"}, "chain": {"state": "not_read"}},
+        "traces": [],
+        "limits": LIMITS,
+    }
+    if not ids:
+        return report
+    exp_path = Path(explanations_path)
+    chain_path = Path(audit_path)
+
+    lock, active, rotated = _explanation_files(exp_path)
+    explanations: Dict[str, Dict[str, Any]] = {}
+    with lock:  # incremental: only what was appended since the last request
+        exp_error = ""
+        try:
+            states = [active.refresh(), rotated.refresh()]
+            exp_state = "present" if "present" in states else "missing"
+        except OSError as exc:
+            exp_state, exp_error = "unreadable", type(exc).__name__
+        for tid in ids:
+            if exp_state == "unreadable":
+                explanations[tid] = {"status": "source_unreadable"}
+                continue
+            n_active, rec = active.lookup(tid)
+            n_rotated, rec_rotated = rotated.lookup(tid)
+            count = n_active + n_rotated
+            if rec is not None:
+                explanations[tid] = _explanation_view(rec, count=count, segment=SEGMENT_ACTIVE)
+            elif rec_rotated is not None:
+                explanations[tid] = _explanation_view(rec_rotated, count=count, segment=SEGMENT_ROTATED)
+            else:
+                explanations[tid] = {
+                    "status": "not_found",
+                    "rotated_file_present": rotated.key is not None,
+                    "note": "no explanation with this trace_id in the retained files"
+                    + ("; older ones may have been rotated out" if rotated.key is not None else ""),
+                }
+        exp_source = source_explanations(
+            state=exp_state, error=exp_error,
+            files=[p.path.name for p in (rotated, active) if p.key is not None],
+            unparsed=active.unparsed + rotated.unparsed,
+            truncated=bool(active.truncated or rotated.truncated), base=exp_path.name,
+        )
+
+    chain = _chain_index(chain_path)
+    snap, recheck_pending = chain.current()
+    verdict = dict(snap.verdict)
+    if recheck_pending:
+        # The chain changed since this verification: nothing is verified now.
+        verdict.update(verified=False)
+    traces = []
+    for tid in ids:
+        explanation = explanations[tid]
+        chain_record: Dict[str, Any]
+        if snap.state == "unreadable":
+            chain_record = {"status": "source_unreadable"}
+        else:
+            count, row, where = chain.lookup(snap, tid)
+            if row is not None and where is not None:
+                chain_record = _chain_view(row, count=count, position=where[0], name=where[1],
+                                           active_name=chain_path.name, verdict=verdict,
+                                           pending=recheck_pending)
+            elif where is not None:
+                chain_record = {"status": "changed", "note": "the record changed after it was indexed; ask again"}
+            else:
+                chain_record = {
+                    "status": "not_found",
+                    "note": "the core decision chain holds P0 decisions only; records rotated out are not retained",
+                }
+        consistency: Dict[str, Any] = {}
+        if explanation.get("status") == "found" and chain_record.get("status") == "found":
+            consistency["action_matches"] = (
+                str(explanation.get("selected_action") or "") == str(chain_record.get("action") or "")
+            )
+        traces.append({
+            "trace_id": tid,
+            "explanation": explanation,
+            "chain_record": chain_record,
+            "consistency": consistency,
+        })
+    report["sources"] = {
+        "explanations": exp_source,
+        "chain": source_chain(verdict, state=snap.state, pending=recheck_pending, base=chain_path.name),
+    }
+    report["traces"] = traces
+    return report

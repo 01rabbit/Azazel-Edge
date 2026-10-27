@@ -328,6 +328,17 @@ sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- h
 sudo tail -n 1 /var/log/azazel-edge/ai/decision-explanations.jsonl | python3 -c 'import json, sys; print(json.load(sys.stdin).get("trust_capsule", {}).get("signature_state"))'
 ```
 
+SVC-14 も読むだけです。core の判定チェーンの最新の記録について、Web UI の判定ごとの
+trace（#341）を確かめます。`azazel-edge-audit-review --trace-id` と同じ、説明と
+チェーンの対応です。チェーンには P0 の判定しか入りません。記録が無ければ（SVC-09 の
+段階 2 で P0 にならなかった）SVC-14 は `N/A (no P0 decision)` にします。
+
+```bash
+# SVC-14 (after SVC-13): the Web UI's decision trace of the newest chain record
+TID=$(sudo tail -n 1 /var/log/azazel-edge/ai/core-decision-audit.jsonl | python3 -c 'import json, sys; print(json.load(sys.stdin)["trace_id"])')
+sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- "https://127.0.0.1/api/decision-trace?trace_id=$TID" | python3 -c 'import json, sys; d = json.load(sys.stdin); t = d["traces"][0]; print(t["explanation"]["status"], t["chain_record"]["status"], t["chain_record"].get("integrity"), d["sources"]["chain"]["verified"])'
+```
+
 | ID | 項目 | コマンド | 期待する結果 | Result | PR / issue |
 | --- | --- | --- | --- | --- | --- |
 | SVC-01 | unit が動いている | `systemctl is-active azazel-edge-control-daemon azazel-edge-core azazel-edge-web azazel-edge-ai-agent azazel-edge-suricata azazel-edge-opencanary nginx ntfy` | どれも `active` | | #483 |
@@ -343,6 +354,7 @@ sudo tail -n 1 /var/log/azazel-edge/ai/decision-explanations.jsonl | python3 -c 
 | SVC-11 | OpenCanary/Suricata の表示 | 上のコマンド | `opencanary`・`suricata`・`ntfy` が `ON`、`container_check` が `not_checked`（Web UI は Docker に問い合わせない） | | #475 |
 | SVC-12 | SNMP/NetFlow（任意） | 上のコマンド（既定では入らない: `ENABLE_SNMP`/`ENABLE_NETFLOW` は `0`、`install_sensors.sh` は `ENABLE_SERVICES=1` のときだけ unit を有効にする） | `User=azazel-sensor`。`ActiveState=inactive`、`Result=success`: モジュールにエントリポイントが無くすぐに終了コード 0 で終わるので、**センサーは動いていない**（5 章） | | #480, #483 |
 | SVC-13 | agent が書く判定の説明 | 上のコマンド（SVC-09 の段階 2 の後） | ファイルが `640 azazel-agent:azazel-web`。監査レビューが最新の判定の action と一緒に `schema:OK`、`capsule:signed`、`chain:OK(<N>) chain_scope=… chain_files=…` を出し、isolate・redirect・throttle なら `release=NOT APPLIED - planned only (dry_run)`（SVC-09 の段階 1 のとおり enforcement は無効。lease の時刻は出ない）と `hash_basis=enforcement_settings` も出す。`chain_scope=from_genesis` と `chain_scope=from_rotation_boundary` はどちらも合格（後者はチェーンが回転していて、回転の境目から後の記録を検証した。`chain_files` は読んだ監査ファイルの数）。`chain:EMPTY(0)` は失敗（監査の記録が無く、何も検証していない。終了コードは 0 でも失敗）。`chain:MISMATCH:…`（終了コード 3）も失敗。`capsule:unsigned` なら `/etc/azazel-edge/trust-capsule.env` が無い。SOCK-06 を見る（`capsule:not_recorded` は #477 より前の記録）。JSON の行は `True` で始まり（`chain.verified` が `true`。`False` は失敗）、scope と capsule の状態が続く。Booth Focus の行が `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1`。最後の行が `signed`（trust capsule が機器の鍵で署名されている。`unsigned` なら `/etc/azazel-edge/trust-capsule.env` が無い。SOCK-06 を見る。`None` は #477 より前の記録） | | #477 |
+| SVC-14 | Web UI の判定ごとの trace | 上のコマンド（SVC-13 の後） | `found found verified True`: その判定の説明とチェーンの記録が見つかり、残っているチェーン全体の検証が通る。`verified` の代わりに `failed_here` や `not_verified`、または最後が `False` なら失敗（SVC-13 の `chain:` と見比べる）。説明が `not_found` なら失敗（agent がチェーンに記録した判定の説明を書いていない） | | #341 |
 
 ### 3.2 ソケット・ディレクトリ・秘密の権限（#471 段階 1・2）
 
