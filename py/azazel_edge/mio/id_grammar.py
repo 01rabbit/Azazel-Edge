@@ -96,8 +96,8 @@ def second_layer_ok(value: str) -> bool:
 
 # --- identifier kinds (each defined once) -------------------------------------
 # Kinds after ``ev:`` that structured evidence refs use (fixtures, capability
-# results). Only kinds that both the model output parser and the no-model
-# handoff accepted before their grammars were merged are listed.
+# results): the intersection of the kinds the model output parser and the
+# no-model handoff accepted before their grammars were merged.
 EVIDENCE_REF_KINDS = ("alert", "auth", "dns", "flow", "http", "ssh", "tls")
 
 # Trace / frame ids from the frame builder callers (bin/azazel-mio-shadow-replay,
@@ -202,6 +202,22 @@ EVIDENCE_REF = ("event_id", "structured_ref", "suricata_ref")
 # cycle / request id grammar (which also covers the hypothesis, gap and
 # structured-ref ids the audit sees).
 AUDIT_ID_KINDS = ("event_id", "cycle_request_id")
+
+
+# A model-chosen capability name can pass the name grammar and still be any
+# word (a person's name, say). Errors and gap-score explanations show it only
+# when the broker registry knows it; otherwise they show this fixed
+# placeholder, which cannot match the capability grammar.
+UNREGISTERED_CAPABILITY = "unregistered-capability"
+
+
+def capability_label(capability: Any, registered_capabilities: Any = ()) -> str:
+    """``capability`` if it is a registered capability name that passes the
+    capability kind, else ``UNREGISTERED_CAPABILITY``."""
+    registered = {item for item in registered_capabilities if type(item) is str}
+    if type(capability) is str and capability in registered and id_ok(capability, ("capability",)):
+        return capability
+    return UNREGISTERED_CAPABILITY
 
 
 def id_ok(value: Any, kinds: tuple[str, ...]) -> bool:

@@ -20,6 +20,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from .contracts import HypothesisStatus, MioEvidenceGap, MioHypothesis, safe_model_id
+from .id_grammar import UNREGISTERED_CAPABILITY, capability_label
 
 SCORING_POLICY_ID = "mio-evidence-gap-score"
 # Bump SCORING_POLICY_VERSION on ANY change to the scoring logic below, not only
@@ -110,6 +111,9 @@ class GapScore:
     basis: tuple[tuple[str, tuple[str, ...]], ...] = ()
     ineligible_basis: tuple[tuple[str, tuple[str, ...]], ...] = ()
     targets: tuple[str, ...] = ()
+    # The capability as shown in to_dict() and in ``basis``: the name only when
+    # the broker registry knows it, otherwise UNREGISTERED_CAPABILITY.
+    capability_label: str = UNREGISTERED_CAPABILITY
 
     def to_dict(self) -> dict[str, Any]:
         basis = dict(self.basis)
@@ -117,7 +121,7 @@ class GapScore:
         return {
             # Defence in depth: only grammar-valid ids leave this module.
             "gap_id": safe_model_id(self.gap_id, "gap_id"),
-            "capability": safe_model_id(self.capability, "capability"),
+            "capability": capability_label(self.capability_label, (self.capability_label,)),
             "score": self.score,
             "eligible": self.eligible,
             "rank": self.rank,
@@ -142,7 +146,8 @@ def _score_one(
 ) -> GapScore:
     # Explanation ids pass the model-id grammar or become INVALID_MODEL_ID.
     gap_ref = f"gap:{safe_model_id(gap.gap_id, 'gap_id')}"
-    cap_ref = f"capability:{safe_model_id(gap.capability, 'capability')}"
+    shown_capability = capability_label(gap.capability, registered)
+    cap_ref = f"capability:{shown_capability}"
     reasons: list[tuple[str, int]] = [("base", WEIGHTS["base"])]
     basis: list[tuple[str, tuple[str, ...]]] = [("base", (gap_ref,))]
     ineligible: list[str] = []
@@ -194,6 +199,7 @@ def _score_one(
     return GapScore(
         gap.gap_id, gap.capability, score, not ineligible, tuple(reasons), tuple(ineligible),
         basis=tuple(basis), ineligible_basis=tuple(ineligible_basis), targets=target_ids,
+        capability_label=shown_capability,
     )
 
 

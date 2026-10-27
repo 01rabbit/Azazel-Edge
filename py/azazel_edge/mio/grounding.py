@@ -13,22 +13,15 @@ from .contracts import (
     MioSituationFrame,
     safe_model_id,
 )
+from .id_grammar import UNREGISTERED_CAPABILITY, capability_label  # noqa: F401
 
 
 # Model-written keys echoed into error paths must look like schema keys.
 _KEY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}\Z")
 FORBIDDEN_DIRECTIVE_KEYS = {"execute", "must_action", "override", "command", "shell", "activate", "enforce", "executable"}
 ALLOWED_RECOMMENDED_ACTIONS = {"OBSERVE", "NOTIFY", "THROTTLE", "REDIRECT", "ISOLATE"}
-# A model-chosen capability name can pass the name grammar and still be any
-# word (a person's name, say). Errors echo it only when the broker registry
-# knows it; otherwise they carry this fixed placeholder.
-UNREGISTERED_CAPABILITY = "unregistered-capability"
-
-
-def capability_label(capability: Any, registered_capabilities: Sequence[str] = ()) -> str:
-    """``capability`` if it is a registered capability name, else a fixed placeholder."""
-    registered = {item for item in registered_capabilities if type(item) is str}
-    return capability if type(capability) is str and capability in registered else UNREGISTERED_CAPABILITY
+# Errors name a capability only when the broker registry knows it
+# (id_grammar.capability_label); otherwise UNREGISTERED_CAPABILITY.
 
 
 @dataclass(frozen=True)

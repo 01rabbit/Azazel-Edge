@@ -389,6 +389,7 @@ def test_opaque_id_is_unchanged_for_the_frame():
 
 from azazel_edge.mio import GroundingValidator, MioEvidenceGap, MioHypothesis, MioSituationFrame  # noqa: E402
 from azazel_edge.mio.grounding import UNREGISTERED_CAPABILITY, capability_label  # noqa: E402
+from azazel_edge.mio.evidence_gap_scoring import score_evidence_gaps  # noqa: E402
 
 
 def _gap_with(capability):
@@ -442,3 +443,33 @@ def test_every_capability_the_repo_names_still_passes_the_model_grammar():
     assert names
     for name in names:
         assert contracts.model_id_ok(name, "capability"), name
+
+
+# The same rule for the gap-score explanation that goes into the trace's
+# evidence_gap_scores event.
+_SCORE_HYPS = (MioHypothesis.from_mapping({"hypothesis_id": "h1", "statement": "s", "falsification_conditions": ["c"]}, ordinal=1),)
+
+
+def _score(capability, *, allowed, registered):
+    (score,) = score_evidence_gaps([_gap_with(capability)], hypotheses=_SCORE_HYPS, allowed_capabilities=allowed,
+                                   registered_capabilities=registered, remaining_broker_calls=3)
+    return score.to_dict()
+
+
+def test_unregistered_capability_is_not_echoed_in_the_gap_score():
+    body = _score("alice_smith", allowed=["query_recent_alerts"], registered=["query_recent_alerts"])
+    assert body["capability"] == UNREGISTERED_CAPABILITY
+    assert "alice_smith" not in json.dumps(body)
+    assert {"code": "capability_not_allowed_by_playbook", "basis": [f"capability:{UNREGISTERED_CAPABILITY}"]} in body["ineligible_basis"]
+    # allowed by the playbook but not registered: still not named
+    body = _score("alice_smith", allowed=["alice_smith"], registered=["query_recent_alerts"])
+    assert "alice_smith" not in json.dumps(body)
+
+
+def test_registered_capability_is_still_named_in_the_gap_score():
+    body = _score("query_flow_summary", allowed=["query_recent_alerts"], registered=["query_flow_summary"])
+    assert body["capability"] == "query_flow_summary"
+    assert {"code": "capability_not_allowed_by_playbook", "basis": ["capability:query_flow_summary"]} in body["ineligible_basis"]
+    body = _score("query_flow_summary", allowed=["query_flow_summary"], registered=["query_flow_summary"])
+    assert body["capability"] == "query_flow_summary" and body["eligible"] is True
+    assert any("capability:query_flow_summary" in r["basis"] for r in body["reasons"])

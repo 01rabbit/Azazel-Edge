@@ -87,9 +87,10 @@ operator can read exactly why a gap ranked where it did.
 Each component is also traceable to the named missing evidence it rests on. The gap
 itself is the named missing evidence (`gap:<gap_id>`); every rule and every
 ineligibility code carries a sorted `basis` of identifiers, never model prose (the gap
-`question` is not copied into the trace). Every id in `gap_id`, `capability`, `targets`
-and `basis` has passed the model-id grammar below; anything else is shown as
-`invalid-model-id`. The basis does not change the score, the
+`question` is not copied into the trace). Every id in `gap_id`, `targets` and `basis` has
+passed the model-id grammar below; anything else is shown as `invalid-model-id`. A
+capability (`capability`, `capability:<name>`) is shown only when it is registered in the
+broker, otherwise as `unregistered-capability`. The basis does not change the score, the
 policy version or `scoring_policy_digest()`.
 
 | Rule / code | `basis` |
@@ -252,7 +253,10 @@ A gap whose capability passes the name grammar but is not in the playbook's
 `allowed_capabilities` is rejected with `capability_not_allowed_by_playbook:<name>` only
 when `<name>` is in the broker registry; any other name is reported as
 `capability_not_allowed_by_playbook:unregistered-capability`, so a model-chosen word (a
-person's name, say) is not echoed into the errors.
+person's name, say) is not echoed into the errors. The gap score follows the same rule:
+its `capability` and every `capability:<name>` in `basis` / `ineligible_basis` (and so the
+trace's `evidence_gap_scores` event) show the name only when it is registered, otherwise
+`unregistered-capability`.
 
 ### One id grammar
 
@@ -280,7 +284,9 @@ Merging the grammars narrowed what is accepted, never widened it
 the fixture ids and the review corpus):
 
 - model output: `ev:` refs of kind `deception`, `host`, `noc`, `soc`, `sys` (the handoff
-  never accepted them); values with a redaction token shape; capability names with an
+  never accepted them), so canonical fixtures that contain `ev:noc|soc|sys|host|deception:`
+  refs are rejected when a model cites them (production refs are `sha256:` event ids and
+  `suricata_sid:`); values with a redaction token shape; capability names with an
   address shape (`aa_bb_cc_dd_ee_ff`) or of 32 or more characters (long-token rule; the
   registered names are much shorter).
 - no-model handoff: `ev:` refs of kind `anomaly`, `dhcp`, `drop`, `ftp`, `netflow`, `smb`,
