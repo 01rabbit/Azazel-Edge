@@ -332,7 +332,7 @@ sudo sed 's/^/X-Auth-Token: /' /etc/azazel-edge/web_token.txt | curl -sk -H @- h
 | SVC-10 | トークンファイルを使った ntfy の SSE | 上のコマンド | 端末 2 が `200`。端末 1 に `first-run test` を含むイベントが出る | | #475, #485 |
 | SVC-11 | OpenCanary/Suricata の表示 | 上のコマンド | `opencanary`・`suricata`・`ntfy` が `ON`、`container_check` が `not_checked`（Web UI は Docker に問い合わせない） | | #475 |
 | SVC-12 | SNMP/NetFlow（任意） | 上のコマンド（既定では入らない: `ENABLE_SNMP`/`ENABLE_NETFLOW` は `0`、`install_sensors.sh` は `ENABLE_SERVICES=1` のときだけ unit を有効にする） | `User=azazel-sensor`。`ActiveState=inactive`、`Result=success`: モジュールにエントリポイントが無くすぐに終了コード 0 で終わるので、**センサーは動いていない**（5 章） | | #480, #483 |
-| SVC-13 | agent が書く判定の説明 | 上のコマンド（SVC-09 の段階 2 の後） | ファイルが `640 azazel-agent:azazel-web`。監査レビューが `schema:OK` と `chain:OK(…)` を最新の判定の action と一緒に出し、isolate・redirect・throttle なら `release=NOT APPLIED - planned only (dry_run)`（SVC-09 の段階 1 のとおり enforcement は無効。lease の時刻は出ない）と `hash_basis=enforcement_settings` も出す。Booth Focus の行が `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1` | | #477 |
+| SVC-13 | agent が書く判定の説明 | 上のコマンド（SVC-09 の段階 2 の後） | ファイルが `640 azazel-agent:azazel-web`。監査レビューが `schema:OK` と `chain:OK(…)` を最新の判定の action と一緒に出し、`chain_scope=from_genesis`（チェーンが 16 MiB で回転した後は `chain_scope=from_rotation_boundary`。回転の境目より前の記録は保持されておらず、検証していない）も出す。ここでは `chain:EMPTY(0)` と `chain:MISMATCH` は失敗。isolate・redirect・throttle なら `release=NOT APPLIED - planned only (dry_run)`（SVC-09 の段階 1 のとおり enforcement は無効。lease の時刻は出ない）と `hash_basis=enforcement_settings` も出す。Booth Focus の行が `True live_test_input <ACTION> azazel-edge-core/rust_event_engine_v1` | | #477 |
 
 ### 3.2 ソケット・ディレクトリ・秘密の権限（#471 段階 1・2）
 

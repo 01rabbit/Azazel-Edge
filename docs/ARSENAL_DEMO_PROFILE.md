@@ -145,8 +145,20 @@ writes, no policy changes, and no enforcement actions.
    `config_hash`, `evidence_ids`, `operator_wording`.
 3. Runs `validate_v2_explanation` on the record and reports whether it is
    schema-valid (lists any problems if it is not).
-4. Runs `P0AuditLogger.verify_chain` on the triage-audit JSONL and reports
-   `OK (N entries)` or `MISMATCH: <error detail>`.
+4. Verifies the audit JSONL (`--audit-path`, default the triage audit) with
+   `audit_review.verify_audit_chain`, which also reads a rotated chain
+   (`<name>.1` and the active file, as the P0 relay does), and reports
+   `OK (N entries, <scope>)`, `EMPTY (0 entries): nothing was verified` or
+   `MISMATCH: <error detail>`. `<scope>` says what OK means:
+   `from_genesis` (every record from the chain's first one) or
+   `from_rotation_boundary` (the oldest retained record starts a rotated
+   file; the records rotation removed are not retained and were not
+   verified). The compact line is `chain:OK(N) chain_scope=<scope>
+   chain_files=<n>`, `chain:EMPTY(0)` or `chain:MISMATCH:<error>`; `--json`
+   has `chain.scope`, `chain.genesis_retained`, `chain.files`,
+   `chain.chain_id` and `chain.meaning`. Records are not signed: a writer of
+   the file can forge a chain that verifies, and records removed from the
+   end are not detected.
 
 ### Usage
 
@@ -189,14 +201,14 @@ The audit path can also be set via the environment variable
 
 | Code | Meaning |
 |------|---------|
-| 0    | Explanation record found; audit chain verified OK |
+| 0    | Explanation record found; audit chain verified OK (or the audit file is missing/empty: `EMPTY`, nothing verified) |
 | 2    | Explanation file missing, empty, or trace-id not found |
-| 3    | Audit chain verification failed (hash mismatch or parse error) |
+| 3    | Audit chain verification failed (hash or link mismatch, parse error, a rotated file the next one does not continue, a cut start, or the file could not be read) |
 
 ### Read-only contract
 
-The command only opens files for reading.  It calls `P0AuditLogger.verify_chain`
-(a classmethod that reads the log file without instantiating a writer) and
+The command only opens files for reading.  It calls `audit_review.verify_audit_chain`
+(reads the chain files with `segments.read_chain` without instantiating a writer) and
 `validate_v2_explanation` (a pure validation function).  No logger is
 instantiated, no file is opened for writing, and no control-plane state is
 modified.  This property is verified by the test suite (see

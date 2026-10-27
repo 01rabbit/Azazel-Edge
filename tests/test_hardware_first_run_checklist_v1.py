@@ -814,6 +814,12 @@ ROW_VALUES = (
     ("WAN-10", ("`Azazel-Edge.local`",) * 2, None, "installer/internal/install_local_ca.sh", '"${SHORT_NAME}.local"', False),
     ("WAN-10", ("not the WAN address", "WAN のアドレスを含まない"), None, "installer/internal/install_local_ca.sh", "ip -4 route get", True),
     ("WAN-10", ("(the CA is kept)", "（CA はそのまま）"), None, "installer/internal/install_local_ca.sh", 'if (( recreate_ca == 1 )); then', False),
+    # SVC-13: the review verifies a rotated core decision chain and says from where (Edge#462, #477).
+    ("SVC-13", ("`chain_scope=from_genesis`",) * 2, None, "py/azazel_edge/audit_review.py", 'SCOPE_FROM_GENESIS = "from_genesis"', False),
+    ("SVC-13", ("`chain_scope=from_rotation_boundary`",) * 2, None, "py/azazel_edge/audit_review.py", 'SCOPE_FROM_ROTATION_BOUNDARY = "from_rotation_boundary"', False),
+    ("SVC-13", ("`chain:EMPTY(0)`",) * 2, None, "py/azazel_edge/audit_review.py", 'chain_status = "chain:EMPTY(0)"', False),
+    ("SVC-13", ("16 MiB",) * 2, None, "py/azazel_edge/notify/core_decisions.py", "DEFAULT_CHAIN_SEGMENT_MAX_BYTES = 16 * 1024 * 1024", False),
+    ("SVC-13", ("`chain:OK(…)`",) * 2, None, "py/azazel_edge/audit_review.py", 'f"chain:OK({chain_result[\'entries\']}) chain_scope={scope}"', False),
 )
 
 
