@@ -131,6 +131,7 @@ Invariants behind the matrix, with the check that pins each one:
 | The agent's only subprocess is the default-route read; the Web UI and control-daemon action tables contain no Defensive State action. | `tests/test_mio_cognitive_plane_authority_v1.py` |
 | Deterministic modules do not import the trace audit or redaction. | `tests/test_mio_reasoning_trace_audit.py` |
 | Model-built broker requests never reach the arbiter, enforcement, AZ-06 or OpenCanary. | `tests/test_mio_capability_broker_acceptance.py` |
+| Every capability name the repository registers, ships in a fixture or allows in a playbook passes the read-only registry rules (no generic network, shell or write capability); broker audit records hold only allowlisted fields and no address or credential shape. | `tests/test_mio_capability_broker_384_v1.py` |
 
 These are static checks of the repository tree. They catch accidental drift,
 not code written to evade them (the same limit as the enforcement inventory).
@@ -232,7 +233,7 @@ A change to an Edge-local M.I.O. schema bumps its version in the same change
 | Final documentation package (operations, offline deployment, field validation) | #375 |
 | Pi-class resource and latency evidence for the frame builder and models | #372 (frame budget follow-up from #383) |
 | Live wiring of `ReasoningCoordinator` and of the trace audit port (`trace_recorder.py`, off by default; key provisioner not run by the installer) | #385 |
-| Real read-only broker adapters, per-capability data minimization, cancelling handlers of stale cycles, RBAC tests | #384 |
+| Real read-only broker adapters, per-capability data minimization, RBAC tests (closed request type, cycle close for stale cycles and address-free audit are in place) | #384 |
 | Claim classes from #366 Part B (per-ref freshness, arbiter contradiction, Knowledge-as-decision, AZ-06 belief, attribution wording); structured playbook selection; `select_playbook` in a runtime | #386 |
 | Live callers that pass Edge's decision-audit records (`action_history`) and an AZ-06 facts projection (`deception_context`) to the frame builder; the v2 fields exist, but no running service fills them | #385 |
 | Outcome-as-Evidence proof gates | #400 |

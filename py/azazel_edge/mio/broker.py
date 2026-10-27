@@ -19,9 +19,12 @@ Security boundary rules enforced here:
   cannot claim provenance/status/authority: reserved keys are stripped
   case-insensitively at every depth.
 * Every request (allowed or refused) produces a sanitized, size-bounded audit
-  record. Free-text parameter values and handler error text are never
-  recorded; identifiers that are not well-formed are recorded only as a keyed
-  (per-process HMAC) digest.
+  record built from a fixed field allowlist. Free-text parameter values and
+  handler error text are never recorded; identifiers that are not well-formed,
+  or that contain an address or a credential shape, are recorded only as a
+  keyed (per-process HMAC) digest.
+* ``close()`` ends the broker's cycle: later requests are refused and a
+  handler still running when the cycle closes yields ``stale`` with no data.
 
 There is no shell, subprocess, socket, HTTP, filesystem-path, packet-control,
 Action Arbiter or AZ-06 control primitive in this module. Only the offline
@@ -45,7 +48,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
-from .contracts import MioCapabilityRequest, MioCapabilityResult
+from .contracts import MioCapabilityRequest, MioCapabilityResult, _opaque_id
+from .redaction import contains_token_like
 
 
 class CapabilityBrokerError(RuntimeError):
@@ -117,11 +121,25 @@ MAX_RESULT_DEPTH = 4
 MAX_RESULT_NODES = 2048
 MAX_EVIDENCE_REFS = 32
 MAX_AUDIT_RECORD_CHARS = 2048
+MAX_PURPOSE_HYPOTHESIS_IDS = 8
+# Every audit record has exactly these keys (plus ``audit_truncated`` when
+# reduced). Nothing outside this allowlist is ever projected.
+AUDIT_RECORD_FIELDS = (
+    "schema", "request_id", "trace_id", "purpose_hypothesis_ids", "capability", "capability_digest",
+    "decision", "status", "reason", "params", "evidence_refs", "source_component", "age_seconds",
+    "latency_ms", "result_chars", "truncated",
+)
+# Broker reasons are fixed codes with optional identifier suffixes; anything
+# else is replaced before it reaches the audit record.
+_REASON_RE = re.compile(r"[a-z][a-z0-9_]{0,63}(?::[A-Za-z0-9_]{1,64}){0,2}\Z")
 FUTURE_SKEW_SECONDS = 60
 
 # Per-process key: audit digests cannot be brute-forced offline from low-entropy
 # inputs (IPs, hostnames) and are only comparable within one process lifetime.
 _AUDIT_KEY = secrets.token_bytes(32)
+
+# Event type used for submit wake-ups (module-level so tests can observe ordering).
+_Event = threading.Event
 
 
 @dataclass(frozen=True)
@@ -217,11 +235,93 @@ def _safe_label(value: Any, limit: int = 128) -> str:
     return _ID_FORBIDDEN_RE.sub("?", value[:limit])
 
 
+# Closed schema for identifiers kept verbatim in the audit. It covers the
+# shapes this repository produces:
+#   * evidence-plane event ids ``sha256:<64 hex>`` (make_event_id),
+#   * Edge core trace ids ``trace-0x<1..16 hex>`` (calc_trace_id), optionally
+#     followed by lifecycle / loop suffixes (``:e1:c2:req:3``),
+#   * ids built from the vocabulary below and short ordinals joined by
+#     ``:``, ``-`` or ``_`` (``ev:auth:0001``, ``replay:g5-golden-replay-v1``,
+#     ``evaluation:stale-evidence:req:1``, ``h1``).
+# Every other value (hostnames, person names, packed or integer-encoded
+# addresses, bare hex, tokens) is replaced by the keyed digest.
+AUDIT_ID_VOCABULARY = frozenset(
+    {
+        # structure
+        "ev", "evidence", "trace", "cycle", "req", "frame", "mio", "fixture", "replay", "evaluation",
+        "golden", "shadow", "scenario", "demo", "test", "sample", "hypothesis", "gap",
+        # evidence sources and kinds
+        "auth", "flow", "sys", "noc", "soc", "ssh", "alert", "alerts", "dns", "tls", "icmp", "iface",
+        "probe", "plane", "activity",
+        # defensive states
+        "observe", "notify", "throttle", "redirect", "isolate",
+        # evaluation / replay scenario words
+        "contradictory", "role", "cross", "fabricated", "ref", "empty", "recommendation", "captured",
+        "malformed", "model", "output", "timeout", "no", "llm", "unavailable", "prompt", "injection",
+        "directive", "recorded", "qwen", "accepted", "stale", "arp", "spoof", "benign", "beacon",
+        "cred", "harvest", "exfil", "phishing", "port", "scan", "recon", "bruteforce", "ambiguity",
+    }
+)
+_SHA256_ID_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_CORE_TRACE_RE = re.compile(r"trace-0x[0-9a-f]{1,16}(?=:|\Z)")
+_ORDINAL_SEGMENT_RE = re.compile(r"[a-z]{0,2}[0-9]{1,6}[a-z]{0,2}\Z")
+_DIGITS_RE = re.compile(r"[0-9]+\Z")
+_ID_SEPARATORS_RE = re.compile(r"[:_-]")
+
+
+def _audit_id_in_schema(value: str) -> bool:
+    if _SHA256_ID_RE.match(value):
+        return True
+    rest = value
+    core = _CORE_TRACE_RE.match(value)
+    if core is not None:
+        rest = value[core.end():].lstrip(":")
+        if not rest:
+            return True
+    if not re.fullmatch(r"[a-z0-9]+(?:[:_-][a-z0-9]+)*", rest):
+        return False
+    digit_run = 0
+    for segment in _ID_SEPARATORS_RE.split(rest):
+        if segment in AUDIT_ID_VOCABULARY:
+            digit_run = 0
+            continue
+        if not _ORDINAL_SEGMENT_RE.match(segment):
+            return False
+        # No more than two numeric segments in a row: dotted, dashed or
+        # colon-separated quads cannot pass.
+        digit_run = digit_run + 1 if _DIGITS_RE.match(segment) else 0
+        if digit_run > 2:
+            return False
+    return True
+
+
+def _audit_safe(value: Any) -> bool:
+    """An identifier may appear verbatim in the audit only if it fits the
+    closed schema above and, as a second layer, carries no address shape
+    (SituationFrame opaque-ID rule) and no credential shape (mio redaction)."""
+    if type(value) is not str or not _IDENT_RE.match(value):
+        return False
+    try:
+        return (
+            _audit_id_in_schema(value)
+            and _opaque_id(value) == value
+            and not contains_token_like(value)
+        )
+    except Exception:
+        return False
+
+
 def _audit_id(value: Any) -> str:
-    """Well-formed identifiers are kept; anything else becomes a keyed digest."""
-    if type(value) is str and _IDENT_RE.match(value):
+    """Safe identifiers are kept; anything else becomes a keyed digest."""
+    if _audit_safe(value):
         return value
     return "h:" + _digest(value)
+
+
+def _audit_reason(value: Any) -> str:
+    if type(value) is str and (value == "" or _REASON_RE.match(value)):
+        return value
+    return "reason_redacted"
 
 
 def _name_forbidden(name: str, tokens: frozenset[str], stems: tuple[str, ...]) -> bool:
@@ -307,10 +407,16 @@ def _sanitize_result(value: Any, level: int, state: dict[str, int], limit: int) 
 class _Slot:
     """Concurrency slot that can be released exactly once."""
 
-    def __init__(self, cap_sem: threading.BoundedSemaphore, global_sem: threading.BoundedSemaphore):
+    def __init__(
+        self,
+        cap_sem: threading.BoundedSemaphore,
+        global_sem: threading.BoundedSemaphore,
+        on_release: Callable[[], None] = lambda: None,
+    ):
         self.lock = threading.Lock()
         self._cap_sem = cap_sem
         self._global_sem = global_sem
+        self._on_release = on_release
         self._released = False
         self.done = False
         self.hung = False
@@ -322,6 +428,7 @@ class _Slot:
             self._released = True
         self._cap_sem.release()
         self._global_sem.release()
+        self._on_release()
 
 
 class CapabilityBroker:
@@ -359,8 +466,33 @@ class CapabilityBroker:
         self._max_quarantined = max(1, min(int(max_quarantined), 16))
         self._quarantined = 0
         self._quarantined_per_capability: dict[str, int] = {}
+        # Admitted handlers whose slot is still held.
+        self._in_flight = 0
+        self._in_flight_per_capability: dict[str, int] = {}
         self._audit: deque[dict[str, Any]] = deque(maxlen=max(1, min(int(audit_capacity), 4096)))
         self._audit_sink = audit_sink
+        # Cycle end: set by close(); wakes every waiting submit at once.
+        self._closed = False
+        self._waiters: set[threading.Event] = set()
+
+    def close(self) -> None:
+        """End this broker's reasoning cycle (e.g. the cycle was superseded).
+
+        Later requests are refused with ``broker_closed``. A submit waiting on a
+        handler returns ``stale`` / ``cycle_closed`` immediately, with no data;
+        the handler thread cannot be killed, so it stays in the bounded
+        quarantine until it returns and its result is discarded. Idempotent.
+        """
+        with self._lock:
+            self._closed = True
+            waiters = list(self._waiters)
+        for event in waiters:
+            event.set()
+
+    @property
+    def closed(self) -> bool:
+        with self._lock:
+            return self._closed
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._capabilities))
@@ -368,6 +500,10 @@ class CapabilityBroker:
     def audit_records(self) -> tuple[dict[str, Any], ...]:
         with self._lock:
             return tuple(copy.deepcopy(item) for item in self._audit)
+
+    def quarantine_limit(self) -> int:
+        """Upper bound on quarantined workers (and on running + quarantined)."""
+        return self._max_quarantined
 
     def quarantined(self) -> int:
         with self._lock:
@@ -395,10 +531,12 @@ class CapabilityBroker:
             self._record_audit(request, result, params_audit)
         except Exception:
             try:
-                self._append_audit({
-                    "schema": "mio_capability_audit/v1", "audit_error": True,
-                    "status": result.status, "reason": result.error,
-                })
+                fallback: dict[str, Any] = dict.fromkeys(AUDIT_RECORD_FIELDS)
+                fallback.update(
+                    schema="mio_capability_audit/v1", decision="refused" if result.status in REFUSAL_STATUSES else "allowed",
+                    status=result.status, reason="audit_error", params={}, purpose_hypothesis_ids=[], evidence_refs=[],
+                )
+                self._append_audit(fallback)
             except Exception:
                 pass
         return result
@@ -424,10 +562,21 @@ class CapabilityBroker:
         )
 
     def _submit(self, request: Any) -> tuple[MioCapabilityResult, dict[str, Any]]:
+        # Closed contract: only the frozen request dataclass is accepted, so a
+        # duck-typed object cannot smuggle extra fields past the schema.
+        if type(request) is not MioCapabilityRequest:
+            return self._result(request, CapabilityStatus.INVALID, "request_type_invalid"), {}
         for attr in ("request_id", "trace_id"):
             value = _attr(request, attr)
             if type(value) is not str or not value or len(value) > 128 or _ID_FORBIDDEN_RE.search(value):
                 return self._result(request, CapabilityStatus.INVALID, f"invalid_{attr}"), {}
+        purpose = _attr(request, "purpose_hypothesis_ids")
+        if (
+            not isinstance(purpose, (list, tuple))
+            or len(purpose) > MAX_PURPOSE_HYPOTHESIS_IDS
+            or any(type(x) is not str or not x or len(x) > 96 or _ID_FORBIDDEN_RE.search(x) for x in purpose)
+        ):
+            return self._result(request, CapabilityStatus.INVALID, "invalid_purpose_hypothesis_ids"), {}
         capability = _attr(request, "capability")
         if type(capability) is not str or not _NAME_RE.match(capability):
             return self._result(request, CapabilityStatus.REJECTED, "capability_name_malformed"), {}
@@ -449,16 +598,26 @@ class CapabilityBroker:
         cap_slots = self._capability_slots[capability]
         # Admission is one atomic critical section: budget check + increment +
         # quarantine check + non-blocking slot acquisition.
+        wake = _Event()
         with self._lock:
+            if self._closed:
+                return self._result(request, CapabilityStatus.REJECTED, "broker_closed"), params_audit
             if self._total_calls >= self._max_total_calls:
                 return self._result(request, CapabilityStatus.REJECTED, "broker_total_budget_exhausted"), params_audit
             used = self._per_capability_calls.get(capability, 0)
             if used >= spec.max_calls_per_cycle:
                 return self._result(request, CapabilityStatus.REJECTED, "capability_budget_exhausted"), params_audit
-            if self._quarantined >= self._max_quarantined:
-                return self._result(request, CapabilityStatus.REJECTED, "broker_quarantine_full"), params_audit
-            if self._quarantined_per_capability.get(capability, 0) >= spec.max_concurrency:
-                return self._result(request, CapabilityStatus.REJECTED, "capability_quarantined"), params_audit
+            # Live workers (running + quarantined) never exceed
+            # max_quarantined, so even if every running handler times out (or
+            # close() strands them) the quarantine stays within its bound. The
+            # same holds per capability against max_concurrency.
+            if self._quarantined + self._in_flight >= self._max_quarantined:
+                reason = "broker_quarantine_full" if self._quarantined else "broker_overloaded"
+                return self._result(request, CapabilityStatus.REJECTED, reason), params_audit
+            cap_quarantined = self._quarantined_per_capability.get(capability, 0)
+            if cap_quarantined + self._in_flight_per_capability.get(capability, 0) >= spec.max_concurrency:
+                reason = "capability_quarantined" if cap_quarantined else "capability_overloaded"
+                return self._result(request, CapabilityStatus.REJECTED, reason), params_audit
             if not self._global_slots.acquire(blocking=False):
                 return self._result(request, CapabilityStatus.REJECTED, "broker_overloaded"), params_audit
             if not cap_slots.acquire(blocking=False):
@@ -466,8 +625,16 @@ class CapabilityBroker:
                 return self._result(request, CapabilityStatus.REJECTED, "capability_overloaded"), params_audit
             self._total_calls += 1
             self._per_capability_calls[capability] = used + 1
+            self._in_flight += 1
+            self._in_flight_per_capability[capability] = self._in_flight_per_capability.get(capability, 0) + 1
+            self._waiters.add(wake)
 
-        slot = _Slot(cap_slots, self._global_slots)
+        def _leave_in_flight() -> None:
+            with self._lock:
+                self._in_flight -= 1
+                self._in_flight_per_capability[capability] -= 1
+
+        slot = _Slot(cap_slots, self._global_slots, _leave_in_flight)
         outcome: dict[str, Any] = {}
         frozen_args = MappingProxyType(dict(args))
 
@@ -482,6 +649,8 @@ class CapabilityBroker:
                 outcome["error"] = f"handler_error:{type(exc).__name__}"[:96]
             finally:
                 slot.release()
+                # Mark done before waking the submitter: a woken submitter
+                # must never see a finished handler as still running.
                 with slot.lock:
                     slot.done = True
                     was_hung = slot.hung
@@ -489,15 +658,22 @@ class CapabilityBroker:
                         with self._lock:
                             self._quarantined -= 1
                             self._quarantined_per_capability[capability] -= 1
+                wake.set()
 
         base = {"source_component": spec.source_component, "max_age_seconds": max_age}
         worker = threading.Thread(target=_run, name=f"mio-cap-{capability}", daemon=True)
         try:
-            worker.start()
-        except Exception:
-            slot.release()
-            return self._result(request, CapabilityStatus.ERROR, "worker_start_failed", **base), params_audit
-        worker.join(spec.timeout_seconds)
+            try:
+                worker.start()
+            except Exception:
+                slot.release()
+                return self._result(request, CapabilityStatus.ERROR, "worker_start_failed", **base), params_audit
+            # Wakes when the handler finishes, the timeout elapses, or close().
+            wake.wait(spec.timeout_seconds)
+        finally:
+            with self._lock:
+                self._waiters.discard(wake)
+                cycle_closed = self._closed
         with slot.lock:
             timed_out = not slot.done
             if timed_out:
@@ -509,7 +685,13 @@ class CapabilityBroker:
             # Free the concurrency slot; the still-running worker is accounted
             # in the bounded quarantine until it returns.
             slot.release()
+            if cycle_closed:
+                return self._result(request, CapabilityStatus.STALE, "cycle_closed", **base), params_audit
             return self._result(request, CapabilityStatus.TIMEOUT, "capability_timeout", **base), params_audit
+        if cycle_closed:
+            # The cycle ended while the handler ran: its data belongs to a
+            # superseded cycle and cannot ground anything.
+            return self._result(request, CapabilityStatus.STALE, "cycle_closed", **base), params_audit
         worker.join(0.5)
         if "status" in outcome:
             return self._result(request, outcome["status"], outcome["error"], **base), params_audit
@@ -651,9 +833,9 @@ class CapabilityBroker:
             "capability_digest": None if allowlisted else _digest(capability),
             "decision": "refused" if result.status in REFUSAL_STATUSES else "allowed",
             "status": result.status,
-            "reason": result.error,
+            "reason": _audit_reason(result.error),
             "params": copy.deepcopy(dict(params_audit)),
-            "evidence_refs": list(result.evidence_refs),
+            "evidence_refs": [_audit_id(ref) for ref in result.evidence_refs],
             "source_component": result.source_component,
             "age_seconds": result.age_seconds,
             "latency_ms": result.latency_ms,
