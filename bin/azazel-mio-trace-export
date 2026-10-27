@@ -34,8 +34,17 @@ def _small_int(value: str, code: str) -> int:
     return int(value)
 
 
+class _Parser(argparse.ArgumentParser):
+    """argparse's own errors repeat the offending argument (an unrecognized
+    value, an extra positional); print a fixed code instead."""
+
+    def error(self, message: str):  # noqa: ARG002 - the message may echo argv
+        print("azazel-mio-trace-export: invalid_arguments", file=sys.stderr)
+        raise SystemExit(2)
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Read-only export of one trace from the M.I.O. trace audit; prints no free text or key.")
+    parser = _Parser(description="Read-only export of one trace from the M.I.O. trace audit; prints no free text or key.")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--config", help="mio.trace_audit_config.v1 JSON file (uses its path and max_files)")
     source.add_argument("--path", help="active trace audit file")

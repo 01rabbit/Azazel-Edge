@@ -146,7 +146,16 @@ stricter checks in addition:
   the key. Do not trace it by other means either.
 - `load_audit_key` opens the file with `O_NOFOLLOW` and uses it only if no
   directory on its path is a symlink and it is a regular file owned by root
-  or the current user with no group or other permission bits. A missing, refused or unusable key gives a random
+  or the current user with no group or other permission bits.
+- The symlink check (`has_symlink_parent`, also used for the config file and
+  the export) looks at every ancestor directory with `lstat`. It fails
+  closed: a system whose ancestors are symlinks (macOS `/var` ->
+  `/private/var`, a symlinked `/etc`) gets `symlink_parent` and must use the
+  resolved path. The check and the later `open` are separate steps: a
+  directory swapped for a symlink between them is not detected (a
+  time-of-check/time-of-use gap). It guards against a misconfigured path, not
+  against a local attacker who can rename the directories; those must be
+  owned by root. A missing, refused or unusable key gives a random
   per-process key and `"digest_key": "ephemeral"`: never a built-in or known
   key. There is no environment variable for the key. Reasons are fixed codes
   (`missing`, `symlink`, `symlink_parent`, `mode_too_wide`, `owner`,
@@ -200,8 +209,11 @@ from the active file and its rotated files, oldest first, as
   `refused:<reason>`. `complete` is false when no file could be read or any
   file was refused; the records may then be incomplete and the exit status
   is 1 (0 when complete). A missing rotated file is normal. Invalid
-  arguments (including `--limit` and `--max-files`) exit 2 with a fixed code
-  and are not echoed.
+  arguments (including `--limit` and `--max-files`, unknown options and extra
+  positional arguments) exit 2 with a fixed code and are not echoed.
+- `complete` is about files only. `all_lines_valid` is false when any line
+  was skipped (`malformed`, `oversize`, `invalid`); a record of the trace may
+  be among them. It does not change the exit status; check it and `skipped`.
 - `digest_key_counts` counts the printed records by `digest_key`
   (`persistent`, `ephemeral`, `not_recorded` for v1). It repeats what the
   records say; see above for what that is worth.
@@ -260,7 +272,10 @@ are serialized by a lock.
 Masking in `redaction.py` is a best-effort pattern list, not a guarantee:
 label/value pairs (English and Japanese labels such as パスワード, 暗証番号,
 秘密鍵, トークン; `:`, `=`, fullwidth `：`, URL-encoded `%3A`/`%3D`, a quoted
-JSON or dict key such as `"password": "x"` or `'password': 'x'`, prose
+JSON or dict key such as `"password": "x"` or `'password': 'x'`, also with an
+escaped (`\"`) or URL-encoded (`%22`, `%27`) quote; a label may follow any
+`%XX` (`%26`, `%0D%0A`, `%20`, ...), a `.` or a `/` (`db.password: x`,
+`/password%3Dx`) but not a `:` (`ev:auth:1` stays); prose
 "password is X"; quoted values to the closing quote, with `\` escaping the
 next character, unquoted to the field end and on over the following `,` `;`
 `&` fields until one starts with its own `key:`/`key=`), `Bearer`/`Basic`, JWTs,
@@ -282,9 +297,11 @@ run to the field end and continue over the next fields (`token: expired,
 abc123` and `password: a,b` are one value; `password: x, user: admin` stops
 before `user:`). For a weak label every field of the value must be ordinary
 (`auth: failed, admin` and `token: expired, retry later` are kept). After
-the first word, IPv4 and IPv6 addresses (with an optional port), network
-context words (`src`, `dst`, `port`, `peer`, ...) and a port number after
-`port` also count as ordinary, so `auth: failed, src 10.0.0.5` is kept;
+the first word, IPv4 and IPv6 addresses (with an optional port; only what
+Python's `ipaddress` parses, not the unspecified `::` or `0.0.0.0`), network
+context words (`src`, `dst`, `port`, `peer`, ...) and a port number (at most
+65535) after `port` also count as ordinary; the port exception does not apply
+to `pin`. A word made only of `:` and punctuation masks the value. So `auth: failed, src 10.0.0.5` is kept;
 hostnames are not recognised and mask the value. When a value ends at a
 closing bracket inside its match, the rest of the match is searched again
 for further labels (`[token: expired] [token: x]` masks `x`). A closing
@@ -306,7 +323,9 @@ process with a wall-clock limit and check that the time grows linearly.
 
 Known limits of the masking (best effort, not a guarantee):
 
-- A value's continuation stops at a field that looks like `key:` or `key=`;
+- Double URL encoding (`password%253Dx`) is not decoded and not masked.
+- A value's continuation stops at a field that looks like `key:` or `key=`
+  (a key starts with a letter or `_`);
   if a secret itself continues with such a field (`password: a, b=c`), that
   part is kept.
 - Labels outside the list, secrets without a label and of no known shape,

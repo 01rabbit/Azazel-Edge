@@ -265,6 +265,10 @@ def export_incident(path: str, *, trace_id: str, max_files: int = 4, cycle_id: s
         # "records" may lack records that exist. A missing rotated file is
         # normal (fewer rotations so far) and does not make it incomplete.
         "complete": "read" in states and not any(x.startswith("refused") for x in states),
+        # "complete" is about files only. False here when a line was skipped
+        # (malformed, oversize or invalid): a record of this trace may be
+        # among them. The exit status of the CLI does not change for it.
+        "all_lines_valid": not any(skipped.values()),
         "trace_id": trace_id,
         "cycle_id": cycle_id,
         "records": records,

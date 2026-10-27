@@ -16,6 +16,7 @@ variants are caught without rewriting unrelated text.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 import unicodedata
 from typing import Callable, Optional
@@ -50,9 +51,11 @@ _LABEL_ANY = (
 )
 # Left boundary: not inside a word or a structured ref (``ev:auth:1``); an
 # optional ``x-``/``my_`` style prefix is consumed so the result stays coherent.
-# A URL-encoded separator (%26 "&", %3B ";", %2C ",") also counts as a left
-# boundary, so "user%3Dbob%26password%3Dx" is found.
-_LEFT = r"(?:(?<![A-Za-z0-9:/._-])|(?<=%26)|(?<=%3[Bb])|(?<=%2[Cc]))(?:[A-Za-z0-9]+[-_])*"
+# Any URL-encoded character (%XX: "&", CR LF, "|", space, quote, ...) also
+# counts as a left boundary, so "user%3Dbob%26password%3Dx" is found. A dot
+# or slash before the label ("db.password: x", "/password%3Dx") is a key path
+# and counts too; ":" does not, so a structured ref ("ev:auth:1") stays.
+_LEFT = r"(?:(?<![A-Za-z0-9:_-])|(?<=%[0-9A-Fa-f]{2}))(?:[A-Za-z0-9]+[-_])*"
 _RIGHT = r"(?![A-Za-z0-9])"
 # Quoted value to its closing quote; otherwise to the end of the field.
 # Unquoted values run to the field end, closing brackets included; a closing
@@ -64,7 +67,9 @@ _RIGHT = r"(?![A-Za-z0-9])"
 _VALUE = r"""(?P<value>"(?:[^"\\\r\n]|\\.)*"?|'(?:[^'\\\r\n]|\\.)*'?|「[^」\r\n]*」?|[^\r\n,;&]+)"""
 # Between label and value: an optional closing quote of a JSON/dict key
 # ("password": x, 'password': x), then ":" or "=", also URL-encoded (%3A, %3D).
-_KV_SEP = r"""["']?\s*(?:[:=]|%3[AD])\s*"""
+# The key's closing quote may be escaped (\" in a JSON string inside a log
+# line) or URL-encoded (%22, %27).
+_KV_SEP = r"""(?:\\?["']|%2[27])?\s*(?:[:=]|%3[AD])\s*"""
 
 # Short labels that also occur in ordinary SOC prose ("auth: failed for admin",
 # "pin: 3 hosts", "token: expired"). For these the value is kept only when the
@@ -93,7 +98,26 @@ _ORDINARY_WORDS = frozenset({
 _CONTEXT_WORDS = frozenset({
     "src", "dst", "source", "destination", "ip", "addr", "address", "port", "peer", "client", "server", "remote", "local",
 })
-_ADDRESS = re.compile(r"(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?|\[?[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}\]?(?::\d{1,5})?")
+_PORT_SUFFIX = re.compile(r"(?P<host>(?:\d{1,3}\.){3}\d{1,3}|\[[0-9a-f:.]+\]):(?P<port>\d{1,5})")
+
+
+def _is_address(word: str) -> bool:
+    """A real IPv4/IPv6 address (``ipaddress`` parses it), with an optional
+    port ("10.0.0.5:22", "[fe80::1]:22"). The unspecified addresses ("::",
+    "0.0.0.0") are not: they carry nothing an operator needs and "::" is
+    also a shape secrets can take."""
+    if "]:" in word and not word.startswith("["):
+        word = "[" + word  # the word strip removed the opening bracket
+    m = _PORT_SUFFIX.fullmatch(word)
+    if m is not None:
+        if int(m.group("port")) > 65535:
+            return False
+        word = m.group("host").strip("[]")
+    try:
+        address = ipaddress.ip_address(word)
+    except ValueError:
+        return False
+    return not address.is_unspecified
 # Unit words that may follow a count. PIN gets a smaller list: a digit run
 # after "pin:" is a PIN unless a unit word follows.
 _UNIT_WORDS = frozenset({"host", "hosts", "attempt", "attempts", "device", "devices", "user", "users", "times", "sessions", "failures", "fail", "failed", "errors", "accounts"})
@@ -104,24 +128,30 @@ _WORD_STRIP = ".,!?:\"'「」()[]{}<>"
 _SEPARATORS = ",;&"
 # One further field of a value; and a field that starts its own "key:"/"key=".
 _SEGMENT = re.compile(r"[^\r\n,;&]*")
-_NEW_FIELD = re.compile(r"\s*[A-Za-z0-9_.\-]+\s*[:=]")
+# A key starts with a letter or "_": "4821:9937:1102" is a value, not a field.
+_NEW_FIELD = re.compile(r"\s*[A-Za-z_][A-Za-z0-9_.\-]*\s*[:=]")
 
 
 def _ordinary_phrase(value: str, label: str, continuation: bool = False) -> bool:
     """Whether a weak label's value is ordinary prose. ``continuation`` is a
     further comma/semicolon segment of the same value: it may start with an
     ordinary word ("auth: failed, admin") and may be empty."""
-    words = [w.lower().strip(_WORD_STRIP) for w in value.split()]
+    raw_words = value.split()
+    words = [w.lower().strip(_WORD_STRIP) for w in raw_words]
+    # A word made only of ":" and punctuation ("::") is not prose: mask.
+    if any(not w and ":" in raw for w, raw in zip(words, raw_words)):
+        return False
     words = [w for w in words if w]
     if not words:
         return continuation
     units = _PIN_UNIT_WORDS if label == "pin" else _UNIT_WORDS
     for i, w in enumerate(words):
         later = i > 0 or continuation
-        if w in _STATUS_WORDS or (later and (w in _ORDINARY_WORDS or w in _CONTEXT_WORDS or _ADDRESS.fullmatch(w))):
+        if w in _STATUS_WORDS or (later and (w in _ORDINARY_WORDS or w in _CONTEXT_WORDS or _is_address(w))):
             continue
-        # "port 22": a port number after the word "port".
-        if later and w.isdigit() and len(w) <= 5 and i > 0 and words[i - 1] == "port":
+        # "port 22": a port number after the word "port". Not for PIN, whose
+        # secret is a digit run ("pin: failed, port 4821" is masked).
+        if label != "pin" and later and w.isdigit() and len(w) <= 5 and int(w) <= 65535 and i > 0 and words[i - 1] == "port":
             continue
         if w.isdigit() and len(w) <= 3:
             nxt = words[i + 1] if i + 1 < len(words) else ""

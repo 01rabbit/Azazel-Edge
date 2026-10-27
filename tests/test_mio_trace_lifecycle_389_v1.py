@@ -110,6 +110,31 @@ def _config(tmp_path: Path, key_file: Path | str = "", **kw) -> TraceAuditConfig
     ("pw: 'a\\',b' ok", (",b",)),
     ("[token: expired] [token: s3cr3t]", ("s3cr3t",)),
     ("(auth: failed) (auth: s3cr3t)", ("s3cr3t",)),
+    # Re-review of #506: the address/port allowance must not pass secrets.
+    ("token: failed ab12:cd34:ef56", ("ab12:cd34:ef56",)),
+    ("secret: ok, 4821:9937:1102", ("4821:9937:1102",)),
+    ("pin: failed 12:34:56", ("12:34:56",)),
+    ("token: failed ::", ("::",)),
+    ("token: failed, ::", ("::",)),
+    ("auth: failed, 999.999.999.999", ("999.999.999.999",)),
+    ("auth: failed from 10.0.0.5:99999", ("10.0.0.5:99999",)),
+    ("auth: failed, src 0.0.0.0", ("0.0.0.0",)),
+    ("pin: failed, port 4821", ("4821",)),
+    ("token: failed, port 99999", ("99999",)),
+    # Escaped and URL-encoded JSON keys, any %XX before a label.
+    ('{\\"password\\": \\"VAL\\"}', ("VAL",)),
+    ('{\\"password\\":\\"VAL\\"}', ("VAL",)),
+    ("{\\'password\\': \\'VAL\\'}", ("VAL",)),
+    ("%7B%22password%22%3A%22VAL%22%7D", ("VAL",)),
+    ("%22password%22%3A%22VAL", ("VAL",)),
+    ("%27password%27%3D%27VAL", ("VAL",)),
+    ("a=b%0D%0Apassword%3DVAL", ("VAL",)),
+    ("x%7Cpassword%3DVAL", ("VAL",)),
+    ("a%20password=VAL", ("VAL",)),
+    # Dotted and path keys.
+    ("db.password: VAL", ("VAL",)),
+    ("foo.password=VAL", ("VAL",)),
+    ("/password%3DVAL", ("VAL",)),
 ])
 def test_known_leaks_are_masked(text, secret_parts):
     out = redact_text(text)
@@ -144,6 +169,10 @@ def test_value_ends_where_the_next_field_starts(text, expected):
     "auth: failed from 10.0.0.5",
     "token: expired, dst fe80::1 port 22",
     "auth: failed for admin from 192.0.2.7:2222",
+    "auth: failed from [2001:db8::1]:22",
+    "token: expired, port 22",
+    "ev:auth:1 and ev:token:2",
+    "see /var/log/auth: failed",
 ])
 def test_ordinary_text_with_commas_and_brackets_is_kept(text):
     assert redact_text(text) == text
@@ -178,6 +207,16 @@ _LINEAR_UNITS = (
     "password%3D",
     "x%26pw%3D",
     "%26a-",
+    "%7B%22password%22%3A%22",
+    '{\\"password\\":\\"',
+    "a%20",
+    "%",
+    "db.password: ",
+    "a.a.a.a.",
+    "/a/b/",
+    "token: failed 1:2:3:4:5:6:7:8:9 ",
+    "auth: failed, src 10.0.0.5:22 port 22 ",
+    "token: failed :: ",
     "auth: failed, src 10.0.0.5 ",
 )
 
@@ -570,6 +609,7 @@ def test_export_never_prints_secrets_free_text_or_tampered_records(tmp_path):
         assert secret not in blob
     assert len(out["records"]) == 1
     assert out["skipped"] == {"malformed": 2, "oversize": 1, "invalid": len(tampered)}
+    assert out["complete"] is True and out["all_lines_valid"] is False
 
 
 def test_export_accepts_v1_records_and_refuses_odd_files(tmp_path):
@@ -608,6 +648,7 @@ def test_export_counts_digest_key_states_and_marks_completeness(tmp_path):
         fh.write(encode_record(v1) + encode_record(persistent))
     out = export_incident(str(path), trace_id="trace-1", max_files=3)
     assert out["complete"] is True  # missing rotated files are normal
+    assert out["all_lines_valid"] is True
     assert out["digest_key_counts"] == {"ephemeral": 1, "persistent": 1, "not_recorded": 1}
     nothing = export_incident(str(tmp_path / "none.jsonl"), trace_id="trace-1")
     assert nothing["complete"] is False and nothing["records"] == []
@@ -649,12 +690,18 @@ def test_export_cli_prints_json_and_does_not_echo_bad_arguments(tmp_path):
         for value in (SECRETS[0], "0" if option == "--limit" else "65", "-1", "1e3", "99999"):
             bad = subprocess.run([sys.executable, str(EXPORT_CLI), "--path", str(path), "--trace-id", "trace-1", option, value], capture_output=True, text=True, env=env, timeout=60)
             assert bad.returncode == 2, (option, value)
-            assert bad.stdout == "" and (value not in bad.stderr or value in ("0", "-1")), (option, value, bad.stderr)
-            assert bad.stderr.strip().startswith("azazel-mio-trace-export: invalid_"), bad.stderr
+            code = "invalid_limit" if option == "--limit" else "invalid_max_files"
+            assert bad.stdout == "" and bad.stderr == f"azazel-mio-trace-export: {code}\n", (option, value, bad.stderr)
     no_path = tmp_path / "nopath.json"
     no_path.write_text(json.dumps({"schema": TRACE_AUDIT_CONFIG_SCHEMA, "enabled": False}))
     missing = subprocess.run([sys.executable, str(EXPORT_CLI), "--config", str(no_path), "--trace-id", "trace-1"], capture_output=True, text=True, env=env, timeout=60)
-    assert missing.returncode == 2 and "config_has_no_path" in missing.stderr
+    assert missing.returncode == 2 and missing.stderr == "azazel-mio-trace-export: config_has_no_path\n"
+    # argparse's own errors (unknown option, extra positional, missing
+    # required option) print a fixed code, not the arguments.
+    for extra in (["--trace-id", "trace-1", SECRETS[0]], ["--trace-id", "trace-1", f"--bogus={SECRETS[0]}"], [f"--{SECRETS[0]}"], []):
+        bad = subprocess.run([sys.executable, str(EXPORT_CLI), "--path", str(path), *extra], capture_output=True, text=True, env=env, timeout=60)
+        assert bad.returncode == 2 and bad.stdout == "", extra
+        assert bad.stderr == "azazel-mio-trace-export: invalid_arguments\n", (extra, bad.stderr)
 
 
 def test_export_cli_exits_non_zero_when_incomplete(tmp_path):
