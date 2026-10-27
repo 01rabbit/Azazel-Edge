@@ -14,7 +14,7 @@ Entry point for all documents in this directory.
 | [architecture/mio-cognitive-plane.md](architecture/mio-cognitive-plane.md) | Developer / Reviewer | Canonical M.I.O. cognitive-plane architecture: components, data flow, authority matrix (decide/enforce/advise/display/audit), degradation ladder, trust boundaries, open work (#388) | 2026-10-27 |
 | [architecture/local-ai-triage.md](architecture/local-ai-triage.md) | Developer / Operator | Optional local AI assist role and its boundaries | 2026-10-27 |
 | [architecture/mio-cognitive-shadow-core.md](architecture/mio-cognitive-shadow-core.md) | Developer | M.I.O. cognitive core modules and the shadow/replay boundary | 2026-10-27 |
-| [architecture/mio-situation-frame.md](architecture/mio-situation-frame.md) | Developer | SituationFrame contract `mio.situation_frame.v1`, budgets and optional dependencies (#383) | 2026-10-27 |
+| [architecture/mio-situation-frame.md](architecture/mio-situation-frame.md) | Developer | SituationFrame contract `mio.situation_frame.v2` (reads v1): actors, actions, deception facts, budgets and optional dependencies (#383) | 2026-10-27 |
 | [architecture/mio-capability-broker.md](architecture/mio-capability-broker.md) | Developer | Typed read-only Capability Broker: trust boundaries, budgets, audit (#384) | 2026-10-27 |
 | [architecture/mio-reasoning-lifecycle.md](architecture/mio-reasoning-lifecycle.md) | Developer | Hypothesis lifecycle, supersession, restart and no-model handoff (#385) | 2026-10-27 |
 | [architecture/mio-grounding-and-evidence-gaps.md](architecture/mio-grounding-and-evidence-gaps.md) | Developer | Evidence-gap scoring and claim-to-reference audit (#386) | 2026-10-27 |

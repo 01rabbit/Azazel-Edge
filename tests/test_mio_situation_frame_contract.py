@@ -27,7 +27,8 @@ from azazel_edge.mio.contracts import (
 from azazel_edge.mio.frame_builder import MioSituationFrameBuilder
 
 FIXTURES = Path(__file__).parent / "fixtures" / "mio"
-GOLDEN = FIXTURES / "situation_frame_canonical_v1.json"
+GOLDEN = FIXTURES / "situation_frame_canonical_v1.json"  # v1 inputs remain valid builder inputs
+GOLDEN_V2 = FIXTURES / "situation_frame_canonical_v2.json"
 DOC = Path(__file__).resolve().parents[1] / "docs" / "architecture" / "mio-situation-frame.md"
 
 # Generous CI regression guard for one worst-case build. This is NOT the Pi
@@ -74,7 +75,7 @@ def _worst_case_inputs(*, text: str = "x", events: int = 20000) -> dict:
 
 def test_schema_version_and_owner_are_explicit_and_serialized():
     frame = _build(_golden_inputs())
-    assert SITUATION_FRAME_SCHEMA_VERSION == "mio.situation_frame.v1"
+    assert SITUATION_FRAME_SCHEMA_VERSION == "mio.situation_frame.v2"
     assert SITUATION_FRAME_SCHEMA_OWNER == contracts.__name__
     assert frame.to_dict()["schema_version"] == SITUATION_FRAME_SCHEMA_VERSION
     doc = DOC.read_text(encoding="utf-8")
@@ -84,7 +85,7 @@ def test_schema_version_and_owner_are_explicit_and_serialized():
 
 
 def test_golden_pins_field_set_so_schema_changes_require_version_bump():
-    golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    golden = json.loads(GOLDEN_V2.read_text(encoding="utf-8"))
     frame = _build(golden["input"])
     assert golden["schema_version"] == SITUATION_FRAME_SCHEMA_VERSION
     assert sorted(frame.to_dict()) == sorted(golden["expected_frame"])

@@ -200,10 +200,16 @@ NON_MATERIAL_FRAME_FIELDS = frozenset({"frame_id", "created_at", "freshness_seco
 # List fields whose order carries no meaning for the situation (the builder's
 # ordering is a capping priority, not semantics); sorted before hashing.
 _UNORDERED_FRAME_LISTS = ("known_facts", "unknowns", "contradictions", "evidence_refs", "knowledge_refs")
+# v2 actor counters that move with every new event of an ongoing incident. A
+# newer material frame supersedes the in-flight cycle, so if these were
+# material, sustained traffic could supersede every cycle before it finished.
+# The actor's position, severity, protocols, ports and kinds stay material.
+NON_MATERIAL_ACTOR_FIELDS = frozenset({"event_count", "first_seen", "last_seen", "distinct_target_ports", "evidence_refs"})
 
 
 def material_frame_digest(frame: MioSituationFrame) -> str:
     payload = {k: v for k, v in frame.to_dict().items() if k not in NON_MATERIAL_FRAME_FIELDS}
+    payload["actors"] = [{k: v for k, v in actor.items() if k not in NON_MATERIAL_ACTOR_FIELDS} for actor in payload["actors"]]
     for key in _UNORDERED_FRAME_LISTS:
         payload[key] = sorted(payload[key])
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
