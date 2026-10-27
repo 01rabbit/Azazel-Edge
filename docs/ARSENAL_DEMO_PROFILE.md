@@ -155,10 +155,22 @@ writes, no policy changes, and no enforcement actions.
    file; the records rotation removed are not retained and were not
    verified). The compact line is `chain:OK(N) chain_scope=<scope>
    chain_files=<n>`, `chain:EMPTY(0)` or `chain:MISMATCH:<error>`; `--json`
-   has `chain.scope`, `chain.genesis_retained`, `chain.files`,
-   `chain.chain_id` and `chain.meaning`. Records are not signed: a writer of
-   the file can forge a chain that verifies, and records removed from the
-   end are not detected.
+   has `chain.verified`, `chain.scope`, `chain.genesis_retained`,
+   `chain.files`, `chain.chain_id` and `chain.meaning`. `chain.ok` means no
+   tampering was found (true, exit 0, also for a missing or empty file, for
+   compatibility); `chain.verified` means there is verified evidence (true
+   only for an OK `from_genesis` or `from_rotation_boundary` chain).
+   `azazel-edge-bhusa-verify` requires `verified`. Records are not signed:
+   a writer of the file can forge a chain that verifies. Not detected:
+   records removed from the end, a removed `.1` (it reads as
+   `from_rotation_boundary`), a removed active file (`.1` alone is read),
+   and a whole chain replaced by another one consistent in itself: compare
+   `chain.chain_id` with the P0 relay's `audit_chain_id` (the
+   `relay_status` records in `p0-alert-queue.jsonl`; see
+   [P0_RUNTIME_ARCHITECTURE.md](P0_RUNTIME_ARCHITECTURE.md), "Cursor per
+   audit file and chain"). A review that races a rotation is retaken; if
+   rotations keep moving files it exits 3 with `snapshot_inconsistent`, and
+   a rerun normally passes.
 
 ### Usage
 

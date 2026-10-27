@@ -368,3 +368,80 @@ def test_an_unreadable_chain_is_an_error_not_empty(tmp_path, what):
         target.chmod(0o700)
     assert rc == 3 and "error reading audit log" in err.getvalue()
     assert "chain:MISMATCH:" in out and "chain:EMPTY" not in out and "chain:OK" not in out
+
+
+# ------------------------------------------------ ok vs verified evidence
+def test_verified_is_true_only_for_a_verified_chain(tmp_path):
+    path = tmp_path / "core-decision-audit.jsonl"
+    assert verify_audit_chain(path)["verified"] is False  # missing
+    path.write_bytes(b"")
+    empty = verify_audit_chain(path)
+    assert empty["ok"] is True and empty["verified"] is False
+    _write(path, 2)
+    assert verify_audit_chain(path)["verified"] is True
+    (tmp_path / "r").mkdir()
+    rotated, _ = _rotated_twice(tmp_path / "r")
+    assert verify_audit_chain(rotated)["verified"] is True
+    _put(rotated, _lines(rotated)[1:])
+    assert verify_audit_chain(rotated)["verified"] is False
+    rc, js = _review(rotated, tmp_path, "--json")
+    assert json.loads(js)["chain"]["verified"] is False
+
+
+def _bhusa_audit_review(monkeypatch, tmp_path, audit_path):
+    from types import SimpleNamespace
+
+    from azazel_edge import bhusa_verify
+
+    def run(cmd):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = audit_review.main(cmd[1:])
+        return SimpleNamespace(returncode=rc, stdout=out.getvalue(), stderr=err.getvalue())
+
+    monkeypatch.setattr(bhusa_verify, "_run_command", run)
+    explanations = tmp_path / "explanations.jsonl"
+    explanations.write_text(json.dumps({"trace_id": "demo:x", "selected_action": "throttle"}) + "\n", encoding="utf-8")
+    demo = {"arbiter": {"action": "throttle"}, "explanation": {}}
+    _, errors, _ = bhusa_verify._verify_audit_review("demo:x", str(explanations), str(audit_path), demo)
+    return errors
+
+
+@pytest.mark.parametrize("state", ["missing", "empty"])
+def test_bhusa_verify_fails_when_no_chain_was_verified(monkeypatch, tmp_path, state):
+    audit_path = tmp_path / "demo-audit.jsonl"
+    if state == "empty":
+        audit_path.write_bytes(b"")
+    errors = _bhusa_audit_review(monkeypatch, tmp_path, audit_path)
+    assert any("verified no audit chain" in e and "'empty'" in e for e in errors), errors
+
+
+def test_bhusa_verify_accepts_a_verified_chain(monkeypatch, tmp_path):
+    audit_path = tmp_path / "demo-audit.jsonl"
+    _write(audit_path, 3)
+    errors = _bhusa_audit_review(monkeypatch, tmp_path, audit_path)
+    assert not any("chain" in e for e in errors), errors
+
+
+# --------------------------------------------- snapshot / torn tail (nits)
+def test_a_snapshot_rotation_keeps_moving_fails_and_is_not_ok(monkeypatch, tmp_path):
+    from azazel_edge.audit import segments
+
+    path, _ = _rotated_twice(tmp_path)
+    real = segments._open_snapshot
+    monkeypatch.setattr(segments, "_open_snapshot", lambda p: (real(p)[0], False))
+    monkeypatch.setattr(segments.time, "sleep", lambda s: None)
+    result = verify_audit_chain(path)
+    assert result["ok"] is False and result["verified"] is False
+    assert result["error"] == "snapshot_inconsistent:rotation_kept_moving_files"
+
+
+def test_a_torn_last_line_of_dot1_is_named(tmp_path):
+    path, _ = _rotated_twice(tmp_path)
+    rotated = segment_path(path, 1)
+    with rotated.open("a", encoding="utf-8") as fh:
+        fh.write('{"kind":"x"')
+    result = verify_audit_chain(path)
+    # The link check reads .1's last complete record, so .1 stays linked and
+    # the torn line is what fails.
+    assert result["ok"] is False and result["error"] == f"incomplete_last_line:{rotated.name}"

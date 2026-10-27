@@ -1196,10 +1196,16 @@ out-of-scope findings tracked separately. Still open:
      `chain_unlinked_segments` / `chain_replaced`), a cut start (a first
      record that continues a chain without being a rotation boundary), a
      foreign `chain_id`, a line that is not JSON and a torn last line fail
-     (exit 3). Not detected: records removed from the end, and a whole chain
-     replaced by another that is consistent in itself (compare the printed
-     `chain_id` with the relay's `audit_chain_id`); chain hashes are not
-     keyed. The single-file `verify_chain` used before reported a rotated
+     (exit 3; a `snapshot_inconsistent` failure while rotations keep
+     moving files passes on a rerun). `ok` means no tampering was found
+     (also true, exit 0, for a missing or empty file); `verified` means
+     there is verified evidence (an OK `from_genesis` or
+     `from_rotation_boundary` chain), and `bhusa_verify` requires it. Not
+     detected: records removed from the end, a removed `.1` (reads as
+     `from_rotation_boundary`), a removed active file (`.1` alone is read),
+     and a whole chain replaced by another that is consistent in itself
+     (compare the printed `chain_id` with the relay's `audit_chain_id`);
+     chain hashes are not keyed. The single-file `verify_chain` used before reported a rotated
      chain as a mismatch at its first line.
 7. **Out-of-scope findings, tracked separately** (not fixed by #471 stages
    0–2):

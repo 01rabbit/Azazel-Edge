@@ -141,6 +141,15 @@ def verify_audit_chain(path: str | Path) -> Dict[str, Any]:
     * ``scope`` ``empty``: no file or no record; ``ok`` stays true (as
       before) but nothing was verified, and the outputs say EMPTY, not OK.
 
+    ``ok`` says no tampering was found (and keeps exit code 0 for an empty
+    file); ``verified`` says there is verified evidence: true only for an OK
+    ``from_genesis`` or ``from_rotation_boundary`` chain. A reader that needs
+    evidence (``bhusa_verify``) checks ``verified``.
+
+    A read that races a rotation is retaken (``read_chain``); if rotations
+    keep moving files it fails with ``snapshot_inconsistent`` and a rerun
+    normally passes.
+
     Failures (``ok`` false, ``scope`` ``not_verified``): a record whose hash
     does not match (rewritten), whose ``chain_prev`` is not the record before
     it (removed, reordered or inserted), a rotated file the next newer file
@@ -161,31 +170,41 @@ def verify_audit_chain(path: str | Path) -> Dict[str, Any]:
 
     log_path = Path(path)
     result: Dict[str, Any] = {
-        "ok": False, "entries": 0, "error": "", "scope": SCOPE_NOT_VERIFIED,
+        "ok": False, "verified": False, "entries": 0, "error": "", "scope": SCOPE_NOT_VERIFIED,
         "genesis_retained": False, "files": [], "chain_id": "",
     }
 
     def fail(error: str) -> Dict[str, Any]:
-        result.update(ok=False, error=error, scope=SCOPE_NOT_VERIFIED)
+        result.update(ok=False, verified=False, error=error, scope=SCOPE_NOT_VERIFIED)
         return result
 
     if not _present(log_path) and not _present(segment_path(log_path, 1)):
         result.update(ok=True, scope=SCOPE_EMPTY)
         return result
-    snapshot = read_chain(log_path)  # OSError (permission) is the caller's: printed, exit 3
+    # read_chain leaves a last line without its newline out of its lines;
+    # its ``sync`` hook is called with the descriptor of every file it reads,
+    # oldest first, so the check sees the same snapshot.
+    torn: List[int] = []
+    order: List[int] = []
+
+    def _tail_check(fd: int) -> bool:
+        order.append(fd)
+        size = os.fstat(fd).st_size
+        if size and os.pread(fd, 1, size - 1) != b"\n":
+            torn.append(len(order) - 1)
+        return False
+
+    snapshot = read_chain(log_path, sync=_tail_check)  # OSError (permission) is the caller's: printed, exit 3
     files = _retained_files(log_path, int(snapshot["segments"]))
     result.update(files=[f.name for f in files], chain_id=str(snapshot["chain_id"] or ""))
     if not snapshot["consistent"]:
         return fail("snapshot_inconsistent:rotation_kept_moving_files")
     if snapshot["unlinked_segments"]:
         return fail(f"rotated_file_not_continued:{snapshot['unlinked_segments']}")
-    for f in files:
-        with f.open("rb") as fh:
-            size = fh.seek(0, 2)
-            if size:
-                fh.seek(size - 1)
-                if fh.read(1) != b"\n":
-                    return fail(f"incomplete_last_line:{f.name}")
+    if torn:
+        idx = torn[0]
+        name = files[idx].name if idx < len(files) else str(idx + 1)
+        return fail(f"incomplete_last_line:{name}")
     rows: List[Dict[str, Any]] = []
     for idx, raw in enumerate(snapshot["lines"], start=1):
         try:
@@ -221,7 +240,7 @@ def verify_audit_chain(path: str | Path) -> Dict[str, Any]:
             return fail(f"chain_hash_mismatch_at:{idx}")
         prev = actual
     result.update(
-        ok=True, entries=len(rows), error="",
+        ok=True, verified=True, entries=len(rows), error="",
         scope=SCOPE_FROM_ROTATION_BOUNDARY if str(head.get("chain_prev") or "") else SCOPE_FROM_GENESIS,
         genesis_retained=not str(head.get("chain_prev") or ""),
     )
@@ -381,6 +400,7 @@ def _format_json(
         "schema_problems": problems,
         "chain": {
             "ok": chain_result["ok"],
+            "verified": bool(chain_result.get("verified")),
             "entries": chain_result["entries"],
             "error": chain_result.get("error", ""),
             "scope": chain_result.get("scope", SCOPE_NOT_VERIFIED),
