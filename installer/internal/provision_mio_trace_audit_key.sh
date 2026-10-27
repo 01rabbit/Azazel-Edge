@@ -12,7 +12,8 @@
 # runs the M.I.O. cognitive core yet (#385). The installer does not run this
 # script; run it as root when the trace audit is enabled.
 #
-# Same rules as provision_trust_capsule_key.sh (Edge#477):
+# The rules of provision_trust_capsule_key.sh (Edge#477, #498), plus
+# stricter checks on what counts as a usable key:
 # - A new key is random (256 bits, hex). The file is 0600 root:root (root:
 #   when run as root) from its first byte (write_private_file) and the key is
 #   never printed or put on a command line.
@@ -22,11 +23,16 @@
 #   characters of [A-Za-z0-9._~+/=-] (after surrounding whitespace is
 #   removed), with at least 8 different characters and none of the markers
 #   of a test or example key (test, example, dummy, sample, changeme,
-#   devkey, dev-key, not-for-devices). The Python side
+#   devkey, dev-key, not-for-devices), no NUL byte, and a file of at most
+#   4096 bytes. The Python side
 #   (key_is_usable in trace_recorder.py of the cognitive core) applies the same rule.
 #   Anything else is replaced by a new random key with a NOTICE (never the
 #   value).
 # - There is no environment variable for this key and no built-in key.
+# - Do not run it with xtrace (bash -x): xtrace would print the key. The
+#   script turns xtrace off first; a trace enabled in another way (for
+#   example BASH_XTRACEFD in a parent shell) is the caller's responsibility.
+set +x
 set -euo pipefail
 
 KEY_FILE="${1:-/etc/azazel-edge/mio-trace-audit.key}"
@@ -57,7 +63,13 @@ narrow_mode() {
 # The key in file $1 with surrounding whitespace (CR included) removed. The
 # value is only kept in a variable, never printed.
 key_in() {
-  local v
+  local v size
+  # A NUL byte or a file over 4096 bytes is never a key ("$(<file)" would
+  # drop NUL bytes silently and read a key Python refuses).
+  size="$(wc -c <"$1")" || size=0
+  if (( size > 4096 )) || (( $(LC_ALL=C tr -d '\000' <"$1" | wc -c) != size )); then
+    return 0
+  fi
   v="$(<"$1")" || v=""
   v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
   printf '%s' "${v}"

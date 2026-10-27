@@ -25,6 +25,7 @@ from typing import Any, Callable, Mapping
 
 from .redaction import contains_token_like
 from .trace_audit import DIGEST_KEY_STATES, TRACE_AUDIT_SCHEMAS, MAX_RECORD_BYTES, is_valid_id
+from .trace_recorder import has_symlink_parent
 
 EXPORT_SCHEMA = "mio.trace_audit_export.v1"
 MAX_FILE_BYTES = 64 << 20
@@ -160,14 +161,17 @@ _RECORD = _obj(
 
 
 def valid_record(record: Any) -> bool:
-    """Whether ``record`` has exactly the allowlisted shape."""
+    """Whether ``record`` has exactly the allowlisted shape.
+
+    ``digest_key`` is required in v2 and absent in v1.
+    """
     try:
         _RECORD(record)
     except _Invalid:
         return False
-    if record["schema"] == "mio.trace_audit.v1" and "digest_key" in record:
-        return False
-    return record["schema"] == "mio.trace_audit.v1" or "digest_key" in record
+    if record["schema"] == "mio.trace_audit.v1":
+        return "digest_key" not in record
+    return "digest_key" in record
 
 
 def valid_trace_selector(kind: str, value: str) -> bool:
@@ -215,12 +219,13 @@ def export_incident(path: str, *, trace_id: str, max_files: int = 4, cycle_id: s
     if type(limit) is not int or not 1 <= limit <= MAX_LIMIT:
         raise ValueError("invalid_limit")
     names = [f"{path}.{i}" for i in range(max_files - 1, 0, -1)] + [path]
+    parent_link = has_symlink_parent(path)
     kept: deque[dict[str, Any]] = deque(maxlen=limit)
     matched = 0
     skipped = {"malformed": 0, "oversize": 0, "invalid": 0}
     files = []
     for name in names:
-        fd, state = _open_readonly(name)
+        fd, state = (None, "refused:symlink_parent") if parent_link else _open_readonly(name)
         files.append({"name": os.path.basename(name), "state": state})
         if fd is None:
             continue
@@ -251,12 +256,23 @@ def export_incident(path: str, *, trace_id: str, max_files: int = 4, cycle_id: s
                     continue
                 matched += 1
                 kept.append(record)
+    records = list(kept)
+    states = [f["state"] for f in files]
     return {
         "schema": EXPORT_SCHEMA,
         "authority": "advisory_only",
+        # False when no file could be read or any file was refused: then
+        # "records" may lack records that exist. A missing rotated file is
+        # normal (fewer rotations so far) and does not make it incomplete.
+        "complete": "read" in states and not any(x.startswith("refused") for x in states),
         "trace_id": trace_id,
         "cycle_id": cycle_id,
-        "records": list(kept),
+        "records": records,
+        # Self-declared by each record, not a signature (see the docs).
+        "digest_key_counts": {
+            state: sum(1 for r in records if r.get("digest_key", "not_recorded") == state)
+            for state in (*sorted(DIGEST_KEY_STATES), "not_recorded")
+        },
         "omitted": matched - len(kept),
         "skipped": skipped,
         "files": files,

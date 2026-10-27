@@ -109,12 +109,24 @@ Digests are HMAC-SHA256 (truncated to 96 bits). Key ownership:
   not an anonymisation claim. Discarding the key makes old digests
   un-correlatable.
 
-`mio.trace_audit.v2` adds `digest_key` to v1; nothing else changed. The
-export reads both versions.
+`mio.trace_audit.v2` adds `digest_key` to v1; nothing else changed. In v2
+`digest_key` is required, in v1 it is absent. The export reads both versions.
+
+What `digest_key` is and is not:
+
+- It is the writer's own statement in the record. It is not a signature,
+  and nothing verifies it.
+- The trace audit has no protection against changing or deleting whole
+  records: a party that can write the file can write any record, including
+  one that says `persistent`. The keyed digests only stop offline guessing
+  of the values behind them.
+- Digests from `ephemeral` records cannot be correlated across restarts (or
+  between processes), not even by the device itself: that key is gone.
 
 ### Persisted digest key
 
-The persisted key follows the trust capsule key (#498):
+The persisted key is handled like the trust capsule key (#498), with
+stricter checks in addition:
 
 - `installer/internal/provision_mio_trace_audit_key.sh [KEY_FILE]` (default
   `/etc/azazel-edge/mio-trace-audit.key`) writes 256 random bits as hex,
@@ -127,15 +139,18 @@ The persisted key follows the trust capsule key (#498):
   `[A-Za-z0-9._~+/=-]` after surrounding whitespace is removed, with at least
   8 different characters and none of the markers of a test or example key
   (`test`, `example`, `dummy`, `sample`, `changeme`, `devkey`, `dev-key`,
-  `not-for-devices`). So the repository's test keys (`"k" * 32`, the trust
+  `not-for-devices`), in a file of at most 4096 bytes without a NUL byte. So the repository's test keys (`"k" * 32`, the trust
   capsule tests' key) are never accepted as a device key. The script and
   `trace_recorder.key_is_usable` apply the same rule (tested).
-- `load_audit_key` opens the file with `O_NOFOLLOW` and uses it only if it is
-  a regular file owned by root or the current user with no group or other
-  permission bits. A missing, refused or unusable key gives a random
+- The script turns xtrace off first: run with `bash -x`, xtrace would print
+  the key. Do not trace it by other means either.
+- `load_audit_key` opens the file with `O_NOFOLLOW` and uses it only if no
+  directory on its path is a symlink and it is a regular file owned by root
+  or the current user with no group or other permission bits. A missing, refused or unusable key gives a random
   per-process key and `"digest_key": "ephemeral"`: never a built-in or known
   key. There is no environment variable for the key. Reasons are fixed codes
-  (`missing`, `symlink`, `mode_too_wide`, `owner`, `not_usable`, ...), never
+  (`missing`, `symlink`, `symlink_parent`, `mode_too_wide`, `owner`,
+  `not_usable`, ...), never
   the value.
 - A future unit should hand the root-owned file to its service account with
   `LoadCredential=` rather than widening the file's mode; that choice belongs
@@ -147,7 +162,9 @@ The persisted key follows the trust capsule key (#498):
 
 - `load_trace_audit_config(path)` reads `mio.trace_audit_config.v1` JSON
   (`enabled`, `path`, `key_file`, `max_file_bytes`, `max_files`; unknown
-  fields are rejected). `config/mio_trace_audit.json` ships with
+  fields are rejected). The file is opened like the key file (no symlink, also
+  not in a parent directory; a regular file; no blocking on a FIFO).
+  `config/mio_trace_audit.json` ships with
   `"enabled": false`; a missing file is also disabled.
 - `open_trace_audit(config)` returns `None` when disabled, so the caller does
   nothing. Enabled, it returns a `TraceAuditRecorder` with a sink and the key
@@ -168,9 +185,9 @@ from the active file and its rotated files, oldest first, as
 `mio.trace_audit_export.v1` JSON. At most `--limit` (default 256, at most
 1024) of the newest records are printed; `omitted` counts the rest.
 
-- Read-only: it opens files `O_RDONLY | O_NOFOLLOW`, refuses non-regular files
-  and files over 64 MiB, and never writes, locks, rotates or truncates. It
-  needs no key. The audit files are `0600`, so it runs as the account that
+- Read-only: it opens files `O_RDONLY | O_NOFOLLOW`, refuses non-regular files,
+  files over 64 MiB and paths with a symlinked directory, and never writes,
+  locks, rotates or truncates. It needs no key. The audit files are `0600`, so it runs as the account that
   writes them, or as root.
 - Allowlist, not masking: every record is checked field by field against the
   shape `project_outcome` writes (IDs matching their grammar or `h:<digest>`,
@@ -180,8 +197,18 @@ from the active file and its rotated files, oldest first, as
   `MAX_RECORD_BYTES` are counted as `malformed` and `oversize`. So text put
   into the file by hand or by a bug is not echoed.
 - Each file is listed by its base name with `read`, `missing` or
-  `refused:<reason>`. Invalid arguments exit 2 with a fixed code and are not
-  echoed.
+  `refused:<reason>`. `complete` is false when no file could be read or any
+  file was refused; the records may then be incomplete and the exit status
+  is 1 (0 when complete). A missing rotated file is normal. Invalid
+  arguments (including `--limit` and `--max-files`) exit 2 with a fixed code
+  and are not echoed.
+- `digest_key_counts` counts the printed records by `digest_key`
+  (`persistent`, `ephemeral`, `not_recorded` for v1). It repeats what the
+  records say; see above for what that is worth.
+- The export does not lock against the writer. If the sink rotates while the
+  export reads, a record can be read twice (from the old and the renamed
+  file) or missed; records are never mixed or torn. Run it again for a
+  stable view, or copy the files first.
 
 Records are capped at `MAX_RECORD_BYTES` (4096). Over the cap, list fields are
 trimmed in a fixed order with `truncated_<field>` counts; if still too large the
@@ -232,9 +259,11 @@ are serialized by a lock.
 
 Masking in `redaction.py` is a best-effort pattern list, not a guarantee:
 label/value pairs (English and Japanese labels such as パスワード, 暗証番号,
-秘密鍵, トークン; `:`, `=`, fullwidth `：`, prose "password is X"; quoted values
-to the closing quote, unquoted to the field end and on over the following
-`,` `;` `&` fields until one starts with its own `key:`/`key=`), `Bearer`/`Basic`, JWTs,
+秘密鍵, トークン; `:`, `=`, fullwidth `：`, URL-encoded `%3A`/`%3D`, a quoted
+JSON or dict key such as `"password": "x"` or `'password': 'x'`, prose
+"password is X"; quoted values to the closing quote, with `\` escaping the
+next character, unquoted to the field end and on over the following `,` `;`
+`&` fields until one starts with its own `key:`/`key=`), `Bearer`/`Basic`, JWTs,
 common key prefixes (`sk-`, `xoxb-`, `ghp_`, `AKIA`, ...), URL userinfo, private
 key blocks (also unterminated), emails and long opaque tokens. Matching runs on
 an NFKC-normalised copy with zero-width chars removed and common
@@ -252,7 +281,13 @@ Strong labels (`password`, `api_key`, ...) are always masked. Unquoted values
 run to the field end and continue over the next fields (`token: expired,
 abc123` and `password: a,b` are one value; `password: x, user: admin` stops
 before `user:`). For a weak label every field of the value must be ordinary
-(`auth: failed, admin` and `token: expired, retry later` are kept). A closing
+(`auth: failed, admin` and `token: expired, retry later` are kept). After
+the first word, IPv4 and IPv6 addresses (with an optional port), network
+context words (`src`, `dst`, `port`, `peer`, ...) and a port number after
+`port` also count as ordinary, so `auth: failed, src 10.0.0.5` is kept;
+hostnames are not recognised and mask the value. When a value ends at a
+closing bracket inside its match, the rest of the match is searched again
+for further labels (`[token: expired] [token: x]` masks `x`). A closing
 bracket ends a value only when its opening bracket precedes the label
 (`(pw: x)`) and the closer is followed by whitespace, end of text or `, ; .
 ! ? &`; otherwise the value continues (`(pw: p)ss)` masks `p)ss`). If a later
@@ -262,9 +297,24 @@ These two cases were the known partial leaks listed on #389.
 
 Masking is linear in the input: the bracket depth before a label is computed
 once per pattern pass, a value never continues past the next match of the
-same pattern, and the JWT rule needs a left boundary. Tests mask 1 MiB of
-repeated label, bracket, comma, quote, URL and JWT shapes and check that the
-time grows linearly.
+same pattern, the JWT rule needs a left boundary, and the searches again
+after a bracket share a budget of about twice the text length; past the
+budget the rest of that match is masked instead (safe side, only reached by
+very long lines full of bracketed labels). Tests mask 1 MiB of repeated
+label, bracket, comma, quote, JSON, URL-encoded and JWT shapes in a child
+process with a wall-clock limit and check that the time grows linearly.
+
+Known limits of the masking (best effort, not a guarantee):
+
+- A value's continuation stops at a field that looks like `key:` or `key=`;
+  if a secret itself continues with such a field (`password: a, b=c`), that
+  part is kept.
+- Labels outside the list, secrets without a label and of no known shape,
+  and other encodings (base64 of a `password=` pair, double URL encoding,
+  HTML entities) are not recognised.
+- A masked JSON key loses its closing quote (`{"[redacted:secret_kv]}`): the
+  text is for a human, not for a JSON parser.
+- Weak-label values with a hostname are masked even when ordinary.
 
 The handoff still uses masking rather than the allowlist of #501, because
 its point is operator-readable frame facts and model hypotheses; the trace

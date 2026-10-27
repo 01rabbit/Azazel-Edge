@@ -50,14 +50,21 @@ _LABEL_ANY = (
 )
 # Left boundary: not inside a word or a structured ref (``ev:auth:1``); an
 # optional ``x-``/``my_`` style prefix is consumed so the result stays coherent.
-_LEFT = r"(?<![A-Za-z0-9:/._-])(?:[A-Za-z0-9]+[-_])*"
+# A URL-encoded separator (%26 "&", %3B ";", %2C ",") also counts as a left
+# boundary, so "user%3Dbob%26password%3Dx" is found.
+_LEFT = r"(?:(?<![A-Za-z0-9:/._-])|(?<=%26)|(?<=%3[Bb])|(?<=%2[Cc]))(?:[A-Za-z0-9]+[-_])*"
 _RIGHT = r"(?![A-Za-z0-9])"
 # Quoted value to its closing quote; otherwise to the end of the field.
 # Unquoted values run to the field end, closing brackets included; a closing
 # bracket only ends the value when its opening bracket precedes the label
 # ("(pw: x)"), see ``_bracket_end``. ``_kv_end`` may extend the value over
 # the following fields.
-_VALUE = r"""(?P<value>"[^"\r\n]*"?|'[^'\r\n]*'?|「[^」\r\n]*」?|[^\r\n,;&]+)"""
+# A backslash escapes the next character inside quotes ("a\"b,c" is one
+# value); the alternatives are disjoint, so matching stays linear.
+_VALUE = r"""(?P<value>"(?:[^"\\\r\n]|\\.)*"?|'(?:[^'\\\r\n]|\\.)*'?|「[^」\r\n]*」?|[^\r\n,;&]+)"""
+# Between label and value: an optional closing quote of a JSON/dict key
+# ("password": x, 'password': x), then ":" or "=", also URL-encoded (%3A, %3D).
+_KV_SEP = r"""["']?\s*(?:[:=]|%3[AD])\s*"""
 
 # Short labels that also occur in ordinary SOC prose ("auth: failed for admin",
 # "pin: 3 hosts", "token: expired"). For these the value is kept only when the
@@ -79,6 +86,14 @@ _ORDINARY_WORDS = frozenset({
     "admin", "root", "user", "users", "account", "accounts", "login", "logins", "repo", "repository", "host", "hosts",
     "device", "devices", "session", "sessions", "retry", "later", "again", "across", "attempt", "attempts",
 })
+# Network context the operator needs (IP addresses are kept, see the module
+# docstring): after the first word, these words and IPv4/IPv6 addresses (with
+# an optional port) count as ordinary, so "auth: failed, src 10.0.0.5" stays.
+# Hostnames are not recognised here: a weak-label value with one is masked.
+_CONTEXT_WORDS = frozenset({
+    "src", "dst", "source", "destination", "ip", "addr", "address", "port", "peer", "client", "server", "remote", "local",
+})
+_ADDRESS = re.compile(r"(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?|\[?[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}\]?(?::\d{1,5})?")
 # Unit words that may follow a count. PIN gets a smaller list: a digit run
 # after "pin:" is a PIN unless a unit word follows.
 _UNIT_WORDS = frozenset({"host", "hosts", "attempt", "attempts", "device", "devices", "user", "users", "times", "sessions", "failures", "fail", "failed", "errors", "accounts"})
@@ -102,7 +117,11 @@ def _ordinary_phrase(value: str, label: str, continuation: bool = False) -> bool
         return continuation
     units = _PIN_UNIT_WORDS if label == "pin" else _UNIT_WORDS
     for i, w in enumerate(words):
-        if w in _STATUS_WORDS or ((i > 0 or continuation) and w in _ORDINARY_WORDS):
+        later = i > 0 or continuation
+        if w in _STATUS_WORDS or (later and (w in _ORDINARY_WORDS or w in _CONTEXT_WORDS or _ADDRESS.fullmatch(w))):
+            continue
+        # "port 22": a port number after the word "port".
+        if later and w.isdigit() and len(w) <= 5 and i > 0 and words[i - 1] == "port":
             continue
         if w.isdigit() and len(w) <= 3:
             nxt = words[i + 1] if i + 1 < len(words) else ""
@@ -126,6 +145,9 @@ class _Scan:
     def __init__(self, norm: str):
         self.norm = norm
         self.limit = len(norm)
+        # Where the next search starts when the value ended inside the match.
+        self.resume = 0
+        self.budget = 2 * len(norm) + 65536
         self._pos = 0
         self._depth: list[str] = []
 
@@ -192,6 +214,8 @@ def _kv_end(norm: str, m: "re.Match[str]", scan: _Scan) -> Optional[int]:
     else:
         cut = _bracket_end(norm, vs, ve, closer) if closer else None
         parts.append((vs, ve if cut is None else cut))
+        if cut is not None:
+            scan.resume = cut
         end = parts[0][1]
         pos = ve
         while cut is None and pos < scan.limit and norm[pos] in _SEPARATORS:
@@ -262,7 +286,7 @@ _RULES: tuple[tuple[str, "re.Pattern[str]", _Keep], ...] = (
     # new scan of the rest of the run (quadratic).
     ("jwt", re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"), None),
     ("api_key", re.compile(r"(?<![A-Za-z0-9])" + _PREFIXED + r"[A-Za-z0-9_-]{6,}"), None),
-    ("secret_kv", re.compile(_LEFT + _LABEL_ANY + _RIGHT + r"\s*[:=]\s*" + _VALUE, re.I), _kv_end),
+    ("secret_kv", re.compile(_LEFT + _LABEL_ANY + _RIGHT + _KV_SEP + _VALUE, re.I), _kv_end),
     ("secret_kv", re.compile(_LEFT + _LABEL_PW + r"(?:\s+(?:is|was)\s+|\s*は\s*)" + _VALUE, re.I), _kv_end),
     # Japanese label then a space: "暗証番号 1234".
     ("secret_kv", re.compile(r"(?:パスワード|暗証番号|パスフレーズ|秘密鍵)\s+[A-Za-z0-9][^\s,;]*"), None),
@@ -279,14 +303,26 @@ def _spans(text: str, labels: frozenset[str] | None = None) -> list[tuple[int, i
         if labels is not None and label not in labels:
             continue
         scan = _Scan(norm)
-        matches = pattern.finditer(norm)
-        m = next(matches, None)
+        m = pattern.search(norm)
         while m is not None:
-            following = next(matches, None)
+            following = pattern.search(norm, max(m.end(), m.start() + 1))
             scan.limit = len(norm) if following is None else following.start()
+            scan.resume = m.end()
             end = m.end() if keep is None else keep(norm, m, scan)
             if end is not None and end > m.start():
                 spans.append((index[m.start()], index[end - 1] + 1, label))
+            if scan.resume < m.end():
+                # The value ended inside the match (a closing bracket), so the
+                # rest of the match may hold another label ("[token: expired]
+                # [token: x]"): search it again. Rescans share a budget of a
+                # few times the text; past it the rest is masked instead, so
+                # the work stays linear and the fallback is the safe side.
+                rest = m.end() - scan.resume
+                if rest <= scan.budget:
+                    scan.budget -= rest
+                    m = pattern.search(norm, scan.resume)
+                    continue
+                spans.append((index[scan.resume], index[m.end() - 1] + 1, label))
             m = following
     spans.sort()
     merged: list[tuple[int, int, str]] = []

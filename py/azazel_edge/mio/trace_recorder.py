@@ -12,15 +12,16 @@ off by default:
 * ``TraceAuditRecorder.record`` projects one finished cycle and appends it;
   it returns whether the M.I.O. advisory may be published (``record_cycle``).
 
-The digest key (HMAC-SHA256 for ``project_outcome``) follows the trust
-capsule key of #498:
+The digest key (HMAC-SHA256 for ``project_outcome``) is handled like the
+trust capsule key of #498, with stricter checks in addition:
 
 * It lives in a file of its own (``/etc/azazel-edge/mio-trace-audit.key`` by
   default), written by ``installer/internal/provision_mio_trace_audit_key.sh``:
   256 random bits as hex, ``0600``, from its first byte. There is no
   environment variable for it and no built-in key.
 * A key is used only when the file is a regular file (no symlink), owned by
-  root or the current user, not readable by group or others, and holds one
+  root or the current user, not readable by group or others, no directory on
+  its path is a symlink, and it holds one
   value of at least 32 characters of ``[A-Za-z0-9._~+/=-]`` after surrounding
   whitespace is removed, with at least 8 different characters and none of the
   markers of a test or example key. Anything else is refused.
@@ -68,6 +69,25 @@ _MIN_DISTINCT = 8
 _NOT_A_DEVICE_KEY = ("test", "example", "dummy", "sample", "changeme", "devkey", "dev-key", "not-for-devices")
 
 
+def has_symlink_parent(path: str) -> bool:
+    """Whether a directory on the way to ``path`` is a symlink.
+
+    ``O_NOFOLLOW`` covers only the last component; this covers the rest. A
+    missing directory is not a symlink (the file itself is then missing).
+    """
+    current = os.path.dirname(os.path.abspath(path))
+    while True:
+        try:
+            if stat.S_ISLNK(os.lstat(current).st_mode):
+                return True
+        except OSError:
+            return False
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
+
+
 def key_is_usable(value: str) -> bool:
     """The same rule as ``usable`` in provision_mio_trace_audit_key.sh."""
     if _USABLE_KEY.fullmatch(value) is None or len(set(value)) < _MIN_DISTINCT:
@@ -89,6 +109,8 @@ def load_audit_key(path: str) -> AuditKeyState:
     """Read the persisted digest key; never raises, never echoes the value."""
     if not path:
         return AuditKeyState("absent", "not_configured")
+    if has_symlink_parent(path):
+        return AuditKeyState("refused", "symlink_parent")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
         fd = os.open(path, flags)
@@ -165,12 +187,28 @@ def parse_trace_audit_config(data: Any) -> TraceAuditConfig:
 
 
 def load_trace_audit_config(path: str) -> TraceAuditConfig:
-    """Read the JSON config; a missing file means disabled."""
+    """Read the JSON config; a missing file means disabled.
+
+    Opened like the key file: no symlink (also not in a parent directory),
+    a regular file only, without blocking on a FIFO.
+    """
+    if has_symlink_parent(path):
+        raise ValueError("invalid_trace_audit_config:symlink_parent")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
-        with open(path, "rb") as fh:
-            raw = fh.read(65537)
+        fd = os.open(path, flags)
     except FileNotFoundError:
         return TraceAuditConfig()
+    except OSError as exc:
+        raise ValueError("invalid_trace_audit_config:" + ("symlink" if exc.errno == errno.ELOOP else "unreadable")) from None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("invalid_trace_audit_config:not_regular")
+        raw = os.read(fd, 65537)
+    except OSError:
+        raise ValueError("invalid_trace_audit_config:unreadable") from None
+    finally:
+        os.close(fd)
     if len(raw) > 65536:
         raise ValueError("invalid_trace_audit_config:too_large")
     try:

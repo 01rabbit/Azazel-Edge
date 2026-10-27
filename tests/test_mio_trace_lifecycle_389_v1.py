@@ -97,6 +97,19 @@ def _config(tmp_path: Path, key_file: Path | str = "", **kw) -> TraceAuditConfig
     ("pw=a&b", ("&b",)),
     ("(token: expired, abc123) ok", ("abc123",)),
     ("password: x,, y", ("y",)),
+    # Review of #506: JSON/dict keys, URL encoding, separators inside quotes,
+    # and a second weak label after a bracket.
+    ('{"password": "hunter2"}', ("hunter2",)),
+    ('"password" : "hunter2"', ("hunter2",)),
+    ("{'password': 'hunter2'}", ("hunter2",)),
+    ('{"api_key":"abc123xyz"}', ("abc123xyz",)),
+    ("password%3Dhunter2", ("hunter2",)),
+    ("user%3Dbob%26password%3Ahunter2", ("hunter2",)),
+    ('pw: "a,b;c&d" ok', ("a,b", "c&d")),
+    ('pw: "a\\",b" ok', ("a\\", ",b")),
+    ("pw: 'a\\',b' ok", (",b",)),
+    ("[token: expired] [token: s3cr3t]", ("s3cr3t",)),
+    ("(auth: failed) (auth: s3cr3t)", ("s3cr3t",)),
 ])
 def test_known_leaks_are_masked(text, secret_parts):
     out = redact_text(text)
@@ -124,6 +137,13 @@ def test_value_ends_where_the_next_field_starts(text, expected):
     "(auth: failed) admin logged in from (lab)",
     "(token: expired) user admin (host a)",
     "pin: 3 hosts, 2 devices",
+    '{"token": "expired"}',
+    "[token: expired] [token: expired]",
+    # Addresses are kept for the operator (module docstring).
+    "auth: failed, src 10.0.0.5",
+    "auth: failed from 10.0.0.5",
+    "token: expired, dst fe80::1 port 22",
+    "auth: failed for admin from 192.0.2.7:2222",
 ])
 def test_ordinary_text_with_commas_and_brackets_is_kept(text):
     assert redact_text(text) == text
@@ -149,21 +169,44 @@ _LINEAR_UNITS = (
     "x-",
     "(",
     "a@b.",
+    "[token: expired] ",
+    "[token: a] ",
+    "[[[[token: x] ",
+    '{"password": "',
+    '"pw": "\\\\',
+    'pw: "\\"',
+    "password%3D",
+    "x%26pw%3D",
+    "%26a-",
+    "auth: failed, src 10.0.0.5 ",
 )
+
+_TIMING_CHILD = """
+import json, sys, time
+from azazel_edge.mio.redaction import redact_text
+unit = sys.argv[1]
+out = []
+for size in (1 << 17, 1 << 20):
+    text = (unit * (size // len(unit) + 1))[:size]
+    start = time.perf_counter()
+    redact_text(text)
+    out.append(time.perf_counter() - start)
+print(json.dumps(out))
+"""
 
 
 @pytest.mark.parametrize("unit", _LINEAR_UNITS)
 def test_masking_is_linear_on_one_megabyte(unit):
-    def run(size: int) -> float:
-        text = (unit * (size // len(unit) + 1))[:size]
-        start = time.perf_counter()
-        redact_text(text)
-        return time.perf_counter() - start
-
-    small = run(1 << 17)
-    large = run(1 << 20)  # 8x the input
-    # Linear is about 8x; quadratic would be about 64x. The absolute bound
-    # catches a slow machine as well as a regression.
+    # In a child process with a wall-clock limit, so a quadratic regression
+    # fails the test instead of hanging the suite.
+    env = dict(os.environ, PYTHONPATH=str(ROOT / "py"))
+    try:
+        child = subprocess.run([sys.executable, "-c", _TIMING_CHILD, unit], capture_output=True, text=True, env=env, timeout=120)
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"masking 1 MiB of {unit!r} took over 120 s")
+    assert child.returncode == 0, child.stderr
+    small, large = json.loads(child.stdout)  # 8x the input
+    # Linear is about 8x; quadratic would be about 64x.
     assert large < 30, (unit, large)
     assert large < max(small, 0.005) * 24, (unit, small, large)
 
@@ -188,13 +231,17 @@ def test_random_key_in_a_private_file_is_loaded(tmp_path):
     "Dummy0123456789abcdefghijklmnopqrstu",
     "ChangeMe0123456789abcdefghijklmnopqr",
     "azazel-edge-devkey-0123456789abcdefgh",
+    "azazel-edge-dev-key-0123456789abcdefg",
+    "Sample0123456789abcdefghijklmnopqrstu",
+    _random_key() + "\x00" + _random_key(),     # a NUL byte
+    _random_key() * 70,                           # over 4096 bytes
     _random_key() + "\n" + _random_key(),        # two values
     _random_key() + "$HOME",                       # outside the character set
     "\"" + _random_key() + "\"",                   # quotes are not removed
 ])
 def test_unusable_or_test_keys_are_refused(tmp_path, value):
     state = load_audit_key(str(_key_file(tmp_path, value)))
-    assert state.state == "refused" and state.key is None and state.reason == "not_usable"
+    assert state.state == "refused" and state.key is None and state.reason in {"not_usable", "too_large"}
     assert not key_is_usable(value.strip())
 
 
@@ -209,6 +256,13 @@ def test_key_file_must_be_private_regular_and_not_a_symlink(tmp_path):
     assert load_audit_key(str(tmp_path)).state == "refused"
     assert load_audit_key(str(tmp_path / "missing.key")).state == "absent"
     assert load_audit_key("").reason == "not_configured"
+    # A symlinked directory on the way is refused too (O_NOFOLLOW sees only
+    # the last component).
+    real = tmp_path / "real"
+    real.mkdir()
+    _key_file(real, value)
+    (tmp_path / "via").symlink_to(real)
+    assert load_audit_key(str(tmp_path / "via" / "mio-trace-audit.key")).reason == "symlink_parent"
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0, reason="needs root to give the file another owner")
@@ -227,22 +281,58 @@ def test_no_environment_variable_or_built_in_key():
 
 # --- port: off by default -----------------------------------------------------
 
+_PORT_SELF = {
+    SCRIPT,
+    EXPORT_CLI,
+    SHIPPED_CONFIG,
+}
+_PORT_NEEDLES = (
+    b"mio_trace_audit.json", b"trace_recorder", b"mio.trace_export", b"mio import trace_export", b"provision_mio_trace_audit_key",
+    b"mio-trace-audit.key", b"azazel-mio-trace-export", b"TraceAuditSink", b"open_trace_audit", b"record_cycle",
+)
+
+
 def test_shipped_config_is_disabled_and_nothing_starts_the_port():
     config = load_trace_audit_config(str(SHIPPED_CONFIG))
     assert config.enabled is False
     assert open_trace_audit(config) is None
-    # No unit, installer step or running service loads the config or the port.
-    for base in ("systemd", "installer", "azazel_edge_web", "py/azazel_edge_ai", "py/azazel_edge_control"):
-        for path in (ROOT / base).rglob("*"):
-            if path.is_file() and path != SCRIPT:
-                text = path.read_text(encoding="utf-8", errors="replace")
-                for needle in ("mio_trace_audit.json", "trace_recorder", "provision_mio_trace_audit_key", "mio-trace-audit.key", "azazel-mio-trace-export"):
-                    assert needle not in text, (path, needle)
+    # Nothing in the repository (except the port itself, the M.I.O. package,
+    # docs and tests) names the config, the port, the sink or the key: no
+    # unit, installer step, packaging or service reads or writes them.
+    skip_dirs = {ROOT / ".git", ROOT / "docs", ROOT / "tests", ROOT / "py" / "azazel_edge" / "mio", ROOT / "rust" / "azazel-edge-core" / "target"}
+    checked = 0
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if Path(dirpath, d) not in skip_dirs and d not in {".venv", "node_modules", "__pycache__"}]
+        for name in filenames:
+            path = Path(dirpath, name)
+            if path in _PORT_SELF or path.is_symlink() or path.stat().st_size > 8 << 20:
+                continue
+            data = path.read_bytes()
+            checked += 1
+            for needle in _PORT_NEEDLES:
+                assert needle not in data, (str(path.relative_to(ROOT)), needle)
+    assert checked > 100
 
 
 def test_missing_config_file_is_disabled(tmp_path):
     assert load_trace_audit_config(str(tmp_path / "none.json")) == TraceAuditConfig()
     assert TraceAuditConfig().enabled is False
+
+
+def test_config_file_must_be_a_regular_file_without_symlinks(tmp_path):
+    good = tmp_path / "cfg.json"
+    good.write_text(SHIPPED_CONFIG.read_text())
+    link = tmp_path / "link.json"
+    link.symlink_to(good)
+    with pytest.raises(ValueError, match="symlink"):
+        load_trace_audit_config(str(link))
+    (tmp_path / "via").symlink_to(tmp_path)
+    with pytest.raises(ValueError, match="symlink_parent"):
+        load_trace_audit_config(str(tmp_path / "via" / "cfg.json"))
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    with pytest.raises(ValueError, match="not_regular"):
+        load_trace_audit_config(str(fifo))  # and does not block
 
 
 @pytest.mark.parametrize("data", [
@@ -372,6 +462,28 @@ def test_provisioner_keeps_a_usable_hand_set_key(tmp_path):
 
 
 @needs_gnu
+@pytest.mark.parametrize("content", [
+    lambda: (secrets.token_hex(16) + "\x00" + secrets.token_hex(16)).encode(),
+    lambda: (secrets.token_hex(32) + "\n") .encode() * 70,
+])
+def test_provisioner_replaces_a_key_with_nul_or_an_oversized_file(tmp_path, content):
+    key_file = tmp_path / "mio-trace-audit.key"
+    key_file.write_bytes(content())
+    result = _run(str(key_file))
+    assert result.returncode == 0 and "NOTICE" in result.stdout, result.stdout + result.stderr
+    assert re.fullmatch(r"[0-9a-f]{64}", key_file.read_text().strip())
+
+
+@needs_gnu
+def test_provisioner_does_not_print_the_key_under_xtrace(tmp_path):
+    key_file = tmp_path / "mio-trace-audit.key"
+    result = subprocess.run(["bash", "-x", str(SCRIPT), str(key_file)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    key = key_file.read_text().strip()
+    assert key not in result.stdout + result.stderr
+
+
+@needs_gnu
 def test_provisioner_refuses_a_symlink(tmp_path):
     target = tmp_path / "elsewhere"
     target.write_text("x\n", encoding="utf-8")
@@ -443,6 +555,8 @@ def test_export_never_prints_secrets_free_text_or_tampered_records(tmp_path):
         {"broker": [{"request_id": "x", "capability": "q", "result": SECRET_TEXT, "evidence_refs": []}]},
         {"hypotheses": [dict(good["hypotheses"][0], supporting_evidence_refs=[SECRETS[1]])]},
         {"digest_key": "approved"},
+        {"authority": "decision"},
+        {"authority": "advisory_only ", "note": None},
     ):
         tampered.append(json.dumps(dict(good, **change)))
     with open(path, "a", encoding="ascii") as fh:
@@ -473,6 +587,46 @@ def test_export_accepts_v1_records_and_refuses_odd_files(tmp_path):
     assert export_incident(str(path), trace_id="trace-1")["records"] == [v1]
     refused = export_incident(str(link), trace_id="trace-1")
     assert refused["records"] == [] and refused["files"][-1]["state"] == "refused:symlink"
+    assert refused["complete"] is False
+
+
+def test_v2_records_require_digest_key(tmp_path):
+    f, ticket, outcome = _cycle()
+    rec = project_outcome(ticket=ticket, outcome=outcome, key=secrets.token_bytes(32), frame=f, digest_key="persistent")
+    assert valid_record(rec)
+    assert not valid_record({k: v for k, v in rec.items() if k != "digest_key"})
+    assert not valid_record(dict(rec, digest_key=None))
+
+
+def test_export_counts_digest_key_states_and_marks_completeness(tmp_path):
+    path = _write_records(tmp_path, ("trace-1",))
+    f, ticket, outcome = _cycle(n=5)
+    v1 = {k: v for k, v in project_outcome(ticket=ticket, outcome=outcome, key=secrets.token_bytes(32), frame=f).items() if k != "digest_key"}
+    v1["schema"] = "mio.trace_audit.v1"
+    persistent = project_outcome(ticket=ticket, outcome=outcome, key=secrets.token_bytes(32), frame=f, digest_key="persistent")
+    with open(path, "ab") as fh:
+        fh.write(encode_record(v1) + encode_record(persistent))
+    out = export_incident(str(path), trace_id="trace-1", max_files=3)
+    assert out["complete"] is True  # missing rotated files are normal
+    assert out["digest_key_counts"] == {"ephemeral": 1, "persistent": 1, "not_recorded": 1}
+    nothing = export_incident(str(tmp_path / "none.jsonl"), trace_id="trace-1")
+    assert nothing["complete"] is False and nothing["records"] == []
+
+
+def test_export_refuses_non_regular_and_oversized_files(tmp_path, monkeypatch):
+    from azazel_edge.mio import trace_export
+
+    path = _write_records(tmp_path, ("trace-1",))
+    os.mkfifo(str(path) + ".1")
+    out = export_incident(str(path), trace_id="trace-1", max_files=2)  # does not block on the FIFO
+    assert [f["state"] for f in out["files"]] == ["refused:not_regular", "read"]
+    assert out["complete"] is False and len(out["records"]) == 1
+    monkeypatch.setattr(trace_export, "MAX_FILE_BYTES", 16)
+    big = export_incident(str(path), trace_id="trace-1", max_files=1)
+    assert big["files"] == [{"name": "trace.jsonl", "state": "refused:too_large"}] and big["records"] == []
+    (tmp_path / "via").symlink_to(path.parent)
+    via = export_incident(str(tmp_path / "via" / path.name), trace_id="trace-1", max_files=1)
+    assert via["files"][0]["state"] == "refused:symlink_parent" and via["complete"] is False
     with pytest.raises(ValueError):
         export_incident(str(path), trace_id="bad id\n")
     with pytest.raises(ValueError):
@@ -491,6 +645,27 @@ def test_export_cli_prints_json_and_does_not_echo_bad_arguments(tmp_path):
     assert via_config.returncode == 0 and json.loads(via_config.stdout) == json.loads(ok.stdout)
     bad = subprocess.run([sys.executable, str(EXPORT_CLI), "--path", str(path), "--trace-id", SECRETS[1] + " x"], capture_output=True, text=True, env=env, timeout=60)
     assert bad.returncode == 2 and SECRETS[1] not in bad.stdout + bad.stderr
+    for option in ("--limit", "--max-files"):
+        for value in (SECRETS[0], "0" if option == "--limit" else "65", "-1", "1e3", "99999"):
+            bad = subprocess.run([sys.executable, str(EXPORT_CLI), "--path", str(path), "--trace-id", "trace-1", option, value], capture_output=True, text=True, env=env, timeout=60)
+            assert bad.returncode == 2, (option, value)
+            assert bad.stdout == "" and (value not in bad.stderr or value in ("0", "-1")), (option, value, bad.stderr)
+            assert bad.stderr.strip().startswith("azazel-mio-trace-export: invalid_"), bad.stderr
+    no_path = tmp_path / "nopath.json"
+    no_path.write_text(json.dumps({"schema": TRACE_AUDIT_CONFIG_SCHEMA, "enabled": False}))
+    missing = subprocess.run([sys.executable, str(EXPORT_CLI), "--config", str(no_path), "--trace-id", "trace-1"], capture_output=True, text=True, env=env, timeout=60)
+    assert missing.returncode == 2 and "config_has_no_path" in missing.stderr
+
+
+def test_export_cli_exits_non_zero_when_incomplete(tmp_path):
+    env = dict(os.environ, PYTHONPATH=str(ROOT / "py"))
+    none = subprocess.run([sys.executable, str(EXPORT_CLI), "--path", str(tmp_path / "none.jsonl"), "--trace-id", "trace-1"], capture_output=True, text=True, env=env, timeout=60)
+    assert none.returncode == 1 and json.loads(none.stdout)["complete"] is False
+    path = _write_records(tmp_path, ("trace-1",))
+    link = tmp_path / "link.jsonl"
+    link.symlink_to(path)
+    refused = subprocess.run([sys.executable, str(EXPORT_CLI), "--path", str(link), "--max-files", "1", "--trace-id", "trace-1"], capture_output=True, text=True, env=env, timeout=60)
+    assert refused.returncode == 1 and json.loads(refused.stdout)["files"][0]["state"] == "refused:symlink"
 
 
 def test_export_cli_has_no_write_options():
