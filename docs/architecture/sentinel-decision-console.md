@@ -33,8 +33,9 @@ nodes is preserved. The console is layered on top:
 | One-line integration hook: `document.dispatchEvent('azazel:refresh', …)` | `static/app.js` (after each render) |
 
 **Not touched:** all `/api/**` payloads, the deterministic evaluator/arbiter, the
-audit trail, `auth.py`, `installer/`, `security/`, `systemd/`, the i18n catalog
-(`py/azazel_edge/i18n.py`). No backend behavior changed.
+audit trail, `auth.py`, `installer/`, `security/`, `systemd/`. No backend
+behavior changed. (Edge#348 later added `sentinel.*` display strings to the i18n
+catalog `py/azazel_edge/i18n.py`; see [i18n](#i18n).)
 
 ## Data flow
 
@@ -91,6 +92,15 @@ The pipeline renders the decision **before and independently of** any AI text
 `status-neutral` maps to `--accent-steel` (unknown), guaranteeing stale/unknown
 is never dressed as healthy — enforced by `tests/test_sentinel_console_v1.py`.
 
+Edge#348's DOM harness found four bespoke surfaces that painted green, or
+showed a made-up value, when their input was absent. They now render unknown
+(display only; the payloads and decisions are unchanged): the NOC path strip's
+Clients and Azazel-Edge hops (no client count / no mode), the NOC runtime
+meters (no queue or LLM health → `—`), the interface-utilization meter (no
+utilization), and the fleet's in-box Deception node (no mode → `UNKNOWN`, was a
+green `STANDBY` and "Mode: SHIELD"). The traffic-control "Active control" row
+no longer defaults to `OBSERVE` when neither a decision nor a mode is known.
+
 ## Visual design system
 
 `sentinel.css` overrides the base `:root` tokens toward an industrial
@@ -103,18 +113,63 @@ fonts, no CDN, no chart library — trend meters are CSS/SVG (the existing
 
 ## Accessibility
 
-Tier nav is a WAI-ARIA `tablist` with roving arrow-key navigation, visible
-focus rings, `aria-selected`/`aria-pressed` state, and status conveyed by text +
-shape as well as color. All motion respects `prefers-reduced-motion` (the
-console adds no blinking). Responsive down to phone width via media queries; the
-main screen never scrolls horizontally.
+Updated by Edge#348. Display only: no decision, enforcement or API change.
+
+| Surface | Pattern | Keyboard |
+| --- | --- | --- |
+| Tier nav (OVERVIEW…SYSTEM) | Navigation, not a tab pattern: buttons in a `nav`, the active tier is `aria-current="page"`, roving `tabindex` (active `0`, others `-1`) | Arrow Left/Right **and** Up/Down (vertical sidebar), Home/End; focus moves with the tier. Arrows on the Ask M.I.O. link do nothing |
+| SOC / NOC (Operations) | True WAI-ARIA tabs: `role="tablist"` → `role="tab"` with `aria-selected` + `aria-controls`; `sentinelSocConsole`/`sentinelNocConsole` are `role="tabpanel"` labelled by their tab | Arrow keys, Home/End; automatic activation |
+| Evidence sub-views (TIMELINE…RAW DATA) | True tabs; each view is a `tabpanel` (lists are wrapped, so `ul` keeps its list role) | Same |
+| System sub-views (RUNTIME…CONFIGURATION) | True tabs | Same |
+| Range / triage-band filters | Toggle buttons with `aria-pressed` (filters, not views) | Tab + Enter/Space |
+| Evidence timeline rows | `role="button"`, focusable | Enter/Space opens the detail |
+
+- **Live region.** `#sentinelLiveRegion` (`role="status"`, `aria-live="polite"`,
+  `aria-atomic`) announces a tier's state change once, e.g. "Status changed:
+  SYSTEM: CRITICAL". The first observation after load and an unchanged 4 s poll
+  are silent, so it never chatters.
+- **Never color alone.** Tier dots carry SR text ` (UNKNOWN)` etc. plus a shape
+  cue; each pipeline stage's accessible name ends with its state
+  (`SENSE (WATCH)`); the CPU/MEM/DISK/TEMP tiles carry
+  `aria-label="Disk 42% (OK)"`; the top-talker share bar has its percentage as
+  SR text; evidence rows, triage bands and identity states have words.
+- **Contrast (WCAG AA).** Every text and accent token in `sentinel.css`
+  (`--text-main/dim/soft`, `--accent-cyan/green/amber/red/steel`) is ≥ 4.5:1 on
+  every background token (`--bg-0/1/2`, `--bg-panel`, `--bg-panel-strong`,
+  `--bg-inset`); the lowest pair is `--accent-red` on `--bg-2` at 4.67:1.
+  `sentinel.css` sets no text color outside these tokens. Both are checked by
+  `tests/test_sentinel_console_v1.py`. This is computed from the tokens, not
+  measured on a screen.
+- Visible focus rings; all motion respects `prefers-reduced-motion` (the console
+  adds no blinking). Responsive down to phone width; the main screen never
+  scrolls horizontally.
+- **Touch console** (`/touch`): its tab bar already was a true tab pattern with
+  roving `tabindex`, but had no arrow keys, so a keyboard could not reach the
+  inactive tabs. Arrow keys and Home/End now move between tabs.
 
 ## i18n
 
-New nav labels (OVERVIEW/OPERATIONS/EVIDENCE/SYSTEM, SOC/NOC) are intentional
-English product terms (consistent with existing fixed-English headings such as
-"Service Health", "NOC Focus"). No new `tr()` catalog keys are introduced, so
-the JA/EN toggle and `tests/test_i18n_catalog_consistency.py` are unaffected.
+Updated by Edge#348.
+
+- **Operator-facing sentences** go through the catalog: `sentinel.*` keys in
+  `py/azazel_edge/i18n.py` (JA and EN). `sentinel.js` reads the catalog that
+  `index.html` injects (`window.AZAZEL_I18N`) with a small `tr(key, fallback,
+  vars)`; a missing key, or a language without these keys (es/uk/tl), falls
+  back to the English text in the code. Covered: empty states ("No recent
+  evidence." …), the Managed-client talkers heading and its empty text, the
+  External peers heading, the evidence count, the client roster summary, the
+  fleet note, the tier-empty note, the QoS-planned note, the decisions note, the
+  live-region sentence, and the tile names in the CPU/MEM/DISK/TEMP
+  `aria-label`.
+- **Product terms and state words stay fixed English** in every language:
+  tier names, SOC/NOC, stage names, tab names, the visible tile labels
+  (CPU/MEMORY/DISK/TEMPERATURE), field labels such as "Uplink", and state words
+  (OK/WATCH/CRITICAL/UNKNOWN, VERIFIED, NOT APPLIED…). The decision-trace rows
+  are not translated either: they are audit wording pinned by tests.
+- `tests/test_i18n_catalog_consistency.py` keeps every `tr('key')` in
+  `static/*.js` and the templates present in both JA and EN.
+- Values from the API are written with `textContent` only; the catalog text is
+  never parsed as markup.
 
 ## Bespoke consoles (target-design fidelity)
 
@@ -150,6 +205,22 @@ CSS/SVG sparklines — no chart library (Pi constraint).
 
 - `tests/test_sentinel_console_v1.py` — tier nav, SOC/NOC sub-filter, pipeline
   strip, `data-tier` grouping, asset wiring order, pinned-ID preservation,
-  forbidden-ID absence, and the stale-≠-green + no-new-poll invariants.
+  forbidden-ID absence, and the stale-≠-green + no-new-poll invariants; since
+  Edge#348 also the tab patterns (tablist/tab/tabpanel wiring), the live
+  region, `sentinel.*` keys present and translated in JA/EN, Japanese rendering
+  with English product terms, and the WCAG AA token contrast.
+- `tests/sentinel_console_logic.test.js` (node, run by CI and by the Python
+  wrapper) — the pure logic (`computeConsoleState`, decision trace, DISK tile,
+  managed talkers), and since Edge#348 a DOM harness: it mounts the console's
+  real markup from `templates/index.html` into `tests/js_mini_dom.js` and runs
+  the bespoke renderers. It asserts that they do not throw on empty, partial or
+  odd payloads; that an empty payload paints nothing green (`is-ok`,
+  `status-ok`, `tone-ok`) anywhere; that stale/down/unread stay off green; that
+  data never becomes markup; tab ARIA state and Arrow/Home/End handling; the
+  live region; and JA sentences with English product terms.
+  `js_mini_dom.js` is a small dependency-free DOM, not jsdom: CI runs plain
+  `node` with no `npm install`. It checks logic and ARIA state, not layout.
+- `tests/touch_console_logic.test.js` — adds the tab-bar keyboard logic and the
+  touch tab/tabpanel wiring.
 - Existing `tests/test_dashboard_data_contract.py` (all pinned IDs/strings) and
   the i18n suites continue to pass unchanged.

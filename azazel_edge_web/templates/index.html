@@ -89,9 +89,10 @@
         </nav>
         <div class="sentinel-content" id="sentinelContent">
         <div class="sentinel-tier-empty" id="sentinelTierEmpty" role="status" aria-live="polite">
-            <strong>Professional detail required.</strong>
-            <span id="sentinelTierEmptyText">Switch Audience Mode to "Professional" to inspect this tier.</span>
+            <strong>{{ tr('sentinel.tier_empty_title', 'Professional detail required.') }}</strong>
+            <span id="sentinelTierEmptyText">{{ tr('sentinel.tier_empty_text', 'Switch Audience Mode to "Professional" to inspect this tier.') }}</span>
         </div>
+        <div class="sr-only" id="sentinelLiveRegion" role="status" aria-live="polite" aria-atomic="true"></div>
         <section class="panel synthetic-mode-banner" id="syntheticModeBanner" hidden>
             <div class="panel-heading">
                 <div>
@@ -195,11 +196,11 @@
                 </article>
             </div>
         </section>
-        <div class="sentinel-subtabs sentinel-ops-tabs" id="sentinelOpsSubnav" data-tier="operations" role="group" aria-label="Operations workspace">
-            <button type="button" class="sentinel-subtab is-active" id="sentinelOpSoc" data-sentinel-op="soc" aria-pressed="true">SOC</button>
-            <button type="button" class="sentinel-subtab" id="sentinelOpNoc" data-sentinel-op="noc" aria-pressed="false">NOC</button>
+        <div class="sentinel-subtabs sentinel-ops-tabs" id="sentinelOpsSubnav" data-tier="operations" role="tablist" aria-label="Operations workspace">
+            <button type="button" class="sentinel-subtab is-active" id="sentinelOpSoc" data-sentinel-op="soc" role="tab" aria-selected="true" aria-controls="sentinelSocConsole" tabindex="0">SOC</button>
+            <button type="button" class="sentinel-subtab" id="sentinelOpNoc" data-sentinel-op="noc" role="tab" aria-selected="false" aria-controls="sentinelNocConsole" tabindex="-1">NOC</button>
         </div>
-        <section class="sentinel-opsconsole" id="sentinelSocConsole" data-tier="operations" data-op="soc" aria-label="SOC operations">
+        <section class="sentinel-opsconsole" id="sentinelSocConsole" data-tier="operations" data-op="soc" role="tabpanel" aria-labelledby="sentinelOpSoc">
             <article class="sentinel-ops-status status-neutral" id="socConsoleCard">
                 <div class="sentinel-ops-status__head">
                     <div><div class="sentinel-card__kicker">SOC Status</div><strong id="socConsoleStatus">—</strong></div>
@@ -260,7 +261,7 @@
                 </article>
             </div>
         </section>
-        <section class="sentinel-opsconsole" id="sentinelNocConsole" data-tier="operations" data-op="noc" aria-label="NOC operations">
+        <section class="sentinel-opsconsole" id="sentinelNocConsole" data-tier="operations" data-op="noc" role="tabpanel" aria-labelledby="sentinelOpNoc">
             <div class="sentinel-console__head"><div class="panel-kicker">NOC — Path &amp; Service Health</div></div>
             <article class="sentinel-ops-status status-neutral" id="nocConsoleCard">
                 <div class="sentinel-ops-status__head">
@@ -293,7 +294,7 @@
                     <div class="sentinel-tc" id="nocTrafficControl"></div>
                     <div class="sentinel-planned" id="nocQosPlanned">
                         <span class="sentinel-planned__tag">PLANNED</span>
-                        <span>Per-user bandwidth allocation &amp; traffic priority (QoS) — requires per-client accounting + a tc class hierarchy; not yet available.</span>
+                        <span>{{ tr('sentinel.qos_planned', 'Per-user bandwidth allocation & traffic priority (QoS) — requires per-client accounting + a tc class hierarchy; not yet available.') }}</span>
                     </div>
                 </article>
             </div>
@@ -328,12 +329,12 @@
             </div>
         </section>
         <section class="sentinel-evconsole" id="sentinelEvidenceConsole" data-tier="evidence" aria-label="Evidence timeline">
-            <div class="sentinel-subtabs" role="group" aria-label="Evidence views">
-                <button type="button" class="sentinel-subtab is-active" data-ev-view="timeline" aria-pressed="true">TIMELINE</button>
-                <button type="button" class="sentinel-subtab" data-ev-view="list" aria-pressed="false">EVIDENCE LIST</button>
-                <button type="button" class="sentinel-subtab" data-ev-view="audit" aria-pressed="false">AUDIT TRAIL</button>
-                <button type="button" class="sentinel-subtab" data-ev-view="decisions" aria-pressed="false">DECISIONS</button>
-                <button type="button" class="sentinel-subtab" data-ev-view="raw" aria-pressed="false">RAW DATA</button>
+            <div class="sentinel-subtabs" id="sentinelEvTabs" role="tablist" aria-label="Evidence views">
+                <button type="button" class="sentinel-subtab is-active" id="evTabTimeline" data-ev-view="timeline" role="tab" aria-selected="true" aria-controls="evPanelTimeline" tabindex="0">TIMELINE</button>
+                <button type="button" class="sentinel-subtab" id="evTabList" data-ev-view="list" role="tab" aria-selected="false" aria-controls="evList" tabindex="-1">EVIDENCE LIST</button>
+                <button type="button" class="sentinel-subtab" id="evTabAudit" data-ev-view="audit" role="tab" aria-selected="false" aria-controls="evPanelAudit" tabindex="-1">AUDIT TRAIL</button>
+                <button type="button" class="sentinel-subtab" id="evTabDecisions" data-ev-view="decisions" role="tab" aria-selected="false" aria-controls="evPanelDecisions" tabindex="-1">DECISIONS</button>
+                <button type="button" class="sentinel-subtab" id="evTabRaw" data-ev-view="raw" role="tab" aria-selected="false" aria-controls="evPanelRaw" tabindex="-1">RAW DATA</button>
             </div>
             <div class="sentinel-ev-toolbar">
                 <span class="sentinel-ev-toolbar__label">Range</span>
@@ -347,15 +348,15 @@
             </div>
             <div class="sentinel-ev-layout">
                 <div class="sentinel-ev-main">
-                    <ul class="sentinel-ev-timeline" id="evTimeline" data-ev-panel="timeline"></ul>
-                    <div class="sentinel-ev-table" id="evList" data-ev-panel="list" hidden></div>
-                    <ul class="sentinel-ev-audit" id="evAudit" data-ev-panel="audit" hidden></ul>
-                    <div class="sentinel-ev-decisions" data-ev-panel="decisions" hidden>
-                        <p class="sentinel-ev-decisions__note">One trace per core decision (explanation + core decision chain), read only. Alerts without a core decision have none.</p>
+                    <div id="evPanelTimeline" data-ev-panel="timeline" role="tabpanel" aria-labelledby="evTabTimeline"><ul class="sentinel-ev-timeline" id="evTimeline"></ul></div>
+                    <div class="sentinel-ev-table" id="evList" data-ev-panel="list" role="tabpanel" aria-labelledby="evTabList" tabindex="0" hidden></div>
+                    <div id="evPanelAudit" data-ev-panel="audit" role="tabpanel" aria-labelledby="evTabAudit" tabindex="0" hidden><ul class="sentinel-ev-audit" id="evAudit"></ul></div>
+                    <div class="sentinel-ev-decisions" id="evPanelDecisions" data-ev-panel="decisions" role="tabpanel" aria-labelledby="evTabDecisions" hidden>
+                        <p class="sentinel-ev-decisions__note">{{ tr('sentinel.decisions_note', 'One trace per core decision (explanation + core decision chain), read only. Alerts without a core decision have none.') }}</p>
                         <button type="button" class="sentinel-range-btn" id="evDecisionExport">EXPORT JSON</button>
                         <ul class="sentinel-ev-audit" id="evDecisions"></ul>
                     </div>
-                    <pre class="sentinel-ev-raw" id="evRaw" data-ev-panel="raw" hidden></pre>
+                    <div id="evPanelRaw" data-ev-panel="raw" role="tabpanel" aria-labelledby="evTabRaw" hidden><pre class="sentinel-ev-raw" id="evRaw" tabindex="0"></pre></div>
                 </div>
                 <aside class="sentinel-ev-detail" id="evDetail" aria-live="polite">
                     <div class="sentinel-card__kicker">Detail</div>
@@ -376,13 +377,13 @@
             </div>
         </section>
         <section class="sentinel-sysconsole" id="sentinelSystemConsole" data-tier="system" aria-label="System runtime">
-            <div class="sentinel-subtabs" role="group" aria-label="System views">
-                <button type="button" class="sentinel-subtab is-active" data-sys-view="runtime" aria-pressed="true">RUNTIME</button>
-                <button type="button" class="sentinel-subtab" data-sys-view="services" aria-pressed="false">SERVICES</button>
-                <button type="button" class="sentinel-subtab" data-sys-view="fleet" aria-pressed="false">FLEET</button>
-                <button type="button" class="sentinel-subtab" data-sys-view="config" aria-pressed="false">CONFIGURATION</button>
+            <div class="sentinel-subtabs" id="sentinelSysTabs" role="tablist" aria-label="System views">
+                <button type="button" class="sentinel-subtab is-active" id="sysTabRuntime" data-sys-view="runtime" role="tab" aria-selected="true" aria-controls="sysRuntimePanel" tabindex="0">RUNTIME</button>
+                <button type="button" class="sentinel-subtab" id="sysTabServices" data-sys-view="services" role="tab" aria-selected="false" aria-controls="sysServicesGrid" tabindex="-1">SERVICES</button>
+                <button type="button" class="sentinel-subtab" id="sysTabFleet" data-sys-view="fleet" role="tab" aria-selected="false" aria-controls="sysFleetPanel" tabindex="-1">FLEET</button>
+                <button type="button" class="sentinel-subtab" id="sysTabConfig" data-sys-view="config" role="tab" aria-selected="false" aria-controls="sysConfigPanel" tabindex="-1">CONFIGURATION</button>
             </div>
-            <div data-sys-panel="runtime">
+            <div data-sys-panel="runtime" id="sysRuntimePanel" role="tabpanel" aria-labelledby="sysTabRuntime">
                 <div class="sentinel-systiles">
                     <article class="systile status-neutral" id="sysCpuTile"><span>CPU</span><strong id="sysCpu">—</strong><div class="systile-spark" id="sysCpuSpark"></div></article>
                     <article class="systile status-neutral" id="sysMemTile"><span>MEMORY</span><strong id="sysMem">—</strong><div class="systile-spark" id="sysMemSpark"></div></article>
@@ -403,8 +404,8 @@
                     <div class="sentinel-spark sentinel-spark--tall" id="sysResSpark"></div>
                 </article>
             </div>
-            <div class="sentinel-svc-grid" data-sys-panel="services" id="sysServicesGrid" hidden></div>
-            <div data-sys-panel="fleet" id="sysFleetPanel" hidden>
+            <div class="sentinel-svc-grid" data-sys-panel="services" id="sysServicesGrid" role="tabpanel" aria-labelledby="sysTabServices" tabindex="0" hidden></div>
+            <div data-sys-panel="fleet" id="sysFleetPanel" role="tabpanel" aria-labelledby="sysTabFleet" hidden>
                 <div class="sentinel-card__kicker">Node fabric — Azazel series</div>
                 <div class="sentinel-fabric" id="sysFabric"></div>
                 <p class="sentinel-fabric-note" id="sysFabricNote"></p>
@@ -423,7 +424,7 @@
                     <ul class="sentinel-gate" id="sysAz06Gate"></ul>
                 </div>
             </div>
-            <div class="sentinel-config" data-sys-panel="config" id="sysConfigPanel" hidden></div>
+            <div class="sentinel-config" data-sys-panel="config" id="sysConfigPanel" role="tabpanel" aria-labelledby="sysTabConfig" tabindex="0" hidden></div>
         </section>
         <section class="onboarding-banner" id="beginnerOnboarding" data-tier="overview">
             <div class="onboarding-copy">
