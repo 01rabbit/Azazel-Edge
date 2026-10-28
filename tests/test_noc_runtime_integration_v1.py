@@ -101,6 +101,14 @@ class NocRuntimeIntegrationV1Tests(unittest.TestCase):
         self.assertEqual(result["noc_incident_summary"]["incident_id"], "incident:abc123")
         self.assertEqual(result["noc_runtime"]["evidence_count"], 2)
 
+    def test_traffic_top_sources_keeps_the_talker_scan_window(self) -> None:
+        rows = [{"src_ip": f"172.16.0.{i}", "bytes": 1000 - i, "packets": 1, "flows": 1} for i in range(1, 16)]
+        payloads = [{"kind": "traffic_concentration", "attrs": {"top_sources": rows}}]
+        result = control_daemon._traffic_top_sources(payloads)
+        self.assertEqual(len(result), 12)
+        self.assertEqual(result[0]["src_ip"], "172.16.0.1")
+        self.assertEqual(result[-1]["src_ip"], "172.16.0.12")
+
     def test_enrich_snapshot_injects_live_noc_projection(self) -> None:
         projection = {
             "noc_summary": {"status": "degraded", "degraded_mode": False, "reasons": ["capacity_health:degraded"]},

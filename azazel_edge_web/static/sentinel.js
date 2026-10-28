@@ -764,11 +764,37 @@
         var tbox = document.getElementById('nocTopTalkers');
         if (tbox) {
             tbox.textContent = '';
+            var clients = managedTalkerRows(noc);
+            var mk = document.createElement('div'); mk.className = 'sentinel-card__kicker'; mk.style.marginTop = '10px'; mk.textContent = 'Managed-client talkers (flow window)'; tbox.appendChild(mk);
+            if (!clients.length) {
+                var me = document.createElement('div'); me.className = 'talker'; me.textContent = 'No managed client in the current top talkers.'; tbox.appendChild(me);
+            }
+            clients.forEach(function (c) {
+                var li = document.createElement('div'); li.className = 'talker';
+                li.textContent = c.label + '  ' + bytesShort(c.bytes) + '  ' + c.share + '%';
+                tbox.appendChild(li);
+            });
             if (peers.length) {
                 var k = document.createElement('div'); k.className = 'sentinel-card__kicker'; k.style.marginTop = '10px'; k.textContent = 'External peers'; tbox.appendChild(k);
                 peers.slice(0, 5).forEach(function (p) { var li = document.createElement('div'); li.className = 'talker'; li.textContent = String(p.label || p.src_ip || p.value || '—'); tbox.appendChild(li); });
             }
         }
+    }
+    // Managed-client talkers from noc_focus.managed_client_talkers (Edge#344):
+    // flow-window bytes per managed client, with each one's share of the
+    // largest. Not an interface meter — per-client counters are not wired yet.
+    function managedTalkerRows(noc) {
+        var view = (noc && noc.managed_client_talkers) || {};
+        var items = Array.isArray(view.items) ? view.items.slice(0, 5) : [];
+        var max = items.reduce(function (m, it) { return Math.max(m, Number(it && it.bytes) || 0); }, 0);
+        return items.filter(function (it) { return it && typeof it === 'object'; }).map(function (it) {
+            var bytes = Number(it.bytes) || 0;
+            return {
+                label: String(it.label || it.id || '—'),
+                bytes: bytes,
+                share: max > 0 ? Math.round((bytes / max) * 100) : 0
+            };
+        });
     }
     function renderNocTrafficControl(detail) {
         var booth = detail.boothFocus || {}, summary = detail.summary || {};
@@ -1526,7 +1552,8 @@
         module.exports = {
             toneOf: toneOf, worstTone: worstTone, computeConsoleState: computeConsoleState,
             alertDecisionTraceId: alertDecisionTraceId, groupAlertsByDecision: groupAlertsByDecision,
-            decisionTraceView: decisionTraceView, diskTileView: diskTileView
+            decisionTraceView: decisionTraceView, diskTileView: diskTileView,
+            managedTalkerRows: managedTalkerRows
         };
     }
 })();
