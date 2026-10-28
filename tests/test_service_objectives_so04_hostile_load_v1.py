@@ -779,8 +779,13 @@ def test_a_burst_phase_is_written_in_bursts(tmp_path):
         sizes.add(eve.read_bytes().count(b"\n"))
         time.sleep(0.01)
     sizes.add(eve.read_bytes().count(b"\n"))
-    # Lines per burst: 200/s * 0.5 s = 100; only whole bursts are ever seen.
-    assert sizes <= {0, 100, 200}, sizes
+    # Lines per burst: 200/s * 0.5 s = 100. Each burst is one write(2), but a
+    # reader that does not lock can catch one mid-write, so a torn count (for
+    # example 121) may appear now and then. A smooth stream would show dozens
+    # of counts; bursts show the plateaus 100 and 200 and at most a few torn
+    # reads.
+    assert {100, 200} <= sizes, sizes
+    assert len(sizes - {0, 100, 200}) <= 2, sizes
     assert load.observed[0]["written"]["flow"] == 200
 
 
