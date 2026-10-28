@@ -23,7 +23,17 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - A DOM harness (`tests/js_mini_dom.js`, no dependency) runs the console's
     renderers over its real markup in the node tests, and a test checks the
     WCAG AA contrast of the palette tokens.
-
+- Legacy `mode` inventory for the Defensive State migration (Edge#390
+  stage 0, docs and a completeness test only):
+  `docs/architecture/defensive-state-mode-inventory.md` lists every use of
+  the portal/shield/scapegoat concept mode by file, use class
+  (enforcement/control, display, record/audit, outward, guard) and #379
+  target term, the other keys called `mode`, the #515 finding that the
+  server fills `shield` when no mode exists, and the owner decisions
+  (a `defensive_state` field, `/api/mode` deprecation, the `shield`
+  default, the admin/responder mismatch). No code, API or UI change.
+  `tests/test_defensive_state_mode_inventory_v1.py` fails when a file with
+  a legacy-mode marker is not on that page.
 - Runtime and fleet read-outs (Edge#343, read/display only):
   - The control daemon samples `disk_percent`, the used share of the root
     filesystem as `df` reports it (`df -h /`, hardware checklist R0-06).
