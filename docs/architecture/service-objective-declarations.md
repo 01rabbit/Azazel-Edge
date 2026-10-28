@@ -360,7 +360,29 @@ nothing waits on a tight timer.
 
 ### Container run (not hardware evidence)
 
-CONTAINER_RUN_PLACEHOLDER
+One run on commit 01d2377 (colima, aarch64, unprivileged, 2026-10-28). The
+record is valid and `not_measurable`; `run --ci` and `validate --ci` exit 4
+because of one run-health prerequisite (below).
+
+| Part | Samples | Max | Violations | Load window | Lines shed by the core |
+| --- | --- | --- | --- | --- | --- |
+| `so03_at_quota` | 200/200 | 235.8 ms | 0 | 43.9 s | 0 |
+| `so03_at_120pct_of_quota` | 200/200 | 233.2 ms | 0 | 44.0 s | 21256 (flow 16961, dns 4295) |
+| `so04_start_at_quota` | 150/150 | 931.7 ms | 0 | 21.9 s | 2866 (flow 1929, dns 864, stats 73) |
+| `so04_start_at_120pct_of_quota` | 150/150 | 973.4 ms | 0 | 22.2 s | 11647 (flow 7383, dns 3577, stats 687) |
+| `so07_at_quota` | 110/110 | — | 0 | 19.0 s | 0 |
+| `so07_at_120pct_of_quota` | 110/110 | — | 0 | 18.3 s | 8397 (flow 6758, dns 1639) |
+
+No alert was shed in any part, every load prerequisite held, and every
+row's pass rule held at both levels. In `so04_start_at_120pct_of_quota`,
+`wall_clock_stable_during_run` was unmet (wall-minus-monotonic drift
+-102.7 ms against a 50 ms tolerance): the colima VM's wall clock was adjusted
+during the run, as in the OF-05 runs; an earlier trial on the uncommitted
+tree saw the same -103 ms. That prerequisite is the SO-04 harness's own and
+is not relaxed here. At exactly 100% the core shed lines in the SO-04 parts
+(the release sweep's work between polls lets lines arrive in bursts that
+empty the bucket) and none in the SO-03 and SO-07 parts; no prerequisite
+asks for zero shedding at 100%.
 
 ### On a Raspberry Pi (procedure only; not run)
 
