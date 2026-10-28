@@ -45,13 +45,13 @@ planned; its number is added to this table when it exists.
 | F-07 | medium | Availability | Sustained activity changes the material digest on every frame, so in-flight cycles never complete | open, #385 decision |
 | F-08 | medium | Availability | One future-dated event makes the frame stale: no reasoning and no handoff | open |
 | F-09 | medium | Availability | No wall-clock deadline for a cycle | open |
-| F-10 | medium | State | `run_cycle` shares one broker across cycles; nothing calls `close()` on supersession | in remediation (PR number to be added) |
+| F-10 | medium | State | `run_cycle` shares one broker across cycles; nothing calls `close()` on supersession | in remediation (#518) |
 | F-11 | medium | Audit | Coordinator snapshot is unauthenticated; audit rows can be forged and rollback reissues cycle IDs | open |
-| F-12 | medium | Data minimization | Durable trace audit ID grammar admits address and hostname shapes | in remediation (PR number to be added) |
+| F-12 | medium | Data minimization | Durable trace audit ID grammar admits address and hostname shapes | in remediation (#518) |
 | F-13 | low | Operator | Handoff cannot show the Edge core trace ID shape | open |
 | F-14 | low | Authority | Broker "read-only" is enforced by capability name only | open, #384 adapter review |
-| F-15 | low | Injection | Envelope marker strings inside untrusted data are not neutralized | in remediation (PR number to be added) |
-| F-16 | low | Data minimization | Raw exception text is kept in `errors` and the in-memory trace | in remediation (PR number to be added) |
+| F-15 | low | Injection | Envelope marker strings inside untrusted data are not neutralized | in remediation (#518) |
+| F-16 | low | Data minimization | Raw exception text is kept in `errors` and the in-memory trace | in remediation (#518) |
 | F-17 | low | Asset integrity | Same playbook ID and version with different content is compiled | open |
 | F-18 | note | Injection | Model-written gap `question` is passed to broker handlers as text | open, #384 adapter review |
 
@@ -113,7 +113,7 @@ summarization/truncation". The budget is tied to the Pi model context
 separate budgets for frame and broker results, or failing the cycle when broker
 results cannot be shown).
 
-**F-15 (low, in remediation): envelope markers are not neutralized.**
+**F-15 (low, in remediation in #518): envelope markers are not neutralized.**
 Evidence text containing the section marker strings reaches the untrusted
 section verbatim (`playbook.py:238`; probe P8). JSON escaping keeps the section
 intact, but the marker text can still mislead a model.
@@ -206,7 +206,7 @@ may take 4 model calls times 2 models times a 20 s timeout (configurable up to
 120 s), plus broker time. The HTTP timeout applies per socket operation, not to
 the whole response. The coordinator has no time-based expiry (open in #385).
 
-**F-10 (medium, in remediation): `run_cycle` shares one broker across cycles.**
+**F-10 (medium, in remediation in #518): `run_cycle` shares one broker across cycles.**
 `ReasoningCoordinator.run_cycle` (`lifecycle.py:510`) runs every cycle with the
 loop's single broker. Call counts carry over, and the second cycle collects no
 evidence (`capability_budget_exhausted`, probe P4), although the broker document
@@ -238,7 +238,7 @@ ID is issued again for a different material digest and durable trace-audit IDs
 can collide (probe P10b). The trace-audit JSONL has no per-record MAC or chain
 either; its design document already lists this as a known limit.
 
-**F-12 (medium, in remediation): the durable trace-audit ID grammar is loose.**
+**F-12 (medium, in remediation in #518): the durable trace-audit ID grammar is loose.**
 `py/azazel_edge/mio/trace_audit.py:52` keeps its own grammar, which was not
 merged into `id_grammar.py` by #510. A trace ID in IPv4 form is written
 verbatim, and so are broker refs in IPv4 or hostname form (probe P1). The export
@@ -264,7 +264,7 @@ A playbook with a built-in ID and version but changed, non-directive content
 passes validation and is compiled into the trusted section (probe P14). The
 provenance digest differs, but no pin maps (ID, version) to a digest.
 
-**F-16 (low, in remediation): raw exception text is kept.**
+**F-16 (low, in remediation in #518): raw exception text is kept.**
 `reasoning.py:159`, `:162`, `:305` and `:366` put `str(exc)` into `errors` and
 the terminal trace payload. The durable projection digests the suffix, and the
 governed adapter raises fixed codes, so the path is narrow.
@@ -274,8 +274,8 @@ governed adapter raises fixed codes, so the path is narrow.
 | #373 item | State |
 | --- | --- |
 | critical/high fixed and regression-tested | none found |
-| medium fixed or accepted by owner | open: F-01 to F-12 (F-10 and F-12 in remediation) |
-| low/note tracked | F-13 to F-18 listed here (F-15 and F-16 in remediation) |
+| medium fixed or accepted by owner | open: F-01 to F-12 (F-10 and F-12 in remediation in #518) |
+| low/note tracked | F-13 to F-18 listed here (F-15 and F-16 in remediation in #518) |
 | #361 architecture doc reflects changed assumptions | not yet; depends on remediation |
 | #372 corpus updated with every reproducible medium class | **not done**. #372 is open; the probes in Appendix A are not in the corpus |
 | no regression in deterministic baseline parity | **only partly shown**: the full suite passes; no dedicated parity run with M.I.O. disabled was made |
