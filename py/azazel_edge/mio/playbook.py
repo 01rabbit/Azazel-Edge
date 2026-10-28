@@ -202,6 +202,20 @@ TRUSTED_RULES: tuple[str, ...] = (
 )
 
 
+# An envelope marker word inside the untrusted JSON (TRUSTED_CONTROL,
+# END_UNTRUSTED_DATA, ... in any letter case) has its underscore written as
+# the JSON escape \u005f. The JSON still decodes to the same value, but the
+# prompt text then holds each marker only where the compiler put it.
+_ENVELOPE_MARKER_RE = re.compile(r"(?i)(TRUSTED)_(?=CONTROL|DATA)")
+
+
+def neutralize_envelope_markers(rendered_json: str) -> str:
+    """Escape envelope marker words in compact JSON text. A literal ``_`` in
+    JSON is never part of an escape sequence, so this keeps the JSON valid
+    and its decoded value unchanged."""
+    return _ENVELOPE_MARKER_RE.sub(lambda m: m.group(1) + "\\u005f", rendered_json)
+
+
 class PromptCompiler:
     """Deterministic compiler that keeps trusted instructions separate from untrusted evidence."""
 
@@ -252,7 +266,7 @@ class PromptCompiler:
         broker_results: Sequence[Mapping[str, Any]],
     ) -> str:
         def render(value: Mapping[str, Any]) -> str:
-            return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+            return neutralize_envelope_markers(json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":")))
 
         rendered = render(untrusted)
         if len(rendered) <= self.max_untrusted_chars:
@@ -309,7 +323,9 @@ class PromptCompiler:
 # ---------------------------------------------------------------------------
 
 PROMPT_TEMPLATE_ID = "mio-prompt-compiler"
-PROMPT_TEMPLATE_VERSION = "1.1.0"  # 1.1.0: explicit h<n>/g<n> id format (#386)
+# 1.1.0: explicit h<n>/g<n> id format (#386).
+# 1.2.0: envelope marker words inside UNTRUSTED_DATA are escaped (#373).
+PROMPT_TEMPLATE_VERSION = "1.2.0"
 COMPILER_TASKS = ("generate_hypotheses", "identify_evidence_gaps", "update_hypotheses", "recommend")
 _ENVELOPE = ("TRUSTED_CONTROL", "END_TRUSTED_CONTROL", "UNTRUSTED_DATA", "END_UNTRUSTED_DATA")
 

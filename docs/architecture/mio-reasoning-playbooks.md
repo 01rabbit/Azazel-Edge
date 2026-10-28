@@ -117,7 +117,11 @@ capability, a version bump — changes the digest. `template_digest()` covers
 **not** cover compiler code (`PromptCompiler`, reduction/truncation logic): a change there
 must bump `PROMPT_TEMPLATE_VERSION`. Version 1.1.0 added the explicit `h<n>` / `g<n>` id rule
 and schema examples (#386); see the model-id grammar in
-[mio-grounding-and-evidence-gaps.md](mio-grounding-and-evidence-gaps.md).
+[mio-grounding-and-evidence-gaps.md](mio-grounding-and-evidence-gaps.md). Version 1.2.0
+escapes envelope marker words found inside the data (`TRUSTED_CONTROL`,
+`END_UNTRUSTED_DATA`, ... in any letter case): their underscore is written as the JSON
+escape `\u005f` (`neutralize_envelope_markers`), so the decoded data is unchanged and
+each marker appears in the prompt only where the compiler put it (#373).
 
 ## Authoring a playbook
 

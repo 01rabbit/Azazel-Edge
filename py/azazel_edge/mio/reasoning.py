@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
+import secrets
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
@@ -29,6 +32,28 @@ from .lifecycle import (
 from .model_adapter import MioModelBlocked, MioModelUnavailable
 from .playbook import GENERIC_UNVERIFIED_MODE, PlaybookSelection, PromptCompiler, ReasoningPlaybook, guard_selection, reasoning_provenance
 from .trace import ReasoningTrace
+
+# Process-local key for the digest suffix of model exception codes: equal
+# exception texts correlate within one process, but the digest cannot be
+# matched against guessed texts elsewhere. Never persisted or exported.
+_EXCEPTION_DIGEST_KEY = secrets.token_bytes(32)
+
+
+def _exception_code(code: str, exc: BaseException) -> str:
+    """``<code>:h:<digest>`` for a model call that raised.
+
+    The exception text comes from the model invoker (a remote endpoint, a
+    transport library, a test double) and may carry addresses, prompts or
+    model output, so it never enters ``errors`` or the trace: only the fixed
+    code and a keyed digest of the text, as in the durable audit.
+    """
+    try:
+        text = str(exc)
+    except Exception:
+        text = type(exc).__name__
+    digest = hmac.new(_EXCEPTION_DIGEST_KEY, text.encode("utf-8", "replace"), hashlib.sha256).hexdigest()[:16]
+    return f"{code}:h:{digest}"
+
 
 ModelInvoker = Callable[[str, str], Mapping[str, Any]]
 CancelCheck = Callable[[], bool]
@@ -116,7 +141,11 @@ class BoundedReasoningLoop:
         cancel_check: CancelCheck | None = None,
         stale_check: CancelCheck | None = None,
         selection: PlaybookSelection | None = None,
+        broker: CapabilityBroker | None = None,
     ) -> ReasoningOutcome:
+        # ``broker``: this cycle's own broker (ReasoningCoordinator.run_cycle
+        # passes a new one per cycle); defaults to the loop's broker.
+        broker = self.broker if broker is None else broker
         trace = ReasoningTrace(trace_id=frame.trace_id, cycle_id=cycle_id)
         errors: list[str] = []
         model_calls = 0
@@ -156,10 +185,10 @@ class BoundedReasoningLoop:
             raw_h = self.model("generate_hypotheses", prompt)
             model_calls += 1
         except (MioModelBlocked, MioModelUnavailable) as exc:
-            errors.append(f"model_dependency_unavailable:{str(exc)[:120]}")
+            errors.append(_exception_code("model_dependency_unavailable", exc))
             return finish(ReasoningState.DEPENDENCY_UNAVAILABLE, (), (), None)
         except Exception as exc:
-            errors.append(f"model_hypothesis_error:{str(exc)[:120]}")
+            errors.append(_exception_code("model_hypothesis_error", exc))
             return finish(ReasoningState.ERROR_FALLBACK, (), (), None)
 
         interrupted = self._interrupted(cancel_check, stale_check, errors)
@@ -196,10 +225,10 @@ class BoundedReasoningLoop:
             raw_g = self.model("identify_evidence_gaps", prompt)
             model_calls += 1
         except (MioModelBlocked, MioModelUnavailable) as exc:
-            errors.append(f"model_dependency_unavailable:{str(exc)[:120]}")
+            errors.append(_exception_code("model_dependency_unavailable", exc))
             return finish(ReasoningState.DEPENDENCY_UNAVAILABLE, hypotheses, (), None)
         except Exception as exc:
-            errors.append(f"model_gap_error:{str(exc)[:120]}")
+            errors.append(_exception_code("model_gap_error", exc))
             return finish(ReasoningState.ERROR_FALLBACK, hypotheses, (), None)
         gap_items = raw_g.get("evidence_gaps", []) if isinstance(raw_g, Mapping) else []
         if not isinstance(gap_items, list):
@@ -213,7 +242,7 @@ class BoundedReasoningLoop:
             gaps,
             hypotheses=hypotheses,
             allowed_capabilities=playbook.allowed_capabilities,
-            registered_capabilities=self.broker.names(),
+            registered_capabilities=broker.names(),
         )
         if not gap_check.ok:
             errors.extend(gap_check.errors)
@@ -224,7 +253,7 @@ class BoundedReasoningLoop:
         broker_summaries: list[dict[str, Any]] = []
         gap_scores = score_evidence_gaps(
             gaps, hypotheses=hypotheses, allowed_capabilities=playbook.allowed_capabilities,
-            registered_capabilities=self.broker.names(), remaining_broker_calls=self.budget.max_broker_calls - broker_calls,
+            registered_capabilities=broker.names(), remaining_broker_calls=self.budget.max_broker_calls - broker_calls,
         )
         trace.record(
             state=ReasoningState.EVIDENCE_GAPS_IDENTIFIED.value, kind="evidence_gap_scores",
@@ -240,7 +269,7 @@ class BoundedReasoningLoop:
                 errors.append("broker_budget_exhausted")
                 break
             if gap.capability not in playbook.allowed_capabilities:
-                errors.append(f"capability_not_allowed_by_playbook:{capability_label(gap.capability, self.broker.names())}")
+                errors.append(f"capability_not_allowed_by_playbook:{capability_label(gap.capability, broker.names())}")
                 continue
             request = MioCapabilityRequest(
                 request_id=f"{cycle_id}:req:{index + 1}",
@@ -254,7 +283,7 @@ class BoundedReasoningLoop:
                 payload={"request_id": request.request_id, "capability": request.capability},
             )
             try:
-                result = self.broker.execute(request)
+                result = broker.execute(request)
                 broker_calls += 1
             except CapabilityBrokerError as exc:
                 errors.append(str(exc))
@@ -299,10 +328,10 @@ class BoundedReasoningLoop:
                 raw_u = self.model("update_hypotheses", prompt)
                 model_calls += 1
             except (MioModelBlocked, MioModelUnavailable) as exc:
-                errors.append(f"model_dependency_unavailable:{str(exc)[:120]}")
+                errors.append(_exception_code("model_dependency_unavailable", exc))
                 return finish(ReasoningState.DEPENDENCY_UNAVAILABLE, hypotheses, gaps, None)
             except Exception as exc:
-                errors.append(f"model_hypothesis_update_error:{str(exc)[:120]}")
+                errors.append(_exception_code("model_hypothesis_update_error", exc))
                 return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
             if not isinstance(raw_u, Mapping):
                 errors.append("hypothesis_update_not_mapping")
@@ -360,10 +389,10 @@ class BoundedReasoningLoop:
             raw_r = self.model("recommend", prompt)
             model_calls += 1
         except (MioModelBlocked, MioModelUnavailable) as exc:
-            errors.append(f"model_dependency_unavailable:{str(exc)[:120]}")
+            errors.append(_exception_code("model_dependency_unavailable", exc))
             return finish(ReasoningState.DEPENDENCY_UNAVAILABLE, hypotheses, gaps, None)
         except Exception as exc:
-            errors.append(f"model_recommend_error:{str(exc)[:120]}")
+            errors.append(_exception_code("model_recommend_error", exc))
             return finish(ReasoningState.ERROR_FALLBACK, hypotheses, gaps, None)
         if not isinstance(raw_r, Mapping):
             errors.append("recommendation_not_mapping")

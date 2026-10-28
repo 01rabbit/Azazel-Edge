@@ -42,7 +42,7 @@ parsed out of model output or attacker-supplied text.
 
 | Kind | Grammar | Minted by |
 |---|---|---|
-| `trace_id` | `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` | Edge |
+| `trace_id` | `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` (structural; see the closed grammar below) | Edge |
 | `cycle_id` | `<trace_id>:e<epoch>:c<seq>` | `ReasoningCoordinator.begin` (global sequence, epoch bumps on restore) |
 | `request_id` | `<cycle_id>:req:<n>` | reasoning loop |
 | `advisory_id` | `<cycle_id>:advisory` | reasoning loop |
@@ -60,6 +60,24 @@ Rules:
   prefix, so one trace's cycle cannot be attached to another trace.
 - After restart the coordinator's epoch is higher, so new cycle IDs never equal
   pre-restart ones, and pre-restart tickets are not current (#385).
+- On top of the structural grammar above, every ID must fit the closed grammar
+  shared by the M.I.O. surfaces (`py/azazel_edge/mio/id_grammar.py`; the kinds per
+  field are `trace_audit.AUDIT_CLOSED_KINDS`, checked by `audit_id_ok`), including
+  its address and secret checks. Codes and playbook ids may not hold an address
+  shape or a dot (except an `X.Y.Z` version). So an IP address or host name used
+  as a trace id, evidence ref or capability is never kept verbatim (#373).
+- Trace ids that operations can use (kept verbatim and selectable with
+  `--trace-id`): the Edge core id `trace-0x<1-16 hex>`, or one of the words
+  `trace`, `mio`, `evaluation`, `incident`, `replay`, optionally followed by
+  `-golden`, `-fixture`, `-shadow`, `-auth`, `-scan`, `-trace` or `-frame`
+  segments, and at most one final number of up to six digits (`-<n>` or
+  `-v<n>`). Examples: `trace-1`, `incident-202610`, `incident-scan-3`,
+  `replay-golden-v1`, `trace-0x1a2b3c`. Ids made of the `id_grammar.ID_WORDS`
+  words with short numbers (`cycle-1`) also pass. Anything else is recorded as
+  `h:<keyed digest>` and can be selected only by that digest; for example a date
+  `incident-2026-10-28` (three numbers in a row) or `incident-20261028` (more
+  than six digits). Write a date as one number of at most six digits
+  (`incident-261028`) or keep the date outside the trace id.
 - In the audit projection a value that fails its grammar, looks like a token or
   credential, or (for evidence refs) was not issued by the frame or a successful
   broker result this cycle, is written as `h:<keyed digest>`, never verbatim.
@@ -205,6 +223,12 @@ from the active file and its rotated files, oldest first, as
   printed and is counted as `invalid`; broken JSON and lines over
   `MAX_RECORD_BYTES` are counted as `malformed` and `oversize`. So text put
   into the file by hand or by a bug is not echoed.
+- An ID that fits the structural grammar but not the closed one (`audit_id_ok`;
+  for example an IP address or host name in a record written before #373) is
+  printed as the fixed `redacted-id`: the writer would have digested it, and the
+  export has no key. A record whose `edge_decision_ref` fails the closed grammar
+  is not printed (the writer refuses such a ref). The `--trace-id` / `--cycle-id`
+  selectors must fit the closed grammar or be `h:<digest>`.
 - Each file is listed by its base name with `read`, `missing` or
   `refused:<reason>`. `complete` is false when no file could be read or any
   file was refused; the records may then be incomplete and the exit status

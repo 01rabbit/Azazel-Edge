@@ -346,6 +346,10 @@ class ReasoningCoordinator:
         # trace's audit, so a forged ticket can neither write rows into another
         # trace's audit nor push its rows out of the cap. In memory only.
         self._unattributed: dict[str, int] = {}
+        # cycle_id -> that cycle's own Capability Broker while run_cycle runs
+        # it. Closed when the cycle is superseded, cancelled or finishes. In
+        # memory only; never in a snapshot.
+        self._brokers: dict[str, Any] = {}
 
     # -- audit ------------------------------------------------------------
     def _log(self, event: str, cycle: _Cycle | None = None, **fields: Any) -> None:
@@ -414,6 +418,7 @@ class ReasoningCoordinator:
             if latest is not None and latest.status is CycleStatus.IN_FLIGHT:
                 latest.status = CycleStatus.SUPERSEDED
                 self._log("cycle_superseded", latest, superseded_by=ticket.cycle_id)
+                self._close_broker(latest.ticket.cycle_id)
             if latest is not None and trace_id in self._current and latest.ticket.material_digest != digest:
                 # The accepted advisory described an older material situation.
                 self._current.pop(trace_id, None)
@@ -452,6 +457,7 @@ class ReasoningCoordinator:
                 return False
             cycle.status = CycleStatus.CANCELLED
             self._log("cycle_cancelled", cycle, reason=str(reason)[:64])
+            self._close_broker(cycle.ticket.cycle_id)
             self._prune()
             return True
 
@@ -507,12 +513,51 @@ class ReasoningCoordinator:
             return STALE_PRE_RESTART, cycle.status.value
         return STALE_SUPERSEDED, cycle.status.value
 
+    def _close_broker(self, cycle_id: str) -> None:
+        """Close and forget the broker of ``cycle_id``, if any. Caller holds the lock."""
+        broker = self._brokers.pop(cycle_id, None)
+        if broker is not None:
+            try:
+                broker.close()
+            except Exception:  # a broker failure must not break bookkeeping
+                pass
+
+    def _attach_broker(self, ticket: CycleTicket, broker: Any) -> None:
+        """Bind ``broker`` to the cycle of ``ticket``. A cycle that already
+        ended (superseded or cancelled before this call) gets a closed broker."""
+        with self._lock:
+            cycle = self._cycles.get(ticket.cycle_id)
+            self._brokers[ticket.cycle_id] = broker
+            if cycle is None or cycle.status is not CycleStatus.IN_FLIGHT:
+                self._close_broker(ticket.cycle_id)
+
+    def _detach_broker(self, ticket: CycleTicket) -> None:
+        with self._lock:
+            self._close_broker(ticket.cycle_id)
+
     def run_cycle(self, loop: Any, frame: MioSituationFrame, playbook: Any) -> CompletionResult:
-        """begin -> loop.run(cancel_check, stale_check) -> complete, for one frame."""
+        """begin -> loop.run(cancel_check, stale_check) -> complete, for one frame.
+
+        The Capability Broker is per cycle (docs/architecture/mio-capability-broker.md):
+        a broker that offers ``for_new_cycle()`` (CapabilityBroker does) is
+        replaced by a new one for this cycle, so one cycle's call budget never
+        carries into the next. That broker is closed when the cycle is
+        superseded by a newer material frame, cancelled, or finishes. A broker
+        without ``for_new_cycle`` (a test double) is passed through unchanged.
+        """
         ticket = self.begin(frame)
         if ticket.deduplicated:
             return CompletionResult(False, CycleStatus.IN_FLIGHT.value, "frame_not_material")
-        outcome = loop.run(frame=frame, playbook=playbook, cycle_id=ticket.cycle_id, cancel_check=self.cancel_check(ticket), stale_check=self.stale_check(ticket))
+        new_cycle = getattr(getattr(loop, "broker", None), "for_new_cycle", None)
+        if not callable(new_cycle):
+            outcome = loop.run(frame=frame, playbook=playbook, cycle_id=ticket.cycle_id, cancel_check=self.cancel_check(ticket), stale_check=self.stale_check(ticket))
+            return self.complete(ticket, outcome)
+        broker = new_cycle()
+        self._attach_broker(ticket, broker)
+        try:
+            outcome = loop.run(frame=frame, playbook=playbook, cycle_id=ticket.cycle_id, cancel_check=self.cancel_check(ticket), stale_check=self.stale_check(ticket), broker=broker)
+        finally:
+            self._detach_broker(ticket)
         return self.complete(ticket, outcome)
 
     def current(self, trace_id: str) -> Any:

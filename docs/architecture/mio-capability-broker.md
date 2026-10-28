@@ -120,7 +120,16 @@ superseded by a newer frame). It is idempotent and has no other effect:
 - Python threads cannot be killed, so a handler still running is moved to the bounded
   quarantine (as for a timeout) and its result is discarded when it returns.
 
-Nothing calls `close()` yet; wiring it to the lifecycle supersede path belongs to #385.
+`ReasoningCoordinator.run_cycle` (`py/azazel_edge/mio/lifecycle.py`) gives every cycle
+its own broker: `CapabilityBroker.for_new_cycle()` returns a new, open broker with the
+same frozen registry and limits and fresh call budgets, so one cycle's spent budget does
+not carry into the next. The coordinator closes that broker when the cycle is superseded
+by a newer material frame, when the operator cancels it, and when `run_cycle` returns.
+`for_new_cycle()` registers nothing new, and a broker made from a closed broker is closed.
+Only the call budgets are per cycle. The concurrency slots and the in-flight / quarantined
+accounting are shared by the broker and every broker made from it, so `max_in_flight`,
+`max_concurrency` and `max_quarantined` bound handler threads across all cycles: a handler
+stranded by a closed cycle still counts against the next cycle's broker.
 
 Callers: only `BoundedReasoningLoop` (`py/azazel_edge/mio/reasoning.py`), used by the offline
 `bin/azazel-mio-shadow-replay` and `bin/azazel-mio-evaluate`, calls the broker. No

@@ -10,8 +10,13 @@ deterministic path never waits on, reads, or depends on this module.
 Identity rules
     IDs are minted by Edge or by this code from validated parts, never parsed
     out of attacker-supplied or model-supplied text. Each kind has a closed
-    grammar (``ID_GRAMMAR``). A value that does not match its kind's grammar is
-    never written as-is: the projection records it as ``h:<keyed digest>``.
+    grammar: the structural shape in ``ID_GRAMMAR`` and, on top of it, the
+    closed grammar shared by the M.I.O. surfaces (``id_grammar``, kinds per
+    field in ``AUDIT_CLOSED_KINDS``) with its address and secret checks. A
+    value that does not match is never written as-is: the projection records
+    it as ``h:<keyed digest>``, like the Capability Broker audit. So an IP
+    address or host name used as a trace id or evidence ref never reaches the
+    durable record.
     A M.I.O. advisory ID (``...:advisory``) can never pass as an Edge decision
     reference (``EDGE_DECISION_REF``) and vice versa.
 
@@ -36,6 +41,7 @@ import stat
 import threading
 from typing import Any, Callable, Mapping, Protocol
 
+from .id_grammar import EVIDENCE_REF, id_ok, opaque_id
 from .redaction import contains_token_like
 from .lifecycle import CycleTicket, ReasoningCoordinator, material_frame_digest
 from .contracts import MioSituationFrame
@@ -69,8 +75,59 @@ ID_GRAMMAR: dict[str, re.Pattern[str]] = {
     "code": re.compile(r"^[a-z][a-z0-9_.]{0,63}$"),
     # Content digests (playbook/frame/handoff). Hex only, so never secret-shaped text.
     "digest": re.compile(r"^[0-9a-f]{16,64}$"),
+    # Reasoning provenance: playbook / template ids and X.Y.Z versions. The
+    # input is only reasoning_provenance(): a playbook that passed
+    # validate_playbook and the PROMPT_TEMPLATE_ID constant, never model or
+    # frame text. Each version part is at most two digits, which keeps out
+    # most three-part prefixes of an IPv4 address (192.168.1); a short one
+    # such as 10.0.1 still has the shape of a version and cannot be told
+    # apart, so it is accepted on the strength of that input. A longer
+    # version (1.100.0) is recorded as a digest.
+    "playbook_ref": re.compile(r"^(?:[a-z][a-z0-9-]{2,63}|[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2})$"),
 }
 EDGE_DECISION_REF = "edge_decision_ref"
+
+# Closed grammar (id_grammar.ID_KINDS) per audit ID kind. A value must match
+# both its ID_GRAMMAR shape and one of these kinds, plus id_grammar's second
+# layer (no address or secret shape).
+AUDIT_CLOSED_KINDS: dict[str, tuple[str, ...]] = {
+    "trace_id": ("trace_id", "cycle_request_id"),
+    "cycle_id": ("cycle_request_id",),
+    "frame_id": ("frame_id", "cycle_request_id"),
+    "hypothesis_id": ("hypothesis_id",),
+    "request_id": ("cycle_request_id",),
+    "evidence_ref": EVIDENCE_REF + ("knowledge_ref", "fixture_ref"),
+}
+_ADVISORY_SUFFIX = ":advisory"
+
+
+def _closed_ok(kind: str, value: str) -> bool:
+    """The closed-grammar layer for a value that already fits ID_GRAMMAR."""
+    if kind == "digest":
+        return True
+    if kind in AUDIT_CLOSED_KINDS:
+        return id_ok(value, AUDIT_CLOSED_KINDS[kind])
+    if kind == "advisory_id":
+        return id_ok(value[: -len(_ADVISORY_SUFFIX)], ("cycle_request_id",))
+    if kind == EDGE_DECISION_REF:
+        tail = value[len("edge-dec:"):]
+        return opaque_id(tail) == tail and "." not in tail
+    # code / playbook_ref: closed-vocabulary words. No address shape, and no
+    # dot outside an X.Y.Z version, so a host name cannot pass as a code.
+    if opaque_id(value) != value:
+        return False
+    return "." not in value or (kind == "playbook_ref" and value[:1].isdigit())
+
+
+def audit_id_ok(kind: str, value: Any) -> bool:
+    """Whether ``value`` may appear verbatim in a durable trace audit record
+    (or its export) as an ID of ``kind``."""
+    if not is_valid_id(kind, value):
+        return False
+    try:
+        return _closed_ok(kind, value)
+    except Exception:
+        return False
 
 
 def is_valid_id(kind: str, value: Any) -> bool:
@@ -87,7 +144,7 @@ def is_valid_id(kind: str, value: Any) -> bool:
 def require_id(kind: str, value: Any) -> str:
     """Raise unless ``value`` is a well-formed ID of ``kind``. Use at boundaries
     where a specific kind is required (e.g. an Edge decision reference)."""
-    if not is_valid_id(kind, value):
+    if not audit_id_ok(kind, value):
         raise ValueError(f"invalid_{kind}")
     return value
 
@@ -110,7 +167,7 @@ def _id(key: bytes, kind: str, value: Any, known: Any = None) -> str:
     """Keep ``value`` only if it matches its grammar, is not token-shaped, and
     (when ``known`` is given) was issued by Edge/the broker this cycle."""
     if (
-        is_valid_id(kind, value)
+        audit_id_ok(kind, value)
         and (kind == "digest" or not contains_token_like(value))
         and (known is None or value in known)
     ):
@@ -128,7 +185,7 @@ def _code(key: bytes, value: Any) -> str:
     if type(value) is not str:
         return "h:" + keyed_digest(key, value)
     head, sep, tail = value.partition(":")
-    if not is_valid_id("code", head):
+    if not audit_id_ok("code", head):
         return "h:" + keyed_digest(key, value)
     return head + (":h:" + keyed_digest(key, tail) if sep else "")
 
@@ -293,10 +350,10 @@ def project_outcome(
         "terminal_state": _code(k, getattr(outcome.state, "value", outcome.state)),
         "errors": [_code(k, e) for e in list(outcome.errors)[:_LIST_CAP]],
         "playbook": {
-            "playbook_id": _id(k, "frame_id", provenance.get("playbook_id")),
-            "playbook_version": _id(k, "frame_id", provenance.get("playbook_version")),
+            "playbook_id": _id(k, "playbook_ref", provenance.get("playbook_id")),
+            "playbook_version": _id(k, "playbook_ref", provenance.get("playbook_version")),
             "playbook_digest": _id(k, "digest", provenance.get("playbook_digest")),
-            "template_id": _id(k, "frame_id", provenance.get("template_id")),
+            "template_id": _id(k, "playbook_ref", provenance.get("template_id")),
         },
         "hypotheses": [
             {

@@ -223,7 +223,8 @@ SituationFrame opaque-ID address checks (`id_grammar.opaque_id`), contain no sec
 (`password`, `token`, `api_key`, `secret`, `bearer` …) and no M.I.O. redaction token
 shape (API key prefixes, bearer, JWT, e-mail, long token). This applies to capability
 names too. Integers and other non-string values are refused, never stringified. The prompt
-template (version 1.1.0) tells the model the `h<n>` / `g<n>` format explicitly.
+template (version 1.2.0; the format rule came in 1.1.0) tells the model the `h<n>` / `g<n>`
+format explicitly.
 
 When the model output is parsed (`MioHypothesis.from_mapping`,
 `MioEvidenceGap.from_mapping`, `MioRecommendation.from_mapping`) a refused value is

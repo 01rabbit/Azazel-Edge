@@ -369,6 +369,28 @@ class _Slot:
         self._on_release()
 
 
+class _SharedLimits:
+    """Bounds on handler threads shared by a broker and every broker made from
+    it with ``for_new_cycle()``: concurrency slots, admitted (in-flight)
+    handlers and timed-out handlers still running (quarantined). Only call
+    budgets are per cycle; these never reset, so a cycle cannot escape the
+    bound by starting with a fresh broker. Guarded by ``lock``."""
+
+    def __init__(self, registry: Mapping[str, CapabilitySpec], max_in_flight: int, max_quarantined: int):
+        self.lock = threading.Lock()
+        self.global_slots = threading.BoundedSemaphore(max_in_flight)
+        self.capability_slots = MappingProxyType(
+            {name: threading.BoundedSemaphore(spec.max_concurrency) for name, spec in registry.items()}
+        )
+        # Timed-out handlers that are still running (bounded).
+        self.max_quarantined = max_quarantined
+        self.quarantined = 0
+        self.quarantined_per_capability: dict[str, int] = {}
+        # Admitted handlers whose slot is still held.
+        self.in_flight = 0
+        self.in_flight_per_capability: dict[str, int] = {}
+
+
 class CapabilityBroker:
     """Typed, allowlisted, read-only capability surface for M.I.O.
 
@@ -395,18 +417,12 @@ class CapabilityBroker:
         self._total_calls = 0
         self._per_capability_calls: dict[str, int] = {}
         self._clock = clock
-        self._lock = threading.Lock()
-        self._global_slots = threading.BoundedSemaphore(max(1, min(int(max_in_flight), 16)))
-        self._capability_slots = MappingProxyType(
-            {name: threading.BoundedSemaphore(spec.max_concurrency) for name, spec in registry.items()}
-        )
-        # Timed-out handlers that are still running (bounded).
-        self._max_quarantined = max(1, min(int(max_quarantined), 16))
-        self._quarantined = 0
-        self._quarantined_per_capability: dict[str, int] = {}
-        # Admitted handlers whose slot is still held.
-        self._in_flight = 0
-        self._in_flight_per_capability: dict[str, int] = {}
+        self._max_in_flight = max(1, min(int(max_in_flight), 16))
+        # Concurrency slots and live-worker accounting. Shared with every
+        # broker made by for_new_cycle(), so the bounds hold across cycles.
+        self._shared = _SharedLimits(registry, self._max_in_flight, max(1, min(int(max_quarantined), 16)))
+        # One lock for this broker's per-cycle state and the shared limits.
+        self._lock = self._shared.lock
         self._audit: deque[dict[str, Any]] = deque(maxlen=max(1, min(int(audit_capacity), 4096)))
         self._audit_sink = audit_sink
         # Cycle end: set by close(); wakes every waiting submit at once.
@@ -432,6 +448,35 @@ class CapabilityBroker:
         with self._lock:
             return self._closed
 
+    def for_new_cycle(self) -> "CapabilityBroker":
+        """A broker for the next reasoning cycle.
+
+        Call budgets are per cycle, so the new broker starts with fresh call
+        counters. Everything that bounds handler threads is shared with this
+        broker and every other broker made from it: the global and
+        per-capability concurrency slots and the in-flight / quarantined
+        accounting (``max_in_flight``, ``max_concurrency``,
+        ``max_quarantined``). A handler stranded by an earlier cycle therefore
+        still counts against the next one. Same frozen registry, clock and
+        audit sink; nothing new can be registered this way. If this broker is
+        closed, the new one is closed too. This broker is not changed; the
+        caller closes the new one when its cycle ends.
+        """
+        new = CapabilityBroker(
+            dict(self._capabilities),
+            max_total_calls=self._max_total_calls,
+            max_in_flight=self._max_in_flight,
+            max_quarantined=self._shared.max_quarantined,
+            clock=self._clock,
+            audit_capacity=self._audit.maxlen or 1,
+            audit_sink=self._audit_sink,
+        )
+        new._shared = self._shared
+        new._lock = self._shared.lock
+        with self._lock:
+            new._closed = self._closed
+        return new
+
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._capabilities))
 
@@ -441,11 +486,11 @@ class CapabilityBroker:
 
     def quarantine_limit(self) -> int:
         """Upper bound on quarantined workers (and on running + quarantined)."""
-        return self._max_quarantined
+        return self._shared.max_quarantined
 
     def quarantined(self) -> int:
         with self._lock:
-            return self._quarantined
+            return self._shared.quarantined
 
     # -- public entrypoints -------------------------------------------------
 
@@ -533,7 +578,7 @@ class CapabilityBroker:
                 return self._result(request, CapabilityStatus.INVALID, "invalid_max_age_seconds"), params_audit
             max_age = req_age if max_age is None else min(max_age, req_age)
 
-        cap_slots = self._capability_slots[capability]
+        cap_slots = self._shared.capability_slots[capability]
         # Admission is one atomic critical section: budget check + increment +
         # quarantine check + non-blocking slot acquisition.
         wake = _Event()
@@ -549,30 +594,30 @@ class CapabilityBroker:
             # max_quarantined, so even if every running handler times out (or
             # close() strands them) the quarantine stays within its bound. The
             # same holds per capability against max_concurrency.
-            if self._quarantined + self._in_flight >= self._max_quarantined:
-                reason = "broker_quarantine_full" if self._quarantined else "broker_overloaded"
+            if self._shared.quarantined + self._shared.in_flight >= self._shared.max_quarantined:
+                reason = "broker_quarantine_full" if self._shared.quarantined else "broker_overloaded"
                 return self._result(request, CapabilityStatus.REJECTED, reason), params_audit
-            cap_quarantined = self._quarantined_per_capability.get(capability, 0)
-            if cap_quarantined + self._in_flight_per_capability.get(capability, 0) >= spec.max_concurrency:
+            cap_quarantined = self._shared.quarantined_per_capability.get(capability, 0)
+            if cap_quarantined + self._shared.in_flight_per_capability.get(capability, 0) >= spec.max_concurrency:
                 reason = "capability_quarantined" if cap_quarantined else "capability_overloaded"
                 return self._result(request, CapabilityStatus.REJECTED, reason), params_audit
-            if not self._global_slots.acquire(blocking=False):
+            if not self._shared.global_slots.acquire(blocking=False):
                 return self._result(request, CapabilityStatus.REJECTED, "broker_overloaded"), params_audit
             if not cap_slots.acquire(blocking=False):
-                self._global_slots.release()
+                self._shared.global_slots.release()
                 return self._result(request, CapabilityStatus.REJECTED, "capability_overloaded"), params_audit
             self._total_calls += 1
             self._per_capability_calls[capability] = used + 1
-            self._in_flight += 1
-            self._in_flight_per_capability[capability] = self._in_flight_per_capability.get(capability, 0) + 1
+            self._shared.in_flight += 1
+            self._shared.in_flight_per_capability[capability] = self._shared.in_flight_per_capability.get(capability, 0) + 1
             self._waiters.add(wake)
 
         def _leave_in_flight() -> None:
             with self._lock:
-                self._in_flight -= 1
-                self._in_flight_per_capability[capability] -= 1
+                self._shared.in_flight -= 1
+                self._shared.in_flight_per_capability[capability] -= 1
 
-        slot = _Slot(cap_slots, self._global_slots, _leave_in_flight)
+        slot = _Slot(cap_slots, self._shared.global_slots, _leave_in_flight)
         outcome: dict[str, Any] = {}
         frozen_args = MappingProxyType(dict(args))
 
@@ -594,8 +639,8 @@ class CapabilityBroker:
                     was_hung = slot.hung
                     if was_hung:
                         with self._lock:
-                            self._quarantined -= 1
-                            self._quarantined_per_capability[capability] -= 1
+                            self._shared.quarantined -= 1
+                            self._shared.quarantined_per_capability[capability] -= 1
                 wake.set()
 
         base = {"source_component": spec.source_component, "max_age_seconds": max_age}
@@ -617,8 +662,8 @@ class CapabilityBroker:
             if timed_out:
                 slot.hung = True
                 with self._lock:
-                    self._quarantined += 1
-                    self._quarantined_per_capability[capability] = self._quarantined_per_capability.get(capability, 0) + 1
+                    self._shared.quarantined += 1
+                    self._shared.quarantined_per_capability[capability] = self._shared.quarantined_per_capability.get(capability, 0) + 1
         if timed_out:
             # Free the concurrency slot; the still-running worker is accounted
             # in the bounded quarantine until it returns.
