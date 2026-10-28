@@ -141,6 +141,59 @@ def test_supersession_closes_the_in_flight_cycle_broker():
     assert old.accepted is False and old.cycle_status == "superseded"
 
 
+def test_hanging_handlers_stay_bounded_across_cycles():
+    release = threading.Event()
+    lock = threading.Lock()
+    live = {"now": 0, "peak": 0, "started": 0}
+
+    def handler(_args):
+        with lock:
+            live["now"] += 1
+            live["started"] += 1
+            live["peak"] = max(live["peak"], live["now"])
+        try:
+            release.wait(30)
+            return {"flow": "late", "evidence_refs": ["ev:flow:1"]}
+        finally:
+            with lock:
+                live["now"] -= 1
+
+    template = CapabilityBroker(
+        {"query_flow_summary": CapabilitySpec(handler, max_concurrency=1, timeout_seconds=0.05)},
+        max_quarantined=2,
+    )
+    loop = BoundedReasoningLoop(model=model(), broker=template)
+    coord = ReasoningCoordinator()
+    try:
+        for i in range(8):
+            coord.run_cycle(loop, frame(trace_id=f"trace-{i}", frame_id=f"frame-{i}"), PLAYBOOK)
+            assert template.quarantined() <= 1
+            assert live["now"] <= 1
+        # The one stranded handler holds the capability's only slot for every
+        # later cycle: no new handler thread was started.
+        assert live["peak"] == 1 and live["started"] == 1
+    finally:
+        release.set()
+    deadline = threading.Event()
+    for _ in range(200):
+        if template.quarantined() == 0 and live["now"] == 0:
+            break
+        deadline.wait(0.05)
+    assert template.quarantined() == 0 and live["now"] == 0
+
+
+def test_broker_made_from_a_closed_broker_is_closed():
+    from azazel_edge.mio.contracts import MioCapabilityRequest
+
+    calls = []
+    template = CapabilityBroker({"query_flow_summary": CapabilitySpec(lambda a: calls.append(a) or {})})
+    template.close()
+    new = template.for_new_cycle()
+    assert new.closed
+    result = new.submit(MioCapabilityRequest(request_id="trace-1:e0:c1:req:1", trace_id="trace-1", capability="query_flow_summary", arguments={"question": "q", "frame_id": "frame-1"}))
+    assert (result.status, result.error) == ("rejected", "broker_closed") and calls == []
+
+
 def test_cancel_closes_the_in_flight_cycle_broker():
     coord = ReasoningCoordinator()
     ticket = coord.begin(frame())
@@ -206,6 +259,11 @@ def _no_address(text):
 def test_structurally_valid_but_open_ids_fail_the_closed_grammar(kind, value):
     assert is_valid_id(kind, value)
     assert not audit_id_ok(kind, value)
+
+
+@pytest.mark.parametrize("value", ["192.168.1", "172.16.10", "1.100.0"])
+def test_playbook_version_parts_are_short(value):
+    assert not audit_id_ok("playbook_ref", value)
 
 
 @pytest.mark.parametrize("kind,value", [

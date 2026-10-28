@@ -66,6 +66,18 @@ Rules:
   its address and secret checks. Codes and playbook ids may not hold an address
   shape or a dot (except an `X.Y.Z` version). So an IP address or host name used
   as a trace id, evidence ref or capability is never kept verbatim (#373).
+- Trace ids that operations can use (kept verbatim and selectable with
+  `--trace-id`): the Edge core id `trace-0x<1-16 hex>`, or one of the words
+  `trace`, `mio`, `evaluation`, `incident`, `replay`, optionally followed by
+  `-golden`, `-fixture`, `-shadow`, `-auth`, `-scan`, `-trace` or `-frame`
+  segments, and at most one final number of up to six digits (`-<n>` or
+  `-v<n>`). Examples: `trace-1`, `incident-202610`, `incident-scan-3`,
+  `replay-golden-v1`, `trace-0x1a2b3c`. Ids made of the `id_grammar.ID_WORDS`
+  words with short numbers (`cycle-1`) also pass. Anything else is recorded as
+  `h:<keyed digest>` and can be selected only by that digest; for example a date
+  `incident-2026-10-28` (three numbers in a row) or `incident-20261028` (more
+  than six digits). Write a date as one number of at most six digits
+  (`incident-261028`) or keep the date outside the trace id.
 - In the audit projection a value that fails its grammar, looks like a token or
   credential, or (for evidence refs) was not issued by the frame or a successful
   broker result this cycle, is written as `h:<keyed digest>`, never verbatim.

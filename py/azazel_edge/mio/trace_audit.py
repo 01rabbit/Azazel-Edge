@@ -75,8 +75,15 @@ ID_GRAMMAR: dict[str, re.Pattern[str]] = {
     "code": re.compile(r"^[a-z][a-z0-9_.]{0,63}$"),
     # Content digests (playbook/frame/handoff). Hex only, so never secret-shaped text.
     "digest": re.compile(r"^[0-9a-f]{16,64}$"),
-    # Reasoning provenance: playbook / template ids and X.Y.Z versions.
-    "playbook_ref": re.compile(r"^(?:[a-z][a-z0-9-]{2,63}|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})$"),
+    # Reasoning provenance: playbook / template ids and X.Y.Z versions. The
+    # input is only reasoning_provenance(): a playbook that passed
+    # validate_playbook and the PROMPT_TEMPLATE_ID constant, never model or
+    # frame text. Each version part is at most two digits, which keeps out
+    # most three-part prefixes of an IPv4 address (192.168.1); a short one
+    # such as 10.0.1 still has the shape of a version and cannot be told
+    # apart, so it is accepted on the strength of that input. A longer
+    # version (1.100.0) is recorded as a digest.
+    "playbook_ref": re.compile(r"^(?:[a-z][a-z0-9-]{2,63}|[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2})$"),
 }
 EDGE_DECISION_REF = "edge_decision_ref"
 
