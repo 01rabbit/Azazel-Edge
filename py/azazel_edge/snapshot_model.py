@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -47,6 +48,9 @@ class Snapshot:
     mem_used_mb: int = 0
     mem_total_mb: int = 0
     temp_c: float = 0.0
+    # Used share of the root filesystem; None when it was not read. Unlike
+    # the fields around it, absence is not folded into 0.
+    disk_percent: Optional[float] = None
     download_mbps: float = 0.0
     upload_mbps: float = 0.0
     session_uptime: int = 0
@@ -115,6 +119,19 @@ def _user_state_from_stage_name(stage_name: str) -> str:
     if name == "DECEPTION":
         return "DECEPTION"
     return "CHECKING"
+
+
+def _optional_percent(value: object) -> Optional[float]:
+    """A 0-100 reading, or None when it is absent or not a usable number."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(number) or number < 0.0 or number > 100.0:
+        return None
+    return number
 
 
 def build_snapshot(data: Dict[str, object], source: str = "SNAPSHOT") -> Snapshot:
@@ -211,6 +228,7 @@ def build_snapshot(data: Dict[str, object], source: str = "SNAPSHOT") -> Snapsho
         mem_used_mb=data.get("mem_used_mb", 0),
         mem_total_mb=data.get("mem_total_mb", 512),
         temp_c=data.get("temp_c", 0.0),
+        disk_percent=_optional_percent(data.get("disk_percent")),
         download_mbps=data.get("download_mbps", 0.0),
         upload_mbps=data.get("upload_mbps", 0.0),
         session_uptime=data.get("session_uptime", 0),

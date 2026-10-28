@@ -1064,6 +1064,36 @@ def _read_temp_c() -> float:
     return 0.0
 
 
+#: The filesystem ``disk_percent`` describes. The root filesystem is the one
+#: the hardware first-run checklist already records (R0-06, ``df -h /``).
+DISK_USAGE_PATH = "/"
+
+
+def _read_disk_percent(path: str = DISK_USAGE_PATH) -> float | None:
+    """Used share of the filesystem holding ``path``, by ``df``'s formula.
+
+    ``df`` computes Use% over the blocks an unprivileged user can see
+    (used / (used + available)), leaving out the root reserve; this uses
+    the same formula. The rounding differs: ``df`` rounds up to a whole
+    percent, this rounds to one decimal place, and the SENTINEL tile then
+    rounds that to the nearest whole percent. So the tile can read one
+    lower than ``df`` on the Pi.
+
+    A read that fails, or a filesystem that reports no blocks, gives
+    ``None``: the reading is absent, not 0% and not an estimate.
+    """
+    try:
+        st = os.statvfs(path)
+        used = (st.f_blocks - st.f_bfree) * st.f_frsize
+        avail = st.f_bavail * st.f_frsize
+        denom = used + avail
+        if st.f_blocks <= 0 or denom <= 0 or used < 0:
+            return None
+        return round(max(0.0, min(100.0, used * 100.0 / denom)), 1)
+    except Exception:
+        return None
+
+
 def _read_signal_dbm(iface: str = "wlan0") -> int | None:
     try:
         result = subprocess.run(
@@ -1597,6 +1627,7 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     cpu_percent = _read_cpu_usage_percent()
     mem_percent, mem_used_mb, mem_total_mb = _read_mem_usage()
     temp_c = _read_temp_c()
+    disk_percent = _read_disk_percent()
     signal_dbm = _read_signal_dbm(up_if if up_if.startswith("wl") else "wlan0")
 
     enriched["cpu_percent"] = cpu_percent
@@ -1604,6 +1635,8 @@ def _enrich_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     enriched["mem_used_mb"] = mem_used_mb
     enriched["mem_total_mb"] = mem_total_mb
     enriched["temp_c"] = temp_c
+    # None when the read failed: renderers show it as unknown, never 0%.
+    enriched["disk_percent"] = disk_percent
     if signal_dbm is not None:
         enriched["signal_dbm"] = signal_dbm
 

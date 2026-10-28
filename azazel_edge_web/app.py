@@ -901,6 +901,19 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _optional_percent(value: Any) -> Optional[float]:
+    """A 0-100 reading, or None when absent or unusable -- never a 0 stand-in."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(str(value).strip())
+    except Exception:
+        return None
+    if number != number or number < 0.0 or number > 100.0:
+        return None
+    return number
+
+
 def _iso_from_epoch(value: Any) -> str:
     try:
         epoch = float(value)
@@ -3502,6 +3515,9 @@ def _dashboard_trend_point_payload(
         "cpu_percent": _as_float(internal.get("cpu_percent"), 0.0),
         "memory_percent": _as_float(internal.get("memory_percent") or internal.get("mem_percent"), 0.0),
         "temperature_c": _as_float(internal.get("temperature_c"), 0.0),
+        # The control daemon writes this at the top level of the snapshot.
+        # None (not 0) when it was not read, so the tile shows unknown.
+        "disk_percent": _optional_percent(state.get("disk_percent")),
         "iface_utilization_pct": _as_float(noc_capacity.get("utilization_pct"), 0.0),
         "internet_check": str(connection.get("internet_check") or ""),
     }
@@ -4975,6 +4991,8 @@ def api_aggregator_register_node():
             node_label=node_label,
             trust_fingerprint=trust_fingerprint,
             poll_url=poll_url,
+            # Optional; validated against aggregator.NODE_ROLES (see there).
+            role=body.get("role"),
         )
     except ValueError as e:
         err = str(e)
