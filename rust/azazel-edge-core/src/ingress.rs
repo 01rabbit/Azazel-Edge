@@ -1193,6 +1193,25 @@ mod tests {
     }
 
     #[test]
+    fn nothing_read_after_the_shutdown_flush_is_ever_summarised() {
+        // The flag, not an empty pending, is what keeps the last interval
+        // single: counts that arrive after the flush (a poll the loop had
+        // already begun) are not written as a second shutdown summary or as
+        // a later interval.
+        let path = temp_path("after-shutdown");
+        write_lines(&path, &mixed(500));
+        let mut r = IngressReader::new(0, IngressLimits { backlog_bound_bytes: 1, ..open_limits() });
+        let t0 = Instant::now();
+        assert!(r.poll(&path, t0, |_| {}).shed_total() > 0);
+        assert_eq!(r.shutdown_records(t0, 1.0).len(), 1);
+        write_lines(&path, &mixed(500));
+        assert!(r.poll(&path, t0 + Duration::from_millis(10), |_| {}).shed_total() > 0);
+        assert!(r.shutdown_records(t0 + Duration::from_millis(20), 1.02).is_empty());
+        assert!(r.audit_records(t0 + Duration::from_secs(5), 6.0).is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn shutdown_in_the_first_interval_writes_what_was_never_summarised() {
         let path = temp_path("shutdown-first");
         write_lines(&path, &mixed(500));

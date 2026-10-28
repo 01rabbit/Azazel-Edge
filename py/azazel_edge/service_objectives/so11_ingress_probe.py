@@ -162,11 +162,7 @@ def run(core_bin: Path, duration_s: float = 40.0, drain_timeout_s: float = 120.0
                     proc.kill()
         records = _read_jsonl(audit)
     shed_records = [r["ingress_shed"] for r in records if isinstance(r.get("ingress_shed"), dict)]
-    # The summary written when the core stops closes a shorter interval on
-    # purpose (``interval_end: "shutdown"``); the rate bound is about the
-    # others.
-    emitted = sorted(float(r.get("emitted_epoch", 0)) for r in shed_records if r.get("interval_end") != "shutdown")
-    gaps_between = [b - a for a, b in zip(emitted, emitted[1:])]
+    gaps_between = rate_bound_gaps(shed_records)
     interval_s = quota["audit_interval_ms"] / 1000.0
     by_type: Dict[str, int] = {}
     for r in shed_records:
@@ -214,6 +210,17 @@ def run(core_bin: Path, duration_s: float = 40.0, drain_timeout_s: float = 120.0
     if not all(checks.values()):
         result["verdict"] = "fail"
     return result
+
+
+def rate_bound_gaps(shed_records: List[Dict[str, Any]]) -> List[float]:
+    """Seconds between consecutive ``ingress_shed`` summaries, for the rate bound.
+
+    The summary the core writes when it stops closes a shorter interval on
+    purpose (``interval_end: "shutdown"``), so it is left out; every other
+    summary, with or without the field, is kept.
+    """
+    emitted = sorted(float(r.get("emitted_epoch", 0)) for r in shed_records if r.get("interval_end") != "shutdown")
+    return [b - a for a, b in zip(emitted, emitted[1:])]
 
 
 def main(argv: List[str] | None = None) -> int:

@@ -355,6 +355,29 @@ def test_the_profile_applied_as_declared_closes_the_gap():
     assert rec.so04_hostile_load_applied(_samples(obs), {"hostile_load": obs}) is True
 
 
+def test_a_shutdown_summary_after_the_last_phase_keeps_the_observation_valid():
+    # Edge#414 SO-11: the core now writes its last interval when the harness
+    # terminates it. The harness drains first (every alert decided, then one
+    # audit interval), so normally nothing is pending and no such line is
+    # written. When one is, it falls after every window and is attributed to
+    # the last phase (profile rule "attribution"); its counts are real lines
+    # the core examined and shed, and the cumulative totals include it.
+    obs = _observation()
+    last = obs["ingress_audit"][-1]["ingress_shed"]
+    end = max(o["window_end_wall_epoch"] for o in obs["phases"])
+    extra = _audit_record(
+        emitted=end + 5.0, shed_total=40, by_backlog=40, level=1,
+        cum_shed=last["cumulative_shed_total"] + 40, cum_over=last["cumulative_oversized_lines_skipped"],
+    )
+    extra["ingress_shed"]["interval_end"] = "shutdown"
+    obs["ingress_audit"].append(extra)
+    assert hl.hostile_load_problems(_samples(obs), obs) == []
+    # Losing it again (as before) is what the cumulative check catches.
+    obs["ingress_audit"].pop()
+    obs["ingress_audit"][-1]["ingress_shed"]["cumulative_shed_total"] += 40
+    assert any("cumulative" in p for p in hl.hostile_load_problems(_samples(obs), obs))
+
+
 def _phase(obs, name):
     return next(o for o in obs["phases"] if o["name"] == name)
 

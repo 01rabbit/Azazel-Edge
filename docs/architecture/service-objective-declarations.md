@@ -270,11 +270,25 @@ is still provisional and container-derived).
   rate-bound check). An empty last interval writes nothing. The reader
   refuses a second flush and any later summary, so the interval is never
   written twice. The handler sets a flag and nothing else; there is no other
-  way to stop or skip anything.
+  way to stop or skip anything. The poll interval (`AZAZEL_EVE_POLL_MS`) is
+  kept but slept in 50 ms slices with a look at the flag between them, so a
+  stop is not held up by a long interval.
+- **SO-04 records.** The SO-04 harness reads `ingress-audit.jsonl` after it
+  terminates the core. It drains first (every alert decided, then one audit
+  interval), so normally nothing is pending and no shutdown line is written;
+  the record's numbers are the same as before. When the drain timed out and
+  a shutdown line is written, it comes after every load window and is
+  attributed to the last phase (profile rule "attribution"): one more
+  summary in `ingress_audit`, and that phase's examined and shed counts
+  include lines the core really read, which were lost before. The cumulative
+  check now closes over it instead of hiding the loss.
 - **Read-only copies.** With the AI forward on, the `ingress_shed` object
   (counts, interval end, emit time and the compiled quota; no address, MAC or
   id) is also queued on the AI socket, the shutdown one with a bounded wait
-  (2 s) for the forwarder. The AI agent keeps the counts of the newest one as
+  (2 s) for the forwarder. If the forward queue is full at that moment the
+  wait is skipped and the shutdown summary may not reach the AI socket (a
+  line that could not be queued is counted in the core's forward drops); it
+  is in `ingress-audit.jsonl` and on the console either way. The AI agent keeps the counts of the newest one as
   the `core_ingress_shed` metric in `ai_metrics.json` (never as an event, an
   advisory input or a decision; a malformed or older one is ignored), and
   `/api/dashboard/health` shows them under `ingress_shed`
@@ -283,7 +297,11 @@ is still provisional and container-derived).
 
 Checked by unit tests (Rust: a stop in the middle of an interval after a
 summary, a stop in the first interval, an empty last interval, a second
-flush; Python: no summary yet and a summary present) and by the full suites in
+flush, counts read after the flush, the sliced sleep; Python: no summary yet
+and a summary present), by `tests/test_core_shutdown_ingress_flush_v1.py`
+(the release core stopped by SIGTERM, SIGINT and SIGTERM twice with a 10 s
+poll interval: exit 0, one shutdown summary, stop within 3 s; and a stop with
+nothing pending writes nothing) and by the full suites in
 a container (colima, aarch64). This is not a hardware measurement and not an
 SO-11 record.
 

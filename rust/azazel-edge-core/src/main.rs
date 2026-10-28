@@ -1210,6 +1210,29 @@ fn ingress_forward_line(record: &Value) -> Option<String> {
     }
 }
 
+/// The longest the main loop sleeps between looks at the stop flag. The
+/// poll interval (`AZAZEL_EVE_POLL_MS`, unbounded) is kept as it is; it is
+/// only slept in slices, so a stop waits at most about one slice for the
+/// sleep, however long the interval.
+const STOP_CHECK_SLICE: Duration = Duration::from_millis(50);
+
+/// Sleep `total` in slices of at most `slice`, returning early once
+/// `stopped` says so. Returns whether it stopped early. A signal does not
+/// interrupt `thread::sleep`, so this is how a stop is noticed in time.
+fn sleep_unless_stopped(total: Duration, slice: Duration, stopped: &dyn Fn() -> bool) -> bool {
+    let end = Instant::now() + total;
+    loop {
+        if stopped() {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= end {
+            return false;
+        }
+        thread::sleep((end - now).min(slice));
+    }
+}
+
 /// How long shutdown waits for the forwarder to hand over the last summary.
 /// A receiver that is absent or wedged costs the stop this long, not more.
 const SHUTDOWN_FORWARD_WAIT: Duration = Duration::from_secs(2);
@@ -1227,6 +1250,13 @@ fn queue_ai_line(socket_path: &str, line: String) {
 
 /// Wait, at most `wait`, until the forwarder has taken every line queued so
 /// far. Says whether it did.
+///
+/// A full queue (the receiver is slow or absent and 1024 lines wait) is
+/// refused at once and returns false without waiting: the stop is not held
+/// up. The shutdown summary is then not delivered to the AI socket -- if it
+/// could not be queued it was counted in `AI_FORWARD_DROPPED`, otherwise it
+/// may still be in the queue when the process exits -- but it is always in
+/// `ingress-audit.jsonl` and on the console, which are written first.
 fn drain_ai_forward(sender: &SyncSender<Forward>, wait: Duration) -> bool {
     let (ack, done) = sync_channel::<()>(1);
     if sender.try_send(Forward::Drained(ack)).is_err() {
@@ -1418,8 +1448,8 @@ fn main() {
         // A poll that stopped on a per-poll budget left work in the file: the
         // next one follows at once, so alerts are read at the Core's capacity
         // and still with a release sweep between every bounded poll.
-        if !report.budget_exhausted() && !stop_signal::requested() {
-            thread::sleep(Duration::from_millis(cfg.poll_ms));
+        if !report.budget_exhausted() {
+            sleep_unless_stopped(Duration::from_millis(cfg.poll_ms), STOP_CHECK_SLICE, &stop_signal::requested);
         }
     }
     let written = shutdown_ingress(&cfg, &mut ingress, &mut |record| {
@@ -2019,6 +2049,35 @@ mod tests {
         drop(sender);
         forwarder.join().unwrap();
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_long_poll_interval_is_slept_in_slices_and_a_stop_ends_it_within_one() {
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let setter = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        // A 60 s poll interval: the stop must not wait for it.
+        let stopped = sleep_unless_stopped(Duration::from_secs(60), STOP_CHECK_SLICE, &|| stop.load(Ordering::SeqCst));
+        let took = started.elapsed();
+        setter.join().unwrap();
+        assert!(stopped);
+        assert!(took >= Duration::from_millis(100), "returned before the stop: {:?}", took);
+        assert!(took < Duration::from_millis(100) + STOP_CHECK_SLICE * 6, "the stop waited {:?}", took);
+    }
+
+    #[test]
+    fn without_a_stop_the_poll_interval_is_slept_whole() {
+        let started = Instant::now();
+        assert!(!sleep_unless_stopped(Duration::from_millis(230), STOP_CHECK_SLICE, &|| false));
+        assert!(started.elapsed() >= Duration::from_millis(230));
+        // A stop already requested sleeps not at all.
+        let started = Instant::now();
+        assert!(sleep_unless_stopped(Duration::from_secs(60), STOP_CHECK_SLICE, &|| true));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
