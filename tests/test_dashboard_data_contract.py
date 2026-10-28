@@ -1036,6 +1036,42 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("memory_percent", first)
         self.assertIn("temperature_c", first)
 
+    def test_dashboard_trends_carry_daemon_runtime_values(self) -> None:
+        # The control daemon writes cpu_percent / mem_percent / temp_c at the
+        # top level of the snapshot (daemon._enrich_snapshot), not under
+        # ``internal``. The trend point must carry those values, not 0.
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        state.update({"cpu_percent": 12.3, "mem_percent": 41, "mem_used_mb": 210, "mem_total_mb": 512, "temp_c": 52.4})
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+        webapp._dashboard_trends_last_write_ts = 0.0
+        self.client.get("/api/dashboard/health")
+        payload = self.client.get("/api/dashboard/trends?limit=10&window_sec=3600").get_json()
+        last = payload["points"][-1]
+        self.assertEqual(last["cpu_percent"], 12.3)
+        self.assertEqual(last["memory_percent"], 41.0)
+        self.assertEqual(last["temperature_c"], 52.4)
+        self.assertEqual(payload["summary"]["cpu_percent"]["max"], 12.3)
+
+    def test_trend_point_prefers_top_level_and_keeps_internal_fallback(self) -> None:
+        top = webapp._dashboard_trend_point_payload(
+            {"cpu_percent": 7.5, "mem_percent": 33, "temp_c": 48.0,
+             "internal": {"cpu_percent": 99.0, "memory_percent": 99.0, "temperature_c": 99.0}},
+            {}, {}, now_epoch=1.0,
+        )
+        self.assertEqual((top["cpu_percent"], top["memory_percent"], top["temperature_c"]), (7.5, 33.0, 48.0))
+        # A real 0 at the top level is the daemon's reading; it is not
+        # replaced by an older ``internal`` value.
+        zero = webapp._dashboard_trend_point_payload(
+            {"cpu_percent": 0.0, "internal": {"cpu_percent": 99.0}}, {}, {}, now_epoch=1.0,
+        )
+        self.assertEqual(zero["cpu_percent"], 0.0)
+        legacy = webapp._dashboard_trend_point_payload(
+            {"internal": {"cpu_percent": 5.0, "mem_percent": 20, "temperature_c": 40.0}}, {}, {}, now_epoch=1.0,
+        )
+        self.assertEqual((legacy["cpu_percent"], legacy["memory_percent"], legacy["temperature_c"]), (5.0, 20.0, 40.0))
+        absent = webapp._dashboard_trend_point_payload({}, {}, {}, now_epoch=1.0)
+        self.assertEqual((absent["cpu_percent"], absent["memory_percent"], absent["temperature_c"]), (0.0, 0.0, 0.0))
+
     def test_dashboard_ai_governance_endpoint_contract(self) -> None:
         response = self.client.get("/api/dashboard/ai-governance")
         self.assertEqual(response.status_code, 200)
