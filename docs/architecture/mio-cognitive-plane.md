@@ -228,7 +228,7 @@ A change to an Edge-local M.I.O. schema bumps its version in the same change
 
 | Item | Issue |
 | --- | --- |
-| Hostile review before any non-shadow M.I.O. influence | #373 |
+| Hostile review before any non-shadow M.I.O. influence (findings: [adversarial review](../reviews/mio-cognitive-plane-adversarial-review.md); gate outcome pending) | #373 |
 | Operator surfaces with authority labels (fact, decision, advisory, hypothesis, recommendation, unknown) | #374 |
 | Decision-level trace and evidence provenance in the console | #341 (being implemented in #501, open) |
 | Final documentation package (operations, offline deployment, field validation) | #375 |
