@@ -183,7 +183,9 @@ Each poll the reader:
 7. **Emits audit summaries**, at most one `ingress_shed` and one
    `ingress_alert_backlog` per second, each only when there is something to
    report, with per-class and per-reason counts for the interval and
-   cumulative totals (so a lost summary shows as a jump).
+   cumulative totals (so a lost summary shows as a jump). When the process is
+   stopped, the last interval's summaries are written once more
+   (`interval_end: "shutdown"`; see below).
 8. **Runs the release sweep**, on every iteration (`poll_iteration` in
    `main.rs`; tested with a five-poll flood already in the file). If the poll
    stopped on a budget, the next poll follows without the 200 ms sleep, so a
@@ -247,11 +249,43 @@ by the declared profile below.
 - **Per peer.** §5 R5 speaks of per-peer quotas; this is one node-wide quota.
 - **A full SO-11 harness** re-running SO-03, SO-04 and SO-07 at the quota and
   at 120% of it, with a `record.py` specification.
-- **Where else the counter is read.** The summaries are in a file and on
-  stdout; nothing forwards them to the AI socket or the health surface yet.
-- **Summaries pending at shutdown.** Counts from the last interval (under one
-  second) are not flushed when the process is killed; the next process starts
-  its cumulative totals at zero.
+- **Across restarts.** The next process still starts its cumulative totals at
+  zero; the shutdown summary below is the last word of the one before.
+- **Hard kills.** SIGKILL, a crash or a power loss still loses the last
+  interval; only a stop the process is told about (SIGTERM, SIGINT) writes it.
+
+### Counted at shutdown and readable from the AI socket and the dashboard (Edge#414 SO-11)
+
+Two former items of "Still open" are done. Neither changes what is read, shed
+or decided, the quota, or the SO-11 verdict (still `not_measurable`; the quota
+is still provisional and container-derived).
+
+- **The last interval at shutdown.** SIGTERM (systemd's stop) and SIGINT set a
+  flag; the main loop ends after its current iteration and the reader writes
+  whatever the last interval holds, at most one `ingress_shed` and one
+  `ingress_alert_backlog`, to the same `ingress-audit.jsonl` and console, in
+  the same shape. Every summary now carries `interval_end`:
+  `"audit_interval"`, or `"shutdown"` for this one, which closes an interval
+  shorter than a second on purpose (the SO-11 probe leaves it out of its
+  rate-bound check). An empty last interval writes nothing. The reader
+  refuses a second flush and any later summary, so the interval is never
+  written twice. The handler sets a flag and nothing else; there is no other
+  way to stop or skip anything.
+- **Read-only copies.** With the AI forward on, the `ingress_shed` object
+  (counts, interval end, emit time and the compiled quota; no address, MAC or
+  id) is also queued on the AI socket, the shutdown one with a bounded wait
+  (2 s) for the forwarder. The AI agent keeps the counts of the newest one as
+  the `core_ingress_shed` metric in `ai_metrics.json` (never as an event, an
+  advisory input or a decision; a malformed or older one is ignored), and
+  `/api/dashboard/health` shows them under `ingress_shed`
+  (`{"available": false}` until one has arrived). Nothing reads them back as
+  a gate.
+
+Checked by unit tests (Rust: a stop in the middle of an interval after a
+summary, a stop in the first interval, an empty last interval, a second
+flush; Python: no summary yet and a summary present) and by the full suites in
+a container (colima, aarch64). This is not a hardware measurement and not an
+SO-11 record.
 
 ## SO-04 hostile-load profile (declared, derived from OF-06, factors confirmed by the owner)
 

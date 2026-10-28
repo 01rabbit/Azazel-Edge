@@ -16,7 +16,8 @@ core's own output that
 * nothing it shed was an alert (``alerts_shed`` 0, and every alert written
   was decided once the writer stopped and the backlog drained),
 * flow was shed at least as much as dns, dns at least as much as stats,
-* the summaries are rate-bounded (at most one per audit interval).
+* the summaries are rate-bounded (at most one per audit interval; the one
+  the core writes when it stops, ``interval_end: "shutdown"``, is not counted).
 
 The result is a plain JSON document with verdict ``not_measurable`` and the
 gaps that keep it so. It is not a service-objective record: SO-11 has no
@@ -161,7 +162,10 @@ def run(core_bin: Path, duration_s: float = 40.0, drain_timeout_s: float = 120.0
                     proc.kill()
         records = _read_jsonl(audit)
     shed_records = [r["ingress_shed"] for r in records if isinstance(r.get("ingress_shed"), dict)]
-    emitted = sorted(float(r.get("emitted_epoch", 0)) for r in shed_records)
+    # The summary written when the core stops closes a shorter interval on
+    # purpose (``interval_end: "shutdown"``); the rate bound is about the
+    # others.
+    emitted = sorted(float(r.get("emitted_epoch", 0)) for r in shed_records if r.get("interval_end") != "shutdown")
     gaps_between = [b - a for a, b in zip(emitted, emitted[1:])]
     interval_s = quota["audit_interval_ms"] / 1000.0
     by_type: Dict[str, int] = {}

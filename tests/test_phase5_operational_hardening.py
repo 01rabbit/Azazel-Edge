@@ -132,6 +132,63 @@ class Phase5OperationalHardeningTests(unittest.TestCase):
         self.assertEqual(int(metrics["processed_events"]), 0)
         self.assertFalse(agent.ADVISORY_PATH.exists())
 
+    def _ingress_shed(self, **over):
+        summary = {
+            "schema": "azazel-edge/ingress-shed/v1", "emitted_epoch": 1790000001.25, "interval_end": "audit_interval",
+            "polls": 4, "shed_by_type": {"flow": 30, "dns": 12, "stats": 0, "other": 0, "unparseable": 0},
+            "shed_total": 42, "shed_by_reason": {"non_alert_rate": 42, "backlog": 0}, "alerts_shed": 0,
+            "admitted": 100, "alerts_admitted": 60, "examined": 142, "max_backlog_bytes": 4096, "max_shed_level": 0,
+            "oversized_lines_skipped": 0, "oversized_possible_alerts": 0, "truncation_resets": 0,
+            "file_replacements": 0, "unread_bytes_lost": 0,
+            "cumulative_shed_by_type": {"flow": 30, "dns": 12, "stats": 0, "other": 0, "unparseable": 0},
+            "cumulative_shed_total": 42, "cumulative_oversized_lines_skipped": 0, "cumulative_resets": 0,
+            "quota": {"non_alert_per_sec": 2500, "non_alert_burst": 1500},
+        }
+        summary.update(over)
+        return summary
+
+    def test_core_ingress_shed_absent_until_one_arrives(self) -> None:
+        agent._persist_metrics()
+        metrics = json.loads(agent.METRICS_PATH.read_text(encoding="utf-8"))
+        self.assertNotIn("core_ingress_shed", metrics)
+
+    def test_core_ingress_shed_is_a_read_only_metric_not_an_event(self) -> None:
+        self.assertIsNone(agent._handle_line(json.dumps(self._ingress_shed())))
+        self.assertFalse(agent.ADVISORY_PATH.exists())
+        self.assertFalse(agent.EVENT_LOG_PATH.exists())
+        metrics = json.loads(agent.METRICS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(int(metrics["processed_events"]), 0)
+        kept = metrics["core_ingress_shed"]
+        self.assertEqual(kept["shed_total"], 42)
+        self.assertEqual(kept["cumulative_shed_total"], 42)
+        self.assertEqual(kept["shed_by_type"]["flow"], 30)
+        self.assertEqual(kept["shed_by_reason"], {"non_alert_rate": 42, "backlog": 0})
+        self.assertEqual(kept["alerts_shed"], 0)
+        self.assertEqual(kept["interval_end"], "audit_interval")
+        self.assertEqual(kept["emitted_epoch"], 1790000001.25)
+        # Counts only: the quota block and anything else is not copied.
+        self.assertNotIn("quota", kept)
+        self.assertNotIn("cumulative_shed_by_type", kept)
+        # The shutdown summary replaces it; an older one arriving late does not.
+        agent._handle_line(json.dumps(self._ingress_shed(emitted_epoch=1790000001.75, interval_end="shutdown",
+                                                         shed_total=5, cumulative_shed_total=47)))
+        agent._handle_line(json.dumps(self._ingress_shed(emitted_epoch=1790000000.0, shed_total=9)))
+        kept = json.loads(agent.METRICS_PATH.read_text(encoding="utf-8"))["core_ingress_shed"]
+        self.assertEqual((kept["interval_end"], kept["shed_total"], kept["cumulative_shed_total"]), ("shutdown", 5, 47))
+        # A malformed summary is ignored whole, and is still not an event.
+        for bad in (
+            self._ingress_shed(emitted_epoch=1790000009.0, shed_total=-1),
+            self._ingress_shed(emitted_epoch=1790000009.0, shed_total=True),
+            self._ingress_shed(emitted_epoch=1790000009.0, interval_end="never"),
+            self._ingress_shed(emitted_epoch=1790000009.0, shed_by_type={"flow": 1}),
+            self._ingress_shed(emitted_epoch="soon"),
+        ):
+            self.assertIsNone(agent._handle_line(json.dumps(bad)))
+        kept = json.loads(agent.METRICS_PATH.read_text(encoding="utf-8"))["core_ingress_shed"]
+        self.assertEqual(kept["shed_total"], 5)
+        self.assertEqual(int(json.loads(agent.METRICS_PATH.read_text(encoding="utf-8"))["processed_events"]), 0)
+        self.assertFalse(agent.ADVISORY_PATH.exists())
+
     def test_suricata_to_snapshot_non_ambiguous_skip(self) -> None:
         agent.LLM_ENABLED = True
         event = {
