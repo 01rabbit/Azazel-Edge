@@ -296,6 +296,70 @@ jobs:
           path: service-objective-lab-records/*.json
           if-no-files-found: error
 
+  service-objectives-so11:
+    # SO-11 (virtual-lab, Edge#414): SO-03, the SO-04 start half and SO-07
+    # re-run against the release core with non-alert EVE lines offered at 100%
+    # and 120% of the declared ingress quota (OF-06). Unprivileged: no part
+    # installs tc/nft state. The quota is provisional and container-derived,
+    # so the verdict stays not_measurable (SO11-QUOTA-PROVISIONAL); a runner
+    # record is never hardware evidence.
+    #
+    # Cost: six referenced runs, several runner minutes, so like
+    # service-objectives-lab it runs only on pushes to main and on
+    # workflow_dispatch; on a pull request it shows as skipped (not a harness
+    # result). Same --ci exit semantics: a part that did not take its samples,
+    # whose load was not offered as declared, that did not shed at 120%, or
+    # that broke its row's bound is red; green only for a clean measurement
+    # blocked by declared gaps. The checks count lines and compare against the
+    # rows' own bounds, so a slower runner is red only if a bound really breaks.
+    name: Service objectives SO-11 (§8 hostile load)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -U pip wheel setuptools
+          pip install -r requirements/runtime.txt
+          pip install -r requirements/fabric.txt
+
+      - name: Build the Rust core
+        run: |
+          cd rust/azazel-edge-core
+          cargo build --release
+
+      - name: Run SO-11 harness
+        run: |
+          . .venv/bin/activate
+          PYTHONPATH=.:py python -m azazel_edge.service_objectives run --ci \
+            --objective SO-11 \
+            --core-bin rust/azazel-edge-core/target/release/azazel-edge-core \
+            --out-dir service-objective-so11-records
+
+      - name: Re-validate SO-11 records
+        if: always()
+        run: |
+          . .venv/bin/activate
+          PYTHONPATH=.:py python -m azazel_edge.service_objectives validate --ci --objective SO-11 \
+            --expect-commit "$GITHUB_SHA" \
+            service-objective-so11-records
+
+      - name: Upload SO-11 records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-objective-so11-records
+          path: service-objective-so11-records/*.json
+          if-no-files-found: error
+
   dependency-review:
     name: Dependency review (PR)
     if: github.event_name == 'pull_request' && vars.ENABLE_DEPENDENCY_REVIEW == 'true'

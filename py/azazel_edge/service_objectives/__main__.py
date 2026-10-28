@@ -54,13 +54,14 @@ from .record import (
 
 
 def _harnesses(args: argparse.Namespace) -> Dict[str, Callable[[], Dict[str, Any]]]:
-    from . import so02_source_failure, so03_alert_queue, so04_lease_rollback, so07_audit_ordering
+    from . import so02_source_failure, so03_alert_queue, so04_lease_rollback, so07_audit_ordering, so11_quota_load
 
     return {
         "SO-02": lambda: so02_source_failure.run(seed=args.seed),
         "SO-03": lambda: so03_alert_queue.run(core_bin=Path(args.core_bin) if args.core_bin else None, seed=args.seed),
         "SO-04": lambda: so04_lease_rollback.run(core_bin=Path(args.core_bin) if args.core_bin else None, seed=args.seed),
         "SO-07": lambda: so07_audit_ordering.run(seed=args.seed),
+        "SO-11": lambda: so11_quota_load.run(core_bin=Path(args.core_bin) if args.core_bin else None, seed=args.seed),
     }
 
 
@@ -101,7 +102,7 @@ def _summary(record: Dict[str, Any]) -> str:
     return "\n".join(bits)
 
 
-OBJECTIVES = ("SO-02", "SO-03", "SO-04", "SO-07")
+OBJECTIVES = ("SO-02", "SO-03", "SO-04", "SO-07", "SO-11")
 
 
 def parse_objectives(value: str) -> List[str]:

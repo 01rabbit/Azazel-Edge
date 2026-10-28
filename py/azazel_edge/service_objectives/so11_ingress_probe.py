@@ -2,9 +2,11 @@
 
     python -m azazel_edge.service_objectives.so11_ingress_probe --core-bin PATH --out FILE
 
-This is not an SO-11 measurement. SO-11 asks for the SO-03, SO-04 and SO-07
-pass rules to hold at each declared ingress quota and for the quota to shed at
-120% of the highest one. This probe covers only the second half for the one
+This is not an SO-11 measurement; that is ``so11_quota_load`` (the SO-11
+harness, ``python -m azazel_edge.service_objectives run --objective SO-11``).
+SO-11 asks for the SO-03, SO-04 and SO-07 pass rules to hold at each declared
+ingress quota and for the quota to shed at 120% of the highest one. This
+probe covers only the second half for the one
 quota Edge declares (``config/service_objectives/ingress_quota.json``), a
 quota on non-alert lines: it starts the real core (Edge defaults, enforcement
 off, AI forward off), writes flow, dns, stats and http records at 120% of the
@@ -20,8 +22,8 @@ core's own output that
   the core writes when it stops, ``interval_end: "shutdown"``, is not counted).
 
 The result is a plain JSON document with verdict ``not_measurable`` and the
-gaps that keep it so. It is not a service-objective record: SO-11 has no
-specification in ``record.py``, and the referenced rows are not re-run here.
+gaps that keep it so. It is not a service-objective record, and the
+referenced rows are not re-run here (the SO-11 harness does both).
 """
 
 from __future__ import annotations
@@ -201,9 +203,9 @@ def run(core_bin: Path, duration_s: float = 40.0, drain_timeout_s: float = 120.0
         },
         "checks": checks,
         "gaps": [
-            {"id": "SO11-REFERENCED-ROWS-NOT-RERUN", "summary": "SO-03, SO-04 and SO-07 are not re-run at the declared quota or at 120% of it; only the shedding half of SO-11 is probed."},
+            {"id": "SO11-REFERENCED-ROWS-NOT-RERUN", "summary": "this probe does not re-run SO-03, SO-04 and SO-07 at the declared quota or at 120% of it (the SO-11 harness, so11_quota_load, does); only the shedding half of SO-11 is probed."},
             {"id": "SO11-QUOTA-PROVISIONAL", "summary": "the quota is provisional and container-derived (container-aarch64, not hardware); no hardware class is declared."},
-            {"id": "SO11-NOT-A-RECORD", "summary": "SO-11 has no specification in record.py; this output is not validated as a service-objective record."},
+            {"id": "SO11-NOT-A-RECORD", "summary": "this probe's output is not a service-objective record; SO-11 records come from the SO-11 harness (so11_quota_load) and are validated by record.py."},
             {"id": "SO11-SINGLE-MIX", "summary": "one traffic mix (flow/dns/stats/http in equal parts at 120% of the quota plus 1000 alerts/s, ~600-byte lines); backlog escalation and unparseable/oversized lines are covered by core unit tests, not here."},
         ],
     })
