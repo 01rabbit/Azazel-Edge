@@ -263,6 +263,60 @@ OBJECTIVE_SPECS: Dict[str, Dict[str, Dict[str, Any]]] = {
         },
     },
 }
+
+# SO-11 (hostile load, virtual-lab): the SO-03, SO-04 start and SO-07 pass
+# rules re-run with non-alert lines offered at 100% and at 120% of the one
+# ingress quota Edge declares (OF-06, config/service_objectives/
+# ingress_quota.json). Each part copies the referenced row's rule, bound,
+# sample count and prerequisites, so SO-11 can never be looser than the row
+# it re-runs, and adds what the load must show (recomputed by
+# so11_quota_load.quota_load_problems from the part's quota_load
+# observation). SO11-QUOTA-PROVISIONAL has no closer: it stays until a
+# hardware-derived quota exists and this table changes with it.
+SO11_INGRESS = "core_eve_reader"
+SO11_LEVELS = (("at_quota", 1.0), ("at_120pct_of_quota", 1.2))
+SO11_REFERENCED_ROWS = (
+    ("so03", "SO-03", "decision_durable_to_alert_enqueued"),
+    ("so04_start", "SO-04", "rollback_start_after_expiry"),
+    ("so07", "SO-07", "reported_complete_implies_record_present"),
+)
+SO11_LOAD_PREREQUISITES = ("ingress_load_offered_at_level", "core_ingress_audit_consistent", "alerts_never_shed")
+SO11_OVERLOAD_PREREQUISITE = "quota_shed_at_overload"
+# What SO-11's own load replaces in a referenced row: the SO-04 hostile-load
+# profile (its phases, its gaps) and the completion half, which is not re-run.
+SO11_REPLACED_PREREQUISITES = {"SO-04": ("load_phase_applied",)}
+SO11_REPLACED_GAPS = {"SO-04": ("SO04-HOSTILE-LOAD-UNDECLARED", "SO04-HOSTILE-LOAD-PROFILE-PROVISIONAL")}
+SO11_ROW_GAPS = {"SO-04": ("SO11-SO04-COMPLETION-NOT-RERUN",)}
+SO11_GAPS = ("SO11-QUOTA-PROVISIONAL",)
+
+
+def _so11_specs() -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for key, objective, part in SO11_REFERENCED_ROWS:
+        ref = OBJECTIVE_SPECS[objective][part]
+        replaced = SO11_REPLACED_GAPS.get(objective, ())
+        row_gaps = tuple(g for g in ref["gaps"] if g not in replaced)
+        for level, factor in SO11_LEVELS:
+            spec: Dict[str, Any] = {
+                "kind": ref["kind"],
+                "bound_ms": ref["bound_ms"],
+                "required_samples": ref["required_samples"],
+                "row_class": "virtual-lab",
+                "references": (objective, part),
+                "load_factor": factor,
+                "prerequisites": tuple(p for p in ref["prerequisites"] if p not in SO11_REPLACED_PREREQUISITES.get(objective, ()))
+                + SO11_LOAD_PREREQUISITES
+                + ((SO11_OVERLOAD_PREREQUISITE,) if factor > 1.0 else ()),
+                "gaps": row_gaps + SO11_ROW_GAPS.get(objective, ()) + SO11_GAPS,
+                "gaps_closed_by_samples": tuple(g for g in ref.get("gaps_closed_by_samples", ()) if g in row_gaps),
+            }
+            if ref.get("per_action_samples"):
+                spec["per_action_samples"] = ref["per_action_samples"]
+            out[f"{key}_{level}"] = spec
+    return out
+
+
+OBJECTIVE_SPECS["SO-11"] = _so11_specs()
 KNOWN_OBJECTIVES = tuple(OBJECTIVE_SPECS)
 CRASH_PART = "harness_crashed"
 # Prerequisites a record may carry beyond its objective's row: the one
@@ -282,10 +336,12 @@ RECORD_FIELDS = frozenset(
         "verdict", "evidence_class", "notes",
     }
 )
-PART_FIELDS = frozenset({"name", "sample_rule", "samples", "pass_rule", "prerequisites", "gaps", "verdict", "hostile_load"})
+PART_FIELDS = frozenset({"name", "sample_rule", "samples", "pass_rule", "prerequisites", "gaps", "verdict", "hostile_load", "quota_load"})
 # Parts that may carry the hostile_load observation (what load was applied and
 # what the core's ingress audit recorded), read by PART_GAP_CLOSERS.
 HOSTILE_LOAD_OBJECTIVES = frozenset({"SO-04"})
+# Parts that carry the SO-11 quota_load observation (and must).
+QUOTA_LOAD_OBJECTIVES = frozenset({"SO-11"})
 _COMMON_SAMPLE_FIELDS = ("sample_id", "start_monotonic_ns", "end_monotonic_ns", "elapsed_ms", "start_event", "end_event")
 SAMPLE_FIELDS: Dict[str, frozenset] = {
     "SO-02": frozenset(
@@ -337,6 +393,22 @@ SAMPLE_FIELDS: Dict[str, frozenset] = {
         )
     ),
 }
+
+
+# SO-11 re-runs SO-04's start half without boot ids in the record: a sample
+# says whether the lease and its start record are in the same boot instead.
+SO11_SO04_SAMPLE_FIELDS = (SAMPLE_FIELDS["SO-04"] - {"lease_boot_id", "start_record_boot_id"}) | {"same_boot_as_lease"}
+
+
+def sample_fields_for(objective_id: str, spec: Mapping[str, Any]) -> frozenset:
+    """The fields a sample of this part may carry: an SO-11 part's are its referenced row's."""
+
+    ref = spec.get("references")
+    if ref is None:
+        return SAMPLE_FIELDS.get(objective_id, frozenset(_COMMON_SAMPLE_FIELDS))
+    if ref[0] == "SO-04":
+        return SO11_SO04_SAMPLE_FIELDS
+    return SAMPLE_FIELDS[ref[0]]
 
 
 def spec_for(objective_id: str, part_name: str) -> Dict[str, Any]:
@@ -444,6 +516,7 @@ CI_DECLARED_PREREQUISITES: Dict[str, frozenset] = {
     "SO-03": frozenset(),
     "SO-04": frozenset(),
     "SO-07": frozenset(),
+    "SO-11": frozenset(),
 }
 
 
@@ -696,6 +769,7 @@ def build_part(
     gaps: List[Dict[str, Any]],
     per_action_required: int = 0,
     hostile_load: Optional[Mapping[str, Any]] = None,
+    quota_load: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     evaluated = evaluate_rule(pass_rule, samples) if samples else {"sample_count": 0, "holds": False}
     rule = dict(pass_rule)
@@ -723,6 +797,8 @@ def build_part(
     }
     if hostile_load is not None:
         part["hostile_load"] = dict(hostile_load)
+    if quota_load is not None:
+        part["quota_load"] = dict(quota_load)
     return part
 
 
@@ -1284,6 +1360,35 @@ PART_GAP_CLOSERS = {
 }
 
 
+def so11_so04_expired_on_monotonic_deadline(sample: Mapping[str, Any]) -> bool:
+    """SO-11's SO-04 sample: as ``so04_expired_on_monotonic_deadline``, with
+    ``same_boot_as_lease`` standing for the two boot ids it does not carry."""
+
+    if sample.get("same_boot_as_lease") is not True or "lease_boot_id" in sample or "start_record_boot_id" in sample:
+        return False
+    return so04_expired_on_monotonic_deadline(dict(sample, lease_boot_id="same", start_record_boot_id="same"))
+
+
+def so11_so04_monotonic_expiry_observed(samples: Sequence[Mapping[str, Any]]) -> bool:
+    items = list(samples)
+    return bool(items) and all(isinstance(s, dict) and so11_so04_expired_on_monotonic_deadline(s) for s in items)
+
+
+# Closers that differ for one objective's parts, looked up before GAP_CLOSERS.
+OBJECTIVE_GAP_CLOSERS = {
+    "SO-11": {"SO04-LEASE-EXPIRY-ON-WALL-CLOCK": so11_so04_monotonic_expiry_observed},
+}
+
+
+def gap_closed(objective_id: str, gid: str, samples: Sequence[Mapping[str, Any]], part: Mapping[str, Any]) -> bool:
+    """Whether the validator's recomputation closes ``gid`` for this part (harnesses use it too)."""
+
+    closer = OBJECTIVE_GAP_CLOSERS.get(objective_id, {}).get(gid)
+    if closer is not None:
+        return bool(closer(samples))
+    return _gap_closed(gid, samples, part)
+
+
 def _gap_closed(gid: str, samples: Sequence[Mapping[str, Any]], part: Mapping[str, Any]) -> bool:
     if gid in GAP_CLOSERS:
         return bool(GAP_CLOSERS[gid](samples))
@@ -1387,6 +1492,8 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
         _reject_unknown_fields(part, PART_FIELDS, where, errors)
         if "hostile_load" in part and (objective not in HOSTILE_LOAD_OBJECTIVES or not isinstance(part["hostile_load"], dict)):
             errors.append(f"{where}.hostile_load: only an object, and only on {sorted(HOSTILE_LOAD_OBJECTIVES)} parts")
+        if "quota_load" in part and (objective not in QUOTA_LOAD_OBJECTIVES or not isinstance(part["quota_load"], dict)):
+            errors.append(f"{where}.quota_load: only an object, and only on {sorted(QUOTA_LOAD_OBJECTIVES)} parts")
         _validate_sample_ids(part["samples"], where, errors)
         if crashed:
             derived_parts.append(_validate_crash_part(part, where, errors))
@@ -1394,6 +1501,9 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
         spec = specs.get(part["name"])
         if spec is None:
             continue
+        # The row whose recomputations apply: the part itself, or for an SO-11
+        # part the row it re-runs under load.
+        row = tuple(spec.get("references") or (objective, part["name"]))
         rule = part["pass_rule"]
         if rule.get("kind") != spec["kind"]:
             errors.append(f"{where}.pass_rule.kind: {objective} requires {spec['kind']!r}")
@@ -1445,7 +1555,7 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
         for p in declared_prereqs:
             if p["id"] not in allowed_prereqs:
                 errors.append(f"{where}: prerequisite {p['id']!r} is not in the {objective} definition")
-        sample_fields = SAMPLE_FIELDS.get(objective, _COMMON_SAMPLE_FIELDS)
+        sample_fields = sample_fields_for(objective, spec)
         for sidx, sample in enumerate(part["samples"]):
             _validate_sample(sample, f"{where}.samples[{sidx}]", errors, sample_fields)
 
@@ -1464,13 +1574,24 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
         closed_gaps = {
             gid
             for gid in spec.get("gaps_closed_by_samples", ())
-            if len(dict_samples) == len(part["samples"]) and _gap_closed(gid, dict_samples, part)
+            if len(dict_samples) == len(part["samples"]) and gap_closed(objective, gid, dict_samples, part)
         }
         for gid in spec["gaps"]:
             if gid not in have_gaps and gid not in closed_gaps:
                 errors.append(f"{where}: mandatory gap {gid!r} omitted")
                 effective_gaps.append({"id": gid, "blocks_verdict": True})
-        if objective == "SO-03" and part["name"] == "decision_durable_to_alert_enqueued":
+        if objective in QUOTA_LOAD_OBJECTIVES:
+            # The load prerequisites are what the part's quota_load and samples
+            # show against the quota in this tree, never what the record declares.
+            from .so11_quota_load import quota_load_prerequisites
+
+            load_observed = quota_load_prerequisites(dict_samples, part.get("quota_load"), float(spec["load_factor"]))
+            for p in effective_prereqs:
+                if p["id"] in load_observed:
+                    if p["met"] and not load_observed[p["id"]]:
+                        errors.append(f"{where}: prerequisite {p['id']!r} declared met but the quota_load observation does not show it")
+                    p["met"] = bool(p["met"]) and load_observed[p["id"]]
+        if row == ("SO-03", "decision_durable_to_alert_enqueued"):
             # The record prerequisites are what the samples show, never what
             # the record declares.
             so03_observed = so03_observed_prerequisites([s for s in part["samples"] if isinstance(s, dict)])
@@ -1480,7 +1601,7 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                         errors.append(f"{where}: prerequisite {p['id']!r} declared met but the samples do not show it")
                     p["met"] = bool(p["met"]) and so03_observed[p["id"]]
 
-        if objective == "SO-03" and part["name"] == "decision_durable_to_alert_enqueued":
+        if row == ("SO-03", "decision_durable_to_alert_enqueued"):
             so03_ends = [isinstance(sm, dict) and so03_end_observed(sm) for sm in part["samples"]]
         else:
             so03_ends = None
@@ -1493,7 +1614,7 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                         f"observed fields give {so07_sample_violations(sample)}"
                     )
             eval_samples = [{"violations": so07_sample_violations(s) if isinstance(s, dict) else -1} for s in part["samples"]]
-            if objective == "SO-07":
+            if row[0] == "SO-07":
                 observed = _so07_observed_prerequisites([s for s in part["samples"] if isinstance(s, dict)])
                 for p in effective_prereqs:
                     if p["id"] in observed:
@@ -1502,7 +1623,7 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                         p["met"] = bool(p["met"]) and observed[p["id"]]
         else:
             eval_samples = _recomputed_latency_samples([s if isinstance(s, dict) else {} for s in part["samples"]])
-            if objective == "SO-02" and part["name"] == "source_failure_visible":
+            if row == ("SO-02", "source_failure_visible"):
                 errors.extend(f"{where}.{p}" for p in so02_sequence_problems(part["samples"]))
                 # An end counts only where the sample's own fields show the
                 # surface naming the source failed after a healthy baseline;
@@ -1528,9 +1649,9 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
                         if isinstance(sample, dict) and sample.get("end_monotonic_ns") is not None:
                             errors.append(f"{where}.samples[{sidx}]: end given but the observed fields do not show a durable enqueue record for the decision")
                         eval_samples[sidx]["elapsed_ms"] = None
-            if objective == "SO-04" and part["name"] in ("rollback_start_after_expiry", "rollback_completion"):
+            if row in (("SO-04", "rollback_start_after_expiry"), ("SO-04", "rollback_completion")):
                 dict_samples = [s for s in part["samples"] if isinstance(s, dict)]
-                if part["name"] == "rollback_start_after_expiry":
+                if row[1] == "rollback_start_after_expiry":
                     observed = _so04_observed_prerequisites(dict_samples)
                 else:
                     observed = _so04_completion_observed_prerequisites(dict_samples, declaration)

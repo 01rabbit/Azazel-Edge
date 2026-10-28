@@ -247,8 +247,10 @@ by the declared profile below.
 - **Hardware classes.** Only container-aarch64 is measured. Raspberry Pi 5 and
   x86_64 appliance quotas, and the R7 hardware confirmation, are not done.
 - **Per peer.** §5 R5 speaks of per-peer quotas; this is one node-wide quota.
-- **A full SO-11 harness** re-running SO-03, SO-04 and SO-07 at the quota and
-  at 120% of it, with a `record.py` specification.
+- **The SO-11 harness** now exists (see "SO-11 harness" below): SO-03, the
+  SO-04 start half and SO-07 at 100% and 120% of the quota, with a
+  `record.py` specification. Its verdict stays `not_measurable` while the
+  quota is provisional; the SO-04 completion half is not re-run under it.
 - **Across restarts.** The next process still starts its cumulative totals at
   zero; the shutdown summary below is the last word of the one before.
 - **Hard kills.** SIGKILL, a crash or a power loss still loses the last
@@ -304,6 +306,82 @@ poll interval: exit 0, one shutdown summary, stop within 3 s; and a stop with
 nothing pending writes nothing) and by the full suites in
 a container (colima, aarch64). This is not a hardware measurement and not an
 SO-11 record.
+
+## SO-11 harness (virtual-lab, not measurable while the quota is provisional)
+
+`python -m azazel_edge.service_objectives run --objective SO-11 --core-bin PATH --out-dir DIR`
+(`py/azazel_edge/service_objectives/so11_quota_load.py`) re-runs three rows
+against the real core binary, each twice: with non-alert EVE lines offered at
+100% and at 120% of the declared `core_eve_reader` quota (2500 and 3000
+lines/s; flow, dns, stats and http in equal parts, about 600 bytes each).
+Alerts are outside the quota and are not added; an alert flood is the SO-04
+profile's `alert_flood` phase.
+
+| Part | Row re-run | How |
+| --- | --- | --- |
+| `so03_at_quota`, `so03_at_120pct_of_quota` | SO-03 (200 samples, 2 s) | the SO-03 harness itself; the load is written into the EVE file its core reads (`so03_alert_queue.run(during_core=...)`, unused by SO-03 alone) |
+| `so04_start_at_quota`, `so04_start_at_120pct_of_quota` | SO-04 start (150 samples, 50 per action type, 5 s) | the SO-04 harness's lease, tail and sample code; the load replaces the SO-04 hostile-load profile |
+| `so07_at_quota`, `so07_at_120pct_of_quota` | SO-07 process-kill (110 injections, zero violations) | the SO-07 harness itself, while a core on the same host reads the load |
+
+Every sample is taken after a 3 s warm-up (at 120% the 1500-token bucket is
+empty by then) and before the load stops.
+
+**Specification.** `record.OBJECTIVE_SPECS["SO-11"]` copies each referenced
+row's rule, bound, sample count and prerequisites (SO-04 without
+`load_phase_applied`, which is the profile's), so an SO-11 part can never be
+looser than the row it re-runs; the validator applies the row's own
+recomputations. Each part adds, recomputed from its `quota_load` observation
+against `ingress_quota.json` as it stands in the tree:
+
+- `ingress_load_offered_at_level`: the quota file is cited at its current
+  SHA-256, every class was written at its share of the level's rate (within
+  10%), and every sample lies inside the load window after the warm-up;
+- `core_ingress_audit_consistent`: the core's `ingress_shed` summaries carry
+  the declared quota, add up, and the audit file was not rotated;
+- `alerts_never_shed`;
+- `quota_shed_at_overload` (120% parts): the core shed non-alert lines for the rate.
+
+**Gaps.** `SO11-QUOTA-PROVISIONAL` on every part has no closer: it stays
+until a hardware-derived quota is declared and the table changes with it in
+review. `SO11-SO04-COMPLETION-NOT-RERUN` on the SO-04 parts: the completion
+half needs owned tc/nft state and root, and its bounds are provisional. The
+referenced rows' own gaps stay, closed only by their usual recomputation
+(SO-04's monotonic-expiry gap by `same_boot_as_lease`, below). So the verdict
+is `not_measurable` whatever the numbers are.
+
+**No identifiers.** The record carries no address, MAC, boot id or host name:
+SO-04 samples carry `same_boot_as_lease` instead of the two boot ids, and
+`run.host` is `not recorded`. The core's summaries hold counts only.
+
+**CI.** Job `service-objectives-so11`, like the SO-02 lab: only on pushes to
+main and on `workflow_dispatch`, unprivileged, with the same `--ci` exit
+semantics. The checks count lines and compare against the rows' own bounds;
+nothing waits on a tight timer.
+
+### Container run (not hardware evidence)
+
+CONTAINER_RUN_PLACEHOLDER
+
+### On a Raspberry Pi (procedure only; not run)
+
+A Pi run is input for a hardware quota declaration, not a pass: the record
+stays `not_measurable` until `ingress_quota.json` declares a quota measured on
+that hardware class and `SO11-QUOTA-PROVISIONAL` is removed from the table in
+review.
+
+1. On a Pi that is not deployed, check out the commit to a scratch directory
+   (not `/opt/azazel-edge`) and build the core:
+   `cd rust/azazel-edge-core && cargo build --release`.
+2. As an unprivileged user, with the installed Edge services in the state they
+   are commissioned in (note which run), run
+   `PYTHONPATH=.:py python3 -m azazel_edge.service_objectives run --ci --objective SO-11 --core-bin rust/azazel-edge-core/target/release/azazel-edge-core --out-dir ~/so11-records`.
+   The harness starts its own core with scratch paths; it never touches the
+   installed one or enables enforcement.
+3. Validate: `PYTHONPATH=.:py python3 -m azazel_edge.service_objectives validate --ci --objective SO-11 --expect-commit "$(git rev-parse HEAD)" ~/so11-records`.
+4. The Pi's capacity for a quota is measured as the OF-06 basis was
+   (pre-written backlog, three runs). How a per-hardware quota is declared
+   (the core compiles one set of limits today) is the owner's decision, not
+   part of this harness.
 
 ## SO-04 hostile-load profile (declared, derived from OF-06, factors confirmed by the owner)
 

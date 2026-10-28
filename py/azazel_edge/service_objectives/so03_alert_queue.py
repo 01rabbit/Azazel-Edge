@@ -75,10 +75,10 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Mapping, Optional
+from typing import Any, Callable, ContextManager, Dict, Iterator, List, Mapping, Optional
 
 from .record import (
     GAP_CLOSERS,
@@ -466,7 +466,14 @@ def _sample(
     return row
 
 
-def _run_core(core: Path, work: Path, socket_path: Path, samples: int, take, info: Dict[str, Any]) -> List[Dict[str, Any]]:  # type: ignore[no-untyped-def]
+# What a caller may run around the samples, once the core has started:
+# called with the scratch directory and the core's EVE file, and entered for
+# as long as the samples are taken. SO-11 (so11_quota_load) uses it to offer
+# the declared ingress quota's load to the same core; SO-03 itself passes none.
+DuringCore = Callable[[Path, Path], ContextManager[Any]]
+
+
+def _run_core(core: Path, work: Path, socket_path: Path, samples: int, take, info: Dict[str, Any], during_core: Optional[DuringCore] = None) -> List[Dict[str, Any]]:  # type: ignore[no-untyped-def]
     rows: List[Dict[str, Any]] = []
     eve = work / "eve.json"
     eve.write_text("", encoding="utf-8")
@@ -478,8 +485,9 @@ def _run_core(core: Path, work: Path, socket_path: Path, samples: int, take, inf
                 lambda: "azazel-edge-core started" in stderr_path.read_text(encoding="utf-8", errors="replace"), START_WAIT_S
             ) and proc.poll() is None
             if info["core_started"]:
-                for i in range(int(samples)):
-                    rows.append(take(i, eve))
+                with during_core(work, eve) if during_core is not None else nullcontext():
+                    for i in range(int(samples)):
+                        rows.append(take(i, eve))
         finally:
             info["core_exited_before_harness_stopped_it"] = proc.poll()
             proc.terminate()
@@ -494,7 +502,10 @@ def _run_core(core: Path, work: Path, socket_path: Path, samples: int, take, inf
     return rows
 
 
-def _measure(core: Path, samples: int, rng: random.Random, synced: List[tuple], work: Path, info: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _measure(
+    core: Path, samples: int, rng: random.Random, synced: List[tuple], work: Path, info: Dict[str, Any],
+    during_core: Optional[DuringCore] = None,
+) -> List[Dict[str, Any]]:
     """Start the agent service and the core, take the samples, stop both."""
 
     from azazel_edge.audit import P0AuditLogger
@@ -536,7 +547,7 @@ def _measure(core: Path, samples: int, rng: random.Random, synced: List[tuple], 
             def take(i: int, eve: Path) -> Dict[str, Any]:
                 return _sample(i, rng, eve, chain_path, queue_path, synced, relayed, relayed_cv)
 
-            rows = _run_core(core, work, socket_path, samples, take, info)
+            rows = _run_core(core, work, socket_path, samples, take, info, during_core)
         finally:
             relay = agent.CORE_P0_RELAY
             recorder = agent.CORE_RECORDER
@@ -559,7 +570,10 @@ def _measure(core: Path, samples: int, rng: random.Random, synced: List[tuple], 
     return rows
 
 
-def run(*, core_bin: Optional[Path] = None, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None) -> Dict[str, Any]:
+def run(
+    *, core_bin: Optional[Path] = None, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None,
+    during_core: Optional[DuringCore] = None,
+) -> Dict[str, Any]:
     from azazel_edge.notify.p0_alert import P0_RULE, QUEUE_SCHEMA
 
     spec = spec_for("SO-03", "decision_durable_to_alert_enqueued")
@@ -572,7 +586,7 @@ def run(*, core_bin: Optional[Path] = None, samples: int = REQUIRED_SAMPLES, see
     info: Dict[str, Any] = {}
     if version is not None:
         with tempfile.TemporaryDirectory(prefix="so03-") as tmp, _watch_fsync() as synced:
-            rows = _measure(core, samples, rng, synced, Path(tmp), info)
+            rows = _measure(core, samples, rng, synced, Path(tmp), info, during_core)
     try:
         full_queue = _full_queue_enqueue_latency()
     except Exception as exc:  # diagnostic only; never part of the verdict
