@@ -254,8 +254,8 @@ does not rename them by accident, and so each gets its #379 term.
 
 ## 6. The #515 finding: `shield` from absence, shown as green
 
-PR #515 (SENTINEL i18n/a11y/JS tests, display only; open at the time of
-writing) found, with its JS harness, that SENTINEL shows green or invented
+PR #515 (SENTINEL i18n/a11y/JS tests, display only; merged after this
+inventory was taken at `1cefe66`, so the line numbers above predate it) found, with its JS harness, that SENTINEL shows green or invented
 values when data is missing, and changed `sentinel.js` so that an absent
 mode is `UNKNOWN` (L27, L28, L30). It also found why that is not enough:
 
