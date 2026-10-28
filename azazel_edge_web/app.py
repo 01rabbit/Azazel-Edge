@@ -3473,9 +3473,35 @@ def _dashboard_health_payload(state: Dict[str, Any], metrics: Dict[str, Any], ll
             "ping": ping,
         },
         "ai_governance": ai_governance,
+        "ingress_shed": _dashboard_ingress_shed(metrics),
     }
     _record_dashboard_trend_point(state, metrics, payload, now_epoch=now_epoch)
     return payload
+
+
+_INGRESS_SHED_SHOWN = (
+    "shed_total", "alerts_shed", "admitted", "alerts_admitted", "examined", "polls",
+    "oversized_lines_skipped", "unread_bytes_lost", "cumulative_shed_total",
+)
+
+
+def _dashboard_ingress_shed(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    """The core's last ``ingress_shed`` summary as the AI agent kept it
+    (Edge#414 SO-11). Read-only counts for display; nothing reads it back as
+    a health gate, a decision or an SO-11 verdict. ``available`` is false
+    until a summary has arrived."""
+    summary = metrics.get("core_ingress_shed")
+    if not isinstance(summary, dict):
+        return {"available": False}
+    out: Dict[str, Any] = {"available": True}
+    for key in _INGRESS_SHED_SHOWN:
+        out[key] = _as_int(summary.get(key), 0)
+    for key in ("shed_by_type", "shed_by_reason"):
+        value = summary.get(key)
+        out[key] = {str(k): _as_int(v, 0) for k, v in value.items()} if isinstance(value, dict) else {}
+    out["interval_end"] = str(summary.get("interval_end") or "")
+    out["emitted_at"] = _iso_from_epoch(summary.get("emitted_epoch"))
+    return out
 
 
 def _dashboard_ai_governance_payload(metrics: Dict[str, Any], *, now_epoch: float | None = None) -> Dict[str, Any]:

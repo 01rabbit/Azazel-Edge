@@ -1016,6 +1016,33 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("manual_route", payload["ai_governance"]["rates"])
         self.assertTrue(webapp.DASHBOARD_TRENDS_PATH.exists())
 
+    def test_dashboard_health_shows_the_core_ingress_shed_summary_read_only(self) -> None:
+        # Edge#414 SO-11: no summary yet reads as not available, not as zero.
+        payload = self.client.get("/api/dashboard/health").get_json()
+        self.assertEqual(payload["ingress_shed"], {"available": False})
+        metrics = json.loads(webapp.AI_METRICS_PATH.read_text(encoding="utf-8"))
+        metrics["core_ingress_shed"] = {
+            "schema": "azazel-edge/ingress-shed/v1", "emitted_epoch": 1790000000.5, "interval_end": "shutdown",
+            "polls": 3, "shed_total": 50, "alerts_shed": 0, "admitted": 6, "alerts_admitted": 0, "examined": 56,
+            "oversized_lines_skipped": 0, "unread_bytes_lost": 0, "cumulative_shed_total": 444,
+            "shed_by_type": {"flow": 50, "dns": 0, "stats": 0, "other": 0, "unparseable": 0},
+            "shed_by_reason": {"non_alert_rate": 50, "backlog": 0},
+        }
+        webapp.AI_METRICS_PATH.write_text(json.dumps(metrics), encoding="utf-8")
+        before = self.client.get("/api/dashboard/health").get_json()
+        shown = before["ingress_shed"]
+        self.assertTrue(shown["available"])
+        self.assertEqual(shown["shed_total"], 50)
+        self.assertEqual(shown["cumulative_shed_total"], 444)
+        self.assertEqual(shown["alerts_shed"], 0)
+        self.assertEqual(shown["interval_end"], "shutdown")
+        self.assertEqual(shown["shed_by_type"]["flow"], 50)
+        self.assertEqual(shown["shed_by_reason"], {"non_alert_rate": 50, "backlog": 0})
+        self.assertTrue(shown["emitted_at"])
+        # Display only: nothing else in the health payload moves with it.
+        for key in ("ok", "stale_flags", "queue", "llm", "policy_mode", "last_error"):
+            self.assertEqual(before[key], payload[key], key)
+
     def test_dashboard_trends_endpoint_contract(self) -> None:
         self.client.get("/api/dashboard/health")
         self.client.get("/api/dashboard/health")

@@ -511,7 +511,7 @@ def agent_paths(monkeypatch):
     answered = []
     monkeypatch.setattr(agent_mod, "_handle_manual_query_request",
                         lambda req: answered.append(req) or {"ok": True, "action": "manual_query", "answer": "x"})
-    for name in ("_handle_event", "_record_forward_stats", "_handle_request_line"):
+    for name in ("_handle_event", "_record_forward_stats", "_record_ingress_shed", "_handle_request_line"):
         monkeypatch.setattr(agent_mod, name, lambda *a, **k: pytest.fail("reached a non-query path"))
     return answered
 
@@ -535,6 +535,7 @@ def test_the_query_socket_refuses_other_peers(monkeypatch, web_account, agent_pa
     json.loads((ROOT / "tests" / "fixtures" / "rust_core_event_v1.json").read_text(encoding="utf-8")),
     {"schema": "azazel-edge/forward-stats/v1", "dropped": 0, "failed": 0, "sent": 1, "since": 0},
     {"action": "manual_query", "schema": "azazel-edge/forward-stats/v1"},
+    {"schema": "azazel-edge/ingress-shed/v1", "shed_total": 1, "interval_end": "shutdown"},
     {"action": "MANUAL_QUERY"},
     {"action": "refresh"},
     ["manual_query"],

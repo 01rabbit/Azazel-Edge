@@ -2520,6 +2520,68 @@ def _record_forward_stats(payload: Dict[str, Any]) -> None:
     _note_core_forward_loss(payload["dropped"], payload["failed"], payload["since"])
 
 
+INGRESS_SHED_SCHEMA = "azazel-edge/ingress-shed/v1"
+INGRESS_SHED_METRIC = "core_ingress_shed"
+_INGRESS_SHED_COUNTS = (
+    "polls", "shed_total", "alerts_shed", "admitted", "alerts_admitted", "examined",
+    "max_backlog_bytes", "max_shed_level", "oversized_lines_skipped", "oversized_possible_alerts",
+    "truncation_resets", "file_replacements", "unread_bytes_lost",
+    "cumulative_shed_total", "cumulative_oversized_lines_skipped", "cumulative_resets",
+)
+_INGRESS_SHED_CLASSES = ("flow", "dns", "stats", "other", "unparseable")
+_INGRESS_SHED_REASONS = ("non_alert_rate", "backlog")
+_INGRESS_SHED_INTERVAL_ENDS = ("audit_interval", "shutdown")
+
+
+def _count(value: Any) -> bool:
+    return type(value) is int and 0 <= value < 2**63
+
+
+def _count_map(value: Any, keys: tuple[str, ...]) -> Dict[str, int] | None:
+    if not isinstance(value, dict) or set(value) != set(keys) or not all(_count(value[k]) for k in keys):
+        return None
+    return {k: value[k] for k in keys}
+
+
+def _record_ingress_shed(payload: Dict[str, Any]) -> None:
+    """Keep the core's last ``ingress_shed`` summary (Edge#414 SO-11) as a metric.
+
+    Read-only: it is counted and shown, never an event, an advisory input or
+    a decision. Only the counts, the interval end and the emit time are kept
+    (the summary carries no address or id; nothing else is copied). A payload
+    that does not fit is ignored, and so is one older than the summary
+    already kept (the shutdown summary can reach the socket after a queued
+    one).
+    """
+    counts = {k: payload.get(k) for k in _INGRESS_SHED_COUNTS}
+    if not all(_count(v) for v in counts.values()):
+        return
+    by_type = _count_map(payload.get("shed_by_type"), _INGRESS_SHED_CLASSES)
+    by_reason = _count_map(payload.get("shed_by_reason"), _INGRESS_SHED_REASONS)
+    emitted = payload.get("emitted_epoch")
+    interval_end = payload.get("interval_end")
+    if by_type is None or by_reason is None or interval_end not in _INGRESS_SHED_INTERVAL_ENDS:
+        return
+    if type(emitted) not in (int, float) or not (0 <= emitted < 2**63):
+        return
+    with METRICS_LOCK:
+        kept = METRICS.get(INGRESS_SHED_METRIC)
+        if isinstance(kept, dict) and float(kept.get("emitted_epoch") or 0) > float(emitted):
+            return
+    summary: Dict[str, Any] = {
+        "schema": INGRESS_SHED_SCHEMA,
+        "emitted_epoch": float(emitted),
+        "interval_end": interval_end,
+        **counts,
+        "shed_by_type": by_type,
+        "shed_by_reason": by_reason,
+        "received_ts": time.time(),
+    }
+    _metrics_update(**{INGRESS_SHED_METRIC: summary})
+    with IO_LOCK:
+        _persist_metrics()
+
+
 def _handle_request_line(raw: str) -> Dict[str, Any] | None:
     text = raw.strip()
     if not text:
@@ -2533,6 +2595,9 @@ def _handle_request_line(raw: str) -> Dict[str, Any] | None:
 
     if "schema" in payload and payload.get("schema") == FORWARD_STATS_SCHEMA:
         _record_forward_stats(payload)
+        return None
+    if "schema" in payload and payload.get("schema") == INGRESS_SHED_SCHEMA:
+        _record_ingress_shed(payload)
         return None
 
     action = str(payload.get("action") or "").strip().lower()

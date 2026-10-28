@@ -26,7 +26,9 @@
 //!   buffered whole.
 //! * **Never silent.** Shed lines are counted by class and by reason and leave
 //!   the Core as at most one `ingress_shed` summary per audit interval, with
-//!   cumulative totals. A backlog past `alert_backlog_bound_bytes` is recorded
+//!   cumulative totals. When the process stops, whatever the last (shorter)
+//!   interval holds is written once more in the same shape, marked
+//!   `interval_end: "shutdown"`, and never again. A backlog past `alert_backlog_bound_bytes` is recorded
 //!   as `ingress_alert_backlog`. A truncated or replaced EVE file that still
 //!   held unread bytes is counted.
 //!
@@ -263,6 +265,8 @@ pub struct IngressReader {
     cumulative_oversized: u64,
     cumulative_alert_backlog_polls: u64,
     cumulative_resets: u64,
+    /// The last interval was written at shutdown; nothing more is emitted.
+    shutdown_flushed: bool,
 }
 
 const ALERT_MARKER: &[u8] = b"\"event_type\":\"alert\"";
@@ -288,6 +292,7 @@ impl IngressReader {
             cumulative_oversized: 0,
             cumulative_alert_backlog_polls: 0,
             cumulative_resets: 0,
+            shutdown_flushed: false,
         }
     }
 
@@ -503,8 +508,32 @@ impl IngressReader {
     /// `ingress_alert_backlog` per audit interval, each only when there is
     /// something to report. Counts not yet reported carry over to the next.
     pub fn audit_records(&mut self, now: Instant, now_epoch: f64) -> Vec<Value> {
+        if self.shutdown_flushed {
+            return Vec::new();
+        }
+        self.summaries(now, now_epoch, false)
+    }
+
+    /// The summaries of the last interval, written once when the process
+    /// stops (Edge#414 SO-11): whatever is pending is emitted now, without
+    /// waiting for the audit interval, in the same shape with `interval_end`
+    /// `"shutdown"`. Each kind is emitted only when there is something to
+    /// report, as on every interval. A second call, and any later
+    /// `audit_records`, returns nothing, so the last interval is never
+    /// written twice. It counts and reports only; nothing it does changes
+    /// what was read, shed or decided.
+    pub fn shutdown_records(&mut self, now: Instant, now_epoch: f64) -> Vec<Value> {
+        if self.shutdown_flushed {
+            return Vec::new();
+        }
+        self.shutdown_flushed = true;
+        self.summaries(now, now_epoch, true)
+    }
+
+    fn summaries(&mut self, now: Instant, now_epoch: f64, at_shutdown: bool) -> Vec<Value> {
+        let interval_end = if at_shutdown { "shutdown" } else { "audit_interval" };
         let mut out = Vec::new();
-        if self.pending.shed_side_nonzero() && self.interval_elapsed(self.last_shed_emit, now) {
+        if self.pending.shed_side_nonzero() && (at_shutdown || self.interval_elapsed(self.last_shed_emit, now)) {
             let mut by_type = serde_json::Map::new();
             let mut cumulative = serde_json::Map::new();
             for c in SHED_CLASSES {
@@ -518,6 +547,7 @@ impl IngressReader {
                 "ingress_shed": {
                     "schema": INGRESS_SHED_SCHEMA,
                     "emitted_epoch": now_epoch,
+                    "interval_end": interval_end,
                     "polls": p.polls,
                     "shed_by_type": by_type,
                     "shed_total": p.shed.iter().sum::<u64>(),
@@ -551,7 +581,7 @@ impl IngressReader {
             self.pending.alert_backlog_max = keep.1;
             self.pending.alert_backlog_alerts_admitted = keep.2;
         }
-        if self.pending.alert_backlog_polls > 0 && self.interval_elapsed(self.last_alert_emit, now) {
+        if self.pending.alert_backlog_polls > 0 && (at_shutdown || self.interval_elapsed(self.last_alert_emit, now)) {
             let p = &self.pending;
             out.push(json!({
                 "source": INGRESS_SOURCE,
@@ -559,6 +589,7 @@ impl IngressReader {
                 "ingress_alert_backlog": {
                     "schema": INGRESS_ALERT_BACKLOG_SCHEMA,
                     "emitted_epoch": now_epoch,
+                    "interval_end": interval_end,
                     "polls_over_bound": p.alert_backlog_polls,
                     "max_backlog_bytes": p.alert_backlog_max,
                     "alert_backlog_bound_bytes": self.limits.alert_backlog_bound_bytes,
@@ -1113,6 +1144,129 @@ mod tests {
         let rep = r.poll(&path, Instant::now(), |_| {});
         assert_eq!(rep.shed_total(), 0);
         assert!(r.audit_records(Instant::now(), 1.0).is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    /// The keys every `ingress_shed` summary carries; a shutdown summary has
+    /// the same ones.
+    fn shed_keys(rec: &Value) -> Vec<String> {
+        let mut keys: Vec<String> = rec["ingress_shed"].as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn shutdown_writes_the_rest_of_an_interval_once_in_the_same_shape() {
+        let path = temp_path("shutdown");
+        write_lines(&path, &mixed(2000));
+        let mut r = IngressReader::new(0, IngressLimits { examine_per_poll: 100, backlog_bound_bytes: 1, ..open_limits() });
+        let t0 = Instant::now();
+        let mut shed = r.poll(&path, t0, |_| {}).shed_total();
+        let first = r.audit_records(t0, 1.0);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0]["ingress_shed"]["interval_end"], "audit_interval");
+        // More is shed within the same interval: not due yet.
+        let mid = t0 + Duration::from_millis(300);
+        let rest = r.poll(&path, mid, |_| {}).shed_total();
+        assert!(rest > 0);
+        shed += rest;
+        assert!(r.audit_records(mid, 1.3).is_empty());
+        // The process stops 0.4 s into the interval.
+        let stop = t0 + Duration::from_millis(400);
+        let last = r.shutdown_records(stop, 1.4);
+        assert_eq!(last.len(), 1, "one summary for the last interval");
+        let rec = &last[0]["ingress_shed"];
+        assert_eq!(rec["schema"], INGRESS_SHED_SCHEMA);
+        assert_eq!(rec["interval_end"], "shutdown");
+        assert_eq!(rec["emitted_epoch"], 1.4);
+        assert_eq!(rec["shed_total"].as_u64().unwrap(), rest);
+        assert_eq!(rec["cumulative_shed_total"].as_u64().unwrap(), shed);
+        assert_eq!(rec["alerts_shed"], 0);
+        assert_eq!(rec["quota"], first[0]["ingress_shed"]["quota"]);
+        assert_eq!(shed_keys(&last[0]), shed_keys(&first[0]));
+        assert_eq!(last[0]["source"], INGRESS_SOURCE);
+        assert_eq!(last[0]["pipeline"], INGRESS_PIPELINE);
+        // Never twice: not by a second flush, not by a later interval.
+        assert!(r.shutdown_records(stop, 1.5).is_empty());
+        assert!(r.audit_records(stop + Duration::from_secs(5), 6.4).is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn nothing_read_after_the_shutdown_flush_is_ever_summarised() {
+        // The flag, not an empty pending, is what keeps the last interval
+        // single: counts that arrive after the flush (a poll the loop had
+        // already begun) are not written as a second shutdown summary or as
+        // a later interval.
+        let path = temp_path("after-shutdown");
+        write_lines(&path, &mixed(500));
+        let mut r = IngressReader::new(0, IngressLimits { backlog_bound_bytes: 1, ..open_limits() });
+        let t0 = Instant::now();
+        assert!(r.poll(&path, t0, |_| {}).shed_total() > 0);
+        assert_eq!(r.shutdown_records(t0, 1.0).len(), 1);
+        write_lines(&path, &mixed(500));
+        assert!(r.poll(&path, t0 + Duration::from_millis(10), |_| {}).shed_total() > 0);
+        assert!(r.shutdown_records(t0 + Duration::from_millis(20), 1.02).is_empty());
+        assert!(r.audit_records(t0 + Duration::from_secs(5), 6.0).is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn shutdown_in_the_first_interval_writes_what_was_never_summarised() {
+        let path = temp_path("shutdown-first");
+        write_lines(&path, &mixed(500));
+        let mut r = IngressReader::new(0, IngressLimits { backlog_bound_bytes: 1, ..open_limits() });
+        let t0 = Instant::now();
+        let shed = r.poll(&path, t0, |_| {}).shed_total();
+        assert!(shed > 0);
+        // Stopped before any summary was due.
+        let last = r.shutdown_records(t0 + Duration::from_millis(50), 2.0);
+        assert_eq!(last.len(), 1);
+        assert_eq!(last[0]["ingress_shed"]["shed_total"].as_u64().unwrap(), shed);
+        assert_eq!(last[0]["ingress_shed"]["cumulative_shed_total"].as_u64().unwrap(), shed);
+        assert_eq!(last[0]["ingress_shed"]["polls"], 1);
+        assert!(r.shutdown_records(t0 + Duration::from_millis(60), 2.1).is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn shutdown_with_nothing_pending_writes_nothing() {
+        // Nothing shed at all.
+        let path = temp_path("shutdown-quiet");
+        write_lines(&path, &mixed(100));
+        let mut r = IngressReader::new(0, IngressLimits::DECLARED);
+        let t0 = Instant::now();
+        assert_eq!(r.poll(&path, t0, |_| {}).shed_total(), 0);
+        assert!(r.shutdown_records(t0, 1.0).is_empty());
+        let _ = fs::remove_file(&path);
+        // Shedding already summarised, and an empty interval since.
+        let path = temp_path("shutdown-empty");
+        write_lines(&path, &mixed(500));
+        let mut r = IngressReader::new(0, IngressLimits { backlog_bound_bytes: 1, ..open_limits() });
+        assert!(r.poll(&path, t0, |_| {}).shed_total() > 0);
+        assert_eq!(r.audit_records(t0, 1.0).len(), 1);
+        r.poll(&path, t0 + Duration::from_millis(200), |_| {});
+        assert!(r.shutdown_records(t0 + Duration::from_millis(300), 1.3).is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn shutdown_also_writes_a_pending_alert_backlog_summary() {
+        let path = temp_path("shutdown-alerts");
+        write_lines(&path, &(0..300).map(|n| line("alert", n)).collect::<Vec<_>>());
+        let mut r = IngressReader::new(0, IngressLimits { alerts_per_poll: 100, alert_backlog_bound_bytes: 10, ..open_limits() });
+        let t0 = Instant::now();
+        r.poll(&path, t0, |_| {});
+        assert_eq!(r.audit_records(t0, 1.0).len(), 1);
+        r.poll(&path, t0 + Duration::from_millis(100), |_| {});
+        assert!(r.audit_records(t0 + Duration::from_millis(100), 1.1).is_empty());
+        let last = r.shutdown_records(t0 + Duration::from_millis(150), 1.15);
+        assert_eq!(last.len(), 1);
+        let rec = &last[0]["ingress_alert_backlog"];
+        assert_eq!(rec["interval_end"], "shutdown");
+        assert_eq!(rec["alerts_admitted"], 100);
+        assert_eq!(rec["alerts_shed"], 0);
+        assert!(r.shutdown_records(t0 + Duration::from_millis(160), 1.16).is_empty());
         let _ = fs::remove_file(&path);
     }
 

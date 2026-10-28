@@ -142,3 +142,19 @@ def test_probe_lines_are_padded_and_typed():
     assert alert["event_type"] == "alert" and "alert" in alert
     assert flow["event_type"] == "flow" and "alert" not in flow
     assert abs(len(w._line(2, "alert")) - probe.LINE_BYTES) < 50
+
+
+def test_the_rate_bound_leaves_out_only_the_shutdown_summary():
+    # Edge#414 SO-11: the summary written at stop closes a shorter interval on
+    # purpose; every other summary still counts for the rate bound.
+    periodic = [{"emitted_epoch": 100.0, "interval_end": "audit_interval"},
+                {"emitted_epoch": 101.2, "interval_end": "audit_interval"}]
+    at_stop = {"emitted_epoch": 101.5, "interval_end": "shutdown"}
+    assert probe.rate_bound_gaps(periodic + [at_stop]) == pytest.approx([1.2])
+    # A summary without the field (an older core) is kept, so a short gap
+    # between two of them still fails the bound.
+    older = [{"emitted_epoch": 100.0}, {"emitted_epoch": 100.3}]
+    assert probe.rate_bound_gaps(older) == pytest.approx([0.3])
+    # A periodic summary too close to the last one is not hidden.
+    assert probe.rate_bound_gaps(periodic + [{"emitted_epoch": 101.5, "interval_end": "audit_interval"}]) == pytest.approx([1.2, 0.3])
+    assert probe.rate_bound_gaps([at_stop]) == []

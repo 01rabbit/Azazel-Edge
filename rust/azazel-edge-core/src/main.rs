@@ -938,6 +938,9 @@ enum Forward {
     /// Report the forward counts. They are read when the forwarder reaches
     /// this marker, so the report includes every line queued before it.
     Stats,
+    /// Answered when the forwarder reaches it: every line queued before it
+    /// has been delivered or counted as failed. Used once, at shutdown.
+    Drained(SyncSender<()>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1080,6 +1083,9 @@ fn forward_ai_lines(socket_path: &str, receiver: Receiver<Forward>) {
                     }
                 }
             }
+            Forward::Drained(ack) => {
+                let _ = ack.try_send(());
+            }
             Forward::Stats => {
                 FORWARD_STATS_QUEUED.store(false, Ordering::Release);
                 let counts = forward_counts();
@@ -1180,8 +1186,101 @@ fn ingress_audit_log_path(cfg: &Config) -> String {
 /// the console copy goes to stdout, or to stderr under
 /// `AZAZEL_EVENT_STDOUT=off` because that setting silences per-event output,
 /// not audit. If the file cannot be written the failure and the record both
-/// go to stderr.
+/// go to stderr. With the AI forward on, the `ingress_shed` part is also
+/// queued for the AI socket (see [`ingress_forward_line`]).
 fn emit_ingress_record(cfg: &Config, record: &Value) {
+    write_ingress_record(cfg, record);
+    if cfg.forward_ai {
+        if let Some(line) = ingress_forward_line(record) {
+            queue_ai_line(&cfg.ai_socket_path, line);
+        }
+    }
+}
+
+/// What the AI socket receives of an ingress summary (Edge#414 SO-11): the
+/// `ingress_shed` object as written to the audit file, on one line. Its
+/// `schema` (`azazel-edge/ingress-shed/v1`) lets the agent keep it as a
+/// read-only metric beside the forward counts; it holds counts, the interval
+/// end and the compiled quota, no address or other identifier. An
+/// `ingress_alert_backlog` summary is not forwarded.
+fn ingress_forward_line(record: &Value) -> Option<String> {
+    match record.get("ingress_shed") {
+        Some(inner) if inner.is_object() => Some(format!("{}\n", inner)),
+        _ => None,
+    }
+}
+
+/// The longest the main loop sleeps between looks at the stop flag. The
+/// poll interval (`AZAZEL_EVE_POLL_MS`, unbounded) is kept as it is; it is
+/// only slept in slices, so a stop waits at most about one slice for the
+/// sleep, however long the interval.
+const STOP_CHECK_SLICE: Duration = Duration::from_millis(50);
+
+/// Sleep `total` in slices of at most `slice`, returning early once
+/// `stopped` says so. Returns whether it stopped early. A signal does not
+/// interrupt `thread::sleep`, so this is how a stop is noticed in time.
+fn sleep_unless_stopped(total: Duration, slice: Duration, stopped: &dyn Fn() -> bool) -> bool {
+    let end = Instant::now() + total;
+    loop {
+        if stopped() {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= end {
+            return false;
+        }
+        thread::sleep((end - now).min(slice));
+    }
+}
+
+/// How long shutdown waits for the forwarder to hand over the last summary.
+/// A receiver that is absent or wedged costs the stop this long, not more.
+const SHUTDOWN_FORWARD_WAIT: Duration = Duration::from_secs(2);
+
+/// Queue one already-serialised line for the AI socket; a full queue drops
+/// and counts it, as for events.
+fn queue_ai_line(socket_path: &str, line: String) {
+    match ai_forwarder(socket_path).try_send(Forward::Line(line)) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+            AI_FORWARD_DROPPED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Wait, at most `wait`, until the forwarder has taken every line queued so
+/// far. Says whether it did.
+///
+/// A full queue (the receiver is slow or absent and 1024 lines wait) is
+/// refused at once and returns false without waiting: the stop is not held
+/// up. The shutdown summary is then not delivered to the AI socket -- if it
+/// could not be queued it was counted in `AI_FORWARD_DROPPED`, otherwise it
+/// may still be in the queue when the process exits -- but it is always in
+/// `ingress-audit.jsonl` and on the console, which are written first.
+fn drain_ai_forward(sender: &SyncSender<Forward>, wait: Duration) -> bool {
+    let (ack, done) = sync_channel::<()>(1);
+    if sender.try_send(Forward::Drained(ack)).is_err() {
+        return false;
+    }
+    done.recv_timeout(wait).is_ok()
+}
+
+/// The process is stopping (SIGTERM from systemd, or SIGINT): write the
+/// ingress summaries of the last interval, which is shorter than the audit
+/// interval and would otherwise be lost (Edge#414 SO-11). They go to the same
+/// audit file and console as every other summary, once: the reader refuses a
+/// second flush. `forward` receives each one for the AI socket. Returns how
+/// many were written. Nothing here reads, sheds or decides.
+fn shutdown_ingress(cfg: &Config, ingress: &mut IngressReader, forward: &mut dyn FnMut(&Value)) -> usize {
+    let records = ingress.shutdown_records(Instant::now(), now_epoch());
+    for record in &records {
+        write_ingress_record(cfg, record);
+        forward(record);
+    }
+    records.len()
+}
+
+fn write_ingress_record(cfg: &Config, record: &Value) {
     let path = ingress_audit_log_path(cfg);
     if let Err(error) = append_audit_record(Path::new(&path), record, IngressLimits::DECLARED.audit_log_cap_bytes) {
         eprintln!("ingress audit write failed ({}): {}: {}", path, error, record);
@@ -1340,7 +1439,8 @@ fn main() {
     process_start();
     let mut reporter = ForwardReporter::new();
     let mut ingress = IngressReader::new(offset, IngressLimits::DECLARED);
-    loop {
+    stop_signal::install();
+    while !stop_signal::requested() {
         let report = poll_iteration(&cfg, &mut ingress, &mut |c, _| process_release_events(c));
         if cfg.forward_ai {
             reporter.tick(Instant::now(), || queue_forward_stats(&cfg.ai_socket_path));
@@ -1349,8 +1449,54 @@ fn main() {
         // next one follows at once, so alerts are read at the Core's capacity
         // and still with a release sweep between every bounded poll.
         if !report.budget_exhausted() {
-            thread::sleep(Duration::from_millis(cfg.poll_ms));
+            sleep_unless_stopped(Duration::from_millis(cfg.poll_ms), STOP_CHECK_SLICE, &stop_signal::requested);
         }
+    }
+    let written = shutdown_ingress(&cfg, &mut ingress, &mut |record| {
+        if cfg.forward_ai {
+            if let Some(line) = ingress_forward_line(record) {
+                queue_ai_line(&cfg.ai_socket_path, line);
+            }
+        }
+    });
+    if cfg.forward_ai && written > 0 && !drain_ai_forward(ai_forwarder(&cfg.ai_socket_path), SHUTDOWN_FORWARD_WAIT) {
+        eprintln!("ingress summary at shutdown: the AI socket forward did not finish within {:?}", SHUTDOWN_FORWARD_WAIT);
+    }
+    eprintln!("azazel-edge-core stopping: {} ingress summary record(s) written for the last interval", written);
+}
+
+/// SIGTERM (systemd's stop) and SIGINT end the main loop after the current
+/// iteration, so the last interval's ingress summaries are written
+/// (Edge#414 SO-11). The handler only sets a flag. There is no other way to
+/// stop or skip anything: the flag is set by these signals alone.
+mod stop_signal {
+    use std::os::raw::c_int;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static STOP: AtomicBool = AtomicBool::new(false);
+
+    // The same on every Linux architecture this crate builds for and on macOS.
+    const SIGINT: c_int = 2;
+    const SIGTERM: c_int = 15;
+
+    extern "C" {
+        fn signal(signum: c_int, handler: extern "C" fn(c_int)) -> usize;
+    }
+
+    extern "C" fn on_stop(_signum: c_int) {
+        // An atomic store is async-signal-safe.
+        STOP.store(true, Ordering::SeqCst);
+    }
+
+    pub fn install() {
+        unsafe {
+            signal(SIGTERM, on_stop);
+            signal(SIGINT, on_stop);
+        }
+    }
+
+    pub fn requested() -> bool {
+        STOP.load(Ordering::SeqCst)
     }
 }
 
@@ -1781,6 +1927,169 @@ mod tests {
         let mut cfg = sample_cfg();
         cfg.normalized_log_path = "/var/log/azazel-edge/normalized-events.jsonl".to_string();
         assert_eq!(ingress_audit_log_path(&cfg), "/var/log/azazel-edge/ingress-audit.jsonl");
+    }
+
+    fn shed_flood(dir: &std::path::Path) -> (Config, IngressReader) {
+        let _ = fs::create_dir_all(dir);
+        let eve = dir.join("eve.json");
+        let mut body = String::new();
+        for n in 0..400 {
+            body.push_str(&format!("{{\"event_type\":\"flow\",\"n\":{}}}\n", n));
+        }
+        fs::write(&eve, &body).unwrap();
+        let mut cfg = sample_cfg();
+        cfg.eve_path = eve.to_string_lossy().into_owned();
+        cfg.normalized_log_path = dir.join("normalized-events.jsonl").to_string_lossy().into_owned();
+        cfg.event_stdout = StdoutMode::Off;
+        let limits = IngressLimits { non_alert_burst: 10, non_alert_per_sec: 1, ..IngressLimits::DECLARED };
+        (cfg, IngressReader::new(0, limits))
+    }
+
+    fn audit_lines(cfg: &Config) -> Vec<Value> {
+        fs::read_to_string(ingress_audit_log_path(cfg))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn shutdown_writes_the_last_interval_to_the_audit_file_once() {
+        let dir = std::env::temp_dir().join(format!("azazel-shutdown-flush-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let (cfg, mut ingress) = shed_flood(&dir);
+        // The first iteration sheds and writes its summary at once.
+        poll_iteration(&cfg, &mut ingress, &mut |_, _| {});
+        assert_eq!(audit_lines(&cfg).len(), 1);
+        // More arrives and is shed within the same interval: not written yet.
+        let mut more = String::new();
+        for n in 0..50 {
+            more.push_str(&format!("{{\"event_type\":\"flow\",\"n\":{}}}\n", 1000 + n));
+        }
+        OpenOptions::new().append(true).open(&cfg.eve_path).unwrap().write_all(more.as_bytes()).unwrap();
+        poll_iteration(&cfg, &mut ingress, &mut |_, _| {});
+        assert_eq!(audit_lines(&cfg).len(), 1);
+        let mut forwarded = Vec::new();
+        let written = shutdown_ingress(&cfg, &mut ingress, &mut |r| forwarded.push(r.clone()));
+        assert_eq!(written, 1);
+        let lines = audit_lines(&cfg);
+        assert_eq!(lines.len(), 2);
+        let last = &lines[1]["ingress_shed"];
+        assert_eq!(last["interval_end"], "shutdown");
+        assert_eq!(last["shed_total"], 50);
+        assert_eq!(last["cumulative_shed_total"].as_u64().unwrap(), lines[0]["ingress_shed"]["shed_total"].as_u64().unwrap() + 50);
+        assert_eq!(forwarded, vec![lines[1].clone()]);
+        // A second stop writes nothing.
+        assert_eq!(shutdown_ingress(&cfg, &mut ingress, &mut |_| panic!("forwarded twice")), 0);
+        assert_eq!(audit_lines(&cfg).len(), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shutdown_with_an_empty_last_interval_writes_nothing() {
+        let dir = std::env::temp_dir().join(format!("azazel-shutdown-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let (cfg, mut ingress) = shed_flood(&dir);
+        poll_iteration(&cfg, &mut ingress, &mut |_, _| {});
+        poll_iteration(&cfg, &mut ingress, &mut |_, _| {});
+        assert_eq!(audit_lines(&cfg).len(), 1);
+        assert_eq!(shutdown_ingress(&cfg, &mut ingress, &mut |_| panic!("nothing to forward")), 0);
+        assert_eq!(audit_lines(&cfg).len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_ai_socket_gets_the_ingress_shed_object_and_counts_only() {
+        let record = json!({
+            "source": "core_ingress",
+            "pipeline": "rust_ingress_v1",
+            "ingress_shed": {"schema": ingress::INGRESS_SHED_SCHEMA, "shed_total": 3, "interval_end": "shutdown"},
+        });
+        let line = ingress_forward_line(&record).expect("forwarded");
+        assert!(line.ends_with('\n') && !line.trim_end().contains('\n'));
+        let sent: Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(sent, record["ingress_shed"]);
+        // An alert backlog summary is not forwarded.
+        assert_eq!(ingress_forward_line(&json!({"ingress_alert_backlog": {"alerts_shed": 0}})), None);
+        // A real summary names no address, MAC or id: counts, bounds, epoch.
+        let dir = std::env::temp_dir().join(format!("azazel-shed-fields-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let (cfg, mut ingress) = shed_flood(&dir);
+        poll_iteration(&cfg, &mut ingress, &mut |_, _| {});
+        let lines = audit_lines(&cfg);
+        let inner = ingress_forward_line(&lines[0]).unwrap();
+        for word in ["ip", "mac", "addr", "host", "trace", "uuid", "_id\""] {
+            assert!(!inner.to_lowercase().contains(&format!("\"{}", word)), "{} in {}", word, inner);
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_shutdown_drain_answers_after_the_lines_queued_before_it() {
+        use std::io::Read;
+        use std::os::unix::net::UnixListener;
+        let _guard = forward_test_lock();
+        let dir = std::env::temp_dir().join(format!("az-edge-drain-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("intake.sock");
+        let _ = fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).expect("bind");
+        let (sender, receiver) = sync_channel::<Forward>(4);
+        let socket = path.to_string_lossy().to_string();
+        let forwarder = thread::spawn(move || forward_ai_lines(&socket, receiver));
+        sender.send(Forward::Line("{\"schema\":\"azazel-edge/ingress-shed/v1\"}\n".to_string())).unwrap();
+        let reader = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut line = String::new();
+            stream.read_to_string(&mut line).expect("read");
+            line
+        });
+        assert!(drain_ai_forward(&sender, Duration::from_secs(10)));
+        assert_eq!(reader.join().unwrap(), "{\"schema\":\"azazel-edge/ingress-shed/v1\"}\n");
+        drop(sender);
+        forwarder.join().unwrap();
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_long_poll_interval_is_slept_in_slices_and_a_stop_ends_it_within_one() {
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let setter = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        // A 60 s poll interval: the stop must not wait for it.
+        let stopped = sleep_unless_stopped(Duration::from_secs(60), STOP_CHECK_SLICE, &|| stop.load(Ordering::SeqCst));
+        let took = started.elapsed();
+        setter.join().unwrap();
+        assert!(stopped);
+        assert!(took >= Duration::from_millis(100), "returned before the stop: {:?}", took);
+        assert!(took < Duration::from_millis(100) + STOP_CHECK_SLICE * 6, "the stop waited {:?}", took);
+    }
+
+    #[test]
+    fn without_a_stop_the_poll_interval_is_slept_whole() {
+        let started = Instant::now();
+        assert!(!sleep_unless_stopped(Duration::from_millis(230), STOP_CHECK_SLICE, &|| false));
+        assert!(started.elapsed() >= Duration::from_millis(230));
+        // A stop already requested sleeps not at all.
+        let started = Instant::now();
+        assert!(sleep_unless_stopped(Duration::from_secs(60), STOP_CHECK_SLICE, &|| true));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn the_shutdown_drain_is_bounded_when_the_forwarder_never_answers() {
+        // Nothing takes from this queue: the drain gives up after its wait.
+        let (sender, _receiver) = sync_channel::<Forward>(1);
+        let started = Instant::now();
+        assert!(!drain_ai_forward(&sender, Duration::from_millis(200)));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // A full queue is refused at once.
+        let (full, _r) = sync_channel::<Forward>(0);
+        assert!(!drain_ai_forward(&full, Duration::from_secs(60)));
     }
 
     fn sample_cfg() -> Config {
