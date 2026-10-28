@@ -281,6 +281,17 @@
 
     /* Everything the status pane shows, derived from existing API payloads.
        input: { bundle, live, nowSec, skewSec, linkLost } */
+    /* Roving focus over the tab bar (WAI-ARIA tabs): Arrow keys wrap,
+       Home/End jump; -1 for keys that do not move (Edge#348). */
+    function rovingIndex(key, idx, count) {
+        if (!(count > 0) || idx < 0 || idx >= count) return -1;
+        if (key === 'ArrowRight' || key === 'ArrowDown') return (idx + 1) % count;
+        if (key === 'ArrowLeft' || key === 'ArrowUp') return (idx - 1 + count) % count;
+        if (key === 'Home') return 0;
+        if (key === 'End') return count - 1;
+        return -1;
+    }
+
     function deriveView(input) {
         input = input || {};
         var b = obj(input.bundle);
@@ -1384,6 +1395,19 @@
         document.querySelectorAll('.t-tab').forEach(function (b) {
             b.addEventListener('click', function () { selectTab(b.getAttribute('data-tab')); });
         });
+        // Inactive tabs have tabindex -1, so the arrow keys are how a keyboard
+        // reaches them (automatic activation, as a tap does).
+        var tabBar = document.querySelector('.t-tabs');
+        if (tabBar) {
+            tabBar.addEventListener('keydown', function (e) {
+                var tabs = Array.prototype.slice.call(document.querySelectorAll('.t-tab'));
+                var next = rovingIndex(e.key, tabs.indexOf(e.target), tabs.length);
+                if (next === -1) return;
+                e.preventDefault();
+                selectTab(tabs[next].getAttribute('data-tab'));
+                tabs[next].focus();
+            });
+        }
         $('alertPrev').addEventListener('click', function () { alertPage = Math.max(0, alertPage - 1); paintAlerts(currentView()); });
         $('alertNext').addEventListener('click', function () { alertPage += 1; paintAlerts(currentView()); });
         $('apPrev').addEventListener('click', function () { apPage = Math.max(0, apPage - 1); paintAps(); });
@@ -1477,6 +1501,7 @@
         streamWanted: streamWanted,
         nextStreamDelay: nextStreamDelay,
         deriveView: deriveView,
+        rovingIndex: rovingIndex,
         boot: boot
     };
 }));

@@ -43,7 +43,36 @@
         }
         return worst || 'is-unknown';
     }
+    /* ---- i18n: operator-facing sentences only (Edge#348) ---------------------
+       Reads the catalog index.html injects (window.AZAZEL_I18N, the current
+       language from py/azazel_edge/i18n.py). A missing key, or no catalog at
+       all (node tests, es/uk/tl), falls back to the English text given here.
+       Product terms and state words (OVERVIEW, SOC, VERIFIED, WATCH, …) are
+       not routed through tr() and stay fixed English in every language. */
+    function tr(key, fallback, vars) {
+        var cat = (typeof window !== 'undefined' && window.AZAZEL_I18N && typeof window.AZAZEL_I18N === 'object') ? window.AZAZEL_I18N : {};
+        var base = (typeof cat[key] === 'string' && cat[key]) ? cat[key] : (fallback || key);
+        return String(base).replace(/\{([a-zA-Z0-9_]+)\}/g, function (m, n) {
+            return (vars && Object.prototype.hasOwnProperty.call(vars, n)) ? String(vars[n]) : m;
+        });
+    }
+    // Roving-focus index for a tab/tier row: Arrow keys wrap, Home/End jump.
+    // Returns -1 for keys that do not move focus (unit-tested in node).
+    function rovingIndex(key, idx, count) {
+        if (!(count > 0) || idx < 0 || idx >= count) return -1;
+        if (key === 'ArrowRight' || key === 'ArrowDown') return (idx + 1) % count;
+        if (key === 'ArrowLeft' || key === 'ArrowUp') return (idx - 1 + count) % count;
+        if (key === 'Home') return 0;
+        if (key === 'End') return count - 1;
+        return -1;
+    }
     function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
+    // A real reading: a finite number, or a string that is one. '' / true /
+    // null are not readings (Number('') is 0 and Number(true) is 1).
+    function isNumeric(v) {
+        if (typeof v === 'number') return isFinite(v);
+        return typeof v === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(v);
+    }
     function upper(v, fallback) {
         var s = String(v == null ? '' : v).trim();
         return s ? s.toUpperCase() : (fallback || '—');
@@ -112,10 +141,27 @@
             var btn = document.querySelector('[data-sentinel-op="' + o + '"]');
             if (!btn) return;
             var active = o === op;
-            btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+            // SOC/NOC is a true tab pattern (tablist/tab/tabpanel in index.html).
+            btn.setAttribute('aria-selected', active ? 'true' : 'false');
             btn.classList.toggle('is-active', active);
+            btn.tabIndex = active ? 0 : -1;
         });
         updateEmptyNote('operations');
+    }
+
+    // Arrow/Home/End over a row of tab buttons; activates and focuses the new
+    // tab (automatic activation — every view is already rendered client side).
+    function wireTabKeys(container, buttons, activate) {
+        if (!container || !buttons.length) return;
+        container.addEventListener('keydown', function (ev) {
+            var idx = buttons.indexOf(ev.target);
+            for (var i = 0; idx === -1 && i < buttons.length; i++) { if (buttons[i].getAttribute('aria-selected') === 'true') idx = i; }
+            var next = rovingIndex(ev.key, idx, buttons.length);
+            if (next === -1) return;
+            ev.preventDefault();
+            activate(buttons[next]);
+            buttons[next].focus();
+        });
     }
 
     function wireNav() {
@@ -125,23 +171,22 @@
         document.querySelectorAll('[data-sentinel-op]').forEach(function (btn) {
             btn.addEventListener('click', function () { setOp(btn.getAttribute('data-sentinel-op')); });
         });
-        // Roving arrow-key navigation across the main tier tabs (WAI-ARIA tablist).
+        // Roving focus across the tier buttons (navigation with aria-current, not
+        // a tab pattern: each tier is a page-level view). Up/Down too, because
+        // the nav is a vertical sidebar on desktop.
         var nav = document.getElementById('sentinelTierNav');
         if (nav) {
             nav.addEventListener('keydown', function (ev) {
+                if (!ev.target || !ev.target.hasAttribute || !ev.target.hasAttribute('data-sentinel-tier')) return;
                 var active = body.getAttribute('data-tier-active') || 'overview';
-                var idx = TIERS.indexOf(active);
-                if (idx === -1) return;
-                var next;
-                if (ev.key === 'ArrowRight') next = (idx + 1) % TIERS.length;
-                else if (ev.key === 'ArrowLeft') next = (idx - 1 + TIERS.length) % TIERS.length;
-                else if (ev.key === 'Home') next = 0;
-                else if (ev.key === 'End') next = TIERS.length - 1;
-                else return;
+                var next = rovingIndex(ev.key, TIERS.indexOf(active), TIERS.length);
+                if (next === -1) return;
                 ev.preventDefault();
                 setTier(TIERS[next], { focus: true });
             });
         }
+        var opBtns = Array.prototype.slice.call(document.querySelectorAll('[data-sentinel-op]'));
+        wireTabKeys(document.getElementById('sentinelOpsSubnav'), opBtns, function (b) { setOp(b.getAttribute('data-sentinel-op')); });
         // Re-check the empty-tier note when app.js flips the audience mode.
         var obs = new MutationObserver(function () {
             updateEmptyNote(body.getAttribute('data-tier-active') || 'overview');
@@ -161,9 +206,33 @@
         if (m && meta != null) m.textContent = meta;
         el.classList.remove('is-ok', 'is-watch', 'is-critical', 'is-unknown');
         el.classList.add(tone || 'is-unknown');
+        // The stage tone is otherwise carried by color: name it in the
+        // group's accessible name too (state words stay fixed English).
+        var stage = String(el.getAttribute('data-sentinel-stage') || '').toUpperCase();
+        if (stage) el.setAttribute('aria-label', stage + ' (' + (TONE_WORD[tone] || 'UNKNOWN') + ')');
     }
 
     var TONE_WORD = { 'is-ok': 'OK', 'is-watch': 'WATCH', 'is-critical': 'CRITICAL', 'is-unknown': 'UNKNOWN' };
+
+    // Live region (Edge#348): announce a tier's state change once, politely.
+    // The first observation of each tier is silent (no announcement on load);
+    // an unchanged tone is silent, so a 4 s poll never chatters.
+    var announcedTone = {};
+    function toneChanges(dots) {
+        var changes = [];
+        TIERS.forEach(function (t) {
+            var tone = (dots || {})[t] || 'is-unknown';
+            var prev = announcedTone[t];
+            announcedTone[t] = tone;
+            if (prev !== undefined && prev !== tone) changes.push(t.toUpperCase() + ': ' + (TONE_WORD[tone] || 'UNKNOWN'));
+        });
+        return changes;
+    }
+    function announce(changes) {
+        if (!changes.length) return;
+        var live = document.getElementById('sentinelLiveRegion');
+        if (live) live.textContent = tr('sentinel.live_changed', 'Status changed: {changes}', { changes: changes.join(', ') });
+    }
 
     // State-transition cue: a single (non-repeating, reduced-motion-aware) highlight
     // when a tracked element's tone changes, so a NORMAL->WATCH->CRITICAL shift is
@@ -296,6 +365,7 @@
         setTierDot('operations', st.dots.operations);
         setTierDot('evidence', st.dots.evidence);
         setTierDot('system', st.dots.system);
+        announce(toneChanges(st.dots));
         updateEmptyNote(body.getAttribute('data-tier-active') || 'overview');
     }
 
@@ -361,7 +431,7 @@
             li.appendChild(a); li.appendChild(rr);
             ul.appendChild(li);
         });
-        if (!ul.children.length) fillLines(id, [], 'No stronger action was justified.');
+        if (!ul.children.length) fillLines(id, [], tr('sentinel.empty_rejected', 'No stronger action was justified.'));
     }
     function fmtClock(v) {
         if (v == null || v === '') return '—';
@@ -382,7 +452,7 @@
             li.appendChild(t); li.appendChild(l);
             ul.appendChild(li);
         });
-        if (!ul.children.length) fillLines(id, [], 'No recent evidence.');
+        if (!ul.children.length) fillLines(id, [], tr('sentinel.empty_recent_evidence', 'No recent evidence.'));
     }
     function confLabel(c) {
         c = Number(c);
@@ -508,7 +578,7 @@
 
         // Why + rejected — prefer the deterministic decision record.
         var whyItems = decision.reason ? [decision.reason] : ((capsule.why_this && capsule.why_this.length) ? capsule.why_this : actions.why_now);
-        fillLines('consoleWhyList', whyItems, 'No decision rationale available yet.');
+        fillLines('consoleWhyList', whyItems, tr('sentinel.empty_rationale', 'No decision rationale available yet.'));
         var rejected = (decision.why_not_others && decision.why_not_others.length) ? decision.why_not_others : actions.rejected_stronger_actions;
         fillRejected('consoleRejectedList', rejected);
 
@@ -716,7 +786,7 @@
     function renderNocClients(noc) {
         var view = noc.client_identity_view || {};
         var items = view.items || [];
-        txt('nocClientSummary', items.length + ' shown · ' + num(view.attention_count) + ' attention · ' + num(view.normal_count) + ' normal');
+        txt('nocClientSummary', tr('sentinel.client_summary', '{shown} shown · {attention} attention · {normal} normal', { shown: items.length, attention: num(view.attention_count), normal: num(view.normal_count) }));
         var box = document.getElementById('nocClientRoster');
         if (!box) return;
         box.textContent = '';
@@ -736,7 +806,7 @@
             row.appendChild(st); row.appendChild(host); row.appendChild(mac); row.appendChild(link); row.appendChild(trust);
             box.appendChild(row);
         });
-        if (items.length <= 0) { var e = document.createElement('div'); e.className = 'client-row'; e.textContent = 'No managed clients in scope.'; box.appendChild(e); }
+        if (items.length <= 0) { var e = document.createElement('div'); e.className = 'client-row'; e.textContent = tr('sentinel.empty_clients', 'No managed clients in scope.'); box.appendChild(e); }
     }
     function renderNocBandwidth(noc) {
         var cap = noc.capacity || {}, br = noc.blast_radius || {};
@@ -750,7 +820,7 @@
             var val = document.createElement('b'); val.textContent = util != null ? (Math.round(util) + '%') : '—';
             lab.appendChild(val);
             var track = document.createElement('div'); track.className = 'sentinel-meter__track';
-            var fill = document.createElement('div'); fill.className = 'sentinel-meter__fill ' + (num(util) >= 80 ? 'is-critical' : num(util) >= 60 ? 'is-watch' : 'is-ok');
+            var fill = document.createElement('div'); fill.className = 'sentinel-meter__fill ' + (util == null ? 'is-unknown' : num(util) >= 80 ? 'is-critical' : num(util) >= 60 ? 'is-watch' : 'is-ok');
             fill.style.width = (util != null ? Math.max(2, Math.min(100, util)) : 0) + '%';
             track.appendChild(fill); meter.appendChild(lab); meter.appendChild(track);
             box.appendChild(meter);
@@ -765,9 +835,9 @@
         if (tbox) {
             tbox.textContent = '';
             var clients = managedTalkerRows(noc);
-            var mk = document.createElement('div'); mk.className = 'sentinel-card__kicker'; mk.style.marginTop = '10px'; mk.textContent = 'Managed-client talkers (flow window)'; tbox.appendChild(mk);
+            var mk = document.createElement('div'); mk.className = 'sentinel-card__kicker'; mk.style.marginTop = '10px'; mk.textContent = tr('sentinel.managed_talkers_heading', 'Managed-client talkers (flow window)'); tbox.appendChild(mk);
             if (!clients.length) {
-                var me = document.createElement('div'); me.className = 'talker'; me.textContent = 'No managed client in the current top talkers.'; tbox.appendChild(me);
+                var me = document.createElement('div'); me.className = 'talker'; me.textContent = tr('sentinel.managed_talkers_empty', 'No managed client in the current top talkers.'); tbox.appendChild(me);
             }
             clients.forEach(function (c) {
                 var li = document.createElement('div'); li.className = 'talker';
@@ -775,7 +845,7 @@
                 tbox.appendChild(li);
             });
             if (peers.length) {
-                var k = document.createElement('div'); k.className = 'sentinel-card__kicker'; k.style.marginTop = '10px'; k.textContent = 'External peers'; tbox.appendChild(k);
+                var k = document.createElement('div'); k.className = 'sentinel-card__kicker'; k.style.marginTop = '10px'; k.textContent = tr('sentinel.external_peers_heading', 'External peers'); tbox.appendChild(k);
                 peers.slice(0, 5).forEach(function (p) { var li = document.createElement('div'); li.className = 'talker'; li.textContent = String(p.label || p.src_ip || p.value || '—'); tbox.appendChild(li); });
             }
         }
@@ -804,7 +874,7 @@
         if (!box) return;
         box.textContent = '';
         var rows = [
-            ['Active control', action || upper((summary.mode || {}).current_mode, 'OBSERVE')],
+            ['Active control', action || upper((summary.mode || {}).current_mode, 'UNKNOWN')],
             ['Effect', action === 'THROTTLE' ? 'traffic shaping (interface-wide)' : action === 'ISOLATE' ? 'segment isolation' : action === 'REDIRECT' ? 'decoy redirect' : 'visibility only'],
             ['Enforcement', booth.available ? (safety.dry_run === false ? 'enforced' : 'dry-run (advisory)') : 'dry-run (advisory)'],
             ['Safety gate', 'auto-downgrade to NOTIFY if critical clients affected']
@@ -852,7 +922,7 @@
         var head = document.createElement('div'); head.className = 'tri-row tri-head';
         ['Time', 'Band', 'Source → Dest', 'SID · Attack', 'Risk'].forEach(function (h) { var c = document.createElement('span'); c.textContent = h; head.appendChild(c); });
         box.appendChild(head);
-        if (!rows.length) { var e = document.createElement('div'); e.className = 'tri-row tri-empty'; e.textContent = 'No queued alerts in this view.'; box.appendChild(e); return; }
+        if (!rows.length) { var e = document.createElement('div'); e.className = 'tri-row tri-empty'; e.textContent = tr('sentinel.empty_triage', 'No queued alerts in this view.'); box.appendChild(e); return; }
         rows.slice(0, 24).forEach(function (r) {
             var band = r[0], it = r[1];
             var row = document.createElement('div'); row.className = 'tri-row';
@@ -873,7 +943,7 @@
         var decision = booth.decision || {}, domains = booth.domains || {}, audit = booth.audit || {};
         var domainReasons = (domains[domainKey] || {}).reasons;
         var whyItems = (domainReasons && domainReasons.length) ? domainReasons : (decision.reason ? [decision.reason] : []);
-        fillLines(prefix + 'WhyList', whyItems, 'No decision rationale available yet.');
+        fillLines(prefix + 'WhyList', whyItems, tr('sentinel.empty_rationale', 'No decision rationale available yet.'));
         fillRejected(prefix + 'RejectedList', decision.why_not_others || []);
         txt(prefix + 'ReleaseCond', decision.release_condition || '—');
         txt(prefix + 'AuditTrace', audit.trace_id || '—');
@@ -890,8 +960,9 @@
         var current = (noc.client_inventory || {}).current_client_count;
         var mode = (summary.mode || {}).current_mode || (state.mode || {}).current_mode;
         var hops = [
-            { title: 'Clients' + (current != null ? (' ×' + current) : ''), state: 'MANAGED', tone: 'is-ok' },
-            { title: 'Azazel-Edge', state: upper(mode, 'OBSERVE'), tone: 'is-ok' },
+            // Absent client count / mode is unknown, never a green hop (false-green law).
+            { title: 'Clients' + (current != null ? (' ×' + current) : ''), state: current != null ? 'MANAGED' : '—', tone: current != null ? 'is-ok' : 'is-unknown' },
+            { title: 'Azazel-Edge', state: upper(mode, 'UNKNOWN'), tone: mode ? 'is-ok' : 'is-unknown' },
             { title: 'Uplink', state: upper(path.uplink, '—'), tone: toneOf(path.uplink) },
             { title: 'GW ' + (state.gateway_ip || '—'), state: upper(path.gateway, '—'), tone: toneOf(path.gateway) },
             { title: 'Internet', state: upper(path.internet_check || path.internet, '—'), tone: toneOf(path.internet_check || path.internet) }
@@ -927,7 +998,7 @@
         var head = document.createElement('div'); head.className = 'talker-row talker-head';
         ['Source', 'Volume', 'Share', 'Identity'].forEach(function (h) { var c = document.createElement('span'); c.textContent = h; head.appendChild(c); });
         box.appendChild(head);
-        if (!sources.length) { var e = document.createElement('div'); e.className = 'talker-row talker-empty'; e.textContent = 'No top-talker telemetry in the current window.'; box.appendChild(e); return; }
+        if (!sources.length) { var e = document.createElement('div'); e.className = 'talker-row talker-empty'; e.textContent = tr('sentinel.empty_top_talkers', 'No top-talker telemetry in the current window.'); box.appendChild(e); return; }
         sources.forEach(function (src) {
             var ip = String(src.src_ip || src.id || '—');
             var identity = byIp[ip];
@@ -936,9 +1007,11 @@
             var stTone = (stateText.indexOf('unauthor') !== -1 || stateText.indexOf('mismatch') !== -1 || stateText.indexOf('missing') !== -1) ? 'is-critical' : (stateText === 'unknown' ? 'is-unknown' : 'is-ok');
             var share = Math.max(4, Math.round(((Number(src.bytes) || 0) / maxBytes) * 100));
             var row = document.createElement('div'); row.className = 'talker-row';
-            var s = document.createElement('span'); s.className = 'talker-src'; s.innerHTML = '<b></b>'; s.firstChild.textContent = ip; s.appendChild(document.createTextNode(name));
+            var s = document.createElement('span'); s.className = 'talker-src'; var sb = document.createElement('b'); sb.textContent = ip; s.appendChild(sb); s.appendChild(document.createTextNode(name));
             var vol = document.createElement('span'); vol.className = 'talker-vol'; vol.textContent = bytesShort(src.bytes);
             var sh = document.createElement('span'); sh.className = 'talker-share'; var bar = document.createElement('span'); bar.className = 'talker-share__bar' + (share >= 60 ? ' is-watch' : ''); bar.style.width = Math.min(100, share) + '%'; sh.appendChild(bar);
+            // The bar length is visual only; give the share as text as well.
+            var shText = document.createElement('span'); shText.className = 'sr-only'; shText.textContent = Math.min(100, share) + '%'; sh.appendChild(shText);
             var idn = document.createElement('span'); var ib = document.createElement('b'); ib.className = 'talker-idn ' + statusFromTone(stTone); ib.textContent = stateText; idn.appendChild(ib);
             row.appendChild(s); row.appendChild(vol); row.appendChild(sh); row.appendChild(idn);
             box.appendChild(row);
@@ -957,10 +1030,14 @@
         var fallbackPct = Math.min(100, Math.max(0, num(llm.fallback_rate) * 100));
         var latency = num(llm.latency_ms_ema);
         var latencyPct = Math.min(100, Math.max(0, (latency / 1500) * 100));
+        // An absent reading is unknown ('—'), not a green 0 (false-green law).
+        var hasQueue = queue.capacity != null && cap > 0;
+        var hasFallback = isNumeric(llm.fallback_rate);
+        var hasLatency = isNumeric(llm.latency_ms_ema);
         var meters = [
-            ['Queue', depth + '/' + cap, queuePct, queuePct >= 90 ? 'is-critical' : queuePct >= 65 ? 'is-watch' : 'is-ok'],
-            ['Fallback rate', Math.round(fallbackPct) + '%', fallbackPct, fallbackPct >= 50 ? 'is-critical' : fallbackPct >= 20 ? 'is-watch' : 'is-ok'],
-            ['Latency', Math.round(latency) + ' ms', latencyPct, latencyPct >= 85 ? 'is-critical' : latencyPct >= 55 ? 'is-watch' : 'is-ok']
+            ['Queue', hasQueue ? (depth + '/' + cap) : '—', queuePct, !hasQueue ? 'is-unknown' : queuePct >= 90 ? 'is-critical' : queuePct >= 65 ? 'is-watch' : 'is-ok'],
+            ['Fallback rate', hasFallback ? (Math.round(fallbackPct) + '%') : '—', fallbackPct, !hasFallback ? 'is-unknown' : fallbackPct >= 50 ? 'is-critical' : fallbackPct >= 20 ? 'is-watch' : 'is-ok'],
+            ['Latency', hasLatency ? (Math.round(latency) + ' ms') : '—', latencyPct, !hasLatency ? 'is-unknown' : latencyPct >= 85 ? 'is-critical' : latencyPct >= 55 ? 'is-watch' : 'is-ok']
         ];
         box.textContent = '';
         meters.forEach(function (m) {
@@ -1099,7 +1176,7 @@
             li.appendChild(id); li.appendChild(body);
             ul.appendChild(li);
         });
-        if (!ul.children.length) { var li = document.createElement('li'); li.textContent = 'No core decision behind the alerts in view.'; ul.appendChild(li); }
+        if (!ul.children.length) { var li = document.createElement('li'); li.textContent = tr('sentinel.empty_decisions', 'No core decision behind the alerts in view.'); ul.appendChild(li); }
     }
     // Saves the decision traces the console shows (the same report as
     // GET /api/decision-trace/export) as a JSON file. Client side only.
@@ -1155,7 +1232,7 @@
             (evidence.recent_triage_audit || []).length + '|' + traceSig(detail.decisionTraces);
         if (sig === evLastSig) return;
         evLastSig = sig;
-        txt('evCount', alerts.length + ' of ' + allAlerts.length + ' shown');
+        txt('evCount', tr('sentinel.ev_count', '{shown} of {total} shown', { shown: alerts.length, total: allAlerts.length }));
         var tl = document.getElementById('evTimeline');
         if (tl) {
             var hadFocus = tl.contains(document.activeElement);
@@ -1174,7 +1251,7 @@
                 li.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectEvidence(a, li); } });
                 tl.appendChild(li);
             });
-            if (!tl.children.length) { var li = document.createElement('li'); li.textContent = 'No evidence in the current window.'; tl.appendChild(li); }
+            if (!tl.children.length) { var li = document.createElement('li'); li.textContent = tr('sentinel.empty_timeline', 'No evidence in the current window.'); tl.appendChild(li); }
             else if (hadFocus) { (selectedLi || tl.firstElementChild).focus(); }
             // Selected alert scrolled out of the window: clear the drawer rather than
             // keep describing an alert that is no longer listed.
@@ -1205,7 +1282,7 @@
                 var b = document.createElement('span'); b.textContent = r[1];
                 li.appendChild(a); li.appendChild(b); au.appendChild(li);
             });
-            if (!au.children.length) { var li = document.createElement('li'); li.textContent = 'No audit entries.'; au.appendChild(li); }
+            if (!au.children.length) { var li = document.createElement('li'); li.textContent = tr('sentinel.empty_audit', 'No audit entries.'); au.appendChild(li); }
         }
         var raw = document.getElementById('evRaw');
         if (raw) { try { raw.textContent = JSON.stringify(alerts.slice(0, 10), null, 2); } catch (e) { raw.textContent = '—'; } }
@@ -1241,10 +1318,10 @@
             var el = document.getElementById(tileId), v = document.getElementById(valId);
             if (el && v) el.setAttribute('aria-label', name + ' ' + v.textContent + ' (' + (TONE_WORD[tone] || 'UNKNOWN') + ')');
         }
-        ariaTile('sysCpuTile', 'sysCpu', 'CPU', pctTone(cpu));
-        ariaTile('sysMemTile', 'sysMem', 'Memory', pctTone(mem));
-        ariaTile('sysTempTile', 'sysTemp', 'Temperature', tempTone(temp));
-        ariaTile('sysDiskTile', 'sysDisk', 'Disk', diskView.tone);
+        ariaTile('sysCpuTile', 'sysCpu', tr('sentinel.tile_cpu', 'CPU'), pctTone(cpu));
+        ariaTile('sysMemTile', 'sysMem', tr('sentinel.tile_memory', 'Memory'), pctTone(mem));
+        ariaTile('sysTempTile', 'sysTemp', tr('sentinel.tile_temperature', 'Temperature'), tempTone(temp));
+        ariaTile('sysDiskTile', 'sysDisk', tr('sentinel.tile_disk', 'Disk'), diskView.tone);
         var path = (summary.noc_focus || {}).path_health || {};
         txt('sysUplink', path.internet_check || '—');
         var svc = summary.service_health_summary || {}; var keys = Object.keys(svc);
@@ -1378,8 +1455,11 @@
         // Deception — in-box subsystem (real state).
         var oc = String(svc.opencanary || '').toUpperCase();
         var decActive = (mode.current_mode === 'scapegoat' || mode.current_mode === 'portal');
-        fab.appendChild(fabricNode('Deception (in-box)', 'OpenCanary + gateway', decActive ? 'ENGAGED' : 'STANDBY', decActive ? 'is-watch' : 'is-ok', 'is-capability', [
-            'Mode: ' + upper(mode.current_mode, 'shield'),
+        // An unknown mode is UNKNOWN, not a green STANDBY (false-green law).
+        var decStatus = decActive ? 'ENGAGED' : (mode.current_mode ? 'STANDBY' : 'UNKNOWN');
+        var decTone = decActive ? 'is-watch' : (mode.current_mode ? 'is-ok' : 'is-unknown');
+        fab.appendChild(fabricNode('Deception (in-box)', 'OpenCanary + gateway', decStatus, decTone, 'is-capability', [
+            'Mode: ' + upper(mode.current_mode, 'UNKNOWN'),
             'OpenCanary service: ' + (oc || 'UNKNOWN'),
             'REDIRECT action decoys suspect traffic'
         ]));
@@ -1395,8 +1475,8 @@
         var note = document.getElementById('sysFabricNote');
         if (note) {
             note.textContent = items.length
-                ? (items.length + ' peer node(s) registered.')
-                : 'No peer Edge nodes registered (single-node deployment). Dashed nodes are architecture/advisory, not live links.';
+                ? tr('sentinel.fabric_peers', '{count} peer node(s) registered.', { count: items.length })
+                : tr('sentinel.fabric_single', 'No peer Edge nodes registered (single-node deployment). Dashed nodes are architecture/advisory, not live links.');
         }
     }
 
@@ -1445,11 +1525,14 @@
     }
 
     /* ---- sub-tab switching (evidence + system) ---------------------------- */
+    // Evidence / System sub-views are a true tab pattern (role=tab buttons,
+    // role=tabpanel panels in index.html): aria-selected + roving tabindex.
     function switchSub(view, btnAttr, panelAttr) {
         document.querySelectorAll('[' + btnAttr + ']').forEach(function (b) {
             var on = b.getAttribute(btnAttr) === view;
             b.classList.toggle('is-active', on);
-            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            b.setAttribute('aria-selected', on ? 'true' : 'false');
+            b.tabIndex = on ? 0 : -1;
         });
         document.querySelectorAll('[' + panelAttr + ']').forEach(function (p) {
             p.hidden = p.getAttribute(panelAttr) !== view;
@@ -1464,6 +1547,10 @@
         document.querySelectorAll('[data-sys-view]').forEach(function (btn) {
             btn.addEventListener('click', function () { switchSub(btn.getAttribute('data-sys-view'), 'data-sys-view', 'data-sys-panel'); });
         });
+        var evTabs = Array.prototype.slice.call(document.querySelectorAll('[data-ev-view]'));
+        wireTabKeys(document.getElementById('sentinelEvTabs'), evTabs, function (b) { switchSub(b.getAttribute('data-ev-view'), 'data-ev-view', 'data-ev-panel'); });
+        var sysTabs = Array.prototype.slice.call(document.querySelectorAll('[data-sys-view]'));
+        wireTabKeys(document.getElementById('sentinelSysTabs'), sysTabs, function (b) { switchSub(b.getAttribute('data-sys-view'), 'data-sys-view', 'data-sys-panel'); });
         document.querySelectorAll('[data-ev-range]').forEach(function (btn) {
             btn.addEventListener('click', function () {
                 evRange = Number(btn.getAttribute('data-ev-range')) || 0;
@@ -1553,7 +1640,11 @@
             toneOf: toneOf, worstTone: worstTone, computeConsoleState: computeConsoleState,
             alertDecisionTraceId: alertDecisionTraceId, groupAlertsByDecision: groupAlertsByDecision,
             decisionTraceView: decisionTraceView, diskTileView: diskTileView,
-            managedTalkerRows: managedTalkerRows
+            managedTalkerRows: managedTalkerRows, tr: tr, rovingIndex: rovingIndex,
+            // Renderers, for the DOM harness in tests/sentinel_console_logic.test.js.
+            renderPipeline: renderPipeline, renderOverviewConsole: renderOverviewConsole,
+            renderOperationsConsole: renderOperationsConsole, renderEvidenceConsole: renderEvidenceConsole,
+            renderSystemConsole: renderSystemConsole, setTier: setTier, setOp: setOp
         };
     }
 })();

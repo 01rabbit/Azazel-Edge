@@ -281,6 +281,27 @@ eq(T.fmtAge(5), '5s ago', 'seconds');
 eq(T.fmtAge(125), '2 min ago', 'minutes');
 eq(T.fmtAge(null), '—', 'unknown age');
 
+// --- tab bar keyboard (Edge#348): inactive tabs have tabindex -1, so the
+// arrow keys are the keyboard's only way to them ---------------------------
+eq(T.rovingIndex('ArrowRight', 0, 5), 1, 'tabs: right -> next');
+eq(T.rovingIndex('ArrowRight', 4, 5), 0, 'tabs: right wraps');
+eq(T.rovingIndex('ArrowLeft', 0, 5), 4, 'tabs: left wraps');
+eq(T.rovingIndex('Home', 3, 5), 0, 'tabs: home');
+eq(T.rovingIndex('End', 0, 5), 4, 'tabs: end');
+eq(T.rovingIndex('Enter', 0, 5), -1, 'tabs: other keys do not move');
+eq(T.rovingIndex('ArrowRight', -1, 5), -1, 'tabs: focus outside the bar -> no move');
+(function () {
+    const fs = require('fs');
+    const html = fs.readFileSync(path.join(__dirname, '..', 'azazel_edge_web', 'templates', 'touch.html'), 'utf8');
+    const tabs = html.match(/<button[^>]*role="tab"[^>]*>/g) || [];
+    eq(tabs.length, 5, 'touch: five tabs');
+    tabs.forEach(function (t) {
+        const ctl = (t.match(/aria-controls="([^"]+)"/) || [])[1];
+        const id = (t.match(/id="([^"]+)"/) || [])[1];
+        ok(!!ctl && new RegExp('id="' + ctl + '"[^>]*role="tabpanel"[^>]*aria-labelledby="' + id + '"').test(html), 'touch: ' + id + ' controls a tabpanel labelled by it');
+    });
+})();
+
 if (failures) {
     console.error(failures + ' failure(s)');
     process.exit(1);

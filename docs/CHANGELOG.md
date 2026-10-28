@@ -6,6 +6,24 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- SENTINEL console quality (Edge#348, display only; no API, decision or
+  enforcement change):
+  - Operator-facing sentences of the console (empty states, the
+    Managed-client talkers heading and its empty text, the evidence count,
+    the fleet note, the tier-empty note, the live-region sentence, the
+    CPU/MEM/DISK/TEMP tile names in their `aria-label`) come from new
+    `sentinel.*` keys in the JA and EN catalogs. Product terms and state
+    words stay English.
+  - SOC/NOC, the Evidence views and the System views are WAI-ARIA tabs
+    (`tablist`/`tab`/`tabpanel`, `aria-selected`, roving `tabindex`, Arrow
+    keys and Home/End). The tier nav also takes Up/Down. A polite live region
+    announces a tier's state change once. Pipeline stages name their state.
+  - The touch console's tab bar takes Arrow keys and Home/End; before, a
+    keyboard could not reach the inactive tabs.
+  - A DOM harness (`tests/js_mini_dom.js`, no dependency) runs the console's
+    renderers over its real markup in the node tests, and a test checks the
+    WCAG AA contrast of the palette tokens.
+
 - Runtime and fleet read-outs (Edge#343, read/display only):
   - The control daemon samples `disk_percent`, the used share of the root
     filesystem as `df` reports it (`df -h /`, hardware checklist R0-06).
@@ -19,6 +37,19 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     unchanged. Nothing reads the role to decide, authorize or enforce.
 
 ### Fixed
+
+- SENTINEL surfaces that showed green or a made-up value when their input was
+  absent now show unknown (Edge#348): the NOC path strip's Clients and
+  Azazel-Edge hops, the NOC runtime meters (`—` with no queue or LLM health),
+  the interface-utilization meter, the fleet's in-box Deception node (was a
+  green STANDBY and "Mode: SHIELD"), and the traffic-control "Active control"
+  row (was OBSERVE). This is in `sentinel.js` only and covers a payload that
+  has no mode. The server still fills a missing mode with `shield`
+  (`azazel_edge_web/app.py`, the summary's `mode.current_mode`), so in
+  practice a mode is almost always present and the Deception node and the
+  Azazel-Edge hop can still read STANDBY/SHIELD from that server default.
+  Changing the default is an API behaviour change and needs the owner's
+  decision; it is not changed here.
 
 - The dashboard trend points read CPU, memory and temperature from the
   snapshot's top level (`cpu_percent`, `mem_percent`, `temp_c`), where the

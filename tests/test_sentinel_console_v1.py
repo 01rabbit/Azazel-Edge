@@ -175,12 +175,78 @@ class SentinelAssetInvariantTests(unittest.TestCase):
         self.assertNotIn("fetch(", js)
         self.assertIn("azazel:refresh", js)
 
-    def test_sentinel_js_adds_no_untranslated_tr_keys(self) -> None:
-        # The i18n catalog-consistency test scans static/*.js for tr('key') calls;
-        # sentinel.js deliberately uses literal product terms and must add none.
+    def test_sentinel_js_tr_keys_are_in_ja_and_en(self) -> None:
+        # Edge#348: operator-facing sentences in sentinel.js go through tr();
+        # every key must exist in both the JA and EN catalogs (product terms
+        # and state words stay literal English and are not routed).
+        from azazel_edge.i18n import UI_STRINGS
+
         js = (_STATIC / "sentinel.js").read_text(encoding="utf-8")
-        self.assertNotIn("tr('", js)
-        self.assertNotIn('tr("', js)
+        keys = set(re.findall(r"""tr\(['"]([a-zA-Z0-9_.-]+)['"]""", js))
+        self.assertIn("sentinel.managed_talkers_heading", keys)
+        self.assertIn("sentinel.managed_talkers_empty", keys)
+        self.assertIn("sentinel.tile_disk", keys)
+        for lang in ("ja", "en"):
+            missing = sorted(k for k in keys if k not in UI_STRINGS[lang])
+            self.assertEqual(missing, [], f"{lang} catalog lacks {missing}")
+        # Every key is translated, not copied from English (except product terms).
+        same = sorted(k for k in keys if UI_STRINGS["ja"][k] == UI_STRINGS["en"][k] and k != "sentinel.tile_cpu")
+        self.assertEqual(same, [])
+        # No markup is built from strings: values are written with textContent.
+        self.assertNotIn("innerHTML", js.replace("no innerHTML", ""))
+
+    def test_sentinel_sentences_render_in_japanese(self) -> None:
+        client = webapp.app.test_client()
+        ja = client.get("/?lang=ja").get_data(as_text=True)
+        en = client.get("/?lang=en").get_data(as_text=True)
+        self.assertIn("専門家詳細の表示が必要です。", ja)
+        self.assertIn("Professional detail required.", en)
+        # Product terms stay English in Japanese.
+        for term in ("TIMELINE", "RUNTIME", ">SOC<", ">DISK<"):
+            self.assertIn(term, ja)
+
+    def test_subtabs_are_true_tab_patterns(self) -> None:
+        # SOC/NOC, Evidence and System sub-views: tablist > tab with
+        # aria-selected/aria-controls, each controlled panel a tabpanel
+        # labelled by its tab.
+        text = webapp.app.test_client().get("/?lang=en").get_data(as_text=True)
+        for list_id in ("sentinelOpsSubnav", "sentinelEvTabs", "sentinelSysTabs"):
+            self.assertRegex(text, rf'id="{list_id}"[^>]*role="tablist"')
+        tabs = re.findall(r"<button[^>]*role=\"tab\"[^>]*>", text)
+        self.assertEqual(len(tabs), 2 + 5 + 4)
+        for tab in tabs:
+            tab_id = re.search(r'id="([^"]+)"', tab).group(1)
+            panel_id = re.search(r'aria-controls="([^"]+)"', tab).group(1)
+            self.assertRegex(tab, r'aria-selected="(true|false)"')
+            self.assertNotIn("aria-pressed", tab)
+            self.assertRegex(text, rf'id="{panel_id}"[^>]*role="tabpanel"[^>]*aria-labelledby="{tab_id}"')
+        # One tab per list is in the tab order (roving tabindex).
+        self.assertEqual(sum('aria-selected="true"' in t and 'tabindex="0"' in t for t in tabs), 3)
+        self.assertIn('id="sentinelLiveRegion"', text)
+
+    def test_wcag_aa_contrast_of_text_tokens(self) -> None:
+        # Edge#348: every text/accent token reads at >= 4.5:1 (WCAG AA, normal
+        # text) on every background token of the industrial palette.
+        css = (_STATIC / "sentinel.css").read_text(encoding="utf-8")
+        root = re.search(r":root\s*\{(.*?)\}", css, re.S).group(1)
+        tokens = dict(re.findall(r"(--[a-z0-9-]+):\s*(#[0-9A-Fa-f]{6})\b", root))
+
+        def lum(hex_color: str) -> float:
+            rgb = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+            return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+        backgrounds = [k for k in tokens if k.startswith("--bg")]
+        foregrounds = [k for k in tokens if k.startswith(("--text", "--accent"))]
+        self.assertGreaterEqual(len(backgrounds), 6)
+        self.assertGreaterEqual(len(foregrounds), 8)
+        for fg in foregrounds:
+            for bg in backgrounds:
+                a, b = lum(tokens[fg]), lum(tokens[bg])
+                ratio = (max(a, b) + 0.05) / (min(a, b) + 0.05)
+                self.assertGreaterEqual(ratio, 4.5, f"{fg} on {bg}: {ratio:.2f}")
+        # Text colors in sentinel.css come only from these tokens.
+        self.assertIsNone(re.search(r"(?<!-)color:\s*(#|rgb)", css))
 
     def test_app_js_dispatches_refresh_event(self) -> None:
         js = (_STATIC / "app.js").read_text(encoding="utf-8")
