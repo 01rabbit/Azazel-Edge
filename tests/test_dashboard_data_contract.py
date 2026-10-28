@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import azazel_edge_web.app as webapp
 
@@ -874,6 +876,48 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(remote["count"], 2)
         labels = [item["label"] for item in remote["items"]]
         self.assertEqual(labels, ["8.8.8.8", "1.1.1.1"])
+
+    def test_dashboard_summary_exposes_managed_client_talkers(self) -> None:
+        # Edge#344: managed clients are split out of the same top sources the
+        # remote-peer view drops them from, using the existing managed scope.
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        state["noc_capacity"]["top_sources"] = [
+            {"src_ip": "8.8.8.8", "bytes": 9000, "packets": 90, "flows": 9},
+            {"src_ip": "172.16.0.44", "bytes": 4096, "packets": 40, "flows": 3},
+            {"src_ip": "192.168.40.1", "bytes": 3000, "packets": 30, "flows": 3},
+            {"src_ip": "172.16.0.45", "bytes": 2048, "packets": 20, "flows": 2},
+            {"src_ip": "172.16.0.46", "bytes": 1024, "packets": 10, "flows": 1},
+            {"src_ip": "172.16.0.47", "bytes": 512, "packets": 5, "flows": 1},
+            {"src_ip": "1.1.1.1", "bytes": 256, "packets": 2, "flows": 1},
+        ]
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+
+        with patch.dict(os.environ, {"AZAZEL_MANAGED_CLIENT_CIDRS": "172.16.0.0/24"}):
+            response = self.client.get("/api/dashboard/summary")
+        self.assertEqual(response.status_code, 200)
+        noc = response.get_json()["noc_focus"]
+        managed = noc["managed_client_talkers"]
+        self.assertEqual(managed["count"], 4)
+        self.assertEqual(
+            [item["label"] for item in managed["items"]],
+            ["172.16.0.44", "172.16.0.45", "172.16.0.46", "172.16.0.47"],
+        )
+        self.assertEqual(managed["items"][0]["bytes"], 4096)
+        self.assertEqual(managed["items"][0]["flows"], 3)
+        # The gateway is neither a managed talker nor a remote peer.
+        remote_labels = [item["label"] for item in noc["remote_peers"]["items"]]
+        self.assertEqual(remote_labels, ["8.8.8.8", "1.1.1.1"])
+        self.assertNotIn("192.168.40.1", remote_labels)
+
+    def test_managed_client_talkers_follow_the_scan_window_and_item_cap(self) -> None:
+        rows = [{"src_ip": f"172.16.0.{i}", "bytes": 1000 - i} for i in range(10, 25)]
+        with patch.dict(os.environ, {"AZAZEL_MANAGED_CLIENT_CIDRS": "172.16.0.0/24"}):
+            view = webapp._managed_client_talker_view_payload({"noc_capacity": {"top_sources": rows}})
+            empty = webapp._managed_client_talker_view_payload({})
+        self.assertEqual(view["count"], 12)
+        self.assertEqual(len(view["items"]), 8)
+        self.assertEqual(view["items"][0]["id"], "172.16.0.10")
+        self.assertEqual(empty, {"count": 0, "items": []})
 
     def test_dashboard_evidence_contract(self) -> None:
         response = self.client.get("/api/dashboard/evidence")

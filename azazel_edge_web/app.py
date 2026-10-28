@@ -1768,14 +1768,30 @@ def _save_operator_progress(
     return session_payload
 
 
-def _remote_peer_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
+# Scan window over noc_capacity.top_sources for the talker views below. It is
+# the same number of sources flow_min keeps (TOP_SOURCES_LIMIT) and the
+# control daemon carries into the snapshot; each view shows at most
+# _TALKER_VIEW_ITEMS of them.
+_TALKER_SCAN_LIMIT = 12
+_TALKER_VIEW_ITEMS = 8
+
+
+def _top_source_talker_view(state: Dict[str, Any], *, managed: bool) -> Dict[str, Any]:
+    """Split the flow-window top sources by the existing managed-client scope.
+
+    managed=False keeps the sources outside AZAZEL_MANAGED_CLIENT_CIDRS (remote
+    peers); managed=True keeps the ones inside it (managed-client talkers).
+    Gateway/uplink/loopback addresses are dropped from both, as in the client
+    identity view. Read-only: bytes come from the flow evidence window, not
+    from per-client interface counters.
+    """
     noc_capacity = state.get("noc_capacity") if isinstance(state.get("noc_capacity"), dict) else {}
     top_sources = noc_capacity.get("top_sources") if isinstance(noc_capacity.get("top_sources"), list) else []
     managed_cidrs = _managed_client_cidrs()
     excluded_ips = _client_identity_excluded_ips(state)
     items: List[Dict[str, Any]] = []
     seen: set[str] = set()
-    for row in top_sources[:12]:
+    for row in top_sources[:_TALKER_SCAN_LIMIT]:
         if not isinstance(row, dict):
             continue
         ip = str(row.get("src_ip") or row.get("id") or "").strip()
@@ -1784,7 +1800,7 @@ def _remote_peer_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
         seen.add(ip)
         if ip in excluded_ips:
             continue
-        if _ip_in_managed_client_scope(ip, managed_cidrs):
+        if _ip_in_managed_client_scope(ip, managed_cidrs) != managed:
             continue
         items.append(
             {
@@ -1798,8 +1814,16 @@ def _remote_peer_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
     items.sort(key=lambda item: (-_as_int(item.get("bytes"), 0), str(item.get("id") or "")))
     return {
         "count": len(items),
-        "items": items[:8],
+        "items": items[:_TALKER_VIEW_ITEMS],
     }
+
+
+def _remote_peer_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
+    return _top_source_talker_view(state, managed=False)
+
+
+def _managed_client_talker_view_payload(state: Dict[str, Any]) -> Dict[str, Any]:
+    return _top_source_talker_view(state, managed=True)
 
 
 def _dashboard_action_guidance(
@@ -2605,6 +2629,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
     )
     client_identity_view = _client_identity_view_payload(state)
     remote_peer_view = _remote_peer_view_payload(state)
+    managed_client_talkers = _managed_client_talker_view_payload(state)
     soc_attack_candidates = (
         second_pass_soc.get("attack_candidates")
         if isinstance(second_pass_soc.get("attack_candidates"), list)
@@ -2850,6 +2875,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
             },
             "client_identity_view": client_identity_view,
             "remote_peers": remote_peer_view,
+            "managed_client_talkers": managed_client_talkers,
             "client_impact": {
                 "scope": path_scope,
                 "segment_scope": str(state.get("up_if") or "unknown"),

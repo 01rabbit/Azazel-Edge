@@ -55,6 +55,13 @@ def adapt_flow_record(record: Dict[str, object]) -> EvidenceEvent:
     )
 
 
+# How many sources the traffic_concentration summary keeps. The dashboard
+# splits them into managed-client talkers and remote peers (Edge#344) and
+# scans up to 12 of them, so three would hide most managed clients. The
+# concentration ratio still uses only the largest source.
+TOP_SOURCES_LIMIT = 12
+
+
 def summarize_flow_events(events: Iterable[EvidenceEvent | Dict[str, object]]) -> Optional[EvidenceEvent]:
     flow_rows: List[Dict[str, object]] = []
     for event in events:
@@ -92,7 +99,7 @@ def summarize_flow_events(events: Iterable[EvidenceEvent | Dict[str, object]]) -
 
     top_sources = [
         {'src_ip': key, **stats}
-        for key, stats in sorted(by_source.items(), key=lambda item: (-item[1]['bytes'], item[0]))[:3]
+        for key, stats in sorted(by_source.items(), key=lambda item: (-item[1]['bytes'], item[0]))[:TOP_SOURCES_LIMIT]
     ]
     top_services = [
         {'service': key, **stats}

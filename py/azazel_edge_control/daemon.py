@@ -1220,6 +1220,10 @@ def _select_capacity_row(event_payloads: list[dict[str, Any]], preferred_uplink:
     return rows[0]
 
 
+# Same as flow_min.TOP_SOURCES_LIMIT: the web talker views scan 12 sources.
+_TRAFFIC_TOP_SOURCES_LIMIT = 12
+
+
 def _traffic_top_sources(event_payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for payload in event_payloads:
         if str(payload.get("kind") or "") != "traffic_concentration":
@@ -1231,7 +1235,7 @@ def _traffic_top_sources(event_payloads: list[dict[str, Any]]) -> list[dict[str,
         if not isinstance(top_sources, list):
             continue
         normalized: list[dict[str, Any]] = []
-        for item in top_sources[:5]:
+        for item in top_sources[:_TRAFFIC_TOP_SOURCES_LIMIT]:
             if not isinstance(item, dict):
                 continue
             normalized.append(

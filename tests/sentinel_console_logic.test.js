@@ -6,7 +6,7 @@
    (is-ok). These are exactly the paths the adversarial review flagged. */
 'use strict';
 const path = require('path');
-const { toneOf, worstTone, computeConsoleState, alertDecisionTraceId, groupAlertsByDecision, decisionTraceView, diskTileView } = require(
+const { toneOf, worstTone, computeConsoleState, alertDecisionTraceId, groupAlertsByDecision, decisionTraceView, diskTileView, managedTalkerRows } = require(
     path.join(__dirname, '..', 'azazel_edge_web', 'static', 'sentinel.js'));
 
 let failures = 0;
@@ -210,6 +210,18 @@ eq(diskTileView(42.4).tone, 'is-ok', 'disk 42% -> ok');
 eq(diskTileView(85.6).text, '86%', 'disk 85.6 -> 86%');
 eq(diskTileView(85.6).tone, 'is-watch', 'disk >= 80 -> watch');
 eq(diskTileView(97).tone, 'is-critical', 'disk >= 95 -> critical');
+
+// --- managedTalkerRows (Edge#344): managed-client talkers, flow window --------
+eq(managedTalkerRows({}).length, 0, 'no managed_client_talkers -> no rows');
+eq(managedTalkerRows({ managed_client_talkers: { items: 'junk' } }).length, 0, 'non-array items -> no rows');
+const mrows = managedTalkerRows({ managed_client_talkers: { count: 6, items: [
+    { id: 'c1', label: 'c1', bytes: 4000 }, { id: 'c2', label: 'c2', bytes: 1000 }, { id: 'c3', bytes: 0 },
+    { id: 'c4', label: 'c4', bytes: 10 }, { id: 'c5', label: 'c5', bytes: 5 }, { id: 'c6', label: 'c6', bytes: 1 }] } });
+eq(mrows.length, 5, 'at most five managed talkers in the bandwidth card');
+eq(mrows[0].share, 100, 'largest managed talker -> 100%');
+eq(mrows[1].share, 25, 'share is relative to the largest');
+eq(mrows[2].label, 'c3', 'label falls back to id');
+eq(managedTalkerRows({ managed_client_talkers: { items: [{ label: 'z', bytes: 0 }] } })[0].share, 0, 'all-zero bytes -> 0%, no NaN');
 
 if (failures) { console.error(failures + ' assertion(s) failed'); process.exit(1); }
 console.log('sentinel logic: all assertions passed');
