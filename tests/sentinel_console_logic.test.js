@@ -471,5 +471,76 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     dom.uninstall();
 })();
 
+// --- 6. Display strings with and without data (review of #515) -------------
+(function () {
+    const m = mount();
+    function deceptionNode() {
+        const n = m.doc.body.querySelectorAll('.fabric-node').filter(function (x) { return x.textContent.indexOf('Deception (in-box)') !== -1; })[0];
+        ok(!!n, 'deception node rendered');
+        return n || m.doc.createElement('div');
+    }
+    function deception(mode) {
+        m.S.renderSystemConsole({ summary: mode === undefined ? {} : { mode: { current_mode: mode } } });
+        const n = deceptionNode();
+        return {
+            status: n.querySelector('.fabric-node__status').textContent,
+            mode: n.querySelectorAll('.fabric-node__line').map(function (l) { return l.textContent; }).filter(function (t) { return t.indexOf('Mode: ') === 0; })[0],
+            green: n.classList.contains('status-ok')
+        };
+    }
+    let d = deception('shield');
+    eq(d.status, 'STANDBY', 'deception shield -> STANDBY'); eq(d.mode, 'Mode: SHIELD', 'deception Mode: SHIELD'); ok(d.green, 'shield standby is ok');
+    d = deception('scapegoat');
+    eq(d.status, 'ENGAGED', 'deception scapegoat -> ENGAGED'); eq(d.mode, 'Mode: SCAPEGOAT', 'deception Mode: SCAPEGOAT'); ok(!d.green, 'engaged is not green');
+    d = deception(undefined);
+    eq(d.status, 'UNKNOWN', 'deception without mode -> UNKNOWN'); eq(d.mode, 'Mode: UNKNOWN', 'deception Mode: UNKNOWN'); ok(!d.green, 'unknown deception not green');
+
+    function kv(id) {
+        const out = {};
+        m.$(id).querySelectorAll('dt').forEach(function (dt) { out[dt.textContent] = dt.parentNode.querySelector('dd').textContent; });
+        return out;
+    }
+    function activeControl(detail) { m.S.renderOperationsConsole(detail); return kv('nocTrafficControl')['Active control']; }
+    eq(activeControl({ boothFocus: { decision: { action: 'throttle' } } }), 'THROTTLE', 'active control throttle -> THROTTLE');
+    eq(activeControl({ boothFocus: { decision: { action: 'observe' } } }), 'OBSERVE', 'active control observe -> OBSERVE');
+    eq(activeControl({ summary: { mode: { current_mode: 'observe' } } }), 'OBSERVE', 'active control from the mode -> OBSERVE');
+    eq(activeControl({}), 'UNKNOWN', 'active control without decision or mode -> UNKNOWN');
+
+    function hops(detail) {
+        m.S.renderOperationsConsole(detail);
+        return m.$('nocPathStrip').querySelectorAll('.sp-hop').map(function (h) {
+            return { title: h.querySelector('.sp-hop__title').textContent, state: h.querySelector('.sp-hop__state').textContent, tone: ['is-ok', 'is-watch', 'is-critical', 'is-unknown'].filter(function (c) { return h.classList.contains(c); })[0] };
+        });
+    }
+    let h = hops({});
+    eq(h[0].title, 'Clients', 'clients hop without count'); eq(h[0].state, '—', 'clients hop state dash'); eq(h[0].tone, 'is-unknown', 'clients hop unknown');
+    eq(h[1].title, 'Azazel-Edge', 'edge hop title'); eq(h[1].state, 'UNKNOWN', 'edge hop without mode -> UNKNOWN'); eq(h[1].tone, 'is-unknown', 'edge hop unknown');
+    h = hops({ summary: { mode: { current_mode: 'shield' }, noc_focus: { client_inventory: { current_client_count: 3 } } } });
+    eq(h[0].title, 'Clients ×3', 'clients hop with count'); eq(h[0].state, 'MANAGED', 'clients hop MANAGED'); eq(h[0].tone, 'is-ok', 'clients hop ok');
+    eq(h[1].state, 'SHIELD', 'edge hop shows the mode'); eq(h[1].tone, 'is-ok', 'edge hop ok');
+
+    function meter(label, health) {
+        m.S.renderOperationsConsole({ health: health });
+        const mt = m.$('nocRuntimeMeters').querySelectorAll('.sentinel-meter').filter(function (x) { return x.textContent.indexOf(label) === 0; })[0];
+        ok(!!mt, label + ' meter rendered');
+        return { value: mt.querySelector('b').textContent, tone: ['is-ok', 'is-watch', 'is-critical', 'is-unknown'].filter(function (c) { return mt.querySelector('.sentinel-meter__fill').classList.contains(c); })[0] };
+    }
+    let f = meter('Fallback rate', {});
+    eq(f.value, '—', 'fallback rate absent -> dash'); eq(f.tone, 'is-unknown', 'fallback rate absent -> unknown');
+    f = meter('Fallback rate', { llm: { fallback_rate: 0.3 } });
+    eq(f.value, '30%', 'fallback rate 0.3 -> 30%'); eq(f.tone, 'is-watch', 'fallback rate 30% -> watch');
+    f = meter('Fallback rate', { llm: { fallback_rate: 0 } });
+    eq(f.value, '0%', 'fallback rate 0 -> 0%'); eq(f.tone, 'is-ok', 'fallback rate 0 -> ok');
+    f = meter('Fallback rate', { llm: { fallback_rate: '0.6' } });
+    eq(f.value, '60%', 'numeric string accepted'); eq(f.tone, 'is-critical', 'fallback rate 60% -> critical');
+    ['', true, 'n/a', null].forEach(function (v) {
+        const r = meter('Fallback rate', { llm: { fallback_rate: v } });
+        eq(r.value, '—', 'fallback rate ' + JSON.stringify(v) + ' -> dash'); eq(r.tone, 'is-unknown', 'fallback rate ' + JSON.stringify(v) + ' -> unknown');
+    });
+    const lat = meter('Latency', { llm: { latency_ms_ema: true } });
+    eq(lat.value, '—', 'latency true -> dash');
+    dom.uninstall();
+})();
+
 if (failures) { console.error(failures + ' assertion(s) failed'); process.exit(1); }
 console.log('sentinel logic: all assertions passed');

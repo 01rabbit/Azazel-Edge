@@ -67,6 +67,12 @@
         return -1;
     }
     function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
+    // A real reading: a finite number, or a string that is one. '' / true /
+    // null are not readings (Number('') is 0 and Number(true) is 1).
+    function isNumeric(v) {
+        if (typeof v === 'number') return isFinite(v);
+        return typeof v === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(v);
+    }
     function upper(v, fallback) {
         var s = String(v == null ? '' : v).trim();
         return s ? s.toUpperCase() : (fallback || '—');
@@ -1026,8 +1032,8 @@
         var latencyPct = Math.min(100, Math.max(0, (latency / 1500) * 100));
         // An absent reading is unknown ('—'), not a green 0 (false-green law).
         var hasQueue = queue.capacity != null && cap > 0;
-        var hasFallback = llm.fallback_rate != null && isFinite(Number(llm.fallback_rate));
-        var hasLatency = llm.latency_ms_ema != null && isFinite(Number(llm.latency_ms_ema));
+        var hasFallback = isNumeric(llm.fallback_rate);
+        var hasLatency = isNumeric(llm.latency_ms_ema);
         var meters = [
             ['Queue', hasQueue ? (depth + '/' + cap) : '—', queuePct, !hasQueue ? 'is-unknown' : queuePct >= 90 ? 'is-critical' : queuePct >= 65 ? 'is-watch' : 'is-ok'],
             ['Fallback rate', hasFallback ? (Math.round(fallbackPct) + '%') : '—', fallbackPct, !hasFallback ? 'is-unknown' : fallbackPct >= 50 ? 'is-critical' : fallbackPct >= 20 ? 'is-watch' : 'is-ok'],

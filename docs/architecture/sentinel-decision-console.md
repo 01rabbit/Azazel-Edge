@@ -101,6 +101,14 @@ utilization), and the fleet's in-box Deception node (no mode → `UNKNOWN`, was 
 green `STANDBY` and "Mode: SHIELD"). The traffic-control "Active control" row
 no longer defaults to `OBSERVE` when neither a decision nor a mode is known.
 
+These fixes are in `sentinel.js` only. The server fills a missing mode with
+`shield` (`azazel_edge_web/app.py`, `mode.current_mode` of the summary), so a
+mode is almost always present and the server-made default can still show as
+STANDBY/SHIELD; changing that default is an API behaviour change for the owner
+to decide. The traffic-control Effect (`visibility only`) and Enforcement
+(`dry-run (advisory)`) rows still state a value when the action is unknown;
+how enforcement state is shown is also left to the owner.
+
 ## Visual design system
 
 `sentinel.css` overrides the base `:root` tokens toward an industrial

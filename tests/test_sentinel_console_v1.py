@@ -182,7 +182,7 @@ class SentinelAssetInvariantTests(unittest.TestCase):
         from azazel_edge.i18n import UI_STRINGS
 
         js = (_STATIC / "sentinel.js").read_text(encoding="utf-8")
-        keys = set(re.findall(r"""tr\('([a-zA-Z0-9_.-]+)'""", js))
+        keys = set(re.findall(r"""tr\(['"]([a-zA-Z0-9_.-]+)['"]""", js))
         self.assertIn("sentinel.managed_talkers_heading", keys)
         self.assertIn("sentinel.managed_talkers_empty", keys)
         self.assertIn("sentinel.tile_disk", keys)

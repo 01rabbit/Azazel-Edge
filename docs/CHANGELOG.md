@@ -43,7 +43,13 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Azazel-Edge hops, the NOC runtime meters (`—` with no queue or LLM health),
   the interface-utilization meter, the fleet's in-box Deception node (was a
   green STANDBY and "Mode: SHIELD"), and the traffic-control "Active control"
-  row (was OBSERVE).
+  row (was OBSERVE). This is in `sentinel.js` only and covers a payload that
+  has no mode. The server still fills a missing mode with `shield`
+  (`azazel_edge_web/app.py`, the summary's `mode.current_mode`), so in
+  practice a mode is almost always present and the Deception node and the
+  Azazel-Edge hop can still read STANDBY/SHIELD from that server default.
+  Changing the default is an API behaviour change and needs the owner's
+  decision; it is not changed here.
 
 - The dashboard trend points read CPU, memory and temperature from the
   snapshot's top level (`cpu_percent`, `mem_percent`, `temp_c`), where the
