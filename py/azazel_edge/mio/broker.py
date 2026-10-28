@@ -396,7 +396,8 @@ class CapabilityBroker:
         self._per_capability_calls: dict[str, int] = {}
         self._clock = clock
         self._lock = threading.Lock()
-        self._global_slots = threading.BoundedSemaphore(max(1, min(int(max_in_flight), 16)))
+        self._max_in_flight = max(1, min(int(max_in_flight), 16))
+        self._global_slots = threading.BoundedSemaphore(self._max_in_flight)
         self._capability_slots = MappingProxyType(
             {name: threading.BoundedSemaphore(spec.max_concurrency) for name, spec in registry.items()}
         )
@@ -431,6 +432,25 @@ class CapabilityBroker:
     def closed(self) -> bool:
         with self._lock:
             return self._closed
+
+    def for_new_cycle(self) -> "CapabilityBroker":
+        """A new, open broker for the next reasoning cycle.
+
+        Budgets are per broker (= per cycle), so each cycle gets its own: same
+        frozen registry, limits, clock and audit sink, fresh call counters and
+        slots. This broker is not changed; the caller closes it when its own
+        cycle ends. The registry is the reviewed one already frozen here, so
+        nothing new can be registered this way.
+        """
+        return CapabilityBroker(
+            dict(self._capabilities),
+            max_total_calls=self._max_total_calls,
+            max_in_flight=self._max_in_flight,
+            max_quarantined=self._max_quarantined,
+            clock=self._clock,
+            audit_capacity=self._audit.maxlen or 1,
+            audit_sink=self._audit_sink,
+        )
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._capabilities))

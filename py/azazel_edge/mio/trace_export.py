@@ -10,7 +10,10 @@ shape ``project_outcome`` writes (IDs that match their grammar or are
 ``h:<digest>``, closed-vocabulary codes, hex digests, counts, ``{digest,
 chars}`` text references). A record with any other field or value is not
 exported, only counted as ``invalid``, so text that was put in the file by
-hand or by a bug is not echoed. The records themselves hold no free text, no
+hand or by a bug is not echoed. An ID that fits the structural grammar but not
+the closed one the writer now uses (``trace_audit.audit_id_ok``: an IP
+address or host name in a record written before it, say) is shown as the
+fixed ``REDACTED_ID``. The records themselves hold no free text, no
 key and no address outside IDs and evidence refs.
 """
 from __future__ import annotations
@@ -24,7 +27,7 @@ import stat
 from typing import Any, Callable, Mapping
 
 from .redaction import contains_token_like
-from .trace_audit import DIGEST_KEY_STATES, TRACE_AUDIT_SCHEMAS, MAX_RECORD_BYTES, is_valid_id
+from .trace_audit import DIGEST_KEY_STATES, TRACE_AUDIT_SCHEMAS, MAX_RECORD_BYTES, audit_id_ok, is_valid_id
 from .trace_recorder import has_symlink_parent
 
 EXPORT_SCHEMA = "mio.trace_audit_export.v1"
@@ -40,69 +43,92 @@ class _Invalid(Exception):
     pass
 
 
+# Fixed replacement for an ID that fits the trace audit's structural grammar
+# but not the closed one (``trace_audit.audit_id_ok``): for example an IP
+# address or host name kept by a record written before the closed grammar.
+# The writer would record it as a keyed digest; the export has no key, so it
+# shows this fixed value instead (like the no-model handoff). It cannot pass
+# any ID grammar, so it never looks like a real ID.
+REDACTED_ID = "redacted-id"
+
+
 def _check(ok: bool) -> None:
     if not ok:
         raise _Invalid()
 
 
-def _id(kind: str) -> Callable[[Any], None]:
-    def check(v: Any) -> None:
-        _check(type(v) is str and (_H.fullmatch(v) is not None or (is_valid_id(kind, v) and (kind == "digest" or not contains_token_like(v)))))
+def _id(kind: str) -> Callable[[Any], Any]:
+    def check(v: Any) -> Any:
+        _check(type(v) is str)
+        if _H.fullmatch(v) is not None:
+            return v
+        _check(is_valid_id(kind, v) and (kind == "digest" or not contains_token_like(v)))
+        return v if audit_id_ok(kind, v) else REDACTED_ID
     return check
 
 
-def _code(v: Any) -> None:
-    _check(type(v) is str and (is_valid_id("code", v) or _CODE_H.fullmatch(v) is not None or _H.fullmatch(v) is not None))
+def _code(v: Any) -> Any:
+    _check(type(v) is str)
+    if _CODE_H.fullmatch(v) is not None:
+        head = v.partition(":")[0]
+        return v if audit_id_ok("code", head) else REDACTED_ID
+    if _H.fullmatch(v) is not None:
+        return v
+    _check(is_valid_id("code", v))
+    return v if audit_id_ok("code", v) else REDACTED_ID
 
 
-def _code_or_empty(v: Any) -> None:
-    if v != "":
-        _code(v)
+def _code_or_empty(v: Any) -> Any:
+    return v if v == "" else _code(v)
 
 
-def _int(v: Any) -> None:
+def _int(v: Any) -> Any:
     _check(type(v) is int and -1 <= v < (1 << 53))
+    return v
 
 
-def _hex64_or_none(v: Any) -> None:
+def _hex64_or_none(v: Any) -> Any:
     _check(v is None or (type(v) is str and _HEX64.fullmatch(v) is not None))
+    return v
 
 
-def _text_ref(v: Any) -> None:
+def _text_ref(v: Any) -> Any:
     _check(isinstance(v, dict) and set(v) == {"digest", "chars"})
     _check(type(v["digest"]) is str and re.fullmatch(r"[0-9a-f]{24}", v["digest"]) is not None)
     _check(type(v["chars"]) is int and 0 <= v["chars"] < (1 << 31))
+    return dict(v)
 
 
-def _list(item: Callable[[Any], None]) -> Callable[[Any], None]:
-    def check(v: Any) -> None:
+def _list(item: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    def check(v: Any) -> Any:
         _check(isinstance(v, list) and len(v) <= _LIST_CAP)
-        for x in v:
-            item(x)
+        return [item(x) for x in v]
     return check
 
 
-def _obj(fields: Mapping[str, Callable[[Any], None]], optional: Mapping[str, Callable[[Any], None]] | None = None) -> Callable[[Any], None]:
+def _obj(fields: Mapping[str, Callable[[Any], Any]], optional: Mapping[str, Callable[[Any], Any]] | None = None) -> Callable[[Any], Any]:
     optional = optional or {}
 
-    def check(v: Any) -> None:
+    def check(v: Any) -> Any:
         _check(isinstance(v, dict) and set(fields) <= set(v) <= set(fields) | set(optional))
-        for name, item in fields.items():
-            item(v[name])
-        for name, item in optional.items():
-            if name in v:
-                item(v[name])
+        out = {name: item(v[name]) for name, item in fields.items()}
+        out.update({name: item(v[name]) for name, item in optional.items() if name in v})
+        return out
     return check
 
 
-def _const(*values: Any) -> Callable[[Any], None]:
-    def check(v: Any) -> None:
+def _const(*values: Any) -> Callable[[Any], Any]:
+    def check(v: Any) -> Any:
         _check(any(type(v) is type(c) and v == c for c in values))
+        return v
     return check
 
 
-def _edge_ref(v: Any) -> None:
-    _check(v is None or is_valid_id("edge_decision_ref", v))
+def _edge_ref(v: Any) -> Any:
+    # The writer refuses (raises) rather than digests an Edge decision ref
+    # outside the closed grammar, so such a record is not exported at all.
+    _check(v is None or audit_id_ok("edge_decision_ref", v))
+    return v
 
 
 _REFS = _list(_id("evidence_ref"))
@@ -126,7 +152,7 @@ _RECORD = _obj(
         "cycle_status": _code_or_empty,
         "terminal_state": _code,
         "errors": _list(_code),
-        "playbook": _obj({k: _id(kind) for k, kind in (("playbook_id", "frame_id"), ("playbook_version", "frame_id"), ("playbook_digest", "digest"), ("template_id", "frame_id"))}),
+        "playbook": _obj({k: _id(kind) for k, kind in (("playbook_id", "playbook_ref"), ("playbook_version", "playbook_ref"), ("playbook_digest", "digest"), ("template_id", "playbook_ref"))}),
         "hypotheses": _list(_obj({
             "hypothesis_id": _id("hypothesis_id"),
             "status": _code,
@@ -160,26 +186,33 @@ _RECORD = _obj(
 )
 
 
-def valid_record(record: Any) -> bool:
-    """Whether ``record`` has exactly the allowlisted shape.
+def export_record(record: Any) -> dict[str, Any] | None:
+    """The record as exported, or None when it does not have exactly the
+    allowlisted shape. IDs that fit the structural grammar but not the closed
+    one are replaced by ``REDACTED_ID``.
 
     ``digest_key`` is required in v2 and absent in v1.
     """
     try:
-        _RECORD(record)
+        out = _RECORD(record)
     except _Invalid:
-        return False
-    if record["schema"] == "mio.trace_audit.v1":
-        return "digest_key" not in record
-    return "digest_key" in record
+        return None
+    if (record["schema"] == "mio.trace_audit.v1") == ("digest_key" in record):
+        return None
+    return out
+
+
+def valid_record(record: Any) -> bool:
+    """Whether ``record`` has exactly the allowlisted shape."""
+    return export_record(record) is not None
 
 
 def valid_trace_selector(kind: str, value: str) -> bool:
+    """A selector must pass the closed grammar as it is (or be ``h:<digest>``)."""
     try:
-        _id(kind)(value)
+        return _id(kind)(value) == value
     except _Invalid:
         return False
-    return True
 
 
 def _open_readonly(path: str) -> tuple[int | None, str]:
@@ -249,7 +282,8 @@ def export_incident(path: str, *, trace_id: str, max_files: int = 4, cycle_id: s
                 except (UnicodeDecodeError, ValueError, RecursionError):
                     skipped["malformed"] += 1
                     continue
-                if not valid_record(record):
+                record = export_record(record)
+                if record is None:
                     skipped["invalid"] += 1
                     continue
                 if record["trace_id"] != trace_id or (cycle_id is not None and record["cycle_id"] != cycle_id):
