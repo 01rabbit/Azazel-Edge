@@ -21,6 +21,32 @@ AEVT_INGEST_REJECT = "aggregator.ingest.reject"
 AEVT_NODE_QUARANTINE = "aggregator.node.quarantine"
 
 
+#: Values the optional ``role`` on a registered node may take.
+#:
+#: Deliberately empty. Edge#343 asks for "typed fabric nodes", but no issue
+#: or document fixes what a node's role is called (an AZ designation, a
+#: function such as sensor/relay, or something else). Until the owner
+#: decides, a registration may omit ``role`` (stored as ``None``) and any
+#: value it does give is refused -- a free-form string would become a
+#: vocabulary by accident. The role is display data only: nothing reads it
+#: to decide, authorize or enforce.
+NODE_ROLES: frozenset[str] = frozenset()
+
+
+def normalize_node_role(role: Any) -> str | None:
+    """``None`` for an absent role; the role itself if it is in NODE_ROLES."""
+    if role is None:
+        return None
+    if not isinstance(role, str):
+        raise ValueError("role_must_be_string")
+    text = role.strip()
+    if not text:
+        return None
+    if text not in NODE_ROLES:
+        raise ValueError("role_unknown")
+    return text
+
+
 @dataclass(frozen=True)
 class FreshnessPolicy:
     poll_interval_sec: int = 30
@@ -86,6 +112,7 @@ class AggregatorRegistry:
         node_label: str = "",
         trust_fingerprint: str = "",
         poll_url: str = "",
+        role: str | None = None,
     ) -> Dict[str, Any]:
         nid = str(node_id or "").strip()
         sid = str(site_id or "").strip()
@@ -93,6 +120,7 @@ class AggregatorRegistry:
             raise ValueError("node_id_required")
         if not sid:
             raise ValueError("site_id_required")
+        node_role = normalize_node_role(role)
         now = time.time()
         with self._lock:
             row = self._nodes.get(nid, {})
@@ -104,6 +132,7 @@ class AggregatorRegistry:
                 "node_label": str(node_label or "").strip(),
                 "trust_fingerprint": str(trust_fingerprint or "").strip(),
                 "poll_url": str(poll_url or "").strip(),
+                "role": node_role,
                 "status": "active",
                 "created_at": created_at,
                 "updated_at": now,
@@ -185,6 +214,8 @@ class AggregatorRegistry:
                     "site_id": site_id,
                     "node_label": str(node.get("node_label") or "").strip(),
                     "trust_fingerprint": "",
+                    # A node seen only through ingest has no registered role.
+                    "role": None,
                     "status": "active",
                     "created_at": now,
                     "updated_at": now,

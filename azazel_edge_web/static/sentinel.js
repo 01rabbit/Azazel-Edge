@@ -1198,9 +1198,12 @@
         var cpu = last.cpu_percent, mem = last.memory_percent, temp = last.temperature_c;
         txt('sysCpu', cpu ? (Math.round(Number(cpu)) + '%') : '—');
         txt('sysMem', mem ? (Math.round(Number(mem)) + '%') : '—');
-        txt('sysDisk', '—');
+        // disk_percent is null when the daemon could not read it; absent and
+        // null both render unknown, the same as the tiles beside it.
+        var disk = last.disk_percent;
+        txt('sysDisk', disk ? (Math.round(Number(disk)) + '%') : '—');
         txt('sysTemp', temp ? (Math.round(Number(temp)) + '°C') : '—');
-        setToneClass('sysCpuTile', pctTone(cpu)); setToneClass('sysMemTile', pctTone(mem)); setToneClass('sysTempTile', tempTone(temp));
+        setToneClass('sysCpuTile', pctTone(cpu)); setToneClass('sysMemTile', pctTone(mem)); setToneClass('sysTempTile', tempTone(temp)); setToneClass('sysDiskTile', pctTone(disk));
         // Non-color state cue for screen readers (tiles otherwise encode state by color).
         function ariaTile(tileId, valId, name, tone) {
             var el = document.getElementById(tileId), v = document.getElementById(valId);
@@ -1209,7 +1212,7 @@
         ariaTile('sysCpuTile', 'sysCpu', 'CPU', pctTone(cpu));
         ariaTile('sysMemTile', 'sysMem', 'Memory', pctTone(mem));
         ariaTile('sysTempTile', 'sysTemp', 'Temperature', tempTone(temp));
-        ariaTile('sysDiskTile', 'sysDisk', 'Disk', 'is-unknown');
+        ariaTile('sysDiskTile', 'sysDisk', 'Disk', pctTone(disk));
         var path = (summary.noc_focus || {}).path_health || {};
         txt('sysUplink', path.internet_check || '—');
         var svc = summary.service_health_summary || {}; var keys = Object.keys(svc);
@@ -1227,8 +1230,8 @@
         drawSpark('sysCpuSpark', cpuSeries.filter(function (v) { return isFinite(Number(v)) && Number(v) > 0; }), 'is-ok');
         drawSpark('sysMemSpark', memSeries.filter(function (v) { return isFinite(Number(v)) && Number(v) > 0; }), 'is-ok');
         drawSpark('sysTempSpark', tempSeries.filter(function (v) { return isFinite(Number(v)) && Number(v) > 0; }), 'is-ok');
-        // DISK has no metric source → leave its sparkline empty (honest).
-        drawSpark('sysDiskSpark', [], 'is-unknown');
+        var diskSeries = points.map(function (p) { return p.disk_percent; });
+        drawSpark('sysDiskSpark', diskSeries.filter(function (v) { return v != null && isFinite(Number(v)) && Number(v) > 0; }), 'is-ok');
         drawMultiSpark('sysResSpark', [
             { data: cpuSeries, cls: 'spk-cpu' },
             { data: memSeries, cls: 'spk-mem' },

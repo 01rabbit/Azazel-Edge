@@ -4,6 +4,20 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Runtime and fleet read-outs (Edge#343, read/display only):
+  - The control daemon samples `disk_percent`, the used share of the root
+    filesystem as `df` reports it (`df -h /`, hardware checklist R0-06).
+    A failed read is `null`, never 0 or an estimate. It is carried in the
+    snapshot, the dashboard trend points and the SYSTEM DISK tile, which
+    shows `—` when it is `null`.
+  - `POST /api/aggregator/nodes/register` takes an optional `role`. It is
+    stored on the node record (`null` when omitted). Its vocabulary
+    (`aggregator.NODE_ROLES`) is not decided yet and is empty, so a given
+    role is refused with `role_unknown`; registrations without a role are
+    unchanged. Nothing reads the role to decide, authorize or enforce.
+
 ### Fixed
 
 - Settings and behaviour that disagreed (Edge#477):
