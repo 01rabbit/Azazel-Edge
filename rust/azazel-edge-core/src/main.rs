@@ -1978,7 +1978,13 @@ mod tests {
         assert_eq!(last["interval_end"], "shutdown");
         assert_eq!(last["shed_total"], 50);
         assert_eq!(last["cumulative_shed_total"].as_u64().unwrap(), lines[0]["ingress_shed"]["shed_total"].as_u64().unwrap() + 50);
-        assert_eq!(forwarded, vec![lines[1].clone()]);
+        // Compare the forwarded record with the line as written, not with a
+        // re-parse of it: serde_json does not round-trip every f64 exactly
+        // (no float_roundtrip), so `emitted_epoch` can differ in the last digit.
+        let raw = fs::read_to_string(ingress_audit_log_path(&cfg)).unwrap();
+        let written_line = raw.lines().nth(1).unwrap();
+        assert_eq!(forwarded.len(), 1);
+        assert_eq!(serde_json::to_string(&forwarded[0]).unwrap(), written_line);
         // A second stop writes nothing.
         assert_eq!(shutdown_ingress(&cfg, &mut ingress, &mut |_| panic!("forwarded twice")), 0);
         assert_eq!(audit_lines(&cfg).len(), 2);
