@@ -49,9 +49,9 @@ def _quota_block():
     }.items()}
 
 
-def _summary(shed: int, cumulative: int, *, alerts_shed: int = 0):
+def _summary(shed: int, cumulative: int, *, alerts_shed: int = 0, examined: int = 3000):
     return {"ingress_shed": {
-        "emitted_epoch": 1.0, "shed_total": shed, "admitted": 2500, "alerts_admitted": 0, "examined": 2500 + shed,
+        "emitted_epoch": 1.0, "shed_total": shed, "admitted": examined - shed, "alerts_admitted": 0, "examined": examined,
         "oversized_lines_skipped": 0, "oversized_possible_alerts": 0, "cumulative_shed_total": cumulative,
         "cumulative_oversized_lines_skipped": 0, "alerts_shed": alerts_shed,
         "shed_by_type": {"flow": shed}, "shed_by_reason": {"non_alert_rate": shed, "backlog": 0},
@@ -63,8 +63,15 @@ def _obs(factor: float, *, seconds: float = 60.0):
     decl = load_ingress_quotas()
     share = QUOTA["value"] * factor / len(so11.NON_ALERT_KINDS)
     end = WIN0 + int(seconds * 1e9)
-    audit = [_summary(500, 500), _summary(500, 1000)] if factor > 1 else []
+    total = int(share * seconds) * len(so11.NON_ALERT_KINDS)
+    # At 120% the summaries cover every line written; at 100% the core wrote one
+    # summary for an interval in which it shed (examined at most what was written).
+    if factor > 1:
+        audit = [_summary(500, 500, examined=total // 2), _summary(500, 1000, examined=total - total // 2)]
+    else:
+        audit = [_summary(10, 10, examined=total // 3)]
     return {
+        "core_started": True, "core_alive_at_load_end": True, "ingress_audit_records_read": len(audit),
         "ingress": "core_eve_reader", "quota_path": decl["path"], "quota_sha256": decl["sha256"],
         "quota_value": QUOTA["value"], "quota_status": QUOTA["status"], "quota_hardware_class": QUOTA["hardware_class"],
         "load_factor": factor, "offered_non_alert_lines_per_s": QUOTA["value"] * factor,
@@ -194,7 +201,7 @@ def test_the_harness_offers_the_declared_quota_and_sheds_only_over_it():
     assert so11.NON_ALERT_KINDS == ("flow", "dns", "stats", "http")
     # The warm-up empties the bucket at 120%: burst / (1.2 - 1.0) x quota.
     assert so11.WARMUP_MS / 1000.0 >= QUOTA["non_alert_burst"] / (0.2 * QUOTA["value"])
-    assert so11.RATE_TOLERANCE <= 0.1
+    assert so11.RATE_TOLERANCE <= 0.02
 
 
 # ---------------------------------------------------- the quota recomputation
@@ -206,6 +213,11 @@ def test_a_load_offered_as_declared_holds_every_load_prerequisite():
         assert all(not v for v in problems.values()), problems
     assert rec.SO11_OVERLOAD_PREREQUISITE in so11.quota_load_problems([], _obs(1.2), 1.2)
     assert rec.SO11_OVERLOAD_PREREQUISITE not in so11.quota_load_problems([], _obs(1.0), 1.0)
+
+
+def _inflate(summary, factor):
+    summary["examined"] *= factor
+    summary["admitted"] = summary["examined"] - summary["shed_total"]
 
 
 @pytest.mark.parametrize(
@@ -222,7 +234,22 @@ def test_a_load_offered_as_declared_holds_every_load_prerequisite():
         (1.2, lambda o: o["ingress_audit"][0]["ingress_shed"]["quota"].update(non_alert_per_sec=999999), "core_ingress_audit_consistent"),
         (1.2, lambda o: o["ingress_audit"][1]["ingress_shed"].update(cumulative_shed_total=1), "core_ingress_audit_consistent"),
         (1.2, lambda o: o.update(ingress_audit_rotated=True), "core_ingress_audit_consistent"),
-        (1.2, lambda o: o.update(ingress_audit=[]), rec.SO11_OVERLOAD_PREREQUISITE),
+        (1.2, lambda o: o.update(ingress_audit=[], ingress_audit_records_read=0), rec.SO11_OVERLOAD_PREREQUISITE),
+        # Review of #520: the audit emptied or the examined count inflated.
+        (1.0, lambda o: o.update(ingress_audit=[]), "core_ingress_audit_consistent"),
+        (1.2, lambda o: o.update(ingress_audit=[]), "core_ingress_audit_consistent"),
+        (1.0, lambda o: o["ingress_audit"][0]["ingress_shed"].update(examined=o["ingress_audit"][0]["ingress_shed"]["examined"] * 100), "core_ingress_audit_consistent"),
+        (1.2, lambda o: o["ingress_audit"][0]["ingress_shed"].update(examined=o["ingress_audit"][0]["ingress_shed"]["examined"] * 100), "core_ingress_audit_consistent"),
+        (1.2, lambda o: o["ingress_audit"].pop(), "core_ingress_audit_consistent"),
+        # Inflated so that the summary still adds up: only the written count catches it.
+        (1.0, lambda o: _inflate(o["ingress_audit"][0]["ingress_shed"], 100), "core_ingress_audit_consistent"),
+        (1.2, lambda o: o.update(ingress_audit=o["ingress_audit"][:1], ingress_audit_records_read=1), "core_ingress_audit_consistent"),
+        (1.0, lambda o: o.update(core_started=False), "core_ran_through_load"),
+        (1.0, lambda o: o.update(core_alive_at_load_end=False), "core_ran_through_load"),
+        (1.2, lambda o: o.pop("core_alive_at_load_end"), "core_ran_through_load"),
+        # 2% rate tolerance: a 100% load is not a 120% one and the reverse.
+        (1.2, lambda o: o.update(load_factor=1.2, written={k: v * 100 // 120 for k, v in o["written"].items()}), "ingress_load_offered_at_level"),
+        (1.0, lambda o: o["written"].update(dns=int(o["written"]["dns"] * 1.03)), "ingress_load_offered_at_level"),
         (1.2, lambda o: [r["ingress_shed"]["shed_by_reason"].update(non_alert_rate=0) for r in o["ingress_audit"]], rec.SO11_OVERLOAD_PREREQUISITE),
     ],
 )
@@ -230,6 +257,32 @@ def test_a_load_not_shown_fails_its_prerequisite(factor, mutate, prereq):
     obs = _obs(factor)
     mutate(obs)
     assert so11.quota_load_problems(_so03_samples(), obs, factor)[prereq]
+
+
+def test_the_rate_ranges_of_the_two_levels_do_not_overlap():
+    hi_100 = QUOTA["value"] * 1.0 * (1 + so11.RATE_TOLERANCE)
+    lo_120 = QUOTA["value"] * 1.2 * (1 - so11.RATE_TOLERANCE)
+    assert hi_100 < lo_120
+    assert so11.RATE_TOLERANCE <= 0.02 and so11.EXAMINED_TOLERANCE <= 0.02
+    # A 120% load measured against the 100% part fails, and the reverse.
+    assert so11.quota_load_problems(_so03_samples(), dict(_obs(1.2), load_factor=1.0), 1.0)["ingress_load_offered_at_level"]
+    assert so11.quota_load_problems(_so03_samples(), dict(_obs(1.0), load_factor=1.2), 1.2)["ingress_load_offered_at_level"]
+
+
+def test_review_tampered_quota_load_in_a_full_record_is_refused(clean_owner):
+    # Review of #520: the 100% part's audit emptied, or its examined count
+    # multiplied by 100, with every prerequisite still declared met.
+    for mutate in (
+        lambda q: q.update(ingress_audit=[]),
+        lambda q: q["ingress_audit"][0]["ingress_shed"].update(examined=q["ingress_audit"][0]["ingress_shed"]["examined"] * 100),
+        lambda q: q.update(core_alive_at_load_end=False),
+        lambda q: _inflate(q["ingress_audit"][0]["ingress_shed"], 100),
+    ):
+        record = _record()
+        part = _part(record, "so07_at_quota")
+        mutate(part["quota_load"])
+        errors = rec.validate_record(record)
+        assert any("declared met but the quota_load observation does not show it" in e for e in errors), errors
 
 
 def test_a_sample_outside_the_load_window_fails_the_offered_prerequisite():
@@ -408,6 +461,7 @@ def test_real_core_so04_start_under_120pct_sheds_and_measures(rust_core_bin):
 def test_real_core_so07_under_the_quota_load(rust_core_bin):
     taken = so11._so07(rust_core_bin, 1.0, QUOTA, seed=5, kinds=["action_decision"])
     assert taken["core_started"]
+    assert taken["quota_load"]["core_started"] is True and taken["quota_load"]["core_alive_at_load_end"] is True
     assert len(taken["samples"]) == len(rec.SO07_INJECTION_POINTS) * len(rec.SO07_RECORD_PADS)
     assert all(s["violations"] == 0 for s in taken["samples"])
     problems = so11.quota_load_problems(taken["samples"], taken["quota_load"], 1.0)

@@ -333,11 +333,20 @@ looser than the row it re-runs; the validator applies the row's own
 recomputations. Each part adds, recomputed from its `quota_load` observation
 against `ingress_quota.json` as it stands in the tree:
 
+- `core_ran_through_load`: the core had started before the load and was
+  still running when the load ended and its last summary had been awaited;
 - `ingress_load_offered_at_level`: the quota file is cited at its current
   SHA-256, every class was written at its share of the level's rate (within
-  10%), and every sample lies inside the load window after the warm-up;
+  2%, so the 100% range, 2450–2550 lines/s, and the 120% range, 2940–3060,
+  do not overlap), and every sample lies inside the load window after the
+  warm-up;
 - `core_ingress_audit_consistent`: the core's `ingress_shed` summaries carry
-  the declared quota, add up, and the audit file was not rotated;
+  the declared quota and add up, the list holds as many records as the
+  harness read from the file, the audit file was not rotated, the non-alert
+  lines the summaries count as examined are never more than were written,
+  and at 120% (where the core sheds until the load stops, so its summaries
+  cover every line) within 2% of them. At 100% a summary is written only for
+  an interval with shedding, so no lower bound applies there;
 - `alerts_never_shed`;
 - `quota_shed_at_overload` (120% parts): the core shed non-alert lines for the rate.
 
@@ -348,6 +357,11 @@ half needs owned tc/nft state and root, and its bounds are provisional. The
 referenced rows' own gaps stay, closed only by their usual recomputation
 (SO-04's monotonic-expiry gap by `same_boot_as_lease`, below). So the verdict
 is `not_measurable` whatever the numbers are.
+
+**Run-health prerequisites are the referenced rows'.** As in SO-04, the
+validator cannot recompute `wall_clock_stable_during_run`, `core_daemon_started`
+and the other run-health checks from the samples; it takes them as the
+harness recorded them, and an unmet one keeps CI red.
 
 **No identifiers.** The record carries no address, MAC, boot id or host name:
 SO-04 samples carry `same_boot_as_lease` instead of the two boot ids, and

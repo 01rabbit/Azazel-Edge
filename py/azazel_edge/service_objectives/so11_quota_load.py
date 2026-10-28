@@ -87,8 +87,14 @@ LINE_BYTES = 600
 # Long enough for the 1500-token bucket to empty at 120% (net 500 lines/s):
 # the samples are taken in the steady state the level produces.
 WARMUP_MS = 3000
-# A class's written rate may differ from its share by this fraction.
-RATE_TOLERANCE = 0.1
+# A class's written rate may differ from its share by this fraction. The
+# writer counts its lines from the start, so the real error is about one line;
+# 2% keeps the 100% (2450-2550 lines/s) and 120% (2940-3060) ranges apart.
+RATE_TOLERANCE = 0.02
+# At 120% the core sheds until the load stops, so its summaries cover every
+# line it examined: the non-alert lines they count must match the lines
+# written to within this fraction (at 100% they can only be at most that).
+EXAMINED_TOLERANCE = 0.02
 AUDIT_FILE = "ingress-audit.jsonl"
 START_WAIT_S = 15.0
 SO04_LEASES_PER_TYPE = 50
@@ -190,11 +196,15 @@ def read_audit(work: Path) -> Tuple[List[Dict[str, Any]], bool]:
 
 
 @contextmanager
-def applied(eve: Path, work: Path, factor: float, quota: Mapping[str, Any], out: Dict[str, Any]) -> Iterator[QuotaLoad]:
+def applied(
+    eve: Path, work: Path, factor: float, quota: Mapping[str, Any], out: Dict[str, Any],
+    *, core_started: bool, core_alive: Callable[[], bool],
+) -> Iterator[QuotaLoad]:
     """Offer ``factor`` x the quota to the core reading ``eve`` for the body of the block.
 
     Waits ``WARMUP_MS`` before the body, and after it one audit interval for
-    the core's last summary; ``out`` then holds the observation.
+    the core's last summary; ``out`` then holds the observation, with whether
+    the core had started and was still running at that point.
     """
 
     load = QuotaLoad(eve, float(quota["value"]) * factor)
@@ -206,10 +216,12 @@ def applied(eve: Path, work: Path, factor: float, quota: Mapping[str, Any], out:
         load.stop.set()
         load.join(timeout=10)
         time.sleep(int(quota["audit_interval_ms"]) / 1000.0 + 0.5)
-        out.update(observation(load, work, factor))
+        out.update(observation(load, work, factor, core_started=core_started, core_alive_at_load_end=bool(core_alive())))
 
 
-def observation(load: Optional[QuotaLoad], work: Path, factor: float) -> Dict[str, Any]:
+def observation(
+    load: Optional[QuotaLoad], work: Path, factor: float, *, core_started: bool = False, core_alive_at_load_end: bool = False,
+) -> Dict[str, Any]:
     """The part's ``quota_load`` block: what was offered, and what the core recorded."""
 
     decl = load_ingress_quotas()
@@ -217,6 +229,11 @@ def observation(load: Optional[QuotaLoad], work: Path, factor: float) -> Dict[st
     audit, rotated = read_audit(work)
     window = dict(load.window) if load is not None else {}
     return {
+        "core_started": bool(core_started),
+        "core_alive_at_load_end": bool(core_alive_at_load_end),
+        # What the harness read from the core's audit file, kept beside the
+        # summaries so a summary removed from or added to the list shows.
+        "ingress_audit_records_read": len(audit),
         "ingress": SO11_INGRESS,
         "quota_path": decl["path"],
         "quota_sha256": decl["sha256"],
@@ -300,7 +317,7 @@ def quota_load_problems(samples: Sequence[Mapping[str, Any]], quota_load: Any, f
 
     decl = load_ingress_quotas()
     quota = decl["quotas"].get(SO11_INGRESS)
-    ids = ("ingress_load_offered_at_level", "core_ingress_audit_consistent", "alerts_never_shed")
+    ids = ("core_ran_through_load", "ingress_load_offered_at_level", "core_ingress_audit_consistent", "alerts_never_shed")
     if factor > 1.0:
         ids += (SO11_OVERLOAD_PREREQUISITE,)
     if quota is None:
@@ -308,12 +325,29 @@ def quota_load_problems(samples: Sequence[Mapping[str, Any]], quota_load: Any, f
     if not isinstance(quota_load, dict):
         return {i: ["no quota_load observation"] for i in ids}
     out: Dict[str, List[str]] = {i: [] for i in ids}
+    if quota_load.get("core_started") is not True:
+        out["core_ran_through_load"].append("the core did not start before the load")
+    if quota_load.get("core_alive_at_load_end") is not True:
+        out["core_ran_through_load"].append("the core was not running when the load ended")
     out["ingress_load_offered_at_level"] = _offered_problems(list(samples), quota_load, factor, quota, decl)
     audit = quota_load.get("ingress_audit")
     if not isinstance(audit, list):
         audit = []
         out["core_ingress_audit_consistent"].append("ingress_audit is not a list")
+    if quota_load.get("ingress_audit_records_read") != len(audit):
+        out["core_ingress_audit_consistent"].append(
+            f"ingress_audit holds {len(audit)} record(s); the harness read {quota_load.get('ingress_audit_records_read')!r}"
+        )
     shed, problems = _audit_problems(audit, quota)
+    written = quota_load.get("written") if isinstance(quota_load.get("written"), dict) else {}
+    written_total = sum(v for v in written.values() if _int(v))
+    examined = sum(int(r["examined"]) - int(r["alerts_admitted"]) for r in shed)
+    if shed and examined > written_total:
+        out["core_ingress_audit_consistent"].append(f"the core counts {examined} non-alert lines examined; only {written_total} were written")
+    if factor > 1.0 and shed and examined < (1.0 - EXAMINED_TOLERANCE) * written_total:
+        out["core_ingress_audit_consistent"].append(
+            f"the core counts {examined} non-alert lines examined of {written_total} written (under {1.0 - EXAMINED_TOLERANCE:.0%})"
+        )
     out["alerts_never_shed"] = [p for p in problems if "alerts_shed" in p]
     out["alerts_never_shed"] += [
         f"ingress_shed shed_by_type.alert is {r.get('shed_by_type', {}).get('alert')!r}"
@@ -358,8 +392,9 @@ def _so03(core: Path, factor: float, quota: Mapping[str, Any], seed: Optional[in
 
     obs: Dict[str, Any] = {}
 
-    def during_core(work: Path, eve: Path):  # type: ignore[no-untyped-def]
-        return applied(eve, work, factor, quota, obs)
+    def during_core(work: Path, eve: Path, alive: Callable[[], bool]):  # type: ignore[no-untyped-def]
+        # Entered only once the core has started (so03_alert_queue._run_core).
+        return applied(eve, work, factor, quota, obs, core_started=True, core_alive=alive)
 
     kwargs: Dict[str, Any] = {"core_bin": core, "seed": seed, "during_core": during_core}
     if samples is not None:
@@ -417,7 +452,7 @@ def _so07(core: Path, factor: float, quota: Mapping[str, Any], seed: Optional[in
         try:
             started = _wait_started(proc, work / "core.stderr")
             if started:
-                with applied(eve, work, factor, quota, obs):
+                with applied(eve, work, factor, quota, obs, core_started=True, core_alive=lambda: proc.poll() is None):
                     record = so07_audit_ordering.run(seed=seed, kinds=kinds)
                 part = record["parts"][0]
                 rows, prereqs = part["samples"], part["prerequisites"]
@@ -481,8 +516,8 @@ def _so04_start(core: Path, factor: float, quota: Mapping[str, Any], seed: Optio
             proc = subprocess.Popen([str(core)], cwd=str(work), env=env, stdout=subprocess.DEVNULL, stderr=err_fh)
             try:
                 # The load starts once the core has started, as for SO-03 and SO-07.
-                _wait_started(proc, stderr_path)
-                with applied(eve, work, factor, quota, obs):
+                core_started = _wait_started(proc, stderr_path)
+                with applied(eve, work, factor, quota, obs, core_started=core_started, core_alive=lambda: proc.poll() is None):
                     deadline = max(l["due_epoch"] for l in leases) + SO04_TAIL_SLACK_S
                     while time.time() < deadline and not tail.done() and proc.poll() is None:
                         time.sleep(0.01)

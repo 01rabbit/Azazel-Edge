@@ -280,7 +280,7 @@ SO11_REFERENCED_ROWS = (
     ("so04_start", "SO-04", "rollback_start_after_expiry"),
     ("so07", "SO-07", "reported_complete_implies_record_present"),
 )
-SO11_LOAD_PREREQUISITES = ("ingress_load_offered_at_level", "core_ingress_audit_consistent", "alerts_never_shed")
+SO11_LOAD_PREREQUISITES = ("core_ran_through_load", "ingress_load_offered_at_level", "core_ingress_audit_consistent", "alerts_never_shed")
 SO11_OVERLOAD_PREREQUISITE = "quota_shed_at_overload"
 # What SO-11's own load replaces in a referenced row: the SO-04 hostile-load
 # profile (its phases, its gaps) and the completion half, which is not re-run.
