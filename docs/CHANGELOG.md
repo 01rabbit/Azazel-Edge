@@ -20,6 +20,13 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The dashboard trend points read CPU, memory and temperature from the
+  snapshot's top level (`cpu_percent`, `mem_percent`, `temp_c`), where the
+  control daemon writes them, and fall back to `internal` only when the top
+  level has no value (Edge#343). They used to read only `internal`, which
+  the daemon does not write, so the SENTINEL SYSTEM CPU/MEM/TEMP tiles were
+  always `—`. They now show the readings and their tone (80% and over is
+  watch, 95% critical; 70°C watch, 85°C critical).
 - Settings and behaviour that disagreed (Edge#477):
   - `control.sock` `contain`, `disconnect` and `stage_open` answer
     `{"ok": false, "error": "not_implemented"}` instead of appending a line

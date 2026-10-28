@@ -914,6 +914,14 @@ def _optional_percent(value: Any) -> Optional[float]:
     return number
 
 
+def _first_present(*values: Any) -> Any:
+    """The first value that is not None or empty, else None."""
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
+
+
 def _iso_from_epoch(value: Any) -> str:
     try:
         epoch = float(value)
@@ -3538,9 +3546,14 @@ def _dashboard_trend_point_payload(
         "stale_snapshot": bool(stale_flags.get("snapshot")),
         "stale_ai_metrics": bool(stale_flags.get("ai_metrics")),
         "ai_contribution_rate": _as_float(rates.get("ai_contribution"), 0.0),
-        "cpu_percent": _as_float(internal.get("cpu_percent"), 0.0),
-        "memory_percent": _as_float(internal.get("memory_percent") or internal.get("mem_percent"), 0.0),
-        "temperature_c": _as_float(internal.get("temperature_c"), 0.0),
+        # The control daemon writes these at the top level of the snapshot
+        # (cpu_percent, mem_percent, temp_c). ``internal`` is the older place
+        # and is still read when the top level does not carry the value.
+        "cpu_percent": _as_float(_first_present(state.get("cpu_percent"), internal.get("cpu_percent")), 0.0),
+        "memory_percent": _as_float(
+            _first_present(state.get("mem_percent"), internal.get("memory_percent") or internal.get("mem_percent")), 0.0
+        ),
+        "temperature_c": _as_float(_first_present(state.get("temp_c"), internal.get("temperature_c")), 0.0),
         # The control daemon writes this at the top level of the snapshot.
         # None (not 0) when it was not read, so the tile shows unknown.
         "disk_percent": _optional_percent(state.get("disk_percent")),
