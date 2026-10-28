@@ -1070,11 +1070,14 @@ DISK_USAGE_PATH = "/"
 
 
 def _read_disk_percent(path: str = DISK_USAGE_PATH) -> float | None:
-    """Used share of the filesystem holding ``path``, as ``df`` reports it.
+    """Used share of the filesystem holding ``path``, by ``df``'s formula.
 
     ``df`` computes Use% over the blocks an unprivileged user can see
-    (used / (used + available)), leaving out the root reserve; this does
-    the same so the value matches what an operator reads on the Pi.
+    (used / (used + available)), leaving out the root reserve; this uses
+    the same formula. The rounding differs: ``df`` rounds up to a whole
+    percent, this rounds to one decimal place, and the SENTINEL tile then
+    rounds that to the nearest whole percent. So the tile can read one
+    lower than ``df`` on the Pi.
 
     A read that fails, or a filesystem that reports no blocks, gives
     ``None``: the reading is absent, not 0% and not an estimate.

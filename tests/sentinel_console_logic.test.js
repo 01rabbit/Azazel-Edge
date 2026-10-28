@@ -6,7 +6,7 @@
    (is-ok). These are exactly the paths the adversarial review flagged. */
 'use strict';
 const path = require('path');
-const { toneOf, worstTone, computeConsoleState, alertDecisionTraceId, groupAlertsByDecision, decisionTraceView } = require(
+const { toneOf, worstTone, computeConsoleState, alertDecisionTraceId, groupAlertsByDecision, decisionTraceView, diskTileView } = require(
     path.join(__dirname, '..', 'azazel_edge_web', 'static', 'sentinel.js'));
 
 let failures = 0;
@@ -199,6 +199,17 @@ const pendingView = decisionTraceView(TID, { ok: true, sources: { chain: { ok: t
 ok(rowText(pendingView).indexOf('Chain record=RE-VERIFYING') !== -1, 'pending record shown as re-verifying: ' + rowText(pendingView));
 ok(rowText(pendingView).indexOf('Chain=RE-VERIFYING') !== -1, 'pending chain shown as re-verifying');
 ok(rowText(pendingView).indexOf('VERIFIED (') === -1 && rowText(pendingView).indexOf('=VERIFIED') === -1, 'pending never reads as verified');
+
+// --- DISK tile (Edge#343): null/absent is '—' (unknown), a value is a % ----
+[null, undefined, 0, 'n/a', NaN].forEach(function (v) {
+    eq(diskTileView(v).text, '—', 'disk ' + String(v) + ' -> dash');
+    eq(diskTileView(v).tone, 'is-unknown', 'disk ' + String(v) + ' -> unknown (never green)');
+});
+eq(diskTileView(42.4).text, '42%', 'disk value -> rounded percent');
+eq(diskTileView(42.4).tone, 'is-ok', 'disk 42% -> ok');
+eq(diskTileView(85.6).text, '86%', 'disk 85.6 -> 86%');
+eq(diskTileView(85.6).tone, 'is-watch', 'disk >= 80 -> watch');
+eq(diskTileView(97).tone, 'is-critical', 'disk >= 95 -> critical');
 
 if (failures) { console.error(failures + ' assertion(s) failed'); process.exit(1); }
 console.log('sentinel logic: all assertions passed');

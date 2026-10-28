@@ -114,6 +114,13 @@ class AggregatorRegistry:
         poll_url: str = "",
         role: str | None = None,
     ) -> Dict[str, Any]:
+        """Register (or re-register) a node; the record is replaced whole.
+
+        Re-registering without ``role`` sets the stored role back to
+        ``None``, as an omitted ``node_label`` clears the label. Once
+        NODE_ROLES has values, a client re-registering a node must send its
+        role again or the node loses it.
+        """
         nid = str(node_id or "").strip()
         sid = str(site_id or "").strip()
         if not nid:

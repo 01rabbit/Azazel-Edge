@@ -1188,6 +1188,14 @@
     /* ---- SYSTEM (runtime tiles + resource history + services/fleet/config) - */
     function pctTone(v) { v = Number(v); if (!isFinite(v) || v === 0) return 'is-unknown'; if (v >= 95) return 'is-critical'; if (v >= 80) return 'is-watch'; return 'is-ok'; }
     function tempTone(v) { v = Number(v); if (!isFinite(v) || v === 0) return 'is-unknown'; if (v >= 85) return 'is-critical'; if (v >= 70) return 'is-watch'; return 'is-ok'; }
+    // DISK tile text and tone. disk_percent is null when the daemon could not
+    // read it; null, absent, 0 and non-numbers all render unknown ('—'), the
+    // same as the CPU/MEM tiles beside it.
+    function diskTileView(disk) {
+        var v = Number(disk);
+        if (disk == null || !isFinite(v) || v === 0) return { text: '—', tone: 'is-unknown' };
+        return { text: Math.round(v) + '%', tone: pctTone(v) };
+    }
     function renderSystemConsole(detail) {
         detail = detail || {};
         var summary = detail.summary || {}, health = detail.health || {}, trends = detail.trends || {};
@@ -1198,12 +1206,10 @@
         var cpu = last.cpu_percent, mem = last.memory_percent, temp = last.temperature_c;
         txt('sysCpu', cpu ? (Math.round(Number(cpu)) + '%') : '—');
         txt('sysMem', mem ? (Math.round(Number(mem)) + '%') : '—');
-        // disk_percent is null when the daemon could not read it; absent and
-        // null both render unknown, the same as the tiles beside it.
-        var disk = last.disk_percent;
-        txt('sysDisk', disk ? (Math.round(Number(disk)) + '%') : '—');
+        var diskView = diskTileView(last.disk_percent);
+        txt('sysDisk', diskView.text);
         txt('sysTemp', temp ? (Math.round(Number(temp)) + '°C') : '—');
-        setToneClass('sysCpuTile', pctTone(cpu)); setToneClass('sysMemTile', pctTone(mem)); setToneClass('sysTempTile', tempTone(temp)); setToneClass('sysDiskTile', pctTone(disk));
+        setToneClass('sysCpuTile', pctTone(cpu)); setToneClass('sysMemTile', pctTone(mem)); setToneClass('sysTempTile', tempTone(temp)); setToneClass('sysDiskTile', diskView.tone);
         // Non-color state cue for screen readers (tiles otherwise encode state by color).
         function ariaTile(tileId, valId, name, tone) {
             var el = document.getElementById(tileId), v = document.getElementById(valId);
@@ -1212,7 +1218,7 @@
         ariaTile('sysCpuTile', 'sysCpu', 'CPU', pctTone(cpu));
         ariaTile('sysMemTile', 'sysMem', 'Memory', pctTone(mem));
         ariaTile('sysTempTile', 'sysTemp', 'Temperature', tempTone(temp));
-        ariaTile('sysDiskTile', 'sysDisk', 'Disk', pctTone(disk));
+        ariaTile('sysDiskTile', 'sysDisk', 'Disk', diskView.tone);
         var path = (summary.noc_focus || {}).path_health || {};
         txt('sysUplink', path.internet_check || '—');
         var svc = summary.service_health_summary || {}; var keys = Object.keys(svc);
@@ -1520,7 +1526,7 @@
         module.exports = {
             toneOf: toneOf, worstTone: worstTone, computeConsoleState: computeConsoleState,
             alertDecisionTraceId: alertDecisionTraceId, groupAlertsByDecision: groupAlertsByDecision,
-            decisionTraceView: decisionTraceView
+            decisionTraceView: decisionTraceView, diskTileView: diskTileView
         };
     }
 })();
