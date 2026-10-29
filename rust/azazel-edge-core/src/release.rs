@@ -7,15 +7,36 @@ use std::net::IpAddr;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const LEDGER_SCHEMA_VERSION: &str = "azazel-release-ledger/v1";
+/// The ledger this core writes. v2 adds the replay checkpoint (generation
+/// migration) and the lease fields of the flow-scoped throttle; a v1 ledger
+/// (an older core, or the SO-04 harness) is read and rewritten as v2. An older
+/// core refuses a v2 ledger instead of ignoring its checkpoint.
+const LEDGER_SCHEMA_VERSION: &str = "azazel-release-ledger/v2";
+const LEDGER_SCHEMA_V1: &str = "azazel-release-ledger/v1";
 const MAX_LEDGER_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_LEDGER_TASKS: usize = 4096;
+/// New leases are admitted only while the ledger is below these marks; what
+/// lies above them is kept for the release path (status and error updates of
+/// leases already granted), so releasing never fails on capacity.
+const ADMIT_MAX_TASKS: usize = MAX_LEDGER_TASKS * 7 / 8;
+const ADMIT_MAX_BYTES: u64 = MAX_LEDGER_BYTES * 3 / 4;
+/// At or above these marks admission first compacts the ledger (generation
+/// migration) and the capacity report says `warning`.
+const COMPACT_AT_TASKS: usize = MAX_LEDGER_TASKS * 3 / 4;
+const COMPACT_AT_BYTES: u64 = MAX_LEDGER_BYTES / 2;
 const MAX_STDOUT_BYTES: usize = 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+/// The owned nft chain of the flow-scoped temporary restriction.
+pub const THROTTLE_CHAIN: &str = "throttle";
+/// `ReleaseTask::mechanism` of a flow-scoped nft rate limit. An empty
+/// mechanism is a lease written before it existed: a throttle is then the
+/// legacy root TBF qdisc, which is still released but never applied.
+pub const MECHANISM_NFT_FLOW_LIMIT: &str = "nft_flow_limit";
 const TRUSTED_DIRS: [&str; 4] = ["/usr/sbin", "/usr/bin", "/sbin", "/bin"];
 /// The audit-chain kind stating that rollback of a lease has begun (SO-04).
 pub const ROLLBACK_STARTED_KIND: &str = "rollback_started";
@@ -74,7 +95,52 @@ pub struct ReleaseTask {
     /// The boot `next_attempt_boottime_ns` belongs to.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub next_attempt_boot_id: String,
+    /// How the restriction is held (`MECHANISM_NFT_FLOW_LIMIT`); empty for
+    /// isolate/redirect rules and for a legacy throttle.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mechanism: String,
+    /// The flow's destination (flow-scoped throttle only).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub destination_ip: String,
+    /// `tcp`, `udp`, or empty when the restriction matches no port.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub protocol: String,
+    /// nft `limit rate over <n> kbytes/second burst <m> kbytes`.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub limit_rate_kbytes: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub limit_burst_kbytes: u32,
+    /// The alert's own time (EVE timestamp), the replay checkpoint's basis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_epoch: Option<f64>,
+    /// When the first lease of this resource in the current family began:
+    /// a family is bounded to `MAX_CUMULATIVE_LEASE_SEC` in total.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_started_epoch: Option<f64>,
+    /// How many times this lease's expiry has been extended.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub extensions: u32,
 }
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+/// Edge-fixed lease bounds. They are compiled in: no environment variable or
+/// file raises them.
+pub const MIN_LEASE_TTL_SEC: u64 = 30;
+pub const MAX_LEASE_TTL_SEC: u64 = 900;
+pub const MAX_LEASE_EXTENSIONS: u32 = 3;
+pub const MAX_CUMULATIVE_LEASE_SEC: u64 = 3600;
+/// Leases restricting traffic at once; above it a new restriction is refused
+/// (notify) rather than widening the restricted set.
+pub const MAX_ACTIVE_LEASES: usize = 64;
+/// A terminal task leaves the ledger (into the checkpoint) only this long
+/// after its last change. It is longer than a lease family can last and than
+/// an alert may be old and still acted on, so a compacted task's alert is
+/// already refused as stale on a correct clock; the checkpoint watermark
+/// keeps refusing it when the wall clock is stepped back.
+pub const COMPACT_MIN_AGE_SEC: f64 = (MAX_CUMULATIVE_LEASE_SEC + 600) as f64;
 
 /// The clocks a lease is created and expired against, read together.
 #[derive(Debug, Clone, PartialEq)]
@@ -186,6 +252,24 @@ pub fn lease_expiry(task: &ReleaseTask, now: &LeaseNow) -> Option<ExpiryClock> {
 struct ReleaseLedger {
     schema_version: String,
     tasks: Vec<ReleaseTask>,
+    #[serde(default)]
+    checkpoint: LedgerCheckpoint,
+}
+
+/// What a generation migration leaves of the terminal tasks it removes. The
+/// replay guard is the task id while a task is in the ledger and, once it is
+/// compacted, the watermark: no task whose alert (or, without an alert time,
+/// whose creation) is at or before it is admitted again.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct LedgerCheckpoint {
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub replay_watermark_epoch: f64,
+    #[serde(default)]
+    pub compacted_total: u64,
+    #[serde(default)]
+    pub last_compacted_epoch: f64,
 }
 
 impl Default for ReleaseLedger {
@@ -193,9 +277,83 @@ impl Default for ReleaseLedger {
         Self {
             schema_version: LEDGER_SCHEMA_VERSION.to_string(),
             tasks: Vec::new(),
+            checkpoint: LedgerCheckpoint::default(),
         }
     }
 }
+
+/// One process-wide lock for every read-modify-write of a ledger, plus an
+/// advisory `flock` on a lock file beside it for the maintenance subcommand
+/// (another process). The apply path holds it only around ledger updates,
+/// never while an apply command runs; the release sweep holds it for a
+/// sweep, whose commands are each time-bounded.
+static LEDGER_LOCK: Mutex<()> = Mutex::new(());
+
+struct LedgerGuard {
+    _process: MutexGuard<'static, ()>,
+    _file: Option<File>,
+}
+
+extern "C" {
+    fn flock(fd: std::os::raw::c_int, operation: std::os::raw::c_int) -> std::os::raw::c_int;
+}
+const LOCK_EX: std::os::raw::c_int = 2;
+
+fn lock_ledger(path: &str) -> Result<LedgerGuard, String> {
+    let process = LEDGER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let destination = Path::new(path);
+    let parent = destination.parent().filter(|p| !p.as_os_str().is_empty());
+    let file = match parent {
+        Some(dir) if dir.is_dir() => {
+            let name = destination
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("release-ledger");
+            let lock_path = destination.with_file_name(format!(".{name}.lock"));
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .mode(0o600)
+                .custom_flags(O_NOFOLLOW)
+                .open(&lock_path)
+                .map_err(|e| format!("release ledger lock open failed: {e}"))?;
+            use std::os::unix::io::AsRawFd;
+            // SAFETY: flock on a descriptor this function owns.
+            if unsafe { flock(file.as_raw_fd(), LOCK_EX) } != 0 {
+                return Err("release ledger lock failed".to_string());
+            }
+            Some(file)
+        }
+        // No directory, so no ledger: nothing on disk to serialise.
+        _ => None,
+    };
+    Ok(LedgerGuard { _process: process, _file: file })
+}
+
+/// Leases whose apply is running in this process. The sweep never releases
+/// one of them: it would verify absence before the apply lands and leave a
+/// rule with no lease. `activate_release_task` or `abandon_release_task`
+/// takes the lease out again; after a crash, `recover_unconfirmed_on_start`
+/// releases what was still in flight.
+static IN_FLIGHT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn set_in_flight(task_id: &str, on: bool) {
+    let mut set = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+    set.retain(|id| id != task_id);
+    if on {
+        set.push(task_id.to_string());
+    }
+}
+
+fn in_flight(task_id: &str) -> bool {
+    IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|id| id == task_id)
+}
+
+#[cfg(target_os = "linux")]
+const O_NOFOLLOW: i32 = 0o400000;
+#[cfg(not(target_os = "linux"))]
+const O_NOFOLLOW: i32 = 0x0100;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReleaseOutcome {
@@ -243,6 +401,19 @@ impl ReleaseCommandRunner for SystemReleaseCommandRunner {
         if !allowed_release_command(argv) {
             return Err(format!("release command rejected by allowlist: {argv:?}"));
         }
+        run_bounded(argv, COMMAND_TIMEOUT)
+    }
+}
+
+/// Run a trusted `nft`/`tc` argv with its output bounded and its run time
+/// bounded by `timeout`: past it the child is killed and the call fails
+/// (`command timeout`). Both the apply path and the release path use it, so
+/// neither can wait on a wedged command for ever.
+pub(crate) fn run_bounded(argv: &[String], timeout: Duration) -> Result<CommandResult, String> {
+    {
+        if argv.is_empty() {
+            return Err("empty command".to_string());
+        }
         let binary = resolve_trusted_binary(&argv[0])?;
         let mut command = trusted_command(&binary);
         command
@@ -267,15 +438,15 @@ impl ReleaseCommandRunner for SystemReleaseCommandRunner {
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
-                Ok(None) if started.elapsed() < COMMAND_TIMEOUT => {
+                Ok(None) if started.elapsed() < timeout => {
                     thread::sleep(Duration::from_millis(20));
                 }
                 Ok(None) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let _ = out_reader.join();
-                    let _ = err_reader.join();
-                    return Err("release command timeout".to_string());
+                    // A grandchild could keep the pipes open; the readers are
+                    // not joined, so the timeout holds regardless.
+                    return Err("command timeout".to_string());
                 }
                 Err(e) => {
                     let _ = child.kill();
@@ -404,7 +575,86 @@ pub fn build_release_task(
         due_boot_id,
         next_attempt_boottime_ns: None,
         next_attempt_boot_id: String::new(),
+        mechanism: String::new(),
+        destination_ip: String::new(),
+        protocol: String::new(),
+        limit_rate_kbytes: 0,
+        limit_burst_kbytes: 0,
+        event_epoch: None,
+        family_started_epoch: None,
+        extensions: 0,
     })
+}
+
+/// The flow a temporary restriction is scoped to: the source, the
+/// destination and, when the protocol carries one, the destination port.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlowScope {
+    pub source_ip: String,
+    pub destination_ip: String,
+    /// `tcp`, `udp`, or empty (then no port is matched).
+    pub protocol: String,
+    pub destination_port: u16,
+}
+
+impl FlowScope {
+    pub fn key(&self) -> String {
+        format!(
+            "{}>{}:{}:{}",
+            self.source_ip,
+            self.destination_ip,
+            if self.protocol.is_empty() { "any" } else { &self.protocol },
+            self.destination_port
+        )
+    }
+}
+
+/// A flow-scoped temporary restriction: an nft rate limit in the owned
+/// `throttle` chain that drops this flow's packets above the given rate.
+/// It changes no qdisc and touches no other flow.
+pub fn build_flow_throttle_task(
+    trace_id: &str,
+    flow: &FlowScope,
+    rate_kbytes: u32,
+    burst_kbytes: u32,
+    ttl_sec: u64,
+    now: &LeaseNow,
+) -> Option<ReleaseTask> {
+    if rate_kbytes == 0 || burst_kbytes == 0 {
+        return None;
+    }
+    let mut task = build_release_task(trace_id, "redirect", "", &flow.source_ip, flow.destination_port.max(1), 1, 0, ttl_sec, now)?;
+    let resource_key = format!("nft:inet:azazel_edge:{THROTTLE_CHAIN}:{}", flow.key());
+    let seed = format!("{trace_id}|throttle|{resource_key}");
+    task.task_id = format!("release-{:016x}", fnv1a64(seed.as_bytes()));
+    task.owner_token = format!("azazel-edge:{}", task.task_id);
+    task.action = "throttle".to_string();
+    task.resource_key = resource_key;
+    task.iface = String::new();
+    task.tc_handle = String::new();
+    task.destination_port = flow.destination_port;
+    task.redirect_port = 0;
+    task.mechanism = MECHANISM_NFT_FLOW_LIMIT.to_string();
+    task.destination_ip = flow.destination_ip.clone();
+    task.protocol = flow.protocol.clone();
+    task.limit_rate_kbytes = rate_kbytes;
+    task.limit_burst_kbytes = burst_kbytes;
+    Some(task)
+}
+
+/// Whether this throttle lease is the legacy root TBF qdisc.
+pub fn is_legacy_tc_throttle(task: &ReleaseTask) -> bool {
+    task.action == "throttle" && task.mechanism.is_empty()
+}
+
+/// The owned nft chain a task's rule lives in, for an nft-held task.
+pub fn owned_nft_chain(task: &ReleaseTask) -> Option<&'static str> {
+    match task.action.as_str() {
+        "isolate" => Some("input"),
+        "redirect" => Some("prerouting"),
+        "throttle" if task.mechanism == MECHANISM_NFT_FLOW_LIMIT => Some(THROTTLE_CHAIN),
+        _ => None,
+    }
 }
 
 /// An owner token is `azazel-edge:release-` followed by ASCII alphanumerics,
@@ -432,9 +682,22 @@ pub fn nft_comment_arg(owner_token: &str) -> Result<String, String> {
     Ok(format!("\"{owner_token}\""))
 }
 
+/// Admission without the lease-family rules (tests and the SO-04 shape);
+/// the daemon uses `admit_release_task`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn prepare_release_task(path: &str, task: &ReleaseTask) -> Result<(), String> {
     validate_task(task)?;
+    let _guard = lock_ledger(path)?;
     let mut ledger = load_ledger(path)?;
+    admit_new_task(&mut ledger, task, task.created_epoch)?;
+    ledger.tasks.push(task.clone());
+    save_ledger(path, &mut ledger)
+}
+
+/// Replay guard, generation migration and capacity, for a task not yet in
+/// the ledger. Never forgets a terminal identity outside a checkpoint: an old
+/// provider event must not become executable again.
+fn admit_new_task(ledger: &mut ReleaseLedger, task: &ReleaseTask, now_epoch: f64) -> Result<(), String> {
     if let Some(existing) = ledger.tasks.iter().find(|item| item.task_id == task.task_id) {
         if same_task_identity(existing, task) {
             return Err(format!(
@@ -444,14 +707,298 @@ pub fn prepare_release_task(path: &str, task: &ReleaseTask) -> Result<(), String
         }
         return Err("release task id collision".to_string());
     }
-    // Never auto-forget terminal identities. Forgetting a tombstone would let an old
-    // provider event become executable again. A full bounded ledger therefore fails
-    // closed until an explicit future migration/tombstone mechanism is introduced.
-    if ledger.tasks.len() >= MAX_LEDGER_TASKS {
-        return Err("release ledger task limit reached; disruptive apply blocked".to_string());
+    if ledger.checkpoint.generation > 0
+        && task.event_epoch.unwrap_or(task.created_epoch) <= ledger.checkpoint.replay_watermark_epoch
+    {
+        return Err("release task is at or before the ledger replay checkpoint; replayed disruptive apply blocked".to_string());
     }
-    ledger.tasks.push(task.clone());
+    if ledger.tasks.len() >= COMPACT_AT_TASKS || encoded_len(ledger) >= COMPACT_AT_BYTES {
+        compact_ledger(ledger, now_epoch);
+    }
+    if ledger.tasks.len() >= ADMIT_MAX_TASKS || encoded_len(ledger) >= ADMIT_MAX_BYTES {
+        return Err("release ledger capacity reached; disruptive apply blocked (release continues)".to_string());
+    }
+    Ok(())
+}
+
+fn encoded_len(ledger: &ReleaseLedger) -> u64 {
+    serde_json::to_vec(ledger).map(|v| v.len() as u64).unwrap_or(u64::MAX)
+}
+
+/// Generation migration: terminal tasks unchanged for `COMPACT_MIN_AGE_SEC`
+/// leave the ledger; the checkpoint watermark rises to the latest of their
+/// alert/creation times, so a replay of any of them is still refused.
+/// Eligible tasks (prepared, active, uncertain) are never removed. Returns
+/// how many tasks were compacted.
+fn compact_ledger(ledger: &mut ReleaseLedger, now_epoch: f64) -> usize {
+    let cutoff = now_epoch - COMPACT_MIN_AGE_SEC;
+    let mut watermark = ledger.checkpoint.replay_watermark_epoch;
+    let before = ledger.tasks.len();
+    ledger.tasks.retain(|task| {
+        let compactable = terminal_status(&task.status) && task.updated_epoch <= cutoff;
+        if compactable {
+            let basis = task.event_epoch.unwrap_or(task.created_epoch).max(task.created_epoch);
+            if basis > watermark {
+                watermark = basis;
+            }
+        }
+        !compactable
+    });
+    let removed = before - ledger.tasks.len();
+    if removed > 0 {
+        ledger.checkpoint.generation = ledger.checkpoint.generation.saturating_add(1);
+        ledger.checkpoint.replay_watermark_epoch = watermark;
+        ledger.checkpoint.compacted_total = ledger.checkpoint.compacted_total.saturating_add(removed as u64);
+        ledger.checkpoint.last_compacted_epoch = now_epoch;
+    }
+    removed
+}
+
+/// What admission did with a new restriction.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Admission {
+    /// A new lease was written as `prepared`; apply it, then activate or
+    /// abandon it.
+    Prepared(ReleaseTask),
+    /// An active lease of the same resource was extended; nothing is
+    /// applied. The new task's identity is kept as a `merged` tombstone so a
+    /// replay of the same alert is refused.
+    Extended { task_id: String, due_epoch: f64, extensions: u32 },
+    /// An active lease of the same resource already lasts at least as long
+    /// as this alert would ask; nothing changes but the tombstone.
+    AlreadyHeld { task_id: String, due_epoch: f64 },
+}
+
+/// Admit a restriction under the Edge-fixed bounds (production path):
+/// replay guard and checkpoint, capacity, at most `MAX_ACTIVE_LEASES` held
+/// at once, one lease per resource (a new alert for a held resource extends
+/// it at most `MAX_LEASE_EXTENSIONS` times), and a family of leases of one
+/// resource bounded to `MAX_CUMULATIVE_LEASE_SEC` from its first lease.
+pub fn admit_release_task(path: &str, task: &ReleaseTask, ttl_sec: u64, now: &LeaseNow) -> Result<Admission, String> {
+    validate_task(task)?;
+    validate_now(now.wall_epoch)?;
+    let now_epoch = now.wall_epoch;
+    let _guard = lock_ledger(path)?;
+    let mut ledger = load_ledger(path)?;
+    admit_new_task(&mut ledger, task, now_epoch)?;
+    let ttl = ttl_sec.clamp(MIN_LEASE_TTL_SEC, MAX_LEASE_TTL_SEC) as f64;
+
+    if let Some(index) = ledger
+        .tasks
+        .iter()
+        .position(|item| item.resource_key == task.resource_key && eligible_status(&item.status))
+    {
+        let held = ledger.tasks[index].clone();
+        if held.status != "active" {
+            return Err(format!("resource has an unconfirmed lease (status={}); not extended", held.status));
+        }
+        let family = held.family_started_epoch.unwrap_or(held.created_epoch);
+        let cap = family + MAX_CUMULATIVE_LEASE_SEC as f64;
+        let new_due = (now_epoch + ttl).min(cap);
+        let mut tombstone = task.clone();
+        tombstone.status = "merged".to_string();
+        tombstone.last_error = format!("merged_into:{}", held.task_id);
+        tombstone.updated_epoch = now_epoch;
+        if new_due <= held.due_epoch + 1.0 {
+            if held.due_epoch + 1.0 >= cap {
+                return Err("lease cumulative limit reached".to_string());
+            }
+            // Held long enough already: record the alert, change nothing.
+            ledger.tasks.push(tombstone);
+            save_ledger(path, &mut ledger)?;
+            return Ok(Admission::AlreadyHeld { task_id: held.task_id, due_epoch: held.due_epoch });
+        }
+        if held.extensions >= MAX_LEASE_EXTENSIONS {
+            return Err("lease extension limit reached".to_string());
+        }
+        // The monotonic deadline moves by the same amount, on the lease's own
+        // boot only; in another boot or unreadable, it is not extended.
+        let added_ns = ((new_due - held.due_epoch) * 1e9) as u64;
+        let due_boottime_ns = match (held.due_boottime_ns, now.boot_id.as_deref()) {
+            (Some(due), Some(boot)) if boot == held.due_boot_id => Some(due.saturating_add(added_ns).min(i64::MAX as u64)),
+            (None, _) => None,
+            _ => return Err("lease belongs to another boot; not extended".to_string()),
+        };
+        ledger.tasks.push(tombstone);
+        let item = &mut ledger.tasks[index];
+        item.due_epoch = new_due;
+        item.next_attempt_epoch = new_due;
+        item.due_boottime_ns = due_boottime_ns;
+        item.extensions += 1;
+        item.updated_epoch = now_epoch;
+        let extensions = item.extensions;
+        let task_id = item.task_id.clone();
+        save_ledger(path, &mut ledger)?;
+        return Ok(Admission::Extended { task_id, due_epoch: new_due, extensions });
+    }
+
+    let held = ledger.tasks.iter().filter(|item| eligible_status(&item.status)).count();
+    if held >= MAX_ACTIVE_LEASES {
+        return Err("active lease limit reached; restriction not widened".to_string());
+    }
+
+    // A family continues while its first lease began less than the
+    // cumulative bound ago; the new lease ends no later than the bound.
+    let family = ledger
+        .tasks
+        .iter()
+        .filter(|item| item.resource_key == task.resource_key && item.status != "merged")
+        .filter_map(|item| item.family_started_epoch.or(Some(item.created_epoch)))
+        .filter(|start| now_epoch - start < MAX_CUMULATIVE_LEASE_SEC as f64)
+        .fold(None, |acc: Option<f64>, start| Some(acc.map_or(start, |a| a.min(start))));
+    let family_start = family.unwrap_or(now_epoch);
+    let cap = family_start + MAX_CUMULATIVE_LEASE_SEC as f64;
+    let mut admitted = task.clone();
+    admitted.family_started_epoch = Some(family_start);
+    if admitted.due_epoch > cap {
+        if cap - now_epoch < MIN_LEASE_TTL_SEC as f64 {
+            return Err("lease cumulative limit reached".to_string());
+        }
+        let shortened = admitted.due_epoch - cap;
+        admitted.due_epoch = cap;
+        admitted.next_attempt_epoch = cap;
+        if let Some(due) = admitted.due_boottime_ns {
+            admitted.due_boottime_ns = Some(due.saturating_sub((shortened * 1e9) as u64));
+        }
+    }
+    admitted.status = "prepared".to_string();
+    ledger.tasks.push(admitted.clone());
+    set_in_flight(&admitted.task_id, true);
+    if let Err(error) = save_ledger(path, &mut ledger) {
+        set_in_flight(&admitted.task_id, false);
+        return Err(error);
+    }
+    Ok(Admission::Prepared(admitted))
+}
+
+/// A lease whose apply did not end confirmed (failed, timed out, or its
+/// owned state did not read back as planned) is released at once: it
+/// becomes `uncertain` and due now, so the next sweep deletes whatever owned
+/// state exists and verifies its absence. It is never left to its TTL.
+pub fn abandon_release_task(path: &str, task_id: &str, reason: &str, now: &LeaseNow) -> Result<(), String> {
+    validate_now(now.wall_epoch)?;
+    let _guard = lock_ledger(path)?;
+    set_in_flight(task_id, false);
+    let mut ledger = load_ledger(path)?;
+    let task = ledger
+        .tasks
+        .iter_mut()
+        .find(|item| item.task_id == task_id)
+        .ok_or_else(|| "release task missing".to_string())?;
+    if task.status != "prepared" {
+        return Err(format!("invalid release lifecycle transition {} -> uncertain", task.status));
+    }
+    make_due_now(task, now);
+    task.status = "uncertain".to_string();
+    task.last_error = bounded_error(reason);
     save_ledger(path, &mut ledger)
+}
+
+fn make_due_now(task: &mut ReleaseTask, now: &LeaseNow) {
+    let now_epoch = now.wall_epoch.max(task.created_epoch);
+    task.due_epoch = now_epoch;
+    task.next_attempt_epoch = now_epoch;
+    task.updated_epoch = now.wall_epoch;
+    if task.due_boottime_ns.is_some() {
+        match (now.boottime_ns, now.boot_id.as_deref()) {
+            (Some(boottime), Some(boot)) if boot == task.due_boot_id => task.due_boottime_ns = Some(boottime),
+            // Another boot or unreadable: the monotonic deadline already
+            // counts as passed (lease_expiry).
+            _ => {}
+        }
+    }
+}
+
+/// At start, before any alert is read: a lease still `prepared` was being
+/// applied when the previous process stopped, and its outcome was never
+/// confirmed. It is released at once (as `abandon_release_task`), never
+/// activated, so a restart grants nothing the previous run did not confirm.
+pub fn recover_unconfirmed_on_start(path: &str, now: &LeaseNow) -> Result<usize, String> {
+    validate_now(now.wall_epoch)?;
+    let _guard = lock_ledger(path)?;
+    if !Path::new(path).exists() {
+        return Ok(0);
+    }
+    let mut ledger = load_ledger(path)?;
+    let mut count = 0;
+    for task in ledger.tasks.iter_mut().filter(|t| t.status == "prepared") {
+        make_due_now(task, now);
+        task.status = "uncertain".to_string();
+        task.last_error = "apply_unconfirmed_at_restart".to_string();
+        count += 1;
+    }
+    if count > 0 {
+        save_ledger(path, &mut ledger)?;
+    }
+    Ok(count)
+}
+
+/// The ledger's fill, for the capacity notice and the maintenance
+/// subcommand. `state`: `ok`, `warning` (compaction will run on the next
+/// admission), or `full` (new restrictions are refused; release continues).
+pub fn ledger_capacity(path: &str) -> Result<Value, String> {
+    let _guard = lock_ledger(path)?;
+    let ledger = load_ledger(path)?;
+    Ok(capacity_value(&ledger))
+}
+
+fn capacity_value(ledger: &ReleaseLedger) -> Value {
+    let bytes = encoded_len(ledger);
+    let tasks = ledger.tasks.len();
+    let held = ledger.tasks.iter().filter(|t| eligible_status(&t.status)).count();
+    let state = if tasks >= ADMIT_MAX_TASKS || bytes >= ADMIT_MAX_BYTES {
+        "full"
+    } else if tasks >= COMPACT_AT_TASKS || bytes >= COMPACT_AT_BYTES {
+        "warning"
+    } else {
+        "ok"
+    };
+    json!({
+        "state": state,
+        "tasks": tasks,
+        "held_leases": held,
+        "admit_max_tasks": ADMIT_MAX_TASKS,
+        "max_tasks": MAX_LEDGER_TASKS,
+        "bytes": bytes,
+        "admit_max_bytes": ADMIT_MAX_BYTES,
+        "max_bytes": MAX_LEDGER_BYTES,
+        "checkpoint": {
+            "generation": ledger.checkpoint.generation,
+            "replay_watermark_epoch": ledger.checkpoint.replay_watermark_epoch,
+            "compacted_total": ledger.checkpoint.compacted_total,
+        },
+    })
+}
+
+/// The maintenance entry (`--release-ledger-compact`): one generation
+/// migration under the same rules as admission. It removes only terminal
+/// tasks older than `COMPACT_MIN_AGE_SEC` and keeps the replay watermark;
+/// it never removes a held lease, so nothing that must be released is lost.
+pub fn compact_release_ledger(path: &str, now_epoch: f64) -> Result<Value, String> {
+    validate_now(now_epoch)?;
+    let _guard = lock_ledger(path)?;
+    if !Path::new(path).exists() {
+        return Ok(json!({"compacted": 0, "capacity": capacity_value(&ReleaseLedger::default())}));
+    }
+    let mut ledger = load_ledger(path)?;
+    let removed = compact_ledger(&mut ledger, now_epoch);
+    if removed > 0 || ledger.schema_version != LEDGER_SCHEMA_VERSION {
+        save_ledger(path, &mut ledger)?;
+    }
+    Ok(json!({"compacted": removed, "capacity": capacity_value(&ledger)}))
+}
+
+/// Read back the owned state of a just-applied lease: present exactly once
+/// with the planned semantics. Only then is the lease `active`.
+pub fn owned_state_matches_plan(task: &ReleaseTask) -> Result<bool, String> {
+    owned_state_matches_plan_with_runner(task, &SystemReleaseCommandRunner)
+}
+
+pub fn owned_state_matches_plan_with_runner<R: ReleaseCommandRunner>(task: &ReleaseTask, runner: &R) -> Result<bool, String> {
+    match owned_nft_chain(task) {
+        Some(chain) => Ok(nft_owned_handles(task, chain, runner)?.len() == 1),
+        None => Err("no readback for this lease mechanism".to_string()),
+    }
 }
 
 fn same_task_identity(left: &ReleaseTask, right: &ReleaseTask) -> bool {
@@ -467,10 +1014,17 @@ fn same_task_identity(left: &ReleaseTask, right: &ReleaseTask) -> bool {
         && left.expected_rate_bps == right.expected_rate_bps
         && left.expected_burst_bytes == right.expected_burst_bytes
         && left.expected_latency_us == right.expected_latency_us
+        && left.mechanism == right.mechanism
+        && left.destination_ip == right.destination_ip
+        && left.protocol == right.protocol
+        && left.limit_rate_kbytes == right.limit_rate_kbytes
+        && left.limit_burst_kbytes == right.limit_burst_kbytes
 }
 
 pub fn activate_release_task(path: &str, task_id: &str, now_epoch: f64) -> Result<(), String> {
     validate_now(now_epoch)?;
+    let _guard = lock_ledger(path)?;
+    set_in_flight(task_id, false);
     let mut ledger = load_ledger(path)?;
     let snapshot = ledger
         .tasks
@@ -485,10 +1039,12 @@ pub fn activate_release_task(path: &str, task_id: &str, now_epoch: f64) -> Resul
         ));
     }
 
-    if snapshot.action == "throttle" {
+    // Only a legacy root-qdisc throttle shares one resource per interface;
+    // a flow-scoped lease is never superseded (one lease per flow).
+    if is_legacy_tc_throttle(&snapshot) {
         for item in &mut ledger.tasks {
             if item.task_id != task_id
-                && item.action == "throttle"
+                && is_legacy_tc_throttle(item)
                 && item.resource_key == snapshot.resource_key
                 && eligible_status(&item.status)
             {
@@ -510,15 +1066,7 @@ pub fn activate_release_task(path: &str, task_id: &str, now_epoch: f64) -> Resul
     save_ledger(path, &mut ledger)
 }
 
-pub fn mark_release_task_uncertain(
-    path: &str,
-    task_id: &str,
-    reason: &str,
-    now_epoch: f64,
-) -> Result<(), String> {
-    transition_task(path, task_id, &["prepared"], "uncertain", reason, now_epoch)
-}
-
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn cancel_release_task(
     path: &str,
     task_id: &str,
@@ -528,6 +1076,7 @@ pub fn cancel_release_task(
     transition_task(path, task_id, &["prepared"], "cancelled", reason, now_epoch)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn transition_task(
     path: &str,
     task_id: &str,
@@ -540,6 +1089,7 @@ fn transition_task(
     if !valid_status(status) {
         return Err("invalid release task status".to_string());
     }
+    let _guard = lock_ledger(path)?;
     let mut ledger = load_ledger(path)?;
     let task = ledger
         .tasks
@@ -570,6 +1120,10 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
 ) -> Result<Vec<ReleaseOutcome>, String> {
     let now_epoch = now.wall_epoch;
     validate_now(now_epoch)?;
+    let _guard = lock_ledger(path)?;
+    if !Path::new(path).exists() {
+        return Ok(Vec::new());
+    }
     let mut ledger = load_ledger(path)?;
     // The first attempt waits only for expiry. A lease with a monotonic
     // deadline can expire before its wall deadline, and its
@@ -580,7 +1134,7 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
     let candidates: Vec<(String, ExpiryClock)> = ledger
         .tasks
         .iter()
-        .filter(|task| eligible_status(&task.status))
+        .filter(|task| eligible_status(&task.status) && !in_flight(&task.task_id))
         .filter_map(|task| {
             let clock = lease_expiry(task, now)?;
             let attempt_due = task.next_attempt_epoch <= now_epoch
@@ -600,10 +1154,10 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
             _ => continue,
         };
 
-        if current.action == "throttle" {
+        if is_legacy_tc_throttle(&current) {
             let newer = ledger.tasks.iter().find(|other| {
                 other.task_id != current.task_id
-                    && other.action == "throttle"
+                    && is_legacy_tc_throttle(other)
                     && other.resource_key == current.resource_key
                     && eligible_status(&other.status)
                     && other.created_epoch > current.created_epoch
@@ -726,7 +1280,14 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
         outcome.expiry_clock = expiry_clock.as_str().to_string();
         outcomes.push(outcome);
     }
-    save_ledger(path, &mut ledger)?;
+    // Release never fails on capacity: if the updated ledger would exceed
+    // its size bound, compact (generation migration) and save again.
+    if let Err(error) = save_ledger(path, &mut ledger) {
+        if compact_ledger(&mut ledger, now_epoch) == 0 {
+            return Err(error);
+        }
+        save_ledger(path, &mut ledger)?;
+    }
     Ok(outcomes)
 }
 
@@ -802,10 +1363,12 @@ fn release_owned_state<R: ReleaseCommandRunner>(
     runner: &R,
     now_epoch: f64,
 ) -> Result<ReleaseOutcome, String> {
-    match task.action.as_str() {
-        "throttle" => release_throttle(task, runner, now_epoch),
-        "isolate" | "redirect" => release_nft_rule(task, runner, now_epoch),
-        _ => Err("unsupported release action".to_string()),
+    if is_legacy_tc_throttle(task) {
+        return release_throttle(task, runner, now_epoch);
+    }
+    match owned_nft_chain(task) {
+        Some(chain) => release_nft_rule(task, chain, runner, now_epoch),
+        None => Err("unsupported release action".to_string()),
     }
 }
 
@@ -910,14 +1473,10 @@ fn tc_owned_state_present<R: ReleaseCommandRunner>(
 
 fn release_nft_rule<R: ReleaseCommandRunner>(
     task: &ReleaseTask,
+    chain: &str,
     runner: &R,
     now_epoch: f64,
 ) -> Result<ReleaseOutcome, String> {
-    let chain = if task.action == "isolate" {
-        "input"
-    } else {
-        "prerouting"
-    };
     let handles = nft_owned_handles(task, chain, runner)?;
     if handles.is_empty() {
         return Ok(outcome_for(
@@ -1057,6 +1616,9 @@ fn nft_rule_semantics_match(task: &ReleaseTask, rule: &Value) -> bool {
         Some(exprs) => exprs,
         None => return false,
     };
+    if task.mechanism == MECHANISM_NFT_FLOW_LIMIT {
+        return flow_limit_semantics_match(task, exprs);
+    }
     if match_value(exprs, "ip", "saddr").and_then(Value::as_str)
         != Some(task.source_ip.as_str())
     {
@@ -1079,6 +1641,64 @@ fn nft_rule_semantics_match(task: &ReleaseTask, rule: &Value) -> bool {
         });
     }
     false
+}
+
+/// nft family keyword of an address: `ip` or `ip6`.
+pub fn nft_family(address: &str) -> Option<&'static str> {
+    match address.parse::<IpAddr>().ok()? {
+        IpAddr::V4(_) => Some("ip"),
+        IpAddr::V6(_) => Some("ip6"),
+    }
+}
+
+/// The flow-limit rule reads back as planned: this source, this
+/// destination, this port (when one is scoped), an inverted (`over`) limit
+/// of exactly the planned rate and burst per second, and `drop`.
+fn flow_limit_semantics_match(task: &ReleaseTask, exprs: &[Value]) -> bool {
+    let Some(family) = nft_family(&task.source_ip) else {
+        return false;
+    };
+    if nft_family(&task.destination_ip) != Some(family) {
+        return false;
+    }
+    if !ip_matches(match_value(exprs, family, "saddr"), &task.source_ip)
+        || !ip_matches(match_value(exprs, family, "daddr"), &task.destination_ip)
+    {
+        return false;
+    }
+    if !task.protocol.is_empty() {
+        if match_value(exprs, &task.protocol, "dport").and_then(value_u16) != Some(task.destination_port) {
+            return false;
+        }
+    } else if exprs.iter().any(|expr| {
+        expr.get("match")
+            .and_then(|m| m.get("left"))
+            .and_then(|l| l.get("payload"))
+            .and_then(|p| p.get("field"))
+            .and_then(Value::as_str)
+            == Some("dport")
+    }) {
+        return false;
+    }
+    let limit_ok = exprs.iter().any(|expr| {
+        let Some(limit) = expr.get("limit") else {
+            return false;
+        };
+        limit.get("inv").and_then(Value::as_bool) == Some(true)
+            && limit.get("per").and_then(Value::as_str) == Some("second")
+            && limit.get("rate").and_then(Value::as_u64) == Some(u64::from(task.limit_rate_kbytes))
+            && limit.get("rate_unit").and_then(Value::as_str) == Some("kbytes")
+            && limit.get("burst").and_then(Value::as_u64) == Some(u64::from(task.limit_burst_kbytes))
+            && limit.get("burst_unit").and_then(Value::as_str) == Some("kbytes")
+    });
+    limit_ok && exprs.iter().any(|expr| expr.get("drop").is_some())
+}
+
+fn ip_matches(value: Option<&Value>, expected: &str) -> bool {
+    let (Some(observed), Ok(expected)) = (value.and_then(Value::as_str), expected.parse::<IpAddr>()) else {
+        return false;
+    };
+    observed.parse::<IpAddr>().map(|o| o == expected).unwrap_or(false)
 }
 
 fn match_value<'a>(exprs: &'a [Value], protocol: &str, field: &str) -> Option<&'a Value> {
@@ -1327,8 +1947,10 @@ fn eligible_status(status: &str) -> bool {
     matches!(status, "prepared" | "active" | "uncertain")
 }
 
+/// `merged`: a restriction admitted as an extension of a held lease; kept as
+/// the replay guard of its alert, never applied or released itself.
 fn terminal_status(status: &str) -> bool {
-    matches!(status, "released" | "cancelled" | "superseded")
+    matches!(status, "released" | "cancelled" | "superseded" | "merged")
 }
 
 fn valid_status(status: &str) -> bool {
@@ -1358,10 +1980,18 @@ fn load_ledger(path: &str) -> Result<ReleaseLedger, String> {
     }
     let raw = fs::read_to_string(source)
         .map_err(|e| format!("release ledger read failed: {e}"))?;
-    let ledger: ReleaseLedger = serde_json::from_str(&raw)
+    let mut ledger: ReleaseLedger = serde_json::from_str(&raw)
         .map_err(|e| format!("release ledger parse failed: {e}"))?;
+    if ledger.schema_version == LEDGER_SCHEMA_V1 {
+        // A v1 ledger has no checkpoint; it is rewritten as v2 on save.
+        ledger.schema_version = LEDGER_SCHEMA_VERSION.to_string();
+    }
     if ledger.schema_version != LEDGER_SCHEMA_VERSION {
         return Err("unsupported release ledger schema".to_string());
+    }
+    let mark = ledger.checkpoint.replay_watermark_epoch;
+    if !mark.is_finite() || mark < 0.0 {
+        return Err("release ledger checkpoint is invalid".to_string());
     }
     if ledger.tasks.len() > MAX_LEDGER_TASKS {
         return Err("release ledger task count exceeds safety bound".to_string());
@@ -1431,7 +2061,11 @@ fn validate_task(task: &ReleaseTask) -> Result<(), String> {
         task.next_attempt_epoch,
         task.created_epoch,
         task.updated_epoch,
-    ] {
+    ]
+    .into_iter()
+    .chain(task.event_epoch)
+    .chain(task.family_started_epoch)
+    {
         validate_now(value)?;
     }
     // Before any attempt the next attempt is the expiry itself. After one, it
@@ -1451,7 +2085,20 @@ fn validate_task(task: &ReleaseTask) -> Result<(), String> {
     if !valid_owner_token(&task.owner_token) {
         return Err("release task has invalid owner token".to_string());
     }
-    if task.action == "throttle" {
+    if task.action == "throttle" && task.mechanism == MECHANISM_NFT_FLOW_LIMIT {
+        if !task.tc_handle.is_empty()
+            || nft_family(&task.source_ip).is_none()
+            || nft_family(&task.destination_ip) != nft_family(&task.source_ip)
+            || !matches!(task.protocol.as_str(), "" | "tcp" | "udp")
+            || (!task.protocol.is_empty() && task.destination_port == 0)
+            || task.limit_rate_kbytes == 0
+            || task.limit_burst_kbytes == 0
+        {
+            return Err("release task has invalid flow-limit semantics".to_string());
+        }
+    } else if !task.mechanism.is_empty() {
+        return Err("release task has unsupported mechanism".to_string());
+    } else if task.action == "throttle" {
         if !valid_interface(&task.iface) || !valid_tc_handle(&task.tc_handle) {
             return Err("release task has invalid tc ownership".to_string());
         }
@@ -1551,7 +2198,7 @@ fn allowed_release_command(argv: &[String]) -> bool {
         && argv[5] == "inet"
         && argv[6] == "azazel_edge"
     {
-        return matches!(argv[7].as_str(), "input" | "prerouting");
+        return matches!(argv[7].as_str(), "input" | "prerouting" | THROTTLE_CHAIN);
     }
     if argv.len() == 8
         && argv[0] == "nft"
@@ -1561,7 +2208,7 @@ fn allowed_release_command(argv: &[String]) -> bool {
         && argv[4] == "azazel_edge"
         && argv[6] == "handle"
     {
-        return matches!(argv[5].as_str(), "input" | "prerouting")
+        return matches!(argv[5].as_str(), "input" | "prerouting" | THROTTLE_CHAIN)
             && argv[7].parse::<u64>().map(|v| v > 0).unwrap_or(false);
     }
     false
@@ -2812,5 +3459,283 @@ mod tests {
         } else {
             assert_eq!(now.boottime_ns, None);
         }
+    }
+
+    // -- flow-scoped throttle, admission bounds, generation migration ------
+
+    fn flow(src: &str) -> FlowScope {
+        FlowScope { source_ip: src.to_string(), destination_ip: "10.20.0.5".to_string(), protocol: "tcp".to_string(), destination_port: 22 }
+    }
+
+    fn flow_rule(task: &ReleaseTask, handle: u64, rate: u64) -> Value {
+        json!({"rule": {
+            "family": "inet", "table": "azazel_edge", "chain": "throttle", "handle": handle,
+            "comment": task.owner_token,
+            "expr": [
+                {"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": task.source_ip}},
+                {"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "daddr"}}, "right": task.destination_ip}},
+                {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 22}},
+                {"limit": {"rate": rate, "burst": 32, "per": "second", "rate_unit": "kbytes", "burst_unit": "kbytes", "inv": true}},
+                {"counter": {"packets": 3, "bytes": 180}},
+                {"drop": null}
+            ]
+        }})
+    }
+
+    #[test]
+    fn a_flow_throttle_is_released_by_its_owned_nft_rule_and_never_touches_a_qdisc() {
+        let path = test_path("ledger.json");
+        let task = build_flow_throttle_task("trace-f", &flow("10.0.0.8"), 32, 32, 30, &LeaseNow::wall_only(100.0)).unwrap();
+        assert_eq!(task.resource_key, "nft:inet:azazel_edge:throttle:10.0.0.8>10.20.0.5:tcp:22");
+        assert!(task.tc_handle.is_empty() && task.iface.is_empty());
+        prepare_release_task(&path, &task).unwrap();
+        activate_release_task(&path, &task.task_id, 100.5).unwrap();
+        let runner = FakeRunner::new(vec![
+            ok_json(json!({"nftables": [flow_rule(&task, 7, 32)]})),
+            Ok(CommandResult { returncode: 0, stdout: String::new(), stderr: String::new() }),
+            ok_json(json!({"nftables": []})),
+        ]);
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
+        assert_eq!(outcomes[0].status, "released", "{outcomes:?}");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[1], strings(&["nft", "delete", "rule", "inet", "azazel_edge", "throttle", "handle", "7"]));
+        assert!(calls.iter().all(|c| c[0] == "nft"), "{calls:?}");
+    }
+
+    #[test]
+    fn a_flow_rule_with_other_semantics_is_never_deleted_or_read_back_as_applied() {
+        let path = test_path("ledger.json");
+        let task = build_flow_throttle_task("trace-g", &flow("10.0.0.8"), 32, 32, 30, &LeaseNow::wall_only(100.0)).unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        activate_release_task(&path, &task.task_id, 100.5).unwrap();
+        // Same owner token, but a different rate: not ours as planned.
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": [flow_rule(&task, 7, 4096)]}))]);
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
+        assert_eq!(outcomes[0].status, "retry_pending");
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
+        // Readback after apply: exactly one matching rule, nothing else.
+        let one = FakeRunner::new(vec![ok_json(json!({"nftables": [flow_rule(&task, 7, 32)]}))]);
+        assert_eq!(owned_state_matches_plan_with_runner(&task, &one), Ok(true));
+        let none = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
+        assert_eq!(owned_state_matches_plan_with_runner(&task, &none), Ok(false));
+        let two = FakeRunner::new(vec![ok_json(json!({"nftables": [flow_rule(&task, 7, 32), flow_rule(&task, 8, 32)]}))]);
+        assert_eq!(owned_state_matches_plan_with_runner(&task, &two), Ok(false));
+        let wrong = FakeRunner::new(vec![ok_json(json!({"nftables": [flow_rule(&task, 7, 4096)]}))]);
+        assert!(owned_state_matches_plan_with_runner(&task, &wrong).is_err());
+    }
+
+    #[test]
+    fn the_release_allowlist_admits_the_throttle_chain_and_nothing_wider() {
+        assert!(allowed_release_command(&strings(&["nft", "-a", "-j", "list", "chain", "inet", "azazel_edge", "throttle"])));
+        assert!(allowed_release_command(&strings(&["nft", "delete", "rule", "inet", "azazel_edge", "throttle", "handle", "9"])));
+        assert!(!allowed_release_command(&strings(&["nft", "delete", "rule", "inet", "azazel_edge", "forward", "handle", "9"])));
+        assert!(!allowed_release_command(&strings(&["nft", "flush", "chain", "inet", "azazel_edge", "throttle", "x", "y"])));
+    }
+
+    fn now_at(wall: f64) -> LeaseNow {
+        LeaseNow { wall_epoch: wall, boottime_ns: Some(5_000_000_000_000), boot_id: Some("b001-1".to_string()) }
+    }
+
+    #[test]
+    fn admission_extends_a_held_lease_at_most_n_times_and_never_past_the_cumulative_bound() {
+        let path = test_path("ledger.json");
+        let t0 = 10_000.0;
+        let first = build_flow_throttle_task("tr-0", &flow("10.0.0.8"), 32, 32, 600, &now_at(t0)).unwrap();
+        let Admission::Prepared(held) = admit_release_task(&path, &first, 600, &now_at(t0)).unwrap() else { panic!() };
+        activate_release_task(&path, &held.task_id, t0).unwrap();
+        let mut at = t0;
+        for n in 1..=MAX_LEASE_EXTENSIONS {
+            at += 590.0;
+            let next = build_flow_throttle_task(&format!("tr-{n}"), &flow("10.0.0.8"), 32, 32, 600, &now_at(at)).unwrap();
+            match admit_release_task(&path, &next, 600, &now_at(at)).unwrap() {
+                Admission::Extended { task_id, due_epoch, extensions } => {
+                    assert_eq!(task_id, held.task_id);
+                    assert_eq!(extensions, n);
+                    assert!(due_epoch <= t0 + MAX_CUMULATIVE_LEASE_SEC as f64);
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        at += 590.0;
+        let over = build_flow_throttle_task("tr-over", &flow("10.0.0.8"), 32, 32, 600, &now_at(at)).unwrap();
+        assert_eq!(admit_release_task(&path, &over, 600, &now_at(at)), Err("lease extension limit reached".to_string()));
+        // A replay of a merged alert is refused by its tombstone.
+        let replay = build_flow_throttle_task("tr-1", &flow("10.0.0.8"), 32, 32, 600, &now_at(at)).unwrap();
+        assert!(admit_release_task(&path, &replay, 600, &now_at(at)).unwrap_err().contains("replayed"));
+        // The monotonic deadline moved with the wall one.
+        let ledger = load_ledger(&path).unwrap();
+        let lease = ledger.tasks.iter().find(|t| t.task_id == held.task_id).unwrap();
+        let wall_added = lease.due_epoch - held.due_epoch;
+        let mono_added = (lease.due_boottime_ns.unwrap() - held.due_boottime_ns.unwrap()) as f64 / 1e9;
+        assert!((wall_added - mono_added).abs() < 1e-3, "{wall_added} {mono_added}");
+    }
+
+    #[test]
+    fn a_new_family_lease_ends_no_later_than_the_cumulative_bound_of_the_family() {
+        let path = test_path("ledger.json");
+        let t0 = 20_000.0;
+        let first = build_flow_throttle_task("fa-0", &flow("10.0.0.9"), 32, 32, 900, &now_at(t0)).unwrap();
+        let Admission::Prepared(held) = admit_release_task(&path, &first, 900, &now_at(t0)).unwrap() else { panic!() };
+        activate_release_task(&path, &held.task_id, t0).unwrap();
+        // Released, then the flow is seen again close to the family's end.
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
+        process_due_releases_with_runner(&path, &now_at(t0 + 901.0), &runner).unwrap();
+        let late = t0 + MAX_CUMULATIVE_LEASE_SEC as f64 - 100.0;
+        let again = build_flow_throttle_task("fa-1", &flow("10.0.0.9"), 32, 32, 900, &now_at(late)).unwrap();
+        let Admission::Prepared(second) = admit_release_task(&path, &again, 900, &now_at(late)).unwrap() else { panic!() };
+        assert_eq!(second.family_started_epoch, Some(t0));
+        assert_eq!(second.due_epoch, t0 + MAX_CUMULATIVE_LEASE_SEC as f64);
+        // Within MIN_LEASE_TTL_SEC of the bound: refused.
+        let edge = t0 + MAX_CUMULATIVE_LEASE_SEC as f64 - 10.0;
+        let path2 = test_path("ledger.json");
+        let one = build_flow_throttle_task("fb-0", &flow("10.0.0.9"), 32, 32, 900, &now_at(t0)).unwrap();
+        let Admission::Prepared(h2) = admit_release_task(&path2, &one, 900, &now_at(t0)).unwrap() else { panic!() };
+        activate_release_task(&path2, &h2.task_id, t0).unwrap();
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
+        process_due_releases_with_runner(&path2, &now_at(t0 + 901.0), &runner).unwrap();
+        let near = build_flow_throttle_task("fb-1", &flow("10.0.0.9"), 32, 32, 900, &now_at(edge)).unwrap();
+        assert_eq!(admit_release_task(&path2, &near, 900, &now_at(edge)), Err("lease cumulative limit reached".to_string()));
+    }
+
+    fn terminal_filler(n: usize, at: f64) -> ReleaseTask {
+        let mut task = build_release_task(&format!("fill-{n}"), "redirect", "br0", "10.1.0.1", 22, 12222, 0, 30, &LeaseNow::wall_only(at)).unwrap();
+        task.status = "released".to_string();
+        task.event_epoch = Some(at - 1.0);
+        task
+    }
+
+    fn write_ledger(path: &str, tasks: Vec<ReleaseTask>) {
+        let mut ledger = ReleaseLedger::default();
+        ledger.tasks = tasks;
+        save_ledger(path, &mut ledger).unwrap();
+    }
+
+    #[test]
+    fn a_full_ledger_migrates_a_generation_and_still_refuses_every_compacted_replay() {
+        let path = test_path("ledger.json");
+        let old = 1_000.0;
+        let count = COMPACT_AT_TASKS + 10;
+        let tasks: Vec<ReleaseTask> = (0..count).map(|n| terminal_filler(n, old + n as f64 * 0.001)).collect();
+        let replayed = tasks[5].clone();
+        write_ledger(&path, tasks);
+        assert_ne!(ledger_capacity(&path).unwrap()["state"], "ok");
+        let now = old + COMPACT_MIN_AGE_SEC + 10.0;
+        let fresh = build_flow_throttle_task("fresh", &flow("10.0.0.20"), 32, 32, 300, &now_at(now)).unwrap();
+        assert!(matches!(admit_release_task(&path, &fresh, 300, &now_at(now)).unwrap(), Admission::Prepared(_)));
+        let ledger = load_ledger(&path).unwrap();
+        assert_eq!(ledger.tasks.len(), 1, "every old terminal task was compacted");
+        assert_eq!(ledger.checkpoint.generation, 1);
+        assert_eq!(ledger.checkpoint.compacted_total, count as u64);
+        assert!(ledger.checkpoint.replay_watermark_epoch >= replayed.created_epoch);
+        // The compacted task's identity is gone, its replay is still refused.
+        let mut replay = replayed.clone();
+        replay.status = "prepared".to_string();
+        let error = admit_release_task(&path, &replay, 300, &now_at(now)).unwrap_err();
+        assert!(error.contains("replay checkpoint"), "{error}");
+        // A ledger saved as v2 keeps the checkpoint across a reload.
+        let raw: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["schema_version"], "azazel-release-ledger/v2");
+        assert_eq!(raw["checkpoint"]["generation"], 1);
+    }
+
+    #[test]
+    fn when_nothing_can_be_compacted_new_restrictions_are_refused_but_release_continues() {
+        let path = test_path("ledger.json");
+        let now = 50_000.0;
+        // Recent terminal tasks (younger than COMPACT_MIN_AGE_SEC) fill it.
+        let mut tasks: Vec<ReleaseTask> = (0..ADMIT_MAX_TASKS).map(|n| terminal_filler(n, now - 10.0)).collect();
+        let mut held = build_release_task("held", "redirect", "br0", "10.2.0.1", 22, 12222, 0, 30, &LeaseNow::wall_only(now - 60.0)).unwrap();
+        held.status = "active".to_string();
+        tasks.push(held.clone());
+        write_ledger(&path, tasks);
+        assert_eq!(ledger_capacity(&path).unwrap()["state"], "full");
+        let fresh = build_flow_throttle_task("fresh", &flow("10.0.0.21"), 32, 32, 300, &now_at(now)).unwrap();
+        let error = admit_release_task(&path, &fresh, 300, &now_at(now)).unwrap_err();
+        assert!(error.contains("capacity reached"), "{error}");
+        // The held lease is due and is still released.
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(now), &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "released");
+        // The maintenance entry compacts nothing that is recent.
+        assert_eq!(compact_release_ledger(&path, now).unwrap()["compacted"], 0);
+        // Later it compacts the old terminal tasks and admission resumes.
+        let later = now + COMPACT_MIN_AGE_SEC + 1.0;
+        let report = compact_release_ledger(&path, later).unwrap();
+        assert!(report["compacted"].as_u64().unwrap() as usize >= ADMIT_MAX_TASKS);
+        assert_eq!(report["capacity"]["state"], "ok");
+        let later_task = build_flow_throttle_task("later", &flow("10.0.0.21"), 32, 32, 300, &now_at(later)).unwrap();
+        assert!(admit_release_task(&path, &later_task, 300, &now_at(later)).is_ok());
+    }
+
+    #[test]
+    fn a_lease_left_prepared_by_a_crash_is_released_at_restart_never_activated() {
+        let path = test_path("ledger.json");
+        let task = build_flow_throttle_task("crash", &flow("10.0.0.30"), 32, 32, 300, &now_at(100.0)).unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        assert_eq!(recover_unconfirmed_on_start(&path, &now_at(110.0)).unwrap(), 1);
+        let ledger = load_ledger(&path).unwrap();
+        assert_eq!(ledger.tasks[0].status, "uncertain");
+        assert_eq!(ledger.tasks[0].due_epoch, 110.0);
+        assert!(activate_release_task(&path, &task.task_id, 111.0).is_err());
+        // The next sweep deletes whatever owned rule exists.
+        let runner = FakeRunner::new(vec![
+            ok_json(json!({"nftables": [flow_rule(&task, 3, 32)]})),
+            Ok(CommandResult { returncode: 0, stdout: String::new(), stderr: String::new() }),
+            ok_json(json!({"nftables": []})),
+        ]);
+        let outcomes = process_due_releases_with_runner(&path, &now_at(110.5), &runner).unwrap();
+        assert_eq!(outcomes[0].status, "released");
+        // A second start finds nothing to recover.
+        assert_eq!(recover_unconfirmed_on_start(&path, &now_at(120.0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn an_abandoned_apply_is_due_at_once_on_both_clocks() {
+        let path = test_path("ledger.json");
+        let task = build_flow_throttle_task("ab", &flow("10.0.0.31"), 32, 32, 300, &now_at(100.0)).unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        let later = LeaseNow { wall_epoch: 101.0, boottime_ns: Some(5_001_000_000_000), boot_id: Some("b001-1".to_string()) };
+        abandon_release_task(&path, &task.task_id, "apply_unconfirmed", &later).unwrap();
+        let ledger = load_ledger(&path).unwrap();
+        assert_eq!(ledger.tasks[0].status, "uncertain");
+        assert_eq!(lease_expiry(&ledger.tasks[0], &later), Some(ExpiryClock::Monotonic));
+        assert!(abandon_release_task(&path, &task.task_id, "again", &later).is_err());
+    }
+
+    #[test]
+    fn a_v1_ledger_is_read_and_an_unknown_schema_or_mechanism_is_refused() {
+        let path = test_path("ledger.json");
+        let task = build_release_task("v1", "redirect", "br0", "10.0.0.8", 22, 12222, 0, 30, &LeaseNow::wall_only(100.0)).unwrap();
+        fs::write(&path, json!({"schema_version": "azazel-release-ledger/v1", "tasks": [task]}).to_string()).unwrap();
+        assert_eq!(load_ledger(&path).unwrap().tasks.len(), 1);
+        fs::write(&path, json!({"schema_version": "azazel-release-ledger/v9", "tasks": []}).to_string()).unwrap();
+        assert!(load_ledger(&path).is_err());
+        let mut odd = task.clone();
+        odd.mechanism = "tc_magic".to_string();
+        assert!(validate_task(&odd).is_err());
+        let mut flow_task = build_flow_throttle_task("v2", &flow("10.0.0.8"), 32, 32, 30, &LeaseNow::wall_only(100.0)).unwrap();
+        assert!(validate_task(&flow_task).is_ok());
+        flow_task.destination_ip = "2001:db8::1".to_string();
+        assert!(validate_task(&flow_task).is_err());
+    }
+
+    #[test]
+    fn the_sweep_never_releases_a_lease_whose_apply_is_in_flight() {
+        let path = test_path("ledger.json");
+        let at = LeaseNow { wall_epoch: 1_000.0, boottime_ns: Some(9_000_000_000_000), boot_id: Some("b001-2".to_string()) };
+        let task = build_flow_throttle_task("inflight", &flow("10.0.0.40"), 32, 32, 30, &at).unwrap();
+        let Admission::Prepared(task) = admit_release_task(&path, &task, 30, &at).unwrap() else { panic!() };
+        // Due on every clock (another boot), yet being applied: untouched.
+        let later = LeaseNow::wall_only(2_000.0);
+        let runner = FakeRunner::new(vec![]);
+        assert!(process_due_releases_with_runner(&path, &later, &runner).unwrap().is_empty());
+        assert!(runner.calls.lock().unwrap().is_empty());
+        // Once the apply is over (here: abandoned), the sweep releases it.
+        abandon_release_task(&path, &task.task_id, "apply_unconfirmed", &later).unwrap();
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
+        let outcomes = process_due_releases_with_runner(&path, &later, &runner).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "released");
     }
 }

@@ -402,8 +402,11 @@ Stays root until stage 3.
 - Client of `ai-bridge.sock` only; it does not check who is on the other end.
   It listens on nothing.
 - Children: apply path (`run_command`) runs `nft insert rule inet azazel_edge …`
-  (isolate, redirect) and `tc qdisc replace dev <iface> root …` (throttle).
-  Since #477 it starts them like the release path: the absolute path of
+  (redirect in `prerouting`, flow-scoped throttle in `throttle`; see
+  `scoped-temporary-actions.md`). It no longer runs `tc` and never applies
+  isolate; each apply command is killed past 3 s and an apply counts only
+  after its owned rule reads back. (Before: isolate in `input` and
+  `tc qdisc replace dev <iface> root …` for throttle.) Since #477 it starts them like the release path: the absolute path of
   `nft`/`tc` from `/usr/sbin`, `/usr/bin`, `/sbin`, `/bin`, the environment
   cleared (`LC_ALL=C`, `LANG=C`, that fixed `PATH`); before, it used
   `Command::new(argv[0])` with the inherited `PATH` and environment.

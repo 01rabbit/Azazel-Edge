@@ -5,5 +5,12 @@ redirect_policy:
     80: 18080
     8080: 18080
   unsupported_port_action: notify
-  high_risk_unsupported_port_action: isolate
+  # Only observe, notify or throttle are accepted; the core turns isolate
+  # (or redirect) into notify: the automatic path never isolates.
+  high_risk_unsupported_port_action: notify
   scan_burst_action: throttle
+  # A redirect is executed only with this boot's decoy separation evidence,
+  # written by the deployment that placed the decoy (see
+  # docs/architecture/scoped-temporary-actions.md), and a reachable decoy.
+  decoy_separation_evidence_path: /run/azazel-edge/decoy-separation.json
+  decoy_evidence_max_age_sec: 600

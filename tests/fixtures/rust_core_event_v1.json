@@ -24,6 +24,17 @@
       "release_resource_key": "nft:inet:azazel_edge:prerouting:203.0.113.9:tcp:22",
       "release_task_id": "release-5a84e55c43ef929e",
       "release_tc_handle": "",
+      "safety": {
+        "decoy_preconditions": "not_evaluated",
+        "gate": "not_evaluated:not_executing",
+        "isolate_automatic": false,
+        "protected_match": null,
+        "protected_set": "not_configured",
+        "scope": "source_and_port:203.0.113.9:22",
+        "strength": "",
+        "ttl_sec": 300,
+        "ttl_source": "default"
+      },
       "selected_decoy_port": 12222,
       "unsupported_port_fallback": ""
     },

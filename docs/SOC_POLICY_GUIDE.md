@@ -56,13 +56,18 @@ redirect_policy:
     80: 18080
     8080: 18080
   unsupported_port_action: notify
-  high_risk_unsupported_port_action: isolate
+  high_risk_unsupported_port_action: notify
   scan_burst_action: throttle
+  decoy_separation_evidence_path: /run/azazel-edge/decoy-separation.json
+  decoy_evidence_max_age_sec: 600
 ```
 
 Behavior:
-- If mapping exists, redirect uses the prepared decoy port.
-- If destination port is unsupported, action falls back deterministically (`notify`, `throttle`, `isolate`, or explicit `observe`) instead of blind redirect.
+- If mapping exists, redirect uses the prepared decoy port. It is executed
+  only when this boot's decoy separation evidence names that port and the
+  decoy answers; otherwise the alert is notified with the reason
+  (`docs/architecture/scoped-temporary-actions.md`).
+- If destination port is unsupported, action falls back deterministically (`notify`, `throttle` (flow-scoped), or explicit `observe`) instead of blind redirect. `isolate` is never an automatic fallback: the core turns it into `notify`.
 - If policy file is absent, runtime keeps backward compatibility with `AZAZEL_DEFENSE_HONEYPOT_PORT` and marks fallback in enforcement metadata.
 - If policy file is invalid, runtime fails safe to `notify` (no blind redirect).
 - If policy is present but `enabled: false`, runtime fails safe to `notify`.

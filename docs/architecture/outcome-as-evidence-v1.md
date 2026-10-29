@@ -59,11 +59,18 @@ NormalizedEvent
 |---|---|---|---|
 | `observe` | no disruptive command | `OBSERVATION_ONLY` | logical action |
 | `notify` | no external delivery receipt in Rust core | `NOTIFICATION` | unverified delivery |
-| `throttle` | `tc qdisc replace dev <iface> root tbf ...` | `TRAFFIC_SHAPING` | interface root qdisc |
+| `throttle` | nft `throttle` chain: source + destination (+ TCP/UDP port) `limit rate over … drop` (legacy records: `tc qdisc replace dev <iface> root tbf ...`) | `TRAFFIC_SHAPING` | one flow (legacy: interface root qdisc) |
 | `redirect` | nft prerouting source-IP + destination-port redirect | `REDIRECTION` | source IP + destination port |
-| `isolate` | nft input source-IP drop | `ISOLATION` | source IP |
+| `isolate` | never applied by the automatic path (legacy records: nft input source-IP drop) | `ISOLATION` | source IP |
 
-The current throttle command is interface-level. The decision subject IP must not be used to relabel the actual qdisc scope as attacker-scoped.
+Since `scoped-temporary-actions.md` the core's throttle is flow-scoped and the
+core itself reads the owned rule back before it reports `applied`. The G1a
+observer in this package still models throttle as the legacy interface root
+qdisc: for a flow-scoped throttle record it has no interface to query and
+does not verify it (it never reports it verified). Teaching it the
+`throttle` chain readback is follow-up work. For legacy records, the decision
+subject IP must not be used to relabel the actual qdisc scope as
+attacker-scoped.
 
 A successful Rust command exit proves that the provider command completed successfully. It does **not** independently prove that the resulting qdisc/nft postcondition exists on the host. Therefore disruptive `AppliedMechanism.status` remains `unverified` until a postcondition observer supplies evidence. Partial application is `disputed`; rejected/failed application is `not_observed`.
 

@@ -1,0 +1,330 @@
+# Scoped temporary actions: design and safety rules
+
+Status: accepted and implemented in `rust/azazel-edge-core` (this change).
+The shipped posture is unchanged: enforcement off, dry run on, level
+`advisory`. Nothing here turns enforcement on.
+
+Scope: the automatic path of the Rust core — the only Edge process that
+changes the network (`X86_64_INTEGRATION_BOUNDARY.md`). It covers the owner
+policy that automatic handling is limited to **notification, temporary
+restriction of traffic and redirection to a decoy**, that the AI proposes and
+Edge's deterministic rules decide whether, on what and for how long, and that
+management, expert-contact and mission communication is preserved.
+
+Findings addressed (independent survey of `cc769e0`): S-06 (throttle acted
+on the whole NIC), S-07 (redirect without decoy checks; fallback to isolate),
+S-08 (no apply time bound, no readback, no product lease bound), S-23 (a full
+release ledger refused new actions forever), and the Edge parts of S-09
+(crash recovery) and S-10 (independent evidence). The Nexus unit
+(`Restart=`, capabilities) is a separate change.
+
+## 1. Decision
+
+### 1.1 What the automatic path may do
+
+| Decision | Automatic action | Executed only if |
+|---|---|---|
+| severity ≤ 1 | `throttle`, strict (16 kbytes/s) | §1.3–§1.7 hold |
+| severity 2 | `redirect` to a prepared decoy port | §1.3–§1.8 hold; otherwise the policy fallback (`notify` by default) or a refusal with its reason |
+| severity 3 | `throttle`, standard (32 kbytes/s) | §1.3–§1.7 hold |
+| severity 4 | `notify` | — |
+| otherwise | `observe` | — |
+
+`isolate` is **not an automatic action**:
+
+* `decide_defense()` never returns it (severity ≤ 1 was `isolate`; it is now
+  the strict throttle).
+* A redirect policy fallback may only be `observe`, `notify` or `throttle`;
+  `isolate` (and `redirect`) in the file become `notify`
+  (`normalize_safe_action`). The shipped `config/redirect_policy.yaml` names
+  `notify`.
+* No enforcement level and no `AZAZEL_DEFENSE_ALLOW_HIGH_IMPACT_AUTO` value
+  puts `isolate` in the allowed actions (`full-auto` used to).
+* The plan builder produces no command for `isolate`, and the static safety
+  rule turns an `isolate` decision into `notify`
+  (`isolate_not_automatic`), so no automatic path can reach a source-wide
+  drop. A unit test walks every level × flag × policy × severity × port and
+  asserts it.
+
+The release path still releases an `isolate` lease found in an existing
+ledger (written by an older core): releasing is always allowed.
+
+Permanent blocking and broad isolation are outside the delegated scope. If
+they are ever wanted, they need an owner decision, an operator approval path
+that is not automatic, and their own design; this change adds none.
+
+### 1.2 Protected communications set
+
+Declared by the deployment in `AZAZEL_PROTECTED_FLOWS_PATH` (default
+`/etc/azazel-edge/protected-flows.yaml`), read once at start:
+
+```yaml
+protected_flows:
+  version: 1
+  entries:
+    - {name: mgmt-lan,  role: management,     network: 192.0.2.0/28}
+    - {name: expert,    role: expert_contact, network: 198.51.100.7, ports: [443]}
+    - {name: radio-gw,  role: mission,        network: 2001:db8:10::/64}
+```
+
+* Roles: `management` (the management path), `expert_contact` (the
+  channel to the remote expert), `mission` (communication the mission needs).
+* Matching is deterministic and done by Edge, never by the AI: a flow is
+  protected when its **source** is inside any entry (every port — restricting
+  a source affects all of its communication) or its **destination** is inside
+  an entry and the destination port is listed (every port when none is).
+* A protected flow is never restricted or redirected. The alert becomes
+  `notify`, `metadata.safety.gate` is `refused:protected_flow:<role>` and
+  `metadata.safety.protected_match` names the entry. This is evaluated in
+  every mode, so a dry run shows the refusal too.
+* Execution requires a usable declaration: absent
+  (`protected_set_not_configured`), invalid (`protected_set_invalid`: unknown
+  key, role, network or version, more than 256 entries, a file that is a
+  symlink, group/world-writable, not owned by root or the core's user, or
+  over 64 KiB), or without a `management` entry
+  (`protected_set_has_no_management_entry`) refuses every restriction and
+  redirect. An unreadable declaration never reads as "nothing to protect".
+
+### 1.3 Target: one flow
+
+A temporary restriction is scoped to the alert's flow: source, destination
+and, for TCP/UDP with a port, the destination port. Source and destination
+must be of one address family; otherwise nothing is restricted
+(`target_not_a_flow`). A redirect needs a TCP alert with a port and an IPv4
+source (the nft redirect rule is `ip saddr … tcp dport …`).
+
+### 1.4 Mechanism and strength
+
+The restriction is an nft rule in the core's own chain, never a qdisc:
+
+```
+nft insert rule inet azazel_edge throttle ip saddr S ip daddr D tcp dport P \
+    limit rate over 32 kbytes/second burst 32 kbytes drop comment "<owner token>"
+```
+
+Packets of this flow above the rate are dropped: the flow keeps working,
+slowed (TCP adapts), and no other flow is touched. Strength is fixed by Edge:
+strict 16 kbytes/s for critical alerts, standard 32 kbytes/s otherwise (the
+old TBF rate was 256 kbit/s = 32 kbytes/s for the *whole interface*).
+
+The previous throttle (`tc qdisc replace dev <iface> root … tbf`) replaced
+the interface's root qdisc and deleted it at release, destroying whatever
+shaping was there. The core no longer runs `tc` at all. A ledger written by
+an older core may still hold such a lease; it is still released by its
+handle (legacy path), never applied.
+
+The deployment declares the owned chain (the core does not create tables or
+base chains):
+
+```
+add table inet azazel_edge
+add chain inet azazel_edge throttle { type filter hook prerouting priority -150; policy accept; }
+add chain inet azazel_edge prerouting { type nat hook prerouting priority -100; policy accept; }
+```
+
+The `prerouting` filter hook sees forwarded traffic and traffic to the Edge
+itself. Without the chain the apply fails, is recorded as `failed`, and its
+lease is released at once (§1.6).
+
+### 1.5 Lease bounds: TTL, extension, cumulative, count
+
+Compiled-in constants; no environment variable or file raises them:
+
+| Bound | Value | Effect |
+|---|---|---|
+| `MIN_LEASE_TTL_SEC` / `MAX_LEASE_TTL_SEC` | 30 s / 900 s | `AZAZEL_DEFENSE_ACTION_TTL_SEC` is clamped into this range (`metadata.safety.ttl_source`: `configured`, `clamped_to_max`, `raised_to_min`, `invalid_default`, `default`) |
+| `MAX_LEASE_EXTENSIONS` | 3 | A new alert for a flow already held extends the lease (no new rule) at most 3 times; then `lease extension limit reached` |
+| `MAX_CUMULATIVE_LEASE_SEC` | 3600 s | A *family* of leases of one flow ends at most 3600 s after its first lease began, extended or re-created; a new lease within `MIN_LEASE_TTL_SEC` of that bound is refused (`lease cumulative limit reached`) |
+| `MAX_ACTIVE_LEASES` | 64 | More held leases are refused (`active lease limit reached; restriction not widened`) so many alerts cannot add up to a broad restriction |
+| `MAX_ALERT_AGE_SEC` | 300 s | An alert older than this by its own EVE time, more than 60 s in the future, or undated, starts nothing (`alert_stale`, `alert_time_in_future`, `alert_time_unreadable`) |
+
+An alert that asks for no more time than a held lease already has is
+recorded (`already_held`) and changes nothing. Every alert merged into a held
+lease is kept as a `merged` tombstone, so a replay of it is refused.
+
+Release is unconditional: when either the wall or the monotonic deadline
+passes (existing rule, `release.rs`), the sweep deletes the owned rule and
+verifies its absence. Lease expiry never depends on the AI, Nexus, the UI or
+Knowledge.
+
+### 1.6 Apply: time bound, readback, immediate release on doubt
+
+* Each apply command runs with a 3 s bound (`APPLY_COMMAND_TIMEOUT`); past
+  it the command is killed and counted as failed (`command timeout`). The
+  release path keeps its own 5 s bound per command.
+* After the commands succeed, the core reads its owned rule back
+  (`nft -a -j list chain`) and requires exactly one rule with the owner
+  token and the planned semantics (source, destination, port, an inverted
+  limit of exactly the planned rate and burst per second, and `drop`; for a
+  redirect, the redirect port). Only then is the lease `active` and the
+  outcome `applied`.
+* Any failure, timeout, missing or different readback: the lease becomes
+  `uncertain` and **due now** on both clocks (`abandon_release_task`), so
+  the next sweep deletes whatever owned rule exists and verifies absence. It
+  is never left for its TTL (before: a failed apply was `cancelled` — a
+  terminal state, so a command that timed out after applying would have left
+  a rule with no lease — and a partial apply waited for the TTL).
+* The release sweep runs on its own thread. The decision loop holds the
+  ledger lock only while it updates the ledger, never while a command runs,
+  so a wedged apply cannot hold a release back. A lease whose apply is in
+  flight is skipped by the sweep (in-process registry): releasing it before
+  the apply lands would verify absence and then leave the rule behind.
+
+### 1.7 Restart and crash: no new grant
+
+* At start, before any alert is read, every lease still `prepared` (its
+  apply was in flight when the previous process stopped) is made `uncertain`
+  and due now: it is released, never activated
+  (`recover_unconfirmed_on_start`).
+* `active` leases keep their deadlines; a lease of another boot counts as
+  expired (existing monotonic rule). A restart extends nothing.
+* The EVE file is read from its end unless `--from-start`; replayed alerts
+  are refused by the ledger (task id, `merged` tombstones, checkpoint
+  watermark) and by the alert-age rule.
+* Enforcement settings are read from the environment at start only; the
+  restart itself is the service manager's (`Restart=` in the Nexus unit,
+  separate change). A restart never widens what the configuration allows.
+
+### 1.8 Decoy redirect preconditions
+
+A redirect is executed only when all of these hold; otherwise it is refused
+(`policy_gated`, `metadata.safety.gate = refused:<reason>`,
+`decoy_preconditions = unmet`) and the operator is notified with the reason:
+
+1. **Eligibility** — §1.2 (not protected) and §1.3 (TCP, IPv4 source, a
+   prepared port mapping).
+2. **Separation** — `decoy_separation_evidence_path` in the redirect policy
+   names a JSON file written by the deployment that placed the decoy
+   (for example Nexus after putting it in its own network namespace):
+
+   ```json
+   {"schema": "azazel-edge/decoy-separation/v1", "boot_id": "<this boot>",
+    "observed_epoch": 1793300000.0, "separation": "network_namespace",
+    "decoy_ports": [12222, 18080]}
+   ```
+
+   It must be this boot's (`/proc/sys/kernel/random/boot_id`), name the
+   decoy port, say `network_namespace` or `separate_host`, be at most
+   `decoy_evidence_max_age_sec` old (capped at 3600 s by Edge), and be a
+   trusted file (regular, owner root or the core's user, not group/world
+   writable, ≤ 16 KiB). Missing → `decoy_separation_evidence_missing`;
+   other boot, stale, wrong port, untrusted → their own reasons.
+3. **Reachability** — a TCP connect to `127.0.0.1:<decoy port>` (where
+   `nft redirect` delivers) succeeds within 300 ms (cached 5 s per port);
+   otherwise `decoy_unreachable`.
+
+Without a policy file (the environment honeypot fallback) there is no
+evidence path, so no redirect is executed. In a dry run the separation and
+reachability checks are not evaluated (`not_evaluated`): a dry run opens no
+connection.
+
+### 1.9 Release ledger capacity and generation migration
+
+The ledger keeps every terminal task as the replay guard. Before this
+change it refused new actions forever once it held 4096 tasks.
+
+* Admission compacts first when the ledger reaches 3/4 of its task bound or
+  1/2 of its 2 MiB byte bound: terminal tasks unchanged for
+  `COMPACT_MIN_AGE_SEC` (4200 s: longer than a lease family and the alert-age
+  bound) leave the ledger, and the **checkpoint** records
+  `replay_watermark_epoch`, the latest alert time (or creation time) among
+  them, with a generation counter. A task whose alert is at or before the
+  watermark is refused (`replayed disruptive apply blocked`), so a compacted
+  task can never be replayed, even with the wall clock stepped back.
+* Eligible tasks (prepared, active, uncertain) are never compacted.
+* Admission stops at 7/8 of the task bound or 3/4 of the byte bound
+  (`release ledger capacity reached; … (release continues)`). The rest is
+  reserved for the release path, which only updates existing tasks; if a
+  release save would still exceed the byte bound, it compacts and saves
+  again. New actions are refused; release never stops on capacity.
+* Notice: the sweep thread writes a `release_ledger_capacity` record (state
+  `warning` or `full`, counts, checkpoint) to the normalized log and stderr
+  when the state leaves `ok`, and every 10 minutes while it stays out.
+* Maintenance entry: `azazel-edge-core --release-ledger-status` prints the
+  capacity; `azazel-edge-core --release-ledger-compact` runs one migration
+  under the same rules (never removes a held lease, keeps the watermark).
+  Both take the same lock as the daemon (process lock plus `flock` on
+  `.<ledger>.lock`). Deleting the ledger by hand is never needed and loses
+  the replay guard; do not.
+* Schema: `azazel-release-ledger/v2` (adds the checkpoint and the flow
+  fields). A v1 ledger is read and rewritten as v2; an older core refuses a
+  v2 ledger rather than ignoring its checkpoint.
+
+### 1.10 Evidence (S-10, Edge part)
+
+`enforcement-evidence.jsonl` beside the ledger receives, fsynced and capped
+at 8 MiB with one rotation, every decision that reached the execution path
+(applied, extended, already held, failed, refused at execution) and every
+release outcome, whatever `AZAZEL_FORWARD_LOG` says and whether the intake
+socket is up. Each record carries a per-run sequence number, so a rotation
+or a lost write shows as a gap. Dry-run "would" decisions are not spooled
+(they change nothing; an fsync per alert would load the decision path). A
+bounded spool of every decision during an intake outage, with persisted
+loss counters, is not part of this change.
+
+## 2. Record fields
+
+Every enforcement outcome carries `metadata.safety` (fixed shape):
+
+| Field | Values |
+|---|---|
+| `protected_set` | `not_configured`, `invalid:<reason>`, `loaded:<n>` |
+| `protected_match` | `null` or `{name, role, side}` |
+| `scope` | `flow:<src>><dst>:<proto>:<port>`, `source_and_port:<src>:<port>`, `unscoped`, `none` |
+| `gate` | `passed`, `passed:extended`, `passed:already_held`, `refused:<reason>`, `not_evaluated:not_executing`, `not_applicable` |
+| `ttl_sec`, `ttl_source` | the bounded TTL and how it was obtained |
+| `strength` | `strict`, `standard`, or empty |
+| `decoy_preconditions` | `met`, `unmet`, `not_evaluated`, `not_applicable` |
+| `isolate_automatic` | always `false` |
+
+Modes and results keep their meanings (`explanations/trace.py`): a static
+refusal is `selected_action: notify` with an empty plan; an execution-time
+refusal is `policy_gated` / `planned_not_applied`; an admission refusal is
+`release_guard_failed`; a held flow is `enforced` / `extended` or
+`already_held` with no command; a failed apply is `enforced` / `failed` or
+`partial_failure` with `release_ledger_state: uncertain_release_scheduled`.
+
+## 3. Relation to the Python ActionArbiter
+
+`py/azazel_edge/arbiter/action.py` (NOC fragility, client impact) is not
+moved into the core. It is the replay/dry-run decision copy and its inputs
+(NOC health, client impact) are not available to the core's EVE path.
+Porting it would make two implementations of one judgement. The core's rules
+here are of a different kind: a declared, deterministic set of protected
+endpoints and fixed bounds, which hold whether or not a NOC estimate exists.
+
+## 4. Verification
+
+* Unit tests (`cargo test`): every rule above, including a sweep of every
+  level × high-impact flag × policy × severity × port that never reaches
+  `isolate`, apply failure/timeout/readback mismatch released at once, a
+  held apply not holding the sweep back, the in-flight skip, extension and
+  cumulative bounds, generation migration with replay refusal, capacity
+  refusal with release continuing, crash recovery, decoy evidence and
+  reachability.
+* Real network (`tests/test_core_scoped_actions_netns_v1.py`, root, CI
+  `service-objectives` job): four network namespaces with real TCP — only the
+  attack flow is limited while the management flow keeps its throughput, an
+  alert naming the management host restricts nothing, the interface's
+  `fq_codel` root qdisc is unchanged throughout, release at expiry restores
+  the attack flow, and a wedged `nft` is killed at its bound while a due
+  lease is released on time.
+* `tests/test_core_nft_owned_lease_v1.py`: throttle and redirect leases
+  applied, read back and released by the real core, no `input` rule.
+
+Container and runner results are not hardware evidence.
+
+## 5. Open points that need an owner decision
+
+* Who approves the protected communications set and how it reaches the
+  node (recommended: the field operator's mission pack, signed like other
+  Nexus configuration, reviewed by the responsible expert; Edge only reads a
+  root-owned file).
+* Who writes the decoy separation evidence (recommended: Nexus, after it
+  verifies the decoy namespace at activation, re-written at least every
+  `decoy_evidence_max_age_sec`).
+* Whether a cooldown should follow an exhausted lease family (today a new
+  family may start once the previous one's 3600 s have passed, on new alerts
+  only).
+* The strength values and bounds are engineering defaults, not measured on
+  the target hardware.
