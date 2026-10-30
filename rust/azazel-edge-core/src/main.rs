@@ -991,6 +991,31 @@ fn maybe_enforce_with<A: Applier>(ev: &NormalizedEvent, decision: &DefensiveDeci
                 metadata: redirect_meta,
             };
         }
+        Ok(Admission::Cooldown { until_epoch }) => {
+            // The flow used up its lease family: notify only until the
+            // cooldown ends; nothing is applied, extended or made permanent.
+            add_release_metadata(&mut redirect_meta, Some(&task), "planned_only");
+            redirect_meta["safety"] = safety_meta("refused:cooldown", decoy_state(true));
+            redirect_meta["release_cooldown_until_epoch"] = json!(until_epoch);
+            return EnforcementOutcome {
+                mode: "policy_gated".to_string(),
+                trace_id,
+                selected_action: effective_decision.action.clone(),
+                target: effective_decision.target.clone(),
+                policy_reason: format!("{}:safety_gate:cooldown", effective_decision.policy_reason),
+                command_plan: plan.apply_commands,
+                rollback_plan: plan.rollback_commands,
+                executed_count: 0,
+                failed_count: 0,
+                errors: Vec::new(),
+                rollback_hint: format!(
+                    "flow used up its {}s lease family; not restricted again until {:.0} (cooldown {}s); operator notified",
+                    release::MAX_CUMULATIVE_LEASE_SEC, until_epoch, release::FLOW_COOLDOWN_SEC
+                ),
+                result: "planned_not_applied".to_string(),
+                metadata: redirect_meta,
+            };
+        }
         Ok(Admission::AlreadyHeld { task_id, due_epoch }) => {
             add_release_metadata(&mut redirect_meta, Some(&task), "merged");
             redirect_meta["release_extended_task_id"] = json!(task_id);
@@ -3554,6 +3579,36 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted.len(), kept.len(), "a record was written twice");
         assert_eq!(sorted, seqs, "a retained record was lost");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A flow in cooldown is notified only: policy_gated, `refused:cooldown`,
+    /// nothing applied, whatever the configured TTL.
+    #[test]
+    fn a_flow_in_cooldown_is_notified_only() {
+        let dir = test_dir("cooldown");
+        let mut cfg = executing_cfg(&dir);
+        cfg.defense_action_ttl_sec = 900;
+        let ev = fresh_event(1, "203.0.113.80");
+        let now = now_epoch();
+        let (_, rate, burst) = strength_for(&ev);
+        let mut used = release::build_flow_throttle_task("trace-used", &flow_scope(&ev).unwrap(), rate, burst, 900, &LeaseNow::wall_only(now - 3700.0)).unwrap();
+        used.status = "released".to_string();
+        used.family_started_epoch = Some(now - 3700.0);
+        used.cooldown_until_epoch = Some(now - 100.0 + release::FLOW_COOLDOWN_SEC as f64);
+        prepare_release_task(&cfg.defense_release_ledger_path, &used).unwrap();
+        let applier = FakeApplier::ok();
+        let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &applier);
+        assert!(applier.applied().is_empty());
+        assert_eq!(outcome.mode, "policy_gated");
+        assert_eq!(outcome.result, "planned_not_applied");
+        assert_eq!(outcome.metadata["safety"]["gate"], "refused:cooldown");
+        assert!(outcome.policy_reason.ends_with(":safety_gate:cooldown"));
+        assert!(outcome.metadata["release_cooldown_until_epoch"].as_f64().unwrap() > now);
+        assert!(enforcement_evidence_due(&outcome, &cfg));
+        // Another flow is not affected.
+        let other = fresh_event(1, "203.0.113.81");
+        assert_eq!(maybe_enforce_with(&other, &decide_defense(&other), &cfg, &FakeApplier::ok()).result, "applied");
         let _ = fs::remove_dir_all(&dir);
     }
 }

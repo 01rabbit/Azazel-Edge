@@ -158,8 +158,21 @@ Compiled-in constants; no environment variable or file raises them:
 | `MIN_LEASE_TTL_SEC` / `MAX_LEASE_TTL_SEC` | 30 s / 900 s | `AZAZEL_DEFENSE_ACTION_TTL_SEC` is clamped into this range (`metadata.safety.ttl_source`: `configured`, `clamped_to_max`, `raised_to_min`, `invalid_default`, `default`) |
 | `MAX_LEASE_EXTENSIONS` | 3 | A new alert for a flow already held extends the lease (no new rule) at most 3 times; then `lease extension limit reached` |
 | `MAX_CUMULATIVE_LEASE_SEC` | 3600 s | A *family* of leases of one flow ends at most 3600 s after its first lease began, extended or re-created; a new lease within `MIN_LEASE_TTL_SEC` of that bound is refused (`lease cumulative limit reached`) |
+| `FLOW_COOLDOWN_SEC` | 900 s | A flow whose lease family reached `MAX_CUMULATIVE_LEASE_SEC` is not restricted again from the family's end until 900 s later: its alerts are refused (`policy_gated`, `safety.gate = refused:cooldown`, `release_cooldown_until_epoch`) and notified only. Never longer, never permanent; afterwards a new family may start on a new alert |
 | `MAX_ACTIVE_LEASES` | 64 | More held leases are refused (`active lease limit reached; restriction not widened`) so many alerts cannot add up to a broad restriction |
 | `MAX_ALERT_AGE_SEC` | 300 s | An alert older than this by its own EVE time, more than 60 s in the future, or undated, starts nothing (`alert_stale`, `alert_time_in_future`, `alert_time_unreadable`) |
+
+**Cooldown in the ledger.** The lease that brings its family to the bound
+(a new lease cut at the bound, an extension that reaches it, or — when a new
+lease would be shorter than `MIN_LEASE_TTL_SEC` before the bound — the
+family's latest lease) records `cooldown_until_epoch` = family start +
+3600 s + 900 s. Admission refuses the flow while the time is between the
+family's end and that value. Being in the ledger, it holds across restarts;
+the task carrying it outlives it there (`COMPACT_MIN_AGE_SEC` 4200 s >
+`FLOW_COOLDOWN_SEC`, checked at compile time), so a generation migration
+cannot drop it early. A cooldown refusal writes nothing: the alert executed
+nothing, so there is nothing a replay could repeat, and every replay guard
+(event keys, tombstones, checkpoint) is unchanged by it.
 
 An alert that asks for no more time than a held lease already has is
 recorded (`already_held`) and changes nothing. Every alert merged into a held
@@ -333,14 +346,15 @@ change (distribution order: Edge first; Nexus needs nothing for
 observe-only). Every other outcome (`policy_gated`, `release_guard_failed`,
 `enforced` — all refused by Nexus today as not observe-only) carries
 `metadata.safety` (fixed shape), plus `release_extended_task_id` (and
-`release_extensions` when extended) for a held flow:
+`release_extensions` when extended) for a held flow, and
+`release_cooldown_until_epoch` for a flow in cooldown:
 
 | Field | Values |
 |---|---|
 | `protected_set` | `not_configured`, `invalid:<reason>`, `loaded:<n>`, `loaded:<n>:not_applicable:<roles>` |
 | `protected_match` | `null` or `{name, role, side}` |
 | `scope` | `flow:<src>><dst>:<proto>:<port>` (`<proto>`: tcp, udp, icmp, ipv6-icmp; port 0 without one), `source_and_port:<src>:<port>`, `unscoped`, `none` |
-| `gate` | `passed`, `passed:extended`, `passed:already_held`, `refused:<reason>`, `not_evaluated:not_executing`, `not_applicable` |
+| `gate` | `passed`, `passed:extended`, `passed:already_held`, `refused:cooldown`, `refused:<reason>`, `not_evaluated:not_executing`, `not_applicable` |
 | `ttl_sec`, `ttl_source` | the bounded TTL and how it was obtained |
 | `strength` | `strict`, `standard`, or empty |
 | `decoy_preconditions` | `met`, `unmet`, `not_evaluated`, `not_applicable` |
@@ -398,17 +412,21 @@ endpoints and fixed bounds, which hold whether or not a NOC estimate exists.
 
 Container and runner results are not hardware evidence.
 
-## 5. Open points that need an owner decision
+## 5. Decided points (2026-10-30, delegated technical decisions)
 
-* Who approves the protected communications set and how it reaches the
-  node (recommended: the field operator's mission pack, signed like other
-  Nexus configuration, reviewed by the responsible expert; Edge only reads a
-  root-owned file).
-* Who writes the decoy separation evidence (recommended: Nexus, after it
-  verifies the decoy namespace at activation, re-written at least every
-  `decoy_evidence_max_age_sec`).
-* Whether a cooldown should follow an exhausted lease family (today a new
-  family may start once the previous one's 3600 s have passed, on new alerts
-  only).
-* The strength values and bounds are engineering defaults, not measured on
-  the target hardware.
+Recorded by the orchestrator as delegated technical decisions:
+
+1. **Protected set and "not applicable"**: declared in the Mission Pack,
+   confirmed and recorded at commissioning, placed on the node by Nexus as
+   a root-owned file. Edge only reads it. (Nexus side: to be implemented.)
+2. **Decoy separation evidence** (including `ingress_interface`): written by
+   Nexus at activation, after it verifies the decoy's namespace, and
+   re-written within `decoy_evidence_max_age_sec`. (Nexus side: to be
+   implemented.)
+3. **Cooldown after a used-up lease family**: Edge-fixed 900 s
+   (`FLOW_COOLDOWN_SEC`), notify only during it, no re-restriction, never
+   permanent. Implemented here (§1.5).
+4. **Permanent blocking and broad isolation**: not built.
+
+Still not measured: the strength values and bounds are engineering
+defaults, not measured on the target hardware.

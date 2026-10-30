@@ -136,6 +136,14 @@ pub struct ReleaseTask {
     /// that survives a change of mechanism or of the decided action.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub event_key: String,
+    /// Set on the lease that brought its family to the cumulative bound:
+    /// from that bound until this time the flow is in cooldown and is not
+    /// restricted again (notify only). Kept in the ledger, so it holds
+    /// across restarts; the task outlives it there (`COMPACT_MIN_AGE_SEC`
+    /// is longer than `FLOW_COOLDOWN_SEC`), so a generation migration cannot
+    /// drop it early.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_until_epoch: Option<f64>,
 }
 
 fn is_zero_u32(value: &u32) -> bool {
@@ -157,6 +165,13 @@ pub const MAX_ACTIVE_LEASES: usize = 64;
 /// already refused as stale on a correct clock; the checkpoint watermark
 /// keeps refusing it when the wall clock is stepped back.
 pub const COMPACT_MIN_AGE_SEC: f64 = (MAX_CUMULATIVE_LEASE_SEC + 600) as f64;
+/// After a flow's lease family reaches `MAX_CUMULATIVE_LEASE_SEC`, the flow
+/// is not restricted again for this long (owner decision 2026-10-30): its
+/// alerts are notified only. Compiled in; nothing in the environment or a
+/// file changes it. It never makes a restriction longer or permanent.
+pub const FLOW_COOLDOWN_SEC: u64 = 900;
+// A cooldown must outlive neither the task that carries it nor a compaction.
+const _: () = assert!((FLOW_COOLDOWN_SEC as f64) < COMPACT_MIN_AGE_SEC);
 
 /// The clocks a lease is created and expired against, read together.
 #[derive(Debug, Clone, PartialEq)]
@@ -600,6 +615,7 @@ pub fn build_release_task(
         family_started_epoch: None,
         extensions: 0,
         event_key: String::new(),
+        cooldown_until_epoch: None,
     })
 }
 
@@ -817,6 +833,10 @@ pub enum Admission {
     /// An active lease of the same resource already lasts at least as long
     /// as this alert would ask; nothing changes but the tombstone.
     AlreadyHeld { task_id: String, due_epoch: f64 },
+    /// The flow used up its lease family and is in cooldown until
+    /// `until_epoch`: nothing is applied and nothing is written (the alert
+    /// executed nothing, so there is nothing a replay could repeat).
+    Cooldown { until_epoch: f64 },
 }
 
 /// Admit a restriction under the Edge-fixed bounds (production path):
@@ -832,6 +852,21 @@ pub fn admit_release_task(path: &str, task: &ReleaseTask, ttl_sec: u64, now: &Le
     let mut ledger = load_ledger(path)?;
     admit_new_task(&mut ledger, task, now_epoch)?;
     let ttl = ttl_sec.clamp(MIN_LEASE_TTL_SEC, MAX_LEASE_TTL_SEC) as f64;
+
+    // Cooldown: from the end of a used-up family until its recorded time.
+    let cooldown = ledger
+        .tasks
+        .iter()
+        .filter(|item| item.resource_key == task.resource_key)
+        .filter_map(|item| {
+            let until = item.cooldown_until_epoch?;
+            let from = item.family_started_epoch.unwrap_or(item.created_epoch) + MAX_CUMULATIVE_LEASE_SEC as f64;
+            (now_epoch >= from - 1.0 && now_epoch < until).then_some(until)
+        })
+        .fold(None, |acc: Option<f64>, until| Some(acc.map_or(until, |a| a.max(until))));
+    if let Some(until_epoch) = cooldown {
+        return Ok(Admission::Cooldown { until_epoch });
+    }
 
     if let Some(index) = ledger
         .tasks
@@ -875,6 +910,9 @@ pub fn admit_release_task(path: &str, task: &ReleaseTask, ttl_sec: u64, now: &Le
         item.next_attempt_epoch = new_due;
         item.due_boottime_ns = due_boottime_ns;
         item.extensions += 1;
+        if new_due >= cap {
+            item.cooldown_until_epoch = Some(cap + FLOW_COOLDOWN_SEC as f64);
+        }
         item.updated_epoch = now_epoch;
         let extensions = item.extensions;
         let task_id = item.task_id.clone();
@@ -900,10 +938,24 @@ pub fn admit_release_task(path: &str, task: &ReleaseTask, ttl_sec: u64, now: &Le
     let cap = family_start + MAX_CUMULATIVE_LEASE_SEC as f64;
     let mut admitted = task.clone();
     admitted.family_started_epoch = Some(family_start);
-    if admitted.due_epoch > cap {
+    if admitted.due_epoch >= cap {
         if cap - now_epoch < MIN_LEASE_TTL_SEC as f64 {
+            // The family is used up: record its cooldown on its latest lease
+            // (nothing is applied) so it holds across restarts.
+            let until = cap + FLOW_COOLDOWN_SEC as f64;
+            if let Some(last) = ledger
+                .tasks
+                .iter_mut()
+                .filter(|item| item.resource_key == task.resource_key && item.status != "merged")
+                .filter(|item| item.family_started_epoch.unwrap_or(item.created_epoch) == family_start)
+                .max_by(|a, b| a.created_epoch.total_cmp(&b.created_epoch))
+            {
+                last.cooldown_until_epoch = Some(until);
+                save_ledger(path, &mut ledger)?;
+            }
             return Err("lease cumulative limit reached".to_string());
         }
+        admitted.cooldown_until_epoch = Some(cap + FLOW_COOLDOWN_SEC as f64);
         let shortened = admitted.due_epoch - cap;
         admitted.due_epoch = cap;
         admitted.next_attempt_epoch = cap;
@@ -2209,6 +2261,7 @@ fn validate_task(task: &ReleaseTask) -> Result<(), String> {
     .into_iter()
     .chain(task.event_epoch)
     .chain(task.family_started_epoch)
+    .chain(task.cooldown_until_epoch)
     {
         validate_now(value)?;
     }
@@ -4009,5 +4062,102 @@ mod tests {
         let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
         assert_eq!(outcomes[0].status, "released");
         assert_eq!(outcomes[0].postcondition["existing_connections"], "conntrack_unavailable");
+    }
+
+    // -- flow cooldown after a used-up lease family (owner decision 2026-10-30)
+
+    fn release_all(path: &str, at: f64) {
+        let runner = FakeRunner::new((0..8).map(|_| ok_json(json!({"nftables": []}))).collect());
+        process_due_releases_with_runner(path, &now_at(at), &runner).unwrap();
+    }
+
+    #[test]
+    fn a_used_up_family_puts_the_flow_in_cooldown_across_restart_and_migration() {
+        assert_eq!(FLOW_COOLDOWN_SEC, 900);
+        let path = test_path("ledger.json");
+        let t0 = 100_000.0;
+        let cap = t0 + MAX_CUMULATIVE_LEASE_SEC as f64;
+        let first = build_flow_throttle_task("cd-0", &flow("10.0.0.70"), 32, 32, 900, &now_at(t0)).unwrap();
+        let Admission::Prepared(lease) = admit_release_task(&path, &first, 900, &now_at(t0)).unwrap() else { panic!() };
+        assert_eq!(lease.cooldown_until_epoch, None, "a lease that ends before the bound sets no cooldown");
+        activate_release_task(&path, &lease.task_id, t0).unwrap();
+        release_all(&path, t0 + 901.0);
+        // Near the family's end: the new lease is cut at the bound and the
+        // flow's cooldown is recorded with it.
+        let late = build_flow_throttle_task("cd-1", &flow("10.0.0.70"), 32, 32, 900, &now_at(cap - 200.0)).unwrap();
+        let Admission::Prepared(last) = admit_release_task(&path, &late, 900, &now_at(cap - 200.0)).unwrap() else { panic!() };
+        assert_eq!(last.due_epoch, cap);
+        assert_eq!(last.cooldown_until_epoch, Some(cap + FLOW_COOLDOWN_SEC as f64));
+        activate_release_task(&path, &last.task_id, cap - 200.0).unwrap();
+        release_all(&path, cap + 1.0);
+
+        let alert = |n: u32, at: f64| {
+            let mut t = build_flow_throttle_task(&format!("cd-a{n}"), &flow("10.0.0.70"), 32, 32, 900, &now_at(at)).unwrap();
+            t.event_key = format!("event-{:016x}", n);
+            t
+        };
+        let before = load_ledger(&path).unwrap().tasks.len();
+        // In cooldown: nothing is admitted, nothing is written; the TTL asked
+        // for makes no difference.
+        for (n, ttl) in [(1, 30), (2, 900), (3, u64::MAX)] {
+            assert_eq!(
+                admit_release_task(&path, &alert(n, cap + 10.0), ttl, &now_at(cap + 10.0)),
+                Ok(Admission::Cooldown { until_epoch: cap + FLOW_COOLDOWN_SEC as f64 })
+            );
+        }
+        assert_eq!(load_ledger(&path).unwrap().tasks.len(), before);
+        // A restart reads the same ledger: still in cooldown.
+        let mut reloaded = load_ledger(&path).unwrap();
+        save_ledger(&path, &mut reloaded).unwrap();
+        assert!(matches!(admit_release_task(&path, &alert(4, cap + 300.0), 900, &now_at(cap + 300.0)), Ok(Admission::Cooldown { .. })));
+        // A generation migration during the cooldown keeps it: its lease is
+        // younger than COMPACT_MIN_AGE_SEC.
+        let mut ledger = load_ledger(&path).unwrap();
+        for n in 0..COMPACT_AT_TASKS {
+            ledger.tasks.push(terminal_filler(n, 1_000.0));
+        }
+        save_ledger(&path, &mut ledger).unwrap();
+        let other = build_flow_throttle_task("cd-other", &flow("10.0.0.71"), 32, 32, 300, &now_at(cap + 400.0)).unwrap();
+        assert!(matches!(admit_release_task(&path, &other, 300, &now_at(cap + 400.0)), Ok(Admission::Prepared(_))));
+        assert!(load_ledger(&path).unwrap().checkpoint.generation >= 1, "the migration ran");
+        assert!(matches!(admit_release_task(&path, &alert(5, cap + 500.0), 900, &now_at(cap + 500.0)), Ok(Admission::Cooldown { .. })));
+        // After the cooldown: a new family may start, on a new alert only.
+        let after = cap + FLOW_COOLDOWN_SEC as f64 + 1.0;
+        let Admission::Prepared(fresh) = admit_release_task(&path, &alert(6, after), 900, &now_at(after)).unwrap() else { panic!() };
+        assert_eq!(fresh.family_started_epoch, Some(after));
+        assert_eq!(fresh.cooldown_until_epoch, None);
+    }
+
+    #[test]
+    fn an_extension_that_reaches_the_bound_records_the_cooldown_and_replays_stay_refused() {
+        let path = test_path("ledger.json");
+        let t0 = 200_000.0;
+        let cap = t0 + MAX_CUMULATIVE_LEASE_SEC as f64;
+        let mut first = build_flow_throttle_task("ce-0", &flow("10.0.0.72"), 32, 32, 900, &now_at(t0)).unwrap();
+        first.event_key = "event-00000000000000e0".to_string();
+        let Admission::Prepared(lease) = admit_release_task(&path, &first, 900, &now_at(t0)).unwrap() else { panic!() };
+        activate_release_task(&path, &lease.task_id, t0).unwrap();
+        // Keep the lease near its end and extend it up to the bound.
+        let mut at = t0;
+        for (n, offset) in (1..=MAX_LEASE_EXTENSIONS).zip([890.0, 1780.0, 2700.0]) {
+            at = t0 + offset;
+            let mut next = build_flow_throttle_task(&format!("ce-{n}"), &flow("10.0.0.72"), 32, 32, 900, &now_at(at)).unwrap();
+            next.event_key = format!("event-00000000000000e{n}");
+            assert!(matches!(admit_release_task(&path, &next, 900, &now_at(at)).unwrap(), Admission::Extended { .. }));
+        }
+        let held = load_ledger(&path).unwrap().tasks.into_iter().find(|t| t.task_id == lease.task_id).unwrap();
+        assert_eq!(held.due_epoch, cap, "extended to the bound (last at {at})");
+        assert_eq!(held.cooldown_until_epoch, Some(cap + FLOW_COOLDOWN_SEC as f64));
+        release_all(&path, cap + 1.0);
+        let mut again = build_flow_throttle_task("ce-x", &flow("10.0.0.72"), 32, 32, 900, &now_at(cap + 5.0)).unwrap();
+        again.event_key = "event-00000000000000ef".to_string();
+        assert!(matches!(admit_release_task(&path, &again, 900, &now_at(cap + 5.0)), Ok(Admission::Cooldown { .. })));
+        // After the cooldown a replay of an alert that was executed (or
+        // merged) is still refused by its event key: the cooldown neither
+        // adds nor removes a replay guard.
+        let after = cap + FLOW_COOLDOWN_SEC as f64 + 1.0;
+        let mut replay = build_flow_throttle_task("ce-0b", &flow("10.0.0.72"), 32, 32, 900, &now_at(after)).unwrap();
+        replay.event_key = "event-00000000000000e1".to_string();
+        assert!(admit_release_task(&path, &replay, 900, &now_at(after)).unwrap_err().contains("already led to a lease"));
     }
 }
