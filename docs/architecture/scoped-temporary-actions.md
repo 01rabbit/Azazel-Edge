@@ -244,7 +244,10 @@ Knowledge.
   whose task ids came from the old mechanism and have no event key) two
   guards hold together: the **trace id** the previous core gave the alert
   for any action it could have decided (isolate, redirect, throttle) is
-  matched against its tasks, whatever the times say; and a migration
+  matched against its tasks — and against the trace ids of every v1 task,
+  copied into the checkpoint at migration and kept there for good
+  (compaction never touches the checkpoint), so the guard outlives the
+  tasks — whatever the times say; and a migration
   boundary refuses every alert dated at or before the latest of the file's
   mtime and every time its tasks carry, plus the 60 s an alert may be dated
   ahead and still be acted on. A previous core whose clock was stepped back
@@ -316,8 +319,22 @@ Rule absence and connection clean-up are separate states. The lease is
 `failed:<why>`, a timeout), the outcome is `retry_pending` /
 `connections_not_cleared`, the lease records `rule_removed_epoch` and stays
 eligible, and the clean-up is retried with the release backoff until it
-succeeds. To avoid that state, a redirect is not applied at all without the
+succeeds. Such a lease is no longer held: a new alert for its resource is
+refused ("being released") and changes neither its deadline nor its retry
+schedule. To avoid that state, a redirect is not applied at all without the
 `conntrack` tool (`refused:conntrack_unavailable`).
+
+**A shared conntrack mark.** The redirect overwrites the mark of the
+connections it takes, and the release trusts its mark. Both are only safe
+when nothing else uses the conntrack mark, so before applying a redirect the
+core reads the nft ruleset (`nft -j list ruleset`, allowlisted) and refuses
+(`refused:ct_mark_in_use`; unreadable ruleset: `refused:ct_mark_use_unreadable`)
+when any rule it does not own matches or sets `ct mark`, or uses an
+iptables-nft `connmark`. At release the same check runs again: with a
+shared mark, "none found" proves nothing, so the clean-up reports
+`ct_mark_shared:<table/chain/handle>` and is retried, never released on it.
+iptables-legacy rules are not visible to this check (documented limit; such a
+deployment should not enable redirect).
 
 Without a policy file (the environment honeypot fallback) there is no
 evidence path, so no redirect is executed. In a dry run the separation and
@@ -376,20 +393,34 @@ the decision path); they are covered by the spool below.
 
 **Undelivered decisions** (`undelivered.rs`). Every line the forwarder could
 not hand to the intake socket (no listener, refused, write timeout) or
-could not even queue (queue full) goes to
-`AZAZEL_UNDELIVERED_SPOOL` (default
-`/var/lib/azazel-edge/undelivered-decisions.jsonl`), in every mode,
+could not even queue (queue full) goes to the spool, in every mode,
 observe-only included, whatever `AZAZEL_FORWARD_LOG` says. While the intake
-takes the lines nothing is written. For a small device it is buffered:
-flushed every second, synced every five, never an fsync per decision;
-capped (`AZAZEL_UNDELIVERED_SPOOL_CAP_BYTES`, 64 KiB–64 MiB, default 8 MiB)
-with one rotated segment. Beside it, `undelivered-decisions.state.json`
-keeps across restarts: runs, unclean stops (a run that ended without a clean
-stop — its last second may be missing), lines spooled, lines lost before the
-spool (hand-off full, or still queued for the forwarder at a clean stop),
-lines the cap rotated out, and the wall-clock range of undelivered lines.
-Every undelivered decision is therefore either in the spool or counted, with
-its time range.
+takes the lines nothing is written.
+
+* Where: `undelivered-decisions.jsonl` beside the release ledger
+  (`AZAZEL_UNDELIVERED_SPOOL` overrides it). In the Nexus unit the ledger is
+  `/var/lib/azazel/edge-core/release-ledger.json`, inside its only
+  `ReadWritePaths`, so the unit needs no change. Where the spool cannot be
+  created the core keeps running and reports on stderr, once a minute and at
+  stop, how many undelivered decisions were not kept.
+* How: one `write` per undelivered line, no user-space buffer, so a line is
+  counted spooled only when the kernel took it and lost when it did not;
+  synced every five seconds, never per decision. Capped
+  (`AZAZEL_UNDELIVERED_SPOOL_CAP_BYTES`, 64 KiB–64 MiB, default 8 MiB) with
+  one rotated segment; when rotating or reopening fails, nothing is written
+  past the cap — lines are counted lost until a later rotation succeeds.
+* State (`undelivered-decisions.state.json`, kept across restarts): runs;
+  lines spooled; lines lost (hand-off full, write failed, cap not
+  rotatable, or still on their way — queued or being delivered — at a clean
+  stop); lines the cap rotated out; sync/state failures; the time range of
+  undelivered lines; and, written every second, how many lines were on
+  their way. After an unclean stop the next start records that number
+  (`unclean_pending_lost_total`) and the interval from the last state write
+  to the start (`last_unclean_gap`). A run with any write, sync or state
+  failure is never recorded as a clean stop.
+
+Every undelivered decision is therefore delivered, in the spool, counted
+lost, or inside a recorded unclean gap.
 
 ## 2. Record fields
 

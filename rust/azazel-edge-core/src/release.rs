@@ -329,6 +329,12 @@ pub struct LedgerCheckpoint {
     pub compacted_total: u64,
     #[serde(default)]
     pub last_compacted_epoch: f64,
+    /// The trace ids of the tasks a v1 ledger (the previous core) held when
+    /// it was migrated. Kept here for good -- compaction never touches the
+    /// checkpoint -- so an alert the previous core handled stays refused
+    /// after its task is compacted. Bounded by the v1 task bound.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_trace_ids: Vec<String>,
 }
 
 impl Default for ReleaseLedger {
@@ -983,11 +989,10 @@ pub fn admit_release_task(path: &str, task: &ReleaseTask, legacy_traces: &[Strin
     // An alert the previous core handled is found by the trace id it gave
     // it, whatever action it decided then (the trace id is built from the
     // alert and that action): a task without an event key is such a task.
-    if ledger
-        .tasks
-        .iter()
-        .any(|item| item.event_key.is_empty() && legacy_traces.iter().any(|t| *t == item.trace_id))
-    {
+    if legacy_traces.iter().any(|t| {
+        ledger.checkpoint.legacy_trace_ids.contains(t)
+            || ledger.tasks.iter().any(|item| item.event_key.is_empty() && item.trace_id == *t)
+    }) {
         return Err("this alert already led to a lease under the previous core; replayed disruptive apply blocked".to_string());
     }
     let ttl = ttl_sec.clamp(MIN_LEASE_TTL_SEC, MAX_LEASE_TTL_SEC) as f64;
@@ -1017,6 +1022,12 @@ pub fn admit_release_task(path: &str, task: &ReleaseTask, legacy_traces: &[Strin
         .position(|item| item.resource_key == task.resource_key && eligible_status(&item.status))
     {
         let held = ledger.tasks[index].clone();
+        // A redirect whose rule is already removed and whose connections are
+        // still being cleared is not held: nothing acts on new connections.
+        // It is neither extended nor rescheduled; the alert is refused.
+        if held.rule_removed_epoch.is_some() {
+            return Err("resource is being released (redirected connections not yet cleared); not extended".to_string());
+        }
         if held.status != "active" {
             return Err(format!("resource has an unconfirmed lease (status={}); not extended", held.status));
         }
@@ -1827,6 +1838,50 @@ fn rule_absent_outcome(task: &ReleaseTask, now_epoch: f64, result: &str, command
     )
 }
 
+/// Another use of the conntrack mark anywhere in the nft ruleset (a rule
+/// not owned by this core that matches or sets `ct mark`, or an iptables-nft
+/// `connmark`): the mark is then shared, Edge could overwrite it, and a
+/// later rule could change ours. `Ok(None)` when there is none. iptables
+/// legacy rules are not visible here (documented limit).
+pub fn foreign_ct_mark_use<R: ReleaseCommandRunner>(runner: &R) -> Result<Option<String>, String> {
+    let result = runner.run(&strings(&["nft", "-j", "list", "ruleset"]))?;
+    if result.returncode != 0 {
+        return Err(format!("nft ruleset readback failed: {}", bounded_error(&result.stderr)));
+    }
+    let payload: Value = serde_json::from_str(&result.stdout).map_err(|e| format!("nft ruleset parse failed: {e}"))?;
+    let entries = payload.get("nftables").and_then(Value::as_array).ok_or_else(|| "nft ruleset missing nftables array".to_string())?;
+    fn uses_ct_mark(value: &Value) -> bool {
+        match value {
+            Value::Object(map) => {
+                if map.get("ct").and_then(|c| c.get("key")).and_then(Value::as_str) == Some("mark") {
+                    return true;
+                }
+                if let Some(xt) = map.get("xt") {
+                    if xt.get("name").and_then(Value::as_str).map_or(false, |n| n.eq_ignore_ascii_case("connmark")) {
+                        return true;
+                    }
+                }
+                map.values().any(uses_ct_mark)
+            }
+            Value::Array(items) => items.iter().any(uses_ct_mark),
+            _ => false,
+        }
+    }
+    for entry in entries {
+        let Some(rule) = entry.get("rule") else { continue };
+        let owned = rule.get("comment").and_then(Value::as_str).map_or(false, valid_owner_token);
+        if !owned && rule.get("expr").map_or(false, uses_ct_mark) {
+            return Ok(Some(format!(
+                "{}/{}/{}",
+                rule.get("table").and_then(Value::as_str).unwrap_or("?"),
+                rule.get("chain").and_then(Value::as_str).unwrap_or("?"),
+                rule.get("handle").and_then(Value::as_u64).unwrap_or(0)
+            )));
+        }
+    }
+    Ok(None)
+}
+
 /// After a redirect's rule is gone, connections it already redirected keep
 /// their NAT binding in connection tracking and stay on the decoy. Delete
 /// the tracking entries of the owned flow only (original tuple: this
@@ -1839,6 +1894,15 @@ fn rule_absent_outcome(task: &ReleaseTask, now_epoch: f64, result: &str, command
 fn clear_redirect_connections<R: ReleaseCommandRunner>(task: &ReleaseTask, runner: &R) -> String {
     if task.action != "redirect" {
         return "not_applicable".to_string();
+    }
+    // With the mark shared, a "none found" would prove nothing (another rule
+    // may have changed ours): not cleared, retried.
+    if task.mechanism == MECHANISM_NFT_FLOW_REDIRECT {
+        match foreign_ct_mark_use(runner) {
+            Ok(None) => {}
+            Ok(Some(user)) => return bounded_error(&format!("ct_mark_shared:{user}")),
+            Err(error) => return bounded_error(&format!("failed:{error}")),
+        }
     }
     let port = task.destination_port.to_string();
     let mark = task.ct_mark.to_string();
@@ -2356,6 +2420,14 @@ fn load_ledger(path: &str) -> Result<ReleaseLedger, String> {
         // possible replay. The boundary is the file's own mtime, so reading
         // the same v1 file again gives the same boundary; it is kept in the
         // checkpoint when the ledger is saved as v2.
+        let mut traces: Vec<String> = ledger.tasks.iter().map(|t| t.trace_id.clone()).collect();
+        traces.sort();
+        traces.dedup();
+        for trace in traces {
+            if !ledger.checkpoint.legacy_trace_ids.contains(&trace) {
+                ledger.checkpoint.legacy_trace_ids.push(trace);
+            }
+        }
         if !ledger.tasks.is_empty() {
             // Not the mtime alone: the previous core's clock may have been
             // stepped back before its last write. The boundary is the latest
@@ -2572,6 +2644,9 @@ pub(crate) fn resolve_trusted_binary(name: &str) -> Result<PathBuf, String> {
 }
 
 fn allowed_release_command(argv: &[String]) -> bool {
+    if argv == strings(&["nft", "-j", "list", "ruleset"]).as_slice() {
+        return true;
+    }
     // `conntrack -D -p tcp --orig-src S --orig-dst D --dport P` (or without
     // the destination for a legacy redirect): only the owned flow's
     // connection-tracking entries.
@@ -4245,6 +4320,7 @@ mod tests {
             ok_json(json!({"nftables": [redirect_rule(&task, 4)]})),
             Ok(CommandResult { returncode: 0, stdout: String::new(), stderr: String::new() }),
             ok_json(json!({"nftables": []})),
+            ok_json(json!({"nftables": []})), // ruleset: no other ct mark user
             Ok(CommandResult { returncode: 0, stdout: String::new(), stderr: "1 flow entries have been deleted.".to_string() }),
         ]);
         let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
@@ -4254,7 +4330,8 @@ mod tests {
         let mark = task.ct_mark.to_string();
         assert_eq!(task.ct_mark & 0xFFF0_0000, CT_MARK_PREFIX);
         let conntrack = strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", "10.0.0.60", "--orig-dst", "10.20.0.5", "--dport", "22", "--mark", &mark]);
-        assert_eq!(calls[3], conntrack);
+        assert_eq!(calls[3], strings(&["nft", "-j", "list", "ruleset"]));
+        assert_eq!(calls[4], conntrack);
         assert!(allowed_release_command(&conntrack));
         // Anything wider is not an allowed release command.
         assert!(!allowed_release_command(&strings(&["conntrack", "-F"])));
@@ -4268,6 +4345,7 @@ mod tests {
         prepare_release_task(&path, &task).unwrap();
         activate_release_task(&path, &task.task_id, 100.5).unwrap();
         let runner = FakeRunner::new(vec![
+            ok_json(json!({"nftables": []})),
             ok_json(json!({"nftables": []})),
             Ok(CommandResult { returncode: 1, stdout: String::new(), stderr: "conntrack v1.4.7 (conntrack-tools): 0 flow entries have been deleted.".to_string() }),
         ]);
@@ -4287,7 +4365,7 @@ mod tests {
             let path = test_path("ledger.json");
             prepare_release_task(&path, &task).unwrap();
             activate_release_task(&path, &task.task_id, 100.5).unwrap();
-            let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []})), failure]);
+            let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []})), ok_json(json!({"nftables": []})), failure]);
             let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
             assert_eq!(outcomes[0].status, "retry_pending");
             assert_eq!(outcomes[0].result, "connections_not_cleared");
@@ -4296,6 +4374,7 @@ mod tests {
             assert_eq!(stored.status, "active");
             assert_eq!(stored.rule_removed_epoch, Some(131.0));
             let runner = FakeRunner::new(vec![
+                ok_json(json!({"nftables": []})),
                 ok_json(json!({"nftables": []})),
                 Ok(CommandResult { returncode: 0, stdout: String::new(), stderr: "1 flow entries have been deleted.".to_string() }),
             ]);
@@ -4543,5 +4622,98 @@ mod tests {
         let deviating = { let mut r = redirect_rule(&redirect, 4); r["rule"]["expr"][5]["redirect"]["port"] = json!(1); r };
         let runner = FakeRunner::new(vec![ok_json(json!({"nftables": [deviating]}))]);
         assert_eq!(nft_owned_rules(&redirect, "prerouting", &runner), Ok(vec![(4, false)]));
+    }
+
+    // -- Codex third review Re521c ---------------------------------------
+
+    /// Re521c-01: the previous core's trace ids outlive compaction.
+    #[test]
+    fn a_v1_trace_is_refused_after_its_task_is_compacted() {
+        let path = test_path("ledger.json");
+        let mut old = build_release_task("trace-v1-old", "throttle", "br0", "10.0.0.90", 22, 0, 1000, 30, &LeaseNow::wall_only(1_000.0)).unwrap();
+        old.status = "released".to_string();
+        fs::write(&path, json!({"schema_version": "azazel-release-ledger/v1", "tasks": [old]}).to_string()).unwrap();
+        let file = OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_modified(UNIX_EPOCH + Duration::from_secs_f64(1_000.0)).unwrap();
+        let now = 100_000.0;
+        // Fill and compact (automatically, then by hand): the old task goes.
+        let mut ledger = load_ledger(&path).unwrap();
+        for n in 0..COMPACT_AT_TASKS {
+            ledger.tasks.push(terminal_filler(n, 1_500.0));
+        }
+        save_ledger(&path, &mut ledger).unwrap();
+        let other = build_flow_throttle_task("v1-other", &flow("10.0.0.91"), 32, 32, 300, &now_at(now)).unwrap();
+        assert!(admit_release_task(&path, &other, &[], 300, &now_at(now)).is_ok());
+        compact_release_ledger(&path, now).unwrap();
+        let ledger = load_ledger(&path).unwrap();
+        assert!(!ledger.tasks.iter().any(|t| t.trace_id == "trace-v1-old"), "the old task was compacted");
+        assert!(ledger.checkpoint.legacy_trace_ids.contains(&"trace-v1-old".to_string()));
+        // The alert, dated after every boundary, is still refused by its trace.
+        let replay = build_flow_throttle_task("new-trace", &flow("10.0.0.90"), 32, 32, 300, &now_at(now + 1.0)).unwrap();
+        let error = admit_release_task(&path, &replay, &["trace-v1-old".to_string()], 300, &now_at(now + 1.0)).unwrap_err();
+        assert!(error.contains("under the previous core"), "{error}");
+    }
+
+    /// Re521c-02: a redirect whose rule is removed and whose connections are
+    /// still being cleared is not held: a new alert is refused, nothing is
+    /// rescheduled, and the clean-up finishes on its own schedule.
+    #[test]
+    fn a_lease_waiting_for_connection_clean_up_is_neither_extended_nor_rescheduled() {
+        let path = test_path("ledger.json");
+        let task = build_flow_redirect_task("cw", &flow("10.0.0.92"), "lan0", 12222, 30, &now_at(100.0)).unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        activate_release_task(&path, &task.task_id, 100.5).unwrap();
+        let failing = FakeRunner::new(vec![ok_json(json!({"nftables": []})), ok_json(json!({"nftables": []})), Err("command timeout".to_string())]);
+        process_due_releases_with_runner(&path, &now_at(131.0), &failing).unwrap();
+        let before = load_ledger(&path).unwrap().tasks[0].clone();
+        assert_eq!(before.rule_removed_epoch, Some(131.0));
+        let again = build_flow_redirect_task("cw-2", &flow("10.0.0.92"), "lan0", 12222, 300, &now_at(132.0)).unwrap();
+        let error = admit_release_task(&path, &again, &[], 300, &now_at(132.0)).unwrap_err();
+        assert!(error.contains("being released"), "{error}");
+        let after = load_ledger(&path).unwrap().tasks[0].clone();
+        assert_eq!((after.due_epoch, after.next_attempt_epoch, after.extensions), (before.due_epoch, before.next_attempt_epoch, before.extensions));
+        let ok = FakeRunner::new(vec![
+            ok_json(json!({"nftables": []})),
+            ok_json(json!({"nftables": []})),
+            Ok(CommandResult { returncode: 0, stdout: String::new(), stderr: "1 flow entries have been deleted.".to_string() }),
+        ]);
+        let outcomes = process_due_releases_with_runner(&path, &now_at(before.next_attempt_epoch + 0.5), &ok).unwrap();
+        assert_eq!(outcomes[0].status, "released");
+    }
+
+    /// Re521c-03: another user of the conntrack mark is detected; its
+    /// presence makes "none found" no proof of absence.
+    #[test]
+    fn another_user_of_the_conntrack_mark_is_detected_and_blocks_trusting_none_found() {
+        let rule = |comment: Option<&str>, expr: Value| {
+            let mut r = json!({"rule": {"family": "inet", "table": "fw", "chain": "pre", "handle": 9, "expr": expr}});
+            if let Some(c) = comment {
+                r["rule"]["comment"] = json!(c);
+            }
+            r
+        };
+        let set_mark = json!([{"mangle": {"key": {"ct": {"key": "mark"}}, "value": 7}}]);
+        let match_mark = json!([{"match": {"op": "==", "left": {"ct": {"key": "mark"}}, "right": 7}}, {"accept": null}]);
+        let connmark = json!([{"xt": {"type": "target", "name": "CONNMARK"}}]);
+        for expr in [set_mark.clone(), match_mark, connmark] {
+            let runner = FakeRunner::new(vec![ok_json(json!({"nftables": [rule(None, expr)]}))]);
+            assert_eq!(foreign_ct_mark_use(&runner).unwrap(), Some("fw/pre/9".to_string()));
+        }
+        // Our own (owner-token) rules and unrelated rules are not.
+        let ours = rule(Some("azazel-edge:release-0123456789abcdef"), set_mark);
+        let plain = rule(None, json!([{"match": {"op": "==", "left": {"meta": {"key": "mark"}}, "right": 1}}]));
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": [ours, plain]}))]);
+        assert_eq!(foreign_ct_mark_use(&runner).unwrap(), None);
+        // At release, a shared mark leaves the lease not released.
+        let path = test_path("ledger.json");
+        let task = build_flow_redirect_task("cm", &flow("10.0.0.93"), "lan0", 12222, 30, &LeaseNow::wall_only(100.0)).unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        activate_release_task(&path, &task.task_id, 100.5).unwrap();
+        let shared = rule(None, json!([{"mangle": {"key": {"ct": {"key": "mark"}}, "value": 1}}]));
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []})), ok_json(json!({"nftables": [shared]}))]);
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
+        assert_eq!(outcomes[0].status, "retry_pending");
+        assert!(outcomes[0].postcondition["existing_connections"].as_str().unwrap().starts_with("ct_mark_shared:"));
+        assert!(allowed_release_command(&strings(&["nft", "-j", "list", "ruleset"])));
     }
 }

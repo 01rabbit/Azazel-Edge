@@ -6,12 +6,12 @@ mod undelivered;
 
 use ingress::{append_audit_record, IngressLimits, IngressReader, PollReport};
 use release::{
-    abandon_release_task, activate_release_task, admit_release_task, build_flow_throttle_task, build_release_task,
+    abandon_release_task, activate_release_task, admit_release_task, build_flow_throttle_task,
     nft_comment_arg, nft_family, owned_state_matches_plan, process_due_releases, Admission, FlowScope, LeaseNow,
     ReleaseTask, THROTTLE_CHAIN,
 };
 #[cfg(test)]
-use release::prepare_release_task;
+use release::{build_release_task, prepare_release_task};
 use safety::{ProtectedMatch, ProtectedSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -321,8 +321,13 @@ fn load_config() -> Config {
         defense_ttl_source: ttl_source.to_string(),
         protected_flows_path: protected_flows_path.clone(),
         protected: ProtectedSet::load(&protected_flows_path),
-        undelivered_spool_path: env::var("AZAZEL_UNDELIVERED_SPOOL")
-            .unwrap_or_else(|_| "/var/lib/azazel-edge/undelivered-decisions.jsonl".to_string()),
+        // Beside the release ledger by default: the core's writable state
+        // directory (the Nexus unit's only ReadWritePaths).
+        undelivered_spool_path: env::var("AZAZEL_UNDELIVERED_SPOOL").unwrap_or_else(|_| {
+            let ledger = env::var("AZAZEL_DEFENSE_RELEASE_LEDGER")
+                .unwrap_or_else(|_| "/var/lib/azazel-edge/release-ledger.json".to_string());
+            undelivered::default_path(&ledger).to_string_lossy().into_owned()
+        }),
         // A size, bounded both ways (64 KiB .. 64 MiB); default 8 MiB.
         undelivered_spool_cap_bytes: env::var("AZAZEL_UNDELIVERED_SPOOL_CAP_BYTES")
             .ok()
@@ -876,6 +881,13 @@ fn execution_safety_refusal(ev: &NormalizedEvent, action: &str, decoy_port: u16,
         // Releasing a redirect ends the connections it redirected through
         // conntrack; without the tool a redirect could not be fully undone.
         release::resolve_trusted_binary("conntrack").map_err(|_| "conntrack_unavailable".to_string())?;
+        // The redirect sets the conntrack mark: refused when anything else in
+        // the ruleset uses it (Edge would overwrite it, or it ours).
+        match release::foreign_ct_mark_use(&release::SystemReleaseCommandRunner) {
+            Ok(None) => {}
+            Ok(Some(_)) => return Err("ct_mark_in_use".to_string()),
+            Err(_) => return Err("ct_mark_use_unreadable".to_string()),
+        }
     }
     Ok(event_epoch)
 }
@@ -1314,6 +1326,10 @@ static AI_FORWARD_SENT: AtomicU64 = AtomicU64::new(0);
 /// Lines in the forward queue right now: what a stop would leave behind.
 static AI_FORWARD_QUEUED: AtomicU64 = AtomicU64::new(0);
 
+fn forward_pending() -> u64 {
+    AI_FORWARD_QUEUED.load(Ordering::Relaxed)
+}
+
 fn uncount_queued() {
     let _ = AI_FORWARD_QUEUED.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
 }
@@ -1488,12 +1504,15 @@ fn forward_ai_lines(socket_path: &str, receiver: Receiver<Forward>) {
     for item in receiver {
         match item {
             Forward::Line(line) => {
-                uncount_queued();
+                // Counted as on its way until its outcome is known (a stop
+                // during delivery then counts it as lost).
                 if deliver(socket_path, &line).is_ok() {
+                    uncount_queued();
                     AI_FORWARD_SENT.fetch_add(1, Ordering::Relaxed);
                 } else {
                     // Not taken by the intake: kept in the Edge spool.
                     undelivered::record(&line);
+                    uncount_queued();
                     let failed = AI_FORWARD_FAILED.fetch_add(1, Ordering::Relaxed) + 1;
                     if failed == 1 || failed % 1000 == 0 {
                         eprintln!("ai socket forward failed; {} event(s) not delivered so far", failed);
@@ -2033,7 +2052,7 @@ fn main() {
     process_release_events(&cfg);
     process_start();
     if cfg.forward_ai {
-        undelivered::start(std::path::PathBuf::from(&cfg.undelivered_spool_path), cfg.undelivered_spool_cap_bytes);
+        undelivered::start(std::path::PathBuf::from(&cfg.undelivered_spool_path), cfg.undelivered_spool_cap_bytes, forward_pending);
     }
     let mut reporter = ForwardReporter::new();
     let mut ingress = IngressReader::new(offset, IngressLimits::DECLARED);
@@ -3472,6 +3491,16 @@ mod tests {
         write_decoy_evidence(&cfg, &[port], &boot);
         let applier = FakeApplier::ok();
         let outcome = maybe_enforce_with(&ev, &decision, &cfg, &applier);
+        if release::resolve_trusted_binary("conntrack").is_ok()
+            && release::foreign_ct_mark_use(&release::SystemReleaseCommandRunner).is_err()
+        {
+            // The ruleset cannot be read here (not root): the redirect is refused.
+            assert!(applier.applied().is_empty());
+            assert_eq!(outcome.metadata["safety"]["gate"], "refused:ct_mark_use_unreadable", "{outcome:?}");
+            drop(listener);
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
         if release::resolve_trusted_binary("conntrack").is_err() {
             // Re521b-03: without the conntrack tool a redirect could not be
             // fully undone, so it is not applied (the applied path is

@@ -565,6 +565,23 @@ def test_a_redirect_reaches_only_the_named_destination_needs_a_reachable_decoy_a
                 core.stop()
             _ns("edge", "nft", "delete", "table", "inet", "harness_fw")
             write_evidence(path_check())
+            # Re521c-03: another rule uses the conntrack mark (here it
+            # accepts connections marked 7): the redirect would overwrite
+            # it, so it is refused.
+            _ns("edge", "nft", "-f", "-", input=(
+                "add table inet harness_mark\n"
+                "add chain inet harness_mark fwchain { type filter hook forward priority 0; policy accept; }\n"
+                "add rule inet harness_mark fwchain ct mark 7 accept\n"))
+            marked_dir = work / "marked"
+            marked_dir.mkdir()
+            core = Core(marked_dir, iface=ATK_IFACE, redirect_policy=policy)
+            try:
+                core.alert(ADDR["atk"], 2, 9704, port=REAL_PORT)
+                refused = core.wait(lambda: _outcome_for(core, ADDR["atk"]), 10)
+                assert refused and refused["metadata"]["safety"]["gate"] == "refused:ct_mark_in_use", refused
+            finally:
+                core.stop()
+            _ns("edge", "nft", "delete", "table", "inet", "harness_mark")
             # Re521b-02: a connection of the same source, destination and
             # port that another rule (not this lease) NATed must survive the
             # release's connection clean-up. Another administrator's
