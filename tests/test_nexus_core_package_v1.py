@@ -328,7 +328,8 @@ class NexusCorePackageV1Tests(unittest.TestCase):
     def test_the_manifest_records_the_elf_header_of_the_packaged_binary(self) -> None:
         """Compared with the header bytes, not with the packager's table."""
 
-        header = BINARY.read_bytes()[:20]
+        with tarfile.open(self.archive, "r:gz") as tar:
+            header = tar.extractfile("bin/azazel-edge-core").read(20)
         machine = struct.unpack_from("<H", header, 18)[0]
         self.assertEqual(machine, EM[HOST])
         self.assertEqual(header[4], 2)
@@ -445,6 +446,34 @@ class ArchitectureRefusalTests(unittest.TestCase):
                 self.assertIn(f"ELF header says {binary_cpu}", str(refused))
                 ran.assert_not_called()
                 self.assertFalse((root / "out").exists())
+
+    def test_a_binary_replaced_after_the_check_is_not_what_gets_packaged(self) -> None:
+        """Re522-01: the bytes checked are the bytes run, hashed and archived."""
+
+        checked = elf_header(machine=EM["x86_64"])
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        fake_tree(root, checked)
+        tree_binary = root / "rust" / "azazel-edge-core" / "target" / "release" / "azazel-edge-core"
+        ran_on: list[tuple[Path, bytes]] = []
+
+        def swap_after_running(path: Path, version: str) -> None:
+            ran_on.append((path, path.read_bytes()))
+            tree_binary.write_bytes(elf_header(machine=EM["aarch64"]))
+
+        with mock.patch.object(packager, "_binary_reports", side_effect=swap_after_running):
+            archive, manifest_path = packager.build(root, root / "out", architecture="x86_64")
+        self.assertEqual(ran_on[0][1], checked)
+        self.assertNotEqual(ran_on[0][0], tree_binary)
+        with tarfile.open(archive, "r:gz") as tar:
+            member = tar.extractfile("bin/azazel-edge-core").read()
+        self.assertEqual(member, checked)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        component = {c["path"]: c for c in manifest["components"]}["bin/azazel-edge-core"]
+        self.assertEqual(component["digest"], packager._digest(checked))
+        self.assertEqual(component["size"], len(checked))
+        self.assertEqual(manifest["architecture"], "x86_64")
 
     def test_a_cpu_outside_the_table_is_refused(self) -> None:
         for asked in ("arm64", "amd64", "riscv64", ""):

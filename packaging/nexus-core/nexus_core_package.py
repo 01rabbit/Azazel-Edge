@@ -70,7 +70,12 @@ from typing import Iterable, Sequence
 ROOT = Path(__file__).resolve().parents[2]
 
 PACKAGE_NAME = "azazel-edge-core"
-MANIFEST_CONTRACT = "azazel-edge-core/package-manifest/v1"
+#: v2 (2026-10-30): the manifest names the CPU read from the binary and
+#: carries `elf`. Bumped, not only extended, so that a consumer that predates
+#: per-CPU packages (it compares a fixed `x86_64` name and never looks at the
+#: host or the binary) refuses every package of this packager by its
+#: contract, instead of accepting an x86_64 package on an aarch64 host.
+MANIFEST_CONTRACT = "azazel-edge-core/package-manifest/v2"
 HEALTH_CONTRACT = "azazel-edge-core/health/v1"
 
 #: The payload, as (archive path, source path relative to the repository).
@@ -172,24 +177,21 @@ def architecture_of(identity: ElfIdentity) -> str:
     )
 
 
-def binary_architecture(binary: Path, requested: str) -> ElfIdentity:
-    """The ELF identity of `binary`, only when it is the one `requested` names.
+def binary_architecture(binary: bytes, requested: str) -> ElfIdentity:
+    """The ELF identity of the binary's bytes, only when it is the one `requested` names.
 
     Called before the binary is run: a binary for another CPU is refused by
     what it is, not by whether it happens to execute here (an emulator would
-    let it).
+    let it). It takes the bytes, not a path: the bytes checked here are the
+    bytes run, hashed and archived (`build`), so nothing can be swapped in
+    between.
     """
 
     if requested not in ARCHITECTURES:
         raise BuildRefused(
             f"--architecture {requested!r} is not one of {sorted(ARCHITECTURES)}"
         )
-    try:
-        with binary.open("rb") as stream:
-            header = stream.read(64)
-    except OSError as exc:
-        raise BuildRefused(f"the payload binary could not be read: {exc}") from exc
-    identity = elf_identity(header)
+    identity = elf_identity(binary[:64])
     found = architecture_of(identity)
     if found != requested:
         raise BuildRefused(
@@ -230,6 +232,24 @@ def _payload_paths(root: Path) -> list[tuple[str, Path]]:
     return sorted(resolved, key=lambda pair: pair[0])
 
 
+def _payload_bytes(root: Path) -> list[tuple[str, bytes]]:
+    """Each payload file, read **once**.
+
+    Everything the package says about a file -- the binary's CPU, its
+    version, each component's digest and size, the archive member -- is
+    derived from these bytes. Reading the tree again later would let a file
+    replaced in between be archived under a check made on its predecessor.
+    """
+
+    payload: list[tuple[str, bytes]] = []
+    for archive_path, path in _payload_paths(root):
+        try:
+            payload.append((archive_path, path.read_bytes()))
+        except OSError as exc:
+            raise BuildRefused(f"{path} could not be read: {exc}") from exc
+    return payload
+
+
 def _version(root: Path) -> str:
     """The crate version, read from Cargo.toml rather than restated here.
 
@@ -242,6 +262,25 @@ def _version(root: Path) -> str:
         if line.startswith("version") and "=" in line:
             return line.split("=", 1)[1].strip().strip('"')
     raise BuildRefused(f"{cargo} declares no version")
+
+
+def _binary_reports_bytes(binary: bytes, version: str) -> None:
+    """`_binary_reports` on a private copy of exactly these bytes.
+
+    The copy is written to a fresh 0700 directory and removed afterwards, so
+    the program run is the one whose header was checked and whose bytes are
+    archived, not whatever the build tree holds by then.
+    """
+
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="azazel-nexus-core-") as scratch:
+        copy = Path(scratch) / "azazel-edge-core"
+        fd = os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(binary)
+        _binary_reports(copy, version)
 
 
 def _binary_reports(binary: Path, version: str) -> None:
@@ -277,18 +316,14 @@ def build(root: Path, out_dir: Path, *, architecture: str) -> tuple[Path, Path]:
     """
 
     version = _version(root)
-    payload = _payload_paths(root)
+    payload = _payload_bytes(root)
     binary = dict(payload)["bin/azazel-edge-core"]
     identity = binary_architecture(binary, architecture)
-    _binary_reports(binary, version)
+    _binary_reports_bytes(binary, version)
 
     components = [
-        Component(
-            path=archive_path,
-            digest=_digest(source.read_bytes()),
-            size=source.stat().st_size,
-        )
-        for archive_path, source in payload
+        Component(path=archive_path, digest=_digest(data), size=len(data))
+        for archive_path, data in payload
     ]
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -404,7 +439,7 @@ def manifest_document(
     }
 
 
-def _write_archive(archive: Path, payload: Sequence[tuple[str, Path]]) -> None:
+def _write_archive(archive: Path, payload: Sequence[tuple[str, bytes]]) -> None:
     """Byte-identical for identical inputs.
 
     Sorted entries, zeroed mtimes, zeroed ownership, fixed modes, and a gzip
@@ -414,9 +449,8 @@ def _write_archive(archive: Path, payload: Sequence[tuple[str, Path]]) -> None:
 
     with gzip.GzipFile(filename="", mode="wb", fileobj=archive.open("wb"), mtime=0) as gz:
         with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar:
-            for archive_path, source in payload:
+            for archive_path, data in sorted(payload, key=lambda pair: pair[0]):
                 info = tarfile.TarInfo(name=archive_path)
-                data = source.read_bytes()
                 info.size = len(data)
                 info.mtime = 0
                 info.uid = 0

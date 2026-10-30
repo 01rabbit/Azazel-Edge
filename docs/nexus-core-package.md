@@ -246,7 +246,9 @@ Rosetta the x86_64 compiler is translated, the output is ordinary x86_64
 code):
 
 ```sh
-# in rust:1.99.1-trixie (rustc 1.99.1), with the tree copied to /work
+# in rust@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137
+# (rust:1.99.1-trixie, rustc 1.99.1; the multi-CPU index, resolved per CPU),
+# with the tree copied to /work
 cargo build --release --locked --manifest-path rust/azazel-edge-core/Cargo.toml
 python3 packaging/nexus-core/nexus_core_package.py --architecture "$(uname -m)" --out /out
 ```
@@ -257,6 +259,27 @@ the package digest is a function of the tree and the toolchain, and a
 consumer can rebuild the artifact it pins. A digest still changes whenever
 the core's source, `config/redirect_policy.yaml`, `Cargo.lock` or the image
 changes.
+
+### What is checked is what is packaged
+
+Each payload file is read **once**. The ELF check, the `--version` run, each
+component's digest and size, and the archive member all come from those
+bytes; the binary is run from a private 0700 copy of them, never from the
+build tree. A binary replaced in the tree after the check therefore cannot
+end up in the archive under the check made on its predecessor
+(`tests/test_nexus_core_package_v1.py`
+`test_a_binary_replaced_after_the_check_is_not_what_gets_packaged`).
+
+### The manifest contract is `package-manifest/v2`
+
+Bumped with the per-CPU names, not only extended. A consumer that predates
+them compares a fixed `x86_64` name and never looks at the host or the
+binary; on an aarch64 host it would accept a correct x86_64 package. Such a
+consumer checks the manifest contract first, so it refuses every v2 package
+instead. **Roll out the CPU-checking Nexus first** (it reads v2, and the v1
+packages already installed, whose binaries it checks itself); then this
+packager's packages. In the other order the old Nexus refuses the new
+packages, which is a gap in Edge readiness and not a wrong acceptance.
 
 Nothing under `installer/`, `security/` or `systemd/` is read or written.
 
