@@ -411,7 +411,9 @@ Stays root until stage 3.
   cleared (`LC_ALL=C`, `LANG=C`, that fixed `PATH`); before, it used
   `Command::new(argv[0])` with the inherited `PATH` and environment.
   The release path (`release.rs`) runs `tc -j qdisc show`, `tc qdisc del`,
-  `nft -a -j list chain`, `nft delete rule … handle <n>` from an allowlist of
+  `nft -a -j list chain`, `nft delete rule … handle <n>`, and for a redirect
+  `conntrack -D -p tcp --orig-src S [--orig-dst D] --dport P` (the owned
+  flow's tracking entries only) from an allowlist of
   `/usr/sbin`, `/usr/bin`, `/sbin`, `/bin` with the environment cleared.
   Both need **cap:NET_ADMIN at least**; whether that alone suffices is
   #471's hardware question and is not answered here.

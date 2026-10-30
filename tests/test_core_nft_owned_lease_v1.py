@@ -158,7 +158,7 @@ def test_core_applies_reads_back_and_releases_owned_throttle_and_redirect(netns)
             work / "decoy-separation.json",
             json.dumps({
                 "schema": "azazel-edge/decoy-separation/v1", "boot_id": boot_id, "observed_epoch": time.time(),
-                "separation": "network_namespace", "decoy_ports": [DECOY_PORT],
+                "separation": "network_namespace", "decoy_ports": [DECOY_PORT], "ingress_interface": "lo",
             }),
         )
         policy = _private(
@@ -168,7 +168,9 @@ def test_core_applies_reads_back_and_releases_owned_throttle_and_redirect(netns)
         )
         protected = _private(
             work / "protected-flows.yaml",
-            "protected_flows:\n  version: 1\n  entries:\n    - {name: mgmt, role: management, network: 203.0.113.0/28}\n",
+            "protected_flows:\n  version: 1\n  entries:\n    - {name: mgmt, role: management, network: 203.0.113.0/28}\n"
+            "    - {name: expert, role: expert_contact, network: 203.0.113.20, ports: [443]}\n"
+            "  roles_not_applicable:\n    - {role: mission, approved_by: test-lead, reason: no mission link in this test}\n",
         )
         listener = subprocess.Popen(["ip", "netns", "exec", netns, sys.executable, "-c", LISTENER])
         env = {

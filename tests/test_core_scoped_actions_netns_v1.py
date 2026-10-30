@@ -60,6 +60,9 @@ NS = {name: f"{TAG}-{name}" for name in ("edge", "atk", "mgr", "srv")}
 ADDR = {"atk": "10.91.1.2", "mgr": "10.91.2.2", "srv": "10.91.3.2"}
 EDGE_ADDR = {"atk": "10.91.1.1", "mgr": "10.91.2.1", "srv": "10.91.3.1"}
 SRV_IFACE = f"{TAG}es"
+ATK_IFACE = f"{TAG}ea"  # the Edge side of the attacker's link: redirect ingress
+REAL_PORT = 2200
+DECOY_PORT = 12222
 
 SINK = (
     "import socket,sys,threading,time\n"
@@ -110,10 +113,10 @@ def _now_ts(offset: float = 0.0) -> str:
     return datetime.fromtimestamp(time.time() + offset, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f+0000")
 
 
-def _alert(src: str, severity: int, sid: int, port: int = SERVER_PORT) -> str:
+def _alert(src: str, severity: int, sid: int, port: int = SERVER_PORT, dst: str = "", proto: str = "TCP") -> str:
     return json.dumps({
-        "timestamp": _now_ts(), "event_type": "alert", "src_ip": src, "dest_ip": ADDR["srv"],
-        "dest_port": port, "proto": "TCP",
+        "timestamp": _now_ts(), "event_type": "alert", "src_ip": src, "dest_ip": dst or ADDR["srv"],
+        "dest_port": port, "proto": proto,
         "alert": {"signature_id": sid, "signature": "scoped action test", "category": "test", "severity": severity},
     })
 
@@ -190,7 +193,8 @@ def _throughput(sink: subprocess.Popen, client: str, seconds: float = 3.0) -> fl
 
 
 class Core:
-    def __init__(self, work: Path, wrapper_dir: Path | None = None):
+    def __init__(self, work: Path, wrapper_dir: Path | None = None, iface: str = SRV_IFACE,
+                 redirect_policy: Path | None = None):
         self.work = work
         self.eve = work / "eve.json"
         self.events = work / "normalized-events.jsonl"
@@ -199,6 +203,9 @@ class Core:
         protected = _private(work / "protected-flows.yaml", (
             "protected_flows:\n  version: 1\n  entries:\n"
             "    - {name: mgmt, role: management, network: 10.91.2.0/24}\n"
+            "    - {name: expert, role: expert_contact, network: 10.91.4.9, ports: [443]}\n"
+            "  roles_not_applicable:\n"
+            "    - {role: mission, approved_by: test-lead, reason: no mission link in this lab}\n"
         ))
         env = {
             "PATH": os.environ.get("PATH", ""),
@@ -207,8 +214,8 @@ class Core:
             "AZAZEL_NORMALIZED_EVENT_LOG": str(self.events), "AZAZEL_EVENT_STDOUT": "off",
             "AZAZEL_DEFENSE_RELEASE_LEDGER": str(self.ledger), "AZAZEL_DEFENSE_ENFORCE": "true",
             "AZAZEL_DEFENSE_DRY_RUN": "false", "AZAZEL_DEFENSE_ENFORCE_LEVEL": "full-auto",
-            "AZAZEL_DEFENSE_ACTION_TTL_SEC": str(TTL_SEC), "AZAZEL_DEFENSE_IFACE": SRV_IFACE,
-            "AZAZEL_REDIRECT_POLICY_PATH": str(work / "no-redirect-policy.yaml"),
+            "AZAZEL_DEFENSE_ACTION_TTL_SEC": str(TTL_SEC), "AZAZEL_DEFENSE_IFACE": iface,
+            "AZAZEL_REDIRECT_POLICY_PATH": str(redirect_policy or work / "no-redirect-policy.yaml"),
             "AZAZEL_PROTECTED_FLOWS_PATH": str(protected),
         }
         argv = ["ip", "netns", "exec", NS["edge"], str(CORE)]
@@ -222,9 +229,9 @@ class Core:
         time.sleep(0.5)
         assert self.proc.poll() is None, self.proc.stderr.read()
 
-    def alert(self, src: str, severity: int, sid: int, port: int = SERVER_PORT):
+    def alert(self, src: str, severity: int, sid: int, port: int = SERVER_PORT, dst: str = "", proto: str = "TCP"):
         with self.eve.open("a", encoding="utf-8") as fh:
-            fh.write(_alert(src, severity, sid, port) + "\n")
+            fh.write(_alert(src, severity, sid, port, dst, proto) + "\n")
 
     def records(self) -> list:
         try:
@@ -279,7 +286,9 @@ def test_only_the_attack_flow_is_limited_and_management_and_shaping_survive(topo
             core.alert(ADDR["mgr"], 3, 9201)
             refused = core.wait(lambda: _outcome_for(core, ADDR["mgr"]), 10)
             assert refused and refused["selected_action"] == "notify", refused
-            assert refused["metadata"]["safety"]["gate"] == "refused:protected_flow:management"
+            # The reason and the matched entry, in the observe-only shape.
+            assert refused["policy_reason"].endswith(":safety_refused:protected_flow:management:mgmt"), refused
+            assert "safety" not in refused["metadata"]
             assert _owned_rules() == []
 
             core.alert(ADDR["atk"], 3, 9202)
@@ -309,25 +318,45 @@ def test_only_the_attack_flow_is_limited_and_management_and_shaping_survive(topo
 
 
 WEDGE = """#!/bin/sh
-# nft for the core under test: an insert for the wedge source never returns.
+# nft for the core under test only (bound over nft in its mount namespace):
+#   10.91.1.66: the insert never returns (nothing applied);
+#   10.91.1.77: the insert lands with another rate (readback mismatch);
+#   10.91.1.88 / .99: the insert lands, then the command never returns.
 case "$*" in
   *"saddr 10.91.1.66 "*) exec sleep 600 ;;
+  *"saddr 10.91.1.77 "*) set -- $(printf '%s' "$*" | sed 's/ over 32 / over 31 /'); exec "{real}" "$@" ;;
+  *"saddr 10.91.1.88 "*|*"saddr 10.91.1.99 "*) "{real}" "$@"; exec sleep 600 ;;
 esac
 exec "{real}" "$@"
 """
 
 
+def _wrapper_dir(work: Path) -> Path:
+    wrapper_dir = work / "bin"
+    wrapper_dir.mkdir()
+    real = wrapper_dir / "nft.real"
+    shutil.copy2(shutil.which("nft"), real)
+    wrapper = wrapper_dir / "nft"
+    wrapper.write_text(WEDGE.format(real=real), encoding="utf-8")
+    os.chmod(wrapper, 0o755)
+    return wrapper_dir
+
+
+def _ledger(core: Core) -> list:
+    try:
+        return json.loads(core.ledger.read_text(encoding="utf-8")).get("tasks", [])
+    except (OSError, ValueError):
+        return []
+
+
+def _rules_of(src: str) -> list:
+    return [r for r in _owned_rules() if src in json.dumps(r)]
+
+
 def test_a_wedged_apply_is_killed_and_never_holds_back_a_due_release(topology):
     with tempfile.TemporaryDirectory(prefix="azwedge-") as tmp:
         work = Path(tmp)
-        wrapper_dir = work / "bin"
-        wrapper_dir.mkdir()
-        real = wrapper_dir / "nft.real"
-        shutil.copy2(shutil.which("nft"), real)
-        wrapper = wrapper_dir / "nft"
-        wrapper.write_text(WEDGE.format(real=real), encoding="utf-8")
-        os.chmod(wrapper, 0o755)
-        core = Core(work, wrapper_dir)
+        core = Core(work, _wrapper_dir(work))
         try:
             core.alert(ADDR["atk"], 3, 9301)
             applied = core.wait(lambda: _outcome_for(core, ADDR["atk"]), 10)
@@ -373,3 +402,174 @@ def test_a_wedged_apply_is_killed_and_never_holds_back_a_due_release(topology):
             assert _owned_rules() == []
         finally:
             core.stop()
+
+
+def test_an_apply_that_landed_then_hung_or_deviates_is_removed_and_a_crash_mid_apply_is_recovered(topology):
+    """Re521-07 and the review's §3: the rule an apply left behind is removed
+    by the sweep when the apply timed out after landing or landed with other
+    semantics, and when the core itself was killed during the apply."""
+    with tempfile.TemporaryDirectory(prefix="azland-") as tmp:
+        work = Path(tmp)
+        core = Core(work, _wrapper_dir(work))
+        try:
+            core.alert("10.91.1.88", 3, 9501)   # lands, then the command hangs
+            core.alert("10.91.1.77", 3, 9502)   # lands with rate 31, not 32
+            def both():
+                pair = (_outcome_for(core, "10.91.1.88"), _outcome_for(core, "10.91.1.77"))
+                return pair if all(pair) else None
+
+            outcomes = core.wait(both, 20)
+            assert outcomes, "the two applies were not decided"
+            hung, deviating = outcomes
+            assert hung["result"] == "failed" and "command timeout" in hung["errors"][0], hung
+            assert deviating["result"] == "partial_failure" and "owned_state_readback_mismatch" in deviating["errors"], deviating
+            for outcome in outcomes:
+                assert outcome["metadata"]["release_ledger_state"] == "uncertain_release_scheduled"
+            for outcome in outcomes:
+                released = core.wait(lambda: _release_for(core, outcome["metadata"]["release_task_id"]), 15)
+                assert released, f"{outcome['metadata']['release_task_id']} not released"
+                assert released["result"] == "rollback_applied_and_absence_verified", released
+            assert core.wait(lambda: _release_for(core, deviating["metadata"]["release_task_id"]), 1)["postcondition"]["deleted_deviating_rules"] == 1
+            assert _rules_of("10.91.1.88") == [] and _rules_of("10.91.1.77") == []
+
+            # Killed during the apply: the rule landed, the lease is still
+            # `prepared`; a restart releases it and grants nothing.
+            core.alert("10.91.1.99", 3, 9503)
+            assert core.wait(lambda: _rules_of("10.91.1.99"), 10), "the wedged insert did not land"
+            assert any(t["status"] == "prepared" and t["source_ip"] == "10.91.1.99" for t in _ledger(core))
+            core.proc.kill()
+            core.proc.wait(timeout=10)
+        finally:
+            core.stop()
+        restarted = Core(work)
+        try:
+            task = restarted.wait(lambda: next((t for t in _ledger(restarted) if t["source_ip"] == "10.91.1.99" and t["status"] == "released"), None), 15)
+            assert task, _ledger(restarted)
+            assert _rules_of("10.91.1.99") == []
+            assert "apply_unconfirmed_at_restart" in json.dumps(_ledger(restarted)) or task["status"] == "released"
+        finally:
+            restarted.stop()
+
+
+def test_an_icmp_alert_limits_icmp_only_and_tcp_to_the_same_host_keeps_its_throughput(topology):
+    """Re521-02: a portless (ICMP) alert is scoped to ICMP."""
+    sink = topology
+    with tempfile.TemporaryDirectory(prefix="azicmp-") as tmp:
+        core = Core(Path(tmp))
+        try:
+            core.alert(ADDR["atk"], 3, 9601, port=0, proto="ICMP")
+            applied = core.wait(lambda: _outcome_for(core, ADDR["atk"]), 10)
+            assert applied and applied["result"] == "applied", applied
+            assert "meta l4proto icmp" in applied["command_plan"][0], applied["command_plan"]
+            # A ping flood above the limit loses packets; TCP to the same host does not slow down.
+            ping = _ns("atk", "ping", "-f", "-c", "1500", "-s", "1200", "-W", "1", ADDR["srv"], check=False)
+            loss = float(ping.stdout.split("% packet loss")[0].split()[-1])
+            assert loss > 20.0, ping.stdout[-300:]
+            tcp = _throughput(sink, "atk")
+            assert tcp > 1_000_000, tcp
+        finally:
+            core.stop()
+
+
+DECOY = (
+    "import socket,sys,threading\n"
+    "s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+    "s.bind((sys.argv[1], int(sys.argv[2]))); s.listen(16)\n"
+    "def serve(c):\n"
+    "    c.sendall((sys.argv[3]+'\\n').encode())\n"
+    "    while True:\n"
+    "        b=c.recv(100)\n"
+    "        if not b: break\n"
+    "        c.sendall(b)\n"
+    "while True:\n"
+    "    c,_=s.accept(); threading.Thread(target=serve, args=(c,), daemon=True).start()\n"
+)
+
+
+def _banner(client: str, host: str, port: int) -> str:
+    out = _ns(client, sys.executable, "-c",
+              "import socket,sys; c=socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=3); print(c.recv(64).decode().strip())",
+              host, str(port), check=False)
+    return out.stdout.strip() or f"error:{out.stderr.strip()[-120:]}"
+
+
+def test_a_redirect_reaches_only_the_named_destination_needs_a_reachable_decoy_and_ends_held_connections(topology):
+    """Re521-01, -05, -06 on real traffic: the attacker's connection to the
+    alert's destination goes to the decoy while its connection to another
+    host on the same port does not; a decoy that listens only on loopback is
+    not reachable where the redirect delivers and the redirect is refused;
+    at release a connection held on the decoy is ended (its conntrack entry
+    is removed) and a new one reaches the real service."""
+    procs = []
+    with tempfile.TemporaryDirectory(prefix="azredir-") as tmp:
+        work = Path(tmp)
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        evidence = _private(work / "decoy.json", json.dumps({
+            "schema": "azazel-edge/decoy-separation/v1", "boot_id": boot_id, "observed_epoch": time.time(),
+            "separation": "network_namespace", "decoy_ports": [DECOY_PORT], "ingress_interface": ATK_IFACE,
+        }))
+        policy = _private(work / "redirect_policy.yaml", (
+            f"redirect_policy:\n  enabled: true\n  prepared_ports:\n    {REAL_PORT}: {DECOY_PORT}\n"
+            f"  decoy_separation_evidence_path: {evidence}\n"
+        ))
+        try:
+            for name, label in (("srv", "REAL-srv"), ("mgr", "REAL-mgr")):
+                procs.append(subprocess.Popen(["ip", "netns", "exec", NS[name], sys.executable, "-c", DECOY, "0.0.0.0", str(REAL_PORT), label]))
+            # First a decoy on loopback only: not where the redirect delivers.
+            loop = subprocess.Popen(["ip", "netns", "exec", NS["edge"], sys.executable, "-c", DECOY, "127.0.0.1", str(DECOY_PORT), "DECOY"])
+            procs.append(loop)
+            time.sleep(0.5)
+            core = Core(work, iface=ATK_IFACE, redirect_policy=policy)
+            try:
+                core.alert(ADDR["atk"], 2, 9701, port=REAL_PORT)
+                refused = core.wait(lambda: _outcome_for(core, ADDR["atk"]), 10)
+                assert refused and refused["mode"] == "policy_gated", refused
+                assert refused["metadata"]["safety"]["gate"] == "refused:decoy_unreachable", refused["metadata"]["safety"]
+                assert _banner("atk", ADDR["srv"], REAL_PORT) == "REAL-srv"
+            finally:
+                core.stop()
+            loop.kill()
+            procs.append(subprocess.Popen(["ip", "netns", "exec", NS["edge"], sys.executable, "-c", DECOY, EDGE_ADDR["atk"], str(DECOY_PORT), "DECOY"]))
+            time.sleep(0.5)
+            second = work / "second"
+            second.mkdir()
+            core = Core(second, iface=ATK_IFACE, redirect_policy=policy)
+            try:
+                core.alert(ADDR["atk"], 2, 9702, port=REAL_PORT)
+                applied = core.wait(lambda: _outcome_for(core, ADDR["atk"]), 10)
+                assert applied and applied["result"] == "applied", applied
+                assert applied["metadata"]["safety"]["decoy_preconditions"] == "met"
+                # Only the named destination is redirected.
+                assert _banner("atk", ADDR["srv"], REAL_PORT) == "DECOY"
+                assert _banner("atk", ADDR["mgr"], REAL_PORT) == "REAL-mgr"
+                # A connection held on the decoy across the release.
+                held = subprocess.Popen(
+                    ["ip", "netns", "exec", NS["atk"], sys.executable, "-u", "-c",
+                     "import socket,sys,time\n"
+                     "c=socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=3); print(c.recv(64).decode().strip(), flush=True)\n"
+                     "c.settimeout(2)\n"
+                     "while True:\n"
+                     "    try:\n"
+                     "        c.sendall(b'ping'); r=c.recv(64)\n"
+                     "        if not r: print('closed', flush=True); break\n"
+                     "    except OSError as e:\n"
+                     "        print('ended', type(e).__name__, flush=True); break\n"
+                     "    time.sleep(0.5)\n",
+                     ADDR["srv"], str(REAL_PORT)],
+                    stdout=subprocess.PIPE, text=True)
+                procs.append(held)
+                assert held.stdout.readline().strip() == "DECOY"
+                task_id = applied["metadata"]["release_task_id"]
+                released = core.wait(lambda: _release_for(core, task_id), TTL_SEC + 20)
+                assert released and released["result"] == "rollback_applied_and_absence_verified", released
+                assert released["postcondition"]["existing_connections"] == "cleared", released["postcondition"]
+                # The held connection does not stay on the decoy.
+                assert held.wait(timeout=15) is not None
+                assert held.stdout.read().strip().startswith(("ended", "closed"))
+                assert _banner("atk", ADDR["srv"], REAL_PORT) == "REAL-srv"
+            finally:
+                core.stop()
+        finally:
+            for proc in procs:
+                proc.kill()
+                proc.wait(timeout=10)
