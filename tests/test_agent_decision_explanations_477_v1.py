@@ -393,6 +393,48 @@ def test_a_partial_failure_that_executed_a_command_is_applied_with_its_lease(age
     assert "NOT APPLIED" not in rec["reason"]
 
 
+def _held(event: dict, result: str, held_task: str, due: float) -> dict:
+    """A new alert for a flow already held: the core runs no command and
+    names the held lease and its (possibly extended) expiry."""
+    enf = _applied(event, "merged")["enforcement"]
+    enf.update(result=result, executed_count=0, failed_count=0, command_plan=[])
+    enf["metadata"].update(release_extended_task_id=held_task, release_due_epoch=due)
+    return event
+
+
+def test_a_held_or_extended_restriction_reads_as_held_with_its_lease_not_as_failed(agent):
+    from azazel_edge.explanations import trace
+    from azazel_edge.outcome.adapter import from_rust_event
+
+    # New restriction, then the same flow seen again (held, then extended),
+    # then its release: the held lease and its expiry follow through.
+    first = _applied(core_event("throttle"), "active")
+    first["enforcement"]["metadata"]["release_task_id"] = "release-00000000000000a1"
+    assert live.applied_state(first["enforcement"]) == "applied"
+    for result, due in (("already_held", 1_800_000_300.0), ("extended", 1_800_000_600.0)):
+        event = _held(core_event("throttle"), result, "release-00000000000000a1", due)
+        enf = event["enforcement"]
+        assert live.applied_state(enf) == "held"
+        assert live._not_applied_label(enf) == ""
+        assert live._release_condition(enf) == (
+            "HELD - existing restriction continues: core lease release-00000000000000a1 expires at "
+            + __import__("datetime").datetime.fromtimestamp(due, __import__("datetime").timezone.utc).isoformat(timespec="seconds")
+        )
+        assert trace.applied_label("held", "enforced") == "HELD - existing restriction continues"
+        assert "held" in trace.APPLIED_STATES and result in trace.ENFORCEMENT_RESULTS
+        receipt = from_rust_event(event).execution
+        assert receipt.release_ref == "release-00000000000000a1"
+        assert receipt.expires_at == __import__("datetime").datetime.fromtimestamp(due, __import__("datetime").timezone.utc).isoformat()
+        agent_mod._handle_event(event)
+        rec = _rows(agent)[-1]
+        assert rec["machine"]["arbiter"]["applied_state"] == "held"
+        assert "NOT APPLIED" not in rec["reason"] and "NOT APPLIED" not in rec["release_condition"]
+    # Only an enforced outcome is held; the same result in another mode is not.
+    odd = _held(core_event("throttle"), "extended", "release-00000000000000a1", 1.0)
+    odd["enforcement"]["mode"] = "dry_run"
+    assert live.applied_state(odd["enforcement"]) == "apply_failed"
+
+
 def test_only_no_disruptive_action_is_none():
     enf = core_event("notify")["enforcement"]
     enf.update(result="no_disruptive_action", executed_count=0, mode="disabled")

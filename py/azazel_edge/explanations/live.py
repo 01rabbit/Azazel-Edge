@@ -127,6 +127,12 @@ APPLIED_RESULTS = ('applied', 'partial_failure')
 # Release ledger states of an applied action whose lease the core runs.
 LEASED_LEDGER_STATES = ('active', 'uncertain')
 NOT_APPLIED_RESULT = 'planned_not_applied'
+# A new alert for a flow whose restriction is already held: no new command,
+# the held lease continues (``already_held``) or was extended (``extended``).
+# The held lease is ``metadata.release_extended_task_id`` and its expiry
+# ``metadata.release_due_epoch`` (docs/architecture/scoped-temporary-actions.md).
+HELD_RESULTS = ('extended', 'already_held')
+HELD_LABEL = 'HELD - existing restriction continues'
 # The only result for which nothing was to be applied (observe, notify:
 # no command plan, mode ``disabled``).
 NOTHING_TO_APPLY_RESULT = 'no_disruptive_action'
@@ -144,7 +150,10 @@ def applied_state(enforcement: Mapping[str, Any]) -> str:
       (``partial_failure`` with nothing executed, ``failed``, or any other
       result, an unknown or missing one included);
     * ``none`` -- nothing disruptive to apply (``no_disruptive_action``:
-      observe, notify).
+      observe, notify);
+    * ``held`` -- the flow's restriction was already in force: the held
+      lease continues or was extended (``extended``/``already_held``), no
+      new command.
     """
 
     result = str(enforcement.get('result') or '')
@@ -156,6 +165,8 @@ def applied_state(enforcement: Mapping[str, Any]) -> str:
         return 'not_applied'
     if result == NOTHING_TO_APPLY_RESULT:
         return 'none'
+    if result in HELD_RESULTS and str(enforcement.get('mode') or '') == 'enforced':
+        return 'held'
     return 'apply_failed'
 
 
@@ -177,9 +188,20 @@ def _release_condition(enforcement: Mapping[str, Any]) -> str:
     label = _not_applied_label(enforcement)
     if label:
         return label
-    if applied_state(enforcement) != 'applied':
-        return ''
+    state = applied_state(enforcement)
     metadata = _mapping(enforcement.get('metadata'))
+    if state == 'held':
+        held = str(metadata.get('release_extended_task_id') or '')
+        due = metadata.get('release_due_epoch')
+        if held and isinstance(due, (int, float)) and not isinstance(due, bool) and due > 0:
+            try:
+                when = datetime.fromtimestamp(float(due), timezone.utc).isoformat(timespec='seconds')
+            except (OverflowError, OSError, ValueError):
+                return HELD_LABEL
+            return f'{HELD_LABEL}: core lease {held} expires at {when}'
+        return HELD_LABEL
+    if state != 'applied':
+        return ''
     if str(metadata.get('release_ledger_state') or '') not in LEASED_LEDGER_STATES:
         return ''
     due = metadata.get('release_due_epoch')
