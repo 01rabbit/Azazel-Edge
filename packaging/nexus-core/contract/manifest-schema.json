@@ -1,6 +1,6 @@
 {
   "contract": "azazel-edge-core/contract-schema/v1",
-  "describes": "azazel-edge-core/package-manifest/v1",
+  "describes": "azazel-edge-core/package-manifest/v2",
   "keys": [
     "architecture",
     "artifact",
@@ -9,6 +9,9 @@
     "components[].size",
     "contract",
     "digest",
+    "elf.class",
+    "elf.data",
+    "elf.machine",
     "health.command",
     "health.contract",
     "health.does_not_establish",

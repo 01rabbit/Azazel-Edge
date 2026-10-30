@@ -1,4 +1,4 @@
-# The x86_64 Edge Core package Azazel-Nexus verifies
+# The per-CPU Edge Core package Azazel-Nexus verifies
 
 Status: **implemented** (`packaging/nexus-core/nexus_core_package.py`,
 `tests/test_nexus_core_package_v1.py`). This is [Edge#424](https://github.com/01rabbit/Azazel-Edge/issues/424),
@@ -173,7 +173,7 @@ documents that both repositories commit:
 
 | file | what it fixes |
 | --- | --- |
-| `pin.json` | package name, version, architecture, both contract strings, the artifact and manifest filenames, `signed: false`, and what a consumer must do |
+| `pin.json` | package name, version, one entry per CPU (`architectures`: the artifact and manifest filenames and the ELF identity of that CPU's binary), both contract strings, `signed: false`, and what a consumer must do (contract `azazel-edge-core/nexus-pin/v2`) |
 | `manifest-schema.json` | every field of the manifest, as sorted dotted paths |
 | `health-schema.json` | every field of the health report, the posture check names, the healthy and unhealthy status words, and the four conditions |
 
@@ -201,12 +201,85 @@ python3 packaging/nexus-core/nexus_core_package.py --emit-contract
 and asserts the committed files are byte-identical, so a field added to the
 manifest cannot reach a package without also reaching the contract.
 
-## 7. Building it
+## 7. Building it, one package per CPU
 
 ```sh
-cargo build --release --manifest-path rust/azazel-edge-core/Cargo.toml
-python3 packaging/nexus-core/nexus_core_package.py --out dist/nexus-core
+cargo build --release --locked --manifest-path rust/azazel-edge-core/Cargo.toml
+python3 packaging/nexus-core/nexus_core_package.py --architecture "$(uname -m)" --out dist/nexus-core
 ```
+
+`--architecture` (`x86_64` or `aarch64`, the Linux `uname -m` spelling the
+Nexus pin uses) is required. It is a request, not a label: before the binary
+is run, its ELF header is read -- class (`ELFCLASS64`), byte order
+(`ELFDATA2LSB`) and `e_machine` (`EM_X86_64` 62, `EM_AARCH64` 183) -- and the
+package is refused unless the header is the one listed for that CPU. A 32-bit
+or big-endian build, another machine, a relocatable object or a file that is
+not ELF is refused too. The manifest records the CPU (`architecture`) and the
+header that was read (`elf`), and the artifact and manifest are named for that
+CPU:
+
+| CPU | artifact | manifest `elf.machine` |
+| --- | --- | --- |
+| x86_64 | `azazel-edge-core-<version>-x86_64.tar.gz` | `EM_X86_64` |
+| aarch64 | `azazel-edge-core-<version>-aarch64.tar.gz` | `EM_AARCH64` |
+
+Before this, the packager wrote `x86_64` into every manifest whatever the
+binary was. The Nexus VM acceptance record of 2026-10-29 (Azazel-Nexus
+`docs/evidence/vm-integration-vm-arm64-2026-10-29.md`, deviation D1) had to
+record an aarch64 build carried under the x86_64 name; that package can no
+longer be built.
+
+**The packager runs the binary** (`--version`, and `--health` for the
+contract), so a package is made on the CPU it is for, or under an emulator.
+It does not cross-package. CI (`nexus-core-package`) builds and packages
+natively on an x86_64 runner (`ubuntu-24.04`) and an arm64 runner
+(`ubuntu-24.04-arm`, available to public repositories); on each it requires
+the packager and contract tests to run with the release binary present and
+the other CPU's name to be refused. CI uploads nothing: a runner build is not
+a released artifact.
+
+### A local build that reproduces bit for bit
+
+The Debian 13 target, in a fixed Rust image, on each CPU natively (on Apple
+Silicon: colima for aarch64, a colima profile with Rosetta for x86_64; under
+Rosetta the x86_64 compiler is translated, the output is ordinary x86_64
+code):
+
+```sh
+# in rust@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137
+# (rust:1.99.1-trixie, rustc 1.99.1; the multi-CPU index, resolved per CPU),
+# with the tree copied to /work
+cargo build --release --locked --manifest-path rust/azazel-edge-core/Cargo.toml
+python3 packaging/nexus-core/nexus_core_package.py --architecture "$(uname -m)" --out /out
+```
+
+Built this way from the same tree, independent fresh containers produced
+byte-identical binaries on each CPU (three aarch64 runs, two x86_64 runs), so
+the package digest is a function of the tree and the toolchain, and a
+consumer can rebuild the artifact it pins. A digest still changes whenever
+the core's source, `config/redirect_policy.yaml`, `Cargo.lock` or the image
+changes.
+
+### What is checked is what is packaged
+
+Each payload file is read **once**. The ELF check, the `--version` run, each
+component's digest and size, and the archive member all come from those
+bytes; the binary is run from a private 0700 copy of them, never from the
+build tree. A binary replaced in the tree after the check therefore cannot
+end up in the archive under the check made on its predecessor
+(`tests/test_nexus_core_package_v1.py`
+`test_a_binary_replaced_after_the_check_is_not_what_gets_packaged`).
+
+### The manifest contract is `package-manifest/v2`
+
+Bumped with the per-CPU names, not only extended. A consumer that predates
+them compares a fixed `x86_64` name and never looks at the host or the
+binary; on an aarch64 host it would accept a correct x86_64 package. Such a
+consumer checks the manifest contract first, so it refuses every v2 package
+instead. **Roll out the CPU-checking Nexus first** (it reads v2, and the v1
+packages already installed, whose binaries it checks itself); then this
+packager's packages. In the other order the old Nexus refuses the new
+packages, which is a gap in Edge readiness and not a wrong acceptance.
 
 Nothing under `installer/`, `security/` or `systemd/` is read or written.
 

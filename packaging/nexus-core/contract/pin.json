@@ -1,16 +1,34 @@
 {
-  "architecture": "x86_64",
-  "artifact": "azazel-edge-core-0.1.0-x86_64.tar.gz",
+  "architectures": {
+    "aarch64": {
+      "artifact": "azazel-edge-core-0.1.0-aarch64.tar.gz",
+      "elf": {
+        "class": "ELFCLASS64",
+        "data": "ELFDATA2LSB",
+        "machine": "EM_AARCH64"
+      },
+      "manifest": "azazel-edge-core-0.1.0-aarch64.manifest.json"
+    },
+    "x86_64": {
+      "artifact": "azazel-edge-core-0.1.0-x86_64.tar.gz",
+      "elf": {
+        "class": "ELFCLASS64",
+        "data": "ELFDATA2LSB",
+        "machine": "EM_X86_64"
+      },
+      "manifest": "azazel-edge-core-0.1.0-x86_64.manifest.json"
+    }
+  },
   "consumer_must": [
+    "select the entry for the host's CPU (Linux uname -m) and refuse a package whose name, manifest architecture or binary ELF header names another CPU, or whose ELF header is not the one listed for it",
     "re-derive the artifact digest and compare it with the manifest",
     "treat a digest match as integrity against accidental change only, because nothing here is signed",
     "report package absence, a corrupt manifest, a version mismatch, a digest mismatch, an unhealthy report and a not-running payload as six separate findings",
     "not claim edge-baseline-ready from accepting this package"
   ],
-  "contract": "azazel-edge-core/nexus-pin/v1",
+  "contract": "azazel-edge-core/nexus-pin/v2",
   "health_contract": "azazel-edge-core/health/v1",
-  "manifest": "azazel-edge-core-0.1.0-x86_64.manifest.json",
-  "manifest_contract": "azazel-edge-core/package-manifest/v1",
+  "manifest_contract": "azazel-edge-core/package-manifest/v2",
   "package": "azazel-edge-core",
   "signed": false,
   "version": "0.1.0"
