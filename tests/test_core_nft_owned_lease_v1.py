@@ -120,6 +120,22 @@ def _wait(predicate, timeout_s: float, proc: subprocess.Popen):
     return predicate()
 
 
+def _logged_pair(path: Path, field: str):
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    # A ledger transition precedes evidence fsync and normalized append.
+    # Wait for newline-terminated JSONL records, never suppress malformed
+    # completed lines. Return extras too so the caller's exact-count check fails.
+    records = [json.loads(line) for line in text.splitlines(keepends=True)
+               if line.endswith("\n") and line.strip()]
+    if text and not text.endswith("\n"):
+        return None
+    outcomes = [record[field] for record in records if field in record]
+    return outcomes if len(outcomes) >= 2 else None
+
+
 def _private(path: Path, text: str) -> Path:
     path.write_text(text, encoding="utf-8")
     os.chmod(path, 0o600)
@@ -230,8 +246,8 @@ def test_core_applies_reads_back_and_releases_owned_throttle_and_redirect(netns)
             # Nothing source-wide, ever.
             assert _owned_rules(netns, "input") == []
 
-            records = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines() if line.strip()]
-            enforced = [r["enforcement"] for r in records if "enforcement" in r]
+            enforced = _wait(lambda: _logged_pair(events, "enforcement"), 10, proc)
+            assert enforced is not None, "two completed enforcement records never arrived"
             assert len(enforced) == 2
             for outcome in enforced:
                 assert outcome["mode"] == "enforced" and outcome["result"] == "applied", outcome
@@ -249,8 +265,9 @@ def test_core_applies_reads_back_and_releases_owned_throttle_and_redirect(netns)
             assert released, f"leases not released: {_ledger_tasks(ledger)}"
             assert not [r for r in _owned_rules(netns, "throttle") if r.get("comment") == throttle["owner_token"]]
             assert not [r for r in _owned_rules(netns, "prerouting") if r.get("comment") == redirect["owner_token"]]
-            records = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines() if line.strip()]
-            results = sorted(r["release"]["result"] for r in records if "release" in r)
+            release_outcomes = _wait(lambda: _logged_pair(events, "release"), 10, proc)
+            assert release_outcomes is not None, "two completed release records never arrived"
+            results = sorted(outcome["result"] for outcome in release_outcomes)
             assert results == ["rollback_applied_and_absence_verified"] * 2, results
         finally:
             listener.terminate()
