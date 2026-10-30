@@ -28,7 +28,7 @@
   ],
   "contract": "azazel-edge-core/nexus-pin/v2",
   "health_contract": "azazel-edge-core/health/v1",
-  "manifest_contract": "azazel-edge-core/package-manifest/v1",
+  "manifest_contract": "azazel-edge-core/package-manifest/v2",
   "package": "azazel-edge-core",
   "signed": false,
   "version": "0.1.0"

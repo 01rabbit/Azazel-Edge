@@ -1,6 +1,6 @@
 {
   "contract": "azazel-edge-core/contract-schema/v1",
-  "describes": "azazel-edge-core/package-manifest/v1",
+  "describes": "azazel-edge-core/package-manifest/v2",
   "keys": [
     "architecture",
     "artifact",
