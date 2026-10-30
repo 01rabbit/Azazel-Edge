@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the x86_64 Edge Core package Azazel-Nexus verifies (Edge#424).
+"""Build the per-CPU Edge Core package Azazel-Nexus verifies (Edge#424).
 
 **This has nothing to do with `installer/`.** Nexus does not change network
 configuration when it installs anything, so the existing network installer is
@@ -28,6 +28,22 @@ can rewrite the package and the manifest together. The manifest carries
 `"signed": false` and the reason, and Nexus is expected to degrade rather than
 pretend otherwise.
 
+## One package per CPU, and the CPU is read from the binary
+
+`--architecture` names the CPU being packaged (`x86_64` or `aarch64`, the
+Linux `uname -m` spelling Nexus pins by). It is a request, not a label: the
+ELF header of the binary actually being packaged (class, byte order and
+`e_machine`) is read **before the binary is run**, and the package is refused
+unless the header is the one listed for that CPU in `ARCHITECTURES`. The
+manifest then records the CPU and the ELF identity that were read, and the
+artifact and manifest are named for that CPU. An aarch64 build can no longer
+be wrapped under an x86_64 name, which is the deviation the Nexus VM
+acceptance record of 2026-10-29 had to write down (its D1).
+
+The packager runs the binary (`--version`, and `--health` for the contract),
+so it packages on the CPU it was built for, or under an emulator; it does not
+cross-package. CI builds and packages on an x86_64 and an arm64 runner.
+
 ## What the package does not establish
 
 That anything is running. The manifest declares how a supervisor should start
@@ -43,6 +59,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import struct
 import subprocess
 import sys
 import tarfile
@@ -53,7 +70,6 @@ from typing import Iterable, Sequence
 ROOT = Path(__file__).resolve().parents[2]
 
 PACKAGE_NAME = "azazel-edge-core"
-ARCHITECTURE = "x86_64"
 MANIFEST_CONTRACT = "azazel-edge-core/package-manifest/v1"
 HEALTH_CONTRACT = "azazel-edge-core/health/v1"
 
@@ -80,6 +96,108 @@ OBSERVE_ONLY_ENV = {
 
 class BuildRefused(Exception):
     """The package was not built, rather than built from something unknown."""
+
+
+@dataclass(frozen=True)
+class ElfIdentity:
+    """The ELF header fields that say which CPU a binary is for.
+
+    Recorded by name in the manifest; the numbers are what the header holds.
+    """
+
+    elf_class: str
+    data: str
+    machine: str
+
+    def as_record(self) -> dict:
+        return {"class": self.elf_class, "data": self.data, "machine": self.machine}
+
+
+#: The CPUs a package can be built for, by the Linux `uname -m` name the
+#: artifact, the manifest and the Nexus pin use, and the ELF identity a
+#: binary for that CPU carries. Both reviewed CPUs run 64-bit little-endian
+#: Linux; a big-endian or 32-bit build of either is not one of them.
+ARCHITECTURES = {
+    "aarch64": ElfIdentity(elf_class="ELFCLASS64", data="ELFDATA2LSB", machine="EM_AARCH64"),
+    "x86_64": ElfIdentity(elf_class="ELFCLASS64", data="ELFDATA2LSB", machine="EM_X86_64"),
+}
+
+_ELF_MAGIC = b"\x7fELF"
+_ELF_CLASSES = {1: "ELFCLASS32", 2: "ELFCLASS64"}
+_ELF_DATA = {1: "ELFDATA2LSB", 2: "ELFDATA2MSB"}
+#: `e_machine` values, from the System V ABI. Only names that matter here are
+#: listed; any other value is reported by number and refused.
+_ELF_MACHINES = {3: "EM_386", 40: "EM_ARM", 62: "EM_X86_64", 183: "EM_AARCH64", 243: "EM_RISCV"}
+#: `e_type` values of something that can be executed: an executable or a
+#: position-independent executable.
+_ELF_EXECUTABLE_TYPES = {2, 3}
+
+
+def elf_identity(header: bytes) -> ElfIdentity:
+    """Read the CPU identity out of the first bytes of an ELF file.
+
+    Reads the header only and runs nothing. Refuses anything that is not a
+    well-formed ELF executable header: a wrong magic, a version other than 1,
+    a type that cannot be executed, or a header too short to hold `e_machine`.
+    """
+
+    if len(header) < 24 or header[:4] != _ELF_MAGIC:
+        raise BuildRefused("the payload binary is not an ELF file")
+    elf_class = _ELF_CLASSES.get(header[4])
+    data = _ELF_DATA.get(header[5])
+    if elf_class is None or data is None or header[6] != 1:
+        raise BuildRefused(
+            f"the payload binary has an ELF header this packager cannot read "
+            f"(class {header[4]}, data {header[5]}, version {header[6]})"
+        )
+    order = "<" if data == "ELFDATA2LSB" else ">"
+    e_type, e_machine, e_version = struct.unpack_from(order + "HHI", header, 16)
+    if e_version != 1 or e_type not in _ELF_EXECUTABLE_TYPES:
+        raise BuildRefused(
+            f"the payload binary is not an ELF executable (e_type {e_type}, e_version {e_version})"
+        )
+    machine = _ELF_MACHINES.get(e_machine, f"e_machine={e_machine}")
+    return ElfIdentity(elf_class=elf_class, data=data, machine=machine)
+
+
+def architecture_of(identity: ElfIdentity) -> str:
+    """The `uname -m` name of the CPU an ELF identity is for, or a refusal."""
+
+    for name, expected in ARCHITECTURES.items():
+        if identity == expected:
+            return name
+    raise BuildRefused(
+        f"the payload binary is {identity.elf_class}/{identity.data}/{identity.machine}, "
+        f"which is none of the CPUs this packager builds for ({sorted(ARCHITECTURES)})"
+    )
+
+
+def binary_architecture(binary: Path, requested: str) -> ElfIdentity:
+    """The ELF identity of `binary`, only when it is the one `requested` names.
+
+    Called before the binary is run: a binary for another CPU is refused by
+    what it is, not by whether it happens to execute here (an emulator would
+    let it).
+    """
+
+    if requested not in ARCHITECTURES:
+        raise BuildRefused(
+            f"--architecture {requested!r} is not one of {sorted(ARCHITECTURES)}"
+        )
+    try:
+        with binary.open("rb") as stream:
+            header = stream.read(64)
+    except OSError as exc:
+        raise BuildRefused(f"the payload binary could not be read: {exc}") from exc
+    identity = elf_identity(header)
+    found = architecture_of(identity)
+    if found != requested:
+        raise BuildRefused(
+            f"asked to package {requested} and the binary's ELF header says {found} "
+            f"({identity.machine}); a package is named for the CPU its binary is for, "
+            "never for the one requested"
+        )
+    return identity
 
 
 @dataclass(frozen=True)
@@ -151,12 +269,17 @@ def _binary_reports(binary: Path, version: str) -> None:
         )
 
 
-def build(root: Path, out_dir: Path) -> tuple[Path, Path]:
-    """Write the package and its manifest. Returns both paths."""
+def build(root: Path, out_dir: Path, *, architecture: str) -> tuple[Path, Path]:
+    """Write the package and its manifest for `architecture`. Returns both paths.
+
+    `architecture` is required and checked against the binary's ELF header
+    before anything runs it.
+    """
 
     version = _version(root)
     payload = _payload_paths(root)
     binary = dict(payload)["bin/azazel-edge-core"]
+    identity = binary_architecture(binary, architecture)
     _binary_reports(binary, version)
 
     components = [
@@ -169,17 +292,19 @@ def build(root: Path, out_dir: Path) -> tuple[Path, Path]:
     ]
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    archive = out_dir / f"{PACKAGE_NAME}-{version}-{ARCHITECTURE}.tar.gz"
+    archive = out_dir / artifact_name(version, architecture)
     _write_archive(archive, payload)
 
     manifest = manifest_document(
         version=version,
+        architecture=architecture,
+        elf=identity,
         artifact=archive.name,
         digest=_digest(archive.read_bytes()),
         components=[component.as_record() for component in components],
     )
 
-    manifest_path = out_dir / f"{PACKAGE_NAME}-{version}-{ARCHITECTURE}.manifest.json"
+    manifest_path = out_dir / manifest_name(version, architecture)
     manifest_bytes = (
         json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     ).encode("utf-8")
@@ -190,8 +315,22 @@ def build(root: Path, out_dir: Path) -> tuple[Path, Path]:
     return archive, manifest_path
 
 
+def artifact_name(version: str, architecture: str) -> str:
+    return f"{PACKAGE_NAME}-{version}-{architecture}.tar.gz"
+
+
+def manifest_name(version: str, architecture: str) -> str:
+    return f"{PACKAGE_NAME}-{version}-{architecture}.manifest.json"
+
+
 def manifest_document(
-    *, version: str, artifact: str, digest: str, components: list[dict]
+    *,
+    version: str,
+    architecture: str,
+    elf: ElfIdentity,
+    artifact: str,
+    digest: str,
+    components: list[dict],
 ) -> dict:
     """The manifest, as a document, separated from writing it.
 
@@ -203,10 +342,10 @@ def manifest_document(
 
     return {
         "contract": MANIFEST_CONTRACT,
-        "contract": MANIFEST_CONTRACT,
         "package": PACKAGE_NAME,
         "version": version,
-        "architecture": ARCHITECTURE,
+        "architecture": architecture,
+        "elf": elf.as_record(),
         "artifact": artifact,
         "digest": digest,
         "signed": False,
@@ -312,7 +451,8 @@ CONTRACT_DIR = Path(__file__).resolve().parent / "contract"
 
 #: What a consumer pins. A version bump has to be written here, which means it
 #: shows up in the diff of both repositories rather than only in a filename.
-PIN_CONTRACT = "azazel-edge-core/nexus-pin/v1"
+#: v2: one entry per CPU (`architectures`) instead of one `architecture`.
+PIN_CONTRACT = "azazel-edge-core/nexus-pin/v2"
 SCHEMA_CONTRACT = "azazel-edge-core/contract-schema/v1"
 
 #: Placeholder values for deriving the manifest schema. They are never
@@ -348,7 +488,9 @@ def manifest_schema() -> dict:
 
     document = manifest_document(
         version="0.0.0",
-        artifact=f"{PACKAGE_NAME}-0.0.0-{ARCHITECTURE}.tar.gz",
+        architecture="x86_64",
+        elf=ARCHITECTURES["x86_64"],
+        artifact=artifact_name("0.0.0", "x86_64"),
         digest=_SCHEMA_DIGEST,
         components=[Component(path="bin/placeholder", digest=_SCHEMA_DIGEST, size=0).as_record()],
     )
@@ -429,19 +571,32 @@ def _run_health(binary: Path, env_overrides: dict) -> dict:
 
 
 def pin_document(version: str) -> dict:
-    """Exactly what a consumer fixes. Nothing derived, nothing optional."""
+    """Exactly what a consumer fixes. Nothing derived, nothing optional.
+
+    One entry per CPU, each naming its artifact, its manifest and the ELF
+    identity its binary carries. Still no digest: a digest changes with every
+    rebuild, and which build a consumer accepts is the consumer's pin.
+    """
 
     return {
         "contract": PIN_CONTRACT,
         "package": PACKAGE_NAME,
         "version": version,
-        "architecture": ARCHITECTURE,
+        "architectures": {
+            name: {
+                "artifact": artifact_name(version, name),
+                "manifest": manifest_name(version, name),
+                "elf": identity.as_record(),
+            }
+            for name, identity in sorted(ARCHITECTURES.items())
+        },
         "manifest_contract": MANIFEST_CONTRACT,
         "health_contract": HEALTH_CONTRACT,
-        "artifact": f"{PACKAGE_NAME}-{version}-{ARCHITECTURE}.tar.gz",
-        "manifest": f"{PACKAGE_NAME}-{version}-{ARCHITECTURE}.manifest.json",
         "signed": False,
         "consumer_must": [
+            "select the entry for the host's CPU (Linux uname -m) and refuse a "
+            "package whose name, manifest architecture or binary ELF header "
+            "names another CPU, or whose ELF header is not the one listed for it",
             "re-derive the artifact digest and compare it with the manifest",
             "treat a digest match as integrity against accidental change only, "
             "because nothing here is signed",
@@ -498,6 +653,14 @@ def main(argv: Iterable[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--contract-dir", type=Path, default=CONTRACT_DIR)
+    parser.add_argument(
+        "--architecture",
+        choices=sorted(ARCHITECTURES),
+        help=(
+            "the CPU being packaged (required to build). Checked against the "
+            "binary's ELF header; a mismatch refuses"
+        ),
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     try:
@@ -505,7 +668,12 @@ def main(argv: Iterable[str] | None = None) -> int:
             for path in write_contract(args.root, args.contract_dir):
                 print(path)
             return 0
-        archive, manifest = build(args.root, args.out)
+        if args.architecture is None:
+            raise BuildRefused(
+                "--architecture is required to build a package; it is checked "
+                "against the binary and never assumed"
+            )
+        archive, manifest = build(args.root, args.out, architecture=args.architecture)
     except BuildRefused as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2

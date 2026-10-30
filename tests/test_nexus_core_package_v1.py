@@ -1,4 +1,4 @@
-"""The x86_64 Edge Core package Azazel-Nexus verifies (Edge#424).
+"""The per-CPU Edge Core package Azazel-Nexus verifies (Edge#424).
 
 Nexus looks at five things and nothing else: the package is present, the
 version matches, the digest matches, the health contract answers, and the
@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import struct
 import subprocess
 import sys
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packaging" / "nexus-core"))
@@ -35,6 +38,38 @@ _REASON = (
     "cargo build --release --manifest-path rust/azazel-edge-core/Cargo.toml"
 )
 
+#: The CPU this test runs on, by `uname -m`, read independently of the
+#: packager. A release binary built here is for this CPU.
+HOST = {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}.get(platform.machine(), "")
+OTHER = {"x86_64": "aarch64", "aarch64": "x86_64"}.get(HOST, "")
+#: `e_machine` numbers from the System V ABI, written here rather than taken
+#: from the packager so the tests do not grade the packager by its own table.
+EM = {"x86_64": 62, "aarch64": 183}
+
+
+def elf_header(
+    *, machine: int, elf_class: int = 2, data: int = 1, e_type: int = 3, version: int = 1,
+    ident_version: int = 1,
+) -> bytes:
+    """A 64-byte ELF header with the fields the CPU check reads."""
+
+    order = "<" if data == 1 else ">"
+    ident = b"\x7fELF" + bytes([elf_class, data, ident_version, 0]) + bytes(8)
+    return ident + struct.pack(order + "HHI", e_type, machine, version) + bytes(40)
+
+
+def fake_tree(root: Path, binary: bytes) -> None:
+    """A tree with a Cargo.toml, a policy and `binary` where the build goes."""
+
+    crate = root / "rust" / "azazel-edge-core"
+    (crate / "target" / "release").mkdir(parents=True)
+    (crate / "Cargo.toml").write_text('version = "0.1.0"\n', encoding="utf-8")
+    target = crate / "target" / "release" / "azazel-edge-core"
+    target.write_bytes(binary)
+    target.chmod(0o755)
+    (root / "config").mkdir()
+    (root / "config" / "redirect_policy.yaml").write_text("{}\n", encoding="utf-8")
+
 
 @unittest.skipUnless(_BUILT, _REASON)
 class NexusCorePackageV1Tests(unittest.TestCase):
@@ -44,7 +79,7 @@ class NexusCorePackageV1Tests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls._tmp = tempfile.TemporaryDirectory()
         out = Path(cls._tmp.name) / "first"
-        cls.archive, cls.manifest_path = packager.build(ROOT, out)
+        cls.archive, cls.manifest_path = packager.build(ROOT, out, architecture=HOST)
         cls.manifest = json.loads(cls.manifest_path.read_text(encoding="utf-8"))
 
     @classmethod
@@ -54,7 +89,7 @@ class NexusCorePackageV1Tests(unittest.TestCase):
     # -- deterministic, because Nexus compares a digest --------------------
 
     def test_two_builds_of_one_tree_are_byte_identical(self) -> None:
-        second, _ = packager.build(ROOT, Path(self._tmp.name) / "second")
+        second, _ = packager.build(ROOT, Path(self._tmp.name) / "second", architecture=HOST)
         self.assertEqual(self.archive.read_bytes(), second.read_bytes())
 
     def test_the_gzip_header_carries_no_timestamp(self) -> None:
@@ -99,7 +134,7 @@ class NexusCorePackageV1Tests(unittest.TestCase):
         try:
             packager.PAYLOAD = tuple(reversed(original))
             reversed_archive, _ = packager.build(
-                ROOT, Path(self._tmp.name) / "reversed"
+                ROOT, Path(self._tmp.name) / "reversed", architecture=HOST
             )
         finally:
             packager.PAYLOAD = original
@@ -117,7 +152,7 @@ class NexusCorePackageV1Tests(unittest.TestCase):
     def test_the_manifest_names_the_five_things_nexus_verifies(self) -> None:
         for field in ("package", "version", "architecture", "digest", "health"):
             self.assertIn(field, self.manifest)
-        self.assertEqual(self.manifest["architecture"], "x86_64")
+        self.assertEqual(self.manifest["architecture"], HOST)
         self.assertEqual(self.manifest["contract"], packager.MANIFEST_CONTRACT)
 
     def test_the_manifest_states_that_the_digest_is_not_signed(self) -> None:
@@ -280,9 +315,157 @@ class NexusCorePackageV1Tests(unittest.TestCase):
     def test_the_artifact_is_named_for_its_version_and_architecture(self) -> None:
         self.assertEqual(
             self.archive.name,
-            f"azazel-edge-core-{self.manifest['version']}-x86_64.tar.gz",
+            f"azazel-edge-core-{self.manifest['version']}-{HOST}.tar.gz",
         )
         self.assertEqual(self.manifest["artifact"], self.archive.name)
+        self.assertEqual(
+            self.manifest_path.name,
+            f"azazel-edge-core-{self.manifest['version']}-{HOST}.manifest.json",
+        )
+
+    # -- the CPU, read from the binary rather than written down ------------
+
+    def test_the_manifest_records_the_elf_header_of_the_packaged_binary(self) -> None:
+        """Compared with the header bytes, not with the packager's table."""
+
+        header = BINARY.read_bytes()[:20]
+        machine = struct.unpack_from("<H", header, 18)[0]
+        self.assertEqual(machine, EM[HOST])
+        self.assertEqual(header[4], 2)
+        self.assertEqual(header[5], 1)
+        self.assertEqual(
+            self.manifest["elf"],
+            {"class": "ELFCLASS64", "data": "ELFDATA2LSB",
+             "machine": {"x86_64": "EM_X86_64", "aarch64": "EM_AARCH64"}[HOST]},
+        )
+
+    def test_the_real_binary_is_refused_under_the_other_cpus_name(self) -> None:
+        """The 2026-10-29 deviation: a binary of one CPU named for the other."""
+
+        with self.assertRaises(packager.BuildRefused) as refused:
+            packager.build(ROOT, Path(self._tmp.name) / "other", architecture=OTHER)
+        self.assertIn(f"ELF header says {HOST}", str(refused.exception))
+        self.assertFalse((Path(self._tmp.name) / "other").exists())
+
+    def test_the_real_binary_with_its_machine_rewritten_is_refused(self) -> None:
+        """The same build, with only `e_machine` changed to the other CPU."""
+
+        data = bytearray(BINARY.read_bytes())
+        data[18:20] = struct.pack("<H", EM[OTHER])
+        with tempfile.TemporaryDirectory() as fake:
+            root = Path(fake)
+            fake_tree(root, bytes(data))
+            with self.assertRaises(packager.BuildRefused) as refused:
+                packager.build(root, root / "out", architecture=HOST)
+        self.assertIn(f"ELF header says {OTHER}", str(refused.exception))
+
+
+class ElfIdentityTests(unittest.TestCase):
+    """The header reader, on headers written here byte by byte."""
+
+    def test_each_reviewed_cpu_is_read_from_its_machine_number(self) -> None:
+        for name, number in EM.items():
+            with self.subTest(cpu=name):
+                identity = packager.elf_identity(elf_header(machine=number))
+                self.assertEqual(packager.architecture_of(identity), name)
+
+    def test_an_executable_and_a_pie_are_both_executables(self) -> None:
+        for e_type in (2, 3):
+            with self.subTest(e_type=e_type):
+                identity = packager.elf_identity(elf_header(machine=62, e_type=e_type))
+                self.assertEqual(packager.architecture_of(identity), "x86_64")
+
+    def test_headers_that_are_not_a_reviewed_cpu_are_refused(self) -> None:
+        cases = {
+            "32-bit": elf_header(machine=EM["x86_64"], elf_class=1),
+            "big-endian aarch64": elf_header(machine=EM["aarch64"], data=2),
+            "riscv64": elf_header(machine=243),
+            "unlisted machine": elf_header(machine=9999),
+            "relocatable object": elf_header(machine=62, e_type=1),
+            "ELF version 0": elf_header(machine=62, version=0),
+            "EI_VERSION 0": elf_header(machine=62, ident_version=0),
+            "unknown class": elf_header(machine=62, elf_class=3),
+            "not ELF": b"#!/bin/sh\n" + bytes(60),
+            "truncated": elf_header(machine=62)[:19],
+        }
+        for name, header in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaises(packager.BuildRefused):
+                    packager.architecture_of(packager.elf_identity(header))
+
+    def test_the_two_cpus_have_different_identities(self) -> None:
+        """Otherwise one would always be read as the other."""
+
+        identities = list(packager.ARCHITECTURES.values())
+        self.assertEqual(len(identities), len(set(identities)))
+        self.assertEqual(sorted(packager.ARCHITECTURES), ["aarch64", "x86_64"])
+
+
+class ArchitectureRefusalTests(unittest.TestCase):
+    """The CPU check, on a synthetic header, without a Rust build.
+
+    `_binary_reports` (which runs the binary) is replaced: the header is not
+    executable. Where it is expected not to run at all, the test says so.
+    """
+
+    def _build(self, binary: bytes, architecture: str):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        fake_tree(root, binary)
+        with mock.patch.object(packager, "_binary_reports") as ran:
+            try:
+                return packager.build(root, root / "out", architecture=architecture), ran, root
+            except packager.BuildRefused as exc:
+                return exc, ran, root
+
+    def test_each_cpu_builds_under_its_own_name_and_records_its_header(self) -> None:
+        for name, number in EM.items():
+            with self.subTest(cpu=name):
+                (archive, manifest_path), ran, _ = self._build(elf_header(machine=number), name)
+                ran.assert_called_once()
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                self.assertEqual(manifest["architecture"], name)
+                self.assertEqual(archive.name, f"azazel-edge-core-0.1.0-{name}.tar.gz")
+                self.assertEqual(manifest_path.name, f"azazel-edge-core-0.1.0-{name}.manifest.json")
+                self.assertEqual(manifest["artifact"], archive.name)
+                self.assertEqual(manifest["elf"]["class"], "ELFCLASS64")
+                self.assertEqual(manifest["elf"]["data"], "ELFDATA2LSB")
+                self.assertEqual(
+                    manifest["elf"]["machine"],
+                    {"x86_64": "EM_X86_64", "aarch64": "EM_AARCH64"}[name],
+                )
+
+    def test_a_binary_of_one_cpu_is_refused_under_the_others_name_before_it_runs(self) -> None:
+        for binary_cpu, asked in (("aarch64", "x86_64"), ("x86_64", "aarch64")):
+            with self.subTest(binary=binary_cpu, asked=asked):
+                refused, ran, root = self._build(elf_header(machine=EM[binary_cpu]), asked)
+                self.assertIsInstance(refused, packager.BuildRefused)
+                self.assertIn(f"asked to package {asked}", str(refused))
+                self.assertIn(f"ELF header says {binary_cpu}", str(refused))
+                ran.assert_not_called()
+                self.assertFalse((root / "out").exists())
+
+    def test_a_cpu_outside_the_table_is_refused(self) -> None:
+        for asked in ("arm64", "amd64", "riscv64", ""):
+            with self.subTest(asked=asked):
+                refused, ran, _ = self._build(elf_header(machine=EM["x86_64"]), asked)
+                self.assertIsInstance(refused, packager.BuildRefused)
+                ran.assert_not_called()
+
+    def test_a_big_endian_header_is_refused_whatever_is_asked(self) -> None:
+        refused, ran, _ = self._build(elf_header(machine=EM["aarch64"], data=2), "aarch64")
+        self.assertIsInstance(refused, packager.BuildRefused)
+        ran.assert_not_called()
+
+    def test_building_without_an_architecture_refuses(self) -> None:
+        with tempfile.TemporaryDirectory() as fake:
+            root = Path(fake)
+            fake_tree(root, elf_header(machine=EM["x86_64"]))
+            with mock.patch("sys.stderr"):
+                code = packager.main(["--root", str(root), "--out", str(root / "out")])
+            self.assertEqual(code, 2)
+            self.assertFalse((root / "out").exists())
 
 
 class NexusCorePackageRefusalTests(unittest.TestCase):
@@ -296,7 +479,7 @@ class NexusCorePackageRefusalTests(unittest.TestCase):
                 'version = "9.9.9"\n', encoding="utf-8"
             )
             with self.assertRaises(packager.BuildRefused) as refused:
-                packager.build(root, root / "out")
+                packager.build(root, root / "out", architecture="x86_64")
             self.assertIn("never builds a stand-in", str(refused.exception))
 
     def test_a_binary_from_another_build_refuses(self) -> None:
@@ -321,7 +504,7 @@ class NexusCorePackageRefusalTests(unittest.TestCase):
             (root / "config" / "redirect_policy.yaml").write_text("{}\n", encoding="utf-8")
 
             with self.assertRaises(packager.BuildRefused) as refused:
-                packager.build(root, root / "out")
+                packager.build(root, root / "out", architecture=HOST)
             self.assertIn("different builds", str(refused.exception))
 
     def test_a_tree_without_a_version_refuses(self) -> None:
@@ -332,7 +515,7 @@ class NexusCorePackageRefusalTests(unittest.TestCase):
                 "[package]\n", encoding="utf-8"
             )
             with self.assertRaises(packager.BuildRefused):
-                packager.build(root, root / "out")
+                packager.build(root, root / "out", architecture="x86_64")
 
     def test_the_payload_is_listed_and_never_globbed(self) -> None:
         """A package whose contents depend on a working copy's state is not one."""
