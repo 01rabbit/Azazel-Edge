@@ -198,6 +198,14 @@ class PinTests(unittest.TestCase):
             },
         )
 
+    def test_the_manifest_contract_is_v2_so_a_reader_without_cpu_checks_refuses(self) -> None:
+        """Re522-04: a Nexus that predates per-CPU packages reads v1 and checks
+        the contract first; v2 is what makes it refuse instead of accepting an
+        x86_64 package on an aarch64 host. Moving back to v1 reopens that."""
+
+        self.assertEqual(packager.MANIFEST_CONTRACT, "azazel-edge-core/package-manifest/v2")
+        self.assertEqual(packager.pin_document("0.1.0")["manifest_contract"], packager.MANIFEST_CONTRACT)
+
     def test_the_pin_tells_the_consumer_to_refuse_another_cpus_package(self) -> None:
         must = " ".join(packager.pin_document("0.1.0")["consumer_must"])
         self.assertIn("host's CPU", must)
