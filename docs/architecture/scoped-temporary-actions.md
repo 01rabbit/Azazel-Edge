@@ -407,20 +407,35 @@ takes the lines nothing is written.
   counted spooled only when the kernel took it and lost when it did not;
   synced every five seconds, never per decision. Capped
   (`AZAZEL_UNDELIVERED_SPOOL_CAP_BYTES`, 64 KiB–64 MiB, default 8 MiB) with
-  one rotated segment; when rotating or reopening fails, nothing is written
-  past the cap — lines are counted lost until a later rotation succeeds.
-* State (`undelivered-decisions.state.json`, kept across restarts): runs;
-  lines spooled; lines lost (hand-off full, write failed, cap not
-  rotatable, or still on their way — queued or being delivered — at a clean
-  stop); lines the cap rotated out; sync/state failures; the time range of
-  undelivered lines; and, written every second, how many lines were on
-  their way. After an unclean stop the next start records that number
-  (`unclean_pending_lost_total`) and the interval from the last state write
-  to the start (`last_unclean_gap`). A run with any write, sync or state
-  failure is never recorded as a clean stop.
+  one rotated segment; a single line longer than the cap is refused
+  (`oversize_total`); when rotating or reopening fails, nothing is written
+  past the cap — lines are counted lost until a later rotation succeeds. A
+  partial line (a write that failed half-way, or a crash mid-write) is cut
+  back to the last complete line, after the failure and at start
+  (`repaired_tails`), so every spooled line decodes on its own.
+* On its way: one count covers a line from the moment it is queued for the
+  forwarder until its outcome is final — delivered, written by the spool
+  writer (or counted lost by it), or lost at the hand-off. A line handed to
+  the writer stays counted until the writer has dealt with it.
+* Clean stop: the spool first closes — from then on the forwarder delivers
+  nothing and nothing is handed to the writer — then the writer writes what
+  it was handed before the close and counts what is still on its way, once,
+  as `unconfirmed_at_stop_total` (a line that was mid-delivery may have
+  reached the intake: unconfirmed, not known lost).
+* State (`undelivered-decisions.state.json`, kept across restarts, written
+  only when something in it changed — an idle spool writes nothing): runs;
+  spooled, lost, oversize, rotated out, unconfirmed at stop; sync/state
+  failures; repaired tails; the time range of undelivered lines; and how
+  many lines were on their way with the earliest time any of them was
+  queued. After an unclean stop the next start records that number as
+  `unclean_unconfirmed_total` (some may have been spooled after the write)
+  and the gap from that earliest time (or the last state write) to the
+  start (`last_unclean_gap`); lines queued inside the gap are in no count.
+  A run with any write, sync or state failure is never recorded as a clean
+  stop.
 
 Every undelivered decision is therefore delivered, in the spool, counted
-lost, or inside a recorded unclean gap.
+lost, counted unconfirmed, or inside a recorded unclean gap.
 
 ## 2. Record fields
 

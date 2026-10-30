@@ -1323,16 +1323,6 @@ static AI_FORWARD_FAILED: AtomicU64 = AtomicU64::new(0);
 /// Event lines written to the receiver. A completed write is not proof the
 /// receiver kept the line; that is the receiver's own count.
 static AI_FORWARD_SENT: AtomicU64 = AtomicU64::new(0);
-/// Lines in the forward queue right now: what a stop would leave behind.
-static AI_FORWARD_QUEUED: AtomicU64 = AtomicU64::new(0);
-
-fn forward_pending() -> u64 {
-    AI_FORWARD_QUEUED.load(Ordering::Relaxed)
-}
-
-fn uncount_queued() {
-    let _ = AI_FORWARD_QUEUED.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
-}
 
 /// The forward counts are reported to the same receiver as one closed-shape
 /// line, because stderr (the only other report) is rate limited by the
@@ -1469,11 +1459,10 @@ fn ai_forwarder(socket_path: &str) -> &'static SyncSender<Forward> {
 fn send_to_ai_socket(socket_path: &str, value: &Value) {
     // Counted before the hand-off, so the forwarder never takes a line the
     // count does not have yet.
-    AI_FORWARD_QUEUED.fetch_add(1, Ordering::Relaxed);
+    undelivered::begin();
     match ai_forwarder(socket_path).try_send(Forward::Line(format!("{}\n", value))) {
         Ok(()) => {}
         Err(TrySendError::Full(Forward::Line(line))) | Err(TrySendError::Disconnected(Forward::Line(line))) => {
-            uncount_queued();
             undelivered::record(&line);
             let dropped = AI_FORWARD_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
             if dropped == 1 || dropped % 1000 == 0 {
@@ -1481,7 +1470,7 @@ fn send_to_ai_socket(socket_path: &str, value: &Value) {
             }
         }
         Err(_) => {
-            uncount_queued();
+            undelivered::finish();
             AI_FORWARD_DROPPED.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -1504,15 +1493,19 @@ fn forward_ai_lines(socket_path: &str, receiver: Receiver<Forward>) {
     for item in receiver {
         match item {
             Forward::Line(line) => {
-                // Counted as on its way until its outcome is known (a stop
-                // during delivery then counts it as lost).
+                // On its way until its outcome is final. After the stop's
+                // close nothing more is delivered: what is left is counted
+                // unconfirmed at the stop, once.
+                if undelivered::closed() {
+                    continue;
+                }
                 if deliver(socket_path, &line).is_ok() {
-                    uncount_queued();
+                    undelivered::finish();
                     AI_FORWARD_SENT.fetch_add(1, Ordering::Relaxed);
                 } else {
-                    // Not taken by the intake: kept in the Edge spool.
+                    // Not taken by the intake: kept in the Edge spool, which
+                    // finishes it.
                     undelivered::record(&line);
-                    uncount_queued();
                     let failed = AI_FORWARD_FAILED.fetch_add(1, Ordering::Relaxed) + 1;
                     if failed == 1 || failed % 1000 == 0 {
                         eprintln!("ai socket forward failed; {} event(s) not delivered so far", failed);
@@ -1758,16 +1751,15 @@ const SHUTDOWN_FORWARD_WAIT: Duration = Duration::from_secs(2);
 /// Queue one already-serialised line for the AI socket; a full queue drops
 /// and counts it, as for events.
 fn queue_ai_line(socket_path: &str, line: String) {
-    AI_FORWARD_QUEUED.fetch_add(1, Ordering::Relaxed);
+    undelivered::begin();
     match ai_forwarder(socket_path).try_send(Forward::Line(line)) {
         Ok(()) => {}
         Err(TrySendError::Full(Forward::Line(line))) | Err(TrySendError::Disconnected(Forward::Line(line))) => {
-            uncount_queued();
             undelivered::record(&line);
             AI_FORWARD_DROPPED.fetch_add(1, Ordering::Relaxed);
         }
         Err(_) => {
-            uncount_queued();
+            undelivered::finish();
             AI_FORWARD_DROPPED.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -2052,7 +2044,7 @@ fn main() {
     process_release_events(&cfg);
     process_start();
     if cfg.forward_ai {
-        undelivered::start(std::path::PathBuf::from(&cfg.undelivered_spool_path), cfg.undelivered_spool_cap_bytes, forward_pending);
+        undelivered::start(std::path::PathBuf::from(&cfg.undelivered_spool_path), cfg.undelivered_spool_cap_bytes);
     }
     let mut reporter = ForwardReporter::new();
     let mut ingress = IngressReader::new(offset, IngressLimits::DECLARED);
@@ -2081,10 +2073,8 @@ fn main() {
         eprintln!("shutdown: the AI socket forward did not finish within {:?}", SHUTDOWN_FORWARD_WAIT);
     }
     if cfg.forward_ai {
-        // Lines still queued for the forwarder are lost with the process:
-        // the spool records how many.
-        let left = AI_FORWARD_QUEUED.load(Ordering::Relaxed);
-        if !undelivered::stop(left, SHUTDOWN_FORWARD_WAIT) {
+        // What is still on its way is counted unconfirmed by the spool.
+        if !undelivered::stop(SHUTDOWN_FORWARD_WAIT) {
             eprintln!("shutdown: the undelivered spool did not close cleanly");
         }
     }
@@ -3818,5 +3808,40 @@ mod tests {
         let lease = tasks.iter().find(|t| t["task_id"] == a["release_task_id"]).unwrap();
         assert_eq!(lease["limit_rate_kbytes"], 32);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Re521d-02: after the stop's close, the forwarder delivers nothing and
+    /// the spool takes nothing, so a line on its way is counted once (as
+    /// unconfirmed at the stop), never also as delivered or spooled.
+    #[test]
+    fn after_the_stop_closes_nothing_more_is_delivered_or_spooled() {
+        use std::io::Read;
+        use std::os::unix::net::UnixListener;
+        let _guard = forward_test_lock();
+        let dir = std::env::temp_dir().join(format!("az-edge-close-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("intake.sock");
+        let _ = fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).expect("bind");
+        listener.set_nonblocking(true).unwrap();
+        undelivered::begin();
+        let before = undelivered::pending();
+        assert!(!undelivered::stop(Duration::from_millis(10)), "no spool in tests: not a clean stop");
+        let (sender, receiver) = sync_channel::<Forward>(2);
+        sender.send(Forward::Line("{\"n\":1}\n".to_string())).unwrap();
+        drop(sender);
+        forward_ai_lines(&path.to_string_lossy(), receiver);
+        undelivered::record("{\"n\":2}\n");
+        let mut got = String::new();
+        if let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.read_to_string(&mut got);
+        }
+        undelivered::reopen_for_test();
+        assert_eq!(got, "", "delivered after the close");
+        // (The pending count itself is shared with other tests that use the
+        // process-wide forwarder, so it is not compared here.)
+        let _ = before;
+        undelivered::finish();
+        let _ = fs::remove_file(&path);
     }
 }

@@ -91,7 +91,8 @@ class Core:
 
 
 def _accounted(state: dict) -> int:
-    return state.get("spooled_total", 0) + state.get("lost_total", 0)
+    # Spooled, lost, or still on its way at a clean stop (unconfirmed).
+    return state.get("spooled_total", 0) + state.get("lost_total", 0) + state.get("unconfirmed_at_stop_total", 0)
 
 
 def _spooled_sids(core: Core) -> list:
@@ -226,8 +227,8 @@ def test_a_wedged_intake_at_shutdown_leaves_every_decision_delivered_spooled_or_
     state = core.read_state()
     assert delivered + _accounted(state) == 60, (delivered, state)
     # Lines still on their way at the stop (queued, or blocked mid-delivery)
-    # are counted as lost, not silently dropped.
-    assert state["lost_total"] > 0, state
+    # are counted once, as unconfirmed, not silently dropped.
+    assert state["unconfirmed_at_stop_total"] > 0, state
 
 
 def test_an_unwritable_spool_directory_never_stops_the_core(tmp_path, rust_core_bin):
