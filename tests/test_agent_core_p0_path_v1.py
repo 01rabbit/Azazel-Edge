@@ -259,15 +259,17 @@ def test_a_redirect_the_policy_turns_into_notify_is_not_p0(tmp_path, rust_core_b
     core = _Core(rust_core_bin, tmp_path, agent.socket, AZAZEL_REDIRECT_POLICY_PATH=str(policy))
     try:
         redirect_sid = core.alert(2, 22)
-        isolate_sid = core.alert(1, 22)
+        # Severity 1 is the strict flow-scoped throttle; the core never
+        # decides isolate (docs/architecture/scoped-temporary-actions.md).
+        critical_sid = core.alert(1, 22)
         assert _wait(lambda: core.logged() == 2)
         assert _wait(lambda: len(_alerts(agent.queue)) >= 2)
         time.sleep(0.5)
         logged = {r["normalized"]["sid"]: r for r in _rows(core.log)}
         assert (logged[redirect_sid]["defense"]["action"], logged[redirect_sid]["enforcement"]["selected_action"]) == ("redirect", "notify")
         assert logged[redirect_sid]["enforcement"]["mode"] == "disabled"
-        assert [r["sid"] for r in _rows(agent.chain)] == [isolate_sid]
-        assert {r["p0_basis"] for r in _alerts(agent.queue)} == {"enforcement:isolate"}
+        assert [r["sid"] for r in _rows(agent.chain)] == [critical_sid]
+        assert {r["p0_basis"] for r in _alerts(agent.queue)} == {"enforcement:throttle"}
     finally:
         core.stop()
         agent.stop()
@@ -277,13 +279,18 @@ def test_dry_run_computes_the_effective_action(tmp_path, rust_core_bin):
     agent = _Agent(tmp_path).start()
     core = _Core(rust_core_bin, tmp_path, agent.socket)
     try:
-        sids = {core.alert(2, 22): "redirect", core.alert(2, 443): "isolate", core.alert(3): "throttle"}
+        # An unprepared port's high-risk fallback is notify (never isolate):
+        # no plan, so mode "disabled", and not P0.
+        sids = {core.alert(2, 22): "redirect", core.alert(2, 443): "notify", core.alert(3): "throttle"}
         assert _wait(lambda: core.logged() == 3)
         for r in _rows(core.log):
-            assert r["enforcement"]["mode"] == "dry_run"
-            assert r["enforcement"]["selected_action"] == sids[r["normalized"]["sid"]]
-        assert _wait(lambda: len(_rows(agent.chain)) == 3)
-        assert {r["sid"]: r["action"] for r in _rows(agent.chain)} == sids
+            action = sids[r["normalized"]["sid"]]
+            assert r["enforcement"]["mode"] == ("disabled" if action == "notify" else "dry_run")
+            assert r["enforcement"]["selected_action"] == action
+        p0 = {sid: action for sid, action in sids.items() if action != "notify"}
+        assert _wait(lambda: len(_rows(agent.chain)) == 2)
+        time.sleep(0.5)
+        assert {r["sid"]: r["action"] for r in _rows(agent.chain)} == p0
     finally:
         core.stop()
         agent.stop()
@@ -294,7 +301,7 @@ def test_decisions_taken_while_the_agent_is_down_are_reconciled_once(tmp_path, r
     core = _Core(rust_core_bin, tmp_path, agent.socket)
     try:
         # The agent is down: the core decides, logs, and cannot forward.
-        down = [core.alert(1), core.alert(3), core.alert(4)]  # isolate, throttle, notify
+        down = [core.alert(1), core.alert(3), core.alert(4)]  # throttle (strict), throttle, notify
         assert _wait(lambda: core.logged() == 3)
         agent.start()
         assert _wait(lambda: len(_rows(agent.chain)) == 2)
