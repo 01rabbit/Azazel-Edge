@@ -35,6 +35,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const STATE_SCHEMA: &str = "azazel-edge/undelivered-spool/v3";
+/// The state the previous version wrote; read and carried over.
+const STATE_SCHEMA_V2: &str = "azazel-edge/undelivered-spool/v2";
 pub const SPOOL_CAP_BYTES: u64 = 8 * 1024 * 1024;
 pub const SPOOL_FILE: &str = "undelivered-decisions.jsonl";
 const HANDOFF: usize = 4096;
@@ -42,9 +44,6 @@ const STATE_EVERY: Duration = Duration::from_secs(1);
 const SYNC_EVERY: Duration = Duration::from_secs(5);
 const UNAVAILABLE_NOTICE_EVERY: Duration = Duration::from_secs(60);
 
-/// Undelivered lines not handed to the writer (hand-off full). Folded into
-/// the state by the writer.
-static LOST_HANDOFF: AtomicU64 = AtomicU64::new(0);
 /// Undelivered lines with no spool at all (it could not be set up).
 static UNAVAILABLE_LOST: AtomicU64 = AtomicU64::new(0);
 static UNAVAILABLE_NOTICE: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
@@ -56,48 +55,127 @@ static SPOOL: OnceLock<SyncSender<Msg>> = OnceLock::new();
 // until its outcome is final: delivered to the intake, written to the spool
 // (or counted lost by the writer), or lost at the hand-off. A line handed to
 // the spool writer stays counted until the writer has dealt with it.
-static PENDING: AtomicU64 = AtomicU64::new(0);
-/// When PENDING last rose from zero (epoch seconds as f64 bits): every line
-/// on its way now was queued at or after this time.
-static PENDING_SINCE: AtomicU64 = AtomicU64::new(0);
-/// Set at a clean stop, before the remaining count is taken: from then on
-/// nothing is delivered or handed to the spool, so no line can be counted
-/// both as unconfirmed and as delivered or spooled.
-static CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) struct Accounts {
+    pending: AtomicU64,
+    /// When `pending` last rose from zero (epoch seconds as f64 bits): every
+    /// line on its way now was queued at or after this time.
+    since: AtomicU64,
+    /// Lines lost at the hand-off (writer queue full); folded into the
+    /// state by the writer.
+    lost_handoff: AtomicU64,
+    /// Set at a clean stop, before the remaining count is taken: from then
+    /// on nothing is delivered or handed to the spool.
+    closed: std::sync::atomic::AtomicBool,
+    /// The close check, the hand-off (or its loss) and the decrement are one
+    /// critical section, and the stop's close takes the same lock: a line is
+    /// then either lost at the hand-off (and no longer on its way) or still
+    /// on its way when the stop counts -- never both.
+    handoff: std::sync::Mutex<()>,
+}
+
+impl Accounts {
+    pub(crate) const fn new() -> Self {
+        Accounts {
+            pending: AtomicU64::new(0),
+            since: AtomicU64::new(0),
+            lost_handoff: AtomicU64::new(0),
+            closed: std::sync::atomic::AtomicBool::new(false),
+            handoff: std::sync::Mutex::new(()),
+        }
+    }
+
+    pub(crate) fn begin(&self) {
+        if self.pending.fetch_add(1, Ordering::AcqRel) == 0 {
+            self.since.store(now_epoch().to_bits(), Ordering::Release);
+        }
+    }
+
+    pub(crate) fn finish(&self) {
+        let _ = self.pending.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| Some(n.saturating_sub(1)));
+    }
+
+    pub(crate) fn pending(&self) -> u64 {
+        self.pending.load(Ordering::Acquire)
+    }
+
+    fn pending_since(&self) -> Option<f64> {
+        (self.pending() > 0).then(|| f64::from_bits(self.since.load(Ordering::Acquire)))
+    }
+
+    pub(crate) fn closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    /// The stop's close: waits for a hand-off in progress to complete.
+    pub(crate) fn close(&self) {
+        let _guard = self.handoff.lock().unwrap_or_else(|e| e.into_inner());
+        self.closed.store(true, Ordering::Release);
+    }
+
+    fn take_lost_handoff(&self) -> u64 {
+        self.lost_handoff.swap(0, Ordering::AcqRel)
+    }
+
+    /// Hand one line to the writer `tx` (or count it lost). Returns false
+    /// when there is no writer. `mid` is a test hook between counting a lost
+    /// line and finishing it.
+    pub(crate) fn record_into(&self, tx: Option<&SyncSender<Msg>>, line: &str, mid: Option<fn()>) -> bool {
+        let _guard = self.handoff.lock().unwrap_or_else(|e| e.into_inner());
+        if self.closed() {
+            return true;
+        }
+        let Some(tx) = tx else {
+            self.finish();
+            return false;
+        };
+        match tx.try_send(Msg::Line(line.to_string())) {
+            // Still on its way: the writer finishes it.
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+                self.lost_handoff.fetch_add(1, Ordering::AcqRel);
+                if let Some(mid) = mid {
+                    mid();
+                }
+                self.finish();
+            }
+        }
+        true
+    }
+}
+
+static ACCOUNTS: Accounts = Accounts::new();
 
 /// A line enters the forwarder's queue.
 pub fn begin() {
-    if PENDING.fetch_add(1, Ordering::AcqRel) == 0 {
-        PENDING_SINCE.store(now_epoch().to_bits(), Ordering::Release);
-    }
+    ACCOUNTS.begin();
 }
 
 /// A line's outcome is final.
 pub fn finish() {
-    let _ = PENDING.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| Some(n.saturating_sub(1)));
+    ACCOUNTS.finish();
 }
 
 pub fn pending() -> u64 {
-    PENDING.load(Ordering::Acquire)
+    ACCOUNTS.pending()
 }
 
 fn pending_since() -> Option<f64> {
-    (pending() > 0).then(|| f64::from_bits(PENDING_SINCE.load(Ordering::Acquire)))
+    ACCOUNTS.pending_since()
 }
 
 /// Tests only: undo `stop`'s close.
 #[cfg(test)]
 pub fn reopen_for_test() {
-    CLOSED.store(false, Ordering::Release);
+    ACCOUNTS.closed.store(false, Ordering::Release);
 }
 
 /// Whether the spool has closed for the stop: the forwarder then delivers
 /// nothing more (what it holds is counted unconfirmed).
 pub fn closed() -> bool {
-    CLOSED.load(Ordering::Acquire)
+    ACCOUNTS.closed()
 }
 
-enum Msg {
+pub(crate) enum Msg {
     Line(String),
     /// Record `lost_at_shutdown`, sync, mark the stop clean if the run had
     /// no failure, answer, end.
@@ -131,23 +209,36 @@ pub struct SpoolState {
     /// earliest time any of them can have been queued.
     pub pending_at_last_write: u64,
     pub last_write_epoch: f64,
+    #[serde(default)]
     pub pending_since_at_last_write: Option<f64>,
     /// Lines still on their way at a clean stop: neither delivered nor
     /// spooled as far as the core knows (one in delivery may have reached
     /// the intake). Unconfirmed, not known lost.
+    #[serde(default)]
     pub unconfirmed_at_stop_total: u64,
     /// After unclean stops: the lines that were on their way at the last
     /// state write (unconfirmed: some may have been spooled after it), and
     /// the last such gap: from the earliest time any of them was queued (or
     /// the last state write) to the next start. Lines queued inside the gap
     /// are not in any count.
+    /// (v2 called it `unclean_pending_lost_total`.)
+    #[serde(default, alias = "unclean_pending_lost_total")]
     pub unclean_unconfirmed_total: u64,
     pub last_unclean_gap: Option<(f64, f64)>,
     /// Lines longer than the cap: refused (also counted in `lost_total`).
+    #[serde(default)]
     pub oversize_total: u64,
     /// Partial tails cut back to the last complete line (after a failed
     /// write, or found at start).
+    #[serde(default)]
     pub repaired_tails: u64,
+    /// Set when the state was carried over from a v2 state: `lost_total` up
+    /// to that point (`v2_lost_total_at_migration`) also counts the lines v2
+    /// counted lost at clean stops, which v3 counts as unconfirmed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub migrated_from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v2_lost_total_at_migration: Option<u64>,
     pub first_undelivered_epoch: Option<f64>,
     pub last_undelivered_epoch: Option<f64>,
 }
@@ -174,6 +265,8 @@ impl SpoolState {
             last_unclean_gap: None,
             oversize_total: 0,
             repaired_tails: 0,
+            migrated_from: String::new(),
+            v2_lost_total_at_migration: None,
             first_undelivered_epoch: None,
             last_undelivered_epoch: None,
         }
@@ -203,7 +296,17 @@ fn load_state(path: &Path, now: f64) -> SpoolState {
     let loaded = fs::read_to_string(path)
         .ok()
         .and_then(|raw| serde_json::from_str::<SpoolState>(&raw).ok())
-        .filter(|s| s.schema == STATE_SCHEMA);
+        .filter(|s| s.schema == STATE_SCHEMA || s.schema == STATE_SCHEMA_V2)
+        .map(|mut s| {
+            if s.schema == STATE_SCHEMA_V2 {
+                // Carried over, history intact; the v2 meaning of lost_total
+                // up to here is recorded.
+                s.schema = STATE_SCHEMA.to_string();
+                s.migrated_from = "v2".to_string();
+                s.v2_lost_total_at_migration = Some(s.lost_total);
+            }
+            s
+        });
     match loaded {
         Some(mut state) => {
             if !state.clean_shutdown {
@@ -294,17 +397,45 @@ pub(crate) struct Writer {
     /// Called once per line when its outcome is final (`finish`; tests
     /// count it).
     done: fn(),
+    /// Whether the segment is known to end on a complete line. While it is
+    /// not (a repair failed), nothing is appended: every line is counted
+    /// lost until a repair succeeds (or a new run's repair at start).
+    tail_ok: bool,
+    /// How the tail is repaired (`repair_tail`; tests inject failures).
+    repair: fn(&Path) -> std::io::Result<bool>,
 }
 
 impl Writer {
-    pub(crate) fn new(path: PathBuf, cap: u64, mut state: SpoolState) -> Self {
-        // A partial line left by an earlier run (crash mid-write) is cut.
-        if repair_tail(&path).unwrap_or(false) {
-            state.repaired_tails += 1;
-        }
+    pub(crate) fn new(path: PathBuf, cap: u64, state: SpoolState) -> Self {
+        Self::with_repair(path, cap, state, repair_tail)
+    }
+
+    pub(crate) fn with_repair(path: PathBuf, cap: u64, state: SpoolState, repair: fn(&Path) -> std::io::Result<bool>) -> Self {
         let file = open_segment(&path).ok();
         let failed = file.is_none();
-        Writer { path, cap, file, state, failed, done: finish }
+        let mut writer = Writer { path, cap, file, state, failed, done: finish, tail_ok: false, repair };
+        // A partial line left by an earlier run (crash mid-write) is cut
+        // before anything is appended.
+        writer.check_tail();
+        writer
+    }
+
+    /// Repair the tail; returns whether the segment may be appended to.
+    fn check_tail(&mut self) -> bool {
+        match (self.repair)(&self.path) {
+            Ok(cut) => {
+                if cut {
+                    self.state.repaired_tails += 1;
+                }
+                self.tail_ok = true;
+            }
+            Err(_) => {
+                self.tail_ok = false;
+                self.failed = true;
+                self.file = None;
+            }
+        }
+        self.tail_ok
     }
 
     /// Make room for `incoming` bytes: rotate at the cap, reopen after an
@@ -358,6 +489,11 @@ impl Writer {
             self.state.lost_total += 1;
             return;
         }
+        // Never append after a tail that is not known to be complete.
+        if !self.tail_ok && !self.check_tail() {
+            self.state.lost_total += 1;
+            return;
+        }
         self.ensure_room(line.len() as u64);
         let ok = match self.file.as_mut() {
             Some(file) => file.write_all(line.as_bytes()).is_ok(),
@@ -373,9 +509,7 @@ impl Writer {
         // Drop the handle and cut whatever part of the line reached the
         // file, so the next line starts on a line of its own.
         self.file = None;
-        if repair_tail(&self.path).unwrap_or(false) {
-            self.state.repaired_tails += 1;
-        }
+        self.check_tail();
     }
 
     pub(crate) fn sync(&mut self) {
@@ -434,7 +568,7 @@ pub fn start(path: PathBuf, cap_bytes: u64) {
         let mut last_sync = Instant::now();
         loop {
             let msg = rx.recv_timeout(STATE_EVERY);
-            let lost = LOST_HANDOFF.swap(0, Ordering::Relaxed);
+            let lost = ACCOUNTS.take_lost_handoff();
             if lost > 0 {
                 writer.state.lost_total += lost;
                 writer.note_time();
@@ -445,7 +579,7 @@ pub fn start(path: PathBuf, cap_bytes: u64) {
                     // Everything handed over before the close is written by
                     // now (the channel is in order); what is still on its way
                     // is unconfirmed, counted once.
-                    writer.state.lost_total += LOST_HANDOFF.swap(0, Ordering::Relaxed);
+                    writer.state.lost_total += ACCOUNTS.take_lost_handoff();
                     let unconfirmed = pending();
                     writer.state.unconfirmed_at_stop_total += unconfirmed;
                     if unconfirmed > 0 {
@@ -499,26 +633,12 @@ fn state_changed(a: &SpoolState, b: &SpoolState) -> bool {
 /// once a minute. After the stop's close nothing is handed over: the line
 /// stays counted as on its way, so the stop counts it unconfirmed.
 pub fn record(line: &str) {
-    if closed() {
-        return;
-    }
-    match SPOOL.get() {
-        Some(tx) => match tx.try_send(Msg::Line(line.to_string())) {
-            // Still on its way: the writer finishes it.
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
-                LOST_HANDOFF.fetch_add(1, Ordering::Relaxed);
-                finish();
-            }
-        },
-        None => {
-            finish();
-            let lost = UNAVAILABLE_LOST.fetch_add(1, Ordering::Relaxed) + 1;
-            let mut last = UNAVAILABLE_NOTICE.lock().unwrap_or_else(|e| e.into_inner());
-            if last.map_or(true, |at| at.elapsed() >= UNAVAILABLE_NOTICE_EVERY) {
-                eprintln!("undelivered spool unavailable: {} undelivered decision(s) not kept since start", lost);
-                *last = Some(Instant::now());
-            }
+    if !ACCOUNTS.record_into(SPOOL.get(), line, None) {
+        let lost = UNAVAILABLE_LOST.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut last = UNAVAILABLE_NOTICE.lock().unwrap_or_else(|e| e.into_inner());
+        if last.map_or(true, |at| at.elapsed() >= UNAVAILABLE_NOTICE_EVERY) {
+            eprintln!("undelivered spool unavailable: {} undelivered decision(s) not kept since start", lost);
+            *last = Some(Instant::now());
         }
     }
 }
@@ -528,7 +648,7 @@ pub fn record(line: &str) {
 /// unconfirmed, sync, and mark the stop clean only if this run had no
 /// failure. Returns whether it was recorded as clean within `wait`.
 pub fn stop(wait: Duration) -> bool {
-    CLOSED.store(true, Ordering::Release);
+    ACCOUNTS.close();
     let Some(tx) = SPOOL.get() else {
         let lost = UNAVAILABLE_LOST.load(Ordering::Relaxed);
         if lost > 0 {
@@ -724,5 +844,112 @@ mod tests {
         assert!(!state_changed(&a, &b));
         b.pending_at_last_write = 1;
         assert!(state_changed(&a, &b));
+    }
+
+    fn failing_repair(_: &Path) -> std::io::Result<bool> {
+        Err(std::io::Error::new(std::io::ErrorKind::Other, "injected repair failure"))
+    }
+
+    /// Re523-03: while the tail cannot be verified nothing is appended; the
+    /// lines are counted lost, and writing resumes only after a repair.
+    #[test]
+    fn nothing_is_appended_after_a_tail_whose_repair_failed() {
+        let d = dir("norepair");
+        let path = d.join("spool.jsonl");
+        fs::write(&path, "{\"n\":1}\n{\"n\":2,\"half").unwrap();
+        let mut w = Writer::with_repair(path.clone(), 1 << 20, SpoolState::new(0.0), failing_repair);
+        assert!(w.failed);
+        w.write_line("{\"n\":3}\n");
+        w.write_line("{\"n\":4}\n");
+        assert_eq!((w.state.spooled_total, w.state.lost_total), (0, 2));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n{\"n\":2,\"half", "appended after a bad tail");
+        // The same after a write that failed half-way.
+        w.repair = repair_tail;
+        w.write_line("{\"n\":5}\n");
+        OpenOptions::new().append(true).open(&path).unwrap().write_all(b"{\"n\":6,\"cut").unwrap();
+        w.repair = failing_repair;
+        w.file = Some(OpenOptions::new().read(true).open(&path).unwrap());
+        w.write_line("{\"n\":6}\n");
+        w.write_line("{\"n\":7}\n");
+        // Repair works again: the tail is cut, writing resumes.
+        w.repair = repair_tail;
+        w.write_line("{\"n\":8}\n");
+        let ns: Vec<u64> = fs::read_to_string(&path).unwrap().lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["n"].as_u64().unwrap()).collect();
+        assert_eq!(ns, vec![1, 5, 8]);
+        assert_eq!((w.state.spooled_total, w.state.lost_total), (2, 4));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Re523-01: a state written by the previous version (v2) is carried
+    /// over with its history, clean or not.
+    #[test]
+    fn a_v2_state_is_carried_over_with_its_history() {
+        let d = dir("v2");
+        let path = d.join("undelivered-decisions.state.json");
+        for clean in [true, false] {
+            fs::write(&path, serde_json::json!({
+                "schema": "azazel-edge/undelivered-spool/v2", "first_run_epoch": 10.0, "runs": 4, "unclean_stops": 1,
+                "clean_shutdown": clean, "spooled_total": 120, "lost_total": 7, "rotated_out_total": 30,
+                "segment_records": 50, "previous_segment_records": 40, "sync_failures": 2,
+                "pending_at_last_write": 3, "last_write_epoch": 500.0, "unclean_pending_lost_total": 9,
+                "last_unclean_gap": [100.0, 200.0], "first_undelivered_epoch": 20.0, "last_undelivered_epoch": 400.0
+            }).to_string()).unwrap();
+            let s = load_state(&path, 600.0);
+            assert_eq!(s.schema, STATE_SCHEMA);
+            assert_eq!((s.migrated_from.as_str(), s.v2_lost_total_at_migration), ("v2", Some(7)));
+            assert_eq!((s.first_run_epoch, s.runs, s.spooled_total, s.lost_total, s.rotated_out_total), (10.0, 4, 120, 7, 30));
+            assert_eq!((s.segment_records, s.previous_segment_records, s.sync_failures), (50, 40, 2));
+            assert_eq!(s.first_undelivered_epoch, Some(20.0));
+            if clean {
+                assert_eq!((s.unclean_stops, s.unclean_unconfirmed_total, s.last_unclean_gap), (1, 9, Some((100.0, 200.0))));
+            } else {
+                assert_eq!((s.unclean_stops, s.unclean_unconfirmed_total, s.last_unclean_gap), (2, 12, Some((500.0, 600.0))));
+            }
+            // The carried-over segment counts go on: a rotation moves the
+            // previous segment's 40 into rotated_out.
+            let spool = d.join("undelivered-decisions.jsonl");
+            fs::write(&spool, "{}\n".repeat(50)).unwrap();
+            let mut w = Writer::new(spool.clone(), 150, s);
+            w.write_line("{}\n");
+            assert_eq!((w.state.rotated_out_total, w.state.previous_segment_records, w.state.segment_records), (70, 50, 1));
+        }
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    static MID_REACHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static MID_GO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    fn pause_mid() {
+        MID_REACHED.store(true, Ordering::SeqCst);
+        while !MID_GO.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Re523-02: a line lost at the hand-off while the stop closes is
+    /// counted once: the close waits for the hand-off, so the stop's count
+    /// (lost + still on its way) is exact.
+    #[test]
+    fn a_line_lost_at_the_hand_off_during_the_stop_is_counted_once() {
+        static ACC: Accounts = Accounts::new();
+        let (full, _rx) = sync_channel::<Msg>(0); // nobody receives: always full
+        ACC.begin();
+        let a = thread::spawn(move || {
+            ACC.record_into(Some(&full), "x\n", Some(pause_mid));
+        });
+        while !MID_REACHED.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(1));
+        }
+        // The stop closes and takes its count while the hand-off is paused
+        // between counting the loss and finishing the line.
+        let b = thread::spawn(|| {
+            ACC.close();
+            ACC.lost_handoff.load(Ordering::SeqCst) + ACC.pending()
+        });
+        thread::sleep(Duration::from_millis(100));
+        MID_GO.store(true, Ordering::SeqCst);
+        a.join().unwrap();
+        let counted = b.join().unwrap();
+        assert_eq!(counted, 1, "one line, counted {} times", counted);
     }
 }
