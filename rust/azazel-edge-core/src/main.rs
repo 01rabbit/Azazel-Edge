@@ -3472,9 +3472,21 @@ mod tests {
         write_decoy_evidence(&cfg, &[port], &boot);
         let applier = FakeApplier::ok();
         let outcome = maybe_enforce_with(&ev, &decision, &cfg, &applier);
+        if release::resolve_trusted_binary("conntrack").is_err() {
+            // Re521b-03: without the conntrack tool a redirect could not be
+            // fully undone, so it is not applied (the applied path is
+            // checked where the tool is installed: locally and in the root
+            // real-network job).
+            assert!(applier.applied().is_empty());
+            assert_eq!(outcome.metadata["safety"]["gate"], "refused:conntrack_unavailable", "{outcome:?}");
+            drop(listener);
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
         assert_eq!(outcome.result, "applied", "{outcome:?}");
         assert_eq!(outcome.metadata["safety"]["decoy_preconditions"], "met");
         assert!(applier.applied()[0].join(" ").contains(&format!("redirect to {}", port)));
+        assert!(applier.applied()[0].join(" ").contains("ct mark set "));
         drop(listener);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3763,9 +3775,12 @@ mod tests {
         let held = maybe_enforce_with(&critical, &decide_defense(&critical), &cfg, &FakeApplier::ok());
         assert_eq!(held.result, "already_held");
         let (a, h) = (&first.metadata, &held.metadata);
-        for key in ["release_task_id", "release_owner_token", "release_resource_key", "release_due_epoch"] {
+        for key in ["release_task_id", "release_owner_token", "release_resource_key"] {
             assert_eq!(h[key], a[key], "{key}");
         }
+        // Read back from the ledger: serde_json does not round-trip every
+        // f64 exactly (no float_roundtrip), so the last digit may differ.
+        assert!((h["release_due_epoch"].as_f64().unwrap() - a["release_due_epoch"].as_f64().unwrap()).abs() < 1e-3);
         assert_eq!(h["release_extended_task_id"], a["release_task_id"]);
         assert_ne!(h["release_merged_task_id"], a["release_task_id"]);
         assert_eq!(h["safety"]["strength"], "standard", "the held rule's strength, not the new alert's");
