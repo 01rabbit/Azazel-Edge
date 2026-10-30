@@ -403,6 +403,20 @@ struct DecoyEvidence {
     /// The interface the redirected traffic arrives on: the redirect rule is
     /// bound to it, and `nft redirect` delivers to its primary address.
     ingress_interface: String,
+    /// The deployment's own check of the real path: a connection from the
+    /// ingress side, through `ingress_interface`, to the decoy port. The
+    /// core's local probe cannot see the ingress path (an INPUT rule on that
+    /// interface, say); this can.
+    ingress_path_check: Option<PathCheck>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PathCheck {
+    result: String,
+    checked_epoch: f64,
+    via_interface: String,
+    decoy_ports: Vec<u16>,
 }
 
 /// The separation evidence: written by the deployment that set the decoy up
@@ -438,6 +452,21 @@ pub fn check_decoy_evidence(path: &str, max_age_sec: u64, port: u16, iface: &str
     }
     if evidence.ingress_interface != iface {
         return Err("decoy_evidence_other_interface".to_string());
+    }
+    let Some(path) = evidence.ingress_path_check else {
+        return Err("decoy_ingress_path_unverified".to_string());
+    };
+    if path.via_interface != iface || !path.decoy_ports.contains(&port) {
+        return Err("decoy_ingress_path_unverified".to_string());
+    }
+    if path.result != "reachable" {
+        return Err("decoy_ingress_path_unreachable".to_string());
+    }
+    if !path.checked_epoch.is_finite()
+        || path.checked_epoch > now_epoch + MAX_ALERT_FUTURE_SEC
+        || now_epoch - path.checked_epoch > max_age
+    {
+        return Err("decoy_ingress_path_check_stale".to_string());
     }
     Ok(())
 }
@@ -679,7 +708,8 @@ mod tests {
     fn decoy_evidence_must_be_this_boot_recent_separated_and_name_the_port() {
         let dir = evidence_dir("ev");
         let now = 1_800_000_000.0;
-        let good = json!({"schema": DECOY_EVIDENCE_SCHEMA, "boot_id": "abc-1", "observed_epoch": now - 10.0, "separation": "network_namespace", "decoy_ports": [12222], "ingress_interface": "lan0"});
+        let good = json!({"schema": DECOY_EVIDENCE_SCHEMA, "boot_id": "abc-1", "observed_epoch": now - 10.0, "separation": "network_namespace", "decoy_ports": [12222], "ingress_interface": "lan0",
+            "ingress_path_check": {"result": "reachable", "checked_epoch": now - 5.0, "via_interface": "lan0", "decoy_ports": [12222]}});
         let path = write_evidence(&dir, &good);
         assert_eq!(check_decoy_evidence(&path, 600, 12222, "lan0", now, "abc-1"), Ok(()));
         assert_eq!(check_decoy_evidence(&path, 600, 12222, "lan0", now, "abc-2"), Err("decoy_separation_evidence_other_boot".to_string()));
@@ -699,6 +729,20 @@ mod tests {
             check_decoy_evidence(&dir.join("absent.json").to_string_lossy(), 600, 12222, "lan0", now, "abc-1"),
             Err("decoy_separation_evidence_missing".to_string())
         );
+        // The real ingress path must have been checked, for this interface
+        // and port, recently, and found reachable.
+        for (patch, reason) in [
+            (json!(null), "decoy_ingress_path_unverified"),
+            (json!({"result": "unreachable", "checked_epoch": now - 5.0, "via_interface": "lan0", "decoy_ports": [12222]}), "decoy_ingress_path_unreachable"),
+            (json!({"result": "reachable", "checked_epoch": now - 5.0, "via_interface": "wan0", "decoy_ports": [12222]}), "decoy_ingress_path_unverified"),
+            (json!({"result": "reachable", "checked_epoch": now - 5.0, "via_interface": "lan0", "decoy_ports": [18080]}), "decoy_ingress_path_unverified"),
+            (json!({"result": "reachable", "checked_epoch": now - 7200.0, "via_interface": "lan0", "decoy_ports": [12222]}), "decoy_ingress_path_check_stale"),
+        ] {
+            let mut body = good.clone();
+            body["ingress_path_check"] = patch;
+            let path = write_evidence(&dir, &body);
+            assert_eq!(check_decoy_evidence(&path, 600, 12222, "lan0", now, "abc-1"), Err(reason.to_string()));
+        }
         // Evidence for another ingress interface does not count here.
         let path = write_evidence(&dir, &good);
         assert_eq!(check_decoy_evidence(&path, 600, 12222, "wan0", now, "abc-1"), Err("decoy_evidence_other_interface".to_string()));

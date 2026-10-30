@@ -159,6 +159,7 @@ def test_core_applies_reads_back_and_releases_owned_throttle_and_redirect(netns)
             json.dumps({
                 "schema": "azazel-edge/decoy-separation/v1", "boot_id": boot_id, "observed_epoch": time.time(),
                 "separation": "network_namespace", "decoy_ports": [DECOY_PORT], "ingress_interface": "lo",
+                "ingress_path_check": {"result": "reachable", "checked_epoch": time.time(), "via_interface": "lo", "decoy_ports": [DECOY_PORT]},
             }),
         )
         policy = _private(

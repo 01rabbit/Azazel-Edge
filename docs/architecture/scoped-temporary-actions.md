@@ -162,17 +162,29 @@ Compiled-in constants; no environment variable or file raises them:
 | `MAX_ACTIVE_LEASES` | 64 | More held leases are refused (`active lease limit reached; restriction not widened`) so many alerts cannot add up to a broad restriction |
 | `MAX_ALERT_AGE_SEC` | 300 s | An alert older than this by its own EVE time, more than 60 s in the future, or undated, starts nothing (`alert_stale`, `alert_time_in_future`, `alert_time_unreadable`) |
 
-**Cooldown in the ledger.** The lease that brings its family to the bound
-(a new lease cut at the bound, an extension that reaches it, or — when a new
-lease would be shorter than `MIN_LEASE_TTL_SEC` before the bound — the
-family's latest lease) records `cooldown_until_epoch` = family start +
-3600 s + 900 s. Admission refuses the flow while the time is between the
-family's end and that value. Being in the ledger, it holds across restarts;
-the task carrying it outlives it there (`COMPACT_MIN_AGE_SEC` 4200 s >
-`FLOW_COOLDOWN_SEC`, checked at compile time), so a generation migration
-cannot drop it early. A cooldown refusal writes nothing: the alert executed
-nothing, so there is nothing a replay could repeat, and every replay guard
-(event keys, tombstones, checkpoint) is unchanged by it.
+**Cooldown in the ledger.** Families and cooldowns belong to the **flow**
+(`flow_key`: source, destination, protocol, port), not to a mechanism: a
+throttle family and a redirect of the same flow share them, so switching the
+action cannot step around a cooldown. The lease that brings its family to
+the bound (a new lease cut at the bound, an extension that reaches it, or —
+when a new lease would be shorter than `MIN_LEASE_TTL_SEC` before the
+bound — the family's latest lease, even an old released one) records the
+cooldown, which runs from that moment until family start + 3600 s + 900 s:
+
+* on both clocks: `cooldown_until_epoch` and, with this boot's id,
+  `cooldown_until_boottime_ns`. In its own boot the monotonic clock decides,
+  so stepping the wall clock back (or forward) neither ends it early nor
+  re-opens the family. In another boot, or when the wall clock is behind the
+  recording time, it is re-anchored on the current boot for the wall-clock
+  remainder, at most `FLOW_COOLDOWN_SEC` — finite, never permanent.
+* in the ledger: it holds across restarts, and recording it counts the task
+  as changed. A task whose cooldown may still run (wall clock less than a
+  cooldown past its end, or its boot's monotonic end not passed) is never
+  compacted, by admission or by `--release-ledger-compact`.
+
+A cooldown refusal writes nothing (except a re-anchoring): the alert
+executed nothing, so there is nothing a replay could repeat, and every
+replay guard (event keys, tombstones, checkpoint) is unchanged by it.
 
 An alert that asks for no more time than a held lease already has is
 recorded (`already_held`) and changes nothing. Every alert merged into a held
@@ -195,9 +207,11 @@ Knowledge.
   `drop`; for a redirect, the ingress interface and the redirect port). Only
   then is the lease `active` and the outcome `applied`.
 * Removal is checked apart from that: a rule is ours to delete when it
-  carries the owner token **and** the lease's flow identity (source, and
-  destination when the lease has one). A rule that is ours but deviates
-  otherwise (another rate, a missing match) is deleted, and counted in the
+  carries the owner token **and** the lease's complete flow identity
+  (source; destination when the lease has one; protocol and port, or
+  `meta l4proto` for a portless flow; the ingress interface of a flow
+  redirect). A rule that is ours but deviates only in how it acts (another
+  rate or burst, redirect port or ct mark) is deleted, and counted in the
   release outcome (`postcondition.deleted_deviating_rules`); a rule with the
   token on another flow is not ours, nothing is deleted and the release is
   retried with the error.
@@ -226,9 +240,16 @@ Knowledge.
   the alert's own **event key** (EVE time, addresses, port, protocol, rule
   id; not the decided action or mechanism, which a policy or code change can
   alter for the same alert), the task id, `merged` tombstones and the
-  checkpoint watermark. A ledger written by the previous core (v1, whose task
-  ids came from the old mechanism and have no event key) sets a migration
-  boundary: every alert at or before that file's last write is refused.
+  checkpoint watermark. For a ledger written by the previous core (v1,
+  whose task ids came from the old mechanism and have no event key) two
+  guards hold together: the **trace id** the previous core gave the alert
+  for any action it could have decided (isolate, redirect, throttle) is
+  matched against its tasks, whatever the times say; and a migration
+  boundary refuses every alert dated at or before the latest of the file's
+  mtime and every time its tasks carry, plus the 60 s an alert may be dated
+  ahead and still be acted on. A previous core whose clock was stepped back
+  before it wrote therefore cannot move the boundary below an alert it
+  handled.
 * Enforcement settings are read from the environment at start only; the
   restart itself is the service manager's (`Restart=` in the Nexus unit,
   separate change). A restart never widens what the configuration allows.
@@ -248,8 +269,19 @@ A redirect is executed only when all of these hold; otherwise it is refused
    ```json
    {"schema": "azazel-edge/decoy-separation/v1", "boot_id": "<this boot>",
     "observed_epoch": 1793300000.0, "separation": "network_namespace",
-    "decoy_ports": [12222, 18080], "ingress_interface": "br0"}
+    "decoy_ports": [12222, 18080], "ingress_interface": "br0",
+    "ingress_path_check": {"result": "reachable", "checked_epoch": 1793300000.0,
+                           "via_interface": "br0", "decoy_ports": [12222, 18080]}}
    ```
+
+   `ingress_path_check` is the deployment's own check of the real path: a
+   TCP connection from the ingress side, through `ingress_interface`, to
+   `<that interface's IPv4>:<decoy port>`. The core cannot see that path
+   itself (its own probe is local: an INPUT rule on the ingress, a reverse
+   path filter or a wrong route are invisible to it). It must name the
+   interface and the port, say `reachable`, and be at most
+   `decoy_evidence_max_age_sec` old; otherwise `decoy_ingress_path_unverified`,
+   `decoy_ingress_path_unreachable` or `decoy_ingress_path_check_stale`.
 
    It must be this boot's (`/proc/sys/kernel/random/boot_id`), name the
    decoy port and the ingress interface the core redirects on
@@ -268,17 +300,24 @@ A redirect is executed only when all of these hold; otherwise it is refused
 
 **Release of a redirect.** Deleting the rule stops new connections from
 being redirected, but connections it already redirected keep their NAT
-binding in connection tracking and would stay on the decoy. After the rule
-is verified absent, the core deletes the connection-tracking entries of the
-owned flow only (`conntrack -D -p tcp --orig-src S --orig-dst D --dport P`,
-an allowlisted shape): such a connection then ends, and new ones reach the
-real destination. This is reported apart from the rule's absence, in
-`postcondition.existing_connections`: `cleared`, `none_found`,
-`conntrack_unavailable` (the `conntrack` tool is not installed; redirected
-connections may then persist until they close — the deployment should
-install it), or `failed:<why>`. Connections of that flow established before
-the redirect are in the same tracking entries and end too; that is the
-owned flow.
+binding in connection tracking and would stay on the decoy. So the rule also
+marks what it redirects (`ct mark set <mark>`, a mark with the fixed Azazel
+prefix `0xA2E` and 20 bits of the lease's id), and after the rule is verified
+absent the core deletes only the tracking entries with **that mark and the
+flow's tuple** (`conntrack -D -p tcp --orig-src S --orig-dst D --dport P
+--mark M`; the allowlist requires the mark). Such a connection then ends;
+new ones reach the real destination; a connection of the same tuple the
+redirect did not take (opened before it, say) keeps going. The mark replaces
+any mark the redirected connection had.
+
+Rule absence and connection clean-up are separate states. The lease is
+`released` only when both hold (`existing_connections`: `cleared` or
+`none_found`). If the clean-up fails (`conntrack_unavailable`,
+`failed:<why>`, a timeout), the outcome is `retry_pending` /
+`connections_not_cleared`, the lease records `rule_removed_epoch` and stays
+eligible, and the clean-up is retried with the release backoff until it
+succeeds. To avoid that state, a redirect is not applied at all without the
+`conntrack` tool (`refused:conntrack_unavailable`).
 
 Without a policy file (the environment honeypot fallback) there is no
 evidence path, so no redirect is executed. In a dry run the separation and
@@ -331,10 +370,26 @@ whatever `AZAZEL_FORWARD_LOG` says and whether the intake socket is up.
 Numbering, the size check, the rotation and the append are one critical
 section (the decision loop and the sweep both write), and a rotation or a
 new file is made durable with a directory fsync. Each record carries a
-per-run sequence number, so a rotation or a lost write shows as a gap. Dry-run "would" decisions are not spooled
-(they change nothing; an fsync per alert would load the decision path). A
-bounded spool of every decision during an intake outage, with persisted
-loss counters, is not part of this change.
+per-run sequence number, so a rotation or a lost write shows as a gap.
+Dry-run "would" decisions are not in this file (an fsync per alert would load
+the decision path); they are covered by the spool below.
+
+**Undelivered decisions** (`undelivered.rs`). Every line the forwarder could
+not hand to the intake socket (no listener, refused, write timeout) or
+could not even queue (queue full) goes to
+`AZAZEL_UNDELIVERED_SPOOL` (default
+`/var/lib/azazel-edge/undelivered-decisions.jsonl`), in every mode,
+observe-only included, whatever `AZAZEL_FORWARD_LOG` says. While the intake
+takes the lines nothing is written. For a small device it is buffered:
+flushed every second, synced every five, never an fsync per decision;
+capped (`AZAZEL_UNDELIVERED_SPOOL_CAP_BYTES`, 64 KiB–64 MiB, default 8 MiB)
+with one rotated segment. Beside it, `undelivered-decisions.state.json`
+keeps across restarts: runs, unclean stops (a run that ended without a clean
+stop — its last second may be missing), lines spooled, lines lost before the
+spool (hand-off full, or still queued for the forwarder at a clean stop),
+lines the cap rotated out, and the wall-clock range of undelivered lines.
+Every undelivered decision is therefore either in the spool or counted, with
+its time range.
 
 ## 2. Record fields
 
@@ -347,7 +402,10 @@ observe-only). Every other outcome (`policy_gated`, `release_guard_failed`,
 `enforced` — all refused by Nexus today as not observe-only) carries
 `metadata.safety` (fixed shape), plus `release_extended_task_id` (and
 `release_extensions` when extended) for a held flow, and
-`release_cooldown_until_epoch` for a flow in cooldown:
+`release_cooldown_until_epoch` for a flow in cooldown. For a held flow the
+`release_*` fields, `safety.strength` and the rollback plan are those of
+the lease in force (its task, owner token, resource, expiry, strength);
+the new alert is `release_merged_task_id`:
 
 | Field | Values |
 |---|---|

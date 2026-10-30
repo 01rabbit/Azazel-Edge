@@ -504,10 +504,24 @@ def test_a_redirect_reaches_only_the_named_destination_needs_a_reachable_decoy_a
     with tempfile.TemporaryDirectory(prefix="azredir-") as tmp:
         work = Path(tmp)
         boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
-        evidence = _private(work / "decoy.json", json.dumps({
-            "schema": "azazel-edge/decoy-separation/v1", "boot_id": boot_id, "observed_epoch": time.time(),
-            "separation": "network_namespace", "decoy_ports": [DECOY_PORT], "ingress_interface": ATK_IFACE,
-        }))
+        evidence = work / "decoy.json"
+
+        def write_evidence(path_result: str):
+            # What the deployment (Nexus) writes after checking the real
+            # ingress path itself; here the test plays that part.
+            _private(evidence, json.dumps({
+                "schema": "azazel-edge/decoy-separation/v1", "boot_id": boot_id, "observed_epoch": time.time(),
+                "separation": "network_namespace", "decoy_ports": [DECOY_PORT], "ingress_interface": ATK_IFACE,
+                "ingress_path_check": {"result": path_result, "checked_epoch": time.time(),
+                                       "via_interface": ATK_IFACE, "decoy_ports": [DECOY_PORT]},
+            }))
+
+        def path_check() -> str:
+            # A connection from the ingress side to where the redirect delivers.
+            got = _banner("atk", EDGE_ADDR["atk"], DECOY_PORT)
+            return "reachable" if got == "DECOY" else "unreachable"
+
+        write_evidence("reachable")  # a stale claim: the local probe still refuses below
         policy = _private(work / "redirect_policy.yaml", (
             f"redirect_policy:\n  enabled: true\n  prepared_ports:\n    {REAL_PORT}: {DECOY_PORT}\n"
             f"  decoy_separation_evidence_path: {evidence}\n"
@@ -531,6 +545,64 @@ def test_a_redirect_reaches_only_the_named_destination_needs_a_reachable_decoy_a
             loop.kill()
             procs.append(subprocess.Popen(["ip", "netns", "exec", NS["edge"], sys.executable, "-c", DECOY, EDGE_ADDR["atk"], str(DECOY_PORT), "DECOY"]))
             time.sleep(0.5)
+            # Re521b-08: the decoy answers the core's own probe, but the
+            # ingress drops traffic to it: the deployment's path check sees
+            # that and the redirect is refused.
+            _ns("edge", "nft", "-f", "-", input=(
+                "add table inet harness_fw\n"
+                "add chain inet harness_fw input { type filter hook input priority 0; policy accept; }\n"
+                f"add rule inet harness_fw input iifname \"{ATK_IFACE}\" tcp dport {DECOY_PORT} drop\n"))
+            assert _banner("edge", EDGE_ADDR["atk"], DECOY_PORT) == "DECOY", "the local probe succeeds"
+            write_evidence(path_check())
+            blocked_dir = work / "blocked"
+            blocked_dir.mkdir()
+            core = Core(blocked_dir, iface=ATK_IFACE, redirect_policy=policy)
+            try:
+                core.alert(ADDR["atk"], 2, 9703, port=REAL_PORT)
+                refused = core.wait(lambda: _outcome_for(core, ADDR["atk"]), 10)
+                assert refused and refused["metadata"]["safety"]["gate"] == "refused:decoy_ingress_path_unreachable", refused
+            finally:
+                core.stop()
+            _ns("edge", "nft", "delete", "table", "inet", "harness_fw")
+            write_evidence(path_check())
+            # Re521b-02: a connection of the same source, destination and
+            # port that another rule (not this lease) NATed must survive the
+            # release's connection clean-up. Another administrator's
+            # redirect (its own table, kept in place: removing the table
+            # that made a NAT binding ends that connection) takes it before
+            # our lease exists; our chain runs first for new connections.
+            procs.append(subprocess.Popen(["ip", "netns", "exec", NS["edge"], sys.executable, "-c", DECOY, EDGE_ADDR["atk"], str(DECOY_PORT + 1), "OTHER"]))
+            time.sleep(0.3)
+            _ns("edge", "nft", "-f", "-", input=(
+                "add table inet harness_nat\n"
+                "add chain inet harness_nat pre { type nat hook prerouting priority -90; policy accept; }\n"
+                f"add rule inet harness_nat pre ip saddr {ADDR['atk']} ip daddr {ADDR['srv']} tcp sport 40100 tcp dport {REAL_PORT} redirect to :{DECOY_PORT + 1}\n"))
+            control = subprocess.Popen(
+                ["ip", "netns", "exec", NS["atk"], sys.executable, "-u", "-c",
+                 "import socket,sys,time\n"
+                 "c=socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=3, source_address=('0.0.0.0', 40100)); print(c.recv(64).decode().strip(), flush=True)\n"
+                 "c.settimeout(2)\n"
+                 "for line in sys.stdin:\n"
+                 "    try:\n"
+                 "        c.sendall(b'ping'); r=c.recv(64); print('alive' if r else 'closed', flush=True)\n"
+                 "    except OSError as e:\n"
+                 "        print('ended', type(e).__name__, flush=True)\n",
+                 ADDR["srv"], str(REAL_PORT)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            procs.append(control)
+            assert control.stdout.readline().strip() == "OTHER"
+            # Its rule stays (removing the rule or table that made a NAT
+            # binding ends that connection in this kernel). A wrongful
+            # delete of its tracking entry would then be repaired by that
+            # rule mid-stream, so the check is the entry's identity: the
+            # same conntrack id before and after our release.
+            def control_ct_id():
+                out = _ns("edge", "conntrack", "-L", "-p", "tcp", "--sport", "40100", "-o", "id", check=False).stdout
+                ids = [w.split("=", 1)[1] for w in out.split() if w.startswith("id=")]
+                return ids[0] if len(ids) == 1 else None
+
+            control_id = control_ct_id()
+            assert control_id, "the control connection has no tracking entry"
             second = work / "second"
             second.mkdir()
             core = Core(second, iface=ATK_IFACE, redirect_policy=policy)
@@ -539,6 +611,10 @@ def test_a_redirect_reaches_only_the_named_destination_needs_a_reachable_decoy_a
                 applied = core.wait(lambda: _outcome_for(core, ADDR["atk"]), 10)
                 assert applied and applied["result"] == "applied", applied
                 assert applied["metadata"]["safety"]["decoy_preconditions"] == "met"
+                ct = _ns("edge", "conntrack", "-L", check=False).stdout
+                control.stdin.write("x\n")
+                control.stdin.flush()
+                assert control.stdout.readline().strip() == "alive", _ns("edge", "conntrack", "-L", check=False).stdout
                 # Only the named destination is redirected.
                 assert _banner("atk", ADDR["srv"], REAL_PORT) == "DECOY"
                 assert _banner("atk", ADDR["mgr"], REAL_PORT) == "REAL-mgr"
@@ -567,9 +643,15 @@ def test_a_redirect_reaches_only_the_named_destination_needs_a_reachable_decoy_a
                 assert held.wait(timeout=15) is not None
                 assert held.stdout.read().strip().startswith(("ended", "closed"))
                 assert _banner("atk", ADDR["srv"], REAL_PORT) == "REAL-srv"
+                # The connection the redirect did not take is untouched.
+                assert control_ct_id() == control_id, "our release deleted a tracking entry it does not own"
+                control.stdin.write("x\n")
+                control.stdin.flush()
+                assert control.stdout.readline().strip() == "alive"
             finally:
                 core.stop()
         finally:
+            _ns("edge", "nft", "delete", "table", "inet", "harness_nat", check=False)
             for proc in procs:
                 proc.kill()
                 proc.wait(timeout=10)

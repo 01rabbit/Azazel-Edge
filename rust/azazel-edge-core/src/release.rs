@@ -17,6 +17,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// core refuses a v2 ledger instead of ignoring its checkpoint.
 const LEDGER_SCHEMA_VERSION: &str = "azazel-release-ledger/v2";
 const LEDGER_SCHEMA_V1: &str = "azazel-release-ledger/v1";
+/// How far an alert may be dated ahead of the clock and still be acted on
+/// (`safety::MAX_ALERT_FUTURE_SEC`); the v1 migration boundary covers it.
+const V1_MIGRATION_FUTURE_SEC: f64 = 60.0;
 const MAX_LEDGER_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_LEDGER_TASKS: usize = 4096;
 /// New leases are admitted only while the ledger is below these marks; what
@@ -144,6 +147,31 @@ pub struct ReleaseTask {
     /// drop it early.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown_until_epoch: Option<f64>,
+    /// The cooldown's end on `CLOCK_BOOTTIME` of `cooldown_boot_id`: in that
+    /// boot the cooldown follows the monotonic clock, so stepping the wall
+    /// clock back or forward does not end it early.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_until_boottime_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cooldown_boot_id: String,
+    /// The wall clock when the cooldown was recorded (or re-anchored).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_recorded_epoch: Option<f64>,
+    /// The flow the lease acts on (`FlowScope::key`), whatever the
+    /// mechanism: lease families and cooldowns are kept per flow, so a
+    /// throttle and a redirect of the same flow share them.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub flow_key: String,
+    /// The connection-tracking mark a flow redirect sets on the connections
+    /// it redirects (`ct mark set`); the release deletes only entries with
+    /// this mark and the flow's tuple.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub ct_mark: u32,
+    /// When the redirect's rule was verified absent while its redirected
+    /// connections were not yet cleared: the lease stays eligible and the
+    /// release retries the connection clean-up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_removed_epoch: Option<f64>,
 }
 
 fn is_zero_u32(value: &u32) -> bool {
@@ -616,6 +644,12 @@ pub fn build_release_task(
         extensions: 0,
         event_key: String::new(),
         cooldown_until_epoch: None,
+        cooldown_until_boottime_ns: None,
+        cooldown_boot_id: String::new(),
+        cooldown_recorded_epoch: None,
+        flow_key: String::new(),
+        ct_mark: 0,
+        rule_removed_epoch: None,
     })
 }
 
@@ -675,6 +709,7 @@ pub fn build_flow_throttle_task(
     task.protocol = flow.protocol.clone();
     task.limit_rate_kbytes = rate_kbytes;
     task.limit_burst_kbytes = burst_kbytes;
+    task.flow_key = flow.key();
     Some(task)
 }
 
@@ -702,7 +737,27 @@ pub fn build_flow_redirect_task(
     task.mechanism = MECHANISM_NFT_FLOW_REDIRECT.to_string();
     task.destination_ip = flow.destination_ip.clone();
     task.protocol = "tcp".to_string();
+    task.flow_key = flow.key();
+    task.ct_mark = ct_mark_for(&task.task_id);
     Some(task)
+}
+
+/// The connection-tracking mark of a flow redirect: a fixed Azazel prefix
+/// in the high 12 bits and 20 bits of the task id's hash, never zero.
+pub fn ct_mark_for(task_id: &str) -> u32 {
+    CT_MARK_PREFIX | ((fnv1a64(task_id.as_bytes()) as u32) & 0x000F_FFFF).max(1)
+}
+
+pub const CT_MARK_PREFIX: u32 = 0xA2E0_0000;
+
+/// Whether two tasks act on the same flow (lease family and cooldown):
+/// the common flow key, or for legacy tasks without one, the resource.
+fn same_flow(a: &ReleaseTask, b: &ReleaseTask) -> bool {
+    if !a.flow_key.is_empty() && !b.flow_key.is_empty() {
+        a.flow_key == b.flow_key
+    } else {
+        a.resource_key == b.resource_key
+    }
 }
 
 /// Whether this throttle lease is the legacy root TBF qdisc.
@@ -752,7 +807,7 @@ pub fn prepare_release_task(path: &str, task: &ReleaseTask) -> Result<(), String
     validate_task(task)?;
     let _guard = lock_ledger(path)?;
     let mut ledger = load_ledger(path)?;
-    admit_new_task(&mut ledger, task, task.created_epoch)?;
+    admit_new_task(&mut ledger, task, &LeaseNow::read(task.created_epoch))?;
     ledger.tasks.push(task.clone());
     save_ledger(path, &mut ledger)
 }
@@ -760,7 +815,7 @@ pub fn prepare_release_task(path: &str, task: &ReleaseTask) -> Result<(), String
 /// Replay guard, generation migration and capacity, for a task not yet in
 /// the ledger. Never forgets a terminal identity outside a checkpoint: an old
 /// provider event must not become executable again.
-fn admit_new_task(ledger: &mut ReleaseLedger, task: &ReleaseTask, now_epoch: f64) -> Result<(), String> {
+fn admit_new_task(ledger: &mut ReleaseLedger, task: &ReleaseTask, now: &LeaseNow) -> Result<(), String> {
     if let Some(existing) = ledger.tasks.iter().find(|item| item.task_id == task.task_id) {
         if same_task_identity(existing, task) {
             return Err(format!(
@@ -779,7 +834,7 @@ fn admit_new_task(ledger: &mut ReleaseLedger, task: &ReleaseTask, now_epoch: f64
         return Err("release task is at or before the ledger replay checkpoint; replayed disruptive apply blocked".to_string());
     }
     if ledger.tasks.len() >= COMPACT_AT_TASKS || encoded_len(ledger) >= COMPACT_AT_BYTES {
-        compact_ledger(ledger, now_epoch);
+        compact_ledger(ledger, now);
     }
     if ledger.tasks.len() >= ADMIT_MAX_TASKS || encoded_len(ledger) >= ADMIT_MAX_BYTES {
         return Err("release ledger capacity reached; disruptive apply blocked (release continues)".to_string());
@@ -796,12 +851,16 @@ fn encoded_len(ledger: &ReleaseLedger) -> u64 {
 /// alert/creation times, so a replay of any of them is still refused.
 /// Eligible tasks (prepared, active, uncertain) are never removed. Returns
 /// how many tasks were compacted.
-fn compact_ledger(ledger: &mut ReleaseLedger, now_epoch: f64) -> usize {
+fn compact_ledger(ledger: &mut ReleaseLedger, now: &LeaseNow) -> usize {
+    let now_epoch = now.wall_epoch;
     let cutoff = now_epoch - COMPACT_MIN_AGE_SEC;
     let mut watermark = ledger.checkpoint.replay_watermark_epoch;
     let before = ledger.tasks.len();
+    let current = now;
     ledger.tasks.retain(|task| {
-        let compactable = terminal_status(&task.status) && task.updated_epoch <= cutoff;
+        let compactable = terminal_status(&task.status)
+            && task.updated_epoch <= cutoff
+            && !cooldown_may_be_running(task, current);
         if compactable {
             let basis = task.event_epoch.unwrap_or(task.created_epoch).max(task.created_epoch);
             if basis > watermark {
@@ -820,6 +879,75 @@ fn compact_ledger(ledger: &mut ReleaseLedger, now_epoch: f64) -> usize {
     removed
 }
 
+/// A task carrying a cooldown that may still run is never compacted: until
+/// the wall clock is a full cooldown past its end, and while its own boot's
+/// monotonic end has not passed.
+fn cooldown_may_be_running(task: &ReleaseTask, now: &LeaseNow) -> bool {
+    let Some(until) = task.cooldown_until_epoch else {
+        return false;
+    };
+    if now.wall_epoch < until + FLOW_COOLDOWN_SEC as f64 {
+        return true;
+    }
+    match (task.cooldown_until_boottime_ns, now.boottime_ns, now.boot_id.as_deref()) {
+        (Some(end), Some(mono), Some(boot)) if boot == task.cooldown_boot_id => mono < end,
+        _ => false,
+    }
+}
+
+/// Record a cooldown ending at `until_wall` on both clocks (the monotonic
+/// one of this boot when it can be read), and mark the task changed so a
+/// migration counts its age from now.
+fn record_cooldown(task: &mut ReleaseTask, until_wall: f64, now: &LeaseNow) {
+    let remaining = (until_wall - now.wall_epoch).max(0.0);
+    task.cooldown_until_epoch = Some(until_wall);
+    task.cooldown_recorded_epoch = Some(now.wall_epoch);
+    match (now.boottime_ns, now.boot_id.as_deref()) {
+        (Some(mono), Some(boot)) if valid_boot_id(boot) => {
+            task.cooldown_until_boottime_ns = Some(mono.saturating_add((remaining * 1e9) as u64).min(i64::MAX as u64));
+            task.cooldown_boot_id = boot.to_string();
+        }
+        _ => {
+            task.cooldown_until_boottime_ns = None;
+            task.cooldown_boot_id.clear();
+        }
+    }
+    task.updated_epoch = task.updated_epoch.max(now.wall_epoch);
+}
+
+/// Whether the task's cooldown is running now, re-anchoring it when the
+/// boot changed. In its own boot the monotonic clock decides, so the wall
+/// clock cannot end it. In another boot (or without a monotonic end) the
+/// wall clock decides, and a wall clock behind the recording time counts as
+/// running; either way the cooldown is then re-anchored on this boot for
+/// at most `FLOW_COOLDOWN_SEC` -- finite, never permanent. Returns the
+/// wall-clock end to report, and whether the task changed.
+fn cooldown_running(task: &mut ReleaseTask, now: &LeaseNow) -> (Option<f64>, bool) {
+    let Some(until_wall) = task.cooldown_until_epoch else {
+        return (None, false);
+    };
+    if let (Some(end), Some(mono), Some(boot)) = (task.cooldown_until_boottime_ns, now.boottime_ns, now.boot_id.as_deref()) {
+        if boot == task.cooldown_boot_id {
+            return if mono < end {
+                (Some(now.wall_epoch + (end - mono) as f64 / 1e9), false)
+            } else {
+                (None, false)
+            };
+        }
+    }
+    let recorded = task.cooldown_recorded_epoch.unwrap_or(until_wall - FLOW_COOLDOWN_SEC as f64);
+    let stepped_back = now.wall_epoch < recorded - 1.0;
+    if now.wall_epoch >= until_wall && !stepped_back {
+        return (None, false);
+    }
+    let remaining = if stepped_back { FLOW_COOLDOWN_SEC as f64 } else { (until_wall - now.wall_epoch).min(FLOW_COOLDOWN_SEC as f64) };
+    let anchored = now.boottime_ns.is_some() && now.boot_id.is_some();
+    if anchored {
+        record_cooldown(task, now.wall_epoch + remaining, now);
+    }
+    (Some(now.wall_epoch + remaining), anchored)
+}
+
 /// What admission did with a new restriction.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Admission {
@@ -828,11 +956,12 @@ pub enum Admission {
     Prepared(ReleaseTask),
     /// An active lease of the same resource was extended; nothing is
     /// applied. The new task's identity is kept as a `merged` tombstone so a
-    /// replay of the same alert is refused.
-    Extended { task_id: String, due_epoch: f64, extensions: u32 },
+    /// replay of the same alert is refused. `held` is the lease in force
+    /// (its owner, strength and rollback are what the event reports).
+    Extended { task_id: String, due_epoch: f64, extensions: u32, held: Box<ReleaseTask> },
     /// An active lease of the same resource already lasts at least as long
     /// as this alert would ask; nothing changes but the tombstone.
-    AlreadyHeld { task_id: String, due_epoch: f64 },
+    AlreadyHeld { task_id: String, due_epoch: f64, held: Box<ReleaseTask> },
     /// The flow used up its lease family and is in cooldown until
     /// `until_epoch`: nothing is applied and nothing is written (the alert
     /// executed nothing, so there is nothing a replay could repeat).
@@ -844,27 +973,41 @@ pub enum Admission {
 /// at once, one lease per resource (a new alert for a held resource extends
 /// it at most `MAX_LEASE_EXTENSIONS` times), and a family of leases of one
 /// resource bounded to `MAX_CUMULATIVE_LEASE_SEC` from its first lease.
-pub fn admit_release_task(path: &str, task: &ReleaseTask, ttl_sec: u64, now: &LeaseNow) -> Result<Admission, String> {
+pub fn admit_release_task(path: &str, task: &ReleaseTask, legacy_traces: &[String], ttl_sec: u64, now: &LeaseNow) -> Result<Admission, String> {
     validate_task(task)?;
     validate_now(now.wall_epoch)?;
     let now_epoch = now.wall_epoch;
     let _guard = lock_ledger(path)?;
     let mut ledger = load_ledger(path)?;
-    admit_new_task(&mut ledger, task, now_epoch)?;
-    let ttl = ttl_sec.clamp(MIN_LEASE_TTL_SEC, MAX_LEASE_TTL_SEC) as f64;
-
-    // Cooldown: from the end of a used-up family until its recorded time.
-    let cooldown = ledger
+    admit_new_task(&mut ledger, task, now)?;
+    // An alert the previous core handled is found by the trace id it gave
+    // it, whatever action it decided then (the trace id is built from the
+    // alert and that action): a task without an event key is such a task.
+    if ledger
         .tasks
         .iter()
-        .filter(|item| item.resource_key == task.resource_key)
-        .filter_map(|item| {
-            let until = item.cooldown_until_epoch?;
-            let from = item.family_started_epoch.unwrap_or(item.created_epoch) + MAX_CUMULATIVE_LEASE_SEC as f64;
-            (now_epoch >= from - 1.0 && now_epoch < until).then_some(until)
-        })
-        .fold(None, |acc: Option<f64>, until| Some(acc.map_or(until, |a| a.max(until))));
+        .any(|item| item.event_key.is_empty() && legacy_traces.iter().any(|t| *t == item.trace_id))
+    {
+        return Err("this alert already led to a lease under the previous core; replayed disruptive apply blocked".to_string());
+    }
+    let ttl = ttl_sec.clamp(MIN_LEASE_TTL_SEC, MAX_LEASE_TTL_SEC) as f64;
+
+    // Cooldown of this flow, whatever mechanism it was held with: from the
+    // grant of the family's final lease until FLOW_COOLDOWN_SEC after the
+    // family's end, on this boot's monotonic clock.
+    let mut cooldown: Option<f64> = None;
+    let mut changed = false;
+    for item in ledger.tasks.iter_mut().filter(|item| same_flow(item, task)) {
+        let (running, anchored) = cooldown_running(item, now);
+        changed |= anchored;
+        if let Some(until) = running {
+            cooldown = Some(cooldown.map_or(until, |c: f64| c.max(until)));
+        }
+    }
     if let Some(until_epoch) = cooldown {
+        if changed {
+            save_ledger(path, &mut ledger)?;
+        }
         return Ok(Admission::Cooldown { until_epoch });
     }
 
@@ -891,7 +1034,7 @@ pub fn admit_release_task(path: &str, task: &ReleaseTask, ttl_sec: u64, now: &Le
             // Held long enough already: record the alert, change nothing.
             ledger.tasks.push(tombstone);
             save_ledger(path, &mut ledger)?;
-            return Ok(Admission::AlreadyHeld { task_id: held.task_id, due_epoch: held.due_epoch });
+            return Ok(Admission::AlreadyHeld { task_id: held.task_id.clone(), due_epoch: held.due_epoch, held: Box::new(held) });
         }
         if held.extensions >= MAX_LEASE_EXTENSIONS {
             return Err("lease extension limit reached".to_string());
@@ -910,14 +1053,15 @@ pub fn admit_release_task(path: &str, task: &ReleaseTask, ttl_sec: u64, now: &Le
         item.next_attempt_epoch = new_due;
         item.due_boottime_ns = due_boottime_ns;
         item.extensions += 1;
-        if new_due >= cap {
-            item.cooldown_until_epoch = Some(cap + FLOW_COOLDOWN_SEC as f64);
-        }
         item.updated_epoch = now_epoch;
+        if new_due >= cap {
+            record_cooldown(item, cap + FLOW_COOLDOWN_SEC as f64, now);
+        }
         let extensions = item.extensions;
         let task_id = item.task_id.clone();
+        let held = Box::new(item.clone());
         save_ledger(path, &mut ledger)?;
-        return Ok(Admission::Extended { task_id, due_epoch: new_due, extensions });
+        return Ok(Admission::Extended { task_id, due_epoch: new_due, extensions, held });
     }
 
     let held = ledger.tasks.iter().filter(|item| eligible_status(&item.status)).count();
@@ -930,7 +1074,7 @@ pub fn admit_release_task(path: &str, task: &ReleaseTask, ttl_sec: u64, now: &Le
     let family = ledger
         .tasks
         .iter()
-        .filter(|item| item.resource_key == task.resource_key && item.status != "merged")
+        .filter(|item| same_flow(item, task) && item.status != "merged")
         .filter_map(|item| item.family_started_epoch.or(Some(item.created_epoch)))
         .filter(|start| now_epoch - start < MAX_CUMULATIVE_LEASE_SEC as f64)
         .fold(None, |acc: Option<f64>, start| Some(acc.map_or(start, |a| a.min(start))));
@@ -946,16 +1090,16 @@ pub fn admit_release_task(path: &str, task: &ReleaseTask, ttl_sec: u64, now: &Le
             if let Some(last) = ledger
                 .tasks
                 .iter_mut()
-                .filter(|item| item.resource_key == task.resource_key && item.status != "merged")
+                .filter(|item| same_flow(item, task) && item.status != "merged")
                 .filter(|item| item.family_started_epoch.unwrap_or(item.created_epoch) == family_start)
                 .max_by(|a, b| a.created_epoch.total_cmp(&b.created_epoch))
             {
-                last.cooldown_until_epoch = Some(until);
+                record_cooldown(last, until, now);
                 save_ledger(path, &mut ledger)?;
             }
             return Err("lease cumulative limit reached".to_string());
         }
-        admitted.cooldown_until_epoch = Some(cap + FLOW_COOLDOWN_SEC as f64);
+        record_cooldown(&mut admitted, cap + FLOW_COOLDOWN_SEC as f64, now);
         let shortened = admitted.due_epoch - cap;
         admitted.due_epoch = cap;
         admitted.next_attempt_epoch = cap;
@@ -1083,7 +1227,7 @@ pub fn compact_release_ledger(path: &str, now_epoch: f64) -> Result<Value, Strin
         return Ok(json!({"compacted": 0, "capacity": capacity_value(&ReleaseLedger::default())}));
     }
     let mut ledger = load_ledger(path)?;
-    let removed = compact_ledger(&mut ledger, now_epoch);
+    let removed = compact_ledger(&mut ledger, &LeaseNow::read(now_epoch));
     if removed > 0 || ledger.schema_version != LEDGER_SCHEMA_VERSION {
         save_ledger(path, &mut ledger)?;
     }
@@ -1361,6 +1505,9 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
                 }
                 Ok(outcome) => {
                     task.last_error = bounded_error(&outcome.errors.join("; "));
+                    if outcome.result == "connections_not_cleared" && task.rule_removed_epoch.is_none() {
+                        task.rule_removed_epoch = Some(now_epoch);
+                    }
                     schedule_retry(task, now);
                 }
                 Err(error) => {
@@ -1389,7 +1536,7 @@ pub fn process_due_releases_with_runner<R: ReleaseCommandRunner>(
     // Release never fails on capacity: if the updated ledger would exceed
     // its size bound, compact (generation migration) and save again.
     if let Err(error) = save_ledger(path, &mut ledger) {
-        if compact_ledger(&mut ledger, now_epoch) == 0 {
+        if compact_ledger(&mut ledger, now) == 0 {
             return Err(error);
         }
         save_ledger(path, &mut ledger)?;
@@ -1588,16 +1735,7 @@ fn release_nft_rule<R: ReleaseCommandRunner>(
     let deviating = owned.iter().filter(|(_, planned)| !planned).count();
     if handles.is_empty() {
         let connections = clear_redirect_connections(task, runner);
-        return Ok(outcome_for(
-            task,
-            now_epoch,
-            "released",
-            "owned_state_already_absent",
-            0,
-            0,
-            Vec::new(),
-            json!({"verified": true, "owned_rule_count": 0, "existing_connections": connections}),
-        ));
+        return Ok(rule_absent_outcome(task, now_epoch, "owned_state_already_absent", 0, 0, connections));
     }
 
     let mut command_count = 0_u32;
@@ -1656,21 +1794,37 @@ fn release_nft_rule<R: ReleaseCommandRunner>(
     // The rule is gone (verified above); connections it already redirected
     // live on in connection tracking. That is separate evidence.
     let connections = clear_redirect_connections(task, runner);
-    Ok(outcome_for(
+    Ok(rule_absent_outcome(task, now_epoch, "rollback_applied_and_absence_verified", command_count, deviating, connections))
+}
+
+/// The rule is verified absent. The lease is released only when the
+/// connections it redirected are cleared as well (`cleared`, `none_found`;
+/// `not_applicable` for a restriction). Otherwise it stays eligible:
+/// `retry_pending` / `connections_not_cleared`, the rule's absence recorded
+/// apart (`rule_removed_epoch`), and the clean-up is retried with backoff.
+fn rule_absent_outcome(task: &ReleaseTask, now_epoch: f64, result: &str, command_count: u32, deviating: usize, connections: String) -> ReleaseOutcome {
+    if matches!(connections.as_str(), "cleared" | "none_found" | "not_applicable") {
+        return outcome_for(
+            task,
+            now_epoch,
+            "released",
+            result,
+            command_count,
+            0,
+            Vec::new(),
+            json!({"verified": true, "owned_rule_count": 0, "deleted_deviating_rules": deviating, "existing_connections": connections}),
+        );
+    }
+    outcome_for(
         task,
         now_epoch,
-        "released",
-        "rollback_applied_and_absence_verified",
+        "retry_pending",
+        "connections_not_cleared",
         command_count,
-        0,
-        Vec::new(),
-        json!({
-            "verified": true,
-            "owned_rule_count": 0,
-            "deleted_deviating_rules": deviating,
-            "existing_connections": connections,
-        }),
-    ))
+        1,
+        vec![bounded_error(&format!("redirected connections not cleared: {connections}"))],
+        json!({"verified": false, "rule_absent": true, "owned_rule_count": 0, "deleted_deviating_rules": deviating, "existing_connections": connections}),
+    )
 }
 
 /// After a redirect's rule is gone, connections it already redirected keep
@@ -1687,10 +1841,13 @@ fn clear_redirect_connections<R: ReleaseCommandRunner>(task: &ReleaseTask, runne
         return "not_applicable".to_string();
     }
     let port = task.destination_port.to_string();
-    let argv = if task.destination_ip.is_empty() {
-        strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", &task.source_ip, "--dport", &port])
+    let mark = task.ct_mark.to_string();
+    let argv = if task.mechanism == MECHANISM_NFT_FLOW_REDIRECT {
+        // Only the connections this lease redirected: its mark and its tuple.
+        strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", &task.source_ip, "--orig-dst", &task.destination_ip, "--dport", &port, "--mark", &mark])
     } else {
-        strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", &task.source_ip, "--orig-dst", &task.destination_ip, "--dport", &port])
+        // A legacy redirect set no mark; its tuple is source and port only.
+        strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", &task.source_ip, "--dport", &port])
     };
     match runner.run(&argv) {
         Ok(result) if result.returncode == 0 => "cleared".to_string(),
@@ -1754,8 +1911,11 @@ fn nft_owned_rules<R: ReleaseCommandRunner>(
     Ok(rules)
 }
 
-/// The flow identity of an owned rule: its source, and its destination when
-/// the lease names one.
+/// The complete flow identity of an owned rule: source, destination (when
+/// the lease names one), protocol and port (or `meta l4proto` for a
+/// portless flow), and the ingress interface of a flow redirect. What may
+/// differ and still be ours to remove is only how the flow is acted on (the
+/// limit's rate/burst, the redirect port, the ct mark).
 fn nft_rule_identity_match(task: &ReleaseTask, rule: &Value) -> bool {
     let Some(exprs) = rule.get("expr").and_then(Value::as_array) else {
         return false;
@@ -1766,7 +1926,28 @@ fn nft_rule_identity_match(task: &ReleaseTask, rule: &Value) -> bool {
     if !ip_matches(match_value(exprs, family, "saddr"), &task.source_ip) {
         return false;
     }
-    task.destination_ip.is_empty() || ip_matches(match_value(exprs, family, "daddr"), &task.destination_ip)
+    if !task.destination_ip.is_empty() && !ip_matches(match_value(exprs, family, "daddr"), &task.destination_ip) {
+        return false;
+    }
+    let port_of = |protocol: &str| match_value(exprs, protocol, "dport").and_then(value_u16);
+    match task.mechanism.as_str() {
+        MECHANISM_NFT_FLOW_LIMIT if protocol_has_port(&task.protocol) => {
+            port_of(&task.protocol) == Some(task.destination_port)
+                && FLOW_PROTOCOLS.iter().filter(|p| **p != task.protocol && protocol_has_port(p)).all(|p| port_of(p).is_none())
+        }
+        MECHANISM_NFT_FLOW_LIMIT => {
+            meta_value(exprs, "l4proto").and_then(Value::as_str) == Some(task.protocol.as_str())
+                && port_of("tcp").is_none()
+                && port_of("udp").is_none()
+        }
+        MECHANISM_NFT_FLOW_REDIRECT => {
+            meta_value(exprs, "iifname").and_then(Value::as_str) == Some(task.iface.as_str())
+                && port_of("tcp") == Some(task.destination_port)
+        }
+        // Legacy: a redirect names its TCP port; an isolate only its source.
+        _ if task.action == "redirect" => port_of("tcp") == Some(task.destination_port),
+        _ => true,
+    }
 }
 
 fn nft_rule_semantics_match(task: &ReleaseTask, rule: &Value) -> bool {
@@ -1782,6 +1963,12 @@ fn nft_rule_semantics_match(task: &ReleaseTask, rule: &Value) -> bool {
             && ip_matches(match_value(exprs, "ip", "saddr"), &task.source_ip)
             && ip_matches(match_value(exprs, "ip", "daddr"), &task.destination_ip)
             && match_value(exprs, "tcp", "dport").and_then(value_u16) == Some(task.destination_port)
+            && exprs.iter().any(|expr| {
+                expr.get("mangle").map_or(false, |m| {
+                    m.get("key").and_then(|k| k.get("ct")).and_then(|c| c.get("key")).and_then(Value::as_str) == Some("mark")
+                        && m.get("value").and_then(Value::as_u64) == Some(u64::from(task.ct_mark))
+                })
+            })
             && exprs.iter().any(|expr| {
                 expr.get("redirect").and_then(|r| r.get("port")).and_then(value_u16) == Some(task.redirect_port)
             });
@@ -2170,13 +2357,23 @@ fn load_ledger(path: &str) -> Result<ReleaseLedger, String> {
         // the same v1 file again gives the same boundary; it is kept in the
         // checkpoint when the ledger is saved as v2.
         if !ledger.tasks.is_empty() {
+            // Not the mtime alone: the previous core's clock may have been
+            // stepped back before its last write. The boundary is the latest
+            // of the mtime and every time its tasks carry, plus the future an
+            // alert may claim and still be acted on; the task ids are matched
+            // separately by the trace id (admit_release_task).
             let written = metadata
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map(|d| d.as_secs_f64())
-                .unwrap_or(f64::MAX);
-            let boundary = if written.is_finite() { written } else { f64::MAX / 2.0 };
+                .unwrap_or(f64::MAX / 4.0);
+            let latest = ledger
+                .tasks
+                .iter()
+                .flat_map(|t| [t.created_epoch, t.updated_epoch])
+                .fold(written, f64::max);
+            let boundary = latest + V1_MIGRATION_FUTURE_SEC;
             ledger.checkpoint.replay_watermark_epoch = ledger.checkpoint.replay_watermark_epoch.max(boundary);
             ledger.checkpoint.generation = ledger.checkpoint.generation.max(1);
         }
@@ -2381,9 +2578,11 @@ fn allowed_release_command(argv: &[String]) -> bool {
     if argv.first().map(String::as_str) == Some("conntrack") {
         let ip_ok = |value: &String| value.parse::<IpAddr>().is_ok();
         let port_ok = |value: &String| value.parse::<u16>().map(|p| p > 0).unwrap_or(false);
+        let mark_ok = |value: &String| value.parse::<u32>().map(|m| m & 0xFFF0_0000 == CT_MARK_PREFIX && m != CT_MARK_PREFIX).unwrap_or(false);
         return match argv.len() {
-            10 => argv[1] == "-D" && argv[2] == "-p" && argv[3] == "tcp" && argv[4] == "--orig-src" && ip_ok(&argv[5])
-                && argv[6] == "--orig-dst" && ip_ok(&argv[7]) && argv[8] == "--dport" && port_ok(&argv[9]),
+            12 => argv[1] == "-D" && argv[2] == "-p" && argv[3] == "tcp" && argv[4] == "--orig-src" && ip_ok(&argv[5])
+                && argv[6] == "--orig-dst" && ip_ok(&argv[7]) && argv[8] == "--dport" && port_ok(&argv[9])
+                && argv[10] == "--mark" && mark_ok(&argv[11]),
             8 => argv[1] == "-D" && argv[2] == "-p" && argv[3] == "tcp" && argv[4] == "--orig-src" && ip_ok(&argv[5])
                 && argv[6] == "--dport" && port_ok(&argv[7]),
             _ => false,
@@ -3768,8 +3967,10 @@ mod tests {
         assert!(!allowed_release_command(&strings(&["nft", "flush", "chain", "inet", "azazel_edge", "throttle", "x", "y"])));
     }
 
+    /// One boot whose monotonic clock runs with the wall clock (1e12 ns
+    /// ahead of it), as on a node whose wall clock is not stepped.
     fn now_at(wall: f64) -> LeaseNow {
-        LeaseNow { wall_epoch: wall, boottime_ns: Some(5_000_000_000_000), boot_id: Some("b001-1".to_string()) }
+        LeaseNow { wall_epoch: wall, boottime_ns: Some((wall * 1e9) as u64 + 1_000_000_000_000), boot_id: Some("b001-1".to_string()) }
     }
 
     #[test]
@@ -3777,14 +3978,14 @@ mod tests {
         let path = test_path("ledger.json");
         let t0 = 10_000.0;
         let first = build_flow_throttle_task("tr-0", &flow("10.0.0.8"), 32, 32, 600, &now_at(t0)).unwrap();
-        let Admission::Prepared(held) = admit_release_task(&path, &first, 600, &now_at(t0)).unwrap() else { panic!() };
+        let Admission::Prepared(held) = admit_release_task(&path, &first, &[], 600, &now_at(t0)).unwrap() else { panic!() };
         activate_release_task(&path, &held.task_id, t0).unwrap();
         let mut at = t0;
         for n in 1..=MAX_LEASE_EXTENSIONS {
             at += 590.0;
             let next = build_flow_throttle_task(&format!("tr-{n}"), &flow("10.0.0.8"), 32, 32, 600, &now_at(at)).unwrap();
-            match admit_release_task(&path, &next, 600, &now_at(at)).unwrap() {
-                Admission::Extended { task_id, due_epoch, extensions } => {
+            match admit_release_task(&path, &next, &[], 600, &now_at(at)).unwrap() {
+                Admission::Extended { task_id, due_epoch, extensions, .. } => {
                     assert_eq!(task_id, held.task_id);
                     assert_eq!(extensions, n);
                     assert!(due_epoch <= t0 + MAX_CUMULATIVE_LEASE_SEC as f64);
@@ -3794,10 +3995,10 @@ mod tests {
         }
         at += 590.0;
         let over = build_flow_throttle_task("tr-over", &flow("10.0.0.8"), 32, 32, 600, &now_at(at)).unwrap();
-        assert_eq!(admit_release_task(&path, &over, 600, &now_at(at)), Err("lease extension limit reached".to_string()));
+        assert_eq!(admit_release_task(&path, &over, &[], 600, &now_at(at)), Err("lease extension limit reached".to_string()));
         // A replay of a merged alert is refused by its tombstone.
         let replay = build_flow_throttle_task("tr-1", &flow("10.0.0.8"), 32, 32, 600, &now_at(at)).unwrap();
-        assert!(admit_release_task(&path, &replay, 600, &now_at(at)).unwrap_err().contains("replayed"));
+        assert!(admit_release_task(&path, &replay, &[], 600, &now_at(at)).unwrap_err().contains("replayed"));
         // The monotonic deadline moved with the wall one.
         let ledger = load_ledger(&path).unwrap();
         let lease = ledger.tasks.iter().find(|t| t.task_id == held.task_id).unwrap();
@@ -3811,26 +4012,26 @@ mod tests {
         let path = test_path("ledger.json");
         let t0 = 20_000.0;
         let first = build_flow_throttle_task("fa-0", &flow("10.0.0.9"), 32, 32, 900, &now_at(t0)).unwrap();
-        let Admission::Prepared(held) = admit_release_task(&path, &first, 900, &now_at(t0)).unwrap() else { panic!() };
+        let Admission::Prepared(held) = admit_release_task(&path, &first, &[], 900, &now_at(t0)).unwrap() else { panic!() };
         activate_release_task(&path, &held.task_id, t0).unwrap();
         // Released, then the flow is seen again close to the family's end.
         let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
         process_due_releases_with_runner(&path, &now_at(t0 + 901.0), &runner).unwrap();
         let late = t0 + MAX_CUMULATIVE_LEASE_SEC as f64 - 100.0;
         let again = build_flow_throttle_task("fa-1", &flow("10.0.0.9"), 32, 32, 900, &now_at(late)).unwrap();
-        let Admission::Prepared(second) = admit_release_task(&path, &again, 900, &now_at(late)).unwrap() else { panic!() };
+        let Admission::Prepared(second) = admit_release_task(&path, &again, &[], 900, &now_at(late)).unwrap() else { panic!() };
         assert_eq!(second.family_started_epoch, Some(t0));
         assert_eq!(second.due_epoch, t0 + MAX_CUMULATIVE_LEASE_SEC as f64);
         // Within MIN_LEASE_TTL_SEC of the bound: refused.
         let edge = t0 + MAX_CUMULATIVE_LEASE_SEC as f64 - 10.0;
         let path2 = test_path("ledger.json");
         let one = build_flow_throttle_task("fb-0", &flow("10.0.0.9"), 32, 32, 900, &now_at(t0)).unwrap();
-        let Admission::Prepared(h2) = admit_release_task(&path2, &one, 900, &now_at(t0)).unwrap() else { panic!() };
+        let Admission::Prepared(h2) = admit_release_task(&path2, &one, &[], 900, &now_at(t0)).unwrap() else { panic!() };
         activate_release_task(&path2, &h2.task_id, t0).unwrap();
         let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
         process_due_releases_with_runner(&path2, &now_at(t0 + 901.0), &runner).unwrap();
         let near = build_flow_throttle_task("fb-1", &flow("10.0.0.9"), 32, 32, 900, &now_at(edge)).unwrap();
-        assert_eq!(admit_release_task(&path2, &near, 900, &now_at(edge)), Err("lease cumulative limit reached".to_string()));
+        assert_eq!(admit_release_task(&path2, &near, &[], 900, &now_at(edge)), Err("lease cumulative limit reached".to_string()));
     }
 
     fn terminal_filler(n: usize, at: f64) -> ReleaseTask {
@@ -3857,7 +4058,7 @@ mod tests {
         assert_ne!(ledger_capacity(&path).unwrap()["state"], "ok");
         let now = old + COMPACT_MIN_AGE_SEC + 10.0;
         let fresh = build_flow_throttle_task("fresh", &flow("10.0.0.20"), 32, 32, 300, &now_at(now)).unwrap();
-        assert!(matches!(admit_release_task(&path, &fresh, 300, &now_at(now)).unwrap(), Admission::Prepared(_)));
+        assert!(matches!(admit_release_task(&path, &fresh, &[], 300, &now_at(now)).unwrap(), Admission::Prepared(_)));
         let ledger = load_ledger(&path).unwrap();
         assert_eq!(ledger.tasks.len(), 1, "every old terminal task was compacted");
         assert_eq!(ledger.checkpoint.generation, 1);
@@ -3866,7 +4067,7 @@ mod tests {
         // The compacted task's identity is gone, its replay is still refused.
         let mut replay = replayed.clone();
         replay.status = "prepared".to_string();
-        let error = admit_release_task(&path, &replay, 300, &now_at(now)).unwrap_err();
+        let error = admit_release_task(&path, &replay, &[], 300, &now_at(now)).unwrap_err();
         assert!(error.contains("replay checkpoint"), "{error}");
         // A ledger saved as v2 keeps the checkpoint across a reload.
         let raw: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -3886,10 +4087,13 @@ mod tests {
         write_ledger(&path, tasks);
         assert_eq!(ledger_capacity(&path).unwrap()["state"], "full");
         let fresh = build_flow_throttle_task("fresh", &flow("10.0.0.21"), 32, 32, 300, &now_at(now)).unwrap();
-        let error = admit_release_task(&path, &fresh, 300, &now_at(now)).unwrap_err();
+        let error = admit_release_task(&path, &fresh, &[], 300, &now_at(now)).unwrap_err();
         assert!(error.contains("capacity reached"), "{error}");
         // The held lease is due and is still released.
-        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []}))]);
+        let runner = FakeRunner::new(vec![
+            ok_json(json!({"nftables": []})),
+            Ok(CommandResult { returncode: 1, stdout: String::new(), stderr: "conntrack v1.4.8 (conntrack-tools): 0 flow entries have been deleted.".to_string() }),
+        ]);
         let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(now), &runner).unwrap();
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].status, "released");
@@ -3901,7 +4105,7 @@ mod tests {
         assert!(report["compacted"].as_u64().unwrap() as usize >= ADMIT_MAX_TASKS);
         assert_eq!(report["capacity"]["state"], "ok");
         let later_task = build_flow_throttle_task("later", &flow("10.0.0.21"), 32, 32, 300, &now_at(later)).unwrap();
-        assert!(admit_release_task(&path, &later_task, 300, &now_at(later)).is_ok());
+        assert!(admit_release_task(&path, &later_task, &[], 300, &now_at(later)).is_ok());
     }
 
     #[test]
@@ -3961,7 +4165,7 @@ mod tests {
         let path = test_path("ledger.json");
         let at = LeaseNow { wall_epoch: 1_000.0, boottime_ns: Some(9_000_000_000_000), boot_id: Some("b001-2".to_string()) };
         let task = build_flow_throttle_task("inflight", &flow("10.0.0.40"), 32, 32, 30, &at).unwrap();
-        let Admission::Prepared(task) = admit_release_task(&path, &task, 30, &at).unwrap() else { panic!() };
+        let Admission::Prepared(task) = admit_release_task(&path, &task, &[], 30, &at).unwrap() else { panic!() };
         // Due on every clock (another boot), yet being applied: untouched.
         let later = LeaseNow::wall_only(2_000.0);
         let runner = FakeRunner::new(vec![]);
@@ -3980,11 +4184,11 @@ mod tests {
         let path = test_path("ledger.json");
         let mut first = build_flow_throttle_task("tr-a", &flow("10.0.0.50"), 32, 32, 300, &now_at(500.0)).unwrap();
         first.event_key = "event-00000000000000aa".to_string();
-        assert!(admit_release_task(&path, &first, 300, &now_at(500.0)).is_ok());
+        assert!(admit_release_task(&path, &first, &[], 300, &now_at(500.0)).is_ok());
         // The same alert decided differently (another trace, action, scope).
         let mut other = build_flow_redirect_task("tr-b", &flow("10.0.0.50"), "lan0", 12222, 300, &now_at(501.0)).unwrap();
         other.event_key = first.event_key.clone();
-        let error = admit_release_task(&path, &other, 300, &now_at(501.0)).unwrap_err();
+        let error = admit_release_task(&path, &other, &[], 300, &now_at(501.0)).unwrap_err();
         assert!(error.contains("this alert already led to a lease"), "{error}");
     }
 
@@ -3996,9 +4200,20 @@ mod tests {
         let written = fs::metadata(&path).unwrap().modified().unwrap().duration_since(UNIX_EPOCH).unwrap().as_secs_f64();
         let ledger = load_ledger(&path).unwrap();
         assert_eq!(ledger.checkpoint.generation, 1);
-        assert_eq!(ledger.checkpoint.replay_watermark_epoch, written);
+        assert_eq!(ledger.checkpoint.replay_watermark_epoch, written + V1_MIGRATION_FUTURE_SEC);
         // Read again: the same boundary.
-        assert_eq!(load_ledger(&path).unwrap().checkpoint.replay_watermark_epoch, written);
+        assert_eq!(load_ledger(&path).unwrap().checkpoint.replay_watermark_epoch, written + V1_MIGRATION_FUTURE_SEC);
+        // A task time later than the file's mtime (the previous core's clock
+        // stepped back before it wrote) moves the boundary to that time.
+        let mut late = task.clone();
+        late.updated_epoch = written + 500.0;
+        late.due_epoch = written + 600.0;
+        late.next_attempt_epoch = written + 600.0;
+        fs::write(&path, json!({"schema_version": "azazel-release-ledger/v1", "tasks": [late]}).to_string()).unwrap();
+        let file = OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_modified(UNIX_EPOCH + Duration::from_secs_f64(written - 300.0)).unwrap();
+        let mark = load_ledger(&path).unwrap().checkpoint.replay_watermark_epoch;
+        assert!((mark - (written + 500.0 + V1_MIGRATION_FUTURE_SEC)).abs() < 1e-3, "{mark}");
         // An empty v1 ledger handled nothing: no boundary.
         fs::write(&path, json!({"schema_version": "azazel-release-ledger/v1", "tasks": []}).to_string()).unwrap();
         assert_eq!(load_ledger(&path).unwrap().checkpoint.generation, 0);
@@ -4012,6 +4227,7 @@ mod tests {
                 {"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": task.source_ip}},
                 {"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "daddr"}}, "right": task.destination_ip}},
                 {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": task.destination_port}},
+                {"mangle": {"key": {"ct": {"key": "mark"}}, "value": task.ct_mark}},
                 {"redirect": {"port": task.redirect_port}}
             ]
         }})
@@ -4035,13 +4251,18 @@ mod tests {
         assert_eq!(outcomes[0].status, "released");
         assert_eq!(outcomes[0].postcondition["existing_connections"], "cleared");
         let calls = runner.calls.lock().unwrap();
-        let conntrack = strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", "10.0.0.60", "--orig-dst", "10.20.0.5", "--dport", "22"]);
+        let mark = task.ct_mark.to_string();
+        assert_eq!(task.ct_mark & 0xFFF0_0000, CT_MARK_PREFIX);
+        let conntrack = strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", "10.0.0.60", "--orig-dst", "10.20.0.5", "--dport", "22", "--mark", &mark]);
         assert_eq!(calls[3], conntrack);
         assert!(allowed_release_command(&conntrack));
         // Anything wider is not an allowed release command.
         assert!(!allowed_release_command(&strings(&["conntrack", "-F"])));
         assert!(!allowed_release_command(&strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", "10.0.0.0/8", "--dport", "22"])));
         assert!(!allowed_release_command(&strings(&["conntrack", "-D", "-p", "udp", "--orig-src", "10.0.0.60", "--dport", "22"])));
+        // A flow redirect's delete must name its mark (an Azazel mark).
+        assert!(!allowed_release_command(&strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", "10.0.0.60", "--orig-dst", "10.20.0.5", "--dport", "22"])));
+        assert!(!allowed_release_command(&strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", "10.0.0.60", "--orig-dst", "10.20.0.5", "--dport", "22", "--mark", "7"])));
         // No match is reported as such; no tool is reported, not hidden.
         let path = test_path("ledger.json");
         prepare_release_task(&path, &task).unwrap();
@@ -4055,13 +4276,33 @@ mod tests {
         let path = test_path("ledger.json");
         prepare_release_task(&path, &task).unwrap();
         activate_release_task(&path, &task.task_id, 100.5).unwrap();
-        let runner = FakeRunner::new(vec![
-            ok_json(json!({"nftables": []})),
+        // Re521b-03: connections not cleared (no tool, a failure, a
+        // timeout) is not a release: the lease stays eligible with the rule's
+        // absence recorded, and the next attempt that clears them releases it.
+        for failure in [
             Err("release binary not found in trusted directories: conntrack".to_string()),
-        ]);
-        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
-        assert_eq!(outcomes[0].status, "released");
-        assert_eq!(outcomes[0].postcondition["existing_connections"], "conntrack_unavailable");
+            Err("command timeout".to_string()),
+            Ok(CommandResult { returncode: 2, stdout: String::new(), stderr: "Operation not permitted".to_string() }),
+        ] {
+            let path = test_path("ledger.json");
+            prepare_release_task(&path, &task).unwrap();
+            activate_release_task(&path, &task.task_id, 100.5).unwrap();
+            let runner = FakeRunner::new(vec![ok_json(json!({"nftables": []})), failure]);
+            let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
+            assert_eq!(outcomes[0].status, "retry_pending");
+            assert_eq!(outcomes[0].result, "connections_not_cleared");
+            assert_eq!(outcomes[0].postcondition["rule_absent"], true);
+            let stored = load_ledger(&path).unwrap().tasks[0].clone();
+            assert_eq!(stored.status, "active");
+            assert_eq!(stored.rule_removed_epoch, Some(131.0));
+            let runner = FakeRunner::new(vec![
+                ok_json(json!({"nftables": []})),
+                Ok(CommandResult { returncode: 0, stdout: String::new(), stderr: "1 flow entries have been deleted.".to_string() }),
+            ]);
+            let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(200.0), &runner).unwrap();
+            assert_eq!(outcomes[0].status, "released");
+            assert_eq!(outcomes[0].postcondition["existing_connections"], "cleared");
+        }
     }
 
     // -- flow cooldown after a used-up lease family (owner decision 2026-10-30)
@@ -4078,14 +4319,14 @@ mod tests {
         let t0 = 100_000.0;
         let cap = t0 + MAX_CUMULATIVE_LEASE_SEC as f64;
         let first = build_flow_throttle_task("cd-0", &flow("10.0.0.70"), 32, 32, 900, &now_at(t0)).unwrap();
-        let Admission::Prepared(lease) = admit_release_task(&path, &first, 900, &now_at(t0)).unwrap() else { panic!() };
+        let Admission::Prepared(lease) = admit_release_task(&path, &first, &[], 900, &now_at(t0)).unwrap() else { panic!() };
         assert_eq!(lease.cooldown_until_epoch, None, "a lease that ends before the bound sets no cooldown");
         activate_release_task(&path, &lease.task_id, t0).unwrap();
         release_all(&path, t0 + 901.0);
         // Near the family's end: the new lease is cut at the bound and the
         // flow's cooldown is recorded with it.
         let late = build_flow_throttle_task("cd-1", &flow("10.0.0.70"), 32, 32, 900, &now_at(cap - 200.0)).unwrap();
-        let Admission::Prepared(last) = admit_release_task(&path, &late, 900, &now_at(cap - 200.0)).unwrap() else { panic!() };
+        let Admission::Prepared(last) = admit_release_task(&path, &late, &[], 900, &now_at(cap - 200.0)).unwrap() else { panic!() };
         assert_eq!(last.due_epoch, cap);
         assert_eq!(last.cooldown_until_epoch, Some(cap + FLOW_COOLDOWN_SEC as f64));
         activate_release_task(&path, &last.task_id, cap - 200.0).unwrap();
@@ -4101,7 +4342,7 @@ mod tests {
         // for makes no difference.
         for (n, ttl) in [(1, 30), (2, 900), (3, u64::MAX)] {
             assert_eq!(
-                admit_release_task(&path, &alert(n, cap + 10.0), ttl, &now_at(cap + 10.0)),
+                admit_release_task(&path, &alert(n, cap + 10.0), &[], ttl, &now_at(cap + 10.0)),
                 Ok(Admission::Cooldown { until_epoch: cap + FLOW_COOLDOWN_SEC as f64 })
             );
         }
@@ -4109,7 +4350,7 @@ mod tests {
         // A restart reads the same ledger: still in cooldown.
         let mut reloaded = load_ledger(&path).unwrap();
         save_ledger(&path, &mut reloaded).unwrap();
-        assert!(matches!(admit_release_task(&path, &alert(4, cap + 300.0), 900, &now_at(cap + 300.0)), Ok(Admission::Cooldown { .. })));
+        assert!(matches!(admit_release_task(&path, &alert(4, cap + 300.0), &[], 900, &now_at(cap + 300.0)), Ok(Admission::Cooldown { .. })));
         // A generation migration during the cooldown keeps it: its lease is
         // younger than COMPACT_MIN_AGE_SEC.
         let mut ledger = load_ledger(&path).unwrap();
@@ -4118,12 +4359,12 @@ mod tests {
         }
         save_ledger(&path, &mut ledger).unwrap();
         let other = build_flow_throttle_task("cd-other", &flow("10.0.0.71"), 32, 32, 300, &now_at(cap + 400.0)).unwrap();
-        assert!(matches!(admit_release_task(&path, &other, 300, &now_at(cap + 400.0)), Ok(Admission::Prepared(_))));
+        assert!(matches!(admit_release_task(&path, &other, &[], 300, &now_at(cap + 400.0)), Ok(Admission::Prepared(_))));
         assert!(load_ledger(&path).unwrap().checkpoint.generation >= 1, "the migration ran");
-        assert!(matches!(admit_release_task(&path, &alert(5, cap + 500.0), 900, &now_at(cap + 500.0)), Ok(Admission::Cooldown { .. })));
+        assert!(matches!(admit_release_task(&path, &alert(5, cap + 500.0), &[], 900, &now_at(cap + 500.0)), Ok(Admission::Cooldown { .. })));
         // After the cooldown: a new family may start, on a new alert only.
         let after = cap + FLOW_COOLDOWN_SEC as f64 + 1.0;
-        let Admission::Prepared(fresh) = admit_release_task(&path, &alert(6, after), 900, &now_at(after)).unwrap() else { panic!() };
+        let Admission::Prepared(fresh) = admit_release_task(&path, &alert(6, after), &[], 900, &now_at(after)).unwrap() else { panic!() };
         assert_eq!(fresh.family_started_epoch, Some(after));
         assert_eq!(fresh.cooldown_until_epoch, None);
     }
@@ -4135,7 +4376,7 @@ mod tests {
         let cap = t0 + MAX_CUMULATIVE_LEASE_SEC as f64;
         let mut first = build_flow_throttle_task("ce-0", &flow("10.0.0.72"), 32, 32, 900, &now_at(t0)).unwrap();
         first.event_key = "event-00000000000000e0".to_string();
-        let Admission::Prepared(lease) = admit_release_task(&path, &first, 900, &now_at(t0)).unwrap() else { panic!() };
+        let Admission::Prepared(lease) = admit_release_task(&path, &first, &[], 900, &now_at(t0)).unwrap() else { panic!() };
         activate_release_task(&path, &lease.task_id, t0).unwrap();
         // Keep the lease near its end and extend it up to the bound.
         let mut at = t0;
@@ -4143,7 +4384,7 @@ mod tests {
             at = t0 + offset;
             let mut next = build_flow_throttle_task(&format!("ce-{n}"), &flow("10.0.0.72"), 32, 32, 900, &now_at(at)).unwrap();
             next.event_key = format!("event-00000000000000e{n}");
-            assert!(matches!(admit_release_task(&path, &next, 900, &now_at(at)).unwrap(), Admission::Extended { .. }));
+            assert!(matches!(admit_release_task(&path, &next, &[], 900, &now_at(at)).unwrap(), Admission::Extended { .. }));
         }
         let held = load_ledger(&path).unwrap().tasks.into_iter().find(|t| t.task_id == lease.task_id).unwrap();
         assert_eq!(held.due_epoch, cap, "extended to the bound (last at {at})");
@@ -4151,13 +4392,156 @@ mod tests {
         release_all(&path, cap + 1.0);
         let mut again = build_flow_throttle_task("ce-x", &flow("10.0.0.72"), 32, 32, 900, &now_at(cap + 5.0)).unwrap();
         again.event_key = "event-00000000000000ef".to_string();
-        assert!(matches!(admit_release_task(&path, &again, 900, &now_at(cap + 5.0)), Ok(Admission::Cooldown { .. })));
+        assert!(matches!(admit_release_task(&path, &again, &[], 900, &now_at(cap + 5.0)), Ok(Admission::Cooldown { .. })));
         // After the cooldown a replay of an alert that was executed (or
         // merged) is still refused by its event key: the cooldown neither
         // adds nor removes a replay guard.
         let after = cap + FLOW_COOLDOWN_SEC as f64 + 1.0;
         let mut replay = build_flow_throttle_task("ce-0b", &flow("10.0.0.72"), 32, 32, 900, &now_at(after)).unwrap();
         replay.event_key = "event-00000000000000e1".to_string();
-        assert!(admit_release_task(&path, &replay, 900, &now_at(after)).unwrap_err().contains("already led to a lease"));
+        assert!(admit_release_task(&path, &replay, &[], 900, &now_at(after)).unwrap_err().contains("already led to a lease"));
+    }
+
+    // -- Codex re-review Re521b ------------------------------------------
+
+    /// Use up a throttle family of `src` ending at the returned cap.
+    fn used_up_throttle(path: &str, src: &str, t0: f64) -> f64 {
+        let cap = t0 + MAX_CUMULATIVE_LEASE_SEC as f64;
+        let late = build_flow_throttle_task(&format!("uu-{src}"), &flow(src), 32, 32, 900, &now_at(cap - 200.0)).unwrap();
+        let mut first = build_flow_throttle_task(&format!("uf-{src}"), &flow(src), 32, 32, 900, &now_at(t0)).unwrap();
+        first.event_key = format!("event-f-{src}");
+        let Admission::Prepared(a) = admit_release_task(path, &first, &[], 900, &now_at(t0)).unwrap() else { panic!() };
+        activate_release_task(path, &a.task_id, t0).unwrap();
+        release_all(path, t0 + 901.0);
+        let Admission::Prepared(b) = admit_release_task(path, &late, &[], 900, &now_at(cap - 200.0)).unwrap() else { panic!() };
+        activate_release_task(path, &b.task_id, cap - 200.0).unwrap();
+        release_all(path, cap + 1.0);
+        cap
+    }
+
+    /// Re521b-04: the cooldown is the flow's, whatever the mechanism.
+    #[test]
+    fn a_cooldown_holds_across_mechanisms_of_the_same_flow() {
+        let path = test_path("ledger.json");
+        let cap = used_up_throttle(&path, "10.0.0.80", 300_000.0);
+        let redirect = build_flow_redirect_task("ub-r", &flow("10.0.0.80"), "lan0", 12222, 300, &now_at(cap + 10.0)).unwrap();
+        assert!(matches!(admit_release_task(&path, &redirect, &[], 300, &now_at(cap + 10.0)), Ok(Admission::Cooldown { .. })));
+        // And the other way: a redirect family used up, then a throttle.
+        let path = test_path("ledger.json");
+        let t0 = 310_000.0;
+        let cap = t0 + MAX_CUMULATIVE_LEASE_SEC as f64;
+        let mut r = build_flow_redirect_task("ub-r2", &flow("10.0.0.81"), "lan0", 12222, 900, &now_at(cap - 200.0)).unwrap();
+        r.family_started_epoch = Some(t0);
+        let mut first = build_flow_redirect_task("ub-r1", &flow("10.0.0.81"), "lan0", 12222, 900, &now_at(t0)).unwrap();
+        first.status = "released".to_string();
+        prepare_release_task(&path, &first).unwrap();
+        let Admission::Prepared(b) = admit_release_task(&path, &r, &[], 900, &now_at(cap - 200.0)).unwrap() else { panic!() };
+        assert_eq!(b.due_epoch, cap);
+        let throttle = build_flow_throttle_task("ub-t", &flow("10.0.0.81"), 32, 32, 300, &now_at(cap + 10.0)).unwrap();
+        assert!(matches!(admit_release_task(&path, &throttle, &[], 300, &now_at(cap + 10.0)), Ok(Admission::Cooldown { .. })));
+    }
+
+    /// Re521b-05: a cooldown added later to an old terminal task survives
+    /// every migration until it ends.
+    #[test]
+    fn a_cooldown_added_to_an_old_released_task_survives_compaction_until_it_ends() {
+        let path = test_path("ledger.json");
+        let t = 400_000.0;
+        let short = build_flow_throttle_task("uc-0", &flow("10.0.0.82"), 32, 32, 30, &now_at(t)).unwrap();
+        let Admission::Prepared(a) = admit_release_task(&path, &short, &[], 30, &now_at(t)).unwrap() else { panic!() };
+        activate_release_task(&path, &a.task_id, t).unwrap();
+        release_all(&path, t + 31.0);
+        // Within MIN_LEASE_TTL_SEC of the family's end: refused, and the
+        // cooldown is recorded on the old released task.
+        let near = build_flow_throttle_task("uc-1", &flow("10.0.0.82"), 32, 32, 900, &now_at(t + 3580.0)).unwrap();
+        assert_eq!(admit_release_task(&path, &near, &[], 900, &now_at(t + 3580.0)), Err("lease cumulative limit reached".to_string()));
+        let carrier = load_ledger(&path).unwrap().tasks.into_iter().find(|x| x.task_id == a.task_id).unwrap();
+        assert_eq!(carrier.cooldown_until_epoch, Some(t + 4500.0));
+        assert_eq!(carrier.updated_epoch, t + 3580.0, "a cooldown counts the task as changed");
+        // Automatic and manual migration at T+4300 (> COMPACT_MIN_AGE_SEC
+        // after the release) keep it.
+        let mut ledger = load_ledger(&path).unwrap();
+        for n in 0..COMPACT_AT_TASKS {
+            ledger.tasks.push(terminal_filler(n, 1_000.0));
+        }
+        save_ledger(&path, &mut ledger).unwrap();
+        let other = build_flow_throttle_task("uc-o", &flow("10.0.0.83"), 32, 32, 300, &now_at(t + 4300.0)).unwrap();
+        assert!(matches!(admit_release_task(&path, &other, &[], 300, &now_at(t + 4300.0)), Ok(Admission::Prepared(_))));
+        compact_release_ledger(&path, t + 4300.0).unwrap();
+        assert!(load_ledger(&path).unwrap().tasks.iter().any(|x| x.task_id == a.task_id));
+        let again = build_flow_throttle_task("uc-2", &flow("10.0.0.82"), 32, 32, 900, &now_at(t + 4400.0)).unwrap();
+        assert!(matches!(admit_release_task(&path, &again, &[], 900, &now_at(t + 4400.0)), Ok(Admission::Cooldown { .. })));
+        // The wall clock jumps far forward while this boot's monotonic
+        // cooldown still runs: neither a migration nor admission ends it.
+        let jumped = LeaseNow { wall_epoch: t + 20_000.0, boottime_ns: now_at(t + 4410.0).boottime_ns, boot_id: Some("b001-1".to_string()) };
+        let mut ledger = load_ledger(&path).unwrap();
+        for n in 0..COMPACT_AT_TASKS {
+            ledger.tasks.push(terminal_filler(10_000 + n, 1_000.0));
+        }
+        save_ledger(&path, &mut ledger).unwrap();
+        let other2 = build_flow_throttle_task("uc-o2", &flow("10.0.0.87"), 32, 32, 300, &jumped).unwrap();
+        assert!(matches!(admit_release_task(&path, &other2, &[], 300, &jumped), Ok(Admission::Prepared(_))));
+        assert!(load_ledger(&path).unwrap().tasks.iter().any(|x| x.task_id == a.task_id), "compacted while its cooldown runs");
+        let again2 = build_flow_throttle_task("uc-3", &flow("10.0.0.82"), 32, 32, 900, &jumped).unwrap();
+        assert!(matches!(admit_release_task(&path, &again2, &[], 900, &jumped), Ok(Admission::Cooldown { .. })));
+        // Once it has ended (and a cooldown later), it may be compacted.
+        assert!(compact_release_ledger(&path, t + 4500.0 + FLOW_COOLDOWN_SEC as f64 + COMPACT_MIN_AGE_SEC).unwrap()["compacted"].as_u64().unwrap() > 0);
+    }
+
+    /// Re521b-06: in its own boot the cooldown follows the monotonic clock;
+    /// in another boot, or with the wall clock behind, it is re-anchored for
+    /// at most FLOW_COOLDOWN_SEC -- never ended early, never permanent.
+    #[test]
+    fn a_cooldown_follows_the_monotonic_clock_and_is_finite_across_boots() {
+        let path = test_path("ledger.json");
+        let cap = used_up_throttle(&path, "10.0.0.84", 500_000.0);
+        let probe = |label: &str, at: LeaseNow| {
+            let t = build_flow_throttle_task(label, &flow("10.0.0.84"), 32, 32, 300, &at).unwrap();
+            admit_release_task(&path, &t, &[], 300, &at)
+        };
+        let mono_at = |wall: f64| now_at(wall).boottime_ns.unwrap();
+        // Wall clock stepped back before the cooldown; monotonic 100 s in.
+        let back = LeaseNow { wall_epoch: cap - 100.0, boottime_ns: Some(mono_at(cap + 100.0)), boot_id: Some("b001-1".to_string()) };
+        assert!(matches!(probe("ud-1", back), Ok(Admission::Cooldown { .. })));
+        // Wall clock stepped forward past its end; monotonic 200 s in.
+        let fwd = LeaseNow { wall_epoch: cap + 5000.0, boottime_ns: Some(mono_at(cap + 200.0)), boot_id: Some("b001-1".to_string()) };
+        assert!(matches!(probe("ud-2", fwd), Ok(Admission::Cooldown { .. })));
+        // Same boot, monotonic past the end: over.
+        assert!(matches!(probe("ud-3", now_at(cap + FLOW_COOLDOWN_SEC as f64 + 1.0)), Ok(Admission::Prepared(_))));
+
+        // Another boot, wall clock behind the recording: re-anchored on the
+        // new boot for FLOW_COOLDOWN_SEC, then over.
+        let path = test_path("ledger.json");
+        let cap = used_up_throttle(&path, "10.0.0.85", 600_000.0);
+        let new_boot = |wall: f64, mono: u64| LeaseNow { wall_epoch: wall, boottime_ns: Some(mono), boot_id: Some("b002-2".to_string()) };
+        let probe2 = |label: &str, at: LeaseNow| {
+            let t = build_flow_throttle_task(label, &flow("10.0.0.85"), 32, 32, 300, &at).unwrap();
+            admit_release_task(&path, &t, &[], 300, &at)
+        };
+        assert!(matches!(probe2("ue-1", new_boot(cap - 3000.0, 10_000_000_000)), Ok(Admission::Cooldown { .. })));
+        assert!(matches!(probe2("ue-2", new_boot(cap - 2500.0, 10_000_000_000 + 500_000_000_000)), Ok(Admission::Cooldown { .. })));
+        let over = new_boot(cap - 2000.0, 10_000_000_000 + (FLOW_COOLDOWN_SEC + 1) * 1_000_000_000);
+        assert!(matches!(probe2("ue-3", over), Ok(Admission::Prepared(_))), "a re-anchored cooldown ends");
+    }
+
+    /// Re521b-07: our token on our IPs but another port, protocol or
+    /// ingress is another flow's rule: never deleted.
+    #[test]
+    fn removal_needs_the_complete_flow_identity() {
+        let throttle = build_flow_throttle_task("ug", &flow("10.0.0.86"), 32, 32, 30, &LeaseNow::wall_only(100.0)).unwrap();
+        let redirect = build_flow_redirect_task("uh", &flow("10.0.0.86"), "lan0", 12222, 30, &LeaseNow::wall_only(100.0)).unwrap();
+        let other_port = { let mut r = flow_rule(&throttle, 3, 32); r["rule"]["expr"][2]["match"]["right"] = json!(23); r };
+        let other_proto = { let mut r = flow_rule(&throttle, 3, 32); r["rule"]["expr"][2]["match"]["left"]["payload"]["protocol"] = json!("udp"); r };
+        let other_iface = { let mut r = redirect_rule(&redirect, 4); r["rule"]["expr"][0]["match"]["right"] = json!("wan0"); r };
+        let other_rport = { let mut r = redirect_rule(&redirect, 4); r["rule"]["expr"][3]["match"]["right"] = json!(2222); r };
+        for (task, rule) in [(&throttle, other_port), (&throttle, other_proto), (&redirect, other_iface), (&redirect, other_rport)] {
+            let chain = owned_nft_chain(task).unwrap();
+            let runner = FakeRunner::new(vec![ok_json(json!({"nftables": [rule]}))]);
+            assert!(nft_owned_rules(task, chain, &runner).is_err(), "{rule}");
+        }
+        // Another rate or redirect port on the same flow is ours (deviating).
+        let deviating = { let mut r = redirect_rule(&redirect, 4); r["rule"]["expr"][5]["redirect"]["port"] = json!(1); r };
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": [deviating]}))]);
+        assert_eq!(nft_owned_rules(&redirect, "prerouting", &runner), Ok(vec![(4, false)]));
     }
 }
