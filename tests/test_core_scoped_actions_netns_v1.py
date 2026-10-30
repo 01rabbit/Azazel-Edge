@@ -334,16 +334,19 @@ def test_a_wedged_apply_is_killed_and_never_holds_back_a_due_release(topology):
             assert applied and applied["result"] == "applied", applied
             task_id = applied["metadata"]["release_task_id"]
             due = applied["metadata"]["release_due_epoch"]
-            # Keep the decision loop inside wedged applies (3 s each) from a
-            # few seconds before the lease falls due until after it.
-            while time.time() < due - 4:
-                time.sleep(0.2)
+            # The first wedged apply (3 s) starts 1.5 s before the lease falls
+            # due, so the decision loop is inside it at the due time. A sweep
+            # on the decision loop could only run after it (>= 1.5 s late; the
+            # per-poll work bound ends the poll after one wedge); the sweep
+            # thread releases on time.
+            while time.time() < due - 1.5:
+                time.sleep(0.02)
             # Six flows (one port each), so each is admitted and wedges.
             for n in range(6):
                 core.alert("10.91.1.66", 3, 9400 + n, 6000 + n)
             released = core.wait(lambda: _release_for(core, task_id), 15)
             assert released, "the due lease was not released while applies were wedged"
-            assert released["attempted_at_epoch"] - due < 3.0, released
+            assert released["attempted_at_epoch"] - due < 1.0, released
             # The wedged applies were still running around the release.
             def all_wedged():
                 found = [r for r in core.records()
@@ -360,8 +363,7 @@ def test_a_wedged_apply_is_killed_and_never_holds_back_a_due_release(topology):
             # wedged apply (each is decided at ingest, then held 3 s).
             starts = sorted(r["normalized"]["ingest_epoch"] for r in wedged)
             at = released["attempted_at_epoch"]
-            assert starts[0] < at < starts[-1], (starts, at)
-            assert any(start <= at <= start + 3.5 for start in starts), (starts, at)
+            assert starts[0] < at < starts[0] + 2.8, (starts, at)
             # Each wedged lease was released at once, not after its TTL.
             def wedged_released():
                 ids = [r["enforcement"]["metadata"]["release_task_id"] for r in wedged]
