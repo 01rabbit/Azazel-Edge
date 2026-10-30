@@ -57,7 +57,7 @@ struct Config {
     redirect_policy_source: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct NormalizedEvent {
     ts: String,
     src_ip: String,
@@ -480,24 +480,49 @@ fn build_enforcement_plan(ev: &NormalizedEvent, decision: &DefensiveDecision, if
 }
 
 /// The flow an alert names: its source and destination of one address
-/// family and, for TCP/UDP with a port, the destination port. `None` when it
-/// cannot be scoped to a flow; then nothing is restricted.
-fn flow_scope(ev: &NormalizedEvent) -> Option<FlowScope> {
-    let family = nft_family(&ev.src_ip)?;
+/// family, its protocol, and for TCP/UDP the destination port. The scope
+/// never widens: TCP/UDP without a port, or any protocol other than
+/// TCP/UDP/ICMP/ICMPv6, is refused (`Err` with the reason) rather than
+/// restricted on every protocol or port.
+fn flow_scope_checked(ev: &NormalizedEvent) -> Result<FlowScope, &'static str> {
+    let family = nft_family(&ev.src_ip).ok_or("target_source_invalid")?;
     if nft_family(&ev.dst_ip) != Some(family) {
-        return None;
+        return Err("target_not_a_flow");
     }
-    let protocol = match ev.protocol.to_ascii_lowercase().as_str() {
-        "tcp" if ev.target_port > 0 => "tcp",
-        "udp" if ev.target_port > 0 => "udp",
-        _ => "",
+    let protocol = match (ev.protocol.to_ascii_lowercase().as_str(), family) {
+        ("tcp", _) => "tcp",
+        ("udp", _) => "udp",
+        ("icmp", "ip") => "icmp",
+        ("ipv6-icmp" | "icmpv6" | "icmp6", "ip6") => "ipv6-icmp",
+        _ => return Err("target_protocol_unsupported"),
     };
-    Some(FlowScope {
+    let has_port = release::protocol_has_port(protocol);
+    if has_port && ev.target_port == 0 {
+        return Err("target_port_missing");
+    }
+    Ok(FlowScope {
         source_ip: ev.src_ip.clone(),
         destination_ip: ev.dst_ip.clone(),
         protocol: protocol.to_string(),
-        destination_port: if protocol.is_empty() { 0 } else { ev.target_port },
+        destination_port: if has_port { ev.target_port } else { 0 },
     })
+}
+
+fn flow_scope(ev: &NormalizedEvent) -> Option<FlowScope> {
+    flow_scope_checked(ev).ok()
+}
+
+/// The alert's identity for the replay guard: its own time, addresses,
+/// port, protocol and rule id -- not the decided action or the mechanism,
+/// which a policy or code change can alter for the same alert.
+fn event_key(ev: &NormalizedEvent) -> String {
+    let material = format!("{}|{}|{}|{}|{}|{}", ev.ts, ev.src_ip, ev.dst_ip, ev.target_port, ev.protocol.to_ascii_lowercase(), ev.sid);
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in material.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("event-{:016x}", hash)
 }
 
 /// The restriction strength for an alert: strict for critical severity.
@@ -519,8 +544,12 @@ fn flow_limit_argv(verb: &str, flow: &FlowScope, rate: u32, burst: u32) -> Vec<S
         THROTTLE_CHAIN.to_string(), family.to_string(), "saddr".to_string(), flow.source_ip.clone(),
         family.to_string(), "daddr".to_string(), flow.destination_ip.clone(),
     ];
-    if !flow.protocol.is_empty() {
+    if release::protocol_has_port(&flow.protocol) {
         argv.extend([flow.protocol.clone(), "dport".to_string(), flow.destination_port.to_string()]);
+    } else {
+        // ICMP/ICMPv6: the protocol is matched, so no TCP/UDP of the flow is
+        // ever in scope.
+        argv.extend(["meta".to_string(), "l4proto".to_string(), flow.protocol.clone()]);
     }
     argv.extend([
         "limit".to_string(), "rate".to_string(), "over".to_string(), rate.to_string(), "kbytes/second".to_string(),
@@ -535,7 +564,7 @@ fn flow_limit_argv(verb: &str, flow: &FlowScope, rate: u32, burst: u32) -> Vec<S
 fn build_enforcement_plan_owned(
     ev: &NormalizedEvent,
     decision: &DefensiveDecision,
-    _iface: &str,
+    iface: &str,
     honeypot_port: u16,
     release_task: Option<&ReleaseTask>,
 ) -> EnforcementPlan {
@@ -565,27 +594,39 @@ fn build_enforcement_plan_owned(
         }
     }
 
+    // A redirect is scoped like a restriction: traffic arriving on the
+    // ingress interface, from this source, to this destination and TCP port.
+    // Another destination of the same source on the same port (a protected
+    // host, say) is never redirected.
     if decision.action == "redirect" {
-        let mut command = vec![
-            "nft".to_string(), "insert".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
-            "prerouting".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "tcp".to_string(),
-            "dport".to_string(), ev.target_port.to_string(), "redirect".to_string(), "to".to_string(), honeypot_port.to_string(),
-        ];
-        if let Some((task, comment)) = &owned_nft {
-            command.push("comment".to_string());
-            command.push(comment.clone());
-            rollback.push(vec![
-                "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
-                "prerouting".to_string(), "handle".to_string(), format!("<owned:{}>", task.owner_token),
-            ]);
-        } else {
-            rollback.push(vec![
-                "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
-                "prerouting".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "tcp".to_string(),
-                "dport".to_string(), ev.target_port.to_string(), "redirect".to_string(), "to".to_string(), honeypot_port.to_string(),
-            ]);
+        if let Some(flow) = flow_scope(ev).filter(|f| f.protocol == "tcp") {
+            let matches = vec![
+                "iifname".to_string(), format!("\"{}\"", iface), "ip".to_string(), "saddr".to_string(), flow.source_ip.clone(),
+                "ip".to_string(), "daddr".to_string(), flow.destination_ip.clone(), "tcp".to_string(), "dport".to_string(),
+                flow.destination_port.to_string(), "redirect".to_string(), "to".to_string(), honeypot_port.to_string(),
+            ];
+            let mut command = vec![
+                "nft".to_string(), "insert".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+                "prerouting".to_string(),
+            ];
+            command.extend(matches.clone());
+            if let Some((task, comment)) = &owned_nft {
+                command.push("comment".to_string());
+                command.push(comment.clone());
+                rollback.push(vec![
+                    "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+                    "prerouting".to_string(), "handle".to_string(), format!("<owned:{}>", task.owner_token),
+                ]);
+            } else {
+                let mut delete = vec![
+                    "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+                    "prerouting".to_string(),
+                ];
+                delete.extend(matches);
+                rollback.push(delete);
+            }
+            apply.push(command);
         }
-        apply.push(command);
     }
 
     EnforcementPlan {
@@ -733,26 +774,28 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
 /// of the protected communications set. Evaluated in every mode, so a dry
 /// run shows what would really happen.
 fn static_safety_refusal(ev: &NormalizedEvent, action: &str, cfg: &Config) -> (Option<String>, Option<ProtectedMatch>) {
-    match action {
+    let flow = match action {
         "isolate" => return (Some("isolate_not_automatic".to_string()), None),
-        "throttle" if flow_scope(ev).is_none() => return (Some("target_not_a_flow".to_string()), None),
-        "redirect" => {
-            if !ev.protocol.eq_ignore_ascii_case("tcp") || ev.target_port == 0 {
-                return (Some("redirect_target_ineligible:not_tcp".to_string()), None);
-            }
-            if nft_family(&ev.src_ip) != Some("ip") {
-                return (Some("redirect_target_ineligible:not_ipv4_source".to_string()), None);
-            }
-        }
-        "throttle" => {}
+        "throttle" => match flow_scope_checked(ev) {
+            Ok(flow) => flow,
+            Err(reason) => return (Some(reason.to_string()), None),
+        },
+        "redirect" => match flow_scope_checked(ev) {
+            Ok(flow) if flow.protocol == "tcp" && nft_family(&flow.source_ip) == Some("ip") => flow,
+            Ok(flow) if flow.protocol != "tcp" => return (Some("redirect_target_ineligible:not_tcp".to_string()), None),
+            Ok(_) => return (Some("redirect_target_ineligible:not_ipv4_source".to_string()), None),
+            Err(reason) => return (Some(format!("redirect_target_ineligible:{reason}")), None),
+        },
         _ => return (None, None),
-    }
-    let Ok(source) = ev.src_ip.parse::<std::net::IpAddr>() else {
+    };
+    // The protected set is matched against what the rule would act on: the
+    // source, the destination and the port (0 for a protocol without one,
+    // which then matches every destination entry).
+    let (Ok(source), Ok(destination)) = (flow.source_ip.parse::<std::net::IpAddr>(), flow.destination_ip.parse::<std::net::IpAddr>()) else {
         return (Some("target_source_invalid".to_string()), None);
     };
-    let destination = ev.dst_ip.parse::<std::net::IpAddr>().ok();
-    match cfg.protected.matches(&source, destination.as_ref(), ev.target_port) {
-        Some(found) => (Some(format!("protected_flow:{}", found.role)), Some(found)),
+    match cfg.protected.matches(&source, Some(&destination), flow.destination_port) {
+        Some(found) => (Some(format!("protected_flow:{}:{}", found.role, found.name)), Some(found)),
         None => (None, None),
     }
 }
@@ -768,10 +811,8 @@ fn execution_safety_refusal(ev: &NormalizedEvent, action: &str, decoy_port: u16,
             Some(policy) => (policy.decoy_separation_evidence_path.as_str(), policy.decoy_evidence_max_age_sec),
             None => ("", 0),
         };
-        safety::check_decoy_evidence(path, max_age, decoy_port, now.wall_epoch, now.boot_id.as_deref().unwrap_or(""))?;
-        if !safety::decoy_reachable(decoy_port) {
-            return Err("decoy_unreachable".to_string());
-        }
+        safety::check_decoy_evidence(path, max_age, decoy_port, &cfg.defense_iface, now.wall_epoch, now.boot_id.as_deref().unwrap_or(""))?;
+        safety::decoy_reachable(&cfg.defense_iface, decoy_port)?;
     }
     Ok(event_epoch)
 }
@@ -816,17 +857,9 @@ fn maybe_enforce_with<A: Applier>(ev: &NormalizedEvent, decision: &DefensiveDeci
             let (_, rate, burst) = strength_for(ev);
             build_flow_throttle_task(&trace_id, &flow, rate, burst, cfg.defense_action_ttl_sec, &now)
         }),
-        "redirect" => build_release_task(
-            &trace_id,
-            "redirect",
-            &cfg.defense_iface,
-            &ev.src_ip,
-            ev.target_port,
-            selected_decoy_port,
-            effective_decision.delay_ms,
-            cfg.defense_action_ttl_sec,
-            &now,
-        ),
+        "redirect" => flow_scope(ev).and_then(|flow| {
+            release::build_flow_redirect_task(&trace_id, &flow, &cfg.defense_iface, selected_decoy_port, cfg.defense_action_ttl_sec, &now)
+        }),
         _ => None,
     };
     let plan = build_enforcement_plan_owned(
@@ -840,7 +873,10 @@ fn maybe_enforce_with<A: Applier>(ev: &NormalizedEvent, decision: &DefensiveDeci
     if plan.apply_commands.is_empty() {
         add_release_metadata(&mut redirect_meta, None, "not_applicable");
         let gate = static_refusal.as_ref().map(|r| format!("refused:{}", r)).unwrap_or_else(|| "not_applicable".to_string());
-        redirect_meta["safety"] = safety_meta(&gate, "not_applicable");
+        // Observe-only outcomes (`disabled`, `dry_run`) keep the metadata
+        // keys Nexus's intake accepts; a refusal's reason is in
+        // policy_reason. `safety` is added only where enforcement acted.
+        let _ = gate;
         return EnforcementOutcome {
             mode: "disabled".to_string(),
             trace_id,
@@ -861,7 +897,9 @@ fn maybe_enforce_with<A: Applier>(ev: &NormalizedEvent, decision: &DefensiveDeci
     let (allowed_by_policy, policy_gate_reason) = should_execute_action(&effective_decision.action, cfg);
     if cfg.defense_dry_run || !allowed_by_policy {
         add_release_metadata(&mut redirect_meta, release_task.as_ref(), "planned_only");
-        redirect_meta["safety"] = safety_meta("not_evaluated:not_executing", "not_evaluated");
+        if !cfg.defense_dry_run {
+            redirect_meta["safety"] = safety_meta("not_evaluated:not_executing", "not_evaluated");
+        }
         return EnforcementOutcome {
             mode: if cfg.defense_dry_run { "dry_run".to_string() } else { "policy_gated".to_string() },
             trace_id,
@@ -927,6 +965,7 @@ fn maybe_enforce_with<A: Applier>(ev: &NormalizedEvent, decision: &DefensiveDeci
         }
     };
     task.event_epoch = Some(event_epoch);
+    task.event_key = event_key(ev);
 
     let admitted = match admit_release_task(&cfg.defense_release_ledger_path, &task, cfg.defense_action_ttl_sec, &now) {
         Ok(Admission::Prepared(admitted)) => admitted,
@@ -1393,7 +1432,7 @@ fn process_value(cfg: &Config, parsed: &Value) {
     let decision = decide_defense(&normalized);
     let enforcement = maybe_enforce(&normalized, &decision, cfg);
     let event = core_event(&normalized, &decision, &enforcement, cfg);
-    if enforcement_evidence_due(&enforcement) {
+    if enforcement_evidence_due(&enforcement, cfg) {
         spool_enforcement_evidence(cfg, &event);
     }
 
@@ -1458,24 +1497,66 @@ fn enforcement_evidence_path(cfg: &Config) -> std::path::PathBuf {
 const ENFORCEMENT_EVIDENCE_CAP_BYTES: u64 = 8 * 1024 * 1024;
 static EVIDENCE_SEQ: AtomicU64 = AtomicU64::new(0);
 
-fn enforcement_evidence_due(outcome: &EnforcementOutcome) -> bool {
+/// What reaches the spool: what enforcement did or refused while it was
+/// executing (applied, extended, held, failed, refused at execution or by
+/// admission) and, with enforcement executing, a refusal by a static rule
+/// (a protected flow, isolate, an unscopable target).
+fn enforcement_evidence_due(outcome: &EnforcementOutcome, cfg: &Config) -> bool {
     matches!(outcome.mode.as_str(), "enforced" | "release_guard_failed")
         || outcome.policy_reason.contains(":safety_gate:")
+        || (cfg.defense_enforce && !cfg.defense_dry_run && outcome.policy_reason.contains(":safety_refused:"))
 }
 
+/// Numbering, the size check, the rotation and the append are one critical
+/// section: the decision loop and the release sweep both write here, and two
+/// writers rotating at once would rename the segment the other just started
+/// over the retained one.
+static EVIDENCE_LOCK: Mutex<()> = Mutex::new(());
+
 fn spool_enforcement_evidence(cfg: &Config, event: &Value) {
+    let path = enforcement_evidence_path(cfg);
+    if let Err(error) = append_evidence(&path, event, ENFORCEMENT_EVIDENCE_CAP_BYTES) {
+        eprintln!("enforcement evidence spool write failed ({}): {}", path.display(), error);
+    }
+}
+
+fn append_evidence(path: &Path, event: &Value, cap_bytes: u64) -> std::io::Result<u64> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let _guard = EVIDENCE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "evidence spool path is a symlink"));
+        }
+        if meta.len() >= cap_bytes {
+            let mut rotated = path.as_os_str().to_owned();
+            rotated.push(".1");
+            fs::rename(path, &rotated)?;
+            // The rename is durable before anything lands in the new segment.
+            fs::File::open(parent)?.sync_all()?;
+        }
+    }
+    let seq = EVIDENCE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     let mut record = event.clone();
     // A per-run sequence: a gap, or a first number above 1 after a rotation,
     // shows what the cap dropped.
-    record["evidence_spool"] = json!({
-        "seq": EVIDENCE_SEQ.fetch_add(1, Ordering::Relaxed) + 1,
-        "since": process_start(),
-        "cap_bytes": ENFORCEMENT_EVIDENCE_CAP_BYTES,
-    });
-    let path = enforcement_evidence_path(cfg);
-    if let Err(error) = append_audit_record(&path, &record, ENFORCEMENT_EVIDENCE_CAP_BYTES) {
-        eprintln!("enforcement evidence spool write failed ({}): {}", path.display(), error);
+    record["evidence_spool"] = json!({"seq": seq, "since": process_start(), "cap_bytes": cap_bytes});
+    let mut line = serde_json::to_vec(&record).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    line.push(b'\n');
+    let created = !path.exists();
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .custom_flags(release::O_NOFOLLOW)
+        .open(path)?;
+    file.write_all(&line)?;
+    file.sync_data()?;
+    if created {
+        fs::File::open(parent)?.sync_all()?;
     }
+    Ok(seq)
 }
 
 /// Where the ingress audit summaries go: next to the normalized event log,
@@ -2905,7 +2986,7 @@ mod tests {
         ev
     }
 
-    const PROTECTED: &str = "protected_flows:\n  version: 1\n  entries:\n    - {name: mgmt, role: management, network: 192.0.2.0/28}\n    - {name: expert, role: expert_contact, network: 198.51.100.7, ports: [443]}\n";
+    const PROTECTED: &str = "protected_flows:\n  version: 1\n  entries:\n    - {name: mgmt, role: management, network: 192.0.2.0/28}\n    - {name: expert, role: expert_contact, network: 198.51.100.7, ports: [443]}\n  roles_not_applicable:\n    - {role: mission, approved_by: test-lead, reason: no mission link in this test}\n";
 
     /// Enforcement on, dry run off, full-auto, a ledger in `dir`, the
     /// protected set above, the prepared-port redirect policy with its decoy
@@ -3045,9 +3126,12 @@ mod tests {
                 assert!(applier.applied().is_empty());
                 assert_eq!(outcome.selected_action, "notify");
                 assert!(outcome.command_plan.is_empty());
-                assert_eq!(outcome.metadata["safety"]["gate"], format!("refused:protected_flow:{}", role));
-                assert_eq!(outcome.metadata["safety"]["protected_match"]["role"], role);
-                assert!(outcome.policy_reason.contains("safety_refused:protected_flow"));
+                // Observe-only shape: the reason (role and entry) is in
+                // policy_reason, no extra metadata key.
+                assert_eq!(outcome.mode, "disabled");
+                assert!(outcome.metadata.get("safety").is_none());
+                let name = if role == "management" { "mgmt" } else { "expert" };
+                assert!(outcome.policy_reason.ends_with(&format!(":safety_refused:protected_flow:{}:{}", role, name)), "{}", outcome.policy_reason);
             }
         }
         // The same alert from an unprotected source, or to the expert on
@@ -3207,7 +3291,7 @@ mod tests {
     fn write_decoy_evidence(cfg: &Config, ports: &[u16], boot: &str) {
         use std::os::unix::fs::PermissionsExt;
         let path = cfg.redirect_policy.as_ref().unwrap().decoy_separation_evidence_path.clone();
-        let body = json!({"schema": safety::DECOY_EVIDENCE_SCHEMA, "boot_id": boot, "observed_epoch": now_epoch(), "separation": "network_namespace", "decoy_ports": ports});
+        let body = json!({"schema": safety::DECOY_EVIDENCE_SCHEMA, "boot_id": boot, "observed_epoch": now_epoch(), "separation": "network_namespace", "decoy_ports": ports, "ingress_interface": cfg.defense_iface});
         fs::write(&path, body.to_string()).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     }
@@ -3216,6 +3300,9 @@ mod tests {
     fn a_redirect_runs_only_with_this_boots_separation_evidence_and_a_reachable_decoy() {
         let dir = test_dir("decoy");
         let mut cfg = executing_cfg(&dir);
+        // The decoy is probed where `nft redirect` delivers: the ingress
+        // interface's address (here lo, 127.0.0.1).
+        cfg.defense_iface = "lo".to_string();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         cfg.redirect_policy.as_mut().unwrap().prepared_ports = HashMap::from([(22_u16, port)]);
@@ -3292,13 +3379,13 @@ mod tests {
         cfg.event_stdout = StdoutMode::Off;
         let ev = fresh_event(3, "203.0.113.60");
         let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &FakeApplier::ok());
-        assert!(enforcement_evidence_due(&outcome));
+        assert!(enforcement_evidence_due(&outcome, &cfg));
         let mut dry = cfg.clone();
         dry.defense_dry_run = true;
-        assert!(!enforcement_evidence_due(&maybe_enforce(&fresh_event(3, "203.0.113.61"), &decide_defense(&ev), &dry)));
+        assert!(!enforcement_evidence_due(&maybe_enforce(&fresh_event(3, "203.0.113.61"), &decide_defense(&ev), &dry), &dry));
         let mut stale = fresh_event(3, "203.0.113.62");
         stale.ts = "2020-01-01T00:00:00Z".to_string();
-        assert!(enforcement_evidence_due(&maybe_enforce_with(&stale, &decide_defense(&stale), &cfg, &FakeApplier::ok())));
+        assert!(enforcement_evidence_due(&maybe_enforce_with(&stale, &decide_defense(&stale), &cfg, &FakeApplier::ok()), &cfg));
         let event = core_event(&ev, &decide_defense(&ev), &outcome, &cfg);
         spool_enforcement_evidence(&cfg, &event);
         let raw = fs::read_to_string(enforcement_evidence_path(&cfg)).unwrap();
@@ -3306,6 +3393,167 @@ mod tests {
         assert_eq!(line["enforcement"]["result"], "applied");
         assert!(line["evidence_spool"]["seq"].as_u64().unwrap() >= 1);
         assert!(!fs::metadata(&cfg.normalized_log_path).map(|m| m.len() > 0).unwrap_or(false));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // -- Codex review Re521 ----------------------------------------------
+
+    /// Re521-01: the redirect acts on this destination only, so another
+    /// destination of the same source on the same port is untouched.
+    #[test]
+    fn a_redirect_is_scoped_to_the_alerts_destination_and_ingress_interface() {
+        let mut ev = fresh_event(2, "203.0.113.20");
+        ev.dst_ip = "10.20.0.5".to_string();
+        let plan = build_enforcement_plan(&ev, &decide_defense(&ev), "lan0", 12222);
+        assert_eq!(
+            plan.apply_commands[0],
+            "nft insert rule inet azazel_edge prerouting iifname '\"lan0\"' ip saddr 203.0.113.20 ip daddr 10.20.0.5 tcp dport 22 redirect to 12222"
+        );
+        let task = release::build_flow_redirect_task("t", &flow_scope(&ev).unwrap(), "lan0", 12222, 300, &LeaseNow::wall_only(100.0)).unwrap();
+        assert_eq!(task.resource_key, "nft:inet:azazel_edge:prerouting:lan0:203.0.113.20>10.20.0.5:tcp:22");
+        // A protected destination on the same port is refused for its own alert.
+        let dir = test_dir("re01");
+        let cfg = executing_cfg(&dir);
+        let mut to_mgmt = fresh_event(2, "203.0.113.20");
+        to_mgmt.dst_ip = "192.0.2.3".to_string();
+        let outcome = maybe_enforce_with(&to_mgmt, &decide_defense(&to_mgmt), &cfg, &FakeApplier::ok());
+        assert_eq!(outcome.selected_action, "notify");
+        assert!(outcome.policy_reason.contains("safety_refused:protected_flow:management:mgmt"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Re521-02: a portless alert is limited to its protocol; TCP/UDP without
+    /// a port and other protocols are refused; a portless scope toward a
+    /// destination entry with listed ports is still protected.
+    #[test]
+    fn a_portless_flow_is_scoped_to_its_protocol_and_never_widened() {
+        let mut ev = fresh_event(3, "203.0.113.21");
+        ev.protocol = "ICMP".to_string();
+        ev.target_port = 0;
+        let plan = build_enforcement_plan(&ev, &decide_defense(&ev), "br0", 2222);
+        assert!(plan.apply_commands[0].contains("ip saddr 203.0.113.21 ip daddr 10.20.0.5 meta l4proto icmp limit rate over"), "{}", plan.apply_commands[0]);
+        let mut v6 = ev.clone();
+        v6.src_ip = "2001:db8::21".to_string();
+        v6.dst_ip = "2001:db8::5".to_string();
+        v6.protocol = "IPv6-ICMP".to_string();
+        assert!(build_enforcement_plan(&v6, &decide_defense(&v6), "br0", 2222).apply_commands[0].contains("ip6 daddr 2001:db8::5 meta l4proto ipv6-icmp"));
+        let dir = test_dir("re02");
+        let cfg = executing_cfg(&dir);
+        for (protocol, port, reason) in [("TCP", 0, "target_port_missing"), ("UDP", 0, "target_port_missing"), ("GRE", 0, "target_protocol_unsupported"), ("unknown", 22, "target_protocol_unsupported")] {
+            let mut bad = fresh_event(3, "203.0.113.22");
+            bad.protocol = protocol.to_string();
+            bad.target_port = port;
+            assert!(build_enforcement_plan(&bad, &decide_defense(&bad), "br0", 2222).apply_argv.is_empty(), "{protocol}");
+            let applier = FakeApplier::ok();
+            let outcome = maybe_enforce_with(&bad, &decide_defense(&bad), &cfg, &applier);
+            assert!(applier.applied().is_empty());
+            assert!(outcome.policy_reason.ends_with(&format!(":safety_refused:{}", reason)), "{}", outcome.policy_reason);
+        }
+        // ICMP toward the expert (protected on 443 only): refused, because
+        // the portless scope cannot exclude any listed port.
+        let mut to_expert = ev.clone();
+        to_expert.dst_ip = "198.51.100.7".to_string();
+        let applier = FakeApplier::ok();
+        let outcome = maybe_enforce_with(&to_expert, &decide_defense(&to_expert), &cfg, &applier);
+        assert!(applier.applied().is_empty());
+        assert!(outcome.policy_reason.contains("safety_refused:protected_flow:expert_contact:expert"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Re521-04: observe-only outcomes keep exactly the metadata keys Nexus's
+    /// intake accepts (its closed shape), whatever the alert and policy.
+    #[test]
+    fn observe_only_outcomes_keep_the_metadata_keys_nexus_accepts() {
+        let nexus_keys: Vec<&str> = vec![
+            "fallback_reason", "original_dst_port", "redirect_mapping_matched", "redirect_policy_source",
+            "release_due_epoch", "release_ledger_state", "release_owner_token", "release_resource_key",
+            "release_task_id", "release_tc_handle", "selected_decoy_port", "unsupported_port_fallback",
+        ];
+        let dir = test_dir("re04");
+        for protected in [ProtectedSet::NotConfigured, ProtectedSet::parse(PROTECTED)] {
+            for policy in [None, cfg_with_redirect_policy().redirect_policy] {
+                let mut cfg = sample_cfg();
+                cfg.protected = protected.clone();
+                cfg.redirect_policy_source = if policy.is_some() { "file:x".to_string() } else { "env_honeypot_fallback".to_string() };
+                cfg.redirect_policy = policy;
+                for severity in 0..=6_u8 {
+                    for (src, proto, port) in [("203.0.113.30", "TCP", 22), ("192.0.2.5", "TCP", 443), ("203.0.113.30", "ICMP", 0), ("203.0.113.30", "TCP", 0)] {
+                        let mut ev = fresh_event(severity, src);
+                        ev.protocol = proto.to_string();
+                        ev.target_port = port;
+                        let outcome = maybe_enforce(&ev, &decide_defense(&ev), &cfg);
+                        assert!(matches!(outcome.mode.as_str(), "dry_run" | "disabled"));
+                        let mut keys: Vec<&str> = outcome.metadata.as_object().unwrap().keys().map(String::as_str).collect();
+                        keys.sort();
+                        assert_eq!(keys, nexus_keys, "{severity} {src} {proto} {port}");
+                        assert!(matches!(outcome.result.as_str(), "no_disruptive_action" | "planned_not_applied"));
+                        assert!(matches!(outcome.metadata["release_ledger_state"].as_str(), Some("not_applicable" | "planned_only")));
+                    }
+                }
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Re521-03: an alert handled by the previous core (v1 ledger) is
+    /// refused after the upgrade, though this core builds another task id.
+    #[test]
+    fn an_alert_handled_under_a_v1_ledger_is_refused_after_the_upgrade() {
+        let dir = test_dir("re03");
+        let cfg = executing_cfg(&dir);
+        let mut ev = fresh_event(3, "203.0.113.40");
+        ev.ts = eve_ts(now_epoch() - 5.0);
+        // What the previous core wrote for it: a root-qdisc throttle lease.
+        let mut legacy = release::build_release_task("trace-old", "throttle", "br0", &ev.src_ip, 22, 0, 1000, 300, &LeaseNow::wall_only(now_epoch() - 4.0)).unwrap();
+        legacy.status = "active".to_string();
+        fs::write(&cfg.defense_release_ledger_path, json!({"schema_version": "azazel-release-ledger/v1", "tasks": [legacy]}).to_string()).unwrap();
+        let applier = FakeApplier::ok();
+        let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &applier);
+        assert!(applier.applied().is_empty());
+        assert_eq!(outcome.mode, "release_guard_failed");
+        assert!(outcome.errors[0].contains("replay checkpoint"), "{:?}", outcome.errors);
+        // A later alert of the same flow is a new event and is admitted.
+        let mut later = fresh_event(3, "203.0.113.40");
+        later.ts = eve_ts(now_epoch() + 2.0);
+        later.sid += 1;
+        assert_eq!(maybe_enforce_with(&later, &decide_defense(&later), &cfg, &FakeApplier::ok()).result, "applied");
+        // ...and replaying it, under any decided action, is refused by its event key.
+        let replay = maybe_enforce_with(&later, &decide_defense(&later), &cfg, &FakeApplier::ok());
+        assert_eq!(replay.mode, "release_guard_failed");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Re521-08: concurrent writers rotating at once lose nothing that the
+    /// two retained segments can hold, and number every record once.
+    #[test]
+    fn concurrent_spool_writers_rotate_once_and_keep_every_retained_record() {
+        let dir = test_dir("re08");
+        let path = dir.join("evidence.jsonl");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let cap = 6_000_u64;
+        let mut handles = Vec::new();
+        for t in 0..8 {
+            let (path, barrier) = (path.clone(), barrier.clone());
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                (0..5).map(|n| append_evidence(&path, &json!({"writer": t, "n": n, "pad": "x".repeat(100)}), cap).unwrap()).collect::<Vec<u64>>()
+            }));
+        }
+        let mut seqs: Vec<u64> = handles.into_iter().flat_map(|h| h.join().unwrap()).collect();
+        seqs.sort();
+        let mut kept: Vec<u64> = Vec::new();
+        for name in ["evidence.jsonl.1", "evidence.jsonl"] {
+            for line in fs::read_to_string(dir.join(name)).unwrap_or_default().lines() {
+                let value: Value = serde_json::from_str(line).unwrap();
+                kept.push(value["evidence_spool"]["seq"].as_u64().unwrap());
+            }
+        }
+        // 40 records of about 230 bytes: more than one 6 KB segment, less than two.
+        let mut sorted = kept.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), kept.len(), "a record was written twice");
+        assert_eq!(sorted, seqs, "a retained record was lost");
         let _ = fs::remove_dir_all(&dir);
     }
 }

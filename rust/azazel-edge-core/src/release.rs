@@ -37,6 +37,17 @@ pub const THROTTLE_CHAIN: &str = "throttle";
 /// mechanism is a lease written before it existed: a throttle is then the
 /// legacy root TBF qdisc, which is still released but never applied.
 pub const MECHANISM_NFT_FLOW_LIMIT: &str = "nft_flow_limit";
+/// `ReleaseTask::mechanism` of a flow-scoped decoy redirect: ingress
+/// interface, source, destination and TCP port. An empty mechanism on a
+/// redirect is a legacy lease (source and port only), released only.
+pub const MECHANISM_NFT_FLOW_REDIRECT: &str = "nft_flow_redirect";
+/// Protocols a flow-scoped lease may name. TCP/UDP always with a port;
+/// ICMP/ICMPv6 never with one, matched by `meta l4proto`.
+pub const FLOW_PROTOCOLS: [&str; 4] = ["tcp", "udp", "icmp", "ipv6-icmp"];
+
+pub fn protocol_has_port(protocol: &str) -> bool {
+    matches!(protocol, "tcp" | "udp")
+}
 const TRUSTED_DIRS: [&str; 4] = ["/usr/sbin", "/usr/bin", "/sbin", "/bin"];
 /// The audit-chain kind stating that rollback of a lease has begun (SO-04).
 pub const ROLLBACK_STARTED_KIND: &str = "rollback_started";
@@ -120,6 +131,11 @@ pub struct ReleaseTask {
     /// How many times this lease's expiry has been extended.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub extensions: u32,
+    /// The alert's own identity (time, addresses, port, protocol, sid),
+    /// independent of the action and of how it is held: the replay guard
+    /// that survives a change of mechanism or of the decided action.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub event_key: String,
 }
 
 fn is_zero_u32(value: &u32) -> bool {
@@ -351,9 +367,9 @@ fn in_flight(task_id: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-const O_NOFOLLOW: i32 = 0o400000;
+pub(crate) const O_NOFOLLOW: i32 = 0o400000;
 #[cfg(not(target_os = "linux"))]
-const O_NOFOLLOW: i32 = 0x0100;
+pub(crate) const O_NOFOLLOW: i32 = 0x0100;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReleaseOutcome {
@@ -583,6 +599,7 @@ pub fn build_release_task(
         event_epoch: None,
         family_started_epoch: None,
         extensions: 0,
+        event_key: String::new(),
     })
 }
 
@@ -620,7 +637,10 @@ pub fn build_flow_throttle_task(
     ttl_sec: u64,
     now: &LeaseNow,
 ) -> Option<ReleaseTask> {
-    if rate_kbytes == 0 || burst_kbytes == 0 {
+    if rate_kbytes == 0 || burst_kbytes == 0 || !FLOW_PROTOCOLS.contains(&flow.protocol.as_str()) {
+        return None;
+    }
+    if protocol_has_port(&flow.protocol) != (flow.destination_port != 0) {
         return None;
     }
     let mut task = build_release_task(trace_id, "redirect", "", &flow.source_ip, flow.destination_port.max(1), 1, 0, ttl_sec, now)?;
@@ -639,6 +659,33 @@ pub fn build_flow_throttle_task(
     task.protocol = flow.protocol.clone();
     task.limit_rate_kbytes = rate_kbytes;
     task.limit_burst_kbytes = burst_kbytes;
+    Some(task)
+}
+
+/// A flow-scoped decoy redirect: on `iface` (the ingress interface the
+/// decoy evidence names), this source to this destination and TCP port is
+/// redirected to the local decoy port. Other destinations of the source,
+/// and other sources, are untouched.
+pub fn build_flow_redirect_task(
+    trace_id: &str,
+    flow: &FlowScope,
+    iface: &str,
+    redirect_port: u16,
+    ttl_sec: u64,
+    now: &LeaseNow,
+) -> Option<ReleaseTask> {
+    if flow.protocol != "tcp" || flow.destination_port == 0 || redirect_port == 0 || !valid_interface(iface) {
+        return None;
+    }
+    let mut task = build_release_task(trace_id, "redirect", iface, &flow.source_ip, flow.destination_port, redirect_port, 0, ttl_sec, now)?;
+    let resource_key = format!("nft:inet:azazel_edge:prerouting:{iface}:{}", flow.key());
+    let seed = format!("{trace_id}|redirect|{resource_key}");
+    task.task_id = format!("release-{:016x}", fnv1a64(seed.as_bytes()));
+    task.owner_token = format!("azazel-edge:{}", task.task_id);
+    task.resource_key = resource_key;
+    task.mechanism = MECHANISM_NFT_FLOW_REDIRECT.to_string();
+    task.destination_ip = flow.destination_ip.clone();
+    task.protocol = "tcp".to_string();
     Some(task)
 }
 
@@ -706,6 +753,9 @@ fn admit_new_task(ledger: &mut ReleaseLedger, task: &ReleaseTask, now_epoch: f64
             ));
         }
         return Err("release task id collision".to_string());
+    }
+    if !task.event_key.is_empty() && ledger.tasks.iter().any(|item| item.event_key == task.event_key) {
+        return Err("this alert already led to a lease; replayed disruptive apply blocked".to_string());
     }
     if ledger.checkpoint.generation > 0
         && task.event_epoch.unwrap_or(task.created_epoch) <= ledger.checkpoint.replay_watermark_epoch
@@ -996,7 +1046,10 @@ pub fn owned_state_matches_plan(task: &ReleaseTask) -> Result<bool, String> {
 
 pub fn owned_state_matches_plan_with_runner<R: ReleaseCommandRunner>(task: &ReleaseTask, runner: &R) -> Result<bool, String> {
     match owned_nft_chain(task) {
-        Some(chain) => Ok(nft_owned_handles(task, chain, runner)?.len() == 1),
+        Some(chain) => {
+            let rules = nft_owned_rules(task, chain, runner)?;
+            Ok(rules.len() == 1 && rules[0].1)
+        }
         None => Err("no readback for this lease mechanism".to_string()),
     }
 }
@@ -1019,6 +1072,7 @@ fn same_task_identity(left: &ReleaseTask, right: &ReleaseTask) -> bool {
         && left.protocol == right.protocol
         && left.limit_rate_kbytes == right.limit_rate_kbytes
         && left.limit_burst_kbytes == right.limit_burst_kbytes
+        && left.event_key == right.event_key
 }
 
 pub fn activate_release_task(path: &str, task_id: &str, now_epoch: f64) -> Result<(), String> {
@@ -1477,8 +1531,11 @@ fn release_nft_rule<R: ReleaseCommandRunner>(
     runner: &R,
     now_epoch: f64,
 ) -> Result<ReleaseOutcome, String> {
-    let handles = nft_owned_handles(task, chain, runner)?;
+    let owned = nft_owned_rules(task, chain, runner)?;
+    let handles: Vec<u64> = owned.iter().map(|(handle, _)| *handle).collect();
+    let deviating = owned.iter().filter(|(_, planned)| !planned).count();
     if handles.is_empty() {
+        let connections = clear_redirect_connections(task, runner);
         return Ok(outcome_for(
             task,
             now_epoch,
@@ -1487,7 +1544,7 @@ fn release_nft_rule<R: ReleaseCommandRunner>(
             0,
             0,
             Vec::new(),
-            json!({"verified": true, "owned_rule_count": 0}),
+            json!({"verified": true, "owned_rule_count": 0, "existing_connections": connections}),
         ));
     }
 
@@ -1531,7 +1588,7 @@ fn release_nft_rule<R: ReleaseCommandRunner>(
             json!({"verified": false}),
         ));
     }
-    let remaining = nft_owned_handles(task, chain, runner)?;
+    let remaining = nft_owned_rules(task, chain, runner)?;
     if !remaining.is_empty() {
         return Ok(outcome_for(
             task,
@@ -1544,6 +1601,9 @@ fn release_nft_rule<R: ReleaseCommandRunner>(
             json!({"verified": false, "owned_rule_count": remaining.len()}),
         ));
     }
+    // The rule is gone (verified above); connections it already redirected
+    // live on in connection tracking. That is separate evidence.
+    let connections = clear_redirect_connections(task, runner);
     Ok(outcome_for(
         task,
         now_epoch,
@@ -1552,31 +1612,63 @@ fn release_nft_rule<R: ReleaseCommandRunner>(
         command_count,
         0,
         Vec::new(),
-        json!({"verified": true, "owned_rule_count": 0}),
+        json!({
+            "verified": true,
+            "owned_rule_count": 0,
+            "deleted_deviating_rules": deviating,
+            "existing_connections": connections,
+        }),
     ))
 }
 
-fn nft_owned_handles<R: ReleaseCommandRunner>(
+/// After a redirect's rule is gone, connections it already redirected keep
+/// their NAT binding in connection tracking and stay on the decoy. Delete
+/// the tracking entries of the owned flow only (original tuple: this
+/// source, destination when the lease has one, TCP port); the next packet
+/// of such a connection is no longer translated and the connection ends,
+/// new connections go to the real destination. Not a redirect:
+/// `not_applicable`. Reported apart from the rule's absence:
+/// `cleared`, `none_found`, `conntrack_unavailable` (no `conntrack` tool;
+/// redirected connections may persist until they close), `failed:<why>`.
+fn clear_redirect_connections<R: ReleaseCommandRunner>(task: &ReleaseTask, runner: &R) -> String {
+    if task.action != "redirect" {
+        return "not_applicable".to_string();
+    }
+    let port = task.destination_port.to_string();
+    let argv = if task.destination_ip.is_empty() {
+        strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", &task.source_ip, "--dport", &port])
+    } else {
+        strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", &task.source_ip, "--orig-dst", &task.destination_ip, "--dport", &port])
+    };
+    match runner.run(&argv) {
+        Ok(result) if result.returncode == 0 => "cleared".to_string(),
+        // conntrack exits 1 when no entry matched ("0 flow entries").
+        Ok(result) if result.returncode == 1 && result.stderr.contains(" 0 flow entries") => "none_found".to_string(),
+        Ok(result) => bounded_error(&format!("failed:exit={}:{}", result.returncode, result.stderr.trim())),
+        Err(error) if error.contains("not found in trusted directories") => "conntrack_unavailable".to_string(),
+        Err(error) => bounded_error(&format!("failed:{error}")),
+    }
+}
+
+/// The rules carrying this lease's owner token in `chain`, with whether
+/// each reads back exactly as planned. Two checks, kept apart:
+///
+/// * applied (`owned_state_matches_plan`): exactly one rule, as planned;
+/// * removable (release): the owner token *and* the lease's own flow
+///   identity (source, and the destination when the lease has one). A rule
+///   that is ours by both but deviates otherwise (another rate, a missing
+///   match) is still deleted -- leaving it would keep a restriction no
+///   lease accounts for. A rule with our token on another flow is not ours
+///   to delete: that is an error and nothing is deleted.
+fn nft_owned_rules<R: ReleaseCommandRunner>(
     task: &ReleaseTask,
     chain: &str,
     runner: &R,
-) -> Result<Vec<u64>, String> {
-    let argv = strings(&[
-        "nft",
-        "-a",
-        "-j",
-        "list",
-        "chain",
-        "inet",
-        "azazel_edge",
-        chain,
-    ]);
+) -> Result<Vec<(u64, bool)>, String> {
+    let argv = strings(&["nft", "-a", "-j", "list", "chain", "inet", "azazel_edge", chain]);
     let result = runner.run(&argv)?;
     if result.returncode != 0 {
-        return Err(format!(
-            "nft readback failed: {}",
-            bounded_error(&result.stderr)
-        ));
+        return Err(format!("nft readback failed: {}", bounded_error(&result.stderr)));
     }
     let payload: Value = serde_json::from_str(&result.stdout)
         .map_err(|e| format!("nft readback parse failed: {e}"))?;
@@ -1584,11 +1676,10 @@ fn nft_owned_handles<R: ReleaseCommandRunner>(
         .get("nftables")
         .and_then(Value::as_array)
         .ok_or_else(|| "nft readback missing nftables array".to_string())?;
-    let mut handles = Vec::new();
+    let mut rules = Vec::new();
     for entry in entries {
-        let rule = match entry.get("rule") {
-            Some(rule) => rule,
-            None => continue,
+        let Some(rule) = entry.get("rule") else {
+            continue;
         };
         if rule.get("chain").and_then(Value::as_str) != Some(chain) {
             continue;
@@ -1596,8 +1687,8 @@ fn nft_owned_handles<R: ReleaseCommandRunner>(
         if rule.get("comment").and_then(Value::as_str) != Some(task.owner_token.as_str()) {
             continue;
         }
-        if !nft_rule_semantics_match(task, rule) {
-            return Err("nft ownership tag exists on semantically different rule".to_string());
+        if !nft_rule_identity_match(task, rule) {
+            return Err("nft ownership tag exists on a rule for another flow".to_string());
         }
         let handle = rule
             .get("handle")
@@ -1606,9 +1697,24 @@ fn nft_owned_handles<R: ReleaseCommandRunner>(
         if handle == 0 {
             return Err("owned nft rule has invalid zero handle".to_string());
         }
-        handles.push(handle);
+        rules.push((handle, nft_rule_semantics_match(task, rule)));
     }
-    Ok(handles)
+    Ok(rules)
+}
+
+/// The flow identity of an owned rule: its source, and its destination when
+/// the lease names one.
+fn nft_rule_identity_match(task: &ReleaseTask, rule: &Value) -> bool {
+    let Some(exprs) = rule.get("expr").and_then(Value::as_array) else {
+        return false;
+    };
+    let Some(family) = nft_family(&task.source_ip) else {
+        return false;
+    };
+    if !ip_matches(match_value(exprs, family, "saddr"), &task.source_ip) {
+        return false;
+    }
+    task.destination_ip.is_empty() || ip_matches(match_value(exprs, family, "daddr"), &task.destination_ip)
 }
 
 fn nft_rule_semantics_match(task: &ReleaseTask, rule: &Value) -> bool {
@@ -1618,6 +1724,15 @@ fn nft_rule_semantics_match(task: &ReleaseTask, rule: &Value) -> bool {
     };
     if task.mechanism == MECHANISM_NFT_FLOW_LIMIT {
         return flow_limit_semantics_match(task, exprs);
+    }
+    if task.mechanism == MECHANISM_NFT_FLOW_REDIRECT {
+        return meta_value(exprs, "iifname").and_then(Value::as_str) == Some(task.iface.as_str())
+            && ip_matches(match_value(exprs, "ip", "saddr"), &task.source_ip)
+            && ip_matches(match_value(exprs, "ip", "daddr"), &task.destination_ip)
+            && match_value(exprs, "tcp", "dport").and_then(value_u16) == Some(task.destination_port)
+            && exprs.iter().any(|expr| {
+                expr.get("redirect").and_then(|r| r.get("port")).and_then(value_u16) == Some(task.redirect_port)
+            });
     }
     if match_value(exprs, "ip", "saddr").and_then(Value::as_str)
         != Some(task.source_ip.as_str())
@@ -1666,11 +1781,12 @@ fn flow_limit_semantics_match(task: &ReleaseTask, exprs: &[Value]) -> bool {
     {
         return false;
     }
-    if !task.protocol.is_empty() {
+    if protocol_has_port(&task.protocol) {
         if match_value(exprs, &task.protocol, "dport").and_then(value_u16) != Some(task.destination_port) {
             return false;
         }
-    } else if exprs.iter().any(|expr| {
+    } else if meta_value(exprs, "l4proto").and_then(Value::as_str) != Some(task.protocol.as_str())
+        || exprs.iter().any(|expr| {
         expr.get("match")
             .and_then(|m| m.get("left"))
             .and_then(|l| l.get("payload"))
@@ -1692,6 +1808,17 @@ fn flow_limit_semantics_match(task: &ReleaseTask, exprs: &[Value]) -> bool {
             && limit.get("burst_unit").and_then(Value::as_str) == Some("kbytes")
     });
     limit_ok && exprs.iter().any(|expr| expr.get("drop").is_some())
+}
+
+/// The right side of an `==` match on `meta <key>`.
+fn meta_value<'a>(exprs: &'a [Value], key: &str) -> Option<&'a Value> {
+    exprs.iter().find_map(|expr| {
+        let matched = expr.get("match")?;
+        if matched.get("op").and_then(Value::as_str) != Some("==") {
+            return None;
+        }
+        (matched.get("left")?.get("meta")?.get("key")?.as_str()? == key).then(|| matched.get("right")).flatten()
+    })
 }
 
 fn ip_matches(value: Option<&Value>, expected: &str) -> bool {
@@ -1983,7 +2110,24 @@ fn load_ledger(path: &str) -> Result<ReleaseLedger, String> {
     let mut ledger: ReleaseLedger = serde_json::from_str(&raw)
         .map_err(|e| format!("release ledger parse failed: {e}"))?;
     if ledger.schema_version == LEDGER_SCHEMA_V1 {
-        // A v1 ledger has no checkpoint; it is rewritten as v2 on save.
+        // A v1 ledger has no checkpoint and its tasks have no event key; a
+        // v1 task id (built from the old mechanism and action) does not
+        // match what this core builds for the same alert. Migration boundary:
+        // every alert at or before the v1 file's last write is refused as a
+        // possible replay. The boundary is the file's own mtime, so reading
+        // the same v1 file again gives the same boundary; it is kept in the
+        // checkpoint when the ledger is saved as v2.
+        if !ledger.tasks.is_empty() {
+            let written = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(f64::MAX);
+            let boundary = if written.is_finite() { written } else { f64::MAX / 2.0 };
+            ledger.checkpoint.replay_watermark_epoch = ledger.checkpoint.replay_watermark_epoch.max(boundary);
+            ledger.checkpoint.generation = ledger.checkpoint.generation.max(1);
+        }
         ledger.schema_version = LEDGER_SCHEMA_VERSION.to_string();
     }
     if ledger.schema_version != LEDGER_SCHEMA_VERSION {
@@ -2089,12 +2233,20 @@ fn validate_task(task: &ReleaseTask) -> Result<(), String> {
         if !task.tc_handle.is_empty()
             || nft_family(&task.source_ip).is_none()
             || nft_family(&task.destination_ip) != nft_family(&task.source_ip)
-            || !matches!(task.protocol.as_str(), "" | "tcp" | "udp")
-            || (!task.protocol.is_empty() && task.destination_port == 0)
+            || !FLOW_PROTOCOLS.contains(&task.protocol.as_str())
+            || protocol_has_port(&task.protocol) != (task.destination_port != 0)
             || task.limit_rate_kbytes == 0
             || task.limit_burst_kbytes == 0
         {
             return Err("release task has invalid flow-limit semantics".to_string());
+        }
+    } else if task.action == "redirect" && task.mechanism == MECHANISM_NFT_FLOW_REDIRECT {
+        if task.protocol != "tcp"
+            || !valid_interface(&task.iface)
+            || nft_family(&task.source_ip) != Some("ip")
+            || nft_family(&task.destination_ip) != Some("ip")
+        {
+            return Err("release task has invalid flow-redirect semantics".to_string());
         }
     } else if !task.mechanism.is_empty() {
         return Err("release task has unsupported mechanism".to_string());
@@ -2155,7 +2307,7 @@ pub(crate) fn trusted_command(binary: &Path) -> Command {
 /// The absolute path of `nft` or `tc` in the first trusted directory that
 /// has it; any other name is refused. `PATH` is never consulted.
 pub(crate) fn resolve_trusted_binary(name: &str) -> Result<PathBuf, String> {
-    if !matches!(name, "tc" | "nft") {
+    if !matches!(name, "tc" | "nft" | "conntrack") {
         return Err("unsupported release binary".to_string());
     }
     for directory in TRUSTED_DIRS {
@@ -2170,6 +2322,20 @@ pub(crate) fn resolve_trusted_binary(name: &str) -> Result<PathBuf, String> {
 }
 
 fn allowed_release_command(argv: &[String]) -> bool {
+    // `conntrack -D -p tcp --orig-src S --orig-dst D --dport P` (or without
+    // the destination for a legacy redirect): only the owned flow's
+    // connection-tracking entries.
+    if argv.first().map(String::as_str) == Some("conntrack") {
+        let ip_ok = |value: &String| value.parse::<IpAddr>().is_ok();
+        let port_ok = |value: &String| value.parse::<u16>().map(|p| p > 0).unwrap_or(false);
+        return match argv.len() {
+            10 => argv[1] == "-D" && argv[2] == "-p" && argv[3] == "tcp" && argv[4] == "--orig-src" && ip_ok(&argv[5])
+                && argv[6] == "--orig-dst" && ip_ok(&argv[7]) && argv[8] == "--dport" && port_ok(&argv[9]),
+            8 => argv[1] == "-D" && argv[2] == "-p" && argv[3] == "tcp" && argv[4] == "--orig-src" && ip_ok(&argv[5])
+                && argv[6] == "--dport" && port_ok(&argv[7]),
+            _ => false,
+        };
+    }
     if argv.len() == 6
         && argv[0] == "tc"
         && argv[1] == "-j"
@@ -3503,13 +3669,30 @@ mod tests {
     }
 
     #[test]
-    fn a_flow_rule_with_other_semantics_is_never_deleted_or_read_back_as_applied() {
+    fn a_deviating_owned_rule_is_never_read_back_as_applied_but_is_removed() {
         let path = test_path("ledger.json");
         let task = build_flow_throttle_task("trace-g", &flow("10.0.0.8"), 32, 32, 30, &LeaseNow::wall_only(100.0)).unwrap();
         prepare_release_task(&path, &task).unwrap();
         activate_release_task(&path, &task.task_id, 100.5).unwrap();
-        // Same owner token, but a different rate: not ours as planned.
-        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": [flow_rule(&task, 7, 4096)]}))]);
+        // Our owner token on our flow, but another rate: not applied as
+        // planned, yet ours to remove -- leaving it would keep a restriction
+        // no lease accounts for.
+        let runner = FakeRunner::new(vec![
+            ok_json(json!({"nftables": [flow_rule(&task, 7, 4096)]})),
+            Ok(CommandResult { returncode: 0, stdout: String::new(), stderr: String::new() }),
+            ok_json(json!({"nftables": []})),
+        ]);
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
+        assert_eq!(outcomes[0].status, "released", "{outcomes:?}");
+        assert_eq!(outcomes[0].postcondition["deleted_deviating_rules"], 1);
+        assert_eq!(runner.calls.lock().unwrap()[1], strings(&["nft", "delete", "rule", "inet", "azazel_edge", "throttle", "handle", "7"]));
+        // Our owner token on another flow: not ours, nothing is deleted.
+        let path = test_path("ledger.json");
+        prepare_release_task(&path, &task).unwrap();
+        activate_release_task(&path, &task.task_id, 100.5).unwrap();
+        let mut foreign = flow_rule(&task, 9, 32);
+        foreign["rule"]["expr"][1]["match"]["right"] = json!("10.99.0.1");
+        let runner = FakeRunner::new(vec![ok_json(json!({"nftables": [foreign]}))]);
         let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
         assert_eq!(outcomes[0].status, "retry_pending");
         assert_eq!(runner.calls.lock().unwrap().len(), 1);
@@ -3521,7 +3704,7 @@ mod tests {
         let two = FakeRunner::new(vec![ok_json(json!({"nftables": [flow_rule(&task, 7, 32), flow_rule(&task, 8, 32)]}))]);
         assert_eq!(owned_state_matches_plan_with_runner(&task, &two), Ok(false));
         let wrong = FakeRunner::new(vec![ok_json(json!({"nftables": [flow_rule(&task, 7, 4096)]}))]);
-        assert!(owned_state_matches_plan_with_runner(&task, &wrong).is_err());
+        assert_eq!(owned_state_matches_plan_with_runner(&task, &wrong), Ok(false));
     }
 
     #[test]
@@ -3737,5 +3920,94 @@ mod tests {
         let outcomes = process_due_releases_with_runner(&path, &later, &runner).unwrap();
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].status, "released");
+    }
+
+    #[test]
+    fn the_same_alert_is_refused_whatever_action_or_mechanism_it_maps_to() {
+        let path = test_path("ledger.json");
+        let mut first = build_flow_throttle_task("tr-a", &flow("10.0.0.50"), 32, 32, 300, &now_at(500.0)).unwrap();
+        first.event_key = "event-00000000000000aa".to_string();
+        assert!(admit_release_task(&path, &first, 300, &now_at(500.0)).is_ok());
+        // The same alert decided differently (another trace, action, scope).
+        let mut other = build_flow_redirect_task("tr-b", &flow("10.0.0.50"), "lan0", 12222, 300, &now_at(501.0)).unwrap();
+        other.event_key = first.event_key.clone();
+        let error = admit_release_task(&path, &other, 300, &now_at(501.0)).unwrap_err();
+        assert!(error.contains("this alert already led to a lease"), "{error}");
+    }
+
+    #[test]
+    fn a_v1_ledger_sets_a_migration_boundary_at_its_last_write() {
+        let path = test_path("ledger.json");
+        let task = build_release_task("v1", "redirect", "br0", "10.0.0.8", 22, 12222, 0, 30, &LeaseNow::wall_only(100.0)).unwrap();
+        fs::write(&path, json!({"schema_version": "azazel-release-ledger/v1", "tasks": [task]}).to_string()).unwrap();
+        let written = fs::metadata(&path).unwrap().modified().unwrap().duration_since(UNIX_EPOCH).unwrap().as_secs_f64();
+        let ledger = load_ledger(&path).unwrap();
+        assert_eq!(ledger.checkpoint.generation, 1);
+        assert_eq!(ledger.checkpoint.replay_watermark_epoch, written);
+        // Read again: the same boundary.
+        assert_eq!(load_ledger(&path).unwrap().checkpoint.replay_watermark_epoch, written);
+        // An empty v1 ledger handled nothing: no boundary.
+        fs::write(&path, json!({"schema_version": "azazel-release-ledger/v1", "tasks": []}).to_string()).unwrap();
+        assert_eq!(load_ledger(&path).unwrap().checkpoint.generation, 0);
+    }
+
+    fn redirect_rule(task: &ReleaseTask, handle: u64) -> Value {
+        json!({"rule": {
+            "chain": "prerouting", "handle": handle, "comment": task.owner_token,
+            "expr": [
+                {"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": task.iface}},
+                {"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": task.source_ip}},
+                {"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "daddr"}}, "right": task.destination_ip}},
+                {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": task.destination_port}},
+                {"redirect": {"port": task.redirect_port}}
+            ]
+        }})
+    }
+
+    #[test]
+    fn a_redirect_release_clears_only_the_owned_flows_connections_and_reports_it_apart() {
+        let path = test_path("ledger.json");
+        let task = build_flow_redirect_task("rd", &flow("10.0.0.60"), "lan0", 12222, 30, &LeaseNow::wall_only(100.0)).unwrap();
+        prepare_release_task(&path, &task).unwrap();
+        activate_release_task(&path, &task.task_id, 100.5).unwrap();
+        let one = FakeRunner::new(vec![ok_json(json!({"nftables": [redirect_rule(&task, 4)]}))]);
+        assert_eq!(owned_state_matches_plan_with_runner(&task, &one), Ok(true));
+        let runner = FakeRunner::new(vec![
+            ok_json(json!({"nftables": [redirect_rule(&task, 4)]})),
+            Ok(CommandResult { returncode: 0, stdout: String::new(), stderr: String::new() }),
+            ok_json(json!({"nftables": []})),
+            Ok(CommandResult { returncode: 0, stdout: String::new(), stderr: "1 flow entries have been deleted.".to_string() }),
+        ]);
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
+        assert_eq!(outcomes[0].status, "released");
+        assert_eq!(outcomes[0].postcondition["existing_connections"], "cleared");
+        let calls = runner.calls.lock().unwrap();
+        let conntrack = strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", "10.0.0.60", "--orig-dst", "10.20.0.5", "--dport", "22"]);
+        assert_eq!(calls[3], conntrack);
+        assert!(allowed_release_command(&conntrack));
+        // Anything wider is not an allowed release command.
+        assert!(!allowed_release_command(&strings(&["conntrack", "-F"])));
+        assert!(!allowed_release_command(&strings(&["conntrack", "-D", "-p", "tcp", "--orig-src", "10.0.0.0/8", "--dport", "22"])));
+        assert!(!allowed_release_command(&strings(&["conntrack", "-D", "-p", "udp", "--orig-src", "10.0.0.60", "--dport", "22"])));
+        // No match is reported as such; no tool is reported, not hidden.
+        let path = test_path("ledger.json");
+        prepare_release_task(&path, &task).unwrap();
+        activate_release_task(&path, &task.task_id, 100.5).unwrap();
+        let runner = FakeRunner::new(vec![
+            ok_json(json!({"nftables": []})),
+            Ok(CommandResult { returncode: 1, stdout: String::new(), stderr: "conntrack v1.4.7 (conntrack-tools): 0 flow entries have been deleted.".to_string() }),
+        ]);
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
+        assert_eq!(outcomes[0].postcondition["existing_connections"], "none_found");
+        let path = test_path("ledger.json");
+        prepare_release_task(&path, &task).unwrap();
+        activate_release_task(&path, &task.task_id, 100.5).unwrap();
+        let runner = FakeRunner::new(vec![
+            ok_json(json!({"nftables": []})),
+            Err("release binary not found in trusted directories: conntrack".to_string()),
+        ]);
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(131.0), &runner).unwrap();
+        assert_eq!(outcomes[0].status, "released");
+        assert_eq!(outcomes[0].postcondition["existing_connections"], "conntrack_unavailable");
     }
 }

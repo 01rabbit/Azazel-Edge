@@ -141,6 +141,19 @@ struct ProtectedFile {
 struct ProtectedDecl {
     version: u32,
     entries: Vec<EntryDecl>,
+    /// Roles the deployment states it has none of, each with who approved
+    /// that statement. A role neither declared nor stated not applicable is
+    /// a missing declaration and execution is refused.
+    #[serde(default)]
+    roles_not_applicable: Vec<NotApplicableDecl>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotApplicableDecl {
+    role: String,
+    approved_by: String,
+    reason: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -202,7 +215,8 @@ pub enum ProtectedSet {
     /// A declaration that could not be read or is invalid: execution is
     /// refused (never treated as "nothing to protect").
     Invalid(String),
-    Loaded(Vec<ProtectedEntry>),
+    /// The entries, and the roles approved as not applicable.
+    Loaded(Vec<ProtectedEntry>, Vec<String>),
 }
 
 /// A match: the flow touches a protected endpoint.
@@ -242,6 +256,20 @@ impl ProtectedSet {
             return ProtectedSet::Invalid("unsupported_version".to_string());
         }
         let entries = parsed.protected_flows.entries;
+        let mut not_applicable = Vec::new();
+        for item in parsed.protected_flows.roles_not_applicable {
+            let text_ok = |v: &str| !v.trim().is_empty() && v.len() <= 256 && !v.chars().any(char::is_control);
+            if !ROLES.contains(&item.role.as_str()) || item.role == "management" {
+                return ProtectedSet::Invalid(format!("invalid_not_applicable_role:{}", item.role.chars().take(32).collect::<String>()));
+            }
+            if !text_ok(&item.approved_by) || !text_ok(&item.reason) {
+                return ProtectedSet::Invalid(format!("not_applicable_without_approval:{}", item.role));
+            }
+            if not_applicable.contains(&item.role) {
+                return ProtectedSet::Invalid(format!("duplicate_not_applicable:{}", item.role));
+            }
+            not_applicable.push(item.role);
+        }
         if entries.len() > MAX_PROTECTED_ENTRIES {
             return ProtectedSet::Invalid("too_many_entries".to_string());
         }
@@ -264,36 +292,56 @@ impl ProtectedSet {
             }
             out.push(ProtectedEntry { name: entry.name, role: entry.role, network, ports: entry.ports });
         }
-        ProtectedSet::Loaded(out)
+        if let Some(both) = not_applicable.iter().find(|role| out.iter().any(|e| &e.role == *role)) {
+            return ProtectedSet::Invalid(format!("role_both_declared_and_not_applicable:{both}"));
+        }
+        ProtectedSet::Loaded(out, not_applicable)
     }
 
     pub fn status(&self) -> String {
         match self {
             ProtectedSet::NotConfigured => "not_configured".to_string(),
             ProtectedSet::Invalid(reason) => format!("invalid:{reason}"),
-            ProtectedSet::Loaded(entries) => format!("loaded:{}", entries.len()),
+            ProtectedSet::Loaded(entries, not_applicable) => {
+                if not_applicable.is_empty() {
+                    format!("loaded:{}", entries.len())
+                } else {
+                    format!("loaded:{}:not_applicable:{}", entries.len(), not_applicable.join(","))
+                }
+            }
         }
     }
 
     /// Whether execution may rely on this set: loaded, with at least one
-    /// management entry (the management path is always protected).
+    /// management entry (the management path always exists), and each of
+    /// the other roles either declared or approved as not applicable. A
+    /// role left out is a missing declaration, not "nothing to protect".
     pub fn ready_for_execution(&self) -> Result<(), String> {
         match self {
             ProtectedSet::NotConfigured => Err("protected_set_not_configured".to_string()),
             ProtectedSet::Invalid(_) => Err("protected_set_invalid".to_string()),
-            ProtectedSet::Loaded(entries) if !entries.iter().any(|e| e.role == "management") => {
+            ProtectedSet::Loaded(entries, _) if !entries.iter().any(|e| e.role == "management") => {
                 Err("protected_set_has_no_management_entry".to_string())
             }
-            ProtectedSet::Loaded(_) => Ok(()),
+            ProtectedSet::Loaded(entries, not_applicable) => {
+                for role in ROLES {
+                    if !entries.iter().any(|e| e.role == role) && !not_applicable.iter().any(|r| r == role) {
+                        return Err(format!("protected_set_role_undeclared:{role}"));
+                    }
+                }
+                Ok(())
+            }
         }
     }
 
-    /// The first protected entry the flow touches. A protected source is
-    /// matched on every port: restricting a source affects its protected
-    /// communication whatever the port. A destination is matched on the
-    /// listed ports (every port when none is listed).
+    /// The first protected entry the action's scope touches. A protected
+    /// source is matched on every port: restricting a source affects its
+    /// protected communication whatever the port. A destination is matched
+    /// on the listed ports (every port when none is listed); a scope with no
+    /// port (`port == 0`: an ICMP flow) is matched on any destination entry,
+    /// so no listed port is ever excluded from the check.
     pub fn matches(&self, source: &IpAddr, destination: Option<&IpAddr>, port: u16) -> Option<ProtectedMatch> {
-        let ProtectedSet::Loaded(entries) = self else {
+        let ProtectedSet::Loaded(entries, _) = self else {
             return None;
         };
         for entry in entries {
@@ -301,7 +349,7 @@ impl ProtectedSet {
                 return Some(ProtectedMatch { name: entry.name.clone(), role: entry.role.clone(), side: "source" });
             }
             if let Some(destination) = destination {
-                let port_hit = entry.ports.is_empty() || entry.ports.contains(&port);
+                let port_hit = port == 0 || entry.ports.is_empty() || entry.ports.contains(&port);
                 if entry.network.contains(destination) && port_hit {
                     return Some(ProtectedMatch { name: entry.name.clone(), role: entry.role.clone(), side: "destination" });
                 }
@@ -352,12 +400,15 @@ struct DecoyEvidence {
     observed_epoch: f64,
     separation: String,
     decoy_ports: Vec<u16>,
+    /// The interface the redirected traffic arrives on: the redirect rule is
+    /// bound to it, and `nft redirect` delivers to its primary address.
+    ingress_interface: String,
 }
 
 /// The separation evidence: written by the deployment that set the decoy up
 /// (for example Nexus, after placing it in its own network namespace), for
 /// this boot, naming the decoy port, recent. Any doubt is a refusal.
-pub fn check_decoy_evidence(path: &str, max_age_sec: u64, port: u16, now_epoch: f64, boot_id: &str) -> Result<(), String> {
+pub fn check_decoy_evidence(path: &str, max_age_sec: u64, port: u16, iface: &str, now_epoch: f64, boot_id: &str) -> Result<(), String> {
     if path.is_empty() {
         return Err("decoy_separation_evidence_not_configured".to_string());
     }
@@ -385,27 +436,91 @@ pub fn check_decoy_evidence(path: &str, max_age_sec: u64, port: u16, now_epoch: 
     if !evidence.decoy_ports.contains(&port) {
         return Err("decoy_port_not_in_evidence".to_string());
     }
+    if evidence.ingress_interface != iface {
+        return Err("decoy_evidence_other_interface".to_string());
+    }
     Ok(())
 }
 
-static PROBES: Mutex<Vec<(u16, Instant, bool)>> = Mutex::new(Vec::new());
+/// The primary IPv4 address of `iface`, where `nft redirect` delivers
+/// traffic arriving on it. `None` when the interface has none or cannot be
+/// read.
+#[cfg(target_os = "linux")]
+pub fn interface_ipv4(iface: &str) -> Option<std::net::Ipv4Addr> {
+    use std::ffi::CStr;
+    use std::os::raw::{c_char, c_int, c_uint, c_void};
+    #[repr(C)]
+    struct IfAddrs {
+        ifa_next: *mut IfAddrs,
+        ifa_name: *mut c_char,
+        ifa_flags: c_uint,
+        ifa_addr: *mut SockAddrIn,
+        ifa_netmask: *mut c_void,
+        ifa_ifu: *mut c_void,
+        ifa_data: *mut c_void,
+    }
+    #[repr(C)]
+    struct SockAddrIn {
+        sin_family: u16,
+        sin_port: u16,
+        sin_addr: [u8; 4],
+    }
+    extern "C" {
+        fn getifaddrs(ifap: *mut *mut IfAddrs) -> c_int;
+        fn freeifaddrs(ifa: *mut IfAddrs);
+    }
+    const AF_INET: u16 = 2;
+    let mut head: *mut IfAddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs fills a list this function frees before returning;
+    // every pointer is checked for null before it is read.
+    unsafe {
+        if getifaddrs(&mut head) != 0 {
+            return None;
+        }
+        let mut found = None;
+        let mut cursor = head;
+        while !cursor.is_null() {
+            let item = &*cursor;
+            if !item.ifa_name.is_null() && !item.ifa_addr.is_null() && (*item.ifa_addr).sin_family == AF_INET {
+                if CStr::from_ptr(item.ifa_name).to_bytes() == iface.as_bytes() {
+                    found = Some(std::net::Ipv4Addr::from((*item.ifa_addr).sin_addr));
+                    break;
+                }
+            }
+            cursor = item.ifa_next;
+        }
+        freeifaddrs(head);
+        found
+    }
+}
 
-/// The decoy answers where the redirect delivers (the host's own address,
-/// `nft redirect`): a TCP connect within 300 ms. Cached 5 s per port so a
-/// burst of alerts costs one probe.
-pub fn decoy_reachable(port: u16) -> bool {
+#[cfg(not(target_os = "linux"))]
+pub fn interface_ipv4(_iface: &str) -> Option<std::net::Ipv4Addr> {
+    None
+}
+
+static PROBES: Mutex<Vec<(SocketAddr, Instant, bool)>> = Mutex::new(Vec::new());
+
+/// The decoy answers where the redirect delivers: `nft redirect` in
+/// prerouting sends traffic arriving on `iface` to that interface's primary
+/// address, so the probe connects there (a listener bound to loopback only
+/// does not count). A TCP connect within 300 ms, cached 5 s per address and
+/// port so a burst of alerts costs one probe.
+pub fn decoy_reachable(iface: &str, port: u16) -> Result<(), String> {
+    let address = interface_ipv4(iface).ok_or_else(|| "decoy_ingress_interface_has_no_ipv4".to_string())?;
+    let target = SocketAddr::from((address, port));
     let now = Instant::now();
     {
         let cache = PROBES.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((_, _, ok)) = cache.iter().find(|(p, at, _)| *p == port && now.duration_since(*at) < PROBE_CACHE) {
-            return *ok;
+        if let Some((_, _, ok)) = cache.iter().find(|(t, at, _)| *t == target && now.duration_since(*at) < PROBE_CACHE) {
+            return if *ok { Ok(()) } else { Err("decoy_unreachable".to_string()) };
         }
     }
-    let ok = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), PROBE_TIMEOUT).is_ok();
+    let ok = TcpStream::connect_timeout(&target, PROBE_TIMEOUT).is_ok();
     let mut cache = PROBES.lock().unwrap_or_else(|e| e.into_inner());
-    cache.retain(|(p, _, _)| *p != port);
-    cache.push((port, now, ok));
-    ok
+    cache.retain(|(t, _, _)| *t != target);
+    cache.push((target, now, ok));
+    if ok { Ok(()) } else { Err("decoy_unreachable".to_string()) }
 }
 
 /// The `safety` block every enforcement outcome carries (fixed shape).
@@ -494,6 +609,38 @@ mod tests {
     }
 
     #[test]
+    fn every_role_must_be_declared_or_approved_as_not_applicable() {
+        let base = "protected_flows:\n  version: 1\n  entries:\n    - {name: mgmt, role: management, network: 192.0.2.0/28}\n";
+        // Only management: both other roles are missing declarations.
+        assert_eq!(ProtectedSet::parse(base).ready_for_execution(), Err("protected_set_role_undeclared:expert_contact".to_string()));
+        let with_expert = format!("{base}    - {{name: ex, role: expert_contact, network: 198.51.100.7}}\n");
+        assert_eq!(ProtectedSet::parse(&with_expert).ready_for_execution(), Err("protected_set_role_undeclared:mission".to_string()));
+        let na = format!("{with_expert}  roles_not_applicable:\n    - {{role: mission, approved_by: field-lead, reason: no mission link on this site}}\n");
+        let set = ProtectedSet::parse(&na);
+        assert_eq!(set.ready_for_execution(), Ok(()), "{set:?}");
+        assert_eq!(set.status(), "loaded:2:not_applicable:mission");
+        // Not applicable needs who approved it; management can never be.
+        for bad in [
+            format!("{with_expert}  roles_not_applicable:\n    - {{role: mission, approved_by: '', reason: r}}\n"),
+            format!("{with_expert}  roles_not_applicable:\n    - {{role: mission, reason: r}}\n"),
+            format!("{with_expert}  roles_not_applicable:\n    - {{role: management, approved_by: a, reason: r}}\n"),
+            format!("{with_expert}  roles_not_applicable:\n    - {{role: expert_contact, approved_by: a, reason: r}}\n"),
+            format!("{with_expert}  roles_not_applicable:\n    - {{role: mission, approved_by: a, reason: r}}\n    - {{role: mission, approved_by: b, reason: r}}\n"),
+        ] {
+            assert!(matches!(ProtectedSet::parse(&bad), ProtectedSet::Invalid(_)), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_portless_scope_is_matched_against_every_destination_entry() {
+        let set = sample_set();
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        // The expert lists port 443 only; an ICMP scope (port 0) toward it
+        // is still a protected destination.
+        assert_eq!(set.matches(&ip("203.0.113.9"), Some(&ip("198.51.100.7")), 0).unwrap().role, "expert_contact");
+    }
+
+    #[test]
     fn an_absent_invalid_or_management_less_set_refuses_execution() {
         assert_eq!(ProtectedSet::NotConfigured.ready_for_execution(), Err("protected_set_not_configured".to_string()));
         for raw in [
@@ -532,44 +679,55 @@ mod tests {
     fn decoy_evidence_must_be_this_boot_recent_separated_and_name_the_port() {
         let dir = evidence_dir("ev");
         let now = 1_800_000_000.0;
-        let good = json!({"schema": DECOY_EVIDENCE_SCHEMA, "boot_id": "abc-1", "observed_epoch": now - 10.0, "separation": "network_namespace", "decoy_ports": [12222]});
+        let good = json!({"schema": DECOY_EVIDENCE_SCHEMA, "boot_id": "abc-1", "observed_epoch": now - 10.0, "separation": "network_namespace", "decoy_ports": [12222], "ingress_interface": "lan0"});
         let path = write_evidence(&dir, &good);
-        assert_eq!(check_decoy_evidence(&path, 600, 12222, now, "abc-1"), Ok(()));
-        assert_eq!(check_decoy_evidence(&path, 600, 12222, now, "abc-2"), Err("decoy_separation_evidence_other_boot".to_string()));
-        assert_eq!(check_decoy_evidence(&path, 600, 18080, now, "abc-1"), Err("decoy_port_not_in_evidence".to_string()));
-        assert_eq!(check_decoy_evidence(&path, 5, 12222, now, "abc-1"), Err("decoy_separation_evidence_stale".to_string()));
+        assert_eq!(check_decoy_evidence(&path, 600, 12222, "lan0", now, "abc-1"), Ok(()));
+        assert_eq!(check_decoy_evidence(&path, 600, 12222, "lan0", now, "abc-2"), Err("decoy_separation_evidence_other_boot".to_string()));
+        assert_eq!(check_decoy_evidence(&path, 600, 18080, "lan0", now, "abc-1"), Err("decoy_port_not_in_evidence".to_string()));
+        assert_eq!(check_decoy_evidence(&path, 5, 12222, "lan0", now, "abc-1"), Err("decoy_separation_evidence_stale".to_string()));
         // The policy cannot raise the age bound past the Edge constant.
         let mut old = good.clone();
         old["observed_epoch"] = json!(now - 7200.0);
         let path = write_evidence(&dir, &old);
-        assert_eq!(check_decoy_evidence(&path, 999_999, 12222, now, "abc-1"), Err("decoy_separation_evidence_stale".to_string()));
+        assert_eq!(check_decoy_evidence(&path, 999_999, 12222, "lan0", now, "abc-1"), Err("decoy_separation_evidence_stale".to_string()));
         let mut none = good.clone();
         none["separation"] = json!("same_host");
         let path = write_evidence(&dir, &none);
-        assert_eq!(check_decoy_evidence(&path, 600, 12222, now, "abc-1"), Err("decoy_separation_not_established".to_string()));
-        assert_eq!(check_decoy_evidence("", 600, 12222, now, "abc-1"), Err("decoy_separation_evidence_not_configured".to_string()));
+        assert_eq!(check_decoy_evidence(&path, 600, 12222, "lan0", now, "abc-1"), Err("decoy_separation_not_established".to_string()));
+        assert_eq!(check_decoy_evidence("", 600, 12222, "lan0", now, "abc-1"), Err("decoy_separation_evidence_not_configured".to_string()));
         assert_eq!(
-            check_decoy_evidence(&dir.join("absent.json").to_string_lossy(), 600, 12222, now, "abc-1"),
+            check_decoy_evidence(&dir.join("absent.json").to_string_lossy(), 600, 12222, "lan0", now, "abc-1"),
             Err("decoy_separation_evidence_missing".to_string())
         );
+        // Evidence for another ingress interface does not count here.
+        let path = write_evidence(&dir, &good);
+        assert_eq!(check_decoy_evidence(&path, 600, 12222, "wan0", now, "abc-1"), Err("decoy_evidence_other_interface".to_string()));
         // A world-writable evidence file is not trusted.
         use std::os::unix::fs::PermissionsExt;
         let path = write_evidence(&dir, &good);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
         assert_eq!(
-            check_decoy_evidence(&path, 600, 12222, now, "abc-1"),
+            check_decoy_evidence(&path, 600, 12222, "lan0", now, "abc-1"),
             Err("decoy_separation_evidence_untrusted:group_or_world_writable".to_string())
         );
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
-    fn a_decoy_port_with_no_listener_is_unreachable_and_a_listening_one_is_reachable() {
+    fn the_decoy_is_probed_on_the_ingress_interface_address_not_loopback() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        assert!(decoy_reachable(port));
-        drop(listener);
+        assert_eq!(interface_ipv4("lo"), Some(std::net::Ipv4Addr::LOCALHOST));
+        assert_eq!(decoy_reachable("lo", port), Ok(()));
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        assert!(!decoy_reachable(closed));
+        assert_eq!(decoy_reachable("lo", closed), Err("decoy_unreachable".to_string()));
+        assert_eq!(decoy_reachable("no-such-if0", port), Err("decoy_ingress_interface_has_no_ipv4".to_string()));
+        // A non-loopback interface: the loopback-only listener is not where
+        // traffic arriving there is delivered.
+        if let Some(name) = ["eth0", "ens3", "enp0s1"].into_iter().find(|n| interface_ipv4(n).is_some()) {
+            assert_eq!(decoy_reachable(name, port), Err("decoy_unreachable".to_string()), "{name}");
+        }
+        drop(listener);
     }
 }
