@@ -170,6 +170,15 @@ def _release_fields(
     metadata = _as_mapping(enforcement.get("metadata"))
     task_id = str(metadata.get("release_task_id") or "").strip()
     ledger_state = str(metadata.get("release_ledger_state") or "").strip().lower()
+    held = str(metadata.get("release_extended_task_id") or "").strip()
+    if (
+        str(enforcement.get("mode") or "").lower() == "enforced"
+        and str(enforcement.get("result") or "").lower() in {"extended", "already_held"}
+        and held
+    ):
+        # A new alert for a held flow: no new task; the release that counts
+        # is the held lease's, with its (possibly extended) expiry.
+        return held, _epoch_iso(metadata.get("release_due_epoch"))
     if status in {ExecutionStatus.APPLIED, ExecutionStatus.PARTIAL} and task_id and ledger_state in {
         "active",
         "uncertain",

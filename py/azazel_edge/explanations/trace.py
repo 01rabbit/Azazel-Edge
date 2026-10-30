@@ -92,14 +92,15 @@ _monotonic = time.monotonic
 
 # ---- allowlist: what a viewer gets (no free text) -------------------------
 ACTIONS = frozenset({"observe", "notify", "throttle", "redirect", "isolate"})
-APPLIED_STATES = frozenset({"applied", "not_applied", "apply_failed", "none"})
+APPLIED_STATES = frozenset({"applied", "not_applied", "apply_failed", "none", "held"})
 ENFORCEMENT_MODES = frozenset({"dry_run", "policy_gated", "release_guard_failed", "enforced", "disabled", "none"})
-ENFORCEMENT_RESULTS = frozenset({"applied", "partial_failure", "planned_not_applied", "no_disruptive_action", "failed"})
+ENFORCEMENT_RESULTS = frozenset({"applied", "partial_failure", "planned_not_applied", "no_disruptive_action", "failed", "extended", "already_held"})
 RECORDED_BY = frozenset({"live", "startup_reconcile", "loss_reconcile"})
 HASH_BASES = frozenset({"enforcement_settings", "policy_file"})
 CAPSULE_STATES = frozenset({"signed", "unsigned", "not_recorded", "invalid"})
 POLICY_PROFILES = frozenset({"azazel-edge-core/rust_event_engine_v1"})
 APPLY_FAILED_LABEL = "NOT APPLIED - apply failed"
+HELD_LABEL = "HELD - existing restriction continues"
 _TS = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:?[0-9]{2})?")
 _HASH = re.compile(r"[0-9a-f]{64}")
 
@@ -219,6 +220,8 @@ def applied_label(state: Optional[str], mode: Optional[str]) -> str:
         return f"NOT APPLIED - planned only ({mode or 'unknown'})"
     if state == "apply_failed":
         return APPLY_FAILED_LABEL
+    if state == "held":
+        return HELD_LABEL
     return ""
 
 

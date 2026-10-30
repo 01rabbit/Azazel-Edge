@@ -150,7 +150,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends nftables iproute2
+          sudo apt-get install -y --no-install-recommends nftables iproute2 conntrack iputils-ping
           python3 -m venv .venv
           . .venv/bin/activate
           pip install -U pip wheel setuptools
@@ -181,6 +181,20 @@ jobs:
           sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
             tests/test_core_nft_owned_lease_v1.py | tee real-nft.log
           grep -Eq "^1 passed" real-nft.log
+
+      - name: Real-network test of the flow-scoped temporary restriction (root)
+        # docs/architecture/scoped-temporary-actions.md. Four network
+        # namespaces with real TCP: only the attack flow is limited, the
+        # management flow and the interface's own qdisc are untouched, release
+        # at expiry, and a wedged nft (shadowed for the core only, in a
+        # private mount namespace) never holds back a due release. Root, the
+        # release core built above; skipped in test-python, here it must run
+        # and pass, never skip. Runner timings, never hardware evidence.
+        run: |
+          sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_core_scoped_actions_netns_v1.py | tee scoped-netns.log
+          grep -Eq "^5 passed" scoped-netns.log
+          ! grep -Eq "skipped|failed|error" scoped-netns.log
 
       - name: Web UI and AI agent non-root checks with real uids (root, Edge#471)
         # control.sock's per-uid table and the agent's manual_query socket,

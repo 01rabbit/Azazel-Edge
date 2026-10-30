@@ -10,6 +10,7 @@ Entry point for all documents in this directory.
 |------|----------|-------------|--------------|
 | [concepts/evolution-map.md](concepts/evolution-map.md) | Operator / Developer | Concept profile map for a single Azazel-Edge core platform | 2026-05-16 |
 | [arsenal/README.md](arsenal/README.md) | Operator / Presenter | Public Black Hat Arsenal history and policy | 2026-05-16 |
+| [architecture/scoped-temporary-actions.md](architecture/scoped-temporary-actions.md) | Developer / Operator / Reviewer | Design of the automatic temporary restriction and decoy redirect: protected communications set, flow scope, strength, TTL/extension/cumulative bounds, no automatic isolate, decoy preconditions, apply time bound and readback, release ledger generation migration, crash recovery | 2026-10-30 |
 | [architecture/decision-loop.md](architecture/decision-loop.md) | Developer / Operator | Deterministic decision loop: the live Rust core path and the replay/dry-run path | 2026-10-27 |
 | [architecture/mio-cognitive-plane.md](architecture/mio-cognitive-plane.md) | Developer / Reviewer | Canonical M.I.O. cognitive-plane architecture: components, data flow, authority matrix (decide/enforce/advise/display/audit), degradation ladder, trust boundaries, open work (#388) | 2026-10-27 |
 | [architecture/local-ai-triage.md](architecture/local-ai-triage.md) | Developer / Operator | Optional local AI assist role and its boundaries | 2026-10-27 |

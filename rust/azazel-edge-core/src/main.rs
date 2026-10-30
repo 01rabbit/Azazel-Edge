@@ -1,12 +1,18 @@
 mod audit_chain;
 mod ingress;
 mod release;
+mod safety;
+mod undelivered;
 
 use ingress::{append_audit_record, IngressLimits, IngressReader, PollReport};
 use release::{
-    activate_release_task, build_release_task, cancel_release_task, mark_release_task_uncertain,
-    nft_comment_arg, prepare_release_task, process_due_releases, LeaseNow, ReleaseTask,
+    abandon_release_task, activate_release_task, admit_release_task, build_flow_throttle_task,
+    nft_comment_arg, nft_family, owned_state_matches_plan, process_due_releases, Admission, FlowScope, LeaseNow,
+    ReleaseTask, THROTTLE_CHAIN,
 };
+#[cfg(test)]
+use release::{build_release_task, prepare_release_task};
+use safety::{ProtectedMatch, ProtectedSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -37,7 +43,17 @@ struct Config {
     defense_dry_run: bool,
     defense_enforce_level: String,
     defense_action_ttl_sec: u64,
+    /// How the TTL was obtained (`safety::bounded_ttl`).
+    defense_ttl_source: String,
     defense_release_ledger_path: String,
+    /// The protected communications set (management, expert contact,
+    /// mission), read once at start from `AZAZEL_PROTECTED_FLOWS_PATH`.
+    protected_flows_path: String,
+    protected: ProtectedSet,
+    /// The spool of decisions the intake did not take (`undelivered.rs`),
+    /// written whatever `AZAZEL_FORWARD_LOG` says, with its size cap.
+    undelivered_spool_path: String,
+    undelivered_spool_cap_bytes: u64,
     defense_allow_high_impact_auto: bool,
     defense_iface: String,
     defense_honeypot_port: u16,
@@ -46,7 +62,7 @@ struct Config {
     redirect_policy_source: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct NormalizedEvent {
     ts: String,
     src_ip: String,
@@ -133,23 +149,39 @@ struct RedirectPolicyConfig {
     high_risk_unsupported_port_action: String,
     #[serde(default = "default_throttle")]
     scan_burst_action: String,
+    /// Where the deployment writes the decoy separation evidence
+    /// (`safety::check_decoy_evidence`). Without it no redirect is executed.
+    #[serde(default)]
+    decoy_separation_evidence_path: String,
+    #[serde(default = "default_evidence_age")]
+    decoy_evidence_max_age_sec: u64,
+}
+
+fn default_evidence_age() -> u64 {
+    600
 }
 
 fn default_notify() -> String {
     "notify".to_string()
 }
 
+/// The high-risk unsupported-port fallback defaults to notify: the
+/// automatic path never chooses isolate (ADR, scoped temporary actions).
 fn default_isolate() -> String {
-    "isolate".to_string()
+    "notify".to_string()
 }
 
 fn default_throttle() -> String {
     "throttle".to_string()
 }
 
+/// A fallback the redirect policy may name. `isolate` (and `redirect`,
+/// which would loop) are not automatic fallbacks: they become `notify`
+/// whatever the file says.
 fn normalize_safe_action(raw: &str, default_action: &str) -> String {
     match raw.to_ascii_lowercase().as_str() {
-        "observe" | "notify" | "throttle" | "redirect" | "isolate" => raw.to_ascii_lowercase(),
+        "observe" | "notify" | "throttle" => raw.to_ascii_lowercase(),
+        "isolate" | "redirect" => "notify".to_string(),
         _ => default_action.to_string(),
     }
 }
@@ -262,6 +294,13 @@ fn load_config() -> Config {
         }
     };
 
+    // The TTL is bounded by Edge constants; the environment can shorten it,
+    // never lengthen it past MAX_LEASE_TTL_SEC.
+    let ttl_raw = env::var("AZAZEL_DEFENSE_ACTION_TTL_SEC").ok();
+    let (ttl, ttl_source) = safety::bounded_ttl(ttl_raw.as_deref());
+    let protected_flows_path = env::var("AZAZEL_PROTECTED_FLOWS_PATH")
+        .unwrap_or_else(|_| "/etc/azazel-edge/protected-flows.yaml".to_string());
+
     Config {
         eve_path: env::var("AZAZEL_EVE_PATH").unwrap_or_else(|_| "/var/log/suricata/eve.json".to_string()),
         ai_socket_path: env::var("AZAZEL_AI_SOCKET").unwrap_or_else(|_| "/run/azazel-edge-ai/ai-bridge.sock".to_string()),
@@ -278,10 +317,23 @@ fn load_config() -> Config {
         defense_enforce: env_bool("AZAZEL_DEFENSE_ENFORCE", false),
         defense_dry_run: env_bool("AZAZEL_DEFENSE_DRY_RUN", true),
         defense_enforce_level: env::var("AZAZEL_DEFENSE_ENFORCE_LEVEL").unwrap_or_else(|_| "advisory".to_string()),
-        defense_action_ttl_sec: env::var("AZAZEL_DEFENSE_ACTION_TTL_SEC")
+        defense_action_ttl_sec: ttl,
+        defense_ttl_source: ttl_source.to_string(),
+        protected_flows_path: protected_flows_path.clone(),
+        protected: ProtectedSet::load(&protected_flows_path),
+        // Beside the release ledger by default: the core's writable state
+        // directory (the Nexus unit's only ReadWritePaths).
+        undelivered_spool_path: env::var("AZAZEL_UNDELIVERED_SPOOL").unwrap_or_else(|_| {
+            let ledger = env::var("AZAZEL_DEFENSE_RELEASE_LEDGER")
+                .unwrap_or_else(|_| "/var/lib/azazel-edge/release-ledger.json".to_string());
+            undelivered::default_path(&ledger).to_string_lossy().into_owned()
+        }),
+        // A size, bounded both ways (64 KiB .. 64 MiB); default 8 MiB.
+        undelivered_spool_cap_bytes: env::var("AZAZEL_UNDELIVERED_SPOOL_CAP_BYTES")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(300),
+            .map(|v| v.clamp(64 * 1024, 64 * 1024 * 1024))
+            .unwrap_or(undelivered::SPOOL_CAP_BYTES),
         defense_release_ledger_path: env::var("AZAZEL_DEFENSE_RELEASE_LEDGER")
             .unwrap_or_else(|_| "/var/lib/azazel-edge/release-ledger.json".to_string()),
         defense_allow_high_impact_auto: env_bool("AZAZEL_DEFENSE_ALLOW_HIGH_IMPACT_AUTO", false),
@@ -379,11 +431,13 @@ fn rule_technique_ids(alert: &serde_json::Map<String, Value>) -> Vec<String> {
 }
 
 fn decide_defense(ev: &NormalizedEvent) -> DefensiveDecision {
+    // Critical: the strict flow-scoped temporary restriction. The automatic
+    // path never isolates (ADR, scoped temporary actions).
     if ev.severity <= 1 {
         return DefensiveDecision {
-            action: "isolate".to_string(),
+            action: "throttle".to_string(),
             reason: format!("critical severity sid={}", ev.sid),
-            policy_reason: "severity_critical_contains_immediately".to_string(),
+            policy_reason: "severity_critical_strict_flow_restriction".to_string(),
             delay_ms: 0,
             target: ev.src_ip.clone(),
         };
@@ -438,10 +492,93 @@ fn command_to_string(argv: &[String]) -> String {
     argv.iter().map(|part| shell_quote(part)).collect::<Vec<String>>().join(" ")
 }
 
+#[cfg(test)]
 fn build_enforcement_plan(ev: &NormalizedEvent, decision: &DefensiveDecision, iface: &str, honeypot_port: u16) -> EnforcementPlan {
     build_enforcement_plan_owned(ev, decision, iface, honeypot_port, None)
 }
 
+/// The flow an alert names: its source and destination of one address
+/// family, its protocol, and for TCP/UDP the destination port. The scope
+/// never widens: TCP/UDP without a port, or any protocol other than
+/// TCP/UDP/ICMP/ICMPv6, is refused (`Err` with the reason) rather than
+/// restricted on every protocol or port.
+fn flow_scope_checked(ev: &NormalizedEvent) -> Result<FlowScope, &'static str> {
+    let family = nft_family(&ev.src_ip).ok_or("target_source_invalid")?;
+    if nft_family(&ev.dst_ip) != Some(family) {
+        return Err("target_not_a_flow");
+    }
+    let protocol = match (ev.protocol.to_ascii_lowercase().as_str(), family) {
+        ("tcp", _) => "tcp",
+        ("udp", _) => "udp",
+        ("icmp", "ip") => "icmp",
+        ("ipv6-icmp" | "icmpv6" | "icmp6", "ip6") => "ipv6-icmp",
+        _ => return Err("target_protocol_unsupported"),
+    };
+    let has_port = release::protocol_has_port(protocol);
+    if has_port && ev.target_port == 0 {
+        return Err("target_port_missing");
+    }
+    Ok(FlowScope {
+        source_ip: ev.src_ip.clone(),
+        destination_ip: ev.dst_ip.clone(),
+        protocol: protocol.to_string(),
+        destination_port: if has_port { ev.target_port } else { 0 },
+    })
+}
+
+fn flow_scope(ev: &NormalizedEvent) -> Option<FlowScope> {
+    flow_scope_checked(ev).ok()
+}
+
+/// The alert's identity for the replay guard: its own time, addresses,
+/// port, protocol and rule id -- not the decided action or the mechanism,
+/// which a policy or code change can alter for the same alert.
+fn event_key(ev: &NormalizedEvent) -> String {
+    let material = format!("{}|{}|{}|{}|{}|{}", ev.ts, ev.src_ip, ev.dst_ip, ev.target_port, ev.protocol.to_ascii_lowercase(), ev.sid);
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in material.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("event-{:016x}", hash)
+}
+
+/// The restriction strength for an alert: strict for critical severity.
+fn strength_for(ev: &NormalizedEvent) -> (&'static str, u32, u32) {
+    if ev.severity <= 1 {
+        safety::STRENGTH_STRICT
+    } else {
+        safety::STRENGTH_STANDARD
+    }
+}
+
+/// The nft argv of a flow-scoped rate limit in the owned `throttle` chain:
+/// only this flow's packets above the rate are dropped. No qdisc is
+/// created, replaced or deleted, so the interface's own shaping stays.
+fn flow_limit_argv(verb: &str, flow: &FlowScope, rate: u32, burst: u32) -> Vec<String> {
+    let family = nft_family(&flow.source_ip).unwrap_or("ip");
+    let mut argv = vec![
+        "nft".to_string(), verb.to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+        THROTTLE_CHAIN.to_string(), family.to_string(), "saddr".to_string(), flow.source_ip.clone(),
+        family.to_string(), "daddr".to_string(), flow.destination_ip.clone(),
+    ];
+    if release::protocol_has_port(&flow.protocol) {
+        argv.extend([flow.protocol.clone(), "dport".to_string(), flow.destination_port.to_string()]);
+    } else {
+        // ICMP/ICMPv6: the protocol is matched, so no TCP/UDP of the flow is
+        // ever in scope.
+        argv.extend(["meta".to_string(), "l4proto".to_string(), flow.protocol.clone()]);
+    }
+    argv.extend([
+        "limit".to_string(), "rate".to_string(), "over".to_string(), rate.to_string(), "kbytes/second".to_string(),
+        "burst".to_string(), burst.to_string(), "kbytes".to_string(), "drop".to_string(),
+    ]);
+    argv
+}
+
+/// The apply and rollback plan. Only `throttle` (flow-scoped nft limit) and
+/// `redirect` produce commands; `isolate` produces none, so the automatic
+/// path cannot reach a source-wide drop even if a decision named it.
 fn build_enforcement_plan_owned(
     ev: &NormalizedEvent,
     decision: &DefensiveDecision,
@@ -452,77 +589,68 @@ fn build_enforcement_plan_owned(
     let mut apply: Vec<Vec<String>> = Vec::new();
     let mut rollback: Vec<Vec<String>> = Vec::new();
     // An owned nft rule carries its owner token as an nft quoted string. A
-    // token that cannot be one gives no owned plan (prepare_release_task
-    // rejects that task before anything is executed).
+    // token that cannot be one gives no owned plan (admission rejects that
+    // task before anything is executed).
     let owned_nft = release_task
         .and_then(|task| nft_comment_arg(&task.owner_token).ok().map(|comment| (task, comment)));
 
-    if decision.action == "isolate" {
-        let mut command = vec![
-            "nft".to_string(), "insert".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
-            "input".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "drop".to_string(),
-        ];
-        if let Some((task, comment)) = &owned_nft {
-            command.push("comment".to_string());
-            command.push(comment.clone());
-            rollback.push(vec![
-                "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
-                "input".to_string(), "handle".to_string(), format!("<owned:{}>", task.owner_token),
-            ]);
-        } else {
-            rollback.push(vec![
-                "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
-                "input".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "drop".to_string(),
-            ]);
-        }
-        apply.push(command);
-    }
-
     if decision.action == "throttle" {
-        let mut command = vec![
-            "tc".to_string(), "qdisc".to_string(), "replace".to_string(), "dev".to_string(), iface.to_string(), "root".to_string(),
-        ];
-        if let Some(task) = release_task {
-            command.push("handle".to_string());
-            command.push(task.tc_handle.clone());
+        if let Some(flow) = flow_scope(ev) {
+            let (_, rate, burst) = strength_for(ev);
+            let mut command = flow_limit_argv("insert", &flow, rate, burst);
+            if let Some((task, comment)) = &owned_nft {
+                command.push("comment".to_string());
+                command.push(comment.clone());
+                rollback.push(vec![
+                    "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+                    THROTTLE_CHAIN.to_string(), "handle".to_string(), format!("<owned:{}>", task.owner_token),
+                ]);
+            } else {
+                rollback.push(flow_limit_argv("delete", &flow, rate, burst));
+            }
+            apply.push(command);
         }
-        command.extend(vec![
-            "tbf".to_string(), "rate".to_string(), "256kbit".to_string(), "burst".to_string(), "32kbit".to_string(),
-            "latency".to_string(), format!("{}ms", decision.delay_ms.max(100)),
-        ]);
-        apply.push(command);
-
-        let mut rollback_command = vec![
-            "tc".to_string(), "qdisc".to_string(), "del".to_string(), "dev".to_string(), iface.to_string(), "root".to_string(),
-        ];
-        if let Some(task) = release_task {
-            rollback_command.push("handle".to_string());
-            rollback_command.push(task.tc_handle.clone());
-        }
-        rollback.push(rollback_command);
     }
 
+    // A redirect is scoped like a restriction: traffic arriving on the
+    // ingress interface, from this source, to this destination and TCP port.
+    // Another destination of the same source on the same port (a protected
+    // host, say) is never redirected.
     if decision.action == "redirect" {
-        let mut command = vec![
-            "nft".to_string(), "insert".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
-            "prerouting".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "tcp".to_string(),
-            "dport".to_string(), ev.target_port.to_string(), "redirect".to_string(), "to".to_string(), honeypot_port.to_string(),
-        ];
-        if let Some((task, comment)) = &owned_nft {
-            command.push("comment".to_string());
-            command.push(comment.clone());
-            rollback.push(vec![
-                "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
-                "prerouting".to_string(), "handle".to_string(), format!("<owned:{}>", task.owner_token),
-            ]);
-        } else {
-            rollback.push(vec![
-                "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
-                "prerouting".to_string(), "ip".to_string(), "saddr".to_string(), ev.src_ip.clone(), "tcp".to_string(),
-                "dport".to_string(), ev.target_port.to_string(), "redirect".to_string(), "to".to_string(), honeypot_port.to_string(),
-            ]);
+        if let Some(flow) = flow_scope(ev).filter(|f| f.protocol == "tcp") {
+            let mut matches = vec![
+                "iifname".to_string(), format!("\"{}\"", iface), "ip".to_string(), "saddr".to_string(), flow.source_ip.clone(),
+                "ip".to_string(), "daddr".to_string(), flow.destination_ip.clone(), "tcp".to_string(), "dport".to_string(),
+                flow.destination_port.to_string(),
+            ];
+            // Mark the connections this lease redirects, so its release can
+            // end exactly those (conntrack by mark and tuple).
+            if let Some(task) = release_task.filter(|t| t.ct_mark != 0) {
+                matches.extend(["ct".to_string(), "mark".to_string(), "set".to_string(), task.ct_mark.to_string()]);
+            }
+            matches.extend(["redirect".to_string(), "to".to_string(), honeypot_port.to_string()]);
+            let mut command = vec![
+                "nft".to_string(), "insert".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+                "prerouting".to_string(),
+            ];
+            command.extend(matches.clone());
+            if let Some((task, comment)) = &owned_nft {
+                command.push("comment".to_string());
+                command.push(comment.clone());
+                rollback.push(vec![
+                    "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+                    "prerouting".to_string(), "handle".to_string(), format!("<owned:{}>", task.owner_token),
+                ]);
+            } else {
+                let mut delete = vec![
+                    "nft".to_string(), "delete".to_string(), "rule".to_string(), "inet".to_string(), "azazel_edge".to_string(),
+                    "prerouting".to_string(),
+                ];
+                delete.extend(matches);
+                rollback.push(delete);
+            }
+            apply.push(command);
         }
-        apply.push(command);
     }
 
     EnforcementPlan {
@@ -549,37 +677,36 @@ fn build_enforcement_plan_owned(
     }
 }
 
+/// Run one apply command, killed and failed past
+/// `safety::APPLY_COMMAND_TIMEOUT`. nft is started by absolute path from the
+/// trusted directories, with the environment cleared and a fixed PATH
+/// (Edge#477).
 fn run_command(argv: &[String]) -> Result<(), String> {
+    run_command_with_timeout(argv, safety::APPLY_COMMAND_TIMEOUT)
+}
+
+fn run_command_with_timeout(argv: &[String], timeout: Duration) -> Result<(), String> {
     if argv.is_empty() {
         return Err("empty command".to_string());
     }
-    // nft/tc are started by absolute path from the trusted directories, with
-    // the environment cleared and a fixed PATH (as the release path does);
-    // the core's own PATH and environment are not passed on (Edge#477). The
-    // argv itself, and so what is applied, is unchanged.
-    let binary = release::resolve_trusted_binary(&argv[0])
-        .map_err(|e| format!("command exec error: {} ({})", e, command_to_string(argv)))?;
-    let mut cmd = release::trusted_command(&binary);
-    cmd.args(&argv[1..]);
-    match cmd.status() {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!(
-            "command failed (exit={}): {}",
-            status.code().map(|v| v.to_string()).unwrap_or_else(|| "signal".to_string()),
-            command_to_string(argv)
-        )),
+    match release::run_bounded(argv, timeout) {
+        Ok(result) if result.returncode == 0 => Ok(()),
+        Ok(result) => Err(format!("command failed (exit={}): {}", result.returncode, command_to_string(argv))),
+        Err(e) if e == "command timeout" => Err(format!("command timeout after {:?}: {}", timeout, command_to_string(argv))),
         Err(e) => Err(format!("command exec error: {} ({})", e, command_to_string(argv))),
     }
 }
 
+/// What each level may execute automatically. `isolate` is in none of
+/// them, whatever the high-impact flag says: the automatic path is limited
+/// to notification, flow-scoped temporary restriction and decoy redirect.
 fn action_allowlist(level: &str, high_impact_auto: bool) -> Vec<String> {
     match level {
-        "full-auto" => vec!["observe", "notify", "throttle", "redirect", "isolate"].iter().map(|s| s.to_string()).collect(),
+        "full-auto" => vec!["observe", "notify", "throttle", "redirect"].iter().map(|s| s.to_string()).collect(),
         "semi-auto" => {
             let mut base = vec!["observe", "notify", "throttle"].iter().map(|s| s.to_string()).collect::<Vec<String>>();
             if high_impact_auto {
                 base.push("redirect".to_string());
-                base.push("isolate".to_string());
             }
             base
         }
@@ -642,25 +769,174 @@ fn add_release_metadata(metadata: &mut Value, task: Option<&ReleaseTask>, state:
     }
 }
 
+/// How an admitted plan is applied and read back. The daemon uses
+/// [`SystemApplier`]; tests substitute failures, hangs and mismatches.
+trait Applier {
+    /// Run one apply argv; bounded in time by the implementation.
+    fn apply(&self, argv: &[String]) -> Result<(), String>;
+    /// Whether the task's owned state reads back exactly as planned.
+    fn readback(&self, task: &ReleaseTask) -> Result<bool, String>;
+}
+
+struct SystemApplier;
+
+impl Applier for SystemApplier {
+    fn apply(&self, argv: &[String]) -> Result<(), String> {
+        run_command(argv)
+    }
+    fn readback(&self, task: &ReleaseTask) -> Result<bool, String> {
+        owned_state_matches_plan(task)
+    }
+}
+
+/// The trace ids the previous core gave this alert for each action it could
+/// have decided (its trace id is built from the alert and the action): a
+/// lease the previous core wrote for this alert carries one of them.
+fn legacy_trace_ids(ev: &NormalizedEvent) -> Vec<String> {
+    ["isolate", "redirect", "throttle"]
+        .iter()
+        .map(|action| {
+            calc_trace_id(
+                ev,
+                &DefensiveDecision {
+                    action: action.to_string(),
+                    reason: String::new(),
+                    policy_reason: String::new(),
+                    delay_ms: 0,
+                    target: String::new(),
+                },
+            )
+        })
+        .collect()
+}
+
+/// The rollback of the lease in force (by owner token, as every owned plan).
+fn held_rollback(held: &ReleaseTask) -> Vec<String> {
+    match release::owned_nft_chain(held) {
+        Some(chain) => vec![format!("nft delete rule inet azazel_edge {} handle '<owned:{}>'", chain, held.owner_token)],
+        None => Vec::new(),
+    }
+}
+
+/// The safety block for a held flow: the strength is the held lease's.
+fn held_safety(block: &Value, held: &ReleaseTask) -> Value {
+    let mut block = block.clone();
+    let strength = match (held.limit_rate_kbytes, held.limit_burst_kbytes) {
+        (r, b) if (r, b) == (safety::STRENGTH_STRICT.1, safety::STRENGTH_STRICT.2) => "strict",
+        (r, b) if (r, b) == (safety::STRENGTH_STANDARD.1, safety::STRENGTH_STANDARD.2) => "standard",
+        _ => "",
+    };
+    block["strength"] = json!(strength);
+    block
+}
+
 fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Config) -> EnforcementOutcome {
+    maybe_enforce_with(ev, decision, cfg, &SystemApplier)
+}
+
+/// Why a restriction may not target this alert, by rules that need no
+/// command and no clock: never isolate, a scopable target, and never a flow
+/// of the protected communications set. Evaluated in every mode, so a dry
+/// run shows what would really happen.
+fn static_safety_refusal(ev: &NormalizedEvent, action: &str, cfg: &Config) -> (Option<String>, Option<ProtectedMatch>) {
+    let flow = match action {
+        "isolate" => return (Some("isolate_not_automatic".to_string()), None),
+        "throttle" => match flow_scope_checked(ev) {
+            Ok(flow) => flow,
+            Err(reason) => return (Some(reason.to_string()), None),
+        },
+        "redirect" => match flow_scope_checked(ev) {
+            Ok(flow) if flow.protocol == "tcp" && nft_family(&flow.source_ip) == Some("ip") => flow,
+            Ok(flow) if flow.protocol != "tcp" => return (Some("redirect_target_ineligible:not_tcp".to_string()), None),
+            Ok(_) => return (Some("redirect_target_ineligible:not_ipv4_source".to_string()), None),
+            Err(reason) => return (Some(format!("redirect_target_ineligible:{reason}")), None),
+        },
+        _ => return (None, None),
+    };
+    // The protected set is matched against what the rule would act on: the
+    // source, the destination and the port (0 for a protocol without one,
+    // which then matches every destination entry).
+    let (Ok(source), Ok(destination)) = (flow.source_ip.parse::<std::net::IpAddr>(), flow.destination_ip.parse::<std::net::IpAddr>()) else {
+        return (Some("target_source_invalid".to_string()), None);
+    };
+    match cfg.protected.matches(&source, Some(&destination), flow.destination_port) {
+        Some(found) => (Some(format!("protected_flow:{}:{}", found.role, found.name)), Some(found)),
+        None => (None, None),
+    }
+}
+
+/// Rules checked only when a restriction is about to be executed: the
+/// protected set is declared, the alert is recent, and for a redirect the
+/// decoy is separated (this boot's evidence) and reachable.
+fn execution_safety_refusal(ev: &NormalizedEvent, action: &str, decoy_port: u16, cfg: &Config, now: &LeaseNow) -> Result<f64, String> {
+    cfg.protected.ready_for_execution()?;
+    let event_epoch = safety::alert_freshness(&ev.ts, now.wall_epoch)?;
+    if action == "redirect" {
+        let (path, max_age) = match &cfg.redirect_policy {
+            Some(policy) => (policy.decoy_separation_evidence_path.as_str(), policy.decoy_evidence_max_age_sec),
+            None => ("", 0),
+        };
+        safety::check_decoy_evidence(path, max_age, decoy_port, &cfg.defense_iface, now.wall_epoch, now.boot_id.as_deref().unwrap_or(""))?;
+        safety::decoy_reachable(&cfg.defense_iface, decoy_port)?;
+        // Releasing a redirect ends the connections it redirected through
+        // conntrack; without the tool a redirect could not be fully undone.
+        release::resolve_trusted_binary("conntrack").map_err(|_| "conntrack_unavailable".to_string())?;
+        // The redirect sets the conntrack mark: refused when anything else in
+        // the ruleset uses it (Edge would overwrite it, or it ours).
+        match release::foreign_ct_mark_use(&release::SystemReleaseCommandRunner) {
+            Ok(None) => {}
+            Ok(Some(_)) => return Err("ct_mark_in_use".to_string()),
+            Err(_) => return Err("ct_mark_use_unreadable".to_string()),
+        }
+    }
+    Ok(event_epoch)
+}
+
+fn maybe_enforce_with<A: Applier>(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Config, applier: &A) -> EnforcementOutcome {
     let trace_id = calc_trace_id(ev, decision);
-    let (effective_decision, mut redirect_meta) = resolve_redirect_decision(ev, decision, cfg);
+    let (mut effective_decision, mut redirect_meta) = resolve_redirect_decision(ev, decision, cfg);
+    let requested_action = effective_decision.action.clone();
+    let strength = if requested_action == "throttle" { strength_for(ev).0 } else { "" };
+    let scope = match requested_action.as_str() {
+        "throttle" => flow_scope(ev).map(|f| format!("flow:{}", f.key())).unwrap_or_else(|| "unscoped".to_string()),
+        "redirect" => format!("source_and_port:{}:{}", ev.src_ip, ev.target_port),
+        _ => "none".to_string(),
+    };
+    let (static_refusal, protected_match) = static_safety_refusal(ev, &requested_action, cfg);
+    if let Some(reason) = &static_refusal {
+        effective_decision.action = "notify".to_string();
+        effective_decision.policy_reason = format!("{}:safety_refused:{}", effective_decision.policy_reason, reason);
+        effective_decision.reason = format!("{}; {} not executed ({}), fallback=notify", effective_decision.reason, requested_action, reason);
+    }
+    let protected_status = cfg.protected.status();
+    let safety_meta = |gate: &str, decoy: &str| {
+        safety::safety_block(
+            &protected_status,
+            protected_match.as_ref(),
+            &scope,
+            gate,
+            cfg.defense_action_ttl_sec,
+            &cfg.defense_ttl_source,
+            strength,
+            decoy,
+        )
+    };
     let selected_decoy_port = redirect_meta
         .get("selected_decoy_port")
         .and_then(|v| v.as_u64())
         .map(|v| v as u16)
         .unwrap_or(cfg.defense_honeypot_port);
-    let release_task = build_release_task(
-        &trace_id,
-        &effective_decision.action,
-        &cfg.defense_iface,
-        &ev.src_ip,
-        ev.target_port,
-        selected_decoy_port,
-        effective_decision.delay_ms,
-        cfg.defense_action_ttl_sec,
-        &LeaseNow::read(now_epoch()),
-    );
+    let now = LeaseNow::read(now_epoch());
+    let release_task = match effective_decision.action.as_str() {
+        "throttle" => flow_scope(ev).and_then(|flow| {
+            let (_, rate, burst) = strength_for(ev);
+            build_flow_throttle_task(&trace_id, &flow, rate, burst, cfg.defense_action_ttl_sec, &now)
+        }),
+        "redirect" => flow_scope(ev).and_then(|flow| {
+            release::build_flow_redirect_task(&trace_id, &flow, &cfg.defense_iface, selected_decoy_port, cfg.defense_action_ttl_sec, &now)
+        }),
+        _ => None,
+    };
     let plan = build_enforcement_plan_owned(
         ev,
         &effective_decision,
@@ -671,6 +947,11 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
 
     if plan.apply_commands.is_empty() {
         add_release_metadata(&mut redirect_meta, None, "not_applicable");
+        let gate = static_refusal.as_ref().map(|r| format!("refused:{}", r)).unwrap_or_else(|| "not_applicable".to_string());
+        // Observe-only outcomes (`disabled`, `dry_run`) keep the metadata
+        // keys Nexus's intake accepts; a refusal's reason is in
+        // policy_reason. `safety` is added only where enforcement acted.
+        let _ = gate;
         return EnforcementOutcome {
             mode: "disabled".to_string(),
             trace_id,
@@ -691,6 +972,9 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
     let (allowed_by_policy, policy_gate_reason) = should_execute_action(&effective_decision.action, cfg);
     if cfg.defense_dry_run || !allowed_by_policy {
         add_release_metadata(&mut redirect_meta, release_task.as_ref(), "planned_only");
+        if !cfg.defense_dry_run {
+            redirect_meta["safety"] = safety_meta("not_evaluated:not_executing", "not_evaluated");
+        }
         return EnforcementOutcome {
             mode: if cfg.defense_dry_run { "dry_run".to_string() } else { "policy_gated".to_string() },
             trace_id,
@@ -708,10 +992,36 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
         };
     }
 
-    let task = match release_task.as_ref() {
+    let decoy_state = |ok: bool| if effective_decision.action == "redirect" { if ok { "met" } else { "unmet" } } else { "not_applicable" };
+    let event_epoch = match execution_safety_refusal(ev, &effective_decision.action, selected_decoy_port, cfg, &now) {
+        Ok(at) => at,
+        Err(reason) => {
+            add_release_metadata(&mut redirect_meta, release_task.as_ref(), "planned_only");
+            let decoy = if reason.starts_with("decoy") { "unmet" } else { "not_evaluated" };
+            redirect_meta["safety"] = safety_meta(&format!("refused:{}", reason), decoy);
+            return EnforcementOutcome {
+                mode: "policy_gated".to_string(),
+                trace_id,
+                selected_action: effective_decision.action.clone(),
+                target: effective_decision.target.clone(),
+                policy_reason: format!("{}:safety_gate:{}", effective_decision.policy_reason, reason),
+                command_plan: plan.apply_commands.clone(),
+                rollback_plan: plan.rollback_commands.clone(),
+                executed_count: 0,
+                failed_count: 0,
+                errors: Vec::new(),
+                rollback_hint: format!("not applied: {}; operator notified", reason),
+                result: "planned_not_applied".to_string(),
+                metadata: redirect_meta,
+            };
+        }
+    };
+
+    let mut task = match release_task {
         Some(task) => task,
         None => {
             add_release_metadata(&mut redirect_meta, None, "ownership_unavailable");
+            redirect_meta["safety"] = safety_meta("refused:ownership_unavailable", decoy_state(true));
             return EnforcementOutcome {
                 mode: "release_guard_failed".to_string(),
                 trace_id,
@@ -729,75 +1039,157 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
             };
         }
     };
+    task.event_epoch = Some(event_epoch);
+    task.event_key = event_key(ev);
 
-    if let Err(error) = prepare_release_task(&cfg.defense_release_ledger_path, task) {
-        add_release_metadata(&mut redirect_meta, Some(task), "prepare_failed");
-        return EnforcementOutcome {
-            mode: "release_guard_failed".to_string(),
-            trace_id,
-            selected_action: effective_decision.action.clone(),
-            target: effective_decision.target.clone(),
-            policy_reason: effective_decision.policy_reason.clone(),
-            command_plan: plan.apply_commands,
-            rollback_plan: plan.rollback_commands,
-            executed_count: 0,
-            failed_count: 0,
-            errors: vec![format!("release_schedule_prepare_failed:{}", error)],
-            rollback_hint: "disruptive action blocked because durable release intent could not be persisted".to_string(),
-            result: "planned_not_applied".to_string(),
-            metadata: redirect_meta,
-        };
-    }
+    let admitted = match admit_release_task(&cfg.defense_release_ledger_path, &task, &legacy_trace_ids(ev), cfg.defense_action_ttl_sec, &now) {
+        Ok(Admission::Prepared(admitted)) => admitted,
+        Ok(Admission::Extended { task_id, due_epoch, extensions, held }) => {
+            // The event reports the lease in force: its task, owner, expiry,
+            // strength and rollback. The new alert is the merged tombstone.
+            add_release_metadata(&mut redirect_meta, Some(&held), "merged");
+            redirect_meta["release_extended_task_id"] = json!(task_id);
+            redirect_meta["release_merged_task_id"] = json!(task.task_id);
+            redirect_meta["release_due_epoch"] = json!(due_epoch);
+            redirect_meta["release_extensions"] = json!(extensions);
+            redirect_meta["safety"] = held_safety(&safety_meta("passed:extended", decoy_state(true)), &held);
+            return EnforcementOutcome {
+                mode: "enforced".to_string(),
+                trace_id,
+                selected_action: effective_decision.action.clone(),
+                target: effective_decision.target.clone(),
+                policy_reason: effective_decision.policy_reason.clone(),
+                command_plan: Vec::new(),
+                rollback_plan: held_rollback(&held),
+                executed_count: 0,
+                failed_count: 0,
+                errors: Vec::new(),
+                rollback_hint: format!("held lease {} extended ({} of {}); release due at {:.0}", task_id, extensions, release::MAX_LEASE_EXTENSIONS, due_epoch),
+                result: "extended".to_string(),
+                metadata: redirect_meta,
+            };
+        }
+        Ok(Admission::Cooldown { until_epoch }) => {
+            // The flow used up its lease family: notify only until the
+            // cooldown ends; nothing is applied, extended or made permanent.
+            add_release_metadata(&mut redirect_meta, Some(&task), "planned_only");
+            redirect_meta["safety"] = safety_meta("refused:cooldown", decoy_state(true));
+            redirect_meta["release_cooldown_until_epoch"] = json!(until_epoch);
+            return EnforcementOutcome {
+                mode: "policy_gated".to_string(),
+                trace_id,
+                selected_action: effective_decision.action.clone(),
+                target: effective_decision.target.clone(),
+                policy_reason: format!("{}:safety_gate:cooldown", effective_decision.policy_reason),
+                command_plan: plan.apply_commands,
+                rollback_plan: plan.rollback_commands,
+                executed_count: 0,
+                failed_count: 0,
+                errors: Vec::new(),
+                rollback_hint: format!(
+                    "flow used up its {}s lease family; not restricted again until {:.0} (cooldown {}s); operator notified",
+                    release::MAX_CUMULATIVE_LEASE_SEC, until_epoch, release::FLOW_COOLDOWN_SEC
+                ),
+                result: "planned_not_applied".to_string(),
+                metadata: redirect_meta,
+            };
+        }
+        Ok(Admission::AlreadyHeld { task_id, due_epoch, held }) => {
+            add_release_metadata(&mut redirect_meta, Some(&held), "merged");
+            redirect_meta["release_extended_task_id"] = json!(task_id);
+            redirect_meta["release_merged_task_id"] = json!(task.task_id);
+            redirect_meta["release_due_epoch"] = json!(due_epoch);
+            redirect_meta["safety"] = held_safety(&safety_meta("passed:already_held", decoy_state(true)), &held);
+            return EnforcementOutcome {
+                mode: "enforced".to_string(),
+                trace_id,
+                selected_action: effective_decision.action.clone(),
+                target: effective_decision.target.clone(),
+                policy_reason: effective_decision.policy_reason.clone(),
+                command_plan: Vec::new(),
+                rollback_plan: held_rollback(&held),
+                executed_count: 0,
+                failed_count: 0,
+                errors: Vec::new(),
+                rollback_hint: format!("held lease {} already lasts until {:.0}; unchanged", task_id, due_epoch),
+                result: "already_held".to_string(),
+                metadata: redirect_meta,
+            };
+        }
+        Err(error) => {
+            add_release_metadata(&mut redirect_meta, Some(&task), "prepare_failed");
+            redirect_meta["safety"] = safety_meta(&format!("refused:admission:{}", error), decoy_state(true));
+            return EnforcementOutcome {
+                mode: "release_guard_failed".to_string(),
+                trace_id,
+                selected_action: effective_decision.action.clone(),
+                target: effective_decision.target.clone(),
+                policy_reason: effective_decision.policy_reason.clone(),
+                command_plan: plan.apply_commands,
+                rollback_plan: plan.rollback_commands,
+                executed_count: 0,
+                failed_count: 0,
+                errors: vec![format!("release_schedule_prepare_failed:{}", error)],
+                rollback_hint: "disruptive action blocked because durable release intent could not be admitted".to_string(),
+                result: "planned_not_applied".to_string(),
+                metadata: redirect_meta,
+            };
+        }
+    };
 
+    // Apply, each command time-bounded; stop at the first failure.
     let mut executed_count = 0_u32;
     let mut failed_count = 0_u32;
     let mut errors: Vec<String> = Vec::new();
     for argv in &plan.apply_argv {
-        match run_command(argv) {
+        match applier.apply(argv) {
             Ok(_) => executed_count += 1,
             Err(e) => {
                 failed_count += 1;
                 errors.push(e);
+                break;
             }
         }
     }
-
-    let ledger_state = if failed_count == 0 && executed_count > 0 {
-        match activate_release_task(&cfg.defense_release_ledger_path, &task.task_id, now_epoch()) {
+    // Applied only when the owned state reads back exactly as planned.
+    let confirmed = if failed_count == 0 && executed_count > 0 {
+        match applier.readback(&admitted) {
+            Ok(true) => true,
+            Ok(false) => {
+                failed_count += 1;
+                errors.push("owned_state_readback_mismatch".to_string());
+                false
+            }
+            Err(e) => {
+                failed_count += 1;
+                errors.push(format!("owned_state_readback_failed:{}", e));
+                false
+            }
+        }
+    } else {
+        false
+    };
+    let ledger_state = if confirmed {
+        match activate_release_task(&cfg.defense_release_ledger_path, &admitted.task_id, now_epoch()) {
             Ok(_) => "active",
             Err(error) => {
                 errors.push(format!("release_schedule_activation_failed:{}", error));
                 "prepared"
             }
         }
-    } else if executed_count > 0 {
-        match mark_release_task_uncertain(
-            &cfg.defense_release_ledger_path,
-            &task.task_id,
-            "provider_partial_apply",
-            now_epoch(),
-        ) {
-            Ok(_) => "uncertain",
-            Err(error) => {
-                errors.push(format!("release_schedule_uncertain_persist_failed:{}", error));
-                "prepared"
-            }
-        }
     } else {
-        match cancel_release_task(
-            &cfg.defense_release_ledger_path,
-            &task.task_id,
-            "provider_apply_failed",
-            now_epoch(),
-        ) {
-            Ok(_) => "cancelled",
+        // Not confirmed: release at once (the sweep deletes whatever owned
+        // state exists and verifies absence), never left to its TTL.
+        match abandon_release_task(&cfg.defense_release_ledger_path, &admitted.task_id, "apply_unconfirmed", &LeaseNow::read(now_epoch())) {
+            Ok(_) => "uncertain_release_scheduled",
             Err(error) => {
-                errors.push(format!("release_schedule_cancel_failed:{}", error));
+                errors.push(format!("release_schedule_abandon_failed:{}", error));
                 "prepared"
             }
         }
     };
-    add_release_metadata(&mut redirect_meta, Some(task), ledger_state);
+    add_release_metadata(&mut redirect_meta, Some(&admitted), ledger_state);
+    redirect_meta["safety"] = safety_meta("passed", decoy_state(true));
 
     EnforcementOutcome {
         mode: "enforced".to_string(),
@@ -810,11 +1202,23 @@ fn maybe_enforce(ev: &NormalizedEvent, decision: &DefensiveDecision, cfg: &Confi
         executed_count,
         failed_count,
         errors,
-        rollback_hint: format!(
-            "durable automatic release due after {}s; release remains unverified until owned-state absence readback",
-            cfg.defense_action_ttl_sec
-        ),
-        result: if failed_count > 0 { "partial_failure".to_string() } else { "applied".to_string() },
+        rollback_hint: if confirmed {
+            format!(
+                "durable automatic release due at {:.0} (ttl {}s, Edge maximum {}s); release is verified by owned-state absence readback",
+                admitted.due_epoch,
+                cfg.defense_action_ttl_sec,
+                release::MAX_LEASE_TTL_SEC
+            )
+        } else {
+            "apply not confirmed; immediate release scheduled".to_string()
+        },
+        result: if confirmed {
+            "applied".to_string()
+        } else if executed_count > 0 {
+            "partial_failure".to_string()
+        } else {
+            "failed".to_string()
+        },
         metadata: redirect_meta,
     }
 }
@@ -851,8 +1255,10 @@ fn resolve_redirect_decision(ev: &NormalizedEvent, decision: &DefensiveDecision,
             }
 
             let high_risk = ev.risk_score >= 80 || ev.severity >= 4;
+            // Never isolate, never redirect again: normalize_safe_action
+            // turns either into notify, whatever the policy file names.
             let fallback = if high_risk {
-                normalize_safe_action(&policy.high_risk_unsupported_port_action, "isolate")
+                normalize_safe_action(&policy.high_risk_unsupported_port_action, "notify")
             } else {
                 normalize_safe_action(&policy.unsupported_port_action, "notify")
             };
@@ -886,13 +1292,18 @@ fn resolve_redirect_decision(ev: &NormalizedEvent, decision: &DefensiveDecision,
     }
 }
 
+/// The decision loop and the release sweep thread both append to the
+/// normalized log; each line is one write under this lock.
+static LOG_LOCK: Mutex<()> = Mutex::new(());
+
 fn append_json_line(path: &str, value: &Value) {
     if let Some(parent) = Path::new(path).parent() {
         let _ = fs::create_dir_all(parent);
     }
-
+    let line = format!("{}\n", value);
+    let _guard = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{}", value);
+        let _ = f.write_all(line.as_bytes());
     }
 }
 
@@ -912,6 +1323,16 @@ static AI_FORWARD_FAILED: AtomicU64 = AtomicU64::new(0);
 /// Event lines written to the receiver. A completed write is not proof the
 /// receiver kept the line; that is the receiver's own count.
 static AI_FORWARD_SENT: AtomicU64 = AtomicU64::new(0);
+/// Lines in the forward queue right now: what a stop would leave behind.
+static AI_FORWARD_QUEUED: AtomicU64 = AtomicU64::new(0);
+
+fn forward_pending() -> u64 {
+    AI_FORWARD_QUEUED.load(Ordering::Relaxed)
+}
+
+fn uncount_queued() {
+    let _ = AI_FORWARD_QUEUED.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
+}
 
 /// The forward counts are reported to the same receiver as one closed-shape
 /// line, because stderr (the only other report) is rate limited by the
@@ -1046,13 +1467,22 @@ fn ai_forwarder(socket_path: &str) -> &'static SyncSender<Forward> {
 /// loop only enqueues: when the queue is full the event is dropped and
 /// counted, and decisions, the JSONL record and stdout are unaffected.
 fn send_to_ai_socket(socket_path: &str, value: &Value) {
+    // Counted before the hand-off, so the forwarder never takes a line the
+    // count does not have yet.
+    AI_FORWARD_QUEUED.fetch_add(1, Ordering::Relaxed);
     match ai_forwarder(socket_path).try_send(Forward::Line(format!("{}\n", value))) {
         Ok(()) => {}
-        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+        Err(TrySendError::Full(Forward::Line(line))) | Err(TrySendError::Disconnected(Forward::Line(line))) => {
+            uncount_queued();
+            undelivered::record(&line);
             let dropped = AI_FORWARD_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
             if dropped == 1 || dropped % 1000 == 0 {
                 eprintln!("ai socket forward queue full; {} event(s) dropped so far", dropped);
             }
+        }
+        Err(_) => {
+            uncount_queued();
+            AI_FORWARD_DROPPED.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -1074,9 +1504,15 @@ fn forward_ai_lines(socket_path: &str, receiver: Receiver<Forward>) {
     for item in receiver {
         match item {
             Forward::Line(line) => {
+                // Counted as on its way until its outcome is known (a stop
+                // during delivery then counts it as lost).
                 if deliver(socket_path, &line).is_ok() {
+                    uncount_queued();
                     AI_FORWARD_SENT.fetch_add(1, Ordering::Relaxed);
                 } else {
+                    // Not taken by the intake: kept in the Edge spool.
+                    undelivered::record(&line);
+                    uncount_queued();
                     let failed = AI_FORWARD_FAILED.fetch_add(1, Ordering::Relaxed) + 1;
                     if failed == 1 || failed % 1000 == 0 {
                         eprintln!("ai socket forward failed; {} event(s) not delivered so far", failed);
@@ -1125,6 +1561,9 @@ fn process_value(cfg: &Config, parsed: &Value) {
     let decision = decide_defense(&normalized);
     let enforcement = maybe_enforce(&normalized, &decision, cfg);
     let event = core_event(&normalized, &decision, &enforcement, cfg);
+    if enforcement_evidence_due(&enforcement, cfg) {
+        spool_enforcement_evidence(cfg, &event);
+    }
 
     if cfg.forward_log {
         append_json_line(&cfg.normalized_log_path, &event);
@@ -1146,6 +1585,7 @@ fn process_release_events(cfg: &Config) {
                     "source": "release_ledger",
                     "pipeline": "rust_release_engine_v1",
                 });
+                spool_enforcement_evidence(cfg, &event);
                 if cfg.forward_log {
                     append_json_line(&cfg.normalized_log_path, &event);
                 }
@@ -1168,6 +1608,84 @@ fn process_release_events(cfg: &Config) {
         }
         Err(error) => eprintln!("release ledger processing failed: {}", error),
     }
+}
+
+/// The Edge-owned enforcement evidence spool, beside the release ledger:
+/// every decision that reached the execution path (applied, extended,
+/// failed, refused by an execution-time safety rule or by admission) and
+/// every release outcome, fsynced, size-capped with one rotation. It is
+/// written whatever `AZAZEL_FORWARD_LOG` says and whether or not the intake
+/// socket is up, so what the Edge did to the network can be reconstructed
+/// after an intake outage. Dry-run and policy-gated "would" decisions are not
+/// spooled: they changed nothing, and spooling every alert would put an
+/// fsync per alert on the decision path.
+fn enforcement_evidence_path(cfg: &Config) -> std::path::PathBuf {
+    Path::new(&cfg.defense_release_ledger_path).with_file_name("enforcement-evidence.jsonl")
+}
+
+const ENFORCEMENT_EVIDENCE_CAP_BYTES: u64 = 8 * 1024 * 1024;
+static EVIDENCE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// What reaches the spool: what enforcement did or refused while it was
+/// executing (applied, extended, held, failed, refused at execution or by
+/// admission) and, with enforcement executing, a refusal by a static rule
+/// (a protected flow, isolate, an unscopable target).
+fn enforcement_evidence_due(outcome: &EnforcementOutcome, cfg: &Config) -> bool {
+    matches!(outcome.mode.as_str(), "enforced" | "release_guard_failed")
+        || outcome.policy_reason.contains(":safety_gate:")
+        || (cfg.defense_enforce && !cfg.defense_dry_run && outcome.policy_reason.contains(":safety_refused:"))
+}
+
+/// Numbering, the size check, the rotation and the append are one critical
+/// section: the decision loop and the release sweep both write here, and two
+/// writers rotating at once would rename the segment the other just started
+/// over the retained one.
+static EVIDENCE_LOCK: Mutex<()> = Mutex::new(());
+
+fn spool_enforcement_evidence(cfg: &Config, event: &Value) {
+    let path = enforcement_evidence_path(cfg);
+    if let Err(error) = append_evidence(&path, event, ENFORCEMENT_EVIDENCE_CAP_BYTES) {
+        eprintln!("enforcement evidence spool write failed ({}): {}", path.display(), error);
+    }
+}
+
+fn append_evidence(path: &Path, event: &Value, cap_bytes: u64) -> std::io::Result<u64> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let _guard = EVIDENCE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "evidence spool path is a symlink"));
+        }
+        if meta.len() >= cap_bytes {
+            let mut rotated = path.as_os_str().to_owned();
+            rotated.push(".1");
+            fs::rename(path, &rotated)?;
+            // The rename is durable before anything lands in the new segment.
+            fs::File::open(parent)?.sync_all()?;
+        }
+    }
+    let seq = EVIDENCE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let mut record = event.clone();
+    // A per-run sequence: a gap, or a first number above 1 after a rotation,
+    // shows what the cap dropped.
+    record["evidence_spool"] = json!({"seq": seq, "since": process_start(), "cap_bytes": cap_bytes});
+    let mut line = serde_json::to_vec(&record).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    line.push(b'\n');
+    let created = !path.exists();
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .custom_flags(release::O_NOFOLLOW)
+        .open(path)?;
+    file.write_all(&line)?;
+    file.sync_data()?;
+    if created {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(seq)
 }
 
 /// Where the ingress audit summaries go: next to the normalized event log,
@@ -1240,9 +1758,16 @@ const SHUTDOWN_FORWARD_WAIT: Duration = Duration::from_secs(2);
 /// Queue one already-serialised line for the AI socket; a full queue drops
 /// and counts it, as for events.
 fn queue_ai_line(socket_path: &str, line: String) {
+    AI_FORWARD_QUEUED.fetch_add(1, Ordering::Relaxed);
     match ai_forwarder(socket_path).try_send(Forward::Line(line)) {
         Ok(()) => {}
-        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+        Err(TrySendError::Full(Forward::Line(line))) | Err(TrySendError::Disconnected(Forward::Line(line))) => {
+            uncount_queued();
+            undelivered::record(&line);
+            AI_FORWARD_DROPPED.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(_) => {
+            uncount_queued();
             AI_FORWARD_DROPPED.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -1291,17 +1816,63 @@ fn write_ingress_record(cfg: &Config, record: &Value) {
     }
 }
 
-/// One iteration of the main loop: one bounded read of the EVE file, its
-/// audit summaries, then the release sweep. The read is bounded
-/// (`IngressLimits`), so the sweep runs on every iteration however much is
-/// waiting in the EVE file; whatever the read left is read next time.
-fn poll_iteration(cfg: &Config, ingress: &mut IngressReader, sweep: &mut dyn FnMut(&Config, &IngressReader)) -> PollReport {
+/// One iteration of the main loop: one bounded read of the EVE file and its
+/// audit summaries. The release sweep is not here: it runs on its own
+/// thread (`spawn_release_sweeper`), so neither an alert backlog nor an
+/// apply command waiting on its time bound holds a release back.
+fn poll_iteration(cfg: &Config, ingress: &mut IngressReader) -> PollReport {
     let report = ingress.poll(Path::new(&cfg.eve_path), Instant::now(), |v| process_value(cfg, v));
     for record in ingress.audit_records(Instant::now(), now_epoch()) {
         emit_ingress_record(cfg, &record);
     }
-    sweep(cfg, ingress);
     report
+}
+
+/// The longest the release sweeper waits between sweeps.
+const SWEEP_INTERVAL_MAX: Duration = Duration::from_millis(1000);
+/// How often the sweeper reports a ledger that is not `ok`.
+const CAPACITY_NOTICE_INTERVAL: Duration = Duration::from_secs(600);
+
+/// The release sweep on its own thread: due leases are released every
+/// interval whatever the decision loop is doing (an apply waiting for its
+/// time bound, a flood of alerts). It runs whether enforcement is on or
+/// not, so a restart or a configuration change never strands old state.
+fn spawn_release_sweeper(cfg: Config, stopped: fn() -> bool) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let interval = Duration::from_millis(cfg.poll_ms.max(50)).min(SWEEP_INTERVAL_MAX);
+        let mut last_state = String::from("ok");
+        let mut last_notice: Option<Instant> = None;
+        while !stopped() {
+            process_release_events(&cfg);
+            capacity_notice(&cfg, &mut last_state, &mut last_notice);
+            sleep_unless_stopped(interval, STOP_CHECK_SLICE, &stopped);
+        }
+    })
+}
+
+/// The capacity notice: when the release ledger leaves `ok` (or stays out of
+/// it), a record goes to the normalized log and stderr before new
+/// restrictions are refused, naming the maintenance entry.
+fn capacity_notice(cfg: &Config, last_state: &mut String, last_notice: &mut Option<Instant>) {
+    let Ok(capacity) = release::ledger_capacity(&cfg.defense_release_ledger_path) else {
+        return;
+    };
+    let state = capacity["state"].as_str().unwrap_or("ok").to_string();
+    let due = state != "ok" && (state != *last_state || last_notice.map_or(true, |at| at.elapsed() >= CAPACITY_NOTICE_INTERVAL));
+    if due {
+        let event = json!({
+            "release_ledger_capacity": capacity,
+            "maintenance": "azazel-edge-core --release-ledger-compact (generation migration; keeps the replay watermark and every held lease)",
+            "source": "release_ledger",
+            "pipeline": "rust_release_engine_v1",
+        });
+        if cfg.forward_log {
+            append_json_line(&cfg.normalized_log_path, &event);
+        }
+        eprintln!("release ledger capacity {}: {}", state, event);
+        *last_notice = Some(Instant::now());
+    }
+    *last_state = state;
 }
 
 
@@ -1409,6 +1980,29 @@ fn main() {
         }
         return;
     }
+    // Maintenance of the release ledger: report its capacity, or run one
+    // generation migration under the admission rules. Neither applies,
+    // releases or forgets a held lease, and both keep the replay checkpoint.
+    if args.iter().any(|a| a == "--release-ledger-status") {
+        match release::ledger_capacity(&cfg.defense_release_ledger_path) {
+            Ok(value) => println!("{}", value),
+            Err(error) => {
+                eprintln!("release ledger status failed: {}", error);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    if args.iter().any(|a| a == "--release-ledger-compact") {
+        match release::compact_release_ledger(&cfg.defense_release_ledger_path, now_epoch()) {
+            Ok(value) => println!("{}", value),
+            Err(error) => {
+                eprintln!("release ledger compaction failed: {}", error);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
 
     if let Some(parent) = Path::new(&cfg.normalized_log_path).parent() {
         let _ = fs::create_dir_all(parent);
@@ -1433,15 +2027,39 @@ fn main() {
         IngressLimits::DECLARED.alerts_per_poll
     );
 
-    // Reconcile due release work before reading new alerts. This runs even when new
-    // enforcement is disabled so a restart/config change cannot strand old temporary state.
+    eprintln!(
+        "azazel-edge-core safety: protected_flows={} ({}), lease_ttl_sec={} ({}, Edge max {}), max_extensions={}, max_cumulative_sec={}, max_held_leases={}, isolate_automatic=false",
+        cfg.protected.status(),
+        cfg.protected_flows_path,
+        cfg.defense_action_ttl_sec,
+        cfg.defense_ttl_source,
+        release::MAX_LEASE_TTL_SEC,
+        release::MAX_LEASE_EXTENSIONS,
+        release::MAX_CUMULATIVE_LEASE_SEC,
+        release::MAX_ACTIVE_LEASES,
+    );
+
+    // A restart grants nothing: a lease still `prepared` was being applied
+    // when the previous process stopped and was never confirmed, so it is
+    // released now, before any alert is read. Then due release work is
+    // reconciled; both run even when enforcement is disabled, so a restart
+    // or a configuration change cannot strand old temporary state.
+    match release::recover_unconfirmed_on_start(&cfg.defense_release_ledger_path, &LeaseNow::read(now_epoch())) {
+        Ok(0) => {}
+        Ok(n) => eprintln!("release ledger: {} unconfirmed lease(s) from the previous run scheduled for immediate release", n),
+        Err(error) => eprintln!("release ledger recovery failed: {}", error),
+    }
     process_release_events(&cfg);
     process_start();
+    if cfg.forward_ai {
+        undelivered::start(std::path::PathBuf::from(&cfg.undelivered_spool_path), cfg.undelivered_spool_cap_bytes, forward_pending);
+    }
     let mut reporter = ForwardReporter::new();
     let mut ingress = IngressReader::new(offset, IngressLimits::DECLARED);
     stop_signal::install();
+    let sweeper = spawn_release_sweeper(cfg.clone(), stop_signal::requested);
     while !stop_signal::requested() {
-        let report = poll_iteration(&cfg, &mut ingress, &mut |c, _| process_release_events(c));
+        let report = poll_iteration(&cfg, &mut ingress);
         if cfg.forward_ai {
             reporter.tick(Instant::now(), || queue_forward_stats(&cfg.ai_socket_path));
         }
@@ -1459,9 +2077,18 @@ fn main() {
             }
         }
     });
-    if cfg.forward_ai && written > 0 && !drain_ai_forward(ai_forwarder(&cfg.ai_socket_path), SHUTDOWN_FORWARD_WAIT) {
-        eprintln!("ingress summary at shutdown: the AI socket forward did not finish within {:?}", SHUTDOWN_FORWARD_WAIT);
+    if cfg.forward_ai && !drain_ai_forward(ai_forwarder(&cfg.ai_socket_path), SHUTDOWN_FORWARD_WAIT) {
+        eprintln!("shutdown: the AI socket forward did not finish within {:?}", SHUTDOWN_FORWARD_WAIT);
     }
+    if cfg.forward_ai {
+        // Lines still queued for the forwarder are lost with the process:
+        // the spool records how many.
+        let left = AI_FORWARD_QUEUED.load(Ordering::Relaxed);
+        if !undelivered::stop(left, SHUTDOWN_FORWARD_WAIT) {
+            eprintln!("shutdown: the undelivered spool did not close cleanly");
+        }
+    }
+    let _ = sweeper.join();
     eprintln!("azazel-edge-core stopping: {} ingress summary record(s) written for the last interval", written);
 }
 
@@ -1525,7 +2152,7 @@ mod tests {
     #[test]
     fn every_planned_apply_command_names_a_trusted_binary() {
         let ev = sample_event();
-        for action in ["isolate", "throttle", "redirect"] {
+        for action in ["throttle", "redirect"] {
             let decision = DefensiveDecision {
                 action: action.to_string(),
                 reason: "test".to_string(),
@@ -1539,6 +2166,9 @@ mod tests {
                 assert!(matches!(argv[0].as_str(), "nft" | "tc"), "{argv:?}");
             }
         }
+        // isolate has no apply plan at all: no automatic path can execute it.
+        let isolate = DefensiveDecision { action: "isolate".to_string(), reason: "t".to_string(), policy_reason: "t".to_string(), delay_ms: 0, target: ev.src_ip.clone() };
+        assert!(build_enforcement_plan(&ev, &isolate, "eth0", 2222).apply_argv.is_empty());
     }
 
     fn sample_event() -> NormalizedEvent {
@@ -1549,7 +2179,7 @@ mod tests {
             attack_type: "test".to_string(),
             severity: 1,
             target_port: 443,
-            protocol: "tcp".to_string(),
+            protocol: "TCP".to_string(),
             sid: 9999,
             category: "test".to_string(),
             event_type: "alert".to_string(),
@@ -1879,14 +2509,11 @@ mod tests {
     }
 
     #[test]
-    fn the_release_sweep_runs_every_iteration_while_an_ingress_backlog_remains() {
-        let dir = std::env::temp_dir().join(format!("azazel-sweep-under-load-{}", std::process::id()));
+    fn an_ingress_backlog_is_read_in_bounded_polls() {
+        let dir = std::env::temp_dir().join(format!("azazel-bounded-polls-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         let eve = dir.join("eve.json");
         let limits = IngressLimits::DECLARED;
-        // Five polls' worth of alerts plus the same number of flow records,
-        // all present before the first poll: a flood the old reader would have
-        // read to the end before the sweep.
         let total = limits.alerts_per_poll * 5;
         let mut body = String::new();
         for n in 0..total {
@@ -1903,22 +2530,67 @@ mod tests {
         cfg.normalized_log_path = dir.join("normalized-events.jsonl").to_string_lossy().into_owned();
         cfg.event_stdout = StdoutMode::Off;
         let mut ingress = IngressReader::new(0, limits);
-        let mut sweeps: Vec<u64> = Vec::new();
         let mut iterations = 0;
         while ingress.offset < len {
-            let report = poll_iteration(&cfg, &mut ingress, &mut |_, r| sweeps.push(r.offset));
+            let report = poll_iteration(&cfg, &mut ingress);
             iterations += 1;
             assert!(report.alerts_admitted <= limits.alerts_per_poll);
             assert!(report.examined <= limits.examine_per_poll);
-            if ingress.offset < len {
-                assert!(report.budget_exhausted(), "stopped early with work left: {:?}", report.stop);
-            }
-            assert_eq!(sweeps.len(), iterations, "one sweep per iteration");
             assert!(iterations < 1000);
         }
         assert!(iterations >= 5, "the backlog took several iterations: {}", iterations);
-        // The first sweep ran with most of the flood still unread.
-        assert!(sweeps[0] < len / 2, "first sweep at offset {} of {}", sweeps[0], len);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The release sweep runs on its own thread: while an apply command is
+    /// held (here for 1.5 s, as a wedged nft would be until its bound), a
+    /// due lease is still released and verified absent.
+    #[test]
+    fn a_held_apply_never_holds_the_release_sweep_back() {
+        use release::{process_due_releases_with_runner, CommandResult, ReleaseCommandRunner};
+        struct AbsentRunner;
+        impl ReleaseCommandRunner for AbsentRunner {
+            fn run(&self, _argv: &[String]) -> Result<CommandResult, String> {
+                Ok(CommandResult { returncode: 0, stdout: json!({"nftables": []}).to_string(), stderr: String::new() })
+            }
+        }
+        struct HeldApplier;
+        impl Applier for HeldApplier {
+            fn apply(&self, _argv: &[String]) -> Result<(), String> {
+                thread::sleep(Duration::from_millis(1500));
+                Err("command timeout".to_string())
+            }
+            fn readback(&self, _task: &ReleaseTask) -> Result<bool, String> {
+                Ok(false)
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("azazel-held-apply-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let ledger = dir.join("ledger.json").to_string_lossy().into_owned();
+        // A lease that is due now (created 400 s ago with a 300 s TTL).
+        let now = now_epoch();
+        let mut due = release::build_release_task("trace-due", "redirect", "br0", "198.51.100.9", 22, 12222, 0, 300, &LeaseNow::wall_only(now - 400.0)).unwrap();
+        due.status = "active".to_string();
+        prepare_release_task(&ledger, &due).unwrap();
+        let mut cfg = executing_cfg(&dir);
+        cfg.defense_release_ledger_path = ledger.clone();
+        let ev = fresh_event(3, "203.0.113.50");
+        let decision = decide_defense(&ev);
+        let applying = {
+            let cfg = cfg.clone();
+            thread::spawn(move || maybe_enforce_with(&ev, &decision, &cfg, &HeldApplier))
+        };
+        thread::sleep(Duration::from_millis(200));
+        let started = Instant::now();
+        let outcomes = process_due_releases_with_runner(&ledger, &LeaseNow::wall_only(now_epoch()), &AbsentRunner).unwrap();
+        let took = started.elapsed();
+        assert!(!applying.is_finished(), "the apply was meant to still be held");
+        assert!(took < Duration::from_millis(800), "the sweep waited on the apply: {:?}", took);
+        assert!(outcomes.iter().any(|o| o.release_task_id == due.task_id && o.status == "released"), "{outcomes:?}");
+        let outcome = applying.join().unwrap();
+        assert_eq!(outcome.result, "failed", "{outcome:?}");
+        assert_eq!(outcome.metadata["release_ledger_state"], "uncertain_release_scheduled");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1959,7 +2631,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let (cfg, mut ingress) = shed_flood(&dir);
         // The first iteration sheds and writes its summary at once.
-        poll_iteration(&cfg, &mut ingress, &mut |_, _| {});
+        poll_iteration(&cfg, &mut ingress);
         assert_eq!(audit_lines(&cfg).len(), 1);
         // More arrives and is shed within the same interval: not written yet.
         let mut more = String::new();
@@ -1967,7 +2639,7 @@ mod tests {
             more.push_str(&format!("{{\"event_type\":\"flow\",\"n\":{}}}\n", 1000 + n));
         }
         OpenOptions::new().append(true).open(&cfg.eve_path).unwrap().write_all(more.as_bytes()).unwrap();
-        poll_iteration(&cfg, &mut ingress, &mut |_, _| {});
+        poll_iteration(&cfg, &mut ingress);
         assert_eq!(audit_lines(&cfg).len(), 1);
         let mut forwarded = Vec::new();
         let written = shutdown_ingress(&cfg, &mut ingress, &mut |r| forwarded.push(r.clone()));
@@ -1996,8 +2668,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("azazel-shutdown-empty-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let (cfg, mut ingress) = shed_flood(&dir);
-        poll_iteration(&cfg, &mut ingress, &mut |_, _| {});
-        poll_iteration(&cfg, &mut ingress, &mut |_, _| {});
+        poll_iteration(&cfg, &mut ingress);
+        poll_iteration(&cfg, &mut ingress);
         assert_eq!(audit_lines(&cfg).len(), 1);
         assert_eq!(shutdown_ingress(&cfg, &mut ingress, &mut |_| panic!("nothing to forward")), 0);
         assert_eq!(audit_lines(&cfg).len(), 1);
@@ -2021,7 +2693,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("azazel-shed-fields-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let (cfg, mut ingress) = shed_flood(&dir);
-        poll_iteration(&cfg, &mut ingress, &mut |_, _| {});
+        poll_iteration(&cfg, &mut ingress);
         let lines = audit_lines(&cfg);
         let inner = ingress_forward_line(&lines[0]).unwrap();
         for word in ["ip", "mac", "addr", "host", "trace", "uuid", "_id\""] {
@@ -2112,7 +2784,12 @@ mod tests {
             defense_dry_run: true,
             defense_enforce_level: "advisory".to_string(),
             defense_action_ttl_sec: 300,
+            defense_ttl_source: "default".to_string(),
             defense_release_ledger_path: "/tmp/azazel-edge-test-release-ledger.json".to_string(),
+            protected_flows_path: "".to_string(),
+            protected: ProtectedSet::NotConfigured,
+            undelivered_spool_path: "".to_string(),
+            undelivered_spool_cap_bytes: undelivered::SPOOL_CAP_BYTES,
         defense_allow_high_impact_auto: false,
         defense_iface: "br0".to_string(),
         defense_honeypot_port: 2222,
@@ -2132,14 +2809,17 @@ mod tests {
         assert!(flat.contains("nft"));
     }
 
+    fn owned_flow_task(ev: &NormalizedEvent) -> ReleaseTask {
+        let (_, rate, burst) = strength_for(ev);
+        build_flow_throttle_task("trace-test", &flow_scope(ev).unwrap(), rate, burst, 300, &LeaseNow::wall_only(100.0)).unwrap()
+    }
+
     #[test]
-    fn owned_isolation_plan_has_release_comment_and_handle_template() {
+    fn owned_flow_throttle_plan_quotes_the_comment_and_scopes_one_flow() {
         let ev = sample_event();
         let decision = decide_defense(&ev);
-        let task = build_release_task(
-            "trace-test", "isolate", "br0", &ev.src_ip, ev.target_port, 2222, 0, 300, &LeaseNow::wall_only(100.0),
-        )
-        .unwrap();
+        assert_eq!(decision.action, "throttle");
+        let task = owned_flow_task(&ev);
         let plan = build_enforcement_plan_owned(&ev, &decision, "br0", 2222, Some(&task));
         // nft joins its argv and parses it: the comment must be one argv
         // element holding an nft quoted string, not the bare token (`:` is a
@@ -2149,15 +2829,16 @@ mod tests {
         let argv = &plan.apply_argv[0];
         assert_eq!(&argv[argv.len() - 2..], &["comment".to_string(), quoted.clone()]);
         assert!(!argv.contains(&task.owner_token));
-        // The recorded plan keeps the bare token after `comment`, which is
-        // what outcome/ownership.py parses.
-        assert_eq!(plan.apply_commands.len(), 1);
-        assert!(plan.apply_commands[0].ends_with(&format!(" drop comment {}", task.owner_token)));
-        assert!(!plan.apply_commands[0].contains('"'));
+        assert_eq!(
+            plan.apply_commands[0],
+            format!("nft insert rule inet azazel_edge throttle ip saddr 10.0.0.8 ip daddr 10.0.0.1 tcp dport 443 limit rate over 16 kbytes/second burst 16 kbytes drop comment {}", task.owner_token)
+        );
         assert_eq!(
             plan.rollback_commands,
-            vec![format!("nft delete rule inet azazel_edge input handle '<owned:{}>'", task.owner_token)]
+            vec![format!("nft delete rule inet azazel_edge throttle handle '<owned:{}>'", task.owner_token)]
         );
+        // Never a qdisc, never a source-wide match.
+        assert!(!plan.apply_commands[0].contains("qdisc") && !plan.apply_commands[0].contains(" input "));
     }
 
     #[test]
@@ -2192,10 +2873,7 @@ mod tests {
     fn owned_nft_plan_refuses_an_owner_token_that_cannot_be_an_nft_string() {
         let ev = sample_event();
         let decision = decide_defense(&ev);
-        let mut task = build_release_task(
-            "trace-test", "isolate", "br0", &ev.src_ip, ev.target_port, 2222, 0, 300, &LeaseNow::wall_only(100.0),
-        )
-        .unwrap();
+        let mut task = owned_flow_task(&ev);
         for bad in [
             "azazel-edge:release-ab\"; flush ruleset; \"",
             "azazel-edge:release-a b",
@@ -2206,25 +2884,27 @@ mod tests {
             task.owner_token = bad.to_string();
             let plan = build_enforcement_plan_owned(&ev, &decision, "br0", 2222, Some(&task));
             // No owned (commented) rule is planned for such a token, and
-            // prepare_release_task refuses the task before any apply.
+            // admission refuses the task before any apply.
             assert!(plan.apply_argv.iter().flatten().all(|part| part != "comment"), "{bad:?}");
             assert!(prepare_release_task("/nonexistent/azazel-edge-test-ledger.json", &task).is_err());
         }
     }
 
     #[test]
-    fn owned_throttle_plan_has_unique_tc_handle() {
+    fn throttle_strength_is_strict_for_critical_and_standard_otherwise() {
         let mut ev = sample_event();
+        assert_eq!(strength_for(&ev), safety::STRENGTH_STRICT);
         ev.severity = 3;
-        let decision = decide_defense(&ev);
-        let task = build_release_task(
-            "trace-test", "throttle", "br0", &ev.src_ip, ev.target_port, 2222, decision.delay_ms, 300, &LeaseNow::wall_only(100.0),
-        )
-        .unwrap();
-        let plan = build_enforcement_plan_owned(&ev, &decision, "br0", 2222, Some(&task));
-        let flat = plan.apply_commands.join("\n");
-        assert!(flat.contains("root handle"));
-        assert!(flat.contains(&task.tc_handle));
+        assert_eq!(strength_for(&ev), safety::STRENGTH_STANDARD);
+        let plan = build_enforcement_plan(&ev, &decide_defense(&ev), "br0", 2222);
+        assert!(plan.apply_commands[0].contains("limit rate over 32 kbytes/second burst 32 kbytes drop"));
+        // A flow without TCP/UDP port is scoped to source and destination.
+        ev.protocol = "ICMP".to_string();
+        let plan = build_enforcement_plan(&ev, &decide_defense(&ev), "br0", 2222);
+        assert!(!plan.apply_commands[0].contains("dport"));
+        // Mixed families cannot be one flow: nothing is planned.
+        ev.dst_ip = "2001:db8::1".to_string();
+        assert!(build_enforcement_plan(&ev, &decide_defense(&ev), "br0", 2222).apply_argv.is_empty());
     }
 
     #[test]
@@ -2267,11 +2947,15 @@ mod tests {
     }
 
     #[test]
-    fn full_auto_allows_high_impact() {
+    fn no_level_and_no_flag_allows_isolate() {
+        for level in ["advisory", "semi-auto", "full-auto", "anything"] {
+            for flag in [false, true] {
+                assert!(!action_allowlist(level, flag).contains(&"isolate".to_string()), "{level} {flag}");
+            }
+        }
         let allowed = action_allowlist("full-auto", false);
         assert!(allowed.contains(&"throttle".to_string()));
         assert!(allowed.contains(&"redirect".to_string()));
-        assert!(allowed.contains(&"isolate".to_string()));
     }
 
     fn cfg_with_redirect_policy() -> Config {
@@ -2282,6 +2966,8 @@ mod tests {
             unsupported_port_action: "notify".to_string(),
             high_risk_unsupported_port_action: "isolate".to_string(),
             scan_burst_action: "throttle".to_string(),
+            decoy_separation_evidence_path: String::new(),
+            decoy_evidence_max_age_sec: 600,
         });
         cfg.redirect_policy_source = "file:config/redirect_policy.yaml".to_string();
         cfg
@@ -2328,17 +3014,18 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_high_risk_port_can_fallback_to_isolate() {
+    fn unsupported_high_risk_port_falls_back_to_notify_even_if_the_policy_names_isolate() {
         let mut ev = sample_event();
         ev.severity = 2;
         ev.target_port = 5432;
         ev.risk_score = 95;
         let decision = decide_defense(&ev);
         let cfg = cfg_with_redirect_policy();
+        assert_eq!(cfg.redirect_policy.as_ref().unwrap().high_risk_unsupported_port_action, "isolate");
         let outcome = maybe_enforce(&ev, &decision, &cfg);
-        assert_eq!(outcome.selected_action, "isolate");
-        assert!(outcome.command_plan.join("\n").contains("input"));
-        assert_eq!(outcome.metadata.get("unsupported_port_fallback").and_then(|v| v.as_str()), Some("isolate"));
+        assert_eq!(outcome.selected_action, "notify");
+        assert!(outcome.command_plan.is_empty());
+        assert_eq!(outcome.metadata.get("unsupported_port_fallback").and_then(|v| v.as_str()), Some("notify"));
     }
 
     #[test]
@@ -2407,5 +3094,729 @@ mod tests {
         let outcome = maybe_enforce(&ev, &decision, &cfg);
         assert_eq!(outcome.mode, "policy_gated");
         assert_eq!(outcome.executed_count, 0);
+    }
+
+    // -- scoped temporary actions (ADR: docs/architecture/scoped-temporary-actions.md)
+
+    /// An EVE timestamp for `epoch` (UTC).
+    fn eve_ts(epoch: f64) -> String {
+        let secs = epoch.floor() as i64;
+        let micros = ((epoch - secs as f64) * 1e6) as i64;
+        let days = secs.div_euclid(86_400);
+        let rem = secs.rem_euclid(86_400);
+        // civil_from_days (Howard Hinnant).
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+        format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}+0000", y, m, d, rem / 3600, rem % 3600 / 60, rem % 60, micros)
+    }
+
+    #[test]
+    fn eve_ts_helper_round_trips_through_the_core_parser() {
+        let now = now_epoch();
+        let parsed = safety::parse_eve_epoch(&eve_ts(now)).unwrap();
+        assert!((parsed - now).abs() < 1e-3, "{} {}", parsed, now);
+    }
+
+    fn fresh_event(severity: u8, src: &str) -> NormalizedEvent {
+        let mut ev = sample_event();
+        ev.ts = eve_ts(now_epoch());
+        ev.severity = severity;
+        ev.src_ip = src.to_string();
+        ev.dst_ip = "10.20.0.5".to_string();
+        ev.target_port = 22;
+        ev.risk_score = ((11_u16.saturating_sub(severity as u16)) * 9).min(100) as u8;
+        ev
+    }
+
+    const PROTECTED: &str = "protected_flows:\n  version: 1\n  entries:\n    - {name: mgmt, role: management, network: 192.0.2.0/28}\n    - {name: expert, role: expert_contact, network: 198.51.100.7, ports: [443]}\n  roles_not_applicable:\n    - {role: mission, approved_by: test-lead, reason: no mission link in this test}\n";
+
+    /// Enforcement on, dry run off, full-auto, a ledger in `dir`, the
+    /// protected set above, the prepared-port redirect policy with its decoy
+    /// evidence path in `dir` (not written: tests that need it write it).
+    fn executing_cfg(dir: &Path) -> Config {
+        let mut cfg = cfg_with_redirect_policy();
+        cfg.defense_enforce = true;
+        cfg.defense_dry_run = false;
+        cfg.defense_enforce_level = "full-auto".to_string();
+        cfg.defense_release_ledger_path = dir.join("ledger.json").to_string_lossy().into_owned();
+        cfg.protected = ProtectedSet::parse(PROTECTED);
+        if let Some(policy) = cfg.redirect_policy.as_mut() {
+            policy.decoy_separation_evidence_path = dir.join("decoy.json").to_string_lossy().into_owned();
+            policy.decoy_evidence_max_age_sec = 600;
+        }
+        cfg
+    }
+
+    fn test_dir(tag: &str) -> std::path::PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!("az-scoped-{}-{}-{}", tag, std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Records what it was asked to apply; applies and reads back as told.
+    struct FakeApplier {
+        applied: Mutex<Vec<Vec<String>>>,
+        apply_result: Result<(), String>,
+        readback: Result<bool, String>,
+    }
+
+    impl FakeApplier {
+        fn ok() -> Self {
+            FakeApplier { applied: Mutex::new(Vec::new()), apply_result: Ok(()), readback: Ok(true) }
+        }
+        fn applied(&self) -> Vec<Vec<String>> {
+            self.applied.lock().unwrap().clone()
+        }
+    }
+
+    impl Applier for FakeApplier {
+        fn apply(&self, argv: &[String]) -> Result<(), String> {
+            self.applied.lock().unwrap().push(argv.to_vec());
+            self.apply_result.clone()
+        }
+        fn readback(&self, _task: &ReleaseTask) -> Result<bool, String> {
+            self.readback.clone()
+        }
+    }
+
+    fn ledger_tasks(cfg: &Config) -> Vec<Value> {
+        fs::read_to_string(&cfg.defense_release_ledger_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .and_then(|v| v["tasks"].as_array().cloned())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn no_automatic_path_reaches_isolate_whatever_the_level_flag_policy_or_port() {
+        let dir = test_dir("noiso");
+        let policies: Vec<(Option<RedirectPolicyConfig>, &str)> = vec![
+            (None, "env_honeypot_fallback"),
+            (None, "invalid_file_notify_fallback:x"),
+            (cfg_with_redirect_policy().redirect_policy, "file:x"),
+            (
+                Some(RedirectPolicyConfig {
+                    enabled: true,
+                    prepared_ports: HashMap::new(),
+                    unsupported_port_action: "isolate".to_string(),
+                    high_risk_unsupported_port_action: "ISOLATE".to_string(),
+                    scan_burst_action: "isolate".to_string(),
+                    decoy_separation_evidence_path: String::new(),
+                    decoy_evidence_max_age_sec: 600,
+                }),
+                "file:x",
+            ),
+        ];
+        let mut cases = 0;
+        for (policy, source) in &policies {
+            for level in ["advisory", "semi-auto", "full-auto"] {
+                for high_impact in [false, true] {
+                    for dry_run in [false, true] {
+                        for severity in 0..=10_u8 {
+                            for port in [0_u16, 22, 80, 443, 5432] {
+                                let mut cfg = executing_cfg(&dir);
+                                cfg.redirect_policy = policy.clone();
+                                cfg.redirect_policy_source = source.to_string();
+                                cfg.defense_enforce_level = level.to_string();
+                                cfg.defense_allow_high_impact_auto = high_impact;
+                                cfg.defense_dry_run = dry_run;
+                                cfg.defense_release_ledger_path = dir.join(format!("l-{}.json", cases)).to_string_lossy().into_owned();
+                                let mut ev = fresh_event(severity, "203.0.113.77");
+                                ev.target_port = port;
+                                let decision = decide_defense(&ev);
+                                assert_ne!(decision.action, "isolate");
+                                let applier = FakeApplier::ok();
+                                let outcome = maybe_enforce_with(&ev, &decision, &cfg, &applier);
+                                assert_ne!(outcome.selected_action, "isolate", "{level} {high_impact} {severity} {port} {source}");
+                                for argv in applier.applied() {
+                                    let line = argv.join(" ");
+                                    assert!(!line.contains(" input ") && !line.contains("qdisc"), "{line}");
+                                    assert!(!line.ends_with(" drop") || line.contains(" limit rate over "), "{line}");
+                                }
+                                for command in &outcome.command_plan {
+                                    assert!(!command.contains(" input "), "{command}");
+                                }
+                                cases += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 1000);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_protected_flow_is_never_restricted_and_the_refusal_is_recorded() {
+        let dir = test_dir("prot");
+        let cfg = executing_cfg(&dir);
+        // The management network as the source (any port), and the expert's
+        // contact port as the destination.
+        let mgmt_src = fresh_event(1, "192.0.2.5");
+        let mut expert_dst = fresh_event(3, "203.0.113.9");
+        expert_dst.dst_ip = "198.51.100.7".to_string();
+        expert_dst.target_port = 443;
+        for (ev, role) in [(mgmt_src, "management"), (expert_dst, "expert_contact")] {
+            for dry_run in [true, false] {
+                let mut cfg = cfg.clone();
+                cfg.defense_dry_run = dry_run;
+                let applier = FakeApplier::ok();
+                let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &applier);
+                assert!(applier.applied().is_empty());
+                assert_eq!(outcome.selected_action, "notify");
+                assert!(outcome.command_plan.is_empty());
+                // Observe-only shape: the reason (role and entry) is in
+                // policy_reason, no extra metadata key.
+                assert_eq!(outcome.mode, "disabled");
+                assert!(outcome.metadata.get("safety").is_none());
+                let name = if role == "management" { "mgmt" } else { "expert" };
+                assert!(outcome.policy_reason.ends_with(&format!(":safety_refused:protected_flow:{}:{}", role, name)), "{}", outcome.policy_reason);
+            }
+        }
+        // The same alert from an unprotected source, or to the expert on
+        // another port, is restricted, and only that flow.
+        let mut other_port = fresh_event(3, "203.0.113.9");
+        other_port.dst_ip = "198.51.100.7".to_string();
+        other_port.target_port = 8443;
+        let applier = FakeApplier::ok();
+        let outcome = maybe_enforce_with(&other_port, &decide_defense(&other_port), &cfg, &applier);
+        assert_eq!(outcome.result, "applied", "{outcome:?}");
+        assert_eq!(applier.applied().len(), 1);
+        assert!(applier.applied()[0].join(" ").contains("ip saddr 203.0.113.9 ip daddr 198.51.100.7 tcp dport 8443 limit rate over"));
+        assert_eq!(outcome.metadata["release_ledger_state"], "active");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn execution_is_refused_without_a_declared_protected_set_or_with_no_management_entry() {
+        let dir = test_dir("noset");
+        for set in [
+            ProtectedSet::NotConfigured,
+            ProtectedSet::Invalid("parse".to_string()),
+            ProtectedSet::parse("protected_flows: {version: 1, entries: [{name: r, role: mission, network: 10.9.0.0/16}]}"),
+        ] {
+            let mut cfg = executing_cfg(&dir);
+            cfg.protected = set.clone();
+            let ev = fresh_event(3, "203.0.113.10");
+            let applier = FakeApplier::ok();
+            let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &applier);
+            assert!(applier.applied().is_empty(), "{set:?}");
+            assert_eq!(outcome.mode, "policy_gated");
+            assert_eq!(outcome.result, "planned_not_applied");
+            assert!(outcome.metadata["safety"]["gate"].as_str().unwrap().starts_with("refused:protected_set_"), "{outcome:?}");
+            assert!(ledger_tasks(&cfg).is_empty());
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stale_or_undated_alert_does_not_start_a_restriction() {
+        let dir = test_dir("stale");
+        let cfg = executing_cfg(&dir);
+        for ts in [eve_ts(now_epoch() - 1000.0), "garbage".to_string(), eve_ts(now_epoch() + 600.0)] {
+            let mut ev = fresh_event(3, "203.0.113.11");
+            ev.ts = ts;
+            let applier = FakeApplier::ok();
+            let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &applier);
+            assert!(applier.applied().is_empty());
+            assert_eq!(outcome.mode, "policy_gated");
+            assert!(outcome.metadata["safety"]["gate"].as_str().unwrap().starts_with("refused:alert_"));
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_apply_failure_timeout_or_readback_mismatch_is_never_applied_and_is_released_at_once() {
+        let dir = test_dir("fail");
+        let cases: Vec<(Result<(), String>, Result<bool, String>, &str, &str)> = vec![
+            (Err("command timeout after 3s: nft ...".to_string()), Ok(true), "failed", "command timeout"),
+            (Err("command failed (exit=1): nft ...".to_string()), Ok(true), "failed", "command failed"),
+            (Ok(()), Ok(false), "partial_failure", "owned_state_readback_mismatch"),
+            (Ok(()), Err("nft readback failed".to_string()), "partial_failure", "owned_state_readback_failed"),
+        ];
+        for (n, (apply, readback, result, error)) in cases.into_iter().enumerate() {
+            let cfg = executing_cfg(&dir);
+            let mut cfg = cfg;
+            cfg.defense_release_ledger_path = dir.join(format!("l{}.json", n)).to_string_lossy().into_owned();
+            let ev = fresh_event(3, "203.0.113.12");
+            let applier = FakeApplier { applied: Mutex::new(Vec::new()), apply_result: apply, readback };
+            let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &applier);
+            assert_eq!(outcome.result, result);
+            assert!(outcome.errors.iter().any(|e| e.contains(error)), "{:?}", outcome.errors);
+            assert_eq!(outcome.metadata["release_ledger_state"], "uncertain_release_scheduled");
+            let tasks = ledger_tasks(&cfg);
+            assert_eq!(tasks.len(), 1);
+            assert_eq!(tasks[0]["status"], "uncertain");
+            // Due now, not after its TTL: the next sweep releases it.
+            assert!(tasks[0]["due_epoch"].as_f64().unwrap() <= now_epoch());
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_alert_for_a_held_flow_extends_its_lease_within_the_edge_bounds() {
+        let dir = test_dir("ext");
+        let cfg = executing_cfg(&dir);
+        let first = fresh_event(3, "203.0.113.13");
+        let applier = FakeApplier::ok();
+        let outcome = maybe_enforce_with(&first, &decide_defense(&first), &cfg, &applier);
+        assert_eq!(outcome.result, "applied");
+        // An immediate re-alert asks for nothing longer: already held.
+        let mut again = fresh_event(3, "203.0.113.13");
+        again.sid = 49_999;
+        let outcome = maybe_enforce_with(&again, &decide_defense(&again), &cfg, &FakeApplier::ok());
+        assert_eq!(outcome.result, "already_held", "{outcome:?}");
+        let mut results = Vec::new();
+        for n in 0..(release::MAX_LEASE_EXTENSIONS + 2) {
+            // The held lease is near its end when the next alert comes.
+            shorten_held_lease(&cfg, 20.0);
+            let mut ev = fresh_event(3, "203.0.113.13");
+            ev.sid = 50_000 + n as u64; // another alert of the same flow
+            let applier = FakeApplier::ok();
+            let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &applier);
+            assert!(applier.applied().is_empty(), "an extension applies nothing");
+            results.push(outcome.result.clone());
+        }
+        let extended = results.iter().filter(|r| *r == "extended").count();
+        assert_eq!(extended as u32, release::MAX_LEASE_EXTENSIONS, "{results:?}");
+        assert_eq!(results.last().unwrap(), "planned_not_applied");
+        let tasks = ledger_tasks(&cfg);
+        let held: Vec<&Value> = tasks.iter().filter(|t| t["status"] == "active").collect();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0]["extensions"], release::MAX_LEASE_EXTENSIONS);
+        let created = held[0]["created_epoch"].as_f64().unwrap();
+        assert!(held[0]["due_epoch"].as_f64().unwrap() <= created + release::MAX_CUMULATIVE_LEASE_SEC as f64);
+        // Replaying an alert that was merged is refused, not extended again.
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Move the active lease's expiry to `left` seconds from now (both
+    /// clocks), as if it had been held for most of its TTL.
+    fn shorten_held_lease(cfg: &Config, left: f64) {
+        let raw = fs::read_to_string(&cfg.defense_release_ledger_path).unwrap();
+        let mut ledger: Value = serde_json::from_str(&raw).unwrap();
+        let now = LeaseNow::read(now_epoch());
+        for task in ledger["tasks"].as_array_mut().unwrap() {
+            if task["status"] == "active" {
+                let due = task["due_epoch"].as_f64().unwrap();
+                let target = now.wall_epoch + left;
+                let delta = due - target;
+                task["due_epoch"] = json!(target);
+                task["next_attempt_epoch"] = json!(target);
+                if let Some(mono) = task["due_boottime_ns"].as_u64() {
+                    task["due_boottime_ns"] = json!(mono - (delta * 1e9) as u64);
+                }
+                task["created_epoch"] = json!(task["created_epoch"].as_f64().unwrap().min(target));
+            }
+        }
+        fs::write(&cfg.defense_release_ledger_path, ledger.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_replayed_alert_is_refused_and_never_applied_twice() {
+        let dir = test_dir("replay");
+        let cfg = executing_cfg(&dir);
+        let ev = fresh_event(3, "203.0.113.14");
+        let applier = FakeApplier::ok();
+        assert_eq!(maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &applier).result, "applied");
+        let again = FakeApplier::ok();
+        let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &again);
+        assert!(again.applied().is_empty());
+        assert_eq!(outcome.mode, "release_guard_failed");
+        assert!(outcome.errors[0].contains("replayed disruptive apply blocked"), "{:?}", outcome.errors);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn write_decoy_evidence(cfg: &Config, ports: &[u16], boot: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let path = cfg.redirect_policy.as_ref().unwrap().decoy_separation_evidence_path.clone();
+        let body = json!({"schema": safety::DECOY_EVIDENCE_SCHEMA, "boot_id": boot, "observed_epoch": now_epoch(), "separation": "network_namespace", "decoy_ports": ports, "ingress_interface": cfg.defense_iface,
+            "ingress_path_check": {"result": "reachable", "checked_epoch": now_epoch(), "via_interface": cfg.defense_iface, "decoy_ports": ports}});
+        fs::write(&path, body.to_string()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn a_redirect_runs_only_with_this_boots_separation_evidence_and_a_reachable_decoy() {
+        let dir = test_dir("decoy");
+        let mut cfg = executing_cfg(&dir);
+        // The decoy is probed where `nft redirect` delivers: the ingress
+        // interface's address (here lo, 127.0.0.1).
+        cfg.defense_iface = "lo".to_string();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        cfg.redirect_policy.as_mut().unwrap().prepared_ports = HashMap::from([(22_u16, port)]);
+        let ev = fresh_event(2, "203.0.113.15");
+        let decision = decide_defense(&ev);
+        assert_eq!(decision.action, "redirect");
+        let boot = LeaseNow::read(now_epoch()).boot_id.unwrap_or_default();
+
+        // No evidence: notified with the reason, nothing applied.
+        let applier = FakeApplier::ok();
+        let outcome = maybe_enforce_with(&ev, &decision, &cfg, &applier);
+        assert!(applier.applied().is_empty());
+        assert_eq!(outcome.mode, "policy_gated");
+        assert_eq!(outcome.metadata["safety"]["decoy_preconditions"], "unmet");
+        assert_eq!(outcome.metadata["safety"]["gate"], "refused:decoy_separation_evidence_missing");
+
+        // Another boot's evidence.
+        write_decoy_evidence(&cfg, &[port], "other-boot");
+        let outcome = maybe_enforce_with(&ev, &decision, &cfg, &FakeApplier::ok());
+        assert_eq!(outcome.metadata["safety"]["gate"], "refused:decoy_separation_evidence_other_boot");
+
+        if boot.is_empty() {
+            // No boot id on this platform: a redirect can never be proven.
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        // This boot's evidence, but the decoy is not listening.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        cfg.redirect_policy.as_mut().unwrap().prepared_ports = HashMap::from([(22_u16, closed)]);
+        write_decoy_evidence(&cfg, &[closed], &boot);
+        let outcome = maybe_enforce_with(&ev, &decision, &cfg, &FakeApplier::ok());
+        assert_eq!(outcome.metadata["safety"]["gate"], "refused:decoy_unreachable");
+
+        // Everything holds: applied.
+        cfg.redirect_policy.as_mut().unwrap().prepared_ports = HashMap::from([(22_u16, port)]);
+        write_decoy_evidence(&cfg, &[port], &boot);
+        let applier = FakeApplier::ok();
+        let outcome = maybe_enforce_with(&ev, &decision, &cfg, &applier);
+        if release::resolve_trusted_binary("conntrack").is_ok()
+            && release::foreign_ct_mark_use(&release::SystemReleaseCommandRunner).is_err()
+        {
+            // The ruleset cannot be read here (not root): the redirect is refused.
+            assert!(applier.applied().is_empty());
+            assert_eq!(outcome.metadata["safety"]["gate"], "refused:ct_mark_use_unreadable", "{outcome:?}");
+            drop(listener);
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        if release::resolve_trusted_binary("conntrack").is_err() {
+            // Re521b-03: without the conntrack tool a redirect could not be
+            // fully undone, so it is not applied (the applied path is
+            // checked where the tool is installed: locally and in the root
+            // real-network job).
+            assert!(applier.applied().is_empty());
+            assert_eq!(outcome.metadata["safety"]["gate"], "refused:conntrack_unavailable", "{outcome:?}");
+            drop(listener);
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        assert_eq!(outcome.result, "applied", "{outcome:?}");
+        assert_eq!(outcome.metadata["safety"]["decoy_preconditions"], "met");
+        assert!(applier.applied()[0].join(" ").contains(&format!("redirect to {}", port)));
+        assert!(applier.applied()[0].join(" ").contains("ct mark set "));
+        drop(listener);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_held_lease_count_is_capped() {
+        let dir = test_dir("cap");
+        let cfg = executing_cfg(&dir);
+        let mut applied = 0;
+        let mut refused = 0;
+        for n in 0..(release::MAX_ACTIVE_LEASES + 3) {
+            let ev = fresh_event(3, &format!("203.0.{}.{}", 100 + n / 200, 1 + n % 200));
+            let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &FakeApplier::ok());
+            match outcome.result.as_str() {
+                "applied" => applied += 1,
+                _ => {
+                    assert!(outcome.errors[0].contains("active lease limit reached"), "{:?}", outcome.errors);
+                    refused += 1
+                }
+            }
+        }
+        assert_eq!(applied, release::MAX_ACTIVE_LEASES);
+        assert_eq!(refused, 3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn executed_and_refused_actions_and_releases_are_spooled_whatever_forward_log_says() {
+        let dir = test_dir("spool");
+        let mut cfg = executing_cfg(&dir);
+        cfg.forward_log = false;
+        cfg.forward_ai = false;
+        cfg.event_stdout = StdoutMode::Off;
+        let ev = fresh_event(3, "203.0.113.60");
+        let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &FakeApplier::ok());
+        assert!(enforcement_evidence_due(&outcome, &cfg));
+        let mut dry = cfg.clone();
+        dry.defense_dry_run = true;
+        assert!(!enforcement_evidence_due(&maybe_enforce(&fresh_event(3, "203.0.113.61"), &decide_defense(&ev), &dry), &dry));
+        let mut stale = fresh_event(3, "203.0.113.62");
+        stale.ts = "2020-01-01T00:00:00Z".to_string();
+        assert!(enforcement_evidence_due(&maybe_enforce_with(&stale, &decide_defense(&stale), &cfg, &FakeApplier::ok()), &cfg));
+        let event = core_event(&ev, &decide_defense(&ev), &outcome, &cfg);
+        spool_enforcement_evidence(&cfg, &event);
+        let raw = fs::read_to_string(enforcement_evidence_path(&cfg)).unwrap();
+        let line: Value = serde_json::from_str(raw.lines().last().unwrap()).unwrap();
+        assert_eq!(line["enforcement"]["result"], "applied");
+        assert!(line["evidence_spool"]["seq"].as_u64().unwrap() >= 1);
+        assert!(!fs::metadata(&cfg.normalized_log_path).map(|m| m.len() > 0).unwrap_or(false));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // -- Codex review Re521 ----------------------------------------------
+
+    /// Re521-01: the redirect acts on this destination only, so another
+    /// destination of the same source on the same port is untouched.
+    #[test]
+    fn a_redirect_is_scoped_to_the_alerts_destination_and_ingress_interface() {
+        let mut ev = fresh_event(2, "203.0.113.20");
+        ev.dst_ip = "10.20.0.5".to_string();
+        let plan = build_enforcement_plan(&ev, &decide_defense(&ev), "lan0", 12222);
+        assert_eq!(
+            plan.apply_commands[0],
+            "nft insert rule inet azazel_edge prerouting iifname '\"lan0\"' ip saddr 203.0.113.20 ip daddr 10.20.0.5 tcp dport 22 redirect to 12222"
+        );
+        let task = release::build_flow_redirect_task("t", &flow_scope(&ev).unwrap(), "lan0", 12222, 300, &LeaseNow::wall_only(100.0)).unwrap();
+        assert_eq!(task.resource_key, "nft:inet:azazel_edge:prerouting:lan0:203.0.113.20>10.20.0.5:tcp:22");
+        // A protected destination on the same port is refused for its own alert.
+        let dir = test_dir("re01");
+        let cfg = executing_cfg(&dir);
+        let mut to_mgmt = fresh_event(2, "203.0.113.20");
+        to_mgmt.dst_ip = "192.0.2.3".to_string();
+        let outcome = maybe_enforce_with(&to_mgmt, &decide_defense(&to_mgmt), &cfg, &FakeApplier::ok());
+        assert_eq!(outcome.selected_action, "notify");
+        assert!(outcome.policy_reason.contains("safety_refused:protected_flow:management:mgmt"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Re521-02: a portless alert is limited to its protocol; TCP/UDP without
+    /// a port and other protocols are refused; a portless scope toward a
+    /// destination entry with listed ports is still protected.
+    #[test]
+    fn a_portless_flow_is_scoped_to_its_protocol_and_never_widened() {
+        let mut ev = fresh_event(3, "203.0.113.21");
+        ev.protocol = "ICMP".to_string();
+        ev.target_port = 0;
+        let plan = build_enforcement_plan(&ev, &decide_defense(&ev), "br0", 2222);
+        assert!(plan.apply_commands[0].contains("ip saddr 203.0.113.21 ip daddr 10.20.0.5 meta l4proto icmp limit rate over"), "{}", plan.apply_commands[0]);
+        let mut v6 = ev.clone();
+        v6.src_ip = "2001:db8::21".to_string();
+        v6.dst_ip = "2001:db8::5".to_string();
+        v6.protocol = "IPv6-ICMP".to_string();
+        assert!(build_enforcement_plan(&v6, &decide_defense(&v6), "br0", 2222).apply_commands[0].contains("ip6 daddr 2001:db8::5 meta l4proto ipv6-icmp"));
+        let dir = test_dir("re02");
+        let cfg = executing_cfg(&dir);
+        for (protocol, port, reason) in [("TCP", 0, "target_port_missing"), ("UDP", 0, "target_port_missing"), ("GRE", 0, "target_protocol_unsupported"), ("unknown", 22, "target_protocol_unsupported")] {
+            let mut bad = fresh_event(3, "203.0.113.22");
+            bad.protocol = protocol.to_string();
+            bad.target_port = port;
+            assert!(build_enforcement_plan(&bad, &decide_defense(&bad), "br0", 2222).apply_argv.is_empty(), "{protocol}");
+            let applier = FakeApplier::ok();
+            let outcome = maybe_enforce_with(&bad, &decide_defense(&bad), &cfg, &applier);
+            assert!(applier.applied().is_empty());
+            assert!(outcome.policy_reason.ends_with(&format!(":safety_refused:{}", reason)), "{}", outcome.policy_reason);
+        }
+        // ICMP toward the expert (protected on 443 only): refused, because
+        // the portless scope cannot exclude any listed port.
+        let mut to_expert = ev.clone();
+        to_expert.dst_ip = "198.51.100.7".to_string();
+        let applier = FakeApplier::ok();
+        let outcome = maybe_enforce_with(&to_expert, &decide_defense(&to_expert), &cfg, &applier);
+        assert!(applier.applied().is_empty());
+        assert!(outcome.policy_reason.contains("safety_refused:protected_flow:expert_contact:expert"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Re521-04: observe-only outcomes keep exactly the metadata keys Nexus's
+    /// intake accepts (its closed shape), whatever the alert and policy.
+    #[test]
+    fn observe_only_outcomes_keep_the_metadata_keys_nexus_accepts() {
+        let nexus_keys: Vec<&str> = vec![
+            "fallback_reason", "original_dst_port", "redirect_mapping_matched", "redirect_policy_source",
+            "release_due_epoch", "release_ledger_state", "release_owner_token", "release_resource_key",
+            "release_task_id", "release_tc_handle", "selected_decoy_port", "unsupported_port_fallback",
+        ];
+        let dir = test_dir("re04");
+        for protected in [ProtectedSet::NotConfigured, ProtectedSet::parse(PROTECTED)] {
+            for policy in [None, cfg_with_redirect_policy().redirect_policy] {
+                let mut cfg = sample_cfg();
+                cfg.protected = protected.clone();
+                cfg.redirect_policy_source = if policy.is_some() { "file:x".to_string() } else { "env_honeypot_fallback".to_string() };
+                cfg.redirect_policy = policy;
+                for severity in 0..=6_u8 {
+                    for (src, proto, port) in [("203.0.113.30", "TCP", 22), ("192.0.2.5", "TCP", 443), ("203.0.113.30", "ICMP", 0), ("203.0.113.30", "TCP", 0)] {
+                        let mut ev = fresh_event(severity, src);
+                        ev.protocol = proto.to_string();
+                        ev.target_port = port;
+                        let outcome = maybe_enforce(&ev, &decide_defense(&ev), &cfg);
+                        assert!(matches!(outcome.mode.as_str(), "dry_run" | "disabled"));
+                        let mut keys: Vec<&str> = outcome.metadata.as_object().unwrap().keys().map(String::as_str).collect();
+                        keys.sort();
+                        assert_eq!(keys, nexus_keys, "{severity} {src} {proto} {port}");
+                        assert!(matches!(outcome.result.as_str(), "no_disruptive_action" | "planned_not_applied"));
+                        assert!(matches!(outcome.metadata["release_ledger_state"].as_str(), Some("not_applicable" | "planned_only")));
+                    }
+                }
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Re521-03: an alert handled by the previous core (v1 ledger) is
+    /// refused after the upgrade, though this core builds another task id.
+    #[test]
+    fn an_alert_handled_under_a_v1_ledger_is_refused_after_the_upgrade() {
+        let dir = test_dir("re03");
+        let cfg = executing_cfg(&dir);
+        let now = now_epoch();
+        let set_mtime = |at: f64| {
+            let file = OpenOptions::new().write(true).open(&cfg.defense_release_ledger_path).unwrap();
+            file.set_modified(UNIX_EPOCH + Duration::from_secs_f64(at)).unwrap();
+        };
+        // What the previous core wrote for an alert: a root-qdisc throttle
+        // lease, with the task id and trace id it built (another mechanism
+        // and, for severity 1, another action than this core decides).
+        let write_v1 = |ev: &NormalizedEvent, created: f64, mtime: f64| {
+            let trace = &legacy_trace_ids(ev)[2];
+            let mut legacy = release::build_release_task(trace, "throttle", "br0", &ev.src_ip, ev.target_port, 0, 1000, 300, &LeaseNow::wall_only(created)).unwrap();
+            legacy.status = "active".to_string();
+            fs::write(&cfg.defense_release_ledger_path, json!({"schema_version": "azazel-release-ledger/v1", "tasks": [legacy]}).to_string()).unwrap();
+            set_mtime(mtime);
+        };
+        // 1. The alert is older than the v1 file's last write.
+        let mut ev = fresh_event(3, "203.0.113.40");
+        ev.ts = eve_ts(now - 5.0);
+        write_v1(&ev, now - 4.0, now - 3.0);
+        let applier = FakeApplier::ok();
+        let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &applier);
+        assert!(applier.applied().is_empty());
+        assert_eq!(outcome.mode, "release_guard_failed");
+        assert!(outcome.errors[0].contains("replay"), "{:?}", outcome.errors);
+        // 2. The previous core's clock was stepped back before it wrote: the
+        //    mtime is earlier than the alert, the task times are not.
+        let mut ev2 = fresh_event(3, "203.0.113.41");
+        ev2.ts = eve_ts(now - 20.0);
+        write_v1(&ev2, now - 15.0, now - 200.0);
+        let outcome = maybe_enforce_with(&ev2, &decide_defense(&ev2), &cfg, &FakeApplier::ok());
+        assert_eq!(outcome.mode, "release_guard_failed", "{outcome:?}");
+        // 3. Whatever the times say (an old file, an alert dated after
+        //    every boundary), the trace id the previous core gave the alert
+        //    is matched -- under any action it may have decided.
+        for severity in [1_u8, 3] {
+            let mut ev3 = fresh_event(severity, "203.0.113.42");
+            ev3.ts = eve_ts(now + 30.0);
+            write_v1(&ev3, now - 7200.0, now - 7200.0);
+            let applier = FakeApplier::ok();
+            let outcome = maybe_enforce_with(&ev3, &decide_defense(&ev3), &cfg, &applier);
+            assert!(applier.applied().is_empty());
+            assert!(outcome.errors[0].contains("under the previous core"), "{:?}", outcome.errors);
+        }
+        // A later, different alert of that flow is admitted; replaying it is
+        // refused by its event key.
+        let mut later = fresh_event(3, "203.0.113.42");
+        later.ts = eve_ts(now + 31.0);
+        later.sid += 7;
+        assert_eq!(maybe_enforce_with(&later, &decide_defense(&later), &cfg, &FakeApplier::ok()).result, "applied");
+        assert_eq!(maybe_enforce_with(&later, &decide_defense(&later), &cfg, &FakeApplier::ok()).mode, "release_guard_failed");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Re521-08: concurrent writers rotating at once lose nothing that the
+    /// two retained segments can hold, and number every record once.
+    #[test]
+    fn concurrent_spool_writers_rotate_once_and_keep_every_retained_record() {
+        let dir = test_dir("re08");
+        let path = dir.join("evidence.jsonl");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let cap = 6_000_u64;
+        let mut handles = Vec::new();
+        for t in 0..8 {
+            let (path, barrier) = (path.clone(), barrier.clone());
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                (0..5).map(|n| append_evidence(&path, &json!({"writer": t, "n": n, "pad": "x".repeat(100)}), cap).unwrap()).collect::<Vec<u64>>()
+            }));
+        }
+        let mut seqs: Vec<u64> = handles.into_iter().flat_map(|h| h.join().unwrap()).collect();
+        seqs.sort();
+        let mut kept: Vec<u64> = Vec::new();
+        for name in ["evidence.jsonl.1", "evidence.jsonl"] {
+            for line in fs::read_to_string(dir.join(name)).unwrap_or_default().lines() {
+                let value: Value = serde_json::from_str(line).unwrap();
+                kept.push(value["evidence_spool"]["seq"].as_u64().unwrap());
+            }
+        }
+        // 40 records of about 230 bytes: more than one 6 KB segment, less than two.
+        let mut sorted = kept.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), kept.len(), "a record was written twice");
+        assert_eq!(sorted, seqs, "a retained record was lost");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A flow in cooldown is notified only: policy_gated, `refused:cooldown`,
+    /// nothing applied, whatever the configured TTL.
+    #[test]
+    fn a_flow_in_cooldown_is_notified_only() {
+        let dir = test_dir("cooldown");
+        let mut cfg = executing_cfg(&dir);
+        cfg.defense_action_ttl_sec = 900;
+        let ev = fresh_event(1, "203.0.113.80");
+        let now = now_epoch();
+        let (_, rate, burst) = strength_for(&ev);
+        let mut used = release::build_flow_throttle_task("trace-used", &flow_scope(&ev).unwrap(), rate, burst, 900, &LeaseNow::wall_only(now - 3700.0)).unwrap();
+        used.status = "released".to_string();
+        used.family_started_epoch = Some(now - 3700.0);
+        used.cooldown_until_epoch = Some(now - 100.0 + release::FLOW_COOLDOWN_SEC as f64);
+        prepare_release_task(&cfg.defense_release_ledger_path, &used).unwrap();
+        let applier = FakeApplier::ok();
+        let outcome = maybe_enforce_with(&ev, &decide_defense(&ev), &cfg, &applier);
+        assert!(applier.applied().is_empty());
+        assert_eq!(outcome.mode, "policy_gated");
+        assert_eq!(outcome.result, "planned_not_applied");
+        assert_eq!(outcome.metadata["safety"]["gate"], "refused:cooldown");
+        assert!(outcome.policy_reason.ends_with(":safety_gate:cooldown"));
+        assert!(outcome.metadata["release_cooldown_until_epoch"].as_f64().unwrap() > now);
+        assert!(enforcement_evidence_due(&outcome, &cfg));
+        // Another flow is not affected.
+        let other = fresh_event(1, "203.0.113.81");
+        assert_eq!(maybe_enforce_with(&other, &decide_defense(&other), &cfg, &FakeApplier::ok()).result, "applied");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Re521b-09: a held or extended flow reports the lease in force: its
+    /// task, owner, strength, expiry and rollback -- not the new alert's.
+    #[test]
+    fn a_held_flow_reports_the_lease_in_force() {
+        let dir = test_dir("held");
+        let cfg = executing_cfg(&dir);
+        let standard = fresh_event(3, "203.0.113.90");
+        let first = maybe_enforce_with(&standard, &decide_defense(&standard), &cfg, &FakeApplier::ok());
+        assert_eq!(first.result, "applied");
+        let mut critical = fresh_event(1, "203.0.113.90");
+        critical.sid += 1;
+        let held = maybe_enforce_with(&critical, &decide_defense(&critical), &cfg, &FakeApplier::ok());
+        assert_eq!(held.result, "already_held");
+        let (a, h) = (&first.metadata, &held.metadata);
+        for key in ["release_task_id", "release_owner_token", "release_resource_key"] {
+            assert_eq!(h[key], a[key], "{key}");
+        }
+        // Read back from the ledger: serde_json does not round-trip every
+        // f64 exactly (no float_roundtrip), so the last digit may differ.
+        assert!((h["release_due_epoch"].as_f64().unwrap() - a["release_due_epoch"].as_f64().unwrap()).abs() < 1e-3);
+        assert_eq!(h["release_extended_task_id"], a["release_task_id"]);
+        assert_ne!(h["release_merged_task_id"], a["release_task_id"]);
+        assert_eq!(h["safety"]["strength"], "standard", "the held rule's strength, not the new alert's");
+        assert_eq!(held.rollback_plan, first.rollback_plan);
+        let tasks = ledger_tasks(&cfg);
+        let lease = tasks.iter().find(|t| t["task_id"] == a["release_task_id"]).unwrap();
+        assert_eq!(lease["limit_rate_kbytes"], 32);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

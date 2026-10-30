@@ -1,11 +1,18 @@
-"""Real-nft test of the core's owned isolate and redirect leases (Edge#464).
+"""Real-nft test of the core's owned throttle and redirect leases (Edge#464).
 
 The release core is run with enforcement on and dry run off inside a network
-namespace this test creates, and given one alert that decides ``isolate`` and
-one that decides ``redirect``. Both leases must reach ``active`` through the
-core's own apply path (not a pre-written lease), their rules must read back
-from ``nft -j`` with the bare owner token as comment, and the core's release
-must delete them and verify their absence.
+namespace this test creates, and given one alert that decides a (strict,
+flow-scoped) ``throttle`` and one that decides ``redirect``. Both leases must
+reach ``active`` through the core's own apply path (not a pre-written lease),
+which now counts an apply only after the owned rule reads back; their rules
+must read back from ``nft -j`` with the bare owner token as comment, and the
+core's release must delete them and verify their absence. No rule is ever
+written to the ``input`` chain: the automatic path never isolates
+(docs/architecture/scoped-temporary-actions.md).
+
+Execution needs what the ADR requires: a protected communications set with a
+management entry, a fresh alert, and for the redirect this boot's decoy
+separation evidence naming the decoy port plus a listener on it.
 
 It needs Linux, root, ``ip``/``nft`` and the release core build, and is skipped
 otherwise (the test-python job). CI runs it as root in the service-objectives
@@ -23,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -30,7 +38,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "rust" / "azazel-edge-core" / "target" / "release" / "azazel-edge-core"
 TABLE = "azazel_edge"
-TTL_SEC = 8
+# The Edge minimum lease (MIN_LEASE_TTL_SEC); a shorter value is raised to it.
+TTL_SEC = 30
 
 pytestmark = pytest.mark.skipif(
     not (
@@ -46,23 +55,40 @@ pytestmark = pytest.mark.skipif(
 )
 
 # Documentation addresses (RFC 5737); the namespace has only loopback.
-ISOLATE_SRC = "198.51.100.71"
+THROTTLE_SRC = "198.51.100.71"
 REDIRECT_SRC = "198.51.100.72"
+DEST_IP = "192.0.2.10"
 DEST_PORT = 22
-HONEYPOT_PORT = 2222
+DECOY_PORT = 12222
+LISTENER = (
+    "import socket,time\n"
+    "s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+    f"s.bind(('127.0.0.1', {DECOY_PORT})); s.listen(16)\n"
+    "s.settimeout(1)\n"
+    "end=time.time()+120\n"
+    "while time.time()<end:\n"
+    "    try:\n"
+    "        c,_=s.accept(); c.close()\n"
+    "    except OSError:\n"
+    "        pass\n"
+)
 
 
 def _run(argv, **kwargs):
     return subprocess.run(argv, capture_output=True, text=True, timeout=20, **kwargs)
 
 
+def _now_ts() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f+0000")
+
+
 def _alert(src: str, severity: int, sid: int) -> str:
     return json.dumps(
         {
-            "timestamp": "2026-01-01T00:00:00.000000+0000",
+            "timestamp": _now_ts(),
             "event_type": "alert",
             "src_ip": src,
-            "dest_ip": "192.0.2.10",
+            "dest_ip": DEST_IP,
             "dest_port": DEST_PORT,
             "proto": "TCP",
             "alert": {"signature_id": sid, "signature": "owned nft lease test", "category": "test", "severity": severity},
@@ -72,7 +98,7 @@ def _alert(src: str, severity: int, sid: int) -> str:
 
 def _ledger_tasks(path: Path) -> list:
     try:
-        return json.loads(path.read_text(encoding="utf-8")).get("tasks", [])
+        return [t for t in json.loads(path.read_text(encoding="utf-8")).get("tasks", []) if t.get("status") != "merged"]
     except (OSError, ValueError):
         return []
 
@@ -94,6 +120,12 @@ def _wait(predicate, timeout_s: float, proc: subprocess.Popen):
     return predicate()
 
 
+def _private(path: Path, text: str) -> Path:
+    path.write_text(text, encoding="utf-8")
+    os.chmod(path, 0o600)
+    return path
+
+
 @pytest.fixture
 def netns():
     ns = f"aznft-{os.getpid()}"
@@ -106,6 +138,7 @@ def netns():
                 f"add table inet {TABLE}",
                 f"add chain inet {TABLE} input {{ type filter hook input priority 0; policy accept; }}",
                 f"add chain inet {TABLE} prerouting {{ type nat hook prerouting priority -100; policy accept; }}",
+                f"add chain inet {TABLE} throttle {{ type filter hook prerouting priority -150; policy accept; }}",
             ]
         )
         out = _run(["ip", "netns", "exec", ns, "nft", "-f", "-"], input=script + "\n")
@@ -115,11 +148,32 @@ def netns():
         _run(["ip", "netns", "del", ns])
 
 
-def test_core_applies_reads_back_and_releases_owned_isolate_and_redirect(netns):
+def test_core_applies_reads_back_and_releases_owned_throttle_and_redirect(netns):
     with tempfile.TemporaryDirectory(prefix="aznft-") as tmp:
         work = Path(tmp)
         eve, events, ledger = work / "eve.json", work / "normalized-events.jsonl", work / "release-ledger.json"
         eve.write_text("", encoding="utf-8")
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        evidence = _private(
+            work / "decoy-separation.json",
+            json.dumps({
+                "schema": "azazel-edge/decoy-separation/v1", "boot_id": boot_id, "observed_epoch": time.time(),
+                "separation": "network_namespace", "decoy_ports": [DECOY_PORT], "ingress_interface": "lo",
+                "ingress_path_check": {"result": "reachable", "checked_epoch": time.time(), "via_interface": "lo", "decoy_ports": [DECOY_PORT]},
+            }),
+        )
+        policy = _private(
+            work / "redirect_policy.yaml",
+            "redirect_policy:\n  enabled: true\n  prepared_ports:\n"
+            f"    {DEST_PORT}: {DECOY_PORT}\n  decoy_separation_evidence_path: {evidence}\n",
+        )
+        protected = _private(
+            work / "protected-flows.yaml",
+            "protected_flows:\n  version: 1\n  entries:\n    - {name: mgmt, role: management, network: 203.0.113.0/28}\n"
+            "    - {name: expert, role: expert_contact, network: 203.0.113.20, ports: [443]}\n"
+            "  roles_not_applicable:\n    - {role: mission, approved_by: test-lead, reason: no mission link in this test}\n",
+        )
+        listener = subprocess.Popen(["ip", "netns", "exec", netns, sys.executable, "-c", LISTENER])
         env = {
             "PATH": os.environ.get("PATH", ""),
             "AZAZEL_EVE_PATH": str(eve),
@@ -135,42 +189,46 @@ def test_core_applies_reads_back_and_releases_owned_isolate_and_redirect(netns):
             "AZAZEL_DEFENSE_ENFORCE_LEVEL": "full-auto",
             "AZAZEL_DEFENSE_ACTION_TTL_SEC": str(TTL_SEC),
             "AZAZEL_DEFENSE_IFACE": "lo",
-            "AZAZEL_DEFENSE_HONEYPOT_PORT": str(HONEYPOT_PORT),
-            "AZAZEL_REDIRECT_POLICY_PATH": str(work / "no-redirect-policy.yaml"),
+            "AZAZEL_REDIRECT_POLICY_PATH": str(policy),
+            "AZAZEL_PROTECTED_FLOWS_PATH": str(protected),
         }
         proc = subprocess.Popen(
             ["ip", "netns", "exec", netns, str(CORE)],
             cwd=str(work), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
         try:
+            time.sleep(0.5)
             with eve.open("a", encoding="utf-8") as fh:
-                fh.write(_alert(ISOLATE_SRC, 1, 9101) + "\n")
+                fh.write(_alert(THROTTLE_SRC, 1, 9101) + "\n")
                 fh.write(_alert(REDIRECT_SRC, 2, 9102) + "\n")
 
             def both_settled():
                 tasks = _ledger_tasks(ledger)
                 return tasks if len(tasks) == 2 and all(t["status"] != "prepared" for t in tasks) else None
 
-            tasks = _wait(both_settled, TTL_SEC / 2, proc)
+            tasks = _wait(both_settled, 10, proc)
             assert tasks, f"leases never left prepared: {_ledger_tasks(ledger)}"
             by_action = {t["action"]: t for t in tasks}
-            assert set(by_action) == {"isolate", "redirect"}
+            assert set(by_action) == {"throttle", "redirect"}
             for task in tasks:
-                # The bug: a bare `comment azazel-edge:...` is an nft syntax
-                # error, the apply fails and the lease is cancelled.
+                # A bare `comment azazel-edge:...` is an nft syntax error; an
+                # apply that does not read back is released, never active.
                 assert task["status"] == "active", (task["status"], task["last_error"])
 
-            # Readback while active: exactly one rule per lease, the comment is
-            # the bare owner token (nft -j drops the quotes), semantics match.
-            isolate, redirect = by_action["isolate"], by_action["redirect"]
-            input_rules = [r for r in _owned_rules(netns, "input") if r.get("comment") == isolate["owner_token"]]
-            assert len(input_rules) == 1
-            assert any("drop" in expr for expr in input_rules[0]["expr"])
-            assert json.dumps(input_rules[0]).count(ISOLATE_SRC) == 1
+            throttle, redirect = by_action["throttle"], by_action["redirect"]
+            assert throttle["mechanism"] == "nft_flow_limit"
+            thr_rules = [r for r in _owned_rules(netns, "throttle") if r.get("comment") == throttle["owner_token"]]
+            assert len(thr_rules) == 1
+            text = json.dumps(thr_rules[0])
+            assert text.count(THROTTLE_SRC) == 1 and text.count(DEST_IP) == 1
+            limit = [e["limit"] for e in thr_rules[0]["expr"] if "limit" in e]
+            assert limit and limit[0]["inv"] is True and limit[0]["rate"] == 16 and limit[0]["rate_unit"] == "kbytes"
             pre_rules = [r for r in _owned_rules(netns, "prerouting") if r.get("comment") == redirect["owner_token"]]
             assert len(pre_rules) == 1
-            assert any(expr.get("redirect", {}).get("port") == HONEYPOT_PORT for expr in pre_rules[0]["expr"])
+            assert any(expr.get("redirect", {}).get("port") == DECOY_PORT for expr in pre_rules[0]["expr"])
             assert json.dumps(pre_rules[0]).count(REDIRECT_SRC) == 1
+            # Nothing source-wide, ever.
+            assert _owned_rules(netns, "input") == []
 
             records = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines() if line.strip()]
             enforced = [r["enforcement"] for r in records if "enforcement" in r]
@@ -178,26 +236,27 @@ def test_core_applies_reads_back_and_releases_owned_isolate_and_redirect(netns):
             for outcome in enforced:
                 assert outcome["mode"] == "enforced" and outcome["result"] == "applied", outcome
                 assert outcome["executed_count"] == 1 and outcome["failed_count"] == 0
-                # The recorded plan keeps the bare token after `comment`.
                 token = outcome["metadata"]["release_owner_token"]
                 assert f"comment {token}" in outcome["command_plan"][0]
+                assert outcome["metadata"]["safety"]["gate"] == "passed"
+            assert {o["metadata"]["safety"]["decoy_preconditions"] for o in enforced} == {"met", "not_applicable"}
 
-            # Rollback by the core at expiry: owned handles resolved by readback,
-            # deleted, absence verified.
             def both_released():
                 tasks = _ledger_tasks(ledger)
                 return tasks if tasks and all(t["status"] == "released" for t in tasks) else None
 
             released = _wait(both_released, TTL_SEC + 20, proc)
             assert released, f"leases not released: {_ledger_tasks(ledger)}"
-            assert not [r for r in _owned_rules(netns, "input") if r.get("comment") == isolate["owner_token"]]
+            assert not [r for r in _owned_rules(netns, "throttle") if r.get("comment") == throttle["owner_token"]]
             assert not [r for r in _owned_rules(netns, "prerouting") if r.get("comment") == redirect["owner_token"]]
             records = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines() if line.strip()]
             results = sorted(r["release"]["result"] for r in records if "release" in r)
             assert results == ["rollback_applied_and_absence_verified"] * 2, results
         finally:
+            listener.terminate()
             proc.terminate()
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
+            listener.wait(timeout=10)

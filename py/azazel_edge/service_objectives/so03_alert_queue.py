@@ -120,9 +120,10 @@ QUEUE_RECORD_KEYS = (
     "enforcement_mode", "effective_action",
 )
 
-# The core's decisions by EVE severity (decide_defense): 1 isolate,
-# 2 redirect, 3 throttle. The core takes no SOC-labelled decision.
-P0_KINDS = (("isolate", 1), ("redirect", 2), ("throttle", 3))
+# The core's decisions by EVE severity (decide_defense): 1 throttle (strict,
+# flow-scoped), 2 redirect, 3 throttle (standard). The core never decides
+# isolate on its automatic path, and takes no SOC-labelled decision.
+P0_KINDS = (("throttle", 1), ("redirect", 2), ("throttle", 3))
 REDIRECT_POLICY = REPO_ROOT / "config" / "redirect_policy.yaml"
 # Destination ports drawn per sample: prepared redirect mappings and ports
 # the redirect policy falls back on (config/redirect_policy.yaml).
@@ -285,7 +286,9 @@ def expected_effective_action(decided: str, severity: int, port: int, policy_pat
     sample, from the redirect policy file, written independently of the core:
     a redirect to a prepared port stays a redirect; any other redirect of an
     EVE severity-2 alert (risk score 81, high risk) takes the policy's
-    high-risk fallback."""
+    high-risk fallback. A fallback is only observe, notify or throttle: the
+    automatic path never isolates (nor redirects again), so the core turns
+    any other name into notify."""
 
     if decided != "redirect":
         return decided
@@ -298,8 +301,19 @@ def expected_effective_action(decided: str, severity: int, port: int, policy_pat
         return "redirect"
     risk_score = min(100, (11 - severity) * 9)
     if risk_score >= 80 or severity >= 4:
-        return str(policy.get("high_risk_unsupported_port_action") or "isolate")
-    return str(policy.get("unsupported_port_action") or "notify")
+        fallback = str(policy.get("high_risk_unsupported_port_action") or "notify").lower()
+    else:
+        fallback = str(policy.get("unsupported_port_action") or "notify").lower()
+    return fallback if fallback in {"observe", "notify", "throttle"} else "notify"
+
+
+def prepared_ports(policy_path: Path = REDIRECT_POLICY) -> tuple:
+    """The redirect policy's prepared ports, sorted."""
+
+    import yaml
+
+    policy = (yaml.safe_load(policy_path.read_text(encoding="utf-8")) or {}).get("redirect_policy") or {}
+    return tuple(sorted(int(k) for k in (policy.get("prepared_ports") or {})))
 
 
 def _eve_line(i: int, severity: int, port: int, sid: Optional[int] = None) -> str:
@@ -398,7 +412,9 @@ def _sample(
     relayed: List[tuple], relayed_cv: threading.Condition,
 ) -> Dict[str, Any]:
     kind, severity = P0_KINDS[i % len(P0_KINDS)]
-    port = rng.choice(DEST_PORTS)
+    # A redirect to an unprepared port falls back to notify, which is not P0
+    # and never reaches the queue; redirect samples use prepared ports.
+    port = rng.choice(prepared_ports() if kind == "redirect" else DEST_PORTS)
     expected = expected_effective_action(kind, severity, port)
     sid = SID_BASE + i
     line = _eve_line(i, severity, port)

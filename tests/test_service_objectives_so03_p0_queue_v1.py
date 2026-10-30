@@ -1098,12 +1098,13 @@ def test_full_run_through_the_core_is_a_pass(genuine_pass):
     assert all(_prereqs(record).values()), _prereqs(record)
     assert record["verdict"] == rec.VERDICT_PASS
     samples = _part(record)["samples"]
-    assert {s["action"] for s in samples} == {"isolate", "redirect", "throttle"}
+    assert {s["action"] for s in samples} == {"redirect", "throttle"}
     assert {s["core_enforcement_mode"] for s in samples} == {"dry_run"}
     assert all(s["decision_source"] == "azazel-edge-core" and s["core_sid"] == s["harness_sid"] for s in samples)
     assert all(s["action"] == s["core_effective_action"] == s["harness_expected_action"] for s in samples)
-    # The fallbacks the policy applies to unprepared ports are sampled too.
-    assert any(s["core_decided_action"] == "redirect" and s["action"] == "isolate" for s in samples)
+    # The automatic path never isolates: critical alerts are a strict
+    # flow-scoped throttle, and redirect samples stay redirects.
+    assert not any(s["action"] == "isolate" or s["core_decided_action"] == "isolate" for s in samples)
     assert any(s["core_decided_action"] == "redirect" and s["action"] == "redirect" for s in samples)
     # The 2 s run from the EVE append (an upper bound of the core's decision)
     # to the durable enqueue: the core's poll, decision and forward are inside.

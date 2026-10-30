@@ -11,10 +11,16 @@ There are two paths. Only the first one changes the network.
 
 1. The Rust `azazel-edge-core` reads Suricata EVE lines through its ingress
    quota.
-2. `decide_defense()` selects one bounded action from the alert severity.
-3. `maybe_enforce()` applies it with `nft`/`tc` only when the enforcement
+2. `decide_defense()` selects one bounded action from the alert severity
+   (never `isolate`: critical alerts get the strict flow-scoped throttle).
+3. `maybe_enforce()` applies it with `nft` only when the enforcement
    settings allow it (the shipped unit is observe-only: enforcement off,
-   dry run, level `advisory`).
+   dry run, level `advisory`) and the deterministic safety rules of
+   [scoped-temporary-actions.md](scoped-temporary-actions.md) hold: the
+   flow is not in the protected communications set, the alert is fresh, the
+   lease is within the Edge bounds and, for a redirect, the decoy is
+   separated and reachable. An apply counts only after its owned rule reads
+   back.
 4. After the decision, the core forwards the decision event to the AI agent
    (one-way, bounded, dropped and counted when the agent does not read).
 5. The agent records P0 decisions in the core-decision audit chain and the P0
