@@ -18,6 +18,7 @@ tests hold the Edge half of the tie:
 from __future__ import annotations
 
 import json
+import platform
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,8 @@ _REASON = (
     "the release binary is not built; run "
     "cargo build --release --manifest-path rust/azazel-edge-core/Cargo.toml"
 )
+
+HOST = {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}.get(platform.machine(), "")
 
 COMMITTED = ROOT / "packaging" / "nexus-core" / "contract"
 NAMES = ("health-schema.json", "manifest-schema.json", "pin.json")
@@ -75,6 +78,8 @@ class ManifestSchemaTests(unittest.TestCase):
 
         document = packager.manifest_document(
             version="9.9.9",
+            architecture="aarch64",
+            elf=packager.ARCHITECTURES["aarch64"],
             artifact="a.tar.gz",
             digest="sha256:" + "0" * 64,
             components=[{"path": "p", "digest": "d", "size": 1}],
@@ -171,6 +176,41 @@ class PinTests(unittest.TestCase):
         must = " ".join(packager.pin_document("0.1.0")["consumer_must"])
         self.assertIn("not claim edge-baseline-ready", must)
 
+    def test_the_pin_has_one_entry_per_cpu_named_for_that_cpu(self) -> None:
+        """Written out here, so a CPU dropped from or added to the table shows."""
+
+        pin = packager.pin_document("0.1.0")
+        self.assertEqual(pin["contract"], "azazel-edge-core/nexus-pin/v2")
+        self.assertNotIn("architecture", pin)
+        self.assertEqual(
+            pin["architectures"],
+            {
+                "aarch64": {
+                    "artifact": "azazel-edge-core-0.1.0-aarch64.tar.gz",
+                    "manifest": "azazel-edge-core-0.1.0-aarch64.manifest.json",
+                    "elf": {"class": "ELFCLASS64", "data": "ELFDATA2LSB", "machine": "EM_AARCH64"},
+                },
+                "x86_64": {
+                    "artifact": "azazel-edge-core-0.1.0-x86_64.tar.gz",
+                    "manifest": "azazel-edge-core-0.1.0-x86_64.manifest.json",
+                    "elf": {"class": "ELFCLASS64", "data": "ELFDATA2LSB", "machine": "EM_X86_64"},
+                },
+            },
+        )
+
+    def test_the_manifest_contract_is_v2_so_a_reader_without_cpu_checks_refuses(self) -> None:
+        """Re522-04: a Nexus that predates per-CPU packages reads v1 and checks
+        the contract first; v2 is what makes it refuse instead of accepting an
+        x86_64 package on an aarch64 host. Moving back to v1 reopens that."""
+
+        self.assertEqual(packager.MANIFEST_CONTRACT, "azazel-edge-core/package-manifest/v2")
+        self.assertEqual(packager.pin_document("0.1.0")["manifest_contract"], packager.MANIFEST_CONTRACT)
+
+    def test_the_pin_tells_the_consumer_to_refuse_another_cpus_package(self) -> None:
+        must = " ".join(packager.pin_document("0.1.0")["consumer_must"])
+        self.assertIn("host's CPU", must)
+        self.assertIn("ELF header", must)
+
 
 @unittest.skipUnless(_BUILT, _REASON)
 class CommittedContractTests(unittest.TestCase):
@@ -226,7 +266,7 @@ class CommittedContractTests(unittest.TestCase):
         """The schema's whole job is to describe the manifest a build writes."""
 
         with tempfile.TemporaryDirectory() as tmp:
-            _, manifest_path = packager.build(ROOT, Path(tmp))
+            _, manifest_path = packager.build(ROOT, Path(tmp), architecture=HOST)
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         committed = json.loads((COMMITTED / "manifest-schema.json").read_text(encoding="utf-8"))
         self.assertEqual(committed["keys"], packager.key_paths(manifest))

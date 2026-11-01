@@ -374,6 +374,74 @@ jobs:
           path: service-objective-so11-records/*.json
           if-no-files-found: error
 
+  nexus-core-package:
+    # The per-CPU Edge Core package Azazel-Nexus verifies
+    # (docs/nexus-core-package.md §7). Built and packaged natively on an
+    # x86_64 and an arm64 runner: the packager runs the binary (--version,
+    # --health), so it does not cross-package. On each runner the package of
+    # that CPU must build with the CPU read from the binary's ELF header, the
+    # other CPU's name must be refused, and the packager and contract tests
+    # must run with the release binary present (never skip; the test-python
+    # job has no Rust build and skips them). Nothing is uploaded: a runner
+    # build is not a released artifact, and which build a consumer accepts is
+    # the consumer's pin.
+    name: Nexus core package (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            other: aarch64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            other: x86_64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Rust toolchain
+        run: |
+          if ! command -v cargo >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Build the release core
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          cargo build --release --locked --manifest-path rust/azazel-edge-core/Cargo.toml
+
+      - name: Packager and contract tests with the release binary
+        run: |
+          python -m pip install pytest
+          python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_nexus_core_package_v1.py tests/test_nexus_contract_export.py | tee nexus-core.log
+          grep -Eq "^[0-9]+ passed" nexus-core.log
+          ! grep -Eq "skipped|failed|error" nexus-core.log
+
+      - name: Package this CPU, refuse the other CPU's name
+        run: |
+          python packaging/nexus-core/nexus_core_package.py --architecture "${{ matrix.arch }}" --out dist/nexus-core
+          python - <<'PY'
+          import json, pathlib
+          arch = "${{ matrix.arch }}"
+          m = json.loads(pathlib.Path(f"dist/nexus-core/azazel-edge-core-0.1.0-{arch}.manifest.json").read_text())
+          assert m["architecture"] == arch, m["architecture"]
+          assert m["elf"]["machine"] == {"x86_64": "EM_X86_64", "aarch64": "EM_AARCH64"}[arch], m["elf"]
+          assert m["artifact"] == f"azazel-edge-core-0.1.0-{arch}.tar.gz"
+          PY
+          if python packaging/nexus-core/nexus_core_package.py --architecture "${{ matrix.other }}" --out dist/refused; then
+            echo "packaged an ${{ matrix.arch }} binary under the ${{ matrix.other }} name" >&2
+            exit 1
+          fi
+          test ! -e dist/refused
+
   dependency-review:
     name: Dependency review (PR)
     if: github.event_name == 'pull_request' && vars.ENABLE_DEPENDENCY_REVIEW == 'true'
