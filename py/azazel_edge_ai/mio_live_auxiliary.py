@@ -337,6 +337,9 @@ class LiveMioAuxiliary:
                 and str(result.get("generation") or "") == str(self._generation)
                 and age is not None and age <= self.max_age_seconds
             )
+            from .knowledge_advisory import current
+            if not current(result.get("edge_knowledge_advisory"), result) or not _binding_matches(result):
+                result.pop("edge_knowledge_advisory", None)
             return result
 
     def current_generation(self) -> int:
@@ -529,6 +532,14 @@ class LiveMioAuxiliary:
                         # Only an exception type is retained; exception text
                         # can contain model or event supplied material.
                         result = _unavailable("mio_failure:" + type(exc).__name__[:48])
+                assistance_payload = result.get("advisory")
+                if isinstance(assistance_payload, dict):
+                    from .knowledge_advisory import project
+                    receipt = assistance_payload.pop("knowledge_context_response_advisory", None)
+                    projected = project(receipt, generation=generation,
+                                        trace_id=str(event.get("_source_trace_id") or "")[:96])
+                    if projected is not None:
+                        result["edge_knowledge_advisory"] = projected
                 result["generation"] = str(generation)
                 result["max_age_seconds"] = self.max_age_seconds
                 result["trace_id"] = str(event.get("_source_trace_id") or "")[:96]

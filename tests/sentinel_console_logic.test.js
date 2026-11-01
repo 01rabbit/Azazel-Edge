@@ -289,6 +289,33 @@ function greenNodes(doc) {
 }
 function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el.className + ' "' + el.textContent.slice(0, 40) + '"'; }
 
+// Optional Knowledge receipt uses the same current handoff gate.
+(function () {
+    const m = mount();
+    const el = m.doc.createElement('span'); el.id = 'mioLiveKnowledgeAdvisory'; m.doc.body.appendChild(el);
+    const p = {status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date().toISOString(), generation: '1', trace_id: 't1',
+        edge_event: {trace_id: 't1', action: 'notify', mode: 'dry_run', result: 'planned_not_applied'},
+        source_context: {event_key: 'e1'}, advisory: {trace_id: 'm1', frame_id: 'f1'},
+        handoff_binding: {status: 'matched', generation: '1', event_key: 'e1', edge_trace_id: 't1',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'm1', frame_id: 'f1'},
+        edge_knowledge_advisory: {schema_version: 'azazel.edge_knowledge_advisory.v1', status: 'complete',
+            authority: 'read_only_advisory', generation: '1', trace_id: 't1', claim_status: 'reported_unverified',
+            source_groups: ['abusech'], attack_techniques: ['T1059.001'], source_freshness: {oldest_feed_days: 2}}};
+    m.S.renderMioLiveAuxiliary(p);
+    ok(el.textContent.includes('abusech') && el.textContent.includes('T1059.001'), 'receipt projected fields displayed');
+    for (const change of [{is_current: false}, {completed_at: '2000-01-01'}, {status: 'unavailable'}, {status: 'degraded'}]) {
+        m.S.renderMioLiveAuxiliary(Object.assign({}, p, change));
+        eq(el.textContent, 'Suppressed', 'unusable envelope hides receipt');
+    }
+    for (const change of [{generation: '2'}, {trace_id: 'wrong'}, {source_groups: ['<b>bad</b>']}, {source_freshness: {token: 'secret'}}]) {
+        m.S.renderMioLiveAuxiliary(Object.assign({}, p, {edge_knowledge_advisory: Object.assign({}, p.edge_knowledge_advisory, change)}));
+        eq(el.textContent, 'Suppressed', 'malformed or unbound receipt suppressed');
+    }
+    m.S.renderMioLiveAuxiliary(Object.assign({}, p, {edge_knowledge_advisory: undefined}));
+    eq(el.textContent, 'Unavailable', 'optional receipt omission');
+})();
+
 // --- 1. Empty payload: nothing throws, nothing is green, unknowns say so ----
 (function () {
     const m = mount();

@@ -138,3 +138,25 @@ Failure isolation and audit degradation:
   `knowledge_status` only when it is a string in the fixed Knowledge status
   vocabulary. Any other value is dropped and never echoed into the audit payload.
   The vocabulary is kept in sync with the model lane by a parity test.
+
+## Optional Knowledge operator receipt candidate
+
+`edge_knowledge_advisory` is an optional `azazel.edge_knowledge_advisory.v1`
+receipt, separate from score comparison. The adapter projects only MIO #18's
+`source_groups` (16 restricted feed group names), `attack_techniques` (32 public
+ATT&CK identifiers), `source_freshness` (bounded feed age and ATT&CK version),
+and `reported_unverified` claim label. Its only status is `complete`, and its
+authority is `read_only_advisory`; missing or invalid receipts are omitted.
+Raw IOC values, recommendation prose, canonical state, tokens and provenance
+are not included. Snapshot and operator display require the existing current
+generation, trace, completion freshness and handoff binding. The browser renders
+all fields as text and clears the receipt when unavailable or suppressed.
+
+This is compatibility preparation based on Edge #528
+`99db185c5349bff17746e5e3534b4c4ebefc2281`, whose MIO pin remains
+`6cd015351979ba69e18517d71f79c0c347bb2722`. That pin does not include MIO #18
+`7a9cc624e4c0b3795b0258ac95a0650364a22a80`, and the current fast adapter
+still calls `knowledge_attempted=False`. No live Knowledge integration is
+claimed. A separate follow-on PR is needed after the #525/#527/#528 stack and
+Knowledge slow-lane candidate have been rebased and the MIO dependency updated.
+This candidate adds no network calls, installer changes or decision consumers.
