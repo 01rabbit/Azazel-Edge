@@ -426,7 +426,8 @@ class LiveMioAuxiliary:
                             if generation == self._generation:
                                 self._frame_snapshot = frame.to_dict() if callable(getattr(frame, "to_dict", None)) else dict(payload)
                         assistance = self._core.explain(
-                            frame, now=datetime.now(timezone.utc).isoformat()
+                            frame, now=datetime.now(timezone.utc).isoformat(),
+                            knowledge_attempted=False,
                         ).to_dict()
                         if time.monotonic() - queued > self.max_age_seconds:
                             result = _unavailable("stale_job")

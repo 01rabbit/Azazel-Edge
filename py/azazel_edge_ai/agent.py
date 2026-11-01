@@ -2321,6 +2321,7 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
     core = AssistantCore(model=StructuredTransport())
     try:
         assistance = core.explain(frame, now=datetime.now(timezone.utc).isoformat(),
+            knowledge_attempted=False,
             stale_check=lambda: time.monotonic() >= deadline or bool(stale_check and stale_check()))
         if time.monotonic() >= deadline:
             raise TimeoutError("deadline_exceeded")

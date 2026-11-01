@@ -39,6 +39,8 @@ def test_edge_action_metadata_uses_known_enums_and_fixed_unknown_marker():
 
 def test_fast_frame_uses_edge_risk_level_and_factors_without_reclassification():
     frame = _safe_event(EVENT, score=72, factors=["known_class", "corr_repeat_src_ip=4/300s"], risk_level="CRITICAL")
+    assert frame["knowledge_status"] == "not_provided"
+    assert frame["knowledge_refs"] == []
     assert frame["threat_level"] == "CRITICAL"
     assert frame["soc_summary"] == (
         "Edge tactical scorer derived risk score: 72; factors=known_class,corr_repeat_src_ip=4/300s"
@@ -79,13 +81,14 @@ def test_submit_preserves_only_allowlisted_outcome_through_production_frame_buil
 
     class Core:
         def explain(self, frame, **kwargs):
+            assert kwargs.get("knowledge_attempted") is False
             return SimpleNamespace(to_dict=lambda: {
                 "schema_version": "mio.assistance.v1", "frame_id": frame.frame_id,
-                "trace_id": frame.trace_id, "dependency_outcome": {"knowledge": "absent"},
+                "trace_id": frame.trace_id, "dependency_outcome": {"knowledge": "not_queried"},
             })
 
     adapter._frame_type, adapter._core = Frame, Core()
-    adapter._knowledge_statuses = frozenset({"absent"})
+    adapter._knowledge_statuses = frozenset({"not_queried"})
     allowed_event = {**EVENT, "normalized": {**EVENT["normalized"], "action": "allowed"}}
     accepted = adapter.submit(allowed_event, score=72, factors=["known_class"], risk_level="HIGH")
     deadline = time.monotonic() + 1
@@ -102,6 +105,13 @@ def test_submit_preserves_only_allowlisted_outcome_through_production_frame_buil
     assert frame["provenance"] == {
         "known_facts": ["caller"], "evidence_refs": ["caller"],
     }
+    deadline = time.monotonic() + 1
+    result = adapter.snapshot()
+    while time.monotonic() < deadline and result["status"] in {"pending", "queued"}:
+        time.sleep(0.005)
+        result = adapter.snapshot()
+    assert result["knowledge"] == {"status": "not_queried", "refs": []}
+    assert '"status": "not_queried"' in json.dumps(result, sort_keys=True)
 
     raw_outcome = "allowed <script>alert(1)</script>"
     disallowed_event = {**EVENT, "normalized": {**EVENT["normalized"], "action": raw_outcome}}
@@ -529,7 +539,9 @@ def test_installed_shared_candidate_core_returns_advisory_with_typed_knowledge_s
     result = adapter.snapshot()
     assert result["status"] == "complete", result.get("reason")
     assert result["authority"] == "read_only_advisory"
-    assert result["knowledge"]["status"] == "absent"
+    assert result["knowledge"]["status"] == "not_queried"
+    assert result["knowledge"]["refs"] == []
+    assert '"status": "not_queried"' in json.dumps(result, sort_keys=True)
     assert result["provenance"]["observations"] == ["rust_core_normalized_event"]
     assert result["provenance"]["derived_signals"] == ["edge_tactical_scorer_v1"]
     assert result["advisory"]["hypotheses"]
@@ -580,6 +592,7 @@ def test_combined_snapshot_envelope_remains_bounded_after_prose_removal(tmp_path
             return "1"
         def snapshot(self):
             return {"status": "complete", "generation": "1", "is_current": True,
+                    "knowledge": {"status": "not_queried", "refs": []},
                     "advisory": {"summary": "x" * (MAX_RESULT_BYTES - 450)},
                     "edge_event": {"unexpected": "y" * MAX_RESULT_BYTES} if oversized_edge else {}}
     class Model:
@@ -597,3 +610,28 @@ def test_combined_snapshot_envelope_remains_bounded_after_prose_removal(tmp_path
     assert mio["authority"] == "read_only_advisory"
     assert mio["model_analysis"]["prompt_tokens"] == 41
     assert mio["knowledge"]["status"] == "not_provided"
+
+
+def test_not_queried_status_is_persisted_in_agent_snapshot(tmp_path, monkeypatch):
+    import json
+    from azazel_edge_ai import agent
+
+    class Fast:
+        def current_generation(self):
+            return "1"
+        def snapshot(self):
+            return {"status": "complete", "generation": "1", "is_current": True,
+                    "knowledge": {"status": "not_queried", "refs": []},
+                    "advisory": None, "edge_event": {}}
+    class Model:
+        def snapshot(self):
+            return {"status": "disabled"}
+    monkeypatch.setattr(agent, "LIVE_MIO_AUXILIARY", Fast())
+    monkeypatch.setattr(agent, "LIVE_MIO_MODEL_LANE", Model())
+    monkeypatch.setattr(agent, "SNAPSHOT_PATH", tmp_path / "snapshot.json")
+    monkeypatch.setattr(agent, "_default_route_info", lambda: {})
+    agent._update_ui_snapshot({"risk_score": 51}, count_suricata=False)
+    serialized = agent.SNAPSHOT_PATH.read_text()
+    mio = json.loads(serialized)["mio_auxiliary"]
+    assert mio["knowledge"] == {"status": "not_queried", "refs": []}
+    assert '"status": "not_queried"' in serialized

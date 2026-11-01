@@ -669,6 +669,7 @@ def test_analyzer_preserves_outer_usage_when_core_or_deadline_fails(monkeypatch)
 
     for failure in (RuntimeError("private completion"), TimeoutError("private prompt")):
         def explain(self, frame, **kwargs):
+            assert kwargs.get("knowledge_attempted") is False
             # Exercise the real transport metadata callback before core failure.
             self.model("hypotheses", "private request")
             raise failure

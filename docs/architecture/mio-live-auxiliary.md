@@ -20,8 +20,10 @@ and factors. The input frame carries Edge's already-computed risk-level label
 unchanged and labels its score/factors as derived context; M.I.O. does not
 re-score the event or supply a competing classification. This adapter makes no
 Azazel-Fabric mapping claim. The frame labels normalized event observations
-separately from the `edge_tactical_scorer_v1` derived risk score. Knowledge is `not_provided`; no
-Knowledge data or references are synthesized. Results carry source, generation,
+separately from the `edge_tactical_scorer_v1` derived risk score. Its input
+`knowledge_status` remains `not_provided`; no Knowledge data or references are
+synthesized. The shared core is called with `knowledge_attempted=False`, so its
+typed result reports Knowledge outcome `not_queried`. Results carry source, generation,
 trace, provenance, typed Knowledge status, and `read_only_advisory` authority.
 They are not used for action selection, enforcement, or arbitration.
 
