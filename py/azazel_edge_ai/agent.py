@@ -10,6 +10,7 @@ import logging
 import os
 import pwd
 import queue
+import re
 import secrets
 import signal
 import socket
