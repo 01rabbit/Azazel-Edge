@@ -28,7 +28,8 @@ trace, provenance, typed Knowledge status, and `read_only_advisory` authority.
 They are not used for action selection, enforcement, or arbitration.
 
 The same event advisory may carry the scorer's optional M.I.O. fast-assessment
-shadow result as `edge_score_comparison`. It is copied into the live panel only
+shadow result as `edge_score_comparison`; its `matches` flag compares both the
+numeric score and factor list. It is copied into the live panel only
 when the scorer submission's generation and trace match the current auxiliary
 result. The panel labels it comparison-only and suppresses it with stale or
 uncorrelated M.I.O. results. Edge's score, factors, risk label, recommendation,

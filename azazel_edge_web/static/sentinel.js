@@ -450,7 +450,7 @@
                 comparisonText = 'Suppressed (comparison generation/trace mismatch)';
             } else if (comparison.status === 'complete') {
                 comparisonText = 'Edge ' + comparison.edge_score + ' / M.I.O. ' + comparison.mio_score
-                    + ' · ' + (comparison.matches ? 'match' : 'different') + ' · comparison only';
+                    + ' · assessment ' + (comparison.matches ? 'match' : 'differs') + ' · comparison only';
             } else {
                 comparisonText = comparison.status + ' · comparison only';
             }
