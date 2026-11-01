@@ -8,6 +8,13 @@ MIO_EXACT_SOURCE must name the clean runtime-pin checkout. No network fetch.
 import json, os, socket, subprocess, sys, time, signal, tempfile, fcntl, urllib.request, http.server, threading
 from pathlib import Path
 
+def require_unprivileged():
+    """Refuse root before evidence writes or service startup."""
+    if os.geteuid() == 0:
+        raise SystemExit('Refusing root execution; run this harness as an unprivileged user.')
+
+require_unprivileged()
+
 ROOT = Path(__file__).resolve().parents[2]
 EV = Path(os.environ['MIO_PROCESS_EVIDENCE']).resolve()
 EV.mkdir(mode=0o700)

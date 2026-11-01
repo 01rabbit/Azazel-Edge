@@ -1,4 +1,6 @@
-Run this explicitly; it starts four unprivileged Edge AI agent subprocesses and
+Run this explicitly as an unprivileged user (never with `sudo` or as root).
+The harness refuses effective UID 0 before creating evidence, writing events,
+or starting services. It starts four unprivileged Edge AI agent subprocesses and
 sends one synthetic accepted Rust event to each ordinary Unix event socket.
 It never calls `_handle_event`, enables enforcement, edits runtime policy, or
 fetches a dependency/model. The exact clean MIO runtime-pin checkout is required.
