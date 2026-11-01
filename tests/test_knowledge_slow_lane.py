@@ -213,7 +213,7 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
             assert authorized == [True]
             assert audits and audits[0]['knowledge_status'] == 'projected' 
             assert observed[0]['knowledge_context_response_advisory']['claim_status'] == 'reported_unverified'
-            assert observed[0]['knowledge_context_response_advisory']['source_groups'] == ['urlhaus']
+            assert observed[0]['knowledge_context_response_advisory']['source_groups'] == ['abusech']
             assert result['knowledge_status'] == 'projected'
             assert frame == before
             assert result['status'] == 'degraded'
@@ -221,6 +221,7 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
             assert frame['knowledge_refs'] == []
             assert '203.0.113.7' not in json.dumps(result) + caplog.text + log.read_text()
             assert 'urlhaus' not in json.dumps(result)
+            assert 'abusech' not in json.dumps(result)
             assert '203.0.113.7' not in json.dumps(lane.diagnostics())
             assert token not in json.dumps(result) + caplog.text + log.read_text()
         finally:
