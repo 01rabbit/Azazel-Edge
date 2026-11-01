@@ -18,6 +18,25 @@ class _FixedScorer:
         return self.Result(features)
 
 
+class _ShadowStatusScorer(_FixedScorer):
+    def __init__(self, shadow: dict) -> None:
+        self.shadow = shadow
+
+    def score(self, features: dict) -> "_FixedScorer.Result":
+        result = super().score(features)
+        result.shadow = self.shadow
+        return result
+
+
+class _FixedMioAuxiliary:
+    def submit(self, event: dict, *, score: int, factors: list[str], risk_level: str) -> dict:
+        return {
+            "schema_version": "azazel.mio_auxiliary.v1", "status": "queued",
+            "authority": "read_only_advisory", "source": "mio_shared_core",
+            "generation": "generation-1", "trace_id": "mio-trace-1",
+        }
+
+
 class _FixedDecisionLayers:
     def enrich_with_second_pass(self, event: dict, advisory: dict) -> dict:
         return {
@@ -86,6 +105,48 @@ class AgentAdvisoryContractV1Tests(unittest.TestCase):
         self.assertEqual(advisory["score_engine"], "tactical_scorer_v1")
         self.assertEqual(advisory["second_pass"]["status"], "completed")
         self.assertEqual(advisory["correlation"], {"force_llm": False})
+
+    def test_live_advisory_surfaces_bounded_shadow_and_preserves_edge_result_on_mio_statuses(self) -> None:
+        event = {
+            "normalized": {"sid": 2402000, "severity": 3, "attack_type": "fixture",
+                           "category": "scan", "action": "allowed", "target_port": 443,
+                           "protocol": "TCP"},
+            "enforcement": {"trace_id": "trace-live"},
+        }
+        edge_result = (72, ["sid=2402000", "port=443"], "HIGH",
+                       "Apply delay policy and increase telemetry (port=443)", "DEGRADED")
+        shadows = (
+            ("complete", {"status": "complete", "score": 72, "matches": True,
+                           "factors": ["severity=3", "threat_class=scan(36)"]}, 72, True),
+            ("unavailable", {"status": "unavailable", "reason": "package_unavailable",
+                             "score": 72, "factors": ["must not leak"]}, None, None),
+            ("degraded", {"status": "degraded", "reason": "assessment_failed",
+                           "score": 0, "matches": False, "factors": ["must not leak"]}, None, None),
+        )
+        for _name, shadow, visible_score, visible_match in shadows:
+            with self.subTest(status=shadow["status"]):
+                with patch.object(agent, "SCORER", _ShadowStatusScorer(shadow)), patch.object(
+                    agent, "LIVE_MIO_AUXILIARY", _FixedMioAuxiliary()
+                ), patch.object(agent, "DECISION_LAYERS", _FixedDecisionLayers()), patch.object(
+                    agent, "DECISION_LOGGER", _NoopDecisionLogger()
+                ), patch.object(agent, "_evaluate_correlation", return_value={"force_llm": False}), patch.object(
+                    agent, "_metrics_inc"
+                ), patch.object(agent, "_LAST_RISK_SCORE", 0), patch.object(agent, "_LAST_STATE_NAME", "NORMAL"):
+                    advisory = agent._build_advisory(event)
+
+                self.assertEqual(
+                    (advisory["risk_score"], advisory["score_factors"], advisory["risk_level"],
+                     advisory["recommendation"], advisory["state_name"]), edge_result,
+                )
+                comparison = advisory["mio_score_comparison"]
+                self.assertEqual(comparison["status"], shadow["status"])
+                self.assertEqual(comparison["mio_score"], visible_score)
+                self.assertEqual(comparison["matches"], visible_match)
+                self.assertEqual(comparison["authority"], "comparison_only")
+                self.assertEqual(comparison["generation"], "generation-1")
+                self.assertEqual(comparison["trace_id"], "mio-trace-1")
+                if shadow["status"] != "complete":
+                    self.assertEqual(comparison["mio_factors"], [])
 
     def test_build_advisory_generates_trace_id_when_enforcement_trace_is_missing(self) -> None:
         event = {
