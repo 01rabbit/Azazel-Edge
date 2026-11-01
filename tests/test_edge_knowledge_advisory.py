@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from azazel_edge_ai.knowledge_advisory import project
+from azazel_edge_ai.mio_live_auxiliary import _project_knowledge_advisory as project
 from azazel_edge_ai.mio_live_auxiliary import LiveMioAuxiliary
 
 
