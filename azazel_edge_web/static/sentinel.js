@@ -383,9 +383,9 @@
                 return '';
             }).filter(Boolean).join(' · ') || 'None';
         }
-        function put(id, value) {
+        function put(id, value, limit) {
             var el = document.getElementById(id);
-            if (el) el.textContent = String(value || '-').slice(0, 500);
+            if (el) el.textContent = String(value || '-').slice(0, limit || 500);
         }
         var recommendation = advisory.recommendation;
         if (recommendation && typeof recommendation === 'object') {
@@ -456,6 +456,29 @@
             }
         }
         put('mioLiveScoreComparison', comparisonText);
+        var receipt = payload.edge_knowledge_advisory;
+        var receiptText = 'Unavailable';
+        if (receipt) {
+            var receiptValid = receipt.schema_version === 'azazel.edge_knowledge_advisory.v1'
+                && receipt.status === 'complete' && receipt.authority === 'read_only_advisory'
+                && receipt.claim_status === 'reported_unverified'
+                && receipt.generation === payload.generation && receipt.trace_id === payload.trace_id
+                && Array.isArray(receipt.source_groups) && receipt.source_groups.length <= 16
+                && receipt.source_groups.every(function (v) { return typeof v === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(v); })
+                && Array.isArray(receipt.attack_techniques) && receipt.attack_techniques.length <= 32
+                && receipt.attack_techniques.every(function (v) { return typeof v === 'string' && /^T[0-9]{4}(\.[0-9]{3})?$/.test(v); });
+            var sf = receipt.source_freshness;
+            receiptValid = receiptValid && sf && typeof sf === 'object' && !Array.isArray(sf)
+                && Object.keys(sf).every(function (k) { return k === 'oldest_feed_days' || k === 'attack_version'; })
+                && (sf.oldest_feed_days == null || (typeof sf.oldest_feed_days === 'number' && Number.isFinite(sf.oldest_feed_days) && sf.oldest_feed_days >= 0 && sf.oldest_feed_days <= 36500))
+                && (sf.attack_version == null || (typeof sf.attack_version === 'string' && /^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$/.test(sf.attack_version)));
+            receiptText = usable && receiptValid
+                ? 'reported_unverified · advisory only · sources: ' + receipt.source_groups.join(', ')
+                    + ' · ATT&CK: ' + receipt.attack_techniques.join(', ')
+                    + ' · freshness: ' + JSON.stringify(sf)
+                : 'Suppressed';
+        }
+        put('mioLiveKnowledgeAdvisory', receiptText, 2048);
         put('mioLiveEdgeAction', actionBits.join(' / ') || (edge.unknown_fields ? 'Unknown (malformed fields omitted)' : 'Unknown'));
         put('mioLiveAuxAdvice', usable
             ? (recommendation || advisory.summary || handoff.summary || 'No advice available.')
