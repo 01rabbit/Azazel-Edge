@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import math
 import queue
 import re
 import secrets
@@ -260,6 +261,46 @@ def _safe_event(
     }
 
 
+def _project_knowledge_advisory(value, *, generation, trace_id):
+    if type(value) is not dict:
+        return None
+    if (value.get('kind') != 'knowledge_context_response_advisory'
+            or value.get('source_kind') != 'knowledge_context_response'
+            or value.get('claim_status') != 'reported_unverified'
+            or value.get('trust') != 'unverified_advisory_only'):
+        return None
+    groups = value.get('source_groups')
+    techniques = value.get('attack_techniques')
+    freshness = value.get('source_freshness')
+    for items, cap, pattern in ((groups, 16, r'[a-z][a-z0-9_-]{0,31}'),
+                                (techniques, 32, r'T\d{4}(?:\.\d{3})?')):
+        if type(items) is not list or len(items) > cap or any(
+                type(item) is not str or not re.fullmatch(pattern, item) for item in items):
+            return None
+    if type(freshness) is not dict or set(freshness) - {'oldest_feed_days', 'attack_version'}:
+        return None
+    days = freshness.get('oldest_feed_days')
+    version = freshness.get('attack_version')
+    if days is not None and (type(days) not in (int, float) or not math.isfinite(days) or not 0 <= days <= 36500):
+        return None
+    if version is not None and (type(version) is not str or not re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){0,2}', version)):
+        return None
+    return {'schema_version': 'azazel.edge_knowledge_advisory.v1',
+            'status': 'complete', 'authority': 'read_only_advisory',
+            'generation': str(generation), 'trace_id': trace_id,
+            'claim_status': 'reported_unverified', 'source_groups': list(groups),
+            'attack_techniques': list(techniques), 'source_freshness': dict(freshness)}
+
+
+def _knowledge_advisory_current(value, envelope):
+    """Caller must also validate the existing handoff binding."""
+    return (type(value) is dict and envelope.get('is_current') is True
+            and envelope.get('status') == 'complete'
+            and bool(envelope.get('trace_id'))
+            and value.get('generation') == envelope.get('generation')
+            and value.get('trace_id') == envelope.get('trace_id'))
+
+
 class LiveMioAuxiliary:
     """Latest-only asynchronous caller for the product-neutral M.I.O. API."""
 
@@ -296,8 +337,7 @@ class LiveMioAuxiliary:
                 and str(result.get("generation") or "") == str(self._generation)
                 and age is not None and age <= self.max_age_seconds
             )
-            from .knowledge_advisory import current
-            if not current(result.get("edge_knowledge_advisory"), result) or not _binding_matches(result):
+            if not _knowledge_advisory_current(result.get("edge_knowledge_advisory"), result) or not _binding_matches(result):
                 result.pop("edge_knowledge_advisory", None)
             return result
 
@@ -493,9 +533,8 @@ class LiveMioAuxiliary:
                         result = _unavailable("mio_failure:" + type(exc).__name__[:48])
                 assistance_payload = result.get("advisory")
                 if isinstance(assistance_payload, dict):
-                    from .knowledge_advisory import project
                     receipt = assistance_payload.pop("knowledge_context_response_advisory", None)
-                    projected = project(receipt, generation=generation,
+                    projected = _project_knowledge_advisory(receipt, generation=generation,
                                         trace_id=str(event.get("_source_trace_id") or "")[:96])
                     if projected is not None:
                         result["edge_knowledge_advisory"] = projected
