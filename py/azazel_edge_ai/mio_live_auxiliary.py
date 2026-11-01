@@ -14,7 +14,7 @@ import secrets
 import hashlib
 import threading
 import time
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 MAX_JOB_AGE_SECONDS = 10.0
 MAX_RESULT_BYTES = 16 * 1024
@@ -263,7 +263,8 @@ def _safe_event(
 class LiveMioAuxiliary:
     """Latest-only asynchronous caller for the product-neutral M.I.O. API."""
 
-    def __init__(self, *, max_age_seconds: float = MAX_JOB_AGE_SECONDS):
+    def __init__(self, *, max_age_seconds: float = MAX_JOB_AGE_SECONDS,
+                 knowledge_input_builder: Callable[[Mapping[str, Any], Mapping[str, Any]], dict[str, Any] | None] | None = None):
         self.max_age_seconds = max(0.1, min(float(max_age_seconds), MAX_JOB_AGE_SECONDS))
         self._queue: queue.Queue[tuple[float, int, dict[str, Any], int, list[str], str, bool]] = queue.Queue(maxsize=1)
         self._lock = threading.Lock()
@@ -274,6 +275,7 @@ class LiveMioAuxiliary:
         self._result_completed_at = ""
         self._frame_snapshot: dict[str, Any] | None = None
         self._knowledge_input: dict[str, Any] | None = None
+        self._knowledge_input_builder = knowledge_input_builder
         self._core: Any = None
         self._frame_type: Any = None
         self._knowledge_statuses: frozenset[str] = frozenset()
@@ -348,8 +350,8 @@ class LiveMioAuxiliary:
             self._generation += 1
             generation = self._generation
             self._frame_snapshot = None
-            from azazel_edge_ai.mio_model_lane import private_input
-            self._knowledge_input = private_input(event, snapshot["_source_context"])
+            self._knowledge_input = (self._knowledge_input_builder(event, snapshot["_source_context"])
+                                     if self._knowledge_input_builder else None)
             self._result_completed_monotonic = None
             self._result_completed_at = ""
             self._result_generation = generation

@@ -273,7 +273,170 @@ MANUAL_MODEL_CHAIN = [
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("azazel-edge-ai-agent")
 SCORER = TacticalScorer()
-LIVE_MIO_AUXILIARY = LiveMioAuxiliary()
+MAX_WIRE_BYTES = 16_384
+def _knowledge_private_input(event: Mapping[str, Any], source_context: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Bounded Knowledge-only IP projection; never part of a frame or UI snapshot."""
+    if os.environ.get('AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED') != '1':
+        return None
+    normalized = event.get('normalized')
+    normalized = normalized if isinstance(normalized, Mapping) else {}
+    entities = []
+    for name in ('src_ip', 'dst_ip'):
+        value = normalized.get(name)
+        if type(value) is str and len(value) <= 45 and '%' not in value:
+            try:
+                address = str(ipaddress.ip_address(value))
+            except ValueError:
+                continue
+            entry = {'type': 'ip', 'value': address}
+            if entry not in entities:
+                entities.append(entry)
+    return {'fields': dict(source_context.get('fields') or {}), 'entities': entities}
+
+
+def _query_knowledge_context(source_context: Mapping[str, Any] | None, *, deadline: float,
+                  stale_check: Callable[[], bool]) -> tuple[str, dict[str, Any] | None]:
+    """Never resolve DNS, follow redirects, retry, log bodies or use ambient proxies."""
+    if os.environ.get('AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED') != '1':
+        return 'disabled', None
+    token = os.environ.get('AZAZEL_MIO_KNOWLEDGE_CONTEXT_QUERY_TOKEN', '')
+    if not token:
+        return 'missing_token', None
+    endpoint = os.environ.get('AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENDPOINT', '')
+    try:
+        target = urllib.parse.urlsplit(endpoint)
+        address = ipaddress.ip_address(target.hostname or '')
+        if (target.scheme != 'http' or not address.is_loopback or '%' in (target.hostname or '') or target.username
+                or target.password or target.path not in ('', '/') or target.query
+                or target.fragment or target.port is None
+                or not re.fullmatch(r'[A-Za-z0-9._~-]{16,512}', token)):
+            return 'invalid_configuration', None
+    except ValueError:
+        return 'invalid_configuration', None
+    if stale_check():
+        return 'superseded', None
+    # Only the already allowlisted source metadata enters the event envelope.
+    # Frame prose, scores, actions and actor identity never enter this envelope.
+    fields = source_context.get('fields', {}) if isinstance(source_context, Mapping) else {}
+    event: dict[str, Any] = {}
+    for name in ('event_type', 'protocol', 'category', 'sid', 'severity', 'target_port', 'technique_ids'):
+        field = fields.get(name) if isinstance(fields, Mapping) else None
+        value = field.get('value') if isinstance(field, Mapping) and field.get('status') == 'observed' else None
+        if name in ('event_type', 'protocol', 'category'):
+            if type(value) is str and re.fullmatch(r'[A-Za-z0-9 ._/-]{1,64}', value):
+                if name == 'event_type':
+                    event['kind'] = value
+                else:
+                    event.setdefault('alert', {})['proto' if name == 'protocol' else 'category'] = value
+        elif name == 'technique_ids':
+            if type(value) is list:
+                event[name] = [x for x in value[:16] if type(x) is str and re.fullmatch(r'T[0-9]{4}(?:\.[0-9]{3})?', x)]
+        elif type(value) is int and 0 <= value <= (65535 if name == 'target_port' else 2**31 - 1):
+            event[name] = value
+    entities = []
+    supplied_entities = source_context.get('entities') if isinstance(source_context, Mapping) else None
+    if type(supplied_entities) is list:
+        for item in supplied_entities[:2]:
+            if (type(item) is dict and item.get('type') == 'ip' and type(item.get('value')) is str
+                    and len(item['value']) <= 45 and '%' not in item['value']):
+                try:
+                    indicator_address = str(ipaddress.ip_address(item['value']))
+                except ValueError:
+                    continue
+                entities.append({'type':'ip', 'value':indicator_address})
+    body = json.dumps({'entities': entities, 'event': event, 'actor_key': ''},
+                      separators=(',', ':'), allow_nan=False).encode('ascii')
+    if len(body) > MAX_WIRE_BYTES:
+        return 'oversized', None
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return 'timeout', None
+    class HeaderLimit(http.client.HTTPException):
+        pass
+
+    class BoundedResponse(http.client.HTTPResponse):
+        def begin(self) -> None:
+            original = self.fp
+            class HeaderBudget:
+                remaining = 4096
+                def readline(self, size: int = -1) -> bytes:
+                    line = original.readline(min(size if size >= 0 else 4097, self.remaining + 1))
+                    self.remaining -= len(line)
+                    if self.remaining < 0:
+                        raise HeaderLimit()
+                    return line
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(original, name)
+            self.fp = HeaderBudget()
+            try:
+                super().begin()
+            finally:
+                self.fp = original
+
+    class NumericLoopbackConnection(http.client.HTTPConnection):
+        response_class = BoundedResponse
+        def connect(self) -> None:
+            self.sock = socket.socket(socket.AF_INET6 if address.version == 6 else socket.AF_INET,
+                                      socket.SOCK_STREAM)
+            self.sock.settimeout(max(0.001, deadline - time.monotonic()))
+            self.sock.connect((str(address), target.port))
+
+    connection = NumericLoopbackConnection(str(address), target.port, timeout=remaining)
+    timer: threading.Timer | None = None
+    try:
+        connection.connect()
+        transport_socket = connection.sock
+        def expire() -> None:
+            if transport_socket is not None:
+                try:
+                    transport_socket.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+        timer = threading.Timer(max(0.0, deadline - time.monotonic()), expire)
+        timer.daemon = True
+        timer.start()
+        if stale_check():
+            return 'superseded', None
+        connection.request('POST', '/v1/context', body=body,
+                           headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        if 300 <= response.status < 400:
+            return 'redirect_rejected', None
+        if response.status in (401, 403):
+            return ('auth_rejected' if response.status == 401 else 'scope_rejected'), None
+        if response.getheader('Transfer-Encoding') is not None:
+            return 'malformed', None
+        if response.status != 200:
+            return 'unavailable', None
+        raw = bytearray()
+        while True:
+            if time.monotonic() >= deadline:
+                return 'timeout', None
+            chunk = response.read1(min(4096, MAX_WIRE_BYTES + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+            if len(raw) > MAX_WIRE_BYTES:
+                return 'oversized', None
+        if stale_check():
+            return 'superseded', None
+        if time.monotonic() >= deadline:
+            return 'timeout', None
+        data = json.loads(raw, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        return ('received', data) if type(data) is dict else ('malformed', None)
+    except HeaderLimit:
+        return 'oversized', None
+    except (ValueError, UnicodeError, RecursionError):
+        return 'malformed', None
+    except (OSError, http.client.HTTPException):
+        return ('timeout' if time.monotonic() >= deadline else 'unavailable'), None
+    finally:
+        if timer is not None:
+            timer.cancel()
+        connection.close()
+
+
+LIVE_MIO_AUXILIARY = LiveMioAuxiliary(knowledge_input_builder=_knowledge_private_input)
 DECISION_LOGGER = DecisionLogger(
     Path(str(os.environ.get("AZAZEL_DECISION_LOG_DIR", "")).strip() or str(AGENT_STATE_DIR / "decisions"))
 )
@@ -2319,8 +2482,7 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
     frame = MioSituationFrame.from_dict(payload)
     if not frame.evidence_refs:
         raise ValueError("no_stable_frame_evidence")
-    from azazel_edge_ai.mio_model_lane import query_context
-    knowledge_status, knowledge_response = query_context(source_context, deadline=deadline,
+    knowledge_status, knowledge_response = _query_knowledge_context(source_context, deadline=deadline,
         stale_check=lambda: bool(stale_check and stale_check()))
     metrics["knowledge_status"] = knowledge_status
     knowledge_kwargs = {}

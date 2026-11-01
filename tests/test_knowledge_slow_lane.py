@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from azazel_edge_ai.mio_model_lane import private_input, query_context
+from azazel_edge_ai.agent import _knowledge_private_input as private_input, _query_knowledge_context as query_context
 
 
 @contextmanager
@@ -170,7 +170,7 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
             assert near_status == 'received'
             assert 'T1595.002' not in [x['technique'] for x in near_response['threat_context']['attack_mapping']]
             from azazel_edge_ai.mio_live_auxiliary import LiveMioAuxiliary
-            auxiliary = LiveMioAuxiliary()
+            auxiliary = LiveMioAuxiliary(knowledge_input_builder=private_input)
             submitted = auxiliary.submit(event, score=50, factors=['synthetic factor'], risk_level='MEDIUM')
             ready_by = time.monotonic() + 2
             while auxiliary.snapshot()['status'] == 'queued' and time.monotonic() < ready_by:
@@ -260,7 +260,7 @@ def test_private_indicators_and_exact_alert_semantics(monkeypatch):
 
 def test_private_input_is_current_only_and_not_retained_when_disabled(monkeypatch):
     from azazel_edge_ai.mio_live_auxiliary import LiveMioAuxiliary
-    auxiliary = LiveMioAuxiliary()
+    auxiliary = LiveMioAuxiliary(knowledge_input_builder=private_input)
     event = {'normalized':{'event_type':'alert','sid':1,'src_ip':'203.0.113.7'},
              'defense':{'action':'observe'}}
     monkeypatch.setenv('AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED','1')
