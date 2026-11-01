@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any, Callable, Dict, Tuple
 
 from azazel_edge.audit import P0AuditLogger
@@ -43,6 +44,9 @@ class AIGovernance:
         if intent == 'advice':
             if source == 'suricata_eve' and risk_band in {'ambiguous', 'uncertain'}:
                 return True, 'ambiguous_suricata'
+            if (source == 'azazel_core' and risk_band in {'ambiguous', 'uncertain'}
+                    and context.get('candidate_scope') == 'mio_read_only_advisory'):
+                return True, 'ambiguous_azazel_core_mio_advisory'
             return False, 'advice_requires_ambiguous_suricata'
         if intent == 'candidate' and source == 'suricata_eve' and risk_band in {'ambiguous', 'uncertain'}:
             return True, 'ambiguous_suricata_candidate'
@@ -105,6 +109,22 @@ class AIGovernance:
                 if key in metadata:
                     value = metadata.get(key)
                     payload[key] = str(value)[:160] if value is not None else ''
+            numeric_limits = {
+                'request_count': 4, 'metered_request_count': 4,
+                'unknown_usage_request_count': 4, 'truncated_count': 4,
+                'prompt_tokens': 400_000, 'completion_tokens': 400_000,
+            }
+            for key, maximum in numeric_limits.items():
+                value = metadata.get(key)
+                if type(value) is int:
+                    payload[key] = max(0, min(value, maximum))
+            usage_status = metadata.get('usage_status')
+            if type(usage_status) is str and usage_status in {'unknown', 'complete', 'partial'}:
+                payload['usage_status'] = usage_status
+            for key in ('mio_state', 'outcome'):
+                value = metadata.get(key)
+                if type(value) is str and re.fullmatch(r'[A-Za-z0-9_-]{1,48}', value):
+                    payload[key] = value
         self.audit.log(
             'ai_assist',
             trace_id=str(trace_id or ''),

@@ -153,8 +153,15 @@ def test_a_failed_second_pass_still_explains_the_cores_decision(agent, monkeypat
 # --------------------------------------------- display and audit only
 
 def test_the_explanation_changes_nothing_the_agent_decides_or_records(tmp_path, agent, monkeypatch):
-    """Same event with and without the writer: the same advisory (score,
-    recommendation, state, second pass) and the same chain record."""
+    """The explanation writer cannot alter Edge decisions or core audit records."""
+
+    def without_observation_clock(value):
+        if isinstance(value, dict):
+            return {key: without_observation_clock(item) for key, item in value.items()
+                    if key not in {"first_seen", "last_seen"}}
+        if isinstance(value, list):
+            return [without_observation_clock(item) for item in value]
+        return value
 
     def run(with_writer: bool, sub: str) -> tuple:
         monkeypatch.setattr(agent_mod, "_LAST_RISK_SCORE", 0)
@@ -172,18 +179,38 @@ def test_the_explanation_changes_nothing_the_agent_decides_or_records(tmp_path, 
         finally:
             recorder.stop()
         advisory = json.loads(agent_mod.ADVISORY_PATH.read_text(encoding="utf-8"))
-        for key in ("ts", "trace_id"):
-            advisory.pop(key, None)
+        mio = advisory.pop("mio_auxiliary")
         # What the core decided and the P0 path records (not the record's own time stamps).
         keys = set(core_decisions.core_decision_payload(core_event("isolate"))[1]) | {"kind", "trace_id", "source"}
         records = [{k: v for k, v in r.items() if k in keys}
                    for r in _rows(chain) if r.get("kind") == "action_decision"]
-        return advisory, records
+        return advisory, records, mio
 
     with_writer = run(True, "a")
     without_writer = run(False, "b")
-    assert with_writer == without_writer
+    edge_owned_fields = (
+        "decision_pipeline", "risk_level", "risk_score", "attack_type", "recommendation",
+        "score_factors", "score_engine", "state_name", "user_state", "suricata_severity",
+        "suricata_sid", "second_pass", "correlation",
+    )
+    assert {key: without_observation_clock(with_writer[0][key]) for key in edge_owned_fields} == {
+        key: without_observation_clock(without_writer[0][key]) for key in edge_owned_fields
+    }
+    assert with_writer[1] == without_writer[1]
     assert with_writer[1] and with_writer[1][0]["action"] == "isolate"
+
+    # M.I.O. is an additive auxiliary envelope with its own generation and
+    # correlation fields; it is not part of the Edge decision record.
+    for envelope in (with_writer[2], without_writer[2]):
+        assert envelope["schema_version"] == "azazel.mio_auxiliary.v1"
+        assert envelope["authority"] == "read_only_advisory"
+        assert envelope["generation"]
+        assert {key: envelope["edge_event"][key] for key in ("action", "mode", "result", "trace_id")} == {
+            "action": "isolate", "mode": "dry_run", "result": "planned_not_applied",
+            "trace_id": core_event("isolate")["enforcement"]["trace_id"],
+        }
+        assert envelope["edge_event"]["unknown_fields"] is True
+    assert with_writer[2]["generation"] != without_writer[2]["generation"]
 
 
 def test_a_write_failure_never_stops_the_event_handling(tmp_path, monkeypatch, caplog):

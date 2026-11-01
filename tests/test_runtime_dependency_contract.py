@@ -82,6 +82,7 @@ def test_runtime_dependencies_cover_imports():
     module_to_requirement = {
         "PIL": "pillow",
         "yaml": "pyyaml",
+        "azazel_mio": "azazel-mio",
     }
     optional_modules = {
         # Optional Fabric integration extra (requirements/fabric.txt); guarded import.
@@ -104,4 +105,14 @@ def test_runtime_dependencies_cover_imports():
             missing.append((module, requirement))
 
     assert not missing, f"Missing runtime requirements for imports: {missing}"
+
+
+def test_runtime_mio_dependency_is_pinned_to_immutable_commit():
+    lines = [line.strip() for line in (ROOT / "requirements/runtime.txt").read_text().splitlines()
+             if line.strip() and not line.lstrip().startswith("#")]
+    pins = [line for line in lines if line.lower().startswith("azazel-mio ")]
+    assert pins == [
+        "azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@22fdb21b6a9af95e18755bec462c4244f16a8948"
+    ]
+    assert not any(token in pins[0] for token in ("@main", "@master", "@latest"))
 

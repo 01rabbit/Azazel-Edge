@@ -369,6 +369,91 @@
         updateEmptyNote(body.getAttribute('data-tier-active') || 'overview');
     }
 
+    function renderMioLiveAuxiliary(payload) {
+        payload = payload && typeof payload === 'object' ? payload : {};
+        var advisory = payload.advisory && typeof payload.advisory === 'object' ? payload.advisory : {};
+        var handoff = advisory.handoff && typeof advisory.handoff === 'object' ? advisory.handoff : {};
+        var hypotheses = Array.isArray(advisory.hypotheses) ? advisory.hypotheses : [];
+        var checks = Array.isArray(advisory.next_checks) ? advisory.next_checks
+            : (Array.isArray(handoff.check_next) ? handoff.check_next : []);
+        function safeList(items, field) {
+            return items.slice(0, 4).map(function (item) {
+                if (typeof item === 'string') return item.slice(0, 160);
+                if (item && typeof item === 'object') return String(item[field] || item.statement || item.text || '').slice(0, 160);
+                return '';
+            }).filter(Boolean).join(' · ') || 'None';
+        }
+        function put(id, value) {
+            var el = document.getElementById(id);
+            if (el) el.textContent = String(value || '-').slice(0, 500);
+        }
+        var recommendation = advisory.recommendation;
+        if (recommendation && typeof recommendation === 'object') {
+            recommendation = recommendation.summary || recommendation.recommended_action || '';
+        }
+        var edge = payload.edge_event && typeof payload.edge_event === 'object' ? payload.edge_event : {};
+        var binding = payload.handoff_binding && typeof payload.handoff_binding === 'object' ? payload.handoff_binding : {};
+        var sourceContext = payload.source_context && typeof payload.source_context === 'object' ? payload.source_context : {};
+        var bindingValid = binding.status === 'matched'
+            && typeof binding.edge_trace_id === 'string' && binding.edge_trace_id.length > 0
+            && typeof binding.edge_action === 'string' && binding.edge_action.length > 0
+            && typeof binding.edge_mode === 'string' && binding.edge_mode.length > 0
+            && typeof binding.edge_result === 'string' && binding.edge_result.length > 0
+            && String(binding.generation || '') === String(payload.generation || '')
+            && String(binding.event_key || '') === String(sourceContext.event_key || '')
+            && String(binding.edge_trace_id || '') === String(edge.trace_id || '')
+            && String(binding.edge_trace_id || '') === String(payload.trace_id || '')
+            && (binding.edge_action || null) === (edge.action || null)
+            && (binding.edge_mode || null) === (edge.mode || null)
+            && (binding.edge_result || null) === (edge.result || null)
+            && (!advisory.frame_id || String(binding.frame_id || '') === String(advisory.frame_id || ''))
+            && (!advisory.trace_id || String(binding.mio_trace_id || '') === String(advisory.trace_id || ''));
+        var actionBits = [edge.action, edge.result, edge.trace_id].filter(function (v) { return typeof v === 'string' && v; });
+        var completedAt = Date.parse(payload.completed_at || '');
+        var resultAge = Number.isFinite(completedAt) ? Math.max(0, (Date.now() - completedAt) / 1000) : Infinity;
+        var fresh = payload.is_current === true && payload.status === 'complete'
+            && resultAge <= Number(payload.max_age_seconds || 0);
+        var usable = fresh && bindingValid;
+        var suppressedMessage = 'M.I.O. details suppressed (stale result or correlation mismatch).';
+        put('mioLiveAuxStatus', usable ? (payload.status || 'unavailable') : ((payload.status || 'unavailable') + ' (details suppressed)'));
+        put('mioLiveAuxKnowledge', usable ? (payload.knowledge && payload.knowledge.status || 'not_provided') : 'suppressed');
+        put('mioLiveAuxFreshness', fresh ? 'Current generation' : 'Stale or not current');
+        put('mioLiveEdgeAction', actionBits.join(' / ') || (edge.unknown_fields ? 'Unknown (malformed fields omitted)' : 'Unknown'));
+        put('mioLiveAuxAdvice', usable
+            ? (recommendation || advisory.summary || handoff.summary || 'No advice available.')
+            : (payload.reason ? 'M.I.O. result suppressed: ' + String(payload.reason).slice(0, 120) : suppressedMessage));
+        put('mioLiveAuxHypotheses', usable ? safeList(hypotheses, 'statement') : 'Suppressed');
+        put('mioLiveAuxChecks', usable ? safeList(checks, 'check') : 'Suppressed');
+        put('mioLiveAuxHandoff', usable
+            ? (handoff.summary || handoff.operator_note || handoff.status || 'No handoff supplied.')
+            : suppressedMessage);
+        var model = payload.model_analysis && typeof payload.model_analysis === 'object' ? payload.model_analysis : {};
+        var modelCurrent = usable && (model.status === 'complete' || model.status === 'partial') && model.is_current === true
+            && String(model.fast_generation || '') === String(payload.generation || '');
+        put('mioModelStatus', modelCurrent ? (model.status || 'disabled') : 'suppressed');
+        put('mioModelFreshness', modelCurrent
+            ? (model.status === 'partial' ? 'Current fast generation; partial M.I.O. result' : 'Current fast generation')
+            : (model.status === 'skipped' ? 'Skipped' : 'Stale or no current model result'));
+        put('mioModelSummary', !modelCurrent ? 'Suppressed' : (model.summary || (model.status === 'partial'
+            ? 'Partial M.I.O. analysis; the shared reasoning cycle did not complete.'
+            : 'No model analysis available.')));
+        put('mioModelState', modelCurrent ? (model.mio_state || 'No validated M.I.O. state') : 'Suppressed');
+        var modelHypotheses = Array.isArray(model.hypotheses) ? model.hypotheses : [];
+        put('mioModelHypotheses', !modelCurrent ? 'Suppressed' : modelHypotheses.slice(0, 4).map(function (item) {
+            if (!item || typeof item !== 'object') return '';
+            var source = ' [M.I.O.-selected; fixed wording; unverified; frame refs are context only]';
+            return String(item.statement || '').slice(0, 240) + source;
+        }).filter(Boolean).join(' · ') || 'None');
+        put('mioModelChecks', modelCurrent ? safeList(Array.isArray(model.next_checks) ? model.next_checks : [], 'check') : 'Suppressed');
+        var measurements = [model.model || 'model unknown', Number(model.duration_ms || 0) + ' ms',
+            'load ' + Number(model.load_duration_ms || 0) + ' ms', 'tokens ' + Number(model.prompt_tokens || 0) + '/' + Number(model.completion_tokens || 0),
+            'requests ' + Number(model.request_count || 0),
+            'metered ' + Number(model.metered_request_count || 0) + '/' + Number(model.request_count || 0),
+            'truncated ' + Number(model.truncated_count || 0), 'usage ' + (model.usage_status || 'unknown'),
+            model.outcome || model.status || 'unknown'].join(' · ');
+        put('mioModelMetrics', modelCurrent ? measurements : 'Suppressed');
+    }
+
     /* ------------------------------------------------------------------------
        DECISION CONSOLE (bespoke OVERVIEW) — populated from live payloads.
        All writes are textContent only (no innerHTML); absent data -> em-dash.
@@ -1621,6 +1706,7 @@
             lastDetail = ev.detail || {};
             syncTopbarHeight(); // attention banners can change topbar height without a resize
             try { renderPipeline(lastDetail); } catch (e) { /* progressive enhancement */ }
+            try { renderMioLiveAuxiliary(lastDetail.summary && lastDetail.summary.mio_auxiliary); } catch (e) { /* read-only panel */ }
             renderActiveTier();
         });
     }
@@ -1643,6 +1729,7 @@
             managedTalkerRows: managedTalkerRows, tr: tr, rovingIndex: rovingIndex,
             // Renderers, for the DOM harness in tests/sentinel_console_logic.test.js.
             renderPipeline: renderPipeline, renderOverviewConsole: renderOverviewConsole,
+            renderMioLiveAuxiliary: renderMioLiveAuxiliary,
             renderOperationsConsole: renderOperationsConsole, renderEvidenceConsole: renderEvidenceConsole,
             renderSystemConsole: renderSystemConsole, setTier: setTier, setOp: setOp
         };

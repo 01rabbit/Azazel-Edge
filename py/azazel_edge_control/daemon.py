@@ -84,7 +84,7 @@ AGENT_SNAPSHOT_KEYS = (
     "advisory_epoch", "user_state", "recommendation", "reasons", "evidence",
     "suricata_critical", "suricata_warning", "suricata_info",
     "deferred_recent", "deferred_lifetime_at_snapshot",
-    "llm", "ops_coach", "decision_pipeline", "second_pass", "llm_metrics", "internal", "attack",
+    "llm", "ops_coach", "decision_pipeline", "second_pass", "llm_metrics", "internal", "attack", "mio_auxiliary",
 )
 AGENT_SNAPSHOT_MAX_BYTES = 1024 * 1024
 SCRIPT_ROOT = PROJECT_ROOT / "py" / "azazel_edge_control" / "scripts"
@@ -1956,6 +1956,7 @@ AGENT_SNAPSHOT_VALIDATORS = {
     "llm_metrics": _valid_object,
     "internal": _valid_object,
     "attack": _valid_object,
+    "mio_auxiliary": _valid_object,
 }
 _AGENT_SNAPSHOT_DROPPED = {"total": 0, "last": ""}
 
