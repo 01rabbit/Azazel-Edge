@@ -351,6 +351,31 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         advisory: {trace_id: 'mio-trace-6', hypotheses: [], next_checks: []}});
     eq(m.$('mioLiveAuxKnowledge').textContent, 'not_queried', 'missing Knowledge is explicit');
     eq(m.$('mioLiveScoreComparison').textContent, 'Edge 35 / M.I.O. 35 · match · comparison only', 'comparison remains available without model analysis');
+    ['pending', 'unavailable', 'degraded'].forEach(function (status) {
+        m.S.renderMioLiveAuxiliary({status: status, is_current: false,
+            edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+                status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35, mio_score: 35, matches: true}});
+        eq(m.$('mioLiveScoreComparison').textContent, 'Suppressed (M.I.O. ' + status + ')', status + ' is distinct from stale/correlation suppression');
+    });
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
+        edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
+        source_context: {event_key: 'event-6'},
+        handoff_binding: {status: 'matched', generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35}});
+    eq(m.$('mioLiveScoreComparison').textContent, 'Suppressed (invalid comparison)', 'complete comparison requires score and match fields');
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
+        edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
+        source_context: {event_key: 'event-6'},
+        handoff_binding: {status: 'matched', generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
+        advisory: {trace_id: 'mio-trace-6'},
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '5', trace_id: 'edge-trace-5', edge_score: 35, mio_score: 35, matches: true}});
+    eq(m.$('mioLiveScoreComparison').textContent, 'Suppressed (comparison generation/trace mismatch)', 'wrong comparison binding is distinguished');
     const mismatched = {status: 'complete', generation: '5', trace_id: 'edge-trace-5', is_current: true,
         completed_at: new Date(Date.now() - 1000).toISOString(), max_age_seconds: 10,
         edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
@@ -363,7 +388,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             handoff: {summary: 'wrong event handoff'}}};
     m.S.renderMioLiveAuxiliary(mismatched);
     eq(m.$('mioLiveAuxStatus').textContent, 'complete (details suppressed)', 'mismatched result status marked suppressed');
-    eq(m.$('mioLiveScoreComparison').textContent, 'Suppressed (stale or uncorrelated)', 'mismatched comparison suppressed');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Suppressed (M.I.O. correlation mismatch)', 'mismatched M.I.O. binding is identified');
     eq(m.$('mioLiveAuxAdvice').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'mismatched recommendation suppressed');
     eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'mismatched hypotheses suppressed');
     eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'mismatched checks suppressed');
