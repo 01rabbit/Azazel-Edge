@@ -27,6 +27,14 @@ typed result reports Knowledge outcome `not_queried`. Results carry source, gene
 trace, provenance, typed Knowledge status, and `read_only_advisory` authority.
 They are not used for action selection, enforcement, or arbitration.
 
+The same event advisory may carry the scorer's optional M.I.O. fast-assessment
+shadow result as `edge_score_comparison`. It is copied into the live panel only
+when the scorer submission's generation and trace match the current auxiliary
+result. The panel labels it comparison-only and suppresses it with stale or
+uncorrelated M.I.O. results. Edge's score, factors, risk label, recommendation,
+and action remain sourced only from `TacticalScorer`; the shadow score is not
+consumed by a decision or enforcement path.
+
 Completed async results are written into the agent snapshot and admitted by
 the control daemon's typed snapshot overlay to the dashboard bundle. The
 dashboard's M.I.O. live auxiliary panel displays status, Knowledge provenance,

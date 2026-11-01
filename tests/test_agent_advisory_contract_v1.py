@@ -7,11 +7,15 @@ from azazel_edge_ai import agent
 
 
 class _FixedScorer:
-    def score_with_features(self, features: dict) -> tuple[int, list[str]]:
-        return 72, [
-            f"sid={features['suricata_sid']}",
-            f"port={features['target_port']}",
-        ]
+    class Result:
+        def __init__(self, features: dict) -> None:
+            self.score = 72
+            self.factors = [f"sid={features['suricata_sid']}", f"port={features['target_port']}"]
+            self.shadow = {"status": "complete", "score": 72, "matches": True,
+                           "factors": ["severity=3", "threat_class=scan(36)"]}
+
+    def score(self, features: dict) -> "_FixedScorer.Result":
+        return self.Result(features)
 
 
 class _FixedDecisionLayers:
@@ -67,6 +71,10 @@ class AgentAdvisoryContractV1Tests(unittest.TestCase):
             advisory = agent._build_advisory(event)
 
         self.assertEqual(advisory["risk_score"], 72)
+        self.assertEqual(advisory["score_factors"], ["sid=2402000", "port=443"])
+        self.assertEqual(advisory["mio_score_comparison"]["edge_score"], 72)
+        self.assertEqual(advisory["mio_score_comparison"]["mio_score"], 72)
+        self.assertTrue(advisory["mio_score_comparison"]["matches"])
         self.assertEqual(advisory["trace_id"], "trace-deadbeef")
         self.assertEqual(advisory["risk_level"], "HIGH")
         self.assertEqual(advisory["attack_type"], "ET SCAN suspicious inbound")

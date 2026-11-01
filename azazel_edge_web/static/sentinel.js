@@ -418,6 +418,29 @@
         put('mioLiveAuxStatus', usable ? (payload.status || 'unavailable') : ((payload.status || 'unavailable') + ' (details suppressed)'));
         put('mioLiveAuxKnowledge', usable ? (payload.knowledge && payload.knowledge.status || 'not_provided') : 'suppressed');
         put('mioLiveAuxFreshness', fresh ? 'Current generation' : 'Stale or not current');
+        var comparison = payload.edge_score_comparison && typeof payload.edge_score_comparison === 'object'
+            ? payload.edge_score_comparison : {};
+        var comparisonValid = usable
+            && comparison.schema_version === 'azazel.edge_score_comparison.v1'
+            && comparison.authority === 'comparison_only'
+            && ['complete', 'unavailable', 'degraded'].indexOf(comparison.status) >= 0
+            && String(comparison.generation || '') === String(payload.generation || '')
+            && String(comparison.generation || '').length > 0
+            && String(comparison.trace_id || '') === String(payload.trace_id || '')
+            && String(comparison.trace_id || '').length > 0
+            && Number.isInteger(comparison.edge_score) && comparison.edge_score >= 0 && comparison.edge_score <= 100;
+        var comparisonText = 'Unavailable';
+        if (comparisonValid && comparison.status === 'complete'
+            && Number.isInteger(comparison.mio_score) && comparison.mio_score >= 0 && comparison.mio_score <= 100
+            && typeof comparison.matches === 'boolean') {
+            comparisonText = 'Edge ' + comparison.edge_score + ' / M.I.O. ' + comparison.mio_score
+                + ' · ' + (comparison.matches ? 'match' : 'different') + ' · comparison only';
+        } else if (comparisonValid) {
+            comparisonText = comparison.status + ' · comparison only';
+        } else if (payload.edge_score_comparison) {
+            comparisonText = usable ? 'Suppressed (invalid comparison)' : 'Suppressed (stale or uncorrelated)';
+        }
+        put('mioLiveScoreComparison', comparisonText);
         put('mioLiveEdgeAction', actionBits.join(' / ') || (edge.unknown_fields ? 'Unknown (malformed fields omitted)' : 'Unknown'));
         put('mioLiveAuxAdvice', usable
             ? (recommendation || advisory.summary || handoff.summary || 'No advice available.')

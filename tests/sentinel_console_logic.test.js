@@ -293,7 +293,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
 (function () {
     const m = mount();
     ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction',
-     'mioLiveAuxAdvice','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff',
+     'mioLiveAuxAdvice','mioLiveScoreComparison','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff',
      'mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics'].forEach(function (id) {
         const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el);
     });
@@ -304,7 +304,10 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', generation: '5',
             event_key: 'event-5', edge_trace_id: 'edge-trace-5', edge_action: 'notify',
             edge_result: 'planned_not_applied', edge_mode: 'dry_run', mio_trace_id: 'mio-trace-5', frame_id: 'frame-5'},
-        generation: '5', model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
+        generation: '5', edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1',
+            authority: 'comparison_only', status: 'complete', generation: '5', trace_id: 'edge-trace-5',
+            edge_score: 72, mio_score: 72, matches: true},
+        model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
             hypotheses: [{statement: 'A hostile-activity explanation remains possible, but this frame does not establish it.', verification: 'model_proposed_unverified', source: 'mio_validated_alternative', frame_refs: ['suricata_sid:42']}],
             next_checks: ['check the observed event'], model: 'qwen:2b', duration_ms: 900, prompt_tokens: 20, completion_tokens: 12},
         advisory: {trace_id: 'mio-trace-5', frame_id: 'frame-5', recommendation: '<img src=x onerror=alert(1)>',
@@ -313,6 +316,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveAuxStatus').textContent, 'complete', 'MIO status rendered');
     eq(m.$('mioLiveAuxKnowledge').textContent, 'not_provided', 'Knowledge provenance rendered');
     eq(m.$('mioLiveAuxFreshness').textContent, 'Current generation', 'fresh completion is current');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 72 / M.I.O. 72 · match · comparison only', 'score comparison is separately labeled');
     eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-5', 'Edge action separated');
     eq(m.$('mioLiveAuxAdvice').textContent, '<img src=x onerror=alert(1)>', 'MIO advice rendered as text');
     eq(m.$('mioLiveAuxHypotheses').textContent, '<script>hypothesis</script>', 'hypothesis rendered as text');
@@ -326,8 +330,22 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         'fixed MIO alternative rendered with context-only frame provenance');
     eq(m.$('mioModelChecks').textContent, 'check the observed event', 'validated model checks rendered as text');
     ok(m.$('mioModelMetrics').textContent.indexOf('qwen:2b') >= 0, 'current model metrics rendered');
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
+        knowledge: {status: 'not_queried'},
+        edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
+        source_context: {event_key: 'event-6'},
+        handoff_binding: {status: 'matched', generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35, mio_score: 35, matches: true},
+        advisory: {trace_id: 'mio-trace-6', hypotheses: [], next_checks: []}});
+    eq(m.$('mioLiveAuxKnowledge').textContent, 'not_queried', 'missing Knowledge is explicit');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 35 / M.I.O. 35 · match · comparison only', 'comparison remains available without model analysis');
     const mismatched = {status: 'complete', generation: '5', trace_id: 'edge-trace-5', is_current: true,
         completed_at: new Date(Date.now() - 1000).toISOString(), max_age_seconds: 10,
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '4', trace_id: 'edge-trace-4', edge_score: 72, mio_score: 75, matches: false},
         source_context: {event_key: 'event-5'}, edge_event: {action: 'notify', mode: 'dry_run', result: 'applied', trace_id: 'edge-trace-5'},
         handoff_binding: {status: 'matched', generation: '5', event_key: 'event-5',
             edge_trace_id: 'edge-trace-5', edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
@@ -336,6 +354,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             handoff: {summary: 'wrong event handoff'}}};
     m.S.renderMioLiveAuxiliary(mismatched);
     eq(m.$('mioLiveAuxStatus').textContent, 'complete (details suppressed)', 'mismatched result status marked suppressed');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Suppressed (stale or uncorrelated)', 'mismatched comparison suppressed');
     eq(m.$('mioLiveAuxAdvice').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'mismatched recommendation suppressed');
     eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'mismatched hypotheses suppressed');
     eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'mismatched checks suppressed');
