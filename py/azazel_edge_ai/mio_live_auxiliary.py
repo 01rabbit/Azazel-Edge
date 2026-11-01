@@ -273,6 +273,7 @@ class LiveMioAuxiliary:
         self._result_completed_monotonic: float | None = None
         self._result_completed_at = ""
         self._frame_snapshot: dict[str, Any] | None = None
+        self._knowledge_input: dict[str, Any] | None = None
         self._core: Any = None
         self._frame_type: Any = None
         self._knowledge_statuses: frozenset[str] = frozenset()
@@ -305,6 +306,13 @@ class LiveMioAuxiliary:
             if str(generation) != str(self._generation) or self._frame_snapshot is None:
                 return None
             return json.loads(json.dumps(self._frame_snapshot))
+
+    def knowledge_input_snapshot(self, generation: Any) -> dict[str, Any] | None:
+        """Private loopback-only query input, separate from public snapshots."""
+        with self._lock:
+            if str(generation) != str(self._generation) or self._knowledge_input is None:
+                return None
+            return json.loads(json.dumps(self._knowledge_input))
 
     def submit(self, event: Mapping[str, Any], *, score: int, factors: list[str], risk_level: str) -> dict[str, Any]:
         """Copy bounded inputs and enqueue without waiting for M.I.O."""
@@ -340,6 +348,8 @@ class LiveMioAuxiliary:
             self._generation += 1
             generation = self._generation
             self._frame_snapshot = None
+            from azazel_edge_ai.mio_model_lane import private_input
+            self._knowledge_input = private_input(event, snapshot["_source_context"])
             self._result_completed_monotonic = None
             self._result_completed_at = ""
             self._result_generation = generation

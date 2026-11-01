@@ -22,7 +22,7 @@ import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Mapping
 
 PY_ROOT = Path(__file__).resolve().parents[1]
 if str(PY_ROOT) not in sys.path:
@@ -2258,7 +2258,8 @@ def _mio_validation_rejection_code(state: Any) -> str:
 
 
 def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
-                            stale_check: Callable[[], bool] | None = None) -> Dict[str, Any]:
+                            stale_check: Callable[[], bool] | None = None,
+                            source_context: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     """Run the exact shared reasoning path over the accepted frame."""
     from azazel_mio.assistant import AssistantCore
     from azazel_mio.contracts import MioSituationFrame
@@ -2318,14 +2319,25 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
     frame = MioSituationFrame.from_dict(payload)
     if not frame.evidence_refs:
         raise ValueError("no_stable_frame_evidence")
+    from azazel_edge_ai.mio_model_lane import query_context
+    knowledge_status, knowledge_response = query_context(source_context, deadline=deadline,
+        stale_check=lambda: bool(stale_check and stale_check()))
+    metrics["knowledge_status"] = knowledge_status
+    knowledge_kwargs = {}
+    if knowledge_response is not None:
+        from azazel_mio.assistant import KnowledgeContextResponseAdvisory
+        knowledge_kwargs["knowledge_context_response"] = KnowledgeContextResponseAdvisory(knowledge_response)
     core = AssistantCore(model=StructuredTransport())
     try:
         assistance = core.explain(frame, now=datetime.now(timezone.utc).isoformat(),
-            knowledge_attempted=False,
+            knowledge_attempted=False, **knowledge_kwargs,
             stale_check=lambda: time.monotonic() >= deadline or bool(stale_check and stale_check()))
         if time.monotonic() >= deadline:
             raise TimeoutError("deadline_exceeded")
         out = assistance.to_dict()
+        if knowledge_response is not None:
+            metrics["knowledge_status"] = ("projected" if out.get("knowledge_context_response_advisory")
+                                           is not None else "rejected")
     except Exception as exc:
         reason = "deadline_exceeded" if isinstance(exc, TimeoutError) else "model_error"
         raise MioModelFailure(reason, metrics) from None
@@ -2426,6 +2438,8 @@ def _audit_mio_model_result(trace_id: str, result: Dict[str, Any]) -> None:
                 "completion_tokens": max(0, min(int(result.get("completion_tokens") or 0), 400_000)),
                 "usage_status": str(result.get("usage_status") or "unknown")[:16],
                 "error": "" if status == "complete" else str(result.get("reason") or status)[:64]}
+    if "knowledge_status" in result:
+        metadata["knowledge_status"] = bounded_usage(result)["knowledge_status"]
     try:
         governance.record_structured_result(
             trace_id=trace_id, source=MIO_MODEL_GOVERNANCE_SOURCE,
@@ -2441,12 +2455,16 @@ def _audit_mio_model_result(trace_id: str, result: Dict[str, Any]) -> None:
 
 def _governed_mio_model_analyze(payload: Dict[str, Any], remaining_seconds: float,
                                 stale_check: Callable[[], bool] | None = None,
-                                source_trace_id: str = "") -> Dict[str, Any]:
+                                source_trace_id: str = "",
+                                source_context: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     trace_id = str(payload.get("trace_id") or "")[:96]
     audit_trace_id = str(source_trace_id or trace_id)[:96]
     try:
-        result = (_analyze_mio_fast_result(payload, remaining_seconds, stale_check)
-                  if stale_check is not None else _analyze_mio_fast_result(payload, remaining_seconds))
+        if source_context is not None:
+            result = _analyze_mio_fast_result(payload, remaining_seconds, stale_check, source_context)
+        else:
+            result = (_analyze_mio_fast_result(payload, remaining_seconds, stale_check)
+                      if stale_check is not None else _analyze_mio_fast_result(payload, remaining_seconds))
     except MioModelFailure as exc:
         try:
             _audit_mio_model_result(audit_trace_id, {**exc.metrics, "status": "degraded", "reason": exc.reason})
@@ -2502,6 +2520,7 @@ def _submit_governed_mio_model(advisory: Dict[str, Any], mio_request: Dict[str, 
 LIVE_MIO_MODEL_LANE = LiveMioModelLane(enabled=MIO_MODEL_ENABLED, analyze=_governed_mio_model_analyze,
                                        fast_snapshot=LIVE_MIO_AUXILIARY.snapshot,
                                        frame_snapshot=LIVE_MIO_AUXILIARY.frame_snapshot,
+                                       knowledge_input_snapshot=LIVE_MIO_AUXILIARY.knowledge_input_snapshot,
                                        authorize=_authorize_mio_model_event)
 
 
