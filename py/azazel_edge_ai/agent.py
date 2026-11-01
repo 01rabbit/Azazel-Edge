@@ -1817,7 +1817,7 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
         "status": shadow_status,
         "edge_score": risk_score,
         "mio_score": shadow_score if shadow_status == "complete" else None,
-        "matches": shadow.get("matches") if type(shadow.get("matches")) is bool else None,
+        "matches": shadow.get("matches") if shadow_status == "complete" and type(shadow.get("matches")) is bool else None,
         "mio_factors": safe_shadow_factors if shadow_status == "complete" else [],
     }
 
