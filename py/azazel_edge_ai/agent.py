@@ -2502,7 +2502,10 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
             metrics["knowledge_status"] = ("projected" if out.get("knowledge_context_response_advisory")
                                            is not None else "rejected")
     except Exception as exc:
-        reason = "deadline_exceeded" if isinstance(exc, TimeoutError) else "model_error"
+        reason = ("superseded" if stale_check and stale_check() else
+                  "deadline_exceeded" if isinstance(exc, TimeoutError) else "model_error")
+        if reason == "superseded":
+            metrics["knowledge_status"] = "superseded"
         raise MioModelFailure(reason, metrics) from None
     model_accepted = out.get("generation_method") == "model"
     state = str(out.get("state") or "")[:48]
@@ -2540,7 +2543,10 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
         # Fixed diagnostic enum only. Never forward ReasoningOutcome.errors or
         # trace details: those can contain model authored identifiers.
         "validation_rejection": _mio_validation_rejection_code(state),
-        "frame_id": frame.frame_id, "trace_id": frame.trace_id}
+        "frame_id": frame.frame_id, "trace_id": frame.trace_id,
+        # The model lane applies a bounded receipt projection and binds this
+        # typed MIO result to its current fast generation before persistence.
+        "knowledge_context_response_advisory": out.get("knowledge_context_response_advisory")}
 
 
 def _authorize_mio_model_event(advisory: Dict[str, Any]) -> tuple[bool, str]:

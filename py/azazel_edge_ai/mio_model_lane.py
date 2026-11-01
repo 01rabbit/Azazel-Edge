@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import inspect
+import math
 import queue
+import re
 import threading
 import time
 from typing import Any, Callable, Mapping
@@ -37,6 +39,38 @@ _ROLE_TEXT = {
     "unresolved": "The frame is insufficient to distinguish competing explanations.",
 }
 _VALIDATION_REJECTIONS = frozenset({"validation_rejected"})
+
+
+def _project_knowledge_advisory(value: Any, *, generation: Any, trace_id: str) -> dict[str, Any] | None:
+    """Whitelist MIO #18's bounded, unverified result for the operator view."""
+    if type(value) is not dict:
+        return None
+    if (value.get("kind") != "knowledge_context_response_advisory"
+            or value.get("source_kind") != "knowledge_context_response"
+            or value.get("claim_status") != "reported_unverified"
+            or value.get("trust") != "unverified_advisory_only"):
+        return None
+    groups = value.get("source_groups")
+    techniques = value.get("attack_techniques")
+    freshness = value.get("source_freshness")
+    for items, cap, pattern in ((groups, 16, r"[a-z][a-z0-9_-]{0,31}"),
+                                (techniques, 32, r"T\d{4}(?:\.\d{3})?")):
+        if type(items) is not list or len(items) > cap or any(
+                type(item) is not str or not re.fullmatch(pattern, item) for item in items):
+            return None
+    if type(freshness) is not dict or set(freshness) - {"oldest_feed_days", "attack_version"}:
+        return None
+    days = freshness.get("oldest_feed_days")
+    version = freshness.get("attack_version")
+    if days is not None and (type(days) not in (int, float) or not math.isfinite(days) or not 0 <= days <= 36500):
+        return None
+    if version is not None and (type(version) is not str or not re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){0,2}", version)):
+        return None
+    return {"schema_version": "azazel.edge_knowledge_advisory.v1",
+            "status": "complete", "authority": "read_only_advisory",
+            "generation": str(generation), "trace_id": trace_id,
+            "claim_status": "reported_unverified", "source_groups": list(groups),
+            "attack_techniques": list(techniques), "source_freshness": dict(freshness)}
 
 
 def bounded_usage(values: Mapping[str, Any]) -> dict[str, Any]:
@@ -127,7 +161,28 @@ def _empty(status: str, reason: str = "") -> dict[str, Any]:
         "frame_id": "",
         "frame_generation": "",
         "validation_rejection": "",
+        "knowledge_status": "not_queried",
+        "knowledge_receipt": None,
+        "knowledge_receipt_status": "not_queried",
     }
+
+
+def _receipt_status(status: Any) -> str:
+    """Collapse private transport outcomes to the operator's safe status set."""
+    if status in {"projected", "received"}:
+        return "received"
+    if status in {"rejected", "auth_rejected", "scope_rejected", "redirect_rejected",
+                  "malformed", "oversized"}:
+        return "rejected"
+    if status in {"superseded"}:
+        return "stale"
+    if status == "timeout":
+        return "timeout"
+    if status in {None, "", "disabled", "not_queried", "not_provided"}:
+        return "not_queried"
+    if status in KNOWLEDGE_STATUSES:
+        return "unavailable"
+    return "unavailable"
 
 
 def _fast_payload(result: Mapping[str, Any]) -> dict[str, Any]:
@@ -185,6 +240,12 @@ class LiveMioModelLane:
             result["diagnostic_count"] = len(self._diagnostics)
             result["is_current"] = (result.get("status") in {"complete", "partial"}
                 and str(result.get("generation") or "") == str(self._generation))
+            receipt = result.get("knowledge_receipt")
+            result["knowledge_receipt_current"] = bool(
+                isinstance(receipt, Mapping)
+                and str(result.get("generation") or "") == str(self._generation)
+                and receipt.get("generation") == result.get("fast_generation")
+                and receipt.get("trace_id") == result.get("trace_id"))
             return result
 
     def diagnostics(self) -> list[dict[str, Any]]:
@@ -356,20 +417,43 @@ class LiveMioModelLane:
                             "validation_rejection": validation_rejection,
                             "knowledge_status": model_result.get("knowledge_status") if
                                 type(model_result.get("knowledge_status")) is str and
-                                model_result.get("knowledge_status") in KNOWLEDGE_STATUSES else "unavailable",
+                                model_result.get("knowledge_status") in KNOWLEDGE_STATUSES else
+                                "not_queried" if model_result.get("knowledge_status") is None else "unavailable",
                         }
                         if model_result.get("frame_id") != frame_payload.get("frame_id") or model_result.get("trace_id") != frame_payload.get("trace_id"):
                             result = _empty("degraded", "frame_binding_rejected")
+                            result["knowledge_status"] = "rejected"
+                        else:
+                            receipt = _project_knowledge_advisory(
+                                model_result.get("knowledge_context_response_advisory"),
+                                generation=fast_generation,
+                                trace_id=str(frame_payload.get("trace_id") or ""))
+                            if receipt is not None and result["knowledge_status"] == "projected":
+                                result["knowledge_receipt"] = receipt
+                            elif result["knowledge_status"] == "projected":
+                                result["knowledge_status"] = "rejected"
                     except (TimeoutError, MioModelFailure) as exc:
                         elapsed = max(0, int((time.monotonic() - started) * 1000))
-                        result = _empty("degraded", exc.reason if isinstance(exc, MioModelFailure) else "deadline_exceeded")
+                        reason = (exc.reason if isinstance(exc, MioModelFailure) else
+                                  "superseded" if str(exc) == "superseded" else "deadline_exceeded")
+                        result = _empty("degraded", reason)
                         if isinstance(exc, MioModelFailure):
                             result.update(exc.metrics)
+                        elif reason == "superseded":
+                            result["knowledge_status"] = "superseded"
                         result["duration_ms"] = min(elapsed, 600_000)
                     except Exception:
                         elapsed = max(0, int((time.monotonic() - started) * 1000))
                         result = _empty("degraded", "model_error")
                         result["duration_ms"] = min(elapsed, 600_000)
+                result["knowledge_receipt_status"] = _receipt_status(result.get("knowledge_status"))
+                if result.get("knowledge_receipt") is not None and (
+                        result.get("knowledge_receipt", {}).get("generation") != fast_generation
+                        or result.get("knowledge_receipt", {}).get("trace_id") != str(fast.get("trace_id") or "")):
+                    result["knowledge_receipt"] = None
+                    result["knowledge_receipt_status"] = "stale"
+                if result["knowledge_receipt_status"] == "received" and result.get("knowledge_receipt") is None:
+                    result["knowledge_receipt_status"] = "rejected"
                 with self._lock:
                     if generation == self._generation:
                         result["generation"] = str(generation)

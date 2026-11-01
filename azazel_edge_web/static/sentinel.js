@@ -418,6 +418,38 @@
         put('mioLiveAuxStatus', usable ? (payload.status || 'unavailable') : ((payload.status || 'unavailable') + ' (details suppressed)'));
         put('mioLiveAuxKnowledge', usable ? (payload.knowledge && payload.knowledge.status || 'not_provided') : 'suppressed');
         put('mioLiveAuxFreshness', fresh ? 'Current generation' : 'Stale or not current');
+        var model = payload.model_analysis && typeof payload.model_analysis === 'object' ? payload.model_analysis : {};
+        var receipt = model.knowledge_receipt;
+        var slowReceiptCurrent = usable && model.knowledge_receipt_current === true
+            && String(model.fast_generation || '') === String(payload.generation || '')
+            && String(model.trace_id || '') === String(payload.trace_id || '')
+            && model.knowledge_receipt_status === 'received';
+        var receiptStatus = model.knowledge_receipt_status;
+        if (!slowReceiptCurrent && receipt) receiptStatus = 'stale';
+        var receiptLabels = {not_queried: 'Not queried', unavailable: 'Unavailable', rejected: 'Rejected',
+            stale: 'Stale', timeout: 'Timeout', received: 'Received'};
+        var receiptText = receiptLabels[receiptStatus] || 'Unavailable';
+        if (receipt) {
+            var receiptValid = receipt.schema_version === 'azazel.edge_knowledge_advisory.v1'
+                && receipt.status === 'complete' && receipt.authority === 'read_only_advisory'
+                && receipt.claim_status === 'reported_unverified'
+                && receipt.generation === payload.generation && receipt.trace_id === payload.trace_id
+                && Array.isArray(receipt.source_groups) && receipt.source_groups.length <= 16
+                && receipt.source_groups.every(function (v) { return typeof v === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(v); })
+                && Array.isArray(receipt.attack_techniques) && receipt.attack_techniques.length <= 32
+                && receipt.attack_techniques.every(function (v) { return typeof v === 'string' && /^T[0-9]{4}(\.[0-9]{3})?$/.test(v); });
+            var sf = receipt.source_freshness;
+            receiptValid = receiptValid && sf && typeof sf === 'object' && !Array.isArray(sf)
+                && Object.keys(sf).every(function (k) { return k === 'oldest_feed_days' || k === 'attack_version'; })
+                && (sf.oldest_feed_days == null || (typeof sf.oldest_feed_days === 'number' && Number.isFinite(sf.oldest_feed_days) && sf.oldest_feed_days >= 0 && sf.oldest_feed_days <= 36500))
+                && (sf.attack_version == null || (typeof sf.attack_version === 'string' && /^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$/.test(sf.attack_version)));
+            receiptText = slowReceiptCurrent && receiptValid
+                ? 'reported_unverified · advisory only · sources: ' + receipt.source_groups.join(', ')
+                    + ' · ATT&CK: ' + receipt.attack_techniques.join(', ')
+                    + ' · freshness: ' + JSON.stringify(sf)
+                : 'Suppressed';
+        }
+        put('mioLiveKnowledgeAdvisory', receiptText, 2048);
         put('mioLiveEdgeAction', actionBits.join(' / ') || (edge.unknown_fields ? 'Unknown (malformed fields omitted)' : 'Unknown'));
         put('mioLiveAuxAdvice', usable
             ? (recommendation || advisory.summary || handoff.summary || 'No advice available.')
@@ -427,7 +459,6 @@
         put('mioLiveAuxHandoff', usable
             ? (handoff.summary || handoff.operator_note || handoff.status || 'No handoff supplied.')
             : suppressedMessage);
-        var model = payload.model_analysis && typeof payload.model_analysis === 'object' ? payload.model_analysis : {};
         var modelCurrent = usable && (model.status === 'complete' || model.status === 'partial') && model.is_current === true
             && String(model.fast_generation || '') === String(payload.generation || '');
         put('mioModelStatus', modelCurrent ? (model.status || 'disabled') : 'suppressed');

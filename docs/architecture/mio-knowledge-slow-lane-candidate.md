@@ -42,13 +42,15 @@ a newer generation.
 The raw response enters only MIO #18's typed advisory projection. That core
 retains public ATT&CK identifiers, bounded source-group labels and freshness, marks them
 `reported_unverified`, and excludes IOC values, source prose, scores and
-recommendations. This candidate publishes only a bounded Knowledge status
-(`projected`, `rejected`, `timeout`, authentication/scope rejection, transport
-failure, supersession or disabled configuration); the raw response is not
-published. Although the pinned MIO API now supports source groups, Edge/UI
-does not surface those labels or the projected ATT&CK/freshness sidecar.
-Existing Edge decisions, tactical scores and frame evidence remain
-unchanged. The deterministic, DPI, arbiter and action paths make no calls.
+recommendations. The slow model lane publishes a bounded receipt only when this
+typed advisory was returned and its frame trace and accepted fast generation
+still match. It carries the core's bounded source groups, ATT&CK identifiers,
+and freshness, with explicit `read_only_advisory` authority. The UI reports
+`not_queried`, `unavailable`, `rejected`, `stale`, `timeout`, or `received`;
+failure, cancellation, stale work, and foreign bindings cannot display a
+positive receipt. Raw response data is not published. Existing Edge decisions,
+tactical scores and frame evidence remain unchanged. The deterministic, DPI,
+arbiter and action paths make no calls.
 Knowledge's own API may write its normal query audit in its local store.
 
 `tests/test_knowledge_slow_lane.py` runs transport boundary tests by default.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from azazel_edge_ai.mio_model_lane import LiveMioModelLane
 
 
@@ -40,6 +42,119 @@ def test_model_lane_keeps_queue_full_degraded_when_both_nonblocking_puts_fail(mo
     assert result["reason"] == "queue_full"
     assert result["generation"] == "1"
     assert result["trace_id"] == "trace-abc"
+
+
+def _knowledge_advisory():
+    return {
+        "kind": "knowledge_context_response_advisory",
+        "source_kind": "knowledge_context_response",
+        "claim_status": "reported_unverified",
+        "trust": "unverified_advisory_only",
+        "source_groups": ["abusech"], "attack_techniques": ["T1059.001"],
+        "source_freshness": {"oldest_feed_days": 2},
+        "ioc_matches": ["must not escape"],
+    }
+
+
+def test_current_slow_context_result_projects_only_bounded_receipt_and_preserves_fast_output():
+    fast = _fast()
+    before = dict(fast)
+    lane = LiveMioModelLane(enabled=True, analyze=lambda payload, remaining: {
+        "summary": "measured", "outcome": "completed", "mio_state": "complete",
+        "generation_method": "model", "frame_id": "frame-abc", "trace_id": "trace-abc",
+        "knowledge_status": "projected", "knowledge_context_response_advisory": _knowledge_advisory(),
+    }, fast_snapshot=lambda: fast, frame_snapshot=lambda generation: {
+        "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": ["suricata_sid:1"]})
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "complete")
+    receipt = result["knowledge_receipt"]
+    assert result["knowledge_receipt_status"] == "received"
+    assert result["knowledge_receipt_current"] is True
+    assert receipt == {
+        "schema_version": "azazel.edge_knowledge_advisory.v1", "status": "complete",
+        "authority": "read_only_advisory", "generation": "7", "trace_id": "trace-abc",
+        "claim_status": "reported_unverified", "source_groups": ["abusech"],
+        "attack_techniques": ["T1059.001"], "source_freshness": {"oldest_feed_days": 2},
+    }
+    assert "must not escape" not in str(result)
+    assert fast == before
+
+
+def test_fast_only_lane_reports_not_queried_without_positive_receipt():
+    lane = LiveMioModelLane(enabled=False, analyze=lambda *_: {}, fast_snapshot=_fast)
+    result = lane.snapshot()
+    assert result["knowledge_receipt_status"] == "not_queried"
+    assert result["knowledge_receipt"] is None
+
+
+def test_slow_lane_without_context_result_stays_not_queried():
+    lane = LiveMioModelLane(enabled=True, analyze=lambda payload, remaining: {
+        "summary": "measured", "outcome": "completed", "mio_state": "complete",
+        "generation_method": "model", "frame_id": "frame-abc", "trace_id": "trace-abc",
+    }, fast_snapshot=_fast, frame_snapshot=lambda generation: {
+        "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": []})
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "complete")
+    assert result["knowledge_receipt_status"] == "not_queried"
+    assert result["knowledge_receipt"] is None
+
+
+@pytest.mark.parametrize("status,expected", [
+    ("unavailable", "unavailable"), ("timeout", "timeout"),
+    ("rejected", "rejected"), ("superseded", "stale"),
+])
+def test_slow_context_failures_never_project_receipts(status, expected):
+    from azazel_edge_ai.mio_model_lane import MioModelFailure
+
+    def analyze(*_args):
+        raise MioModelFailure("model_error", {"knowledge_status": status})
+
+    lane = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=_fast,
+        frame_snapshot=lambda generation: {"frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": []})
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+    assert result["knowledge_receipt_status"] == expected
+    assert result["knowledge_receipt"] is None
+
+
+def test_receipt_from_foreign_trace_is_rejected():
+    lane = LiveMioModelLane(enabled=True, analyze=lambda payload, remaining: {
+            "outcome": "completed", "mio_state": "complete", "generation_method": "model",
+            "frame_id": "frame-abc", "trace_id": "trace-foreign", "knowledge_status": "projected",
+            "knowledge_context_response_advisory": _knowledge_advisory(),
+        }, fast_snapshot=_fast, frame_snapshot=lambda generation: {
+            "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": []})
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+    assert result["knowledge_receipt"] is None
+    assert result["knowledge_receipt_status"] == "rejected"
+
+
+def test_receipt_cannot_cross_to_a_different_fast_generation():
+    calls = []
+    lane = LiveMioModelLane(enabled=True, analyze=lambda *args: calls.append(args) or {},
+                            fast_snapshot=lambda: _fast("8"))
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+    assert result["knowledge_receipt"] is None
+    assert result["knowledge_receipt_status"] == "not_queried"
+    assert calls == []
+
+
+def test_cancellation_after_receipt_return_marks_stale_and_drops_receipt():
+    fast = [_fast()]
+    def analyze(*_args):
+        fast[0] = _fast("8")
+        return {"outcome": "completed", "mio_state": "complete", "generation_method": "model",
+            "frame_id": "frame-abc", "trace_id": "trace-abc", "knowledge_status": "projected",
+            "knowledge_context_response_advisory": _knowledge_advisory()}
+
+    lane = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=lambda: fast[0],
+        frame_snapshot=lambda generation: {"frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": []})
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+    assert result["knowledge_receipt_status"] == "stale"
+    assert result["knowledge_receipt"] is None
 
 
 def test_model_lane_is_opt_in_and_skip_does_not_call_transport():

@@ -215,6 +215,13 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
             assert observed[0]['knowledge_context_response_advisory']['claim_status'] == 'reported_unverified'
             assert observed[0]['knowledge_context_response_advisory']['source_groups'] == ['abusech']
             assert result['knowledge_status'] == 'projected'
+            assert result['knowledge_receipt_status'] == 'received'
+            receipt = result['knowledge_receipt']
+            assert receipt['claim_status'] == 'reported_unverified'
+            assert receipt['source_groups'] == ['abusech']
+            assert receipt['attack_techniques'] == ['T1595.002']
+            assert receipt['generation'] == '1' and receipt['trace_id'] == 'trace-synthetic'
+            assert result['knowledge_receipt_current'] is True
             assert frame == before
             assert result['status'] == 'degraded'
             assert result['outcome'] == 'degraded'
