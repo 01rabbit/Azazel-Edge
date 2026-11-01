@@ -321,7 +321,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveAuxStatus').textContent, 'complete', 'MIO status rendered');
     eq(m.$('mioLiveAuxKnowledge').textContent, 'not_provided', 'Knowledge provenance rendered');
     eq(m.$('mioLiveAuxFreshness').textContent, 'Current generation', 'fresh completion is current');
-    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 72 / M.I.O. 72 · match · comparison only', 'score comparison is separately labeled');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 72 / M.I.O. 72 · assessment match · comparison only', 'score and factor assessment comparison is separately labeled');
     eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-5', 'Edge action separated');
     eq(m.$('mioLiveAuxAdvice').textContent, '<img src=x onerror=alert(1)>', 'MIO advice rendered as text');
     eq(m.$('mioLiveAuxHypotheses').textContent, '<script>hypothesis</script>', 'hypothesis rendered as text');
@@ -350,7 +350,19 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35, mio_score: 35, matches: true},
         advisory: {trace_id: 'mio-trace-6', hypotheses: [], next_checks: []}});
     eq(m.$('mioLiveAuxKnowledge').textContent, 'not_queried', 'missing Knowledge is explicit');
-    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 35 / M.I.O. 35 · match · comparison only', 'comparison remains available without model analysis');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 35 / M.I.O. 35 · assessment match · comparison only', 'comparison remains available without model analysis');
+    // `matches` represents both score and factor equality, so equal scores can still differ.
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
+        edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
+        source_context: {event_key: 'event-6'},
+        handoff_binding: {status: 'matched', generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
+        advisory: {trace_id: 'mio-trace-6'},
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35, mio_score: 35,
+            matches: false, mio_factors: ['different explanation']}});
+    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 35 / M.I.O. 35 · assessment differs · comparison only', 'equal scores can report differing factor assessment');
     ['pending', 'unavailable', 'degraded'].forEach(function (status) {
         m.S.renderMioLiveAuxiliary({status: status, is_current: false,
             edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
