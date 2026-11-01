@@ -7,7 +7,7 @@ requests>=2.32,<3
 PyYAML>=6,<7
 # Shared M.I.O. advisory contracts: local cross-repo candidate, not a production release.
 # Includes MIO #18 KnowledgeContextResponseAdvisory; requires candidate commit availability.
-azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@8ea40673fb478e1f02bdf9300fd28c7a432acc9b
+azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@7a9cc624e4c0b3795b0258ac95a0650364a22a80
 # Azazel-Fabric shared contracts are an OPTIONAL extra: see requirements/fabric.txt.
 # (Every Fabric integration point is a guarded no-op without the package, so the
 # deterministic path runs unchanged when it is absent. An earlier note here said

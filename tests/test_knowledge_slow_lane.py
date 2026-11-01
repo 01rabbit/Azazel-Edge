@@ -213,6 +213,7 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
             assert authorized == [True]
             assert audits and audits[0]['knowledge_status'] == 'projected' 
             assert observed[0]['knowledge_context_response_advisory']['claim_status'] == 'reported_unverified'
+            assert observed[0]['knowledge_context_response_advisory']['source_groups'] == ['urlhaus']
             assert result['knowledge_status'] == 'projected'
             assert frame == before
             assert result['status'] == 'degraded'

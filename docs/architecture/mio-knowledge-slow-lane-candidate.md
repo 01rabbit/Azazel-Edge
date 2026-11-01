@@ -3,7 +3,7 @@
 The [cognitive-plane authority matrix](mio-cognitive-plane.md) remains authoritative.
 
 This local candidate follows Edge #525 at `a676849adb87415c89545a1fdf7dd9e6ecc16587`.
-It depends on the MIO #18 candidate `8ea40673fb478e1f02bdf9300fd28c7a432acc9b`,
+It depends on the MIO #18 candidate `7a9cc624e4c0b3795b0258ac95a0650364a22a80`,
 not a production release. The old runtime pin does not provide
 `KnowledgeContextResponseAdvisory`. No installation, service configuration,
 credential provisioning or production deployment is included.
@@ -24,7 +24,7 @@ This opt-in creates a local data flow of existing normalized `src_ip` and
 Rust's `NormalizedEvent`, where `dst_ip` is populated from EVE `dest_ip`.
 They live in a separate bounded private current-generation buffer. They are
 absent from MIO frames, public source context, snapshots, prompts and logs.
-Disabling the context option prevents their retention in that buffer.
+Disabling the context option prevents new capture into that buffer.
 No address, actor, indicator, application protocol or technique is inferred.
 `actor_key` stays empty. Category and protocol metadata retain exact values
 in Knowledge's `event.alert.category` and `event.alert.proto`; a TCP port does
@@ -40,12 +40,14 @@ and after the request and before and after analysis. Late work cannot replace
 a newer generation.
 
 The raw response enters only MIO #18's typed advisory projection. That core
-retains public ATT&CK identifiers and freshness, marks them
+retains public ATT&CK identifiers, bounded source-group labels and freshness, marks them
 `reported_unverified`, and excludes IOC values, source prose, scores and
 recommendations. This candidate publishes only a bounded Knowledge status
 (`projected`, `rejected`, `timeout`, authentication/scope rejection, transport
 failure, supersession or disabled configuration); the raw response is not
-published. Existing Edge decisions, tactical scores and frame evidence remain
+published. Although the pinned MIO API now supports source groups, Edge/UI
+does not surface those labels or the projected ATT&CK/freshness sidecar.
+Existing Edge decisions, tactical scores and frame evidence remain
 unchanged. The deterministic, DPI, arbiter and action paths make no calls.
 Knowledge's own API may write its normal query audit in its local store.
 
