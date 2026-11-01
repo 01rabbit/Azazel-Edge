@@ -318,8 +318,14 @@ class _DecisionLogger:
 
 
 class _Scorer:
-    def score_with_features(self, features):
-        return 72, ["known_class"]
+    class Result:
+        score = 72
+        factors = ["known_class"]
+        shadow = {"status": "complete", "score": 72, "matches": True,
+                  "factors": [f"factor-{index}-" + ("x" * 200) for index in range(14)]}
+
+    def score(self, features):
+        return self.Result()
 
 
 class _Adapter:
@@ -357,6 +363,10 @@ def test_live_event_consumer_enqueues_core_advisory_after_edge_score():
     assert result["mio_auxiliary"]["authority"] == "read_only_advisory"
     assert result["mio_auxiliary"]["provenance"]["derived_signals"] == ["edge_tactical_scorer_v1"]
     assert result["score_engine"] == "tactical_scorer_v1"
+    assert result["mio_score_comparison"]["edge_score"] == result["risk_score"]
+    assert result["mio_score_comparison"]["matches"] is True
+    assert len(result["mio_score_comparison"]["mio_factors"]) == 12
+    assert all(len(item) <= 96 for item in result["mio_score_comparison"]["mio_factors"])
 
 
 
@@ -493,6 +503,19 @@ def test_edge_decision_fields_are_identical_when_mio_is_missing_failing_slow_or_
         candidate = _build(_Adapter(condition))
         for key in ("risk_score", "risk_level", "recommendation", "state_name", "user_state", "score_factors", "score_engine", "trace_id"):
             assert candidate[key] == baseline[key]
+
+
+def test_score_comparison_is_attached_only_to_matching_generation_and_trace():
+    comparison = {"schema_version": "azazel.edge_score_comparison.v1", "authority": "comparison_only",
+                  "generation": "3", "trace_id": "trace-3"}
+    original = {"generation": "3", "trace_id": "trace-3", "status": "complete"}
+    attached = agent._attach_current_score_comparison(original, {"generation": "3", "trace_id": "trace-3"}, comparison)
+    assert attached["edge_score_comparison"] == comparison
+    assert "edge_score_comparison" not in original
+    stale = agent._attach_current_score_comparison(original, {"generation": "2", "trace_id": "trace-3"}, comparison)
+    assert "edge_score_comparison" not in stale
+    uncorrelated = agent._attach_current_score_comparison(original, {"generation": "3", "trace_id": "trace-other"}, comparison)
+    assert "edge_score_comparison" not in uncorrelated
 
 
 def test_missing_or_failing_shared_core_returns_explicit_safe_status():

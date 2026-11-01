@@ -1799,7 +1799,27 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
         "target_port": int(norm.get("target_port") or 0),
         "protocol": str(norm.get("protocol") or ""),
     }
-    risk_score, factors = SCORER.score_with_features(features)
+    score_breakdown = SCORER.score(features)
+    risk_score = score_breakdown.score
+    factors = score_breakdown.factors
+    shadow = score_breakdown.shadow if isinstance(score_breakdown.shadow, dict) else {}
+    status_candidate = shadow.get("status")
+    shadow_status = status_candidate if type(status_candidate) is str and status_candidate in {"complete", "unavailable", "degraded"} else "degraded"
+    shadow_score = shadow.get("score")
+    if type(shadow_score) is not int or not 0 <= shadow_score <= 100:
+        shadow_score = None
+    shadow_factors = shadow.get("factors") if isinstance(shadow.get("factors"), list) else []
+    safe_shadow_factors = [item[:96] for item in shadow_factors[:12]
+                           if type(item) is str and item.strip()]
+    shadow_comparison = {
+        "schema_version": "azazel.edge_score_comparison.v1",
+        "authority": "comparison_only",
+        "status": shadow_status,
+        "edge_score": risk_score,
+        "mio_score": shadow_score if shadow_status == "complete" else None,
+        "matches": shadow.get("matches") if type(shadow.get("matches")) is bool else None,
+        "mio_factors": safe_shadow_factors if shadow_status == "complete" else [],
+    }
 
     advisory = {
         "ts": time.time(),
@@ -1818,6 +1838,7 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
         },
         "risk_level": _risk_level(risk_score),
         "risk_score": risk_score,
+        "mio_score_comparison": shadow_comparison,
         "attack_type": str(norm.get("attack_type") or "unknown"),
         "src_ip": str(norm.get("src_ip") or ""),
         "dst_ip": str(norm.get("dst_ip") or ""),
@@ -1911,6 +1932,8 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
             "provenance": {"observations": [], "derived_signals": []},
             "knowledge": {"status": "not_provided", "refs": []}, "advisory": None,
         }
+    advisory["mio_score_comparison"]["generation"] = str(advisory["mio_auxiliary"].get("generation") or "")[:96]
+    advisory["mio_score_comparison"]["trace_id"] = str(advisory["mio_auxiliary"].get("trace_id") or "")[:96]
 
     return advisory
 
@@ -2927,6 +2950,25 @@ def _llm_worker() -> None:
             LLM_QUEUE.task_done()
 
 
+def _attach_current_score_comparison(
+    mio: Dict[str, Any], request: Dict[str, Any], comparison: Dict[str, Any] | None
+) -> Dict[str, Any]:
+    """Bind the comparison to the same accepted M.I.O. generation and Edge trace."""
+    result = dict(mio)
+    generation = str(request.get("generation") or "")
+    trace_id = str(request.get("trace_id") or "")
+    same_generation = bool(generation) and generation == str(result.get("generation") or "")
+    same_trace = bool(trace_id) and trace_id == str(result.get("trace_id") or "")
+    same_comparison = (comparison is not None
+                       and str(comparison.get("generation") or "") == generation
+                       and str(comparison.get("trace_id") or "") == trace_id)
+    if same_comparison and same_generation and same_trace:
+        result["edge_score_comparison"] = comparison
+    else:
+        result.pop("edge_score_comparison", None)
+    return result
+
+
 def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -> None:
     _ensure_parent(SNAPSHOT_PATH)
     now = time.time()
@@ -3012,6 +3054,9 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
     mio["authority"] = "read_only_advisory"
     mio["edge_action_label"] = "Edge action/result (observed)"
     mio["advisory_label"] = "M.I.O. advice/handoff (read-only)"
+    requested_mio = advisory.get("mio_auxiliary") if isinstance(advisory.get("mio_auxiliary"), dict) else {}
+    comparison = advisory.get("mio_score_comparison") if isinstance(advisory.get("mio_score_comparison"), dict) else None
+    mio = _attach_current_score_comparison(mio, requested_mio, comparison)
     if len(json.dumps(mio, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")) > MAX_RESULT_BYTES:
         mio = {
             "schema_version": "azazel.mio_auxiliary.v1", "status": "degraded",
