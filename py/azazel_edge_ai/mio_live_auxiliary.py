@@ -273,7 +273,7 @@ def _project_knowledge_advisory(value, *, generation, trace_id):
     techniques = value.get('attack_techniques')
     freshness = value.get('source_freshness')
     for items, cap, pattern in ((groups, 16, r'[a-z][a-z0-9_-]{0,31}'),
-                                (techniques, 32, r'T\d{4}(?:\.\d{3})?')):
+                                (techniques, 32, r'T[0-9]{4}(?:\.[0-9]{3})?')):
         if type(items) is not list or len(items) > cap or any(
                 type(item) is not str or not re.fullmatch(pattern, item) for item in items):
             return None
@@ -281,9 +281,9 @@ def _project_knowledge_advisory(value, *, generation, trace_id):
         return None
     days = freshness.get('oldest_feed_days')
     version = freshness.get('attack_version')
-    if days is not None and (type(days) not in (int, float) or not math.isfinite(days) or not 0 <= days <= 36500):
+    if days is not None and (type(days) not in (int, float) or not 0 <= days <= 36500 or not math.isfinite(days)):
         return None
-    if version is not None and (type(version) is not str or not re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){0,2}', version)):
+    if version is not None and (type(version) is not str or not re.fullmatch(r'[0-9]{1,3}(?:\.[0-9]{1,3}){0,2}', version)):
         return None
     return {'schema_version': 'azazel.edge_knowledge_advisory.v1',
             'status': 'complete', 'authority': 'read_only_advisory',

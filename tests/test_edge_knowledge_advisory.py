@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 
@@ -26,6 +27,13 @@ def test_allowlist_copies_only_bounded_projection():
 @pytest.mark.parametrize('key,value', [('source_groups', ['raw.example.com']), ('source_groups', ['x'] * 17),
     ('attack_techniques', ['bad']), ('source_freshness', {'oldest_feed_days': True}),
     ('source_freshness', {'oldest_feed_days': float('nan')}),
+    ('source_freshness', {'oldest_feed_days': float('inf')}),
+    ('source_freshness', {'oldest_feed_days': float('-inf')}),
+    ('source_freshness', {'oldest_feed_days': json.loads('1' + '0' * 400)}),
+    ('attack_techniques', ['T１０５９.００１']),
+    ('attack_techniques', ['T١٠٥٩.٠٠١']),
+    ('source_freshness', {'attack_version': '１６.１'}),
+    ('source_freshness', {'attack_version': '١٦.١'}),
     ('source_freshness', {'token': 'secret'}), ('claim_status', 'verified')])
 def test_reject_malformed(key, value):
     data = receipt()
@@ -92,3 +100,39 @@ def test_worker_projects_receipt_and_strips_original(monkeypatch, delay):
     assert out['edge_knowledge_advisory']['source_groups'] == ['abusech']
     assert 'knowledge_context_response_advisory' not in out['advisory']
     assert 'never expose' not in str(out)
+
+
+def test_malformed_receipt_does_not_kill_worker_and_later_job_completes(monkeypatch):
+    from types import SimpleNamespace
+    from azazel_mio.assistant import AssistantCore
+    original = AssistantCore.explain
+    calls = []
+
+    def explain(self, *args, **kwargs):
+        out = original(self, *args, **kwargs).to_dict()
+        data = receipt()
+        if not calls:
+            data['source_freshness']['oldest_feed_days'] = json.loads('1' + '0' * 400)
+        calls.append(True)
+        out['knowledge_context_response_advisory'] = data
+        return SimpleNamespace(to_dict=lambda: out)
+
+    monkeypatch.setattr(AssistantCore, 'explain', explain)
+    adapter = LiveMioAuxiliary()
+    for generation in (1, 2):
+        adapter.submit({'normalized': {'event_type': 'alert', 'sid': 42},
+                        'defense': {'action': 'notify'},
+                        'enforcement': {'trace_id': 't1', 'mode': 'dry_run',
+                                        'result': 'planned_not_applied'}},
+                       score=30, factors=[], risk_level='LOW')
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            out = adapter.snapshot()
+            if out.get('generation') == str(generation) and out.get('status') == 'complete':
+                break
+            time.sleep(.01)
+        assert out['generation'] == str(generation)
+        assert out['status'] == 'complete'
+        assert ('edge_knowledge_advisory' in out) == (generation == 2)
+        assert 'knowledge_context_response_advisory' not in out['advisory']
+    assert len(calls) == 2
