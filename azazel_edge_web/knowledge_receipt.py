@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 import math
 import re
 
+from azazel_edge_ai.mio_live_auxiliary import _binding_matches
+
 _STATUSES = frozenset(('starting queued disabled missing_token invalid_configuration unavailable timeout '
     'oversized redirect_rejected auth_rejected scope_rejected malformed received superseded projected rejected').split())
 
@@ -40,6 +42,10 @@ def operator_mio_payload(payload, *, now=None):
     if not fresh or payload.get('is_current') is not True or payload.get('status') != 'complete':
         return output
     if receipt.get('generation') != payload.get('generation'):
+        return output
+    # Use the producer's same-envelope contract, including the observed Edge
+    # action/result and both frame IDs; a receipt alone cannot establish it.
+    if not _binding_matches(payload):
         return output
     if receipt['status'] != 'projected':
         output['knowledge_analysis'] = {'status': receipt['status'], 'is_current': False}
