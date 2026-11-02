@@ -85,5 +85,6 @@ exactly `stage` and `rejection_class`. Edge accepts only the closed M.I.O.
 vocabulary with strict string types and omits malformed diagnostics, including
 objects with extra keys. It never forwards raw validation errors, trace details,
 or model-authored identifiers through this field. Existing generic status,
-reason, and advisory authority remain unchanged. The candidate dependency pin
-requires M.I.O. PR #21 to merge before this consumer is considered integrated.
+reason, and advisory authority remain unchanged. The immutable dependency pin
+uses merged M.I.O. PR #21 source commit
+`9fedb01bc9936531407a5181aa8fa5553ec19d55`; the merge dependency is satisfied.
