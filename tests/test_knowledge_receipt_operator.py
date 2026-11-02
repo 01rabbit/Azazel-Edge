@@ -56,6 +56,63 @@ def test_current_receipt_only_exposes_reference_metadata_without_changing_action
     assert output == original  # All decision, action, fast and model fields unchanged.
 
 
+def test_current_dashboard_projection_drops_unrecognized_top_level_and_nested_fields():
+    payload = current()
+    payload['private_payload'] = 'TOP_SECRET_SHOULD_NOT_ESCAPE'
+    payload['advisory'].update(summary='bounded explanation', private_prompt='TOP_SECRET_SHOULD_NOT_ESCAPE',
+        hypotheses=[{'statement': 'Check the source event.', 'private_note': 'TOP_SECRET_SHOULD_NOT_ESCAPE'}],
+        handoff={'summary': 'Confirm with the operator.', 'credentials': 'TOP_SECRET_SHOULD_NOT_ESCAPE'})
+    payload['source_context']['fields'] = {'event_type': {'value': 'alert', 'status': 'observed',
+        'provenance': 'rust_core_normalized_event', 'address': 'TOP_SECRET_SHOULD_NOT_ESCAPE'}}
+    payload['handoff_binding']['private_token'] = 'TOP_SECRET_SHOULD_NOT_ESCAPE'
+    payload['edge_event']['private_reason'] = 'TOP_SECRET_SHOULD_NOT_ESCAPE'
+    payload['model_analysis'] = {'schema_version': 'azazel.mio_model_analysis.v1',
+        'status': 'complete', 'is_current': True, 'fast_generation': '1',
+        'summary': 'Bounded analysis.', 'model': 'qwen3.5:0.8b', 'duration_ms': 12,
+        'prompt_tokens': 100, 'completion_tokens': 25,
+        'request_body': 'TOP_SECRET_SHOULD_NOT_ESCAPE'}
+    payload['edge_knowledge_advisory'] = {'schema_version': 'azazel.edge_knowledge_advisory.v1',
+        'status': 'complete', 'authority': 'read_only_advisory', 'claim_status': 'reported_unverified',
+        'generation': '1', 'trace_id': 'edge-1', 'source_groups': ['abusech'],
+        'attack_techniques': ['T1059.001'],
+        'source_freshness': {'oldest_feed_days': 14, 'attack_version': '18.1',
+            'credential': 'TOP_SECRET_SHOULD_NOT_ESCAPE'},
+        'raw_response': 'TOP_SECRET_SHOULD_NOT_ESCAPE'}
+    result = operator_mio_payload(payload, now=101)
+
+    assert 'private_payload' not in result
+    assert result['advisory']['summary'] == 'bounded explanation'
+    assert result['advisory']['hypotheses'] == [{'statement': 'Check the source event.'}]
+    assert result['advisory']['handoff'] == {'summary': 'Confirm with the operator.'}
+    assert result['source_context']['fields']['event_type'] == {
+        'value': 'alert', 'status': 'observed', 'provenance': 'rust_core_normalized_event'}
+    assert 'private_token' not in result['handoff_binding']
+    assert result['edge_event']['unknown_fields'] is True
+    assert result['model_analysis'] == {'schema_version': 'azazel.mio_model_analysis.v1',
+        'status': 'complete', 'is_current': True, 'fast_generation': '1',
+        'summary': 'Bounded analysis.', 'model': 'qwen3.5:0.8b', 'duration_ms': 12,
+        'prompt_tokens': 100, 'completion_tokens': 25}
+    assert result['edge_knowledge_advisory']['source_freshness'] == {
+        'oldest_feed_days': 14, 'attack_version': '18.1'}
+    assert 'raw_response' not in result['edge_knowledge_advisory']
+    assert 'TOP_SECRET_SHOULD_NOT_ESCAPE' not in repr(result)
+
+
+def test_private_looking_correlation_value_is_not_reemitted_as_generation():
+    payload = current()
+    value = 'PRIVATE TOKEN SHOULD NOT ESCAPE'
+    payload['generation'] = value
+    payload['handoff_binding']['generation'] = value
+    payload['knowledge_analysis']['generation'] = value
+    payload['knowledge_analysis']['frame_generation'] = value
+
+    result = operator_mio_payload(payload, now=101)
+
+    assert result['knowledge_analysis'] == lane_status_only('projected')
+    assert 'generation' not in result
+    assert value not in repr(result)
+
+
 BINDING_KEYS = ('generation', 'frame_generation', 'source_trace_id', 'event_key', 'trace_id', 'frame_id')
 
 
@@ -123,12 +180,18 @@ def test_receipt_with_real_fast_producer_envelope_survives_typed_overlay():
             source_trace_id=payload['trace_id'], event_key=payload['source_context']['event_key'],
             trace_id=payload['advisory']['trace_id'], frame_id=payload['advisory']['frame_id'])
         payload['knowledge_analysis'] = receipt
-        original = deepcopy(payload)
         output = operator_mio_payload(payload)
         assert output.pop('knowledge_analysis')['status'] == 'projected'
-        assert payload == original
-        original.pop('knowledge_analysis')
-        assert output == original
+        assert payload['status'] == 'complete' and payload['handoff_binding']['valid'] is True
+        assert output['edge_event'] == {'action': 'notify', 'mode': 'dry_run',
+            'result': 'planned_not_applied', 'trace_id': 'edge-1'}
+        assert output['source_context']['event_key'] == payload['source_context']['event_key']
+        assert output['advisory']['trace_id'] == payload['advisory']['trace_id']
+        assert output['advisory']['frame_id'] == payload['advisory']['frame_id']
+        assert output['handoff_binding']['valid'] is True
+        assert set(output) <= {'status', 'is_current', 'generation', 'completed_at', 'max_age_seconds',
+            'trace_id', 'edge_event', 'source_context', 'handoff_binding', 'advisory', 'model_analysis',
+            'knowledge', 'edge_score_comparison', 'edge_knowledge_advisory'}
     finally:
         producer._queue.join()
 
