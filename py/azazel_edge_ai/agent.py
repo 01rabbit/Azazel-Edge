@@ -3186,7 +3186,7 @@ def _mio_snapshot_worker() -> None:
             model_done = bool(model_generation and model_generation != seen_model_generation)
             knowledge = LIVE_MIO_KNOWLEDGE_LANE.snapshot()
             knowledge_state = (str(knowledge.get("generation") or ""), str(knowledge.get("status") or ""))
-            knowledge_done = (knowledge_state != seen_knowledge_state
+            knowledge_done = (bool(knowledge_state[0]) and knowledge_state != seen_knowledge_state
                               and knowledge.get("status") not in {"starting", "queued"})
             if not static_done and not model_done and not knowledge_done:
                 continue

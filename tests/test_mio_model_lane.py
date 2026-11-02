@@ -93,6 +93,19 @@ def test_snapshot_worker_does_not_refresh_for_default_off_lane_at_startup(monkey
     assert _run_snapshot_worker(monkeypatch, lane) == []
 
 
+def test_snapshot_worker_refreshes_for_terminal_knowledge_generation(monkeypatch):
+    from azazel_edge_ai import agent
+
+    lane = LiveMioModelLane(enabled=False, analyze=lambda payload, remaining: {}, fast_snapshot=_fast)
+    monkeypatch.setattr(agent, "LIVE_MIO_KNOWLEDGE_LANE", type("Knowledge", (), {
+        "snapshot": staticmethod(lambda: {"generation": "2", "status": "projected"})
+    })())
+
+    refreshed = _run_snapshot_worker(monkeypatch, lane)
+    assert len(refreshed) == 1
+    assert refreshed[0][1] == {"count_suricata": False}
+
+
 def test_snapshot_worker_refreshes_once_for_async_result_completed_before_first_poll(monkeypatch):
     lane = LiveMioModelLane(
         enabled=True,
