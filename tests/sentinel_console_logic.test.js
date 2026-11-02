@@ -308,7 +308,9 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         m.S.renderMioLiveAuxiliary(Object.assign({}, p, change));
         eq(el.textContent, 'Suppressed', 'unusable envelope hides receipt');
     }
-    for (const change of [{generation: '2'}, {trace_id: 'wrong'}, {source_groups: ['<b>bad</b>']}, {source_freshness: {token: 'secret'}}]) {
+    for (const change of [{generation: '2'}, {trace_id: 'wrong'}, {source_groups: ['<b>bad</b>']}, {source_freshness: {token: 'secret'}},
+        {attack_techniques: ['T１０５９.００１']}, {attack_techniques: ['T١٠٥٩.٠٠١']},
+        {source_freshness: {attack_version: '１６.１'}}, {source_freshness: {attack_version: '١٦.١'}}]) {
         m.S.renderMioLiveAuxiliary(Object.assign({}, p, {edge_knowledge_advisory: Object.assign({}, p.edge_knowledge_advisory, change)}));
         eq(el.textContent, 'Suppressed', 'malformed or unbound receipt suppressed');
     }

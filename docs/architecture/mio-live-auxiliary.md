@@ -152,11 +152,12 @@ are not included. Snapshot and operator display require the existing current
 generation, trace, completion freshness and handoff binding. The browser renders
 all fields as text and clears the receipt when unavailable or suppressed.
 
-This is compatibility preparation based on Edge #528
-`99db185c5349bff17746e5e3534b4c4ebefc2281`, whose MIO pin remains
-`6cd015351979ba69e18517d71f79c0c347bb2722`. That pin does not include MIO #18
-`7a9cc624e4c0b3795b0258ac95a0650364a22a80`, and the current fast adapter
-still calls `knowledge_attempted=False`. No live Knowledge integration is
-claimed. A separate follow-on PR is needed after the #525/#527/#528 stack and
-Knowledge slow-lane candidate have been rebased and the MIO dependency updated.
-This candidate adds no network calls, installer changes or decision consumers.
+This local operator-sidecar candidate is based on Edge #528
+`df61bd9847acc49d41d96d48e42046b858fb93da`, whose MIO pin is
+`c6a0e0d6ef589693bc7bd54a4c2c1cdf32371524` and includes MIO #18's typed
+receipt. The fast adapter still calls `knowledge_attempted=False`; it projects
+only a receipt already supplied by the shared core and adds no Knowledge query
+or context construction. This operator UI functionality is separate from the
+#525/#527/#528 stack and the optional Knowledge slow lane. No live Knowledge
+integration or deployment is established by this sidecar candidate. It adds no
+network calls, installer changes or decision consumers.
