@@ -479,8 +479,10 @@
                 : 'Suppressed';
         }
         put('mioLiveKnowledgeAdvisory', receiptText, 2048);
-        put('mioLiveEdgeAction', actionBits.join(' / ') || (edge.unknown_fields ? 'Unknown (malformed fields omitted)' : 'Unknown'));
+        put('mioLiveEdgeAction', (actionBits.join(' / ') || 'Unknown') + (edge.unknown_fields === true ? ' (malformed fields omitted)' : ''));
         // Normalized source context: hard-coded allowlist only; split into observed values and unavailable/invalid names.
+        // Producer emits a 24-char lowercase hex SHA prefix as event_key; source fields need that key to be present.
+        var sourceUsable = usable && /^[0-9a-f]{24}$/.test(String(sourceContext.event_key || ''));
         var SOURCE_FIELD_ALLOWLIST = ['event_type', 'attack_type', 'category', 'protocol', 'sid', 'severity', 'target_port', 'technique_ids', 'ts', 'normalized_outcome'];
         var sourceFields = sourceContext.fields && typeof sourceContext.fields === 'object' && !Array.isArray(sourceContext.fields)
             ? sourceContext.fields : {};
@@ -520,8 +522,8 @@
             if (text) observedFields.push(name + '=' + text);
             else unavailableFields.push(name);
         });
-        put('mioSourceObserved', usable ? (observedFields.join(' · ') || 'None') : 'Suppressed', 600);
-        put('mioSourceUnavailable', usable ? (unavailableFields.join(', ') || 'None') : 'Suppressed', 300);
+        put('mioSourceObserved', sourceUsable ? (observedFields.join(' · ') || 'None') : 'Suppressed', 600);
+        put('mioSourceUnavailable', sourceUsable ? (unavailableFields.join(', ') || 'None') : 'Suppressed', 300);
         put('mioLiveAuxAdvice', usable
             ? (recommendation || advisory.summary || handoff.summary || 'No advice available.')
             : (payload.reason ? 'M.I.O. result suppressed: ' + String(payload.reason).slice(0, 120) : suppressedMessage));
