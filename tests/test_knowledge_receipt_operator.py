@@ -111,20 +111,20 @@ def test_receipt_with_real_fast_producer_envelope_survives_typed_overlay():
 
 @pytest.mark.parametrize('field', ['handoff_binding', 'edge_event'])
 @pytest.mark.parametrize('value', ['absent', None, [], {}])
-def test_missing_or_malformed_enclosing_handoff_is_unavailable(field, value):
+def test_missing_or_malformed_enclosing_handoff_retains_status_only(field, value):
     payload = current()
     if value == 'absent':
         payload.pop(field)
     else:
         payload[field] = value
-    assert_unavailable_without_other_changes(payload)
+    assert_status_only_without_other_changes(payload)
 
 
-def assert_unavailable_without_other_changes(payload):
+def assert_status_only_without_other_changes(payload):
     original = deepcopy(payload)
     output = operator_mio_payload(payload, now=101)
     assert payload == original
-    assert output.pop('knowledge_analysis') == {'status': 'unavailable', 'is_current': False}
+    assert output.pop('knowledge_analysis') == {'status': 'projected', 'is_current': False}
     original.pop('knowledge_analysis')
     assert output == original
 
@@ -132,10 +132,10 @@ def assert_unavailable_without_other_changes(payload):
 @pytest.mark.parametrize('key', ['status', 'generation', 'event_key', 'edge_trace_id',
     'edge_action', 'edge_mode', 'edge_result', 'mio_trace_id', 'frame_id'])
 @pytest.mark.parametrize('value', [None, 'old'])
-def test_stale_or_mismatched_handoff_binding_is_unavailable(key, value):
+def test_stale_or_mismatched_handoff_binding_retains_status_only(key, value):
     payload = current()
     payload['handoff_binding'][key] = value
-    assert_unavailable_without_other_changes(payload)
+    assert_status_only_without_other_changes(payload)
 
 
 @pytest.mark.parametrize('key', ['trace_id', 'action', 'mode', 'result'])
@@ -143,28 +143,28 @@ def test_stale_or_mismatched_handoff_binding_is_unavailable(key, value):
 def test_edge_event_must_match_enclosing_handoff(key, value):
     payload = current()
     payload['edge_event'][key] = value
-    assert_unavailable_without_other_changes(payload)
+    assert_status_only_without_other_changes(payload)
 
 
 def test_edge_event_and_handoff_trace_cannot_disagree_with_receipt_source():
     payload = current()
     payload['edge_event']['trace_id'] = 'other-edge'
     payload['handoff_binding']['edge_trace_id'] = 'other-edge'
-    assert_unavailable_without_other_changes(payload)
+    assert_status_only_without_other_changes(payload)
 
 
 @pytest.mark.parametrize('now', [111, 99])
-def test_cached_expired_or_future_receipt_is_unavailable(now):
+def test_cached_expired_or_future_receipt_retains_status_only(now):
     assert operator_mio_payload(current(), now=now)['knowledge_analysis'] == {
-        'status': 'unavailable', 'is_current': False}
+        'status': 'projected', 'is_current': False}
 
 
 @pytest.mark.parametrize('key', ['generation', 'frame_generation', 'source_trace_id',
     'trace_id', 'frame_id', 'event_key'])
-def test_every_stale_correlation_is_unavailable(key):
+def test_every_stale_correlation_retains_status_only(key):
     payload = current()
     payload['knowledge_analysis'][key] = 'old'
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis']['status'] == 'unavailable'
+    assert_status_only_without_other_changes(payload)
 
 
 @pytest.mark.parametrize('key,value', [('status', []), ('schema_version', 'wrong'),
@@ -175,7 +175,9 @@ def test_every_stale_correlation_is_unavailable(key):
 def test_malformed_receipt_rejected(key, value):
     payload = current()
     payload['knowledge_analysis'][key] = value
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis']['status'] == 'unavailable'
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == {
+        'status': 'unavailable' if key in {'status', 'schema_version', 'authority', 'usage_status'} else 'projected',
+        'is_current': False}
 
 
 def test_valid_nonresult_status_is_bounded_and_separate():
@@ -186,25 +188,28 @@ def test_valid_nonresult_status_is_bounded_and_separate():
 
 
 @pytest.mark.parametrize('completed', [None, [], {}, 'bad'])
-def test_malformed_clock_is_unavailable(completed):
+def test_malformed_clock_retains_status_only(completed):
     payload = current()
     payload['completed_at'] = completed
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis']['status'] == 'unavailable'
+    assert_status_only_without_other_changes(payload)
 
 
-@pytest.mark.parametrize('completed,expected_status', [
-    ('1970-01-01T00:01:40', 'unavailable'),
-    ('1970-01-01T00:01:40Z', 'projected'),
-    ('1970-01-01T09:01:40+09:00', 'projected'),
-    ('not-a-timestamp', 'unavailable'),
+@pytest.mark.parametrize('completed,expected_current', [
+    ('1970-01-01T00:01:40', False),
+    ('1970-01-01T00:01:40Z', True),
+    ('1970-01-01T09:01:40+09:00', True),
+    ('not-a-timestamp', False),
 ])
-def test_receipt_clock_requires_timezone_without_changing_other_fields(completed, expected_status):
+def test_receipt_clock_requires_timezone_without_changing_other_fields(completed, expected_current):
     payload = current()
     payload['completed_at'] = completed
     original = deepcopy(payload)
     output = operator_mio_payload(payload, now=101)
     assert payload == original
-    assert output.pop('knowledge_analysis')['status'] == expected_status
+    receipt = output.pop('knowledge_analysis')
+    assert receipt['is_current'] is expected_current
+    if not expected_current:
+        assert receipt == {'status': 'projected', 'is_current': False}
     original.pop('knowledge_analysis')
     assert output == original  # Includes the action, fast lane and model result.
 
@@ -227,7 +232,7 @@ def test_lane_diagnostics_survive_unusable_fast_envelope_without_reference_ids(s
     original = deepcopy(payload)
     output = operator_mio_payload(payload, now=101)
     assert output.pop('knowledge_analysis') == {
-        'status': 'unavailable' if status == 'projected' else status, 'is_current': False}
+        'status': status, 'is_current': False}
     assert payload == original
     original.pop('knowledge_analysis')
     assert output == original
@@ -240,4 +245,5 @@ def test_invalid_lane_diagnostic_schema_is_unavailable_even_when_fast_queued(fie
     payload['status'] = 'queued'
     payload['knowledge_analysis']['status'] = 'disabled'
     payload['knowledge_analysis'][field] = value
-    assert_unavailable_without_other_changes(payload)
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == {
+        'status': 'unavailable', 'is_current': False}

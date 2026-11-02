@@ -457,7 +457,7 @@
             && knowledge.claim_status === 'reported_unverified' && knowledge.trust === 'unverified_advisory_only';
         var knowledgeStatus = ['starting', 'queued', 'disabled', 'missing_token', 'invalid_configuration',
             'unavailable', 'timeout', 'oversized', 'redirect_rejected', 'auth_rejected', 'scope_rejected',
-            'malformed', 'received', 'superseded', 'rejected'];
+            'malformed', 'received', 'superseded', 'rejected', 'projected'];
         var knowledgeLabel = knowledgeCurrent ? 'projected (reported, unverified)'
             : (knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable');
         put('mioKnowledgeStatus', knowledgeLabel);
