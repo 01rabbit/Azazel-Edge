@@ -1,7 +1,7 @@
 """Separately paced, opt-in M.I.O. model analysis over an existing fast result.
 
-This product adapter owns no transport. Its caller supplies the existing Edge
-Ollama transport; the worker is latest-only, bounded, and advisory-only.
+Its caller supplies the existing Edge Ollama and optional loopback Knowledge
+transports. The worker is latest-only, bounded, and advisory-only.
 """
 from __future__ import annotations
 
@@ -11,6 +11,11 @@ import queue
 import threading
 import time
 from typing import Any, Callable, Mapping
+
+KNOWLEDGE_STATUSES = frozenset({'disabled', 'missing_token', 'invalid_configuration', 'unavailable',
+                      'timeout', 'oversized', 'redirect_rejected', 'auth_rejected',
+                      'scope_rejected', 'malformed', 'received', 'superseded', 'projected', 'rejected'})
+
 
 MAX_AGE_SECONDS = 10.0
 MAX_DIAGNOSTICS = 64
@@ -48,6 +53,9 @@ def bounded_usage(values: Mapping[str, Any]) -> dict[str, Any]:
     result["unknown_usage_request_count"] = max(0, requests - metered)
     result["usage_status"] = ("unknown" if metered == 0 else
         "complete" if metered == requests and not result["truncated_count"] else "partial")
+    if "knowledge_status" in values:
+        status = values.get("knowledge_status")
+        result["knowledge_status"] = status if type(status) is str and status in KNOWLEDGE_STATUSES else "unavailable"
     return result
 
 
@@ -154,12 +162,14 @@ class LiveMioModelLane:
                  fast_snapshot: Callable[[], Mapping[str, Any]],
                  frame_snapshot: Callable[[Any], Mapping[str, Any] | None] | None = None,
                  authorize: Callable[[Mapping[str, Any]], tuple[bool, str]] | None = None,
-                 max_age_seconds: float = MAX_AGE_SECONDS):
+                 max_age_seconds: float = MAX_AGE_SECONDS,
+                 knowledge_input_snapshot: Callable[[Any], Mapping[str, Any] | None] | None = None):
         self.enabled = bool(enabled)
         self.max_age_seconds = max(0.1, min(float(max_age_seconds), MAX_AGE_SECONDS))
         self._analyze = analyze
         self._fast_snapshot = fast_snapshot
         self._frame_snapshot = frame_snapshot
+        self._knowledge_input_snapshot = knowledge_input_snapshot
         self._authorize = authorize
         self._queue: queue.Queue[tuple[float, int, str, dict[str, Any], str]] = queue.Queue(maxsize=1)
         self._lock = threading.RLock()
@@ -280,17 +290,26 @@ class LiveMioModelLane:
                         frame_payload = self._frame_snapshot(fast_generation) if self._frame_snapshot else None
                         if not isinstance(frame_payload, Mapping):
                             raise RuntimeError("accepted_frame_unavailable")
-                        stale_check = lambda: generation != self._generation
+                        stale_check = lambda: (generation != self._generation or
+                            str(self._fast_snapshot().get("generation") or "") != fast_generation)
+                        if stale_check():
+                            raise TimeoutError("superseded")
                         try:
                             analyze_parameter_count = len(inspect.signature(self._analyze).parameters)
                         except (TypeError, ValueError):
                             analyze_parameter_count = 0
-                        if analyze_parameter_count >= 4:
+                        if analyze_parameter_count >= 5:
+                            analyzed = self._analyze(dict(frame_payload), remaining, stale_check, source_trace_id,
+                                                     self._knowledge_input_snapshot(fast_generation)
+                                                     if self._knowledge_input_snapshot else fast.get("source_context"))
+                        elif analyze_parameter_count >= 4:
                             analyzed = self._analyze(dict(frame_payload), remaining, stale_check, source_trace_id)
                         elif analyze_parameter_count >= 3:
                             analyzed = self._analyze(dict(frame_payload), remaining, stale_check)
                         else:
                             analyzed = self._analyze(dict(frame_payload), remaining)
+                        if stale_check():
+                            raise TimeoutError("superseded")
                         model_result = dict(analyzed)
                         elapsed = max(0, int((time.monotonic() - started) * 1000))
                         safe_hypotheses = _bounded_hypotheses(model_result.get("hypotheses"), frame_payload)
@@ -335,6 +354,9 @@ class LiveMioModelLane:
                             "unknowns": safe_unknowns,
                             "frame_generation": fast_generation,
                             "validation_rejection": validation_rejection,
+                            "knowledge_status": model_result.get("knowledge_status") if
+                                type(model_result.get("knowledge_status")) is str and
+                                model_result.get("knowledge_status") in KNOWLEDGE_STATUSES else "unavailable",
                         }
                         if model_result.get("frame_id") != frame_payload.get("frame_id") or model_result.get("trace_id") != frame_payload.get("trace_id"):
                             result = _empty("degraded", "frame_binding_rejected")
