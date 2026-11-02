@@ -159,6 +159,14 @@ def test_cached_expired_or_future_receipt_retains_status_only(now):
         'status': 'projected', 'is_current': False}
 
 
+@pytest.mark.parametrize('envelope', [{'is_current': False}, {'status': 'queued'}])
+def test_unusable_envelope_keeps_projected_status_not_current(envelope):
+    payload = current()
+    payload.update(envelope)
+    output = operator_mio_payload(payload, now=101)
+    assert output['knowledge_analysis'] == {'status': 'projected', 'is_current': False}
+
+
 @pytest.mark.parametrize('key', ['generation', 'frame_generation', 'source_trace_id',
     'trace_id', 'frame_id', 'event_key'])
 def test_every_stale_correlation_retains_status_only(key):

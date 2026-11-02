@@ -408,13 +408,24 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             let scheduled = false;
             global.window.setTimeout = function () { scheduled = true; return 1; };
             m.S.renderMioLiveAuxiliary(payload);
-            eq(m.$('mioKnowledgeStatus').textContent, status,
+            eq(m.$('mioKnowledgeStatus').textContent, status === 'projected' ? 'projected but not current' : status,
                 status + '/' + fastState + ': bounded diagnostic visible');
             eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable',
                 status + '/' + fastState + ': all reference IDs hidden');
             ok(!scheduled, status + '/' + fastState + ': diagnostic independent of fast expiry');
         });
     });
+    // Status-only projected receipts (server-suppressed) must be labelled not current, with no refs.
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: false, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 60000).toISOString(), generation: '8',
+        knowledge_analysis: {status: 'projected', is_current: false}});
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'stale envelope projected receipt labelled not current');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'stale envelope projected receipt has no refs');
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '8',
+        knowledge_analysis: {status: 'projected', is_current: false}});
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'unbound projected receipt labelled not current');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'unbound projected receipt has no refs');
     ['unknown', '<script>bad</script>', [], null].forEach(function (status) {
         m.S.renderMioLiveAuxiliary({status: 'queued', knowledge_analysis: {status: status}});
         eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'invalid diagnostic suppressed');
