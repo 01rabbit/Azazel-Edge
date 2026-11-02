@@ -510,7 +510,7 @@
         var cueTail = ' Edge observed action/result remains authoritative; use the existing operator review workflow for this event. Nothing is retried automatically.';
         put('mioKnowledgeCue', knowledgeCurrent
             ? 'Reported, unverified reference metadata only; not a verdict. Edge observed action/result remains authoritative.'
-            : 'Knowledge ' + knowledgeLabel + ': no reference metadata.' + cueTail);
+            : 'Knowledge ' + knowledgeLabel + ': not current/usable; no reference metadata.' + cueTail);
         function knowledgeRefs(key, pattern) {
             var values = knowledge[key];
             return Array.isArray(values) && values.length <= 16 && values.every(function (v) {

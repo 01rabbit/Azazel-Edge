@@ -764,31 +764,32 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-8', 'timeout: Edge observed result unchanged');
     dom.uninstall();
 
-    // Stale: completed too long ago; receipt and cue are suppressed, Edge result stays visible.
+    // Stale: completed too long ago; only a fixed status remains, with refs suppressed and Edge visible.
     m = mountKnowledge();
     m.S.renderMioLiveAuxiliary(payload({completed_at: new Date(Date.now() - 60000).toISOString()}));
-    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'stale: receipt unavailable');
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'stale: receipt status is not current');
     eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'stale: refs suppressed');
-    ok(m.$('mioKnowledgeCue').textContent.indexOf('Knowledge suppressed') >= 0 && m.$('mioKnowledgeCue').textContent.indexOf(CUE_TAIL) >= 0, 'stale: safe cue');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('not current/usable; no reference metadata') >= 0 && m.$('mioKnowledgeCue').textContent.indexOf(CUE_TAIL) >= 0, 'stale: safe non-current cue');
     dom.uninstall();
 
     // Binding mismatch: receipt generation differs from the parent generation.
     m = mountKnowledge();
     m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({generation: '7'})}));
-    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'mismatch: generation-mismatched receipt not current');
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'mismatch: generation-mismatched receipt status is not current');
     eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'mismatch: refs suppressed');
     dom.uninstall();
 
     // Binding mismatch: receipt names a different frame than the advisory.
     m = mountKnowledge();
     m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({frame_id: 'frame-other'})}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'frame mismatch: status is not current');
     eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'frame mismatch: refs suppressed');
     dom.uninstall();
 
     // Missing parent frame: advisory carries no frame, so the receipt cannot be bound to a frame.
     m = mountKnowledge();
     m.S.renderMioLiveAuxiliary(payload({advisory: {trace_id: 'mio-8'}}));
-    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'missing parent frame: receipt not shown current');
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'missing parent frame: status is not current');
     eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'missing parent frame: refs suppressed');
     eq(m.$('mioLiveCorrelation').textContent, 'event event-8 · trace edge-trace-8 · frame none', 'missing parent frame: frame shown as none');
     dom.uninstall();
@@ -800,9 +801,9 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         const r = receipt({});
         delete r[field];
         m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: r}));
-        eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'missing receipt ' + field + ': not shown current');
+        eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'missing receipt ' + field + ': status is not current');
         eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'missing receipt ' + field + ': refs suppressed');
-        ok(m.$('mioKnowledgeCue').textContent.indexOf('Knowledge unavailable: no reference metadata.') === 0
+        ok(m.$('mioKnowledgeCue').textContent.indexOf('Knowledge projected but not current: not current/usable; no reference metadata.') === 0
             && m.$('mioKnowledgeCue').textContent.indexOf(CUE_TAIL) >= 0, 'missing receipt ' + field + ': cue is safe');
         eq(m.$('mioLiveCorrelation').textContent, 'event event-8 · trace edge-trace-8 · frame frame-8', 'missing receipt ' + field + ': parent IDs unchanged');
         dom.uninstall();

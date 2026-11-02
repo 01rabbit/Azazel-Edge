@@ -11,12 +11,12 @@ def current():
     return {'status': 'complete', 'is_current': True, 'generation': '1',
         'completed_at': datetime.fromtimestamp(100, timezone.utc).isoformat(),
         'max_age_seconds': 10, 'trace_id': 'edge-1',
-        'source_context': {'event_key': 'event-1'},
+        'source_context': {'event_key': 'a1b2c3d4e5f60718293a4b5c'},
         'advisory': {'trace_id': 'mio-1', 'frame_id': 'frame-1'},
         'edge_event': {'action': 'notify', 'mode': 'dry_run',
             'result': 'planned_not_applied', 'trace_id': 'edge-1'},
         'handoff_binding': {'status': 'matched', 'valid': True, 'generation': '1',
-            'event_key': 'event-1', 'edge_trace_id': 'edge-1', 'edge_action': 'notify',
+            'event_key': 'a1b2c3d4e5f60718293a4b5c', 'edge_trace_id': 'edge-1', 'edge_action': 'notify',
             'edge_mode': 'dry_run', 'edge_result': 'planned_not_applied',
             'mio_trace_id': 'mio-1', 'frame_id': 'frame-1'},
         'model_analysis': {'status': 'disabled'},
@@ -24,7 +24,7 @@ def current():
             'authority': 'read_only_advisory', 'usage_status': 'not_applicable',
             'status': 'projected', 'is_current': True, 'generation': '1',
             'frame_generation': '1', 'source_trace_id': 'edge-1', 'trace_id': 'mio-1',
-            'frame_id': 'frame-1', 'event_key': 'event-1',
+            'frame_id': 'frame-1', 'event_key': 'a1b2c3d4e5f60718293a4b5c',
             'projection': {'claim_status': 'reported_unverified',
                 'trust': 'unverified_advisory_only', 'attack_techniques': ['T1059.001'],
                 'source_groups': ['abusech'], 'summary': 'untrusted prose',
@@ -40,7 +40,7 @@ def test_current_receipt_only_exposes_reference_metadata_without_changing_action
     assert receipt == {'status': 'projected', 'is_current': True,
         'claim_status': 'reported_unverified', 'trust': 'unverified_advisory_only',
         'generation': '1', 'frame_generation': '1', 'source_trace_id': 'edge-1',
-        'event_key': 'event-1', 'trace_id': 'mio-1', 'frame_id': 'frame-1',
+        'event_key': 'a1b2c3d4e5f60718293a4b5c', 'trace_id': 'mio-1', 'frame_id': 'frame-1',
         'attack_techniques': ['T1059.001'], 'source_groups': ['abusech']}
     original.pop('knowledge_analysis')
     assert output == original  # All decision, action, fast and model fields unchanged.
@@ -54,7 +54,7 @@ def test_projected_receipt_requires_every_binding_field(key):
     payload = current()
     del payload['knowledge_analysis'][key]
     assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == {
-        'status': 'unavailable', 'is_current': False}
+        'status': 'projected', 'is_current': False}
 
 
 @pytest.mark.parametrize('key', BINDING_KEYS)
@@ -62,20 +62,27 @@ def test_projected_receipt_requires_every_binding_field(key):
 def test_binding_field_must_be_bounded_nonempty_string(key, value):
     payload = current()
     payload['knowledge_analysis'][key] = value
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis']['status'] == 'unavailable'
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == {
+        'status': 'projected', 'is_current': False}
 
 
-def test_binding_field_at_96_chars_is_projected():
+def test_binding_fields_at_96_chars_are_projected_with_valid_event_key():
     value = 'y' * 96
+    event_key = 'a1b2c3d4e5f60718293a4b5c'
     payload = current()
     payload['generation'] = payload['trace_id'] = value
-    payload['source_context']['event_key'] = payload['advisory']['trace_id'] = value
-    payload['advisory']['frame_id'] = value
+    payload['edge_event']['trace_id'] = value
+    payload['handoff_binding'].update(generation=value, edge_trace_id=value,
+        mio_trace_id=value, frame_id=value)
+    payload['advisory'].update(trace_id=value, frame_id=value)
     for key in BINDING_KEYS:
-        payload['knowledge_analysis'][key] = value
+        payload['knowledge_analysis'][key] = event_key if key == 'event_key' else value
     receipt = operator_mio_payload(payload, now=101)['knowledge_analysis']
-    assert receipt['status'] == 'projected'
-    assert {key: receipt[key] for key in BINDING_KEYS} == {key: 'y' * 96 for key in BINDING_KEYS}
+    assert receipt['status'] == 'projected' and receipt['is_current'] is True
+    assert {key: receipt[key] for key in BINDING_KEYS} == {
+        key: event_key if key == 'event_key' else value for key in BINDING_KEYS}
+
+
 def test_receipt_with_real_fast_producer_envelope_survives_typed_overlay():
     from azazel_edge_ai.mio_live_auxiliary import LiveMioAuxiliary
     from azazel_edge_control.daemon import AGENT_SNAPSHOT_VALIDATORS
