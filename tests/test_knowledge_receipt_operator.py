@@ -113,6 +113,22 @@ def test_private_looking_correlation_value_is_not_reemitted_as_generation():
     assert value not in repr(result)
 
 
+@pytest.mark.parametrize(('field', 'value'), [
+    ('status', []), ('status', {}), ('provenance', []), ('provenance', {}),
+])
+def test_malformed_source_context_metadata_is_omitted_without_failing_dashboard_projection(field, value):
+    payload = current()
+    item = {'value': 'alert', 'status': 'observed',
+        'provenance': 'rust_core_normalized_event'}
+    item[field] = value
+    payload['source_context']['fields'] = {'event_type': item}
+
+    result = operator_mio_payload(payload, now=101)
+
+    assert result['knowledge_analysis']['status'] == 'projected'
+    assert 'event_type' not in result['source_context']['fields']
+
+
 BINDING_KEYS = ('generation', 'frame_generation', 'source_trace_id', 'event_key', 'trace_id', 'frame_id')
 
 

@@ -44,7 +44,8 @@ def _display_source_context(value):
                 continue
             status = item.get('status')
             provenance = item.get('provenance')
-            if status not in {'observed', 'unavailable'} or provenance != 'rust_core_normalized_event':
+            if (type(status) is not str or status not in {'observed', 'unavailable'}
+                    or type(provenance) is not str or provenance != 'rust_core_normalized_event'):
                 continue
             raw = item.get('value')
             if name == 'technique_ids':
