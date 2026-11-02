@@ -441,7 +441,10 @@
         var fresh = payload.is_current === true && payload.status === 'complete'
             && resultAge <= Number(payload.max_age_seconds || 0);
         var usable = fresh && bindingValid;
-        var actionBits = [edge.action, 'mode ' + edgeModeText(edge.mode), edge.result, usable ? boundedEdgeTrace(edge.trace_id) : '']
+        // The mode is shown only alongside an Edge action or result; with neither, the row keeps the Unknown fallback.
+        var hasEdgeActionOrResult = (typeof edge.action === 'string' && edge.action.length > 0)
+            || (typeof edge.result === 'string' && edge.result.length > 0);
+        var actionBits = [edge.action, hasEdgeActionOrResult ? 'mode ' + edgeModeText(edge.mode) : '', edge.result, usable ? boundedEdgeTrace(edge.trace_id) : '']
             .filter(function (v) { return typeof v === 'string' && v; });
         var suppressedMessage = 'M.I.O. details suppressed (stale result or correlation mismatch).';
         put('mioLiveAuxStatus', usable ? (payload.status || 'unavailable') : ((payload.status || 'unavailable') + ' (details suppressed)'));
@@ -590,10 +593,12 @@
                 || (typeof receipt.source_freshness.attack_version === 'string'
                     && /^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$/.test(receipt.source_freshness.attack_version)));
         var edgeCorrelatedToMio = usable && bindingValid;
-        // An uncorrelated/stale row is only the last Edge report. Its age is the M.I.O. snapshot's payload.completed_at, not an Edge timestamp.
-        var snapshotAgeText = Number.isFinite(resultAge)
-            ? 'M.I.O. snapshot age ' + Math.round(resultAge) + ' s'
-            : 'M.I.O. snapshot age unavailable';
+        // An uncorrelated/stale row is only the last Edge report. Its age is the M.I.O. snapshot's payload.completed_at
+        // measured at the last refresh, not an Edge timestamp. A future or negative raw age is unavailable, never 0 s.
+        var rawAgeSeconds = Number.isFinite(completedAt) ? (Date.now() - completedAt) / 1000 : NaN;
+        var snapshotAgeText = Number.isFinite(rawAgeSeconds) && rawAgeSeconds >= 0
+            ? 'M.I.O. snapshot age at last refresh ' + Math.round(rawAgeSeconds) + ' s'
+            : 'M.I.O. snapshot age at last refresh unavailable';
         put('mioLiveEdgeAction', edgeActionText + (!edgeCorrelatedToMio
             ? ' · not correlated to current M.I.O./Knowledge details · last report only · ' + snapshotAgeText
             : (receipt && !receiptBoundForDisplay ? ' · Knowledge unmatched/un-correlated' : '')));
