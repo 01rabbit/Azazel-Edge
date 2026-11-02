@@ -285,6 +285,9 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                 result = lane.snapshot()
             assert observed[0]['knowledge_context_response_advisory']['claim_status'] == 'reported_unverified'
             assert observed[0]['knowledge_context_response_advisory']['source_groups'] == ['abusech']
+            observed_json = json.dumps(observed[0])
+            assert '203.0.113.7' not in observed_json
+            assert 'urlhaus' not in observed_json
             assert result['status'] == 'projected'
             assert result['is_current'] is True
             assert result['projection']['source_groups'] == ['abusech']
