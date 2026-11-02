@@ -24,9 +24,11 @@ class LiveMioKnowledgeLane:
     def __init__(self, *, enabled: Callable[[], bool], query: Callable,
                  fast_snapshot: Callable, frame_snapshot: Callable,
                  knowledge_input_snapshot: Callable, project: Callable,
-                 max_age_seconds: float = 10.0):
+                 max_age_seconds: float = 10.0, current_generation: Callable | None = None):
         self._enabled, self._query, self._project = enabled, query, project
         self._fast_snapshot, self._frame_snapshot = fast_snapshot, frame_snapshot
+        # Optional cheap scalar for the 10 ms cancellation watcher; without it stale() falls back to fast_snapshot.
+        self._current_generation = current_generation
         self._knowledge_input_snapshot = knowledge_input_snapshot
         self.max_age_seconds = max(.1, min(float(max_age_seconds), 10.0))
         self._lock = threading.RLock()
@@ -61,6 +63,11 @@ class LiveMioKnowledgeLane:
             return _empty('disabled', result['generation'])
         return result
 
+    def _live_generation(self) -> str:
+        if self._current_generation is not None:
+            return str(self._current_generation())
+        return str(self._fast_snapshot().get('generation') or '')
+
     def submit(self, generation: Any, source_trace_id: str = ''):
         # Never calls snapshot/fast_snapshot: the receipt is built from lane-owned state only,
         # so the synchronous _handle_event caller cannot block on the auxiliary callback.
@@ -85,7 +92,7 @@ class LiveMioKnowledgeLane:
             deadline = queued_at + self.max_age_seconds
             def stale():
                 return (sequence != self._sequence or not self._enabled()
-                    or str(self._fast_snapshot().get('generation') or '') != generation)
+                    or self._live_generation() != generation)
             result = _empty('unavailable', generation)
             try:
                 fast = {}

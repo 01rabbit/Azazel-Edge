@@ -37,7 +37,8 @@ It accepts HTTP only on loopback, does not follow redirects or retry, limits
 response headers to 4 KiB and request/response bodies to 16 KiB, and rejects
 transfer encoding. A single per-request cancellation watcher shuts down the captured socket on
 supersession or the absolute remaining Knowledge deadline, including connect,
-response headers and body reads. It checks supersession every 10 ms and is joined
+response headers and body reads. It checks supersession every 10 ms through the
+auxiliary's lightweight current-generation scalar, not a full auxiliary snapshot, and is joined
 before the serial worker starts another request, so stale I/O cannot consume the
 latest queued request's deadline or create an accumulating pool of query threads. Generations are checked before
 and after the request and before and after model-free projection. Late work cannot replace
@@ -57,8 +58,13 @@ receipt expires after ten seconds, suppresses its projection when stale, and
 checks current generation, event and both frame bindings before `is_current`.
 There is no Knowledge-to-model join. The control daemon carries the receipt within its bounded `mio_auxiliary`
 object. The normal dashboard summary API now replaces the nested receipt with
-an allowlisted display projection: fixed status, current marker, public ATT&CK
-IDs and bounded source-group labels. The separate Knowledge panel labels these
+an allowlisted display projection: fixed status, current marker, reported-unverified
+claim and trust labels, public ATT&CK IDs, bounded source-group labels, and six
+parent-bound correlation identifiers: `generation`, `frame_generation`,
+`source_trace_id`, `event_key`, `trace_id` and `frame_id`. Each correlation identifier
+equals the parent envelope's value, which is checked before projection; it is rendered
+so the browser can verify the binding, not as newly displayed data, and the allowlist
+does not make these identifiers private. The separate Knowledge panel labels these
 as reported and unverified, independent of the measured model result. It does
 not expose source prose, routes, actions or reported defensive state.
 The read path checks generation, event, Edge trace and both MIO frame bindings.

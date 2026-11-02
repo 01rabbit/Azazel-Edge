@@ -12,14 +12,14 @@ def wait(lane):
     return lane.snapshot()
 
 
-def setup(query, enabled=lambda: True, max_age_seconds=1):
+def setup(query, enabled=lambda: True, max_age_seconds=1, **lane_kwargs):
     state = {'generation': '1', 'trace_id': 'edge-1', 'status': 'complete', 'is_current': True,
         'advisory': {'trace_id': 'mio-1', 'frame_id': 'frame-1'}, 'source_context': {'event_key': 'event-1'}}
     frames = {'1': {'trace_id': 'mio-1', 'frame_id': 'frame-1'}}
     lane = LiveMioKnowledgeLane(enabled=enabled, query=query, fast_snapshot=lambda: dict(state),
         frame_snapshot=lambda g: frames.get(g), knowledge_input_snapshot=lambda g: {'private': g},
         project=lambda frame, response, deadline, stale: {'claim_status': 'reported_unverified'},
-        max_age_seconds=max_age_seconds)
+        max_age_seconds=max_age_seconds, **lane_kwargs)
     return lane, state, frames
 
 
@@ -106,6 +106,28 @@ def test_blocked_knowledge_query_does_not_block_fast_model_path_or_overwrite_new
     assert result['is_current'] is True
     assert result['frame_id'] == 'frame-2'
     assert result['source_trace_id'] == 'edge-2'
+
+
+def test_repeated_stale_checks_use_generation_callback_without_full_snapshot():
+    generation, snapshots, observed = {'value': 1}, [], {}
+    def query(private, stale_check, **kwargs):
+        before = len(snapshots)
+        observed['fresh'] = [stale_check() for _ in range(500)]
+        observed['snapshot_calls'] = len(snapshots) - before
+        generation['value'] = 2
+        observed['superseded'] = stale_check()
+        return 'received', {}
+    lane, state, frames = setup(query, current_generation=lambda: generation['value'])
+    # fast_snapshot still reports generation '1'; only the scalar callback can observe the supersession.
+    lane._fast_snapshot = lambda: (snapshots.append(1), dict(state))[1]
+    lane.submit('1', 'edge-1')
+    result = wait(lane)
+    assert observed['fresh'] == [False] * 500
+    assert observed['snapshot_calls'] == 0
+    assert observed['superseded'] is True
+    assert result['status'] == 'superseded'
+    assert result['is_current'] is False
+    assert 'projection' not in result
 
 
 def test_blocking_fast_snapshot_does_not_block_submit():

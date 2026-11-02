@@ -2744,7 +2744,8 @@ LIVE_MIO_KNOWLEDGE_LANE = LiveMioKnowledgeLane(
     enabled=lambda: os.environ.get('AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED') == '1',
     query=_query_knowledge_context, project=_project_mio_knowledge,
     fast_snapshot=LIVE_MIO_AUXILIARY.snapshot, frame_snapshot=LIVE_MIO_AUXILIARY.frame_snapshot,
-    knowledge_input_snapshot=LIVE_MIO_AUXILIARY.knowledge_input_snapshot)
+    knowledge_input_snapshot=LIVE_MIO_AUXILIARY.knowledge_input_snapshot,
+    current_generation=LIVE_MIO_AUXILIARY.current_generation)
 
 
 def _call_llm_with_retry(payload: Dict[str, Any], model: str) -> tuple[Dict[str, Any] | None, int, int, str]:
