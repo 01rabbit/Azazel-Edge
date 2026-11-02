@@ -23,6 +23,11 @@
     var CRIT_WORDS = ['critical', 'danger', 'alert', 'down', 'off', 'outage', 'compromised', 'failed', 'fail', 'high'];
 
     /* ---- model lane (display-only) allowlists ------------------------------ */
+    // Edge mode display allowlist (fixed; mirrors the producer's _EDGE_MODES). Anything else, or a missing mode, shows "unavailable".
+    var EDGE_MODE_ALLOWLIST = ['disabled', 'dry_run', 'policy_gated', 'release_guard_failed', 'enforced'];
+    function edgeModeText(raw) {
+        return typeof raw === 'string' && EDGE_MODE_ALLOWLIST.indexOf(raw) >= 0 ? raw : 'unavailable';
+    }
     // Lane statuses shown for a non-current model result. Anything else stays generic "suppressed".
     var MODEL_LANE_DEGRADED_STATUSES = ['degraded', 'skipped', 'queued', 'pending', 'unavailable'];
     var MODEL_LANE_REASON_LABELS = {
@@ -436,7 +441,7 @@
         var fresh = payload.is_current === true && payload.status === 'complete'
             && resultAge <= Number(payload.max_age_seconds || 0);
         var usable = fresh && bindingValid;
-        var actionBits = [edge.action, edge.result, usable ? boundedEdgeTrace(edge.trace_id) : '']
+        var actionBits = [edge.action, 'mode ' + edgeModeText(edge.mode), edge.result, usable ? boundedEdgeTrace(edge.trace_id) : '']
             .filter(function (v) { return typeof v === 'string' && v; });
         var suppressedMessage = 'M.I.O. details suppressed (stale result or correlation mismatch).';
         put('mioLiveAuxStatus', usable ? (payload.status || 'unavailable') : ((payload.status || 'unavailable') + ' (details suppressed)'));
@@ -585,8 +590,12 @@
                 || (typeof receipt.source_freshness.attack_version === 'string'
                     && /^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$/.test(receipt.source_freshness.attack_version)));
         var edgeCorrelatedToMio = usable && bindingValid;
+        // An uncorrelated/stale row is only the last Edge report. Its age is the M.I.O. snapshot's payload.completed_at, not an Edge timestamp.
+        var snapshotAgeText = Number.isFinite(resultAge)
+            ? 'M.I.O. snapshot age ' + Math.round(resultAge) + ' s'
+            : 'M.I.O. snapshot age unavailable';
         put('mioLiveEdgeAction', edgeActionText + (!edgeCorrelatedToMio
-            ? ' · not correlated to current M.I.O./Knowledge details'
+            ? ' · not correlated to current M.I.O./Knowledge details · last report only · ' + snapshotAgeText
             : (receipt && !receiptBoundForDisplay ? ' · Knowledge unmatched/un-correlated' : '')));
         // Bounded, untrusted correlation IDs for operator matching; rendered via textContent only.
         function boundedId(value) {
