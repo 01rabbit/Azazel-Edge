@@ -245,7 +245,7 @@ class LiveMioModelLane:
                 isinstance(receipt, Mapping)
                 and str(result.get("generation") or "") == str(self._generation)
                 and receipt.get("generation") == result.get("fast_generation")
-                and receipt.get("trace_id") == result.get("trace_id"))
+                and receipt.get("trace_id") == result.get("frame_trace_id"))
             return result
 
     def diagnostics(self) -> list[dict[str, Any]]:
@@ -457,7 +457,7 @@ class LiveMioModelLane:
                 with self._lock:
                     if generation == self._generation:
                         result["generation"] = str(generation)
-                        result["trace_id"] = (str(result.get("frame_trace_id") or "") if result.get("frame_trace_id")
+                        result["trace_id"] = (str(result.get("frame_trace_id") or "") if result.get("status") in {"complete", "partial"}
                                                else str(fast.get("trace_id") or "")[:96] if fast else "")
                         result["fast_generation"] = fast_generation
                         result["authority"] = "read_only_advisory"

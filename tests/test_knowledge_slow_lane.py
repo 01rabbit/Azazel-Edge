@@ -222,7 +222,8 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
             assert receipt['attack_techniques'] == observed[0]['knowledge_context_response_advisory']['attack_techniques']
             assert receipt['attack_techniques'] == ['T1071.001', 'T1595.002']
             assert receipt['generation'] == submitted['generation']
-            assert receipt['trace_id'] == frame['trace_id'] == result['frame_trace_id'] == result['trace_id']
+            assert receipt['trace_id'] == frame['trace_id'] == result['frame_trace_id']
+            assert result['trace_id'] == event['enforcement']['trace_id']
             assert receipt['trace_id'] != event['enforcement']['trace_id']
             assert result['knowledge_receipt_current'] is True
             assert frame == before

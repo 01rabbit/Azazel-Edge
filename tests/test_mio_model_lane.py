@@ -72,8 +72,8 @@ def test_current_slow_context_result_projects_only_bounded_receipt_and_preserves
         "frame_id": "frame-abc", "trace_id": "mio-frame-abc", "evidence_refs": ["suricata_sid:1"]})
     lane.submit("7", "trace-abc")
     result = _wait(lane, status)
-    assert result["trace_id"] == result["frame_trace_id"] == "mio-frame-abc"
-    assert result["trace_id"] != fast["trace_id"]
+    assert result["frame_trace_id"] == "mio-frame-abc"
+    assert result["trace_id"] == ("mio-frame-abc" if status == "complete" else fast["trace_id"])
     receipt = result["knowledge_receipt"]
     assert result["knowledge_receipt_status"] == "received"
     assert result["knowledge_receipt_current"] is True
