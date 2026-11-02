@@ -28,7 +28,10 @@ def operator_mio_payload(payload, *, now=None):
             or receipt['status'] not in _STATUSES):
         return output
     try:
-        completed = datetime.fromisoformat(payload['completed_at'].replace('Z', '+00:00')).timestamp()
+        completed_at = datetime.fromisoformat(payload['completed_at'].replace('Z', '+00:00'))
+        if completed_at.utcoffset() is None:
+            return output
+        completed = completed_at.timestamp()
         age = (datetime.now(timezone.utc).timestamp() if now is None else now) - completed
         limit = payload['max_age_seconds']
         fresh = type(limit) in (int, float) and math.isfinite(limit) and 0 < limit <= 10 and 0 <= age <= limit
