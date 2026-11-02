@@ -435,7 +435,8 @@
             'unavailable', 'timeout', 'oversized', 'redirect_rejected', 'auth_rejected', 'scope_rejected',
             'malformed', 'received', 'superseded', 'rejected', 'projected'];
         put('mioKnowledgeStatus', knowledgeCurrent ? 'projected (reported, unverified)'
-            : (knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable'));
+            : (knowledge.status === 'projected' ? 'projected but not current'
+            : (knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable')));
         function knowledgeRefs(key, pattern) {
             var values = knowledge[key];
             return Array.isArray(values) && values.length <= 16 && values.every(function (v) {

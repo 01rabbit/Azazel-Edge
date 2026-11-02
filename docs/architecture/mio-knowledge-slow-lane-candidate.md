@@ -69,7 +69,14 @@ mismatched handoff or Edge-event fields suppress the receipt display.
 It conservatively expires at the fast frame's deadline (at most ten seconds),
 which can suppress a later Knowledge completion early; it never extends the
 Knowledge receipt lifetime. The browser also clears the panel at that deadline
-when polling stops. Malformed, expired or mismatched receipts are unavailable.
+when polling stops. An invalid outer receipt schema, authority, usage status or
+status is unavailable.
+Once the outer envelope validates, a projected receipt whose freshness, bindings
+or projection metadata (for example a wrong `claim_status` or `trust`) fail keeps
+only its bounded `projected` status with `is_current=false` and no references.
+A stale, expired or mismatched receipt follows the same status-only rule; the
+operator console labels it "projected but not current" and shows no ATT&CK or
+source-group references.
 This display projection does not modify the producer receipt or fast/model lane.
 Existing Edge decisions, tactical scores and frame evidence remain
 unchanged. The deterministic, DPI, arbiter and action paths make no calls.
