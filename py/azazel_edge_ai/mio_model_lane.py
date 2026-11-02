@@ -449,7 +449,7 @@ class LiveMioModelLane:
                 result["knowledge_receipt_status"] = _receipt_status(result.get("knowledge_status"))
                 if result.get("knowledge_receipt") is not None and (
                         result.get("knowledge_receipt", {}).get("generation") != fast_generation
-                        or result.get("knowledge_receipt", {}).get("trace_id") != str(fast.get("trace_id") or "")):
+                        or result.get("knowledge_receipt", {}).get("trace_id") != str(result.get("frame_trace_id") or "")):
                     result["knowledge_receipt"] = None
                     result["knowledge_receipt_status"] = "stale"
                 if result["knowledge_receipt_status"] == "received" and result.get("knowledge_receipt") is None:
@@ -457,7 +457,7 @@ class LiveMioModelLane:
                 with self._lock:
                     if generation == self._generation:
                         result["generation"] = str(generation)
-                        result["trace_id"] = (str(result.get("frame_trace_id") or "") if result.get("status") in {"complete", "partial"}
+                        result["trace_id"] = (str(result.get("frame_trace_id") or "") if result.get("frame_trace_id")
                                                else str(fast.get("trace_id") or "")[:96] if fast else "")
                         result["fast_generation"] = fast_generation
                         result["authority"] = "read_only_advisory"

@@ -219,8 +219,11 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
             receipt = result['knowledge_receipt']
             assert receipt['claim_status'] == 'reported_unverified'
             assert receipt['source_groups'] == ['abusech']
-            assert receipt['attack_techniques'] == ['T1595.002']
-            assert receipt['generation'] == '1' and receipt['trace_id'] == 'trace-synthetic'
+            assert receipt['attack_techniques'] == observed[0]['knowledge_context_response_advisory']['attack_techniques']
+            assert receipt['attack_techniques'] == ['T1071.001', 'T1595.002']
+            assert receipt['generation'] == submitted['generation']
+            assert receipt['trace_id'] == frame['trace_id'] == result['frame_trace_id'] == result['trace_id']
+            assert receipt['trace_id'] != event['enforcement']['trace_id']
             assert result['knowledge_receipt_current'] is True
             assert frame == before
             assert result['status'] == 'degraded'
@@ -228,7 +231,6 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
             assert frame['knowledge_refs'] == []
             assert '203.0.113.7' not in json.dumps(result) + caplog.text + log.read_text()
             assert 'urlhaus' not in json.dumps(result)
-            assert 'abusech' not in json.dumps(result)
             assert '203.0.113.7' not in json.dumps(lane.diagnostics())
             assert token not in json.dumps(result) + caplog.text + log.read_text()
         finally:

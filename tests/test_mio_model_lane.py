@@ -56,23 +56,30 @@ def _knowledge_advisory():
     }
 
 
-def test_current_slow_context_result_projects_only_bounded_receipt_and_preserves_fast_output():
+@pytest.mark.parametrize("generation_method,outcome,mio_state,status", [
+    ("model", "completed", "complete", "complete"),
+    ("deterministic", "degraded", "degraded", "degraded"),
+])
+def test_current_slow_context_result_projects_only_bounded_receipt_and_preserves_fast_output(
+        generation_method, outcome, mio_state, status):
     fast = _fast()
     before = dict(fast)
     lane = LiveMioModelLane(enabled=True, analyze=lambda payload, remaining: {
-        "summary": "measured", "outcome": "completed", "mio_state": "complete",
-        "generation_method": "model", "frame_id": "frame-abc", "trace_id": "trace-abc",
+        "summary": "measured", "outcome": outcome, "mio_state": mio_state,
+        "generation_method": generation_method, "frame_id": "frame-abc", "trace_id": "mio-frame-abc",
         "knowledge_status": "projected", "knowledge_context_response_advisory": _knowledge_advisory(),
     }, fast_snapshot=lambda: fast, frame_snapshot=lambda generation: {
-        "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": ["suricata_sid:1"]})
+        "frame_id": "frame-abc", "trace_id": "mio-frame-abc", "evidence_refs": ["suricata_sid:1"]})
     lane.submit("7", "trace-abc")
-    result = _wait(lane, "complete")
+    result = _wait(lane, status)
+    assert result["trace_id"] == result["frame_trace_id"] == "mio-frame-abc"
+    assert result["trace_id"] != fast["trace_id"]
     receipt = result["knowledge_receipt"]
     assert result["knowledge_receipt_status"] == "received"
     assert result["knowledge_receipt_current"] is True
     assert receipt == {
         "schema_version": "azazel.edge_knowledge_advisory.v1", "status": "complete",
-        "authority": "read_only_advisory", "generation": "7", "trace_id": "trace-abc",
+        "authority": "read_only_advisory", "generation": "7", "trace_id": "mio-frame-abc",
         "claim_status": "reported_unverified", "source_groups": ["abusech"],
         "attack_techniques": ["T1059.001"], "source_freshness": {"oldest_feed_days": 2},
     }
