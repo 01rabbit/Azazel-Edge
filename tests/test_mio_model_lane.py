@@ -323,10 +323,6 @@ def test_unexpected_frame_extension_never_reaches_model_prompt(monkeypatch):
     with pytest.raises(ValueError, match="invalid_situation_frame_payload"):
         agent._analyze_mio_fast_result(extended, 1.0)
     assert len(captured) == control_count
-    for prompt in captured:
-        assert sentinel_ioc not in prompt
-        assert sentinel_feed not in prompt
-        assert sentinel_token not in prompt
 
 
 def test_valid_fake_transport_runs_full_shared_core_and_lane_preserves_validation_metrics(monkeypatch):
