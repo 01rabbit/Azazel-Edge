@@ -345,15 +345,17 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {generation: 'old'})}));
     eq(m.$('mioLiveKnowledgeAdvisory').textContent, 'Suppressed', 'stale optional receipt is suppressed');
     ok(m.$('mioLiveEdgeAction').textContent.includes('notify / planned_not_applied'), 'stale receipt leaves Edge action/result visible');
-    ok(!m.$('mioLiveEdgeAction').textContent.includes('Knowledge unmatched/un-correlated'), 'stale outer envelope does not use receipt correlation');
-    ok(!m.$('mioLiveEdgeAction').textContent.includes('event-530'), 'unmatched marker exposes no correlation ID');
-    const mismatched = Object.assign({}, payload, {edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {trace_id: 'other-private-id'})});
+    ok(m.$('mioLiveEdgeAction').textContent.includes('not correlated to current M.I.O./Knowledge details'), 'stale outer envelope marks retained Edge action uncorrelated');
+    ok(!m.$('mioLiveEdgeAction').textContent.includes('event-530'), 'stale marker exposes no correlation ID');
+    const mismatched = Object.assign({}, payload, {handoff_binding: Object.assign({}, payload.handoff_binding, {valid: false}),
+        edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {trace_id: 'other-private-id'})});
     m.S.renderMioLiveAuxiliary(mismatched);
-    ok(m.$('mioLiveEdgeAction').textContent.includes('Knowledge unmatched/un-correlated'), 'mismatched receipt is marked unmatched');
+    ok(m.$('mioLiveEdgeAction').textContent.includes('notify / planned_not_applied'), 'binding mismatch keeps Edge action/result visible');
+    ok(m.$('mioLiveEdgeAction').textContent.includes('not correlated to current M.I.O./Knowledge details'), 'binding mismatch marks retained Edge action uncorrelated');
     ok(!m.$('mioLiveEdgeAction').textContent.includes('other-private-id'), 'mismatch marker hides receipt ID');
     const malformed = Object.assign({}, payload, {edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {source_groups: ['raw.example']})});
     m.S.renderMioLiveAuxiliary(malformed);
-    ok(m.$('mioLiveEdgeAction').textContent.includes('Knowledge unmatched/un-correlated'), 'malformed receipt is marked unmatched');
+    ok(m.$('mioLiveEdgeAction').textContent.includes('Knowledge unmatched/un-correlated'), 'malformed current receipt is marked unmatched');
 })();
 
 // --- 1. Empty payload: nothing throws, nothing is green, unknowns say so ----
@@ -472,7 +474,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'mismatched hypotheses suppressed');
     eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'mismatched checks suppressed');
     eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'mismatched handoff suppressed');
-    eq(m.$('mioLiveEdgeAction').textContent, 'notify / applied', 'Edge trace suppressed on MIO mismatch');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / applied · not correlated to current M.I.O./Knowledge details', 'Edge action retained and marked uncorrelated on MIO mismatch');
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '5',
         trace_id: 'edge-trace-5', edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-5'},
@@ -498,7 +500,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'stale hypotheses suppressed');
     eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'stale checks suppressed');
     eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'stale handoff suppressed');
-    eq(m.$('mioLiveEdgeAction').textContent, 'isolate / applied', 'stale MIO result suppresses Edge trace ID');
+    eq(m.$('mioLiveEdgeAction').textContent, 'isolate / applied · not correlated to current M.I.O./Knowledge details', 'stale MIO result retains action and marks it uncorrelated');
     function currentPayload(modelAnalysis) {
         return {status: 'complete', is_current: true, max_age_seconds: 10,
             completed_at: new Date(Date.now() - 1000).toISOString(), generation: '7', trace_id: 'edge-trace-7',
@@ -919,7 +921,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             'binding valid marker #' + i + ': handoff suppressed');
         ok(m.$('mioKnowledgeCue').textContent.indexOf('not current/usable; no reference metadata') >= 0,
             'binding valid marker #' + i + ': safe non-current cue');
-        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied',
+        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied · not correlated to current M.I.O./Knowledge details',
             'binding valid marker #' + i + ': action/result remain visible and trace is suppressed');
         dom.uninstall();
     });
@@ -1037,7 +1039,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         m.S.renderMioLiveAuxiliary(current(normal, over));
         eq(m.$('mioSourceObserved').textContent, 'Suppressed', 'stale or mismatched source context suppressed');
         eq(m.$('mioSourceUnavailable').textContent, 'Suppressed', 'stale or mismatched unavailable list suppressed');
-        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied', 'Edge action/result remain while trace is suppressed');
+        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied · not correlated to current M.I.O./Knowledge details', 'Edge action/result remain and are marked uncorrelated');
     });
 
     // Missing, empty, or non-producer-format event key: binding otherwise valid, source fields still suppressed.
@@ -1057,7 +1059,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-8 (malformed fields omitted)',
         'valid action with unknown_fields discloses malformed omitted fields');
     m.S.renderMioLiveAuxiliary(current(normal, {edge_event: {unknown_fields: true}}));
-    eq(m.$('mioLiveEdgeAction').textContent, 'Unknown (malformed fields omitted)', 'no valid Edge fields with unknown_fields still discloses');
+    eq(m.$('mioLiveEdgeAction').textContent, 'Unknown (malformed fields omitted) · not correlated to current M.I.O./Knowledge details', 'no valid Edge fields with unknown_fields still discloses and marks binding');
 
     // Hostile values, oversized values, wrong types, and arbitrary keys never leak through.
     const hostile = Object.assign({}, normal, {

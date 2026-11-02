@@ -562,8 +562,10 @@
             && (receipt.source_freshness.attack_version == null
                 || (typeof receipt.source_freshness.attack_version === 'string'
                     && /^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$/.test(receipt.source_freshness.attack_version)));
-        put('mioLiveEdgeAction', edgeActionText + (usable && receipt && !receiptBoundForDisplay
-            ? ' · Knowledge unmatched/un-correlated' : ''));
+        var edgeCorrelatedToMio = usable && bindingValid;
+        put('mioLiveEdgeAction', edgeActionText + (!edgeCorrelatedToMio
+            ? ' · not correlated to current M.I.O./Knowledge details'
+            : (receipt && !receiptBoundForDisplay ? ' · Knowledge unmatched/un-correlated' : '')));
         // Bounded, untrusted correlation IDs for operator matching; rendered via textContent only.
         function boundedId(value) {
             return typeof value === 'string' && value ? value.slice(0, 96) : '';
