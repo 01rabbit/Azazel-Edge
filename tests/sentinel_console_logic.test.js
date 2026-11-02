@@ -308,14 +308,14 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             event_key: 'event-5', edge_trace_id: 'edge-trace-5', edge_action: 'notify',
             edge_result: 'planned_not_applied', edge_mode: 'dry_run', mio_trace_id: 'mio-trace-5', frame_id: 'frame-5'},
         advisory: {trace_id: 'mio-trace-5', frame_id: 'frame-5'},
-        generation: '5', knowledge_analysis: {status: 'projected', is_current: true, claim_status: 'reported_unverified', trust: 'unverified_advisory_only', generation: '5', frame_generation: '5', source_trace_id: 'edge-trace-5', event_key: 'event-5', trace_id: 'mio-trace-5', frame_id: 'frame-5', attack_techniques: ['T1059.001'], source_groups: ['abusech'], action: 'isolate'}, model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
+        generation: '5', knowledge_analysis: {status: 'projected', is_current: true, claim_status: 'reported_unverified', trust: 'unverified_advisory_only', generation: '5', frame_generation: '5', source_trace_id: 'edge-trace-5', event_key: 'event-5', trace_id: 'mio-trace-5', frame_id: 'frame-5', attack_techniques: ['T1059.001'], source_groups: ['abusech'], source_freshness: {status: 'reported_unverified_at_lookup', oldest_feed_days: null, attack_version: null}, action: 'isolate'}, model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
             hypotheses: [{statement: 'A hostile-activity explanation remains possible, but this frame does not establish it.', verification: 'model_proposed_unverified', source: 'mio_validated_alternative', frame_refs: ['suricata_sid:42']}],
             next_checks: ['check the observed event'], model: 'qwen:2b', duration_ms: 900, prompt_tokens: 20, completion_tokens: 12},
         advisory: {trace_id: 'mio-trace-5', frame_id: 'frame-5', recommendation: '<img src=x onerror=alert(1)>',
             hypotheses: [{statement: '<script>hypothesis</script>', verification: 'unverified'}],
             next_checks: ['check one'], handoff: {summary: '<b>handoff</b>'}}});
     eq(m.$('mioKnowledgeStatus').textContent, 'projected (reported, unverified)', 'independent receipt status');
-    eq(m.$('mioKnowledgeRefs').textContent, 'ATT&CK: T1059.001 · Source groups: abusech', 'only reference metadata rendered');
+    eq(m.$('mioKnowledgeRefs').textContent, 'ATT&CK: T1059.001 · Source groups: abusech · Source freshness reported, unverified at lookup: oldest feed unavailable; ATT&CK version unavailable', 'only allowlisted reference metadata rendered');
     eq(m.$('mioLiveAuxStatus').textContent, 'complete', 'MIO status rendered');
     eq(m.$('mioLiveAuxKnowledge').textContent, 'not_provided', 'Knowledge provenance rendered');
     eq(m.$('mioLiveAuxFreshness').textContent, 'Current generation', 'fresh completion is current');
@@ -350,7 +350,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'mismatched hypotheses suppressed');
     eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'mismatched checks suppressed');
     eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'mismatched handoff suppressed');
-    eq(m.$('mioLiveEdgeAction').textContent, 'notify / applied / edge-trace-5', 'Edge action remains visible on MIO mismatch');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / applied', 'Edge trace suppressed on MIO mismatch');
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '5',
         trace_id: 'edge-trace-5', edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-5'},
@@ -376,13 +376,13 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'stale hypotheses suppressed');
     eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'stale checks suppressed');
     eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'stale handoff suppressed');
-    eq(m.$('mioLiveEdgeAction').textContent, 'isolate / applied / edge-trace-old', 'Edge action remains visible on stale MIO result');
+    eq(m.$('mioLiveEdgeAction').textContent, 'isolate / applied', 'stale MIO result suppresses Edge trace ID');
     function currentPayload(modelAnalysis) {
         return {status: 'complete', is_current: true, max_age_seconds: 10,
             completed_at: new Date(Date.now() - 1000).toISOString(), generation: '7', trace_id: 'edge-trace-7',
             edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-7'},
             source_context: {event_key: 'event-7'},
-            handoff_binding: {status: 'matched', generation: '7', event_key: 'event-7', edge_trace_id: 'edge-trace-7',
+            handoff_binding: {status: 'matched', valid: true, generation: '7', event_key: 'event-7', edge_trace_id: 'edge-trace-7',
                 edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
             model_analysis: modelAnalysis};
     }
@@ -730,7 +730,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         return Object.assign({status: 'projected', is_current: true, claim_status: 'reported_unverified',
             trust: 'unverified_advisory_only', generation: '8', frame_generation: '8', source_trace_id: 'edge-trace-8',
             event_key: 'event-8', trace_id: 'mio-8', frame_id: 'frame-8', attack_techniques: ['T1059'],
-            source_groups: ['abusech']}, over);
+            source_groups: ['abusech'], source_freshness: {status: 'reported_unverified_at_lookup', oldest_feed_days: 14.5, attack_version: '18.1'}}, over);
     }
     function mountKnowledge() {
         const m = mount();
@@ -746,12 +746,40 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     let m = mountKnowledge();
     m.S.renderMioLiveAuxiliary(payload({}));
     eq(m.$('mioKnowledgeStatus').textContent, 'projected (reported, unverified)', 'normal: receipt current');
-    eq(m.$('mioKnowledgeRefs').textContent, 'ATT&CK: T1059 · Source groups: abusech', 'normal: refs shown');
+    eq(m.$('mioKnowledgeRefs').textContent,
+        'ATT&CK: T1059 · Source groups: abusech · Source freshness reported, unverified at lookup: oldest feed 14.5 days; ATT&CK version 18.1',
+        'normal: refs and explicitly unverified source freshness shown');
     ok(m.$('mioKnowledgeCue').textContent.indexOf('not a verdict') >= 0, 'normal: cue states unverified, not a verdict');
     eq(m.$('mioLiveCorrelation').textContent, 'event event-8 · trace edge-trace-8 · frame frame-8', 'normal: correlation IDs shown');
     m.expire();
     eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'normal: expiry clears receipt');
     ok(m.$('mioKnowledgeCue').textContent.indexOf('expired') >= 0 && m.$('mioKnowledgeCue').textContent.indexOf(CUE_TAIL) >= 0, 'normal: expiry cue keeps Edge authority');
+    dom.uninstall();
+
+    // Null and malformed/absent freshness stay explicitly unavailable and never become verified.
+    [null, {}, {status: 'reported_unverified_at_lookup', oldest_feed_days: true, attack_version: '18.1'},
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: -1, attack_version: null},
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: 36501, attack_version: null},
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: 1, attack_version: 'unknown'},
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: 1, attack_version: '18.1<script>'},
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: 1, attack_version: null, url: 'https://evil.invalid'}
+    ].forEach(function (freshness, i) {
+        m = mountKnowledge();
+        const r = receipt({});
+        if (freshness === null) delete r.source_freshness;
+        else r.source_freshness = freshness;
+        m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: r}));
+        ok(m.$('mioKnowledgeRefs').textContent.indexOf('Source freshness unavailable (not verified)') >= 0,
+            'freshness malformed #' + i + ' is explicitly unavailable');
+        ok(m.$('mioKnowledgeRefs').textContent.indexOf('Source freshness verified') < 0,
+            'freshness malformed #' + i + ' never claimed verified');
+        dom.uninstall();
+    });
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({source_freshness:
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: null, attack_version: null}})}));
+    ok(m.$('mioKnowledgeRefs').textContent.indexOf('oldest feed unavailable; ATT&CK version unavailable') >= 0,
+        'null freshness values render as unavailable');
     dom.uninstall();
 
     // The producer's explicit binding marker is required even when all fields align.
@@ -769,8 +797,8 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             'binding valid marker #' + i + ': handoff suppressed');
         ok(m.$('mioKnowledgeCue').textContent.indexOf('not current/usable; no reference metadata') >= 0,
             'binding valid marker #' + i + ': safe non-current cue');
-        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-8',
-            'binding valid marker #' + i + ': Edge action remains visible');
+        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied',
+            'binding valid marker #' + i + ': action/result remain visible and trace is suppressed');
         dom.uninstall();
     });
 
@@ -887,7 +915,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         m.S.renderMioLiveAuxiliary(current(normal, over));
         eq(m.$('mioSourceObserved').textContent, 'Suppressed', 'stale or mismatched source context suppressed');
         eq(m.$('mioSourceUnavailable').textContent, 'Suppressed', 'stale or mismatched unavailable list suppressed');
-        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-8', 'Edge action independent of MIO gate');
+        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied', 'Edge action/result remain while trace is suppressed');
     });
 
     // Missing, empty, or non-producer-format event key: binding otherwise valid, source fields still suppressed.

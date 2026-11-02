@@ -27,8 +27,10 @@ def current():
             'frame_id': 'frame-1', 'event_key': 'a1b2c3d4e5f60718293a4b5c',
             'projection': {'claim_status': 'reported_unverified',
                 'trust': 'unverified_advisory_only', 'attack_techniques': ['T1059.001'],
-                'source_groups': ['abusech'], 'summary': 'untrusted prose',
-                'action': 'isolate', 'url': 'https://untrusted.invalid'}}}
+                'source_groups': ['abusech'], 'source_freshness': {'oldest_feed_days': 14.5, 'attack_version': '18.1'},
+                'summary': 'untrusted prose',
+                'action': 'isolate', 'url': 'https://untrusted.invalid'},
+            'source_freshness_verification': 'reported_unverified_at_lookup'}}
 
 
 def test_current_receipt_only_exposes_reference_metadata_without_changing_action_or_model():
@@ -41,7 +43,8 @@ def test_current_receipt_only_exposes_reference_metadata_without_changing_action
         'claim_status': 'reported_unverified', 'trust': 'unverified_advisory_only',
         'generation': '1', 'frame_generation': '1', 'source_trace_id': 'edge-1',
         'event_key': 'a1b2c3d4e5f60718293a4b5c', 'trace_id': 'mio-1', 'frame_id': 'frame-1',
-        'attack_techniques': ['T1059.001'], 'source_groups': ['abusech']}
+        'attack_techniques': ['T1059.001'], 'source_groups': ['abusech'],
+        'source_freshness': {'status': 'reported_unverified_at_lookup', 'oldest_feed_days': 14.5, 'attack_version': '18.1'}}
     original.pop('knowledge_analysis')
     assert output == original  # All decision, action, fast and model fields unchanged.
 
@@ -49,12 +52,16 @@ def test_current_receipt_only_exposes_reference_metadata_without_changing_action
 BINDING_KEYS = ('generation', 'frame_generation', 'source_trace_id', 'event_key', 'trace_id', 'frame_id')
 
 
+def status_only(status):
+    return {'status': status, 'is_current': False,
+        'source_freshness': {'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}}
+
+
 @pytest.mark.parametrize('key', BINDING_KEYS)
 def test_projected_receipt_requires_every_binding_field(key):
     payload = current()
     del payload['knowledge_analysis'][key]
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == {
-        'status': 'projected', 'is_current': False}
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == status_only('projected')
 
 
 @pytest.mark.parametrize('key', BINDING_KEYS)
@@ -62,8 +69,7 @@ def test_projected_receipt_requires_every_binding_field(key):
 def test_binding_field_must_be_bounded_nonempty_string(key, value):
     payload = current()
     payload['knowledge_analysis'][key] = value
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == {
-        'status': 'projected', 'is_current': False}
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == status_only('projected')
 
 
 def test_binding_fields_at_96_chars_are_projected_with_valid_event_key():
@@ -131,9 +137,63 @@ def assert_status_only_without_other_changes(payload):
     original = deepcopy(payload)
     output = operator_mio_payload(payload, now=101)
     assert payload == original
-    assert output.pop('knowledge_analysis') == {'status': 'projected', 'is_current': False}
-    original.pop('knowledge_analysis')
-    assert output == original
+    status = original.get('knowledge_analysis', {}).get('status', 'unavailable')
+    assert output['knowledge_analysis'] == {'status': status, 'is_current': False,
+        'source_freshness': {'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}}
+    assert output['status'] == 'unavailable' and output['is_current'] is False
+    edge = original.get('edge_event')
+    expected_edge = {key: edge[key] for key in ('action', 'mode', 'result')
+        if isinstance(edge, dict) and type(edge.get(key)) is str and edge[key] and len(edge[key]) <= 96}
+    assert output['edge_event'] == expected_edge
+    assert set(output) == {'status', 'is_current', 'max_age_seconds', 'edge_event', 'knowledge_analysis'}
+
+
+@pytest.mark.parametrize('freshness', [
+    {'oldest_feed_days': None, 'attack_version': None},
+    {'oldest_feed_days': 0, 'attack_version': '1'},
+    {'oldest_feed_days': 36500, 'attack_version': '18.1.2'},
+])
+def test_source_freshness_allowlist_accepts_bounded_values(freshness):
+    payload = current()
+    payload['knowledge_analysis']['projection']['source_freshness'] = freshness
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis']['source_freshness'] == {
+        'status': 'reported_unverified_at_lookup', **freshness}
+
+
+@pytest.mark.parametrize('freshness', [
+    {}, {'oldest_feed_days': True, 'attack_version': None},
+    {'oldest_feed_days': -1, 'attack_version': None},
+    {'oldest_feed_days': 36501, 'attack_version': None},
+    {'oldest_feed_days': float('inf'), 'attack_version': None},
+    {'oldest_feed_days': 1, 'attack_version': 'unknown'},
+    {'oldest_feed_days': 1, 'attack_version': '18.1<script>'},
+    {'oldest_feed_days': 1, 'attack_version': None, 'url': 'https://evil.invalid'},
+])
+def test_malformed_source_freshness_is_explicitly_unavailable(freshness):
+    payload = current()
+    payload['knowledge_analysis']['projection']['source_freshness'] = freshness
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis']['source_freshness'] == {
+        'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}
+
+
+def test_missing_freshness_verification_marker_is_unavailable():
+    payload = current()
+    payload['knowledge_analysis'].pop('source_freshness_verification')
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis']['source_freshness']['status'] == 'unavailable'
+
+
+@pytest.mark.parametrize('value', [True, -0.1, 36500.1, float('nan'), float('inf')])
+def test_source_freshness_rejects_nonfinite_or_out_of_range_age(value):
+    payload = current()
+    payload['knowledge_analysis']['projection']['source_freshness']['oldest_feed_days'] = value
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis']['source_freshness']['status'] == 'unavailable'
+
+
+@pytest.mark.parametrize('version', ['unknown', '1.2.3.4', '1<script>', 1, True])
+def test_source_freshness_rejects_unrecognized_attack_version(version):
+    payload = current()
+    payload['knowledge_analysis']['projection']['source_freshness']['attack_version'] = version
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis']['source_freshness']['status'] == 'unavailable'
 
 
 @pytest.mark.parametrize('key', ['status', 'generation', 'event_key', 'edge_trace_id',
@@ -172,8 +232,7 @@ def test_edge_event_and_handoff_trace_cannot_disagree_with_receipt_source():
 
 @pytest.mark.parametrize('now', [111, 99])
 def test_cached_expired_or_future_receipt_retains_status_only(now):
-    assert operator_mio_payload(current(), now=now)['knowledge_analysis'] == {
-        'status': 'projected', 'is_current': False}
+    assert operator_mio_payload(current(), now=now)['knowledge_analysis'] == status_only('projected')
 
 
 @pytest.mark.parametrize('envelope', [{'is_current': False}, {'status': 'queued'}])
@@ -181,7 +240,7 @@ def test_unusable_envelope_keeps_projected_status_not_current(envelope):
     payload = current()
     payload.update(envelope)
     output = operator_mio_payload(payload, now=101)
-    assert output['knowledge_analysis'] == {'status': 'projected', 'is_current': False}
+    assert output['knowledge_analysis'] == status_only('projected')
 
 
 @pytest.mark.parametrize('key', ['generation', 'frame_generation', 'source_trace_id',
@@ -200,16 +259,14 @@ def test_every_stale_correlation_retains_status_only(key):
 def test_malformed_receipt_rejected(key, value):
     payload = current()
     payload['knowledge_analysis'][key] = value
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == {
-        'status': 'unavailable' if key in {'status', 'schema_version', 'authority', 'usage_status'} else 'projected',
-        'is_current': False}
+    expected_status = 'unavailable' if key in {'status', 'schema_version', 'authority', 'usage_status'} else 'projected'
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == status_only(expected_status)
 
 
 def test_valid_nonresult_status_is_bounded_and_separate():
     payload = current()
     payload['knowledge_analysis']['status'] = 'disabled'
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == {
-        'status': 'disabled', 'is_current': False}
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == status_only('disabled')
 
 
 @pytest.mark.parametrize('completed', [None, [], {}, 'bad'])
@@ -234,7 +291,10 @@ def test_receipt_clock_requires_timezone_without_changing_other_fields(completed
     receipt = output.pop('knowledge_analysis')
     assert receipt['is_current'] is expected_current
     if not expected_current:
-        assert receipt == {'status': 'projected', 'is_current': False}
+        assert receipt == status_only('projected')
+        assert set(output) == {'status', 'is_current', 'max_age_seconds', 'edge_event'}
+        assert 'handoff_binding' not in output and 'trace_id' not in output and 'advisory' not in output
+        return
     original.pop('knowledge_analysis')
     assert output == original  # Includes the action, fast lane and model result.
 
@@ -256,11 +316,9 @@ def test_lane_diagnostics_survive_unusable_fast_envelope_without_reference_ids(s
         payload['handoff_binding']['frame_id'] = 'wrong-frame'
     original = deepcopy(payload)
     output = operator_mio_payload(payload, now=101)
-    assert output.pop('knowledge_analysis') == {
-        'status': status, 'is_current': False}
+    assert output.pop('knowledge_analysis') == status_only(status)
     assert payload == original
-    original.pop('knowledge_analysis')
-    assert output == original
+    assert set(output) == {'status', 'is_current', 'max_age_seconds', 'edge_event'}
 
 
 @pytest.mark.parametrize('field,value', [('schema_version', 'wrong'), ('authority', 'execute'),
@@ -270,5 +328,4 @@ def test_invalid_lane_diagnostic_schema_is_unavailable_even_when_fast_queued(fie
     payload['status'] = 'queued'
     payload['knowledge_analysis']['status'] = 'disabled'
     payload['knowledge_analysis'][field] = value
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == {
-        'status': 'unavailable', 'is_current': False}
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == status_only('unavailable')

@@ -409,12 +409,13 @@
             && (binding.edge_result || null) === (edge.result || null)
             && (!advisory.frame_id || String(binding.frame_id || '') === String(advisory.frame_id || ''))
             && (!advisory.trace_id || String(binding.mio_trace_id || '') === String(advisory.trace_id || ''));
-        var actionBits = [edge.action, edge.result, edge.trace_id].filter(function (v) { return typeof v === 'string' && v; });
         var completedAt = Date.parse(payload.completed_at || '');
         var resultAge = Number.isFinite(completedAt) ? Math.max(0, (Date.now() - completedAt) / 1000) : Infinity;
         var fresh = payload.is_current === true && payload.status === 'complete'
             && resultAge <= Number(payload.max_age_seconds || 0);
         var usable = fresh && bindingValid;
+        var actionBits = [edge.action, edge.result, usable ? boundedEdgeTrace(edge.trace_id) : '']
+            .filter(function (v) { return typeof v === 'string' && v; });
         var suppressedMessage = 'M.I.O. details suppressed (stale result or correlation mismatch).';
         put('mioLiveAuxStatus', usable ? (payload.status || 'unavailable') : ((payload.status || 'unavailable') + ' (details suppressed)'));
         put('mioLiveAuxKnowledge', usable ? (payload.knowledge && payload.knowledge.status || 'not_provided') : 'suppressed');
@@ -423,6 +424,9 @@
         // Bounded, untrusted correlation IDs for operator matching; rendered via textContent only.
         function boundedId(value) {
             return typeof value === 'string' && value ? value.slice(0, 96) : '';
+        }
+        function boundedEdgeTrace(value) {
+            return typeof value === 'string' && value && value.length <= 96 ? value : '';
         }
         put('mioLiveCorrelation', usable
             ? ('event ' + (boundedId(sourceContext.event_key) || 'unknown')
@@ -519,9 +523,29 @@
                 return typeof v === 'string' && pattern.test(v);
             }) ? values.join(', ') : '';
         }
+        function sourceFreshnessText() {
+            var f = knowledge.source_freshness;
+            if (!knowledgeCurrent || !f || typeof f !== 'object' || Array.isArray(f)
+                || f.status !== 'reported_unverified_at_lookup'
+                || Object.keys(f).some(function (key) { return ['status', 'oldest_feed_days', 'attack_version'].indexOf(key) < 0; })
+                || !Object.prototype.hasOwnProperty.call(f, 'oldest_feed_days')
+                || !Object.prototype.hasOwnProperty.call(f, 'attack_version')) {
+                return 'Source freshness unavailable (not verified)';
+            }
+            var age = f.oldest_feed_days;
+            var version = f.attack_version;
+            if ((age !== null && (typeof age !== 'number' || !Number.isFinite(age) || age < 0 || age > 36500))
+                || (version !== null && (typeof version !== 'string' || !/^\d{1,3}(?:\.\d{1,3}){0,2}$/.test(version)))) {
+                return 'Source freshness unavailable (not verified)';
+            }
+            return 'Source freshness reported, unverified at lookup: oldest feed '
+                + (age === null ? 'unavailable' : String(age) + ' days') + '; ATT&CK version '
+                + (version === null ? 'unavailable' : version);
+        }
         put('mioKnowledgeRefs', knowledgeCurrent
             ? ('ATT&CK: ' + (knowledgeRefs('attack_techniques', /^T[0-9]{4}(\.[0-9]{3})?$/) || 'None')
-                + ' · Source groups: ' + (knowledgeRefs('source_groups', /^[a-z][a-z0-9_-]{0,31}$/) || 'None'))
+                + ' · Source groups: ' + (knowledgeRefs('source_groups', /^[a-z][a-z0-9_-]{0,31}$/) || 'None')
+                + ' · ' + sourceFreshnessText())
             : 'Unavailable');
         // Expire projected references even when polling stops; lane diagnostics have no fast deadline.
         if (typeof window.setTimeout === 'function') {

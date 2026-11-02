@@ -7,19 +7,56 @@ from azazel_edge_ai.mio_live_auxiliary import _binding_matches
 
 _STATUSES = frozenset(('starting queued disabled missing_token invalid_configuration unavailable timeout '
     'oversized redirect_rejected auth_rejected scope_rejected malformed received superseded projected rejected').split())
+_SOURCE_FRESHNESS_VERIFICATION = 'reported_unverified_at_lookup'
+_ATTACK_VERSION = re.compile(r'[0-9]{1,3}(?:\.[0-9]{1,3}){0,2}')
+
+
+def _status_only_payload(payload, status):
+    """Return a browser-safe lane status and observed Edge action/result only."""
+    edge = payload.get('edge_event')
+    edge = edge if isinstance(edge, dict) else {}
+    observed = {}
+    for key in ('action', 'mode', 'result'):
+        value = edge.get(key)
+        if type(value) is str and value and len(value) <= 96:
+            observed[key] = value
+    if edge.get('unknown_fields') is True:
+        observed['unknown_fields'] = True
+    safe_status = status if type(status) is str and status in _STATUSES else 'unavailable'
+    return {'status': 'unavailable', 'is_current': False, 'max_age_seconds': 0,
+        'edge_event': observed,
+        'knowledge_analysis': {'status': safe_status, 'is_current': False,
+            'source_freshness': {'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}}}
+
+
+def _source_freshness(projection, receipt):
+    """Project only the fixed, explicitly unverified lookup-freshness fields."""
+    value = projection.get('source_freshness')
+    if (not isinstance(value, dict) or set(value) - {'oldest_feed_days', 'attack_version'}
+            or receipt.get('source_freshness_verification') != _SOURCE_FRESHNESS_VERIFICATION):
+        return {'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}
+    age = value.get('oldest_feed_days')
+    if age is not None and (type(age) not in (int, float) or not math.isfinite(age) or not 0 <= age <= 36500):
+        return {'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}
+    version = value.get('attack_version')
+    if version is not None and (type(version) is not str or _ATTACK_VERSION.fullmatch(version) is None):
+        return {'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}
+    if set(value) != {'oldest_feed_days', 'attack_version'}:
+        return {'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}
+    return {'status': _SOURCE_FRESHNESS_VERIFICATION, 'oldest_feed_days': age, 'attack_version': version}
 
 
 def operator_mio_payload(payload, *, now=None):
-    """Copy the envelope, replacing its receipt with a small display allowlist.
+    """Expose a current allowlisted projection or a status-only safe envelope.
 
     The fast completion deadline is deliberately conservative: Knowledge completes
-    after that frame, so its own ten-second lifetime cannot end earlier.
+    after that frame, so its own ten-second lifetime cannot end earlier. Unbound,
+    stale, or malformed envelopes retain only fixed lane status and bounded Edge
+    action/result fields; correlation and advisory data are removed.
     """
     if not isinstance(payload, dict):
         return {}
-    output = dict(payload)
-    unavailable = {'status': 'unavailable', 'is_current': False}
-    output['knowledge_analysis'] = unavailable
+    output = _status_only_payload(payload, 'unavailable')
     receipt = payload.get('knowledge_analysis')
     if not isinstance(receipt, dict):
         return output
@@ -30,7 +67,7 @@ def operator_mio_payload(payload, *, now=None):
             or receipt['status'] not in _STATUSES):
         return output
     # Lane diagnostics do not assert that reference metadata is current.
-    output['knowledge_analysis'] = {'status': receipt['status'], 'is_current': False}
+    output = _status_only_payload(payload, receipt['status'])
     if receipt['status'] != 'projected':
         return output
     try:
@@ -83,6 +120,9 @@ def operator_mio_payload(payload, *, now=None):
     bound = {'generation': receipt['generation'], 'frame_generation': receipt['frame_generation'],
         'source_trace_id': receipt['source_trace_id'], 'event_key': receipt['event_key'],
         'trace_id': receipt['trace_id'], 'frame_id': receipt['frame_id']}
+    freshness = _source_freshness(projection, receipt)
+    output = dict(payload)
     output['knowledge_analysis'] = {'status': 'projected', 'is_current': True,
-        'claim_status': 'reported_unverified', 'trust': 'unverified_advisory_only', **bound, **refs}
+        'claim_status': 'reported_unverified', 'trust': 'unverified_advisory_only', **bound, **refs,
+        'source_freshness': freshness}
     return output
