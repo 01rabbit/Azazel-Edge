@@ -837,12 +837,13 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     });
     const field = function (value, status) { return {value: value, status: status || 'observed', provenance: 'rust_core_normalized_event'}; };
     const unavailable = function () { return field(null, 'unavailable'); };
+    const KEY8 = 'a1b2c3d4e5f60718293a4b5c'; // producer-shaped: 24 lowercase hex chars
     function current(sourceFields, overrides) {
         return Object.assign({status: 'complete', is_current: true, max_age_seconds: 10,
             completed_at: new Date(Date.now() - 1000).toISOString(), generation: '8', trace_id: 'edge-trace-8',
             edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-8'},
-            source_context: {event_key: 'event-8', fields: sourceFields},
-            handoff_binding: {status: 'matched', generation: '8', event_key: 'event-8', edge_trace_id: 'edge-trace-8',
+            source_context: {event_key: KEY8, fields: sourceFields},
+            handoff_binding: {status: 'matched', generation: '8', event_key: KEY8, edge_trace_id: 'edge-trace-8',
                 edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-8'},
             advisory: {trace_id: 'mio-trace-8'}}, overrides || {});
     }
@@ -866,6 +867,25 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         eq(m.$('mioSourceUnavailable').textContent, 'Suppressed', 'stale or mismatched unavailable list suppressed');
         eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-8', 'Edge action independent of MIO gate');
     });
+
+    // Missing, empty, or non-producer-format event key: binding otherwise valid, source fields still suppressed.
+    [{}, {event_key: ''}, {event_key: 'A1B2C3D4E5F60718293A4B5C'}, {event_key: 'a1b2c3d4e5f60718293a4b5'}].forEach(function (keyObj, i) {
+        const ctx = Object.assign({fields: normal}, keyObj);
+        const binding = Object.assign({status: 'matched', generation: '8', edge_trace_id: 'edge-trace-8',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-8'}, keyObj);
+        m.S.renderMioLiveAuxiliary(current(normal, {source_context: ctx, handoff_binding: binding}));
+        eq(m.$('mioSourceObserved').textContent, 'Suppressed', 'invalid event key #' + i + ' suppresses observed source fields');
+        eq(m.$('mioSourceUnavailable').textContent, 'Suppressed', 'invalid event key #' + i + ' suppresses unavailable list');
+        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-8', 'invalid event key #' + i + ' keeps Edge action');
+    });
+
+    // Partial record: valid Edge action plus unknown_fields discloses omitted malformed fields; valid parts stay visible.
+    m.S.renderMioLiveAuxiliary(current(normal, {edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied',
+        trace_id: 'edge-trace-8', unknown_fields: true}}));
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-8 (malformed fields omitted)',
+        'valid action with unknown_fields discloses malformed omitted fields');
+    m.S.renderMioLiveAuxiliary(current(normal, {edge_event: {unknown_fields: true}}));
+    eq(m.$('mioLiveEdgeAction').textContent, 'Unknown (malformed fields omitted)', 'no valid Edge fields with unknown_fields still discloses');
 
     // Hostile values, oversized values, wrong types, and arbitrary keys never leak through.
     const hostile = Object.assign({}, normal, {
