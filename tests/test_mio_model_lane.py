@@ -47,10 +47,64 @@ def test_model_lane_is_opt_in_and_skip_does_not_call_transport():
     lane = LiveMioModelLane(enabled=False, analyze=lambda payload, remaining: calls.append(payload), fast_snapshot=_fast)
     assert lane.submit("7", "trace-abc")["status"] == "disabled"
     assert calls == []
-
     enabled = LiveMioModelLane(enabled=True, analyze=lambda payload, remaining: calls.append(payload) or {}, fast_snapshot=_fast)
     assert enabled.submit("7", "trace-abc", skip_reason="legacy_llm_already_routed")["reason"] == "legacy_llm_already_routed"
     assert calls == []
+
+
+
+def _run_snapshot_worker(monkeypatch, lane, *, polls=5):
+    from pathlib import Path
+    from azazel_edge_ai import agent
+
+    class StopAfterPolls:
+        def __init__(self):
+            self.calls = 0
+
+        def wait(self, _timeout):
+            self.calls += 1
+            return self.calls >= polls
+
+    refreshed = []
+    monkeypatch.setattr(agent, "LIVE_MIO_MODEL_LANE", lane)
+    monkeypatch.setattr(agent, "LIVE_MIO_AUXILIARY", type("Aux", (), {
+        "snapshot": staticmethod(lambda: {"generation": 0, "status": "starting"})
+    })())
+    monkeypatch.setattr(agent, "_MIO_SNAPSHOT_STOP", StopAfterPolls())
+    monkeypatch.setattr(agent, "ADVISORY_PATH", Path("/path/that/does/not/exist/advisory.json"))
+    monkeypatch.setattr(agent, "_update_ui_snapshot", lambda advisory, **kwargs: refreshed.append((advisory, kwargs)))
+    agent._mio_snapshot_worker()
+    return refreshed
+
+
+def test_snapshot_worker_ignores_repeated_immediate_default_off_submissions(monkeypatch):
+    lane = LiveMioModelLane(enabled=False, analyze=lambda payload, remaining: {}, fast_snapshot=_fast)
+    for index in range(5):
+        assert lane.submit(str(index), f"trace-{index}")["status"] == "disabled"
+    assert lane.completed_async_generation() == ""
+
+    assert _run_snapshot_worker(monkeypatch, lane) == []
+
+
+def test_snapshot_worker_refreshes_once_for_async_result_completed_before_first_poll(monkeypatch):
+    lane = LiveMioModelLane(
+        enabled=True,
+        analyze=lambda payload, remaining: {
+            "summary": "measured", "outcome": "completed", "mio_state": "complete",
+            "generation_method": "model", "frame_id": "frame-abc", "trace_id": "trace-abc",
+        },
+        fast_snapshot=_fast,
+        frame_snapshot=lambda generation: {"frame_id": "frame-abc", "trace_id": "trace-abc",
+                                           "evidence_refs": []},
+    )
+    lane.submit("7", "trace-abc")
+    lane._queue.join()
+    assert lane.snapshot()["status"] == "complete"
+    assert lane.completed_async_generation() == "1"
+
+    refreshed = _run_snapshot_worker(monkeypatch, lane)
+    assert len(refreshed) == 1
+    assert refreshed[0][1] == {"count_suricata": False}
 
 
 def test_model_lane_waits_for_fast_generation_and_exposes_only_bounded_measurements():

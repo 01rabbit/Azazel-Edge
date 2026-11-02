@@ -192,6 +192,10 @@ class LiveMioModelLane:
         self._queue: queue.Queue[tuple[float, int, str, dict[str, Any], str]] = queue.Queue(maxsize=1)
         self._lock = threading.RLock()
         self._generation = 0
+        # The snapshot worker persists only results produced by accepted async
+        # submissions. Immediate disabled/skipped/degraded submissions change
+        # the visible generation, but are not completion events.
+        self._async_generation = 0
         self._result = _empty("disabled" if not self.enabled else "starting")
         self._diagnostics: list[dict[str, Any]] = []
         self._thread = threading.Thread(target=self._run, name="mio-model-analysis", daemon=True)
@@ -208,6 +212,15 @@ class LiveMioModelLane:
     def diagnostics(self) -> list[dict[str, Any]]:
         with self._lock:
             return json.loads(json.dumps(self._diagnostics))
+
+    def completed_async_generation(self) -> str:
+        """Return the current async generation once it reaches a terminal state."""
+        with self._lock:
+            if self._async_generation != self._generation:
+                return ""
+            if self._result.get("status") in {"starting", "queued"}:
+                return ""
+            return str(self._async_generation)
 
     def submit(self, generation: Any, trace_id: str, *, skip_reason: str = "",
                authorization_payload: Mapping[str, Any] | None = None,
@@ -239,6 +252,7 @@ class LiveMioModelLane:
                 except queue.Full:
                     self._result = {**_empty("degraded", "queue_full"), "generation": str(current), "trace_id": str(trace_id)[:96]}
             if queued:
+                self._async_generation = current
                 self._result = {
                     **_empty("queued"), "generation": str(current), "trace_id": str(trace_id)[:96],
                     "fast_generation": str(generation or ""),

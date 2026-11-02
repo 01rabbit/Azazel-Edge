@@ -3070,21 +3070,20 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
 def _mio_snapshot_worker() -> None:
     """Persist either async M.I.O. timeline completion to the operator snapshot."""
     seen_generation = 0
-    seen_model_state: tuple[str, str] = ("", "")
+    seen_model_generation = ""
     while not _MIO_SNAPSHOT_STOP.wait(0.2):
         try:
             result = LIVE_MIO_AUXILIARY.snapshot()
             generation = int(result.get("generation") or 0)
             static_done = generation > seen_generation and result.get("status") not in {"pending", "starting", "queued"}
-            model = LIVE_MIO_MODEL_LANE.snapshot()
-            model_state = (str(model.get("generation") or ""), str(model.get("status") or ""))
-            model_done = model_state != seen_model_state and model.get("status") not in {"starting", "queued"}
+            model_generation = LIVE_MIO_MODEL_LANE.completed_async_generation()
+            model_done = bool(model_generation and model_generation != seen_model_generation)
             if not static_done and not model_done:
                 continue
             if static_done:
                 seen_generation = generation
             if model_done:
-                seen_model_state = model_state
+                seen_model_generation = model_generation
             # Preserve current Edge advisory fields while refreshing only the
             # operator snapshot with generation-tagged auxiliary results.
             with IO_LOCK:
