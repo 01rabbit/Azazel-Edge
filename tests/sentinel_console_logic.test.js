@@ -407,7 +407,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             let scheduled = false;
             global.window.setTimeout = function () { scheduled = true; return 1; };
             m.S.renderMioLiveAuxiliary(payload);
-            eq(m.$('mioKnowledgeStatus').textContent, status === 'projected' ? 'unavailable' : status,
+            eq(m.$('mioKnowledgeStatus').textContent, status,
                 status + '/' + fastState + ': bounded diagnostic visible');
             eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable',
                 status + '/' + fastState + ': all reference IDs hidden');

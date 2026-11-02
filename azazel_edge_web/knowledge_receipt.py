@@ -30,8 +30,8 @@ def operator_mio_payload(payload, *, now=None):
             or receipt['status'] not in _STATUSES):
         return output
     # Lane diagnostics do not assert that reference metadata is current.
+    output['knowledge_analysis'] = {'status': receipt['status'], 'is_current': False}
     if receipt['status'] != 'projected':
-        output['knowledge_analysis'] = {'status': receipt['status'], 'is_current': False}
         return output
     try:
         completed_at = datetime.fromisoformat(payload['completed_at'].replace('Z', '+00:00'))
