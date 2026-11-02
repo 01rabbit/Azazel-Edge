@@ -49,7 +49,10 @@ def operator_mio_payload(payload, *, now=None):
         return output
     # Use the producer's same-envelope contract, including the observed Edge
     # action/result and both frame IDs; a receipt alone cannot establish it.
-    if not _binding_matches(payload):
+    binding = payload.get('handoff_binding')
+    # The producer marks a successful same-envelope binding explicitly. An
+    # absent or false marker must never be inferred as current from matching IDs.
+    if not isinstance(binding, dict) or binding.get('valid') is not True or not _binding_matches(payload):
         return output
     advisory = payload.get('advisory') or {}
     context = payload.get('source_context') or {}

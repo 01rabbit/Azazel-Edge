@@ -304,7 +304,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         completed_at: new Date(Date.now() - 1000).toISOString(),
         knowledge: {status: 'not_provided'}, trace_id: 'edge-trace-5',
         edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-5'},
-        source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', generation: '5',
+        source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', valid: true, generation: '5',
             event_key: 'event-5', edge_trace_id: 'edge-trace-5', edge_action: 'notify',
             edge_result: 'planned_not_applied', edge_mode: 'dry_run', mio_trace_id: 'mio-trace-5', frame_id: 'frame-5'},
         advisory: {trace_id: 'mio-trace-5', frame_id: 'frame-5'},
@@ -339,7 +339,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     const mismatched = {status: 'complete', generation: '5', trace_id: 'edge-trace-5', is_current: true,
         completed_at: new Date(Date.now() - 1000).toISOString(), max_age_seconds: 10,
         source_context: {event_key: 'event-5'}, edge_event: {action: 'notify', mode: 'dry_run', result: 'applied', trace_id: 'edge-trace-5'},
-        handoff_binding: {status: 'matched', generation: '5', event_key: 'event-5',
+        handoff_binding: {status: 'matched', valid: true, generation: '5', event_key: 'event-5',
             edge_trace_id: 'edge-trace-5', edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
         advisory: {recommendation: 'wrong event recommendation', summary: 'wrong event summary',
             hypotheses: [{statement: 'wrong event hypothesis'}], next_checks: ['wrong event check'],
@@ -354,7 +354,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '5',
         trace_id: 'edge-trace-5', edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-5'},
-        source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', generation: '5',
+        source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', valid: true, generation: '5',
             event_key: 'event-5', edge_trace_id: 'edge-trace-5', edge_action: 'notify',
             edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
         model_analysis: {status: 'partial', is_current: true, fast_generation: '5',
@@ -711,13 +711,14 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
 (function () {
     const IDS = ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction','mioLiveCorrelation',
      'mioLiveAuxAdvice','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff','mioKnowledgeStatus','mioKnowledgeRefs',
-     'mioKnowledgeCue','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics'];
+     'mioKnowledgeCue','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics',
+     'mioSourceObserved','mioSourceUnavailable'];
     function payload(over) {
         const base = {status: 'complete', is_current: true, max_age_seconds: 10,
             completed_at: new Date(Date.now() - 1000).toISOString(), generation: '8', trace_id: 'edge-trace-8',
             edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-8'},
             source_context: {event_key: 'event-8'},
-            handoff_binding: {status: 'matched', generation: '8', event_key: 'event-8', edge_trace_id: 'edge-trace-8',
+            handoff_binding: {status: 'matched', valid: true, generation: '8', event_key: 'event-8', edge_trace_id: 'edge-trace-8',
                 edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied',
                 mio_trace_id: 'mio-8', frame_id: 'frame-8'},
             advisory: {trace_id: 'mio-8', frame_id: 'frame-8'},
@@ -752,6 +753,26 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'normal: expiry clears receipt');
     ok(m.$('mioKnowledgeCue').textContent.indexOf('expired') >= 0 && m.$('mioKnowledgeCue').textContent.indexOf(CUE_TAIL) >= 0, 'normal: expiry cue keeps Edge authority');
     dom.uninstall();
+
+    // The producer's explicit binding marker is required even when all fields align.
+    [false, undefined].forEach(function (valid, i) {
+        m = mountKnowledge();
+        const envelope = payload({});
+        if (valid === undefined) delete envelope.handoff_binding.valid;
+        else envelope.handoff_binding.valid = valid;
+        m.S.renderMioLiveAuxiliary(envelope);
+        eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'binding valid marker #' + i + ': fixed status only');
+        eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'binding valid marker #' + i + ': refs suppressed');
+        eq(m.$('mioLiveCorrelation').textContent, 'Suppressed', 'binding valid marker #' + i + ': source identifiers suppressed');
+        eq(m.$('mioSourceObserved').textContent, 'Suppressed', 'binding valid marker #' + i + ': claims suppressed');
+        eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).',
+            'binding valid marker #' + i + ': handoff suppressed');
+        ok(m.$('mioKnowledgeCue').textContent.indexOf('not current/usable; no reference metadata') >= 0,
+            'binding valid marker #' + i + ': safe non-current cue');
+        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-8',
+            'binding valid marker #' + i + ': Edge action remains visible');
+        dom.uninstall();
+    });
 
     // Timeout: correlated failure state is labelled, refs suppressed, cue is deterministic and non-retrying.
     m = mountKnowledge();
@@ -844,7 +865,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             completed_at: new Date(Date.now() - 1000).toISOString(), generation: '8', trace_id: 'edge-trace-8',
             edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-8'},
             source_context: {event_key: KEY8, fields: sourceFields},
-            handoff_binding: {status: 'matched', generation: '8', event_key: KEY8, edge_trace_id: 'edge-trace-8',
+            handoff_binding: {status: 'matched', valid: true, generation: '8', event_key: KEY8, edge_trace_id: 'edge-trace-8',
                 edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-8'},
             advisory: {trace_id: 'mio-trace-8'}}, overrides || {});
     }
@@ -872,7 +893,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     // Missing, empty, or non-producer-format event key: binding otherwise valid, source fields still suppressed.
     [{}, {event_key: ''}, {event_key: 'A1B2C3D4E5F60718293A4B5C'}, {event_key: 'a1b2c3d4e5f60718293a4b5'}].forEach(function (keyObj, i) {
         const ctx = Object.assign({fields: normal}, keyObj);
-        const binding = Object.assign({status: 'matched', generation: '8', edge_trace_id: 'edge-trace-8',
+        const binding = Object.assign({status: 'matched', valid: true, generation: '8', edge_trace_id: 'edge-trace-8',
             edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-8'}, keyObj);
         m.S.renderMioLiveAuxiliary(current(normal, {source_context: ctx, handoff_binding: binding}));
         eq(m.$('mioSourceObserved').textContent, 'Suppressed', 'invalid event key #' + i + ' suppresses observed source fields');

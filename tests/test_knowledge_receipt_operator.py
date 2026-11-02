@@ -145,6 +145,16 @@ def test_stale_or_mismatched_handoff_binding_retains_status_only(key, value):
     assert_status_only_without_other_changes(payload)
 
 
+@pytest.mark.parametrize('marker', [False, None])
+def test_handoff_binding_requires_explicit_true_marker(marker):
+    payload = current()
+    if marker is None:
+        payload['handoff_binding'].pop('valid')
+    else:
+        payload['handoff_binding']['valid'] = marker
+    assert_status_only_without_other_changes(payload)
+
+
 @pytest.mark.parametrize('key', ['trace_id', 'action', 'mode', 'result'])
 @pytest.mark.parametrize('value', [None, 'old'])
 def test_edge_event_must_match_enclosing_handoff(key, value):

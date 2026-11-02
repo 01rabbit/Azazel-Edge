@@ -395,7 +395,7 @@
         var edge = payload.edge_event && typeof payload.edge_event === 'object' ? payload.edge_event : {};
         var binding = payload.handoff_binding && typeof payload.handoff_binding === 'object' ? payload.handoff_binding : {};
         var sourceContext = payload.source_context && typeof payload.source_context === 'object' ? payload.source_context : {};
-        var bindingValid = binding.status === 'matched'
+        var bindingValid = binding.valid === true && binding.status === 'matched'
             && typeof binding.edge_trace_id === 'string' && binding.edge_trace_id.length > 0
             && typeof binding.edge_action === 'string' && binding.edge_action.length > 0
             && typeof binding.edge_mode === 'string' && binding.edge_mode.length > 0
@@ -424,9 +424,11 @@
         function boundedId(value) {
             return typeof value === 'string' && value ? value.slice(0, 96) : '';
         }
-        put('mioLiveCorrelation', 'event ' + (boundedId(sourceContext.event_key) || 'unknown')
-            + ' · trace ' + (boundedId(edge.trace_id) || boundedId(payload.trace_id) || 'unknown')
-            + ' · frame ' + (boundedId(advisory.frame_id) || 'none'));
+        put('mioLiveCorrelation', usable
+            ? ('event ' + (boundedId(sourceContext.event_key) || 'unknown')
+                + ' · trace ' + (boundedId(edge.trace_id) || boundedId(payload.trace_id) || 'unknown')
+                + ' · frame ' + (boundedId(advisory.frame_id) || 'none'))
+            : 'Suppressed');
         // Normalized source context: hard-coded allowlist only; split into observed values and unavailable/invalid names.
         // Producer emits a 24-char lowercase hex SHA prefix as event_key; source fields need that key to be present.
         var sourceUsable = usable && /^[0-9a-f]{24}$/.test(String(sourceContext.event_key || ''));
