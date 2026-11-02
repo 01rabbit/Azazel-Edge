@@ -86,6 +86,13 @@ def test_snapshot_worker_ignores_repeated_immediate_default_off_submissions(monk
     assert _run_snapshot_worker(monkeypatch, lane) == []
 
 
+def test_snapshot_worker_does_not_refresh_for_default_off_lane_at_startup(monkeypatch):
+    lane = LiveMioModelLane(enabled=False, analyze=lambda payload, remaining: {}, fast_snapshot=_fast)
+    assert lane.completed_async_generation() == ""
+
+    assert _run_snapshot_worker(monkeypatch, lane) == []
+
+
 def test_snapshot_worker_refreshes_once_for_async_result_completed_before_first_poll(monkeypatch):
     lane = LiveMioModelLane(
         enabled=True,

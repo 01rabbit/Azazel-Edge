@@ -216,7 +216,7 @@ class LiveMioModelLane:
     def completed_async_generation(self) -> str:
         """Return the current async generation once it reaches a terminal state."""
         with self._lock:
-            if self._async_generation != self._generation:
+            if self._async_generation == 0 or self._async_generation != self._generation:
                 return ""
             if self._result.get("status") in {"starting", "queued"}:
                 return ""
