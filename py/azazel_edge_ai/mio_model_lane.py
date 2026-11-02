@@ -1,7 +1,6 @@
 """Separately paced, opt-in M.I.O. model analysis over an existing fast result.
 
-Its caller supplies the existing Edge Ollama and optional loopback Knowledge
-transports. The worker is latest-only, bounded, and advisory-only.
+Its caller supplies the existing Edge Ollama transport. The worker is latest-only, bounded, and advisory-only.
 """
 from __future__ import annotations
 
@@ -190,7 +189,6 @@ class LiveMioModelLane:
                  frame_snapshot: Callable[[Any], Mapping[str, Any] | None] | None = None,
                  authorize: Callable[[Mapping[str, Any]], tuple[bool, str]] | None = None,
                  max_age_seconds: float = MAX_AGE_SECONDS,
-                 knowledge_input_snapshot: Callable[[Any], Mapping[str, Any] | None] | None = None,
                  audit_result: Callable[[str, dict[str, Any]], None] | None = None):
         # audit_result(trace_id, final_result) durably audits the lane-accepted result
         # under self._lock with the freshness re-check and publication. Raising fails the result closed.
@@ -200,7 +198,6 @@ class LiveMioModelLane:
         self._analyze = analyze
         self._fast_snapshot = fast_snapshot
         self._frame_snapshot = frame_snapshot
-        self._knowledge_input_snapshot = knowledge_input_snapshot
         self._authorize = authorize
         self._queue: queue.Queue[tuple[float, int, str, dict[str, Any], str]] = queue.Queue(maxsize=1)
         self._lock = threading.RLock()
@@ -352,11 +349,7 @@ class LiveMioModelLane:
                         # Only post-authorization analysis attempts are finalized through the output
                         # callback; pre-analysis failures above (frame, stale, deadline) are not audited here.
                         audit_pending = True
-                        if analyze_parameter_count >= 5:
-                            analyzed = self._analyze(dict(frame_payload), remaining, stale_check, source_trace_id,
-                                                     self._knowledge_input_snapshot(fast_generation)
-                                                     if self._knowledge_input_snapshot else fast.get("source_context"))
-                        elif analyze_parameter_count >= 4:
+                        if analyze_parameter_count >= 4:
                             analyzed = self._analyze(dict(frame_payload), remaining, stale_check, source_trace_id)
                         elif analyze_parameter_count >= 3:
                             analyzed = self._analyze(dict(frame_payload), remaining, stale_check)
@@ -417,9 +410,6 @@ class LiveMioModelLane:
                             "validation_rejection": validation_rejection,
                             **({"validation_diagnostic": diagnostic} if (diagnostic :=
                                 bounded_validation_diagnostic(model_result.get("validation_diagnostic"))) else {}),
-                            "knowledge_status": model_result.get("knowledge_status") if
-                                type(model_result.get("knowledge_status")) is str and
-                                model_result.get("knowledge_status") in KNOWLEDGE_STATUSES else "unavailable",
                         }
                         if model_result.get("frame_id") != frame_payload.get("frame_id") or model_result.get("trace_id") != frame_payload.get("trace_id"):
                             result = _empty("degraded", "frame_binding_rejected")

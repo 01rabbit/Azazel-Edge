@@ -32,6 +32,7 @@ if str(PY_ROOT) not in sys.path:
 from azazel_edge.decision_layers import DecisionLayers
 from azazel_edge.ai_governance import AIGovernance
 from azazel_edge_ai.mio_live_auxiliary import LiveMioAuxiliary, MAX_RESULT_BYTES
+from azazel_edge_ai.mio_knowledge_lane import LiveMioKnowledgeLane
 from azazel_edge_ai.mio_model_lane import (LiveMioModelLane, MioModelFailure, bounded_truncated_count,
                                            bounded_usage, bounded_validation_diagnostic)
 from azazel_edge.tactics_engine import ConfigHash, DecisionLogger, TacticalScorer
@@ -2484,24 +2485,14 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
     frame = MioSituationFrame.from_dict(payload)
     if not frame.evidence_refs:
         raise ValueError("no_stable_frame_evidence")
-    knowledge_status, knowledge_response = _query_knowledge_context(source_context, deadline=deadline,
-        stale_check=lambda: bool(stale_check and stale_check()))
-    metrics["knowledge_status"] = knowledge_status
-    knowledge_kwargs = {}
-    if knowledge_response is not None:
-        from azazel_mio.assistant import KnowledgeContextResponseAdvisory
-        knowledge_kwargs["knowledge_context_response"] = KnowledgeContextResponseAdvisory(knowledge_response)
     core = AssistantCore(model=StructuredTransport())
     try:
         assistance = core.explain(frame, now=datetime.now(timezone.utc).isoformat(),
-            knowledge_attempted=False, **knowledge_kwargs,
+            knowledge_attempted=False,
             stale_check=lambda: time.monotonic() >= deadline or bool(stale_check and stale_check()))
         if time.monotonic() >= deadline:
             raise TimeoutError("deadline_exceeded")
         out = assistance.to_dict()
-        if knowledge_response is not None:
-            metrics["knowledge_status"] = ("projected" if out.get("knowledge_context_response_advisory")
-                                           is not None else "rejected")
     except Exception as exc:
         reason = "deadline_exceeded" if isinstance(exc, TimeoutError) else "model_error"
         raise MioModelFailure(reason, metrics) from None
@@ -2713,8 +2704,32 @@ LIVE_MIO_MODEL_LANE = LiveMioModelLane(enabled=MIO_MODEL_ENABLED, analyze=_produ
                                        audit_result=lambda trace_id, result: _audit_mio_model_result(trace_id, result),
                                        fast_snapshot=LIVE_MIO_AUXILIARY.snapshot,
                                        frame_snapshot=LIVE_MIO_AUXILIARY.frame_snapshot,
-                                       knowledge_input_snapshot=LIVE_MIO_AUXILIARY.knowledge_input_snapshot,
                                        authorize=_authorize_mio_model_event)
+
+
+def _project_mio_knowledge(frame_payload, response, deadline, stale_check):
+    """Typed MIO projection on this exact frame; no model, prose or raw refs published."""
+    from azazel_mio.assistant import AssistantCore, KnowledgeContextResponseAdvisory
+    from azazel_mio.contracts import MioSituationFrame
+    frame = MioSituationFrame.from_dict(frame_payload)
+    out = AssistantCore().explain(frame, now=datetime.now(timezone.utc).isoformat(),
+        knowledge_attempted=False, knowledge_context_response=KnowledgeContextResponseAdvisory(response),
+        stale_check=lambda: stale_check() or time.monotonic() >= deadline).to_dict()
+    if out.get('frame_id') != frame.frame_id or out.get('trace_id') != frame.trace_id:
+        return None
+    projection = out.get('knowledge_context_response_advisory')
+    if not isinstance(projection, dict):
+        return None
+    # Core-validated public identifiers and measured freshness only. No state/action.
+    return {key: projection[key] for key in ('claim_status', 'attack_techniques',
+        'source_groups', 'source_freshness', 'trust') if key in projection}
+
+
+LIVE_MIO_KNOWLEDGE_LANE = LiveMioKnowledgeLane(
+    enabled=lambda: os.environ.get('AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED') == '1',
+    query=_query_knowledge_context, project=_project_mio_knowledge,
+    fast_snapshot=LIVE_MIO_AUXILIARY.snapshot, frame_snapshot=LIVE_MIO_AUXILIARY.frame_snapshot,
+    knowledge_input_snapshot=LIVE_MIO_AUXILIARY.knowledge_input_snapshot)
 
 
 def _call_llm_with_retry(payload: Dict[str, Any], model: str) -> tuple[Dict[str, Any] | None, int, int, str]:
@@ -2992,6 +3007,7 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
             "edge_action_label": "Edge action/result (observed)",
             "advisory_label": "M.I.O. advice/handoff (read-only)",
         }
+    mio["knowledge_analysis"] = LIVE_MIO_KNOWLEDGE_LANE.snapshot()
     mio["model_analysis"] = LIVE_MIO_MODEL_LANE.snapshot()
     # Keep the combined persisted envelope under the same cap after adding the
     # separately paced model lane. If needed, retain measurements but drop prose.
@@ -3099,6 +3115,7 @@ def _mio_snapshot_worker() -> None:
     """Persist either async M.I.O. timeline completion to the operator snapshot."""
     seen_generation = 0
     seen_model_generation = ""
+    seen_knowledge_state: tuple[str, str] = ("", "")
     while not _MIO_SNAPSHOT_STOP.wait(0.2):
         try:
             result = LIVE_MIO_AUXILIARY.snapshot()
@@ -3106,12 +3123,18 @@ def _mio_snapshot_worker() -> None:
             static_done = generation > seen_generation and result.get("status") not in {"pending", "starting", "queued"}
             model_generation = LIVE_MIO_MODEL_LANE.completed_async_generation()
             model_done = bool(model_generation and model_generation != seen_model_generation)
-            if not static_done and not model_done:
+            knowledge = LIVE_MIO_KNOWLEDGE_LANE.snapshot()
+            knowledge_state = (str(knowledge.get("generation") or ""), str(knowledge.get("status") or ""))
+            knowledge_done = (knowledge_state != seen_knowledge_state
+                              and knowledge.get("status") not in {"starting", "queued"})
+            if not static_done and not model_done and not knowledge_done:
                 continue
             if static_done:
                 seen_generation = generation
             if model_done:
                 seen_model_generation = model_generation
+            if knowledge_done:
+                seen_knowledge_state = knowledge_state
             # Preserve current Edge advisory fields while refreshing only the
             # operator snapshot with generation-tagged auxiliary results.
             with IO_LOCK:
@@ -3207,6 +3230,12 @@ def _handle_event(event: Dict[str, Any]) -> None:
     _metrics_inc("processed_events", 1)
     _route_llm(event, advisory)
     mio_request = advisory.get("mio_auxiliary") if isinstance(advisory.get("mio_auxiliary"), dict) else {}
+    try:
+        LIVE_MIO_KNOWLEDGE_LANE.submit(mio_request.get("generation", ""),
+            str(mio_request.get("trace_id") or advisory.get("trace_id") or ""))
+    except Exception:
+        # Independent optional Knowledge timeline: never block model enqueue or persistence.
+        logger.warning("mio knowledge enqueue degraded")
     try:
         _submit_governed_mio_model(advisory, mio_request)
     except Exception:

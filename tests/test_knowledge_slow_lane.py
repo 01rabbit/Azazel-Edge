@@ -192,37 +192,31 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                 observed.append(result.to_dict())
                 return result
             monkeypatch.setattr(AssistantCore, 'explain', explain)
+            monkeypatch.setattr(agent, 'MIO_MODEL_ENABLED', False)
             monkeypatch.setattr(agent,'_ollama_chat',lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError('synthetic model failure')))
             monkeypatch.setattr(agent,'_mio_model_endpoint_target',lambda: None)
-            from azazel_edge_ai.mio_model_lane import LiveMioModelLane
-            audits = []
-            authorized = []
-            monkeypatch.setattr(agent, '_audit_mio_model_result', lambda trace, result: audits.append(result))
-            lane = LiveMioModelLane(enabled=True, analyze=agent._governed_mio_model_analyze,
-                fast_snapshot=auxiliary.snapshot,
+            from azazel_edge_ai.mio_knowledge_lane import LiveMioKnowledgeLane
+            lane = LiveMioKnowledgeLane(enabled=lambda: True, query=agent._query_knowledge_context,
+                project=agent._project_mio_knowledge, fast_snapshot=auxiliary.snapshot,
                 frame_snapshot=auxiliary.frame_snapshot,
                 knowledge_input_snapshot=auxiliary.knowledge_input_snapshot,
-                authorize=lambda payload: (authorized.append(True) or True, 'synthetic_test'),
                 max_age_seconds=3)
-            lane.submit('1','trace-synthetic')
+            lane.submit('1', 'trace-synthetic')
             until = time.monotonic() + 4
             result = lane.snapshot()
-            while result['status'] in {'pending','queued','starting'} and time.monotonic() < until:
+            while result['status'] in {'queued', 'starting'} and time.monotonic() < until:
                 time.sleep(.01)
                 result = lane.snapshot()
-            assert authorized == [True]
-            assert audits and audits[0]['knowledge_status'] == 'projected'
             assert observed[0]['knowledge_context_response_advisory']['claim_status'] == 'reported_unverified'
             assert observed[0]['knowledge_context_response_advisory']['source_groups'] == ['abusech']
-            assert result['knowledge_status'] == 'projected'
+            assert result['status'] == 'projected'
+            assert result['is_current'] is True
+            assert result['projection']['source_groups'] == ['abusech']
+            assert result['projection']['claim_status'] == 'reported_unverified'
             assert frame == before
-            assert result['status'] == 'degraded'
-            assert result['outcome'] == 'degraded'
             assert frame['knowledge_refs'] == []
             assert '203.0.113.7' not in json.dumps(result) + caplog.text + log.read_text()
             assert 'urlhaus' not in json.dumps(result)
-            assert 'abusech' not in json.dumps(result)
-            assert '203.0.113.7' not in json.dumps(lane.diagnostics())
             assert token not in json.dumps(result) + caplog.text + log.read_text()
         finally:
             process.send_signal(2)
