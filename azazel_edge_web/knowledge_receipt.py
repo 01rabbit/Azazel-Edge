@@ -28,6 +28,12 @@ def _text_list(value, *, count, length):
     return [item for item in value if _text(item, length) is not None]
 
 
+def _finite_bounded_number(value, *, minimum, maximum):
+    if type(value) is int:
+        return minimum <= value <= maximum
+    return type(value) is float and math.isfinite(value) and minimum <= value <= maximum
+
+
 def _display_source_context(value):
     """Project the event correlation fields used by the dashboard, not the raw mapping."""
     if type(value) is not dict:
@@ -187,7 +193,7 @@ def _display_payload(payload):
     if completed is not None:
         result['completed_at'] = completed
     age = payload.get('max_age_seconds')
-    if type(age) in (int, float) and math.isfinite(age) and 0 <= age <= 10:
+    if _finite_bounded_number(age, minimum=0, maximum=10):
         result['max_age_seconds'] = age
     reason = payload.get('reason')
     if type(reason) is str and (reason in {'starting', 'pending', 'queued', 'queue_full', 'package_unavailable',
@@ -279,7 +285,7 @@ def _display_payload(payload):
         freshness = receipt.get('source_freshness')
         if type(freshness) is dict and {'oldest_feed_days', 'attack_version'} <= set(freshness):
             age, version = freshness.get('oldest_feed_days'), freshness.get('attack_version')
-            if ((age is None or type(age) in (int, float) and math.isfinite(age) and 0 <= age <= 36500)
+            if ((age is None or _finite_bounded_number(age, minimum=0, maximum=36500))
                     and (version is None or type(version) is str and _ATTACK_VERSION.fullmatch(version))
                     and {'oldest_feed_days', 'attack_version'} <= set(freshness)):
                 projected['source_freshness'] = {'oldest_feed_days': age, 'attack_version': version}
@@ -305,7 +311,7 @@ def _source_freshness(projection, receipt):
             or receipt.get('source_freshness_verification') != _SOURCE_FRESHNESS_VERIFICATION):
         return {'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}
     age = value.get('oldest_feed_days')
-    if age is not None and (type(age) not in (int, float) or not math.isfinite(age) or not 0 <= age <= 36500):
+    if age is not None and not _finite_bounded_number(age, minimum=0, maximum=36500):
         return {'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}
     version = value.get('attack_version')
     if version is not None and (type(version) is not str or _ATTACK_VERSION.fullmatch(version) is None):
@@ -325,7 +331,8 @@ def _fresh_bound_fast_envelope(payload, *, now=None):
             return False
         age = (datetime.now(timezone.utc).timestamp() if now is None else now) - completed_at.timestamp()
         limit = payload['max_age_seconds']
-        if type(limit) not in (int, float) or not math.isfinite(limit) or not 0 < limit <= 10 or not 0 <= age <= limit:
+        if (not _finite_bounded_number(limit, minimum=0, maximum=10) or limit == 0
+                or not 0 <= age <= limit):
             return False
     except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
         return False

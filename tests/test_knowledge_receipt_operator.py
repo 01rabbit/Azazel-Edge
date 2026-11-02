@@ -129,6 +129,28 @@ def test_malformed_source_context_metadata_is_omitted_without_failing_dashboard_
     assert 'event_type' not in result['source_context']['fields']
 
 
+def test_oversized_integer_age_fields_are_omitted_without_dashboard_exception():
+    huge = 10 ** 10000
+
+    envelope = current()
+    envelope['max_age_seconds'] = huge
+    assert operator_mio_payload(envelope, now=101)['knowledge_analysis'] == status_only('projected')
+
+    knowledge = current()
+    knowledge['knowledge_analysis']['projection']['source_freshness']['oldest_feed_days'] = huge
+    assert operator_mio_payload(knowledge, now=101)['knowledge_analysis']['source_freshness'] == {
+        'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}
+
+    sidecar = current()
+    sidecar['edge_knowledge_advisory'] = {'schema_version': 'azazel.edge_knowledge_advisory.v1',
+        'status': 'complete', 'authority': 'read_only_advisory', 'claim_status': 'reported_unverified',
+        'generation': '1', 'trace_id': 'edge-1', 'source_groups': ['abusech'],
+        'attack_techniques': ['T1059.001'], 'source_freshness': {
+            'oldest_feed_days': huge, 'attack_version': '18.1'}}
+    result = operator_mio_payload(sidecar, now=101)
+    assert 'source_freshness' not in result['edge_knowledge_advisory']
+
+
 BINDING_KEYS = ('generation', 'frame_generation', 'source_trace_id', 'event_key', 'trace_id', 'frame_id')
 
 
