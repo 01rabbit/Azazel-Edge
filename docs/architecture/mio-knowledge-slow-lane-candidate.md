@@ -68,6 +68,10 @@ does not make these identifiers private. The separate Knowledge panel labels the
 as reported and unverified, independent of the measured model result. It does
 not expose source prose, routes, actions or reported defensive state.
 The read path checks generation, event, Edge trace and both MIO frame bindings.
+It also reuses the fast producer's handoff validation against the same enclosing
+envelope: the handoff must be matched and agree with the generation, event key,
+observed Edge trace/action/mode/result and MIO trace/frame IDs. Missing or
+mismatched handoff or Edge-event fields suppress the receipt display.
 It conservatively expires at the fast frame's deadline (at most ten seconds),
 which can suppress a later Knowledge completion early; it never extends the
 Knowledge receipt lifetime. The browser also clears the panel at that deadline

@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import datetime, timezone
+import time
 
 import pytest
 
@@ -12,7 +13,12 @@ def current():
         'max_age_seconds': 10, 'trace_id': 'edge-1',
         'source_context': {'event_key': 'event-1'},
         'advisory': {'trace_id': 'mio-1', 'frame_id': 'frame-1'},
-        'edge_event': {'action': 'notify', 'result': 'planned_not_applied'},
+        'edge_event': {'action': 'notify', 'mode': 'dry_run',
+            'result': 'planned_not_applied', 'trace_id': 'edge-1'},
+        'handoff_binding': {'status': 'matched', 'valid': True, 'generation': '1',
+            'event_key': 'event-1', 'edge_trace_id': 'edge-1', 'edge_action': 'notify',
+            'edge_mode': 'dry_run', 'edge_result': 'planned_not_applied',
+            'mio_trace_id': 'mio-1', 'frame_id': 'frame-1'},
         'model_analysis': {'status': 'disabled'},
         'knowledge_analysis': {'schema_version': 'azazel.mio_knowledge_analysis.v1',
             'authority': 'read_only_advisory', 'usage_status': 'not_applicable',
@@ -70,6 +76,81 @@ def test_binding_field_at_96_chars_is_projected():
     receipt = operator_mio_payload(payload, now=101)['knowledge_analysis']
     assert receipt['status'] == 'projected'
     assert {key: receipt[key] for key in BINDING_KEYS} == {key: 'y' * 96 for key in BINDING_KEYS}
+def test_receipt_with_real_fast_producer_envelope_survives_typed_overlay():
+    from azazel_edge_ai.mio_live_auxiliary import LiveMioAuxiliary
+    from azazel_edge_control.daemon import AGENT_SNAPSHOT_VALIDATORS
+
+    producer = LiveMioAuxiliary()
+    try:
+        producer.submit({'normalized': {'event_type': 'alert', 'sid': 42},
+            'defense': {'action': 'notify'}, 'enforcement': {'trace_id': 'edge-1',
+                'mode': 'dry_run', 'result': 'planned_not_applied'}},
+            score=5, factors=[], risk_level='LOW')
+        deadline = time.monotonic() + 2
+        payload = producer.snapshot()
+        while payload['status'] in {'queued', 'starting'} and time.monotonic() < deadline:
+            time.sleep(.005)
+            payload = producer.snapshot()
+        assert payload['status'] == 'complete'
+        assert payload['handoff_binding']['valid'] is True
+        assert AGENT_SNAPSHOT_VALIDATORS['mio_auxiliary'](payload)
+        receipt = current()['knowledge_analysis']
+        receipt.update(generation=payload['generation'], frame_generation=payload['generation'],
+            source_trace_id=payload['trace_id'], event_key=payload['source_context']['event_key'],
+            trace_id=payload['advisory']['trace_id'], frame_id=payload['advisory']['frame_id'])
+        payload['knowledge_analysis'] = receipt
+        original = deepcopy(payload)
+        output = operator_mio_payload(payload)
+        assert output.pop('knowledge_analysis')['status'] == 'projected'
+        assert payload == original
+        original.pop('knowledge_analysis')
+        assert output == original
+    finally:
+        producer._queue.join()
+
+
+@pytest.mark.parametrize('field', ['handoff_binding', 'edge_event'])
+@pytest.mark.parametrize('value', ['absent', None, [], {}])
+def test_missing_or_malformed_enclosing_handoff_is_unavailable(field, value):
+    payload = current()
+    if value == 'absent':
+        payload.pop(field)
+    else:
+        payload[field] = value
+    assert_unavailable_without_other_changes(payload)
+
+
+def assert_unavailable_without_other_changes(payload):
+    original = deepcopy(payload)
+    output = operator_mio_payload(payload, now=101)
+    assert payload == original
+    assert output.pop('knowledge_analysis') == {'status': 'unavailable', 'is_current': False}
+    original.pop('knowledge_analysis')
+    assert output == original
+
+
+@pytest.mark.parametrize('key', ['status', 'generation', 'event_key', 'edge_trace_id',
+    'edge_action', 'edge_mode', 'edge_result', 'mio_trace_id', 'frame_id'])
+@pytest.mark.parametrize('value', [None, 'old'])
+def test_stale_or_mismatched_handoff_binding_is_unavailable(key, value):
+    payload = current()
+    payload['handoff_binding'][key] = value
+    assert_unavailable_without_other_changes(payload)
+
+
+@pytest.mark.parametrize('key', ['trace_id', 'action', 'mode', 'result'])
+@pytest.mark.parametrize('value', [None, 'old'])
+def test_edge_event_must_match_enclosing_handoff(key, value):
+    payload = current()
+    payload['edge_event'][key] = value
+    assert_unavailable_without_other_changes(payload)
+
+
+def test_edge_event_and_handoff_trace_cannot_disagree_with_receipt_source():
+    payload = current()
+    payload['edge_event']['trace_id'] = 'other-edge'
+    payload['handoff_binding']['edge_trace_id'] = 'other-edge'
+    assert_unavailable_without_other_changes(payload)
 
 
 @pytest.mark.parametrize('now', [111, 99])
