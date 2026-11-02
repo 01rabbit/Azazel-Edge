@@ -63,6 +63,8 @@ py/azazel_edge_epd.py
 py/azazel_edge_epd_mode_refresh.py
 py/azazel_edge_ai/__init__.py
 py/azazel_edge_ai/agent.py
+py/azazel_edge_ai/mio_live_auxiliary.py
+py/azazel_edge_ai/mio_model_lane.py
 py/azazel_edge_control/__init__.py
 py/azazel_edge_control/daemon.py
 py/azazel_edge_control/mode_manager.py
