@@ -2,7 +2,7 @@ Task: Edge #532 P3 independent review correction
 Base commit: 1c285cdd04c90cf5e735bae04133f5b7ec9ed507
 Base tree: 4e8e17721afa3e4fbdaa072c81de0002b5fcb9f6
 PR #532 remote head reference: 672822fce15850eb70c4f7b1fc209f774bb222a9
-Read-only MIO source verified: /Users/mao/Developer/GitHub/Azazel-MIO commit 9fedb01bc9936531407a5181aa8fa5553ec19d55
+Read-only MIO source verified: pinned public commit 9fedb01bc9936531407a5181aa8fa5553ec19d55 (tree 47f41988f8f5b1b580a49dd6031f380844a032ed)
 
 Commands and outcomes:
 - node tests/sentinel_console_logic.test.js: PASS (all assertions)

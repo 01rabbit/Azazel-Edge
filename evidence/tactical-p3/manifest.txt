@@ -1,7 +1,7 @@
 Task: Edge #532 bounded P3 clarity fixes
 Base commit: 672822fce15850eb70c4f7b1fc209f774bb222a
 Base tree: caa65a5c4aceb9277b51b20df36def449510be5f
-Read-only MIO source verified: /Users/mao/Developer/GitHub/Azazel-MIO commit 9fedb01bc9936531407a5181aa8fa5553ec19d55
+Read-only MIO source verified: pinned public commit 9fedb01bc9936531407a5181aa8fa5553ec19d55 (tree 47f41988f8f5b1b580a49dd6031f380844a032ed)
 
 Commands and outcomes:
 - node tests/sentinel_console_logic.test.js: PASS (all assertions)
