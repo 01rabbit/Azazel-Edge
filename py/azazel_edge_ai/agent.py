@@ -375,28 +375,41 @@ def _query_knowledge_context(source_context: Mapping[str, Any] | None, *, deadli
             finally:
                 self.fp = original
 
+    cancellation_done = threading.Event()
+    watcher: threading.Thread | None = None
+
+    def watch_transport(transport_socket: socket.socket) -> None:
+        # One watcher per serial request; shutdown interrupts connect, headers and
+        # body reads without adding a second query worker or retaining stale I/O.
+        while not cancellation_done.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or stale_check():
+                try:
+                    transport_socket.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    # A supersession can precede connect entering the kernel.
+                    # Keep watching until teardown so that race cannot leave a
+                    # subsequently connected socket without cancellation.
+                    pass
+                cancellation_done.wait(.01)
+                continue
+            cancellation_done.wait(min(.01, remaining))
+
     class NumericLoopbackConnection(http.client.HTTPConnection):
         response_class = BoundedResponse
         def connect(self) -> None:
             self.sock = socket.socket(socket.AF_INET6 if address.version == 6 else socket.AF_INET,
                                       socket.SOCK_STREAM)
+            nonlocal watcher
+            watcher = threading.Thread(target=watch_transport, args=(self.sock,),
+                                       name='mio-knowledge-cancellation', daemon=True)
+            watcher.start()
             self.sock.settimeout(max(0.001, deadline - time.monotonic()))
             self.sock.connect((str(address), target.port))
 
     connection = NumericLoopbackConnection(str(address), target.port, timeout=remaining)
-    timer: threading.Timer | None = None
     try:
         connection.connect()
-        transport_socket = connection.sock
-        def expire() -> None:
-            if transport_socket is not None:
-                try:
-                    transport_socket.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-        timer = threading.Timer(max(0.0, deadline - time.monotonic()), expire)
-        timer.daemon = True
-        timer.start()
         if stale_check():
             return 'superseded', None
         connection.request('POST', '/v1/context', body=body,
@@ -431,10 +444,12 @@ def _query_knowledge_context(source_context: Mapping[str, Any] | None, *, deadli
     except (ValueError, UnicodeError, RecursionError):
         return 'malformed', None
     except (OSError, http.client.HTTPException):
-        return ('timeout' if time.monotonic() >= deadline else 'unavailable'), None
+        return ('superseded' if stale_check() else
+                'timeout' if time.monotonic() >= deadline else 'unavailable'), None
     finally:
-        if timer is not None:
-            timer.cancel()
+        cancellation_done.set()
+        if watcher is not None:
+            watcher.join()
         connection.close()
 
 
