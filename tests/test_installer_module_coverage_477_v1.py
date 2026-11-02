@@ -206,3 +206,11 @@ def test_the_runtime_sync_check_covers_every_installed_module():
             continue
         covered = rel in files or any(rel.startswith(d + "/") and "/" not in rel[len(d) + 1:] for d in dirs)
         assert covered, f"verify_runtime_sync.sh does not compare {rel}"
+
+
+def test_the_knowledge_lane_modules_are_in_the_runtime_sync_files_list():
+    # Both Knowledge lane runtime modules must be compared by verify_runtime_sync.sh's FILES list.
+    src = SYNC.read_text(encoding="utf-8")
+    files = re.search(r"mapfile -t FILES <<'EOF'\n(.*?)\nEOF", src, re.S).group(1).split()
+    for rel in ("py/azazel_edge_ai/mio_knowledge_lane.py", "azazel_edge_web/knowledge_receipt.py"):
+        assert rel in files, f"verify_runtime_sync.sh FILES does not list {rel}"

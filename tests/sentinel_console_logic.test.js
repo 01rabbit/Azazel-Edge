@@ -342,13 +342,13 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     m.S.renderMioLiveAuxiliary(Object.assign({}, payload, {is_current: false, trace_id: 'old-edge-trace',
         edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {generation: 'old'})}));
     eq(m.$('mioLiveKnowledgeAdvisory').textContent, 'Suppressed', 'stale optional receipt is suppressed');
-    ok(m.$('mioLiveEdgeAction').textContent.includes('notify / mode dry_run / planned_not_applied'), 'stale receipt leaves Edge action/result visible');
+    ok(m.$('mioLiveEdgeAction').textContent.includes('notify / reported mode dry_run / planned_not_applied'), 'stale receipt leaves Edge action/result visible');
     ok(m.$('mioLiveEdgeAction').textContent.includes('not correlated to current M.I.O./Knowledge details'), 'stale outer envelope marks retained Edge action uncorrelated');
     ok(!m.$('mioLiveEdgeAction').textContent.includes('event-530'), 'stale marker exposes no correlation ID');
     const mismatched = Object.assign({}, payload, {handoff_binding: Object.assign({}, payload.handoff_binding, {valid: false}),
         edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {trace_id: 'other-private-id'})});
     m.S.renderMioLiveAuxiliary(mismatched);
-    ok(m.$('mioLiveEdgeAction').textContent.includes('notify / mode dry_run / planned_not_applied'), 'binding mismatch keeps Edge action/result visible');
+    ok(m.$('mioLiveEdgeAction').textContent.includes('notify / reported mode dry_run / planned_not_applied'), 'binding mismatch keeps Edge action/result visible');
     ok(m.$('mioLiveEdgeAction').textContent.includes('not correlated to current M.I.O./Knowledge details'), 'binding mismatch marks retained Edge action uncorrelated');
     ok(!m.$('mioLiveEdgeAction').textContent.includes('other-private-id'), 'mismatch marker hides receipt ID');
     const malformed = Object.assign({}, payload, {edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {source_groups: ['raw.example']})});
@@ -476,8 +476,8 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'mismatched hypotheses suppressed');
     eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'mismatched checks suppressed');
     eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'mismatched handoff suppressed');
-    ok(/^notify \/ mode dry_run \/ applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent),
-        'Edge action/mode retained and marked uncorrelated on MIO mismatch with snapshot age: ' + m.$('mioLiveEdgeAction').textContent);
+    ok(/^notify \/ reported mode dry_run \/ applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent),
+        'Edge action/reported mode retained and marked uncorrelated on MIO mismatch with snapshot age: ' + m.$('mioLiveEdgeAction').textContent);
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '5',
         trace_id: 'edge-trace-5', edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-5'},
@@ -505,8 +505,8 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'stale handoff suppressed');
     // Age is bounded, not exact: the fixture is 60 s old, so it must be at least 60 s and tolerate a paused test run.
     const ageA = /snapshot age at last refresh (\d+) s$/.exec(m.$('mioLiveEdgeAction').textContent);
-    ok(/^isolate \/ mode enforced \/ applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent) && ageA !== null && Number(ageA[1]) >= 60 && Number(ageA[1]) <= 120,
-        'stale MIO result retains action/mode and shows known snapshot age: ' + m.$('mioLiveEdgeAction').textContent);
+    ok(/^isolate \/ reported mode enforced \/ applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent) && ageA !== null && Number(ageA[1]) >= 60 && Number(ageA[1]) <= 120,
+        'stale MIO result retains action/reported mode and shows known snapshot age: ' + m.$('mioLiveEdgeAction').textContent);
     function currentPayload(modelAnalysis) {
         return {status: 'complete', is_current: true, max_age_seconds: 10,
             completed_at: new Date(Date.now() - 1000).toISOString(), generation: '7', trace_id: 'edge-trace-7',
@@ -949,7 +949,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             'binding valid marker #' + i + ': handoff suppressed');
         ok(m.$('mioKnowledgeCue').textContent.indexOf('not current/usable; no reference metadata') >= 0,
             'binding valid marker #' + i + ': safe non-current cue');
-        ok(/^notify \/ mode dry_run \/ planned_not_applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent),
+        ok(/^notify \/ reported mode dry_run \/ planned_not_applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent),
             'binding valid marker #' + i + ': action/result remain visible and trace is suppressed');
         dom.uninstall();
     });
@@ -1067,7 +1067,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         m.S.renderMioLiveAuxiliary(current(normal, over));
         eq(m.$('mioSourceObserved').textContent, 'Suppressed', 'stale or mismatched source context suppressed');
         eq(m.$('mioSourceUnavailable').textContent, 'Suppressed', 'stale or mismatched unavailable list suppressed');
-        ok(/^notify \/ mode dry_run \/ planned_not_applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent), 'Edge action/result remain and are marked uncorrelated');
+        ok(/^notify \/ reported mode dry_run \/ planned_not_applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent), 'Edge action/result remain and are marked uncorrelated');
     });
 
     // Missing, empty, or non-producer-format event key: binding otherwise valid, source fields still suppressed.
@@ -1164,7 +1164,9 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     Date.now = function () { return T; };
     try {
         const m = mount();
-        const el = m.doc.createElement('span'); el.id = 'mioLiveEdgeAction'; m.doc.body.appendChild(el);
+        ['mioLiveEdgeAction', 'mioLiveAuxStatus', 'mioLiveAuxFreshness', 'mioLiveAuxAdvice', 'mioLiveAuxKnowledge'].forEach(function (id) {
+            const node = m.doc.createElement('span'); node.id = id; m.doc.body.appendChild(node);
+        });
         const row = function () { return m.$('mioLiveEdgeAction').textContent; };
         // ageMs > 0 is past, < 0 is future, null is an invalid timestamp, undefined is missing.
         const build = function (ageMs, edgeOver, bindOver) {
@@ -1187,7 +1189,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
 
         // Exact full mismatch output with a known age (5 s before the frozen clock).
         m.S.renderMioLiveAuxiliary(build(5000, null, {edge_mode: 'enforced'}));
-        eq(row(), 'notify / mode dry_run / planned_not_applied' + LABEL + '5 s', 'exact mismatch output with snapshot age at last refresh');
+        eq(row(), 'notify / reported mode dry_run / planned_not_applied' + LABEL + '5 s', 'exact mismatch output with snapshot age at last refresh');
 
         // Unlisted, hostile and missing modes show unavailable and never echo raw text.
         m.S.renderMioLiveAuxiliary(build(1000, {mode: 'shadow_only'}, {edge_mode: 'shadow_only'}));
@@ -1198,7 +1200,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         // A missing mode can never match the binding, so the row is the uncorrelated last report.
         const noMode = build(1000, null, {edge_mode: undefined}); delete noMode.edge_event.mode;
         m.S.renderMioLiveAuxiliary(noMode);
-        eq(row(), 'notify / mode unavailable / planned_not_applied' + LABEL + '1 s', 'missing mode shows unavailable');
+        eq(row(), 'notify / reported mode unavailable / planned_not_applied' + LABEL + '1 s', 'missing mode shows unavailable');
 
         // Mode is added only with an Edge action or result; without either, the Unknown fallback is kept.
         const noActionOrResult = build(5000, null, {edge_mode: 'enforced'});
@@ -1208,13 +1210,21 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
 
         // Future timestamp: age unavailable, never 0 s.
         m.S.renderMioLiveAuxiliary(build(-5000, null, {edge_mode: 'enforced'}));
-        eq(row(), 'notify / mode dry_run / planned_not_applied' + LABEL + 'unavailable', 'future completed_at shows age unavailable, not 0 s');
+        eq(row(), 'notify / reported mode dry_run / planned_not_applied' + LABEL + 'unavailable', 'future completed_at shows age unavailable, not 0 s');
+
+        // Matched binding with a future completed_at: never fresh, so details and Knowledge stay suppressed.
+        m.S.renderMioLiveAuxiliary(build(-5000));
+        eq(m.$('mioLiveAuxFreshness').textContent, 'Stale or not current', 'matched future completed_at is stale, not fresh');
+        eq(m.$('mioLiveAuxStatus').textContent, 'complete (details suppressed)', 'matched future completed_at suppresses M.I.O. details');
+        eq(m.$('mioLiveAuxAdvice').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'matched future completed_at suppresses advice');
+        eq(m.$('mioLiveAuxKnowledge').textContent, 'suppressed', 'matched future completed_at suppresses Knowledge provenance');
+        eq(row(), 'notify / reported mode dry_run / planned_not_applied' + LABEL + 'unavailable', 'matched future completed_at row shows age unavailable, not 0 s');
 
         // Invalid and missing timestamps: age unavailable.
         m.S.renderMioLiveAuxiliary(build(null, null, {edge_mode: 'enforced'}));
-        eq(row(), 'notify / mode dry_run / planned_not_applied' + LABEL + 'unavailable', 'invalid completed_at shows age unavailable');
+        eq(row(), 'notify / reported mode dry_run / planned_not_applied' + LABEL + 'unavailable', 'invalid completed_at shows age unavailable');
         m.S.renderMioLiveAuxiliary(build(undefined, null, {edge_mode: 'enforced'}));
-        eq(row(), 'notify / mode dry_run / planned_not_applied' + LABEL + 'unavailable', 'missing completed_at shows age unavailable');
+        eq(row(), 'notify / reported mode dry_run / planned_not_applied' + LABEL + 'unavailable', 'missing completed_at shows age unavailable');
 
         dom.uninstall();
     } finally {

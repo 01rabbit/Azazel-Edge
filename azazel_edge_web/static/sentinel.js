@@ -437,14 +437,17 @@
             && (!advisory.frame_id || String(binding.frame_id || '') === String(advisory.frame_id || ''))
             && (!advisory.trace_id || String(binding.mio_trace_id || '') === String(advisory.trace_id || ''));
         var completedAt = Date.parse(payload.completed_at || '');
-        var resultAge = Number.isFinite(completedAt) ? Math.max(0, (Date.now() - completedAt) / 1000) : Infinity;
+        // Freshness uses the raw age: a negative (future) or unparseable completed_at is never fresh and is not clamped to 0.
+        var rawAgeSeconds = Number.isFinite(completedAt) ? (Date.now() - completedAt) / 1000 : NaN;
+        var resultAge = Number.isFinite(rawAgeSeconds) ? rawAgeSeconds : Infinity;
         var fresh = payload.is_current === true && payload.status === 'complete'
-            && resultAge <= Number(payload.max_age_seconds || 0);
+            && resultAge >= 0 && resultAge <= Number(payload.max_age_seconds || 0);
         var usable = fresh && bindingValid;
         // The mode is shown only alongside an Edge action or result; with neither, the row keeps the Unknown fallback.
         var hasEdgeActionOrResult = (typeof edge.action === 'string' && edge.action.length > 0)
             || (typeof edge.result === 'string' && edge.result.length > 0);
-        var actionBits = [edge.action, hasEdgeActionOrResult ? 'mode ' + edgeModeText(edge.mode) : '', edge.result, usable ? boundedEdgeTrace(edge.trace_id) : '']
+        // A usable, correlated row shows the mode; a non-usable (stale or uncorrelated) row shows only the reported mode.
+        var actionBits = [edge.action, hasEdgeActionOrResult ? (usable ? 'mode ' : 'reported mode ') + edgeModeText(edge.mode) : '', edge.result, usable ? boundedEdgeTrace(edge.trace_id) : '']
             .filter(function (v) { return typeof v === 'string' && v; });
         var suppressedMessage = 'M.I.O. details suppressed (stale result or correlation mismatch).';
         put('mioLiveAuxStatus', usable ? (payload.status || 'unavailable') : ((payload.status || 'unavailable') + ' (details suppressed)'));
@@ -595,7 +598,6 @@
         var edgeCorrelatedToMio = usable && bindingValid;
         // An uncorrelated/stale row is only the last Edge report. Its age is the M.I.O. snapshot's payload.completed_at
         // measured at the last refresh, not an Edge timestamp. A future or negative raw age is unavailable, never 0 s.
-        var rawAgeSeconds = Number.isFinite(completedAt) ? (Date.now() - completedAt) / 1000 : NaN;
         var snapshotAgeText = Number.isFinite(rawAgeSeconds) && rawAgeSeconds >= 0
             ? 'M.I.O. snapshot age at last refresh ' + Math.round(rawAgeSeconds) + ' s'
             : 'M.I.O. snapshot age at last refresh unavailable';
