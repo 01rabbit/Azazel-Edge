@@ -35,8 +35,11 @@ kind, SID, severity, port and rule-declared technique IDs.
 Transport uses direct numeric sockets without DNS or ambient proxy support.
 It accepts HTTP only on loopback, does not follow redirects or retry, limits
 response headers to 4 KiB and request/response bodies to 16 KiB, and rejects
-transfer encoding. A socket shutdown timer enforces the absolute remaining
-Knowledge deadline, including response headers. Generations are checked before
+transfer encoding. A single per-request cancellation watcher shuts down the captured socket on
+supersession or the absolute remaining Knowledge deadline, including connect,
+response headers and body reads. It checks supersession every 10 ms and is joined
+before the serial worker starts another request, so stale I/O cannot consume the
+latest queued request's deadline or create an accumulating pool of query threads. Generations are checked before
 and after the request and before and after model-free projection. Late work cannot replace
 a newer generation.
 

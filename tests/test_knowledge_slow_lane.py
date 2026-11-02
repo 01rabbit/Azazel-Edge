@@ -105,6 +105,82 @@ def test_absolute_deadline(monkeypatch):
         assert time.monotonic() - started < .3
 
 
+@pytest.mark.parametrize('stall_phase', ['headers', 'body'])
+def test_stalled_old_transport_releases_latest_lane(monkeypatch, stall_phase):
+    from azazel_edge_ai.mio_knowledge_lane import LiveMioKnowledgeLane
+
+    entered, release, latest_requested = (threading.Event() for _ in range(3))
+    requests, projected = [], []
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            requests.append(self.path)
+            first = len(requests) == 1
+            if first and stall_phase == 'headers':
+                entered.set()
+                release.wait(3)
+            self.send_response(200)
+            self.send_header('Content-Length', '2')
+            self.end_headers()
+            if first and stall_phase == 'body':
+                self.wfile.flush()
+                entered.set()
+                release.wait(3)
+            if not first:
+                latest_requested.set()
+            try:
+                self.wfile.write(b'{}')
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        def log_message(self, *_args):
+            pass
+    httpd = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv('AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED', '1')
+    monkeypatch.setenv('AZAZEL_MIO_KNOWLEDGE_CONTEXT_QUERY_TOKEN', 'synthetic_test_token_123')
+    monkeypatch.setenv('AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENDPOINT', f'http://127.0.0.1:{httpd.server_port}')
+    state = {}
+    frames = {g: {'trace_id': 'mio-' + g, 'frame_id': 'frame-' + g} for g in ('1', '2')}
+    def select(g):
+        state.update(generation=g, trace_id='edge-' + g, status='complete', is_current=True,
+                     advisory=frames[g], source_context={'event_key': 'event-' + g})
+    def project(frame, *_args):
+        projected.append(frame['frame_id'])
+        return {'claim_status': 'reported_unverified'}
+    lane = LiveMioKnowledgeLane(enabled=lambda: True, query=query_context,
+        fast_snapshot=lambda: dict(state), frame_snapshot=frames.get,
+        knowledge_input_snapshot=lambda _g: {}, project=project, max_age_seconds=.4)
+    try:
+        select('1')
+        lane.submit('1', 'edge-1')
+        assert entered.wait(1)
+        select('2')
+        started = time.monotonic()
+        lane.submit('2', 'edge-2')
+        assert latest_requested.wait(.25)
+        until = started + .35
+        while lane.snapshot()['status'] == 'queued' and time.monotonic() < until:
+            time.sleep(.005)
+        result = lane.snapshot()
+        assert result['generation'] == '2'
+        assert result['status'] == 'projected'
+        assert result['is_current'] is True
+        assert not release.is_set()
+        # Keep the old server-side I/O held beyond the latest request's deadline.
+        time.sleep(max(0, started + .45 - time.monotonic()))
+        assert projected == ['frame-2']
+        assert lane.snapshot()['generation'] == '2'
+        release.set()
+        assert projected == ['frame-2']
+        assert requests == ['/v1/context', '/v1/context']
+    finally:
+        release.set()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join()
+
+
 def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, caplog):
     """Opt-in local integration: real Uvicorn, temporary synthetic DB and keys."""
     source = os.environ.get('EDGE_TEST_KNOWLEDGE_SOURCE')
