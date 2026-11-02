@@ -1232,6 +1232,10 @@
                         <div>Model next checks: <span id="mioModelChecks">None</span></div>
                         <div>Model measurements: <span id="mioModelMetrics">—</span></div>
                     </div>
+                    <div class="assistant-block" aria-live="polite">
+                        <div>Independent Knowledge receipt (read-only, separate from model): <strong id="mioKnowledgeStatus">unavailable</strong></div>
+                        <div>Reported, unverified reference metadata; freshness unverified at lookup: <span id="mioKnowledgeRefs">Unavailable</span></div>
+                    </div>
                     <details class="panel-fold-details" id="mioAssistDetails">
                         <summary id="mioAssistDetailsToggle">{{ tr('dashboard.mio_details_show', 'Show M.I.O. details') }}</summary>
                         <div class="assistant-block">

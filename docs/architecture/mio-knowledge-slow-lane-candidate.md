@@ -55,8 +55,18 @@ claim status and trust. Reported freshness is explicitly unverified at lookup;
 it is never promoted to evidence or a claim of current source health. The
 receipt expires after ten seconds, suppresses its projection when stale, and
 checks current generation, event and both frame bindings before `is_current`.
-There is no Knowledge-to-model join. The control daemon/UI does not yet admit
-or render this new schema; a separate consumer change is required.
+There is no Knowledge-to-model join. The control daemon carries the receipt within its bounded `mio_auxiliary`
+object. The normal dashboard summary API now replaces the nested receipt with
+an allowlisted display projection: fixed status, current marker, public ATT&CK
+IDs and bounded source-group labels. The separate Knowledge panel labels these
+as reported and unverified, independent of the measured model result. It does
+not expose source prose, routes, actions or reported defensive state.
+The read path checks generation, event, Edge trace and both MIO frame bindings.
+It conservatively expires at the fast frame's deadline (at most ten seconds),
+which can suppress a later Knowledge completion early; it never extends the
+Knowledge receipt lifetime. The browser also clears the panel at that deadline
+when polling stops. Malformed, expired or mismatched receipts are unavailable.
+This display projection does not modify the producer receipt or fast/model lane.
 Existing Edge decisions, tactical scores and frame evidence remain
 unchanged. The deterministic, DPI, arbiter and action paths make no calls.
 Knowledge's own API may write its normal query audit in its local store.

@@ -292,9 +292,12 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
 // --- 1. Empty payload: nothing throws, nothing is green, unknowns say so ----
 (function () {
     const m = mount();
+    let expireKnowledge;
+    global.window.setTimeout = function (callback) { expireKnowledge = callback; return 1; };
+    global.window.clearTimeout = function () {};
     ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction',
      'mioLiveAuxAdvice','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff',
-     'mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics'].forEach(function (id) {
+     'mioKnowledgeStatus','mioKnowledgeRefs','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics'].forEach(function (id) {
         const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el);
     });
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
@@ -304,12 +307,14 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', generation: '5',
             event_key: 'event-5', edge_trace_id: 'edge-trace-5', edge_action: 'notify',
             edge_result: 'planned_not_applied', edge_mode: 'dry_run', mio_trace_id: 'mio-trace-5', frame_id: 'frame-5'},
-        generation: '5', model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
+        generation: '5', knowledge_analysis: {status: 'projected', is_current: true, claim_status: 'reported_unverified', trust: 'unverified_advisory_only', attack_techniques: ['T1059.001'], source_groups: ['abusech'], action: 'isolate'}, model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
             hypotheses: [{statement: 'A hostile-activity explanation remains possible, but this frame does not establish it.', verification: 'model_proposed_unverified', source: 'mio_validated_alternative', frame_refs: ['suricata_sid:42']}],
             next_checks: ['check the observed event'], model: 'qwen:2b', duration_ms: 900, prompt_tokens: 20, completion_tokens: 12},
         advisory: {trace_id: 'mio-trace-5', frame_id: 'frame-5', recommendation: '<img src=x onerror=alert(1)>',
             hypotheses: [{statement: '<script>hypothesis</script>', verification: 'unverified'}],
             next_checks: ['check one'], handoff: {summary: '<b>handoff</b>'}}});
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected (reported, unverified)', 'independent receipt status');
+    eq(m.$('mioKnowledgeRefs').textContent, 'ATT&CK: T1059.001 · Source groups: abusech', 'only reference metadata rendered');
     eq(m.$('mioLiveAuxStatus').textContent, 'complete', 'MIO status rendered');
     eq(m.$('mioLiveAuxKnowledge').textContent, 'not_provided', 'Knowledge provenance rendered');
     eq(m.$('mioLiveAuxFreshness').textContent, 'Current generation', 'fresh completion is current');
@@ -326,6 +331,10 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         'fixed MIO alternative rendered with context-only frame provenance');
     eq(m.$('mioModelChecks').textContent, 'check the observed event', 'validated model checks rendered as text');
     ok(m.$('mioModelMetrics').textContent.indexOf('qwen:2b') >= 0, 'current model metrics rendered');
+    expireKnowledge();
+    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'receipt expires even without another poll');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'expiry clears refs');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-5', 'receipt expiry preserves observed action');
     const mismatched = {status: 'complete', generation: '5', trace_id: 'edge-trace-5', is_current: true,
         completed_at: new Date(Date.now() - 1000).toISOString(), max_age_seconds: 10,
         source_context: {event_key: 'event-5'}, edge_event: {action: 'notify', mode: 'dry_run', result: 'applied', trace_id: 'edge-trace-5'},
@@ -360,6 +369,8 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             next_checks: ['stale check'], handoff: {summary: 'stale handoff'}},
         model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: 'old'} });
     eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result', 'stale fast result cannot label model current');
+    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'stale independent receipt unavailable');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'stale receipt refs hidden');
     eq(m.$('mioLiveAuxAdvice').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'stale advice suppressed');
     eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'stale hypotheses suppressed');
     eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'stale checks suppressed');

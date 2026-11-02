@@ -39,6 +39,8 @@ from typing import Dict, Any, Optional, Iterator, Tuple, List
 from urllib.request import Request, urlopen
 from urllib.parse import quote
 
+from azazel_edge_web.knowledge_receipt import operator_mio_payload
+
 from azazel_edge_web.io_helpers import (
     _append_jsonl,
     _parse_json_dict_lenient,
@@ -2693,7 +2695,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
         },
         "service_health_summary": service_summary,
         "current_recommendation": str(state.get("recommendation") or advisory.get("recommendation") or ""),
-        "mio_auxiliary": state.get("mio_auxiliary") if isinstance(state.get("mio_auxiliary"), dict) else {},
+        "mio_auxiliary": operator_mio_payload(state.get("mio_auxiliary")),
         "normal_assurance": _normal_assurance_payload(
             state=state,
             metrics=metrics,
