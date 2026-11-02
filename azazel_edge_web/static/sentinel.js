@@ -480,6 +480,48 @@
         }
         put('mioLiveKnowledgeAdvisory', receiptText, 2048);
         put('mioLiveEdgeAction', actionBits.join(' / ') || (edge.unknown_fields ? 'Unknown (malformed fields omitted)' : 'Unknown'));
+        // Normalized source context: hard-coded allowlist only; split into observed values and unavailable/invalid names.
+        var SOURCE_FIELD_ALLOWLIST = ['event_type', 'attack_type', 'category', 'protocol', 'sid', 'severity', 'target_port', 'technique_ids', 'ts', 'normalized_outcome'];
+        var sourceFields = sourceContext.fields && typeof sourceContext.fields === 'object' && !Array.isArray(sourceContext.fields)
+            ? sourceContext.fields : {};
+        var SOURCE_INTEGER_RANGES = {sid: [1, 2147483647], severity: [0, 10], target_port: [1, 65535]};
+        // Mirrors py/azazel_edge_ai/mio_live_auxiliary.py `_source_context()` validation at the UI boundary.
+        var SOURCE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:\/+()\[\]-]{0,95}$/;
+        var SOURCE_TECHNIQUE = /^T[0-9]{4}(?:\.[0-9]{3})?$/;
+        var SOURCE_TIMESTAMP = /^[0-9TtZz:+.\-]{1,32}$/;
+        var SOURCE_LABEL_LIMITS = {event_type: 32, attack_type: 96, category: 64, protocol: 16};
+        var SOURCE_OUTCOMES = ['allowed', 'blocked', 'drop', 'rejected'];
+        function sourceValueText(name, entry) {
+            var value = entry.value;
+            var range = SOURCE_INTEGER_RANGES[name];
+            if (range) {
+                return Number.isInteger(value) && value >= range[0] && value <= range[1] ? String(value) : '';
+            }
+            if (name === 'technique_ids') {
+                if (!Array.isArray(value) || value.length > 16) return '';
+                if (!value.every(function (v) { return typeof v === 'string' && SOURCE_TECHNIQUE.test(v); })) return '';
+                return value.length ? value.join(', ') : 'none';
+            }
+            if (name === 'normalized_outcome') {
+                return typeof value === 'string' && SOURCE_OUTCOMES.indexOf(value) !== -1 ? value : '';
+            }
+            if (name === 'ts') {
+                return typeof value === 'string' && SOURCE_TIMESTAMP.test(value) ? value : '';
+            }
+            var limit = SOURCE_LABEL_LIMITS[name];
+            if (!limit || typeof value !== 'string' || value.length > limit || !SOURCE_LABEL.test(value)) return '';
+            return value.trim().toLowerCase() === 'unknown' ? '' : value;
+        }
+        var observedFields = [];
+        var unavailableFields = [];
+        SOURCE_FIELD_ALLOWLIST.forEach(function (name) {
+            var entry = Object.prototype.hasOwnProperty.call(sourceFields, name) ? sourceFields[name] : null;
+            var text = entry && typeof entry === 'object' && entry.status === 'observed' ? sourceValueText(name, entry) : '';
+            if (text) observedFields.push(name + '=' + text);
+            else unavailableFields.push(name);
+        });
+        put('mioSourceObserved', usable ? (observedFields.join(' · ') || 'None') : 'Suppressed', 600);
+        put('mioSourceUnavailable', usable ? (unavailableFields.join(', ') || 'None') : 'Suppressed', 300);
         put('mioLiveAuxAdvice', usable
             ? (recommendation || advisory.summary || handoff.summary || 'No advice available.')
             : (payload.reason ? 'M.I.O. result suppressed: ' + String(payload.reason).slice(0, 120) : suppressedMessage));

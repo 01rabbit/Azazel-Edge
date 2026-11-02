@@ -735,5 +735,109 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     dom.uninstall();
 })();
 
+// --- 7. Normalized source context: allowlist, observed vs unavailable, gated --
+(function () {
+    const m = mount();
+    ['mioSourceObserved', 'mioSourceUnavailable', 'mioLiveEdgeAction'].forEach(function (id) {
+        const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el);
+    });
+    const field = function (value, status) { return {value: value, status: status || 'observed', provenance: 'rust_core_normalized_event'}; };
+    const unavailable = function () { return field(null, 'unavailable'); };
+    function current(sourceFields, overrides) {
+        return Object.assign({status: 'complete', is_current: true, max_age_seconds: 10,
+            completed_at: new Date(Date.now() - 1000).toISOString(), generation: '8', trace_id: 'edge-trace-8',
+            edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-8'},
+            source_context: {event_key: 'event-8', fields: sourceFields},
+            handoff_binding: {status: 'matched', generation: '8', event_key: 'event-8', edge_trace_id: 'edge-trace-8',
+                edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-8'},
+            advisory: {trace_id: 'mio-trace-8'}}, overrides || {});
+    }
+    const normal = {
+        event_type: field('alert'), attack_type: field('Exploit Attempt'), category: unavailable(),
+        protocol: unavailable(), sid: field(2001), severity: field(2), target_port: unavailable(),
+        technique_ids: field(['T1190']), ts: field('2026-11-02T00:00:00Z'), normalized_outcome: unavailable()
+    };
+    // Normal: observed values and unavailable names are split, labelled, and allowlist-ordered.
+    m.S.renderMioLiveAuxiliary(current(normal));
+    eq(m.$('mioSourceObserved').textContent, 'event_type=alert · attack_type=Exploit Attempt · sid=2001 · severity=2 · technique_ids=T1190 · ts=2026-11-02T00:00:00Z',
+        'observed normalized fields rendered in allowlist order');
+    eq(m.$('mioSourceUnavailable').textContent, 'category, protocol, target_port, normalized_outcome', 'unavailable fields listed by name only');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-8', 'Edge action still shown alongside source context');
+
+    // Stale or mismatched binding: source context is suppressed, deterministic Edge action is not.
+    [{is_current: false}, {handoff_binding: {status: 'matched', generation: '8', event_key: 'other-event', edge_trace_id: 'edge-trace-8',
+        edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-8'}}].forEach(function (over) {
+        m.S.renderMioLiveAuxiliary(current(normal, over));
+        eq(m.$('mioSourceObserved').textContent, 'Suppressed', 'stale or mismatched source context suppressed');
+        eq(m.$('mioSourceUnavailable').textContent, 'Suppressed', 'stale or mismatched unavailable list suppressed');
+        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-8', 'Edge action independent of MIO gate');
+    });
+
+    // Hostile values, oversized values, wrong types, and arbitrary keys never leak through.
+    const hostile = Object.assign({}, normal, {
+        attack_type: field('<img src=x onerror=alert(1)>'),
+        protocol: field('x'.repeat(200)),
+        severity: field('high'),
+        technique_ids: field(Array.from({length: 17}, function () { return 'T1190'; })),
+        ts: {value: 'ok', status: 'observed', provenance: {raw: 'payload 10.0.0.5 secret-token'}},
+        '<script>evil</script>': field('10.0.0.5 secret-token')
+    });
+    m.S.renderMioLiveAuxiliary(current(hostile));
+    eq(m.doc.body.querySelectorAll('img').length, 0, 'hostile source value never becomes markup');
+    ok(m.$('mioSourceObserved').textContent.indexOf('<img') === -1, 'hostile markup-like source value rejected by label rule');
+    ok(m.$('mioSourceObserved').textContent.indexOf('ts=ok') === -1 && m.$('mioSourceUnavailable').textContent.indexOf('ts') !== -1,
+        'non-timestamp ts value rejected and listed as unavailable');
+    ok(m.$('mioSourceObserved').textContent.indexOf('10.0.0.5') === -1 && m.$('mioSourceObserved').textContent.indexOf('secret-token') === -1,
+        'arbitrary keys and provenance payloads never displayed');
+    ok(m.$('mioSourceUnavailable').textContent.indexOf('protocol') !== -1 && m.$('mioSourceUnavailable').textContent.indexOf('severity') !== -1
+        && m.$('mioSourceUnavailable').textContent.indexOf('technique_ids') !== -1, 'oversized, mistyped, or overlong fields listed as unavailable');
+    ok(m.$('mioSourceUnavailable').textContent.indexOf('script') === -1, 'arbitrary key names never displayed');
+    ok(m.$('mioSourceObserved').textContent.length <= 600, 'observed text is total-length bounded');
+
+    // Missing or malformed fields container: no throw, everything reported unavailable.
+    [undefined, [], 'junk', {event_type: 'not-a-field'}].forEach(function (fields, i) {
+        noThrow(function () { m.S.renderMioLiveAuxiliary(current(fields)); }, 'malformed source fields #' + i + ' does not throw');
+    });
+    m.S.renderMioLiveAuxiliary(current(undefined));
+    eq(m.$('mioSourceObserved').textContent, 'None', 'absent fields report no observed values');
+    ok(m.$('mioSourceUnavailable').textContent.indexOf('event_type') !== -1, 'absent fields list allowlisted names as unavailable');
+
+    // Field-specific validation mirrors the producer: control, bidi, and zero-width/format characters are rejected.
+    const rejected = function (name, value) {
+        m.S.renderMioLiveAuxiliary(current(Object.assign({}, normal, {[name]: field(value)})));
+        return m.$('mioSourceObserved').textContent.indexOf(name + '=') === -1
+            && m.$('mioSourceUnavailable').textContent.indexOf(name) !== -1;
+    };
+    ok(rejected('attack_type', 'Exploit\nAttempt'), 'newline in attack_type rejected');
+    ok(rejected('attack_type', 'Exploit\u0007Attempt'), 'control character in attack_type rejected');
+    ok(rejected('attack_type', 'alert‮gnp'), 'bidi override in attack_type rejected');
+    ok(rejected('event_type', 'ale​rt'), 'zero-width space in event_type rejected');
+    ok(rejected('category', 'web﻿attack'), 'BOM/format character in category rejected');
+    ok(rejected('event_type', 'Exploit Attempt'), 'non-ASCII space in event_type rejected');
+    ok(rejected('event_type', 'unknown'), 'unknown label rejected');
+    ok(rejected('attack_type', 'x'.repeat(97)), 'attack_type over 96 characters rejected');
+    ok(rejected('event_type', 'x'.repeat(33)), 'event_type over 32 characters rejected');
+    ok(rejected('category', 'x'.repeat(65)), 'category over 64 characters rejected');
+    ok(rejected('protocol', 'x'.repeat(17)), 'protocol over 16 characters rejected');
+    ok(rejected('ts', '2026-11-02T00:00:00‮Z'), 'bidi override in ts rejected');
+    ok(rejected('ts', '2026-11-02 00:00:00'), 'space in ts rejected');
+    ok(rejected('normalized_outcome', 'accepted'), 'outcome outside enum rejected');
+    ok(rejected('normalized_outcome', 'ALLOWED'), 'uppercase outcome rejected (producer emits lowercase)');
+    ok(rejected('normalized_outcome', 'blocked\n'), 'outcome with trailing control rejected');
+    ['T1190.1', 'TA0001', 'T1190 ', 'T119', 'T1190​'].forEach(function (bad) {
+        ok(rejected('technique_ids', [bad]), 'invalid ATT&CK technique ' + JSON.stringify(bad) + ' rejects the list');
+    });
+
+    // Producer-shaped ASCII values still render.
+    m.S.renderMioLiveAuxiliary(current(Object.assign({}, normal, {
+        event_type: field('alert'), attack_type: field('ET EXPLOIT Possible (CVE-2024:1234) [web]/v2+'),
+        category: field('web-attack'), protocol: field('TCP'), normalized_outcome: field('blocked'),
+        technique_ids: field(['T1190', 'T1059.001']), ts: field('2026-11-02T00:00:00.123+09:00')
+    })));
+    eq(m.$('mioSourceObserved').textContent, 'event_type=alert · attack_type=ET EXPLOIT Possible (CVE-2024:1234) [web]/v2+ · category=web-attack · protocol=TCP · sid=2001 · severity=2 · technique_ids=T1190, T1059.001 · ts=2026-11-02T00:00:00.123+09:00 · normalized_outcome=blocked',
+        'producer-shaped ASCII values render with field-specific validation');
+    dom.uninstall();
+})();
+
 if (failures) { console.error(failures + ' assertion(s) failed'); process.exit(1); }
 console.log('sentinel logic: all assertions passed');
