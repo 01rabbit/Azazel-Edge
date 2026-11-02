@@ -8,10 +8,11 @@ not a production release. This source pin includes
 `KnowledgeContextResponseAdvisory`. No installation, service configuration,
 credential provisioning or production deployment is included.
 
-The existing governed slow advisory worker can make one authenticated
-`POST /v1/context` request before its shared-core model analysis. Both the
-existing `AZAZEL_MIO_MODEL_ENABLED=1` setting and its ordinary governance
-approval remain required. Knowledge additionally requires all of:
+A separate latest-only Knowledge worker can make one authenticated
+`POST /v1/context` request on its own ten-second deadline. Ordinary event intake
+queues it after deterministic scoring; it does not wait for model consent,
+availability or completion. The model lane never makes a Knowledge request.
+Knowledge requires all of:
 
 - `AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED=1` (default disabled).
 - `AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENDPOINT=http://127.0.0.1:<port>` or a numeric
@@ -35,18 +36,24 @@ Transport uses direct numeric sockets without DNS or ambient proxy support.
 It accepts HTTP only on loopback, does not follow redirects or retry, limits
 response headers to 4 KiB and request/response bodies to 16 KiB, and rejects
 transfer encoding. A socket shutdown timer enforces the absolute remaining
-slow-lane deadline, including response headers. Generations are checked before
-and after the request and before and after analysis. Late work cannot replace
+Knowledge deadline, including response headers. Generations are checked before
+and after the request and before and after model-free projection. Late work cannot replace
 a newer generation.
 
 The raw response enters only MIO #18's typed advisory projection. That core
 retains public ATT&CK identifiers, bounded source-group labels and freshness, marks them
 `reported_unverified`, and excludes IOC values, source prose, scores and
-recommendations. This candidate publishes only a bounded Knowledge status
-(`projected`, `rejected`, `timeout`, authentication/scope rejection, transport
-failure, supersession or disabled configuration); the raw response is not
-published. Although the pinned MIO API now supports source groups, Edge/UI
-does not surface those labels or the projected ATT&CK/freshness sidecar.
+recommendations. This candidate publishes a separate bounded `knowledge_analysis` receipt in the
+agent snapshot (`azazel.mio_knowledge_analysis.v1`). Fields include generation,
+event key, Edge source trace, MIO frame trace/ID, duration, request-attempt count,
+status and `usage_status=not_applicable`. A successful model-free shared-core
+projection retains only public ATT&CK IDs, source groups, reported freshness,
+claim status and trust. Reported freshness is explicitly unverified at lookup;
+it is never promoted to evidence or a claim of current source health. The
+receipt expires after ten seconds, suppresses its projection when stale, and
+checks current generation, event and both frame bindings before `is_current`.
+There is no Knowledge-to-model join. The control daemon/UI does not yet admit
+or render this new schema; a separate consumer change is required.
 Existing Edge decisions, tactical scores and frame evidence remain
 unchanged. The deterministic, DPI, arbiter and action paths make no calls.
 Knowledge's own API may write its normal query audit in its local store.
@@ -57,7 +64,7 @@ exports via `EDGE_TEST_KNOWLEDGE_SOURCE` and `EDGE_TEST_FABRIC_SOURCE`, and an
 environment with their API dependencies plus the candidate MIO installed.
 The test launches actual Uvicorn on numeric loopback, creates temporary
 synthetic databases and ephemeral QUERY/INGEST principals, checks IOC source
-matches and exact/near-miss mappings, traverses the governed slow worker and
-MIO #18 with a deliberately failing model, and checks bounded status and
+matches and exact/near-miss mappings, traverses the independent Knowledge worker and
+pinned MIO projection with the model opt-in disabled, and checks bounded status and
 absence of raw IOC/token output. This is synthetic local integration evidence;
 it does not establish production credentials, deployment or remote TLS readiness.
