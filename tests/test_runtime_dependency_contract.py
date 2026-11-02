@@ -108,11 +108,12 @@ def test_runtime_dependencies_cover_imports():
 
 
 def test_runtime_mio_dependency_is_pinned_to_immutable_commit():
+    # Candidate diagnostics dependency: MIO PR #21 must merge before integration.
     lines = [line.strip() for line in (ROOT / "requirements/runtime.txt").read_text().splitlines()
              if line.strip() and not line.lstrip().startswith("#")]
     pins = [line for line in lines if line.lower().startswith("azazel-mio ")]
     assert pins == [
-        "azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@c6a0e0d6ef589693bc7bd54a4c2c1cdf32371524"
+        "azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@a8b1bee1775f483a7b2d7d33538896c9446a9b0c"
     ]
     assert not any(token in pins[0] for token in ("@main", "@master", "@latest"))
 
