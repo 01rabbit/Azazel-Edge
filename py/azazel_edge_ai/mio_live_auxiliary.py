@@ -120,7 +120,13 @@ def _source_context(event: Mapping[str, Any]) -> dict[str, Any]:
     return {"event_key": event_key if "event_type" in values and "sid" in values else "", "fields": available}
 
 
-def _binding_matches(payload: Mapping[str, Any]) -> bool:
+def binding_matches_same_envelope(payload: Mapping[str, Any]) -> bool:
+    """Check that a completed Edge envelope and M.I.O. handoff name one event.
+
+    This validates the field-to-field relationship and fixed Edge vocabularies.
+    Consumers of a completed producer envelope must additionally require the
+    producer's explicit ``handoff_binding.valid is True`` marker.
+    """
     binding = payload.get("handoff_binding")
     edge = payload.get("edge_event")
     context = payload.get("source_context")
@@ -152,6 +158,35 @@ def _binding_matches(payload: Mapping[str, Any]) -> bool:
         if binding.get("mio_trace_id") != advisory.get("trace_id") or binding.get("frame_id") != advisory.get("frame_id"):
             return False
     return binding.get("status") == "matched"
+
+
+# Compatibility alias for existing producer and test imports.
+_binding_matches = binding_matches_same_envelope
+
+
+def edge_observation_for_display(edge: Mapping[str, Any]) -> dict[str, Any]:
+    """Return allowlisted Edge action/mode/result without correlation identifiers."""
+    if not isinstance(edge, Mapping):
+        return {}
+    output: dict[str, Any] = {}
+    action = edge.get("action")
+    if type(action) is str and action.lower() in _EDGE_ACTIONS:
+        output["action"] = action.lower()
+    mode = edge.get("mode")
+    if type(mode) is str and mode in _EDGE_MODES:
+        output["mode"] = mode
+    result = edge.get("result")
+    if type(result) is str and result in _EDGE_RESULTS:
+        output["result"] = result
+    unknown = edge.get("unknown_fields") is True
+    unknown = unknown or ("unknown_fields" in edge and type(edge.get("unknown_fields")) is not bool)
+    unknown = unknown or any(key not in {"action", "mode", "result", "trace_id", "unknown_fields"} for key in edge)
+    if (unknown or
+            (action is not None and "action" not in output) or
+            (mode is not None and "mode" not in output) or
+            (result is not None and "result" not in output)):
+        output["unknown_fields"] = True
+    return output
 
 
 def _safe_event(

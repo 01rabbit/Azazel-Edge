@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+from azazel_edge_ai.mio_live_auxiliary import _binding_matches, binding_matches_same_envelope
 from azazel_edge_web.knowledge_receipt import operator_mio_payload
 
 
@@ -33,6 +34,12 @@ def current():
             'source_freshness_verification': 'reported_unverified_at_lookup'}}
 
 
+def test_public_same_envelope_binding_helper_retains_private_compatibility_alias():
+    payload = current()
+    assert binding_matches_same_envelope(payload) is True
+    assert _binding_matches(payload) is True
+
+
 def test_current_receipt_only_exposes_reference_metadata_without_changing_action_or_model():
     payload = current()
     original = deepcopy(payload)
@@ -57,11 +64,15 @@ def status_only(status):
         'source_freshness': {'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}}
 
 
+def lane_status_only(status):
+    return {'status': status, 'is_current': False}
+
+
 @pytest.mark.parametrize('key', BINDING_KEYS)
 def test_projected_receipt_requires_every_binding_field(key):
     payload = current()
     del payload['knowledge_analysis'][key]
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == status_only('projected')
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == lane_status_only('projected')
 
 
 @pytest.mark.parametrize('key', BINDING_KEYS)
@@ -69,7 +80,7 @@ def test_projected_receipt_requires_every_binding_field(key):
 def test_binding_field_must_be_bounded_nonempty_string(key, value):
     payload = current()
     payload['knowledge_analysis'][key] = value
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == status_only('projected')
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == lane_status_only('projected')
 
 
 def test_binding_fields_at_96_chars_are_projected_with_valid_event_key():
@@ -142,10 +153,64 @@ def assert_status_only_without_other_changes(payload):
         'source_freshness': {'status': 'unavailable', 'oldest_feed_days': None, 'attack_version': None}}
     assert output['status'] == 'unavailable' and output['is_current'] is False
     edge = original.get('edge_event')
-    expected_edge = {key: edge[key] for key in ('action', 'mode', 'result')
-        if isinstance(edge, dict) and type(edge.get(key)) is str and edge[key] and len(edge[key]) <= 96}
+    allowed = {'action': {'observe', 'notify', 'throttle', 'redirect', 'isolate'},
+        'mode': {'disabled', 'dry_run', 'policy_gated', 'release_guard_failed', 'enforced'},
+        'result': {'no_disruptive_action', 'planned_not_applied', 'extended', 'already_held', 'applied', 'failed', 'uncertain'}}
+    expected_edge = {}
+    unknown = isinstance(edge, dict) and edge.get('unknown_fields') is True
+    for key, values in allowed.items():
+        value = edge.get(key) if isinstance(edge, dict) else None
+        if type(value) is str and (value.lower() if key == 'action' else value) in values:
+            expected_edge[key] = value.lower() if key == 'action' else value
+        elif value is not None:
+            unknown = True
+    if unknown:
+        expected_edge['unknown_fields'] = True
     assert output['edge_event'] == expected_edge
     assert set(output) == {'status', 'is_current', 'max_age_seconds', 'edge_event', 'knowledge_analysis'}
+
+
+@pytest.mark.parametrize('status', ['disabled', 'timeout'])
+def test_nonprojected_knowledge_status_preserves_current_fast_and_model_lanes(status):
+    payload = current()
+    payload['knowledge_analysis']['status'] = status
+    payload['knowledge_analysis']['is_current'] = False
+    output = operator_mio_payload(payload, now=101)
+    assert output['knowledge_analysis'] == {'status': status, 'is_current': False}
+    assert output['advisory'] == payload['advisory']
+    assert output['model_analysis'] == payload['model_analysis']
+    assert output['edge_event'] == payload['edge_event']
+    assert output['handoff_binding'] == payload['handoff_binding']
+    assert 'projection' not in output['knowledge_analysis']
+    assert 'source_freshness' not in output['knowledge_analysis']
+
+
+def test_missing_knowledge_receipt_preserves_current_fast_and_model_lanes():
+    payload = current()
+    payload.pop('knowledge_analysis')
+    output = operator_mio_payload(payload, now=101)
+    assert output['knowledge_analysis'] == {'status': 'unavailable', 'is_current': False}
+    assert output['advisory'] == payload['advisory']
+    assert output['model_analysis'] == payload['model_analysis']
+    assert output['edge_event'] == payload['edge_event']
+    assert 'handoff_binding' in output
+    assert 'projection' not in output['knowledge_analysis'] and 'source_freshness' not in output['knowledge_analysis']
+
+
+def test_current_malformed_receipt_schema_preserves_fast_and_model_lanes():
+    payload = current()
+    payload['knowledge_analysis']['authority'] = 'unexpected'
+    output = operator_mio_payload(payload, now=101)
+    assert output['knowledge_analysis'] == {'status': 'unavailable', 'is_current': False}
+    assert output['advisory'] == payload['advisory'] and output['model_analysis'] == payload['model_analysis']
+
+
+def test_edge_fallback_uses_producer_allowlists_and_boolean_unknown_marker():
+    payload = current()
+    payload['handoff_binding']['valid'] = False
+    payload['edge_event'].update(action='launch', mode='arbitrary', result='custom', unknown_fields='yes')
+    output = operator_mio_payload(payload, now=101)
+    assert output['edge_event'] == {'unknown_fields': True}
 
 
 @pytest.mark.parametrize('freshness', [
@@ -248,7 +313,10 @@ def test_unusable_envelope_keeps_projected_status_not_current(envelope):
 def test_every_stale_correlation_retains_status_only(key):
     payload = current()
     payload['knowledge_analysis'][key] = 'old'
-    assert_status_only_without_other_changes(payload)
+    output = operator_mio_payload(payload, now=101)
+    assert output['knowledge_analysis'] == lane_status_only('projected')
+    assert 'projection' not in output['knowledge_analysis'] and 'source_freshness' not in output['knowledge_analysis']
+    assert output['advisory'] == payload['advisory'] and output['model_analysis'] == payload['model_analysis']
 
 
 @pytest.mark.parametrize('key,value', [('status', []), ('schema_version', 'wrong'),
@@ -260,13 +328,13 @@ def test_malformed_receipt_rejected(key, value):
     payload = current()
     payload['knowledge_analysis'][key] = value
     expected_status = 'unavailable' if key in {'status', 'schema_version', 'authority', 'usage_status'} else 'projected'
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == status_only(expected_status)
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == lane_status_only(expected_status)
 
 
 def test_valid_nonresult_status_is_bounded_and_separate():
     payload = current()
     payload['knowledge_analysis']['status'] = 'disabled'
-    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == status_only('disabled')
+    assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == lane_status_only('disabled')
 
 
 @pytest.mark.parametrize('completed', [None, [], {}, 'bad'])
