@@ -369,6 +369,7 @@
         updateEmptyNote(body.getAttribute('data-tier-active') || 'overview');
     }
 
+    var knowledgeExpiryTimer = null;
     function renderMioLiveAuxiliary(payload) {
         payload = payload && typeof payload === 'object' ? payload : {};
         var advisory = payload.advisory && typeof payload.advisory === 'object' ? payload.advisory : {};
@@ -427,6 +428,33 @@
         put('mioLiveAuxHandoff', usable
             ? (handoff.summary || handoff.operator_note || handoff.status || 'No handoff supplied.')
             : suppressedMessage);
+        var knowledge = payload.knowledge_analysis || {};
+        var knowledgeCurrent = usable && knowledge.status === 'projected' && knowledge.is_current === true
+            && knowledge.claim_status === 'reported_unverified' && knowledge.trust === 'unverified_advisory_only';
+        var knowledgeStatus = ['starting', 'queued', 'disabled', 'missing_token', 'invalid_configuration',
+            'unavailable', 'timeout', 'oversized', 'redirect_rejected', 'auth_rejected', 'scope_rejected',
+            'malformed', 'received', 'superseded', 'rejected'];
+        put('mioKnowledgeStatus', knowledgeCurrent ? 'projected (reported, unverified)'
+            : (usable && knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable'));
+        function knowledgeRefs(key, pattern) {
+            var values = knowledge[key];
+            return Array.isArray(values) && values.length <= 16 && values.every(function (v) {
+                return typeof v === 'string' && pattern.test(v);
+            }) ? values.join(', ') : '';
+        }
+        put('mioKnowledgeRefs', knowledgeCurrent
+            ? ('ATT&CK: ' + (knowledgeRefs('attack_techniques', /^T[0-9]{4}(\.[0-9]{3})?$/) || 'None')
+                + ' · Source groups: ' + (knowledgeRefs('source_groups', /^[a-z][a-z0-9_-]{0,31}$/) || 'None'))
+            : 'Unavailable');
+        // Clear this independent receipt even when polling stops or fails.
+        if (typeof window.setTimeout === 'function') {
+            if (knowledgeExpiryTimer !== null) window.clearTimeout(knowledgeExpiryTimer);
+            if (usable) knowledgeExpiryTimer = window.setTimeout(function () {
+                put('mioKnowledgeStatus', 'unavailable');
+                put('mioKnowledgeRefs', 'Unavailable');
+            }, Math.max(0, Math.min(10, Number(payload.max_age_seconds || 0)) * 1000
+                - (Date.now() - completedAt)));
+        }
         var model = payload.model_analysis && typeof payload.model_analysis === 'object' ? payload.model_analysis : {};
         var modelCurrent = usable && (model.status === 'complete' || model.status === 'partial') && model.is_current === true
             && String(model.fast_generation || '') === String(payload.generation || '');
