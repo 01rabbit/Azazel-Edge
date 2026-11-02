@@ -509,7 +509,8 @@
                 comparisonText = 'Suppressed (comparison generation/trace mismatch)';
             } else if (comparison.status === 'complete') {
                 comparisonText = 'Edge ' + comparison.edge_score + ' / M.I.O. ' + comparison.mio_score
-                    + ' · assessment ' + (comparison.matches ? 'match' : 'differs') + ' · comparison only';
+                    + ' · same Edge-resolved inputs: ' + (comparison.matches ? 'parity' : 'differs')
+                    + ' · comparison only (not independent corroboration or ground truth)';
             } else {
                 comparisonText = comparison.status + ' · comparison only';
             }
@@ -538,7 +539,87 @@
                 : 'Suppressed';
         }
         put('mioLiveKnowledgeAdvisory', receiptText, 2048);
-        put('mioLiveEdgeAction', actionBits.join(' / ') || (edge.unknown_fields ? 'Unknown (malformed fields omitted)' : 'Unknown'));
+        var edgeActionText = (actionBits.join(' / ') || 'Unknown') + (edge.unknown_fields === true ? ' (malformed fields omitted)' : '');
+        var receiptBoundForDisplay = receipt
+            && receipt.schema_version === 'azazel.edge_knowledge_advisory.v1'
+            && receipt.status === 'complete' && receipt.authority === 'read_only_advisory'
+            && receipt.claim_status === 'reported_unverified'
+            && receipt.generation === payload.generation && receipt.trace_id === payload.trace_id
+            && Array.isArray(receipt.source_groups) && receipt.source_groups.length <= 16
+            && receipt.source_groups.every(function (v) { return typeof v === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(v); })
+            && Array.isArray(receipt.attack_techniques) && receipt.attack_techniques.length <= 32
+            && receipt.attack_techniques.every(function (v) { return typeof v === 'string' && /^T[0-9]{4}(\.[0-9]{3})?$/.test(v); })
+            && receipt.source_freshness && typeof receipt.source_freshness === 'object'
+            && !Array.isArray(receipt.source_freshness)
+            && Object.keys(receipt.source_freshness).every(function (k) {
+                return k === 'oldest_feed_days' || k === 'attack_version';
+            })
+            && (receipt.source_freshness.oldest_feed_days == null
+                || (typeof receipt.source_freshness.oldest_feed_days === 'number'
+                    && Number.isFinite(receipt.source_freshness.oldest_feed_days)
+                    && receipt.source_freshness.oldest_feed_days >= 0
+                    && receipt.source_freshness.oldest_feed_days <= 36500))
+            && (receipt.source_freshness.attack_version == null
+                || (typeof receipt.source_freshness.attack_version === 'string'
+                    && /^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$/.test(receipt.source_freshness.attack_version)));
+        put('mioLiveEdgeAction', edgeActionText + (usable && receipt && !receiptBoundForDisplay
+            ? ' · Knowledge unmatched/un-correlated' : ''));
+        // Bounded, untrusted correlation IDs for operator matching; rendered via textContent only.
+        function boundedId(value) {
+            return typeof value === 'string' && value ? value.slice(0, 96) : '';
+        }
+        function boundedEdgeTrace(value) {
+            return typeof value === 'string' && value && value.length <= 96 ? value : '';
+        }
+        put('mioLiveCorrelation', usable
+            ? ('event ' + (boundedId(sourceContext.event_key) || 'unknown')
+                + ' · trace ' + (boundedId(edge.trace_id) || boundedId(payload.trace_id) || 'unknown')
+                + ' · frame ' + (boundedId(advisory.frame_id) || 'none'))
+            : 'Suppressed');
+        // Normalized source context: hard-coded allowlist only; split into observed values and unavailable/invalid names.
+        // Producer emits a 24-char lowercase hex SHA prefix as event_key; source fields need that key to be present.
+        var sourceUsable = usable && /^[0-9a-f]{24}$/.test(String(sourceContext.event_key || ''));
+        var SOURCE_FIELD_ALLOWLIST = ['event_type', 'attack_type', 'category', 'protocol', 'sid', 'severity', 'target_port', 'technique_ids', 'ts', 'normalized_outcome'];
+        var sourceFields = sourceContext.fields && typeof sourceContext.fields === 'object' && !Array.isArray(sourceContext.fields)
+            ? sourceContext.fields : {};
+        var SOURCE_INTEGER_RANGES = {sid: [1, 2147483647], severity: [0, 10], target_port: [1, 65535]};
+        // Mirrors py/azazel_edge_ai/mio_live_auxiliary.py `_source_context()` validation at the UI boundary.
+        var SOURCE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:\/+()\[\]-]{0,95}$/;
+        var SOURCE_TECHNIQUE = /^T[0-9]{4}(?:\.[0-9]{3})?$/;
+        var SOURCE_TIMESTAMP = /^[0-9TtZz:+.\-]{1,32}$/;
+        var SOURCE_LABEL_LIMITS = {event_type: 32, attack_type: 96, category: 64, protocol: 16};
+        var SOURCE_OUTCOMES = ['allowed', 'blocked', 'drop', 'rejected'];
+        function sourceValueText(name, entry) {
+            var value = entry.value;
+            var range = SOURCE_INTEGER_RANGES[name];
+            if (range) {
+                return Number.isInteger(value) && value >= range[0] && value <= range[1] ? String(value) : '';
+            }
+            if (name === 'technique_ids') {
+                if (!Array.isArray(value) || value.length > 16) return '';
+                if (!value.every(function (v) { return typeof v === 'string' && SOURCE_TECHNIQUE.test(v); })) return '';
+                return value.length ? value.join(', ') : 'none';
+            }
+            if (name === 'normalized_outcome') {
+                return typeof value === 'string' && SOURCE_OUTCOMES.indexOf(value) !== -1 ? value : '';
+            }
+            if (name === 'ts') {
+                return typeof value === 'string' && SOURCE_TIMESTAMP.test(value) ? value : '';
+            }
+            var limit = SOURCE_LABEL_LIMITS[name];
+            if (!limit || typeof value !== 'string' || value.length > limit || !SOURCE_LABEL.test(value)) return '';
+            return value.trim().toLowerCase() === 'unknown' ? '' : value;
+        }
+        var observedFields = [];
+        var unavailableFields = [];
+        SOURCE_FIELD_ALLOWLIST.forEach(function (name) {
+            var entry = Object.prototype.hasOwnProperty.call(sourceFields, name) ? sourceFields[name] : null;
+            var text = entry && typeof entry === 'object' && entry.status === 'observed' ? sourceValueText(name, entry) : '';
+            if (text) observedFields.push(name + '=' + text);
+            else unavailableFields.push(name);
+        });
+        put('mioSourceObserved', sourceUsable ? (observedFields.join(' · ') || 'None') : 'Suppressed', 600);
+        put('mioSourceUnavailable', sourceUsable ? (unavailableFields.join(', ') || 'None') : 'Suppressed', 300);
         put('mioLiveAuxAdvice', usable
             ? (recommendation || advisory.summary || handoff.summary || 'No advice available.')
             : (payload.reason ? 'M.I.O. result suppressed: ' + String(payload.reason).slice(0, 120) : suppressedMessage));

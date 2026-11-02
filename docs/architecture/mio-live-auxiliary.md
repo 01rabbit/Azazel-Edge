@@ -143,21 +143,25 @@ Failure isolation and audit degradation:
 
 `edge_knowledge_advisory` is an optional `azazel.edge_knowledge_advisory.v1`
 receipt, separate from score comparison. The adapter projects only MIO #18's
-`source_groups` (16 restricted feed group names), `attack_techniques` (32 public
-ATT&CK identifiers), `source_freshness` (bounded feed age and ATT&CK version),
-and `reported_unverified` claim label. Its only status is `complete`, and its
-authority is `read_only_advisory`; missing or invalid receipts are omitted.
-Raw IOC values, recommendation prose, canonical state, tokens and provenance
-are not included. Snapshot and operator display require the existing current
-generation, trace, completion freshness and handoff binding. The browser renders
-all fields as text and clears the receipt when unavailable or suppressed.
+bounded `source_groups`, public ATT&CK identifiers, bounded source freshness,
+and the `reported_unverified` claim label. Its status is `complete` and its
+authority is `read_only_advisory`; missing or invalid receipts are omitted. Raw
+IOC values, recommendation prose, canonical state, tokens and provenance are
+excluded. Snapshot and display require current generation, trace, completion
+freshness and handoff binding; the browser renders text only.
 
-This local operator-sidecar candidate is based on Edge #528
-`df61bd9847acc49d41d96d48e42046b858fb93da`, whose MIO pin is
-`c6a0e0d6ef589693bc7bd54a4c2c1cdf32371524` and includes MIO #18's typed
+This local operator sidecar is based on Edge #528
+`df61bd9847acc49d41d96d48e42046b858fb93da`, using MIO pin
+`c6a0e0d6ef589693bc7bd54a4c2c1cdf32371524`, which includes MIO #18's typed
 receipt. The fast adapter still calls `knowledge_attempted=False`; it projects
 only a receipt already supplied by the shared core and adds no Knowledge query
-or context construction. This operator UI functionality is separate from the
-#525/#527/#528 stack and the optional Knowledge slow lane. No live Knowledge
-integration or deployment is established by this sidecar candidate. It adds no
-network calls, installer changes or decision consumers.
+or context construction. A separate optional loopback Knowledge query lane is
+bounded and disabled by default. This does not establish full-node or deployed
+Knowledge integration; it adds no network calls, installer changes or decision
+consumers.
+
+An Edge score/factor comparison is labeled `comparison_only` and separately
+bound to generation and trace. Its M.I.O. score uses the same Edge-resolved
+inputs, so a match indicates parity within that comparison, not independent
+corroboration, detection, or ground truth. It does not alter the deterministic
+decision path.

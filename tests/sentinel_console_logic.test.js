@@ -318,6 +318,44 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(el.textContent, 'Unavailable', 'optional receipt omission');
 })();
 
+(function () {
+    const m = mount();
+    ['mioLiveScoreComparison', 'mioLiveKnowledgeAdvisory', 'mioLiveEdgeAction'].forEach(function (id) {
+        const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el);
+    });
+    const payload = {status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date().toISOString(), generation: '530', trace_id: 'edge-530',
+        edge_event: {trace_id: 'edge-530', action: 'notify', mode: 'dry_run', result: 'planned_not_applied'},
+        source_context: {event_key: 'event-530'},
+        handoff_binding: {status: 'matched', valid: true, generation: '530', event_key: 'event-530',
+            edge_trace_id: 'edge-530', edge_action: 'notify', edge_mode: 'dry_run',
+            edge_result: 'planned_not_applied', mio_trace_id: 'mio-530'},
+        advisory: {trace_id: 'mio-530'},
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '530', trace_id: 'edge-530', edge_score: 50, mio_score: 51, matches: false},
+        edge_knowledge_advisory: {schema_version: 'azazel.edge_knowledge_advisory.v1', status: 'complete',
+            authority: 'read_only_advisory', generation: '530', trace_id: 'edge-530',
+            claim_status: 'reported_unverified', source_groups: ['abusech'], attack_techniques: ['T1059.001'],
+            source_freshness: {oldest_feed_days: 1}}};
+    m.S.renderMioLiveAuxiliary(payload);
+    eq(m.$('mioLiveScoreComparison').textContent,
+        'Edge 50 / M.I.O. 51 · same Edge-resolved inputs: differs · comparison only (not independent corroboration or ground truth)', 'comparison is trace bound and labeled');
+    ok(m.$('mioLiveKnowledgeAdvisory').textContent.includes('abusech'), 'optional receipt fields are projected');
+    m.S.renderMioLiveAuxiliary(Object.assign({}, payload, {is_current: false, trace_id: 'old-edge-trace',
+        edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {generation: 'old'})}));
+    eq(m.$('mioLiveKnowledgeAdvisory').textContent, 'Suppressed', 'stale optional receipt is suppressed');
+    ok(m.$('mioLiveEdgeAction').textContent.includes('notify / planned_not_applied'), 'stale receipt leaves Edge action/result visible');
+    ok(!m.$('mioLiveEdgeAction').textContent.includes('Knowledge unmatched/un-correlated'), 'stale outer envelope does not use receipt correlation');
+    ok(!m.$('mioLiveEdgeAction').textContent.includes('event-530'), 'unmatched marker exposes no correlation ID');
+    const mismatched = Object.assign({}, payload, {edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {trace_id: 'other-private-id'})});
+    m.S.renderMioLiveAuxiliary(mismatched);
+    ok(m.$('mioLiveEdgeAction').textContent.includes('Knowledge unmatched/un-correlated'), 'mismatched receipt is marked unmatched');
+    ok(!m.$('mioLiveEdgeAction').textContent.includes('other-private-id'), 'mismatch marker hides receipt ID');
+    const malformed = Object.assign({}, payload, {edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {source_groups: ['raw.example']})});
+    m.S.renderMioLiveAuxiliary(malformed);
+    ok(m.$('mioLiveEdgeAction').textContent.includes('Knowledge unmatched/un-correlated'), 'malformed receipt is marked unmatched');
+})();
+
 // --- 1. Empty payload: nothing throws, nothing is green, unknowns say so ----
 (function () {
     const m = mount();
