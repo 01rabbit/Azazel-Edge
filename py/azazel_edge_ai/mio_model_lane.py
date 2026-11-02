@@ -39,6 +39,24 @@ _ROLE_TEXT = {
 _VALIDATION_REJECTIONS = frozenset({"validation_rejected"})
 
 
+_VALIDATION_STAGES = frozenset({"unknown", "playbook", "generate_hypotheses",
+    "identify_evidence_gaps", "update_hypotheses", "recommend"})
+_VALIDATION_CLASSES = frozenset({"unknown", "output_shape", "alternative_slots",
+    "model_identifier", "evidence_grounding", "raw_payload", "hypothesis_structure",
+    "evidence_gap", "hypothesis_lifecycle", "recommendation_structure", "unsupported_claim"})
+
+
+def bounded_validation_diagnostic(value: Any) -> dict[str, str]:
+    """Accept only the complete closed M.I.O. diagnostic; never copy error text."""
+    if type(value) is not dict or value.keys() != {"stage", "rejection_class"}:
+        return {}
+    stage, rejection_class = value["stage"], value["rejection_class"]
+    if (type(stage) is not str or stage not in _VALIDATION_STAGES
+            or type(rejection_class) is not str or rejection_class not in _VALIDATION_CLASSES):
+        return {}
+    return {"stage": stage, "rejection_class": rejection_class}
+
+
 def bounded_usage(values: Mapping[str, Any]) -> dict[str, Any]:
     """Allow only bounded accrued measurements across failure boundaries."""
     result = {}
@@ -354,6 +372,8 @@ class LiveMioModelLane:
                             "unknowns": safe_unknowns,
                             "frame_generation": fast_generation,
                             "validation_rejection": validation_rejection,
+                            **({"validation_diagnostic": diagnostic} if (diagnostic :=
+                                bounded_validation_diagnostic(model_result.get("validation_diagnostic"))) else {}),
                             "knowledge_status": model_result.get("knowledge_status") if
                                 type(model_result.get("knowledge_status")) is str and
                                 model_result.get("knowledge_status") in KNOWLEDGE_STATUSES else "unavailable",

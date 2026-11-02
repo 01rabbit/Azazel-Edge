@@ -79,3 +79,11 @@ snapshot. A 64-record in-memory diagnostics ring carries generation, trace,
 model identity, duration, load duration, prompt/completion token counts, outcome,
 and status; prompts, full completion bodies, request bodies, and raw exception
 text are not logged.
+
+The model snapshot optionally carries M.I.O.'s `validation_diagnostic` with
+exactly `stage` and `rejection_class`. Edge accepts only the closed M.I.O.
+vocabulary with strict string types and omits malformed diagnostics, including
+objects with extra keys. It never forwards raw validation errors, trace details,
+or model-authored identifiers through this field. Existing generic status,
+reason, and advisory authority remain unchanged. The candidate dependency pin
+requires M.I.O. PR #21 to merge before this consumer is considered integrated.

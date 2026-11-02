@@ -32,7 +32,7 @@ if str(PY_ROOT) not in sys.path:
 from azazel_edge.decision_layers import DecisionLayers
 from azazel_edge.ai_governance import AIGovernance
 from azazel_edge_ai.mio_live_auxiliary import LiveMioAuxiliary, MAX_RESULT_BYTES
-from azazel_edge_ai.mio_model_lane import LiveMioModelLane, MioModelFailure, bounded_usage
+from azazel_edge_ai.mio_model_lane import LiveMioModelLane, MioModelFailure, bounded_usage, bounded_validation_diagnostic
 from azazel_edge.tactics_engine import ConfigHash, DecisionLogger, TacticalScorer
 from azazel_edge.tactics_engine.decision_logger import (
     ChosenAction,
@@ -2540,6 +2540,8 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
         # Fixed diagnostic enum only. Never forward ReasoningOutcome.errors or
         # trace details: those can contain model authored identifiers.
         "validation_rejection": _mio_validation_rejection_code(state),
+        **({"validation_diagnostic": diagnostic} if (diagnostic :=
+            bounded_validation_diagnostic(out.get("validation_diagnostic"))) else {}),
         "frame_id": frame.frame_id, "trace_id": frame.trace_id}
 
 

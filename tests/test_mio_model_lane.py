@@ -190,6 +190,8 @@ def test_shared_core_transport_compiles_task_schema_and_rejects_invalid_model_re
     }
     result = agent._analyze_mio_fast_result(frame, 1.0)
     assert result["outcome"] == "degraded"
+    assert result["validation_diagnostic"] == {
+        "stage": "generate_hypotheses", "rejection_class": "alternative_slots"}
     assert result["request_count"] == 1
     assert result["metered_request_count"] == 0
     assert result["unknown_usage_request_count"] == 1
@@ -688,3 +690,45 @@ def test_analyzer_preserves_outer_usage_when_core_or_deadline_fails(monkeypatch)
         assert caught.value.metrics["completion_tokens"] == 9
         assert caught.value.metrics["model"] == "fixture"
         assert caught.value.reason == ("deadline_exceeded" if isinstance(failure, TimeoutError) else "model_error")
+
+
+def test_validation_diagnostic_closed_vocabulary_and_strict_shape():
+    from azazel_edge_ai.mio_model_lane import bounded_validation_diagnostic
+
+    stages = ("unknown", "playbook", "generate_hypotheses", "identify_evidence_gaps",
+              "update_hypotheses", "recommend")
+    classes = ("unknown", "output_shape", "alternative_slots", "model_identifier",
+               "evidence_grounding", "raw_payload", "hypothesis_structure", "evidence_gap",
+               "hypothesis_lifecycle", "recommendation_structure", "unsupported_claim")
+    for stage in stages:
+        for rejection_class in classes:
+            value = {"stage": stage, "rejection_class": rejection_class}
+            assert bounded_validation_diagnostic(value) == value
+    valid = {"stage": "recommend", "rejection_class": "unsupported_claim"}
+    for malformed in (None, [], "private user text", {}, {"stage": "recommend"},
+                      {**valid, "errors": "private model/error text"},
+                      {**valid, "stage": "recommend:private"},
+                      {**valid, "rejection_class": "unsupported_claim:private"},
+                      {**valid, "stage": True}, {**valid, "stage": ["recommend"]},
+                      {**valid, "rejection_class": 1}, {**valid, "rejection_class": {}},
+                      {**valid, "stage": "x" * 100_000}):
+        assert bounded_validation_diagnostic(malformed) == {}
+
+
+def test_validation_diagnostic_lane_propagates_only_closed_fields():
+    valid = {"stage": "generate_hypotheses", "rejection_class": "alternative_slots"}
+    for diagnostic in (valid, {**valid, "raw": "private model/user/error text"}):
+        lane = LiveMioModelLane(enabled=True, analyze=lambda payload, remaining: {
+            "outcome": "degraded", "mio_state": "validation_rejected",
+            "generation_method": "deterministic", "validation_rejection": "validation_rejected",
+            "validation_diagnostic": diagnostic, "errors": ["private model/user/error text"],
+            "frame_id": "frame-abc", "trace_id": "trace-abc",
+        }, fast_snapshot=_fast, frame_snapshot=lambda generation: {
+            "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": []})
+        lane.submit("7", "trace-abc")
+        result = _wait(lane, "degraded")
+        assert result["reason"] == "mio_no_model_contribution"
+        assert result["validation_rejection"] == "validation_rejected"
+        assert result["authority"] == "read_only_advisory"
+        assert result.get("validation_diagnostic") == (valid if diagnostic == valid else None)
+        assert "private model/user/error text" not in str(result) + str(lane.diagnostics())
