@@ -75,3 +75,20 @@ def test_malformed_clock_is_unavailable(completed):
     payload = current()
     payload['completed_at'] = completed
     assert operator_mio_payload(payload, now=101)['knowledge_analysis']['status'] == 'unavailable'
+
+
+@pytest.mark.parametrize('completed,expected_status', [
+    ('1970-01-01T00:01:40', 'unavailable'),
+    ('1970-01-01T00:01:40Z', 'projected'),
+    ('1970-01-01T09:01:40+09:00', 'projected'),
+    ('not-a-timestamp', 'unavailable'),
+])
+def test_receipt_clock_requires_timezone_without_changing_other_fields(completed, expected_status):
+    payload = current()
+    payload['completed_at'] = completed
+    original = deepcopy(payload)
+    output = operator_mio_payload(payload, now=101)
+    assert payload == original
+    assert output.pop('knowledge_analysis')['status'] == expected_status
+    original.pop('knowledge_analysis')
+    assert output == original  # Includes the action, fast lane and model result.
