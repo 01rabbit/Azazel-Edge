@@ -2,10 +2,10 @@
 
 The [cognitive-plane authority matrix](mio-cognitive-plane.md) remains authoritative.
 
-This local candidate follows Edge #525 at `a676849adb87415c89545a1fdf7dd9e6ecc16587`.
-It depends on merged MIO main at `c6a0e0d6ef589693bc7bd54a4c2c1cdf32371524`,
+This local candidate follows Edge #525 at `0534ed048235a92c5677c6d815321149fa6c96d5`.
+It depends on merged MIO main at `9fedb01bc9936531407a5181aa8fa5553ec19d55`,
 not a production release. This source pin includes
-`KnowledgeContextResponseAdvisory`. No installation, service configuration,
+`KnowledgeContextResponseAdvisory` and bounded validation diagnostics. No installation, service configuration,
 credential provisioning or production deployment is included.
 
 The existing governed slow advisory worker can make one authenticated

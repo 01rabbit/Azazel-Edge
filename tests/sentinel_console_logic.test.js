@@ -289,7 +289,7 @@ function greenNodes(doc) {
 }
 function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el.className + ' "' + el.textContent.slice(0, 40) + '"'; }
 
-// Slow Knowledge receipt needs a current model-lane generation, fast generation, and Edge trace.
+// Slow receipt binds the MIO frame trace separately from the Edge trace and keeps generation checks.
 (function () {
     const m = mount();
     const el = m.doc.createElement('span'); el.id = 'mioLiveKnowledgeAdvisory'; m.doc.body.appendChild(el);
@@ -301,16 +301,17 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-abc', frame_id: 'frame-abc'},
         knowledge: {status: 'not_queried'},
         model_analysis: {status: 'degraded', is_current: false, generation: '3', fast_generation: '7',
-            trace_id: 'trace-abc', knowledge_receipt_current: true, knowledge_receipt_status: 'received',
+            trace_id: 'trace-abc', frame_trace_id: 'frame-trace-abc', knowledge_receipt_current: true, knowledge_receipt_status: 'received',
             knowledge_receipt: {schema_version: 'azazel.edge_knowledge_advisory.v1', status: 'complete',
-                authority: 'read_only_advisory', generation: '7', trace_id: 'trace-abc',
+                authority: 'read_only_advisory', generation: '7', trace_id: 'frame-trace-abc',
                 claim_status: 'reported_unverified', source_groups: ['abusech'],
                 attack_techniques: ['T1059.001'], source_freshness: {oldest_feed_days: 2}}}};
     m.S.renderMioLiveAuxiliary(p);
     ok(el.textContent.includes('reported_unverified') && el.textContent.includes('abusech'),
         'current slow receipt displays as reported unverified advice');
     for (const patch of [
-        {fast_generation: '6'}, {trace_id: 'foreign-trace'}, {knowledge_receipt_current: false},
+        {fast_generation: '6'}, {trace_id: 'foreign-trace'},
+        {frame_trace_id: 'foreign-frame-trace'}, {knowledge_receipt_current: false},
         {knowledge_receipt_status: 'stale'},
     ]) {
         m.S.renderMioLiveAuxiliary(Object.assign({}, p, {model_analysis: Object.assign({}, p.model_analysis, patch)}));
