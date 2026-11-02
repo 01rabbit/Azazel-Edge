@@ -69,6 +69,10 @@ def operator_mio_payload(payload, *, now=None):
                 type(v) is not str or re.fullmatch(pattern, v) is None for v in values)):
             return output
         refs[key] = list(values)
+    # Binding values are already proven equal to the parent envelope above; project them for browser checks.
+    bound = {'generation': receipt['generation'], 'frame_generation': receipt['frame_generation'],
+        'source_trace_id': receipt['source_trace_id'], 'event_key': receipt['event_key'],
+        'trace_id': receipt['trace_id'], 'frame_id': receipt['frame_id']}
     output['knowledge_analysis'] = {'status': 'projected', 'is_current': True,
-        'claim_status': 'reported_unverified', 'trust': 'unverified_advisory_only', **refs}
+        'claim_status': 'reported_unverified', 'trust': 'unverified_advisory_only', **bound, **refs}
     return output

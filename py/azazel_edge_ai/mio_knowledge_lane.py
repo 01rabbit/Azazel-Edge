@@ -38,6 +38,10 @@ class LiveMioKnowledgeLane:
         self._thread.start()
 
     def snapshot(self):
+        if not self._enabled():
+            with self._lock:
+                generation = self._result.get('generation', '')
+            return _empty('disabled', generation)
         with self._lock:
             result = json.loads(json.dumps(self._result))
             fresh = time.monotonic() - self._completed_at <= self.max_age_seconds
@@ -51,22 +55,28 @@ class LiveMioKnowledgeLane:
             and (fast.get('advisory') or {}).get('frame_id') == result['frame_id'])
         if not result['is_current']:
             result.pop('projection', None)
+        # The auxiliary callback may block while opt-in is revoked. Recheck
+        # before publishing the copied receipt, including its projection.
+        if not self._enabled():
+            return _empty('disabled', result['generation'])
         return result
 
     def submit(self, generation: Any, source_trace_id: str = ''):
+        # Never calls snapshot/fast_snapshot: the receipt is built from lane-owned state only,
+        # so the synchronous _handle_event caller cannot block on the auxiliary callback.
         with self._lock:
             self._sequence += 1
-            self._result = _empty('queued' if self._enabled() else 'disabled', str(generation or ''))
-            if not self._enabled():
-                return self.snapshot()
-            item = (self._sequence, time.monotonic(), str(generation or ''), str(source_trace_id)[:96])
-            try:
-                self._queue.get_nowait()
-                self._queue.task_done()
-            except queue.Empty:
-                pass
-            self._queue.put_nowait(item)
-            return self.snapshot()
+            enabled = self._enabled()
+            self._result = _empty('queued' if enabled else 'disabled', str(generation or ''))
+            if enabled:
+                item = (self._sequence, time.monotonic(), str(generation or ''), str(source_trace_id)[:96])
+                try:
+                    self._queue.get_nowait()
+                    self._queue.task_done()
+                except queue.Empty:
+                    pass
+                self._queue.put_nowait(item)
+            return json.loads(json.dumps(self._result))
 
     def _run(self):
         while True:

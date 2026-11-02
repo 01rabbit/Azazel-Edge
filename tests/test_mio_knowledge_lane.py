@@ -72,6 +72,110 @@ def test_supersession_does_not_wait_or_overwrite():
     assert state['trace_id'] == 'edge-2'
 
 
+def test_blocked_knowledge_query_does_not_block_fast_model_path_or_overwrite_newer_generation():
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    def query(private, **kwargs):
+        if private['private'] == '1':
+            entered.set()
+            release.wait(5)
+            finished.set()
+        return 'received', {}
+    lane, state, frames = setup(query)
+    lane.submit('1', 'edge-1')
+    assert entered.wait(5)
+    assert lane.snapshot()['status'] not in {'projected', 'superseded', 'timeout'}
+
+    def analyze(frame, remaining):
+        return {**frame, 'generation_method': 'model', 'mio_state': 'complete', 'outcome': 'completed'}
+    model = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=lambda: state,
+                             frame_snapshot=lambda g: frames.get(g))
+    model.submit('1', 'edge-1')
+    model_result = wait(model)
+    assert model_result['status'] == 'complete'
+    assert model_result['is_current'] is True
+    assert lane.snapshot()['status'] not in {'projected', 'superseded', 'timeout'}
+
+    state.update(generation='2', trace_id='edge-2', advisory={'frame_id': 'frame-2', 'trace_id': 'mio-2'})
+    frames['2'] = {'frame_id': 'frame-2', 'trace_id': 'mio-2'}
+    lane.submit('2', 'edge-2')
+    release.set()
+    assert finished.wait(5)
+    result = wait(lane)
+    assert result['generation'] == '2'
+    assert result['status'] == 'projected'
+    assert result['is_current'] is True
+    assert result['frame_id'] == 'frame-2'
+    assert result['source_trace_id'] == 'edge-2'
+
+
+def test_blocking_fast_snapshot_does_not_block_submit():
+    entered, release = threading.Event(), threading.Event()
+    lane, state, frames = setup(lambda *_a, **_k: ('received', {}))
+    def blocking_fast_snapshot():
+        entered.set()
+        release.wait(2)
+        return dict(state)
+    lane._fast_snapshot = blocking_fast_snapshot
+    try:
+        lane.submit('1', 'edge-1')
+        assert entered.wait(1)
+        started = time.monotonic()
+        receipt = lane.submit('1', 'edge-1')
+        assert time.monotonic() - started < .5
+        assert receipt['status'] == 'queued'
+        assert receipt['is_current'] is False
+        assert 'projection' not in receipt
+    finally:
+        release.set()
+    assert wait(lane)['is_current'] is True
+
+
+def test_disabling_opt_in_immediately_hides_projection():
+    enabled = {'value': True}
+    lane, state, frames = setup(lambda *_a, **_k: ('received', {}), enabled=lambda: enabled['value'])
+    lane.submit('1', 'edge-1')
+    assert wait(lane)['is_current'] is True
+    enabled['value'] = False
+    result = lane.snapshot()
+    assert result['status'] == 'disabled'
+    assert result['is_current'] is False
+    assert 'projection' not in result
+
+
+def test_disabling_during_inflight_snapshot_hides_copied_projection():
+    enabled = threading.Event()
+    enabled.set()
+    lane, state, frames = setup(lambda *_a, **_k: ('received', {}), enabled=enabled.is_set)
+    lane.submit('1', 'edge-1')
+    projected = wait(lane)
+    assert projected['status'] == 'projected'
+    assert projected['is_current'] is True
+    assert 'projection' in projected
+    entered, release = threading.Event(), threading.Event()
+    results = []
+
+    def blocking_fast_snapshot():
+        entered.set()
+        assert release.wait(2)
+        return dict(state)
+
+    lane._fast_snapshot = blocking_fast_snapshot
+    reader = threading.Thread(target=lambda: results.append(lane.snapshot()))
+    reader.start()
+    try:
+        assert entered.wait(1)
+        enabled.clear()
+    finally:
+        release.set()
+        reader.join(2)
+    assert not reader.is_alive()
+    assert len(results) == 1
+    assert results[0]['status'] == 'disabled'
+    assert results[0]['generation'] == '1'
+    assert results[0]['is_current'] is False
+    assert 'projection' not in results[0]
+
+
 def test_binding_rejected_before_query_and_expiry_hides_projection():
     calls = []
     lane, state, frames = setup(lambda *_a, **_k: (calls.append(1) or 'received', {}), max_age_seconds=.1)

@@ -307,7 +307,8 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', generation: '5',
             event_key: 'event-5', edge_trace_id: 'edge-trace-5', edge_action: 'notify',
             edge_result: 'planned_not_applied', edge_mode: 'dry_run', mio_trace_id: 'mio-trace-5', frame_id: 'frame-5'},
-        generation: '5', knowledge_analysis: {status: 'projected', is_current: true, claim_status: 'reported_unverified', trust: 'unverified_advisory_only', attack_techniques: ['T1059.001'], source_groups: ['abusech'], action: 'isolate'}, model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
+        advisory: {trace_id: 'mio-trace-5', frame_id: 'frame-5'},
+        generation: '5', knowledge_analysis: {status: 'projected', is_current: true, claim_status: 'reported_unverified', trust: 'unverified_advisory_only', generation: '5', frame_generation: '5', source_trace_id: 'edge-trace-5', event_key: 'event-5', trace_id: 'mio-trace-5', frame_id: 'frame-5', attack_techniques: ['T1059.001'], source_groups: ['abusech'], action: 'isolate'}, model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
             hypotheses: [{statement: 'A hostile-activity explanation remains possible, but this frame does not establish it.', verification: 'model_proposed_unverified', source: 'mio_validated_alternative', frame_refs: ['suricata_sid:42']}],
             next_checks: ['check the observed event'], model: 'qwen:2b', duration_ms: 900, prompt_tokens: 20, completion_tokens: 12},
         advisory: {trace_id: 'mio-trace-5', frame_id: 'frame-5', recommendation: '<img src=x onerror=alert(1)>',
@@ -658,6 +659,128 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     });
     const lat = meter('Latency', { llm: { latency_ms_ema: true } });
     eq(lat.value, '—', 'latency true -> dash');
+    dom.uninstall();
+})();
+
+// --- 1b. Knowledge receipt: normal, timeout/stale, binding mismatch, safe cue, bounded IDs ---
+(function () {
+    const IDS = ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction','mioLiveCorrelation',
+     'mioLiveAuxAdvice','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff','mioKnowledgeStatus','mioKnowledgeRefs',
+     'mioKnowledgeCue','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics'];
+    function payload(over) {
+        const base = {status: 'complete', is_current: true, max_age_seconds: 10,
+            completed_at: new Date(Date.now() - 1000).toISOString(), generation: '8', trace_id: 'edge-trace-8',
+            edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-8'},
+            source_context: {event_key: 'event-8'},
+            handoff_binding: {status: 'matched', generation: '8', event_key: 'event-8', edge_trace_id: 'edge-trace-8',
+                edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied',
+                mio_trace_id: 'mio-8', frame_id: 'frame-8'},
+            advisory: {trace_id: 'mio-8', frame_id: 'frame-8'},
+            knowledge_analysis: receipt({})};
+        return Object.assign(base, over);
+    }
+    // A projected receipt carrying all six server-projected bindings, bound to payload({}) above.
+    function receipt(over) {
+        return Object.assign({status: 'projected', is_current: true, claim_status: 'reported_unverified',
+            trust: 'unverified_advisory_only', generation: '8', frame_generation: '8', source_trace_id: 'edge-trace-8',
+            event_key: 'event-8', trace_id: 'mio-8', frame_id: 'frame-8', attack_techniques: ['T1059'],
+            source_groups: ['abusech']}, over);
+    }
+    function mountKnowledge() {
+        const m = mount();
+        m.expire = null;
+        global.window.setTimeout = function (callback) { m.expire = callback; return 1; };
+        global.window.clearTimeout = function () {};
+        IDS.forEach(function (id) { const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el); });
+        return m;
+    }
+    const CUE_TAIL = 'Edge observed action/result remains authoritative';
+
+    // Normal: projected, bound receipt is current; correlation IDs shown.
+    let m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected (reported, unverified)', 'normal: receipt current');
+    eq(m.$('mioKnowledgeRefs').textContent, 'ATT&CK: T1059 · Source groups: abusech', 'normal: refs shown');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('not a verdict') >= 0, 'normal: cue states unverified, not a verdict');
+    eq(m.$('mioLiveCorrelation').textContent, 'event event-8 · trace edge-trace-8 · frame frame-8', 'normal: correlation IDs shown');
+    m.expire();
+    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'normal: expiry clears receipt');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('expired') >= 0 && m.$('mioKnowledgeCue').textContent.indexOf(CUE_TAIL) >= 0, 'normal: expiry cue keeps Edge authority');
+    dom.uninstall();
+
+    // Timeout: correlated failure state is labelled, refs suppressed, cue is deterministic and non-retrying.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: {status: 'timeout', is_current: false}}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'timeout', 'timeout: failure status shown');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'timeout: refs suppressed');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('Knowledge timeout') >= 0, 'timeout: cue names the failure');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('Nothing is retried automatically') >= 0, 'timeout: cue forbids automatic retry');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('model') < 0, 'timeout: cue implies no model action');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-8', 'timeout: Edge observed result unchanged');
+    dom.uninstall();
+
+    // Stale: completed too long ago; receipt and cue are suppressed, Edge result stays visible.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({completed_at: new Date(Date.now() - 60000).toISOString()}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'stale: receipt unavailable');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'stale: refs suppressed');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('Knowledge suppressed') >= 0 && m.$('mioKnowledgeCue').textContent.indexOf(CUE_TAIL) >= 0, 'stale: safe cue');
+    dom.uninstall();
+
+    // Binding mismatch: receipt generation differs from the parent generation.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({generation: '7'})}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'mismatch: generation-mismatched receipt not current');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'mismatch: refs suppressed');
+    dom.uninstall();
+
+    // Binding mismatch: receipt names a different frame than the advisory.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({frame_id: 'frame-other'})}));
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'frame mismatch: refs suppressed');
+    dom.uninstall();
+
+    // Missing parent frame: advisory carries no frame, so the receipt cannot be bound to a frame.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({advisory: {trace_id: 'mio-8'}}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'missing parent frame: receipt not shown current');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'missing parent frame: refs suppressed');
+    eq(m.$('mioLiveCorrelation').textContent, 'event event-8 · trace edge-trace-8 · frame none', 'missing parent frame: frame shown as none');
+    dom.uninstall();
+
+    // Missing receipt binding: each of the six projected binding fields, when absent, suppresses the receipt
+    // even though the parent envelope names every value. The correlation line still shows parent IDs.
+    ['generation', 'frame_generation', 'source_trace_id', 'event_key', 'trace_id', 'frame_id'].forEach(function (field) {
+        m = mountKnowledge();
+        const r = receipt({});
+        delete r[field];
+        m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: r}));
+        eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'missing receipt ' + field + ': not shown current');
+        eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'missing receipt ' + field + ': refs suppressed');
+        ok(m.$('mioKnowledgeCue').textContent.indexOf('Knowledge unavailable: no reference metadata.') === 0
+            && m.$('mioKnowledgeCue').textContent.indexOf(CUE_TAIL) >= 0, 'missing receipt ' + field + ': cue is safe');
+        eq(m.$('mioLiveCorrelation').textContent, 'event event-8 · trace edge-trace-8 · frame frame-8', 'missing receipt ' + field + ': parent IDs unchanged');
+        dom.uninstall();
+    });
+
+    // Over-length or non-string receipt binding is suppressed, not truncated into a match.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({frame_id: 'frame-8' + 'x'.repeat(90)})}));
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'over-length receipt binding: refs suppressed');
+    dom.uninstall();
+
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({event_key: ['event-8']})}));
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'non-string receipt binding: refs suppressed');
+    dom.uninstall();
+
+    // Bounded, untrusted IDs: long markup-like key is rendered as text and truncated.
+    m = mountKnowledge();
+    const hostile = '<img src=x onerror=alert(1)>' + 'k'.repeat(200);
+    m.S.renderMioLiveAuxiliary(payload({source_context: {event_key: hostile}, handoff_binding: Object.assign({}, payload({}).handoff_binding, {event_key: hostile})}));
+    const corr = m.$('mioLiveCorrelation').textContent;
+    ok(corr.indexOf('event <img src=x onerror=alert(1)>') === 0, 'bounded IDs: markup kept as inert text');
+    ok(corr.length <= 'event '.length + 96 + ' · trace edge-trace-8 · frame frame-8'.length, 'bounded IDs: event key truncated to 96 chars');
     dom.uninstall();
 })();
 

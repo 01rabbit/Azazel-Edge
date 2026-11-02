@@ -420,6 +420,13 @@
         put('mioLiveAuxKnowledge', usable ? (payload.knowledge && payload.knowledge.status || 'not_provided') : 'suppressed');
         put('mioLiveAuxFreshness', fresh ? 'Current generation' : 'Stale or not current');
         put('mioLiveEdgeAction', actionBits.join(' / ') || (edge.unknown_fields ? 'Unknown (malformed fields omitted)' : 'Unknown'));
+        // Bounded, untrusted correlation IDs for operator matching; rendered via textContent only.
+        function boundedId(value) {
+            return typeof value === 'string' && value ? value.slice(0, 96) : '';
+        }
+        put('mioLiveCorrelation', 'event ' + (boundedId(sourceContext.event_key) || 'unknown')
+            + ' · trace ' + (boundedId(edge.trace_id) || boundedId(payload.trace_id) || 'unknown')
+            + ' · frame ' + (boundedId(advisory.frame_id) || 'none'));
         put('mioLiveAuxAdvice', usable
             ? (recommendation || advisory.summary || handoff.summary || 'No advice available.')
             : (payload.reason ? 'M.I.O. result suppressed: ' + String(payload.reason).slice(0, 120) : suppressedMessage));
@@ -429,13 +436,36 @@
             ? (handoff.summary || handoff.operator_note || handoff.status || 'No handoff supplied.')
             : suppressedMessage);
         var knowledge = payload.knowledge_analysis || {};
-        var knowledgeCurrent = usable && knowledge.status === 'projected' && knowledge.is_current === true
+        // The parent envelope must name the generation, event and frame; any binding the receipt
+        // carries must equal them. A receipt missing its parent binding is never shown as current.
+        // Binding comparisons are strict: an over-length parent value is not truncated into a match.
+        function exactId(value) {
+            return typeof value === 'string' && value !== '' && value.length <= 96 ? value : '';
+        }
+        // Every binding field must be present, bounded and equal to its parent value; absence is not a pass.
+        function receiptBinds(field, expected) {
+            var actual = knowledge[field];
+            return expected !== '' && typeof actual === 'string' && actual !== '' && actual.length <= 96 && actual === expected;
+        }
+        var knowledgeBound = receiptBinds('generation', exactId(payload.generation))
+            && receiptBinds('frame_generation', exactId(payload.generation))
+            && receiptBinds('event_key', exactId(sourceContext.event_key))
+            && receiptBinds('frame_id', exactId(advisory.frame_id))
+            && receiptBinds('source_trace_id', exactId(payload.trace_id))
+            && receiptBinds('trace_id', exactId(advisory.trace_id));
+        var knowledgeCurrent = usable && knowledgeBound && knowledge.status === 'projected' && knowledge.is_current === true
             && knowledge.claim_status === 'reported_unverified' && knowledge.trust === 'unverified_advisory_only';
         var knowledgeStatus = ['starting', 'queued', 'disabled', 'missing_token', 'invalid_configuration',
             'unavailable', 'timeout', 'oversized', 'redirect_rejected', 'auth_rejected', 'scope_rejected',
             'malformed', 'received', 'superseded', 'rejected'];
-        put('mioKnowledgeStatus', knowledgeCurrent ? 'projected (reported, unverified)'
-            : (usable && knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable'));
+        var knowledgeLabel = knowledgeCurrent ? 'projected (reported, unverified)'
+            : (usable && knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable');
+        put('mioKnowledgeStatus', knowledgeLabel);
+        // Deterministic, observation-only guidance; never retries or implies a model/Knowledge action.
+        var cueTail = ' Edge observed action/result remains authoritative; use the existing operator review workflow for this event. Nothing is retried automatically.';
+        put('mioKnowledgeCue', knowledgeCurrent
+            ? 'Reported, unverified reference metadata only; not a verdict. Edge observed action/result remains authoritative.'
+            : (usable ? 'Knowledge ' + knowledgeLabel + ': no reference metadata.' : 'Knowledge suppressed (stale or uncorrelated).') + cueTail);
         function knowledgeRefs(key, pattern) {
             var values = knowledge[key];
             return Array.isArray(values) && values.length <= 16 && values.every(function (v) {
@@ -452,6 +482,7 @@
             if (usable) knowledgeExpiryTimer = window.setTimeout(function () {
                 put('mioKnowledgeStatus', 'unavailable');
                 put('mioKnowledgeRefs', 'Unavailable');
+                put('mioKnowledgeCue', 'Knowledge expired (stale).' + cueTail);
             }, Math.max(0, Math.min(10, Number(payload.max_age_seconds || 0)) * 1000
                 - (Date.now() - completedAt)));
         }
