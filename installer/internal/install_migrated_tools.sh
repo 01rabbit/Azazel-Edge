@@ -194,10 +194,12 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/__init__.py" /opt/azazel-edge/py/a
 install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/agent.py" /opt/azazel-edge/py/azazel_edge_ai/agent.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/mio_live_auxiliary.py" /opt/azazel-edge/py/azazel_edge_ai/mio_live_auxiliary.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/mio_model_lane.py" /opt/azazel-edge/py/azazel_edge_ai/mio_model_lane.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/mio_knowledge_lane.py" /opt/azazel-edge/py/azazel_edge_ai/mio_knowledge_lane.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge_runbook_broker.py" /opt/azazel-edge/py/azazel_edge_runbook_broker.py
 
 echo "[6/16] Install WebUI and EPD modules"
 install -m 0644 "$REPO_ROOT/azazel_edge_web/app.py" /opt/azazel-edge/azazel_edge_web/app.py
+install -m 0644 "$REPO_ROOT/azazel_edge_web/knowledge_receipt.py" /opt/azazel-edge/azazel_edge_web/knowledge_receipt.py
 install -m 0644 "$REPO_ROOT/azazel_edge_web/auth.py" /opt/azazel-edge/azazel_edge_web/auth.py
 install -m 0644 "$REPO_ROOT/azazel_edge_web/io_helpers.py" /opt/azazel-edge/azazel_edge_web/io_helpers.py
 install -m 0644 "$REPO_ROOT/azazel_edge_web/static/"*.css "$REPO_ROOT/azazel_edge_web/static/"*.js /opt/azazel-edge/azazel_edge_web/static/

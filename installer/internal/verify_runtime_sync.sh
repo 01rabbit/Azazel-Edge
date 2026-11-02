@@ -32,6 +32,7 @@ fi
 
 mapfile -t FILES <<'EOF'
 azazel_edge_web/app.py
+azazel_edge_web/knowledge_receipt.py
 azazel_edge_web/auth.py
 azazel_edge_web/io_helpers.py
 py/azazel_edge/__init__.py
@@ -65,6 +66,7 @@ py/azazel_edge_ai/__init__.py
 py/azazel_edge_ai/agent.py
 py/azazel_edge_ai/mio_live_auxiliary.py
 py/azazel_edge_ai/mio_model_lane.py
+py/azazel_edge_ai/mio_knowledge_lane.py
 py/azazel_edge_control/__init__.py
 py/azazel_edge_control/daemon.py
 py/azazel_edge_control/mode_manager.py
