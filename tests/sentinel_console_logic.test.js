@@ -579,6 +579,28 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6',
         model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: 'mismatch'} });
     eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result', 'different fast generation cannot label model current');
+    // Degraded model lane: status and allowlisted reason stay visible; detail fields remain suppressed; Edge action unchanged.
+    m.S.renderMioLiveAuxiliary(currentPayload({status: 'degraded', is_current: false, fast_generation: '7',
+        reason: 'deadline_exceeded', summary: 'raw model text must not show', mio_state: 'raw state', model: 'degraded-model'}));
+    eq(m.$('mioModelStatus').textContent, 'degraded (not current)', 'degraded lane status visible while not current');
+    eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result · lane reason: deadline exceeded', 'allowlisted lane reason visible as fixed label');
+    eq(m.$('mioModelSummary').textContent, 'Suppressed', 'degraded result summary still suppressed');
+    eq(m.$('mioModelState').textContent, 'Suppressed', 'degraded result state still suppressed');
+    eq(m.$('mioModelMetrics').textContent, 'Suppressed', 'degraded result metrics still suppressed');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-7', 'degraded model lane leaves Edge action unchanged');
+    [['governance_denied:policy_x', 'governance denied'], ['audit_failed', 'audit failed'],
+     ['mio_no_model_contribution', 'no model contribution'], ['mio_partial:error_fallback', 'partial M.I.O. state'],
+     ['model_error', 'model error'], ['queue_full', 'queue full'], ['superseded', 'superseded'],
+     ['frame_binding_rejected', 'frame binding rejected'], ['fast_result_unavailable', 'fast result unavailable']].forEach(function (pair) {
+        m.S.renderMioLiveAuxiliary(currentPayload({status: 'skipped', is_current: false, fast_generation: '7', reason: pair[0]}));
+        eq(m.$('mioModelFreshness').textContent, 'Skipped · lane reason: ' + pair[1], 'allowlisted reason ' + pair[0] + ' maps to fixed label');
+    });
+    m.S.renderMioLiveAuxiliary(currentPayload({status: 'degraded', is_current: false, fast_generation: '7',
+        reason: '<img src=x onerror=alert(1)> raw reason text'}));
+    eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result · lane reason: reason withheld (not allowlisted)', 'unlisted reason withheld, not echoed');
+    ok(m.$('mioModelFreshness').textContent.indexOf('<img') < 0, 'raw reason markup never displayed');
+    m.S.renderMioLiveAuxiliary(currentPayload({status: 'complete', is_current: false, fast_generation: '7', reason: 'deadline_exceeded'}));
+    eq(m.$('mioModelStatus').textContent, 'suppressed', 'non-degraded non-current status remains generic suppressed');
     ok(m.$('mioLiveAuxAdvice').children.length === 0, 'untrusted MIO prose is not parsed as markup');
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 1,
         completed_at: new Date(Date.now() - 5000).toISOString()});

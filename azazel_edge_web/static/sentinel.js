@@ -22,6 +22,28 @@
     var WATCH_WORDS = ['watch', 'elevated', 'caution', 'degraded', 'partial', 'suspected', 'drift', 'limited', 'pending', 'stale'];
     var CRIT_WORDS = ['critical', 'danger', 'alert', 'down', 'off', 'outage', 'compromised', 'failed', 'fail', 'high'];
 
+    /* ---- model lane (display-only) allowlists ------------------------------ */
+    // Lane statuses shown for a non-current model result. Anything else stays generic "suppressed".
+    var MODEL_LANE_DEGRADED_STATUSES = ['degraded', 'skipped', 'queued', 'pending', 'unavailable'];
+    var MODEL_LANE_REASON_LABELS = {
+        deadline_exceeded: 'deadline exceeded',
+        mio_no_model_contribution: 'no model contribution',
+        audit_failed: 'audit failed',
+        model_error: 'model error',
+        queue_full: 'queue full',
+        superseded: 'superseded',
+        frame_binding_rejected: 'frame binding rejected',
+        fast_result_unavailable: 'fast result unavailable'
+    };
+    // Maps a lane reason to a fixed display label. Raw strings are never echoed; unlisted reasons are withheld.
+    function modelLaneReasonLabel(raw) {
+        if (typeof raw !== 'string' || raw === '' || raw.length > 64) return '';
+        if (Object.prototype.hasOwnProperty.call(MODEL_LANE_REASON_LABELS, raw)) return MODEL_LANE_REASON_LABELS[raw];
+        if (/^governance_denied:[a-z_]{1,32}$/.test(raw)) return 'governance denied';
+        if (/^mio_partial:[a-z_]{1,32}$/.test(raw)) return 'partial M.I.O. state';
+        return 'reason withheld (not allowlisted)';
+    }
+
     function toneOf(word) {
         var w = String(word == null ? '' : word).trim().toLowerCase();
         if (!w) return 'is-unknown';
@@ -705,10 +727,16 @@
         var model = payload.model_analysis && typeof payload.model_analysis === 'object' ? payload.model_analysis : {};
         var modelCurrent = usable && (model.status === 'complete' || model.status === 'partial') && model.is_current === true
             && String(model.fast_generation || '') === String(payload.generation || '');
-        put('mioModelStatus', modelCurrent ? (model.status || 'disabled') : 'suppressed');
-        put('mioModelFreshness', modelCurrent
+        // Lane degradation stays visible: a non-current result shows its own allowlisted lane status and a fixed-label reason.
+        // Raw model text and unlisted reason strings are never displayed; authority is unchanged (display only).
+        var modelLaneStatus = typeof model.status === 'string' && MODEL_LANE_DEGRADED_STATUSES.indexOf(model.status) >= 0 ? model.status : '';
+        var modelReasonText = modelLaneReasonLabel(model.reason);
+        var modelReasonTail = modelReasonText ? ' · lane reason: ' + modelReasonText : '';
+        put('mioModelStatus', modelCurrent ? (model.status || 'disabled')
+            : (modelLaneStatus ? modelLaneStatus + ' (not current)' : 'suppressed'));
+        put('mioModelFreshness', (modelCurrent
             ? (model.status === 'partial' ? 'Current fast generation; partial M.I.O. result' : 'Current fast generation')
-            : (model.status === 'skipped' ? 'Skipped' : 'Stale or no current model result'));
+            : (model.status === 'skipped' ? 'Skipped' : 'Stale or no current model result')) + modelReasonTail);
         put('mioModelSummary', !modelCurrent ? 'Suppressed' : (model.summary || (model.status === 'partial'
             ? 'Partial M.I.O. analysis; the shared reasoning cycle did not complete.'
             : 'No model analysis available.')));
