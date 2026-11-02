@@ -207,3 +207,37 @@ def test_receipt_clock_requires_timezone_without_changing_other_fields(completed
     assert output.pop('knowledge_analysis')['status'] == expected_status
     original.pop('knowledge_analysis')
     assert output == original  # Includes the action, fast lane and model result.
+
+
+@pytest.mark.parametrize('status', ('starting queued disabled missing_token invalid_configuration '
+    'unavailable timeout oversized redirect_rejected auth_rejected scope_rejected malformed '
+    'received superseded rejected projected').split())
+@pytest.mark.parametrize('fast_state', ['queued', 'degraded', 'stale', 'mismatched'])
+def test_lane_diagnostics_survive_unusable_fast_envelope_without_reference_ids(status, fast_state):
+    payload = current()
+    payload['knowledge_analysis']['status'] = status
+    if fast_state in {'queued', 'degraded'}:
+        payload['status'] = fast_state
+        payload['is_current'] = False
+        payload.pop('completed_at')
+    elif fast_state == 'stale':
+        payload['completed_at'] = datetime.fromtimestamp(1, timezone.utc).isoformat()
+    else:
+        payload['handoff_binding']['frame_id'] = 'wrong-frame'
+    original = deepcopy(payload)
+    output = operator_mio_payload(payload, now=101)
+    assert output.pop('knowledge_analysis') == {
+        'status': 'unavailable' if status == 'projected' else status, 'is_current': False}
+    assert payload == original
+    original.pop('knowledge_analysis')
+    assert output == original
+
+
+@pytest.mark.parametrize('field,value', [('schema_version', 'wrong'), ('authority', 'execute'),
+    ('usage_status', 'metered'), ('status', 'unknown'), ('status', [])])
+def test_invalid_lane_diagnostic_schema_is_unavailable_even_when_fast_queued(field, value):
+    payload = current()
+    payload['status'] = 'queued'
+    payload['knowledge_analysis']['status'] = 'disabled'
+    payload['knowledge_analysis'][field] = value
+    assert_unavailable_without_other_changes(payload)

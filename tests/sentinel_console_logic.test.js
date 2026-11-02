@@ -386,6 +386,40 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
                 edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
             model_analysis: modelAnalysis};
     }
+    const diagnosticStatuses = ['starting', 'queued', 'disabled', 'missing_token', 'invalid_configuration',
+        'unavailable', 'timeout', 'oversized', 'redirect_rejected', 'auth_rejected', 'scope_rejected',
+        'malformed', 'received', 'superseded', 'rejected', 'projected'];
+    diagnosticStatuses.forEach(function (status) {
+        ['queued', 'degraded', 'stale', 'mismatched'].forEach(function (fastState) {
+            const payload = currentPayload({status: 'disabled'});
+            payload.knowledge_analysis = {status: status, is_current: true,
+                claim_status: 'reported_unverified', trust: 'unverified_advisory_only',
+                attack_techniques: ['T1059.001'], source_groups: ['abusech'],
+                trace_id: 'must-not-render', frame_id: 'must-not-render'};
+            if (fastState === 'queued' || fastState === 'degraded') {
+                payload.status = fastState;
+                payload.is_current = false;
+                delete payload.completed_at;
+            } else if (fastState === 'stale') {
+                payload.completed_at = new Date(Date.now() - 60000).toISOString();
+            } else {
+                payload.handoff_binding.edge_result = 'wrong-result';
+            }
+            let scheduled = false;
+            global.window.setTimeout = function () { scheduled = true; return 1; };
+            m.S.renderMioLiveAuxiliary(payload);
+            eq(m.$('mioKnowledgeStatus').textContent, status === 'projected' ? 'unavailable' : status,
+                status + '/' + fastState + ': bounded diagnostic visible');
+            eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable',
+                status + '/' + fastState + ': all reference IDs hidden');
+            ok(!scheduled, status + '/' + fastState + ': diagnostic independent of fast expiry');
+        });
+    });
+    ['unknown', '<script>bad</script>', [], null].forEach(function (status) {
+        m.S.renderMioLiveAuxiliary({status: 'queued', knowledge_analysis: {status: status}});
+        eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'invalid diagnostic suppressed');
+        eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'invalid diagnostic refs hidden');
+    });
     function assertModelSuppressed(payload, label) {
         m.S.renderMioLiveAuxiliary(payload);
         eq(m.$('mioModelStatus').textContent, 'suppressed', label + ': model status suppressed');

@@ -459,13 +459,13 @@
             'unavailable', 'timeout', 'oversized', 'redirect_rejected', 'auth_rejected', 'scope_rejected',
             'malformed', 'received', 'superseded', 'rejected'];
         var knowledgeLabel = knowledgeCurrent ? 'projected (reported, unverified)'
-            : (usable && knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable');
+            : (knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable');
         put('mioKnowledgeStatus', knowledgeLabel);
         // Deterministic, observation-only guidance; never retries or implies a model/Knowledge action.
         var cueTail = ' Edge observed action/result remains authoritative; use the existing operator review workflow for this event. Nothing is retried automatically.';
         put('mioKnowledgeCue', knowledgeCurrent
             ? 'Reported, unverified reference metadata only; not a verdict. Edge observed action/result remains authoritative.'
-            : (usable ? 'Knowledge ' + knowledgeLabel + ': no reference metadata.' : 'Knowledge suppressed (stale or uncorrelated).') + cueTail);
+            : 'Knowledge ' + knowledgeLabel + ': no reference metadata.' + cueTail);
         function knowledgeRefs(key, pattern) {
             var values = knowledge[key];
             return Array.isArray(values) && values.length <= 16 && values.every(function (v) {
@@ -476,10 +476,10 @@
             ? ('ATT&CK: ' + (knowledgeRefs('attack_techniques', /^T[0-9]{4}(\.[0-9]{3})?$/) || 'None')
                 + ' · Source groups: ' + (knowledgeRefs('source_groups', /^[a-z][a-z0-9_-]{0,31}$/) || 'None'))
             : 'Unavailable');
-        // Clear this independent receipt even when polling stops or fails.
+        // Expire projected references even when polling stops; lane diagnostics have no fast deadline.
         if (typeof window.setTimeout === 'function') {
             if (knowledgeExpiryTimer !== null) window.clearTimeout(knowledgeExpiryTimer);
-            if (usable) knowledgeExpiryTimer = window.setTimeout(function () {
+            if (knowledgeCurrent) knowledgeExpiryTimer = window.setTimeout(function () {
                 put('mioKnowledgeStatus', 'unavailable');
                 put('mioKnowledgeRefs', 'Unavailable');
                 put('mioKnowledgeCue', 'Knowledge expired (stale).' + cueTail);
