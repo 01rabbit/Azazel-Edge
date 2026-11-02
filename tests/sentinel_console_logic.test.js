@@ -384,7 +384,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             next_checks: ['check the observed event'], model: 'qwen:2b', duration_ms: 900, prompt_tokens: 20, completion_tokens: 12},
         advisory: {trace_id: 'mio-trace-5', frame_id: 'frame-5', recommendation: '<img src=x onerror=alert(1)>',
             hypotheses: [{statement: '<script>hypothesis</script>', verification: 'unverified'}],
-            next_checks: ['check one'], handoff: {summary: '<b>handoff</b>'}}});
+            next_checks: ['check one'], handoff: {summary: 'No model contributed to the static fast result.'}}});
     eq(m.$('mioKnowledgeStatus').textContent, 'projected (reported, unverified)', 'independent receipt status');
     eq(m.$('mioKnowledgeRefs').textContent, 'ATT&CK: T1059.001 · Source groups: abusech · Source freshness reported, unverified at lookup: oldest feed unavailable; ATT&CK version unavailable', 'only allowlisted reference metadata rendered');
     eq(m.$('mioLiveAuxStatus').textContent, 'complete', 'MIO status rendered');
@@ -395,9 +395,11 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveAuxAdvice').textContent, '<img src=x onerror=alert(1)>', 'MIO advice rendered as text');
     eq(m.$('mioLiveAuxHypotheses').textContent, '<script>hypothesis</script>', 'hypothesis rendered as text');
     eq(m.$('mioLiveAuxChecks').textContent, 'check one', 'next checks rendered');
-    eq(m.$('mioLiveAuxHandoff').textContent, '<b>handoff</b>', 'handoff rendered as text');
+    eq(m.$('mioLiveAuxHandoff').textContent, 'No model contributed to the static fast result.', 'static fast handoff status is displayed independently');
     eq(m.$('mioModelFreshness').textContent, 'Current fast generation', 'model result correlated to fast generation');
     eq(m.$('mioModelSummary').textContent, '<b>measured</b>', 'model text rendered as text');
+    eq(m.$('mioLiveAuxAdvice').textContent, '<img src=x onerror=alert(1)>', 'complete model result does not replace static fast assessment');
+    ok(m.$('mioModelSummary').textContent !== m.$('mioLiveAuxHandoff').textContent, 'measured model summary remains in its separate display field');
     eq(m.$('mioModelState').textContent, 'complete', 'validated MIO state rendered');
     eq(m.$('mioModelHypotheses').textContent,
         'A hostile-activity explanation remains possible, but this frame does not establish it. [M.I.O.-selected; fixed wording; unverified; frame refs are context only]',
