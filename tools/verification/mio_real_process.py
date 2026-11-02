@@ -5,8 +5,25 @@ Use an existing dependency-complete interpreter and a clean exact MIO source.
 MIO_PROCESS_EVIDENCE must name a new private evidence directory;
 MIO_EXACT_SOURCE must name the clean runtime-pin checkout. No network fetch.
 """
-import json, os, socket, subprocess, sys, time, signal, tempfile, fcntl, urllib.request, http.server, threading
+import re, json, os, socket, subprocess, sys, time, signal, tempfile, fcntl, urllib.request, http.server, threading
 from pathlib import Path
+
+def runtime_mio_pin(requirements):
+    """Require one immutable MIO source pin in this Edge checkout."""
+    entries = [re.split(r'\s+#', line, maxsplit=1)[0].strip()
+               for line in requirements.read_text().splitlines()
+               if not line.lstrip().startswith('#')]
+    mio_entries = [line for line in entries
+                   if re.search(r'azazel[-_.]mio', line, re.IGNORECASE)]
+    if len(mio_entries) != 1:
+        raise SystemExit('Expected exactly one immutable MIO runtime pin.')
+    match = re.fullmatch(
+        r'azazel-mio\s*@\s*git\+https://github\.com/01rabbit/Azazel-MIO\.git@([0-9a-f]{40})',
+        mio_entries[0])
+    if match is None:
+        raise SystemExit('Malformed immutable MIO runtime pin.')
+    return match.group(1)
+
 
 def require_unprivileged():
     """Refuse root before evidence writes or service startup."""
@@ -19,8 +36,11 @@ ROOT = Path(__file__).resolve().parents[2]
 EV = Path(os.environ['MIO_PROCESS_EVIDENCE']).resolve()
 EV.mkdir(mode=0o700)
 SOURCE = Path(os.environ['MIO_EXACT_SOURCE']).resolve()
-assert subprocess.check_output(['git','-C',str(SOURCE),'rev-parse','HEAD'],text=True).strip() == '6cd015351979ba69e18517d71f79c0c347bb2722'
-assert not subprocess.check_output(['git','-C',str(SOURCE),'status','--porcelain'],text=True).strip()
+PIN = runtime_mio_pin(ROOT / 'requirements/runtime.txt')
+if subprocess.check_output(['git','-C',str(SOURCE),'rev-parse','HEAD'],text=True).strip() != PIN:
+    raise SystemExit('MIO_EXACT_SOURCE HEAD does not match the Edge runtime pin.')
+if subprocess.check_output(['git','-C',str(SOURCE),'status','--porcelain'],text=True).strip():
+    raise SystemExit('MIO_EXACT_SOURCE must be clean.')
 PY = sys.executable
 BASE = {
     'PATH': '/usr/bin:/bin:/opt/homebrew/bin',
