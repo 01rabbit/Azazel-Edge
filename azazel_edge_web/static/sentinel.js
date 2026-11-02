@@ -435,7 +435,7 @@
             'unavailable', 'timeout', 'oversized', 'redirect_rejected', 'auth_rejected', 'scope_rejected',
             'malformed', 'received', 'superseded', 'rejected'];
         put('mioKnowledgeStatus', knowledgeCurrent ? 'projected (reported, unverified)'
-            : (usable && knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable'));
+            : (knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable'));
         function knowledgeRefs(key, pattern) {
             var values = knowledge[key];
             return Array.isArray(values) && values.length <= 16 && values.every(function (v) {
@@ -446,10 +446,10 @@
             ? ('ATT&CK: ' + (knowledgeRefs('attack_techniques', /^T[0-9]{4}(\.[0-9]{3})?$/) || 'None')
                 + ' · Source groups: ' + (knowledgeRefs('source_groups', /^[a-z][a-z0-9_-]{0,31}$/) || 'None'))
             : 'Unavailable');
-        // Clear this independent receipt even when polling stops or fails.
+        // Expire projected references even when polling stops; lane diagnostics have no fast deadline.
         if (typeof window.setTimeout === 'function') {
             if (knowledgeExpiryTimer !== null) window.clearTimeout(knowledgeExpiryTimer);
-            if (usable) knowledgeExpiryTimer = window.setTimeout(function () {
+            if (knowledgeCurrent) knowledgeExpiryTimer = window.setTimeout(function () {
                 put('mioKnowledgeStatus', 'unavailable');
                 put('mioKnowledgeRefs', 'Unavailable');
             }, Math.max(0, Math.min(10, Number(payload.max_age_seconds || 0)) * 1000

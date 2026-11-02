@@ -29,6 +29,10 @@ def operator_mio_payload(payload, *, now=None):
             or type(receipt.get('status')) is not str
             or receipt['status'] not in _STATUSES):
         return output
+    # Lane diagnostics do not assert that reference metadata is current.
+    if receipt['status'] != 'projected':
+        output['knowledge_analysis'] = {'status': receipt['status'], 'is_current': False}
+        return output
     try:
         completed_at = datetime.fromisoformat(payload['completed_at'].replace('Z', '+00:00'))
         if completed_at.utcoffset() is None:
@@ -46,9 +50,6 @@ def operator_mio_payload(payload, *, now=None):
     # Use the producer's same-envelope contract, including the observed Edge
     # action/result and both frame IDs; a receipt alone cannot establish it.
     if not _binding_matches(payload):
-        return output
-    if receipt['status'] != 'projected':
-        output['knowledge_analysis'] = {'status': receipt['status'], 'is_current': False}
         return output
     advisory = payload.get('advisory') or {}
     context = payload.get('source_context') or {}
