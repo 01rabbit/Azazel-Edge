@@ -28,6 +28,9 @@ class ScoreBreakdown:
     score: int
     factors: List[str]
     shadow: Dict[str, Any] | None = None
+    # "shared_core" only when the MIO kernel reproduced Edge's score+factors exactly;
+    # otherwise "edge_local" (the Edge reference calculation is the fail-safe result).
+    source: str = "edge_local"
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -235,9 +238,11 @@ class TacticalScorer:
             factors.append("benign_dampener")
 
         score = max(0, min(100, score))
-        # Shadow comparison only: these are the exact resolver outputs above.
-        # Never replace Edge's score/factors or consume this metadata in a gate.
+        # Edge's local calculation above is the reference and fail-safe result. The
+        # shared MIO kernel is consulted on the same path; its score/factors are used
+        # only when they reproduce the local result exactly.
         shadow: Dict[str, Any] = {"authority": "comparison_only", "mode": "shadow"}
+        source = "edge_local"
         try:
             from azazel_mio.fast_assessment import FastAssessmentInput, PortSignal, assess_fast
 
@@ -247,15 +252,23 @@ class TacticalScorer:
                 action=action, deception_sid=sid in DECEPTION_SIDS,
                 benign_classless=threat_weight == 0 and category in _BENIGN_CLASSTYPES,
             ))
-            shadow.update(status="complete", score=comparison.score,
-                          factors=list(comparison.factors),
-                          matches=(comparison.score == score and list(comparison.factors) == factors))
+            shared_score = comparison.score
+            shared_factors = list(comparison.factors)
+            matches = type(shared_score) is int and shared_score == score and shared_factors == factors
+            shadow.update(score=shared_score, factors=shared_factors, matches=matches)
+            if matches:
+                score, factors = shared_score, shared_factors
+                source = "shared_core"
+                shadow.update(status="complete")
+            else:
+                # Mismatch: keep Edge's local score/factors and mark the comparison degraded.
+                shadow.update(status="degraded", reason="parity_mismatch")
         except ImportError:
             shadow.update(status="unavailable", reason="package_unavailable")
         except Exception:
             # Optional advisory availability must not alter the authoritative result.
             shadow.update(status="degraded", reason="assessment_failed")
-        return ScoreBreakdown(score=score, factors=factors, shadow=shadow)
+        return ScoreBreakdown(score=score, factors=factors, shadow=shadow, source=source)
 
     def score_with_features(self, features: Dict[str, Any]) -> Tuple[int, List[str]]:
         """Compatibility helper for callers that need a plain tuple."""
