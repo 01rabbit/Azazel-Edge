@@ -15,6 +15,21 @@ def _advisory(score=55):
             "category": "synthetic", "summary": "synthetic summary"}
 
 
+def _bound_fast(generation, edge_trace, frame_id, frame_trace):
+    """A complete, producer-bound fast envelope for model-lane tests."""
+    event_key = "a1b2c3d4e5f60718293a4b5c"
+    return {"status": "complete", "generation": str(generation), "is_current": True,
+        "trace_id": edge_trace,
+        "edge_event": {"action": "notify", "mode": "dry_run", "result": "planned_not_applied",
+                       "trace_id": edge_trace},
+        "source_context": {"event_key": event_key},
+        "advisory": {"frame_id": frame_id, "trace_id": frame_trace},
+        "handoff_binding": {"status": "matched", "valid": True, "generation": str(generation),
+            "event_key": event_key, "edge_trace_id": edge_trace, "edge_action": "notify",
+            "edge_mode": "dry_run", "edge_result": "planned_not_applied",
+            "mio_trace_id": frame_trace, "frame_id": frame_id}}
+
+
 def test_ambiguous_synthetic_event_passes_existing_governance_even_when_legacy_llm_off(tmp_path, monkeypatch):
     log_path = tmp_path / "ai-audit.jsonl"
     audit = P0AuditLogger(log_path)
@@ -183,8 +198,7 @@ def test_governance_input_and_output_audits_share_edge_trace_while_frame_trace_i
         "generation_method": "model", "frame_id": payload["frame_id"], "trace_id": payload["trace_id"],
     })
     lane = LiveMioModelLane(enabled=True, analyze=agent._governed_mio_model_analyze,
-        fast_snapshot=lambda: {"status": "complete", "generation": "9", "is_current": True,
-                              "trace_id": edge_trace},
+        fast_snapshot=lambda: _bound_fast("9", edge_trace, "frame-9", frame_trace),
         frame_snapshot=lambda _: {"frame_id": "frame-9", "trace_id": frame_trace,
                                   "evidence_refs": []},
         authorize=agent._authorize_mio_model_event)
@@ -219,8 +233,7 @@ def test_lane_authorization_failure_skips_model_analysis():
         raise OSError("private audit detail")
 
     lane = LiveMioModelLane(enabled=True, analyze=lambda *args: model_calls.append(args) or {},
-        fast_snapshot=lambda: {"status": "complete", "generation": "7", "is_current": True,
-                              "trace_id": "trace-model-test"},
+        fast_snapshot=lambda: _bound_fast("7", "trace-model-test", "f", "trace-model-test"),
         frame_snapshot=lambda _: {"frame_id": "f", "trace_id": "trace-model-test"},
         authorize=authorize)
     queued = lane.submit("7", "trace-model-test", authorization_payload={"risk_score": 55})
@@ -259,8 +272,7 @@ def test_lane_authorized_analysis_starts_only_after_authorization_succeeds():
                 "frame_id": "f", "trace_id": "trace-model-test"}
 
     lane = LiveMioModelLane(enabled=True, analyze=analyze,
-        fast_snapshot=lambda: {"status": "complete", "generation": "7", "is_current": True,
-                              "trace_id": "trace-model-test"},
+        fast_snapshot=lambda: _bound_fast("7", "trace-model-test", "f", "trace-model-test"),
         frame_snapshot=lambda _: {"frame_id": "f", "trace_id": "trace-model-test"},
         authorize=authorize)
     lane.submit("7", "trace-model-test", authorization_payload={"risk_score": 55})
@@ -290,8 +302,7 @@ def test_event_logging_and_snapshot_do_not_wait_for_governance_audit(tmp_path, m
         return False, "audit_failed"
 
     lane = LiveMioModelLane(enabled=True, analyze=lambda *args: model_calls.append(args) or {},
-        fast_snapshot=lambda: {"status": "complete", "generation": "7", "is_current": True,
-                              "trace_id": "trace-model-test"},
+        fast_snapshot=lambda: _bound_fast("7", "trace-model-test", "f", "trace-model-test"),
         frame_snapshot=lambda _: {"frame_id": "f", "trace_id": "trace-model-test"},
         authorize=authorize)
     advisory = {**_advisory(), "mio_auxiliary": {"generation": "7"}}
@@ -347,8 +358,8 @@ def test_superseded_authorization_is_diagnostic_only_and_latest_job_proceeds():
             "outcome": "completed", "mio_state": "complete", "generation_method": "model",
             "truncated_count": 0,
             "frame_id": "frame-" + payload["trace_id"], "trace_id": payload["trace_id"]},
-        fast_snapshot=lambda: {"status": "complete", "generation": fast_generation[0], "is_current": True,
-                              "trace_id": fast_trace[0]},
+        fast_snapshot=lambda: _bound_fast(fast_generation[0], fast_trace[0],
+            "frame-" + fast_trace[0], fast_trace[0]),
         frame_snapshot=lambda generation: {"frame_id": "frame-trace-new", "trace_id": "trace-new"},
         authorize=authorize)
     lane.submit("7", "trace-old", authorization_payload={"event": "old"})
@@ -382,8 +393,8 @@ def test_fast_snapshot_failure_during_finalization_degrades_superseded_without_w
         snapshot_calls[0] += 1
         if snapshot_calls[0] == 4:
             raise RuntimeError("snapshot unavailable")
-        return {"status": "complete", "generation": fast_generation[0], "is_current": True,
-                "trace_id": "trace-" + fast_generation[0]}
+        return _bound_fast(fast_generation[0], "trace-" + fast_generation[0],
+            "frame-" + fast_generation[0], "trace-" + fast_generation[0])
 
     def analyze(payload, remaining):
         return {"outcome": "completed", "mio_state": "complete", "generation_method": "model",
@@ -434,8 +445,8 @@ def test_fast_snapshot_failure_before_analysis_degrades_and_worker_survives():
         snapshot_calls[0] += 1
         if snapshot_calls[0] == 1:
             raise RuntimeError("snapshot unavailable")
-        return {"status": "complete", "generation": fast_generation[0], "is_current": True,
-                "trace_id": "trace-" + fast_generation[0]}
+        return _bound_fast(fast_generation[0], "trace-" + fast_generation[0],
+            "frame-" + fast_generation[0], "trace-" + fast_generation[0])
 
     def analyze(payload, remaining):
         return {"outcome": "completed", "mio_state": "complete", "generation_method": "model",
@@ -584,8 +595,9 @@ def test_successful_model_result_fails_closed_when_output_audit_fails(monkeypatc
     import time
     lane = LiveMioModelLane(enabled=True,
         analyze=agent._governed_mio_model_analyze,
-        fast_snapshot=lambda: {"status": "complete", "generation": "1", "is_current": True,
-                              "trace_id": "trace-audit-failure"})
+        fast_snapshot=lambda: _bound_fast("1", "trace-audit-failure",
+            "frame-audit-failure", "trace-audit-failure"),
+        frame_snapshot=lambda _: {"frame_id": "frame-audit-failure", "trace_id": "trace-audit-failure"})
     lane.submit("1", "trace-audit-failure")
     deadline = time.monotonic() + 1
     result = lane.snapshot()
@@ -627,7 +639,7 @@ def _production_lane(monkeypatch, tmp_path, analyzed):
         return analyzed() if callable(analyzed) else dict(analyzed)
     monkeypatch.setattr(agent, "_analyze_mio_fast_result", fake)
     lane = LiveMioModelLane(enabled=True, analyze=agent._production_mio_model_analyze,
-        fast_snapshot=lambda: {"status": "complete", "generation": "1", "is_current": True, "trace_id": "tr"},
+        fast_snapshot=lambda: _bound_fast("1", "tr", "f", "tr"),
         frame_snapshot=lambda g: _FRAME,
         audit_result=lambda t, r: agent._audit_mio_model_result(t, r))
     return lane, log_path
@@ -735,8 +747,7 @@ def test_production_lane_newer_submit_cannot_overtake_audit_publication(monkeypa
 def test_production_lane_fast_generation_change_audits_superseded_degraded(monkeypatch, tmp_path):
     lane, log = _production_lane(monkeypatch, tmp_path, _GOOD)
     state = {"gen": "1"}
-    lane._fast_snapshot = lambda: {"status": "complete", "generation": state["gen"],
-                                   "is_current": True, "trace_id": "tr"}
+    lane._fast_snapshot = lambda: _bound_fast(state["gen"], "tr", "f", "tr")
 
     def analyzed():
         state["gen"] = "2"  # fast freshness changes after analysis, before finalization
