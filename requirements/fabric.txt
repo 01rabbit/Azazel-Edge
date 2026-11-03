@@ -10,8 +10,9 @@
 # v0.9.0rc5 is a release candidate at source commit
 # 450d9502884ba533653210056a6fb85012b96b84. It is additive over rc4:
 # PresentedTerrainRef gains optional bindings for decision-less effects.
-# The non-additive rc4 EffectObservation authority restriction is preserved;
-# Edge's local reader keeps the same fail-closed classes.
+# The non-additive rc4 EffectObservation authority restriction is preserved:
+# four authority classes accepted by rc3 remain refused. Consumers that emitted
+# them must still adapt; Edge's local reader already fails closed on them.
 #
 # This pin skips v0.9.0rc3, which widened the typed-reference grammar so a
 # reference body may carry further colons. Edge mints `edge:nft:1` and was

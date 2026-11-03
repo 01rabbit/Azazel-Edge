@@ -10,8 +10,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `v0.9.0rc5` (source commit
   `450d9502884ba533653210056a6fb85012b96b84`). Fabric documents rc5 as
   additive over rc4; Edge retains its rc4-era `EffectObservation` authority
-  checks. Targeted contract compatibility evidence is tied to the PR head;
-  no Edge product version or release is implied.
+  checks. This optional prerelease dependency change does not change the Edge
+  product version or create a release.
 
 ### Added
 
