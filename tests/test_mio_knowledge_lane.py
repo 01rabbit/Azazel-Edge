@@ -40,7 +40,7 @@ def test_model_runs_without_knowledge_and_has_separate_status():
     called = threading.Event()
     def analyze(frame, remaining):
         called.set()
-        return {**frame, 'generation_method': 'model', 'mio_state': 'complete', 'outcome': 'completed'}
+        return {**frame, 'generation_method': 'model', 'mio_state': 'complete', 'outcome': 'completed', 'truncated_count': 0}
     model = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=lambda: state,
                              frame_snapshot=lambda g: frames[g])
     model.submit('1', 'edge-1')
@@ -86,7 +86,7 @@ def test_blocked_knowledge_query_does_not_block_fast_model_path_or_overwrite_new
     assert lane.snapshot()['status'] not in {'projected', 'superseded', 'timeout'}
 
     def analyze(frame, remaining):
-        return {**frame, 'generation_method': 'model', 'mio_state': 'complete', 'outcome': 'completed'}
+        return {**frame, 'generation_method': 'model', 'mio_state': 'complete', 'outcome': 'completed', 'truncated_count': 0}
     model = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=lambda: state,
                              frame_snapshot=lambda g: frames.get(g))
     model.submit('1', 'edge-1')

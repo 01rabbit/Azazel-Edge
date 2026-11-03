@@ -245,8 +245,10 @@ eq(rovingIndex('ArrowRight', 0, 0), -1, 'empty row -> no move');
 eq(tr('sentinel.x', 'Hello {who}', { who: 'op' }), 'Hello op', 'tr fallback + vars');
 eq(tr('sentinel.x', '{a} {b}', { a: 1 }), '1 {b}', 'unknown var left as is');
 
-// ====================================================================// DOM harness over the bespoke renderers (Edge#348)
-// ====================================================================const fs = require('fs');
+// ===========================================================================
+// DOM harness over the bespoke renderers (Edge#348)
+// ===========================================================================
+const fs = require('fs');
 const dom = require(path.join(__dirname, 'js_mini_dom.js'));
 const SENTINEL = require.resolve(path.join(__dirname, '..', 'azazel_edge_web', 'static', 'sentinel.js'));
 const TEMPLATE = fs.readFileSync(path.join(__dirname, '..', 'azazel_edge_web', 'templates', 'index.html'), 'utf8');
@@ -295,7 +297,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         completed_at: new Date().toISOString(), generation: '1', trace_id: 't1',
         edge_event: {trace_id: 't1', action: 'notify', mode: 'dry_run', result: 'planned_not_applied'},
         source_context: {event_key: 'e1'}, advisory: {trace_id: 'm1', frame_id: 'f1'},
-        handoff_binding: {status: 'matched', generation: '1', event_key: 'e1', edge_trace_id: 't1',
+        handoff_binding: {status: 'matched', valid: true, generation: '1', event_key: 'e1', edge_trace_id: 't1',
             edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'm1', frame_id: 'f1'},
         edge_knowledge_advisory: {schema_version: 'azazel.edge_knowledge_advisory.v1', status: 'complete',
             authority: 'read_only_advisory', generation: '1', trace_id: 't1', claim_status: 'reported_unverified',
@@ -388,8 +390,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioLiveAuxStatus').textContent, 'complete', 'MIO status rendered');
     eq(m.$('mioLiveAuxKnowledge').textContent, 'not_provided', 'Knowledge provenance rendered');
     eq(m.$('mioLiveAuxFreshness').textContent, 'Current generation', 'fresh completion is current');
-    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 72 / M.I.O. 72 · assessment match · comparison only', 'score and factor assessment comparison is separately labeled');
-    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-5', 'Edge action separated');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 72 / M.I.O. 72 · same Edge-resolved inputs: parity · comparison only (not independent corroboration or ground truth)', 'score and factor assessment comparison is separately labeled');
     eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-5', 'Edge action separated');
     eq(m.$('mioLiveAuxAdvice').textContent, '<img src=x onerror=alert(1)>', 'MIO advice rendered as text');
     eq(m.$('mioLiveAuxHypotheses').textContent, '<script>hypothesis</script>', 'hypothesis rendered as text');
@@ -408,31 +409,31 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     expireKnowledge();
     eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'receipt expires even without another poll');
     eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'expiry clears refs');
-    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-5', 'receipt expiry preserves observed action');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-5', 'receipt expiry preserves the correlated Edge action');
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
         knowledge: {status: 'not_queried'},
         edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
         source_context: {event_key: 'event-6'},
-        handoff_binding: {status: 'matched', generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+        handoff_binding: {status: 'matched', valid: true, generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
             edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
         edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
             status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35, mio_score: 35, matches: true},
         advisory: {trace_id: 'mio-trace-6', hypotheses: [], next_checks: []}});
     eq(m.$('mioLiveAuxKnowledge').textContent, 'not_queried', 'missing Knowledge is explicit');
-    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 35 / M.I.O. 35 · assessment match · comparison only', 'comparison remains available without model analysis');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 35 / M.I.O. 35 · same Edge-resolved inputs: parity · comparison only (not independent corroboration or ground truth)', 'comparison remains available without model analysis');
     // `matches` represents both score and factor equality, so equal scores can still differ.
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
         edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
         source_context: {event_key: 'event-6'},
-        handoff_binding: {status: 'matched', generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+        handoff_binding: {status: 'matched', valid: true, generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
             edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
         advisory: {trace_id: 'mio-trace-6'},
         edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
             status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35, mio_score: 35,
             matches: false, mio_factors: ['different explanation']}});
-    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 35 / M.I.O. 35 · assessment differs · comparison only', 'equal scores can report differing factor assessment');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 35 / M.I.O. 35 · same Edge-resolved inputs: differs · comparison only (not independent corroboration or ground truth)', 'equal scores can report differing factor assessment');
     ['pending', 'unavailable', 'degraded'].forEach(function (status) {
         m.S.renderMioLiveAuxiliary({status: status, is_current: false,
             edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
@@ -443,7 +444,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
         edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
         source_context: {event_key: 'event-6'},
-        handoff_binding: {status: 'matched', generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+        handoff_binding: {status: 'matched', valid: true, generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
             edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
         edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
             status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35}});
@@ -452,13 +453,13 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
         edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
         source_context: {event_key: 'event-6'},
-        handoff_binding: {status: 'matched', generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+        handoff_binding: {status: 'matched', valid: true, generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
             edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
         advisory: {trace_id: 'mio-trace-6'},
         edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
             status: 'complete', generation: '5', trace_id: 'edge-trace-5', edge_score: 35, mio_score: 35, matches: true}});
     eq(m.$('mioLiveScoreComparison').textContent, 'Suppressed (comparison generation/trace mismatch)', 'wrong comparison binding is distinguished');
-    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-5', 'receipt expiry preserves observed action');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-6', 'comparison mismatch preserves the separately correlated Edge action');
     const mismatched = {status: 'complete', generation: '5', trace_id: 'edge-trace-5', is_current: true,
         completed_at: new Date(Date.now() - 1000).toISOString(), max_age_seconds: 10,
         edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
