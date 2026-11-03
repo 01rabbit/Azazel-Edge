@@ -3438,6 +3438,7 @@ mod tests {
 
     #[test]
     fn a_redirect_runs_only_with_this_boots_separation_evidence_and_a_reachable_decoy() {
+        let _probe_test_guard = safety::lock_probe_tests();
         let dir = test_dir("decoy");
         let mut cfg = executing_cfg(&dir);
         // The decoy is probed where `nft redirect` delivers: the ingress

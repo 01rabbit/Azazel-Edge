@@ -530,6 +530,18 @@ pub fn interface_ipv4(_iface: &str) -> Option<std::net::Ipv4Addr> {
 
 static PROBES: Mutex<Vec<(SocketAddr, Instant, bool)>> = Mutex::new(Vec::new());
 
+#[cfg(test)]
+static PROBE_TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+/// Keep the tests that exercise the process-wide reachability cache from
+/// racing each other when the OS reuses an ephemeral loopback port.
+#[cfg(test)]
+pub fn lock_probe_tests() -> std::sync::MutexGuard<'static, ()> {
+    let guard = PROBE_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    PROBES.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    guard
+}
+
 /// The decoy answers where the redirect delivers: `nft redirect` in
 /// prerouting sends traffic arriving on `iface` to that interface's primary
 /// address, so the probe connects there (a listener bound to loopback only
@@ -760,6 +772,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn the_decoy_is_probed_on_the_ingress_interface_address_not_loopback() {
+        let _probe_test_guard = lock_probe_tests();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         assert_eq!(interface_ipv4("lo"), Some(std::net::Ipv4Addr::LOCALHOST));
