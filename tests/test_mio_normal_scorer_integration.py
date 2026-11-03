@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from importlib.metadata import distribution
 from pathlib import Path
+import re
 import sys
 from unittest.mock import patch
 
@@ -23,11 +24,29 @@ class _DecisionLogger:
 
 
 def test_normal_advisory_path_uses_real_mio_fast_assessment() -> None:
+    runtime_requirements = Path(__file__).resolve().parents[1] / "requirements/runtime.txt"
+    pin_lines = [
+        line.strip()
+        for line in runtime_requirements.read_text(encoding="utf-8").splitlines()
+        if line.strip().lower().startswith("azazel-mio @ ")
+    ]
+    assert len(pin_lines) == 1, "runtime.txt must declare exactly one MIO pin"
+    pin_match = re.fullmatch(
+        r"azazel-mio @ git\+https://github\.com/01rabbit/Azazel-MIO\.git@([0-9a-f]{40})",
+        pin_lines[0],
+    )
+    assert pin_match is not None, "runtime.txt MIO dependency must use a full immutable Git SHA"
+    declared_mio_commit = pin_match.group(1)
+
     installed_mio = distribution("azazel-mio")
     direct_url_text = installed_mio.read_text("direct_url.json")
-    assert direct_url_text is not None
+    assert direct_url_text is not None, "MIO must be installed from its immutable VCS source pin"
     direct_url = json.loads(direct_url_text)
-    assert direct_url["vcs_info"]["commit_id"] == "9fedb01bc9936531407a5181aa8fa5553ec19d55"
+    vcs_info = direct_url.get("vcs_info")
+    installed_mio_commit = vcs_info.get("commit_id") if isinstance(vcs_info, dict) else None
+    assert installed_mio_commit == declared_mio_commit, (
+        "installed MIO source commit must match requirements/runtime.txt"
+    )
     assert sys.modules.get("azazel_mio.fast_assessment") is mio_fast_assessment
     assert mio_fast_assessment.assess_fast.__module__ == "azazel_mio.fast_assessment"
     assert Path(mio_fast_assessment.__file__).resolve() == Path(
