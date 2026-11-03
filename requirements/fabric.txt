@@ -13,6 +13,8 @@
 # The non-additive rc4 EffectObservation authority restriction is preserved:
 # four authority classes accepted by rc3 remain refused. Consumers that emitted
 # them must still adapt; Edge's local reader already fails closed on them.
+# rc4 was the first non-additive step, so later candidate moves cannot be
+# assumed free. rc5 is explicitly additive over rc4; keep checking each move.
 #
 # This pin skips v0.9.0rc3, which widened the typed-reference grammar so a
 # reference body may carry further colons. Edge mints `edge:nft:1` and was

@@ -4,15 +4,6 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- Update the optional Azazel-Fabric integration pin from `v0.9.0rc4` to
-  `v0.9.0rc5` (source commit
-  `450d9502884ba533653210056a6fb85012b96b84`). Fabric documents rc5 as
-  additive over rc4; Edge retains its rc4-era `EffectObservation` authority
-  checks. This optional prerelease dependency change does not change the Edge
-  product version or create a release.
-
 ### Added
 
 - AZ-06 activation/termination decision builders (Azazel-Deception#55;
@@ -61,6 +52,15 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     (`aggregator.NODE_ROLES`) is not decided yet and is empty, so a given
     role is refused with `role_unknown`; registrations without a role are
     unchanged. Nothing reads the role to decide, authorize or enforce.
+
+### Changed
+
+- Update the optional Azazel-Fabric integration pin from `v0.9.0rc4` to
+  `v0.9.0rc5` (source commit
+  `450d9502884ba533653210056a6fb85012b96b84`). Fabric documents rc5 as
+  additive over rc4; Edge retains its rc4-era `EffectObservation` authority
+  checks. This optional prerelease dependency change does not change the Edge
+  product version or create a release.
 
 ### Fixed
 
