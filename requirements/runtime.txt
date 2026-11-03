@@ -5,6 +5,9 @@ textual>=0.70,<1
 Pillow>=10,<12
 requests>=2.32,<3
 PyYAML>=6,<7
+# Shared M.I.O. advisory contracts: immutable merged-source pin, not a production release.
+# Includes merged MIO #18 and #21 bounded validation diagnostics.
+azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@9fedb01bc9936531407a5181aa8fa5553ec19d55
 # Azazel-Fabric shared contracts are an OPTIONAL extra: see requirements/fabric.txt.
 # (Every Fabric integration point is a guarded no-op without the package, so the
 # deterministic path runs unchanged when it is absent. An earlier note here said

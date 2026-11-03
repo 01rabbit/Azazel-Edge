@@ -184,6 +184,9 @@ class DashboardDataContractTests(unittest.TestCase):
             },
             "evidence": ["net_health=SUSPECTED signals=dns_mismatch"],
             "llm": {"status": "skipped_non_ambiguous"},
+            "mio_auxiliary": {"status": "complete", "authority": "read_only_advisory",
+                              "knowledge": {"status": "not_provided", "refs": []},
+                              "is_current": True, "advisory": {"hypotheses": []}},
         }
         advisory = {
             "ts": now - 3,
@@ -361,6 +364,8 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("soc_focus", payload)
         self.assertIn("noc_focus", payload)
         self.assertIn("decision_path", payload)
+        self.assertEqual(payload["mio_auxiliary"]["authority"], "read_only_advisory")
+        self.assertEqual(payload["mio_auxiliary"]["knowledge"]["status"], "not_provided")
         self.assertEqual(payload["soc_focus"]["attack_type"], "dns anomaly")
         self.assertEqual(payload["noc_focus"]["path_health"]["uplink"], "eth1")
         self.assertEqual(payload["noc_focus"]["capacity"]["state"], "elevated")

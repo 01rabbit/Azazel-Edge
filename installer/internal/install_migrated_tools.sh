@@ -192,6 +192,8 @@ install -m 0644 "$REPO_ROOT/py/azazel_edge_control/wifi_connect.py" /opt/azazel-
 install -m 0755 "$REPO_ROOT/py/azazel_edge_control/scripts/"*.sh /opt/azazel-edge/py/azazel_edge_control/scripts/
 install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/__init__.py" /opt/azazel-edge/py/azazel_edge_ai/__init__.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/agent.py" /opt/azazel-edge/py/azazel_edge_ai/agent.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/mio_live_auxiliary.py" /opt/azazel-edge/py/azazel_edge_ai/mio_live_auxiliary.py
+install -m 0644 "$REPO_ROOT/py/azazel_edge_ai/mio_model_lane.py" /opt/azazel-edge/py/azazel_edge_ai/mio_model_lane.py
 install -m 0644 "$REPO_ROOT/py/azazel_edge_runbook_broker.py" /opt/azazel-edge/py/azazel_edge_runbook_broker.py
 
 echo "[6/16] Install WebUI and EPD modules"

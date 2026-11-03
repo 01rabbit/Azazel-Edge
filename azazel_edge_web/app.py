@@ -2693,6 +2693,7 @@ def _dashboard_summary_payload(state: Dict[str, Any], metrics: Dict[str, Any], a
         },
         "service_health_summary": service_summary,
         "current_recommendation": str(state.get("recommendation") or advisory.get("recommendation") or ""),
+        "mio_auxiliary": state.get("mio_auxiliary") if isinstance(state.get("mio_auxiliary"), dict) else {},
         "normal_assurance": _normal_assurance_payload(
             state=state,
             metrics=metrics,

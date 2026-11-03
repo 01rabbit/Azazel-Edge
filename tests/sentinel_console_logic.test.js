@@ -292,6 +292,114 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
 // --- 1. Empty payload: nothing throws, nothing is green, unknowns say so ----
 (function () {
     const m = mount();
+    ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction',
+     'mioLiveAuxAdvice','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff',
+     'mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics'].forEach(function (id) {
+        const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el);
+    });
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(),
+        knowledge: {status: 'not_provided'}, trace_id: 'edge-trace-5',
+        edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-5'},
+        source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', generation: '5',
+            event_key: 'event-5', edge_trace_id: 'edge-trace-5', edge_action: 'notify',
+            edge_result: 'planned_not_applied', edge_mode: 'dry_run', mio_trace_id: 'mio-trace-5', frame_id: 'frame-5'},
+        generation: '5', model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
+            hypotheses: [{statement: 'A hostile-activity explanation remains possible, but this frame does not establish it.', verification: 'model_proposed_unverified', source: 'mio_validated_alternative', frame_refs: ['suricata_sid:42']}],
+            next_checks: ['check the observed event'], model: 'qwen:2b', duration_ms: 900, prompt_tokens: 20, completion_tokens: 12},
+        advisory: {trace_id: 'mio-trace-5', frame_id: 'frame-5', recommendation: '<img src=x onerror=alert(1)>',
+            hypotheses: [{statement: '<script>hypothesis</script>', verification: 'unverified'}],
+            next_checks: ['check one'], handoff: {summary: '<b>handoff</b>'}}});
+    eq(m.$('mioLiveAuxStatus').textContent, 'complete', 'MIO status rendered');
+    eq(m.$('mioLiveAuxKnowledge').textContent, 'not_provided', 'Knowledge provenance rendered');
+    eq(m.$('mioLiveAuxFreshness').textContent, 'Current generation', 'fresh completion is current');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-5', 'Edge action separated');
+    eq(m.$('mioLiveAuxAdvice').textContent, '<img src=x onerror=alert(1)>', 'MIO advice rendered as text');
+    eq(m.$('mioLiveAuxHypotheses').textContent, '<script>hypothesis</script>', 'hypothesis rendered as text');
+    eq(m.$('mioLiveAuxChecks').textContent, 'check one', 'next checks rendered');
+    eq(m.$('mioLiveAuxHandoff').textContent, '<b>handoff</b>', 'handoff rendered as text');
+    eq(m.$('mioModelFreshness').textContent, 'Current fast generation', 'model result correlated to fast generation');
+    eq(m.$('mioModelSummary').textContent, '<b>measured</b>', 'model text rendered as text');
+    eq(m.$('mioModelState').textContent, 'complete', 'validated MIO state rendered');
+    eq(m.$('mioModelHypotheses').textContent,
+        'A hostile-activity explanation remains possible, but this frame does not establish it. [M.I.O.-selected; fixed wording; unverified; frame refs are context only]',
+        'fixed MIO alternative rendered with context-only frame provenance');
+    eq(m.$('mioModelChecks').textContent, 'check the observed event', 'validated model checks rendered as text');
+    ok(m.$('mioModelMetrics').textContent.indexOf('qwen:2b') >= 0, 'current model metrics rendered');
+    const mismatched = {status: 'complete', generation: '5', trace_id: 'edge-trace-5', is_current: true,
+        completed_at: new Date(Date.now() - 1000).toISOString(), max_age_seconds: 10,
+        source_context: {event_key: 'event-5'}, edge_event: {action: 'notify', mode: 'dry_run', result: 'applied', trace_id: 'edge-trace-5'},
+        handoff_binding: {status: 'matched', generation: '5', event_key: 'event-5',
+            edge_trace_id: 'edge-trace-5', edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
+        advisory: {recommendation: 'wrong event recommendation', summary: 'wrong event summary',
+            hypotheses: [{statement: 'wrong event hypothesis'}], next_checks: ['wrong event check'],
+            handoff: {summary: 'wrong event handoff'}}};
+    m.S.renderMioLiveAuxiliary(mismatched);
+    eq(m.$('mioLiveAuxStatus').textContent, 'complete (details suppressed)', 'mismatched result status marked suppressed');
+    eq(m.$('mioLiveAuxAdvice').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'mismatched recommendation suppressed');
+    eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'mismatched hypotheses suppressed');
+    eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'mismatched checks suppressed');
+    eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'mismatched handoff suppressed');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / applied / edge-trace-5', 'Edge action remains visible on MIO mismatch');
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '5',
+        trace_id: 'edge-trace-5', edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-5'},
+        source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', generation: '5',
+            event_key: 'event-5', edge_trace_id: 'edge-trace-5', edge_action: 'notify',
+            edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
+        model_analysis: {status: 'partial', is_current: true, fast_generation: '5',
+            mio_state: 'error_fallback', request_count: 3, metered_request_count: 3,
+            truncated_count: 1, usage_status: 'partial', prompt_tokens: 4435, completion_tokens: 604}});
+    eq(m.$('mioModelFreshness').textContent, 'Current fast generation; partial M.I.O. result', 'partial result remains current to matching fast generation');
+    eq(m.$('mioModelSummary').textContent, 'Partial M.I.O. analysis; the shared reasoning cycle did not complete.', 'partial state is explained');
+    ok(m.$('mioModelMetrics').textContent.indexOf('truncated 1') >= 0, 'truncated response count is rendered');
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: false, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 60000).toISOString(), generation: '5',
+        edge_event: {action: 'isolate', mode: 'enforced', result: 'applied', trace_id: 'edge-trace-old'},
+        advisory: {recommendation: 'stale advice', hypotheses: [{statement: 'stale hypothesis'}],
+            next_checks: ['stale check'], handoff: {summary: 'stale handoff'}},
+        model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: 'old'} });
+    eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result', 'stale fast result cannot label model current');
+    eq(m.$('mioLiveAuxAdvice').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'stale advice suppressed');
+    eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'stale hypotheses suppressed');
+    eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'stale checks suppressed');
+    eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'stale handoff suppressed');
+    eq(m.$('mioLiveEdgeAction').textContent, 'isolate / applied / edge-trace-old', 'Edge action remains visible on stale MIO result');
+    function currentPayload(modelAnalysis) {
+        return {status: 'complete', is_current: true, max_age_seconds: 10,
+            completed_at: new Date(Date.now() - 1000).toISOString(), generation: '7', trace_id: 'edge-trace-7',
+            edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-7'},
+            source_context: {event_key: 'event-7'},
+            handoff_binding: {status: 'matched', generation: '7', event_key: 'event-7', edge_trace_id: 'edge-trace-7',
+                edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
+            model_analysis: modelAnalysis};
+    }
+    function assertModelSuppressed(payload, label) {
+        m.S.renderMioLiveAuxiliary(payload);
+        eq(m.$('mioModelStatus').textContent, 'suppressed', label + ': model status suppressed');
+        eq(m.$('mioModelSummary').textContent, 'Suppressed', label + ': model summary suppressed');
+        eq(m.$('mioModelState').textContent, 'Suppressed', label + ': model state suppressed');
+        eq(m.$('mioModelHypotheses').textContent, 'Suppressed', label + ': model hypotheses suppressed');
+        eq(m.$('mioModelChecks').textContent, 'Suppressed', label + ': model checks suppressed');
+        eq(m.$('mioModelMetrics').textContent, 'Suppressed', label + ': model metrics suppressed');
+        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-7', label + ': Edge action stays visible');
+    }
+    assertModelSuppressed(currentPayload({status: 'complete', is_current: true, fast_generation: '6', summary: 'wrong generation',
+        mio_state: 'wrong generation state', hypotheses: [{statement: 'wrong generation hypothesis'}],
+        next_checks: ['wrong generation check'], model: 'wrong-generation-model', duration_ms: 900}), 'fast-generation mismatch');
+    eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result', 'mismatched fast generation marked stale');
+    assertModelSuppressed(currentPayload({status: 'complete', is_current: false, fast_generation: '7', summary: 'not current',
+        mio_state: 'not current state', hypotheses: [{statement: 'not current hypothesis'}],
+        next_checks: ['not current check'], model: 'not-current-model', duration_ms: 900}), 'model is_current false');
+    eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result', 'model is_current false marked stale');
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6',
+        model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: 'mismatch'} });
+    eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result', 'different fast generation cannot label model current');
+    ok(m.$('mioLiveAuxAdvice').children.length === 0, 'untrusted MIO prose is not parsed as markup');
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 1,
+        completed_at: new Date(Date.now() - 5000).toISOString()});
+    eq(m.$('mioLiveAuxFreshness').textContent, 'Stale or not current', 'old completion cannot display as current');
     noThrow(function () { renderAll(m.S, {}); }, 'renderers on {}');
     noThrow(function () { renderAll(m.S, undefined); }, 'renderers on undefined');
     const green = greenNodes(m.doc);

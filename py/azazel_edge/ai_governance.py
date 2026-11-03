@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any, Callable, Dict, Tuple
 
 from azazel_edge.audit import P0AuditLogger
@@ -20,6 +21,14 @@ SANITIZED_KEYS = {
     'candidate_scope',
 }
 FORBIDDEN_KEYS = {'raw', 'raw_log', 'full_log', 'message', 'line', 'payload', 'event'}
+# Fixed vocabulary of Knowledge dependency statuses. Kept as a literal (no import of
+# azazel_edge_ai) to avoid production coupling; tests/test_knowledge_status_vocabulary_parity.py
+# asserts it equals mio_model_lane.KNOWLEDGE_STATUSES.
+KNOWLEDGE_STATUS_VALUES = frozenset({
+    'disabled', 'missing_token', 'invalid_configuration', 'unavailable',
+    'timeout', 'oversized', 'redirect_rejected', 'auth_rejected',
+    'scope_rejected', 'malformed', 'received', 'superseded', 'projected', 'rejected',
+})
 
 
 class AIGovernanceError(ValueError):
@@ -43,6 +52,9 @@ class AIGovernance:
         if intent == 'advice':
             if source == 'suricata_eve' and risk_band in {'ambiguous', 'uncertain'}:
                 return True, 'ambiguous_suricata'
+            if (source == 'azazel_core' and risk_band in {'ambiguous', 'uncertain'}
+                    and context.get('candidate_scope') == 'mio_read_only_advisory'):
+                return True, 'ambiguous_azazel_core_mio_advisory'
             return False, 'advice_requires_ambiguous_suricata'
         if intent == 'candidate' and source == 'suricata_eve' and risk_band in {'ambiguous', 'uncertain'}:
             return True, 'ambiguous_suricata_candidate'
@@ -105,6 +117,29 @@ class AIGovernance:
                 if key in metadata:
                     value = metadata.get(key)
                     payload[key] = str(value)[:160] if value is not None else ''
+            numeric_limits = {
+                'request_count': 4, 'metered_request_count': 4,
+                'unknown_usage_request_count': 4, 'truncated_count': 4,
+                'prompt_tokens': 400_000, 'completion_tokens': 400_000,
+            }
+            for key, maximum in numeric_limits.items():
+                value = metadata.get(key)
+                if key == 'truncated_count':
+                    # Missing stays omitted; a present value must be an exact int 0..4, else fail closed to 4.
+                    if key in metadata:
+                        payload[key] = value if type(value) is int and 0 <= value <= 4 else 4
+                elif type(value) is int:
+                    payload[key] = max(0, min(value, maximum))
+            usage_status = metadata.get('usage_status')
+            if type(usage_status) is str and usage_status in {'unknown', 'complete', 'partial'}:
+                payload['usage_status'] = usage_status
+            for key in ('mio_state', 'outcome'):
+                value = metadata.get(key)
+                if type(value) is str and re.fullmatch(r'[A-Za-z0-9_-]{1,48}', value):
+                    payload[key] = value
+            knowledge_status = metadata.get('knowledge_status')
+            if type(knowledge_status) is str and knowledge_status in KNOWLEDGE_STATUS_VALUES:
+                payload['knowledge_status'] = knowledge_status
         self.audit.log(
             'ai_assist',
             trace_id=str(trace_id or ''),

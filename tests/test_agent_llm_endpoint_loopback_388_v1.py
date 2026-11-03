@@ -22,6 +22,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -447,3 +448,169 @@ def test_the_default_endpoint_is_loopback():
     assert agent._check_llm_endpoint("http://127.0.0.1:11434")[2] == ("127.0.0.1",)
     # The old unchecked call path is gone.
     assert "urllib.request" not in source
+
+
+def test_absolute_deadline_bounds_a_stalled_request_body_send(monkeypatch):
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    accepted = threading.Event()
+
+    def hold_without_reading():
+        try:
+            conn, _ = listener.accept()
+            accepted.set()
+            time.sleep(1.0)
+            conn.close()
+        finally:
+            listener.close()
+
+    threading.Thread(target=hold_without_reading, daemon=True).start()
+    port = listener.getsockname()[1]
+    target = ("http", "127.0.0.1", ("127.0.0.1",), port, "")
+    def response_must_not_be_requested(self):
+        raise AssertionError("request body send did not stall")
+    monkeypatch.setattr(agent._PinnedHTTPConnection, "getresponse", response_must_not_be_requested)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        agent._post_to_llm_endpoint(target, "/api/chat", b"x" * (16 * 1024 * 1024),
+                                    timeout_sec=1.0, deadline_monotonic=started + 0.1)
+    assert accepted.wait(0.2)
+    assert time.monotonic() - started < 0.35
+
+
+def test_absolute_deadline_bounds_a_stalled_response():
+    class SlowHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            time.sleep(0.4)
+            try:
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+            except OSError:
+                pass
+
+        def log_message(self, *_args):
+            return
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), SlowHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    target = ("http", "127.0.0.1", ("127.0.0.1",), server.server_address[1], "")
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):
+            agent._post_to_llm_endpoint(target, "/api/chat", b"{}", timeout_sec=1.0,
+                                        deadline_monotonic=started + 0.1)
+        assert time.monotonic() - started < 0.35
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_absolute_deadline_bounds_a_stalled_response_body():
+    class SlowBodyHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.flush()
+            time.sleep(0.4)
+            try:
+                self.wfile.write(b"{}")
+            except OSError:
+                pass
+
+        def log_message(self, *_args):
+            return
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), SlowBodyHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    target = ("http", "127.0.0.1", ("127.0.0.1",), server.server_address[1], "")
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):
+            agent._post_to_llm_endpoint(target, "/api/chat", b"{}", timeout_sec=1.0,
+                                        deadline_monotonic=started + 0.1)
+        assert time.monotonic() - started < 0.35
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_absolute_deadline_bounds_slow_drip_status_and_headers():
+    class SlowHeadersHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            header_bytes = b"HTTP/1.1 200 OK\r\nX-Slow: " + (b"x" * 64) + b"\r\nContent-Length: 2\r\n\r\n{}"
+            try:
+                for byte in header_bytes:
+                    self.wfile.write(bytes((byte,)))
+                    self.wfile.flush()
+                    time.sleep(0.02)
+            except OSError:
+                pass
+
+        def log_message(self, *_args):
+            return
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), SlowHeadersHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    target = ("http", "127.0.0.1", ("127.0.0.1",), server.server_address[1], "")
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):
+            agent._post_to_llm_endpoint(target, "/api/chat", b"{}", timeout_sec=1.0,
+                                        deadline_monotonic=started + 0.12)
+        assert time.monotonic() - started < 0.35
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_mio_model_lane_requires_numeric_loopback_without_hostname_resolution(monkeypatch):
+    resolved = []
+    monkeypatch.setattr(agent, "_resolve_llm_host", lambda host, port: resolved.append((host, port)) or ["127.0.0.1"])
+    monkeypatch.setattr(agent, "LLM_ENDPOINT", "http://localhost:11434")
+    with pytest.raises(agent.LlmEndpointRejected, match="mio_model_endpoint_requires_ip_literal"):
+        agent._mio_model_endpoint_target()
+    assert resolved == []
+
+    monkeypatch.setattr(agent, "LLM_ENDPOINT", "http://127.0.0.1:11434")
+    target = agent._mio_model_endpoint_target()
+    assert target[2] == ("127.0.0.1",)
+    assert resolved == []
+
+
+def test_absolute_deadline_interrupts_slow_drip_tls_handshake():
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    accepted = threading.Event()
+
+    def drip_tls_record():
+        try:
+            conn, _ = listener.accept()
+            accepted.set()
+            # Partial handshake record: each byte arrives within the socket's
+            # per-operation timeout, while the whole TLS record exceeds deadline.
+            conn.sendall(bytes((0x16, 0x03, 0x03, 0x00, 0x64)))
+            for _ in range(100):
+                conn.sendall(bytes((0x00,)))
+                time.sleep(0.03)
+            conn.close()
+        except OSError:
+            pass
+        finally:
+            listener.close()
+
+    threading.Thread(target=drip_tls_record, daemon=True).start()
+    target = ("https", "127.0.0.1", ("127.0.0.1",), listener.getsockname()[1], "")
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        agent._post_to_llm_endpoint(target, "/api/chat", b"{}", timeout_sec=1.0,
+                                    deadline_monotonic=started + 0.12)
+    assert accepted.wait(0.2)
+    assert time.monotonic() - started < 0.4
