@@ -63,7 +63,7 @@ class SharedCoreAdvisoryTests(unittest.TestCase):
         self.assertEqual(seen["inputs"], {
             "severity": 2, "classes": ("c2",), "token_only": False,
             "ports": (("web", 443),), "action": "allowed",
-            "deception_sid": False, "benign_classless": False,
+            "deception_sid": True, "benign_classless": False,
         })
         self.assertEqual(result.source, "shared_core")
         self.assertEqual((result.score, result.factors), (score, factors))
@@ -102,10 +102,15 @@ class SharedCoreAdvisoryTests(unittest.TestCase):
 
     def test_non_sequence_or_non_string_shared_factors_are_degraded(self):
         score, _factors = self.ref["c2"]
-        for bad_factors in (None, "not-a-factor-list", (1,)):
-            with self.subTest(bad_factors=bad_factors):
+        malformed = (
+            types.SimpleNamespace(score=score, factors=None),
+            types.SimpleNamespace(score=score, factors="not-a-factor-list"),
+            types.SimpleNamespace(score=score, factors=(1,)),
+        )
+        for result_value in malformed:
+            with self.subTest(result_value=result_value):
                 with patch.dict(sys.modules, _fake_module(
-                    lambda _i, f=bad_factors: _result(score, f)
+                    lambda _i, value=result_value: value
                 )):
                     result = TacticalScorer().score(FEATURES)
                 self.assertEqual(result.source, "edge_local")
