@@ -36,7 +36,7 @@ not read by any running service. Wiring it into a service is open work
 | Local model runtime | Ollama, outside this repository | `agent.py` (`AZAZEL_OLLAMA_ENDPOINT`, default `http://127.0.0.1:11434`), `py/azazel_edge/mio/model_adapter.py` | Produces untrusted text that the callers validate. |
 | Web UI | `azazel-edge-web.service`, `azazel-web` (#471 stage 1) | `azazel_edge_web/app.py` | Dashboards, Booth Focus, touch console, Mattermost relay, runbook preview and execution, fixed control actions through the control daemon. |
 | Control daemon | `azazel-edge-control-daemon.service`, root | `py/azazel_edge_control/daemon.py` | The only writer of the shared `ui_snapshot.json`: it merges the agent's `ai_snapshot.json` fields listed in `AGENT_SNAPSHOT_KEYS` (`user_state`, `recommendation`, `reasons`, `evidence`, `llm`, `ops_coach`, `decision_pipeline`, `second_pass`, `attack` and others, each type-checked) and ages out a stale advisory. The Web UI and the e-paper refresh read that snapshot. It also runs Wi-Fi, legacy mode files, SoT edits, uplink disconnect, shutdown and reboot for the peers its fixed table allows. None of this is decision input: the core never reads the snapshot. |
-| Optional peers | Other products | `py/azazel_edge/engagement_advisory_client.py`, `deception_effectiveness_client.py`, `deception_shadow*.py`, `deception_transition.py`, `engagement/candidate.py` | Knowledge (AZ-04) and Deception (AZ-06) through Fabric contracts. Advisory-only on the way in, optional for Edge operation (section 4.2). |
+| Optional peers | Other products | `py/azazel_edge/engagement_advisory_client.py`, `deception_effectiveness_client.py`, `deception_shadow*.py`, `deception_transition.py`, `deception_activation.py`, `engagement/candidate.py` | Knowledge (AZ-04) and Deception (AZ-06) through Fabric contracts. Advisory-only on the way in, optional for Edge operation (section 4.2). |
 
 "The arbiter" in integration contracts means the Rust core, and
 `ActionArbiter` means the Python class
@@ -145,7 +145,7 @@ not code written to evade them (the same limit as the enforcement inventory).
 | Read evidence | through the broker only | serves local reads | advisory reads (clients verify `authority=advisory_only`, `executable=false`, fail closed) | state reads | describes |
 | Select a network action | no | **Rust core** | no | no | no |
 | Approve engagement | no | Edge records (`engagement/candidate.py` can only downgrade to the arbiter's action; library, no live caller) | no | no | no |
-| Activate or transition AZ-06 | no | produces the signed transition decision (`deception_transition.py`; library, no live caller) | no | executes approved decisions only (in AZ-06) | describes the decision |
+| Activate or transition AZ-06 | no | produces the signed transition decision (`deception_transition.py`) and records an already-made activation or termination (`deception_activation.py`, [details](deception-activation-decision.md)); libraries, no live caller | no | executes approved decisions only (in AZ-06) | describes the decision |
 
 Availability of Knowledge and AZ-06 is fail-open for Edge: a timeout, an
 outage or a rejected response is "no advisory" and never blocks or changes a

@@ -6,6 +6,13 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- AZ-06 activation/termination decision builders (proposal, Deception#55 /
+  Azazel-Deception#59; library only, no live caller, no API or runtime
+  change): `azazel_edge.deception_activation` records an activation or
+  termination Edge has already authorized as a canonical, optionally signed
+  Fabric decision. Optional `objective_refs` records the M.I.O. objective Edge
+  considered; it never decides. See
+  [deception-activation-decision](architecture/deception-activation-decision.md).
 - SENTINEL console quality (Edge#348, display only; no API, decision or
   enforcement change):
   - Operator-facing sentences of the console (empty states, the
