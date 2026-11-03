@@ -245,29 +245,37 @@ class TacticalScorer:
         source = "edge_local"
         try:
             from azazel_mio.fast_assessment import FastAssessmentInput, PortSignal, assess_fast
-
-            comparison = assess_fast(FastAssessmentInput(
-                severity=severity, classes=tuple(sorted(matched)), token_only=token_only,
-                ports=tuple(PortSignal(kind, port) for kind, port in port_signals),
-                action=action, deception_sid=sid in DECEPTION_SIDS,
-                benign_classless=threat_weight == 0 and category in _BENIGN_CLASSTYPES,
-            ))
-            shared_score = comparison.score
-            shared_factors = list(comparison.factors)
-            matches = type(shared_score) is int and shared_score == score and shared_factors == factors
-            shadow.update(score=shared_score, factors=shared_factors, matches=matches)
-            if matches:
-                score, factors = shared_score, shared_factors
-                source = "shared_core"
-                shadow.update(status="complete")
-            else:
-                # Mismatch: keep Edge's local score/factors and mark the comparison degraded.
-                shadow.update(status="degraded", reason="parity_mismatch")
         except ImportError:
             shadow.update(status="unavailable", reason="package_unavailable")
-        except Exception:
-            # Optional advisory availability must not alter the authoritative result.
-            shadow.update(status="degraded", reason="assessment_failed")
+        else:
+            try:
+                comparison = assess_fast(FastAssessmentInput(
+                    severity=severity, classes=tuple(sorted(matched)), token_only=token_only,
+                    ports=tuple(PortSignal(kind, port) for kind, port in port_signals),
+                    action=action, deception_sid=sid in DECEPTION_SIDS,
+                    benign_classless=threat_weight == 0 and category in _BENIGN_CLASSTYPES,
+                ))
+                shared_score = comparison.score
+                shared_factors_value = comparison.factors
+                if (type(shared_score) is not int or not 0 <= shared_score <= 100
+                        or type(shared_factors_value) not in (tuple, list)
+                        or any(type(item) is not str for item in shared_factors_value)):
+                    raise ValueError("malformed shared assessment")
+                shared_factors = list(shared_factors_value)
+                matches = shared_score == score and shared_factors == factors
+                # Keep separate lists so a caller mutating the Edge result cannot
+                # rewrite the comparison evidence (or vice versa).
+                shadow.update(score=shared_score, factors=list(shared_factors), matches=matches)
+                if matches:
+                    score, factors = shared_score, list(shared_factors)
+                    source = "shared_core"
+                # `complete` means the comparison ran and returned a valid result;
+                # `matches` separately records exact parity. A valid mismatch is
+                # useful drift evidence and must remain visible to operators.
+                shadow.update(status="complete")
+            except Exception:
+                # Optional advisory availability must not alter the authoritative result.
+                shadow.update(status="degraded", reason="assessment_failed")
         return ScoreBreakdown(score=score, factors=factors, shadow=shadow, source=source)
 
     def score_with_features(self, features: Dict[str, Any]) -> Tuple[int, List[str]]:

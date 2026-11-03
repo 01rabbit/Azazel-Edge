@@ -60,15 +60,22 @@ class SharedCoreAdvisoryTests(unittest.TestCase):
         with patch.dict(sys.modules, _fake_module(assess)):
             result = TacticalScorer().score(FEATURES)
 
-        self.assertIn("inputs", seen)
+        self.assertEqual(seen["inputs"], {
+            "severity": 2, "classes": ("c2",), "token_only": False,
+            "ports": (("web", 443),), "action": "allowed",
+            "deception_sid": False, "benign_classless": False,
+        })
         self.assertEqual(result.source, "shared_core")
         self.assertEqual((result.score, result.factors), (score, factors))
         self.assertIsInstance(result.factors, list)
+        self.assertIsNot(result.factors, result.shadow["factors"])
         self.assertEqual(result.shadow["status"], "complete")
         self.assertIs(result.shadow["matches"], True)
         self.assertEqual(result.shadow["authority"], "comparison_only")
+        result.factors.append("caller_mutation")
+        self.assertEqual(result.shadow["factors"], factors)
 
-    def test_mismatch_falls_back_to_local_and_degrades(self):
+    def test_valid_mismatch_falls_back_to_local_and_remains_visible(self):
         score, factors = self.ref["c2"]
         for bad in (_result(score + 1, factors), _result(score, factors[:-1] + ["other"])):
             with self.subTest(bad=bad):
@@ -76,17 +83,46 @@ class SharedCoreAdvisoryTests(unittest.TestCase):
                     result = TacticalScorer().score(FEATURES)
                 self.assertEqual(result.source, "edge_local")
                 self.assertEqual((result.score, result.factors), (score, factors))
-                self.assertEqual(result.shadow["status"], "degraded")
-                self.assertEqual(result.shadow["reason"], "parity_mismatch")
+                self.assertEqual(result.shadow["status"], "complete")
                 self.assertIs(result.shadow["matches"], False)
+                self.assertEqual(result.shadow["score"], bad.score)
+                self.assertEqual(result.shadow["factors"], list(bad.factors))
+                self.assertIsNot(result.factors, result.shadow["factors"])
 
-    def test_non_int_shared_score_is_a_mismatch(self):
+    def test_non_int_shared_score_is_degraded_as_malformed(self):
         score, factors = self.ref["c2"]
-        with patch.dict(sys.modules, _fake_module(lambda _i: _result(float(score), factors))):
+        for bad_score in (float(score), True):
+            with self.subTest(bad_score=bad_score):
+                with patch.dict(sys.modules, _fake_module(lambda _i, s=bad_score: _result(s, factors))):
+                    result = TacticalScorer().score(FEATURES)
+                self.assertEqual(result.source, "edge_local")
+                self.assertEqual((result.score, result.factors), (score, factors))
+                self.assertEqual(result.shadow["status"], "degraded")
+                self.assertEqual(result.shadow["reason"], "assessment_failed")
+
+    def test_non_sequence_or_non_string_shared_factors_are_degraded(self):
+        score, _factors = self.ref["c2"]
+        for bad_factors in (None, "not-a-factor-list", (1,)):
+            with self.subTest(bad_factors=bad_factors):
+                with patch.dict(sys.modules, _fake_module(
+                    lambda _i, f=bad_factors: _result(score, f)
+                )):
+                    result = TacticalScorer().score(FEATURES)
+                self.assertEqual(result.source, "edge_local")
+                self.assertEqual(result.shadow["status"], "degraded")
+                self.assertEqual(result.shadow["reason"], "assessment_failed")
+
+    def test_import_error_from_running_kernel_is_degraded_not_package_absent(self):
+        score, factors = self.ref["c2"]
+
+        def kernel_import_error(_inputs):
+            raise ImportError("internal kernel dependency failure")
+
+        with patch.dict(sys.modules, _fake_module(kernel_import_error)):
             result = TacticalScorer().score(FEATURES)
-        self.assertEqual(result.source, "edge_local")
-        self.assertIs(result.shadow["matches"], False)
+        self.assertEqual((result.score, result.factors), (score, factors))
         self.assertEqual(result.shadow["status"], "degraded")
+        self.assertEqual(result.shadow["reason"], "assessment_failed")
 
     def test_package_error_falls_back_to_local(self):
         score, factors = self.ref["c2"]

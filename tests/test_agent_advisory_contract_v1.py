@@ -118,6 +118,8 @@ class AgentAdvisoryContractV1Tests(unittest.TestCase):
         shadows = (
             ("complete", {"status": "complete", "score": 72, "matches": True,
                            "factors": ["severity=3", "threat_class=scan(36)"]}, 72, True),
+            ("complete_mismatch", {"status": "complete", "score": 73, "matches": False,
+                                     "factors": ["severity=3", "threat_class=scan(37)"]}, 73, False),
             ("unavailable", {"status": "unavailable", "reason": "package_unavailable",
                              "score": 72, "factors": ["must not leak"]}, None, None),
             ("degraded", {"status": "degraded", "reason": "assessment_failed",
