@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import threading
+import textwrap
 import time
 
 import pytest
@@ -214,7 +215,7 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
     log = tmp_path / 'knowledge.log'
     with log.open('wb') as output:
         process = subprocess.Popen([sys.executable, '-m', 'uvicorn', 'azazel_knowledge.api.app:app',
-            '--host', '127.0.0.1', '--port', str(port), '--no-access-log'],
+                '--host', '127.0.0.1', '--port', str(port), '--no-access-log'],
             cwd=source, env=env, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
         try:
             until = time.monotonic() + 8
@@ -297,6 +298,173 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
             assert '203.0.113.7' not in json.dumps(result) + caplog.text + log.read_text()
             assert 'urlhaus' not in json.dumps(result)
             assert token not in json.dumps(result) + caplog.text + log.read_text()
+
+            # Exercise the production handler and its module-global lanes in
+            # fresh interpreters so those worker generations cannot leak into
+            # other tests. All files remain under this test's temporary root.
+            handler_script = textwrap.dedent('''\
+                import json, os, socket, threading, time
+                from pathlib import Path
+                connections = []
+                original_socket = socket.socket
+                knowledge_port = int(os.environ['EDGE_TEST_KNOWLEDGE_PORT'])
+                class TrackedSocket(original_socket):
+                    def _record_knowledge_attempt(self, address):
+                        if (isinstance(address, tuple) and len(address) > 1 and address[1] == knowledge_port
+                                and not getattr(self, '_knowledge_counted', False)):
+                            self._knowledge_counted = True
+                            connections.append(self)
+                    def connect(self, address):
+                        self._record_knowledge_attempt(address)
+                        return super().connect(address)
+                    def connect_ex(self, address):
+                        self._record_knowledge_attempt(address)
+                        return super().connect_ex(address)
+                socket.socket = TrackedSocket
+                from azazel_edge_ai import agent
+
+                calls = []
+                original_query = agent.LIVE_MIO_KNOWLEDGE_LANE._query
+                def counted_query(*args, **kwargs):
+                    calls.append(1)
+                    return original_query(*args, **kwargs)
+                agent.LIVE_MIO_KNOWLEDGE_LANE._query = counted_query
+                agent._default_route_info = lambda: {
+                    "up_if": "-", "up_ip": "-", "gateway_ip": "-", "uplink_type": "unknown"}
+                stop = threading.Event()
+                agent._MIO_SNAPSHOT_STOP = stop
+                writer = threading.Thread(target=agent._mio_snapshot_worker, daemon=True)
+                writer.start()
+                event = json.loads(os.environ["EDGE_TEST_EVENT_JSON"])
+                agent._handle_event(event)
+                snapshot_path = agent.SNAPSHOT_PATH
+                deadline = time.monotonic() + 6
+                snapshot = {}
+                while time.monotonic() < deadline:
+                    try:
+                        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+                    except (FileNotFoundError, json.JSONDecodeError):
+                        time.sleep(.02)
+                        continue
+                    mio = snapshot.get("mio_auxiliary", {})
+                    knowledge = mio.get("knowledge_analysis", {})
+                    if os.environ["AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED"] == "1":
+                        ready = (mio.get("trace_id") == event["enforcement"]["trace_id"]
+                                 and knowledge.get("status") == "projected"
+                                 and knowledge.get("is_current") is True)
+                    else:
+                        ready = (mio.get("trace_id") == event["enforcement"]["trace_id"]
+                                 and mio.get("status") == "complete"
+                                 and knowledge.get("status") == "disabled")
+                    if ready:
+                        break
+                    time.sleep(.02)
+                else:
+                    raise AssertionError("ordinary handler snapshot did not reach its expected terminal state")
+                advisory = json.loads(agent.ADVISORY_PATH.read_text(encoding="utf-8"))
+                stop.set()
+                writer.join(timeout=2)
+                assert not writer.is_alive(), "snapshot worker did not stop before test process exit"
+                result = {"query_count": len(calls),
+                          "knowledge_connection_count": len(connections),
+                          "risk_score": advisory["risk_score"],
+                          "risk_level": advisory["risk_level"],
+                          "recommendation": advisory["recommendation"],
+                          "mio": mio, "knowledge": knowledge,
+                          "advisory": advisory, "snapshot_path": str(snapshot_path)}
+                print(json.dumps(result, sort_keys=True))
+            ''')
+            base_env = dict(os.environ,
+                AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENDPOINT=f'http://127.0.0.1:{port}',
+                AZAZEL_MIO_KNOWLEDGE_CONTEXT_QUERY_TOKEN=token,
+                AZAZEL_LLM_ENABLED='0', AZAZEL_MIO_MODEL_ENABLED='0',
+                AZAZEL_AI_METRICS_HEARTBEAT_SEC='60', PYTHONDONTWRITEBYTECODE='1',
+                PYTHONPATH=os.pathsep.join(filter(None, [str(Path(__file__).resolve().parents[1] / 'py'),
+                    os.environ.get('PYTHONPATH', '')])),
+                EDGE_TEST_EVENT_JSON=json.dumps(event))
+            base_env['EDGE_TEST_KNOWLEDGE_PORT'] = str(port)
+            def run_normal_handler(enabled, trace_id):
+                run_root = tmp_path / f'edge-{trace_id}'
+                run_root.mkdir()
+                child_env = {key: value for key, value in base_env.items() if not key.startswith('AZAZEL_')}
+                child_env.update(
+                    AZAZEL_ROOT=str(run_root / 'root'), AZAZEL_CONFIG_DIR=str(source / 'config'),
+                    AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED='1' if enabled else '0',
+                    AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENDPOINT=f'http://127.0.0.1:{port}',
+                    AZAZEL_MIO_KNOWLEDGE_CONTEXT_QUERY_TOKEN=token,
+                    AZAZEL_LLM_ENABLED='0', AZAZEL_MIO_MODEL_ENABLED='0',
+                    AZAZEL_AI_ADVISORY=str(run_root / 'advisory.json'),
+                    AZAZEL_AI_EVENT_LOG=str(run_root / 'events.jsonl'),
+                    AZAZEL_AI_DEFERRED_LOG=str(run_root / 'deferred.jsonl'),
+                    AZAZEL_AI_LLM_LOG=str(run_root / 'llm.jsonl'),
+                    AZAZEL_AI_METRICS=str(run_root / 'metrics.json'),
+                    AZAZEL_AI_POLICY=str(run_root / 'policy.json'),
+                    AZAZEL_AI_AUDIT_LOG=str(run_root / 'audit.jsonl'),
+                    AZAZEL_AI_SOCKET=str(run_root / 'ai-bridge.sock'),
+                    AZAZEL_AI_QUERY_SOCKET=str(run_root / 'agent-query.sock'),
+                    AZAZEL_NORMALIZED_EVENT_LOG=str(run_root / 'normalized-events.jsonl'),
+                    AZAZEL_DECISION_LOG_DIR=str(run_root / 'decisions'))
+                run_event = json.loads(json.dumps(event))
+                run_event['enforcement']['trace_id'] = trace_id
+                child_env['EDGE_TEST_EVENT_JSON'] = json.dumps(run_event)
+                completed = subprocess.run([sys.executable, '-c', handler_script], cwd=Path.cwd(),
+                    env=child_env, capture_output=True, text=True, timeout=12)
+                assert completed.returncode == 0, completed.stderr[-2000:]
+                assert token not in completed.stdout + completed.stderr
+                return json.loads(completed.stdout.splitlines()[-1])
+
+            disabled = run_normal_handler(False, 'trace-normal-disabled')
+            assert disabled['mio']['status'] == 'complete'
+            assert disabled['knowledge']['status'] == 'disabled'
+            assert disabled['knowledge'].get('projection') is None
+            assert disabled['query_count'] == 0
+            assert disabled['knowledge_connection_count'] == 0
+            enabled = run_normal_handler(True, 'trace-normal-enabled')
+            knowledge = enabled['knowledge']
+            assert enabled['query_count'] == 1
+            assert enabled['knowledge_connection_count'] == 1
+            assert knowledge['status'] == 'projected'
+            assert knowledge['is_current'] is True
+            assert knowledge['generation'] == enabled['mio']['generation']
+            assert knowledge['frame_generation'] == enabled['mio']['generation']
+            mio_advisory = enabled['mio'].get('advisory')
+            assert isinstance(mio_advisory, dict), 'enabled MIO frame advisory is missing'
+            assert mio_advisory.get('trace_id')
+            assert mio_advisory.get('frame_id')
+            assert knowledge['trace_id'] == mio_advisory['trace_id']
+            assert knowledge['frame_id'] == mio_advisory['frame_id']
+            assert knowledge['source_trace_id'] == 'trace-normal-enabled'
+            assert knowledge['projection']['claim_status'] == 'reported_unverified'
+            assert knowledge['source_freshness_verification'] == 'reported_unverified_at_lookup'
+            assert knowledge['projection']['source_groups'] == ['abusech']
+            score_fields = ('risk_score', 'risk_level', 'recommendation', 'score_factors', 'score_engine',
+                            'state_name', 'user_state', 'suricata_severity', 'suricata_sid',
+                            'attack_type', 'target_port')
+            assert {field: enabled['advisory'].get(field) for field in score_fields} == {
+                field: disabled['advisory'].get(field) for field in score_fields}
+            comparison_fields = ('schema_version', 'authority', 'status', 'edge_score', 'mio_score',
+                                 'matches', 'mio_factors')
+            assert {field: enabled['advisory']['mio_score_comparison'].get(field) for field in comparison_fields} == {
+                field: disabled['advisory']['mio_score_comparison'].get(field) for field in comparison_fields}
+            # Edge's own second-pass SOC display may retain an entity; the shared
+            # MIO envelope and Knowledge projection must not expose those values.
+            assert '203.0.113.7' not in json.dumps(enabled['mio'])
+            assert '198.51.100.8' not in json.dumps(enabled['mio'])
+            assert 'urlhaus' not in json.dumps(enabled['knowledge'])
+            assert token not in json.dumps(enabled['mio']) + json.dumps(enabled['advisory'])
+            run_root = tmp_path / 'edge-trace-normal-enabled'
+            assert Path(enabled['snapshot_path']) == run_root / 'ai_snapshot.json'
+            required_artifacts = ('advisory.json', 'events.jsonl', 'ai_snapshot.json')
+            for filename in required_artifacts:
+                assert (run_root / filename).is_file()
+            optional_artifacts = ('metrics.json', 'policy.json', 'audit.jsonl', 'deferred.jsonl', 'llm.jsonl',
+                                  'core-decision-audit.jsonl', 'decision-explanations.jsonl')
+            for filename in required_artifacts + optional_artifacts:
+                path = run_root / filename
+                if filename in required_artifacts or path.exists():
+                    captured = path.read_text(encoding='utf-8')
+                    assert token not in captured
+                    assert 'urlhaus' not in captured
         finally:
             process.send_signal(2)
             try:
