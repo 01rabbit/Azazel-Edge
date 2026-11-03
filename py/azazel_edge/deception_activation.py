@@ -20,8 +20,10 @@ Doctrine:
   *considered* when it authorized, so the signed ``evidence_refs`` bind them
   (Azazel-Deception#55 / #59 reads exactly these). Passing refs never makes a
   decision acceptable, never widens a budget or window, and is refused unless
-  the caller also supplies Edge's own non-advisory basis (``evidence_refs`` and
-  ``reason_codes``). An objective alone cannot be turned into a decision here.
+  the caller also supplies non-empty ``evidence_refs`` and ``reason_codes``
+  without advisory kinds. That is a light lint against passing advice as the
+  basis, not a guarantee of authorization: whether the basis is real is the
+  calling Edge arbiter's responsibility, not checked here.
 * Building/signing grants no runtime authority and performs no live action.
   There is no production caller yet; wiring is a separate, reviewed stage.
 * Deterministic. ``as_of`` is the only time source (no ``datetime.now`` / RNG),
@@ -72,14 +74,17 @@ _REASON_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 #: identifier; one that spells a verb is refused rather than carried into a
 #: signed record.
 _DIRECTIVE_SEGMENTS = frozenset(
-    {
-        "activate", "activation", "deploy", "execute", "exec", "run", "start",
-        "stop", "terminate", "kill", "delete", "extend", "enable", "disable",
-        "expose", "open", "grant", "allow", "approve", "force", "shutdown",
-        "reset", "now", "immediately",
-    }
+    """
+    activate activation deactivate execute exec run start stop open allow
+    authorize authorized approve approved enable extend terminate withdraw block
+    isolate quarantine redirect expose command shell sudo deploy install delete
+    kill
+    """.split()
 )
-_SEGMENT_SPLIT = re.compile(r"[-._:~@=+]+")
+# Mirror of the cross-repo set (CONVENTIONS C3); segments are split on _ - . ~ :
+#: Kinds that name advice, not Edge's own evidence (CONVENTIONS C4).
+_ADVISORY_KINDS = frozenset({"advisory", "observation_objective", "hypothesis", "frame"})
+_SEGMENT_SPLIT = re.compile(r"[-._~:]+")
 
 
 class ActivationDecisionError(ValueError):
@@ -196,9 +201,11 @@ def _compose_evidence(
 ) -> list[str]:
     own = _string_list(evidence_refs, field="evidence_refs", limit=MAX_EVIDENCE_REFS)
     for ref in own:
-        if ref.startswith("advisory:"):
+        kind = ref.split(":", 1)[0].strip().lower() if ":" in ref else ""
+        if kind in _ADVISORY_KINDS:
             raise ActivationDecisionError(
-                "evidence_refs must be Edge's own basis; advisory refs go through objective_refs only"
+                "evidence_refs must not carry advisory kinds (advisory, observation_objective, "
+                "hypothesis, frame); MIO refs go through objective_refs only"
             )
     objective = validate_objective_refs(objective_refs)
     if objective and (not own or not reason_codes):

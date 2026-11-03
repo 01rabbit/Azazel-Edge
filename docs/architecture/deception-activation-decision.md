@@ -57,13 +57,24 @@ Accepted, and nothing else:
 slash or quote). Each ref is at most 200 characters; at most 16 refs. Refused:
 other kinds (`decision:`, `evidence:`), untyped strings, a malformed digest,
 duplicates, a partial set, over-long values, and ids whose hyphen/dot-separated
-segments spell an instruction (`activate`, `terminate`, `run`, `extend`, ...).
+segments spell an instruction. The set is the cross-repo list (C3: `activate`,
+`terminate`, `run`, `extend`, `redirect`, `isolate`, ...), compared per
+segment split on `_ - . ~ :`, so `frame-dec-1`, `h1` and `redirection` pass.
+The current Deception hypothesis form `advisory:mio-hypothesis-<frame_id>~<hid>`
+(for example `advisory:mio-hypothesis-frame-dec-1~h1`) is accepted; `~` is in
+the Fabric opaque body set.
 
-`objective_refs` additionally requires Edge's own non-advisory basis:
-non-empty `evidence_refs` and `reason_codes` (termination: non-empty
-`evidence_refs`; `reason` is its code). An advisory alone cannot be the input of
-a call. Edge's own `evidence_refs` must not start with `advisory:`; advisory refs
-travel only through `objective_refs`. Refs are sorted and de-duplicated, so
+The digest ref is checked for shape only. The builder never computes a digest;
+the rule is Deception's "Digest normalization rule" in
+`docs/mio-objective-feedback.md` (Azazel-Deception).
+
+`objective_refs` additionally requires non-empty `evidence_refs` and `reason_codes` (termination: non-empty
+`evidence_refs`; `reason` is its code). This is a light lint against passing
+advice as the basis, not a guarantee of authorization: the decision to
+authorize belongs to the calling Edge arbiter, and the builder cannot check
+that the basis is real. Edge's own `evidence_refs` must not carry the kinds
+`advisory`, `observation_objective`, `hypothesis` or `frame` (any letter case);
+MIO refs travel only through `objective_refs`. Refs are sorted and de-duplicated, so
 order does not change the id or signature.
 
 ## Compatibility
@@ -90,7 +101,11 @@ is a plain accepted/modified activation, which Deception#59 treats as before
    `build_termination_decision` with `reason` such as `isolation-drift` or
    `lease-expired` and the observation id as `evidence_refs`. Lease expiry is
    already enforced by the consumer's own `expires_at`, so a termination is for
-   early withdrawal. Open questions: who owns the policy for drift severity;
+   early withdrawal. One case that matters: Deception records
+   `lease_expired_runtime_still_active` when the runtime keeps running after
+   the consumer's expiry. Edge may withdraw on that observation, again only
+   after the arbiter judges it, with `reason` `lease-expired` and the
+   observation id as evidence. Open questions: who owns the policy for drift severity;
    idempotency when the lease ends at the same time; behaviour when Edge or the
    transport is down (the consumer fails closed on expiry, so absence of a
    termination must never extend a lease).

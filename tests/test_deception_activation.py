@@ -204,3 +204,38 @@ def test_deception_consumer_roundtrip_if_available():
     kept = mio.admit_objective(
         obj, unlisted, authenticator=lambda d: verify_decision_signature(d, KEY), now=now)
     assert isinstance(kept, mio.AdvisoryRetained)
+
+
+@pytest.mark.parametrize("bad", [
+    "observation_objective:obs-1", "hypothesis:h1", "frame:f1", "ADVISORY:x",
+    "Advisory:mio-objective-o1", "HYPOTHESIS:h1", " frame:f1",
+])
+def test_advisory_kinds_rejected_in_own_evidence_any_case(bad):
+    with pytest.raises(ActivationDecisionError):
+        _act(evidence_refs=[bad])
+
+
+def test_current_deception_hypothesis_form_with_tilde_is_accepted():
+    refs = ["advisory:mio-objective-o1", "advisory:mio-frame-frame-dec-1",
+            "advisory:mio-hypothesis-frame-dec-1~h1"]
+    signed = _act(objective_refs=refs, key=KEY)
+    assert set(refs) <= set(signed["evidence_refs"])
+    assert verify_decision_signature(signed, KEY)
+
+
+def test_directive_set_is_c3_and_segment_based():
+    assert da._DIRECTIVE_SEGMENTS == frozenset(
+        "activate activation deactivate execute exec run start stop open allow "
+        "authorize authorized approve approved enable extend terminate withdraw "
+        "block isolate quarantine redirect expose command shell sudo deploy "
+        "install delete kill".split())
+    ok = ["advisory:mio-objective-obj-1", "advisory:mio-frame-frame-dec-1",
+          "advisory:mio-hypothesis-h1", "advisory:mio-hypothesis-redirection~isolation",
+          "advisory:mio-hypothesis-frame-dec-1~active"]
+    assert validate_objective_refs(ok[:2] + ok[2:3]) 
+    assert validate_objective_refs([ok[0], ok[1], ok[3]])
+    assert validate_objective_refs([ok[0], ok[1], ok[4]])
+    for bad in ("advisory:mio-objective-run~1", "advisory:mio-objective-x.withdraw",
+                "advisory:mio-objective-a:Redirect"):
+        with pytest.raises(ActivationDecisionError):
+            validate_objective_refs([bad, "advisory:mio-frame-f1"])
