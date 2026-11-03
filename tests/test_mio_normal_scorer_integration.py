@@ -68,6 +68,8 @@ def test_normal_advisory_path_uses_real_mio_fast_assessment() -> None:
     assert comparison["matches"] is True
     assert type(comparison["mio_score"]) is int
     assert comparison["mio_score"] == comparison["edge_score"] == advisory["risk_score"]
+    assert comparison["mio_score"] > 0
     assert comparison["mio_factors"] == advisory["score_factors"]
+    assert comparison["mio_factors"]
     assert advisory["score_engine"] == "tactical_scorer_v1"
     assert advisory["decision_pipeline"]["first_pass"]["engine"] == "tactical_scorer_v1"
