@@ -1,19 +1,23 @@
 # AZ-06 activation and termination decisions (Edge producer)
 
-Status: proposal for the Edge team's decision (Deception#55, consumed by
-Azazel-Deception#59). Library only: no service calls it, no API or
-configuration changes, no runtime behaviour changes.
+Status: implemented library; production integration remains open
+(Azazel-Deception#55).
+The activation and termination decision builders are present and tested, but no
+normal Edge service calls them. There are no API or configuration changes and
+no runtime behaviour changes.
 
 ## Purpose
 
-Azazel-Deception executes an environment only on a signed
-`EnvironmentActivationDecision` from Edge, and withdraws one only on a signed
-`EnvironmentTerminationDecision`. Edge main could build a *transition*
-decision (`py/azazel_edge/deception_transition.py`) but had no production
-builder for activation or termination; only the drill tools
+Azazel-Deception acts only on a signed `EnvironmentActivationDecision` from
+Edge, and accepts a signed `EnvironmentTerminationDecision` for early
+withdrawal. Edge has pure builders in
+`py/azazel_edge/deception_activation.py`, alongside the
+transition builder in `py/azazel_edge/deception_transition.py`. The drill tools
 (`tools/detection_to_decoy_drill.py`, `tools/edge_integration_functional_test.py`)
-hand-wrote them. `py/azazel_edge/deception_activation.py` adds the two missing
-pure builders in the same style.
+also construct decisions for isolated tests. These are producer libraries and
+test paths; Edge has not yet connected them to a normal service, a production
+signing-key source, a caller that wires them into the shadow/replay client or a
+live transport, or a withdrawal watcher.
 
 ## Authority boundary
 
@@ -38,7 +42,7 @@ The builders **decide nothing**.
 
 ## `objective_refs` (optional)
 
-Deception#59 binds a M.I.O. objective to a decision only when the signed
+Azazel-Deception PR #59 binds a M.I.O. objective to a decision only when the signed
 decision's `evidence_refs` list the objective's `advisory:` refs. Passing
 `objective_refs` appends them. It is a record that Edge *considered* the
 objective when it authorized. It is not a reason to authorize, and it changes
@@ -83,13 +87,14 @@ Additive: a new module and tests, no change to existing modules. Fabric is the
 existing optional extra (`requirements/fabric.txt`, `v0.9.0rc4`; both models
 are present there). Without Fabric the module cannot be imported, like the
 other Fabric-backed producers. A decision built with no `objective_refs`
-is a plain accepted/modified activation, which Deception#59 treats as before
+is a plain accepted/modified activation, which Azazel-Deception PR #59 treats as before
 (the objective is retained as advice).
 
-## Not in this change (next stages)
+## Remaining work
 
-1. **Production wiring.** Which Edge component calls the builders (an
-   arbiter-outcome adapter like `transition_decision_from_arbiter`, or an API
+1. **Production wiring (not implemented).** Which Edge component calls the
+   builders (an arbiter-outcome adapter like `transition_decision_from_arbiter`,
+   or an API
    endpoint behind operator approval), how the signing key is provisioned, and
    how the signed decision reaches AZ-06 (shadow/replay client). Needs Edge
    review per AGENTS.md; nothing here enables enforcement.
@@ -102,7 +107,8 @@ is a plain accepted/modified activation, which Deception#59 treats as before
    `lease-expired` and the observation id as `evidence_refs`. Lease expiry is
    already enforced by the consumer's own `expires_at`, so a termination is for
    early withdrawal. One case that matters: Deception records
-   `lease_expired_runtime_still_active` when the runtime keeps running after
+   `lease_expired_runtime_still_active` (a Deception observation name, not
+   defined in Edge) when the runtime keeps running after
    the consumer's expiry. Edge may withdraw on that observation, again only
    after the arbiter judges it, with `reason` `lease-expired` and the
    observation id as evidence. Open questions: who owns the policy for drift severity;
