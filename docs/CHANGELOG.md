@@ -55,6 +55,11 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The Edge runtime now pins the merged M.I.O. 0.1.0 source containing PR #40's
+  bounded fast-assessment validation and zero-budget handoff behavior. The
+  immutable source pin is `c31c2442899e778f1c49e5becd739c59ef8f1092`; Edge's
+  deterministic scorer and authority are unchanged. No Edge product version
+  or release artifact is created by this change.
 - The optional MIO fast-score comparison now degrades if package initialization
   raises a non-`ImportError` exception, while Edge's local score and factors
   remain authoritative. A genuinely absent package keeps its existing

@@ -3,7 +3,7 @@
 The [cognitive-plane authority matrix](mio-cognitive-plane.md) remains authoritative.
 
 This local candidate follows Edge #525 head `80445737f2ae6df2cae3bcdd7e79176352dffe24`
-and uses the M.I.O. source pin `9fedb01bc9936531407a5181aa8fa5553ec19d55`, which is
+and uses the M.I.O. source pin `c31c2442899e778f1c49e5becd739c59ef8f1092`, which is
 publicly available at that immutable commit. This is a candidate, not a release or
 deployment claim. No installation, service configuration, credential provisioning
 or production deployment is included.
