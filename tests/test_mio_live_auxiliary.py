@@ -35,6 +35,26 @@ def test_edge_action_metadata_uses_known_enums_and_fixed_unknown_marker():
                     "trace_id": "trace-17", "unknown_fields": True}
 
 
+def test_a_valid_selected_action_is_known_and_not_exported():
+    safe = _safe_edge_event({"defense": {"action": "isolate"}, "enforcement": {
+        "mode": "dry_run", "result": "planned_not_applied", "trace_id": "trace-18",
+        "selected_action": "isolate",
+    }})
+    assert safe == {"action": "isolate", "mode": "dry_run", "result": "planned_not_applied",
+                    "trace_id": "trace-18"}
+    assert "selected_action" not in safe and "unknown_fields" not in safe
+
+
+@pytest.mark.parametrize("bad", ["bogus", "<b>isolate</b>", "ISOLATE ", "", None, 3, ["notify"], {"a": 1}])
+def test_a_malformed_selected_action_is_marked_unknown(bad):
+    safe = _safe_edge_event({"defense": {"action": "notify"}, "enforcement": {
+        "mode": "dry_run", "result": "planned_not_applied", "trace_id": "trace-19",
+        "selected_action": bad,
+    }})
+    assert safe == {"action": "notify", "mode": "dry_run", "result": "planned_not_applied",
+                    "trace_id": "trace-19", "unknown_fields": True}
+
+
 
 
 def test_fast_frame_uses_edge_risk_level_and_factors_without_reclassification():
@@ -635,3 +655,178 @@ def test_not_queried_status_is_persisted_in_agent_snapshot(tmp_path, monkeypatch
     mio = json.loads(serialized)["mio_auxiliary"]
     assert mio["knowledge"] == {"status": "not_queried", "refs": []}
     assert '"status": "not_queried"' in serialized
+
+
+# ----------------------------------------------------------------------------
+# Isolation of optional MIO lanes from Edge persistence (_handle_event).
+
+_ISOLATION_SECRET = "SECRET-model-enqueue-7f3a"
+
+
+def _isolation_event() -> dict:
+    import pathlib
+    fixture = pathlib.Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "rust_core_event_v1.json"
+    return json.loads(fixture.read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def isolated_edge(tmp_path, monkeypatch):
+    for name in ("ADVISORY_PATH", "EVENT_LOG_PATH", "SNAPSHOT_PATH", "METRICS_PATH", "POLICY_PATH",
+                 "LLM_DEFERRED_LOG_PATH", "LLM_RESULT_LOG_PATH"):
+        monkeypatch.setattr(agent, name, tmp_path / name.lower())
+    monkeypatch.setattr(agent, "_route_llm", lambda event, advisory: None)
+    monkeypatch.setattr(agent, "CORE_RECORDER", None)
+    log_dir = tmp_path / "log-ai"
+    log_dir.mkdir()
+    monkeypatch.setattr(agent, "DECISION_EXPLANATIONS_PATH", log_dir / "decision-explanations.jsonl")
+    monkeypatch.setattr(agent, "DECISION_EXPLANATIONS", None)
+    assert agent._start_decision_explanations() is not None
+    # Deterministic, non-networked auxiliary: fixed degraded status, no worker thread.
+    monkeypatch.setattr(agent.LIVE_MIO_AUXILIARY, "submit",
+                        lambda *a, **k: {"status": "unavailable", "reason": "test_stub", "generation": ""})
+    return tmp_path
+
+
+def test_model_enqueue_failure_still_persists_event_advisory_and_snapshot(isolated_edge, monkeypatch, caplog):
+    def boom(*_a, **_k):
+        raise RuntimeError(_ISOLATION_SECRET)
+
+    monkeypatch.setattr(agent.LIVE_MIO_MODEL_LANE, "submit", boom)
+    caplog.set_level("WARNING", logger="azazel-edge-ai-agent")
+    agent._handle_event(_isolation_event())
+
+    event_log = isolated_edge / "event_log_path"
+    advisory_path = isolated_edge / "advisory_path"
+    snapshot = isolated_edge / "snapshot_path"
+    assert event_log.exists() and event_log.read_text(encoding="utf-8").strip()
+    assert advisory_path.exists()
+    assert snapshot.exists()
+    # Fixed degraded indication only; the exception text never leaks.
+    assert "mio model enqueue degraded" in caplog.text
+    assert _ISOLATION_SECRET not in caplog.text
+    assert _ISOLATION_SECRET not in advisory_path.read_text(encoding="utf-8")
+    assert _ISOLATION_SECRET not in snapshot.read_text(encoding="utf-8")
+
+
+def test_model_enqueue_failure_leaves_edge_decision_fields_unchanged(isolated_edge, monkeypatch):
+    fields = ("risk_score", "risk_level", "recommendation", "state_name", "score_engine")
+    advisory_path = isolated_edge / "advisory_path"
+
+    monkeypatch.setattr(agent.LIVE_MIO_MODEL_LANE, "submit", lambda *a, **k: {"status": "queued"})
+    agent._handle_event(_isolation_event())
+    baseline = json.loads(advisory_path.read_text(encoding="utf-8"))
+
+    def boom(*_a, **_k):
+        raise RuntimeError(_ISOLATION_SECRET)
+
+    monkeypatch.setattr(agent.LIVE_MIO_MODEL_LANE, "submit", boom)
+    agent._handle_event(_isolation_event())
+    failed = json.loads(advisory_path.read_text(encoding="utf-8"))
+
+    for key in fields:
+        assert failed.get(key) == baseline.get(key), key
+
+
+def test_knowledge_failure_does_not_suppress_model_lane(isolated_edge, monkeypatch):
+    def knowledge_boom(*_a, **_k):
+        raise RuntimeError(_ISOLATION_SECRET)
+
+    calls = []
+    monkeypatch.setattr(agent.LIVE_MIO_AUXILIARY, "submit", knowledge_boom)
+    monkeypatch.setattr(agent.LIVE_MIO_MODEL_LANE, "submit",
+                        lambda *a, **k: calls.append(a) or {"status": "queued"})
+    agent._handle_event(_isolation_event())
+
+    assert len(calls) == 1
+    assert (isolated_edge / "event_log_path").exists()
+    assert (isolated_edge / "advisory_path").exists()
+    assert (isolated_edge / "snapshot_path").exists()
+    assert _ISOLATION_SECRET not in (isolated_edge / "advisory_path").read_text(encoding="utf-8")
+
+
+class _FakeGovernance:
+    def __init__(self):
+        self.calls = []
+
+    def record_structured_result(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+def _run_model_analyze(monkeypatch, result, governance):
+    monkeypatch.setattr(agent, "AI_GOVERNANCE", governance)
+    monkeypatch.setattr(agent, "_analyze_mio_fast_result", lambda *a, **k: dict(result))
+    return agent._governed_mio_model_analyze({"trace_id": "t-1"}, 5.0)
+
+
+def test_truncated_model_output_audits_as_degraded_not_adopted(monkeypatch):
+    governance = _FakeGovernance()
+    _run_model_analyze(monkeypatch, {"outcome": "completed", "mio_state": "complete",
+                                     "truncated_count": 1, "request_count": 1, "metered_request_count": 1},
+                       governance)
+    assert len(governance.calls) == 1
+    assert governance.calls[0]["decision"] == "degraded"
+    assert governance.calls[0]["metadata"]["truncated_count"] == 1
+
+
+def test_untruncated_complete_model_output_is_still_adopted(monkeypatch):
+    governance = _FakeGovernance()
+    _run_model_analyze(monkeypatch, {"outcome": "completed", "mio_state": "complete",
+                                     "truncated_count": 0, "request_count": 1, "metered_request_count": 1},
+                       governance)
+    assert governance.calls[0]["decision"] == "adopted"
+
+
+def test_model_result_knowledge_status_reaches_durable_audit(monkeypatch):
+    governance = _FakeGovernance()
+    _run_model_analyze(monkeypatch, {"outcome": "completed", "mio_state": "complete", "truncated_count": 0,
+                                     "knowledge_status": "projected"}, governance)
+    assert governance.calls[0]["metadata"]["knowledge_status"] == "projected"
+
+
+class _RecordingAudit:
+    def __init__(self):
+        self.entries = []
+
+    def log(self, event, **kwargs):
+        self.entries.append((event, kwargs))
+
+
+def test_record_structured_result_persists_allowlisted_knowledge_status():
+    from azazel_edge.ai_governance import AIGovernance
+    audit = _RecordingAudit()
+    AIGovernance(audit).record_structured_result(
+        trace_id="t-1", source="mio", candidate_scope="mio_read_only_advisory", decision="adopted",
+        metadata={"knowledge_status": "projected"})
+    assert audit.entries[0][1]["payload"]["knowledge_status"] == "projected"
+
+
+def test_record_structured_result_drops_unknown_knowledge_status_text():
+    from azazel_edge.ai_governance import AIGovernance
+    audit = _RecordingAudit()
+    AIGovernance(audit).record_structured_result(
+        trace_id="t-1", source="mio", candidate_scope="mio_read_only_advisory", decision="degraded",
+        metadata={"knowledge_status": "free text with " + _ISOLATION_SECRET})
+    payload = audit.entries[0][1]["payload"]
+    assert "knowledge_status" not in payload
+    assert _ISOLATION_SECRET not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("bad", ["not-a-number", "1.5", object(), float("nan"), 10**400])
+def test_malformed_truncated_count_audits_as_degraded_without_raising(monkeypatch, bad):
+    governance = _FakeGovernance()
+    _run_model_analyze(monkeypatch, {"outcome": "completed", "mio_state": "complete",
+                                     "truncated_count": bad, "request_count": 1, "metered_request_count": 1},
+                       governance)
+    assert len(governance.calls) == 1
+    assert governance.calls[0]["decision"] == "degraded"
+    assert governance.calls[0]["metadata"]["truncated_count"] == 4
+
+
+@pytest.mark.parametrize("bad", ["", "1", 0.5, -1, 5, True, [], {}, None])
+def test_non_integer_or_out_of_range_truncated_count_is_treated_as_truncated(monkeypatch, bad):
+    governance = _FakeGovernance()
+    _run_model_analyze(monkeypatch, {"outcome": "completed", "mio_state": "complete",
+                                     "truncated_count": bad, "request_count": 1,
+                                     "metered_request_count": 1}, governance)
+    assert governance.calls[0]["decision"] == "degraded"
+    assert governance.calls[0]["metadata"]["truncated_count"] == 4

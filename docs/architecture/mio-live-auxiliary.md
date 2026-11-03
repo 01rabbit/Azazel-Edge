@@ -1,6 +1,6 @@
 # Live M.I.O. auxiliary path
 
-Status: branch preparation; the shared M.I.O. package source is not yet published.
+Status: branch preparation. The shared M.I.O. source is publicly available at immutable commit `9fedb01bc9936531407a5181aa8fa5553ec19d55`. This document does not claim any release or deployment.
 
 Canonical M.I.O. authority and data-flow architecture: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
 
@@ -34,7 +34,7 @@ hypotheses, next checks, and handoff separately from Edge's observed action and
 result. It uses text-only DOM writes. Results from superseded generations are
 marked stale. Edge metadata is copied only from bounded enums and a restricted
 trace token; malformed supplied values are omitted with a fixed
-`unknown_fields` marker. The full persisted M.I.O. envelope is capped at 16
+`unknown_fields` marker. Safe Edge projection treats a valid `selected_action` as a recognized omitted field and never exports it; malformed values set `unknown_fields`. The full persisted M.I.O. envelope is capped at 16
 KiB. No lease expiry, applied state, or release state is inferred.
 
 The bounded source-context projection records event type, signature, category,
@@ -52,9 +52,17 @@ result envelope. The dashboard suppresses the handoff if a value is absent or
 mismatched, while the dashboard response retains the binding for consumers
 that export the available snapshot data.
 
+Freshness limitation: the server reports `age_seconds`, `completed_at` and
+`is_current` at the moment it serves a snapshot. The dashboard script
+(`sentinel.js`) recomputes the age from `completed_at` on each render, so the
+browser's view stays current as time passes. Exported snapshot and API
+consumers do not get that recomputation: they must compare `completed_at`
+with their own clock against `max_age_seconds` and must not treat a stored
+`is_current: true` as still fresh.
+
 The runtime dependency is declared in `requirements/runtime.txt` using an
-immutable Git commit pin. The source commit must be published before a normal
-installation can resolve it; this branch does not vendor the package. If the
+immutable Git commit pin. The pinned source, `9fedb01bc9936531407a5181aa8fa5553ec19d55`,
+is publicly available; this branch does not vendor the package. If the
 package is absent at runtime, the guarded adapter reports `package_unavailable`
 and Edge continues its existing behavior. The fast adapter itself supplies no
 model transport or Knowledge adapter.
@@ -86,5 +94,38 @@ vocabulary with strict string types and omits malformed diagnostics, including
 objects with extra keys. It never forwards raw validation errors, trace details,
 or model-authored identifiers through this field. Existing generic status,
 reason, and advisory authority remain unchanged. The immutable dependency pin
-uses merged M.I.O. PR #21 source commit
-`9fedb01bc9936531407a5181aa8fa5553ec19d55`; the merge dependency is satisfied.
+is the public M.I.O. source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55`.
+
+Failure isolation and audit degradation:
+
+- Enqueue failure isolation: if the optional model lane fails to enqueue, Edge
+  logs a fixed warning (no exception detail) and continues to persist the event,
+  advisory, and operator snapshot. The Edge decision fields are unchanged.
+- Truncated audit degradation: a model result with `truncated_count` above zero
+  is audited as `degraded`, never `adopted`. A `truncated_count` that is not
+  an integer from 0 through 4 is treated as truncated and audited as degraded
+  without raising before the audit record is written. `record_structured_result`
+  applies the same rule to a present value (exact int 0..4, else persisted as 4);
+  a missing value is omitted.
+- Audit follows the final accepted result: in the production lane the success
+  audit is written by `LiveMioModelLane` after the stale check and frame/trace
+  binding check, from the final result (so a binding rejection audits as
+  `degraded`). `usage_status` is recomputed from normalized counts, never copied
+  from the analyzer. Finalization runs entirely under `LiveMioModelLane._lock`:
+  re-check the generation and the current fast generation, audit the final
+  result, then publish it before releasing the lock. If either freshness check
+  changed, a `degraded` `superseded` result is audited instead and is not
+  published as complete. If the audit raises, only a `degraded` result with an
+  empty summary and bounded usage metrics is published. There is no compensating
+  or adopted-then-degraded record. Only post-authorization analysis attempts use
+  the output callback. Pre-analysis paths (fast result unavailable, pre-analysis
+  deadline, frame unavailable, stale-before-analysis) do not; governance denial is
+  recorded by the input authorization audit instead.
+  Tradeoff: finalization holds `LiveMioModelLane._lock` while the durable
+  result-audit write runs, so both `submit` and `snapshot` may briefly wait on
+  that audit I/O. This is required to serialize final adoption with generation
+  advancement. The deterministic Edge action path is unchanged.
+- Allowlisted durable `knowledge_status`: the governed audit record persists
+  `knowledge_status` only when it is a string in the fixed Knowledge status
+  vocabulary. Any other value is dropped and never echoed into the audit payload.
+  The vocabulary is kept in sync with the model lane by a parity test.

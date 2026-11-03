@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from azazel_edge_ai.mio_model_lane import LiveMioModelLane
+from azazel_edge_ai.mio_model_lane import LiveMioModelLane, bounded_truncated_count, bounded_usage
 
 
 def _fast(generation="7"):
@@ -99,6 +99,7 @@ def test_snapshot_worker_refreshes_once_for_async_result_completed_before_first_
         analyze=lambda payload, remaining: {
             "summary": "measured", "outcome": "completed", "mio_state": "complete",
             "generation_method": "model", "frame_id": "frame-abc", "trace_id": "trace-abc",
+            "truncated_count": 0,
         },
         fast_snapshot=_fast,
         frame_snapshot=lambda generation: {"frame_id": "frame-abc", "trace_id": "trace-abc",
@@ -120,7 +121,7 @@ def test_model_lane_waits_for_fast_generation_and_exposes_only_bounded_measureme
         "summary": "measured summary", "uncertainties": ["unknown context"], "confidence": 0.7,
         "model": "qwen3.5:2b", "duration_ms": 44, "load_duration_ms": 12,
         "prompt_tokens": 20, "completion_tokens": 9, "outcome": "completed",
-        "mio_state": "complete", "generation_method": "model",
+        "mio_state": "complete", "generation_method": "model", "truncated_count": 0,
         "frame_id": "frame-abc", "trace_id": "trace-abc",
     }, fast_snapshot=_fast, frame_snapshot=lambda generation: {
         "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": ["suricata_sid:1"]})
@@ -497,6 +498,100 @@ def test_truncated_outer_usage_is_counted_once_and_core_error_fallback_is_partia
     assert "trusted_control" not in diagnostics and "truncated_completion" not in diagnostics
 
 
+def _complete_model_result(truncated_count):
+    result = {
+        "summary": "measured", "outcome": "completed", "mio_state": "complete",
+        "generation_method": "model", "frame_id": "frame-abc", "trace_id": "trace-abc",
+    }
+    if truncated_count is not _MISSING:
+        result["truncated_count"] = truncated_count
+    return result
+
+
+_MISSING = object()
+
+
+def _lane_with_truncated_count(truncated_count):
+    return LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: _complete_model_result(truncated_count),
+        fast_snapshot=_fast, frame_snapshot=lambda generation: {
+            "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": []})
+
+
+def test_truncated_count_accepts_exact_ints_zero_through_four():
+    for value in range(5):
+        lane = _lane_with_truncated_count(value)
+        lane.submit("7", "trace-abc")
+        result = _wait(lane, "complete" if value == 0 else "partial")
+        assert result["truncated_count"] == value, value
+        assert result["status"] == ("complete" if value == 0 else "partial"), value
+
+
+def test_lying_analyzer_usage_status_cannot_make_incomplete_metering_complete():
+    # Valid truncation 0 but only one of two requests metered: usage must stay partial.
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: {
+            **_complete_model_result(0), "request_count": 2, "metered_request_count": 1,
+            "unknown_usage_request_count": 0, "usage_status": "complete"},
+        fast_snapshot=_fast, frame_snapshot=lambda generation: {
+            "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": []})
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "complete")
+    assert result["truncated_count"] == 0
+    assert result["usage_status"] == "partial"
+    assert result["unknown_usage_request_count"] == 1
+
+
+def test_lying_analyzer_partial_status_cannot_hide_complete_counts():
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: {
+            **_complete_model_result(0), "request_count": 1, "metered_request_count": 1,
+            "unknown_usage_request_count": 0, "usage_status": "partial"},
+        fast_snapshot=_fast, frame_snapshot=lambda generation: {
+            "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": []})
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "complete")
+    assert result["truncated_count"] == 0
+    assert result["usage_status"] == "complete"
+    assert result["unknown_usage_request_count"] == 0
+
+
+def test_shared_truncated_count_helper_bounds_present_values():
+    for value in (0, 1, 2, 3, 4):
+        assert bounded_truncated_count(value) == value
+    for value in (True, False, 0.0, 1.0, "0", None, [0], {}, -1, 5, 2**70, float("nan")):
+        assert bounded_truncated_count(value) == 4, value
+
+
+def test_bounded_usage_truncated_count_parity_with_lane():
+    # Present malformed values fail closed to 4 exactly as the lane does; a missing key is 0.
+    for value in (0, 1, 4, True, "1", 5, -1, None):
+        usage = bounded_usage({"request_count": 1, "metered_request_count": 1, "truncated_count": value})
+        assert usage["truncated_count"] == bounded_truncated_count(value), value
+        assert usage["usage_status"] != "complete" or value == 0, value
+    assert bounded_usage({"request_count": 1, "metered_request_count": 1})["truncated_count"] == 0
+
+
+def test_lane_truncated_count_matches_bounded_usage_for_present_values():
+    for value in (0, 1, 4, True, "1", 5, -1, None):
+        lane = _lane_with_truncated_count(value)
+        lane.submit("7", "trace-abc")
+        result = _wait(lane, "complete" if value == 0 else "partial")
+        assert result["truncated_count"] == bounded_truncated_count(value), value
+
+
+def test_malformed_truncated_count_never_yields_complete_result():
+    malformed = [True, False, 0.0, 1.0, "0", "1", None, _MISSING, [0], {}, -1, 5, 2**70, float("nan")]
+    for value in malformed:
+        lane = _lane_with_truncated_count(value)
+        lane.submit("7", "trace-abc")
+        result = _wait(lane, "partial")
+        assert result["status"] == "partial", value
+        assert result["truncated_count"] == 4, value
+        assert result["usage_status"] != "complete", value
+        assert result["status"] != "complete", value
+
+
 def _safe_alt(alternative_id):
     from azazel_edge_ai.mio_model_lane import _ALTERNATIVE_ROLES, _ROLE_TEXT
     return _ROLE_TEXT[_ALTERNATIVE_ROLES[alternative_id]]
@@ -586,7 +681,8 @@ def test_real_auxiliary_pending_generation_waits_for_matching_fast_completion():
         analyzed.append((frame["frame_id"], frame["trace_id"]))
         return {"summary": "accepted fake result", "model": "fixture",
                 "frame_id": frame["frame_id"], "trace_id": frame["trace_id"],
-                "mio_state": "complete", "generation_method": "model", "outcome": "completed"}
+                "mio_state": "complete", "generation_method": "model", "outcome": "completed",
+                "truncated_count": 0}
 
     lane = LiveMioModelLane(enabled=True, analyze=analyze,
         fast_snapshot=adapter.snapshot, frame_snapshot=adapter.frame_snapshot, max_age_seconds=3)
@@ -631,7 +727,8 @@ def test_real_auxiliary_new_event_supersedes_old_slow_generation():
         analyze=lambda frame, remaining: analyzed.append((frame["frame_id"], frame["trace_id"])) or {
             "summary": "new current result", "model": "fixture",
             "frame_id": frame["frame_id"], "trace_id": frame["trace_id"],
-            "mio_state": "complete", "generation_method": "model", "outcome": "completed"},
+            "mio_state": "complete", "generation_method": "model", "outcome": "completed",
+            "truncated_count": 0},
         fast_snapshot=adapter.snapshot, frame_snapshot=adapter.frame_snapshot, max_age_seconds=3)
     old = adapter.submit(_accepted_event("rust-trace-old"), score=72, factors=[], risk_level="HIGH")
     lane.submit(old["generation"], old["trace_id"])
@@ -793,3 +890,17 @@ def test_validation_diagnostic_lane_propagates_only_closed_fields():
         assert result["authority"] == "read_only_advisory"
         assert result.get("validation_diagnostic") == (valid if diagnostic == valid else None)
         assert "private model/user/error text" not in str(result) + str(lane.diagnostics())
+
+
+def test_lane_recomputes_usage_status_ignoring_analyzer_complete_with_malformed_truncation():
+    for bad in (-1, 5, True, "0", None):
+        lane = LiveMioModelLane(enabled=True,
+            analyze=lambda payload, remaining, bad=bad: {
+                **_complete_model_result(bad), "request_count": 1, "metered_request_count": 1,
+                "unknown_usage_request_count": 3, "usage_status": "complete"},
+            fast_snapshot=_fast, frame_snapshot=lambda generation: {
+                "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": []})
+        lane.submit("7", "trace-abc")
+        result = _wait(lane, "partial")
+        assert result["truncated_count"] == 4 and result["usage_status"] == "partial", bad
+        assert result["unknown_usage_request_count"] == 0, bad

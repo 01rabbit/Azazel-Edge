@@ -32,7 +32,8 @@ if str(PY_ROOT) not in sys.path:
 from azazel_edge.decision_layers import DecisionLayers
 from azazel_edge.ai_governance import AIGovernance
 from azazel_edge_ai.mio_live_auxiliary import LiveMioAuxiliary, MAX_RESULT_BYTES
-from azazel_edge_ai.mio_model_lane import LiveMioModelLane, MioModelFailure, bounded_usage, bounded_validation_diagnostic
+from azazel_edge_ai.mio_model_lane import (LiveMioModelLane, MioModelFailure, bounded_truncated_count,
+                                           bounded_usage, bounded_validation_diagnostic)
 from azazel_edge.tactics_engine import ConfigHash, DecisionLogger, TacticalScorer
 from azazel_edge.tactics_engine.decision_logger import (
     ChosenAction,
@@ -2598,7 +2599,9 @@ def _audit_mio_model_result(trace_id: str, result: Dict[str, Any]) -> None:
                 "request_count": max(0, min(int(result.get("request_count") or 0), 4)),
                 "metered_request_count": max(0, min(int(result.get("metered_request_count") or 0), 4)),
                 "unknown_usage_request_count": max(0, min(int(result.get("unknown_usage_request_count") or 0), 4)),
-                "truncated_count": max(0, min(int(result.get("truncated_count") or 0), 4)),
+                # Failure/deadline records carry no truncation evidence (missing -> 0); present values fail closed.
+                "truncated_count": (bounded_truncated_count(result["truncated_count"])
+                                    if "truncated_count" in result else 0),
                 "prompt_tokens": max(0, min(int(result.get("prompt_tokens") or 0), 400_000)),
                 "completion_tokens": max(0, min(int(result.get("completion_tokens") or 0), 400_000)),
                 "usage_status": str(result.get("usage_status") or "unknown")[:16],
@@ -2621,7 +2624,11 @@ def _audit_mio_model_result(trace_id: str, result: Dict[str, Any]) -> None:
 def _governed_mio_model_analyze(payload: Dict[str, Any], remaining_seconds: float,
                                 stale_check: Callable[[], bool] | None = None,
                                 source_trace_id: str = "",
-                                source_context: Mapping[str, Any] | None = None) -> Dict[str, Any]:
+                                source_context: Mapping[str, Any] | None = None,
+                                defer_audit: bool = False) -> Dict[str, Any]:
+    # defer_audit=True (production lane) skips every audit here, on success and failure alike;
+    # the LiveMioModelLane callback owns the audit of every result after the analysis attempt.
+    # defer_audit=False (direct calls) keeps the fail-closed audit semantics below.
     trace_id = str(payload.get("trace_id") or "")[:96]
     audit_trace_id = str(source_trace_id or trace_id)[:96]
     try:
@@ -2631,20 +2638,32 @@ def _governed_mio_model_analyze(payload: Dict[str, Any], remaining_seconds: floa
             result = (_analyze_mio_fast_result(payload, remaining_seconds, stale_check)
                       if stale_check is not None else _analyze_mio_fast_result(payload, remaining_seconds))
     except MioModelFailure as exc:
-        try:
-            _audit_mio_model_result(audit_trace_id, {**exc.metrics, "status": "degraded", "reason": exc.reason})
-        except Exception:
-            raise MioModelFailure("mio_model_result_audit_failed", exc.metrics) from None
+        if not defer_audit:
+            try:
+                _audit_mio_model_result(audit_trace_id, {**exc.metrics, "status": "degraded", "reason": exc.reason})
+            except Exception:
+                raise MioModelFailure("mio_model_result_audit_failed", exc.metrics) from None
         raise
     except TimeoutError:
-        _audit_mio_model_result(audit_trace_id, {"status": "degraded", "reason": "deadline_exceeded"})
+        if not defer_audit:
+            _audit_mio_model_result(audit_trace_id, {"status": "degraded", "reason": "deadline_exceeded"})
         raise
     except Exception:
-        _audit_mio_model_result(audit_trace_id, {"status": "degraded", "reason": "model_error"})
+        if not defer_audit:
+            _audit_mio_model_result(audit_trace_id, {"status": "degraded", "reason": "model_error"})
         raise
-    successful = result.get("outcome") == "completed" and result.get("mio_state") == "complete"
+    if defer_audit:
+        return result
+    # Truncated model output is partial: it must audit as degraded, never adopted.
+    # A success-shaped result without a truncated_count key has no completeness evidence:
+    # it is audited degraded with the fail-closed truncated_count of 4.
+    success_shaped = result.get("outcome") == "completed" and result.get("mio_state") == "complete"
+    audited = dict(result)  # audit copy only; the returned result is unchanged
+    if success_shaped and "truncated_count" not in audited:
+        audited["truncated_count"] = 4
+    successful = success_shaped and bounded_truncated_count(audited.get("truncated_count")) == 0
     try:
-        _audit_mio_model_result(audit_trace_id, {**result, "status": "complete" if successful else "degraded"})
+        _audit_mio_model_result(audit_trace_id, {**audited, "status": "complete" if successful else "degraded"})
     except Exception:
         raise MioModelFailure("mio_model_result_audit_failed", result) from None
     return result
@@ -2682,7 +2701,16 @@ def _submit_governed_mio_model(advisory: Dict[str, Any], mio_request: Dict[str, 
         source_trace_id=source_trace_id)
 
 
-LIVE_MIO_MODEL_LANE = LiveMioModelLane(enabled=MIO_MODEL_ENABLED, analyze=_governed_mio_model_analyze,
+def _production_mio_model_analyze(payload: Dict[str, Any], remaining_seconds: float,
+                                  stale_check: Callable[[], bool] | None = None,
+                                  source_trace_id: str = "",
+                                  source_context: Mapping[str, Any] | None = None) -> Dict[str, Any]:
+    return _governed_mio_model_analyze(payload, remaining_seconds, stale_check, source_trace_id,
+                                       source_context, defer_audit=True)
+
+
+LIVE_MIO_MODEL_LANE = LiveMioModelLane(enabled=MIO_MODEL_ENABLED, analyze=_production_mio_model_analyze,
+                                       audit_result=lambda trace_id, result: _audit_mio_model_result(trace_id, result),
                                        fast_snapshot=LIVE_MIO_AUXILIARY.snapshot,
                                        frame_snapshot=LIVE_MIO_AUXILIARY.frame_snapshot,
                                        knowledge_input_snapshot=LIVE_MIO_AUXILIARY.knowledge_input_snapshot,
@@ -3179,7 +3207,12 @@ def _handle_event(event: Dict[str, Any]) -> None:
     _metrics_inc("processed_events", 1)
     _route_llm(event, advisory)
     mio_request = advisory.get("mio_auxiliary") if isinstance(advisory.get("mio_auxiliary"), dict) else {}
-    _submit_governed_mio_model(advisory, mio_request)
+    try:
+        _submit_governed_mio_model(advisory, mio_request)
+    except Exception:
+        # Optional model lane: a failed enqueue must not skip Edge event/advisory
+        # persistence or the operator snapshot. Fixed message only; no exception detail.
+        logger.warning("mio model enqueue degraded")
     _append_jsonl(EVENT_LOG_PATH, {"event": event, "advisory": advisory})
     with IO_LOCK:
         _write_json(ADVISORY_PATH, advisory)

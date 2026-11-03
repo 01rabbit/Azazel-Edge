@@ -2,11 +2,11 @@
 
 The [cognitive-plane authority matrix](mio-cognitive-plane.md) remains authoritative.
 
-This local candidate follows Edge #525 at `a676849adb87415c89545a1fdf7dd9e6ecc16587`.
-It depends on merged MIO main at `c6a0e0d6ef589693bc7bd54a4c2c1cdf32371524`,
-not a production release. This source pin includes
-`KnowledgeContextResponseAdvisory`. No installation, service configuration,
-credential provisioning or production deployment is included.
+This local candidate follows Edge #525 head `80445737f2ae6df2cae3bcdd7e79176352dffe24`
+and uses the M.I.O. source pin `9fedb01bc9936531407a5181aa8fa5553ec19d55`, which is
+publicly available at that immutable commit. This is a candidate, not a release or
+deployment claim. No installation, service configuration, credential provisioning
+or production deployment is included.
 
 The existing governed slow advisory worker can make one authenticated
 `POST /v1/context` request before its shared-core model analysis. Both the
@@ -50,6 +50,12 @@ does not surface those labels or the projected ATT&CK/freshness sidecar.
 Existing Edge decisions, tactical scores and frame evidence remain
 unchanged. The deterministic, DPI, arbiter and action paths make no calls.
 Knowledge's own API may write its normal query audit in its local store.
+
+Edge's governed audit record persists the Knowledge dependency status as
+`knowledge_status` only when it belongs to the fixed allowlisted vocabulary;
+other values are dropped. A model enqueue failure is isolated from event and
+advisory persistence, and truncated model output audits as degraded. See
+[mio-live-auxiliary.md](mio-live-auxiliary.md) for details.
 
 `tests/test_knowledge_slow_lane.py` runs transport boundary tests by default.
 Its real-process test additionally requires local Knowledge and Fabric source

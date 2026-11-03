@@ -21,6 +21,14 @@ SANITIZED_KEYS = {
     'candidate_scope',
 }
 FORBIDDEN_KEYS = {'raw', 'raw_log', 'full_log', 'message', 'line', 'payload', 'event'}
+# Fixed vocabulary of Knowledge dependency statuses. Kept as a literal (no import of
+# azazel_edge_ai) to avoid production coupling; tests/test_knowledge_status_vocabulary_parity.py
+# asserts it equals mio_model_lane.KNOWLEDGE_STATUSES.
+KNOWLEDGE_STATUS_VALUES = frozenset({
+    'disabled', 'missing_token', 'invalid_configuration', 'unavailable',
+    'timeout', 'oversized', 'redirect_rejected', 'auth_rejected',
+    'scope_rejected', 'malformed', 'received', 'superseded', 'projected', 'rejected',
+})
 
 
 class AIGovernanceError(ValueError):
@@ -116,7 +124,11 @@ class AIGovernance:
             }
             for key, maximum in numeric_limits.items():
                 value = metadata.get(key)
-                if type(value) is int:
+                if key == 'truncated_count':
+                    # Missing stays omitted; a present value must be an exact int 0..4, else fail closed to 4.
+                    if key in metadata:
+                        payload[key] = value if type(value) is int and 0 <= value <= 4 else 4
+                elif type(value) is int:
                     payload[key] = max(0, min(value, maximum))
             usage_status = metadata.get('usage_status')
             if type(usage_status) is str and usage_status in {'unknown', 'complete', 'partial'}:
@@ -125,6 +137,9 @@ class AIGovernance:
                 value = metadata.get(key)
                 if type(value) is str and re.fullmatch(r'[A-Za-z0-9_-]{1,48}', value):
                     payload[key] = value
+            knowledge_status = metadata.get('knowledge_status')
+            if type(knowledge_status) is str and knowledge_status in KNOWLEDGE_STATUS_VALUES:
+                payload['knowledge_status'] = knowledge_status
         self.audit.log(
             'ai_assist',
             trace_id=str(trace_id or ''),

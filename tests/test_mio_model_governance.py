@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from azazel_edge.audit.logger import P0AuditLogger
 from azazel_edge.ai_governance import AIGovernance
 from azazel_edge_ai import agent
@@ -253,6 +255,7 @@ def test_lane_authorized_analysis_starts_only_after_authorization_succeeds():
         assert authorized.is_set()
         order.append("model")
         return {"outcome": "completed", "mio_state": "complete", "generation_method": "model",
+                "truncated_count": 0,
                 "frame_id": "f", "trace_id": "trace-model-test"}
 
     lane = LiveMioModelLane(enabled=True, analyze=analyze,
@@ -342,6 +345,7 @@ def test_superseded_authorization_is_diagnostic_only_and_latest_job_proceeds():
     lane = LiveMioModelLane(enabled=True,
         analyze=lambda payload, remaining: calls.append(payload["trace_id"]) or {
             "outcome": "completed", "mio_state": "complete", "generation_method": "model",
+            "truncated_count": 0,
             "frame_id": "frame-" + payload["trace_id"], "trace_id": payload["trace_id"]},
         fast_snapshot=lambda: {"status": "complete", "generation": fast_generation[0], "is_current": True,
                               "trace_id": fast_trace[0]},
@@ -361,6 +365,111 @@ def test_superseded_authorization_is_diagnostic_only_and_latest_job_proceeds():
     assert result["status"] == "complete"
     assert calls == ["trace-new"]
     assert any(item["reason"] == "superseded" for item in lane.diagnostics())
+
+
+def test_fast_snapshot_failure_during_finalization_degrades_superseded_without_worker_loss():
+    import time
+    from azazel_edge_ai.mio_model_lane import LiveMioModelLane
+
+    fast_generation = ["7"]
+    snapshot_calls = [0]
+    audited = []
+
+    def fast_snapshot():
+        # Call order for generation 7: pre-analysis poll (1), stale check before
+        # analysis (2), stale check after analysis (3), finalization freshness (4).
+        # Fail only the finalization call, once; later submissions must still work.
+        snapshot_calls[0] += 1
+        if snapshot_calls[0] == 4:
+            raise RuntimeError("snapshot unavailable")
+        return {"status": "complete", "generation": fast_generation[0], "is_current": True,
+                "trace_id": "trace-" + fast_generation[0]}
+
+    def analyze(payload, remaining):
+        return {"outcome": "completed", "mio_state": "complete", "generation_method": "model",
+                "truncated_count": 0, "frame_id": payload["frame_id"], "trace_id": payload["trace_id"]}
+
+    lane = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=fast_snapshot,
+                            frame_snapshot=lambda generation: {
+                                "frame_id": "frame-" + str(generation), "trace_id": "trace-" + str(generation)},
+                            audit_result=lambda trace_id, result: audited.append(dict(result)))
+
+    lane.submit("7", "trace-7")
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and not audited:
+        time.sleep(0.005)
+    assert len(audited) == 1
+    assert audited[0]["status"] == "degraded"
+    assert audited[0]["reason"] == "superseded"
+    result = lane.snapshot()
+    assert result["status"] == "degraded"
+    assert result["reason"] == "superseded"
+    assert any(item["reason"] == "superseded" for item in lane.diagnostics())
+
+    # Worker survived: a new submission is processed to completion.
+    fast_generation[0] = "8"
+    lane.submit("8", "trace-8")
+    deadline = time.monotonic() + 1
+    result = lane.snapshot()
+    while time.monotonic() < deadline and result["status"] != "complete":
+        time.sleep(0.005)
+        result = lane.snapshot()
+    assert result["status"] == "complete"
+    assert result["generation"] == "2"
+    assert result["fast_generation"] == "8"
+    assert len(audited) == 2
+    assert audited[1]["status"] == "complete"
+
+
+def test_fast_snapshot_failure_before_analysis_degrades_and_worker_survives():
+    import time
+    from azazel_edge_ai.mio_model_lane import LiveMioModelLane
+
+    fast_generation = ["7"]
+    snapshot_calls = [0]
+    audited = []
+
+    def fast_snapshot():
+        # The first pre-analysis poll raises; later calls return a valid complete fast result.
+        snapshot_calls[0] += 1
+        if snapshot_calls[0] == 1:
+            raise RuntimeError("snapshot unavailable")
+        return {"status": "complete", "generation": fast_generation[0], "is_current": True,
+                "trace_id": "trace-" + fast_generation[0]}
+
+    def analyze(payload, remaining):
+        return {"outcome": "completed", "mio_state": "complete", "generation_method": "model",
+                "truncated_count": 0, "frame_id": payload["frame_id"], "trace_id": payload["trace_id"]}
+
+    lane = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=fast_snapshot,
+                            frame_snapshot=lambda generation: {
+                                "frame_id": "frame-" + str(generation), "trace_id": "trace-" + str(generation)},
+                            audit_result=lambda trace_id, result: audited.append(dict(result)))
+
+    lane.submit("7", "trace-7")
+    deadline = time.monotonic() + 1
+    result = lane.snapshot()
+    while time.monotonic() < deadline and result["status"] in {"queued", "starting"}:
+        time.sleep(0.005)
+        result = lane.snapshot()
+    assert result["status"] == "degraded"
+    assert result["reason"] == "fast_result_unavailable"
+    assert audited == []
+    assert lane._thread.is_alive()
+
+    # Worker survived: the next submission completes.
+    fast_generation[0] = "8"
+    lane.submit("8", "trace-8")
+    deadline = time.monotonic() + 1
+    result = lane.snapshot()
+    while time.monotonic() < deadline and result["status"] != "complete":
+        time.sleep(0.005)
+        result = lane.snapshot()
+    assert result["status"] == "complete"
+    assert result["fast_generation"] == "8"
+    assert lane._thread.is_alive()
+    assert len(audited) == 1
+    assert audited[0]["status"] == "complete"
 
 
 def test_authorized_model_result_is_audited_as_structured_metadata(tmp_path, monkeypatch):
@@ -389,6 +498,51 @@ def test_authorized_model_result_is_audited_as_structured_metadata(tmp_path, mon
     assert entry["payload"]["usage_status"] == "partial"
     assert entry["payload"]["mio_state"] == "complete"
     assert entry["payload"]["outcome"] == "completed"
+
+
+def test_failure_audit_with_missing_truncated_count_records_zero(tmp_path, monkeypatch):
+    log_path = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(agent, "AI_GOVERNANCE", AIGovernance(P0AuditLogger(log_path)))
+    agent._audit_mio_model_result("trace-missing-truncated", {"status": "degraded", "reason": "deadline_exceeded"})
+    entry = json.loads(log_path.read_text().splitlines()[-1])
+    assert entry["decision"] == "degraded"
+    assert entry["payload"]["truncated_count"] == 0
+
+
+def test_audit_with_malformed_present_truncated_count_records_four(tmp_path, monkeypatch):
+    for index, bad in enumerate((True, "1", 5, -1, 1.0, None)):
+        log_path = tmp_path / f"audit-malformed-{index}.jsonl"
+        monkeypatch.setattr(agent, "AI_GOVERNANCE", AIGovernance(P0AuditLogger(log_path)))
+        agent._audit_mio_model_result("trace-malformed-truncated", {
+            "status": "degraded", "outcome": "completed", "mio_state": "complete", "truncated_count": bad})
+        entry = json.loads(log_path.read_text().splitlines()[-1])
+        assert entry["payload"]["truncated_count"] == 4, bad
+        assert entry["decision"] == "degraded", bad
+
+
+def test_success_shaped_result_with_missing_truncated_count_audits_degraded_as_four(tmp_path, monkeypatch):
+    log_path = tmp_path / "audit-success-missing.jsonl"
+    monkeypatch.setattr(agent, "AI_GOVERNANCE", AIGovernance(P0AuditLogger(log_path)))
+    monkeypatch.setattr(agent, "_analyze_mio_fast_result", lambda *a, **k: {
+        "outcome": "completed", "mio_state": "complete", "summary": "s", "model": "m"})
+    agent._governed_mio_model_analyze({"trace_id": "trace-x"}, 1.0)
+    entry = json.loads(log_path.read_text().splitlines()[-1])
+    assert entry["decision"] == "degraded"
+    assert entry["payload"]["truncated_count"] == 4  # missing completeness evidence fails closed
+
+
+def test_failure_record_without_truncated_count_stays_zero_on_direct_path(tmp_path, monkeypatch):
+    log_path = tmp_path / "audit-failure-missing.jsonl"
+    monkeypatch.setattr(agent, "AI_GOVERNANCE", AIGovernance(P0AuditLogger(log_path)))
+
+    def deadline(*_a, **_k):
+        raise TimeoutError("deadline_exceeded")
+    monkeypatch.setattr(agent, "_analyze_mio_fast_result", deadline)
+    with pytest.raises(TimeoutError):
+        agent._governed_mio_model_analyze({"trace_id": "trace-x"}, 1.0)
+    entry = json.loads(log_path.read_text().splitlines()[-1])
+    assert entry["decision"] == "degraded"
+    assert entry["payload"]["truncated_count"] == 0
 
 
 def test_structured_result_audit_clamps_usage_and_rejects_unallowlisted_metadata(tmp_path):
@@ -440,3 +594,202 @@ def test_successful_model_result_fails_closed_when_output_audit_fails(monkeypatc
     assert result["status"] == "degraded"
     assert result["summary"] == ""
     assert "private audit details" not in str(result)
+
+
+def test_record_structured_result_truncated_count_present_exact_int_else_four(tmp_path):
+    path = tmp_path / "trunc.jsonl"
+    governance = AIGovernance(P0AuditLogger(path))
+
+    def last(metadata):
+        governance.record_structured_result(trace_id="t", source="azazel_core", candidate_scope="s",
+                                            decision="degraded", metadata=metadata)
+        return json.loads(path.read_text().splitlines()[-1])["payload"]
+
+    for value in (0, 1, 4):
+        assert last({"truncated_count": value})["truncated_count"] == value
+    for value in (-1, 5, True, False, "1", 1.0, None, [0], 2**70):
+        assert last({"truncated_count": value})["truncated_count"] == 4, value
+    assert "truncated_count" not in last({})
+
+
+_GOOD = {"outcome": "completed", "mio_state": "complete", "truncated_count": 0, "generation_method": "model",
+         "frame_id": "f", "trace_id": "tr", "summary": "s", "request_count": 1, "metered_request_count": 1}
+_FRAME = {"frame_id": "f", "trace_id": "tr", "evidence_refs": []}
+
+
+def _production_lane(monkeypatch, tmp_path, analyzed):
+    from azazel_edge_ai.mio_model_lane import LiveMioModelLane
+    log_path = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(agent, "AI_GOVERNANCE", AIGovernance(P0AuditLogger(log_path)))
+
+    def fake(*a, **k):
+        return analyzed() if callable(analyzed) else dict(analyzed)
+    monkeypatch.setattr(agent, "_analyze_mio_fast_result", fake)
+    lane = LiveMioModelLane(enabled=True, analyze=agent._production_mio_model_analyze,
+        fast_snapshot=lambda: {"status": "complete", "generation": "1", "is_current": True, "trace_id": "tr"},
+        frame_snapshot=lambda g: _FRAME,
+        audit_result=lambda t, r: agent._audit_mio_model_result(t, r))
+    return lane, log_path
+
+
+_TERMINAL_STATUSES = frozenset({"complete", "partial", "degraded", "skipped"})
+
+
+def _wait_terminal(lane, timeout=2.0):
+    """Poll until the lane publishes one of _TERMINAL_STATUSES; fail on timeout."""
+    import time
+    deadline = time.monotonic() + timeout
+    result = lane.snapshot()
+    while time.monotonic() < deadline and result["status"] not in _TERMINAL_STATUSES:
+        time.sleep(0.01)
+        result = lane.snapshot()
+    assert result["status"] in _TERMINAL_STATUSES, result["status"]
+    return result
+
+
+def _decisions(path):
+    if not path.exists():
+        return []
+    entries = [json.loads(line) for line in path.read_text().splitlines()]
+    return [e["decision"] for e in entries if e.get("stage") == "output"]
+
+
+def test_production_lane_audits_adopted_only_for_accepted_result(monkeypatch, tmp_path):
+    lane, log = _production_lane(monkeypatch, tmp_path, _GOOD)
+    lane.submit("1", "tr", source_trace_id="tr")
+    assert _wait_terminal(lane)["status"] == "complete"
+    assert _decisions(log) == ["adopted"]
+
+
+_BINDING_CASES = {
+    "frame_mismatch": {**_GOOD, "frame_id": "other"},
+    "trace_mismatch": {**_GOOD, "trace_id": "other"},
+    "missing_frame": {k: v for k, v in _GOOD.items() if k != "frame_id"},
+    "missing_trace": {k: v for k, v in _GOOD.items() if k != "trace_id"},
+}
+
+
+@pytest.mark.parametrize("case", sorted(_BINDING_CASES))
+def test_production_lane_binding_rejection_is_audited_degraded_not_adopted(monkeypatch, tmp_path, case):
+    lane, log = _production_lane(monkeypatch, tmp_path, _BINDING_CASES[case])
+    lane.submit("1", "tr", source_trace_id="tr")
+    result = _wait_terminal(lane)
+    assert result["status"] == "degraded" and result["reason"] == "frame_binding_rejected"
+    assert _decisions(log) == ["degraded"]
+
+
+def test_production_lane_supersession_during_analysis_is_never_adopted(monkeypatch, tmp_path):
+    holder = {"submits": 0}
+
+    def analyzed():
+        if holder["submits"] == 0:
+            holder["submits"] += 1
+            holder["lane"].submit("2", "tr2")  # supersede exactly once, during analysis
+        return dict(_GOOD)
+    lane, log = _production_lane(monkeypatch, tmp_path, analyzed)
+    holder["lane"] = lane
+    lane.submit("1", "tr", source_trace_id="tr")
+    result = _wait_terminal(lane)
+    assert holder["submits"] == 1
+    assert "adopted" not in _decisions(log)
+    assert _decisions(log).count("degraded") >= 1
+    assert result["status"] == "degraded"
+
+
+def test_production_lane_newer_submit_cannot_overtake_audit_publication(monkeypatch, tmp_path):
+    import threading
+    lane, log = _production_lane(monkeypatch, tmp_path, _GOOD)
+    in_audit, release = threading.Event(), threading.Event()
+    order = []
+
+    def audit(trace_id, result):
+        in_audit.set()
+        assert release.wait(2)
+        agent._audit_mio_model_result(trace_id, result)
+        order.append("audited")
+    lane._audit_result = audit
+    lane.submit("1", "tr", source_trace_id="tr")
+    assert in_audit.wait(2)
+    done = threading.Event()
+    started = threading.Event()
+
+    def newer():
+        started.set()
+        lane.submit("2", "tr2")
+        order.append("submitted")
+        done.set()
+    thread = threading.Thread(target=newer, daemon=True)
+    thread.start()
+    assert started.wait(2)  # the submitter is running before the blocking window is timed
+    assert not done.wait(0.2)  # blocked behind the audit/publication critical section
+    release.set()
+    assert done.wait(2)  # proceeds immediately afterwards
+    thread.join(2)
+    assert order == ["audited", "submitted"]
+    assert _decisions(log) == ["adopted"]
+    snapshot = lane.snapshot()
+    assert snapshot["generation"] == "2" and snapshot["status"] != "complete"
+
+
+def test_production_lane_fast_generation_change_audits_superseded_degraded(monkeypatch, tmp_path):
+    lane, log = _production_lane(monkeypatch, tmp_path, _GOOD)
+    state = {"gen": "1"}
+    lane._fast_snapshot = lambda: {"status": "complete", "generation": state["gen"],
+                                   "is_current": True, "trace_id": "tr"}
+
+    def analyzed():
+        state["gen"] = "2"  # fast freshness changes after analysis, before finalization
+        return dict(_GOOD)
+    monkeypatch.setattr(agent, "_analyze_mio_fast_result", lambda *a, **k: analyzed())
+    lane.submit("1", "tr", source_trace_id="tr")
+    result = _wait_terminal(lane)
+    assert result["status"] == "degraded"
+    assert _decisions(log) == ["degraded"]
+
+
+def test_production_lane_audit_failure_prevents_complete_publication(monkeypatch, tmp_path):
+    lane, log = _production_lane(monkeypatch, tmp_path, _GOOD)
+    calls = []
+
+    def broken(trace_id, result):
+        calls.append(dict(result))
+        raise OSError("private")
+    lane._audit_result = broken
+    lane.submit("1", "tr", source_trace_id="tr")
+    result = _wait_terminal(lane)
+    assert len(calls) == 1  # the output callback ran once for the accepted analysis attempt
+    assert calls[0]["status"] == "complete"
+    assert result["status"] == "degraded"
+    assert result["reason"] == "mio_model_result_audit_failed"
+    assert result["summary"] == ""
+    assert "adopted" not in _decisions(log)
+    assert "private" not in str(result)
+
+
+def test_production_analyze_failure_still_audits_degraded(monkeypatch, tmp_path):
+    def boom():
+        raise RuntimeError("x")
+    lane, log = _production_lane(monkeypatch, tmp_path, boom)
+    lane.submit("1", "tr", source_trace_id="tr")
+    assert _wait_terminal(lane)["reason"] == "model_error"
+    assert _decisions(log) == ["degraded"]
+
+
+def test_production_degraded_path_audit_failure_publishes_fail_closed_degraded(monkeypatch, tmp_path):
+    def boom():
+        raise RuntimeError("x")
+    lane, log = _production_lane(monkeypatch, tmp_path, boom)
+    calls = []
+
+    def broken(trace_id, result):
+        calls.append(trace_id)
+        raise OSError("private degraded audit detail")
+    lane._audit_result = broken
+    lane.submit("1", "tr", source_trace_id="tr")
+    result = _wait_terminal(lane)
+    assert len(calls) == 1
+    assert result["status"] == "degraded"
+    assert result["reason"] == "mio_model_result_audit_failed"
+    assert result["summary"] == ""
+    assert "private degraded audit detail" not in str(result)
+    assert "adopted" not in _decisions(log)

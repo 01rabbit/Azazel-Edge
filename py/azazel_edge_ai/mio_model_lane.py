@@ -57,15 +57,24 @@ def bounded_validation_diagnostic(value: Any) -> dict[str, str]:
     return {"stage": stage, "rejection_class": rejection_class}
 
 
+def bounded_truncated_count(value: Any) -> int:
+    """Shared fail-closed truncation bound: exact ints 0..4 pass; any other present value is 4."""
+    if type(value) is not int or not 0 <= value <= 4:
+        return 4
+    return value
+
+
 def bounded_usage(values: Mapping[str, Any]) -> dict[str, Any]:
     """Allow only bounded accrued measurements across failure boundaries."""
     result = {}
     for key, cap in (("request_count", 4), ("metered_request_count", 4),
-                     ("unknown_usage_request_count", 4), ("truncated_count", 4),
+                     ("unknown_usage_request_count", 4),
                      ("prompt_tokens", 400_000), ("completion_tokens", 400_000),
                      ("load_duration_ms", 600_000)):
         value = values.get(key)
         result[key] = max(0, min(value, cap)) if type(value) is int else 0
+    # A truly missing key carries no truncation evidence (0); a present value is bounded fail-closed.
+    result["truncated_count"] = bounded_truncated_count(values["truncated_count"]) if "truncated_count" in values else 0
     result["model"] = values.get("model", "")[:96] if type(values.get("model")) is str else ""
     requests, metered = result["request_count"], result["metered_request_count"]
     result["unknown_usage_request_count"] = max(0, requests - metered)
@@ -181,7 +190,11 @@ class LiveMioModelLane:
                  frame_snapshot: Callable[[Any], Mapping[str, Any] | None] | None = None,
                  authorize: Callable[[Mapping[str, Any]], tuple[bool, str]] | None = None,
                  max_age_seconds: float = MAX_AGE_SECONDS,
-                 knowledge_input_snapshot: Callable[[Any], Mapping[str, Any] | None] | None = None):
+                 knowledge_input_snapshot: Callable[[Any], Mapping[str, Any] | None] | None = None,
+                 audit_result: Callable[[str, dict[str, Any]], None] | None = None):
+        # audit_result(trace_id, final_result) durably audits the lane-accepted result
+        # under self._lock with the freshness re-check and publication. Raising fails the result closed.
+        self._audit_result = audit_result
         self.enabled = bool(enabled)
         self.max_age_seconds = max(0.1, min(float(max_age_seconds), MAX_AGE_SECONDS))
         self._analyze = analyze
@@ -270,8 +283,14 @@ class LiveMioModelLane:
             try:
                 deadline = queued_at + self.max_age_seconds
                 fast: Mapping[str, Any] | None = None
+                audit_pending = False
                 while time.monotonic() < deadline:
-                    candidate = self._fast_snapshot()
+                    try:
+                        candidate = self._fast_snapshot()
+                    except Exception:
+                        # Snapshot failure cannot verify the fast result: degrade without killing the worker.
+                        fast = None
+                        break
                     if str(candidate.get("generation") or "") != fast_generation:
                         break
                     if candidate.get("status") not in {"pending", "starting", "queued"}:
@@ -330,6 +349,9 @@ class LiveMioModelLane:
                             analyze_parameter_count = len(inspect.signature(self._analyze).parameters)
                         except (TypeError, ValueError):
                             analyze_parameter_count = 0
+                        # Only post-authorization analysis attempts are finalized through the output
+                        # callback; pre-analysis failures above (frame, stale, deadline) are not audited here.
+                        audit_pending = True
                         if analyze_parameter_count >= 5:
                             analyzed = self._analyze(dict(frame_payload), remaining, stale_check, source_trace_id,
                                                      self._knowledge_input_snapshot(fast_generation)
@@ -352,7 +374,14 @@ class LiveMioModelLane:
                         validation_rejection = model_result.get("validation_rejection")
                         validation_rejection = (validation_rejection if type(validation_rejection) is str
                                                 and validation_rejection in _VALIDATION_REJECTIONS else "")
-                        truncated_count = max(0, min(int(model_result.get("truncated_count") or 0), 4))
+                        # Missing or malformed truncation evidence fails closed as truncated.
+                        truncated_count = bounded_truncated_count(model_result.get("truncated_count"))
+                        # Never copy analyzer usage_status/unknown count: recompute from normalized values.
+                        request_count = max(0, min(int(model_result.get("request_count") or 0), 4))
+                        metered_count = max(0, min(int(model_result.get("metered_request_count") or 0), 4))
+                        usage = bounded_usage({"request_count": request_count,
+                                               "metered_request_count": metered_count,
+                                               "truncated_count": truncated_count})
                         has_model_contribution = model_result.get("generation_method") == "model"
                         if model_outcome == "completed" and mio_state == "complete" and truncated_count == 0:
                             result_status, result_reason = "complete", ""
@@ -371,11 +400,11 @@ class LiveMioModelLane:
                             "load_duration_ms": max(0, min(int(model_result.get("load_duration_ms") or 0), 600_000)),
                             "prompt_tokens": max(0, min(int(model_result.get("prompt_tokens") or 0), 100_000)),
                             "completion_tokens": max(0, min(int(model_result.get("completion_tokens") or 0), 100_000)),
-                            "request_count": max(0, min(int(model_result.get("request_count") or 0), 4)),
-                            "metered_request_count": max(0, min(int(model_result.get("metered_request_count") or 0), 4)),
-                            "unknown_usage_request_count": max(0, min(int(model_result.get("unknown_usage_request_count") or 0), 4)),
+                            "request_count": request_count,
+                            "metered_request_count": metered_count,
+                            "unknown_usage_request_count": usage["unknown_usage_request_count"],
                             "truncated_count": truncated_count,
-                            "usage_status": str(model_result.get("usage_status") or "unknown")[:16],
+                            "usage_status": usage["usage_status"],
                             "outcome": model_outcome,
                             "frame_id": str(model_result.get("frame_id") or "")[:96],
                             "frame_trace_id": str(model_result.get("trace_id") or "")[:96],
@@ -405,6 +434,27 @@ class LiveMioModelLane:
                         result = _empty("degraded", "model_error")
                         result["duration_ms"] = min(elapsed, 600_000)
                 with self._lock:
+                    # Strict invariant: re-check freshness, audit the final result and publish it
+                    # while holding the lane lock, so a newer submit cannot interleave.
+                    if audit_pending and self._audit_result is not None:
+                        audit_trace = (source_trace_id or str(result.get("frame_trace_id") or "")[:96]
+                                       or str(fast.get("trace_id") or "")[:96])
+                        # A failing snapshot means freshness cannot be verified: treat as not fresh.
+                        try:
+                            fresh = (generation == self._generation and
+                                     str(self._fast_snapshot().get("generation") or "") == fast_generation)
+                        except Exception:
+                            fresh = False
+                        if not fresh:
+                            result = _empty("degraded", "superseded")
+                        try:
+                            self._audit_result(audit_trace, result)
+                        except Exception:
+                            if fresh:
+                                usage = bounded_usage(result)
+                                result = _empty("degraded", "mio_model_result_audit_failed")
+                                result.update(usage)
+                                result["summary"] = ""
                     if generation == self._generation:
                         result["generation"] = str(generation)
                         result["trace_id"] = (str(result.get("frame_trace_id") or "") if result.get("status") in {"complete", "partial"}

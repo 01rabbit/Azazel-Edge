@@ -155,12 +155,23 @@ def test_a_failed_second_pass_still_explains_the_cores_decision(agent, monkeypat
 def test_the_explanation_changes_nothing_the_agent_decides_or_records(tmp_path, agent, monkeypatch):
     """The explanation writer cannot alter Edge decisions or core audit records."""
 
-    def without_observation_clock(value):
+    # Volatile by design, and only these: wall-clock stamps and timing values,
+    # plus the core chain's link fields (its hashes cover the ts above, so they
+    # change with the clock). Trace IDs are deterministic here and are compared.
+    # Chain linkage itself (prev/hash continuity) is asserted in
+    # tests/test_audit_logger_v1.py, so this parity check only needs the fields above excluded.
+    volatile = frozenset({
+        "ts", "timestamp", "created_at", "updated_at", "first_seen", "last_seen", "enqueued_at",
+        "agent_received_epoch", "agent_received_monotonic_ns",
+        "latency_ms", "duration_ms", "load_duration_ms",
+        "chain_prev", "chain_hash", "chain_id",
+    })
+
+    def without_volatile(value):
         if isinstance(value, dict):
-            return {key: without_observation_clock(item) for key, item in value.items()
-                    if key not in {"first_seen", "last_seen"}}
+            return {key: without_volatile(item) for key, item in value.items() if key not in volatile}
         if isinstance(value, list):
-            return [without_observation_clock(item) for item in value]
+            return [without_volatile(item) for item in value]
         return value
 
     def run(with_writer: bool, sub: str) -> tuple:
@@ -179,23 +190,15 @@ def test_the_explanation_changes_nothing_the_agent_decides_or_records(tmp_path, 
         finally:
             recorder.stop()
         advisory = json.loads(agent_mod.ADVISORY_PATH.read_text(encoding="utf-8"))
+        # Only the M.I.O. envelope is excluded from the Edge advisory.
         mio = advisory.pop("mio_auxiliary")
-        # What the core decided and the P0 path records (not the record's own time stamps).
-        keys = set(core_decisions.core_decision_payload(core_event("isolate"))[1]) | {"kind", "trace_id", "source"}
-        records = [{k: v for k, v in r.items() if k in keys}
-                   for r in _rows(chain) if r.get("kind") == "action_decision"]
-        return advisory, records, mio
+        records = [r for r in _rows(chain) if r.get("kind") == "action_decision"]
+        return without_volatile(advisory), without_volatile(records), mio
 
     with_writer = run(True, "a")
     without_writer = run(False, "b")
-    edge_owned_fields = (
-        "decision_pipeline", "risk_level", "risk_score", "attack_type", "recommendation",
-        "score_factors", "score_engine", "state_name", "user_state", "suricata_severity",
-        "suricata_sid", "second_pass", "correlation",
-    )
-    assert {key: without_observation_clock(with_writer[0][key]) for key in edge_owned_fields} == {
-        key: without_observation_clock(without_writer[0][key]) for key in edge_owned_fields
-    }
+    # The whole normalized Edge advisory and the whole core decision records.
+    assert with_writer[0] == without_writer[0]
     assert with_writer[1] == without_writer[1]
     assert with_writer[1] and with_writer[1][0]["action"] == "isolate"
 

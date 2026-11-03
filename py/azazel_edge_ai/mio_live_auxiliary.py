@@ -50,8 +50,14 @@ def _safe_edge_event(event: Mapping[str, Any]) -> dict[str, Any]:
     defense = event.get("defense") if isinstance(event.get("defense"), Mapping) else {}
     enforcement = event.get("enforcement") if isinstance(event.get("enforcement"), Mapping) else {}
     out: dict[str, Any] = {}
-    unknown = any(key not in {"mode", "result", "trace_id"} for key in enforcement)
+    unknown = any(key not in {"mode", "result", "trace_id", "selected_action"} for key in enforcement)
     unknown = unknown or any(key != "action" for key in defense)
+    # Normal Edge enforcement carries selected_action. A type-valid enum is a
+    # known field that this projection does not export; anything else is marked.
+    if "selected_action" in enforcement:
+        selected = enforcement.get("selected_action")
+        if not (type(selected) is str and selected in _EDGE_ACTIONS):
+            unknown = True
     action = defense.get("action")
     if type(action) is str and action.lower() in _EDGE_ACTIONS:
         out["action"] = action.lower()
