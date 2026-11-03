@@ -75,3 +75,16 @@ def test_shadow_failure_or_mismatch_never_replaces_edge_result():
         result = TacticalScorer().score(features)
         assert (result.score, result.factors) == expected
         assert result.shadow["status"] == "unavailable"
+
+    def broken_import(name, *args, **kwargs):
+        if name == "azazel_mio.fast_assessment":
+            raise RuntimeError("optional package initialization failed")
+        return original_import(name, *args, **kwargs)
+    with patch("builtins.__import__", side_effect=broken_import):
+        result = TacticalScorer().score(features)
+        assert (result.score, result.factors) == expected
+        assert result.source == "edge_local"
+        assert result.shadow == {
+            "authority": "comparison_only", "mode": "shadow",
+            "status": "degraded", "reason": "import_failed",
+        }
