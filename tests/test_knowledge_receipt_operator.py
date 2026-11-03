@@ -68,6 +68,7 @@ def test_current_dashboard_projection_drops_unrecognized_top_level_and_nested_fi
     payload['edge_event']['private_reason'] = 'TOP_SECRET_SHOULD_NOT_ESCAPE'
     payload['model_analysis'] = {'schema_version': 'azazel.mio_model_analysis.v1',
         'status': 'complete', 'is_current': True, 'fast_generation': '1',
+        'frame_id': 'frame-1', 'trace_id': 'mio-1',
         'summary': 'Bounded analysis.', 'model': 'qwen3.5:0.8b', 'duration_ms': 12,
         'prompt_tokens': 100, 'completion_tokens': 25,
         'request_body': 'TOP_SECRET_SHOULD_NOT_ESCAPE'}
@@ -90,6 +91,7 @@ def test_current_dashboard_projection_drops_unrecognized_top_level_and_nested_fi
     assert result['edge_event']['unknown_fields'] is True
     assert result['model_analysis'] == {'schema_version': 'azazel.mio_model_analysis.v1',
         'status': 'complete', 'is_current': True, 'fast_generation': '1',
+        'frame_id': 'frame-1', 'trace_id': 'mio-1',
         'summary': 'Bounded analysis.', 'model': 'qwen3.5:0.8b', 'duration_ms': 12,
         'prompt_tokens': 100, 'completion_tokens': 25}
     assert result['edge_knowledge_advisory']['source_freshness'] == {
@@ -304,6 +306,80 @@ def test_current_malformed_receipt_schema_preserves_fast_and_model_lanes():
     output = operator_mio_payload(payload, now=101)
     assert output['knowledge_analysis'] == {'status': 'unavailable', 'is_current': False}
     assert output['advisory'] == payload['advisory'] and output['model_analysis'] == payload['model_analysis']
+
+
+PROSE_KEYS = ('summary', 'hypotheses', 'next_checks', 'unknowns', 'uncertainties')
+
+
+def _model_payload():
+    payload = current()
+    payload['model_analysis'] = {'schema_version': 'azazel.mio_model_analysis.v1',
+        'status': 'complete', 'is_current': True, 'fast_generation': '1',
+        'frame_id': 'frame-1', 'trace_id': 'mio-1', 'mio_state': 'complete',
+        'summary': 'Bounded analysis.', 'hypotheses': [{'statement': 'Probe hypothesis'}],
+        'next_checks': ['Review logs'], 'unknowns': ['Source unknown'], 'uncertainties': ['Limited'],
+        'model': 'qwen3.5:0.8b', 'duration_ms': 12, 'prompt_tokens': 100, 'completion_tokens': 25,
+        'request_count': 1, 'metered_request_count': 1, 'truncated_count': 0, 'usage_status': 'complete'}
+    return payload
+
+
+def _advance_outer_generation(payload):
+    """Make the enclosing envelope generation 2 while the model result still reports generation 1."""
+    payload['generation'] = '2'
+    payload['handoff_binding']['generation'] = '2'
+    payload['knowledge_analysis']['generation'] = '2'
+    payload['knowledge_analysis']['frame_generation'] = '2'
+
+
+def test_matching_model_result_keeps_prose_as_current():
+    output = operator_mio_payload(_model_payload(), now=101)
+    model = output['model_analysis']
+    assert model['is_current'] is True
+    assert model['summary'] == 'Bounded analysis.'
+    assert model['hypotheses'] == [{'statement': 'Probe hypothesis'}]
+    assert model['next_checks'] == ['Review logs']
+    assert model['unknowns'] == ['Source unknown'] and model['uncertainties'] == ['Limited']
+
+
+def test_model_result_from_older_generation_is_not_current_and_prose_is_cleared():
+    payload = _model_payload()
+    _advance_outer_generation(payload)  # outer N+1, model still fast_generation '1' (N)
+    output = operator_mio_payload(payload, now=101)
+    assert output['advisory'] == payload['advisory']  # fast lane itself stays current
+    assert output['model_analysis'] == {'schema_version': 'azazel.mio_model_analysis.v1',
+        'status': 'complete', 'is_current': False, 'fast_generation': '1', 'mio_state': 'complete',
+        'model': 'qwen3.5:0.8b', 'duration_ms': 12, 'prompt_tokens': 100, 'completion_tokens': 25,
+        'request_count': 1, 'metered_request_count': 1, 'truncated_count': 0, 'usage_status': 'complete'}
+    for key in PROSE_KEYS:
+        assert key not in output['model_analysis']
+
+
+@pytest.mark.parametrize('key,value', [
+    ('frame_id', 'frame-2'), ('trace_id', 'mio-2'), ('fast_generation', '2'),
+    ('fast_generation', None), ('is_current', False), ('is_current', 'True'), ('frame_id', None)])
+def test_model_result_bound_to_wrong_frame_trace_or_generation_is_not_current(key, value):
+    payload = _model_payload()
+    if value is None:
+        payload['model_analysis'].pop(key)
+    else:
+        payload['model_analysis'][key] = value
+    output = operator_mio_payload(payload, now=101)
+    model = output['model_analysis']
+    assert model['is_current'] is False
+    assert model['status'] == 'complete' and model['duration_ms'] == 12
+    for prose in PROSE_KEYS:
+        assert prose not in model
+    assert 'frame_id' not in model and 'trace_id' not in model
+
+
+def test_noncurrent_model_status_cannot_reemit_unbound_prose():
+    payload = current()
+    payload['model_analysis'] = {'status': 'degraded', 'summary': 'unbound stale prose',
+        'is_current': False, 'fast_generation': '0'}
+    output = operator_mio_payload(payload, now=101)
+    model = output['model_analysis']
+    assert model['status'] == 'degraded' and model['is_current'] is False
+    assert 'summary' not in model and model['fast_generation'] == '0'
 
 
 def test_edge_fallback_uses_producer_allowlists_and_boolean_unknown_marker():

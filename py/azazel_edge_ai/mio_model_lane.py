@@ -11,6 +11,9 @@ import threading
 import time
 from typing import Any, Callable, Mapping
 
+# mio_live_auxiliary imports only the standard library, so this direction cannot cycle.
+from azazel_edge_ai.mio_live_auxiliary import binding_matches_same_envelope
+
 KNOWLEDGE_STATUSES = frozenset({'disabled', 'missing_token', 'invalid_configuration', 'unavailable',
                       'timeout', 'oversized', 'redirect_rejected', 'auth_rejected',
                       'scope_rejected', 'malformed', 'received', 'superseded', 'projected', 'rejected'})
@@ -156,6 +159,17 @@ def _empty(status: str, reason: str = "") -> dict[str, Any]:
     }
 
 
+def _fast_binding_verified(fast: Mapping[str, Any]) -> bool:
+    """Require the producer's explicit valid marker plus the same-envelope field check."""
+    binding = fast.get("handoff_binding")
+    if not isinstance(binding, Mapping) or binding.get("valid") is not True:
+        return False
+    try:
+        return binding_matches_same_envelope(fast) is True
+    except Exception:
+        return False
+
+
 def _fast_payload(result: Mapping[str, Any]) -> dict[str, Any]:
     """Project only small, typed, non-action fields from the static result."""
     advisory = result.get("advisory") if isinstance(result.get("advisory"), Mapping) else {}
@@ -294,8 +308,12 @@ class LiveMioModelLane:
                         fast = candidate
                         break
                     time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
-                if fast is None or fast.get("status") != "complete" or fast.get("is_current") is False:
+                if fast is None or fast.get("status") != "complete" or fast.get("is_current") is not True:
                     result = _empty("degraded", "fast_result_unavailable")
+                elif not _fast_binding_verified(fast):
+                    # Checked before authorization, analysis, and audit: an unbound or reduced
+                    # fast envelope never reaches the model, governance, or audit boundary.
+                    result = _empty("degraded", "fast_binding_unverified")
                 elif time.monotonic() >= deadline:
                     result = _empty("degraded", "deadline_exceeded")
                 else:
@@ -338,6 +356,13 @@ class LiveMioModelLane:
                         frame_payload = self._frame_snapshot(fast_generation) if self._frame_snapshot else None
                         if not isinstance(frame_payload, Mapping):
                             raise RuntimeError("accepted_frame_unavailable")
+                        advisory = fast.get("advisory")
+                        if (not isinstance(advisory, Mapping)
+                                or frame_payload.get("frame_id") != advisory.get("frame_id")
+                                or frame_payload.get("trace_id") != advisory.get("trace_id")):
+                            # Bind the fetched frame to the verified fast advisory before any
+                            # model call or result-audit adoption can occur.
+                            raise MioModelFailure("frame_binding_rejected", {})
                         stale_check = lambda: (generation != self._generation or
                             str(self._fast_snapshot().get("generation") or "") != fast_generation)
                         if stale_check():

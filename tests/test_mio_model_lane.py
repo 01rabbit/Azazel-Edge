@@ -1,15 +1,29 @@
 from __future__ import annotations
 
+import copy
 import time
+
+import pytest
 
 from azazel_edge_ai.mio_model_lane import LiveMioModelLane, bounded_truncated_count, bounded_usage
 
+_EVENT_KEY = "a1b2c3d4e5f60718293a4b5c"
 
-def _fast(generation="7"):
+
+def _fast(generation="7", trace_id="trace-abc", *, mio_trace_id=None, frame_id="frame-abc"):
+    """A complete fast envelope whose handoff_binding is the producer's valid same-envelope binding."""
     return {
         "status": "complete", "generation": generation, "is_current": True,
-        "trace_id": "trace-abc", "knowledge": {"status": "absent"},
-        "advisory": {"summary": "Static summary", "hypotheses": [{"statement": "possible probe"}],
+        "trace_id": trace_id, "knowledge": {"status": "absent"},
+        "edge_event": {"action": "notify", "mode": "dry_run", "result": "planned_not_applied",
+                       "trace_id": trace_id},
+        "source_context": {"event_key": _EVENT_KEY},
+        "handoff_binding": {"status": "matched", "valid": True, "generation": generation,
+            "event_key": _EVENT_KEY, "edge_trace_id": trace_id, "edge_action": "notify",
+            "edge_mode": "dry_run", "edge_result": "planned_not_applied",
+            "mio_trace_id": mio_trace_id or trace_id, "frame_id": frame_id},
+        "advisory": {"trace_id": mio_trace_id or trace_id, "frame_id": frame_id, "summary": "Static summary",
+                     "hypotheses": [{"statement": "possible probe"}],
                      "next_checks": [{"check": "review logs"}]},
     }
 
@@ -164,6 +178,102 @@ def test_model_lane_discards_fast_result_from_a_superseded_generation():
     result = _wait(lane, "degraded")
     assert result["reason"] == "fast_result_unavailable"
     assert calls == []
+
+
+def test_model_lane_rejects_completed_fast_snapshot_without_explicit_current_marker():
+    calls = {"authorize": [], "analyze": [], "audit": []}
+    fast = _fast()
+    fast.pop("is_current")
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: calls["analyze"].append(payload) or {},
+        fast_snapshot=lambda: fast,
+        authorize=lambda payload: calls["authorize"].append(payload) or (True, "allowed"),
+        audit_result=lambda trace_id, result: calls["audit"].append(trace_id))
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+    assert result["reason"] == "fast_result_unavailable"
+    assert calls == {"authorize": [], "analyze": [], "audit": []}
+
+
+def test_model_lane_rejects_frame_snapshot_not_bound_to_verified_advisory():
+    authorized, analyzed, audited = [], [], []
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: analyzed.append(payload) or {},
+        fast_snapshot=_fast,
+        frame_snapshot=lambda generation: {"frame_id": "other-frame", "trace_id": "trace-abc"},
+        authorize=lambda payload: authorized.append(payload) or (True, "allowed"),
+        audit_result=lambda trace_id, result: audited.append((trace_id, result)))
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+    assert result["reason"] == "frame_binding_rejected"
+    assert len(authorized) == 1
+    assert analyzed == [] and audited == []
+
+
+def _unbound(mutate):
+    fast = _fast()
+    mutate(fast)
+    return fast
+
+
+def _without_binding(fast):
+    fast.pop("handoff_binding")
+
+
+def _invalid_marker(fast):
+    fast["handoff_binding"]["valid"] = False
+
+
+def _string_marker(fast):
+    fast["handoff_binding"]["valid"] = "True"
+
+
+def _missing_marker(fast):
+    fast["handoff_binding"].pop("valid")
+
+
+def _edge_trace_mismatch(fast):
+    fast["handoff_binding"]["edge_trace_id"] = "other-trace"
+
+
+def _mio_frame_mismatch(fast):
+    fast["handoff_binding"]["frame_id"] = "frame-other"
+
+
+def _reduced_binding(fast):
+    fast["handoff_binding"] = {"valid": True}
+
+
+@pytest.mark.parametrize("mutate", [_without_binding, _invalid_marker, _string_marker,
+    _missing_marker, _edge_trace_mismatch, _mio_frame_mismatch, _reduced_binding])
+def test_unbound_or_reduced_fast_envelope_never_reaches_authorize_analyze_or_audit(mutate):
+    calls = {"authorize": [], "analyze": [], "audit": []}
+    fast = _unbound(mutate)
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: calls["analyze"].append(payload) or {"summary": "must not surface"},
+        fast_snapshot=lambda: copy.deepcopy(fast),
+        frame_snapshot=lambda generation: {"frame_id": "frame-abc", "trace_id": "trace-abc"},
+        authorize=lambda payload: calls["authorize"].append(payload) or (True, ""),
+        audit_result=lambda trace_id, result: calls["audit"].append(trace_id))
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+    assert result["reason"] == "fast_binding_unverified"
+    assert result["summary"] == ""
+    assert calls == {"authorize": [], "analyze": [], "audit": []}
+
+
+def test_matching_fast_envelope_proceeds_through_authorize_analyze_and_audit():
+    calls = {"authorize": 0, "analyze": 0, "audit": []}
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: calls.__setitem__("analyze", calls["analyze"] + 1) or {"summary": ""},
+        fast_snapshot=_fast,
+        frame_snapshot=lambda generation: {"frame_id": "frame-abc", "trace_id": "trace-abc"},
+        authorize=lambda payload: calls.__setitem__("authorize", calls["authorize"] + 1) or (True, ""),
+        audit_result=lambda trace_id, result: calls["audit"].append(trace_id))
+    lane.submit("7", "trace-abc")
+    _wait(lane, "degraded")
+    assert calls["authorize"] == 1 and calls["analyze"] == 1
+    assert calls["audit"] == ["trace-abc"]
 
 
 def test_model_error_is_degraded_without_persisting_raw_exception_text():
@@ -395,8 +505,7 @@ def test_valid_fake_transport_runs_full_shared_core_and_lane_preserves_validatio
             return True
     monkeypatch.setattr(agent, "AI_GOVERNANCE", Governance())
     lane = LiveMioModelLane(enabled=True, analyze=agent._governed_mio_model_analyze,
-        fast_snapshot=lambda: {"status": "complete", "generation": "19", "is_current": True,
-                              "trace_id": "external-trace"},
+        fast_snapshot=lambda: _fast("19", "external-trace", mio_trace_id="trace-current", frame_id="frame-current"),
         frame_snapshot=lambda generation: frame)
     lane.submit("19", "external-trace")
     result = _wait(lane, "complete")
@@ -553,8 +662,7 @@ def test_truncated_outer_usage_is_counted_once_and_core_error_fallback_is_partia
     monkeypatch.setattr(agent, "AI_GOVERNANCE", governance)
 
     lane = LiveMioModelLane(enabled=True, analyze=agent._governed_mio_model_analyze,
-        fast_snapshot=lambda: {"status": "complete", "generation": "1", "is_current": True,
-                              "trace_id": "external-trace"},
+        fast_snapshot=lambda: _fast("1", "external-trace", mio_trace_id="trace-telemetry", frame_id="frame-telemetry"),
         frame_snapshot=lambda _generation: frame)
     lane.submit("1", "external-trace")
     result = _wait(lane, "partial")
@@ -742,7 +850,8 @@ def _real_adapter_with_blocking_fake_core():
 
 def _accepted_event(trace):
     return {"normalized": {"event_type": "alert", "sid": 42},
-            "defense": {"action": "notify"}, "enforcement": {"trace_id": trace}}
+            "defense": {"action": "notify"}, "enforcement": {
+                "trace_id": trace, "mode": "dry_run", "result": "planned_not_applied"}}
 
 
 def test_real_auxiliary_pending_generation_waits_for_matching_fast_completion():
@@ -855,7 +964,7 @@ def test_accrued_failure_metrics_survive_governance_and_worker(monkeypatch):
         monkeypatch.setattr(agent, "_analyze_mio_fast_result", fail)
         monkeypatch.setattr(agent, "_audit_mio_model_result", lambda trace, result: audits.append(result))
         lane = LiveMioModelLane(enabled=True, analyze=agent._governed_mio_model_analyze,
-            fast_snapshot=_fast, frame_snapshot=lambda _: {"trace_id": "trace-abc"})
+            fast_snapshot=_fast, frame_snapshot=lambda _: {"frame_id": "frame-abc", "trace_id": "trace-abc"})
         lane.submit("7", "trace-abc")
         result = _wait(lane, "degraded")
         assert result["reason"] == reason
