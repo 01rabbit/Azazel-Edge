@@ -35,6 +35,7 @@ NOT_INSTALLED = {
     "py/azazel_edge/bhusa_": "event preparation tools (bin/azazel-edge-bhusa-*, run from a checkout)",
     "py/azazel_edge/deception_shadow_client.py": "client of an external service, imported by nothing installed",
     "py/azazel_edge/deception_transition.py": "imported by nothing installed",
+    "py/azazel_edge/deception_activation.py": "pure decision builders, imported by nothing installed",
     "py/azazel_edge/engagement_advisory_client.py": "used by outcome/ (not installed)",
     "py/azazel_edge/soc_policy_dry_run.py": "bin/azazel-soc-policy-dry-run, not installed",
 }
