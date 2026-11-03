@@ -27,6 +27,15 @@ typed result reports Knowledge outcome `not_queried`. Results carry source, gene
 trace, provenance, typed Knowledge status, and `read_only_advisory` authority.
 They are not used for action selection, enforcement, or arbitration.
 
+The same event advisory may carry the scorer's optional M.I.O. fast-assessment
+shadow result as `edge_score_comparison`; its `matches` flag compares both the
+numeric score and factor list. It is copied into the live panel only
+when the scorer submission's generation and trace match the current auxiliary
+result. The panel labels it comparison-only and suppresses it with stale or
+uncorrelated M.I.O. results. Edge's score, factors, risk label, recommendation,
+and action remain sourced only from `TacticalScorer`; the shadow score is not
+consumed by a decision or enforcement path.
+
 Completed async results are written into the agent snapshot and admitted by
 the control daemon's typed snapshot overlay to the dashboard bundle. The
 dashboard's M.I.O. live auxiliary panel displays status, Knowledge provenance,
@@ -129,3 +138,30 @@ Failure isolation and audit degradation:
   `knowledge_status` only when it is a string in the fixed Knowledge status
   vocabulary. Any other value is dropped and never echoed into the audit payload.
   The vocabulary is kept in sync with the model lane by a parity test.
+
+## Optional Knowledge operator receipt candidate
+
+`edge_knowledge_advisory` is an optional `azazel.edge_knowledge_advisory.v1`
+receipt, separate from score comparison. The adapter projects only MIO #18's
+bounded `source_groups`, public ATT&CK identifiers, bounded source freshness,
+and the `reported_unverified` claim label. Its status is `complete` and its
+authority is `read_only_advisory`; missing or invalid receipts are omitted. Raw
+IOC values, recommendation prose, canonical state, tokens and provenance are
+excluded. Snapshot and display require current generation, trace, completion
+freshness and handoff binding; the browser renders text only.
+
+This local operator sidecar is based on Edge #528
+`df61bd9847acc49d41d96d48e42046b858fb93da`, using MIO pin
+`c6a0e0d6ef589693bc7bd54a4c2c1cdf32371524`, which includes MIO #18's typed
+receipt. The fast adapter still calls `knowledge_attempted=False`; it projects
+only a receipt already supplied by the shared core and adds no Knowledge query
+or context construction. A separate optional loopback Knowledge query lane is
+bounded and disabled by default. This does not establish full-node or deployed
+Knowledge integration; it adds no network calls, installer changes or decision
+consumers.
+
+An Edge score/factor comparison is labeled `comparison_only` and separately
+bound to generation and trace. Its M.I.O. score uses the same Edge-resolved
+inputs, so a match indicates parity within that comparison, not independent
+corroboration, detection, or ground truth. It does not alter the deterministic
+decision path.

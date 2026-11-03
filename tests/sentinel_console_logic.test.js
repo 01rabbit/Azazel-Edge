@@ -289,62 +289,200 @@ function greenNodes(doc) {
 }
 function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el.className + ' "' + el.textContent.slice(0, 40) + '"'; }
 
+// Optional Knowledge receipt uses the same current handoff gate.
+(function () {
+    const m = mount();
+    const el = m.doc.createElement('span'); el.id = 'mioLiveKnowledgeAdvisory'; m.doc.body.appendChild(el);
+    const p = {status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date().toISOString(), generation: '1', trace_id: 't1',
+        edge_event: {trace_id: 't1', action: 'notify', mode: 'dry_run', result: 'planned_not_applied'},
+        source_context: {event_key: 'e1'}, advisory: {trace_id: 'm1', frame_id: 'f1'},
+        handoff_binding: {status: 'matched', valid: true, generation: '1', event_key: 'e1', edge_trace_id: 't1',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'm1', frame_id: 'f1'},
+        edge_knowledge_advisory: {schema_version: 'azazel.edge_knowledge_advisory.v1', status: 'complete',
+            authority: 'read_only_advisory', generation: '1', trace_id: 't1', claim_status: 'reported_unverified',
+            source_groups: ['abusech'], attack_techniques: ['T1059.001'], source_freshness: {oldest_feed_days: 2}}};
+    m.S.renderMioLiveAuxiliary(p);
+    ok(el.textContent.includes('abusech') && el.textContent.includes('T1059.001'), 'receipt projected fields displayed');
+    for (const change of [{is_current: false}, {completed_at: '2000-01-01'}, {status: 'unavailable'}, {status: 'degraded'}]) {
+        m.S.renderMioLiveAuxiliary(Object.assign({}, p, change));
+        eq(el.textContent, 'Suppressed', 'unusable envelope hides receipt');
+    }
+    for (const change of [{generation: '2'}, {trace_id: 'wrong'}, {source_groups: ['<b>bad</b>']}, {source_freshness: {token: 'secret'}},
+        {attack_techniques: ['T１０５９.００１']}, {attack_techniques: ['T١٠٥٩.٠٠١']},
+        {source_freshness: {attack_version: '１６.１'}}, {source_freshness: {attack_version: '١٦.١'}}]) {
+        m.S.renderMioLiveAuxiliary(Object.assign({}, p, {edge_knowledge_advisory: Object.assign({}, p.edge_knowledge_advisory, change)}));
+        eq(el.textContent, 'Suppressed', 'malformed or unbound receipt suppressed');
+    }
+    m.S.renderMioLiveAuxiliary(Object.assign({}, p, {edge_knowledge_advisory: undefined}));
+    eq(el.textContent, 'Unavailable', 'optional receipt omission');
+})();
+
+(function () {
+    const m = mount();
+    ['mioLiveScoreComparison', 'mioLiveKnowledgeAdvisory', 'mioLiveEdgeAction'].forEach(function (id) {
+        const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el);
+    });
+    const payload = {status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date().toISOString(), generation: '530', trace_id: 'edge-530',
+        edge_event: {trace_id: 'edge-530', action: 'notify', mode: 'dry_run', result: 'planned_not_applied'},
+        source_context: {event_key: 'event-530'},
+        handoff_binding: {status: 'matched', valid: true, generation: '530', event_key: 'event-530',
+            edge_trace_id: 'edge-530', edge_action: 'notify', edge_mode: 'dry_run',
+            edge_result: 'planned_not_applied', mio_trace_id: 'mio-530'},
+        advisory: {trace_id: 'mio-530'},
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '530', trace_id: 'edge-530', edge_score: 50, mio_score: 51, matches: false},
+        edge_knowledge_advisory: {schema_version: 'azazel.edge_knowledge_advisory.v1', status: 'complete',
+            authority: 'read_only_advisory', generation: '530', trace_id: 'edge-530',
+            claim_status: 'reported_unverified', source_groups: ['abusech'], attack_techniques: ['T1059.001'],
+            source_freshness: {oldest_feed_days: 1}}};
+    m.S.renderMioLiveAuxiliary(payload);
+    eq(m.$('mioLiveScoreComparison').textContent,
+        'Edge 50 / M.I.O. 51 · same Edge-resolved inputs: differs · comparison only (not independent corroboration or ground truth)', 'comparison is trace bound and labeled');
+    ok(m.$('mioLiveKnowledgeAdvisory').textContent.includes('abusech'), 'optional receipt fields are projected');
+    m.S.renderMioLiveAuxiliary(Object.assign({}, payload, {is_current: false, trace_id: 'old-edge-trace',
+        edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {generation: 'old'})}));
+    eq(m.$('mioLiveKnowledgeAdvisory').textContent, 'Suppressed', 'stale optional receipt is suppressed');
+    ok(m.$('mioLiveEdgeAction').textContent.includes('notify / reported mode dry_run / planned_not_applied'), 'stale receipt leaves Edge action/result visible');
+    ok(m.$('mioLiveEdgeAction').textContent.includes('not correlated to current M.I.O./Knowledge details'), 'stale outer envelope marks retained Edge action uncorrelated');
+    ok(!m.$('mioLiveEdgeAction').textContent.includes('event-530'), 'stale marker exposes no correlation ID');
+    const mismatched = Object.assign({}, payload, {handoff_binding: Object.assign({}, payload.handoff_binding, {valid: false}),
+        edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {trace_id: 'other-private-id'})});
+    m.S.renderMioLiveAuxiliary(mismatched);
+    ok(m.$('mioLiveEdgeAction').textContent.includes('notify / reported mode dry_run / planned_not_applied'), 'binding mismatch keeps Edge action/result visible');
+    ok(m.$('mioLiveEdgeAction').textContent.includes('not correlated to current M.I.O./Knowledge details'), 'binding mismatch marks retained Edge action uncorrelated');
+    ok(!m.$('mioLiveEdgeAction').textContent.includes('other-private-id'), 'mismatch marker hides receipt ID');
+    const malformed = Object.assign({}, payload, {edge_knowledge_advisory: Object.assign({}, payload.edge_knowledge_advisory, {source_groups: ['raw.example']})});
+    m.S.renderMioLiveAuxiliary(malformed);
+    ok(m.$('mioLiveEdgeAction').textContent.includes('Knowledge unmatched/un-correlated'), 'malformed current receipt is marked unmatched');
+})();
+
 // --- 1. Empty payload: nothing throws, nothing is green, unknowns say so ----
 (function () {
     const m = mount();
+    let expireKnowledge;
+    global.window.setTimeout = function (callback) { expireKnowledge = callback; return 1; };
+    global.window.clearTimeout = function () {};
     ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction',
-     'mioLiveAuxAdvice','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff',
-     'mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics'].forEach(function (id) {
+     'mioLiveAuxAdvice','mioLiveScoreComparison','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff',
+     'mioKnowledgeStatus','mioKnowledgeRefs','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics'].forEach(function (id) {
         const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el);
     });
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
         completed_at: new Date(Date.now() - 1000).toISOString(),
         knowledge: {status: 'not_provided'}, trace_id: 'edge-trace-5',
         edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-5'},
-        source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', generation: '5',
+        source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', valid: true, generation: '5',
             event_key: 'event-5', edge_trace_id: 'edge-trace-5', edge_action: 'notify',
             edge_result: 'planned_not_applied', edge_mode: 'dry_run', mio_trace_id: 'mio-trace-5', frame_id: 'frame-5'},
-        generation: '5', model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
+        generation: '5', edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1',
+            authority: 'comparison_only', status: 'complete', generation: '5', trace_id: 'edge-trace-5',
+            edge_score: 72, mio_score: 72, matches: true},
+        knowledge_analysis:{status: 'projected', is_current: true, claim_status: 'reported_unverified', trust: 'unverified_advisory_only', generation: '5', frame_generation: '5', source_trace_id: 'edge-trace-5', event_key: 'event-5', trace_id: 'mio-trace-5', frame_id: 'frame-5', attack_techniques: ['T1059.001'], source_groups: ['abusech'], source_freshness: {status: 'reported_unverified_at_lookup', oldest_feed_days: null, attack_version: null}, action: 'isolate'}, model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
             hypotheses: [{statement: 'A hostile-activity explanation remains possible, but this frame does not establish it.', verification: 'model_proposed_unverified', source: 'mio_validated_alternative', frame_refs: ['suricata_sid:42']}],
             next_checks: ['check the observed event'], model: 'qwen:2b', duration_ms: 900, prompt_tokens: 20, completion_tokens: 12},
         advisory: {trace_id: 'mio-trace-5', frame_id: 'frame-5', recommendation: '<img src=x onerror=alert(1)>',
             hypotheses: [{statement: '<script>hypothesis</script>', verification: 'unverified'}],
-            next_checks: ['check one'], handoff: {summary: '<b>handoff</b>'}}});
+            next_checks: ['check one'], handoff: {summary: 'No model contributed to the static fast result.'}}});
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected (reported, unverified)', 'independent receipt status');
+    eq(m.$('mioKnowledgeRefs').textContent, 'ATT&CK: T1059.001 · Source groups: abusech · Source freshness reported, unverified at lookup: oldest feed unavailable; ATT&CK version unavailable', 'only allowlisted reference metadata rendered');
     eq(m.$('mioLiveAuxStatus').textContent, 'complete', 'MIO status rendered');
     eq(m.$('mioLiveAuxKnowledge').textContent, 'not_provided', 'Knowledge provenance rendered');
     eq(m.$('mioLiveAuxFreshness').textContent, 'Current generation', 'fresh completion is current');
-    eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-5', 'Edge action separated');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 72 / M.I.O. 72 · same Edge-resolved inputs: parity · comparison only (not independent corroboration or ground truth)', 'score and factor assessment comparison is separately labeled');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-5', 'Edge action separated');
     eq(m.$('mioLiveAuxAdvice').textContent, '<img src=x onerror=alert(1)>', 'MIO advice rendered as text');
     eq(m.$('mioLiveAuxHypotheses').textContent, '<script>hypothesis</script>', 'hypothesis rendered as text');
     eq(m.$('mioLiveAuxChecks').textContent, 'check one', 'next checks rendered');
-    eq(m.$('mioLiveAuxHandoff').textContent, '<b>handoff</b>', 'handoff rendered as text');
+    eq(m.$('mioLiveAuxHandoff').textContent, 'No model contributed to the static fast result.', 'static fast handoff status is displayed independently');
     eq(m.$('mioModelFreshness').textContent, 'Current fast generation', 'model result correlated to fast generation');
     eq(m.$('mioModelSummary').textContent, '<b>measured</b>', 'model text rendered as text');
+    eq(m.$('mioLiveAuxAdvice').textContent, '<img src=x onerror=alert(1)>', 'complete model result does not replace static fast assessment');
+    ok(m.$('mioModelSummary').textContent !== m.$('mioLiveAuxHandoff').textContent, 'measured model summary remains in its separate display field');
     eq(m.$('mioModelState').textContent, 'complete', 'validated MIO state rendered');
     eq(m.$('mioModelHypotheses').textContent,
         'A hostile-activity explanation remains possible, but this frame does not establish it. [M.I.O.-selected; fixed wording; unverified; frame refs are context only]',
         'fixed MIO alternative rendered with context-only frame provenance');
     eq(m.$('mioModelChecks').textContent, 'check the observed event', 'validated model checks rendered as text');
     ok(m.$('mioModelMetrics').textContent.indexOf('qwen:2b') >= 0, 'current model metrics rendered');
+    expireKnowledge();
+    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'receipt expires even without another poll');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'expiry clears refs');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-5', 'receipt expiry preserves the correlated Edge action');
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
+        knowledge: {status: 'not_queried'},
+        edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
+        source_context: {event_key: 'event-6'},
+        handoff_binding: {status: 'matched', valid: true, generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35, mio_score: 35, matches: true},
+        advisory: {trace_id: 'mio-trace-6', hypotheses: [], next_checks: []}});
+    eq(m.$('mioLiveAuxKnowledge').textContent, 'not_queried', 'missing Knowledge is explicit');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 35 / M.I.O. 35 · same Edge-resolved inputs: parity · comparison only (not independent corroboration or ground truth)', 'comparison remains available without model analysis');
+    // `matches` represents both score and factor equality, so equal scores can still differ.
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
+        edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
+        source_context: {event_key: 'event-6'},
+        handoff_binding: {status: 'matched', valid: true, generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
+        advisory: {trace_id: 'mio-trace-6'},
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35, mio_score: 35,
+            matches: false, mio_factors: ['different explanation']}});
+    eq(m.$('mioLiveScoreComparison').textContent, 'Edge 35 / M.I.O. 35 · same Edge-resolved inputs: differs · comparison only (not independent corroboration or ground truth)', 'equal scores can report differing factor assessment');
+    ['pending', 'unavailable', 'degraded'].forEach(function (status) {
+        m.S.renderMioLiveAuxiliary({status: status, is_current: false,
+            edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+                status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35, mio_score: 35, matches: true}});
+        eq(m.$('mioLiveScoreComparison').textContent, 'Suppressed (M.I.O. ' + status + ')', status + ' is distinct from stale/correlation suppression');
+    });
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
+        edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
+        source_context: {event_key: 'event-6'},
+        handoff_binding: {status: 'matched', valid: true, generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '6', trace_id: 'edge-trace-6', edge_score: 35}});
+    eq(m.$('mioLiveScoreComparison').textContent, 'Suppressed (invalid comparison)', 'complete comparison requires score and match fields');
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
+        edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-6'},
+        source_context: {event_key: 'event-6'},
+        handoff_binding: {status: 'matched', valid: true, generation: '6', event_key: 'event-6', edge_trace_id: 'edge-trace-6',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-6'},
+        advisory: {trace_id: 'mio-trace-6'},
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '5', trace_id: 'edge-trace-5', edge_score: 35, mio_score: 35, matches: true}});
+    eq(m.$('mioLiveScoreComparison').textContent, 'Suppressed (comparison generation/trace mismatch)', 'wrong comparison binding is distinguished');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-6', 'comparison mismatch preserves the separately correlated Edge action');
     const mismatched = {status: 'complete', generation: '5', trace_id: 'edge-trace-5', is_current: true,
         completed_at: new Date(Date.now() - 1000).toISOString(), max_age_seconds: 10,
+        edge_score_comparison: {schema_version: 'azazel.edge_score_comparison.v1', authority: 'comparison_only',
+            status: 'complete', generation: '4', trace_id: 'edge-trace-4', edge_score: 72, mio_score: 75, matches: false},
         source_context: {event_key: 'event-5'}, edge_event: {action: 'notify', mode: 'dry_run', result: 'applied', trace_id: 'edge-trace-5'},
-        handoff_binding: {status: 'matched', generation: '5', event_key: 'event-5',
+        handoff_binding: {status: 'matched', valid: true, generation: '5', event_key: 'event-5',
             edge_trace_id: 'edge-trace-5', edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
         advisory: {recommendation: 'wrong event recommendation', summary: 'wrong event summary',
             hypotheses: [{statement: 'wrong event hypothesis'}], next_checks: ['wrong event check'],
             handoff: {summary: 'wrong event handoff'}}};
     m.S.renderMioLiveAuxiliary(mismatched);
     eq(m.$('mioLiveAuxStatus').textContent, 'complete (details suppressed)', 'mismatched result status marked suppressed');
+    eq(m.$('mioLiveScoreComparison').textContent, 'Suppressed (M.I.O. correlation mismatch)', 'mismatched M.I.O. binding is identified');
     eq(m.$('mioLiveAuxAdvice').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'mismatched recommendation suppressed');
     eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'mismatched hypotheses suppressed');
     eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'mismatched checks suppressed');
     eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'mismatched handoff suppressed');
-    eq(m.$('mioLiveEdgeAction').textContent, 'notify / applied / edge-trace-5', 'Edge action remains visible on MIO mismatch');
+    ok(/^notify \/ reported mode dry_run \/ applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent),
+        'Edge action/reported mode retained and marked uncorrelated on MIO mismatch with snapshot age: ' + m.$('mioLiveEdgeAction').textContent);
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '5',
         trace_id: 'edge-trace-5', edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-5'},
-        source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', generation: '5',
+        source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', valid: true, generation: '5',
             event_key: 'event-5', edge_trace_id: 'edge-trace-5', edge_action: 'notify',
             edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
         model_analysis: {status: 'partial', is_current: true, fast_generation: '5',
@@ -360,20 +498,70 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             next_checks: ['stale check'], handoff: {summary: 'stale handoff'}},
         model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: 'old'} });
     eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result', 'stale fast result cannot label model current');
+    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'stale independent receipt unavailable');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'stale receipt refs hidden');
     eq(m.$('mioLiveAuxAdvice').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'stale advice suppressed');
     eq(m.$('mioLiveAuxHypotheses').textContent, 'Suppressed', 'stale hypotheses suppressed');
     eq(m.$('mioLiveAuxChecks').textContent, 'Suppressed', 'stale checks suppressed');
     eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'stale handoff suppressed');
-    eq(m.$('mioLiveEdgeAction').textContent, 'isolate / applied / edge-trace-old', 'Edge action remains visible on stale MIO result');
+    // Age is bounded, not exact: the fixture is 60 s old, so it must be at least 60 s and tolerate a paused test run.
+    const ageA = /snapshot age at last refresh (\d+) s$/.exec(m.$('mioLiveEdgeAction').textContent);
+    ok(/^isolate \/ reported mode enforced \/ applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent) && ageA !== null && Number(ageA[1]) >= 60 && Number(ageA[1]) <= 120,
+        'stale MIO result retains action/reported mode and shows known snapshot age: ' + m.$('mioLiveEdgeAction').textContent);
     function currentPayload(modelAnalysis) {
         return {status: 'complete', is_current: true, max_age_seconds: 10,
             completed_at: new Date(Date.now() - 1000).toISOString(), generation: '7', trace_id: 'edge-trace-7',
             edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-7'},
             source_context: {event_key: 'event-7'},
-            handoff_binding: {status: 'matched', generation: '7', event_key: 'event-7', edge_trace_id: 'edge-trace-7',
+            handoff_binding: {status: 'matched', valid: true, generation: '7', event_key: 'event-7', edge_trace_id: 'edge-trace-7',
                 edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
             model_analysis: modelAnalysis};
     }
+    const diagnosticStatuses = ['starting', 'queued', 'disabled', 'missing_token', 'invalid_configuration',
+        'unavailable', 'timeout', 'oversized', 'redirect_rejected', 'auth_rejected', 'scope_rejected',
+        'malformed', 'received', 'superseded', 'rejected', 'projected'];
+    diagnosticStatuses.forEach(function (status) {
+        ['queued', 'degraded', 'stale', 'mismatched'].forEach(function (fastState) {
+            const payload = currentPayload({status: 'disabled'});
+            payload.knowledge_analysis = {status: status, is_current: true,
+                claim_status: 'reported_unverified', trust: 'unverified_advisory_only',
+                attack_techniques: ['T1059.001'], source_groups: ['abusech'],
+                trace_id: 'must-not-render', frame_id: 'must-not-render'};
+            if (fastState === 'queued' || fastState === 'degraded') {
+                payload.status = fastState;
+                payload.is_current = false;
+                delete payload.completed_at;
+            } else if (fastState === 'stale') {
+                payload.completed_at = new Date(Date.now() - 60000).toISOString();
+            } else {
+                payload.handoff_binding.edge_result = 'wrong-result';
+            }
+            let scheduled = false;
+            global.window.setTimeout = function () { scheduled = true; return 1; };
+            m.S.renderMioLiveAuxiliary(payload);
+            eq(m.$('mioKnowledgeStatus').textContent, status === 'projected' ? 'projected but not current' : status,
+                status + '/' + fastState + ': bounded diagnostic visible');
+            eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable',
+                status + '/' + fastState + ': all reference IDs hidden');
+            ok(!scheduled, status + '/' + fastState + ': diagnostic independent of fast expiry');
+        });
+    });
+    // Status-only projected receipts (server-suppressed) must be labelled not current, with no refs.
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: false, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 60000).toISOString(), generation: '8',
+        knowledge_analysis: {status: 'projected', is_current: false}});
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'stale envelope projected receipt labelled not current');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'stale envelope projected receipt has no refs');
+    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+        completed_at: new Date(Date.now() - 1000).toISOString(), generation: '8',
+        knowledge_analysis: {status: 'projected', is_current: false}});
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'unbound projected receipt labelled not current');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'unbound projected receipt has no refs');
+    ['unknown', '<script>bad</script>', [], null].forEach(function (status) {
+        m.S.renderMioLiveAuxiliary({status: 'queued', knowledge_analysis: {status: status}});
+        eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'invalid diagnostic suppressed');
+        eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'invalid diagnostic refs hidden');
+    });
     function assertModelSuppressed(payload, label) {
         m.S.renderMioLiveAuxiliary(payload);
         eq(m.$('mioModelStatus').textContent, 'suppressed', label + ': model status suppressed');
@@ -382,7 +570,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         eq(m.$('mioModelHypotheses').textContent, 'Suppressed', label + ': model hypotheses suppressed');
         eq(m.$('mioModelChecks').textContent, 'Suppressed', label + ': model checks suppressed');
         eq(m.$('mioModelMetrics').textContent, 'Suppressed', label + ': model metrics suppressed');
-        eq(m.$('mioLiveEdgeAction').textContent, 'notify / planned_not_applied / edge-trace-7', label + ': Edge action stays visible');
+        eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-7', label + ': Edge action stays visible');
     }
     assertModelSuppressed(currentPayload({status: 'complete', is_current: true, fast_generation: '6', summary: 'wrong generation',
         mio_state: 'wrong generation state', hypotheses: [{statement: 'wrong generation hypothesis'}],
@@ -396,6 +584,28 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6',
         model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: 'mismatch'} });
     eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result', 'different fast generation cannot label model current');
+    // Degraded model lane: status and allowlisted reason stay visible; detail fields remain suppressed; Edge action unchanged.
+    m.S.renderMioLiveAuxiliary(currentPayload({status: 'degraded', is_current: false, fast_generation: '7',
+        reason: 'deadline_exceeded', summary: 'raw model text must not show', mio_state: 'raw state', model: 'degraded-model'}));
+    eq(m.$('mioModelStatus').textContent, 'degraded (not current)', 'degraded lane status visible while not current');
+    eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result · lane reason: deadline exceeded', 'allowlisted lane reason visible as fixed label');
+    eq(m.$('mioModelSummary').textContent, 'Suppressed', 'degraded result summary still suppressed');
+    eq(m.$('mioModelState').textContent, 'Suppressed', 'degraded result state still suppressed');
+    eq(m.$('mioModelMetrics').textContent, 'Suppressed', 'degraded result metrics still suppressed');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-7', 'degraded model lane leaves Edge action unchanged');
+    [['governance_denied:policy_x', 'governance denied'], ['audit_failed', 'audit failed'],
+     ['mio_no_model_contribution', 'no model contribution'], ['mio_partial:error_fallback', 'partial M.I.O. state'],
+     ['model_error', 'model error'], ['queue_full', 'queue full'], ['superseded', 'superseded'],
+     ['frame_binding_rejected', 'frame binding rejected'], ['fast_result_unavailable', 'fast result unavailable']].forEach(function (pair) {
+        m.S.renderMioLiveAuxiliary(currentPayload({status: 'skipped', is_current: false, fast_generation: '7', reason: pair[0]}));
+        eq(m.$('mioModelFreshness').textContent, 'Skipped · lane reason: ' + pair[1], 'allowlisted reason ' + pair[0] + ' maps to fixed label');
+    });
+    m.S.renderMioLiveAuxiliary(currentPayload({status: 'degraded', is_current: false, fast_generation: '7',
+        reason: '<img src=x onerror=alert(1)> raw reason text'}));
+    eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result · lane reason: reason withheld (not allowlisted)', 'unlisted reason withheld, not echoed');
+    ok(m.$('mioModelFreshness').textContent.indexOf('<img') < 0, 'raw reason markup never displayed');
+    m.S.renderMioLiveAuxiliary(currentPayload({status: 'complete', is_current: false, fast_generation: '7', reason: 'deadline_exceeded'}));
+    eq(m.$('mioModelStatus').textContent, 'suppressed', 'non-degraded non-current status remains generic suppressed');
     ok(m.$('mioLiveAuxAdvice').children.length === 0, 'untrusted MIO prose is not parsed as markup');
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 1,
         completed_at: new Date(Date.now() - 5000).toISOString()});
@@ -648,6 +858,473 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     const lat = meter('Latency', { llm: { latency_ms_ema: true } });
     eq(lat.value, '—', 'latency true -> dash');
     dom.uninstall();
+})();
+
+// --- 1b. Knowledge receipt: normal, timeout/stale, binding mismatch, safe cue, bounded IDs ---
+(function () {
+    const IDS = ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction','mioLiveCorrelation',
+     'mioLiveAuxAdvice','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff','mioKnowledgeStatus','mioKnowledgeRefs',
+     'mioKnowledgeCue','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics',
+     'mioSourceObserved','mioSourceUnavailable'];
+    function payload(over) {
+        const base = {status: 'complete', is_current: true, max_age_seconds: 10,
+            completed_at: new Date(Date.now() - 1000).toISOString(), generation: '8', trace_id: 'edge-trace-8',
+            edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-8'},
+            source_context: {event_key: 'event-8'},
+            handoff_binding: {status: 'matched', valid: true, generation: '8', event_key: 'event-8', edge_trace_id: 'edge-trace-8',
+                edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied',
+                mio_trace_id: 'mio-8', frame_id: 'frame-8'},
+            advisory: {trace_id: 'mio-8', frame_id: 'frame-8'},
+            knowledge_analysis: receipt({})};
+        return Object.assign(base, over);
+    }
+    // A projected receipt carrying all six server-projected bindings, bound to payload({}) above.
+    function receipt(over) {
+        return Object.assign({status: 'projected', is_current: true, claim_status: 'reported_unverified',
+            trust: 'unverified_advisory_only', generation: '8', frame_generation: '8', source_trace_id: 'edge-trace-8',
+            event_key: 'event-8', trace_id: 'mio-8', frame_id: 'frame-8', attack_techniques: ['T1059'],
+            source_groups: ['abusech'], source_freshness: {status: 'reported_unverified_at_lookup', oldest_feed_days: 14.5, attack_version: '18.1'}}, over);
+    }
+    function mountKnowledge() {
+        const m = mount();
+        m.expire = null;
+        global.window.setTimeout = function (callback) { m.expire = callback; return 1; };
+        global.window.clearTimeout = function () {};
+        IDS.forEach(function (id) { const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el); });
+        return m;
+    }
+    const CUE_TAIL = 'Edge observed action/result remains authoritative';
+
+    // Normal: projected, bound receipt is current; correlation IDs shown.
+    let m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected (reported, unverified)', 'normal: receipt current');
+    eq(m.$('mioKnowledgeRefs').textContent,
+        'ATT&CK: T1059 · Source groups: abusech · Source freshness reported, unverified at lookup: oldest feed 14.5 days; ATT&CK version 18.1',
+        'normal: refs and explicitly unverified source freshness shown');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('not a verdict') >= 0, 'normal: cue states unverified, not a verdict');
+    eq(m.$('mioLiveCorrelation').textContent, 'event event-8 · trace edge-trace-8 · frame frame-8', 'normal: correlation IDs shown');
+    m.expire();
+    eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'normal: expiry clears receipt');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('expired') >= 0 && m.$('mioKnowledgeCue').textContent.indexOf(CUE_TAIL) >= 0, 'normal: expiry cue keeps Edge authority');
+    dom.uninstall();
+
+    // Null and malformed/absent freshness stay explicitly unavailable and never become verified.
+    [null, {}, {status: 'reported_unverified_at_lookup', oldest_feed_days: true, attack_version: '18.1'},
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: -1, attack_version: null},
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: 36501, attack_version: null},
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: 1, attack_version: 'unknown'},
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: 1, attack_version: '18.1<script>'},
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: 1, attack_version: null, url: 'https://evil.invalid'}
+    ].forEach(function (freshness, i) {
+        m = mountKnowledge();
+        const r = receipt({});
+        if (freshness === null) delete r.source_freshness;
+        else r.source_freshness = freshness;
+        m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: r}));
+        ok(m.$('mioKnowledgeRefs').textContent.indexOf('Source freshness unavailable (not verified)') >= 0,
+            'freshness malformed #' + i + ' is explicitly unavailable');
+        ok(m.$('mioKnowledgeRefs').textContent.indexOf('Source freshness verified') < 0,
+            'freshness malformed #' + i + ' never claimed verified');
+        dom.uninstall();
+    });
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({source_freshness:
+        {status: 'reported_unverified_at_lookup', oldest_feed_days: null, attack_version: null}})}));
+    ok(m.$('mioKnowledgeRefs').textContent.indexOf('oldest feed unavailable; ATT&CK version unavailable') >= 0,
+        'null freshness values render as unavailable');
+    dom.uninstall();
+
+    // The producer's explicit binding marker is required even when all fields align.
+    [false, undefined].forEach(function (valid, i) {
+        m = mountKnowledge();
+        const envelope = payload({});
+        if (valid === undefined) delete envelope.handoff_binding.valid;
+        else envelope.handoff_binding.valid = valid;
+        m.S.renderMioLiveAuxiliary(envelope);
+        eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'binding valid marker #' + i + ': fixed status only');
+        eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'binding valid marker #' + i + ': refs suppressed');
+        eq(m.$('mioLiveCorrelation').textContent, 'Suppressed', 'binding valid marker #' + i + ': source identifiers suppressed');
+        eq(m.$('mioSourceObserved').textContent, 'Suppressed', 'binding valid marker #' + i + ': claims suppressed');
+        eq(m.$('mioLiveAuxHandoff').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).',
+            'binding valid marker #' + i + ': handoff suppressed');
+        ok(m.$('mioKnowledgeCue').textContent.indexOf('not current/usable; no reference metadata') >= 0,
+            'binding valid marker #' + i + ': safe non-current cue');
+        ok(/^notify \/ reported mode dry_run \/ planned_not_applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent),
+            'binding valid marker #' + i + ': action/result remain visible and trace is suppressed');
+        dom.uninstall();
+    });
+
+    // Timeout: correlated failure state is labelled, refs suppressed, cue is deterministic and non-retrying.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: {status: 'timeout', is_current: false}}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'timeout', 'timeout: failure status shown');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'timeout: refs suppressed');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('Knowledge timeout') >= 0, 'timeout: cue names the failure');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('Nothing is retried automatically') >= 0, 'timeout: cue forbids automatic retry');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('model') < 0, 'timeout: cue implies no model action');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-8', 'timeout: Edge observed result unchanged');
+    dom.uninstall();
+
+    // Stale: completed too long ago; only a fixed status remains, with refs suppressed and Edge visible.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({completed_at: new Date(Date.now() - 60000).toISOString()}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'stale: receipt status is not current');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'stale: refs suppressed');
+    ok(m.$('mioKnowledgeCue').textContent.indexOf('not current/usable; no reference metadata') >= 0 && m.$('mioKnowledgeCue').textContent.indexOf(CUE_TAIL) >= 0, 'stale: safe non-current cue');
+    dom.uninstall();
+
+    // Binding mismatch: receipt generation differs from the parent generation.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({generation: '7'})}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'mismatch: generation-mismatched receipt status is not current');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'mismatch: refs suppressed');
+    dom.uninstall();
+
+    // Binding mismatch: receipt names a different frame than the advisory.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({frame_id: 'frame-other'})}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'frame mismatch: status is not current');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'frame mismatch: refs suppressed');
+    dom.uninstall();
+
+    // Missing parent frame: advisory carries no frame, so the receipt cannot be bound to a frame.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({advisory: {trace_id: 'mio-8'}}));
+    eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'missing parent frame: status is not current');
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'missing parent frame: refs suppressed');
+    eq(m.$('mioLiveCorrelation').textContent, 'event event-8 · trace edge-trace-8 · frame none', 'missing parent frame: frame shown as none');
+    dom.uninstall();
+
+    // Missing receipt binding: each of the six projected binding fields, when absent, suppresses the receipt
+    // even though the parent envelope names every value. The correlation line still shows parent IDs.
+    ['generation', 'frame_generation', 'source_trace_id', 'event_key', 'trace_id', 'frame_id'].forEach(function (field) {
+        m = mountKnowledge();
+        const r = receipt({});
+        delete r[field];
+        m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: r}));
+        eq(m.$('mioKnowledgeStatus').textContent, 'projected but not current', 'missing receipt ' + field + ': status is not current');
+        eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'missing receipt ' + field + ': refs suppressed');
+        ok(m.$('mioKnowledgeCue').textContent.indexOf('Knowledge projected but not current: not current/usable; no reference metadata.') === 0
+            && m.$('mioKnowledgeCue').textContent.indexOf(CUE_TAIL) >= 0, 'missing receipt ' + field + ': cue is safe');
+        eq(m.$('mioLiveCorrelation').textContent, 'event event-8 · trace edge-trace-8 · frame frame-8', 'missing receipt ' + field + ': parent IDs unchanged');
+        dom.uninstall();
+    });
+
+    // Over-length or non-string receipt binding is suppressed, not truncated into a match.
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({frame_id: 'frame-8' + 'x'.repeat(90)})}));
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'over-length receipt binding: refs suppressed');
+    dom.uninstall();
+
+    m = mountKnowledge();
+    m.S.renderMioLiveAuxiliary(payload({knowledge_analysis: receipt({event_key: ['event-8']})}));
+    eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'non-string receipt binding: refs suppressed');
+    dom.uninstall();
+
+    // Bounded, untrusted IDs: long markup-like key is rendered as text and truncated.
+    m = mountKnowledge();
+    const hostile = '<img src=x onerror=alert(1)>' + 'k'.repeat(200);
+    m.S.renderMioLiveAuxiliary(payload({source_context: {event_key: hostile}, handoff_binding: Object.assign({}, payload({}).handoff_binding, {event_key: hostile})}));
+    const corr = m.$('mioLiveCorrelation').textContent;
+    ok(corr.indexOf('event <img src=x onerror=alert(1)>') === 0, 'bounded IDs: markup kept as inert text');
+    ok(corr.length <= 'event '.length + 96 + ' · trace edge-trace-8 · frame frame-8'.length, 'bounded IDs: event key truncated to 96 chars');
+    dom.uninstall();
+})();
+
+// --- 7. Normalized source context: allowlist, observed vs unavailable, gated --
+(function () {
+    const m = mount();
+    ['mioSourceObserved', 'mioSourceUnavailable', 'mioLiveEdgeAction'].forEach(function (id) {
+        const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el);
+    });
+    const field = function (value, status) { return {value: value, status: status || 'observed', provenance: 'rust_core_normalized_event'}; };
+    const unavailable = function () { return field(null, 'unavailable'); };
+    const KEY8 = 'a1b2c3d4e5f60718293a4b5c'; // producer-shaped: 24 lowercase hex chars
+    function current(sourceFields, overrides) {
+        return Object.assign({status: 'complete', is_current: true, max_age_seconds: 10,
+            completed_at: new Date(Date.now() - 1000).toISOString(), generation: '8', trace_id: 'edge-trace-8',
+            edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-8'},
+            source_context: {event_key: KEY8, fields: sourceFields},
+            handoff_binding: {status: 'matched', valid: true, generation: '8', event_key: KEY8, edge_trace_id: 'edge-trace-8',
+                edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-8'},
+            advisory: {trace_id: 'mio-trace-8'}}, overrides || {});
+    }
+    const normal = {
+        event_type: field('alert'), attack_type: field('Exploit Attempt'), category: unavailable(),
+        protocol: unavailable(), sid: field(2001), severity: field(2), target_port: unavailable(),
+        technique_ids: field(['T1190']), ts: field('2026-11-02T00:00:00Z'), normalized_outcome: unavailable()
+    };
+    // Normal: observed values and unavailable names are split, labelled, and allowlist-ordered.
+    m.S.renderMioLiveAuxiliary(current(normal));
+    eq(m.$('mioSourceObserved').textContent, 'event_type=alert · attack_type=Exploit Attempt · sid=2001 · severity=2 · technique_ids=T1190 · ts=2026-11-02T00:00:00Z',
+        'observed normalized fields rendered in allowlist order');
+    eq(m.$('mioSourceUnavailable').textContent, 'category, protocol, target_port, normalized_outcome', 'unavailable fields listed by name only');
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-8', 'Edge action still shown alongside source context');
+
+    // Stale or mismatched binding: source context is suppressed, deterministic Edge action is not.
+    [{is_current: false}, {handoff_binding: {status: 'matched', generation: '8', event_key: 'other-event', edge_trace_id: 'edge-trace-8',
+        edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-8'}}].forEach(function (over) {
+        m.S.renderMioLiveAuxiliary(current(normal, over));
+        eq(m.$('mioSourceObserved').textContent, 'Suppressed', 'stale or mismatched source context suppressed');
+        eq(m.$('mioSourceUnavailable').textContent, 'Suppressed', 'stale or mismatched unavailable list suppressed');
+        ok(/^notify \/ reported mode dry_run \/ planned_not_applied · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent), 'Edge action/result remain and are marked uncorrelated');
+    });
+
+    // Missing, empty, or non-producer-format event key: binding otherwise valid, source fields still suppressed.
+    [{}, {event_key: ''}, {event_key: 'A1B2C3D4E5F60718293A4B5C'}, {event_key: 'a1b2c3d4e5f60718293a4b5'}].forEach(function (keyObj, i) {
+        const ctx = Object.assign({fields: normal}, keyObj);
+        const binding = Object.assign({status: 'matched', valid: true, generation: '8', edge_trace_id: 'edge-trace-8',
+            edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-8'}, keyObj);
+        m.S.renderMioLiveAuxiliary(current(normal, {source_context: ctx, handoff_binding: binding}));
+        eq(m.$('mioSourceObserved').textContent, 'Suppressed', 'invalid event key #' + i + ' suppresses observed source fields');
+        eq(m.$('mioSourceUnavailable').textContent, 'Suppressed', 'invalid event key #' + i + ' suppresses unavailable list');
+        eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-8', 'invalid event key #' + i + ' keeps Edge action');
+    });
+
+    // Partial record: valid Edge action plus unknown_fields discloses omitted malformed fields; valid parts stay visible.
+    m.S.renderMioLiveAuxiliary(current(normal, {edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied',
+        trace_id: 'edge-trace-8', unknown_fields: true}}));
+    eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-8 (malformed fields omitted)',
+        'valid action with unknown_fields discloses malformed omitted fields');
+    m.S.renderMioLiveAuxiliary(current(normal, {edge_event: {unknown_fields: true}}));
+    ok(/^Unknown \(malformed fields omitted\) · not correlated to current M\.I\.O\.\/Knowledge details · last report only · M\.I\.O\. snapshot age at last refresh \d+ s$/.test(m.$('mioLiveEdgeAction').textContent),
+        'no valid Edge fields with unknown_fields still discloses and marks binding: ' + m.$('mioLiveEdgeAction').textContent);
+
+    // Hostile values, oversized values, wrong types, and arbitrary keys never leak through.
+    const hostile = Object.assign({}, normal, {
+        attack_type: field('<img src=x onerror=alert(1)>'),
+        protocol: field('x'.repeat(200)),
+        severity: field('high'),
+        technique_ids: field(Array.from({length: 17}, function () { return 'T1190'; })),
+        ts: {value: 'ok', status: 'observed', provenance: {raw: 'payload 10.0.0.5 secret-token'}},
+        '<script>evil</script>': field('10.0.0.5 secret-token')
+    });
+    m.S.renderMioLiveAuxiliary(current(hostile));
+    eq(m.doc.body.querySelectorAll('img').length, 0, 'hostile source value never becomes markup');
+    ok(m.$('mioSourceObserved').textContent.indexOf('<img') === -1, 'hostile markup-like source value rejected by label rule');
+    ok(m.$('mioSourceObserved').textContent.indexOf('ts=ok') === -1 && m.$('mioSourceUnavailable').textContent.indexOf('ts') !== -1,
+        'non-timestamp ts value rejected and listed as unavailable');
+    ok(m.$('mioSourceObserved').textContent.indexOf('10.0.0.5') === -1 && m.$('mioSourceObserved').textContent.indexOf('secret-token') === -1,
+        'arbitrary keys and provenance payloads never displayed');
+    ok(m.$('mioSourceUnavailable').textContent.indexOf('protocol') !== -1 && m.$('mioSourceUnavailable').textContent.indexOf('severity') !== -1
+        && m.$('mioSourceUnavailable').textContent.indexOf('technique_ids') !== -1, 'oversized, mistyped, or overlong fields listed as unavailable');
+    ok(m.$('mioSourceUnavailable').textContent.indexOf('script') === -1, 'arbitrary key names never displayed');
+    ok(m.$('mioSourceObserved').textContent.length <= 600, 'observed text is total-length bounded');
+
+    // Missing or malformed fields container: no throw, everything reported unavailable.
+    [undefined, [], 'junk', {event_type: 'not-a-field'}].forEach(function (fields, i) {
+        noThrow(function () { m.S.renderMioLiveAuxiliary(current(fields)); }, 'malformed source fields #' + i + ' does not throw');
+    });
+    m.S.renderMioLiveAuxiliary(current(undefined));
+    eq(m.$('mioSourceObserved').textContent, 'None', 'absent fields report no observed values');
+    ok(m.$('mioSourceUnavailable').textContent.indexOf('event_type') !== -1, 'absent fields list allowlisted names as unavailable');
+
+    // Field-specific validation mirrors the producer: control, bidi, and zero-width/format characters are rejected.
+    const rejected = function (name, value) {
+        m.S.renderMioLiveAuxiliary(current(Object.assign({}, normal, {[name]: field(value)})));
+        return m.$('mioSourceObserved').textContent.indexOf(name + '=') === -1
+            && m.$('mioSourceUnavailable').textContent.indexOf(name) !== -1;
+    };
+    ok(rejected('attack_type', 'Exploit\nAttempt'), 'newline in attack_type rejected');
+    ok(rejected('attack_type', 'Exploit\u0007Attempt'), 'control character in attack_type rejected');
+    ok(rejected('attack_type', 'alert‮gnp'), 'bidi override in attack_type rejected');
+    ok(rejected('event_type', 'ale​rt'), 'zero-width space in event_type rejected');
+    ok(rejected('category', 'web﻿attack'), 'BOM/format character in category rejected');
+    ok(rejected('event_type', 'Exploit Attempt'), 'non-ASCII space in event_type rejected');
+    ok(rejected('event_type', 'unknown'), 'unknown label rejected');
+    ok(rejected('attack_type', 'x'.repeat(97)), 'attack_type over 96 characters rejected');
+    ok(rejected('event_type', 'x'.repeat(33)), 'event_type over 32 characters rejected');
+    ok(rejected('category', 'x'.repeat(65)), 'category over 64 characters rejected');
+    ok(rejected('protocol', 'x'.repeat(17)), 'protocol over 16 characters rejected');
+    ok(rejected('ts', '2026-11-02T00:00:00‮Z'), 'bidi override in ts rejected');
+    ok(rejected('ts', '2026-11-02 00:00:00'), 'space in ts rejected');
+    ok(rejected('normalized_outcome', 'accepted'), 'outcome outside enum rejected');
+    ok(rejected('normalized_outcome', 'ALLOWED'), 'uppercase outcome rejected (producer emits lowercase)');
+    ok(rejected('normalized_outcome', 'blocked\n'), 'outcome with trailing control rejected');
+    ['T1190.1', 'TA0001', 'T1190 ', 'T119', 'T1190​'].forEach(function (bad) {
+        ok(rejected('technique_ids', [bad]), 'invalid ATT&CK technique ' + JSON.stringify(bad) + ' rejects the list');
+    });
+
+    // Producer-shaped ASCII values still render.
+    m.S.renderMioLiveAuxiliary(current(Object.assign({}, normal, {
+        event_type: field('alert'), attack_type: field('ET EXPLOIT Possible (CVE-2024:1234) [web]/v2+'),
+        category: field('web-attack'), protocol: field('TCP'), normalized_outcome: field('blocked'),
+        technique_ids: field(['T1190', 'T1059.001']), ts: field('2026-11-02T00:00:00.123+09:00')
+    })));
+    eq(m.$('mioSourceObserved').textContent, 'event_type=alert · attack_type=ET EXPLOIT Possible (CVE-2024:1234) [web]/v2+ · category=web-attack · protocol=TCP · sid=2001 · severity=2 · technique_ids=T1190, T1059.001 · ts=2026-11-02T00:00:00.123+09:00 · normalized_outcome=blocked',
+        'producer-shaped ASCII values render with field-specific validation');
+    dom.uninstall();
+})();
+
+// Edge action row: allowlisted mode beside action/result; uncorrelated rows are the last report with the snapshot age at last refresh.
+// Date.now is frozen so the exact output (including the age) is deterministic; it is restored afterwards.
+(function () {
+    const realNow = Date.now;
+    const T = Date.UTC(2026, 10, 3, 0, 0, 0);
+    Date.now = function () { return T; };
+    try {
+        const m = mount();
+        ['mioLiveEdgeAction', 'mioLiveAuxStatus', 'mioLiveAuxFreshness', 'mioLiveAuxAdvice', 'mioLiveAuxKnowledge'].forEach(function (id) {
+            const node = m.doc.createElement('span'); node.id = id; m.doc.body.appendChild(node);
+        });
+        const row = function () { return m.$('mioLiveEdgeAction').textContent; };
+        // ageMs > 0 is past, < 0 is future, null is an invalid timestamp, undefined is missing.
+        const build = function (ageMs, edgeOver, bindOver) {
+            const edge = Object.assign({action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-9'}, edgeOver || {});
+            const binding = Object.assign({status: 'matched', valid: true, generation: '9', event_key: 'event-9',
+                edge_trace_id: 'edge-9', edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied'}, bindOver || {});
+            const p = {status: 'complete', is_current: true, max_age_seconds: 10, generation: '9', trace_id: 'edge-9',
+                source_context: {event_key: 'event-9'}, edge_event: edge, handoff_binding: binding};
+            if (ageMs !== undefined) p.completed_at = ageMs === null ? 'not-a-date' : new Date(T - ageMs).toISOString();
+            return p;
+        };
+        const LABEL = ' · not correlated to current M.I.O./Knowledge details · last report only · M.I.O. snapshot age at last refresh ';
+
+        // All five producer-allowlisted modes on a correlated row: exact output, no snapshot age.
+        ['disabled', 'dry_run', 'policy_gated', 'release_guard_failed', 'enforced'].forEach(function (mode) {
+            m.S.renderMioLiveAuxiliary(build(1000, {mode: mode}, {edge_mode: mode}));
+            eq(row(), 'notify / mode ' + mode + ' / planned_not_applied / edge-9', 'correlated row shows allowlisted mode ' + mode);
+            eq(row().indexOf('snapshot age'), -1, 'correlated row carries no snapshot age (' + mode + ')');
+        });
+
+        // Exact full mismatch output with a known age (5 s before the frozen clock).
+        m.S.renderMioLiveAuxiliary(build(5000, null, {edge_mode: 'enforced'}));
+        eq(row(), 'notify / reported mode dry_run / planned_not_applied' + LABEL + '5 s', 'exact mismatch output with snapshot age at last refresh');
+
+        // Unlisted, hostile and missing modes show unavailable and never echo raw text.
+        m.S.renderMioLiveAuxiliary(build(1000, {mode: 'shadow_only'}, {edge_mode: 'shadow_only'}));
+        eq(row(), 'notify / mode unavailable / planned_not_applied / edge-9', 'unlisted mode shows unavailable');
+        m.S.renderMioLiveAuxiliary(build(1000, {mode: '<img src=x onerror=alert(1)>'}, {edge_mode: '<img src=x onerror=alert(1)>'}));
+        eq(row(), 'notify / mode unavailable / planned_not_applied / edge-9', 'hostile mode shows unavailable');
+        eq(m.doc.body.querySelectorAll('img').length, 0, 'hostile mode never becomes markup');
+        // A missing mode can never match the binding, so the row is the uncorrelated last report.
+        const noMode = build(1000, null, {edge_mode: undefined}); delete noMode.edge_event.mode;
+        m.S.renderMioLiveAuxiliary(noMode);
+        eq(row(), 'notify / reported mode unavailable / planned_not_applied' + LABEL + '1 s', 'missing mode shows unavailable');
+
+        // Mode is added only with an Edge action or result; without either, the Unknown fallback is kept.
+        const noActionOrResult = build(5000, null, {edge_mode: 'enforced'});
+        noActionOrResult.edge_event = {mode: 'enforced', trace_id: 'edge-9'};
+        m.S.renderMioLiveAuxiliary(noActionOrResult);
+        eq(row(), 'Unknown' + LABEL + '5 s', 'no action or result: mode omitted, Unknown fallback kept');
+
+        // Future timestamp: age unavailable, never 0 s.
+        m.S.renderMioLiveAuxiliary(build(-5000, null, {edge_mode: 'enforced'}));
+        eq(row(), 'notify / reported mode dry_run / planned_not_applied' + LABEL + 'unavailable', 'future completed_at shows age unavailable, not 0 s');
+
+        // Matched binding with a future completed_at: never fresh, so details and Knowledge stay suppressed.
+        m.S.renderMioLiveAuxiliary(build(-5000));
+        eq(m.$('mioLiveAuxFreshness').textContent, 'Stale or not current', 'matched future completed_at is stale, not fresh');
+        eq(m.$('mioLiveAuxStatus').textContent, 'complete (details suppressed)', 'matched future completed_at suppresses M.I.O. details');
+        eq(m.$('mioLiveAuxAdvice').textContent, 'M.I.O. details suppressed (stale result or correlation mismatch).', 'matched future completed_at suppresses advice');
+        eq(m.$('mioLiveAuxKnowledge').textContent, 'suppressed', 'matched future completed_at suppresses Knowledge provenance');
+        eq(row(), 'notify / reported mode dry_run / planned_not_applied' + LABEL + 'unavailable', 'matched future completed_at row shows age unavailable, not 0 s');
+
+        // Invalid and missing timestamps: age unavailable.
+        m.S.renderMioLiveAuxiliary(build(null, null, {edge_mode: 'enforced'}));
+        eq(row(), 'notify / reported mode dry_run / planned_not_applied' + LABEL + 'unavailable', 'invalid completed_at shows age unavailable');
+        m.S.renderMioLiveAuxiliary(build(undefined, null, {edge_mode: 'enforced'}));
+        eq(row(), 'notify / reported mode dry_run / planned_not_applied' + LABEL + 'unavailable', 'missing completed_at shows age unavailable');
+
+        dom.uninstall();
+    } finally {
+        Date.now = realNow;
+    }
+})();
+
+// --- 1c. Knowledge last report and status-specific operator cues ---
+(function () {
+    const IDS = ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction','mioLiveCorrelation',
+     'mioLiveAuxAdvice','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff','mioKnowledgeStatus','mioKnowledgeRefs',
+     'mioKnowledgeCue','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics',
+     'mioSourceObserved','mioSourceUnavailable'];
+    function stale(knowledge) {
+        return {status: 'unavailable', is_current: false, max_age_seconds: 0,
+            edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied'}, knowledge_analysis: knowledge};
+    }
+    function report(over) {
+        return Object.assign({status: 'projected', is_current: false, report_state: 'last_report',
+            claim_status: 'reported_unverified', trust: 'unverified_advisory_only', report_age_seconds: 4.2,
+            max_age_seconds: 10,
+            report_expires_at_ms: Date.now() + 5800,
+            attack_techniques: ['T1059'], source_groups: ['abusech'],
+            source_freshness: {status: 'reported_unverified_at_lookup', oldest_feed_days: 3, attack_version: '18.1'}}, over);
+    }
+    function run(knowledge) {
+        const m = mount();
+        const originalSetTimeout = global.window.setTimeout;
+        const originalClearTimeout = global.window.clearTimeout;
+        let expiry = null, expiryDelay = null;
+        try {
+            global.window.setTimeout = function (callback, delay) { expiry = callback; expiryDelay = delay; return 1; };
+            global.window.clearTimeout = function () {};
+            IDS.forEach(function (id) { const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el); });
+            m.S.renderMioLiveAuxiliary(stale(knowledge));
+            const out = {status: m.$('mioKnowledgeStatus').textContent, refs: m.$('mioKnowledgeRefs').textContent,
+                cue: m.$('mioKnowledgeCue').textContent};
+            if (expiry) {
+                out.expiryDelay = expiryDelay;
+                expiry();
+                out.expired = {status: m.$('mioKnowledgeStatus').textContent, refs: m.$('mioKnowledgeRefs').textContent,
+                    cue: m.$('mioKnowledgeCue').textContent};
+            }
+            return out;
+        } finally {
+            global.window.setTimeout = originalSetTimeout;
+            global.window.clearTimeout = originalClearTimeout;
+            dom.uninstall();
+        }
+    }
+    const TAIL = 'Nothing is retried automatically';
+    let r = run(report({}));
+    eq(r.status, 'last report (not current, unverified)', 'last report: explicit not-current/unverified status');
+    ok(r.refs.indexOf('LAST REPORT · NOT CURRENT · UNVERIFIED · report age at last refresh 4.2 s') === 0
+        && r.refs.indexOf('ATT&CK: T1059') > 0, 'last report: measured age and labels precede refs');
+    ok(r.cue.indexOf('not current, unverified, not a verdict') >= 0 && r.cue.indexOf(TAIL) >= 0, 'last report: cue is not-current');
+    ok(r.expiryDelay > 0 && r.expiryDelay <= 5800, 'last report: expiry is bounded by absolute deadline');
+    eq(r.expired.status, 'unavailable', 'last report expiry: status cleared');
+    eq(r.expired.refs, 'Unavailable', 'last report expiry: refs cleared');
+    {
+        const m = mount();
+        const originalSetTimeout = global.window.setTimeout;
+        const originalClearTimeout = global.window.clearTimeout;
+        try {
+            const callbacks = [];
+            global.window.setTimeout = function (callback) { callbacks.push(callback); return callbacks.length; };
+            global.window.clearTimeout = function () {};
+            IDS.forEach(function (id) { const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el); });
+            m.S.renderMioLiveAuxiliary(stale(report({})));
+            m.S.renderMioLiveAuxiliary(stale({status: 'disabled', is_current: false}));
+            callbacks[0](); // Simulate a callback that had already entered the event queue before clearTimeout.
+            eq(m.$('mioKnowledgeStatus').textContent, 'disabled', 'superseded expiry callback does not overwrite newer status');
+        } finally {
+            global.window.setTimeout = originalSetTimeout;
+            global.window.clearTimeout = originalClearTimeout;
+            dom.uninstall();
+        }
+    }
+    [{report_state: 'current'}, {is_current: true}, {report_age_seconds: -1}, {report_age_seconds: '4'},
+     {report_age_seconds: NaN}, {report_age_seconds: 10.1}, {max_age_seconds: 0},
+     {report_expires_at_ms: Date.now() - 1}, {trust: 'trusted'},
+     {attack_techniques: ['<img>']}, {source_groups: 'abusech'}
+    ].forEach(function (over, i) {
+        r = run(report(over));
+        ok(r.status !== 'last report (not current, unverified)' && r.refs === 'Unavailable',
+            'last report malformed #' + i + ': suppressed');
+    });
+    const CUES = {timeout: 'query deadline', unavailable: 'usable answer', disabled: 'switched off by configuration',
+        missing_token: 'credential is not configured', auth_rejected: 'rejected the configured credential'};
+    const seen = {};
+    Object.keys(CUES).forEach(function (status) {
+        r = run({status: status, is_current: false, token: 'SECRET-TOKEN', error: 'raw boom'});
+        ok(r.cue.indexOf('Knowledge ' + status + ': ') === 0 && r.cue.indexOf(CUES[status]) > 0, status + ': status-specific cue');
+        ok(r.cue.indexOf(TAIL) >= 0 && r.cue.indexOf('No reference metadata') > 0, status + ': read-only, no retry');
+        ok(r.cue.indexOf('SECRET') < 0 && r.cue.indexOf('boom') < 0, status + ': no token or raw error');
+        ok(!seen[r.cue], status + ': cue is distinct'); seen[r.cue] = true;
+    });
+    r = run({status: 'oversized', is_current: false});
+    ok(r.cue.indexOf('not current/usable; no reference metadata') >= 0, 'other statuses keep the generic cue');
 })();
 
 if (failures) { console.error(failures + ' assertion(s) failed'); process.exit(1); }

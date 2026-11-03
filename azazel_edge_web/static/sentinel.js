@@ -22,6 +22,33 @@
     var WATCH_WORDS = ['watch', 'elevated', 'caution', 'degraded', 'partial', 'suspected', 'drift', 'limited', 'pending', 'stale'];
     var CRIT_WORDS = ['critical', 'danger', 'alert', 'down', 'off', 'outage', 'compromised', 'failed', 'fail', 'high'];
 
+    /* ---- model lane (display-only) allowlists ------------------------------ */
+    // Edge mode display allowlist (fixed; mirrors the producer's _EDGE_MODES). Anything else, or a missing mode, shows "unavailable".
+    var EDGE_MODE_ALLOWLIST = ['disabled', 'dry_run', 'policy_gated', 'release_guard_failed', 'enforced'];
+    function edgeModeText(raw) {
+        return typeof raw === 'string' && EDGE_MODE_ALLOWLIST.indexOf(raw) >= 0 ? raw : 'unavailable';
+    }
+    // Lane statuses shown for a non-current model result. Anything else stays generic "suppressed".
+    var MODEL_LANE_DEGRADED_STATUSES = ['degraded', 'skipped', 'queued', 'pending', 'unavailable'];
+    var MODEL_LANE_REASON_LABELS = {
+        deadline_exceeded: 'deadline exceeded',
+        mio_no_model_contribution: 'no model contribution',
+        audit_failed: 'audit failed',
+        model_error: 'model error',
+        queue_full: 'queue full',
+        superseded: 'superseded',
+        frame_binding_rejected: 'frame binding rejected',
+        fast_result_unavailable: 'fast result unavailable'
+    };
+    // Maps a lane reason to a fixed display label. Raw strings are never echoed; unlisted reasons are withheld.
+    function modelLaneReasonLabel(raw) {
+        if (typeof raw !== 'string' || raw === '' || raw.length > 64) return '';
+        if (Object.prototype.hasOwnProperty.call(MODEL_LANE_REASON_LABELS, raw)) return MODEL_LANE_REASON_LABELS[raw];
+        if (/^governance_denied:[a-z_]{1,32}$/.test(raw)) return 'governance denied';
+        if (/^mio_partial:[a-z_]{1,32}$/.test(raw)) return 'partial M.I.O. state';
+        return 'reason withheld (not allowlisted)';
+    }
+
     function toneOf(word) {
         var w = String(word == null ? '' : word).trim().toLowerCase();
         if (!w) return 'is-unknown';
@@ -369,7 +396,11 @@
         updateEmptyNote(body.getAttribute('data-tier-active') || 'overview');
     }
 
+    var knowledgeExpiryTimer = null;
+    var knowledgeExpirySequence = 0;
     function renderMioLiveAuxiliary(payload) {
+        knowledgeExpirySequence += 1;
+        var expirySequence = knowledgeExpirySequence;
         payload = payload && typeof payload === 'object' ? payload : {};
         var advisory = payload.advisory && typeof payload.advisory === 'object' ? payload.advisory : {};
         var handoff = advisory.handoff && typeof advisory.handoff === 'object' ? advisory.handoff : {};
@@ -383,9 +414,9 @@
                 return '';
             }).filter(Boolean).join(' · ') || 'None';
         }
-        function put(id, value) {
+        function put(id, value, limit) {
             var el = document.getElementById(id);
-            if (el) el.textContent = String(value || '-').slice(0, 500);
+            if (el) el.textContent = String(value || '-').slice(0, limit || 500);
         }
         var recommendation = advisory.recommendation;
         if (recommendation && typeof recommendation === 'object') {
@@ -394,7 +425,7 @@
         var edge = payload.edge_event && typeof payload.edge_event === 'object' ? payload.edge_event : {};
         var binding = payload.handoff_binding && typeof payload.handoff_binding === 'object' ? payload.handoff_binding : {};
         var sourceContext = payload.source_context && typeof payload.source_context === 'object' ? payload.source_context : {};
-        var bindingValid = binding.status === 'matched'
+        var bindingValid = binding.valid === true && binding.status === 'matched'
             && typeof binding.edge_trace_id === 'string' && binding.edge_trace_id.length > 0
             && typeof binding.edge_action === 'string' && binding.edge_action.length > 0
             && typeof binding.edge_mode === 'string' && binding.edge_mode.length > 0
@@ -408,17 +439,153 @@
             && (binding.edge_result || null) === (edge.result || null)
             && (!advisory.frame_id || String(binding.frame_id || '') === String(advisory.frame_id || ''))
             && (!advisory.trace_id || String(binding.mio_trace_id || '') === String(advisory.trace_id || ''));
-        var actionBits = [edge.action, edge.result, edge.trace_id].filter(function (v) { return typeof v === 'string' && v; });
         var completedAt = Date.parse(payload.completed_at || '');
-        var resultAge = Number.isFinite(completedAt) ? Math.max(0, (Date.now() - completedAt) / 1000) : Infinity;
+        // Freshness uses the raw age: a negative (future) or unparseable completed_at is never fresh and is not clamped to 0.
+        var rawAgeSeconds = Number.isFinite(completedAt) ? (Date.now() - completedAt) / 1000 : NaN;
+        var resultAge = Number.isFinite(rawAgeSeconds) ? rawAgeSeconds : Infinity;
         var fresh = payload.is_current === true && payload.status === 'complete'
-            && resultAge <= Number(payload.max_age_seconds || 0);
+            && resultAge >= 0 && resultAge <= Number(payload.max_age_seconds || 0);
         var usable = fresh && bindingValid;
+        // The mode is shown only alongside an Edge action or result; with neither, the row keeps the Unknown fallback.
+        var hasEdgeActionOrResult = (typeof edge.action === 'string' && edge.action.length > 0)
+            || (typeof edge.result === 'string' && edge.result.length > 0);
+        // A usable, correlated row shows the mode; a non-usable (stale or uncorrelated) row shows only the reported mode.
+        var actionBits = [edge.action, hasEdgeActionOrResult ? (usable ? 'mode ' : 'reported mode ') + edgeModeText(edge.mode) : '', edge.result, usable ? boundedEdgeTrace(edge.trace_id) : '']
+            .filter(function (v) { return typeof v === 'string' && v; });
         var suppressedMessage = 'M.I.O. details suppressed (stale result or correlation mismatch).';
         put('mioLiveAuxStatus', usable ? (payload.status || 'unavailable') : ((payload.status || 'unavailable') + ' (details suppressed)'));
         put('mioLiveAuxKnowledge', usable ? (payload.knowledge && payload.knowledge.status || 'not_provided') : 'suppressed');
         put('mioLiveAuxFreshness', fresh ? 'Current generation' : 'Stale or not current');
-        put('mioLiveEdgeAction', actionBits.join(' / ') || (edge.unknown_fields ? 'Unknown (malformed fields omitted)' : 'Unknown'));
+        put('mioLiveEdgeAction', (actionBits.join(' / ') || 'Unknown') + (edge.unknown_fields === true ? ' (malformed fields omitted)' : ''));
+        // Bounded, untrusted correlation IDs for operator matching; rendered via textContent only.
+        function boundedId(value) {
+            return typeof value === 'string' && value ? value.slice(0, 96) : '';
+        }
+        function boundedEdgeTrace(value) {
+            return typeof value === 'string' && value && value.length <= 96 ? value : '';
+        }
+        put('mioLiveCorrelation', usable
+            ? ('event ' + (boundedId(sourceContext.event_key) || 'unknown')
+                + ' · trace ' + (boundedId(edge.trace_id) || boundedId(payload.trace_id) || 'unknown')
+                + ' · frame ' + (boundedId(advisory.frame_id) || 'none'))
+            : 'Suppressed');
+        // Normalized source context: hard-coded allowlist only; split into observed values and unavailable/invalid names.
+        // Producer emits a 24-char lowercase hex SHA prefix as event_key; source fields need that key to be present.
+        var sourceUsable = usable && /^[0-9a-f]{24}$/.test(String(sourceContext.event_key || ''));
+        var SOURCE_FIELD_ALLOWLIST = ['event_type', 'attack_type', 'category', 'protocol', 'sid', 'severity', 'target_port', 'technique_ids', 'ts', 'normalized_outcome'];
+        var sourceFields = sourceContext.fields && typeof sourceContext.fields === 'object' && !Array.isArray(sourceContext.fields)
+            ? sourceContext.fields : {};
+        var SOURCE_INTEGER_RANGES = {sid: [1, 2147483647], severity: [0, 10], target_port: [1, 65535]};
+        // Mirrors py/azazel_edge_ai/mio_live_auxiliary.py `_source_context()` validation at the UI boundary.
+        var SOURCE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:\/+()\[\]-]{0,95}$/;
+        var SOURCE_TECHNIQUE = /^T[0-9]{4}(?:\.[0-9]{3})?$/;
+        var SOURCE_TIMESTAMP = /^[0-9TtZz:+.\-]{1,32}$/;
+        var SOURCE_LABEL_LIMITS = {event_type: 32, attack_type: 96, category: 64, protocol: 16};
+        var SOURCE_OUTCOMES = ['allowed', 'blocked', 'drop', 'rejected'];
+        function sourceValueText(name, entry) {
+            var value = entry.value;
+            var range = SOURCE_INTEGER_RANGES[name];
+            if (range) {
+                return Number.isInteger(value) && value >= range[0] && value <= range[1] ? String(value) : '';
+            }
+            if (name === 'technique_ids') {
+                if (!Array.isArray(value) || value.length > 16) return '';
+                if (!value.every(function (v) { return typeof v === 'string' && SOURCE_TECHNIQUE.test(v); })) return '';
+                return value.length ? value.join(', ') : 'none';
+            }
+            if (name === 'normalized_outcome') {
+                return typeof value === 'string' && SOURCE_OUTCOMES.indexOf(value) !== -1 ? value : '';
+            }
+            if (name === 'ts') {
+                return typeof value === 'string' && SOURCE_TIMESTAMP.test(value) ? value : '';
+            }
+            var limit = SOURCE_LABEL_LIMITS[name];
+            if (!limit || typeof value !== 'string' || value.length > limit || !SOURCE_LABEL.test(value)) return '';
+            return value.trim().toLowerCase() === 'unknown' ? '' : value;
+        }
+        var observedFields = [];
+        var unavailableFields = [];
+        SOURCE_FIELD_ALLOWLIST.forEach(function (name) {
+            var entry = Object.prototype.hasOwnProperty.call(sourceFields, name) ? sourceFields[name] : null;
+            var text = entry && typeof entry === 'object' && entry.status === 'observed' ? sourceValueText(name, entry) : '';
+            if (text) observedFields.push(name + '=' + text);
+            else unavailableFields.push(name);
+        });
+        put('mioSourceObserved', sourceUsable ? (observedFields.join(' · ') || 'None') : 'Suppressed', 600);
+        put('mioSourceUnavailable', sourceUsable ? (unavailableFields.join(', ') || 'None') : 'Suppressed', 300);
+        var comparison =payload.edge_score_comparison && typeof payload.edge_score_comparison === 'object'
+            ? payload.edge_score_comparison : {};
+        var comparisonStatusValid = ['complete', 'unavailable', 'degraded'].indexOf(comparison.status) >= 0;
+        var comparisonShapeValid = comparison.schema_version === 'azazel.edge_score_comparison.v1'
+            && comparison.authority === 'comparison_only'
+            && comparisonStatusValid
+            && Number.isInteger(comparison.edge_score) && comparison.edge_score >= 0 && comparison.edge_score <= 100;
+        var comparisonBound = String(comparison.generation || '') === String(payload.generation || '')
+            && String(comparison.generation || '').length > 0
+            && String(comparison.trace_id || '') === String(payload.trace_id || '')
+            && String(comparison.trace_id || '').length > 0;
+        var comparisonCompleteFieldsValid = Number.isInteger(comparison.mio_score)
+            && comparison.mio_score >= 0 && comparison.mio_score <= 100
+            && typeof comparison.matches === 'boolean';
+        var comparisonText = 'Unavailable';
+        if (payload.edge_score_comparison) {
+            if (comparison.status === 'complete' && (!comparisonShapeValid || !comparisonCompleteFieldsValid)) {
+                comparisonText = 'Suppressed (invalid comparison)';
+            } else if (['pending', 'queued', 'unavailable', 'degraded'].indexOf(payload.status) >= 0) {
+                comparisonText = 'Suppressed (M.I.O. ' + payload.status + ')';
+            } else if (payload.status !== 'complete') {
+                comparisonText = 'Suppressed (M.I.O. status unavailable)';
+            } else if (!fresh) {
+                comparisonText = 'Suppressed (stale M.I.O. result)';
+            } else if (!bindingValid) {
+                comparisonText = 'Suppressed (M.I.O. correlation mismatch)';
+            } else if (!comparisonShapeValid) {
+                comparisonText = 'Suppressed (invalid comparison)';
+            } else if (!comparisonBound) {
+                comparisonText = 'Suppressed (comparison generation/trace mismatch)';
+            } else if (comparison.status === 'complete') {
+                comparisonText = 'Edge ' + comparison.edge_score + ' / M.I.O. ' + comparison.mio_score
+                    + ' · same Edge-resolved inputs: ' + (comparison.matches ? 'parity' : 'differs')
+                    + ' · comparison only (not independent corroboration or ground truth)';
+            } else {
+                comparisonText = comparison.status + ' · comparison only';
+            }
+        }
+        put('mioLiveScoreComparison', comparisonText);
+        var receipt = payload.edge_knowledge_advisory;
+        var receiptText = 'Unavailable';
+        if (receipt) {
+            var receiptValid = receipt.schema_version === 'azazel.edge_knowledge_advisory.v1'
+                && receipt.status === 'complete' && receipt.authority === 'read_only_advisory'
+                && receipt.claim_status === 'reported_unverified'
+                && receipt.generation === payload.generation && receipt.trace_id === payload.trace_id
+                && Array.isArray(receipt.source_groups) && receipt.source_groups.length <= 16
+                && receipt.source_groups.every(function (v) { return typeof v === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(v); })
+                && Array.isArray(receipt.attack_techniques) && receipt.attack_techniques.length <= 32
+                && receipt.attack_techniques.every(function (v) { return typeof v === 'string' && /^T[0-9]{4}(\.[0-9]{3})?$/.test(v); });
+            var sf = receipt.source_freshness;
+            receiptValid = receiptValid && sf && typeof sf === 'object' && !Array.isArray(sf)
+                && Object.keys(sf).every(function (k) { return k === 'oldest_feed_days' || k === 'attack_version'; })
+                && (sf.oldest_feed_days == null || (typeof sf.oldest_feed_days === 'number' && Number.isFinite(sf.oldest_feed_days) && sf.oldest_feed_days >= 0 && sf.oldest_feed_days <= 36500))
+                && (sf.attack_version == null || (typeof sf.attack_version === 'string' && /^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$/.test(sf.attack_version)));
+            receiptText = usable && receiptValid
+                ? 'reported_unverified · advisory only · sources: ' + receipt.source_groups.join(', ')
+                    + ' · ATT&CK: ' + receipt.attack_techniques.join(', ')
+                    + ' · freshness: ' + JSON.stringify(sf)
+                : 'Suppressed';
+        }
+        put('mioLiveKnowledgeAdvisory', receiptText, 2048);
+        var edgeActionText = (actionBits.join(' / ') || 'Unknown') + (edge.unknown_fields === true ? ' (malformed fields omitted)' : '');
+        var receiptBoundForDisplay = !!(usable && receiptValid);
+        var edgeCorrelatedToMio = usable && bindingValid;
+        // An uncorrelated/stale row is only the last Edge report. Its age is the M.I.O. snapshot's payload.completed_at
+        // measured at the last refresh, not an Edge timestamp. A future or negative raw age is unavailable, never 0 s.
+        var snapshotAgeText = Number.isFinite(rawAgeSeconds) && rawAgeSeconds >= 0
+            ? 'M.I.O. snapshot age at last refresh ' + Math.round(rawAgeSeconds) + ' s'
+            : 'M.I.O. snapshot age at last refresh unavailable';
+        put('mioLiveEdgeAction', edgeActionText + (!edgeCorrelatedToMio
+            ? ' · not correlated to current M.I.O./Knowledge details · last report only · ' + snapshotAgeText
+            : (receipt && !receiptBoundForDisplay ? ' · Knowledge unmatched/un-correlated' : '')));
         put('mioLiveAuxAdvice', usable
             ? (recommendation || advisory.summary || handoff.summary || 'No advice available.')
             : (payload.reason ? 'M.I.O. result suppressed: ' + String(payload.reason).slice(0, 120) : suppressedMessage));
@@ -427,13 +594,139 @@
         put('mioLiveAuxHandoff', usable
             ? (handoff.summary || handoff.operator_note || handoff.status || 'No handoff supplied.')
             : suppressedMessage);
+        var knowledge = payload.knowledge_analysis || {};
+        // The parent envelope must name the generation, event and frame; any binding the receipt
+        // carries must equal them. A receipt missing its parent binding is never shown as current.
+        // Binding comparisons are strict: an over-length parent value is not truncated into a match.
+        function exactId(value) {
+            return typeof value === 'string' && value !== '' && value.length <= 96 ? value : '';
+        }
+        // Every binding field must be present, bounded and equal to its parent value; absence is not a pass.
+        function receiptBinds(field, expected) {
+            var actual = knowledge[field];
+            return expected !== '' && typeof actual === 'string' && actual !== '' && actual.length <= 96 && actual === expected;
+        }
+        var knowledgeBound = receiptBinds('generation', exactId(payload.generation))
+            && receiptBinds('frame_generation', exactId(payload.generation))
+            && receiptBinds('event_key', exactId(sourceContext.event_key))
+            && receiptBinds('frame_id', exactId(advisory.frame_id))
+            && receiptBinds('source_trace_id', exactId(payload.trace_id))
+            && receiptBinds('trace_id', exactId(advisory.trace_id));
+        var knowledgeCurrent = usable && knowledgeBound && knowledge.status === 'projected' && knowledge.is_current === true
+            && knowledge.claim_status === 'reported_unverified' && knowledge.trust === 'unverified_advisory_only';
+        var knowledgeStatus = ['starting', 'queued', 'disabled', 'missing_token', 'invalid_configuration',
+            'unavailable', 'timeout', 'oversized', 'redirect_rejected', 'auth_rejected', 'scope_rejected',
+            'malformed', 'received', 'superseded', 'rejected', 'projected'];
+        function knowledgeRefs(key, pattern) {
+            var values = knowledge[key];
+            return Array.isArray(values) && values.length <= 16 && values.every(function (v) {
+                return typeof v === 'string' && pattern.test(v);
+            }) ? values.join(', ') : '';
+        }
+        function refsWellFormed(key, pattern) {
+            var values = knowledge[key];
+            return Array.isArray(values) && values.length <= 16 && values.every(function (v) {
+                return typeof v === 'string' && pattern.test(v);
+            });
+        }
+        // Same-event binding is verified server-side. This client accepts only its fixed, unverified
+        // last-report schema and keeps it display-only after the fast frame expired.
+        var reportAge = knowledge.report_age_seconds;
+        var reportMaxAge = knowledge.max_age_seconds;
+        var reportExpiresAt = knowledge.report_expires_at_ms;
+        var knowledgeHistorical = !knowledgeCurrent && knowledge.status === 'projected' && knowledge.is_current === false
+            && knowledge.report_state === 'last_report'
+            && knowledge.claim_status === 'reported_unverified' && knowledge.trust === 'unverified_advisory_only'
+            && typeof reportAge === 'number' && Number.isFinite(reportAge) && reportAge >= 0
+            && typeof reportMaxAge === 'number' && Number.isFinite(reportMaxAge) && reportMaxAge >= 0.1 && reportMaxAge <= 10
+            && reportAge <= reportMaxAge
+            && typeof reportExpiresAt === 'number' && Number.isSafeInteger(reportExpiresAt)
+            && reportExpiresAt > Date.now() && reportExpiresAt <= Date.now() + reportMaxAge * 1000
+            && refsWellFormed('attack_techniques', /^T[0-9]{4}(\.[0-9]{3})?$/)
+            && refsWellFormed('source_groups', /^[a-z][a-z0-9_-]{0,31}$/);
+        var knowledgeLabel = knowledgeCurrent ? 'projected (reported, unverified)'
+            : (knowledgeHistorical ? 'last report (not current, unverified)'
+            : (knowledge.status === 'projected' ? 'projected but not current'
+            : (knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable')));
+        put('mioKnowledgeStatus', knowledgeLabel);
+        // Deterministic, observation-only guidance; never retries or implies a model/Knowledge action.
+        var cueTail = ' Edge observed action/result remains authoritative; use the existing operator review workflow for this event. Nothing is retried automatically.';
+        // Fixed, status-specific, read-only cues: no tokens, endpoints or raw errors are ever interpolated.
+        var KNOWLEDGE_STATUS_CUES = {
+            timeout: 'the bounded reference lookup did not finish within its own query deadline.',
+            unavailable: 'the reference lookup did not return a usable answer.',
+            disabled: 'the optional reference lookup is switched off by configuration.',
+            missing_token: 'the lookup credential is not configured; check the lane configuration.',
+            auth_rejected: 'the lookup service rejected the configured credential; check the lane configuration.'
+        };
+        var statusCue = knowledgeStatus.indexOf(knowledge.status) >= 0 && knowledge.status === knowledgeLabel
+            && Object.prototype.hasOwnProperty.call(KNOWLEDGE_STATUS_CUES, knowledgeLabel)
+            ? 'Knowledge ' + knowledgeLabel + ': ' + KNOWLEDGE_STATUS_CUES[knowledgeLabel] + ' No reference metadata.' + cueTail
+            : '';
+        put('mioKnowledgeCue', knowledgeCurrent
+            ? 'Reported, unverified reference metadata only; not a verdict. Edge observed action/result remains authoritative.'
+            : (knowledgeHistorical
+                ? 'Last report for this same event only: not current, unverified, not a verdict.' + cueTail
+                : (statusCue || 'Knowledge ' + knowledgeLabel + ': not current/usable; no reference metadata.' + cueTail)));
+        function sourceFreshnessText() {
+            var f = knowledge.source_freshness;
+            if (!(knowledgeCurrent || knowledgeHistorical) || !f || typeof f !== 'object' || Array.isArray(f)
+                || f.status !== 'reported_unverified_at_lookup'
+                || Object.keys(f).some(function (key) { return ['status', 'oldest_feed_days', 'attack_version'].indexOf(key) < 0; })
+                || !Object.prototype.hasOwnProperty.call(f, 'oldest_feed_days')
+                || !Object.prototype.hasOwnProperty.call(f, 'attack_version')) {
+                return 'Source freshness unavailable (not verified)';
+            }
+            var age = f.oldest_feed_days;
+            var version = f.attack_version;
+            if ((age !== null && (typeof age !== 'number' || !Number.isFinite(age) || age < 0 || age > 36500))
+                || (version !== null && (typeof version !== 'string' || !/^\d{1,3}(?:\.\d{1,3}){0,2}$/.test(version)))) {
+                return 'Source freshness unavailable (not verified)';
+            }
+            return 'Source freshness reported, unverified at lookup: oldest feed '
+                + (age === null ? 'unavailable' : String(age) + ' days') + '; ATT&CK version '
+                + (version === null ? 'unavailable' : version);
+        }
+        put('mioKnowledgeRefs', knowledgeCurrent
+            ? ('ATT&CK: ' + (knowledgeRefs('attack_techniques', /^T[0-9]{4}(\.[0-9]{3})?$/) || 'None')
+                + ' · Source groups: ' + (knowledgeRefs('source_groups', /^[a-z][a-z0-9_-]{0,31}$/) || 'None')
+                + ' · ' + sourceFreshnessText())
+            : (knowledgeHistorical
+                ? ('LAST REPORT · NOT CURRENT · UNVERIFIED · report age at last refresh ' + reportAge.toFixed(1) + ' s'
+                    + ' · ATT&CK: ' + (knowledgeRefs('attack_techniques', /^T[0-9]{4}(\.[0-9]{3})?$/) || 'None')
+                    + ' · Source groups: ' + (knowledgeRefs('source_groups', /^[a-z][a-z0-9_-]{0,31}$/) || 'None')
+                    + ' · ' + sourceFreshnessText())
+                : 'Unavailable'));
+        // Expire projected references even when polling stops; lane diagnostics have no fast deadline.
+        if (typeof window.setTimeout === 'function') {
+            if (knowledgeExpiryTimer !== null) window.clearTimeout(knowledgeExpiryTimer);
+            if (knowledgeCurrent) knowledgeExpiryTimer = window.setTimeout(function () {
+                if (expirySequence !== knowledgeExpirySequence) return;
+                put('mioKnowledgeStatus', 'unavailable');
+                put('mioKnowledgeRefs', 'Unavailable');
+                put('mioKnowledgeCue', 'Knowledge expired (stale).' + cueTail);
+            }, Math.max(0, Math.min(10, Number(payload.max_age_seconds || 0)) * 1000
+                - (Date.now() - completedAt)));
+            else if (knowledgeHistorical) knowledgeExpiryTimer = window.setTimeout(function () {
+                if (expirySequence !== knowledgeExpirySequence) return;
+                put('mioKnowledgeStatus', 'unavailable');
+                put('mioKnowledgeRefs', 'Unavailable');
+                put('mioKnowledgeCue', 'Knowledge last report expired (stale).' + cueTail);
+            }, Math.max(0, reportExpiresAt - Date.now()));
+        }
         var model = payload.model_analysis && typeof payload.model_analysis === 'object' ? payload.model_analysis : {};
         var modelCurrent = usable && (model.status === 'complete' || model.status === 'partial') && model.is_current === true
             && String(model.fast_generation || '') === String(payload.generation || '');
-        put('mioModelStatus', modelCurrent ? (model.status || 'disabled') : 'suppressed');
-        put('mioModelFreshness', modelCurrent
+        // Lane degradation stays visible: a non-current result shows its own allowlisted lane status and a fixed-label reason.
+        // Raw model text and unlisted reason strings are never displayed; authority is unchanged (display only).
+        var modelLaneStatus = typeof model.status === 'string' && MODEL_LANE_DEGRADED_STATUSES.indexOf(model.status) >= 0 ? model.status : '';
+        var modelReasonText = modelLaneReasonLabel(model.reason);
+        var modelReasonTail = modelReasonText ? ' · lane reason: ' + modelReasonText : '';
+        put('mioModelStatus', modelCurrent ? (model.status || 'disabled')
+            : (modelLaneStatus ? modelLaneStatus + ' (not current)' : 'suppressed'));
+        put('mioModelFreshness', (modelCurrent
             ? (model.status === 'partial' ? 'Current fast generation; partial M.I.O. result' : 'Current fast generation')
-            : (model.status === 'skipped' ? 'Skipped' : 'Stale or no current model result'));
+            : (model.status === 'skipped' ? 'Skipped' : 'Stale or no current model result')) + modelReasonTail);
         put('mioModelSummary', !modelCurrent ? 'Suppressed' : (model.summary || (model.status === 'partial'
             ? 'Partial M.I.O. analysis; the shared reasoning cycle did not complete.'
             : 'No model analysis available.')));

@@ -192,8 +192,11 @@ def test_the_explanation_changes_nothing_the_agent_decides_or_records(tmp_path, 
         advisory = json.loads(agent_mod.ADVISORY_PATH.read_text(encoding="utf-8"))
         # Only the M.I.O. envelope is excluded from the Edge advisory.
         mio = advisory.pop("mio_auxiliary")
+        # Comparison generation/trace identify the asynchronous M.I.O. result
+        # and are validated against its envelope below, not across runs.
+        comparison = advisory.pop("mio_score_comparison")
         records = [r for r in _rows(chain) if r.get("kind") == "action_decision"]
-        return without_volatile(advisory), without_volatile(records), mio
+        return without_volatile(advisory), without_volatile(records), mio, comparison
 
     with_writer = run(True, "a")
     without_writer = run(False, "b")
@@ -201,6 +204,18 @@ def test_the_explanation_changes_nothing_the_agent_decides_or_records(tmp_path, 
     assert with_writer[0] == without_writer[0]
     assert with_writer[1] == without_writer[1]
     assert with_writer[1] and with_writer[1][0]["action"] == "isolate"
+    comparison_fields = {"generation", "trace_id"}
+    assert {k: v for k, v in with_writer[3].items() if k not in comparison_fields} == {
+        k: v for k, v in without_writer[3].items() if k not in comparison_fields
+    }
+    for comparison, envelope in ((with_writer[3], with_writer[2]), (without_writer[3], without_writer[2])):
+        assert comparison["schema_version"] == "azazel.edge_score_comparison.v1"
+        assert comparison["authority"] == "comparison_only"
+        assert comparison["generation"]
+        assert comparison["trace_id"]
+        assert comparison["generation"] == envelope["generation"]
+        assert comparison["trace_id"] == envelope["trace_id"]
+        assert envelope["trace_id"] == envelope["edge_event"]["trace_id"]
 
     # M.I.O. is an additive auxiliary envelope with its own generation and
     # correlation fields; it is not part of the Edge decision record.

@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Tuple
 class ScoreBreakdown:
     score: int
     factors: List[str]
+    shadow: Dict[str, Any] | None = None
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -185,19 +186,24 @@ class TacticalScorer:
 
         # Ports corroborate an existing threat; they never manufacture one. Decoy
         # ports are honeypot-only and suspicious by construction, so they always count.
+        port_signals = []
         if threat_weight > 0:
             if target_port in self._ADMIN_PORTS:
                 score += 8
                 factors.append(f"admin_port={target_port}")
+                port_signals.append(("admin", target_port))
             elif target_port in self._WEB_PORTS:
                 score += 8
                 factors.append(f"web_port={target_port}")
+                port_signals.append(("web", target_port))
             elif target_port in self._DNS_PORTS:
                 score += 8
                 factors.append(f"dns_port={target_port}")
+                port_signals.append(("dns", target_port))
         if target_port in self._DECOY_PORTS:
             score += 10
             factors.append(f"decoy_port={target_port}")
+            port_signals.append(("decoy", target_port))
 
         # Action is neutral-or-positive: a contained verdict is evidence the system
         # reacted to hostility, not benignity. Never subtract (an attacker who
@@ -229,7 +235,27 @@ class TacticalScorer:
             factors.append("benign_dampener")
 
         score = max(0, min(100, score))
-        return ScoreBreakdown(score=score, factors=factors)
+        # Shadow comparison only: these are the exact resolver outputs above.
+        # Never replace Edge's score/factors or consume this metadata in a gate.
+        shadow: Dict[str, Any] = {"authority": "comparison_only", "mode": "shadow"}
+        try:
+            from azazel_mio.fast_assessment import FastAssessmentInput, PortSignal, assess_fast
+
+            comparison = assess_fast(FastAssessmentInput(
+                severity=severity, classes=tuple(sorted(matched)), token_only=token_only,
+                ports=tuple(PortSignal(kind, port) for kind, port in port_signals),
+                action=action, deception_sid=sid in DECEPTION_SIDS,
+                benign_classless=threat_weight == 0 and category in _BENIGN_CLASSTYPES,
+            ))
+            shadow.update(status="complete", score=comparison.score,
+                          factors=list(comparison.factors),
+                          matches=(comparison.score == score and list(comparison.factors) == factors))
+        except ImportError:
+            shadow.update(status="unavailable", reason="package_unavailable")
+        except Exception:
+            # Optional advisory availability must not alter the authoritative result.
+            shadow.update(status="degraded", reason="assessment_failed")
+        return ScoreBreakdown(score=score, factors=factors, shadow=shadow)
 
     def score_with_features(self, features: Dict[str, Any]) -> Tuple[int, List[str]]:
         """Compatibility helper for callers that need a plain tuple."""

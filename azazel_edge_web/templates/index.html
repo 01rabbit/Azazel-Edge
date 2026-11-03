@@ -1219,18 +1219,28 @@
                     </div>
                     <div class="assistant-block mio-live-auxiliary" aria-live="polite">
                         <div class="assistant-label">M.I.O. live auxiliary (read-only)</div>
-                        <div><strong id="mioLiveAuxStatus">Unavailable</strong> · Knowledge: <span id="mioLiveAuxKnowledge">not_provided</span> · <span id="mioLiveAuxFreshness">No current result</span></div>
+                        <div><strong id="mioLiveAuxStatus">Unavailable</strong> · Fast-lane Knowledge details: <span id="mioLiveAuxKnowledge">not_provided</span> · <span id="mioLiveAuxFreshness">No current result</span></div>
                         <div>Edge action/result (observed): <span id="mioLiveEdgeAction">Unknown</span></div>
+                        <div>Correlation (bounded IDs): <span id="mioLiveCorrelation">-</span></div>
+                        <div>Normalized source context (observed fields; not a conclusion or model fact): <span id="mioSourceObserved">Unavailable</span></div>
+                        <div>Normalized source unavailable or invalid fields (not inferred):<span id="mioSourceUnavailable">Unavailable</span></div>
                         <div>Static fast assessment (read-only): <span id="mioLiveAuxAdvice">No advice available.</span></div>
+                        <div>Fast score/factor comparison (same Edge-resolved inputs; parity is not independent corroboration, detection, or ground truth): <span id="mioLiveScoreComparison">Unavailable</span></div>
+                        <div>Knowledge context (advisory only): <span id="mioLiveKnowledgeAdvisory">Unavailable</span></div>
                         <div>Hypotheses: <span id="mioLiveAuxHypotheses">None</span></div>
                         <div>Next checks: <span id="mioLiveAuxChecks">None</span></div>
                         <div>Handoff: <span id="mioLiveAuxHandoff">None</span></div>
-                        <div>Measured model analysis (advisory): <strong id="mioModelStatus">Disabled</strong> · <span id="mioModelFreshness">No current model result</span></div>
+                        <div>Measured model analysis (separate slow advisory lane; does not change the static fast result or Edge action): <strong id="mioModelStatus">Disabled</strong> · <span id="mioModelFreshness">No current model result</span></div>
                         <div>Model summary: <span id="mioModelSummary">No model analysis available.</span></div>
                         <div>Validated M.I.O. state: <span id="mioModelState">No validated M.I.O. state</span></div>
                         <div>M.I.O.-selected alternatives (fixed wording, unverified; frame refs are context only): <span id="mioModelHypotheses">None</span></div>
                         <div>Model next checks: <span id="mioModelChecks">None</span></div>
                         <div>Model measurements: <span id="mioModelMetrics">—</span></div>
+                    </div>
+                    <div class="assistant-block" aria-live="polite">
+                        <div>Independent Knowledge reported status (read-only, separate from model): <strong id="mioKnowledgeStatus">unavailable</strong></div>
+                        <div>Reference details and source freshness (reported, unverified at lookup): <span id="mioKnowledgeRefs">Unavailable</span></div>
+                        <div>Next step (read-only guidance): <span id="mioKnowledgeCue">Knowledge suppressed or unavailable; Edge observed action/result remains authoritative.</span></div>
                     </div>
                     <details class="panel-fold-details" id="mioAssistDetails">
                         <summary id="mioAssistDetailsToggle">{{ tr('dashboard.mio_details_show', 'Show M.I.O. details') }}</summary>

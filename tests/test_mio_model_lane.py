@@ -53,7 +53,7 @@ def test_model_lane_is_opt_in_and_skip_does_not_call_transport():
 
 
 
-def _run_snapshot_worker(monkeypatch, lane, *, polls=5):
+def _run_snapshot_worker(monkeypatch, lane, *, polls=5, knowledge_snapshot=None):
     from pathlib import Path
     from azazel_edge_ai import agent
 
@@ -65,8 +65,14 @@ def _run_snapshot_worker(monkeypatch, lane, *, polls=5):
             self.calls += 1
             return self.calls >= polls
 
+    if knowledge_snapshot is None:
+        # Neutral Knowledge lane: no generation, so it never triggers a refresh.
+        knowledge_snapshot = lambda: {"generation": "", "status": "absent"}  # noqa: E731
     refreshed = []
     monkeypatch.setattr(agent, "LIVE_MIO_MODEL_LANE", lane)
+    monkeypatch.setattr(agent, "LIVE_MIO_KNOWLEDGE_LANE", type("Knowledge", (), {
+        "snapshot": staticmethod(knowledge_snapshot)
+    })())
     monkeypatch.setattr(agent, "LIVE_MIO_AUXILIARY", type("Aux", (), {
         "snapshot": staticmethod(lambda: {"generation": 0, "status": "starting"})
     })())
@@ -91,6 +97,17 @@ def test_snapshot_worker_does_not_refresh_for_default_off_lane_at_startup(monkey
     assert lane.completed_async_generation() == ""
 
     assert _run_snapshot_worker(monkeypatch, lane) == []
+
+
+def test_snapshot_worker_refreshes_for_terminal_knowledge_generation(monkeypatch):
+    lane = LiveMioModelLane(enabled=False, analyze=lambda payload, remaining: {}, fast_snapshot=_fast)
+
+    refreshed = _run_snapshot_worker(
+        monkeypatch, lane,
+        knowledge_snapshot=lambda: {"generation": "2", "status": "projected"},
+    )
+    assert len(refreshed) == 1
+    assert refreshed[0][1] == {"count_suricata": False}
 
 
 def test_snapshot_worker_refreshes_once_for_async_result_completed_before_first_poll(monkeypatch):
@@ -261,6 +278,68 @@ def test_shared_core_transport_compiles_task_schema_and_rejects_invalid_model_re
     assert observed[0]["strict_object_decode"] is True
     assert observed[0]["user_content"].startswith("TRUSTED_CONTROL\n")
     assert "suricata_sid:42" in observed[0]["user_content"]
+
+
+def test_unexpected_frame_extension_never_reaches_model_prompt(monkeypatch):
+    import json
+    import pytest
+    from azazel_edge_ai import agent
+
+    frame = {
+        "schema_version": "mio.situation_frame.v2", "frame_id": "frame-current",
+        "trace_id": "trace-current", "created_at": "2026-11-01T00:00:00Z",
+        "mission": "Provide a read-only explanation of this accepted Edge event.",
+        "current_defensive_state": "NOTIFY", "threat_level": "HIGH",
+        "noc_summary": "No NOC evaluation supplied to this bounded live adapter.",
+        "soc_summary": "Observed authentication login failures",
+        "known_facts": ["Observed Suricata SID: 42"], "unknowns": ["LIVE_ADAPTER_CONTEXT_LIMITED"],
+        "contradictions": [], "evidence_refs": ["suricata_sid:42"], "knowledge_refs": [],
+        "knowledge_status": "not_provided", "deception_status": "not_provided",
+        "provenance": {"known_facts": ["caller"], "evidence_refs": ["caller"]},
+        "freshness_seconds": 0, "truncated": False, "actors": [], "actions": [],
+        "deception_context": None,
+    }
+    sentinel_ioc = "198.51.100.200"
+    sentinel_feed = "sentinel_feed_zq"
+    sentinel_token = "rcpt_tok_sentinel_zq91"
+    captured = []
+    def hypothesis(hid, alternative, statement):
+        return {"hypothesis_id": hid, "hypothesis_alternative_id": alternative,
+                "statement": statement, "status": "proposed",
+                "supporting_evidence_refs": ["suricata_sid:42"],
+                "contradicting_evidence_refs": [], "assumptions": [],
+                "falsification_conditions": ["new evidence contradicts this"],
+                "expected_observations": [], "missing_evidence": []}
+    responses = {
+        "generate_hypotheses": {"hypotheses": [
+            hypothesis("h1", "credential_attack", "Possible credential attack"),
+            hypothesis("h2", "misconfigured_automation", "Possible benign automation")]},
+        "identify_evidence_gaps": {"evidence_gaps": []},
+        "recommend": {"summary": "Review the observation", "recommended_action": "OBSERVE",
+                      "rationale": "One alert is limited evidence.",
+                      "evidence_refs": ["suricata_sid:42"], "limitations": ["Intent unknown."]},
+    }
+    def fake_chat(_payload, **kwargs):
+        captured.append(kwargs["user_content"])
+        control = kwargs["user_content"].split("TRUSTED_CONTROL\n", 1)[1].split(
+            "\nEND_TRUSTED_CONTROL", 1)[0]
+        task = json.loads(control)["task"]
+        return {"parsed": responses[task], "model": "fixture-model", "load_duration_ms": 7,
+                "prompt_tokens": 11, "completion_tokens": 5}
+    monkeypatch.setattr(agent, "_ollama_chat", fake_chat)
+
+    # Control: the unmodified frame reaches the model, so the prompt capture is live.
+    agent._analyze_mio_fast_result(frame, 1.0)
+    assert captured and all("suricata_sid:42" in prompt for prompt in captured)
+    control_count = len(captured)
+
+    # Extension carrying raw Knowledge receipt/context sentinels: the closed frame
+    # key set must reject it before any model prompt is compiled.
+    extended = dict(frame, knowledge_receipt={
+        "ioc": sentinel_ioc, "feed": sentinel_feed, "receipt_token": sentinel_token})
+    with pytest.raises(ValueError, match="invalid_situation_frame_payload"):
+        agent._analyze_mio_fast_result(extended, 1.0)
+    assert len(captured) == control_count
 
 
 def test_valid_fake_transport_runs_full_shared_core_and_lane_preserves_validation_metrics(monkeypatch):

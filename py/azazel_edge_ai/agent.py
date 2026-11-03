@@ -32,6 +32,7 @@ if str(PY_ROOT) not in sys.path:
 from azazel_edge.decision_layers import DecisionLayers
 from azazel_edge.ai_governance import AIGovernance
 from azazel_edge_ai.mio_live_auxiliary import LiveMioAuxiliary, MAX_RESULT_BYTES
+from azazel_edge_ai.mio_knowledge_lane import LiveMioKnowledgeLane
 from azazel_edge_ai.mio_model_lane import (LiveMioModelLane, MioModelFailure, bounded_truncated_count,
                                            bounded_usage, bounded_validation_diagnostic)
 from azazel_edge.tactics_engine import ConfigHash, DecisionLogger, TacticalScorer
@@ -375,28 +376,41 @@ def _query_knowledge_context(source_context: Mapping[str, Any] | None, *, deadli
             finally:
                 self.fp = original
 
+    cancellation_done = threading.Event()
+    watcher: threading.Thread | None = None
+
+    def watch_transport(transport_socket: socket.socket) -> None:
+        # One watcher per serial request; shutdown interrupts connect, headers and
+        # body reads without adding a second query worker or retaining stale I/O.
+        while not cancellation_done.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or stale_check():
+                try:
+                    transport_socket.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    # A supersession can precede connect entering the kernel.
+                    # Keep watching until teardown so that race cannot leave a
+                    # subsequently connected socket without cancellation.
+                    pass
+                cancellation_done.wait(.01)
+                continue
+            cancellation_done.wait(min(.01, remaining))
+
     class NumericLoopbackConnection(http.client.HTTPConnection):
         response_class = BoundedResponse
         def connect(self) -> None:
             self.sock = socket.socket(socket.AF_INET6 if address.version == 6 else socket.AF_INET,
                                       socket.SOCK_STREAM)
+            nonlocal watcher
+            watcher = threading.Thread(target=watch_transport, args=(self.sock,),
+                                       name='mio-knowledge-cancellation', daemon=True)
+            watcher.start()
             self.sock.settimeout(max(0.001, deadline - time.monotonic()))
             self.sock.connect((str(address), target.port))
 
     connection = NumericLoopbackConnection(str(address), target.port, timeout=remaining)
-    timer: threading.Timer | None = None
     try:
         connection.connect()
-        transport_socket = connection.sock
-        def expire() -> None:
-            if transport_socket is not None:
-                try:
-                    transport_socket.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-        timer = threading.Timer(max(0.0, deadline - time.monotonic()), expire)
-        timer.daemon = True
-        timer.start()
         if stale_check():
             return 'superseded', None
         connection.request('POST', '/v1/context', body=body,
@@ -431,10 +445,12 @@ def _query_knowledge_context(source_context: Mapping[str, Any] | None, *, deadli
     except (ValueError, UnicodeError, RecursionError):
         return 'malformed', None
     except (OSError, http.client.HTTPException):
-        return ('timeout' if time.monotonic() >= deadline else 'unavailable'), None
+        return ('superseded' if stale_check() else
+                'timeout' if time.monotonic() >= deadline else 'unavailable'), None
     finally:
-        if timer is not None:
-            timer.cancel()
+        cancellation_done.set()
+        if watcher is not None:
+            watcher.join()
         connection.close()
 
 
@@ -1783,7 +1799,27 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
         "target_port": int(norm.get("target_port") or 0),
         "protocol": str(norm.get("protocol") or ""),
     }
-    risk_score, factors = SCORER.score_with_features(features)
+    score_breakdown = SCORER.score(features)
+    risk_score = score_breakdown.score
+    factors = score_breakdown.factors
+    shadow = score_breakdown.shadow if isinstance(score_breakdown.shadow, dict) else {}
+    status_candidate = shadow.get("status")
+    shadow_status = status_candidate if type(status_candidate) is str and status_candidate in {"complete", "unavailable", "degraded"} else "degraded"
+    shadow_score = shadow.get("score")
+    if type(shadow_score) is not int or not 0 <= shadow_score <= 100:
+        shadow_score = None
+    shadow_factors = shadow.get("factors") if isinstance(shadow.get("factors"), list) else []
+    safe_shadow_factors = [item[:96] for item in shadow_factors[:12]
+                           if type(item) is str and item.strip()]
+    shadow_comparison = {
+        "schema_version": "azazel.edge_score_comparison.v1",
+        "authority": "comparison_only",
+        "status": shadow_status,
+        "edge_score": risk_score,
+        "mio_score": shadow_score if shadow_status == "complete" else None,
+        "matches": shadow.get("matches") if shadow_status == "complete" and type(shadow.get("matches")) is bool else None,
+        "mio_factors": safe_shadow_factors if shadow_status == "complete" else [],
+    }
 
     advisory = {
         "ts": time.time(),
@@ -1802,6 +1838,7 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
         },
         "risk_level": _risk_level(risk_score),
         "risk_score": risk_score,
+        "mio_score_comparison": shadow_comparison,
         "attack_type": str(norm.get("attack_type") or "unknown"),
         "src_ip": str(norm.get("src_ip") or ""),
         "dst_ip": str(norm.get("dst_ip") or ""),
@@ -1895,6 +1932,8 @@ def _build_advisory(event: Dict[str, Any]) -> Dict[str, Any]:
             "provenance": {"observations": [], "derived_signals": []},
             "knowledge": {"status": "not_provided", "refs": []}, "advisory": None,
         }
+    advisory["mio_score_comparison"]["generation"] = str(advisory["mio_auxiliary"].get("generation") or "")[:96]
+    advisory["mio_score_comparison"]["trace_id"] = str(advisory["mio_auxiliary"].get("trace_id") or "")[:96]
 
     return advisory
 
@@ -2484,24 +2523,14 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
     frame = MioSituationFrame.from_dict(payload)
     if not frame.evidence_refs:
         raise ValueError("no_stable_frame_evidence")
-    knowledge_status, knowledge_response = _query_knowledge_context(source_context, deadline=deadline,
-        stale_check=lambda: bool(stale_check and stale_check()))
-    metrics["knowledge_status"] = knowledge_status
-    knowledge_kwargs = {}
-    if knowledge_response is not None:
-        from azazel_mio.assistant import KnowledgeContextResponseAdvisory
-        knowledge_kwargs["knowledge_context_response"] = KnowledgeContextResponseAdvisory(knowledge_response)
     core = AssistantCore(model=StructuredTransport())
     try:
         assistance = core.explain(frame, now=datetime.now(timezone.utc).isoformat(),
-            knowledge_attempted=False, **knowledge_kwargs,
+            knowledge_attempted=False,
             stale_check=lambda: time.monotonic() >= deadline or bool(stale_check and stale_check()))
         if time.monotonic() >= deadline:
             raise TimeoutError("deadline_exceeded")
         out = assistance.to_dict()
-        if knowledge_response is not None:
-            metrics["knowledge_status"] = ("projected" if out.get("knowledge_context_response_advisory")
-                                           is not None else "rejected")
     except Exception as exc:
         reason = "deadline_exceeded" if isinstance(exc, TimeoutError) else "model_error"
         raise MioModelFailure(reason, metrics) from None
@@ -2713,8 +2742,33 @@ LIVE_MIO_MODEL_LANE = LiveMioModelLane(enabled=MIO_MODEL_ENABLED, analyze=_produ
                                        audit_result=lambda trace_id, result: _audit_mio_model_result(trace_id, result),
                                        fast_snapshot=LIVE_MIO_AUXILIARY.snapshot,
                                        frame_snapshot=LIVE_MIO_AUXILIARY.frame_snapshot,
-                                       knowledge_input_snapshot=LIVE_MIO_AUXILIARY.knowledge_input_snapshot,
                                        authorize=_authorize_mio_model_event)
+
+
+def _project_mio_knowledge(frame_payload, response, deadline, stale_check):
+    """Typed MIO projection on this exact frame; no model, prose or raw refs published."""
+    from azazel_mio.assistant import AssistantCore, KnowledgeContextResponseAdvisory
+    from azazel_mio.contracts import MioSituationFrame
+    frame = MioSituationFrame.from_dict(frame_payload)
+    out = AssistantCore().explain(frame, now=datetime.now(timezone.utc).isoformat(),
+        knowledge_attempted=False, knowledge_context_response=KnowledgeContextResponseAdvisory(response),
+        stale_check=lambda: stale_check() or time.monotonic() >= deadline).to_dict()
+    if out.get('frame_id') != frame.frame_id or out.get('trace_id') != frame.trace_id:
+        return None
+    projection = out.get('knowledge_context_response_advisory')
+    if not isinstance(projection, dict):
+        return None
+    # Core-validated public identifiers and measured freshness only. No state/action.
+    return {key: projection[key] for key in ('claim_status', 'attack_techniques',
+        'source_groups', 'source_freshness', 'trust') if key in projection}
+
+
+LIVE_MIO_KNOWLEDGE_LANE = LiveMioKnowledgeLane(
+    enabled=lambda: os.environ.get('AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED') == '1',
+    query=_query_knowledge_context, project=_project_mio_knowledge,
+    fast_snapshot=LIVE_MIO_AUXILIARY.snapshot, frame_snapshot=LIVE_MIO_AUXILIARY.frame_snapshot,
+    knowledge_input_snapshot=LIVE_MIO_AUXILIARY.knowledge_input_snapshot,
+    current_generation=LIVE_MIO_AUXILIARY.current_generation)
 
 
 def _call_llm_with_retry(payload: Dict[str, Any], model: str) -> tuple[Dict[str, Any] | None, int, int, str]:
@@ -2896,6 +2950,25 @@ def _llm_worker() -> None:
             LLM_QUEUE.task_done()
 
 
+def _attach_current_score_comparison(
+    mio: Dict[str, Any], request: Dict[str, Any], comparison: Dict[str, Any] | None
+) -> Dict[str, Any]:
+    """Bind the comparison to the same accepted M.I.O. generation and Edge trace."""
+    result = dict(mio)
+    generation = str(request.get("generation") or "")
+    trace_id = str(request.get("trace_id") or "")
+    same_generation = bool(generation) and generation == str(result.get("generation") or "")
+    same_trace = bool(trace_id) and trace_id == str(result.get("trace_id") or "")
+    same_comparison = (comparison is not None
+                       and str(comparison.get("generation") or "") == generation
+                       and str(comparison.get("trace_id") or "") == trace_id)
+    if same_comparison and same_generation and same_trace:
+        result["edge_score_comparison"] = comparison
+    else:
+        result.pop("edge_score_comparison", None)
+    return result
+
+
 def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -> None:
     _ensure_parent(SNAPSHOT_PATH)
     now = time.time()
@@ -2981,6 +3054,9 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
     mio["authority"] = "read_only_advisory"
     mio["edge_action_label"] = "Edge action/result (observed)"
     mio["advisory_label"] = "M.I.O. advice/handoff (read-only)"
+    requested_mio = advisory.get("mio_auxiliary") if isinstance(advisory.get("mio_auxiliary"), dict) else {}
+    comparison = advisory.get("mio_score_comparison") if isinstance(advisory.get("mio_score_comparison"), dict) else None
+    mio = _attach_current_score_comparison(mio, requested_mio, comparison)
     if len(json.dumps(mio, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")) > MAX_RESULT_BYTES:
         mio = {
             "schema_version": "azazel.mio_auxiliary.v1", "status": "degraded",
@@ -2992,6 +3068,7 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
             "edge_action_label": "Edge action/result (observed)",
             "advisory_label": "M.I.O. advice/handoff (read-only)",
         }
+    mio["knowledge_analysis"] = LIVE_MIO_KNOWLEDGE_LANE.snapshot()
     mio["model_analysis"] = LIVE_MIO_MODEL_LANE.snapshot()
     # Keep the combined persisted envelope under the same cap after adding the
     # separately paced model lane. If needed, retain measurements but drop prose.
@@ -3099,6 +3176,7 @@ def _mio_snapshot_worker() -> None:
     """Persist either async M.I.O. timeline completion to the operator snapshot."""
     seen_generation = 0
     seen_model_generation = ""
+    seen_knowledge_state: tuple[str, str] = ("", "")
     while not _MIO_SNAPSHOT_STOP.wait(0.2):
         try:
             result = LIVE_MIO_AUXILIARY.snapshot()
@@ -3106,12 +3184,18 @@ def _mio_snapshot_worker() -> None:
             static_done = generation > seen_generation and result.get("status") not in {"pending", "starting", "queued"}
             model_generation = LIVE_MIO_MODEL_LANE.completed_async_generation()
             model_done = bool(model_generation and model_generation != seen_model_generation)
-            if not static_done and not model_done:
+            knowledge = LIVE_MIO_KNOWLEDGE_LANE.snapshot()
+            knowledge_state = (str(knowledge.get("generation") or ""), str(knowledge.get("status") or ""))
+            knowledge_done = (bool(knowledge_state[0]) and knowledge_state != seen_knowledge_state
+                              and knowledge.get("status") not in {"starting", "queued"})
+            if not static_done and not model_done and not knowledge_done:
                 continue
             if static_done:
                 seen_generation = generation
             if model_done:
                 seen_model_generation = model_generation
+            if knowledge_done:
+                seen_knowledge_state = knowledge_state
             # Preserve current Edge advisory fields while refreshing only the
             # operator snapshot with generation-tagged auxiliary results.
             with IO_LOCK:
@@ -3207,6 +3291,12 @@ def _handle_event(event: Dict[str, Any]) -> None:
     _metrics_inc("processed_events", 1)
     _route_llm(event, advisory)
     mio_request = advisory.get("mio_auxiliary") if isinstance(advisory.get("mio_auxiliary"), dict) else {}
+    try:
+        LIVE_MIO_KNOWLEDGE_LANE.submit(mio_request.get("generation", ""),
+            str(mio_request.get("trace_id") or advisory.get("trace_id") or ""))
+    except Exception:
+        # Independent optional Knowledge timeline: never block model enqueue or persistence.
+        logger.warning("mio knowledge enqueue degraded")
     try:
         _submit_governed_mio_model(advisory, mio_request)
     except Exception:

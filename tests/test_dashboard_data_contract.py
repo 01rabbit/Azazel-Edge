@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -364,8 +365,9 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertIn("soc_focus", payload)
         self.assertIn("noc_focus", payload)
         self.assertIn("decision_path", payload)
-        self.assertEqual(payload["mio_auxiliary"]["authority"], "read_only_advisory")
-        self.assertEqual(payload["mio_auxiliary"]["knowledge"]["status"], "not_provided")
+        self.assertEqual(payload["mio_auxiliary"]["knowledge_analysis"]["status"], "unavailable")
+        self.assertNotIn("authority", payload["mio_auxiliary"])
+        self.assertNotIn("advisory", payload["mio_auxiliary"])
         self.assertEqual(payload["soc_focus"]["attack_type"], "dns anomaly")
         self.assertEqual(payload["noc_focus"]["path_health"]["uplink"], "eth1")
         self.assertEqual(payload["noc_focus"]["capacity"]["state"], "elevated")
@@ -373,6 +375,7 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["noc_focus"]["client_inventory"]["current_client_count"], 6)
         self.assertEqual(payload["noc_focus"]["client_inventory"]["inventory_mismatch_count"], 1)
         self.assertIn("client_identity_view", payload["noc_focus"])
+
         self.assertEqual(payload["noc_focus"]["client_identity_view"]["default_filter"], "attention_only")
         self.assertEqual(payload["noc_focus"]["client_identity_view"]["attention_count"], 2)
         self.assertEqual(payload["noc_focus"]["client_identity_view"]["normal_count"], 1)
@@ -406,6 +409,91 @@ class DashboardDataContractTests(unittest.TestCase):
         self.assertEqual(payload["soc_focus"]["triage_priority"]["top_priority_ids"], ["inc-1", "ent-1"])
         self.assertEqual(payload["soc_focus"]["incident_campaign"]["incident_count"], 2)
         self.assertEqual(payload["soc_focus"]["entity_risk"]["entity_count"], 3)
+
+    def test_dashboard_api_sanitizes_unbound_mio_auxiliary_before_serialization(self) -> None:
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        state["mio_auxiliary"] = {
+            "status": "complete", "is_current": True, "generation": "secret-generation",
+            "trace_id": "secret-trace", "max_age_seconds": 10,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "edge_event": {"action": "notify", "mode": "dry_run", "result": "planned_not_applied",
+                "trace_id": "secret-trace"},
+            "source_context": {"event_key": "secret-event", "fields": {"attack_type": "secret-claim"}},
+            "advisory": {"trace_id": "secret-mio-trace", "frame_id": "secret-frame",
+                "handoff": {"summary": "secret-handoff"}},
+            "handoff_binding": {"status": "matched", "valid": False,
+                "generation": "secret-generation", "event_key": "secret-event", "edge_trace_id": "secret-trace",
+                "edge_action": "notify", "edge_mode": "dry_run", "edge_result": "planned_not_applied",
+                "mio_trace_id": "secret-mio-trace", "frame_id": "secret-frame"},
+            "knowledge_analysis": {"schema_version": "azazel.mio_knowledge_analysis.v1",
+                "authority": "read_only_advisory", "usage_status": "not_applicable",
+                "status": "projected", "is_current": True, "generation": "secret-generation",
+                "frame_generation": "secret-generation", "source_trace_id": "secret-trace",
+                "trace_id": "secret-mio-trace", "frame_id": "secret-frame", "event_key": "secret-event",
+                "source_freshness_verification": "reported_unverified_at_lookup",
+                "projection": {"claim_status": "reported_unverified", "trust": "unverified_advisory_only",
+                    "source_freshness": {"oldest_feed_days": 2, "attack_version": "18.1"},
+                    "source_groups": ["secret-source"], "attack_techniques": ["T1059"]}},
+            "model_analysis": {"summary": "secret-model"}}
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+        response = self.client.get("/api/dashboard/summary")
+        self.assertEqual(response.status_code, 200)
+        mio = response.get_json()["mio_auxiliary"]
+        self.assertEqual(mio["edge_event"], {"action": "notify", "mode": "dry_run", "result": "planned_not_applied"})
+        self.assertEqual(mio["knowledge_analysis"], {"status": "projected", "is_current": False,
+            "source_freshness": {"status": "unavailable", "oldest_feed_days": None, "attack_version": None}})
+        self.assertNotIn("handoff_binding", mio)
+        self.assertNotIn("source_context", mio)
+        self.assertNotIn("advisory", mio)
+        self.assertNotIn("model_analysis", mio)
+        serialized = json.dumps(mio)
+        for secret in ("secret-generation", "secret-trace", "secret-event",
+            "secret-mio-trace", "secret-frame", "secret-claim", "secret-handoff", "secret-source", "secret-model"):
+            self.assertNotIn(secret, serialized)
+
+        # Expired last-report metadata is also filtered from the raw state and bundle
+        # endpoints, which persist/return the operator snapshot without using summary().
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        receipt = state["mio_auxiliary"]["knowledge_analysis"]
+        receipt.update(is_current=False, report_state="last_report", report_age_seconds=10,
+            max_age_seconds=10, report_expires_at_ms=int(time.time() * 1000) - 1)
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+        state_response = self.client.get("/api/state")
+        self.assertEqual(state_response.status_code, 200)
+        raw_state_mio = state_response.get_json()["mio_auxiliary"]
+        self.assertNotIn("attack_techniques", raw_state_mio.get("knowledge_analysis", {}))
+        self.assertNotIn("source_groups", raw_state_mio.get("knowledge_analysis", {}))
+        bundle_response = self.client.get("/api/dashboard/bundle?session_id=ops-test&trends_limit=10")
+        self.assertEqual(bundle_response.status_code, 200)
+        bundled_mio = bundle_response.get_json()["state"]["mio_auxiliary"]
+        self.assertNotIn("attack_techniques", bundled_mio.get("knowledge_analysis", {}))
+        self.assertNotIn("source_groups", bundled_mio.get("knowledge_analysis", {}))
+
+    def test_api_state_stream_sanitizes_expired_mio_report(self) -> None:
+        snapshot = {"ok": True, "user_state": "CHECKING", "mio_auxiliary": {
+            "status": "complete", "is_current": False, "max_age_seconds": 0,
+            "edge_event": {"action": "notify", "mode": "dry_run", "result": "planned_not_applied"},
+            "knowledge_analysis": {"status": "projected", "is_current": False,
+                "report_state": "last_report", "claim_status": "reported_unverified",
+                "trust": "unverified_advisory_only", "report_age_seconds": 10,
+                "max_age_seconds": 10, "report_expires_at_ms": int(time.time() * 1000) - 1,
+                "attack_techniques": ["T1059"], "source_groups": ["abusech"]}}}
+        original_watch = webapp.cp_watch_snapshots
+        def fake_watch(*, interval_sec=1.0, errors=None):
+            yield snapshot
+        webapp.cp_watch_snapshots = fake_watch
+        try:
+            response = self.client.get("/api/state/stream")
+            body = response.get_data(as_text=True)
+        finally:
+            webapp.cp_watch_snapshots = original_watch
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: state", body, body)
+        state_event = json.loads(body.split("event: state\ndata: ", 1)[1].split("\n\n", 1)[0])
+        knowledge = state_event["mio_auxiliary"]["knowledge_analysis"]
+        self.assertNotIn("attack_techniques", knowledge)
+        self.assertNotIn("source_groups", knowledge)
+
 
     def test_api_state_uses_current_now_time_instead_of_snapshot_time(self) -> None:
         original_strftime = webapp.time.strftime

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import math
 import queue
 import re
 import secrets
@@ -120,7 +121,13 @@ def _source_context(event: Mapping[str, Any]) -> dict[str, Any]:
     return {"event_key": event_key if "event_type" in values and "sid" in values else "", "fields": available}
 
 
-def _binding_matches(payload: Mapping[str, Any]) -> bool:
+def binding_matches_same_envelope(payload: Mapping[str, Any]) -> bool:
+    """Check that a completed Edge envelope and M.I.O. handoff name one event.
+
+    This validates the field-to-field relationship and fixed Edge vocabularies.
+    Consumers of a completed producer envelope must additionally require the
+    producer's explicit ``handoff_binding.valid is True`` marker.
+    """
     binding = payload.get("handoff_binding")
     edge = payload.get("edge_event")
     context = payload.get("source_context")
@@ -152,6 +159,35 @@ def _binding_matches(payload: Mapping[str, Any]) -> bool:
         if binding.get("mio_trace_id") != advisory.get("trace_id") or binding.get("frame_id") != advisory.get("frame_id"):
             return False
     return binding.get("status") == "matched"
+
+
+# Compatibility alias for existing producer and test imports.
+_binding_matches = binding_matches_same_envelope
+
+
+def edge_observation_for_display(edge: Mapping[str, Any]) -> dict[str, Any]:
+    """Return allowlisted Edge action/mode/result without correlation identifiers."""
+    if not isinstance(edge, Mapping):
+        return {}
+    output: dict[str, Any] = {}
+    action = edge.get("action")
+    if type(action) is str and action.lower() in _EDGE_ACTIONS:
+        output["action"] = action.lower()
+    mode = edge.get("mode")
+    if type(mode) is str and mode in _EDGE_MODES:
+        output["mode"] = mode
+    result = edge.get("result")
+    if type(result) is str and result in _EDGE_RESULTS:
+        output["result"] = result
+    unknown = edge.get("unknown_fields") is True
+    unknown = unknown or ("unknown_fields" in edge and type(edge.get("unknown_fields")) is not bool)
+    unknown = unknown or any(key not in {"action", "mode", "result", "trace_id", "unknown_fields"} for key in edge)
+    if (unknown or
+            (action is not None and "action" not in output) or
+            (mode is not None and "mode" not in output) or
+            (result is not None and "result" not in output)):
+        output["unknown_fields"] = True
+    return output
 
 
 def _safe_event(
@@ -266,6 +302,46 @@ def _safe_event(
     }
 
 
+def _project_knowledge_advisory(value, *, generation, trace_id):
+    if type(value) is not dict:
+        return None
+    if (value.get('kind') != 'knowledge_context_response_advisory'
+            or value.get('source_kind') != 'knowledge_context_response'
+            or value.get('claim_status') != 'reported_unverified'
+            or value.get('trust') != 'unverified_advisory_only'):
+        return None
+    groups = value.get('source_groups')
+    techniques = value.get('attack_techniques')
+    freshness = value.get('source_freshness')
+    for items, cap, pattern in ((groups, 16, r'[a-z][a-z0-9_-]{0,31}'),
+                                (techniques, 32, r'T[0-9]{4}(?:\.[0-9]{3})?')):
+        if type(items) is not list or len(items) > cap or any(
+                type(item) is not str or not re.fullmatch(pattern, item) for item in items):
+            return None
+    if type(freshness) is not dict or set(freshness) - {'oldest_feed_days', 'attack_version'}:
+        return None
+    days = freshness.get('oldest_feed_days')
+    version = freshness.get('attack_version')
+    if days is not None and (type(days) not in (int, float) or not 0 <= days <= 36500 or not math.isfinite(days)):
+        return None
+    if version is not None and (type(version) is not str or not re.fullmatch(r'[0-9]{1,3}(?:\.[0-9]{1,3}){0,2}', version)):
+        return None
+    return {'schema_version': 'azazel.edge_knowledge_advisory.v1',
+            'status': 'complete', 'authority': 'read_only_advisory',
+            'generation': str(generation), 'trace_id': trace_id,
+            'claim_status': 'reported_unverified', 'source_groups': list(groups),
+            'attack_techniques': list(techniques), 'source_freshness': dict(freshness)}
+
+
+def _knowledge_advisory_current(value, envelope):
+    """Caller must also validate the existing handoff binding."""
+    return (type(value) is dict and envelope.get('is_current') is True
+            and envelope.get('status') == 'complete'
+            and bool(envelope.get('trace_id'))
+            and value.get('generation') == envelope.get('generation')
+            and value.get('trace_id') == envelope.get('trace_id'))
+
+
 class LiveMioAuxiliary:
     """Latest-only asynchronous caller for the product-neutral M.I.O. API."""
 
@@ -302,6 +378,8 @@ class LiveMioAuxiliary:
                 and str(result.get("generation") or "") == str(self._generation)
                 and age is not None and age <= self.max_age_seconds
             )
+            if not _knowledge_advisory_current(result.get("edge_knowledge_advisory"), result) or not _binding_matches(result):
+                result.pop("edge_knowledge_advisory", None)
             return result
 
     def current_generation(self) -> int:
@@ -494,6 +572,13 @@ class LiveMioAuxiliary:
                         # Only an exception type is retained; exception text
                         # can contain model or event supplied material.
                         result = _unavailable("mio_failure:" + type(exc).__name__[:48])
+                assistance_payload = result.get("advisory")
+                if isinstance(assistance_payload, dict):
+                    receipt = assistance_payload.pop("knowledge_context_response_advisory", None)
+                    projected = _project_knowledge_advisory(receipt, generation=generation,
+                                        trace_id=str(event.get("_source_trace_id") or "")[:96])
+                    if projected is not None:
+                        result["edge_knowledge_advisory"] = projected
                 result["generation"] = str(generation)
                 result["max_age_seconds"] = self.max_age_seconds
                 result["trace_id"] = str(event.get("_source_trace_id") or "")[:96]
