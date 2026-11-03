@@ -78,7 +78,7 @@ _DIRECTIVE_SEGMENTS = frozenset(
     activate activation deactivate execute exec run start stop open allow
     authorize authorized approve approved enable extend terminate withdraw block
     isolate quarantine redirect expose command shell sudo deploy install delete
-    kill
+    kill override enforce grant granted bypass
     """.split()
 )
 # Mirror of the cross-repo set (CONVENTIONS C3); segments are split on _ - . ~ :

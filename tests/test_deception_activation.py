@@ -228,7 +228,7 @@ def test_directive_set_is_c3_and_segment_based():
         "activate activation deactivate execute exec run start stop open allow "
         "authorize authorized approve approved enable extend terminate withdraw "
         "block isolate quarantine redirect expose command shell sudo deploy "
-        "install delete kill".split())
+        "install delete kill override enforce grant granted bypass".split())
     ok = ["advisory:mio-objective-obj-1", "advisory:mio-frame-frame-dec-1",
           "advisory:mio-hypothesis-h1", "advisory:mio-hypothesis-redirection~isolation",
           "advisory:mio-hypothesis-frame-dec-1~active"]
@@ -239,3 +239,16 @@ def test_directive_set_is_c3_and_segment_based():
                 "advisory:mio-objective-a:Redirect"):
         with pytest.raises(ActivationDecisionError):
             validate_objective_refs([bad, "advisory:mio-frame-f1"])
+
+
+@pytest.mark.parametrize("word", ["override", "enforce", "grant", "granted", "bypass"])
+def test_r2_directive_words_rejected(word):
+    with pytest.raises(ActivationDecisionError):
+        validate_objective_refs([f"advisory:mio-objective-a-{word}", "advisory:mio-frame-f1"])
+
+
+@pytest.mark.parametrize("token", [
+    "objective_content_not_bound", "isolation_drift_observed", "runtime_active_after_lease_end",
+    "redirection_does_not_imply_diversion", "enforcement-note", "granted1"])
+def test_r2_words_do_not_overreach(token):
+    assert validate_objective_refs([f"advisory:mio-objective-{token}", "advisory:mio-frame-f1"])
